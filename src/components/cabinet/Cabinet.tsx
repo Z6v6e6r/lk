@@ -95,6 +95,9 @@ export function Cabinet() {
 
   if (loading) return <div className="loading">Загрузка...</div>;
   if (!profile) return <div className="loading">Ошибка загрузки профиля</div>;
+  const levelValue = profile.customFields?.[4]?.value?.[0];
+  const hasLevel = levelValue !== undefined && levelValue !== null && levelValue !== "";
+  const onboardingLabel = hasLevel ? "Верифицируй свой уровень" : "Определи свой уровень";
 
   return (
     <div className="app-container">
@@ -104,6 +107,13 @@ export function Cabinet() {
         profile={profile}
         openEditForm={() => setIsEditOpen(true)}
       />
+
+      {/* Онбординг */}
+      <div className="onboarding-section">
+        <button className="onboarding-btn" onClick={() => setIsOnboardingOpen(true)}>
+          {onboardingLabel}
+        </button>
+      </div>
 
       {/* Быстрые действия */}
       <div className="quick-actions">
@@ -130,10 +140,12 @@ export function Cabinet() {
       />
 
       {/* Реклама */}
-      <div className="section-title-row">
-        <span className="section-title">Акции</span>
+      <div className="section section--ads">
+        <div className="section-header">
+          <span className="section-title">Акции</span>
+        </div>
+        <Advertisement />
       </div>
-      <Advertisement />
 
       {/* Абонементы */}
       <SubscriptionsContainer
@@ -144,7 +156,7 @@ export function Cabinet() {
       />
 
       {/* Соцсети */}
-      <ButtonModule onOpenOnboarding={() => setIsOnboardingOpen(true)} />
+      <ButtonModule />
 
       {/* Модалки */}
       <ProfileEditForm

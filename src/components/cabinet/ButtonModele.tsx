@@ -3,11 +3,7 @@ import tgLogo from "../../assets/telegram.svg";
 import vkLogo from "../../assets/vk.svg";
 import giftLogo from "../../assets/gift-card.png";
 
-interface ButtonModuleProps {
-  onOpenOnboarding: () => void;
-}
-
-export function ButtonModule({ onOpenOnboarding }: ButtonModuleProps) {
+export function ButtonModule() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
   useEffect(() => {
@@ -29,22 +25,17 @@ export function ButtonModule({ onOpenOnboarding }: ButtonModuleProps) {
 
   return (
     <div className="social-section">
-      <div className="social-links">
-        <a href="https://vk.com/padlhub" target="_blank" rel="noopener noreferrer" className="social-link">
-          <img src={vkLogo} alt="ВКонтакте" />
-        </a>
-        <a href="https://padlhub.ru/giftcard" target="_blank" rel="noopener noreferrer" className="social-link">
-          <img src={giftLogo} alt="Подарочная карта" />
-        </a>
-        <a href="https://t.me/padel_academyF" target="_blank" rel="noopener noreferrer" className="social-link">
-          <img src={tgLogo} alt="Telegram" />
-        </a>
-        <button className="install-btn" onClick={handleInstall} title="Добавить на рабочий стол">
-          📲
-        </button>
-      </div>
-      <button className="onboarding-btn" onClick={onOpenOnboarding}>
-        Онбординг
+      <a href="https://vk.com/padlhub" target="_blank" rel="noopener noreferrer" className="social-link">
+        <img src={vkLogo} alt="ВКонтакте" />
+      </a>
+      <a href="https://padlhub.ru/giftcard" target="_blank" rel="noopener noreferrer" className="social-link">
+        <img src={giftLogo} alt="Подарочная карта" />
+      </a>
+      <a href="https://t.me/padel_academyF" target="_blank" rel="noopener noreferrer" className="social-link">
+        <img src={tgLogo} alt="Telegram" />
+      </a>
+      <button className="install-btn" onClick={handleInstall} title="Добавить на рабочий стол">
+        📲
       </button>
     </div>
   );

@@ -4,8 +4,14 @@
   box-sizing: border-box;
 }
 
+html, body {
+  width: 100%;
+  overflow-x: hidden;
+}
+
 #root {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  width: 100%;
 }

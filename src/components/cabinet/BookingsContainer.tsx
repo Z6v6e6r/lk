@@ -9,7 +9,20 @@ interface BookingsContainerProps {
   loadBookings: () => void;
 }
 
-const TABS = ["Все", "Активные", "История"];
+const TABS = [
+  { key: "all", label: "Все записи" },
+  { key: "games", label: "Игры" },
+  { key: "trainings", label: "Тренировки" },
+  { key: "tournaments", label: "Турниры" },
+];
+
+function getBookingCategory(name: string): "games" | "trainings" | "tournaments" | "other" {
+  const n = name.toLowerCase();
+  if (n.includes("турнир") || n.includes("tournament")) return "tournaments";
+  if (n.includes("трен") || n.includes("training")) return "trainings";
+  if (n.includes("игр") || n.includes("game")) return "games";
+  return "other";
+}
 
 export function BookingsContainer({
   activeBookings,
@@ -24,15 +37,21 @@ export function BookingsContainer({
 
   if (!hasActive && !hasHistory) return null;
 
-  const showActive = activeTab === 0 || activeTab === 1;
-  const showHistory = activeTab === 0 || activeTab === 2;
+  const activeList = activeBookings?.content || [];
+  const currentTab = TABS[activeTab]?.key || "all";
+  const filteredActive = currentTab === "all"
+    ? activeList
+    : activeList.filter((book) => {
+        const name = book.exercise?.direction?.name || book.exercise?.type?.name || "";
+        return getBookingCategory(name) === currentTab;
+      });
 
   return (
     <div className="section">
       <div className="section-header">
         <span className="section-title">Предстоящие записи</span>
         {hasHistory && (
-          <button className="section-link" onClick={openHistory}>
+          <button className="section-link section-link--bold" onClick={openHistory}>
             История
           </button>
         )}
@@ -41,22 +60,26 @@ export function BookingsContainer({
       <div className="tabs">
         {TABS.map((tab, i) => (
           <button
-            key={tab}
+            key={tab.key}
             className={`tab ${activeTab === i ? "active" : ""}`}
             onClick={() => setActiveTab(i)}
           >
-            {tab}
+            {tab.label}
           </button>
         ))}
       </div>
 
-      {showActive && hasActive &&
-        activeBookings!.content.map((book) => (
+      {filteredActive.length > 0 ? (
+        filteredActive.map((book) => (
           <BookingCard key={book.id} booking={book} active={true} loadBookings={loadBookings} />
         ))
-      }
+      ) : (
+        <div style={{ padding: "16px", fontSize: 14, color: "var(--text-secondary)" }}>
+          Нет предстоящих записей в этой категории
+        </div>
+      )}
 
-      {showHistory && hasHistory && (
+      {hasHistory && (
         <button className="all-bookings-btn" onClick={openHistory}>
           Все записи →
         </button>

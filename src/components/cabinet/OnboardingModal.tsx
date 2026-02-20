@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../UI/Modal";
 import { apiUpdateCustomFields } from "../../utils/apiClient";
 import type { UserProfileType } from "../../utils/apiClient";
+import onboardingQ1 from "../../assets/onboarding-q1.jpg";
 
 type ScoreOp =
   | { type: "add"; value: number }
@@ -27,6 +28,7 @@ const BASE_QUESTION: Question = {
   id: "q1_1",
   text: "Опыт игры",
   type: "single",
+  image: onboardingQ1,
   options: [
     { id: "less_month", label: "Меньше месяца", base: 1 },
     { id: "less_year", label: "Меньше года", base: 2 },
@@ -395,9 +397,11 @@ export function OnboardingModal({
 
   if (!isOpen) return null;
 
+  const titleText = hasRating ? "Верифицируй свой уровень" : "Определи свой уровень";
+
   if (hasRating) {
     return (
-      <Modal isOpen={isOpen} onClose={onClose} title="Онбординг">
+      <Modal isOpen={isOpen} onClose={onClose} title={titleText}>
         <div className="onboarding-body">
           <div className="onboarding-title">Онбординг уже пройден</div>
           <p className="onboarding-text">
@@ -418,7 +422,7 @@ export function OnboardingModal({
 
   if (doneScore) {
     return (
-      <Modal isOpen={isOpen} onClose={onClose} title="Онбординг">
+      <Modal isOpen={isOpen} onClose={onClose} title={titleText}>
         <div className="onboarding-body">
           <div className="onboarding-title">Готово!</div>
           <p className="onboarding-text">Ваш рейтинг: <strong>{doneScore}</strong></p>
@@ -432,7 +436,7 @@ export function OnboardingModal({
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Онбординг">
+    <Modal isOpen={isOpen} onClose={onClose} title={titleText}>
       <div className="onboarding-body">
         <div className="onboarding-progress">
           Вопрос {currentIndex + 1} из {questions.length}
