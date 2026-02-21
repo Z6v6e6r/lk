@@ -21,6 +21,7 @@ import { SubscriptionInformation } from "./SubscriptionInformation";
 import { BuySupscription } from "./BuySubscription";
 import { Advertisement } from "./Advertisement";
 import { OnboardingModal } from "./OnboardingModal";
+import { CUSTOM_FIELD_IDS, getCustomField, getCustomFieldValue } from "../../utils/customFields";
 
 const QUICK_ACTIONS = [
   { icon: "🎾", label: "Играть", href: "https://t.me/padlhub_bot" },
@@ -29,7 +30,12 @@ const QUICK_ACTIONS = [
   { icon: "🎯", label: "Индивидуальные тренировки", href: "https://padlhub.ru/indi_lk" },
 ];
 
-export function Cabinet() {
+interface CabinetProps {
+  onOpenGames: () => void;
+  onOpenTournaments: () => void;
+}
+
+export function Cabinet({ onOpenGames, onOpenTournaments }: CabinetProps) {
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [historyBookings, setHistoryBookings] = useState<BookingsResponse | null>(null);
   const [activeBookings, setActiveBookings] = useState<BookingsResponse | null>(null);
@@ -95,9 +101,17 @@ export function Cabinet() {
 
   if (loading) return <div className="loading">Загрузка...</div>;
   if (!profile) return <div className="loading">Ошибка загрузки профиля</div>;
-  const levelValue = profile.customFields?.[4]?.value?.[0];
-  const hasLevel = levelValue !== undefined && levelValue !== null && levelValue !== "";
+  const numericLevelValue = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
+  const hasLevel = numericLevelValue !== undefined && numericLevelValue !== null && numericLevelValue !== "";
   const onboardingLabel = hasLevel ? "Верифицируй свой уровень" : "Определи свой уровень";
+  const tournamentsField = getCustomField(profile, CUSTOM_FIELD_IDS.tournamentsAccess);
+  const tournamentsAccessValue = tournamentsField?.value?.[0];
+  const canHostTournaments = tournamentsAccessValue === "проводит турниры"
+    || Boolean(
+      tournamentsField?.attributes?.options?.some(
+        (opt) => opt.id === tournamentsAccessValue && opt.name.toLowerCase() === "проводит турниры",
+      ),
+    );
 
   return (
     <div className="app-container">
@@ -130,6 +144,36 @@ export function Cabinet() {
           </a>
         ))}
       </div>
+
+      {/* Игры */}
+      {canHostTournaments && (
+        <div className="section">
+          <div className="section-header">
+            <span className="section-title">Игры</span>
+          </div>
+          <div className="section-body">
+            <p className="section-text">Открывайте игровые сценарии в отдельном модуле.</p>
+            <button className="section-cta" onClick={onOpenGames} type="button">
+              Перейти в игры
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Турниры */}
+      {canHostTournaments && (
+        <div className="section">
+          <div className="section-header">
+            <span className="section-title">Турниры</span>
+          </div>
+          <div className="section-body">
+            <p className="section-text">Управляйте турнирами в отдельном модуле.</p>
+            <button className="section-cta" onClick={onOpenTournaments} type="button">
+              Перейти в турниры
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Записи */}
       <BookingsContainer
@@ -192,8 +236,8 @@ export function Cabinet() {
         isOpen={isOnboardingOpen}
         onClose={() => setIsOnboardingOpen(false)}
         profile={profile}
-        onboardingFieldIndex={4}
         gamesLink={QUICK_ACTIONS.find((action) => action.label === "Играть")?.href || "#"}
+        trainingLink={QUICK_ACTIONS.find((action) => action.label === "Групповые тренировки")?.href || "#"}
         tournamentsLink={QUICK_ACTIONS.find((action) => action.label === "Турниры")?.href || "#"}
         onProfileUpdated={loadProfile}
       />

@@ -1,0 +1,56 @@
+import type { CustomField, UserProfileType } from "./apiClient";
+
+export const CUSTOM_FIELD_IDS = {
+  vivaPadelLevel: "9018d922-6427-41a6-9ac0-4a2c0440eb8a",
+  lkPadelLevel: "f9790818-25fd-4b73-a781-79c02720727d",
+  lkPadelLevelNumeric: "eabfe27b-3f72-4496-9185-1a2ec6e6465e",
+  tournamentsAccess: "e17a32f3-65f7-47c5-bda1-33d79932c884",
+} as const;
+
+export function getCustomFieldValue(
+  profile: UserProfileType,
+  fieldId: string,
+): string | undefined {
+  return profile.customFields?.find((field) => field?.id === fieldId)?.value?.[0];
+}
+
+export function getCustomField(
+  profile: UserProfileType,
+  fieldId: string,
+): CustomField | undefined {
+  return profile.customFields?.find((field) => field?.id === fieldId);
+}
+
+export function parseNumericLevel(value?: string): number | null {
+  if (!value) return null;
+  const normalized = value.replace(",", ".");
+  const num = Number.parseFloat(normalized);
+  return Number.isFinite(num) ? num : null;
+}
+
+export function getLetterGrade(value: number): string {
+  if (value < 2) return "D";
+  if (value < 3) return "D+";
+  if (value < 3.5) return "C";
+  if (value < 4) return "C+";
+  if (value < 4.7) return "B";
+  if (value < 5.5) return "B+";
+  return "A";
+}
+
+export function formatScoreDisplay(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  return rounded.toFixed(1).replace(/\.0$/, "");
+}
+
+export function formatNumericField(value: number): string {
+  return value.toFixed(5).replace(".", ",");
+}
+
+export function findCustomFieldIndex(
+  customFields: CustomField[] | undefined,
+  fieldId: string,
+): number {
+  if (!customFields) return -1;
+  return customFields.findIndex((field) => field?.id === fieldId);
+}

@@ -3,6 +3,13 @@ import { Modal } from "../UI/Modal";
 import { apiUpdateCustomFields } from "../../utils/apiClient";
 import type { UserProfileType } from "../../utils/apiClient";
 import onboardingQ1 from "../../assets/onboarding-q1.jpg";
+import {
+  CUSTOM_FIELD_IDS,
+  findCustomFieldIndex,
+  formatNumericField,
+  getCustomFieldValue,
+  getLetterGrade,
+} from "../../utils/customFields";
 
 type ScoreOp =
   | { type: "add"; value: number }
@@ -273,8 +280,8 @@ interface OnboardingModalProps {
   isOpen: boolean;
   onClose: () => void;
   profile: UserProfileType;
-  onboardingFieldIndex: number;
   gamesLink: string;
+  trainingLink: string;
   tournamentsLink: string;
   onProfileUpdated: () => void;
 }
@@ -283,12 +290,13 @@ export function OnboardingModal({
   isOpen,
   onClose,
   profile,
-  onboardingFieldIndex,
   gamesLink,
+  trainingLink,
   tournamentsLink,
   onProfileUpdated,
 }: OnboardingModalProps) {
-  const existingRating = profile.customFields?.[onboardingFieldIndex]?.value?.[0];
+  const existingRating = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevel)
+    ?? getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
   const hasRating = existingRating !== undefined && existingRating !== null && existingRating !== "";
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
@@ -361,14 +369,13 @@ export function OnboardingModal({
     });
 
     if (cap != null) score = Math.min(score, cap);
-
-    const rounded = Math.round(score * 10) / 10;
-    return rounded.toFixed(1).replace(/\.0$/, "");
+    return score;
   };
 
   const handleFinish = async () => {
     const finalScore = computeScore();
-    setDoneScore(finalScore);
+    const letterScore = getLetterGrade(finalScore);
+    setDoneScore(letterScore);
     setSaving(true);
     setError(null);
 
@@ -376,13 +383,22 @@ export function OnboardingModal({
       const updatedCustomFields = Array.isArray(profile.customFields)
         ? [...profile.customFields]
         : [];
-      const currentField = updatedCustomFields[onboardingFieldIndex] || {};
-      updatedCustomFields[onboardingFieldIndex] = {
-        ...currentField,
-        value: [finalScore],
-      };
+      const ratingIndex = findCustomFieldIndex(updatedCustomFields, CUSTOM_FIELD_IDS.lkPadelLevel);
+      const numericIndex = findCustomFieldIndex(updatedCustomFields, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
+      if (ratingIndex === -1 && numericIndex === -1) {
+        setError("Поле рейтинга не найдено. Обратитесь к администратору.");
+        return;
+      }
+      if (ratingIndex !== -1) {
+        const currentField = updatedCustomFields[ratingIndex] || {};
+        updatedCustomFields[ratingIndex] = { ...currentField, value: [letterScore] };
+      }
+      if (numericIndex !== -1) {
+        const currentField = updatedCustomFields[numericIndex] || {};
+        updatedCustomFields[numericIndex] = { ...currentField, value: [formatNumericField(finalScore)] };
+      }
 
-      const res = await apiUpdateCustomFields(updatedCustomFields);
+      const res = await apiUpdateCustomFields(profile, updatedCustomFields);
       if (res.status === 200 || res.status === 204) {
         onProfileUpdated();
       } else {
@@ -425,7 +441,18 @@ export function OnboardingModal({
       <Modal isOpen={isOpen} onClose={onClose} title={titleText}>
         <div className="onboarding-body">
           <div className="onboarding-title">Готово!</div>
-          <p className="onboarding-text">Ваш рейтинг: <strong>{doneScore}</strong></p>
+          <p className="onboarding-text">Ваш уровень {doneScore}</p>
+          <p className="onboarding-text">
+            Если вы не согласны, вы можете верифицировать его на тренировке или при участии в турнире.
+          </p>
+          <div className="onboarding-links">
+            <a className="onboarding-link" href={trainingLink} target="_blank" rel="noopener noreferrer">
+              Перейти к тренировкам
+            </a>
+            <a className="onboarding-link" href={tournamentsLink} target="_blank" rel="noopener noreferrer">
+              Перейти к турнирам
+            </a>
+          </div>
           <div className="onboarding-actions">
             <button className="btn-primary" onClick={onClose}>Закрыть</button>
           </div>

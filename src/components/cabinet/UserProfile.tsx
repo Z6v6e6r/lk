@@ -1,5 +1,6 @@
 import { useAuth } from "../../context/AuthContext";
 import type { UserProfileType } from "../../utils/apiClient";
+import { CUSTOM_FIELD_IDS, getCustomFieldValue, getLetterGrade, parseNumericLevel } from "../../utils/customFields";
 
 interface UserProfileProps {
   profile: UserProfileType;
@@ -11,7 +12,13 @@ export function UserProfile({ profile, openEditForm }: UserProfileProps) {
   const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
   const initials = (profile.firstName?.[0] || "") + (profile.lastName?.[0] || "");
   const balance = (profile.deposit / 100).toLocaleString("ru-RU");
-  const points = profile.customFields?.[4]?.value?.[0];
+  const numericLevelRaw = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
+  const numericLevel = parseNumericLevel(numericLevelRaw ?? undefined);
+  const fraction = numericLevel != null ? Math.max(0, Math.min(1, numericLevel - Math.floor(numericLevel))) : 0;
+  const totalSegments = 135;
+  const filledSegments = Math.round(fraction * totalSegments);
+
+  const letterGrade = numericLevel != null ? getLetterGrade(numericLevel) : null;
 
   return (
     <div className="cab-header">
@@ -20,21 +27,22 @@ export function UserProfile({ profile, openEditForm }: UserProfileProps) {
   <div className="cab-avatar-wrapper">
     <svg className="cab-avatar-ring" viewBox="0 0 60 60">
       <circle cx="30" cy="30" r="27" fill="none" stroke="#e5e7eb" strokeWidth="4"/>
-      {Array.from({length: 135}, (_, idx) => {
+      {Array.from({length: totalSegments}, (_, idx) => {
         const i = idx + 1;
-        const t = i / 135;
+        const t = i / totalSegments;
         const power = Math.pow(t, 3);
-        const segmentLength = 127 / 135;
+        const segmentLength = 127 / totalSegments;
         const start = idx * segmentLength;
         const r = Math.round(180 + power * (53 - 180));
         const g = Math.round(150 + power * (63 - 150));
         const b = Math.round(255 + power * (185 - 255));
+        const isActive = idx < filledSegments;
         return (
           <circle key={i}
             cx="30" cy="30" r="27"
             fill="none"
-            stroke={`rgb(${r},${g},${b})`}
-            strokeWidth={0.3 + power * 10}
+            stroke={isActive ? `rgb(${r},${g},${b})` : "transparent"}
+            strokeWidth={isActive ? 0.3 + power * 10 : 0}
             strokeDasharray={`${segmentLength} 169`}
             strokeDashoffset={-start}
             strokeLinecap="butt"
@@ -44,7 +52,7 @@ export function UserProfile({ profile, openEditForm }: UserProfileProps) {
       })}
     </svg>
     <img src={profile.photo} alt="Аватар" className="cab-avatar" />
-    <div className="cab-avatar-badge">{points || "B+"}</div>
+    <div className="cab-avatar-badge">{letterGrade || "—"}</div>
   </div>
 ) : (
   <div className="cab-avatar-placeholder">{initials || "?"}</div>

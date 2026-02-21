@@ -16,7 +16,42 @@ export interface UserProfileType {
   withCard: boolean;
   loyaltyCard: string;
   clientCategory: { id: number; name: string };
-  customFields: any[];
+  customFields: CustomField[];
+}
+
+export interface CustomFieldOption {
+  id: string;
+  name: string;
+  default?: boolean;
+}
+
+export interface CustomFieldAttributes {
+  placeholder?: string;
+  options?: CustomFieldOption[];
+  default?: string;
+}
+
+export interface CustomFieldSettings {
+  visibleInWidget?: boolean;
+  alwaysAsk?: boolean;
+}
+
+export interface CustomField {
+  value: string[];
+  id: string;
+  name: string;
+  description?: string;
+  required?: boolean;
+  resource?: string;
+  type?: string;
+  attributes?: CustomFieldAttributes;
+  settings?: CustomFieldSettings;
+  enabled?: boolean;
+}
+
+export interface CustomFieldValue {
+  id: string;
+  value: string[];
 }
 
 export interface SubscriptionAvailableStudios {
@@ -242,7 +277,7 @@ export interface UpdateProfileData {
   middleName: string | null;
   photo: string | null;
   sex: string | null;
-  customFields?: any[];
+  customFields?: CustomFieldValue[];
 }
 
 export interface SubscriptionName {
@@ -368,7 +403,6 @@ async function withRetry<T>(
 ): Promise<ApiResult<T>> {
   let attempt = 0;
   while (true) {
-    console.log(attempt);
     try {
       const res = await fn();
       if (res.status !== 200 && res.status !== 204 && res.status !== 304) {
@@ -413,8 +447,20 @@ export async function apiUpdateProfile(data: UpdateProfileData) {
   });
 }
 
-export async function apiUpdateCustomFields(customFields: any[]) {
-  return apiUpdateProfile({ customFields } as UpdateProfileData);
+export async function apiUpdateCustomFields(profile: UserProfileType, customFields: CustomField[]) {
+  const customFieldValues: CustomFieldValue[] = customFields.map((field) => ({
+    id: field.id,
+    value: field.value ?? [],
+  }));
+  return apiUpdateProfile({
+    email: profile.email ?? null,
+    firstName: profile.firstName ?? null,
+    lastName: profile.lastName ?? null,
+    middleName: profile.middleName ?? null,
+    photo: profile.photo ?? null,
+    sex: profile.sex ?? "U",
+    customFields: customFieldValues,
+  });
 }
 
 export async function apiUploadProfilePhoto(file: File) {
@@ -458,6 +504,28 @@ export async function apiCancelBooking(bookingId: string) {
 export async function apiFetchSubscriptions() {
   return request<SubscriptionResponse>(
     `${API_BASE}/end-user/api/v1/${TENANT_KEY}/subscriptions`,
+    {
+      method: "GET",
+      auth: true,
+      retries: 1,
+    },
+  );
+}
+
+export async function apiFetchExercisesByDate(date: string) {
+  return request<Exercise[]>(
+    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/exercises?date=${date}`,
+    {
+      method: "GET",
+      auth: true,
+      retries: 1,
+    },
+  );
+}
+
+export async function apiFetchStudios() {
+  return request<Studio[]>(
+    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/studios`,
     {
       method: "GET",
       auth: true,
