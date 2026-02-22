@@ -1,5 +1,5 @@
 import { getCookie } from "./cookies";
-import { TENANT_KEY, API_BASE, SERV2, SUCCESS_URL, FAIL_URL } from "../consts/api_config";
+import { TENANT_KEY, API_BASE, SERV2, SERV2_FALLBACK, SUCCESS_URL, FAIL_URL } from "../consts/api_config";
 
 export interface UserProfileType {
   id: string;
@@ -394,6 +394,22 @@ export async function request<T>(
   return rawRequest<T>(url, options);
 }
 
+function shouldFallback(result: ApiResult<unknown>) {
+  return result.status == null || result.status >= 500;
+}
+
+async function requestWithFallback<T>(
+  primaryUrl: string,
+  fallbackUrl: string | undefined,
+  options: RequestOptions = {},
+): Promise<ApiResult<T>> {
+  const primary = await request<T>(primaryUrl, options);
+  if (!fallbackUrl || fallbackUrl === primaryUrl) return primary;
+  if (!shouldFallback(primary)) return primary;
+  const fallback = await request<T>(fallbackUrl, options);
+  return fallback.data ? fallback : primary;
+}
+
 async function withRetry<T>(
   fn: () => Promise<ApiResult<T>>,
   {
@@ -535,13 +551,14 @@ export async function apiFetchStudios() {
 }
 
 export async function apiFetchSubscriptioName(subId: string, phone: string) {
-  return request<SubscriptionName>(
-    `${SERV2}?type=get_sub_name&phone=${phone}&subId=${subId}`,
-    {
-      method: "GET",
-      retries: 1,
-    },
-  );
+  const primary = `${SERV2}?type=get_sub_name&phone=${phone}&subId=${subId}`;
+  const fallback = SERV2_FALLBACK
+    ? `${SERV2_FALLBACK}?type=get_sub_name&phone=${phone}&subId=${subId}`
+    : undefined;
+  return requestWithFallback<SubscriptionName>(primary, fallback, {
+    method: "GET",
+    retries: 1,
+  });
 }
 
 export async function apiBuySubscroption(
@@ -575,14 +592,18 @@ export async function apiBuySubscroption(
 }
 
 export async function apiGetSubscriptionsForSale() {
-  return request<apiSubscription[]>(`${SERV2}?type=sub_for_sale`, {
+  const primary = `${SERV2}?type=sub_for_sale`;
+  const fallback = SERV2_FALLBACK ? `${SERV2_FALLBACK}?type=sub_for_sale` : undefined;
+  return requestWithFallback<apiSubscription[]>(primary, fallback, {
     method: "GET",
     retries: 1,
   });
 }
 
 export async function apiGetAdvertisement() {
-  return request<AdvertisementType>(`${SERV2}?type=advertisement`, {
+  const primary = `${SERV2}?type=advertisement`;
+  const fallback = SERV2_FALLBACK ? `${SERV2_FALLBACK}?type=advertisement` : undefined;
+  return requestWithFallback<AdvertisementType>(primary, fallback, {
     method: "GET",
     retries: 1,
   });

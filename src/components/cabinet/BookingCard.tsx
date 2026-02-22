@@ -40,6 +40,13 @@ export function BookingCard({ booking, active, loadBookings }: BookingProps) {
   const timeFrom = booking.exercise?.timeFrom.slice(11, 16);
   const timeTo = booking.exercise?.timeTo.slice(11, 16);
   const canCancel = active && new Date(booking.cancellationDeadline) > new Date();
+  const roomName = booking.exercise?.room?.name || "";
+  const courtNumber = roomName.match(/\d+/)?.[0];
+  const courtLabel = roomName
+    ? courtNumber
+      ? `Корт №${courtNumber}`
+      : roomName
+    : "";
 
   const studioName = booking.exercise?.studio?.name || "";
   const studioAddr = booking.exercise?.studio?.address || "";
@@ -49,7 +56,8 @@ export function BookingCard({ booking, active, loadBookings }: BookingProps) {
 
   const handleCancel = async () => {
     const res = await apiCancelBooking(booking.id);
-    setCancelOk(res.status === 200);
+    const ok = res.status !== null && res.status >= 200 && res.status < 300;
+    setCancelOk(ok);
     setCancelState("done");
   };
 
@@ -70,6 +78,9 @@ export function BookingCard({ booking, active, loadBookings }: BookingProps) {
       <div className="booking-tags">
         {booking.exercise?.direction.name && (
           <span className="booking-tag">{booking.exercise.direction.name}</span>
+        )}
+        {active && courtLabel && (
+          <span className="booking-tag">{courtLabel}</span>
         )}
         <span className="booking-tag">{getPaymentLabel(booking, active)}</span>
       </div>
@@ -108,7 +119,7 @@ export function BookingCard({ booking, active, loadBookings }: BookingProps) {
       {cancelState === "done" && (
         <div className="booking-cancel-row">
           <button className="btn-cancel primary" onClick={() => { if (loadBookings) loadBookings(); }}>
-            {cancelOk ? "✓ Отменено" : "Ошибка — закрыть"}
+            {cancelOk ? "Запись отменена, продолжить" : "Ошибка — закрыть"}
           </button>
         </div>
       )}

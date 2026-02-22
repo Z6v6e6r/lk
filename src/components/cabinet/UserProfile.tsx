@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 import type { UserProfileType } from "../../utils/apiClient";
 import { CUSTOM_FIELD_IDS, getCustomFieldValue, getLetterGrade, parseNumericLevel } from "../../utils/customFields";
@@ -9,6 +10,7 @@ interface UserProfileProps {
 
 export function UserProfile({ profile, openEditForm }: UserProfileProps) {
   const { logout } = useAuth();
+  const [avatarError, setAvatarError] = useState(false);
   const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
   const initials = (profile.firstName?.[0] || "") + (profile.lastName?.[0] || "");
   const balance = (profile.deposit / 100).toLocaleString("ru-RU");
@@ -23,7 +25,7 @@ export function UserProfile({ profile, openEditForm }: UserProfileProps) {
   return (
     <div className="cab-header">
       <div className="cab-user-row">
-      {profile.photo ? (
+      {profile.photo && !avatarError ? (
   <div className="cab-avatar-wrapper">
     <svg className="cab-avatar-ring" viewBox="0 0 60 60">
       <circle cx="30" cy="30" r="27" fill="none" stroke="#e5e7eb" strokeWidth="4"/>
@@ -51,7 +53,12 @@ export function UserProfile({ profile, openEditForm }: UserProfileProps) {
         );
       })}
     </svg>
-    <img src={profile.photo} alt="Аватар" className="cab-avatar" />
+    <img
+      src={profile.photo}
+      alt="Аватар"
+      className="cab-avatar"
+      onError={() => setAvatarError(true)}
+    />
     <div className="cab-avatar-badge">{letterGrade || "—"}</div>
   </div>
 ) : (

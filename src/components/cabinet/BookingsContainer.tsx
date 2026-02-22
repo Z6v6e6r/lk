@@ -38,10 +38,15 @@ export function BookingsContainer({
   if (!hasActive && !hasHistory) return null;
 
   const activeList = activeBookings?.content || [];
+  const sortedActive = [...activeList].sort((a, b) => {
+    const aTime = a.exercise?.timeFrom ? new Date(a.exercise.timeFrom).getTime() : Number.POSITIVE_INFINITY;
+    const bTime = b.exercise?.timeFrom ? new Date(b.exercise.timeFrom).getTime() : Number.POSITIVE_INFINITY;
+    return aTime - bTime;
+  });
   const currentTab = TABS[activeTab]?.key || "all";
   const filteredActive = currentTab === "all"
-    ? activeList
-    : activeList.filter((book) => {
+    ? sortedActive
+    : sortedActive.filter((book) => {
         const name = book.exercise?.direction?.name || book.exercise?.type?.name || "";
         return getBookingCategory(name) === currentTab;
       });

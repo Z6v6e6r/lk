@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import type { Studio } from "../../utils/apiClient";
 import { apiFetchStudios, apiFetchProfile } from "../../utils/apiClient";
@@ -68,9 +69,12 @@ export default function GamesPage({ onBack }: GamesPageProps) {
   const [loadingStudios, setLoadingStudios] = useState(false);
   const [profileName, setProfileName] = useState("Организатор");
   const [profileGrade, setProfileGrade] = useState("D+");
+  const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
+  const [ringFraction, setRingFraction] = useState(0);
   const [inviteCopied, setInviteCopied] = useState(false);
   const [payMode, setPayMode] = useState<PayMode>("self");
   const [mapOpen, setMapOpen] = useState(false);
+  const [avatarError, setAvatarError] = useState(false);
 
   const dates = useMemo(() => {
     const base = new Date();
@@ -101,10 +105,16 @@ export default function GamesPage({ onBack }: GamesPageProps) {
         .filter(Boolean)
         .join(" ");
       setProfileName(fullName || "Организатор");
+      setProfilePhoto(res.data.photo ?? null);
 
       const numeric = parseNumericLevel(
         getCustomFieldValue(res.data, CUSTOM_FIELD_IDS.lkPadelLevelNumeric),
       );
+      const fraction =
+        numeric != null
+          ? Math.max(0, Math.min(1, numeric - Math.floor(numeric)))
+          : 0;
+      setRingFraction(fraction);
       const explicitGrade = getCustomFieldValue(
         res.data,
         CUSTOM_FIELD_IDS.lkPadelLevel,
@@ -172,6 +182,9 @@ export default function GamesPage({ onBack }: GamesPageProps) {
     .slice(0, 2)
     .join("")
     .toUpperCase();
+
+  const ringSegments = 135;
+  const filledSegments = Math.round(ringFraction * ringSegments);
 
   const handleCreateGame = () => {
     if (!canCreate) return;
@@ -313,24 +326,38 @@ export default function GamesPage({ onBack }: GamesPageProps) {
         <div className="game-section">
           <div className="game-section-title">Дата и время начала игры</div>
           <div className="date-row">
-            {dates.map((d, i) => (
-              <button
-                key={d.toISOString()}
-                className={`date-chip ${dateIndex === i ? "active" : ""}`}
-                onClick={() => {
-                  setDateIndex(i);
-                  setTime(null);
-                }}
-                type="button"
-              >
-                <span className="date-chip-weekday">
-                  {d.toLocaleDateString("ru-RU", { weekday: "short" })}
-                </span>
-                <span className="date-chip-day">
-                  {d.toLocaleDateString("ru-RU", { day: "2-digit" })}
-                </span>
-              </button>
-            ))}
+            {dates.map((d, i) => {
+              const monthLabel = d
+                .toLocaleDateString("ru-RU", { month: "short" })
+                .replace(".", "")
+                .trim()
+                .slice(0, 3)
+                .toUpperCase();
+              const weekdayLabel = d
+                .toLocaleDateString("ru-RU", { weekday: "short" })
+                .replace(".", "")
+                .toUpperCase();
+              const dayLabel = d.toLocaleDateString("ru-RU", { day: "2-digit" });
+
+              return (
+                <div key={d.toISOString()} className="date-item">
+                  <div className="date-weekday">{weekdayLabel}</div>
+                  <button
+                    className={`date-chip ${dateIndex === i ? "active" : ""}`}
+                    onClick={() => {
+                      setDateIndex(i);
+                      setTime(null);
+                    }}
+                    type="button"
+                  >
+                    <div className="booking-date-badge">
+                      <div className="booking-date-badge-month">{monthLabel}</div>
+                      <div className="booking-date-badge-day">{dayLabel}</div>
+                    </div>
+                  </button>
+                </div>
+              );
+            })}
           </div>
           <div className="time-grid">
             {TIME_SLOTS.map((slot) => (
@@ -469,26 +496,34 @@ export default function GamesPage({ onBack }: GamesPageProps) {
           <div className="game-card-row">
             <div>
               <div className="game-card-title">
-                {studio ? studio.name : "Выберите место"}
+                {studio ? studio.name : "Выберите станцию"}
               </div>
               <div className="game-card-sub">
-                {studio ? studio.address : "Клуб или корт"}
+                {studio ? studio.address : "Клуб"}
               </div>
             </div>
             <span className="game-card-arrow">›</span>
           </div>
         </button>
 
-        <button className="game-card" onClick={() => setStep("time")} type="button">
+        <button
+          className={`game-card ${studio ? "" : "disabled"}`}
+          onClick={() => {
+            if (!studio) return;
+            setStep("time");
+          }}
+          type="button"
+          disabled={!studio}
+        >
           <div className="game-card-row">
             <div>
               <div className="game-card-title">
-                {time && selectedDate ? `Забронировано на ${dateLabel}` : "Забронируйте корт"}
+                {time && selectedDate ? `Забронировано на ${dateLabel}` : "Выбери корт и время"}
               </div>
               <div className="game-card-sub">
                 {time && selectedCourt
                   ? `${time}, ${duration} мин · ${selectedCourt.name}`
-                  : "Выберите дату, время и корт"}
+                  : "Корт и время"}
               </div>
             </div>
             <span className="game-card-arrow">›</span>
@@ -520,7 +555,7 @@ export default function GamesPage({ onBack }: GamesPageProps) {
                 {
                   "--min": `${minPercent}%`,
                   "--max": `${maxPercent}%`,
-                } as React.CSSProperties
+                } as CSSProperties
               }
             />
             <input
@@ -560,9 +595,56 @@ export default function GamesPage({ onBack }: GamesPageProps) {
           <div className="game-card-title">Команда</div>
           <div className="team-row">
             <div className="team-member">
-              <div className="team-avatar">
-                <span className="team-initials">{initials || "Вы"}</span>
-                <span className="team-grade">{profileGrade}</span>
+              <div className="team-avatar-wrapper">
+                <svg className="team-avatar-ring" viewBox="0 0 60 60">
+                  <circle
+                    cx="30"
+                    cy="30"
+                    r="27"
+                    fill="none"
+                    stroke="#e5e7eb"
+                    strokeWidth="4"
+                  />
+                  {Array.from({ length: ringSegments }, (_, idx) => {
+                    const i = idx + 1;
+                    const t = i / ringSegments;
+                    const power = Math.pow(t, 3);
+                    const segmentLength = 127 / ringSegments;
+                    const start = idx * segmentLength;
+                    const r = Math.round(180 + power * (53 - 180));
+                    const g = Math.round(150 + power * (63 - 150));
+                    const b = Math.round(255 + power * (185 - 255));
+                    const isActive = idx < filledSegments;
+                    return (
+                      <circle
+                        key={i}
+                        cx="30"
+                        cy="30"
+                        r="27"
+                        fill="none"
+                        stroke={isActive ? `rgb(${r},${g},${b})` : "transparent"}
+                        strokeWidth={isActive ? 0.3 + power * 10 : 0}
+                        strokeDasharray={`${segmentLength} 169`}
+                        strokeDashoffset={-start}
+                        strokeLinecap="butt"
+                        transform="rotate(90 30 30)"
+                      />
+                    );
+                  })}
+                </svg>
+                {profilePhoto && !avatarError ? (
+                  <img
+                    src={profilePhoto}
+                    alt="Аватар"
+                    className="team-avatar-img"
+                    onError={() => setAvatarError(true)}
+                  />
+                ) : (
+                  <div className="team-avatar-fallback">
+                    {initials || "Вы"}
+                  </div>
+                )}
+                <div className="team-avatar-badge">{profileGrade}</div>
               </div>
               <div className="team-name">{profileName}</div>
               <span className="team-badge">Вы</span>

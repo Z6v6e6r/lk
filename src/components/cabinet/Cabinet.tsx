@@ -24,9 +24,9 @@ import { OnboardingModal } from "./OnboardingModal";
 import { CUSTOM_FIELD_IDS, getCustomField, getCustomFieldValue } from "../../utils/customFields";
 
 const QUICK_ACTIONS = [
-  { icon: "🎾", label: "Играть", href: "https://t.me/padlhub_bot" },
+  { icon: "🎾", label: "Играть", href: "https://padlhub.ru/locations_lk" },
   { icon: "👥", label: "Групповые тренировки", href: "#9Rzqf" },
-  { icon: "🏆", label: "Турниры", href: "https://t.me/Academy_F_padel_bot" },
+  { icon: "🏆", label: "Турниры", href: "https://padlhub.ru/padel_torneos" },
   { icon: "🎯", label: "Индивидуальные тренировки", href: "https://padlhub.ru/indi_lk" },
 ];
 
@@ -41,6 +41,8 @@ export function Cabinet({ onOpenGames, onOpenTournaments }: CabinetProps) {
   const [activeBookings, setActiveBookings] = useState<BookingsResponse | null>(null);
   const [userSubscriptions, setUserSubscriptions] = useState<SubscriptionResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isBookingHistoryOpen, setIsBookingHistoryOpen] = useState(false);
   const [isSubscriptionInfoOpen, SetSubscriptionInfoOpen] = useState(false);
@@ -54,6 +56,7 @@ export function Cabinet({ onOpenGames, onOpenTournaments }: CabinetProps) {
     let isMounted = true;
     const loadData = async () => {
       setLoading(true);
+      setLoadError(null);
       try {
         const [profileRes, activeRes, historyRes, subsRes] = await Promise.all([
           apiFetchProfile(),
@@ -62,20 +65,31 @@ export function Cabinet({ onOpenGames, onOpenTournaments }: CabinetProps) {
           apiFetchSubscriptions(),
         ]);
         if (!isMounted) return;
-        if (!profileRes?.data) { logout(); return; }
+        if (!profileRes?.data) {
+          if (profileRes?.status === 401) {
+            logout();
+            return;
+          }
+          setLoadError(profileRes?.error?.message || "Не удалось загрузить данные. Проверьте интернет.");
+          setLoading(false);
+          return;
+        }
         setProfile(profileRes.data);
         setActiveBookings(activeRes?.data || null);
         setHistoryBookings(historyRes?.data || null);
         setUserSubscriptions(subsRes?.data || null);
       } catch (error) {
-        if (isMounted) console.error("Ошибка загрузки:", error);
+        if (isMounted) {
+          console.error("Ошибка загрузки:", error);
+          setLoadError("Ошибка сети. Проверьте интернет и повторите.");
+        }
       } finally {
         if (isMounted) setLoading(false);
       }
     };
     loadData();
     return () => { isMounted = false; };
-  }, [logout]);
+  }, [logout, reloadKey]);
 
   const loadProfile = async () => {
     const data = await apiFetchProfile();
@@ -100,7 +114,22 @@ export function Cabinet({ onOpenGames, onOpenTournaments }: CabinetProps) {
   };
 
   if (loading) return <div className="loading">Загрузка...</div>;
-  if (!profile) return <div className="loading">Ошибка загрузки профиля</div>;
+  if (loadError) {
+    return (
+      <div className="load-error">
+        <div className="load-error-title">Не удалось загрузить данные</div>
+        <div className="load-error-text">{loadError}</div>
+        <button
+          className="section-cta"
+          type="button"
+          onClick={() => setReloadKey((v) => v + 1)}
+        >
+          Повторить
+        </button>
+      </div>
+    );
+  }
+  if (!profile) return <div className="load-error">Ошибка загрузки профиля</div>;
   const numericLevelValue = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
   const hasLevel = numericLevelValue !== undefined && numericLevelValue !== null && numericLevelValue !== "";
   const onboardingLabel = hasLevel ? "Верифицируй свой уровень" : "Определи свой уровень";
@@ -123,11 +152,13 @@ export function Cabinet({ onOpenGames, onOpenTournaments }: CabinetProps) {
       />
 
       {/* Онбординг */}
-      <div className="onboarding-section">
-        <button className="onboarding-btn" onClick={() => setIsOnboardingOpen(true)}>
-          {onboardingLabel}
-        </button>
-      </div>
+      {canHostTournaments && (
+        <div className="onboarding-section">
+          <button className="onboarding-btn" onClick={() => setIsOnboardingOpen(true)}>
+            {onboardingLabel}
+          </button>
+        </div>
+      )}
 
       {/* Быстрые действия */}
       <div className="quick-actions">
