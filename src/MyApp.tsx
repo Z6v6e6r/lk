@@ -3,11 +3,11 @@ import { createRoot } from "react-dom/client";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { AuthForm } from "./components/auth/AuthForm";
 import { Cabinet } from "./components/cabinet/Cabinet";
-import { GAMES_BUNDLE_URL, TOURNAMENTS_BUNDLE_URL } from "./consts/api_config";
+import { GAMES_BUNDLE_URL, TOURNAMENTS_BUNDLE_URL, ONBOARDING_BUNDLE_URL } from "./consts/api_config";
 import "./MyApp.css";
 
 type WidgetModule = {
-  mount: (options?: { targetId?: string; onClose?: () => void }) => void;
+  mount: (options?: { targetId?: string; onClose?: () => void; data?: any }) => void;
   unmount?: (targetId?: string) => void;
 };
 
@@ -79,9 +79,10 @@ function AppContent() {
   }, []);
 
   const openOverlayModule = async (
-    module: "games" | "tournaments",
+    module: "games" | "tournaments" | "onboarding",
     src?: string,
     globalName?: string,
+    data?: any,
   ) => {
     if (!src || !globalName) {
       console.warn("Overlay module URL is not configured");
@@ -92,10 +93,11 @@ function AppContent() {
 
     if (import.meta.env.DEV) {
       try {
-        const mod =
-          module === "games"
-            ? await import("./components/games/GamesPage")
-            : await import("./components/tournaments/TournamentsPage");
+        const mod = module === "games"
+          ? await import("./components/games/GamesPage")
+          : module === "tournaments"
+            ? await import("./components/tournaments/TournamentsPage")
+            : await import("./components/onboarding/OnboardingPage");
         const Component = mod.default;
         container.innerHTML = "";
         overlayRoot?.unmount();
@@ -105,6 +107,7 @@ function AppContent() {
             onBack={() => {
               hideOverlay();
             }}
+            {...(data ?? {})}
           />,
         );
         return;
@@ -123,6 +126,7 @@ function AppContent() {
           widget.unmount?.(OVERLAY_ID);
           hideOverlay();
         },
+        data,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Ошибка загрузки";
@@ -149,6 +153,13 @@ function AppContent() {
             "tournaments",
             TOURNAMENTS_BUNDLE_URL,
             "LKWidgetTournaments",
+          )}
+        onOpenOnboarding={(data) =>
+          openOverlayModule(
+            "onboarding",
+            ONBOARDING_BUNDLE_URL,
+            "LKWidgetOnboarding",
+            data,
           )}
       />
     );

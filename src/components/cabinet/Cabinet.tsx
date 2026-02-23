@@ -20,7 +20,6 @@ import { SubscriptionsContainer } from "./SubscriptionsContainer";
 import { SubscriptionInformation } from "./SubscriptionInformation";
 import { BuySupscription } from "./BuySubscription";
 import { Advertisement } from "./Advertisement";
-import { OnboardingModal } from "./OnboardingModal";
 import { CUSTOM_FIELD_IDS, getCustomField, getCustomFieldValue } from "../../utils/customFields";
 
 const QUICK_ACTIONS = [
@@ -33,9 +32,15 @@ const QUICK_ACTIONS = [
 interface CabinetProps {
   onOpenGames: () => void;
   onOpenTournaments: () => void;
+  onOpenOnboarding: (data: {
+    profile: UserProfileType;
+    gamesLink: string;
+    trainingLink: string;
+    tournamentsLink: string;
+  }) => void;
 }
 
-export function Cabinet({ onOpenGames, onOpenTournaments }: CabinetProps) {
+export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: CabinetProps) {
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [historyBookings, setHistoryBookings] = useState<BookingsResponse | null>(null);
   const [activeBookings, setActiveBookings] = useState<BookingsResponse | null>(null);
@@ -49,7 +54,6 @@ export function Cabinet({ onOpenGames, onOpenTournaments }: CabinetProps) {
   const [currenSub, SetCurrenSub] = useState<Subscription | null>(null);
   const [currenSubName, SetCurrenSubName] = useState<string>("Абонемент");
   const [isOpenBuySub, setOpenBuySub] = useState<boolean>(false);
-  const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(false);
   const { logout } = useAuth();
 
   useEffect(() => {
@@ -90,6 +94,16 @@ export function Cabinet({ onOpenGames, onOpenTournaments }: CabinetProps) {
     loadData();
     return () => { isMounted = false; };
   }, [logout, reloadKey]);
+
+  useEffect(() => {
+    const handler = () => {
+      loadProfile();
+    };
+    window.addEventListener("lk-profile-updated", handler);
+    return () => {
+      window.removeEventListener("lk-profile-updated", handler);
+    };
+  }, []);
 
   const loadProfile = async () => {
     const data = await apiFetchProfile();
@@ -154,7 +168,16 @@ export function Cabinet({ onOpenGames, onOpenTournaments }: CabinetProps) {
       {/* Онбординг */}
       {canHostTournaments && (
         <div className="onboarding-section">
-          <button className="onboarding-btn" onClick={() => setIsOnboardingOpen(true)}>
+          <button
+            className="onboarding-btn"
+            onClick={() =>
+              onOpenOnboarding({
+                profile,
+                gamesLink: QUICK_ACTIONS.find((action) => action.label === "Играть")?.href || "#",
+                trainingLink: QUICK_ACTIONS.find((action) => action.label === "Групповые тренировки")?.href || "#",
+                tournamentsLink: QUICK_ACTIONS.find((action) => action.label === "Турниры")?.href || "#",
+              })}
+          >
             {onboardingLabel}
           </button>
         </div>
@@ -262,15 +285,6 @@ export function Cabinet({ onOpenGames, onOpenTournaments }: CabinetProps) {
         isOpen={isOpenBuySub}
         onClose={() => setOpenBuySub(false)}
         phone={profile.phone}
-      />
-      <OnboardingModal
-        isOpen={isOnboardingOpen}
-        onClose={() => setIsOnboardingOpen(false)}
-        profile={profile}
-        gamesLink={QUICK_ACTIONS.find((action) => action.label === "Играть")?.href || "#"}
-        trainingLink={QUICK_ACTIONS.find((action) => action.label === "Групповые тренировки")?.href || "#"}
-        tournamentsLink={QUICK_ACTIONS.find((action) => action.label === "Турниры")?.href || "#"}
-        onProfileUpdated={loadProfile}
       />
     </div>
   );

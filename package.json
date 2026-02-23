@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && vite build --config vite.config.games.ts && vite build --config vite.config.tournaments.ts",
+    "build": "tsc -b && vite build && vite build --config vite.config.games.ts && vite build --config vite.config.tournaments.ts && vite build --config vite.config.onboarding.ts",
     "lint": "eslint .",
     "preview": "vite preview"
   },

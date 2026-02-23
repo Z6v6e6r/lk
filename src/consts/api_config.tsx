@@ -9,3 +9,4 @@ export const FAIL_URL = import.meta.env.VITE_FAIL_URL as string;
 
 export const GAMES_BUNDLE_URL = import.meta.env.VITE_GAMES_BUNDLE_URL as string | undefined;
 export const TOURNAMENTS_BUNDLE_URL = import.meta.env.VITE_TOURNAMENTS_BUNDLE_URL as string | undefined;
+export const ONBOARDING_BUNDLE_URL = import.meta.env.VITE_ONBOARDING_BUNDLE_URL as string | undefined;
