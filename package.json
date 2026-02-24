@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build && vite build --config vite.config.games.ts && vite build --config vite.config.tournaments.ts && vite build --config vite.config.onboarding.ts",
+    "build:dev": "tsc -b && vite build --mode dev --outDir dist-dev && vite build --config vite.config.games.ts --mode dev --outDir dist-dev && vite build --config vite.config.tournaments.ts --mode dev --outDir dist-dev && vite build --config vite.config.onboarding.ts --mode dev --outDir dist-dev && node scripts/copy-dev.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },

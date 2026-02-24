@@ -257,6 +257,62 @@ export interface AmericanoTournamentPayload {
     photo: string | null;
     name: string;
   }>;
+  rounds?: Array<{
+    id: string;
+    index: number;
+    matches: Array<{
+      id: string;
+      court: string;
+      pair1: string[];
+      pair2: string[];
+      score1: number | null;
+      score2: number | null;
+    }>;
+  }>;
+}
+
+export interface AmericanoResultsPayload {
+  tournamentId: string;
+  results: Array<{
+    roundId: string;
+    matchId: string;
+    score1: number;
+    score2: number;
+    pair1?: string[];
+    pair2?: string[];
+  }>;
+  params?: Record<string, unknown>;
+}
+
+export interface AmericanoResultsResponse {
+  totals?: Record<
+    string,
+    {
+      ratingBefore: number;
+      ratingAfter: number;
+      deltaTotal: number;
+      wins: number;
+      losses: number;
+      draws: number;
+      pointsFor: number;
+      pointsAgainst: number;
+    }
+  >;
+  rounds?: unknown[];
+  playerLogs?: Record<
+    string,
+    Array<{
+      roundId?: string;
+      matchId?: string;
+      scoreFor?: number;
+      scoreAgainst?: number;
+      delta?: number;
+      ratingBefore?: number;
+      ratingAfter?: number;
+      expected?: number;
+      actual?: number;
+    }>
+  >;
 }
 
 export interface Booking {
@@ -433,7 +489,7 @@ export async function request<T>(
   return rawRequest<T>(url, options);
 }
 
-function getServ2Origin() {
+export function getServ2Origin() {
   try {
     return new URL(SERV2).origin;
   } catch {
@@ -611,6 +667,15 @@ export async function apiFetchTournamentParticipants(exerciseId: string) {
 export async function apiCreateAmericanoTournament(payload: AmericanoTournamentPayload) {
   const base = getServ2Origin();
   return request<{ ok?: boolean }>(`${base}/lk/tournaments/americano`, {
+    method: "POST",
+    retries: 1,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiUpdateAmericanoResults(payload: AmericanoResultsPayload) {
+  const base = getServ2Origin();
+  return request<AmericanoResultsResponse>(`${base}/lk/tournaments/americano/results`, {
     method: "POST",
     retries: 1,
     body: JSON.stringify(payload),
