@@ -220,6 +220,101 @@ export interface Exercise {
   cancellationDeadline?: string | null;
 }
 
+export interface ExerciseBookingClient {
+  id: string;
+  firstName?: string;
+  lastName?: string;
+  middleName?: string;
+  photo?: string;
+  phone?: string;
+}
+
+export interface ExerciseBooking {
+  id: string;
+  spot?: number;
+  isCancelled?: boolean;
+  client?: ExerciseBookingClient;
+  rating?: string;
+  ratingSource?: "level" | "phone";
+}
+
+export interface AmericanoTournamentPayload {
+  tournamentId: string;
+  tenantKey: string;
+  createdAt: string;
+  organizer: {
+    id: string | null;
+    phone: string | null;
+    tenantKey: string;
+  };
+  tournamentType: "americano";
+  targetScore: number;
+  courts: string[];
+  participants: Array<{
+    id: string | null;
+    phone: string | null;
+    rating: string | null;
+    photo: string | null;
+    name: string;
+  }>;
+  rounds?: Array<{
+    id: string;
+    index: number;
+    matches: Array<{
+      id: string;
+      court: string;
+      pair1: string[];
+      pair2: string[];
+      score1: number | null;
+      score2: number | null;
+    }>;
+  }>;
+}
+
+export interface AmericanoResultsPayload {
+  tournamentId: string;
+  results: Array<{
+    roundId: string;
+    matchId: string;
+    score1: number;
+    score2: number;
+    pair1?: string[];
+    pair2?: string[];
+  }>;
+  params?: Record<string, unknown>;
+}
+
+export interface AmericanoResultsResponse {
+  totals?: Record<
+    string,
+    {
+      ratingBefore: number;
+      ratingAfter: number;
+      deltaTotal: number;
+      wins: number;
+      losses: number;
+      draws: number;
+      pointsFor: number;
+      pointsAgainst: number;
+    }
+  >;
+  rounds?: unknown[];
+  playerLogs?: Record<
+    string,
+    Array<{
+      roundId?: string;
+      matchId?: string;
+      scoreFor?: number;
+      scoreAgainst?: number;
+      delta?: number;
+      ratingBefore?: number;
+      ratingAfter?: number;
+      expected?: number;
+      actual?: number;
+    }>
+  >;
+}
+
 export interface Booking {
   id: string;
   spot: number;
@@ -394,6 +489,14 @@ export async function request<T>(
   return rawRequest<T>(url, options);
 }
 
+export function getServ2Origin() {
+  try {
+    return new URL(SERV2).origin;
+  } catch {
+    return SERV2;
+  }
+}
+
 function shouldFallback(result: ApiResult<unknown>) {
   return result.status == null || result.status >= 500;
 }
@@ -460,6 +563,23 @@ export async function apiUpdateProfile(data: UpdateProfileData) {
     auth: true,
     retries: 1,
     body: JSON.stringify(data),
+  });
+}
+
+export interface OnboardingLevelPayload {
+  clientId: string;
+  phone?: string | null;
+  levelLetter: string;
+  levelNumeric: string | number;
+}
+
+export async function apiSaveOnboardingLevel(payload: OnboardingLevelPayload) {
+  const baseUrl = getServ2Origin() || "";
+  return request<{ ok: boolean }>(`/lk/onboarding/level`, {
+    method: "POST",
+    baseUrl,
+    retries: 1,
+    body: JSON.stringify(payload),
   });
 }
 
@@ -537,6 +657,46 @@ export async function apiFetchExercisesByDate(date: string) {
       retries: 1,
     },
   );
+}
+
+export async function apiFetchExerciseBookings(exerciseId: string) {
+  return request<ExerciseBooking[]>(
+    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/exercises/${exerciseId}/bookings`,
+    {
+      method: "GET",
+      auth: true,
+      retries: 1,
+    },
+  );
+}
+
+export async function apiFetchTournamentParticipants(exerciseId: string) {
+  const base = getServ2Origin();
+  return request<ExerciseBooking[]>(
+    `${base}/lk/tournaments/participants?exerciseId=${exerciseId}`,
+    {
+      method: "GET",
+      retries: 1,
+    },
+  );
+}
+
+export async function apiCreateAmericanoTournament(payload: AmericanoTournamentPayload) {
+  const base = getServ2Origin();
+  return request<{ ok?: boolean }>(`${base}/lk/tournaments/americano`, {
+    method: "POST",
+    retries: 1,
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiUpdateAmericanoResults(payload: AmericanoResultsPayload) {
+  const base = getServ2Origin();
+  return request<AmericanoResultsResponse>(`${base}/lk/tournaments/americano/results`, {
+    method: "POST",
+    retries: 1,
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function apiFetchStudios() {

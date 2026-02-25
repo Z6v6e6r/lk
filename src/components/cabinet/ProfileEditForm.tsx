@@ -14,10 +14,12 @@ interface ProfileEditFormProps {
     photo: string | null;
   };
   onSaveSuccess: () => void;
+  showVerifyLevel?: boolean;
+  onVerifyLevel?: () => void;
 }
 
 export const ProfileEditForm: React.FC<ProfileEditFormProps> = ({
-  isOpen, onClose, initialData, onSaveSuccess,
+  isOpen, onClose, initialData, onSaveSuccess, showVerifyLevel = false, onVerifyLevel,
 }) => {
   const [formData, setFormData] = useState({
     email: initialData.email || "",
@@ -64,6 +66,11 @@ export const ProfileEditForm: React.FC<ProfileEditFormProps> = ({
     }
   };
 
+  const handleVerifyLevel = () => {
+    onClose();
+    onVerifyLevel?.();
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -104,6 +111,19 @@ export const ProfileEditForm: React.FC<ProfileEditFormProps> = ({
             <option value="F">Женский</option>
           </select>
         </div>
+
+        {showVerifyLevel && onVerifyLevel && (
+          <div className="form-verify-level">
+            <button
+              type="button"
+              className="onboarding-btn onboarding-btn--secondary"
+              onClick={handleVerifyLevel}
+              disabled={saving}
+            >
+              Верифицировать уровень
+            </button>
+          </div>
+        )}
 
         <div className="form-actions" style={{ marginTop: 20 }}>
           <button type="button" className="btn-secondary" onClick={onClose} disabled={saving}>Отмена</button>

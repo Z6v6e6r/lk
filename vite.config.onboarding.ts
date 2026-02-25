@@ -16,9 +16,9 @@ export default defineConfig({
     cssCodeSplit: false,
     assetsInlineLimit: 4096,
     lib: {
-      entry: 'src/tournaments.tsx',
+      entry: 'src/onboarding.tsx',
       name: 'LKWidget',
-      fileName: () => 'tournaments.js',
+      fileName: () => 'onboarding.js',
       formats: ['iife'],
     },
     rollupOptions: {
