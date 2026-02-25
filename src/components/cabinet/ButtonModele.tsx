@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
-import tgLogo from "../../assets/telegram.svg";
-import vkLogo from "../../assets/vk.svg";
-import giftLogo from "../../assets/gift-card.png";
+import { useAuth } from "../../context/AuthContext";
+const tgLogo = "https://zver.tw1.ru/lk/assets/telegram.svg";
+const vkLogo = "https://zver.tw1.ru/lk/assets/vk.svg";
+const giftLogo = "https://zver.tw1.ru/lk/assets/gift-card.png";
 
 export function ButtonModule() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const { logout } = useAuth();
 
   useEffect(() => {
     window.addEventListener("beforeinstallprompt", (e) => {
@@ -25,17 +27,24 @@ export function ButtonModule() {
 
   return (
     <div className="social-section">
-      <a href="https://vk.com/padlhub" target="_blank" rel="noopener noreferrer" className="social-link">
-        <img src={vkLogo} alt="ВКонтакте" />
-      </a>
-      <a href="https://padlhub.ru/giftcard" target="_blank" rel="noopener noreferrer" className="social-link">
-        <img src={giftLogo} alt="Подарочная карта" />
-      </a>
-      <a href="https://t.me/padel_academyF" target="_blank" rel="noopener noreferrer" className="social-link">
-        <img src={tgLogo} alt="Telegram" />
-      </a>
-      <button className="install-btn" onClick={handleInstall} title="Добавить на рабочий стол">
-        📲
+      <div className="social-links">
+        <a href="https://vk.com/padlhub" target="_blank" rel="noopener noreferrer" className="social-link">
+          <img src={vkLogo} alt="ВКонтакте" />
+        </a>
+        <a href="https://padlhub.ru/giftcard" target="_blank" rel="noopener noreferrer" className="social-link">
+          <img src={giftLogo} alt="Подарочная карта" />
+        </a>
+        <a href="https://t.me/padel_academyF" target="_blank" rel="noopener noreferrer" className="social-link">
+          <img src={tgLogo} alt="Telegram" />
+        </a>
+        <button className="install-btn" onClick={handleInstall} title="Добавить на рабочий стол">
+          📲
+        </button>
+      </div>
+      <button className="social-logout" onClick={logout} title="Выйти">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5-5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z" fill="#1A1A1A"/>
+        </svg>
       </button>
     </div>
   );

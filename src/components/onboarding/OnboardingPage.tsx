@@ -11,6 +11,11 @@ interface OnboardingPageProps {
   tournamentsLink: string;
 }
 
+type ProfileUpdatedEventDetail = {
+  levelLetter: string;
+  levelNumeric: string;
+};
+
 export default function OnboardingPage({
   onBack,
   profile: initialProfile,
@@ -49,8 +54,8 @@ export default function OnboardingPage({
       gamesLink={gamesLink}
       trainingLink={trainingLink}
       tournamentsLink={tournamentsLink}
-      onProfileUpdated={() => {
-        window.dispatchEvent(new CustomEvent("lk-profile-updated"));
+      onProfileUpdated={(detail: ProfileUpdatedEventDetail) => {
+        window.dispatchEvent(new CustomEvent<ProfileUpdatedEventDetail>("lk-profile-updated", { detail }));
       }}
     />
   );

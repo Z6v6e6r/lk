@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useCountdown } from "../../hooks/useCountdown";
-import resendImg from "../../assets/resend.png";
+const resendImg = "https://zver.tw1.ru/lk/assets/resend.png";
 
 interface CodeStepProps {
   phone: string;

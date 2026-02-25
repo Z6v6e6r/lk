@@ -36,11 +36,26 @@ function hideOverlay() {
   const el = document.getElementById(OVERLAY_ID);
   if (el) {
     el.classList.remove("open");
-    el.innerHTML = "";
   }
-  overlayRoot?.unmount();
-  overlayRoot = null;
   document.body.classList.remove("lk-overlay-open");
+
+  const root = overlayRoot;
+  overlayRoot = null;
+
+  const cleanup = () => {
+    if (root) {
+      try {
+        root.unmount();
+      } catch (err) {
+        console.warn("Overlay unmount failed", err);
+      }
+    }
+    if (el) {
+      el.textContent = "";
+    }
+  };
+
+  requestAnimationFrame(cleanup);
 }
 
 const scriptPromises: Record<string, Promise<WidgetModule> | undefined> = {};
@@ -89,6 +104,10 @@ function AppContent() {
       if (!import.meta.env.DEV) return;
     }
     const container = showOverlay();
+    if (overlayRoot) {
+      overlayRoot.unmount();
+      overlayRoot = null;
+    }
     container.innerHTML = '<div class="overlay-loading">Загрузка...</div>';
 
     if (import.meta.env.DEV) {
@@ -100,7 +119,8 @@ function AppContent() {
             : await import("./components/onboarding/OnboardingPage");
         const Component = mod.default;
         container.innerHTML = "";
-        overlayRoot?.unmount();
+        const currentRoot = overlayRoot as ReturnType<typeof createRoot> | null;
+        if (currentRoot) currentRoot.unmount();
         overlayRoot = createRoot(container);
         overlayRoot.render(
           <Component

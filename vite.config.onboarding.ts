@@ -14,7 +14,7 @@ export default defineConfig({
   build: {
     emptyOutDir: false,
     cssCodeSplit: false,
-    assetsInlineLimit: 100000000,
+    assetsInlineLimit: 4096,
     lib: {
       entry: 'src/onboarding.tsx',
       name: 'LKWidget',

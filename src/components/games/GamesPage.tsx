@@ -107,18 +107,32 @@ export default function GamesPage({ onBack }: GamesPageProps) {
       setProfileName(fullName || "Организатор");
       setProfilePhoto(res.data.photo ?? null);
 
-      const numeric = parseNumericLevel(
+      const explicitGrade = getCustomFieldValue(
+        res.data,
+        CUSTOM_FIELD_IDS.lkPadelLevel,
+      );
+      const numericValue = parseNumericLevel(
         getCustomFieldValue(res.data, CUSTOM_FIELD_IDS.lkPadelLevelNumeric),
       );
+      const gradeFallback: Record<string, number> = {
+        D: 2.0,
+        "D+": 2.5,
+        C: 3.0,
+        "C+": 3.5,
+        B: 4.2,
+        "B+": 5.0,
+        A: 6.0,
+      };
+      const numeric =
+        numericValue ??
+        (explicitGrade && gradeFallback[explicitGrade]
+          ? gradeFallback[explicitGrade]
+          : null);
       const fraction =
         numeric != null
           ? Math.max(0, Math.min(1, numeric - Math.floor(numeric)))
           : 0;
       setRingFraction(fraction);
-      const explicitGrade = getCustomFieldValue(
-        res.data,
-        CUSTOM_FIELD_IDS.lkPadelLevel,
-      );
       if (explicitGrade) {
         setProfileGrade(explicitGrade);
       } else if (numeric !== null) {

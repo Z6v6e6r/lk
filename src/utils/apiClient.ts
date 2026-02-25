@@ -566,6 +566,23 @@ export async function apiUpdateProfile(data: UpdateProfileData) {
   });
 }
 
+export interface OnboardingLevelPayload {
+  clientId: string;
+  phone?: string | null;
+  levelLetter: string;
+  levelNumeric: string | number;
+}
+
+export async function apiSaveOnboardingLevel(payload: OnboardingLevelPayload) {
+  const baseUrl = getServ2Origin() || "";
+  return request<{ ok: boolean }>(`/lk/onboarding/level`, {
+    method: "POST",
+    baseUrl,
+    retries: 1,
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function apiUpdateCustomFields(profile: UserProfileType, customFields: CustomField[]) {
   const customFieldValues: CustomFieldValue[] = customFields.map((field) => ({
     id: field.id,
