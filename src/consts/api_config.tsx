@@ -12,5 +12,5 @@ export const GAMES_BUNDLE_URL = import.meta.env.VITE_GAMES_BUNDLE_URL as string 
 export const TOURNAMENTS_BUNDLE_URL = import.meta.env.VITE_TOURNAMENTS_BUNDLE_URL as string | undefined;
 export const ONBOARDING_BUNDLE_URL = import.meta.env.VITE_ONBOARDING_BUNDLE_URL as string | undefined;
 export const PUBLIC_INVITE_ORIGIN = (import.meta.env.VITE_PUBLIC_INVITE_ORIGIN as string | undefined) ?? "https://padlhub.ru";
-export const PUBLIC_INVITE_PATH = (import.meta.env.VITE_PUBLIC_INVITE_PATH as string | undefined) ?? "/lk_new";
+export const PUBLIC_INVITE_PATH = (import.meta.env.VITE_PUBLIC_INVITE_PATH as string | undefined) ?? "/game_join";
 export const CABINET_URL = (import.meta.env.VITE_CABINET_URL as string | undefined) ?? "https://padlhub.ru/lk_new";

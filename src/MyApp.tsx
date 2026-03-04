@@ -20,7 +20,7 @@ type WidgetModule = {
 };
 
 const DEFAULT_CABINET_URL = CABINET_URL;
-const DEFAULT_INVITE_PATH = (PUBLIC_INVITE_PATH || "/lk_new").replace(/\/+$/, "") || "/lk_new";
+const DEFAULT_INVITE_PATH = (PUBLIC_INVITE_PATH || "/game_join").replace(/\/+$/, "") || "/game_join";
 
 const OVERLAY_ID = "lk-overlay";
 let overlayRoot: ReturnType<typeof createRoot> | null = null;
