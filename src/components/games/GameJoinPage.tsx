@@ -352,7 +352,9 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       : "Время уточняется";
   const courtLabel = game.booking?.roomName || "Корт";
   const stationLabel = game.booking?.studioName || "Станция";
-  const canJoin = submitting === null;
+  const alreadyJoined = myDecision === "JOINED";
+  const canJoin = submitting === null && !alreadyJoined;
+  const canDecline = submitting === null;
 
   return (
     <div className="app-container game-container game-join-container">
@@ -399,20 +401,22 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       )}
 
       <div className="game-section game-join-actions">
-        <button
-          className="section-cta"
-          type="button"
-          disabled={!canJoin}
-          onClick={() => {
-            void applyDecision("join");
-          }}
-        >
-          {submitting === "join" ? "Сохраняем..." : "Присоединиться"}
-        </button>
+        {!alreadyJoined && (
+          <button
+            className="section-cta"
+            type="button"
+            disabled={!canJoin}
+            onClick={() => {
+              void applyDecision("join");
+            }}
+          >
+            {submitting === "join" ? "Сохраняем..." : "Присоединиться"}
+          </button>
+        )}
         <button
           className="section-cta section-cta-secondary"
           type="button"
-          disabled={!canJoin}
+          disabled={!canDecline}
           onClick={() => {
             void applyDecision("decline");
           }}

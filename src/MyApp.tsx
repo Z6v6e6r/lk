@@ -118,14 +118,31 @@ function AppContent() {
     }
 
     const current = new URL(window.location.href);
+    const hashRaw = (current.hash || "").replace(/^#/, "");
+    const hashQueryIndex = hashRaw.indexOf("?");
+    const hashParams = new URLSearchParams(hashQueryIndex >= 0 ? hashRaw.slice(hashQueryIndex + 1) : "");
+    const href = window.location.href || "";
+    const regexJoinMatch = href.match(/[?&#]joinGame=([^&#]+)/i);
+    const regexJoinGame = (() => {
+      if (!regexJoinMatch?.[1]) return null;
+      try {
+        return decodeURIComponent(regexJoinMatch[1]);
+      } catch {
+        return regexJoinMatch[1];
+      }
+    })();
     const joinConfig =
       (window as typeof window & {
         __PADLHUB_JOIN_CONFIG__?: { gameId?: string | null; cabinetUrl?: string | null };
       }).__PADLHUB_JOIN_CONFIG__ ?? null;
     const gameId = (
       current.searchParams.get("joinGame")
+      || hashParams.get("joinGame")
+      || regexJoinGame
       || current.searchParams.get("gameId")
+      || hashParams.get("gameId")
       || current.searchParams.get("id")
+      || hashParams.get("id")
       || joinConfig?.gameId
       || ""
     ).trim();
