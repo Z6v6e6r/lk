@@ -4,7 +4,13 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { AuthForm } from "./components/auth/AuthForm";
 import { Cabinet } from "./components/cabinet/Cabinet";
 import GameJoinPage from "./components/games/GameJoinPage";
-import { GAMES_BUNDLE_URL, TOURNAMENTS_BUNDLE_URL, ONBOARDING_BUNDLE_URL } from "./consts/api_config";
+import {
+  CABINET_URL,
+  GAMES_BUNDLE_URL,
+  ONBOARDING_BUNDLE_URL,
+  PUBLIC_INVITE_PATH,
+  TOURNAMENTS_BUNDLE_URL,
+} from "./consts/api_config";
 import { trackAnalyticsEvent, trackClientError } from "./utils/analytics";
 import "./MyApp.css";
 
@@ -13,7 +19,8 @@ type WidgetModule = {
   unmount?: (targetId?: string) => void;
 };
 
-const DEFAULT_CABINET_URL = "https://padlhub.ru/lk/";
+const DEFAULT_CABINET_URL = CABINET_URL;
+const DEFAULT_INVITE_PATH = (PUBLIC_INVITE_PATH || "/lk_new").replace(/\/+$/, "") || "/lk_new";
 
 const OVERLAY_ID = "lk-overlay";
 let overlayRoot: ReturnType<typeof createRoot> | null = null;
@@ -122,7 +129,7 @@ function AppContent() {
       || joinConfig?.gameId
       || ""
     ).trim();
-    const byPath = current.pathname.replace(/\/+$/, "").endsWith("/game_join");
+    const byPath = current.pathname.replace(/\/+$/, "").endsWith(DEFAULT_INVITE_PATH);
     const enabled = byPath || Boolean(gameId);
     const cabinetUrl = (
       current.searchParams.get("cabinetUrl")

@@ -98,6 +98,10 @@ Tilda подтянет новую версию автоматически.
 
 Тот же `bundle.js` теперь поддерживает режим приглашения в игру.
 
+Invite-ссылки настраиваются через:
+- `VITE_PUBLIC_INVITE_ORIGIN` (домен, например `https://padlhub.ru`)
+- `VITE_PUBLIC_INVITE_PATH` (путь, например `/lk_new` или `/lk_dev`)
+
 Формат ссылки:
 ```
 https://padlhub.ru/game_join?joinGame=<GAME_ID>

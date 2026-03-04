@@ -30,7 +30,11 @@ import {
   trackCabinetVisit,
   trackClientError,
 } from "../../utils/analytics";
-import { GAMES_BUNDLE_URL } from "../../consts/api_config";
+import {
+  GAMES_BUNDLE_URL,
+  PUBLIC_INVITE_ORIGIN,
+  PUBLIC_INVITE_PATH,
+} from "../../consts/api_config";
 
 const QUICK_ACTIONS = [
   { icon: "🎾", label: "Играть", href: "https://padlhub.ru/locations_lk" },
@@ -42,8 +46,7 @@ const QUICK_ACTIONS = [
 const CABINET_LOAD_ERROR_TEXT =
   "Не удалось загрузить личный кабинет, попробуйте подключиться к WiFi сети и загрузить кабинет повторно.";
 const MAX_GAME_PLAYERS = 4;
-const PUBLIC_INVITE_ORIGIN = "https://padlhub.ru";
-const INVITE_JOIN_PATH = "/game_join";
+const INVITE_JOIN_PATH = PUBLIC_INVITE_PATH;
 
 interface CabinetProps {
   onOpenGames: (options?: { gameId?: string | null; openChat?: boolean }) => void;

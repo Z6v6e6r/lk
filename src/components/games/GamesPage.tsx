@@ -28,7 +28,11 @@ import {
   getLetterGrade,
   parseNumericLevel,
 } from "../../utils/customFields";
-import { GAMES_BUNDLE_URL } from "../../consts/api_config";
+import {
+  GAMES_BUNDLE_URL,
+  PUBLIC_INVITE_ORIGIN,
+  PUBLIC_INVITE_PATH,
+} from "../../consts/api_config";
 
 interface GamesPageProps {
   onBack: () => void;
@@ -47,8 +51,7 @@ const MAX_GAME_PLAYERS = 4;
 const PENDING_GAME_DRAFT_KEY = "padlhub.pendingPaidGameDraft.v1";
 const PAYMENT_REF_QUERY_KEY = "phPaymentRef";
 const PUBLIC_GAMES_ORIGIN_FALLBACK = "https://padlhub.su";
-const PUBLIC_INVITE_ORIGIN = "https://padlhub.ru";
-const INVITE_JOIN_PATH = "/game_join";
+const INVITE_JOIN_PATH = PUBLIC_INVITE_PATH;
 
 function formatPrice(value: number): string {
   return value.toLocaleString("ru-RU");

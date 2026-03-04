@@ -14,6 +14,7 @@ import {
   getLetterGrade,
   parseNumericLevel,
 } from "../../utils/customFields";
+import { CABINET_URL } from "../../consts/api_config";
 
 type JoinDecision = "JOINED" | "WAITLIST" | "DECLINED" | "NONE";
 
@@ -22,7 +23,7 @@ interface GameJoinPageProps {
   cabinetUrl?: string | null;
 }
 
-const DEFAULT_CABINET_URL = "https://padlhub.ru/lk/";
+const DEFAULT_CABINET_URL = CABINET_URL;
 const DEFAULT_MAX_PLAYERS = 4;
 
 function normalizePhone(value: string | null | undefined): string | null {
@@ -443,4 +444,3 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
     </div>
   );
 }
-
