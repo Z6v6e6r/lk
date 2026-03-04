@@ -22,6 +22,9 @@ interface TournamentsPageProps {
 }
 
 const TOURNAMENT_DIRECTION_ID = 2617;
+const DAYS_BEFORE_TODAY = 7;
+const DAYS_AFTER_TODAY = 14;
+const TODAY_DATE_INDEX = DAYS_BEFORE_TODAY;
 
 const TOURNAMENT_TYPES = [
   { id: "americano", label: "Американо" },
@@ -1230,20 +1233,36 @@ export default function TournamentsPage({ onBack }: TournamentsPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [selectedTournament, setSelectedTournament] = useState<Exercise | null>(null);
   const [managerData, setManagerData] = useState<AmericanoTournamentPayload | null>(null);
+  const [dateIndex, setDateIndex] = useState(TODAY_DATE_INDEX);
 
-  const todayStr = useMemo(() => formatDate(new Date()), []);
+  const dates = useMemo(() => {
+    const base = new Date();
+    const totalDays = DAYS_BEFORE_TODAY + DAYS_AFTER_TODAY + 1;
+    return Array.from({ length: totalDays }).map((_, i) => {
+      const next = new Date(base);
+      next.setDate(base.getDate() + (i - DAYS_BEFORE_TODAY));
+      return next;
+    });
+  }, []);
+
+  const selectedDate = dates[dateIndex] ?? dates[0] ?? new Date();
+  const selectedDateStr = formatDate(selectedDate);
+  const selectedDateLabel = selectedDate.toLocaleDateString("ru-RU", {
+    day: "numeric",
+    month: "long",
+  });
 
   useEffect(() => {
     setLoading(true);
     setError(null);
-    apiFetchExercisesByDate(todayStr)
+    apiFetchExercisesByDate(selectedDateStr)
       .then((res) => {
         if (res.data) setItems(res.data);
         else setItems([]);
       })
       .catch(() => setError("Не удалось загрузить список турниров"))
       .finally(() => setLoading(false));
-  }, [todayStr]);
+  }, [selectedDateStr]);
 
   const tournaments = items.filter((ex) =>
     ex.direction?.id === TOURNAMENT_DIRECTION_ID || ex.type?.id === TOURNAMENT_DIRECTION_ID,
@@ -1258,13 +1277,45 @@ export default function TournamentsPage({ onBack }: TournamentsPageProps) {
 
       <div className="section">
         <div className="section-header">
-          <span className="section-title">Турниры на сегодня</span>
+          <span className="section-title">Турниры на {selectedDateLabel}</span>
         </div>
         <div className="section-body tournaments-body">
+          <div className="date-row">
+            {dates.map((date, idx) => {
+              const monthLabel = date
+                .toLocaleDateString("ru-RU", { month: "short" })
+                .replace(".", "")
+                .trim()
+                .slice(0, 3)
+                .toUpperCase();
+              const weekdayLabel = date
+                .toLocaleDateString("ru-RU", { weekday: "short" })
+                .replace(".", "")
+                .toUpperCase();
+              const dayLabel = date.toLocaleDateString("ru-RU", { day: "2-digit" });
+
+              return (
+                <div key={date.toISOString()} className="date-item">
+                  <div className="date-weekday">{weekdayLabel}</div>
+                  <button
+                    className={`date-chip ${dateIndex === idx ? "active" : ""}`}
+                    onClick={() => setDateIndex(idx)}
+                    type="button"
+                  >
+                    <div className="booking-date-badge">
+                      <div className="booking-date-badge-month">{monthLabel}</div>
+                      <div className="booking-date-badge-day">{dayLabel}</div>
+                    </div>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
           {loading && <div className="tournaments-muted">Загрузка...</div>}
           {!loading && error && <div className="tournaments-error">{error}</div>}
           {!loading && !error && tournaments.length === 0 && (
-            <div className="tournaments-muted">На сегодня турниров нет</div>
+            <div className="tournaments-muted">На выбранную дату турниров нет</div>
           )}
           {!loading && !error && tournaments.length > 0 && (
             <div className="tournaments-list">

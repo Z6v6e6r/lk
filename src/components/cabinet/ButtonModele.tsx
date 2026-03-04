@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "../../context/AuthContext";
-const tgLogo = "https://zver.tw1.ru/lk/assets/telegram.svg";
-const vkLogo = "https://zver.tw1.ru/lk/assets/vk.svg";
-const giftLogo = "https://zver.tw1.ru/lk/assets/gift-card.png";
+const tgLogo = "https://padlhub.su/lk/assets/telegram.svg";
+const vkLogo = "https://padlhub.su/lk/assets/vk.svg";
+const giftLogo = "https://padlhub.su/lk/assets/gift-card.png";
 
 export function ButtonModule() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);

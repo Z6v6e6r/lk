@@ -8,6 +8,7 @@ import {
   getCustomFieldValue,
   getLetterGrade,
 } from "../../utils/customFields";
+import { identifyAnalyticsUser, trackAnalyticsEvent, trackClientError } from "../../utils/analytics";
 
 type ScoreOp =
   | { type: "add"; value: number }
@@ -31,7 +32,7 @@ type Question = {
 
 const ONBOARDING_IMAGE_BASE =
   (import.meta.env.VITE_ONBOARDING_IMAGE_BASE as string | undefined)?.replace(/\/$/, "")
-  || "https://zver.tw1.ru/lk/assets";
+  || "https://padlhub.su/lk/assets";
 
 const onboardingImage = (num: number) => `${ONBOARDING_IMAGE_BASE}/${num}.webp`;
 
@@ -336,6 +337,16 @@ export function OnboardingModal({
     return [BASE_QUESTION, ...BRANCH_QUESTIONS[branchKey]];
   }, [branchKey]);
 
+  const handleClose = () => {
+    trackAnalyticsEvent("onboarding_closed", {
+      clientId: profile.id,
+      stage: doneScore ? "done" : hasRating ? "already_completed" : "in_progress",
+      currentQuestionId: currentQuestion?.id ?? null,
+      currentQuestionIndex: currentQuestion ? currentIndex + 1 : null,
+    });
+    onClose();
+  };
+
   useEffect(() => {
     if (!isOpen) {
       setCurrentIndex(0);
@@ -347,6 +358,21 @@ export function OnboardingModal({
   }, [isOpen]);
 
   useEffect(() => {
+    if (!isOpen) return;
+    identifyAnalyticsUser({
+      clientId: profile.id,
+      phone: profile.phone,
+      onboardingCompleted: hasRating,
+      levelNumeric: existingRating ?? null,
+    });
+    trackAnalyticsEvent("onboarding_opened", {
+      clientId: profile.id,
+      onboardingAlreadyCompleted: hasRating,
+      existingLevelNumeric: existingRating ?? null,
+    });
+  }, [isOpen, hasRating, existingRating, profile.id, profile.phone]);
+
+  useEffect(() => {
     if (currentIndex >= questions.length) {
       setCurrentIndex(Math.max(questions.length - 1, 0));
     }
@@ -355,6 +381,26 @@ export function OnboardingModal({
   const currentQuestion = questions[currentIndex];
   const selected = answers[currentQuestion?.id || ""] || [];
   const isQuestionReady = !!currentQuestion && readyQuestionId === currentQuestion.id;
+
+  useEffect(() => {
+    if (!isOpen || !currentQuestion || hasRating || doneScore) return;
+    trackAnalyticsEvent("onboarding_question_viewed", {
+      clientId: profile.id,
+      questionId: currentQuestion.id,
+      questionIndex: currentIndex + 1,
+      totalQuestions: questions.length,
+      branch: branchKey ?? null,
+    });
+  }, [
+    branchKey,
+    currentIndex,
+    currentQuestion,
+    doneScore,
+    hasRating,
+    isOpen,
+    profile.id,
+    questions.length,
+  ]);
 
   useEffect(() => {
     if (!isOpen || !currentQuestion) return;
@@ -387,18 +433,52 @@ export function OnboardingModal({
 
   const handleSelect = (optionId: string) => {
     if (!currentQuestion) return;
+    const currentSelection = answers[currentQuestion.id] || [];
+    let nextSelection: string[] = [optionId];
+
+    if (currentQuestion.id === BASE_QUESTION.id) {
+      nextSelection = [optionId];
+    } else if (currentQuestion.type === "multi") {
+      const exists = currentSelection.includes(optionId);
+      nextSelection = exists
+        ? currentSelection.filter((id) => id !== optionId)
+        : [...currentSelection, optionId];
+    }
+
+    trackAnalyticsEvent("onboarding_answer_selected", {
+      clientId: profile.id,
+      questionId: currentQuestion.id,
+      questionType: currentQuestion.type,
+      selectedOptions: nextSelection,
+    });
+
     setAnswers((prev) => {
       if (currentQuestion.id === BASE_QUESTION.id) {
         return { [BASE_QUESTION.id]: [optionId] };
       }
-      const prevSel = prev[currentQuestion.id] || [];
       if (currentQuestion.type === "multi") {
-        const exists = prevSel.includes(optionId);
-        const nextSel = exists ? prevSel.filter((id) => id !== optionId) : [...prevSel, optionId];
-        return { ...prev, [currentQuestion.id]: nextSel };
+        return { ...prev, [currentQuestion.id]: nextSelection };
       }
       return { ...prev, [currentQuestion.id]: [optionId] };
     });
+  };
+
+  const handleBack = () => {
+    trackAnalyticsEvent("onboarding_back_clicked", {
+      clientId: profile.id,
+      questionId: currentQuestion?.id ?? null,
+      questionIndex: currentIndex + 1,
+    });
+    setCurrentIndex((prev) => Math.max(prev - 1, 0));
+  };
+
+  const handleNext = () => {
+    trackAnalyticsEvent("onboarding_next_clicked", {
+      clientId: profile.id,
+      questionId: currentQuestion?.id ?? null,
+      questionIndex: currentIndex + 1,
+    });
+    setCurrentIndex((prev) => Math.min(prev + 1, questions.length - 1));
   };
 
   const computeScore = () => {
@@ -427,6 +507,13 @@ export function OnboardingModal({
     const finalScore = computeScore();
     const letterScore = getLetterGrade(finalScore);
     const numericScore = formatNumericField(finalScore);
+    trackAnalyticsEvent("onboarding_submit_started", {
+      clientId: profile.id,
+      answeredQuestions: Object.keys(answers).length,
+      totalQuestions: questions.length,
+      finalLevelLetter: letterScore,
+      finalLevelNumeric: numericScore,
+    });
     setDoneScore(letterScore);
     setSaving(true);
     setError(null);
@@ -439,11 +526,47 @@ export function OnboardingModal({
         levelNumeric: numericScore,
       });
       if (res.status === 200 || res.status === 204) {
+        identifyAnalyticsUser({
+          clientId: profile.id,
+          phone: profile.phone,
+          onboardingCompleted: true,
+          levelLetter: letterScore,
+          levelNumeric: numericScore,
+        });
+        trackAnalyticsEvent("onboarding_submit_success", {
+          clientId: profile.id,
+          status: res.status,
+          finalLevelLetter: letterScore,
+          finalLevelNumeric: numericScore,
+        });
         onProfileUpdated({ levelLetter: letterScore, levelNumeric: numericScore });
       } else {
+        trackClientError(
+          "onboarding.save_failed",
+          new Error(`Failed to save onboarding result: HTTP ${res.status}`),
+          {
+            clientId: profile.id,
+            status: res.status,
+          },
+          { handled: true, severity: "error" },
+        );
+        trackAnalyticsEvent("onboarding_submit_failed", {
+          clientId: profile.id,
+          status: res.status,
+        });
         setError("Не удалось сохранить рейтинг. Попробуйте позже.");
       }
-    } catch {
+    } catch (err) {
+      trackClientError(
+        "onboarding.save_exception",
+        err,
+        { clientId: profile.id },
+        { handled: true, severity: "error" },
+      );
+      trackAnalyticsEvent("onboarding_submit_failed", {
+        clientId: profile.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
       setError("Не удалось сохранить рейтинг. Попробуйте позже.");
     } finally {
       setSaving(false);
@@ -456,7 +579,7 @@ export function OnboardingModal({
 
   if (hasRating) {
     return (
-      <Modal isOpen={isOpen} onClose={onClose} title={titleText}>
+      <Modal isOpen={isOpen} onClose={handleClose} title={titleText}>
         <div className="onboarding-body">
           <div className="onboarding-title">Онбординг уже пройден</div>
           <p className="onboarding-text">
@@ -464,10 +587,32 @@ export function OnboardingModal({
             или участвуя в групповых тренировках и турнирах.
           </p>
           <div className="onboarding-links">
-            <a className="onboarding-link" href={trainingLink} target="_blank" rel="noopener noreferrer">
+            <a
+              className="onboarding-link"
+              href={trainingLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() =>
+                trackAnalyticsEvent("onboarding_link_click", {
+                  clientId: profile.id,
+                  destination: "training",
+                  source: "already_completed",
+                })}
+            >
               Групповые тренировки
             </a>
-            <a className="onboarding-link" href={tournamentsLink} target="_blank" rel="noopener noreferrer">
+            <a
+              className="onboarding-link"
+              href={tournamentsLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() =>
+                trackAnalyticsEvent("onboarding_link_click", {
+                  clientId: profile.id,
+                  destination: "tournaments",
+                  source: "already_completed",
+                })}
+            >
               Турниры
             </a>
           </div>
@@ -478,7 +623,7 @@ export function OnboardingModal({
 
   if (doneScore) {
     return (
-      <Modal isOpen={isOpen} onClose={onClose} title={titleText}>
+      <Modal isOpen={isOpen} onClose={handleClose} title={titleText}>
         <div className="onboarding-body">
           <div className="onboarding-title">Готово!</div>
           <p className="onboarding-text">Ваш уровень {doneScore}</p>
@@ -486,15 +631,37 @@ export function OnboardingModal({
             Если вы не согласны, вы можете верифицировать его на тренировке или при участии в турнире.
           </p>
           <div className="onboarding-links">
-            <a className="onboarding-link" href={trainingLink} target="_blank" rel="noopener noreferrer">
+            <a
+              className="onboarding-link"
+              href={trainingLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() =>
+                trackAnalyticsEvent("onboarding_link_click", {
+                  clientId: profile.id,
+                  destination: "training",
+                  source: "completed",
+                })}
+            >
               Перейти к тренировкам
             </a>
-            <a className="onboarding-link" href={tournamentsLink} target="_blank" rel="noopener noreferrer">
+            <a
+              className="onboarding-link"
+              href={tournamentsLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() =>
+                trackAnalyticsEvent("onboarding_link_click", {
+                  clientId: profile.id,
+                  destination: "tournaments",
+                  source: "completed",
+                })}
+            >
               Перейти к турнирам
             </a>
           </div>
           <div className="onboarding-actions">
-            <button className="btn-primary" onClick={onClose}>Закрыть</button>
+            <button className="btn-primary" onClick={handleClose}>Закрыть</button>
           </div>
           {error && <div className="onboarding-error">{error}</div>}
         </div>
@@ -503,7 +670,7 @@ export function OnboardingModal({
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={titleText}>
+    <Modal isOpen={isOpen} onClose={handleClose} title={titleText}>
       <div className="onboarding-body">
         <div className="onboarding-progress">
           Вопрос {currentIndex + 1} из {questions.length}
@@ -546,7 +713,7 @@ export function OnboardingModal({
             <div className="onboarding-actions">
               <button
                 className="btn-secondary"
-                onClick={() => setCurrentIndex((prev) => Math.max(prev - 1, 0))}
+                onClick={handleBack}
                 disabled={currentIndex === 0}
               >
                 Назад
@@ -558,7 +725,7 @@ export function OnboardingModal({
               ) : (
                 <button
                   className="btn-primary"
-                  onClick={() => setCurrentIndex((prev) => Math.min(prev + 1, questions.length - 1))}
+                  onClick={handleNext}
                   disabled={!canNext}
                 >
                   Далее

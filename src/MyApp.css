@@ -19,7 +19,7 @@
 
 @font-face {
   font-family: 'RF Dewi UltraBold';
-  src: url('https://zver.tw1.ru/lk/fonts/rf-dewi-ultrabold.ttf') format('truetype');
+  src: url('https://padlhub.su/lk/fonts/rf-dewi-ultrabold.ttf') format('truetype');
   font-weight: 800;
   font-style: normal;
   font-display: swap;
@@ -27,7 +27,7 @@
 
 @font-face {
   font-family: 'RF Dewi Expanded UltraBold Italic';
-  src: url('https://zver.tw1.ru/lk/fonts/rf-dewi-expanded-ultrabold-italic.ttf') format('truetype');
+  src: url('https://padlhub.su/lk/fonts/rf-dewi-expanded-ultrabold-italic.ttf') format('truetype');
   font-weight: 800;
   font-style: italic;
   font-display: swap;
@@ -35,7 +35,7 @@
 
 @font-face {
   font-family: 'Source Code Pro';
-  src: url('https://zver.tw1.ru/lk/fonts/SourceCodePro-Medium.ttf') format('truetype');
+  src: url('https://padlhub.su/lk/fonts/SourceCodePro-Medium.ttf') format('truetype');
   font-weight: 500;
   font-style: normal;
   font-display: swap;
@@ -43,7 +43,7 @@
 
 @font-face {
   font-family: 'Source Code Pro Regular';
-  src: url('https://zver.tw1.ru/lk/fonts/SourceCodePro-Regular.ttf') format('truetype');
+  src: url('https://padlhub.su/lk/fonts/SourceCodePro-Regular.ttf') format('truetype');
   font-weight: 400;
   font-style: normal;
   font-display: swap;
@@ -719,6 +719,18 @@ h6,
   gap: 10px;
 }
 
+.cabinet-games-feed .game-created-list {
+  margin-bottom: 4px;
+}
+
+.cabinet-games-feed .game-created-card {
+  cursor: default;
+}
+
+.cabinet-games-feed .game-created-card:active {
+  transform: none;
+}
+
 .section-text {
   font-size: 13px;
   color: var(--text-secondary);
@@ -738,6 +750,11 @@ h6,
 }
 
 .section-cta:active { transform: scale(0.98); }
+
+.section-cta:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
 
 .section-cta-secondary {
   background: var(--purple-light);
@@ -791,6 +808,26 @@ h6,
   font-weight: 700;
   color: var(--text);
   margin-bottom: 2px;
+}
+
+.game-city-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.game-city-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.game-city-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .game-search {
@@ -870,15 +907,221 @@ h6,
   flex-shrink: 0;
 }
 
-.game-map-placeholder {
-  height: 120px;
+.game-card-place-step {
+  position: relative;
+  padding-top: 20px;
+}
+
+.game-card-step-corner {
+  position: absolute;
+  top: 8px;
+  right: 14px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  line-height: 1;
+}
+
+.game-card-step1 .game-card-sub {
+  margin-top: 6px;
+}
+
+.game-created-section {
+  padding-top: 10px;
+  padding-bottom: 4px;
+}
+
+.game-created-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.game-created-card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.game-created-card:active {
+  transform: scale(0.995);
+}
+
+.game-created-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.game-created-date {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: capitalize;
+}
+
+.game-created-date-badge {
+  min-width: 42px;
+}
+
+.game-created-time {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.game-created-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.game-created-tag {
+  border-radius: 999px;
+  background: #eef0ff;
+  color: #5b46cb;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+}
+
+.game-created-players {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.game-created-player {
+  position: relative;
+  width: 34px;
+  height: 40px;
+}
+
+.game-created-player-mark {
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: #8a8f9c;
+}
+
+.game-created-player-avatar {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #eceef3;
+}
+
+.game-created-player-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #6b7280;
+}
+
+.game-created-actions {
+  margin-top: 2px;
+  display: grid;
+  grid-template-columns: 1fr 110px;
+  gap: 8px;
+}
+
+.game-created-action {
+  border: none;
+  border-radius: 12px;
+  background: #7758ef;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.game-created-action-secondary {
+  background: #f1edff;
+  color: #6d4ee6;
+}
+
+.game-created-action:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.game-map {
+  height: 260px;
   border-radius: 14px;
-  background: linear-gradient(135deg, #e7e7f5, #f7f4ff);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  position: relative;
+  background: #eef2ff;
+}
+
+.game-map-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.game-map-locate {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 500;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.game-map-locate:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.game-map-overlay {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0 16px;
+  text-align: center;
   color: var(--text-secondary);
   font-size: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.game-map-hint {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.74);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+}
+
+.game-map-hint-error {
+  background: rgba(153, 27, 27, 0.84);
 }
 
 .game-toggle-row {
@@ -1142,6 +1385,23 @@ h6,
   word-break: break-all;
 }
 
+.manual-phone-row {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.manual-phone-row .game-input {
+  flex: 1;
+}
+
+.manual-phone-row .section-cta {
+  width: auto;
+  margin: 0;
+  white-space: nowrap;
+}
+
 .game-submit {
   margin: 16px;
   width: calc(100% - 32px);
@@ -1158,6 +1418,35 @@ h6,
 }
 
 .game-submit.active { background: var(--purple); }
+
+.game-submit:disabled {
+  cursor: not-allowed;
+}
+
+.game-submit-booking {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+}
+
+.game-submit-main {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.game-submit-meta {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: #4b5563;
+}
+
+.game-submit-booking.active .game-submit-meta {
+  color: rgba(255, 255, 255, 0.92);
+}
 
 .duration-row {
   display: flex;
@@ -1292,10 +1581,20 @@ h6,
   color: var(--text);
 }
 
+.details-date-capitalize {
+  text-transform: capitalize;
+}
+
 .details-time {
   font-size: 12px;
   color: var(--text-secondary);
   margin-top: 4px;
+}
+
+.details-time-strong {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
 }
 
 .details-tags {
@@ -1337,10 +1636,186 @@ h6,
   line-height: 1;
 }
 
+.match-payment-status {
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--white);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.match-payment-status.paid {
+  border-color: #c7ebd4;
+  background: #f2fbf6;
+}
+
+.match-payment-status.unpaid {
+  border-color: #f2d6d6;
+  background: #fff6f6;
+}
+
+.match-payment-status-main {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.match-payment-status-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.match-payment-status.paid .match-payment-status-icon {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.match-payment-status.unpaid .match-payment-status-icon {
+  color: #b42318;
+  background: #fee4e2;
+}
+
 .game-empty {
   font-size: 13px;
   color: var(--text-secondary);
   padding: 6px 2px;
+}
+
+.game-pay-error {
+  color: #b42318;
+}
+
+.game-chat-container {
+  padding-bottom: 92px;
+}
+
+.game-chat-meta {
+  padding-top: 4px;
+  padding-bottom: 8px;
+}
+
+.game-chat-section {
+  flex: 1;
+  min-height: 0;
+  padding-bottom: 8px;
+}
+
+.game-chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 56vh;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.game-chat-message {
+  align-self: flex-start;
+  max-width: 84%;
+  border-radius: 14px;
+  background: #f3f4f8;
+  border: 1px solid #e6e8ef;
+  padding: 8px 10px;
+}
+
+.game-chat-message.mine {
+  align-self: flex-end;
+  background: #efe9ff;
+  border-color: #d8cdfd;
+}
+
+.game-chat-author {
+  font-size: 11px;
+  font-weight: 700;
+  color: #6b7280;
+  margin-bottom: 3px;
+}
+
+.game-chat-text {
+  font-size: 14px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.game-chat-time {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #8b93a5;
+  text-align: right;
+}
+
+.game-chat-refresh {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.game-chat-input-row {
+  position: sticky;
+  bottom: 8px;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  padding: 0 16px 12px;
+}
+
+.game-chat-input {
+  margin: 0;
+}
+
+.game-chat-send {
+  width: auto;
+  margin: 0;
+  min-width: 70px;
+  padding: 12px 14px;
+}
+
+.game-chat-note {
+  padding: 0 16px 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.game-join-container {
+  padding-bottom: 24px;
+}
+
+.game-join-status {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.game-join-comment {
+  min-height: 92px;
+  resize: vertical;
+  padding-top: 12px;
+  line-height: 1.4;
+}
+
+.game-join-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.game-join-actions .section-cta {
+  margin: 0;
+  width: 100%;
+}
+
+.game-join-footer {
+  margin-top: 6px;
 }
 
 /* ─── TABS ─── */
@@ -1426,6 +1901,26 @@ h6,
   font-weight: 800;
   padding: 6px 12px;
   width: 100%;
+}
+
+/* Date picker in Games step: highlight only active date */
+.date-chip .booking-date-badge {
+  border: 1px solid var(--border);
+  background: var(--white);
+}
+
+.date-chip .booking-date-badge-day {
+  background: var(--white);
+  color: var(--text);
+}
+
+.date-chip.active .booking-date-badge {
+  border-color: var(--purple);
+}
+
+.date-chip.active .booking-date-badge-day {
+  background: var(--purple);
+  color: var(--white);
 }
 
 .booking-time {

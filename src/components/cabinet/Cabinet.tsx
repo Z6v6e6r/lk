@@ -1,15 +1,18 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { UserProfile } from "./UserProfile";
 import {
   apiFetchProfile,
   apiFetchBookings,
   apiFetchSubscriptions,
+  apiFetchPadelGamesByPhone,
 } from "../../utils/apiClient";
 import type {
   UserProfileType,
   BookingsResponse,
   SubscriptionResponse,
   Subscription,
+  PadelGameRecord,
+  PadelGamePlayer,
 } from "../../utils/apiClient";
 import { useAuth } from "../../context/AuthContext";
 import { ButtonModule } from "./ButtonModele";
@@ -21,6 +24,13 @@ import { SubscriptionInformation } from "./SubscriptionInformation";
 import { BuySupscription } from "./BuySubscription";
 import { Advertisement } from "./Advertisement";
 import { CUSTOM_FIELD_IDS, getCustomField, getCustomFieldValue } from "../../utils/customFields";
+import {
+  identifyAnalyticsUser,
+  trackAnalyticsEvent,
+  trackCabinetVisit,
+  trackClientError,
+} from "../../utils/analytics";
+import { GAMES_BUNDLE_URL } from "../../consts/api_config";
 
 const QUICK_ACTIONS = [
   { icon: "🎾", label: "Играть", href: "https://padlhub.ru/locations_lk" },
@@ -29,8 +39,14 @@ const QUICK_ACTIONS = [
   { icon: "🎯", label: "Индивидуальные тренировки", href: "https://padlhub.ru/indi_lk" },
 ];
 
+const CABINET_LOAD_ERROR_TEXT =
+  "Не удалось загрузить личный кабинет, попробуйте подключиться к WiFi сети и загрузить кабинет повторно.";
+const MAX_GAME_PLAYERS = 4;
+const PUBLIC_INVITE_ORIGIN = "https://padlhub.ru";
+const INVITE_JOIN_PATH = "/game_join";
+
 interface CabinetProps {
-  onOpenGames: () => void;
+  onOpenGames: (options?: { gameId?: string | null; openChat?: boolean }) => void;
   onOpenTournaments: () => void;
   onOpenOnboarding: (data: {
     profile: UserProfileType;
@@ -44,6 +60,124 @@ type ProfileUpdatedEventDetail = {
   levelLetter?: string;
   levelNumeric?: string;
 };
+
+function getPlayerInitials(name: string | null | undefined): string {
+  const value = (name || "").trim();
+  if (!value) return "";
+  return value
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0] ?? "")
+    .join("")
+    .toUpperCase();
+}
+
+function getDateBadge(dateValue: string | null | undefined) {
+  if (!dateValue) return { month: "—", day: "—" };
+  const parsed = new Date(`${dateValue}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return { month: "—", day: "—" };
+  return {
+    month: parsed
+      .toLocaleDateString("ru-RU", { month: "short" })
+      .replace(".", "")
+      .toUpperCase(),
+    day: parsed.toLocaleDateString("ru-RU", { day: "2-digit" }),
+  };
+}
+
+function formatGameCardDate(dateValue: string | null | undefined): string {
+  if (!dateValue) return "Дата не указана";
+  const parsed = new Date(`${dateValue}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return "Дата не указана";
+  return parsed.toLocaleDateString("ru-RU", {
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+  });
+}
+
+function toGameTimestamp(game: PadelGameRecord): number {
+  const date = game.booking?.date || "9999-12-31";
+  const fromTime = game.booking?.timeFrom || "23:59";
+  const parsed = new Date(`${date}T${fromTime.length === 5 ? `${fromTime}:00` : fromTime}`);
+  if (Number.isNaN(parsed.getTime())) return Number.MAX_SAFE_INTEGER;
+  return parsed.getTime();
+}
+
+function isLocalHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".local");
+}
+
+function resolvePublicGamesOrigin(current: URL): string {
+  if (!isLocalHostname(current.hostname)) {
+    return current.origin;
+  }
+
+  const fromBundle = (GAMES_BUNDLE_URL || "").trim();
+  if (fromBundle) {
+    try {
+      const parsed = new URL(fromBundle);
+      if (!isLocalHostname(parsed.hostname)) {
+        return parsed.origin;
+      }
+    } catch {
+      // fallback below
+    }
+  }
+
+  return "https://padlhub.su";
+}
+
+function normalizePublicGamesUrl(value: string | null | undefined): string | null {
+  const raw = value?.trim();
+  if (!raw) return null;
+  if (typeof window === "undefined") return raw;
+
+  try {
+    const current = new URL(window.location.href);
+    const parsed = new URL(raw, current.origin);
+    const hasJoinGame = Boolean(parsed.searchParams.get("joinGame")?.trim());
+
+    if (hasJoinGame) {
+      const normalized = new URL(INVITE_JOIN_PATH, PUBLIC_INVITE_ORIGIN);
+      parsed.searchParams.forEach((paramValue, key) => {
+        normalized.searchParams.set(key, paramValue);
+      });
+      return normalized.toString();
+    }
+
+    if (!isLocalHostname(parsed.hostname)) {
+      return parsed.toString();
+    }
+    const publicOrigin = resolvePublicGamesOrigin(current);
+    const normalized = new URL(`${parsed.pathname}${parsed.search}${parsed.hash}`, publicOrigin);
+    return normalized.toString();
+  } catch {
+    return raw;
+  }
+}
+
+function buildInviteFallbackUrl(gameId: string): string | null {
+  const id = gameId.trim();
+  if (!id) return null;
+  if (typeof window === "undefined") return null;
+  try {
+    const url = new URL(INVITE_JOIN_PATH, PUBLIC_INVITE_ORIGIN);
+    url.searchParams.set("joinGame", id);
+    return `${url.origin}${url.pathname}?${url.searchParams.toString()}`;
+  } catch {
+    return null;
+  }
+}
+
+function resolveGameInviteUrl(game: PadelGameRecord): string | null {
+  return (
+    normalizePublicGamesUrl(game.inviteUrl) ??
+    buildInviteFallbackUrl(game.id)
+  );
+}
 
 export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: CabinetProps) {
   const [profile, setProfile] = useState<UserProfileType | null>(null);
@@ -59,6 +193,12 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
   const [currenSub, SetCurrenSub] = useState<Subscription | null>(null);
   const [currenSubName, SetCurrenSubName] = useState<string>("Абонемент");
   const [isOpenBuySub, setOpenBuySub] = useState<boolean>(false);
+  const [createdGames, setCreatedGames] = useState<PadelGameRecord[]>([]);
+  const [loadingCreatedGames, setLoadingCreatedGames] = useState(false);
+  const [createdGamesError, setCreatedGamesError] = useState<string | null>(null);
+  const [copiedGameInviteId, setCopiedGameInviteId] = useState<string | null>(null);
+  const cabinetVisitTrackedRef = useRef(false);
+  const onboardingStatusRef = useRef<boolean | null>(null);
   const { logout } = useAuth();
 
   useEffect(() => {
@@ -76,10 +216,30 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
         if (!isMounted) return;
         if (!profileRes?.data) {
           if (profileRes?.status === 401) {
+            trackClientError(
+              "cabinet.load_unauthorized",
+              new Error("Profile request unauthorized"),
+              { status: 401 },
+              { handled: true, severity: "warning" },
+            );
+            trackAnalyticsEvent("cabinet_load_failed", {
+              reason: "unauthorized",
+              status: 401,
+            });
             logout();
             return;
           }
-          setLoadError(profileRes?.error?.message || "Не удалось загрузить данные. Проверьте интернет.");
+          trackAnalyticsEvent("cabinet_load_failed", {
+            reason: "profile_not_loaded",
+            status: profileRes?.status ?? null,
+          });
+          trackClientError(
+            "cabinet.profile_not_loaded",
+            new Error("Profile payload is empty"),
+            { status: profileRes?.status ?? null, message: profileRes?.error?.message ?? null },
+            { handled: true, severity: "error" },
+          );
+          setLoadError(CABINET_LOAD_ERROR_TEXT);
           setLoading(false);
           return;
         }
@@ -87,10 +247,25 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
         setActiveBookings(activeRes?.data || null);
         setHistoryBookings(historyRes?.data || null);
         setUserSubscriptions(subsRes?.data || null);
+        trackAnalyticsEvent("cabinet_data_loaded", {
+          activeBookingsCount: activeRes?.data?.content?.length ?? 0,
+          historyBookingsCount: historyRes?.data?.content?.length ?? 0,
+          subscriptionsCount: subsRes?.data?.content?.length ?? 0,
+        });
       } catch (error) {
         if (isMounted) {
           console.error("Ошибка загрузки:", error);
-          setLoadError("Ошибка сети. Проверьте интернет и повторите.");
+          trackClientError(
+            "cabinet.load_exception",
+            error,
+            { reloadKey },
+            { handled: true, severity: "error" },
+          );
+          trackAnalyticsEvent("cabinet_load_failed", {
+            reason: "network_error",
+            error: error instanceof Error ? error.message : String(error),
+          });
+          setLoadError(CABINET_LOAD_ERROR_TEXT);
         }
       } finally {
         if (isMounted) setLoading(false);
@@ -154,6 +329,88 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
     };
   }, []);
 
+  useEffect(() => {
+    if (!profile) return;
+
+    const numericLevelValue = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
+    const letterLevelValue = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevel);
+    const onboardingCompleted = Boolean(numericLevelValue);
+
+    identifyAnalyticsUser({
+      clientId: profile.id,
+      phone: profile.phone,
+      email: profile.email,
+      firstName: profile.firstName,
+      lastName: profile.lastName,
+      middleName: profile.middleName,
+      sex: profile.sex,
+      birthDate: profile.birthDate,
+      onboardingCompleted,
+      levelLetter: letterLevelValue,
+      levelNumeric: numericLevelValue,
+    });
+
+    if (!cabinetVisitTrackedRef.current) {
+      const visitCount = trackCabinetVisit({
+        clientId: profile.id,
+        onboardingCompleted,
+      });
+      cabinetVisitTrackedRef.current = true;
+      trackAnalyticsEvent("cabinet_opened", {
+        clientId: profile.id,
+        visitCount,
+        onboardingCompleted,
+      });
+    }
+
+    if (onboardingStatusRef.current !== onboardingCompleted) {
+      onboardingStatusRef.current = onboardingCompleted;
+      trackAnalyticsEvent("onboarding_status_detected", {
+        clientId: profile.id,
+        onboardingCompleted,
+        levelLetter: letterLevelValue ?? null,
+        levelNumeric: numericLevelValue ?? null,
+      });
+    }
+  }, [profile]);
+
+  useEffect(() => {
+    const phone = profile?.phone?.trim();
+    if (!phone) {
+      setCreatedGames([]);
+      return;
+    }
+
+    let alive = true;
+    setLoadingCreatedGames(true);
+    setCreatedGamesError(null);
+
+    apiFetchPadelGamesByPhone(phone, profile?.id ?? null)
+      .then((result) => {
+        if (!alive) return;
+        setCreatedGames(Array.isArray(result.data) ? result.data : []);
+        if (result.error) {
+          setCreatedGamesError(result.error.message || "Не удалось загрузить игры");
+        }
+      })
+      .catch(() => {
+        if (!alive) return;
+        setCreatedGames([]);
+        setCreatedGamesError("Не удалось загрузить игры");
+      })
+      .finally(() => {
+        if (alive) setLoadingCreatedGames(false);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [profile?.phone, profile?.id]);
+
+  const gamesForFeed = useMemo(() => {
+    return [...createdGames].sort((left, right) => toGameTimestamp(left) - toGameTimestamp(right));
+  }, [createdGames]);
+
   const loadBookings = async () => {
     const [activeBookingsData, historyBookingsData, userSubscriptionsData] = await Promise.all([
       apiFetchBookings(false),
@@ -163,6 +420,11 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
     if (activeBookingsData) setActiveBookings(activeBookingsData.data);
     if (historyBookingsData) setHistoryBookings(historyBookingsData.data);
     if (userSubscriptionsData.data) setUserSubscriptions(userSubscriptionsData.data);
+    trackAnalyticsEvent("cabinet_data_refreshed", {
+      activeBookingsCount: activeBookingsData?.data?.content?.length ?? 0,
+      historyBookingsCount: historyBookingsData?.data?.content?.length ?? 0,
+      subscriptionsCount: userSubscriptionsData?.data?.content?.length ?? 0,
+    });
   };
 
   const openSubInfo = (sub: Subscription, subName: string) => {
@@ -175,19 +437,22 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
   if (loadError) {
     return (
       <div className="load-error">
-        <div className="load-error-title">Не удалось загрузить данные</div>
-        <div className="load-error-text">{loadError}</div>
+        <div className="load-error-title">Не удалось загрузить личный кабинет</div>
+        <div className="load-error-text">Попробуйте подключиться к WiFi сети и загрузить кабинет повторно.</div>
         <button
           className="section-cta"
           type="button"
-          onClick={() => setReloadKey((v) => v + 1)}
+          onClick={() => {
+            trackAnalyticsEvent("cabinet_reload_clicked");
+            setReloadKey((v) => v + 1);
+          }}
         >
           Повторить
         </button>
       </div>
     );
   }
-  if (!profile) return <div className="load-error">Ошибка загрузки профиля</div>;
+  if (!profile) return <div className="load-error">{CABINET_LOAD_ERROR_TEXT}</div>;
   const numericLevelValue = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
   const hasLevel = numericLevelValue !== undefined && numericLevelValue !== null && numericLevelValue !== "";
   const onboardingLabel = "Определи свой уровень";
@@ -200,13 +465,54 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
       ),
     );
 
-  const openOnboarding = () =>
+  const openOnboarding = () => {
+    trackAnalyticsEvent("onboarding_open_requested", {
+      source: "cabinet",
+      clientId: profile.id,
+    });
     onOpenOnboarding({
       profile,
       gamesLink: QUICK_ACTIONS.find((action) => action.label === "Играть")?.href || "#",
       trainingLink: QUICK_ACTIONS.find((action) => action.label === "Групповые тренировки")?.href || "#",
       tournamentsLink: QUICK_ACTIONS.find((action) => action.label === "Турниры")?.href || "#",
     });
+  };
+
+  const handleOpenGames = () => {
+    trackAnalyticsEvent("module_open_requested", {
+      module: "games",
+      source: "cabinet",
+      clientId: profile.id,
+    });
+    onOpenGames();
+  };
+
+  const handleCopyInviteFromFeed = async (game: PadelGameRecord) => {
+    const url = resolveGameInviteUrl(game) || "";
+    if (!url) return;
+    try {
+      await navigator.clipboard?.writeText(url);
+      setCopiedGameInviteId(game.id);
+      window.setTimeout(() => {
+        setCopiedGameInviteId((prev) => (prev === game.id ? null : prev));
+      }, 1600);
+    } catch {
+      setCopiedGameInviteId(null);
+    }
+  };
+
+  const handleOpenGameChat = (game: PadelGameRecord) => {
+    onOpenGames({ gameId: game.id, openChat: true });
+  };
+
+  const handleOpenTournaments = () => {
+    trackAnalyticsEvent("module_open_requested", {
+      module: "tournaments",
+      source: "cabinet",
+      clientId: profile.id,
+    });
+    onOpenTournaments();
+  };
 
   const renderActionIcon = (label: string, fallback: string) => {
     if (label === "Играть") {
@@ -300,6 +606,12 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
             target="_blank"
             rel="noopener noreferrer"
             className="quick-action-card"
+            onClick={() =>
+              trackAnalyticsEvent("quick_action_click", {
+                label: action.label,
+                href: action.href,
+                clientId: profile.id,
+              })}
           >
             {renderActionIcon(action.label, action.icon)}
             <span className="quick-action-label">{action.label}</span>
@@ -308,19 +620,123 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
       </div>
 
       {/* Игры */}
-      {canHostTournaments && (
-        <div className="section">
-          <div className="section-header">
-            <span className="section-title">Игры</span>
-          </div>
-          <div className="section-body">
-            <p className="section-text">Открывайте игровые сценарии в отдельном модуле.</p>
-            <button className="section-cta" onClick={onOpenGames} type="button">
-              Перейти в игры
-            </button>
-          </div>
+      <div className="section">
+        <div className="section-header">
+          <span className="section-title">Игры</span>
         </div>
-      )}
+        <div className="section-body cabinet-games-feed">
+          {loadingCreatedGames && <div className="section-text">Загружаем созданные игры...</div>}
+          {!loadingCreatedGames && createdGamesError && (
+            <div className="section-text">{createdGamesError}</div>
+          )}
+          {!loadingCreatedGames && !createdGamesError && gamesForFeed.length === 0 && (
+            <div className="section-text">У вас пока нет созданных игр</div>
+          )}
+
+          {!loadingCreatedGames && !createdGamesError && gamesForFeed.length > 0 && (
+            <div className="game-created-list">
+              {gamesForFeed.map((game) => {
+                const dateTitle = formatGameCardDate(game.booking?.date);
+                const badge = getDateBadge(game.booking?.date);
+                const timeFrom = game.booking?.timeFrom ?? "—:—";
+                const timeTo = game.booking?.timeTo ?? "—:—";
+                const ratingTag = game.settings?.ratingGame ? "Рейтинговый" : "Без рейтинга";
+                const durationTag = game.booking?.durationMinutes
+                  ? `${game.booking.durationMinutes} мин`
+                  : null;
+                const ratingRangeTag =
+                  game.settings?.minRating && game.settings?.maxRating
+                    ? `${game.settings.minRating}/${game.settings.maxRating}`
+                    : null;
+                const organizerPlayer: PadelGamePlayer | null = game.organizer
+                  ? {
+                      id: game.organizer.id ?? null,
+                      name: game.organizer.name || "Организатор",
+                      phone: game.organizer.phone ?? null,
+                      photo: game.organizer.photo ?? null,
+                      rating: game.organizer.rating ?? null,
+                      source: "ORGANIZER",
+                      status: "CONFIRMED",
+                    }
+                  : null;
+                const participants = game.participants && game.participants.length > 0
+                  ? game.participants
+                  : (organizerPlayer ? [organizerPlayer] : []);
+                const playerSlots = Array.from({ length: MAX_GAME_PLAYERS }, (_, index) => (
+                  participants[index] ?? null
+                ));
+
+                return (
+                  <div key={game.id} className="game-created-card">
+                    <div className="game-created-head">
+                      <div className="game-created-date">{dateTitle}</div>
+                      <div className="booking-date-badge game-created-date-badge">
+                        <div className="booking-date-badge-month">{badge.month}</div>
+                        <div className="booking-date-badge-day">{badge.day}</div>
+                      </div>
+                    </div>
+                    <div className="game-created-time">{`${timeFrom} • ${timeTo}`}</div>
+                    <div className="game-created-tags">
+                      <span className="game-created-tag">{ratingTag}</span>
+                      {durationTag && <span className="game-created-tag">{durationTag}</span>}
+                      {ratingRangeTag && <span className="game-created-tag">{ratingRangeTag}</span>}
+                    </div>
+                    <div className="game-created-players">
+                      {playerSlots.map((player, index) => {
+                        const initials = getPlayerInitials(player?.name);
+                        const isConfirmed = player?.status === "CONFIRMED" || !player?.status;
+                        return (
+                          <div key={`${game.id}-slot-${index}`} className="game-created-player">
+                            <span className="game-created-player-mark">
+                              {isConfirmed ? "●" : "◷"}
+                            </span>
+                            {player?.photo ? (
+                              <img
+                                src={player.photo}
+                                alt={player.name}
+                                className="game-created-player-avatar"
+                              />
+                            ) : (
+                              <div className="game-created-player-avatar game-created-player-fallback">
+                                {initials}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="game-created-actions">
+                      <button
+                        className="game-created-action game-created-action-secondary"
+                        type="button"
+                        disabled={!resolveGameInviteUrl(game)}
+                        onClick={() => {
+                          void handleCopyInviteFromFeed(game);
+                        }}
+                      >
+                        {copiedGameInviteId === game.id ? "Скопировано" : "Пригласить в игру"}
+                      </button>
+                      <button
+                        className="game-created-action"
+                        type="button"
+                        onClick={() => {
+                          handleOpenGameChat(game);
+                        }}
+                      >
+                        Чат
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <button className="section-cta" onClick={handleOpenGames} type="button">
+            Перейти в игры
+          </button>
+        </div>
+      </div>
 
       {/* Турниры */}
       {canHostTournaments && (
@@ -330,7 +746,7 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
           </div>
           <div className="section-body">
             <p className="section-text">Управляйте турнирами в отдельном модуле.</p>
-            <button className="section-cta" onClick={onOpenTournaments} type="button">
+            <button className="section-cta" onClick={handleOpenTournaments} type="button">
               Перейти в турниры
             </button>
           </div>

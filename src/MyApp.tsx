@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { AuthForm } from "./components/auth/AuthForm";
 import { Cabinet } from "./components/cabinet/Cabinet";
+import GameJoinPage from "./components/games/GameJoinPage";
 import { GAMES_BUNDLE_URL, TOURNAMENTS_BUNDLE_URL, ONBOARDING_BUNDLE_URL } from "./consts/api_config";
+import { trackAnalyticsEvent, trackClientError } from "./utils/analytics";
 import "./MyApp.css";
 
 type WidgetModule = {
@@ -11,8 +13,11 @@ type WidgetModule = {
   unmount?: (targetId?: string) => void;
 };
 
+const DEFAULT_CABINET_URL = "https://padlhub.ru/lk/";
+
 const OVERLAY_ID = "lk-overlay";
 let overlayRoot: ReturnType<typeof createRoot> | null = null;
+let activeOverlayModule: "games" | "tournaments" | "onboarding" | null = null;
 
 function ensureOverlayContainer() {
   let el = document.getElementById(OVERLAY_ID);
@@ -33,6 +38,13 @@ function showOverlay() {
 }
 
 function hideOverlay() {
+  if (activeOverlayModule) {
+    trackAnalyticsEvent("module_closed", {
+      module: activeOverlayModule,
+    });
+    activeOverlayModule = null;
+  }
+
   const el = document.getElementById(OVERLAY_ID);
   if (el) {
     el.classList.remove("open");
@@ -88,6 +100,43 @@ function loadWidget(src: string, globalName: string): Promise<WidgetModule> {
 function AppContent() {
   const { isAuthenticated } = useAuth();
   const [view, setView] = useState<"auth" | "cabinet">("auth");
+  const [autoOpenFromPaymentHandled, setAutoOpenFromPaymentHandled] = useState(false);
+  const joinRouteData = useMemo(() => {
+    if (typeof window === "undefined") {
+      return {
+        enabled: false,
+        gameId: null as string | null,
+        cabinetUrl: DEFAULT_CABINET_URL,
+      };
+    }
+
+    const current = new URL(window.location.href);
+    const joinConfig =
+      (window as typeof window & {
+        __PADLHUB_JOIN_CONFIG__?: { gameId?: string | null; cabinetUrl?: string | null };
+      }).__PADLHUB_JOIN_CONFIG__ ?? null;
+    const gameId = (
+      current.searchParams.get("joinGame")
+      || current.searchParams.get("gameId")
+      || current.searchParams.get("id")
+      || joinConfig?.gameId
+      || ""
+    ).trim();
+    const byPath = current.pathname.replace(/\/+$/, "").endsWith("/game_join");
+    const enabled = byPath || Boolean(gameId);
+    const cabinetUrl = (
+      current.searchParams.get("cabinetUrl")
+      || current.searchParams.get("returnUrl")
+      || joinConfig?.cabinetUrl
+      || DEFAULT_CABINET_URL
+    ).trim() || DEFAULT_CABINET_URL;
+
+    return {
+      enabled,
+      gameId: gameId || null,
+      cabinetUrl,
+    };
+  }, []);
 
   useEffect(() => {
     (window as typeof window & { __LK_ON_READY?: () => void }).__LK_ON_READY?.();
@@ -99,9 +148,28 @@ function AppContent() {
     globalName?: string,
     data?: any,
   ) => {
+    trackAnalyticsEvent("module_open_requested", {
+      module,
+      source: "overlay",
+    });
+
+    if (activeOverlayModule) {
+      trackAnalyticsEvent("module_closed", {
+        module: activeOverlayModule,
+        reason: "switch",
+      });
+      activeOverlayModule = null;
+    }
+
     if (!src || !globalName) {
       console.warn("Overlay module URL is not configured");
-      if (!import.meta.env.DEV) return;
+      if (!import.meta.env.DEV) {
+        trackAnalyticsEvent("module_open_failed", {
+          module,
+          reason: "bundle_url_not_configured",
+        });
+        return;
+      }
     }
     const container = showOverlay();
     if (overlayRoot) {
@@ -130,10 +198,27 @@ function AppContent() {
             {...(data ?? {})}
           />,
         );
+        activeOverlayModule = module;
+        trackAnalyticsEvent("module_opened", {
+          module,
+          mode: "dev_import",
+        });
         return;
       } catch (err) {
         const message = err instanceof Error ? err.message : "Ошибка загрузки";
         container.innerHTML = `<div class="overlay-loading">${message}</div>`;
+        trackClientError(
+          "overlay.module_open_failed.dev_import",
+          err,
+          { module, globalName: globalName ?? null, src: src ?? null },
+          { handled: true, severity: "error" },
+        );
+        activeOverlayModule = null;
+        trackAnalyticsEvent("module_open_failed", {
+          module,
+          mode: "dev_import",
+          reason: message,
+        });
         return;
       }
     }
@@ -148,9 +233,26 @@ function AppContent() {
         },
         data,
       });
+      activeOverlayModule = module;
+      trackAnalyticsEvent("module_opened", {
+        module,
+        mode: "remote_bundle",
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Ошибка загрузки";
       container.innerHTML = `<div class="overlay-loading">${message}</div>`;
+      trackClientError(
+        "overlay.module_open_failed.remote_bundle",
+        err,
+        { module, globalName: globalName ?? null, src: src ?? null },
+        { handled: true, severity: "error" },
+      );
+      activeOverlayModule = null;
+      trackAnalyticsEvent("module_open_failed", {
+        module,
+        mode: "remote_bundle",
+        reason: message,
+      });
     }
   };
 
@@ -160,14 +262,56 @@ function AppContent() {
     } else {
       setView("auth");
       hideOverlay();
+      setAutoOpenFromPaymentHandled(false);
     }
   }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (view !== "cabinet" || autoOpenFromPaymentHandled) return;
+    if (typeof window === "undefined") return;
+
+    const search = new URLSearchParams(window.location.search);
+    const paymentRef = search.get("phPaymentRef");
+    if (!paymentRef) return;
+
+    setAutoOpenFromPaymentHandled(true);
+    openOverlayModule("games", GAMES_BUNDLE_URL, "LKWidgetGames");
+  }, [view, autoOpenFromPaymentHandled, openOverlayModule]);
+
+  if (joinRouteData.enabled) {
+    if (!isAuthenticated) {
+      return <AuthForm onLogin={() => setView("cabinet")} />;
+    }
+
+    if (!joinRouteData.gameId) {
+      return (
+        <div className="load-error">
+          <div className="load-error-title">Не передан идентификатор игры</div>
+          <div className="load-error-text">Проверьте ссылку приглашения и попробуйте снова.</div>
+        </div>
+      );
+    }
+
+    return (
+      <GameJoinPage
+        gameId={joinRouteData.gameId}
+        cabinetUrl={joinRouteData.cabinetUrl}
+      />
+    );
+  }
 
   if (view === "cabinet") {
     return (
       <Cabinet
-        onOpenGames={() =>
-          openOverlayModule("games", GAMES_BUNDLE_URL, "LKWidgetGames")}
+        onOpenGames={(options) =>
+          openOverlayModule(
+            "games",
+            GAMES_BUNDLE_URL,
+            "LKWidgetGames",
+            options?.gameId
+              ? { openGameId: options.gameId, openChat: options.openChat === true }
+              : undefined,
+          )}
         onOpenTournaments={() =>
           openOverlayModule(
             "tournaments",

@@ -1,0 +1,606 @@
+[
+  {
+    "id": "chat_comment_001",
+    "type": "comment",
+    "z": "1e95dcebc274ac6c",
+    "name": "LK games chat (separate DB games_chat)",
+    "info": "Хранение сообщений чата игры в отдельной БД games_chat. Авторизация по участию в игре.",
+    "x": 280,
+    "y": 3260,
+    "wires": []
+  },
+  {
+    "id": "chat_db_client_001",
+    "type": "mongodb4-client",
+    "name": "lk_games_chat_db",
+    "protocol": "mongodb",
+    "hostname": "147.45.254.160",
+    "port": "27017",
+    "dbName": "games_chat",
+    "appName": "",
+    "authSource": "admin",
+    "authMechanism": "DEFAULT",
+    "tls": false,
+    "tlsCAFile": "",
+    "tlsCertificateKeyFile": "",
+    "tlsInsecure": false,
+    "connectTimeoutMS": "30000",
+    "socketTimeoutMS": "0",
+    "minPoolSize": "0",
+    "maxPoolSize": "100",
+    "maxIdleTimeMS": "0",
+    "uri": "mongodb://gen_user:l^RRk2kNPNqoC~@147.45.254.160:27017/games_chat?authSource=admin&directConnection=true&retryWrites=false",
+    "advanced": "{}",
+    "uriTabActive": "tab-uri-advanced"
+  },
+  {
+    "id": "chat_post_in_001",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "LK game chat send",
+    "url": "/lk/games/:gameId/chat/messages",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 3300,
+    "wires": [
+      [
+        "chat_post_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_post_fn_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Chat send validate",
+    "func": "const isObj = (v) => v && typeof v === \"object\" && !Array.isArray(v);\nconst toStr = (v) => {\n  if (v === null || v === undefined) return null;\n  const s = String(v).trim();\n  return s ? s : null;\n};\nconst normPhone = (v) => {\n  const s = String(v || \"\").replace(/\\D/g, \"\");\n  if (!s) return null;\n  if (s.length === 10) return \"7\" + s;\n  if (s.length === 11 && s.startsWith(\"8\")) return \"7\" + s.slice(1);\n  return s;\n};\n\nconst gameId = toStr(msg.req?.params?.gameId);\nif (!gameId) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"gameId is required\" };\n  return [null, msg, msg];\n}\n\nconst body = isObj(msg.payload) ? msg.payload : {};\nconst senderPhone = normPhone(body.senderPhone || body.phone || body.clientPhone || msg.req?.query?.phone);\nconst text = toStr(body.text);\nconst messageType = toStr(body.type) || \"TEXT\";\n\nif (!senderPhone) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"senderPhone is required\" };\n  return [null, msg, msg];\n}\n\nif (!text) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"text is required\" };\n  return [null, msg, msg];\n}\n\nmsg._chat = {\n  gameId,\n  senderPhone,\n  text,\n  type: messageType,\n  senderName: toStr(body.senderName),\n  senderId: toStr(body.senderId || body.clientId),\n};\n\nmsg.payload = { id: gameId, archived: { $ne: true } };\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 380,
+    "y": 3300,
+    "wires": [
+      [
+        "chat_post_find_game_001"
+      ],
+      [
+        "chat_post_http_resp_001"
+      ],
+      [
+        "chat_post_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_post_find_game_001",
+    "type": "mongodb in",
+    "z": "1e95dcebc274ac6c",
+    "mongodb": "mongo_lk",
+    "name": "Find game for chat send",
+    "collection": "lk_games",
+    "operation": "find",
+    "x": 650,
+    "y": 3260,
+    "wires": [
+      [
+        "chat_post_fn_insert_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_post_fn_insert_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Build chat message doc",
+    "func": "const normPhone = (v) => {\n  const s = String(v || \"\").replace(/\\D/g, \"\");\n  if (!s) return null;\n  if (s.length === 10) return \"7\" + s;\n  if (s.length === 11 && s.startsWith(\"8\")) return \"7\" + s.slice(1);\n  return s;\n};\nconst toStr = (v) => {\n  if (v === null || v === undefined) return null;\n  const s = String(v).trim();\n  return s ? s : null;\n};\nconst uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));\n\nconst rows = Array.isArray(msg.payload) ? msg.payload : [];\nif (rows.length === 0) {\n  msg.statusCode = 404;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Game not found\" };\n  return [null, msg, msg];\n}\n\nconst game = rows[0] || {};\nconst ctx = msg._chat || {};\nconst allPhones = uniq([\n  normPhone(game?.organizer?.phoneNorm || game?.organizer?.phone),\n  ...(Array.isArray(game?.allRelatedPhones) ? game.allRelatedPhones.map(normPhone) : []),\n  ...(Array.isArray(game?.participantPhones) ? game.participantPhones.map(normPhone) : []),\n  ...(Array.isArray(game?.waitlistPhones) ? game.waitlistPhones.map(normPhone) : []),\n  ...(Array.isArray(game?.invitedPhones) ? game.invitedPhones.map(normPhone) : []),\n]);\n\nif (allPhones.length > 0 && !allPhones.includes(ctx.senderPhone)) {\n  msg.statusCode = 403;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Sender is not participant of this game\" };\n  return [null, msg, msg];\n}\n\nconst now = new Date();\nconst nowIso = now.toISOString();\nconst nowTs = now.getTime();\n\nconst senderRole =\n  normPhone(game?.organizer?.phoneNorm || game?.organizer?.phone) === ctx.senderPhone\n    ? \"ORGANIZER\"\n    : \"PLAYER\";\n\nconst messageDoc = {\n  gameId: game.id,\n  tenantKey: game.tenantKey || null,\n  relatedPhones: allPhones,\n  sender: {\n    id: toStr(ctx.senderId),\n    phoneNorm: ctx.senderPhone,\n    name: toStr(ctx.senderName) || (senderRole === \"ORGANIZER\" ? (toStr(game?.organizer?.name) || \"Организатор\") : \"Игрок\"),\n    role: senderRole,\n  },\n  type: ctx.type || \"TEXT\",\n  text: ctx.text,\n  createdAt: nowIso,\n  createdTs: nowTs,\n  editedAt: null,\n  deleted: false,\n};\n\nmsg._chatMessageDoc = messageDoc;\nmsg.payload = messageDoc;\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 930,
+    "y": 3260,
+    "wires": [
+      [
+        "chat_post_insert_msg_001"
+      ],
+      [
+        "chat_post_http_resp_001"
+      ],
+      [
+        "chat_post_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_post_insert_msg_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "chat_db_client_001",
+    "mode": "collection",
+    "collection": "chat_messages",
+    "operation": "insertOne",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Insert chat message",
+    "x": 1190,
+    "y": 3260,
+    "wires": [
+      [
+        "chat_post_fn_response_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_post_fn_response_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Chat send response",
+    "func": "msg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = msg._chatMessageDoc || { ok: true };\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1460,
+    "y": 3260,
+    "wires": [
+      [
+        "chat_post_http_resp_001"
+      ],
+      [
+        "chat_post_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_post_http_resp_001",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 1720,
+    "y": 3300,
+    "wires": []
+  },
+  {
+    "id": "chat_post_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "chat send debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1710,
+    "y": 3340,
+    "wires": []
+  },
+  {
+    "id": "chat_get_in_001",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "LK game chat messages",
+    "url": "/lk/games/:gameId/chat/messages",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 140,
+    "y": 3400,
+    "wires": [
+      [
+        "chat_get_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_get_fn_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Chat get validate",
+    "func": "const toStr = (v) => {\n  if (v === null || v === undefined) return null;\n  const s = String(v).trim();\n  return s ? s : null;\n};\nconst normPhone = (v) => {\n  const s = String(v || \"\").replace(/\\D/g, \"\");\n  if (!s) return null;\n  if (s.length === 10) return \"7\" + s;\n  if (s.length === 11 && s.startsWith(\"8\")) return \"7\" + s.slice(1);\n  return s;\n};\n\nconst gameId = toStr(msg.req?.params?.gameId);\nif (!gameId) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"gameId is required\" };\n  return [null, msg, msg];\n}\n\nconst q = msg.req?.query || {};\nconst phone = normPhone(q.phone || q.phoneNumber || q.userPhone || q.mobile);\nif (!phone) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"phone is required\" };\n  return [null, msg, msg];\n}\n\nconst limitRaw = Number(q.limit);\nconst limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 50;\nconst beforeRaw = Number(q.beforeTs || q.before);\nconst beforeTs = Number.isFinite(beforeRaw) ? beforeRaw : Date.now();\n\nmsg._chatGet = { gameId, phone, limit, beforeTs };\nmsg.payload = { id: gameId, archived: { $ne: true } };\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 380,
+    "y": 3400,
+    "wires": [
+      [
+        "chat_get_find_game_001"
+      ],
+      [
+        "chat_get_http_resp_001"
+      ],
+      [
+        "chat_get_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_get_find_game_001",
+    "type": "mongodb in",
+    "z": "1e95dcebc274ac6c",
+    "mongodb": "mongo_lk",
+    "name": "Find game for chat read",
+    "collection": "lk_games",
+    "operation": "find",
+    "x": 650,
+    "y": 3360,
+    "wires": [
+      [
+        "chat_get_fn_query_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_get_fn_query_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Build chat messages query",
+    "func": "const normPhone = (v) => {\n  const s = String(v || \"\").replace(/\\D/g, \"\");\n  if (!s) return null;\n  if (s.length === 10) return \"7\" + s;\n  if (s.length === 11 && s.startsWith(\"8\")) return \"7\" + s.slice(1);\n  return s;\n};\nconst uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));\n\nconst rows = Array.isArray(msg.payload) ? msg.payload : [];\nif (rows.length === 0) {\n  msg.statusCode = 404;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Game not found\" };\n  return [null, msg, msg];\n}\n\nconst game = rows[0] || {};\nconst ctx = msg._chatGet || {};\n\nconst allPhones = uniq([\n  normPhone(game?.organizer?.phoneNorm || game?.organizer?.phone),\n  ...(Array.isArray(game?.allRelatedPhones) ? game.allRelatedPhones.map(normPhone) : []),\n  ...(Array.isArray(game?.participantPhones) ? game.participantPhones.map(normPhone) : []),\n  ...(Array.isArray(game?.waitlistPhones) ? game.waitlistPhones.map(normPhone) : []),\n  ...(Array.isArray(game?.invitedPhones) ? game.invitedPhones.map(normPhone) : []),\n]);\n\nif (allPhones.length > 0 && !allPhones.includes(ctx.phone)) {\n  msg.statusCode = 403;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Access denied for this game\" };\n  return [null, msg, msg];\n}\n\nmsg.payload = {\n  gameId: ctx.gameId,\n  deleted: { $ne: true },\n  createdTs: { $lt: ctx.beforeTs },\n};\n\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 930,
+    "y": 3360,
+    "wires": [
+      [
+        "chat_get_find_messages_001"
+      ],
+      [
+        "chat_get_http_resp_001"
+      ],
+      [
+        "chat_get_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_get_find_messages_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "chat_db_client_001",
+    "mode": "collection",
+    "collection": "chat_messages",
+    "operation": "find",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Find chat messages",
+    "x": 1200,
+    "y": 3360,
+    "wires": [
+      [
+        "chat_get_fn_response_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_get_fn_response_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Chat get response",
+    "func": "const rows = Array.isArray(msg.payload) ? msg.payload : [];\nconst ctx = msg._chatGet || { limit: 50, beforeTs: Date.now(), phone: null, gameId: null };\n\nconst sorted = rows\n  .filter((row) => row && typeof row === \"object\")\n  .sort((a, b) => Number(a.createdTs || 0) - Number(b.createdTs || 0));\n\nconst sliced = sorted.slice(Math.max(0, sorted.length - ctx.limit));\nconst hasMore = sorted.length > sliced.length;\nconst nextBeforeTs = sliced.length > 0 ? Number(sliced[0].createdTs || ctx.beforeTs) : null;\n\nmsg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = {\n  gameId: ctx.gameId,\n  phone: ctx.phone,\n  totalFetched: sliced.length,\n  hasMore,\n  nextBeforeTs,\n  messages: sliced,\n};\n\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1460,
+    "y": 3360,
+    "wires": [
+      [
+        "chat_get_http_resp_001"
+      ],
+      [
+        "chat_get_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_get_http_resp_001",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 1720,
+    "y": 3400,
+    "wires": []
+  },
+  {
+    "id": "chat_get_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "chat get debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1710,
+    "y": 3440,
+    "wires": []
+  },
+  {
+    "id": "chat_read_in_001",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "LK game chat read",
+    "url": "/lk/games/:gameId/chat/read",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 3500,
+    "wires": [
+      [
+        "chat_read_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_read_fn_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Chat read validate",
+    "func": "const toStr = (v) => {\n  if (v === null || v === undefined) return null;\n  const s = String(v).trim();\n  return s ? s : null;\n};\nconst normPhone = (v) => {\n  const s = String(v || \"\").replace(/\\D/g, \"\");\n  if (!s) return null;\n  if (s.length === 10) return \"7\" + s;\n  if (s.length === 11 && s.startsWith(\"8\")) return \"7\" + s.slice(1);\n  return s;\n};\n\nconst gameId = toStr(msg.req?.params?.gameId);\nif (!gameId) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"gameId is required\" };\n  return [null, msg, msg];\n}\n\nconst body = (msg.payload && typeof msg.payload === \"object\") ? msg.payload : {};\nconst phone = normPhone(body.phone || body.phoneNumber || body.userPhone || msg.req?.query?.phone);\nif (!phone) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"phone is required\" };\n  return [null, msg, msg];\n}\n\nconst readTsRaw = Number(body.lastReadTs || body.readTs);\nconst lastReadTs = Number.isFinite(readTsRaw) ? readTsRaw : Date.now();\n\nmsg._chatRead = { gameId, phone, lastReadTs };\nmsg.payload = { id: gameId, archived: { $ne: true } };\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 380,
+    "y": 3500,
+    "wires": [
+      [
+        "chat_read_find_game_001"
+      ],
+      [
+        "chat_read_http_resp_001"
+      ],
+      [
+        "chat_read_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_read_find_game_001",
+    "type": "mongodb in",
+    "z": "1e95dcebc274ac6c",
+    "mongodb": "mongo_lk",
+    "name": "Find game for read mark",
+    "collection": "lk_games",
+    "operation": "find",
+    "x": 650,
+    "y": 3460,
+    "wires": [
+      [
+        "chat_read_fn_insert_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_read_fn_insert_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Build read event doc",
+    "func": "const normPhone = (v) => {\n  const s = String(v || \"\").replace(/\\D/g, \"\");\n  if (!s) return null;\n  if (s.length === 10) return \"7\" + s;\n  if (s.length === 11 && s.startsWith(\"8\")) return \"7\" + s.slice(1);\n  return s;\n};\nconst uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));\n\nconst rows = Array.isArray(msg.payload) ? msg.payload : [];\nif (rows.length === 0) {\n  msg.statusCode = 404;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Game not found\" };\n  return [null, msg, msg];\n}\n\nconst game = rows[0] || {};\nconst ctx = msg._chatRead || {};\nconst allPhones = uniq([\n  normPhone(game?.organizer?.phoneNorm || game?.organizer?.phone),\n  ...(Array.isArray(game?.allRelatedPhones) ? game.allRelatedPhones.map(normPhone) : []),\n  ...(Array.isArray(game?.participantPhones) ? game.participantPhones.map(normPhone) : []),\n  ...(Array.isArray(game?.waitlistPhones) ? game.waitlistPhones.map(normPhone) : []),\n  ...(Array.isArray(game?.invitedPhones) ? game.invitedPhones.map(normPhone) : []),\n]);\n\nif (allPhones.length > 0 && !allPhones.includes(ctx.phone)) {\n  msg.statusCode = 403;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Access denied for this game\" };\n  return [null, msg, msg];\n}\n\nconst nowIso = new Date().toISOString();\nconst doc = {\n  gameId: ctx.gameId,\n  phoneNorm: ctx.phone,\n  lastReadTs: ctx.lastReadTs,\n  updatedAt: nowIso,\n};\n\nmsg._chatReadDoc = doc;\nmsg.payload = doc;\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 920,
+    "y": 3460,
+    "wires": [
+      [
+        "chat_read_insert_001"
+      ],
+      [
+        "chat_read_http_resp_001"
+      ],
+      [
+        "chat_read_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_read_insert_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "chat_db_client_001",
+    "mode": "collection",
+    "collection": "chat_reads",
+    "operation": "insertOne",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Insert read event",
+    "x": 1180,
+    "y": 3460,
+    "wires": [
+      [
+        "chat_read_fn_response_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_read_fn_response_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Chat read response",
+    "func": "msg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = {\n  ok: true,\n  read: msg._chatReadDoc || null,\n};\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1450,
+    "y": 3460,
+    "wires": [
+      [
+        "chat_read_http_resp_001"
+      ],
+      [
+        "chat_read_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_read_http_resp_001",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 1720,
+    "y": 3500,
+    "wires": []
+  },
+  {
+    "id": "chat_read_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "chat read debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1710,
+    "y": 3540,
+    "wires": []
+  },
+  {
+    "id": "chat_list_in_001",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "LK chats by phone",
+    "url": "/lk/chats/by-phone",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 3600,
+    "wires": [
+      [
+        "chat_list_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_list_fn_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Build chats by phone query",
+    "func": "const normPhone = (v) => {\n  const s = String(v || \"\").replace(/\\D/g, \"\");\n  if (!s) return null;\n  if (s.length === 10) return \"7\" + s;\n  if (s.length === 11 && s.startsWith(\"8\")) return \"7\" + s.slice(1);\n  return s;\n};\n\nconst q = msg.req?.query || {};\nconst phone = normPhone(q.phone || q.phoneNumber || q.userPhone || q.mobile);\nif (!phone) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"phone is required\" };\n  return [null, msg, msg];\n}\n\nmsg._chatList = { phone };\nmsg.payload = { relatedPhones: phone, deleted: { $ne: true } };\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 390,
+    "y": 3600,
+    "wires": [
+      [
+        "chat_list_find_001"
+      ],
+      [
+        "chat_list_http_resp_001"
+      ],
+      [
+        "chat_list_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_list_find_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "chat_db_client_001",
+    "mode": "collection",
+    "collection": "chat_messages",
+    "operation": "find",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Find chats by phone",
+    "x": 670,
+    "y": 3560,
+    "wires": [
+      [
+        "chat_list_fn_response_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_list_fn_response_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Build chats summary response",
+    "func": "const rows = Array.isArray(msg.payload) ? msg.payload : [];\nconst phone = msg._chatList?.phone || null;\n\nconst byGame = new Map();\nrows.forEach((row) => {\n  if (!row || typeof row !== \"object\") return;\n  const gameId = String(row.gameId || \"\").trim();\n  if (!gameId) return;\n\n  const prev = byGame.get(gameId);\n  const rowTs = Number(row.createdTs || 0);\n  const prevTs = Number(prev?.createdTs || 0);\n\n  if (!prev || rowTs >= prevTs) {\n    byGame.set(gameId, row);\n  }\n});\n\nconst chats = Array.from(byGame.values())\n  .sort((a, b) => Number(b.createdTs || 0) - Number(a.createdTs || 0))\n  .map((m) => ({\n    gameId: m.gameId,\n    lastMessage: {\n      text: m.text || \"\",\n      type: m.type || \"TEXT\",\n      createdAt: m.createdAt || null,\n      createdTs: Number(m.createdTs || 0),\n      sender: m.sender || null,\n    },\n  }));\n\nmsg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = {\n  phone,\n  total: chats.length,\n  chats,\n};\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 950,
+    "y": 3560,
+    "wires": [
+      [
+        "chat_list_http_resp_001"
+      ],
+      [
+        "chat_list_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "chat_list_http_resp_001",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 1220,
+    "y": 3600,
+    "wires": []
+  },
+  {
+    "id": "chat_list_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "chat list debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1210,
+    "y": 3640,
+    "wires": []
+  }
+]

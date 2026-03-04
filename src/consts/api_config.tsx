@@ -6,6 +6,7 @@ export const SERV2_FALLBACK = import.meta.env.VITE_SERV2_FALLBACK as string | un
 
 export const SUCCESS_URL = import.meta.env.VITE_SUCCESS_URL as string;
 export const FAIL_URL = import.meta.env.VITE_FAIL_URL as string;
+export const GAMES_MASTER_SERVICE_ID = import.meta.env.VITE_GAMES_MASTER_SERVICE_ID as string | undefined;
 
 export const GAMES_BUNDLE_URL = import.meta.env.VITE_GAMES_BUNDLE_URL as string | undefined;
 export const TOURNAMENTS_BUNDLE_URL = import.meta.env.VITE_TOURNAMENTS_BUNDLE_URL as string | undefined;
