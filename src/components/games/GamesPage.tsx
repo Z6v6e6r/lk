@@ -11,6 +11,7 @@ import type {
 } from "../../utils/apiClient";
 import {
   apiCreatePadelGameRecord,
+  apiFetchPadelChatsByPhone,
   apiFetchPadelGameChatMessages,
   apiFetchPadelGameRecord,
   apiFetchPadelGamesByPhone,
@@ -50,6 +51,7 @@ const TODAY_DATE_INDEX = DAYS_BEFORE_TODAY;
 const MAX_GAME_PLAYERS = 4;
 const PENDING_GAME_DRAFT_KEY = "padlhub.pendingPaidGameDraft.v1";
 const PAYMENT_REF_QUERY_KEY = "phPaymentRef";
+const CHAT_READ_STORAGE_KEY_PREFIX = "padlhub.chat.lastRead.v1";
 const PUBLIC_GAMES_ORIGIN_FALLBACK = "https://padlhub.su";
 const INVITE_JOIN_PATH = PUBLIC_INVITE_PATH;
 
@@ -354,6 +356,39 @@ function normalizePhoneForGame(value: string | null | undefined): string | null 
   return digits;
 }
 
+function getChatReadStorageKey(phoneNorm: string): string {
+  return `${CHAT_READ_STORAGE_KEY_PREFIX}.${phoneNorm}`;
+}
+
+function readChatReadMap(phoneNorm: string): Record<string, number> {
+  if (typeof window === "undefined" || !phoneNorm) return {};
+
+  try {
+    const raw = window.localStorage.getItem(getChatReadStorageKey(phoneNorm));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object") return {};
+    const next: Record<string, number> = {};
+    Object.entries(parsed).forEach(([gameId, value]) => {
+      const ts = Number(value);
+      if (!gameId || !Number.isFinite(ts)) return;
+      next[gameId] = Math.max(0, Math.floor(ts));
+    });
+    return next;
+  } catch {
+    return {};
+  }
+}
+
+function writeChatReadMap(phoneNorm: string, map: Record<string, number>) {
+  if (typeof window === "undefined" || !phoneNorm) return;
+  try {
+    window.localStorage.setItem(getChatReadStorageKey(phoneNorm), JSON.stringify(map));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 function addMinutesToTime(timeValue: string, minutesToAdd: number): string {
   const [hoursRaw, minutesRaw] = timeValue.split(":");
   const hours = Number.parseInt(hoursRaw ?? "", 10);
@@ -577,6 +612,8 @@ export default function GamesPage({ onBack, openGameId = null, openChat = false 
   const [chatSending, setChatSending] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [chatDraft, setChatDraft] = useState("");
+  const [chatReadMap, setChatReadMap] = useState<Record<string, number>>({});
+  const [chatUnreadByGame, setChatUnreadByGame] = useState<Record<string, number>>({});
   const [gameRecordId, setGameRecordId] = useState<string | null>(null);
   const [gameRecordStatus, setGameRecordStatus] = useState<string | null>(null);
   const [gamePaymentUrl, setGamePaymentUrl] = useState<string | null>(null);
@@ -753,6 +790,121 @@ export default function GamesPage({ onBack, openGameId = null, openChat = false 
       alive = false;
     };
   }, [profilePhone, profileId]);
+
+  const profilePhoneNorm = useMemo(
+    () => normalizePhoneForGame(profilePhone),
+    [profilePhone],
+  );
+
+  useEffect(() => {
+    if (!profilePhoneNorm) {
+      setChatReadMap({});
+      return;
+    }
+    setChatReadMap(readChatReadMap(profilePhoneNorm));
+  }, [profilePhoneNorm]);
+
+  const updateChatReadState = useCallback(
+    (gameId: string, readTsRaw: number) => {
+      const normalizedId = gameId.trim();
+      const readTs = Number.isFinite(readTsRaw) ? Math.floor(readTsRaw) : 0;
+      if (!normalizedId || readTs <= 0) return;
+
+      setChatReadMap((prev) => {
+        const prevTs = prev[normalizedId] ?? 0;
+        const nextTs = Math.max(prevTs, readTs);
+        if (nextTs === prevTs) return prev;
+        const next = { ...prev, [normalizedId]: nextTs };
+        if (profilePhoneNorm) {
+          writeChatReadMap(profilePhoneNorm, next);
+        }
+        return next;
+      });
+
+      setChatUnreadByGame((prev) => {
+        if (!prev[normalizedId]) return prev;
+        const next = { ...prev };
+        delete next[normalizedId];
+        return next;
+      });
+    },
+    [profilePhoneNorm],
+  );
+
+  const markChatAsRead = useCallback(
+    async (gameId: string, readTsRaw: number) => {
+      if (!profilePhoneNorm) return;
+      const readTs = Number.isFinite(readTsRaw) ? Math.floor(readTsRaw) : 0;
+      if (!gameId.trim() || readTs <= 0) return;
+
+      const response = await apiMarkPadelGameChatRead({
+        gameId,
+        phone: profilePhoneNorm,
+        lastReadTs: readTs,
+      });
+
+      const resolvedTs = response.data?.read?.lastReadTs ?? readTs;
+      if (!response.error && resolvedTs > 0) {
+        updateChatReadState(gameId, resolvedTs);
+      }
+    },
+    [profilePhoneNorm, updateChatReadState],
+  );
+
+  const refreshUnreadChats = useCallback(async () => {
+    if (!profilePhoneNorm) {
+      setChatUnreadByGame({});
+      return;
+    }
+
+    const gameIds = new Set(createdGames.map((item) => item.id).filter(Boolean));
+    if (gameRecordId) {
+      gameIds.add(gameRecordId);
+    }
+    if (gameIds.size === 0) {
+      setChatUnreadByGame({});
+      return;
+    }
+
+    const summaryResult = await apiFetchPadelChatsByPhone(profilePhoneNorm);
+    if (!summaryResult.data) return;
+
+    const nextUnread: Record<string, number> = {};
+    summaryResult.data.chats.forEach((chat) => {
+      if (!gameIds.has(chat.gameId)) return;
+      if (!Number.isFinite(chat.lastMessageTs) || chat.lastMessageTs <= 0) return;
+
+      const lastReadTs = chatReadMap[chat.gameId] ?? 0;
+      const senderPhone = normalizePhoneForGame(chat.lastMessageSenderPhone);
+      const isMine = Boolean(senderPhone && senderPhone === profilePhoneNorm);
+      if (!isMine && chat.lastMessageTs > lastReadTs) {
+        nextUnread[chat.gameId] = 1;
+      }
+    });
+
+    setChatUnreadByGame(nextUnread);
+  }, [chatReadMap, createdGames, gameRecordId, profilePhoneNorm]);
+
+  useEffect(() => {
+    if (!profilePhoneNorm) return;
+    let cancelled = false;
+
+    const run = async () => {
+      await refreshUnreadChats();
+      if (cancelled) return;
+    };
+
+    void run();
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      void run();
+    }, 12000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [profilePhoneNorm, refreshUnreadChats]);
 
   const filteredStudios = studios.filter((s) => {
     if (!studiosQuery.trim()) return true;
@@ -1516,6 +1668,8 @@ export default function GamesPage({ onBack, openGameId = null, openChat = false 
     () => (gameRecordId ? createdGames.find((item) => item.id === gameRecordId) ?? null : null),
     [createdGames, gameRecordId],
   );
+  const currentGameUnreadCount = gameRecordId ? (chatUnreadByGame[gameRecordId] ?? 0) : 0;
+  const currentChatReadTs = gameRecordId ? (chatReadMap[gameRecordId] ?? 0) : 0;
   const canCurrentUserSendChat = useMemo(() => {
     const myPhone = normalizePhoneForGame(profilePhone);
     if (!myPhone) return false;
@@ -1797,11 +1951,7 @@ export default function GamesPage({ onBack, openGameId = null, openChat = false 
         setChatMessages((prev) => mergeChatMessages(prev, result.data?.messages ?? []));
         const lastMessage = result.data.messages[result.data.messages.length - 1];
         if (lastMessage?.createdTs) {
-          void apiMarkPadelGameChatRead({
-            gameId: gameRecordId,
-            phone: profilePhone,
-            lastReadTs: lastMessage.createdTs,
-          });
+          void markChatAsRead(gameRecordId, lastMessage.createdTs);
         }
       } else if (result.error) {
         setChatError(result.error.message || "Не удалось загрузить чат");
@@ -1813,7 +1963,7 @@ export default function GamesPage({ onBack, openGameId = null, openChat = false 
         setChatRefreshing(false);
       }
     },
-    [gameRecordId, profilePhone],
+    [gameRecordId, markChatAsRead, profilePhone],
   );
 
   useEffect(() => {
@@ -1862,17 +2012,21 @@ export default function GamesPage({ onBack, openGameId = null, openChat = false 
     if (sentMessage) {
       setChatMessages((prev) => mergeChatMessages(prev, [sentMessage]));
       setChatDraft("");
-      void apiMarkPadelGameChatRead({
-        gameId: gameRecordId,
-        phone: profilePhone,
-        lastReadTs: sentMessage.createdTs || Date.now(),
-      });
+      void markChatAsRead(gameRecordId, sentMessage.createdTs || Date.now());
     } else {
       setChatError(sendResult.error?.message || "Не удалось отправить сообщение");
     }
 
     setChatSending(false);
-  }, [chatDraft, chatSending, gameRecordId, profileId, profileName, profilePhone]);
+  }, [
+    chatDraft,
+    chatSending,
+    gameRecordId,
+    markChatAsRead,
+    profileId,
+    profileName,
+    profilePhone,
+  ]);
 
   const handleOpenGameChat = useCallback((game: PadelGameRecord) => {
     setGameRecordError(null);
@@ -2182,16 +2336,18 @@ export default function GamesPage({ onBack, openGameId = null, openChat = false 
               {chatMessages.map((message) => {
                 const senderPhone = (message.sender?.phoneNorm || "").replace(/\D/g, "");
                 const myPhone = (profilePhone || "").replace(/\D/g, "");
-                const isMine = senderPhone && myPhone && senderPhone === myPhone;
+                const isMine = Boolean(senderPhone && myPhone && senderPhone === myPhone);
+                const isUnread = !isMine && message.createdTs > currentChatReadTs;
                 const senderName = message.sender?.name || (isMine ? "Вы" : "Игрок");
                 return (
                   <div
                     key={`${message.createdTs}-${senderPhone}-${message.text}`}
-                    className={`game-chat-message ${isMine ? "mine" : ""}`}
+                    className={`game-chat-message ${isMine ? "mine" : ""} ${isUnread ? "unread" : ""}`}
                   >
                     <div className="game-chat-author">{senderName}</div>
                     <div className="game-chat-text">{message.text}</div>
                     <div className="game-chat-time">
+                      {isUnread && <span className="game-chat-unread-dot">●</span>}
                       {formatChatTime(message.createdAt, message.createdTs)}
                     </div>
                   </div>
@@ -2314,7 +2470,7 @@ export default function GamesPage({ onBack, openGameId = null, openChat = false 
 
           {gameRecordId && (
             <button
-              className="section-cta section-cta-secondary"
+              className="section-cta section-cta-secondary game-chat-open-btn"
               onClick={() => {
                 setChatMessages([]);
                 setChatError(null);
@@ -2323,6 +2479,9 @@ export default function GamesPage({ onBack, openGameId = null, openChat = false 
               type="button"
             >
               Чат игры
+              {currentGameUnreadCount > 0 && (
+                <span className="game-chat-unread-badge">{currentGameUnreadCount}</span>
+              )}
             </button>
           )}
 
@@ -2374,6 +2533,7 @@ export default function GamesPage({ onBack, openGameId = null, openChat = false 
               game.settings?.minRating && game.settings?.maxRating
                 ? `${game.settings.minRating}/${game.settings.maxRating}`
                 : null;
+            const unreadCount = chatUnreadByGame[game.id] ?? 0;
             const organizerPlayer: PadelGamePlayer | null = game.organizer
               ? {
                   id: game.organizer.id ?? null,
@@ -2452,7 +2612,7 @@ export default function GamesPage({ onBack, openGameId = null, openChat = false 
                     {copiedGameInviteId === game.id ? "Скопировано" : "Пригласить в игру"}
                   </button>
                   <button
-                    className="game-created-action"
+                    className="game-created-action game-chat-open-btn"
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation();
@@ -2460,6 +2620,9 @@ export default function GamesPage({ onBack, openGameId = null, openChat = false 
                     }}
                   >
                     Чат
+                    {unreadCount > 0 && (
+                      <span className="game-chat-unread-badge">{unreadCount}</span>
+                    )}
                   </button>
                 </div>
               </div>

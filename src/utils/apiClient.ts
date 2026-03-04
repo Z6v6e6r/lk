@@ -1989,6 +1989,20 @@ export interface PadelGameChatReadResponse {
   } | null;
 }
 
+export interface PadelChatSummaryItem {
+  gameId: string;
+  lastMessageTs: number;
+  lastMessageAt: string | null;
+  lastMessageText: string;
+  lastMessageSenderPhone: string | null;
+}
+
+export interface PadelChatsByPhoneResponse {
+  phone: string | null;
+  total: number;
+  chats: PadelChatSummaryItem[];
+}
+
 export interface Booking {
   id: string;
   spot: number;
@@ -2889,6 +2903,47 @@ function extractPadelGameChatMessages(payload: unknown): PadelGameChatMessagesPa
   };
 }
 
+function extractPadelChatsByPhone(payload: unknown): PadelChatsByPhoneResponse | null {
+  if (!isRecord(payload)) return null;
+
+  const rowsRaw = Array.isArray(payload.chats)
+    ? payload.chats
+    : Array.isArray(payload.items)
+      ? payload.items
+      : Array.isArray(payload.content)
+        ? payload.content
+        : [];
+
+  const chats = rowsRaw
+    .map((item) => {
+      if (!isRecord(item)) return null;
+      const gameId = pickString(item, ["gameId", "id"]);
+      if (!gameId) return null;
+
+      const lastMessagePayload = isRecord(item.lastMessage) ? item.lastMessage : item;
+      const senderPayload = isRecord(lastMessagePayload.sender)
+        ? lastMessagePayload.sender
+        : null;
+
+      return {
+        gameId,
+        lastMessageTs: pickNumber(lastMessagePayload, ["createdTs", "ts", "timestamp"]) ?? 0,
+        lastMessageAt: pickString(lastMessagePayload, ["createdAt", "date", "created"]),
+        lastMessageText: pickString(lastMessagePayload, ["text", "message", "body"]) ?? "",
+        lastMessageSenderPhone:
+          pickString(senderPayload ?? {}, ["phoneNorm", "phone", "phoneNumber"]) ?? null,
+      } satisfies PadelChatSummaryItem;
+    })
+    .filter((item): item is PadelChatSummaryItem => item !== null)
+    .sort((left, right) => right.lastMessageTs - left.lastMessageTs);
+
+  return {
+    phone: pickString(payload, ["phone", "phoneNorm"]),
+    total: pickNumber(payload, ["total", "count"]) ?? chats.length,
+    chats,
+  };
+}
+
 export async function apiFetchPadelGamesByPhone(phone: string, clientId?: string | null) {
   const normalizedPhone = phone.replace(/\D/g, "");
   if (!normalizedPhone) {
@@ -3220,6 +3275,55 @@ export async function apiMarkPadelGameChatRead(params: {
           }
         : null,
     },
+    error: null,
+    status: response.status,
+  };
+}
+
+export async function apiFetchPadelChatsByPhone(phoneRaw: string) {
+  const phone = normalizePhoneForChat(phoneRaw);
+  if (!phone) {
+    return {
+      data: null as PadelChatsByPhoneResponse | null,
+      error: {
+        status: 400,
+        message: "Недостаточно данных для загрузки списка чатов",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const baseUrl = getServ2Origin() || "";
+  const query = new URLSearchParams({ phone });
+
+  const response = await request<unknown>(`/lk/chats/by-phone?${query.toString()}`, {
+    method: "GET",
+    baseUrl,
+    retries: 1,
+  });
+
+  if (response.error) {
+    return {
+      data: null as PadelChatsByPhoneResponse | null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  const parsed = extractPadelChatsByPhone(response.data);
+  if (!parsed) {
+    return {
+      data: null as PadelChatsByPhoneResponse | null,
+      error: {
+        status: response.status,
+        message: "Не удалось разобрать список чатов",
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: parsed,
     error: null,
     status: response.status,
   };

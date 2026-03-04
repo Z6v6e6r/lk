@@ -4,6 +4,7 @@ import {
   apiFetchProfile,
   apiFetchBookings,
   apiFetchSubscriptions,
+  apiFetchPadelChatsByPhone,
   apiFetchPadelGamesByPhone,
 } from "../../utils/apiClient";
 import type {
@@ -47,6 +48,7 @@ const CABINET_LOAD_ERROR_TEXT =
   "Не удалось загрузить личный кабинет, попробуйте подключиться к WiFi сети и загрузить кабинет повторно.";
 const MAX_GAME_PLAYERS = 4;
 const INVITE_JOIN_PATH = PUBLIC_INVITE_PATH;
+const CHAT_READ_STORAGE_KEY_PREFIX = "padlhub.chat.lastRead.v1";
 
 interface CabinetProps {
   onOpenGames: (options?: { gameId?: string | null; openChat?: boolean }) => void;
@@ -182,6 +184,37 @@ function resolveGameInviteUrl(game: PadelGameRecord): string | null {
   );
 }
 
+function normalizePhoneForGame(value: string | null | undefined): string | null {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.length === 10) return `7${digits}`;
+  if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
+  return digits;
+}
+
+function getChatReadStorageKey(phoneNorm: string): string {
+  return `${CHAT_READ_STORAGE_KEY_PREFIX}.${phoneNorm}`;
+}
+
+function readChatReadMap(phoneNorm: string): Record<string, number> {
+  if (typeof window === "undefined" || !phoneNorm) return {};
+  try {
+    const raw = window.localStorage.getItem(getChatReadStorageKey(phoneNorm));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object") return {};
+    const next: Record<string, number> = {};
+    Object.entries(parsed).forEach(([gameId, value]) => {
+      const ts = Number(value);
+      if (!gameId || !Number.isFinite(ts)) return;
+      next[gameId] = Math.max(0, Math.floor(ts));
+    });
+    return next;
+  } catch {
+    return {};
+  }
+}
+
 export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: CabinetProps) {
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [historyBookings, setHistoryBookings] = useState<BookingsResponse | null>(null);
@@ -200,6 +233,8 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
   const [loadingCreatedGames, setLoadingCreatedGames] = useState(false);
   const [createdGamesError, setCreatedGamesError] = useState<string | null>(null);
   const [copiedGameInviteId, setCopiedGameInviteId] = useState<string | null>(null);
+  const [, setChatReadMap] = useState<Record<string, number>>({});
+  const [chatUnreadByGame, setChatUnreadByGame] = useState<Record<string, number>>({});
   const cabinetVisitTrackedRef = useRef(false);
   const onboardingStatusRef = useRef<boolean | null>(null);
   const { logout } = useAuth();
@@ -409,6 +444,65 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
       alive = false;
     };
   }, [profile?.phone, profile?.id]);
+
+  const profilePhoneNorm = useMemo(
+    () => normalizePhoneForGame(profile?.phone ?? null),
+    [profile?.phone],
+  );
+
+  useEffect(() => {
+    if (!profilePhoneNorm) {
+      setChatReadMap({});
+      return;
+    }
+    setChatReadMap(readChatReadMap(profilePhoneNorm));
+  }, [profilePhoneNorm]);
+
+  useEffect(() => {
+    if (!profilePhoneNorm) {
+      setChatUnreadByGame({});
+      return;
+    }
+
+    let cancelled = false;
+    const run = async () => {
+      const latestReadMap = readChatReadMap(profilePhoneNorm);
+      if (!cancelled) {
+        setChatReadMap(latestReadMap);
+      }
+
+      const result = await apiFetchPadelChatsByPhone(profilePhoneNorm);
+      if (cancelled || !result.data) return;
+
+      const gameIds = new Set(createdGames.map((game) => game.id).filter(Boolean));
+      const nextUnread: Record<string, number> = {};
+
+      result.data.chats.forEach((chat) => {
+        if (!gameIds.has(chat.gameId)) return;
+        const senderPhone = normalizePhoneForGame(chat.lastMessageSenderPhone);
+        const isMine = Boolean(senderPhone && senderPhone === profilePhoneNorm);
+        const readTs = latestReadMap[chat.gameId] ?? 0;
+        if (!isMine && chat.lastMessageTs > readTs) {
+          nextUnread[chat.gameId] = 1;
+        }
+      });
+
+      if (!cancelled) {
+        setChatUnreadByGame(nextUnread);
+      }
+    };
+
+    void run();
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      void run();
+    }, 12000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [createdGames, profilePhoneNorm]);
 
   const gamesForFeed = useMemo(() => {
     return [...createdGames].sort((left, right) => toGameTimestamp(left) - toGameTimestamp(right));
@@ -651,6 +745,7 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
                   game.settings?.minRating && game.settings?.maxRating
                     ? `${game.settings.minRating}/${game.settings.maxRating}`
                     : null;
+                const unreadCount = chatUnreadByGame[game.id] ?? 0;
                 const organizerPlayer: PadelGamePlayer | null = game.organizer
                   ? {
                       id: game.organizer.id ?? null,
@@ -720,13 +815,16 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
                         {copiedGameInviteId === game.id ? "Скопировано" : "Пригласить в игру"}
                       </button>
                       <button
-                        className="game-created-action"
+                        className="game-created-action game-chat-open-btn"
                         type="button"
                         onClick={() => {
                           handleOpenGameChat(game);
                         }}
                       >
                         Чат
+                        {unreadCount > 0 && (
+                          <span className="game-chat-unread-badge">{unreadCount}</span>
+                        )}
                       </button>
                     </div>
                   </div>

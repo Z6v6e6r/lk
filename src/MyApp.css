@@ -1733,6 +1733,11 @@ h6,
   border-color: #d8cdfd;
 }
 
+.game-chat-message.unread {
+  border-color: #fda29b;
+  background: #fff1f0;
+}
+
 .game-chat-author {
   font-size: 11px;
   font-weight: 700;
@@ -1752,6 +1757,36 @@ h6,
   font-size: 11px;
   color: #8b93a5;
   text-align: right;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.game-chat-unread-dot {
+  color: #d92d20;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.game-chat-open-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.game-chat-unread-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
 }
 
 .game-chat-refresh {
