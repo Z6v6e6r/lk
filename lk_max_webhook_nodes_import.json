@@ -1,0 +1,242 @@
+[
+  {
+    "id": "f9f8d8f2a833ab13",
+    "type": "tab",
+    "label": "MAX webhook",
+    "disabled": false,
+    "info": "Прием входящих сообщений MAX и маршрутизация в мультиканальные support-диалоги"
+  },
+  {
+    "id": "max_comment_001",
+    "type": "comment",
+    "z": "f9f8d8f2a833ab13",
+    "name": "MAX inbound webhook",
+    "info": "Вебхук принимает входящие сообщения MAX и нормализует их в msg.maxUpdate.\nТакже доступен link-in для подключения существующего maxbot-receive без вебхука.\nПосле нормализации flow запрашивает состояние клиента через /lk/support/clients/resolve\nи отправляет событие в /lk/support/dialogs/events.\nИсходящие сервисные сообщения уходят в link-out \"MAX outbound messages\" — подключите его к существующему maxbot-send.",
+    "x": 280,
+    "y": 140,
+    "wires": []
+  },
+  {
+    "id": "max_webhook_in_001",
+    "type": "http in",
+    "z": "f9f8d8f2a833ab13",
+    "name": "MAX webhook",
+    "url": "/integrations/max/webhook",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 120,
+    "y": 220,
+    "wires": [
+      [
+        "max_webhook_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "max_link_in_001",
+    "type": "link in",
+    "z": "f9f8d8f2a833ab13",
+    "name": "MAX raw receive",
+    "links": [],
+    "x": 115,
+    "y": 280,
+    "wires": [
+      [
+        "max_webhook_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "max_webhook_fn_prepare_001",
+    "type": "function",
+    "z": "f9f8d8f2a833ab13",
+    "name": "Normalize MAX inbound",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toArray = (value) => (Array.isArray(value) ? value : []);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst toInt = (value) => {\n  const parsed = Number(value);\n  return Number.isFinite(parsed) ? Math.trunc(parsed) : null;\n};\nconst normPhone = (value) => {\n  const digits = String(value || \"\").replace(/\\D/g, \"\");\n  if (!digits) return null;\n  if (digits.length === 10) return `7${digits}`;\n  if (digits.length === 11 && digits.startsWith(\"8\")) return `7${digits.slice(1)}`;\n  return digits;\n};\nconst uniq = (values) => Array.from(new Set(values.filter(Boolean)));\n\nfunction buildSenderName(sender) {\n  const firstName = toStr(sender?.first_name || sender?.firstName);\n  const lastName = toStr(sender?.last_name || sender?.lastName);\n  const fullName = [firstName, lastName].filter(Boolean).join(\" \").trim();\n  return fullName || toStr(sender?.name) || toStr(sender?.username) || null;\n}\n\nfunction makeHttpResponse(baseMsg, statusCode, payload) {\n  return Object.assign({}, baseMsg, {\n    statusCode,\n    headers: { \"Content-Type\": \"application/json; charset=utf-8\" },\n    payload,\n  });\n}\n\nfunction extractContact(rawMessage, body, attachments) {\n  const directContact =\n    (isObj(body.contact) ? body.contact : null)\n    || (isObj(rawMessage.contact) ? rawMessage.contact : null)\n    || attachments.find((item) => isObj(item.contact))?.contact\n    || attachments.find((item) => String(item.type || \"\").toLowerCase() === \"contact\")\n    || null;\n\n  if (!isObj(directContact)) {\n    return null;\n  }\n\n  const phone =\n    normPhone(\n      directContact.phone_number\n      || directContact.phone\n      || directContact.phoneNumber\n      || directContact.msisdn,\n    );\n\n  if (!phone) return null;\n\n  return {\n    phone,\n    firstName: toStr(directContact.first_name || directContact.firstName),\n    lastName: toStr(directContact.last_name || directContact.lastName),\n    userId: toStr(directContact.user_id || directContact.userId),\n    raw: directContact,\n  };\n}\n\nfunction extractButtonValue(rawMessage, body) {\n  return (\n    toStr(body.callback_data)\n    || toStr(body.callbackData)\n    || toStr(body.button)\n    || toStr(rawMessage.callback_data)\n    || toStr(rawMessage.callbackData)\n    || null\n  );\n}\n\nconst stationMap = new Map([\n  [\"нaгатинская\", { id: \"nagat\", name: \"Нагатинская\" }],\n  [\"нагатинская\", { id: \"nagat\", name: \"Нагатинская\" }],\n  [\"нагатинская премиум\", { id: \"nagat_p\", name: \"Нагатинская Премиум\" }],\n  [\"терехово\", { id: \"tereh\", name: \"Терехово\" }],\n  [\"сколково\", { id: \"kuncev\", name: \"Сколково\" }],\n  [\"ясенево\", { id: \"yas\", name: \"Ясенево\" }],\n  [\"селигерская\", { id: \"seleger\", name: \"Селигерская\" }],\n  [\"сочи\", { id: \"sochi\", name: \"Сочи\" }],\n  [\"точка сбора\", { id: \"t-sbora\", name: \"Точка сбора\" }],\n  [\"nagat\", { id: \"nagat\", name: \"Нагатинская\" }],\n  [\"nagat_p\", { id: \"nagat_p\", name: \"Нагатинская Премиум\" }],\n  [\"tereh\", { id: \"tereh\", name: \"Терехово\" }],\n  [\"kuncev\", { id: \"kuncev\", name: \"Сколково\" }],\n  [\"yas\", { id: \"yas\", name: \"Ясенево\" }],\n  [\"seleger\", { id: \"seleger\", name: \"Селигерская\" }],\n  [\"sochi\", { id: \"sochi\", name: \"Сочи\" }],\n  [\"t-sbora\", { id: \"t-sbora\", name: \"Точка сбора\" }],\n]);\n\nfunction extractStation(text, buttonValue) {\n  const candidates = [\n    toStr(buttonValue)?.toLowerCase(),\n    toStr(text)?.toLowerCase(),\n  ].filter(Boolean);\n\n  for (const candidate of candidates) {\n    if (stationMap.has(candidate)) {\n      return stationMap.get(candidate);\n    }\n  }\n  return null;\n}\n\nconst expectedSecret = (() => {\n  try {\n    return toStr(env.get(\"MAX_BOT_WEBHOOK_SECRET\"));\n  } catch {\n    return null;\n  }\n})();\n\nconst rawPayload = isObj(msg.maxUpdate)\n  ? msg.maxUpdate\n  : (isObj(msg.payload) ? msg.payload : null);\n\nif (!rawPayload) {\n  const response = makeHttpResponse(msg, 400, {\n    ok: false,\n    provider: \"max\",\n    error: \"JSON body is required\",\n  });\n  return [null, response, response];\n}\n\nconst isWebhook = Boolean(msg.req);\nif (isWebhook) {\n  const incomingSecret = toStr(msg.req?.headers?.[\"x-max-bot-api-secret\"]);\n  if (expectedSecret && incomingSecret !== expectedSecret) {\n    const response = makeHttpResponse(msg, 401, {\n      ok: false,\n      provider: \"max\",\n      error: \"Invalid X-Max-Bot-Api-Secret header\",\n    });\n    return [null, response, response];\n  }\n}\n\nconst rawMessage =\n  (isObj(rawPayload.message) ? rawPayload.message : null)\n  || (isObj(rawPayload.originalMessage) ? rawPayload.originalMessage : null)\n  || rawPayload;\nconst sender = isObj(rawMessage.sender) ? rawMessage.sender : (isObj(rawMessage.from) ? rawMessage.from : {});\nconst recipient = isObj(rawMessage.recipient) ? rawMessage.recipient : {};\nconst body = isObj(rawMessage.body) ? rawMessage.body : (isObj(rawPayload.body) ? rawPayload.body : rawMessage);\nconst attachments = uniq([\n  ...toArray(body.attachments),\n  ...toArray(rawMessage.attachments),\n]).filter((item) => item !== null && item !== undefined);\n\nconst text =\n  toStr(body.text)\n  || toStr(rawMessage.text)\n  || toStr(rawPayload.text)\n  || toStr(rawPayload.content)\n  || null;\nconst buttonValue = extractButtonValue(rawMessage, body);\nconst command = text && text.startsWith(\"/\") ? text.split(/\\s+/)[0] : null;\nconst contact = extractContact(rawMessage, body, attachments);\nconst station = extractStation(text, buttonValue);\nconst updateType = toStr(rawPayload.update_type || rawPayload.type || rawMessage.type) || \"message\";\nconst updateTimestamp = toInt(rawPayload.timestamp || rawMessage.timestamp) ?? Date.now();\n\nconst normalized = {\n  provider: \"max\",\n  updateType,\n  timestamp: updateTimestamp,\n  messageId: toStr(rawMessage.mid || rawMessage.message_id || body.mid || body.message_id || rawPayload.messageId),\n  messageTimestamp: toInt(rawMessage.timestamp || body.timestamp) ?? updateTimestamp,\n  text,\n  command,\n  buttonValue,\n  contact,\n  station,\n  messageKind: contact\n    ? \"contact\"\n    : station\n      ? \"station\"\n      : command\n        ? \"command\"\n        : (text ? \"text\" : \"unknown\"),\n  attachments,\n  sender: {\n    userId: toStr(sender.user_id || sender.userId || sender.id),\n    username: toStr(sender.username),\n    name: buildSenderName(sender),\n    isBot: typeof sender.is_bot === \"boolean\" ? sender.is_bot : null,\n  },\n  recipient: {\n    chatId: toStr(recipient.chat_id || recipient.chatId || rawPayload.chatId || rawMessage.chatId),\n    userId: toStr(recipient.user_id || recipient.userId),\n    chatType: toStr(recipient.chat_type || recipient.type || rawPayload.chatType),\n  },\n  raw: rawPayload,\n};\n\nconst downstreamMsg = Object.assign({}, msg, {\n  topic: `max/${normalized.messageKind}`,\n  maxRaw: rawPayload,\n  maxUpdate: normalized,\n  payload: normalized,\n});\n\nconst httpResponse = isWebhook\n  ? makeHttpResponse(msg, 200, {\n      ok: true,\n      provider: \"max\",\n      accepted: true,\n      messageId: normalized.messageId,\n      chatId: normalized.recipient.chatId,\n      userId: normalized.sender.userId,\n      messageKind: normalized.messageKind,\n    })\n  : null;\n\nconst debugMsg = Object.assign({}, downstreamMsg);\n\nreturn [downstreamMsg, httpResponse, debugMsg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 390,
+    "y": 240,
+    "wires": [
+      [
+        "max_client_lookup_prepare_001"
+      ],
+      [
+        "max_webhook_http_resp_001"
+      ],
+      [
+        "max_webhook_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "max_client_lookup_prepare_001",
+    "type": "function",
+    "z": "f9f8d8f2a833ab13",
+    "name": "Prepare client lookup",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\n\nconst update = isObj(msg.maxUpdate) ? msg.maxUpdate : null;\nif (!update) {\n  return null;\n}\n\nconst apiBase = (() => {\n  try {\n    return toStr(env.get(\"SUPPORT_API_BASE_URL\"));\n  } catch {\n    return null;\n  }\n})();\n\nconst baseUrl = apiBase || \"http://127.0.0.1:1880\";\nconst query = new URLSearchParams();\nquery.set(\"channel\", \"MAX\");\nif (update.recipient?.chatId) query.set(\"chatId\", update.recipient.chatId);\nif (update.sender?.userId) query.set(\"channelUserId\", update.sender.userId);\nif (update.contact?.phone) query.set(\"phone\", update.contact.phone);\n\nmsg.method = \"GET\";\nmsg.url = `${baseUrl}/lk/support/clients/resolve?${query.toString()}`;\nmsg.headers = { Accept: \"application/json\" };\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 680,
+    "y": 220,
+    "wires": [
+      [
+        "max_client_lookup_http_001"
+      ]
+    ]
+  },
+  {
+    "id": "max_client_lookup_http_001",
+    "type": "http request",
+    "z": "f9f8d8f2a833ab13",
+    "name": "Resolve support client",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 930,
+    "y": 220,
+    "wires": [
+      [
+        "max_support_route_001"
+      ]
+    ]
+  },
+  {
+    "id": "max_support_route_001",
+    "type": "function",
+    "z": "f9f8d8f2a833ab13",
+    "name": "Route MAX support flow",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst uniq = (values) => Array.from(new Set(values.filter(Boolean)));\n\nfunction getApiBase() {\n  try {\n    return toStr(env.get(\"SUPPORT_API_BASE_URL\")) || \"http://127.0.0.1:1880\";\n  } catch {\n    return \"http://127.0.0.1:1880\";\n  }\n}\n\nfunction buildMessage(chatId, content, options = null) {\n  return {\n    payload: {\n      chatId,\n      type: \"message\",\n      content,\n      options: options || undefined,\n    },\n  };\n}\n\nfunction buildContactOptions() {\n  return {\n    reply_markup: JSON.stringify({\n      keyboard: [[{ text: \"Поделиться номером\", request_contact: true }]],\n      resize_keyboard: true,\n      one_time_keyboard: false,\n    }),\n  };\n}\n\nfunction buildStationOptions() {\n  return {\n    reply_markup: JSON.stringify({\n      keyboard: [\n        [{ text: \"Нагатинская\" }],\n        [{ text: \"Нагатинская Премиум\" }],\n        [{ text: \"Терехово\" }],\n        [{ text: \"Сколково\" }],\n        [{ text: \"Ясенево\" }],\n        [{ text: \"Селигерская\" }],\n        [{ text: \"Сочи\" }],\n        [{ text: \"Точка сбора\" }],\n      ],\n      resize_keyboard: true,\n      one_time_keyboard: false,\n    }),\n  };\n}\n\nconst update = isObj(msg.maxUpdate) ? msg.maxUpdate : null;\nif (!update) {\n  return [null, null, msg];\n}\n\nconst clientPayload = isObj(msg.payload) ? msg.payload : {};\nconst client = isObj(clientPayload.client) ? clientPayload.client : null;\nconst chatId = toStr(update.recipient?.chatId);\nconst senderUserId = toStr(update.sender?.userId);\nconst senderName = toStr(update.sender?.name) || \"Клиент\";\nconst authStatus = toStr(client?.authStatus) || (update.contact?.phone ? \"AUTHORIZED\" : \"PENDING_CONTACT\");\nconst workflowState = toStr(client?.workflowState)\n  || (authStatus !== \"AUTHORIZED\" ? \"WAIT_CONTACT\" : (toStr(client?.lastStationId) ? \"READY\" : \"WAIT_STATION\"));\nconst stationId = update.station?.id || toStr(client?.lastStationId) || \"UNASSIGNED\";\nconst stationName = update.station?.name || toStr(client?.lastStationName) || \"Без станции\";\n\nconst supportEvent = {\n  channel: \"MAX\",\n  direction: \"INBOUND\",\n  authorType: \"CLIENT\",\n  eventType: \"MESSAGE\",\n  text: update.text,\n  displayName: senderName,\n  phone: update.contact?.phone || null,\n  phoneNumbers: update.contact?.phone ? [update.contact.phone] : [],\n  authStatus,\n  workflowState,\n  stationId,\n  stationName,\n  channelUserId: senderUserId,\n  userId: senderUserId,\n  chatId,\n  externalMessageId: update.messageId || null,\n  externalThreadId: chatId,\n  senderName,\n  senderId: senderUserId,\n  attachments: update.attachments || [],\n  metadata: {\n    provider: \"max\",\n    messageKind: update.messageKind,\n    command: update.command || null,\n    stationToken: update.station?.id || null,\n  },\n};\n\nconst outboundMessages = [];\n\nif (update.command === \"/start\") {\n  supportEvent.eventType = \"START\";\n  if (authStatus !== \"AUTHORIZED\") {\n    supportEvent.authStatus = \"PENDING_CONTACT\";\n    supportEvent.workflowState = \"WAIT_CONTACT\";\n    outboundMessages.push(buildMessage(\n      chatId,\n      \"Чтобы подключить администратора, нужно подтвердить номер телефона. Нажмите кнопку ниже.\",\n      buildContactOptions(),\n    ));\n  } else if (workflowState === \"WAIT_STATION\") {\n    outboundMessages.push(buildMessage(\n      chatId,\n      \"Номер подтверждён. Теперь выберите станцию, чтобы мы направили диалог нужной команде.\",\n      buildStationOptions(),\n    ));\n  } else {\n    outboundMessages.push(buildMessage(\n      chatId,\n      \"Вы уже авторизованы. Напишите сообщение, и мы подключим администратора по вашей станции.\",\n    ));\n  }\n} else if (update.messageKind === \"contact\" && update.contact?.phone) {\n  supportEvent.eventType = \"CONTACT_SHARED\";\n  supportEvent.phone = update.contact.phone;\n  supportEvent.phoneNumbers = [update.contact.phone];\n  supportEvent.authStatus = \"AUTHORIZED\";\n  supportEvent.workflowState = stationId && stationId !== \"UNASSIGNED\" ? \"READY\" : \"WAIT_STATION\";\n  supportEvent.text = \"Клиент поделился контактом\";\n  outboundMessages.push(buildMessage(\n    chatId,\n    \"Спасибо. Номер сохранён. Теперь выберите станцию, чтобы мы направили обращение нужному администратору.\",\n    buildStationOptions(),\n  ));\n} else if (update.messageKind === \"station\" && update.station) {\n  supportEvent.eventType = \"STATION_SELECTED\";\n  supportEvent.stationId = update.station.id;\n  supportEvent.stationName = update.station.name;\n  supportEvent.text = `Выбрана станция: ${update.station.name}`;\n  supportEvent.workflowState = authStatus === \"AUTHORIZED\" ? \"READY\" : \"WAIT_CONTACT\";\n  if (authStatus !== \"AUTHORIZED\") {\n    outboundMessages.push(buildMessage(\n      chatId,\n      \"Подключить администратора мы можем только для авторизованных пользователей. Сначала поделитесь номером телефона.\",\n      buildContactOptions(),\n    ));\n  } else {\n    outboundMessages.push(buildMessage(\n      chatId,\n      `Станция ${update.station.name} сохранена. Теперь можете написать сообщение для администратора.`,\n    ));\n  }\n} else {\n  supportEvent.eventType = \"MESSAGE\";\n  if (authStatus !== \"AUTHORIZED\") {\n    supportEvent.workflowState = \"WAIT_CONTACT\";\n    outboundMessages.push(buildMessage(\n      chatId,\n      \"Подключить администратора мы можем только для авторизованных пользователей. Поделитесь номером телефона, и мы продолжим диалог.\",\n      buildContactOptions(),\n    ));\n  } else if (workflowState === \"WAIT_STATION\") {\n    outboundMessages.push(buildMessage(\n      chatId,\n      \"Номер подтверждён, но станция ещё не выбрана. Пожалуйста, выберите станцию.\",\n      buildStationOptions(),\n    ));\n  }\n}\n\nconst supportEventMsg = Object.assign({}, msg, {\n  method: \"POST\",\n  url: `${getApiBase()}/lk/support/dialogs/events`,\n  headers: { \"Content-Type\": \"application/json\", Accept: \"application/json\" },\n  payload: supportEvent,\n});\n\nconst debugMsg = Object.assign({}, msg, {\n  payload: {\n    maxUpdate: update,\n    supportEvent,\n    outboundCount: outboundMessages.length,\n    clientFound: Boolean(client),\n  },\n});\n\nreturn [supportEventMsg, outboundMessages, debugMsg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1200,
+    "y": 220,
+    "wires": [
+      [
+        "max_support_event_http_001"
+      ],
+      [
+        "max_outbound_link_out_001",
+        "max_outbound_debug_001"
+      ],
+      [
+        "max_webhook_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "max_support_event_http_001",
+    "type": "http request",
+    "z": "f9f8d8f2a833ab13",
+    "name": "POST support event",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 1470,
+    "y": 180,
+    "wires": [
+      [
+        "max_support_event_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "max_outbound_link_out_001",
+    "type": "link out",
+    "z": "f9f8d8f2a833ab13",
+    "name": "MAX outbound messages",
+    "mode": "link",
+    "links": [],
+    "x": 1475,
+    "y": 240,
+    "wires": []
+  },
+  {
+    "id": "max_webhook_http_resp_001",
+    "type": "http response",
+    "z": "f9f8d8f2a833ab13",
+    "name": "",
+    "x": 690,
+    "y": 280,
+    "wires": []
+  },
+  {
+    "id": "max_webhook_debug_001",
+    "type": "debug",
+    "z": "f9f8d8f2a833ab13",
+    "name": "MAX webhook debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 690,
+    "y": 340,
+    "wires": []
+  },
+  {
+    "id": "max_outbound_debug_001",
+    "type": "debug",
+    "z": "f9f8d8f2a833ab13",
+    "name": "MAX outbound debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1470,
+    "y": 300,
+    "wires": []
+  },
+  {
+    "id": "max_support_event_debug_001",
+    "type": "debug",
+    "z": "f9f8d8f2a833ab13",
+    "name": "MAX support event debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1740,
+    "y": 180,
+    "wires": []
+  }
+]
