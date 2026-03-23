@@ -2,7 +2,7 @@
 
 ## Что добавлено
 
-В репозиторий добавлен отдельный `Node-RED` слой для мультиканальных диалогов:
+В репозиторий добавлен отдельный `Node-RED` слой для мультиканальных диалогов и новый `support` backend в `ph-ab`:
 
 - `support_clients`
   Один клиент с несколькими телефонами, email и канальными идентификаторами.
@@ -22,18 +22,24 @@
 
 ## Эндпоинты
 
-- `GET /lk/support/clients/resolve`
+- `GET /api/support/clients/resolve`
   Поиск клиента по телефону, email или канальному идентификатору.
-- `POST /lk/support/dialogs/events`
+- `POST /api/support/dialogs/events`
   Универсальная точка записи входящих/исходящих событий из MAX, TG, email, Mango, Bitrix.
-- `GET /lk/support/dialogs`
-  Список диалогов для ЦУП.
-- `GET /lk/support/dialogs/:dialogId/messages`
+- `GET /api/support/connectors`
+  Список коннекторов для ЦУП.
+- `GET /api/support/connectors/:connector/stations`
+  Станции по коннектору.
+- `GET /api/support/connectors/:connector/stations/:stationId/dialogs`
+  Диалоги станции.
+- `GET /api/support/dialogs/:dialogId/messages`
   История сообщений диалога.
-- `POST /lk/support/dialogs/:dialogId/reply`
+- `POST /api/support/dialogs/:dialogId/reply`
   Ответ администратора с фиксацией SLA и подготовкой dispatch-пакета.
-- `GET /lk/support/analytics/daily`
+- `GET /api/support/analytics/daily`
   Дневная аналитика по обращениям, темам, приоритетам, станциям и времени ответа.
+- `GET /api/support/outbox/pull?connector=MAX_BOT`
+  Очередь исходящих ответов для MAX.
 
 ## MAX сценарий
 
@@ -41,25 +47,24 @@
 
 1. Принимает входящий webhook MAX или сообщение через `link in`.
 2. Нормализует сообщение в `msg.maxUpdate`.
-3. Смотрит текущее состояние клиента через `GET /lk/support/clients/resolve`.
-4. Отправляет событие в `POST /lk/support/dialogs/events`.
+3. Смотрит текущее состояние клиента через `GET /api/support/clients/resolve`.
+4. Отправляет событие в `POST /api/support/dialogs/events`.
 5. Формирует сервисные ответы:
    - `/start` -> запрос контакта;
    - контакт получен -> запрос выбора станции;
    - сообщение без номера -> предупреждение о необходимости авторизации;
    - сообщение без станции -> просьба выбрать станцию.
+6. Каждые 5 секунд тянет `GET /api/support/outbox/pull?connector=MAX_BOT`,
+   отправляет ответы сотрудников в MAX и подтверждает их через `ack`.
 
 ## Как подключить к текущему MAX node-red flow
 
-У вас уже есть `maxbot-receive` и `maxbot-send`.
-
 Нужно:
 
-1. Импортировать `lk_support_dialog_nodes_import.json`.
-2. Импортировать `lk_max_webhook_nodes_import.json`.
-3. Подключить ваш `maxbot-receive` к `link in` `MAX raw receive`
-   или использовать webhook `/integrations/max/webhook`.
-4. Подключить `link out` `MAX outbound messages` к вашему `maxbot-send`.
+1. Поднять `ph-ab` с новым модулем `src/support/*`.
+2. В `Node-RED` импортировать `lk_max_webhook_nodes_import.json`.
+3. В конфиге flow указать `SUPPORT_API_BASE_URL` и `SUPPORT_INTEGRATION_TOKEN`.
+4. В `maxbot-config` прописать настройки бота MAX.
 
 ## AI-классификация
 

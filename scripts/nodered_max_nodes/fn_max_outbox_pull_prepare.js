@@ -1,14 +1,8 @@
-const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
   const normalized = String(value).trim();
   return normalized ? normalized : null;
 };
-
-const update = isObj(msg.maxUpdate) ? msg.maxUpdate : null;
-if (!update) {
-  return null;
-}
 
 const apiBase = (() => {
   try {
@@ -26,14 +20,8 @@ const integrationToken = (() => {
 })();
 
 const baseUrl = apiBase || "http://127.0.0.1:3000/api";
-const query = new URLSearchParams();
-query.set("connector", "MAX_BOT");
-if (update.sender?.userId) query.set("externalUserId", update.sender.userId);
-if (update.recipient?.chatId) query.set("externalChatId", update.recipient.chatId);
-if (update.contact?.phone) query.set("phone", update.contact.phone);
-
 msg.method = "GET";
-msg.url = `${baseUrl}/support/clients/resolve?${query.toString()}`;
+msg.url = `${baseUrl}/support/outbox/pull?connector=MAX_BOT&limit=10&leaseSec=60`;
 msg.headers = Object.assign(
   { Accept: "application/json" },
   integrationToken ? { "x-integration-token": integrationToken } : {},

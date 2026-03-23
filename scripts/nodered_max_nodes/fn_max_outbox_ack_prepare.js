@@ -5,8 +5,8 @@ const toStr = (value) => {
   return normalized ? normalized : null;
 };
 
-const update = isObj(msg.maxUpdate) ? msg.maxUpdate : null;
-if (!update) {
+const command = isObj(msg.supportOutbox) ? msg.supportOutbox : (isObj(msg.payload?.supportOutbox) ? msg.payload.supportOutbox : null);
+if (!command || !command.id) {
   return null;
 }
 
@@ -26,16 +26,11 @@ const integrationToken = (() => {
 })();
 
 const baseUrl = apiBase || "http://127.0.0.1:3000/api";
-const query = new URLSearchParams();
-query.set("connector", "MAX_BOT");
-if (update.sender?.userId) query.set("externalUserId", update.sender.userId);
-if (update.recipient?.chatId) query.set("externalChatId", update.recipient.chatId);
-if (update.contact?.phone) query.set("phone", update.contact.phone);
-
-msg.method = "GET";
-msg.url = `${baseUrl}/support/clients/resolve?${query.toString()}`;
+msg.method = "POST";
+msg.url = `${baseUrl}/support/outbox/${encodeURIComponent(command.id)}/ack`;
 msg.headers = Object.assign(
-  { Accept: "application/json" },
+  { "Content-Type": "application/json", Accept: "application/json" },
   integrationToken ? { "x-integration-token": integrationToken } : {},
 );
+msg.payload = {};
 return msg;
