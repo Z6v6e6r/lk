@@ -3429,7 +3429,7 @@ h6,
   position: fixed;
   inset: 0;
   background: var(--bg);
-  z-index: 9999;
+  z-index: 10020;
   display: none;
   overflow-y: auto;
 }
