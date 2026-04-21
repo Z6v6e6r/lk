@@ -6,6 +6,8 @@ const mappings = [
   { src: "dist-dev/games.js", dest: "dist/games-dev.js" },
   { src: "dist-dev/tournaments.js", dest: "dist/tournaments-dev.js" },
   { src: "dist-dev/onboarding.js", dest: "dist/onboarding-dev.js" },
+  { src: "dist-dev/communities.js", dest: "dist/communities-dev.js" },
+  { src: "dist-dev/release.json", dest: "dist/release-dev.json" },
 ];
 
 const cwd = process.cwd();

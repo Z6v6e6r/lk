@@ -4,23 +4,26 @@ import "./index.css";
 import "./MyApp.css";
 import { AppErrorBoundary } from "./components/UI/AppErrorBoundary";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { OverlayScopeProvider } from "./context/OverlayScopeContext";
 import { AuthForm } from "./components/auth/AuthForm";
+import GameJoinPage from "./components/games/GameJoinPage";
 import GamesPage from "./components/games/GamesPage";
 import {
   installGlobalErrorTracking,
   trackAnalyticsEvent,
   trackClientError,
 } from "./utils/analytics";
-
-type GamesMountData = {
-  openGameId?: string | null;
-  openChat?: boolean;
-};
+import { mountDevReleaseBadge } from "./utils/devReleaseBadge";
+import type { GamesMountData } from "./types/gamesOverlay";
+import { ensureFreshRelease } from "./utils/releaseGuard";
 
 type MountOptions = { targetId?: string; onClose?: () => void; data?: GamesMountData };
+type GamesWidgetModule = { mount: typeof mount; update: typeof update; unmount: typeof unmount };
 
 let gamesRoot: ReturnType<typeof createRoot> | null = null;
 
+ensureFreshRelease({ entry: "games", bundleFileNames: ["games.js", "games-dev.js"] });
+mountDevReleaseBadge({ bundleFileNames: ["games.js", "games-dev.js"] });
 installGlobalErrorTracking();
 trackAnalyticsEvent("widget_bundle_loaded", { entry: "games" });
 
@@ -40,11 +43,24 @@ function GamesContent({ onClose, data }: { onClose?: () => void; data?: GamesMou
     return <AuthForm onLogin={() => {}} />;
   }
 
+  if (data?.joinGameId) {
+    return (
+      <GameJoinPage
+        gameId={data.joinGameId}
+        cabinetUrl={data.cabinetUrl}
+      />
+    );
+  }
+
   return (
     <GamesPage
       onBack={() => onClose?.()}
       openGameId={data?.openGameId ?? null}
       openChat={data?.openChat === true}
+      createFromBooking={data?.createFromBooking ?? null}
+      publicCreateEntry={data?.publicCreateEntry === true}
+      presetStudioId={data?.presetStudioId ?? null}
+      presetStudioName={data?.presetStudioName ?? null}
     />
   );
 }
@@ -59,6 +75,7 @@ function GamesApp({ onClose, data }: { onClose?: () => void; data?: GamesMountDa
 
 function mount(options: MountOptions = {}) {
   const targetId = options.targetId ?? "root";
+  const isOverlayScope = targetId === "lk-overlay";
   const container = document.getElementById(targetId);
   if (!container) {
     trackClientError(
@@ -75,9 +92,11 @@ function mount(options: MountOptions = {}) {
     gamesRoot = createRoot(container);
     gamesRoot.render(
       <StrictMode>
-        <AppErrorBoundary module="games">
-          <GamesApp onClose={options.onClose} data={options.data} />
-        </AppErrorBoundary>
+        <OverlayScopeProvider value={isOverlayScope}>
+          <AppErrorBoundary module="games">
+            <GamesApp onClose={options.onClose} data={options.data} />
+          </AppErrorBoundary>
+        </OverlayScopeProvider>
       </StrictMode>,
     );
     trackAnalyticsEvent("widget_mounted", { entry: "games", targetId });
@@ -91,9 +110,29 @@ function mount(options: MountOptions = {}) {
   }
 }
 
+function update(options: MountOptions = {}) {
+  if (!gamesRoot) {
+    mount(options);
+    return;
+  }
+
+  const targetId = options.targetId ?? "root";
+  const isOverlayScope = targetId === "lk-overlay";
+
+  gamesRoot.render(
+    <StrictMode>
+      <OverlayScopeProvider value={isOverlayScope}>
+        <AppErrorBoundary module="games">
+          <GamesApp onClose={options.onClose} data={options.data} />
+        </AppErrorBoundary>
+      </OverlayScopeProvider>
+    </StrictMode>,
+  );
+}
+
 function unmount() {
   gamesRoot?.unmount();
   gamesRoot = null;
 }
 
-(window as any).LKWidgetGames = { mount, unmount };
+(window as Window & { LKWidgetGames?: GamesWidgetModule }).LKWidgetGames = { mount, update, unmount };

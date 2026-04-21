@@ -18,6 +18,23 @@ const normPhone = (value) => {
 };
 const uniq = (values) => Array.from(new Set(values.filter(Boolean)));
 
+function extractPhoneFromVcard(vcf) {
+  const source = toStr(vcf);
+  if (!source) return null;
+
+  const telLine = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => /^TEL(?:;[^:]*)?:/i.test(line));
+
+  if (!telLine) {
+    return null;
+  }
+
+  const [, phonePart] = telLine.split(/:(.+)/, 2);
+  return normPhone(phonePart);
+}
+
 function buildSenderName(sender) {
   const firstName = toStr(sender?.first_name || sender?.firstName);
   const lastName = toStr(sender?.last_name || sender?.lastName);
@@ -34,11 +51,15 @@ function makeHttpResponse(baseMsg, statusCode, payload) {
 }
 
 function extractContact(rawMessage, body, attachments) {
+  const contactAttachment = attachments.find((item) => String(item?.type || "").toLowerCase() === "contact") || null;
+  const attachmentPayload = isObj(contactAttachment?.payload) ? contactAttachment.payload : null;
+  const attachmentMaxInfo = isObj(attachmentPayload?.max_info) ? attachmentPayload.max_info : null;
   const directContact =
     (isObj(body.contact) ? body.contact : null)
     || (isObj(rawMessage.contact) ? rawMessage.contact : null)
     || attachments.find((item) => isObj(item.contact))?.contact
-    || attachments.find((item) => String(item.type || "").toLowerCase() === "contact")
+    || attachmentPayload
+    || contactAttachment
     || null;
 
   if (!isObj(directContact)) {
@@ -50,17 +71,41 @@ function extractContact(rawMessage, body, attachments) {
       directContact.phone_number
       || directContact.phone
       || directContact.phoneNumber
-      || directContact.msisdn,
+      || directContact.msisdn
+      || attachmentPayload?.phone_number
+      || attachmentPayload?.phone
+      || attachmentPayload?.phoneNumber
+      || attachmentPayload?.msisdn,
     );
 
-  if (!phone) return null;
+  const phoneFromVcard = phone || extractPhoneFromVcard(attachmentPayload?.vcf_info || directContact.vcf_info);
+  if (!phoneFromVcard) return null;
 
   return {
-    phone,
-    firstName: toStr(directContact.first_name || directContact.firstName),
-    lastName: toStr(directContact.last_name || directContact.lastName),
-    userId: toStr(directContact.user_id || directContact.userId),
-    raw: directContact,
+    phone: phoneFromVcard,
+    firstName: toStr(
+      directContact.first_name
+      || directContact.firstName
+      || attachmentMaxInfo?.first_name
+      || attachmentMaxInfo?.firstName,
+    ),
+    lastName: toStr(
+      directContact.last_name
+      || directContact.lastName
+      || attachmentMaxInfo?.last_name
+      || attachmentMaxInfo?.lastName,
+    ),
+    userId: toStr(
+      directContact.user_id
+      || directContact.userId
+      || attachmentMaxInfo?.user_id
+      || attachmentMaxInfo?.userId,
+    ),
+    raw: {
+      contact: directContact,
+      attachment: contactAttachment,
+      payload: attachmentPayload,
+    },
   };
 }
 
@@ -143,21 +188,31 @@ if (isWebhook) {
   }
 }
 
+const transportData = isObj(rawPayload.data) ? rawPayload.data : null;
 const rawMessage =
   (isObj(rawPayload.message) ? rawPayload.message : null)
   || (isObj(rawPayload.originalMessage) ? rawPayload.originalMessage : null)
+  || transportData
   || rawPayload;
-const sender = isObj(rawMessage.sender) ? rawMessage.sender : (isObj(rawMessage.from) ? rawMessage.from : {});
-const recipient = isObj(rawMessage.recipient) ? rawMessage.recipient : {};
-const body = isObj(rawMessage.body) ? rawMessage.body : (isObj(rawPayload.body) ? rawPayload.body : rawMessage);
+const sender = isObj(rawMessage.sender)
+  ? rawMessage.sender
+  : (isObj(rawMessage.from) ? rawMessage.from : (isObj(transportData?.sender) ? transportData.sender : {}));
+const recipient = isObj(rawMessage.recipient)
+  ? rawMessage.recipient
+  : (isObj(transportData?.recipient) ? transportData.recipient : {});
+const body = isObj(rawMessage.body)
+  ? rawMessage.body
+  : (isObj(transportData?.body) ? transportData.body : (isObj(rawPayload.body) ? rawPayload.body : rawMessage));
 const attachments = uniq([
   ...toArray(body.attachments),
   ...toArray(rawMessage.attachments),
+  ...toArray(transportData?.attachments),
 ]).filter((item) => item !== null && item !== undefined);
 
 const text =
   toStr(body.text)
   || toStr(rawMessage.text)
+  || toStr(transportData?.text)
   || toStr(rawPayload.text)
   || toStr(rawPayload.content)
   || null;
@@ -165,8 +220,8 @@ const buttonValue = extractButtonValue(rawMessage, body);
 const command = text && text.startsWith("/") ? text.split(/\s+/)[0] : null;
 const contact = extractContact(rawMessage, body, attachments);
 const station = extractStation(text, buttonValue);
-const updateType = toStr(rawPayload.update_type || rawPayload.type || rawMessage.type) || "message";
-const updateTimestamp = toInt(rawPayload.timestamp || rawMessage.timestamp) ?? Date.now();
+const updateType = toStr(rawPayload.update_type || rawPayload.type || rawMessage.type || transportData?.type) || "message";
+const updateTimestamp = toInt(rawPayload.timestamp || rawMessage.timestamp || transportData?.timestamp) ?? Date.now();
 
 const normalized = {
   provider: "max",
@@ -188,14 +243,14 @@ const normalized = {
         : (text ? "text" : "unknown"),
   attachments,
   sender: {
-    userId: toStr(sender.user_id || sender.userId || sender.id),
+    userId: toStr(sender.user_id || sender.userId || sender.id || rawPayload.userId),
     username: toStr(sender.username),
     name: buildSenderName(sender),
     isBot: typeof sender.is_bot === "boolean" ? sender.is_bot : null,
   },
   recipient: {
     chatId: toStr(recipient.chat_id || recipient.chatId || rawPayload.chatId || rawMessage.chatId),
-    userId: toStr(recipient.user_id || recipient.userId),
+    userId: toStr(recipient.user_id || recipient.userId || rawPayload.userId),
     chatType: toStr(recipient.chat_type || recipient.type || rawPayload.chatType),
   },
   raw: rawPayload,

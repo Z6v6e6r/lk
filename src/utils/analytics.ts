@@ -75,6 +75,9 @@ const ERROR_DEDUPE_TTL_MS = 30_000;
 const ERROR_DEDUPE_LIMIT = 250;
 const ANALYTICS_DISABLE_TTL_MS = 10 * 60 * 1000;
 const NON_RETRYABLE_HTTP_STATUSES = new Set([400, 401, 403, 404, 405, 410, 413, 415, 422]);
+const ANALYTICS_ERRORS_ONLY = String(
+  import.meta.env.VITE_ANALYTICS_ERRORS_ONLY ?? "true",
+).toLowerCase() !== "false";
 
 const sessionId = makeSessionId();
 let userContext: AnalyticsUserContext = restoreUserContext();
@@ -548,6 +551,7 @@ export function trackAnalyticsEvent(
 ) {
   const eventName = trimString(event);
   if (!eventName) return;
+  if (ANALYTICS_ERRORS_ONLY && eventName !== "client_error") return;
   if (isAnalyticsTemporarilyDisabled()) return;
 
   const serializedEvent = JSON.stringify(buildEnvelope(eventName, payload));
@@ -605,6 +609,7 @@ export function trackClientError(
   const normalized = normalizeErrorPayload(error);
   const handled = options?.handled ?? true;
   const severity = options?.severity ?? "error";
+  if (ANALYTICS_ERRORS_ONLY && severity !== "error") return;
 
   const signature = [
     normalizedSource,
@@ -646,6 +651,64 @@ function extractResourceErrorPayload(target: EventTarget | null): AnalyticsPaylo
   };
 }
 
+function shouldIgnoreResourceError(payload: AnalyticsPayload): boolean {
+  const tagName = trimString(payload.tagName)?.toLowerCase() ?? "";
+  const resourceUrlRaw = trimString(payload.resourceUrl);
+  if (!tagName || !resourceUrlRaw) return false;
+
+  try {
+    const baseHref = typeof window !== "undefined" ? window.location.href : undefined;
+    const parsed = new URL(resourceUrlRaw, baseHref);
+    const hostname = parsed.hostname.toLowerCase();
+    const pathname = parsed.pathname.toLowerCase();
+
+    // Ignore noisy Yandex Metrica click-map pixel failures (often blocked by browser/privacy tools).
+    if (tagName === "img" && hostname === "mc.yandex.com" && pathname.startsWith("/clmap/")) {
+      return true;
+    }
+    // Ignore Yandex Metrica bootstrap script failures (often blocked by privacy tools).
+    if (
+      tagName === "script"
+      && (hostname === "mc.yandex.ru" || hostname === "mc.yandex.com")
+      && (pathname === "/metrika/tag.js" || pathname === "/tag.js")
+    ) {
+      return true;
+    }
+  } catch {
+    const normalized = resourceUrlRaw.toLowerCase();
+    if (tagName === "img" && normalized.includes("mc.yandex.com/clmap/")) {
+      return true;
+    }
+    if (
+      tagName === "script"
+      && (
+        normalized.includes("mc.yandex.ru/metrika/tag.js")
+        || normalized.includes("mc.yandex.com/metrika/tag.js")
+        || normalized.includes("mc.yandex.ru/tag.js")
+        || normalized.includes("mc.yandex.com/tag.js")
+      )
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function shouldIgnoreConsoleError(args: unknown[]): boolean {
+  if (args.length === 0) return false;
+  const normalized = args
+    .slice(0, 3)
+    .map((arg) => safeToString(arg).toLowerCase())
+    .join(" | ");
+
+  if (normalized.includes("tildastat: fail pageview")) {
+    return true;
+  }
+
+  return false;
+}
+
 function installConsoleErrorTracking() {
   if (typeof window === "undefined") return;
   if (window.__LK_CONSOLE_ERROR_PATCHED__) return;
@@ -656,6 +719,10 @@ function installConsoleErrorTracking() {
 
   console.error = (...args: unknown[]) => {
     try {
+      if (shouldIgnoreConsoleError(args)) {
+        original(...args);
+        return;
+      }
       const maybeError = args.find((arg) => arg instanceof Error) ?? args[0];
       const serializedArgs = args
         .map((arg) => cutText(normalizeSpaces(safeToString(arg)), 600))
@@ -685,11 +752,17 @@ export function installGlobalErrorTracking() {
     (event) => {
       const resourceErrorPayload = extractResourceErrorPayload(event.target);
       if (resourceErrorPayload) {
+        if (shouldIgnoreResourceError(resourceErrorPayload)) {
+          return;
+        }
+        const resourceTag = trimString(resourceErrorPayload.tagName)?.toLowerCase() ?? "";
+        const resourceSeverity: "error" | "warning" =
+          resourceTag === "script" || resourceTag === "link" ? "error" : "warning";
         trackClientError(
           "window.resource_error",
           new Error("Resource failed to load"),
           resourceErrorPayload,
-          { handled: false, severity: "error" },
+          { handled: false, severity: resourceSeverity },
         );
         return;
       }

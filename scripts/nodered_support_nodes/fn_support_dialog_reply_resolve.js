@@ -36,6 +36,7 @@ const now = new Date();
 const nowIso = now.toISOString();
 const nowTs = now.getTime();
 const channel = reply.channel || toStr(dialog.lastInboundChannel) || toStr(dialog.lastChannel) || "MAX";
+const connector = toStr(reply.connector) || toStr(dialog.lastConnector) || (channel === "WEB" ? "WEB_LK" : channel);
 const target = isObj(dialog.channelTargets?.[channel.toLowerCase()]) ? clone(dialog.channelTargets[channel.toLowerCase()]) : null;
 const pendingResponseSinceTs = Number(dialog.pendingResponseSinceTs || 0) || null;
 const responseMinutes = pendingResponseSinceTs
@@ -77,6 +78,7 @@ const messageDoc = {
   direction: "OUTBOUND",
   authorType: "ADMIN",
   eventType: "ADMIN_REPLY",
+  connector,
   channel,
   sender: {
     id: reply.adminUserId || null,
@@ -123,6 +125,7 @@ msg._supportReplyResolved = {
     lastMessageTs: nowTs,
     lastMessageDirection: "OUTBOUND",
     lastMessageAuthorType: "ADMIN",
+    lastConnector: connector,
     lastChannel: channel,
     lastOutboundChannel: channel,
     updatedAt: nowIso,
@@ -133,6 +136,7 @@ msg._supportReplyResolved = {
 };
 
 const setDialogDoc = Object.assign({}, msg._supportReplyResolved.dialog);
+delete setDialogDoc.id;
 delete setDialogDoc.createdAt;
 delete setDialogDoc.createdTs;
 delete setDialogDoc.openedAt;

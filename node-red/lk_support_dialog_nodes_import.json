@@ -1,0 +1,896 @@
+[
+  {
+    "id": "support_comment_001",
+    "type": "comment",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support dialogs",
+    "info": "Мультиканальные диалоги для MAX, Telegram, email, телефонии и Bitrix.\nКоллекции: support_clients, support_dialogs, support_messages.\nREST: resolve client, ingest event, list dialogs, dialog messages, admin reply, daily analytics.\nСущность диалога завязана на клиенте и станции, а клиент поддерживает несколько телефонов и идентификаторов каналов.",
+    "x": 260,
+    "y": 5720,
+    "wires": []
+  },
+  {
+    "id": "support_client_resolve_in_001",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support client resolve",
+    "url": "/lk/support/clients/resolve",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 5780,
+    "wires": [
+      [
+        "support_client_resolve_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_client_resolve_fn_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support client resolve prepare",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst uniq = (values) => Array.from(new Set(values.filter(Boolean)));\nconst normPhone = (value) => {\n  const digits = String(value || \"\").replace(/\\D/g, \"\");\n  if (!digits) return null;\n  if (digits.length === 10) return `7${digits}`;\n  if (digits.length === 11 && digits.startsWith(\"8\")) return `7${digits.slice(1)}`;\n  return digits;\n};\nconst normEmail = (value) => {\n  const email = toStr(value)?.toLowerCase();\n  return email && email.includes(\"@\") ? email : null;\n};\n\nconst q = isObj(msg.req?.query) ? msg.req.query : {};\nconst channel = toStr(q.channel || q.provider || \"WEB\")?.toUpperCase() || \"WEB\";\nconst phones = uniq([\n  normPhone(q.phone),\n  ...String(q.phoneNumbers || \"\")\n    .split(\",\")\n    .map((value) => normPhone(value)),\n]);\nconst emails = uniq([\n  normEmail(q.email),\n  ...String(q.emails || \"\")\n    .split(\",\")\n    .map((value) => normEmail(value)),\n]);\nconst identityKeys = uniq([\n  toStr(q.identityKey),\n  toStr(q.channelUserId) ? `${channel.toLowerCase()}:user:${toStr(q.channelUserId)}` : null,\n  toStr(q.userId) ? `${channel.toLowerCase()}:user:${toStr(q.userId)}` : null,\n  toStr(q.chatId) ? `${channel.toLowerCase()}:chat:${toStr(q.chatId)}` : null,\n  toStr(q.externalThreadId) ? `${channel.toLowerCase()}:thread:${toStr(q.externalThreadId)}` : null,\n  ...phones.map((phone) => `phone:${phone}`),\n  ...emails.map((email) => `email:${email}`),\n]);\n\nif (phones.length === 0 && emails.length === 0 && identityKeys.length === 0) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Provide phone, email or channel identity\" };\n  return [null, msg, msg];\n}\n\nmsg._supportClientResolve = {\n  phones,\n  emails,\n  identityKeys,\n  channel,\n};\nmsg.payload = {\n  $or: [\n    phones.length > 0 ? { phones: { $in: phones } } : null,\n    emails.length > 0 ? { emails: { $in: emails } } : null,\n    identityKeys.length > 0 ? { identityKeys: { $in: identityKeys } } : null,\n  ].filter(Boolean),\n};\n\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 400,
+    "y": 5780,
+    "wires": [
+      [
+        "support_client_resolve_find_001"
+      ],
+      [
+        "support_client_resolve_http_resp_001"
+      ],
+      [
+        "support_client_resolve_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_client_resolve_find_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "support_clients",
+    "operation": "find",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Find support clients",
+    "x": 680,
+    "y": 5780,
+    "wires": [
+      [
+        "support_client_resolve_fn_response_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_client_resolve_fn_response_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support client resolve response",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toArray = (value) => (Array.isArray(value) ? value : []);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst normPhone = (value) => {\n  const digits = String(value || \"\").replace(/\\D/g, \"\");\n  if (!digits) return null;\n  if (digits.length === 10) return `7${digits}`;\n  if (digits.length === 11 && digits.startsWith(\"8\")) return `7${digits.slice(1)}`;\n  return digits;\n};\n\nfunction scoreClient(client, request) {\n  const phones = new Set(toArray(client?.phones).map(normPhone).filter(Boolean));\n  const emails = new Set(toArray(client?.emails).map((value) => toStr(value)?.toLowerCase()).filter(Boolean));\n  const identities = new Set(toArray(client?.identityKeys).map(toStr).filter(Boolean));\n\n  let score = 0;\n  request.phones.forEach((phone) => {\n    if (phones.has(phone)) score += 10;\n  });\n  request.emails.forEach((email) => {\n    if (emails.has(email)) score += 7;\n  });\n  request.identityKeys.forEach((identity) => {\n    if (identities.has(identity)) score += 5;\n  });\n  if (toStr(client?.lastChannel) === request.channel) {\n    score += 1;\n  }\n  return score;\n}\n\nconst request = isObj(msg._supportClientResolve) ? msg._supportClientResolve : { phones: [], emails: [], identityKeys: [], channel: \"WEB\" };\nconst rows = toArray(msg.payload).filter((item) => isObj(item));\nconst ranked = rows\n  .map((row) => ({ row, score: scoreClient(row, request) }))\n  .sort((left, right) => {\n    if (right.score !== left.score) return right.score - left.score;\n    return Number(right.row?.updatedTs || 0) - Number(left.row?.updatedTs || 0);\n  });\n\nconst client = ranked[0]?.row || null;\n\nmsg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = {\n  ok: true,\n  found: Boolean(client),\n  client: client || null,\n  matchedClientIds: ranked.map((item) => toStr(item.row?.id)).filter(Boolean),\n};\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 970,
+    "y": 5780,
+    "wires": [
+      [
+        "support_client_resolve_http_resp_001"
+      ],
+      [
+        "support_client_resolve_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_client_resolve_http_resp_001",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 1250,
+    "y": 5780,
+    "wires": []
+  },
+  {
+    "id": "support_client_resolve_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "support client resolve debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1260,
+    "y": 5820,
+    "wires": []
+  },
+  {
+    "id": "support_event_in_001",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support event ingest",
+    "url": "/lk/support/dialogs/events",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 120,
+    "y": 5880,
+    "wires": [
+      [
+        "support_event_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_event_fn_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support event prepare",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toArray = (value) => (Array.isArray(value) ? value : []);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst uniq = (values) => Array.from(new Set(values.filter(Boolean)));\nconst normPhone = (value) => {\n  const digits = String(value || \"\").replace(/\\D/g, \"\");\n  if (!digits) return null;\n  if (digits.length === 10) return `7${digits}`;\n  if (digits.length === 11 && digits.startsWith(\"8\")) return `7${digits.slice(1)}`;\n  return digits;\n};\nconst normEmail = (value) => {\n  const email = toStr(value)?.toLowerCase();\n  return email && email.includes(\"@\") ? email : null;\n};\nconst clampTags = (values) => uniq(values).slice(0, 12);\nconst normalizeStationId = (value) => {\n  const stationId = toStr(value);\n  return stationId ? stationId : \"UNASSIGNED\";\n};\nconst normalizeStationName = (value, fallbackId) => {\n  const stationName = toStr(value);\n  if (stationName) return stationName;\n  return fallbackId && fallbackId !== \"UNASSIGNED\" ? fallbackId : \"Без станции\";\n};\nconst normalizeDirection = (value) => {\n  const normalized = toStr(value)?.toUpperCase();\n  if (normalized === \"OUTBOUND\" || normalized === \"SYSTEM\") return normalized;\n  return \"INBOUND\";\n};\nconst normalizeAuthorType = (value, direction) => {\n  const normalized = toStr(value)?.toUpperCase();\n  if (normalized) return normalized;\n  if (direction === \"OUTBOUND\") return \"ADMIN\";\n  if (direction === \"SYSTEM\") return \"SYSTEM\";\n  return \"CLIENT\";\n};\nconst normalizeEventType = (value) => {\n  const normalized = toStr(value)?.toUpperCase();\n  if (!normalized) return \"MESSAGE\";\n  return normalized;\n};\nconst normalizeChannel = (value) => {\n  const normalized = toStr(value)?.toUpperCase();\n  return normalized || \"WEB\";\n};\nconst normalizeConnector = (value, channel) => {\n  const normalized = toStr(value)?.toUpperCase();\n  if (normalized) return normalized;\n  if (channel === \"WEB\") return \"WEB_LK\";\n  return channel;\n};\nconst normalizePriority = (value) => {\n  const normalized = toStr(value)?.toUpperCase();\n  if ([\"CRITICAL\", \"IMPORTANT\", \"MEDIUM\", \"SUGGESTION\"].includes(normalized)) {\n    return normalized;\n  }\n  return null;\n};\nconst normalizeSentiment = (value) => {\n  const normalized = toStr(value)?.toUpperCase();\n  if ([\"NEGATIVE\", \"NEUTRAL\", \"POSITIVE\"].includes(normalized)) {\n    return normalized;\n  }\n  return null;\n};\nconst normalizeAuthStatus = (value, hasPhones) => {\n  const normalized = toStr(value)?.toUpperCase();\n  if (normalized === \"AUTHORIZED\" || normalized === \"PENDING_CONTACT\") {\n    return normalized;\n  }\n  return hasPhones ? \"AUTHORIZED\" : \"PENDING_CONTACT\";\n};\nconst normalizeWorkflowState = (value, authStatus, stationId) => {\n  const normalized = toStr(value)?.toUpperCase();\n  if ([\"WAIT_CONTACT\", \"WAIT_STATION\", \"READY\"].includes(normalized)) {\n    return normalized;\n  }\n  if (authStatus !== \"AUTHORIZED\") return \"WAIT_CONTACT\";\n  if (!stationId || stationId === \"UNASSIGNED\") return \"WAIT_STATION\";\n  return \"READY\";\n};\nconst previewText = (value, max = 240) => {\n  const text = toStr(value);\n  if (!text) return \"\";\n  return text.length > max ? `${text.slice(0, max)}...` : text;\n};\nconst escapeRegex = (value) => String(value || \"\").replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n\nfunction collectPhones(body) {\n  const fromContacts = toArray(body.contacts)\n    .flatMap((item) => {\n      if (typeof item === \"string\") return [item];\n      if (!isObj(item)) return [];\n      return [\n        item.phone,\n        item.phoneNumber,\n        item.msisdn,\n        item.mobile,\n      ];\n    });\n\n  return uniq([\n    normPhone(body.phone),\n    normPhone(body.phoneNumber),\n    normPhone(body.mobile),\n    normPhone(body.clientPhone),\n    normPhone(body.primaryPhone),\n    ...toArray(body.phoneNumbers).map(normPhone),\n    ...toArray(body.phones).map(normPhone),\n    ...fromContacts.map(normPhone),\n  ]);\n}\n\nfunction collectEmails(body) {\n  return uniq([\n    normEmail(body.email),\n    normEmail(body.clientEmail),\n    ...toArray(body.emails).map(normEmail),\n  ]);\n}\n\nfunction buildIdentityKeys(channel, body, phones, emails) {\n  const channelKey = channel.toLowerCase();\n  return uniq([\n    ...phones.map((phone) => `phone:${phone}`),\n    ...emails.map((email) => `email:${email}`),\n    toStr(body.identityKey),\n    toStr(body.channelUserId) ? `${channelKey}:user:${toStr(body.channelUserId)}` : null,\n    toStr(body.userId) ? `${channelKey}:user:${toStr(body.userId)}` : null,\n    toStr(body.chatId) ? `${channelKey}:chat:${toStr(body.chatId)}` : null,\n    toStr(body.externalThreadId) ? `${channelKey}:thread:${toStr(body.externalThreadId)}` : null,\n    toStr(body.externalDialogId) ? `${channelKey}:dialog:${toStr(body.externalDialogId)}` : null,\n    toStr(body.callId) ? `call:${toStr(body.callId)}` : null,\n  ]);\n}\n\nfunction classifyText(text, eventType) {\n  const safeText = toStr(text) || \"\";\n  const lower = safeText.toLowerCase();\n\n  const topicTags = [];\n  let topic = \"general_support\";\n  let priority = \"MEDIUM\";\n  let sentiment = \"NEUTRAL\";\n\n  const addTag = (tag) => {\n    if (tag) topicTags.push(tag);\n  };\n\n  if (/брон|корт|запис|слот|расписан|игр|трениров/.test(lower)) {\n    topic = \"booking\";\n    addTag(\"booking\");\n  }\n  if (/оплат|чек|возврат|деньг|списал|касс|invoice|платеж/.test(lower)) {\n    topic = \"payment\";\n    addTag(\"payment\");\n  }\n  if (/жалоб|плох|ужас|не устраивает|хам|груб|сервис/.test(lower)) {\n    topic = \"complaint\";\n    addTag(\"complaint\");\n  }\n  if (/турнир|соревнован|americano|лиги/.test(lower)) {\n    topic = \"tournament\";\n    addTag(\"tournament\");\n  }\n  if (/ракетк|инвентар|мяч/.test(lower)) {\n    topic = \"equipment\";\n    addTag(\"equipment\");\n  }\n  if (/тренер|занят|урок|индивидуальн|группов/.test(lower)) {\n    topic = \"training\";\n    addTag(\"training\");\n  }\n  if (/станц|адрес|как добрат|маршрут|локац/.test(lower)) {\n    topic = \"station\";\n    addTag(\"station\");\n  }\n  if (/звон|перезвон|связ|администратор|поддержк/.test(lower)) {\n    addTag(\"operator\");\n  }\n  if (/предлож|пожелан|идея|было бы круто|рекомен/.test(lower)) {\n    topic = \"suggestion\";\n    addTag(\"suggestion\");\n    priority = \"SUGGESTION\";\n  }\n\n  if (/сроч|немедлен|экстрен|опас|травм|мошенн|верните деньги|не работает оплата/.test(lower)) {\n    priority = \"CRITICAL\";\n  } else if (priority !== \"SUGGESTION\" && /не могу|ошибк|проблем|не работает|не приш|жалоб|плох|отмен|перенос/.test(lower)) {\n    priority = \"IMPORTANT\";\n  }\n\n  if (/ужас|отврат|кошмар|жалоб|разочар|не доволен|не работает|ошибк|верните|плохо/.test(lower)) {\n    sentiment = \"NEGATIVE\";\n  } else if (/спасибо|супер|класс|отлично|люблю|огонь/.test(lower)) {\n    sentiment = \"POSITIVE\";\n  }\n\n  if (eventType === \"CALL_LOG\") {\n    addTag(\"call\");\n  }\n  if (eventType === \"CONTACT_SHARED\") {\n    addTag(\"contact_shared\");\n  }\n  if (eventType === \"STATION_SELECTED\") {\n    addTag(\"station_selected\");\n  }\n\n  return {\n    topic,\n    topicTags: clampTags(topicTags.length > 0 ? topicTags : [topic]),\n    priority,\n    sentiment,\n    confidence: safeText ? 0.62 : 0.4,\n    source: \"heuristic\",\n    needsAttention: priority === \"CRITICAL\" || priority === \"IMPORTANT\" || sentiment === \"NEGATIVE\",\n  };\n}\n\nconst body = isObj(msg.payload) ? msg.payload : {};\nconst now = new Date();\nconst nowIso = now.toISOString();\nconst nowTs = now.getTime();\n\nconst channel = normalizeChannel(body.channel || body.provider || body.sourceChannel);\nconst connector = normalizeConnector(body.connector || body.sourceConnector, channel);\nconst direction = normalizeDirection(body.direction);\nconst authorType = normalizeAuthorType(body.authorType, direction);\nconst eventType = normalizeEventType(body.eventType);\n\nconst phoneNumbers = collectPhones(body);\nconst emails = collectEmails(body);\nconst identityKeys = buildIdentityKeys(channel, body, phoneNumbers, emails);\n\nif (identityKeys.length === 0) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"At least one phone, email or channel identity is required\" };\n  return [null, msg, msg];\n}\n\nconst stationId = normalizeStationId(body.stationId || body.currentStationId || body.routeStationId);\nconst stationName = normalizeStationName(body.stationName || body.currentStationName, stationId);\nconst primaryPhone = phoneNumbers[0] || null;\nconst displayName =\n  toStr(body.displayName)\n  || toStr(body.senderName)\n  || toStr(body.authorName)\n  || toStr(body.clientName)\n  || (primaryPhone ? `Клиент ${primaryPhone}` : \"Клиент\");\nconst authStatus = normalizeAuthStatus(body.authStatus, phoneNumbers.length > 0);\nconst workflowState = normalizeWorkflowState(body.workflowState, authStatus, stationId);\n\nconst rawAi = isObj(body.ai) ? body.ai : {};\nconst fallbackAi = classifyText(body.text || body.message || body.content, eventType);\nconst ai = {\n  topic: toStr(rawAi.topic) || fallbackAi.topic,\n  topicTags: clampTags([\n    ...toArray(rawAi.topicTags).map((value) => toStr(value)),\n    ...fallbackAi.topicTags,\n  ]),\n  sentiment: normalizeSentiment(rawAi.sentiment) || fallbackAi.sentiment,\n  priority: normalizePriority(rawAi.priority) || fallbackAi.priority,\n  confidence: Number.isFinite(Number(rawAi.confidence)) ? Number(rawAi.confidence) : fallbackAi.confidence,\n  source: toStr(rawAi.source) || fallbackAi.source,\n  needsAttention:\n    typeof rawAi.needsAttention === \"boolean\"\n      ? rawAi.needsAttention\n      : fallbackAi.needsAttention,\n};\n\nconst text =\n  toStr(body.text)\n  || toStr(body.message)\n  || toStr(body.content)\n  || (\n    eventType === \"CONTACT_SHARED\"\n      ? \"Клиент поделился контактом\"\n      : eventType === \"STATION_SELECTED\"\n        ? `Клиент выбрал станцию: ${stationName}`\n        : eventType === \"START\"\n          ? \"Клиент запустил диалог\"\n          : null\n  );\n\nconst supportEvent = {\n  eventId: toStr(body.eventId) || `${channel}:${nowTs}:${Math.random().toString(36).slice(2, 10)}`,\n  connector,\n  channel,\n  direction,\n  authorType,\n  eventType,\n  text,\n  textPreview: previewText(text),\n  displayName,\n  primaryPhone,\n  phoneNumbers,\n  emails,\n  identityKeys,\n  authStatus,\n  workflowState,\n  stationId,\n  stationName,\n  channelUserId: toStr(body.channelUserId || body.userId || body.senderId),\n  userId: toStr(body.userId || body.clientId || body.senderId),\n  chatId: toStr(body.chatId || body.threadId || body.conversationId),\n  externalMessageId: toStr(body.externalMessageId || body.messageId),\n  externalThreadId: toStr(body.externalThreadId || body.threadId || body.dialogId),\n  callId: toStr(body.callId),\n  senderName: toStr(body.senderName || body.authorName || displayName),\n  senderId: toStr(body.senderId || body.userId || body.clientId),\n  attachments: toArray(body.attachments).filter((item) => item !== null && item !== undefined),\n  tags: clampTags([\n    ...toArray(body.tags).map((value) => toStr(value)),\n    ...ai.topicTags,\n  ]),\n  ai,\n  metadata: Object.assign({}, isObj(body.metadata) ? body.metadata : {}, {\n    sourcePayloadType: typeof msg.payload,\n    sourceConnector: connector,\n    requestPath: toStr(msg.req?.path || msg.req?.originalUrl || msg.req?.url),\n  }),\n  createdAt: nowIso,\n  createdTs: nowTs,\n};\n\nconst dedupeWindowMs = 2500;\nconst externalMessageId = toStr(supportEvent.externalMessageId);\nconst dedupeIdentity =\n  toStr(supportEvent.channelUserId)\n  || toStr(supportEvent.userId)\n  || toStr(supportEvent.senderId)\n  || toStr(supportEvent.primaryPhone)\n  || \"anonymous\";\nconst dedupeText = toStr(supportEvent.text) || \"\";\nconst dedupeKey = externalMessageId\n  ? `${supportEvent.connector}|${supportEvent.channel}|ext:${externalMessageId}`\n  : `${supportEvent.connector}|${supportEvent.channel}|${dedupeIdentity}|${supportEvent.stationId}|${supportEvent.eventType}|${dedupeText.toLowerCase()}`;\nconst dedupeCache = isObj(context.get(\"supportEventDedupeCache\"))\n  ? context.get(\"supportEventDedupeCache\")\n  : {};\n\nObject.keys(dedupeCache).forEach((key) => {\n  const ts = Number(dedupeCache[key] || 0);\n  if (!Number.isFinite(ts) || nowTs - ts > dedupeWindowMs) {\n    delete dedupeCache[key];\n  }\n});\n\nconst prevTs = Number(dedupeCache[dedupeKey] || 0);\nif (Number.isFinite(prevTs) && prevTs > 0 && nowTs - prevTs < dedupeWindowMs) {\n  dedupeCache[dedupeKey] = nowTs;\n  context.set(\"supportEventDedupeCache\", dedupeCache);\n  msg.statusCode = 202;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = {\n    ok: true,\n    ignored: true,\n    reason: \"duplicate_event_window\",\n    dedupeWindowMs,\n  };\n  return [null, msg, msg];\n}\n\ndedupeCache[dedupeKey] = nowTs;\ncontext.set(\"supportEventDedupeCache\", dedupeCache);\n\nmsg._supportEvent = supportEvent;\nmsg.payload = {\n  $or: [\n    supportEvent.phoneNumbers.length > 0 ? { phones: { $in: supportEvent.phoneNumbers } } : null,\n    supportEvent.emails.length > 0 ? { emails: { $in: supportEvent.emails } } : null,\n    supportEvent.identityKeys.length > 0 ? { identityKeys: { $in: supportEvent.identityKeys } } : null,\n  ].filter(Boolean),\n};\n\nif (!Array.isArray(msg.payload.$or) || msg.payload.$or.length === 0) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Unable to build client lookup query\" };\n  return [null, msg, msg];\n}\n\nmsg._supportSearch = {\n  preview: supportEvent.textPreview,\n  searchRegex: escapeRegex(supportEvent.textPreview),\n};\n\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 390,
+    "y": 5880,
+    "wires": [
+      [
+        "support_event_find_client_001"
+      ],
+      [
+        "support_event_http_resp_001"
+      ],
+      [
+        "support_event_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_event_find_client_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "support_clients",
+    "operation": "find",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Find support client",
+    "x": 670,
+    "y": 5840,
+    "wires": [
+      [
+        "support_event_fn_resolve_client_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_event_fn_resolve_client_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Resolve support client",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toArray = (value) => (Array.isArray(value) ? value : []);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst uniq = (values) => Array.from(new Set(values.filter(Boolean)));\nconst normPhone = (value) => {\n  const digits = String(value || \"\").replace(/\\D/g, \"\");\n  if (!digits) return null;\n  if (digits.length === 10) return `7${digits}`;\n  if (digits.length === 11 && digits.startsWith(\"8\")) return `7${digits.slice(1)}`;\n  return digits;\n};\nconst normalizeWorkflowState = (authStatus, stationId) => {\n  if (authStatus !== \"AUTHORIZED\") return \"WAIT_CONTACT\";\n  if (!stationId || stationId === \"UNASSIGNED\") return \"WAIT_STATION\";\n  return \"READY\";\n};\nconst clone = (value) => JSON.parse(JSON.stringify(value));\n\nfunction scoreClient(client, event) {\n  const phones = new Set(toArray(client?.phones).map(normPhone).filter(Boolean));\n  const emails = new Set(toArray(client?.emails).map((value) => toStr(value)?.toLowerCase()).filter(Boolean));\n  const identities = new Set(toArray(client?.identityKeys).map(toStr).filter(Boolean));\n\n  let score = 0;\n  event.phoneNumbers.forEach((phone) => {\n    if (phones.has(phone)) score += 10;\n  });\n  event.emails.forEach((email) => {\n    if (emails.has(email)) score += 7;\n  });\n  event.identityKeys.forEach((identity) => {\n    if (identities.has(identity)) score += 5;\n  });\n  if (toStr(client?.primaryPhone) && event.primaryPhone && toStr(client.primaryPhone) === event.primaryPhone) {\n    score += 3;\n  }\n  if (toStr(client?.lastChannel) === event.channel) {\n    score += 1;\n  }\n  return score;\n}\n\nfunction mergeChannelTargets(existingTargets, event, nowIso, nowTs) {\n  const targets = isObj(existingTargets) ? clone(existingTargets) : {};\n  const key = event.channel.toLowerCase();\n  const current = isObj(targets[key]) ? targets[key] : {};\n  targets[key] = Object.assign({}, current, {\n    channel: event.channel,\n    channelUserId: event.channelUserId || current.channelUserId || null,\n    userId: event.userId || current.userId || null,\n    chatId: event.chatId || current.chatId || null,\n    externalThreadId: event.externalThreadId || current.externalThreadId || null,\n    lastSeenAt: nowIso,\n    lastSeenTs: nowTs,\n  });\n  return targets;\n}\n\nconst rows = toArray(msg.payload).filter((item) => isObj(item));\nconst event = isObj(msg._supportEvent) ? msg._supportEvent : null;\n\nif (!event) {\n  return [null, null, msg];\n}\n\nconst nowIso = event.createdAt || new Date().toISOString();\nconst nowTs = Number(event.createdTs || Date.now());\nconst ranked = rows\n  .map((row) => ({ row, score: scoreClient(row, event) }))\n  .sort((left, right) => {\n    if (right.score !== left.score) return right.score - left.score;\n    return Number(right.row?.updatedTs || 0) - Number(left.row?.updatedTs || 0);\n  });\n\nconst best = ranked[0]?.row || null;\nconst mergeCandidateIds = ranked\n  .slice(1)\n  .map((item) => toStr(item.row?.id))\n  .filter(Boolean);\n\nconst clientId = toStr(best?.id) || `cli_${nowTs}_${Math.random().toString(36).slice(2, 8)}`;\nconst mergedPhones = uniq([\n  ...toArray(best?.phones).map(normPhone),\n  ...event.phoneNumbers,\n]);\nconst mergedEmails = uniq([\n  ...toArray(best?.emails).map((value) => toStr(value)?.toLowerCase()),\n  ...event.emails,\n]);\nconst mergedIdentities = uniq([\n  ...toArray(best?.identityKeys).map(toStr),\n  ...event.identityKeys,\n]);\nconst authStatus =\n  best?.authStatus === \"AUTHORIZED\" || event.authStatus === \"AUTHORIZED\" || mergedPhones.length > 0\n    ? \"AUTHORIZED\"\n    : \"PENDING_CONTACT\";\nconst workflowState = normalizeWorkflowState(\n  authStatus,\n  event.stationId || toStr(best?.lastStationId) || \"UNASSIGNED\",\n);\n\nconst clientDoc = {\n  id: clientId,\n  displayName: event.displayName || toStr(best?.displayName) || \"Клиент\",\n  primaryPhone: event.primaryPhone || toStr(best?.primaryPhone) || mergedPhones[0] || null,\n  phones: mergedPhones,\n  emails: mergedEmails,\n  identityKeys: mergedIdentities,\n  authStatus,\n  workflowState,\n  sourceChannels: uniq([\n    ...toArray(best?.sourceChannels).map((value) => toStr(value)?.toUpperCase()),\n    event.channel,\n  ]),\n  sourceConnectors: uniq([\n    ...toArray(best?.sourceConnectors).map((value) => toStr(value)?.toUpperCase()),\n    event.connector,\n  ]),\n  channelTargets: mergeChannelTargets(best?.channelTargets, event, nowIso, nowTs),\n  lastConnector: event.connector,\n  lastChannel: event.channel,\n  lastSeenAt: nowIso,\n  lastSeenTs: nowTs,\n  lastStationId: event.stationId || toStr(best?.lastStationId) || \"UNASSIGNED\",\n  lastStationName: event.stationName || toStr(best?.lastStationName) || \"Без станции\",\n  mergedCandidateIds: uniq([\n    ...toArray(best?.mergedCandidateIds).map(toStr),\n    ...mergeCandidateIds,\n  ]),\n  updatedAt: nowIso,\n  updatedTs: nowTs,\n  archived: false,\n};\n\nmsg._supportEvent.client = clientDoc;\n\nconst setClientDoc = Object.assign({}, clientDoc);\ndelete setClientDoc.id;\n\nconst clientWriteMsg = Object.assign({}, msg, {\n  payload: [\n    { id: clientId },\n    {\n      $set: setClientDoc,\n      $setOnInsert: {\n        createdAt: toStr(best?.createdAt) || nowIso,\n        createdTs: Number(best?.createdTs || nowTs),\n      },\n    },\n    { upsert: true },\n  ],\n});\n\nconst dialogQuery = {\n  clientId,\n  archived: { $ne: true },\n  status: { $in: [\"OPEN\", \"PENDING_AUTH\"] },\n};\n\nif (event.stationId && event.stationId !== \"UNASSIGNED\") {\n  dialogQuery.$or = [\n    { stationId: event.stationId },\n    { stationId: \"UNASSIGNED\" },\n    { stationId: null },\n    { stationId: \"\" },\n  ];\n}\n\nconst dialogFindMsg = Object.assign({}, msg, {\n  payload: dialogQuery,\n});\n\nconst debugMsg = Object.assign({}, msg, {\n  payload: {\n    clientId,\n    matchedClientIds: ranked.map((item) => toStr(item.row?.id)).filter(Boolean),\n    mergeCandidateIds,\n    workflowState,\n    authStatus,\n  },\n});\n\nreturn [clientWriteMsg, dialogFindMsg, debugMsg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 950,
+    "y": 5840,
+    "wires": [
+      [
+        "support_event_update_client_001"
+      ],
+      [
+        "support_event_find_dialog_001"
+      ],
+      [
+        "support_event_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_event_update_client_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "support_clients",
+    "operation": "updateOne",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Upsert support client",
+    "x": 1240,
+    "y": 5780,
+    "wires": []
+  },
+  {
+    "id": "support_event_find_dialog_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "support_dialogs",
+    "operation": "find",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Find support dialog",
+    "x": 1230,
+    "y": 5880,
+    "wires": [
+      [
+        "support_event_fn_resolve_dialog_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_event_fn_resolve_dialog_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Resolve support dialog",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toArray = (value) => (Array.isArray(value) ? value : []);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst uniq = (values) => Array.from(new Set(values.filter(Boolean)));\nconst normPhone = (value) => {\n  const digits = String(value || \"\").replace(/\\D/g, \"\");\n  if (!digits) return null;\n  if (digits.length === 10) return `7${digits}`;\n  if (digits.length === 11 && digits.startsWith(\"8\")) return `7${digits.slice(1)}`;\n  return digits;\n};\nconst previewText = (value, max = 240) => {\n  const text = toStr(value);\n  if (!text) return \"\";\n  return text.length > max ? `${text.slice(0, max)}...` : text;\n};\nconst clone = (value) => JSON.parse(JSON.stringify(value));\nconst maybeNumber = (value) => {\n  if (value === null || value === undefined || value === \"\") return null;\n  const parsed = Number(value);\n  return Number.isFinite(parsed) ? parsed : null;\n};\n\nfunction pickDialog(rows, event) {\n  const safeRows = toArray(rows).filter((item) => isObj(item));\n  if (safeRows.length === 0) return null;\n\n  const exact = safeRows.filter((item) => toStr(item.stationId) === event.stationId);\n  if (exact.length > 0) {\n    return exact.sort((left, right) => Number(right.updatedTs || 0) - Number(left.updatedTs || 0))[0];\n  }\n\n  const unassigned = safeRows.filter((item) => {\n    const stationId = toStr(item.stationId);\n    return !stationId || stationId === \"UNASSIGNED\";\n  });\n  if (unassigned.length > 0) {\n    return unassigned.sort((left, right) => Number(right.updatedTs || 0) - Number(left.updatedTs || 0))[0];\n  }\n\n  return safeRows.sort((left, right) => Number(right.updatedTs || 0) - Number(left.updatedTs || 0))[0];\n}\n\nfunction mergeChannelTargets(existingTargets, clientTargets, event, nowIso, nowTs) {\n  const targets = isObj(existingTargets) ? clone(existingTargets) : {};\n  Object.entries(isObj(clientTargets) ? clientTargets : {}).forEach(([key, value]) => {\n    targets[key] = Object.assign({}, isObj(targets[key]) ? targets[key] : {}, isObj(value) ? value : {});\n  });\n  const key = event.channel.toLowerCase();\n  const current = isObj(targets[key]) ? targets[key] : {};\n  targets[key] = Object.assign({}, current, {\n    channel: event.channel,\n    channelUserId: event.channelUserId || current.channelUserId || null,\n    userId: event.userId || current.userId || null,\n    chatId: event.chatId || current.chatId || null,\n    externalThreadId: event.externalThreadId || current.externalThreadId || null,\n    lastSeenAt: nowIso,\n    lastSeenTs: nowTs,\n  });\n  return targets;\n}\n\nconst rows = toArray(msg.payload).filter((item) => isObj(item));\nconst event = isObj(msg._supportEvent) ? msg._supportEvent : null;\nconst client = isObj(event?.client) ? event.client : null;\n\nif (!event || !client) {\n  return [null, null, msg];\n}\n\nconst nowIso = event.createdAt || new Date().toISOString();\nconst nowTs = Number(event.createdTs || Date.now());\nconst existing = pickDialog(rows, event);\nconst dialogId = toStr(existing?.id) || `dlg_${nowTs}_${Math.random().toString(36).slice(2, 8)}`;\nconst stationId = event.stationId || toStr(existing?.stationId) || toStr(client.lastStationId) || \"UNASSIGNED\";\nconst stationName = event.stationName || toStr(existing?.stationName) || toStr(client.lastStationName) || \"Без станции\";\n\nconst authStatus = client.authStatus === \"AUTHORIZED\" || event.authStatus === \"AUTHORIZED\" ? \"AUTHORIZED\" : \"PENDING_CONTACT\";\nconst workflowState =\n  authStatus !== \"AUTHORIZED\"\n    ? \"WAIT_CONTACT\"\n    : stationId === \"UNASSIGNED\"\n      ? \"WAIT_STATION\"\n      : \"READY\";\n\nconst isClientInbound =\n  event.direction === \"INBOUND\"\n  && [\"CLIENT\", \"CALL\", \"EMAIL\", \"CRM\"].includes(event.authorType);\nconst isAdminOutbound =\n  event.direction === \"OUTBOUND\"\n  && event.authorType === \"ADMIN\";\nconst countsAsSupportRequest =\n  isClientInbound\n  && [\"MESSAGE\", \"CALL_LOG\", \"EMAIL\", \"BITRIX_NOTE\"].includes(event.eventType);\n\nconst pendingResponseSinceTs = Number(existing?.pendingResponseSinceTs || 0) || null;\nconst responseMinutes = isAdminOutbound && pendingResponseSinceTs\n  ? Math.max(0, Math.round(((nowTs - pendingResponseSinceTs) / 60000) * 10) / 10)\n  : null;\nconst prevResponseCount = maybeNumber(existing?.responseCount) || 0;\nconst nextResponseCount = prevResponseCount + (responseMinutes !== null ? 1 : 0);\nconst prevAvgResponse = maybeNumber(existing?.avgResponseMinutes) || 0;\nconst nextAvgResponse = responseMinutes === null\n  ? (Number.isFinite(prevAvgResponse) ? prevAvgResponse : 0)\n  : Math.round((((prevAvgResponse * prevResponseCount) + responseMinutes) / nextResponseCount) * 10) / 10;\nconst prevMaxResponse = maybeNumber(existing?.maxResponseMinutes) || 0;\nconst nextMaxResponse = responseMinutes === null ? prevMaxResponse : Math.max(prevMaxResponse, responseMinutes);\nconst prevFirstResponse = maybeNumber(existing?.firstResponseMinutes);\nconst firstResponseMinutes = prevFirstResponse !== null\n  ? prevFirstResponse\n  : (responseMinutes !== null ? responseMinutes : null);\n\nconst mergedTopicTags = uniq([\n  ...toArray(existing?.ai?.topicTags).map(toStr),\n  ...toArray(event.ai?.topicTags).map(toStr),\n]).slice(0, 20);\n\nconst dialogDoc = {\n  id: dialogId,\n  clientId: client.id,\n  displayName: client.displayName,\n  primaryPhone: client.primaryPhone || event.primaryPhone || null,\n  phoneNumbers: uniq([\n    ...toArray(existing?.phoneNumbers).map(normPhone),\n    ...toArray(client.phones).map(normPhone),\n    ...event.phoneNumbers,\n  ]),\n  emails: uniq([\n    ...toArray(existing?.emails).map((value) => toStr(value)?.toLowerCase()),\n    ...toArray(client.emails).map((value) => toStr(value)?.toLowerCase()),\n    ...event.emails,\n  ]),\n  identityKeys: uniq([\n    ...toArray(existing?.identityKeys).map(toStr),\n    ...toArray(client.identityKeys).map(toStr),\n    ...event.identityKeys,\n  ]),\n  channels: uniq([\n    ...toArray(existing?.channels).map((value) => toStr(value)?.toUpperCase()),\n    ...toArray(client.sourceChannels).map((value) => toStr(value)?.toUpperCase()),\n    event.channel,\n  ]),\n  connectors: uniq([\n    ...toArray(existing?.connectors).map((value) => toStr(value)?.toUpperCase()),\n    ...toArray(client.sourceConnectors).map((value) => toStr(value)?.toUpperCase()),\n    event.connector,\n  ]),\n  channelTargets: mergeChannelTargets(existing?.channelTargets, client.channelTargets, event, nowIso, nowTs),\n  authStatus,\n  workflowState,\n  provisional: authStatus !== \"AUTHORIZED\",\n  status: authStatus !== \"AUTHORIZED\" ? \"PENDING_AUTH\" : (toStr(existing?.status) === \"CLOSED\" ? \"OPEN\" : (toStr(existing?.status) || \"OPEN\")),\n  stationId,\n  stationName,\n  unreadClientMessages: countsAsSupportRequest\n    ? Number(existing?.unreadClientMessages || 0) + 1\n    : (isAdminOutbound ? 0 : Number(existing?.unreadClientMessages || 0)),\n  pendingResponseSinceTs: countsAsSupportRequest\n    ? (pendingResponseSinceTs || nowTs)\n    : (isAdminOutbound ? null : pendingResponseSinceTs),\n  pendingResponseAt: countsAsSupportRequest\n    ? (toStr(existing?.pendingResponseAt) || nowIso)\n    : (isAdminOutbound ? null : toStr(existing?.pendingResponseAt) || null),\n  firstResponseMinutes,\n  lastResponseMinutes: responseMinutes !== null ? responseMinutes : (maybeNumber(existing?.lastResponseMinutes) ?? null),\n  responseCount: nextResponseCount,\n  avgResponseMinutes: nextResponseCount > 0 ? nextAvgResponse : null,\n  maxResponseMinutes: nextResponseCount > 0 ? nextMaxResponse : null,\n  firstClientMessageAt: toStr(existing?.firstClientMessageAt) || (countsAsSupportRequest ? nowIso : null),\n  firstClientMessageTs: Number(existing?.firstClientMessageTs || 0) || (countsAsSupportRequest ? nowTs : null),\n  lastClientMessageAt: countsAsSupportRequest ? nowIso : (toStr(existing?.lastClientMessageAt) || null),\n  lastClientMessageTs: countsAsSupportRequest ? nowTs : (Number(existing?.lastClientMessageTs || 0) || null),\n  lastAdminMessageAt: isAdminOutbound ? nowIso : (toStr(existing?.lastAdminMessageAt) || null),\n  lastAdminMessageTs: isAdminOutbound ? nowTs : (Number(existing?.lastAdminMessageTs || 0) || null),\n  lastMessagePreview: previewText(event.text),\n  lastMessageAt: nowIso,\n  lastMessageTs: nowTs,\n  lastMessageDirection: event.direction,\n  lastMessageAuthorType: event.authorType,\n  lastConnector: event.connector,\n  lastChannel: event.channel,\n  lastInboundChannel: isClientInbound ? event.channel : (toStr(existing?.lastInboundChannel) || null),\n  lastOutboundChannel: isAdminOutbound ? event.channel : (toStr(existing?.lastOutboundChannel) || null),\n  ai: {\n    lastTopic: toStr(event.ai?.topic) || toStr(existing?.ai?.lastTopic) || \"general_support\",\n    lastSentiment: toStr(event.ai?.sentiment) || toStr(existing?.ai?.lastSentiment) || \"NEUTRAL\",\n    lastPriority: toStr(event.ai?.priority) || toStr(existing?.ai?.lastPriority) || \"MEDIUM\",\n    topicTags: mergedTopicTags,\n    needsAttention:\n      typeof event.ai?.needsAttention === \"boolean\"\n        ? event.ai.needsAttention\n        : Boolean(existing?.ai?.needsAttention),\n  },\n  createdAt: toStr(existing?.createdAt) || nowIso,\n  createdTs: Number(existing?.createdTs || 0) || nowTs,\n  openedAt: toStr(existing?.openedAt) || nowIso,\n  openedTs: Number(existing?.openedTs || 0) || nowTs,\n  updatedAt: nowIso,\n  updatedTs: nowTs,\n  archived: false,\n};\n\nconst messageDoc = {\n  id: `${dialogId}:${nowTs}:${Math.random().toString(36).slice(2, 8)}`,\n  dialogId,\n  clientId: client.id,\n  stationId,\n  stationName,\n  direction: event.direction,\n  authorType: event.authorType,\n  eventType: event.eventType,\n  connector: event.connector,\n  channel: event.channel,\n  externalMessageId: event.externalMessageId || null,\n  externalThreadId: event.externalThreadId || null,\n  callId: event.callId || null,\n  chatId: event.chatId || null,\n  channelUserId: event.channelUserId || null,\n  sender: {\n    id: event.senderId || null,\n    name: event.senderName || client.displayName || \"Клиент\",\n    role: event.authorType,\n  },\n  clientSnapshot: {\n    displayName: client.displayName,\n    primaryPhone: client.primaryPhone || null,\n    phones: toArray(client.phones).map(normPhone).filter(Boolean),\n    emails: toArray(client.emails).map((value) => toStr(value)?.toLowerCase()).filter(Boolean),\n    authStatus,\n    workflowState,\n  },\n  text: event.text || \"\",\n  textPreview: previewText(event.text),\n  attachments: toArray(event.attachments),\n  tags: uniq([\n    ...toArray(event.tags).map(toStr),\n    ...toArray(event.ai?.topicTags).map(toStr),\n  ]).slice(0, 20),\n  ai: isObj(event.ai) ? clone(event.ai) : null,\n  responseMetrics: responseMinutes === null\n    ? null\n    : {\n        pendingRequestTs: pendingResponseSinceTs,\n        responseMinutes,\n        isFirstResponse: !Number.isFinite(prevFirstResponse),\n      },\n  authStatus,\n  workflowState,\n  createdAt: nowIso,\n  createdTs: nowTs,\n  deleted: false,\n  metadata: isObj(event.metadata) ? clone(event.metadata) : {},\n};\n\nmsg._supportEvent.dialog = dialogDoc;\nmsg._supportEvent.message = messageDoc;\n\nconst setDialogDoc = Object.assign({}, dialogDoc);\ndelete setDialogDoc.id;\ndelete setDialogDoc.createdAt;\ndelete setDialogDoc.createdTs;\ndelete setDialogDoc.openedAt;\ndelete setDialogDoc.openedTs;\n\nconst dialogWriteMsg = Object.assign({}, msg, {\n  payload: [\n    { id: dialogId },\n    {\n      $set: setDialogDoc,\n      $setOnInsert: {\n        createdAt: dialogDoc.createdAt,\n        createdTs: dialogDoc.createdTs,\n        openedAt: dialogDoc.openedAt,\n        openedTs: dialogDoc.openedTs,\n      },\n    },\n    { upsert: true },\n  ],\n});\n\nconst messageInsertMsg = Object.assign({}, msg, {\n  payload: messageDoc,\n});\n\nconst debugMsg = Object.assign({}, msg, {\n  payload: {\n    dialogId,\n    stationId,\n    authStatus,\n    workflowState,\n    unreadClientMessages: dialogDoc.unreadClientMessages,\n    responseMinutes,\n  },\n});\n\nreturn [dialogWriteMsg, messageInsertMsg, debugMsg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1510,
+    "y": 5880,
+    "wires": [
+      [
+        "support_event_update_dialog_001"
+      ],
+      [
+        "support_event_insert_message_001"
+      ],
+      [
+        "support_event_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_event_update_dialog_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "support_dialogs",
+    "operation": "updateOne",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Upsert support dialog",
+    "x": 1790,
+    "y": 5840,
+    "wires": []
+  },
+  {
+    "id": "support_event_insert_message_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "support_messages",
+    "operation": "insertOne",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Insert support message",
+    "x": 1790,
+    "y": 5920,
+    "wires": [
+      [
+        "support_event_fn_response_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_event_fn_response_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support event response",
+    "func": "msg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = {\n  ok: true,\n  client: msg._supportEvent?.client || null,\n  dialog: msg._supportEvent?.dialog || null,\n  message: msg._supportEvent?.message || null,\n};\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 2050,
+    "y": 5920,
+    "wires": [
+      [
+        "support_event_http_resp_001"
+      ],
+      [
+        "support_event_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_event_http_resp_001",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 2310,
+    "y": 5880,
+    "wires": []
+  },
+  {
+    "id": "support_event_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "support event debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 2310,
+    "y": 5920,
+    "wires": []
+  },
+  {
+    "id": "support_dialog_list_in_001",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support dialogs list",
+    "url": "/lk/support/dialogs",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 120,
+    "y": 6000,
+    "wires": [
+      [
+        "support_dialog_list_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_dialog_list_fn_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support dialogs list prepare",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst toBool = (value) => {\n  if (typeof value === \"boolean\") return value;\n  const normalized = toStr(value)?.toLowerCase();\n  if (!normalized) return false;\n  return [\"1\", \"true\", \"yes\", \"y\", \"on\"].includes(normalized);\n};\nconst uniq = (values) => Array.from(new Set(values.filter(Boolean)));\nconst normPhone = (value) => {\n  const digits = String(value || \"\").replace(/\\D/g, \"\");\n  if (!digits) return null;\n  if (digits.length === 10) return `7${digits}`;\n  if (digits.length === 11 && digits.startsWith(\"8\")) return `7${digits.slice(1)}`;\n  return digits;\n};\nconst splitCsv = (value) =>\n  uniq(\n    String(value || \"\")\n      .split(\",\")\n      .map((item) => toStr(item))\n      .filter(Boolean),\n  );\nconst escapeRegex = (value) => String(value || \"\").replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n\nconst q = isObj(msg.req?.query) ? msg.req.query : {};\nconst stationIds = splitCsv(q.stationIds || q.stationId);\nconst statuses = splitCsv(q.status || q.statuses).map((value) => value.toUpperCase());\nconst clientId = toStr(q.clientId || q.supportClientId || q.client || q.id);\nconst phone = normPhone(q.phone || q.phoneNumber || q.clientPhone);\nconst channel = toStr(q.channel)?.toUpperCase() || null;\nconst limitRaw = Number(q.limit);\nconst limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(300, Math.floor(limitRaw))) : 100;\nconst onlyUnanswered = toBool(q.onlyUnanswered || q.unansweredOnly || q.unanswered);\nconst includeClosed = toBool(q.includeClosed);\nconst search = toStr(q.q || q.search);\n\nconst query = {\n  archived: { $ne: true },\n};\nconst andFilters = [];\n\nif (stationIds.length > 0) {\n  query.stationId = { $in: stationIds };\n}\nif (statuses.length > 0) {\n  query.status = { $in: statuses };\n} else if (!includeClosed) {\n  query.status = { $in: [\"OPEN\", \"PENDING_AUTH\"] };\n}\nconst identityFilters = [];\nif (clientId) {\n  identityFilters.push({ clientId });\n}\nif (phone) {\n  identityFilters.push(\n    { phoneNumbers: { $in: [phone] } },\n    { primaryPhone: phone },\n    { currentPhone: phone },\n    { phone },\n  );\n}\nif (identityFilters.length === 1) {\n  andFilters.push(identityFilters[0]);\n} else if (identityFilters.length > 1) {\n  andFilters.push({ $or: identityFilters });\n}\nif (channel) {\n  const channelFilters = [\n    { channels: { $in: [channel] } },\n    { lastChannel: channel },\n    { channel },\n  ];\n  const channelTargetPath = `channelTargets.${channel.toLowerCase()}.channel`;\n  channelFilters.push({ [channelTargetPath]: channel });\n\n  const connectorAliases = channel === \"WEB\"\n    ? [\"WEB\", \"WEB_LK\", \"LK_WEB_MESSENGER\"]\n    : [channel];\n  connectorAliases.forEach((connector) => {\n    channelFilters.push({ connectors: { $in: [connector] } });\n    channelFilters.push({ lastConnector: connector });\n    channelFilters.push({ connector });\n  });\n\n  andFilters.push({ $or: channelFilters });\n}\nif (onlyUnanswered) {\n  query.unreadClientMessages = { $gt: 0 };\n}\nif (search) {\n  const pattern = escapeRegex(search);\n  andFilters.push({\n    $or: [\n    { displayName: { $regex: pattern, $options: \"i\" } },\n    { primaryPhone: { $regex: pattern, $options: \"i\" } },\n    { lastMessagePreview: { $regex: pattern, $options: \"i\" } },\n    ],\n  });\n}\nif (andFilters.length === 1) {\n  Object.assign(query, andFilters[0]);\n} else if (andFilters.length > 1) {\n  query.$and = andFilters;\n}\n\nmsg._supportDialogList = {\n  limit,\n  stationIds,\n  statuses,\n  clientId,\n  phone,\n  channel,\n  onlyUnanswered,\n  includeClosed,\n  search,\n};\nmsg.payload = query;\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 400,
+    "y": 6000,
+    "wires": [
+      [
+        "support_dialog_list_find_001"
+      ],
+      [
+        "support_dialog_list_http_resp_001"
+      ],
+      [
+        "support_dialog_list_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_dialog_list_find_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "support_dialogs",
+    "operation": "find",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Find support dialogs",
+    "x": 690,
+    "y": 6000,
+    "wires": [
+      [
+        "support_dialog_list_fn_response_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_dialog_list_fn_response_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support dialogs list response",
+    "func": "const toArray = (value) => (Array.isArray(value) ? value : []);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\n\nconst rows = toArray(msg.payload)\n  .filter((item) => item && typeof item === \"object\")\n  .sort((left, right) => Number(right.lastMessageTs || 0) - Number(left.lastMessageTs || 0));\nconst ctx = msg._supportDialogList || { limit: 100 };\nconst sliced = rows.slice(0, ctx.limit);\n\nconst dialogs = sliced.map((row) => ({\n  id: toStr(row.id),\n  clientId: toStr(row.clientId),\n  displayName: toStr(row.displayName) || \"Клиент\",\n  primaryPhone: toStr(row.primaryPhone),\n  phoneNumbers: toArray(row.phoneNumbers).map((value) => toStr(value)).filter(Boolean),\n  stationId: toStr(row.stationId) || \"UNASSIGNED\",\n  stationName: toStr(row.stationName) || \"Без станции\",\n  status: toStr(row.status) || \"OPEN\",\n  authStatus: toStr(row.authStatus) || \"PENDING_CONTACT\",\n  workflowState: toStr(row.workflowState) || \"WAIT_CONTACT\",\n  channels: toArray(row.channels).map((value) => toStr(value)).filter(Boolean),\n  connectors: toArray(row.connectors).map((value) => toStr(value)).filter(Boolean),\n  lastConnector: toStr(row.lastConnector),\n  unreadClientMessages: Number(row.unreadClientMessages || 0),\n  pendingResponseSinceTs: Number(row.pendingResponseSinceTs || 0) || null,\n  firstResponseMinutes: Number(row.firstResponseMinutes || 0) || null,\n  lastResponseMinutes: Number(row.lastResponseMinutes || 0) || null,\n  avgResponseMinutes: Number(row.avgResponseMinutes || 0) || null,\n  maxResponseMinutes: Number(row.maxResponseMinutes || 0) || null,\n  ai: row.ai || null,\n  lastMessage: {\n    preview: toStr(row.lastMessagePreview) || \"\",\n    direction: toStr(row.lastMessageDirection) || \"INBOUND\",\n    authorType: toStr(row.lastMessageAuthorType) || \"CLIENT\",\n    channel: toStr(row.lastChannel),\n    createdAt: toStr(row.lastMessageAt),\n    createdTs: Number(row.lastMessageTs || 0) || null,\n  },\n  createdAt: toStr(row.createdAt),\n  updatedAt: toStr(row.updatedAt),\n  updatedTs: Number(row.updatedTs || 0) || null,\n}));\n\nmsg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = {\n  total: dialogs.length,\n  dialogs,\n  summary: {\n    unanswered: dialogs.filter((dialog) => dialog.unreadClientMessages > 0).length,\n    pendingAuth: dialogs.filter((dialog) => dialog.authStatus !== \"AUTHORIZED\").length,\n  },\n};\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 980,
+    "y": 6000,
+    "wires": [
+      [
+        "support_dialog_list_http_resp_001"
+      ],
+      [
+        "support_dialog_list_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_dialog_list_http_resp_001",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 1260,
+    "y": 6000,
+    "wires": []
+  },
+  {
+    "id": "support_dialog_list_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "support dialogs list debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1270,
+    "y": 6040,
+    "wires": []
+  },
+  {
+    "id": "support_dialog_messages_in_001",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support dialog messages",
+    "url": "/lk/support/dialogs/:dialogId/messages",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 6100,
+    "wires": [
+      [
+        "support_dialog_messages_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_dialog_messages_fn_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support dialog messages prepare",
+    "func": "const toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\n\nconst dialogId = toStr(msg.req?.params?.dialogId);\nif (!dialogId) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"dialogId is required\" };\n  return [null, msg, msg];\n}\n\nconst q = msg.req?.query || {};\nconst limitRaw = Number(q.limit);\nconst limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 100;\nconst beforeRaw = Number(q.beforeTs || q.before);\nconst beforeTs = Number.isFinite(beforeRaw) ? beforeRaw : Date.now() + 1;\n\nmsg._supportDialogMessages = { dialogId, limit, beforeTs };\nmsg.payload = {\n  dialogId,\n  deleted: { $ne: true },\n  $or: [\n    { createdTs: { $lt: beforeTs } },\n    { createdTs: { $exists: false } },\n    { createdTs: null },\n  ],\n};\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 430,
+    "y": 6100,
+    "wires": [
+      [
+        "support_dialog_messages_find_001"
+      ],
+      [
+        "support_dialog_messages_http_resp_001"
+      ],
+      [
+        "support_dialog_messages_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_dialog_messages_find_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "support_messages",
+    "operation": "find",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Find support dialog messages",
+    "x": 730,
+    "y": 6100,
+    "wires": [
+      [
+        "support_dialog_messages_fn_response_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_dialog_messages_fn_response_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support dialog messages response",
+    "func": "const toArray = (value) => (Array.isArray(value) ? value : []);\nconst toTs = (value) => {\n  if (value === null || value === undefined || value === \"\") return null;\n  const parsed = Number(value);\n  return Number.isFinite(parsed) ? Math.trunc(parsed) : null;\n};\nconst parseIsoTs = (value) => {\n  if (value === null || value === undefined) return null;\n  const parsed = Date.parse(String(value));\n  return Number.isFinite(parsed) ? parsed : null;\n};\nconst resolveCreatedTs = (row) => {\n  const direct =\n    toTs(row?.createdTs)\n    ?? toTs(row?.timestamp)\n    ?? parseIsoTs(row?.createdAt);\n  return Number.isFinite(direct) ? direct : 0;\n};\n\nconst ctx = msg._supportDialogMessages || { dialogId: null, limit: 100, beforeTs: Date.now() + 1 };\nconst rows = toArray(msg.payload)\n  .filter((item) => item && typeof item === \"object\")\n  .map((item) => {\n    const createdTs = resolveCreatedTs(item);\n    if (toTs(item.createdTs) !== null) return item;\n    return Object.assign({}, item, {\n      createdTs,\n    });\n  })\n  .filter((item) => resolveCreatedTs(item) < Number(ctx.beforeTs || Date.now() + 1))\n  .sort((left, right) => resolveCreatedTs(left) - resolveCreatedTs(right));\n\nconst sliced = rows.slice(Math.max(0, rows.length - ctx.limit));\nconst hasMore = rows.length > sliced.length;\nconst nextBeforeTs = sliced.length > 0 ? resolveCreatedTs(sliced[0]) : null;\n\nmsg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = {\n  dialogId: ctx.dialogId,\n  totalFetched: sliced.length,\n  hasMore,\n  nextBeforeTs,\n  messages: sliced,\n};\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1040,
+    "y": 6100,
+    "wires": [
+      [
+        "support_dialog_messages_http_resp_001"
+      ],
+      [
+        "support_dialog_messages_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_dialog_messages_http_resp_001",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 1340,
+    "y": 6100,
+    "wires": []
+  },
+  {
+    "id": "support_dialog_messages_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "support dialog messages debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1350,
+    "y": 6140,
+    "wires": []
+  },
+  {
+    "id": "support_reply_in_001",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support dialog reply",
+    "url": "/lk/support/dialogs/:dialogId/reply",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 120,
+    "y": 6200,
+    "wires": [
+      [
+        "support_reply_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_reply_fn_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support dialog reply prepare",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\n\nconst dialogId = toStr(msg.req?.params?.dialogId);\nif (!dialogId) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"dialogId is required\" };\n  return [null, msg, msg];\n}\n\nconst body = isObj(msg.payload) ? msg.payload : {};\nconst text = toStr(body.text || body.message || body.content);\nif (!text) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"text is required\" };\n  return [null, msg, msg];\n}\n\nmsg._supportReply = {\n  dialogId,\n  text,\n  adminUserId: toStr(body.adminUserId || body.userId),\n  adminName: toStr(body.adminName || body.authorName) || \"Администратор\",\n  channel: toStr(body.channel)?.toUpperCase() || null,\n  metadata: isObj(body.metadata) ? body.metadata : {},\n};\n\nmsg.payload = {\n  id: dialogId,\n  archived: { $ne: true },\n};\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 420,
+    "y": 6200,
+    "wires": [
+      [
+        "support_reply_find_dialog_001"
+      ],
+      [
+        "support_reply_http_resp_001"
+      ],
+      [
+        "support_reply_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_reply_find_dialog_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "support_dialogs",
+    "operation": "find",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Find reply dialog",
+    "x": 710,
+    "y": 6200,
+    "wires": [
+      [
+        "support_reply_fn_resolve_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_reply_fn_resolve_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Resolve support reply",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toArray = (value) => (Array.isArray(value) ? value : []);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst previewText = (value, max = 240) => {\n  const text = toStr(value);\n  if (!text) return \"\";\n  return text.length > max ? `${text.slice(0, max)}...` : text;\n};\nconst clone = (value) => JSON.parse(JSON.stringify(value));\nconst maybeNumber = (value) => {\n  if (value === null || value === undefined || value === \"\") return null;\n  const parsed = Number(value);\n  return Number.isFinite(parsed) ? parsed : null;\n};\n\nconst rows = toArray(msg.payload).filter((item) => isObj(item));\nconst reply = isObj(msg._supportReply) ? msg._supportReply : null;\n\nif (!reply) {\n  return [null, null, null, msg];\n}\n\nif (rows.length === 0) {\n  msg.statusCode = 404;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Dialog not found\" };\n  return [null, null, null, msg];\n}\n\nconst dialog = rows[0];\nconst now = new Date();\nconst nowIso = now.toISOString();\nconst nowTs = now.getTime();\nconst channel = reply.channel || toStr(dialog.lastInboundChannel) || toStr(dialog.lastChannel) || \"MAX\";\nconst connector = toStr(reply.connector) || toStr(dialog.lastConnector) || (channel === \"WEB\" ? \"WEB_LK\" : channel);\nconst target = isObj(dialog.channelTargets?.[channel.toLowerCase()]) ? clone(dialog.channelTargets[channel.toLowerCase()]) : null;\nconst pendingResponseSinceTs = Number(dialog.pendingResponseSinceTs || 0) || null;\nconst responseMinutes = pendingResponseSinceTs\n  ? Math.max(0, Math.round(((nowTs - pendingResponseSinceTs) / 60000) * 10) / 10)\n  : null;\nconst prevResponseCount = maybeNumber(dialog.responseCount) || 0;\nconst nextResponseCount = prevResponseCount + (responseMinutes !== null ? 1 : 0);\nconst prevAvgResponse = maybeNumber(dialog.avgResponseMinutes) || 0;\nconst nextAvgResponse = responseMinutes === null\n  ? (Number.isFinite(prevAvgResponse) ? prevAvgResponse : 0)\n  : Math.round((((prevAvgResponse * prevResponseCount) + responseMinutes) / nextResponseCount) * 10) / 10;\nconst prevFirstResponse = maybeNumber(dialog.firstResponseMinutes);\nconst firstResponseMinutes = prevFirstResponse !== null\n  ? prevFirstResponse\n  : (responseMinutes !== null ? responseMinutes : null);\nconst prevMaxResponse = maybeNumber(dialog.maxResponseMinutes) || 0;\nconst nextMaxResponse = responseMinutes === null ? prevMaxResponse : Math.max(prevMaxResponse, responseMinutes);\n\nconst delivery = {\n  status: target ? \"READY\" : \"NO_TARGET\",\n  channel,\n  target,\n  payload: target\n    ? {\n        chatId: target.chatId || null,\n        content: reply.text,\n        type: \"message\",\n        options: {},\n      }\n    : null,\n};\n\nconst messageDoc = {\n  id: `${reply.dialogId}:${nowTs}:${Math.random().toString(36).slice(2, 8)}`,\n  dialogId: reply.dialogId,\n  clientId: toStr(dialog.clientId),\n  stationId: toStr(dialog.stationId) || \"UNASSIGNED\",\n  stationName: toStr(dialog.stationName) || \"Без станции\",\n  direction: \"OUTBOUND\",\n  authorType: \"ADMIN\",\n  eventType: \"ADMIN_REPLY\",\n  connector,\n  channel,\n  sender: {\n    id: reply.adminUserId || null,\n    name: reply.adminName || \"Администратор\",\n    role: \"ADMIN\",\n  },\n  text: reply.text,\n  textPreview: previewText(reply.text),\n  attachments: [],\n  tags: [],\n  ai: null,\n  responseMetrics: responseMinutes === null\n    ? null\n    : {\n        pendingRequestTs: pendingResponseSinceTs,\n        responseMinutes,\n        isFirstResponse: !Number.isFinite(prevFirstResponse),\n      },\n  authStatus: toStr(dialog.authStatus) || \"AUTHORIZED\",\n  workflowState: toStr(dialog.workflowState) || \"READY\",\n  createdAt: nowIso,\n  createdTs: nowTs,\n  deleted: false,\n  metadata: Object.assign({}, reply.metadata || {}, {\n    replyChannel: channel,\n  }),\n  delivery,\n};\n\nmsg._supportReplyResolved = {\n  dialog: Object.assign({}, dialog, {\n    unreadClientMessages: 0,\n    pendingResponseSinceTs: null,\n    pendingResponseAt: null,\n    firstResponseMinutes,\n    lastResponseMinutes: responseMinutes === null ? (maybeNumber(dialog.lastResponseMinutes) ?? null) : responseMinutes,\n    responseCount: nextResponseCount,\n    avgResponseMinutes: nextResponseCount > 0 ? nextAvgResponse : null,\n    maxResponseMinutes: nextResponseCount > 0 ? nextMaxResponse : null,\n    lastAdminMessageAt: nowIso,\n    lastAdminMessageTs: nowTs,\n    lastMessagePreview: previewText(reply.text),\n    lastMessageAt: nowIso,\n    lastMessageTs: nowTs,\n    lastMessageDirection: \"OUTBOUND\",\n    lastMessageAuthorType: \"ADMIN\",\n    lastConnector: connector,\n    lastChannel: channel,\n    lastOutboundChannel: channel,\n    updatedAt: nowIso,\n    updatedTs: nowTs,\n  }),\n  message: messageDoc,\n  dispatch: delivery,\n};\n\nconst setDialogDoc = Object.assign({}, msg._supportReplyResolved.dialog);\ndelete setDialogDoc.id;\ndelete setDialogDoc.createdAt;\ndelete setDialogDoc.createdTs;\ndelete setDialogDoc.openedAt;\ndelete setDialogDoc.openedTs;\n\nconst dialogWriteMsg = Object.assign({}, msg, {\n  payload: [\n    { id: reply.dialogId },\n    { $set: setDialogDoc },\n    { upsert: false },\n  ],\n});\n\nconst messageInsertMsg = Object.assign({}, msg, {\n  payload: messageDoc,\n});\n\nconst dispatchMsg = target\n  ? Object.assign({}, msg, {\n      payload: delivery,\n    })\n  : null;\n\nreturn [dialogWriteMsg, messageInsertMsg, dispatchMsg, null];\n",
+    "outputs": 4,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1000,
+    "y": 6200,
+    "wires": [
+      [
+        "support_reply_update_dialog_001"
+      ],
+      [
+        "support_reply_insert_message_001"
+      ],
+      [
+        "support_reply_dispatch_link_out_001",
+        "support_reply_dispatch_debug_001"
+      ],
+      [
+        "support_reply_http_resp_001",
+        "support_reply_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_reply_update_dialog_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "support_dialogs",
+    "operation": "updateOne",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Update reply dialog",
+    "x": 1290,
+    "y": 6160,
+    "wires": []
+  },
+  {
+    "id": "support_reply_insert_message_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "support_messages",
+    "operation": "insertOne",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Insert reply message",
+    "x": 1290,
+    "y": 6240,
+    "wires": [
+      [
+        "support_reply_fn_response_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_reply_fn_response_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support reply response",
+    "func": "msg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = {\n  ok: true,\n  dialog: msg._supportReplyResolved?.dialog || null,\n  message: msg._supportReplyResolved?.message || null,\n  dispatch: msg._supportReplyResolved?.dispatch || null,\n};\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1550,
+    "y": 6240,
+    "wires": [
+      [
+        "support_reply_http_resp_001"
+      ],
+      [
+        "support_reply_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_reply_http_resp_001",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 1820,
+    "y": 6200,
+    "wires": []
+  },
+  {
+    "id": "support_reply_dispatch_link_out_001",
+    "type": "link out",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support outbound dispatch",
+    "mode": "link",
+    "links": [],
+    "x": 1295,
+    "y": 6320,
+    "wires": []
+  },
+  {
+    "id": "support_reply_dispatch_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "support reply dispatch debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1570,
+    "y": 6320,
+    "wires": []
+  },
+  {
+    "id": "support_reply_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "support reply debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1810,
+    "y": 6240,
+    "wires": []
+  },
+  {
+    "id": "support_analytics_in_001",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support analytics daily",
+    "url": "/lk/support/analytics/daily",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 120,
+    "y": 6420,
+    "wires": [
+      [
+        "support_analytics_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_analytics_fn_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support analytics daily prepare",
+    "func": "const toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\n\nconst q = msg.req?.query || {};\nconst dateRaw = toStr(q.date);\nconst date = dateRaw && /^\\d{4}-\\d{2}-\\d{2}$/.test(dateRaw)\n  ? dateRaw\n  : new Date().toISOString().slice(0, 10);\nconst startTs = Date.parse(`${date}T00:00:00+03:00`);\nconst endTs = Date.parse(`${date}T23:59:59.999+03:00`) + 1;\n\nmsg._supportAnalytics = { date, startTs, endTs };\nmsg.payload = {\n  createdTs: {\n    $gte: startTs,\n    $lt: endTs,\n  },\n  deleted: { $ne: true },\n};\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 430,
+    "y": 6420,
+    "wires": [
+      [
+        "support_analytics_find_001"
+      ],
+      [
+        "support_analytics_http_resp_001"
+      ],
+      [
+        "support_analytics_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_analytics_find_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "support_messages",
+    "operation": "find",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Find support analytics messages",
+    "x": 740,
+    "y": 6420,
+    "wires": [
+      [
+        "support_analytics_fn_response_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_analytics_fn_response_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Support analytics daily response",
+    "func": "const toArray = (value) => (Array.isArray(value) ? value : []);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst maybeNumber = (value) => {\n  if (value === null || value === undefined || value === \"\") return null;\n  const parsed = Number(value);\n  return Number.isFinite(parsed) ? parsed : null;\n};\n\nconst ctx = msg._supportAnalytics || { date: new Date().toISOString().slice(0, 10) };\nconst rows = toArray(msg.payload).filter((item) => item && typeof item === \"object\");\nconst inboundRows = rows.filter((row) => row.direction === \"INBOUND\" && [\"CLIENT\", \"CALL\", \"EMAIL\", \"CRM\"].includes(row.authorType));\nconst outboundRows = rows.filter((row) => row.direction === \"OUTBOUND\" && row.authorType === \"ADMIN\");\n\nconst byStation = new Map();\nconst byTopic = new Map();\nconst byPriority = new Map();\nconst bySentiment = new Map();\nconst dialogIds = new Set();\nconst slowReplies = [];\n\nconst ensureStation = (row) => {\n  const stationId = toStr(row.stationId) || \"UNASSIGNED\";\n  const key = stationId;\n  if (!byStation.has(key)) {\n    byStation.set(key, {\n      stationId,\n      stationName: toStr(row.stationName) || \"Без станции\",\n      incomingCount: 0,\n      dialogIds: new Set(),\n      firstResponseSum: 0,\n      firstResponseCount: 0,\n      responseSum: 0,\n      responseCount: 0,\n      maxResponseMinutes: 0,\n    });\n  }\n  return byStation.get(key);\n};\n\nconst bump = (map, key) => {\n  if (!key) return;\n  map.set(key, Number(map.get(key) || 0) + 1);\n};\n\ninboundRows.forEach((row) => {\n  const station = ensureStation(row);\n  station.incomingCount += 1;\n  if (row.dialogId) {\n    station.dialogIds.add(row.dialogId);\n    dialogIds.add(row.dialogId);\n  }\n  bump(byTopic, toStr(row.ai?.topic) || \"general_support\");\n  bump(byPriority, toStr(row.ai?.priority) || \"MEDIUM\");\n  bump(bySentiment, toStr(row.ai?.sentiment) || \"NEUTRAL\");\n});\n\noutboundRows.forEach((row) => {\n  const minutes = maybeNumber(row.responseMetrics?.responseMinutes);\n  if (minutes === null || minutes <= 0) return;\n\n  const station = ensureStation(row);\n  station.responseSum += minutes;\n  station.responseCount += 1;\n  station.maxResponseMinutes = Math.max(station.maxResponseMinutes, minutes);\n  if (row.responseMetrics?.isFirstResponse) {\n    station.firstResponseSum += minutes;\n    station.firstResponseCount += 1;\n  }\n  slowReplies.push({\n    dialogId: toStr(row.dialogId),\n    stationId: station.stationId,\n    stationName: station.stationName,\n    responseMinutes: minutes,\n    createdAt: toStr(row.createdAt),\n    textPreview: toStr(row.textPreview) || \"\",\n  });\n});\n\nconst stationStats = Array.from(byStation.values())\n  .map((station) => ({\n    stationId: station.stationId,\n    stationName: station.stationName,\n    incomingCount: station.incomingCount,\n    dialogsCount: station.dialogIds.size,\n    avgFirstResponseMinutes: station.firstResponseCount > 0\n      ? Math.round((station.firstResponseSum / station.firstResponseCount) * 10) / 10\n      : null,\n    avgResponseMinutes: station.responseCount > 0\n      ? Math.round((station.responseSum / station.responseCount) * 10) / 10\n      : null,\n    maxResponseMinutes: station.responseCount > 0 ? station.maxResponseMinutes : null,\n  }))\n  .sort((left, right) => right.incomingCount - left.incomingCount);\n\nconst topicStats = Array.from(byTopic.entries())\n  .map(([topic, count]) => ({ topic, count }))\n  .sort((left, right) => right.count - left.count);\nconst priorityStats = Array.from(byPriority.entries())\n  .map(([priority, count]) => ({ priority, count }))\n  .sort((left, right) => right.count - left.count);\nconst sentimentStats = Array.from(bySentiment.entries())\n  .map(([sentiment, count]) => ({ sentiment, count }))\n  .sort((left, right) => right.count - left.count);\n\nconst overallResponseCount = outboundRows.filter((row) => maybeNumber(row.responseMetrics?.responseMinutes) !== null).length;\nconst overallResponseSum = outboundRows.reduce((sum, row) => {\n  const minutes = maybeNumber(row.responseMetrics?.responseMinutes);\n  return minutes !== null ? sum + minutes : sum;\n}, 0);\nconst overallFirstRows = outboundRows.filter((row) => row.responseMetrics?.isFirstResponse);\nconst overallFirstSum = overallFirstRows.reduce((sum, row) => {\n  const minutes = maybeNumber(row.responseMetrics?.responseMinutes);\n  return minutes !== null ? sum + minutes : sum;\n}, 0);\n\nmsg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = {\n  date: ctx.date,\n  totals: {\n    inboundMessages: inboundRows.length,\n    outboundReplies: outboundRows.length,\n    dialogs: dialogIds.size,\n    avgFirstResponseMinutes: overallFirstRows.length > 0\n      ? Math.round((overallFirstSum / overallFirstRows.length) * 10) / 10\n      : null,\n    avgResponseMinutes: overallResponseCount > 0\n      ? Math.round((overallResponseSum / overallResponseCount) * 10) / 10\n      : null,\n  },\n  byStation: stationStats,\n  byTopic: topicStats,\n  byPriority: priorityStats,\n  bySentiment: sentimentStats,\n  slowReplies: slowReplies\n    .sort((left, right) => right.responseMinutes - left.responseMinutes)\n    .slice(0, 20),\n};\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1060,
+    "y": 6420,
+    "wires": [
+      [
+        "support_analytics_http_resp_001"
+      ],
+      [
+        "support_analytics_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "support_analytics_http_resp_001",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 1360,
+    "y": 6420,
+    "wires": []
+  },
+  {
+    "id": "support_analytics_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "support analytics debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1360,
+    "y": 6460,
+    "wires": []
+  }
+]

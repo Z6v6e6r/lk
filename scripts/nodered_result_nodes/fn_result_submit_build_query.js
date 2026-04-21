@@ -82,10 +82,16 @@ if (teams.teamA.length === 0 || teams.teamB.length === 0) {
   return [null, msg, msg];
 }
 
-if (!teams.teamA.some((p) => p.phoneNorm === ctx.phone)) {
+const submitterTeam = teams.teamA.some((p) => p.phoneNorm === ctx.phone)
+  ? 'A'
+  : teams.teamB.some((p) => p.phoneNorm === ctx.phone)
+    ? 'B'
+    : null;
+
+if (!submitterTeam) {
   msg.statusCode = 403;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };
-  msg.payload = { error: 'Only player from team A can submit result' };
+  msg.payload = { error: 'Only participant can submit result' };
   return [null, msg, msg];
 }
 
@@ -97,6 +103,6 @@ if (!Number.isFinite(endTs) || endTs > Date.now()) {
   return [null, msg, msg];
 }
 
-msg._resultSubmit = Object.assign({}, ctx, { game, teams, endTs });
+msg._resultSubmit = Object.assign({}, ctx, { game, teams, endTs, submitterTeam });
 msg.payload = { gameId: game.id, deleted: { $ne: true } };
 return [msg, null, msg];

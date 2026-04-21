@@ -20,7 +20,13 @@ if (!gameId) {
 }
 
 const body = (msg.payload && typeof msg.payload === 'object') ? msg.payload : {};
-const phone = normPhone(body.phone || body.confirmerPhone || body.playerPhone || msg.req?.query?.phone);
+const phone = normPhone(
+  body.phone
+  || body.disputerPhone
+  || body.playerPhone
+  || body.confirmerPhone
+  || msg.req?.query?.phone,
+);
 if (!phone) {
   msg.statusCode = 400;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };

@@ -21,6 +21,20 @@ export function getCustomField(
   return profile.customFields?.find((field) => field?.id === fieldId);
 }
 
+export function hasTournamentHostingAccess(profile: UserProfileType): boolean {
+  const tournamentsField = getCustomField(profile, CUSTOM_FIELD_IDS.tournamentsAccess);
+  const tournamentsAccessValue = tournamentsField?.value?.[0];
+
+  return tournamentsAccessValue === "проводит турниры"
+    || Boolean(
+      tournamentsField?.attributes?.options?.some(
+        (option) =>
+          option.id === tournamentsAccessValue
+          && option.name.toLowerCase() === "проводит турниры",
+      ),
+    );
+}
+
 export function parseNumericLevel(value?: string): number | null {
   if (!value) return null;
   const normalized = value.replace(",", ".");

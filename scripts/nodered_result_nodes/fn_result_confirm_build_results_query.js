@@ -82,10 +82,13 @@ if (teams.teamA.length === 0 || teams.teamB.length === 0) {
   return [null, msg, msg];
 }
 
-if (!teams.teamB.some((p) => p.phoneNorm === ctx.phone)) {
+const isParticipant = teams.teamA.some((p) => p.phoneNorm === ctx.phone)
+  || teams.teamB.some((p) => p.phoneNorm === ctx.phone);
+
+if (!isParticipant) {
   msg.statusCode = 403;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };
-  msg.payload = { error: 'Only player from team B can confirm result' };
+  msg.payload = { error: 'Only participant can dispute result' };
   return [null, msg, msg];
 }
 

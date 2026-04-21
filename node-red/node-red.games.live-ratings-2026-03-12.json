@@ -1,0 +1,231 @@
+[
+  {
+    "id": "7d2b2a4f6f9d4101",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "LK games live ratings",
+    "url": "/lk/games/ratings/live",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 180,
+    "y": 1980,
+    "wires": [
+      [
+        "2b7f1f8c8a6242a1"
+      ]
+    ]
+  },
+  {
+    "id": "2b7f1f8c8a6242a1",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Validate live ratings request",
+    "func": "const asArray = (v) => (Array.isArray(v) ? v : []);\nconst toStr = (v) => {\n  if (v === null || v === undefined) return null;\n  const s = String(v).trim();\n  return s ? s : null;\n};\nconst toNum = (v) => {\n  if (v === null || v === undefined || v === \"\") return null;\n  const n = Number(String(v).replace(\",\", \".\"));\n  return Number.isFinite(n) ? n : null;\n};\nconst normPhone = (v) => {\n  const s = String(v || \"\").replace(/\\D/g, \"\");\n  if (!s) return null;\n  if (s.length === 10) return `7${s}`;\n  if (s.length === 11 && s.startsWith(\"8\")) return `7${s.slice(1)}`;\n  return s;\n};\n\nconst body = msg.payload && typeof msg.payload === \"object\" ? msg.payload : {};\nconst rawPlayers = asArray(body.players || body.items);\nconst players = rawPlayers\n  .map((item) => {\n    const p = item && typeof item === \"object\" ? item : {};\n    return {\n      clientId: toStr(p.clientId || p.id),\n      phoneNorm: normPhone(p.phone || p.phoneNorm || p.phoneNumber),\n      name: toStr(p.name),\n      rating: toStr(p.rating || p.level || p.grade),\n      ratingNumeric: toNum(p.ratingNumeric || p.numericRating || p.levelNumeric),\n    };\n  })\n  .filter((p) => p.clientId || p.phoneNorm);\n\nif (players.length === 0) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"players[] is required\" };\n  return [null, msg, msg];\n}\n\nmsg._liveRatingsCtx = { players };\nmsg.payload = players;\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 450,
+    "y": 1980,
+    "wires": [
+      [
+        "f4b6f5a9de214801"
+      ],
+      [
+        "1d8e2f5b9c684d5c"
+      ],
+      [
+        "3f66f7265b354c77"
+      ]
+    ]
+  },
+  {
+    "id": "f4b6f5a9de214801",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Get Viva admin token (live)",
+    "func": "const token = global.get(\"vivacrm_access_token\");\nif (!token) {\n  msg.statusCode = 503;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Viva admin token is missing in global context\" };\n  return [null, msg, msg];\n}\n\nmsg.vivaToken = token;\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 720,
+    "y": 1980,
+    "wires": [
+      [
+        "9bc3abccf76a4fd2"
+      ],
+      [
+        "1d8e2f5b9c684d5c"
+      ],
+      [
+        "3f66f7265b354c77"
+      ]
+    ]
+  },
+  {
+    "id": "9bc3abccf76a4fd2",
+    "type": "split",
+    "z": "1e95dcebc274ac6c",
+    "name": "Split players for live rating",
+    "splt": "\\n",
+    "spltType": "str",
+    "arraySplt": 1,
+    "arraySpltType": "len",
+    "stream": false,
+    "addname": "payload",
+    "x": 980,
+    "y": 1980,
+    "wires": [
+      [
+        "0c8f7b2a9d4d4ec0"
+      ]
+    ]
+  },
+  {
+    "id": "0c8f7b2a9d4d4ec0",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Build Viva client rating request",
+    "func": "const player = msg.payload && typeof msg.payload === \"object\" ? msg.payload : {};\nmsg._livePlayer = player;\n\nif (!player.clientId) {\n  msg.payload = {\n    clientId: null,\n    phoneNorm: player.phoneNorm || null,\n    name: player.name || null,\n    rating: player.rating || null,\n    ratingNumeric:\n      Number.isFinite(Number(player.ratingNumeric)) ? Number(player.ratingNumeric) : null,\n    source: \"NO_CLIENT_ID\",\n  };\n  return [null, msg, msg];\n}\n\nmsg.method = \"GET\";\nmsg.url = `https://api.vivacrm.ru/api/v1/clients/${encodeURIComponent(player.clientId)}`;\nmsg.headers = { Authorization: `Bearer ${msg.vivaToken}` };\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1250,
+    "y": 1980,
+    "wires": [
+      [
+        "d1529d6e3ec5453b"
+      ],
+      [
+        "2e9fd4e3d0ce4d77"
+      ],
+      [
+        "3f66f7265b354c77"
+      ]
+    ]
+  },
+  {
+    "id": "d1529d6e3ec5453b",
+    "type": "http request",
+    "z": "1e95dcebc274ac6c",
+    "name": "Viva Admin client (live rating)",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "x": 1540,
+    "y": 1940,
+    "wires": [
+      [
+        "6c4a4e5a58f94b85"
+      ]
+    ]
+  },
+  {
+    "id": "6c4a4e5a58f94b85",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Parse live rating from Viva",
+    "func": "const LK_FIELD_ID = \"f9790818-25fd-4b73-a781-79c02720727d\";\nconst NUM_FIELD_ID = \"eabfe27b-3f72-4496-9185-1a2ec6e6465e\";\n\nconst player = msg._livePlayer || {};\nconst toNum = (v) => {\n  if (v === null || v === undefined || v === \"\") return null;\n  const n = Number(String(v).replace(\",\", \".\"));\n  return Number.isFinite(n) ? n : null;\n};\nconst getField = (client, id) => {\n  const list = Array.isArray(client?.customFields) ? client.customFields : [];\n  const found = list.find((field) => field && field.id === id);\n  const value = Array.isArray(found?.value) ? found.value[0] : null;\n  return value == null ? null : String(value).trim() || null;\n};\n\nif (msg.statusCode !== 200 || !msg.payload || typeof msg.payload !== \"object\") {\n  msg.payload = {\n    clientId: player.clientId || null,\n    phoneNorm: player.phoneNorm || null,\n    name: player.name || null,\n    rating: player.rating || null,\n    ratingNumeric: toNum(player.ratingNumeric),\n    source: `FALLBACK_HTTP_${String(msg.statusCode || \"ERR\")}`,\n  };\n  return msg;\n}\n\nconst client = msg.payload;\nconst levelLetter = getField(client, LK_FIELD_ID);\nconst levelNumeric = toNum(getField(client, NUM_FIELD_ID));\n\nmsg.payload = {\n  clientId: player.clientId || null,\n  phoneNorm: player.phoneNorm || null,\n  name: player.name || null,\n  rating: levelLetter || player.rating || null,\n  ratingNumeric: levelNumeric ?? toNum(player.ratingNumeric),\n  source: levelNumeric != null ? \"VIVA_NUMERIC\" : levelLetter ? \"VIVA_LETTER\" : \"FALLBACK_EMPTY\",\n};\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1810,
+    "y": 1940,
+    "wires": [
+      [
+        "2e9fd4e3d0ce4d77"
+      ]
+    ]
+  },
+  {
+    "id": "2e9fd4e3d0ce4d77",
+    "type": "join",
+    "z": "1e95dcebc274ac6c",
+    "name": "Join live rating results",
+    "mode": "auto",
+    "build": "array",
+    "property": "payload",
+    "propertyType": "msg",
+    "key": "topic",
+    "joiner": "\\n",
+    "joinerType": "str",
+    "useparts": true,
+    "accumulate": false,
+    "timeout": "",
+    "count": "",
+    "reduceRight": false,
+    "reduceExp": "",
+    "reduceInit": "",
+    "reduceInitType": "",
+    "reduceFixup": "",
+    "x": 1810,
+    "y": 2020,
+    "wires": [
+      [
+        "4f3d6aa5d2b74f7d"
+      ]
+    ]
+  },
+  {
+    "id": "4f3d6aa5d2b74f7d",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Build live rating response",
+    "func": "const asArray = (v) => (Array.isArray(v) ? v : []);\n\nmsg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = {\n  items: asArray(msg.payload),\n  fetchedAt: new Date().toISOString(),\n};\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 2070,
+    "y": 2020,
+    "wires": [
+      [
+        "1d8e2f5b9c684d5c"
+      ],
+      [
+        "3f66f7265b354c77"
+      ]
+    ]
+  },
+  {
+    "id": "1d8e2f5b9c684d5c",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 2320,
+    "y": 1980,
+    "wires": []
+  },
+  {
+    "id": "3f66f7265b354c77",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "live ratings debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 2320,
+    "y": 2020,
+    "wires": []
+  }
+]

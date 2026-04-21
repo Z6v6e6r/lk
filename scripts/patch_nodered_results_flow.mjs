@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { transformFlowToMongo4 } from './nodered_mongodb4_transform.mjs';
 
-const srcPath = '/Users/zver/Desktop/project-fixed 6/ЛК03_03_26.with_games_chat.json';
-const outPath = '/Users/zver/Desktop/project-fixed 6/ЛК03_03_26.with_games_chat_results.json';
+const srcPath = '/Users/zver/Desktop/project-fixed 6/node-red/ЛК03_03_26.with_games_chat.json';
+const outPath = '/Users/zver/Desktop/project-fixed 6/node-red/ЛК03_03_26.with_games_chat_results.json';
 const fnDir = '/Users/zver/Desktop/project-fixed 6/scripts/nodered_result_nodes';
 
 const readFn = (name) => fs.readFileSync(path.join(fnDir, name), 'utf8');
@@ -71,8 +72,8 @@ const nodes = [
     id: 'result_comment_001',
     type: 'comment',
     z: tabId,
-    name: 'LK game results (submit by team A, confirm by team B, rating update)',
-    info: 'После окончания игры: ввод результата игроком команды A, подтверждение игроком команды B, пересчет рейтингов.',
+    name: 'LK game results (submit, 24h dispute window, auto-agreement)',
+    info: 'После окончания игры: одна из команд вносит результат, противоположная команда может оспорить его в течение 24 часов.',
     x: 300,
     y: 3700,
     wires: [],
@@ -335,8 +336,8 @@ const nodes = [
     id: 'result_confirm_in_001',
     type: 'http in',
     z: tabId,
-    name: 'LK game result confirm',
-    url: '/lk/games/:gameId/result/confirm',
+    name: 'LK game result dispute',
+    url: '/lk/games/:gameId/result/dispute',
     method: 'post',
     upload: false,
     swaggerDoc: '',
@@ -348,7 +349,7 @@ const nodes = [
     id: 'result_confirm_fn_prepare_001',
     type: 'function',
     z: tabId,
-    name: 'Result confirm validate',
+    name: 'Result dispute validate',
     func: fnResultConfirmPrepare,
     outputs: 3,
     timeout: '',
@@ -365,7 +366,7 @@ const nodes = [
     type: 'mongodb in',
     z: tabId,
     mongodb: 'mongo_lk',
-    name: 'Find game for result confirm',
+    name: 'Find game for result dispute',
     collection: 'lk_games',
     operation: 'find',
     x: 690,
@@ -376,7 +377,7 @@ const nodes = [
     id: 'result_confirm_fn_build_results_query_001',
     type: 'function',
     z: tabId,
-    name: 'Validate confirmer + build results query',
+    name: 'Validate disputer + build results query',
     func: fnResultConfirmBuildResultsQuery,
     outputs: 3,
     timeout: '',
@@ -393,7 +394,7 @@ const nodes = [
     type: 'mongodb in',
     z: tabId,
     mongodb: 'mongo_lk',
-    name: 'Find pending results',
+    name: 'Find disputable results',
     collection: 'lk_game_results',
     operation: 'find',
     x: 1260,
@@ -404,7 +405,7 @@ const nodes = [
     id: 'result_confirm_fn_prepare_ratings_query_001',
     type: 'function',
     z: tabId,
-    name: 'Pick pending + build ratings query',
+    name: 'Pick pending + validate dispute',
     func: fnResultConfirmPrepareRatingsQuery,
     outputs: 3,
     timeout: '',
@@ -421,7 +422,7 @@ const nodes = [
     type: 'mongodb in',
     z: tabId,
     mongodb: 'mongo_lk',
-    name: 'Find players ratings',
+    name: 'Find players for dispute context',
     collection: 'player_ratings',
     operation: 'find',
     x: 1790,
@@ -432,7 +433,7 @@ const nodes = [
     id: 'result_confirm_fn_apply_001',
     type: 'function',
     z: tabId,
-    name: 'Confirm result + calc rating',
+    name: 'Dispute result',
     func: fnResultConfirmApply,
     outputs: 5,
     timeout: '',
@@ -455,7 +456,7 @@ const nodes = [
     type: 'mongodb out',
     z: tabId,
     mongodb: 'mongo_lk',
-    name: 'Update result confirmed',
+    name: 'Update result disputed',
     collection: 'lk_game_results',
     payonly: false,
     upsert: false,
@@ -516,7 +517,7 @@ const nodes = [
     type: 'mongodb out',
     z: tabId,
     mongodb: 'mongo_lk',
-    name: 'Update game result status',
+    name: 'Update game dispute status',
     collection: 'lk_games',
     payonly: false,
     upsert: false,
@@ -539,7 +540,7 @@ const nodes = [
     id: 'result_confirm_debug_001',
     type: 'debug',
     z: tabId,
-    name: 'result confirm debug',
+    name: 'result dispute debug',
     active: false,
     tosidebar: true,
     console: false,
@@ -554,6 +555,7 @@ const nodes = [
 ];
 
 filtered.push(...nodes);
-fs.writeFileSync(outPath, JSON.stringify(filtered, null, 4), 'utf8');
+const mongo4Flow = transformFlowToMongo4(filtered);
+fs.writeFileSync(outPath, JSON.stringify(mongo4Flow, null, 4), 'utf8');
 console.log(`Patched flow written to: ${outPath}`);
-console.log(`Total nodes: ${filtered.length}`);
+console.log(`Total nodes: ${mongo4Flow.length}`);

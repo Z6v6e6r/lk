@@ -1,21 +1,44 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Modal } from "../UI/Modal";
 import {
+  apiCancelBooking,
+  apiFetchBookings,
   apiCreateAmericanoTournament,
-  apiFetchExercisesByDate,
+  apiFetchExercisesByVisibleDate,
+  apiFetchPadelLiveRatings,
   apiFetchProfile,
+  apiFetchTournamentHistory,
   apiFetchTournamentParticipants,
+  apiSaveOnboardingLevel,
   getServ2Origin,
   apiUpdateAmericanoResults,
 } from "../../utils/apiClient";
 import type {
   AmericanoTournamentPayload,
   AmericanoResultsResponse,
+  Booking,
   Exercise,
   ExerciseBooking,
+  TournamentHistoryRecord,
   UserProfileType,
 } from "../../utils/apiClient";
 import { TENANT_KEY } from "../../consts/api_config";
+import {
+  CUSTOM_FIELD_IDS,
+  getCustomFieldValue,
+  getLetterGrade,
+  hasTournamentHostingAccess,
+  parseNumericLevel,
+} from "../../utils/customFields";
+import {
+  buildAmericanoStandings,
+  createAmericanoRounds,
+  hydrateAmericanoRounds,
+  parseTournamentRatingValue,
+  serializeAmericanoRounds,
+  type AmericanoLabParticipant as ParticipantEntry,
+  type AmericanoLabRound as TournamentRound,
+} from "./americanoLab";
 
 interface TournamentsPageProps {
   onBack: () => void;
@@ -37,6 +60,16 @@ const HTML_TO_IMAGE_CDN =
 type HtmlToImageApi = {
   toPng: (node: HTMLElement, options?: Record<string, unknown>) => Promise<string>;
   toJpeg: (node: HTMLElement, options?: Record<string, unknown>) => Promise<string>;
+};
+
+const TOURNAMENT_LEVEL_BADGE_COLORS: Record<string, string> = {
+  A: "rgb(130, 100, 255)",
+  "B+": "rgb(160, 84, 230)",
+  B: "rgb(191, 68, 196)",
+  "C+": "rgb(216, 58, 149)",
+  C: "rgb(226, 67, 99)",
+  "D+": "rgb(236, 99, 57)",
+  D: "rgb(241, 138, 43)",
 };
 
 declare global {
@@ -74,6 +107,47 @@ function formatTime(timeStr?: string) {
   return timeStr ? timeStr.slice(11, 16) : "";
 }
 
+function getExerciseDateKey(exercise?: Exercise | null) {
+  if (!exercise?.timeFrom) return null;
+  const parsed = new Date(exercise.timeFrom);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return formatDate(parsed);
+}
+
+function mergeTournamentExercises(primary: Exercise[], bookings: Booking[], dateKey: string) {
+  const merged = new Map<string, Exercise>();
+
+  primary.forEach((exercise) => {
+    const id = String(exercise?.id || "").trim();
+    if (!id) return;
+    merged.set(id, exercise);
+  });
+
+  bookings.forEach((booking) => {
+    const exercise = booking.exercise ?? null;
+    const id = String(exercise?.id || "").trim();
+    if (!exercise || !id) return;
+    if (getExerciseDateKey(exercise) !== dateKey) return;
+    if (!merged.has(id)) {
+      merged.set(id, exercise);
+    }
+  });
+
+  return Array.from(merged.values()).sort((left, right) => {
+    const leftTs = new Date(left.timeFrom || 0).getTime();
+    const rightTs = new Date(right.timeFrom || 0).getTime();
+    return leftTs - rightTs;
+  });
+}
+
+function normalizeTournamentPhone(value?: string | null) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.length === 10) return `7${digits}`;
+  if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
+  return digits;
+}
+
 function getClientName(booking: ExerciseBooking, index: number) {
   const client = booking.client as ExerciseBooking["client"] | undefined;
   const parts = [client?.firstName, client?.lastName].filter(Boolean);
@@ -95,49 +169,173 @@ function getInitialsFromName(name?: string | null) {
   return initials.toUpperCase() || "U";
 }
 
-type ParticipantEntry = {
-  id: string;
-  name: string;
-  photo?: string | null;
-  phone?: string | null;
-  spot?: number | null;
-  rating?: string | null;
-};
-
-type TournamentMatch = {
-  id: string;
-  court: string;
-  pair1: ParticipantEntry[];
-  pair2: ParticipantEntry[];
-  score1: number | null;
-  score2: number | null;
-  saved?: boolean;
-};
-
-type TournamentRound = {
-  id: string;
-  index: number;
-  matches: TournamentMatch[];
-  collapsed: boolean;
-  saved: boolean;
-};
-
-function parseRatingValue(value: string | number | null | undefined) {
-  if (value == null) return null;
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  const normalized = value.replace(",", ".").trim();
-  const digits = normalized.replace(/\D/g, "");
-  if (digits.length >= 10) return null; // похоже на телефон
-  const parsed = Number.parseFloat(normalized);
-  if (!Number.isFinite(parsed)) return null;
-  if (parsed < 0 || parsed > 10) return null;
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 function formatRating(value: number) {
   return value.toLocaleString("ru-RU", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
+  });
+}
+
+function pickTournamentMinRatingSource(
+  tournament: Exercise | null,
+  historyRecord?: TournamentHistoryRecord | null,
+) {
+  if (historyRecord?.minRating) return historyRecord.minRating;
+
+  const tournamentRecord = tournament as (Exercise & {
+    settings?: {
+      minRating?: string | null;
+      ratingFrom?: string | null;
+      ratingMin?: string | null;
+    };
+    minRating?: string | null;
+    ratingFrom?: string | null;
+    ratingMin?: string | null;
+  }) | null;
+
+  return (
+    tournamentRecord?.settings?.minRating
+    ?? tournamentRecord?.settings?.ratingFrom
+    ?? tournamentRecord?.settings?.ratingMin
+    ?? tournamentRecord?.minRating
+    ?? tournamentRecord?.ratingFrom
+    ?? tournamentRecord?.ratingMin
+    ?? null
+  );
+}
+
+function resolveTournamentMinRating(
+  tournament: Exercise | null,
+  historyRecord?: TournamentHistoryRecord | null,
+) {
+  const rawMinRating = pickTournamentMinRatingSource(tournament, historyRecord);
+  const minRatingValue = parseTournamentRatingValue(rawMinRating) ?? 1;
+
+  return {
+    raw: rawMinRating,
+    value: minRatingValue,
+    display: rawMinRating?.trim() || formatRating(minRatingValue),
+  };
+}
+
+function parseBoundedIntegerInput(value: string, min: number, max: number) {
+  const digits = value.replace(/[^\d]/g, "");
+  if (!digits) return null;
+  const parsed = Number.parseInt(digits, 10);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) return null;
+  return parsed;
+}
+
+function formatTournamentNumber(value: number, maximumFractionDigits = 2) {
+  return value.toLocaleString("ru-RU", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits,
+  });
+}
+
+function formatSignedTournamentNumber(value: number, maximumFractionDigits = 2) {
+  const formatted = formatTournamentNumber(Math.abs(value), maximumFractionDigits);
+  if (value > 0) return `+${formatted}`;
+  if (value < 0) return `-${formatted}`;
+  return "0";
+}
+
+function formatStatsRatingBadge(value: number) {
+  return getLetterGrade(value);
+}
+
+function getTournamentRatingBadgeStyle(value: number | null): CSSProperties | undefined {
+  if (value == null) return undefined;
+  const grade = getLetterGrade(value);
+  const backgroundColor = TOURNAMENT_LEVEL_BADGE_COLORS[grade] ?? "#000000";
+
+  return {
+    backgroundColor,
+    color: "#FFFFFF",
+    borderColor: "rgba(255, 255, 255, 0.28)",
+  };
+}
+
+function getTournamentRatingRingProgress(value: number | null) {
+  if (value == null) return 0;
+  return Math.max(0, Math.min(1, value / 7));
+}
+
+function getQualityTone(score: number) {
+  if (score >= 90) return "high";
+  if (score >= 75) return "good";
+  if (score >= 60) return "normal";
+  return "risk";
+}
+
+function applyPartialRoundUpdates(
+  currentRounds: TournamentRound[],
+  incomingRounds: TournamentRound[],
+) {
+  const incomingRoundIds = new Set(incomingRounds.map((round) => round.id));
+  const hasFullSchedule =
+    incomingRounds.length >= currentRounds.length
+    && currentRounds.every((round) => incomingRoundIds.has(round.id));
+
+  if (hasFullSchedule) {
+    return incomingRounds;
+  }
+
+  const incomingRoundMap = new Map(incomingRounds.map((round) => [round.id, round]));
+  const incomingMatchMap = new Map<string, TournamentRound["matches"][number]>();
+
+  incomingRounds.forEach((round) => {
+    round.matches.forEach((match) => {
+      incomingMatchMap.set(`${round.id}::${match.id}`, match);
+    });
+  });
+
+  return currentRounds.map((round) => {
+    const incomingRound = incomingRoundMap.get(round.id);
+    const nextMatches = round.matches.map((match) => {
+      const incomingMatch =
+        incomingMatchMap.get(`${round.id}::${match.id}`)
+        ?? incomingRound?.matches.find((candidate) => candidate.id === match.id);
+      if (!incomingMatch) return match;
+      return {
+        ...match,
+        score1: incomingMatch.score1,
+        score2: incomingMatch.score2,
+        saved: incomingMatch.score1 != null && incomingMatch.score2 != null,
+      };
+    });
+
+    return {
+      ...round,
+      matches: nextMatches,
+      saved: nextMatches.length > 0 && nextMatches.every((match) => match.saved),
+    };
+  });
+}
+
+function findTournamentMatch(
+  rounds: TournamentRound[],
+  roundId: string,
+  matchId: string,
+) {
+  return rounds
+    .find((round) => round.id === roundId)
+    ?.matches.find((match) => match.id === matchId) ?? null;
+}
+
+function advanceTournamentRoundAfterSave(
+  rounds: TournamentRound[],
+  completedRoundId: string,
+  shouldAdvance: boolean,
+) {
+  if (!shouldAdvance) return rounds;
+  const completedRoundIndex = rounds.findIndex((round) => round.id === completedRoundId);
+  if (completedRoundIndex < 0 || completedRoundIndex >= rounds.length - 1) return rounds;
+
+  return rounds.map((round, index) => {
+    if (index === completedRoundIndex) return { ...round, collapsed: true };
+    if (index === completedRoundIndex + 1) return { ...round, collapsed: false };
+    return round;
   });
 }
 
@@ -146,43 +344,263 @@ function toNumberSafe(value: unknown, fallback = 0) {
   return Number.isFinite(num) ? num : fallback;
 }
 
+type TournamentProgressState = "not_started" | "in_progress" | "completed";
+
+function toTimestamp(value?: string | null) {
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function pickLatestTournamentHistory(records: TournamentHistoryRecord[] | null | undefined) {
+  if (!Array.isArray(records) || records.length === 0) return null;
+  return [...records].sort((left, right) => {
+    const timeGap =
+      toTimestamp(right.updatedAt ?? right.createdAt) - toTimestamp(left.updatedAt ?? left.createdAt);
+    if (timeGap !== 0) return timeGap;
+    return String(right.id).localeCompare(String(left.id), "ru");
+  })[0] ?? null;
+}
+
+function normalizeTournamentTypeKey(value: string | null | undefined) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized.includes("americano") || normalized.includes("американо")) return "americano";
+  if (normalized.includes("mexicano") || normalized.includes("мексикано")) return "mexicano";
+  return normalized;
+}
+
+function getTournamentTypeLabel(value: string | null | undefined) {
+  const typeKey = normalizeTournamentTypeKey(value);
+  if (typeKey === "americano") return "Американо";
+  if (typeKey === "mexicano") return "Мексикано";
+  return String(value || "").trim() || "Турнир";
+}
+
+function isCompletedHistoryMatch(value: unknown) {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return record.score1 != null && record.score2 != null;
+}
+
+function getTournamentProgressState(history: TournamentHistoryRecord | null | undefined): TournamentProgressState {
+  if (!history) return "not_started";
+  const matches = Array.isArray(history.rounds)
+    ? history.rounds.flatMap((round) => {
+      if (!round || typeof round !== "object") return [];
+      const roundMatches = (round as { matches?: unknown[] }).matches;
+      return Array.isArray(roundMatches) ? roundMatches : [];
+    })
+    : [];
+  if (matches.length === 0) return "in_progress";
+  return matches.every((match) => isCompletedHistoryMatch(match)) ? "completed" : "in_progress";
+}
+
+function formatCourtsCountLabel(count: number) {
+  const lastDigit = count % 10;
+  const lastTwoDigits = count % 100;
+  if (lastDigit === 1 && lastTwoDigits !== 11) return `${count} корт`;
+  if (lastDigit >= 2 && lastDigit <= 4 && (lastTwoDigits < 12 || lastTwoDigits > 14)) {
+    return `${count} корта`;
+  }
+  return `${count} кортов`;
+}
+
+function isTournamentTrainer(exercise: Exercise, currentUserId: string | null) {
+  if (!currentUserId) return false;
+  return (exercise.trainers ?? []).some((trainer) => (trainer.id || "").trim() === currentUserId);
+}
+
+function buildTournamentPayloadFromHistory(history: TournamentHistoryRecord): AmericanoTournamentPayload | null {
+  if (normalizeTournamentTypeKey(history.tournamentType) !== "americano") return null;
+
+  return {
+    tournamentId: history.tournamentId,
+    tenantKey: TENANT_KEY,
+    createdAt: history.createdAt ?? history.updatedAt ?? new Date().toISOString(),
+    organizer: {
+      id: history.organizer?.id ?? null,
+      phone: history.organizer?.phone ?? null,
+      tenantKey: TENANT_KEY,
+    },
+    tournamentType: "americano",
+    targetScore: history.targetScore ?? 21,
+    courts: history.courts.length > 0 ? history.courts : ["Корт №1"],
+    participants: history.participants.map((participant, index) => ({
+      id: participant.id ?? participant.phone ?? `participant-${index}`,
+      phone: participant.phone ?? null,
+      rating: participant.rating ?? null,
+      photo: participant.photo ?? null,
+      name: participant.name || `Участник ${index + 1}`,
+    })),
+    rounds: history.rounds as AmericanoTournamentPayload["rounds"],
+  };
+}
+
+function buildTournamentHistoryRecordFromPayload(
+  payload: AmericanoTournamentPayload,
+  tournament: Exercise | null,
+  previousHistory?: TournamentHistoryRecord | null,
+  totals?: AmericanoResultsResponse["totals"] | null,
+  playerLogs?: AmericanoResultsResponse["playerLogs"] | null,
+): TournamentHistoryRecord {
+  const girlsOnly = previousHistory?.girlsOnly ?? tournament?.girlsOnly ?? null;
+
+  return {
+    id: payload.tournamentId,
+    tournamentId: payload.tournamentId,
+    title:
+      previousHistory?.title
+      ?? tournament?.direction?.name
+      ?? tournament?.type?.name
+      ?? getTournamentTypeLabel(payload.tournamentType),
+    tournamentType: payload.tournamentType,
+    targetScore: payload.targetScore,
+    courts: [...payload.courts],
+    participants: payload.participants.map((participant, index) => ({
+      id: participant.id ?? participant.phone ?? `participant-${index}`,
+      phone: participant.phone ?? null,
+      photo: participant.photo ?? null,
+      rating: participant.rating ?? null,
+      name: participant.name || `Участник ${index + 1}`,
+    })),
+    participantsCount: payload.participants.length,
+    maxParticipants: previousHistory?.maxParticipants ?? tournament?.maxClientsCount ?? null,
+    minRating: previousHistory?.minRating ?? null,
+    maxRating: previousHistory?.maxRating ?? null,
+    genderLabel: previousHistory?.genderLabel ?? (girlsOnly ? "Женщины" : null),
+    girlsOnly,
+    mixed: previousHistory?.mixed ?? null,
+    organizer:
+      previousHistory?.organizer
+      ?? (payload.organizer.id || payload.organizer.phone
+        ? {
+          id: payload.organizer.id ?? null,
+          phone: payload.organizer.phone ?? null,
+          photo: null,
+          rating: null,
+          name: "Организатор",
+        }
+        : null),
+    params: previousHistory?.params ?? null,
+    rounds: payload.rounds ?? [],
+    standings: previousHistory?.standings ?? [],
+    summary: previousHistory?.summary ?? null,
+    totals: totals ?? previousHistory?.totals ?? null,
+    playerLogs: playerLogs ?? previousHistory?.playerLogs ?? null,
+    createdAt: previousHistory?.createdAt ?? payload.createdAt,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 interface TournamentDetailsModalProps {
   isOpen: boolean;
   onClose: () => void;
   tournament: Exercise | null;
+  historyRecord?: TournamentHistoryRecord | null;
   onSaved: (data: AmericanoTournamentPayload) => void;
 }
 
-function TournamentDetailsModal({ isOpen, onClose, tournament, onSaved }: TournamentDetailsModalProps) {
+type TournamentParticipantEntry = ParticipantEntry & {
+  bookingId: string | null;
+  clientId: string | null;
+  isOrganizerSlot?: boolean;
+};
+
+type TournamentMissingRatingConfirmation = {
+  missingCount: number;
+  minRatingDisplay: string;
+};
+
+function TournamentDetailsModal({
+  isOpen,
+  onClose,
+  tournament,
+  historyRecord = null,
+  onSaved,
+}: TournamentDetailsModalProps) {
   const [loading, setLoading] = useState(false);
   const [participants, setParticipants] = useState<ExerciseBooking[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedType, setSelectedType] = useState<string | null>(null);
-  const [courtsCount, setCourtsCount] = useState("");
+  const [courtsCountDraft, setCourtsCountDraft] = useState("");
   const [courtNames, setCourtNames] = useState<string[]>([]);
   const [targetScore, setTargetScore] = useState(21);
+  const [targetScoreDraft, setTargetScoreDraft] = useState("21");
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [manualRatings, setManualRatings] = useState<Record<string, string>>({});
+  const [ratingSaveStateById, setRatingSaveStateById] = useState<Record<string, "idle" | "saving">>({});
+  const [ratingSaveErrors, setRatingSaveErrors] = useState<Record<string, string>>({});
+  const [refreshingRatings, setRefreshingRatings] = useState(false);
+  const [refreshRatingsError, setRefreshRatingsError] = useState<string | null>(null);
+  const [missingRatingConfirmation, setMissingRatingConfirmation] =
+    useState<TournamentMissingRatingConfirmation | null>(null);
+  const [organizerSlotRating, setOrganizerSlotRating] = useState<string | null>(null);
+  const [leavingParticipantId, setLeavingParticipantId] = useState<string | null>(null);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
+  const [autoRefreshedParticipantsKey, setAutoRefreshedParticipantsKey] = useState("");
 
   useEffect(() => {
     if (!selectedType) {
-      setCourtsCount("");
+      setCourtsCountDraft("");
       setCourtNames([]);
       setTargetScore(21);
+      setTargetScoreDraft("21");
       setSaveState("idle");
       setManualRatings({});
+      setRatingSaveStateById({});
+      setRatingSaveErrors({});
+      setRefreshingRatings(false);
+      setRefreshRatingsError(null);
+      setMissingRatingConfirmation(null);
+      setOrganizerSlotRating(null);
+      setLeavingParticipantId(null);
+      setLeaveError(null);
+      setAutoRefreshedParticipantsKey("");
     }
   }, [selectedType]);
 
-  const handleCourtsCountChange = (value: string) => {
-    setCourtsCount(value);
-    const digits = value.replace(/[^\d]/g, "");
-    const parsed = digits ? Number.parseInt(digits, 10) : 0;
-    const count = Math.max(0, Math.min(12, parsed));
+  useEffect(() => {
+    if (!isOpen) return;
+    const restoredType = normalizeTournamentTypeKey(historyRecord?.tournamentType);
+    const restoredCourts = Array.isArray(historyRecord?.courts) ? historyRecord.courts : [];
+    const restoredTargetScore = historyRecord?.targetScore ?? 21;
+    setSelectedType(restoredType === "americano" || restoredType === "mexicano" ? restoredType : null);
+    setCourtsCountDraft(restoredCourts.length > 0 ? String(restoredCourts.length) : "");
+    setCourtNames(restoredCourts);
+    setTargetScore(restoredTargetScore);
+    setTargetScoreDraft(String(restoredTargetScore));
+    setSaveState("idle");
+    setManualRatings({});
+    setRatingSaveStateById({});
+    setRatingSaveErrors({});
+    setRefreshingRatings(false);
+    setRefreshRatingsError(null);
+    setMissingRatingConfirmation(null);
+    setOrganizerSlotRating(null);
+    setLeavingParticipantId(null);
+    setLeaveError(null);
+    setAutoRefreshedParticipantsKey("");
+  }, [isOpen, historyRecord, tournament?.id]);
+
+  const applyCourtsCount = (count: number) => {
     setCourtNames((prev) =>
       Array.from({ length: count }, (_, idx) => prev[idx] ?? `Корт №${idx + 1}`),
     );
+  };
+
+  const handleCourtsCountSave = () => {
+    const parsedCount = parseBoundedIntegerInput(courtsCountDraft, 1, 12);
+    if (parsedCount == null) return;
+    applyCourtsCount(parsedCount);
+    setCourtsCountDraft(String(parsedCount));
+  };
+
+  const handleTargetScoreSave = () => {
+    const parsedScore = parseBoundedIntegerInput(targetScoreDraft, 1, 99);
+    if (parsedScore == null) return;
+    setTargetScore(parsedScore);
+    setTargetScoreDraft(String(parsedScore));
   };
 
   useEffect(() => {
@@ -192,12 +610,31 @@ function TournamentDetailsModal({ isOpen, onClose, tournament, onSaved }: Tourna
     });
   }, [isOpen]);
 
-  const handleSaveAmericano = async () => {
+  const handleSaveAmericano = async (allowMissingRatings = false) => {
     if (!tournament) return;
+    const minRating = resolveTournamentMinRating(tournament, historyRecord);
+    const missingParticipants = sortedParticipants.filter((participant) => {
+      const manualRating = manualRatings[participant.id];
+      const ratingValue = parseTournamentRatingValue(manualRating ?? participant.rating);
+      return ratingValue == null;
+    });
+
+    if (!allowMissingRatings && missingParticipants.length > 0) {
+      setMissingRatingConfirmation({
+        missingCount: missingParticipants.length,
+        minRatingDisplay: minRating.display,
+      });
+      return;
+    }
+
+    setMissingRatingConfirmation(null);
     setSaveState("loading");
+
     const participantsForRounds: ParticipantEntry[] = sortedParticipants.map((participant, idx) => {
       const manualRating = manualRatings[participant.id];
-      const ratingValue = parseRatingValue(manualRating ?? participant.rating);
+      const ratingValue =
+        parseTournamentRatingValue(manualRating ?? participant.rating)
+        ?? (allowMissingRatings ? minRating.value : null);
       return {
         id: participant.id ?? participant.phone ?? `participant-${idx}`,
         name: participant.name || `Участник ${idx + 1}`,
@@ -207,18 +644,9 @@ function TournamentDetailsModal({ isOpen, onClose, tournament, onSaved }: Tourna
       };
     });
 
-    const roundsForServer = generateAmericanoRounds(participantsForRounds, courtNames).map((round) => ({
-      id: round.id,
-      index: round.index,
-      matches: round.matches.map((match) => ({
-        id: match.id,
-        court: match.court,
-        pair1: match.pair1.map((p) => p.id),
-        pair2: match.pair2.map((p) => p.id),
-        score1: match.score1,
-        score2: match.score2,
-      })),
-    }));
+    const roundsForServer = serializeAmericanoRounds(
+      createAmericanoRounds(participantsForRounds, courtNames),
+    );
 
     const payload: AmericanoTournamentPayload = {
       tournamentId: String(tournament.id),
@@ -252,32 +680,42 @@ function TournamentDetailsModal({ isOpen, onClose, tournament, onSaved }: Tourna
     }
   };
 
-  useEffect(() => {
-    if (!isOpen || !tournament) return;
+  const tournamentId = tournament?.id ? String(tournament.id) : null;
+
+  const loadParticipants = async (nextTournamentId: string) => {
     setLoading(true);
     setError(null);
-    apiFetchTournamentParticipants(String(tournament.id))
-      .then((res) => {
-        const data = res.data as unknown;
-        const list = Array.isArray(data)
-          ? data
-          : Array.isArray((data as { payload?: ExerciseBooking[] })?.payload)
-            ? (data as { payload: ExerciseBooking[] }).payload
-            : Array.isArray((data as { content?: ExerciseBooking[] })?.content)
-              ? (data as { content: ExerciseBooking[] }).content
-              : [];
-        setParticipants(list);
-      })
-      .catch(() => setError("Не удалось загрузить участников"))
-      .finally(() => setLoading(false));
-  }, [isOpen, tournament?.id]);
+    try {
+      const res = await apiFetchTournamentParticipants(nextTournamentId);
+      const data = res.data as unknown;
+      const list = Array.isArray(data)
+        ? data
+        : Array.isArray((data as { payload?: ExerciseBooking[] })?.payload)
+          ? (data as { payload: ExerciseBooking[] }).payload
+          : Array.isArray((data as { content?: ExerciseBooking[] })?.content)
+            ? (data as { content: ExerciseBooking[] }).content
+            : [];
+      setParticipants(list);
+    } catch {
+      setError("Не удалось загрузить участников");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isOpen || !tournamentId) return;
+    void loadParticipants(tournamentId);
+  }, [isOpen, tournamentId]);
 
   const title = tournament?.direction?.name || tournament?.type?.name || "Турнир";
   const trainer = tournament?.trainers?.[0];
 
-  const participantEntries = useMemo((): ParticipantEntry[] => {
+  const baseParticipantEntries = useMemo((): TournamentParticipantEntry[] => {
     return participants.map((participant, idx) => ({
       id: participant.client?.id ?? participant.id ?? `participant-${idx}`,
+      bookingId: participant.id ?? null,
+      clientId: participant.client?.id ?? null,
       name: getClientName(participant, idx),
       photo: participant.client?.photo ?? null,
       phone: participant.client?.phone ?? null,
@@ -286,22 +724,352 @@ function TournamentDetailsModal({ isOpen, onClose, tournament, onSaved }: Tourna
     }));
   }, [participants]);
 
+  const organizerSlotParticipant = useMemo<TournamentParticipantEntry | null>(() => {
+    if (!profile) return null;
+
+    const profileRatingNumeric = parseNumericLevel(
+      getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric),
+    );
+    const profileRatingLetter =
+      getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevel)
+      ?? (profileRatingNumeric != null ? getLetterGrade(profileRatingNumeric) : null);
+    const name = [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim() || "Организатор";
+    const persistedRating =
+      organizerSlotRating
+      ?? (profileRatingNumeric != null ? profileRatingNumeric.toFixed(5) : profileRatingLetter ?? null);
+
+    return {
+      id: profile.id || `organizer-slot-${normalizeTournamentPhone(profile.phone) || "self"}`,
+      bookingId: null,
+      clientId: profile.id || null,
+      name,
+      photo: profile.photo ?? null,
+      phone: profile.phone ?? null,
+      spot: null,
+      rating: persistedRating,
+      isOrganizerSlot: true,
+    };
+  }, [organizerSlotRating, profile]);
+
+  const shouldAutoIncludeOrganizerSlot = useMemo(() => {
+    if (!organizerSlotParticipant) return false;
+    if (baseParticipantEntries.length === 0 || baseParticipantEntries.length % 2 === 0) return false;
+
+    return !baseParticipantEntries.some((participant) => (
+      (participant.clientId && organizerSlotParticipant.clientId && participant.clientId === organizerSlotParticipant.clientId)
+      || (
+        normalizeTournamentPhone(participant.phone)
+        && normalizeTournamentPhone(organizerSlotParticipant.phone)
+        && normalizeTournamentPhone(participant.phone) === normalizeTournamentPhone(organizerSlotParticipant.phone)
+      )
+    ));
+  }, [baseParticipantEntries, organizerSlotParticipant]);
+
+  const participantEntries = useMemo((): TournamentParticipantEntry[] => {
+    if (!shouldAutoIncludeOrganizerSlot || !organizerSlotParticipant) {
+      return baseParticipantEntries;
+    }
+
+    return [...baseParticipantEntries, organizerSlotParticipant];
+  }, [baseParticipantEntries, organizerSlotParticipant, shouldAutoIncludeOrganizerSlot]);
+
+  const participantRatingsRefreshKey = useMemo(
+    () =>
+      participantEntries
+        .map((participant) => [
+          participant.id,
+          participant.clientId ?? "",
+          normalizeTournamentPhone(participant.phone) ?? "",
+          participant.isOrganizerSlot ? "organizer" : "participant",
+        ].join(":"))
+        .sort()
+        .join("|"),
+    [participantEntries],
+  );
+
+  const isCurrentUserParticipant = (participant: TournamentParticipantEntry) => {
+    if (!profile || participant.isOrganizerSlot) return false;
+    if (profile.id && participant.clientId && profile.id === participant.clientId) return true;
+
+    const participantPhone = normalizeTournamentPhone(participant.phone);
+    const profilePhone = normalizeTournamentPhone(profile.phone);
+    return Boolean(participantPhone && profilePhone && participantPhone === profilePhone);
+  };
+
+  const handleParticipantRatingInput = (participantId: string, value: string) => {
+    setManualRatings((prev) => ({
+      ...prev,
+      [participantId]: value,
+    }));
+    setRatingSaveErrors((prev) => {
+      if (!prev[participantId]) return prev;
+      const next = { ...prev };
+      delete next[participantId];
+      return next;
+    });
+  };
+
+  const handleRefreshParticipantRatings = async (silent = false) => {
+    if (participantEntries.length === 0) return;
+
+    setRefreshingRatings(true);
+    if (!silent) {
+      setRefreshRatingsError(null);
+    }
+
+    const liveRatingsResult = await apiFetchPadelLiveRatings(
+      participantEntries.map((participant) => ({
+        clientId: participant.clientId,
+        phone: participant.phone ?? null,
+        name: participant.name,
+        rating: participant.rating ?? null,
+        ratingNumeric: null,
+      })),
+    );
+
+    if (liveRatingsResult.error) {
+      setRefreshingRatings(false);
+      if (!silent) {
+        setRefreshRatingsError(liveRatingsResult.error.message || "Не удалось пересчитать рейтинги");
+      }
+      return;
+    }
+
+    const liveByClientId = new Map<string, string | null>();
+    const liveByPhone = new Map<string, string | null>();
+
+    (liveRatingsResult.data ?? []).forEach((item) => {
+      const clientId = (item.clientId || "").trim();
+      const phoneNorm = normalizeTournamentPhone(item.phoneNorm);
+      const parsedNumeric =
+        typeof item.ratingNumeric === "number" && Number.isFinite(item.ratingNumeric)
+          ? item.ratingNumeric
+          : parseTournamentRatingValue(item.rating);
+      const nextRating =
+        typeof item.rating === "string" && item.rating.trim()
+          ? item.rating.trim()
+          : parsedNumeric != null
+            ? parsedNumeric.toFixed(5)
+            : null;
+
+      if (clientId) liveByClientId.set(clientId, nextRating);
+      if (phoneNorm) liveByPhone.set(phoneNorm, nextRating);
+    });
+
+    const refreshedPositiveIds = new Set<string>();
+    const organizerPhoneNorm = normalizeTournamentPhone(organizerSlotParticipant?.phone);
+    const nextOrganizerRating = organizerSlotParticipant
+      ? (organizerSlotParticipant.clientId ? liveByClientId.get(organizerSlotParticipant.clientId) : undefined)
+        ?? (organizerPhoneNorm ? liveByPhone.get(organizerPhoneNorm) : undefined)
+      : undefined;
+
+    setParticipants((prev) =>
+      prev.map((participant, idx) => {
+        const clientId = (participant.client?.id || "").trim();
+        const bookingId = (participant.id || "").trim();
+        const phoneNorm = normalizeTournamentPhone(participant.client?.phone);
+        const nextRating =
+          (clientId ? liveByClientId.get(clientId) : undefined)
+          ?? (phoneNorm ? liveByPhone.get(phoneNorm) : undefined);
+
+        if (nextRating === undefined) return participant;
+
+        const participantId = clientId || bookingId || `participant-${idx}`;
+        if (parseTournamentRatingValue(nextRating) != null) {
+          refreshedPositiveIds.add(participantId);
+        }
+
+        return {
+          ...participant,
+          rating: nextRating ?? undefined,
+          ratingSource: parseTournamentRatingValue(nextRating) != null ? "level" : participant.ratingSource,
+        };
+      }),
+    );
+
+    if (organizerSlotParticipant && nextOrganizerRating !== undefined) {
+      setOrganizerSlotRating(nextOrganizerRating ?? null);
+      if (parseTournamentRatingValue(nextOrganizerRating) != null) {
+        refreshedPositiveIds.add(organizerSlotParticipant.id);
+      }
+    }
+
+    setManualRatings((prev) => {
+      if (refreshedPositiveIds.size === 0) return prev;
+      const next = { ...prev };
+      refreshedPositiveIds.forEach((participantId) => {
+        delete next[participantId];
+      });
+      return next;
+    });
+    setRatingSaveErrors((prev) => {
+      if (refreshedPositiveIds.size === 0) return prev;
+      const next = { ...prev };
+      refreshedPositiveIds.forEach((participantId) => {
+        delete next[participantId];
+      });
+      return next;
+    });
+    setRefreshingRatings(false);
+  };
+
+  useEffect(() => {
+    if (!isOpen || loading || refreshingRatings || participantEntries.length === 0) return;
+    if (!participantRatingsRefreshKey || participantRatingsRefreshKey === autoRefreshedParticipantsKey) return;
+    setAutoRefreshedParticipantsKey(participantRatingsRefreshKey);
+    void handleRefreshParticipantRatings(true);
+  }, [
+    autoRefreshedParticipantsKey,
+    isOpen,
+    loading,
+    participantEntries.length,
+    participantRatingsRefreshKey,
+    refreshingRatings,
+  ]);
+
+  const handleParticipantRatingSave = async (participant: TournamentParticipantEntry) => {
+    const rawRating = manualRatings[participant.id] ?? "";
+    const parsedRating = parseTournamentRatingValue(rawRating);
+
+    if (!participant.clientId) {
+      setRatingSaveErrors((prev) => ({
+        ...prev,
+        [participant.id]: "Не найден clientId для сохранения рейтинга",
+      }));
+      return;
+    }
+
+    if (parsedRating == null) {
+      setRatingSaveErrors((prev) => ({
+        ...prev,
+        [participant.id]: "Введите рейтинг больше 0",
+      }));
+      return;
+    }
+
+    setRatingSaveStateById((prev) => ({
+      ...prev,
+      [participant.id]: "saving",
+    }));
+    setRatingSaveErrors((prev) => {
+      if (!prev[participant.id]) return prev;
+      const next = { ...prev };
+      delete next[participant.id];
+      return next;
+    });
+
+    const response = await apiSaveOnboardingLevel({
+      clientId: participant.clientId,
+      phone: participant.phone ?? null,
+      levelLetter: getLetterGrade(parsedRating),
+      levelNumeric: parsedRating,
+    });
+
+    if (response.error) {
+      setRatingSaveStateById((prev) => ({
+        ...prev,
+        [participant.id]: "idle",
+      }));
+      setRatingSaveErrors((prev) => ({
+        ...prev,
+        [participant.id]: response.error?.message || "Не удалось сохранить рейтинг",
+      }));
+      return;
+    }
+
+    if (participant.isOrganizerSlot) {
+      setOrganizerSlotRating(parsedRating.toFixed(5));
+    } else {
+      setParticipants((prev) =>
+        prev.map((item, idx) => {
+          const itemParticipantId = item.client?.id ?? item.id ?? `participant-${idx}`;
+          if (itemParticipantId !== participant.id) return item;
+          return {
+            ...item,
+            rating: parsedRating.toFixed(5),
+            ratingSource: "level",
+          };
+        }),
+      );
+    }
+    setManualRatings((prev) => {
+      const next = { ...prev };
+      delete next[participant.id];
+      return next;
+    });
+    setRatingSaveStateById((prev) => ({
+      ...prev,
+      [participant.id]: "idle",
+    }));
+  };
+
+  const handleParticipantLeave = async (participant: TournamentParticipantEntry) => {
+    if (!participant.bookingId || leavingParticipantId) return;
+    const accepted = window.confirm("Покинуть турнир? Вы потеряете место в записи.");
+    if (!accepted) return;
+
+    setLeavingParticipantId(participant.id);
+    setLeaveError(null);
+
+    try {
+      const response = await apiCancelBooking(participant.bookingId);
+      const ok = response.status != null && response.status >= 200 && response.status < 300;
+
+      if (!ok) {
+        setLeaveError(response.error?.message || "Не удалось покинуть турнир");
+        return;
+      }
+
+      if (tournamentId) {
+        await loadParticipants(tournamentId);
+      } else {
+        setParticipants((prev) => prev.filter((item) => item.id !== participant.bookingId));
+      }
+    } catch {
+      setLeaveError("Не удалось покинуть турнир");
+    } finally {
+      setLeavingParticipantId(null);
+    }
+  };
+
   const sortedParticipants = useMemo(() => {
     return [...participantEntries].sort((a, b) => {
-      const aManual = manualRatings[a.id];
-      const bManual = manualRatings[b.id];
-      const aRating = parseRatingValue(aManual ?? a.rating);
-      const bRating = parseRatingValue(bManual ?? b.rating);
+      const aRating = parseTournamentRatingValue(a.rating);
+      const bRating = parseTournamentRatingValue(b.rating);
       if (aRating == null && bRating == null) return 0;
       if (aRating == null) return 1;
       if (bRating == null) return -1;
       return bRating - aRating;
     });
-  }, [participantEntries, manualRatings]);
+  }, [participantEntries]);
+
+  const parsedTargetScoreDraft = selectedType === "americano"
+    ? parseBoundedIntegerInput(targetScoreDraft, 1, 99)
+    : null;
+  const parsedCourtsCountDraft = selectedType
+    ? parseBoundedIntegerInput(courtsCountDraft, 1, 12)
+    : null;
+  const canSaveTargetScore =
+    selectedType === "americano" && parsedTargetScoreDraft != null && parsedTargetScoreDraft !== targetScore;
+  const canSaveCourtsCount =
+    selectedType != null && parsedCourtsCountDraft != null && parsedCourtsCountDraft !== courtNames.length;
+  const targetScoreNeedsConfirmation =
+    selectedType === "americano"
+    && (targetScoreDraft.trim() === "" || parsedTargetScoreDraft == null || parsedTargetScoreDraft !== targetScore);
+  const courtsCountNeedsConfirmation =
+    selectedType != null
+    && (courtsCountDraft.trim() === "" || parsedCourtsCountDraft == null || parsedCourtsCountDraft !== courtNames.length);
+  const settingsNeedConfirmation = targetScoreNeedsConfirmation || courtsCountNeedsConfirmation;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={title}>
-      <div className="tournaments-body">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={title}
+      variant="fullscreen"
+      bodyClassName="tournament-settings-modal-body"
+    >
+      <div className="tournaments-body tournament-settings-screen">
         <div className="tournament-row">
           <span>{formatTime(tournament?.timeFrom)} – {formatTime(tournament?.timeTo)}</span>
           {tournament?.studio?.name && <span>{tournament.studio.name}</span>}
@@ -342,9 +1110,25 @@ function TournamentDetailsModal({ isOpen, onClose, tournament, onSaved }: Tourna
         )}
 
         <div className="tournament-section">
-          <div className="tournament-section-title">Участники</div>
+          <div className="tournament-section-head">
+            <div className="tournament-section-title">Участники</div>
+            <button
+              className="tournament-section-action"
+              type="button"
+              onClick={() => void handleRefreshParticipantRatings()}
+              disabled={refreshingRatings || loading || sortedParticipants.length === 0}
+            >
+              {refreshingRatings ? "Пересчет..." : "Пересчитать"}
+            </button>
+          </div>
           {loading && <div className="tournaments-muted">Загрузка...</div>}
           {!loading && error && <div className="tournaments-error">{error}</div>}
+          {!loading && !error && refreshRatingsError && (
+            <div className="tournaments-error">{refreshRatingsError}</div>
+          )}
+          {!loading && !error && leaveError && (
+            <div className="tournaments-error">{leaveError}</div>
+          )}
           {!loading && !error && participants.length === 0 && (
             <div className="tournaments-muted">Участников пока нет</div>
           )}
@@ -357,12 +1141,19 @@ function TournamentDetailsModal({ isOpen, onClose, tournament, onSaved }: Tourna
                   .join("")
                   .toUpperCase()
                   .slice(0, 2) || "U";
-                const manualRating = manualRatings[participant.id];
-                const ratingValue = parseRatingValue(manualRating ?? participant.rating);
-                const hasRating = ratingValue != null;
+                const manualRating = manualRatings[participant.id] ?? "";
+                const savedRatingValue = parseTournamentRatingValue(participant.rating);
+                const hasSavedRating = savedRatingValue != null;
+                const manualParsedRating = parseTournamentRatingValue(manualRating);
+                const isSavingRating = ratingSaveStateById[participant.id] === "saving";
+                const canLeaveParticipant =
+                  Boolean(participant.bookingId)
+                  && isCurrentUserParticipant(participant);
+                const isLeavingParticipant = leavingParticipantId === participant.id;
 
                 return (
                   <div key={participant.id ?? idx} className="tournament-participant">
+                    <div className="tournament-participant-order">{idx + 1}</div>
                     <div className={`tournament-participant-avatar ${participant.photo ? "" : "no-photo"}`}>
                       {participant.photo ? (
                         <img
@@ -380,29 +1171,72 @@ function TournamentDetailsModal({ isOpen, onClose, tournament, onSaved }: Tourna
                     </div>
                     <div className="tournament-participant-info">
                       <div className="tournament-participant-name">{participant.name}</div>
+                      {participant.isOrganizerSlot && (
+                        <div className="tournament-participant-note">
+                          Тренер / организатор занимает свободный слот
+                        </div>
+                      )}
+                      {ratingSaveErrors[participant.id] && (
+                        <div className="tournament-participant-note error">
+                          {ratingSaveErrors[participant.id]}
+                        </div>
+                      )}
                     </div>
-                    {hasRating ? (
-                      <div className="tournament-participant-rating">
-                        {formatRating(ratingValue!)}
-                      </div>
-                    ) : (
-                      <input
-                        className="tournament-participant-rating-input"
-                        type="text"
-                        inputMode="decimal"
-                        placeholder={participant.phone || "Рейтинг"}
-                        value={manualRating ?? ""}
-                        onChange={(e) =>
-                          setManualRatings((prev) => ({
-                            ...prev,
-                            [participant.id]: e.target.value,
-                          }))
-                        }
-                      />
-                    )}
+                    <div className="tournament-participant-actions">
+                      {hasSavedRating ? (
+                        <div className="tournament-participant-rating">
+                          {formatRating(savedRatingValue!)}
+                        </div>
+                      ) : (
+                        <div className="tournament-participant-rating-editor">
+                          <input
+                            className="tournament-participant-rating-input"
+                            type="text"
+                            inputMode="decimal"
+                            placeholder={participant.phone || "Рейтинг"}
+                            value={manualRating}
+                            onChange={(e) => handleParticipantRatingInput(participant.id, e.target.value)}
+                          />
+                          {participant.clientId && manualParsedRating != null && (
+                            <button
+                              className="tournament-participant-rating-save"
+                              type="button"
+                              onClick={() => void handleParticipantRatingSave(participant)}
+                              disabled={isSavingRating}
+                              aria-label="Сохранить рейтинг"
+                              title="Сохранить рейтинг"
+                            >
+                              {isSavingRating ? "…" : "✓"}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {canLeaveParticipant && (
+                        <button
+                          className="tournament-participant-leave"
+                          type="button"
+                          onClick={() => void handleParticipantLeave(participant)}
+                          disabled={isLeavingParticipant}
+                        >
+                          {isLeavingParticipant ? "Выходим..." : "Покинуть"}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
+            </div>
+          )}
+          {!loading && !error && shouldAutoIncludeOrganizerSlot && (
+            <div className="tournament-organizer-slot">
+              <div className="tournament-organizer-slot-copy">
+                <div className="tournament-organizer-slot-title">
+                  Нечетное количество игроков
+                </div>
+                <div className="tournament-organizer-slot-text">
+                  Тренер или организатор автоматически добавлен в свободный четный слот.
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -430,29 +1264,49 @@ function TournamentDetailsModal({ isOpen, onClose, tournament, onSaved }: Tourna
                 <div className="tournament-section-title">
                   До какого суммарного счета играть матчи
                 </div>
-                <input
-                  className="tournament-input"
-                  type="number"
-                  min={1}
-                  placeholder="21"
-                  value={targetScore}
-                  onChange={(e) =>
-                    setTargetScore(Math.max(1, Number.parseInt(e.target.value || "0", 10)))
-                  }
-                />
+                <div className="tournament-inline-save">
+                  <input
+                    className="tournament-input"
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="21"
+                    value={targetScoreDraft}
+                    onChange={(e) => setTargetScoreDraft(e.target.value.replace(/[^\d]/g, ""))}
+                  />
+                  <button
+                    className="tournament-inline-save-btn"
+                    type="button"
+                    onClick={handleTargetScoreSave}
+                    disabled={!canSaveTargetScore}
+                    aria-label="Сохранить сумму счета"
+                    title="Сохранить сумму счета"
+                  >
+                    ✓
+                  </button>
+                </div>
               </div>
             )}
             <div className="tournament-section-title">Сколько кортов используем</div>
-            <input
-              className="tournament-input"
-              type="number"
-              min={1}
-              max={12}
-              placeholder="Например, 2"
-              value={courtsCount}
-              onChange={(e) => handleCourtsCountChange(e.target.value)}
-              onInput={(e) => handleCourtsCountChange((e.target as HTMLInputElement).value)}
-            />
+            <div className="tournament-inline-save">
+              <input
+                className="tournament-input"
+                type="text"
+                inputMode="numeric"
+                placeholder="Например, 2"
+                value={courtsCountDraft}
+                onChange={(e) => setCourtsCountDraft(e.target.value.replace(/[^\d]/g, ""))}
+              />
+              <button
+                className="tournament-inline-save-btn"
+                type="button"
+                onClick={handleCourtsCountSave}
+                disabled={!canSaveCourtsCount}
+                aria-label="Сохранить количество кортов"
+                title="Сохранить количество кортов"
+              >
+                ✓
+              </button>
+            </div>
 
             {courtNames.length > 0 && (
               <div className="tournament-courts">
@@ -473,12 +1327,22 @@ function TournamentDetailsModal({ isOpen, onClose, tournament, onSaved }: Tourna
               </div>
             )}
 
-            {courtNames.length > 0 && (
+            <div className="tournament-settings-actions">
+              {settingsNeedConfirmation && (
+                <div className="tournament-settings-hint">
+                  Подтвердите сумму счета и количество кортов кнопками ✓.
+                </div>
+              )}
               <button
                 className="section-cta"
                 type="button"
-                onClick={selectedType === "americano" ? handleSaveAmericano : undefined}
-                disabled={saveState === "loading" || selectedType !== "americano"}
+                onClick={selectedType === "americano" ? () => void handleSaveAmericano() : undefined}
+                disabled={
+                  saveState === "loading"
+                  || selectedType !== "americano"
+                  || courtNames.length === 0
+                  || settingsNeedConfirmation
+                }
               >
                 {saveState === "loading"
                   ? "Сохранение..."
@@ -486,73 +1350,73 @@ function TournamentDetailsModal({ isOpen, onClose, tournament, onSaved }: Tourna
                     ? "Сохранено"
                     : "Сохранить"}
               </button>
-            )}
+            </div>
           </div>
         )}
       </div>
+
+      <Modal
+        isOpen={Boolean(missingRatingConfirmation)}
+        onClose={() => setMissingRatingConfirmation(null)}
+        title="Подтверждение"
+        variant="dialog"
+      >
+        <div className="tournament-confirm-copy">
+          Игрокам без уровня будет установлен минимальный уровень согласно настройкам турнира.
+        </div>
+        <div className="tournament-confirm-note">
+          Минимальный уровень: {missingRatingConfirmation?.minRatingDisplay}.
+          {" "}
+          Игроков без рейтинга: {missingRatingConfirmation?.missingCount ?? 0}.
+        </div>
+        <div className="tournament-confirm-actions">
+          <button
+            type="button"
+            className="onboarding-btn onboarding-btn--secondary"
+            onClick={() => setMissingRatingConfirmation(null)}
+          >
+            Отмена
+          </button>
+          <button
+            type="button"
+            className="onboarding-btn"
+            onClick={() => void handleSaveAmericano(true)}
+          >
+            Ок
+          </button>
+        </div>
+      </Modal>
     </Modal>
   );
-}
-
-function generateAmericanoRounds(
-  participants: ParticipantEntry[],
-  courts: string[],
-): TournamentRound[] {
-  const players = [...participants];
-  if (players.length < 4) return [];
-  const matchesPerRound = Math.min(courts.length, Math.floor(players.length / 4));
-  if (matchesPerRound < 1) return [];
-  const playersPerRound = matchesPerRound * 4;
-  const roundsCount = players.length % 2 === 0 ? players.length - 1 : players.length;
-  const rounds: TournamentRound[] = [];
-
-  let order = [...players];
-  for (let r = 0; r < roundsCount; r += 1) {
-    const roundPlayers = order.slice(0, playersPerRound);
-    const matches: TournamentMatch[] = [];
-    for (let m = 0; m < matchesPerRound; m += 1) {
-      const idx = m * 4;
-      const block = roundPlayers.slice(idx, idx + 4);
-      if (block.length < 4) break;
-      matches.push({
-        id: `round-${r + 1}-match-${m + 1}`,
-        court: courts[m] ?? `Корт №${m + 1}`,
-        pair1: [block[0], block[1]],
-        pair2: [block[2], block[3]],
-        score1: null,
-        score2: null,
-        saved: false,
-      });
-    }
-    rounds.push({
-      id: `round-${r + 1}`,
-      index: r + 1,
-      matches,
-      collapsed: r !== 0,
-      saved: false,
-    });
-
-    if (order.length > 2) {
-      const fixed = order[0];
-      const rest = order.slice(1);
-      rest.unshift(rest.pop() as ParticipantEntry);
-      order = [fixed, ...rest];
-    }
-  }
-
-  return rounds;
 }
 
 function TournamentManagerModal({
   isOpen,
   onClose,
   data,
+  title,
+  initialTotals = null,
+  initialPlayerLogs = null,
+  onDataChange,
+  onEditSettings,
 }: {
   isOpen: boolean;
   onClose: () => void;
   data: AmericanoTournamentPayload | null;
+  title?: string;
+  initialTotals?: AmericanoResultsResponse["totals"] | null;
+  initialPlayerLogs?: AmericanoResultsResponse["playerLogs"] | null;
+  onDataChange?: (
+    payload: AmericanoTournamentPayload,
+    extras: {
+      totals: AmericanoResultsResponse["totals"] | null;
+      playerLogs: AmericanoResultsResponse["playerLogs"] | null;
+    },
+  ) => void;
+  onEditSettings?: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<"tournament" | "table" | "stats">("tournament");
+  const [expertMode, setExpertMode] = useState(false);
   const [rounds, setRounds] = useState<TournamentRound[]>([]);
   const statsRef = useRef<HTMLDivElement | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -575,12 +1439,13 @@ function TournamentManagerModal({
 
   useEffect(() => {
     if (!data) return;
-    setRounds(generateAmericanoRounds(normalizedParticipants, data.courts));
+    setRounds(hydrateAmericanoRounds(data.rounds, normalizedParticipants, data.courts));
     setActiveTab("tournament");
-    setServerTotals(null);
-    setServerLogs(null);
+    setExpertMode(false);
+    setServerTotals(initialTotals);
+    setServerLogs(initialPlayerLogs);
     setMatchSaveErrors({});
-  }, [data, normalizedParticipants]);
+  }, [data, normalizedParticipants, initialTotals, initialPlayerLogs]);
 
   const handleScoreChange = (
     roundId: string,
@@ -615,6 +1480,13 @@ function TournamentManagerModal({
   const handleMatchSave = (roundId: string, matchId: string) => {
     if (!data) return;
     const round = rounds.find((r) => r.id === roundId);
+    const persistedRoundBeforeSave = (data.rounds ?? []).find((item) => item.id === roundId);
+    const wasRoundPersistedCompleteBeforeSave =
+      Array.isArray(persistedRoundBeforeSave?.matches)
+      && persistedRoundBeforeSave.matches.length > 0
+      && persistedRoundBeforeSave.matches.every(
+        (savedMatch) => savedMatch.score1 != null && savedMatch.score2 != null,
+      );
     if (!round) return;
     const match = round.matches.find((m) => m.id === matchId);
     if (!match || match.score1 == null || match.score2 == null) {
@@ -631,6 +1503,7 @@ function TournamentManagerModal({
         matchId,
         score1: match.score1 as number,
         score2: match.score2 as number,
+        court: match.court,
         pair1: match.pair1.map((p) => p.id),
         pair2: match.pair2.map((p) => p.id),
       },
@@ -648,25 +1521,53 @@ function TournamentManagerModal({
     })
       .then((res) => {
         if (res.data) {
-          setRounds((prev) =>
-            prev.map((r) => {
-              if (r.id !== roundId) return r;
-              const updatedMatches = r.matches.map((m) =>
-                m.id === matchId ? { ...m, saved: true } : m,
-              );
-              return {
-                ...r,
-                matches: updatedMatches,
-                saved: updatedMatches.every((m) => m.saved),
-              };
-            }),
+          if (!Array.isArray(res.data.rounds)) {
+            setMatchSaveErrors((prev) => ({
+              ...prev,
+              [matchId]: "Сервер не подтвердил сохранение результата",
+            }));
+            return;
+          }
+
+          const nextRounds = applyPartialRoundUpdates(
+            rounds,
+            hydrateAmericanoRounds(res.data.rounds, normalizedParticipants, data.courts),
           );
-          if (res.data.totals) {
-            setServerTotals(res.data.totals);
+          const persistedRound = nextRounds.find((item) => item.id === roundId) ?? null;
+          const shouldAdvanceRound =
+            !wasRoundPersistedCompleteBeforeSave && Boolean(persistedRound?.saved);
+          const nextRoundsWithCollapse = advanceTournamentRoundAfterSave(
+            nextRounds,
+            roundId,
+            shouldAdvanceRound,
+          );
+          const persistedMatch = findTournamentMatch(nextRoundsWithCollapse, roundId, matchId);
+          const persisted =
+            persistedMatch?.score1 === match.score1 && persistedMatch?.score2 === match.score2;
+
+          if (!persisted) {
+            setMatchSaveErrors((prev) => ({
+              ...prev,
+              [matchId]: "Результат не сохранился на сервере",
+            }));
+            return;
           }
-          if (res.data.playerLogs) {
-            setServerLogs(res.data.playerLogs);
-          }
+
+          setRounds(nextRoundsWithCollapse);
+          const nextTotals = res.data.totals ?? serverTotals ?? null;
+          const nextPlayerLogs = res.data.playerLogs ?? serverLogs ?? null;
+          if (res.data.totals) setServerTotals(res.data.totals);
+          if (res.data.playerLogs) setServerLogs(res.data.playerLogs);
+          onDataChange?.(
+            {
+              ...data,
+              rounds: serializeAmericanoRounds(nextRoundsWithCollapse),
+            },
+            {
+              totals: nextTotals,
+              playerLogs: nextPlayerLogs,
+            },
+          );
         } else {
           setMatchSaveErrors((prev) => ({
             ...prev,
@@ -683,73 +1584,27 @@ function TournamentManagerModal({
       .finally(() => setSavingMatchId(null));
   };
 
-  const tableStats = useMemo(() => {
-    const map: Record<string, { name: string; pointsFor: number; pointsAgainst: number }> = {};
-    normalizedParticipants.forEach((p) => {
-      map[p.id] = { name: p.name, pointsFor: 0, pointsAgainst: 0 };
-    });
+  const standingsSnapshot = useMemo(
+    () => buildAmericanoStandings(normalizedParticipants, rounds, serverTotals),
+    [normalizedParticipants, rounds, serverTotals],
+  );
 
-    rounds.forEach((round) => {
-      round.matches.forEach((match) => {
-        if (match.score1 == null || match.score2 == null) return;
-        match.pair1.forEach((p) => {
-          const key = p.id || p.phone || p.name;
-          if (!map[key]) return;
-          map[key].pointsFor += match.score1!;
-          map[key].pointsAgainst += match.score2!;
-        });
-        match.pair2.forEach((p) => {
-          const key = p.id || p.phone || p.name;
-          if (!map[key]) return;
-          map[key].pointsFor += match.score2!;
-          map[key].pointsAgainst += match.score1!;
-        });
-      });
-    });
-
-    return map;
-  }, [normalizedParticipants, rounds]);
-
-  const hasServerTotals = useMemo(() => {
-    if (!serverTotals) return false;
-    const totals = Object.values(serverTotals);
-    if (!totals.length) return false;
-    return totals.some((total) => {
-      const pointsFor = toNumberSafe(total?.pointsFor ?? 0);
-      const pointsAgainst = toNumberSafe(total?.pointsAgainst ?? 0);
-      const delta = Math.abs(toNumberSafe(total?.deltaTotal ?? 0));
-      const wins = toNumberSafe(total?.wins ?? 0);
-      const losses = toNumberSafe(total?.losses ?? 0);
-      const draws = toNumberSafe(total?.draws ?? 0);
-      return pointsFor + pointsAgainst + delta + wins + losses + draws > 0;
-    });
-  }, [serverTotals]);
-
-  const tableRows = useMemo(() => {
-    const rows = normalizedParticipants.map((p) => {
-      const totals = serverTotals?.[p.id];
-      const localStats = tableStats[p.id] || { pointsFor: 0, pointsAgainst: 0 };
-      const pointsFor = totals && hasServerTotals ? toNumberSafe(totals.pointsFor) : localStats.pointsFor;
-      const pointsAgainst =
-        totals && hasServerTotals ? toNumberSafe(totals.pointsAgainst) : localStats.pointsAgainst;
-      const pointsDiff = pointsFor - pointsAgainst;
-      const ratingDelta = totals && hasServerTotals ? toNumberSafe(totals.deltaTotal ?? 0) : 0;
-      return {
-        id: p.id,
-        name: p.name,
-        pointsDiff,
-        ratingDelta,
-        hasTotals: Boolean(totals) && hasServerTotals,
-      };
-    });
-
-    return rows.sort((a, b) => {
-      if (a.hasTotals && b.hasTotals) {
-        return b.ratingDelta - a.ratingDelta;
-      }
-      return b.pointsDiff - a.pointsDiff;
-    });
-  }, [normalizedParticipants, tableStats, serverTotals, hasServerTotals]);
+  const tableRows = standingsSnapshot.rows;
+  const roundByePoints = standingsSnapshot.roundByePoints;
+  const statsRows = standingsSnapshot.rows;
+  const participantRatingById = useMemo(
+    () => new Map(normalizedParticipants.map((participant) => [
+      participant.id,
+      parseTournamentRatingValue(participant.rating),
+    ])),
+    [normalizedParticipants],
+  );
+  const canEditSettings = useMemo(
+    () => rounds.every((round) => round.matches.every((match) => !match.saved)),
+    [rounds],
+  );
+  const canFinishTournament =
+    standingsSnapshot.totalMatches > 0 && standingsSnapshot.completedMatches === standingsSnapshot.totalMatches;
 
   const splitName = (name: string) => {
     const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -806,104 +1661,6 @@ function TournamentManagerModal({
     window.open(url, "_blank");
   };
 
-  const stats = useMemo(() => {
-    if (!data) return [];
-    const map: Record<
-      string,
-      {
-        id: string;
-        name: string;
-        photo?: string | null;
-        wins: number;
-        draws: number;
-        losses: number;
-        games: number;
-        pointsFor: number;
-        pointsAgainst: number;
-      }
-    > = {};
-
-    normalizedParticipants.forEach((p, idx) => {
-      const key = p.id ?? `participant-${idx}`;
-      map[key] = {
-        id: key,
-        name: p.name || `Участник ${idx + 1}`,
-        photo: p.photo ?? null,
-        wins: 0,
-        draws: 0,
-        losses: 0,
-        games: 0,
-        pointsFor: 0,
-        pointsAgainst: 0,
-      };
-    });
-
-    rounds.forEach((round) => {
-      round.matches.forEach((match) => {
-        if (match.score1 == null || match.score2 == null) return;
-        const pair1Result =
-          match.score1 > match.score2 ? "win" : match.score1 < match.score2 ? "loss" : "draw";
-        const pair2Result =
-          match.score2 > match.score1 ? "win" : match.score2 < match.score1 ? "loss" : "draw";
-
-        match.pair1.forEach((p) => {
-          const key = p.id || p.phone || p.name;
-          if (!map[key]) return;
-          map[key].games += 1;
-          map[key].pointsFor += match.score1 ?? 0;
-          map[key].pointsAgainst += match.score2 ?? 0;
-          if (pair1Result === "win") map[key].wins += 1;
-          else if (pair1Result === "loss") map[key].losses += 1;
-          else map[key].draws += 1;
-        });
-
-        match.pair2.forEach((p) => {
-          const key = p.id || p.phone || p.name;
-          if (!map[key]) return;
-          map[key].games += 1;
-          map[key].pointsFor += match.score2 ?? 0;
-          map[key].pointsAgainst += match.score1 ?? 0;
-          if (pair2Result === "win") map[key].wins += 1;
-          else if (pair2Result === "loss") map[key].losses += 1;
-          else map[key].draws += 1;
-        });
-      });
-    });
-
-    return Object.values(map).sort((a, b) => {
-      const diffA = a.pointsFor - a.pointsAgainst;
-      const diffB = b.pointsFor - b.pointsAgainst;
-      if (diffB !== diffA) return diffB - diffA;
-      return b.pointsFor - a.pointsFor;
-    });
-  }, [data, rounds]);
-
-  const statsRows = useMemo(() => {
-    if (serverTotals && hasServerTotals) {
-      return normalizedParticipants
-        .map((p) => {
-          const total = serverTotals[p.id];
-          return {
-            id: p.id,
-            name: p.name,
-            photo: p.photo ?? null,
-            wins: toNumberSafe(total?.wins ?? 0),
-            losses: toNumberSafe(total?.losses ?? 0),
-            draws: toNumberSafe(total?.draws ?? 0),
-            pointsFor: toNumberSafe(total?.pointsFor ?? 0),
-            pointsAgainst: toNumberSafe(total?.pointsAgainst ?? 0),
-          };
-        })
-        .sort((a, b) => {
-          const diffA = a.pointsFor - a.pointsAgainst;
-          const diffB = b.pointsFor - b.pointsAgainst;
-          if (diffB !== diffA) return diffB - diffA;
-          return b.pointsFor - a.pointsFor;
-        });
-    }
-    return stats;
-  }, [serverTotals, normalizedParticipants, stats, hasServerTotals]);
-
   const handleExportStats = async (format: "png" | "jpeg") => {
     if (!statsRef.current || exporting) return;
     setExporting(true);
@@ -934,10 +1691,37 @@ function TournamentManagerModal({
   };
 
   if (!isOpen || !data) return null;
+  const completedRoundsLabel = `${standingsSnapshot.completedRounds}/${standingsSnapshot.totalRounds}`;
+  const completedMatchesLabel = `${standingsSnapshot.completedMatches}/${standingsSnapshot.totalMatches}`;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Американо">
+    <Modal isOpen={isOpen} onClose={onClose} title={title || "Турнир"} variant="fullscreen">
       <div className="tournament-manager">
+        <div className="tournament-manager-meta">
+          <span className="tournament-manager-chip strong">{getTournamentTypeLabel(data.tournamentType)}</span>
+          <span className="tournament-manager-chip">До {data.targetScore}</span>
+          <span className="tournament-manager-chip">{formatCourtsCountLabel(data.courts.length)}</span>
+        </div>
+        {canEditSettings && onEditSettings && (
+          <div className="tournament-manager-top-actions">
+            <button
+              type="button"
+              className="tournament-manager-secondary"
+              onClick={onEditSettings}
+            >
+              Вернуться к редактированию
+            </button>
+          </div>
+        )}
+        {data.courts.length > 0 && (
+          <div className="tournament-manager-courts">
+            {data.courts.map((court, index) => (
+              <span key={`${court}-${index}`} className="tournament-manager-court-chip">
+                {court}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="tournament-tabs">
           {[
             { key: "tournament", label: "Турнир" },
@@ -956,47 +1740,150 @@ function TournamentManagerModal({
         </div>
 
         {activeTab === "tournament" && (
-          <div className="tournament-rounds">
-            {rounds.map((round) => (
-              <div
-                key={round.id}
-                className={`tournament-round ${round.saved ? "saved" : "unsaved"}`}
-              >
-                <button
-                  type="button"
-                  className="tournament-round-header"
-                  onClick={() =>
-                    setRounds((prev) =>
-                      prev.map((r) =>
-                        r.id === round.id ? { ...r, collapsed: !r.collapsed } : r,
-                      ),
-                    )
-                  }
-                >
-                  <span className="tournament-round-title">Раунд {round.index}</span>
-                  <div className="tournament-round-actions">
-                    {Object.keys(matchSaveErrors).some((id) =>
-                      round.matches.some((m) => m.id === id),
-                    ) ? (
-                      <span className="tournament-round-status error">Ошибка</span>
-                    ) : round.saved ? (
-                      <span className="tournament-round-status saved">Сохранено</span>
-                    ) : null}
-                    {round.saved && (
-                      <span className="tournament-round-edit" title="Редактировать">
-                        ✎
-                      </span>
-                    )}
-                    <span>{round.collapsed ? "+" : "−"}</span>
+          <div className="tournament-mode-toggle">
+            <div className="tournament-mode-copy">
+              <div className="tournament-mode-title">Экспертный режим</div>
+              <div className="tournament-mode-subtitle">
+                Показывать качество, bye и служебные параметры сетки
+              </div>
+            </div>
+            <button
+              type="button"
+              className={`switch ${expertMode ? "on" : ""}`}
+              onClick={() => setExpertMode((prev) => !prev)}
+              aria-pressed={expertMode}
+              aria-label="Переключить экспертный режим"
+            >
+              <span />
+            </button>
+          </div>
+        )}
+
+        {activeTab === "tournament" && (
+          <>
+            <div className="tournament-rounds">
+              {expertMode && (
+                <div className="tournament-summary">
+                  <div className="tournament-summary-card">
+                    <span className="tournament-summary-label">Раунды</span>
+                    <span className="tournament-summary-value">{completedRoundsLabel}</span>
                   </div>
-                </button>
-                {!round.collapsed && (
-                  <div className="tournament-round-body">
+                  <div className="tournament-summary-card">
+                    <span className="tournament-summary-label">Матчи</span>
+                    <span className="tournament-summary-value">{completedMatchesLabel}</span>
+                  </div>
+                  <div className="tournament-summary-card wide">
+                    <span className="tournament-summary-label">Bye</span>
+                    <span className="tournament-summary-value">
+                      Среднее очков раунда после завершения всех матчей
+                    </span>
+                  </div>
+                </div>
+              )}
+              {rounds.map((round) => (
+                <div
+                  key={round.id}
+                  className={`tournament-round ${round.saved ? "saved" : "unsaved"}`}
+                >
+                  <button
+                    type="button"
+                    className="tournament-round-header"
+                    onClick={() =>
+                      setRounds((prev) =>
+                        prev.map((r) =>
+                          r.id === round.id ? { ...r, collapsed: !r.collapsed } : r,
+                        ),
+                      )
+                    }
+                  >
+                    <div className="tournament-round-heading">
+                      <span className="tournament-round-title">Раунд {round.index}</span>
+                      {expertMode && (
+                        <div className="tournament-round-meta">
+                          <span
+                            className={`tournament-quality-badge quality-${getQualityTone(round.quality.score)}`}
+                          >
+                            {round.quality.label} · {formatTournamentNumber(round.quality.score, 1)}
+                          </span>
+                          <span className="tournament-round-meta-text">
+                            {round.matches.length} матч. · bye {round.byes.length}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="tournament-round-actions">
+                      {Object.keys(matchSaveErrors).some((id) =>
+                        round.matches.some((m) => m.id === id),
+                      ) ? (
+                        <span className="tournament-round-status error">Ошибка</span>
+                      ) : round.saved ? (
+                        <span className="tournament-round-status saved">Сохранено</span>
+                      ) : null}
+                      {round.saved && (
+                        <span className="tournament-round-edit" title="Редактировать">
+                          ✎
+                        </span>
+                      )}
+                      <span>{round.collapsed ? "+" : "−"}</span>
+                    </div>
+                  </button>
+                  {!round.collapsed && (
+                    <div className="tournament-round-body">
+                    {expertMode && (
+                      <div className="tournament-round-quality">
+                        <div className="tournament-round-quality-item">
+                          <span className="tournament-round-quality-label">Среднее качество кортов</span>
+                          <span className="tournament-round-quality-value">
+                            {formatTournamentNumber(round.quality.averageCourtScore, 1)}
+                          </span>
+                        </div>
+                        <div className="tournament-round-quality-item">
+                          <span className="tournament-round-quality-label">Минимальное качество</span>
+                          <span className="tournament-round-quality-value">
+                            {formatTournamentNumber(round.quality.minCourtScore, 1)}
+                          </span>
+                        </div>
+                        <div className="tournament-round-quality-item">
+                          <span className="tournament-round-quality-label">Пояснение</span>
+                          <span className="tournament-round-quality-value secondary">
+                            {round.quality.explanation}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    {expertMode && round.byes.length > 0 && (
+                      <div className="tournament-byes">
+                        <div className="tournament-byes-header">
+                          <span className="tournament-byes-title">Bye в этом раунде</span>
+                          <span className="tournament-byes-points">
+                            {roundByePoints[round.id] != null
+                              ? `+${formatTournamentNumber(roundByePoints[round.id] ?? 0)} очка каждому`
+                              : "Очки появятся после завершения всех матчей раунда"}
+                          </span>
+                        </div>
+                        <div className="tournament-byes-list">
+                          {round.byes.map((player) => (
+                            <div key={`${round.id}-${player.id}`} className="tournament-bye-chip">
+                              <span className="tournament-bye-chip-name">{player.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {round.matches.map((match) => (
                       <div key={match.id} className="tournament-match">
-                        <div className="tournament-match-row">
-                          <span className="tournament-match-label">Корт</span>
-                          <span className="tournament-match-value">{match.court}</span>
+                        <div className="tournament-match-header">
+                          <div className="tournament-match-court">
+                            <span className="tournament-match-label">Корт</span>
+                            <span className="tournament-match-value">{match.court}</span>
+                          </div>
+                          {expertMode && (
+                            <span
+                              className={`tournament-quality-badge quality-${getQualityTone(match.quality.score)}`}
+                            >
+                              {match.quality.label} · {formatTournamentNumber(match.quality.score, 1)}
+                            </span>
+                          )}
                         </div>
                         <div className="tournament-match-row">
                           <span className="tournament-match-label">Пара 1</span>
@@ -1030,6 +1917,15 @@ function TournamentManagerModal({
                             }
                           />
                         </div>
+                        {expertMode && (
+                          <div className="tournament-match-summary">
+                            <span>{match.quality.explanation}</span>
+                            <span>
+                              Сила пар: {formatTournamentNumber(match.summary.pairPower1, 3)} /{" "}
+                              {formatTournamentNumber(match.summary.pairPower2, 3)}
+                            </span>
+                          </div>
+                        )}
                         <div className="tournament-match-actions">
                           <div className="tournament-match-status">
                             {matchSaveErrors[match.id] ? (
@@ -1052,24 +1948,47 @@ function TournamentManagerModal({
                         )}
                       </div>
                     ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="tournament-manager-footer">
+              {!canFinishTournament && (
+                <div className="tournament-manager-footer-note">
+                  Кнопка станет активной после сохранения всех результатов.
+                </div>
+              )}
+              <button
+                type="button"
+                className="section-cta tournament-manager-finish"
+                onClick={onClose}
+                disabled={!canFinishTournament}
+              >
+                Завершить турнир
+              </button>
+            </div>
+          </>
         )}
 
         {activeTab === "table" && (
           <div className="tournament-table">
             {tableRows.map((row) => {
+              const playerRating =
+                row.ratingAfter
+                ?? participantRatingById.get(row.id)
+                ?? row.ratingBefore
+                ?? null;
+              const playerBadgeStyle = getTournamentRatingBadgeStyle(playerRating);
+              const playerRingProgressDeg = `${Math.round(getTournamentRatingRingProgress(playerRating) * 360)}deg`;
               const name = splitName(row.name);
-              const diffClass =
-                row.pointsDiff > 0
+              const pointDiffClass =
+                row.pointDiff > 0
                   ? "positive"
-                  : row.pointsDiff < 0
+                  : row.pointDiff < 0
                     ? "negative"
                     : "";
-              const deltaClass =
+              const ratingDeltaClass =
                 row.ratingDelta > 0
                   ? "positive"
                   : row.ratingDelta < 0
@@ -1077,27 +1996,76 @@ function TournamentManagerModal({
                     : "";
               return (
                 <div key={row.id} className="tournament-table-row">
-                  <div className="tournament-table-name">
-                    <span className="tournament-table-name-line">{name.line1}</span>
-                    {name.line2 && (
-                      <span className="tournament-table-name-line secondary">{name.line2}</span>
-                    )}
+                  <div className="tournament-table-player">
+                    <div className="tournament-table-avatar-wrap">
+                      <span className="tournament-table-rank">{row.rank}</span>
+                      <div
+                        className={`tournament-table-player-ring${playerRating != null ? " has-level" : ""}`}
+                        style={{ "--player-ring-progress": playerRingProgressDeg } as CSSProperties}
+                      >
+                        <div className={`tournament-participant-avatar ${row.photo ? "" : "no-photo"}`}>
+                          {row.photo ? (
+                            <img
+                              src={row.photo}
+                              alt={row.name}
+                              crossOrigin="anonymous"
+                              onError={(e) => {
+                                const target = e.currentTarget;
+                                target.style.display = "none";
+                                const parent = target.parentElement;
+                                if (parent) parent.classList.add("no-photo");
+                              }}
+                            />
+                          ) : null}
+                          <span className="tournament-participant-initials">
+                            {getInitialsFromName(row.name)}
+                          </span>
+                        </div>
+                      </div>
+                      {playerRating != null && (
+                        <span className="tournament-table-level" style={playerBadgeStyle}>
+                          {formatStatsRatingBadge(playerRating)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="tournament-table-name">
+                      <span className="tournament-table-name-line">{name.line1}</span>
+                      {name.line2 && (
+                        <span className="tournament-table-name-line secondary">{name.line2}</span>
+                      )}
+                    </div>
                   </div>
-                  <div className="tournament-table-metrics">
-                    <div className="tournament-table-metric">
-                      <span className="tournament-table-metric-label">Разница</span>
-                      <span className={`tournament-table-metric-value ${diffClass}`}>
-                        {row.pointsDiff > 0 ? `+${row.pointsDiff}` : row.pointsDiff}
+                  <div className="tournament-table-stat-group">
+                    <div className="tournament-table-stat-head">
+                      <span>В</span>
+                      <span>Н</span>
+                      <span>П</span>
+                    </div>
+                    <div className="tournament-table-stat-values">
+                      <span className="positive">{formatTournamentNumber(row.wins, 0)}</span>
+                      <span>{formatTournamentNumber(row.draws, 0)}</span>
+                      <span className="negative">{formatTournamentNumber(row.losses, 0)}</span>
+                    </div>
+                  </div>
+                  <div className="tournament-table-stat-group">
+                    <div className="tournament-table-stat-head">
+                      <span>+</span>
+                      <span>-</span>
+                      <span>Δ</span>
+                    </div>
+                    <div className="tournament-table-stat-values">
+                      <span className="positive">{formatTournamentNumber(row.pointsFor, 0)}</span>
+                      <span className="negative">{formatTournamentNumber(row.pointsAgainst, 0)}</span>
+                      <span className={pointDiffClass}>
+                        {formatSignedTournamentNumber(row.pointDiff, 0)}
                       </span>
                     </div>
-                    <div className="tournament-table-metric">
-                      <span className="tournament-table-metric-label">Δ рейтинг</span>
-                      <span className={`tournament-table-metric-value ${deltaClass}`}>
-                        {row.ratingDelta > 0
-                          ? `+${row.ratingDelta.toFixed(5)}`
-                          : row.ratingDelta.toFixed(5)}
-                      </span>
-                    </div>
+                  </div>
+                  <div className="tournament-table-rating-group">
+                    <span className="tournament-table-rating-label">Δ рейтинга</span>
+                    <span className={`tournament-table-rating-value ${ratingDeltaClass}`}>
+                      {formatSignedTournamentNumber(row.ratingDelta, 5)}
+                    </span>
                   </div>
                 </div>
               );
@@ -1141,53 +2109,97 @@ function TournamentManagerModal({
               {exportError && <span className="tournament-stats-error">{exportError}</span>}
             </div>
             <div className="tournament-stats-capture" ref={statsRef}>
-              <div className="tournament-stats-header">
-                <span>Участник</span>
-                <span>Игры</span>
-                <span>Очки</span>
-                <span>Разница</span>
-              </div>
               {statsRows.map((row) => {
-                const diff = row.pointsFor - row.pointsAgainst;
+                const diff = row.pointDiff;
+                const playerRating =
+                  row.ratingAfter
+                  ?? participantRatingById.get(row.id)
+                  ?? row.ratingBefore
+                  ?? null;
+                const playerBadgeStyle = getTournamentRatingBadgeStyle(playerRating);
+                const playerRingProgressDeg = `${Math.round(getTournamentRatingRingProgress(playerRating) * 360)}deg`;
+                const diffClass =
+                  diff > 0
+                    ? "positive"
+                    : diff < 0
+                      ? "negative"
+                      : "";
+                const ratingDeltaClass =
+                  row.ratingDelta > 0
+                    ? "positive"
+                    : row.ratingDelta < 0
+                      ? "negative"
+                      : "";
                 return (
                   <div key={row.id} className="tournament-stats-row">
                     <div className="tournament-stats-player">
-                      <div className={`tournament-participant-avatar ${row.photo ? "" : "no-photo"}`}>
-                        {row.photo ? (
-                          <img
-                            src={row.photo}
-                            alt={row.name}
-                            crossOrigin="anonymous"
-                            onError={(e) => {
-                              const target = e.currentTarget;
-                              target.style.display = "none";
-                              const parent = target.parentElement;
-                              if (parent) parent.classList.add("no-photo");
-                            }}
-                          />
-                        ) : null}
-                        <span className="tournament-participant-initials">
-                          {getInitialsFromName(row.name)}
-                        </span>
+                      <div className="tournament-table-avatar-wrap tournament-stats-avatar-wrap">
+                        <div
+                          className={`tournament-table-player-ring${playerRating != null ? " has-level" : ""}`}
+                          style={{ "--player-ring-progress": playerRingProgressDeg } as CSSProperties}
+                        >
+                          <div className={`tournament-participant-avatar ${row.photo ? "" : "no-photo"}`}>
+                            {row.photo ? (
+                              <img
+                                src={row.photo}
+                                alt={row.name}
+                                crossOrigin="anonymous"
+                                onError={(e) => {
+                                  const target = e.currentTarget;
+                                  target.style.display = "none";
+                                  const parent = target.parentElement;
+                                  if (parent) parent.classList.add("no-photo");
+                                }}
+                              />
+                            ) : null}
+                            <span className="tournament-participant-initials">
+                              {getInitialsFromName(row.name)}
+                            </span>
+                          </div>
+                        </div>
+                        {playerRating != null && (
+                          <span
+                            className="tournament-table-level tournament-stats-level"
+                            style={playerBadgeStyle}
+                          >
+                            {formatStatsRatingBadge(playerRating)}
+                          </span>
+                        )}
                       </div>
                       <span className="tournament-stats-name">{row.name}</span>
                     </div>
-                    <div className="tournament-stats-record">
-                      <span className="tournament-stats-loss">{row.losses}</span>
-                      <span className="tournament-stats-sep">-</span>
-                      <span className="tournament-stats-draw">{row.draws}</span>
-                      <span className="tournament-stats-sep">-</span>
-                      <span className="tournament-stats-win">{row.wins}</span>
+                    <div className="tournament-stats-block tournament-stats-block-record">
+                      <div className="tournament-stats-head">
+                        <span>В</span>
+                        <span>Н</span>
+                        <span>П</span>
+                      </div>
+                      <div className="tournament-stats-values">
+                        <span className="positive">{formatTournamentNumber(row.wins, 0)}</span>
+                        <span>{formatTournamentNumber(row.draws, 0)}</span>
+                        <span className="negative">{formatTournamentNumber(row.losses, 0)}</span>
+                      </div>
                     </div>
-                    <div className="tournament-stats-points">
-                      {row.pointsAgainst} - {row.pointsFor}
+                    <div className="tournament-stats-block tournament-stats-block-points">
+                      <div className="tournament-stats-head tournament-stats-head-single">
+                        <span>Очки</span>
+                      </div>
+                      <div className="tournament-stats-points-line">
+                        <span className="positive">{formatTournamentNumber(row.pointsFor, 0)}</span>
+                        <span className="tournament-stats-divider">-</span>
+                        <span className="negative">{formatTournamentNumber(row.pointsAgainst, 0)}</span>
+                      </div>
+                      <div className={`tournament-stats-sum ${diffClass}`}>
+                        {formatSignedTournamentNumber(diff, 0)}
+                      </div>
                     </div>
-                    <div
-                      className={`tournament-stats-diff ${
-                        diff > 0 ? "positive" : diff < 0 ? "negative" : ""
-                      }`}
-                    >
-                      {diff > 0 ? `+${diff}` : diff}
+                    <div className="tournament-stats-block tournament-stats-block-rating">
+                      <div className="tournament-stats-head tournament-stats-head-single">
+                        <span>Δ рейтинга</span>
+                      </div>
+                      <div className={`tournament-stats-rating-change ${ratingDeltaClass}`}>
+                        {formatSignedTournamentNumber(row.ratingDelta, 5)}
+                      </div>
                     </div>
                   </div>
                 );
@@ -1231,8 +2243,14 @@ export default function TournamentsPage({ onBack }: TournamentsPageProps) {
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<Exercise[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [profile, setProfile] = useState<UserProfileType | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
   const [selectedTournament, setSelectedTournament] = useState<Exercise | null>(null);
   const [managerData, setManagerData] = useState<AmericanoTournamentPayload | null>(null);
+  const [managerTotals, setManagerTotals] = useState<AmericanoResultsResponse["totals"] | null>(null);
+  const [managerPlayerLogs, setManagerPlayerLogs] = useState<AmericanoResultsResponse["playerLogs"] | null>(null);
+  const [historyById, setHistoryById] = useState<Record<string, TournamentHistoryRecord | null>>({});
+  const [openingTournamentId, setOpeningTournamentId] = useState<string | null>(null);
   const [dateIndex, setDateIndex] = useState(TODAY_DATE_INDEX);
 
   const dates = useMemo(() => {
@@ -1247,26 +2265,215 @@ export default function TournamentsPage({ onBack }: TournamentsPageProps) {
 
   const selectedDate = dates[dateIndex] ?? dates[0] ?? new Date();
   const selectedDateStr = formatDate(selectedDate);
+  const todayDateStr = formatDate(new Date());
+  const includePastTournaments = selectedDateStr <= todayDateStr;
   const selectedDateLabel = selectedDate.toLocaleDateString("ru-RU", {
     day: "numeric",
     month: "long",
   });
 
   useEffect(() => {
+    let alive = true;
     setLoading(true);
     setError(null);
-    apiFetchExercisesByDate(selectedDateStr)
-      .then((res) => {
-        if (res.data) setItems(res.data);
-        else setItems([]);
-      })
-      .catch(() => setError("Не удалось загрузить список турниров"))
-      .finally(() => setLoading(false));
-  }, [selectedDateStr]);
 
-  const tournaments = items.filter((ex) =>
-    ex.direction?.id === TOURNAMENT_DIRECTION_ID || ex.type?.id === TOURNAMENT_DIRECTION_ID,
+    void (async () => {
+      try {
+        const [exercisesResult, activeBookingsResult, historyBookingsResult] = await Promise.all([
+          apiFetchExercisesByVisibleDate(selectedDateStr, {
+            includePast: includePastTournaments,
+            includeAdjacentDays: selectedDateStr === todayDateStr,
+          }),
+          includePastTournaments ? apiFetchBookings(false) : Promise.resolve(null),
+          includePastTournaments ? apiFetchBookings(true) : Promise.resolve(null),
+        ]);
+
+        if (!alive) return;
+
+        const exerciseItems = exercisesResult.data ?? [];
+        const bookingItems = [
+          ...(activeBookingsResult?.data?.content ?? []),
+          ...(historyBookingsResult?.data?.content ?? []),
+        ];
+
+        setItems(mergeTournamentExercises(exerciseItems, bookingItems, selectedDateStr));
+      } catch {
+        if (!alive) return;
+        setError("Не удалось загрузить список турниров");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [includePastTournaments, selectedDateStr]);
+
+  useEffect(() => {
+    let alive = true;
+    setProfileLoading(true);
+    apiFetchProfile()
+      .then((res) => {
+        if (!alive) return;
+        setProfile(res.data ?? null);
+      })
+      .finally(() => {
+        if (alive) setProfileLoading(false);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const canHostTournaments = profile ? hasTournamentHostingAccess(profile) : false;
+  const tournaments = useMemo(
+    () =>
+      items.filter((ex) =>
+        ex.direction?.id === TOURNAMENT_DIRECTION_ID || ex.type?.id === TOURNAMENT_DIRECTION_ID,
+      ),
+    [items],
   );
+  const visibleTournaments = useMemo(
+    () =>
+      tournaments.filter((exercise) => (
+        canHostTournaments || isTournamentTrainer(exercise, profile?.id ?? null)
+      )),
+    [canHostTournaments, profile?.id, tournaments],
+  );
+  const tournamentIdsKey = useMemo(
+    () => visibleTournaments.map((ex) => String(ex.id)).sort().join("|"),
+    [visibleTournaments],
+  );
+
+  useEffect(() => {
+    if (!tournamentIdsKey) {
+      setHistoryById({});
+      return;
+    }
+
+    let alive = true;
+
+    void Promise.all(
+      visibleTournaments.map(async (tournament) => {
+        const tournamentId = String(tournament.id);
+        const result = await apiFetchTournamentHistory(tournamentId);
+        return [tournamentId, pickLatestTournamentHistory(result.data)] as const;
+      }),
+    ).then((entries) => {
+      if (!alive) return;
+      const next: Record<string, TournamentHistoryRecord | null> = {};
+      entries.forEach(([tournamentId, historyRecord]) => {
+        next[tournamentId] = historyRecord;
+      });
+      setHistoryById(next);
+    }).catch(() => {
+      if (!alive) return;
+      const next: Record<string, TournamentHistoryRecord | null> = {};
+      visibleTournaments.forEach((tournament) => {
+        next[String(tournament.id)] = null;
+      });
+      setHistoryById(next);
+    });
+
+    return () => {
+      alive = false;
+    };
+  }, [tournamentIdsKey, visibleTournaments]);
+
+  const handleTournamentOpen = async (tournament: Exercise) => {
+    const tournamentId = String(tournament.id);
+    if (openingTournamentId) return;
+    setOpeningTournamentId(tournamentId);
+
+    try {
+      let historyRecord = historyById[tournamentId] ?? null;
+
+      try {
+        const result = await apiFetchTournamentHistory(tournamentId);
+        const freshHistory = pickLatestTournamentHistory(result.data);
+        if (freshHistory || !historyRecord) {
+          historyRecord = freshHistory;
+        }
+        setHistoryById((prev) => ({
+          ...prev,
+          [tournamentId]: historyRecord,
+        }));
+      } catch {
+        if (!historyRecord) {
+          setHistoryById((prev) => ({
+            ...prev,
+            [tournamentId]: null,
+          }));
+        }
+      }
+
+      const restoredPayload = historyRecord ? buildTournamentPayloadFromHistory(historyRecord) : null;
+      if (restoredPayload) {
+        setSelectedTournament(null);
+        setManagerTotals(historyRecord?.totals ?? null);
+        setManagerPlayerLogs(historyRecord?.playerLogs ?? null);
+        setManagerData(restoredPayload);
+        return;
+      }
+
+      setSelectedTournament(tournament);
+    } finally {
+      setOpeningTournamentId((current) => (current === tournamentId ? null : current));
+    }
+  };
+
+  const handleTournamentCreated = (payload: AmericanoTournamentPayload) => {
+    const previousHistory = historyById[payload.tournamentId] ?? null;
+    const nextHistory = buildTournamentHistoryRecordFromPayload(
+      payload,
+      selectedTournament,
+      previousHistory,
+    );
+    setHistoryById((prev) => ({
+      ...prev,
+      [payload.tournamentId]: nextHistory,
+    }));
+    setManagerTotals(null);
+    setManagerPlayerLogs(null);
+    setManagerData(payload);
+  };
+
+  const handleManagerDataChange = (
+    payload: AmericanoTournamentPayload,
+    extras: {
+      totals: AmericanoResultsResponse["totals"] | null;
+      playerLogs: AmericanoResultsResponse["playerLogs"] | null;
+    },
+  ) => {
+    const currentTournament =
+      visibleTournaments.find((item) => String(item.id) === payload.tournamentId) ?? selectedTournament ?? null;
+    setHistoryById((prev) => ({
+      ...prev,
+      [payload.tournamentId]: buildTournamentHistoryRecordFromPayload(
+        payload,
+        currentTournament,
+        prev[payload.tournamentId] ?? null,
+        extras.totals,
+        extras.playerLogs,
+      ),
+    }));
+  };
+
+  const handleManagerEditSettings = () => {
+    if (!managerData?.tournamentId) return;
+    const currentTournament =
+      visibleTournaments.find((item) => String(item.id) === managerData.tournamentId)
+      ?? items.find((item) => String(item.id) === managerData.tournamentId)
+      ?? null;
+    if (!currentTournament) return;
+
+    setManagerData(null);
+    setManagerTotals(null);
+    setManagerPlayerLogs(null);
+    setSelectedTournament(currentTournament);
+  };
 
   return (
     <div className="app-container">
@@ -1312,21 +2519,51 @@ export default function TournamentsPage({ onBack }: TournamentsPageProps) {
             })}
           </div>
 
-          {loading && <div className="tournaments-muted">Загрузка...</div>}
+          {(loading || profileLoading) && <div className="tournaments-muted">Загрузка...</div>}
           {!loading && error && <div className="tournaments-error">{error}</div>}
-          {!loading && !error && tournaments.length === 0 && (
+          {!loading && !profileLoading && !error && visibleTournaments.length === 0 && (
             <div className="tournaments-muted">На выбранную дату турниров нет</div>
           )}
-          {!loading && !error && tournaments.length > 0 && (
+          {!loading && !profileLoading && !error && visibleTournaments.length > 0 && (
             <div className="tournaments-list">
-              {tournaments.map((ex) => (
-                <button
-                  className="tournament-card"
-                  key={ex.id}
-                  type="button"
-                  onClick={() => setSelectedTournament(ex)}
-                >
-                  <div className="tournament-title">{ex.direction?.name || ex.type?.name || "Турнир"}</div>
+              {!canHostTournaments && (
+                <div className="tournaments-muted">
+                  Показаны турниры, где вы назначены исполнителем.
+                </div>
+              )}
+              {visibleTournaments.map((ex) => {
+                const tournamentId = String(ex.id);
+                const historyRecord = historyById[tournamentId] ?? null;
+                const progressState = getTournamentProgressState(historyRecord);
+                const progressLabel =
+                  progressState === "completed"
+                    ? "Проведен и сохранен"
+                    : progressState === "in_progress"
+                      ? "Не завершен"
+                      : null;
+
+                return (
+                  <button
+                    className={`tournament-card${
+                      progressState !== "not_started" ? ` tournament-card--${progressState}` : ""
+                    }${openingTournamentId === tournamentId ? " is-loading" : ""}`}
+                    key={ex.id}
+                    type="button"
+                    onClick={() => void handleTournamentOpen(ex)}
+                    aria-busy={openingTournamentId === tournamentId}
+                  >
+                    <div className="tournament-card-head">
+                      <div className="tournament-title">
+                        {ex.direction?.name || ex.type?.name || "Турнир"}
+                      </div>
+                      {progressLabel && (
+                        <span
+                          className={`tournament-card-status tournament-card-status--${progressState}`}
+                        >
+                          {progressLabel}
+                        </span>
+                      )}
+                    </div>
                   <div className="tournament-row">
                     <span>{formatTime(ex.timeFrom)} – {formatTime(ex.timeTo)}</span>
                     {ex.studio?.name && <span>{ex.studio.name}</span>}
@@ -1339,8 +2576,9 @@ export default function TournamentsPage({ onBack }: TournamentsPageProps) {
                   {ex.studio?.address && (
                     <div className="tournament-address">{ex.studio.address}</div>
                   )}
-                </button>
-              ))}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
@@ -1350,13 +2588,23 @@ export default function TournamentsPage({ onBack }: TournamentsPageProps) {
         isOpen={Boolean(selectedTournament)}
         onClose={() => setSelectedTournament(null)}
         tournament={selectedTournament}
-        onSaved={(data) => setManagerData(data)}
+        historyRecord={selectedTournament ? historyById[String(selectedTournament.id)] ?? null : null}
+        onSaved={handleTournamentCreated}
       />
 
       <TournamentManagerModal
         isOpen={Boolean(managerData)}
-        onClose={() => setManagerData(null)}
+        onClose={() => {
+          setManagerData(null);
+          setManagerTotals(null);
+          setManagerPlayerLogs(null);
+        }}
         data={managerData}
+        title={managerData ? getTournamentTypeLabel(managerData.tournamentType) : "Турнир"}
+        initialTotals={managerTotals}
+        initialPlayerLogs={managerPlayerLogs}
+        onDataChange={handleManagerDataChange}
+        onEditSettings={handleManagerEditSettings}
       />
     </div>
   );

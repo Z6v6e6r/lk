@@ -117,7 +117,12 @@ const clientDoc = {
     ...toArray(best?.sourceChannels).map((value) => toStr(value)?.toUpperCase()),
     event.channel,
   ]),
+  sourceConnectors: uniq([
+    ...toArray(best?.sourceConnectors).map((value) => toStr(value)?.toUpperCase()),
+    event.connector,
+  ]),
   channelTargets: mergeChannelTargets(best?.channelTargets, event, nowIso, nowTs),
+  lastConnector: event.connector,
   lastChannel: event.channel,
   lastSeenAt: nowIso,
   lastSeenTs: nowTs,
@@ -134,13 +139,15 @@ const clientDoc = {
 
 msg._supportEvent.client = clientDoc;
 
+const setClientDoc = Object.assign({}, clientDoc);
+delete setClientDoc.id;
+
 const clientWriteMsg = Object.assign({}, msg, {
   payload: [
     { id: clientId },
     {
-      $set: Object.assign({}, clientDoc),
+      $set: setClientDoc,
       $setOnInsert: {
-        id: clientId,
         createdAt: toStr(best?.createdAt) || nowIso,
         createdTs: Number(best?.createdTs || nowTs),
       },

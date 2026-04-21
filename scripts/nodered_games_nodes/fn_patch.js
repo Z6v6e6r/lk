@@ -13,6 +13,11 @@ const normPhone = (v) => {
   return s;
 };
 const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
+const toNum = (v) => {
+  if (v === null || v === undefined) return null;
+  const n = Number(String(v).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+};
 
 const gameId = String(msg.req?.params?.gameId || "").trim();
 if (!gameId) {
@@ -72,6 +77,7 @@ const normalizePlayer = (p, fallbackSource) => {
     phone: normPhone(p.phone || p.phoneNumber || p.mobile),
     photo: toStr(p.photo || p.avatar || p.imageUrl),
     rating: toStr(p.rating || p.level || p.grade),
+    ratingNumeric: toNum(p.ratingNumeric || p.numericRating || p.levelNumeric),
     source: toStr(p.source || fallbackSource || "INVITED"),
     status: toStr(p.status || "CONFIRMED"),
   };
@@ -132,4 +138,13 @@ const responseMsg = Object.assign({}, msg, {
   payload: Object.assign({ id: gameId }, setDoc),
 });
 
-return [dbMsg, responseMsg, responseMsg];
+const autojoinProbeMsg = Object.assign({}, msg, {
+  _gameAutojoinPatch: {
+    gameId,
+    patch: setDoc,
+    source: "games_patch",
+  },
+  payload: { id: gameId, archived: { $ne: true } },
+});
+
+return [dbMsg, responseMsg, responseMsg, autojoinProbeMsg];

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { Modal } from "../UI/Modal";
 import { apiSaveOnboardingLevel } from "../../utils/apiClient";
 import type { UserProfileType } from "../../utils/apiClient";
@@ -9,6 +9,7 @@ import {
   getLetterGrade,
 } from "../../utils/customFields";
 import { identifyAnalyticsUser, trackAnalyticsEvent, trackClientError } from "../../utils/analytics";
+import { resolveHashActionTarget, retriggerHashAction } from "../../utils/hashActions";
 
 type ScoreOp =
   | { type: "add"; value: number }
@@ -347,6 +348,28 @@ export function OnboardingModal({
     onClose();
   };
 
+  const handleLinkClick = (
+    event: MouseEvent<HTMLAnchorElement>,
+    href: string,
+    destination: "training" | "tournaments",
+    source: "already_completed" | "completed",
+  ) => {
+    trackAnalyticsEvent("onboarding_link_click", {
+      clientId: profile.id,
+      destination,
+      source,
+    });
+
+    const hashActionTarget = resolveHashActionTarget(href);
+    if (!hashActionTarget) return;
+
+    event.preventDefault();
+    handleClose();
+    window.setTimeout(() => {
+      retriggerHashAction(hashActionTarget);
+    }, 0);
+  };
+
   useEffect(() => {
     if (!isOpen) {
       setCurrentIndex(0);
@@ -425,7 +448,7 @@ export function OnboardingModal({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, currentQuestion?.id, currentQuestion?.image]);
+  }, [isOpen, currentQuestion]);
 
   const isMulti = currentQuestion?.type === "multi";
   const canNext = currentQuestion && selected.length > 0;
@@ -525,7 +548,7 @@ export function OnboardingModal({
         levelLetter: letterScore,
         levelNumeric: numericScore,
       });
-      if (res.status === 200 || res.status === 204) {
+      if (!res.error && (res.status === 200 || res.status === 204)) {
         identifyAnalyticsUser({
           clientId: profile.id,
           phone: profile.phone,
@@ -590,14 +613,10 @@ export function OnboardingModal({
             <a
               className="onboarding-link"
               href={trainingLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={() =>
-                trackAnalyticsEvent("onboarding_link_click", {
-                  clientId: profile.id,
-                  destination: "training",
-                  source: "already_completed",
-                })}
+              target={resolveHashActionTarget(trainingLink) ? undefined : "_blank"}
+              rel={resolveHashActionTarget(trainingLink) ? undefined : "noopener noreferrer"}
+              onClick={(event) =>
+                handleLinkClick(event, trainingLink, "training", "already_completed")}
             >
               Групповые тренировки
             </a>
@@ -606,12 +625,8 @@ export function OnboardingModal({
               href={tournamentsLink}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={() =>
-                trackAnalyticsEvent("onboarding_link_click", {
-                  clientId: profile.id,
-                  destination: "tournaments",
-                  source: "already_completed",
-                })}
+              onClick={(event) =>
+                handleLinkClick(event, tournamentsLink, "tournaments", "already_completed")}
             >
               Турниры
             </a>
@@ -634,14 +649,10 @@ export function OnboardingModal({
             <a
               className="onboarding-link"
               href={trainingLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={() =>
-                trackAnalyticsEvent("onboarding_link_click", {
-                  clientId: profile.id,
-                  destination: "training",
-                  source: "completed",
-                })}
+              target={resolveHashActionTarget(trainingLink) ? undefined : "_blank"}
+              rel={resolveHashActionTarget(trainingLink) ? undefined : "noopener noreferrer"}
+              onClick={(event) =>
+                handleLinkClick(event, trainingLink, "training", "completed")}
             >
               Перейти к тренировкам
             </a>
@@ -650,12 +661,8 @@ export function OnboardingModal({
               href={tournamentsLink}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={() =>
-                trackAnalyticsEvent("onboarding_link_click", {
-                  clientId: profile.id,
-                  destination: "tournaments",
-                  source: "completed",
-                })}
+              onClick={(event) =>
+                handleLinkClick(event, tournamentsLink, "tournaments", "completed")}
             >
               Перейти к турнирам
             </a>

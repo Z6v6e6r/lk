@@ -48,6 +48,12 @@ const normalizeChannel = (value) => {
   const normalized = toStr(value)?.toUpperCase();
   return normalized || "WEB";
 };
+const normalizeConnector = (value, channel) => {
+  const normalized = toStr(value)?.toUpperCase();
+  if (normalized) return normalized;
+  if (channel === "WEB") return "WEB_LK";
+  return channel;
+};
 const normalizePriority = (value) => {
   const normalized = toStr(value)?.toUpperCase();
   if (["CRITICAL", "IMPORTANT", "MEDIUM", "SUGGESTION"].includes(normalized)) {
@@ -222,6 +228,7 @@ const nowIso = now.toISOString();
 const nowTs = now.getTime();
 
 const channel = normalizeChannel(body.channel || body.provider || body.sourceChannel);
+const connector = normalizeConnector(body.connector || body.sourceConnector, channel);
 const direction = normalizeDirection(body.direction);
 const authorType = normalizeAuthorType(body.authorType, direction);
 const eventType = normalizeEventType(body.eventType);
@@ -283,6 +290,7 @@ const text =
 
 const supportEvent = {
   eventId: toStr(body.eventId) || `${channel}:${nowTs}:${Math.random().toString(36).slice(2, 10)}`,
+  connector,
   channel,
   direction,
   authorType,
@@ -314,11 +322,53 @@ const supportEvent = {
   ai,
   metadata: Object.assign({}, isObj(body.metadata) ? body.metadata : {}, {
     sourcePayloadType: typeof msg.payload,
+    sourceConnector: connector,
     requestPath: toStr(msg.req?.path || msg.req?.originalUrl || msg.req?.url),
   }),
   createdAt: nowIso,
   createdTs: nowTs,
 };
+
+const dedupeWindowMs = 2500;
+const externalMessageId = toStr(supportEvent.externalMessageId);
+const dedupeIdentity =
+  toStr(supportEvent.channelUserId)
+  || toStr(supportEvent.userId)
+  || toStr(supportEvent.senderId)
+  || toStr(supportEvent.primaryPhone)
+  || "anonymous";
+const dedupeText = toStr(supportEvent.text) || "";
+const dedupeKey = externalMessageId
+  ? `${supportEvent.connector}|${supportEvent.channel}|ext:${externalMessageId}`
+  : `${supportEvent.connector}|${supportEvent.channel}|${dedupeIdentity}|${supportEvent.stationId}|${supportEvent.eventType}|${dedupeText.toLowerCase()}`;
+const dedupeCache = isObj(context.get("supportEventDedupeCache"))
+  ? context.get("supportEventDedupeCache")
+  : {};
+
+Object.keys(dedupeCache).forEach((key) => {
+  const ts = Number(dedupeCache[key] || 0);
+  if (!Number.isFinite(ts) || nowTs - ts > dedupeWindowMs) {
+    delete dedupeCache[key];
+  }
+});
+
+const prevTs = Number(dedupeCache[dedupeKey] || 0);
+if (Number.isFinite(prevTs) && prevTs > 0 && nowTs - prevTs < dedupeWindowMs) {
+  dedupeCache[dedupeKey] = nowTs;
+  context.set("supportEventDedupeCache", dedupeCache);
+  msg.statusCode = 202;
+  msg.headers = { "Content-Type": "application/json; charset=utf-8" };
+  msg.payload = {
+    ok: true,
+    ignored: true,
+    reason: "duplicate_event_window",
+    dedupeWindowMs,
+  };
+  return [null, msg, msg];
+}
+
+dedupeCache[dedupeKey] = nowTs;
+context.set("supportEventDedupeCache", dedupeCache);
 
 msg._supportEvent = supportEvent;
 msg.payload = {

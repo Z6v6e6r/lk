@@ -1,0 +1,357 @@
+.card {
+  width: 100%;
+  border-radius: 22px;
+  padding: 14px;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(86, 68, 133, 0.08);
+  font-family: Inter, "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.cardInteractive {
+  cursor: pointer;
+}
+
+.topRow {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.calendarBadge {
+  width: 42px;
+  height: 58px;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: inset 0 0 0 1px rgba(123, 87, 246, 0.04);
+}
+
+.badgeTop {
+  height: 16px;
+  background: #15151d;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: 0.04em;
+}
+
+.badgeMiddle {
+  height: 24px;
+  background: linear-gradient(180deg, #7b57f6 0%, #6847e8 100%);
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 800;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.badgeBottom {
+  height: 18px;
+  background: #f2eff7;
+  color: #7b7489;
+  font-size: 9px;
+  font-weight: 700;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.content {
+  min-width: 0;
+}
+
+.headerRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.textGroup {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 auto;
+}
+
+.chatTopButton {
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 14px;
+  background: #f1ecfa;
+  color: #6f4df6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.chatTopIcon {
+  width: 19px;
+  height: 19px;
+}
+
+.title {
+  margin: 0;
+  color: #1f1a2e;
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.subtitleText {
+  margin: 0;
+  color: #6f6a7d;
+  font-size: 12px;
+  line-height: 1.25;
+  font-weight: 400;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: -0.05em;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.metaRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.timeText {
+  margin: 0;
+  color: #3c3750;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 400;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: -0.05em;
+  white-space: nowrap;
+}
+
+.metaDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #bbb4c8;
+  flex: 0 0 auto;
+}
+
+.levelBadge {
+  min-width: 0;
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 24px;
+  background: linear-gradient(180deg, #ff9736 0%, #ff7b1c 100%);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 500;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: -0.05em;
+  white-space: nowrap;
+}
+
+.resultsBlock {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  border-top: 1px solid rgba(187, 180, 200, 0.35);
+}
+
+.teamRow {
+  padding: 12px 0 10px;
+}
+
+.teamRow + .teamRow {
+  border-top: 1px solid rgba(187, 180, 200, 0.3);
+}
+
+.teamRowTop {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.teamAvatars {
+  display: flex;
+  align-items: center;
+  isolation: isolate;
+  flex: 0 0 auto;
+}
+
+.resultAvatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  margin-left: -8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #d8d4e2;
+  color: #4c445f;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 6px 14px rgba(99, 86, 129, 0.1);
+}
+
+.resultAvatar:first-child {
+  margin-left: 0;
+}
+
+.avatarImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.teamSets {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+}
+
+.setValueWinner,
+.setValueLoser {
+  min-width: 18px;
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 800;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.setValueWinner {
+  color: #6da784;
+}
+
+.setValueLoser {
+  color: #d25a73;
+}
+
+.teamNames {
+  margin-top: 8px;
+  padding-left: 2px;
+  color: #6a6480;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 500;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: -0.04em;
+}
+
+.footerRow {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.statusPill {
+  min-height: 28px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 800;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.statusPillPending {
+  background: rgba(123, 87, 246, 0.12);
+  color: #6d4df0;
+}
+
+.statusPillDisputable {
+  background: rgba(255, 123, 28, 0.16);
+  color: #d96b15;
+}
+
+.statusPillDisputed {
+  background: rgba(210, 90, 115, 0.14);
+  color: #c24d64;
+}
+
+.actionButton {
+  min-height: 36px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #ff8e35 0%, #ff6d1f 100%);
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 800;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+@media (max-width: 360px) {
+  .card {
+    padding: 12px;
+  }
+
+  .topRow {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 9px;
+  }
+
+  .calendarBadge {
+    width: 40px;
+    height: 56px;
+  }
+
+  .title {
+    font-size: 16px;
+  }
+
+  .subtitleText,
+  .teamNames {
+    font-size: 11px;
+  }
+
+  .teamSets {
+    gap: 14px;
+  }
+
+  .setValueWinner,
+  .setValueLoser {
+    font-size: 22px;
+  }
+}

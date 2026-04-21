@@ -7,7 +7,6 @@ import {
   type PadelGameRecord,
   type UserProfileType,
 } from "../../utils/apiClient";
-import { useAuth } from "../../context/AuthContext";
 import {
   CUSTOM_FIELD_IDS,
   getCustomFieldValue,
@@ -25,6 +24,7 @@ interface GameJoinPageProps {
 
 const DEFAULT_CABINET_URL = CABINET_URL;
 const DEFAULT_MAX_PLAYERS = 4;
+const OPEN_GAME_QUERY_KEY = "openGameId";
 
 function normalizePhone(value: string | null | undefined): string | null {
   const digits = String(value || "").replace(/\D/g, "");
@@ -80,6 +80,7 @@ function buildMyPlayer(profile: UserProfileType): PadelGamePlayer {
     phone: profile.phone ?? null,
     photo: profile.photo ?? null,
     rating: explicitGrade ?? (numeric != null ? getLetterGrade(numeric) : null),
+    ratingNumeric: numeric,
     source: "INVITE_LINK",
     status: "CONFIRMED",
   };
@@ -151,14 +152,41 @@ function mergeRecord(base: PadelGameRecord, incoming: PadelGameRecord): PadelGam
   };
 }
 
+function resolveInviteCabinetUrl(value: string | null | undefined): string {
+  const fallback = (DEFAULT_CABINET_URL || "").trim();
+  const raw = (value || "").trim();
+  if (!raw) return fallback;
+
+  try {
+    return new URL(raw, typeof window !== "undefined" ? window.location.origin : undefined).toString();
+  } catch {
+    return raw || fallback;
+  }
+}
+
+function buildCabinetGameUrl(cabinetUrl: string | null | undefined, gameId: string): string {
+  const targetUrl = resolveInviteCabinetUrl(cabinetUrl);
+
+  try {
+    const parsed = new URL(targetUrl, window.location.origin);
+    parsed.searchParams.set(OPEN_GAME_QUERY_KEY, gameId);
+    return parsed.toString();
+  } catch {
+    const join = targetUrl.includes("?") ? "&" : "?";
+    return `${targetUrl}${join}${OPEN_GAME_QUERY_KEY}=${encodeURIComponent(gameId)}`;
+  }
+}
+
+function buildCabinetHomeUrl(cabinetUrl: string | null | undefined): string {
+  return resolveInviteCabinetUrl(cabinetUrl);
+}
+
 export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL }: GameJoinPageProps) {
-  const { logout } = useAuth();
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [game, setGame] = useState<PadelGameRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [decisionError, setDecisionError] = useState<string | null>(null);
-  const [decisionSuccess, setDecisionSuccess] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<"join" | "decline" | null>(null);
   const [comment, setComment] = useState("");
 
@@ -224,7 +252,6 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
 
       setSubmitting(target);
       setDecisionError(null);
-      setDecisionSuccess(null);
 
       const freshRecordResult = await apiFetchPadelGameRecord(game.id);
       const actualGame = freshRecordResult.data ?? game;
@@ -300,17 +327,16 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         setGame(mergeRecord(actualGame, updateResult.data));
       }
 
-      if (appliedStatus === "JOINED") {
-        setDecisionSuccess("Вы успешно присоединились к игре");
-      } else if (appliedStatus === "WAITLIST") {
-        setDecisionSuccess("Мест нет, вы добавлены в лист ожидания");
-      } else {
-        setDecisionSuccess("Вы отказались от участия");
+      if (target === "join") {
+        setSubmitting(null);
+        window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
+        return;
       }
 
       setSubmitting(null);
+      window.location.href = buildCabinetHomeUrl(cabinetUrl);
     },
-    [comment, game, profile],
+    [cabinetUrl, comment, game, profile],
   );
 
   if (loading) {
@@ -335,7 +361,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
             className="section-cta"
             type="button"
             onClick={() => {
-              window.location.href = cabinetUrl || DEFAULT_CABINET_URL;
+              window.location.href = buildCabinetHomeUrl(cabinetUrl);
             }}
           >
             Перейти в личный кабинет
@@ -353,6 +379,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const courtLabel = game.booking?.roomName || "Корт";
   const stationLabel = game.booking?.studioName || "Станция";
   const alreadyJoined = myDecision === "JOINED";
+  const showJoinedActions = alreadyJoined;
   const canJoin = submitting === null && !alreadyJoined;
   const canDecline = submitting === null;
 
@@ -379,71 +406,82 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         <div className="game-join-status">{statusLabel}</div>
       </div>
 
-      <div className="game-section">
-        <div className="game-section-title">Комментарий к ответу</div>
-        <textarea
-          className="game-input game-join-comment"
-          placeholder="Например: буду с партнером / опоздаю на 10 минут"
-          value={comment}
-          onChange={(event) => setComment(event.target.value.slice(0, 300))}
-        />
-      </div>
+      {!showJoinedActions && (
+        <div className="game-section">
+          <div className="game-section-title">Комментарий к ответу</div>
+          <textarea
+            className="game-input game-join-comment"
+            placeholder="Например: буду с партнером / опоздаю на 10 минут"
+            value={comment}
+            onChange={(event) => setComment(event.target.value.slice(0, 300))}
+          />
+        </div>
+      )}
 
       {decisionError && (
         <div className="game-section">
           <div className="game-empty game-pay-error">{decisionError}</div>
         </div>
       )}
-      {decisionSuccess && (
-        <div className="game-section">
-          <div className="game-empty">{decisionSuccess}</div>
-        </div>
-      )}
 
       <div className="game-section game-join-actions">
-        {!alreadyJoined && (
-          <button
-            className="section-cta"
-            type="button"
-            disabled={!canJoin}
-            onClick={() => {
-              void applyDecision("join");
-            }}
-          >
-            {submitting === "join" ? "Сохраняем..." : "Присоединиться"}
-          </button>
+        {showJoinedActions ? (
+          <>
+            <button
+              className="section-cta"
+              type="button"
+              onClick={() => {
+                window.location.href = buildCabinetGameUrl(cabinetUrl, game.id);
+              }}
+            >
+              Перейти в игру
+            </button>
+            <button
+              className="section-cta section-cta-secondary"
+              type="button"
+              disabled={!canDecline}
+              onClick={() => {
+                void applyDecision("decline");
+              }}
+            >
+              {submitting === "decline" ? "Сохраняем..." : "Выйти из игры"}
+            </button>
+            <button
+              className="section-cta section-cta-secondary"
+              type="button"
+              onClick={() => {
+                window.location.href = buildCabinetHomeUrl(cabinetUrl);
+              }}
+            >
+              Перейти в личный кабинет
+            </button>
+          </>
+        ) : (
+          <>
+            {!alreadyJoined && (
+              <button
+                className="section-cta"
+                type="button"
+                disabled={!canJoin}
+                onClick={() => {
+                  void applyDecision("join");
+                }}
+              >
+                {submitting === "join" ? "Сохраняем..." : "Присоединиться"}
+              </button>
+            )}
+            <button
+              className="section-cta section-cta-secondary"
+              type="button"
+              disabled={!canDecline}
+              onClick={() => {
+                void applyDecision("decline");
+              }}
+            >
+              {submitting === "decline" ? "Сохраняем..." : "Отказаться от игры"}
+            </button>
+          </>
         )}
-        <button
-          className="section-cta section-cta-secondary"
-          type="button"
-          disabled={!canDecline}
-          onClick={() => {
-            void applyDecision("decline");
-          }}
-        >
-          {submitting === "decline" ? "Сохраняем..." : "Отказаться от игры"}
-        </button>
-      </div>
-
-      <div className="game-section game-join-actions game-join-footer">
-        <button
-          className="section-cta"
-          type="button"
-          onClick={() => {
-            window.location.href = cabinetUrl || DEFAULT_CABINET_URL;
-          }}
-        >
-          Перейти в личный кабинет
-        </button>
-        <button
-          className="section-cta section-cta-secondary"
-          type="button"
-          onClick={() => {
-            logout();
-          }}
-        >
-          Выйти
-        </button>
       </div>
     </div>
   );

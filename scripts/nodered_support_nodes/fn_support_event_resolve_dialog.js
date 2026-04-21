@@ -144,6 +144,11 @@ const dialogDoc = {
     ...toArray(client.sourceChannels).map((value) => toStr(value)?.toUpperCase()),
     event.channel,
   ]),
+  connectors: uniq([
+    ...toArray(existing?.connectors).map((value) => toStr(value)?.toUpperCase()),
+    ...toArray(client.sourceConnectors).map((value) => toStr(value)?.toUpperCase()),
+    event.connector,
+  ]),
   channelTargets: mergeChannelTargets(existing?.channelTargets, client.channelTargets, event, nowIso, nowTs),
   authStatus,
   workflowState,
@@ -176,6 +181,7 @@ const dialogDoc = {
   lastMessageTs: nowTs,
   lastMessageDirection: event.direction,
   lastMessageAuthorType: event.authorType,
+  lastConnector: event.connector,
   lastChannel: event.channel,
   lastInboundChannel: isClientInbound ? event.channel : (toStr(existing?.lastInboundChannel) || null),
   lastOutboundChannel: isAdminOutbound ? event.channel : (toStr(existing?.lastOutboundChannel) || null),
@@ -207,6 +213,7 @@ const messageDoc = {
   direction: event.direction,
   authorType: event.authorType,
   eventType: event.eventType,
+  connector: event.connector,
   channel: event.channel,
   externalMessageId: event.externalMessageId || null,
   externalThreadId: event.externalThreadId || null,
@@ -253,6 +260,7 @@ msg._supportEvent.dialog = dialogDoc;
 msg._supportEvent.message = messageDoc;
 
 const setDialogDoc = Object.assign({}, dialogDoc);
+delete setDialogDoc.id;
 delete setDialogDoc.createdAt;
 delete setDialogDoc.createdTs;
 delete setDialogDoc.openedAt;
@@ -264,7 +272,6 @@ const dialogWriteMsg = Object.assign({}, msg, {
     {
       $set: setDialogDoc,
       $setOnInsert: {
-        id: dialogId,
         createdAt: dialogDoc.createdAt,
         createdTs: dialogDoc.createdTs,
         openedAt: dialogDoc.openedAt,

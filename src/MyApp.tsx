@@ -1,30 +1,66 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { OverlayScopeProvider } from "./context/OverlayScopeContext";
 import { AuthForm } from "./components/auth/AuthForm";
+import { RemoteWidgetHost } from "./components/UI/RemoteWidgetHost";
 import { Cabinet } from "./components/cabinet/Cabinet";
-import GameJoinPage from "./components/games/GameJoinPage";
+import CommunityJoinPage from "./components/communities/CommunityJoinPage";
 import {
   CABINET_URL,
+  PUBLIC_COMMUNITY_JOIN_PATH,
   GAMES_BUNDLE_URL,
   ONBOARDING_BUNDLE_URL,
+  PUBLIC_GAME_CREATE_PATH,
   PUBLIC_INVITE_PATH,
   TOURNAMENTS_BUNDLE_URL,
 } from "./consts/api_config";
+import { loadWidget, type WidgetGlobalName, type WidgetModule } from "./utils/widgetLoader";
 import { trackAnalyticsEvent, trackClientError } from "./utils/analytics";
+import { PAYMENT_REF_QUERY_KEY, processPendingPaymentSyncQueue } from "./utils/paymentSync";
+import { syncGamesCommunityAutopublish } from "./utils/gameCommunityAutopublish";
+import type { GamesMountData, OpenGamesOptions } from "./types/gamesOverlay";
+import type { UserProfileType } from "./utils/apiClient";
 import "./MyApp.css";
 
-type WidgetModule = {
-  mount: (options?: { targetId?: string; onClose?: () => void; data?: any }) => void;
-  unmount?: (targetId?: string) => void;
+type OnboardingMountData = {
+  profile?: UserProfileType;
+  gamesLink?: string;
+  trainingLink?: string;
+  tournamentsLink?: string;
+};
+
+type OverlayModuleName = "games" | "tournaments" | "onboarding";
+type OverlayData = GamesMountData | OnboardingMountData | undefined;
+
+type AppWindow = Window & Record<WidgetGlobalName, WidgetModule | undefined> & {
+  __LK_ON_READY?: () => void;
+  __PADLHUB_JOIN_CONFIG__?: { gameId?: string | null; cabinetUrl?: string | null };
+  __PADLHUB_COMMUNITY_JOIN_CONFIG__?: {
+    inviteCode?: string | null;
+    inviteLink?: string | null;
+    cabinetUrl?: string | null;
+  };
+  __PADLHUB_CREATE_CONFIG__?: {
+    studioId?: string | null;
+    studioName?: string | null;
+    stationId?: string | null;
+    stationName?: string | null;
+    cabinetUrl?: string | null;
+  };
 };
 
 const DEFAULT_CABINET_URL = CABINET_URL;
 const DEFAULT_INVITE_PATH = (PUBLIC_INVITE_PATH || "/game_join").replace(/\/+$/, "") || "/game_join";
+const DEFAULT_GAME_CREATE_PATH =
+  (PUBLIC_GAME_CREATE_PATH || "/game_create").replace(/\/+$/, "") || "/game_create";
+const DEFAULT_COMMUNITY_JOIN_PATH =
+  (PUBLIC_COMMUNITY_JOIN_PATH || "/community_join").replace(/\/+$/, "") || "/community_join";
+const OPEN_GAME_QUERY_KEY = "openGameId";
 
 const OVERLAY_ID = "lk-overlay";
 let overlayRoot: ReturnType<typeof createRoot> | null = null;
-let activeOverlayModule: "games" | "tournaments" | "onboarding" | null = null;
+let activeOverlayModule: OverlayModuleName | null = null;
 
 function ensureOverlayContainer() {
   let el = document.getElementById(OVERLAY_ID);
@@ -77,31 +113,34 @@ function hideOverlay() {
   requestAnimationFrame(cleanup);
 }
 
-const scriptPromises: Record<string, Promise<WidgetModule> | undefined> = {};
+function normalizeInviteCabinetUrl(value: string | null | undefined): string {
+  const fallback = (DEFAULT_CABINET_URL || "").trim();
+  const raw = (value || "").trim();
+  if (!raw) return fallback;
 
-function loadWidget(src: string, globalName: string): Promise<WidgetModule> {
-  if ((window as any)[globalName]) {
-    return Promise.resolve((window as any)[globalName] as WidgetModule);
+  try {
+    return new URL(raw, typeof window !== "undefined" ? window.location.origin : undefined).toString();
+  } catch {
+    return raw || fallback;
   }
-  if (scriptPromises[globalName]) return scriptPromises[globalName]!;
+}
 
-  scriptPromises[globalName] = new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = src;
-    script.async = true;
-    script.onload = () => {
-      const mod = (window as any)[globalName] as WidgetModule | undefined;
-      if (!mod) {
-        reject(new Error("Module did not register on window"));
-        return;
-      }
-      resolve(mod);
-    };
-    script.onerror = () => reject(new Error("Failed to load script"));
-    document.head.appendChild(script);
-  });
+function extractCommunityInviteCode(value: string | null | undefined): string | null {
+  const raw = (value || "").trim();
+  if (!raw) return null;
 
-  return scriptPromises[globalName];
+  try {
+    const parsed = new URL(raw, typeof window !== "undefined" ? window.location.origin : undefined);
+    return (
+      parsed.searchParams.get("invite")
+      || parsed.searchParams.get("code")
+      || parsed.searchParams.get("inviteCode")
+      || parsed.pathname.split("/").filter(Boolean).at(-1)
+      || ""
+    ).trim() || null;
+  } catch {
+    return raw.split("/").filter(Boolean).at(-1)?.trim() || null;
+  }
 }
 
 function AppContent() {
@@ -148,12 +187,12 @@ function AppContent() {
     ).trim();
     const byPath = current.pathname.replace(/\/+$/, "").endsWith(DEFAULT_INVITE_PATH);
     const enabled = byPath || Boolean(gameId);
-    const cabinetUrl = (
+    const cabinetUrl = normalizeInviteCabinetUrl((
       current.searchParams.get("cabinetUrl")
       || current.searchParams.get("returnUrl")
       || joinConfig?.cabinetUrl
       || DEFAULT_CABINET_URL
-    ).trim() || DEFAULT_CABINET_URL;
+    ));
 
     return {
       enabled,
@@ -162,15 +201,139 @@ function AppContent() {
     };
   }, []);
 
-  useEffect(() => {
-    (window as typeof window & { __LK_ON_READY?: () => void }).__LK_ON_READY?.();
+  const createRouteData = useMemo(() => {
+    if (typeof window === "undefined") {
+      return {
+        enabled: false,
+        studioId: null as string | null,
+        studioName: null as string | null,
+        cabinetUrl: DEFAULT_CABINET_URL,
+      };
+    }
+
+    const current = new URL(window.location.href);
+    const hashRaw = (current.hash || "").replace(/^#/, "");
+    const hashQueryIndex = hashRaw.indexOf("?");
+    const hashParams = new URLSearchParams(hashQueryIndex >= 0 ? hashRaw.slice(hashQueryIndex + 1) : "");
+    const createConfig =
+      (window as typeof window & {
+        __PADLHUB_CREATE_CONFIG__?: {
+          studioId?: string | null;
+          studioName?: string | null;
+          stationId?: string | null;
+          stationName?: string | null;
+          cabinetUrl?: string | null;
+        };
+      }).__PADLHUB_CREATE_CONFIG__ ?? null;
+    const studioId = (
+      current.searchParams.get("stationId")
+      || hashParams.get("stationId")
+      || current.searchParams.get("studioId")
+      || hashParams.get("studioId")
+      || createConfig?.stationId
+      || createConfig?.studioId
+      || ""
+    ).trim();
+    const studioName = (
+      current.searchParams.get("station")
+      || hashParams.get("station")
+      || current.searchParams.get("stationName")
+      || hashParams.get("stationName")
+      || current.searchParams.get("studio")
+      || hashParams.get("studio")
+      || current.searchParams.get("studioName")
+      || hashParams.get("studioName")
+      || createConfig?.stationName
+      || createConfig?.studioName
+      || ""
+    ).trim();
+    const byPath = current.pathname.replace(/\/+$/, "").endsWith(DEFAULT_GAME_CREATE_PATH);
+    const cabinetUrl = (
+      current.searchParams.get("cabinetUrl")
+      || current.searchParams.get("returnUrl")
+      || createConfig?.cabinetUrl
+      || DEFAULT_CABINET_URL
+    ).trim() || DEFAULT_CABINET_URL;
+
+    return {
+      enabled: byPath,
+      studioId: studioId || null,
+      studioName: studioName || null,
+      cabinetUrl,
+    };
   }, []);
 
-  const openOverlayModule = async (
-    module: "games" | "tournaments" | "onboarding",
+  const communityJoinRouteData = useMemo(() => {
+    if (typeof window === "undefined") {
+      return {
+        enabled: false,
+        inviteCode: null as string | null,
+        inviteLink: null as string | null,
+        cabinetUrl: DEFAULT_CABINET_URL,
+      };
+    }
+
+    const current = new URL(window.location.href);
+    const hashRaw = (current.hash || "").replace(/^#/, "");
+    const hashQueryIndex = hashRaw.indexOf("?");
+    const hashParams = new URLSearchParams(hashQueryIndex >= 0 ? hashRaw.slice(hashQueryIndex + 1) : "");
+    const communityJoinConfig = (
+      window as typeof window & {
+        __PADLHUB_COMMUNITY_JOIN_CONFIG__?: {
+          inviteCode?: string | null;
+          inviteLink?: string | null;
+          cabinetUrl?: string | null;
+        };
+      }
+    ).__PADLHUB_COMMUNITY_JOIN_CONFIG__ ?? null;
+    const inviteLink = (
+      current.searchParams.get("inviteLink")
+      || current.searchParams.get("invite")
+      || hashParams.get("inviteLink")
+      || hashParams.get("invite")
+      || communityJoinConfig?.inviteLink
+      || ""
+    ).trim();
+    const inviteCode = (
+      current.searchParams.get("inviteCode")
+      || current.searchParams.get("code")
+      || current.searchParams.get("invite")
+      || hashParams.get("inviteCode")
+      || hashParams.get("code")
+      || hashParams.get("invite")
+      || current.searchParams.get("communityInvite")
+      || hashParams.get("communityInvite")
+      || communityJoinConfig?.inviteCode
+      || extractCommunityInviteCode(current.pathname.includes("/community/invite/") ? current.pathname : inviteLink)
+      || ""
+    ).trim();
+    const byPath = current.pathname.replace(/\/+$/, "").endsWith(DEFAULT_COMMUNITY_JOIN_PATH)
+      || current.pathname.includes("/community/invite/");
+    const enabled = byPath || Boolean(inviteCode);
+    const cabinetUrl = normalizeInviteCabinetUrl((
+      current.searchParams.get("cabinetUrl")
+      || current.searchParams.get("returnUrl")
+      || communityJoinConfig?.cabinetUrl
+      || DEFAULT_CABINET_URL
+    ));
+
+    return {
+      enabled,
+      inviteCode: inviteCode || null,
+      inviteLink: inviteLink || null,
+      cabinetUrl,
+    };
+  }, []);
+
+  useEffect(() => {
+    (window as unknown as AppWindow).__LK_ON_READY?.();
+  }, []);
+
+  const openOverlayModule = useCallback(async (
+    module: OverlayModuleName,
     src?: string,
-    globalName?: string,
-    data?: any,
+    globalName?: WidgetGlobalName,
+    data?: OverlayData,
   ) => {
     trackAnalyticsEvent("module_open_requested", {
       module,
@@ -204,24 +367,46 @@ function AppContent() {
 
     if (import.meta.env.DEV) {
       try {
-        const mod = module === "games"
-          ? await import("./components/games/GamesPage")
-          : module === "tournaments"
-            ? await import("./components/tournaments/TournamentsPage")
-            : await import("./components/onboarding/OnboardingPage");
-        const Component = mod.default;
+        const onBack = () => {
+          hideOverlay();
+        };
         container.innerHTML = "";
-        const currentRoot = overlayRoot as ReturnType<typeof createRoot> | null;
-        if (currentRoot) currentRoot.unmount();
         overlayRoot = createRoot(container);
-        overlayRoot.render(
-          <Component
-            onBack={() => {
-              hideOverlay();
-            }}
-            {...(data ?? {})}
-          />,
-        );
+        if (module === "games") {
+          const mod = await import("./components/games/GamesPage");
+          const gamesData = data as GamesMountData | undefined;
+          overlayRoot.render(
+            <OverlayScopeProvider value>
+              <mod.default
+                onBack={onBack}
+                openGameId={gamesData?.openGameId ?? null}
+                openChat={gamesData?.openChat === true}
+                createFromBooking={gamesData?.createFromBooking ?? null}
+              />
+            </OverlayScopeProvider>,
+          );
+        } else if (module === "tournaments") {
+          const mod = await import("./components/tournaments/TournamentsPage");
+          overlayRoot.render(
+            <OverlayScopeProvider value>
+              <mod.default onBack={onBack} />
+            </OverlayScopeProvider>,
+          );
+        } else {
+          const mod = await import("./components/onboarding/OnboardingPage");
+          const onboardingData = data as OnboardingMountData | undefined;
+          overlayRoot.render(
+            <OverlayScopeProvider value>
+              <mod.default
+                onBack={onBack}
+                profile={onboardingData?.profile}
+                gamesLink={onboardingData?.gamesLink || "#"}
+                trainingLink={onboardingData?.trainingLink || "#"}
+                tournamentsLink={onboardingData?.tournamentsLink || "#"}
+              />
+            </OverlayScopeProvider>,
+          );
+        }
         activeOverlayModule = module;
         trackAnalyticsEvent("module_opened", {
           module,
@@ -278,7 +463,7 @@ function AppContent() {
         reason: message,
       });
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -295,12 +480,91 @@ function AppContent() {
     if (typeof window === "undefined") return;
 
     const search = new URLSearchParams(window.location.search);
-    const paymentRef = search.get("phPaymentRef");
+    const paymentRef = search.get(PAYMENT_REF_QUERY_KEY)?.trim() || "";
     if (!paymentRef) return;
 
     setAutoOpenFromPaymentHandled(true);
-    openOverlayModule("games", GAMES_BUNDLE_URL, "LKWidgetGames");
+    void processPendingPaymentSyncQueue({
+      forcePaymentRef: paymentRef,
+      source: "app_payment_callback",
+      keepalive: true,
+      maxItems: 1,
+    }).then(async (result) => {
+      await syncGamesCommunityAutopublish(result.resolved.map((item) => item.record));
+      const currentUrl = new URL(window.location.href);
+      currentUrl.searchParams.delete(PAYMENT_REF_QUERY_KEY);
+      const nextUrl = `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`;
+      window.history.replaceState({}, "", nextUrl);
+    }).catch(() => {
+      const currentUrl = new URL(window.location.href);
+      currentUrl.searchParams.delete(PAYMENT_REF_QUERY_KEY);
+      const nextUrl = `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`;
+      window.history.replaceState({}, "", nextUrl);
+    });
   }, [view, autoOpenFromPaymentHandled, openOverlayModule]);
+
+  useEffect(() => {
+    if (view !== "cabinet") return;
+    if (typeof window === "undefined") return;
+
+    const currentUrl = new URL(window.location.href);
+    const openGameId = currentUrl.searchParams.get(OPEN_GAME_QUERY_KEY)?.trim() || "";
+    if (!openGameId) return;
+
+    currentUrl.searchParams.delete(OPEN_GAME_QUERY_KEY);
+    const nextUrl = `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`;
+    window.history.replaceState({}, "", nextUrl);
+
+    void openOverlayModule("games", GAMES_BUNDLE_URL, "LKWidgetGames", {
+      openGameId,
+    });
+  }, [view, openOverlayModule]);
+
+  useEffect(() => {
+    if (view !== "cabinet") return;
+    if (typeof window === "undefined") return;
+    if (new URLSearchParams(window.location.search).get(PAYMENT_REF_QUERY_KEY)?.trim()) return;
+
+    let cancelled = false;
+
+    const runSync = async (source: string) => {
+      const result = await processPendingPaymentSyncQueue({
+        source,
+        keepalive: true,
+        maxItems: 3,
+      });
+      await syncGamesCommunityAutopublish(result.resolved.map((item) => item.record));
+      if (cancelled) return;
+      if (result.resolved.length > 0 || result.failed.length > 0) {
+        trackAnalyticsEvent("payment_sync_background", {
+          source,
+          processed: result.processed,
+          resolved: result.resolved.length,
+          failed: result.failed.length,
+          pending: result.pending,
+        });
+      }
+    };
+
+    void runSync("app_boot");
+
+    const onFocus = () => {
+      void runSync("app_focus");
+    };
+    const onVisibility = () => {
+      if (document.hidden) return;
+      void runSync("app_visible");
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [view]);
 
   if (joinRouteData.enabled) {
     if (!isAuthenticated) {
@@ -317,25 +581,82 @@ function AppContent() {
     }
 
     return (
-      <GameJoinPage
-        gameId={joinRouteData.gameId}
-        cabinetUrl={joinRouteData.cabinetUrl}
+      <RemoteWidgetHost
+        src={GAMES_BUNDLE_URL}
+        globalName="LKWidgetGames"
+        data={{
+          joinGameId: joinRouteData.gameId,
+          cabinetUrl: joinRouteData.cabinetUrl,
+        } satisfies GamesMountData}
+        loadingText="Загружаем игру..."
+        errorTitle="Не удалось открыть игру"
+      />
+    );
+  }
+
+  if (createRouteData.enabled) {
+    if (!isAuthenticated) {
+      return <AuthForm onLogin={() => setView("cabinet")} />;
+    }
+
+    return (
+      <RemoteWidgetHost
+        src={GAMES_BUNDLE_URL}
+        globalName="LKWidgetGames"
+        data={{
+          publicCreateEntry: true,
+          presetStudioId: createRouteData.studioId,
+          presetStudioName: createRouteData.studioName,
+          cabinetUrl: createRouteData.cabinetUrl || DEFAULT_CABINET_URL,
+        } satisfies GamesMountData}
+        loadingText="Загружаем создание игры..."
+        errorTitle="Не удалось открыть создание игры"
+      />
+    );
+  }
+
+  if (communityJoinRouteData.enabled) {
+    if (!isAuthenticated) {
+      return <AuthForm onLogin={() => setView("cabinet")} />;
+    }
+
+    if (!communityJoinRouteData.inviteCode && !communityJoinRouteData.inviteLink) {
+      return (
+        <div className="load-error">
+          <div className="load-error-title">Не передана ссылка сообщества</div>
+          <div className="load-error-text">Проверьте ссылку приглашения и попробуйте снова.</div>
+        </div>
+      );
+    }
+
+    return (
+      <CommunityJoinPage
+        inviteCode={communityJoinRouteData.inviteCode}
+        inviteLink={communityJoinRouteData.inviteLink}
+        cabinetUrl={communityJoinRouteData.cabinetUrl}
       />
     );
   }
 
   if (view === "cabinet") {
     return (
-      <Cabinet
-        onOpenGames={(options) =>
-          openOverlayModule(
+        <Cabinet
+        onOpenGames={(options?: OpenGamesOptions) => {
+          const hasOptions = Boolean(options?.gameId || options?.createFromBooking);
+          const data: GamesMountData | undefined = hasOptions
+            ? {
+                openGameId: options?.gameId ?? null,
+                openChat: options?.openChat === true,
+                createFromBooking: options?.createFromBooking ?? null,
+              }
+            : undefined;
+          return openOverlayModule(
             "games",
             GAMES_BUNDLE_URL,
             "LKWidgetGames",
-            options?.gameId
-              ? { openGameId: options.gameId, openChat: options.openChat === true }
-              : undefined,
-          )}
+            data,
+          );
+        }}
         onOpenTournaments={() =>
           openOverlayModule(
             "tournaments",

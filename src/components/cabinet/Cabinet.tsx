@@ -1,20 +1,28 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, type CSSProperties } from "react";
 import { UserProfile } from "./UserProfile";
 import {
+  apiCancelBooking,
   apiFetchProfile,
   apiFetchBookings,
+  apiFetchExercisesByDate,
+  apiFetchExercisesByVisibleDate,
   apiFetchSubscriptions,
   apiFetchPadelChatsByPhone,
   apiFetchPadelGamesByPhone,
+  apiFetchTournamentHistory,
+  apiUpdatePadelGameRecord,
 } from "../../utils/apiClient";
 import type {
+  Booking,
   UserProfileType,
   BookingsResponse,
   SubscriptionResponse,
   Subscription,
   PadelGameRecord,
   PadelGamePlayer,
+  TournamentHistoryRecord,
 } from "../../utils/apiClient";
+import type { OpenGamesOptions } from "../../types/gamesOverlay";
 import { useAuth } from "../../context/AuthContext";
 import { ButtonModule } from "./ButtonModele";
 import { ProfileEditForm } from "./ProfileEditForm";
@@ -24,7 +32,10 @@ import { SubscriptionsContainer } from "./SubscriptionsContainer";
 import { SubscriptionInformation } from "./SubscriptionInformation";
 import { BuySupscription } from "./BuySubscription";
 import { Advertisement } from "./Advertisement";
-import { CUSTOM_FIELD_IDS, getCustomField, getCustomFieldValue } from "../../utils/customFields";
+import { CommunitiesSectionLoader } from "./CommunitiesSectionLoader";
+import { SupportChatWidget } from "./SupportChatWidget";
+import { CalendarDateBadge } from "../UI/CalendarDateBadge";
+import { CUSTOM_FIELD_IDS, getCustomFieldValue, hasTournamentHostingAccess } from "../../utils/customFields";
 import {
   identifyAnalyticsUser,
   trackAnalyticsEvent,
@@ -32,26 +43,51 @@ import {
   trackClientError,
 } from "../../utils/analytics";
 import {
+  CABINET_URL,
+  COMMUNITIES_BUNDLE_URL,
   GAMES_BUNDLE_URL,
+  IS_DEV_RELEASE_CHANNEL,
+  PUBLIC_COMMUNITY_JOIN_PATH,
   PUBLIC_INVITE_ORIGIN,
   PUBLIC_INVITE_PATH,
 } from "../../consts/api_config";
+import { shareOrCopyGameInvitePayload } from "../../utils/gameInviteClipboard";
+import { addGameToCalendar } from "../../utils/calendarEvent";
+import { resolveHashActionTarget, retriggerHashAction } from "../../utils/hashActions";
 
-const QUICK_ACTIONS = [
+const SHOW_COLLECT_FRIENDS_BUTTON = false;
+const GROUP_TRAININGS_HASH = "#9Rzqf";
+
+type QuickAction = {
+  icon: string;
+  label: string;
+  href: string;
+};
+
+const QUICK_ACTIONS: QuickAction[] = [
   { icon: "🎾", label: "Играть", href: "https://padlhub.ru/locations_lk" },
-  { icon: "👥", label: "Групповые тренировки", href: "#9Rzqf" },
+  { icon: "👥", label: "Групповые тренировки", href: GROUP_TRAININGS_HASH },
   { icon: "🏆", label: "Турниры", href: "https://padlhub.ru/padel_torneos" },
   { icon: "🎯", label: "Индивидуальные тренировки", href: "https://padlhub.ru/indi_lk" },
 ];
 
 const CABINET_LOAD_ERROR_TEXT =
   "Не удалось загрузить личный кабинет, попробуйте подключиться к WiFi сети и загрузить кабинет повторно.";
+const MAX_SINGLES_PLAYERS = 2;
 const MAX_GAME_PLAYERS = 4;
+const COMMUNITY_JOIN_PATH =
+  (PUBLIC_COMMUNITY_JOIN_PATH || "/community_join").replace(/\/+$/, "") || "/community_join";
 const INVITE_JOIN_PATH = PUBLIC_INVITE_PATH;
 const CHAT_READ_STORAGE_KEY_PREFIX = "padlhub.chat.lastRead.v1";
+const RATING_LABELS = ["D", "D+", "C", "C+", "B", "B+", "A"];
+const TOURNAMENT_DIRECTION_ID = 2617;
+const TOURNAMENT_LOOKBACK_DAYS = 7;
+const TOURNAMENT_LOOKAHEAD_DAYS = 14;
+const DEV_TOURNAMENT_SCAN_DELAY_MS = 3000;
+const ACTIVE_EVENTS_PREVIEW_LIMIT = 3;
 
 interface CabinetProps {
-  onOpenGames: (options?: { gameId?: string | null; openChat?: boolean }) => void;
+  onOpenGames: (options?: OpenGamesOptions) => void;
   onOpenTournaments: () => void;
   onOpenOnboarding: (data: {
     profile: UserProfileType;
@@ -59,12 +95,43 @@ interface CabinetProps {
     trainingLink: string;
     tournamentsLink: string;
   }) => void;
+  initialCommunityInviteCode?: string | null;
+  initialCommunityInviteLink?: string | null;
+  inviteEntryCabinetUrl?: string | null;
 }
 
 type ProfileUpdatedEventDetail = {
   levelLetter?: string;
   levelNumeric?: string;
 };
+
+type GameCancelState = "idle" | "confirm" | "done";
+
+function applyOnboardingLevels(
+  source: UserProfileType,
+  detail: ProfileUpdatedEventDetail,
+): UserProfileType {
+  const nextCustomFields = [...(source.customFields || [])];
+
+  const upsertField = (fieldId: string, value: string | undefined) => {
+    if (!value) return;
+    const index = nextCustomFields.findIndex((field) => field.id === fieldId);
+    if (index >= 0) {
+      nextCustomFields[index] = { ...nextCustomFields[index], value: [value] };
+      return;
+    }
+    nextCustomFields.push({
+      id: fieldId,
+      name: "",
+      value: [value],
+    });
+  };
+
+  upsertField(CUSTOM_FIELD_IDS.lkPadelLevel, detail.levelLetter);
+  upsertField(CUSTOM_FIELD_IDS.lkPadelLevelNumeric, detail.levelNumeric);
+
+  return { ...source, customFields: nextCustomFields };
+}
 
 function getPlayerInitials(name: string | null | undefined): string {
   const value = (name || "").trim();
@@ -78,36 +145,82 @@ function getPlayerInitials(name: string | null | undefined): string {
     .toUpperCase();
 }
 
+function normalizePlayerRatingLabel(value: string | null | undefined): string | null {
+  const raw = String(value || "").trim().toUpperCase();
+  if (!raw) return null;
+
+  if (RATING_LABELS.includes(raw)) {
+    return raw;
+  }
+
+  const compact = raw.replace(/\s+/g, "");
+  if (RATING_LABELS.includes(compact)) {
+    return compact;
+  }
+
+  const numeric = Number.parseFloat(raw.replace(",", "."));
+  if (Number.isFinite(numeric)) {
+    const index = Math.max(0, Math.min(RATING_LABELS.length - 1, Math.round(numeric) - 1));
+    return RATING_LABELS[index] ?? null;
+  }
+
+  return null;
+}
+
+function getPlayerRatingProgress(label: string | null): number | null {
+  if (!label) return null;
+  const index = RATING_LABELS.findIndex((item) => item === label);
+  if (index < 0) return null;
+  if (RATING_LABELS.length <= 1) return 1;
+  return (index + 1) / RATING_LABELS.length;
+}
+
 function getDateBadge(dateValue: string | null | undefined) {
-  if (!dateValue) return { month: "—", day: "—" };
+  if (!dateValue) return { month: "—", day: "—", weekday: "—" };
   const parsed = new Date(`${dateValue}T00:00:00`);
-  if (Number.isNaN(parsed.getTime())) return { month: "—", day: "—" };
+  if (Number.isNaN(parsed.getTime())) return { month: "—", day: "—", weekday: "—" };
   return {
     month: parsed
       .toLocaleDateString("ru-RU", { month: "short" })
       .replace(".", "")
       .toUpperCase(),
     day: parsed.toLocaleDateString("ru-RU", { day: "2-digit" }),
+    weekday: parsed
+      .toLocaleDateString("ru-RU", { weekday: "short" })
+      .replace(".", "")
+      .toUpperCase(),
   };
 }
 
-function formatGameCardDate(dateValue: string | null | undefined): string {
-  if (!dateValue) return "Дата не указана";
-  const parsed = new Date(`${dateValue}T00:00:00`);
-  if (Number.isNaN(parsed.getTime())) return "Дата не указана";
-  return parsed.toLocaleDateString("ru-RU", {
-    weekday: "long",
-    day: "2-digit",
-    month: "long",
-  });
+function isGamePaidRecord(game: PadelGameRecord): boolean {
+  if (game.payment?.paid != null) return game.payment.paid === true;
+  const statusUpper = String(game.status || "").trim().toUpperCase();
+  if (!statusUpper) return false;
+  if (statusUpper.includes("PAID") || statusUpper.includes("PAYED")) return true;
+  if (
+    statusUpper.includes("PENDING")
+    || statusUpper.includes("UNPAID")
+    || statusUpper.includes("NOT_PAID")
+  ) return false;
+  return false;
 }
 
-function toGameTimestamp(game: PadelGameRecord): number {
-  const date = game.booking?.date || "9999-12-31";
-  const fromTime = game.booking?.timeFrom || "23:59";
-  const parsed = new Date(`${date}T${fromTime.length === 5 ? `${fromTime}:00` : fromTime}`);
-  if (Number.isNaN(parsed.getTime())) return Number.MAX_SAFE_INTEGER;
-  return parsed.getTime();
+function resolveGameCardPlayersCount(game: PadelGameRecord): number {
+  const inviteMaxPlayers = game.invite?.maxPlayers;
+  if (typeof inviteMaxPlayers === "number" && Number.isFinite(inviteMaxPlayers) && inviteMaxPlayers > 0) {
+    return Math.max(1, Math.floor(inviteMaxPlayers));
+  }
+
+  const metadata = game.metadata;
+  const metadataGameFormat =
+    metadata && typeof metadata.gameFormat === "string"
+      ? metadata.gameFormat.trim().toLowerCase()
+      : "";
+  if (metadataGameFormat === "singles") {
+    return MAX_SINGLES_PLAYERS;
+  }
+
+  return MAX_GAME_PLAYERS;
 }
 
 function isLocalHostname(hostname: string): boolean {
@@ -135,6 +248,28 @@ function resolvePublicGamesOrigin(current: URL): string {
   return "https://padlhub.su";
 }
 
+function resolveInviteCabinetBaseUrl(): URL | null {
+  const cabinetUrl = (CABINET_URL || "").trim();
+  let parsedCabinetUrl: URL | null = null;
+
+  if (cabinetUrl) {
+    try {
+      parsedCabinetUrl = new URL(cabinetUrl);
+      if (parsedCabinetUrl.pathname.includes("/lk_dev")) {
+        return parsedCabinetUrl;
+      }
+    } catch {
+      // fallback below
+    }
+  }
+
+  try {
+    return new URL(INVITE_JOIN_PATH, PUBLIC_INVITE_ORIGIN);
+  } catch {
+    return parsedCabinetUrl;
+  }
+}
+
 function normalizePublicGamesUrl(value: string | null | undefined): string | null {
   const raw = value?.trim();
   if (!raw) return null;
@@ -146,8 +281,11 @@ function normalizePublicGamesUrl(value: string | null | undefined): string | nul
     const hasJoinGame = Boolean(parsed.searchParams.get("joinGame")?.trim());
 
     if (hasJoinGame) {
-      const normalized = new URL(INVITE_JOIN_PATH, PUBLIC_INVITE_ORIGIN);
+      const normalized = resolveInviteCabinetBaseUrl();
+      if (!normalized) return parsed.toString();
       parsed.searchParams.forEach((paramValue, key) => {
+        const normalizedKey = key.trim().toLowerCase();
+        if (normalizedKey === "cabineturl" || normalizedKey === "returnurl") return;
         normalized.searchParams.set(key, paramValue);
       });
       return normalized.toString();
@@ -164,12 +302,45 @@ function normalizePublicGamesUrl(value: string | null | undefined): string | nul
   }
 }
 
+function resolveQuickActionHref(value: string | null | undefined): string {
+  const raw = value?.trim();
+  if (!raw) return "#";
+  if (!raw.startsWith("#")) return raw;
+
+  try {
+    const normalized = new URL(CABINET_URL);
+    normalized.hash = raw;
+    return normalized.toString();
+  } catch {
+    return raw;
+  }
+}
+
+function shouldShowCommunitiesSection(options?: {
+  initialInviteCode?: string | null;
+  initialInviteLink?: string | null;
+}) {
+  const hasConfiguredBundle = Boolean((COMMUNITIES_BUNDLE_URL || "").trim());
+  if (import.meta.env.DEV) return true;
+
+  const hasInitialInvite = Boolean(
+    options?.initialInviteCode?.trim() || options?.initialInviteLink?.trim(),
+  );
+  if (typeof window === "undefined") return hasInitialInvite || hasConfiguredBundle;
+
+  const pathname = window.location.pathname.replace(/\/+$/, "");
+  if (hasInitialInvite) return true;
+  if (pathname.endsWith(COMMUNITY_JOIN_PATH) || pathname.includes("/community/invite/")) return true;
+  return hasConfiguredBundle;
+}
+
 function buildInviteFallbackUrl(gameId: string): string | null {
   const id = gameId.trim();
   if (!id) return null;
   if (typeof window === "undefined") return null;
   try {
-    const url = new URL(INVITE_JOIN_PATH, PUBLIC_INVITE_ORIGIN);
+    const url = resolveInviteCabinetBaseUrl();
+    if (!url) return null;
     url.searchParams.set("joinGame", id);
     return `${url.origin}${url.pathname}?${url.searchParams.toString()}`;
   } catch {
@@ -190,6 +361,369 @@ function normalizePhoneForGame(value: string | null | undefined): string | null 
   if (digits.length === 10) return `7${digits}`;
   if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
   return digits;
+}
+
+function toDateKey(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const matched = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  return matched?.[1] ?? null;
+}
+
+function toTimeKey(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const matched = value.match(/T?(\d{2}:\d{2})/);
+  return matched?.[1] ?? null;
+}
+
+function resolveDurationMinutes(
+  fromIso: string | null | undefined,
+  toIso: string | null | undefined,
+): number | null {
+  if (!fromIso || !toIso) return null;
+  const fromTs = Date.parse(fromIso);
+  const toTs = Date.parse(toIso);
+  if (!Number.isFinite(fromTs) || !Number.isFinite(toTs) || toTs <= fromTs) return null;
+  return Math.round((toTs - fromTs) / 60000);
+}
+
+function pickStringFromUnknown(value: unknown): string | null {
+  if (value == null) return null;
+  const normalized = String(value).trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function pickStringFromRecord(source: unknown, keys: string[]): string | null {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+  const record = source as Record<string, unknown>;
+  for (const key of keys) {
+    const normalized = pickStringFromUnknown(record[key]);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function detectPaidStateByStatusToken(value: string | null | undefined): boolean | null {
+  const token = String(value || "").trim().toUpperCase();
+  if (!token) return null;
+
+  const unpaidMarkers = [
+    "PENDING",
+    "CREATED",
+    "WAIT",
+    "UNPAID",
+    "NOT_PAID",
+    "FAILED",
+    "DECLINED",
+    "CANCEL",
+    "EXPIRED",
+    "ERROR",
+    "REFUND",
+    "CHARGEBACK",
+  ];
+  if (unpaidMarkers.some((marker) => token.includes(marker))) return false;
+
+  const paidMarkers = [
+    "PAID",
+    "PAYED",
+    "SUCCESS",
+    "SUCCEEDED",
+    "CAPTURED",
+    "COMPLETED",
+    "DONE",
+    "CONFIRMED",
+    "APPROVED",
+  ];
+  if (paidMarkers.some((marker) => token.includes(marker))) return true;
+
+  return null;
+}
+
+function resolveBookingPaidState(booking: Booking): boolean | null {
+  const cardStatus = detectPaidStateByStatusToken(booking.transactionStatus?.cardPaymentStatus?.status ?? null);
+  if (cardStatus != null) return cardStatus;
+
+  const cardOriginalStatus = detectPaidStateByStatusToken(
+    booking.transactionStatus?.cardPaymentStatus?.originalStatus ?? null,
+  );
+  if (cardOriginalStatus != null) return cardOriginalStatus;
+
+  return detectPaidStateByStatusToken(booking.transactionStatus?.transactionStatus ?? null);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeBookingLikeId(value: unknown): string | null {
+  if (value == null) return null;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function parseBookingIdsFromUnknown(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return Array.from(new Set(
+      value
+        .map((item) => normalizeBookingLikeId(item))
+        .filter((item): item is string => Boolean(item)),
+    ));
+  }
+  if (typeof value === "string") {
+    return Array.from(new Set(
+      value
+        .split(",")
+        .map((item) => normalizeBookingLikeId(item))
+        .filter((item): item is string => Boolean(item)),
+    ));
+  }
+  return [];
+}
+
+function toBookingDateKey(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  const matched = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (matched) return matched[1];
+
+  if (/[T ]\d{2}:\d{2}/.test(trimmed)) {
+    const parsedTs = Date.parse(trimmed);
+    if (Number.isFinite(parsedTs)) {
+      const parsed = new Date(parsedTs);
+      const y = parsed.getFullYear();
+      const m = String(parsed.getMonth() + 1).padStart(2, "0");
+      const d = String(parsed.getDate()).padStart(2, "0");
+      return `${y}-${m}-${d}`;
+    }
+  }
+  return null;
+}
+
+function toBookingTimeKey(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+
+  const plainTimeMatched = trimmed.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (plainTimeMatched) {
+    const hh = String(Number.parseInt(plainTimeMatched[1], 10)).padStart(2, "0");
+    const mm = plainTimeMatched[2];
+    return `${hh}:${mm}`;
+  }
+
+  if (/[T ]\d{2}:\d{2}/.test(trimmed)) {
+    const parsedTs = Date.parse(trimmed);
+    if (Number.isFinite(parsedTs)) {
+      const parsed = new Date(parsedTs);
+      const hh = String(parsed.getHours()).padStart(2, "0");
+      const mm = String(parsed.getMinutes()).padStart(2, "0");
+      return `${hh}:${mm}`;
+    }
+  }
+
+  const fallbackMatched = trimmed.match(/T?(\d{2}:\d{2})/);
+  return fallbackMatched?.[1] ?? null;
+}
+
+function normalizeSlotName(value: unknown): string | null {
+  if (value == null) return null;
+  const normalized = String(value).trim().toLowerCase().replace(/\s+/g, " ");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function isGameCancelledStatus(value: string | null | undefined): boolean {
+  const status = String(value || "").trim().toUpperCase();
+  return Boolean(status && status.includes("CANCEL"));
+}
+
+function collectGameBookingIds(game: PadelGameRecord): string[] {
+  const bucket = new Set<string>();
+  const push = (value: unknown) => {
+    const normalized = normalizeBookingLikeId(value);
+    if (normalized) bucket.add(normalized);
+  };
+  const pushMany = (value: unknown) => {
+    parseBookingIdsFromUnknown(value).forEach((item) => bucket.add(item));
+  };
+
+  if (isRecord(game.metadata)) {
+    pushMany(game.metadata.bookingIds);
+    push(game.metadata.bookingId);
+    pushMany(game.metadata.booking_ids);
+    push(game.metadata.booking_id);
+  }
+
+  const gameAny = game as unknown as Record<string, unknown>;
+  if (isRecord(gameAny.booking)) {
+    pushMany(gameAny.booking.bookingIds);
+    push(gameAny.booking.bookingId);
+  }
+  if (isRecord(gameAny.payment)) {
+    pushMany(gameAny.payment.bookingIds);
+    push(gameAny.payment.bookingId);
+  }
+
+  return Array.from(bucket);
+}
+
+function collectGameExerciseIds(game: PadelGameRecord): string[] {
+  const bucket = new Set<string>();
+  const push = (value: unknown) => {
+    const normalized = normalizeBookingLikeId(value);
+    if (normalized) bucket.add(normalized);
+  };
+
+  if (isRecord(game.metadata)) {
+    push(game.metadata.exerciseId);
+    push(game.metadata.exercise_id);
+    push(game.metadata.vivaExerciseId);
+    push(game.metadata.viva_exercise_id);
+  }
+
+  const gameAny = game as unknown as Record<string, unknown>;
+  if (isRecord(gameAny.booking)) {
+    push(gameAny.booking.exerciseId);
+    push(gameAny.booking.exercise_id);
+    push(gameAny.booking.vivaExerciseId);
+    push(gameAny.booking.viva_exercise_id);
+  }
+
+  return Array.from(bucket);
+}
+
+function buildGameSlotKey(game: PadelGameRecord): string | null {
+  const date = toBookingDateKey(game.booking?.date ?? null);
+  const timeFrom = toBookingTimeKey(game.booking?.timeFrom ?? null);
+  const timeTo = toBookingTimeKey(game.booking?.timeTo ?? null);
+  const studioName = normalizeSlotName(game.booking?.studioName ?? null);
+  const roomName = normalizeSlotName(game.booking?.roomName ?? null);
+  if (!date || !timeFrom || !timeTo || !studioName || !roomName) return null;
+  return [date, timeFrom, timeTo, studioName, roomName].join("|");
+}
+
+function buildGameSlotIdKey(game: PadelGameRecord): string | null {
+  const gameAny = game as unknown as Record<string, unknown>;
+  const booking = isRecord(gameAny.booking) ? gameAny.booking : null;
+  const date = toBookingDateKey(game.booking?.date ?? null);
+  const timeFrom = toBookingTimeKey(game.booking?.timeFrom ?? null);
+  const timeTo = toBookingTimeKey(game.booking?.timeTo ?? null);
+  const studioId = normalizeBookingLikeId(booking?.studioId ?? null);
+  const roomId = normalizeBookingLikeId(booking?.roomId ?? null);
+  if (!date || !timeFrom || !timeTo || !studioId || !roomId) return null;
+  return [date, timeFrom, timeTo, studioId, roomId].join("|");
+}
+
+function buildBookingSlotKey(booking: Booking): string | null {
+  const date = toBookingDateKey(booking.exercise?.timeFrom ?? null);
+  const timeFrom = toBookingTimeKey(booking.exercise?.timeFrom ?? null);
+  const timeTo = toBookingTimeKey(booking.exercise?.timeTo ?? null);
+  const studioName = normalizeSlotName(booking.exercise?.studio?.name ?? null);
+  const roomName = normalizeSlotName(booking.exercise?.room?.name ?? null);
+  if (!date || !timeFrom || !timeTo || !studioName || !roomName) return null;
+  return [date, timeFrom, timeTo, studioName, roomName].join("|");
+}
+
+function buildBookingSlotIdKey(booking: Booking): string | null {
+  const date = toBookingDateKey(booking.exercise?.timeFrom ?? null);
+  const timeFrom = toBookingTimeKey(booking.exercise?.timeFrom ?? null);
+  const timeTo = toBookingTimeKey(booking.exercise?.timeTo ?? null);
+  const studioId = normalizeBookingLikeId(booking.exercise?.studio?.id ?? null);
+  const roomId = normalizeBookingLikeId(booking.exercise?.room?.id ?? null);
+  if (!date || !timeFrom || !timeTo || !studioId || !roomId) return null;
+  return [date, timeFrom, timeTo, studioId, roomId].join("|");
+}
+
+function collectBookingExerciseIds(booking: Booking): string[] {
+  const bucket = new Set<string>();
+  const push = (value: unknown) => {
+    const normalized = normalizeBookingLikeId(value);
+    if (normalized) bucket.add(normalized);
+  };
+
+  push(booking.exercise?.id);
+
+  const bookingAny = booking as unknown as Record<string, unknown>;
+  push(bookingAny.exerciseId);
+  push(bookingAny.exercise_id);
+  push(bookingAny.vivaExerciseId);
+  push(bookingAny.viva_exercise_id);
+
+  if (isRecord(bookingAny.exercise)) {
+    push(bookingAny.exercise.exerciseId);
+    push(bookingAny.exercise.exercise_id);
+    push(bookingAny.exercise.vivaExerciseId);
+    push(bookingAny.exercise.viva_exercise_id);
+  }
+
+  return Array.from(bucket);
+}
+
+function isTournamentBookingCandidate(booking: Booking): boolean {
+  const combinedName = `${booking.exercise?.direction?.name || ""} ${booking.exercise?.type?.name || ""}`
+    .trim()
+    .toLowerCase();
+
+  if (
+    booking.exercise?.direction?.id === TOURNAMENT_DIRECTION_ID
+    || booking.exercise?.type?.id === TOURNAMENT_DIRECTION_ID
+  ) {
+    return true;
+  }
+
+  return (
+    combinedName.includes("турнир")
+    || combinedName.includes("tournament")
+    || combinedName.includes("американо")
+    || combinedName.includes("americano")
+    || combinedName.includes("мексикано")
+    || combinedName.includes("mexicano")
+    || combinedName.includes("round robin")
+    || combinedName.includes("олимп")
+  );
+}
+
+function isTournamentExercise(exercise: Booking["exercise"] | null | undefined): boolean {
+  if (!exercise) return false;
+
+  const combinedName = `${exercise.direction?.name || ""} ${exercise.type?.name || ""}`
+    .trim()
+    .toLowerCase();
+
+  if (
+    exercise.direction?.id === TOURNAMENT_DIRECTION_ID
+    || exercise.type?.id === TOURNAMENT_DIRECTION_ID
+  ) {
+    return true;
+  }
+
+  return (
+    combinedName.includes("турнир")
+    || combinedName.includes("tournament")
+    || combinedName.includes("американо")
+    || combinedName.includes("americano")
+    || combinedName.includes("мексикано")
+    || combinedName.includes("mexicano")
+    || combinedName.includes("round robin")
+    || combinedName.includes("олимп")
+  );
+}
+
+function formatTournamentDateKey(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(value: Date, amount: number) {
+  const next = new Date(value);
+  next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function isTournamentTrainer(exercise: Booking["exercise"], currentUserId: string | null) {
+  if (!exercise || !currentUserId) return false;
+  return (exercise.trainers ?? []).some((trainer) => (trainer.id || "").trim() === currentUserId);
 }
 
 function getChatReadStorageKey(phoneNorm: string): string {
@@ -215,10 +749,24 @@ function readChatReadMap(phoneNorm: string): Record<string, number> {
   }
 }
 
-export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: CabinetProps) {
+export function Cabinet({
+  onOpenGames,
+  onOpenTournaments,
+  onOpenOnboarding,
+  initialCommunityInviteCode,
+  initialCommunityInviteLink,
+  inviteEntryCabinetUrl,
+}: CabinetProps) {
+  const cabinetRootRef = useRef<HTMLDivElement | null>(null);
+  const profileSectionRef = useRef<HTMLDivElement | null>(null);
+  const showCommunitiesSection = shouldShowCommunitiesSection({
+    initialInviteCode: initialCommunityInviteCode,
+    initialInviteLink: initialCommunityInviteLink,
+  });
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [historyBookings, setHistoryBookings] = useState<BookingsResponse | null>(null);
   const [activeBookings, setActiveBookings] = useState<BookingsResponse | null>(null);
+  const [loadingHistoryBookings, setLoadingHistoryBookings] = useState(false);
   const [userSubscriptions, setUserSubscriptions] = useState<SubscriptionResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -232,23 +780,52 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
   const [createdGames, setCreatedGames] = useState<PadelGameRecord[]>([]);
   const [loadingCreatedGames, setLoadingCreatedGames] = useState(false);
   const [createdGamesError, setCreatedGamesError] = useState<string | null>(null);
+  const [activeGameRecordsTotal, setActiveGameRecordsTotal] = useState(0);
+  const [hasLoadedAllActiveRecords, setHasLoadedAllActiveRecords] = useState(false);
+  const [loadingMoreActiveRecords, setLoadingMoreActiveRecords] = useState(false);
+  const [hasAssignedTournamentAccess, setHasAssignedTournamentAccess] = useState(false);
+  const [customTournaments, setCustomTournaments] = useState<TournamentHistoryRecord[]>([]);
   const [copiedGameInviteId, setCopiedGameInviteId] = useState<string | null>(null);
   const [, setChatReadMap] = useState<Record<string, number>>({});
   const [chatUnreadByGame, setChatUnreadByGame] = useState<Record<string, number>>({});
+  const [gameCancelStateById, setGameCancelStateById] = useState<Record<string, GameCancelState>>({});
+  const [gameCancelOkById, setGameCancelOkById] = useState<Record<string, boolean>>({});
+  const [cancellingGameId, setCancellingGameId] = useState<string | null>(null);
   const cabinetVisitTrackedRef = useRef(false);
   const onboardingStatusRef = useRef<boolean | null>(null);
+  const cancellingGameIdsRef = useRef<Set<string>>(new Set());
+  const historyBookingsRequestRef = useRef<Promise<BookingsResponse | null> | null>(null);
   const { logout } = useAuth();
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    if (window.location.hash !== GROUP_TRAININGS_HASH) return undefined;
+
+    const timeoutId = window.setTimeout(() => {
+      retriggerHashAction(GROUP_TRAININGS_HASH);
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
     const loadData = async () => {
       setLoading(true);
       setLoadError(null);
+      setHistoryBookings(null);
+      setLoadingHistoryBookings(false);
+      setHasLoadedAllActiveRecords(false);
+      setLoadingMoreActiveRecords(false);
+      setActiveGameRecordsTotal(0);
+      setCustomTournaments([]);
+      historyBookingsRequestRef.current = null;
       try {
-        const [profileRes, activeRes, historyRes, subsRes] = await Promise.all([
+        const [profileRes, activeRes, subsRes] = await Promise.all([
           apiFetchProfile(),
           apiFetchBookings(false),
-          apiFetchBookings(true),
           apiFetchSubscriptions(),
         ]);
         if (!isMounted) return;
@@ -283,11 +860,10 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
         }
         setProfile(profileRes.data);
         setActiveBookings(activeRes?.data || null);
-        setHistoryBookings(historyRes?.data || null);
         setUserSubscriptions(subsRes?.data || null);
         trackAnalyticsEvent("cabinet_data_loaded", {
           activeBookingsCount: activeRes?.data?.content?.length ?? 0,
-          historyBookingsCount: historyRes?.data?.content?.length ?? 0,
+          historyBookingsLoaded: false,
           subscriptionsCount: subsRes?.data?.content?.length ?? 0,
         });
       } catch (error) {
@@ -313,33 +889,38 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
     return () => { isMounted = false; };
   }, [logout, reloadKey]);
 
-  const applyOnboardingLevels = (
-    source: UserProfileType,
-    detail: ProfileUpdatedEventDetail,
-  ): UserProfileType => {
-    const nextCustomFields = [...(source.customFields || [])];
+  const loadHistoryBookings = useCallback(async (force = false) => {
+    if (!force && historyBookings) {
+      return historyBookings;
+    }
+    if (historyBookingsRequestRef.current) {
+      return historyBookingsRequestRef.current;
+    }
 
-    const upsertField = (fieldId: string, value: string | undefined) => {
-      if (!value) return;
-      const index = nextCustomFields.findIndex((field) => field.id === fieldId);
-      if (index >= 0) {
-        nextCustomFields[index] = { ...nextCustomFields[index], value: [value] };
-        return;
+    setLoadingHistoryBookings(true);
+    const requestPromise = (async () => {
+      try {
+        const historyRes = await apiFetchBookings(true);
+        if (historyRes?.data) {
+          setHistoryBookings(historyRes.data);
+          trackAnalyticsEvent("cabinet_history_loaded", {
+            historyBookingsCount: historyRes.data.content?.length ?? 0,
+            source: force ? "refresh" : "modal",
+          });
+          return historyRes.data;
+        }
+        return historyBookings;
+      } finally {
+        setLoadingHistoryBookings(false);
+        historyBookingsRequestRef.current = null;
       }
-      nextCustomFields.push({
-        id: fieldId,
-        name: "",
-        value: [value],
-      });
-    };
+    })();
 
-    upsertField(CUSTOM_FIELD_IDS.lkPadelLevel, detail.levelLetter);
-    upsertField(CUSTOM_FIELD_IDS.lkPadelLevelNumeric, detail.levelNumeric);
+    historyBookingsRequestRef.current = requestPromise;
+    return requestPromise;
+  }, [historyBookings]);
 
-    return { ...source, customFields: nextCustomFields };
-  };
-
-  const loadProfile = async (fallbackDetail?: ProfileUpdatedEventDetail) => {
+  const loadProfile = useCallback(async (fallbackDetail?: ProfileUpdatedEventDetail) => {
     const data = await apiFetchProfile();
     if (!data?.data) return;
 
@@ -349,7 +930,7 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
     }
 
     setProfile(data.data);
-  };
+  }, []);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -365,7 +946,7 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
     return () => {
       window.removeEventListener("lk-profile-updated", handler);
     };
-  }, []);
+  }, [loadProfile]);
 
   useEffect(() => {
     if (!profile) return;
@@ -413,9 +994,78 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
   }, [profile]);
 
   useEffect(() => {
+    if (!profile?.id) {
+      setHasAssignedTournamentAccess(false);
+      return;
+    }
+    if (hasTournamentHostingAccess(profile)) {
+      setHasAssignedTournamentAccess(false);
+      return;
+    }
+
+    let cancelled = false;
+    let timeoutId: number | null = null;
+
+    const loadAssignedTournamentAccess = async () => {
+      const today = new Date();
+      const todayKey = formatTournamentDateKey(today);
+      const dateKeys = Array.from(
+        { length: TOURNAMENT_LOOKBACK_DAYS + TOURNAMENT_LOOKAHEAD_DAYS + 1 },
+        (_, index) => formatTournamentDateKey(addDays(today, index - TOURNAMENT_LOOKBACK_DAYS)),
+      );
+
+      const results = await Promise.allSettled(
+        dateKeys.map((date) => (
+          date === todayKey
+            ? apiFetchExercisesByVisibleDate(date, {
+              includePast: true,
+              includeAdjacentDays: true,
+            })
+            : apiFetchExercisesByDate(date, { includePast: date <= todayKey })
+        )),
+      );
+
+      if (cancelled) return;
+
+      const hasAssigned = results.some((result) => {
+        if (result.status !== "fulfilled") return false;
+        const exercises = Array.isArray(result.value.data) ? result.value.data : [];
+        return exercises.some((exercise) => (
+          isTournamentExercise(exercise) && isTournamentTrainer(exercise, profile.id)
+        ));
+      });
+
+      setHasAssignedTournamentAccess(hasAssigned);
+    };
+
+    const runTournamentAccessScan = () => {
+      void loadAssignedTournamentAccess().catch(() => {
+        if (!cancelled) {
+          setHasAssignedTournamentAccess(false);
+        }
+      });
+    };
+
+    if (IS_DEV_RELEASE_CHANNEL) {
+      timeoutId = window.setTimeout(runTournamentAccessScan, DEV_TOURNAMENT_SCAN_DELAY_MS);
+    } else {
+      runTournamentAccessScan();
+    }
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [profile]);
+
+  useEffect(() => {
     const phone = profile?.phone?.trim();
     if (!phone) {
       setCreatedGames([]);
+      setActiveGameRecordsTotal(0);
+      setHasLoadedAllActiveRecords(false);
       return;
     }
 
@@ -423,10 +1073,16 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
     setLoadingCreatedGames(true);
     setCreatedGamesError(null);
 
-    apiFetchPadelGamesByPhone(phone, profile?.id ?? null)
+      apiFetchPadelGamesByPhone(
+        phone,
+        profile?.id ?? null,
+        false,
+        { limit: ACTIVE_EVENTS_PREVIEW_LIMIT },
+      )
       .then((result) => {
         if (!alive) return;
-        setCreatedGames(Array.isArray(result.data) ? result.data : []);
+        setCreatedGames(Array.isArray(result.data?.games) ? result.data.games : []);
+        setActiveGameRecordsTotal(result.data?.total ?? 0);
         if (result.error) {
           setCreatedGamesError(result.error.message || "Не удалось загрузить игры");
         }
@@ -434,6 +1090,7 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
       .catch(() => {
         if (!alive) return;
         setCreatedGames([]);
+        setActiveGameRecordsTotal(0);
         setCreatedGamesError("Не удалось загрузить игры");
       })
       .finally(() => {
@@ -444,6 +1101,40 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
       alive = false;
     };
   }, [profile?.phone, profile?.id]);
+
+  const loadAllActiveRecords = useCallback(async () => {
+    const phone = profile?.phone?.trim();
+    if (!phone || hasLoadedAllActiveRecords || loadingMoreActiveRecords) {
+      return;
+    }
+
+    setLoadingMoreActiveRecords(true);
+    try {
+      const [activeBookingsResult, gamesResult] = await Promise.all([
+        apiFetchBookings(false),
+        apiFetchPadelGamesByPhone(phone, profile?.id ?? null, true),
+      ]);
+
+      if (activeBookingsResult.data) {
+        setActiveBookings(activeBookingsResult.data);
+      }
+
+      if (gamesResult.data) {
+        setCreatedGames(gamesResult.data.games);
+        setActiveGameRecordsTotal(gamesResult.data.total);
+      }
+
+      if (!activeBookingsResult.error && !gamesResult.error) {
+        setHasLoadedAllActiveRecords(true);
+      }
+
+      if (gamesResult.error) {
+        setCreatedGamesError(gamesResult.error.message || "Не удалось загрузить игры");
+      }
+    } finally {
+      setLoadingMoreActiveRecords(false);
+    }
+  }, [hasLoadedAllActiveRecords, loadingMoreActiveRecords, profile?.id, profile?.phone]);
 
   const profilePhoneNorm = useMemo(
     () => normalizePhoneForGame(profile?.phone ?? null),
@@ -504,25 +1195,315 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
     };
   }, [createdGames, profilePhoneNorm]);
 
-  const gamesForFeed = useMemo(() => {
-    return [...createdGames].sort((left, right) => toGameTimestamp(left) - toGameTimestamp(right));
+  const gameByBookingId = useMemo(() => {
+    const map = new Map<string, PadelGameRecord>();
+    createdGames.forEach((game) => {
+      if (!game || isGameCancelledStatus(game.status)) return;
+      collectGameBookingIds(game).forEach((bookingId) => {
+        if (!map.has(bookingId)) {
+          map.set(bookingId, game);
+        }
+      });
+    });
+    return map;
   }, [createdGames]);
+  const gameBySlotKey = useMemo(() => {
+    const map = new Map<string, PadelGameRecord>();
+    createdGames.forEach((game) => {
+      if (!game || isGameCancelledStatus(game.status)) return;
+      const slotKey = buildGameSlotKey(game);
+      if (!slotKey || map.has(slotKey)) return;
+      map.set(slotKey, game);
+    });
+    return map;
+  }, [createdGames]);
+  const gameByExerciseId = useMemo(() => {
+    const map = new Map<string, PadelGameRecord>();
+    createdGames.forEach((game) => {
+      if (!game || isGameCancelledStatus(game.status)) return;
+      collectGameExerciseIds(game).forEach((exerciseId) => {
+        if (!map.has(exerciseId)) {
+          map.set(exerciseId, game);
+        }
+      });
+    });
+    return map;
+  }, [createdGames]);
+  const gameBySlotIdKey = useMemo(() => {
+    const map = new Map<string, PadelGameRecord>();
+    createdGames.forEach((game) => {
+      if (!game || isGameCancelledStatus(game.status)) return;
+      const slotIdKey = buildGameSlotIdKey(game);
+      if (!slotIdKey || map.has(slotIdKey)) return;
+      map.set(slotIdKey, game);
+    });
+    return map;
+  }, [createdGames]);
+  const resolveGameForBooking = useCallback((booking: Booking): PadelGameRecord | null => {
+    const bookingId = normalizeBookingLikeId(booking.id);
+    if (bookingId) {
+      const byId = gameByBookingId.get(bookingId);
+      if (byId) return byId;
+    }
+    const exerciseIds = collectBookingExerciseIds(booking);
+    for (const exerciseId of exerciseIds) {
+      const byExerciseId = gameByExerciseId.get(exerciseId);
+      if (byExerciseId) return byExerciseId;
+    }
+    const slotIdKey = buildBookingSlotIdKey(booking);
+    if (slotIdKey) {
+      const bySlotIdKey = gameBySlotIdKey.get(slotIdKey);
+      if (bySlotIdKey) return bySlotIdKey;
+    }
+    const slotKey = buildBookingSlotKey(booking);
+    if (!slotKey) return null;
+    return gameBySlotKey.get(slotKey) ?? null;
+  }, [gameByBookingId, gameByExerciseId, gameBySlotIdKey, gameBySlotKey]);
+  const resolveCancelledGameForBooking = useCallback((booking: Booking): PadelGameRecord | null => {
+    const bookingId = normalizeBookingLikeId(booking.id);
+    if (bookingId) {
+      const byId = gameByBookingId.get(bookingId);
+      if (byId) return byId;
+    }
+    const exerciseIds = collectBookingExerciseIds(booking);
+    for (const exerciseId of exerciseIds) {
+      const byExerciseId = gameByExerciseId.get(exerciseId);
+      if (byExerciseId) return byExerciseId;
+    }
+    return null;
+  }, [gameByBookingId, gameByExerciseId]);
+  const hasTeamGameForBooking = useCallback((booking: Booking): boolean => {
+    return Boolean(resolveGameForBooking(booking));
+  }, [resolveGameForBooking]);
+  const activeBookingsLoadedCount = activeBookings?.content?.length ?? 0;
+  const activeBookingsTotal = activeBookings?.totalElements ?? activeBookingsLoadedCount;
+  const hasMoreActiveBookings = activeBookingsTotal > activeBookingsLoadedCount;
+  const hasMoreActiveGames = activeGameRecordsTotal > createdGames.length;
+  const hasMoreActiveRecords = !hasLoadedAllActiveRecords && (hasMoreActiveBookings || hasMoreActiveGames);
+  const allBookings = useMemo(
+    () => [
+      ...(activeBookings?.content ?? []),
+      ...(historyBookings?.content ?? []),
+    ],
+    [activeBookings?.content, historyBookings?.content],
+  );
+  const tournamentHistorySourceBookings = useMemo(
+    () => (isBookingHistoryOpen ? allBookings : (activeBookings?.content ?? [])),
+    [activeBookings?.content, allBookings, isBookingHistoryOpen],
+  );
+  const tournamentExerciseIds = useMemo(() => {
+    const bucket = new Set<string>();
+    tournamentHistorySourceBookings.forEach((booking) => {
+      if (!isTournamentBookingCandidate(booking)) return;
+      collectBookingExerciseIds(booking).forEach((exerciseId) => bucket.add(exerciseId));
+    });
+    return Array.from(bucket).sort();
+  }, [tournamentHistorySourceBookings]);
+  useEffect(() => {
+    if (tournamentExerciseIds.length === 0) {
+      setCustomTournaments([]);
+      return;
+    }
+
+    let alive = true;
+    void Promise.all(
+      tournamentExerciseIds.map(async (exerciseId) => {
+        const result = await apiFetchTournamentHistory(exerciseId);
+        return Array.isArray(result.data) ? result.data : [];
+      }),
+    ).then((results) => {
+      if (!alive) return;
+      const next = new Map<string, TournamentHistoryRecord>();
+      results.flat().forEach((record) => {
+        const normalizedTournamentId = normalizeBookingLikeId(record.tournamentId);
+        if (!normalizedTournamentId || next.has(normalizedTournamentId)) return;
+        next.set(normalizedTournamentId, record);
+      });
+      setCustomTournaments(Array.from(next.values()));
+    }).catch(() => {
+      if (!alive) return;
+      setCustomTournaments([]);
+    });
+
+    return () => {
+      alive = false;
+    };
+  }, [tournamentExerciseIds]);
+  useEffect(() => {
+    if (createdGames.length === 0 || allBookings.length === 0) return;
+
+    const cancelledGameIds = new Set<string>();
+    allBookings.forEach((booking) => {
+      if (!booking.isCancelled) return;
+      const game = resolveCancelledGameForBooking(booking);
+      if (game?.id) {
+        cancelledGameIds.add(game.id);
+      }
+    });
+
+    if (cancelledGameIds.size === 0) return;
+
+    setCreatedGames((prev) => {
+      let changed = false;
+      const next = prev.map((game) => {
+        if (!cancelledGameIds.has(game.id) || isGameCancelledStatus(game.status)) {
+          return game;
+        }
+        changed = true;
+        return {
+          ...game,
+          status: "CANCELLED",
+        };
+      });
+      return changed ? next : prev;
+    });
+
+    const gameIdsToPersist = Array.from(cancelledGameIds).filter(
+      (gameId) => !cancellingGameIdsRef.current.has(gameId),
+    );
+    if (gameIdsToPersist.length === 0) return;
+
+    gameIdsToPersist.forEach((gameId) => {
+      cancellingGameIdsRef.current.add(gameId);
+    });
+
+    void Promise.all(gameIdsToPersist.map(async (gameId) => {
+      const result = await apiUpdatePadelGameRecord(gameId, { status: "CANCELLED" });
+      if (result.data?.id) {
+        setCreatedGames((prev) => prev.map((game) => (
+          game.id === result.data?.id ? (result.data as PadelGameRecord) : game
+        )));
+        return;
+      }
+      cancellingGameIdsRef.current.delete(gameId);
+    }));
+  }, [allBookings, createdGames.length, resolveCancelledGameForBooking]);
+  const bookingPaidById = useMemo(() => {
+    const next = new Map<string, boolean | null>();
+    allBookings.forEach((booking) => {
+      const bookingId = normalizeBookingLikeId(booking.id);
+      if (!bookingId) return;
+      const paidState = resolveBookingPaidState(booking);
+      const prev = next.get(bookingId);
+      if (prev === true) return;
+      if (paidState === true) {
+        next.set(bookingId, true);
+        return;
+      }
+      if (prev == null) {
+        next.set(bookingId, paidState);
+      }
+    });
+    return next;
+  }, [allBookings]);
+  const bookingById = useMemo(() => {
+    const next = new Map<string, Booking>();
+    allBookings.forEach((booking) => {
+      const bookingId = normalizeBookingLikeId(booking.id);
+      if (!bookingId || next.has(bookingId)) return;
+      next.set(bookingId, booking);
+    });
+    return next;
+  }, [allBookings]);
+  const tournamentByExerciseId = useMemo(() => {
+    const next = new Map<string, TournamentHistoryRecord>();
+    customTournaments.forEach((record) => {
+      const tournamentId = normalizeBookingLikeId(record.tournamentId);
+      if (!tournamentId || next.has(tournamentId)) return;
+      next.set(tournamentId, record);
+    });
+    return next;
+  }, [customTournaments]);
+  const resolveTournamentForBooking = useCallback((booking: Booking): TournamentHistoryRecord | null => {
+    const exerciseIds = collectBookingExerciseIds(booking);
+    for (const exerciseId of exerciseIds) {
+      const match = tournamentByExerciseId.get(exerciseId);
+      if (match) return match;
+    }
+    return null;
+  }, [tournamentByExerciseId]);
+  const bookingPaidBySlotKey = useMemo(() => {
+    const next = new Map<string, boolean | null>();
+    allBookings.forEach((booking) => {
+      const slotKey = buildBookingSlotKey(booking);
+      if (!slotKey) return;
+      const paidState = resolveBookingPaidState(booking);
+      const prev = next.get(slotKey);
+      if (prev === true) return;
+      if (paidState === true) {
+        next.set(slotKey, true);
+        return;
+      }
+      if (prev == null) {
+        next.set(slotKey, paidState);
+      }
+    });
+    return next;
+  }, [allBookings]);
+  const isGamePaidForInvite = useCallback((game: PadelGameRecord): boolean => {
+    if (isGamePaidRecord(game)) return true;
+
+    const bookingIds = collectGameBookingIds(game);
+    if (bookingIds.length > 0) {
+      const states = bookingIds
+        .map((bookingId) => bookingPaidById.get(bookingId))
+        .filter((state): state is boolean => state !== null && state !== undefined);
+      if (states.includes(true)) return true;
+      if (states.length > 0 && states.every((state) => state === false)) return false;
+    }
+
+    const slotKey = buildGameSlotKey(game);
+    if (slotKey) {
+      const slotPaidState = bookingPaidBySlotKey.get(slotKey);
+      if (slotPaidState != null) return slotPaidState;
+    }
+
+    return false;
+  }, [bookingPaidById, bookingPaidBySlotKey]);
+
+  const resolveBookingForGameCancellation = useCallback((game: PadelGameRecord): Booking | null => {
+    const bookingIds = collectGameBookingIds(game);
+    for (const bookingId of bookingIds) {
+      const booking = bookingById.get(bookingId) ?? null;
+      if (booking && !booking.isCancelled) {
+        return booking;
+      }
+    }
+
+    const activeSource = activeBookings?.content ?? [];
+    for (const booking of activeSource) {
+      if (booking.isCancelled) continue;
+      const linkedGame = resolveGameForBooking(booking);
+      if (linkedGame?.id === game.id) {
+        return booking;
+      }
+    }
+
+    return null;
+  }, [activeBookings?.content, bookingById, resolveGameForBooking]);
 
   const loadBookings = async () => {
+    const shouldRefreshHistory = isBookingHistoryOpen || historyBookings !== null;
     const [activeBookingsData, historyBookingsData, userSubscriptionsData] = await Promise.all([
       apiFetchBookings(false),
-      apiFetchBookings(true),
+      shouldRefreshHistory ? loadHistoryBookings(true) : Promise.resolve(null),
       apiFetchSubscriptions(),
     ]);
     if (activeBookingsData) setActiveBookings(activeBookingsData.data);
-    if (historyBookingsData) setHistoryBookings(historyBookingsData.data);
     if (userSubscriptionsData.data) setUserSubscriptions(userSubscriptionsData.data);
     trackAnalyticsEvent("cabinet_data_refreshed", {
       activeBookingsCount: activeBookingsData?.data?.content?.length ?? 0,
-      historyBookingsCount: historyBookingsData?.data?.content?.length ?? 0,
+      historyBookingsCount: historyBookingsData?.content?.length ?? (historyBookings?.content?.length ?? 0),
+      historyBookingsLoaded: shouldRefreshHistory,
       subscriptionsCount: userSubscriptionsData?.data?.content?.length ?? 0,
     });
   };
+
+  const openBookingHistory = useCallback(() => {
+    setIsBookingHistoryOpen(true);
+    void loadAllActiveRecords();
+    void loadHistoryBookings();
+  }, [loadAllActiveRecords, loadHistoryBookings]);
 
   const openSubInfo = (sub: Subscription, subName: string) => {
     SetCurrenSub(sub);
@@ -553,14 +1534,8 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
   const numericLevelValue = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
   const hasLevel = numericLevelValue !== undefined && numericLevelValue !== null && numericLevelValue !== "";
   const onboardingLabel = "Определи свой уровень";
-  const tournamentsField = getCustomField(profile, CUSTOM_FIELD_IDS.tournamentsAccess);
-  const tournamentsAccessValue = tournamentsField?.value?.[0];
-  const canHostTournaments = tournamentsAccessValue === "проводит турниры"
-    || Boolean(
-      tournamentsField?.attributes?.options?.some(
-        (opt) => opt.id === tournamentsAccessValue && opt.name.toLowerCase() === "проводит турниры",
-      ),
-    );
+  const canHostTournaments = hasTournamentHostingAccess(profile);
+  const canOpenTournamentsBlock = canHostTournaments || hasAssignedTournamentAccess;
 
   const openOnboarding = () => {
     trackAnalyticsEvent("onboarding_open_requested", {
@@ -569,26 +1544,24 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
     });
     onOpenOnboarding({
       profile,
-      gamesLink: QUICK_ACTIONS.find((action) => action.label === "Играть")?.href || "#",
-      trainingLink: QUICK_ACTIONS.find((action) => action.label === "Групповые тренировки")?.href || "#",
-      tournamentsLink: QUICK_ACTIONS.find((action) => action.label === "Турниры")?.href || "#",
+      gamesLink: resolveQuickActionHref(QUICK_ACTIONS.find((action) => action.label === "Играть")?.href || "#"),
+      trainingLink: resolveQuickActionHref(
+        QUICK_ACTIONS.find((action) => action.label === "Групповые тренировки")?.href || "#",
+      ),
+      tournamentsLink: resolveQuickActionHref(
+        QUICK_ACTIONS.find((action) => action.label === "Турниры")?.href || "#",
+      ),
     });
-  };
-
-  const handleOpenGames = () => {
-    trackAnalyticsEvent("module_open_requested", {
-      module: "games",
-      source: "cabinet",
-      clientId: profile.id,
-    });
-    onOpenGames();
   };
 
   const handleCopyInviteFromFeed = async (game: PadelGameRecord) => {
     const url = resolveGameInviteUrl(game) || "";
     if (!url) return;
     try {
-      await navigator.clipboard?.writeText(url);
+      await shareOrCopyGameInvitePayload(url, game, {
+        includePreviewImage: true,
+        preferNativeShare: true,
+      });
       setCopiedGameInviteId(game.id);
       window.setTimeout(() => {
         setCopiedGameInviteId((prev) => (prev === game.id ? null : prev));
@@ -602,6 +1575,73 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
     onOpenGames({ gameId: game.id, openChat: true });
   };
 
+  const handleOpenGameDetails = (game: PadelGameRecord) => {
+    onOpenGames({ gameId: game.id, openChat: false });
+  };
+
+  const handleCancelGameBooking = async (gameId: string, bookingId: string) => {
+    if (!gameId || !bookingId || cancellingGameId) return;
+
+    setCancellingGameId(gameId);
+    const res = await apiCancelBooking(bookingId);
+    const ok = res.status !== null && res.status >= 200 && res.status < 300;
+
+    setGameCancelOkById((prev) => ({ ...prev, [gameId]: ok }));
+    setGameCancelStateById((prev) => ({ ...prev, [gameId]: "done" }));
+    setCancellingGameId(null);
+  };
+
+  const handleCreateTeamGameFromBooking = (booking: Booking) => {
+    const exercise = booking.exercise;
+    const bookingId = String(booking.id || "").trim();
+    if (!bookingId || !exercise?.timeFrom || !exercise?.timeTo) return;
+
+    const date = toDateKey(exercise.timeFrom);
+    const timeFrom = toTimeKey(exercise.timeFrom);
+    const timeTo = toTimeKey(exercise.timeTo);
+    if (!date || !timeFrom || !timeTo) return;
+
+    const paidState = resolveBookingPaidState(booking);
+    const amountRub = Number.isFinite(booking.cost) ? Math.max(0, Math.round(booking.cost / 100)) : null;
+    const slotId =
+      pickStringFromRecord(booking, ["slotId", "timeSlotId", "slot_id", "time_slot_id"]) ??
+      pickStringFromRecord(exercise, ["slotId", "timeSlotId", "slot_id", "time_slot_id"]);
+    const exerciseId =
+      pickStringFromUnknown(exercise.id) ??
+      pickStringFromRecord(booking, ["exerciseId", "vivaExerciseId", "exercise_id", "viva_exercise_id"]);
+    const durationMinutes = resolveDurationMinutes(exercise.timeFrom, exercise.timeTo);
+
+    onOpenGames({
+      createFromBooking: {
+        bookingId,
+        slotId,
+        exerciseId,
+        studioId: pickStringFromUnknown(exercise.studio?.id),
+        studioName: pickStringFromUnknown(exercise.studio?.name),
+        roomId: pickStringFromUnknown(exercise.room?.id),
+        roomName: pickStringFromUnknown(exercise.room?.name),
+        date,
+        timeFrom,
+        timeTo,
+        durationMinutes,
+        amount: amountRub,
+        paid: paidState,
+        paymentUrl: booking.transactionStatus?.cardPaymentStatus?.paymentUrl ?? null,
+        directionName: pickStringFromUnknown(exercise.direction?.name),
+      },
+    });
+  };
+
+  const isCurrentUserOrganizer = (game: PadelGameRecord): boolean => {
+    const profileId = (profile?.id || "").trim();
+    const organizerId = (game.organizer?.id || "").trim();
+    if (profileId && organizerId && profileId === organizerId) {
+      return true;
+    }
+    const organizerPhoneNorm = normalizePhoneForGame(game.organizer?.phone ?? null);
+    return Boolean(profilePhoneNorm && organizerPhoneNorm && profilePhoneNorm === organizerPhoneNorm);
+  };
+
   const handleOpenTournaments = () => {
     trackAnalyticsEvent("module_open_requested", {
       module: "tournaments",
@@ -609,6 +1649,355 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
       clientId: profile.id,
     });
     onOpenTournaments();
+  };
+
+  const handleOpenGamesCreate = () => {
+    trackAnalyticsEvent("module_open_requested", {
+      module: "games",
+      source: "cabinet",
+      action: "gather_friends_click",
+      clientId: profile.id,
+    });
+    onOpenGames();
+  };
+
+  const handleOpenCabinetHomeFromCommunities = () => {
+    cabinetRootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handleOpenProfileFromCommunities = () => {
+    profileSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handleQuickActionPlay = (action: QuickAction) => {
+    trackAnalyticsEvent("quick_action_click", {
+      label: action.label,
+      href: action.href,
+      clientId: profile.id,
+    });
+    trackAnalyticsEvent("module_open_requested", {
+      module: "games",
+      source: "cabinet",
+      action: "quick_action_play_click",
+      clientId: profile.id,
+    });
+    onOpenGames();
+  };
+
+  const renderGameCard = (
+    game: PadelGameRecord,
+    options?: {
+      onBeforeOpen?: () => void;
+    },
+  ) => {
+    const handleBeforeOpen = () => {
+      options?.onBeforeOpen?.();
+    };
+    const openGameDetails = () => {
+      handleBeforeOpen();
+      handleOpenGameDetails(game);
+    };
+    const openGameChat = () => {
+      handleBeforeOpen();
+      handleOpenGameChat(game);
+    };
+    const stationTitle = String(game.booking?.studioName || "").trim();
+    const cardTitle = stationTitle ? `Игра ${stationTitle}` : "Игра";
+    const courtTitle = String(game.booking?.roomName || "").trim();
+    const badge = getDateBadge(game.booking?.date);
+    const timeFrom = game.booking?.timeFrom ?? "—:—";
+    const timeTo = game.booking?.timeTo ?? "—:—";
+    const ratingTag = game.settings?.ratingGame ? "Игра на уровень" : "Без уровня";
+    const durationTag = game.booking?.durationMinutes
+      ? `${game.booking.durationMinutes} мин`
+      : null;
+    const ratingRangeTag =
+      game.settings?.minRating && game.settings?.maxRating
+        ? `${game.settings.minRating}/${game.settings.maxRating}`
+        : null;
+    const isCurrentUserPlayer = (player: PadelGamePlayer | null | undefined): boolean => {
+      if (!player) return false;
+      const normalizedProfileId = (profile?.id || "").trim();
+      const playerId = (player.id || "").trim();
+      if (normalizedProfileId && playerId && normalizedProfileId === playerId) {
+        return true;
+      }
+      const playerPhoneNorm = normalizePhoneForGame(player.phone);
+      return Boolean(profilePhoneNorm && playerPhoneNorm && profilePhoneNorm === playerPhoneNorm);
+    };
+    const waitlistPlayers = Array.isArray(game.waitlist) ? game.waitlist : [];
+    const topLevelWaitlistCount = Array.isArray(game.waitlistPhones)
+      ? game.waitlistPhones.reduce((count, phoneValue) => {
+          return normalizePhoneForGame(phoneValue) ? count + 1 : count;
+        }, 0)
+      : 0;
+    const metadataWaitlistCount = Array.isArray(game.metadata?.waitlistPhones)
+      ? game.metadata.waitlistPhones.reduce((count, phoneValue) => {
+          if (typeof phoneValue !== "string") return count;
+          return normalizePhoneForGame(phoneValue) ? count + 1 : count;
+        }, 0)
+      : 0;
+    const participantsWaitlistCount = Array.isArray(game.participants)
+      ? game.participants.reduce((count, player) => {
+          const status = String(player.status || "").trim().toUpperCase();
+          return status.includes("WAIT") ? count + 1 : count;
+        }, 0)
+      : 0;
+    const waitlistCount = Math.max(
+      waitlistPlayers.length,
+      topLevelWaitlistCount,
+      metadataWaitlistCount,
+      participantsWaitlistCount,
+    );
+    const isCurrentUserWaitlisted =
+      waitlistPlayers.some((player) => isCurrentUserPlayer(player))
+      || (Array.isArray(game.waitlistPhones)
+        && game.waitlistPhones.some((value) => normalizePhoneForGame(value) === profilePhoneNorm))
+      || (Array.isArray(game.participants)
+        && game.participants.some((player) => {
+          if (!isCurrentUserPlayer(player)) return false;
+          const status = String(player.status || "").trim().toUpperCase();
+          return status.includes("WAIT");
+        }))
+      || (Array.isArray(game.metadata?.waitlistPhones)
+        && game.metadata.waitlistPhones.some((value) => {
+          if (typeof value !== "string") return false;
+          return normalizePhoneForGame(value) === profilePhoneNorm;
+        }));
+    const isOrganizer = isCurrentUserOrganizer(game);
+    const showOrganizerWaitlistBadge = isOrganizer && waitlistCount > 0;
+    const linkedBooking = resolveBookingForGameCancellation(game);
+    const inviteUrl = resolveGameInviteUrl(game);
+    const canInvite = Boolean(inviteUrl && isOrganizer && isGamePaidForInvite(game));
+    const canCancelGameBooking = Boolean(
+      isOrganizer
+      && linkedBooking
+      && linkedBooking.cancellationDeadline
+      && new Date(linkedBooking.cancellationDeadline) > new Date(),
+    );
+    const showCancelDeadlineText = Boolean(isOrganizer && linkedBooking && !canCancelGameBooking);
+    const cancelState = gameCancelStateById[game.id] ?? "idle";
+    const cancelOk = gameCancelOkById[game.id] ?? false;
+    const isCancellingThisGame = cancellingGameId === game.id;
+    const unreadCount = chatUnreadByGame[game.id] ?? 0;
+    const organizerPlayer: PadelGamePlayer | null = game.organizer
+      ? {
+          id: game.organizer.id ?? null,
+          name: game.organizer.name || "Организатор",
+          phone: game.organizer.phone ?? null,
+          photo: game.organizer.photo ?? null,
+          rating: game.organizer.rating ?? null,
+          source: "ORGANIZER",
+          status: "CONFIRMED",
+        }
+      : null;
+    const participants = game.participants && game.participants.length > 0
+      ? game.participants
+      : (organizerPlayer ? [organizerPlayer] : []);
+    const playersCount = resolveGameCardPlayersCount(game);
+    const playerSlots = Array.from({ length: playersCount }, (_, index) => (
+      participants[index] ?? null
+    ));
+    const waitlistBadgeLabel = isCurrentUserWaitlisted
+      ? "В листе ожидания"
+      : showOrganizerWaitlistBadge
+        ? `Лист ожидания: ${waitlistCount}`
+        : null;
+
+    return (
+      <div
+        key={game.id}
+        className="game-created-card game-created-card-clickable"
+        onClick={openGameDetails}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openGameDetails();
+          }
+        }}
+      >
+        {waitlistBadgeLabel && (
+          <div className="game-created-top-badge-row">
+            <span
+              className={`game-created-tag game-created-tag-waitlist${isCurrentUserWaitlisted ? " game-created-tag-waitlist-user" : ""}`}
+            >
+              {waitlistBadgeLabel}
+            </span>
+          </div>
+        )}
+        <div className="game-created-head">
+          <div className="game-created-head-main">
+            <div className="game-created-date">{cardTitle}</div>
+            {courtTitle && <div className="game-created-court">{courtTitle}</div>}
+            <div className="game-created-time">{`${timeFrom} • ${timeTo}`}</div>
+            <div className="game-created-tags">
+              <span className={`game-created-tag ${game.settings?.ratingGame ? "game-created-tag-level" : "game-created-tag-neutral"}`}>
+                {ratingTag}
+              </span>
+              {durationTag && <span className="game-created-tag game-created-tag-duration">{durationTag}</span>}
+              {ratingRangeTag && <span className="game-created-tag game-created-tag-range">{ratingRangeTag}</span>}
+            </div>
+          </div>
+          <div className="game-created-head-right">
+            <CalendarDateBadge
+              monthLabel={badge.month}
+              dayLabel={badge.day}
+              weekdayLabel={badge.weekday}
+              badgeClassName="game-created-date-badge"
+              buttonClassName="game-created-date-badge-button"
+              variant="game-card"
+              disabled={!game.booking?.date || (!game.booking?.timeFrom && !game.booking?.timeTo)}
+              onClick={() => addGameToCalendar(game)}
+            />
+          </div>
+        </div>
+        <div className={`game-created-players${playersCount <= 2 ? " game-created-players-singles" : ""}`}>
+          {playerSlots.map((player, index) => {
+            const initials = getPlayerInitials(player?.name);
+            const levelLabel = normalizePlayerRatingLabel(player?.rating ?? null);
+            const levelProgress = getPlayerRatingProgress(levelLabel);
+            const ringProgressDeg =
+              levelProgress != null ? `${Math.max(0, Math.min(360, Math.round(levelProgress * 360)))}deg` : "0deg";
+            return (
+              <div key={`${game.id}-slot-${index}`} className="game-created-player">
+                <div
+                  className={`game-created-player-ring${levelLabel ? " has-level" : ""}`}
+                  style={{ "--player-ring-progress": ringProgressDeg } as CSSProperties}
+                >
+                  {player?.photo ? (
+                    <img
+                      src={player.photo}
+                      alt={player.name}
+                      className="game-created-player-avatar"
+                    />
+                  ) : (
+                    <div className="game-created-player-avatar game-created-player-fallback">
+                      {initials}
+                    </div>
+                  )}
+                </div>
+                {levelLabel && (
+                  <div className="game-created-player-level">
+                    {levelLabel}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className={`game-created-actions${canInvite ? " game-created-actions-organizer" : " game-created-actions-single"}`}>
+          {canInvite && (
+            <button
+              className="game-created-action game-created-action-invite"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleCopyInviteFromFeed(game);
+              }}
+            >
+              {copiedGameInviteId === game.id ? "Скопировано" : "Пригласить в игру"}
+            </button>
+          )}
+          <button
+            className={`game-created-action game-chat-open-btn${canInvite ? " game-created-action-chat-icon" : ""}`}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              openGameChat();
+            }}
+            aria-label="Открыть чат игры"
+            title="Чат"
+          >
+            {canInvite ? (
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path
+                  d="M3.333 10.667H2.667C1.93 10.667 1.333 10.07 1.333 9.333V2.667C1.333 1.93 1.93 1.333 2.667 1.333H9.333C10.07 1.333 10.667 1.93 10.667 2.667V3.333"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M6.667 5.333H13.333C14.07 5.333 14.667 5.93 14.667 6.667V11.333C14.667 12.07 14.07 12.667 13.333 12.667H10L7.333 14.667V12.667H6.667C5.93 12.667 5.333 12.07 5.333 11.333V6.667C5.333 5.93 5.93 5.333 6.667 5.333Z"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            ) : (
+              "Чат"
+            )}
+            {unreadCount > 0 && (
+              <span className="game-chat-unread-badge">{unreadCount}</span>
+            )}
+          </button>
+        </div>
+        {canCancelGameBooking && cancelState === "idle" && linkedBooking && (
+          <div className="booking-cancel-row game-created-cancel-row">
+            <button
+              className="btn-cancel danger"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setGameCancelStateById((prev) => ({ ...prev, [game.id]: "confirm" }));
+              }}
+            >
+              Отменить запись
+            </button>
+          </div>
+        )}
+        {cancelState === "confirm" && linkedBooking && (
+          <div className="booking-cancel-row game-created-cancel-row">
+            <button
+              className="btn-cancel outline"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setGameCancelStateById((prev) => ({ ...prev, [game.id]: "idle" }));
+              }}
+              disabled={isCancellingThisGame}
+            >
+              Нет
+            </button>
+            <button
+              className="btn-cancel danger"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleCancelGameBooking(game.id, linkedBooking.id);
+              }}
+              disabled={isCancellingThisGame}
+            >
+              {isCancellingThisGame ? "Отменяем..." : "Да, отменить"}
+            </button>
+          </div>
+        )}
+        {cancelState === "done" && (
+          <div className="booking-cancel-row game-created-cancel-row">
+            <button
+              className="btn-cancel primary"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (cancelOk) {
+                  void loadBookings();
+                  return;
+                }
+                setGameCancelStateById((prev) => ({ ...prev, [game.id]: "idle" }));
+              }}
+            >
+              {cancelOk ? "Запись отменена, продолжить" : "Ошибка — закрыть"}
+            </button>
+          </div>
+        )}
+        {showCancelDeadlineText && (
+          <div className="booking-status-text">Отмена возможна только за 24 часа</div>
+        )}
+      </div>
+    );
   };
 
   const renderActionIcon = (label: string, fallback: string) => {
@@ -674,13 +2063,29 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
   };
 
   return (
-    <div className="app-container">
+    <div ref={cabinetRootRef} className="app-container">
 
       {/* Шапка с профилем */}
-      <UserProfile
-        profile={profile}
-        openEditForm={() => setIsEditOpen(true)}
-      />
+      <div ref={profileSectionRef}>
+        <UserProfile
+          profile={profile}
+          openEditForm={() => setIsEditOpen(true)}
+        />
+      </div>
+
+      {showCommunitiesSection && (
+        <CommunitiesSectionLoader
+          profile={profile}
+          createdGames={createdGames}
+          onOpenGames={onOpenGames}
+          onOpenTournaments={handleOpenTournaments}
+          onOpenHome={handleOpenCabinetHomeFromCommunities}
+          onOpenProfile={handleOpenProfileFromCommunities}
+          initialInviteCode={initialCommunityInviteCode}
+          initialInviteLink={initialCommunityInviteLink}
+          inviteEntryCabinetUrl={inviteEntryCabinetUrl}
+        />
+      )}
 
       {/* Онбординг */}
       {!hasLevel && (
@@ -696,151 +2101,107 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
 
       {/* Быстрые действия */}
       <div className="quick-actions">
-        {QUICK_ACTIONS.map((action) => (
-          <a
-            key={action.label}
-            href={action.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="quick-action-card"
-            onClick={() =>
-              trackAnalyticsEvent("quick_action_click", {
-                label: action.label,
-                href: action.href,
-                clientId: profile.id,
-              })}
-          >
-            {renderActionIcon(action.label, action.icon)}
-            <span className="quick-action-label">{action.label}</span>
-          </a>
-        ))}
+        {QUICK_ACTIONS.map((action) => {
+          const openInOverlay = action.label === "Играть";
+          const resolvedHref = resolveQuickActionHref(action.href);
+          const hashActionTarget = resolveHashActionTarget(action.href) ?? resolveHashActionTarget(resolvedHref);
+          if (openInOverlay) {
+            return (
+              <button
+                key={action.label}
+                type="button"
+                className="quick-action-card quick-action-card-button"
+                onClick={() => handleQuickActionPlay(action)}
+              >
+                {renderActionIcon(action.label, action.icon)}
+                <span className="quick-action-label">{action.label}</span>
+              </button>
+            );
+          }
+          if (hashActionTarget) {
+            return (
+              <button
+                key={action.label}
+                type="button"
+                className="quick-action-card quick-action-card-button"
+                onClick={() => {
+                  trackAnalyticsEvent("quick_action_click", {
+                    label: action.label,
+                    href: resolvedHref,
+                    clientId: profile.id,
+                  });
+                  retriggerHashAction(hashActionTarget);
+                }}
+              >
+                {renderActionIcon(action.label, action.icon)}
+                <span className="quick-action-label">{action.label}</span>
+              </button>
+            );
+          }
+          return (
+            <a
+              key={action.label}
+              href={resolvedHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="quick-action-card"
+              onClick={() =>
+                trackAnalyticsEvent("quick_action_click", {
+                  label: action.label,
+                  href: resolvedHref,
+                  clientId: profile.id,
+                })}
+            >
+              {renderActionIcon(action.label, action.icon)}
+              <span className="quick-action-label">{action.label}</span>
+            </a>
+          );
+        })}
       </div>
-
-      {/* Игры */}
-      <div className="section">
-        <div className="section-header">
-          <span className="section-title">Игры</span>
-        </div>
-        <div className="section-body cabinet-games-feed">
-          {loadingCreatedGames && <div className="section-text">Загружаем созданные игры...</div>}
-          {!loadingCreatedGames && createdGamesError && (
-            <div className="section-text">{createdGamesError}</div>
-          )}
-          {!loadingCreatedGames && !createdGamesError && gamesForFeed.length === 0 && (
-            <div className="section-text">У вас пока нет созданных игр</div>
-          )}
-
-          {!loadingCreatedGames && !createdGamesError && gamesForFeed.length > 0 && (
-            <div className="game-created-list">
-              {gamesForFeed.map((game) => {
-                const dateTitle = formatGameCardDate(game.booking?.date);
-                const badge = getDateBadge(game.booking?.date);
-                const timeFrom = game.booking?.timeFrom ?? "—:—";
-                const timeTo = game.booking?.timeTo ?? "—:—";
-                const ratingTag = game.settings?.ratingGame ? "Рейтинговый" : "Без рейтинга";
-                const durationTag = game.booking?.durationMinutes
-                  ? `${game.booking.durationMinutes} мин`
-                  : null;
-                const ratingRangeTag =
-                  game.settings?.minRating && game.settings?.maxRating
-                    ? `${game.settings.minRating}/${game.settings.maxRating}`
-                    : null;
-                const unreadCount = chatUnreadByGame[game.id] ?? 0;
-                const organizerPlayer: PadelGamePlayer | null = game.organizer
-                  ? {
-                      id: game.organizer.id ?? null,
-                      name: game.organizer.name || "Организатор",
-                      phone: game.organizer.phone ?? null,
-                      photo: game.organizer.photo ?? null,
-                      rating: game.organizer.rating ?? null,
-                      source: "ORGANIZER",
-                      status: "CONFIRMED",
-                    }
-                  : null;
-                const participants = game.participants && game.participants.length > 0
-                  ? game.participants
-                  : (organizerPlayer ? [organizerPlayer] : []);
-                const playerSlots = Array.from({ length: MAX_GAME_PLAYERS }, (_, index) => (
-                  participants[index] ?? null
-                ));
-
-                return (
-                  <div key={game.id} className="game-created-card">
-                    <div className="game-created-head">
-                      <div className="game-created-date">{dateTitle}</div>
-                      <div className="booking-date-badge game-created-date-badge">
-                        <div className="booking-date-badge-month">{badge.month}</div>
-                        <div className="booking-date-badge-day">{badge.day}</div>
-                      </div>
-                    </div>
-                    <div className="game-created-time">{`${timeFrom} • ${timeTo}`}</div>
-                    <div className="game-created-tags">
-                      <span className="game-created-tag">{ratingTag}</span>
-                      {durationTag && <span className="game-created-tag">{durationTag}</span>}
-                      {ratingRangeTag && <span className="game-created-tag">{ratingRangeTag}</span>}
-                    </div>
-                    <div className="game-created-players">
-                      {playerSlots.map((player, index) => {
-                        const initials = getPlayerInitials(player?.name);
-                        const isConfirmed = player?.status === "CONFIRMED" || !player?.status;
-                        return (
-                          <div key={`${game.id}-slot-${index}`} className="game-created-player">
-                            <span className="game-created-player-mark">
-                              {isConfirmed ? "●" : "◷"}
-                            </span>
-                            {player?.photo ? (
-                              <img
-                                src={player.photo}
-                                alt={player.name}
-                                className="game-created-player-avatar"
-                              />
-                            ) : (
-                              <div className="game-created-player-avatar game-created-player-fallback">
-                                {initials}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="game-created-actions">
-                      <button
-                        className="game-created-action game-created-action-secondary"
-                        type="button"
-                        disabled={!resolveGameInviteUrl(game)}
-                        onClick={() => {
-                          void handleCopyInviteFromFeed(game);
-                        }}
-                      >
-                        {copiedGameInviteId === game.id ? "Скопировано" : "Пригласить в игру"}
-                      </button>
-                      <button
-                        className="game-created-action game-chat-open-btn"
-                        type="button"
-                        onClick={() => {
-                          handleOpenGameChat(game);
-                        }}
-                      >
-                        Чат
-                        {unreadCount > 0 && (
-                          <span className="game-chat-unread-badge">{unreadCount}</span>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          <button className="section-cta" onClick={handleOpenGames} type="button">
-            Перейти в игры
+      {SHOW_COLLECT_FRIENDS_BUTTON && (
+        <div className="quick-actions-extra">
+          <button className="section-cta" onClick={handleOpenGamesCreate} type="button">
+            Собрать друзей
           </button>
         </div>
-      </div>
+      )}
+
+      {/* Записи */}
+      <BookingsContainer
+        activeBookings={activeBookings}
+        historyBookings={historyBookings}
+        historyLoading={loadingHistoryBookings}
+        openHistory={openBookingHistory}
+        preloadHistory={() => {
+          void loadHistoryBookings();
+        }}
+        loadBookings={loadBookings}
+        hasMoreActiveRecords={hasMoreActiveRecords}
+        loadingMoreActiveRecords={loadingMoreActiveRecords}
+        onLoadMoreActiveRecords={loadAllActiveRecords}
+        gameRecords={createdGames}
+        onCreateTeamGame={handleCreateTeamGameFromBooking}
+        hasTeamGameForBooking={hasTeamGameForBooking}
+        renderGameCard={renderGameCard}
+        loadingGameRecords={loadingCreatedGames}
+        gameRecordsError={createdGamesError}
+        resolveGameForBooking={resolveGameForBooking}
+        resolveTournamentForBooking={resolveTournamentForBooking}
+      />
+
+      {/* Реклама */}
+      <Advertisement profile={profile} />
+
+      {/* Абонементы */}
+      <SubscriptionsContainer
+        UserSubscriptions={userSubscriptions}
+        phone={profile.phone}
+        openSubInfo={openSubInfo}
+        openBuy={() => setOpenBuySub(true)}
+      />
 
       {/* Турниры */}
-      {canHostTournaments && (
+      {canOpenTournamentsBlock && (
         <div className="section">
           <div className="section-header">
             <span className="section-title">Турниры</span>
@@ -853,30 +2214,6 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
           </div>
         </div>
       )}
-
-      {/* Записи */}
-      <BookingsContainer
-        activeBookings={activeBookings}
-        historyBookings={historyBookings}
-        openHistory={() => setIsBookingHistoryOpen(true)}
-        loadBookings={loadBookings}
-      />
-
-      {/* Реклама */}
-      <div className="section section--ads">
-        <div className="section-header">
-          <span className="section-title">Акции</span>
-        </div>
-        <Advertisement />
-      </div>
-
-      {/* Абонементы */}
-      <SubscriptionsContainer
-        UserSubscriptions={userSubscriptions}
-        phone={profile.phone}
-        openSubInfo={openSubInfo}
-        openBuy={() => setOpenBuySub(true)}
-      />
 
       {/* Соцсети */}
       <ButtonModule />
@@ -900,7 +2237,12 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
       <BookingHistory
         isOpen={isBookingHistoryOpen}
         onClose={() => setIsBookingHistoryOpen(false)}
+        loading={loadingHistoryBookings}
         historyBookings={historyBookings}
+        gameRecords={createdGames}
+        renderGameCard={renderGameCard}
+        resolveGameForBooking={resolveGameForBooking}
+        resolveTournamentForBooking={resolveTournamentForBooking}
       />
       <SubscriptionInformation
         isOpen={isSubscriptionInfoOpen}
@@ -913,6 +2255,7 @@ export function Cabinet({ onOpenGames, onOpenTournaments, onOpenOnboarding }: Ca
         onClose={() => setOpenBuySub(false)}
         phone={profile.phone}
       />
+      <SupportChatWidget profile={profile} />
     </div>
   );
 }

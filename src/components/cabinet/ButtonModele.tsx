@@ -4,15 +4,25 @@ const tgLogo = "https://padlhub.su/lk/assets/telegram.svg";
 const vkLogo = "https://padlhub.su/lk/assets/vk.svg";
 const giftLogo = "https://padlhub.su/lk/assets/gift-card.png";
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+}
+
 export function ButtonModule() {
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const { logout } = useAuth();
 
   useEffect(() => {
-    window.addEventListener("beforeinstallprompt", (e) => {
+    const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
-      setDeferredPrompt(e);
-    });
+      setDeferredPrompt(e as BeforeInstallPromptEvent);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    };
   }, []);
 
   const handleInstall = async () => {

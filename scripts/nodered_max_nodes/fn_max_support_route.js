@@ -21,44 +21,67 @@ function getIntegrationToken() {
   }
 }
 
-function buildMessage(chatId, content, options = null) {
+function buildInlineKeyboard(buttons) {
   return {
+    type: "inline_keyboard",
     payload: {
-      chatId,
-      type: "message",
-      content,
-      options: options || undefined,
+      buttons,
     },
   };
 }
 
-function buildContactOptions() {
+function buildMessage(chatId, text, attachments = null, format = null) {
+  const normalizedText = toStr(text);
+  if (!chatId || !normalizedText) {
+    return null;
+  }
+
+  let payload = normalizedText;
+  if (format || (Array.isArray(attachments) && attachments.length)) {
+    payload = {
+      text: normalizedText,
+    };
+    if (format) {
+      payload.format = format;
+    }
+    if (Array.isArray(attachments) && attachments.length) {
+      payload.attachments = attachments;
+    }
+  }
+
   return {
-    reply_markup: JSON.stringify({
-      keyboard: [[{ text: "Поделиться номером", request_contact: true }]],
-      resize_keyboard: true,
-      one_time_keyboard: false,
-    }),
+    chatId,
+    payload,
   };
 }
 
-function buildStationOptions() {
-  return {
-    reply_markup: JSON.stringify({
-      keyboard: [
-        [{ text: "Нагатинская" }],
-        [{ text: "Нагатинская Премиум" }],
-        [{ text: "Терехово" }],
-        [{ text: "Сколково" }],
-        [{ text: "Ясенево" }],
-        [{ text: "Селигерская" }],
-        [{ text: "Сочи" }],
-        [{ text: "Точка сбора" }],
+function buildContactRequestAttachment() {
+  return [
+    buildInlineKeyboard([
+      [
+        {
+          type: "request_contact",
+          text: "Поделиться номером",
+          payload: "share_contact",
+        },
       ],
-      resize_keyboard: true,
-      one_time_keyboard: false,
-    }),
-  };
+    ]),
+  ];
+}
+
+function buildStationAttachment() {
+  return [
+    buildInlineKeyboard([
+      [{ type: "callback", text: "Нагатинская", payload: "nagat" }],
+      [{ type: "callback", text: "Нагатинская Премиум", payload: "nagat_p" }],
+      [{ type: "callback", text: "Терехово", payload: "tereh" }],
+      [{ type: "callback", text: "Сколково", payload: "kuncev" }],
+      [{ type: "callback", text: "Ясенево", payload: "yas" }],
+      [{ type: "callback", text: "Селигерская", payload: "seleger" }],
+      [{ type: "callback", text: "Сочи", payload: "sochi" }],
+      [{ type: "callback", text: "Точка сбора", payload: "t-sbora" }],
+    ]),
+  ];
 }
 
 const update = isObj(msg.maxUpdate) ? msg.maxUpdate : null;
@@ -113,13 +136,13 @@ if (update.command === "/start") {
     outbound.push(buildMessage(
       chatId,
       "Чтобы подключить администратора, сначала подтвердите номер телефона. Нажмите кнопку ниже.",
-      buildContactOptions(),
+      buildContactRequestAttachment(),
     ));
   } else if (!currentStationId) {
     outbound.push(buildMessage(
       chatId,
       "Номер уже подтвержден. Теперь выберите станцию, чтобы мы направили обращение нужной команде.",
-      buildStationOptions(),
+      buildStationAttachment(),
     ));
   } else {
     outbound.push(buildMessage(
@@ -131,14 +154,14 @@ if (update.command === "/start") {
   outbound.push(buildMessage(
     chatId,
     "Спасибо. Номер сохранен. Теперь выберите станцию, чтобы мы направили обращение нужному администратору.",
-    buildStationOptions(),
+    buildStationAttachment(),
   ));
 } else if (update.messageKind === "station" && update.station) {
   if (!authVerified) {
     outbound.push(buildMessage(
       chatId,
       "Подключить администратора мы можем только для авторизованных пользователей. Сначала поделитесь номером телефона.",
-      buildContactOptions(),
+      buildContactRequestAttachment(),
     ));
   } else {
     outbound.push(buildMessage(
@@ -150,13 +173,13 @@ if (update.command === "/start") {
   outbound.push(buildMessage(
     chatId,
     "Подключить администратора мы можем только для авторизованных пользователей. Поделитесь номером телефона, и мы продолжим диалог.",
-    buildContactOptions(),
+    buildContactRequestAttachment(),
   ));
 } else if (!currentStationId && !selectedStationId) {
   outbound.push(buildMessage(
     chatId,
     "Номер подтвержден, но станция еще не выбрана. Пожалуйста, выберите станцию.",
-    buildStationOptions(),
+    buildStationAttachment(),
   ));
 }
 

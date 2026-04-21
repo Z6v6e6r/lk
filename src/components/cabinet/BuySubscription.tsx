@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Modal } from "../UI/Modal";
 import {
   apiBuySubscroption,
@@ -24,13 +24,7 @@ export function BuySupscription({
   const [selectedSub, setSelectedSub] = useState<apiSubscription | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
 
-  useEffect(() => {
-    if (isOpen && !subscriptions) {
-      fetchSubscriptions();
-    }
-  }, [isOpen]);
-
-  const fetchSubscriptions = async () => {
+  const fetchSubscriptions = useCallback(async () => {
     setLoading(true);
     try {
       const response = await apiGetSubscriptionsForSale();
@@ -42,7 +36,13 @@ export function BuySupscription({
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (isOpen && !subscriptions) {
+      void fetchSubscriptions();
+    }
+  }, [fetchSubscriptions, isOpen, subscriptions]);
 
   const handleSelectSubscription = (sub: apiSubscription) => {
     setSelectedSub(sub);

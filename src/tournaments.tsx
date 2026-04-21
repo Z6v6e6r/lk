@@ -4,6 +4,7 @@ import "./index.css";
 import "./MyApp.css";
 import { AppErrorBoundary } from "./components/UI/AppErrorBoundary";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { OverlayScopeProvider } from "./context/OverlayScopeContext";
 import { AuthForm } from "./components/auth/AuthForm";
 import TournamentsPage from "./components/tournaments/TournamentsPage";
 import {
@@ -11,11 +12,16 @@ import {
   trackAnalyticsEvent,
   trackClientError,
 } from "./utils/analytics";
+import { mountDevReleaseBadge } from "./utils/devReleaseBadge";
+import { ensureFreshRelease } from "./utils/releaseGuard";
 
 type MountOptions = { targetId?: string; onClose?: () => void };
+type TournamentsWidgetModule = { mount: typeof mount; unmount: typeof unmount };
 
 let tournamentsRoot: ReturnType<typeof createRoot> | null = null;
 
+ensureFreshRelease({ entry: "tournaments", bundleFileNames: ["tournaments.js", "tournaments-dev.js"] });
+mountDevReleaseBadge({ bundleFileNames: ["tournaments.js", "tournaments-dev.js"] });
 installGlobalErrorTracking();
 trackAnalyticsEvent("widget_bundle_loaded", { entry: "tournaments" });
 
@@ -48,6 +54,7 @@ function TournamentsApp({ onClose }: { onClose?: () => void }) {
 
 function mount(options: MountOptions = {}) {
   const targetId = options.targetId ?? "root";
+  const isOverlayScope = targetId === "lk-overlay";
   const container = document.getElementById(targetId);
   if (!container) {
     trackClientError(
@@ -64,9 +71,11 @@ function mount(options: MountOptions = {}) {
     tournamentsRoot = createRoot(container);
     tournamentsRoot.render(
       <StrictMode>
-        <AppErrorBoundary module="tournaments">
-          <TournamentsApp onClose={options.onClose} />
-        </AppErrorBoundary>
+        <OverlayScopeProvider value={isOverlayScope}>
+          <AppErrorBoundary module="tournaments">
+            <TournamentsApp onClose={options.onClose} />
+          </AppErrorBoundary>
+        </OverlayScopeProvider>
       </StrictMode>,
     );
     trackAnalyticsEvent("widget_mounted", { entry: "tournaments", targetId });
@@ -85,4 +94,4 @@ function unmount() {
   tournamentsRoot = null;
 }
 
-(window as any).LKWidgetTournaments = { mount, unmount };
+(window as Window & { LKWidgetTournaments?: TournamentsWidgetModule }).LKWidgetTournaments = { mount, unmount };

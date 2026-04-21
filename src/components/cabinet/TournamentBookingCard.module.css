@@ -1,0 +1,32 @@
+.card {
+  cursor: default;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 20px;
+}
+
+.card:active {
+  transform: none;
+}
+
+.title {
+  text-transform: none;
+}
+
+.subtitle {
+  color: #000000;
+}
+
+.slotTag {
+  background: #eef8f1;
+  color: #2f8654;
+}
+
+.slotTagFull {
+  background: rgba(31, 26, 46, 0.08);
+  color: #4f4a5d;
+}
+
+.actionRow {
+  margin-top: -2px;
+}

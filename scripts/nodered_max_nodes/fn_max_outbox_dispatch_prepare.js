@@ -18,11 +18,8 @@ if (!chatId || !content) {
 
 const sendMsg = Object.assign({}, msg, {
   supportOutbox: command,
-  payload: {
-    chatId,
-    type: "message",
-    content,
-  },
+  chatId,
+  payload: content,
 });
 
 return [sendMsg, null];

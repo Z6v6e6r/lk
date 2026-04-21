@@ -7,7 +7,11 @@ import {
   trackAnalyticsEvent,
   trackClientError,
 } from "./utils/analytics";
+import { mountDevReleaseBadge } from "./utils/devReleaseBadge";
+import { ensureFreshRelease } from "./utils/releaseGuard";
 
+ensureFreshRelease({ entry: "main", bundleFileNames: ["bundle.js", "bundle-dev.js"] });
+mountDevReleaseBadge({ bundleFileNames: ["bundle.js", "bundle-dev.js"] });
 installGlobalErrorTracking();
 trackAnalyticsEvent("widget_bootstrap_started", { entry: "main" });
 

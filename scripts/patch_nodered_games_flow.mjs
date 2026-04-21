@@ -1,8 +1,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { transformFlowToMongo4 } from './nodered_mongodb4_transform.mjs';
 
-const srcPath = '/Users/zver/Desktop/ЛК03_03_26.json';
-const outPath = '/Users/zver/Desktop/project-fixed 6/ЛК03_03_26.with_games.json';
+const cliSrcPath = process.argv[2] ? path.resolve(process.argv[2]) : null;
+const cliOutPath = process.argv[3] ? path.resolve(process.argv[3]) : null;
+
+const srcCandidates = cliSrcPath
+  ? [cliSrcPath]
+  : [
+      '/Users/zver/Desktop/ЛК03_03_26.json',
+      '/Users/zver/Desktop/project-fixed 6/node-red/ЛК03_03_26.with_games_chat_results_communities.json',
+      '/Users/zver/Desktop/project-fixed 6/node-red/ЛК03_03_26.with_games_chat_results.json',
+      '/Users/zver/Desktop/project-fixed 6/node-red/ЛК03_03_26.with_games_chat.json',
+      '/Users/zver/Desktop/project-fixed 6/node-red/ЛК03_03_26.with_games.json',
+      '/Users/zver/Desktop/project-fixed 6/node-red/поток-lk.mongodb4.json',
+    ];
+const outPath = cliOutPath || '/Users/zver/Desktop/project-fixed 6/ЛК03_03_26.with_games.json';
 const fnDir = '/Users/zver/Desktop/project-fixed 6/scripts/nodered_games_nodes';
 
 const readFn = (name) => fs.readFileSync(path.join(fnDir, name), 'utf8');
@@ -13,9 +26,34 @@ const fnListNormalize = readFn('fn_list_normalize.js');
 const fnGetByIdQuery = readFn('fn_get_by_id_query.js');
 const fnGetByIdResp = readFn('fn_get_by_id_resp.js');
 const fnPatch = readFn('fn_patch.js');
+const fnAutojoinPrepare = readFn('fn_autojoin_prepare.js');
+const fnAutojoinApply = readFn('fn_autojoin_apply.js');
+const fnAutojoinPatchMerge = readFn('fn_autojoin_patch_merge.js');
+const fnLiveRatingsValidate = readFn('fn_live_ratings_validate.js');
+const fnLiveRatingsGetToken = readFn('fn_live_ratings_get_token.js');
+const fnLiveRatingsStoreToken = readFn('fn_live_ratings_store_token.js');
+const fnLiveRatingsBuildRequest = readFn('fn_live_ratings_build_request.js');
+const fnLiveRatingsParse = readFn('fn_live_ratings_parse.js');
+const fnLiveRatingsResponse = readFn('fn_live_ratings_response.js');
+const fnTournamentPrepare = readFn('fn_tournament_prepare.js');
+const fnTournamentRecalculate = readFn('fn_tournament_recalculate.js');
+const fnTournamentExport = readFn('fn_tournament_export.js');
+
+const srcPath = srcCandidates.find((candidate) => fs.existsSync(candidate));
+if (!srcPath) {
+  throw new Error(`Source flow not found. Checked: ${srcCandidates.join(', ')}`);
+}
 
 const raw = fs.readFileSync(srcPath, 'utf8');
 const flow = JSON.parse(raw);
+const tabs = flow.filter((node) => node.type === 'tab');
+const detectedTab = tabs.find((node) => String(node.label || node.name || '').trim().toLowerCase() === 'lk dops')
+  || tabs[0]
+  || null;
+if (!detectedTab?.id) {
+  throw new Error(`Target tab not found in source flow: ${srcPath}`);
+}
+const tabId = detectedTab.id;
 
 const NEW_IDS = new Set([
   'c71c9902f8a14c01',
@@ -45,10 +83,85 @@ const NEW_IDS = new Set([
   '9a8b7c6d5e4f3014',
   '9a8b7c6d5e4f3015',
   '9a8b7c6d5e4f3016',
+  '7d2b2a4f6f9d4101',
+  '2b7f1f8c8a6242a1',
+  '51b1a0d0ee534101',
+  '1b122b3dbfe94d02',
+  'f4b6f5a9de214801',
+  '9bc3abccf76a4fd2',
+  '0c8f7b2a9d4d4ec0',
+  'd1529d6e3ec5453b',
+  '6c4a4e5a58f94b85',
+  '2e9fd4e3d0ce4d77',
+  '4f3d6aa5d2b74f7d',
+  '1d8e2f5b9c684d5c',
+  '3f66f7265b354c77',
+  '3a6db0a1f28a4102',
+  '2b52d9bc7f1e4103',
+  '5caa2f44de3c4104',
+  '6d8a7302bb5e4105',
+  '7b4c82b8f65f4106',
+  '8c5d93c9a7604107',
+  '9d6ea4dab8614108',
+  'ae7fb5ebc9624109',
+  'bf80c6fcd0634110',
+  'c091d70de1644111',
+]);
+const LEGACY_GAME_ROUTE_URLS = new Set([
+  '/lk/games',
+  '/lk/games/records',
+  '/lk/games/by-phone',
+  '/lk/games/:gameId',
+  '/lk/games/records/:gameId',
+  '/lk/games/ratings/live',
+]);
+const EXPLICIT_ORPHAN_IDS = new Set([
+  'b5e8119f2a0a99f9',
+  '0564cd6d2c702f4b',
 ]);
 
-const filtered = flow.filter((node) => !NEW_IDS.has(node.id));
-const tabId = '1e95dcebc274ac6c';
+const byId = new Map(flow.map((node) => [node.id, node]));
+const removalIds = new Set();
+const removalQueue = [];
+
+const enqueueRemoval = (nodeId) => {
+  if (!nodeId || removalIds.has(nodeId)) return;
+  removalIds.add(nodeId);
+  removalQueue.push(nodeId);
+};
+
+flow.forEach((node) => {
+  if (NEW_IDS.has(node.id)) {
+    enqueueRemoval(node.id);
+    return;
+  }
+  if (node.z !== tabId) return;
+  if (node.type === 'http in' && LEGACY_GAME_ROUTE_URLS.has(String(node.url || '').trim())) {
+    enqueueRemoval(node.id);
+    return;
+  }
+  if (node.type === 'comment' && node.name === 'LK games (create/list/upcoming by phone)') {
+    enqueueRemoval(node.id);
+  }
+});
+
+while (removalQueue.length > 0) {
+  const currentId = removalQueue.shift();
+  const currentNode = currentId ? byId.get(currentId) : null;
+  if (!currentNode || !Array.isArray(currentNode.wires)) continue;
+
+  currentNode.wires.forEach((group) => {
+    if (!Array.isArray(group)) return;
+    group.forEach((nextId) => {
+      const nextNode = byId.get(nextId);
+      if (!nextNode) return;
+      if (nextNode.z && nextNode.z !== tabId) return;
+      enqueueRemoval(nextId);
+    });
+  });
+}
+
+const filtered = flow.filter((node) => !removalIds.has(node.id) && !EXPLICIT_ORPHAN_IDS.has(node.id));
 
 const newNodes = [
   {
@@ -94,7 +207,7 @@ const newNodes = [
     z: tabId,
     name: 'Prepare game upsert',
     func: fnCreate,
-    outputs: 3,
+    outputs: 4,
     timeout: '',
     noerr: 0,
     initialize: '',
@@ -102,7 +215,7 @@ const newNodes = [
     libs: [],
     x: 420,
     y: 2800,
-    wires: [['5f89d9ea1bc44704'], ['3d09c7bbf34d4505'], ['1a34ab77e96d4606']],
+    wires: [['5f89d9ea1bc44704'], ['3d09c7bbf34d4505'], ['1a34ab77e96d4606'], ['3a6db0a1f28a4102']],
   },
   {
     id: '5f89d9ea1bc44704',
@@ -369,7 +482,7 @@ const newNodes = [
     z: tabId,
     name: 'Prepare game patch',
     func: fnPatch,
-    outputs: 3,
+    outputs: 4,
     timeout: '',
     noerr: 0,
     initialize: '',
@@ -377,7 +490,7 @@ const newNodes = [
     libs: [],
     x: 410,
     y: 3140,
-    wires: [['9a8b7c6d5e4f3014'], ['9a8b7c6d5e4f3015'], ['9a8b7c6d5e4f3016']],
+    wires: [['9a8b7c6d5e4f3014'], ['9a8b7c6d5e4f3015'], ['9a8b7c6d5e4f3016'], ['bf80c6fcd0634110']],
   },
   {
     id: '9a8b7c6d5e4f3014',
@@ -419,9 +532,393 @@ const newNodes = [
     y: 3200,
     wires: [],
   },
+  {
+    id: '3a6db0a1f28a4102',
+    type: 'function',
+    z: tabId,
+    name: 'Prepare game station autojoin',
+    func: fnAutojoinPrepare,
+    outputs: 2,
+    timeout: '',
+    noerr: 0,
+    initialize: '',
+    finalize: '',
+    libs: [],
+    x: 710,
+    y: 2840,
+    wires: [['2b52d9bc7f1e4103'], ['ae7fb5ebc9624109']],
+  },
+  {
+    id: '2b52d9bc7f1e4103',
+    type: 'mongodb in',
+    z: tabId,
+    mongodb: 'mongo_lk',
+    name: 'Find communities for game autojoin',
+    collection: 'lk_communities',
+    operation: 'find',
+    x: 1030,
+    y: 2800,
+    wires: [['5caa2f44de3c4104']],
+  },
+  {
+    id: '5caa2f44de3c4104',
+    type: 'function',
+    z: tabId,
+    name: 'Apply game station autojoin',
+    func: fnAutojoinApply,
+    outputs: 5,
+    timeout: '',
+    noerr: 0,
+    initialize: '',
+    finalize: '',
+    libs: [],
+    x: 1310,
+    y: 2800,
+    wires: [
+      ['6d8a7302bb5e4105'],
+      ['7b4c82b8f65f4106'],
+      ['8c5d93c9a7604107'],
+      ['9d6ea4dab8614108'],
+      ['ae7fb5ebc9624109'],
+    ],
+  },
+  {
+    id: '6d8a7302bb5e4105',
+    type: 'mongodb out',
+    z: tabId,
+    mongodb: 'mongo_lk',
+    name: 'Autojoin update community',
+    collection: 'lk_communities',
+    payonly: false,
+    upsert: false,
+    multi: false,
+    operation: 'update',
+    x: 1600,
+    y: 2720,
+    wires: [],
+  },
+  {
+    id: '7b4c82b8f65f4106',
+    type: 'mongodb out',
+    z: tabId,
+    mongodb: 'mongo_lk',
+    name: 'Autojoin ranking upsert',
+    collection: 'lk_community_rankings',
+    payonly: false,
+    upsert: true,
+    multi: false,
+    operation: 'update',
+    x: 1600,
+    y: 2760,
+    wires: [],
+  },
+  {
+    id: '8c5d93c9a7604107',
+    type: 'mongodb out',
+    z: tabId,
+    mongodb: 'mongo_lk',
+    name: 'Autojoin feed insert',
+    collection: 'lk_community_feed',
+    payonly: false,
+    upsert: false,
+    multi: false,
+    operation: 'insert',
+    x: 1590,
+    y: 2800,
+    wires: [],
+  },
+  {
+    id: '9d6ea4dab8614108',
+    type: 'mongodb out',
+    z: tabId,
+    mongodb: 'mongo_lk',
+    name: 'Autojoin event insert',
+    collection: 'lk_community_events',
+    payonly: false,
+    upsert: false,
+    multi: false,
+    operation: 'insert',
+    x: 1590,
+    y: 2840,
+    wires: [],
+  },
+  {
+    id: 'ae7fb5ebc9624109',
+    type: 'debug',
+    z: tabId,
+    name: 'game station autojoin debug',
+    active: false,
+    tosidebar: true,
+    console: false,
+    tostatus: false,
+    complete: 'payload',
+    statusVal: '',
+    statusType: 'auto',
+    x: 1600,
+    y: 2880,
+    wires: [],
+  },
+  {
+    id: 'bf80c6fcd0634110',
+    type: 'mongodb in',
+    z: tabId,
+    mongodb: 'mongo_lk',
+    name: 'Find game for patch autojoin',
+    collection: 'lk_games',
+    operation: 'find',
+    x: 720,
+    y: 3240,
+    wires: [['c091d70de1644111']],
+  },
+  {
+    id: 'c091d70de1644111',
+    type: 'function',
+    z: tabId,
+    name: 'Merge patch game for autojoin',
+    func: fnAutojoinPatchMerge,
+    outputs: 2,
+    timeout: '',
+    noerr: 0,
+    initialize: '',
+    finalize: '',
+    libs: [],
+    x: 1010,
+    y: 3240,
+    wires: [['3a6db0a1f28a4102'], ['ae7fb5ebc9624109']],
+  },
+
+  {
+    id: '7d2b2a4f6f9d4101',
+    type: 'http in',
+    z: tabId,
+    name: 'LK games live ratings',
+    url: '/lk/games/ratings/live',
+    method: 'post',
+    upload: false,
+    swaggerDoc: '',
+    x: 180,
+    y: 1980,
+    wires: [['2b7f1f8c8a6242a1']],
+  },
+  {
+    id: '2b7f1f8c8a6242a1',
+    type: 'function',
+    z: tabId,
+    name: 'Validate live ratings request',
+    func: fnLiveRatingsValidate,
+    outputs: 3,
+    timeout: '',
+    noerr: 0,
+    initialize: '',
+    finalize: '',
+    libs: [],
+    x: 450,
+    y: 1980,
+    wires: [['51b1a0d0ee534101'], ['1d8e2f5b9c684d5c'], ['3f66f7265b354c77']],
+  },
+  {
+    id: '51b1a0d0ee534101',
+    type: 'function',
+    z: tabId,
+    name: 'Get or request Viva token',
+    func: fnLiveRatingsGetToken,
+    outputs: 3,
+    timeout: '',
+    noerr: 0,
+    initialize: '',
+    finalize: '',
+    libs: [],
+    x: 710,
+    y: 1980,
+    wires: [['9bc3abccf76a4fd2'], ['1b122b3dbfe94d02'], ['1d8e2f5b9c684d5c']],
+  },
+  {
+    id: '1b122b3dbfe94d02',
+    type: 'http request',
+    z: tabId,
+    name: 'Get Viva token (live)',
+    method: 'use',
+    ret: 'obj',
+    paytoqs: 'ignore',
+    url: '',
+    x: 980,
+    y: 1940,
+    wires: [['f4b6f5a9de214801']],
+  },
+  {
+    id: 'f4b6f5a9de214801',
+    type: 'function',
+    z: tabId,
+    name: 'Store Viva token (live)',
+    func: fnLiveRatingsStoreToken,
+    outputs: 3,
+    timeout: '',
+    noerr: 0,
+    initialize: '',
+    finalize: '',
+    libs: [],
+    x: 1250,
+    y: 1940,
+    wires: [['9bc3abccf76a4fd2'], ['1d8e2f5b9c684d5c'], ['3f66f7265b354c77']],
+  },
+  {
+    id: '9bc3abccf76a4fd2',
+    type: 'split',
+    z: tabId,
+    name: 'Split players for live rating',
+    splt: '\\n',
+    spltType: 'str',
+    arraySplt: 1,
+    arraySpltType: 'len',
+    stream: false,
+    addname: 'payload',
+    x: 1520,
+    y: 1980,
+    wires: [['0c8f7b2a9d4d4ec0']],
+  },
+  {
+    id: '0c8f7b2a9d4d4ec0',
+    type: 'function',
+    z: tabId,
+    name: 'Build Viva client rating request',
+    func: fnLiveRatingsBuildRequest,
+    outputs: 3,
+    timeout: '',
+    noerr: 0,
+    initialize: '',
+    finalize: '',
+    libs: [],
+    x: 1790,
+    y: 1980,
+    wires: [['d1529d6e3ec5453b'], ['2e9fd4e3d0ce4d77'], ['3f66f7265b354c77']],
+  },
+  {
+    id: 'd1529d6e3ec5453b',
+    type: 'http request',
+    z: tabId,
+    name: 'Viva Admin client (live rating)',
+    method: 'use',
+    ret: 'obj',
+    paytoqs: 'ignore',
+    url: '',
+    x: 2080,
+    y: 1940,
+    wires: [['6c4a4e5a58f94b85']],
+  },
+  {
+    id: '6c4a4e5a58f94b85',
+    type: 'function',
+    z: tabId,
+    name: 'Parse live rating from Viva',
+    func: fnLiveRatingsParse,
+    outputs: 1,
+    timeout: '',
+    noerr: 0,
+    initialize: '',
+    finalize: '',
+    libs: [],
+    x: 2350,
+    y: 1940,
+    wires: [['2e9fd4e3d0ce4d77']],
+  },
+  {
+    id: '2e9fd4e3d0ce4d77',
+    type: 'join',
+    z: tabId,
+    name: 'Join live rating results',
+    mode: 'auto',
+    build: 'array',
+    property: 'payload',
+    propertyType: 'msg',
+    key: 'topic',
+    joiner: '\\n',
+    joinerType: 'str',
+    useparts: true,
+    accumulate: false,
+    timeout: '',
+    count: '',
+    reduceRight: false,
+    reduceExp: '',
+    reduceInit: '',
+    reduceInitType: '',
+    reduceFixup: '',
+    x: 2350,
+    y: 2020,
+    wires: [['4f3d6aa5d2b74f7d']],
+  },
+  {
+    id: '4f3d6aa5d2b74f7d',
+    type: 'function',
+    z: tabId,
+    name: 'Build live rating response',
+    func: fnLiveRatingsResponse,
+    outputs: 2,
+    timeout: '',
+    noerr: 0,
+    initialize: '',
+    finalize: '',
+    libs: [],
+    x: 2610,
+    y: 2020,
+    wires: [['1d8e2f5b9c684d5c'], ['3f66f7265b354c77']],
+  },
+  {
+    id: '1d8e2f5b9c684d5c',
+    type: 'http response',
+    z: tabId,
+    name: '',
+    x: 2860,
+    y: 1980,
+    wires: [],
+  },
+  {
+    id: '3f66f7265b354c77',
+    type: 'debug',
+    z: tabId,
+    name: 'live ratings debug',
+    active: false,
+    tosidebar: true,
+    console: false,
+    tostatus: false,
+    complete: 'payload',
+    targetType: 'msg',
+    statusVal: '',
+    statusType: 'auto',
+    x: 2860,
+    y: 2020,
+    wires: [],
+  },
 ];
 
 filtered.push(...newNodes);
-fs.writeFileSync(outPath, JSON.stringify(filtered, null, 4), 'utf8');
+const mongo4Flow = transformFlowToMongo4(filtered);
+const tunedFlow = mongo4Flow.map((node) => {
+  if (node.id === '5f89d9ea1bc44704' && node.type === 'mongodb4') {
+    return {
+      ...node,
+      maxTimeMS: '5000',
+    };
+  }
+  if (node.id === 'f24b7853762ba062' && node.type === 'function') {
+    return {
+      ...node,
+      func: fnTournamentPrepare,
+    };
+  }
+  if (node.id === 'e1f6143b9ad980fd' && node.type === 'function') {
+    return {
+      ...node,
+      func: fnTournamentRecalculate,
+    };
+  }
+  if (node.id === '08e3de6478a9b10f' && node.type === 'function') {
+    return {
+      ...node,
+      func: fnTournamentExport,
+    };
+  }
+  return node;
+});
+fs.writeFileSync(outPath, JSON.stringify(tunedFlow, null, 4), 'utf8');
 console.log(`Patched flow written to: ${outPath}`);
-console.log(`Total nodes: ${filtered.length}`);
+console.log(`Total nodes: ${tunedFlow.length}`);

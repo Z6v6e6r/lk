@@ -1,11 +1,15 @@
 import { useState } from "react";
 import type { Booking } from "../../utils/apiClient";
 import { apiCancelBooking } from "../../utils/apiClient";
+import { CalendarDateBadge } from "../UI/CalendarDateBadge";
+import { addBookingToCalendar } from "../../utils/calendarEvent";
 
 interface BookingProps {
   booking: Booking;
   active: boolean;
   loadBookings?: () => void;
+  showCreateTeamGame?: boolean;
+  onCreateTeamGame?: (booking: Booking) => void;
 }
 
 function formatDate(dateStr: string) {
@@ -31,7 +35,13 @@ function getPaymentLabel(booking: Booking, active: boolean): string {
   return booking.paymentType === "SUBSCRIPTION" ? "Абонемент" : `${booking.cost / 100} ₽`;
 }
 
-export function BookingCard({ booking, active, loadBookings }: BookingProps) {
+export function BookingCard({
+  booking,
+  active,
+  loadBookings,
+  showCreateTeamGame = false,
+  onCreateTeamGame,
+}: BookingProps) {
   const [cancelState, setCancelState] = useState<"idle" | "confirm" | "done">("idle");
   const [cancelOk, setCancelOk] = useState(false);
 
@@ -53,6 +63,7 @@ export function BookingCard({ booking, active, loadBookings }: BookingProps) {
   const mapsUrl = studioName === "Селигерская"
     ? "https://yandex.ru/maps/213/moscow/?ll=37.523554%2C55.867424&mode=routes&rtext=~55.867046%2C37.523758&rtt=auto&ruri=~ymapsbm1%3A%2F%2Forg%3Foid%3D190285749872"
     : "https://yandex.ru/maps/?text=" + encodeURIComponent(studioAddr);
+  const canAddToCalendar = Boolean(booking.exercise?.timeFrom && booking.exercise?.timeTo);
 
   const handleCancel = async () => {
     const res = await apiCancelBooking(booking.id);
@@ -66,10 +77,12 @@ export function BookingCard({ booking, active, loadBookings }: BookingProps) {
       <div className="booking-date-row">
         <span className="booking-date-text">{date?.full}</span>
         {date && (
-          <div className="booking-date-badge">
-            <div className="booking-date-badge-month">{date.short}</div>
-            <div className="booking-date-badge-day">{date.day}</div>
-          </div>
+          <CalendarDateBadge
+            monthLabel={date.short}
+            dayLabel={date.day}
+            disabled={!canAddToCalendar}
+            onClick={() => addBookingToCalendar(booking)}
+          />
         )}
       </div>
 
@@ -99,6 +112,14 @@ export function BookingCard({ booking, active, loadBookings }: BookingProps) {
           </div>
           <span style={{ color: "var(--text-secondary)" }}>›</span>
         </a>
+      )}
+
+      {showCreateTeamGame && onCreateTeamGame && (
+        <div className="booking-cancel-row">
+          <button type="button" className="btn-cancel primary" onClick={() => onCreateTeamGame(booking)}>
+            Собрать друзей
+          </button>
+        </div>
       )}
 
       {canCancel && cancelState === "idle" && (

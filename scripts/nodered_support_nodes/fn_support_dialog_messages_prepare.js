@@ -22,6 +22,10 @@ msg._supportDialogMessages = { dialogId, limit, beforeTs };
 msg.payload = {
   dialogId,
   deleted: { $ne: true },
-  createdTs: { $lt: beforeTs },
+  $or: [
+    { createdTs: { $lt: beforeTs } },
+    { createdTs: { $exists: false } },
+    { createdTs: null },
+  ],
 };
 return [msg, null, msg];

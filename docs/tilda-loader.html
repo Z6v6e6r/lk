@@ -1,0 +1,213 @@
+<div id="root"></div>
+<script>
+  (function () {
+    var primaryBaseUrl = "https://ваш-сервер/lk";
+    var fallbackBaseUrls = [];
+    var analyticsUrl = "https://ваш-сервер/lk/analytics/events";
+    var channel = "prod"; // "prod" or "dev"
+    var requestTimeoutMs = 8000;
+
+    function normalizeBaseUrl(value) {
+      return String(value || "").trim().replace(/\/+$/, "");
+    }
+
+    function dedupeStrings(values) {
+      var seen = {};
+      return values.filter(function (value) {
+        if (!value || seen[value]) return false;
+        seen[value] = true;
+        return true;
+      });
+    }
+
+    function resolveBaseUrls() {
+      var configured = normalizeBaseUrl(primaryBaseUrl);
+      var fallbacks = Array.isArray(fallbackBaseUrls)
+        ? fallbackBaseUrls.map(normalizeBaseUrl).filter(Boolean)
+        : [];
+      var currentOriginBase = normalizeBaseUrl(location.origin + "/lk");
+
+      if (configured && currentOriginBase && configured !== currentOriginBase) {
+        fallbacks.push(currentOriginBase);
+      }
+
+      return dedupeStrings([configured].concat(fallbacks).filter(Boolean));
+    }
+
+    var baseUrls = resolveBaseUrls();
+
+    function sendBootstrapError(kind, payload) {
+      try {
+        var body = JSON.stringify({
+          event: "tilda_bootstrap_error",
+          timestamp: new Date().toISOString(),
+          source: "tilda-loader",
+          channel: channel,
+          kind: kind,
+          payload: payload || {},
+          page: {
+            href: location.href,
+            referrer: document.referrer || null
+          },
+          userAgent: navigator.userAgent || null
+        });
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon(analyticsUrl, new Blob([body], { type: "application/json" }));
+          return;
+        }
+        fetch(analyticsUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: body,
+          keepalive: true
+        });
+      } catch (_) {}
+    }
+
+    function isLikelyExtensionError(event) {
+      var filename = String(event && event.filename || "");
+      var message = String(event && event.message || "");
+      return /(^|\/)content\.js(\?|$)/i.test(filename)
+        || /^chrome-extension:/i.test(filename)
+        || /^moz-extension:/i.test(filename)
+        || /^safari-web-extension:/i.test(filename)
+        || /safari is not defined/i.test(message);
+    }
+
+    window.addEventListener("error", function (event) {
+      if (isLikelyExtensionError(event)) return;
+      sendBootstrapError("window.error", {
+        message: event.message || "Runtime error before widget init",
+        filename: event.filename || null,
+        lineno: event.lineno || null,
+        colno: event.colno || null
+      });
+    }, true);
+
+    window.addEventListener("unhandledrejection", function (event) {
+      var reason = event && event.reason ? String(event.reason) : "Unhandled promise rejection";
+      sendBootstrapError("window.unhandledrejection", { reason: reason });
+    });
+
+    function getReleaseFileName() {
+      return channel === "dev" ? "release-dev.json" : "release.json";
+    }
+
+    function getBundleFileName() {
+      return channel === "dev" ? "bundle-dev.js" : "bundle.js";
+    }
+
+    function showLoadError(payload) {
+      sendBootstrapError("bundle.load_failed", payload || {});
+      var root = document.getElementById("root");
+      if (root) {
+        root.innerHTML = "<div style='padding:16px;font-family:Arial,sans-serif;color:#333'>Не удалось загрузить кабинет. Проверьте интернет или попробуйте позже.</div>";
+      }
+    }
+
+    function buildBundleUrl(baseUrl, version) {
+      var normalizedVersion = (version || "").trim();
+      return baseUrl + "/" + getBundleFileName() + (normalizedVersion ? ("?v=" + encodeURIComponent(normalizedVersion)) : "");
+    }
+
+    function rotateBaseUrls(startIndex) {
+      return baseUrls.slice(startIndex).concat(baseUrls.slice(0, startIndex));
+    }
+
+    function appendBundleScript(version, candidateBaseUrls, releaseUrl, errors) {
+      var candidates = candidateBaseUrls && candidateBaseUrls.length ? candidateBaseUrls : baseUrls;
+      var normalizedVersion = (version || "").trim();
+      if (normalizedVersion) {
+        window.__LK_RELEASE_VERSION__ = normalizedVersion;
+      }
+
+      var failedUrls = Array.isArray(errors) ? errors.slice() : [];
+
+      function tryNext(index) {
+        if (index >= candidates.length) {
+          showLoadError({
+            releaseUrl: releaseUrl || null,
+            attemptedBundleUrls: failedUrls,
+            baseUrls: candidates
+          });
+          return;
+        }
+
+        var bundleUrl = buildBundleUrl(candidates[index], version);
+        failedUrls.push(bundleUrl);
+
+        var script = document.createElement("script");
+        script.src = bundleUrl;
+        script.async = true;
+        script.crossOrigin = "anonymous";
+        script.onerror = function () {
+          if (script.parentNode) {
+            script.parentNode.removeChild(script);
+          }
+          sendBootstrapError("bundle.load_retry", {
+            bundleUrl: bundleUrl,
+            nextBaseUrl: candidates[index + 1] || null
+          });
+          tryNext(index + 1);
+        };
+        document.head.appendChild(script);
+      }
+
+      tryNext(0);
+    }
+
+    function fetchJsonWithTimeout(url) {
+      if (typeof AbortController === "undefined") {
+        return fetch(url, { cache: "no-store" });
+      }
+
+      var controller = new AbortController();
+      var timeoutId = setTimeout(function () {
+        controller.abort();
+      }, requestTimeoutMs);
+
+      return fetch(url, {
+        cache: "no-store",
+        signal: controller.signal
+      }).finally(function () {
+        clearTimeout(timeoutId);
+      });
+    }
+
+    function fetchReleaseVersion(index, manifestErrors) {
+      if (index >= baseUrls.length) {
+        appendBundleScript(String(Date.now()), baseUrls, null, manifestErrors);
+        return;
+      }
+
+      var releaseUrl = baseUrls[index] + "/" + getReleaseFileName() + "?ts=" + Date.now();
+      var nextErrors = Array.isArray(manifestErrors) ? manifestErrors.slice() : [];
+      nextErrors.push(releaseUrl);
+
+      fetchJsonWithTimeout(releaseUrl)
+        .then(function (response) {
+          if (!response.ok) throw new Error("Release manifest request failed");
+          return response.json();
+        })
+        .then(function (payload) {
+          var version = payload && payload.version ? String(payload.version) : "";
+          appendBundleScript(version, rotateBaseUrls(index), releaseUrl, nextErrors);
+        })
+        .catch(function (error) {
+          sendBootstrapError("release.fetch_failed", {
+            releaseUrl: releaseUrl,
+            nextBaseUrl: baseUrls[index + 1] || null,
+            reason: error && error.message ? error.message : String(error || "unknown")
+          });
+          fetchReleaseVersion(index + 1, nextErrors);
+        });
+    }
+
+    if (baseUrls.length === 0) {
+      showLoadError({ reason: "No base URLs configured" });
+      return;
+    }
+
+    fetchReleaseVersion(0, []);
+  })();
+</script>

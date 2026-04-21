@@ -1,0 +1,663 @@
+.card {
+  width: 100%;
+  min-height: 140px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 12px;
+  border-radius: 22px;
+  padding: 14px;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(86, 68, 133, 0.08);
+  font-family: Inter, "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.resultCard {
+  padding: 18px 20px;
+  background:
+    radial-gradient(circle at top left, rgba(123, 87, 246, 0.08), transparent 34%),
+    linear-gradient(180deg, #ffffff 0%, #fcfbff 100%);
+  box-shadow:
+    0 18px 38px rgba(91, 76, 143, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.resultCardLayout {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 22px;
+  align-items: stretch;
+}
+
+.resultSidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.resultDatePill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  min-height: 46px;
+  padding: 0 22px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #7b57f6 0%, #6847e8 100%);
+  box-shadow: 0 10px 20px rgba(105, 72, 233, 0.28);
+  color: #ffffff;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+  white-space: nowrap;
+}
+
+.resultMetaStack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.resultMetaPrimary,
+.resultMetaSecondary,
+.resultTimeText {
+  color: #7a7491;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: -0.04em;
+}
+
+.resultMetaPrimary {
+  font-size: 18px;
+  line-height: 1.1;
+}
+
+.resultMetaSecondary {
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.resultTimeText {
+  margin-top: 10px;
+  font-size: 17px;
+  line-height: 1.1;
+}
+
+.resultMain {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.resultHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.resultTitle {
+  margin: 0;
+  color: #2b2740;
+  font-size: 22px;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+}
+
+.resultScoreboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.resultTeamRow {
+  display: grid;
+  grid-template-columns: minmax(0, 260px) 1fr auto;
+  gap: 14px;
+  align-items: center;
+  min-height: 92px;
+}
+
+.resultTeamRow + .resultTeamRow {
+  border-top: 1px solid rgba(123, 116, 145, 0.24);
+}
+
+.resultTeamScores {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 16px;
+}
+
+.resultScoreValueWin,
+.resultScoreValueLose {
+  min-width: 28px;
+  text-align: center;
+  font-size: 28px;
+  line-height: 1;
+  font-weight: 800;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+}
+
+.resultScoreValueWin {
+  color: #76af88;
+}
+
+.resultScoreValueLose {
+  color: #cd5161;
+}
+
+.resultTeamLine {
+  height: 1px;
+  background: rgba(123, 116, 145, 0.24);
+}
+
+.resultPlayersCluster {
+  display: flex;
+  align-items: center;
+  padding-left: 14px;
+  isolation: isolate;
+}
+
+.resultAvatar {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 4px solid #ffffff;
+  margin-left: -14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #d8d4e2;
+  color: #4c445f;
+  font-size: 26px;
+  font-weight: 700;
+  box-shadow: 0 10px 24px rgba(99, 86, 129, 0.12);
+}
+
+.resultAvatar:first-child {
+  margin-left: 0;
+}
+
+.resultTeamNames {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  color: #7a7491;
+  font-size: 12px;
+  line-height: 1.3;
+  font-weight: 600;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.topRow {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.calendarBadge {
+  width: 42px;
+  height: 58px;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: inset 0 0 0 1px rgba(123, 87, 246, 0.04);
+}
+
+.badgeTop {
+  height: 16px;
+  background: #15151d;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: 0.04em;
+}
+
+.badgeMiddle {
+  height: 24px;
+  background: linear-gradient(180deg, #7b57f6 0%, #6847e8 100%);
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 800;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.badgeBottom {
+  height: 18px;
+  background: #f2eff7;
+  color: #7b7489;
+  font-size: 9px;
+  font-weight: 700;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.content {
+  min-width: 0;
+}
+
+.headerRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.textGroup {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 auto;
+}
+
+.chatTopButton {
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 14px;
+  background: #f1ecfa;
+  color: #6f4df6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.chatTopIcon {
+  width: 19px;
+  height: 19px;
+}
+
+.title {
+  margin: 0;
+  color: #1f1a2e;
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.subtitleText {
+  margin: 0;
+  color: #6f6a7d;
+  font-size: 12px;
+  line-height: 1.25;
+  font-weight: 400;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: -0.05em;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.metaRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.timeText {
+  margin: 0;
+  color: #3c3750;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 400;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: -0.05em;
+  white-space: nowrap;
+}
+
+.metaDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #bbb4c8;
+  flex: 0 0 auto;
+}
+
+.levelBadge {
+  min-width: 0;
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 24px;
+  background: linear-gradient(180deg, #ff9736 0%, #ff7b1c 100%);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 500;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: -0.05em;
+  white-space: nowrap;
+}
+
+.bottomRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.playersWrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+}
+
+.avatarsGroup {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding-left: 2px;
+  flex: 0 0 auto;
+  isolation: isolate;
+}
+
+.avatarItem {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  margin-left: -8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #d8d4e2;
+  color: #4c445f;
+  font-size: 12px;
+  font-weight: 700;
+  flex: 0 0 auto;
+  box-shadow: 0 6px 14px rgba(99, 86, 129, 0.1);
+}
+
+.avatarItem:first-child {
+  margin-left: 0;
+}
+
+.avatarOverflow {
+  margin-left: -22px;
+  opacity: 0.38;
+  filter: saturate(0.75);
+  box-shadow: none;
+}
+
+.avatarImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.waitlistGroup {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin-left: -8px;
+}
+
+.waitlistAvatars {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding-left: 2px;
+  isolation: isolate;
+}
+
+.waitlistAvatarItem {
+  width: 28px;
+  height: 28px;
+  margin-left: -20px;
+  border-width: 1.5px;
+  background: rgba(216, 212, 226, 0.7);
+  color: rgba(76, 68, 95, 0.78);
+  box-shadow: none;
+  backdrop-filter: blur(8px);
+  filter: blur(0.2px) saturate(0.72);
+  opacity: 0.9;
+}
+
+.waitlistAvatarItem:first-child {
+  margin-left: 0;
+}
+
+.waitlistAvatarItem .avatarImage {
+  filter: blur(0.8px) saturate(0.55);
+  transform: scale(1.08);
+}
+
+.waitlistAvatarMore {
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.actionsGroup {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.resultBlock {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.resultTeams {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+
+.resultTeam {
+  color: #544d65;
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 600;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: -0.03em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resultScore {
+  min-width: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #221b36 0%, #3a2f5e 100%);
+  color: #ffffff;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 800;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.playButton {
+  min-height: 0;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #7b57f6 0%, #6847e8 100%);
+  color: #ffffff;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 700;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 20px;
+  cursor: pointer;
+}
+
+.playButtonAttention {
+  background: linear-gradient(135deg, #ff8e35 0%, #ff6d1f 100%);
+}
+
+.preview390 {
+  width: 100%;
+  max-width: 390px;
+  margin: 0 auto;
+}
+
+@media (max-width: 360px) {
+  .card {
+    row-gap: 10px;
+    padding: 12px;
+  }
+
+  .topRow {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 9px;
+  }
+
+  .calendarBadge {
+    width: 40px;
+    height: 56px;
+  }
+
+  .title {
+    font-size: 16px;
+  }
+
+  .subtitleText {
+    font-size: 12px;
+  }
+
+  .metaRow {
+    gap: 8px;
+  }
+
+  .bottomRow {
+    gap: 0;
+  }
+
+  .avatarItem,
+  .avatarOverflow {
+    width: 34px;
+    height: 34px;
+    margin-left: -7px;
+  }
+
+  .avatarOverflow {
+    margin-left: -18px;
+  }
+
+  .actionsGroup {
+    gap: 0;
+  }
+
+  .resultTeams {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .resultScore {
+    justify-self: start;
+  }
+
+  .playButton {
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 720px) {
+  .resultCardLayout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .resultDatePill {
+    min-height: 40px;
+    padding: 0 18px;
+    font-size: 18px;
+  }
+
+  .resultMetaPrimary {
+    font-size: 16px;
+  }
+
+  .resultMetaSecondary {
+    font-size: 13px;
+  }
+
+  .resultTimeText {
+    font-size: 15px;
+  }
+
+  .resultTitle {
+    font-size: 18px;
+  }
+
+  .resultTeamRow {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    min-height: auto;
+    padding: 12px 0;
+  }
+
+  .resultTeamScores {
+    padding: 0;
+  }
+
+  .resultTeamLine {
+    display: none;
+  }
+
+  .resultPlayersCluster {
+    padding-left: 0;
+  }
+
+  .resultAvatar {
+    width: 54px;
+    height: 54px;
+    font-size: 18px;
+    border-width: 3px;
+    margin-left: -10px;
+  }
+
+  .resultTeamNames {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+}

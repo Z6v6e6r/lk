@@ -26,14 +26,22 @@ const integrationToken = (() => {
 })();
 
 const baseUrl = apiBase || "http://127.0.0.1:3000/api";
-const query = new URLSearchParams();
-query.set("connector", "MAX_BOT");
-if (update.sender?.userId) query.set("externalUserId", update.sender.userId);
-if (update.recipient?.chatId) query.set("externalChatId", update.recipient.chatId);
-if (update.contact?.phone) query.set("phone", update.contact.phone);
+const queryParts = [];
+const addQuery = (key, value) => {
+  const normalized = toStr(value);
+  if (!normalized) {
+    return;
+  }
+  queryParts.push(`${encodeURIComponent(key)}=${encodeURIComponent(normalized)}`);
+};
+
+addQuery("connector", "MAX_BOT");
+addQuery("externalUserId", update.sender?.userId);
+addQuery("externalChatId", update.recipient?.chatId);
+addQuery("phone", update.contact?.phone);
 
 msg.method = "GET";
-msg.url = `${baseUrl}/support/clients/resolve?${query.toString()}`;
+msg.url = `${baseUrl}/support/clients/resolve${queryParts.length ? `?${queryParts.join("&")}` : ""}`;
 msg.headers = Object.assign(
   { Accept: "application/json" },
   integrationToken ? { "x-integration-token": integrationToken } : {},

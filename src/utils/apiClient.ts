@@ -4,9 +4,12 @@ import {
   API_BASE,
   SERV2,
   SERV2_FALLBACK,
+  SUPPORT_API_BASE,
   SUCCESS_URL,
   FAIL_URL,
   GAMES_MASTER_SERVICE_ID,
+  BOOKING_CANCEL_REFUND_TYPE,
+  IS_DEV_RELEASE_CHANNEL,
 } from "../consts/api_config";
 import { trackClientError } from "./analytics";
 
@@ -14,6 +17,11 @@ const DEFAULT_GAMES_MASTER_SERVICE_ID =
   GAMES_MASTER_SERVICE_ID || "2f4155ad-7bc0-4a15-a12c-da7fce15c37a";
 const ENABLE_MASTER_SERVICE_AUTO_DISCOVERY = false;
 const PREFERRED_PANORAMIC_SUB_SERVICE_ID = "415edff9-b4ad-4d88-8709-75f1ab7d4081";
+const DEV_EXERCISES_CACHE_TTL_MS = 30_000;
+const DEV_GAMES_CACHE_TTL_MS = 30_000;
+const DEV_CHAT_SUMMARY_CACHE_TTL_MS = 5_000;
+const DEV_TOURNAMENT_HISTORY_CACHE_TTL_MS = 60_000;
+const DEV_CABINET_ADVERTISING_CACHE_TTL_MS = 30_000;
 
 export interface UserProfileType {
   id: string;
@@ -117,8 +125,24 @@ export interface Subscription {
 }
 
 export interface AdvertisementType {
+  id?: string;
+  title?: string;
   imgUrl: string;
   href: string;
+}
+
+export interface CabinetHomeAdvertisingItem {
+  id: string;
+  title?: string;
+  imgUrl: string;
+  href: string;
+}
+
+export interface CabinetHomeAdvertisingSettings {
+  placement: "cabinet_home";
+  rotationEnabled: boolean;
+  ads: CabinetHomeAdvertisingItem[];
+  updatedAt?: string;
 }
 export interface apiSubscription {
   id: string;
@@ -189,6 +213,20 @@ export interface Studio {
   lng?: number | null;
 }
 
+export type GamePlayFormat = "doubles" | "singles";
+
+export interface StudioGameModeConfig {
+  key: GamePlayFormat;
+  subServiceIds: string[];
+  preferredSubServiceId: string | null;
+  preferredRoomIds: string[];
+}
+
+export interface StudioGameModes {
+  doubles: StudioGameModeConfig | null;
+  singles: StudioGameModeConfig | null;
+}
+
 export interface GameCourtOption {
   id: string;
   name: string;
@@ -199,6 +237,7 @@ export interface GameTimeSlot {
   id: string;
   roomId: string;
   roomName: string;
+  date: string | null;
   time: string;
   price: number | null;
   subServiceIds: string[];
@@ -353,6 +392,29 @@ function normalizeTimeLabel(value: unknown): string | null {
   return null;
 }
 
+function normalizeDateLabel(value: unknown): string | null {
+  const raw = toTrimmedString(value);
+  if (!raw) return null;
+
+  const exactMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (exactMatch) {
+    return exactMatch[0];
+  }
+
+  const isoMatch = raw.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  }
+
+  const parsed = new Date(raw);
+  if (!Number.isFinite(parsed.getTime())) return null;
+
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function parseIsoDurationMinutes(value: string): number | null {
   const matched = value.trim().match(/^PT(?:(\d+)H)?(?:(\d+)M)?$/i);
   if (!matched) return null;
@@ -411,6 +473,113 @@ function uniqueIds(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
+function extractStringList(value: unknown): string[] {
+  if (value == null) return [];
+  if (Array.isArray(value)) {
+    return uniqueIds(value.flatMap((item) => extractStringList(item)));
+  }
+  if (isRecord(value)) {
+    const nestedKeys = ["items", "content", "data", "phones", "values"];
+    for (const key of nestedKeys) {
+      const candidate = value[key];
+      if (candidate != null) {
+        const extracted = extractStringList(candidate);
+        if (extracted.length > 0) return extracted;
+      }
+    }
+    return [];
+  }
+  const direct = toTrimmedString(value);
+  return direct ? [direct] : [];
+}
+
+function extractPhoneList(value: unknown): string[] {
+  return uniqueIds(
+    extractStringList(value)
+      .map((item) => normalizePhoneForChat(item) ?? item)
+      .filter(Boolean),
+  );
+}
+
+function hasMeaningfulValue(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value as Record<string, unknown>).length > 0;
+  return true;
+}
+
+function mergeFlatObject<T extends Record<string, unknown> | null | undefined>(current: T, incoming: T): T {
+  if (!current) return incoming;
+  if (!incoming) return current;
+
+  const next: Record<string, unknown> = { ...current };
+  Object.entries(incoming).forEach(([key, value]) => {
+    if (hasMeaningfulValue(value)) {
+      next[key] = value;
+    }
+  });
+  return next as T;
+}
+
+function buildPadelGamePlayerKey(player: PadelGamePlayer): string {
+  const id = (player.id || "").trim();
+  if (id) return `id:${id}`;
+  const phone = normalizePhoneForChat(player.phone ?? "");
+  if (phone) return `phone:${phone}`;
+  return `name:${(player.name || "").trim().toLowerCase()}`;
+}
+
+function mergePadelGamePlayers(current: PadelGamePlayer[] = [], incoming: PadelGamePlayer[] = []): PadelGamePlayer[] {
+  const merged = new Map<string, PadelGamePlayer>();
+
+  [...current, ...incoming].forEach((player) => {
+    const key = buildPadelGamePlayerKey(player);
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, player);
+      return;
+    }
+    merged.set(key, {
+      id: player.id ?? existing.id,
+      name: player.name || existing.name,
+      phone: player.phone ?? existing.phone,
+      photo: player.photo ?? existing.photo,
+      rating: player.rating ?? existing.rating,
+      ratingNumeric: player.ratingNumeric ?? existing.ratingNumeric,
+      source: player.source ?? existing.source,
+      status: player.status ?? existing.status,
+    });
+  });
+
+  return Array.from(merged.values());
+}
+
+function mergePadelGameRecord(current: PadelGameRecord | undefined, incoming: PadelGameRecord): PadelGameRecord {
+  if (!current) return incoming;
+
+  return {
+    ...current,
+    ...incoming,
+    inviteUrl: incoming.inviteUrl ?? current.inviteUrl,
+    status: incoming.status ?? current.status,
+    participantPhones: uniqueIds([...(current.participantPhones ?? []), ...(incoming.participantPhones ?? [])]),
+    waitlistPhones: uniqueIds([...(current.waitlistPhones ?? []), ...(incoming.waitlistPhones ?? [])]),
+    allRelatedPhones: uniqueIds([...(current.allRelatedPhones ?? []), ...(incoming.allRelatedPhones ?? [])]),
+    invitedPhones: uniqueIds([...(current.invitedPhones ?? []), ...(incoming.invitedPhones ?? [])]),
+    createdAt: incoming.createdAt ?? current.createdAt,
+    updatedAt: incoming.updatedAt ?? current.updatedAt,
+    organizer: mergeFlatObject(current.organizer, incoming.organizer),
+    settings: mergeFlatObject(current.settings, incoming.settings),
+    participants: mergePadelGamePlayers(current.participants, incoming.participants),
+    waitlist: mergePadelGamePlayers(current.waitlist, incoming.waitlist),
+    invite: mergeFlatObject(current.invite, incoming.invite),
+    metadata: mergeFlatObject(current.metadata, incoming.metadata),
+    booking: mergeFlatObject(current.booking, incoming.booking),
+    payment: mergeFlatObject(current.payment, incoming.payment),
+  };
+}
+
 function extractPriceAmount(payload: unknown): number | null {
   if (payload == null) return null;
 
@@ -461,12 +630,69 @@ function extractPriceAmount(payload: unknown): number | null {
   return toNumeric(payload);
 }
 
+function extractDirectPriceAmount(payload: unknown): number | null {
+  if (!isRecord(payload)) return null;
+  return pickNumeric(payload, [
+    "from",
+    "price",
+    "cost",
+    "amount",
+    "fullPrice",
+    "total",
+    "value",
+    "finalPrice",
+    "valueFrom",
+  ]);
+}
+
+function extractImpactPriceAmount(impactPayload: unknown): number | null {
+  if (!isRecord(impactPayload)) return null;
+
+  const applied =
+    pickNumeric(impactPayload, [
+      "appliedValueFrom",
+      "appliedValue",
+      "appliedAmount",
+      "valueFrom",
+      "from",
+      "amount",
+    ]) ??
+    (isRecord(impactPayload.price)
+      ? pickNumeric(impactPayload.price, [
+        "appliedValueFrom",
+        "appliedValue",
+        "appliedAmount",
+        "valueFrom",
+        "from",
+        "amount",
+      ])
+      : null);
+  if (applied !== null) return applied;
+
+  const rawValue =
+    pickNumeric(impactPayload, ["value", "valueTo"]) ??
+    (isRecord(impactPayload.price)
+      ? pickNumeric(impactPayload.price, ["value", "valueTo"])
+      : null);
+  if (rawValue === null) return null;
+
+  const direction = pickString(impactPayload, ["impactDirection", "direction"])?.trim().toUpperCase();
+  if (direction === "DISCOUNT") {
+    return -Math.abs(rawValue);
+  }
+
+  return rawValue;
+}
+
 function extractPriceAmountForSubServices(payload: unknown, subServiceIds: string[]): number | null {
   if (!isRecord(payload)) return null;
   if (subServiceIds.length === 0) return null;
 
   const extractCalculatedPrice = (entryPayload: unknown): number | null => {
     if (!isRecord(entryPayload)) return null;
+    const direct = extractDirectPriceAmount(entryPayload);
+    if (direct !== null) return direct;
+
     const calculation = entryPayload.calculation;
     if (!isRecord(calculation)) return null;
 
@@ -474,19 +700,14 @@ function extractPriceAmountForSubServices(payload: unknown, subServiceIds: strin
       if (!isRecord(item)) continue;
       const basePrice = isRecord(item.basePrice) ? item.basePrice : null;
       const base =
-        (basePrice ? pickNumeric(basePrice, ["valueFrom", "from", "value", "amount"]) : null) ??
+        (basePrice ? pickNumeric(basePrice, ["appliedValueFrom", "valueFrom", "from", "value", "amount"]) : null) ??
         pickNumeric(item, ["valueFrom", "from", "value", "amount"]);
       if (base === null) continue;
 
       const impacts = Array.isArray(item.impacts) ? item.impacts : [];
       const impactsSum = impacts.reduce((sum, impact) => {
-        if (!isRecord(impact)) return sum;
-        const directImpact =
-          pickNumeric(impact, ["valueFrom", "from", "value", "amount"]) ??
-          (isRecord(impact.price)
-            ? pickNumeric(impact.price, ["valueFrom", "from", "value", "amount"])
-            : null);
-        return directImpact == null ? sum : sum + directImpact;
+        const directImpact = extractImpactPriceAmount(impact);
+        return directImpact === null ? sum : sum + directImpact;
       }, 0);
 
       return base + impactsSum;
@@ -496,10 +717,119 @@ function extractPriceAmountForSubServices(payload: unknown, subServiceIds: strin
   };
 
   for (const subServiceId of subServiceIds) {
+    const directBySubService = extractDirectPriceAmount(payload[subServiceId]);
+    if (directBySubService !== null) return directBySubService;
     const calculatedBySubService = extractCalculatedPrice(payload[subServiceId]);
     if (calculatedBySubService !== null) return calculatedBySubService;
     const bySubService = extractPriceAmount(payload[subServiceId]);
     if (bySubService !== null) return bySubService;
+  }
+
+  return null;
+}
+
+function extractPromoDiscountSummary(payload: unknown): PromoDiscountSummary | null {
+  const summary: PromoDiscountSummary = {
+    discount: 0,
+    bonusPoints: 0,
+  };
+  let matched = false;
+
+  const visit = (value: unknown) => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+
+    if (!isRecord(value)) return;
+
+    const hasDirectPromoFields =
+      Object.prototype.hasOwnProperty.call(value, "discount")
+      || Object.prototype.hasOwnProperty.call(value, "discountAmount")
+      || Object.prototype.hasOwnProperty.call(value, "bonusPoints")
+      || Object.prototype.hasOwnProperty.call(value, "bonus");
+
+    if (hasDirectPromoFields) {
+      summary.discount += pickNumeric(value, ["discount", "discountAmount", "discountPrice"]) ?? 0;
+      summary.bonusPoints += pickNumeric(value, ["bonusPoints", "bonus"]) ?? 0;
+      matched = true;
+      return;
+    }
+
+    const nestedKeys = ["payload", "data", "content", "result", "items", "discounts"];
+    nestedKeys.forEach((key) => {
+      if (key in value) {
+        visit(value[key]);
+      }
+    });
+  };
+
+  visit(payload);
+  return matched ? summary : null;
+}
+
+function extractPromoValidationState(payload: unknown): boolean | null {
+  if (typeof payload === "boolean") return payload;
+
+  if (typeof payload === "string") {
+    const normalized = payload.trim().toLowerCase();
+    if (!normalized) return null;
+    if (
+      normalized.includes("invalid")
+      || normalized.includes("not valid")
+      || normalized.includes("невер")
+      || normalized.includes("недейств")
+      || normalized.includes("ошиб")
+    ) {
+      return false;
+    }
+    if (
+      normalized.includes("valid")
+      || normalized.includes("success")
+      || normalized.includes("ok")
+      || normalized.includes("успеш")
+      || normalized.includes("примен")
+    ) {
+      return true;
+    }
+    return null;
+  }
+
+  if (!isRecord(payload)) return null;
+
+  for (const key of ["valid", "isValid", "available", "active", "applied"]) {
+    const picked = toBoolean(payload[key]);
+    if (picked !== null) return picked;
+  }
+
+  const statusText = pickString(payload, ["status", "code", "message", "reason", "description"]);
+  const statusState = extractPromoValidationState(statusText);
+  if (statusState !== null) return statusState;
+
+  for (const key of ["payload", "data", "content", "result"]) {
+    if (!(key in payload)) continue;
+    const nested = extractPromoValidationState(payload[key]);
+    if (nested !== null) return nested;
+  }
+
+  return null;
+}
+
+function extractPromoMessage(payload: unknown): string | null {
+  if (typeof payload === "string") {
+    const normalized = payload.trim();
+    return normalized ? normalized : null;
+  }
+
+  if (!isRecord(payload)) return null;
+
+  const direct = pickString(payload, ["message", "reason", "description", "error", "status"]);
+  if (direct) return direct;
+
+  for (const key of ["payload", "data", "content", "result"]) {
+    if (!(key in payload)) continue;
+    const nested = extractPromoMessage(payload[key]);
+    if (nested) return nested;
   }
 
   return null;
@@ -553,6 +883,83 @@ function extractPaymentUrl(payload: unknown): string | null {
   }
 
   return null;
+}
+
+function extractBookingIdsFromPaymentPayload(payload: unknown): string[] {
+  const bucket = new Set<string>();
+  const pushMany = (value: unknown) => {
+    extractIdList(value).forEach((item) => {
+      const normalized = item.trim();
+      if (normalized) bucket.add(normalized);
+    });
+  };
+  const tryPaymentUrl = (value: unknown) => {
+    if (typeof value !== "string") return;
+    const normalized = value.trim();
+    if (!normalized) return;
+    try {
+      const parsed = new URL(normalized);
+      parsed.searchParams.getAll("bookingIds").forEach((item) => pushMany(item));
+      parsed.searchParams.getAll("bookingId").forEach((item) => pushMany(item));
+    } catch {
+      // ignore invalid URLs
+    }
+  };
+
+  const visit = (value: unknown) => {
+    if (value == null) return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!isRecord(value)) return;
+
+    pushMany(value.bookingIds);
+    pushMany(value.bookingId);
+    pushMany(value.booking_ids);
+    pushMany(value.booking_id);
+
+    const bookingLike =
+      Object.prototype.hasOwnProperty.call(value, "isCancelled")
+      || Object.prototype.hasOwnProperty.call(value, "paymentType")
+      || Object.prototype.hasOwnProperty.call(value, "visitConfirmed")
+      || Object.prototype.hasOwnProperty.call(value, "cancellationDeadline")
+      || Object.prototype.hasOwnProperty.call(value, "clientOneTimeId")
+      || Object.prototype.hasOwnProperty.call(value, "transactionStatus")
+      || Object.prototype.hasOwnProperty.call(value, "exercise");
+    if (bookingLike) {
+      pushMany(value.id);
+    }
+
+    tryPaymentUrl(value.paymentUrl);
+    tryPaymentUrl(value.paymentLink);
+    tryPaymentUrl(value.redirectUrl);
+    tryPaymentUrl(value.url);
+
+    [
+      "booking",
+      "bookings",
+      "bookingInfo",
+      "bookingPayload",
+      "createdBooking",
+      "createdBookings",
+      "payload",
+      "data",
+      "content",
+      "result",
+      "items",
+      "transaction",
+      "transactions",
+      "transactionStatus",
+    ].forEach((key) => {
+      if (key in value) {
+        visit(value[key]);
+      }
+    });
+  };
+
+  visit(payload);
+  return Array.from(bucket);
 }
 
 function extractOneTimeFilterItems(payload: unknown): unknown[] {
@@ -993,6 +1400,14 @@ function normalizeMasterServiceTimeslot(item: unknown, index: number): GameTimeS
     pickString(item, ["roomName", "resourceName", "courtName"]) ??
     (roomPayload ? pickString(roomPayload, ["name", "title"]) : null) ??
     "Корт";
+  const date =
+    normalizeDateLabel(item.date) ??
+    normalizeDateLabel(item.timeFrom) ??
+    normalizeDateLabel(item.dateTimeFrom) ??
+    normalizeDateLabel(item.dateStart) ??
+    normalizeDateLabel(item.from) ??
+    normalizeDateLabel(item.timeFromLocal) ??
+    normalizeDateLabel(item.time);
 
   const time =
     normalizeTimeLabel(item.timeFrom) ??
@@ -1052,6 +1467,7 @@ function normalizeMasterServiceTimeslot(item: unknown, index: number): GameTimeS
     id,
     roomId,
     roomName,
+    date,
     time,
     price,
     subServiceIds,
@@ -1072,6 +1488,7 @@ const masterServiceBootstrapCache = new Set<string>();
 const masterServiceStudioSubServicesCache = new Map<string, string[]>();
 const masterServiceStudioPreferredSubServiceCache = new Map<string, string>();
 const masterServiceStudioPreferredRoomIdsCache = new Map<string, string[]>();
+const masterServiceStudioGameModesCache = new Map<string, StudioGameModes>();
 const masterServiceTimeZoneCache = new Map<string, string>();
 
 function extractMasterServiceItems(payload: unknown): unknown[] {
@@ -1149,6 +1566,108 @@ type PreferredSubServiceSelection = {
   preferredId: string | null;
   preferredRoomIds: string[];
 };
+
+type StudioModeSubServiceCandidate = {
+  id: string;
+  name: string;
+  roomIds: string[];
+  durationMinutes: number | null;
+  isSingles: boolean;
+  isDoubles: boolean;
+};
+
+function isSinglesSubServiceName(name: string): boolean {
+  return /сингл|single|1\s*на\s*1|1x1/i.test(name);
+}
+
+function isDoublesSubServiceName(name: string): boolean {
+  return /панорам|panoramic|2\s*на\s*2|2x2|doubles/i.test(name);
+}
+
+function scoreStudioModeSubService(
+  candidate: StudioModeSubServiceCandidate,
+  format: GamePlayFormat,
+): number {
+  let score = 0;
+  if (candidate.durationMinutes === 60) score += 70;
+  if (candidate.durationMinutes === 30) score -= 40;
+  if (candidate.roomIds.length > 0) score += 30;
+
+  if (format === "doubles") {
+    if (candidate.id === PREFERRED_PANORAMIC_SUB_SERVICE_ID) score += 10_000;
+    if (/панорам|panoramic/i.test(candidate.name)) score += 300;
+    if (/2\s*на\s*2|2x2|doubles/i.test(candidate.name)) score += 220;
+    if (candidate.isDoubles) score += 180;
+    if (candidate.isSingles) score -= 320;
+    return score;
+  }
+
+  if (/сингл|single/i.test(candidate.name)) score += 420;
+  if (/1\s*на\s*1|1x1/i.test(candidate.name)) score += 260;
+  if (candidate.isSingles) score += 220;
+  if (candidate.isDoubles) score -= 260;
+  return score;
+}
+
+function buildStudioGameModeConfig(
+  format: GamePlayFormat,
+  candidates: StudioModeSubServiceCandidate[],
+): StudioGameModeConfig | null {
+  if (candidates.length === 0) return null;
+
+  const ranked = candidates
+    .slice()
+    .sort((a, b) => scoreStudioModeSubService(b, format) - scoreStudioModeSubService(a, format));
+  const preferred = ranked[0];
+  if (!preferred) return null;
+
+  return {
+    key: format,
+    subServiceIds: uniqueIds(candidates.map((item) => item.id)),
+    preferredSubServiceId: preferred.id,
+    preferredRoomIds: uniqueIds(candidates.flatMap((item) => item.roomIds)),
+  };
+}
+
+function extractStudioGameModes(payload: unknown, studioId?: string | null): StudioGameModes {
+  const candidates = extractSubServiceItems(payload)
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .map((item) => {
+      const id = pickString(item, ["id", "subServiceId", "serviceId", "uuid"]);
+      if (!id) return null;
+
+      const name = pickString(item, ["name", "title", "description"]) || "";
+      const exerciseDirection = isRecord(item.exerciseDirection) ? item.exerciseDirection : null;
+      const durationRaw =
+        (exerciseDirection ? pickString(exerciseDirection, ["duration"]) : null) ??
+        pickString(item, ["duration"]);
+
+      return {
+        id,
+        name,
+        roomIds: extractSubServiceRoomIdsForStudio(item, studioId),
+        durationMinutes: durationRaw ? toDurationMinutes(durationRaw) : null,
+        isSingles: isSinglesSubServiceName(name),
+        isDoubles: isDoublesSubServiceName(name),
+      } satisfies StudioModeSubServiceCandidate;
+    })
+    .filter((item): item is StudioModeSubServiceCandidate => item !== null);
+
+  if (candidates.length === 0) {
+    return { doubles: null, singles: null };
+  }
+
+  const singlesCandidates = candidates.filter((item) => item.isSingles);
+  const doublesCandidates = candidates.filter((item) => !item.isSingles);
+  const fallbackDoublesCandidates = doublesCandidates.length > 0
+    ? doublesCandidates
+    : (singlesCandidates.length === 0 ? candidates : []);
+
+  return {
+    doubles: buildStudioGameModeConfig("doubles", fallbackDoublesCandidates),
+    singles: buildStudioGameModeConfig("singles", singlesCandidates),
+  };
+}
 
 function pickPreferredSubService(payload: unknown, studioId?: string | null): PreferredSubServiceSelection {
   const items = extractSubServiceItems(payload)
@@ -1400,14 +1919,24 @@ async function bootstrapMasterService(masterServiceId: string, studioId?: string
         retries: 1,
       },
     );
+    const studioGameModes = extractStudioGameModes(studioSubServicesResult.data, studioId);
+    masterServiceStudioGameModesCache.set(cacheKey, studioGameModes);
+
     const selectedSubService = pickPreferredSubService(studioSubServicesResult.data, studioId);
-    if (selectedSubService.allIds.length > 0) {
+    const defaultMode = studioGameModes.doubles ?? studioGameModes.singles;
+    if (defaultMode?.subServiceIds.length) {
+      masterServiceStudioSubServicesCache.set(cacheKey, defaultMode.subServiceIds);
+    } else if (selectedSubService.allIds.length > 0) {
       masterServiceStudioSubServicesCache.set(cacheKey, selectedSubService.allIds);
     }
-    if (selectedSubService.preferredId) {
+    if (defaultMode?.preferredSubServiceId) {
+      masterServiceStudioPreferredSubServiceCache.set(cacheKey, defaultMode.preferredSubServiceId);
+    } else if (selectedSubService.preferredId) {
       masterServiceStudioPreferredSubServiceCache.set(cacheKey, selectedSubService.preferredId);
     }
-    if (selectedSubService.preferredRoomIds.length > 0) {
+    if (defaultMode?.preferredRoomIds.length) {
+      masterServiceStudioPreferredRoomIdsCache.set(cacheKey, defaultMode.preferredRoomIds);
+    } else if (selectedSubService.preferredRoomIds.length > 0) {
       masterServiceStudioPreferredRoomIdsCache.set(cacheKey, selectedSubService.preferredRoomIds);
     }
   }
@@ -1767,6 +2296,40 @@ export interface ExerciseBooking {
   ratingSource?: "level" | "phone";
 }
 
+export interface TournamentHistoryParticipant {
+  id: string | null;
+  name: string;
+  phone: string | null;
+  photo: string | null;
+  rating: string | null;
+}
+
+export interface TournamentHistoryRecord {
+  id: string;
+  tournamentId: string;
+  title: string | null;
+  tournamentType: string | null;
+  targetScore: number | null;
+  courts: string[];
+  participants: TournamentHistoryParticipant[];
+  participantsCount: number;
+  maxParticipants: number | null;
+  minRating: string | null;
+  maxRating: string | null;
+  genderLabel: string | null;
+  girlsOnly: boolean | null;
+  mixed: boolean | null;
+  organizer: TournamentHistoryParticipant | null;
+  params: Record<string, unknown> | null;
+  rounds: unknown[];
+  standings: unknown[];
+  summary: Record<string, unknown> | null;
+  totals: AmericanoResultsResponse["totals"] | null;
+  playerLogs: AmericanoResultsResponse["playerLogs"] | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
 export interface AmericanoTournamentPayload {
   tournamentId: string;
   tenantKey: string;
@@ -1789,13 +2352,39 @@ export interface AmericanoTournamentPayload {
   rounds?: Array<{
     id: string;
     index: number;
+    byes?: string[];
+    quality?: {
+      score: number;
+      label: string;
+      explanation: string;
+      averageCourtScore: number;
+      minCourtScore: number;
+      byeCount: number;
+    };
     matches: Array<{
       id: string;
       court: string;
+      courtIndex?: number;
       pair1: string[];
       pair2: string[];
       score1: number | null;
       score2: number | null;
+      quality?: {
+        score: number;
+        label: string;
+        explanation: string;
+        partnerRepeatCount: number;
+        opponentRepeatCount: number;
+        balanceGap: number;
+        courtRepeatPressure: number;
+      };
+      summary?: {
+        pairPower1: number;
+        pairPower2: number;
+        balanceGap: number;
+        partnerRepeatCount: number;
+        opponentRepeatCount: number;
+      };
     }>;
   }>;
 }
@@ -1807,6 +2396,7 @@ export interface AmericanoResultsPayload {
     matchId: string;
     score1: number;
     score2: number;
+    court?: string;
     pair1?: string[];
     pair2?: string[];
   }>;
@@ -1825,9 +2415,16 @@ export interface AmericanoResultsResponse {
       draws: number;
       pointsFor: number;
       pointsAgainst: number;
+      byeCount?: number;
+      byePoints?: number;
+      tournamentPoints?: number;
+      playedPoints?: number;
+      pointDiff?: number;
     }
   >;
   rounds?: unknown[];
+  standings?: unknown[];
+  summary?: Record<string, unknown>;
   playerLogs?: Record<
     string,
     Array<{
@@ -1850,12 +2447,14 @@ export interface PadelGamePlayer {
   phone: string | null;
   photo?: string | null;
   rating?: string | null;
+  ratingNumeric?: number | null;
   source?: "ORGANIZER" | "INVITE_LINK" | "MANUAL_LIST" | "MANUAL_PHONE" | "ADMIN";
   status?: "CONFIRMED" | "WAITLIST" | "PENDING";
 }
 
 export interface PadelGameRecordPayload {
   gameId?: string | null;
+  paymentRef?: string | null;
   tenantKey?: string | null;
   status?: "PAYMENT_PENDING" | "PAID" | "CANCELLED";
   organizer: {
@@ -1864,6 +2463,7 @@ export interface PadelGameRecordPayload {
     phone: string | null;
     photo?: string | null;
     rating?: string | null;
+    ratingNumeric?: number | null;
   };
   booking: {
     studioId: string;
@@ -1879,6 +2479,7 @@ export interface PadelGameRecordPayload {
     timeToIso: string;
     durationMinutes: number;
     slotId: string | null;
+    bookingIds?: string[];
   };
   payment: {
     amount: number | null;
@@ -1886,6 +2487,9 @@ export interface PadelGameRecordPayload {
     paymentMethod: "WIDGET";
     baseRedirectUrl?: string | null;
     paid?: boolean;
+    paidAt?: string | null;
+    paymentRef?: string | null;
+    bookingIds?: string[];
   };
   settings?: {
     ratingGame?: boolean;
@@ -1908,18 +2512,26 @@ export interface PadelGameRecord {
   id: string;
   inviteUrl: string | null;
   status: string | null;
+  participantPhones?: string[];
+  waitlistPhones?: string[];
+  allRelatedPhones?: string[];
+  invitedPhones?: string[];
+  createdAt?: string | null;
+  updatedAt?: string | null;
   organizer?: {
     id: string | null;
     name: string | null;
     phone: string | null;
     photo: string | null;
     rating: string | null;
+    ratingNumeric?: number | null;
   } | null;
   settings?: {
     ratingGame: boolean | null;
     minRating: string | null;
     maxRating: string | null;
     isPrivate: boolean | null;
+    payMode?: "self" | "split" | null;
   } | null;
   participants?: PadelGamePlayer[];
   waitlist?: PadelGamePlayer[];
@@ -1936,6 +2548,13 @@ export interface PadelGameRecord {
     timeFrom: string | null;
     timeTo: string | null;
     durationMinutes: number | null;
+    studioId?: string | null;
+    roomId?: string | null;
+    bookingId?: string | null;
+    bookingIds?: string[];
+    exerciseId?: string | null;
+    vivaExerciseId?: string | null;
+    subServiceIds?: string[];
   } | null;
   payment?: {
     amount: number | null;
@@ -1950,6 +2569,24 @@ export interface PadelPlayerCandidate {
   phone: string | null;
   photo: string | null;
   rating: string | null;
+  ratingNumeric?: number | null;
+}
+
+export interface PadelLiveRatingRequestPlayer {
+  clientId?: string | null;
+  phone?: string | null;
+  name?: string | null;
+  rating?: string | null;
+  ratingNumeric?: number | null;
+}
+
+export interface PadelLiveRatingItem {
+  clientId: string | null;
+  phoneNorm: string | null;
+  name: string | null;
+  rating: string | null;
+  ratingNumeric: number | null;
+  source: string | null;
 }
 
 export interface PadelGameChatMessageSender {
@@ -2003,6 +2640,133 @@ export interface PadelChatsByPhoneResponse {
   chats: PadelChatSummaryItem[];
 }
 
+export interface SupportDialogAI {
+  lastTopic: string | null;
+  lastSentiment: string | null;
+  lastPriority: string | null;
+  topicTags: string[];
+  needsAttention: boolean;
+}
+
+export interface SupportDialogLastMessage {
+  preview: string;
+  direction: string;
+  authorType: string;
+  channel: string | null;
+  createdAt: string | null;
+  createdTs: number | null;
+}
+
+export interface SupportDialog {
+  id: string;
+  clientId: string | null;
+  displayName: string;
+  primaryPhone: string | null;
+  phoneNumbers: string[];
+  stationId: string;
+  stationName: string;
+  status: string;
+  authStatus: string;
+  workflowState: string;
+  channels: string[];
+  connectors: string[];
+  lastConnector: string | null;
+  unreadClientMessages: number;
+  pendingResponseSinceTs: number | null;
+  firstResponseMinutes: number | null;
+  lastResponseMinutes: number | null;
+  avgResponseMinutes: number | null;
+  maxResponseMinutes: number | null;
+  ai: SupportDialogAI | null;
+  lastMessage: SupportDialogLastMessage;
+  createdAt: string | null;
+  updatedAt: string | null;
+  updatedTs: number | null;
+}
+
+export interface SupportDialogsResponse {
+  total: number;
+  dialogs: SupportDialog[];
+  summary: {
+    unanswered: number;
+    pendingAuth: number;
+  };
+}
+
+export interface SupportDialogMessageSender {
+  id: string | null;
+  name: string | null;
+  role: string | null;
+}
+
+export interface SupportDialogMessage {
+  id: string;
+  dialogId: string;
+  clientId: string | null;
+  stationId: string | null;
+  stationName: string | null;
+  direction: string;
+  authorType: string;
+  eventType: string;
+  channel: string;
+  connector: string | null;
+  text: string;
+  textPreview: string;
+  createdAt: string | null;
+  createdTs: number;
+  sender: SupportDialogMessageSender | null;
+  deleted: boolean;
+  metadata: Record<string, unknown> | null;
+}
+
+export interface SupportDialogMessagesPage {
+  dialogId: string;
+  totalFetched: number;
+  hasMore: boolean;
+  nextBeforeTs: number | null;
+  messages: SupportDialogMessage[];
+}
+
+export interface SupportDialogEventPayload {
+  connector?: string | null;
+  channel?: string;
+  direction?: "INBOUND" | "OUTBOUND" | "SYSTEM";
+  authorType?: string;
+  eventType?: string;
+  text?: string;
+  message?: string;
+  content?: string;
+  phone?: string;
+  phoneNumber?: string;
+  primaryPhone?: string;
+  displayName?: string | null;
+  clientName?: string | null;
+  senderName?: string | null;
+  userId?: string | null;
+  clientId?: string | null;
+  senderId?: string | null;
+  channelUserId?: string | null;
+  chatId?: string | null;
+  externalThreadId?: string | null;
+  stationId?: string | null;
+  stationName?: string | null;
+  authStatus?: string;
+  workflowState?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SupportDialogEventResponse {
+  ok: boolean;
+  client: Record<string, unknown> | null;
+  dialog: SupportDialog | null;
+  message: SupportDialogMessage | null;
+}
+
+interface SupportClientResolveResult {
+  found: boolean;
+  clientId: string | null;
+}
+
 export interface Booking {
   id: string;
   spot: number;
@@ -2053,6 +2817,11 @@ export interface BookingsResponse {
   empty: boolean;
 }
 
+export interface PadelGamesByPhoneResponse {
+  games: PadelGameRecord[];
+  total: number;
+}
+
 export interface UpdateProfileData {
   email: string | null;
   firstName: string | null;
@@ -2069,7 +2838,14 @@ export interface SubscriptionName {
 
 export interface PaymentUrl {
   toPay: number;
-  paymentUrl: string;
+  paymentUrl: string | null;
+  bookingIds?: string[];
+  paid?: boolean | null;
+}
+
+export interface PromoDiscountSummary {
+  discount: number;
+  bonusPoints: number;
 }
 
 export type ApiStatus = number | null;
@@ -2086,18 +2862,94 @@ export interface ApiResult<T> {
   status: ApiStatus;
 }
 
-interface RequestOptions extends RequestInit {
+export interface RequestOptions extends RequestInit {
   auth?: boolean;
   retries?: number;
   baseUrl?: string;
-  signal?: AbortSignal
+  signal?: AbortSignal;
+  cacheTtlMs?: number;
+  dedupe?: boolean;
+}
+
+type CachedApiResult = ApiResult<unknown>;
+
+type DevRequestCacheEntry = {
+  expiresAt: number;
+  result: CachedApiResult;
+};
+
+const devRequestCache = new Map<string, DevRequestCacheEntry>();
+const devInflightRequests = new Map<string, Promise<CachedApiResult>>();
+
+function pruneExpiredDevRequestCache() {
+  const now = Date.now();
+  devRequestCache.forEach((entry, key) => {
+    if (entry.expiresAt <= now) {
+      devRequestCache.delete(key);
+    }
+  });
+}
+
+function readDevRequestCache(
+  key: string,
+  options: {
+    allowExpired?: boolean;
+  } = {},
+): CachedApiResult | null {
+  const entry = devRequestCache.get(key);
+  if (!entry) return null;
+  if (options.allowExpired || entry.expiresAt > Date.now()) {
+    return entry.result;
+  }
+  return null;
+}
+
+function writeDevRequestCache<T>(key: string, result: ApiResult<T>, ttlMs: number) {
+  if (ttlMs <= 0) return;
+  pruneExpiredDevRequestCache();
+  devRequestCache.set(key, {
+    expiresAt: Date.now() + ttlMs,
+    result: result as CachedApiResult,
+  });
+}
+
+function resolveRequestCacheConfig(url: string, options: RequestOptions) {
+  const method = String(options.method || "GET").toUpperCase();
+  if (!IS_DEV_RELEASE_CHANNEL || method !== "GET" || options.signal) {
+    return null;
+  }
+
+  const ttlMs = Number.isFinite(options.cacheTtlMs)
+    ? Math.max(0, Number(options.cacheTtlMs))
+    : 0;
+  const dedupe = options.dedupe ?? ttlMs > 0;
+  if (!dedupe && ttlMs <= 0) {
+    return null;
+  }
+
+  const baseUrl = options.baseUrl ?? API_BASE;
+  const fullUrl = url.startsWith("http") ? url : `${baseUrl}${url}`;
+  const authToken = options.auth ? getCookie(`${TENANT_KEY}AuthToken`) : null;
+  const authScope = options.auth ? (authToken ? authToken.slice(-24) : "missing-auth") : "public";
+
+  return {
+    key: `${method}:${fullUrl}:auth=${authScope}`,
+    ttlMs,
+    dedupe,
+  };
 }
 
 async function rawRequest<T>(
   url: string,
   options: RequestOptions = {},
 ): Promise<ApiResult<T>> {
-  const { auth = false, baseUrl = API_BASE, ...fetchOptions } = options;
+  const {
+    auth = false,
+    baseUrl = API_BASE,
+    cacheTtlMs: _cacheTtlMs,
+    dedupe: _dedupe,
+    ...fetchOptions
+  } = options;
 
   const headers = new Headers(fetchOptions.headers ?? {});
 
@@ -2148,7 +3000,7 @@ async function rawRequest<T>(
 
   const status = response.status;
 
-  let payload: any = null;
+  let payload: unknown = null;
   const contentType = response.headers.get("Content-Type") || "";
   if (contentType.includes("application/json")) {
     payload = await response.json().catch(() => null);
@@ -2156,9 +3008,17 @@ async function rawRequest<T>(
     payload = await response.text().catch(() => null);
   }
 
+  if (status === 304) {
+    return {
+      data: null,
+      error: null,
+      status,
+    };
+  }
+
   if (!response.ok) {
     const message =
-      (payload && (payload.message || payload.error_description)) ||
+      (isRecord(payload) && (pickString(payload, ["message", "error_description"]) || null)) ||
       `Ошибка запроса (${status})`;
 
     trackClientError(
@@ -2192,10 +3052,53 @@ export async function request<T>(
   options: RequestOptions = {},
 ): Promise<ApiResult<T>> {
   const { retries = 0 } = options;
-  if (retries > 0) {
-    return withRetry(() => rawRequest<T>(url, options), { retries });
+  const cacheConfig = resolveRequestCacheConfig(url, options);
+
+  if (cacheConfig) {
+    const cached = readDevRequestCache(cacheConfig.key);
+    if (cached) {
+      return cached as ApiResult<T>;
+    }
+    if (cacheConfig.dedupe) {
+      const inflight = devInflightRequests.get(cacheConfig.key);
+      if (inflight) {
+        return inflight as Promise<ApiResult<T>>;
+      }
+    }
   }
-  return rawRequest<T>(url, options);
+
+  const executeRequest = async (): Promise<ApiResult<T>> => {
+    const result = retries > 0
+      ? await withRetry(() => rawRequest<T>(url, options), { retries })
+      : await rawRequest<T>(url, options);
+
+    if (cacheConfig && result.status === 304) {
+      const cached = readDevRequestCache(cacheConfig.key, { allowExpired: true });
+      if (cached) {
+        writeDevRequestCache(cacheConfig.key, cached, cacheConfig.ttlMs);
+        return cached as ApiResult<T>;
+      }
+    }
+
+    if (cacheConfig && !result.error && cacheConfig.ttlMs > 0) {
+      writeDevRequestCache(cacheConfig.key, result, cacheConfig.ttlMs);
+    }
+
+    return result;
+  };
+
+  if (!cacheConfig?.dedupe) {
+    return executeRequest();
+  }
+
+  const sharedRequest = executeRequest() as Promise<CachedApiResult>;
+  devInflightRequests.set(cacheConfig.key, sharedRequest);
+  sharedRequest.finally(() => {
+    if (devInflightRequests.get(cacheConfig.key) === sharedRequest) {
+      devInflightRequests.delete(cacheConfig.key);
+    }
+  });
+  return sharedRequest as Promise<ApiResult<T>>;
 }
 
 export function getServ2Origin() {
@@ -2229,11 +3132,14 @@ async function withRetry<T>(
     baseDelayMs = 300,
   }: { retries?: number; baseDelayMs?: number } = {},
 ): Promise<ApiResult<T>> {
+  const isSuccessStatus = (status: ApiStatus) =>
+    status === 304 || (typeof status === "number" && status >= 200 && status < 300);
+
   let attempt = 0;
   while (true) {
     try {
       const res = await fn();
-      if (res.status !== 200 && res.status !== 204 && res.status !== 304) {
+      if (!isSuccessStatus(res.status)) {
         attempt++;
         if (attempt > retries) {
           return res;
@@ -2283,13 +3189,40 @@ export interface OnboardingLevelPayload {
 }
 
 export async function apiSaveOnboardingLevel(payload: OnboardingLevelPayload) {
-  const baseUrl = getServ2Origin() || "";
-  return request<{ ok: boolean }>(`/lk/onboarding/level`, {
+  const serv2Origin = (getServ2Origin() || "").trim();
+  const onboardingUrl = serv2Origin
+    ? `${serv2Origin.replace(/\/+$/, "")}/lk/onboarding/level`
+    : "/lk/onboarding/level";
+
+  const result = await request<{ ok?: boolean; success?: boolean; message?: string; error?: string }>(onboardingUrl, {
     method: "POST",
-    baseUrl,
+    auth: true,
     retries: 1,
     body: JSON.stringify(payload),
   });
+
+  if (
+    !result.error
+    && isRecord(result.data)
+    && (
+      result.data.ok === false
+      || result.data.success === false
+    )
+  ) {
+    return {
+      data: result.data,
+      error: {
+        status: result.status,
+        message:
+          pickString(result.data, ["message", "error", "error_description"])
+          || "Не удалось обновить данные в Viva",
+        raw: result.data,
+      },
+      status: result.status,
+    };
+  }
+
+  return result;
 }
 
 export async function apiUpdateCustomFields(profile: UserProfileType, customFields: CustomField[]) {
@@ -2322,10 +3255,27 @@ export async function apiUploadProfilePhoto(file: File) {
   );
 }
 
-export async function apiFetchBookings(includeCanceled: boolean) {
+function buildBookingCancelPayload(): Record<string, string> {
+  const refundType = BOOKING_CANCEL_REFUND_TYPE?.trim();
+  if (!refundType || refundType.toLowerCase() === "none") {
+    return {};
+  }
+
+  return { refundType };
+}
+
+export async function apiFetchBookings(
+  includeCanceled: boolean,
+  options: {
+    size?: number;
+  } = {},
+) {
+  const size = Number.isFinite(options.size)
+    ? Math.max(1, Math.min(1000, Math.floor(options.size as number)))
+    : 1000;
   const url = includeCanceled
-    ? `/end-user/api/v2/${TENANT_KEY}/bookings/history?includeCanceled=true&size=1000`
-    : `/end-user/api/v2/${TENANT_KEY}/bookings?size=1000`;
+    ? `/end-user/api/v2/${TENANT_KEY}/bookings/history?includeCanceled=true&size=${size}`
+    : `/end-user/api/v2/${TENANT_KEY}/bookings?size=${size}`;
 
   return request<BookingsResponse>(url, {
     method: "GET",
@@ -2341,7 +3291,7 @@ export async function apiCancelBooking(bookingId: string) {
       method: "DELETE",
       auth: true,
       retries: 1,
-      body: JSON.stringify({}),
+      body: JSON.stringify(buildBookingCancelPayload()),
     },
   );
 }
@@ -2357,15 +3307,174 @@ export async function apiFetchSubscriptions() {
   );
 }
 
-export async function apiFetchExercisesByDate(date: string) {
+export async function apiFetchExercisesByDate(
+  date: string,
+  options: {
+    includePast?: boolean;
+  } = {},
+) {
+  const query = new URLSearchParams({ date });
+  if (options.includePast) {
+    query.set("includePast", "true");
+    query.set("past", "true");
+    if (!IS_DEV_RELEASE_CHANNEL) {
+      query.set("_ts", String(Date.now()));
+    }
+  }
+
   return request<Exercise[]>(
-    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/exercises?date=${date}`,
+    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/exercises?${query.toString()}`,
     {
       method: "GET",
       auth: true,
       retries: 1,
+      ...(IS_DEV_RELEASE_CHANNEL
+        ? {
+            cacheTtlMs: DEV_EXERCISES_CACHE_TTL_MS,
+            dedupe: true,
+          }
+        : {
+            cache: "no-store" as RequestCache,
+          }),
     },
   );
+}
+
+function extractExercisesResponse(data: unknown): Exercise[] {
+  if (Array.isArray(data)) {
+    return data as Exercise[];
+  }
+  if (isRecord(data) && Array.isArray(data.content)) {
+    return data.content as Exercise[];
+  }
+  return [];
+}
+
+export async function apiFetchExercisesByPeriod(
+  dateFrom: string,
+  dateTo: string,
+  options: {
+    size?: number;
+  } = {},
+): Promise<ApiResult<Exercise[]>> {
+  const query = new URLSearchParams({
+    dateFrom,
+    dateTo,
+    size: String(options.size ?? 5000),
+  });
+
+  const result = await request<unknown>(
+    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/exercises/period?${query.toString()}`,
+    {
+      method: "GET",
+      auth: true,
+      retries: 1,
+      ...(IS_DEV_RELEASE_CHANNEL
+        ? {
+            cacheTtlMs: DEV_EXERCISES_CACHE_TTL_MS,
+            dedupe: true,
+          }
+        : {
+            cache: "no-store" as RequestCache,
+          }),
+    },
+  );
+
+  if (result.error) {
+    return {
+      data: null,
+      error: result.error,
+      status: result.status,
+    };
+  }
+
+  return {
+    data: extractExercisesResponse(result.data),
+    error: null,
+    status: result.status,
+  };
+}
+
+function formatExerciseQueryDate(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function shiftExerciseQueryDate(date: string, days: number) {
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  parsed.setDate(parsed.getDate() + days);
+  return formatExerciseQueryDate(parsed);
+}
+
+function getExerciseResponseDateKey(exercise: Pick<Exercise, "timeFrom"> | null | undefined) {
+  if (!exercise?.timeFrom) return null;
+  const parsed = new Date(exercise.timeFrom);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return formatExerciseQueryDate(parsed);
+}
+
+function mergeExercisesForDate(exerciseGroups: Array<Exercise[] | null | undefined>, date: string) {
+  const merged = new Map<string, Exercise>();
+
+  exerciseGroups.forEach((group) => {
+    (group ?? []).forEach((exercise) => {
+      const id = String(exercise?.id || "").trim();
+      if (!id || getExerciseResponseDateKey(exercise) !== date) return;
+      merged.set(id, exercise);
+    });
+  });
+
+  return Array.from(merged.values()).sort((left, right) => {
+    const leftTs = Date.parse(left.timeFrom || "");
+    const rightTs = Date.parse(right.timeFrom || "");
+    const safeLeftTs = Number.isFinite(leftTs) ? leftTs : 0;
+    const safeRightTs = Number.isFinite(rightTs) ? rightTs : 0;
+    return safeLeftTs - safeRightTs;
+  });
+}
+
+export async function apiFetchExercisesByVisibleDate(
+  date: string,
+  options: {
+    includePast?: boolean;
+    includeAdjacentDays?: boolean;
+  } = {},
+): Promise<ApiResult<Exercise[]>> {
+  const primaryResult = await apiFetchExercisesByDate(date, { includePast: options.includePast });
+  if (!options.includeAdjacentDays) {
+    return primaryResult;
+  }
+
+  const previousDate = shiftExerciseQueryDate(date, -1);
+  const nextDate = shiftExerciseQueryDate(date, 1);
+
+  if (!previousDate || !nextDate) {
+    return primaryResult;
+  }
+
+  // Work around backend day-boundary issues around the selected day with one range query.
+  const periodResult = await apiFetchExercisesByPeriod(previousDate, nextDate, { size: 5000 });
+  if (periodResult.error && primaryResult.error) {
+    return {
+      data: null,
+      error: primaryResult.error,
+      status: primaryResult.status,
+    };
+  }
+
+  const mergedData = mergeExercisesForDate(
+    [periodResult.data ?? [], primaryResult.data ?? []],
+    date,
+  );
+
+  return {
+    data: mergedData,
+    error: null,
+    status: periodResult.status || primaryResult.status,
+  };
 }
 
 export async function apiFetchExerciseBookings(exerciseId: string) {
@@ -2388,6 +3497,169 @@ export async function apiFetchTournamentParticipants(exerciseId: string) {
       retries: 1,
     },
   );
+}
+
+function normalizeTournamentHistoryParticipant(
+  value: unknown,
+  index: number,
+): TournamentHistoryParticipant | null {
+  if (!isRecord(value)) return null;
+
+  const firstName = pickString(value, ["firstName", "name"]);
+  const lastName = pickString(value, ["lastName", "surname"]);
+  const displayName = pickString(value, ["displayName", "fullName", "title"]);
+  const composedName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  const name = displayName || composedName || `Участник ${index + 1}`;
+
+  return {
+    id: pickString(value, ["id", "clientId", "userId", "uuid"]),
+    name,
+    phone: pickString(value, ["phone", "phoneNumber", "mobile"]),
+    photo: pickString(value, ["photo", "avatar", "imageUrl"]),
+    rating: pickString(value, ["rating", "level", "grade"]),
+  };
+}
+
+function normalizeTournamentGenderLabel(value: string | null): string | null {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+
+  const lowered = normalized.toLowerCase();
+  if (["women", "female", "girls", "ladies"].includes(lowered)) return "Женщины";
+  if (["men", "male", "boys"].includes(lowered)) return "Мужчины";
+  if (["mixed", "mix", "mixt", "микст"].includes(lowered)) return "Микст";
+  if (["common", "open", "all", "general"].includes(lowered)) return "Общий";
+  return normalized;
+}
+
+function normalizeTournamentHistoryRecord(value: unknown): TournamentHistoryRecord | null {
+  if (!isRecord(value)) return null;
+
+  const tournamentId = pickString(value, ["tournamentId", "exerciseId", "id"]);
+  if (!tournamentId) return null;
+
+  const paramsPayload = isRecord(value.params) ? value.params : null;
+  const summaryPayload = isRecord(value.summary) ? value.summary : null;
+  const organizerPayload = isRecord(value.organizer) ? value.organizer : null;
+  const totalsPayload = isRecord(value.totals)
+    ? (value.totals as AmericanoResultsResponse["totals"])
+    : null;
+  const playerLogsPayload = isRecord(value.playerLogs)
+    ? (value.playerLogs as AmericanoResultsResponse["playerLogs"])
+    : null;
+  const participants = Array.isArray(value.participants)
+    ? value.participants
+      .map((item, index) => normalizeTournamentHistoryParticipant(item, index))
+      .filter((item): item is TournamentHistoryParticipant => item !== null)
+    : [];
+  const explicitParticipantsCount =
+    pickNumber(value, ["participantsCount", "joinedCount", "clientsCount"]) ??
+    (paramsPayload ? pickNumber(paramsPayload, ["participantsCount", "joinedCount", "clientsCount"]) : null);
+  const explicitMaxParticipants =
+    pickNumber(value, ["maxParticipants", "maxClientsCount", "playersLimit", "limit"]) ??
+    (paramsPayload
+      ? pickNumber(paramsPayload, ["maxParticipants", "maxClientsCount", "maxPlayers", "playersLimit", "limit"])
+      : null);
+  const girlsOnly =
+    toBoolean(value.girlsOnly) ??
+    (paramsPayload
+      ? (
+        toBoolean(paramsPayload.girlsOnly)
+        ?? toBoolean(paramsPayload.womenOnly)
+        ?? toBoolean(paramsPayload.femaleOnly)
+      )
+      : null);
+  const mixed =
+    toBoolean(value.mixed) ??
+    (paramsPayload
+      ? (
+        toBoolean(paramsPayload.mixed)
+        ?? toBoolean(paramsPayload.mix)
+        ?? toBoolean(paramsPayload.isMixed)
+      )
+      : null);
+  const genderLabel =
+    normalizeTournamentGenderLabel(
+      pickString(value, ["genderLabel", "gender", "sex", "category", "division"])
+      ?? (paramsPayload ? pickString(paramsPayload, ["genderLabel", "gender", "sex", "category", "division"]) : null),
+    )
+    ?? (girlsOnly ? "Женщины" : null)
+    ?? (mixed ? "Микст" : null);
+
+  return {
+    id: tournamentId,
+    tournamentId,
+    title:
+      pickString(value, ["title", "name", "displayName", "tournamentName", "label"])
+      ?? (paramsPayload ? pickString(paramsPayload, ["title", "name", "displayName", "tournamentName", "label"]) : null)
+      ?? (summaryPayload ? pickString(summaryPayload, ["title", "name", "displayName", "tournamentName"]) : null),
+    tournamentType:
+      pickString(value, ["tournamentType", "type"])
+      ?? (paramsPayload ? pickString(paramsPayload, ["tournamentType", "type", "format"]) : null),
+    targetScore:
+      pickNumber(value, ["targetScore", "scoreTarget"])
+      ?? (paramsPayload ? pickNumber(paramsPayload, ["targetScore", "scoreTarget"]) : null),
+    courts: Array.isArray(value.courts)
+      ? value.courts
+        .map((item) => toTrimmedString(item))
+        .filter((item): item is string => Boolean(item))
+      : [],
+    participants,
+    participantsCount: explicitParticipantsCount ?? participants.length,
+    maxParticipants: explicitMaxParticipants,
+    minRating:
+      (paramsPayload ? pickString(paramsPayload, ["minRating", "ratingFrom", "ratingMin"]) : null)
+      ?? pickString(value, ["minRating", "ratingFrom", "ratingMin"]),
+    maxRating:
+      (paramsPayload ? pickString(paramsPayload, ["maxRating", "ratingTo", "ratingMax"]) : null)
+      ?? pickString(value, ["maxRating", "ratingTo", "ratingMax"]),
+    genderLabel,
+    girlsOnly,
+    mixed,
+    organizer: organizerPayload ? normalizeTournamentHistoryParticipant(organizerPayload, 0) : null,
+    params: paramsPayload,
+    rounds: Array.isArray(value.rounds) ? value.rounds : [],
+    standings: Array.isArray(value.standings) ? value.standings : [],
+    summary: summaryPayload,
+    totals: totalsPayload,
+    playerLogs: playerLogsPayload,
+    createdAt: pickString(value, ["createdAt", "created"]),
+    updatedAt: pickString(value, ["updatedAt", "updated"]),
+  };
+}
+
+export async function apiFetchTournamentHistory(tournamentId: string) {
+  const base = getServ2Origin();
+  const result = await request<unknown>(
+    `${base}/lk/tournaments/americano/history?tournamentId=${encodeURIComponent(tournamentId)}`,
+    {
+      method: "GET",
+      retries: 1,
+      ...(IS_DEV_RELEASE_CHANNEL
+        ? {
+            cacheTtlMs: DEV_TOURNAMENT_HISTORY_CACHE_TTL_MS,
+            dedupe: true,
+          }
+        : {}),
+    },
+  );
+
+  const payload = result.data;
+  const items = Array.isArray(payload)
+    ? payload
+    : Array.isArray((payload as { content?: unknown[] } | null | undefined)?.content)
+      ? (payload as { content: unknown[] }).content
+      : payload
+        ? [payload]
+        : [];
+
+  return {
+    data: items
+      .map((item) => normalizeTournamentHistoryRecord(item))
+      .filter((item): item is TournamentHistoryRecord => item !== null),
+    error: result.error,
+    status: result.status,
+  };
 }
 
 export async function apiCreateAmericanoTournament(payload: AmericanoTournamentPayload) {
@@ -2564,6 +3836,7 @@ function normalizePadelGamePlayer(item: unknown): PadelGamePlayer | null {
   const phone = pickString(item, ["phone", "phoneNumber", "mobile"]);
   const photo = pickString(item, ["photo", "avatar", "imageUrl"]);
   const rating = pickString(item, ["rating", "level", "grade"]);
+  const ratingNumeric = pickNumeric(item, ["ratingNumeric", "numericRating", "levelNumeric"]);
   const sourceRaw = pickString(item, ["source", "origin", "type"]);
   const statusRaw = pickString(item, ["status", "state"]);
 
@@ -2582,6 +3855,7 @@ function normalizePadelGamePlayer(item: unknown): PadelGamePlayer | null {
     phone: phone ?? null,
     photo: photo ?? null,
     rating: rating ?? null,
+    ratingNumeric,
     source,
     status,
   };
@@ -2662,6 +3936,32 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
     const waitlist = extractPadelGamePlayerItems(waitlistPayload)
       .map((item) => normalizePadelGamePlayer(item))
       .filter((item): item is PadelGamePlayer => item !== null);
+    const participantPhones = extractPhoneList(
+      payload.participantPhones
+      ?? (dataPayload ? dataPayload.participantPhones : null)
+      ?? (metadataPayload ? metadataPayload.participantPhones : null),
+    );
+    const waitlistPhones = extractPhoneList(
+      payload.waitlistPhones
+      ?? (dataPayload ? dataPayload.waitlistPhones : null)
+      ?? (metadataPayload ? metadataPayload.waitlistPhones : null),
+    );
+    const allRelatedPhones = extractPhoneList(
+      payload.allRelatedPhones
+      ?? (dataPayload ? dataPayload.allRelatedPhones : null)
+      ?? (metadataPayload ? metadataPayload.allRelatedPhones : null),
+    );
+    const invitedPhones = extractPhoneList(
+      payload.invitedPhones
+      ?? (dataPayload ? dataPayload.invitedPhones : null)
+      ?? (metadataPayload ? metadataPayload.invitedPhones : null),
+    );
+    const createdAt =
+      pickString(payload, ["createdAt", "created", "insertedAt"]) ??
+      (dataPayload ? pickString(dataPayload, ["createdAt", "created", "insertedAt"]) : null);
+    const updatedAt =
+      pickString(payload, ["updatedAt", "updated", "modifiedAt"]) ??
+      (dataPayload ? pickString(dataPayload, ["updatedAt", "updated", "modifiedAt"]) : null);
 
     const organizer = organizerPayload
       ? {
@@ -2674,6 +3974,7 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
           phone: pickString(organizerPayload, ["phone", "phoneNumber", "mobile"]),
           photo: pickString(organizerPayload, ["photo", "avatar", "imageUrl"]),
           rating: pickString(organizerPayload, ["rating", "level", "grade"]),
+          ratingNumeric: pickNumeric(organizerPayload, ["ratingNumeric", "numericRating", "levelNumeric"]),
         }
       : null;
 
@@ -2684,6 +3985,7 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
         phone: organizer.phone ?? null,
         photo: organizer.photo ?? null,
         rating: organizer.rating ?? null,
+        ratingNumeric: organizer.ratingNumeric ?? null,
         source: "ORGANIZER",
         status: "CONFIRMED",
       });
@@ -2702,6 +4004,12 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
       id: directId,
       inviteUrl: inviteUrl ?? null,
       status: status ?? null,
+      participantPhones,
+      waitlistPhones,
+      allRelatedPhones,
+      invitedPhones,
+      createdAt: createdAt ?? null,
+      updatedAt: updatedAt ?? null,
       organizer,
       settings: settingsPayload
         ? {
@@ -2715,6 +4023,12 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
               toBoolean(settingsPayload.isPrivate) ??
               toBoolean(settingsPayload.private) ??
               null,
+            payMode: (() => {
+              const normalized = pickString(settingsPayload, ["payMode"])?.toLowerCase();
+              return normalized === "split" || normalized === "self"
+                ? normalized
+                : null;
+            })(),
           }
         : null,
       participants,
@@ -2734,24 +4048,51 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
         ? {
             studioName: pickString(bookingPayload, ["studioName", "stationName", "studio"]),
             roomName: pickString(bookingPayload, ["roomName", "courtName", "room"]),
-            date: pickString(bookingPayload, ["date", "exerciseDate", "day"]),
-            timeFrom: pickString(bookingPayload, [
-              "timeFrom",
-              "fromTime",
-              "startTime",
-              "timeFromIso",
-            ]),
-            timeTo: pickString(bookingPayload, [
-              "timeTo",
-              "toTime",
-              "endTime",
-              "timeToIso",
-            ]),
+            date:
+              normalizeDateLabel(
+                bookingPayload.date
+                ?? bookingPayload.exerciseDate
+                ?? bookingPayload.day
+                ?? bookingPayload.timeFromIso
+                ?? bookingPayload.timeToIso,
+              ),
+            timeFrom: normalizeTimeLabel(
+              bookingPayload.timeFrom
+              ?? bookingPayload.fromTime
+              ?? bookingPayload.startTime
+              ?? bookingPayload.timeFromIso,
+            ),
+            timeTo: normalizeTimeLabel(
+              bookingPayload.timeTo
+              ?? bookingPayload.toTime
+              ?? bookingPayload.endTime
+              ?? bookingPayload.timeToIso,
+            ),
             durationMinutes: pickNumber(bookingPayload, [
               "durationMinutes",
               "duration",
               "durationMin",
             ]),
+            studioId: pickString(bookingPayload, ["studioId", "stationId"]),
+            roomId: pickString(bookingPayload, ["roomId", "courtId"]),
+            bookingId: pickString(bookingPayload, ["bookingId", "id"]),
+            bookingIds: uniqueIds(
+              extractIdList(
+                bookingPayload.bookingIds
+                ?? bookingPayload.bookingId
+                ?? bookingPayload.id,
+              ),
+            ),
+            exerciseId: pickString(bookingPayload, ["exerciseId", "exercise_id"]),
+            vivaExerciseId: pickString(bookingPayload, ["vivaExerciseId", "viva_exercise_id"]),
+            subServiceIds: uniqueIds(
+              extractIdList(
+                bookingPayload.subServiceIds
+                ?? bookingPayload.subServiceId
+                ?? bookingPayload.subServiceIDs
+                ?? bookingPayload.sub_service_ids,
+              ),
+            ),
           }
         : null,
       payment: paymentPayload
@@ -2792,8 +4133,8 @@ function collectPadelGameRecords(payload: unknown, bucket: Map<string, PadelGame
   if (!isRecord(payload)) return;
 
   const normalized = normalizePadelGameRecord(payload);
-  if (normalized && !bucket.has(normalized.id)) {
-    bucket.set(normalized.id, normalized);
+  if (normalized) {
+    bucket.set(normalized.id, mergePadelGameRecord(bucket.get(normalized.id), normalized));
   }
 
   const listKeys = [
@@ -2817,6 +4158,11 @@ function extractPadelGameRecordList(payload: unknown): PadelGameRecord[] {
   const bucket = new Map<string, PadelGameRecord>();
   collectPadelGameRecords(payload, bucket);
   return Array.from(bucket.values());
+}
+
+function extractPadelGameRecordListTotal(payload: unknown): number | null {
+  if (!isRecord(payload)) return null;
+  return pickNumber(payload, ["total", "totalElements", "count", "gamesCount"]);
 }
 
 function normalizePhoneForChat(phone: string): string | null {
@@ -2944,40 +4290,308 @@ function extractPadelChatsByPhone(payload: unknown): PadelChatsByPhoneResponse |
   };
 }
 
-export async function apiFetchPadelGamesByPhone(phone: string, clientId?: string | null) {
+function normalizeSupportDialogAi(payload: unknown): SupportDialogAI | null {
+  if (!isRecord(payload)) return null;
+  return {
+    lastTopic: pickString(payload, ["lastTopic", "topic"]),
+    lastSentiment: pickString(payload, ["lastSentiment", "sentiment"]),
+    lastPriority: pickString(payload, ["lastPriority", "priority"]),
+    topicTags: extractStringList(payload.topicTags),
+    needsAttention: toBoolean(payload.needsAttention) ?? false,
+  };
+}
+
+function normalizeSupportDialog(payload: unknown): SupportDialog | null {
+  if (!isRecord(payload)) return null;
+
+  const id = pickString(payload, ["id", "_id"]);
+  if (!id) return null;
+
+  const lastMessagePayload = isRecord(payload.lastMessage) ? payload.lastMessage : {};
+  const aiPayload = isRecord(payload.ai) ? payload.ai : null;
+
+  return {
+    id,
+    clientId: pickString(payload, ["clientId"]),
+    displayName: pickString(payload, ["displayName", "clientName", "subject"]) ?? "Клиент",
+    primaryPhone: pickString(payload, ["primaryPhone", "currentPhone"]),
+    phoneNumbers: extractPhoneList(payload.phoneNumbers ?? payload.phones),
+    stationId: pickString(payload, ["stationId"]) ?? "UNASSIGNED",
+    stationName: pickString(payload, ["stationName"]) ?? "Без станции",
+    status: pickString(payload, ["status"]) ?? "OPEN",
+    authStatus: pickString(payload, ["authStatus"]) ?? "PENDING_CONTACT",
+    workflowState: pickString(payload, ["workflowState"]) ?? "WAIT_CONTACT",
+    channels: extractStringList(payload.channels).map((value) => value.toUpperCase()),
+    connectors: extractStringList(payload.connectors).map((value) => value.toUpperCase()),
+    lastConnector: pickString(payload, ["lastConnector", "lastInboundConnector", "lastOutboundConnector"]),
+    unreadClientMessages: pickNumber(payload, ["unreadClientMessages", "unreadCount"]) ?? 0,
+    pendingResponseSinceTs: pickNumber(payload, ["pendingResponseSinceTs"]),
+    firstResponseMinutes: pickNumeric(payload, ["firstResponseMinutes"]),
+    lastResponseMinutes: pickNumeric(payload, ["lastResponseMinutes"]),
+    avgResponseMinutes: pickNumeric(payload, ["avgResponseMinutes"]),
+    maxResponseMinutes: pickNumeric(payload, ["maxResponseMinutes"]),
+    ai: normalizeSupportDialogAi(aiPayload),
+    lastMessage: {
+      preview:
+        pickString(lastMessagePayload, ["preview", "textPreview", "text", "message"])
+        ?? pickString(payload, ["lastMessagePreview"])
+        ?? "",
+      direction:
+        pickString(lastMessagePayload, ["direction"])
+        ?? pickString(payload, ["lastMessageDirection"])
+        ?? "INBOUND",
+      authorType:
+        pickString(lastMessagePayload, ["authorType", "senderRole"])
+        ?? pickString(payload, ["lastMessageAuthorType"])
+        ?? pickString(payload, ["lastMessageSenderRole"])
+        ?? "CLIENT",
+      channel:
+        pickString(lastMessagePayload, ["channel"])
+        ?? pickString(payload, ["lastChannel"]),
+      createdAt:
+        pickString(lastMessagePayload, ["createdAt"])
+        ?? pickString(payload, ["lastMessageAt"]),
+      createdTs:
+        pickNumber(lastMessagePayload, ["createdTs"])
+        ?? pickNumber(payload, ["lastMessageTs"]),
+    },
+    createdAt: pickString(payload, ["createdAt"]),
+    updatedAt: pickString(payload, ["updatedAt"]),
+    updatedTs: pickNumber(payload, ["updatedTs"]),
+  };
+}
+
+function normalizeSupportDialogMessageSender(payload: unknown): SupportDialogMessageSender | null {
+  if (!isRecord(payload)) return null;
+  return {
+    id: pickString(payload, ["id", "userId", "clientId", "senderId"]),
+    name: pickString(payload, ["name", "displayName", "senderName"]),
+    role: pickString(payload, ["role", "type", "senderRole"]),
+  };
+}
+
+function normalizeSupportDialogMessage(payload: unknown): SupportDialogMessage | null {
+  if (!isRecord(payload)) return null;
+
+  const mongoIdPayload = isRecord(payload._id) ? payload._id : null;
+  const id =
+    pickString(payload, ["id", "_id"])
+    ?? (mongoIdPayload ? pickString(mongoIdPayload, ["$oid", "oid"]) : null);
+  const dialogId = pickString(payload, ["dialogId"]);
+  const text = pickString(payload, ["text", "message", "content"]) ?? "";
+  const createdAt = pickString(payload, ["createdAt"]);
+  const createdTsDirect = pickNumber(payload, ["createdTs", "timestamp"]);
+  const createdAtTs = createdAt ? Date.parse(createdAt) : Number.NaN;
+  const createdTs = createdTsDirect ?? (Number.isFinite(createdAtTs) ? createdAtTs : 0);
+  const rawEventType = pickString(payload, ["eventType", "kind"]) ?? "MESSAGE";
+  const eventType = rawEventType.toUpperCase() === "TEXT" ? "MESSAGE" : rawEventType;
+
+  if (!id || !dialogId) return null;
+
+  return {
+    id,
+    dialogId,
+    clientId: pickString(payload, ["clientId"]),
+    stationId: pickString(payload, ["stationId"]),
+    stationName: pickString(payload, ["stationName"]),
+    direction: pickString(payload, ["direction"]) ?? "INBOUND",
+    authorType: pickString(payload, ["authorType", "senderRole"]) ?? "CLIENT",
+    eventType,
+    channel:
+      pickString(payload, ["channel"])
+      ?? (isRecord(payload.meta) ? pickString(payload.meta, ["channel"]) : null)
+      ?? "WEB",
+    connector: pickString(payload, ["connector"]),
+    text,
+    textPreview: pickString(payload, ["textPreview", "preview"]) ?? text,
+    createdAt,
+    createdTs,
+    sender: normalizeSupportDialogMessageSender(payload.sender) ?? normalizeSupportDialogMessageSender(payload),
+    deleted: toBoolean(payload.deleted) ?? false,
+    metadata:
+      (isRecord(payload.metadata) ? payload.metadata : null)
+      ?? (isRecord(payload.meta) ? payload.meta : null),
+  };
+}
+
+function extractSupportDialogs(payload: unknown): SupportDialogsResponse | null {
+  if (!isRecord(payload)) return null;
+
+  const rowsRaw = Array.isArray(payload.dialogs)
+    ? payload.dialogs
+    : Array.isArray(payload.items)
+      ? payload.items
+      : Array.isArray(payload.content)
+        ? payload.content
+        : Array.isArray(payload.data)
+          ? payload.data
+          : [];
+
+  const dialogs = rowsRaw
+    .map((item) => normalizeSupportDialog(item))
+    .filter((item): item is SupportDialog => item !== null)
+    .sort((left, right) => (right.updatedTs ?? 0) - (left.updatedTs ?? 0));
+
+  const summaryPayload = isRecord(payload.summary) ? payload.summary : {};
+
+  return {
+    total: pickNumber(payload, ["total", "count"]) ?? dialogs.length,
+    dialogs,
+    summary: {
+      unanswered:
+        pickNumber(summaryPayload, ["unanswered"])
+        ?? dialogs.filter((dialog) => dialog.unreadClientMessages > 0).length,
+      pendingAuth:
+        pickNumber(summaryPayload, ["pendingAuth"])
+        ?? dialogs.filter((dialog) => dialog.authStatus !== "AUTHORIZED").length,
+    },
+  };
+}
+
+function extractSupportDialogMessages(payload: unknown): SupportDialogMessagesPage | null {
+  if (Array.isArray(payload)) {
+    const messages = payload
+      .map((item) => normalizeSupportDialogMessage(item))
+      .filter((item): item is SupportDialogMessage => item !== null)
+      .sort((a, b) => a.createdTs - b.createdTs);
+
+    return {
+      dialogId: messages[0]?.dialogId ?? "",
+      totalFetched: messages.length,
+      hasMore: false,
+      nextBeforeTs: null,
+      messages,
+    };
+  }
+
+  if (!isRecord(payload)) return null;
+
+  const rowsRaw = Array.isArray(payload.messages)
+    ? payload.messages
+    : Array.isArray(payload.items)
+      ? payload.items
+      : Array.isArray(payload.content)
+        ? payload.content
+        : Array.isArray(payload.data)
+          ? payload.data
+          : [];
+
+  const messages = rowsRaw
+    .map((item) => normalizeSupportDialogMessage(item))
+    .filter((item): item is SupportDialogMessage => item !== null)
+    .sort((a, b) => a.createdTs - b.createdTs);
+
+  return {
+    dialogId: pickString(payload, ["dialogId"]) ?? messages[0]?.dialogId ?? "",
+    totalFetched: pickNumber(payload, ["totalFetched", "total", "count"]) ?? messages.length,
+    hasMore: toBoolean(payload.hasMore) ?? false,
+    nextBeforeTs: pickNumber(payload, ["nextBeforeTs", "nextBefore", "beforeTs"]),
+    messages,
+  };
+}
+
+function extractSupportDialogEventResponse(payload: unknown): SupportDialogEventResponse | null {
+  if (!isRecord(payload)) return null;
+
+  return {
+    ok: toBoolean(payload.ok) ?? false,
+    client: isRecord(payload.client) ? payload.client : null,
+    dialog: normalizeSupportDialog(payload.dialog),
+    message: normalizeSupportDialogMessage(payload.message),
+  };
+}
+
+function extractSupportClientResolveResult(payload: unknown): SupportClientResolveResult | null {
+  if (!isRecord(payload)) return null;
+
+  const matchedClientIds = extractStringList(payload.matchedClientIds);
+  const clientPayload = isRecord(payload.client) ? payload.client : null;
+  const clientId =
+    (clientPayload ? pickString(clientPayload, ["id", "clientId"]) : null)
+    ?? matchedClientIds[0]
+    ?? null;
+
+  return {
+    found: toBoolean(payload.found) ?? Boolean(clientId),
+    clientId,
+  };
+}
+
+export async function apiFetchPadelGamesByPhone(
+  phone: string,
+  clientId?: string | null,
+  includePast = false,
+  options: {
+    limit?: number;
+  } = {},
+) {
   const normalizedPhone = phone.replace(/\D/g, "");
   if (!normalizedPhone) {
     return {
-      data: [] as PadelGameRecord[],
+      data: { games: [] as PadelGameRecord[], total: 0 } as PadelGamesByPhoneResponse,
       error: { status: 400, message: "Телефон не указан для получения игр" },
       status: 400 as ApiStatus,
     };
   }
 
   const baseUrl = getServ2Origin() || "";
-  const query = new URLSearchParams({ phone: normalizedPhone });
   const normalizedClientId = clientId?.trim() || "";
+  const limit = Number.isFinite(options.limit)
+    ? Math.max(1, Math.min(1000, Math.floor(options.limit as number)))
+    : null;
+  const buildQuery = (resolvedClientId?: string | null) => {
+    const query = new URLSearchParams({ phone: normalizedPhone });
+    const trimmedClientId = resolvedClientId?.trim() || "";
+    if (trimmedClientId) {
+      query.set("clientId", trimmedClientId);
+    }
+    if (includePast) {
+      // Keep both flags for backward compatibility with older Node-RED handlers.
+      query.set("includePast", "true");
+      query.set("past", "true");
+    }
+    if (limit) {
+      query.set("limit", String(limit));
+    }
+
+    if (!IS_DEV_RELEASE_CHANNEL) {
+      // Prevent stale 304 responses from hiding past games in "Все".
+      query.set("_ts", String(Date.now()));
+    }
+    return query.toString();
+  };
+
+  const queryVariants = [buildQuery(normalizedClientId)];
   if (normalizedClientId) {
-    query.set("clientId", normalizedClientId);
+    // Some handlers narrow the result too aggressively when clientId is present,
+    // so keep a pure phone lookup as a fallback and merge both result sets.
+    queryVariants.push(buildQuery(null));
   }
 
-  const endpoints = [
-    `/lk/games/by-phone?${query.toString()}`,
-    `/lk/games?${query.toString()}`,
-    `/lk/games/records?${query.toString()}`,
-    `/lk/games/list?${query.toString()}`,
-    `/lk/games/by-client?${query.toString()}`,
-  ];
+  const endpoints = queryVariants.flatMap((query) => [
+    `/lk/games/by-phone?${query}`,
+    `/lk/games?${query}`,
+  ]);
 
   let firstError: ApiError | null = null;
   let firstStatus: ApiStatus = null;
   let firstSuccessStatus: ApiStatus = null;
+  let reportedTotal = 0;
+  const recordsById = new Map<string, PadelGameRecord>();
 
   for (const endpoint of endpoints) {
     const response = await request<unknown>(endpoint, {
       method: "GET",
       baseUrl,
       retries: 1,
+      ...(IS_DEV_RELEASE_CHANNEL
+        ? {
+            cacheTtlMs: DEV_GAMES_CACHE_TTL_MS,
+            dedupe: true,
+          }
+        : {
+            cache: "no-store" as RequestCache,
+          }),
     });
     if (response.error) {
       if (!firstError) {
@@ -2991,9 +4605,19 @@ export async function apiFetchPadelGamesByPhone(phone: string, clientId?: string
     }
 
     const records = extractPadelGameRecordList(response.data);
+    const endpointTotal = extractPadelGameRecordListTotal(response.data);
+    if (endpointTotal !== null) {
+      reportedTotal = Math.max(reportedTotal, endpointTotal);
+    }
     if (records.length === 0) continue;
+    records.forEach((record) => {
+      if (!record?.id) return;
+      recordsById.set(record.id, mergePadelGameRecord(recordsById.get(record.id), record));
+    });
+  }
 
-    const sorted = records.sort((left, right) => {
+  if (recordsById.size > 0) {
+    const sorted = Array.from(recordsById.values()).sort((left, right) => {
       const toTimestamp = (record: PadelGameRecord) => {
         const date = record.booking?.date || "9999-12-31";
         const time = record.booking?.timeFrom || "23:59";
@@ -3003,24 +4627,26 @@ export async function apiFetchPadelGamesByPhone(phone: string, clientId?: string
       };
       return toTimestamp(left) - toTimestamp(right);
     });
+    const total = Math.max(reportedTotal, sorted.length);
+    const games = limit ? sorted.slice(0, limit) : sorted;
 
     return {
-      data: sorted,
+      data: { games, total },
       error: null,
-      status: response.status,
+      status: firstSuccessStatus,
     };
   }
 
   if (firstSuccessStatus != null) {
     return {
-      data: [] as PadelGameRecord[],
+      data: { games: [] as PadelGameRecord[], total: reportedTotal } as PadelGamesByPhoneResponse,
       error: null,
       status: firstSuccessStatus,
     };
   }
 
   return {
-    data: [] as PadelGameRecord[],
+    data: { games: [] as PadelGameRecord[], total: 0 } as PadelGamesByPhoneResponse,
     error: firstError,
     status: firstStatus,
   };
@@ -3037,10 +4663,7 @@ export async function apiFetchPadelGameRecord(gameId: string) {
   }
 
   const baseUrl = getServ2Origin() || "";
-  const endpoints = [
-    `/lk/games/${encodeURIComponent(normalizedGameId)}`,
-    `/lk/games/records/${encodeURIComponent(normalizedGameId)}`,
-  ];
+  const endpoints = [`/lk/games/${encodeURIComponent(normalizedGameId)}`];
 
   let firstError: ApiError | null = null;
   let firstStatus: ApiStatus = null;
@@ -3300,6 +4923,12 @@ export async function apiFetchPadelChatsByPhone(phoneRaw: string) {
     method: "GET",
     baseUrl,
     retries: 1,
+    ...(IS_DEV_RELEASE_CHANNEL
+      ? {
+          cacheTtlMs: DEV_CHAT_SUMMARY_CACHE_TTL_MS,
+          dedupe: true,
+        }
+      : {}),
   });
 
   if (response.error) {
@@ -3329,21 +4958,447 @@ export async function apiFetchPadelChatsByPhone(phoneRaw: string) {
   };
 }
 
+function trimTrailingSlashes(value: string | null | undefined): string {
+  return String(value || "").trim().replace(/\/+$/g, "");
+}
+
+function buildSupportEndpointCandidates(suffix: string): string[] {
+  const origin = trimTrailingSlashes(getServ2Origin() || "");
+  const explicitBase = trimTrailingSlashes(SUPPORT_API_BASE);
+  const normalizedSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
+
+  if (explicitBase) {
+    return [`${explicitBase}${normalizedSuffix}`];
+  }
+
+  const candidates = [
+    `${origin}/lk${normalizedSuffix}`,
+    `${origin}/api${normalizedSuffix}`,
+  ];
+
+  return Array.from(new Set(candidates.filter((value): value is string => Boolean(value))));
+}
+
+async function requestSupportWithFallback<T>(
+  suffix: string,
+  options: RequestOptions = {},
+): Promise<ApiResult<T>> {
+  const candidates = buildSupportEndpointCandidates(suffix);
+  const method = String(options.method || "GET").trim().toUpperCase();
+  const isReadLikeMethod = method === "GET" || method === "HEAD" || method === "OPTIONS";
+  let firstError: ApiError | null = null;
+  let firstStatus: ApiStatus = null;
+  const seenErrors: ApiError[] = [];
+
+  for (const url of candidates) {
+    const response = await request<T>(url, { ...options, baseUrl: undefined });
+    if (!response.error) {
+      return response;
+    }
+
+    seenErrors.push(response.error);
+
+    if (!firstError) {
+      firstError = response.error;
+      firstStatus = response.status;
+    }
+
+    // For write operations we still allow safe routing fallbacks when the first endpoint
+    // is clearly unavailable for this request and therefore could not have accepted a write.
+    if (
+      !isReadLikeMethod
+      && response.status !== 401
+      && response.status !== 403
+      && response.status !== 404
+      && response.status !== 405
+    ) {
+      return response;
+    }
+  }
+
+  if (seenErrors.length > 0 && seenErrors.every((error) => error.status === 404)) {
+    return {
+      data: null,
+      error: {
+        status: 404,
+        message: "Support endpoints не опубликованы на сервере",
+        raw: { suffix, candidates },
+      },
+      status: 404,
+    };
+  }
+
+  return {
+    data: null,
+    error:
+      firstError
+      ?? {
+        status: firstStatus,
+        message: "Не удалось связаться с support backend",
+      },
+    status: firstStatus,
+  };
+}
+
+async function apiResolveSupportClientByPhone(params: {
+  phone: string;
+  channel?: string;
+}) {
+  const phone = normalizePhoneForChat(params.phone);
+  if (!phone) {
+    return {
+      data: null as SupportClientResolveResult | null,
+      error: {
+        status: 400,
+        message: "Недостаточно данных для поиска клиента поддержки",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const query = new URLSearchParams({ phone });
+  const channel = (params.channel || "").trim().toUpperCase();
+  if (channel) {
+    query.set("channel", channel);
+  }
+
+  const response = await requestSupportWithFallback<unknown>(`/support/clients/resolve?${query.toString()}`, {
+    method: "GET",
+    retries: 1,
+  });
+
+  if (response.error) {
+    return {
+      data: null as SupportClientResolveResult | null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  const parsed = extractSupportClientResolveResult(response.data);
+  if (!parsed) {
+    return {
+      data: null as SupportClientResolveResult | null,
+      error: {
+        status: response.status,
+        message: "Не удалось разобрать ответ resolve клиента поддержки",
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: parsed,
+    error: null,
+    status: response.status,
+  };
+}
+
+export async function apiFetchSupportDialogs(params: {
+  phone: string;
+  channel?: string;
+  includeClosed?: boolean;
+  clientId?: string | null;
+}) {
+  const phone = normalizePhoneForChat(params.phone);
+  if (!phone) {
+    return {
+      data: null as SupportDialogsResponse | null,
+      error: {
+        status: 400,
+        message: "Недостаточно данных для загрузки диалогов поддержки",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const requestedChannel = (params.channel || "WEB").trim().toUpperCase();
+  const requestedClientId = params.clientId?.trim() || null;
+  const fetchDialogs = async (channel: string | null, clientId: string | null) => {
+    const query = new URLSearchParams({ phone });
+    if (clientId) {
+      query.set("clientId", clientId);
+    }
+    if (channel) {
+      query.set("channel", channel);
+    }
+    if (params.includeClosed) {
+      query.set("includeClosed", "1");
+    }
+
+    const response = await requestSupportWithFallback<unknown>(`/support/dialogs?${query.toString()}`, {
+      method: "GET",
+      retries: 1,
+    });
+
+    if (response.error) {
+      return {
+        data: null as SupportDialogsResponse | null,
+        error: response.error,
+        status: response.status,
+      };
+    }
+
+    const parsed = extractSupportDialogs(response.data);
+    if (!parsed) {
+      return {
+        data: null as SupportDialogsResponse | null,
+        error: {
+          status: response.status,
+          message: "Не удалось разобрать список диалогов поддержки",
+        },
+        status: response.status,
+      };
+    }
+
+    return {
+      data: parsed,
+      error: null,
+      status: response.status,
+    };
+  };
+
+  const fetchWithRelaxedChannel = async (clientId: string | null) => {
+    const primary = await fetchDialogs(requestedChannel, clientId);
+    if (primary.error || !primary.data) {
+      return primary;
+    }
+
+    if (requestedChannel && primary.data.dialogs.length === 0) {
+      const relaxed = await fetchDialogs(null, clientId);
+      if (!relaxed.error && relaxed.data && relaxed.data.dialogs.length > 0) {
+        return relaxed;
+      }
+      if (!relaxed.error && relaxed.data) {
+        return relaxed;
+      }
+    }
+
+    return primary;
+  };
+
+  const direct = await fetchWithRelaxedChannel(requestedClientId);
+  if (direct.error || !direct.data) {
+    return direct;
+  }
+
+  if (direct.data.dialogs.length > 0 || requestedClientId) {
+    return direct;
+  }
+
+  const resolvedClient = await apiResolveSupportClientByPhone({
+    phone,
+    channel: requestedChannel,
+  });
+  if (resolvedClient.error || !resolvedClient.data?.found || !resolvedClient.data.clientId) {
+    return direct;
+  }
+
+  const byClientId = await fetchWithRelaxedChannel(resolvedClient.data.clientId);
+  if (!byClientId.error && byClientId.data && byClientId.data.dialogs.length > 0) {
+    return byClientId;
+  }
+  if (byClientId.error || !byClientId.data) {
+    return direct;
+  }
+
+  return byClientId;
+}
+
+export async function apiFetchSupportDialogMessages(params: {
+  dialogId: string;
+  limit?: number;
+  beforeTs?: number;
+}) {
+  const dialogId = params.dialogId.trim();
+  if (!dialogId) {
+    return {
+      data: null as SupportDialogMessagesPage | null,
+      error: {
+        status: 400,
+        message: "Не указан dialogId для загрузки переписки",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const safeLimit = Number.isFinite(params.limit)
+    ? Math.max(1, Math.min(300, Math.floor(params.limit as number)))
+    : 200;
+  const beforeTs = Number.isFinite(params.beforeTs)
+    ? Math.floor(params.beforeTs as number)
+    : Date.now() + 1;
+
+  const query = new URLSearchParams({
+    limit: String(safeLimit),
+    beforeTs: String(beforeTs),
+  });
+
+  const response = await requestSupportWithFallback<unknown>(
+    `/support/dialogs/${encodeURIComponent(dialogId)}/messages?${query.toString()}`,
+    {
+      method: "GET",
+      retries: 1,
+    },
+  );
+
+  if (response.error) {
+    return {
+      data: null as SupportDialogMessagesPage | null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  const parsed = extractSupportDialogMessages(response.data);
+  if (!parsed) {
+    return {
+      data: null as SupportDialogMessagesPage | null,
+      error: {
+        status: response.status,
+        message: "Не удалось разобрать сообщения поддержки",
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: parsed,
+    error: null,
+    status: response.status,
+  };
+}
+
+export async function apiCreateSupportDialogEvent(payload: SupportDialogEventPayload) {
+  const text =
+    payload.text?.trim()
+    || payload.message?.trim()
+    || payload.content?.trim()
+    || "";
+  const phone =
+    normalizePhoneForChat(payload.phone || "")
+    || normalizePhoneForChat(payload.phoneNumber || "")
+    || normalizePhoneForChat(payload.primaryPhone || "");
+
+  if (!text || !phone) {
+    return {
+      data: null as SupportDialogEventResponse | null,
+      error: {
+        status: 400,
+        message: "Недостаточно данных для отправки сообщения в поддержку",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const connector = payload.connector?.trim().toUpperCase() || "WEB_LK";
+  const externalUserId =
+    payload.channelUserId?.trim()
+    || payload.userId?.trim()
+    || payload.clientId?.trim()
+    || payload.senderId?.trim()
+    || phone;
+  const externalChatId =
+    payload.chatId?.trim()
+    || payload.externalThreadId?.trim()
+    || `lk:${externalUserId}`;
+  const stationId = payload.stationId?.trim() || null;
+  const stationName = payload.stationName?.trim() || null;
+  const displayName =
+    payload.displayName?.trim()
+    || payload.senderName?.trim()
+    || payload.clientName?.trim()
+    || `Клиент ${phone}`;
+
+  const body = SUPPORT_API_BASE
+    ? {
+        connector,
+        externalUserId,
+        externalChatId,
+        displayName,
+        phone,
+        text,
+        kind: "TEXT",
+        ...(stationId ? { stationId, selectedStationId: stationId } : {}),
+        ...(stationName ? { stationName, selectedStationName: stationName } : {}),
+        meta: {
+          ...(payload.metadata ?? {}),
+          channel: (payload.channel || "WEB").trim().toUpperCase(),
+          direction: payload.direction || "INBOUND",
+          authorType: payload.authorType || "CLIENT",
+          eventType: payload.eventType || "MESSAGE",
+          sourceChatId: payload.chatId?.trim() || null,
+          sourceThreadId: payload.externalThreadId?.trim() || null,
+        },
+      }
+    : {
+        ...payload,
+        phone,
+        primaryPhone: phone,
+        text,
+        connector,
+        channel: (payload.channel || "WEB").trim().toUpperCase(),
+      };
+
+  const response = await requestSupportWithFallback<unknown>(`/support/dialogs/events`, {
+    method: "POST",
+    retries: 0,
+    body: JSON.stringify(body),
+  });
+
+  if (response.error) {
+    return {
+      data: null as SupportDialogEventResponse | null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  const parsed = extractSupportDialogEventResponse(response.data);
+  if (!parsed) {
+    return {
+      data: null as SupportDialogEventResponse | null,
+      error: {
+        status: response.status,
+        message: "Не удалось разобрать ответ поддержки",
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: parsed,
+    error: null,
+    status: response.status,
+  };
+}
+
 async function writePadelGameRecord(
   candidates: Array<{ url: string; method: "POST" | "PATCH" }>,
   payload: Record<string, unknown>,
   fallbackId: string | null = null,
   fallbackInviteUrl: string | null = null,
+  requestOptions: {
+    retries?: number;
+    keepalive?: boolean;
+  } = {},
 ): Promise<ApiResult<PadelGameRecord>> {
   const baseUrl = getServ2Origin() || "";
   let firstError: ApiError | null = null;
   let firstStatus: ApiStatus = null;
+  let firstSuccessStatus: ApiStatus = null;
+  let sawSuccessWithoutParsedRecord = false;
+  const retries = Number.isFinite(requestOptions.retries)
+    ? Math.max(0, Math.floor(requestOptions.retries as number))
+    : 1;
+  const keepalive = requestOptions.keepalive === true;
 
   for (const candidate of candidates) {
     const response = await request<unknown>(candidate.url, {
       method: candidate.method,
       baseUrl,
-      retries: 1,
+      retries,
+      keepalive,
       body: JSON.stringify(payload),
     });
 
@@ -3355,25 +5410,21 @@ async function writePadelGameRecord(
       continue;
     }
 
+    if (firstSuccessStatus == null) {
+      firstSuccessStatus = response.status;
+    }
+
     const parsed = normalizePadelGameRecord(response.data);
     if (parsed) {
       return { data: parsed, error: null, status: response.status };
     }
 
-    if (fallbackId) {
-      return {
-        data: {
-          id: fallbackId,
-          inviteUrl: fallbackInviteUrl,
-          status: null,
-        },
-        error: null,
-        status: response.status,
-      };
-    }
+    sawSuccessWithoutParsedRecord = true;
   }
 
-  if (fallbackId) {
+  // Fallback by local gameId is valid only when backend accepted a request
+  // but returned a body we cannot parse. Do not mask full request failures.
+  if (fallbackId && sawSuccessWithoutParsedRecord) {
     return {
       data: {
         id: fallbackId,
@@ -3381,7 +5432,7 @@ async function writePadelGameRecord(
         status: null,
       },
       error: null,
-      status: firstStatus,
+      status: firstSuccessStatus,
     };
   }
 
@@ -3394,20 +5445,158 @@ async function writePadelGameRecord(
   };
 }
 
-export async function apiCreatePadelGameRecord(payload: PadelGameRecordPayload) {
+export async function apiCreatePadelGameRecord(
+  payload: PadelGameRecordPayload,
+  requestOptions: {
+    retries?: number;
+    keepalive?: boolean;
+  } = {},
+) {
+  const fallbackId = payload.gameId?.trim() || null;
+  const fallbackInviteUrl = payload.invite?.inviteUrl?.trim() || null;
+
+  return writePadelGameRecord(
+    [{ url: "/lk/games", method: "POST" }],
+    payload as unknown as Record<string, unknown>,
+    fallbackId,
+    fallbackInviteUrl,
+    requestOptions,
+  );
+}
+
+export async function apiCreatePadelGameDraft(
+  payload: PadelGameRecordPayload,
+  requestOptions: {
+    retries?: number;
+    keepalive?: boolean;
+  } = {},
+) {
   const fallbackId = payload.gameId?.trim() || null;
   const fallbackInviteUrl = payload.invite?.inviteUrl?.trim() || null;
 
   return writePadelGameRecord(
     [
+      { url: "/lk/games/drafts", method: "POST" },
+      { url: "/lk/games/draft", method: "POST" },
       { url: "/lk/games", method: "POST" },
-      { url: "/lk/games/records", method: "POST" },
-      { url: "/lk/games/create", method: "POST" },
     ],
     payload as unknown as Record<string, unknown>,
     fallbackId,
     fallbackInviteUrl,
+    requestOptions,
   );
+}
+
+export async function apiConfirmPadelGamePayment(
+  payload: PadelGameRecordPayload,
+  requestOptions: {
+    retries?: number;
+    keepalive?: boolean;
+  } = {},
+) {
+  const fallbackId = payload.gameId?.trim() || null;
+  const fallbackInviteUrl = payload.invite?.inviteUrl?.trim() || null;
+
+  return writePadelGameRecord(
+    [
+      { url: "/lk/games/payment/confirm", method: "POST" },
+      { url: "/lk/games/confirm", method: "POST" },
+      { url: "/lk/games", method: "POST" },
+    ],
+    payload as unknown as Record<string, unknown>,
+    fallbackId,
+    fallbackInviteUrl,
+    requestOptions,
+  );
+}
+
+export async function apiFetchPadelGameByPaymentRef(
+  paymentRefRaw: string,
+  bookingIdsRaw: string[] = [],
+) {
+  const paymentRef = paymentRefRaw.trim();
+  const bookingIds = bookingIdsRaw
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (!paymentRef && bookingIds.length === 0) {
+    return {
+      data: null as PadelGameRecord | null,
+      error: { status: 400, message: "Не указан paymentRef/bookingIds для поиска игры" },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const baseUrl = getServ2Origin() || "";
+  const query = new URLSearchParams();
+  if (paymentRef) query.set("paymentRef", paymentRef);
+  if (bookingIds.length > 0) query.set("bookingIds", bookingIds.join(","));
+
+  const endpoints = [
+    `/lk/games/by-payment-ref?${query.toString()}`,
+    `/lk/games?${query.toString()}`,
+    `/lk/games/by-phone?${query.toString()}`,
+  ];
+
+  let firstError: ApiError | null = null;
+  let firstStatus: ApiStatus = null;
+  let firstSuccessStatus: ApiStatus = null;
+
+  for (const endpoint of endpoints) {
+    const response = await request<unknown>(endpoint, {
+      method: "GET",
+      baseUrl,
+      retries: 1,
+    });
+    if (response.error) {
+      if (!firstError) {
+        firstError = response.error;
+        firstStatus = response.status;
+      }
+      continue;
+    }
+
+    if (firstSuccessStatus == null) {
+      firstSuccessStatus = response.status;
+    }
+
+    const single = normalizePadelGameRecord(response.data);
+    if (single) {
+      return {
+        data: single,
+        error: null,
+        status: response.status,
+      };
+    }
+
+    const records = extractPadelGameRecordList(response.data);
+    if (records.length > 0) {
+      return {
+        data: records[0],
+        error: null,
+        status: response.status,
+      };
+    }
+  }
+
+  if (firstSuccessStatus != null) {
+    return {
+      data: null as PadelGameRecord | null,
+      error: { status: firstSuccessStatus, message: "Игра по paymentRef не найдена" },
+      status: firstSuccessStatus,
+    };
+  }
+
+  return {
+    data: null as PadelGameRecord | null,
+    error:
+      firstError
+      ?? {
+        status: firstStatus,
+        message: "Не удалось найти игру по paymentRef",
+      },
+    status: firstStatus,
+  };
 }
 
 export async function apiUpdatePadelGameRecord(
@@ -3424,12 +5613,7 @@ export async function apiUpdatePadelGameRecord(
   }
 
   return writePadelGameRecord(
-    [
-      { url: `/lk/games/${encodeURIComponent(normalizedGameId)}`, method: "PATCH" },
-      { url: `/lk/games/${encodeURIComponent(normalizedGameId)}`, method: "POST" },
-      { url: `/lk/games/records/${encodeURIComponent(normalizedGameId)}`, method: "PATCH" },
-      { url: `/lk/games/records/${encodeURIComponent(normalizedGameId)}`, method: "POST" },
-    ],
+    [{ url: `/lk/games/${encodeURIComponent(normalizedGameId)}`, method: "PATCH" }],
     payload as unknown as Record<string, unknown>,
     normalizedGameId,
     payload.invite?.inviteUrl?.trim() || null,
@@ -3459,6 +5643,7 @@ function normalizePadelPlayerCandidate(item: unknown): PadelPlayerCandidate | nu
   const phone = pickString(item, ["phone", "phoneNumber", "mobile"]);
   const photo = pickString(item, ["photo", "avatar", "imageUrl"]);
   const rating = pickString(item, ["rating", "level", "grade"]);
+  const ratingNumeric = pickNumeric(item, ["ratingNumeric", "numericRating", "levelNumeric"]);
 
   return {
     id: id ?? null,
@@ -3466,6 +5651,7 @@ function normalizePadelPlayerCandidate(item: unknown): PadelPlayerCandidate | nu
     phone: phone ?? null,
     photo: photo ?? null,
     rating: rating ?? null,
+    ratingNumeric: ratingNumeric ?? null,
   };
 }
 
@@ -3522,6 +5708,110 @@ export async function apiSearchPadelPlayers(query: string, limit = 8) {
   };
 }
 
+function normalizePadelLiveRatingItem(item: unknown): PadelLiveRatingItem | null {
+  if (!isRecord(item)) return null;
+  const clientId = pickString(item, ["clientId", "id", "playerId"]);
+  const phoneNorm = pickString(item, ["phoneNorm", "phone", "phoneNumber"]);
+  const name = pickString(item, ["name", "playerName", "fullName"]);
+  const rating = pickString(item, ["rating", "level", "grade", "levelLetter"]);
+  const ratingNumeric = pickNumeric(item, ["ratingNumeric", "numericRating", "levelNumeric"]);
+  const source = pickString(item, ["source", "ratingSource"]);
+
+  return {
+    clientId: clientId ?? null,
+    phoneNorm: phoneNorm ?? null,
+    name: name ?? null,
+    rating: rating ?? null,
+    ratingNumeric: ratingNumeric ?? null,
+    source: source ?? null,
+  };
+}
+
+export async function apiFetchPadelLiveRatings(players: PadelLiveRatingRequestPlayer[]) {
+  const body = {
+    players: (Array.isArray(players) ? players : [])
+      .map((player) => ({
+        clientId: (player?.clientId || "").trim() || null,
+        phone: (player?.phone || "").trim() || null,
+        name: (player?.name || "").trim() || null,
+        rating: (player?.rating || "").trim() || null,
+        ratingNumeric:
+          typeof player?.ratingNumeric === "number" && Number.isFinite(player.ratingNumeric)
+            ? player.ratingNumeric
+            : null,
+      }))
+      .filter((player) => player.clientId || player.phone),
+  };
+
+  if (body.players.length === 0) {
+    return {
+      data: [] as PadelLiveRatingItem[],
+      error: null,
+      status: 200 as ApiStatus,
+    };
+  }
+
+  const endpoints = [
+    { url: "/lk/games/ratings/live", method: "POST" as const },
+  ];
+  const baseUrl = getServ2Origin() || "";
+
+  let firstError: ApiError | null = null;
+  let firstStatus: ApiStatus = null;
+
+  for (const endpoint of endpoints) {
+    const response = await request<unknown>(endpoint.url, {
+      method: endpoint.method,
+      baseUrl,
+      retries: 1,
+      body: JSON.stringify(body),
+    });
+
+    if (response.error) {
+      if (!firstError) {
+        firstError = response.error;
+        firstStatus = response.status;
+      }
+      continue;
+    }
+
+    const payload = response.data;
+    const rawItems = Array.isArray(payload)
+      ? payload
+      : (
+          isRecord(payload)
+            ? (
+                Array.isArray(payload.items)
+                  ? payload.items
+                  : (
+                      Array.isArray(payload.data)
+                        ? payload.data
+                        : (
+                            Array.isArray(payload.result) ? payload.result : []
+                          )
+                    )
+              )
+            : []
+        );
+
+    const items = rawItems
+      .map((item) => normalizePadelLiveRatingItem(item))
+      .filter((item): item is PadelLiveRatingItem => item !== null);
+
+    return {
+      data: items,
+      error: null,
+      status: response.status,
+    };
+  }
+
+  return {
+    data: [] as PadelLiveRatingItem[],
+    error: firstError,
+    status: firstStatus,
+  };
+}
+
 interface MasterServicePriceParams {
   date: string;
   fromTime: string;
@@ -3536,6 +5826,15 @@ interface MasterServicePayParams extends MasterServicePriceParams {
   clientId?: string | null;
   clientPhone?: string | null;
   baseRedirectUrl?: string | null;
+  promoCode?: string | null;
+}
+
+interface MasterServicePromoCheckParams extends MasterServicePriceParams {
+  promoCode: string;
+}
+
+interface MasterServicePromoDiscountParams extends MasterServicePromoCheckParams {
+  clientId: string;
 }
 
 export async function apiFetchMasterServicePrice(params: MasterServicePriceParams) {
@@ -3652,12 +5951,143 @@ export async function apiFetchMasterServicePrice(params: MasterServicePriceParam
   };
 }
 
+export async function apiCheckMasterServicePromoCode(params: MasterServicePromoCheckParams) {
+  const studioId = params.studioId?.trim() || null;
+  const fromDate = params.date?.trim() || null;
+  const fromTime = params.fromTime?.trim() || null;
+  const toTime = params.toTime?.trim() || null;
+  const promoCode = params.promoCode?.trim() || null;
+  const subServiceIds = uniqueIds(params.subServiceIds ?? []);
+
+  if (!studioId || !fromDate || !fromTime || !toTime || !promoCode || subServiceIds.length === 0) {
+    return {
+      data: null as { message: string | null } | null,
+      error: {
+        status: 400,
+        message: "Недостаточно данных для проверки промокода",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const result = await request<unknown>(
+    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/promo/code/check?productIds=${encodeURIComponent(subServiceIds.join(","))}&promoCode=${encodeURIComponent(promoCode)}&studioId=${encodeURIComponent(studioId)}`,
+    { method: "GET", auth: true, retries: 0 },
+  );
+
+  if (result.error) {
+    return {
+      data: null as { message: string | null } | null,
+      error: result.error,
+      status: result.status,
+    };
+  }
+
+  const isValid = extractPromoValidationState(result.data);
+  if (isValid === false) {
+    return {
+      data: null as { message: string | null } | null,
+      error: {
+        status: result.status,
+        message: extractPromoMessage(result.data) || "Промокод не прошел проверку",
+        raw: result.data,
+      },
+      status: result.status,
+    };
+  }
+
+  return {
+    data: {
+      message: extractPromoMessage(result.data),
+    },
+    error: null,
+    status: result.status,
+  };
+}
+
+export async function apiFetchMasterServicePromoDiscounts(params: MasterServicePromoDiscountParams) {
+  const studioId = params.studioId?.trim() || null;
+  const roomId = params.roomId?.trim() || null;
+  const fromDate = params.date?.trim() || null;
+  const fromTime = params.fromTime?.trim() || null;
+  const toTime = params.toTime?.trim() || null;
+  const promoCode = params.promoCode?.trim() || null;
+  const clientId = params.clientId?.trim() || null;
+  const subServiceIds = uniqueIds(params.subServiceIds ?? []);
+
+  if (
+    !studioId
+    || !roomId
+    || !fromDate
+    || !fromTime
+    || !toTime
+    || !promoCode
+    || !clientId
+    || subServiceIds.length === 0
+  ) {
+    return {
+      data: null as PromoDiscountSummary | null,
+      error: {
+        status: 400,
+        message: "Недостаточно данных для расчета скидки по промокоду",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const fromDateTimeLocal = `${fromDate}T${fromTime}:00`;
+  const toDateTimeLocal = `${fromDate}T${toTime}:00`;
+  const discountsUrl =
+    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/promo/discounts`
+    + `?productIds=${encodeURIComponent(subServiceIds.join(","))}`
+    + `&clientId=${encodeURIComponent(clientId)}`
+    + `&studioId=${encodeURIComponent(studioId)}`
+    + `&timeFrom=${encodeURIComponent(fromDateTimeLocal)}`
+    + `&timeTo=${encodeURIComponent(toDateTimeLocal)}`
+    + `&roomId=${encodeURIComponent(roomId)}`
+    + `&promoCode=${encodeURIComponent(promoCode)}`;
+
+  const result = await request<unknown>(discountsUrl, {
+    method: "GET",
+    auth: true,
+    retries: 0,
+  });
+
+  if (result.error) {
+    return {
+      data: null as PromoDiscountSummary | null,
+      error: result.error,
+      status: result.status,
+    };
+  }
+
+  const summary = extractPromoDiscountSummary(result.data);
+  if (!summary) {
+    return {
+      data: null as PromoDiscountSummary | null,
+      error: {
+        status: result.status,
+        message: "Не удалось определить скидку по промокоду",
+        raw: result.data,
+      },
+      status: result.status,
+    };
+  }
+
+  return {
+    data: summary,
+    error: null,
+    status: result.status,
+  };
+}
+
 export async function apiPayMasterService(params: MasterServicePayParams) {
   const studioId = params.studioId?.trim() || null;
   const roomId = params.roomId?.trim() || null;
   const fromDate = params.date?.trim() || null;
   const fromTime = params.fromTime?.trim() || null;
   const toTime = params.toTime?.trim() || null;
+  const promoCode = params.promoCode?.trim() || null;
 
   if (!studioId || !roomId || !fromDate || !fromTime || !toTime) {
     return {
@@ -3740,11 +6170,27 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
   const fromDateTimeLocal = `${fromDate}T${fromTime}:00`;
   const toDateTimeLocal = `${fromDate}T${toTime}:00`;
   const clientId = params.clientId?.trim() || null;
+  let promoDiscountAmount: number | null = null;
   if (clientId) {
-    await request<unknown>(
-      `${API_BASE}/end-user/api/v1/${TENANT_KEY}/promo/discounts?productIds=${encodeURIComponent(subServiceIds.join(","))}&clientId=${encodeURIComponent(clientId)}&studioId=${encodeURIComponent(studioId)}&timeFrom=${encodeURIComponent(fromDateTimeLocal)}&timeTo=${encodeURIComponent(toDateTimeLocal)}&roomId=${encodeURIComponent(roomId)}`,
+    const discountsUrl =
+      `${API_BASE}/end-user/api/v1/${TENANT_KEY}/promo/discounts`
+      + `?productIds=${encodeURIComponent(subServiceIds.join(","))}`
+      + `&clientId=${encodeURIComponent(clientId)}`
+      + `&studioId=${encodeURIComponent(studioId)}`
+      + `&timeFrom=${encodeURIComponent(fromDateTimeLocal)}`
+      + `&timeTo=${encodeURIComponent(toDateTimeLocal)}`
+      + `&roomId=${encodeURIComponent(roomId)}`
+      + (promoCode ? `&promoCode=${encodeURIComponent(promoCode)}` : "");
+    const promoDiscountsResult = await request<unknown>(
+      discountsUrl,
       { method: "GET", auth: true, retries: 0 },
     );
+    if (!promoDiscountsResult.error && promoCode) {
+      const promoSummary = extractPromoDiscountSummary(promoDiscountsResult.data);
+      if (promoSummary) {
+        promoDiscountAmount = Math.max(0, promoSummary.discount);
+      }
+    }
   }
 
   await request<unknown>(`${API_BASE}/end-user/api/v1/${TENANT_KEY}/messenger/bots`, {
@@ -3787,6 +6233,7 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
     marketingAttribution: {},
     timeFrom: fromDateTimeWithOffset,
     timeTo: toDateTimeWithOffset,
+    ...(promoCode ? { promoCode } : {}),
   };
 
   const payResult = await request<unknown>(
@@ -3813,6 +6260,7 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
           id: primaryOneTimeId,
           type: "ONE_TIME",
           successUrl: SUCCESS_URL,
+          ...(promoCode ? { promoCode } : {}),
         },
         {
           ...(clientPhone ? { clientPhone } : {}),
@@ -3820,6 +6268,7 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
           paymentMethod: "WIDGET",
           products: [{ id: primaryOneTimeId, type: "ONE_TIME", count: 1 }],
           successUrl: SUCCESS_URL,
+          ...(promoCode ? { promoCode } : {}),
         },
       ];
 
@@ -3836,16 +6285,33 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
         if (txResult.error) continue;
 
         const txPaymentUrl = extractPaymentUrl(txResult.data);
-        if (!txPaymentUrl) continue;
-
+        const txBookingIds = extractBookingIdsFromPaymentPayload(txResult.data);
         const txToPay =
           extractPriceAmountForSubServices(txResult.data, subServiceIds) ??
           extractPriceAmount(txResult.data) ??
           latestPrice.data ??
           0;
+        if (!txPaymentUrl && txToPay <= 0) {
+          return {
+            data: {
+              paymentUrl: null,
+              toPay: txToPay,
+              bookingIds: txBookingIds,
+              paid: true,
+            },
+            error: null,
+            status: txResult.status,
+          };
+        }
+        if (!txPaymentUrl) continue;
 
         return {
-          data: { paymentUrl: txPaymentUrl, toPay: txToPay },
+          data: {
+            paymentUrl: txPaymentUrl,
+            toPay: txToPay,
+            bookingIds: txBookingIds,
+            paid: txToPay <= 0 ? true : null,
+          },
           error: null,
           status: txResult.status,
         };
@@ -3859,8 +6325,31 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
     };
   }
 
+  const discountedLatestPrice =
+    promoDiscountAmount != null && latestPrice.data != null
+      ? Math.max(latestPrice.data - promoDiscountAmount, 0)
+      : null;
+  const toPay =
+    extractPriceAmountForSubServices(payResult.data, subServiceIds) ??
+    extractPriceAmount(payResult.data) ??
+    discountedLatestPrice ??
+    latestPrice.data ??
+    0;
   const paymentUrl = extractPaymentUrl(payResult.data);
+  const bookingIds = extractBookingIdsFromPaymentPayload(payResult.data);
   if (!paymentUrl) {
+    if (toPay <= 0) {
+      return {
+        data: {
+          paymentUrl: null,
+          toPay,
+          bookingIds,
+          paid: true,
+        },
+        error: null,
+        status: payResult.status,
+      };
+    }
     return {
       data: null as PaymentUrl | null,
       error: {
@@ -3872,14 +6361,13 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
     };
   }
 
-  const toPay =
-    extractPriceAmountForSubServices(payResult.data, subServiceIds) ??
-    extractPriceAmount(payResult.data) ??
-    latestPrice.data ??
-    0;
-
   return {
-    data: { paymentUrl, toPay },
+    data: {
+      paymentUrl,
+      toPay,
+      bookingIds,
+      paid: toPay <= 0 ? true : null,
+    },
     error: null,
     status: payResult.status,
   };
@@ -3892,6 +6380,7 @@ export async function apiFetchMasterServiceTimeslots(
     masterServiceId?: string | null;
     preferredSubServiceId?: string | null;
     preferredSubServiceIds?: string[];
+    preferredRoomIds?: string[];
   } = {},
 ) {
   const explicitMasterServiceId = options.masterServiceId?.trim() || null;
@@ -3934,9 +6423,13 @@ export async function apiFetchMasterServiceTimeslots(
     ...(explicitPreferredSubServiceId ? [explicitPreferredSubServiceId] : []),
     ...(cachedPreferredSubServiceId ? [cachedPreferredSubServiceId] : []),
   ]);
-  const preferredRoomIds = studioId
-    ? (masterServiceStudioPreferredRoomIdsCache.get(cacheKey) ?? [])
-    : [];
+  const hasExplicitPreferredRoomIds = Object.prototype.hasOwnProperty.call(options, "preferredRoomIds");
+  const explicitPreferredRoomIds = uniqueIds(options.preferredRoomIds ?? []).filter((value) =>
+    isUuidLike(value),
+  );
+  const preferredRoomIds = hasExplicitPreferredRoomIds
+    ? explicitPreferredRoomIds
+    : (studioId ? (masterServiceStudioPreferredRoomIdsCache.get(cacheKey) ?? []) : []);
 
   const requestPayload: {
     date: string;
@@ -3974,6 +6467,10 @@ export async function apiFetchMasterServiceTimeslots(
   let parsed = items
     .map((item, index) => normalizeMasterServiceTimeslot(item, index))
     .filter((item): item is GameTimeSlot => item !== null);
+  const slotsWithExplicitDate = parsed.filter((slot) => slot.date !== null);
+  if (slotsWithExplicitDate.length > 0) {
+    parsed = slotsWithExplicitDate.filter((slot) => slot.date === date);
+  }
   if (preferredSubServiceIds.length > 0) {
     const preferredSet = new Set(preferredSubServiceIds);
     parsed = parsed.filter((slot) =>
@@ -3987,7 +6484,7 @@ export async function apiFetchMasterServiceTimeslots(
 
   const unique = new Map<string, GameTimeSlot>();
   parsed.forEach((slot) => {
-    const key = `${slot.roomId}-${slot.time}`;
+    const key = `${slot.date ?? date}-${slot.roomId}-${slot.time}`;
     const existing = unique.get(key);
     if (!existing) {
       unique.set(key, slot);
@@ -4002,6 +6499,43 @@ export async function apiFetchMasterServiceTimeslots(
     data: Array.from(unique.values()),
     error: null,
     status: result.status,
+  };
+}
+
+export async function apiFetchMasterServiceGameModes(options: {
+  studioId?: string | null;
+  masterServiceId?: string | null;
+} = {}) {
+  const studioId = options.studioId?.trim() || null;
+  const explicitMasterServiceId = options.masterServiceId?.trim() || null;
+  const resolvedByStudio =
+    ENABLE_MASTER_SERVICE_AUTO_DISCOVERY && !explicitMasterServiceId && studioId
+      ? await resolveMasterServiceIdByStudio(studioId)
+      : null;
+  const fallbackMasterServiceId = studioId ? null : DEFAULT_GAMES_MASTER_SERVICE_ID;
+  const masterServiceId =
+    explicitMasterServiceId ??
+    resolvedByStudio ??
+    fallbackMasterServiceId;
+
+  if (!studioId || !masterServiceId) {
+    return {
+      data: { doubles: null, singles: null } as StudioGameModes,
+      error: {
+        status: 400,
+        message: "Недостаточно данных для определения форматов игры",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  await bootstrapMasterService(masterServiceId, studioId);
+
+  const cacheKey = `${masterServiceId}:${studioId}`;
+  return {
+    data: masterServiceStudioGameModesCache.get(cacheKey) ?? { doubles: null, singles: null },
+    error: null,
+    status: 200 as ApiStatus,
   };
 }
 
@@ -4062,4 +6596,99 @@ export async function apiGetAdvertisement() {
     method: "GET",
     retries: 1,
   });
+}
+
+function normalizeCabinetHomeAdvertisingSettingsPayload(
+  value: unknown,
+): CabinetHomeAdvertisingSettings | null {
+  if (!isRecord(value)) return null;
+
+  const ads = Array.isArray(value.ads)
+    ? value.ads
+      .map((item, index): CabinetHomeAdvertisingItem | null => {
+        if (!isRecord(item)) return null;
+
+        const href = pickString(item, ["href", "url", "link"]);
+        const imgUrl = pickString(item, ["imgUrl", "imageUrl", "photo", "image"]);
+        if (!href || !imgUrl) return null;
+
+        return {
+          id: pickString(item, ["id"]) ?? `${href}::${imgUrl}::${index}`,
+          title: pickString(item, ["title", "name"]) ?? undefined,
+          href,
+          imgUrl,
+        };
+      })
+      .filter((item): item is CabinetHomeAdvertisingItem => Boolean(item))
+    : [];
+
+  return {
+    placement: "cabinet_home",
+    rotationEnabled: value.rotationEnabled === true,
+    ads,
+    updatedAt: pickString(value, ["updatedAt"]) ?? undefined,
+  };
+}
+
+function mapLegacyAdvertisementToCabinetSettings(
+  advertisement: AdvertisementType | null,
+): CabinetHomeAdvertisingSettings | null {
+  if (!advertisement?.href || !advertisement.imgUrl) {
+    return null;
+  }
+
+  return {
+    placement: "cabinet_home",
+    rotationEnabled: false,
+    ads: [
+      {
+        id: advertisement.id ?? `${advertisement.href}::${advertisement.imgUrl}`,
+        title: advertisement.title,
+        href: advertisement.href,
+        imgUrl: advertisement.imgUrl,
+      },
+    ],
+  };
+}
+
+export async function apiGetCabinetHomeAdvertisingSettings() {
+  const supportResponse = await requestSupportWithFallback<unknown>("/advertising/cabinet-home", {
+    method: "GET",
+    retries: 1,
+    cacheTtlMs: DEV_CABINET_ADVERTISING_CACHE_TTL_MS,
+    dedupe: true,
+  });
+
+  const normalizedSupportData = normalizeCabinetHomeAdvertisingSettingsPayload(supportResponse.data);
+  if (normalizedSupportData) {
+    return {
+      data: normalizedSupportData,
+      error: null,
+      status: supportResponse.status,
+    } satisfies ApiResult<CabinetHomeAdvertisingSettings>;
+  }
+
+  const legacyResponse = await apiGetAdvertisement();
+  const normalizedLegacyData = mapLegacyAdvertisementToCabinetSettings(legacyResponse.data);
+  if (normalizedLegacyData) {
+    return {
+      data: normalizedLegacyData,
+      error: null,
+      status: legacyResponse.status,
+    } satisfies ApiResult<CabinetHomeAdvertisingSettings>;
+  }
+
+  if (supportResponse.error) {
+    return {
+      data: null,
+      error: supportResponse.error,
+      status: supportResponse.status,
+    } satisfies ApiResult<CabinetHomeAdvertisingSettings>;
+  }
+
+  return {
+    data: null,
+    error: legacyResponse.error,
+    status: legacyResponse.status,
+  } satisfies ApiResult<CabinetHomeAdvertisingSettings>;
 }

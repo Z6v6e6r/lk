@@ -3,9 +3,10 @@ import path from 'node:path';
 import { GAMES_MONGO4_CLIENT_ID, transformFlowToMongo4 } from './nodered_mongodb4_transform.mjs';
 
 const workspaceRoot = process.cwd();
-const srcPath = path.resolve(workspaceRoot, 'ЛК03_03_26.with_games_chat_results_communities.json');
-const outPath = path.resolve(workspaceRoot, 'ЛК03_03_26.with_games_chat_results_communities_support.json');
-const importPath = path.resolve(workspaceRoot, 'lk_support_dialog_nodes_import.json');
+const nodeRedRoot = path.resolve(workspaceRoot, 'node-red');
+const srcPath = path.resolve(nodeRedRoot, 'ЛК03_03_26.with_games_chat_results_communities.json');
+const outPath = path.resolve(nodeRedRoot, 'ЛК03_03_26.with_games_chat_results_communities_support.json');
+const importPath = path.resolve(nodeRedRoot, 'lk_support_dialog_nodes_import.json');
 const fnDir = path.resolve(workspaceRoot, 'scripts/nodered_support_nodes');
 const tabId = '1e95dcebc274ac6c';
 

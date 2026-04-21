@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../UI/Modal";
-import { apiFetchExercisesByDate } from "../../utils/apiClient";
+import { apiFetchExercisesByVisibleDate } from "../../utils/apiClient";
 import type { Exercise } from "../../utils/apiClient";
 
 interface TournamentsTodayModalProps {
@@ -32,7 +32,7 @@ export function TournamentsTodayModal({ isOpen, onClose }: TournamentsTodayModal
     if (!isOpen) return;
     setLoading(true);
     setError(null);
-    apiFetchExercisesByDate(todayStr)
+    apiFetchExercisesByVisibleDate(todayStr, { includePast: true, includeAdjacentDays: true })
       .then((res) => {
         if (res.data) setItems(res.data);
         else setItems([]);

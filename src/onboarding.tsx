@@ -4,6 +4,7 @@ import "./index.css";
 import "./MyApp.css";
 import { AppErrorBoundary } from "./components/UI/AppErrorBoundary";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { OverlayScopeProvider } from "./context/OverlayScopeContext";
 import { AuthForm } from "./components/auth/AuthForm";
 import OnboardingPage from "./components/onboarding/OnboardingPage";
 import type { UserProfileType } from "./utils/apiClient";
@@ -12,6 +13,8 @@ import {
   trackAnalyticsEvent,
   trackClientError,
 } from "./utils/analytics";
+import { mountDevReleaseBadge } from "./utils/devReleaseBadge";
+import { ensureFreshRelease } from "./utils/releaseGuard";
 
 type OnboardingData = {
   profile?: UserProfileType;
@@ -25,9 +28,12 @@ type MountOptions = {
   onClose?: () => void;
   data?: OnboardingData;
 };
+type OnboardingWidgetModule = { mount: typeof mount; unmount: typeof unmount };
 
 let onboardingRoot: ReturnType<typeof createRoot> | null = null;
 
+ensureFreshRelease({ entry: "onboarding", bundleFileNames: ["onboarding.js", "onboarding-dev.js"] });
+mountDevReleaseBadge({ bundleFileNames: ["onboarding.js", "onboarding-dev.js"] });
 installGlobalErrorTracking();
 trackAnalyticsEvent("widget_bundle_loaded", { entry: "onboarding" });
 
@@ -80,6 +86,7 @@ function OnboardingApp({
 
 function mount(options: MountOptions = {}) {
   const targetId = options.targetId ?? "root";
+  const isOverlayScope = targetId === "lk-overlay";
   const container = document.getElementById(targetId);
   if (!container) {
     trackClientError(
@@ -96,9 +103,11 @@ function mount(options: MountOptions = {}) {
     onboardingRoot = createRoot(container);
     onboardingRoot.render(
       <StrictMode>
-        <AppErrorBoundary module="onboarding">
-          <OnboardingApp onClose={options.onClose} data={options.data} />
-        </AppErrorBoundary>
+        <OverlayScopeProvider value={isOverlayScope}>
+          <AppErrorBoundary module="onboarding">
+            <OnboardingApp onClose={options.onClose} data={options.data} />
+          </AppErrorBoundary>
+        </OverlayScopeProvider>
       </StrictMode>,
     );
     trackAnalyticsEvent("widget_mounted", { entry: "onboarding", targetId });
@@ -117,4 +126,4 @@ function unmount() {
   onboardingRoot = null;
 }
 
-(window as any).LKWidgetOnboarding = { mount, unmount };
+(window as Window & { LKWidgetOnboarding?: OnboardingWidgetModule }).LKWidgetOnboarding = { mount, unmount };

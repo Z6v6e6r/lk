@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { GAMES_MONGO4_CLIENT_ID, transformFlowToMongo4 } from './nodered_mongodb4_transform.mjs';
 
 const srcPath = '/Users/zver/Desktop/project-fixed 6/ЛК03_03_26.with_games.json';
 const outPath = '/Users/zver/Desktop/project-fixed 6/ЛК03_03_26.with_games_chat.json';
@@ -24,7 +25,6 @@ const flow = JSON.parse(raw);
 
 const NEW_IDS = new Set([
   'chat_comment_001',
-  'chat_db_client_001',
   'chat_post_in_001',
   'chat_post_fn_prepare_001',
   'chat_post_find_game_001',
@@ -68,35 +68,11 @@ const chatNodes = [
     id: 'chat_comment_001',
     type: 'comment',
     z: tabId,
-    name: 'LK games chat (separate DB games_chat)',
-    info: 'Хранение сообщений чата игры в отдельной БД games_chat. Авторизация по участию в игре.',
+    name: 'LK games chat',
+    info: 'Хранение сообщений чата игры в MongoDB games. Авторизация по участию в игре.',
     x: 280,
     y: 3260,
     wires: [],
-  },
-  {
-    id: 'chat_db_client_001',
-    type: 'mongodb4-client',
-    name: 'lk_games_chat_db',
-    protocol: 'mongodb',
-    hostname: '147.45.254.160',
-    port: '27017',
-    dbName: 'games_chat',
-    appName: '',
-    authSource: 'admin',
-    authMechanism: 'DEFAULT',
-    tls: false,
-    tlsCAFile: '',
-    tlsCertificateKeyFile: '',
-    tlsInsecure: false,
-    connectTimeoutMS: '30000',
-    socketTimeoutMS: '0',
-    minPoolSize: '0',
-    maxPoolSize: '100',
-    maxIdleTimeMS: '0',
-    uri: 'mongodb://gen_user:l^RRk2kNPNqoC~@147.45.254.160:27017/games_chat?authSource=admin&directConnection=true&retryWrites=false',
-    advanced: '{}',
-    uriTabActive: 'tab-uri-advanced',
   },
 
   {
@@ -160,7 +136,7 @@ const chatNodes = [
     id: 'chat_post_insert_msg_001',
     type: 'mongodb4',
     z: tabId,
-    clientNode: 'chat_db_client_001',
+    clientNode: GAMES_MONGO4_CLIENT_ID,
     mode: 'collection',
     collection: 'chat_messages',
     operation: 'insertOne',
@@ -275,7 +251,7 @@ const chatNodes = [
     id: 'chat_get_find_messages_001',
     type: 'mongodb4',
     z: tabId,
-    clientNode: 'chat_db_client_001',
+    clientNode: GAMES_MONGO4_CLIENT_ID,
     mode: 'collection',
     collection: 'chat_messages',
     operation: 'find',
@@ -390,7 +366,7 @@ const chatNodes = [
     id: 'chat_read_insert_001',
     type: 'mongodb4',
     z: tabId,
-    clientNode: 'chat_db_client_001',
+    clientNode: GAMES_MONGO4_CLIENT_ID,
     mode: 'collection',
     collection: 'chat_reads',
     operation: 'insertOne',
@@ -477,7 +453,7 @@ const chatNodes = [
     id: 'chat_list_find_001',
     type: 'mongodb4',
     z: tabId,
-    clientNode: 'chat_db_client_001',
+    clientNode: GAMES_MONGO4_CLIENT_ID,
     mode: 'collection',
     collection: 'chat_messages',
     operation: 'find',
@@ -533,6 +509,7 @@ const chatNodes = [
 ];
 
 filtered.push(...chatNodes);
-fs.writeFileSync(outPath, JSON.stringify(filtered, null, 4), 'utf8');
+const mongo4Flow = transformFlowToMongo4(filtered);
+fs.writeFileSync(outPath, JSON.stringify(mongo4Flow, null, 4), 'utf8');
 console.log(`Patched flow written to: ${outPath}`);
-console.log(`Total nodes: ${filtered.length}`);
+console.log(`Total nodes: ${mongo4Flow.length}`);

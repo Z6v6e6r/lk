@@ -23,6 +23,8 @@ const dialogs = sliced.map((row) => ({
   authStatus: toStr(row.authStatus) || "PENDING_CONTACT",
   workflowState: toStr(row.workflowState) || "WAIT_CONTACT",
   channels: toArray(row.channels).map((value) => toStr(value)).filter(Boolean),
+  connectors: toArray(row.connectors).map((value) => toStr(value)).filter(Boolean),
+  lastConnector: toStr(row.lastConnector),
   unreadClientMessages: Number(row.unreadClientMessages || 0),
   pendingResponseSinceTs: Number(row.pendingResponseSinceTs || 0) || null,
   firstResponseMinutes: Number(row.firstResponseMinutes || 0) || null,

@@ -1,0 +1,135 @@
+.card {
+  padding: 18px;
+  border: none;
+  box-shadow: 0 10px 24px rgba(86, 68, 133, 0.08);
+}
+
+.layout {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.headMain {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+}
+
+.title {
+  margin: 0;
+  color: #000000;
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.station,
+.time {
+  margin: 0;
+  color: #000000;
+  font-size: 12px;
+  line-height: 1.25;
+  font-weight: 400;
+  letter-spacing: -0.05em;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.station {
+  color: #111111;
+}
+
+.time {
+  color: #3c3750;
+}
+
+.dateWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.dateBadge {
+  min-width: 42px;
+}
+
+.dateCaption {
+  min-height: 9px;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tag {
+  border-radius: 24px;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: -0.05em;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.tagType {
+  background: #000000;
+  color: #ffffff;
+}
+
+.tagSlots {
+  background: #eef8f1;
+  color: #2f8654;
+}
+
+.tagSlotsFull {
+  background: rgba(31, 26, 46, 0.08);
+  color: #4f4a5d;
+}
+
+.tagRating {
+  background: linear-gradient(90deg, #e56b00 0%, #dd4d20 100%);
+  color: #ffffff;
+}
+
+.tagGender {
+  background: #f4f0ff;
+  color: #7353d9;
+}
+
+.action {
+  width: 100%;
+  min-height: 44px;
+  border: none;
+  border-radius: 12px;
+  padding: 14px 20px;
+  background: linear-gradient(135deg, #7b57f6 0%, #6847e8 100%);
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  box-shadow: 0 10px 20px rgba(104, 71, 232, 0.2);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.action:active {
+  transform: scale(0.98);
+  box-shadow: 0 6px 14px rgba(104, 71, 232, 0.2);
+}
