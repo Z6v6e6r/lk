@@ -1,31 +1,78 @@
 import type { KeyboardEvent, MouseEvent } from "react";
 import { CommunityFeedCardBase } from "./CommunityFeedCardBase";
-import { ChatIcon, NewsIcon, ThumbsDownIcon, ThumbsUpIcon } from "./CommunityIcons";
-import { communityPlaceholderImages } from "./communityMedia";
+import { ChatIcon, HeartIcon, MoreIcon } from "./CommunityIcons";
 import type { CommunityNewsCard as CommunityNewsCardData, NewsReaction } from "./feedTypes";
+import { getInitials } from "./feedFormatters";
 
 interface CommunityNewsCardProps {
   card: CommunityNewsCardData;
   likes: number;
-  dislikes: number;
   commentsCount: number;
   reaction: NewsReaction;
   onLike: () => void;
-  onDislike: () => void;
   onOpen: () => void;
+  onEdit?: () => void;
+}
+
+function buildAuthorHandle(name: string) {
+  const normalizedName = name.trim();
+  if (!normalizedName) return "@community";
+  if (normalizedName.startsWith("@")) return normalizedName;
+
+  const slug = normalizedName
+    .toLowerCase()
+    .replace(/[’'"]/g, "")
+    .replace(/\s+/g, "_")
+    .replace(/[^\p{L}\p{N}_]+/gu, "")
+    .replace(/^_+|_+$/g, "");
+
+  return `@${slug || "community"}`;
+}
+
+function getBadgeText(value: string) {
+  const [label = "новость"] = value.split("•");
+  return (label.trim() || "новость").toLowerCase();
+}
+
+function formatPublishedLabel(value: string) {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return "";
+
+  const targetDate = new Date(parsed);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfTarget = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
+  const diffDays = Math.round((startOfToday.getTime() - startOfTarget.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return "сегодня";
+  if (diffDays > 0 && diffDays < 7) return `${diffDays} д.`;
+
+  return targetDate
+    .toLocaleDateString("ru-RU", {
+      day: "numeric",
+      month: "short",
+    })
+    .replace(/\.$/, "");
 }
 
 export function CommunityNewsCard({
   card,
   likes,
-  dislikes,
   commentsCount,
   reaction,
   onLike,
-  onDislike,
   onOpen,
+  onEdit,
 }: CommunityNewsCardProps) {
-  const previewText = (card.previewText || card.text).trim();
+  const previewText = (card.previewText || card.text || card.title).trim();
+  const authorName = (card.author.name || "Сообщество").trim() || "Сообщество";
+  const authorHandle = buildAuthorHandle(authorName);
+  const badgeText = getBadgeText(card.badgeLabel);
+  const publishedLabel = formatPublishedLabel(card.publishedAt);
+  const avatarSrc = card.author.avatarUrl || card.author.avatar || "";
+  const titleLabel = card.title.trim() || "Новость сообщества";
+  const mediaSrc = (card.imageUrl || card.media || "").trim();
+  const hasMedia = Boolean(mediaSrc);
 
   const handleCardKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key !== "Enter" && event.key !== " ") return;
@@ -41,70 +88,86 @@ export function CommunityNewsCard({
   return (
     <CommunityFeedCardBase
       variant="news"
-      className="community-feed-card--interactive"
+      className={`community-feed-card--interactive community-feed-card--news-feed${hasMedia ? "" : " community-feed-card--news-feed-no-media"}`}
       onClick={onOpen}
       onKeyDown={handleCardKeyDown}
       role="button"
       tabIndex={0}
-      aria-label={`Открыть новость: ${card.title}`}
+      aria-label={`Открыть новость: ${titleLabel}`}
     >
-      <div className="community-news-card-layout">
-        <div className="community-news-copy">
-          <div className="community-feed-card-badge community-feed-card-badge--news">
-            <NewsIcon className="community-feed-card-badge-icon" />
-            <span>{card.badgeLabel}</span>
+      <div className="community-news-feed-header">
+        <div className="community-news-feed-author">
+          <div className="community-news-feed-avatar">
+            {avatarSrc ? (
+              <img src={avatarSrc} alt={authorName} className="community-news-feed-avatar-image" />
+            ) : (
+              <span className="community-news-feed-avatar-fallback">{getInitials(authorName)}</span>
+            )}
           </div>
 
-          <h3 className="community-feed-card-title community-feed-card-title--compact">{card.title}</h3>
-          <p className="community-feed-card-copy community-feed-card-copy--news">{previewText}</p>
+          <div className="community-news-feed-author-copy">
+            <div className="community-news-feed-author-line">
+              <span className="community-news-feed-author-name">{authorName}</span>
+              <span className="community-news-feed-badge">{badgeText}</span>
+            </div>
+            <span className="community-news-feed-handle">{authorHandle}</span>
+          </div>
+        </div>
 
-          <div className="community-feed-news-meta">
+        {card.canEdit && onEdit ? (
+          <button
+            type="button"
+            className="community-news-feed-edit"
+            onClick={(event) => handleControlClick(event, onEdit)}
+            aria-label="Редактировать новость"
+          >
+            Редактировать
+          </button>
+        ) : (
+          <div className="community-news-feed-more" aria-hidden="true">
+            <MoreIcon className="community-news-feed-more-icon" />
+          </div>
+        )}
+      </div>
+
+      <div className="community-news-feed-body">
+        <p className="community-news-feed-text">{previewText}</p>
+
+        {hasMedia ? (
+          <div className="community-news-feed-media">
+            <div className="community-feed-media community-feed-media--news">
+              <img
+                src={mediaSrc}
+                alt={titleLabel}
+                className="community-news-feed-media-image"
+              />
+            </div>
+          </div>
+        ) : null}
+
+        <div className="community-news-feed-footer">
+          <div className="community-news-feed-actions">
             <button
               type="button"
-              className={`community-feed-news-vote community-feed-news-vote--like${reaction === "like" ? " is-active" : ""}`}
+              className={`community-news-feed-action community-news-feed-action--like${reaction === "like" ? " is-active" : ""}`}
               onClick={(event) => handleControlClick(event, onLike)}
-              aria-label="Поставить лайк новости"
+              aria-label={reaction === "like" ? "Убрать лайк у новости" : "Поставить лайк новости"}
             >
-              <ThumbsUpIcon className="community-feed-news-vote-icon" />
+              <HeartIcon className="community-news-feed-action-icon" />
               <span>{likes}</span>
             </button>
             <button
               type="button"
-              className={`community-feed-news-vote community-feed-news-vote--dislike${reaction === "dislike" ? " is-active" : ""}`}
-              onClick={(event) => handleControlClick(event, onDislike)}
-              aria-label="Поставить дизлайк новости"
-            >
-              <ThumbsDownIcon className="community-feed-news-vote-icon" />
-              <span>{dislikes}</span>
-            </button>
-            <button
-              type="button"
-              className="community-feed-news-stat community-feed-news-stat--button"
+              className="community-news-feed-action community-news-feed-action--comments"
               onClick={(event) => handleControlClick(event, onOpen)}
               aria-label="Открыть обсуждение новости"
             >
-              <ChatIcon className="community-feed-news-stat-icon" />
+              <ChatIcon className="community-news-feed-action-icon" />
               <span>{commentsCount}</span>
-              <span className="community-feed-news-stat-label">комм.</span>
             </button>
           </div>
-        </div>
 
-        <div className="community-news-media-column">
-          <div className="community-feed-media community-feed-media--news">
-            <img
-              src={card.imageUrl || card.media || communityPlaceholderImages.news}
-              alt={card.title}
-              className="community-feed-media-image"
-            />
-          </div>
-          <button
-            type="button"
-            className="community-feed-cta community-feed-cta--media"
-            onClick={(event) => handleControlClick(event, onOpen)}
-          >
-            Читать
-          </button>
+          {publishedLabel ? <span className="community-news-feed-age">{publishedLabel}</span> : null}
         </div>
       </div>
     </CommunityFeedCardBase>

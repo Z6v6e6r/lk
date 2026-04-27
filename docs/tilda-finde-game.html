@@ -1,0 +1,52 @@
+<div id="root"></div>
+
+<script>
+  (function () {
+    var scriptUrl = "https://padlhub.su/lk/games.js";
+    var cabinetUrl = "https://padlhub.ru/lk_new";
+    var url = new URL(window.location.href);
+
+    var data = {
+      publicFindEntry: true,
+      presetStudioId: url.searchParams.get("stationId") || url.searchParams.get("studioId") || null,
+      presetStudioName:
+        url.searchParams.get("station") ||
+        url.searchParams.get("stationName") ||
+        url.searchParams.get("studio") ||
+        url.searchParams.get("studioName") ||
+        null,
+      cabinetUrl: cabinetUrl
+    };
+
+    function showError() {
+      var root = document.getElementById("root");
+      if (root) {
+        root.innerHTML =
+          "<div style='padding:16px;font-family:Arial,sans-serif;color:#333'>Не удалось загрузить поиск игр. Попробуйте позже.</div>";
+      }
+    }
+
+    var script = document.createElement("script");
+    script.src = scriptUrl;
+    script.async = true;
+    script.crossOrigin = "anonymous";
+
+    script.onload = function () {
+      if (!window.LKWidgetGames || typeof window.LKWidgetGames.mount !== "function") {
+        showError();
+        return;
+      }
+
+      window.LKWidgetGames.mount({
+        targetId: "root",
+        onClose: function () {
+          window.location.href = cabinetUrl;
+        },
+        data: data
+      });
+    };
+
+    script.onerror = showError;
+    document.head.appendChild(script);
+  })();
+</script>

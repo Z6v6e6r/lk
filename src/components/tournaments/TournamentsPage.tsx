@@ -323,20 +323,80 @@ function findTournamentMatch(
     ?.matches.find((match) => match.id === matchId) ?? null;
 }
 
-function advanceTournamentRoundAfterSave(
-  rounds: TournamentRound[],
-  completedRoundId: string,
-  shouldAdvance: boolean,
-) {
-  if (!shouldAdvance) return rounds;
-  const completedRoundIndex = rounds.findIndex((round) => round.id === completedRoundId);
-  if (completedRoundIndex < 0 || completedRoundIndex >= rounds.length - 1) return rounds;
+type TournamentMatchLocation = {
+  roundId: string;
+  matchId: string;
+};
 
-  return rounds.map((round, index) => {
-    if (index === completedRoundIndex) return { ...round, collapsed: true };
-    if (index === completedRoundIndex + 1) return { ...round, collapsed: false };
-    return round;
-  });
+function getTournamentMatchKey(roundId: string, matchId: string) {
+  return `${roundId}::${matchId}`;
+}
+
+function isTournamentMatchSaved(match: TournamentRound["matches"][number]) {
+  return match.score1 != null && match.score2 != null;
+}
+
+function findNextIncompleteTournamentMatch(
+  rounds: TournamentRound[],
+  currentRoundId: string,
+  currentMatchId: string,
+) {
+  const orderedMatches = rounds.flatMap((round) =>
+    round.matches.map((match) => ({
+      roundId: round.id,
+      matchId: match.id,
+      saved: isTournamentMatchSaved(match),
+    })),
+  );
+
+  if (orderedMatches.length === 0) return null;
+
+  const currentMatchIndex = orderedMatches.findIndex((match) => (
+    match.roundId === currentRoundId && match.matchId === currentMatchId
+  ));
+
+  const findIncompleteFromIndex = (startIndex: number) => {
+    for (let index = Math.max(startIndex, 0); index < orderedMatches.length; index += 1) {
+      const candidate = orderedMatches[index];
+      if (!candidate.saved) {
+        return {
+          roundId: candidate.roundId,
+          matchId: candidate.matchId,
+        };
+      }
+    }
+    return null;
+  };
+
+  return (
+    (currentMatchIndex >= 0 ? findIncompleteFromIndex(currentMatchIndex + 1) : null)
+    ?? findIncompleteFromIndex(0)
+  );
+}
+
+function navigateTournamentAfterMatchSave(
+  rounds: TournamentRound[],
+  currentRoundId: string,
+  currentMatchId: string,
+) {
+  const nextMatch = findNextIncompleteTournamentMatch(rounds, currentRoundId, currentMatchId);
+  if (!nextMatch) {
+    return {
+      rounds,
+      nextMatch: null,
+    };
+  }
+
+  return {
+    nextMatch,
+    rounds: rounds.map((round) => {
+      if (round.id === nextMatch.roundId) return { ...round, collapsed: false };
+      if (round.id === currentRoundId && currentRoundId !== nextMatch.roundId && round.saved) {
+        return { ...round, collapsed: true };
+      }
+      return round;
+    }),
+  };
 }
 
 function toNumberSafe(value: unknown, fallback = 0) {
@@ -1425,6 +1485,11 @@ function TournamentManagerModal({
   const [matchSaveErrors, setMatchSaveErrors] = useState<Record<string, string>>({});
   const [serverTotals, setServerTotals] = useState<AmericanoResultsResponse["totals"] | null>(null);
   const [serverLogs, setServerLogs] = useState<AmericanoResultsResponse["playerLogs"] | null>(null);
+  const matchElementRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const matchInputRefs = useRef<
+    Record<string, { score1: HTMLInputElement | null; score2: HTMLInputElement | null }>
+  >({});
+  const pendingMatchNavigationRef = useRef<TournamentMatchLocation | null>(null);
 
   const normalizedParticipants = useMemo<ParticipantEntry[]>(() => {
     if (!data) return [];
@@ -1446,6 +1511,37 @@ function TournamentManagerModal({
     setServerLogs(initialPlayerLogs);
     setMatchSaveErrors({});
   }, [data, normalizedParticipants, initialTotals, initialPlayerLogs]);
+
+  useEffect(() => {
+    if (activeTab !== "tournament") return;
+    const pendingMatch = pendingMatchNavigationRef.current;
+    if (!pendingMatch) return;
+
+    const matchKey = getTournamentMatchKey(pendingMatch.roundId, pendingMatch.matchId);
+    const matchElement = matchElementRefs.current[matchKey];
+    if (!matchElement || typeof window === "undefined") return;
+
+    pendingMatchNavigationRef.current = null;
+
+    window.requestAnimationFrame(() => {
+      matchElement.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+
+      const inputRefs = matchInputRefs.current[matchKey];
+      const targetMatch = findTournamentMatch(rounds, pendingMatch.roundId, pendingMatch.matchId);
+      const nextInput =
+        targetMatch?.score1 == null
+          ? inputRefs?.score1
+          : targetMatch.score2 == null
+            ? inputRefs?.score2
+            : inputRefs?.score1 ?? inputRefs?.score2 ?? null;
+
+      nextInput?.focus();
+      nextInput?.select();
+    });
+  }, [activeTab, rounds]);
 
   const handleScoreChange = (
     roundId: string,
@@ -1536,12 +1632,21 @@ function TournamentManagerModal({
           const persistedRound = nextRounds.find((item) => item.id === roundId) ?? null;
           const shouldAdvanceRound =
             !wasRoundPersistedCompleteBeforeSave && Boolean(persistedRound?.saved);
-          const nextRoundsWithCollapse = advanceTournamentRoundAfterSave(
-            nextRounds,
-            roundId,
-            shouldAdvanceRound,
-          );
-          const persistedMatch = findTournamentMatch(nextRoundsWithCollapse, roundId, matchId);
+          const {
+            rounds: nextRoundsWithCollapse,
+            nextMatch,
+          } = shouldAdvanceRound
+            ? navigateTournamentAfterMatchSave(nextRounds, roundId, matchId)
+            : {
+                rounds: nextRounds,
+                nextMatch: findNextIncompleteTournamentMatch(nextRounds, roundId, matchId),
+              };
+          const nextRoundsWithNavigation = nextMatch
+            ? nextRoundsWithCollapse.map((round) => (
+              round.id === nextMatch.roundId ? { ...round, collapsed: false } : round
+            ))
+            : nextRoundsWithCollapse;
+          const persistedMatch = findTournamentMatch(nextRoundsWithNavigation, roundId, matchId);
           const persisted =
             persistedMatch?.score1 === match.score1 && persistedMatch?.score2 === match.score2;
 
@@ -1553,7 +1658,8 @@ function TournamentManagerModal({
             return;
           }
 
-          setRounds(nextRoundsWithCollapse);
+          pendingMatchNavigationRef.current = nextMatch;
+          setRounds(nextRoundsWithNavigation);
           const nextTotals = res.data.totals ?? serverTotals ?? null;
           const nextPlayerLogs = res.data.playerLogs ?? serverLogs ?? null;
           if (res.data.totals) setServerTotals(res.data.totals);
@@ -1561,7 +1667,7 @@ function TournamentManagerModal({
           onDataChange?.(
             {
               ...data,
-              rounds: serializeAmericanoRounds(nextRoundsWithCollapse),
+              rounds: serializeAmericanoRounds(nextRoundsWithNavigation),
             },
             {
               totals: nextTotals,
@@ -1871,7 +1977,13 @@ function TournamentManagerModal({
                       </div>
                     )}
                     {round.matches.map((match) => (
-                      <div key={match.id} className="tournament-match">
+                      <div
+                        key={match.id}
+                        className="tournament-match"
+                        ref={(node) => {
+                          matchElementRefs.current[getTournamentMatchKey(round.id, match.id)] = node;
+                        }}
+                      >
                         <div className="tournament-match-header">
                           <div className="tournament-match-court">
                             <span className="tournament-match-label">Корт</span>
@@ -1896,6 +2008,13 @@ function TournamentManagerModal({
                             min={0}
                             max={data.targetScore}
                             value={match.score1 ?? ""}
+                            ref={(node) => {
+                              const matchKey = getTournamentMatchKey(round.id, match.id);
+                              matchInputRefs.current[matchKey] = {
+                                score1: node,
+                                score2: matchInputRefs.current[matchKey]?.score2 ?? null,
+                              };
+                            }}
                             onChange={(e) =>
                               handleScoreChange(round.id, match.id, "score1", e.target.value)
                             }
@@ -1912,6 +2031,13 @@ function TournamentManagerModal({
                             min={0}
                             max={data.targetScore}
                             value={match.score2 ?? ""}
+                            ref={(node) => {
+                              const matchKey = getTournamentMatchKey(round.id, match.id);
+                              matchInputRefs.current[matchKey] = {
+                                score1: matchInputRefs.current[matchKey]?.score1 ?? null,
+                                score2: node,
+                              };
+                            }}
                             onChange={(e) =>
                               handleScoreChange(round.id, match.id, "score2", e.target.value)
                             }

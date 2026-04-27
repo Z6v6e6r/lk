@@ -1,22 +1,37 @@
-import { ChatIcon } from "./CommunityIcons";
-import { getInitials } from "./feedFormatters";
+import type { ReactNode } from "react";
+import {
+  ChatIcon,
+  EmptySlotAvatarIcon,
+  GameDateIcon,
+  GameLevelIcon,
+  GameLocationIcon,
+  HeartIcon,
+  MoreIcon,
+} from "./CommunityIcons";
+import { AvatarImageOrInitials } from "./AvatarImageOrInitials";
 import styles from "./CommunityGameCard.module.css";
+
+type CardPlayer = {
+  id: string;
+  avatarUrl: string;
+  name: string;
+};
 
 export type CommunityGameCardProps = {
   month: string;
   day: string;
   weekday: string;
+  isRatingGame?: boolean | null;
   title: string;
   subtitleText: string;
   timeText: string;
   levelText: string;
-  players: { id: string; avatarUrl: string; name: string }[];
-  waitlistPlayers?: { id: string; avatarUrl: string; name: string }[];
+  players: CardPlayer[];
+  waitlistPlayers?: CardPlayer[];
   confirmedPlayersCount?: number;
   totalSlots?: number;
   slotsLeft?: number;
   isJoined?: boolean;
-  ctaLabel?: string;
   showWaitlist?: boolean;
   isPastGame?: boolean;
   needsResult?: boolean;
@@ -29,6 +44,13 @@ export type CommunityGameCardProps = {
     left: { id: string; avatarUrl?: string; name: string }[];
     right: { id: string; avatarUrl?: string; name: string }[];
   } | null;
+  badgeLabel?: string;
+  durationText?: string;
+  authorName?: string;
+  authorHandle?: string;
+  authorAvatarUrl?: string;
+  likesCount?: number;
+  commentsCount?: number;
   onPlay?: () => void;
   onChat?: () => void;
 };
@@ -65,9 +87,45 @@ function hideDuplicateAvatarUrls<T extends { avatarUrl?: string; name: string }>
   });
 }
 
-function renderAvatar(player: CommunityGameCardProps["players"][number], index: number) {
-  const hasAvatar = Boolean(player.avatarUrl);
+function buildAuthorHandle(authorName?: string, providedHandle?: string) {
+  const normalizedHandle = (providedHandle || "").trim();
+  if (normalizedHandle) {
+    return normalizedHandle.startsWith("@") ? normalizedHandle : `@${normalizedHandle}`;
+  }
 
+  const fallback = (authorName || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+
+  return fallback ? `@${fallback}` : "@player";
+}
+
+function formatLevelRange(levelText: string) {
+  const normalized = levelText.trim();
+  if (!normalized) return "Уровень уточняется";
+
+  const rangeParts = normalized
+    .split(/[\/–-]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (rangeParts.length >= 2) {
+    return `от ${rangeParts[0]} до ${rangeParts[1]}`;
+  }
+
+  return normalized;
+}
+
+function getGameTypeBadge(isRatingGame?: boolean | null) {
+  if (isRatingGame) {
+    return { label: "Рейтинговая игра", tone: styles.statusBadgeRating };
+  }
+
+  return { label: "Френдли игра", tone: styles.statusBadgeFriendly };
+}
+
+function renderAvatar(player: CardPlayer, index: number) {
   return (
     <div
       key={`${player.id}-${index}`}
@@ -76,80 +134,49 @@ function renderAvatar(player: CommunityGameCardProps["players"][number], index: 
       title={player.name}
       aria-label={player.name}
     >
-      {hasAvatar ? (
-        <img src={player.avatarUrl} alt={player.name} className={styles.avatarImage} />
-      ) : (
-        <span>{getInitials(player.name)}</span>
-      )}
+      <AvatarImageOrInitials src={player.avatarUrl} name={player.name} imageClassName={styles.avatarImage} />
     </div>
   );
 }
 
-function renderOverflowAvatar(
-  player: CommunityGameCardProps["players"][number],
-  index: number,
-) {
-  const hasAvatar = Boolean(player.avatarUrl);
-
+function renderEmptySlotAvatar(key: string) {
   return (
-    <div
-      key={`${player.id}-${index}-overflow`}
-      className={`${styles.avatarItem} ${styles.avatarOverflow}`}
-      style={{ zIndex: Math.max(1, 4 - index) }}
-      title={player.name}
-      aria-label={player.name}
-    >
-      {hasAvatar ? (
-        <img src={player.avatarUrl} alt={player.name} className={styles.avatarImage} />
-      ) : (
-        <span>{getInitials(player.name)}</span>
-      )}
+    <div key={key} className={`${styles.avatarItem} ${styles.avatarGhost}`} aria-hidden="true">
+      <EmptySlotAvatarIcon className={styles.emptySlotAvatarIcon} />
     </div>
   );
 }
 
-function renderWaitlistAvatar(
-  player: CommunityGameCardProps["players"][number],
-  index: number,
+function renderStat(
+  icon: ReactNode,
+  label: string,
+  count?: number,
+  onClick?: () => void,
+  active = false,
 ) {
-  const hasAvatar = Boolean(player.avatarUrl);
-
-  return (
-    <div
-      key={`${player.id}-${index}-waitlist`}
-      className={`${styles.avatarItem} ${styles.waitlistAvatarItem}`}
-      style={{ zIndex: Math.max(1, 6 - index) }}
-      title={player.name}
-      aria-label={player.name}
-    >
-      {hasAvatar ? (
-        <img src={player.avatarUrl} alt={player.name} className={styles.avatarImage} />
-      ) : (
-        <span>{getInitials(player.name)}</span>
-      )}
-    </div>
+  const content = (
+    <>
+      <span className={styles.statIcon}>{icon}</span>
+      {typeof count === "number" && count > 0 ? <span className={styles.statCount}>{count}</span> : null}
+    </>
   );
-}
 
-function renderResultAvatar(
-  player: { id: string; avatarUrl?: string; name: string },
-  index: number,
-) {
-  const hasAvatar = Boolean(player.avatarUrl);
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        className={`${styles.statButton}${active ? ` ${styles.statButtonActive}` : ""}`}
+        onClick={onClick}
+        aria-label={label}
+      >
+        {content}
+      </button>
+    );
+  }
 
   return (
-    <div
-      key={`${player.id}-${index}-result`}
-      className={styles.resultAvatar}
-      style={{ zIndex: 10 - index }}
-      title={player.name}
-      aria-label={player.name}
-    >
-      {hasAvatar ? (
-        <img src={player.avatarUrl} alt={player.name} className={styles.avatarImage} />
-      ) : (
-        <span>{getInitials(player.name)}</span>
-      )}
+    <div className={`${styles.statButton}${active ? ` ${styles.statButtonActive}` : ""}`} aria-label={label}>
+      {content}
     </div>
   );
 }
@@ -158,196 +185,140 @@ export function CommunityGameCard({
   month,
   day,
   weekday,
+  isRatingGame,
   title,
   subtitleText,
   timeText,
   levelText,
   players,
-  waitlistPlayers = [],
   confirmedPlayersCount = players.length,
   totalSlots = 4,
   slotsLeft,
   isJoined = false,
-  ctaLabel,
-  showWaitlist = true,
   needsResult = false,
-  hasConfirmedResult = false,
-  resultScore,
-  resultTeams,
+  durationText,
+  authorName,
+  authorHandle,
+  authorAvatarUrl,
+  likesCount = 0,
+  commentsCount = 0,
   onPlay,
   onChat,
 }: CommunityGameCardProps) {
   const sanitizedPlayers = hideDuplicateAvatarUrls(players);
-  const sanitizedWaitlistPlayers = hideDuplicateAvatarUrls(waitlistPlayers);
-  const visiblePlayers = sanitizedPlayers.slice(0, 4);
-  const overflowPlayers = sanitizedPlayers.slice(4);
-  const visibleWaitlistPlayers = sanitizedWaitlistPlayers.slice(0, 3);
-  const waitlistOverflowCount = Math.max(waitlistPlayers.length - visibleWaitlistPlayers.length, 0);
+  const slotsCount = Math.max(2, Math.min(totalSlots, 4));
+  const visiblePlayers = sanitizedPlayers.slice(0, slotsCount);
   const isGameFull = typeof slotsLeft === "number"
     ? slotsLeft <= 0
     : confirmedPlayersCount >= totalSlots;
-  const playButtonLabel = ctaLabel || (!isJoined && isGameFull ? "В лист ожидания" : "Играть");
-  const visibleResultTeams = resultTeams && hasConfirmedResult
-    ? resultTeams
-    : null;
-  const showResultBlock = Boolean(visibleResultTeams && resultScore);
-  const resultSets = (resultScore || "")
-    .split("·")
-    .map((setItem) => setItem.trim())
-    .filter(Boolean)
-    .map((setItem) => {
-      const [left = "", right = ""] = setItem.split(":").map((value) => value.trim());
-      return { left, right };
-    });
-  const renderTeamNames = (teamPlayers: { id: string; avatarUrl?: string; name: string }[]) => teamPlayers
-    .map((player) => player.name)
-    .filter(Boolean)
-    .join(" / ");
-
-  if (showResultBlock && resultTeams) {
-    return (
-      <article className={`${styles.card} ${styles.resultCard}`}>
-        <div className={styles.resultCardLayout}>
-          <div className={styles.resultSidebar}>
-            <div className={styles.resultDatePill}>
-              {day} {month}
-            </div>
-            <div className={styles.resultMetaStack}>
-              <div className={styles.resultMetaPrimary}>{subtitleText.split("•")[0]?.trim() || subtitleText}</div>
-              <div className={styles.resultMetaSecondary}>
-                {subtitleText.split("•").slice(1).join(" • ").trim() || "Локация уточняется"}
-              </div>
-              <div className={styles.resultTimeText}>{timeText}</div>
-            </div>
-          </div>
-
-          <div className={styles.resultMain}>
-            <div className={styles.resultHeader}>
-              <h3 className={styles.resultTitle}>{title}</h3>
-              <button
-                type="button"
-                className={styles.chatTopButton}
-                onClick={onChat}
-                aria-label="Открыть чат игры"
-              >
-                <ChatIcon className={styles.chatTopIcon} />
-              </button>
-            </div>
-
-            <div className={styles.resultScoreboard}>
-              <div className={styles.resultTeamRow}>
-                <div className={styles.resultTeamScores}>
-                  {resultSets.map((setItem, index) => (
-                    <span key={`left-set-${index}`} className={styles.resultScoreValueWin}>
-                      {setItem.left}
-                    </span>
-                  ))}
-                </div>
-                <div className={styles.resultTeamLine} />
-                <div className={styles.resultPlayersCluster}>
-                  {resultTeams.left.map(renderResultAvatar)}
-                </div>
-              </div>
-
-              <div className={styles.resultTeamRow}>
-                <div className={styles.resultTeamScores}>
-                  {resultSets.map((setItem, index) => (
-                    <span key={`right-set-${index}`} className={styles.resultScoreValueLose}>
-                      {setItem.right}
-                    </span>
-                  ))}
-                </div>
-                <div className={styles.resultTeamLine} />
-                <div className={styles.resultPlayersCluster}>
-                  {resultTeams.right.map(renderResultAvatar)}
-                </div>
-              </div>
-            </div>
-
-            <div className={styles.resultTeamNames}>
-              <span>{renderTeamNames(resultTeams.left)}</span>
-              <span>{renderTeamNames(resultTeams.right)}</span>
-            </div>
-          </div>
-        </div>
-      </article>
-    );
-  }
+  const playButtonLabel = isJoined
+    ? "Открыть игру"
+    : isGameFull
+      ? "В лист ожидания"
+      : "Вступить в игру";
+  const emptySlotsCount = Math.max(slotsCount - visiblePlayers.length, 0);
+  const statusBadge = getGameTypeBadge(isRatingGame);
+  const primaryAuthor = authorName || players[0]?.name || "Игрок";
+  const primaryAuthorAvatar = normalizeAvatarUrl(authorAvatarUrl) || normalizeAvatarUrl(players[0]?.avatarUrl);
+  const primaryAuthorHandle = buildAuthorHandle(primaryAuthor, authorHandle);
+  const locationText = subtitleText.trim() || "Локация уточняется";
+  const dateLine = `${day} ${month.toLowerCase()}, ${timeText}`;
+  const formattedLevelText = formatLevelRange(levelText);
+  const secondaryAction = onChat || onPlay;
 
   return (
     <article className={styles.card}>
-      <div className={styles.topRow}>
-        <div className={styles.calendarBadge} aria-label={`${day} ${month} ${weekday}`}>
-          <div className={styles.badgeTop}>{month}</div>
-          <div className={styles.badgeMiddle}>{day}</div>
-          <div className={styles.badgeBottom}>{weekday}</div>
+      <div className={styles.profileRow}>
+        <div className={styles.profileMain}>
+          <div className={styles.profileAvatar} aria-hidden="true">
+            <AvatarImageOrInitials
+              src={primaryAuthorAvatar}
+              name={primaryAuthor}
+              imageClassName={styles.avatarImage}
+            />
+          </div>
+
+          <div className={styles.profileCopy}>
+            <div className={styles.profileName}>{primaryAuthor}</div>
+            <div className={styles.profileHandle}>{primaryAuthorHandle}</div>
+          </div>
         </div>
 
-        <div className={styles.content}>
-          <div className={styles.headerRow}>
-            <div className={styles.textGroup}>
-              <h3 className={styles.title}>{title}</h3>
-              <p className={styles.subtitleText}>{subtitleText}</p>
+        <button
+          type="button"
+          className={styles.moreButton}
+          onClick={secondaryAction}
+          aria-label="Открыть действия игры"
+        >
+          <MoreIcon className={styles.moreIcon} />
+        </button>
+      </div>
 
-              <div className={styles.metaRow}>
-                <span className={styles.timeText}>{timeText}</span>
-                <span className={styles.metaDot} aria-hidden="true" />
-                <span className={styles.levelBadge}>{levelText}</span>
-              </div>
+      <div className={styles.gameCard}>
+        <div className={styles.gameHeader}>
+          <div className={styles.headerMain}>
+            <div className={`${styles.statusBadge} ${statusBadge.tone}`}>
+              <span className={styles.statusBadgeDot} aria-hidden="true" />
+              <span>{statusBadge.label}</span>
+            </div>
+            <h3 className={styles.title}>{title}</h3>
+          </div>
+
+          <div className={styles.dateBadge} aria-label={`${day} ${month} ${weekday}`}>
+            <span className={styles.dateBadgeDay}>{day}</span>
+            <span className={styles.dateBadgeWeekday}>{weekday}</span>
+          </div>
+        </div>
+
+        <div className={styles.infoStack}>
+          <div className={styles.infoRow}>
+            <GameDateIcon className={styles.infoIcon} />
+            <span className={styles.infoText}>{dateLine}</span>
+          </div>
+
+          <div className={styles.infoRow}>
+            <GameLocationIcon className={styles.infoIcon} />
+            <div className={styles.locationRow}>
+              <span className={styles.infoText}>{locationText}</span>
+              <span className={styles.mapLink}>на карте</span>
+            </div>
+          </div>
+
+          <div className={styles.infoRow}>
+            <GameLevelIcon className={styles.infoIcon} />
+            <span className={styles.infoText}>{formattedLevelText}</span>
+          </div>
+        </div>
+
+        <div className={styles.footer}>
+          <div className={styles.footerDivider} />
+
+          <div className={styles.footerMain}>
+            <div className={styles.avatarsGroup} aria-label={`Игроков: ${players.length}`}>
+              {visiblePlayers.map(renderAvatar)}
+              {Array.from({ length: emptySlotsCount }, (_, index) => (
+                renderEmptySlotAvatar(`ghost-slot-${index}`)
+              ))}
             </div>
 
             <button
               type="button"
-              className={styles.chatTopButton}
-              onClick={onChat}
-              aria-label="Открыть чат игры"
+              className={`${styles.playButton}${needsResult ? ` ${styles.playButtonAttention}` : ""}`}
+              onClick={onPlay}
             >
-              <ChatIcon className={styles.chatTopIcon} />
+              {playButtonLabel}
             </button>
           </div>
         </div>
       </div>
 
-      <div className={styles.bottomRow}>
-        <div className={styles.playersWrap}>
-          <div className={styles.avatarsGroup} aria-label={`Игроков: ${players.length}`}>
-            {visiblePlayers.map(renderAvatar)}
-            {overflowPlayers.map((player, index) => renderOverflowAvatar(player, index))}
-          </div>
-
-          {showWaitlist && waitlistPlayers.length > 0 && (
-            <div className={styles.waitlistGroup} aria-label={`В листе ожидания: ${waitlistPlayers.length}`}>
-              <div className={styles.waitlistAvatars}>
-                {visibleWaitlistPlayers.map((player, index) => renderWaitlistAvatar(player, index))}
-                {waitlistOverflowCount > 0 && (
-                  <div className={`${styles.avatarItem} ${styles.waitlistAvatarItem} ${styles.waitlistAvatarMore}`}>
-                    +{waitlistOverflowCount}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {showResultBlock && visibleResultTeams && (
-            <div className={styles.resultBlock} aria-label={`Счёт матча ${resultScore}`}>
-              <div className={styles.resultTeams}>
-                <div className={styles.resultTeam}>{renderTeamNames(visibleResultTeams.left)}</div>
-                <div className={styles.resultScore}>{resultScore}</div>
-                <div className={styles.resultTeam}>{renderTeamNames(visibleResultTeams.right)}</div>
-              </div>
-            </div>
-          )}
+      <div className={styles.metaBar}>
+        <div className={styles.statsGroup}>
+          {renderStat(<HeartIcon className={styles.inlineIcon} />, "Лайки", likesCount, undefined, likesCount > 0)}
+          {renderStat(<ChatIcon className={styles.inlineIcon} />, "Чат игры", commentsCount, onChat)}
         </div>
 
-        <div className={styles.actionsGroup}>
-          <button
-            type="button"
-            className={`${styles.playButton}${needsResult ? ` ${styles.playButtonAttention}` : ""}`}
-            onClick={onPlay}
-          >
-            {playButtonLabel}
-          </button>
-        </div>
+        <span className={styles.durationText}>{durationText || "1 ч."}</span>
       </div>
     </article>
   );

@@ -27,6 +27,7 @@ export type GamesMountData = {
   openChat?: boolean;
   createFromBooking?: GamesCreateFromBookingData | null;
   publicCreateEntry?: boolean;
+  publicFindEntry?: boolean;
   joinGameId?: string | null;
   presetStudioId?: string | null;
   presetStudioName?: string | null;

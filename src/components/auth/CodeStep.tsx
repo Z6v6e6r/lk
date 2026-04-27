@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useCountdown } from "../../hooks/useCountdown";
 const resendImg = "https://padlhub.su/lk/assets/resend.png";
+const maxBotUrl = "https://max.ru/id7722810381_bot";
 
 interface CodeStepProps {
   phone: string;
@@ -50,8 +51,10 @@ export function CodeStep({ phone, onVerify, onResendSms, onChangePhone, error }:
         )}
       </div>
       <p className="auth-subtitle">
-        Код отправлен по номеру +{phone}<br/> Проверьте <a href="https://t.me/VerificationCodes" target="_blank" rel="noreferrer">Telegram</a> или СМС сообщения.{"\n"}<br/><br/> Код действует {timeStr}<br/><br/>Если код не приходит, поделитесь номером с нашим{' '}
-          <a href="https://t.me/Academy_F_padel_bot" target="_blank" rel="noreferrer">ботом</a> и запросите код повторно.
+        Код отправлен по номеру +{phone}<br/><br/>
+        Код действует {timeStr}<br/><br/>
+        Если код не приходит, поделитесь номером с нашим{" "}
+        <a href={maxBotUrl} target="_blank" rel="noreferrer">ботом</a> и запросите код повторно.
       </p>
       
       {error && <p className="auth-error">{error}</p>}

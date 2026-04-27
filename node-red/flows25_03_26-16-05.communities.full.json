@@ -679,7 +679,7 @@
     "type": "function",
     "z": "e2a03ad807a54837",
     "name": "Validate + build Viva request",
-    "func": "const exerciseId =\n  msg.req?.query?.exerciseId ||\n  msg.req?.query?.tournamentId ||\n  msg.payload?.exerciseId ||\n  msg.payload?.tournamentId;\n\nif (!exerciseId) {\n  msg.statusCode = 400;\n  msg.payload = { error: \"exerciseId required\" };\n  return [null, msg];\n}\n\nconst token = global.get(\"vivacrm_access_token\");\nif (!token) {\n  msg.statusCode = 401;\n  msg.payload = { error: \"VIVA_ADMIN_TOKEN missing\" };\n  return [null, msg];\n}\n\nmsg.method = \"GET\";\nmsg.url = `https://api.vivacrm.ru/api/v1/exercises/${exerciseId}/bookings`;\nmsg.headers = { Authorization: `Bearer ${token}` };\nreturn [msg, null];\n",
+    "func": "const exerciseId =\n  msg.req?.query?.exerciseId ||\n  msg.req?.query?.tournamentId ||\n  msg.payload?.exerciseId ||\n  msg.payload?.tournamentId;\n\nif (!exerciseId) {\n  msg.statusCode = 400;\n  msg.payload = { error: \"exerciseId required\" };\n  return [null, msg];\n}\n\nconst token = global.get(\"vivacrm_access_token\");\nif (!token) {\n  msg.statusCode = 401;\n  msg.payload = { error: \"VIVA_ADMIN_TOKEN missing\" };\n  return [null, msg];\n}\n\nmsg.method = \"GET\";\nconst params = new URLSearchParams({\n  showCancelled: \"true\",\n  size: String(Number(msg.req?.query?.size) || 100),\n});\nparams.append(\"sort\", \"visitConfirmed,asc\");\nparams.append(\"sort\", \"client.lastName,asc\");\nmsg.url = `https://api.vivacrm.ru/api/v1/exercises/${encodeURIComponent(exerciseId)}/bookings?${params.toString()}`;\nmsg.headers = { Authorization: `Bearer ${token}` };\nreturn [msg, null];\n",
     "outputs": 2,
     "timeout": "",
     "noerr": 0,

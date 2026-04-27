@@ -112,12 +112,210 @@ function mergeGamePlayers(players: PadelGamePlayer[]) {
   return mergedPlayers;
 }
 
+function normalizeAvatarUrl(value: string | null | undefined) {
+  return (value || "").trim();
+}
+
+function isSameOrganizerPlayer(
+  organizer: PadelGameRecord["organizer"],
+  player: PadelGamePlayer,
+) {
+  if (!organizer) return false;
+
+  const organizerId = (organizer.id || "").trim();
+  const playerId = (player.id || "").trim();
+  if (organizerId && playerId && organizerId === playerId) return true;
+
+  const organizerPhone = normalizePhone(organizer.phone);
+  const playerPhone = normalizePhone(player.phone);
+  if (organizerPhone && playerPhone && organizerPhone === playerPhone) return true;
+
+  const organizerName = (organizer.name || "").trim().toLowerCase();
+  const playerName = (player.name || "").trim().toLowerCase();
+  return Boolean(organizerName && playerName && organizerName === playerName);
+}
+
+function resolveTrustedOrganizerAvatar(game: PadelGameRecord | undefined) {
+  const organizerAvatar = normalizeAvatarUrl(game?.organizer?.photo);
+  if (!organizerAvatar) return null;
+
+  const hasAvatarConflict = (game?.participants ?? []).some((player) => (
+    normalizeAvatarUrl(player.photo) === organizerAvatar
+    && !isSameOrganizerPlayer(game?.organizer ?? null, player)
+  ));
+
+  return hasAvatarConflict ? null : organizerAvatar;
+}
+
+function toTrimmedString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function pickRecord(source: Record<string, unknown> | null | undefined, keys: string[]) {
+  if (!source) return null;
+  for (const key of keys) {
+    if (isRecord(source[key])) return source[key] as Record<string, unknown>;
+  }
+  return null;
+}
+
+function pickStringValue(source: Record<string, unknown> | null | undefined, keys: string[]) {
+  if (!source) return "";
+  for (const key of keys) {
+    const picked = toTrimmedString(source[key]);
+    if (picked) return picked;
+  }
+  return "";
+}
+
+function pickNumberValue(
+  source: Record<string, unknown> | null | undefined,
+  keys: string[],
+  fallback: number | null = null,
+) {
+  if (!source) return fallback;
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, Math.floor(value));
+    if (typeof value === "string") {
+      const parsed = Number.parseInt(value.trim(), 10);
+      if (Number.isFinite(parsed)) return Math.max(0, parsed);
+    }
+  }
+  return fallback;
+}
+
+function normalizeStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.map((item) => toTrimmedString(item)).filter(Boolean)
+    : [];
+}
+
+function formatAccessLevelRange(value: unknown) {
+  const levels = normalizeStringArray(value);
+  if (levels.length === 0) return "";
+  if (levels.length === 1) return levels[0];
+  return `${levels[0]}-${levels[levels.length - 1]}`;
+}
+
+function formatIsoTime(value: string | null | undefined) {
+  const parsed = Date.parse(value || "");
+  if (!Number.isFinite(parsed)) return "";
+  return new Date(parsed).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatTournamentDuration(startsAt: string, endsAt: string) {
+  const startMs = Date.parse(startsAt);
+  const endMs = Date.parse(endsAt);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return "";
+
+  const totalMinutes = Math.round((endMs - startMs) / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0 && minutes > 0) return `${hours} ч ${minutes} мин`;
+  if (hours > 0) return `${hours} ч`;
+  return `${minutes} мин`;
+}
+
+function normalizeTournamentGenderLabel(value: string | null | undefined) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (["male", "men", "m", "м", "мужской", "мужчины"].includes(normalized)) return "Мужчины";
+  if (["female", "women", "f", "ж", "женский", "женщины"].includes(normalized)) return "Женщины";
+  if (["mixed", "mix", "микст", "м/ж"].includes(normalized)) return "М/Ж";
+  if (["any", "all", "open", "любой", "любой пол", "без ограничений"].includes(normalized)) return "М/Ж";
+  return value?.trim() || "";
+}
+
+function getGameBookingIds(game: PadelGameRecord | undefined) {
+  const bookingIds = Array.isArray(game?.booking?.bookingIds) ? game.booking.bookingIds : [];
+  const metadataBookingIds = Array.isArray(game?.metadata?.bookingIds) ? game.metadata.bookingIds : [];
+  const singleBookingId = game?.booking?.bookingId ?? toTrimmedString(game?.metadata?.bookingId);
+
+  return [...bookingIds, ...metadataBookingIds, singleBookingId]
+    .map((value) => toTrimmedString(value))
+    .filter(Boolean)
+    .sort();
+}
+
+function getGameFeedDedupeKey(post: CommunityPost, game: PadelGameRecord | undefined) {
+  const bookingIds = getGameBookingIds(game);
+  if (bookingIds.length > 0) {
+    return `booking:${bookingIds.join("|")}`;
+  }
+
+  const booking = game?.booking;
+  const slotKey = [
+    booking?.studioId,
+    booking?.roomId,
+    booking?.date,
+    booking?.timeFrom,
+    booking?.timeTo,
+  ]
+    .map((value) => toTrimmedString(value))
+    .join("|");
+
+  if (slotKey.replace(/\|/g, "")) {
+    return `slot:${slotKey}`;
+  }
+
+  return post.relatedGameId ? `game:${post.relatedGameId}` : `post:${post.id}`;
+}
+
+function getGamePostDisplayScore(post: CommunityPost, game: PadelGameRecord | undefined) {
+  const confirmedPlayersCount = getConfirmedPlayers(game).length;
+  const waitlistPlayersCount = getWaitlistPlayers(game).length;
+  const hasResult = getMatchResultDisplayState(game) !== "none" ? 1000 : 0;
+  const hasInvite = game?.inviteUrl || game?.invite?.waitlistEnabled ? 100 : 0;
+  return hasResult + hasInvite + (confirmedPlayersCount * 10) + waitlistPlayersCount + (post.createdTs / 1_000_000_000_000_000);
+}
+
+function dedupeGameFeedPosts(posts: CommunityPost[], gameById: Map<string, PadelGameRecord>) {
+  const selectedByKey = new Map<string, { post: CommunityPost; game: PadelGameRecord | undefined; score: number }>();
+  const result: CommunityPost[] = [];
+
+  posts.forEach((post) => {
+    if (post.kind !== "GAME") {
+      result.push(post);
+      return;
+    }
+
+    const game = post.relatedGameId ? gameById.get(post.relatedGameId) : undefined;
+    const dedupeKey = getGameFeedDedupeKey(post, game);
+    const score = getGamePostDisplayScore(post, game);
+    const current = selectedByKey.get(dedupeKey);
+
+    if (!current || score > current.score) {
+      selectedByKey.set(dedupeKey, { post, game, score });
+    }
+  });
+
+  const selectedGamePostIds = new Set(
+    Array.from(selectedByKey.values()).map((entry) => entry.post.id),
+  );
+
+  posts.forEach((post) => {
+    if (post.kind === "GAME" && !selectedGamePostIds.has(post.id)) {
+      return;
+    }
+    if (post.kind === "GAME") {
+      result.push(post);
+    }
+  });
+
+  return result;
+}
+
 function buildOrganizerUser(post: CommunityPost, game: PadelGameRecord | undefined): User | null {
   if (game?.organizer?.name) {
     return fallbackUser(
       game.organizer.name,
       game.organizer.id || normalizePhone(game.organizer.phone) || `organizer:${post.id}`,
-      game.organizer.photo,
+      resolveTrustedOrganizerAvatar(game),
     );
   }
 
@@ -727,71 +925,156 @@ function pickTournamentGenderLabel(text: string) {
 }
 
 function buildTournament(post: CommunityPost): Tournament {
+  const details = post.details ?? {};
+  const publicTournament =
+    pickRecord(details, ["publicTournament", "tournament", "customTournament"]) ?? {};
+  const skin = pickRecord(publicTournament, ["skin"]) ?? pickRecord(details, ["skin", "tournamentSkin"]) ?? {};
   const searchableText = [post.previewLabel, post.body, post.title].filter(Boolean).join(" • ");
   const parsedProgress = pickParticipantsProgress(searchableText);
   const pairCount = pickTournamentPairCount(searchableText);
-  const maxParticipants = parsedProgress?.maxParticipants ?? (pairCount ? pairCount * 2 : 16);
-  const participants = parsedProgress?.participants ?? 0;
+  const maxParticipants =
+    pickNumberValue(publicTournament, ["maxPlayers"], null) ??
+    pickNumberValue(details, ["maxPlayers"], null) ??
+    parsedProgress?.maxParticipants ??
+    (pairCount ? pairCount * 2 : 16);
+  const participants =
+    pickNumberValue(publicTournament, ["participantsCount"], null) ??
+    pickNumberValue(details, ["participantsCount"], null) ??
+    parsedProgress?.participants ??
+    0;
+  const waitlistCount =
+    pickNumberValue(publicTournament, ["waitlistCount"], null) ??
+    pickNumberValue(details, ["waitlistCount"], 0) ??
+    0;
   const level = pickTournamentLevel(searchableText);
-  const startTime = pickTime(searchableText) ?? (() => {
+  const startsAt =
+    pickStringValue(publicTournament, ["startsAt", "startAt"]) ||
+    pickStringValue(details, ["startsAt", "startAt"]) ||
+    "";
+  const endsAt =
+    pickStringValue(publicTournament, ["endsAt", "endAt"]) ||
+    pickStringValue(details, ["endsAt", "endAt"]) ||
+    "";
+  const startTime = formatIsoTime(startsAt) || (pickTime(searchableText) ?? (() => {
     const parsed = Date.parse(post.publishedAt);
     if (!Number.isFinite(parsed)) return "10:00";
     return new Date(parsed).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
-  })();
-  const eventDate = pickTournamentEventDate(searchableText, toIsoDate(post.publishedAt), startTime);
-  const stationLabel = pickTournamentStation(post.previewLabel, searchableText) || "Станция уточняется";
-  const tournamentTypeLabel = pickTournamentType(searchableText) || "Турнир";
-  const ratingLabel = pickTournamentRatingLabel(searchableText, level);
-  const genderLabel = pickTournamentGenderLabel(searchableText) || "Любой пол";
+  })());
+  const eventDate = startsAt || pickTournamentEventDate(searchableText, toIsoDate(post.publishedAt), startTime);
+  const stationLabel =
+    pickStringValue(publicTournament, ["studioName", "stationName", "clubName"]) ||
+    pickStringValue(details, ["studioName", "stationName", "clubName"]) ||
+    pickTournamentStation(post.previewLabel, searchableText) ||
+    "Станция уточняется";
+  const tournamentTypeLabel =
+    pickStringValue(publicTournament, ["tournamentType"]) ||
+    pickStringValue(details, ["tournamentType"]) ||
+    pickTournamentType(searchableText) ||
+    "Турнир";
+  const ratingLabel =
+    pickStringValue(details, ["levelLabel"]) ||
+    formatAccessLevelRange(publicTournament.accessLevels || details.accessLevels) ||
+    pickTournamentRatingLabel(searchableText, level);
+  const genderLabel =
+    normalizeTournamentGenderLabel(
+      pickStringValue(publicTournament, ["gender"]) ||
+      pickStringValue(details, ["gender"]),
+    ) ||
+    pickTournamentGenderLabel(searchableText) ||
+    "М/Ж";
   const slotsLabel = `${participants}/${maxParticipants} мест`;
+  const trainerName =
+    pickStringValue(publicTournament, ["trainerName"]) ||
+    pickStringValue(details, ["trainerName"]) ||
+    post.authorName ||
+    "PadelHub";
+  const trainerAvatarUrl =
+    pickStringValue(publicTournament, ["trainerAvatarUrl"]) ||
+    pickStringValue(details, ["trainerAvatarUrl"]) ||
+    pickStringValue(skin, ["imageUrl"]) ||
+    post.authorAvatar ||
+    post.imageUrl ||
+    "";
+  const title =
+    pickStringValue(skin, ["title"]) ||
+    pickStringValue(publicTournament, ["name", "title"]) ||
+    post.title;
+  const ctaLabel =
+    pickStringValue(skin, ["ctaLabel"]) ||
+    post.ctaLabel?.trim() ||
+    "Записаться";
+  const publicUrl =
+    pickStringValue(publicTournament, ["publicUrl", "joinUrl"]) ||
+    pickStringValue(details, ["publicUrl", "joinUrl"]) ||
+    "";
+  const endTime = formatIsoTime(endsAt);
+  const duration = formatTournamentDuration(startsAt, endsAt);
+  const spotsLeft = maxParticipants > 0 ? Math.max(0, maxParticipants - participants) : null;
 
   return {
     id: post.relatedTournamentId || post.id,
     badgeLabel: formatTournamentBadgeLabel(eventDate),
-    title: post.title,
+    title,
     subtitle: stationLabel,
     metaText: [tournamentTypeLabel, `Старт ${startTime}`, slotsLabel].join(" • "),
     progress: maxParticipants > 0 ? participants / maxParticipants : 0,
-    imageUrl: post.imageUrl ?? "",
+    imageUrl: trainerAvatarUrl || post.imageUrl || "",
     date: eventDate,
     level,
     participants,
     maxParticipants,
     startTime,
+    endTime,
+    duration,
     media: post.imageUrl ?? undefined,
     stationLabel,
     tournamentTypeLabel,
     ratingLabel: ratingLabel ?? undefined,
     genderLabel,
     slotsLabel,
-    ctaLabel: post.ctaLabel?.trim() || undefined,
-    isJoined: Boolean(post.ctaLabel && /откры/i.test(post.ctaLabel)),
+    ctaLabel,
+    trainerName,
+    trainerAvatarUrl: trainerAvatarUrl || undefined,
+    profileHandle: stationLabel,
+    publicUrl: publicUrl || undefined,
+    waitlistCount,
+    spotsLeft,
+    isJoined: Boolean(ctaLabel && /откры/i.test(ctaLabel)),
     isFull: maxParticipants > 0 && participants >= maxParticipants,
   };
 }
 
 function buildNewsPreviewText(value: string) {
-  const normalizedPreview = value
+  return value
     .replace(/\r\n?/g, "\n")
     .split("\n")
     .map((line) => line.replace(/[^\S\n]+/g, " ").trim())
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-
-  const previewLimit = 128;
-  if (normalizedPreview.length <= previewLimit) {
-    return normalizedPreview;
-  }
-
-  const previewSlice = normalizedPreview.slice(0, previewLimit);
-  const breakIndex = Math.max(previewSlice.lastIndexOf("\n"), previewSlice.lastIndexOf(" "));
-  const endIndex = breakIndex >= 88 ? breakIndex : previewLimit;
-
-  return `${previewSlice.slice(0, endIndex).trimEnd()}…`;
 }
 
-function buildNews(post: CommunityPost, communityName: string): News {
+function isCurrentUserAuthorOfPost(
+  post: CommunityPost,
+  currentUserId: string | null | undefined,
+  currentUserPhone: string | null | undefined,
+) {
+  const normalizedCurrentUserId = (currentUserId || "").trim() || null;
+  const normalizedCurrentUserPhone = normalizePhone(currentUserPhone);
+  const postAuthorId = (post.memberPreview?.id || post.authorId || "").trim() || null;
+  const postAuthorPhone = normalizePhone(post.memberPreview?.phone || post.authorPhone);
+
+  return Boolean(
+    (normalizedCurrentUserId && postAuthorId && normalizedCurrentUserId === postAuthorId)
+    || (normalizedCurrentUserPhone && postAuthorPhone && normalizedCurrentUserPhone === postAuthorPhone),
+  );
+}
+
+function buildNews(
+  post: CommunityPost,
+  communityName: string,
+  currentUser: BuildFeedEntriesParams["currentUser"],
+): News {
   const fullText = (post.body || "Обновление сообщества").trim();
   const plainText = stripNewsTextMarkup(fullText);
   const fallbackLikes = Math.max(4, Math.min(18, Math.round((post.body || post.title).length / 12)));
@@ -805,6 +1088,7 @@ function buildNews(post: CommunityPost, communityName: string): News {
   return {
     id: post.id,
     badgeLabel: formatNewsBadgeLabel(post.publishedAt),
+    publishedAt: post.publishedAt,
     title: post.title,
     text: fullText,
     previewText,
@@ -822,7 +1106,10 @@ function buildNews(post: CommunityPost, communityName: string): News {
     imageUrl: post.imageUrl ?? "",
     author:
       toUserFromPreview(post.memberPreview)
-      ?? (post.authorName ? fallbackUser(post.authorName, `author:${post.id}`) : fallbackUser(communityName, `community:${post.communityId}`)),
+      ?? (post.authorName
+        ? fallbackUser(post.authorName, `author:${post.id}`, post.authorAvatar)
+        : fallbackUser(communityName, `community:${post.communityId}`, post.authorAvatar)),
+    canEdit: isCurrentUserAuthorOfPost(post, currentUser.id, currentUser.phone),
   };
 }
 
@@ -912,8 +1199,9 @@ export function buildFeedEntries({
   );
 
   const entries: FeedEntry[] = [];
+  const visiblePosts = dedupeGameFeedPosts(posts, gameById);
 
-  posts.forEach((post) => {
+  visiblePosts.forEach((post) => {
     if (!isVisibleCommunityPostKind(post.kind)) {
       return;
     }
@@ -970,6 +1258,7 @@ export function buildFeedEntries({
           type: "game",
           data: {
             id: post.relatedGameId || post.id,
+            isRatingGame: game?.settings?.ratingGame ?? null,
             dateMonth: formatDateMonthLabel(buildGameDateTime(post, game)),
             dateDay: formatDateDayLabel(buildGameDateTime(post, game)),
             dateWeekday: formatWeekdayLabel(buildGameDateTime(post, game)),
@@ -1032,7 +1321,7 @@ export function buildFeedEntries({
         id: `news:${post.id}`,
         item: {
           type: "news",
-          data: buildNews(post, community.name),
+          data: buildNews(post, community.name, currentUser),
         },
         publishedAt: post.publishedAt,
       });

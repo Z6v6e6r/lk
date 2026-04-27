@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  apiCreatePadelSplitParticipantPayment,
   apiFetchPadelGameRecord,
   apiFetchProfile,
   apiUpdatePadelGameRecord,
@@ -13,7 +14,8 @@ import {
   getLetterGrade,
   parseNumericLevel,
 } from "../../utils/customFields";
-import { CABINET_URL } from "../../consts/api_config";
+import { CABINET_URL, IS_DEV_RELEASE_CHANNEL } from "../../consts/api_config";
+import { PAYMENT_REF_QUERY_KEY } from "../../utils/paymentSync";
 
 type JoinDecision = "JOINED" | "WAITLIST" | "DECLINED" | "NONE";
 
@@ -25,6 +27,7 @@ interface GameJoinPageProps {
 const DEFAULT_CABINET_URL = CABINET_URL;
 const DEFAULT_MAX_PLAYERS = 4;
 const OPEN_GAME_QUERY_KEY = "openGameId";
+const SPLIT_JOIN_QUERY_KEY = "splitJoin";
 
 function normalizePhone(value: string | null | undefined): string | null {
   const digits = String(value || "").replace(/\D/g, "");
@@ -47,6 +50,10 @@ function toDateLabel(dateValue: string | null | undefined): string {
     day: "2-digit",
     month: "long",
   });
+}
+
+function formatPrice(value: number): string {
+  return value.toLocaleString("ru-RU");
 }
 
 function dedupePlayers(players: PadelGamePlayer[]): PadelGamePlayer[] {
@@ -138,6 +145,94 @@ function resolveWaitlistEnabled(game: PadelGameRecord): boolean {
   return true;
 }
 
+function resolveSplitPaymentMetadata(game: PadelGameRecord | null): Record<string, unknown> | null {
+  if (!game || !isRecord(game.metadata)) return null;
+  const splitPayment = game.metadata.splitPayment;
+  return isRecord(splitPayment) ? splitPayment : null;
+}
+
+function isSplitPaymentGame(game: PadelGameRecord | null): boolean {
+  if (!IS_DEV_RELEASE_CHANNEL || !game) return false;
+  if (game.settings?.payMode === "split") return true;
+  const splitPayment = resolveSplitPaymentMetadata(game);
+  return Boolean(splitPayment?.enabled);
+}
+
+function getSplitShareAmount(game: PadelGameRecord | null): number | null {
+  const splitPayment = resolveSplitPaymentMetadata(game);
+  const value = splitPayment?.shareAmount;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(",", "."));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function getSplitShareCount(game: PadelGameRecord | null): number | null {
+  const splitPayment = resolveSplitPaymentMetadata(game);
+  const value = splitPayment?.shareCount;
+  if (typeof value === "number" && Number.isFinite(value)) return Math.floor(value);
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return Math.floor(parsed);
+  }
+  return null;
+}
+
+function findMySplitPayment(game: PadelGameRecord, profile: UserProfileType): Record<string, unknown> | null {
+  const splitPayment = resolveSplitPaymentMetadata(game);
+  const payments = Array.isArray(splitPayment?.payments) ? splitPayment.payments : [];
+  const myPhone = normalizePhone(profile.phone);
+  const myId = profile.id ?? null;
+
+  for (const item of payments) {
+    if (!isRecord(item)) continue;
+    const itemPhone = normalizePhone(
+      typeof item.phoneNorm === "string"
+        ? item.phoneNorm
+        : (typeof item.phone === "string" ? item.phone : null),
+    );
+    const itemId = typeof item.clientId === "string" ? item.clientId : null;
+    if (myPhone && itemPhone === myPhone) return item;
+    if (myId && itemId === myId) return item;
+  }
+
+  return null;
+}
+
+function buildCurrentJoinUrl(extraParams: Record<string, string>): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const url = new URL(window.location.href);
+    Object.entries(extraParams).forEach(([key, value]) => {
+      url.searchParams.set(key, value);
+    });
+    return url.toString();
+  } catch {
+    return window.location.href || null;
+  }
+}
+
+function generatePaymentRef(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function cleanSplitJoinQuery(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete(PAYMENT_REF_QUERY_KEY);
+    url.searchParams.delete(SPLIT_JOIN_QUERY_KEY);
+    window.history.replaceState(window.history.state, "", url.toString());
+  } catch {
+    // ignore history cleanup failures
+  }
+}
+
 function mergeRecord(base: PadelGameRecord, incoming: PadelGameRecord): PadelGameRecord {
   return {
     ...base,
@@ -188,6 +283,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const [error, setError] = useState<string | null>(null);
   const [decisionError, setDecisionError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<"join" | "decline" | null>(null);
+  const [confirmingSplitPaymentRef, setConfirmingSplitPaymentRef] = useState<string | null>(null);
   const [comment, setComment] = useState("");
 
   const loadData = useCallback(async () => {
@@ -229,13 +325,126 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       case "JOINED":
         return "Вы в составе игры";
       case "WAITLIST":
-        return "Вы в листе ожидания";
+        return isSplitPaymentGame(game) ? "Ожидается оплата участия" : "Вы в листе ожидания";
       case "DECLINED":
         return "Вы отказались от игры";
       default:
         return "Вы пока не присоединились";
     }
-  }, [myDecision]);
+  }, [game, myDecision]);
+
+  const confirmSplitJoinPayment = useCallback(
+    async (paymentRef: string) => {
+      if (!game || !profile || !isSplitPaymentGame(game)) return;
+
+      const myPhoneNorm = normalizePhone(profile.phone);
+      if (!myPhoneNorm) {
+        setDecisionError("В профиле отсутствует номер телефона");
+        return;
+      }
+
+      setConfirmingSplitPaymentRef(paymentRef);
+      setDecisionError(null);
+
+      const freshRecordResult = await apiFetchPadelGameRecord(game.id);
+      const actualGame = freshRecordResult.data ?? game;
+      const myPlayer = buildMyPlayer(profile);
+      let participants = dedupePlayers(actualGame.participants ?? []);
+      let waitlist = dedupePlayers(actualGame.waitlist ?? []);
+      const maxPlayers = resolveMaxPlayers(actualGame);
+
+      participants = removePlayer(participants, myPhoneNorm, profile.id ?? null);
+      waitlist = removePlayer(waitlist, myPhoneNorm, profile.id ?? null);
+
+      if (participants.length < maxPlayers) {
+        participants.push({
+          ...myPlayer,
+          source: "INVITE_LINK",
+          status: "CONFIRMED",
+        });
+      } else {
+        waitlist.push({
+          ...myPlayer,
+          source: "INVITE_LINK",
+          status: "WAITLIST",
+        });
+      }
+
+      const nowIso = new Date().toISOString();
+      const metadata: Record<string, unknown> = isRecord(actualGame.metadata)
+        ? { ...actualGame.metadata }
+        : {};
+      const splitPaymentMeta = resolveSplitPaymentMetadata(actualGame) ?? {};
+      const currentPayments = Array.isArray(splitPaymentMeta.payments)
+        ? splitPaymentMeta.payments.filter((item) => isRecord(item))
+        : [];
+      metadata.splitPayment = {
+        ...splitPaymentMeta,
+        enabled: true,
+        status: "ACTIVE",
+        payments: currentPayments.map((item) => {
+          const itemRef = typeof item.paymentRef === "string" ? item.paymentRef.trim() : "";
+          const itemPhone = normalizePhone(
+            typeof item.phoneNorm === "string"
+              ? item.phoneNorm
+              : (typeof item.phone === "string" ? item.phone : null),
+          );
+          if (itemRef !== paymentRef && itemPhone !== myPhoneNorm) return item;
+          return {
+            ...item,
+            status: "PAID",
+            paidAt: nowIso,
+          };
+        }),
+      };
+
+      const joinResponses = isRecord(metadata.joinResponses)
+        ? { ...metadata.joinResponses as Record<string, unknown> }
+        : {};
+      joinResponses[myPhoneNorm] = {
+        status: "JOINED",
+        updatedAt: nowIso,
+        playerName: myPlayer.name,
+        playerId: myPlayer.id ?? null,
+        paymentRef,
+      };
+      metadata.joinResponses = joinResponses;
+      metadata.lastJoinUpdateAt = nowIso;
+
+      const updateResult = await apiUpdatePadelGameRecord(actualGame.id, {
+        participants,
+        waitlist,
+        metadata,
+      });
+
+      if (updateResult.error) {
+        setConfirmingSplitPaymentRef(null);
+        setDecisionError(updateResult.error.message || "Не удалось подтвердить оплату участия");
+        return;
+      }
+
+      cleanSplitJoinQuery();
+      setConfirmingSplitPaymentRef(null);
+      window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
+    },
+    [cabinetUrl, game, profile],
+  );
+
+  useEffect(() => {
+    if (!game || !profile || confirmingSplitPaymentRef) return;
+    if (typeof window === "undefined") return;
+
+    try {
+      const url = new URL(window.location.href);
+      const splitJoin = url.searchParams.get(SPLIT_JOIN_QUERY_KEY);
+      const paymentRef = url.searchParams.get(PAYMENT_REF_QUERY_KEY)?.trim() || "";
+      if (splitJoin === "paid" && paymentRef) {
+        void confirmSplitJoinPayment(paymentRef);
+      }
+    } catch {
+      // ignore malformed callback URL
+    }
+  }, [confirmSplitJoinPayment, confirmingSplitPaymentRef, game, profile]);
 
   const applyDecision = useCallback(
     async (target: "join" | "decline") => {
@@ -266,6 +475,182 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       const maxPlayers = resolveMaxPlayers(actualGame);
       const waitlistEnabled = resolveWaitlistEnabled(actualGame);
       let appliedStatus: JoinDecision = "NONE";
+
+      if (target === "join" && isSplitPaymentGame(actualGame)) {
+        const existingPayment = findMySplitPayment(actualGame, profile);
+        const existingPaymentStatus = String(existingPayment?.status || "").trim().toUpperCase();
+        const existingPaymentUrl =
+          typeof existingPayment?.paymentUrl === "string" ? existingPayment.paymentUrl.trim() : "";
+
+        if (existingPaymentStatus === "PAYMENT_PENDING" && existingPaymentUrl) {
+          setSubmitting(null);
+          window.location.href = existingPaymentUrl;
+          return;
+        }
+
+        const booking = actualGame.booking;
+        const shareCountRaw = getSplitShareCount(actualGame);
+        const shareCount = shareCountRaw === 2 ? 2 : 4;
+        const shareAmount = getSplitShareAmount(actualGame) ?? (shareCount === 2 ? 500 : 250);
+        const paymentRef = generatePaymentRef();
+        const successUrl = buildCurrentJoinUrl({
+          [PAYMENT_REF_QUERY_KEY]: paymentRef,
+          [SPLIT_JOIN_QUERY_KEY]: "paid",
+        });
+        const splitPaymentMeta = resolveSplitPaymentMetadata(actualGame) ?? {};
+        const currentPayments = Array.isArray(splitPaymentMeta.payments)
+          ? splitPaymentMeta.payments.filter((item) => isRecord(item))
+          : [];
+        const usedSpots = new Set<number>(
+          currentPayments
+            .map((item) => (typeof item.spot === "number" && Number.isFinite(item.spot) ? Math.floor(item.spot) : null))
+            .filter((item): item is number => item !== null && item > 0),
+        );
+        let nextSpot: number | null = null;
+        for (let candidate = 1; candidate <= Math.max(maxPlayers, shareCount); candidate += 1) {
+          if (!usedSpots.has(candidate)) {
+            nextSpot = candidate;
+            break;
+          }
+        }
+
+        if (!booking?.date || !booking.timeFrom || !booking.timeTo || !booking.studioId || !booking.roomId) {
+          setSubmitting(null);
+          setDecisionError("В игре нет данных для оплаты участия");
+          return;
+        }
+
+        const paymentResult = await apiCreatePadelSplitParticipantPayment(actualGame.id, {
+          date: booking.date,
+          fromTime: booking.timeFrom,
+          toTime: booking.timeTo,
+          studioId: booking.studioId,
+          roomId: booking.roomId,
+          clientId: profile.id ?? null,
+          clientPhone: profile.phone ?? null,
+          paymentRef,
+          baseRedirectUrl: successUrl,
+          successUrl,
+          failUrl: successUrl,
+          shareCount,
+          shareAmount,
+          maxClientsCount: Math.max(maxPlayers, shareCount),
+          spot: nextSpot,
+        });
+
+        if (paymentResult.error || !paymentResult.data) {
+          setSubmitting(null);
+          setDecisionError(paymentResult.error?.message || "Не удалось создать оплату участия");
+          return;
+        }
+
+        const isPaidWithoutRedirect = !paymentResult.data.paymentUrl && paymentResult.data.toPay <= 0;
+        if (!paymentResult.data.paymentUrl && !isPaidWithoutRedirect) {
+          setSubmitting(null);
+          setDecisionError("Не удалось получить ссылку на оплату участия");
+          return;
+        }
+
+        const nowIso = new Date().toISOString();
+        const paymentStatus = isPaidWithoutRedirect ? "PAID" : "PAYMENT_PENDING";
+        if (isPaidWithoutRedirect && participants.length < maxPlayers) {
+          participants.push({
+            ...myPlayer,
+            source: "INVITE_LINK",
+            status: "CONFIRMED",
+          });
+          appliedStatus = "JOINED";
+        } else {
+          waitlist.push({
+            ...myPlayer,
+            source: "INVITE_LINK",
+            status: "PENDING",
+          });
+          appliedStatus = "WAITLIST";
+        }
+
+        const metadata: Record<string, unknown> = isRecord(actualGame.metadata)
+          ? { ...actualGame.metadata }
+          : {};
+        const joinResponses = isRecord(metadata.joinResponses)
+          ? { ...metadata.joinResponses as Record<string, unknown> }
+          : {};
+        joinResponses[myPhoneNorm] = {
+          status: paymentStatus,
+          comment: comment.trim() || null,
+          updatedAt: nowIso,
+          playerName: myPlayer.name,
+          playerId: myPlayer.id ?? null,
+          paymentRef,
+        };
+        metadata.joinResponses = joinResponses;
+        metadata.lastJoinUpdateAt = nowIso;
+        metadata.splitPayment = {
+          ...splitPaymentMeta,
+          enabled: true,
+          status: "ACTIVE",
+          shareCount,
+          shareAmount,
+          bookingIds: [
+            ...new Set([
+              ...(Array.isArray(splitPaymentMeta.bookingIds) ? splitPaymentMeta.bookingIds : []),
+              paymentResult.data.bookingId,
+            ].filter(Boolean)),
+          ],
+          payments: [
+            ...currentPayments.filter((item) => {
+              const itemPhone = normalizePhone(
+                typeof item.phoneNorm === "string"
+                  ? item.phoneNorm
+                  : (typeof item.phone === "string" ? item.phone : null),
+              );
+              const itemId = typeof item.clientId === "string" ? item.clientId : null;
+              if (myPhoneNorm && itemPhone === myPhoneNorm) return false;
+              if (profile.id && itemId === profile.id) return false;
+              return true;
+            }),
+            {
+              role: "PARTICIPANT",
+              status: paymentStatus,
+              paymentRef,
+              clientId: profile.id ?? null,
+              phone: profile.phone ?? null,
+              phoneNorm: myPhoneNorm,
+              bookingId: paymentResult.data.bookingId,
+              productId: paymentResult.data.productId,
+              transactionId: paymentResult.data.transactionId,
+              paymentUrl: paymentResult.data.paymentUrl,
+              amount: paymentResult.data.toPay,
+              amountMinor: paymentResult.data.toPayMinor,
+              spot: paymentResult.data.spot ?? nextSpot,
+              createdAt: nowIso,
+              paidAt: isPaidWithoutRedirect ? nowIso : null,
+            },
+          ],
+        };
+
+        const updateResult = await apiUpdatePadelGameRecord(actualGame.id, {
+          participants,
+          waitlist,
+          metadata,
+        });
+
+        if (updateResult.error) {
+          setSubmitting(null);
+          setDecisionError(updateResult.error.message || "Не удалось сохранить оплату участия");
+          return;
+        }
+
+        if (isPaidWithoutRedirect) {
+          setSubmitting(null);
+          window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
+          return;
+        }
+
+        setSubmitting(null);
+        window.location.href = paymentResult.data.paymentUrl || buildCabinetGameUrl(cabinetUrl, actualGame.id);
+        return;
+      }
 
       if (target === "join") {
         if (participants.length < maxPlayers) {
@@ -379,9 +764,17 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const courtLabel = game.booking?.roomName || "Корт";
   const stationLabel = game.booking?.studioName || "Станция";
   const alreadyJoined = myDecision === "JOINED";
+  const splitPaymentGame = isSplitPaymentGame(game);
+  const splitShareAmount = getSplitShareAmount(game);
+  const splitShareCount = getSplitShareCount(game);
   const showJoinedActions = alreadyJoined;
-  const canJoin = submitting === null && !alreadyJoined;
-  const canDecline = submitting === null;
+  const canJoin = submitting === null && !alreadyJoined && !confirmingSplitPaymentRef;
+  const canDecline = submitting === null && !confirmingSplitPaymentRef;
+  const joinButtonLabel = splitPaymentGame
+    ? (submitting === "join"
+        ? "Готовим оплату..."
+        : `Оплатить участие${splitShareAmount != null ? ` · ${formatPrice(splitShareAmount)} ₽` : ""}`)
+    : (submitting === "join" ? "Сохраняем..." : "Присоединиться");
 
   return (
     <div className="app-container game-container game-join-container">
@@ -404,6 +797,15 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
 
       <div className="game-section">
         <div className="game-join-status">{statusLabel}</div>
+        {confirmingSplitPaymentRef && (
+          <div className="game-empty">Подтверждаем оплату участия...</div>
+        )}
+        {splitPaymentGame && splitShareAmount != null && (
+          <div className="game-split-join-summary">
+            <span>{formatPrice(splitShareAmount)} ₽ за участие</span>
+            {splitShareCount != null && <span>{splitShareCount === 2 ? "2 команды" : "4 игрока"}</span>}
+          </div>
+        )}
       </div>
 
       {!showJoinedActions && (
@@ -467,7 +869,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
                   void applyDecision("join");
                 }}
               >
-                {submitting === "join" ? "Сохраняем..." : "Присоединиться"}
+                {joinButtonLabel}
               </button>
             )}
             <button

@@ -1,5 +1,6 @@
+import { AvatarImageOrInitials } from "./AvatarImageOrInitials";
 import { FeedCardWrapper } from "./FeedCardWrapper";
-import { formatFeedDayLabel, formatFeedTimeLabel, formatRelativePublishedLabel, getInitials } from "./feedFormatters";
+import { formatFeedDayLabel, formatFeedTimeLabel, formatRelativePublishedLabel } from "./feedFormatters";
 import type { Game, User } from "./feedTypes";
 
 interface FeedCardGameProps {
@@ -17,11 +18,11 @@ function renderAvatar(user: User, index: number) {
       style={{ zIndex: 10 - index }}
       title={user.name}
     >
-      {user.avatar ? (
-        <img src={user.avatar} alt={user.name} className="community-feed-avatar-stack-image" />
-      ) : (
-        <span>{getInitials(user.name)}</span>
-      )}
+      <AvatarImageOrInitials
+        src={user.avatar}
+        name={user.name}
+        imageClassName="community-feed-avatar-stack-image"
+      />
     </div>
   );
 }
@@ -72,11 +73,11 @@ export function FeedCardGame({ game, author, publishedAt, onOpen }: FeedCardGame
 
         <div className="community-feed-author-row">
           <div className="community-feed-author-avatar">
-            {author?.avatar ? (
-              <img src={author.avatar} alt={author.name} className="community-feed-author-avatar-image" />
-            ) : (
-              <span>{getInitials(author?.name || "Сообщество")}</span>
-            )}
+            <AvatarImageOrInitials
+              src={author?.avatar}
+              name={author?.name || "Сообщество"}
+              imageClassName="community-feed-author-avatar-image"
+            />
           </div>
           <div className="community-feed-author-copy">
             <span className="community-feed-author-name">{author?.name || "Сообщество"}</span>

@@ -8,6 +8,7 @@ export type User = {
 
 export type CommunityGameCard = {
   id: string;
+  isRatingGame?: boolean | null;
   dateMonth: string;
   dateDay: string;
   dateWeekday: string;
@@ -59,6 +60,8 @@ export type CommunityTournamentCard = {
   participants: number;
   maxParticipants: number;
   startTime: string;
+  endTime?: string;
+  duration?: string;
   media?: string;
   stationLabel?: string;
   tournamentTypeLabel?: string;
@@ -66,11 +69,18 @@ export type CommunityTournamentCard = {
   genderLabel?: string;
   slotsLabel?: string;
   ctaLabel?: string;
+  trainerName?: string;
+  trainerAvatarUrl?: string;
+  profileHandle?: string;
+  publicUrl?: string;
+  waitlistCount?: number;
+  spotsLeft?: number | null;
 };
 
 export type CommunityNewsCard = {
   id: string;
   badgeLabel: string;
+  publishedAt: string;
   title: string;
   text: string;
   previewText?: string;
@@ -82,6 +92,7 @@ export type CommunityNewsCard = {
   imageUrl: string;
   media?: string;
   author: User;
+  canEdit?: boolean;
 };
 
 export type NewsReaction = "like" | "dislike" | null;

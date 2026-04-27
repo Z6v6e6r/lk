@@ -84,7 +84,11 @@ export interface CommunityPost {
   ctaLabel: string | null;
   relatedGameId: string | null;
   relatedTournamentId: string | null;
+  details: Record<string, unknown> | null;
+  authorId: string | null;
+  authorPhone: string | null;
   authorName: string | null;
+  authorAvatar: string | null;
   memberPreview: CommunityPostMemberPreview | null;
   likesCount: number;
   dislikesCount: number;
@@ -678,30 +682,47 @@ function normalizeCommunityPost(value: unknown): CommunityPost | null {
   const communityId = pickString(value, ["communityId"]);
   const title = pickString(value, ["title"]);
   const body = pickString(value, ["body", "text", "description"]);
-  if (!id || !communityId || !title || !body) return null;
+  const kind = normalizePostKind(value.kind ?? value.type);
+  if (!id || !communityId || !title || (!body && kind !== "TOURNAMENT")) return null;
 
   const publishedAt = pickString(value, ["publishedAt", "createdAt"]) ?? new Date(0).toISOString();
   const createdTs =
     pickNumber(value, ["createdTs", "publishedTs", "timestamp"]) ??
     Date.parse(publishedAt) ??
     0;
+  const rawDetails = isRecord(value.details) ? value.details : null;
+  const nestedDetails = rawDetails && isRecord(rawDetails.details) ? rawDetails.details : null;
+  const details = rawDetails ? { ...rawDetails, ...(nestedDetails ?? {}) } : null;
 
   return {
     id,
     communityId,
-    kind: normalizePostKind(value.kind ?? value.type),
+    kind,
     title,
-    body,
+    body: body ?? "",
     publishedAt,
     createdTs,
     imageUrl: pickString(value, ["imageUrl", "image", "photo"]),
     previewLabel: pickString(value, ["previewLabel", "preview", "label"]),
     ctaLabel: pickString(value, ["ctaLabel", "buttonLabel", "actionLabel"]),
     relatedGameId: pickString(value, ["relatedGameId", "gameId"]),
-    relatedTournamentId: pickString(value, ["relatedTournamentId", "tournamentId"]),
+    relatedTournamentId:
+      pickString(value, ["relatedTournamentId", "tournamentId"]) ??
+      (details ? pickString(details, ["tournamentId"]) : null),
+    details,
+    authorId:
+      pickString(value, ["authorId"]) ??
+      (isRecord(value.author) ? pickString(value.author, ["id", "clientId", "userId", "uuid"]) : null),
+    authorPhone: normalizePhone(
+      value.authorPhone
+      ?? (isRecord(value.author) ? value.author.phone ?? value.author.phoneNorm ?? value.author.phoneNumber ?? value.author.mobile : null),
+    ),
     authorName:
       pickString(value, ["authorName"]) ??
       (isRecord(value.author) ? pickString(value.author, ["name", "displayName"]) : null),
+    authorAvatar:
+      pickString(value, ["authorAvatar"]) ??
+      (isRecord(value.author) ? pickString(value.author, ["avatar", "photo", "imageUrl"]) : null),
     memberPreview: (() => {
       const memberPreview = isRecord(value.memberPreview) ? value.memberPreview : null;
       if (!memberPreview) return null;
@@ -1615,6 +1636,59 @@ export async function apiCreateCommunityFeedPost(
 
   if (!post) {
     return errorResult<CommunityPost>(response.status, "Не удалось разобрать пост сообщества", null);
+  }
+
+  return {
+    data: post,
+    error: null,
+    status: response.status,
+  };
+}
+
+export async function apiUpdateCommunityFeedPost(
+  communityId: string,
+  postId: string,
+  payload: CreateCommunityFeedPostPayload,
+) {
+  const normalizedCommunityId = communityId.trim();
+  const normalizedPostId = postId.trim();
+  if (!normalizedCommunityId || !normalizedPostId) {
+    return errorResult<CommunityPost>(400, "Не указан communityId или postId", null);
+  }
+
+  const response = await requestCommunityMutation<unknown>(
+    `/lk/communities/${encodeURIComponent(normalizedCommunityId)}/feed/${encodeURIComponent(normalizedPostId)}`,
+    {
+      method: "PATCH",
+      retries: 1,
+      body: JSON.stringify({
+        member: buildMemberPayload(payload.member),
+        kind: payload.kind,
+        title: payload.title.trim(),
+        body: payload.body.trim(),
+        imageUrl: payload.imageUrl?.trim() || null,
+        previewLabel: payload.previewLabel?.trim() || null,
+        ctaLabel: payload.ctaLabel?.trim() || null,
+        relatedGameId: payload.relatedGameId?.trim() || null,
+        relatedTournamentId: payload.relatedTournamentId?.trim() || null,
+      }),
+    },
+  );
+
+  if (response.error) {
+    return errorResult<CommunityPost>(response.status, response.error.message, null);
+  }
+
+  const payloadRecord = isRecord(response.data) ? response.data : {};
+  const nestedData = isRecord(payloadRecord.data) ? payloadRecord.data : null;
+  const post =
+    normalizeCommunityPost(payloadRecord.post) ??
+    (nestedData ? normalizeCommunityPost(nestedData.post) : null) ??
+    (nestedData ? normalizeCommunityPost(nestedData) : null) ??
+    normalizeCommunityPost(response.data);
+
+  if (!post) {
+    return errorResult<CommunityPost>(response.status, "Не удалось разобрать обновленный пост сообщества", null);
   }
 
   return {

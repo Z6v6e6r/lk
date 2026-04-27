@@ -24,6 +24,8 @@ export const PUBLIC_INVITE_ORIGIN = (import.meta.env.VITE_PUBLIC_INVITE_ORIGIN a
 export const PUBLIC_INVITE_PATH = (import.meta.env.VITE_PUBLIC_INVITE_PATH as string | undefined) ?? "/game_join";
 export const PUBLIC_GAME_CREATE_PATH =
   (import.meta.env.VITE_PUBLIC_GAME_CREATE_PATH as string | undefined) ?? "/game_create";
+export const PUBLIC_GAME_FIND_PATH =
+  (import.meta.env.VITE_PUBLIC_GAME_FIND_PATH as string | undefined) ?? "/finde_game";
 export const PUBLIC_COMMUNITY_JOIN_PATH =
   (import.meta.env.VITE_PUBLIC_COMMUNITY_JOIN_PATH as string | undefined) ?? "/community_join";
 export const CABINET_URL = (import.meta.env.VITE_CABINET_URL as string | undefined) ?? "https://padlhub.ru/lk_new";

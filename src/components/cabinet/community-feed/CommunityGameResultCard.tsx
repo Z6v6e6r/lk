@@ -1,5 +1,5 @@
 import { ChatIcon } from "./CommunityIcons";
-import { getInitials } from "./feedFormatters";
+import { AvatarImageOrInitials } from "./AvatarImageOrInitials";
 import styles from "./CommunityGameResultCard.module.css";
 
 type ResultPlayer = {
@@ -64,8 +64,6 @@ export type CommunityGameResultCardProps = {
 };
 
 function renderAvatar(player: ResultPlayer, index: number) {
-  const hasAvatar = Boolean(player.avatarUrl);
-
   return (
     <div
       key={`${player.id}-${index}`}
@@ -74,11 +72,7 @@ function renderAvatar(player: ResultPlayer, index: number) {
       title={player.name}
       aria-label={player.name}
     >
-      {hasAvatar ? (
-        <img src={player.avatarUrl} alt={player.name} className={styles.avatarImage} />
-      ) : (
-        <span>{getInitials(player.name)}</span>
-      )}
+      <AvatarImageOrInitials src={player.avatarUrl} name={player.name} imageClassName={styles.avatarImage} />
     </div>
   );
 }

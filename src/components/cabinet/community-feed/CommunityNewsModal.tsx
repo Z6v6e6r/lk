@@ -4,6 +4,7 @@ import type { KeyboardEvent } from "react";
 import { ChatIcon, ThumbsDownIcon, ThumbsUpIcon } from "./CommunityIcons";
 import { communityPlaceholderImages } from "./communityMedia";
 import type { CommunityNewsCard, NewsComment, NewsReaction } from "./feedTypes";
+import { getInitials } from "./feedFormatters";
 import { renderNewsTextParagraph } from "./newsTextFormatting";
 
 interface CommunityNewsModalProps {
@@ -19,6 +20,7 @@ interface CommunityNewsModalProps {
   onClose: () => void;
   onLike: () => void;
   onDislike: () => void;
+  onEdit?: () => void;
   onSubmitComment: (text: string) => Promise<boolean> | boolean;
 }
 
@@ -46,6 +48,7 @@ export function CommunityNewsModal({
   onClose,
   onLike,
   onDislike,
+  onEdit,
   onSubmitComment,
 }: CommunityNewsModalProps) {
   const [draft, setDraft] = useState("");
@@ -76,6 +79,9 @@ export function CommunityNewsModal({
   }, [comments.length, isOpen]);
 
   if (!news) return null;
+
+  const authorName = (news.author.name || "Сообщество").trim() || "Сообщество";
+  const authorAvatar = news.author.avatarUrl || news.author.avatar || "";
 
   const handleSubmit = async () => {
     const value = draft.trim();
@@ -111,13 +117,37 @@ export function CommunityNewsModal({
         </div>
 
         <div className="community-news-modal-meta">
-          <div className="community-feed-card-badge community-feed-card-badge--news">
-            <span>{news.badgeLabel}</span>
+          <div className="community-news-modal-author-block">
+            <div className="community-news-modal-avatar">
+              {authorAvatar ? (
+                <img
+                  src={authorAvatar}
+                  alt={authorName}
+                  className="community-news-modal-avatar-image"
+                />
+              ) : (
+                <span className="community-news-modal-avatar-fallback">{getInitials(authorName)}</span>
+              )}
+            </div>
+            <div className="community-news-modal-author-meta">
+              <div className="community-feed-card-badge community-feed-card-badge--news">
+                <span>{news.badgeLabel}</span>
+              </div>
+              <div className="community-news-modal-author">
+                <strong>{authorName}</strong>
+                <span>Лента сообщества</span>
+              </div>
+            </div>
           </div>
-          <div className="community-news-modal-author">
-            <strong>{news.author.name}</strong>
-            <span>Лента сообщества</span>
-          </div>
+          {news.canEdit && onEdit ? (
+            <button
+              type="button"
+              className="community-news-modal-edit"
+              onClick={onEdit}
+            >
+              Редактировать
+            </button>
+          ) : null}
         </div>
 
         <div className="community-news-modal-actions">

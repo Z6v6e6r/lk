@@ -1,6 +1,10 @@
 import {
+  useEffect,
+  useId,
   useLayoutEffect,
   useRef,
+  useState,
+  type CSSProperties,
   type FormEventHandler,
   type KeyboardEventHandler,
   type ReactNode,
@@ -53,6 +57,20 @@ type ChatDisplayItem =
       isMine: boolean;
       messages: Array<{ key: string; message: CommunityChatMessage }>;
     };
+
+const COMMUNITY_CHAT_KEYBOARD_THRESHOLD = 120;
+
+function getCommunityChatKeyboardInset() {
+  if (typeof window === "undefined") return 0;
+
+  const visualViewport = window.visualViewport;
+  if (!visualViewport) return 0;
+
+  return Math.max(
+    0,
+    window.innerHeight - (visualViewport.height + visualViewport.offsetTop),
+  );
+}
 
 function normalizeMessageTs(message: CommunityChatMessage) {
   if (Number.isFinite(message.createdTs) && message.createdTs > 0) {
@@ -234,31 +252,54 @@ function CircleMoreIcon() {
 }
 
 function AttachPlusIcon({ className }: { className?: string }) {
+  const clipId = useId().replace(/:/g, "");
+
   return (
-    <svg viewBox="0 0 20 20" className={className} aria-hidden="true">
-      <path d="M8.25 10.75H5.75C5.47386 10.75 5.25 10.5261 5.25 10.25C5.25 9.97386 5.47386 9.75 5.75 9.75H8.25V10.75Z" fill="currentColor" />
-      <path d="M13.75 9.75C14.0261 9.75 14.25 9.97386 14.25 10.25C14.25 10.5261 14.0261 10.75 13.75 10.75H9.25V9.75H13.75Z" fill="currentColor" />
-      <path d="M10.75 14.25C10.75 14.5261 10.5261 14.75 10.25 14.75C9.97386 14.75 9.75 14.5261 9.75 14.25V9.75H10.75V14.25Z" fill="currentColor" />
-      <path d="M10.25 5.75C10.5261 5.75 10.75 5.97386 10.75 6.25V8.75H9.75V6.25C9.75 5.97386 9.97386 5.75 10.25 5.75Z" fill="currentColor" />
+    <svg viewBox="0 0 32 32" className={className} aria-hidden="true" fill="none">
+      <defs>
+        <clipPath id={clipId}>
+          <circle cx="16" cy="16" r="16" />
+        </clipPath>
+      </defs>
+
+      <g clipPath={`url(#${clipId})`}>
+        <foreignObject x="0" y="0" width="32" height="32">
+          <div
+            style={{
+              width: "100%",
+              height: "100%",
+              background:
+                "conic-gradient(from 90deg, rgba(255, 255, 255, 1) 0deg, rgba(241, 241, 241, 1) 86.8865deg, rgba(255, 255, 255, 1) 174.792deg, rgba(241, 241, 241, 1) 271.789deg, rgba(255, 255, 255, 1) 360deg)",
+            }}
+          />
+        </foreignObject>
+      </g>
+
+      <circle cx="16" cy="16" r="15.5" fill="#FAFAFA" />
+      <path d="M14 16.6666H10.6667C10.2985 16.6666 10 16.3681 10 15.9999C10 15.6317 10.2985 15.3333 10.6667 15.3333H14V16.6666Z" fill="#353436" />
+      <path d="M21.3333 15.3333C21.7015 15.3333 22 15.6317 22 15.9999C22 16.3681 21.7015 16.6666 21.3333 16.6666H15.3333V15.3333H21.3333Z" fill="#353436" />
+      <path d="M16.6678 21.3333C16.6678 21.7015 16.3693 22 16.0011 22C15.6329 22 15.3345 21.7015 15.3345 21.3333V15.3333H16.6678V21.3333Z" fill="#353436" />
+      <path d="M16.0011 10C16.3693 10 16.6678 10.2985 16.6678 10.6667V14H15.3345V10.6667C15.3345 10.2985 15.6329 10 16.0011 10Z" fill="#353436" />
     </svg>
   );
 }
 
 function SendIcon() {
   return (
-    <svg viewBox="0 0 20 20" className="community-chat-figma-send-icon" aria-hidden="true">
+    <svg viewBox="0 0 32 32" className="community-chat-figma-send-icon" aria-hidden="true" fill="none">
+      <circle cx="16" cy="16" r="16" fill="#8766EB" />
       <path
-        d="M10 3.5v8.25"
+        d="M16 24V8"
         fill="none"
-        stroke="currentColor"
+        stroke="#FAFAFA"
         strokeWidth="1.5"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
       <path
-        d="m6.75 7.5 3.25-4 3.25 4"
+        d="M12 12L16 8L20 12"
         fill="none"
-        stroke="currentColor"
+        stroke="#FAFAFA"
         strokeWidth="1.5"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -534,6 +575,7 @@ function ChatComposer({
   isSending,
   onDraftChange,
   onSubmit,
+  onFocusChange,
   joinActionLabel,
   isJoinActionLoading,
   onJoinAction,
@@ -544,6 +586,7 @@ function ChatComposer({
   isSending: boolean;
   onDraftChange: (value: string) => void;
   onSubmit: FormEventHandler<HTMLFormElement>;
+  onFocusChange?: (isFocused: boolean) => void;
   joinActionLabel?: string | null;
   isJoinActionLoading: boolean;
   onJoinAction?: (() => void) | null;
@@ -617,6 +660,8 @@ function ChatComposer({
             className="community-chat-figma-input"
             value={draft}
             onChange={(event) => onDraftChange(event.target.value)}
+            onFocus={() => onFocusChange?.(true)}
+            onBlur={() => onFocusChange?.(false)}
             onKeyDown={handleInputKeyDown}
             placeholder="Введите сообщение"
             disabled={!canSend || isSending}
@@ -688,8 +733,44 @@ export function CommunityChatScreen({
   isJoinActionLoading = false,
   onJoinAction,
 }: CommunityChatScreenProps) {
+  const [keyboardInset, setKeyboardInset] = useState(0);
+  const [isComposerFocused, setIsComposerFocused] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const visualViewport = window.visualViewport;
+
+    const updateKeyboardInset = () => {
+      const nextInset = getCommunityChatKeyboardInset();
+      setKeyboardInset(nextInset >= COMMUNITY_CHAT_KEYBOARD_THRESHOLD ? nextInset : 0);
+    };
+
+    updateKeyboardInset();
+
+    visualViewport?.addEventListener("resize", updateKeyboardInset);
+    visualViewport?.addEventListener("scroll", updateKeyboardInset);
+    window.addEventListener("resize", updateKeyboardInset);
+    window.addEventListener("orientationchange", updateKeyboardInset);
+
+    return () => {
+      visualViewport?.removeEventListener("resize", updateKeyboardInset);
+      visualViewport?.removeEventListener("scroll", updateKeyboardInset);
+      window.removeEventListener("resize", updateKeyboardInset);
+      window.removeEventListener("orientationchange", updateKeyboardInset);
+    };
+  }, []);
+
+  const isKeyboardOpen = keyboardInset > 0 || isComposerFocused;
+  const chatScreenStyle = {
+    "--community-chat-keyboard-offset": `${keyboardInset}px`,
+  } as CSSProperties;
+
   return (
-    <div className="community-feed-screen community-chat-screen community-chat-figma-screen">
+    <div
+      className={`community-feed-screen community-chat-screen community-chat-figma-screen${isKeyboardOpen ? " community-chat-figma-screen--keyboard-open" : ""}`}
+      style={chatScreenStyle}
+    >
       <div className="community-feed-screen-glow" aria-hidden="true" />
 
       <ChatHeader
@@ -719,6 +800,7 @@ export function CommunityChatScreen({
         isSending={isSending}
         onDraftChange={onDraftChange}
         onSubmit={onSubmit}
+        onFocusChange={setIsComposerFocused}
         joinActionLabel={joinActionLabel}
         isJoinActionLoading={isJoinActionLoading}
         onJoinAction={onJoinAction}

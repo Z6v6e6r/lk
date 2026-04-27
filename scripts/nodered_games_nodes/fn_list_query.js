@@ -33,8 +33,12 @@ const q = msg.req?.query || {};
 const phone = normPhone(q.phone || q.phoneNumber || q.userPhone || q.mobile);
 const paymentRef = toStr(q.paymentRef || q.phPaymentRef);
 const bookingIds = uniq(parseBookingIds(q.bookingIds));
+const publicMode = ["true", "1", "yes", "available", "find"]
+  .includes(String(q.public || q.available || q.find || "").trim().toLowerCase());
+const stationId = toStr(q.stationId || q.studioId);
+const stationName = toStr(q.stationName || q.studioName || q.station || q.studio);
 
-if (!phone && !paymentRef && bookingIds.length === 0) {
+if (!publicMode && !phone && !paymentRef && bookingIds.length === 0) {
   msg.statusCode = 400;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };
   msg.payload = { error: "phone or paymentRef or bookingIds is required" };
@@ -44,6 +48,8 @@ if (!phone && !paymentRef && bookingIds.length === 0) {
 const includePast = String(q.includePast || "").toLowerCase() === "true";
 const limitRaw = Number(q.limit);
 const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(1000, Math.floor(limitRaw))) : null;
+const offsetRaw = Number(q.offset || q.skip || q.from);
+const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.floor(offsetRaw)) : 0;
 const nowTs = Date.now();
 
 const orConditions = [];
@@ -75,35 +81,58 @@ if (bookingIds.length > 0) {
 
 const mongoQuery = {
   archived: { $ne: true },
-  $or: orConditions,
 };
 
+if (orConditions.length > 0) {
+  mongoQuery.$or = orConditions;
+}
+
+const andConditions = [];
+
 if (!includePast) {
-  mongoQuery.$and = [
-    {
-      $or: [
-        { "booking.endTs": { $gte: nowTs } },
-        {
-          $and: [
-            { "booking.endTs": { $exists: false } },
-            { "booking.startTs": { $gte: nowTs } },
-          ],
-        },
-        {
-          $and: [
-            { "booking.endTs": { $exists: false } },
-            { "booking.startTs": { $exists: false } },
-          ],
-        },
-      ],
-    },
-  ];
+  andConditions.push({
+    $or: [
+      { "booking.endTs": { $gte: nowTs } },
+      {
+        $and: [
+          { "booking.endTs": { $exists: false } },
+          { "booking.startTs": { $gte: nowTs } },
+        ],
+      },
+      {
+        $and: [
+          { "booking.endTs": { $exists: false } },
+          { "booking.startTs": { $exists: false } },
+        ],
+      },
+    ],
+  });
+}
+
+if (publicMode) {
+  andConditions.push({
+    $or: [
+      { "settings.isPrivate": { $exists: false } },
+      { "settings.isPrivate": { $ne: true } },
+    ],
+  });
+  if (stationId) {
+    andConditions.push({ "booking.studioId": stationId });
+  }
+}
+
+if (andConditions.length > 0) {
+  mongoQuery.$and = andConditions;
 }
 
 msg._lkPhone = phone || null;
 msg._lkIncludePast = includePast;
 msg._lkLimit = limit;
+msg._lkOffset = offset;
 msg._lkPaymentRef = paymentRef || null;
 msg._lkBookingIds = bookingIds;
+msg._lkPublicMode = publicMode;
+msg._lkStationId = stationId || null;
+msg._lkStationName = stationName || null;
 msg.payload = mongoQuery;
 return [msg, null, msg];

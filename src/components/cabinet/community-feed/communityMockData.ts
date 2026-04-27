@@ -92,12 +92,13 @@ export function buildCommunityMockFeedEntries(): FeedEntry[] {
     },
     {
       id: "mock-news",
-      publishedAt: "2026-03-28T18:30:00.000Z",
+      publishedAt: "2026-04-20T18:30:00.000Z",
       item: {
         type: "news",
         data: {
           id: "mock-news",
-          badgeLabel: "Новость • вчера",
+          badgeLabel: "Новость • 20 апреля",
+          publishedAt: "2026-04-20T18:30:00.000Z",
           title: "Открытие нового корта",
           text: "В эту пятницу открываем новый панорамный корт и делаем вечерний мини-фестиваль для участников сообщества.\n\nБудет пробная игра, музыка, welcome-напитки и короткий разбор форматов для новичков. Если хотите прийти компанией, напишите в комментариях: соберём отдельный слот и поможем с парами.",
           previewText: "В эту пятницу открываем новый панорамный корт и делаем вечерний мини-фестиваль для участников сообщества.",
@@ -110,7 +111,9 @@ export function buildCommunityMockFeedEntries(): FeedEntry[] {
           media: communityPlaceholderImages.news,
           author: {
             id: "mock-author",
-            name: "Падл утром",
+            name: "Хаб Селигерская",
+            avatarUrl: communityPlaceholderImages.avatars.ak,
+            avatar: communityPlaceholderImages.avatars.ak,
           },
         },
       },

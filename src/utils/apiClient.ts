@@ -22,6 +22,7 @@ const DEV_GAMES_CACHE_TTL_MS = 30_000;
 const DEV_CHAT_SUMMARY_CACHE_TTL_MS = 5_000;
 const DEV_TOURNAMENT_HISTORY_CACHE_TTL_MS = 60_000;
 const DEV_CABINET_ADVERTISING_CACHE_TTL_MS = 30_000;
+const DEV_SPLIT_PAYMENT_PROMO_CACHE_TTL_MS = 30_000;
 
 export interface UserProfileType {
   id: string;
@@ -144,6 +145,38 @@ export interface CabinetHomeAdvertisingSettings {
   ads: CabinetHomeAdvertisingItem[];
   updatedAt?: string;
 }
+
+export interface PadelSplitPaymentPromoConfig {
+  enabled: boolean;
+  stationIds: string[];
+  stationNameIncludes: string[];
+  roomIds: string[];
+  roomNameIncludes: string[];
+  shareAmounts: {
+    twoTeams: number;
+    fourPlayers: number;
+  };
+  baseShareAmount: number;
+  vivaDirectionId: number;
+  vivaExerciseTypeId: number;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export const DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG: PadelSplitPaymentPromoConfig = {
+  enabled: true,
+  stationIds: ["6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1"],
+  stationNameIncludes: ["терехово", "terekhovo"],
+  roomIds: [],
+  roomNameIncludes: ["new"],
+  shareAmounts: {
+    twoTeams: 500,
+    fourPlayers: 250,
+  },
+  baseShareAmount: 2000,
+  vivaDirectionId: 4485,
+  vivaExerciseTypeId: 1208,
+};
 export interface apiSubscription {
   id: string;
   productType: string;
@@ -835,54 +868,80 @@ function extractPromoMessage(payload: unknown): string | null {
   return null;
 }
 
-function extractPaymentUrl(payload: unknown): string | null {
-  if (payload == null) return null;
-
-  if (typeof payload === "string") {
-    const normalized = payload.trim();
-    if (/^https?:\/\//i.test(normalized)) return normalized;
-    return null;
+function isLikelyPaymentUrl(value: string): boolean {
+  if (!/^https?:\/\//i.test(value)) return false;
+  try {
+    const parsed = new URL(value);
+    const searchable = `${parsed.hostname}${parsed.pathname}`.toLowerCase();
+    if (/(pay|tbank|tinkoff|payment|checkout|bank|acquir)/.test(searchable)) return true;
+    return ["payment", "transaction", "order", "invoice"].some((key) => parsed.searchParams.has(key));
+  } catch {
+    return false;
   }
+}
 
-  if (Array.isArray(payload)) {
-    for (const item of payload) {
-      const nested = extractPaymentUrl(item);
+function extractPaymentUrl(payload: unknown): string | null {
+  const visit = (value: unknown): string | null => {
+    if (value == null) return null;
+
+    if (typeof value === "string") {
+      const normalized = value.trim();
+      if (!/^https?:\/\//i.test(normalized)) return null;
+      if (isLikelyPaymentUrl(normalized)) return normalized;
+      return null;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const nested = visit(item);
+        if (nested) return nested;
+      }
+      return null;
+    }
+
+    if (!isRecord(value)) return null;
+
+    const directPaymentKeys = [
+      "paymentUrl",
+      "redirectUrl",
+      "paymentLink",
+      "checkoutUrl",
+      "cardPaymentUrl",
+      "paymentPageUrl",
+    ];
+    for (const key of directPaymentKeys) {
+      const direct = pickString(value, [key]);
+      if (!direct) continue;
+      const normalized = visit(direct);
+      if (normalized) return normalized;
+    }
+
+    const genericDirect = pickString(value, ["url", "link"]);
+    if (genericDirect) {
+      const normalized = visit(genericDirect);
+      if (normalized) return normalized;
+    }
+
+    const nestedKeys = [
+      "data",
+      "payload",
+      "result",
+      "transaction",
+      "transactionStatus",
+      "cardPaymentStatus",
+      "payment",
+      "paymentInfo",
+      "cardPaymentInfo",
+    ];
+    for (const key of nestedKeys) {
+      const nested = visit(value[key]);
       if (nested) return nested;
     }
+
     return null;
-  }
+  };
 
-  if (!isRecord(payload)) return null;
-
-  const direct = pickString(payload, [
-    "paymentUrl",
-    "url",
-    "redirectUrl",
-    "paymentLink",
-    "checkoutUrl",
-    "link",
-  ]);
-  if (direct && /^https?:\/\//i.test(direct)) return direct;
-
-  const nestedKeys = [
-    "data",
-    "payload",
-    "result",
-    "transactionStatus",
-    "cardPaymentStatus",
-    "payment",
-  ];
-  for (const key of nestedKeys) {
-    const nested = extractPaymentUrl(payload[key]);
-    if (nested) return nested;
-  }
-
-  for (const value of Object.values(payload)) {
-    const nested = extractPaymentUrl(value);
-    if (nested) return nested;
-  }
-
-  return null;
+  return visit(payload);
 }
 
 function extractBookingIdsFromPaymentPayload(payload: unknown): string[] {
@@ -2822,6 +2881,14 @@ export interface PadelGamesByPhoneResponse {
   total: number;
 }
 
+export interface PadelAvailableGamesResponse {
+  games: PadelGameRecord[];
+  total: number;
+  hasMore: boolean;
+  limit: number;
+  offset: number;
+}
+
 export interface UpdateProfileData {
   email: string | null;
   firstName: string | null;
@@ -2841,6 +2908,48 @@ export interface PaymentUrl {
   paymentUrl: string | null;
   bookingIds?: string[];
   paid?: boolean | null;
+}
+
+export interface PadelSplitPaymentParams {
+  date: string;
+  fromTime: string;
+  toTime: string;
+  studioId: string;
+  roomId: string;
+  studioName?: string | null;
+  roomName?: string | null;
+  clientId?: string | null;
+  clientPhone?: string | null;
+  paymentRef?: string | null;
+  baseRedirectUrl?: string | null;
+  successUrl?: string | null;
+  failUrl?: string | null;
+  shareCount: 2 | 4;
+  shareAmount: number;
+  maxClientsCount?: number | null;
+  spot?: number | null;
+  vivaDirectionId?: number | null;
+  vivaExerciseTypeId?: number | null;
+}
+
+export interface PadelSplitPaymentResult {
+  paymentRef: string | null;
+  paymentUrl: string | null;
+  toPay: number;
+  toPayMinor: number | null;
+  shareAmount: number | null;
+  shareAmountMinor: number | null;
+  baseShareAmount: number | null;
+  baseShareAmountMinor: number | null;
+  discountAmount: number | null;
+  discountAmountMinor: number | null;
+  deadlineAt: string | null;
+  exerciseId: string | null;
+  bookingId: string | null;
+  productId: string | null;
+  transactionId: string | null;
+  spot: number | null;
+  raw?: unknown;
 }
 
 export interface PromoDiscountSummary {
@@ -4165,6 +4274,16 @@ function extractPadelGameRecordListTotal(payload: unknown): number | null {
   return pickNumber(payload, ["total", "totalElements", "count", "gamesCount"]);
 }
 
+function extractPadelGameRecordListHasMore(payload: unknown): boolean | null {
+  if (!isRecord(payload)) return null;
+  return (
+    toBoolean(payload.hasMore) ??
+    toBoolean(payload.more) ??
+    toBoolean(payload.hasNext) ??
+    null
+  );
+}
+
 function normalizePhoneForChat(phone: string): string | null {
   const digits = String(phone || "").replace(/\D/g, "");
   if (!digits) return null;
@@ -4649,6 +4768,72 @@ export async function apiFetchPadelGamesByPhone(
     data: { games: [] as PadelGameRecord[], total: 0 } as PadelGamesByPhoneResponse,
     error: firstError,
     status: firstStatus,
+  };
+}
+
+export async function apiFetchPadelAvailableGames(options: {
+  limit?: number;
+  offset?: number;
+  stationId?: string | null;
+  stationName?: string | null;
+} = {}) {
+  const baseUrl = getServ2Origin() || "";
+  const limit = Number.isFinite(options.limit)
+    ? Math.max(1, Math.min(50, Math.floor(options.limit as number)))
+    : 12;
+  const offset = Number.isFinite(options.offset)
+    ? Math.max(0, Math.floor(options.offset as number))
+    : 0;
+  const query = new URLSearchParams({
+    public: "true",
+    available: "true",
+    limit: String(limit),
+    offset: String(offset),
+  });
+  const stationId = options.stationId?.trim() || "";
+  const stationName = options.stationName?.trim() || "";
+
+  if (stationId) {
+    query.set("stationId", stationId);
+    query.set("studioId", stationId);
+  }
+  if (stationName) {
+    query.set("stationName", stationName);
+    query.set("studioName", stationName);
+  }
+  if (!IS_DEV_RELEASE_CHANNEL) {
+    query.set("_ts", String(Date.now()));
+  }
+
+  const endpoint = `/lk/games?${query.toString()}`;
+  const response = await request<unknown>(endpoint, {
+    method: "GET",
+    baseUrl,
+    retries: 1,
+    ...(IS_DEV_RELEASE_CHANNEL
+      ? {
+          cacheTtlMs: DEV_GAMES_CACHE_TTL_MS,
+          dedupe: true,
+        }
+      : {
+          cache: "no-store" as RequestCache,
+        }),
+  });
+
+  const games = extractPadelGameRecordList(response.data);
+  const total = extractPadelGameRecordListTotal(response.data) ?? games.length + offset;
+  const hasMore = extractPadelGameRecordListHasMore(response.data) ?? (offset + games.length < total);
+
+  return {
+    data: {
+      games,
+      total,
+      hasMore,
+      limit,
+      offset,
+    } satisfies PadelAvailableGamesResponse,
+    error: response.error,
+    status: response.status,
   };
 }
 
@@ -5618,6 +5803,173 @@ export async function apiUpdatePadelGameRecord(
     normalizedGameId,
     payload.invite?.inviteUrl?.trim() || null,
   );
+}
+
+function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentResult | null {
+  if (!isRecord(payload)) return null;
+
+  const data = isRecord(payload.data) ? payload.data : payload;
+  const toPayMinor = pickNumeric(data, ["toPayMinor", "amountMinor"]);
+  const toPayRaw = pickNumeric(data, ["toPay", "amount"]) ?? 0;
+  const toPay = toPayMinor != null
+    ? toPayMinor / 100
+    : (toPayRaw > 10000 ? toPayRaw / 100 : toPayRaw);
+
+  return {
+    paymentRef: pickString(data, ["paymentRef", "ref"]) ?? null,
+    paymentUrl: extractPaymentUrl(data),
+    toPay,
+    toPayMinor,
+    shareAmount: pickNumeric(data, ["shareAmount"]) ?? null,
+    shareAmountMinor: pickNumeric(data, ["shareAmountMinor"]) ?? null,
+    baseShareAmount: pickNumeric(data, ["baseShareAmount"]) ?? null,
+    baseShareAmountMinor: pickNumeric(data, ["baseShareAmountMinor"]) ?? null,
+    discountAmount: pickNumeric(data, ["discountAmount"]) ?? null,
+    discountAmountMinor: pickNumeric(data, ["discountAmountMinor"]) ?? null,
+    deadlineAt: pickString(data, ["deadlineAt"]) ?? null,
+    exerciseId: pickString(data, ["exerciseId", "vivaExerciseId"]) ?? null,
+    bookingId: pickString(data, ["bookingId"]) ?? null,
+    productId: pickString(data, ["productId"]) ?? null,
+    transactionId: pickString(data, ["transactionId"]) ?? null,
+    spot: pickNumeric(data, ["spot"]) ?? null,
+    raw: payload,
+  };
+}
+
+function buildPadelSplitPaymentPayload(params: PadelSplitPaymentParams): Record<string, unknown> {
+  return {
+    date: params.date,
+    fromTime: params.fromTime,
+    toTime: params.toTime,
+    studioId: params.studioId,
+    roomId: params.roomId,
+    studioName: params.studioName ?? null,
+    roomName: params.roomName ?? null,
+    clientId: params.clientId ?? null,
+    clientPhone: params.clientPhone ?? null,
+    paymentRef: params.paymentRef ?? null,
+    baseRedirectUrl: params.baseRedirectUrl ?? null,
+    successUrl: params.successUrl ?? params.baseRedirectUrl ?? null,
+    failUrl: params.failUrl ?? params.baseRedirectUrl ?? null,
+    shareCount: params.shareCount,
+    shareAmount: params.shareAmount,
+    maxClientsCount: params.maxClientsCount ?? params.shareCount,
+    spot: params.spot ?? null,
+    vivaDirectionId: params.vivaDirectionId ?? null,
+    vivaExerciseTypeId: params.vivaExerciseTypeId ?? null,
+  };
+}
+
+export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentParams) {
+  const baseUrl = getServ2Origin() || "";
+  const studioId = params.studioId?.trim() || null;
+  const roomId = params.roomId?.trim() || null;
+  const fromDate = params.date?.trim() || null;
+  const fromTime = params.fromTime?.trim() || null;
+  const toTime = params.toTime?.trim() || null;
+  const clientPhone = params.clientPhone?.trim() || null;
+
+  if (!studioId || !roomId || !fromDate || !fromTime || !toTime || !clientPhone) {
+    return {
+      data: null as PadelSplitPaymentResult | null,
+      error: {
+        status: 400,
+        message: "Недостаточно данных для split-оплаты",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const response = await request<unknown>("/lk/games/split/create", {
+    method: "POST",
+    baseUrl,
+    retries: 1,
+    body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
+  });
+
+  if (response.error) {
+    return {
+      data: null as PadelSplitPaymentResult | null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  const parsed = normalizePadelSplitPaymentResult(response.data);
+  if (!parsed) {
+    return {
+      data: null as PadelSplitPaymentResult | null,
+      error: {
+        status: response.status,
+        message: "Не удалось разобрать ответ split-оплаты",
+        raw: response.data,
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: parsed,
+    error: null,
+    status: response.status,
+  };
+}
+
+export async function apiCreatePadelSplitParticipantPayment(
+  gameId: string,
+  params: PadelSplitPaymentParams,
+) {
+  const normalizedGameId = gameId.trim();
+  const baseUrl = getServ2Origin() || "";
+  const clientPhone = params.clientPhone?.trim() || null;
+
+  if (!normalizedGameId || !clientPhone) {
+    return {
+      data: null as PadelSplitPaymentResult | null,
+      error: {
+        status: 400,
+        message: "Недостаточно данных для оплаты участия",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const response = await request<unknown>(
+    `/lk/games/${encodeURIComponent(normalizedGameId)}/split/join`,
+    {
+      method: "POST",
+      baseUrl,
+      retries: 1,
+      body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
+    },
+  );
+
+  if (response.error) {
+    return {
+      data: null as PadelSplitPaymentResult | null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  const parsed = normalizePadelSplitPaymentResult(response.data);
+  if (!parsed) {
+    return {
+      data: null as PadelSplitPaymentResult | null,
+      error: {
+        status: response.status,
+        message: "Не удалось разобрать ответ оплаты участия",
+        raw: response.data,
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: parsed,
+    error: null,
+    status: response.status,
+  };
 }
 
 function extractPadelPlayerItems(payload: unknown): unknown[] {
@@ -6651,6 +7003,76 @@ function mapLegacyAdvertisementToCabinetSettings(
   };
 }
 
+function normalizeMoneyAmount(value: unknown, fallback: number): number {
+  const parsed = toNumeric(value);
+  if (parsed === null || parsed < 0) return fallback;
+  return Math.round(parsed);
+}
+
+function normalizeIntegerSetting(value: unknown, fallback: number): number {
+  const parsed = toNumeric(value);
+  if (parsed === null) return fallback;
+  return Math.round(parsed);
+}
+
+function normalizePadelSplitPaymentPromoConfigPayload(
+  value: unknown,
+): PadelSplitPaymentPromoConfig {
+  const source = isRecord(value) && isRecord(value.data) ? value.data : value;
+  const data = isRecord(source) ? source : {};
+  const shareAmounts = isRecord(data.shareAmounts) ? data.shareAmounts : {};
+
+  const stationIds = uniqueIds(extractStringList(data.stationIds));
+  const stationNameIncludes = uniqueIds(extractStringList(data.stationNameIncludes));
+  const roomIds = uniqueIds(extractStringList(data.roomIds));
+  const roomNameIncludes = uniqueIds(extractStringList(data.roomNameIncludes));
+
+  return {
+    enabled: toBoolean(data.enabled) ?? DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.enabled,
+    stationIds:
+      stationIds.length > 0
+        ? stationIds
+        : DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.stationIds,
+    stationNameIncludes:
+      stationNameIncludes.length > 0
+        ? stationNameIncludes
+        : DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.stationNameIncludes,
+    roomIds,
+    roomNameIncludes:
+      roomNameIncludes.length > 0
+        ? roomNameIncludes
+        : DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.roomNameIncludes,
+    shareAmounts: {
+      twoTeams: normalizeMoneyAmount(
+        pickNumeric(shareAmounts, ["twoTeams", "two", "2"]) ??
+          data.twoTeamsShareAmount ??
+          data.teamShareAmount,
+        DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.shareAmounts.twoTeams,
+      ),
+      fourPlayers: normalizeMoneyAmount(
+        pickNumeric(shareAmounts, ["fourPlayers", "four", "4"]) ??
+          data.fourPlayersShareAmount ??
+          data.playerShareAmount,
+        DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.shareAmounts.fourPlayers,
+      ),
+    },
+    baseShareAmount: normalizeMoneyAmount(
+      data.baseShareAmount,
+      DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.baseShareAmount,
+    ),
+    vivaDirectionId: normalizeIntegerSetting(
+      data.vivaDirectionId ?? data.directionId,
+      DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.vivaDirectionId,
+    ),
+    vivaExerciseTypeId: normalizeIntegerSetting(
+      data.vivaExerciseTypeId ?? data.exerciseTypeId,
+      DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.vivaExerciseTypeId,
+    ),
+    updatedAt: pickString(data, ["updatedAt"]) ?? undefined,
+    updatedBy: pickString(data, ["updatedBy"]) ?? undefined,
+  };
+}
+
 export async function apiGetCabinetHomeAdvertisingSettings() {
   const supportResponse = await requestSupportWithFallback<unknown>("/advertising/cabinet-home", {
     method: "GET",
@@ -6691,4 +7113,22 @@ export async function apiGetCabinetHomeAdvertisingSettings() {
     error: legacyResponse.error,
     status: legacyResponse.status,
   } satisfies ApiResult<CabinetHomeAdvertisingSettings>;
+}
+
+export async function apiFetchPadelSplitPaymentPromoConfig() {
+  const supportResponse = await requestSupportWithFallback<unknown>(
+    "/advertising/split-payment-promo",
+    {
+      method: "GET",
+      retries: 1,
+      cacheTtlMs: DEV_SPLIT_PAYMENT_PROMO_CACHE_TTL_MS,
+      dedupe: true,
+    },
+  );
+
+  return {
+    data: normalizePadelSplitPaymentPromoConfigPayload(supportResponse.data),
+    error: supportResponse.error,
+    status: supportResponse.status,
+  } satisfies ApiResult<PadelSplitPaymentPromoConfig>;
 }

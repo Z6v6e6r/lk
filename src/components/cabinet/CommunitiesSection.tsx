@@ -42,6 +42,7 @@ import {
   apiSetCommunityPostReaction,
   apiUploadCommunityLogo,
   apiUpdateCommunity,
+  apiUpdateCommunityFeedPost,
   buildCommunityInviteLink,
   buildCommunityLogoCandidates,
   communityErrorMessage,
@@ -247,12 +248,12 @@ const EMPTY_FEED_IMAGE_EDITOR: FeedImageEditorState = {
   focalY: 50,
 };
 const COMMUNITY_NEWS_IMAGE_FRAME = {
-  width: 112,
-  height: 136,
+  width: 319,
+  height: 160,
 } as const;
 const COMMUNITY_NEWS_EDITOR_PREVIEW = {
-  width: 168,
-  height: 204,
+  width: 319,
+  height: 160,
 } as const;
 
 function buildCommunityFormStateFromRecord(community: CommunityRecord): CommunityFormState {
@@ -1846,6 +1847,7 @@ export function CommunitiesSection({
   const [isMobileTouchEditor, setIsMobileTouchEditor] = useState(() => isCoarsePointerDevice());
   const [feedFormError, setFeedFormError] = useState<string | null>(null);
   const [feedSubmitting, setFeedSubmitting] = useState(false);
+  const [editingFeedPostId, setEditingFeedPostId] = useState<string | null>(null);
   const [isFocusedCommunityHintOpen, setIsFocusedCommunityHintOpen] = useState(false);
   const [expandedGraphCommunityId, setExpandedGraphCommunityId] = useState<string | null>(null);
   const storiesScrollerRef = useRef<HTMLDivElement | null>(null);
@@ -2045,6 +2047,7 @@ export function CommunitiesSection({
     setFeedTournamentOptionsLoading(false);
     setFeedTournamentOptionsError(null);
     setFeedFormError(null);
+    setEditingFeedPostId(null);
     setChatDraft("");
     setChatError(null);
     setRankingRefreshError(null);
@@ -4531,7 +4534,26 @@ export function CommunitiesSection({
     setFeedImageNaturalSize(null);
     setFeedTournamentOptionsError(null);
     setFeedFormError(null);
+    setEditingFeedPostId(null);
   };
+
+  const openFeedComposerForEdit = useCallback((post: CommunityPost) => {
+    setFeedFormError(null);
+    setFeedTournamentOptionsError(null);
+    setEditingFeedPostId(post.id);
+    setFeedFormState({
+      kind: post.kind === "GAME" || post.kind === "TOURNAMENT" ? post.kind : "PHOTO",
+      title: post.title,
+      body: post.body,
+      imageUrl: post.imageUrl,
+      previewLabel: post.previewLabel ?? "",
+      relatedGameId: post.relatedGameId ?? "",
+      relatedTournamentId: post.relatedTournamentId ?? "",
+    });
+    setFeedImageEditor(EMPTY_FEED_IMAGE_EDITOR);
+    setFeedImageNaturalSize(null);
+    setIsFeedComposerOpen(true);
+  }, []);
 
   const handleFeedGameChange = (gameId: string) => {
     const selectedGame = upcomingCreatedGames.find((game) => game.id === gameId);
@@ -4627,7 +4649,7 @@ export function CommunitiesSection({
       }
     }
 
-    const response = await apiCreateCommunityFeedPost(selectedCommunity.id, {
+    const payload = {
       member: {
         ...currentMember,
         role: selectedCommunityMember?.role ?? currentMember.role,
@@ -4645,13 +4667,22 @@ export function CommunitiesSection({
             : null,
       relatedGameId: selectedGame?.id ?? null,
       relatedTournamentId: selectedTournamentOption?.tournament.id ?? null,
-    });
+    };
+
+    const response = editingFeedPostId
+      ? await apiUpdateCommunityFeedPost(selectedCommunity.id, editingFeedPostId, payload)
+      : await apiCreateCommunityFeedPost(selectedCommunity.id, payload);
 
     setFeedSubmitting(false);
 
     if (response.error || !response.data) {
       setFeedFormError(
-        communityErrorMessage(response.error, "Не удалось опубликовать пост сообщества"),
+        communityErrorMessage(
+          response.error,
+          editingFeedPostId
+            ? "Не удалось сохранить изменения новости"
+            : "Не удалось опубликовать пост сообщества",
+        ),
       );
       return;
     }
@@ -4659,7 +4690,9 @@ export function CommunitiesSection({
     const nextPost = response.data;
     setFeedByCommunityId((current) => ({
       ...current,
-      [selectedCommunity.id]: prependPost(current[selectedCommunity.id] ?? [], nextPost),
+      [selectedCommunity.id]: editingFeedPostId
+        ? updateCommunityPostById(current[selectedCommunity.id] ?? [], editingFeedPostId, () => nextPost)
+        : prependPost(current[selectedCommunity.id] ?? [], nextPost),
     }));
     markCommunityAsSeen(selectedCommunity.id, Math.max(Date.now(), nextPost.createdTs ?? 0));
     setDetailLoadedByCommunityId((current) => ({
@@ -4892,6 +4925,18 @@ export function CommunitiesSection({
     });
     setIsFeedComposerOpen(true);
   };
+
+  const handleEditCommunityNews = useCallback((news: News) => {
+    if (!selectedCommunity) return;
+
+    const targetPost = (feedByCommunityId[selectedCommunity.id] ?? []).find((post) => post.id === news.id);
+    if (!targetPost) {
+      setAccessMessage("Не удалось найти исходную новость для редактирования.");
+      return;
+    }
+
+    openFeedComposerForEdit(targetPost);
+  }, [feedByCommunityId, openFeedComposerForEdit, selectedCommunity]);
 
   const handleInvitePlayers = async () => {
     if (!selectedCommunity) return;
@@ -5711,6 +5756,7 @@ export function CommunitiesSection({
                   onLoadNewsThread={(news) => handleLoadNewsThread(news)}
                   onPersistNewsReaction={(news, reaction) => handlePersistNewsReaction(news, reaction)}
                   onPersistNewsComment={(news, text) => handlePersistNewsComment(news, text)}
+                  onEditNews={(news) => handleEditCommunityNews(news)}
                   onOpenUser={(user) => {
                     setAccessMessage(`Профиль ${user.name} скоро появится.`);
                   }}
@@ -6171,13 +6217,17 @@ export function CommunitiesSection({
           setIsFeedComposerOpen(false);
           resetFeedComposer();
         }}
-        title="Новый пост"
+        title={editingFeedPostId ? "Редактировать пост" : "Новый пост"}
       >
         {selectedCommunity && (
           <form className="community-composer" onSubmit={(event) => void handleCreateFeedPost(event)}>
             <div className="community-detail-section-head">
-              <h3 className="community-detail-section-title">Публикация в ленту</h3>
-              <span className="community-detail-section-caption">Сразу уходит в базу</span>
+              <h3 className="community-detail-section-title">
+                {editingFeedPostId ? "Редактирование публикации" : "Публикация в ленту"}
+              </h3>
+              <span className="community-detail-section-caption">
+                {editingFeedPostId ? "Изменения сохранятся в текущей новости" : "Сразу уходит в базу"}
+              </span>
             </div>
 
             {feedFormError && <div className="community-form-error">{feedFormError}</div>}
@@ -6189,6 +6239,7 @@ export function CommunitiesSection({
                   className="form-input"
                   value={feedFormState.kind}
                   onChange={(event) => handleFeedKindChange(event.target.value as FeedFormState["kind"])}
+                  disabled={Boolean(editingFeedPostId)}
                 >
                   <option value="PHOTO">Новость</option>
                   <option value="GAME">Игра</option>
@@ -6321,7 +6372,7 @@ export function CommunitiesSection({
                 <div className="community-detail-section-head">
                   <h3 className="community-detail-section-title">Кадр новости</h3>
                   <span className="community-detail-section-caption">
-                    Настрой видимую область под размер news-превью
+                    Настрой видимую область под формат новой карточки новости
                   </span>
                 </div>
 
@@ -6437,12 +6488,26 @@ export function CommunitiesSection({
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={resetFeedComposer}
+                onClick={() => {
+                  if (editingFeedPostId) {
+                    setIsFeedComposerOpen(false);
+                    resetFeedComposer();
+                    return;
+                  }
+
+                  resetFeedComposer();
+                }}
               >
-                Очистить
+                {editingFeedPostId ? "Отмена" : "Очистить"}
               </button>
               <button type="submit" className="btn-primary" disabled={feedSubmitting}>
-                {feedSubmitting ? "Публикуем..." : "Опубликовать"}
+                {feedSubmitting
+                  ? editingFeedPostId
+                    ? "Сохраняем..."
+                    : "Публикуем..."
+                  : editingFeedPostId
+                    ? "Сохранить"
+                    : "Опубликовать"}
               </button>
             </div>
           </form>

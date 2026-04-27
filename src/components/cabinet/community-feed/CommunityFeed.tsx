@@ -19,6 +19,7 @@ interface CommunityFeedProps {
   onOpenUser: (user: User, entry: FeedEntry) => void;
   onAddFriend: (user: User, entry: FeedEntry) => void;
   onMessageUser: (user: User, entry: FeedEntry) => void;
+  onEditNews?: (news: News, entry: FeedEntry) => void;
   newsLikes?: Record<string, number>;
   newsDislikes?: Record<string, number>;
   newsCommentsCount?: Record<string, number>;
@@ -71,12 +72,11 @@ export function CommunityFeed({
   onOpenUser,
   onAddFriend,
   onMessageUser,
+  onEditNews,
   newsLikes = {},
-  newsDislikes = {},
   newsCommentsCount = {},
   newsReactions = {},
   onNewsLike,
-  onNewsDislike,
 }: CommunityFeedProps) {
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
@@ -192,6 +192,7 @@ export function CommunityFeed({
               month={game.dateMonth}
               day={game.dateDay}
               weekday={game.dateWeekday}
+              isRatingGame={game.isRatingGame}
               title={game.title}
               subtitleText={subtitleText}
               timeText={timeText}
@@ -210,13 +211,16 @@ export function CommunityFeed({
               totalSlots={game.totalSlots}
               slotsLeft={game.slotsLeft}
               isJoined={game.isJoined}
-              ctaLabel={game.ctaLabel}
               showWaitlist={game.showWaitlist}
               isPastGame={game.isPastGame}
               needsResult={game.needsResult}
               hasConfirmedResult={game.hasConfirmedResult}
               resultScore={game.resultScore}
               resultTeams={game.resultTeams}
+              badgeLabel={game.badgeLabel}
+              durationText={game.duration}
+              authorName={entry.author?.name}
+              authorAvatarUrl={entry.author?.avatarUrl || entry.author?.avatar}
               onPlay={() => onOpenGame(game, entry)}
               onChat={() => onOpenGameChat(game, entry)}
             />
@@ -239,12 +243,11 @@ export function CommunityFeed({
               key={entry.id}
               card={item.data}
               likes={newsLikes[item.data.id] ?? item.data.likes}
-              dislikes={newsDislikes[item.data.id] ?? item.data.dislikes}
               commentsCount={newsCommentsCount[item.data.id] ?? item.data.comments}
               reaction={newsReactions[item.data.id] ?? item.data.reaction}
               onLike={() => onNewsLike?.(item.data, entry)}
-              onDislike={() => onNewsDislike?.(item.data, entry)}
               onOpen={() => onOpenNews(item.data, entry)}
+              onEdit={item.data.canEdit ? () => onEditNews?.(item.data, entry) : undefined}
             />
           );
         }

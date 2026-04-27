@@ -39,6 +39,7 @@ interface CommunityScreenProps {
   onLoadNewsThread: (news: News, entry: FeedEntry) => Promise<NewsThreadData>;
   onPersistNewsReaction: (news: News, reaction: NewsReaction, entry: FeedEntry) => Promise<void>;
   onPersistNewsComment: (news: News, text: string, entry: FeedEntry) => Promise<NewsComment>;
+  onEditNews?: (news: News, entry: FeedEntry) => void;
   onOpenUser: (user: User, entry: FeedEntry) => void;
   onAddFriend: (user: User, entry: FeedEntry) => void;
   onMessageUser: (user: User, entry: FeedEntry) => void;
@@ -113,6 +114,7 @@ export function CommunityScreen({
   onLoadNewsThread,
   onPersistNewsReaction,
   onPersistNewsComment,
+  onEditNews,
   onOpenUser,
   onAddFriend,
   onMessageUser,
@@ -260,41 +262,55 @@ export function CommunityScreen({
     }
   };
 
+  const handleEditNews = (news: News, entry: FeedEntry) => {
+    setSelectedNewsEntry(null);
+    setNewsThreadError(null);
+    onEditNews?.(news, entry);
+  };
+
   return (
     <div className="community-feed-screen community-feed-screen--feed">
       <div className="community-feed-top-stack">
         <CommunityHeader community={community} onOpenMenu={onOpenMenu} onClose={onClose} />
         <CommunitySecondaryNav activeItem="feed" onSelect={onSelectSectionNav} />
-        <CommunityFilters activeFilter={activeFilter} onChange={setActiveFilter} />
       </div>
 
-      <CommunityFeed
-        entries={filteredEntries}
-        isLoading={isLoading && displayEntries.length === 0}
-        hasMore={hasMore}
-        isLoadingMore={isLoadingMore}
-        onLoadMore={onLoadMore}
-        onOpenGame={onOpenGame}
-        onOpenGameChat={onOpenGameChat}
-        onOpenTournament={onOpenTournament}
-        onOpenNews={(news, entry) => {
-          void handleOpenNews(news, entry);
-          onOpenNews(news, entry);
-        }}
-        onOpenUser={onOpenUser}
-        onAddFriend={onAddFriend}
-        onMessageUser={onMessageUser}
-        newsLikes={newsStats.likes}
-        newsDislikes={newsStats.dislikes}
-        newsCommentsCount={newsStats.commentsCount}
-        newsReactions={newsStats.reactions}
-        onNewsLike={(news, entry) => {
-          void handleNewsReaction(news, entry, "like");
-        }}
-        onNewsDislike={(news, entry) => {
-          void handleNewsReaction(news, entry, "dislike");
-        }}
-      />
+      <div className="community-feed-box">
+        <div className="community-feed-box-header">
+          <CommunityFilters activeFilter={activeFilter} onChange={setActiveFilter} />
+        </div>
+
+        <div className="community-feed-box-scroll">
+          <CommunityFeed
+            entries={filteredEntries}
+            isLoading={isLoading && displayEntries.length === 0}
+            hasMore={hasMore}
+            isLoadingMore={isLoadingMore}
+            onLoadMore={onLoadMore}
+            onOpenGame={onOpenGame}
+            onOpenGameChat={onOpenGameChat}
+            onOpenTournament={onOpenTournament}
+            onOpenNews={(news, entry) => {
+              void handleOpenNews(news, entry);
+              onOpenNews(news, entry);
+            }}
+            onEditNews={onEditNews ? (news, entry) => handleEditNews(news, entry) : undefined}
+            onOpenUser={onOpenUser}
+            onAddFriend={onAddFriend}
+            onMessageUser={onMessageUser}
+            newsLikes={newsStats.likes}
+            newsDislikes={newsStats.dislikes}
+            newsCommentsCount={newsStats.commentsCount}
+            newsReactions={newsStats.reactions}
+            onNewsLike={(news, entry) => {
+              void handleNewsReaction(news, entry, "like");
+            }}
+            onNewsDislike={(news, entry) => {
+              void handleNewsReaction(news, entry, "dislike");
+            }}
+          />
+        </div>
+      </div>
 
       <CommunityBottomNav
         activeItem="table"
@@ -332,6 +348,12 @@ export function CommunityScreen({
           if (!selectedNewsEntry) return;
           void handleNewsReaction(selectedNewsEntry.news, selectedNewsEntry.entry, "dislike");
         }}
+        onEdit={selectedNewsEntry?.news.canEdit && onEditNews
+          ? () => {
+            if (!selectedNewsEntry) return;
+            handleEditNews(selectedNewsEntry.news, selectedNewsEntry.entry);
+          }
+          : undefined}
         onSubmitComment={handleSubmitComment}
       />
     </div>

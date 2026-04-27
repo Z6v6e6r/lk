@@ -6,6 +6,7 @@ import { AppErrorBoundary } from "./components/UI/AppErrorBoundary";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { OverlayScopeProvider } from "./context/OverlayScopeContext";
 import { AuthForm } from "./components/auth/AuthForm";
+import FindGamePage from "./components/games/FindGamePage";
 import GameJoinPage from "./components/games/GameJoinPage";
 import GamesPage from "./components/games/GamesPage";
 import {
@@ -14,6 +15,7 @@ import {
   trackClientError,
 } from "./utils/analytics";
 import { mountDevReleaseBadge } from "./utils/devReleaseBadge";
+import { PUBLIC_GAME_FIND_PATH } from "./consts/api_config";
 import type { GamesMountData } from "./types/gamesOverlay";
 import { ensureFreshRelease } from "./utils/releaseGuard";
 
@@ -27,9 +29,21 @@ mountDevReleaseBadge({ bundleFileNames: ["games.js", "games-dev.js"] });
 installGlobalErrorTracking();
 trackAnalyticsEvent("widget_bundle_loaded", { entry: "games" });
 
+function normalizePath(value: string) {
+  return (`/${String(value || "").trim()}`).replace(/\/+/g, "/").replace(/\/+$/, "") || "/";
+}
+
+function isPublicFindRoute() {
+  if (typeof window === "undefined") return false;
+  const currentPath = normalizePath(window.location.pathname);
+  const configuredPath = normalizePath(PUBLIC_GAME_FIND_PATH || "/finde_game");
+  return currentPath.endsWith(configuredPath) || currentPath.endsWith("/find_game");
+}
+
 function GamesContent({ onClose, data }: { onClose?: () => void; data?: GamesMountData }) {
   const { isAuthenticated } = useAuth();
   const [ready, setReady] = useState(false);
+  const isFindEntry = data?.publicFindEntry === true || isPublicFindRoute();
 
   useEffect(() => {
     setReady(true);
@@ -48,6 +62,17 @@ function GamesContent({ onClose, data }: { onClose?: () => void; data?: GamesMou
       <GameJoinPage
         gameId={data.joinGameId}
         cabinetUrl={data.cabinetUrl}
+      />
+    );
+  }
+
+  if (isFindEntry) {
+    return (
+      <FindGamePage
+        onBack={() => onClose?.()}
+        cabinetUrl={data?.cabinetUrl}
+        presetStudioId={data?.presetStudioId ?? null}
+        presetStudioName={data?.presetStudioName ?? null}
       />
     );
   }

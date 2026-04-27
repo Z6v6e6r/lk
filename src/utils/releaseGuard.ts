@@ -209,6 +209,10 @@ function getCurrentVersion(bundleScriptUrls: URL[]): string | null {
   return null;
 }
 
+function isRuntimeCacheBusterVersion(version: string): boolean {
+  return /^\d{13,}$/.test(version);
+}
+
 async function fetchJsonWithTimeout(url: string): Promise<Response> {
   if (typeof AbortController === "undefined") {
     return fetch(url, { cache: "no-store" });
@@ -278,8 +282,9 @@ export function ensureFreshRelease(options: ReleaseGuardOptions) {
       return;
     }
 
-    if (!currentVersion) {
+    if (!currentVersion || isRuntimeCacheBusterVersion(currentVersion)) {
       window.__LK_RELEASE_VERSION__ = latestVersion;
+      clearAttemptState(options.entry);
       return;
     }
 

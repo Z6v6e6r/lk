@@ -81,6 +81,10 @@ location = /game_create {
     try_files $uri /lk/index.html;
 }
 
+location = /finde_game {
+    try_files $uri /lk/index.html;
+}
+
 location = /community_join {
     try_files $uri /lk/index.html;
 }

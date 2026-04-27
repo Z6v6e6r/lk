@@ -9,6 +9,7 @@ import type {
   PadelGamePlayer,
   PadelGameRecord,
   PadelGameRecordPayload,
+  PadelSplitPaymentPromoConfig,
   Studio,
   StudioGameModes,
 } from "../../utils/apiClient";
@@ -18,6 +19,7 @@ import {
   apiFetchBookings,
   apiFetchMasterServiceGameModes,
   apiCreatePadelGameRecord,
+  apiCreatePadelSplitGamePayment,
   apiFetchPadelChatsByPhone,
   apiFetchPadelGameChatMessages,
   apiFetchPadelGameRecord,
@@ -30,8 +32,10 @@ import {
   apiFetchMasterServiceTimeslots,
   apiFetchOnboardingStations,
   apiFetchPadelLiveRatings,
+  apiFetchPadelSplitPaymentPromoConfig,
   apiFetchProfile,
   apiSaveOnboardingLevel,
+  DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG,
 } from "../../utils/apiClient";
 import {
   apiAddCommunityMember,
@@ -61,6 +65,7 @@ import type { GamesCreateFromBookingData } from "../../types/gamesOverlay";
 import {
   CABINET_URL,
   GAMES_BUNDLE_URL,
+  IS_DEV_RELEASE_CHANNEL,
   PUBLIC_INVITE_ORIGIN,
   PUBLIC_INVITE_PATH,
 } from "../../consts/api_config";
@@ -81,6 +86,8 @@ interface GamesPageProps {
 }
 
 type Step = "create" | "place" | "time" | "details" | "chat";
+type GamePaymentMode = "self" | "split";
+type SplitShareCount = 2 | 4;
 
 const RATING_LABELS = ["D", "D+", "C", "C+", "B", "B+", "A"];
 
@@ -114,6 +121,74 @@ const MATCH_RESULT_RATING_DEFAULT_PARAMS = {
   round: 5,
 };
 const ENABLE_GAME_COMMUNITY_AUTOPUBLISH = true;
+const ENABLE_SPLIT_GAME_PAYMENT = IS_DEV_RELEASE_CHANNEL;
+const SPLIT_PAYMENT_DEADLINE_HOURS = 6;
+
+function resolveSplitShareAmount(
+  shareCount: SplitShareCount,
+  config: PadelSplitPaymentPromoConfig,
+): number {
+  return shareCount === 4
+    ? config.shareAmounts.fourPlayers
+    : config.shareAmounts.twoTeams;
+}
+
+function resolveSplitBaseShareAmount(config: PadelSplitPaymentPromoConfig): number {
+  return config.baseShareAmount;
+}
+
+function splitConfigListAllows(
+  allowedIds: string[],
+  includeTokens: string[],
+  id: string | null | undefined,
+  name: string | null | undefined,
+): boolean {
+  const idSet = new Set(
+    allowedIds
+      .map((value) => normalizeComparableId(value))
+      .filter((value): value is string => Boolean(value)),
+  );
+  const normalizedId = normalizeComparableId(id);
+  if (idSet.size > 0 && normalizedId && idSet.has(normalizedId)) {
+    return true;
+  }
+
+  const normalizedName = normalizeComparableName(name);
+  const tokens = includeTokens
+    .map((value) => normalizeComparableName(value))
+    .filter((value): value is string => Boolean(value));
+  if (tokens.length > 0 && normalizedName && tokens.some((token) => normalizedName.includes(token))) {
+    return true;
+  }
+  return idSet.size === 0 && tokens.length === 0;
+}
+
+function isSplitPaymentPromoAvailableForSelection(params: {
+  config: PadelSplitPaymentPromoConfig;
+  studioId: string | null;
+  studioName: string | null;
+  roomId: string | null;
+  roomName: string | null;
+}): boolean {
+  if (!ENABLE_SPLIT_GAME_PAYMENT || params.config.enabled !== true) {
+    return false;
+  }
+
+  const stationAllowed = splitConfigListAllows(
+    params.config.stationIds,
+    params.config.stationNameIncludes,
+    params.studioId,
+    params.studioName,
+  );
+  if (!stationAllowed) return false;
+
+  return splitConfigListAllows(
+    params.config.roomIds,
+    params.config.roomNameIncludes,
+    params.roomId,
+    params.roomName,
+  );
+}
 
 type CommunityAutopublishTarget = {
   id: string;
@@ -2753,6 +2828,10 @@ export default function GamesPage({
   const [loadingSlotPrice, setLoadingSlotPrice] = useState(false);
   const [loadingPay, setLoadingPay] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
+  const [paymentMode, setPaymentMode] = useState<GamePaymentMode>("self");
+  const [splitShareCount, setSplitShareCount] = useState<SplitShareCount>(4);
+  const [splitPaymentPromoConfig, setSplitPaymentPromoConfig] =
+    useState<PadelSplitPaymentPromoConfig>(DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG);
   const [promoModalOpen, setPromoModalOpen] = useState(false);
   const [promoCodeDraft, setPromoCodeDraft] = useState("");
   const [promoCodeApplied, setPromoCodeApplied] = useState<string | null>(null);
@@ -2903,6 +2982,24 @@ export default function GamesPage({
     setPromoStatusMessage(null);
     setPromoError(null);
     setApplyingPromo(false);
+  }, []);
+  useEffect(() => {
+    if (!ENABLE_SPLIT_GAME_PAYMENT) return;
+
+    let alive = true;
+    apiFetchPadelSplitPaymentPromoConfig()
+      .then((result) => {
+        if (!alive || !result.data) return;
+        setSplitPaymentPromoConfig(result.data);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setSplitPaymentPromoConfig(DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG);
+      });
+
+    return () => {
+      alive = false;
+    };
   }, []);
   const restorePromoState = useCallback((metadata: unknown, paymentAmountValue: unknown) => {
     const snapshot = extractPromoStateSnapshot(metadata, paymentAmountValue);
@@ -4164,6 +4261,18 @@ export default function GamesPage({
   const showInlinePaymentSection = !isBookingPresetMode && canProceedToPayment;
   const basePaymentAmount = slotPrice ?? selectedSlot?.price ?? selectedCourt?.price ?? null;
   const paymentAmount = promoPricePreview ?? basePaymentAmount;
+  const splitPaymentAvailable = isSplitPaymentPromoAvailableForSelection({
+    config: splitPaymentPromoConfig,
+    studioId,
+    studioName,
+    roomId: courtId,
+    roomName: selectedCourtName,
+  });
+  const splitPaymentSelected = splitPaymentAvailable && paymentMode === "split";
+  const splitShareAmount = resolveSplitShareAmount(splitShareCount, splitPaymentPromoConfig);
+  const splitBaseShareAmount = resolveSplitBaseShareAmount(splitPaymentPromoConfig);
+  const splitDiscountAmount = Math.max(splitBaseShareAmount - splitShareAmount, 0);
+  const splitPaymentSummary = `${formatPrice(splitShareAmount)} ₽ × ${splitShareCount}`;
   const paymentTitle = loadingPay
     ? "Оплатить · подготовка..."
     : loadingSlotPrice
@@ -4171,6 +4280,9 @@ export default function GamesPage({
     : paymentAmount != null && paymentAmount > 0
       ? `Оплатить · ${formatPrice(paymentAmount)} ₽`
       : "Оплатить · — ₽";
+  const paymentSubmitTitle = splitPaymentSelected
+    ? (loadingPay ? "Оплатить участие · подготовка..." : `Оплатить участие · ${formatPrice(splitShareAmount)} ₽`)
+    : paymentTitle;
   const paymentStationCourt = studio && selectedCourt
     ? `${studio.name} · ${selectedCourt.name}`
     : "Выберите станцию и корт";
@@ -4183,6 +4295,11 @@ export default function GamesPage({
     : paymentAmount != null && paymentAmount > 0
       ? `Сумма брони · ${formatPrice(paymentAmount)} ₽`
       : "Сумма брони · — ₽";
+  useEffect(() => {
+    if (paymentMode === "split" && !splitPaymentAvailable) {
+      setPaymentMode("self");
+    }
+  }, [paymentMode, splitPaymentAvailable]);
   useEffect(() => {
     if (loadingPay) return;
     if (!promoCodeApplied || promoDiscountAmount == null || basePaymentAmount == null) return;
@@ -6070,6 +6187,272 @@ export default function GamesPage({
     resolvedSelectedSubServiceIds,
     studioMasterServiceId,
     resolveCurrentClientProfile,
+  ]);
+
+  const handleSplitGamePay = useCallback(async () => {
+    if (!studioId || !selectedDate || !courtId || !time || !selectedSlotId) return;
+    if (!splitPaymentAvailable) {
+      setPaymentMode("self");
+      setPayError("Раздельная оплата доступна только для кортов new на Терехово");
+      return;
+    }
+
+    setLoadingPay(true);
+    setPayError(null);
+    setGameRecordError(null);
+
+    const fromDate = formatDateLocalIso(selectedDate);
+    const fromTime = time;
+    const toTime = addMinutesToTime(fromTime, duration);
+    const subServiceIds = resolvedSelectedSubServiceIds;
+    const paymentRef = generatePaymentRef();
+    const baseRedirectUrl = buildBaseRedirectUrl(fromDate, {
+      [PAYMENT_REF_QUERY_KEY]: paymentRef,
+      splitPayment: "organizer",
+    });
+
+    const profile = await resolveCurrentClientProfile();
+    const clientId = profile.clientId;
+    const clientPhone = profile.clientPhone;
+
+    const shareAmount = resolveSplitShareAmount(splitShareCount, splitPaymentPromoConfig);
+    const baseShareAmount = resolveSplitBaseShareAmount(splitPaymentPromoConfig);
+    const discountAmount = Math.max(baseShareAmount - shareAmount, 0);
+    const paymentResult = await apiCreatePadelSplitGamePayment({
+      date: fromDate,
+      fromTime,
+      toTime,
+      studioId,
+      roomId: courtId,
+      studioName,
+      roomName: selectedCourtName ?? null,
+      clientId,
+      clientPhone,
+      paymentRef,
+      baseRedirectUrl,
+      successUrl: baseRedirectUrl,
+      failUrl: baseRedirectUrl,
+      shareCount: splitShareCount,
+      shareAmount,
+      maxClientsCount: splitShareCount,
+      spot: 1,
+      vivaDirectionId: splitPaymentPromoConfig.vivaDirectionId,
+      vivaExerciseTypeId: splitPaymentPromoConfig.vivaExerciseTypeId,
+    });
+
+    if (paymentResult.error || !paymentResult.data) {
+      setPayError(paymentResult.error?.message ?? "Не удалось сформировать split-оплату");
+      setLoadingPay(false);
+      return;
+    }
+
+    const normalizedParticipants = participants.length > 0
+      ? participants
+      : [
+          {
+            id: clientId ?? null,
+            name: profileName || "Организатор",
+            phone: clientPhone ?? null,
+            photo: profilePhoto ?? null,
+            rating: profileGrade ?? null,
+            ratingNumeric: profileRatingNumeric,
+            source: "ORGANIZER" as const,
+            status: "CONFIRMED" as const,
+          },
+        ];
+    const organizerPlayer =
+      normalizedParticipants.find((player) => player.source === "ORGANIZER") ??
+      normalizedParticipants[0] ?? {
+        id: clientId ?? null,
+        name: profileName || "Организатор",
+        phone: clientPhone ?? null,
+        photo: profilePhoto ?? null,
+        rating: profileGrade ?? null,
+        ratingNumeric: profileRatingNumeric,
+      };
+    const resolvedBookingIds = paymentResult.data.bookingId ? [paymentResult.data.bookingId] : [];
+    const resolvedPaymentAmount = paymentResult.data.toPay ?? shareAmount;
+    const paidAt = new Date().toISOString();
+    const splitDeadlineAt =
+      paymentResult.data.deadlineAt ??
+      new Date(Date.now() + SPLIT_PAYMENT_DEADLINE_HOURS * 60 * 60 * 1000).toISOString();
+    const splitMetadata = {
+      enabled: true,
+      mode: "group_booking",
+      shareCount: splitShareCount,
+      shareAmount,
+      shareAmountMinor: Math.round(shareAmount * 100),
+      baseShareAmount,
+      baseShareAmountMinor: Math.round(baseShareAmount * 100),
+      discountAmount,
+      discountAmountMinor: Math.round(discountAmount * 100),
+      deadlineAt: splitDeadlineAt,
+      status: "ACTIVE",
+      vivaExerciseId: paymentResult.data.exerciseId,
+      organizerBookingId: paymentResult.data.bookingId,
+      productId: paymentResult.data.productId,
+      directionId: splitPaymentPromoConfig.vivaDirectionId,
+      exerciseTypeId: splitPaymentPromoConfig.vivaExerciseTypeId,
+      payments: [
+        {
+          role: "ORGANIZER",
+          status: "PAID",
+          paymentRef,
+          clientId: clientId ?? organizerPlayer.id ?? null,
+          phone: clientPhone ?? organizerPlayer.phone ?? null,
+          phoneNorm: normalizePhoneForGame(clientPhone ?? organizerPlayer.phone ?? null),
+          bookingId: paymentResult.data.bookingId,
+          transactionId: paymentResult.data.transactionId,
+          paymentUrl: paymentResult.data.paymentUrl,
+          amount: resolvedPaymentAmount,
+          amountMinor: paymentResult.data.toPayMinor,
+          paidAt,
+          spot: paymentResult.data.spot ?? 1,
+        },
+      ],
+    };
+
+    const payload: PadelGameRecordPayload = {
+      paymentRef,
+      tenantKey: null,
+      status: paymentResult.data.paymentUrl || resolvedPaymentAmount > 0 ? "PAYMENT_PENDING" : "PAID",
+      organizer: {
+        id: clientId ?? organizerPlayer.id ?? null,
+        name: profileName || organizerPlayer.name || "Организатор",
+        phone: clientPhone ?? organizerPlayer.phone ?? null,
+        photo: profilePhoto ?? organizerPlayer.photo ?? null,
+        rating: profileGrade ?? organizerPlayer.rating ?? null,
+        ratingNumeric: profileRatingNumeric ?? organizerPlayer.ratingNumeric ?? null,
+      },
+      booking: {
+        studioId,
+        studioName,
+        masterServiceId: studioMasterServiceId,
+        subServiceIds,
+        roomId: courtId,
+        roomName: selectedCourtName ?? "Корт",
+        date: fromDate,
+        timeFrom: fromTime,
+        timeTo: toTime,
+        timeFromIso: `${fromDate}T${fromTime}:00+03:00`,
+        timeToIso: `${fromDate}T${toTime}:00+03:00`,
+        durationMinutes: duration,
+        slotId: selectedSlotId,
+        bookingIds: resolvedBookingIds,
+      },
+      payment: {
+        amount: resolvedPaymentAmount,
+        paymentUrl: paymentResult.data.paymentUrl,
+        paymentMethod: "WIDGET",
+        baseRedirectUrl,
+        paid: !paymentResult.data.paymentUrl && resolvedPaymentAmount <= 0,
+        ...(paymentResult.data.paymentUrl ? {} : { paidAt }),
+        paymentRef,
+        bookingIds: resolvedBookingIds,
+      },
+      settings: {
+        ratingGame: effectiveRatingGame,
+        minRating: effectiveRatingGame ? (RATING_LABELS[minRating] ?? null) : null,
+        maxRating: effectiveRatingGame ? (RATING_LABELS[maxRating] ?? null) : null,
+        isPrivate,
+        payMode: "split",
+      },
+      invite: {
+        inviteUrl: null,
+        waitlistEnabled: true,
+        maxPlayers: splitShareCount,
+      },
+      participants: normalizedParticipants.slice(0, splitShareCount),
+      waitlist: waitlistPlayers,
+      metadata: {
+        paymentRef,
+        bookingIds: resolvedBookingIds,
+        source: "games_split_widget",
+        gameFormat: resolvedGameFormat,
+        splitPayment: splitMetadata,
+        ...buildCommunityAutopublishMetadataFields(buildCommunityAutopublishMetadata()),
+      },
+    };
+
+    if (!paymentResult.data.paymentUrl && resolvedPaymentAmount <= 0) {
+      const directCreateResult = await apiCreatePadelGameRecord({
+        ...payload,
+        status: "PAID",
+        payment: {
+          ...payload.payment,
+          paid: true,
+          paidAt,
+        },
+      });
+
+      if (!directCreateResult.data?.id) {
+        setPayError(directCreateResult.error?.message || "Не удалось создать split-игру");
+        setLoadingPay(false);
+        return;
+      }
+
+      const createdRecord = directCreateResult.data;
+      const fallbackInviteUrl = buildInviteFallbackUrl(createdRecord.id);
+      setCreatedGames((prev) => upsertPadelGameRecord(prev, createdRecord));
+      void runPaidGameCommunityMembershipAndPublication(createdRecord, "direct_create");
+      setGameRecordId(createdRecord.id);
+      setGameRecordStatus(createdRecord.status ?? "PAID");
+      setInviteLink(resolveGameInviteUrl(createdRecord) ?? fallbackInviteUrl);
+      setGamePaymentUrl(null);
+      setGamePaid(true);
+      setGameSnapshot(
+        mergeMatchSnapshots(
+          buildMatchSnapshotFromPayload(payload),
+          buildMatchSnapshotFromRecord(createdRecord),
+        ),
+      );
+      setConfirmCancelUnpaidGame(false);
+      setLoadingPay(false);
+      setStep("details");
+      return;
+    }
+
+    if (paymentResult.data.paymentUrl) {
+      savePendingPaidGameDraft(paymentRef, payload, resolvedBookingIds);
+      enqueuePendingPaymentSync(paymentRef, resolvedBookingIds, "split_pay_click");
+
+      if (!navigateToExternalUrl(paymentResult.data.paymentUrl)) {
+        setPayError("Не удалось открыть страницу оплаты");
+        setLoadingPay(false);
+      }
+      return;
+    }
+
+    setPayError("Не удалось получить ссылку split-оплаты");
+    setLoadingPay(false);
+  }, [
+    studioId,
+    studioMasterServiceId,
+    studioName,
+    selectedDate,
+    courtId,
+    selectedCourtName,
+    time,
+    duration,
+    profileName,
+    profileGrade,
+    profileRatingNumeric,
+    profilePhoto,
+    effectiveRatingGame,
+    minRating,
+    maxRating,
+    isPrivate,
+    participants,
+    waitlistPlayers,
+    selectedSlotId,
+    resolvedSelectedSubServiceIds,
+    splitPaymentAvailable,
+    splitPaymentPromoConfig,
+    splitShareCount,
+    resolvedGameFormat,
+    buildCommunityAutopublishMetadata,
+    resolveCurrentClientProfile,
+    runPaidGameCommunityMembershipAndPublication,
   ]);
 
   const handleMasterServicePay = useCallback(async () => {
@@ -10253,40 +10636,92 @@ export default function GamesPage({
 
         {showInlinePaymentSection && (
           <div className="game-payment-stack">
+            {splitPaymentAvailable && (
+              <div className="game-split-payment-panel">
+                <div className="payment-toggle" role="group" aria-label="Способ оплаты игры">
+                  <button
+                    className={`payment-pill ${paymentMode === "self" ? "active" : ""}`}
+                    type="button"
+                    onClick={() => setPaymentMode("self")}
+                  >
+                    Я оплачу игру один
+                  </button>
+                  <button
+                    className={`payment-pill ${paymentMode === "split" ? "active" : ""}`}
+                    type="button"
+                    onClick={() => setPaymentMode("split")}
+                  >
+                    Разделить оплату
+                  </button>
+                </div>
+                {splitPaymentSelected && (
+                  <>
+                    <div className="payment-toggle game-split-share-toggle" role="group" aria-label="Количество частей оплаты">
+                      <button
+                        className={`payment-pill ${splitShareCount === 2 ? "active" : ""}`}
+                        type="button"
+                        onClick={() => setSplitShareCount(2)}
+                      >
+                        2 команды
+                      </button>
+                      <button
+                        className={`payment-pill ${splitShareCount === 4 ? "active" : ""}`}
+                        type="button"
+                        onClick={() => setSplitShareCount(4)}
+                      >
+                        4 игрока
+                      </button>
+                    </div>
+                    <div className="game-split-payment-summary">
+                      <span>{splitPaymentSummary}</span>
+                      <span>скидка {formatPrice(splitDiscountAmount)} ₽ с участника</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             <button
               className={`game-submit game-submit-booking game-submit-inline ${canProceedToPayment ? "active" : ""}`}
               onClick={() => {
-                void handleMasterServicePay();
+                if (splitPaymentSelected) {
+                  void handleSplitGamePay();
+                } else {
+                  void handleMasterServicePay();
+                }
               }}
               type="button"
               disabled={!canProceedToPayment || loadingPay}
             >
-              <span className="game-submit-main">{paymentTitle}</span>
+              <span className="game-submit-main">{paymentSubmitTitle}</span>
               <span className="game-submit-meta">{paymentStationCourt}</span>
               <span className="game-submit-meta">{paymentTimeRange}</span>
             </button>
-            <button
-              className={`game-promo-trigger ${promoCodeApplied ? "applied" : ""}`}
-              onClick={() => {
-                setPromoError(null);
-                setPromoModalOpen(true);
-              }}
-              type="button"
-            >
-              у меня есть промокод
-            </button>
-            {promoCodeApplied && (
-              <div className="game-promo-status">
-                {promoStatusMessage || `Промокод ${promoCodeApplied} применен`}
-                {promoDiscountAmount != null
-                  && promoDiscountAmount > 0
-                  && basePaymentAmount != null
-                  && promoPricePreview != null && (
-                    <span className="game-promo-status-amount">
-                      Было {formatPrice(basePaymentAmount)} ₽, стало {formatPrice(promoPricePreview)} ₽
-                    </span>
-                  )}
-              </div>
+            {!splitPaymentSelected && (
+              <>
+                <button
+                  className={`game-promo-trigger ${promoCodeApplied ? "applied" : ""}`}
+                  onClick={() => {
+                    setPromoError(null);
+                    setPromoModalOpen(true);
+                  }}
+                  type="button"
+                >
+                  у меня есть промокод
+                </button>
+                {promoCodeApplied && (
+                  <div className="game-promo-status">
+                    {promoStatusMessage || `Промокод ${promoCodeApplied} применен`}
+                    {promoDiscountAmount != null
+                      && promoDiscountAmount > 0
+                      && basePaymentAmount != null
+                      && promoPricePreview != null && (
+                        <span className="game-promo-status-amount">
+                          Было {formatPrice(basePaymentAmount)} ₽, стало {formatPrice(promoPricePreview)} ₽
+                        </span>
+                      )}
+                  </div>
+                )}
+              </>
             )}
             {payError && <div className="game-empty game-pay-error">{payError}</div>}
           </div>

@@ -13,15 +13,7 @@ export function PhoneStep({ onSend, error, authPhone }: PhoneStepProps) {
   return (
     <div className="auth-card">
       <p className="auth-title">Войти или зарегистрироваться</p>
-      {/*<p className="auth-subtitle">
-      мы отправим код подтверждения<br/>
-      - проверьте сообщение от Telegram Gateway;<br/>
-      - проверьте sms сообщение;<br/>
-      - если код не приходит, поделитесь своим номером с нашим{' '}
-    <a href="https://t.me/Academy_F_padel_bot" target="_blank" rel="noreferrer">
-     ботом
-  </a>
-</p>  */}    <PhoneInput value={phone} onChange={setPhone} />
+      <PhoneInput value={phone} onChange={setPhone} />
       <button
         className="auth-btn"
         onClick={() => onSend(phone)}

@@ -8,12 +8,26 @@ const normPhone = (v) => {
 };
 const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
 const asArray = (v) => (Array.isArray(v) ? v : []);
+const toStr = (v) => {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s ? s : null;
+};
+const toNum = (v) => {
+  if (v === null || v === undefined) return null;
+  const n = Number(String(v).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+};
 
 const phone = msg._lkPhone || null;
 const includePast = Boolean(msg._lkIncludePast);
 const limit = Number(msg._lkLimit);
+const offset = Number.isFinite(Number(msg._lkOffset)) ? Math.max(0, Math.floor(Number(msg._lkOffset))) : 0;
 const paymentRef = msg._lkPaymentRef || null;
 const bookingIdsFilter = new Set(asArray(msg._lkBookingIds));
+const publicMode = Boolean(msg._lkPublicMode);
+const stationIdFilter = toStr(msg._lkStationId);
+const stationNameFilter = toStr(msg._lkStationName);
 const nowTs = Date.now();
 
 const rows = Array.isArray(msg.payload) ? msg.payload : [];
@@ -55,14 +69,61 @@ const collectBookingIds = (doc) => {
   ]);
 };
 
+const normalizeComparable = (value) => {
+  const raw = toStr(value);
+  if (!raw) return null;
+  const normalized = raw
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^a-zа-я0-9]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized || null;
+};
+
+const resolveMaxPlayers = (doc) => {
+  const inviteLimit = toNum(doc?.invite?.maxPlayers);
+  if (inviteLimit && inviteLimit > 0) return Math.floor(inviteLimit);
+  const metaLimit = toNum(doc?.metadata?.maxPlayers || doc?.metadata?.playersLimit);
+  if (metaLimit && metaLimit > 0) return Math.floor(metaLimit);
+  const format = String(doc?.metadata?.gameFormat || doc?.metadata?.format || "").toLowerCase();
+  if (format === "singles" || format.includes("1x1") || format.includes("1 на 1")) return 2;
+  return 4;
+};
+
+const resolveWaitlistEnabled = (doc) => {
+  if (typeof doc?.invite?.waitlistEnabled === "boolean") return doc.invite.waitlistEnabled;
+  if (typeof doc?.metadata?.waitlistEnabled === "boolean") return doc.metadata.waitlistEnabled;
+  return true;
+};
+
+const matchesStationFilter = (doc) => {
+  if (stationIdFilter && toStr(doc?.booking?.studioId) !== stationIdFilter) return false;
+  const stationName = normalizeComparable(stationNameFilter);
+  if (!stationName) return true;
+  const docStationName = normalizeComparable(doc?.booking?.studioName);
+  return Boolean(docStationName && (docStationName.includes(stationName) || stationName.includes(docStationName)));
+};
+
 rows.forEach((doc) => {
   if (!isObj(doc)) return;
 
   const status = String(doc.status || "").toUpperCase();
   if (status.includes("CANCEL")) return;
+  if (publicMode && (status.includes("PAYMENT_PENDING") || status.includes("DRAFT"))) return;
 
   const endTs = Number(doc?.booking?.endTs);
   if (!includePast && Number.isFinite(endTs) && endTs < nowTs) return;
+
+  if (publicMode) {
+    if (doc?.settings?.isPrivate === true) return;
+    if (doc?.payment?.paid === false) return;
+    if (!matchesStationFilter(doc)) return;
+
+    const maxPlayers = resolveMaxPlayers(doc);
+    const participantCount = asArray(doc?.participants).length;
+    if (participantCount >= maxPlayers && !resolveWaitlistEnabled(doc)) return;
+  }
 
   if (phone) {
     const phones = collectPhones(doc);
@@ -111,9 +172,11 @@ rows.forEach((doc) => {
 
 const games = Array.from(byKey.values()).sort((a, b) => getTs(a) - getTs(b));
 const total = games.length;
-const slicedGames = Number.isFinite(limit) && limit > 0
-  ? games.slice(0, limit)
+const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : null;
+const slicedGames = safeLimit
+  ? games.slice(offset, offset + safeLimit)
   : games;
+const hasMore = safeLimit ? offset + slicedGames.length < total : false;
 
 msg.statusCode = 200;
 msg.headers = { "Content-Type": "application/json; charset=utf-8" };
@@ -121,7 +184,11 @@ msg.payload = {
   phone,
   paymentRef,
   bookingIds: Array.from(bookingIdsFilter.values()),
+  public: publicMode,
+  offset,
+  limit: safeLimit,
   total,
+  hasMore,
   games: slicedGames,
 };
 

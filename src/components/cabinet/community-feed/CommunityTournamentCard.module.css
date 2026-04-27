@@ -1,135 +1,272 @@
 .card {
-  padding: 18px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 20px 16px;
   border: none;
-  box-shadow: 0 10px 24px rgba(86, 68, 133, 0.08);
+  border-bottom: 0.5px solid #ededed;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .layout {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
 }
 
-.head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
+.author {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 10px;
 }
 
-.headMain {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex: 1 1 auto;
-}
-
-.title {
-  margin: 0;
-  color: #000000;
-  font-size: 16px;
-  line-height: 1.25;
+.avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #c9ffdc;
+  color: #2f3b31;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  line-height: 1;
   font-weight: 800;
-  letter-spacing: -0.02em;
   font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-.station,
-.time {
-  margin: 0;
-  color: #000000;
-  font-size: 12px;
-  line-height: 1.25;
-  font-weight: 400;
-  letter-spacing: -0.05em;
-  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
-.station {
-  color: #111111;
+.authorText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.time {
-  color: #3c3750;
+.authorName {
+  color: #1d1a22;
+  font-size: 14px;
+  line-height: 1.15;
+  font-weight: 800;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.authorHandle,
+.menuDots {
+  color: #aaa5ad;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: 0;
+  font-family: "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.menuDots {
+  justify-self: end;
+  align-self: start;
+}
+
+.tournament {
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 14px 12px 12px;
+  box-shadow: 0 8px 24px rgba(45, 38, 56, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.topLine {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border-radius: 999px;
+  padding: 0 8px;
+  background: #eaff7a;
+  color: #5d8b00;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0;
+  font-family: "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  background: #90c500;
 }
 
 .dateWrap {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
   flex: 0 0 auto;
 }
 
 .dateBadge {
-  min-width: 42px;
-}
-
-.dateCaption {
-  min-height: 9px;
-}
-
-.tags {
+  min-width: 44px;
+  min-height: 48px;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 8px 18px rgba(34, 30, 44, 0.08);
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
 }
 
-.tag {
-  border-radius: 24px;
-  padding: 4px 8px;
+.dateDay {
+  color: #1d1a22;
+  font-size: 20px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.dateMonth {
+  color: #7b57f6;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.title {
+  margin: -4px 54px 0 0;
+  color: #1d1a22;
+  font-size: 18px;
+  line-height: 1.15;
+  font-weight: 800;
+  letter-spacing: 0;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #4a4650;
+  font-size: 12px;
+  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: 0;
+  font-family: "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.meta span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.capacity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.capacityLabels {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #7d7784;
   font-size: 11px;
   line-height: 1.2;
-  font-weight: 500;
-  letter-spacing: -0.05em;
-  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 700;
+  letter-spacing: 0;
+  font-family: "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-.tagType {
-  background: #000000;
-  color: #ffffff;
+.progressTrack {
+  height: 5px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #eeeaf6;
 }
 
-.tagSlots {
-  background: #eef8f1;
-  color: #2f8654;
+.progressTrack span {
+  display: block;
+  height: 100%;
+  min-width: 8px;
+  border-radius: inherit;
+  background: #7b57f6;
 }
 
-.tagSlotsFull {
-  background: rgba(31, 26, 46, 0.08);
-  color: #4f4a5d;
+.footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(128px, 156px);
+  align-items: center;
+  gap: 10px;
+  padding-top: 2px;
 }
 
-.tagRating {
-  background: linear-gradient(90deg, #e56b00 0%, #dd4d20 100%);
-  color: #ffffff;
-}
-
-.tagGender {
-  background: #f4f0ff;
-  color: #7353d9;
+.waitlist {
+  color: #8b8490;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: 0;
+  font-family: "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 .action {
-  width: 100%;
-  min-height: 44px;
+  min-height: 34px;
   border: none;
-  border-radius: 12px;
-  padding: 14px 20px;
-  background: linear-gradient(135deg, #7b57f6 0%, #6847e8 100%);
+  border-radius: 18px;
+  padding: 9px 16px;
+  background: #7b57f6;
   color: #ffffff;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1;
   font-weight: 800;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
+  white-space: nowrap;
   font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  box-shadow: 0 10px 20px rgba(104, 71, 232, 0.2);
+  box-shadow: 0 8px 16px rgba(123, 87, 246, 0.24);
   transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 
 .action:active {
   transform: scale(0.98);
-  box-shadow: 0 6px 14px rgba(104, 71, 232, 0.2);
+  box-shadow: 0 5px 12px rgba(123, 87, 246, 0.22);
+}
+
+@media (max-width: 360px) {
+  .card {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .footer {
+    grid-template-columns: 1fr;
+  }
+
+  .action {
+    width: 100%;
+  }
 }

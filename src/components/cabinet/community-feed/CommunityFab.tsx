@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CalendarPlusIcon, InviteIcon, PlusIcon } from "./CommunityIcons";
+import { CalendarPlusIcon, InviteIcon, NavFabPlusIcon, PlusIcon } from "./CommunityIcons";
 
 interface CommunityFabProps {
   onAddPost: () => void;
@@ -106,7 +106,11 @@ export function CommunityFab({
         aria-expanded={isOpen}
         aria-haspopup="menu"
       >
-        <PlusIcon className="community-feed-fab-icon" />
+        {isNavVariant ? (
+          <NavFabPlusIcon className="community-feed-fab-nav-icon" />
+        ) : (
+          <PlusIcon className="community-feed-fab-icon" />
+        )}
       </button>
     </div>
   );

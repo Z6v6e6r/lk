@@ -1,0 +1,200 @@
+[
+  {
+    "id": "d4a011b9337a4201",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "LK games split create",
+    "url": "/lk/games/split/create",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 180,
+    "y": 1880,
+    "wires": [
+      [
+        "d4a011b9337a4203"
+      ]
+    ]
+  },
+  {
+    "id": "d4a011b9337a4202",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "LK games split join",
+    "url": "/lk/games/:gameId/split/join",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 170,
+    "y": 1920,
+    "wires": [
+      [
+        "d4a011b9337a4204"
+      ]
+    ]
+  },
+  {
+    "id": "d4a011b9337a4203",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Prepare split game payment",
+    "func": "const TOKEN_URL = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\n\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const text = String(value).trim();\n  return text ? text : null;\n};\n\nconst toNumber = (value) => {\n  if (typeof value === \"number\" && Number.isFinite(value)) return value;\n  if (typeof value === \"string\") {\n    const parsed = Number(value.trim().replace(\",\", \".\"));\n    if (Number.isFinite(parsed)) return parsed;\n  }\n  return null;\n};\n\nconst normalizePhone = (value) => {\n  const digits = String(value || \"\").replace(/\\D/g, \"\");\n  if (!digits) return null;\n  if (digits.length === 10) return `7${digits}`;\n  if (digits.length === 11 && digits.startsWith(\"8\")) return `7${digits.slice(1)}`;\n  return digits;\n};\n\nconst fail = (status, error, details) => {\n  msg.statusCode = status;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error, details: details || null };\n  return [null, msg, msg];\n};\n\nconst body = msg.payload && typeof msg.payload === \"object\" ? msg.payload : {};\nconst date = toStr(body.date);\nconst fromTime = toStr(body.fromTime);\nconst toTime = toStr(body.toTime);\nconst roomId = toStr(body.roomId);\nconst clientPhone = normalizePhone(body.clientPhone || body.phone);\n\nif (!date || !fromTime || !toTime || !roomId || !clientPhone) {\n  return fail(400, \"date, fromTime, toTime, roomId and clientPhone are required\");\n}\n\nconst shareCount = Number(body.shareCount) === 2 ? 2 : 4;\nconst shareAmount = toNumber(body.shareAmount) ?? (shareCount === 2 ? 500 : 250);\nconst maxClientsCount = Math.max(1, Math.min(4, Math.floor(toNumber(body.maxClientsCount) ?? shareCount)));\nconst spot = Math.max(1, Math.min(4, Math.floor(toNumber(body.spot) ?? 1)));\nconst paymentRef = toStr(body.paymentRef) || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;\nconst vivaDirectionId = Math.max(1, Math.floor(toNumber(body.vivaDirectionId || body.directionId) ?? 4485));\nconst vivaExerciseTypeId = Math.max(1, Math.floor(toNumber(body.vivaExerciseTypeId || body.exerciseTypeId) ?? 1208));\n\nmsg._splitCtx = {\n  action: \"create\",\n  step: \"token\",\n  paymentRef,\n  date,\n  fromTime,\n  toTime,\n  timeFrom: `${date}T${fromTime}:00+03:00`,\n  timeTo: `${date}T${toTime}:00+03:00`,\n  studioId: toStr(body.studioId),\n  roomId,\n  clientId: toStr(body.clientId),\n  clientPhone,\n  shareCount,\n  shareAmount,\n  maxClientsCount,\n  spot,\n  vivaDirectionId,\n  vivaExerciseTypeId,\n  successUrl: toStr(body.successUrl) || toStr(body.baseRedirectUrl),\n  failUrl: toStr(body.failUrl) || toStr(body.baseRedirectUrl),\n  deadlineAt: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),\n};\n\nmsg.method = \"POST\";\nmsg.url = TOKEN_URL;\nmsg.headers = { \"Content-Type\": \"application/x-www-form-urlencoded\" };\nmsg.payload =\n  \"grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ\";\n\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 470,
+    "y": 1880,
+    "wires": [
+      [
+        "d4a011b9337a4207"
+      ],
+      [
+        "d4a011b9337a4209"
+      ],
+      [
+        "d4a011b9337a4210"
+      ]
+    ]
+  },
+  {
+    "id": "d4a011b9337a4204",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Build split join game query",
+    "func": "const toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const text = String(value).trim();\n  return text ? text : null;\n};\n\nconst gameId = toStr(msg.req?.params?.gameId);\n\nif (!gameId) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"gameId is required\" };\n  return [null, msg];\n}\n\nmsg._splitJoinGameId = gameId;\nmsg._splitJoinBody = msg.payload && typeof msg.payload === \"object\" ? msg.payload : {};\nmsg.payload = { id: gameId, archived: { $ne: true } };\nreturn [msg, null];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 470,
+    "y": 1920,
+    "wires": [
+      [
+        "d4a011b9337a4205"
+      ],
+      [
+        "d4a011b9337a4209"
+      ]
+    ]
+  },
+  {
+    "id": "d4a011b9337a4205",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "name": "Find split game",
+    "collection": "lk_games",
+    "operation": "find",
+    "x": 730,
+    "y": 1920,
+    "wires": [
+      [
+        "d4a011b9337a4206"
+      ]
+    ],
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false
+  },
+  {
+    "id": "d4a011b9337a4206",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Prepare split join payment",
+    "func": "const TOKEN_URL = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\n\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const text = String(value).trim();\n  return text ? text : null;\n};\n\nconst toNumber = (value) => {\n  if (typeof value === \"number\" && Number.isFinite(value)) return value;\n  if (typeof value === \"string\") {\n    const parsed = Number(value.trim().replace(\",\", \".\"));\n    if (Number.isFinite(parsed)) return parsed;\n  }\n  return null;\n};\n\nconst normalizePhone = (value) => {\n  const digits = String(value || \"\").replace(/\\D/g, \"\");\n  if (!digits) return null;\n  if (digits.length === 10) return `7${digits}`;\n  if (digits.length === 11 && digits.startsWith(\"8\")) return `7${digits.slice(1)}`;\n  return digits;\n};\n\nconst fail = (status, error, details) => {\n  msg.statusCode = status;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error, details: details || null };\n  return [null, msg, msg];\n};\n\nconst rows = Array.isArray(msg.payload) ? msg.payload : [];\nif (rows.length === 0) {\n  return fail(404, \"Game not found\");\n}\n\nconst game = rows[0] && typeof rows[0] === \"object\" ? rows[0] : null;\nif (!game) {\n  return fail(404, \"Game not found\");\n}\n\nconst body = msg._splitJoinBody && typeof msg._splitJoinBody === \"object\" ? msg._splitJoinBody : {};\nconst metadata = game.metadata && typeof game.metadata === \"object\" ? game.metadata : {};\nconst splitPayment = metadata.splitPayment && typeof metadata.splitPayment === \"object\" ? metadata.splitPayment : {};\nconst booking = game.booking && typeof game.booking === \"object\" ? game.booking : {};\nconst exerciseId =\n  toStr(splitPayment.vivaExerciseId) ||\n  toStr(booking.vivaExerciseId) ||\n  toStr(booking.exerciseId);\nconst clientPhone = normalizePhone(body.clientPhone || body.phone);\nconst studioId = toStr(body.studioId) || toStr(booking.studioId);\nconst shareCount = Number(body.shareCount) === 2 || Number(splitPayment.shareCount) === 2 ? 2 : 4;\nconst shareAmount = toNumber(body.shareAmount) ?? toNumber(splitPayment.shareAmount) ?? (shareCount === 2 ? 500 : 250);\nconst maxClientsCount = Math.max(1, Math.min(4, Math.floor(toNumber(body.maxClientsCount) ?? shareCount)));\nconst spotRaw = toNumber(body.spot);\nconst spot = spotRaw === null ? null : Math.max(1, Math.min(4, Math.floor(spotRaw)));\nconst paymentRef = toStr(body.paymentRef) || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;\n\nif (!exerciseId || !clientPhone || !studioId) {\n  return fail(400, \"exerciseId, studioId and clientPhone are required\");\n}\n\nmsg._splitCtx = {\n  action: \"join\",\n  step: \"token\",\n  paymentRef,\n  exerciseId,\n  studioId,\n  clientId: toStr(body.clientId),\n  clientPhone,\n  shareCount,\n  shareAmount,\n  maxClientsCount,\n  spot,\n  successUrl: toStr(body.successUrl) || toStr(body.baseRedirectUrl),\n  failUrl: toStr(body.failUrl) || toStr(body.baseRedirectUrl),\n  deadlineAt: toStr(splitPayment.deadlineAt) || new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),\n};\n\nmsg.method = \"POST\";\nmsg.url = TOKEN_URL;\nmsg.headers = { \"Content-Type\": \"application/x-www-form-urlencoded\" };\nmsg.payload =\n  \"grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ\";\n\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 990,
+    "y": 1920,
+    "wires": [
+      [
+        "d4a011b9337a4207"
+      ],
+      [
+        "d4a011b9337a4209"
+      ],
+      [
+        "d4a011b9337a4210"
+      ]
+    ]
+  },
+  {
+    "id": "d4a011b9337a4207",
+    "type": "http request",
+    "z": "1e95dcebc274ac6c",
+    "name": "Viva split payment request",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "x": 1260,
+    "y": 1880,
+    "wires": [
+      [
+        "d4a011b9337a4208"
+      ]
+    ]
+  },
+  {
+    "id": "d4a011b9337a4208",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Route Viva split payment",
+    "func": "const ADMIN_API = \"https://api.vivacrm.ru/api/v1\";\nconst SPLIT_DIRECTION_ID = 4485;\nconst SPLIT_EXERCISE_TYPE_ID = 1208;\n\nconst isOk = (status) => Number(status) >= 200 && Number(status) < 300;\n\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const text = String(value).trim();\n  return text ? text : null;\n};\n\nconst toNumber = (value) => {\n  if (typeof value === \"number\" && Number.isFinite(value)) return value;\n  if (typeof value === \"string\") {\n    const parsed = Number(value.trim().replace(\",\", \".\"));\n    if (Number.isFinite(parsed)) return parsed;\n  }\n  return null;\n};\n\nconst pickId = (value) => {\n  if (!value || typeof value !== \"object\") return null;\n  return toStr(value.id) || toStr(value.uuid);\n};\n\nconst fail = (status, error, details) => {\n  msg.statusCode = status;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error, details: details || null };\n  return [null, msg, msg];\n};\n\nconst adminRequest = (ctx, method, path, payload) => {\n  msg._splitCtx = ctx;\n  msg.method = method;\n  msg.url = `${ADMIN_API}${path}`;\n  msg.headers = {\n    Authorization: `Bearer ${ctx.token}`,\n    \"Content-Type\": \"application/json\",\n  };\n  msg.payload = payload;\n  return [msg, null, msg];\n};\n\nconst extractList = (value) => {\n  if (Array.isArray(value)) return value;\n  if (value && typeof value === \"object\") {\n    if (Array.isArray(value.content)) return value.content;\n    if (Array.isArray(value.data)) return value.data;\n    if (Array.isArray(value.items)) return value.items;\n  }\n  return [];\n};\n\nconst isLikelyPaymentUrl = (value) => {\n  if (typeof value !== \"string\") return false;\n  const text = value.trim();\n  if (!/^https?:\\/\\//i.test(text)) return false;\n  return /(pay|tbank|tinkoff|payment|checkout|bank|acquir)|([?&](payment|transaction|order|invoice)=)/i.test(text);\n};\n\nconst extractPaymentUrl = (value) => {\n  if (!value) return null;\n  if (typeof value === \"string\") {\n    const text = value.trim();\n    if (!/^https?:\\/\\//i.test(text)) return null;\n    return isLikelyPaymentUrl(text) ? text : null;\n  }\n  if (Array.isArray(value)) {\n    for (const item of value) {\n      const nested = extractPaymentUrl(item);\n      if (nested) return nested;\n    }\n    return null;\n  }\n  if (typeof value !== \"object\") return null;\n\n  for (const key of [\"paymentUrl\", \"redirectUrl\", \"paymentLink\", \"checkoutUrl\", \"cardPaymentUrl\", \"paymentPageUrl\"]) {\n    const direct = extractPaymentUrl(value[key]);\n    if (direct) return direct;\n  }\n\n  for (const key of [\"url\", \"link\"]) {\n    const direct = extractPaymentUrl(value[key]);\n    if (direct) return direct;\n  }\n\n  for (const key of [\"data\", \"payload\", \"result\", \"transaction\", \"transactionStatus\", \"cardPaymentStatus\", \"payment\", \"paymentInfo\", \"cardPaymentInfo\"]) {\n    const found = extractPaymentUrl(value[key]);\n    if (found) return found;\n  }\n  return null;\n};\n\nconst buildBookingRequest = (ctx) => {\n  const payload = {\n    phone: ctx.clientPhone,\n    paymentType: \"ON_PLACE\",\n    familyMemberId: \"\",\n  };\n  if (ctx.spot) payload.spot = ctx.spot;\n\n  ctx.step = \"create_booking\";\n  return adminRequest(\n    ctx,\n    \"POST\",\n    `/exercises/${encodeURIComponent(ctx.exerciseId)}/bookings`,\n    payload,\n  );\n};\n\nconst ctx = msg._splitCtx && typeof msg._splitCtx === \"object\" ? msg._splitCtx : null;\nif (!ctx) {\n  return fail(500, \"Split payment context is missing\");\n}\n\nif (ctx.step === \"token\") {\n  if (!isOk(msg.statusCode) || !msg.payload?.access_token) {\n    return fail(500, \"Viva token error\", msg.payload || null);\n  }\n  ctx.token = msg.payload.access_token;\n\n  if (ctx.action === \"create\") {\n    ctx.step = \"create_exercise\";\n    return adminRequest(ctx, \"POST\", \"/exercises\", {\n      direction: toNumber(ctx.vivaDirectionId) ?? SPLIT_DIRECTION_ID,\n      type: toNumber(ctx.vivaExerciseTypeId) ?? SPLIT_EXERCISE_TYPE_ID,\n      timeFrom: `${ctx.date}T${ctx.fromTime}+03:00`,\n      timeTo: `${ctx.date}T${ctx.toTime}+03:00`,\n      maxClientsCount: ctx.maxClientsCount,\n      roomId: ctx.roomId,\n      clientId: ctx.clientId || undefined,\n      requirements: [],\n    });\n  }\n\n  return buildBookingRequest(ctx);\n}\n\nif (!isOk(msg.statusCode)) {\n  return fail(msg.statusCode || 502, \"Viva request failed\", msg.payload || null);\n}\n\nif (ctx.step === \"create_exercise\") {\n  const exerciseId = pickId(msg.payload);\n  if (!exerciseId) {\n    return fail(502, \"Viva exercise response has no id\", msg.payload || null);\n  }\n\n  ctx.exercise = msg.payload;\n  ctx.exerciseId = exerciseId;\n  if (!ctx.studioId && msg.payload?.studio?.id) {\n    ctx.studioId = msg.payload.studio.id;\n  }\n  return buildBookingRequest(ctx);\n}\n\nif (ctx.step === \"create_booking\") {\n  const bookingId = pickId(msg.payload);\n  if (!bookingId) {\n    return fail(502, \"Viva booking response has no id\", msg.payload || null);\n  }\n\n  ctx.booking = msg.payload;\n  ctx.bookingId = bookingId;\n  ctx.clientId = ctx.clientId || toStr(msg.payload?.client?.id);\n  ctx.clientPhone = ctx.clientPhone || toStr(msg.payload?.client?.phone);\n  ctx.studioId = ctx.studioId || toStr(msg.payload?.studio?.id);\n  ctx.spot = toNumber(msg.payload?.spot) ?? ctx.spot ?? null;\n\n  if (!ctx.clientId || !ctx.studioId) {\n    return fail(502, \"Viva booking response has no clientId or studioId\", msg.payload || null);\n  }\n\n  ctx.step = \"available_products\";\n  return adminRequest(ctx, \"POST\", \"/products/available/by-booking\", {\n    bookingIds: [bookingId],\n    clientId: ctx.clientId,\n    studioId: ctx.studioId,\n  });\n}\n\nif (ctx.step === \"available_products\") {\n  const products = extractList(msg.payload);\n  const product = products.find((item) => {\n    if (!item || typeof item !== \"object\") return false;\n    const type = String(item.productType || item.type || \"\").toUpperCase();\n    return type === \"SERVICE\" || type === \"BOOKING_PAYMENT\";\n  }) || products[0];\n\n  if (!product || typeof product !== \"object\") {\n    return fail(502, \"No Viva booking payment product is available\", msg.payload || null);\n  }\n\n  const productId = pickId(product);\n  if (!productId) {\n    return fail(502, \"Viva product response has no id\", product);\n  }\n\n  const productCostMinor = Math.max(0, Math.round(toNumber(product.cost) ?? 200000));\n  const shareAmountMinor = Math.max(0, Math.round(Number(ctx.shareAmount || 0) * 100));\n  const discountAmountMinor = Math.max(productCostMinor - shareAmountMinor, 0);\n\n  ctx.product = product;\n  ctx.productId = productId;\n  ctx.baseShareAmountMinor = productCostMinor;\n  ctx.baseShareAmount = productCostMinor / 100;\n  ctx.shareAmountMinor = shareAmountMinor;\n  ctx.discountAmountMinor = discountAmountMinor;\n  ctx.discountAmount = discountAmountMinor / 100;\n  ctx.step = \"transaction\";\n\n  const transactionPayload = {\n    clientPhone: ctx.clientPhone.startsWith(\"+\") ? ctx.clientPhone : `+${ctx.clientPhone}`,\n    paymentMethod: \"WIDGET\",\n    products: [\n      {\n        id: productId,\n        count: 1,\n        customAmount: null,\n        type: \"SERVICE\",\n        discount: discountAmountMinor,\n        bookingIds: [ctx.bookingId],\n      },\n    ],\n    studioId: ctx.studioId,\n    discountReason: ctx.shareCount === 4 ? \"Своя игра 1/4 акция Терехово\" : \"Своя игра split акция Терехово\",\n    offlineTillId: null,\n    deposit: 0,\n  };\n  if (ctx.successUrl) transactionPayload.successUrl = ctx.successUrl;\n  if (ctx.failUrl) transactionPayload.failUrl = ctx.failUrl;\n\n  return adminRequest(ctx, \"POST\", \"/transactions\", transactionPayload);\n}\n\nif (ctx.step === \"transaction\") {\n  const transactionId = pickId(msg.payload);\n  const toPayMinor = Math.max(0, Math.round(toNumber(msg.payload?.toPay) ?? ctx.shareAmountMinor ?? 0));\n  const responsePayload = {\n    ok: true,\n    mode: ctx.action,\n    paymentRef: ctx.paymentRef,\n    exerciseId: ctx.exerciseId,\n    bookingId: ctx.bookingId,\n    productId: ctx.productId,\n    transactionId,\n    paymentUrl: extractPaymentUrl(msg.payload),\n    toPayMinor,\n    toPay: toPayMinor / 100,\n    shareAmount: ctx.shareAmount,\n    shareAmountMinor: ctx.shareAmountMinor,\n    baseShareAmount: ctx.baseShareAmount,\n    baseShareAmountMinor: ctx.baseShareAmountMinor,\n    discountAmount: ctx.discountAmount,\n    discountAmountMinor: ctx.discountAmountMinor,\n    directionId: toNumber(ctx.vivaDirectionId) ?? SPLIT_DIRECTION_ID,\n    exerciseTypeId: toNumber(ctx.vivaExerciseTypeId) ?? SPLIT_EXERCISE_TYPE_ID,\n    deadlineAt: ctx.deadlineAt,\n    spot: ctx.spot ?? null,\n  };\n\n  msg.statusCode = 201;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = responsePayload;\n  return [null, msg, msg];\n}\n\nreturn fail(500, \"Unsupported split payment step\", { step: ctx.step });\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1530,
+    "y": 1880,
+    "wires": [
+      [
+        "d4a011b9337a4207"
+      ],
+      [
+        "d4a011b9337a4209"
+      ],
+      [
+        "d4a011b9337a4210"
+      ]
+    ]
+  },
+  {
+    "id": "d4a011b9337a4209",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 1790,
+    "y": 1860,
+    "wires": []
+  },
+  {
+    "id": "d4a011b9337a4210",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "lk games split payment debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1810,
+    "y": 1900,
+    "wires": []
+  }
+]

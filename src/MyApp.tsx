@@ -12,6 +12,7 @@ import {
   GAMES_BUNDLE_URL,
   ONBOARDING_BUNDLE_URL,
   PUBLIC_GAME_CREATE_PATH,
+  PUBLIC_GAME_FIND_PATH,
   PUBLIC_INVITE_PATH,
   TOURNAMENTS_BUNDLE_URL,
 } from "./consts/api_config";
@@ -48,12 +49,21 @@ type AppWindow = Window & Record<WidgetGlobalName, WidgetModule | undefined> & {
     stationName?: string | null;
     cabinetUrl?: string | null;
   };
+  __PADLHUB_FIND_GAME_CONFIG__?: {
+    studioId?: string | null;
+    studioName?: string | null;
+    stationId?: string | null;
+    stationName?: string | null;
+    cabinetUrl?: string | null;
+  };
 };
 
 const DEFAULT_CABINET_URL = CABINET_URL;
 const DEFAULT_INVITE_PATH = (PUBLIC_INVITE_PATH || "/game_join").replace(/\/+$/, "") || "/game_join";
 const DEFAULT_GAME_CREATE_PATH =
   (PUBLIC_GAME_CREATE_PATH || "/game_create").replace(/\/+$/, "") || "/game_create";
+const DEFAULT_GAME_FIND_PATH =
+  (PUBLIC_GAME_FIND_PATH || "/finde_game").replace(/\/+$/, "") || "/finde_game";
 const DEFAULT_COMMUNITY_JOIN_PATH =
   (PUBLIC_COMMUNITY_JOIN_PATH || "/community_join").replace(/\/+$/, "") || "/community_join";
 const OPEN_GAME_QUERY_KEY = "openGameId";
@@ -252,6 +262,68 @@ function AppContent() {
       current.searchParams.get("cabinetUrl")
       || current.searchParams.get("returnUrl")
       || createConfig?.cabinetUrl
+      || DEFAULT_CABINET_URL
+    ).trim() || DEFAULT_CABINET_URL;
+
+    return {
+      enabled: byPath,
+      studioId: studioId || null,
+      studioName: studioName || null,
+      cabinetUrl,
+    };
+  }, []);
+
+  const findRouteData = useMemo(() => {
+    if (typeof window === "undefined") {
+      return {
+        enabled: false,
+        studioId: null as string | null,
+        studioName: null as string | null,
+        cabinetUrl: DEFAULT_CABINET_URL,
+      };
+    }
+
+    const current = new URL(window.location.href);
+    const hashRaw = (current.hash || "").replace(/^#/, "");
+    const hashQueryIndex = hashRaw.indexOf("?");
+    const hashParams = new URLSearchParams(hashQueryIndex >= 0 ? hashRaw.slice(hashQueryIndex + 1) : "");
+    const findConfig =
+      (window as typeof window & {
+        __PADLHUB_FIND_GAME_CONFIG__?: {
+          studioId?: string | null;
+          studioName?: string | null;
+          stationId?: string | null;
+          stationName?: string | null;
+          cabinetUrl?: string | null;
+        };
+      }).__PADLHUB_FIND_GAME_CONFIG__ ?? null;
+    const studioId = (
+      current.searchParams.get("stationId")
+      || hashParams.get("stationId")
+      || current.searchParams.get("studioId")
+      || hashParams.get("studioId")
+      || findConfig?.stationId
+      || findConfig?.studioId
+      || ""
+    ).trim();
+    const studioName = (
+      current.searchParams.get("station")
+      || hashParams.get("station")
+      || current.searchParams.get("stationName")
+      || hashParams.get("stationName")
+      || current.searchParams.get("studio")
+      || hashParams.get("studio")
+      || current.searchParams.get("studioName")
+      || hashParams.get("studioName")
+      || findConfig?.stationName
+      || findConfig?.studioName
+      || ""
+    ).trim();
+    const byPath = current.pathname.replace(/\/+$/, "").endsWith(DEFAULT_GAME_FIND_PATH);
+    const cabinetUrl = (
+      current.searchParams.get("cabinetUrl")
+      || current.searchParams.get("returnUrl")
+      || findConfig?.cabinetUrl
       || DEFAULT_CABINET_URL
     ).trim() || DEFAULT_CABINET_URL;
 
@@ -611,6 +683,27 @@ function AppContent() {
         } satisfies GamesMountData}
         loadingText="Загружаем создание игры..."
         errorTitle="Не удалось открыть создание игры"
+      />
+    );
+  }
+
+  if (findRouteData.enabled) {
+    if (!isAuthenticated) {
+      return <AuthForm onLogin={() => setView("cabinet")} />;
+    }
+
+    return (
+      <RemoteWidgetHost
+        src={GAMES_BUNDLE_URL}
+        globalName="LKWidgetGames"
+        data={{
+          publicFindEntry: true,
+          presetStudioId: findRouteData.studioId,
+          presetStudioName: findRouteData.studioName,
+          cabinetUrl: findRouteData.cabinetUrl || DEFAULT_CABINET_URL,
+        } satisfies GamesMountData}
+        loadingText="Загружаем игры..."
+        errorTitle="Не удалось открыть игры"
       />
     );
   }
