@@ -5101,6 +5101,12 @@
     tabAdvertising.textContent = 'Реклама';
     tabs.appendChild(tabAdvertising);
 
+    var tabSplitPromo = document.createElement('button');
+    tabSplitPromo.className = 'phab-admin-tab';
+    tabSplitPromo.type = 'button';
+    tabSplitPromo.textContent = 'Split-акция';
+    tabs.appendChild(tabSplitPromo);
+
     var content = document.createElement('div');
     content.className = 'phab-admin-content';
     root.appendChild(content);
@@ -7215,6 +7221,7 @@
       tabAnalytics: tabAnalytics,
       tabSettings: tabSettings,
       tabAdvertising: tabAdvertising,
+      tabSplitPromo: tabSplitPromo,
       messagesSection: messagesSection,
       gamesSection: gamesSection,
       logsSection: logsSection,
@@ -8791,7 +8798,8 @@
         { value: 'laboratory', label: 'Лаборатория', hidden: hideLaboratoryTab },
         { value: 'analytics', label: 'Аналитика', hidden: isRestrictedStationAdmin },
         { value: 'settings', label: 'Настройки', hidden: isRestrictedStationAdmin },
-        { value: 'advertising', label: 'Реклама', hidden: isRestrictedStationAdmin }
+        { value: 'advertising', label: 'Реклама', hidden: isRestrictedStationAdmin },
+        { value: 'splitPromo', label: 'Split-акция', hidden: isRestrictedStationAdmin }
       ]
         .filter(function (item) {
           return item.hidden !== true;
@@ -23089,7 +23097,7 @@
     function switchTab(nextTab) {
       if (
         isRestrictedStationAdmin &&
-        ['logs', 'analytics', 'settings', 'advertising'].indexOf(nextTab) >= 0
+        ['logs', 'analytics', 'settings', 'advertising', 'splitPromo'].indexOf(nextTab) >= 0
       ) {
         nextTab = 'messages';
       }
@@ -23107,7 +23115,8 @@
       var isCommunities = nextTab === 'communities';
       var isLaboratory = nextTab === 'laboratory';
       var isAnalytics = nextTab === 'analytics';
-      var isSettings = nextTab === 'settings';
+      var isSplitPromo = nextTab === 'splitPromo';
+      var isSettings = nextTab === 'settings' || isSplitPromo;
       var isAdvertising = nextTab === 'advertising';
       var hideLogsTab = isRestrictedStationAdmin;
       var hideCommunitiesTab = !canAccessCommunities(cfg);
@@ -23115,6 +23124,7 @@
       var hideAnalyticsTab = isRestrictedStationAdmin;
       var hideSettingsTab = isRestrictedStationAdmin;
       var hideAdvertisingTab = isRestrictedStationAdmin;
+      var hideSplitPromoTab = isRestrictedStationAdmin;
 
       dom.tabMessages.className = 'phab-admin-tab' + (isMessages ? ' phab-admin-tab-active' : '');
       dom.tabGames.className = 'phab-admin-tab' + (isGames ? ' phab-admin-tab-active' : '');
@@ -23138,12 +23148,16 @@
         (hideAnalyticsTab ? ' phab-admin-hidden' : '');
       dom.tabSettings.className =
         'phab-admin-tab' +
-        (isSettings ? ' phab-admin-tab-active' : '') +
+        (isSettings && !isSplitPromo ? ' phab-admin-tab-active' : '') +
         (hideSettingsTab ? ' phab-admin-hidden' : '');
       dom.tabAdvertising.className =
         'phab-admin-tab' +
         (isAdvertising ? ' phab-admin-tab-active' : '') +
         (hideAdvertisingTab ? ' phab-admin-hidden' : '');
+      dom.tabSplitPromo.className =
+        'phab-admin-tab' +
+        (isSplitPromo ? ' phab-admin-tab-active' : '') +
+        (hideSplitPromoTab ? ' phab-admin-hidden' : '');
       dom.mobileTabSelect.value = nextTab;
       dom.messagesSection.className = isMessages ? '' : 'phab-admin-hidden';
       dom.gamesSection.className = isGames ? '' : 'phab-admin-hidden';
@@ -23159,6 +23173,9 @@
       }
       if (isAdvertising) {
         setAdvertisingSubtab(state.advertisingSubtab);
+      }
+      if (isSplitPromo) {
+        setSettingsSubtab('splitPromo');
       }
       if (!isMessages) {
         toggleMobileFiltersSheet(false);
@@ -23233,6 +23250,7 @@
         dom.tabAnalytics.classList.add('phab-admin-hidden');
         dom.tabSettings.classList.add('phab-admin-hidden');
         dom.tabAdvertising.classList.add('phab-admin-hidden');
+        dom.tabSplitPromo.classList.add('phab-admin-hidden');
       }
       dom.tabMessages.addEventListener('click', function () {
         switchTab('messages');
@@ -23275,6 +23293,11 @@
         }
         if (nextTab === 'advertising') {
           loadAdvertising().catch(handleError);
+          return;
+        }
+        if (nextTab === 'splitPromo') {
+          setSettingsSubtab('splitPromo');
+          loadSettings().catch(handleError);
           return;
         }
         loadSettings().catch(handleError);
@@ -23323,6 +23346,11 @@
       dom.tabAdvertising.addEventListener('click', function () {
         switchTab('advertising');
         loadAdvertising().catch(handleError);
+      });
+      dom.tabSplitPromo.addEventListener('click', function () {
+        switchTab('splitPromo');
+        setSettingsSubtab('splitPromo');
+        loadSettings().catch(handleError);
       });
       dom.settingsGeneralTabBtn.addEventListener('click', function () {
         setSettingsSubtab('general');
