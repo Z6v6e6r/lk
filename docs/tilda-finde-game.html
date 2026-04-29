@@ -2,7 +2,9 @@
 
 <script>
   (function () {
-    var scriptUrl = "https://padlhub.su/lk/games.js";
+    var assetOrigin = "https://padlhub.su";
+    var scriptPath = "/lk/games.js";
+    var releasePath = "/lk/release.json";
     var cabinetUrl = "https://padlhub.ru/lk_new";
     var url = new URL(window.location.href);
 
@@ -26,12 +28,13 @@
       }
     }
 
-    var script = document.createElement("script");
-    script.src = scriptUrl;
-    script.async = true;
-    script.crossOrigin = "anonymous";
+    function withVersion(src, version) {
+      var scriptUrl = new URL(src, window.location.href);
+      scriptUrl.searchParams.set("v", version || String(Date.now()));
+      return scriptUrl.toString();
+    }
 
-    script.onload = function () {
+    function mountWidget() {
       if (!window.LKWidgetGames || typeof window.LKWidgetGames.mount !== "function") {
         showError();
         return;
@@ -44,9 +47,33 @@
         },
         data: data
       });
-    };
+    }
 
-    script.onerror = showError;
-    document.head.appendChild(script);
+    function loadScript(version) {
+      if (window.LKWidgetGames && typeof window.LKWidgetGames.unmount === "function") {
+        window.LKWidgetGames.unmount("root");
+      }
+      window.LKWidgetGames = undefined;
+
+      var script = document.createElement("script");
+      script.src = withVersion(assetOrigin + scriptPath, version);
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.onload = mountWidget;
+      script.onerror = showError;
+      document.head.appendChild(script);
+    }
+
+    fetch(withVersion(assetOrigin + releasePath, String(Date.now())), { cache: "no-store" })
+      .then(function (response) {
+        if (!response.ok) throw new Error("release manifest unavailable");
+        return response.json();
+      })
+      .then(function (release) {
+        loadScript(release && release.version);
+      })
+      .catch(function () {
+        loadScript(String(Date.now()));
+      });
   })();
 </script>

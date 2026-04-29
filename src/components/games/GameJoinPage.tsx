@@ -14,7 +14,7 @@ import {
   getLetterGrade,
   parseNumericLevel,
 } from "../../utils/customFields";
-import { CABINET_URL, IS_DEV_RELEASE_CHANNEL } from "../../consts/api_config";
+import { CABINET_URL } from "../../consts/api_config";
 import { PAYMENT_REF_QUERY_KEY } from "../../utils/paymentSync";
 
 type JoinDecision = "JOINED" | "WAITLIST" | "DECLINED" | "NONE";
@@ -152,7 +152,7 @@ function resolveSplitPaymentMetadata(game: PadelGameRecord | null): Record<strin
 }
 
 function isSplitPaymentGame(game: PadelGameRecord | null): boolean {
-  if (!IS_DEV_RELEASE_CHANNEL || !game) return false;
+  if (!game) return false;
   if (game.settings?.payMode === "split") return true;
   const splitPayment = resolveSplitPaymentMetadata(game);
   return Boolean(splitPayment?.enabled);

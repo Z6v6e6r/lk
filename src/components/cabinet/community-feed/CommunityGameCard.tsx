@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   ChatIcon,
   EmptySlotAvatarIcon,
@@ -31,6 +31,8 @@ export type CommunityGameCardProps = {
   confirmedPlayersCount?: number;
   totalSlots?: number;
   slotsLeft?: number;
+  splitJoinPriceText?: string | null;
+  splitCancelDeadlineAt?: string | null;
   isJoined?: boolean;
   showWaitlist?: boolean;
   isPastGame?: boolean;
@@ -125,6 +127,30 @@ function getGameTypeBadge(isRatingGame?: boolean | null) {
   return { label: "Френдли игра", tone: styles.statusBadgeFriendly };
 }
 
+function formatCountdown(deadlineAt?: string | null, nowMs = Date.now()) {
+  if (!deadlineAt) return null;
+
+  const deadlineMs = Date.parse(deadlineAt);
+  if (!Number.isFinite(deadlineMs)) return null;
+
+  const totalMinutes = Math.max(0, Math.ceil((deadlineMs - nowMs) / 60000));
+  if (totalMinutes <= 0) return "0 мин";
+
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) {
+    return `${days} д ${hours} ч`;
+  }
+
+  if (hours > 0) {
+    return `${hours} ч ${minutes} мин`;
+  }
+
+  return `${minutes} мин`;
+}
+
 function renderAvatar(player: CardPlayer, index: number) {
   return (
     <div
@@ -194,6 +220,8 @@ export function CommunityGameCard({
   confirmedPlayersCount = players.length,
   totalSlots = 4,
   slotsLeft,
+  splitJoinPriceText,
+  splitCancelDeadlineAt,
   isJoined = false,
   needsResult = false,
   durationText,
@@ -205,6 +233,7 @@ export function CommunityGameCard({
   onPlay,
   onChat,
 }: CommunityGameCardProps) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const sanitizedPlayers = hideDuplicateAvatarUrls(players);
   const slotsCount = Math.max(2, Math.min(totalSlots, 4));
   const visiblePlayers = sanitizedPlayers.slice(0, slotsCount);
@@ -225,6 +254,18 @@ export function CommunityGameCard({
   const dateLine = `${day} ${month.toLowerCase()}, ${timeText}`;
   const formattedLevelText = formatLevelRange(levelText);
   const secondaryAction = onChat || onPlay;
+  const splitCountdownText = formatCountdown(splitCancelDeadlineAt, nowMs);
+  const showSplitJoinInfo = !isGameFull && Boolean(splitJoinPriceText || splitCountdownText);
+
+  useEffect(() => {
+    if (!splitCancelDeadlineAt) return undefined;
+
+    const intervalId = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, [splitCancelDeadlineAt]);
 
   return (
     <article className={styles.card}>
@@ -301,13 +342,32 @@ export function CommunityGameCard({
               ))}
             </div>
 
-            <button
-              type="button"
-              className={`${styles.playButton}${needsResult ? ` ${styles.playButtonAttention}` : ""}`}
-              onClick={onPlay}
-            >
-              {playButtonLabel}
-            </button>
+            <div className={styles.footerActions}>
+              {showSplitJoinInfo && (
+                <div className={styles.splitJoinInfo} aria-label="Условия присоединения к сборной игре">
+                  {splitJoinPriceText && (
+                    <div className={styles.splitJoinInfoRow}>
+                      <span>Вход</span>
+                      <strong>{splitJoinPriceText}</strong>
+                    </div>
+                  )}
+                  {splitCountdownText && (
+                    <div className={styles.splitJoinInfoRow}>
+                      <span>Отмена через</span>
+                      <strong>{splitCountdownText}</strong>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <button
+                type="button"
+                className={`${styles.playButton}${needsResult ? ` ${styles.playButtonAttention}` : ""}`}
+                onClick={onPlay}
+              >
+                {playButtonLabel}
+              </button>
+            </div>
           </div>
         </div>
       </div>

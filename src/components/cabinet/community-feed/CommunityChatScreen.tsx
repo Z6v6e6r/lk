@@ -14,7 +14,8 @@ import {
 import type { CommunityChatMessage, CommunityRecord } from "../../../utils/communityApi";
 import { MembersCountIcon } from "./CommunityIcons";
 import { CommunitySecondaryNav, type CommunitySecondaryNavItemId } from "./CommunitySecondaryNav";
-import { formatFeedDayLabel, formatFeedTimeLabel, getInitials } from "./feedFormatters";
+import { formatFeedDayLabel, formatFeedTimeLabel } from "./feedFormatters";
+import { AvatarImageOrInitials } from "./AvatarImageOrInitials";
 import { CommunityBottomNav } from "./CommunityBottomNav";
 import type { CommunityBottomNavItemId } from "./feedTypes";
 
@@ -349,11 +350,7 @@ function ChatHeader({
           aria-label={`${community.name}, ${formatMemberCount(community.memberCount)}${unreadCount > 0 ? `, новых сообщений ${unreadCount}` : ""}`}
         >
           <div className="community-chat-figma-avatar">
-            {community.logo ? (
-              <img src={community.logo} alt={community.name} className="community-chat-figma-avatar-image" />
-            ) : (
-              <span className="community-chat-figma-avatar-fallback">{getInitials(community.name)}</span>
-            )}
+            <AvatarImageOrInitials src={community.logo ?? undefined} name={community.name} imageClassName="community-chat-figma-avatar-image" fallbackClassName="community-chat-figma-avatar-fallback" />
           </div>
 
           <div className="community-chat-figma-summary-copy">
@@ -405,15 +402,7 @@ function IncomingMessageBubble({
       <div className="community-chat-figma-message-avatar-slot" aria-hidden={showAvatar ? undefined : "true"}>
         {showAvatar ? (
           <div className="community-chat-figma-message-avatar">
-            {message.authorAvatar ? (
-              <img
-                src={message.authorAvatar}
-                alt={message.authorName}
-                className="community-chat-figma-message-avatar-image"
-              />
-            ) : (
-              getInitials(message.authorName)
-            )}
+            <AvatarImageOrInitials src={message.authorAvatar ?? undefined} name={message.authorName} imageClassName="community-chat-figma-message-avatar-image" />
           </div>
         ) : null}
       </div>

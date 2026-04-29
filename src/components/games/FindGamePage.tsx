@@ -20,8 +20,12 @@ interface FindGamePageProps {
 }
 
 type ViewerGameState = "participant" | "waitlist" | "none";
+type FindGameViewer = { id: string | null; phone: string | null; level: string | null; levelNumeric: number | null };
 
 const PAGE_SIZE = 12;
+const DAYS_BEFORE_TODAY = 0;
+const DAYS_AFTER_TODAY = 14;
+const TODAY_DATE_INDEX = DAYS_BEFORE_TODAY;
 const DEFAULT_CABINET_URL = CABINET_URL;
 const DEFAULT_GAME_CREATE_PATH =
   (PUBLIC_GAME_CREATE_PATH || "/game_create").replace(/\/+$/, "") || "/game_create";
@@ -49,6 +53,69 @@ function toNumber(value: unknown): number | null {
   return null;
 }
 
+function pickString(source: Record<string, unknown> | null, keys: string[]): string | null {
+  if (!source) return null;
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value !== "string") continue;
+    const normalized = value.trim();
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function getSplitPaymentMetadata(game: PadelGameRecord | undefined): Record<string, unknown> | null {
+  const metadata = isRecordObject(game?.metadata) ? game.metadata : null;
+  return metadata && isRecordObject(metadata.splitPayment) ? metadata.splitPayment : null;
+}
+
+function isSplitPaymentGame(game: PadelGameRecord | undefined): boolean {
+  if (!game) return false;
+  if (game.settings?.payMode === "split") return true;
+  const splitPayment = getSplitPaymentMetadata(game);
+  return Boolean(splitPayment?.enabled);
+}
+
+function formatRubPrice(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value)) return null;
+  return `${Math.round(value).toLocaleString("ru-RU")} ₽`;
+}
+
+function getSplitJoinPriceText(game: PadelGameRecord | undefined): string | null {
+  if (!isSplitPaymentGame(game)) return null;
+  const splitPayment = getSplitPaymentMetadata(game);
+  const shareAmountMinor = toNumber(splitPayment?.shareAmountMinor ?? splitPayment?.amountMinor ?? splitPayment?.toPayMinor);
+  const shareAmount =
+    toNumber(splitPayment?.shareAmount ?? splitPayment?.amount ?? splitPayment?.toPay)
+    ?? (shareAmountMinor !== null ? shareAmountMinor / 100 : null);
+  return formatRubPrice(shareAmount);
+}
+
+function getSplitCancelDeadlineAt(game: PadelGameRecord | undefined): string | null {
+  if (!isSplitPaymentGame(game)) return null;
+  const splitPayment = getSplitPaymentMetadata(game);
+  const deadlineAt = pickString(splitPayment, ["deadlineAt", "cancelAt", "expiresAt", "expires_at"]);
+  if (!deadlineAt || !Number.isFinite(Date.parse(deadlineAt))) return null;
+  return deadlineAt;
+}
+
+function formatCountdown(deadlineAt?: string | null, nowMs = Date.now()): string | null {
+  if (!deadlineAt) return null;
+  const deadlineMs = Date.parse(deadlineAt);
+  if (!Number.isFinite(deadlineMs)) return null;
+
+  const totalMinutes = Math.max(0, Math.ceil((deadlineMs - nowMs) / 60000));
+  if (totalMinutes <= 0) return "0 мин";
+
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) return `${days} д ${hours} ч`;
+  if (hours > 0) return `${hours} ч ${minutes} мин`;
+  return `${minutes} мин`;
+}
+
 function initialsFromName(value: string | null | undefined): string {
   const parts = String(value || "")
     .trim()
@@ -63,6 +130,13 @@ function parseLocalGameDate(dateValue: string | null | undefined): Date | null {
   if (!dateValue) return null;
   const parsed = new Date(`${dateValue}T00:00:00`);
   return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
+function formatDateLocalIso(date: Date): string {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function resolveGameStartTs(game: PadelGameRecord): number | null {
@@ -151,6 +225,50 @@ function getViewerLevel(profile: UserProfileType | null): string | null {
   if (explicitGrade) return explicitGrade;
   const numeric = parseNumericLevel(getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric));
   return numeric !== null ? getLetterGrade(numeric) : null;
+}
+
+function getViewerLevelNumeric(profile: UserProfileType | null): number | null {
+  if (!profile) return null;
+  return parseNumericLevel(getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric));
+}
+
+function getRatingRank(value: string | number | null | undefined): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  const normalized = String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+  if (!normalized) return null;
+
+  const numeric = Number(normalized.replace(",", "."));
+  if (Number.isFinite(numeric)) return numeric;
+
+  const ranks: Record<string, number> = {
+    D: 1,
+    "D+": 2,
+    C: 3,
+    "C+": 4,
+    B: 5,
+    "B+": 6,
+    A: 7,
+  };
+
+  return ranks[normalized] ?? null;
+}
+
+function isViewerBelowGameLevel(game: PadelGameRecord, viewer: FindGameViewer): boolean {
+  if (game.settings?.ratingGame === false) return false;
+
+  const viewerRank = viewer.levelNumeric ?? getRatingRank(viewer.level);
+  if (viewerRank === null) return false;
+
+  const minRank = getRatingRank(game.settings?.minRating);
+  const maxRank = getRatingRank(game.settings?.maxRating);
+
+  return (minRank !== null && viewerRank < minRank) || (maxRank !== null && viewerRank > maxRank);
 }
 
 function getRatingTag(game: PadelGameRecord): string {
@@ -242,6 +360,11 @@ function matchesStationFilter(
   return Boolean(gameStudioName && (gameStudioName.includes(studioName) || studioName.includes(gameStudioName)));
 }
 
+function matchesDateFilter(game: PadelGameRecord, dateKey: string | null): boolean {
+  if (!dateKey) return true;
+  return game.booking?.date === dateKey;
+}
+
 function buildAbsolutePageUrl(path: string, fallbackOrigin?: string): URL {
   if (typeof window === "undefined") {
     return new URL(path, fallbackOrigin || "https://padlhub.ru");
@@ -289,11 +412,18 @@ function isJoinablePublicGame(
 }
 
 function GamePlayerAvatar({ player, index }: { player: PadelGamePlayer; index: number }) {
+  const [imageFailed, setImageFailed] = useState(false);
   const level = player.rating || (typeof player.ratingNumeric === "number" ? getLetterGrade(player.ratingNumeric) : null);
   const numeric = typeof player.ratingNumeric === "number" ? player.ratingNumeric : null;
+  const photoSrc = (player.photo || "").trim();
+  const showPhoto = Boolean(photoSrc) && !imageFailed;
   const progress = numeric !== null
     ? `${Math.max(18, Math.min(360, (numeric / 7) * 360))}deg`
     : "0deg";
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [photoSrc]);
 
   return (
     <div className="find-game-player" title={player.name || `Игрок ${index + 1}`}>
@@ -301,8 +431,8 @@ function GamePlayerAvatar({ player, index }: { player: PadelGamePlayer; index: n
         className={`find-game-player-ring${numeric !== null ? " has-level" : ""}`}
         style={{ "--player-ring-progress": progress } as CSSProperties}
       >
-        {player.photo ? (
-          <img className="find-game-player-avatar" src={player.photo} alt="" />
+        {showPhoto ? (
+          <img className="find-game-player-avatar" src={photoSrc} alt="" onError={() => setImageFailed(true)} />
         ) : (
           <span className="find-game-player-avatar find-game-player-fallback">
             {initialsFromName(player.name)}
@@ -317,9 +447,7 @@ function GamePlayerAvatar({ player, index }: { player: PadelGamePlayer; index: n
 function EmptyPlayerSlot() {
   return (
     <div className="find-game-player find-game-player-empty">
-      <span className="find-game-player-ring">
-        <span className="find-game-player-avatar find-game-player-fallback">+</span>
-      </span>
+      <span className="find-game-player-ring" aria-hidden="true" />
     </div>
   );
 }
@@ -330,7 +458,7 @@ function FindGameCard({
   onOpen,
 }: {
   game: PadelGameRecord;
-  viewer: { id: string | null; phone: string | null; level: string | null };
+  viewer: FindGameViewer;
   onOpen: (game: PadelGameRecord) => void;
 }) {
   const maxPlayers = resolveMaxPlayers(game);
@@ -338,18 +466,25 @@ function FindGameCard({
   const freeSlots = Math.max(0, maxPlayers - participants.length);
   const viewerState = resolveViewerState(game, viewer);
   const waitlistEnabled = resolveWaitlistEnabled(game);
+  const shouldUseWaitlistByLevel = viewerState === "none" && isViewerBelowGameLevel(game, viewer);
   const badgeLabels = getDateBadgeLabels(game);
   const actionLabel = viewerState === "participant"
     ? "Открыть игру"
     : viewerState === "waitlist"
       ? "Открыть заявку"
-      : freeSlots > 0
+      : shouldUseWaitlistByLevel
+        ? "В лист ожидания"
+        : freeSlots > 0
         ? "Присоединиться"
         : waitlistEnabled
           ? "В лист ожидания"
           : "Мест нет";
   const participantsLabel = `${participants.length}/${maxPlayers}`;
   const waitlistCount = game.waitlist?.length ?? 0;
+  const splitJoinPriceText = getSplitJoinPriceText(game);
+  const splitCancelDeadlineAt = getSplitCancelDeadlineAt(game);
+  const splitCountdownText = formatCountdown(splitCancelDeadlineAt, Date.now());
+  const showSplitJoinInfo = freeSlots > 0 && Boolean(splitJoinPriceText || splitCountdownText);
 
   return (
     <article className="find-game-card">
@@ -388,29 +523,52 @@ function FindGameCard({
         )}
       </div>
 
-      <div className={`find-game-players${maxPlayers <= 2 ? " find-game-players-singles" : ""}`}>
-        {participants.map((player, index) => (
-          <GamePlayerAvatar key={getPlayerKey(player, index)} player={player} index={index} />
-        ))}
-        {Array.from({ length: freeSlots }, (_, index) => (
-          <EmptyPlayerSlot key={`empty-${index}`} />
-        ))}
-      </div>
-
       {game.organizer?.name && (
         <div className="find-game-organizer">
           Организатор: <span>{game.organizer.name}</span>
         </div>
       )}
 
-      <button
-        type="button"
-        className="find-game-action"
-        disabled={freeSlots <= 0 && !waitlistEnabled && viewerState === "none"}
-        onClick={() => onOpen(game)}
-      >
-        {actionLabel}
-      </button>
+      <div className="find-game-footer">
+        <div className="find-game-footer-divider" />
+        <div className="find-game-footer-row">
+          <div className={`find-game-players${maxPlayers <= 2 ? " find-game-players-singles" : ""}`}>
+            {participants.map((player, index) => (
+              <GamePlayerAvatar key={getPlayerKey(player, index)} player={player} index={index} />
+            ))}
+            {Array.from({ length: freeSlots }, (_, index) => (
+              <EmptyPlayerSlot key={`empty-${index}`} />
+            ))}
+          </div>
+
+          <div className="find-game-footer-actions">
+            {showSplitJoinInfo && (
+              <div className="find-game-split-join-info" aria-label="Условия присоединения к сборной игре">
+                {splitJoinPriceText && (
+                  <div className="find-game-split-join-info-row">
+                    <span>Вход</span>
+                    <strong>{splitJoinPriceText}</strong>
+                  </div>
+                )}
+                {splitCountdownText && (
+                  <div className="find-game-split-join-info-row">
+                    <span>Отмена через</span>
+                    <strong>{splitCountdownText}</strong>
+                  </div>
+                )}
+              </div>
+            )}
+            <button
+              type="button"
+              className="find-game-action"
+              disabled={freeSlots <= 0 && !waitlistEnabled && viewerState === "none"}
+              onClick={() => onOpen(game)}
+            >
+              {actionLabel}
+            </button>
+          </div>
+        </div>
+      </div>
     </article>
   );
 }
@@ -429,13 +587,26 @@ export default function FindGamePage({
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dateIndex, setDateIndex] = useState(TODAY_DATE_INDEX);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const requestInFlightRef = useRef(false);
+
+  const dates = useMemo(() => {
+    const base = new Date();
+    const totalDays = DAYS_BEFORE_TODAY + DAYS_AFTER_TODAY + 1;
+    return Array.from({ length: totalDays }).map((_, i) => {
+      const d = new Date(base);
+      d.setDate(base.getDate() + (i - DAYS_BEFORE_TODAY));
+      return d;
+    });
+  }, []);
+  const selectedDateKey = dates[dateIndex] ? formatDateLocalIso(dates[dateIndex]) : null;
 
   const viewer = useMemo(() => ({
     id: profile?.id ?? null,
     phone: normalizePhone(profile?.phone),
     level: getViewerLevel(profile),
+    levelNumeric: getViewerLevelNumeric(profile),
   }), [profile]);
 
   const buildCreateUrl = useCallback(() => {
@@ -486,11 +657,13 @@ export default function FindGamePage({
       const response = await apiFetchPadelAvailableGames({
         limit: PAGE_SIZE,
         offset: nextOffset,
+        date: selectedDateKey,
         stationId: presetStudioId,
         stationName: presetStudioName,
       });
       const incoming = (response.data?.games ?? [])
         .filter((game) => matchesStationFilter(game, presetStudioId, presetStudioName))
+        .filter((game) => matchesDateFilter(game, selectedDateKey))
         .filter((game) => isJoinablePublicGame(game, viewer));
 
       setGames((prev) => (mode === "replace" ? mergeGames([], incoming) : mergeGames(prev, incoming)));
@@ -512,7 +685,7 @@ export default function FindGamePage({
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [presetStudioId, presetStudioName, viewer]);
+  }, [presetStudioId, presetStudioName, selectedDateKey, viewer]);
 
   useEffect(() => {
     let alive = true;
@@ -563,9 +736,8 @@ export default function FindGamePage({
     <div className="app-container game-container find-game-container">
       <div className="page-header">
         <button className="page-back" onClick={handleBack} type="button">
-          Кабинет
+          В личный кабинет
         </button>
-        <div className="page-title">Играть</div>
       </div>
 
       <div className="find-game-hero">
@@ -583,10 +755,44 @@ export default function FindGamePage({
 
       <div className="find-game-section-head">
         <div>
-          <div className="game-section-title">Доступные игры</div>
+          <div className="game-section-title">Присоединиться к игре</div>
           {presetStudioName && <div className="find-game-section-sub">{presetStudioName}</div>}
         </div>
         {visibleCountLabel && <div className="find-game-total">{visibleCountLabel}</div>}
+      </div>
+
+      <div className="find-game-date-filter">
+        <div className="date-row">
+          {dates.map((d, i) => {
+            const monthLabel = d
+              .toLocaleDateString("ru-RU", { month: "short" })
+              .replace(".", "")
+              .trim()
+              .slice(0, 3)
+              .toUpperCase();
+            const weekdayLabel = d
+              .toLocaleDateString("ru-RU", { weekday: "short" })
+              .replace(".", "")
+              .toUpperCase();
+            const dayLabel = d.toLocaleDateString("ru-RU", { day: "2-digit" });
+
+            return (
+              <div key={d.toISOString()} className="date-item">
+                <div className="date-weekday">{weekdayLabel}</div>
+                <button
+                  className={`date-chip ${dateIndex === i ? "active" : ""}`}
+                  onClick={() => setDateIndex(i)}
+                  type="button"
+                >
+                  <div className="booking-date-badge">
+                    <div className="booking-date-badge-month">{monthLabel}</div>
+                    <div className="booking-date-badge-day">{dayLabel}</div>
+                  </div>
+                </button>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {loading && <div className="community-loading-note find-game-loading">Загружаем игры...</div>}
@@ -600,9 +806,9 @@ export default function FindGamePage({
         </div>
       )}
 
-      {!loading && !error && games.length === 0 && (
+      {!loading && !loadingMore && !hasMore && !error && games.length === 0 && (
         <div className="find-game-empty">
-          <div className="find-game-empty-title">Пока нет открытых игр</div>
+          <div className="find-game-empty-title">На выбранную дату нет открытых игр</div>
           <div className="find-game-empty-text">Создайте игру первым, остальные игроки увидят ее в этом списке.</div>
         </div>
       )}

@@ -5,9 +5,15 @@ type AvatarImageOrInitialsProps = {
   src?: string;
   name: string;
   imageClassName: string;
+  fallbackClassName?: string;
 };
 
-export function AvatarImageOrInitials({ src, name, imageClassName }: AvatarImageOrInitialsProps) {
+export function AvatarImageOrInitials({
+  src,
+  name,
+  imageClassName,
+  fallbackClassName,
+}: AvatarImageOrInitialsProps) {
   const [imageFailed, setImageFailed] = useState(false);
   const normalizedSrc = (src || "").trim();
   const shouldShowImage = Boolean(normalizedSrc) && !imageFailed;
@@ -27,5 +33,5 @@ export function AvatarImageOrInitials({ src, name, imageClassName }: AvatarImage
     );
   }
 
-  return <span>{getInitials(name) || "?"}</span>;
+  return <span className={fallbackClassName}>{getInitials(name) || "?"}</span>;
 }

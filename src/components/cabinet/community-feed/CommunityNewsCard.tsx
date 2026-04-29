@@ -2,7 +2,7 @@ import type { KeyboardEvent, MouseEvent } from "react";
 import { CommunityFeedCardBase } from "./CommunityFeedCardBase";
 import { ChatIcon, HeartIcon, MoreIcon } from "./CommunityIcons";
 import type { CommunityNewsCard as CommunityNewsCardData, NewsReaction } from "./feedTypes";
-import { getInitials } from "./feedFormatters";
+import { AvatarImageOrInitials } from "./AvatarImageOrInitials";
 
 interface CommunityNewsCardProps {
   card: CommunityNewsCardData;
@@ -98,11 +98,7 @@ export function CommunityNewsCard({
       <div className="community-news-feed-header">
         <div className="community-news-feed-author">
           <div className="community-news-feed-avatar">
-            {avatarSrc ? (
-              <img src={avatarSrc} alt={authorName} className="community-news-feed-avatar-image" />
-            ) : (
-              <span className="community-news-feed-avatar-fallback">{getInitials(authorName)}</span>
-            )}
+            <AvatarImageOrInitials src={avatarSrc} name={authorName} imageClassName="community-news-feed-avatar-image" fallbackClassName="community-news-feed-avatar-fallback" />
           </div>
 
           <div className="community-news-feed-author-copy">

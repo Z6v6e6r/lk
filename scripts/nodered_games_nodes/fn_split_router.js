@@ -24,6 +24,26 @@ const pickId = (value) => {
   return toStr(value.id) || toStr(value.uuid);
 };
 
+const extractConflictExerciseId = (value, ctx) => {
+  const conflicts = Array.isArray(value?.conflicts) ? value.conflicts : [];
+  const targetStart = `${ctx.date}T${ctx.fromTime}:00+03:00`;
+  const targetEnd = `${ctx.date}T${ctx.toTime}:00+03:00`;
+
+  const matchingConflict = conflicts.find((item) => {
+    if (!item || typeof item !== "object") return false;
+    const exerciseId = toStr(item.conflictingExerciseId) || toStr(item.exerciseId);
+    if (!exerciseId) return false;
+    const roomId = toStr(item.room?.id || item.roomId);
+    const startsAt = toStr(item.timeFrom);
+    const endsAt = toStr(item.timeTo);
+    return roomId === ctx.roomId && startsAt === targetStart && endsAt === targetEnd;
+  });
+
+  return matchingConflict
+    ? toStr(matchingConflict.conflictingExerciseId) || toStr(matchingConflict.exerciseId)
+    : null;
+};
+
 const fail = (status, error, details) => {
   msg.statusCode = status;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };
@@ -139,6 +159,15 @@ if (ctx.step === "token") {
 }
 
 if (!isOk(msg.statusCode)) {
+  if (ctx.step === "create_exercise" && Number(msg.statusCode) === 409) {
+    const conflictExerciseId = extractConflictExerciseId(msg.payload, ctx);
+    if (conflictExerciseId) {
+      ctx.exercise = msg.payload;
+      ctx.exerciseId = conflictExerciseId;
+      ctx.reusedConflictingExercise = true;
+      return buildBookingRequest(ctx);
+    }
+  }
   return fail(msg.statusCode || 502, "Viva request failed", msg.payload || null);
 }
 
@@ -198,6 +227,10 @@ if (ctx.step === "available_products") {
     return fail(502, "Viva product response has no id", product);
   }
 
+  const productTypeRaw = String(product.productType || product.type || "").toUpperCase();
+  const productType = ["SERVICE", "ADVANCE_SUB_SERVICE", "BOOKING_PAYMENT"].includes(productTypeRaw)
+    ? productTypeRaw
+    : "SERVICE";
   const productCostMinor = Math.max(0, Math.round(toNumber(product.cost) ?? 200000));
   const shareAmountMinor = Math.max(0, Math.round(Number(ctx.shareAmount || 0) * 100));
   const discountAmountMinor = Math.max(productCostMinor - shareAmountMinor, 0);
@@ -219,7 +252,7 @@ if (ctx.step === "available_products") {
         id: productId,
         count: 1,
         customAmount: null,
-        type: "SERVICE",
+        type: productType,
         discount: discountAmountMinor,
         bookingIds: [ctx.bookingId],
       },
@@ -229,8 +262,18 @@ if (ctx.step === "available_products") {
     offlineTillId: null,
     deposit: 0,
   };
-  if (ctx.successUrl) transactionPayload.successUrl = ctx.successUrl;
-  if (ctx.failUrl) transactionPayload.failUrl = ctx.failUrl;
+  if (ctx.successUrl) {
+    transactionPayload.successUrl = ctx.successUrl;
+    transactionPayload.baseRedirectUrl = ctx.successUrl;
+    transactionPayload.redirectUrl = ctx.successUrl;
+    transactionPayload.returnUrl = ctx.successUrl;
+    transactionPayload.successRedirectUrl = ctx.successUrl;
+  }
+  if (ctx.failUrl) {
+    transactionPayload.failUrl = ctx.failUrl;
+    transactionPayload.failRedirectUrl = ctx.failUrl;
+    transactionPayload.failureRedirectUrl = ctx.failUrl;
+  }
 
   return adminRequest(ctx, "POST", "/transactions", transactionPayload);
 }
@@ -259,6 +302,7 @@ if (ctx.step === "transaction") {
     exerciseTypeId: toNumber(ctx.vivaExerciseTypeId) ?? SPLIT_EXERCISE_TYPE_ID,
     deadlineAt: ctx.deadlineAt,
     spot: ctx.spot ?? null,
+    reusedConflictingExercise: Boolean(ctx.reusedConflictingExercise),
   };
 
   msg.statusCode = 201;

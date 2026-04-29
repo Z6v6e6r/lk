@@ -70,6 +70,7 @@ import {
   getLetterGrade,
   parseNumericLevel,
 } from "../../utils/customFields";
+import { PUBLIC_GAME_FIND_PATH } from "../../consts/api_config";
 import { getGameCommunityAutopublishState } from "../../utils/gameCommunityAutopublish";
 import { CommunityScreen } from "./community-feed/CommunityScreen";
 import { CommunityChatScreen } from "./community-feed/CommunityChatScreen";
@@ -88,6 +89,8 @@ import type {
   NewsReaction,
   NewsThreadData,
 } from "./community-feed/feedTypes";
+
+const GAME_FIND_PATH = (PUBLIC_GAME_FIND_PATH || "/finde_game").replace(/\/+$/, "") || "/finde_game";
 
 interface CommunityFormState {
   name: string;
@@ -3539,7 +3542,7 @@ export function CommunitiesSection({
       return;
     }
     if (itemId === "table") {
-      setActiveCommunityTab("TABLE");
+      window.location.href = GAME_FIND_PATH;
       return;
     }
     if (itemId === "chat") {
@@ -4909,7 +4912,7 @@ export function CommunitiesSection({
     setFeedFormError(null);
 
     if (action === "game") {
-      onOpenGames();
+      window.location.href = GAME_FIND_PATH;
       return;
     }
 

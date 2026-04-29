@@ -48,6 +48,7 @@ import {
   GAMES_BUNDLE_URL,
   IS_DEV_RELEASE_CHANNEL,
   PUBLIC_COMMUNITY_JOIN_PATH,
+  PUBLIC_GAME_FIND_PATH,
   PUBLIC_INVITE_ORIGIN,
   PUBLIC_INVITE_PATH,
 } from "../../consts/api_config";
@@ -57,6 +58,7 @@ import { resolveHashActionTarget, retriggerHashAction } from "../../utils/hashAc
 
 const SHOW_COLLECT_FRIENDS_BUTTON = false;
 const GROUP_TRAININGS_HASH = "#9Rzqf";
+const GAME_FIND_PATH = (PUBLIC_GAME_FIND_PATH || "/finde_game").replace(/\/+$/, "") || "/finde_game";
 
 type QuickAction = {
   icon: string;
@@ -65,7 +67,7 @@ type QuickAction = {
 };
 
 const QUICK_ACTIONS: QuickAction[] = [
-  { icon: "🎾", label: "Играть", href: "https://padlhub.ru/locations_lk" },
+  { icon: "🎾", label: "Играть", href: GAME_FIND_PATH },
   { icon: "👥", label: "Групповые тренировки", href: GROUP_TRAININGS_HASH },
   { icon: "🏆", label: "Турниры", href: "https://padlhub.ru/padel_torneos" },
   { icon: "🎯", label: "Индивидуальные тренировки", href: "https://padlhub.ru/indi_lk" },
@@ -203,6 +205,18 @@ function isGamePaidRecord(game: PadelGameRecord): boolean {
     || statusUpper.includes("NOT_PAID")
   ) return false;
   return false;
+}
+
+function isGameExplicitlyUnpaidRecord(game: PadelGameRecord): boolean {
+  if (game.payment?.paid === false) return true;
+  const statusUpper = String(game.status || "").trim().toUpperCase();
+  if (!statusUpper) return false;
+  return Boolean(
+    statusUpper.includes("PENDING")
+    || statusUpper.includes("UNPAID")
+    || statusUpper.includes("NOT_PAID")
+    || statusUpper.includes("DRAFT")
+  );
 }
 
 function resolveGameCardPlayersCount(game: PadelGameRecord): number {
@@ -452,6 +466,79 @@ function resolveBookingPaidState(booking: Booking): boolean | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function pickNumberValue(source: Record<string, unknown> | null, keys: string[]): number | null {
+  if (!source) return null;
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const parsed = Number.parseFloat(value.replace(",", ".").trim());
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function pickStringValue(source: Record<string, unknown> | null, keys: string[]): string | null {
+  if (!source) return null;
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value !== "string") continue;
+    const normalized = value.trim();
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function getSplitPaymentMetadata(game: PadelGameRecord | null | undefined): Record<string, unknown> | null {
+  const metadata = isRecord(game?.metadata) ? game.metadata : null;
+  return metadata && isRecord(metadata.splitPayment) ? metadata.splitPayment : null;
+}
+
+function isSplitPaymentGame(game: PadelGameRecord | null | undefined): boolean {
+  if (!game) return false;
+  if (game.settings?.payMode === "split") return true;
+  const splitPayment = getSplitPaymentMetadata(game);
+  return Boolean(splitPayment?.enabled);
+}
+
+function formatRubPrice(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value)) return null;
+  return `${Math.round(value).toLocaleString("ru-RU")} ₽`;
+}
+
+function getSplitJoinPriceText(game: PadelGameRecord | null | undefined): string | null {
+  if (!isSplitPaymentGame(game)) return null;
+  const splitPayment = getSplitPaymentMetadata(game);
+  const shareAmountMinor = pickNumberValue(splitPayment, ["shareAmountMinor", "amountMinor", "toPayMinor"]);
+  const shareAmount =
+    pickNumberValue(splitPayment, ["shareAmount", "amount", "toPay"])
+    ?? (shareAmountMinor !== null ? shareAmountMinor / 100 : null);
+  return formatRubPrice(shareAmount);
+}
+
+function getSplitCancelDeadlineAt(game: PadelGameRecord | null | undefined): string | null {
+  if (!isSplitPaymentGame(game)) return null;
+  const splitPayment = getSplitPaymentMetadata(game);
+  const deadlineAt = pickStringValue(splitPayment, ["deadlineAt", "cancelAt", "expiresAt", "expires_at"]);
+  if (!deadlineAt || !Number.isFinite(Date.parse(deadlineAt))) return null;
+  return deadlineAt;
+}
+
+function formatCountdown(deadlineAt?: string | null, nowMs = Date.now()): string | null {
+  if (!deadlineAt) return null;
+  const deadlineMs = Date.parse(deadlineAt);
+  if (!Number.isFinite(deadlineMs)) return null;
+  const totalMinutes = Math.max(0, Math.ceil((deadlineMs - nowMs) / 60000));
+  if (totalMinutes <= 0) return "0 мин";
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `${days} д ${hours} ч`;
+  if (hours > 0) return `${hours} ч ${minutes} мин`;
+  return `${minutes} мин`;
 }
 
 function normalizeBookingLikeId(value: unknown): string | null {
@@ -1458,7 +1545,7 @@ export function Cabinet({
       if (slotPaidState != null) return slotPaidState;
     }
 
-    return false;
+    return !isGameExplicitlyUnpaidRecord(game);
   }, [bookingPaidById, bookingPaidBySlotKey]);
 
   const resolveBookingForGameCancellation = useCallback((game: PadelGameRecord): Booking | null => {
@@ -1670,18 +1757,13 @@ export function Cabinet({
   };
 
   const handleQuickActionPlay = (action: QuickAction) => {
+    const resolvedHref = resolveQuickActionHref(action.href);
     trackAnalyticsEvent("quick_action_click", {
       label: action.label,
-      href: action.href,
+      href: resolvedHref,
       clientId: profile.id,
     });
-    trackAnalyticsEvent("module_open_requested", {
-      module: "games",
-      source: "cabinet",
-      action: "quick_action_play_click",
-      clientId: profile.id,
-    });
-    onOpenGames();
+    window.location.href = resolvedHref;
   };
 
   const renderGameCard = (
@@ -1768,7 +1850,12 @@ export function Cabinet({
     const showOrganizerWaitlistBadge = isOrganizer && waitlistCount > 0;
     const linkedBooking = resolveBookingForGameCancellation(game);
     const inviteUrl = resolveGameInviteUrl(game);
-    const canInvite = Boolean(inviteUrl && isOrganizer && isGamePaidForInvite(game));
+    const canInvite = Boolean(
+      inviteUrl
+      && isOrganizer
+      && !isGameCancelledStatus(game.status)
+      && isGamePaidForInvite(game)
+    );
     const canCancelGameBooking = Boolean(
       isOrganizer
       && linkedBooking
@@ -1795,6 +1882,12 @@ export function Cabinet({
       ? game.participants
       : (organizerPlayer ? [organizerPlayer] : []);
     const playersCount = resolveGameCardPlayersCount(game);
+    const splitJoinPriceText = getSplitJoinPriceText(game);
+    const splitCancelDeadlineAt = getSplitCancelDeadlineAt(game);
+    const splitCountdownText = formatCountdown(splitCancelDeadlineAt, Date.now());
+    const showSplitJoinInfo = !isOrganizer && !isCurrentUserWaitlisted
+      && (playersCount - Math.max(participants.length, 0)) > 0
+      && Boolean(splitJoinPriceText || splitCountdownText);
     const playerSlots = Array.from({ length: playersCount }, (_, index) => (
       participants[index] ?? null
     ));
@@ -1888,6 +1981,22 @@ export function Cabinet({
           })}
         </div>
         <div className={`game-created-actions${canInvite ? " game-created-actions-organizer" : " game-created-actions-single"}`}>
+          {showSplitJoinInfo && (
+            <div className="game-created-split-join-info" aria-label="Условия присоединения к сборной игре">
+              {splitJoinPriceText && (
+                <div className="game-created-split-join-info-row">
+                  <span>Вход</span>
+                  <strong>{splitJoinPriceText}</strong>
+                </div>
+              )}
+              {splitCountdownText && (
+                <div className="game-created-split-join-info-row">
+                  <span>Отмена через</span>
+                  <strong>{splitCountdownText}</strong>
+                </div>
+              )}
+            </div>
+          )}
           {canInvite && (
             <button
               className="game-created-action game-created-action-invite"

@@ -28,6 +28,8 @@ export type CommunityGameCard = {
   location: string;
   slotsLeft: number;
   totalSlots: number;
+  splitJoinPriceText?: string | null;
+  splitCancelDeadlineAt?: string | null;
   media?: string;
   ctaLabel?: string;
   showWaitlist?: boolean;

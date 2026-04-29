@@ -65,7 +65,6 @@ import type { GamesCreateFromBookingData } from "../../types/gamesOverlay";
 import {
   CABINET_URL,
   GAMES_BUNDLE_URL,
-  IS_DEV_RELEASE_CHANNEL,
   PUBLIC_INVITE_ORIGIN,
   PUBLIC_INVITE_PATH,
 } from "../../consts/api_config";
@@ -121,7 +120,7 @@ const MATCH_RESULT_RATING_DEFAULT_PARAMS = {
   round: 5,
 };
 const ENABLE_GAME_COMMUNITY_AUTOPUBLISH = true;
-const ENABLE_SPLIT_GAME_PAYMENT = IS_DEV_RELEASE_CHANNEL;
+const ENABLE_SPLIT_GAME_PAYMENT = true;
 const SPLIT_PAYMENT_DEADLINE_HOURS = 6;
 
 function resolveSplitShareAmount(
@@ -165,6 +164,7 @@ function splitConfigListAllows(
 
 function isSplitPaymentPromoAvailableForSelection(params: {
   config: PadelSplitPaymentPromoConfig;
+  date: Date | null;
   studioId: string | null;
   studioName: string | null;
   roomId: string | null;
@@ -172,6 +172,17 @@ function isSplitPaymentPromoAvailableForSelection(params: {
 }): boolean {
   if (!ENABLE_SPLIT_GAME_PAYMENT || params.config.enabled !== true) {
     return false;
+  }
+  if (!params.date) {
+    return false;
+  }
+
+  const promoActiveTo = params.config.activeTo?.trim();
+  if (promoActiveTo) {
+    const selectedDate = formatDateLocalIso(params.date);
+    if (selectedDate > promoActiveTo) {
+      return false;
+    }
   }
 
   const stationAllowed = splitConfigListAllows(
@@ -1548,6 +1559,47 @@ function getPlayerInitials(name: string | null | undefined): string {
     .map((part) => part[0] ?? "")
     .join("")
     .toUpperCase();
+}
+
+function AvatarWithInitialsFallback({
+  src,
+  alt,
+  imageClassName,
+  fallbackClassName,
+  fallbackText,
+  fallbackStyle,
+}: {
+  src: string | null | undefined;
+  alt: string;
+  imageClassName: string;
+  fallbackClassName: string;
+  fallbackText: string;
+  fallbackStyle?: CSSProperties;
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const normalizedSrc = (src || "").trim();
+  const showImage = Boolean(normalizedSrc) && !imageFailed;
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [normalizedSrc]);
+
+  if (showImage) {
+    return (
+      <img
+        className={imageClassName}
+        src={normalizedSrc}
+        alt={alt}
+        onError={() => setImageFailed(true)}
+      />
+    );
+  }
+
+  return (
+    <div className={fallbackClassName} style={fallbackStyle}>
+      {fallbackText}
+    </div>
+  );
 }
 
 function getPadelPlayerIdentityKey(player: PadelGamePlayer | null | undefined): string {
@@ -2994,7 +3046,7 @@ export default function GamesPage({
       })
       .catch(() => {
         if (!alive) return;
-        setSplitPaymentPromoConfig(DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG);
+        setSplitPaymentPromoConfig({ ...DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG, enabled: false });
       });
 
     return () => {
@@ -4263,6 +4315,7 @@ export default function GamesPage({
   const paymentAmount = promoPricePreview ?? basePaymentAmount;
   const splitPaymentAvailable = isSplitPaymentPromoAvailableForSelection({
     config: splitPaymentPromoConfig,
+    date: selectedDate,
     studioId,
     studioName,
     roomId: courtId,
@@ -4389,8 +4442,9 @@ export default function GamesPage({
     () => isCurrentUserOrganizerOfGame(activeGameRecord),
     [activeGameRecord, isCurrentUserOrganizerOfGame],
   );
-  const canCurrentUserInviteInDetails = isGamePaid === true
+  const canCurrentUserInviteInDetails = isGamePaid !== false
     && isCurrentUserOrganizerOfActiveGame
+    && !isGameCancelledStatus(gameRecordStatus)
     && Boolean(inviteLink);
   const detailsMaxPlayers = useMemo(() => {
     const maxPlayers = activeGameRecord?.invite?.maxPlayers;
@@ -5978,27 +6032,19 @@ export default function GamesPage({
     [selectedCommunityAutopublishIds],
   );
   const renderCommunityAutopublishAvatar = (community: { name: string; logo: string | null }) => {
-    if (community.logo) {
-      return (
-        <img
-          src={community.logo}
-          alt={community.name}
-          className="game-autopublish-card-avatar-image"
-        />
-      );
-    }
-
     const palette = getCommunityAutopublishPalette(community.name);
     return (
-      <div
-        className="game-autopublish-card-avatar-fallback"
-        style={{
+      <AvatarWithInitialsFallback
+        src={community.logo}
+        alt={community.name}
+        imageClassName="game-autopublish-card-avatar-image"
+        fallbackClassName="game-autopublish-card-avatar-fallback"
+        fallbackText={getCommunityAutopublishInitials(community.name)}
+        fallbackStyle={{
           "--community-gradient-start": palette.start,
           "--community-gradient-end": palette.end,
         } as CSSProperties}
-      >
-        {getCommunityAutopublishInitials(community.name)}
-      </div>
+      />
     );
   };
   const buildCommunityAutopublishMetadata = useCallback(() => {
@@ -6222,6 +6268,7 @@ export default function GamesPage({
       date: fromDate,
       fromTime,
       toTime,
+      activeTo: splitPaymentPromoConfig.activeTo ?? null,
       studioId,
       roomId: courtId,
       studioName,
@@ -9115,13 +9162,13 @@ export default function GamesPage({
                   <div key={item.key} className={`game-chat-row ${isMine ? "mine" : ""}`}>
                     {!isMine && (
                       <div className="game-chat-avatar-wrap">
-                        {senderPhoto ? (
-                          <img className="game-chat-avatar" src={senderPhoto} alt={senderName} />
-                        ) : (
-                          <div className="game-chat-avatar game-chat-avatar-fallback">
-                            {senderInitials}
-                          </div>
-                        )}
+                        <AvatarWithInitialsFallback
+                          src={senderPhoto}
+                          alt={senderName}
+                          imageClassName="game-chat-avatar"
+                          fallbackClassName="game-chat-avatar game-chat-avatar-fallback"
+                          fallbackText={senderInitials}
+                        />
                       </div>
                     )}
 
@@ -9139,13 +9186,13 @@ export default function GamesPage({
 
                     {isMine && (
                       <div className="game-chat-avatar-wrap">
-                        {senderPhoto ? (
-                          <img className="game-chat-avatar" src={senderPhoto} alt={senderName} />
-                        ) : (
-                          <div className="game-chat-avatar game-chat-avatar-fallback">
-                            {senderInitials}
-                          </div>
-                        )}
+                        <AvatarWithInitialsFallback
+                          src={senderPhoto}
+                          alt={senderName}
+                          imageClassName="game-chat-avatar"
+                          fallbackClassName="game-chat-avatar game-chat-avatar-fallback"
+                          fallbackText={senderInitials}
+                        />
                       </div>
                     )}
                   </div>
@@ -9391,17 +9438,13 @@ export default function GamesPage({
             <div className="details-roster-list">
               <div className="details-roster-row">
                 <div className="details-roster-player">
-                  {detailsOrganizerPlayer.photo ? (
-                    <img
-                      className="details-roster-avatar"
-                      src={detailsOrganizerPlayer.photo}
-                      alt={detailsOrganizerPlayer.name || "Организатор"}
-                    />
-                  ) : (
-                    <div className="details-roster-avatar details-roster-avatar-fallback">
-                      {getPlayerInitials(detailsOrganizerPlayer.name || "Организатор")}
-                    </div>
-                  )}
+                  <AvatarWithInitialsFallback
+                    src={detailsOrganizerPlayer.photo}
+                    alt={detailsOrganizerPlayer.name || "Организатор"}
+                    imageClassName="details-roster-avatar"
+                    fallbackClassName="details-roster-avatar details-roster-avatar-fallback"
+                    fallbackText={getPlayerInitials(detailsOrganizerPlayer.name || "Организатор") || "О"}
+                  />
                   <div className="details-roster-meta">
                     <div className="details-roster-name">{detailsOrganizerPlayer.name || "Организатор"}</div>
                     <div className="details-roster-sub">
@@ -9433,17 +9476,13 @@ export default function GamesPage({
                 return (
                   <div className="details-roster-row" key={playerKey}>
                     <div className="details-roster-player">
-                      {player.photo ? (
-                        <img
-                          className="details-roster-avatar"
-                          src={player.photo}
-                          alt={player.name}
-                        />
-                      ) : (
-                        <div className="details-roster-avatar details-roster-avatar-fallback">
-                          {getPlayerInitials(player.name)}
-                        </div>
-                      )}
+                      <AvatarWithInitialsFallback
+                        src={player.photo}
+                        alt={player.name || "Игрок"}
+                        imageClassName="details-roster-avatar"
+                        fallbackClassName="details-roster-avatar details-roster-avatar-fallback"
+                        fallbackText={getPlayerInitials(player.name) || "+"}
+                      />
                       <div className="details-roster-meta">
                         <div className="details-roster-name">{player.name || "Игрок"}</div>
                         <div className="details-roster-sub">
@@ -9494,17 +9533,13 @@ export default function GamesPage({
                   return (
                     <div className="details-roster-row" key={playerKey}>
                       <div className="details-roster-player">
-                        {player.photo ? (
-                          <img
-                            className="details-roster-avatar"
-                            src={player.photo}
-                            alt={player.name}
-                          />
-                        ) : (
-                          <div className="details-roster-avatar details-roster-avatar-fallback">
-                            {getPlayerInitials(player.name)}
-                          </div>
-                        )}
+                        <AvatarWithInitialsFallback
+                          src={player.photo}
+                          alt={player.name || "Игрок"}
+                          imageClassName="details-roster-avatar"
+                          fallbackClassName="details-roster-avatar details-roster-avatar-fallback"
+                          fallbackText={getPlayerInitials(player.name) || "+"}
+                        />
                         <div className="details-roster-meta">
                           <div className="details-roster-name">{player.name || "Игрок"}</div>
                           <div className="details-roster-sub">Ожидает подтверждения</div>
@@ -9858,17 +9893,13 @@ export default function GamesPage({
                                     className={`details-team-slot-ring${slotLevelLabel ? " has-level" : ""}`}
                                     style={{ "--player-ring-progress": slotRingProgressDeg } as CSSProperties}
                                   >
-                                    {slotPlayer?.photo ? (
-                                      <img
-                                        src={slotPlayer.photo}
-                                        alt={slotPlayer.name || "Игрок"}
-                                        className="details-team-slot-avatar"
-                                      />
-                                    ) : (
-                                      <div className="details-team-slot-avatar details-team-slot-avatar-fallback">
-                                        {getPlayerInitials(slotPlayer?.name || "") || "+"}
-                                      </div>
-                                    )}
+                                    <AvatarWithInitialsFallback
+                                      src={slotPlayer?.photo}
+                                      alt={slotPlayer?.name || "Игрок"}
+                                      imageClassName="details-team-slot-avatar"
+                                      fallbackClassName="details-team-slot-avatar details-team-slot-avatar-fallback"
+                                      fallbackText={getPlayerInitials(slotPlayer?.name || "") || "+"}
+                                    />
                                   </div>
                                   {slotLevelLabel && (
                                     <div className="details-team-slot-level">{slotLevelLabel}</div>
@@ -10104,17 +10135,13 @@ export default function GamesPage({
                                         className={`details-result-set-pairing-player-ring${playerLevelLabel ? " has-level" : ""}`}
                                         style={{ "--player-ring-progress": playerRingProgressDeg } as CSSProperties}
                                       >
-                                        {player.photo ? (
-                                          <img
-                                            src={player.photo}
-                                            alt={player.name || "Игрок"}
-                                            className="details-result-set-pairing-player-avatar"
-                                          />
-                                        ) : (
-                                          <div className="details-result-set-pairing-player-avatar details-result-set-pairing-player-avatar-fallback">
-                                            {getPlayerInitials(player.name || "") || "+"}
-                                          </div>
-                                        )}
+                                        <AvatarWithInitialsFallback
+                                          src={player.photo}
+                                          alt={player.name || "Игрок"}
+                                          imageClassName="details-result-set-pairing-player-avatar"
+                                          fallbackClassName="details-result-set-pairing-player-avatar details-result-set-pairing-player-avatar-fallback"
+                                          fallbackText={getPlayerInitials(player.name || "") || "+"}
+                                        />
                                       </div>
                                       {playerLevelLabel && (
                                         <div className="details-result-set-pairing-player-level">{playerLevelLabel}</div>
@@ -10146,17 +10173,13 @@ export default function GamesPage({
                                         className={`details-result-set-pairing-player-ring${playerLevelLabel ? " has-level" : ""}`}
                                         style={{ "--player-ring-progress": playerRingProgressDeg } as CSSProperties}
                                       >
-                                        {player.photo ? (
-                                          <img
-                                            src={player.photo}
-                                            alt={player.name || "Игрок"}
-                                            className="details-result-set-pairing-player-avatar"
-                                          />
-                                        ) : (
-                                          <div className="details-result-set-pairing-player-avatar details-result-set-pairing-player-avatar-fallback">
-                                            {getPlayerInitials(player.name || "") || "+"}
-                                          </div>
-                                        )}
+                                        <AvatarWithInitialsFallback
+                                          src={player.photo}
+                                          alt={player.name || "Игрок"}
+                                          imageClassName="details-result-set-pairing-player-avatar"
+                                          fallbackClassName="details-result-set-pairing-player-avatar details-result-set-pairing-player-avatar-fallback"
+                                          fallbackText={getPlayerInitials(player.name || "") || "+"}
+                                        />
                                       </div>
                                       {playerLevelLabel && (
                                         <div className="details-result-set-pairing-player-level">{playerLevelLabel}</div>

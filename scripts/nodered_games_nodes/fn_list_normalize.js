@@ -28,6 +28,7 @@ const bookingIdsFilter = new Set(asArray(msg._lkBookingIds));
 const publicMode = Boolean(msg._lkPublicMode);
 const stationIdFilter = toStr(msg._lkStationId);
 const stationNameFilter = toStr(msg._lkStationName);
+const dateFilter = toStr(msg._lkDate);
 const nowTs = Date.now();
 
 const rows = Array.isArray(msg.payload) ? msg.payload : [];
@@ -105,6 +106,11 @@ const matchesStationFilter = (doc) => {
   return Boolean(docStationName && (docStationName.includes(stationName) || stationName.includes(docStationName)));
 };
 
+const matchesDateFilter = (doc) => {
+  if (!dateFilter) return true;
+  return toStr(doc?.booking?.date) === dateFilter;
+};
+
 rows.forEach((doc) => {
   if (!isObj(doc)) return;
 
@@ -118,6 +124,7 @@ rows.forEach((doc) => {
   if (publicMode) {
     if (doc?.settings?.isPrivate === true) return;
     if (doc?.payment?.paid === false) return;
+    if (!matchesDateFilter(doc)) return;
     if (!matchesStationFilter(doc)) return;
 
     const maxPlayers = resolveMaxPlayers(doc);
@@ -185,6 +192,7 @@ msg.payload = {
   paymentRef,
   bookingIds: Array.from(bookingIdsFilter.values()),
   public: publicMode,
+  date: dateFilter,
   offset,
   limit: safeLimit,
   total,

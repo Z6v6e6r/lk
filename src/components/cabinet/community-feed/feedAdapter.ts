@@ -189,6 +189,50 @@ function pickNumberValue(
   return fallback;
 }
 
+function getSplitPaymentMetadata(game: PadelGameRecord | undefined) {
+  const metadata = isRecord(game?.metadata) ? game.metadata : null;
+  const splitPayment = metadata && isRecord(metadata.splitPayment)
+    ? metadata.splitPayment
+    : null;
+
+  return splitPayment;
+}
+
+function isSplitPaymentGame(game: PadelGameRecord | undefined) {
+  if (!game) return false;
+  if (game.settings?.payMode === "split") return true;
+
+  const splitPayment = getSplitPaymentMetadata(game);
+  return Boolean(splitPayment?.enabled);
+}
+
+function formatRubPrice(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return null;
+  return `${Math.round(value).toLocaleString("ru-RU")} ₽`;
+}
+
+function getSplitJoinPriceText(game: PadelGameRecord | undefined) {
+  if (!isSplitPaymentGame(game)) return null;
+
+  const splitPayment = getSplitPaymentMetadata(game);
+  const shareAmountMinor = pickNumberValue(splitPayment, ["shareAmountMinor", "amountMinor", "toPayMinor"]);
+  const shareAmount =
+    pickNumberValue(splitPayment, ["shareAmount", "amount", "toPay"])
+    ?? (shareAmountMinor !== null ? shareAmountMinor / 100 : null);
+
+  return formatRubPrice(shareAmount);
+}
+
+function getSplitCancelDeadlineAt(game: PadelGameRecord | undefined) {
+  if (!isSplitPaymentGame(game)) return null;
+
+  const splitPayment = getSplitPaymentMetadata(game);
+  const deadlineAt = pickStringValue(splitPayment, ["deadlineAt", "cancelAt", "expiresAt", "expires_at"]);
+  if (!deadlineAt || !Number.isFinite(Date.parse(deadlineAt))) return null;
+
+  return deadlineAt;
+}
+
 function normalizeStringArray(value: unknown) {
   return Array.isArray(value)
     ? value.map((item) => toTrimmedString(item)).filter(Boolean)
@@ -1272,6 +1316,8 @@ export function buildFeedEntries({
             location: buildGameLocation(post, game),
             slotsLeft,
             totalSlots,
+            splitJoinPriceText: getSplitJoinPriceText(game),
+            splitCancelDeadlineAt: getSplitCancelDeadlineAt(game),
             players,
             waitlistPlayers,
             extraPlayersCount: Math.max(players.length - 4, 0),

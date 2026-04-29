@@ -1248,6 +1248,7 @@ h6,
   display: grid;
   grid-template-columns: 1fr 110px;
   gap: 6px;
+  align-items: end;
 }
 
 .game-created-actions-organizer {
@@ -1257,6 +1258,34 @@ h6,
 
 .game-created-actions-single {
   grid-template-columns: 1fr;
+}
+
+.game-created-split-join-info {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-height: 100%;
+  color: #847ca6;
+  font-family: "RF Dewi", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.game-created-split-join-info-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.game-created-split-join-info-row strong {
+  color: #2f2947;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.15;
 }
 
 .game-created-action {
@@ -1397,6 +1426,14 @@ h6,
   white-space: nowrap;
 }
 
+.find-game-date-filter {
+  padding: 0 16px 16px;
+}
+
+.find-game-date-filter .game-section-title {
+  margin-bottom: 12px;
+}
+
 .find-game-list {
   display: flex;
   flex-direction: column;
@@ -1474,17 +1511,21 @@ h6,
 .find-game-players {
   display: flex;
   align-items: center;
-  gap: 10px;
+  isolation: isolate;
+  min-width: 0;
+  padding-left: 6px;
 }
 
 .find-game-players-singles {
-  gap: 14px;
+  padding-left: 6px;
 }
 
 .find-game-player {
   position: relative;
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  margin-left: -6px;
 }
 
 .find-game-player-ring {
@@ -1495,7 +1536,9 @@ h6,
   align-items: center;
   justify-content: center;
   background: #e6e8f0;
-  padding: 2px;
+  border: 1.5px solid #fafafa;
+  padding: 0;
+  overflow: hidden;
 }
 
 .find-game-player-ring.has-level {
@@ -1503,8 +1546,8 @@ h6,
 }
 
 .find-game-player-avatar {
-  width: 35px;
-  height: 35px;
+  width: 100%;
+  height: 100%;
   border-radius: 50%;
   object-fit: cover;
   background: #eceef3;
@@ -1516,23 +1559,34 @@ h6,
 .find-game-player-fallback {
   font-size: 10px;
   font-weight: 800;
-  color: #6b7280;
+  color: #6f56d9;
+  background: #f1ecff;
 }
 
 .find-game-player-empty .find-game-player-ring {
-  background: #f0eef7;
+  background: #f1f1f1;
 }
 
-.find-game-player-empty .find-game-player-fallback {
-  color: #8a82a4;
-  font-size: 18px;
-  line-height: 1;
+.find-game-player-empty .find-game-player-ring::before,
+.find-game-player-empty .find-game-player-ring::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 15px;
+  width: 8px;
+  height: 1.5px;
+  border-radius: 999px;
+  background: #888889;
+}
+
+.find-game-player-empty .find-game-player-ring::after {
+  transform: rotate(90deg);
 }
 
 .find-game-player-level {
   position: absolute;
-  right: -2px;
-  bottom: 0;
+  right: -4px;
+  bottom: -2px;
   border-radius: 999px;
   background: #000000;
   color: #ffffff;
@@ -1548,17 +1602,74 @@ h6,
   font-weight: 700;
 }
 
-.find-game-action {
+.find-game-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.find-game-footer-divider {
   width: 100%;
+  height: 0;
+  border-top: 1.5px dashed #e8e8e9;
+}
+
+.find-game-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 35px;
+}
+
+.find-game-footer-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.find-game-split-join-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: #847ca6;
+  font-size: 11px;
+  line-height: 1.2;
+  min-width: 130px;
+}
+
+.find-game-split-join-info-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.find-game-split-join-info-row strong {
+  color: #2f2947;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.find-game-action {
+  width: auto;
+  min-width: 137px;
+  min-height: 32px;
   border: none;
-  border-radius: 12px;
-  background: #7758ef;
-  color: #ffffff;
-  padding: 13px 16px;
-  font-size: 14px;
-  font-weight: 800;
-  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  border-radius: 24px;
+  background: #8766eb;
+  color: #fafafa;
+  padding: 10px 24px 10px 20px;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .find-game-action:disabled {
@@ -2604,7 +2715,8 @@ h6,
   justify-content: center;
   font-size: 11px;
   font-weight: 700;
-  color: #6b7280;
+  color: #6f56d9;
+  background: #f1ecff;
 }
 
 .details-roster-meta {
@@ -2837,7 +2949,8 @@ h6,
   justify-content: center;
   font-size: 14px;
   font-weight: 700;
-  color: #6b7280;
+  color: #6f56d9;
+  background: #f1ecff;
 }
 
 .details-team-slot-level {
@@ -3344,7 +3457,8 @@ h6,
   justify-content: center;
   font-size: 13px;
   font-weight: 700;
-  color: #6b7280;
+  color: #6f56d9;
+  background: #f1ecff;
   font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -11532,7 +11646,7 @@ h6,
   border-radius: 8px;
   overflow: hidden;
   flex: 0 0 auto;
-  background: linear-gradient(157.94deg, #d2d2d2 0%, #f9f9f9 85.81%);
+  background: linear-gradient(157.94deg, rgba(248, 245, 255, 0.98) 0%, rgba(239, 232, 255, 0.82) 85.81%);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
 }
 

@@ -1,5 +1,6 @@
 import { FeedCardWrapper } from "./FeedCardWrapper";
-import { formatRelativePublishedLabel, getInitials } from "./feedFormatters";
+import { formatRelativePublishedLabel } from "./feedFormatters";
+import { AvatarImageOrInitials } from "./AvatarImageOrInitials";
 import type { UserJoined } from "./feedTypes";
 
 interface FeedCardUserJoinedProps {
@@ -17,11 +18,7 @@ export function FeedCardUserJoined({ item, onAddFriend, onMessage }: FeedCardUse
 
       <div className="community-feed-user-joined">
         <div className="community-feed-user-avatar">
-          {item.user.avatar ? (
-            <img src={item.user.avatar} alt={item.user.name} className="community-feed-user-avatar-image" />
-          ) : (
-            <span>{getInitials(item.user.name)}</span>
-          )}
+          <AvatarImageOrInitials src={item.user.avatar} name={item.user.name} imageClassName="community-feed-user-avatar-image" />
         </div>
 
         <div className="community-feed-user-copy">

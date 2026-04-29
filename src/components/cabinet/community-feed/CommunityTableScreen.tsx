@@ -3,7 +3,7 @@ import type { CommunityMember, CommunityRecord } from "../../../utils/communityA
 import { formatScoreDisplay } from "../../../utils/customFields";
 import { CommunityBottomNav } from "./CommunityBottomNav";
 import { CommunityHeader } from "./CommunityHeader";
-import { getInitials } from "./feedFormatters";
+import { AvatarImageOrInitials } from "./AvatarImageOrInitials";
 import type { CommunityBottomNavItemId } from "./feedTypes";
 
 interface CommunityTableScreenProps {
@@ -80,9 +80,7 @@ export function CommunityTableScreen({
                 <div key={`table-member-${memberKey}`} className="community-member-row">
                   <div className="community-member-main">
                     <div className="community-member-avatar">
-                      {member.avatar
-                        ? <img src={member.avatar} alt={member.name} className="community-ranking-avatar-image" />
-                        : getInitials(member.name)}
+                      <AvatarImageOrInitials src={member.avatar ?? undefined} name={member.name} imageClassName="community-ranking-avatar-image" />
                     </div>
                     <div className="community-member-copy">
                       <div className="community-member-name-row">

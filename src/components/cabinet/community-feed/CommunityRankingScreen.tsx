@@ -3,7 +3,7 @@ import type { CommunityRecord } from "../../../utils/communityApi";
 import { CommunityBottomNav } from "./CommunityBottomNav";
 import { CommunityHeader } from "./CommunityHeader";
 import { CommunitySecondaryNav, type CommunitySecondaryNavItemId } from "./CommunitySecondaryNav";
-import { getInitials } from "./feedFormatters";
+import { AvatarImageOrInitials } from "./AvatarImageOrInitials";
 import type { CommunityBottomNavItemId } from "./feedTypes";
 
 type CommunityRankingPeriodId = "month" | "quarter" | "year" | "all";
@@ -291,11 +291,7 @@ export function CommunityRankingScreen({
                       <div className="community-ranking-rank-badge">#{row.rank}</div>
 
                       <div className="community-ranking-avatar community-ranking-avatar--screen">
-                        {row.avatar ? (
-                          <img src={row.avatar} alt={row.name} className="community-ranking-avatar-image" />
-                        ) : (
-                          getInitials(row.name)
-                        )}
+                        <AvatarImageOrInitials src={row.avatar ?? undefined} name={row.name} imageClassName="community-ranking-avatar-image" />
                       </div>
 
                       <div className="community-ranking-card-copy">

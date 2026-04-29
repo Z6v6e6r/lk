@@ -210,6 +210,8 @@ export function CommunityFeed({
               confirmedPlayersCount={game.confirmedPlayersCount ?? game.players.length}
               totalSlots={game.totalSlots}
               slotsLeft={game.slotsLeft}
+              splitJoinPriceText={game.splitJoinPriceText}
+              splitCancelDeadlineAt={game.splitCancelDeadlineAt}
               isJoined={game.isJoined}
               showWaitlist={game.showWaitlist}
               isPastGame={game.isPastGame}

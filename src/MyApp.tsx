@@ -6,6 +6,7 @@ import { AuthForm } from "./components/auth/AuthForm";
 import { RemoteWidgetHost } from "./components/UI/RemoteWidgetHost";
 import { Cabinet } from "./components/cabinet/Cabinet";
 import CommunityJoinPage from "./components/communities/CommunityJoinPage";
+import FindGamePage from "./components/games/FindGamePage";
 import {
   CABINET_URL,
   PUBLIC_COMMUNITY_JOIN_PATH,
@@ -690,6 +691,16 @@ function AppContent() {
   if (findRouteData.enabled) {
     if (!isAuthenticated) {
       return <AuthForm onLogin={() => setView("cabinet")} />;
+    }
+
+    if (import.meta.env.DEV) {
+      return (
+        <FindGamePage
+          cabinetUrl={findRouteData.cabinetUrl || DEFAULT_CABINET_URL}
+          presetStudioId={findRouteData.studioId}
+          presetStudioName={findRouteData.studioName}
+        />
+      );
     }
 
     return (

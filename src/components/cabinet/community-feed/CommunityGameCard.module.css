@@ -296,6 +296,46 @@
   width: 100%;
 }
 
+.footerActions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.splitJoinInfo {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  max-width: 160px;
+  color: #888889;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: 0.02em;
+  text-align: right;
+}
+
+.splitJoinInfoRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 5px;
+  width: 100%;
+  white-space: nowrap;
+}
+
+.splitJoinInfoRow strong {
+  color: #1f1e20;
+  font-family: "RF Dewi", "Inter Display", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .avatarsGroup {
   display: flex;
   align-items: center;

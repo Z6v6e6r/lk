@@ -37,6 +37,7 @@ const publicMode = ["true", "1", "yes", "available", "find"]
   .includes(String(q.public || q.available || q.find || "").trim().toLowerCase());
 const stationId = toStr(q.stationId || q.studioId);
 const stationName = toStr(q.stationName || q.studioName || q.station || q.studio);
+const date = toStr(q.date || q.bookingDate || q.gameDate);
 
 if (!publicMode && !phone && !paymentRef && bookingIds.length === 0) {
   msg.statusCode = 400;
@@ -116,6 +117,9 @@ if (publicMode) {
       { "settings.isPrivate": { $ne: true } },
     ],
   });
+  if (date) {
+    andConditions.push({ "booking.date": date });
+  }
   if (stationId) {
     andConditions.push({ "booking.studioId": stationId });
   }
@@ -134,5 +138,6 @@ msg._lkBookingIds = bookingIds;
 msg._lkPublicMode = publicMode;
 msg._lkStationId = stationId || null;
 msg._lkStationName = stationName || null;
+msg._lkDate = date || null;
 msg.payload = mongoQuery;
 return [msg, null, msg];

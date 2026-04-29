@@ -148,6 +148,7 @@ export interface CabinetHomeAdvertisingSettings {
 
 export interface PadelSplitPaymentPromoConfig {
   enabled: boolean;
+  activeTo?: string;
   stationIds: string[];
   stationNameIncludes: string[];
   roomIds: string[];
@@ -165,6 +166,7 @@ export interface PadelSplitPaymentPromoConfig {
 
 export const DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG: PadelSplitPaymentPromoConfig = {
   enabled: true,
+  activeTo: undefined,
   stationIds: ["6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1"],
   stationNameIncludes: ["терехово", "terekhovo"],
   roomIds: [],
@@ -2914,6 +2916,7 @@ export interface PadelSplitPaymentParams {
   date: string;
   fromTime: string;
   toTime: string;
+  activeTo?: string | null;
   studioId: string;
   roomId: string;
   studioName?: string | null;
@@ -4774,6 +4777,7 @@ export async function apiFetchPadelGamesByPhone(
 export async function apiFetchPadelAvailableGames(options: {
   limit?: number;
   offset?: number;
+  date?: string | null;
   stationId?: string | null;
   stationName?: string | null;
 } = {}) {
@@ -4792,7 +4796,11 @@ export async function apiFetchPadelAvailableGames(options: {
   });
   const stationId = options.stationId?.trim() || "";
   const stationName = options.stationName?.trim() || "";
+  const date = options.date?.trim() || "";
 
+  if (date) {
+    query.set("date", date);
+  }
   if (stationId) {
     query.set("stationId", stationId);
     query.set("studioId", stationId);
@@ -5841,6 +5849,7 @@ function buildPadelSplitPaymentPayload(params: PadelSplitPaymentParams): Record<
     date: params.date,
     fromTime: params.fromTime,
     toTime: params.toTime,
+    activeTo: params.activeTo ?? null,
     studioId: params.studioId,
     roomId: params.roomId,
     studioName: params.studioName ?? null,
@@ -5883,7 +5892,7 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
   const response = await request<unknown>("/lk/games/split/create", {
     method: "POST",
     baseUrl,
-    retries: 1,
+    retries: 0,
     body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
   });
 
@@ -5939,7 +5948,7 @@ export async function apiCreatePadelSplitParticipantPayment(
     {
       method: "POST",
       baseUrl,
-      retries: 1,
+      retries: 0,
       body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
     },
   );
@@ -6581,6 +6590,8 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
     trainers: { type: "NO_TRAINER" as const },
     paymentMethod: "WIDGET",
     baseRedirectUrl,
+    successUrl: baseRedirectUrl,
+    failUrl: baseRedirectUrl,
     comment: null,
     marketingAttribution: {},
     timeFrom: fromDateTimeWithOffset,
@@ -6605,21 +6616,23 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
       const txPayloads: Record<string, unknown>[] = [
         {
           ...(clientPhone ? { clientPhone } : {}),
-          failUrl: FAIL_URL,
+          failUrl: baseRedirectUrl,
           paymentMethod: "WIDGET",
           products: [{ id: primaryOneTimeId, type: "ONE_TIME", count: 1 }],
           count: 1,
           id: primaryOneTimeId,
           type: "ONE_TIME",
-          successUrl: SUCCESS_URL,
+          successUrl: baseRedirectUrl,
+          baseRedirectUrl,
           ...(promoCode ? { promoCode } : {}),
         },
         {
           ...(clientPhone ? { clientPhone } : {}),
-          failUrl: FAIL_URL,
+          failUrl: baseRedirectUrl,
           paymentMethod: "WIDGET",
           products: [{ id: primaryOneTimeId, type: "ONE_TIME", count: 1 }],
-          successUrl: SUCCESS_URL,
+          successUrl: baseRedirectUrl,
+          baseRedirectUrl,
           ...(promoCode ? { promoCode } : {}),
         },
       ];
@@ -7029,6 +7042,10 @@ function normalizePadelSplitPaymentPromoConfigPayload(
 
   return {
     enabled: toBoolean(data.enabled) ?? DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.enabled,
+    activeTo:
+      normalizeDateLabel(
+        pickString(data, ["activeTo", "dateTo", "validUntil", "expiresAt"]),
+      ) ?? undefined,
     stationIds:
       stationIds.length > 0
         ? stationIds
@@ -7125,6 +7142,14 @@ export async function apiFetchPadelSplitPaymentPromoConfig() {
       dedupe: true,
     },
   );
+
+  if (supportResponse.error && supportResponse.data == null) {
+    return {
+      data: { ...DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG, enabled: false },
+      error: supportResponse.error,
+      status: supportResponse.status,
+    } satisfies ApiResult<PadelSplitPaymentPromoConfig>;
+  }
 
   return {
     data: normalizePadelSplitPaymentPromoConfigPayload(supportResponse.data),

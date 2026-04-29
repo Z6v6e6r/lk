@@ -1,6 +1,6 @@
 import type { CommunityRecord } from "../../../utils/communityApi";
 import { MembersCountIcon } from "./CommunityIcons";
-import { getInitials } from "./feedFormatters";
+import { AvatarImageOrInitials } from "./AvatarImageOrInitials";
 
 interface CommunityHeaderProps {
   community: Pick<CommunityRecord, "name" | "logo"> & { memberCount?: number | null };
@@ -68,11 +68,7 @@ export function CommunityHeader({ community, onOpenMenu, onClose }: CommunityHea
 
         <div className="community-header-summary">
           <div className="community-header-avatar">
-            {community.logo ? (
-              <img src={community.logo} alt={community.name} className="community-header-avatar-image" />
-            ) : (
-              <span className="community-header-avatar-fallback">{getInitials(community.name)}</span>
-            )}
+            <AvatarImageOrInitials src={community.logo ?? undefined} name={community.name} imageClassName="community-header-avatar-image" fallbackClassName="community-header-avatar-fallback" />
           </div>
 
           <div className="community-header-copy">

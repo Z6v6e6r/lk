@@ -15,6 +15,13 @@ const toNumber = (value) => {
   return null;
 };
 
+const normalizeDate = (value) => {
+  const text = toStr(value);
+  if (!text) return null;
+  const matched = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return matched ? `${matched[1]}-${matched[2]}-${matched[3]}` : null;
+};
+
 const normalizePhone = (value) => {
   const digits = String(value || "").replace(/\D/g, "");
   if (!digits) return null;
@@ -31,14 +38,21 @@ const fail = (status, error, details) => {
 };
 
 const body = msg.payload && typeof msg.payload === "object" ? msg.payload : {};
-const date = toStr(body.date);
+const date = normalizeDate(body.date);
 const fromTime = toStr(body.fromTime);
 const toTime = toStr(body.toTime);
 const roomId = toStr(body.roomId);
 const clientPhone = normalizePhone(body.clientPhone || body.phone);
+const activeTo = normalizeDate(body.activeTo || body.dateTo);
 
 if (!date || !fromTime || !toTime || !roomId || !clientPhone) {
   return fail(400, "date, fromTime, toTime, roomId and clientPhone are required");
+}
+if (activeTo && date > activeTo) {
+  return fail(409, "Split promo is not active for selected date", {
+    date,
+    activeTo,
+  });
 }
 
 const shareCount = Number(body.shareCount) === 2 ? 2 : 4;
@@ -54,6 +68,7 @@ msg._splitCtx = {
   step: "token",
   paymentRef,
   date,
+  activeTo,
   fromTime,
   toTime,
   timeFrom: `${date}T${fromTime}:00+03:00`,
