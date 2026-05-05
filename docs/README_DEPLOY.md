@@ -9,7 +9,9 @@ npm run build
 После сборки в `dist/` лежат два комплекта скриптов:
 
 - боевой комплект для пользователей: `bundle.js`, `games.js`, `tournaments.js`, `onboarding.js`, `communities.js`
+- публичная запись на турниры: `tournament-signup.js`
 - dev-комплект для тестов и новых фич: `bundle-dev.js`, `games-dev.js`, `tournaments-dev.js`, `onboarding-dev.js`, `communities-dev.js`
+- dev-запись на турниры: `tournament-signup-dev.js`
 - манифесты релиза для пробития кэша Safari: `release.json`, `release-dev.json`
 
 Правило использования:
@@ -23,6 +25,7 @@ npm run build
 /var/www/html/lk/bundle.js
 /var/www/html/lk/games.js
 /var/www/html/lk/tournaments.js
+/var/www/html/lk/tournament-signup.js
 /var/www/html/lk/onboarding.js
 /var/www/html/lk/communities.js
 /var/www/html/lk/release.json
@@ -33,6 +36,7 @@ npm run build
 /var/www/html/lk/bundle-dev.js
 /var/www/html/lk/games-dev.js
 /var/www/html/lk/tournaments-dev.js
+/var/www/html/lk/tournament-signup-dev.js
 /var/www/html/lk/onboarding-dev.js
 /var/www/html/lk/communities-dev.js
 /var/www/html/lk/release-dev.json
@@ -60,7 +64,7 @@ location = /lk/release-dev.json {
 gzip on;
 gzip_types application/javascript text/css application/json font/woff2;
 
-location ~* ^/lk/(bundle|games|tournaments|onboarding|communities|ffc-academy)(-dev)?\.js$ {
+location ~* ^/lk/(bundle|games|tournaments|tournament-signup|onboarding|communities|ffc-academy)(-dev)?\.js$ {
     add_header Cache-Control "public, max-age=31536000, immutable" always;
 }
 
@@ -381,6 +385,74 @@ https://padlhub.ru/game_create?stationId=<STATION_ID>&cabinetUrl=https%3A%2F%2Fp
 - если пользователь не авторизован, сначала показывается форма входа;
 - после входа открывается экран создания игры;
 - если в ссылке передана станция, она подставляется автоматически и пользователь сразу попадает на выбор времени.
+
+## Публичная запись на турниры (`/tournament_signup`)
+
+Для новой Tilda-страницы публичной записи используйте отдельную HTML-вставку из:
+```text
+docs/tilda-tournament-signup.html
+```
+
+Она читает `https://padlhub.su/lk/release.json`, подставляет версию к `tournament-signup.js`, пробивает кэш и монтирует `LKWidgetTournamentSignup` в `#root`.
+
+Формат ссылки:
+```text
+https://padlhub.ru/tournament_signup
+```
+
+С открытием конкретного турнира:
+```text
+https://padlhub.ru/tournament_signup?tournamentId=<TOURNAMENT_ID>
+```
+
+Также поддерживаются алиасы идентификатора:
+- `id`
+- `exerciseId`
+
+С открытием даты:
+```text
+https://padlhub.ru/tournament_signup?date=2026-05-05
+```
+
+Логика:
+- если пользователь не авторизован, сначала показывается общая форма входа ЛК;
+- после входа бандл отправляет ph-ab API `Authorization: Bearer <LK Keycloak token>` и заголовки `X-PadlHub-Auth-Source: lk-keycloak`, `X-PadlHub-Tenant-Key`;
+- пользователь видит список турниров, карточку турнира, свой статус записи, может записаться или отменить запись.
+
+API по умолчанию берется из `VITE_PHAB_API_BASE`, fallback: `https://padlhub.su/api`.
+
+## Организаторская страница турниров (`/tournaments`)
+
+Для Tilda-страницы `https://padlhub.ru/tournaments` используйте отдельную HTML-вставку из:
+```text
+docs/tilda-tournaments.html
+```
+
+Она работает так же, как вставка для `/game_create`: читает `https://padlhub.su/lk/release.json`, подставляет версию к `tournaments.js`, пробивает кэш и монтирует `LKWidgetTournaments` в `#root`.
+
+Формат ссылки:
+```text
+https://padlhub.ru/tournaments
+```
+
+С открытием конкретного турнира:
+```text
+https://padlhub.ru/tournaments?tournamentId=<TOURNAMENT_ID>
+```
+
+Также поддерживаются алиасы идентификатора:
+- `id`
+- `exerciseId`
+
+С открытием даты:
+```text
+https://padlhub.ru/tournaments?date=2026-05-05
+```
+
+Опционально можно передать адрес возврата:
+```text
+https://padlhub.ru/tournaments?cabinetUrl=https%3A%2F%2Fpadlhub.ru%2Flk_new
+```
 
 ## Страница вступления в сообщество (`/community_join`)
 

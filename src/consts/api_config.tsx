@@ -20,6 +20,9 @@ export const GAMES_BUNDLE_URL = import.meta.env.VITE_GAMES_BUNDLE_URL as string 
 export const TOURNAMENTS_BUNDLE_URL = import.meta.env.VITE_TOURNAMENTS_BUNDLE_URL as string | undefined;
 export const ONBOARDING_BUNDLE_URL = import.meta.env.VITE_ONBOARDING_BUNDLE_URL as string | undefined;
 export const COMMUNITIES_BUNDLE_URL = import.meta.env.VITE_COMMUNITIES_BUNDLE_URL as string | undefined;
+export const TOURNAMENT_SIGNUP_BUNDLE_URL = import.meta.env.VITE_TOURNAMENT_SIGNUP_BUNDLE_URL as string | undefined;
+export const PHAB_API_BASE =
+  (import.meta.env.VITE_PHAB_API_BASE as string | undefined) ?? "https://padlhub.su/api";
 export const PUBLIC_INVITE_ORIGIN = (import.meta.env.VITE_PUBLIC_INVITE_ORIGIN as string | undefined) ?? "https://padlhub.ru";
 export const PUBLIC_INVITE_PATH = (import.meta.env.VITE_PUBLIC_INVITE_PATH as string | undefined) ?? "/game_join";
 export const PUBLIC_GAME_CREATE_PATH =
