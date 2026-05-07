@@ -18,8 +18,10 @@ export type GamesCreateFromBookingData = {
 
 export type OpenGamesOptions = {
   gameId?: string | null;
+  joinGameId?: string | null;
   openChat?: boolean;
   createFromBooking?: GamesCreateFromBookingData | null;
+  cabinetUrl?: string | null;
 };
 
 export type GamesMountData = {

@@ -147,6 +147,8 @@ export interface CabinetHomeAdvertisingSettings {
 }
 
 export interface PadelSplitPaymentPromoConfig {
+  id?: string;
+  title?: string;
   enabled: boolean;
   activeTo?: string;
   stationIds: string[];
@@ -160,6 +162,7 @@ export interface PadelSplitPaymentPromoConfig {
   baseShareAmount: number;
   vivaDirectionId: number;
   vivaExerciseTypeId: number;
+  promos?: PadelSplitPaymentPromoConfig[];
   updatedAt?: string;
   updatedBy?: string;
 }
@@ -2391,6 +2394,14 @@ export interface TournamentHistoryRecord {
   updatedAt: string | null;
 }
 
+export type TournamentTypeKey =
+  | "americano"
+  | "americano_padelhub"
+  | "americano_classic"
+  | "paired_americano"
+  | "mexicano"
+  | "paired_mexicano";
+
 export interface AmericanoTournamentPayload {
   tournamentId: string;
   tenantKey: string;
@@ -2400,9 +2411,10 @@ export interface AmericanoTournamentPayload {
     phone: string | null;
     tenantKey: string;
   };
-  tournamentType: "americano";
+  tournamentType: TournamentTypeKey;
   targetScore: number;
   courts: string[];
+  params?: Record<string, unknown>;
   participants: Array<{
     id: string | null;
     phone: string | null;
@@ -2929,6 +2941,8 @@ export interface PadelSplitPaymentParams {
   failUrl?: string | null;
   shareCount: 2 | 4;
   shareAmount: number;
+  shareAmountIncludesDuration?: boolean;
+  durationMinutes?: number | null;
   maxClientsCount?: number | null;
   spot?: number | null;
   vivaDirectionId?: number | null;
@@ -3606,6 +3620,7 @@ export async function apiFetchTournamentParticipants(exerciseId: string) {
     `${base}/lk/tournaments/participants?exerciseId=${exerciseId}`,
     {
       method: "GET",
+      auth: true,
       retries: 1,
     },
   );
@@ -5862,6 +5877,8 @@ function buildPadelSplitPaymentPayload(params: PadelSplitPaymentParams): Record<
     failUrl: params.failUrl ?? params.baseRedirectUrl ?? null,
     shareCount: params.shareCount,
     shareAmount: params.shareAmount,
+    shareAmountIncludesDuration: params.shareAmountIncludesDuration === true,
+    durationMinutes: params.durationMinutes ?? null,
     maxClientsCount: params.maxClientsCount ?? params.shareCount,
     spot: params.spot ?? null,
     vivaDirectionId: params.vivaDirectionId ?? null,
@@ -7030,10 +7047,15 @@ function normalizeIntegerSetting(value: unknown, fallback: number): number {
 
 function normalizePadelSplitPaymentPromoConfigPayload(
   value: unknown,
+  options?: { fallbackToDefaultRestrictions?: boolean },
 ): PadelSplitPaymentPromoConfig {
   const source = isRecord(value) && isRecord(value.data) ? value.data : value;
   const data = isRecord(source) ? source : {};
   const shareAmounts = isRecord(data.shareAmounts) ? data.shareAmounts : {};
+  const rawPromos = Array.isArray(data.promos)
+    ? data.promos.filter((item): item is Record<string, unknown> => isRecord(item))
+    : [];
+  const fallbackToDefaults = options?.fallbackToDefaultRestrictions !== false;
 
   const stationIds = uniqueIds(extractStringList(data.stationIds));
   const stationNameIncludes = uniqueIds(extractStringList(data.stationNameIncludes));
@@ -7041,6 +7063,8 @@ function normalizePadelSplitPaymentPromoConfigPayload(
   const roomNameIncludes = uniqueIds(extractStringList(data.roomNameIncludes));
 
   return {
+    id: pickString(data, ["id"]) ?? undefined,
+    title: pickString(data, ["title"]) ?? undefined,
     enabled: toBoolean(data.enabled) ?? DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.enabled,
     activeTo:
       normalizeDateLabel(
@@ -7049,16 +7073,22 @@ function normalizePadelSplitPaymentPromoConfigPayload(
     stationIds:
       stationIds.length > 0
         ? stationIds
-        : DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.stationIds,
+        : fallbackToDefaults
+          ? DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.stationIds
+          : [],
     stationNameIncludes:
       stationNameIncludes.length > 0
         ? stationNameIncludes
-        : DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.stationNameIncludes,
+        : fallbackToDefaults
+          ? DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.stationNameIncludes
+          : [],
     roomIds,
     roomNameIncludes:
       roomNameIncludes.length > 0
         ? roomNameIncludes
-        : DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.roomNameIncludes,
+        : fallbackToDefaults
+          ? DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.roomNameIncludes
+          : [],
     shareAmounts: {
       twoTeams: normalizeMoneyAmount(
         pickNumeric(shareAmounts, ["twoTeams", "two", "2"]) ??
@@ -7084,6 +7114,11 @@ function normalizePadelSplitPaymentPromoConfigPayload(
     vivaExerciseTypeId: normalizeIntegerSetting(
       data.vivaExerciseTypeId ?? data.exerciseTypeId,
       DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.vivaExerciseTypeId,
+    ),
+    promos: rawPromos.map((promo) =>
+      normalizePadelSplitPaymentPromoConfigPayload(promo, {
+        fallbackToDefaultRestrictions: false,
+      }),
     ),
     updatedAt: pickString(data, ["updatedAt"]) ?? undefined,
     updatedBy: pickString(data, ["updatedBy"]) ?? undefined,
@@ -7133,11 +7168,15 @@ export async function apiGetCabinetHomeAdvertisingSettings() {
 }
 
 export async function apiFetchPadelSplitPaymentPromoConfig() {
+  const query = new URLSearchParams({
+    force_ts: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  });
   const supportResponse = await requestSupportWithFallback<unknown>(
-    "/advertising/split-payment-promo",
+    `/advertising/split-payment-promo?${query.toString()}`,
     {
       method: "GET",
       retries: 1,
+      cache: "no-store",
       cacheTtlMs: DEV_SPLIT_PAYMENT_PROMO_CACHE_TTL_MS,
       dedupe: true,
     },

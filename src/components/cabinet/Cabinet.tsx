@@ -23,6 +23,7 @@ import type {
   TournamentHistoryRecord,
 } from "../../utils/apiClient";
 import type { OpenGamesOptions } from "../../types/gamesOverlay";
+import type { OpenTournamentsOptions } from "../../types/tournamentsOverlay";
 import { useAuth } from "../../context/AuthContext";
 import { ButtonModule } from "./ButtonModele";
 import { ProfileEditForm } from "./ProfileEditForm";
@@ -34,6 +35,7 @@ import { BuySupscription } from "./BuySubscription";
 import { Advertisement } from "./Advertisement";
 import { CommunitiesSectionLoader } from "./CommunitiesSectionLoader";
 import { SupportChatWidget } from "./SupportChatWidget";
+import { TournamentDetailsModal } from "./TournamentDetailsModal";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
 import { CUSTOM_FIELD_IDS, getCustomFieldValue, hasTournamentHostingAccess } from "../../utils/customFields";
 import {
@@ -69,7 +71,7 @@ type QuickAction = {
 const QUICK_ACTIONS: QuickAction[] = [
   { icon: "🎾", label: "Играть", href: GAME_FIND_PATH },
   { icon: "👥", label: "Групповые тренировки", href: GROUP_TRAININGS_HASH },
-  { icon: "🏆", label: "Турниры", href: "https://padlhub.ru/padel_torneos" },
+  { icon: "🏆", label: "Турниры", href: "https://padlhub.ru/tournaments" },
   { icon: "🎯", label: "Индивидуальные тренировки", href: "https://padlhub.ru/indi_lk" },
 ];
 
@@ -87,10 +89,11 @@ const TOURNAMENT_LOOKBACK_DAYS = 7;
 const TOURNAMENT_LOOKAHEAD_DAYS = 14;
 const DEV_TOURNAMENT_SCAN_DELAY_MS = 3000;
 const ACTIVE_EVENTS_PREVIEW_LIMIT = 3;
+const RESULT_ENTRY_GRACE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 interface CabinetProps {
   onOpenGames: (options?: OpenGamesOptions) => void;
-  onOpenTournaments: () => void;
+  onOpenTournaments: (options?: OpenTournamentsOptions) => void;
   onOpenOnboarding: (data: {
     profile: UserProfileType;
     gamesLink: string;
@@ -108,6 +111,7 @@ type ProfileUpdatedEventDetail = {
 };
 
 type GameCancelState = "idle" | "confirm" | "done";
+type InlineGameResultScore = { left: string; right: string };
 
 function applyOnboardingLevels(
   source: UserProfileType,
@@ -237,6 +241,133 @@ function resolveGameCardPlayersCount(game: PadelGameRecord): number {
   return MAX_GAME_PLAYERS;
 }
 
+function getGameEndTimestamp(game: PadelGameRecord): number {
+  const date = game.booking?.date;
+  const rawTime = game.booking?.timeTo ?? game.booking?.timeFrom;
+  if (rawTime) {
+    const directParsed = new Date(rawTime).getTime();
+    if (Number.isFinite(directParsed)) return directParsed;
+  }
+  if (!date || !rawTime) return Number.POSITIVE_INFINITY;
+  const normalizedTime = /^\d{2}:\d{2}$/.test(rawTime) ? `${rawTime}:00` : rawTime;
+  const parsed = new Date(`${date}T${normalizedTime}`).getTime();
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
+function getGameStartTimestamp(game: PadelGameRecord): number {
+  const date = game.booking?.date;
+  const rawTime = game.booking?.timeFrom ?? game.booking?.timeTo;
+  if (rawTime) {
+    const directParsed = new Date(rawTime).getTime();
+    if (Number.isFinite(directParsed)) return directParsed;
+  }
+  if (!date || !rawTime) return Number.POSITIVE_INFINITY;
+  const normalizedTime = /^\d{2}:\d{2}$/.test(rawTime) ? `${rawTime}:00` : rawTime;
+  const parsed = new Date(`${date}T${normalizedTime}`).getTime();
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
+function getTodayDateKey(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getGameDateKey(game: PadelGameRecord): string | null {
+  const rawDate = String(game.booking?.date || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
+    return rawDate.slice(0, 10);
+  }
+
+  const startTs = getGameStartTimestamp(game);
+  if (!Number.isFinite(startTs)) return null;
+  const parsed = new Date(startTs);
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function hasEnteredMatchResult(game: PadelGameRecord): boolean {
+  const metadata = isRecord(game.metadata) ? game.metadata : null;
+  const matchResult = metadata && isRecord(metadata.matchResult) ? metadata.matchResult : null;
+  if (!matchResult) return false;
+  const sets = matchResult.sets;
+  if (Array.isArray(sets) && sets.length > 0) return true;
+  const status = String(matchResult.status || "").trim();
+  return Boolean(status || matchResult.submittedAt || matchResult.confirmedAt);
+}
+
+function shouldShowInlineResultEntry(game: PadelGameRecord): boolean {
+  if (String(game.status || "").toUpperCase().includes("CANCEL")) return false;
+  if (hasEnteredMatchResult(game)) return false;
+  const startTs = getGameStartTimestamp(game);
+  if (
+    getGameDateKey(game) === getTodayDateKey()
+    && Number.isFinite(startTs)
+    && startTs <= Date.now()
+  ) {
+    return true;
+  }
+
+  const endTs = getGameEndTimestamp(game);
+  const now = Date.now();
+  return Number.isFinite(endTs) && endTs < now && now - endTs <= RESULT_ENTRY_GRACE_WINDOW_MS;
+}
+
+function normalizeScoreInput(value: string): string {
+  return value.replace(/[^\d]/g, "").slice(0, 2);
+}
+
+function getPlayerIdentityKey(player: PadelGamePlayer | null | undefined): string | null {
+  if (!player) return null;
+  const id = String(player.id || "").trim();
+  if (id) return `id:${id}`;
+  const phone = normalizePhoneForGame(player.phone);
+  if (phone) return `phone:${phone}`;
+  const name = String(player.name || "").trim().toLowerCase();
+  return name ? `name:${name}` : null;
+}
+
+function resolveStoredTeamSlots(
+  game: PadelGameRecord,
+  fallbackPlayers: Array<PadelGamePlayer | null>,
+): Array<PadelGamePlayer | null> {
+  const metadata = isRecord(game.metadata) ? game.metadata : null;
+  const rawSlots = Array.isArray(metadata?.teamSlots) ? metadata.teamSlots : [];
+  if (rawSlots.length === 0) return fallbackPlayers;
+
+  const playersByKey = new Map<string, PadelGamePlayer>();
+  fallbackPlayers.forEach((player, index) => {
+    const key = getPlayerIdentityKey(player) || `slot:${index}`;
+    if (player) playersByKey.set(key, player);
+  });
+
+  const resolveSlot = (value: unknown): PadelGamePlayer | null => {
+    if (!value) return null;
+    if (isRecord(value)) {
+      const id = pickStringValue(value, ["id"]);
+      const phone = normalizePhoneForGame(pickStringValue(value, ["phone", "phoneNorm"]));
+      const name = pickStringValue(value, ["name"])?.toLowerCase() ?? null;
+      return (
+        (id ? playersByKey.get(`id:${id}`) : null)
+        ?? (phone ? playersByKey.get(`phone:${phone}`) : null)
+        ?? (name ? playersByKey.get(`name:${name}`) : null)
+        ?? null
+      );
+    }
+    if (typeof value === "string") {
+      const raw = value.trim();
+      return playersByKey.get(raw) ?? playersByKey.get(`id:${raw}`) ?? playersByKey.get(`phone:${normalizePhoneForGame(raw)}`) ?? null;
+    }
+    return null;
+  };
+
+  return Array.from({ length: MAX_GAME_PLAYERS }, (_, index) => resolveSlot(rawSlots[index]) ?? fallbackPlayers[index] ?? null);
+}
+
 function isLocalHostname(hostname: string): boolean {
   const host = hostname.toLowerCase();
   return host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".local");
@@ -259,7 +390,7 @@ function resolvePublicGamesOrigin(current: URL): string {
     }
   }
 
-  return "https://padlhub.su";
+  return "https://padlhub.ru";
 }
 
 function resolveInviteCabinetBaseUrl(): URL | null {
@@ -278,7 +409,11 @@ function resolveInviteCabinetBaseUrl(): URL | null {
   }
 
   try {
-    return new URL(INVITE_JOIN_PATH, PUBLIC_INVITE_ORIGIN);
+    const inviteUrl = new URL(INVITE_JOIN_PATH, PUBLIC_INVITE_ORIGIN);
+    if (inviteUrl.hostname === "padlhub.su") {
+      inviteUrl.hostname = "padlhub.ru";
+    }
+    return inviteUrl;
   } catch {
     return parsedCabinetUrl;
   }
@@ -872,12 +1007,16 @@ export function Cabinet({
   const [loadingMoreActiveRecords, setLoadingMoreActiveRecords] = useState(false);
   const [hasAssignedTournamentAccess, setHasAssignedTournamentAccess] = useState(false);
   const [customTournaments, setCustomTournaments] = useState<TournamentHistoryRecord[]>([]);
+  const [selectedTournamentBooking, setSelectedTournamentBooking] = useState<Booking | null>(null);
   const [copiedGameInviteId, setCopiedGameInviteId] = useState<string | null>(null);
   const [, setChatReadMap] = useState<Record<string, number>>({});
   const [chatUnreadByGame, setChatUnreadByGame] = useState<Record<string, number>>({});
   const [gameCancelStateById, setGameCancelStateById] = useState<Record<string, GameCancelState>>({});
   const [gameCancelOkById, setGameCancelOkById] = useState<Record<string, boolean>>({});
   const [cancellingGameId, setCancellingGameId] = useState<string | null>(null);
+  const [inlineGameResultScores, setInlineGameResultScores] = useState<Record<string, InlineGameResultScore>>({});
+  const [savingInlineGameResultId, setSavingInlineGameResultId] = useState<string | null>(null);
+  const [inlineGameResultErrorById, setInlineGameResultErrorById] = useState<Record<string, string>>({});
   const cabinetVisitTrackedRef = useRef(false);
   const onboardingStatusRef = useRef<boolean | null>(null);
   const cancellingGameIdsRef = useRef<Set<string>>(new Set());
@@ -1374,10 +1513,10 @@ export function Cabinet({
     ],
     [activeBookings?.content, historyBookings?.content],
   );
-  const tournamentHistorySourceBookings = useMemo(
-    () => (isBookingHistoryOpen ? allBookings : (activeBookings?.content ?? [])),
-    [activeBookings?.content, allBookings, isBookingHistoryOpen],
-  );
+  const tournamentHistorySourceBookings = useMemo(() => {
+    if (!selectedTournamentBooking) return allBookings;
+    return allBookings.includes(selectedTournamentBooking) ? allBookings : [...allBookings, selectedTournamentBooking];
+  }, [allBookings, selectedTournamentBooking]);
   const tournamentExerciseIds = useMemo(() => {
     const bucket = new Set<string>();
     tournamentHistorySourceBookings.forEach((booking) => {
@@ -1509,6 +1648,12 @@ export function Cabinet({
     }
     return null;
   }, [tournamentByExerciseId]);
+  const closeTournamentDetails = useCallback(() => {
+    setSelectedTournamentBooking(null);
+  }, []);
+  const handleOpenTournamentDetails = useCallback((booking: Booking) => {
+    setSelectedTournamentBooking(booking);
+  }, []);
   const bookingPaidBySlotKey = useMemo(() => {
     const next = new Map<string, boolean | null>();
     allBookings.forEach((booking) => {
@@ -1647,7 +1792,7 @@ export function Cabinet({
     try {
       await shareOrCopyGameInvitePayload(url, game, {
         includePreviewImage: true,
-        preferNativeShare: true,
+        preferNativeShare: false,
       });
       setCopiedGameInviteId(game.id);
       window.setTimeout(() => {
@@ -1729,13 +1874,14 @@ export function Cabinet({
     return Boolean(profilePhoneNorm && organizerPhoneNorm && profilePhoneNorm === organizerPhoneNorm);
   };
 
-  const handleOpenTournaments = () => {
+  const handleOpenTournaments = (options?: OpenTournamentsOptions) => {
     trackAnalyticsEvent("module_open_requested", {
       module: "tournaments",
       source: "cabinet",
       clientId: profile.id,
+      tournamentId: options?.tournamentId ?? null,
     });
-    onOpenTournaments();
+    onOpenTournaments(options);
   };
 
   const handleOpenGamesCreate = () => {
@@ -1764,6 +1910,104 @@ export function Cabinet({
       clientId: profile.id,
     });
     window.location.href = resolvedHref;
+  };
+
+  const handleInlineGameResultScoreChange = (
+    gameId: string,
+    side: keyof InlineGameResultScore,
+    value: string,
+  ) => {
+    setInlineGameResultScores((current) => ({
+      ...current,
+      [gameId]: {
+        left: current[gameId]?.left ?? "",
+        right: current[gameId]?.right ?? "",
+        [side]: normalizeScoreInput(value),
+      },
+    }));
+    setInlineGameResultErrorById((current) => {
+      if (!current[gameId]) return current;
+      const next = { ...current };
+      delete next[gameId];
+      return next;
+    });
+  };
+
+  const handleSaveInlineGameResult = async (
+    game: PadelGameRecord,
+    teamSlots: Array<PadelGamePlayer | null>,
+  ) => {
+    const score = inlineGameResultScores[game.id] ?? { left: "", right: "" };
+    const left = Number.parseInt(score.left, 10);
+    const right = Number.parseInt(score.right, 10);
+    if (!Number.isFinite(left) || !Number.isFinite(right)) {
+      setInlineGameResultErrorById((current) => ({
+        ...current,
+        [game.id]: "Введите счёт с обеих сторон",
+      }));
+      return;
+    }
+
+    setSavingInlineGameResultId(game.id);
+    setInlineGameResultErrorById((current) => {
+      if (!current[game.id]) return current;
+      const next = { ...current };
+      delete next[game.id];
+      return next;
+    });
+
+    const storedTeamSlots = teamSlots.map((player) => (
+      player
+        ? {
+            id: player.id ?? null,
+            phone: normalizePhoneForGame(player.phone),
+            name: player.name || null,
+          }
+        : null
+    ));
+    const nextMetadata = {
+      ...(isRecord(game.metadata) ? game.metadata : {}),
+      teamSlots: storedTeamSlots,
+      matchResult: {
+        ...(isRecord(game.metadata?.matchResult) ? game.metadata.matchResult : {}),
+        sets: [{ left, right }],
+        setPairings: [{ setIndex: 0, teamSlots: storedTeamSlots }],
+        status: "DRAFT",
+        savedAt: new Date().toISOString(),
+        savedBy: {
+          id: profile?.id ?? null,
+          phone: normalizePhoneForGame(profile?.phone ?? null),
+          name: [profile?.firstName, profile?.lastName].filter(Boolean).join(" ").trim() || null,
+        },
+      },
+    };
+
+    try {
+      const result = await apiUpdatePadelGameRecord(game.id, { metadata: nextMetadata });
+      if (!result.data?.id) {
+        setInlineGameResultErrorById((current) => ({
+          ...current,
+          [game.id]: result.error?.message || "Не удалось сохранить результат",
+        }));
+        return;
+      }
+
+      setCreatedGames((current) => current.map((item) => (
+        item.id === game.id ? (result.data as PadelGameRecord) : item
+      )));
+      setInlineGameResultScores((current) => {
+        const next = { ...current };
+        delete next[game.id];
+        return next;
+      });
+    } catch {
+      setInlineGameResultErrorById((current) => ({
+        ...current,
+        [game.id]: "Не удалось сохранить результат",
+      }));
+    } finally {
+      setSavingInlineGameResultId(null);
+    }
   };
 
   const renderGameCard = (
@@ -1891,6 +2135,12 @@ export function Cabinet({
     const playerSlots = Array.from({ length: playersCount }, (_, index) => (
       participants[index] ?? null
     ));
+    const teamSlots = resolveStoredTeamSlots(game, playerSlots);
+    const showInlineResultEntry = shouldShowInlineResultEntry(game) && participants.some((player) => isCurrentUserPlayer(player));
+    const inlineResultScore = inlineGameResultScores[game.id] ?? { left: "", right: "" };
+    const inlineResultSaving = savingInlineGameResultId === game.id;
+    const inlineResultCanSave = inlineResultScore.left.trim() !== "" && inlineResultScore.right.trim() !== "";
+    const inlineResultError = inlineGameResultErrorById[game.id] ?? null;
     const waitlistBadgeLabel = isCurrentUserWaitlisted
       ? "В листе ожидания"
       : showOrganizerWaitlistBadge
@@ -1946,40 +2196,130 @@ export function Cabinet({
             />
           </div>
         </div>
-        <div className={`game-created-players${playersCount <= 2 ? " game-created-players-singles" : ""}`}>
-          {playerSlots.map((player, index) => {
-            const initials = getPlayerInitials(player?.name);
-            const levelLabel = normalizePlayerRatingLabel(player?.rating ?? null);
-            const levelProgress = getPlayerRatingProgress(levelLabel);
-            const ringProgressDeg =
-              levelProgress != null ? `${Math.max(0, Math.min(360, Math.round(levelProgress * 360)))}deg` : "0deg";
-            return (
-              <div key={`${game.id}-slot-${index}`} className="game-created-player">
-                <div
-                  className={`game-created-player-ring${levelLabel ? " has-level" : ""}`}
-                  style={{ "--player-ring-progress": ringProgressDeg } as CSSProperties}
-                >
-                  {player?.photo ? (
-                    <img
-                      src={player.photo}
-                      alt={player.name}
-                      className="game-created-player-avatar"
-                    />
-                  ) : (
-                    <div className="game-created-player-avatar game-created-player-fallback">
-                      {initials}
+        {!showInlineResultEntry && (
+          <div className={`game-created-players${playersCount <= 2 ? " game-created-players-singles" : ""}`}>
+            {playerSlots.map((player, index) => {
+              const initials = getPlayerInitials(player?.name);
+              const levelLabel = normalizePlayerRatingLabel(player?.rating ?? null);
+              const levelProgress = getPlayerRatingProgress(levelLabel);
+              const ringProgressDeg =
+                levelProgress != null ? `${Math.max(0, Math.min(360, Math.round(levelProgress * 360)))}deg` : "0deg";
+              return (
+                <div key={`${game.id}-slot-${index}`} className="game-created-player">
+                  <div
+                    className={`game-created-player-ring${levelLabel ? " has-level" : ""}`}
+                    style={{ "--player-ring-progress": ringProgressDeg } as CSSProperties}
+                  >
+                    {player?.photo ? (
+                      <img
+                        src={player.photo}
+                        alt={player.name}
+                        className="game-created-player-avatar"
+                      />
+                    ) : (
+                      <div className="game-created-player-avatar game-created-player-fallback">
+                        {initials}
+                      </div>
+                    )}
+                  </div>
+                  {levelLabel && (
+                    <div className="game-created-player-level">
+                      {levelLabel}
                     </div>
                   )}
                 </div>
-                {levelLabel && (
-                  <div className="game-created-player-level">
-                    {levelLabel}
+              );
+            })}
+          </div>
+        )}
+
+        {showInlineResultEntry && (
+          <div
+            className="game-created-result-entry"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            <div className="game-created-result-entry-head">
+              <span>Команды</span>
+              <span>{playersCount <= 2 ? "1 пара по 2 игрока" : "2 пары по 2 игрока"}</span>
+            </div>
+            <div className={`game-created-result-teams${playersCount <= 2 ? " game-created-result-teams-singles" : ""}`}>
+              {[
+                { label: "Команда 1", indexes: [0, 1] },
+                ...(playersCount <= 2 ? [] : [{ label: "Команда 2", indexes: [2, 3] }]),
+              ].map((team) => (
+                <div key={team.label} className="game-created-result-team">
+                  <div className="game-created-result-team-title">{team.label}</div>
+                  <div className="game-created-result-team-players">
+                    {team.indexes.map((slotIndex) => {
+                      const player = teamSlots[slotIndex] ?? null;
+                      const initials = getPlayerInitials(player?.name);
+                      const levelLabel = normalizePlayerRatingLabel(player?.rating ?? null);
+                      const levelProgress = getPlayerRatingProgress(levelLabel);
+                      const ringProgressDeg =
+                        levelProgress != null ? `${Math.max(0, Math.min(360, Math.round(levelProgress * 360)))}deg` : "0deg";
+                      return (
+                        <div key={`${game.id}-result-slot-${slotIndex}`} className="game-created-result-player">
+                          <div
+                            className={`game-created-player-ring${levelLabel ? " has-level" : ""}`}
+                            style={{ "--player-ring-progress": ringProgressDeg } as CSSProperties}
+                          >
+                            {player?.photo ? (
+                              <img
+                                src={player.photo}
+                                alt={player.name}
+                                className="game-created-player-avatar"
+                              />
+                            ) : (
+                              <div className="game-created-player-avatar game-created-player-fallback">
+                                {initials}
+                              </div>
+                            )}
+                          </div>
+                          {levelLabel && <div className="game-created-player-level">{levelLabel}</div>}
+                          <div className="game-created-result-player-name">{player?.name || "Свободно"}</div>
+                        </div>
+                      );
+                    })}
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                </div>
+              ))}
+            </div>
+            <div className="game-created-result-score">
+              <span>Сет 1</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={inlineResultScore.left}
+                onChange={(event) => handleInlineGameResultScoreChange(game.id, "left", event.target.value)}
+                disabled={inlineResultSaving}
+                aria-label="Счёт первой команды"
+              />
+              <b>-</b>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={inlineResultScore.right}
+                onChange={(event) => handleInlineGameResultScoreChange(game.id, "right", event.target.value)}
+                disabled={inlineResultSaving}
+                aria-label="Счёт второй команды"
+              />
+            </div>
+            {inlineResultError && <div className="game-created-result-error">{inlineResultError}</div>}
+            <button
+              type="button"
+              className="game-created-action game-created-result-save"
+              onClick={() => {
+                void handleSaveInlineGameResult(game, teamSlots);
+              }}
+              disabled={inlineResultSaving || !inlineResultCanSave}
+            >
+              {inlineResultSaving ? "Сохраняем..." : "Сохранить результат"}
+            </button>
+          </div>
+        )}
+
+        {!showInlineResultEntry && (
         <div className={`game-created-actions${canInvite ? " game-created-actions-organizer" : " game-created-actions-single"}`}>
           {showSplitJoinInfo && (
             <div className="game-created-split-join-info" aria-label="Условия присоединения к сборной игре">
@@ -2044,6 +2384,7 @@ export function Cabinet({
             )}
           </button>
         </div>
+        )}
         {canCancelGameBooking && cancelState === "idle" && linkedBooking && (
           <div className="booking-cancel-row game-created-cancel-row">
             <button
@@ -2296,6 +2637,7 @@ export function Cabinet({
         gameRecordsError={createdGamesError}
         resolveGameForBooking={resolveGameForBooking}
         resolveTournamentForBooking={resolveTournamentForBooking}
+        onOpenTournamentDetails={handleOpenTournamentDetails}
       />
 
       {/* Реклама */}
@@ -2317,7 +2659,7 @@ export function Cabinet({
           </div>
           <div className="section-body">
             <p className="section-text">Управляйте турнирами в отдельном модуле.</p>
-            <button className="section-cta" onClick={handleOpenTournaments} type="button">
+            <button className="section-cta" onClick={() => handleOpenTournaments()} type="button">
               Перейти в турниры
             </button>
           </div>
@@ -2352,6 +2694,16 @@ export function Cabinet({
         renderGameCard={renderGameCard}
         resolveGameForBooking={resolveGameForBooking}
         resolveTournamentForBooking={resolveTournamentForBooking}
+        onOpenTournamentDetails={(booking) => {
+          setIsBookingHistoryOpen(false);
+          handleOpenTournamentDetails(booking);
+        }}
+      />
+      <TournamentDetailsModal
+        isOpen={selectedTournamentBooking !== null}
+        booking={selectedTournamentBooking}
+        customTournament={selectedTournamentBooking ? resolveTournamentForBooking(selectedTournamentBooking) : null}
+        onClose={closeTournamentDetails}
       />
       <SubscriptionInformation
         isOpen={isSubscriptionInfoOpen}

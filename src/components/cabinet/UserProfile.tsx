@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { UserProfileType } from "../../utils/apiClient";
 import { CUSTOM_FIELD_IDS, getCustomFieldValue, getLetterGrade, parseNumericLevel } from "../../utils/customFields";
+import { forceAppRefresh } from "../../utils/forceAppRefresh";
 
 interface UserProfileProps {
   profile: UserProfileType;
@@ -76,6 +77,7 @@ const isLevelGrade = (value: string): value is LevelGrade => value in LEVEL_RANG
 
 export function UserProfile({ profile, openEditForm }: UserProfileProps) {
   const [avatarError, setAvatarError] = useState(false);
+  const [isRefreshingApp, setIsRefreshingApp] = useState(false);
   const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
   const initials = (profile.firstName?.[0] || "") + (profile.lastName?.[0] || "");
   const balance = (profile.deposit / 100).toLocaleString("ru-RU");
@@ -111,6 +113,12 @@ export function UserProfile({ profile, openEditForm }: UserProfileProps) {
   useEffect(() => {
     setAvatarError(false);
   }, [profile.photo]);
+
+  const handleForceRefresh = () => {
+    if (isRefreshingApp) return;
+    setIsRefreshingApp(true);
+    void forceAppRefresh();
+  };
 
   return (
     <div className="cab-header">
@@ -177,6 +185,20 @@ export function UserProfile({ profile, openEditForm }: UserProfileProps) {
               </svg>
             </button>
           </div>
+          <button
+            className="cab-refresh-app-btn"
+            type="button"
+            onClick={handleForceRefresh}
+            disabled={isRefreshingApp}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+              <path d="M20 11a8 8 0 0 0-14.7-4.4L4 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M4 4v4h4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M4 13a8 8 0 0 0 14.7 4.4L20 16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M20 20v-4h-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <span>{isRefreshingApp ? "Обновляем..." : "Обновить приложение"}</span>
+          </button>
         </div>
         <div className="cab-header-actions">
           <div className="balance-inline">

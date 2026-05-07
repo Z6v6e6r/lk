@@ -7,7 +7,7 @@ import {
   type PadelGameRecord,
   type UserProfileType,
 } from "../../utils/apiClient";
-import { CABINET_URL, PUBLIC_GAME_CREATE_PATH, PUBLIC_INVITE_PATH } from "../../consts/api_config";
+import { CABINET_URL, PUBLIC_GAME_CREATE_PATH, PUBLIC_INVITE_ORIGIN, PUBLIC_INVITE_PATH } from "../../consts/api_config";
 import { CUSTOM_FIELD_IDS, getCustomFieldValue, getLetterGrade, parseNumericLevel } from "../../utils/customFields";
 import { addGameToCalendar } from "../../utils/calendarEvent";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
@@ -366,17 +366,28 @@ function matchesDateFilter(game: PadelGameRecord, dateKey: string | null): boole
 }
 
 function buildAbsolutePageUrl(path: string, fallbackOrigin?: string): URL {
+  if (fallbackOrigin) {
+    return new URL(path, fallbackOrigin);
+  }
   if (typeof window === "undefined") {
-    return new URL(path, fallbackOrigin || "https://padlhub.ru");
+    return new URL(path, "https://padlhub.ru");
   }
   return new URL(path, window.location.origin);
+}
+
+function normalizePadlHubInviteOrigin(url: URL): URL {
+  if (url.hostname !== "padlhub.su") return url;
+  const normalized = new URL(url.toString());
+  normalized.hostname = "padlhub.ru";
+  return normalized;
 }
 
 function normalizeUrl(value: string | null | undefined): string | null {
   const raw = String(value || "").trim();
   if (!raw) return null;
   try {
-    return new URL(raw, typeof window !== "undefined" ? window.location.origin : "https://padlhub.ru").toString();
+    const parsed = new URL(raw, typeof window !== "undefined" ? window.location.origin : "https://padlhub.ru");
+    return normalizePadlHubInviteOrigin(parsed).toString();
   } catch {
     return raw;
   }
@@ -626,7 +637,7 @@ export default function FindGamePage({
     const normalizedInvite = normalizeUrl(game.inviteUrl);
     if (normalizedInvite) return normalizedInvite;
 
-    const url = buildAbsolutePageUrl(DEFAULT_GAME_JOIN_PATH);
+    const url = normalizePadlHubInviteOrigin(buildAbsolutePageUrl(DEFAULT_GAME_JOIN_PATH, PUBLIC_INVITE_ORIGIN));
     url.searchParams.set("joinGame", game.id);
     const resolvedCabinetUrl = String(cabinetUrl || DEFAULT_CABINET_URL || "").trim();
     if (resolvedCabinetUrl) {

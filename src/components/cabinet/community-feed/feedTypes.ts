@@ -77,6 +77,7 @@ export type CommunityTournamentCard = {
   publicUrl?: string;
   waitlistCount?: number;
   spotsLeft?: number | null;
+  priceLabel?: string | null;
 };
 
 export type CommunityNewsCard = {

@@ -10,6 +10,8 @@ import { BookingCard } from "./BookingCard";
 import type { ReactNode } from "react";
 import { TournamentBookingCard } from "./TournamentBookingCard";
 
+const RESULT_ENTRY_GRACE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 interface BookingHistoryProps {
   isOpen: boolean;
   onClose: () => void;
@@ -24,6 +26,7 @@ interface BookingHistoryProps {
   ) => ReactNode;
   resolveGameForBooking?: (booking: Booking) => PadelGameRecord | null;
   resolveTournamentForBooking?: (booking: Booking) => TournamentHistoryRecord | null;
+  onOpenTournamentDetails?: (booking: Booking) => void;
 }
 
 function getBookingCategory(name: string): "games" | "trainings" | "tournaments" | "other" {
@@ -68,6 +71,29 @@ function getGameTimestamp(game: PadelGameRecord, type: "start" | "end" = "start"
   return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
+function getTodayDateKey(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getGameDateKey(game: PadelGameRecord): string | null {
+  const rawDate = String(game.booking?.date || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
+    return rawDate.slice(0, 10);
+  }
+
+  const startTs = getGameTimestamp(game, "start");
+  if (!Number.isFinite(startTs)) return null;
+  const parsed = new Date(startTs);
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function isCancelledGameRecord(game: PadelGameRecord): boolean {
   return String(game.status || "").toUpperCase().includes("CANCEL");
 }
@@ -83,8 +109,37 @@ function hasCompletedMatchResult(game: PadelGameRecord): boolean {
   return Boolean((matchResult as Record<string, unknown>).confirmedAt);
 }
 
+function hasEnteredMatchResult(game: PadelGameRecord): boolean {
+  const metadata = game.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
+  const matchResult = (metadata as Record<string, unknown>).matchResult;
+  if (!matchResult || typeof matchResult !== "object" || Array.isArray(matchResult)) return false;
+  const sets = (matchResult as Record<string, unknown>).sets;
+  if (Array.isArray(sets) && sets.length > 0) return true;
+  const status = String((matchResult as Record<string, unknown>).status || "").trim();
+  return Boolean(status || (matchResult as Record<string, unknown>).submittedAt || (matchResult as Record<string, unknown>).confirmedAt);
+}
+
+function shouldKeepGameActiveForResultEntry(game: PadelGameRecord): boolean {
+  if (isCancelledGameRecord(game) || hasEnteredMatchResult(game)) return false;
+  const startTs = getGameTimestamp(game, "start");
+  if (
+    getGameDateKey(game) === getTodayDateKey()
+    && Number.isFinite(startTs)
+    && startTs <= Date.now()
+  ) {
+    return true;
+  }
+
+  const endTs = getGameTimestamp(game, "end");
+  if (!Number.isFinite(endTs)) return false;
+  const now = Date.now();
+  return endTs < now && now - endTs <= RESULT_ENTRY_GRACE_WINDOW_MS;
+}
+
 function isUpcomingGameRecord(game: PadelGameRecord): boolean {
   if (isCancelledGameRecord(game)) return false;
+  if (shouldKeepGameActiveForResultEntry(game)) return true;
   const endTs = getGameTimestamp(game, "end");
   if (!Number.isFinite(endTs)) return !hasCompletedMatchResult(game);
   return endTs >= Date.now();
@@ -99,6 +154,7 @@ export const BookingHistory: React.FC<BookingHistoryProps> = ({
   renderGameCard,
   resolveGameForBooking,
   resolveTournamentForBooking,
+  onOpenTournamentDetails,
 }) => {
   const [bookingsType, setBookingsType] = useState("visited");
 
@@ -176,6 +232,7 @@ export const BookingHistory: React.FC<BookingHistoryProps> = ({
               if (item.type === "booking") {
                 const linkedGame = resolveGameForBooking?.(item.booking) ?? null;
                 if (linkedGame?.id && renderGameCard) {
+                  if (isUpcomingGameRecord(linkedGame)) return null;
                   if (seenGames.has(linkedGame.id)) return null;
                   seenGames.add(linkedGame.id);
                   return (
@@ -194,6 +251,7 @@ export const BookingHistory: React.FC<BookingHistoryProps> = ({
                       booking={item.booking}
                       active={false}
                       customTournament={resolveTournamentForBooking?.(item.booking) ?? null}
+                      onOpenDetails={onOpenTournamentDetails}
                     />
                   );
                 }

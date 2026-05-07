@@ -17,14 +17,24 @@ import {
 } from "./feedFormatters";
 import { stripNewsTextMarkup } from "./newsTextFormatting";
 
+const PUBLIC_TOURNAMENT_ORIGIN = "https://padlhub.su";
+
 interface BuildFeedEntriesParams {
   community: Pick<CommunityRecord, "id" | "name" | "members" | "minimumLevel">;
   posts: CommunityPost[];
   games: PadelGameRecord[];
+  tournamentStats?: Record<string, TournamentStats | undefined>;
   currentUser: {
     id?: string | null;
     phone?: string | null;
   };
+}
+
+export interface TournamentStats {
+  participantsCount?: number | null;
+  maxParticipants?: number | null;
+  waitlistCount?: number | null;
+  publicTournament?: Record<string, unknown> | null;
 }
 
 function normalizePhone(value: string | null | undefined) {
@@ -33,6 +43,22 @@ function normalizePhone(value: string | null | undefined) {
   if (digits.length === 10) return `7${digits}`;
   if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
   return digits;
+}
+
+function normalizeTournamentPublicUrl(value: string | null | undefined) {
+  const raw = (value || "").trim();
+  if (!raw) return "";
+
+  try {
+    const parsed = new URL(raw, PUBLIC_TOURNAMENT_ORIGIN);
+    if (parsed.pathname.startsWith("/api/tournaments/public")) {
+      parsed.protocol = "https:";
+      parsed.hostname = "padlhub.su";
+    }
+    return parsed.toString();
+  } catch {
+    return raw.replace("https://padlhub.ru/api/tournaments/public", `${PUBLIC_TOURNAMENT_ORIGIN}/api/tournaments/public`);
+  }
 }
 
 function getPlayerIdentityKey(player: PadelGamePlayer | null | undefined) {
@@ -206,9 +232,64 @@ function isSplitPaymentGame(game: PadelGameRecord | undefined) {
   return Boolean(splitPayment?.enabled);
 }
 
+function parseCustomRubPriceLabel(value: string) {
+  const withoutCurrency = value
+    .replace(/₽/g, "")
+    .replace(/руб(?:\.|лей|ля|ль)?/gi, "")
+    .replace(/\s*р\.?\s*$/i, "")
+    .trim();
+  if (!/^\d[\d\s.,\u00a0]*$/.test(withoutCurrency)) return null;
+
+  const compact = withoutCurrency.replace(/[\s\u00a0]/g, "");
+  const lastSeparatorIndex = Math.max(compact.lastIndexOf(","), compact.lastIndexOf("."));
+  const normalized = lastSeparatorIndex >= 0
+    ? (() => {
+      const integerPart = compact.slice(0, lastSeparatorIndex).replace(/[.,]/g, "");
+      const fractionalPart = compact.slice(lastSeparatorIndex + 1);
+      return fractionalPart.length > 0 && fractionalPart.length <= 2
+        ? `${integerPart}.${fractionalPart}`
+        : compact.replace(/[.,]/g, "");
+    })()
+    : compact;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function formatRubPrice(value: number | null) {
   if (value === null || !Number.isFinite(value)) return null;
   return `${Math.round(value).toLocaleString("ru-RU")} ₽`;
+}
+
+function normalizeCustomRubPriceLabel(value: string) {
+  const label = value.trim();
+  if (!label || label.includes("₽")) return label;
+  const parsed = parseCustomRubPriceLabel(label);
+  return parsed === null ? label : formatRubPrice(parsed) || label;
+}
+
+function formatTournamentCardPrice(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return null;
+  const rubles = value >= 10000 ? value / 100 : value;
+  return formatRubPrice(rubles);
+}
+
+function resolveTournamentPriceLabel(
+  publicTournament: Record<string, unknown>,
+  details: Record<string, unknown>,
+  skin: Record<string, unknown>,
+) {
+  const skinPriceLabel = pickStringValue(skin, ["priceLabel", "priceText", "costLabel", "costText"]);
+  if (skinPriceLabel) return normalizeCustomRubPriceLabel(skinPriceLabel);
+
+  const skinPrice = pickNumberValue(skin, ["price", "amount", "cost", "customPrice", "customCost"], null);
+  const source =
+    pickRecord(details, ["sourceTournamentSnapshot", "sourceTournament", "tournament", "exercise", "baseTournament"]) ??
+    publicTournament;
+  const sourcePrice = pickNumberValue(source, ["price", "amount", "cost"], null);
+  if (skinPrice !== null && sourcePrice !== null && Math.round(skinPrice) !== Math.round(sourcePrice)) {
+    return formatTournamentCardPrice(skinPrice);
+  }
+  return "энергия";
 }
 
 function getSplitJoinPriceText(game: PadelGameRecord | undefined) {
@@ -898,7 +979,7 @@ function pickTournamentStation(previewLabel: string | null | undefined, text: st
   if (preview) return preview;
 
   const explicitStationMatch = text.match(
-    /\b(?:станция|клуб|локация|площадка)\s*[:\-]?\s*([^\n•,.;]+)/i,
+    /\b(?:станция|клуб|локация|площадка)\s*[:-]?\s*([^\n•,.;]+)/i,
   );
   const explicitStation = explicitStationMatch?.[1]?.trim();
   return explicitStation || null;
@@ -918,7 +999,7 @@ function pickTournamentType(text: string) {
   const matchedKnownType = knownTypes.find((item) => item.pattern.test(text));
   if (matchedKnownType) return matchedKnownType.label;
 
-  const explicitTypeMatch = text.match(/\b(?:тип|формат)\s*[:\-]?\s*([^\n•,.;]+)/i);
+  const explicitTypeMatch = text.match(/\b(?:тип|формат)\s*[:-]?\s*([^\n•,.;]+)/i);
   return explicitTypeMatch?.[1]?.trim() || null;
 }
 
@@ -933,7 +1014,7 @@ function normalizeTournamentRatingLabel(value: string | null | undefined) {
 
 function pickTournamentRatingLabel(text: string, fallbackLevel: string | null | undefined) {
   const prefixedMatch = text.match(
-    /\b(?:рейтинг|уровень)\s*[:\-]?\s*((?:[A-D]\+?)(?:\s*[–/-]\s*(?:[A-D]\+?))?|(?:\d(?:[.,]\d+)?)(?:\s*[–/-]\s*(?:\d(?:[.,]\d+)?))?)\b/i,
+    /\b(?:рейтинг|уровень)\s*[:-]?\s*((?:[A-D]\+?)(?:\s*[–/-]\s*(?:[A-D]\+?))?|(?:\d(?:[.,]\d+)?)(?:\s*[–/-]\s*(?:\d(?:[.,]\d+)?))?)\b/i,
   );
   if (prefixedMatch) {
     return normalizeTournamentRatingLabel(prefixedMatch[1]?.replace(/,/g, "."));
@@ -951,7 +1032,7 @@ function pickTournamentRatingLabel(text: string, fallbackLevel: string | null | 
 
 function pickTournamentGenderLabel(text: string) {
   const explicitGenderMatch = text.match(
-    /\b(?:пол|категория)\s*[:\-]?\s*(мужчины|мужской|женщины|женский|микст|mixed|любой пол|без ограничений)\b/i,
+    /\b(?:пол|категория)\s*[:-]?\s*(мужчины|мужской|женщины|женский|микст|mixed|любой пол|без ограничений)\b/i,
   );
   const explicitGender = explicitGenderMatch?.[1]?.trim().toLowerCase();
   if (explicitGender) {
@@ -968,25 +1049,33 @@ function pickTournamentGenderLabel(text: string) {
   return null;
 }
 
-function buildTournament(post: CommunityPost): Tournament {
+function buildTournament(post: CommunityPost, stats?: TournamentStats): Tournament {
   const details = post.details ?? {};
-  const publicTournament =
-    pickRecord(details, ["publicTournament", "tournament", "customTournament"]) ?? {};
+  const savedPublicTournament =
+    pickRecord(details, ["publicTournament", "sourceTournamentSnapshot", "tournament", "customTournament"]) ?? {};
+  const publicTournament = stats?.publicTournament ?? savedPublicTournament;
   const skin = pickRecord(publicTournament, ["skin"]) ?? pickRecord(details, ["skin", "tournamentSkin"]) ?? {};
   const searchableText = [post.previewLabel, post.body, post.title].filter(Boolean).join(" • ");
   const parsedProgress = pickParticipantsProgress(searchableText);
   const pairCount = pickTournamentPairCount(searchableText);
   const maxParticipants =
+    stats?.maxParticipants ??
     pickNumberValue(publicTournament, ["maxPlayers"], null) ??
+    pickNumberValue(publicTournament, ["maxParticipants", "maxClientsCount", "playersLimit", "limit"], null) ??
     pickNumberValue(details, ["maxPlayers"], null) ??
+    pickNumberValue(details, ["maxParticipants", "maxClientsCount", "playersLimit", "limit"], null) ??
     parsedProgress?.maxParticipants ??
     (pairCount ? pairCount * 2 : 16);
   const participants =
+    stats?.participantsCount ??
     pickNumberValue(publicTournament, ["participantsCount"], null) ??
+    pickNumberValue(publicTournament, ["clientsCount", "joinedCount"], null) ??
     pickNumberValue(details, ["participantsCount"], null) ??
+    pickNumberValue(details, ["clientsCount", "joinedCount"], null) ??
     parsedProgress?.participants ??
     0;
   const waitlistCount =
+    stats?.waitlistCount ??
     pickNumberValue(publicTournament, ["waitlistCount"], null) ??
     pickNumberValue(details, ["waitlistCount"], 0) ??
     0;
@@ -1006,7 +1095,7 @@ function buildTournament(post: CommunityPost): Tournament {
   })());
   const eventDate = startsAt || pickTournamentEventDate(searchableText, toIsoDate(post.publishedAt), startTime);
   const stationLabel =
-    pickStringValue(publicTournament, ["studioName", "stationName", "clubName"]) ||
+    pickStringValue(publicTournament, ["locationName", "studioName", "stationName", "clubName"]) ||
     pickStringValue(details, ["studioName", "stationName", "clubName"]) ||
     pickTournamentStation(post.previewLabel, searchableText) ||
     "Станция уточняется";
@@ -1047,13 +1136,15 @@ function buildTournament(post: CommunityPost): Tournament {
     pickStringValue(skin, ["ctaLabel"]) ||
     post.ctaLabel?.trim() ||
     "Записаться";
-  const publicUrl =
+  const publicUrl = normalizeTournamentPublicUrl(
     pickStringValue(publicTournament, ["publicUrl", "joinUrl"]) ||
     pickStringValue(details, ["publicUrl", "joinUrl"]) ||
-    "";
+    "",
+  );
   const endTime = formatIsoTime(endsAt);
   const duration = formatTournamentDuration(startsAt, endsAt);
   const spotsLeft = maxParticipants > 0 ? Math.max(0, maxParticipants - participants) : null;
+  const priceLabel = resolveTournamentPriceLabel(publicTournament, details, skin);
 
   return {
     id: post.relatedTournamentId || post.id,
@@ -1083,6 +1174,7 @@ function buildTournament(post: CommunityPost): Tournament {
     publicUrl: publicUrl || undefined,
     waitlistCount,
     spotsLeft,
+    priceLabel,
     isJoined: Boolean(ctaLabel && /откры/i.test(ctaLabel)),
     isFull: maxParticipants > 0 && participants >= maxParticipants,
   };
@@ -1174,10 +1266,22 @@ function getEventTimestamp(entry: FeedEntry) {
     entry.item.type === "game"
       ? entry.item.data.datetime
       : entry.item.type === "tournament"
-        ? `${entry.item.data.date}T${entry.item.data.startTime}:00`
+        ? getTournamentDateTime(entry.item.data)
         : entry.publishedAt;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : Date.parse(entry.publishedAt);
+}
+
+function getTournamentDateTime(tournament: Tournament) {
+  const date = tournament.date.trim();
+  const startTime = tournament.startTime.trim();
+  if (!date) return "";
+
+  if (/[T\s]\d{1,2}:\d{2}/.test(date)) {
+    return date;
+  }
+
+  return startTime ? `${date}T${startTime}:00` : date;
 }
 
 function getGameRank(entry: FeedEntry) {
@@ -1234,6 +1338,7 @@ export function buildFeedEntries({
   community,
   posts,
   games,
+  tournamentStats = {},
   currentUser,
 }: BuildFeedEntriesParams): FeedEntry[] {
   const gameById = new Map(
@@ -1349,11 +1454,12 @@ export function buildFeedEntries({
     }
 
     if (post.kind === "TOURNAMENT") {
+      const tournamentId = post.relatedTournamentId || post.id;
       entries.push({
         id: `tournament:${post.id}`,
         item: {
           type: "tournament",
-          data: buildTournament(post),
+          data: buildTournament(post, tournamentStats[tournamentId]),
         },
         publishedAt: post.publishedAt,
         author: post.authorName ? fallbackUser(post.authorName, `author:${post.id}`) : undefined,

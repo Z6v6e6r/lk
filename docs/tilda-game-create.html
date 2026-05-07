@@ -1,0 +1,100 @@
+<div id="root"></div>
+
+<script>
+  (function () {
+    var assetOrigin = "https://padlhub.su";
+    var scriptPath = "/lk/games.js";
+    var releasePath = "/lk/release.json";
+    var cabinetUrl = "https://padlhub.ru/lk_new";
+    var cacheBust = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+    var url = new URL(window.location.href);
+
+    var data = {
+      publicCreateEntry: true,
+      presetStudioId: url.searchParams.get("stationId") || url.searchParams.get("studioId") || null,
+      presetStudioName:
+        url.searchParams.get("station") ||
+        url.searchParams.get("stationName") ||
+        url.searchParams.get("studio") ||
+        url.searchParams.get("studioName") ||
+        null,
+      cabinetUrl: url.searchParams.get("cabinetUrl") || cabinetUrl
+    };
+
+    function showError() {
+      var root = document.getElementById("root");
+      if (root) {
+        root.innerHTML =
+          "<div style='padding:16px;font-family:Arial,sans-serif;color:#333'>Не удалось загрузить создание игры. Попробуйте позже.</div>";
+      }
+    }
+
+    function addParam(src, key, value) {
+      var scriptUrl = new URL(src, window.location.href);
+      scriptUrl.searchParams.set(key, value);
+      return scriptUrl.toString();
+    }
+
+    function buildScriptUrl(version) {
+      var src = assetOrigin + scriptPath;
+      if (version) {
+        window.__LK_RELEASE_VERSION__ = String(version);
+        src = addParam(src, "v", String(version));
+      }
+      return addParam(src, "force_ts", cacheBust);
+    }
+
+    function mountWidget() {
+      if (!window.LKWidgetGames || typeof window.LKWidgetGames.mount !== "function") {
+        showError();
+        return;
+      }
+
+      window.LKWidgetGames.mount({
+        targetId: "root",
+        onClose: function () {
+          window.location.href = data.cabinetUrl || cabinetUrl;
+        },
+        data: data
+      });
+    }
+
+    function loadScript(version) {
+      var old = document.getElementById("padlhub-games-create-script");
+      if (old && old.parentNode) old.parentNode.removeChild(old);
+
+      if (window.LKWidgetGames && typeof window.LKWidgetGames.unmount === "function") {
+        window.LKWidgetGames.unmount("root");
+      }
+      window.LKWidgetGames = undefined;
+
+      var script = document.createElement("script");
+      script.id = "padlhub-games-create-script";
+      script.src = buildScriptUrl(version);
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.onload = mountWidget;
+      script.onerror = showError;
+      document.head.appendChild(script);
+    }
+
+    fetch(addParam(assetOrigin + releasePath, "force_ts", cacheBust), {
+      cache: "no-store",
+      headers: {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
+      }
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error("release manifest unavailable");
+        return response.json();
+      })
+      .then(function (release) {
+        loadScript(release && release.version ? String(release.version) : null);
+      })
+      .catch(function () {
+        loadScript(String(Date.now()));
+      });
+  })();
+</script>

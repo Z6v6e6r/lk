@@ -32,6 +32,7 @@ interface BookingsContainerProps {
   gameRecordsError?: string | null;
   resolveGameForBooking?: (booking: Booking) => PadelGameRecord | null;
   resolveTournamentForBooking?: (booking: Booking) => TournamentHistoryRecord | null;
+  onOpenTournamentDetails?: (booking: Booking) => void;
 }
 
 const TABS = [
@@ -43,6 +44,7 @@ const TABS = [
 type TabKey = (typeof TABS)[number]["key"];
 type ActiveTabKey = "all" | TabKey;
 const ACTIVE_RECORDS_PREVIEW_LIMIT = 3;
+const RESULT_ENTRY_GRACE_WINDOW_MS = 24 * 60 * 60 * 1000;
 type GamesAwareItem = {
   type: "game" | "booking";
   key: string;
@@ -65,9 +67,27 @@ function getBookingCategory(name: string): "games" | "trainings" | "tournaments"
   ) {
     return "tournaments";
   }
+  if (
+    n.includes("своя игра")
+    || n.includes("свою игру")
+    || n.includes("игр")
+    || n.includes("game")
+    || n.includes("сплит")
+    || n.includes("split")
+  ) {
+    return "games";
+  }
   if (n.includes("трен") || n.includes("training")) return "trainings";
-  if (n.includes("игр") || n.includes("game")) return "games";
   return "other";
+}
+
+function getBookingCategoryName(booking: Booking): string {
+  return [
+    booking.exercise?.direction?.name,
+    booking.exercise?.type?.name,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function getBookingTimestamp(booking: Booking): number {
@@ -93,6 +113,95 @@ function getGameTimestamp(game: PadelGameRecord, type: "start" | "end" = "start"
   return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
+function getBookingDateKey(booking: Booking): string | null {
+  const raw = booking.exercise?.timeFrom;
+  if (!raw) return null;
+  const matched = raw.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+  if (matched) return matched;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getBookingTimeLabel(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const matched = value.match(/T?(\d{2}:\d{2})/)?.[1];
+  if (matched) return matched;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const hours = String(parsed.getHours()).padStart(2, "0");
+  const minutes = String(parsed.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function getBookingDurationMinutes(booking: Booking): number | null {
+  const fromTs = booking.exercise?.timeFrom ? Date.parse(booking.exercise.timeFrom) : NaN;
+  const toTs = booking.exercise?.timeTo ? Date.parse(booking.exercise.timeTo) : NaN;
+  if (!Number.isFinite(fromTs) || !Number.isFinite(toTs) || toTs <= fromTs) return null;
+  return Math.round((toTs - fromTs) / 60000);
+}
+
+function getGameWithBookingSchedule(game: PadelGameRecord, booking: Booking): PadelGameRecord {
+  const bookingDate = getBookingDateKey(booking);
+  const timeFrom = getBookingTimeLabel(booking.exercise?.timeFrom);
+  const timeTo = getBookingTimeLabel(booking.exercise?.timeTo);
+  const hasScheduleOverride = Boolean(bookingDate || timeFrom || timeTo);
+  if (!hasScheduleOverride && !booking.exercise?.studio && !booking.exercise?.room) return game;
+
+  return {
+    ...game,
+    booking: {
+      ...(game.booking ?? {
+        studioName: null,
+        roomName: null,
+        date: null,
+        timeFrom: null,
+        timeTo: null,
+        durationMinutes: null,
+      }),
+      studioName: booking.exercise?.studio?.name ?? game.booking?.studioName ?? null,
+      roomName: booking.exercise?.room?.name ?? game.booking?.roomName ?? null,
+      date: bookingDate ?? game.booking?.date ?? null,
+      timeFrom: timeFrom ?? game.booking?.timeFrom ?? null,
+      timeTo: timeTo ?? game.booking?.timeTo ?? null,
+      durationMinutes: getBookingDurationMinutes(booking) ?? game.booking?.durationMinutes ?? null,
+      studioId: booking.exercise?.studio?.id != null ? String(booking.exercise.studio.id) : game.booking?.studioId ?? null,
+      roomId: booking.exercise?.room?.id != null ? String(booking.exercise.room.id) : game.booking?.roomId ?? null,
+      bookingId: booking.id ?? game.booking?.bookingId ?? null,
+      bookingIds: Array.from(new Set([...(game.booking?.bookingIds ?? []), booking.id].filter(Boolean))),
+      exerciseId: booking.exercise?.id ?? game.booking?.exerciseId ?? null,
+      vivaExerciseId: game.booking?.vivaExerciseId ?? null,
+      subServiceIds: game.booking?.subServiceIds ?? [],
+    },
+  };
+}
+
+function getTodayDateKey(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getGameDateKey(game: PadelGameRecord): string | null {
+  const rawDate = String(game.booking?.date || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
+    return rawDate.slice(0, 10);
+  }
+
+  const startTs = getGameTimestamp(game, "start");
+  if (!Number.isFinite(startTs)) return null;
+  const parsed = new Date(startTs);
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function isCancelledGameRecord(game: PadelGameRecord): boolean {
   return String(game.status || "").toUpperCase().includes("CANCEL");
 }
@@ -108,8 +217,37 @@ function hasCompletedMatchResult(game: PadelGameRecord): boolean {
   return Boolean((matchResult as Record<string, unknown>).confirmedAt);
 }
 
+function hasEnteredMatchResult(game: PadelGameRecord): boolean {
+  const metadata = game.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
+  const matchResult = (metadata as Record<string, unknown>).matchResult;
+  if (!matchResult || typeof matchResult !== "object" || Array.isArray(matchResult)) return false;
+  const sets = (matchResult as Record<string, unknown>).sets;
+  if (Array.isArray(sets) && sets.length > 0) return true;
+  const status = String((matchResult as Record<string, unknown>).status || "").trim();
+  return Boolean(status || (matchResult as Record<string, unknown>).submittedAt || (matchResult as Record<string, unknown>).confirmedAt);
+}
+
+function shouldKeepGameActiveForResultEntry(game: PadelGameRecord): boolean {
+  if (isCancelledGameRecord(game) || hasEnteredMatchResult(game)) return false;
+  const startTs = getGameTimestamp(game, "start");
+  if (
+    getGameDateKey(game) === getTodayDateKey()
+    && Number.isFinite(startTs)
+    && startTs <= Date.now()
+  ) {
+    return true;
+  }
+
+  const endTs = getGameTimestamp(game, "end");
+  if (!Number.isFinite(endTs)) return false;
+  const now = Date.now();
+  return endTs < now && now - endTs <= RESULT_ENTRY_GRACE_WINDOW_MS;
+}
+
 function isUpcomingGameRecord(game: PadelGameRecord): boolean {
   if (isCancelledGameRecord(game)) return false;
+  if (shouldKeepGameActiveForResultEntry(game)) return true;
   const endTs = getGameTimestamp(game, "end");
   if (!Number.isFinite(endTs)) return !hasCompletedMatchResult(game);
   return endTs >= Date.now();
@@ -143,11 +281,12 @@ function buildGamesAwareItems(
     if (linkedGame && linkedGame.id) {
       if (seenGameIds.has(linkedGame.id)) return;
       seenGameIds.add(linkedGame.id);
+      const gameWithCurrentBooking = getGameWithBookingSchedule(linkedGame, booking);
       items.push({
         type: "game",
         key: `game-${linkedGame.id}`,
-        timestamp: getGameTimestamp(linkedGame, "start"),
-        game: linkedGame,
+        timestamp: getGameTimestamp(gameWithCurrentBooking, "start"),
+        game: gameWithCurrentBooking,
       });
       return;
     }
@@ -201,6 +340,7 @@ export function BookingsContainer({
   gameRecordsError = null,
   resolveGameForBooking,
   resolveTournamentForBooking,
+  onOpenTournamentDetails,
 }: BookingsContainerProps) {
   const [activeTab, setActiveTab] = useState<ActiveTabKey>("all");
   const [activeRecordsExpanded, setActiveRecordsExpanded] = useState(false);
@@ -222,8 +362,7 @@ export function BookingsContainer({
   const filteredActive = activeTab === "all"
     ? sortedActive
     : sortedActive.filter((book) => {
-        const name = book.exercise?.direction?.name || book.exercise?.type?.name || "";
-        return getBookingCategory(name) === activeTab;
+        return getBookingCategory(getBookingCategoryName(book)) === activeTab;
       });
   const gamesTabEnabled = activeTab === "games" && typeof renderGameCard === "function";
 
@@ -235,23 +374,16 @@ export function BookingsContainer({
 
   const gamesActiveBookings = useMemo(() => {
     return sortedActive.filter((book) => {
-      const name = book.exercise?.direction?.name || book.exercise?.type?.name || "";
-      return getBookingCategory(name) === "games";
+      return getBookingCategory(getBookingCategoryName(book)) === "games";
     });
   }, [sortedActive]);
 
   const gamesHistoryBookings = useMemo(() => {
     const source = historyBookings?.content || [];
     return source.filter((book) => {
-      const name = book.exercise?.direction?.name || book.exercise?.type?.name || "";
-      return getBookingCategory(name) === "games";
+      return getBookingCategory(getBookingCategoryName(book)) === "games";
     });
   }, [historyBookings?.content]);
-  const filteredGamesHistoryBookings = useMemo(() => {
-    return gamesHistoryBookings.filter((booking) =>
-      gamesHistoryType === "cancelled" ? booking.isCancelled === true : booking.isCancelled === false
-    );
-  }, [gamesHistoryBookings, gamesHistoryType]);
   const activeGameRecords = useMemo(
     () => gameRecords.filter((game) => isUpcomingGameRecord(game)),
     [gameRecords],
@@ -265,6 +397,16 @@ export function BookingsContainer({
     () => collectLinkedGameIds(gamesActiveBookings, resolveGameForBooking),
     [gamesActiveBookings, resolveGameForBooking],
   );
+  const filteredGamesHistoryBookings = useMemo(() => {
+    return gamesHistoryBookings.filter((booking) => {
+      const matchesTab = gamesHistoryType === "cancelled" ? booking.isCancelled === true : booking.isCancelled === false;
+      if (!matchesTab) return false;
+      const linkedGame = resolveGameForBooking?.(booking) ?? null;
+      if (!linkedGame) return true;
+      if (linkedGamesInGamesBookings.has(linkedGame.id)) return false;
+      return !isUpcomingGameRecord(getGameWithBookingSchedule(linkedGame, booking));
+    });
+  }, [gamesHistoryBookings, gamesHistoryType, linkedGamesInGamesBookings, resolveGameForBooking]);
   const linkedGamesInAllActiveBookings = useMemo(
     () => collectLinkedGameIds(sortedActive, resolveGameForBooking),
     [sortedActive, resolveGameForBooking],
@@ -381,8 +523,7 @@ export function BookingsContainer({
   };
 
   const renderBookingByCategory = (booking: Booking, key: string, active: boolean) => {
-    const directionName = booking.exercise?.direction?.name || booking.exercise?.type?.name || "";
-    const category = getBookingCategory(directionName);
+    const category = getBookingCategory(getBookingCategoryName(booking));
 
     if (category === "tournaments") {
       return (
@@ -392,6 +533,7 @@ export function BookingsContainer({
           active={active}
           customTournament={resolveTournamentForBooking?.(booking) ?? null}
           loadBookings={active ? loadBookings : undefined}
+          onOpenDetails={onOpenTournamentDetails}
         />
       );
     }

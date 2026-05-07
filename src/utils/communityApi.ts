@@ -267,6 +267,7 @@ export interface CreateCommunityFeedPostPayload {
   ctaLabel?: string | null;
   relatedGameId?: string | null;
   relatedTournamentId?: string | null;
+  details?: Record<string, unknown> | null;
 }
 
 export interface ArchiveCommunityFeedPostPayload {
@@ -692,7 +693,14 @@ function normalizeCommunityPost(value: unknown): CommunityPost | null {
     0;
   const rawDetails = isRecord(value.details) ? value.details : null;
   const nestedDetails = rawDetails && isRecord(rawDetails.details) ? rawDetails.details : null;
-  const details = rawDetails ? { ...rawDetails, ...(nestedDetails ?? {}) } : null;
+  const sourceTournamentSnapshot = isRecord(value.sourceTournamentSnapshot)
+    ? value.sourceTournamentSnapshot
+    : null;
+  const details = rawDetails
+    ? { ...rawDetails, ...(nestedDetails ?? {}), ...(sourceTournamentSnapshot ? { sourceTournamentSnapshot } : {}) }
+    : sourceTournamentSnapshot
+      ? { sourceTournamentSnapshot, publicTournament: sourceTournamentSnapshot }
+      : null;
 
   return {
     id,
@@ -1618,6 +1626,7 @@ export async function apiCreateCommunityFeedPost(
         ctaLabel: payload.ctaLabel?.trim() || null,
         relatedGameId: payload.relatedGameId?.trim() || null,
         relatedTournamentId: payload.relatedTournamentId?.trim() || null,
+        details: payload.details ?? null,
       }),
     },
   );
@@ -1671,6 +1680,7 @@ export async function apiUpdateCommunityFeedPost(
         ctaLabel: payload.ctaLabel?.trim() || null,
         relatedGameId: payload.relatedGameId?.trim() || null,
         relatedTournamentId: payload.relatedTournamentId?.trim() || null,
+        details: payload.details ?? null,
       }),
     },
   );

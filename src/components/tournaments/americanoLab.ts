@@ -72,6 +72,8 @@ export type AmericanoRoundPayload = {
   }>;
 };
 
+export type PairedMexicanoPairAssignment = [string, string];
+
 export type AmericanoServerTotal = {
   ratingBefore?: number;
   ratingAfter?: number;
@@ -120,6 +122,12 @@ export type AmericanoStandingsSnapshot = {
   byePolicy: string;
 };
 
+type AmericanoScheduleMode = "padelhub" | "classic";
+
+type AmericanoScheduleOptions = {
+  mode?: AmericanoScheduleMode;
+};
+
 type RatedParticipant = AmericanoLabParticipant & {
   ratingValue: number;
   seed: number;
@@ -140,10 +148,13 @@ type MatchDraft = {
   summary: AmericanoLabMatch["summary"];
 };
 
+type PartnerDraft = [RatedParticipant, RatedParticipant];
+
 const DEFAULT_RATING = 3.5;
 const MAX_BEAM_STATES = 48;
 const MAX_MATCH_CANDIDATES_FIRST = 24;
 const MAX_MATCH_CANDIDATES_NEXT = 14;
+const MAX_CLASSIC_PAIRING_STATES = 96;
 const BYE_POLICY = "round_average_points";
 
 const clampNumber = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -362,6 +373,7 @@ function evaluateMatchDraft(
   history: ScheduleHistory,
   roundIndex: number,
   totalRounds: number,
+  options?: AmericanoScheduleOptions,
 ): MatchDraft {
   const [p1a, p1b] = pair1;
   const [p2a, p2b] = pair2;
@@ -384,14 +396,36 @@ function evaluateMatchDraft(
     + (getOpponentCount(history, p1a.id, p2b.id) === 0 ? 1 : 0)
     + (getOpponentCount(history, p1b.id, p2a.id) === 0 ? 1 : 0)
     + (getOpponentCount(history, p1b.id, p2b.id) === 0 ? 1 : 0);
+  const isClassicMode = (options?.mode ?? "padelhub") === "classic";
+
+  if (isClassicMode && partnerRepeatCount > 0) {
+    return {
+      players: [p1a, p1b, p2a, p2b],
+      pair1,
+      pair2,
+      baseScore: Number.NEGATIVE_INFINITY,
+      summary: {
+        pairPower1: roundTo(pairPower1, 3),
+        pairPower2: roundTo(pairPower2, 3),
+        balanceGap: roundTo(balanceGap, 3),
+        partnerRepeatCount,
+        opponentRepeatCount,
+      },
+    };
+  }
 
   const baseScore =
-    280
-    - getSelectionPartnerPenalty(partnerRepeatCount, progressRatio)
-    - getSelectionOpponentPenalty(opponentRepeatCount)
-    - getSelectionBalancePenalty(balanceGap)
-    + unseenPartnerEdges * 12
-    + unseenOpponentEdges * 3;
+    isClassicMode
+      ? 260
+        - getSelectionOpponentPenalty(opponentRepeatCount)
+        - getSelectionBalancePenalty(balanceGap)
+        + unseenOpponentEdges * 4
+      : 280
+        - getSelectionPartnerPenalty(partnerRepeatCount, progressRatio)
+        - getSelectionOpponentPenalty(opponentRepeatCount)
+        - getSelectionBalancePenalty(balanceGap)
+        + unseenPartnerEdges * 12
+        + unseenOpponentEdges * 3;
 
   return {
     players: [p1a, p1b, p2a, p2b],
@@ -413,6 +447,7 @@ function generateMatchCandidates(
   history: ScheduleHistory,
   roundIndex: number,
   totalRounds: number,
+  options?: AmericanoScheduleOptions,
 ) {
   const ordered = orderRemainingPlayers(players, history);
   const anchor = ordered[0];
@@ -430,7 +465,9 @@ function generateMatchCandidates(
           history,
           roundIndex,
           totalRounds,
+          options,
         );
+        if (!Number.isFinite(draft.baseScore)) continue;
         const key = draft.players.map((player) => player.id).sort().join("|");
         if (!candidates.has(key) || (candidates.get(key)?.baseScore ?? Number.NEGATIVE_INFINITY) < draft.baseScore) {
           candidates.set(key, draft);
@@ -452,19 +489,24 @@ function buildFallbackMatches(
   history: ScheduleHistory,
   roundIndex: number,
   totalRounds: number,
+  options?: AmericanoScheduleOptions,
 ) {
   const ordered = orderRemainingPlayers(players, history);
   const drafts: MatchDraft[] = [];
   for (let index = 0; index < ordered.length; index += 4) {
     const block = ordered.slice(index, index + 4);
     if (block.length < 4) break;
-    drafts.push(evaluateMatchDraft(
+    const draft = evaluateMatchDraft(
       [block[0], block[1]],
       [block[2], block[3]],
       history,
       roundIndex,
       totalRounds,
-    ));
+      options,
+    );
+    if (Number.isFinite(draft.baseScore)) {
+      drafts.push(draft);
+    }
   }
   return drafts;
 }
@@ -474,6 +516,7 @@ function planRoundMatches(
   history: ScheduleHistory,
   roundIndex: number,
   totalRounds: number,
+  options?: AmericanoScheduleOptions,
 ) {
   const matchesCount = Math.floor(players.length / 4);
   if (matchesCount <= 0) return [] as MatchDraft[];
@@ -495,7 +538,7 @@ function planRoundMatches(
 
     states.forEach((state) => {
       const orderedRemaining = orderRemainingPlayers(state.remaining, history);
-      const candidates = generateMatchCandidates(orderedRemaining, history, roundIndex, totalRounds);
+      const candidates = generateMatchCandidates(orderedRemaining, history, roundIndex, totalRounds, options);
       const limitedCandidates = candidates.slice(
         0,
         matchIndex === 0 ? MAX_MATCH_CANDIDATES_FIRST : MAX_MATCH_CANDIDATES_NEXT,
@@ -512,7 +555,7 @@ function planRoundMatches(
     });
 
     if (nextStates.length === 0) {
-      return buildFallbackMatches(players, history, roundIndex, totalRounds);
+      return buildFallbackMatches(players, history, roundIndex, totalRounds, options);
     }
 
     states = nextStates
@@ -527,7 +570,7 @@ function planRoundMatches(
 
   const bestCompleted = states.find((state) => state.remaining.length === 0);
   if (bestCompleted) return bestCompleted.matches;
-  return states[0]?.matches.length ? states[0].matches : buildFallbackMatches(players, history, roundIndex, totalRounds);
+  return states[0]?.matches.length ? states[0].matches : buildFallbackMatches(players, history, roundIndex, totalRounds, options);
 }
 
 function materializeMatch(
@@ -659,6 +702,159 @@ function buildRoundQuality(matches: AmericanoLabMatch[], byes: RatedParticipant[
   };
 }
 
+function planAmericanoRoundFromHistory(
+  players: RatedParticipant[],
+  courts: string[],
+  history: ScheduleHistory,
+  roundIndex: number,
+  totalRounds: number,
+  options?: AmericanoScheduleOptions,
+) {
+  const matchesPerRound = Math.min(courts.length, Math.floor(players.length / 4));
+  if (matchesPerRound < 1) {
+    return { matches: [] as AmericanoLabMatch[], byes: [] as RatedParticipant[] };
+  }
+
+  const activePlayersCount = matchesPerRound * 4;
+  const byeCount = Math.max(0, players.length - activePlayersCount);
+  const byes = selectByePlayers(players, byeCount, history);
+  const byeIds = new Set(byes.map((player) => player.id));
+  const activePlayers = players.filter((player) => !byeIds.has(player.id));
+  const drafts = planRoundMatches(activePlayers, history, roundIndex, totalRounds, options);
+  const matches = assignCourts(drafts, courts, history, roundIndex, totalRounds, players.length);
+
+  return { matches, byes };
+}
+
+function rotateClassicPool(pool: RatedParticipant[]) {
+  if (pool.length <= 2) return pool;
+  return [
+    pool[0],
+    pool[pool.length - 1],
+    ...pool.slice(1, pool.length - 1),
+  ];
+}
+
+function generateClassicPartnerRounds(players: RatedParticipant[]) {
+  if (players.length < 4 || players.length % 2 !== 0) return [] as PartnerDraft[][];
+
+  let pool = [...players].sort((left, right) => left.seed - right.seed);
+  const rounds: PartnerDraft[][] = [];
+
+  for (let roundIndex = 0; roundIndex < players.length - 1; roundIndex += 1) {
+    const pairs: PartnerDraft[] = [];
+    for (let index = 0; index < pool.length / 2; index += 1) {
+      const left = pool[index];
+      const right = pool[pool.length - 1 - index];
+      if (roundIndex % 2 === 0) {
+        pairs.push([left, right]);
+      } else {
+        pairs.push([right, left]);
+      }
+    }
+    rounds.push(pairs);
+    pool = rotateClassicPool(pool);
+  }
+
+  return rounds;
+}
+
+function buildClassicMatchupStates(
+  pairs: PartnerDraft[],
+  history: ScheduleHistory,
+  roundIndex: number,
+  totalRounds: number,
+) {
+  let states = [{
+    remaining: pairs,
+    drafts: [] as MatchDraft[],
+    score: 0,
+    minBaseScore: Number.POSITIVE_INFINITY,
+  }];
+
+  while (states.some((state) => state.remaining.length >= 2)) {
+    const nextStates: typeof states = [];
+
+    states.forEach((state) => {
+      if (state.remaining.length < 2) {
+        nextStates.push(state);
+        return;
+      }
+
+      const anchor = state.remaining[0];
+      state.remaining.slice(1).forEach((opponentPair) => {
+        const draft = evaluateMatchDraft(
+          anchor,
+          opponentPair,
+          history,
+          roundIndex,
+          totalRounds,
+          { mode: "classic" },
+        );
+        if (!Number.isFinite(draft.baseScore)) return;
+        const usedIds = new Set([...anchor, ...opponentPair].map((player) => player.id));
+        nextStates.push({
+          remaining: state.remaining.filter((pair) => !pair.some((player) => usedIds.has(player.id))),
+          drafts: [...state.drafts, draft],
+          score: state.score + draft.baseScore,
+          minBaseScore: Math.min(state.minBaseScore, draft.baseScore),
+        });
+      });
+    });
+
+    if (nextStates.length === 0) break;
+
+    states = nextStates
+      .sort((left, right) => {
+        const rankingGap = getStateRankingScore(right.score, right.minBaseScore)
+          - getStateRankingScore(left.score, left.minBaseScore);
+        if (rankingGap !== 0) return rankingGap;
+        return right.score - left.score;
+      })
+      .slice(0, MAX_CLASSIC_PAIRING_STATES);
+  }
+
+  const completed = states.find((state) => state.remaining.length === 0);
+  return completed?.drafts ?? states[0]?.drafts ?? [];
+}
+
+function createClassicAmericanoRounds(
+  players: RatedParticipant[],
+  courts: string[],
+) {
+  const partnerRounds = generateClassicPartnerRounds(players);
+  if (partnerRounds.length === 0) return null;
+
+  const pairsPerRound = partnerRounds[0]?.length ?? 0;
+  if (pairsPerRound < 2 || pairsPerRound % 2 !== 0 || pairsPerRound / 2 > courts.length) {
+    return null;
+  }
+
+  const history = createHistory(players, courts);
+  const totalRounds = partnerRounds.length;
+  const rounds: AmericanoLabRound[] = [];
+
+  partnerRounds.forEach((partnerPairs, roundIndex) => {
+    const drafts = buildClassicMatchupStates(partnerPairs, history, roundIndex, totalRounds);
+    const matches = assignCourts(drafts, courts, history, roundIndex, totalRounds, players.length);
+
+    const round: AmericanoLabRound = {
+      id: `round-${roundIndex + 1}`,
+      index: roundIndex + 1,
+      matches,
+      byes: [],
+      collapsed: roundIndex !== 0,
+      saved: false,
+      quality: buildRoundQuality(matches, []),
+    };
+
+    rounds.push(round);
+    applyRoundToHistory(round, history);
+  });
+
+  return rounds;
+}
+
 function applyRoundToHistory(
   round: AmericanoLabRound,
   history: ScheduleHistory,
@@ -693,26 +889,32 @@ function applyRoundToHistory(
 export function createAmericanoRounds(
   participants: AmericanoLabParticipant[],
   courts: string[],
+  options?: AmericanoScheduleOptions,
 ) {
   const players = normalizeParticipants(participants);
   if (players.length < 4 || courts.length === 0) return [] as AmericanoLabRound[];
 
-  const matchesPerRound = Math.min(courts.length, Math.floor(players.length / 4));
-  if (matchesPerRound < 1) return [] as AmericanoLabRound[];
+  if (Math.min(courts.length, Math.floor(players.length / 4)) < 1) return [] as AmericanoLabRound[];
 
-  const activePlayersCount = matchesPerRound * 4;
-  const byeCount = Math.max(0, players.length - activePlayersCount);
+  if ((options?.mode ?? "padelhub") === "classic") {
+    const classicRounds = createClassicAmericanoRounds(players, courts);
+    if (classicRounds) return classicRounds;
+  }
+
   const roundCount = players.length % 2 === 0 ? players.length - 1 : players.length;
   const history = createHistory(players, courts);
 
   const rounds: AmericanoLabRound[] = [];
 
   for (let roundIndex = 0; roundIndex < roundCount; roundIndex += 1) {
-    const byes = selectByePlayers(players, byeCount, history);
-    const byeIds = new Set(byes.map((player) => player.id));
-    const activePlayers = players.filter((player) => !byeIds.has(player.id));
-    const drafts = planRoundMatches(activePlayers, history, roundIndex, roundCount);
-    const matches = assignCourts(drafts, courts, history, roundIndex, roundCount, players.length);
+    const { matches, byes } = planAmericanoRoundFromHistory(
+      players,
+      courts,
+      history,
+      roundIndex,
+      roundCount,
+      options,
+    );
 
     const round: AmericanoLabRound = {
       id: `round-${roundIndex + 1}`,
@@ -734,6 +936,227 @@ export function createAmericanoRounds(
         lastRound: roundIndex,
       });
     });
+  }
+
+  return rounds;
+}
+
+export function createPairedMexicanoInitialRounds(
+  participants: AmericanoLabParticipant[],
+  courts: string[],
+  pairAssignments: PairedMexicanoPairAssignment[],
+) {
+  const players = normalizeParticipants(participants);
+  if (players.length < 4 || courts.length === 0 || pairAssignments.length < 2) {
+    return [] as AmericanoLabRound[];
+  }
+
+  const playerMap = new Map(players.map((player) => [player.id, player]));
+  const pairDrafts = pairAssignments
+    .map((pair, index) => {
+      const left = playerMap.get(pair[0]);
+      const right = playerMap.get(pair[1]);
+      if (!left || !right) return null;
+      const power = teamRatingPower(left.ratingValue, right.ratingValue);
+      return {
+        id: `pair-${index + 1}`,
+        players: [left, right] as [RatedParticipant, RatedParticipant],
+        power,
+        seed: index,
+      };
+    })
+    .filter((pair): pair is {
+      id: string;
+      players: [RatedParticipant, RatedParticipant];
+      power: number;
+      seed: number;
+    } => Boolean(pair))
+    .sort((left, right) => {
+      if (right.power !== left.power) return right.power - left.power;
+      return left.seed - right.seed;
+    });
+
+  const matchesCount = Math.min(courts.length, Math.floor(pairDrafts.length / 2));
+  if (matchesCount < 1) return [] as AmericanoLabRound[];
+
+  const activePairsCount = matchesCount * 2;
+  const activePairs = pairDrafts.slice(0, activePairsCount);
+  const byePairPlayers = pairDrafts.slice(activePairsCount).flatMap((pair) => pair.players);
+  const history = createHistory(players, courts);
+  const totalRounds = Math.max(1, pairDrafts.length - 1);
+
+  const matches = Array.from({ length: matchesCount }, (_, matchIndex) => {
+    const leftPair = activePairs[matchIndex * 2];
+    const rightPair = activePairs[matchIndex * 2 + 1];
+      const draft = evaluateMatchDraft(
+        leftPair.players,
+        rightPair.players,
+        history,
+        0,
+        totalRounds,
+        { mode: "padelhub" },
+      );
+    return materializeMatch(
+      draft,
+      courts[matchIndex] ?? `Корт №${matchIndex + 1}`,
+      matchIndex,
+      history,
+      0,
+      matchIndex,
+      totalRounds,
+      players.length,
+      courts.length,
+    );
+  });
+
+  const round: AmericanoLabRound = {
+    id: "round-1",
+    index: 1,
+    matches,
+    byes: byePairPlayers,
+    collapsed: false,
+    saved: false,
+    quality: buildRoundQuality(matches, byePairPlayers),
+  };
+
+  applyRoundToHistory(round, history);
+  return [round];
+}
+
+export function createPairedAmericanoRounds(
+  participants: AmericanoLabParticipant[],
+  courts: string[],
+  pairAssignments: PairedMexicanoPairAssignment[],
+) {
+  const players = normalizeParticipants(participants);
+  if (players.length < 4 || courts.length === 0 || pairAssignments.length < 2) {
+    return [] as AmericanoLabRound[];
+  }
+
+  const playerMap = new Map(players.map((player) => [player.id, player]));
+  const pairs = pairAssignments
+    .map((pair, index) => {
+      const left = playerMap.get(pair[0]);
+      const right = playerMap.get(pair[1]);
+      if (!left || !right) return null;
+      const power = teamRatingPower(left.ratingValue, right.ratingValue);
+      return {
+        id: `pair-${index + 1}`,
+        players: [left, right] as [RatedParticipant, RatedParticipant],
+        power,
+        seed: index,
+      };
+    })
+    .filter((pair): pair is {
+      id: string;
+      players: [RatedParticipant, RatedParticipant];
+      power: number;
+      seed: number;
+    } => Boolean(pair))
+    .sort((left, right) => {
+      if (right.power !== left.power) return right.power - left.power;
+      return left.seed - right.seed;
+    });
+
+  if (pairs.length < 2) return [] as AmericanoLabRound[];
+
+  const allMatchups: Array<{
+    left: typeof pairs[number];
+    right: typeof pairs[number];
+    balanceGap: number;
+  }> = [];
+
+  for (let leftIndex = 0; leftIndex < pairs.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < pairs.length; rightIndex += 1) {
+      allMatchups.push({
+        left: pairs[leftIndex],
+        right: pairs[rightIndex],
+        balanceGap: Math.abs(pairs[leftIndex].power - pairs[rightIndex].power),
+      });
+    }
+  }
+
+  const history = createHistory(players, courts);
+  const pairByeCounts = new Map<string, number>(pairs.map((pair) => [pair.id, 0]));
+  const rounds: AmericanoLabRound[] = [];
+  const pending = [...allMatchups];
+
+  while (pending.length > 0) {
+    const usedPairIds = new Set<string>();
+    const roundMatchups: typeof pending = [];
+
+    pending.sort((left, right) => {
+      const leftLoad = (pairByeCounts.get(left.left.id) ?? 0) + (pairByeCounts.get(left.right.id) ?? 0);
+      const rightLoad = (pairByeCounts.get(right.left.id) ?? 0) + (pairByeCounts.get(right.right.id) ?? 0);
+      if (leftLoad !== rightLoad) return leftLoad - rightLoad;
+      return left.balanceGap - right.balanceGap;
+    });
+
+    for (const matchup of pending) {
+      if (roundMatchups.length >= courts.length) break;
+      if (usedPairIds.has(matchup.left.id) || usedPairIds.has(matchup.right.id)) continue;
+      roundMatchups.push(matchup);
+      usedPairIds.add(matchup.left.id);
+      usedPairIds.add(matchup.right.id);
+    }
+
+    if (roundMatchups.length === 0) break;
+
+    const roundIndex = rounds.length;
+    const matches = roundMatchups.map((matchup, matchIndex) => {
+      const draft = evaluateMatchDraft(
+        matchup.left.players,
+        matchup.right.players,
+        history,
+        roundIndex,
+        Math.max(1, pairs.length - 1),
+        { mode: "padelhub" },
+      );
+      return materializeMatch(
+        draft,
+        courts[matchIndex] ?? `Корт №${matchIndex + 1}`,
+        matchIndex,
+        history,
+        roundIndex,
+        matchIndex,
+        Math.max(1, pairs.length - 1),
+        players.length,
+        courts.length,
+      );
+    });
+
+    const byePairs = pairs.filter((pair) => !usedPairIds.has(pair.id));
+    const byes = byePairs.flatMap((pair) => pair.players);
+
+    const round: AmericanoLabRound = {
+      id: `round-${roundIndex + 1}`,
+      index: roundIndex + 1,
+      matches,
+      byes,
+      collapsed: roundIndex !== 0,
+      saved: false,
+      quality: buildRoundQuality(matches, byes),
+    };
+
+    rounds.push(round);
+    applyRoundToHistory(round, history);
+
+    byes.forEach((player) => {
+      const prev = history.byeCounts.get(player.id) ?? { count: 0, lastRound: null };
+      history.byeCounts.set(player.id, {
+        count: prev.count + 1,
+        lastRound: roundIndex,
+      });
+    });
+    byePairs.forEach((pair) => {
+      pairByeCounts.set(pair.id, (pairByeCounts.get(pair.id) ?? 0) + 1);
+    });
+
+    const completedKeys = new Set(roundMatchups.map((matchup) => `${matchup.left.id}::${matchup.right.id}`));
+    for (let index = pending.length - 1; index >= 0; index -= 1) {
+      const key = `${pending[index].left.id}::${pending[index].right.id}`;
+      if (completedKeys.has(key)) pending.splice(index, 1);
+    }
   }
 
   return rounds;
@@ -814,9 +1237,10 @@ export function hydrateAmericanoRounds(
   rawRounds: unknown,
   participants: AmericanoLabParticipant[],
   courts: string[],
+  options?: AmericanoScheduleOptions,
 ) {
   if (!Array.isArray(rawRounds) || rawRounds.length === 0) {
-    return createAmericanoRounds(participants, courts);
+    return createAmericanoRounds(participants, courts, options);
   }
 
   const ratedParticipants = normalizeParticipants(participants);
@@ -835,7 +1259,7 @@ export function hydrateAmericanoRounds(
 
   sortedRawRounds.forEach((rawRound, roundIndex) => {
     const rawMatches = Array.isArray(rawRound.matches) ? rawRound.matches : [];
-    const matches = rawMatches
+    let matches = rawMatches
       .map((value, matchIndex) => {
         if (!value || typeof value !== "object") return null;
         const record = value as Record<string, unknown>;
@@ -860,6 +1284,7 @@ export function hydrateAmericanoRounds(
           history,
           roundIndex,
           sortedRawRounds.length,
+          options,
         );
         const match = materializeMatch(
           draft,
@@ -882,7 +1307,21 @@ export function hydrateAmericanoRounds(
       })
       .filter((value): value is AmericanoLabMatch => Boolean(value));
 
-    const byes = inferRoundByes(rawRound, matches, ratedParticipants, participantMap);
+    let byes = inferRoundByes(rawRound, matches, ratedParticipants, participantMap);
+    const shouldRebuildEmptyRound = rawMatches.length === 0 && matches.length === 0 && ratedParticipants.length >= 4 && courts.length > 0;
+    if (shouldRebuildEmptyRound) {
+      const planned = planAmericanoRoundFromHistory(
+        ratedParticipants,
+        courts,
+        history,
+        roundIndex,
+        sortedRawRounds.length,
+        options,
+      );
+      matches = planned.matches;
+      byes = planned.byes;
+    }
+
     const round: AmericanoLabRound = {
       id: typeof rawRound.id === "string" && rawRound.id.trim()
         ? rawRound.id.trim()
@@ -906,7 +1345,7 @@ export function hydrateAmericanoRounds(
     });
   });
 
-  return normalizedRounds.length > 0 ? normalizedRounds : createAmericanoRounds(participants, courts);
+  return normalizedRounds.length > 0 ? normalizedRounds : createAmericanoRounds(participants, courts, options);
 }
 
 export function serializeAmericanoRounds(rounds: AmericanoLabRound[]): AmericanoRoundPayload[] {

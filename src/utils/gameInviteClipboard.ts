@@ -178,6 +178,44 @@ function buildInviteMessage(
   };
 }
 
+function copyPlainTextFallback(text: string): boolean {
+  if (typeof document === "undefined") return false;
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "0";
+  textarea.style.left = "-9999px";
+  textarea.style.opacity = "0";
+
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
+async function writePlainTextToClipboard(text: string): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (copyPlainTextFallback(text)) {
+    return;
+  }
+
+  throw new Error("Clipboard API is not available");
+}
+
 function getGamePlayers(game: PadelGameRecord | null | undefined): PreviewPlayer[] {
   const participants = Array.isArray(game?.participants) ? game.participants : [];
   const organizer = game?.organizer
@@ -517,11 +555,7 @@ export async function copyGameInviteClipboardPayload(
     }
   }
 
-  if (!navigator.clipboard?.writeText) {
-    throw new Error("Clipboard API is not available");
-  }
-
-  await navigator.clipboard.writeText(inviteMessage.plainText);
+  await writePlainTextToClipboard(inviteMessage.plainText);
 }
 
 type ShareOrCopyOptions = {

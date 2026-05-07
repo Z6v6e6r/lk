@@ -64,9 +64,45 @@ function filterEntries(entries: FeedEntry[], activeFilter: CommunityFeedFilterId
     return entries.filter((entry) => entry.item.type === "game");
   }
   if (activeFilter === "tournaments") {
-    return entries.filter((entry) => entry.item.type === "tournament");
+    return sortTournamentEntriesByStart(entries.filter((entry) => entry.item.type === "tournament"));
   }
   return entries.filter((entry) => entry.item.type === "news");
+}
+
+function getTournamentEntryStartTimestamp(entry: FeedEntry) {
+  if (entry.item.type !== "tournament") return Number.NaN;
+
+  const { date, startTime } = entry.item.data;
+  const normalizedDate = date.trim();
+  const normalizedStartTime = startTime.trim();
+  const dateTime = /[T\s]\d{1,2}:\d{2}/.test(normalizedDate)
+    ? normalizedDate
+    : [normalizedDate, normalizedStartTime].filter(Boolean).join("T");
+  const parsed = Date.parse(dateTime);
+  if (Number.isFinite(parsed)) return parsed;
+
+  const fallback = Date.parse(entry.publishedAt);
+  return Number.isFinite(fallback) ? fallback : Number.NaN;
+}
+
+function getUpcomingDistance(timestamp: number) {
+  if (!Number.isFinite(timestamp)) return Number.MAX_SAFE_INTEGER;
+
+  const now = Date.now();
+  return timestamp >= now
+    ? timestamp - now
+    : Number.MAX_SAFE_INTEGER + (now - timestamp);
+}
+
+function sortTournamentEntriesByStart(entries: FeedEntry[]) {
+  return [...entries].sort((left, right) => {
+    const leftTimestamp = getTournamentEntryStartTimestamp(left);
+    const rightTimestamp = getTournamentEntryStartTimestamp(right);
+    const distanceDiff = getUpcomingDistance(leftTimestamp) - getUpcomingDistance(rightTimestamp);
+    if (distanceDiff !== 0) return distanceDiff;
+
+    return right.publishedAt.localeCompare(left.publishedAt);
+  });
 }
 
 function buildBaseNewsThread(news: News): NewsThreadData {

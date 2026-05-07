@@ -19,6 +19,7 @@ import type {
   Booking,
   Exercise,
   ExerciseBooking,
+  TournamentTypeKey,
   TournamentHistoryRecord,
   UserProfileType,
 } from "../../utils/apiClient";
@@ -33,26 +34,69 @@ import {
 import {
   buildAmericanoStandings,
   createAmericanoRounds,
+  createPairedAmericanoRounds,
+  createPairedMexicanoInitialRounds,
   hydrateAmericanoRounds,
   parseTournamentRatingValue,
   serializeAmericanoRounds,
+  type PairedMexicanoPairAssignment,
   type AmericanoLabParticipant as ParticipantEntry,
   type AmericanoLabRound as TournamentRound,
 } from "./americanoLab";
 
 interface TournamentsPageProps {
   onBack: () => void;
+  initialOpenTournamentId?: string | null;
+  initialOpenDate?: string | null;
 }
 
 const TOURNAMENT_DIRECTION_ID = 2617;
-const DAYS_BEFORE_TODAY = 7;
-const DAYS_AFTER_TODAY = 14;
+const DAYS_BEFORE_TODAY = 30;
+const DAYS_AFTER_TODAY = 30;
 const TODAY_DATE_INDEX = DAYS_BEFORE_TODAY;
 
-const TOURNAMENT_TYPES = [
+type TournamentFamilyKey = "americano" | "mexicano";
+
+const TOURNAMENT_FAMILIES: Array<{ id: TournamentFamilyKey; label: string }> = [
   { id: "americano", label: "Американо" },
   { id: "mexicano", label: "Мексикано" },
 ];
+
+const TOURNAMENT_SUBTYPES: Record<TournamentFamilyKey, Array<{
+  id: TournamentTypeKey;
+  label: string;
+  description?: string;
+}>> = {
+  americano: [
+    {
+      id: "americano_padelhub",
+      label: "ПадлхАБ",
+      description: "Текущее американо с мягким балансом повторов и уровней.",
+    },
+    {
+      id: "americano_classic",
+      label: "Классическое",
+      description: "Каждый раунд новый напарник и новые соперники, баланс пар по остаточному принципу.",
+    },
+    {
+      id: "paired_americano",
+      label: "Парное американо",
+      description: "Фиксированные пары играют турнир между собой.",
+    },
+  ],
+  mexicano: [
+    {
+      id: "mexicano",
+      label: "Классическое",
+      description: "Одиночный формат мексикано.",
+    },
+    {
+      id: "paired_mexicano",
+      label: "Парное",
+      description: "Фиксированные пары и стартовая сетка по силе пар.",
+    },
+  ],
+};
 
 const HTML_TO_IMAGE_CDN =
   "https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js";
@@ -103,6 +147,16 @@ function formatDate(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
+function getDateKeyFromInput(value?: string | null) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return null;
+  const isoDate = normalized.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+  if (isoDate) return isoDate;
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return formatDate(parsed);
+}
+
 function formatTime(timeStr?: string) {
   return timeStr ? timeStr.slice(11, 16) : "";
 }
@@ -140,14 +194,6 @@ function mergeTournamentExercises(primary: Exercise[], bookings: Booking[], date
   });
 }
 
-function normalizeTournamentPhone(value?: string | null) {
-  const digits = String(value || "").replace(/\D/g, "");
-  if (!digits) return null;
-  if (digits.length === 10) return `7${digits}`;
-  if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
-  return digits;
-}
-
 function getClientName(booking: ExerciseBooking, index: number) {
   const client = booking.client as ExerciseBooking["client"] | undefined;
   const parts = [client?.firstName, client?.lastName].filter(Boolean);
@@ -160,6 +206,72 @@ function getInitials(booking: ExerciseBooking) {
   const first = client?.firstName?.[0] || "";
   const last = client?.lastName?.[0] || "";
   return (first + last).toUpperCase() || "U";
+}
+
+function isCancelledTournamentBooking(booking: ExerciseBooking) {
+  const raw = booking as ExerciseBooking & {
+    cancelled?: boolean;
+    canceled?: boolean;
+    status?: string | null;
+    state?: string | null;
+  };
+  const status = String(raw.status ?? raw.state ?? "").trim().toLowerCase();
+
+  return (
+    raw.isCancelled === true
+    || raw.cancelled === true
+    || raw.canceled === true
+    || status === "cancelled"
+    || status === "canceled"
+    || status === "cancel"
+  );
+}
+
+function getTournamentBookingClientId(booking: ExerciseBooking) {
+  return String(booking.client?.id || "").trim();
+}
+
+function getTournamentBookingDedupeKey(booking: ExerciseBooking) {
+  const clientId = getTournamentBookingClientId(booking);
+  if (clientId) return `client:${clientId}`;
+
+  const bookingId = String(booking.id || "").trim();
+  return bookingId ? `booking:${bookingId}` : "";
+}
+
+function stripTournamentParticipantPhone(booking: ExerciseBooking): ExerciseBooking {
+  if (!booking.client) return booking;
+  return {
+    ...booking,
+    client: {
+      ...booking.client,
+      phone: undefined,
+    },
+  };
+}
+
+function normalizeTournamentParticipantBookings(list: ExerciseBooking[]) {
+  const byKey = new Map<string, ExerciseBooking>();
+
+  list.forEach((booking, index) => {
+    if (!booking || isCancelledTournamentBooking(booking)) return;
+    if (!getTournamentBookingClientId(booking)) return;
+
+    const key = getTournamentBookingDedupeKey(booking) || `slot:${index}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, stripTournamentParticipantPhone(booking));
+      return;
+    }
+
+    const existingRating = parseTournamentRatingValue(existing.rating);
+    const nextRating = parseTournamentRatingValue(booking.rating);
+    if (existingRating == null && nextRating != null) {
+      byKey.set(key, stripTournamentParticipantPhone(booking));
+    }
+  });
+
+  return Array.from(byKey.values());
 }
 
 function getInitialsFromName(name?: string | null) {
@@ -424,15 +536,55 @@ function pickLatestTournamentHistory(records: TournamentHistoryRecord[] | null |
 function normalizeTournamentTypeKey(value: string | null | undefined) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return null;
-  if (normalized.includes("americano") || normalized.includes("американо")) return "americano";
+  if (
+    normalized.includes("americano_classic")
+    || normalized.includes("classic_americano")
+    || normalized.includes("классическое американо")
+  ) return "americano_classic";
+  if (
+    normalized.includes("americano_padelhub")
+    || normalized.includes("padelhub")
+    || normalized.includes("падлхаб")
+  ) return "americano_padelhub";
+  if (
+    normalized.includes("paired_americano")
+    || normalized.includes("americano_pairs")
+    || normalized.includes("парный американо")
+    || normalized.includes("парное американо")
+  ) return "paired_americano";
+  if (
+    normalized.includes("paired_mexicano")
+    || normalized.includes("mexicano_pairs")
+    || normalized.includes("парный мексикано")
+    || normalized.includes("парное мексикано")
+  ) return "paired_mexicano";
+  if (normalized.includes("americano") || normalized.includes("американо")) return "americano_padelhub";
   if (normalized.includes("mexicano") || normalized.includes("мексикано")) return "mexicano";
   return normalized;
 }
 
+function getTournamentFamilyByType(value: string | null | undefined): TournamentFamilyKey | null {
+  const typeKey = normalizeTournamentTypeKey(value);
+  if (!typeKey) return null;
+  if (
+    typeKey === "americano"
+    || typeKey === "americano_padelhub"
+    || typeKey === "americano_classic"
+    || typeKey === "paired_americano"
+  ) {
+    return "americano";
+  }
+  if (typeKey === "mexicano" || typeKey === "paired_mexicano") return "mexicano";
+  return null;
+}
+
 function getTournamentTypeLabel(value: string | null | undefined) {
   const typeKey = normalizeTournamentTypeKey(value);
-  if (typeKey === "americano") return "Американо";
-  if (typeKey === "mexicano") return "Мексикано";
+  if (typeKey === "americano" || typeKey === "americano_padelhub") return "Американо · ПадлхАБ";
+  if (typeKey === "americano_classic") return "Американо · Классическое";
+  if (typeKey === "paired_americano") return "Американо · Парное";
+  if (typeKey === "paired_mexicano") return "Парный мексикано";
+  if (typeKey === "mexicano") return "Мексикано · Классическое";
   return String(value || "").trim() || "Турнир";
 }
 
@@ -471,7 +623,13 @@ function isTournamentTrainer(exercise: Exercise, currentUserId: string | null) {
 }
 
 function buildTournamentPayloadFromHistory(history: TournamentHistoryRecord): AmericanoTournamentPayload | null {
-  if (normalizeTournamentTypeKey(history.tournamentType) !== "americano") return null;
+  const typeKey = normalizeTournamentTypeKey(history.tournamentType);
+  if (
+    typeKey !== "americano_padelhub"
+    && typeKey !== "americano_classic"
+    && typeKey !== "paired_americano"
+    && typeKey !== "paired_mexicano"
+  ) return null;
 
   return {
     tournamentId: history.tournamentId,
@@ -479,15 +637,16 @@ function buildTournamentPayloadFromHistory(history: TournamentHistoryRecord): Am
     createdAt: history.createdAt ?? history.updatedAt ?? new Date().toISOString(),
     organizer: {
       id: history.organizer?.id ?? null,
-      phone: history.organizer?.phone ?? null,
+      phone: null,
       tenantKey: TENANT_KEY,
     },
-    tournamentType: "americano",
+    tournamentType: typeKey,
     targetScore: history.targetScore ?? 21,
     courts: history.courts.length > 0 ? history.courts : ["Корт №1"],
+    params: history.params ?? undefined,
     participants: history.participants.map((participant, index) => ({
-      id: participant.id ?? participant.phone ?? `participant-${index}`,
-      phone: participant.phone ?? null,
+      id: participant.id ?? `participant-${index}`,
+      phone: null,
       rating: participant.rating ?? null,
       photo: participant.photo ?? null,
       name: participant.name || `Участник ${index + 1}`,
@@ -517,8 +676,8 @@ function buildTournamentHistoryRecordFromPayload(
     targetScore: payload.targetScore,
     courts: [...payload.courts],
     participants: payload.participants.map((participant, index) => ({
-      id: participant.id ?? participant.phone ?? `participant-${index}`,
-      phone: participant.phone ?? null,
+      id: participant.id ?? `participant-${index}`,
+      phone: null,
       photo: participant.photo ?? null,
       rating: participant.rating ?? null,
       name: participant.name || `Участник ${index + 1}`,
@@ -530,18 +689,21 @@ function buildTournamentHistoryRecordFromPayload(
     genderLabel: previousHistory?.genderLabel ?? (girlsOnly ? "Женщины" : null),
     girlsOnly,
     mixed: previousHistory?.mixed ?? null,
-    organizer:
-      previousHistory?.organizer
-      ?? (payload.organizer.id || payload.organizer.phone
+    organizer: previousHistory?.organizer
+        ? {
+          ...previousHistory.organizer,
+          phone: null,
+        }
+      : (payload.organizer.id
         ? {
           id: payload.organizer.id ?? null,
-          phone: payload.organizer.phone ?? null,
+          phone: null,
           photo: null,
           rating: null,
           name: "Организатор",
         }
         : null),
-    params: previousHistory?.params ?? null,
+    params: payload.params ?? previousHistory?.params ?? null,
     rounds: payload.rounds ?? [],
     standings: previousHistory?.standings ?? [],
     summary: previousHistory?.summary ?? null,
@@ -581,7 +743,8 @@ function TournamentDetailsModal({
   const [loading, setLoading] = useState(false);
   const [participants, setParticipants] = useState<ExerciseBooking[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [selectedType, setSelectedType] = useState<string | null>(null);
+  const [selectedFamily, setSelectedFamily] = useState<TournamentFamilyKey | null>(null);
+  const [selectedType, setSelectedType] = useState<TournamentTypeKey | null>(null);
   const [courtsCountDraft, setCourtsCountDraft] = useState("");
   const [courtNames, setCourtNames] = useState<string[]>([]);
   const [targetScore, setTargetScore] = useState(21);
@@ -599,9 +762,10 @@ function TournamentDetailsModal({
   const [leavingParticipantId, setLeavingParticipantId] = useState<string | null>(null);
   const [leaveError, setLeaveError] = useState<string | null>(null);
   const [autoRefreshedParticipantsKey, setAutoRefreshedParticipantsKey] = useState("");
+  const [pairedMexicanoPairs, setPairedMexicanoPairs] = useState<string[][]>([]);
 
   useEffect(() => {
-    if (!selectedType) {
+    if (!selectedFamily && !selectedType) {
       setCourtsCountDraft("");
       setCourtNames([]);
       setTargetScore(21);
@@ -617,15 +781,18 @@ function TournamentDetailsModal({
       setLeavingParticipantId(null);
       setLeaveError(null);
       setAutoRefreshedParticipantsKey("");
+      setPairedMexicanoPairs([]);
     }
-  }, [selectedType]);
+  }, [selectedFamily, selectedType]);
 
   useEffect(() => {
     if (!isOpen) return;
     const restoredType = normalizeTournamentTypeKey(historyRecord?.tournamentType);
+    const restoredFamily = getTournamentFamilyByType(restoredType);
     const restoredCourts = Array.isArray(historyRecord?.courts) ? historyRecord.courts : [];
     const restoredTargetScore = historyRecord?.targetScore ?? 21;
-    setSelectedType(restoredType === "americano" || restoredType === "mexicano" ? restoredType : null);
+    setSelectedFamily(restoredFamily);
+    setSelectedType(restoredType as TournamentTypeKey | null);
     setCourtsCountDraft(restoredCourts.length > 0 ? String(restoredCourts.length) : "");
     setCourtNames(restoredCourts);
     setTargetScore(restoredTargetScore);
@@ -641,6 +808,16 @@ function TournamentDetailsModal({
     setLeavingParticipantId(null);
     setLeaveError(null);
     setAutoRefreshedParticipantsKey("");
+    const restoredPairs = Array.isArray(historyRecord?.params?.pairAssignments)
+      ? historyRecord.params.pairAssignments
+        .filter((pair): pair is PairedMexicanoPairAssignment => (
+          Array.isArray(pair)
+          && pair.length === 2
+          && typeof pair[0] === "string"
+          && typeof pair[1] === "string"
+        ))
+      : [];
+    setPairedMexicanoPairs(restoredPairs);
   }, [isOpen, historyRecord, tournament?.id]);
 
   const applyCourtsCount = (count: number) => {
@@ -670,8 +847,10 @@ function TournamentDetailsModal({
     });
   }, [isOpen]);
 
-  const handleSaveAmericano = async (allowMissingRatings = false) => {
+  const handleSaveTournament = async (allowMissingRatings = false) => {
     if (!tournament) return;
+    if (!selectedType) return;
+    const tournamentType = selectedType;
     const minRating = resolveTournamentMinRating(tournament, historyRecord);
     const missingParticipants = sortedParticipants.filter((participant) => {
       const manualRating = manualRatings[participant.id];
@@ -696,16 +875,32 @@ function TournamentDetailsModal({
         parseTournamentRatingValue(manualRating ?? participant.rating)
         ?? (allowMissingRatings ? minRating.value : null);
       return {
-        id: participant.id ?? participant.phone ?? `participant-${idx}`,
+        id: participant.id ?? `participant-${idx}`,
         name: participant.name || `Участник ${idx + 1}`,
         photo: participant.photo ?? null,
-        phone: participant.phone ?? null,
+        phone: null,
         rating: ratingValue != null ? String(ratingValue) : null,
       };
     });
 
+    const completedMexicanoPairs = pairedMexicanoPairs
+      .filter((pair): pair is PairedMexicanoPairAssignment => pair.length === 2)
+      .map((pair) => [pair[0], pair[1]] as PairedMexicanoPairAssignment);
+    if ((tournamentType === "paired_mexicano" || tournamentType === "paired_americano") && pairedMexicanoPairError) {
+      setSaveState("error");
+      return;
+    }
+
     const roundsForServer = serializeAmericanoRounds(
-      createAmericanoRounds(participantsForRounds, courtNames),
+      tournamentType === "paired_mexicano"
+        ? createPairedMexicanoInitialRounds(participantsForRounds, courtNames, completedMexicanoPairs)
+        : tournamentType === "paired_americano"
+          ? createPairedAmericanoRounds(participantsForRounds, courtNames, completedMexicanoPairs)
+          : createAmericanoRounds(
+              participantsForRounds,
+              courtNames,
+              { mode: tournamentType === "americano_classic" ? "classic" : "padelhub" },
+            ),
     );
 
     const payload: AmericanoTournamentPayload = {
@@ -714,15 +909,39 @@ function TournamentDetailsModal({
       createdAt: new Date().toISOString(),
       organizer: {
         id: profile?.id ?? null,
-        phone: profile?.phone ?? null,
+        phone: null,
         tenantKey: TENANT_KEY,
       },
-      tournamentType: "americano" as const,
+      tournamentType,
       targetScore,
       courts: courtNames,
+      params:
+        tournamentType === "paired_mexicano"
+          ? {
+              tournamentFamily: "mexicano",
+              tournamentSubtype: "paired",
+              mexicanoMode: "paired",
+              totalRounds: Math.max(1, completedMexicanoPairs.length - 1),
+              pairAssignments: completedMexicanoPairs,
+            }
+          : tournamentType === "paired_americano"
+            ? {
+                tournamentFamily: "americano",
+                tournamentSubtype: "paired",
+                pairAssignments: completedMexicanoPairs,
+              }
+            : tournamentType === "americano_classic"
+              ? {
+                  tournamentFamily: "americano",
+                  tournamentSubtype: "classic",
+                }
+              : {
+                  tournamentFamily: selectedFamily,
+                  tournamentSubtype: tournamentType === "mexicano" ? "classic" : "padelhub",
+                },
       participants: participantsForRounds.map((participant) => ({
         id: participant.id ?? null,
-        phone: participant.phone ?? null,
+        phone: null,
         rating: participant.rating ?? null,
         photo: participant.photo ?? null,
         name: participant.name,
@@ -755,7 +974,7 @@ function TournamentDetailsModal({
           : Array.isArray((data as { content?: ExerciseBooking[] })?.content)
             ? (data as { content: ExerciseBooking[] }).content
             : [];
-      setParticipants(list);
+      setParticipants(normalizeTournamentParticipantBookings(list));
     } catch {
       setError("Не удалось загрузить участников");
     } finally {
@@ -772,13 +991,13 @@ function TournamentDetailsModal({
   const trainer = tournament?.trainers?.[0];
 
   const baseParticipantEntries = useMemo((): TournamentParticipantEntry[] => {
-    return participants.map((participant, idx) => ({
+    return normalizeTournamentParticipantBookings(participants).map((participant, idx) => ({
       id: participant.client?.id ?? participant.id ?? `participant-${idx}`,
       bookingId: participant.id ?? null,
       clientId: participant.client?.id ?? null,
       name: getClientName(participant, idx),
       photo: participant.client?.photo ?? null,
-      phone: participant.client?.phone ?? null,
+      phone: null,
       spot: participant.spot ?? null,
       rating: participant.rating ?? null,
     }));
@@ -799,12 +1018,12 @@ function TournamentDetailsModal({
       ?? (profileRatingNumeric != null ? profileRatingNumeric.toFixed(5) : profileRatingLetter ?? null);
 
     return {
-      id: profile.id || `organizer-slot-${normalizeTournamentPhone(profile.phone) || "self"}`,
+      id: profile.id || "organizer-slot-self",
       bookingId: null,
       clientId: profile.id || null,
       name,
       photo: profile.photo ?? null,
-      phone: profile.phone ?? null,
+      phone: null,
       spot: null,
       rating: persistedRating,
       isOrganizerSlot: true,
@@ -817,11 +1036,6 @@ function TournamentDetailsModal({
 
     return !baseParticipantEntries.some((participant) => (
       (participant.clientId && organizerSlotParticipant.clientId && participant.clientId === organizerSlotParticipant.clientId)
-      || (
-        normalizeTournamentPhone(participant.phone)
-        && normalizeTournamentPhone(organizerSlotParticipant.phone)
-        && normalizeTournamentPhone(participant.phone) === normalizeTournamentPhone(organizerSlotParticipant.phone)
-      )
     ));
   }, [baseParticipantEntries, organizerSlotParticipant]);
 
@@ -839,7 +1053,6 @@ function TournamentDetailsModal({
         .map((participant) => [
           participant.id,
           participant.clientId ?? "",
-          normalizeTournamentPhone(participant.phone) ?? "",
           participant.isOrganizerSlot ? "organizer" : "participant",
         ].join(":"))
         .sort()
@@ -850,10 +1063,7 @@ function TournamentDetailsModal({
   const isCurrentUserParticipant = (participant: TournamentParticipantEntry) => {
     if (!profile || participant.isOrganizerSlot) return false;
     if (profile.id && participant.clientId && profile.id === participant.clientId) return true;
-
-    const participantPhone = normalizeTournamentPhone(participant.phone);
-    const profilePhone = normalizeTournamentPhone(profile.phone);
-    return Boolean(participantPhone && profilePhone && participantPhone === profilePhone);
+    return false;
   };
 
   const handleParticipantRatingInput = (participantId: string, value: string) => {
@@ -880,7 +1090,7 @@ function TournamentDetailsModal({
     const liveRatingsResult = await apiFetchPadelLiveRatings(
       participantEntries.map((participant) => ({
         clientId: participant.clientId,
-        phone: participant.phone ?? null,
+        phone: null,
         name: participant.name,
         rating: participant.rating ?? null,
         ratingNumeric: null,
@@ -896,11 +1106,9 @@ function TournamentDetailsModal({
     }
 
     const liveByClientId = new Map<string, string | null>();
-    const liveByPhone = new Map<string, string | null>();
 
     (liveRatingsResult.data ?? []).forEach((item) => {
       const clientId = (item.clientId || "").trim();
-      const phoneNorm = normalizeTournamentPhone(item.phoneNorm);
       const parsedNumeric =
         typeof item.ratingNumeric === "number" && Number.isFinite(item.ratingNumeric)
           ? item.ratingNumeric
@@ -913,24 +1121,19 @@ function TournamentDetailsModal({
             : null;
 
       if (clientId) liveByClientId.set(clientId, nextRating);
-      if (phoneNorm) liveByPhone.set(phoneNorm, nextRating);
     });
 
     const refreshedPositiveIds = new Set<string>();
-    const organizerPhoneNorm = normalizeTournamentPhone(organizerSlotParticipant?.phone);
     const nextOrganizerRating = organizerSlotParticipant
       ? (organizerSlotParticipant.clientId ? liveByClientId.get(organizerSlotParticipant.clientId) : undefined)
-        ?? (organizerPhoneNorm ? liveByPhone.get(organizerPhoneNorm) : undefined)
       : undefined;
 
     setParticipants((prev) =>
       prev.map((participant, idx) => {
         const clientId = (participant.client?.id || "").trim();
         const bookingId = (participant.id || "").trim();
-        const phoneNorm = normalizeTournamentPhone(participant.client?.phone);
         const nextRating =
-          (clientId ? liveByClientId.get(clientId) : undefined)
-          ?? (phoneNorm ? liveByPhone.get(phoneNorm) : undefined);
+          clientId ? liveByClientId.get(clientId) : undefined;
 
         if (nextRating === undefined) return participant;
 
@@ -1020,7 +1223,7 @@ function TournamentDetailsModal({
 
     const response = await apiSaveOnboardingLevel({
       clientId: participant.clientId,
-      phone: participant.phone ?? null,
+      phone: null,
       levelLetter: getLetterGrade(parsedRating),
       levelNumeric: parsedRating,
     });
@@ -1103,18 +1306,83 @@ function TournamentDetailsModal({
     });
   }, [participantEntries]);
 
-  const parsedTargetScoreDraft = selectedType === "americano"
+  const sortedParticipantIds = useMemo(
+    () => sortedParticipants.map((participant) => participant.id),
+    [sortedParticipants],
+  );
+  const selectedPairPlayerIds = useMemo(
+    () => new Set(pairedMexicanoPairs.flat()),
+    [pairedMexicanoPairs],
+  );
+  const pairedMexicanoPairCount = Math.floor(sortedParticipants.length / 2);
+  const completedPairedMexicanoPairsCount = pairedMexicanoPairs.filter((pair) => pair.length === 2).length;
+  const pairedMexicanoMissingPairs = Math.max(0, pairedMexicanoPairCount - completedPairedMexicanoPairsCount);
+  const pairedMexicanoPairError = useMemo(() => {
+    if (selectedType !== "paired_mexicano" && selectedType !== "paired_americano") return null;
+    const formatLabel = selectedType === "paired_americano" ? "парного американо" : "парного мексикано";
+    if (sortedParticipants.length < 4) return `Для ${formatLabel} нужно минимум 4 игрока.`;
+    if (sortedParticipants.length % 4 !== 0) return `Для ${formatLabel} количество игроков должно делиться на 4.`;
+    if (
+      pairedMexicanoPairs.length !== pairedMexicanoPairCount
+      || pairedMexicanoPairs.some((pair) => pair.length !== 2)
+    ) return "Распределите всех игроков по парам.";
+    return null;
+  }, [pairedMexicanoPairCount, pairedMexicanoPairs, selectedType, sortedParticipants.length]);
+
+  useEffect(() => {
+    if (selectedType !== "paired_mexicano" && selectedType !== "paired_americano") return;
+    const validIds = new Set(sortedParticipantIds);
+    setPairedMexicanoPairs((prev) => {
+      const usedIds = new Set<string>();
+      const next = prev.filter((pair) => {
+        const valid = pair.every((playerId) => validIds.has(playerId) && !usedIds.has(playerId));
+        if (valid) pair.forEach((playerId) => usedIds.add(playerId));
+        return valid;
+      });
+      return next.length === prev.length && next.every((pair, index) => pair.join(":") === prev[index]?.join(":"))
+        ? prev
+        : next;
+    });
+  }, [selectedType, sortedParticipantIds]);
+
+  const handlePairedMexicanoPlayerClick = (participantId: string) => {
+    setPairedMexicanoPairs((prev) => {
+      const existingPairIndex = prev.findIndex((pair) => pair.includes(participantId));
+      if (existingPairIndex >= 0) {
+        return prev
+          .map((pair, index) => (index === existingPairIndex ? pair.filter((id) => id !== participantId) : pair))
+          .filter((pair) => pair.length > 0);
+      }
+
+      const next = [...prev];
+      const openPairIndex = next.findIndex((pair) => pair.length === 1);
+      if (openPairIndex >= 0) {
+        next[openPairIndex] = [next[openPairIndex][0], participantId];
+        return next;
+      }
+      if (next.length >= pairedMexicanoPairCount) return prev;
+      next.push([participantId]);
+      return next;
+    });
+  };
+
+  const selectedTypeUsesScores =
+    selectedType === "americano_padelhub"
+    || selectedType === "americano_classic"
+    || selectedType === "paired_americano"
+    || selectedType === "paired_mexicano";
+  const parsedTargetScoreDraft = selectedTypeUsesScores
     ? parseBoundedIntegerInput(targetScoreDraft, 1, 99)
     : null;
   const parsedCourtsCountDraft = selectedType
     ? parseBoundedIntegerInput(courtsCountDraft, 1, 12)
     : null;
   const canSaveTargetScore =
-    selectedType === "americano" && parsedTargetScoreDraft != null && parsedTargetScoreDraft !== targetScore;
+    selectedTypeUsesScores && parsedTargetScoreDraft != null && parsedTargetScoreDraft !== targetScore;
   const canSaveCourtsCount =
     selectedType != null && parsedCourtsCountDraft != null && parsedCourtsCountDraft !== courtNames.length;
   const targetScoreNeedsConfirmation =
-    selectedType === "americano"
+    selectedTypeUsesScores
     && (targetScoreDraft.trim() === "" || parsedTargetScoreDraft == null || parsedTargetScoreDraft !== targetScore);
   const courtsCountNeedsConfirmation =
     selectedType != null
@@ -1253,7 +1521,7 @@ function TournamentDetailsModal({
                             className="tournament-participant-rating-input"
                             type="text"
                             inputMode="decimal"
-                            placeholder={participant.phone || "Рейтинг"}
+                            placeholder="Рейтинг"
                             value={manualRating}
                             onChange={(e) => handleParticipantRatingInput(participant.id, e.target.value)}
                           />
@@ -1302,14 +1570,19 @@ function TournamentDetailsModal({
         </div>
 
         <div className="tournament-section">
-          <div className="tournament-section-title">Тип турнира</div>
+          <div className="tournament-section-title">Формат турнира</div>
           <div className="tournament-type-list">
-            {TOURNAMENT_TYPES.map((type) => (
+            {TOURNAMENT_FAMILIES.map((type) => (
               <button
                 key={type.id}
-                className={`tournament-type-option ${selectedType === type.id ? "active" : ""}`}
+                className={`tournament-type-option ${selectedFamily === type.id ? "active" : ""}`}
                 type="button"
-                onClick={() => setSelectedType(type.id)}
+                onClick={() => {
+                  setSelectedFamily(type.id);
+                  setSelectedType(null);
+                  setPairedMexicanoPairs([]);
+                  setSaveState("idle");
+                }}
               >
                 {type.label}
               </button>
@@ -1317,9 +1590,35 @@ function TournamentDetailsModal({
           </div>
         </div>
 
+        {selectedFamily && (
+          <div className="tournament-section">
+            <div className="tournament-section-title">Тип {selectedFamily === "americano" ? "американо" : "мексикано"}</div>
+            <div className="tournament-type-list">
+              {TOURNAMENT_SUBTYPES[selectedFamily].map((type) => (
+                <button
+                  key={type.id}
+                  className={`tournament-type-option ${selectedType === type.id ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setSelectedType(type.id)}
+                >
+                  <span>{type.label}</span>
+                  {type.description && (
+                    <span className="tournament-type-option-hint">{type.description}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {selectedType && (
           <div className="tournament-section">
-            {selectedType === "americano" && (
+            {selectedType === "mexicano" && (
+              <div className="tournament-settings-hint">
+                Классическое мексикано пока оставлено без автоматической генерации сетки.
+              </div>
+            )}
+            {selectedTypeUsesScores && (
               <div className="tournament-inline-field">
                 <div className="tournament-section-title">
                   До какого суммарного счета играть матчи
@@ -1387,6 +1686,90 @@ function TournamentDetailsModal({
               </div>
             )}
 
+            {(selectedType === "paired_mexicano" || selectedType === "paired_americano") && (
+              <div className="tournament-pair-builder">
+                <div className="tournament-section-head">
+                  <div className="tournament-section-title">Пары</div>
+                  <button
+                    className="tournament-section-action"
+                    type="button"
+                    onClick={() => setPairedMexicanoPairs([])}
+                    disabled={pairedMexicanoPairs.length === 0}
+                  >
+                    Сбросить
+                  </button>
+                </div>
+                <div className="tournament-pair-grid">
+                  {Array.from({ length: pairedMexicanoPairCount }, (_, pairIndex) => {
+                    const pair = pairedMexicanoPairs[pairIndex] ?? [];
+                    return (
+                      <div key={`mexicano-pair-${pairIndex}`} className="tournament-pair-card">
+                        <div className="tournament-pair-card-title">Пара {pairIndex + 1}</div>
+                        <div className="tournament-pair-slots">
+                          {[0, 1].map((slotIndex) => {
+                            const participant = sortedParticipants.find((item) => item.id === pair[slotIndex]);
+                            return (
+                              <button
+                                key={`mexicano-pair-${pairIndex}-${slotIndex}`}
+                                type="button"
+                                className={`tournament-pair-slot ${participant ? "filled" : ""}`}
+                                onClick={() => {
+                                  if (participant) handlePairedMexicanoPlayerClick(participant.id);
+                                }}
+                              >
+                                {participant ? getInitialsFromName(participant.name) : "+"}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="tournament-pair-pool">
+                  {sortedParticipants.map((participant) => {
+                    const selected = selectedPairPlayerIds.has(participant.id);
+                    const ratingValue = parseTournamentRatingValue(participant.rating);
+                    return (
+                      <button
+                        key={`mexicano-player-${participant.id}`}
+                        className={`tournament-pair-player ${selected ? "selected" : ""}`}
+                        type="button"
+                        onClick={() => handlePairedMexicanoPlayerClick(participant.id)}
+                      >
+                        <span className="tournament-pair-player-avatar">
+                          {participant.photo ? (
+                            <img
+                              src={participant.photo}
+                              alt={participant.name}
+                              onError={(e) => {
+                                e.currentTarget.style.display = "none";
+                              }}
+                            />
+                          ) : null}
+                          <span>{getInitialsFromName(participant.name)}</span>
+                        </span>
+                        <span className="tournament-pair-player-name">{participant.name}</span>
+                        {ratingValue != null && (
+                          <span className="tournament-pair-player-rating">
+                            {formatRating(ratingValue)}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className={pairedMexicanoPairError ? "tournaments-error" : "tournament-settings-hint"}>
+                  {pairedMexicanoPairError
+                    ?? (pairedMexicanoMissingPairs > 0
+                      ? `Осталось собрать пар: ${pairedMexicanoMissingPairs}.`
+                      : selectedType === "paired_americano"
+                        ? "Все пары собраны. Сетка будет построена по фиксированным парам."
+                        : "Все пары собраны. Первый раунд будет расставлен по уровню пар.")}
+                </div>
+              </div>
+            )}
+
             <div className="tournament-settings-actions">
               {settingsNeedConfirmation && (
                 <div className="tournament-settings-hint">
@@ -1396,19 +1779,22 @@ function TournamentDetailsModal({
               <button
                 className="section-cta"
                 type="button"
-                onClick={selectedType === "americano" ? () => void handleSaveAmericano() : undefined}
+                onClick={selectedTypeUsesScores ? () => void handleSaveTournament() : undefined}
                 disabled={
                   saveState === "loading"
-                  || selectedType !== "americano"
+                  || !selectedTypeUsesScores
                   || courtNames.length === 0
                   || settingsNeedConfirmation
+                  || Boolean(pairedMexicanoPairError)
                 }
               >
                 {saveState === "loading"
                   ? "Сохранение..."
                   : saveState === "success"
                     ? "Сохранено"
-                    : "Сохранить"}
+                    : selectedType === "paired_mexicano" || selectedType === "paired_americano"
+                      ? "Начать турнир"
+                      : "Сохранить"}
               </button>
             </div>
           </div>
@@ -1440,7 +1826,7 @@ function TournamentDetailsModal({
           <button
             type="button"
             className="onboarding-btn"
-            onClick={() => void handleSaveAmericano(true)}
+            onClick={() => void handleSaveTournament(true)}
           >
             Ок
           </button>
@@ -1494,17 +1880,22 @@ function TournamentManagerModal({
   const normalizedParticipants = useMemo<ParticipantEntry[]>(() => {
     if (!data) return [];
     return data.participants.map((p, idx) => ({
-      id: p.id ?? p.phone ?? `participant-${idx}`,
+      id: p.id ?? `participant-${idx}`,
       name: p.name || `Участник ${idx + 1}`,
       photo: p.photo ?? null,
-      phone: p.phone ?? null,
+      phone: null,
       rating: p.rating ?? null,
     }));
   }, [data]);
 
   useEffect(() => {
     if (!data) return;
-    setRounds(hydrateAmericanoRounds(data.rounds, normalizedParticipants, data.courts));
+    setRounds(hydrateAmericanoRounds(
+      data.rounds,
+      normalizedParticipants,
+      data.courts,
+      { mode: data.tournamentType === "americano_classic" ? "classic" : "padelhub" },
+    ));
     setActiveTab("tournament");
     setExpertMode(false);
     setServerTotals(initialTotals);
@@ -1627,7 +2018,12 @@ function TournamentManagerModal({
 
           const nextRounds = applyPartialRoundUpdates(
             rounds,
-            hydrateAmericanoRounds(res.data.rounds, normalizedParticipants, data.courts),
+            hydrateAmericanoRounds(
+              res.data.rounds,
+              normalizedParticipants,
+              data.courts,
+              { mode: data.tournamentType === "americano_classic" ? "classic" : "padelhub" },
+            ),
           );
           const persistedRound = nextRounds.find((item) => item.id === roundId) ?? null;
           const shouldAdvanceRound =
@@ -1710,7 +2106,9 @@ function TournamentManagerModal({
     [rounds],
   );
   const canFinishTournament =
-    standingsSnapshot.totalMatches > 0 && standingsSnapshot.completedMatches === standingsSnapshot.totalMatches;
+    standingsSnapshot.totalMatches > 0
+    && standingsSnapshot.completedMatches === standingsSnapshot.totalMatches
+    && standingsSnapshot.completedRounds === standingsSnapshot.totalRounds;
 
   const splitName = (name: string) => {
     const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -2365,7 +2763,11 @@ function TournamentManagerModal({
   );
 }
 
-export default function TournamentsPage({ onBack }: TournamentsPageProps) {
+export default function TournamentsPage({
+  onBack,
+  initialOpenTournamentId = null,
+  initialOpenDate = null,
+}: TournamentsPageProps) {
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<Exercise[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -2378,6 +2780,8 @@ export default function TournamentsPage({ onBack }: TournamentsPageProps) {
   const [historyById, setHistoryById] = useState<Record<string, TournamentHistoryRecord | null>>({});
   const [openingTournamentId, setOpeningTournamentId] = useState<string | null>(null);
   const [dateIndex, setDateIndex] = useState(TODAY_DATE_INDEX);
+  const autoOpenTournamentKeyRef = useRef<string | null>(null);
+  const activeDateRef = useRef<HTMLDivElement | null>(null);
 
   const dates = useMemo(() => {
     const base = new Date();
@@ -2397,6 +2801,24 @@ export default function TournamentsPage({ onBack }: TournamentsPageProps) {
     day: "numeric",
     month: "long",
   });
+
+  useEffect(() => {
+    const dateKey = getDateKeyFromInput(initialOpenDate);
+    if (!dateKey) return;
+
+    const nextIndex = dates.findIndex((date) => formatDate(date) === dateKey);
+    if (nextIndex >= 0) {
+      setDateIndex(nextIndex);
+    }
+  }, [dates, initialOpenDate]);
+
+  useEffect(() => {
+    activeDateRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+      inline: "center",
+    });
+  }, [dateIndex]);
 
   useEffect(() => {
     let alive = true;
@@ -2550,6 +2972,30 @@ export default function TournamentsPage({ onBack }: TournamentsPageProps) {
     }
   };
 
+  useEffect(() => {
+    const targetTournamentId = String(initialOpenTournamentId || "").trim();
+    if (!targetTournamentId || loading || profileLoading || openingTournamentId) return;
+
+    const targetTournament =
+      tournaments.find((item) => String(item.id) === targetTournamentId)
+      ?? items.find((item) => String(item.id) === targetTournamentId)
+      ?? null;
+    if (!targetTournament) return;
+
+    const autoOpenKey = `${targetTournamentId}:${selectedDateStr}`;
+    if (autoOpenTournamentKeyRef.current === autoOpenKey) return;
+    autoOpenTournamentKeyRef.current = autoOpenKey;
+    void handleTournamentOpen(targetTournament);
+  }, [
+    initialOpenTournamentId,
+    items,
+    loading,
+    openingTournamentId,
+    profileLoading,
+    selectedDateStr,
+    tournaments,
+  ]);
+
   const handleTournamentCreated = (payload: AmericanoTournamentPayload) => {
     const previousHistory = historyById[payload.tournamentId] ?? null;
     const nextHistory = buildTournamentHistoryRecordFromPayload(
@@ -2628,7 +3074,11 @@ export default function TournamentsPage({ onBack }: TournamentsPageProps) {
               const dayLabel = date.toLocaleDateString("ru-RU", { day: "2-digit" });
 
               return (
-                <div key={date.toISOString()} className="date-item">
+                <div
+                  key={date.toISOString()}
+                  className="date-item"
+                  ref={dateIndex === idx ? activeDateRef : null}
+                >
                   <div className="date-weekday">{weekdayLabel}</div>
                   <button
                     className={`date-chip ${dateIndex === idx ? "active" : ""}`}

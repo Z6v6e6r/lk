@@ -358,6 +358,89 @@ tournament.rounds
     });
   });
 
+const getPairKey = (pairIds) => normalizeIdArray(pairIds, "pair").sort().join("::");
+
+const maybeAppendPairedMexicanoRound = () => {
+  const tournamentType = String(tournament.tournamentType || params.tournamentType || "").toLowerCase();
+  const isPairedMexicano =
+    tournamentType === "paired_mexicano"
+    || tournamentType === "mexicano_pairs"
+    || (tournamentType.includes("mexicano") && String(params.mexicanoMode || "").toLowerCase() === "paired");
+  if (!isPairedMexicano) return;
+
+  const totalRounds = Math.max(1, Math.floor(toNum(params.totalRounds, 0)));
+  if (!totalRounds || tournament.rounds.length >= totalRounds) return;
+
+  const sortedRounds = tournament.rounds
+    .filter((round) => round && Array.isArray(round.matches))
+    .sort((left, right) => toNum(left?.index, 0) - toNum(right?.index, 0));
+  const lastRound = sortedRounds[sortedRounds.length - 1];
+  if (!lastRound || !Array.isArray(lastRound.matches) || lastRound.matches.length === 0) return;
+  if (Array.isArray(lastRound.byes) && lastRound.byes.length > 0) return;
+
+  const completedMatches = [...lastRound.matches]
+    .sort((left, right) => toNum(left?.courtIndex, 0) - toNum(right?.courtIndex, 0));
+  const isRoundComplete = completedMatches.every((match) => (
+    normalizeIdArray(match?.pair1, "pair1").length === 2
+    && normalizeIdArray(match?.pair2, "pair2").length === 2
+    && match.score1 != null
+    && match.score2 != null
+  ));
+  if (!isRoundComplete) return;
+
+  const courtCount = completedMatches.length;
+  const nextCourtPairs = Array.from({ length: courtCount }, () => []);
+
+  completedMatches.forEach((match, index) => {
+    const pair1 = normalizeIdArray(match.pair1, `round-${lastRound.index}-pair1-${index + 1}`);
+    const pair2 = normalizeIdArray(match.pair2, `round-${lastRound.index}-pair2-${index + 1}`);
+    const score1 = toNum(match.score1, 0);
+    const score2 = toNum(match.score2, 0);
+    const winner = score1 >= score2 ? pair1 : pair2;
+    const loser = score1 >= score2 ? pair2 : pair1;
+    const winnerCourt = Math.max(0, index - 1);
+    const loserCourt = Math.min(courtCount - 1, index + 1);
+    nextCourtPairs[winnerCourt].push(winner);
+    nextCourtPairs[loserCourt].push(loser);
+  });
+
+  if (nextCourtPairs.some((courtPairs) => courtPairs.length !== 2)) return;
+
+  const previousSignature = completedMatches
+    .map((match) => [getPairKey(match.pair1), getPairKey(match.pair2)].sort().join("|"))
+    .join(";");
+  const nextSignature = nextCourtPairs
+    .map((courtPairs) => courtPairs.map((pair) => getPairKey(pair)).sort().join("|"))
+    .join(";");
+
+  const nextRoundIndex = toNum(lastRound.index, sortedRounds.length) + 1;
+  const nextRound = {
+    id: `round-${nextRoundIndex}`,
+    index: nextRoundIndex,
+    collapsed: false,
+    saved: false,
+    byes: [],
+    summary: {
+      mexicanoMode: "paired",
+      movementFromRoundId: lastRound.id,
+      repeatedLayout: previousSignature === nextSignature,
+    },
+    matches: nextCourtPairs.map((courtPairs, index) => ({
+      id: `round-${nextRoundIndex}-match-${index + 1}`,
+      court: completedMatches[index]?.court || tournament.courts?.[index] || `Корт №${index + 1}`,
+      courtIndex: toNum(completedMatches[index]?.courtIndex, index),
+      pair1: courtPairs[0],
+      pair2: courtPairs[1],
+      score1: null,
+      score2: null,
+    })),
+  };
+
+  tournament.rounds.push(nextRound);
+};
+
+maybeAppendPairedMexicanoRound();
+
 const standings = Object.values(players)
   .map((player) => {
     const playedPoints = roundTo(player.stats.playedPoints, 2);

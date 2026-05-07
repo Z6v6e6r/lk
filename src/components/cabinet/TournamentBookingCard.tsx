@@ -10,6 +10,7 @@ interface TournamentBookingCardProps {
   active: boolean;
   customTournament?: TournamentHistoryRecord | null;
   loadBookings?: () => void;
+  onOpenDetails?: (booking: Booking) => void;
 }
 
 function formatDate(dateStr: string) {
@@ -152,6 +153,7 @@ export function TournamentBookingCard({
   active,
   customTournament = null,
   loadBookings,
+  onOpenDetails,
 }: TournamentBookingCardProps) {
   const [cancelState, setCancelState] = useState<"idle" | "confirm" | "done">("idle");
   const [cancelOk, setCancelOk] = useState(false);
@@ -177,8 +179,25 @@ export function TournamentBookingCard({
     setCancelState("done");
   };
 
+  const handleOpenDetails = () => {
+    onOpenDetails?.(booking);
+  };
+
   return (
-    <div className={`game-created-card ${styles.card}`}>
+    <div
+      className={`game-created-card ${styles.card}${onOpenDetails ? " game-created-card-clickable" : ""}`}
+      onClick={onOpenDetails ? handleOpenDetails : undefined}
+      role={onOpenDetails ? "button" : undefined}
+      tabIndex={onOpenDetails ? 0 : undefined}
+      onKeyDown={onOpenDetails
+        ? (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              handleOpenDetails();
+            }
+          }
+        : undefined}
+    >
       <div className="game-created-head">
         <div className="game-created-head-main">
           <div className={`game-created-date ${styles.title}`}>{title}</div>
@@ -209,7 +228,10 @@ export function TournamentBookingCard({
           </div>
         </div>
 
-        <div className="game-created-head-right">
+        <div
+          className="game-created-head-right"
+          onClick={onOpenDetails ? (event) => event.stopPropagation() : undefined}
+        >
           {date && (
             <CalendarDateBadge
               monthLabel={date.short}
@@ -224,7 +246,13 @@ export function TournamentBookingCard({
 
       {canCancel && cancelState === "idle" && (
         <div className={`booking-cancel-row ${styles.actionRow}`}>
-          <button className="btn-cancel danger" onClick={() => setCancelState("confirm")}>
+          <button
+            className="btn-cancel danger"
+            onClick={(event) => {
+              event.stopPropagation();
+              setCancelState("confirm");
+            }}
+          >
             Отменить запись
           </button>
         </div>
@@ -232,14 +260,36 @@ export function TournamentBookingCard({
 
       {cancelState === "confirm" && (
         <div className={`booking-cancel-row ${styles.actionRow}`}>
-          <button className="btn-cancel outline" onClick={() => setCancelState("idle")}>Нет</button>
-          <button className="btn-cancel danger" onClick={handleCancel}>Да, отменить</button>
+          <button
+            className="btn-cancel outline"
+            onClick={(event) => {
+              event.stopPropagation();
+              setCancelState("idle");
+            }}
+          >
+            Нет
+          </button>
+          <button
+            className="btn-cancel danger"
+            onClick={(event) => {
+              event.stopPropagation();
+              void handleCancel();
+            }}
+          >
+            Да, отменить
+          </button>
         </div>
       )}
 
       {cancelState === "done" && (
         <div className={`booking-cancel-row ${styles.actionRow}`}>
-          <button className="btn-cancel primary" onClick={() => { if (loadBookings) loadBookings(); }}>
+          <button
+            className="btn-cancel primary"
+            onClick={(event) => {
+              event.stopPropagation();
+              if (loadBookings) loadBookings();
+            }}
+          >
             {cancelOk ? "Запись отменена, продолжить" : "Ошибка — закрыть"}
           </button>
         </div>

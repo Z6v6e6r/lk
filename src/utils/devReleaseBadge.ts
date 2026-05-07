@@ -6,7 +6,7 @@ type DevReleaseBadgeOptions = {
 
 const BADGE_ID = "lk-dev-release-badge";
 const BADGE_REFRESH_DELAY_MS = 1500;
-const BADGE_REVEAL_TAP_TARGET = 5;
+const BADGE_REVEAL_TAP_TARGET = 6;
 const BADGE_REVEAL_RESET_MS = 1400;
 const BADGE_REVEAL_CORNER_SIZE_PX = 56;
 
@@ -63,7 +63,8 @@ function resolveBundleVersion(bundleFileNames: string[]): string | null {
 }
 
 function renderBadgeText(version: string | null): string {
-  return version ? `dev ${version}` : "dev version pending";
+  const modeLabel = import.meta.env.MODE === "dev" ? "dev" : "prod";
+  return version ? `${modeLabel} ${version}` : `${modeLabel} version pending`;
 }
 
 function resetBadgeRevealProgress() {
@@ -165,10 +166,6 @@ function ensureBadge(): HTMLDivElement | null {
 }
 
 export function mountDevReleaseBadge(options: DevReleaseBadgeOptions) {
-  if (import.meta.env.MODE !== "dev") {
-    return;
-  }
-
   if (typeof window === "undefined" || typeof document === "undefined") {
     return;
   }
@@ -181,7 +178,7 @@ export function mountDevReleaseBadge(options: DevReleaseBadgeOptions) {
     if (badge.textContent !== text) {
       badge.textContent = text;
     }
-    badge.title = version ? `Loaded dev release: ${version}` : "Loaded dev release is not resolved yet";
+    badge.title = version ? `Loaded script version: ${version}` : "Loaded script version is not resolved yet";
   };
 
   updateBadge();

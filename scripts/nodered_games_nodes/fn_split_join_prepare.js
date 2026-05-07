@@ -23,6 +23,37 @@ const normalizePhone = (value) => {
   return digits;
 };
 
+const parseTimeMinutes = (value) => {
+  const text = toStr(value);
+  if (!text) return null;
+  const matched = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!matched) return null;
+  const hours = Number(matched[1]);
+  const minutes = Number(matched[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+};
+
+const resolveDurationMinutes = (from, to, explicitDuration) => {
+  const explicit = toNumber(explicitDuration);
+  if (explicit && explicit > 0) return explicit;
+  const fromMinutes = parseTimeMinutes(from);
+  const toMinutes = parseTimeMinutes(to);
+  if (fromMinutes === null || toMinutes === null) return 60;
+  const delta = toMinutes >= fromMinutes
+    ? toMinutes - fromMinutes
+    : toMinutes + 24 * 60 - fromMinutes;
+  return delta > 0 ? delta : 60;
+};
+
+const resolveShareAmount = (baseAmount, durationMinutes, includesDuration) => {
+  const safeBase = toNumber(baseAmount);
+  if (safeBase === null) return null;
+  if (includesDuration === true) return safeBase;
+  return Math.round(safeBase * Math.max(durationMinutes, 1) / 60);
+};
+
 const fail = (status, error, details) => {
   msg.statusCode = status;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };
@@ -51,7 +82,14 @@ const exerciseId =
 const clientPhone = normalizePhone(body.clientPhone || body.phone);
 const studioId = toStr(body.studioId) || toStr(booking.studioId);
 const shareCount = Number(body.shareCount) === 2 || Number(splitPayment.shareCount) === 2 ? 2 : 4;
-const shareAmount = toNumber(body.shareAmount) ?? toNumber(splitPayment.shareAmount) ?? (shareCount === 2 ? 500 : 250);
+const durationMinutes = resolveDurationMinutes(booking.timeFrom, booking.timeTo, body.durationMinutes || booking.durationMinutes);
+const bodyShareAmount = toNumber(body.shareAmount);
+const storedShareAmount = toNumber(splitPayment.shareAmount);
+const defaultShareAmount = shareCount === 2 ? 500 : 250;
+const shareAmount =
+  bodyShareAmount !== null
+    ? (resolveShareAmount(bodyShareAmount, durationMinutes, body.shareAmountIncludesDuration === true) ?? defaultShareAmount)
+    : storedShareAmount ?? resolveShareAmount(defaultShareAmount, durationMinutes, false) ?? defaultShareAmount;
 const maxClientsCount = Math.max(1, Math.min(4, Math.floor(toNumber(body.maxClientsCount) ?? shareCount)));
 const spotRaw = toNumber(body.spot);
 const spot = spotRaw === null ? null : Math.max(1, Math.min(4, Math.floor(spotRaw)));
@@ -71,6 +109,7 @@ msg._splitCtx = {
   clientPhone,
   shareCount,
   shareAmount,
+  durationMinutes,
   maxClientsCount,
   spot,
   successUrl: toStr(body.successUrl) || toStr(body.baseRedirectUrl),

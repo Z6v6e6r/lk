@@ -12,6 +12,10 @@ export type WidgetModule = {
   unmount?: (targetId?: string) => void;
 };
 
+export type LoadWidgetOptions = {
+  forceReload?: boolean;
+};
+
 export type WidgetGlobalName =
   | "LKWidgetGames"
   | "LKWidgetTournaments"
@@ -54,6 +58,18 @@ function swapPadlHubOrigin(url: URL): URL | null {
 
 function buildCandidateSources(src: string): string[] {
   const baseUrl = typeof window !== "undefined" ? window.location.href : undefined;
+  const runtimeCacheBust = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const withRuntimeCacheBust = (candidate: string): string => {
+    const versioned = appendBundleVersion(candidate);
+    try {
+      const url = new URL(versioned, baseUrl);
+      url.searchParams.set("module_ts", runtimeCacheBust);
+      return url.toString();
+    } catch {
+      const separator = versioned.includes("?") ? "&" : "?";
+      return `${versioned}${separator}module_ts=${encodeURIComponent(runtimeCacheBust)}`;
+    }
+  };
 
   try {
     const resolved = new URL(src, baseUrl);
@@ -71,9 +87,9 @@ function buildCandidateSources(src: string): string[] {
       candidates.push(swappedOrigin.toString());
     }
 
-    return dedupeUrls(candidates).map((candidate) => appendBundleVersion(candidate));
+    return dedupeUrls(candidates).map(withRuntimeCacheBust);
   } catch {
-    return [appendBundleVersion(src)];
+    return [withRuntimeCacheBust(src)];
   }
 }
 
@@ -100,14 +116,23 @@ function loadWidgetScript(src: string, globalName: WidgetGlobalName): Promise<Wi
   });
 }
 
-export function loadWidget(src: string, globalName: WidgetGlobalName): Promise<WidgetModule> {
+export function loadWidget(
+  src: string,
+  globalName: WidgetGlobalName,
+  options: LoadWidgetOptions = {},
+): Promise<WidgetModule> {
   const appWindow = window as unknown as AppWindow;
-  if (appWindow[globalName]) {
+  if (options.forceReload) {
+    scriptPromises[globalName] = undefined;
+    appWindow[globalName] = undefined;
+  }
+
+  if (!options.forceReload && appWindow[globalName]) {
     return Promise.resolve(appWindow[globalName] as WidgetModule);
   }
 
   const pending = scriptPromises[globalName];
-  if (pending) {
+  if (!options.forceReload && pending) {
     return pending;
   }
 

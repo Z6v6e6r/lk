@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { OverlayScopeProvider } from "./context/OverlayScopeContext";
 import { AuthForm } from "./components/auth/AuthForm";
 import TournamentsPage from "./components/tournaments/TournamentsPage";
+import type { TournamentsMountData } from "./types/tournamentsOverlay";
 import {
   installGlobalErrorTracking,
   trackAnalyticsEvent,
@@ -15,7 +16,7 @@ import {
 import { mountDevReleaseBadge } from "./utils/devReleaseBadge";
 import { ensureFreshRelease } from "./utils/releaseGuard";
 
-type MountOptions = { targetId?: string; onClose?: () => void };
+type MountOptions = { targetId?: string; onClose?: () => void; data?: TournamentsMountData };
 type TournamentsWidgetModule = { mount: typeof mount; unmount: typeof unmount };
 
 let tournamentsRoot: ReturnType<typeof createRoot> | null = null;
@@ -25,7 +26,7 @@ mountDevReleaseBadge({ bundleFileNames: ["tournaments.js", "tournaments-dev.js"]
 installGlobalErrorTracking();
 trackAnalyticsEvent("widget_bundle_loaded", { entry: "tournaments" });
 
-function TournamentsContent({ onClose }: { onClose?: () => void }) {
+function TournamentsContent({ data, onClose }: { data?: TournamentsMountData; onClose?: () => void }) {
   const { isAuthenticated } = useAuth();
   const [ready, setReady] = useState(false);
 
@@ -41,13 +42,19 @@ function TournamentsContent({ onClose }: { onClose?: () => void }) {
     return <AuthForm onLogin={() => {}} />;
   }
 
-  return <TournamentsPage onBack={() => onClose?.()} />;
+  return (
+    <TournamentsPage
+      onBack={() => onClose?.()}
+      initialOpenTournamentId={data?.tournamentId ?? null}
+      initialOpenDate={data?.date ?? null}
+    />
+  );
 }
 
-function TournamentsApp({ onClose }: { onClose?: () => void }) {
+function TournamentsApp({ data, onClose }: { data?: TournamentsMountData; onClose?: () => void }) {
   return (
     <AuthProvider>
-      <TournamentsContent onClose={onClose} />
+      <TournamentsContent data={data} onClose={onClose} />
     </AuthProvider>
   );
 }
@@ -73,7 +80,7 @@ function mount(options: MountOptions = {}) {
       <StrictMode>
         <OverlayScopeProvider value={isOverlayScope}>
           <AppErrorBoundary module="tournaments">
-            <TournamentsApp onClose={options.onClose} />
+            <TournamentsApp data={options.data} onClose={options.onClose} />
           </AppErrorBoundary>
         </OverlayScopeProvider>
       </StrictMode>,

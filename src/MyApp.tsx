@@ -22,6 +22,7 @@ import { trackAnalyticsEvent, trackClientError } from "./utils/analytics";
 import { PAYMENT_REF_QUERY_KEY, processPendingPaymentSyncQueue } from "./utils/paymentSync";
 import { syncGamesCommunityAutopublish } from "./utils/gameCommunityAutopublish";
 import type { GamesMountData, OpenGamesOptions } from "./types/gamesOverlay";
+import type { OpenTournamentsOptions, TournamentsMountData } from "./types/tournamentsOverlay";
 import type { UserProfileType } from "./utils/apiClient";
 import "./MyApp.css";
 
@@ -33,7 +34,7 @@ type OnboardingMountData = {
 };
 
 type OverlayModuleName = "games" | "tournaments" | "onboarding";
-type OverlayData = GamesMountData | OnboardingMountData | undefined;
+type OverlayData = GamesMountData | TournamentsMountData | OnboardingMountData | undefined;
 
 type AppWindow = Window & Record<WidgetGlobalName, WidgetModule | undefined> & {
   __LK_ON_READY?: () => void;
@@ -460,9 +461,14 @@ function AppContent() {
           );
         } else if (module === "tournaments") {
           const mod = await import("./components/tournaments/TournamentsPage");
+          const tournamentsData = data as TournamentsMountData | undefined;
           overlayRoot.render(
             <OverlayScopeProvider value>
-              <mod.default onBack={onBack} />
+              <mod.default
+                onBack={onBack}
+                initialOpenTournamentId={tournamentsData?.tournamentId ?? null}
+                initialOpenDate={tournamentsData?.date ?? null}
+              />
             </OverlayScopeProvider>,
           );
         } else {
@@ -506,7 +512,7 @@ function AppContent() {
     }
 
     try {
-      const widget = await loadWidget(src!, globalName!);
+      const widget = await loadWidget(src!, globalName!, { forceReload: module === "games" });
       widget.mount({
         targetId: OVERLAY_ID,
         onClose: () => {
@@ -657,6 +663,7 @@ function AppContent() {
       <RemoteWidgetHost
         src={GAMES_BUNDLE_URL}
         globalName="LKWidgetGames"
+        forceReload
         data={{
           joinGameId: joinRouteData.gameId,
           cabinetUrl: joinRouteData.cabinetUrl,
@@ -676,6 +683,7 @@ function AppContent() {
       <RemoteWidgetHost
         src={GAMES_BUNDLE_URL}
         globalName="LKWidgetGames"
+        forceReload
         data={{
           publicCreateEntry: true,
           presetStudioId: createRouteData.studioId,
@@ -707,6 +715,7 @@ function AppContent() {
       <RemoteWidgetHost
         src={GAMES_BUNDLE_URL}
         globalName="LKWidgetGames"
+        forceReload
         data={{
           publicFindEntry: true,
           presetStudioId: findRouteData.studioId,
@@ -746,12 +755,14 @@ function AppContent() {
     return (
         <Cabinet
         onOpenGames={(options?: OpenGamesOptions) => {
-          const hasOptions = Boolean(options?.gameId || options?.createFromBooking);
+          const hasOptions = Boolean(options?.gameId || options?.joinGameId || options?.createFromBooking);
           const data: GamesMountData | undefined = hasOptions
             ? {
                 openGameId: options?.gameId ?? null,
+                joinGameId: options?.joinGameId ?? null,
                 openChat: options?.openChat === true,
                 createFromBooking: options?.createFromBooking ?? null,
+                cabinetUrl: options?.cabinetUrl ?? DEFAULT_CABINET_URL,
               }
             : undefined;
           return openOverlayModule(
@@ -761,11 +772,17 @@ function AppContent() {
             data,
           );
         }}
-        onOpenTournaments={() =>
+        onOpenTournaments={(options?: OpenTournamentsOptions) =>
           openOverlayModule(
             "tournaments",
             TOURNAMENTS_BUNDLE_URL,
             "LKWidgetTournaments",
+            options?.tournamentId || options?.date
+              ? {
+                  tournamentId: options.tournamentId ?? null,
+                  date: options.date ?? null,
+                }
+              : undefined,
           )}
         onOpenOnboarding={(data) =>
           openOverlayModule(

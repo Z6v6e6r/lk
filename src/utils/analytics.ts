@@ -1,5 +1,9 @@
 import { useEffect } from "react";
 import { SERV2, TENANT_KEY } from "../consts/api_config";
+import {
+  identifyFirebaseAnalyticsUser,
+  trackFirebaseAnalyticsEvent,
+} from "./firebase";
 
 type AnalyticsPayload = Record<string, unknown>;
 
@@ -539,6 +543,8 @@ export function identifyAnalyticsUser(payload: IdentifyAnalyticsUserPayload) {
     }
   }
 
+  identifyFirebaseAnalyticsUser(payload);
+
   if (!changed) return;
   userContext = nextContext;
   saveUserContext();
@@ -551,6 +557,9 @@ export function trackAnalyticsEvent(
 ) {
   const eventName = trimString(event);
   if (!eventName) return;
+
+  trackFirebaseAnalyticsEvent(eventName, payload);
+
   if (ANALYTICS_ERRORS_ONLY && eventName !== "client_error") return;
   if (isAnalyticsTemporarilyDisabled()) return;
 

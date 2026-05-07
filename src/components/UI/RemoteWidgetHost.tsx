@@ -5,6 +5,7 @@ interface RemoteWidgetHostProps {
   src?: string;
   globalName: WidgetGlobalName;
   data?: unknown;
+  forceReload?: boolean;
   loadingText?: string;
   errorTitle?: string;
   className?: string;
@@ -19,6 +20,7 @@ export function RemoteWidgetHost({
   src,
   globalName,
   data,
+  forceReload = false,
   loadingText = "Загрузка...",
   errorTitle = "Не удалось загрузить модуль",
   className,
@@ -43,7 +45,7 @@ export function RemoteWidgetHost({
 
     const mountWidget = async () => {
       try {
-        const widget = await loadWidget(src, globalName);
+        const widget = await loadWidget(src, globalName, { forceReload });
         if (cancelled) return;
 
         widgetRef.current = widget;
@@ -69,7 +71,7 @@ export function RemoteWidgetHost({
       }
       widgetRef.current = null;
     };
-  }, [globalName, src, targetId]);
+  }, [forceReload, globalName, src, targetId]);
 
   useEffect(() => {
     if (!mountedRef.current || !widgetRef.current) return;

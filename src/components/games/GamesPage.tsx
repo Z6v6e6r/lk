@@ -46,6 +46,7 @@ import {
 } from "../../utils/communityApi";
 import { Modal } from "../UI/Modal";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
+import { ChatIcon } from "../cabinet/community-feed/CommunityIcons";
 import {
   PAYMENT_REF_QUERY_KEY,
   enqueuePendingPaymentSync,
@@ -101,7 +102,7 @@ const MAX_MATCH_RESULT_ATTACHMENTS = 6;
 const MATCH_RESULT_IMAGE_MAX_SIDE = 1600;
 const MATCH_RESULT_DISPUTE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const CHAT_READ_STORAGE_KEY_PREFIX = "padlhub.chat.lastRead.v1";
-const PUBLIC_GAMES_ORIGIN_FALLBACK = "https://padlhub.su";
+const PUBLIC_GAMES_ORIGIN_FALLBACK = "https://padlhub.ru";
 const INVITE_JOIN_PATH = PUBLIC_INVITE_PATH;
 const CHAT_MESSAGE_BG_PALETTE = [
   "#f5efff",
@@ -126,14 +127,16 @@ const SPLIT_PAYMENT_DEADLINE_HOURS = 6;
 function resolveSplitShareAmount(
   shareCount: SplitShareCount,
   config: PadelSplitPaymentPromoConfig,
+  durationMinutes = 60,
 ): number {
-  return shareCount === 4
+  const baseAmount = shareCount === 4
     ? config.shareAmounts.fourPlayers
     : config.shareAmounts.twoTeams;
+  return Math.round(baseAmount * Math.max(durationMinutes, 1) / 60);
 }
 
-function resolveSplitBaseShareAmount(config: PadelSplitPaymentPromoConfig): number {
-  return config.baseShareAmount;
+function resolveSplitBaseShareAmount(config: PadelSplitPaymentPromoConfig, durationMinutes = 60): number {
+  return Math.round(config.baseShareAmount * Math.max(durationMinutes, 1) / 60);
 }
 
 function splitConfigListAllows(
@@ -198,6 +201,25 @@ function isSplitPaymentPromoAvailableForSelection(params: {
     params.config.roomNameIncludes,
     params.roomId,
     params.roomName,
+  );
+}
+
+function resolveSplitPaymentPromoConfigForSelection(params: {
+  config: PadelSplitPaymentPromoConfig;
+  date: Date | null;
+  studioId: string | null;
+  studioName: string | null;
+  roomId: string | null;
+  roomName: string | null;
+}): PadelSplitPaymentPromoConfig {
+  const candidates = params.config.promos?.length ? params.config.promos : [params.config];
+  return (
+    candidates.find((candidate) =>
+      isSplitPaymentPromoAvailableForSelection({
+        ...params,
+        config: candidate,
+      }),
+    ) ?? params.config
   );
 }
 
@@ -358,7 +380,11 @@ function resolveInviteCabinetBaseUrl(): URL | null {
   }
 
   try {
-    return new URL(INVITE_JOIN_PATH, PUBLIC_INVITE_ORIGIN);
+    const inviteUrl = new URL(INVITE_JOIN_PATH, PUBLIC_INVITE_ORIGIN);
+    if (inviteUrl.hostname === "padlhub.su") {
+      inviteUrl.hostname = "padlhub.ru";
+    }
+    return inviteUrl;
   } catch {
     return parsedCabinetUrl;
   }
@@ -4313,7 +4339,7 @@ export default function GamesPage({
   const showInlinePaymentSection = !isBookingPresetMode && canProceedToPayment;
   const basePaymentAmount = slotPrice ?? selectedSlot?.price ?? selectedCourt?.price ?? null;
   const paymentAmount = promoPricePreview ?? basePaymentAmount;
-  const splitPaymentAvailable = isSplitPaymentPromoAvailableForSelection({
+  const activeSplitPaymentPromoConfig = resolveSplitPaymentPromoConfigForSelection({
     config: splitPaymentPromoConfig,
     date: selectedDate,
     studioId,
@@ -4321,9 +4347,17 @@ export default function GamesPage({
     roomId: courtId,
     roomName: selectedCourtName,
   });
+  const splitPaymentAvailable = isSplitPaymentPromoAvailableForSelection({
+    config: activeSplitPaymentPromoConfig,
+    date: selectedDate,
+    studioId,
+    studioName,
+    roomId: courtId,
+    roomName: selectedCourtName,
+  });
   const splitPaymentSelected = splitPaymentAvailable && paymentMode === "split";
-  const splitShareAmount = resolveSplitShareAmount(splitShareCount, splitPaymentPromoConfig);
-  const splitBaseShareAmount = resolveSplitBaseShareAmount(splitPaymentPromoConfig);
+  const splitShareAmount = resolveSplitShareAmount(splitShareCount, activeSplitPaymentPromoConfig, duration);
+  const splitBaseShareAmount = resolveSplitBaseShareAmount(activeSplitPaymentPromoConfig, duration);
   const splitDiscountAmount = Math.max(splitBaseShareAmount - splitShareAmount, 0);
   const splitPaymentSummary = `${formatPrice(splitShareAmount)} ₽ × ${splitShareCount}`;
   const paymentTitle = loadingPay
@@ -5244,6 +5278,7 @@ export default function GamesPage({
       }
     } else {
       detailsParticipants.forEach((player) => pushAvailablePlayer(player));
+      detailsWaitlist.forEach((player) => pushAvailablePlayer(player));
     }
 
     const usedKeys = new Set<string>(
@@ -6261,14 +6296,14 @@ export default function GamesPage({
     const clientId = profile.clientId;
     const clientPhone = profile.clientPhone;
 
-    const shareAmount = resolveSplitShareAmount(splitShareCount, splitPaymentPromoConfig);
-    const baseShareAmount = resolveSplitBaseShareAmount(splitPaymentPromoConfig);
+    const shareAmount = resolveSplitShareAmount(splitShareCount, activeSplitPaymentPromoConfig, duration);
+    const baseShareAmount = resolveSplitBaseShareAmount(activeSplitPaymentPromoConfig, duration);
     const discountAmount = Math.max(baseShareAmount - shareAmount, 0);
     const paymentResult = await apiCreatePadelSplitGamePayment({
       date: fromDate,
       fromTime,
       toTime,
-      activeTo: splitPaymentPromoConfig.activeTo ?? null,
+      activeTo: activeSplitPaymentPromoConfig.activeTo ?? null,
       studioId,
       roomId: courtId,
       studioName,
@@ -6281,10 +6316,12 @@ export default function GamesPage({
       failUrl: baseRedirectUrl,
       shareCount: splitShareCount,
       shareAmount,
+      shareAmountIncludesDuration: true,
+      durationMinutes: duration,
       maxClientsCount: splitShareCount,
       spot: 1,
-      vivaDirectionId: splitPaymentPromoConfig.vivaDirectionId,
-      vivaExerciseTypeId: splitPaymentPromoConfig.vivaExerciseTypeId,
+      vivaDirectionId: activeSplitPaymentPromoConfig.vivaDirectionId,
+      vivaExerciseTypeId: activeSplitPaymentPromoConfig.vivaExerciseTypeId,
     });
 
     if (paymentResult.error || !paymentResult.data) {
@@ -6338,8 +6375,8 @@ export default function GamesPage({
       vivaExerciseId: paymentResult.data.exerciseId,
       organizerBookingId: paymentResult.data.bookingId,
       productId: paymentResult.data.productId,
-      directionId: splitPaymentPromoConfig.vivaDirectionId,
-      exerciseTypeId: splitPaymentPromoConfig.vivaExerciseTypeId,
+      directionId: activeSplitPaymentPromoConfig.vivaDirectionId,
+      exerciseTypeId: activeSplitPaymentPromoConfig.vivaExerciseTypeId,
       payments: [
         {
           role: "ORGANIZER",
@@ -6494,7 +6531,7 @@ export default function GamesPage({
     selectedSlotId,
     resolvedSelectedSubServiceIds,
     splitPaymentAvailable,
-    splitPaymentPromoConfig,
+    activeSplitPaymentPromoConfig,
     splitShareCount,
     resolvedGameFormat,
     buildCommunityAutopublishMetadata,
@@ -7009,7 +7046,7 @@ export default function GamesPage({
     try {
       await shareOrCopyGameInvitePayload(inviteLink, activeGameRecord, {
         includePreviewImage: true,
-        preferNativeShare: true,
+        preferNativeShare: false,
       });
       setInviteCopied(true);
       window.setTimeout(() => setInviteCopied(false), 1600);
@@ -7809,6 +7846,11 @@ export default function GamesPage({
       teamSlots ? cloneTeamSlots(teamSlots) : null
     ));
     const nextSlots = [...detailsTeamSlots];
+    const previousSlotPlayer = detailsTeamSlots[slotIndex] ?? null;
+    const previousSlotKey = getPadelPlayerIdentityKey(previousSlotPlayer);
+    const targetFromWaitlist = Boolean(targetKey && detailsWaitlist.some((item) => (
+      getPadelPlayerIdentityKey(item) === targetKey
+    )));
     if (playerForSlot) {
       nextSlots.forEach((slotPlayer, index) => {
         const slotKey = getPadelPlayerIdentityKey(slotPlayer);
@@ -7827,6 +7869,51 @@ export default function GamesPage({
     setDetailsTeamSlots(nextSlots);
     setDetailsMatchResultSetPairings(nextSetPairings);
     setDetailsTeamMenuSlotIndex(null);
+    if (playerForSlot && targetKey && targetFromWaitlist) {
+      const shouldDemotePreviousSlot = Boolean(
+        previousSlotPlayer
+        && previousSlotKey
+        && previousSlotKey !== targetKey
+        && !detailsHasFreeSlots,
+      );
+      const normalizedParticipantsBase = detailsParticipants.filter((item) => {
+        const itemKey = getPadelPlayerIdentityKey(item);
+        if (itemKey === targetKey) return false;
+        if (shouldDemotePreviousSlot && itemKey && itemKey === previousSlotKey) return false;
+        return true;
+      });
+      const normalizedParticipants = normalizedParticipantsBase.some((item) => (
+        getPadelPlayerIdentityKey(item) === targetKey
+      ))
+        ? normalizedParticipantsBase
+        : [...normalizedParticipantsBase, playerForSlot];
+      const normalizedWaitlistBase = detailsWaitlist.filter((item) => (
+        getPadelPlayerIdentityKey(item) !== targetKey
+      ));
+      const normalizedWaitlist = shouldDemotePreviousSlot && previousSlotPlayer
+        ? [
+            ...normalizedWaitlistBase,
+            {
+              ...previousSlotPlayer,
+              status: "WAITLIST" as const,
+            },
+          ]
+        : normalizedWaitlistBase;
+      const nextMetadata = buildDetailsRosterMetadata(normalizedParticipants, normalizedWaitlist, {
+        teamSlots: nextSlots,
+        setPairings: nextSetPairings,
+      });
+      const saved = await patchGameRoster(normalizedParticipants, normalizedWaitlist, {
+        metadata: nextMetadata,
+        fallbackErrorMessage: "Не удалось добавить игрока из листа ожидания",
+      });
+      if (!saved) {
+        setDetailsTeamSlots(previousSlots);
+        setDetailsMatchResultSetPairings(previousSetPairings);
+      }
+      return;
+    }
+
     const saved = await persistTeamSlots(nextSlots, { setPairings: nextSetPairings });
     if (!saved) {
       setDetailsTeamSlots(previousSlots);
@@ -9312,6 +9399,24 @@ export default function GamesPage({
       matchResultSetsForDisplay.length,
       detailsTeamSlots,
     );
+    const hasAnyMatchResultScoreInput = detailsMatchResultSets.some((setItem) => (
+      setItem.left.trim() !== "" || setItem.right.trim() !== ""
+    ));
+    const shouldHandleMatchResultFromFooter = detailsActiveTab === "result"
+      && !isMatchResultPendingReview
+      && !isMatchResultAgreed
+      && canEditMatchResult;
+    const shouldSubmitMatchResultFromFooter = shouldHandleMatchResultFromFooter && hasAnyMatchResultScoreInput;
+    const detailsFooterSubmitDisabled = shouldHandleMatchResultFromFooter && updatingGameMeta;
+    const detailsFooterSubmitLabel = shouldHandleMatchResultFromFooter
+      ? (
+        updatingGameMeta
+          ? "Сохраняем..."
+          : hasAnyMatchResultScoreInput
+            ? "Отправить на согласование"
+            : "Внести результат"
+      )
+      : "Отлично";
     const canUploadMatchResultPhotos = isCurrentUserConfirmedParticipant
       && !isMatchResultPendingReview
       && !isMatchResultAgreed
@@ -9385,6 +9490,123 @@ export default function GamesPage({
       && !isMatchResultVivaSynced;
     const useStartedMatchDetailsLayout = isDetailsMatchStarted;
     const detailsTeamCardTitle = useStartedMatchDetailsLayout ? "Команды" : "Команда";
+    const detailsTeamEditorBlock = (
+      <div className="details-team-card">
+        <div className="details-team-header">
+          <div className="details-team-title">{detailsTeamCardTitle}</div>
+          <div className="details-team-subtitle">{detailsTeamSubtitle}</div>
+        </div>
+        <div className={`details-team-pairs${detailsMaxPlayers <= 2 ? " details-team-pairs-singles" : ""}`}>
+          {detailsTeamPairIndexes.map((slotIndexes, pairIndex) => {
+            return (
+              <div key={`pair-${pairIndex}`} className="details-team-pair">
+                {useStartedMatchDetailsLayout && (
+                  <div className="details-team-pair-label">{`Команда ${pairIndex + 1}`}</div>
+                )}
+                <div className="details-team-pair-slots">
+                  {slotIndexes.map((slotIndex) => {
+                    const slotPlayer = detailsTeamSlots[slotIndex];
+                    const slotLevelLabel = normalizePlayerRatingLabel(slotPlayer?.rating ?? null);
+                    const slotLevelProgress = getPlayerRatingProgress(slotLevelLabel);
+                    const slotRingProgressDeg = slotLevelProgress != null
+                      ? `${Math.max(0, Math.min(360, Math.round(slotLevelProgress * 360)))}deg`
+                      : "0deg";
+                    const slotIsOrganizerLocked =
+                      slotIndex === 0 && detailsOrganizerInMatch && Boolean(detailsOrganizerPlayer);
+                    const slotDisabled = updatingGameMeta
+                      || (slotIsOrganizerLocked && !canManagePlayersInDetails)
+                      || (!canManagePlayersInDetails
+                        && (!isCurrentUserConfirmedParticipant || (slotIndex === 0 && detailsOrganizerInMatch)));
+                    return (
+                      <div key={`team-slot-${slotIndex}`} className="details-team-slot-wrap">
+                        <button
+                          type="button"
+                          className={`details-team-slot${slotPlayer ? "" : " empty"}${slotIsOrganizerLocked ? " locked" : ""}`}
+                          onClick={() => {
+                            void handleTeamSlotTap(slotIndex);
+                          }}
+                          disabled={slotDisabled}
+                        >
+                          <div
+                            className={`details-team-slot-ring${slotLevelLabel ? " has-level" : ""}`}
+                            style={{ "--player-ring-progress": slotRingProgressDeg } as CSSProperties}
+                          >
+                            <AvatarWithInitialsFallback
+                              src={slotPlayer?.photo}
+                              alt={slotPlayer?.name || "Игрок"}
+                              imageClassName="details-team-slot-avatar"
+                              fallbackClassName="details-team-slot-avatar details-team-slot-avatar-fallback"
+                              fallbackText={getPlayerInitials(slotPlayer?.name || "") || "+"}
+                            />
+                          </div>
+                          {slotLevelLabel && (
+                            <div className="details-team-slot-level">{slotLevelLabel}</div>
+                          )}
+                        </button>
+                        <div className="details-team-slot-name">
+                          {slotPlayer?.name || "Свободно"}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {detailsTeamMenuSlotIndex != null && canManagePlayersInDetails && (
+          <div className="details-team-picker">
+            <div className="details-team-picker-title">
+              {`Слот ${detailsTeamMenuSlotIndex + 1}: выберите игрока`}
+            </div>
+            <div className="details-team-picker-list">
+              {detailsTeamMenuOptions.map((player) => {
+                const playerKey = getPadelPlayerIdentityKey(player) || `${player.name}-${player.phone}`;
+                const isWaitlistPlayer = detailsWaitlist.some((item) => (
+                  getPadelPlayerIdentityKey(item) === getPadelPlayerIdentityKey(player)
+                ));
+                return (
+                  <button
+                    key={playerKey}
+                    type="button"
+                    className="details-team-picker-item"
+                    onClick={() => {
+                      void handleTeamSlotPick(detailsTeamMenuSlotIndex, player);
+                    }}
+                    disabled={updatingGameMeta}
+                  >
+                    {player.name || "Игрок"}
+                    {isWaitlistPlayer ? " · лист ожидания" : ""}
+                  </button>
+                );
+              })}
+              {detailsTeamMenuSlotIndex !== 0 && detailsTeamSlots[detailsTeamMenuSlotIndex] && (
+                <button
+                  type="button"
+                  className="details-team-picker-item danger"
+                  onClick={() => {
+                    void handleTeamSlotPick(detailsTeamMenuSlotIndex, null);
+                  }}
+                  disabled={updatingGameMeta}
+                >
+                  Очистить слот
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        {!canManagePlayersInDetails && isCurrentUserConfirmedParticipant && detailsCurrentUserTeamSlotIndex < 0 && (
+          <div className="details-team-note">
+            Выберите свободный слот в команде
+          </div>
+        )}
+        {!canManagePlayersInDetails && isCurrentUserConfirmedParticipant && detailsCurrentUserTeamSlotIndex >= 0 && (
+          <div className="details-team-note">
+            Слот закреплен. Менять состав может только организатор.
+          </div>
+        )}
+      </div>
+    );
     const matchInfoSection = (
       <div className="game-section">
         {gameRecordError && <div className="game-empty game-pay-error">{gameRecordError}</div>}
@@ -9736,7 +9958,7 @@ export default function GamesPage({
             event.currentTarget.value = "";
           }}
         />
-        {detailsPrimaryMatchPhoto ? (
+        {detailsPrimaryMatchPhoto && (
           <div className="details-result-photo-stage">
             <img
               src={detailsPrimaryMatchPhoto}
@@ -9769,10 +9991,6 @@ export default function GamesPage({
               ×
             </button>
           </div>
-        ) : (
-          <div className="details-result-photo-stage details-result-photo-stage-empty">
-            <div className="details-result-photo-stage-empty-text">Фото матча не добавлено</div>
-          </div>
         )}
         {detailsMatchResultAttachmentsLoading && (
           <div className="details-result-meta">Загружаем фото...</div>
@@ -9799,16 +10017,18 @@ export default function GamesPage({
             ))}
           </div>
         )}
-        <button
-          type="button"
-          className="section-cta section-cta-secondary details-result-share"
-          onClick={() => {
-            void handleShareMatchResultPhoto();
-          }}
-          disabled={!canShareMatchResult}
-        >
-          {sharingMatchResultPhoto ? "Готовим файл..." : "Поделиться результатом"}
-        </button>
+        {detailsPrimaryMatchPhoto && (
+          <button
+            type="button"
+            className="section-cta section-cta-secondary details-result-share"
+            onClick={() => {
+              void handleShareMatchResultPhoto();
+            }}
+            disabled={!canShareMatchResult}
+          >
+            {sharingMatchResultPhoto ? "Готовим файл..." : "Поделиться результатом"}
+          </button>
+        )}
       </div>
     );
     const detailsTabs: Array<{ key: "game" | "result"; label: string }> = isDetailsMatchStarted
@@ -9853,117 +10073,7 @@ export default function GamesPage({
             <>
               {gameDetailsMetaError && <div className="game-empty game-pay-error">{gameDetailsMetaError}</div>}
               {detailsPlayersBlock}
-              <div className="details-team-card">
-                <div className="details-team-header">
-                  <div className="details-team-title">{detailsTeamCardTitle}</div>
-                  <div className="details-team-subtitle">{detailsTeamSubtitle}</div>
-                </div>
-                <div className={`details-team-pairs${detailsMaxPlayers <= 2 ? " details-team-pairs-singles" : ""}`}>
-                  {detailsTeamPairIndexes.map((slotIndexes, pairIndex) => {
-                    return (
-                      <div key={`pair-${pairIndex}`} className="details-team-pair">
-                        {useStartedMatchDetailsLayout && (
-                          <div className="details-team-pair-label">{`Команда ${pairIndex + 1}`}</div>
-                        )}
-                        <div className="details-team-pair-slots">
-                          {slotIndexes.map((slotIndex) => {
-                            const slotPlayer = detailsTeamSlots[slotIndex];
-                            const slotLevelLabel = normalizePlayerRatingLabel(slotPlayer?.rating ?? null);
-                            const slotLevelProgress = getPlayerRatingProgress(slotLevelLabel);
-                            const slotRingProgressDeg = slotLevelProgress != null
-                              ? `${Math.max(0, Math.min(360, Math.round(slotLevelProgress * 360)))}deg`
-                              : "0deg";
-                            const slotIsOrganizerLocked =
-                              slotIndex === 0 && detailsOrganizerInMatch && Boolean(detailsOrganizerPlayer);
-                            const slotDisabled = updatingGameMeta
-                              || (slotIsOrganizerLocked && !canManagePlayersInDetails)
-                              || (!canManagePlayersInDetails
-                                && (!isCurrentUserConfirmedParticipant || (slotIndex === 0 && detailsOrganizerInMatch)));
-                            return (
-                              <div key={`team-slot-${slotIndex}`} className="details-team-slot-wrap">
-                                <button
-                                  type="button"
-                                  className={`details-team-slot${slotPlayer ? "" : " empty"}${slotIsOrganizerLocked ? " locked" : ""}`}
-                                  onClick={() => {
-                                    void handleTeamSlotTap(slotIndex);
-                                  }}
-                                  disabled={slotDisabled}
-                                >
-                                  <div
-                                    className={`details-team-slot-ring${slotLevelLabel ? " has-level" : ""}`}
-                                    style={{ "--player-ring-progress": slotRingProgressDeg } as CSSProperties}
-                                  >
-                                    <AvatarWithInitialsFallback
-                                      src={slotPlayer?.photo}
-                                      alt={slotPlayer?.name || "Игрок"}
-                                      imageClassName="details-team-slot-avatar"
-                                      fallbackClassName="details-team-slot-avatar details-team-slot-avatar-fallback"
-                                      fallbackText={getPlayerInitials(slotPlayer?.name || "") || "+"}
-                                    />
-                                  </div>
-                                  {slotLevelLabel && (
-                                    <div className="details-team-slot-level">{slotLevelLabel}</div>
-                                  )}
-                                </button>
-                                <div className="details-team-slot-name">
-                                  {slotPlayer?.name || "Свободно"}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                {detailsTeamMenuSlotIndex != null && canManagePlayersInDetails && (
-                  <div className="details-team-picker">
-                    <div className="details-team-picker-title">
-                      {`Слот ${detailsTeamMenuSlotIndex + 1}: выберите игрока`}
-                    </div>
-                    <div className="details-team-picker-list">
-                      {detailsTeamMenuOptions.map((player) => {
-                        const playerKey = getPadelPlayerIdentityKey(player) || `${player.name}-${player.phone}`;
-                        return (
-                          <button
-                            key={playerKey}
-                            type="button"
-                            className="details-team-picker-item"
-                            onClick={() => {
-                              void handleTeamSlotPick(detailsTeamMenuSlotIndex, player);
-                            }}
-                            disabled={updatingGameMeta}
-                          >
-                            {player.name || "Игрок"}
-                          </button>
-                        );
-                      })}
-                      {detailsTeamMenuSlotIndex !== 0 && detailsTeamSlots[detailsTeamMenuSlotIndex] && (
-                        <button
-                          type="button"
-                          className="details-team-picker-item danger"
-                          onClick={() => {
-                            void handleTeamSlotPick(detailsTeamMenuSlotIndex, null);
-                          }}
-                          disabled={updatingGameMeta}
-                        >
-                          Очистить слот
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
-                {!canManagePlayersInDetails && isCurrentUserConfirmedParticipant && detailsCurrentUserTeamSlotIndex < 0 && (
-                  <div className="details-team-note">
-                    Выберите свободный слот в команде
-                  </div>
-                )}
-                {!canManagePlayersInDetails && isCurrentUserConfirmedParticipant && detailsCurrentUserTeamSlotIndex >= 0 && (
-                  <div className="details-team-note">
-                    Слот закреплен. Менять состав может только организатор.
-                  </div>
-                )}
-              </div>
+              {detailsTeamEditorBlock}
 
               {isCurrentUserOrganizerOfActiveGame && detailsPublishedCommunityCards.length > 0 && (
                 <div className="team-card game-autopublish-panel">
@@ -10086,28 +10196,97 @@ export default function GamesPage({
                   const previousSetPairing = index > 0
                     ? (matchResultSetPairingsForDisplay[index - 1] ?? null)
                   : null;
-                const setPairingTeamAPlayers = setPairing
-                  ? getMatchResultPairTeamPlayers(setPairing, [0, 1])
+                const isEditableStartPairing = canEditMatchResult && index === 0;
+                const setPairingSlotsForDisplay = isEditableStartPairing
+                  ? cloneTeamSlots(detailsTeamSlots)
+                  : setPairing;
+                const setPairingTeamAPlayers = setPairingSlotsForDisplay
+                  ? getMatchResultPairTeamPlayers(setPairingSlotsForDisplay, [0, 1])
                   : [];
-                const setPairingTeamBPlayers = setPairing
-                  ? getMatchResultPairTeamPlayers(setPairing, [2, 3])
+                const setPairingTeamBPlayers = setPairingSlotsForDisplay
+                  ? getMatchResultPairTeamPlayers(setPairingSlotsForDisplay, [2, 3])
                   : [];
-                const setPairingTeamALabel = setPairing
-                  ? formatMatchResultPairTeamLabel(setPairing, [0, 1])
+                const setPairingTeamALabel = setPairingSlotsForDisplay
+                  ? formatMatchResultPairTeamLabel(setPairingSlotsForDisplay, [0, 1])
                   : null;
-                const setPairingTeamBLabel = setPairing
-                  ? formatMatchResultPairTeamLabel(setPairing, [2, 3])
+                const setPairingTeamBLabel = setPairingSlotsForDisplay
+                  ? formatMatchResultPairTeamLabel(setPairingSlotsForDisplay, [2, 3])
                   : null;
                 const shouldShowSetPairingBlock = Boolean(
-                  (setPairingTeamALabel || setPairingTeamBLabel)
+                  (setPairingTeamALabel || setPairingTeamBLabel || isEditableStartPairing)
+                  && (isEditableStartPairing || !canEditMatchResult || index < detailsCompletedMatchResultSets.length)
                   && (
+                    isEditableStartPairing
+                    ||
                     !previousSetPairing
-                    || !areTeamSlotsEqualByIdentity(setPairing ?? [], previousSetPairing)
+                    || !areTeamSlotsEqualByIdentity(setPairingSlotsForDisplay ?? [], previousSetPairing)
                   )
                 );
                 const setPairingBlockTitle = index === 0
                   ? "Стартовый состав"
                   : `Новый состав перед сетом ${index + 1}`;
+                const renderResultPairingPlayer = (
+                  slotIndex: number,
+                  playerIndex: number,
+                  teamKey: "a" | "b",
+                ) => {
+                  const player = setPairingSlotsForDisplay?.[slotIndex] ?? null;
+                  if (!player && !isEditableStartPairing) return null;
+                  const playerLevelLabel = normalizePlayerRatingLabel(player?.rating ?? null);
+                  const playerLevelProgress = getPlayerRatingProgress(playerLevelLabel);
+                  const playerRingProgressDeg = playerLevelProgress != null
+                    ? `${Math.max(0, Math.min(360, Math.round(playerLevelProgress * 360)))}deg`
+                    : "0deg";
+                  const playerKey = getPadelPlayerIdentityKey(player) || `set-${index}-${teamKey}-${playerIndex}`;
+                  const slotIsOrganizerLocked =
+                    slotIndex === 0 && detailsOrganizerInMatch && Boolean(detailsOrganizerPlayer);
+                  const slotDisabled = updatingGameMeta
+                    || (slotIsOrganizerLocked && !canManagePlayersInDetails)
+                    || (!canManagePlayersInDetails
+                      && (!isCurrentUserConfirmedParticipant || (slotIndex === 0 && detailsOrganizerInMatch)));
+                  const playerContent = (
+                    <>
+                      <div
+                        className={`details-result-set-pairing-player-ring${playerLevelLabel ? " has-level" : ""}`}
+                        style={{ "--player-ring-progress": playerRingProgressDeg } as CSSProperties}
+                      >
+                        <AvatarWithInitialsFallback
+                          src={player?.photo}
+                          alt={player?.name || "Игрок"}
+                          imageClassName="details-result-set-pairing-player-avatar"
+                          fallbackClassName="details-result-set-pairing-player-avatar details-result-set-pairing-player-avatar-fallback"
+                          fallbackText={getPlayerInitials(player?.name || "") || "+"}
+                        />
+                      </div>
+                      {playerLevelLabel && (
+                        <div className="details-result-set-pairing-player-level">{playerLevelLabel}</div>
+                      )}
+                      <div className="details-result-set-pairing-player-name">{player?.name || "Свободно"}</div>
+                    </>
+                  );
+
+                  if (isEditableStartPairing) {
+                    return (
+                      <button
+                        key={`slot-${slotIndex}`}
+                        type="button"
+                        className={`details-result-set-pairing-player details-result-set-pairing-player-action${player ? "" : " empty"}${slotIsOrganizerLocked ? " locked" : ""}`}
+                        onClick={() => {
+                          void handleTeamSlotTap(slotIndex);
+                        }}
+                        disabled={slotDisabled}
+                      >
+                        {playerContent}
+                      </button>
+                    );
+                  }
+
+                  return (
+                    <div key={playerKey} className="details-result-set-pairing-player">
+                      {playerContent}
+                    </div>
+                  );
+                };
 
                 return (
                   <div className="details-result-set-row" key={`set-${index + 1}`}>
@@ -10115,83 +10294,72 @@ export default function GamesPage({
                       <div className="details-result-set-pairing">
                         <div className="details-result-set-pairing-head">{setPairingBlockTitle}</div>
                         <div className="details-result-set-pairing-cards">
-                          {setPairingTeamALabel && (
+                          {(setPairingTeamALabel || isEditableStartPairing) && (
                             <div className="details-result-set-pairing-card">
                               <div className="details-result-set-pairing-card-title">Команда 1</div>
                               <div
-                                className={`details-result-set-pairing-card-players${setPairingTeamAPlayers.length === 1 ? " is-solo" : ""}`}
+                                className={`details-result-set-pairing-card-players${!isEditableStartPairing && setPairingTeamAPlayers.length === 1 ? " is-solo" : ""}`}
                               >
-                                {setPairingTeamAPlayers.map((player, playerIndex) => {
-                                  const playerLevelLabel = normalizePlayerRatingLabel(player.rating ?? null);
-                                  const playerLevelProgress = getPlayerRatingProgress(playerLevelLabel);
-                                  const playerRingProgressDeg = playerLevelProgress != null
-                                    ? `${Math.max(0, Math.min(360, Math.round(playerLevelProgress * 360)))}deg`
-                                    : "0deg";
-                                  const playerKey = getPadelPlayerIdentityKey(player) || `set-${index}-a-${playerIndex}`;
-
-                                  return (
-                                    <div key={playerKey} className="details-result-set-pairing-player">
-                                      <div
-                                        className={`details-result-set-pairing-player-ring${playerLevelLabel ? " has-level" : ""}`}
-                                        style={{ "--player-ring-progress": playerRingProgressDeg } as CSSProperties}
-                                      >
-                                        <AvatarWithInitialsFallback
-                                          src={player.photo}
-                                          alt={player.name || "Игрок"}
-                                          imageClassName="details-result-set-pairing-player-avatar"
-                                          fallbackClassName="details-result-set-pairing-player-avatar details-result-set-pairing-player-avatar-fallback"
-                                          fallbackText={getPlayerInitials(player.name || "") || "+"}
-                                        />
-                                      </div>
-                                      {playerLevelLabel && (
-                                        <div className="details-result-set-pairing-player-level">{playerLevelLabel}</div>
-                                      )}
-                                      <div className="details-result-set-pairing-player-name">{player.name || "Игрок"}</div>
-                                    </div>
-                                  );
-                                })}
+                                {[0, 1].map((slotIndex, playerIndex) =>
+                                  renderResultPairingPlayer(slotIndex, playerIndex, "a"),
+                                )}
                               </div>
                             </div>
                           )}
-                          {setPairingTeamBLabel && (
+                          {(setPairingTeamBLabel || isEditableStartPairing) && (
                             <div className="details-result-set-pairing-card">
                               <div className="details-result-set-pairing-card-title">Команда 2</div>
                               <div
-                                className={`details-result-set-pairing-card-players${setPairingTeamBPlayers.length === 1 ? " is-solo" : ""}`}
+                                className={`details-result-set-pairing-card-players${!isEditableStartPairing && setPairingTeamBPlayers.length === 1 ? " is-solo" : ""}`}
                               >
-                                {setPairingTeamBPlayers.map((player, playerIndex) => {
-                                  const playerLevelLabel = normalizePlayerRatingLabel(player.rating ?? null);
-                                  const playerLevelProgress = getPlayerRatingProgress(playerLevelLabel);
-                                  const playerRingProgressDeg = playerLevelProgress != null
-                                    ? `${Math.max(0, Math.min(360, Math.round(playerLevelProgress * 360)))}deg`
-                                    : "0deg";
-                                  const playerKey = getPadelPlayerIdentityKey(player) || `set-${index}-b-${playerIndex}`;
-
-                                  return (
-                                    <div key={playerKey} className="details-result-set-pairing-player">
-                                      <div
-                                        className={`details-result-set-pairing-player-ring${playerLevelLabel ? " has-level" : ""}`}
-                                        style={{ "--player-ring-progress": playerRingProgressDeg } as CSSProperties}
-                                      >
-                                        <AvatarWithInitialsFallback
-                                          src={player.photo}
-                                          alt={player.name || "Игрок"}
-                                          imageClassName="details-result-set-pairing-player-avatar"
-                                          fallbackClassName="details-result-set-pairing-player-avatar details-result-set-pairing-player-avatar-fallback"
-                                          fallbackText={getPlayerInitials(player.name || "") || "+"}
-                                        />
-                                      </div>
-                                      {playerLevelLabel && (
-                                        <div className="details-result-set-pairing-player-level">{playerLevelLabel}</div>
-                                      )}
-                                      <div className="details-result-set-pairing-player-name">{player.name || "Игрок"}</div>
-                                    </div>
-                                  );
-                                })}
+                                {[2, 3].map((slotIndex, playerIndex) =>
+                                  renderResultPairingPlayer(slotIndex, playerIndex, "b"),
+                                )}
                               </div>
                             </div>
                           )}
                         </div>
+                        {isEditableStartPairing && detailsTeamMenuSlotIndex != null && canManagePlayersInDetails && (
+                          <div className="details-team-picker details-result-team-picker">
+                            <div className="details-team-picker-title">
+                              {`Слот ${detailsTeamMenuSlotIndex + 1}: выберите игрока`}
+                            </div>
+                            <div className="details-team-picker-list">
+                              {detailsTeamMenuOptions.map((player) => {
+                                const playerKey = getPadelPlayerIdentityKey(player) || `${player.name}-${player.phone}`;
+                                const isWaitlistPlayer = detailsWaitlist.some((item) => (
+                                  getPadelPlayerIdentityKey(item) === getPadelPlayerIdentityKey(player)
+                                ));
+                                return (
+                                  <button
+                                    key={playerKey}
+                                    type="button"
+                                    className="details-team-picker-item"
+                                    onClick={() => {
+                                      void handleTeamSlotPick(detailsTeamMenuSlotIndex, player);
+                                    }}
+                                    disabled={updatingGameMeta}
+                                  >
+                                    {player.name || "Игрок"}
+                                    {isWaitlistPlayer ? " · лист ожидания" : ""}
+                                  </button>
+                                );
+                              })}
+                              {detailsTeamMenuSlotIndex !== 0 && detailsTeamSlots[detailsTeamMenuSlotIndex] && (
+                                <button
+                                  type="button"
+                                  className="details-team-picker-item danger"
+                                  onClick={() => {
+                                    void handleTeamSlotPick(detailsTeamMenuSlotIndex, null);
+                                  }}
+                                  disabled={updatingGameMeta}
+                                >
+                                  Очистить слот
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                     <span className="details-result-set-label">{`Сет ${index + 1}`}</span>
@@ -10342,32 +10510,38 @@ export default function GamesPage({
             </>
           )}
 
-          {!isMatchResultAgreed && canCurrentUserInviteInDetails && (
-            <button
-              className="section-cta"
-              onClick={handleCopyInvite}
-              type="button"
-              disabled={!inviteLink}
-            >
-              {inviteCopied ? "Ссылка скопирована" : "Пригласить в игру"}
-            </button>
-          )}
-
-          {!isMatchResultAgreed && gameRecordId && (
-            <button
-              className="section-cta section-cta-secondary game-chat-open-btn"
-              onClick={() => {
-                setChatMessages([]);
-                setChatError(null);
-                setStep("chat");
-              }}
-              type="button"
-            >
-              Чат игры
-              {currentGameUnreadCount > 0 && (
-                <span className="game-chat-unread-badge">{currentGameUnreadCount}</span>
+          {!isMatchResultAgreed && (canCurrentUserInviteInDetails || gameRecordId) && (
+            <div className="details-action-row">
+              {canCurrentUserInviteInDetails && (
+                <button
+                  className="section-cta details-action-invite"
+                  onClick={handleCopyInvite}
+                  type="button"
+                  disabled={!inviteLink}
+                >
+                  {inviteCopied ? "Ссылка скопирована" : "Пригласить в игру"}
+                </button>
               )}
-            </button>
+
+              {gameRecordId && (
+                <button
+                  className="details-chat-stat-btn"
+                  onClick={() => {
+                    setChatMessages([]);
+                    setChatError(null);
+                    setStep("chat");
+                  }}
+                  type="button"
+                  aria-label="Открыть чат игры"
+                >
+                  <ChatIcon className="details-chat-stat-icon" />
+                  <span>Чат игры</span>
+                  {currentGameUnreadCount > 0 && (
+                    <span className="game-chat-unread-badge">{currentGameUnreadCount}</span>
+                  )}
+                </button>
+              )}
+            </div>
           )}
 
           {detailsServiceInfoVisible && (
@@ -10383,8 +10557,23 @@ export default function GamesPage({
           )}
         </div>
 
-        <button className="game-submit active" onClick={onBack} type="button">
-          Отлично
+        <button
+          className={`game-submit ${detailsFooterSubmitDisabled ? "" : "active"}`}
+          onClick={() => {
+            if (shouldHandleMatchResultFromFooter) {
+              if (!shouldSubmitMatchResultFromFooter) {
+                setGameDetailsMetaError("Введите счёт первого сета");
+                return;
+              }
+              void handleSubmitMatchResult();
+              return;
+            }
+            onBack();
+          }}
+          type="button"
+          disabled={detailsFooterSubmitDisabled}
+        >
+          {detailsFooterSubmitLabel}
         </button>
         <button
           type="button"
@@ -10670,7 +10859,7 @@ export default function GamesPage({
                     Я оплачу игру один
                   </button>
                   <button
-                    className={`payment-pill ${paymentMode === "split" ? "active" : ""}`}
+                    className={`payment-pill game-split-payment-pill ${paymentMode === "split" ? "active" : ""}`}
                     type="button"
                     onClick={() => setPaymentMode("split")}
                   >

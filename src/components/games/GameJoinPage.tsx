@@ -534,6 +534,10 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           failUrl: successUrl,
           shareCount,
           shareAmount,
+          shareAmountIncludesDuration: true,
+          durationMinutes: typeof booking.durationMinutes === "number" && Number.isFinite(booking.durationMinutes)
+            ? booking.durationMinutes
+            : null,
           maxClientsCount: Math.max(maxPlayers, shareCount),
           spot: nextSpot,
         });
