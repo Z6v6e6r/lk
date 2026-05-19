@@ -41,6 +41,7 @@ prod_files=(
   "games.js"
   "tournaments.js"
   "onboarding.js"
+  "levels-info.js"
   "communities.js"
   "release.json"
 )
@@ -50,6 +51,7 @@ dev_files=(
   "games-dev.js"
   "tournaments-dev.js"
   "onboarding-dev.js"
+  "levels-info-dev.js"
   "communities-dev.js"
   "release-dev.json"
 )

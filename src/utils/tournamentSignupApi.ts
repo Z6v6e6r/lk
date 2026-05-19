@@ -1,5 +1,14 @@
 import { API_BASE, BOOKING_CANCEL_REFUND_TYPE, PHAB_API_BASE, TENANT_KEY } from "../consts/api_config";
-import { request, type ApiResult, type UserProfileType } from "./apiClient";
+import { apiFetchSubscriptioName, request, type ApiResult, type UserProfileType } from "./apiClient";
+import {
+  buildTournamentCustomEnergyDiscountReason,
+  buildTournamentCustomEnergyProduct,
+  buildTournamentVivaTransactionProductPayload,
+  resolveTournamentCustomPricing,
+  toTournamentRubMinorAmount,
+  type TournamentCustomPricing,
+  type TournamentCustomPricingProductFields,
+} from "./tournamentCustomPricing";
 
 export type TournamentSignupStatus = "AVAILABLE" | "REGISTERED" | "WAITLIST" | "FULL" | "CLOSED" | "CANCELLED";
 
@@ -59,14 +68,20 @@ export interface TournamentVivaProduct {
   type: TournamentVivaProductType;
   cost: number | null;
   visitsTotal: number | null;
-  source: "client-subscription" | "client-one-time" | "one-time" | "subscription";
+  source: "client-subscription" | "client-one-time" | "one-time" | "subscription" | "custom-tournament-energy";
   raw: unknown;
+  priceLabel?: TournamentCustomPricingProductFields["priceLabel"];
+  baseAmount?: TournamentCustomPricingProductFields["baseAmount"];
+  discountAmount?: TournamentCustomPricingProductFields["discountAmount"];
+  targetAmount?: TournamentCustomPricingProductFields["targetAmount"];
+  isCustomTournamentEnergy?: TournamentCustomPricingProductFields["isCustomTournamentEnergy"];
 }
 
 export interface TournamentVivaCheckout {
   profile: UserProfileType;
   exercise: Record<string, unknown>;
   studioId: string | null;
+  customPricing: TournamentCustomPricing | null;
   purchasedProducts: TournamentVivaProduct[];
   clientSubscriptions: TournamentVivaProduct[];
   oneTimes: TournamentVivaProduct[];
@@ -140,6 +155,61 @@ function pickFirstArray(value: unknown, keys: string[]): unknown[] {
     if (Array.isArray(raw)) return raw;
   }
   return [];
+}
+
+function normalizeStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value
+      .map((item) => (typeof item === "string" || typeof item === "number" ? String(item).trim() : ""))
+      .filter(Boolean)
+    : [];
+}
+
+function parseTournamentAccessLevel(value: string) {
+  const normalized = value.replace(",", ".").trim();
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatTournamentAccessLevel(value: string) {
+  const parsed = parseTournamentAccessLevel(value);
+  if (parsed === null) return value;
+  if (parsed < 2) return "D1";
+  if (parsed < 3) return "D+";
+  if (parsed < 3.5) return "C";
+  if (parsed <= 4) return "C+";
+  if (parsed < 4.7) return "B";
+  if (parsed < 5.5) return "B+";
+  return "A";
+}
+
+function formatAccessLevelRange(value: unknown): string | null {
+  const levels = normalizeStringArray(value);
+  if (levels.length === 0) return null;
+  const normalizedLevels = levels
+    .map((level) => ({
+      raw: level,
+      numeric: parseTournamentAccessLevel(level),
+      label: formatTournamentAccessLevel(level),
+    }))
+    .sort((left, right) => {
+      if (left.numeric == null && right.numeric == null) return left.raw.localeCompare(right.raw, "ru-RU");
+      if (left.numeric == null) return 1;
+      if (right.numeric == null) return -1;
+      return left.numeric - right.numeric;
+    });
+
+  if (normalizedLevels.length === 1) return normalizedLevels[0].label;
+  return `${normalizedLevels[0].label}/${normalizedLevels[normalizedLevels.length - 1].label}`;
+}
+
+function normalizeTournamentRatingLabel(value: string | null | undefined) {
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*[–-]\s*/g, "–")
+    .replace(/\s*\/\s*/g, "/")
+    .trim();
+  return normalized || null;
 }
 
 function pickPersonName(value: unknown): string | null {
@@ -230,6 +300,55 @@ function isClosedStatusValue(value: unknown) {
     || normalized === "DRAFT";
 }
 
+function toBooleanFlag(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value !== 0;
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (["true", "1", "yes", "y", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "off"].includes(normalized)) return false;
+  return null;
+}
+
+function isClosedVisibilityValue(value: unknown) {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (!normalized) return false;
+  return normalized === "CLOSED"
+    || normalized === "PRIVATE"
+    || normalized === "INVITE_ONLY"
+    || normalized === "INVITE-ONLY"
+    || normalized === "HIDDEN";
+}
+
+function isPrivateTournamentRecord(record: Record<string, unknown>) {
+  if (
+    ["isPublic", "public"].some((key) => toBooleanFlag(record[key]) === false)
+  ) return true;
+
+  if (
+    [
+      "isPrivate",
+      "private",
+      "isClosed",
+      "closed",
+      "isHidden",
+      "hidden",
+      "inviteOnly",
+      "isInviteOnly",
+    ].some((key) => toBooleanFlag(record[key]) === true)
+  ) return true;
+
+  return [
+    "visibility",
+    "privacy",
+    "access",
+    "accessType",
+    "audience",
+    "joinRule",
+  ].some((key) => isClosedVisibilityValue(record[key]));
+}
+
 function collectTournamentStateRecords(value: unknown): Record<string, unknown>[] {
   if (!isRecord(value)) return [];
   const records: Record<string, unknown>[] = [value];
@@ -249,6 +368,36 @@ function collectTournamentStateRecords(value: unknown): Record<string, unknown>[
     if (isRecord(nested)) records.push(...collectTournamentStateRecords(nested));
   }
   return records;
+}
+
+function buildTournamentLevelLabel(value: unknown): string | null {
+  const states = collectTournamentStateRecords(value);
+  for (const state of states) {
+    const direct = pickString(state, ["levelLabel", "ratingLabel", "level", "ratingRange", "rating"]);
+    if (direct) {
+      const normalizedDirect = normalizeTournamentRatingLabel(direct);
+      if (normalizedDirect) return normalizedDirect;
+    }
+
+    const accessRange = formatAccessLevelRange(state.accessLevels);
+    if (accessRange) {
+      const normalizedRange = normalizeTournamentRatingLabel(accessRange);
+      if (normalizedRange) return normalizedRange;
+    }
+
+    const min = pickString(state, ["minRating", "ratingFrom", "ratingMin", "levelFrom"]);
+    const max = pickString(state, ["maxRating", "ratingTo", "ratingMax", "levelTo"]);
+    if (min && max) {
+      const normalizedMinMax = normalizeTournamentRatingLabel(min === max ? min : `${min}/${max}`);
+      if (normalizedMinMax) return normalizedMinMax;
+    }
+    if (min || max) {
+      const normalizedBound = normalizeTournamentRatingLabel(min || max || null);
+      if (normalizedBound) return normalizedBound;
+    }
+  }
+
+  return null;
 }
 
 function isCancelledTournamentPayload(value: unknown) {
@@ -275,7 +424,8 @@ function isCancelledTournamentPayload(value: unknown) {
 function isHiddenTournamentPayload(value: unknown) {
   if (isCancelledTournamentPayload(value)) return true;
   return collectTournamentStateRecords(value).some((record) => (
-    ["skinStatus", "tournamentStatus", "customStatus", "publicationStatus"]
+    isPrivateTournamentRecord(record)
+    || ["skinStatus", "tournamentStatus", "customStatus", "publicationStatus"]
       .some((key) => isClosedStatusValue(record[key]))
   ));
 }
@@ -328,6 +478,20 @@ function formatDate(startsAt: string | null) {
   return parsed.toISOString().slice(0, 10);
 }
 
+function formatDiscountReasonDate(startsAt: string | null, fallbackDate: string | null) {
+  const source = startsAt || fallbackDate;
+  if (!source) return null;
+  const parsed = new Date(source);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleDateString("ru-RU", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+  }
+  return fallbackDate;
+}
+
 function normalizeTournamentSummary(value: unknown): TournamentSignupSummary | null {
   if (!isRecord(value)) return null;
   const id = pickString(value, ["id", "tournamentId", "uuid", "exerciseId"]);
@@ -353,7 +517,7 @@ function normalizeTournamentSummary(value: unknown): TournamentSignupSummary | n
     studioName: pickString(value, ["studioName", "stationName", "clubName"]) || pickString(studio, ["name", "title"]),
     address: pickString(value, ["address", "studioAddress"]) || pickString(studio, ["address", "fullAddress"]),
     format: pickString(value, ["format", "tournamentType", "type", "category"]),
-    levelLabel: pickString(value, ["levelLabel", "level", "ratingRange", "accessLevels"]),
+    levelLabel: buildTournamentLevelLabel(value),
     priceLabel: pickString(value, ["priceLabel", "priceText"]) || (price != null ? `${price.toLocaleString("ru-RU")} ${currency}` : null),
     participantsCount,
     maxParticipants,
@@ -389,6 +553,17 @@ function normalizePublicTournamentPath(value: string | null) {
   return raw.startsWith("/") ? raw : `/${raw}`;
 }
 
+function resolvePublicTournamentPath(value: unknown) {
+  const records = collectTournamentStateRecords(value);
+  for (const record of records) {
+    const normalizedPath = normalizePublicTournamentPath(
+      pickString(record, ["publicUrl", "joinUrl"]),
+    );
+    if (normalizedPath) return normalizedPath;
+  }
+  return null;
+}
+
 function shouldHideByPublicTournamentDetail(
   summary: TournamentSignupSummary,
   detailPayload: unknown,
@@ -411,11 +586,8 @@ function shouldHideByPublicTournamentDetail(
 async function shouldShowTournamentSummary(summary: TournamentSignupSummary) {
   if (summary.status === "CANCELLED" || isHiddenTournamentPayload(summary.raw)) return false;
 
-  const publicPath = normalizePublicTournamentPath(
-    pickString(summary.raw, ["publicUrl", "joinUrl"])
-      || (isRecord(summary.raw) ? pickString(summary.raw.skin, ["publicUrl", "joinUrl"]) : null),
-  );
-  if (!publicPath) return true;
+  const publicPath = resolvePublicTournamentPath(summary.raw);
+  if (!publicPath) return false;
 
   const detailResult = await request<unknown>(publicPath, {
     baseUrl: PHAB_API_BASE,
@@ -423,7 +595,13 @@ async function shouldShowTournamentSummary(summary: TournamentSignupSummary) {
     headers: phabHeaders(),
     retries: 1,
   });
-  if (detailResult.error) return true;
+  if (detailResult.error) {
+    const errorStatus = detailResult.error.status;
+    if (errorStatus === 401 || errorStatus === 403 || errorStatus === 404 || errorStatus === 410) {
+      return false;
+    }
+    return true;
+  }
 
   return !shouldHideByPublicTournamentDetail(summary, detailResult.data);
 }
@@ -486,7 +664,7 @@ function extractPaymentUrl(payload: unknown): string | null {
       const direct = visit(value[key]);
       if (direct) return direct;
     }
-    for (const key of ["data", "payload", "result", "transaction", "transactionStatus", "cardPaymentStatus", "payment"]) {
+    for (const key of ["data", "payload", "result", "transaction", "transactionStatus", "cardPaymentStatus", "cardPaymentInfo", "payment"]) {
       const nested = visit(value[key]);
       if (nested) return nested;
     }
@@ -576,11 +754,11 @@ function hasPendingPaymentStatus(payload: unknown): boolean {
     }
     if (!isRecord(value)) return null;
 
-    for (const key of ["transactionStatus", "paymentStatus", "status", "originalStatus", "cardPaymentStatus", "paymentType"]) {
+    for (const key of ["transactionStatus", "paymentStatus", "status", "originalStatus", "cardPaymentStatus", "cardPaymentInfo", "paymentType"]) {
       const direct = visit(value[key]);
       if (direct !== null) return direct;
     }
-    for (const key of ["transaction", "transactionStatus", "cardPaymentStatus", "payment", "paymentInfo", "data", "payload", "result"]) {
+    for (const key of ["transaction", "transactionStatus", "cardPaymentStatus", "cardPaymentInfo", "payment", "paymentInfo", "data", "payload", "result"]) {
       const nested = visit(value[key]);
       if (nested !== null) return nested;
     }
@@ -623,11 +801,11 @@ function hasPaidPaymentStatus(payload: unknown): boolean {
     }
     if (!isRecord(value)) return null;
 
-    for (const key of ["transactionStatus", "paymentStatus", "status", "originalStatus", "cardPaymentStatus", "paymentType"]) {
+    for (const key of ["transactionStatus", "paymentStatus", "status", "originalStatus", "cardPaymentStatus", "cardPaymentInfo", "paymentType"]) {
       const direct = visit(value[key]);
       if (direct !== null) return direct;
     }
-    for (const key of ["transaction", "transactionStatus", "cardPaymentStatus", "payment", "paymentInfo", "data", "payload", "result"]) {
+    for (const key of ["transaction", "transactionStatus", "cardPaymentStatus", "cardPaymentInfo", "payment", "paymentInfo", "data", "payload", "result"]) {
       const nested = visit(value[key]);
       if (nested !== null) return nested;
     }
@@ -1020,6 +1198,36 @@ function normalizeVivaProducts(items: unknown[], source: TournamentVivaProduct["
     .filter((item): item is TournamentVivaProduct => item !== null);
 }
 
+function pickSubscriptionLookupId(value: unknown) {
+  if (!isRecord(value)) return null;
+  return pickString(value, ["subscriptionId", "clientSubscriptionId", "id"]);
+}
+
+async function resolveClientSubscriptionProductNames(
+  products: TournamentVivaProduct[],
+  clientPhone: string | null | undefined,
+) {
+  const phone = String(clientPhone || "").trim();
+  if (!phone || products.length === 0) return products;
+
+  const resolved = await Promise.all(products.map(async (product) => {
+    if (product.source !== "client-subscription") return product;
+    const lookupId = pickSubscriptionLookupId(product.raw);
+    if (!lookupId) return product;
+
+    const nameResult = await apiFetchSubscriptioName(lookupId, phone);
+    const resolvedName = nameResult.data?.sertName?.trim();
+    if (!resolvedName) return product;
+
+    return {
+      ...product,
+      name: resolvedName,
+    };
+  }));
+
+  return resolved;
+}
+
 function collectComparableIds(value: unknown, keys: string[], seen = new Set<unknown>()): Set<string> {
   const ids = new Set<string>();
   if (value == null || seen.has(value)) return ids;
@@ -1146,7 +1354,36 @@ function extractAuthorizationTicket(payload: unknown): string | null {
     || extractAuthorizationTicket(payload.payload);
 }
 
-async function createVivaPaymentWatcher(clientId?: string | null) {
+function extractStompFrameBody(message: string): string | null {
+  if (typeof message !== "string" || !message) return null;
+  const separatorIndex = message.indexOf("\n\n");
+  if (separatorIndex === -1) return null;
+  const body = message.slice(separatorIndex + 2).replace(/\u0000+$/g, "").trim();
+  return body || null;
+}
+
+function parseVivaSocketPayload(message: string): unknown | null {
+  if (typeof message !== "string" || !message) return null;
+
+  const candidates = [message, extractStompFrameBody(message)].filter(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate) as unknown;
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+async function createVivaSocketWatcher<T>(
+  clientId: string | null | undefined,
+  resolvePayload: (payload: unknown, rawMessage: string) => T | null,
+) {
   if (typeof window === "undefined" || typeof WebSocket === "undefined") {
     return null;
   }
@@ -1165,11 +1402,11 @@ async function createVivaPaymentWatcher(clientId?: string | null) {
   const wsBase = API_BASE.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:").replace(/\/+$/, "");
   let socket: WebSocket | null = null;
   let settled = false;
-  let resolveWait: (value: string | null) => void = () => {};
-  const wait = new Promise<string | null>((resolve) => {
+  let resolveWait: (value: T | null) => void = () => {};
+  const wait = new Promise<T | null>((resolve) => {
     resolveWait = resolve;
   });
-  const finish = (value: string | null) => {
+  const finish = (value: T | null) => {
     if (settled) return;
     settled = true;
     resolveWait(value);
@@ -1190,14 +1427,9 @@ async function createVivaPaymentWatcher(clientId?: string | null) {
         );
         return;
       }
-      try {
-        const payload = JSON.parse(text) as unknown;
-        const paymentUrl = extractPaymentUrl(payload);
-        if (paymentUrl) finish(paymentUrl);
-      } catch {
-        const paymentUrl = extractPaymentUrl(text);
-        if (paymentUrl) finish(paymentUrl);
-      }
+      const payload = parseVivaSocketPayload(text);
+      const resolved = resolvePayload(payload, text);
+      if (resolved !== null) finish(resolved);
     });
     socket.addEventListener("error", () => finish(null));
     socket.addEventListener("close", () => finish(null));
@@ -1210,6 +1442,43 @@ async function createVivaPaymentWatcher(clientId?: string | null) {
     wait: wait.finally(() => window.clearTimeout(timeout)),
     close: () => finish(null),
   };
+}
+
+async function createVivaPaymentWatcher(clientId?: string | null) {
+  return createVivaSocketWatcher<string>(
+    clientId,
+    (payload, rawMessage) => extractPaymentUrl(payload) || extractPaymentUrl(rawMessage),
+  );
+}
+
+function extractCorrelationId(payload: unknown): string | null {
+  if (!isRecord(payload)) return null;
+  return pickString(payload, ["correlationId", "requestId", "id"]);
+}
+
+function mapTournamentVivaFailureMessage(errorText: string | null | undefined): string | null {
+  const normalized = String(errorText || "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized.includes("no available spots")) return "В турнире нет свободных мест";
+  return null;
+}
+
+async function createVivaBookingWatcher(
+  clientId: string | null | undefined,
+  correlationId: string,
+) {
+  return createVivaSocketWatcher<{ status: string; action: string | null; error: string | null; raw: unknown }>(
+    clientId,
+    (payload) => {
+      if (!isRecord(payload)) return null;
+      if (pickString(payload, ["correlationId"]) !== correlationId) return null;
+      const action = String(pickString(payload, ["action"]) || "").toUpperCase();
+      const status = String(pickString(payload, ["status"]) || "").toUpperCase();
+      if (!["COMPLETED", "FAILED", "ERROR", "CANCELLED"].includes(status)) return null;
+      const error = pickString(payload, ["error", "message", "reason", "description"]);
+      return { status, action: action || null, error, raw: payload };
+    },
+  );
 }
 
 function buildTournamentPaymentReturnUrls(exerciseId: string) {
@@ -1460,6 +1729,10 @@ export async function apiCancelTournamentRegistration(
 
 export async function apiFetchTournamentVivaCheckout(
   exerciseId: string,
+  options: {
+    tournament?: unknown;
+    skinPriceLabel?: string | null;
+  } = {},
 ): Promise<ApiResult<TournamentVivaCheckout>> {
   const [profileResult, exerciseResult] = await Promise.all([
     request<UserProfileType>(`/end-user/api/v1/${TENANT_KEY}/profile`, {
@@ -1481,6 +1754,27 @@ export async function apiFetchTournamentVivaCheckout(
     return { data: null, error: exerciseResult.error || { status: 404, message: "Не удалось получить карточку турнира Viva" }, status: exerciseResult.status };
   }
 
+  const exercise = exerciseResult.data;
+  const studio = pickNestedRecord(exercise, ["studio"]);
+  const customPricing = resolveTournamentCustomPricing([exercise, options.tournament], options.skinPriceLabel);
+
+  if (customPricing) {
+    return {
+      data: {
+        profile: profileResult.data,
+        exercise,
+        studioId: pickString(studio, ["id"]) || pickString(exercise, ["studioId"]),
+        customPricing,
+        purchasedProducts: [],
+        clientSubscriptions: [],
+        oneTimes: [],
+        subscriptions: [buildTournamentCustomEnergyProduct(customPricing)],
+      },
+      error: null,
+      status: exerciseResult.status || profileResult.status,
+    };
+  }
+
   const [oneTimesResult, subscriptionsResult] = await Promise.all([
     request<unknown>(`/end-user/api/v2/${TENANT_KEY}/products/one-times?exerciseId=${encodeURIComponent(exerciseId)}`, {
       method: "GET",
@@ -1494,43 +1788,310 @@ export async function apiFetchTournamentVivaCheckout(
     }),
   ]);
 
-  const exercise = exerciseResult.data;
-  const studio = pickNestedRecord(exercise, ["studio"]);
   const clientSubscriptions = filterClientSubscriptionsForExercise(
     normalizeVivaProducts(pickFirstArray(exercise, ["availableClientSubscriptions"]), "client-subscription"),
     exerciseId,
     exercise,
   );
-  const purchasedProducts = [
-    ...clientSubscriptions,
-    ...normalizeVivaProducts(pickFirstArray(exercise, ["availableClientOneTimes"]), "client-one-time"),
-  ];
+  const clientOneTimes = normalizeVivaProducts(
+    pickFirstArray(exercise, ["availableClientOneTimes"]),
+    "client-one-time",
+  );
+  const oneTimes = oneTimesResult.error ? [] : normalizeVivaProducts(extractItems(oneTimesResult.data), "one-time");
+  const subscriptions = subscriptionsResult.error ? [] : normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription");
+  const resolvedClientSubscriptions = await resolveClientSubscriptionProductNames(
+    clientSubscriptions,
+    profileResult.data.phone,
+  );
 
   return {
     data: {
       profile: profileResult.data,
       exercise,
       studioId: pickString(studio, ["id"]) || pickString(exercise, ["studioId"]),
-      purchasedProducts,
-      clientSubscriptions,
-      oneTimes: oneTimesResult.error ? [] : normalizeVivaProducts(extractItems(oneTimesResult.data), "one-time"),
-      subscriptions: subscriptionsResult.error ? [] : normalizeVivaProducts(extractItems(subscriptionsResult.data), "subscription"),
+      customPricing: null,
+      purchasedProducts: [...resolvedClientSubscriptions, ...clientOneTimes],
+      clientSubscriptions: resolvedClientSubscriptions,
+      oneTimes,
+      subscriptions,
     },
     error: null,
     status: exerciseResult.status || profileResult.status,
   };
 }
 
-export async function apiCreateTournamentVivaTransaction(params: {
+type CreateTournamentVivaTransactionParams = {
   exerciseId: string;
   studioId: string | null;
   clientPhone: string;
   clientId?: string | null;
+  profile?: UserProfileType | null;
   product: TournamentVivaProduct;
+  customPricing?: TournamentCustomPricing | null;
+  tournament?: unknown;
+  exercise?: Record<string, unknown> | null;
   promoCode?: string | null;
   successUrl?: string | null;
   failUrl?: string | null;
-}): Promise<ApiResult<TournamentVivaTransactionResult>> {
+};
+
+function buildTournamentCustomEnergySnapshot(
+  exerciseId: string,
+  tournament: unknown,
+  exercise: Record<string, unknown> | null | undefined,
+) {
+  const tournamentRecord = isRecord(tournament) ? tournament : null;
+  const rawRecord = isRecord(tournamentRecord?.raw) ? tournamentRecord.raw : null;
+  const source = rawRecord ?? tournamentRecord;
+  const startsAt =
+    pickString(source, ["startsAt", "startAt", "timeFrom", "dateTimeFrom", "startTime"])
+    || pickString(exercise, ["timeFrom", "startsAt", "startAt", "dateTimeFrom"]);
+  const endsAt =
+    pickString(source, ["endsAt", "endAt", "timeTo", "dateTimeTo", "endTime"])
+    || pickString(exercise, ["timeTo", "endsAt", "endAt", "dateTimeTo"]);
+  const date = pickString(source, ["date", "day"]) || formatDate(startsAt);
+  const dateLabel = formatDiscountReasonDate(startsAt, date);
+  const studio = pickNestedRecord(exercise, ["studio"]);
+
+  return {
+    id: pickString(source, ["id", "tournamentId", "uuid", "exerciseId"]) || exerciseId,
+    exerciseId,
+    sourceTournamentId: pickString(source, ["sourceTournamentId", "vivaExerciseId", "exerciseId"]),
+    linkedCustomTournamentId: pickString(source, ["linkedCustomTournamentId", "customTournamentId"]),
+    title: pickString(source, ["title", "name", "displayName"]) || "Турнир",
+    startsAt,
+    endsAt,
+    date,
+    dateLabel,
+    studioId: pickString(source, ["studioId"]) || pickString(studio, ["id"]),
+    studioName: pickString(source, ["studioName", "stationName", "clubName"]) || pickString(studio, ["name", "title"]),
+    publicUrl: pickString(source, ["publicUrl", "url", "link"]),
+  };
+}
+
+function buildTournamentCustomEnergyCheckoutPayload(
+  params: CreateTournamentVivaTransactionParams,
+  pricing: TournamentCustomPricing,
+  successUrl: string | null,
+  failUrl: string | null,
+) {
+  const tournament = buildTournamentCustomEnergySnapshot(params.exerciseId, params.tournament, params.exercise);
+  const discountReason = buildTournamentCustomEnergyDiscountReason(tournament.title, tournament.dateLabel);
+
+  return {
+    source: "lk-tournament-signup",
+    authProvider: "lk-keycloak",
+    tenantKey: TENANT_KEY,
+    exerciseId: params.exerciseId,
+    studioId: params.studioId ?? tournament.studioId ?? null,
+    paymentMethod: "SMS",
+    client: {
+      id: params.clientId ?? params.profile?.id ?? null,
+      phone: params.clientPhone || params.profile?.phone || null,
+      firstName: params.profile?.firstName ?? null,
+      lastName: params.profile?.lastName ?? null,
+      middleName: params.profile?.middleName ?? null,
+      email: params.profile?.email ?? null,
+    },
+    product: {
+      name: pricing.productName,
+      type: "SUBSCRIPTION",
+      kind: "TOURNAMENT_CUSTOM_ENERGY",
+    },
+    pricing: {
+      currency: "RUB",
+      priceLabel: pricing.priceLabel,
+      amount: pricing.amount,
+      amountMinor: toTournamentRubMinorAmount(pricing.amount),
+      baseAmount: pricing.baseAmount,
+      baseAmountMinor: toTournamentRubMinorAmount(pricing.baseAmount),
+      discountAmount: pricing.discountAmount,
+      discountAmountMinor: toTournamentRubMinorAmount(pricing.discountAmount),
+      discountReason,
+    },
+    tournament,
+    returnUrls: {
+      successUrl,
+      failUrl,
+    },
+  };
+}
+
+function normalizeServerTournamentTransactionResult(
+  payload: unknown,
+  fallbackPaymentExpiresAt: string | null,
+): TournamentVivaTransactionResult {
+  const toPay =
+    (isRecord(payload) ? pickNumber(payload, ["toPayMinor", "amountMinor", "targetAmountMinor"]) : null)
+    ?? extractToPay(payload);
+  const paymentUrl = extractPaymentUrl(payload);
+  return {
+    paymentUrl,
+    bookingId: extractBookingId(payload),
+    toPay,
+    paid: hasPaidPaymentStatus(payload) || (!paymentUrl && toPay != null && toPay <= 0),
+    paymentExpiresAt: isRecord(payload)
+      ? pickString(payload, ["paymentExpiresAt", "paymentDeadline", "paymentDeadlineAt", "paymentDueDate", "expiresAt"]) || fallbackPaymentExpiresAt
+      : fallbackPaymentExpiresAt,
+    raw: payload,
+  };
+}
+
+async function apiCreateTournamentCustomEnergyTransaction(
+  params: CreateTournamentVivaTransactionParams,
+): Promise<ApiResult<TournamentVivaTransactionResult>> {
+  const transactionStartedAtMs = Date.now();
+  const returnUrls = buildTournamentPaymentReturnUrls(params.exerciseId);
+  const successUrl = params.successUrl?.trim() || returnUrls.successUrl;
+  const failUrl = params.failUrl?.trim() || returnUrls.failUrl;
+  const pricing = params.customPricing
+    ?? resolveTournamentCustomPricing([params.exercise, params.tournament], params.product.priceLabel);
+
+  if (!pricing) {
+    return {
+      data: null,
+      error: { status: 400, message: "Не найдена кастомная цена турнира" },
+      status: 400,
+    };
+  }
+
+  const result = await request<unknown>(
+    `/tournaments/${encodeURIComponent(params.exerciseId)}/custom-energy-checkout`,
+    {
+      baseUrl: PHAB_API_BASE,
+      method: "POST",
+      auth: true,
+      headers: phabHeaders(),
+      retries: 1,
+      body: JSON.stringify(buildTournamentCustomEnergyCheckoutPayload(params, pricing, successUrl, failUrl)),
+    },
+  );
+  if (result.error) {
+    return { data: null, error: result.error, status: result.status };
+  }
+
+  const normalized = normalizeServerTournamentTransactionResult(
+    result.data,
+    buildPaymentExpiresAt(transactionStartedAtMs),
+  );
+  if (!normalized.paymentUrl && !normalized.paid) {
+    return {
+      data: null,
+      error: {
+        status: result.status,
+        message: "Сервер не вернул ссылку на оплату",
+        raw: result.data,
+      },
+      status: result.status,
+    };
+  }
+
+  return {
+    data: normalized,
+    error: null,
+    status: result.status,
+  };
+}
+
+async function apiCreateTournamentVivaBookingFromSubscription(
+  params: CreateTournamentVivaTransactionParams,
+): Promise<ApiResult<TournamentVivaTransactionResult>> {
+  const requestStartedAtMs = Date.now();
+  const payload = {
+    exerciseId: params.exerciseId,
+    paymentType: "SUBSCRIPTION",
+    comment: null,
+    marketingAttribution: {},
+  };
+
+  const response = await request<unknown>(
+    `${API_BASE}/end-user/api/v2/${TENANT_KEY}/bookings`,
+    {
+      method: "POST",
+      auth: true,
+      retries: 1,
+      body: JSON.stringify(payload),
+    },
+  );
+  if (response.error) {
+    return { data: null, error: response.error, status: response.status };
+  }
+
+  const correlationId = extractCorrelationId(response.data);
+  const bookingWatcher = correlationId
+    ? await createVivaBookingWatcher(params.clientId, correlationId)
+    : null;
+
+  let bookingEvent: { status: string; action: string | null; error: string | null; raw: unknown } | null = null;
+  if (bookingWatcher) {
+    bookingEvent = await Promise.race([
+      bookingWatcher.wait,
+      wait(5000).then(() => null),
+    ]);
+    bookingWatcher.close();
+  }
+
+  if (bookingEvent && bookingEvent.status !== "COMPLETED") {
+    const mappedMessage = mapTournamentVivaFailureMessage(bookingEvent.error);
+    return {
+      data: null,
+      error: {
+        status: response.status,
+        message: mappedMessage || "Viva не подтвердила создание записи",
+        raw: bookingEvent.raw,
+      },
+      status: response.status,
+    };
+  }
+
+  const resolvedBooking = await pollTournamentVivaPaymentResolution(params.exerciseId, null);
+  const bookingId = resolvedBooking?.bookingId ?? extractBookingId(response.data);
+  const paid = resolvedBooking?.paid ?? Boolean(bookingEvent?.status === "COMPLETED");
+
+  if (!paid && !bookingId) {
+    return {
+      data: null,
+      error: {
+        status: response.status,
+        message: "Не удалось подтвердить запись по абонементу",
+        raw: {
+          booking: response.data,
+          event: bookingEvent?.raw ?? null,
+          resolvedBooking: resolvedBooking?.raw ?? null,
+        },
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: {
+      paymentUrl: null,
+      bookingId,
+      toPay: resolvedBooking?.toPay ?? 0,
+      paid,
+      paymentExpiresAt: paid ? null : buildPaymentExpiresAt(requestStartedAtMs),
+      raw: {
+        booking: response.data,
+        event: bookingEvent?.raw ?? null,
+        resolvedBooking: resolvedBooking?.raw ?? null,
+      },
+    },
+    error: null,
+    status: response.status,
+  };
+}
+
+export async function apiCreateTournamentVivaTransaction(
+  params: CreateTournamentVivaTransactionParams,
+): Promise<ApiResult<TournamentVivaTransactionResult>> {
+  if (params.product.isCustomTournamentEnergy) {
+    return apiCreateTournamentCustomEnergyTransaction(params);
+  }
+  if (params.product.source === "client-subscription") {
+    return apiCreateTournamentVivaBookingFromSubscription(params);
+  }
+
   const paymentWatcher = await createVivaPaymentWatcher(params.clientId);
   const transactionStartedAtMs = Date.now();
   const returnUrls = buildTournamentPaymentReturnUrls(params.exerciseId);
@@ -1538,20 +2099,7 @@ export async function apiCreateTournamentVivaTransaction(params: {
   const failUrl = params.failUrl?.trim() || returnUrls.failUrl;
   const payload = {
     products: [
-      {
-        id: params.product.id,
-        name: params.product.name,
-        type: params.product.type,
-        count: 1,
-        bookingRequests: [
-          {
-            exerciseId: params.exerciseId,
-            client: null,
-            comment: null,
-            marketingAttribution: {},
-          },
-        ],
-      },
+      buildTournamentVivaTransactionProductPayload(params.product, params.exerciseId),
     ],
     clientPhone: params.clientPhone,
     paymentMethod: "WIDGET",
@@ -1577,6 +2125,9 @@ export async function apiCreateTournamentVivaTransaction(params: {
   }
 
   const transactionId = extractTransactionId(result.data);
+  const bookingWatcher = transactionId
+    ? await createVivaBookingWatcher(params.clientId, transactionId)
+    : null;
   const responseBookingId = extractBookingId(result.data);
   const responseToPay = extractToPay(result.data);
   const directPaymentUrl = extractPaymentUrl(result.data);
@@ -1604,16 +2155,25 @@ export async function apiCreateTournamentVivaTransaction(params: {
   const toPay = resolvedPayment?.toPay ?? responseToPay;
   const paymentExpiresAt = resolvedPayment?.paymentExpiresAt ?? (paymentUrl ? buildPaymentExpiresAt(transactionStartedAtMs) : null);
   const paid = resolvedPayment?.paid === true || (!paymentUrl && toPay != null && toPay <= 0);
+  const bookingEvent = !paymentUrl && !paid && bookingWatcher
+    ? await Promise.race([
+        bookingWatcher.wait,
+        wait(1200).then(() => null),
+      ])
+    : null;
+  bookingWatcher?.close();
   paymentWatcher?.close();
 
   if (!paymentUrl && !paid) {
+    const mappedMessage = mapTournamentVivaFailureMessage(bookingEvent?.error);
     return {
       data: null,
       error: {
         status: result.status,
-        message: "Не удалось получить ссылку на оплату",
+        message: mappedMessage || "Не удалось получить ссылку на оплату",
         raw: {
           transaction: result.data,
+          event: bookingEvent?.raw ?? null,
           resolvedPayment: resolvedPayment?.raw ?? null,
         },
       },

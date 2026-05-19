@@ -175,12 +175,12 @@ export const DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG: PadelSplitPaymentPromoCon
   roomIds: [],
   roomNameIncludes: ["new"],
   shareAmounts: {
-    twoTeams: 500,
-    fourPlayers: 250,
+    twoTeams: 5000,
+    fourPlayers: 2500,
   },
-  baseShareAmount: 2000,
-  vivaDirectionId: 4485,
-  vivaExerciseTypeId: 1208,
+  baseShareAmount: 10000,
+  vivaDirectionId: 4588,
+  vivaExerciseTypeId: 1613,
 };
 export interface apiSubscription {
   id: string;
@@ -2357,7 +2357,7 @@ export interface ExerciseBooking {
   isCancelled?: boolean;
   client?: ExerciseBookingClient;
   rating?: string;
-  ratingSource?: "level" | "phone";
+  ratingSource?: string | null;
 }
 
 export interface TournamentHistoryParticipant {
@@ -2398,6 +2398,7 @@ export type TournamentTypeKey =
   | "americano"
   | "americano_padelhub"
   | "americano_classic"
+  | "americano_flex"
   | "paired_americano"
   | "mexicano"
   | "paired_mexicano";
@@ -2467,9 +2468,10 @@ export interface AmericanoResultsPayload {
   results: Array<{
     roundId: string;
     matchId: string;
-    score1: number;
-    score2: number;
+    score1?: number | null;
+    score2?: number | null;
     court?: string;
+    courtIndex?: number;
     pair1?: string[];
     pair2?: string[];
   }>;
@@ -2477,6 +2479,7 @@ export interface AmericanoResultsPayload {
 }
 
 export interface AmericanoResultsResponse {
+  params?: Record<string, unknown>;
   totals?: Record<
     string,
     {
@@ -2936,17 +2939,28 @@ export interface PadelSplitPaymentParams {
   clientId?: string | null;
   clientPhone?: string | null;
   paymentRef?: string | null;
+  paymentMode?: "subscription" | "one_time" | null;
   baseRedirectUrl?: string | null;
   successUrl?: string | null;
   failUrl?: string | null;
   shareCount: 2 | 4;
   shareAmount: number;
+  totalAmount?: number | null;
+  oneTimeBaseAmount?: number | null;
   shareAmountIncludesDuration?: boolean;
   durationMinutes?: number | null;
   maxClientsCount?: number | null;
   spot?: number | null;
   vivaDirectionId?: number | null;
   vivaExerciseTypeId?: number | null;
+}
+
+export interface PadelSplitPaymentModeOption {
+  id: string;
+  label: string | null;
+  productId: string | null;
+  productName: string | null;
+  type: string | null;
 }
 
 export interface PadelSplitPaymentResult {
@@ -2966,6 +2980,17 @@ export interface PadelSplitPaymentResult {
   productId: string | null;
   transactionId: string | null;
   spot: number | null;
+  directionId: number | null;
+  exerciseTypeId: number | null;
+  totalAmount: number | null;
+  oneTimeBaseAmount: number | null;
+  assembleDeadlineAt: string | null;
+  selectedPaymentMode: string | null;
+  paymentModes: PadelSplitPaymentModeOption[];
+  subscriptionProductId: string | null;
+  subscriptionProductName: string | null;
+  oneTimeProductId: string | null;
+  oneTimeProductName: string | null;
   raw?: unknown;
 }
 
@@ -3314,6 +3339,17 @@ export interface OnboardingLevelPayload {
   levelNumeric: string | number;
 }
 
+export interface TournamentRatingChangeLogPayload {
+  tournamentId: string;
+  participantId: string;
+  participantName: string;
+  previousRating: number | null;
+  nextRating: number;
+  changedById: string | null;
+  changedByName: string | null;
+  changedAt: string;
+}
+
 export async function apiSaveOnboardingLevel(payload: OnboardingLevelPayload) {
   const serv2Origin = (getServ2Origin() || "").trim();
   const onboardingUrl = serv2Origin
@@ -3349,6 +3385,15 @@ export async function apiSaveOnboardingLevel(payload: OnboardingLevelPayload) {
   }
 
   return result;
+}
+
+export async function apiLogTournamentRatingChange(payload: TournamentRatingChangeLogPayload) {
+  const base = getServ2Origin();
+  return request<{ ok?: boolean; success?: boolean }>(`${base}/lk/tournaments/americano/rating-change`, {
+    method: "POST",
+    retries: 0,
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function apiUpdateCustomFields(profile: UserProfileType, customFields: CustomField[]) {
@@ -3614,9 +3659,60 @@ export async function apiFetchExerciseBookings(exerciseId: string) {
   );
 }
 
+function isPhoneLikeRatingValue(value: unknown): boolean {
+  if (typeof value !== "string" && typeof value !== "number") return false;
+  const digits = String(value).replace(/\D/g, "");
+  return digits.length >= 10;
+}
+
+function sanitizeTournamentParticipantBooking(booking: ExerciseBooking): ExerciseBooking {
+  const ratingSource = String(booking.ratingSource || "").trim().toLowerCase();
+  const shouldDropRating = ratingSource === "phone" || isPhoneLikeRatingValue(booking.rating);
+
+  return {
+    ...booking,
+    rating: shouldDropRating ? undefined : booking.rating,
+    ratingSource: shouldDropRating ? undefined : booking.ratingSource,
+    client: booking.client
+      ? {
+          ...booking.client,
+          phone: undefined,
+        }
+      : booking.client,
+  };
+}
+
+function sanitizeTournamentParticipantsPayload<T>(payload: T): T {
+  if (Array.isArray(payload)) {
+    return payload.map((item) => (
+      isRecord(item)
+        ? sanitizeTournamentParticipantBooking(item as unknown as ExerciseBooking)
+        : item
+    )) as T;
+  }
+
+  if (!isRecord(payload)) return payload;
+
+  const keys = ["payload", "content", "data", "result", "items", "records", "participants", "bookings"];
+  let nextPayload: Record<string, unknown> | null = null;
+
+  keys.forEach((key) => {
+    const value = payload[key];
+    if (!Array.isArray(value)) return;
+    if (!nextPayload) nextPayload = { ...payload };
+    nextPayload[key] = value.map((item) => (
+      isRecord(item)
+        ? sanitizeTournamentParticipantBooking(item as unknown as ExerciseBooking)
+        : item
+    ));
+  });
+
+  return (nextPayload ?? payload) as T;
+}
+
 export async function apiFetchTournamentParticipants(exerciseId: string) {
   const base = getServ2Origin();
-  return request<ExerciseBooking[]>(
+  const result = await request<ExerciseBooking[]>(
     `${base}/lk/tournaments/participants?exerciseId=${exerciseId}`,
     {
       method: "GET",
@@ -3624,6 +3720,10 @@ export async function apiFetchTournamentParticipants(exerciseId: string) {
       retries: 1,
     },
   );
+  return {
+    ...result,
+    data: result.data ? sanitizeTournamentParticipantsPayload(result.data) : result.data,
+  };
 }
 
 function normalizeTournamentHistoryParticipant(
@@ -3637,13 +3737,14 @@ function normalizeTournamentHistoryParticipant(
   const displayName = pickString(value, ["displayName", "fullName", "title"]);
   const composedName = [firstName, lastName].filter(Boolean).join(" ").trim();
   const name = displayName || composedName || `Участник ${index + 1}`;
+  const rating = pickString(value, ["rating", "level", "grade"]);
 
   return {
     id: pickString(value, ["id", "clientId", "userId", "uuid"]),
     name,
-    phone: pickString(value, ["phone", "phoneNumber", "mobile"]),
+    phone: null,
     photo: pickString(value, ["photo", "avatar", "imageUrl"]),
-    rating: pickString(value, ["rating", "level", "grade"]),
+    rating: isPhoneLikeRatingValue(rating) ? null : rating,
   };
 }
 
@@ -4660,6 +4761,9 @@ export async function apiFetchPadelGamesByPhone(
   includePast = false,
   options: {
     limit?: number;
+    offset?: number;
+    windowHours?: number;
+    needsResult?: boolean;
   } = {},
 ) {
   const normalizedPhone = phone.replace(/\D/g, "");
@@ -4676,6 +4780,13 @@ export async function apiFetchPadelGamesByPhone(
   const limit = Number.isFinite(options.limit)
     ? Math.max(1, Math.min(1000, Math.floor(options.limit as number)))
     : null;
+  const offset = Number.isFinite(options.offset)
+    ? Math.max(0, Math.floor(options.offset as number))
+    : null;
+  const windowHours = Number.isFinite(options.windowHours)
+    ? Math.max(1, Math.min(168, Math.floor(options.windowHours as number)))
+    : null;
+  const needsResult = options.needsResult === true;
   const buildQuery = (resolvedClientId?: string | null) => {
     const query = new URLSearchParams({ phone: normalizedPhone });
     const trimmedClientId = resolvedClientId?.trim() || "";
@@ -4689,6 +4800,17 @@ export async function apiFetchPadelGamesByPhone(
     }
     if (limit) {
       query.set("limit", String(limit));
+    }
+    if (offset !== null) {
+      query.set("offset", String(offset));
+    }
+    if (windowHours !== null) {
+      query.set("windowHours", String(windowHours));
+    }
+    if (needsResult) {
+      // Support both possible backend flags while endpoint is being rolled out.
+      query.set("needsResult", "true");
+      query.set("withoutConfirmedResult", "true");
     }
 
     if (!IS_DEV_RELEASE_CHANNEL) {
@@ -5837,6 +5959,18 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
   const toPay = toPayMinor != null
     ? toPayMinor / 100
     : (toPayRaw > 10000 ? toPayRaw / 100 : toPayRaw);
+  const paymentModes = Array.isArray(data.paymentModes)
+    ? data.paymentModes
+      .filter((item): item is Record<string, unknown> => isRecord(item))
+      .map((item) => ({
+        id: pickString(item, ["id"]) ?? "",
+        label: pickString(item, ["label"]),
+        productId: pickString(item, ["productId"]),
+        productName: pickString(item, ["productName"]),
+        type: pickString(item, ["type"]),
+      }))
+      .filter((item) => item.id.length > 0)
+    : [];
 
   return {
     paymentRef: pickString(data, ["paymentRef", "ref"]) ?? null,
@@ -5855,6 +5989,17 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
     productId: pickString(data, ["productId"]) ?? null,
     transactionId: pickString(data, ["transactionId"]) ?? null,
     spot: pickNumeric(data, ["spot"]) ?? null,
+    directionId: pickNumeric(data, ["directionId", "vivaDirectionId"]) ?? null,
+    exerciseTypeId: pickNumeric(data, ["exerciseTypeId", "vivaExerciseTypeId"]) ?? null,
+    totalAmount: pickNumeric(data, ["totalAmount"]) ?? null,
+    oneTimeBaseAmount: pickNumeric(data, ["oneTimeBaseAmount"]) ?? null,
+    assembleDeadlineAt: pickString(data, ["assembleDeadlineAt"]) ?? null,
+    selectedPaymentMode: pickString(data, ["selectedPaymentMode", "paymentMode"]) ?? null,
+    paymentModes,
+    subscriptionProductId: pickString(data, ["subscriptionProductId"]) ?? null,
+    subscriptionProductName: pickString(data, ["subscriptionProductName"]) ?? null,
+    oneTimeProductId: pickString(data, ["oneTimeProductId"]) ?? null,
+    oneTimeProductName: pickString(data, ["oneTimeProductName"]) ?? null,
     raw: payload,
   };
 }
@@ -5872,11 +6017,14 @@ function buildPadelSplitPaymentPayload(params: PadelSplitPaymentParams): Record<
     clientId: params.clientId ?? null,
     clientPhone: params.clientPhone ?? null,
     paymentRef: params.paymentRef ?? null,
+    paymentMode: params.paymentMode ?? null,
     baseRedirectUrl: params.baseRedirectUrl ?? null,
     successUrl: params.successUrl ?? params.baseRedirectUrl ?? null,
     failUrl: params.failUrl ?? params.baseRedirectUrl ?? null,
     shareCount: params.shareCount,
     shareAmount: params.shareAmount,
+    totalAmount: params.totalAmount ?? null,
+    oneTimeBaseAmount: params.oneTimeBaseAmount ?? null,
     shareAmountIncludesDuration: params.shareAmountIncludesDuration === true,
     durationMinutes: params.durationMinutes ?? null,
     maxClientsCount: params.maxClientsCount ?? params.shareCount,
@@ -6092,7 +6240,13 @@ function normalizePadelLiveRatingItem(item: unknown): PadelLiveRatingItem | null
   const phoneNorm = pickString(item, ["phoneNorm", "phone", "phoneNumber"]);
   const name = pickString(item, ["name", "playerName", "fullName"]);
   const rating = pickString(item, ["rating", "level", "grade", "levelLetter"]);
-  const ratingNumeric = pickNumeric(item, ["ratingNumeric", "numericRating", "levelNumeric"]);
+  const ratingNumeric = pickNumeric(item, [
+    "ratingNumeric",
+    "numericRating",
+    "levelNumeric",
+    "levelScore",
+    "value",
+  ]);
   const source = pickString(item, ["source", "ratingSource"]);
 
   return {

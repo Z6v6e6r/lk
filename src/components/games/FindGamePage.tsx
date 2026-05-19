@@ -3,8 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   apiFetchPadelAvailableGames,
   apiFetchProfile,
+  apiFetchSubscriptions,
   type PadelGamePlayer,
   type PadelGameRecord,
+  type Subscription,
   type UserProfileType,
 } from "../../utils/apiClient";
 import { CABINET_URL, PUBLIC_GAME_CREATE_PATH, PUBLIC_INVITE_ORIGIN, PUBLIC_INVITE_PATH } from "../../consts/api_config";
@@ -21,6 +23,8 @@ interface FindGamePageProps {
 
 type ViewerGameState = "participant" | "waitlist" | "none";
 type FindGameViewer = { id: string | null; phone: string | null; level: string | null; levelNumeric: number | null };
+type FindGameTimeOfDayFilter = "all" | "morning" | "day" | "evening";
+type FindGameSelectOption = { value: string; label: string };
 
 const PAGE_SIZE = 12;
 const DAYS_BEFORE_TODAY = 0;
@@ -31,6 +35,16 @@ const DEFAULT_GAME_CREATE_PATH =
   (PUBLIC_GAME_CREATE_PATH || "/game_create").replace(/\/+$/, "") || "/game_create";
 const DEFAULT_GAME_JOIN_PATH =
   (PUBLIC_INVITE_PATH || "/game_join").replace(/\/+$/, "") || "/game_join";
+const SPLIT_OPEN_GAME_EXERCISE_TYPE_ID = 1613;
+const SPLIT_OPEN_GAME_DIRECTION_ID = 4588;
+const SPLIT_PAYMENT_MODE_QUERY_KEY = "splitPaymentMode";
+const FIND_GAME_FILTER_ALL_VALUE = "__all__";
+const FIND_GAME_TIME_OF_DAY_OPTIONS: Array<{ value: FindGameTimeOfDayFilter; label: string }> = [
+  { value: "all", label: "Все" },
+  { value: "morning", label: "Утро до 11" },
+  { value: "day", label: "День с 11 до 18" },
+  { value: "evening", label: "Вечер после 18" },
+];
 
 function normalizePhone(value: string | null | undefined): string | null {
   const digits = String(value || "").replace(/\D/g, "");
@@ -53,20 +67,108 @@ function toNumber(value: unknown): number | null {
   return null;
 }
 
-function pickString(source: Record<string, unknown> | null, keys: string[]): string | null {
-  if (!source) return null;
-  for (const key of keys) {
-    const value = source[key];
-    if (typeof value !== "string") continue;
+function getSplitPaymentMetadata(game: PadelGameRecord | undefined): Record<string, unknown> | null {
+  const metadata = isRecordObject(game?.metadata) ? game.metadata : null;
+  return metadata && isRecordObject(metadata.splitPayment) ? metadata.splitPayment : null;
+}
+
+function normalizeComparableId(value: unknown): string | null {
+  if (typeof value === "string") {
     const normalized = value.trim();
-    if (normalized) return normalized;
+    return normalized || null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(Math.trunc(value));
   }
   return null;
 }
 
-function getSplitPaymentMetadata(game: PadelGameRecord | undefined): Record<string, unknown> | null {
-  const metadata = isRecordObject(game?.metadata) ? game.metadata : null;
-  return metadata && isRecordObject(metadata.splitPayment) ? metadata.splitPayment : null;
+function buildComparableIdSet(values: Array<string | number | null | undefined>): Set<string> {
+  return new Set(
+    values
+      .map((value) => normalizeComparableId(value))
+      .filter((value): value is string => Boolean(value)),
+  );
+}
+
+function hasIdIntersection(left: Set<string>, right: Set<string>): boolean {
+  for (const value of left) {
+    if (right.has(value)) return true;
+  }
+  return false;
+}
+
+function isSplitSubscriptionStatusActive(status: string | null | undefined): boolean {
+  const normalized = String(status || "").trim().toUpperCase();
+  if (!normalized) return true;
+  const blockedMarkers = [
+    "EXPIRED",
+    "CANCEL",
+    "BLOCK",
+    "ARCHIVE",
+    "INACTIVE",
+    "SUSPEND",
+    "FINISH",
+    "TERMINAT",
+    "ENDED",
+    "ЗАВЕРШ",
+    "ОТМЕН",
+    "ПРОСРОЧ",
+  ];
+  return !blockedMarkers.some((marker) => normalized.includes(marker));
+}
+
+function hasSplitSubscriptionBalance(subscription: Subscription): boolean {
+  const visitsLeft = Number.isFinite(subscription.visitsLeft) ? subscription.visitsLeft : null;
+  const minutesLeft = Number.isFinite(subscription.availableMinutes) ? subscription.availableMinutes : null;
+  if (visitsLeft != null && visitsLeft > 0) return true;
+  if (minutesLeft != null && minutesLeft > 0) return true;
+  if (visitsLeft != null && minutesLeft != null) return false;
+  if (visitsLeft != null) return visitsLeft > 0;
+  if (minutesLeft != null) return minutesLeft > 0;
+  return true;
+}
+
+function subscriptionMatchesSplitCategory(
+  subscription: Subscription,
+  requiredExerciseTypeIds: Set<string>,
+  requiredDirectionIds: Set<string>,
+): boolean {
+  if (subscription.hasTypeLimitation) {
+    const allowedTypes = new Set(
+      (subscription.availableTypes || [])
+        .map((item) => normalizeComparableId(item?.id))
+        .filter((value): value is string => Boolean(value)),
+    );
+    if (allowedTypes.size === 0 || !hasIdIntersection(allowedTypes, requiredExerciseTypeIds)) {
+      return false;
+    }
+  }
+
+  if (subscription.hasDirectionLimitation) {
+    const allowedDirections = new Set(
+      (subscription.availableDirections || [])
+        .map((item) => normalizeComparableId(item?.id))
+        .filter((value): value is string => Boolean(value)),
+    );
+    if (allowedDirections.size === 0 || !hasIdIntersection(allowedDirections, requiredDirectionIds)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function filterSplitEligibleSubscriptions(
+  subscriptions: Subscription[],
+  requiredExerciseTypeIds: Set<string>,
+  requiredDirectionIds: Set<string>,
+): Subscription[] {
+  return subscriptions.filter((subscription) => {
+    if (!isSplitSubscriptionStatusActive(subscription.status)) return false;
+    if (!hasSplitSubscriptionBalance(subscription)) return false;
+    return subscriptionMatchesSplitCategory(subscription, requiredExerciseTypeIds, requiredDirectionIds);
+  });
 }
 
 function isSplitPaymentGame(game: PadelGameRecord | undefined): boolean {
@@ -74,6 +176,54 @@ function isSplitPaymentGame(game: PadelGameRecord | undefined): boolean {
   if (game.settings?.payMode === "split") return true;
   const splitPayment = getSplitPaymentMetadata(game);
   return Boolean(splitPayment?.enabled);
+}
+
+function extractGameCustomTitle(game: PadelGameRecord | undefined): string | null {
+  const metadata = isRecordObject(game?.metadata) ? game.metadata : null;
+  if (!metadata) return null;
+  const value = typeof metadata.gameTitle === "string" ? metadata.gameTitle.trim() : "";
+  return value || null;
+}
+
+function extractGameJoinPrice(game: PadelGameRecord | undefined): number | null {
+  const metadata = isRecordObject(game?.metadata) ? game.metadata : null;
+  if (!metadata) return null;
+  if (typeof metadata.joinPrice === "number" && Number.isFinite(metadata.joinPrice)) {
+    const normalized = Math.max(0, Math.round(metadata.joinPrice));
+    return normalized > 0 ? normalized : null;
+  }
+  const raw = typeof metadata.joinPrice === "string" ? metadata.joinPrice.trim() : "";
+  const digits = raw.replace(/[^\d]/g, "").replace(/^0+(?=\d)/, "");
+  if (!digits) return null;
+  const numeric = Number.parseInt(digits, 10);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function toComparableIdValue(value: unknown): string | number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    return normalized || null;
+  }
+  return null;
+}
+
+function resolveSplitRequiredTypeIds(game: PadelGameRecord | undefined): Set<string> {
+  const splitPayment = getSplitPaymentMetadata(game);
+  return buildComparableIdSet([
+    SPLIT_OPEN_GAME_EXERCISE_TYPE_ID,
+    toComparableIdValue(splitPayment?.exerciseTypeId),
+    toComparableIdValue(splitPayment?.vivaExerciseTypeId),
+  ]);
+}
+
+function resolveSplitRequiredDirectionIds(game: PadelGameRecord | undefined): Set<string> {
+  const splitPayment = getSplitPaymentMetadata(game);
+  return buildComparableIdSet([
+    SPLIT_OPEN_GAME_DIRECTION_ID,
+    toComparableIdValue(splitPayment?.directionId),
+    toComparableIdValue(splitPayment?.vivaDirectionId),
+  ]);
 }
 
 function formatRubPrice(value: number | null): string | null {
@@ -87,33 +237,9 @@ function getSplitJoinPriceText(game: PadelGameRecord | undefined): string | null
   const shareAmountMinor = toNumber(splitPayment?.shareAmountMinor ?? splitPayment?.amountMinor ?? splitPayment?.toPayMinor);
   const shareAmount =
     toNumber(splitPayment?.shareAmount ?? splitPayment?.amount ?? splitPayment?.toPay)
-    ?? (shareAmountMinor !== null ? shareAmountMinor / 100 : null);
+    ?? (shareAmountMinor !== null ? shareAmountMinor / 100 : null)
+    ?? extractGameJoinPrice(game);
   return formatRubPrice(shareAmount);
-}
-
-function getSplitCancelDeadlineAt(game: PadelGameRecord | undefined): string | null {
-  if (!isSplitPaymentGame(game)) return null;
-  const splitPayment = getSplitPaymentMetadata(game);
-  const deadlineAt = pickString(splitPayment, ["deadlineAt", "cancelAt", "expiresAt", "expires_at"]);
-  if (!deadlineAt || !Number.isFinite(Date.parse(deadlineAt))) return null;
-  return deadlineAt;
-}
-
-function formatCountdown(deadlineAt?: string | null, nowMs = Date.now()): string | null {
-  if (!deadlineAt) return null;
-  const deadlineMs = Date.parse(deadlineAt);
-  if (!Number.isFinite(deadlineMs)) return null;
-
-  const totalMinutes = Math.max(0, Math.ceil((deadlineMs - nowMs) / 60000));
-  if (totalMinutes <= 0) return "0 мин";
-
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const minutes = totalMinutes % 60;
-
-  if (days > 0) return `${days} д ${hours} ч`;
-  if (hours > 0) return `${hours} ч ${minutes} мин`;
-  return `${minutes} мин`;
 }
 
 function initialsFromName(value: string | null | undefined): string {
@@ -232,45 +358,6 @@ function getViewerLevelNumeric(profile: UserProfileType | null): number | null {
   return parseNumericLevel(getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric));
 }
 
-function getRatingRank(value: string | number | null | undefined): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-
-  const normalized = String(value || "")
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, "");
-  if (!normalized) return null;
-
-  const numeric = Number(normalized.replace(",", "."));
-  if (Number.isFinite(numeric)) return numeric;
-
-  const ranks: Record<string, number> = {
-    D: 1,
-    "D+": 2,
-    C: 3,
-    "C+": 4,
-    B: 5,
-    "B+": 6,
-    A: 7,
-  };
-
-  return ranks[normalized] ?? null;
-}
-
-function isViewerBelowGameLevel(game: PadelGameRecord, viewer: FindGameViewer): boolean {
-  if (game.settings?.ratingGame === false) return false;
-
-  const viewerRank = viewer.levelNumeric ?? getRatingRank(viewer.level);
-  if (viewerRank === null) return false;
-
-  const minRank = getRatingRank(game.settings?.minRating);
-  const maxRank = getRatingRank(game.settings?.maxRating);
-
-  return (minRank !== null && viewerRank < minRank) || (maxRank !== null && viewerRank > maxRank);
-}
-
 function getRatingTag(game: PadelGameRecord): string {
   if (game.settings?.ratingGame === false) return "Без рейтинга";
   const min = game.settings?.minRating;
@@ -342,6 +429,53 @@ function normalizeComparable(value: string | null | undefined): string | null {
     .replace(/\s+/g, " ")
     .trim();
   return normalized || null;
+}
+
+function buildStationFilterValue(
+  studioId: string | null | undefined,
+  studioName: string | null | undefined,
+): string | null {
+  const normalizedStudioId = String(studioId || "").trim();
+  if (normalizedStudioId) return `id:${normalizedStudioId}`;
+  const normalizedStudioName = normalizeComparable(studioName);
+  return normalizedStudioName ? `name:${normalizedStudioName}` : null;
+}
+
+function matchesSelectedStationFilter(game: PadelGameRecord, stationFilterValue: string): boolean {
+  if (stationFilterValue === FIND_GAME_FILTER_ALL_VALUE) return true;
+  const gameStationValue = buildStationFilterValue(game.booking?.studioId, game.booking?.studioName);
+  return Boolean(gameStationValue && gameStationValue === stationFilterValue);
+}
+
+function matchesSelectedLevelFilter(game: PadelGameRecord, levelFilterValue: string): boolean {
+  if (levelFilterValue === FIND_GAME_FILTER_ALL_VALUE) return true;
+  return getRatingTag(game) === levelFilterValue;
+}
+
+function parseTimeMinutes(value: string | null | undefined): number | null {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return null;
+  const hours = Number.parseInt(match[1], 10);
+  const minutes = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function matchesTimeOfDayFilter(game: PadelGameRecord, timeOfDayFilter: FindGameTimeOfDayFilter): boolean {
+  if (timeOfDayFilter === "all") return true;
+  const startMinutes = parseTimeMinutes(game.booking?.timeFrom || game.booking?.timeTo);
+  if (startMinutes === null) return false;
+
+  if (timeOfDayFilter === "morning") {
+    return startMinutes >= 7 * 60 && startMinutes < 11 * 60;
+  }
+  if (timeOfDayFilter === "day") {
+    return startMinutes >= 11 * 60 && startMinutes < 18 * 60;
+  }
+  return startMinutes >= 18 * 60 && startMinutes < 24 * 60;
 }
 
 function matchesStationFilter(
@@ -466,39 +600,40 @@ function EmptyPlayerSlot() {
 function FindGameCard({
   game,
   viewer,
+  splitSubscriptionsLoading,
+  splitHasEligibleSubscription,
   onOpen,
 }: {
   game: PadelGameRecord;
   viewer: FindGameViewer;
-  onOpen: (game: PadelGameRecord) => void;
+  splitSubscriptionsLoading: boolean;
+  splitHasEligibleSubscription: boolean;
+  onOpen: (game: PadelGameRecord, preferredPaymentMode?: "subscription" | "one_time") => void;
 }) {
   const maxPlayers = resolveMaxPlayers(game);
   const participants = (game.participants ?? []).slice(0, maxPlayers);
   const freeSlots = Math.max(0, maxPlayers - participants.length);
   const viewerState = resolveViewerState(game, viewer);
-  const waitlistEnabled = resolveWaitlistEnabled(game);
-  const shouldUseWaitlistByLevel = viewerState === "none" && isViewerBelowGameLevel(game, viewer);
   const badgeLabels = getDateBadgeLabels(game);
-  const actionLabel = viewerState === "participant"
-    ? "Открыть игру"
-    : viewerState === "waitlist"
-      ? "Открыть заявку"
-      : shouldUseWaitlistByLevel
-        ? "В лист ожидания"
-        : freeSlots > 0
-        ? "Присоединиться"
-        : waitlistEnabled
-          ? "В лист ожидания"
-          : "Мест нет";
+  const cardTitle = extractGameCustomTitle(game) ?? formatDateLine(game);
+  const actionLabel = viewerState === "participant" ? "Открыть игру" : "Открыть";
   const participantsLabel = `${participants.length}/${maxPlayers}`;
   const waitlistCount = game.waitlist?.length ?? 0;
+  const splitPaymentGame = isSplitPaymentGame(game);
   const splitJoinPriceText = getSplitJoinPriceText(game);
-  const splitCancelDeadlineAt = getSplitCancelDeadlineAt(game);
-  const splitCountdownText = formatCountdown(splitCancelDeadlineAt, Date.now());
-  const showSplitJoinInfo = freeSlots > 0 && Boolean(splitJoinPriceText || splitCountdownText);
+  const showSplitJoinInfo = splitPaymentGame && freeSlots > 0 && Boolean(splitJoinPriceText);
+  const showSplitPaymentChoices = splitPaymentGame && viewerState === "none";
+  const showDefaultActionButton = true;
 
   return (
-    <article className="find-game-card">
+    <article
+      className={`find-game-card find-game-card-clickable${splitPaymentGame ? " find-game-card-split" : ""}`}
+      onClick={(event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest("button, a, input, textarea, select, label")) return;
+        onOpen(game);
+      }}
+    >
       <div className="find-game-card-head">
         <CalendarDateBadge
           monthLabel={badgeLabels.monthLabel}
@@ -511,7 +646,7 @@ function FindGameCard({
           onClick={() => addGameToCalendar(game)}
         />
         <div className="find-game-main">
-          <div className="find-game-date">{formatDateLine(game)}</div>
+          <div className="find-game-date">{cardTitle}</div>
           <div className="find-game-time">{formatTimeLine(game)}</div>
           <div className="find-game-location">{formatLocationLine(game)}</div>
         </div>
@@ -536,7 +671,13 @@ function FindGameCard({
 
       {game.organizer?.name && (
         <div className="find-game-organizer">
-          Организатор: <span>{game.organizer.name}</span>
+          <span>Организатор: <span>{game.organizer.name}</span></span>
+          {showSplitJoinInfo && (
+            <div className="find-game-friendly-tag" aria-label="Тег игры">
+              <span className="find-game-friendly-tag-dot" aria-hidden="true" />
+              <span className="find-game-friendly-tag-text">Лето.Падел.Дружба</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -555,28 +696,53 @@ function FindGameCard({
           <div className="find-game-footer-actions">
             {showSplitJoinInfo && (
               <div className="find-game-split-join-info" aria-label="Условия присоединения к сборной игре">
-                {splitJoinPriceText && (
-                  <div className="find-game-split-join-info-row">
-                    <span>Вход</span>
-                    <strong>{splitJoinPriceText}</strong>
-                  </div>
-                )}
-                {splitCountdownText && (
-                  <div className="find-game-split-join-info-row">
-                    <span>Отмена через</span>
-                    <strong>{splitCountdownText}</strong>
-                  </div>
-                )}
+                <div className="find-game-split-join-info-row">
+                  <span>Присоединиться за</span>
+                  <strong>{splitJoinPriceText}</strong>
+                </div>
               </div>
             )}
-            <button
-              type="button"
-              className="find-game-action"
-              disabled={freeSlots <= 0 && !waitlistEnabled && viewerState === "none"}
-              onClick={() => onOpen(game)}
-            >
-              {actionLabel}
-            </button>
+            {showDefaultActionButton && (
+              <button
+                type="button"
+                className="find-game-action"
+                onClick={() => onOpen(game)}
+              >
+                {actionLabel}
+              </button>
+            )}
+            {showSplitPaymentChoices && (
+              <div className="find-game-split-pay-actions find-game-split-pay-actions-inside">
+                {splitSubscriptionsLoading ? (
+                  <button type="button" className="find-game-split-pay-option" disabled>
+                    Проверяем абонемент...
+                  </button>
+                ) : (
+                  splitHasEligibleSubscription && (
+                    <button
+                      type="button"
+                      className="find-game-split-pay-option"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onOpen(game, "subscription");
+                      }}
+                    >
+                      Списать с абонемента
+                    </button>
+                  )
+                )}
+                <button
+                  type="button"
+                  className="find-game-split-pay-option find-game-split-pay-option-primary"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpen(game, "one_time");
+                  }}
+                >
+                  Оплатить стоимость
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -592,6 +758,8 @@ export default function FindGamePage({
 }: FindGamePageProps) {
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [games, setGames] = useState<PadelGameRecord[]>([]);
+  const [splitSubscriptionsLoading, setSplitSubscriptionsLoading] = useState(false);
+  const [splitSubscriptions, setSplitSubscriptions] = useState<Subscription[]>([]);
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(true);
@@ -599,8 +767,17 @@ export default function FindGamePage({
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dateIndex, setDateIndex] = useState(TODAY_DATE_INDEX);
+  const [stationFilterValue, setStationFilterValue] = useState(
+    buildStationFilterValue(presetStudioId, presetStudioName) ?? FIND_GAME_FILTER_ALL_VALUE,
+  );
+  const [stationFilterLabel, setStationFilterLabel] = useState(
+    String(presetStudioName || "").trim() || "Выбранная станция",
+  );
+  const [levelFilterValue, setLevelFilterValue] = useState(FIND_GAME_FILTER_ALL_VALUE);
+  const [timeOfDayFilter, setTimeOfDayFilter] = useState<FindGameTimeOfDayFilter>("all");
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const requestInFlightRef = useRef(false);
+  const isStationLockedByPreset = Boolean(buildStationFilterValue(presetStudioId, presetStudioName));
 
   const dates = useMemo(() => {
     const base = new Date();
@@ -620,28 +797,116 @@ export default function FindGamePage({
     levelNumeric: getViewerLevelNumeric(profile),
   }), [profile]);
 
+  const stationOptions = useMemo(() => {
+    const byValue = new Map<string, string>();
+    games.forEach((game) => {
+      const value = buildStationFilterValue(game.booking?.studioId, game.booking?.studioName);
+      const label = String(game.booking?.studioName || "").trim() || "Станция";
+      if (!value || byValue.has(value)) return;
+      byValue.set(value, label);
+    });
+    const presetValue = buildStationFilterValue(presetStudioId, presetStudioName);
+    const presetLabel = String(presetStudioName || "").trim();
+    if (presetValue && presetLabel && !byValue.has(presetValue)) {
+      byValue.set(presetValue, presetLabel);
+    }
+
+    const options = Array.from(byValue.entries())
+      .map(([value, label]): FindGameSelectOption => ({ value, label }))
+      .sort((left, right) => left.label.localeCompare(right.label, "ru"));
+
+    const withDefault = isStationLockedByPreset
+      ? options
+      : [{ value: FIND_GAME_FILTER_ALL_VALUE, label: "Все станции" }, ...options];
+
+    if (
+      stationFilterValue !== FIND_GAME_FILTER_ALL_VALUE
+      && !withDefault.some((option) => option.value === stationFilterValue)
+    ) {
+      withDefault.push({
+        value: stationFilterValue,
+        label: stationFilterLabel || "Выбранная станция",
+      });
+    }
+
+    return withDefault;
+  }, [
+    games,
+    isStationLockedByPreset,
+    presetStudioId,
+    presetStudioName,
+    stationFilterLabel,
+    stationFilterValue,
+  ]);
+
+  const levelOptions = useMemo(() => {
+    const uniqueLevels = new Set<string>();
+    games.forEach((game) => {
+      uniqueLevels.add(getRatingTag(game));
+    });
+    const options = Array.from(uniqueLevels)
+      .sort((left, right) => left.localeCompare(right, "ru"))
+      .map((level): FindGameSelectOption => ({ value: level, label: level }));
+    const withDefault: FindGameSelectOption[] = [
+      { value: FIND_GAME_FILTER_ALL_VALUE, label: "Любой уровень" },
+      ...options,
+    ];
+    if (
+      levelFilterValue !== FIND_GAME_FILTER_ALL_VALUE
+      && !withDefault.some((option) => option.value === levelFilterValue)
+    ) {
+      withDefault.push({ value: levelFilterValue, label: levelFilterValue });
+    }
+    return withDefault;
+  }, [games, levelFilterValue]);
+
+  const hasEligibleSplitSubscriptionForGame = useCallback((game: PadelGameRecord): boolean => {
+    if (splitSubscriptions.length === 0) return false;
+    const requiredTypeIds = resolveSplitRequiredTypeIds(game);
+    const requiredDirectionIds = resolveSplitRequiredDirectionIds(game);
+    const eligible = filterSplitEligibleSubscriptions(splitSubscriptions, requiredTypeIds, requiredDirectionIds);
+    return eligible.length > 0;
+  }, [splitSubscriptions]);
+
   const buildCreateUrl = useCallback(() => {
     const url = buildAbsolutePageUrl(DEFAULT_GAME_CREATE_PATH);
     const stationId = String(presetStudioId || "").trim();
     const stationName = String(presetStudioName || "").trim();
+    const resolvedCabinetUrl = String(cabinetUrl || DEFAULT_CABINET_URL || "").trim();
     if (stationId) {
       url.searchParams.set("stationId", stationId);
     }
     if (stationName) {
       url.searchParams.set("station", stationName);
     }
+    if (resolvedCabinetUrl) {
+      url.searchParams.set("cabinetUrl", resolvedCabinetUrl);
+    }
     return url.toString();
-  }, [presetStudioId, presetStudioName]);
+  }, [cabinetUrl, presetStudioId, presetStudioName]);
 
-  const buildJoinUrl = useCallback((game: PadelGameRecord) => {
+  const buildJoinUrl = useCallback((game: PadelGameRecord, preferredPaymentMode?: "subscription" | "one_time") => {
     const normalizedInvite = normalizeUrl(game.inviteUrl);
-    if (normalizedInvite) return normalizedInvite;
+    if (normalizedInvite) {
+      try {
+        const inviteUrl = new URL(normalizedInvite);
+        if (preferredPaymentMode) {
+          inviteUrl.searchParams.set(SPLIT_PAYMENT_MODE_QUERY_KEY, preferredPaymentMode);
+        }
+        return inviteUrl.toString();
+      } catch {
+        return normalizedInvite;
+      }
+    }
 
     const url = normalizePadlHubInviteOrigin(buildAbsolutePageUrl(DEFAULT_GAME_JOIN_PATH, PUBLIC_INVITE_ORIGIN));
     url.searchParams.set("joinGame", game.id);
     const resolvedCabinetUrl = String(cabinetUrl || DEFAULT_CABINET_URL || "").trim();
     if (resolvedCabinetUrl) {
       url.searchParams.set("cabinetUrl", resolvedCabinetUrl);
+    }
+    if (preferredPaymentMode) {
+      url.searchParams.set(SPLIT_PAYMENT_MODE_QUERY_KEY, preferredPaymentMode);
     }
     return url.toString();
   }, [cabinetUrl]);
@@ -716,6 +981,29 @@ export default function FindGamePage({
   }, []);
 
   useEffect(() => {
+    let alive = true;
+    setSplitSubscriptionsLoading(true);
+    apiFetchSubscriptions()
+      .then((result) => {
+        if (!alive) return;
+        const subscriptions = Array.isArray(result.data?.content) ? result.data.content : [];
+        setSplitSubscriptions(subscriptions);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setSplitSubscriptions([]);
+      })
+      .finally(() => {
+        if (!alive) return;
+        setSplitSubscriptionsLoading(false);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
     setGames([]);
     setOffset(0);
     setHasMore(true);
@@ -739,8 +1027,25 @@ export default function FindGamePage({
     return () => observer.disconnect();
   }, [hasMore, loading, loadingMore, loadPage, offset]);
 
-  const visibleCountLabel = games.length > 0
-    ? `${games.length}${total > games.length ? ` из ${total}` : ""}`
+  const filteredGames = useMemo(() => games
+    .filter((game) => matchesSelectedStationFilter(game, stationFilterValue))
+    .filter((game) => matchesSelectedLevelFilter(game, levelFilterValue))
+    .filter((game) => matchesTimeOfDayFilter(game, timeOfDayFilter)), [
+    games,
+    levelFilterValue,
+    stationFilterValue,
+    timeOfDayFilter,
+  ]);
+
+  const hasStationFilter = !isStationLockedByPreset && stationFilterValue !== FIND_GAME_FILTER_ALL_VALUE;
+  const hasActiveFilters = hasStationFilter
+    || levelFilterValue !== FIND_GAME_FILTER_ALL_VALUE
+    || timeOfDayFilter !== "all";
+
+  const visibleCountLabel = filteredGames.length > 0
+    ? (hasActiveFilters
+      ? `${filteredGames.length}`
+      : `${filteredGames.length}${total > filteredGames.length ? ` из ${total}` : ""}`)
     : "";
 
   return (
@@ -806,6 +1111,51 @@ export default function FindGamePage({
         </div>
       </div>
 
+      <div className="find-game-filterbar">
+        <label className="find-game-filter-control">
+          <span>Станция</span>
+          <select
+            value={stationFilterValue}
+            onChange={(event) => {
+              setStationFilterValue(event.target.value);
+              const selectedLabel = event.target.selectedOptions[0]?.textContent?.trim();
+              if (selectedLabel) {
+                setStationFilterLabel(selectedLabel);
+              }
+            }}
+            disabled={isStationLockedByPreset || stationOptions.length <= 1}
+          >
+            {stationOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="find-game-filter-control">
+          <span>Уровень</span>
+          <select
+            value={levelFilterValue}
+            onChange={(event) => setLevelFilterValue(event.target.value)}
+            disabled={levelOptions.length <= 1}
+          >
+            {levelOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <div className="find-game-time-of-day">
+          {FIND_GAME_TIME_OF_DAY_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={`find-game-time-chip${timeOfDayFilter === option.value ? " active" : ""}`}
+              onClick={() => setTimeOfDayFilter(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {loading && <div className="community-loading-note find-game-loading">Загружаем игры...</div>}
 
       {!loading && error && (
@@ -817,22 +1167,45 @@ export default function FindGamePage({
         </div>
       )}
 
-      {!loading && !loadingMore && !hasMore && !error && games.length === 0 && (
+      {!loading && !loadingMore && !hasMore && !error && filteredGames.length === 0 && (
         <div className="find-game-empty">
-          <div className="find-game-empty-title">На выбранную дату нет открытых игр</div>
-          <div className="find-game-empty-text">Создайте игру первым, остальные игроки увидят ее в этом списке.</div>
+          <div className="find-game-empty-title">
+            {hasActiveFilters ? "Нет игр по выбранным фильтрам" : "На выбранную дату нет открытых игр"}
+          </div>
+          <div className="find-game-empty-text">
+            {hasActiveFilters
+              ? "Измените фильтры или прокрутите ниже для подгрузки игр."
+              : "Создайте игру первым, остальные игроки увидят ее в этом списке."}
+          </div>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              className="section-cta section-cta-secondary"
+              onClick={() => {
+                if (!isStationLockedByPreset) {
+                  setStationFilterValue(FIND_GAME_FILTER_ALL_VALUE);
+                }
+                setLevelFilterValue(FIND_GAME_FILTER_ALL_VALUE);
+                setTimeOfDayFilter("all");
+              }}
+            >
+              Сбросить фильтры
+            </button>
+          )}
         </div>
       )}
 
-      {!loading && !error && games.length > 0 && (
+      {!loading && !error && filteredGames.length > 0 && (
         <div className="find-game-list">
-          {games.map((game) => (
+          {filteredGames.map((game) => (
             <FindGameCard
               key={game.id}
               game={game}
               viewer={viewer}
-              onOpen={(targetGame) => {
-                window.location.href = buildJoinUrl(targetGame);
+              splitSubscriptionsLoading={splitSubscriptionsLoading}
+              splitHasEligibleSubscription={hasEligibleSplitSubscriptionForGame(game)}
+              onOpen={(targetGame, preferredPaymentMode) => {
+                window.location.href = buildJoinUrl(targetGame, preferredPaymentMode);
               }}
             />
           ))}

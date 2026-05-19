@@ -1,0 +1,165 @@
+<div id="root"></div>
+
+<style>
+  html,
+  body {
+    margin: 0 !important;
+    background: #f5f5f7 !important;
+  }
+
+  #root {
+    width: 100% !important;
+    min-height: 100vh !important;
+  }
+
+  .t123,
+  .t123 .t-container_100,
+  .t123 .t-width_100 {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+</style>
+
+<script>
+  (function () {
+    var assetOrigin = "https://padlhub.su";
+    var scriptPath = "/lk/games.js";
+    var releasePath = "/lk/release.json";
+    var defaultCabinetUrl = "https://padlhub.ru/lk_new";
+    var cacheBust = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+    var url = new URL(window.location.href);
+
+    function hideTildaShell() {
+      var root = document.getElementById("root");
+      var currentRecord = root && root.closest ? root.closest(".t-rec") : null;
+
+      var records = document.querySelectorAll("#allrecords > .t-rec");
+      Array.prototype.forEach.call(records, function (record) {
+        if (record !== currentRecord) {
+          record.style.display = "none";
+        }
+      });
+
+      var footer = document.getElementById("t-footer");
+      if (footer) footer.style.display = "none";
+    }
+
+    hideTildaShell();
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", hideTildaShell);
+    } else {
+      hideTildaShell();
+    }
+    window.setTimeout(hideTildaShell, 0);
+    window.setTimeout(hideTildaShell, 500);
+
+    function readHashParam(key) {
+      var hash = String(url.hash || "").replace(/^#/, "");
+      if (!hash) return null;
+      var idx = hash.indexOf("?");
+      var hashParams = new URLSearchParams(idx >= 0 ? hash.slice(idx + 1) : hash);
+      return hashParams.get(key);
+    }
+
+    var joinGameId =
+      url.searchParams.get("joinGame") ||
+      readHashParam("joinGame") ||
+      url.searchParams.get("gameId") ||
+      readHashParam("gameId") ||
+      url.searchParams.get("id") ||
+      readHashParam("id") ||
+      "";
+
+    var data = {
+      joinGameId: String(joinGameId || "").trim() || null,
+      cabinetUrl: url.searchParams.get("cabinetUrl") || url.searchParams.get("returnUrl") || defaultCabinetUrl
+    };
+
+    function showError(message) {
+      var root = document.getElementById("root");
+      if (root) {
+        root.innerHTML =
+          "<div style='padding:16px;font-family:Arial,sans-serif;color:#333'>" +
+          (message || "Не удалось загрузить приглашение в игру. Попробуйте позже.") +
+          "</div>";
+      }
+    }
+
+    function addParam(src, key, value) {
+      var scriptUrl = new URL(src, window.location.href);
+      scriptUrl.searchParams.set(key, value);
+      return scriptUrl.toString();
+    }
+
+    function buildScriptUrl(version) {
+      var src = assetOrigin + scriptPath;
+      if (version) {
+        window.__LK_RELEASE_VERSION__ = String(version);
+        src = addParam(src, "v", String(version));
+      }
+      return addParam(src, "force_ts", cacheBust);
+    }
+
+    function mountWidget() {
+      if (!data.joinGameId) {
+        showError("Не передан идентификатор игры.");
+        return;
+      }
+
+      if (!window.LKWidgetGames || typeof window.LKWidgetGames.mount !== "function") {
+        showError();
+        return;
+      }
+
+      window.LKWidgetGames.mount({
+        targetId: "root",
+        onClose: function () {
+          window.location.href = data.cabinetUrl || defaultCabinetUrl;
+        },
+        data: data
+      });
+    }
+
+    function loadScript(version) {
+      var old = document.getElementById("padlhub-game-join-script");
+      if (old && old.parentNode) old.parentNode.removeChild(old);
+
+      if (window.LKWidgetGames && typeof window.LKWidgetGames.unmount === "function") {
+        window.LKWidgetGames.unmount("root");
+      }
+      window.LKWidgetGames = undefined;
+
+      var script = document.createElement("script");
+      script.id = "padlhub-game-join-script";
+      script.src = buildScriptUrl(version);
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.onload = mountWidget;
+      script.onerror = function () {
+        showError();
+      };
+      document.head.appendChild(script);
+    }
+
+    fetch(addParam(assetOrigin + releasePath, "force_ts", cacheBust), {
+      cache: "no-store",
+      headers: {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
+      }
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error("release manifest unavailable");
+        return response.json();
+      })
+      .then(function (release) {
+        loadScript(release && release.version ? String(release.version) : null);
+      })
+      .catch(function () {
+        loadScript(String(Date.now()));
+      });
+  })();
+</script>

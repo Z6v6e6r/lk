@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "743700931941",
+    "project_id": "padlhub",
+    "storage_bucket": "padlhub.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:743700931941:android:cb128317796185aca2ad8c",
+        "android_client_info": {
+          "package_name": "com.cabinet.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDQcM1I_2-DxUqJ2cgUoEhPGQnohhmcqB8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

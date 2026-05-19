@@ -21,6 +21,10 @@ const toNum = (v) => {
 
 const phone = msg._lkPhone || null;
 const includePast = Boolean(msg._lkIncludePast);
+const needsResult = Boolean(msg._lkNeedsResult);
+const windowHours = Number.isFinite(Number(msg._lkWindowHours))
+  ? Math.max(1, Math.min(168, Math.floor(Number(msg._lkWindowHours))))
+  : null;
 const limit = Number(msg._lkLimit);
 const offset = Number.isFinite(Number(msg._lkOffset)) ? Math.max(0, Math.floor(Number(msg._lkOffset))) : 0;
 const paymentRef = msg._lkPaymentRef || null;
@@ -30,6 +34,7 @@ const stationIdFilter = toStr(msg._lkStationId);
 const stationNameFilter = toStr(msg._lkStationName);
 const dateFilter = toStr(msg._lkDate);
 const nowTs = Date.now();
+const windowStartTs = windowHours ? nowTs - (windowHours * 60 * 60 * 1000) : null;
 
 const rows = Array.isArray(msg.payload) ? msg.payload : [];
 const byKey = new Map();
@@ -111,6 +116,28 @@ const matchesDateFilter = (doc) => {
   return toStr(doc?.booking?.date) === dateFilter;
 };
 
+const hasConfirmedResult = (doc) => {
+  const matchResult = isObj(doc?.metadata?.matchResult) ? doc.metadata.matchResult : null;
+  if (!matchResult) return false;
+  const status = String(matchResult.status || "").trim().toUpperCase();
+  if (status.includes("CONFIRM") || status.includes("COMPLET")) return true;
+  if (matchResult.confirmedAt) return true;
+  return false;
+};
+
+const isInsideResultWindow = (doc) => {
+  if (windowStartTs === null) return true;
+  const endTs = Number(doc?.booking?.endTs);
+  if (Number.isFinite(endTs)) {
+    return endTs <= nowTs && endTs >= windowStartTs;
+  }
+  const startTs = Number(doc?.booking?.startTs);
+  if (Number.isFinite(startTs)) {
+    return startTs <= nowTs && startTs >= windowStartTs;
+  }
+  return false;
+};
+
 rows.forEach((doc) => {
   if (!isObj(doc)) return;
 
@@ -120,6 +147,11 @@ rows.forEach((doc) => {
 
   const endTs = Number(doc?.booking?.endTs);
   if (!includePast && Number.isFinite(endTs) && endTs < nowTs) return;
+
+  if (needsResult) {
+    if (hasConfirmedResult(doc)) return;
+    if (!isInsideResultWindow(doc)) return;
+  }
 
   if (publicMode) {
     if (doc?.settings?.isPrivate === true) return;

@@ -57,6 +57,7 @@ prod_files=(
   "$dist_dir/games.js"
   "$dist_dir/tournaments.js"
   "$dist_dir/onboarding.js"
+  "$dist_dir/levels-info.js"
   "$dist_dir/communities.js"
   "$dist_dir/release.json"
 )
@@ -66,6 +67,7 @@ dev_files=(
   "$dist_dir/games-dev.js"
   "$dist_dir/tournaments-dev.js"
   "$dist_dir/onboarding-dev.js"
+  "$dist_dir/levels-info-dev.js"
   "$dist_dir/communities-dev.js"
   "$dist_dir/release-dev.json"
 )

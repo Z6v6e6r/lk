@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { UserProfileType } from "../../utils/apiClient";
 import { CUSTOM_FIELD_IDS, getCustomFieldValue, getLetterGrade, parseNumericLevel } from "../../utils/customFields";
 import { forceAppRefresh } from "../../utils/forceAppRefresh";
@@ -6,6 +6,7 @@ import { forceAppRefresh } from "../../utils/forceAppRefresh";
 interface UserProfileProps {
   profile: UserProfileType;
   openEditForm: () => void;
+  onAvatarClick?: () => void;
 }
 
 type Rgb = { r: number; g: number; b: number };
@@ -75,9 +76,11 @@ const mixRgb = (from: Rgb, to: Rgb, t: number): Rgb => {
 const toRgbCss = (color: Rgb) => `rgb(${color.r}, ${color.g}, ${color.b})`;
 const isLevelGrade = (value: string): value is LevelGrade => value in LEVEL_RANGES;
 
-export function UserProfile({ profile, openEditForm }: UserProfileProps) {
+export function UserProfile({ profile, openEditForm, onAvatarClick }: UserProfileProps) {
   const [avatarError, setAvatarError] = useState(false);
   const [isRefreshingApp, setIsRefreshingApp] = useState(false);
+  const [isLevelHintOpen, setIsLevelHintOpen] = useState(false);
+  const levelHintRef = useRef<HTMLDivElement | null>(null);
   const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
   const initials = (profile.firstName?.[0] || "") + (profile.lastName?.[0] || "");
   const balance = (profile.deposit / 100).toLocaleString("ru-RU");
@@ -109,10 +112,43 @@ export function UserProfile({ profile, openEditForm }: UserProfileProps) {
     : undefined;
 
   const hasPhoto = Boolean(profile.photo) && !avatarError;
+  const numericLevelLabel = numericLevel != null
+    ? numericLevel.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : null;
+  const progressPercent = Math.max(0, Math.min(100, rangeProgress * 100));
+  const progressPercentLabel = progressPercent.toLocaleString("ru-RU", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
 
   useEffect(() => {
     setAvatarError(false);
   }, [profile.photo]);
+
+  useEffect(() => {
+    if (!isLevelHintOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (levelHintRef.current?.contains(target)) return;
+      setIsLevelHintOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsLevelHintOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isLevelHintOpen]);
 
   const handleForceRefresh = () => {
     if (isRefreshingApp) return;
@@ -123,54 +159,101 @@ export function UserProfile({ profile, openEditForm }: UserProfileProps) {
   return (
     <div className="cab-header">
       <div className="cab-user-row">
-        <div className="cab-avatar-wrapper">
-          <svg className="cab-avatar-ring" viewBox="0 0 60 60">
-            <circle cx="30" cy="30" r={ringRadius} fill="none" stroke="#e5e7eb" strokeWidth="4"/>
-            {Array.from({length: totalSegments}, (_, idx) => {
-              const i = idx + 1;
-              const t = i / totalSegments;
-              const segmentLength = ringCircumference / totalSegments;
-              const start = idx * segmentLength;
-              const remaining = filledLength - start;
-              const activeLength = Math.max(0, Math.min(segmentLength, remaining));
-              const isActive = activeLength > 0;
-              const activeProgress = filledLength > 0
-                ? Math.max(0, Math.min(1, (start + activeLength) / filledLength))
-                : 0;
-              const gradientColor = ringPalette
-                ? mixRgb(ringPalette.start, ringPalette.end, Math.pow(activeProgress, 1.08))
-                : mixRgb(
-                  { r: 180, g: 150, b: 255 },
-                  { r: 53, g: 63, b: 185 },
-                  Math.pow(t, 3),
-                );
-              const widthProgress = Math.pow(activeProgress, 1.9);
-              const segmentStrokeWidth = 1.35 + widthProgress * 5.55;
-              return (
-                <circle key={i}
-                  cx="30" cy="30" r={ringRadius}
-                  fill="none"
-                  stroke={isActive ? toRgbCss(gradientColor) : "transparent"}
-                  strokeWidth={isActive ? segmentStrokeWidth : 0}
-                  strokeDasharray={`${isActive ? activeLength : 0} ${ringCircumference}`}
-                  strokeDashoffset={-start}
-                  strokeLinecap="butt"
-                  transform="rotate(90 30 30)"
+        <div className="cab-avatar-tools">
+          <button
+            type="button"
+            className="cab-avatar-tap-target"
+            onClick={onAvatarClick}
+            disabled={!onAvatarClick}
+            aria-label="Открыть информацию об уровнях"
+          >
+            <div className="cab-avatar-wrapper">
+              <svg className="cab-avatar-ring" viewBox="0 0 60 60">
+                <circle cx="30" cy="30" r={ringRadius} fill="none" stroke="#e5e7eb" strokeWidth="4"/>
+                {Array.from({length: totalSegments}, (_, idx) => {
+                  const i = idx + 1;
+                  const t = i / totalSegments;
+                  const segmentLength = ringCircumference / totalSegments;
+                  const start = idx * segmentLength;
+                  const remaining = filledLength - start;
+                  const activeLength = Math.max(0, Math.min(segmentLength, remaining));
+                  const isActive = activeLength > 0;
+                  const activeProgress = filledLength > 0
+                    ? Math.max(0, Math.min(1, (start + activeLength) / filledLength))
+                    : 0;
+                  const gradientColor = ringPalette
+                    ? mixRgb(ringPalette.start, ringPalette.end, Math.pow(activeProgress, 1.08))
+                    : mixRgb(
+                      { r: 180, g: 150, b: 255 },
+                      { r: 53, g: 63, b: 185 },
+                      Math.pow(t, 3),
+                    );
+                  const widthProgress = Math.pow(activeProgress, 1.9);
+                  const segmentStrokeWidth = 1.35 + widthProgress * 5.55;
+                  return (
+                    <circle key={i}
+                      cx="30" cy="30" r={ringRadius}
+                      fill="none"
+                      stroke={isActive ? toRgbCss(gradientColor) : "transparent"}
+                      strokeWidth={isActive ? segmentStrokeWidth : 0}
+                      strokeDasharray={`${isActive ? activeLength : 0} ${ringCircumference}`}
+                      strokeDashoffset={-start}
+                      strokeLinecap="butt"
+                      transform="rotate(90 30 30)"
+                    />
+                  );
+                })}
+              </svg>
+              {hasPhoto ? (
+                <img
+                  src={profile.photo || undefined}
+                  alt="Аватар"
+                  className="cab-avatar"
+                  onError={() => setAvatarError(true)}
                 />
-              );
-            })}
-          </svg>
-          {hasPhoto ? (
-            <img
-              src={profile.photo || undefined}
-              alt="Аватар"
-              className="cab-avatar"
-              onError={() => setAvatarError(true)}
-            />
-          ) : (
-            <div className="cab-avatar cab-avatar--fallback">{initials || "?"}</div>
-          )}
-          <div className="cab-avatar-badge" style={badgeStyle}>{letterGrade || "—"}</div>
+              ) : (
+                <div className="cab-avatar cab-avatar--fallback">{initials || "?"}</div>
+              )}
+              <div className="cab-avatar-badge" style={badgeStyle}>{letterGrade || "—"}</div>
+            </div>
+          </button>
+
+          <div className="cab-level-help" ref={levelHintRef}>
+            <button
+              type="button"
+              className="cab-level-help-trigger"
+              aria-label="Показать подсказку по уровню"
+              aria-expanded={isLevelHintOpen}
+              onClick={() => setIsLevelHintOpen((prev) => !prev)}
+            >
+              <span className="cab-level-help-dot">?</span>
+            </button>
+
+            {isLevelHintOpen && (
+              <div className="cab-level-help-popover" role="status">
+                {gradeKey && numericLevelLabel ? (
+                  <>
+                    <div className="cab-level-help-title">Уровень {gradeKey}</div>
+                    <div className="cab-level-help-copy">
+                      Рейтинг {numericLevelLabel}, прогресс внутри уровня: {progressPercentLabel}%.
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="cab-level-help-title">Уровень пока не определен</div>
+                    <div className="cab-level-help-copy">
+                      Добавьте числовой рейтинг в профиль, чтобы видеть уровень и прогресс.
+                    </div>
+                  </>
+                )}
+                {onAvatarClick && (
+                  <div className="cab-level-help-copy">
+                    Нажмите на аватар, чтобы открыть подробную расшифровку уровней.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
         <div className="cab-user-info">
           <div className="cab-user-name-row">

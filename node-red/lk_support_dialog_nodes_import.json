@@ -892,5 +892,457 @@
     "x": 1360,
     "y": 6460,
     "wires": []
+  },
+  {
+    "id": "push_comment_001",
+    "type": "comment",
+    "z": "1e95dcebc274ac6c",
+    "name": "Push backend",
+    "info": "Push API для мобильного клиента и ЦУП.\nКоллекция: push_tokens.\nREST:\n- POST /lk/push/register\n- POST /lk/push/unregister\n- POST /lk/push/admin/send\n\nДля отправки FCM из Node-RED задайте env:\n- PUSH_FCM_SERVICE_ACCOUNT_PATH=/abs/path/service-account.json\n- PUSH_FCM_SEND_SCRIPT=/abs/path/scripts/fcm/send-fcm.mjs (опционально)\n- PUSH_FCM_PROJECT_ID=<firebase-project-id> (опционально)",
+    "x": 250,
+    "y": 6540,
+    "wires": []
+  },
+  {
+    "id": "push_register_in_001",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "Push register",
+    "url": "/lk/push/register",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 120,
+    "y": 6600,
+    "wires": [
+      [
+        "push_register_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_register_fn_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Push register prepare",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst uniq = (values) => Array.from(new Set(values.filter(Boolean)));\nconst normPhone = (value) => {\n  const digits = String(value || \"\").replace(/\\D/g, \"\");\n  if (!digits) return null;\n  if (digits.length === 10) return `7${digits}`;\n  if (digits.length === 11 && digits.startsWith(\"8\")) return `7${digits.slice(1)}`;\n  return digits;\n};\nconst normEmail = (value) => {\n  const email = toStr(value)?.toLowerCase();\n  return email && email.includes(\"@\") ? email : null;\n};\nconst decodeBase64Url = (value) => {\n  const normalized = String(value || \"\")\n    .replace(/-/g, \"+\")\n    .replace(/_/g, \"/\");\n  const pad = normalized.length % 4 === 0 ? \"\" : \"=\".repeat(4 - (normalized.length % 4));\n  const full = normalized + pad;\n  try {\n    return Buffer.from(full, \"base64\").toString(\"utf8\");\n  } catch {\n    return null;\n  }\n};\nconst parseJwtPayload = (token) => {\n  const parts = String(token || \"\").split(\".\");\n  if (parts.length < 2) return {};\n  const decoded = decodeBase64Url(parts[1]);\n  if (!decoded) return {};\n  try {\n    const parsed = JSON.parse(decoded);\n    return isObj(parsed) ? parsed : {};\n  } catch {\n    return {};\n  }\n};\nconst cleanObj = (value) => {\n  if (!isObj(value)) return {};\n  const result = {};\n  Object.entries(value).forEach(([key, current]) => {\n    if (current === undefined) return;\n    result[key] = current;\n  });\n  return result;\n};\n\nconst reqHeaders = isObj(msg.req?.headers) ? msg.req.headers : {};\nconst authHeader = toStr(reqHeaders.authorization || reqHeaders.Authorization);\nconst bearerToken = authHeader && /^Bearer\\s+/i.test(authHeader)\n  ? authHeader.replace(/^Bearer\\s+/i, \"\").trim()\n  : null;\nconst claims = bearerToken ? parseJwtPayload(bearerToken) : {};\n\nconst body = isObj(msg.payload) ? msg.payload : {};\nconst token = toStr(body.token);\nif (!token) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"token is required\" };\n  return [null, msg, msg];\n}\n\nconst now = new Date();\nconst nowIso = now.toISOString();\nconst nowTs = now.getTime();\n\nconst tenantKey = toStr(body.tenantKey) || toStr(claims.tenantKey) || \"iSkq6G\";\nconst platform = toStr(body.platform)?.toLowerCase() || \"android\";\n\nconst subject = toStr(claims.sub);\nconst userId =\n  toStr(body.userId)\n  || toStr(claims.userId)\n  || toStr(claims.user_id)\n  || toStr(claims.id);\nconst clientId =\n  toStr(body.clientId)\n  || toStr(claims.clientId)\n  || toStr(claims.client_id);\nconst username = toStr(body.username) || toStr(claims.preferred_username) || toStr(claims.name);\nconst email = normEmail(body.email) || normEmail(claims.email);\nconst phone = normPhone(body.phone) || normPhone(claims.phone_number) || normPhone(claims.phone);\n\nconst identityKeys = uniq([\n  subject ? `subject:${subject}` : null,\n  userId ? `user:${userId}` : null,\n  clientId ? `client:${clientId}` : null,\n  username ? `username:${username.toLowerCase()}` : null,\n  email ? `email:${email}` : null,\n  phone ? `phone:${phone}` : null,\n  ...((Array.isArray(body.identityKeys) ? body.identityKeys : [])\n    .map((value) => toStr(value))\n    .filter(Boolean)),\n]);\n\nconst docId = `push:${tenantKey}:${token}`;\nconst setDoc = cleanObj({\n  token,\n  tenantKey,\n  platform,\n  channel: \"FCM\",\n  appVersion: toStr(body.appVersion),\n  timezone: toStr(body.timezone),\n  userAgent: toStr(body.userAgent),\n  subject,\n  userId,\n  clientId,\n  username,\n  email,\n  phone,\n  identityKeys,\n  active: true,\n  registeredAt: toStr(body.registeredAt) || nowIso,\n  registeredTs: nowTs,\n  unregisteredAt: null,\n  updatedAt: nowIso,\n  updatedTs: nowTs,\n  claims: cleanObj({\n    iss: toStr(claims.iss),\n    aud: toStr(claims.aud),\n    azp: toStr(claims.azp),\n    scope: toStr(claims.scope),\n  }),\n});\n\nmsg._pushRegister = {\n  id: docId,\n  token,\n  tenantKey,\n  platform,\n  identityKeys,\n};\n\nmsg.payload = [\n  { id: docId },\n  {\n    $set: setDoc,\n    $setOnInsert: {\n      id: docId,\n      createdAt: nowIso,\n      createdTs: nowTs,\n    },\n  },\n  { upsert: true },\n];\n\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 390,
+    "y": 6600,
+    "wires": [
+      [
+        "push_register_upsert_001"
+      ],
+      [
+        "push_register_http_resp_001"
+      ],
+      [
+        "push_register_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_register_upsert_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "push_tokens",
+    "operation": "updateOne",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Upsert push token",
+    "x": 670,
+    "y": 6600,
+    "wires": [
+      [
+        "push_register_fn_response_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_register_fn_response_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Push register response",
+    "func": "msg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = {\n  ok: true,\n  id: msg._pushRegister?.id || null,\n  token: msg._pushRegister?.token || null,\n  tenantKey: msg._pushRegister?.tenantKey || null,\n  platform: msg._pushRegister?.platform || null,\n  active: true,\n  identityKeys: Array.isArray(msg._pushRegister?.identityKeys) ? msg._pushRegister.identityKeys : [],\n};\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 950,
+    "y": 6600,
+    "wires": [
+      [
+        "push_register_http_resp_001"
+      ],
+      [
+        "push_register_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_register_http_resp_001",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 1220,
+    "y": 6600,
+    "wires": []
+  },
+  {
+    "id": "push_register_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "push register debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1220,
+    "y": 6640,
+    "wires": []
+  },
+  {
+    "id": "push_unregister_in_001",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "Push unregister",
+    "url": "/lk/push/unregister",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 120,
+    "y": 6700,
+    "wires": [
+      [
+        "push_unregister_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_unregister_fn_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Push unregister prepare",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\n\nconst body = isObj(msg.payload) ? msg.payload : {};\nconst token = toStr(body.token);\nif (!token) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"token is required\" };\n  return [null, msg, msg];\n}\n\nconst tenantKey = toStr(body.tenantKey);\nconst now = new Date();\nconst nowIso = now.toISOString();\nconst nowTs = now.getTime();\n\nconst query = tenantKey\n  ? { token, tenantKey }\n  : { token };\n\nmsg._pushUnregister = {\n  token,\n  tenantKey: tenantKey || null,\n};\n\nmsg.payload = [\n  query,\n  {\n    $set: {\n      active: false,\n      unregisteredAt: toStr(body.unregisteredAt) || nowIso,\n      updatedAt: nowIso,\n      updatedTs: nowTs,\n    },\n  },\n  { upsert: false },\n];\n\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 400,
+    "y": 6700,
+    "wires": [
+      [
+        "push_unregister_update_001"
+      ],
+      [
+        "push_unregister_http_resp_001"
+      ],
+      [
+        "push_unregister_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_unregister_update_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "push_tokens",
+    "operation": "updateOne",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Deactivate push token",
+    "x": 690,
+    "y": 6700,
+    "wires": [
+      [
+        "push_unregister_fn_response_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_unregister_fn_response_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Push unregister response",
+    "func": "msg.statusCode = 200;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = {\n  ok: true,\n  token: msg._pushUnregister?.token || null,\n  tenantKey: msg._pushUnregister?.tenantKey || null,\n  active: false,\n};\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 980,
+    "y": 6700,
+    "wires": [
+      [
+        "push_unregister_http_resp_001"
+      ],
+      [
+        "push_unregister_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_unregister_http_resp_001",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 1260,
+    "y": 6700,
+    "wires": []
+  },
+  {
+    "id": "push_unregister_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "push unregister debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1260,
+    "y": 6740,
+    "wires": []
+  },
+  {
+    "id": "push_admin_send_in_001",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "Push admin send",
+    "url": "/lk/push/admin/send",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 120,
+    "y": 6820,
+    "wires": [
+      [
+        "push_admin_send_fn_prepare_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_admin_send_fn_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Push admin send prepare",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst uniq = (values) => Array.from(new Set(values.filter(Boolean)));\nconst toInt = (value, fallback = 0) => {\n  const parsed = Number(value);\n  return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;\n};\nconst parseBool = (value) => {\n  if (typeof value === \"boolean\") return value;\n  const normalized = toStr(value)?.toLowerCase();\n  if (!normalized) return false;\n  return normalized === \"1\" || normalized === \"true\" || normalized === \"yes\" || normalized === \"on\";\n};\nconst normPhone = (value) => {\n  const digits = String(value || \"\").replace(/\\D/g, \"\");\n  if (!digits) return null;\n  if (digits.length === 10) return `7${digits}`;\n  if (digits.length === 11 && digits.startsWith(\"8\")) return `7${digits.slice(1)}`;\n  return digits;\n};\nconst normEmail = (value) => {\n  const email = toStr(value)?.toLowerCase();\n  return email && email.includes(\"@\") ? email : null;\n};\nconst toDataMap = (value) => {\n  if (!isObj(value)) return {};\n  const result = {};\n  Object.entries(value).forEach(([key, current]) => {\n    const safeKey = toStr(key);\n    if (!safeKey) return;\n    if (current === null || current === undefined) return;\n    result[safeKey] = String(current);\n  });\n  return result;\n};\nconst toTokenArray = (value) => {\n  if (Array.isArray(value)) {\n    return uniq(value.map((item) => toStr(item)));\n  }\n  const single = toStr(value);\n  if (!single) return [];\n  if (!single.includes(\",\")) return [single];\n  return uniq(single.split(\",\").map((item) => toStr(item)));\n};\n\nconst body = isObj(msg.payload) ? msg.payload : {};\nconst title = toStr(body.title);\nconst text = toStr(body.body) || toStr(body.text) || toStr(body.message);\nconst data = toDataMap(body.data);\nconst channelId = toStr(body.androidChannelId || body.channelId) || \"lk_default\";\nconst dryRun = parseBool(body.dryRun);\nconst tenantKey = toStr(body.tenantKey);\n\nif (!title && !text && Object.keys(data).length === 0) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Provide title, body or data payload\" };\n  return [null, null, msg, msg];\n}\n\nconst explicitTokens = uniq([\n  ...toTokenArray(body.token),\n  ...toTokenArray(body.tokens),\n]);\n\nconst maxRecipients = Math.min(100, Math.max(1, toInt(body.limit, 20)));\nconst allowBroadcast = parseBool(body.allowBroadcast);\nconst userId = toStr(body.userId);\nconst clientId = toStr(body.clientId);\nconst subject = toStr(body.subject);\nconst username = toStr(body.username);\nconst identityKey = toStr(body.identityKey);\nconst phone = normPhone(body.phone);\nconst email = normEmail(body.email);\n\nconst requestId =\n  toStr(body.requestId)\n  || `push_admin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;\n\nmsg._pushAdminSend = {\n  requestId,\n  tenantKey,\n  title,\n  body: text,\n  data,\n  dryRun,\n  channelId,\n  maxRecipients,\n  allowBroadcast,\n  directTokens: explicitTokens,\n};\n\nif (explicitTokens.length > 0) {\n  msg.payload = explicitTokens;\n  return [null, msg, null, msg];\n}\n\nconst query = { active: true };\nif (tenantKey) query.tenantKey = tenantKey;\n\nconst filters = [];\nif (userId) {\n  filters.push({ userId });\n  filters.push({ identityKeys: `user:${userId}` });\n}\nif (clientId) {\n  filters.push({ clientId });\n  filters.push({ identityKeys: `client:${clientId}` });\n}\nif (subject) {\n  filters.push({ subject });\n  filters.push({ identityKeys: `subject:${subject}` });\n}\nif (username) {\n  filters.push({ username });\n  filters.push({ identityKeys: `username:${username.toLowerCase()}` });\n}\nif (identityKey) {\n  filters.push({ identityKeys: identityKey });\n}\nif (phone) {\n  filters.push({ phone });\n  filters.push({ identityKeys: `phone:${phone}` });\n}\nif (email) {\n  filters.push({ email });\n  filters.push({ identityKeys: `email:${email}` });\n}\n\nif (filters.length > 0) {\n  query.$or = filters;\n} else if (!allowBroadcast) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = {\n    error: \"Specify token or recipient filter (userId/clientId/phone/email) or set allowBroadcast=true\",\n  };\n  return [null, null, msg, msg];\n}\n\nmsg.payload = query;\nreturn [msg, null, null, msg];\n",
+    "outputs": 4,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 410,
+    "y": 6820,
+    "wires": [
+      [
+        "push_admin_send_find_tokens_001"
+      ],
+      [
+        "push_admin_send_fn_resolve_001"
+      ],
+      [
+        "push_admin_send_http_resp_001"
+      ],
+      [
+        "push_admin_send_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_admin_send_find_tokens_001",
+    "type": "mongodb4",
+    "z": "1e95dcebc274ac6c",
+    "clientNode": "4e820638cc39c730",
+    "mode": "collection",
+    "collection": "push_tokens",
+    "operation": "find",
+    "output": "toArray",
+    "maxTimeMS": "0",
+    "handleDocId": false,
+    "name": "Find push tokens",
+    "x": 700,
+    "y": 6780,
+    "wires": [
+      [
+        "push_admin_send_fn_resolve_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_admin_send_fn_resolve_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Push admin resolve tokens",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst uniq = (values) => Array.from(new Set(values.filter(Boolean)));\nconst toArray = (value) => (Array.isArray(value) ? value : []);\n\nconst ctx = isObj(msg._pushAdminSend) ? msg._pushAdminSend : null;\nif (!ctx) {\n  msg.statusCode = 500;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Push admin context is missing\" };\n  return [null, msg, msg];\n}\n\nconst rows = toArray(msg.payload).filter((item) => isObj(item));\nconst tokens = uniq(\n  (Array.isArray(ctx.directTokens) && ctx.directTokens.length > 0\n    ? ctx.directTokens\n    : rows.map((row) => toStr(row.token)))\n    .map((token) => toStr(token)),\n).slice(0, Math.max(1, Number(ctx.maxRecipients || 20)));\n\nif (tokens.length === 0) {\n  msg.statusCode = 404;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = {\n    error: \"No active push tokens matched recipient filter\",\n    requestId: ctx.requestId || null,\n  };\n  return [null, msg, msg];\n}\n\nmsg._pushAdminSend = Object.assign({}, ctx, {\n  resolvedTokens: tokens,\n  matchedRows: rows.length,\n});\n\nmsg.payload = {\n  tokensCount: tokens.length,\n  matchedRows: rows.length,\n};\n\nreturn [msg, null, msg];\n",
+    "outputs": 3,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 710,
+    "y": 6860,
+    "wires": [
+      [
+        "push_admin_send_fn_exec_prepare_001"
+      ],
+      [
+        "push_admin_send_http_resp_001"
+      ],
+      [
+        "push_admin_send_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_admin_send_fn_exec_prepare_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Push admin build exec",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toStr = (value) => {\n  if (value === null || value === undefined) return null;\n  const normalized = String(value).trim();\n  return normalized ? normalized : null;\n};\nconst toArray = (value) => (Array.isArray(value) ? value : []);\nconst shellQuote = (value) => `'${String(value || \"\").replace(/'/g, `'\\\"'\\\"'`)}'`;\n\nconst ctx = isObj(msg._pushAdminSend) ? msg._pushAdminSend : null;\nif (!ctx) {\n  msg.statusCode = 500;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Push admin context is missing before exec\" };\n  return [null, msg];\n}\n\nconst tokens = toArray(ctx.resolvedTokens).map((token) => toStr(token)).filter(Boolean);\nif (tokens.length === 0) {\n  msg.statusCode = 400;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = { error: \"Resolved tokens are empty\", requestId: ctx.requestId || null };\n  return [null, msg];\n}\n\nconst scriptPath = toStr(env.get(\"PUSH_FCM_SEND_SCRIPT\")) || \"scripts/fcm/send-fcm.mjs\";\nconst serviceAccountPath = toStr(env.get(\"PUSH_FCM_SERVICE_ACCOUNT_PATH\"));\nconst projectId = toStr(env.get(\"PUSH_FCM_PROJECT_ID\"));\nif (!serviceAccountPath) {\n  msg.statusCode = 500;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = {\n    error: \"PUSH_FCM_SERVICE_ACCOUNT_PATH is not configured in Node-RED env\",\n    requestId: ctx.requestId || null,\n  };\n  return [null, msg];\n}\n\nconst baseArgs = [\n  `node ${shellQuote(scriptPath)}`,\n  `--service-account ${shellQuote(serviceAccountPath)}`,\n  projectId ? `--project-id ${shellQuote(projectId)}` : null,\n  ctx.title ? `--title ${shellQuote(ctx.title)}` : null,\n  ctx.body ? `--body ${shellQuote(ctx.body)}` : null,\n  ctx.channelId ? `--android-channel-id ${shellQuote(ctx.channelId)}` : null,\n  ctx.dryRun ? \"--dry-run\" : null,\n]\n  .filter(Boolean)\n  .join(\" \");\n\nconst dataArgs = isObj(ctx.data)\n  ? Object.entries(ctx.data)\n      .map(([key, value]) => {\n        const safeKey = toStr(key);\n        if (!safeKey || value === null || value === undefined) return null;\n        return `--data ${shellQuote(`${safeKey}=${String(value)}`)}`;\n      })\n      .filter(Boolean)\n      .join(\" \")\n  : \"\";\n\nconst command = tokens\n  .map((token) => `${baseArgs} --token ${shellQuote(token)}${dataArgs ? ` ${dataArgs}` : \"\"}`)\n  .join(\" && \");\n\nmsg._pushAdminCommand = {\n  requestId: ctx.requestId || null,\n  tokens,\n  tokensCount: tokens.length,\n  dryRun: Boolean(ctx.dryRun),\n  channelId: ctx.channelId || null,\n  title: ctx.title || null,\n  body: ctx.body || null,\n};\nmsg.payload = command;\n\nreturn [msg, null];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1020,
+    "y": 6860,
+    "wires": [
+      [
+        "push_admin_send_exec_001"
+      ],
+      [
+        "push_admin_send_http_resp_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_admin_send_exec_001",
+    "type": "exec",
+    "z": "1e95dcebc274ac6c",
+    "command": "/bin/sh",
+    "addpay": "payload",
+    "append": "-lc",
+    "useSpawn": "false",
+    "timer": "",
+    "oldrc": false,
+    "name": "Dispatch FCM",
+    "x": 1260,
+    "y": 6860,
+    "wires": [
+      [
+        "push_admin_send_exec_stdout_debug_001"
+      ],
+      [
+        "push_admin_send_exec_stderr_debug_001"
+      ],
+      [
+        "push_admin_send_fn_exec_response_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_admin_send_fn_exec_response_001",
+    "type": "function",
+    "z": "1e95dcebc274ac6c",
+    "name": "Push admin exec response",
+    "func": "const isObj = (value) => value && typeof value === \"object\" && !Array.isArray(value);\nconst toNum = (value, fallback = NaN) => {\n  const parsed = Number(value);\n  return Number.isFinite(parsed) ? parsed : fallback;\n};\nconst resolveRc = (msgValue, payloadValue) => {\n  const direct = toNum(msgValue?.rc?.code);\n  if (Number.isFinite(direct)) return direct;\n  const payloadCode = toNum(payloadValue?.code);\n  if (Number.isFinite(payloadCode)) return payloadCode;\n  const payloadDirect = toNum(payloadValue);\n  if (Number.isFinite(payloadDirect)) return payloadDirect;\n  return -1;\n};\n\nconst ctx = isObj(msg._pushAdminCommand) ? msg._pushAdminCommand : {};\nconst payload = msg.payload;\n\nconst rc = resolveRc(msg, payload);\n\nif (rc === 0) {\n  msg.statusCode = 200;\n  msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n  msg.payload = {\n    ok: true,\n    requestId: ctx.requestId || null,\n    sent: ctx.tokensCount || 0,\n    tokens: Array.isArray(ctx.tokens) ? ctx.tokens : [],\n    dryRun: Boolean(ctx.dryRun),\n    channelId: ctx.channelId || null,\n    title: ctx.title || null,\n    body: ctx.body || null,\n  };\n  return [msg, msg];\n}\n\nmsg.statusCode = 502;\nmsg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\nmsg.payload = {\n  error: \"FCM dispatch command failed\",\n  requestId: ctx.requestId || null,\n  rc,\n};\nreturn [msg, msg];\n",
+    "outputs": 2,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1510,
+    "y": 6860,
+    "wires": [
+      [
+        "push_admin_send_http_resp_001"
+      ],
+      [
+        "push_admin_send_debug_001"
+      ]
+    ]
+  },
+  {
+    "id": "push_admin_send_http_resp_001",
+    "type": "http response",
+    "z": "1e95dcebc274ac6c",
+    "name": "",
+    "x": 1770,
+    "y": 6820,
+    "wires": []
+  },
+  {
+    "id": "push_admin_send_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "push admin send debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1770,
+    "y": 6860,
+    "wires": []
+  },
+  {
+    "id": "push_admin_send_exec_stdout_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "push admin send exec stdout",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1510,
+    "y": 6920,
+    "wires": []
+  },
+  {
+    "id": "push_admin_send_exec_stderr_debug_001",
+    "type": "debug",
+    "z": "1e95dcebc274ac6c",
+    "name": "push admin send exec stderr",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1510,
+    "y": 6960,
+    "wires": []
   }
 ]

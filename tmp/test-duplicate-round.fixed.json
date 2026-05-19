@@ -1,0 +1,657 @@
+{
+  "_id": {
+    "$oid": "000000000000000000000001"
+  },
+  "tournamentId": "test-dup-round",
+  "tournamentType": "mexicano",
+  "courts": [
+    "Корт №1",
+    "Корт №2"
+  ],
+  "params": {
+    "mexicanoMode": "classic",
+    "byePointsMode": "zero",
+    "totalRounds": 2
+  },
+  "participants": [
+    {
+      "id": "p1",
+      "name": "P1",
+      "rating": "2.0"
+    },
+    {
+      "id": "p2",
+      "name": "P2",
+      "rating": "2.0"
+    },
+    {
+      "id": "p3",
+      "name": "P3",
+      "rating": "2.0"
+    },
+    {
+      "id": "p4",
+      "name": "P4",
+      "rating": "2.0"
+    },
+    {
+      "id": "p5",
+      "name": "P5",
+      "rating": "2.0"
+    },
+    {
+      "id": "p6",
+      "name": "P6",
+      "rating": "2.0"
+    },
+    {
+      "id": "p7",
+      "name": "P7",
+      "rating": "2.0"
+    },
+    {
+      "id": "p8",
+      "name": "P8",
+      "rating": "2.0"
+    }
+  ],
+  "rounds": [
+    {
+      "id": "round-1",
+      "index": 1,
+      "byes": [],
+      "matches": [
+        {
+          "id": "round-1-match-1",
+          "pair1": [
+            "p5",
+            "p2"
+          ],
+          "pair2": [
+            "p3",
+            "p4"
+          ],
+          "score1": 13,
+          "score2": 8,
+          "quality": {
+            "explanation": "x p5"
+          },
+          "results": {
+            "p5": {
+              "actual": 0.8175744761936437,
+              "ratingBefore": 2,
+              "ratingAfter": 2.04061,
+              "delta": 0.04061
+            },
+            "p2": {
+              "actual": 0.8175744761936437,
+              "ratingBefore": 2,
+              "ratingAfter": 2.04061,
+              "delta": 0.04061
+            },
+            "p3": {
+              "actual": 0.18242552380635635,
+              "ratingBefore": 2,
+              "ratingAfter": 1.95939,
+              "delta": -0.04061
+            },
+            "p4": {
+              "actual": 0.18242552380635635,
+              "ratingBefore": 2,
+              "ratingAfter": 1.95939,
+              "delta": -0.04061
+            }
+          }
+        },
+        {
+          "id": "round-1-match-2",
+          "pair1": [
+            "p6",
+            "p7"
+          ],
+          "pair2": [
+            "p8",
+            "p1"
+          ],
+          "score1": 7,
+          "score2": 14,
+          "quality": {
+            "explanation": "p1,p8,p2,p7"
+          },
+          "results": {
+            "p6": {
+              "actual": 0.10909682119561294,
+              "ratingBefore": 2,
+              "ratingAfter": 1.95001,
+              "delta": -0.04999
+            },
+            "p7": {
+              "actual": 0.10909682119561294,
+              "ratingBefore": 2,
+              "ratingAfter": 1.95001,
+              "delta": -0.04999
+            },
+            "p8": {
+              "actual": 0.8909031788043871,
+              "ratingBefore": 2,
+              "ratingAfter": 2.04999,
+              "delta": 0.04999
+            },
+            "p1": {
+              "actual": 0.8909031788043871,
+              "ratingBefore": 2,
+              "ratingAfter": 2.04999,
+              "delta": 0.04999
+            }
+          }
+        }
+      ],
+      "summary": {
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      }
+    },
+    {
+      "id": "round-2",
+      "index": 2,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-1"
+      },
+      "matches": [
+        {
+          "id": "round-2-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "p1",
+            "p2"
+          ],
+          "pair2": [
+            "p8",
+            "p5"
+          ],
+          "score1": null,
+          "score2": null,
+          "quality": {
+            "score": 95,
+            "label": "Мексикано",
+            "explanation": "схема: 1+3 vs 2+4 · позиции p1,p8,p2,p5",
+            "partnerRepeatCount": 0,
+            "opponentRepeatCount": 0,
+            "balanceGap": 1,
+            "courtRepeatPressure": 0
+          },
+          "summary": {
+            "pairPower1": 0,
+            "pairPower2": 0,
+            "balanceGap": 1,
+            "partnerRepeatCount": 0,
+            "opponentRepeatCount": 0
+          }
+        },
+        {
+          "id": "round-2-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "p3",
+            "p6"
+          ],
+          "pair2": [
+            "p4",
+            "p7"
+          ],
+          "score1": null,
+          "score2": null,
+          "quality": {
+            "score": 95,
+            "label": "Мексикано",
+            "explanation": "схема: 1+3 vs 2+4 · позиции p3,p4,p6,p7",
+            "partnerRepeatCount": 0,
+            "opponentRepeatCount": 0,
+            "balanceGap": 1,
+            "courtRepeatPressure": 0
+          },
+          "summary": {
+            "pairPower1": 0,
+            "pairPower2": 0,
+            "balanceGap": 1,
+            "partnerRepeatCount": 0,
+            "opponentRepeatCount": 0
+          }
+        }
+      ]
+    }
+  ],
+  "playerLogs": {
+    "p5": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-1",
+        "scoreFor": 13,
+        "scoreAgainst": 8,
+        "delta": 0.04061,
+        "ratingBefore": 2,
+        "ratingAfter": 2.04061,
+        "expected": 0.5,
+        "actual": 0.8175744761936437
+      }
+    ],
+    "p2": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-1",
+        "scoreFor": 13,
+        "scoreAgainst": 8,
+        "delta": 0.04061,
+        "ratingBefore": 2,
+        "ratingAfter": 2.04061,
+        "expected": 0.5,
+        "actual": 0.8175744761936437
+      }
+    ],
+    "p3": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-1",
+        "scoreFor": 8,
+        "scoreAgainst": 13,
+        "delta": -0.04061,
+        "ratingBefore": 2,
+        "ratingAfter": 1.95939,
+        "expected": 0.5,
+        "actual": 0.18242552380635635
+      }
+    ],
+    "p4": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-1",
+        "scoreFor": 8,
+        "scoreAgainst": 13,
+        "delta": -0.04061,
+        "ratingBefore": 2,
+        "ratingAfter": 1.95939,
+        "expected": 0.5,
+        "actual": 0.18242552380635635
+      }
+    ],
+    "p6": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-2",
+        "scoreFor": 7,
+        "scoreAgainst": 14,
+        "delta": -0.04999,
+        "ratingBefore": 2,
+        "ratingAfter": 1.95001,
+        "expected": 0.5,
+        "actual": 0.10909682119561294
+      }
+    ],
+    "p7": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-2",
+        "scoreFor": 7,
+        "scoreAgainst": 14,
+        "delta": -0.04999,
+        "ratingBefore": 2,
+        "ratingAfter": 1.95001,
+        "expected": 0.5,
+        "actual": 0.10909682119561294
+      }
+    ],
+    "p8": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-2",
+        "scoreFor": 14,
+        "scoreAgainst": 7,
+        "delta": 0.04999,
+        "ratingBefore": 2,
+        "ratingAfter": 2.04999,
+        "expected": 0.5,
+        "actual": 0.8909031788043871
+      }
+    ],
+    "p1": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-2",
+        "scoreFor": 14,
+        "scoreAgainst": 7,
+        "delta": 0.04999,
+        "ratingBefore": 2,
+        "ratingAfter": 2.04999,
+        "expected": 0.5,
+        "actual": 0.8909031788043871
+      }
+    ]
+  },
+  "totals": {
+    "p1": {
+      "ratingBefore": 2,
+      "ratingAfter": 2.04999,
+      "deltaTotal": 0.04999,
+      "wins": 1,
+      "losses": 0,
+      "draws": 0,
+      "pointsFor": 14,
+      "pointsAgainst": 7,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 14,
+      "playedPoints": 14,
+      "pointDiff": 7,
+      "matchesPlayed": 1,
+      "rank": 1
+    },
+    "p8": {
+      "ratingBefore": 2,
+      "ratingAfter": 2.04999,
+      "deltaTotal": 0.04999,
+      "wins": 1,
+      "losses": 0,
+      "draws": 0,
+      "pointsFor": 14,
+      "pointsAgainst": 7,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 14,
+      "playedPoints": 14,
+      "pointDiff": 7,
+      "matchesPlayed": 1,
+      "rank": 2
+    },
+    "p2": {
+      "ratingBefore": 2,
+      "ratingAfter": 2.04061,
+      "deltaTotal": 0.04061,
+      "wins": 1,
+      "losses": 0,
+      "draws": 0,
+      "pointsFor": 13,
+      "pointsAgainst": 8,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 13,
+      "playedPoints": 13,
+      "pointDiff": 5,
+      "matchesPlayed": 1,
+      "rank": 3
+    },
+    "p5": {
+      "ratingBefore": 2,
+      "ratingAfter": 2.04061,
+      "deltaTotal": 0.04061,
+      "wins": 1,
+      "losses": 0,
+      "draws": 0,
+      "pointsFor": 13,
+      "pointsAgainst": 8,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 13,
+      "playedPoints": 13,
+      "pointDiff": 5,
+      "matchesPlayed": 1,
+      "rank": 4
+    },
+    "p3": {
+      "ratingBefore": 2,
+      "ratingAfter": 1.95939,
+      "deltaTotal": -0.04061,
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "pointsFor": 8,
+      "pointsAgainst": 13,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 8,
+      "playedPoints": 8,
+      "pointDiff": -5,
+      "matchesPlayed": 1,
+      "rank": 5
+    },
+    "p4": {
+      "ratingBefore": 2,
+      "ratingAfter": 1.95939,
+      "deltaTotal": -0.04061,
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "pointsFor": 8,
+      "pointsAgainst": 13,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 8,
+      "playedPoints": 8,
+      "pointDiff": -5,
+      "matchesPlayed": 1,
+      "rank": 6
+    },
+    "p6": {
+      "ratingBefore": 2,
+      "ratingAfter": 1.95001,
+      "deltaTotal": -0.04999,
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "pointsFor": 7,
+      "pointsAgainst": 14,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 7,
+      "playedPoints": 7,
+      "pointDiff": -7,
+      "matchesPlayed": 1,
+      "rank": 7
+    },
+    "p7": {
+      "ratingBefore": 2,
+      "ratingAfter": 1.95001,
+      "deltaTotal": -0.04999,
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "pointsFor": 7,
+      "pointsAgainst": 14,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 7,
+      "playedPoints": 7,
+      "pointDiff": -7,
+      "matchesPlayed": 1,
+      "rank": 8
+    }
+  },
+  "standings": [
+    {
+      "id": "p1",
+      "name": "P1",
+      "matchesPlayed": 1,
+      "wins": 1,
+      "losses": 0,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 14,
+      "totalPoints": 14,
+      "tournamentPoints": 14,
+      "pointsFor": 14,
+      "pointsAgainst": 7,
+      "pointDiff": 7,
+      "ratingBefore": 2,
+      "ratingAfter": 2.04999,
+      "ratingDelta": 0.04999,
+      "deltaTotal": 0.04999,
+      "rank": 1
+    },
+    {
+      "id": "p8",
+      "name": "P8",
+      "matchesPlayed": 1,
+      "wins": 1,
+      "losses": 0,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 14,
+      "totalPoints": 14,
+      "tournamentPoints": 14,
+      "pointsFor": 14,
+      "pointsAgainst": 7,
+      "pointDiff": 7,
+      "ratingBefore": 2,
+      "ratingAfter": 2.04999,
+      "ratingDelta": 0.04999,
+      "deltaTotal": 0.04999,
+      "rank": 2
+    },
+    {
+      "id": "p2",
+      "name": "P2",
+      "matchesPlayed": 1,
+      "wins": 1,
+      "losses": 0,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 13,
+      "totalPoints": 13,
+      "tournamentPoints": 13,
+      "pointsFor": 13,
+      "pointsAgainst": 8,
+      "pointDiff": 5,
+      "ratingBefore": 2,
+      "ratingAfter": 2.04061,
+      "ratingDelta": 0.04061,
+      "deltaTotal": 0.04061,
+      "rank": 3
+    },
+    {
+      "id": "p5",
+      "name": "P5",
+      "matchesPlayed": 1,
+      "wins": 1,
+      "losses": 0,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 13,
+      "totalPoints": 13,
+      "tournamentPoints": 13,
+      "pointsFor": 13,
+      "pointsAgainst": 8,
+      "pointDiff": 5,
+      "ratingBefore": 2,
+      "ratingAfter": 2.04061,
+      "ratingDelta": 0.04061,
+      "deltaTotal": 0.04061,
+      "rank": 4
+    },
+    {
+      "id": "p3",
+      "name": "P3",
+      "matchesPlayed": 1,
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 8,
+      "totalPoints": 8,
+      "tournamentPoints": 8,
+      "pointsFor": 8,
+      "pointsAgainst": 13,
+      "pointDiff": -5,
+      "ratingBefore": 2,
+      "ratingAfter": 1.95939,
+      "ratingDelta": -0.04061,
+      "deltaTotal": -0.04061,
+      "rank": 5
+    },
+    {
+      "id": "p4",
+      "name": "P4",
+      "matchesPlayed": 1,
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 8,
+      "totalPoints": 8,
+      "tournamentPoints": 8,
+      "pointsFor": 8,
+      "pointsAgainst": 13,
+      "pointDiff": -5,
+      "ratingBefore": 2,
+      "ratingAfter": 1.95939,
+      "ratingDelta": -0.04061,
+      "deltaTotal": -0.04061,
+      "rank": 6
+    },
+    {
+      "id": "p6",
+      "name": "P6",
+      "matchesPlayed": 1,
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 7,
+      "totalPoints": 7,
+      "tournamentPoints": 7,
+      "pointsFor": 7,
+      "pointsAgainst": 14,
+      "pointDiff": -7,
+      "ratingBefore": 2,
+      "ratingAfter": 1.95001,
+      "ratingDelta": -0.04999,
+      "deltaTotal": -0.04999,
+      "rank": 7
+    },
+    {
+      "id": "p7",
+      "name": "P7",
+      "matchesPlayed": 1,
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 7,
+      "totalPoints": 7,
+      "tournamentPoints": 7,
+      "pointsFor": 7,
+      "pointsAgainst": 14,
+      "pointDiff": -7,
+      "ratingBefore": 2,
+      "ratingAfter": 1.95001,
+      "ratingDelta": -0.04999,
+      "deltaTotal": -0.04999,
+      "rank": 8
+    }
+  ],
+  "summary": {
+    "totalRounds": 2,
+    "completedRounds": 1,
+    "totalMatches": 2,
+    "completedMatches": 2,
+    "byePolicy": "zero_points",
+    "status": "in_progress",
+    "finished": false
+  },
+  "updatedAt": "2026-05-19T13:11:14.280Z"
+}

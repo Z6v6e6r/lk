@@ -7,10 +7,12 @@ import { RemoteWidgetHost } from "./components/UI/RemoteWidgetHost";
 import { Cabinet } from "./components/cabinet/Cabinet";
 import CommunityJoinPage from "./components/communities/CommunityJoinPage";
 import FindGamePage from "./components/games/FindGamePage";
+import GamesPage from "./components/games/GamesPage";
 import {
   CABINET_URL,
   PUBLIC_COMMUNITY_JOIN_PATH,
   GAMES_BUNDLE_URL,
+  LEVELS_INFO_BUNDLE_URL,
   ONBOARDING_BUNDLE_URL,
   PUBLIC_GAME_CREATE_PATH,
   PUBLIC_GAME_FIND_PATH,
@@ -22,8 +24,9 @@ import { trackAnalyticsEvent, trackClientError } from "./utils/analytics";
 import { PAYMENT_REF_QUERY_KEY, processPendingPaymentSyncQueue } from "./utils/paymentSync";
 import { syncGamesCommunityAutopublish } from "./utils/gameCommunityAutopublish";
 import type { GamesMountData, OpenGamesOptions } from "./types/gamesOverlay";
+import type { LevelsInfoMountData, OpenLevelsInfoOptions } from "./types/levelsInfoOverlay";
 import type { OpenTournamentsOptions, TournamentsMountData } from "./types/tournamentsOverlay";
-import type { UserProfileType } from "./utils/apiClient";
+import type { PadelGameRecord, UserProfileType } from "./utils/apiClient";
 import "./MyApp.css";
 
 type OnboardingMountData = {
@@ -33,8 +36,8 @@ type OnboardingMountData = {
   tournamentsLink?: string;
 };
 
-type OverlayModuleName = "games" | "tournaments" | "onboarding";
-type OverlayData = GamesMountData | TournamentsMountData | OnboardingMountData | undefined;
+type OverlayModuleName = "games" | "tournaments" | "onboarding" | "levels-info";
+type OverlayData = GamesMountData | TournamentsMountData | OnboardingMountData | LevelsInfoMountData | undefined;
 
 type AppWindow = Window & Record<WidgetGlobalName, WidgetModule | undefined> & {
   __LK_ON_READY?: () => void;
@@ -69,6 +72,16 @@ const DEFAULT_GAME_FIND_PATH =
 const DEFAULT_COMMUNITY_JOIN_PATH =
   (PUBLIC_COMMUNITY_JOIN_PATH || "/community_join").replace(/\/+$/, "") || "/community_join";
 const OPEN_GAME_QUERY_KEY = "openGameId";
+
+function notifyGamesUpdated(records: PadelGameRecord[], source: string): void {
+  if (typeof window === "undefined" || records.length === 0) return;
+  window.dispatchEvent(new CustomEvent("lk-games-updated", {
+    detail: {
+      records,
+      source,
+    },
+  }));
+}
 
 const OVERLAY_ID = "lk-overlay";
 let overlayRoot: ReturnType<typeof createRoot> | null = null;
@@ -165,6 +178,7 @@ function AppContent() {
         enabled: false,
         gameId: null as string | null,
         cabinetUrl: DEFAULT_CABINET_URL,
+        openChat: false,
       };
     }
 
@@ -197,6 +211,12 @@ function AppContent() {
       || joinConfig?.gameId
       || ""
     ).trim();
+    const openChatRaw = (
+      current.searchParams.get("openChat")
+      || hashParams.get("openChat")
+      || ""
+    ).trim();
+    const openChat = /^(1|true|yes)$/i.test(openChatRaw);
     const byPath = current.pathname.replace(/\/+$/, "").endsWith(DEFAULT_INVITE_PATH);
     const enabled = byPath || Boolean(gameId);
     const cabinetUrl = normalizeInviteCabinetUrl((
@@ -210,8 +230,41 @@ function AppContent() {
       enabled,
       gameId: gameId || null,
       cabinetUrl,
+      openChat,
     };
   }, []);
+
+  useEffect(() => {
+    if (!joinRouteData.enabled || !joinRouteData.gameId) return;
+    if (typeof window === "undefined") return;
+
+    try {
+      const current = new URL(window.location.href);
+      if (current.searchParams.get("entry") !== "game_join") return;
+
+      const normalizedInvitePath = DEFAULT_INVITE_PATH.startsWith("/")
+        ? DEFAULT_INVITE_PATH
+        : `/${DEFAULT_INVITE_PATH}`;
+      const currentPath = current.pathname.replace(/\/+$/, "") || "/";
+      const targetPath = normalizedInvitePath.replace(/\/+$/, "") || "/";
+      if (currentPath === targetPath) return;
+
+      const next = new URL(targetPath, current.origin);
+      current.searchParams.forEach((value, key) => {
+        if (key.trim().toLowerCase() === "entry") return;
+        next.searchParams.append(key, value);
+      });
+      next.searchParams.set("joinGame", joinRouteData.gameId);
+
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${next.pathname}${next.search}${current.hash}`,
+      );
+    } catch {
+      // URL cleanup is best-effort only.
+    }
+  }, [joinRouteData.enabled, joinRouteData.gameId]);
 
   const createRouteData = useMemo(() => {
     if (typeof window === "undefined") {
@@ -467,7 +520,19 @@ function AppContent() {
               <mod.default
                 onBack={onBack}
                 initialOpenTournamentId={tournamentsData?.tournamentId ?? null}
+                initialOpenTournamentSlug={tournamentsData?.tournamentSlug ?? null}
                 initialOpenDate={tournamentsData?.date ?? null}
+              />
+            </OverlayScopeProvider>,
+          );
+        } else if (module === "levels-info") {
+          const mod = await import("./components/levels-info/LevelsInfoPage");
+          const levelsInfoData = data as LevelsInfoMountData | undefined;
+          overlayRoot.render(
+            <OverlayScopeProvider value>
+              <mod.default
+                onBack={onBack}
+                profile={levelsInfoData?.profile}
               />
             </OverlayScopeProvider>,
           );
@@ -569,7 +634,9 @@ function AppContent() {
       keepalive: true,
       maxItems: 1,
     }).then(async (result) => {
-      await syncGamesCommunityAutopublish(result.resolved.map((item) => item.record));
+      const resolvedRecords = result.resolved.map((item) => item.record);
+      notifyGamesUpdated(resolvedRecords, "app_payment_callback");
+      await syncGamesCommunityAutopublish(resolvedRecords);
       const currentUrl = new URL(window.location.href);
       currentUrl.searchParams.delete(PAYMENT_REF_QUERY_KEY);
       const nextUrl = `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`;
@@ -612,7 +679,9 @@ function AppContent() {
         keepalive: true,
         maxItems: 3,
       });
-      await syncGamesCommunityAutopublish(result.resolved.map((item) => item.record));
+      const resolvedRecords = result.resolved.map((item) => item.record);
+      notifyGamesUpdated(resolvedRecords, source);
+      await syncGamesCommunityAutopublish(resolvedRecords);
       if (cancelled) return;
       if (result.resolved.length > 0 || result.failed.length > 0) {
         trackAnalyticsEvent("payment_sync_background", {
@@ -660,16 +729,16 @@ function AppContent() {
     }
 
     return (
-      <RemoteWidgetHost
-        src={GAMES_BUNDLE_URL}
-        globalName="LKWidgetGames"
-        forceReload
-        data={{
-          joinGameId: joinRouteData.gameId,
-          cabinetUrl: joinRouteData.cabinetUrl,
-        } satisfies GamesMountData}
-        loadingText="Загружаем игру..."
-        errorTitle="Не удалось открыть игру"
+      <GamesPage
+        onBack={() => {
+          window.location.href = joinRouteData.cabinetUrl || DEFAULT_CABINET_URL;
+        }}
+        openGameId={joinRouteData.gameId}
+        openChat={joinRouteData.openChat}
+        createFromBooking={null}
+        publicCreateEntry={false}
+        presetStudioId={null}
+        presetStudioName={null}
       />
     );
   }
@@ -755,11 +824,33 @@ function AppContent() {
     return (
         <Cabinet
         onOpenGames={(options?: OpenGamesOptions) => {
+          const directGameId = (options?.gameId || options?.joinGameId || "").trim();
+          if (directGameId && typeof window !== "undefined") {
+            const gameWindowUrl = new URL(window.location.href);
+            gameWindowUrl.searchParams.set("joinGame", directGameId);
+            if (options?.openChat) {
+              gameWindowUrl.searchParams.set("openChat", "1");
+            } else {
+              gameWindowUrl.searchParams.delete("openChat");
+            }
+            const returnUrl = normalizeInviteCabinetUrl(
+              options?.cabinetUrl ?? DEFAULT_CABINET_URL,
+            );
+            if (returnUrl) {
+              gameWindowUrl.searchParams.set("cabinetUrl", returnUrl);
+            } else {
+              gameWindowUrl.searchParams.delete("cabinetUrl");
+            }
+            const openedWindow = window.open(gameWindowUrl.toString(), "_blank", "noopener");
+            if (openedWindow) {
+              return;
+            }
+          }
+
           const hasOptions = Boolean(options?.gameId || options?.joinGameId || options?.createFromBooking);
           const data: GamesMountData | undefined = hasOptions
             ? {
-                openGameId: options?.gameId ?? null,
-                joinGameId: options?.joinGameId ?? null,
+                openGameId: options?.gameId ?? options?.joinGameId ?? null,
                 openChat: options?.openChat === true,
                 createFromBooking: options?.createFromBooking ?? null,
                 cabinetUrl: options?.cabinetUrl ?? DEFAULT_CABINET_URL,
@@ -777,12 +868,20 @@ function AppContent() {
             "tournaments",
             TOURNAMENTS_BUNDLE_URL,
             "LKWidgetTournaments",
-            options?.tournamentId || options?.date
+            options?.tournamentId || options?.tournamentSlug || options?.date
               ? {
                   tournamentId: options.tournamentId ?? null,
+                  tournamentSlug: options.tournamentSlug ?? null,
                   date: options.date ?? null,
                 }
               : undefined,
+          )}
+        onOpenLevelsInfo={(options?: OpenLevelsInfoOptions) =>
+          openOverlayModule(
+            "levels-info",
+            LEVELS_INFO_BUNDLE_URL,
+            "LKWidgetLevelsInfo",
+            options?.profile ? { profile: options.profile } : undefined,
           )}
         onOpenOnboarding={(data) =>
           openOverlayModule(

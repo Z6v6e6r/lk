@@ -332,6 +332,7 @@ cp dist/bundle.js /var/www/html/lk/bundle.js
 ## Страница приглашения в игру (`/game_join`)
 
 Тот же `bundle.js` теперь поддерживает режим приглашения в игру.
+Для Tilda-страницы `/game_join` используйте HTML из `docs/tilda-game-join.html`: он грузит `games.js` сразу на этой странице и не делает промежуточный редирект на `/lk_new`.
 
 Invite-ссылки настраиваются через:
 - `VITE_PUBLIC_INVITE_ORIGIN` (домен, например `https://padlhub.ru`)
@@ -444,6 +445,14 @@ https://padlhub.ru/tournaments?tournamentId=<TOURNAMENT_ID>
 - `id`
 - `exerciseId`
 
+Новый формат для ссылок из скина турнира:
+```text
+https://padlhub.ru/tournaments?slug=<TOURNAMENT_SLUG>
+```
+
+Также поддерживается алиас:
+- `tournamentSlug`
+
 С открытием даты:
 ```text
 https://padlhub.ru/tournaments?date=2026-05-05
@@ -452,6 +461,13 @@ https://padlhub.ru/tournaments?date=2026-05-05
 Опционально можно передать адрес возврата:
 ```text
 https://padlhub.ru/tournaments?cabinetUrl=https%3A%2F%2Fpadlhub.ru%2Flk_new
+```
+
+Legacy-ссылки публичной страницы турнира лучше оставлять рабочими через 301 на публичный домен LK:
+```nginx
+location ~ ^/api/tournaments/public/([^/?#]+)$ {
+    return 301 https://padlhub.ru/tournaments?slug=$1;
+}
 ```
 
 ## Страница вступления в сообщество (`/community_join`)

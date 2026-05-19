@@ -105,6 +105,23 @@
   padding: 14px 12px;
   background: #fafafa;
   border-radius: 12px;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease;
+}
+
+.gameCard:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(31, 30, 32, 0.08);
+}
+
+.gameCard:focus-visible {
+  outline: 2px solid rgba(135, 102, 235, 0.32);
+  outline-offset: 2px;
+}
+
+.gameCard:active {
+  transform: translateY(0);
+  box-shadow: 0 6px 16px rgba(31, 30, 32, 0.06);
 }
 
 .gameHeader {
@@ -460,7 +477,7 @@ button.statButton {
   letter-spacing: 0.02em;
 }
 
-.durationText {
+.metaText {
   color: #b4b4b4;
   font-size: 11px;
   font-weight: 500;

@@ -44,6 +44,74 @@
     ]
   },
   {
+    "id": "9fd0e6f8a39f4d41",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "LK games payment confirm",
+    "url": "/lk/games/payment/confirm",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 170,
+    "y": 2860,
+    "wires": [
+      [
+        "7b3ec71fa2a54c03"
+      ]
+    ]
+  },
+  {
+    "id": "bd5d786f8c784d42",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "LK games confirm alias",
+    "url": "/lk/games/confirm",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 160,
+    "y": 2900,
+    "wires": [
+      [
+        "7b3ec71fa2a54c03"
+      ]
+    ]
+  },
+  {
+    "id": "1f6b7e92ca354d43",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "LK games draft create",
+    "url": "/lk/games/drafts",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 160,
+    "y": 2940,
+    "wires": [
+      [
+        "7b3ec71fa2a54c03"
+      ]
+    ]
+  },
+  {
+    "id": "ffb62be4a6104d44",
+    "type": "http in",
+    "z": "1e95dcebc274ac6c",
+    "name": "LK games draft alias",
+    "url": "/lk/games/draft",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 150,
+    "y": 2980,
+    "wires": [
+      [
+        "7b3ec71fa2a54c03"
+      ]
+    ]
+  },
+  {
     "id": "7b3ec71fa2a54c03",
     "type": "function",
     "z": "1e95dcebc274ac6c",

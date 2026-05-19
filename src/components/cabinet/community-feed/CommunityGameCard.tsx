@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   ChatIcon,
   EmptySlotAvatarIcon,
@@ -34,6 +34,7 @@ export type CommunityGameCardProps = {
   splitJoinPriceText?: string | null;
   splitCancelDeadlineAt?: string | null;
   isJoined?: boolean;
+  ctaLabel?: string;
   showWaitlist?: boolean;
   isPastGame?: boolean;
   needsResult?: boolean;
@@ -47,7 +48,7 @@ export type CommunityGameCardProps = {
     right: { id: string; avatarUrl?: string; name: string }[];
   } | null;
   badgeLabel?: string;
-  durationText?: string;
+  publishedText?: string;
   authorName?: string;
   authorHandle?: string;
   authorAvatarUrl?: string;
@@ -117,6 +118,26 @@ function formatLevelRange(levelText: string) {
   }
 
   return normalized;
+}
+
+function formatMonthInDateLine(month: string) {
+  const normalized = month.trim().toUpperCase();
+  const monthByCase: Record<string, string> = {
+    ЯНВ: "января",
+    ФЕВ: "февраля",
+    МАРТ: "марта",
+    АПР: "апреля",
+    МАЙ: "мая",
+    ИЮН: "июня",
+    ИЮЛ: "июля",
+    АВГ: "августа",
+    СЕН: "сентября",
+    ОКТ: "октября",
+    НОЯ: "ноября",
+    ДЕК: "декабря",
+  };
+
+  return monthByCase[normalized] || month.toLowerCase();
 }
 
 function getGameTypeBadge(isRatingGame?: boolean | null) {
@@ -207,6 +228,16 @@ function renderStat(
   );
 }
 
+function handleKeyboardCardOpen(
+  event: KeyboardEvent<HTMLDivElement>,
+  onOpen?: () => void,
+) {
+  if (!onOpen) return;
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  onOpen();
+}
+
 export function CommunityGameCard({
   month,
   day,
@@ -223,8 +254,9 @@ export function CommunityGameCard({
   splitJoinPriceText,
   splitCancelDeadlineAt,
   isJoined = false,
+  ctaLabel,
   needsResult = false,
-  durationText,
+  publishedText,
   authorName,
   authorHandle,
   authorAvatarUrl,
@@ -240,18 +272,21 @@ export function CommunityGameCard({
   const isGameFull = typeof slotsLeft === "number"
     ? slotsLeft <= 0
     : confirmedPlayersCount >= totalSlots;
-  const playButtonLabel = isJoined
-    ? "Открыть игру"
-    : isGameFull
-      ? "В лист ожидания"
-      : "Вступить в игру";
+  const normalizedCtaLabel = (ctaLabel || "").trim();
+  const playButtonLabel = normalizedCtaLabel || (
+    isJoined
+      ? "Открыть игру"
+      : isGameFull
+        ? "В лист ожидания"
+        : "Вступить в игру"
+  );
   const emptySlotsCount = Math.max(slotsCount - visiblePlayers.length, 0);
   const statusBadge = getGameTypeBadge(isRatingGame);
   const primaryAuthor = authorName || players[0]?.name || "Игрок";
   const primaryAuthorAvatar = normalizeAvatarUrl(authorAvatarUrl) || normalizeAvatarUrl(players[0]?.avatarUrl);
   const primaryAuthorHandle = buildAuthorHandle(primaryAuthor, authorHandle);
   const locationText = subtitleText.trim() || "Локация уточняется";
-  const dateLine = `${day} ${month.toLowerCase()}, ${timeText}`;
+  const dateLine = `${day} ${formatMonthInDateLine(month)}, ${timeText}`;
   const formattedLevelText = formatLevelRange(levelText);
   const secondaryAction = onChat || onPlay;
   const splitCountdownText = formatCountdown(splitCancelDeadlineAt, nowMs);
@@ -295,7 +330,14 @@ export function CommunityGameCard({
         </button>
       </div>
 
-      <div className={styles.gameCard}>
+      <div
+        className={styles.gameCard}
+        role="button"
+        tabIndex={0}
+        onClick={onPlay}
+        onKeyDown={(event) => handleKeyboardCardOpen(event, onPlay)}
+        aria-label={`${playButtonLabel} ${title}`}
+      >
         <div className={styles.gameHeader}>
           <div className={styles.headerMain}>
             <div className={`${styles.statusBadge} ${statusBadge.tone}`}>
@@ -319,10 +361,7 @@ export function CommunityGameCard({
 
           <div className={styles.infoRow}>
             <GameLocationIcon className={styles.infoIcon} />
-            <div className={styles.locationRow}>
-              <span className={styles.infoText}>{locationText}</span>
-              <span className={styles.mapLink}>на карте</span>
-            </div>
+            <span className={styles.infoText}>{locationText}</span>
           </div>
 
           <div className={styles.infoRow}>
@@ -363,7 +402,10 @@ export function CommunityGameCard({
               <button
                 type="button"
                 className={`${styles.playButton}${needsResult ? ` ${styles.playButtonAttention}` : ""}`}
-                onClick={onPlay}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onPlay?.();
+                }}
               >
                 {playButtonLabel}
               </button>
@@ -378,7 +420,7 @@ export function CommunityGameCard({
           {renderStat(<ChatIcon className={styles.inlineIcon} />, "Чат игры", commentsCount, onChat)}
         </div>
 
-        <span className={styles.durationText}>{durationText || "1 ч."}</span>
+        <span className={styles.metaText}>{publishedText || "только что"}</span>
       </div>
     </article>
   );

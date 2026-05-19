@@ -39,11 +39,13 @@ function extractGameLines(game: Game) {
   const dateTimeParts = splitByBullet(game.datetimeText);
   const locationParts = splitByBullet(game.location);
   const normalizedLocationParts = [...locationParts, ...dateTimeParts.slice(1)]
-    .map((part) => part.trim())
+    .map((part) => part.replace(/\s+на карте\b/gi, "").trim())
     .filter(Boolean);
 
-  const timePart = dateTimeParts.find((part) => /\d{1,2}:\d{2}/.test(part)) || dateTimeParts[0] || "Время уточняется";
-  const normalizedTimeText = timePart.replace(/\s*[–-]\s*/g, "–");
+  const explicitTime = dateTimeParts.find((part) => /\b\d{1,2}:\d{2}\b/.test(part)) || "";
+  const normalizedTimeText = explicitTime
+    ? explicitTime.replace(/\s*[–-]\s*/g, "–")
+    : "Время уточняется";
   const courtPart =
     normalizedLocationParts.find((part) => /корт/i.test(part))
     || normalizedLocationParts[0]
@@ -213,6 +215,7 @@ export function CommunityFeed({
               splitJoinPriceText={game.splitJoinPriceText}
               splitCancelDeadlineAt={game.splitCancelDeadlineAt}
               isJoined={game.isJoined}
+              ctaLabel={game.ctaLabel}
               showWaitlist={game.showWaitlist}
               isPastGame={game.isPastGame}
               needsResult={game.needsResult}
@@ -220,7 +223,7 @@ export function CommunityFeed({
               resultScore={game.resultScore}
               resultTeams={game.resultTeams}
               badgeLabel={game.badgeLabel}
-              durationText={game.duration}
+              publishedText={game.publishedLabel}
               authorName={entry.author?.name}
               authorAvatarUrl={entry.author?.avatarUrl || entry.author?.avatar}
               onPlay={() => onOpenGame(game, entry)}

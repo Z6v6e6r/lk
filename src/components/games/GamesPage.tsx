@@ -10,6 +10,7 @@ import type {
   PadelGameRecord,
   PadelGameRecordPayload,
   PadelSplitPaymentPromoConfig,
+  Subscription,
   Studio,
   StudioGameModes,
 } from "../../utils/apiClient";
@@ -20,12 +21,14 @@ import {
   apiFetchMasterServiceGameModes,
   apiCreatePadelGameRecord,
   apiCreatePadelSplitGamePayment,
+  apiFetchSubscriptions,
   apiFetchPadelChatsByPhone,
   apiFetchPadelGameChatMessages,
   apiFetchPadelGameRecord,
   apiFetchPadelGamesByPhone,
   apiMarkPadelGameChatRead,
   apiPayMasterService,
+  apiSearchPadelPlayers,
   apiUpdatePadelGameRecord,
   apiSendPadelGameChatMessage,
   apiFetchMasterServicePrice,
@@ -122,7 +125,11 @@ const MATCH_RESULT_RATING_DEFAULT_PARAMS = {
 };
 const ENABLE_GAME_COMMUNITY_AUTOPUBLISH = true;
 const ENABLE_SPLIT_GAME_PAYMENT = true;
-const SPLIT_PAYMENT_DEADLINE_HOURS = 6;
+const SPLIT_PAYMENT_DEADLINE_MINUTES = 25;
+const SPLIT_PAYMENT_UNLOCK_TAP_COUNT = 8;
+const SPLIT_PAYMENT_UNLOCK_RESET_MS = 6000;
+const SPLIT_OPEN_GAME_EXERCISE_TYPE_ID = 1613;
+const SPLIT_OPEN_GAME_DIRECTION_ID = 4588;
 
 function resolveSplitShareAmount(
   shareCount: SplitShareCount,
@@ -137,6 +144,124 @@ function resolveSplitShareAmount(
 
 function resolveSplitBaseShareAmount(config: PadelSplitPaymentPromoConfig, durationMinutes = 60): number {
   return Math.round(config.baseShareAmount * Math.max(durationMinutes, 1) / 60);
+}
+
+function isSplitSubscriptionStatusActive(status: string | null | undefined): boolean {
+  const normalized = String(status || "").trim().toUpperCase();
+  if (!normalized) return true;
+  const blockedMarkers = [
+    "EXPIRED",
+    "CANCEL",
+    "BLOCK",
+    "ARCHIVE",
+    "INACTIVE",
+    "SUSPEND",
+    "FINISH",
+    "TERMINAT",
+    "ENDED",
+    "ЗАВЕРШ",
+    "ОТМЕН",
+    "ПРОСРОЧ",
+  ];
+  return !blockedMarkers.some((marker) => normalized.includes(marker));
+}
+
+function hasSplitSubscriptionBalance(subscription: Subscription): boolean {
+  const hasVisitsValue = Number.isFinite(subscription.visitsLeft);
+  const hasMinutesValue = Number.isFinite(subscription.availableMinutes);
+  const visitsLeft = hasVisitsValue ? subscription.visitsLeft : null;
+  const minutesLeft = hasMinutesValue ? subscription.availableMinutes : null;
+
+  if (visitsLeft != null && visitsLeft > 0) return true;
+  if (minutesLeft != null && minutesLeft > 0) return true;
+  if (visitsLeft != null && minutesLeft != null) return false;
+  if (visitsLeft != null) return visitsLeft > 0;
+  if (minutesLeft != null) return minutesLeft > 0;
+  return true;
+}
+
+function buildComparableIdSet(values: Array<string | number | null | undefined>): Set<string> {
+  return new Set(
+    values
+      .map((value) => normalizeComparableId(value))
+      .filter((value): value is string => Boolean(value)),
+  );
+}
+
+function hasIdIntersection(left: Set<string>, right: Set<string>): boolean {
+  for (const value of left) {
+    if (right.has(value)) return true;
+  }
+  return false;
+}
+
+function subscriptionMatchesSplitCategory(
+  subscription: Subscription,
+  requiredExerciseTypeIds: Set<string>,
+  requiredDirectionIds: Set<string>,
+): boolean {
+  if (subscription.hasTypeLimitation) {
+    const allowedTypes = new Set(
+      (subscription.availableTypes || [])
+        .map((item) => normalizeComparableId(item?.id))
+        .filter((value): value is string => Boolean(value)),
+    );
+    if (allowedTypes.size === 0 || !hasIdIntersection(allowedTypes, requiredExerciseTypeIds)) {
+      return false;
+    }
+  }
+
+  if (subscription.hasDirectionLimitation) {
+    const allowedDirections = new Set(
+      (subscription.availableDirections || [])
+        .map((item) => normalizeComparableId(item?.id))
+        .filter((value): value is string => Boolean(value)),
+    );
+    if (allowedDirections.size === 0 || !hasIdIntersection(allowedDirections, requiredDirectionIds)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function filterSplitEligibleSubscriptions(
+  subscriptions: Subscription[],
+  requiredExerciseTypeIds: Set<string>,
+  requiredDirectionIds: Set<string>,
+): Subscription[] {
+  return subscriptions.filter((subscription) => {
+    if (!isSplitSubscriptionStatusActive(subscription.status)) return false;
+    if (!hasSplitSubscriptionBalance(subscription)) return false;
+    return subscriptionMatchesSplitCategory(
+      subscription,
+      requiredExerciseTypeIds,
+      requiredDirectionIds,
+    );
+  });
+}
+
+function buildSplitSubscriptionStatusLabel(subscriptions: Subscription[]): string {
+  const primary = subscriptions[0];
+  if (!primary) return "Найдено доступных абонементов: 0";
+
+  const name = typeof primary.name === "string" ? primary.name.trim() : "";
+  const visitsLeft = Number.isFinite(primary.visitsLeft)
+    ? Math.max(0, Math.floor(primary.visitsLeft))
+    : null;
+  const extraCount = Math.max(0, subscriptions.length - 1);
+  const extraLabel = extraCount > 0 ? ` · еще ${extraCount}` : "";
+
+  if (name && visitsLeft != null) {
+    return `Абонемент «${name}» · осталось посещений: ${visitsLeft}${extraLabel}`;
+  }
+  if (name) {
+    return `Абонемент «${name}»${extraLabel}`;
+  }
+  if (visitsLeft != null) {
+    return `Найден абонемент · осталось посещений: ${visitsLeft}${extraLabel}`;
+  }
+  return `Найдено доступных абонементов: ${subscriptions.length}`;
 }
 
 function splitConfigListAllows(
@@ -280,14 +405,9 @@ function buildCommunityAutopublishSelectionState(
       .map((communityId) => communityId.trim())
       .filter((communityId) => selectableIds.has(communityId)),
   ));
-  const effectiveSelectedIds = snapshot.selectionTouched
-    ? normalizedSelectedIds
-    : (normalizedSelectedIds.length > 0
-        ? normalizedSelectedIds
-        : (snapshot.stationTarget?.isOrganizerMember ? [snapshot.stationTarget.id] : []));
 
   return {
-    selectedCommunityIds: effectiveSelectedIds,
+    selectedCommunityIds: normalizedSelectedIds,
     stationCommunityId: snapshot.stationTarget?.id ?? null,
     selectionTouched: snapshot.selectionTouched,
   };
@@ -302,6 +422,52 @@ function buildCommunityAutopublishMetadataFields(
     communityAutoPublish: payload,
     communityAutoPublishDev: payload,
   };
+}
+
+function extractGameCustomTitle(metadata: Record<string, unknown> | null | undefined): string | null {
+  if (!metadata) return null;
+  const value = typeof metadata.gameTitle === "string" ? metadata.gameTitle.trim() : "";
+  return value || null;
+}
+
+function extractGameParticipantComment(metadata: Record<string, unknown> | null | undefined): string | null {
+  if (!metadata) return null;
+  const value = typeof metadata.participantComment === "string" ? metadata.participantComment.trim() : "";
+  return value || null;
+}
+
+function extractGameJoinPrice(metadata: Record<string, unknown> | null | undefined): string | null {
+  if (!metadata) return null;
+  if (typeof metadata.joinPrice === "number" && Number.isFinite(metadata.joinPrice)) {
+    const normalized = Math.max(0, Math.round(metadata.joinPrice));
+    return normalized > 0 ? String(normalized) : null;
+  }
+  const raw = typeof metadata.joinPrice === "string" ? metadata.joinPrice.trim() : "";
+  const digits = raw.replace(/[^\d]/g, "").replace(/^0+(?=\d)/, "");
+  return digits || null;
+}
+
+function buildGameOptionalMetadataFields(params: {
+  gameTitle: string;
+  participantComment: string;
+  joinPrice: string;
+}): Record<string, unknown> {
+  const title = params.gameTitle.trim();
+  const participantComment = params.participantComment.trim();
+  const joinPrice = params.joinPrice.replace(/[^\d]/g, "").replace(/^0+(?=\d)/, "");
+
+  return {
+    ...(title ? { gameTitle: title } : {}),
+    ...(participantComment ? { participantComment } : {}),
+    ...(joinPrice ? { joinPrice } : {}),
+  };
+}
+
+function formatGameJoinPriceLabel(value: string | null): string | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return `${formatPrice(parsed)} ₽`;
 }
 
 function formatPrice(value: number): string {
@@ -1540,6 +1706,46 @@ function upsertPadelGameRecord(
   return next;
 }
 
+function notifyGameRecordsUpdated(records: PadelGameRecord[], source: string): void {
+  if (typeof window === "undefined" || records.length === 0) return;
+  window.dispatchEvent(new CustomEvent("lk-games-updated", {
+    detail: {
+      records,
+      source,
+    },
+  }));
+}
+
+function mergePadelGamePlayers(
+  current: PadelGamePlayer[] = [],
+  incoming: PadelGamePlayer[] = [],
+): PadelGamePlayer[] {
+  const merged = new Map<string, PadelGamePlayer>();
+
+  [...current, ...incoming].forEach((player, index) => {
+    const key = getPadelPlayerIdentityKey(player) || `player:${index}`;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, player);
+      return;
+    }
+    merged.set(key, {
+      ...existing,
+      ...player,
+      id: player.id ?? existing.id,
+      name: player.name || existing.name,
+      phone: player.phone ?? existing.phone,
+      photo: player.photo ?? existing.photo,
+      rating: player.rating ?? existing.rating,
+      ratingNumeric: player.ratingNumeric ?? existing.ratingNumeric,
+      source: player.source ?? existing.source,
+      status: player.status ?? existing.status,
+    });
+  });
+
+  return Array.from(merged.values());
+}
+
 function mergePadelGameRecord(
   current: PadelGameRecord | null | undefined,
   incoming: PadelGameRecord,
@@ -1558,16 +1764,21 @@ function mergePadelGameRecord(
     ...incoming,
     inviteUrl: normalizedIncomingInvite ?? normalizedExistingInvite,
     status: incoming.status ?? current.status,
-    organizer: incoming.organizer ?? current.organizer ?? null,
+    organizer: incoming.organizer || current.organizer
+      ? {
+          ...(current.organizer ?? {}),
+          ...(incoming.organizer ?? {}),
+          id: incoming.organizer?.id ?? current.organizer?.id ?? null,
+          name: incoming.organizer?.name ?? current.organizer?.name ?? null,
+          phone: incoming.organizer?.phone ?? current.organizer?.phone ?? null,
+          photo: incoming.organizer?.photo ?? current.organizer?.photo ?? null,
+          rating: incoming.organizer?.rating ?? current.organizer?.rating ?? null,
+          ratingNumeric: incoming.organizer?.ratingNumeric ?? current.organizer?.ratingNumeric ?? null,
+        }
+      : null,
     settings: incoming.settings ?? current.settings ?? null,
-    participants:
-      incoming.participants && incoming.participants.length > 0
-        ? incoming.participants
-        : (current.participants ?? []),
-    waitlist:
-      incoming.waitlist && incoming.waitlist.length > 0
-        ? incoming.waitlist
-        : (current.waitlist ?? []),
+    participants: mergePadelGamePlayers(current.participants ?? [], incoming.participants ?? []),
+    waitlist: mergePadelGamePlayers(current.waitlist ?? [], incoming.waitlist ?? []),
     chatUrl: incoming.chatUrl ?? current.chatUrl ?? null,
     metadata: incoming.metadata ?? current.metadata ?? null,
     booking: incoming.booking ?? current.booking ?? null,
@@ -1639,6 +1850,91 @@ function getPadelPlayerIdentityKey(player: PadelGamePlayer | null | undefined): 
   return "";
 }
 
+type EnrichedPadelPlayerData = {
+  id: string | null;
+  phone: string | null;
+  name: string | null;
+  photo: string | null;
+  rating: string | null;
+  ratingNumeric: number | null;
+};
+
+function getPadelPlayerLookupKeys(player: {
+  id?: string | null;
+  phone?: string | null;
+  name?: string | null;
+}) {
+  const keys: string[] = [];
+  const id = (player.id || "").trim();
+  const phone = normalizePhoneForGame(player.phone);
+  const name = (player.name || "").trim().toLowerCase();
+  if (id) keys.push(`id:${id}`);
+  if (phone) keys.push(`phone:${phone}`);
+  if (name) keys.push(`name:${name}`);
+  return keys;
+}
+
+function mergePadelPlayerFreshData(
+  player: PadelGamePlayer,
+  fresh: EnrichedPadelPlayerData | undefined,
+): PadelGamePlayer {
+  if (!fresh) return player;
+  const freshRatingNumeric = normalizeRatingNumeric(fresh.ratingNumeric);
+  const nextRating =
+    (fresh.rating || "").trim()
+    || (freshRatingNumeric != null ? mapNumericToRatingGrade(freshRatingNumeric) : "")
+    || player.rating
+    || null;
+  const nextPlayer: PadelGamePlayer = {
+    ...player,
+    id: fresh.id ?? player.id,
+    phone: fresh.phone ?? player.phone,
+    name: fresh.name?.trim() || player.name,
+    photo: fresh.photo ?? player.photo ?? null,
+    rating: nextRating,
+    ratingNumeric: freshRatingNumeric ?? player.ratingNumeric ?? null,
+  };
+  return (
+    nextPlayer.id === player.id
+    && nextPlayer.phone === player.phone
+    && nextPlayer.name === player.name
+    && nextPlayer.photo === (player.photo ?? null)
+    && nextPlayer.rating === (player.rating ?? null)
+    && nextPlayer.ratingNumeric === (player.ratingNumeric ?? null)
+  ) ? player : nextPlayer;
+}
+
+function mergePadelOrganizerFreshData(
+  organizer: PadelGameRecord["organizer"],
+  fresh: EnrichedPadelPlayerData | undefined,
+) {
+  if (!organizer || !fresh) return organizer;
+  const freshRatingNumeric = normalizeRatingNumeric(fresh.ratingNumeric);
+  const nextRating =
+    (fresh.rating || "").trim()
+    || (freshRatingNumeric != null ? mapNumericToRatingGrade(freshRatingNumeric) : "")
+    || organizer.rating
+    || null;
+  const nextOrganizer = {
+    ...organizer,
+    // Keep organizer identity and display name from game payload whenever present.
+    id: organizer.id ?? fresh.id ?? null,
+    phone: organizer.phone ?? fresh.phone ?? null,
+    name: organizer.name || fresh.name?.trim() || null,
+    photo: organizer.photo ?? fresh.photo ?? null,
+    rating: nextRating,
+    ratingNumeric: freshRatingNumeric ?? organizer.ratingNumeric ?? null,
+  };
+  return (
+    nextOrganizer.id === organizer.id
+    && nextOrganizer.phone === organizer.phone
+    && nextOrganizer.name === organizer.name
+    && nextOrganizer.photo === (organizer.photo ?? null)
+    && nextOrganizer.rating === (organizer.rating ?? null)
+    && nextOrganizer.ratingNumeric === (organizer.ratingNumeric ?? null)
+  ) ? organizer : nextOrganizer;
+}
+
 function dedupePlayersByIdentity(
   players: Array<PadelGamePlayer | null | undefined>,
 ): PadelGamePlayer[] {
@@ -1650,6 +1946,34 @@ function dedupePlayersByIdentity(
     map.set(key, player);
   });
   return Array.from(map.values());
+}
+
+function buildPadelPlayersRefreshKey(
+  gameId: string | null | undefined,
+  participants: PadelGamePlayer[],
+  waitlist: PadelGamePlayer[],
+  organizer: PadelGameRecord["organizer"] | null | undefined,
+) {
+  const encodePlayer = (player: PadelGamePlayer | null | undefined) => {
+    if (!player) return "";
+    return [
+      getPadelPlayerIdentityKey(player),
+    ].join("|");
+  };
+
+  const organizerKey = organizer
+    ? [
+      (organizer.id || "").trim(),
+      normalizePhoneForGame(organizer.phone) || "",
+    ].join("|")
+    : "";
+
+  return [
+    gameId || "",
+    organizerKey,
+    participants.map((player) => encodePlayer(player)).join(";"),
+    waitlist.map((player) => encodePlayer(player)).join(";"),
+  ].join("::");
 }
 
 function areTeamSlotsEqualByIdentity(
@@ -1823,6 +2147,11 @@ function getCommunityActorLevelScore(
 }
 
 function buildCommunityGamePostBody(game: PadelGameRecord) {
+  const metadata = isRecordObject(game.metadata) ? game.metadata : null;
+  const participantComment = extractGameParticipantComment(
+    metadata,
+  );
+  const joinPriceLabel = formatGameJoinPriceLabel(extractGameJoinPrice(metadata));
   const date = game.booking?.date
     ? new Date(`${game.booking.date}T00:00:00`).toLocaleDateString("ru-RU", {
         day: "2-digit",
@@ -1833,7 +2162,13 @@ function buildCommunityGamePostBody(game: PadelGameRecord) {
   const timeTo = game.booking?.timeTo ?? "—:—";
   const location = [game.booking?.studioName, game.booking?.roomName].filter(Boolean).join(", ");
 
-  return [date, `${timeFrom} - ${timeTo}`, location].filter(Boolean).join(" • ");
+  return [
+    [date, `${timeFrom} - ${timeTo}`, location].filter(Boolean).join(" • "),
+    joinPriceLabel ? `Стоимость присоединения: ${joinPriceLabel}` : null,
+    participantComment ? `Комментарий: ${participantComment}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function buildCommunityGamePreviewLabel(game: PadelGameRecord) {
@@ -2907,6 +3242,7 @@ export default function GamesPage({
   const [loadingPay, setLoadingPay] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
   const [paymentMode, setPaymentMode] = useState<GamePaymentMode>("self");
+  const [splitPaymentTesterUnlocked, setSplitPaymentTesterUnlocked] = useState(false);
   const [splitShareCount, setSplitShareCount] = useState<SplitShareCount>(4);
   const [splitPaymentPromoConfig, setSplitPaymentPromoConfig] =
     useState<PadelSplitPaymentPromoConfig>(DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG);
@@ -2917,11 +3253,17 @@ export default function GamesPage({
   const [promoPricePreview, setPromoPricePreview] = useState<number | null>(null);
   const [promoStatusMessage, setPromoStatusMessage] = useState<string | null>(null);
   const [promoError, setPromoError] = useState<string | null>(null);
+  const [splitSubscriptionsLoading, setSplitSubscriptionsLoading] = useState(false);
+  const [splitSubscriptionsError, setSplitSubscriptionsError] = useState<string | null>(null);
+  const [splitSubscriptions, setSplitSubscriptions] = useState<Subscription[]>([]);
   const [applyingPromo, setApplyingPromo] = useState(false);
   const [ratingGame, setRatingGame] = useState(true);
   const [minRating, setMinRating] = useState(1);
   const [maxRating, setMaxRating] = useState(4);
   const [isPrivate, setIsPrivate] = useState(false);
+  const [gameTitleDraft, setGameTitleDraft] = useState("");
+  const [gameParticipantCommentDraft, setGameParticipantCommentDraft] = useState("");
+  const [gameJoinPriceDraft, setGameJoinPriceDraft] = useState("");
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<PadelGameChatMessage[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
@@ -2952,7 +3294,8 @@ export default function GamesPage({
   const [waitlistEnabled, setWaitlistEnabled] = useState(true);
   const [loadingStudios, setLoadingStudios] = useState(false);
   const [studiosError, setStudiosError] = useState<string | null>(null);
-  const [createdGames, setCreatedGames] = useState<PadelGameRecord[]>([]);
+  const [communityGames, setCommunityGames] = useState<PadelGameRecord[]>([]);
+  const [activeGameRecordStore, setActiveGameRecordStore] = useState<PadelGameRecord | null>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [profilePhone, setProfilePhone] = useState<string | null>(null);
   const [profileName, setProfileName] = useState("Организатор");
@@ -3037,11 +3380,19 @@ export default function GamesPage({
     count: 0,
     timeoutId: null,
   });
+  const splitSubscriptionRequestRef = useRef(0);
+  const splitPaymentUnlockTapStateRef = useRef<{ count: number; timeoutId: number | null }>({
+    count: 0,
+    timeoutId: null,
+  });
   const detailsCameraInputRef = useRef<HTMLInputElement | null>(null);
   const detailsGalleryInputRef = useRef<HTMLInputElement | null>(null);
   const publicCreateEntryHandledRef = useRef(false);
   const publicCreatePresetHandledRef = useRef(false);
+  const openedGameInitKeyRef = useRef<string | null>(null);
+  const splitJoinPriceAutofilledRef = useRef(false);
   const communityAutopublishSelectionTouchedRef = useRef(false);
+  const detailsRatingsRefreshKeyRef = useRef<string | null>(null);
   const selectedCommunityAutopublishIdsRef = useRef<string[]>([]);
   const communityAutopublishSyncInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
   const communityAutopublishRepairAttemptRef = useRef<string | null>(null);
@@ -3260,11 +3611,11 @@ export default function GamesPage({
     apiFetchPadelGamesByPhone(phone, profileId, true)
       .then((result) => {
         if (!alive) return;
-        setCreatedGames(Array.isArray(result.data?.games) ? result.data.games : []);
+        setCommunityGames(Array.isArray(result.data?.games) ? result.data.games : []);
       })
       .catch(() => {
         if (!alive) return;
-        setCreatedGames([]);
+        setCommunityGames([]);
       });
 
     return () => {
@@ -3338,7 +3689,7 @@ export default function GamesPage({
       return;
     }
 
-    const gameIds = new Set(createdGames.map((item) => item.id).filter(Boolean));
+    const gameIds = new Set(communityGames.map((item) => item.id).filter(Boolean));
     if (gameRecordId) {
       gameIds.add(gameRecordId);
     }
@@ -3364,7 +3715,7 @@ export default function GamesPage({
     });
 
     setChatUnreadByGame(nextUnread);
-  }, [chatReadMap, createdGames, gameRecordId, profilePhoneNorm]);
+  }, [chatReadMap, communityGames, gameRecordId, profilePhoneNorm]);
 
   const resolveGamePaymentByVivaBookings = useCallback(async (
     game: PadelGameRecord | null | undefined,
@@ -3899,6 +4250,10 @@ export default function GamesPage({
   useEffect(() => {
     const requestedGameId = openGameId?.trim() || "";
     if (!requestedGameId) return;
+    const requestedOpenStep: Step = openChat ? "chat" : "details";
+    const requestedOpenKey = `${requestedGameId}:${requestedOpenStep}`;
+    if (openedGameInitKeyRef.current === requestedOpenKey) return;
+    openedGameInitKeyRef.current = requestedOpenKey;
 
     setGameRecordError(null);
     setGameRosterError(null);
@@ -3906,12 +4261,28 @@ export default function GamesPage({
     setGameRecordStatus(null);
     setInviteLink(null);
     setGameSnapshot(null);
+    setActiveGameRecordStore((prev) => {
+      if (prev?.id === requestedGameId) return prev;
+      return communityGames.find((game) => game.id === requestedGameId) ?? null;
+    });
     setChatMessages([]);
     setChatError(null);
     setChatDraft("");
     setConfirmCancelUnpaidGame(false);
-    setStep(openChat ? "chat" : "details");
+    setStep(requestedOpenStep);
   }, [openGameId, openChat]);
+
+  useEffect(() => {
+    const activeId = (gameRecordId || "").trim();
+    if (!activeId) {
+      setActiveGameRecordStore(null);
+      return;
+    }
+    setActiveGameRecordStore((prev) => {
+      if (prev?.id === activeId) return prev;
+      return communityGames.find((game) => game.id === activeId) ?? null;
+    });
+  }, [gameRecordId, communityGames]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -4037,7 +4408,8 @@ export default function GamesPage({
           booking: record.booking ?? fallbackRecord.booking,
           payment: record.payment ?? fallbackRecord.payment,
         };
-        setCreatedGames((prev) => upsertPadelGameRecord(prev, nextRecord));
+        upsertGameRecordInStores(nextRecord, { communityMode: "upsert" });
+        notifyGameRecordsUpdated([nextRecord], "games_payment_callback");
         void runPaidGameCommunityMembershipAndPublication(nextRecord, "payment_callback");
         setParticipants(
           Array.isArray(draftPayload.participants)
@@ -4051,7 +4423,8 @@ export default function GamesPage({
         );
         setWaitlistEnabled(draftPayload.invite?.waitlistEnabled !== false);
       } else {
-        setCreatedGames((prev) => upsertPadelGameRecord(prev, record));
+        upsertGameRecordInStores(record, { communityMode: "upsert" });
+        notifyGameRecordsUpdated([record], "games_payment_callback");
         void runPaidGameCommunityMembershipAndPublication(record, "payment_callback");
       }
 
@@ -4294,8 +4667,8 @@ export default function GamesPage({
   }, [promoSelectionKey, clearPromoState]);
 
   const ratingSubLabel = effectiveRatingGame
-    ? "Игра влияет на рейтинг участников"
-    : "Игра не влияет на рейтинг участников";
+    ? "Игра на уровень, результаты игры изменяет уровень участников"
+    : "Дружеская игра не влияет на уровень участников";
   const minPercent = (minRating / (RATING_LABELS.length - 1)) * 100;
   const maxPercent = (maxRating / (RATING_LABELS.length - 1)) * 100;
 
@@ -4347,19 +4720,50 @@ export default function GamesPage({
     roomId: courtId,
     roomName: selectedCourtName,
   });
-  const splitPaymentAvailable = isSplitPaymentPromoAvailableForSelection({
-    config: activeSplitPaymentPromoConfig,
-    date: selectedDate,
-    studioId,
-    studioName,
-    roomId: courtId,
-    roomName: selectedCourtName,
-  });
+  const splitPaymentAvailable = ENABLE_SPLIT_GAME_PAYMENT && splitPaymentTesterUnlocked;
   const splitPaymentSelected = splitPaymentAvailable && paymentMode === "split";
-  const splitShareAmount = resolveSplitShareAmount(splitShareCount, activeSplitPaymentPromoConfig, duration);
-  const splitBaseShareAmount = resolveSplitBaseShareAmount(activeSplitPaymentPromoConfig, duration);
-  const splitDiscountAmount = Math.max(splitBaseShareAmount - splitShareAmount, 0);
+  const paymentModeSubLabel = splitPaymentSelected
+    ? "Разделить оплату на 4-ых"
+    : splitPaymentTesterUnlocked
+      ? "Тестовый режим активирован · оплачу игру один"
+      : "Оплачу игру один";
+  const splitShareAmount = paymentAmount != null && paymentAmount > 0
+    ? Math.max(0, Math.round(paymentAmount / Math.max(splitShareCount, 1)))
+    : resolveSplitShareAmount(splitShareCount, activeSplitPaymentPromoConfig, duration);
   const splitPaymentSummary = `${formatPrice(splitShareAmount)} ₽ × ${splitShareCount}`;
+  const splitRequiredTypeIds = useMemo(
+    () => buildComparableIdSet([
+      SPLIT_OPEN_GAME_EXERCISE_TYPE_ID,
+      DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.vivaExerciseTypeId,
+      activeSplitPaymentPromoConfig.vivaExerciseTypeId,
+    ]),
+    [activeSplitPaymentPromoConfig.vivaExerciseTypeId],
+  );
+  const splitRequiredDirectionIds = useMemo(
+    () => buildComparableIdSet([
+      SPLIT_OPEN_GAME_DIRECTION_ID,
+      DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.vivaDirectionId,
+      activeSplitPaymentPromoConfig.vivaDirectionId,
+    ]),
+    [activeSplitPaymentPromoConfig.vivaDirectionId],
+  );
+  const splitHasEligibleSubscriptions = splitSubscriptions.length > 0;
+  const normalizedGameTitle = gameTitleDraft.trim();
+  const normalizedGameParticipantComment = gameParticipantCommentDraft.trim();
+  const normalizedGameJoinPrice = gameJoinPriceDraft.replace(/[^\d]/g, "").replace(/^0+(?=\d)/, "");
+  const splitJoinPriceAutoAmount = paymentAmount != null && paymentAmount > 0
+    ? Math.max(0, Math.round(paymentAmount / 4))
+    : 0;
+  const splitJoinPriceAutoValue = splitJoinPriceAutoAmount > 0 ? String(splitJoinPriceAutoAmount) : "";
+  const hasSelectedCommunityAutopublish = selectedCommunityAutopublishIds.length > 0;
+  const showPublicationFields = !isPrivate || hasSelectedCommunityAutopublish;
+  const publicationFieldsNote = !isPrivate
+    ? (
+      hasSelectedCommunityAutopublish
+        ? "Открытая игра будет опубликована в общем списке и в выбранных сообществах. Любой участник выбранного сообщества сможет присоединиться к игре."
+        : "Открытая игра будет опубликована в общем списке и доступна другим игрокам для присоединения."
+    )
+    : "Указанная игра будет опубликована в сообществе, любой участник выбранного сообщества сможет присоединиться к игре.";
   const paymentTitle = loadingPay
     ? "Оплатить · подготовка..."
     : loadingSlotPrice
@@ -4368,7 +4772,13 @@ export default function GamesPage({
       ? `Оплатить · ${formatPrice(paymentAmount)} ₽`
       : "Оплатить · — ₽";
   const paymentSubmitTitle = splitPaymentSelected
-    ? (loadingPay ? "Оплатить участие · подготовка..." : `Оплатить участие · ${formatPrice(splitShareAmount)} ₽`)
+    ? (
+      loadingPay
+        ? "Оплатить участие · подготовка..."
+        : splitHasEligibleSubscriptions
+          ? `Оплатить 1/4 стоимости · ${formatPrice(splitShareAmount)} ₽`
+          : `Оплатить участие · ${formatPrice(splitShareAmount)} ₽`
+    )
     : paymentTitle;
   const paymentStationCourt = studio && selectedCourt
     ? `${studio.name} · ${selectedCourt.name}`
@@ -4382,11 +4792,111 @@ export default function GamesPage({
     : paymentAmount != null && paymentAmount > 0
       ? `Сумма брони · ${formatPrice(paymentAmount)} ₽`
       : "Сумма брони · — ₽";
+  const splitSubscriptionsLabel = splitPaymentSelected
+    ? (
+      splitSubscriptionsLoading
+        ? "Проверяем доступные абонементы для split-оплаты..."
+          : splitSubscriptionsError
+            ? splitSubscriptionsError
+            : splitSubscriptions.length > 0
+            ? buildSplitSubscriptionStatusLabel(splitSubscriptions)
+            : "Подходящий абонемент не найден, доступна оплата 1/4 стоимости."
+    )
+    : null;
+  const splitPaymentAvailabilityLabel = splitPaymentSelected ? splitSubscriptionsLabel : null;
+  const splitPaymentAvailabilityLabelIsError = splitPaymentSelected ? Boolean(splitSubscriptionsError) : false;
+  const loadSplitSubscriptions = useCallback(async () => {
+    const requestId = splitSubscriptionRequestRef.current + 1;
+    splitSubscriptionRequestRef.current = requestId;
+    setSplitSubscriptionsLoading(true);
+    setSplitSubscriptionsError(null);
+
+    try {
+      const result = await apiFetchSubscriptions();
+      if (splitSubscriptionRequestRef.current !== requestId) return;
+      if (result.error) {
+        setSplitSubscriptions([]);
+        setSplitSubscriptionsError(result.error.message || "Не удалось получить абонементы");
+        return;
+      }
+
+      const subscriptions = Array.isArray(result.data?.content) ? result.data.content : [];
+      const eligible = filterSplitEligibleSubscriptions(subscriptions, splitRequiredTypeIds, splitRequiredDirectionIds);
+      setSplitSubscriptions(eligible);
+      setSplitSubscriptionsError(null);
+    } catch {
+      if (splitSubscriptionRequestRef.current !== requestId) return;
+      setSplitSubscriptions([]);
+      setSplitSubscriptionsError("Не удалось получить абонементы");
+    } finally {
+      if (splitSubscriptionRequestRef.current === requestId) {
+        setSplitSubscriptionsLoading(false);
+      }
+    }
+  }, [splitRequiredTypeIds, splitRequiredDirectionIds]);
+  const handlePaymentModeSwitchTap = useCallback(() => {
+    if (!splitPaymentTesterUnlocked) {
+      const tapState = splitPaymentUnlockTapStateRef.current;
+      tapState.count += 1;
+
+      if (tapState.timeoutId != null && typeof window !== "undefined") {
+        window.clearTimeout(tapState.timeoutId);
+        tapState.timeoutId = null;
+      }
+
+      if (tapState.count >= SPLIT_PAYMENT_UNLOCK_TAP_COUNT) {
+        tapState.count = 0;
+        setSplitPaymentTesterUnlocked(true);
+        setPromoStatusMessage("Тестовый режим split-оплаты активирован");
+        setPromoError(null);
+        setPaymentMode((current) => {
+          const nextMode = current === "split" ? "self" : "split";
+          if (nextMode === "split") {
+            setSplitShareCount(4);
+          }
+          return nextMode;
+        });
+        return;
+      }
+
+      if (typeof window !== "undefined") {
+        tapState.timeoutId = window.setTimeout(() => {
+          splitPaymentUnlockTapStateRef.current.count = 0;
+          splitPaymentUnlockTapStateRef.current.timeoutId = null;
+        }, SPLIT_PAYMENT_UNLOCK_RESET_MS);
+      }
+      return;
+    }
+
+    setPaymentMode((current) => {
+      const nextMode = current === "split" ? "self" : "split";
+      if (nextMode === "split") {
+        setSplitShareCount(4);
+      }
+      return nextMode;
+    });
+  }, [splitPaymentTesterUnlocked]);
+  useEffect(() => {
+    if (!splitPaymentSelected) return;
+    void loadSplitSubscriptions();
+  }, [splitPaymentSelected, loadSplitSubscriptions]);
   useEffect(() => {
     if (paymentMode === "split" && !splitPaymentAvailable) {
       setPaymentMode("self");
     }
   }, [paymentMode, splitPaymentAvailable]);
+  useEffect(() => {
+    if (splitPaymentSelected) {
+      splitJoinPriceAutofilledRef.current = true;
+      setGameJoinPriceDraft(splitJoinPriceAutoValue);
+      return;
+    }
+
+    if (splitJoinPriceAutofilledRef.current) {
+      setGameJoinPriceDraft("");
+      splitJoinPriceAutofilledRef.current = false;
+    }
+  }, [splitPaymentSelected, splitJoinPriceAutoValue]);
   useEffect(() => {
     if (loadingPay) return;
     if (!promoCodeApplied || promoDiscountAmount == null || basePaymentAmount == null) return;
@@ -4426,10 +4936,49 @@ export default function GamesPage({
   const detailsStudioName = gameSnapshot?.studioName ?? studio?.name ?? "Станция";
   const detailsRoomName = gameSnapshot?.roomName ?? selectedCourt?.name ?? "Корт";
   const detailsAmount = gameSnapshot?.amount ?? paymentAmount;
+  const upsertGameRecordInStores = useCallback((
+    incoming: PadelGameRecord,
+    options?: { communityMode?: "upsert" | "if_exists" | "skip" },
+  ) => {
+    const communityMode = options?.communityMode ?? "if_exists";
+    if (communityMode !== "skip") {
+      setCommunityGames((prev) => {
+        if (communityMode === "if_exists" && !prev.some((item) => item.id === incoming.id)) {
+          return prev;
+        }
+        return upsertPadelGameRecord(prev, incoming);
+      });
+    }
+    setActiveGameRecordStore((prev) => {
+      const activeId = (gameRecordId || "").trim();
+      if (activeId && incoming.id === activeId) {
+        return prev ? mergePadelGameRecord(prev, incoming) : incoming;
+      }
+      if (prev && prev.id === incoming.id) {
+        return mergePadelGameRecord(prev, incoming);
+      }
+      return prev;
+    });
+  }, [gameRecordId]);
+  const removeGameRecordFromStores = useCallback((targetId: string) => {
+    const normalizedId = targetId.trim();
+    if (!normalizedId) return;
+    setCommunityGames((prev) => prev.filter((item) => item.id !== normalizedId));
+    setActiveGameRecordStore((prev) => (prev?.id === normalizedId ? null : prev));
+  }, []);
   const activeGameRecord = useMemo(
-    () => (gameRecordId ? createdGames.find((item) => item.id === gameRecordId) ?? null : null),
-    [createdGames, gameRecordId],
+    () => {
+      if (!gameRecordId) return null;
+      if (activeGameRecordStore?.id === gameRecordId) return activeGameRecordStore;
+      return communityGames.find((item) => item.id === gameRecordId) ?? null;
+    },
+    [activeGameRecordStore, communityGames, gameRecordId],
   );
+  const activeGameMetadata = isRecordObject(activeGameRecord?.metadata) ? activeGameRecord.metadata : null;
+  const detailsGameTitle = extractGameCustomTitle(activeGameMetadata) ?? normalizedGameTitle ?? null;
+  const detailsGameParticipantComment = extractGameParticipantComment(activeGameMetadata)
+    ?? normalizedGameParticipantComment
+    ?? null;
   const currentGameUnreadCount = gameRecordId ? (chatUnreadByGame[gameRecordId] ?? 0) : 0;
   const currentChatReadTs = gameRecordId ? (chatReadMap[gameRecordId] ?? 0) : 0;
   const matchesCurrentUserByIdentity = useCallback((
@@ -4520,7 +5069,10 @@ export default function GamesPage({
         status: "CONFIRMED",
       };
     }
-    const organizerFallback = participants.find((player) => player.source === "ORGANIZER") ?? null;
+    const organizerFallback = (activeGameRecord?.participants ?? []).find((player) => {
+      const source = String(player.source || "").trim().toUpperCase();
+      return source === "ORGANIZER";
+    }) ?? null;
     if (!organizerFallback) return null;
     const organizerIsCurrentUser = matchesCurrentUserByIdentity(
       organizerFallback.id,
@@ -4542,8 +5094,8 @@ export default function GamesPage({
     };
   }, [
     activeGameRecord?.organizer,
+    activeGameRecord?.participants,
     matchesCurrentUserByIdentity,
-    participants,
     profileGrade,
     profileRatingNumeric,
   ]);
@@ -4553,26 +5105,19 @@ export default function GamesPage({
   );
   const detailsOrganizerPayload = useMemo(
     () => ({
-      id: activeGameRecord?.organizer?.id ?? detailsOrganizerPlayer?.id ?? profileId ?? null,
-      name: activeGameRecord?.organizer?.name ?? detailsOrganizerPlayer?.name ?? profileName ?? "Организатор",
-      phone: activeGameRecord?.organizer?.phone ?? detailsOrganizerPlayer?.phone ?? profilePhone ?? null,
-      photo: activeGameRecord?.organizer?.photo ?? detailsOrganizerPlayer?.photo ?? profilePhoto ?? null,
-      rating: activeGameRecord?.organizer?.rating ?? detailsOrganizerPlayer?.rating ?? profileGrade ?? null,
+      id: activeGameRecord?.organizer?.id ?? detailsOrganizerPlayer?.id ?? null,
+      name: activeGameRecord?.organizer?.name ?? detailsOrganizerPlayer?.name ?? "Организатор",
+      phone: activeGameRecord?.organizer?.phone ?? detailsOrganizerPlayer?.phone ?? null,
+      photo: activeGameRecord?.organizer?.photo ?? detailsOrganizerPlayer?.photo ?? null,
+      rating: activeGameRecord?.organizer?.rating ?? detailsOrganizerPlayer?.rating ?? null,
       ratingNumeric:
         activeGameRecord?.organizer?.ratingNumeric
         ?? detailsOrganizerPlayer?.ratingNumeric
-        ?? profileRatingNumeric
         ?? null,
     }),
     [
       activeGameRecord?.organizer,
       detailsOrganizerPlayer,
-      profileGrade,
-      profileRatingNumeric,
-      profileId,
-      profileName,
-      profilePhone,
-      profilePhoto,
     ],
   );
   const detailsMetadata = useMemo<Record<string, unknown>>(
@@ -4740,6 +5285,232 @@ export default function GamesPage({
       return !key || !participantKeys.has(key);
     });
   }, [activeGameRecord?.waitlist, waitlistPlayers, detailsParticipants]);
+  useEffect(() => {
+    if ((step !== "details" && step !== "chat") || !activeGameRecord?.id) {
+      return;
+    }
+
+    const sourceParticipants =
+      activeGameRecord?.participants && activeGameRecord.participants.length > 0
+        ? activeGameRecord.participants
+        : participants;
+    const sourceWaitlist =
+      activeGameRecord?.waitlist && activeGameRecord.waitlist.length > 0
+        ? activeGameRecord.waitlist
+        : waitlistPlayers;
+
+    const uniquePlayers = new Map<string, PadelGamePlayer>();
+    const addPlayer = (player: PadelGamePlayer | null | undefined) => {
+      if (!player) return;
+      const keys = getPadelPlayerLookupKeys(player);
+      if (keys.length === 0) return;
+      if (!uniquePlayers.has(keys[0])) {
+        uniquePlayers.set(keys[0], player);
+      }
+    };
+
+    sourceParticipants.forEach(addPlayer);
+    sourceWaitlist.forEach(addPlayer);
+    if (activeGameRecord?.organizer) {
+      addPlayer({
+        id: activeGameRecord.organizer.id ?? null,
+        name: activeGameRecord.organizer.name || "Организатор",
+        phone: activeGameRecord.organizer.phone ?? null,
+        photo: activeGameRecord.organizer.photo ?? null,
+        rating: activeGameRecord.organizer.rating ?? null,
+        ratingNumeric: activeGameRecord.organizer.ratingNumeric ?? null,
+        source: "ORGANIZER",
+        status: "CONFIRMED",
+      });
+    }
+    if (profilePhoneNorm || profileId || profileName) {
+      addPlayer({
+        id: profileId ?? null,
+        name: profileName || "Игрок",
+        phone: profilePhoneNorm ?? profilePhone ?? null,
+        photo: profilePhoto ?? null,
+        rating: profileGrade ?? null,
+        ratingNumeric: profileRatingNumeric ?? null,
+        status: "CONFIRMED",
+      });
+    }
+
+    const players = Array.from(uniquePlayers.values());
+    if (players.length === 0) return;
+
+    const refreshKey = buildPadelPlayersRefreshKey(
+      activeGameRecord.id,
+      sourceParticipants,
+      sourceWaitlist,
+      activeGameRecord.organizer,
+    );
+    if (detailsRatingsRefreshKeyRef.current === refreshKey) {
+      return;
+    }
+    detailsRatingsRefreshKeyRef.current = refreshKey;
+
+    let cancelled = false;
+    void (async () => {
+      const liveRatingsResult = await apiFetchPadelLiveRatings(
+        players.map((player) => ({
+          clientId: (player.id || "").trim() || null,
+          phone: (player.id || "").trim() ? null : normalizePhoneForGame(player.phone),
+          name: player.name || null,
+          rating: player.rating ?? null,
+          ratingNumeric: normalizeRatingNumeric(player.ratingNumeric),
+        })),
+      );
+
+      const enrichedByKey = new Map<string, EnrichedPadelPlayerData>();
+      const upsertEnriched = (value: EnrichedPadelPlayerData) => {
+        getPadelPlayerLookupKeys(value).forEach((key) => {
+          const current = enrichedByKey.get(key);
+          enrichedByKey.set(key, {
+            id: value.id ?? current?.id ?? null,
+            phone: value.phone ?? current?.phone ?? null,
+            name: value.name ?? current?.name ?? null,
+            photo: value.photo ?? current?.photo ?? null,
+            rating: value.rating ?? current?.rating ?? null,
+            ratingNumeric: value.ratingNumeric ?? current?.ratingNumeric ?? null,
+          });
+        });
+      };
+
+      players.forEach((player) => {
+        upsertEnriched({
+          id: player.id ?? null,
+          phone: normalizePhoneForGame(player.phone),
+          name: player.name,
+          photo: player.photo ?? null,
+          rating: player.rating ?? null,
+          ratingNumeric: normalizeRatingNumeric(player.ratingNumeric),
+        });
+      });
+
+      (liveRatingsResult.data ?? []).forEach((item) => {
+        upsertEnriched({
+          id: item.clientId ?? null,
+          phone: normalizePhoneForGame(item.phoneNorm),
+          name: item.name ?? null,
+          photo: null,
+          rating: item.rating || mapNumericToRatingGrade(item.ratingNumeric) || null,
+          ratingNumeric: normalizeRatingNumeric(item.ratingNumeric),
+        });
+      });
+
+      const playersMissingRating = players.filter((player) => {
+        const fresh = getPadelPlayerLookupKeys(player)
+          .map((key) => enrichedByKey.get(key))
+          .find(Boolean);
+        return !fresh?.rating && fresh?.ratingNumeric == null;
+      });
+
+      if (playersMissingRating.length > 0) {
+        const searchResults = await Promise.all(
+          playersMissingRating.slice(0, 12).map(async (player) => {
+            const query = (player.id || "").trim()
+              || normalizePhoneForGame(player.phone)
+              || player.name.trim();
+            if (!query) return null;
+            const result = await apiSearchPadelPlayers(query, 8);
+            const playerKeys = new Set(getPadelPlayerLookupKeys(player));
+            const match = result.data.find((candidate) => (
+              getPadelPlayerLookupKeys(candidate).some((key) => playerKeys.has(key))
+            )) ?? null;
+            if (!match) return null;
+            return {
+              id: match.id ?? null,
+              phone: normalizePhoneForGame(match.phone),
+              name: match.name ?? null,
+              photo: match.photo ?? null,
+              rating: match.rating || mapNumericToRatingGrade(match.ratingNumeric) || null,
+              ratingNumeric: normalizeRatingNumeric(match.ratingNumeric),
+            } satisfies EnrichedPadelPlayerData;
+          }),
+        );
+
+        searchResults.forEach((item) => {
+          if (item) upsertEnriched(item);
+        });
+      }
+
+      if (cancelled) return;
+
+      const enrichPlayerArray = (list: PadelGamePlayer[]) => {
+        let changed = false;
+        const next = list.map((player) => {
+          const fresh = getPadelPlayerLookupKeys(player)
+            .map((key) => enrichedByKey.get(key))
+            .find(Boolean);
+          const merged = mergePadelPlayerFreshData(player, fresh);
+          if (merged !== player) changed = true;
+          return merged;
+        });
+        return changed ? next : list;
+      };
+
+      if (activeGameRecord?.id) {
+        const nextOrganizer = mergePadelOrganizerFreshData(
+          activeGameRecord.organizer,
+          activeGameRecord.organizer
+            ? getPadelPlayerLookupKeys(activeGameRecord.organizer).map((key) => enrichedByKey.get(key)).find(Boolean)
+            : undefined,
+        );
+        const nextParticipants = Array.isArray(activeGameRecord.participants)
+          ? enrichPlayerArray(activeGameRecord.participants)
+          : activeGameRecord.participants;
+        const nextWaitlist = Array.isArray(activeGameRecord.waitlist)
+          ? enrichPlayerArray(activeGameRecord.waitlist)
+          : activeGameRecord.waitlist;
+        if (
+          nextOrganizer !== activeGameRecord.organizer
+          || nextParticipants !== activeGameRecord.participants
+          || nextWaitlist !== activeGameRecord.waitlist
+        ) {
+          upsertGameRecordInStores(
+            {
+              ...activeGameRecord,
+              organizer: nextOrganizer,
+              participants: nextParticipants,
+              waitlist: nextWaitlist,
+            },
+            { communityMode: "if_exists" },
+          );
+        }
+      }
+
+      if (!(activeGameRecord?.participants && activeGameRecord.participants.length > 0)) {
+        setParticipants((prev) => enrichPlayerArray(prev));
+      }
+      if (!(activeGameRecord?.waitlist && activeGameRecord.waitlist.length > 0)) {
+        setWaitlistPlayers((prev) => enrichPlayerArray(prev));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeGameRecord?.id,
+    activeGameRecord?.organizer,
+    activeGameRecord?.participants,
+    activeGameRecord?.waitlist,
+    participants,
+    profileGrade,
+    profileId,
+    profileName,
+    profilePhone,
+    profilePhoneNorm,
+    profilePhoto,
+    profileRatingNumeric,
+    step,
+    upsertGameRecordInStores,
+    waitlistPlayers,
+  ]);
+  useEffect(() => {
+    if (step === "details" || step === "chat") return;
+    detailsRatingsRefreshKeyRef.current = null;
+  }, [step, activeGameRecord?.id]);
   const chatSenderPhotoByIdentity = useMemo(() => {
     const map = new Map<string, string>();
 
@@ -4891,6 +5662,22 @@ export default function GamesPage({
     [detailsParticipants, isCurrentUserPlayer],
   );
   const isCurrentUserConfirmedParticipant = Boolean(detailsCurrentUserParticipant);
+  const isCurrentUserInWaitlist = useMemo(
+    () => detailsWaitlist.some((player) => isCurrentUserPlayer(player)),
+    [detailsWaitlist, isCurrentUserPlayer],
+  );
+  const hasCurrentUserIdentityInDetails = Boolean((profileId || "").trim() || profilePhoneNorm);
+  const isDetailsWaitlistEnabled = activeGameRecord?.invite?.waitlistEnabled ?? waitlistEnabled;
+  const canCurrentUserJoinGameInDetails = Boolean(
+    gameRecordId
+    && !isCurrentUserOrganizerByDetails
+    && !updatingGameRoster
+    && !updatingGameMeta
+    && hasCurrentUserIdentityInDetails
+    && !isCurrentUserConfirmedParticipant
+    && !isCurrentUserInWaitlist
+    && (detailsHasFreeSlots || isDetailsWaitlistEnabled),
+  );
   const canCurrentUserLeaveGameInDetails = Boolean(
     gameRecordId
     && !isCurrentUserOrganizerByDetails
@@ -4919,10 +5706,17 @@ export default function GamesPage({
   const isDetailsMatchStarted = detailsMatchStartAt
     ? Date.now() >= detailsMatchStartAt.getTime()
     : false;
+  const canCurrentUserAccessResultTab = isCurrentUserOrganizerByDetails || isCurrentUserConfirmedParticipant;
 
   useEffect(() => {
-    setDetailsActiveTab(isDetailsMatchStarted ? "result" : "game");
-  }, [activeGameRecord?.id, isDetailsMatchStarted]);
+    setDetailsActiveTab(isDetailsMatchStarted && canCurrentUserAccessResultTab ? "result" : "game");
+  }, [activeGameRecord?.id, isDetailsMatchStarted, canCurrentUserAccessResultTab]);
+
+  useEffect(() => {
+    if (detailsActiveTab === "result" && !canCurrentUserAccessResultTab) {
+      setDetailsActiveTab("game");
+    }
+  }, [detailsActiveTab, canCurrentUserAccessResultTab]);
 
   useEffect(() => {
     const participantByKey = new Map<string, PadelGamePlayer>();
@@ -5421,6 +6215,15 @@ export default function GamesPage({
       window.clearTimeout(tapState.timeoutId);
     }
   }, []);
+  useEffect(() => () => {
+    const tapState = splitPaymentUnlockTapStateRef.current;
+    if (tapState.timeoutId != null && typeof window !== "undefined") {
+      window.clearTimeout(tapState.timeoutId);
+    }
+  }, []);
+  useEffect(() => () => {
+    splitSubscriptionRequestRef.current += 1;
+  }, []);
 
   const resolveCurrentClientProfile = useCallback(async () => {
     if (profileId && profilePhone) {
@@ -5486,7 +6289,7 @@ export default function GamesPage({
     return {
       stationTarget,
       memberTargets,
-      defaultSelectedIds: stationTarget?.isOrganizerMember ? [stationTarget.id] : [],
+      defaultSelectedIds: [],
     };
   }, [communityAutopublishStationName, resolveCurrentClientProfile]);
 
@@ -5628,7 +6431,6 @@ export default function GamesPage({
       | "payment_status_sync" = "direct_create",
   ) => {
     if (!ENABLE_GAME_COMMUNITY_AUTOPUBLISH || !game?.id) return;
-    if (game.settings?.isPrivate) return;
     if (String(game.status || "").trim().toUpperCase().includes("CANCEL")) return;
     if (!isGamePaidForCommunityAutopublish(game)) return;
 
@@ -5720,7 +6522,7 @@ export default function GamesPage({
       const response = await apiCreateCommunityFeedPost(target.id, {
         member: actor,
         kind: "GAME",
-        title: "Приглашение в игру",
+        title: extractGameCustomTitle(baseMetadata) ?? "Приглашение в игру",
         body: buildCommunityGamePostBody(game),
         imageUrl: null,
         previewLabel: buildCommunityGamePreviewLabel(game),
@@ -5772,7 +6574,7 @@ export default function GamesPage({
       }),
     };
 
-    setCreatedGames((prev) => upsertPadelGameRecord(prev, { ...game, metadata: nextMetadata }));
+    upsertGameRecordInStores({ ...game, metadata: nextMetadata }, { communityMode: "if_exists" });
 
     if (!hasNewPublication && Object.keys(existingPostsByCommunityId).length > 0) {
       return;
@@ -5784,12 +6586,13 @@ export default function GamesPage({
 
     const updatedRecord = updateResult.data;
     if (updatedRecord?.id) {
-      setCreatedGames((prev) => upsertPadelGameRecord(prev, updatedRecord));
+      upsertGameRecordInStores(updatedRecord, { communityMode: "if_exists" });
     }
   }, [
     fetchCommunityAutopublishTargets,
     getCurrentCommunityAutopublishSelectionState,
     resolveCurrentCommunityActor,
+    upsertGameRecordInStores,
   ]);
 
   const syncPaidGameCommunityMembershipAndPublication = useCallback(async (
@@ -5840,7 +6643,6 @@ export default function GamesPage({
       return;
     }
     if (!ENABLE_GAME_COMMUNITY_AUTOPUBLISH) return;
-    if (activeGameRecord.settings?.isPrivate === true) return;
     if (String(activeGameRecord.status || "").trim().toUpperCase().includes("CANCEL")) return;
     if (!isGamePaidForCommunityAutopublish(activeGameRecord)) return;
     if (detailsPendingCommunityAutopublishIds.length === 0) return;
@@ -5941,7 +6743,7 @@ export default function GamesPage({
           }
           const snapshotFromRecord = buildMatchSnapshotFromRecord(fetchedRecord);
           setGameSnapshot((prev) => mergeMatchSnapshots(prev, snapshotFromRecord));
-          setCreatedGames((prev) => upsertPadelGameRecord(prev, fetchedRecord));
+          upsertGameRecordInStores(fetchedRecord, { communityMode: "if_exists" });
           if (!result.error) {
             setGameRecordError(null);
           }
@@ -5956,18 +6758,16 @@ export default function GamesPage({
             setGamePaid(false);
             setInviteLink(null);
             setGamePaymentUrl(vivaStatus.paymentUrl ?? fetchedRecord.payment?.paymentUrl ?? null);
-            setCreatedGames((prev) => {
-              const nextRecord: PadelGameRecord = {
-                ...fetchedRecord,
-                status: "CANCELLED",
-                payment: {
-                  amount: fetchedRecord.payment?.amount ?? null,
-                  paymentUrl: vivaStatus.paymentUrl ?? fetchedRecord.payment?.paymentUrl ?? null,
-                  paid: false,
-                },
-              };
-              return upsertPadelGameRecord(prev, nextRecord);
-            });
+            const nextRecord: PadelGameRecord = {
+              ...fetchedRecord,
+              status: "CANCELLED",
+              payment: {
+                amount: fetchedRecord.payment?.amount ?? null,
+                paymentUrl: vivaStatus.paymentUrl ?? fetchedRecord.payment?.paymentUrl ?? null,
+                paid: false,
+              },
+            };
+            upsertGameRecordInStores(nextRecord, { communityMode: "if_exists" });
             setGameRecordStatus("CANCELLED");
 
             const fetchedStatusUpper = String(fetchedRecord.status || "").trim().toUpperCase();
@@ -6005,7 +6805,7 @@ export default function GamesPage({
                   : vivaStatus.paid,
               },
             };
-            setCreatedGames((prev) => upsertPadelGameRecord(prev, nextRecord));
+            upsertGameRecordInStores(nextRecord, { communityMode: "if_exists" });
             if (effectivePaid) {
               setGameRecordStatus((prev) => {
                 const statusUpper = String(prev || "").trim().toUpperCase();
@@ -6035,7 +6835,7 @@ export default function GamesPage({
                 if (!alive) return;
                 if (patchResult.data?.id) {
                   recordForPublish = mergePadelGameRecord(nextRecord, patchResult.data as PadelGameRecord);
-                  setCreatedGames((prev) => upsertPadelGameRecord(prev, recordForPublish));
+                  upsertGameRecordInStores(recordForPublish, { communityMode: "if_exists" });
                 }
               }
               void runPaidGameCommunityMembershipAndPublication(recordForPublish, "payment_status_sync");
@@ -6060,7 +6860,13 @@ export default function GamesPage({
     return () => {
       alive = false;
     };
-  }, [step, gameRecordId, resolveGamePaymentByVivaBookings, runPaidGameCommunityMembershipAndPublication]);
+  }, [
+    step,
+    gameRecordId,
+    resolveGamePaymentByVivaBookings,
+    runPaidGameCommunityMembershipAndPublication,
+    upsertGameRecordInStores,
+  ]);
 
   const communityAutopublishSelectedIdsSet = useMemo(
     () => new Set(selectedCommunityAutopublishIds),
@@ -6083,7 +6889,7 @@ export default function GamesPage({
     );
   };
   const buildCommunityAutopublishMetadata = useCallback(() => {
-    if (!ENABLE_GAME_COMMUNITY_AUTOPUBLISH || isPrivate) return null;
+    if (!ENABLE_GAME_COMMUNITY_AUTOPUBLISH) return null;
     const selectionState = getCurrentCommunityAutopublishSelectionState();
     const targetById = new Map<string, CommunityAutopublishTarget>([
       ...(communityAutopublishStationTarget ? [[communityAutopublishStationTarget.id, communityAutopublishStationTarget] as const] : []),
@@ -6112,7 +6918,41 @@ export default function GamesPage({
     communityAutopublishMemberTargets,
     communityAutopublishStationTarget,
     getCurrentCommunityAutopublishSelectionState,
-    isPrivate,
+  ]);
+  const validateGamePublicationFields = useCallback(() => {
+    if (!showPublicationFields) return true;
+    if (!normalizedGameTitle) {
+      const errorMessage = "Укажите название игры.";
+      setPayError(errorMessage);
+      setGameRecordError(errorMessage);
+      return false;
+    }
+    if (!normalizedGameParticipantComment) {
+      const errorMessage = "Добавьте комментарий для участников.";
+      setPayError(errorMessage);
+      setGameRecordError(errorMessage);
+      return false;
+    }
+    if (splitPaymentSelected && !normalizedGameJoinPrice) {
+      const errorMessage = "Не удалось рассчитать стоимость присоединения для раздельной оплаты.";
+      setPayError(errorMessage);
+      setGameRecordError(errorMessage);
+      return false;
+    }
+    if (!splitPaymentSelected && !normalizedGameJoinPrice) {
+      const errorMessage = "Укажите стоимость присоединения к игре перед публикацией в сообщества.";
+      setPayError(errorMessage);
+      setGameRecordError(errorMessage);
+      return false;
+    }
+
+    return true;
+  }, [
+    showPublicationFields,
+    normalizedGameTitle,
+    normalizedGameParticipantComment,
+    splitPaymentSelected,
+    normalizedGameJoinPrice,
   ]);
   const communityAutopublishCards = useMemo(() => {
     const cards: Array<{
@@ -6270,11 +7110,12 @@ export default function GamesPage({
     resolveCurrentClientProfile,
   ]);
 
-  const handleSplitGamePay = useCallback(async () => {
+  const handleSplitGamePay = useCallback(async (preferredPaymentMode?: "subscription" | "one_time") => {
     if (!studioId || !selectedDate || !courtId || !time || !selectedSlotId) return;
+    if (!validateGamePublicationFields()) return;
     if (!splitPaymentAvailable) {
       setPaymentMode("self");
-      setPayError("Раздельная оплата доступна только для кортов new на Терехово");
+      setPayError("Раздельная оплата сейчас недоступна");
       return;
     }
 
@@ -6299,11 +7140,15 @@ export default function GamesPage({
     const shareAmount = resolveSplitShareAmount(splitShareCount, activeSplitPaymentPromoConfig, duration);
     const baseShareAmount = resolveSplitBaseShareAmount(activeSplitPaymentPromoConfig, duration);
     const discountAmount = Math.max(baseShareAmount - shareAmount, 0);
+    const resolvedPaymentMode = preferredPaymentMode ?? (splitHasEligibleSubscriptions ? "subscription" : "one_time");
+    const resolvedTotalAmount = paymentAmount != null && Number.isFinite(paymentAmount)
+      ? Math.max(0, Math.round(paymentAmount))
+      : null;
     const paymentResult = await apiCreatePadelSplitGamePayment({
       date: fromDate,
       fromTime,
       toTime,
-      activeTo: activeSplitPaymentPromoConfig.activeTo ?? null,
+      activeTo: null,
       studioId,
       roomId: courtId,
       studioName,
@@ -6311,17 +7156,20 @@ export default function GamesPage({
       clientId,
       clientPhone,
       paymentRef,
+      paymentMode: resolvedPaymentMode,
       baseRedirectUrl,
       successUrl: baseRedirectUrl,
       failUrl: baseRedirectUrl,
       shareCount: splitShareCount,
       shareAmount,
+      totalAmount: resolvedTotalAmount,
+      oneTimeBaseAmount: DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.baseShareAmount,
       shareAmountIncludesDuration: true,
       durationMinutes: duration,
       maxClientsCount: splitShareCount,
       spot: 1,
-      vivaDirectionId: activeSplitPaymentPromoConfig.vivaDirectionId,
-      vivaExerciseTypeId: activeSplitPaymentPromoConfig.vivaExerciseTypeId,
+      vivaDirectionId: SPLIT_OPEN_GAME_DIRECTION_ID,
+      vivaExerciseTypeId: SPLIT_OPEN_GAME_EXERCISE_TYPE_ID,
     });
 
     if (paymentResult.error || !paymentResult.data) {
@@ -6357,30 +7205,51 @@ export default function GamesPage({
     const resolvedBookingIds = paymentResult.data.bookingId ? [paymentResult.data.bookingId] : [];
     const resolvedPaymentAmount = paymentResult.data.toPay ?? shareAmount;
     const paidAt = new Date().toISOString();
+    const organizerPaymentStatus = paymentResult.data.paymentUrl ? "PAYMENT_PENDING" : "PAID";
     const splitDeadlineAt =
       paymentResult.data.deadlineAt ??
-      new Date(Date.now() + SPLIT_PAYMENT_DEADLINE_HOURS * 60 * 60 * 1000).toISOString();
+      new Date(Date.now() + SPLIT_PAYMENT_DEADLINE_MINUTES * 60 * 1000).toISOString();
+    const resolvedDirectionId = paymentResult.data.directionId ?? SPLIT_OPEN_GAME_DIRECTION_ID;
+    const resolvedExerciseTypeId = paymentResult.data.exerciseTypeId ?? SPLIT_OPEN_GAME_EXERCISE_TYPE_ID;
+    const resolvedSplitShareAmount = paymentResult.data.shareAmount ?? shareAmount;
+    const resolvedSplitShareAmountMinor = paymentResult.data.shareAmountMinor ?? Math.round(resolvedSplitShareAmount * 100);
+    const resolvedBaseShareAmount = paymentResult.data.baseShareAmount ?? baseShareAmount;
+    const resolvedBaseShareAmountMinor = paymentResult.data.baseShareAmountMinor ?? Math.round(resolvedBaseShareAmount * 100);
+    const resolvedDiscountAmount = paymentResult.data.discountAmount ?? discountAmount;
+    const resolvedDiscountAmountMinor = paymentResult.data.discountAmountMinor ?? Math.round(resolvedDiscountAmount * 100);
+    const resolvedSplitTotalAmount = paymentResult.data.totalAmount ?? resolvedTotalAmount;
+    const resolvedOneTimeBaseAmount = paymentResult.data.oneTimeBaseAmount
+      ?? DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.baseShareAmount;
     const splitMetadata = {
       enabled: true,
       mode: "group_booking",
       shareCount: splitShareCount,
-      shareAmount,
-      shareAmountMinor: Math.round(shareAmount * 100),
-      baseShareAmount,
-      baseShareAmountMinor: Math.round(baseShareAmount * 100),
-      discountAmount,
-      discountAmountMinor: Math.round(discountAmount * 100),
+      shareAmount: resolvedSplitShareAmount,
+      shareAmountMinor: resolvedSplitShareAmountMinor,
+      baseShareAmount: resolvedBaseShareAmount,
+      baseShareAmountMinor: resolvedBaseShareAmountMinor,
+      discountAmount: resolvedDiscountAmount,
+      discountAmountMinor: resolvedDiscountAmountMinor,
       deadlineAt: splitDeadlineAt,
+      assembleDeadlineAt: paymentResult.data.assembleDeadlineAt,
       status: "ACTIVE",
       vivaExerciseId: paymentResult.data.exerciseId,
       organizerBookingId: paymentResult.data.bookingId,
       productId: paymentResult.data.productId,
-      directionId: activeSplitPaymentPromoConfig.vivaDirectionId,
-      exerciseTypeId: activeSplitPaymentPromoConfig.vivaExerciseTypeId,
+      directionId: resolvedDirectionId,
+      exerciseTypeId: resolvedExerciseTypeId,
+      totalAmount: resolvedSplitTotalAmount,
+      oneTimeBaseAmount: resolvedOneTimeBaseAmount,
+      selectedPaymentMode: paymentResult.data.selectedPaymentMode ?? resolvedPaymentMode,
+      paymentModes: paymentResult.data.paymentModes,
+      subscriptionProductId: paymentResult.data.subscriptionProductId,
+      subscriptionProductName: paymentResult.data.subscriptionProductName,
+      oneTimeProductId: paymentResult.data.oneTimeProductId,
+      oneTimeProductName: paymentResult.data.oneTimeProductName,
       payments: [
         {
           role: "ORGANIZER",
-          status: "PAID",
+          status: organizerPaymentStatus,
           paymentRef,
           clientId: clientId ?? organizerPlayer.id ?? null,
           phone: clientPhone ?? organizerPlayer.phone ?? null,
@@ -6390,7 +7259,7 @@ export default function GamesPage({
           paymentUrl: paymentResult.data.paymentUrl,
           amount: resolvedPaymentAmount,
           amountMinor: paymentResult.data.toPayMinor,
-          paidAt,
+          paidAt: organizerPaymentStatus === "PAID" ? paidAt : null,
           spot: paymentResult.data.spot ?? 1,
         },
       ],
@@ -6453,6 +7322,11 @@ export default function GamesPage({
         bookingIds: resolvedBookingIds,
         source: "games_split_widget",
         gameFormat: resolvedGameFormat,
+        ...buildGameOptionalMetadataFields({
+          gameTitle: gameTitleDraft,
+          participantComment: gameParticipantCommentDraft,
+          joinPrice: gameJoinPriceDraft,
+        }),
         splitPayment: splitMetadata,
         ...buildCommunityAutopublishMetadataFields(buildCommunityAutopublishMetadata()),
       },
@@ -6477,7 +7351,8 @@ export default function GamesPage({
 
       const createdRecord = directCreateResult.data;
       const fallbackInviteUrl = buildInviteFallbackUrl(createdRecord.id);
-      setCreatedGames((prev) => upsertPadelGameRecord(prev, createdRecord));
+      upsertGameRecordInStores(createdRecord, { communityMode: "upsert" });
+      notifyGameRecordsUpdated([createdRecord], "games_split_direct_create");
       void runPaidGameCommunityMembershipAndPublication(createdRecord, "direct_create");
       setGameRecordId(createdRecord.id);
       setGameRecordStatus(createdRecord.status ?? "PAID");
@@ -6522,6 +7397,9 @@ export default function GamesPage({
     profileGrade,
     profileRatingNumeric,
     profilePhoto,
+    gameTitleDraft,
+    gameParticipantCommentDraft,
+    gameJoinPriceDraft,
     effectiveRatingGame,
     minRating,
     maxRating,
@@ -6533,14 +7411,18 @@ export default function GamesPage({
     splitPaymentAvailable,
     activeSplitPaymentPromoConfig,
     splitShareCount,
+    splitHasEligibleSubscriptions,
     resolvedGameFormat,
     buildCommunityAutopublishMetadata,
+    validateGamePublicationFields,
     resolveCurrentClientProfile,
     runPaidGameCommunityMembershipAndPublication,
+    upsertGameRecordInStores,
   ]);
 
   const handleMasterServicePay = useCallback(async () => {
     if (!studioId || !selectedDate || !courtId || !time || !selectedSlotId) return;
+    if (!validateGamePublicationFields()) return;
 
     setLoadingPay(true);
     setPayError(null);
@@ -6678,6 +7560,11 @@ export default function GamesPage({
           promoCode: promoCodeApplied,
           promoDiscount: promoDiscountAmount,
           gameFormat: resolvedGameFormat,
+          ...buildGameOptionalMetadataFields({
+            gameTitle: gameTitleDraft,
+            participantComment: gameParticipantCommentDraft,
+            joinPrice: gameJoinPriceDraft,
+          }),
           ...buildCommunityAutopublishMetadataFields(buildCommunityAutopublishMetadata()),
         },
       };
@@ -6713,7 +7600,8 @@ export default function GamesPage({
 
       const createdRecord = directCreateResult.data;
       const fallbackInviteUrl = buildInviteFallbackUrl(createdRecord.id);
-      setCreatedGames((prev) => upsertPadelGameRecord(prev, createdRecord));
+      upsertGameRecordInStores(createdRecord, { communityMode: "upsert" });
+      notifyGameRecordsUpdated([createdRecord], "games_direct_create");
       void runPaidGameCommunityMembershipAndPublication(createdRecord, "direct_create");
       setGameRecordId(createdRecord.id);
       setGameRecordStatus(createdRecord.status ?? "PAID");
@@ -6791,6 +7679,11 @@ export default function GamesPage({
           promoCode: promoCodeApplied,
           promoDiscount: promoDiscountAmount,
           gameFormat: resolvedGameFormat,
+          ...buildGameOptionalMetadataFields({
+            gameTitle: gameTitleDraft,
+            participantComment: gameParticipantCommentDraft,
+            joinPrice: gameJoinPriceDraft,
+          }),
           ...buildCommunityAutopublishMetadataFields(buildCommunityAutopublishMetadata()),
         },
       };
@@ -6821,6 +7714,9 @@ export default function GamesPage({
     profileRatingNumeric,
     profilePhoto,
     paymentAmount,
+    gameTitleDraft,
+    gameParticipantCommentDraft,
+    gameJoinPriceDraft,
     effectiveRatingGame,
     minRating,
     maxRating,
@@ -6835,8 +7731,10 @@ export default function GamesPage({
     createMaxPlayers,
     resolvedGameFormat,
     buildCommunityAutopublishMetadata,
+    validateGamePublicationFields,
     resolveCurrentClientProfile,
     runPaidGameCommunityMembershipAndPublication,
+    upsertGameRecordInStores,
   ]);
 
   useEffect(() => {
@@ -6870,7 +7768,12 @@ export default function GamesPage({
     setGameRosterError(null);
 
     try {
-      const existing = findGameRecordByBookingData(createdGames, createFromBooking);
+      const existing = findGameRecordByBookingData(
+        activeGameRecordStore
+          ? upsertPadelGameRecord(communityGames, activeGameRecordStore)
+          : communityGames,
+        createFromBooking,
+      );
       if (existing) {
         setGameRecordId(existing.id);
         setGameRecordStatus(existing.status ?? null);
@@ -6968,6 +7871,11 @@ export default function GamesPage({
           exerciseId: bookingPreset.exerciseId,
           directionName: bookingPreset.directionName,
           gameFormat: resolvedGameFormat,
+          ...buildGameOptionalMetadataFields({
+            gameTitle: gameTitleDraft,
+            participantComment: gameParticipantCommentDraft,
+            joinPrice: gameJoinPriceDraft,
+          }),
           ...buildCommunityAutopublishMetadataFields(buildCommunityAutopublishMetadata()),
         },
       };
@@ -6979,7 +7887,8 @@ export default function GamesPage({
       }
 
       const createdRecord = createResult.data;
-      setCreatedGames((prev) => upsertPadelGameRecord(prev, createdRecord));
+      upsertGameRecordInStores(createdRecord, { communityMode: "upsert" });
+      notifyGameRecordsUpdated([createdRecord], "games_booking_create");
       void runPaidGameCommunityMembershipAndPublication(createdRecord, "booking_create");
       setGameRecordId(createdRecord.id);
       setGameRecordStatus(createdRecord.status ?? payload.status ?? null);
@@ -7001,8 +7910,9 @@ export default function GamesPage({
     isBookingPresetMode,
     creatingFromBooking,
     bookingPreset,
-    createdGames,
+    communityGames,
     createFromBooking,
+    activeGameRecordStore,
     profileId,
     profilePhone,
     participants,
@@ -7010,6 +7920,9 @@ export default function GamesPage({
     profilePhoto,
     profileGrade,
     profileRatingNumeric,
+    gameTitleDraft,
+    gameParticipantCommentDraft,
+    gameJoinPriceDraft,
     effectiveRatingGame,
     minRating,
     maxRating,
@@ -7019,10 +7932,12 @@ export default function GamesPage({
     resolvedGameFormat,
     buildCommunityAutopublishMetadata,
     runPaidGameCommunityMembershipAndPublication,
+    upsertGameRecordInStores,
   ]);
 
   const handleCreateGame = () => {
     if (loadingPay) return;
+    if (!validateGamePublicationFields()) return;
 
     if (isBookingPresetMode) {
       void handleCreateGameFromBooking();
@@ -7169,7 +8084,7 @@ export default function GamesPage({
           void apiUpdatePadelGameRecord(gameRecordId, { status: "CANCELLED" });
         }
         if (activeGameRecord) {
-          setCreatedGames((prev) => upsertPadelGameRecord(prev, {
+          upsertGameRecordInStores({
             ...activeGameRecord,
             status: "CANCELLED",
             payment: {
@@ -7177,7 +8092,7 @@ export default function GamesPage({
               paymentUrl: vivaStatus.paymentUrl ?? gamePaymentUrl ?? activeGameRecord.payment?.paymentUrl ?? null,
               paid: false,
             },
-          }));
+          }, { communityMode: "if_exists" });
         }
         setGamePaid(false);
         setGameRecordStatus("CANCELLED");
@@ -7211,7 +8126,7 @@ export default function GamesPage({
           return "PAID";
         });
         if (paidRecord) {
-          setCreatedGames((prev) => upsertPadelGameRecord(prev, paidRecord));
+          upsertGameRecordInStores(paidRecord, { communityMode: "if_exists" });
         }
         if (fallbackInvite) {
           setInviteLink((prev) => prev ?? fallbackInvite);
@@ -7233,7 +8148,7 @@ export default function GamesPage({
           });
           if (patchResult.data?.id) {
             const mergedPatchedRecord = mergePadelGameRecord(paidRecord, patchResult.data as PadelGameRecord);
-            setCreatedGames((prev) => upsertPadelGameRecord(prev, mergedPatchedRecord));
+            upsertGameRecordInStores(mergedPatchedRecord, { communityMode: "if_exists" });
             void runPaidGameCommunityMembershipAndPublication(mergedPatchedRecord, "payment_status_sync");
           } else if (paidRecord) {
             void runPaidGameCommunityMembershipAndPublication(paidRecord, "payment_status_sync");
@@ -7274,6 +8189,7 @@ export default function GamesPage({
     gameRecordId,
     detailsAmount,
     runPaidGameCommunityMembershipAndPublication,
+    upsertGameRecordInStores,
   ]);
 
   const handleCancelUnpaidGame = useCallback(async () => {
@@ -7288,7 +8204,7 @@ export default function GamesPage({
 
     if (cancelResult.data?.id || !cancelResult.error) {
       const cancelledId = gameRecordId;
-      setCreatedGames((prev) => prev.filter((item) => item.id !== cancelledId));
+      removeGameRecordFromStores(cancelledId);
       setGameRecordId(null);
       setGameRecordStatus("CANCELLED");
       setInviteLink(null);
@@ -7303,7 +8219,7 @@ export default function GamesPage({
 
     setGameRecordError(cancelResult.error?.message || "Не удалось отменить бронь");
     setCancellingUnpaidGame(false);
-  }, [gameRecordId, cancellingUnpaidGame]);
+  }, [gameRecordId, cancellingUnpaidGame, removeGameRecordFromStores]);
 
   const toggleDetailsCommunityUnpublishSelection = useCallback((communityId: string) => {
     const normalizedCommunityId = communityId.trim();
@@ -7417,7 +8333,7 @@ export default function GamesPage({
       });
 
       if (updateResult.data?.id) {
-        setCreatedGames((prev) => upsertPadelGameRecord(prev, updateResult.data as PadelGameRecord));
+        upsertGameRecordInStores(updateResult.data as PadelGameRecord, { communityMode: "if_exists" });
         setDetailsSelectedCommunityUnpublishIds((current) => current.filter((communityId) => (
           !archivedCommunityIds.includes(communityId)
         )));
@@ -7444,6 +8360,7 @@ export default function GamesPage({
     isCurrentUserOrganizerOfActiveGame,
     resolveCurrentCommunityActor,
     updatingGameMeta,
+    upsertGameRecordInStores,
   ]);
 
   const saveDetailsMetadata = useCallback(async (
@@ -7467,7 +8384,7 @@ export default function GamesPage({
       });
 
       if (updateResult.data?.id) {
-        setCreatedGames((prev) => upsertPadelGameRecord(prev, updateResult.data as PadelGameRecord));
+        upsertGameRecordInStores(updateResult.data as PadelGameRecord, { communityMode: "if_exists" });
         return true;
       }
 
@@ -7488,6 +8405,7 @@ export default function GamesPage({
     activeGameRecord?.invite?.waitlistEnabled,
     waitlistEnabled,
     detailsMaxPlayers,
+    upsertGameRecordInStores,
   ]);
 
   const buildDraftMatchResultMetadata = useCallback((options?: {
@@ -7600,7 +8518,14 @@ export default function GamesPage({
       const updateResult = await apiUpdatePadelGameRecord(gameRecordId, payload);
 
       if (updateResult.data?.id) {
-        setCreatedGames((prev) => upsertPadelGameRecord(prev, updateResult.data as PadelGameRecord));
+        const normalizedRecord = updateResult.data as PadelGameRecord;
+        const mergedRecord = mergePadelGameRecord(activeGameRecord, normalizedRecord);
+        const recordWithRoster: PadelGameRecord = {
+          ...mergedRecord,
+          participants: normalizedParticipants,
+          waitlist: normalizedWaitlist,
+        };
+        upsertGameRecordInStores(recordWithRoster, { communityMode: "if_exists" });
         setParticipants(normalizedParticipants);
         setWaitlistPlayers(normalizedWaitlist);
         setGameRosterError(null);
@@ -7623,8 +8548,10 @@ export default function GamesPage({
     gameRecordId,
     detailsMaxPlayers,
     detailsOrganizerPayload,
+    activeGameRecord,
     activeGameRecord?.invite?.maxPlayers,
     activeGameRecord?.invite?.waitlistEnabled,
+    upsertGameRecordInStores,
     waitlistEnabled,
   ]);
 
@@ -8797,6 +9724,101 @@ export default function GamesPage({
     patchGameRoster,
   ]);
 
+  const handleReturnOrganizerToMatchFromDetails = useCallback(async () => {
+    if (!canManagePlayersInDetails || updatingGameRoster) return;
+    if (!detailsOrganizerPlayer || detailsOrganizerInMatch) return;
+    if (!detailsHasFreeSlots) {
+      setGameRosterError("Сначала освободите место в составе, чтобы вернуть организатора в матч");
+      return;
+    }
+
+    const organizerPlayerForSlot: PadelGamePlayer = {
+      ...detailsOrganizerPlayer,
+      source: "ORGANIZER",
+      status: "CONFIRMED",
+    };
+    const organizerKey = getPadelPlayerIdentityKey(organizerPlayerForSlot);
+    const nextParticipants = dedupePlayersByIdentity([
+      organizerPlayerForSlot,
+      ...detailsParticipants.filter((player) => {
+        if (!organizerKey) return !isDetailsOrganizerPlayer(player);
+        return getPadelPlayerIdentityKey(player) !== organizerKey;
+      }),
+    ]);
+    const nextWaitlist = detailsWaitlist.filter((player) => {
+      if (!organizerKey) return !isDetailsOrganizerPlayer(player);
+      return getPadelPlayerIdentityKey(player) !== organizerKey;
+    });
+    const previousSlots = [...detailsTeamSlots];
+    const previousSetPairings = detailsMatchResultSetPairings.map((teamSlots) => (
+      teamSlots ? cloneTeamSlots(teamSlots) : null
+    ));
+    const nextSlots = [...detailsTeamSlots];
+    nextSlots[0] = organizerPlayerForSlot;
+    const nextSetPairings = buildNextSetPairingsForTeamSlots(nextSlots);
+
+    setDetailsTeamSlots(nextSlots);
+    setDetailsMatchResultSetPairings(nextSetPairings);
+    setDetailsTeamMenuSlotIndex(null);
+    const nextMetadata = buildDetailsRosterMetadata(nextParticipants, nextWaitlist, {
+      organizerInMatch: true,
+      teamSlots: nextSlots,
+      setPairings: nextSetPairings,
+    });
+    const saved = await patchGameRoster(nextParticipants, nextWaitlist, {
+      metadata: nextMetadata,
+      fallbackErrorMessage: "Не удалось вернуть организатора в состав",
+    });
+    if (!saved) {
+      setDetailsTeamSlots(previousSlots);
+      setDetailsMatchResultSetPairings(previousSetPairings);
+    }
+  }, [
+    canManagePlayersInDetails,
+    updatingGameRoster,
+    detailsOrganizerPlayer,
+    detailsOrganizerInMatch,
+    detailsHasFreeSlots,
+    detailsParticipants,
+    detailsWaitlist,
+    detailsTeamSlots,
+    detailsMatchResultSetPairings,
+    isDetailsOrganizerPlayer,
+    buildNextSetPairingsForTeamSlots,
+    buildDetailsRosterMetadata,
+    patchGameRoster,
+  ]);
+
+  const handleMoveParticipantToWaitlistFromDetails = useCallback((player: PadelGamePlayer, index: number) => {
+    if (!canManagePlayersInDetails || updatingGameRoster) return;
+    if (!isDetailsWaitlistEnabled) {
+      setGameRosterError("Лист ожидания закрыт для этой игры");
+      return;
+    }
+    if (isDetailsOrganizerPlayer(player)) {
+      setGameRosterError("Организатора нельзя переместить в лист ожидания");
+      return;
+    }
+
+    const nextParticipants = detailsParticipants.filter((_, playerIndex) => playerIndex !== index);
+    const nextWaitlist = dedupePlayersByIdentity([
+      ...detailsWaitlist,
+      {
+        ...player,
+        status: "WAITLIST" as const,
+      },
+    ]);
+    void patchGameRoster(nextParticipants, nextWaitlist);
+  }, [
+    canManagePlayersInDetails,
+    updatingGameRoster,
+    isDetailsWaitlistEnabled,
+    isDetailsOrganizerPlayer,
+    detailsParticipants,
+    detailsWaitlist,
+    patchGameRoster,
+  ]);
+
   const handleAddWaitlistPlayerToDetails = useCallback((player: PadelGamePlayer, index: number) => {
     if (!canManagePlayersInDetails || updatingGameRoster) return;
     if (!detailsHasFreeSlots) {
@@ -8901,6 +9923,96 @@ export default function GamesPage({
     profilePhoneNorm,
     patchGameRoster,
   ]);
+
+  const handleJoinCurrentUserFromDetails = useCallback(async () => {
+    if (!canCurrentUserJoinGameInDetails || !gameRecordId) return;
+
+    const normalizedProfileId = (profileId || "").trim() || null;
+    const normalizedPhone = profilePhoneNorm ?? normalizePhoneForGame(profilePhone);
+    if (!normalizedProfileId && !normalizedPhone) {
+      setGameRosterError("Не удалось определить ваш профиль. Обновите страницу и попробуйте снова.");
+      return;
+    }
+
+    if (!detailsHasFreeSlots && !isDetailsWaitlistEnabled) {
+      setGameRosterError("Свободных мест нет, лист ожидания закрыт.");
+      return;
+    }
+
+    const joinPlayerBase: PadelGamePlayer = {
+      id: normalizedProfileId,
+      name: profileName || "Игрок",
+      phone: normalizedPhone,
+      photo: profilePhoto ?? null,
+      rating: profileGrade ?? null,
+      ratingNumeric: profileRatingNumeric ?? null,
+      source: "INVITE_LINK",
+      status: detailsHasFreeSlots ? "CONFIRMED" : "WAITLIST",
+    };
+
+    const nextParticipants = dedupePlayersByIdentity([
+      ...detailsParticipants.filter((player) => !isCurrentUserPlayer(player)),
+      ...(detailsHasFreeSlots
+        ? [{ ...joinPlayerBase, status: "CONFIRMED" as const }]
+        : []),
+    ]);
+    const nextWaitlist = dedupePlayersByIdentity([
+      ...detailsWaitlist.filter((player) => !isCurrentUserPlayer(player)),
+      ...(!detailsHasFreeSlots
+        ? [{ ...joinPlayerBase, status: "WAITLIST" as const }]
+        : []),
+    ]);
+    const nextMetadata = buildDetailsRosterMetadata(nextParticipants, nextWaitlist);
+
+    await patchGameRoster(nextParticipants, nextWaitlist, {
+      metadata: nextMetadata,
+      fallbackErrorMessage: detailsHasFreeSlots
+        ? "Не удалось присоединиться к игре"
+        : "Не удалось добавиться в лист ожидания",
+    });
+  }, [
+    canCurrentUserJoinGameInDetails,
+    gameRecordId,
+    profileId,
+    profilePhoneNorm,
+    profilePhone,
+    detailsHasFreeSlots,
+    isDetailsWaitlistEnabled,
+    profileName,
+    profilePhoto,
+    profileGrade,
+    profileRatingNumeric,
+    detailsParticipants,
+    detailsWaitlist,
+    isCurrentUserPlayer,
+    buildDetailsRosterMetadata,
+    patchGameRoster,
+  ]);
+
+  const handleOpenCabinetFromDetails = useCallback(() => {
+    const fallbackCabinetUrl = (CABINET_URL || "").trim();
+    if (typeof window !== "undefined") {
+      try {
+        const currentUrl = new URL(window.location.href);
+        const fromQuery = (
+          currentUrl.searchParams.get("cabinetUrl")
+          || currentUrl.searchParams.get("returnUrl")
+          || ""
+        ).trim();
+        if (fromQuery) {
+          window.location.href = new URL(fromQuery, currentUrl.origin).toString();
+          return;
+        }
+      } catch {
+        // fallback below
+      }
+      if (fallbackCabinetUrl) {
+        window.location.href = fallbackCabinetUrl;
+        return;
+      }
+    }
+    onBack();
+  }, [onBack]);
 
   if (step === "place") {
     return (
@@ -9175,7 +10287,7 @@ export default function GamesPage({
   }
 
   if (step === "chat") {
-    const chatTitle = detailsRoomName || "Чат игры";
+    const chatTitle = detailsGameTitle || detailsRoomName || "Чат игры";
     const chatSubtitle = [
       detailsStudioName || null,
       detailsDateKey || null,
@@ -9208,6 +10320,9 @@ export default function GamesPage({
         <div className="game-section game-chat-meta">
           <div className="game-card-title">{chatTitle}</div>
           <div className="game-card-sub">{chatSubtitle || "Матч"}</div>
+          {detailsGameParticipantComment && (
+            <div className="game-card-sub">{detailsGameParticipantComment}</div>
+          )}
         </div>
 
         <div className="game-section game-chat-section">
@@ -9407,6 +10522,14 @@ export default function GamesPage({
       && !isMatchResultAgreed
       && canEditMatchResult;
     const shouldSubmitMatchResultFromFooter = shouldHandleMatchResultFromFooter && hasAnyMatchResultScoreInput;
+    const canCurrentUserOpenDetailsChat = Boolean(
+      gameRecordId
+      && canCurrentUserSendChat
+      && (isCurrentUserConfirmedParticipant || isCurrentUserOrganizerByDetails),
+    );
+    const shouldRenderDetailsFooterSubmit = shouldHandleMatchResultFromFooter
+      || isCurrentUserConfirmedParticipant
+      || isCurrentUserOrganizerByDetails;
     const detailsFooterSubmitDisabled = shouldHandleMatchResultFromFooter && updatingGameMeta;
     const detailsFooterSubmitLabel = shouldHandleMatchResultFromFooter
       ? (
@@ -9612,15 +10735,27 @@ export default function GamesPage({
         {gameRecordError && <div className="game-empty game-pay-error">{gameRecordError}</div>}
         <div className="details-card">
           <div className="details-row">
-            <div>
-              <div className="details-date details-date-capitalize">{detailsDateLabel}</div>
-              <div className="details-time">
-                {detailsTimeFrom && detailsTimeTo
-                  ? `${detailsTimeFrom} • ${detailsTimeTo}`
-                  : "Время не указано"}
+            <div className="details-main">
+              <div className="details-main-info">
+                <div className="details-date details-date-capitalize">{detailsDateLabel}</div>
+                <div className="details-time">
+                  {detailsTimeFrom && detailsTimeTo
+                    ? `${detailsTimeFrom} • ${detailsTimeTo}`
+                    : "Время не указано"}
+                </div>
+                <div className="details-time details-time-strong">{detailsRoomName}</div>
+                <div className="details-time">{detailsStudioName}</div>
+                {detailsGameTitle && (
+                  <div className="details-match-custom-title">{detailsGameTitle}</div>
+                )}
               </div>
-              <div className="details-time details-time-strong">{detailsRoomName}</div>
-              <div className="details-time">{detailsStudioName}</div>
+              {detailsGameParticipantComment && (
+                <div className="details-match-comment" aria-label="Комментарий к игре">
+                  <span className="details-match-comment-quote" aria-hidden="true">“</span>
+                  <span>{detailsGameParticipantComment}</span>
+                  <span className="details-match-comment-quote" aria-hidden="true">”</span>
+                </div>
+              )}
             </div>
             <div className="details-right-stack">
               <CalendarDateBadge
@@ -9667,14 +10802,28 @@ export default function GamesPage({
                     fallbackClassName="details-roster-avatar details-roster-avatar-fallback"
                     fallbackText={getPlayerInitials(detailsOrganizerPlayer.name || "Организатор") || "О"}
                   />
-                  <div className="details-roster-meta">
-                    <div className="details-roster-name">{detailsOrganizerPlayer.name || "Организатор"}</div>
-                    <div className="details-roster-sub">
-                      {detailsOrganizerPlayer.rating ? `Уровень: ${detailsOrganizerPlayer.rating}` : "Вне состава"}
-                    </div>
+                <div className="details-roster-meta">
+                  <div className="details-roster-name">{detailsOrganizerPlayer.name || "Организатор"}</div>
+                  <div className="details-roster-sub">
+                    {detailsOrganizerPlayer.rating ? `Уровень: ${detailsOrganizerPlayer.rating}` : "Вне состава"}
                   </div>
                 </div>
+              </div>
+              {canManagePlayersInDetails ? (
+                <button
+                  type="button"
+                  className="details-roster-action details-roster-return-organizer"
+                  onClick={() => {
+                    void handleReturnOrganizerToMatchFromDetails();
+                  }}
+                  disabled={updatingGameRoster || !detailsHasFreeSlots}
+                  title={detailsHasFreeSlots ? "Вернуть организатора в состав" : "Сначала освободите место в составе"}
+                >
+                  Вернуться в игру
+                </button>
+              ) : (
                 <span className="details-roster-badge">Организатор</span>
+              )}
               </div>
             </div>
           </div>
@@ -9717,14 +10866,25 @@ export default function GamesPage({
                       <span className="details-roster-badge">Организатор</span>
                     ) : (
                       canManagePlayersInDetails ? (
-                        <button
-                          type="button"
-                          className="details-roster-action details-roster-remove"
-                          onClick={() => handleRemoveParticipantFromDetails(player, index)}
-                          disabled={updatingGameRoster}
-                        >
-                          Удалить
-                        </button>
+                        <div className="details-roster-actions">
+                          <button
+                            type="button"
+                            className="details-roster-action details-roster-move-waitlist"
+                            onClick={() => handleMoveParticipantToWaitlistFromDetails(player, index)}
+                            disabled={updatingGameRoster || !isDetailsWaitlistEnabled}
+                            title={isDetailsWaitlistEnabled ? "Переместить в лист ожидания" : "Лист ожидания закрыт"}
+                          >
+                            В лист ожидания
+                          </button>
+                          <button
+                            type="button"
+                            className="details-roster-action details-roster-remove"
+                            onClick={() => handleRemoveParticipantFromDetails(player, index)}
+                            disabled={updatingGameRoster}
+                          >
+                            Удалить
+                          </button>
+                        </div>
                       ) : (
                         isCurrentUserPlayer(player) && (
                           <button
@@ -10031,14 +11191,14 @@ export default function GamesPage({
         )}
       </div>
     );
-    const detailsTabs: Array<{ key: "game" | "result"; label: string }> = isDetailsMatchStarted
+    const detailsTabs: Array<{ key: "game" | "result"; label: string; disabled?: boolean }> = isDetailsMatchStarted
       ? [
-        { key: "result", label: "Результат" },
+        { key: "result", label: "Результат", disabled: !canCurrentUserAccessResultTab },
         { key: "game", label: "Игра" },
       ]
       : [
         { key: "game", label: "Игра" },
-        { key: "result", label: "Результат" },
+        { key: "result", label: "Результат", disabled: !canCurrentUserAccessResultTab },
       ];
 
     return (
@@ -10059,8 +11219,13 @@ export default function GamesPage({
                 type="button"
                 role="tab"
                 aria-selected={detailsActiveTab === tab.key}
-                className={`details-tab ${detailsActiveTab === tab.key ? "active" : ""}`}
-                onClick={() => setDetailsActiveTab(tab.key)}
+                aria-disabled={tab.disabled ? true : undefined}
+                className={`details-tab ${detailsActiveTab === tab.key ? "active" : ""}${tab.disabled ? " is-disabled" : ""}`}
+                onClick={() => {
+                  if (tab.disabled) return;
+                  setDetailsActiveTab(tab.key);
+                }}
+                disabled={Boolean(tab.disabled)}
               >
                 {tab.label}
               </button>
@@ -10463,6 +11628,36 @@ export default function GamesPage({
             </div>
           )}
 
+          {!isCurrentUserConfirmedParticipant && !isCurrentUserOrganizerByDetails && (
+            <div className="details-action-row">
+              <button
+                className="section-cta"
+                type="button"
+                onClick={() => {
+                  void handleJoinCurrentUserFromDetails();
+                }}
+                disabled={!canCurrentUserJoinGameInDetails}
+              >
+                {isCurrentUserInWaitlist
+                  ? "Вы в листе ожидания"
+                  : updatingGameRoster
+                    ? "Сохраняем..."
+                    : detailsHasFreeSlots
+                      ? "Присоединиться к игре"
+                      : isDetailsWaitlistEnabled
+                        ? "В лист ожидания"
+                        : "Нет мест"}
+              </button>
+              <button
+                className="section-cta section-cta-secondary"
+                type="button"
+                onClick={handleOpenCabinetFromDetails}
+              >
+                Вернуться в личный кабинет
+              </button>
+            </div>
+          )}
+
           {isGamePaid !== true && (
             <>
               <button
@@ -10510,7 +11705,7 @@ export default function GamesPage({
             </>
           )}
 
-          {!isMatchResultAgreed && (canCurrentUserInviteInDetails || gameRecordId) && (
+          {!isMatchResultAgreed && (canCurrentUserInviteInDetails || canCurrentUserOpenDetailsChat) && (
             <div className="details-action-row">
               {canCurrentUserInviteInDetails && (
                 <button
@@ -10523,7 +11718,7 @@ export default function GamesPage({
                 </button>
               )}
 
-              {gameRecordId && (
+              {canCurrentUserOpenDetailsChat && (
                 <button
                   className="details-chat-stat-btn"
                   onClick={() => {
@@ -10557,24 +11752,26 @@ export default function GamesPage({
           )}
         </div>
 
-        <button
-          className={`game-submit ${detailsFooterSubmitDisabled ? "" : "active"}`}
-          onClick={() => {
-            if (shouldHandleMatchResultFromFooter) {
-              if (!shouldSubmitMatchResultFromFooter) {
-                setGameDetailsMetaError("Введите счёт первого сета");
+        {shouldRenderDetailsFooterSubmit && (
+          <button
+            className={`game-submit ${detailsFooterSubmitDisabled ? "" : "active"}`}
+            onClick={() => {
+              if (shouldHandleMatchResultFromFooter) {
+                if (!shouldSubmitMatchResultFromFooter) {
+                  setGameDetailsMetaError("Введите счёт первого сета");
+                  return;
+                }
+                void handleSubmitMatchResult();
                 return;
               }
-              void handleSubmitMatchResult();
-              return;
-            }
-            onBack();
-          }}
-          type="button"
-          disabled={detailsFooterSubmitDisabled}
-        >
-          {detailsFooterSubmitLabel}
-        </button>
+              onBack();
+            }}
+            type="button"
+            disabled={detailsFooterSubmitDisabled}
+          >
+            {detailsFooterSubmitLabel}
+          </button>
+        )}
         <button
           type="button"
           className="details-debug-trigger"
@@ -10656,7 +11853,7 @@ export default function GamesPage({
         {!isSinglesGame && (
           <div className="game-toggle-row">
             <div>
-              <div className="game-toggle-title">Игра на рейтинг</div>
+              <div className="game-toggle-title">Игра на уровень</div>
               <div className="game-toggle-sub">{ratingSubLabel}</div>
             </div>
             <button
@@ -10672,7 +11869,7 @@ export default function GamesPage({
 
         {effectiveRatingGame && (
           <div className="rating-card">
-            <div className="game-card-title">Допустимый рейтинг соперников</div>
+            <div className="game-card-title">Допустимый уровень соперников</div>
             <div className="rating-slider">
               <div
                 className="rating-rail"
@@ -10788,22 +11985,48 @@ export default function GamesPage({
 
         <div className="game-toggle-row">
           <div>
-            <div className="game-toggle-title">Приватная</div>
+            <div className="game-toggle-title">
+              {isPrivate ? "Приватная" : "Открытая игра"}
+            </div>
             <div className="game-toggle-sub">
-              Присоединиться смогут только те, у кого есть ссылка
+              {isPrivate
+                ? "Присоединиться смогут только те, у кого есть ссылка"
+                : "Игра будет опубликована в общем списке и доступна другим игрокам для присоединения."}
             </div>
           </div>
           <button
-            className={`switch ${isPrivate ? "on" : ""}`}
+            className={`switch ${!isPrivate ? "on" : ""}`}
             onClick={() => setIsPrivate((v) => !v)}
             type="button"
-            aria-label="toggle private"
+            aria-label="toggle game visibility"
+            aria-pressed={!isPrivate}
           >
             <span />
           </button>
         </div>
+        {!isBookingPresetMode && (
+          <div className="game-toggle-row">
+            <div>
+              <div className="game-toggle-title">Тип оплаты</div>
+              <div className="game-toggle-sub">{paymentModeSubLabel}</div>
+            </div>
+            <button
+              className={`switch ${splitPaymentSelected ? "on" : ""}`}
+              onClick={handlePaymentModeSwitchTap}
+              type="button"
+              aria-label="toggle payment mode"
+            >
+              <span />
+            </button>
+          </div>
+        )}
+        {splitPaymentAvailabilityLabel && (
+          <div className={`game-empty${splitPaymentAvailabilityLabelIsError ? " game-pay-error" : ""}`}>
+            {splitPaymentAvailabilityLabel}
+          </div>
+        )}
 
-        {ENABLE_GAME_COMMUNITY_AUTOPUBLISH && !isPrivate && (
+        {ENABLE_GAME_COMMUNITY_AUTOPUBLISH && (
           <div className="team-card game-autopublish-panel">
             <div className="game-card-title">Публикация в сообщества</div>
             <div className="game-autopublish-row" role="group" aria-label="Выбор сообществ для публикации">
@@ -10846,57 +12069,84 @@ export default function GamesPage({
           </div>
         )}
 
+        {showPublicationFields && (
+          <div className="team-card game-publish-fields">
+            <div className="game-publish-fields-note">
+              {publicationFieldsNote}
+            </div>
+            <div className="game-card-title">Данные для публикации</div>
+            <div className="game-publish-fields-stack">
+              <label className="game-publish-field">
+                <span className="game-publish-field-label">Название игры</span>
+                <input
+                  type="text"
+                  className="game-input"
+                  placeholder="Например, вечерний матч на счёт"
+                  value={gameTitleDraft}
+                  onChange={(event) => setGameTitleDraft(event.target.value)}
+                  maxLength={80}
+                  required
+                />
+              </label>
+              <label className="game-publish-field">
+                <span className="game-publish-field-label">Комментарий для участников</span>
+                <textarea
+                  className="game-input game-textarea"
+                  placeholder="Что важно знать участникам перед матчем"
+                  value={gameParticipantCommentDraft}
+                  onChange={(event) => setGameParticipantCommentDraft(event.target.value)}
+                  maxLength={280}
+                  rows={4}
+                  required
+                />
+              </label>
+              <label className="game-publish-field">
+                <span className="game-publish-field-label">Стоимость присоединения к игре</span>
+                <input
+                  type="text"
+                  className="game-input"
+                  placeholder={splitPaymentSelected ? "Рассчитывается автоматически" : "Например, 2000"}
+                  value={gameJoinPriceDraft}
+                  onChange={(event) => {
+                    if (splitPaymentSelected) return;
+                    const nextValue = event.target.value.replace(/[^\d]/g, "").replace(/^0+(?=\d)/, "");
+                    setGameJoinPriceDraft(nextValue);
+                  }}
+                  inputMode="numeric"
+                  maxLength={8}
+                  readOnly={splitPaymentSelected}
+                />
+              </label>
+            </div>
+          </div>
+        )}
+
         {showInlinePaymentSection && (
           <div className="game-payment-stack">
-            {splitPaymentAvailable && (
+            {splitPaymentAvailable && splitPaymentSelected && (
               <div className="game-split-payment-panel">
-                <div className="payment-toggle" role="group" aria-label="Способ оплаты игры">
-                  <button
-                    className={`payment-pill ${paymentMode === "self" ? "active" : ""}`}
-                    type="button"
-                    onClick={() => setPaymentMode("self")}
-                  >
-                    Я оплачу игру один
-                  </button>
-                  <button
-                    className={`payment-pill game-split-payment-pill ${paymentMode === "split" ? "active" : ""}`}
-                    type="button"
-                    onClick={() => setPaymentMode("split")}
-                  >
-                    Разделить оплату
-                  </button>
+                <div className="game-split-payment-summary">
+                  <span>{splitPaymentSummary}</span>
                 </div>
-                {splitPaymentSelected && (
-                  <>
-                    <div className="payment-toggle game-split-share-toggle" role="group" aria-label="Количество частей оплаты">
-                      <button
-                        className={`payment-pill ${splitShareCount === 2 ? "active" : ""}`}
-                        type="button"
-                        onClick={() => setSplitShareCount(2)}
-                      >
-                        2 команды
-                      </button>
-                      <button
-                        className={`payment-pill ${splitShareCount === 4 ? "active" : ""}`}
-                        type="button"
-                        onClick={() => setSplitShareCount(4)}
-                      >
-                        4 игрока
-                      </button>
-                    </div>
-                    <div className="game-split-payment-summary">
-                      <span>{splitPaymentSummary}</span>
-                      <span>скидка {formatPrice(splitDiscountAmount)} ₽ с участника</span>
-                    </div>
-                  </>
-                )}
               </div>
+            )}
+            {splitPaymentSelected && splitHasEligibleSubscriptions && (
+              <button
+                className="section-cta section-cta-secondary"
+                onClick={() => {
+                  void handleSplitGamePay("subscription");
+                }}
+                type="button"
+                disabled={!canProceedToPayment || loadingPay || splitSubscriptionsLoading}
+              >
+                {loadingPay ? "Списать с абонемента · подготовка..." : "Списать с абонемента"}
+              </button>
             )}
             <button
               className={`game-submit game-submit-booking game-submit-inline ${canProceedToPayment ? "active" : ""}`}
               onClick={() => {
                 if (splitPaymentSelected) {
-                  void handleSplitGamePay();
+                  void handleSplitGamePay(splitHasEligibleSubscriptions ? "one_time" : undefined);
                 } else {
                   void handleMasterServicePay();
                 }

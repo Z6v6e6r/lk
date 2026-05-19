@@ -16,7 +16,6 @@ import { CommunityVerifiedBadge } from "../UI/CommunityVerifiedBadge";
 import {
   apiCreateSupportDialogEvent,
   apiFetchExercisesByDate,
-  apiFetchExercisesByPeriod,
   apiFetchExercisesByVisibleDate,
   apiFetchPadelGameRecord,
   apiFetchTournamentParticipants,
@@ -192,6 +191,11 @@ const COMMUNITY_ORDER_STORAGE_KEY_PREFIX = "padlhub.communities.order.v1";
 const COMMUNITY_LAST_SEEN_STORAGE_KEY_PREFIX = "padlhub.communities.last-seen.v1";
 const COMMUNITY_CHAT_LAST_READ_STORAGE_KEY_PREFIX = "padlhub.communities.chat-last-read.v1";
 const COMMUNITY_FEED_PAGE_SIZE = 10;
+const COMMUNITY_FEED_INITIAL_BATCH_SIZE = 24;
+const COMMUNITY_FEED_INITIAL_SCAN_MAX_PAGES = 4;
+const COMMUNITY_FEED_INITIAL_GAME_LIMIT = 10;
+const COMMUNITY_FEED_INITIAL_TOURNAMENT_LIMIT = 6;
+const COMMUNITY_FEED_INITIAL_NEWS_LIMIT = 5;
 const COMMUNITY_FEED_AUTOPUBLISH_REFRESH_WINDOW_MS = 1000 * 60 * 10;
 const COMMUNITY_CHAT_PAGE_SIZE = 15;
 const COMMUNITY_RANKING_FEED_PAGE_SIZE = 60;
@@ -202,6 +206,14 @@ const COMMUNITY_LOGO_MAX_BYTES = 220 * 1024;
 const COMMUNITY_LOGO_INITIAL_QUALITY = 0.86;
 const COMMUNITY_LOGO_MIN_QUALITY = 0.5;
 const COMMUNITY_LOGO_QUALITY_STEP = 0.08;
+const COMMUNITY_LOGO_FILE_ACCEPT = "image/jpeg,image/png,image/webp";
+const COMMUNITY_LOGO_UNSUPPORTED_MIME_TYPES = new Set([
+  "image/heic",
+  "image/heif",
+  "image/heic-sequence",
+  "image/heif-sequence",
+]);
+const COMMUNITY_LOGO_UNSUPPORTED_EXTENSIONS = new Set(["heic", "heif"]);
 const COMMUNITY_GRAPH_MIN_ZOOM = 0.52;
 const COMMUNITY_GRAPH_MAX_ZOOM = 1.65;
 const COMMUNITY_GRAPH_DEFAULT_ZOOM = 0.88;
@@ -1179,6 +1191,33 @@ function mergeCommunityPosts(posts: CommunityPost[]) {
   return Array.from(byId.values()).sort((left, right) => right.createdTs - left.createdTs);
 }
 
+function applyInitialFeedEntryLimits(entries: FeedEntry[]) {
+  const counters = {
+    games: 0,
+    tournaments: 0,
+    news: 0,
+  };
+
+  return entries.filter((entry) => {
+    if (entry.item.type === "game") {
+      if (counters.games >= COMMUNITY_FEED_INITIAL_GAME_LIMIT) return false;
+      counters.games += 1;
+      return true;
+    }
+    if (entry.item.type === "tournament") {
+      if (counters.tournaments >= COMMUNITY_FEED_INITIAL_TOURNAMENT_LIMIT) return false;
+      counters.tournaments += 1;
+      return true;
+    }
+    if (entry.item.type === "news") {
+      if (counters.news >= COMMUNITY_FEED_INITIAL_NEWS_LIMIT) return false;
+      counters.news += 1;
+      return true;
+    }
+    return true;
+  });
+}
+
 function parseRecordTimestamp(value: string | null | undefined) {
   const parsed = Date.parse(String(value || "").trim());
   return Number.isFinite(parsed) ? parsed : null;
@@ -1480,38 +1519,6 @@ function buildTournamentPostDetails(option: FeedTournamentOption) {
   };
 }
 
-function buildLiveTournamentStats(tournament: Exercise, participants: ExerciseBooking[]): TournamentStats {
-  const activeParticipants = participants.filter((participant) => !participant.isCancelled);
-  const participantsCount = Math.max(activeParticipants.length, tournament.clientsCount || 0);
-  const maxParticipants = tournament.maxClientsCount > 0 ? tournament.maxClientsCount : null;
-  const trainer = tournament.trainers?.[0] ?? null;
-  const trainerName = trainer
-    ? [trainer.firstName, trainer.lastName].filter(Boolean).join(" ").trim() || null
-    : null;
-  const locationName = [tournament.studio?.name, tournament.room?.name].filter(Boolean).join(" • ");
-
-  return {
-    participantsCount,
-    maxParticipants,
-    publicTournament: {
-      tournamentId: tournament.id,
-      name: buildTournamentTitle(tournament),
-      startsAt: tournament.timeFrom,
-      endsAt: tournament.timeTo,
-      locationName: locationName || null,
-      studioName: tournament.studio?.name ?? null,
-      roomName: tournament.room?.name ?? null,
-      tournamentType: tournament.type?.name ?? null,
-      gender: tournament.girlsOnly ? "FEMALE" : null,
-      participantsCount,
-      maxParticipants,
-      maxClientsCount: maxParticipants,
-      trainerName,
-      trainerAvatarUrl: trainer?.photo ?? null,
-    },
-  };
-}
-
 function formatTournamentOption(option: FeedTournamentOption) {
   const tournament = option.tournament;
   const date = tournament.timeFrom
@@ -1585,6 +1592,17 @@ async function readFileAsDataUrl(file: File) {
   });
 }
 
+function getFileExtension(name: string) {
+  const match = /\.([a-z0-9]+)$/i.exec(name);
+  return (match?.[1] || "").toLowerCase();
+}
+
+function isUnsupportedCommunityLogoFile(file: File) {
+  const mimeType = String(file.type || "").toLowerCase();
+  if (mimeType && COMMUNITY_LOGO_UNSUPPORTED_MIME_TYPES.has(mimeType)) return true;
+  return COMMUNITY_LOGO_UNSUPPORTED_EXTENSIONS.has(getFileExtension(file.name || ""));
+}
+
 function getDataUrlApproximateSize(dataUrl: string) {
   const commaIndex = dataUrl.indexOf(",");
   const base64Body = commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
@@ -1626,12 +1644,21 @@ function buildCoverImageStyle(
 }
 
 async function optimizeCommunityLogo(file: File) {
+  if (isUnsupportedCommunityLogoFile(file)) {
+    throw new Error("Формат HEIC/HEIF пока не поддерживается. Сохрани фото как JPG, PNG или WEBP.");
+  }
+
   if (!file.type.startsWith("image/")) {
     throw new Error("Можно загрузить только изображение.");
   }
 
   const source = await readFileAsDataUrl(file);
-  const image = await loadImageElement(source);
+  let image: HTMLImageElement;
+  try {
+    image = await loadImageElement(source);
+  } catch {
+    throw new Error("Не удалось открыть изображение. Попробуй JPG, PNG или WEBP.");
+  }
   const naturalWidth = image.naturalWidth || image.width;
   const naturalHeight = image.naturalHeight || image.height;
 
@@ -1824,6 +1851,7 @@ export function CommunitiesSection({
   const [feedByCommunityId, setFeedByCommunityId] = useState<Record<string, CommunityPost[]>>({});
   const [feedNextBeforeTsByCommunityId, setFeedNextBeforeTsByCommunityId] = useState<Record<string, number | null>>({});
   const [feedHasMoreByCommunityId, setFeedHasMoreByCommunityId] = useState<Record<string, boolean>>({});
+  const [feedInitialLimitLiftedByCommunityId, setFeedInitialLimitLiftedByCommunityId] = useState<Record<string, boolean>>({});
   const [feedGameRecordById, setFeedGameRecordById] = useState<Record<string, PadelGameRecord>>({});
   const [feedTournamentStatsById, setFeedTournamentStatsById] = useState<Record<string, TournamentStats>>({});
   const [rankingGameIdsByCommunityId, setRankingGameIdsByCommunityId] = useState<Record<string, string[]>>({});
@@ -1877,6 +1905,8 @@ export function CommunitiesSection({
   const communityOrderIdsRef = useRef<string[]>(communityOrderIds);
   const loadingCommunityDetailIdsRef = useRef<Set<string>>(new Set());
   const refreshingCommunityFeedIdsRef = useRef<Set<string>>(new Set());
+  const warmingGameRecordIdsRef = useRef<Set<string>>(new Set());
+  const warmingTournamentStatIdsRef = useRef<Set<string>>(new Set());
   const attemptedAutopublishFeedRefreshKeysRef = useRef<Set<string>>(new Set());
   const pendingAutopublishFeedRefreshAttemptsRef = useRef<Record<string, number>>({});
 
@@ -2109,6 +2139,78 @@ export function CommunitiesSection({
     setIsFocusedCommunityHintOpen(false);
   }, [focusedCommunityId]);
 
+  const loadInitialCommunityFeed = useCallback(async (
+    communityId: string,
+    options: { forceFresh?: boolean } = {},
+  ) => {
+    const normalizedCommunityId = communityId.trim();
+    if (!normalizedCommunityId) {
+      return apiFetchCommunityFeed(communityId, {
+        phone: profile.phone,
+        clientId: profile.id,
+        limit: COMMUNITY_FEED_PAGE_SIZE,
+        forceFresh: options.forceFresh,
+      });
+    }
+
+    let beforeTs: number | undefined;
+    let hasMore = true;
+    let nextBeforeTs: number | null = null;
+    let totalFetched = 0;
+    let aggregatedPosts: CommunityPost[] = [];
+    let lastStatus: number | null = 200;
+
+    for (let pageIndex = 0; hasMore && pageIndex < COMMUNITY_FEED_INITIAL_SCAN_MAX_PAGES; pageIndex += 1) {
+      const response = await apiFetchCommunityFeed(normalizedCommunityId, {
+        phone: profile.phone,
+        clientId: profile.id,
+        limit: COMMUNITY_FEED_INITIAL_BATCH_SIZE,
+        beforeTs,
+        forceFresh: options.forceFresh && pageIndex === 0,
+      });
+
+      lastStatus = response.status;
+
+      if (response.error) {
+        return response;
+      }
+
+      const chunkPosts = response.data?.posts ?? [];
+      totalFetched += chunkPosts.length;
+      aggregatedPosts = mergeCommunityPosts([...aggregatedPosts, ...chunkPosts]);
+
+      const candidateNextBeforeTs = response.data?.nextBeforeTs ?? null;
+      const canLoadMore = Boolean(
+        response.data?.hasMore
+        && candidateNextBeforeTs
+        && candidateNextBeforeTs !== beforeTs,
+      );
+
+      nextBeforeTs = candidateNextBeforeTs;
+      hasMore = canLoadMore;
+      // Do not stop early on 10/6/5 quota: feed API is sorted by post creation time,
+      // and nearby upcoming games can be hidden in older pages.
+      // We keep the UI quota in applyInitialFeedEntryLimits, but scan up to max pages here.
+      if (!canLoadMore) {
+        break;
+      }
+
+      beforeTs = candidateNextBeforeTs ?? undefined;
+    }
+
+    return {
+      data: {
+        communityId: normalizedCommunityId,
+        posts: aggregatedPosts,
+        hasMore,
+        nextBeforeTs,
+        totalFetched,
+      },
+      error: null,
+      status: lastStatus,
+    };
+  }, [profile.id, profile.phone]);
+
   useEffect(() => {
     if (activeCommunityTab !== "RANKING" || !selectedCommunity) {
       return;
@@ -2281,10 +2383,7 @@ export function CommunitiesSection({
           setCommunities((current) => upsertCommunity(current, fullCommunity, communityOrderIdsRef.current));
         }
 
-        const feedResponse = await apiFetchCommunityFeed(communityId, {
-          phone: profile.phone,
-          clientId: profile.id,
-          limit: COMMUNITY_FEED_PAGE_SIZE,
+        const feedResponse = await loadInitialCommunityFeed(communityId, {
           forceFresh: true,
         });
 
@@ -2313,6 +2412,10 @@ export function CommunitiesSection({
           ...current,
           [communityId]: feedResponse.data?.hasMore ?? (nextFeedPosts.length >= COMMUNITY_FEED_PAGE_SIZE),
         }));
+        setFeedInitialLimitLiftedByCommunityId((current) => ({
+          ...current,
+          [communityId]: false,
+        }));
         setDetailLoadedByCommunityId((current) => ({
           ...current,
           [communityId]: true,
@@ -2328,7 +2431,15 @@ export function CommunitiesSection({
     return () => {
       cancelled = true;
     };
-  }, [profile.id, profile.phone, profileId, profilePhone, selectedCommunityId, Boolean(selectedCommunity)]);
+  }, [
+    loadInitialCommunityFeed,
+    profile.id,
+    profile.phone,
+    profileId,
+    profilePhone,
+    selectedCommunityId,
+    Boolean(selectedCommunity),
+  ]);
 
   const refreshCommunityFeedPage = useCallback(async (
     communityId: string,
@@ -2342,10 +2453,7 @@ export function CommunitiesSection({
     refreshingCommunityFeedIdsRef.current.add(communityId);
 
     try {
-      const response = await apiFetchCommunityFeed(communityId, {
-        phone: profile.phone,
-        clientId: profile.id,
-        limit: COMMUNITY_FEED_PAGE_SIZE,
+      const response = await loadInitialCommunityFeed(communityId, {
         forceFresh: options.forceFresh,
       });
 
@@ -2384,8 +2492,7 @@ export function CommunitiesSection({
     }
   }, [
     communities,
-    profile.id,
-    profile.phone,
+    loadInitialCommunityFeed,
     profileId,
     profilePhone,
     selectedCommunityId,
@@ -2407,7 +2514,6 @@ export function CommunitiesSection({
     createdGames.forEach((game) => {
       const gameId = game.id?.trim() || "";
       if (!gameId) return;
-      if (game.settings?.isPrivate === true) return;
       if (String(game.status || "").trim().toUpperCase().includes("CANCEL")) return;
 
       const activityTs = getGameCommunityFeedActivityTs(game);
@@ -3051,56 +3157,6 @@ export function CommunitiesSection({
       ),
     )
   ), [currentFeed]);
-  const currentFeedTournamentIds = useMemo(() => (
-    Array.from(
-      new Set(
-        currentFeed
-          .filter((post) => post.kind === "TOURNAMENT")
-          .map((post) => post.relatedTournamentId?.trim() || "")
-          .filter(Boolean),
-      ),
-    )
-  ), [currentFeed]);
-  const currentFeedTournamentDateRange = useMemo(() => {
-    const timestamps = currentFeed
-      .filter((post) => post.kind === "TOURNAMENT")
-      .map((post) => {
-        const details = isRecord(post.details) ? post.details : null;
-        const publicTournament = details && isRecord(details.publicTournament)
-          ? details.publicTournament
-          : null;
-        const rawStartsAt =
-          (typeof publicTournament?.startsAt === "string" ? publicTournament.startsAt : null)
-          ?? (typeof publicTournament?.startAt === "string" ? publicTournament.startAt : null)
-          ?? (typeof details?.startsAt === "string" ? details.startsAt : null)
-          ?? (typeof details?.startAt === "string" ? details.startAt : null)
-          ?? post.publishedAt;
-        return Date.parse(rawStartsAt);
-      })
-      .filter((timestamp) => Number.isFinite(timestamp));
-
-    const today = new Date();
-    const fallbackFrom = addDays(today, -1);
-    const fallbackTo = addDays(today, COMMUNITY_TOURNAMENT_LOOKAHEAD_DAYS);
-
-    const from = timestamps.length > 0
-      ? new Date(Math.min(...timestamps, fallbackFrom.getTime()))
-      : fallbackFrom;
-    const to = timestamps.length > 0
-      ? new Date(Math.max(...timestamps, fallbackTo.getTime()))
-      : fallbackTo;
-
-    from.setDate(from.getDate() - 1);
-    to.setDate(to.getDate() + 1);
-
-    const dateFrom = formatCommunityApiDate(from);
-    const dateTo = formatCommunityApiDate(to);
-    return {
-      dateFrom,
-      dateTo,
-      key: `${dateFrom}:${dateTo}`,
-    };
-  }, [currentFeed]);
   const currentRankingGameIds = useMemo(
     () => (selectedCommunity
       ? (rankingGameIdsByCommunityId[selectedCommunity.id] ?? currentFeedGameIds)
@@ -3108,80 +3164,9 @@ export function CommunitiesSection({
     [currentFeedGameIds, rankingGameIdsByCommunityId, selectedCommunity],
   );
   const upcomingCreatedGames = useMemo(
-    () => createdGames.filter((game) => isUpcomingGameRecord(game) && game.settings?.isPrivate !== true),
+    () => createdGames.filter((game) => isUpcomingGameRecord(game)),
     [createdGames],
   );
-
-  useEffect(() => {
-    if (currentFeedTournamentIds.length === 0) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const refreshFeedTournaments = async () => {
-      const [exercisesResult, participantResults] = await Promise.all([
-        apiFetchExercisesByPeriod(
-          currentFeedTournamentDateRange.dateFrom,
-          currentFeedTournamentDateRange.dateTo,
-          { size: 5000 },
-        ),
-        Promise.all(
-          currentFeedTournamentIds.map(async (tournamentId) => ({
-            tournamentId,
-            result: await apiFetchTournamentParticipants(tournamentId),
-          })),
-        ),
-      ]);
-
-      const liveTournamentById = new Map<string, Exercise>();
-      (exercisesResult.data ?? []).forEach((exercise) => {
-        const tournamentId = String(exercise.id || "").trim();
-        if (!tournamentId || !isTournamentExercise(exercise)) return;
-        liveTournamentById.set(tournamentId, exercise);
-      });
-
-      return participantResults.map(({ tournamentId, result: participantsResult }) => {
-        if (participantsResult.error) {
-          return null;
-        }
-
-        const participants = extractTournamentBookings(participantsResult.data);
-        const liveTournament = liveTournamentById.get(tournamentId);
-
-        return {
-          tournamentId,
-          stats: liveTournament
-            ? buildLiveTournamentStats(liveTournament, participants)
-            : {
-                participantsCount: participants.filter((participant) => !participant.isCancelled).length,
-              } satisfies TournamentStats,
-        };
-      });
-    };
-
-    void refreshFeedTournaments().then((results) => {
-      if (cancelled) return;
-
-      setFeedTournamentStatsById((current) => {
-        const next = { ...current };
-        results.forEach((result) => {
-          if (!result) return;
-          next[result.tournamentId] = {
-            ...next[result.tournamentId],
-            ...result.stats,
-          };
-        });
-        return next;
-      });
-    }).catch(() => {
-      // Keep the saved post snapshot if Viva participants are temporarily unavailable.
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentFeedTournamentDateRange.dateFrom, currentFeedTournamentDateRange.dateTo, currentFeedTournamentIds]);
 
   useEffect(() => {
     if (feedFormState.kind !== "GAME" || !feedFormState.relatedGameId) {
@@ -3353,42 +3338,6 @@ export function CommunitiesSection({
     selectedCommunityMember?.phone,
   ]);
 
-  useEffect(() => {
-    if (currentFeedGameIds.length === 0) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const refreshFeedGameRecords = async () => {
-      const results = await Promise.all(
-        currentFeedGameIds.map(async (gameId) => ({
-          gameId,
-          response: await apiFetchPadelGameRecord(gameId),
-        })),
-      );
-
-      if (cancelled) return;
-
-      setFeedGameRecordById((current) => {
-        const next = { ...current };
-
-        results.forEach(({ gameId, response }) => {
-          if (!response.data) return;
-          next[gameId] = mergeGameRecord(current[gameId], response.data);
-        });
-
-        return next;
-      });
-    };
-
-    void refreshFeedGameRecords();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentFeedGameIds, selectedCommunity?.id]);
-
   const feedGameRecords = useMemo(() => {
     const gameById = new Map<string, PadelGameRecord>();
 
@@ -3424,7 +3373,7 @@ export function CommunitiesSection({
     return Array.from(gameById.values());
   }, [createdGames, currentRankingGameIds, feedGameRecordById]);
 
-  const currentFeedEntries = selectedCommunity
+  const currentFeedEntriesRaw = selectedCommunity
     ? buildFeedEntries({
       community: selectedCommunity,
       posts: currentFeed,
@@ -3436,6 +3385,14 @@ export function CommunitiesSection({
       },
     })
     : [];
+  const shouldApplyInitialFeedLimits = Boolean(
+    selectedCommunity
+    && currentFeedHasMore
+    && !feedInitialLimitLiftedByCommunityId[selectedCommunity.id],
+  );
+  const currentFeedEntries = shouldApplyInitialFeedLimits
+    ? applyInitialFeedEntryLimits(currentFeedEntriesRaw)
+    : currentFeedEntriesRaw;
   const currentChatMessages = selectedCommunity ? (chatByCommunityId[selectedCommunity.id] ?? []) : [];
   const currentChatHasMore = selectedCommunity
     ? (chatHasMoreByCommunityId[selectedCommunity.id] ?? false)
@@ -3725,6 +3682,10 @@ export function CommunitiesSection({
       return;
     }
 
+    setFeedInitialLimitLiftedByCommunityId((current) => ({
+      ...current,
+      [selectedCommunity.id]: true,
+    }));
     setFeedLoadingMoreId(selectedCommunity.id);
 
     const response = await apiFetchCommunityFeed(selectedCommunity.id, {
@@ -4913,12 +4874,62 @@ export function CommunitiesSection({
     }
   }, [canCreateTournamentPostInSelectedCommunity]);
 
-  const handlePlayCommunityGame = async (game: Game, entry: FeedEntry) => {
+  const warmFeedGameRecord = useCallback(async (gameId: string) => {
+    const normalizedGameId = gameId.trim();
+    if (!normalizedGameId) return;
+    if (feedGameRecordById[normalizedGameId]) return;
+    if (warmingGameRecordIdsRef.current.has(normalizedGameId)) return;
+
+    warmingGameRecordIdsRef.current.add(normalizedGameId);
+
+    try {
+      const response = await apiFetchPadelGameRecord(normalizedGameId);
+      const nextRecord = response.data;
+      if (!nextRecord) return;
+
+      setFeedGameRecordById((current) => ({
+        ...current,
+        [normalizedGameId]: mergeGameRecord(current[normalizedGameId], nextRecord),
+      }));
+    } finally {
+      warmingGameRecordIdsRef.current.delete(normalizedGameId);
+    }
+  }, [feedGameRecordById]);
+
+  const warmFeedTournamentStats = useCallback(async (tournamentId: string) => {
+    const normalizedTournamentId = tournamentId.trim();
+    if (!normalizedTournamentId) return;
+    if (feedTournamentStatsById[normalizedTournamentId]) return;
+    if (warmingTournamentStatIdsRef.current.has(normalizedTournamentId)) return;
+
+    warmingTournamentStatIdsRef.current.add(normalizedTournamentId);
+
+    try {
+      const response = await apiFetchTournamentParticipants(normalizedTournamentId);
+      if (response.error) return;
+
+      const participants = extractTournamentBookings(response.data);
+      const activeParticipants = participants.filter((participant) => !participant.isCancelled);
+      setFeedTournamentStatsById((current) => ({
+        ...current,
+        [normalizedTournamentId]: {
+          ...current[normalizedTournamentId],
+          participantsCount: activeParticipants.length,
+        },
+      }));
+    } finally {
+      warmingTournamentStatIdsRef.current.delete(normalizedTournamentId);
+    }
+  }, [feedTournamentStatsById]);
+
+  const handlePlayCommunityGame = (game: Game, entry: FeedEntry) => {
     const gameId = (entry.relatedGameId ?? game.id ?? "").trim();
     if (!gameId) {
       onOpenGames();
       return;
     }
+
+    void warmFeedGameRecord(gameId);
 
     if (
       game.isJoined
@@ -4932,7 +4943,7 @@ export function CommunitiesSection({
       return;
     }
 
-    onOpenGames({ joinGameId: gameId });
+    onOpenGames({ gameId, openChat: false });
   };
 
   const handleFeedFabAction = (action: FeedFabAction) => {
@@ -4976,11 +4987,14 @@ export function CommunitiesSection({
     }
 
     const tournamentId = (entry.relatedTournamentId ?? tournament.id ?? "").trim();
+    if (tournamentId) {
+      void warmFeedTournamentStats(tournamentId);
+    }
     onOpenTournaments({
       tournamentId: tournamentId || null,
       date: tournament.date || null,
     });
-  }, [onOpenTournaments]);
+  }, [onOpenTournaments, warmFeedTournamentStats]);
 
   const handleInvitePlayers = async () => {
     if (!selectedCommunity) return;
@@ -5374,7 +5388,7 @@ export function CommunitiesSection({
                 id="community-logo"
                 className="img-form-input"
                 type="file"
-                accept="image/*"
+                accept={COMMUNITY_LOGO_FILE_ACCEPT}
                 onChange={(event) => void handleCreateLogoChange(event)}
               />
               <label htmlFor="community-logo" className="section-link section-link--bold">Загрузить файл</label>
@@ -5788,6 +5802,7 @@ export function CommunitiesSection({
                   onOpenGameChat={(game, entry) => {
                     const gameId = entry.relatedGameId ?? game.id;
                     if (gameId) {
+                      void warmFeedGameRecord(gameId);
                       onOpenGames({ gameId, openChat: true });
                       return;
                     }
@@ -5975,7 +5990,7 @@ export function CommunitiesSection({
                           id="community-edit-logo"
                           className="img-form-input"
                           type="file"
-                          accept="image/*"
+                          accept={COMMUNITY_LOGO_FILE_ACCEPT}
                           onChange={(event) => void handleEditLogoChange(event)}
                         />
                         <label htmlFor="community-edit-logo" className="section-link section-link--bold">Загрузить файл</label>

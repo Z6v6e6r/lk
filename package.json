@@ -6,9 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run build:prod && npm run build:dev:bundles",
-    "build:prod": "tsc -b && vite build && vite build --config vite.config.games.ts && vite build --config vite.config.tournaments.ts && vite build --config vite.config.tournament-signup.ts && vite build --config vite.config.onboarding.ts && vite build --config vite.config.communities.ts && vite build --config vite.config.academy.ts && node scripts/write-release.mjs dist release.json && node scripts/write-release.mjs dist release-ffc-academy.json",
+    "build:prod": "tsc -b && vite build && vite build --config vite.config.games.ts && vite build --config vite.config.tournaments.ts && vite build --config vite.config.tournament-signup.ts && vite build --config vite.config.onboarding.ts && vite build --config vite.config.levels-info.ts && vite build --config vite.config.communities.ts && vite build --config vite.config.academy.ts && node scripts/write-release.mjs dist release.json && node scripts/write-release.mjs dist release-ffc-academy.json",
     "build:dev": "tsc -b && npm run build:dev:bundles",
-    "build:dev:bundles": "vite build --mode dev && vite build --config vite.config.games.ts --mode dev && vite build --config vite.config.tournaments.ts --mode dev && vite build --config vite.config.tournament-signup.ts --mode dev && vite build --config vite.config.onboarding.ts --mode dev && vite build --config vite.config.communities.ts --mode dev && node scripts/write-release.mjs dist release-dev.json && vite build --config vite.config.academy.ts --mode dev && node scripts/write-release.mjs dist release-ffc-academy-dev.json",
+    "build:dev:bundles": "vite build --mode dev && vite build --config vite.config.games.ts --mode dev && vite build --config vite.config.tournaments.ts --mode dev && vite build --config vite.config.tournament-signup.ts --mode dev && vite build --config vite.config.onboarding.ts --mode dev && vite build --config vite.config.levels-info.ts --mode dev && vite build --config vite.config.communities.ts --mode dev && node scripts/write-release.mjs dist release-dev.json && vite build --config vite.config.academy.ts --mode dev && node scripts/write-release.mjs dist release-ffc-academy-dev.json",
     "build:academy": "tsc -b && vite build --config vite.config.academy.ts && node scripts/write-release.mjs dist release-ffc-academy.json",
     "build:academy:dev": "tsc -b && vite build --config vite.config.academy.ts --mode dev && node scripts/write-release.mjs dist release-ffc-academy-dev.json",
     "build:academy:all": "npm run build:academy && npm run build:academy:dev",
@@ -18,11 +18,14 @@
     "package:upload:prod": "bash ./scripts/package-lk-upload.sh prod",
     "package:upload:dev": "bash ./scripts/package-lk-upload.sh dev",
     "package:upload:all": "bash ./scripts/package-lk-upload.sh all",
+    "fcm:send": "node ./scripts/fcm/send-fcm.mjs",
     "build:analyze": "ANALYZE=1 vite build",
     "lint": "eslint .",
+    "test:community-rating": "node --experimental-strip-types --test scripts/tests/communityRating.calculations.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/push-notifications": "^8.1.1",
     "firebase": "^12.12.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"

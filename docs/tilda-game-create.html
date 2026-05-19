@@ -3,11 +3,32 @@
 <script>
   (function () {
     var assetOrigin = "https://padlhub.su";
-    var scriptPath = "/lk/games.js";
-    var releasePath = "/lk/release.json";
-    var cabinetUrl = "https://padlhub.ru/lk_new";
-    var cacheBust = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
     var url = new URL(window.location.href);
+    var cacheBust = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+
+    function isDevCabinetUrl(value) {
+      var raw = String(value || "").trim();
+      if (!raw) return false;
+      try {
+        return new URL(raw, window.location.origin).pathname.indexOf("/lk_dev") !== -1;
+      } catch (_) {
+        return raw.indexOf("/lk_dev") !== -1;
+      }
+    }
+
+    function resolveChannel() {
+      var explicitChannel = String(url.searchParams.get("channel") || "").trim().toLowerCase();
+      if (explicitChannel === "dev" || explicitChannel === "prod") return explicitChannel;
+      if (isDevCabinetUrl(url.searchParams.get("cabinetUrl"))) return "dev";
+      if (isDevCabinetUrl(url.searchParams.get("returnUrl"))) return "dev";
+      if (isDevCabinetUrl(document.referrer || "")) return "dev";
+      return "prod";
+    }
+
+    var channel = resolveChannel();
+    var scriptPath = channel === "dev" ? "/lk/games-dev.js" : "/lk/games.js";
+    var releasePath = channel === "dev" ? "/lk/release-dev.json" : "/lk/release.json";
+    var defaultCabinetUrl = channel === "dev" ? "https://padlhub.ru/lk_dev" : "https://padlhub.ru/lk_new";
 
     var data = {
       publicCreateEntry: true,
@@ -18,7 +39,7 @@
         url.searchParams.get("studio") ||
         url.searchParams.get("studioName") ||
         null,
-      cabinetUrl: url.searchParams.get("cabinetUrl") || cabinetUrl
+      cabinetUrl: url.searchParams.get("cabinetUrl") || url.searchParams.get("returnUrl") || defaultCabinetUrl
     };
 
     function showError() {
@@ -53,7 +74,7 @@
       window.LKWidgetGames.mount({
         targetId: "root",
         onClose: function () {
-          window.location.href = data.cabinetUrl || cabinetUrl;
+          window.location.href = data.cabinetUrl || defaultCabinetUrl;
         },
         data: data
       });

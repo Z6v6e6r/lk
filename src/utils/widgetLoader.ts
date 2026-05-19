@@ -20,6 +20,7 @@ export type WidgetGlobalName =
   | "LKWidgetGames"
   | "LKWidgetTournaments"
   | "LKWidgetOnboarding"
+  | "LKWidgetLevelsInfo"
   | "LKWidgetCommunities";
 
 type AppWindow = Window & Record<WidgetGlobalName, WidgetModule | undefined>;

@@ -113,6 +113,29 @@ function RankingDateFilterIcon() {
   );
 }
 
+function RankingGamesIcon() {
+  return (
+    <svg viewBox="0 0 14 14" className="community-ranking-games-pill-icon" aria-hidden="true" fill="none">
+      <path d="M4.25 8.25H9.75" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M5 8.25V5.75" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M9 8.25V4.75" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M2.25 2.5H11.75V11.5H2.25V2.5Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function RankingLeaderIcon() {
+  return (
+    <svg viewBox="0 0 12 12" className="community-ranking-leader-icon" aria-hidden="true" fill="none">
+      <path
+        d="M2.1 3.2h7.8l-1.1 2.2H3.2L2.1 3.2Zm1.6 2.8h4.6l-.9 2H4.6l-.9-2Z"
+        fill="currentColor"
+      />
+      <path d="M6 1.5 7 3.2H5l1-1.7Z" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function CommunityRankingScreen({
   community,
   rows,
@@ -143,6 +166,16 @@ export function CommunityRankingScreen({
 
     return rows.filter((row) => normalizeSearchValue(row.name).includes(normalizedSearchValue));
   }, [normalizedSearchValue, rows]);
+  const currentRowPhone = normalizePhone(currentUserRow?.phone);
+  const visibleRows = useMemo(() => {
+    if (!currentUserRow) return filteredRows;
+    return filteredRows.filter((row) => {
+      const rowPhone = normalizePhone(row.phone);
+      const sameId = Boolean(row.id && currentUserRow.id && row.id === currentUserRow.id);
+      const samePhone = Boolean(rowPhone && currentRowPhone && rowPhone === currentRowPhone);
+      return !sameId && !samePhone;
+    });
+  }, [currentRowPhone, currentUserRow, filteredRows]);
 
   const handleCyclePeriod = () => {
     const currentIndex = PERIOD_OPTIONS.findIndex((option) => option.id === activePeriod);
@@ -213,51 +246,6 @@ export function CommunityRankingScreen({
 
         {error && <div className="community-form-error">{error}</div>}
 
-        {currentUserRow ? (
-          <article className="community-ranking-summary-card community-ranking-summary-card--screen">
-            <div className="community-ranking-summary-head">
-              <div>
-                <div className="community-ranking-summary-label">Моя позиция</div>
-                <div className="community-ranking-summary-main">
-                  <span className="community-ranking-summary-place">#{currentUserRow.rank}</span>
-                  <span className="community-ranking-summary-name">{currentUserRow.name}</span>
-                </div>
-              </div>
-
-              <div
-                className={`community-ranking-delta${currentUserRow.ratingDeltaSum > 0 ? " is-positive" : currentUserRow.ratingDeltaSum < 0 ? " is-negative" : ""}`}
-              >
-                {formatSignedNumber(currentUserRow.ratingDeltaSum)}
-              </div>
-            </div>
-
-            <div className="community-ranking-summary-metrics">
-              <div className="community-ranking-summary-metric">
-                <span className="community-ranking-summary-metric-label">Игры</span>
-                <span className="community-ranking-summary-metric-value">{currentUserRow.matchesPlayed}</span>
-              </div>
-              <div className="community-ranking-summary-metric">
-                <span className="community-ranking-summary-metric-label">Победы</span>
-                <span className="community-ranking-summary-metric-value">{currentUserRow.matchesWon}</span>
-              </div>
-              <div className="community-ranking-summary-metric">
-                <span className="community-ranking-summary-metric-label">Поражения</span>
-                <span className="community-ranking-summary-metric-value">{currentUserRow.matchesLost}</span>
-              </div>
-              <div className="community-ranking-summary-metric">
-                <span className="community-ranking-summary-metric-label">Сеты</span>
-                <span className="community-ranking-summary-metric-value">
-                  {currentUserRow.setsWon}:{currentUserRow.setsLost}
-                </span>
-              </div>
-            </div>
-          </article>
-        ) : (
-          <div className="community-empty-note">
-            У тебя пока нет подтвержденных матчей в выбранном периоде.
-          </div>
-        )}
-
         {isLoading && rows.length > 0 && (
           <div className="community-ranking-status">Обновляем статистику сообщества...</div>
         )}
@@ -268,27 +256,30 @@ export function CommunityRankingScreen({
           <div className="community-empty-note">
             За выбранный период подтвержденных игр сообщества пока нет.
           </div>
-        ) : filteredRows.length === 0 ? (
+        ) : visibleRows.length === 0 ? (
           <div className="community-empty-note">
             Игрок по запросу не найден.
           </div>
         ) : (
           <div className="community-ranking-list">
-            {filteredRows.map((row) => {
+            {visibleRows.map((row, index) => {
               const normalizedRowPhone = normalizePhone(row.phone);
               const isCurrentUser = Boolean(
                 (row.id && currentUserId && row.id === currentUserId)
                 || (normalizedRowPhone && currentUserPhone && normalizedRowPhone === currentUserPhone),
               );
+              const isLeader = row.rank === 1;
 
               return (
                 <article
                   key={`${row.id ?? row.phone ?? row.name}-${row.rank}`}
-                  className={`community-ranking-card${isCurrentUser ? " is-current" : ""}`}
+                  className={`community-ranking-card community-ranking-card--compact${isCurrentUser ? " is-current" : ""}`}
                 >
                   <div className="community-ranking-card-head">
                     <div className="community-ranking-card-player">
-                      <div className="community-ranking-rank-badge">#{row.rank}</div>
+                      <div className={`community-ranking-rank-badge${isLeader ? " is-leader" : ""}`}>
+                        {isLeader ? <RankingLeaderIcon /> : row.rank}
+                      </div>
 
                       <div className="community-ranking-avatar community-ranking-avatar--screen">
                         <AvatarImageOrInitials src={row.avatar ?? undefined} name={row.name} imageClassName="community-ranking-avatar-image" />
@@ -305,57 +296,52 @@ export function CommunityRankingScreen({
                       </div>
                     </div>
 
-                    <div
-                      className={`community-ranking-delta${row.ratingDeltaSum > 0 ? " is-positive" : row.ratingDeltaSum < 0 ? " is-negative" : ""}`}
-                    >
-                      {formatSignedNumber(row.ratingDeltaSum)}
+                    <div className="community-ranking-games-pill">
+                      <RankingGamesIcon />
+                      <span className="community-ranking-games-pill-value">{row.matchesPlayed}</span>
                     </div>
                   </div>
-
-                  <div className="community-ranking-metrics">
-                    <div className="community-ranking-metric">
-                      <span className="community-ranking-metric-label">Игры</span>
-                      <span className="community-ranking-metric-value">{row.matchesPlayed}</span>
-                    </div>
-                    <div className="community-ranking-metric">
-                      <span className="community-ranking-metric-label">Выигр. игры</span>
-                      <span className="community-ranking-metric-value">{row.matchesWon}</span>
-                    </div>
-                    <div className="community-ranking-metric">
-                      <span className="community-ranking-metric-label">Проигр. игры</span>
-                      <span className="community-ranking-metric-value">{row.matchesLost}</span>
-                    </div>
-                    <div className="community-ranking-metric">
-                      <span className="community-ranking-metric-label">Выигр. сеты</span>
-                      <span className="community-ranking-metric-value">{row.setsWon}</span>
-                    </div>
-                    <div className="community-ranking-metric">
-                      <span className="community-ranking-metric-label">Проигр. сеты</span>
-                      <span className="community-ranking-metric-value">{row.setsLost}</span>
-                    </div>
-                    <div className="community-ranking-metric">
-                      <span className="community-ranking-metric-label">Выигр. геймы</span>
-                      <span className="community-ranking-metric-value">{row.gamesWon}</span>
-                    </div>
-                    <div className="community-ranking-metric">
-                      <span className="community-ranking-metric-label">Проигр. геймы</span>
-                      <span className="community-ranking-metric-value">{row.gamesLost}</span>
-                    </div>
-                    <div className="community-ranking-metric community-ranking-metric--delta">
-                      <span className="community-ranking-metric-label">Сумма рейтинга</span>
-                      <span
-                        className={`community-ranking-metric-value${row.ratingDeltaSum > 0 ? " is-positive" : row.ratingDeltaSum < 0 ? " is-negative" : ""}`}
-                      >
-                        {formatSignedNumber(row.ratingDeltaSum)}
-                      </span>
-                    </div>
-                  </div>
+                  {index < visibleRows.length - 1 && <div className="community-ranking-card-separator" />}
                 </article>
               );
             })}
           </div>
         )}
       </section>
+
+      {currentUserRow ? (
+        <article className="community-ranking-summary-card community-ranking-summary-card--docked">
+          <div className="community-ranking-summary-docked-inner">
+            <div className="community-ranking-summary-row">
+              <div className="community-ranking-rank-badge community-ranking-rank-badge--docked">#{currentUserRow.rank}</div>
+
+              <div className="community-ranking-card-player">
+                <div className="community-ranking-avatar community-ranking-avatar--screen">
+                  <AvatarImageOrInitials
+                    src={currentUserRow.avatar ?? undefined}
+                    name={currentUserRow.name}
+                    imageClassName="community-ranking-avatar-image"
+                  />
+                </div>
+
+                <div className="community-ranking-card-copy community-ranking-card-copy--docked">
+                  <span className="community-ranking-summary-label community-ranking-summary-label--docked">
+                    Моя позиция
+                  </span>
+                  <span className="community-ranking-name">{currentUserRow.name}</span>
+                </div>
+              </div>
+
+              <div className="community-ranking-summary-score-pill">
+                <RankingGamesIcon />
+                <span className="community-ranking-summary-score-value">
+                  {formatSignedNumber(currentUserRow.ratingDeltaSum)}
+                </span>
+              </div>
+            </div>
+          </div>
+        </article>
+      ) : null}
 
       <CommunityBottomNav
         activeItem="table"

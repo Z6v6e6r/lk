@@ -19,6 +19,7 @@ import {
   type TournamentVivaCheckout,
   type TournamentVivaProduct,
 } from "../../utils/tournamentSignupApi";
+import { findTournamentSkinPriceLabel } from "../../utils/tournamentCustomPricing";
 import type { CommunityTournamentCard as CommunityTournamentCardData } from "../cabinet/community-feed/feedTypes";
 
 interface TournamentSignupPageProps {
@@ -51,6 +52,32 @@ const TOURNAMENT_DETAIL_TABS: Array<{ id: TournamentDetailTab; label: string }> 
 const ALL_FILTER_VALUE = "__all__";
 const DAYS_BEFORE_TODAY = 0;
 const DAYS_AFTER_TODAY = 14;
+const TOURNAMENT_SHARE_ORIGIN = "https://padlhub.ru";
+const TOURNAMENT_SHARE_SLUG_KEYS = [
+  "slug",
+  "publicSlug",
+  "tournamentSlug",
+  "linkSlug",
+  "shareSlug",
+];
+const TOURNAMENT_SHARE_URL_KEYS = [
+  "publicUrl",
+  "joinUrl",
+  "url",
+  "link",
+];
+const TOURNAMENT_SHARE_NESTED_KEYS = [
+  "details",
+  "metadata",
+  "params",
+  "publicTournament",
+  "sourceTournamentSnapshot",
+  "sourceTournament",
+  "customTournament",
+  "tournament",
+  "skin",
+  "tournamentSkin",
+];
 
 const LEVEL_RANGES: Record<LevelGrade, { min: number; max: number }> = {
   D: { min: 1, max: 2 },
@@ -115,6 +142,66 @@ function getDateFromInput(value?: string | null) {
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.getTime())) return null;
   return formatDate(parsed);
+}
+
+function normalizeTournamentSlug(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  try {
+    return decodeURIComponent(raw).trim().toLowerCase() || null;
+  } catch {
+    return raw.toLowerCase();
+  }
+}
+
+function extractTournamentSlugFromUrl(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw, TOURNAMENT_SHARE_ORIGIN);
+    const byQuery = parsed.searchParams.get("slug") || parsed.searchParams.get("tournamentSlug");
+    if (byQuery) return normalizeTournamentSlug(byQuery);
+
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const publicIndex = parts.findIndex((part, index) => (
+      part === "public" && parts[index - 1] === "tournaments" && parts[index - 2] === "api"
+    ));
+    if (publicIndex >= 0) return normalizeTournamentSlug(parts[publicIndex + 1]);
+  } catch {
+    const match = raw.match(/\/api\/tournaments\/public\/([^/?#]+)/i);
+    if (match?.[1]) return normalizeTournamentSlug(match[1]);
+  }
+  return null;
+}
+
+function collectTournamentSlugCandidates(value: unknown, seen = new Set<unknown>()): string[] {
+  if (!isRecord(value) || seen.has(value)) return [];
+  seen.add(value);
+
+  const candidates = [
+    normalizeTournamentSlug(pickString(value, TOURNAMENT_SHARE_SLUG_KEYS)),
+    extractTournamentSlugFromUrl(pickString(value, TOURNAMENT_SHARE_URL_KEYS)),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  TOURNAMENT_SHARE_NESTED_KEYS.forEach((key) => {
+    const nested = value[key];
+    if (isRecord(nested)) {
+      candidates.push(...collectTournamentSlugCandidates(nested, seen));
+    }
+  });
+
+  return Array.from(new Set(candidates));
+}
+
+function slugifyTournamentTitle(value: string | null | undefined) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/['"`]+/g, "")
+    .replace(/[^a-z0-9а-яё]+/gi, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || null;
 }
 
 function getDateLabel(date: string | null) {
@@ -189,6 +276,68 @@ function formatClock(value: string | null) {
 function formatMoneyMinor(value: number | null) {
   if (value == null) return "Стоимость уточняется";
   return `${(value / 100).toLocaleString("ru-RU")} ₽`;
+}
+
+function readTournamentPaymentNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.replace(",", "."));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function getTournamentPaymentProductRemainingVisits(product: TournamentVivaProduct) {
+  const raw = product.raw;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const payload = raw as Record<string, unknown>;
+    const direct = [
+      payload.visitsLeft,
+      payload.availableVisits,
+      payload.remainingVisits,
+      payload.visitsRemaining,
+      payload.left,
+      payload.balance,
+    ];
+    for (const value of direct) {
+      const parsed = readTournamentPaymentNumber(value);
+      if (parsed != null) return parsed;
+    }
+
+    const nested = payload.subscription;
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const nestedPayload = nested as Record<string, unknown>;
+      const nestedValues = [
+        nestedPayload.visitsLeft,
+        nestedPayload.availableVisits,
+        nestedPayload.remainingVisits,
+        nestedPayload.visitsRemaining,
+        nestedPayload.left,
+        nestedPayload.balance,
+      ];
+      for (const value of nestedValues) {
+        const parsed = readTournamentPaymentNumber(value);
+        if (parsed != null) return parsed;
+      }
+    }
+  }
+  return product.visitsTotal;
+}
+
+function formatTournamentPaymentProductPrice(product: TournamentVivaProduct) {
+  return product.priceLabel || formatMoneyMinor(product.cost);
+}
+
+function formatTournamentPaymentProductVisits(product: TournamentVivaProduct) {
+  if (product.isCustomTournamentEnergy || !product.visitsTotal) return "";
+  return ` / ${product.visitsTotal} посещ.`;
+}
+
+function formatTournamentPaymentProductRemainingVisits(product: TournamentVivaProduct) {
+  if (product.isCustomTournamentEnergy) return "";
+  const visitsRemaining = getTournamentPaymentProductRemainingVisits(product);
+  if (visitsRemaining == null) return "";
+  return `${visitsRemaining} посещ.`;
 }
 
 const PAYMENT_HOLD_MS = 20 * 60 * 1000;
@@ -555,6 +704,91 @@ function getPlayerLevelMeta(
   };
 }
 
+function isLocalHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".local");
+}
+
+function copyPlainTextFallback(text: string): boolean {
+  if (typeof document === "undefined") return false;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "0";
+  textarea.style.left = "-9999px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
+async function writeTextToClipboard(text: string): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (copyPlainTextFallback(text)) {
+    return;
+  }
+
+  throw new Error("Clipboard API is not available");
+}
+
+function buildTournamentShareUrl(
+  tournament: TournamentSignupSummary | TournamentSignupDetail | null,
+  fallbackDate: string | null,
+): string | null {
+  if (!tournament || typeof window === "undefined") return null;
+  const tournamentId = String(tournament.id || "").trim();
+  if (!tournamentId) return null;
+
+  let currentUrl: URL | null = null;
+  try {
+    currentUrl = new URL(window.location.href);
+  } catch {
+    // fallback below
+  }
+
+  const currentTournamentId = String(currentUrl?.searchParams.get("tournamentId") || "").trim();
+  const fromCurrentSlug = currentTournamentId === tournamentId
+    ? normalizeTournamentSlug(
+      currentUrl?.searchParams.get("slug")
+      || currentUrl?.searchParams.get("tournamentSlug"),
+    )
+    : null;
+  const fromRawSlug = collectTournamentSlugCandidates(tournament.raw)[0] ?? null;
+  const fromPublicUrlSlug = extractTournamentSlugFromUrl(tournament.publicUrl) ?? null;
+  const slug = fromCurrentSlug || fromRawSlug || fromPublicUrlSlug || slugifyTournamentTitle(tournament.title);
+
+  const date =
+    getDateFromInput(tournament.date)
+    || getDateFromInput(tournament.startsAt)
+    || getDateFromInput(currentUrl?.searchParams.get("date"))
+    || getDateFromInput(fallbackDate);
+
+  const origin = currentUrl && !isLocalHostname(currentUrl.hostname)
+    ? currentUrl.origin
+    : TOURNAMENT_SHARE_ORIGIN;
+  const pathname = currentUrl?.pathname?.includes("tournaments")
+    ? currentUrl.pathname
+    : "/tournaments";
+  const shareUrl = new URL(pathname, origin);
+  shareUrl.searchParams.set("tournamentId", tournamentId);
+  if (date) shareUrl.searchParams.set("date", date);
+  if (slug) shareUrl.searchParams.set("slug", slug);
+  return shareUrl.toString();
+}
+
 function normalizeParticipant(item: unknown, index: number): TournamentSignupParticipant | null {
   if (!isRecord(item)) return null;
   const client = isRecord(item.client) ? item.client : isRecord(item.user) ? item.user : isRecord(item.player) ? item.player : null;
@@ -676,6 +910,8 @@ export default function TournamentSignupPage({
   const [stationFilter, setStationFilter] = useState(ALL_FILTER_VALUE);
   const [liveRatings, setLiveRatings] = useState<Map<string, PadelLiveRatingItem>>(() => new Map());
   const [nowTs, setNowTs] = useState(() => Date.now());
+  const [inviteSharing, setInviteSharing] = useState(false);
+  const [inviteFeedback, setInviteFeedback] = useState<"shared" | "copied" | null>(null);
 
   const selectedDate = dates[dateIndex] ?? dates[DAYS_BEFORE_TODAY] ?? new Date();
   const selectedDateStr = formatDate(selectedDate);
@@ -759,6 +995,11 @@ export default function TournamentSignupPage({
   }, [isAuthenticated, loadDetail, selectedId]);
 
   useEffect(() => {
+    setInviteFeedback(null);
+    setInviteSharing(false);
+  }, [selectedId]);
+
+  useEffect(() => {
     if (registration?.status !== "PAYMENT_PENDING") return;
     setNowTs(Date.now());
     const timer = window.setInterval(() => setNowTs(Date.now()), 1000);
@@ -774,8 +1015,12 @@ export default function TournamentSignupPage({
         exerciseId: selectedId,
         studioId: nextCheckout.studioId,
         clientId: nextCheckout.profile.id,
+        profile: nextCheckout.profile,
         clientPhone: normalizePhone(nextCheckout.profile.phone) || nextCheckout.profile.phone,
         product,
+        customPricing: nextCheckout.customPricing,
+        tournament: detail?.raw ?? selectedTournament?.raw ?? selectedTournament,
+        exercise: nextCheckout.exercise,
       });
       if (result.error || !result.data) {
         setError(result.error?.message || "Не удалось создать запись через Viva");
@@ -814,7 +1059,11 @@ export default function TournamentSignupPage({
     setActionLoading(true);
     setError(null);
     setCheckout(null);
-    const result = await apiFetchTournamentVivaCheckout(selectedId);
+    const tournamentPayload = detail?.raw ?? selectedTournament?.raw ?? selectedTournament;
+    const result = await apiFetchTournamentVivaCheckout(selectedId, {
+      tournament: tournamentPayload,
+      skinPriceLabel: findTournamentSkinPriceLabel(tournamentPayload),
+    });
     setActionLoading(false);
 
     if (result.error || !result.data) {
@@ -829,7 +1078,9 @@ export default function TournamentSignupPage({
     ];
     if (availableProducts.length === 0) {
       setError(
-        result.data.purchasedProducts.length > 0
+        result.data.customPricing
+          ? "Для кастомной цены в Viva не найден продукт «Энергия турниры»"
+          : result.data.purchasedProducts.length > 0
           ? "У клиента есть подходящий продукт, но для списания нужен отдельный Viva-пейлоад. Покупаемые услуги для этого турнира не найдены."
           : "Для этого турнира в Viva нет доступных услуг или абонементов для покупки",
       );
@@ -884,6 +1135,47 @@ export default function TournamentSignupPage({
     }
   };
 
+  const handleInviteFriend = useCallback(async () => {
+    if (!selectedTournament) return;
+
+    const shareUrl = buildTournamentShareUrl(selectedTournament, selectedDateStr);
+    if (!shareUrl) {
+      setError("Ссылка на этот турнир пока недоступна.");
+      return;
+    }
+
+    const tournamentTitle = selectedTournament.title || "Турнир PadelHub";
+    const inviteText = `Присоединяйся к турниру «${tournamentTitle}»`;
+    const shareMessage = `${inviteText}\n${shareUrl}`;
+
+    setError(null);
+    setInviteSharing(true);
+    setInviteFeedback(null);
+
+    try {
+      if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+        try {
+          await navigator.share({
+            text: shareMessage,
+          });
+          setInviteFeedback("shared");
+          window.setTimeout(() => setInviteFeedback((current) => (current === "shared" ? null : current)), 1600);
+          return;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+        }
+      }
+
+      await writeTextToClipboard(shareMessage);
+      setInviteFeedback("copied");
+      window.setTimeout(() => setInviteFeedback((current) => (current === "copied" ? null : current)), 1600);
+    } catch {
+      setError("Не удалось поделиться ссылкой на турнир.");
+    } finally {
+      setInviteSharing(false);
+    }
+  }, [selectedDateStr, selectedTournament]);
+
   const registrationText = getRegistrationText(registration);
   const registrationStatusText = isAuthenticated
     ? (registrationText || "Вы пока не записаны")
@@ -921,6 +1213,7 @@ export default function TournamentSignupPage({
   const detailParticipantCount = Math.max(detailParticipants.length, selectedTournament?.participantsCount ?? 0);
   const detailTrainerName = detail?.trainerName || selectedTournament?.trainerName || null;
   const detailTrainerAvatarUrl = detail?.trainerAvatarUrl || selectedTournament?.trainerAvatarUrl || null;
+  const purchasableSubscriptionProducts = checkout ? [...checkout.oneTimes, ...checkout.subscriptions] : [];
 
   useEffect(() => {
     if (!selectedId || detailParticipants.length === 0) {
@@ -968,7 +1261,6 @@ export default function TournamentSignupPage({
         </button>
         <div className="tournament-signup-header-title">
           <div className="page-title">Запись на турниры</div>
-          <div className="tournament-signup-subtitle">PadelHub</div>
         </div>
       </header>
 
@@ -1152,6 +1444,22 @@ export default function TournamentSignupPage({
                           <span className="details-roster-badge">Исполнитель</span>
                         </div>
                       </div>
+                      <button
+                        type="button"
+                        className="section-cta section-cta-secondary details-organizer-invite"
+                        onClick={() => {
+                          void handleInviteFriend();
+                        }}
+                        disabled={inviteSharing}
+                      >
+                        {inviteSharing
+                          ? "Готовим ссылку..."
+                          : inviteFeedback === "shared"
+                            ? "Ссылка отправлена"
+                            : inviteFeedback === "copied"
+                              ? "Ссылка скопирована"
+                              : "Пригласить друга"}
+                      </button>
                     </div>
                   )}
 
@@ -1254,52 +1562,14 @@ export default function TournamentSignupPage({
                   {checkout && (
                     <div className="tournament-signup-auth">
                       <div className="tournament-signup-auth-head">
-                        <strong>Выберите способ записи</strong>
+                        <strong>
+                          Выберите способ записи · Баланс депозита: {formatMoneyMinor(checkout.profile.deposit)}
+                        </strong>
                         <button className="tournament-signup-ghost" type="button" onClick={() => setCheckout(null)}>
                           Закрыть
                         </button>
                       </div>
                       <div className="tournament-signup-payment-options">
-                        <div className="tournament-signup-muted">
-                          Баланс депозита: {formatMoneyMinor(checkout.profile.deposit)}
-                        </div>
-                        {checkout.oneTimes.length > 0 && (
-                          <div className="tournament-signup-payment-group">
-                            <div className="tournament-signup-payment-title">Разовая услуга</div>
-                            {checkout.oneTimes.map((product) => (
-                              <button
-                                key={`${product.source}-${product.id}`}
-                                className="tournament-signup-payment-option"
-                                type="button"
-                                onClick={() => void completeVivaRegistration(checkout, product)}
-                                disabled={actionLoading}
-                              >
-                                <span>{product.name}</span>
-                                <strong>{formatMoneyMinor(product.cost)}</strong>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                        {checkout.subscriptions.length > 0 && (
-                          <div className="tournament-signup-payment-group">
-                            <div className="tournament-signup-payment-title">Абонемент</div>
-                            {checkout.subscriptions.map((product) => (
-                              <button
-                                key={`${product.source}-${product.id}`}
-                                className="tournament-signup-payment-option"
-                                type="button"
-                                onClick={() => void completeVivaRegistration(checkout, product)}
-                                disabled={actionLoading}
-                              >
-                                <span>{product.name}</span>
-                                <strong>
-                                  {formatMoneyMinor(product.cost)}
-                                  {product.visitsTotal ? ` / ${product.visitsTotal} посещ.` : ""}
-                                </strong>
-                              </button>
-                            ))}
-                          </div>
-                        )}
                         {checkout.clientSubscriptions.length > 0 && (
                           <div className="tournament-signup-payment-group">
                             <div className="tournament-signup-payment-title">Действующий абонемент</div>
@@ -1312,9 +1582,26 @@ export default function TournamentSignupPage({
                                 disabled={actionLoading}
                               >
                                 <span>{product.name}</span>
+                                <strong>{formatTournamentPaymentProductRemainingVisits(product)}</strong>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {purchasableSubscriptionProducts.length > 0 && (
+                          <div className="tournament-signup-payment-group">
+                            <div className="tournament-signup-payment-title">Приобрести новый абонемент</div>
+                            {purchasableSubscriptionProducts.map((product) => (
+                              <button
+                                key={`${product.source}-${product.id}`}
+                                className="tournament-signup-payment-option"
+                                type="button"
+                                onClick={() => void completeVivaRegistration(checkout, product)}
+                                disabled={actionLoading}
+                              >
+                                <span>{product.name}</span>
                                 <strong>
-                                  {formatMoneyMinor(product.cost)}
-                                  {product.visitsTotal ? ` / ${product.visitsTotal} посещ.` : ""}
+                                  {formatTournamentPaymentProductPrice(product)}
+                                  {formatTournamentPaymentProductVisits(product)}
                                 </strong>
                               </button>
                             ))}

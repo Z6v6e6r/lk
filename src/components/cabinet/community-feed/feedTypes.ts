@@ -15,7 +15,7 @@ export type CommunityGameCard = {
   badgeLabel: string;
   title: string;
   datetimeText: string;
-  duration: string;
+  publishedLabel: string;
   level: string;
   slotsText: string;
   players: User[];

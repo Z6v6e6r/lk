@@ -47,6 +47,12 @@ if (!publicMode && !phone && !paymentRef && bookingIds.length === 0) {
 }
 
 const includePast = String(q.includePast || "").toLowerCase() === "true";
+const needsResult = ["true", "1", "yes"]
+  .includes(String(q.needsResult || q.withoutConfirmedResult || "").trim().toLowerCase());
+const windowHoursRaw = Number(q.windowHours || q.resultWindowHours);
+const windowHours = Number.isFinite(windowHoursRaw)
+  ? Math.max(1, Math.min(168, Math.floor(windowHoursRaw)))
+  : null;
 const limitRaw = Number(q.limit);
 const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(1000, Math.floor(limitRaw))) : null;
 const offsetRaw = Number(q.offset || q.skip || q.from);
@@ -131,6 +137,8 @@ if (andConditions.length > 0) {
 
 msg._lkPhone = phone || null;
 msg._lkIncludePast = includePast;
+msg._lkNeedsResult = needsResult;
+msg._lkWindowHours = windowHours;
 msg._lkLimit = limit;
 msg._lkOffset = offset;
 msg._lkPaymentRef = paymentRef || null;

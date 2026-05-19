@@ -28,6 +28,16 @@ const DEFAULT_CABINET_URL = CABINET_URL;
 const DEFAULT_MAX_PLAYERS = 4;
 const OPEN_GAME_QUERY_KEY = "openGameId";
 const SPLIT_JOIN_QUERY_KEY = "splitJoin";
+const SPLIT_PAYMENT_MODE_QUERY_KEY = "splitPaymentMode";
+
+function parseSplitPaymentMode(
+  value: string | null | undefined,
+): "subscription" | "one_time" | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "subscription") return "subscription";
+  if (normalized === "one_time") return "one_time";
+  return null;
+}
 
 function normalizePhone(value: string | null | undefined): string | null {
   const digits = String(value || "").replace(/\D/g, "");
@@ -285,6 +295,15 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const [submitting, setSubmitting] = useState<"join" | "decline" | null>(null);
   const [confirmingSplitPaymentRef, setConfirmingSplitPaymentRef] = useState<string | null>(null);
   const [comment, setComment] = useState("");
+  const preferredSplitPaymentMode = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const url = new URL(window.location.href);
+      return parseSplitPaymentMode(url.searchParams.get(SPLIT_PAYMENT_MODE_QUERY_KEY));
+    } catch {
+      return null;
+    }
+  }, []);
 
   const loadData = useCallback(async () => {
     const normalizedGameId = gameId.trim();
@@ -491,13 +510,31 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         const booking = actualGame.booking;
         const shareCountRaw = getSplitShareCount(actualGame);
         const shareCount = shareCountRaw === 2 ? 2 : 4;
-        const shareAmount = getSplitShareAmount(actualGame) ?? (shareCount === 2 ? 500 : 250);
+        const shareAmount = getSplitShareAmount(actualGame) ?? (shareCount === 2 ? 5000 : 2500);
         const paymentRef = generatePaymentRef();
         const successUrl = buildCurrentJoinUrl({
           [PAYMENT_REF_QUERY_KEY]: paymentRef,
           [SPLIT_JOIN_QUERY_KEY]: "paid",
         });
         const splitPaymentMeta = resolveSplitPaymentMetadata(actualGame) ?? {};
+        const splitPaymentTotalAmount = (() => {
+          const value = splitPaymentMeta.totalAmount;
+          if (typeof value === "number" && Number.isFinite(value)) return value;
+          if (typeof value === "string") {
+            const parsed = Number(value.trim().replace(",", "."));
+            return Number.isFinite(parsed) ? parsed : null;
+          }
+          return null;
+        })();
+        const splitPaymentOneTimeBaseAmount = (() => {
+          const value = splitPaymentMeta.oneTimeBaseAmount ?? splitPaymentMeta.baseShareAmount;
+          if (typeof value === "number" && Number.isFinite(value)) return value;
+          if (typeof value === "string") {
+            const parsed = Number(value.trim().replace(",", "."));
+            return Number.isFinite(parsed) ? parsed : null;
+          }
+          return null;
+        })();
         const currentPayments = Array.isArray(splitPaymentMeta.payments)
           ? splitPaymentMeta.payments.filter((item) => isRecord(item))
           : [];
@@ -520,6 +557,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           return;
         }
 
+        const resolvedPaymentMode = preferredSplitPaymentMode ?? "one_time";
         const paymentResult = await apiCreatePadelSplitParticipantPayment(actualGame.id, {
           date: booking.date,
           fromTime: booking.timeFrom,
@@ -529,11 +567,14 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           clientId: profile.id ?? null,
           clientPhone: profile.phone ?? null,
           paymentRef,
+          paymentMode: resolvedPaymentMode,
           baseRedirectUrl: successUrl,
           successUrl,
           failUrl: successUrl,
           shareCount,
           shareAmount,
+          totalAmount: splitPaymentTotalAmount,
+          oneTimeBaseAmount: splitPaymentOneTimeBaseAmount,
           shareAmountIncludesDuration: true,
           durationMinutes: typeof booking.durationMinutes === "number" && Number.isFinite(booking.durationMinutes)
             ? booking.durationMinutes
@@ -725,7 +766,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       setSubmitting(null);
       window.location.href = buildCabinetHomeUrl(cabinetUrl);
     },
-    [cabinetUrl, comment, game, profile],
+    [cabinetUrl, comment, game, preferredSplitPaymentMode, profile],
   );
 
   if (loading) {
@@ -753,7 +794,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
               window.location.href = buildCabinetHomeUrl(cabinetUrl);
             }}
           >
-            Перейти в личный кабинет
+            Вернуться в личный кабинет
           </button>
         </div>
       </div>
@@ -771,14 +812,18 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const splitPaymentGame = isSplitPaymentGame(game);
   const splitShareAmount = getSplitShareAmount(game);
   const splitShareCount = getSplitShareCount(game);
-  const showJoinedActions = alreadyJoined;
-  const canJoin = submitting === null && !alreadyJoined && !confirmingSplitPaymentRef;
+  const canPrimaryAction = submitting === null && !confirmingSplitPaymentRef;
   const canDecline = submitting === null && !confirmingSplitPaymentRef;
   const joinButtonLabel = splitPaymentGame
     ? (submitting === "join"
         ? "Готовим оплату..."
-        : `Оплатить участие${splitShareAmount != null ? ` · ${formatPrice(splitShareAmount)} ₽` : ""}`)
+        : (
+          preferredSplitPaymentMode === "subscription"
+            ? "Списать с абонемента"
+            : `Оплатить стоимость${splitShareAmount != null ? ` · ${formatPrice(splitShareAmount)} ₽` : ""}`
+        ))
     : (submitting === "join" ? "Сохраняем..." : "Присоединиться");
+  const primaryButtonLabel = alreadyJoined ? "Открыть игру" : joinButtonLabel;
 
   return (
     <div className="app-container game-container game-join-container">
@@ -812,7 +857,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         )}
       </div>
 
-      {!showJoinedActions && (
+      {!alreadyJoined && (
         <div className="game-section">
           <div className="game-section-title">Комментарий к ответу</div>
           <textarea
@@ -831,63 +876,30 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       )}
 
       <div className="game-section game-join-actions">
-        {showJoinedActions ? (
-          <>
-            <button
-              className="section-cta"
-              type="button"
-              onClick={() => {
-                window.location.href = buildCabinetGameUrl(cabinetUrl, game.id);
-              }}
-            >
-              Перейти в игру
-            </button>
-            <button
-              className="section-cta section-cta-secondary"
-              type="button"
-              disabled={!canDecline}
-              onClick={() => {
-                void applyDecision("decline");
-              }}
-            >
-              {submitting === "decline" ? "Сохраняем..." : "Выйти из игры"}
-            </button>
-            <button
-              className="section-cta section-cta-secondary"
-              type="button"
-              onClick={() => {
-                window.location.href = buildCabinetHomeUrl(cabinetUrl);
-              }}
-            >
-              Перейти в личный кабинет
-            </button>
-          </>
-        ) : (
-          <>
-            {!alreadyJoined && (
-              <button
-                className="section-cta"
-                type="button"
-                disabled={!canJoin}
-                onClick={() => {
-                  void applyDecision("join");
-                }}
-              >
-                {joinButtonLabel}
-              </button>
-            )}
-            <button
-              className="section-cta section-cta-secondary"
-              type="button"
-              disabled={!canDecline}
-              onClick={() => {
-                void applyDecision("decline");
-              }}
-            >
-              {submitting === "decline" ? "Сохраняем..." : "Отказаться от игры"}
-            </button>
-          </>
-        )}
+        <button
+          className="section-cta"
+          type="button"
+          disabled={!canPrimaryAction}
+          onClick={() => {
+            if (alreadyJoined) {
+              window.location.href = buildCabinetGameUrl(cabinetUrl, game.id);
+              return;
+            }
+            void applyDecision("join");
+          }}
+        >
+          {primaryButtonLabel}
+        </button>
+        <button
+          className="section-cta section-cta-secondary"
+          type="button"
+          disabled={!canDecline}
+          onClick={() => {
+            void applyDecision("decline");
+          }}
+        >
+          {submitting === "decline" ? "Сохраняем..." : "Выйти"}
+        </button>
       </div>
     </div>
   );

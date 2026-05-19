@@ -1,0 +1,2172 @@
+{
+  "_id": {
+    "$oid": "6a07373e08a68ead1224b5e4"
+  },
+  "tournamentId": "59695764-ff5f-4ed3-9973-acd6f053227a",
+  "courts": [
+    "Корт №1",
+    "Корт №2"
+  ],
+  "createdAt": "2026-05-15T15:09:50.193Z",
+  "organizer": {
+    "id": "f53bc943-b3ad-4248-985c-8d6f969e6e06",
+    "phone": null,
+    "tenantKey": "iSkq6G"
+  },
+  "params": {
+    "tournamentFamily": "mexicano",
+    "tournamentSubtype": "classic",
+    "mexicanoMode": "classic",
+    "firstRoundMode": "random",
+    "byeMode": "rotating_bye",
+    "seed": "mexicano",
+    "totalRounds": 8,
+    "minRoundsBeforeFinish": 5,
+    "byePointsMode": "zero",
+    "readyParticipantIds": [
+      "552ee727-094b-4257-aa0c-7106d2342848",
+      "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+      "22f6f4d7-15c6-414e-9d4e-6f898eeac592",
+      "d30a090a-7f8f-46e4-99ce-50b3bbb4819e",
+      "00590410-4904-425c-a973-327b9e86d63a",
+      "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+      "3492d837-e37a-437c-ab9b-7d8734f09109",
+      "b26095ca-98d8-45fb-8a8a-cf180e71b535"
+    ],
+    "resultsSortMode": "points"
+  },
+  "participants": [
+    {
+      "id": "552ee727-094b-4257-aa0c-7106d2342848",
+      "phone": null,
+      "rating": "2.64",
+      "photo": "https://562807.selcdn.ru/smstretching/dd3c54a0-e086-4a82-af0e-2e1b6641183a",
+      "name": "Виктория Бугаенко"
+    },
+    {
+      "id": "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+      "phone": null,
+      "rating": "2.6",
+      "photo": "",
+      "name": "Евгения Мелингер"
+    },
+    {
+      "id": "22f6f4d7-15c6-414e-9d4e-6f898eeac592",
+      "phone": null,
+      "rating": "2.414",
+      "photo": null,
+      "name": "Ольга Эрман"
+    },
+    {
+      "id": "d30a090a-7f8f-46e4-99ce-50b3bbb4819e",
+      "phone": null,
+      "rating": "2.35",
+      "photo": "",
+      "name": "Светлана Виноградова"
+    },
+    {
+      "id": "00590410-4904-425c-a973-327b9e86d63a",
+      "phone": null,
+      "rating": "2.26",
+      "photo": "",
+      "name": "Анастасия Фефелова"
+    },
+    {
+      "id": "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+      "phone": null,
+      "rating": "2.1",
+      "photo": null,
+      "name": "Екатерина Цепляева"
+    },
+    {
+      "id": "3492d837-e37a-437c-ab9b-7d8734f09109",
+      "phone": null,
+      "rating": "2.01",
+      "photo": "https://562807.selcdn.ru/smstretching/50f64163-68b5-4942-a76a-0c8243aa8724",
+      "name": "Анна Лебедева"
+    },
+    {
+      "id": "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+      "phone": null,
+      "rating": "2",
+      "photo": "https://562807.selcdn.ru/smstretching/ad06a7a8-e5f3-408c-8583-557a1334d6b1",
+      "name": "Наталья Провоторова"
+    }
+  ],
+  "rounds": [
+    {
+      "id": "round-1",
+      "index": 1,
+      "collapsed": false,
+      "byes": [],
+      "summary": {
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-1-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535"
+          ],
+          "pair2": [
+            "00590410-4904-425c-a973-327b9e86d63a",
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1"
+          ],
+          "score1": 11,
+          "score2": 10,
+          "results": {
+            "552ee727-094b-4257-aa0c-7106d2342848": {
+              "actual": 0.574442516811659,
+              "ratingBefore": 2.64,
+              "ratingAfter": 2.63842,
+              "delta": -0.00158
+            },
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535": {
+              "actual": 0.574442516811659,
+              "ratingBefore": 2,
+              "ratingAfter": 2.014,
+              "delta": 0.014
+            },
+            "00590410-4904-425c-a973-327b9e86d63a": {
+              "actual": 0.425557483188341,
+              "ratingBefore": 2.26,
+              "ratingAfter": 2.25303,
+              "delta": -0.00697
+            },
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1": {
+              "actual": 0.425557483188341,
+              "ratingBefore": 2.1,
+              "ratingAfter": 2.09694,
+              "delta": -0.00306
+            }
+          }
+        },
+        {
+          "id": "round-1-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "pair2": [
+            "3492d837-e37a-437c-ab9b-7d8734f09109",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "score1": 11,
+          "score2": 10,
+          "results": {
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f": {
+              "actual": 0.574442516811659,
+              "ratingBefore": 2.6,
+              "ratingAfter": 2.59962,
+              "delta": -0.00038
+            },
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592": {
+              "actual": 0.574442516811659,
+              "ratingBefore": 2.414,
+              "ratingAfter": 2.41812,
+              "delta": 0.00412
+            },
+            "3492d837-e37a-437c-ab9b-7d8734f09109": {
+              "actual": 0.425557483188341,
+              "ratingBefore": 2.01,
+              "ratingAfter": 2.01261,
+              "delta": 0.00261
+            },
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e": {
+              "actual": 0.425557483188341,
+              "ratingBefore": 2.35,
+              "ratingAfter": 2.34441,
+              "delta": -0.00559
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "round-2",
+      "index": 2,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-1",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-2-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "pair2": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535"
+          ],
+          "score1": 5,
+          "score2": 16,
+          "results": {
+            "552ee727-094b-4257-aa0c-7106d2342848": {
+              "actual": 0.03557118927263618,
+              "ratingBefore": 2.63842,
+              "ratingAfter": 2.57184,
+              "delta": -0.06658
+            },
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592": {
+              "actual": 0.03557118927263618,
+              "ratingBefore": 2.41812,
+              "ratingAfter": 2.35691,
+              "delta": -0.06121
+            },
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f": {
+              "actual": 0.9644288107273639,
+              "ratingBefore": 2.59962,
+              "ratingAfter": 2.65738,
+              "delta": 0.05776
+            },
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535": {
+              "actual": 0.9644288107273639,
+              "ratingBefore": 2.014,
+              "ratingAfter": 2.08596,
+              "delta": 0.07196
+            }
+          }
+        },
+        {
+          "id": "round-2-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e",
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1"
+          ],
+          "pair2": [
+            "00590410-4904-425c-a973-327b9e86d63a",
+            "3492d837-e37a-437c-ab9b-7d8734f09109"
+          ],
+          "score1": 12,
+          "score2": 9,
+          "results": {
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e": {
+              "actual": 0.7109495026250039,
+              "ratingBefore": 2.34441,
+              "ratingAfter": 2.36637,
+              "delta": 0.02196
+            },
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1": {
+              "actual": 0.7109495026250039,
+              "ratingBefore": 2.09694,
+              "ratingAfter": 2.12496,
+              "delta": 0.02802
+            },
+            "00590410-4904-425c-a973-327b9e86d63a": {
+              "actual": 0.28905049737499605,
+              "ratingBefore": 2.25303,
+              "ratingAfter": 2.22543,
+              "delta": -0.0276
+            },
+            "3492d837-e37a-437c-ab9b-7d8734f09109": {
+              "actual": 0.28905049737499605,
+              "ratingBefore": 2.01261,
+              "ratingAfter": 1.9909,
+              "delta": -0.02171
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "round-3",
+      "index": 3,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-2",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-3-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "pair2": [
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1"
+          ],
+          "score1": 12,
+          "score2": 9,
+          "results": {
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f": {
+              "actual": 0.7109495026250039,
+              "ratingBefore": 2.65738,
+              "ratingAfter": 2.67102,
+              "delta": 0.01364
+            },
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e": {
+              "actual": 0.7109495026250039,
+              "ratingBefore": 2.36637,
+              "ratingAfter": 2.38697,
+              "delta": 0.0206
+            },
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535": {
+              "actual": 0.28905049737499605,
+              "ratingBefore": 2.08596,
+              "ratingAfter": 2.06954,
+              "delta": -0.01642
+            },
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1": {
+              "actual": 0.28905049737499605,
+              "ratingBefore": 2.12496,
+              "ratingAfter": 2.10761,
+              "delta": -0.01735
+            }
+          }
+        },
+        {
+          "id": "round-3-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "00590410-4904-425c-a973-327b9e86d63a",
+            "552ee727-094b-4257-aa0c-7106d2342848"
+          ],
+          "pair2": [
+            "3492d837-e37a-437c-ab9b-7d8734f09109",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": 14,
+          "score2": 7,
+          "results": {
+            "00590410-4904-425c-a973-327b9e86d63a": {
+              "actual": 0.8909031788043871,
+              "ratingBefore": 2.22543,
+              "ratingAfter": 2.27453,
+              "delta": 0.0491
+            },
+            "552ee727-094b-4257-aa0c-7106d2342848": {
+              "actual": 0.8909031788043871,
+              "ratingBefore": 2.57184,
+              "ratingAfter": 2.61251,
+              "delta": 0.04067
+            },
+            "3492d837-e37a-437c-ab9b-7d8734f09109": {
+              "actual": 0.10909682119561294,
+              "ratingBefore": 1.9909,
+              "ratingAfter": 1.95114,
+              "delta": -0.03976
+            },
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592": {
+              "actual": 0.10909682119561294,
+              "ratingBefore": 2.35691,
+              "ratingAfter": 2.30825,
+              "delta": -0.04866
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "round-4",
+      "index": 4,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-3",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-4-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "pair2": [
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+            "00590410-4904-425c-a973-327b9e86d63a"
+          ],
+          "score1": 10,
+          "score2": 11,
+          "results": {
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f": {
+              "actual": 0.425557483188341,
+              "ratingBefore": 2.67102,
+              "ratingAfter": 2.64952,
+              "delta": -0.0215
+            },
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e": {
+              "actual": 0.425557483188341,
+              "ratingBefore": 2.38697,
+              "ratingAfter": 2.37231,
+              "delta": -0.01466
+            },
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535": {
+              "actual": 0.574442516811659,
+              "ratingBefore": 2.06954,
+              "ratingAfter": 2.09041,
+              "delta": 0.02087
+            },
+            "00590410-4904-425c-a973-327b9e86d63a": {
+              "actual": 0.574442516811659,
+              "ratingBefore": 2.27453,
+              "ratingAfter": 2.29047,
+              "delta": 0.01594
+            }
+          }
+        },
+        {
+          "id": "round-4-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+            "3492d837-e37a-437c-ab9b-7d8734f09109"
+          ],
+          "pair2": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": 17,
+          "score2": 4,
+          "results": {
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1": {
+              "actual": 0.9801596942659225,
+              "ratingBefore": 2.10761,
+              "ratingAfter": 2.17784,
+              "delta": 0.07023
+            },
+            "3492d837-e37a-437c-ab9b-7d8734f09109": {
+              "actual": 0.9801596942659225,
+              "ratingBefore": 1.95114,
+              "ratingAfter": 2.0251,
+              "delta": 0.07396
+            },
+            "552ee727-094b-4257-aa0c-7106d2342848": {
+              "actual": 0.01984030573407751,
+              "ratingBefore": 2.61251,
+              "ratingAfter": 2.53711,
+              "delta": -0.0754
+            },
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592": {
+              "actual": 0.01984030573407751,
+              "ratingBefore": 2.30825,
+              "ratingAfter": 2.24011,
+              "delta": -0.06814
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "round-5",
+      "index": 5,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-4",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-5-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535"
+          ],
+          "pair2": [
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+            "00590410-4904-425c-a973-327b9e86d63a"
+          ],
+          "score1": 13,
+          "score2": 8,
+          "results": {
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f": {
+              "actual": 0.8175744761936437,
+              "ratingBefore": 2.64952,
+              "ratingAfter": 2.68006,
+              "delta": 0.03054
+            },
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535": {
+              "actual": 0.8175744761936437,
+              "ratingBefore": 2.09041,
+              "ratingAfter": 2.13458,
+              "delta": 0.04417
+            },
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1": {
+              "actual": 0.18242552380635635,
+              "ratingBefore": 2.17784,
+              "ratingAfter": 2.14274,
+              "delta": -0.0351
+            },
+            "00590410-4904-425c-a973-327b9e86d63a": {
+              "actual": 0.18242552380635635,
+              "ratingBefore": 2.29047,
+              "ratingAfter": 2.25262,
+              "delta": -0.03785
+            }
+          }
+        },
+        {
+          "id": "round-5-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "pair2": [
+            "3492d837-e37a-437c-ab9b-7d8734f09109",
+            "552ee727-094b-4257-aa0c-7106d2342848"
+          ],
+          "score1": 7,
+          "score2": 14,
+          "results": {
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e": {
+              "actual": 0.10909682119561294,
+              "ratingBefore": 2.37231,
+              "ratingAfter": 2.32079,
+              "delta": -0.05152
+            },
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592": {
+              "actual": 0.10909682119561294,
+              "ratingBefore": 2.24011,
+              "ratingAfter": 2.19183,
+              "delta": -0.04828
+            },
+            "3492d837-e37a-437c-ab9b-7d8734f09109": {
+              "actual": 0.8909031788043871,
+              "ratingBefore": 2.0251,
+              "ratingAfter": 2.082,
+              "delta": 0.0569
+            },
+            "552ee727-094b-4257-aa0c-7106d2342848": {
+              "actual": 0.8909031788043871,
+              "ratingBefore": 2.53711,
+              "ratingAfter": 2.58149,
+              "delta": 0.04438
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "round-6",
+      "index": 6,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-5",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-6-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "pair2": [
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+            "3492d837-e37a-437c-ab9b-7d8734f09109"
+          ],
+          "score1": 10,
+          "score2": 11,
+          "results": {
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f": {
+              "actual": 0.425557483188341,
+              "ratingBefore": 2.68006,
+              "ratingAfter": 2.65674,
+              "delta": -0.02332
+            },
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e": {
+              "actual": 0.425557483188341,
+              "ratingBefore": 2.32079,
+              "ratingAfter": 2.30608,
+              "delta": -0.01471
+            },
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535": {
+              "actual": 0.574442516811659,
+              "ratingBefore": 2.13458,
+              "ratingAfter": 2.15333,
+              "delta": 0.01875
+            },
+            "3492d837-e37a-437c-ab9b-7d8734f09109": {
+              "actual": 0.574442516811659,
+              "ratingBefore": 2.082,
+              "ratingAfter": 2.10201,
+              "delta": 0.02001
+            }
+          }
+        },
+        {
+          "id": "round-6-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+            "00590410-4904-425c-a973-327b9e86d63a"
+          ],
+          "pair2": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": 11,
+          "score2": 10,
+          "results": {
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1": {
+              "actual": 0.574442516811659,
+              "ratingBefore": 2.14274,
+              "ratingAfter": 2.15861,
+              "delta": 0.01587
+            },
+            "00590410-4904-425c-a973-327b9e86d63a": {
+              "actual": 0.574442516811659,
+              "ratingBefore": 2.25262,
+              "ratingAfter": 2.26581,
+              "delta": 0.01319
+            },
+            "552ee727-094b-4257-aa0c-7106d2342848": {
+              "actual": 0.425557483188341,
+              "ratingBefore": 2.58149,
+              "ratingAfter": 2.56265,
+              "delta": -0.01884
+            },
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592": {
+              "actual": 0.425557483188341,
+              "ratingBefore": 2.19183,
+              "ratingAfter": 2.18249,
+              "delta": -0.00934
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "round-7",
+      "index": 7,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-6",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-7-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "pair2": [
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+            "3492d837-e37a-437c-ab9b-7d8734f09109"
+          ],
+          "score1": 13,
+          "score2": 8,
+          "results": {
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f": {
+              "actual": 0.8175744761936437,
+              "ratingBefore": 2.65674,
+              "ratingAfter": 2.68455,
+              "delta": 0.02781
+            },
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e": {
+              "actual": 0.8175744761936437,
+              "ratingBefore": 2.30608,
+              "ratingAfter": 2.34233,
+              "delta": 0.03625
+            },
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535": {
+              "actual": 0.18242552380635635,
+              "ratingBefore": 2.15333,
+              "ratingAfter": 2.12103,
+              "delta": -0.0323
+            },
+            "3492d837-e37a-437c-ab9b-7d8734f09109": {
+              "actual": 0.18242552380635635,
+              "ratingBefore": 2.10201,
+              "ratingAfter": 2.07094,
+              "delta": -0.03107
+            }
+          }
+        },
+        {
+          "id": "round-7-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+            "00590410-4904-425c-a973-327b9e86d63a"
+          ],
+          "pair2": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": 9,
+          "score2": 12,
+          "results": {
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1": {
+              "actual": 0.28905049737499605,
+              "ratingBefore": 2.15861,
+              "ratingAfter": 2.13724,
+              "delta": -0.02137
+            },
+            "00590410-4904-425c-a973-327b9e86d63a": {
+              "actual": 0.28905049737499605,
+              "ratingBefore": 2.26581,
+              "ratingAfter": 2.24183,
+              "delta": -0.02398
+            },
+            "552ee727-094b-4257-aa0c-7106d2342848": {
+              "actual": 0.7109495026250039,
+              "ratingBefore": 2.56265,
+              "ratingAfter": 2.58111,
+              "delta": 0.01846
+            },
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592": {
+              "actual": 0.7109495026250039,
+              "ratingBefore": 2.18249,
+              "ratingAfter": 2.21023,
+              "delta": 0.02774
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "round-8",
+      "index": 8,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-7",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-8-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535"
+          ],
+          "pair2": [
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e",
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1"
+          ],
+          "score1": 14,
+          "score2": 7,
+          "results": {
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f": {
+              "actual": 0.8909031788043871,
+              "ratingBefore": 2.68455,
+              "ratingAfter": 2.72384,
+              "delta": 0.03929
+            },
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535": {
+              "actual": 0.8909031788043871,
+              "ratingBefore": 2.12103,
+              "ratingAfter": 2.17404,
+              "delta": 0.05301
+            },
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e": {
+              "actual": 0.10909682119561294,
+              "ratingBefore": 2.34233,
+              "ratingAfter": 2.29464,
+              "delta": -0.04769
+            },
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1": {
+              "actual": 0.10909682119561294,
+              "ratingBefore": 2.13724,
+              "ratingAfter": 2.09455,
+              "delta": -0.04269
+            }
+          }
+        },
+        {
+          "id": "round-8-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "3492d837-e37a-437c-ab9b-7d8734f09109",
+            "00590410-4904-425c-a973-327b9e86d63a"
+          ],
+          "pair2": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": 13,
+          "score2": 8,
+          "results": {
+            "3492d837-e37a-437c-ab9b-7d8734f09109": {
+              "actual": 0.8175744761936437,
+              "ratingBefore": 2.07094,
+              "ratingAfter": 2.11982,
+              "delta": 0.04888
+            },
+            "00590410-4904-425c-a973-327b9e86d63a": {
+              "actual": 0.8175744761936437,
+              "ratingBefore": 2.24183,
+              "ratingAfter": 2.28656,
+              "delta": 0.04473
+            },
+            "552ee727-094b-4257-aa0c-7106d2342848": {
+              "actual": 0.18242552380635635,
+              "ratingBefore": 2.58111,
+              "ratingAfter": 2.53025,
+              "delta": -0.05086
+            },
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592": {
+              "actual": 0.18242552380635635,
+              "ratingBefore": 2.21023,
+              "ratingAfter": 2.16838,
+              "delta": -0.04185
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "round-9",
+      "index": 9,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-8",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-9-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "3492d837-e37a-437c-ab9b-7d8734f09109"
+          ],
+          "pair2": [
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "score1": 9,
+          "score2": 12,
+          "results": {
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f": {
+              "actual": 0.28905049737499605,
+              "ratingBefore": 2.72384,
+              "ratingAfter": 2.68503,
+              "delta": -0.03881
+            },
+            "3492d837-e37a-437c-ab9b-7d8734f09109": {
+              "actual": 0.28905049737499605,
+              "ratingBefore": 2.11982,
+              "ratingAfter": 2.09569,
+              "delta": -0.02413
+            },
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535": {
+              "actual": 0.7109495026250039,
+              "ratingBefore": 2.17404,
+              "ratingAfter": 2.20799,
+              "delta": 0.03395
+            },
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e": {
+              "actual": 0.7109495026250039,
+              "ratingBefore": 2.29464,
+              "ratingAfter": 2.32565,
+              "delta": 0.03101
+            }
+          }
+        },
+        {
+          "id": "round-9-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+            "00590410-4904-425c-a973-327b9e86d63a"
+          ],
+          "pair2": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": 13,
+          "score2": 8,
+          "results": {
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1": {
+              "actual": 0.8175744761936437,
+              "ratingBefore": 2.09455,
+              "ratingAfter": 2.14173,
+              "delta": 0.04718
+            },
+            "00590410-4904-425c-a973-327b9e86d63a": {
+              "actual": 0.8175744761936437,
+              "ratingBefore": 2.28656,
+              "ratingAfter": 2.32905,
+              "delta": 0.04249
+            },
+            "552ee727-094b-4257-aa0c-7106d2342848": {
+              "actual": 0.18242552380635635,
+              "ratingBefore": 2.53025,
+              "ratingAfter": 2.48145,
+              "delta": -0.0488
+            },
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592": {
+              "actual": 0.18242552380635635,
+              "ratingBefore": 2.16838,
+              "ratingAfter": 2.12842,
+              "delta": -0.03996
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "round-10",
+      "index": 10,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-9",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": false
+      },
+      "matches": [
+        {
+          "id": "round-10-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "3492d837-e37a-437c-ab9b-7d8734f09109"
+          ],
+          "pair2": [
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "score1": null,
+          "score2": null
+        },
+        {
+          "id": "round-10-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+            "552ee727-094b-4257-aa0c-7106d2342848"
+          ],
+          "pair2": [
+            "00590410-4904-425c-a973-327b9e86d63a",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": null,
+          "score2": null
+        }
+      ]
+    }
+  ],
+  "targetScore": 21,
+  "tenantKey": "iSkq6G",
+  "tournamentType": "mexicano",
+  "updatedAt": "2026-05-19T13:19:58.000Z",
+  "playerLogs": {
+    "552ee727-094b-4257-aa0c-7106d2342848": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-1",
+        "scoreFor": 11,
+        "scoreAgainst": 10,
+        "delta": -0.00158,
+        "ratingBefore": 2.64,
+        "ratingAfter": 2.63842,
+        "expected": 0.5868139282036098,
+        "actual": 0.574442516811659
+      },
+      {
+        "roundId": "round-2",
+        "matchId": "round-2-match-1",
+        "scoreFor": 5,
+        "scoreAgainst": 16,
+        "delta": -0.06658,
+        "ratingBefore": 2.63842,
+        "ratingAfter": 2.57184,
+        "expected": 0.5562590585746378,
+        "actual": 0.03557118927263618
+      },
+      {
+        "roundId": "round-3",
+        "matchId": "round-3-match-2",
+        "scoreFor": 14,
+        "scoreAgainst": 7,
+        "delta": 0.04067,
+        "ratingBefore": 2.57184,
+        "ratingAfter": 2.61251,
+        "expected": 0.5728777280382996,
+        "actual": 0.8909031788043871
+      },
+      {
+        "roundId": "round-4",
+        "matchId": "round-4-match-2",
+        "scoreFor": 4,
+        "scoreAgainst": 17,
+        "delta": -0.0754,
+        "ratingBefore": 2.61251,
+        "ratingAfter": 2.53711,
+        "expected": 0.6095111297729664,
+        "actual": 0.01984030573407751
+      },
+      {
+        "roundId": "round-5",
+        "matchId": "round-5-match-2",
+        "scoreFor": 14,
+        "scoreAgainst": 7,
+        "delta": 0.04438,
+        "ratingBefore": 2.53711,
+        "ratingAfter": 2.58149,
+        "expected": 0.5438292642494998,
+        "actual": 0.8909031788043871
+      },
+      {
+        "roundId": "round-6",
+        "matchId": "round-6-match-2",
+        "scoreFor": 10,
+        "scoreAgainst": 11,
+        "delta": -0.01884,
+        "ratingBefore": 2.58149,
+        "ratingAfter": 2.56265,
+        "expected": 0.5728603350462457,
+        "actual": 0.425557483188341
+      },
+      {
+        "roundId": "round-7",
+        "matchId": "round-7-match-2",
+        "scoreFor": 12,
+        "scoreAgainst": 9,
+        "delta": 0.01846,
+        "ratingBefore": 2.56265,
+        "ratingAfter": 2.58111,
+        "expected": 0.5665959151529653,
+        "actual": 0.7109495026250039
+      },
+      {
+        "roundId": "round-8",
+        "matchId": "round-8-match-2",
+        "scoreFor": 8,
+        "scoreAgainst": 13,
+        "delta": -0.05086,
+        "ratingBefore": 2.58111,
+        "ratingAfter": 2.53025,
+        "expected": 0.5801501671842624,
+        "actual": 0.18242552380635635
+      },
+      {
+        "roundId": "round-9",
+        "matchId": "round-9-match-2",
+        "scoreFor": 8,
+        "scoreAgainst": 13,
+        "delta": -0.0488,
+        "ratingBefore": 2.53025,
+        "ratingAfter": 2.48145,
+        "expected": 0.5640206789277703,
+        "actual": 0.18242552380635635
+      }
+    ],
+    "b26095ca-98d8-45fb-8a8a-cf180e71b535": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-1",
+        "scoreFor": 11,
+        "scoreAgainst": 10,
+        "delta": 0.014,
+        "ratingBefore": 2,
+        "ratingAfter": 2.014,
+        "expected": 0.4649554549881109,
+        "actual": 0.574442516811659
+      },
+      {
+        "roundId": "round-2",
+        "matchId": "round-2-match-1",
+        "scoreFor": 16,
+        "scoreAgainst": 5,
+        "delta": 0.07196,
+        "ratingBefore": 2.014,
+        "ratingAfter": 2.08596,
+        "expected": 0.4016967849124063,
+        "actual": 0.9644288107273639
+      },
+      {
+        "roundId": "round-3",
+        "matchId": "round-3-match-1",
+        "scoreFor": 9,
+        "scoreAgainst": 12,
+        "delta": -0.01642,
+        "ratingBefore": 2.08596,
+        "ratingAfter": 2.06954,
+        "expected": 0.4174206171375104,
+        "actual": 0.28905049737499605
+      },
+      {
+        "roundId": "round-4",
+        "matchId": "round-4-match-1",
+        "scoreFor": 11,
+        "scoreAgainst": 10,
+        "delta": 0.02087,
+        "ratingBefore": 2.06954,
+        "ratingAfter": 2.09041,
+        "expected": 0.41125819396661445,
+        "actual": 0.574442516811659
+      },
+      {
+        "roundId": "round-5",
+        "matchId": "round-5-match-1",
+        "scoreFor": 13,
+        "scoreAgainst": 8,
+        "delta": 0.04417,
+        "ratingBefore": 2.09041,
+        "ratingAfter": 2.13458,
+        "expected": 0.4721743121002591,
+        "actual": 0.8175744761936437
+      },
+      {
+        "roundId": "round-6",
+        "matchId": "round-6-match-1",
+        "scoreFor": 11,
+        "scoreAgainst": 10,
+        "delta": 0.01875,
+        "ratingBefore": 2.13458,
+        "ratingAfter": 2.15333,
+        "expected": 0.42783211299840507,
+        "actual": 0.574442516811659
+      },
+      {
+        "roundId": "round-7",
+        "matchId": "round-7-match-1",
+        "scoreFor": 8,
+        "scoreAgainst": 13,
+        "delta": -0.0323,
+        "ratingBefore": 2.15333,
+        "ratingAfter": 2.12103,
+        "expected": 0.4350394654786658,
+        "actual": 0.18242552380635635
+      },
+      {
+        "roundId": "round-8",
+        "matchId": "round-8-match-1",
+        "scoreFor": 14,
+        "scoreAgainst": 7,
+        "delta": 0.05301,
+        "ratingBefore": 2.12103,
+        "ratingAfter": 2.17404,
+        "expected": 0.47632988886797356,
+        "actual": 0.8909031788043871
+      },
+      {
+        "roundId": "round-9",
+        "matchId": "round-9-match-1",
+        "scoreFor": 12,
+        "scoreAgainst": 9,
+        "delta": 0.03395,
+        "ratingBefore": 2.17404,
+        "ratingAfter": 2.20799,
+        "expected": 0.44544499831366235,
+        "actual": 0.7109495026250039
+      }
+    ],
+    "00590410-4904-425c-a973-327b9e86d63a": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-1",
+        "scoreFor": 10,
+        "scoreAgainst": 11,
+        "delta": -0.00697,
+        "ratingBefore": 2.26,
+        "ratingAfter": 2.25303,
+        "expected": 0.48002842745844904,
+        "actual": 0.425557483188341
+      },
+      {
+        "roundId": "round-2",
+        "matchId": "round-2-match-2",
+        "scoreFor": 9,
+        "scoreAgainst": 12,
+        "delta": -0.0276,
+        "ratingBefore": 2.25303,
+        "ratingAfter": 2.22543,
+        "expected": 0.5048852666009862,
+        "actual": 0.28905049737499605
+      },
+      {
+        "roundId": "round-3",
+        "matchId": "round-3-match-2",
+        "scoreFor": 14,
+        "scoreAgainst": 7,
+        "delta": 0.0491,
+        "ratingBefore": 2.22543,
+        "ratingAfter": 2.27453,
+        "expected": 0.5069301763415877,
+        "actual": 0.8909031788043871
+      },
+      {
+        "roundId": "round-4",
+        "matchId": "round-4-match-1",
+        "scoreFor": 11,
+        "scoreAgainst": 10,
+        "delta": 0.01594,
+        "ratingBefore": 2.27453,
+        "ratingAfter": 2.29047,
+        "expected": 0.4498118659801731,
+        "actual": 0.574442516811659
+      },
+      {
+        "roundId": "round-5",
+        "matchId": "round-5-match-1",
+        "scoreFor": 8,
+        "scoreAgainst": 13,
+        "delta": -0.03785,
+        "ratingBefore": 2.29047,
+        "ratingAfter": 2.25262,
+        "expected": 0.47843229938542053,
+        "actual": 0.18242552380635635
+      },
+      {
+        "roundId": "round-6",
+        "matchId": "round-6-match-2",
+        "scoreFor": 11,
+        "scoreAgainst": 10,
+        "delta": 0.01319,
+        "ratingBefore": 2.25262,
+        "ratingAfter": 2.26581,
+        "expected": 0.47126004275869693,
+        "actual": 0.574442516811659
+      },
+      {
+        "roundId": "round-7",
+        "matchId": "round-7-match-2",
+        "scoreFor": 9,
+        "scoreAgainst": 12,
+        "delta": -0.02398,
+        "ratingBefore": 2.26581,
+        "ratingAfter": 2.24183,
+        "expected": 0.4766096989180685,
+        "actual": 0.28905049737499605
+      },
+      {
+        "roundId": "round-8",
+        "matchId": "round-8-match-2",
+        "scoreFor": 13,
+        "scoreAgainst": 8,
+        "delta": 0.04473,
+        "ratingBefore": 2.24183,
+        "ratingAfter": 2.28656,
+        "expected": 0.4677712855971194,
+        "actual": 0.8175744761936437
+      },
+      {
+        "roundId": "round-9",
+        "matchId": "round-9-match-2",
+        "scoreFor": 13,
+        "scoreAgainst": 8,
+        "delta": 0.04249,
+        "ratingBefore": 2.28656,
+        "ratingAfter": 2.32905,
+        "expected": 0.4852888284785925,
+        "actual": 0.8175744761936437
+      }
+    ],
+    "b3b505c2-ca2c-44e5-a93b-061256e826a1": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-1",
+        "scoreFor": 10,
+        "scoreAgainst": 11,
+        "delta": -0.00306,
+        "ratingBefore": 2.1,
+        "ratingAfter": 2.09694,
+        "expected": 0.44948954479682723,
+        "actual": 0.425557483188341
+      },
+      {
+        "roundId": "round-2",
+        "matchId": "round-2-match-2",
+        "scoreFor": 12,
+        "scoreAgainst": 9,
+        "delta": 0.02802,
+        "ratingBefore": 2.09694,
+        "ratingAfter": 2.12496,
+        "expected": 0.49181594744460627,
+        "actual": 0.7109495026250039
+      },
+      {
+        "roundId": "round-3",
+        "matchId": "round-3-match-1",
+        "scoreFor": 9,
+        "scoreAgainst": 12,
+        "delta": -0.01735,
+        "ratingBefore": 2.12496,
+        "ratingAfter": 2.10761,
+        "expected": 0.42471738285453686,
+        "actual": 0.28905049737499605
+      },
+      {
+        "roundId": "round-4",
+        "matchId": "round-4-match-2",
+        "scoreFor": 17,
+        "scoreAgainst": 4,
+        "delta": 0.07023,
+        "ratingBefore": 2.10761,
+        "ratingAfter": 2.17784,
+        "expected": 0.43094889684602966,
+        "actual": 0.9801596942659225
+      },
+      {
+        "roundId": "round-5",
+        "matchId": "round-5-match-1",
+        "scoreFor": 8,
+        "scoreAgainst": 13,
+        "delta": -0.0351,
+        "ratingBefore": 2.17784,
+        "ratingAfter": 2.14274,
+        "expected": 0.45691434950602605,
+        "actual": 0.18242552380635635
+      },
+      {
+        "roundId": "round-6",
+        "matchId": "round-6-match-2",
+        "scoreFor": 11,
+        "scoreAgainst": 10,
+        "delta": 0.01587,
+        "ratingBefore": 2.14274,
+        "ratingAfter": 2.15861,
+        "expected": 0.45030889711519445,
+        "actual": 0.574442516811659
+      },
+      {
+        "roundId": "round-7",
+        "matchId": "round-7-match-2",
+        "scoreFor": 9,
+        "scoreAgainst": 12,
+        "delta": -0.02137,
+        "ratingBefore": 2.15861,
+        "ratingAfter": 2.13724,
+        "expected": 0.4561359056433777,
+        "actual": 0.28905049737499605
+      },
+      {
+        "roundId": "round-8",
+        "matchId": "round-8-match-1",
+        "scoreFor": 7,
+        "scoreAgainst": 14,
+        "delta": -0.04269,
+        "ratingBefore": 2.13724,
+        "ratingAfter": 2.09455,
+        "expected": 0.4429553411822805,
+        "actual": 0.10909682119561294
+      },
+      {
+        "roundId": "round-9",
+        "matchId": "round-9-match-2",
+        "scoreFor": 13,
+        "scoreAgainst": 8,
+        "delta": 0.04718,
+        "ratingBefore": 2.09455,
+        "ratingAfter": 2.14173,
+        "expected": 0.4486232716181339,
+        "actual": 0.8175744761936437
+      }
+    ],
+    "44ae6edf-eb3b-4285-8a17-2d8a41acca4f": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-2",
+        "scoreFor": 11,
+        "scoreAgainst": 10,
+        "delta": -0.00038,
+        "ratingBefore": 2.6,
+        "ratingAfter": 2.59962,
+        "expected": 0.577418964036725,
+        "actual": 0.574442516811659
+      },
+      {
+        "roundId": "round-2",
+        "matchId": "round-2-match-1",
+        "scoreFor": 16,
+        "scoreAgainst": 5,
+        "delta": 0.05776,
+        "ratingBefore": 2.59962,
+        "ratingAfter": 2.65738,
+        "expected": 0.5127671802308309,
+        "actual": 0.9644288107273639
+      },
+      {
+        "roundId": "round-3",
+        "matchId": "round-3-match-1",
+        "scoreFor": 12,
+        "scoreAgainst": 9,
+        "delta": 0.01364,
+        "ratingBefore": 2.65738,
+        "ratingAfter": 2.67102,
+        "expected": 0.6043146395979001,
+        "actual": 0.7109495026250039
+      },
+      {
+        "roundId": "round-4",
+        "matchId": "round-4-match-1",
+        "scoreFor": 10,
+        "scoreAgainst": 11,
+        "delta": -0.0215,
+        "ratingBefore": 2.67102,
+        "ratingAfter": 2.64952,
+        "expected": 0.5936977298371171,
+        "actual": 0.425557483188341
+      },
+      {
+        "roundId": "round-5",
+        "matchId": "round-5-match-1",
+        "scoreFor": 13,
+        "scoreAgainst": 8,
+        "delta": 0.03054,
+        "ratingBefore": 2.64952,
+        "ratingAfter": 2.68006,
+        "expected": 0.578767258421516,
+        "actual": 0.8175744761936437
+      },
+      {
+        "roundId": "round-6",
+        "matchId": "round-6-match-1",
+        "scoreFor": 10,
+        "scoreAgainst": 11,
+        "delta": -0.02332,
+        "ratingBefore": 2.68006,
+        "ratingAfter": 2.65674,
+        "expected": 0.6079249289096773,
+        "actual": 0.425557483188341
+      },
+      {
+        "roundId": "round-7",
+        "matchId": "round-7-match-1",
+        "scoreFor": 13,
+        "scoreAgainst": 8,
+        "delta": 0.02781,
+        "ratingBefore": 2.65674,
+        "ratingAfter": 2.68455,
+        "expected": 0.6000896610843011,
+        "actual": 0.8175744761936437
+      },
+      {
+        "roundId": "round-8",
+        "matchId": "round-8-match-1",
+        "scoreFor": 14,
+        "scoreAgainst": 7,
+        "delta": 0.03929,
+        "ratingBefore": 2.68455,
+        "ratingAfter": 2.72384,
+        "expected": 0.5836478322496471,
+        "actual": 0.8909031788043871
+      },
+      {
+        "roundId": "round-9",
+        "matchId": "round-9-match-1",
+        "scoreFor": 9,
+        "scoreAgainst": 12,
+        "delta": -0.03881,
+        "ratingBefore": 2.72384,
+        "ratingAfter": 2.68503,
+        "expected": 0.5925352850992148,
+        "actual": 0.28905049737499605
+      }
+    ],
+    "22f6f4d7-15c6-414e-9d4e-6f898eeac592": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-2",
+        "scoreFor": 11,
+        "scoreAgainst": 10,
+        "delta": 0.00412,
+        "ratingBefore": 2.414,
+        "ratingAfter": 2.41812,
+        "expected": 0.5422556193612169,
+        "actual": 0.574442516811659
+      },
+      {
+        "roundId": "round-2",
+        "matchId": "round-2-match-1",
+        "scoreFor": 5,
+        "scoreAgainst": 16,
+        "delta": -0.06121,
+        "ratingBefore": 2.41812,
+        "ratingAfter": 2.35691,
+        "expected": 0.5142228351895001,
+        "actual": 0.03557118927263618
+      },
+      {
+        "roundId": "round-3",
+        "matchId": "round-3-match-2",
+        "scoreFor": 7,
+        "scoreAgainst": 14,
+        "delta": -0.04866,
+        "ratingBefore": 2.35691,
+        "ratingAfter": 2.30825,
+        "expected": 0.4895953331398489,
+        "actual": 0.10909682119561294
+      },
+      {
+        "roundId": "round-4",
+        "matchId": "round-4-match-2",
+        "scoreFor": 4,
+        "scoreAgainst": 17,
+        "delta": -0.06814,
+        "ratingBefore": 2.30825,
+        "ratingAfter": 2.24011,
+        "expected": 0.5527355288940267,
+        "actual": 0.01984030573407751
+      },
+      {
+        "roundId": "round-5",
+        "matchId": "round-5-match-2",
+        "scoreFor": 7,
+        "scoreAgainst": 14,
+        "delta": -0.04828,
+        "ratingBefore": 2.24011,
+        "ratingAfter": 2.19183,
+        "expected": 0.4866240104860087,
+        "actual": 0.10909682119561294
+      },
+      {
+        "roundId": "round-6",
+        "matchId": "round-6-match-2",
+        "scoreFor": 10,
+        "scoreAgainst": 11,
+        "delta": -0.00934,
+        "ratingBefore": 2.19183,
+        "ratingAfter": 2.18249,
+        "expected": 0.49861395285919763,
+        "actual": 0.425557483188341
+      },
+      {
+        "roundId": "round-7",
+        "matchId": "round-7-match-2",
+        "scoreFor": 12,
+        "scoreAgainst": 9,
+        "delta": 0.02774,
+        "ratingBefore": 2.18249,
+        "ratingAfter": 2.21023,
+        "expected": 0.49404835131890756,
+        "actual": 0.7109495026250039
+      },
+      {
+        "roundId": "round-8",
+        "matchId": "round-8-match-2",
+        "scoreFor": 8,
+        "scoreAgainst": 13,
+        "delta": -0.04185,
+        "ratingBefore": 2.21023,
+        "ratingAfter": 2.16838,
+        "expected": 0.5096810281505127,
+        "actual": 0.18242552380635635
+      },
+      {
+        "roundId": "round-9",
+        "matchId": "round-9-match-2",
+        "scoreFor": 8,
+        "scoreAgainst": 13,
+        "delta": -0.03996,
+        "ratingBefore": 2.16838,
+        "ratingAfter": 2.12842,
+        "expected": 0.4949378261973296,
+        "actual": 0.18242552380635635
+      }
+    ],
+    "3492d837-e37a-437c-ab9b-7d8734f09109": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-2",
+        "scoreFor": 10,
+        "scoreAgainst": 11,
+        "delta": 0.00261,
+        "ratingBefore": 2.01,
+        "ratingAfter": 2.01261,
+        "expected": 0.4051361134577637,
+        "actual": 0.425557483188341
+      },
+      {
+        "roundId": "round-2",
+        "matchId": "round-2-match-2",
+        "scoreFor": 9,
+        "scoreAgainst": 12,
+        "delta": -0.02171,
+        "ratingBefore": 2.01261,
+        "ratingAfter": 1.9909,
+        "expected": 0.4588464403723019,
+        "actual": 0.28905049737499605
+      },
+      {
+        "roundId": "round-3",
+        "matchId": "round-3-match-2",
+        "scoreFor": 7,
+        "scoreAgainst": 14,
+        "delta": -0.03976,
+        "ratingBefore": 1.9909,
+        "ratingAfter": 1.95114,
+        "expected": 0.42005497159219296,
+        "actual": 0.10909682119561294
+      },
+      {
+        "roundId": "round-4",
+        "matchId": "round-4-match-2",
+        "scoreFor": 17,
+        "scoreAgainst": 4,
+        "delta": 0.07396,
+        "ratingBefore": 1.95114,
+        "ratingAfter": 2.0251,
+        "expected": 0.4017747153560661,
+        "actual": 0.9801596942659225
+      },
+      {
+        "roundId": "round-5",
+        "matchId": "round-5-match-2",
+        "scoreFor": 14,
+        "scoreAgainst": 7,
+        "delta": 0.0569,
+        "ratingBefore": 2.0251,
+        "ratingAfter": 2.082,
+        "expected": 0.44590900622788326,
+        "actual": 0.8909031788043871
+      },
+      {
+        "roundId": "round-6",
+        "matchId": "round-6-match-1",
+        "scoreFor": 11,
+        "scoreAgainst": 10,
+        "delta": 0.02001,
+        "ratingBefore": 2.082,
+        "ratingAfter": 2.10201,
+        "expected": 0.41798315956507626,
+        "actual": 0.574442516811659
+      },
+      {
+        "roundId": "round-7",
+        "matchId": "round-7-match-1",
+        "scoreFor": 8,
+        "scoreAgainst": 13,
+        "delta": -0.03107,
+        "ratingBefore": 2.10201,
+        "ratingAfter": 2.07094,
+        "expected": 0.4253842491911293,
+        "actual": 0.18242552380635635
+      },
+      {
+        "roundId": "round-8",
+        "matchId": "round-8-match-2",
+        "scoreFor": 13,
+        "scoreAgainst": 8,
+        "delta": 0.04888,
+        "ratingBefore": 2.07094,
+        "ratingAfter": 2.11982,
+        "expected": 0.4353005912235339,
+        "actual": 0.8175744761936437
+      },
+      {
+        "roundId": "round-9",
+        "matchId": "round-9-match-1",
+        "scoreFor": 9,
+        "scoreAgainst": 12,
+        "delta": -0.02413,
+        "ratingBefore": 2.11982,
+        "ratingAfter": 2.09569,
+        "expected": 0.47772814817753456,
+        "actual": 0.28905049737499605
+      }
+    ],
+    "d30a090a-7f8f-46e4-99ce-50b3bbb4819e": [
+      {
+        "roundId": "round-1",
+        "matchId": "round-1-match-2",
+        "scoreFor": 10,
+        "scoreAgainst": 11,
+        "delta": -0.00559,
+        "ratingBefore": 2.35,
+        "ratingAfter": 2.34441,
+        "expected": 0.4692513810028324,
+        "actual": 0.425557483188341
+      },
+      {
+        "roundId": "round-2",
+        "matchId": "round-2-match-2",
+        "scoreFor": 12,
+        "scoreAgainst": 9,
+        "delta": 0.02196,
+        "ratingBefore": 2.34441,
+        "ratingAfter": 2.36637,
+        "expected": 0.5392195440445835,
+        "actual": 0.7109495026250039
+      },
+      {
+        "roundId": "round-3",
+        "matchId": "round-3-match-1",
+        "scoreFor": 12,
+        "scoreAgainst": 9,
+        "delta": 0.0206,
+        "ratingBefore": 2.36637,
+        "ratingAfter": 2.38697,
+        "expected": 0.5498630081854018,
+        "actual": 0.7109495026250039
+      },
+      {
+        "roundId": "round-4",
+        "matchId": "round-4-match-1",
+        "scoreFor": 10,
+        "scoreAgainst": 11,
+        "delta": -0.01466,
+        "ratingBefore": 2.38697,
+        "ratingAfter": 2.37231,
+        "expected": 0.5402269908265442,
+        "actual": 0.425557483188341
+      },
+      {
+        "roundId": "round-5",
+        "matchId": "round-5-match-2",
+        "scoreFor": 7,
+        "scoreAgainst": 14,
+        "delta": -0.05152,
+        "ratingBefore": 2.37231,
+        "ratingAfter": 2.32079,
+        "expected": 0.5119853342774183,
+        "actual": 0.10909682119561294
+      },
+      {
+        "roundId": "round-6",
+        "matchId": "round-6-match-1",
+        "scoreFor": 10,
+        "scoreAgainst": 11,
+        "delta": -0.01471,
+        "ratingBefore": 2.32079,
+        "ratingAfter": 2.30608,
+        "expected": 0.5406223053170901,
+        "actual": 0.425557483188341
+      },
+      {
+        "roundId": "round-7",
+        "matchId": "round-7-match-1",
+        "scoreFor": 13,
+        "scoreAgainst": 8,
+        "delta": 0.03625,
+        "ratingBefore": 2.30608,
+        "ratingAfter": 2.34233,
+        "expected": 0.5341211872212431,
+        "actual": 0.8175744761936437
+      },
+      {
+        "roundId": "round-8",
+        "matchId": "round-8-match-1",
+        "scoreFor": 7,
+        "scoreAgainst": 14,
+        "delta": -0.04769,
+        "ratingBefore": 2.34233,
+        "ratingAfter": 2.29464,
+        "expected": 0.4820666791214991,
+        "actual": 0.10909682119561294
+      },
+      {
+        "roundId": "round-9",
+        "matchId": "round-9-match-1",
+        "scoreFor": 12,
+        "scoreAgainst": 9,
+        "delta": 0.03101,
+        "ratingBefore": 2.29464,
+        "ratingAfter": 2.32565,
+        "expected": 0.4684100599690599,
+        "actual": 0.7109495026250039
+      }
+    ]
+  },
+  "totals": {
+    "44ae6edf-eb3b-4285-8a17-2d8a41acca4f": {
+      "ratingBefore": 2.6,
+      "ratingAfter": 2.68503,
+      "deltaTotal": 0.08503,
+      "wins": 6,
+      "losses": 3,
+      "draws": 0,
+      "pointsFor": 108,
+      "pointsAgainst": 81,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 108,
+      "playedPoints": 108,
+      "pointDiff": 27,
+      "matchesPlayed": 9,
+      "rank": 1
+    },
+    "b26095ca-98d8-45fb-8a8a-cf180e71b535": {
+      "ratingBefore": 2,
+      "ratingAfter": 2.20799,
+      "deltaTotal": 0.20799,
+      "wins": 7,
+      "losses": 2,
+      "draws": 0,
+      "pointsFor": 105,
+      "pointsAgainst": 84,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 105,
+      "playedPoints": 105,
+      "pointDiff": 21,
+      "matchesPlayed": 9,
+      "rank": 2
+    },
+    "00590410-4904-425c-a973-327b9e86d63a": {
+      "ratingBefore": 2.26,
+      "ratingAfter": 2.32905,
+      "deltaTotal": 0.06905,
+      "wins": 5,
+      "losses": 4,
+      "draws": 0,
+      "pointsFor": 98,
+      "pointsAgainst": 91,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 98,
+      "playedPoints": 98,
+      "pointDiff": 7,
+      "matchesPlayed": 9,
+      "rank": 3
+    },
+    "3492d837-e37a-437c-ab9b-7d8734f09109": {
+      "ratingBefore": 2.01,
+      "ratingAfter": 2.09569,
+      "deltaTotal": 0.08569,
+      "wins": 4,
+      "losses": 5,
+      "draws": 0,
+      "pointsFor": 98,
+      "pointsAgainst": 91,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 98,
+      "playedPoints": 98,
+      "pointDiff": 7,
+      "matchesPlayed": 9,
+      "rank": 4
+    },
+    "b3b505c2-ca2c-44e5-a93b-061256e826a1": {
+      "ratingBefore": 2.1,
+      "ratingAfter": 2.14173,
+      "deltaTotal": 0.04173,
+      "wins": 4,
+      "losses": 5,
+      "draws": 0,
+      "pointsFor": 96,
+      "pointsAgainst": 93,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 96,
+      "playedPoints": 96,
+      "pointDiff": 3,
+      "matchesPlayed": 9,
+      "rank": 5
+    },
+    "d30a090a-7f8f-46e4-99ce-50b3bbb4819e": {
+      "ratingBefore": 2.35,
+      "ratingAfter": 2.32565,
+      "deltaTotal": -0.02435,
+      "wins": 4,
+      "losses": 5,
+      "draws": 0,
+      "pointsFor": 93,
+      "pointsAgainst": 96,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 93,
+      "playedPoints": 93,
+      "pointDiff": -3,
+      "matchesPlayed": 9,
+      "rank": 6
+    },
+    "552ee727-094b-4257-aa0c-7106d2342848": {
+      "ratingBefore": 2.64,
+      "ratingAfter": 2.48145,
+      "deltaTotal": -0.15855,
+      "wins": 4,
+      "losses": 5,
+      "draws": 0,
+      "pointsFor": 86,
+      "pointsAgainst": 103,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 86,
+      "playedPoints": 86,
+      "pointDiff": -17,
+      "matchesPlayed": 9,
+      "rank": 7
+    },
+    "22f6f4d7-15c6-414e-9d4e-6f898eeac592": {
+      "ratingBefore": 2.414,
+      "ratingAfter": 2.12842,
+      "deltaTotal": -0.28558,
+      "wins": 2,
+      "losses": 7,
+      "draws": 0,
+      "pointsFor": 72,
+      "pointsAgainst": 117,
+      "byeCount": 0,
+      "byePoints": 0,
+      "tournamentPoints": 72,
+      "playedPoints": 72,
+      "pointDiff": -45,
+      "matchesPlayed": 9,
+      "rank": 8
+    }
+  },
+  "standings": [
+    {
+      "id": "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+      "name": "Евгения Мелингер",
+      "matchesPlayed": 9,
+      "wins": 6,
+      "losses": 3,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 108,
+      "totalPoints": 108,
+      "tournamentPoints": 108,
+      "pointsFor": 108,
+      "pointsAgainst": 81,
+      "pointDiff": 27,
+      "ratingBefore": 2.6,
+      "ratingAfter": 2.68503,
+      "ratingDelta": 0.08503,
+      "deltaTotal": 0.08503,
+      "rank": 1
+    },
+    {
+      "id": "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+      "name": "Наталья Провоторова",
+      "matchesPlayed": 9,
+      "wins": 7,
+      "losses": 2,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 105,
+      "totalPoints": 105,
+      "tournamentPoints": 105,
+      "pointsFor": 105,
+      "pointsAgainst": 84,
+      "pointDiff": 21,
+      "ratingBefore": 2,
+      "ratingAfter": 2.20799,
+      "ratingDelta": 0.20799,
+      "deltaTotal": 0.20799,
+      "rank": 2
+    },
+    {
+      "id": "00590410-4904-425c-a973-327b9e86d63a",
+      "name": "Анастасия Фефелова",
+      "matchesPlayed": 9,
+      "wins": 5,
+      "losses": 4,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 98,
+      "totalPoints": 98,
+      "tournamentPoints": 98,
+      "pointsFor": 98,
+      "pointsAgainst": 91,
+      "pointDiff": 7,
+      "ratingBefore": 2.26,
+      "ratingAfter": 2.32905,
+      "ratingDelta": 0.06905,
+      "deltaTotal": 0.06905,
+      "rank": 3
+    },
+    {
+      "id": "3492d837-e37a-437c-ab9b-7d8734f09109",
+      "name": "Анна Лебедева",
+      "matchesPlayed": 9,
+      "wins": 4,
+      "losses": 5,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 98,
+      "totalPoints": 98,
+      "tournamentPoints": 98,
+      "pointsFor": 98,
+      "pointsAgainst": 91,
+      "pointDiff": 7,
+      "ratingBefore": 2.01,
+      "ratingAfter": 2.09569,
+      "ratingDelta": 0.08569,
+      "deltaTotal": 0.08569,
+      "rank": 4
+    },
+    {
+      "id": "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+      "name": "Екатерина Цепляева",
+      "matchesPlayed": 9,
+      "wins": 4,
+      "losses": 5,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 96,
+      "totalPoints": 96,
+      "tournamentPoints": 96,
+      "pointsFor": 96,
+      "pointsAgainst": 93,
+      "pointDiff": 3,
+      "ratingBefore": 2.1,
+      "ratingAfter": 2.14173,
+      "ratingDelta": 0.04173,
+      "deltaTotal": 0.04173,
+      "rank": 5
+    },
+    {
+      "id": "d30a090a-7f8f-46e4-99ce-50b3bbb4819e",
+      "name": "Светлана Виноградова",
+      "matchesPlayed": 9,
+      "wins": 4,
+      "losses": 5,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 93,
+      "totalPoints": 93,
+      "tournamentPoints": 93,
+      "pointsFor": 93,
+      "pointsAgainst": 96,
+      "pointDiff": -3,
+      "ratingBefore": 2.35,
+      "ratingAfter": 2.32565,
+      "ratingDelta": -0.02435,
+      "deltaTotal": -0.02435,
+      "rank": 6
+    },
+    {
+      "id": "552ee727-094b-4257-aa0c-7106d2342848",
+      "name": "Виктория Бугаенко",
+      "matchesPlayed": 9,
+      "wins": 4,
+      "losses": 5,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 86,
+      "totalPoints": 86,
+      "tournamentPoints": 86,
+      "pointsFor": 86,
+      "pointsAgainst": 103,
+      "pointDiff": -17,
+      "ratingBefore": 2.64,
+      "ratingAfter": 2.48145,
+      "ratingDelta": -0.15855,
+      "deltaTotal": -0.15855,
+      "rank": 7
+    },
+    {
+      "id": "22f6f4d7-15c6-414e-9d4e-6f898eeac592",
+      "name": "Ольга Эрман",
+      "matchesPlayed": 9,
+      "wins": 2,
+      "losses": 7,
+      "draws": 0,
+      "byeCount": 0,
+      "byePoints": 0,
+      "playedPoints": 72,
+      "totalPoints": 72,
+      "tournamentPoints": 72,
+      "pointsFor": 72,
+      "pointsAgainst": 117,
+      "pointDiff": -45,
+      "ratingBefore": 2.414,
+      "ratingAfter": 2.12842,
+      "ratingDelta": -0.28558,
+      "deltaTotal": -0.28558,
+      "rank": 8
+    }
+  ],
+  "summary": {
+    "totalRounds": 10,
+    "completedRounds": 9,
+    "totalMatches": 20,
+    "completedMatches": 18,
+    "byePolicy": "zero_points",
+    "status": "in_progress",
+    "finished": false
+  }
+}

@@ -1,0 +1,579 @@
+{
+  "_id": {
+    "$oid": "6a07373e08a68ead1224b5e4"
+  },
+  "tournamentId": "59695764-ff5f-4ed3-9973-acd6f053227a",
+  "courts": [
+    "Корт №1",
+    "Корт №2"
+  ],
+  "createdAt": "2026-05-15T15:09:50.193Z",
+  "organizer": {
+    "id": "f53bc943-b3ad-4248-985c-8d6f969e6e06",
+    "phone": null,
+    "tenantKey": "iSkq6G"
+  },
+  "params": {
+    "tournamentFamily": "mexicano",
+    "tournamentSubtype": "classic",
+    "mexicanoMode": "classic",
+    "firstRoundMode": "random",
+    "byeMode": "rotating_bye",
+    "seed": "mexicano",
+    "totalRounds": 8,
+    "minRoundsBeforeFinish": 5,
+    "byePointsMode": "zero",
+    "readyParticipantIds": [
+      "552ee727-094b-4257-aa0c-7106d2342848",
+      "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+      "22f6f4d7-15c6-414e-9d4e-6f898eeac592",
+      "d30a090a-7f8f-46e4-99ce-50b3bbb4819e",
+      "00590410-4904-425c-a973-327b9e86d63a",
+      "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+      "3492d837-e37a-437c-ab9b-7d8734f09109",
+      "b26095ca-98d8-45fb-8a8a-cf180e71b535"
+    ],
+    "resultsSortMode": "points"
+  },
+  "participants": [
+    {
+      "id": "552ee727-094b-4257-aa0c-7106d2342848",
+      "phone": null,
+      "rating": "2.64",
+      "photo": "https://562807.selcdn.ru/smstretching/dd3c54a0-e086-4a82-af0e-2e1b6641183a",
+      "name": "Виктория Бугаенко"
+    },
+    {
+      "id": "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+      "phone": null,
+      "rating": "2.6",
+      "photo": "",
+      "name": "Евгения Мелингер"
+    },
+    {
+      "id": "22f6f4d7-15c6-414e-9d4e-6f898eeac592",
+      "phone": null,
+      "rating": "2.414",
+      "photo": null,
+      "name": "Ольга Эрман"
+    },
+    {
+      "id": "d30a090a-7f8f-46e4-99ce-50b3bbb4819e",
+      "phone": null,
+      "rating": "2.35",
+      "photo": "",
+      "name": "Светлана Виноградова"
+    },
+    {
+      "id": "00590410-4904-425c-a973-327b9e86d63a",
+      "phone": null,
+      "rating": "2.26",
+      "photo": "",
+      "name": "Анастасия Фефелова"
+    },
+    {
+      "id": "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+      "phone": null,
+      "rating": "2.1",
+      "photo": null,
+      "name": "Екатерина Цепляева"
+    },
+    {
+      "id": "3492d837-e37a-437c-ab9b-7d8734f09109",
+      "phone": null,
+      "rating": "2.01",
+      "photo": "https://562807.selcdn.ru/smstretching/50f64163-68b5-4942-a76a-0c8243aa8724",
+      "name": "Анна Лебедева"
+    },
+    {
+      "id": "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+      "phone": null,
+      "rating": "2",
+      "photo": "https://562807.selcdn.ru/smstretching/ad06a7a8-e5f3-408c-8583-557a1334d6b1",
+      "name": "Наталья Провоторова"
+    }
+  ],
+  "rounds": [
+    {
+      "id": "round-1",
+      "index": 1,
+      "collapsed": false,
+      "byes": [],
+      "summary": {
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-1-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535"
+          ],
+          "pair2": [
+            "00590410-4904-425c-a973-327b9e86d63a",
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1"
+          ],
+          "score1": 11,
+          "score2": 10
+        },
+        {
+          "id": "round-1-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "pair2": [
+            "3492d837-e37a-437c-ab9b-7d8734f09109",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "score1": 11,
+          "score2": 10
+        }
+      ]
+    },
+    {
+      "id": "round-2",
+      "index": 2,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-1",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-2-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "pair2": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535"
+          ],
+          "score1": 5,
+          "score2": 16
+        },
+        {
+          "id": "round-2-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e",
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1"
+          ],
+          "pair2": [
+            "00590410-4904-425c-a973-327b9e86d63a",
+            "3492d837-e37a-437c-ab9b-7d8734f09109"
+          ],
+          "score1": 12,
+          "score2": 9
+        }
+      ]
+    },
+    {
+      "id": "round-3",
+      "index": 3,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-2",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-3-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "pair2": [
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1"
+          ],
+          "score1": 12,
+          "score2": 9
+        },
+        {
+          "id": "round-3-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "00590410-4904-425c-a973-327b9e86d63a",
+            "552ee727-094b-4257-aa0c-7106d2342848"
+          ],
+          "pair2": [
+            "3492d837-e37a-437c-ab9b-7d8734f09109",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": 14,
+          "score2": 7
+        }
+      ]
+    },
+    {
+      "id": "round-4",
+      "index": 4,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-3",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-4-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "pair2": [
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+            "00590410-4904-425c-a973-327b9e86d63a"
+          ],
+          "score1": 10,
+          "score2": 11
+        },
+        {
+          "id": "round-4-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+            "3492d837-e37a-437c-ab9b-7d8734f09109"
+          ],
+          "pair2": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": 17,
+          "score2": 4
+        }
+      ]
+    },
+    {
+      "id": "round-5",
+      "index": 5,
+      "collapsed": false,
+      "saved": false,
+      "byes": [
+        "00590410-4904-425c-a973-327b9e86d63a"
+      ],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-4",
+        "byePolicy": "zero_points",
+        "byePoints": 0,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-5-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535"
+          ],
+          "pair2": [
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "score1": 13,
+          "score2": 8
+        },
+        {
+          "id": "round-5-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "pair2": [
+            "3492d837-e37a-437c-ab9b-7d8734f09109",
+            "552ee727-094b-4257-aa0c-7106d2342848"
+          ],
+          "score1": 7,
+          "score2": 14
+        }
+      ]
+    },
+    {
+      "id": "round-6",
+      "index": 6,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-5",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-6-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "pair2": [
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+            "3492d837-e37a-437c-ab9b-7d8734f09109"
+          ],
+          "score1": 10,
+          "score2": 11
+        },
+        {
+          "id": "round-6-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+            "00590410-4904-425c-a973-327b9e86d63a"
+          ],
+          "pair2": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": 11,
+          "score2": 10
+        }
+      ]
+    },
+    {
+      "id": "round-7",
+      "index": 7,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-6",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-7-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "pair2": [
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+            "3492d837-e37a-437c-ab9b-7d8734f09109"
+          ],
+          "score1": 13,
+          "score2": 8
+        },
+        {
+          "id": "round-7-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+            "00590410-4904-425c-a973-327b9e86d63a"
+          ],
+          "pair2": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": 9,
+          "score2": 12
+        }
+      ]
+    },
+    {
+      "id": "round-8",
+      "index": 8,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-7",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-8-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535"
+          ],
+          "pair2": [
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e",
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1"
+          ],
+          "score1": 14,
+          "score2": 7
+        },
+        {
+          "id": "round-8-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "3492d837-e37a-437c-ab9b-7d8734f09109",
+            "00590410-4904-425c-a973-327b9e86d63a"
+          ],
+          "pair2": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": 13,
+          "score2": 8
+        }
+      ]
+    },
+    {
+      "id": "round-9",
+      "index": 9,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-8",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": true
+      },
+      "matches": [
+        {
+          "id": "round-9-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "3492d837-e37a-437c-ab9b-7d8734f09109"
+          ],
+          "pair2": [
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "score1": 9,
+          "score2": 12
+        },
+        {
+          "id": "round-9-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+            "00590410-4904-425c-a973-327b9e86d63a"
+          ],
+          "pair2": [
+            "552ee727-094b-4257-aa0c-7106d2342848",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": 13,
+          "score2": 8
+        }
+      ]
+    },
+    {
+      "id": "round-10",
+      "index": 10,
+      "collapsed": false,
+      "saved": false,
+      "byes": [],
+      "summary": {
+        "mexicanoMode": "classic",
+        "byeMode": "rotating_bye",
+        "byePointsMode": "zero_points",
+        "generatedFromRoundId": "round-9",
+        "byePolicy": "zero_points",
+        "byePoints": null,
+        "completed": false
+      },
+      "matches": [
+        {
+          "id": "round-10-match-1",
+          "court": "Корт №1",
+          "courtIndex": 0,
+          "pair1": [
+            "44ae6edf-eb3b-4285-8a17-2d8a41acca4f",
+            "3492d837-e37a-437c-ab9b-7d8734f09109"
+          ],
+          "pair2": [
+            "b26095ca-98d8-45fb-8a8a-cf180e71b535",
+            "d30a090a-7f8f-46e4-99ce-50b3bbb4819e"
+          ],
+          "score1": null,
+          "score2": null
+        },
+        {
+          "id": "round-10-match-2",
+          "court": "Корт №2",
+          "courtIndex": 1,
+          "pair1": [
+            "b3b505c2-ca2c-44e5-a93b-061256e826a1",
+            "552ee727-094b-4257-aa0c-7106d2342848"
+          ],
+          "pair2": [
+            "00590410-4904-425c-a973-327b9e86d63a",
+            "22f6f4d7-15c6-414e-9d4e-6f898eeac592"
+          ],
+          "score1": null,
+          "score2": null
+        }
+      ]
+    }
+  ],
+  "targetScore": 21,
+  "tenantKey": "iSkq6G",
+  "tournamentType": "mexicano",
+  "updatedAt": "2026-05-18T08:29:29.115Z"
+}

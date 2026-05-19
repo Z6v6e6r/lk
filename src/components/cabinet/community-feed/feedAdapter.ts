@@ -1,4 +1,5 @@
 import type { PadelGamePlayer, PadelGameRecord } from "../../../utils/apiClient";
+import { PUBLIC_INVITE_ORIGIN } from "../../../consts/api_config";
 import type {
   CommunityPost,
   CommunityPostMemberPreview,
@@ -11,13 +12,14 @@ import {
   formatDateMonthLabel,
   formatGameBadgeLabel,
   formatNewsBadgeLabel,
+  formatRelativePublishedLabel,
   formatSlotsLabel,
   formatTournamentBadgeLabel,
   formatWeekdayLabel,
 } from "./feedFormatters";
 import { stripNewsTextMarkup } from "./newsTextFormatting";
 
-const PUBLIC_TOURNAMENT_ORIGIN = "https://padlhub.su";
+const PUBLIC_TOURNAMENT_ORIGIN = PUBLIC_INVITE_ORIGIN || "https://padlhub.ru";
 
 interface BuildFeedEntriesParams {
   community: Pick<CommunityRecord, "id" | "name" | "members" | "minimumLevel">;
@@ -51,13 +53,23 @@ function normalizeTournamentPublicUrl(value: string | null | undefined) {
 
   try {
     const parsed = new URL(raw, PUBLIC_TOURNAMENT_ORIGIN);
-    if (parsed.pathname.startsWith("/api/tournaments/public")) {
-      parsed.protocol = "https:";
-      parsed.hostname = "padlhub.su";
+    const publicPrefix = "/api/tournaments/public/";
+    if (parsed.pathname.startsWith(publicPrefix)) {
+      const slug = parsed.pathname.slice(publicPrefix.length).split("/").filter(Boolean)[0] ?? "";
+      const publicUrl = new URL("/tournaments", PUBLIC_TOURNAMENT_ORIGIN);
+      parsed.searchParams.forEach((paramValue, key) => {
+        publicUrl.searchParams.set(key, paramValue);
+      });
+      if (slug) publicUrl.searchParams.set("slug", decodeURIComponent(slug));
+      return publicUrl.toString();
     }
     return parsed.toString();
   } catch {
-    return raw.replace("https://padlhub.ru/api/tournaments/public", `${PUBLIC_TOURNAMENT_ORIGIN}/api/tournaments/public`);
+    const legacyMatch = raw.match(/\/api\/tournaments\/public\/([^/?#]+)/i);
+    if (legacyMatch?.[1]) {
+      return `${PUBLIC_TOURNAMENT_ORIGIN}/tournaments?slug=${encodeURIComponent(legacyMatch[1])}`;
+    }
+    return raw;
   }
 }
 
@@ -232,6 +244,25 @@ function isSplitPaymentGame(game: PadelGameRecord | undefined) {
   return Boolean(splitPayment?.enabled);
 }
 
+function extractGameCustomTitle(metadata: Record<string, unknown> | null | undefined) {
+  if (!metadata) return null;
+  const value = typeof metadata.gameTitle === "string" ? metadata.gameTitle.trim() : "";
+  return value || null;
+}
+
+function extractGameJoinPriceLabel(metadata: Record<string, unknown> | null | undefined) {
+  if (!metadata) return null;
+  if (typeof metadata.joinPrice === "number" && Number.isFinite(metadata.joinPrice)) {
+    return formatRubPrice(Math.max(0, Math.round(metadata.joinPrice)));
+  }
+  const raw = typeof metadata.joinPrice === "string" ? metadata.joinPrice.trim() : "";
+  if (!raw) return null;
+  const digitsOnly = raw.replace(/[^\d]/g, "").replace(/^0+(?=\d)/, "");
+  if (!digitsOnly) return null;
+  const parsed = Number(digitsOnly);
+  return Number.isFinite(parsed) ? formatRubPrice(parsed) : null;
+}
+
 function parseCustomRubPriceLabel(value: string) {
   const withoutCurrency = value
     .replace(/₽/g, "")
@@ -293,7 +324,9 @@ function resolveTournamentPriceLabel(
 }
 
 function getSplitJoinPriceText(game: PadelGameRecord | undefined) {
-  if (!isSplitPaymentGame(game)) return null;
+  const metadata = isRecord(game?.metadata) ? game.metadata : null;
+  const metadataJoinPriceLabel = extractGameJoinPriceLabel(metadata);
+  if (!isSplitPaymentGame(game)) return metadataJoinPriceLabel;
 
   const splitPayment = getSplitPaymentMetadata(game);
   const shareAmountMinor = pickNumberValue(splitPayment, ["shareAmountMinor", "amountMinor", "toPayMinor"]);
@@ -301,7 +334,7 @@ function getSplitJoinPriceText(game: PadelGameRecord | undefined) {
     pickNumberValue(splitPayment, ["shareAmount", "amount", "toPay"])
     ?? (shareAmountMinor !== null ? shareAmountMinor / 100 : null);
 
-  return formatRubPrice(shareAmount);
+  return formatRubPrice(shareAmount) ?? metadataJoinPriceLabel;
 }
 
 function getSplitCancelDeadlineAt(game: PadelGameRecord | undefined) {
@@ -320,11 +353,43 @@ function normalizeStringArray(value: unknown) {
     : [];
 }
 
+function parseTournamentAccessLevel(value: string) {
+  const normalized = value.replace(",", ".").trim();
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatTournamentAccessLevel(value: string) {
+  const parsed = parseTournamentAccessLevel(value);
+  if (parsed === null) return value;
+  if (parsed < 2) return "D1";
+  if (parsed < 3) return "D+";
+  if (parsed < 3.5) return "C";
+  if (parsed <= 4) return "C+";
+  if (parsed < 4.7) return "B";
+  if (parsed < 5.5) return "B+";
+  return "A";
+}
+
 function formatAccessLevelRange(value: unknown) {
   const levels = normalizeStringArray(value);
   if (levels.length === 0) return "";
-  if (levels.length === 1) return levels[0];
-  return `${levels[0]}-${levels[levels.length - 1]}`;
+
+  const normalizedLevels = levels
+    .map((level) => ({
+      raw: level,
+      numeric: parseTournamentAccessLevel(level),
+      label: formatTournamentAccessLevel(level),
+    }))
+    .sort((left, right) => {
+      if (left.numeric == null && right.numeric == null) return left.raw.localeCompare(right.raw, "ru-RU");
+      if (left.numeric == null) return 1;
+      if (right.numeric == null) return -1;
+      return left.numeric - right.numeric;
+    });
+
+  if (normalizedLevels.length === 1) return normalizedLevels[0].label;
+  return `${normalizedLevels[0].label} - ${normalizedLevels[normalizedLevels.length - 1].label}`;
 }
 
 function formatIsoTime(value: string | null | undefined) {
@@ -494,13 +559,33 @@ function buildGameDateTime(post: CommunityPost, game: PadelGameRecord | undefine
   return post.publishedAt;
 }
 
+function sanitizeGameLocationText(value: string | null | undefined) {
+  const normalized = (value || "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*•\s*/g, " • ")
+    .trim();
+  if (!normalized) return "";
+
+  const withoutMap = normalized
+    .replace(/\s+на карте\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  return withoutMap
+    .split("•")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(" • ");
+}
+
 function buildGameLocation(post: CommunityPost, game: PadelGameRecord | undefined) {
   const location = [game?.booking?.studioName, game?.booking?.roomName]
     .map((value) => value?.trim() || "")
     .filter(Boolean)
     .join(" • ");
 
-  return location || post.previewLabel || "Локация уточняется";
+  const fallbackLocation = sanitizeGameLocationText(post.previewLabel);
+  return sanitizeGameLocationText(location) || fallbackLocation || "Локация уточняется";
 }
 
 function buildGameDateLine(post: CommunityPost, game: PadelGameRecord | undefined) {
@@ -530,10 +615,6 @@ function getConfirmedPlayers(game: PadelGameRecord | undefined) {
 
 function getWaitlistPlayers(game: PadelGameRecord | undefined) {
   return mergeGamePlayers(game?.waitlist ?? []);
-}
-
-function isPrivateGameRecord(game: PadelGameRecord | undefined) {
-  return game?.settings?.isPrivate === true;
 }
 
 function getGameMatchResult(game: PadelGameRecord | undefined) {
@@ -1079,7 +1160,14 @@ function buildTournament(post: CommunityPost, stats?: TournamentStats): Tourname
     pickNumberValue(publicTournament, ["waitlistCount"], null) ??
     pickNumberValue(details, ["waitlistCount"], 0) ??
     0;
-  const level = pickTournamentLevel(searchableText);
+  const level =
+    normalizeTournamentRatingLabel(
+      pickStringValue(skin, ["levelLabel", "ratingLabel", "level", "rating"]) ||
+      pickStringValue(publicTournament, ["levelLabel", "ratingLabel", "level", "rating"]) ||
+      pickStringValue(details, ["levelLabel", "ratingLabel", "level", "rating"]) ||
+      formatAccessLevelRange(publicTournament.accessLevels || details.accessLevels) ||
+      pickTournamentLevel(searchableText),
+    ) || undefined;
   const startsAt =
     pickStringValue(publicTournament, ["startsAt", "startAt"]) ||
     pickStringValue(details, ["startsAt", "startAt"]) ||
@@ -1105,9 +1193,13 @@ function buildTournament(post: CommunityPost, stats?: TournamentStats): Tourname
     pickTournamentType(searchableText) ||
     "Турнир";
   const ratingLabel =
-    pickStringValue(details, ["levelLabel"]) ||
-    formatAccessLevelRange(publicTournament.accessLevels || details.accessLevels) ||
-    pickTournamentRatingLabel(searchableText, level);
+    normalizeTournamentRatingLabel(
+      pickStringValue(skin, ["ratingLabel", "levelLabel", "level", "rating"]) ||
+      pickStringValue(publicTournament, ["ratingLabel", "levelLabel", "level", "rating"]) ||
+      pickStringValue(details, ["ratingLabel", "levelLabel", "level", "rating"]) ||
+      formatAccessLevelRange(publicTournament.accessLevels || details.accessLevels) ||
+      pickTournamentRatingLabel(searchableText, level),
+    ) || undefined;
   const genderLabel =
     normalizeTournamentGenderLabel(
       pickStringValue(publicTournament, ["gender"]) ||
@@ -1357,9 +1449,7 @@ export function buildFeedEntries({
 
     if (post.kind === "GAME") {
       const game = post.relatedGameId ? gameById.get(post.relatedGameId) : undefined;
-      if (isPrivateGameRecord(game)) {
-        return;
-      }
+      const hasLiveGameRecord = Boolean(game);
       const isCurrentUserParticipant = isCurrentUserInGame(game, currentUser.id, currentUser.phone);
       const confirmedPlayers = getConfirmedPlayers(game);
       const waitlistPlayers = getWaitlistPlayers(game).map(toUserFromPlayer);
@@ -1371,18 +1461,21 @@ export function buildFeedEntries({
       );
       const occupiedSlots = Math.max(confirmedPlayers.length, players.length);
       const slotsLeft = Math.max(totalSlots - occupiedSlots, 0);
-      const gameEndTs = getGameEndTimestamp(game, buildGameDateTime(post, game));
-      const isPastGame = gameEndTs !== null && gameEndTs <= Date.now();
+      const gameEndTs = hasLiveGameRecord ? getGameEndTimestamp(game, buildGameDateTime(post, game)) : null;
+      const fallbackTs = Date.parse(buildGameDateTime(post, game));
+      const effectiveGameTs = gameEndTs ?? (Number.isFinite(fallbackTs) ? fallbackTs : null);
+      const isPastGame = effectiveGameTs !== null && effectiveGameTs <= Date.now();
       const resultDisplayState = getMatchResultDisplayState(game);
       const resultScore = resultDisplayState !== "none" ? getMatchResultScore(game) : null;
       const hasVisibleResult = Boolean(resultScore);
       const hasConfirmedResult = resultDisplayState === "confirmed" && hasVisibleResult;
       const hasPendingResult = resultDisplayState === "pending" && hasVisibleResult;
       const isResultDisputed = resultDisplayState === "disputed" && hasVisibleResult;
-      const canDisputeResult = hasPendingResult
+      const canDisputeResult = hasLiveGameRecord
+        && hasPendingResult
         && canCurrentUserDisputeMatchResult(game, currentUser);
-      const needsResult = isPastGame && !hasVisibleResult;
-      if (needsResult && !isCurrentUserParticipant) {
+      const needsResult = hasLiveGameRecord && isPastGame && !hasVisibleResult;
+      if (hasLiveGameRecord && needsResult && !isCurrentUserParticipant) {
         return;
       }
       const resultTeams = hasVisibleResult ? buildResultTeams(game, players, organizerUser) : null;
@@ -1395,6 +1488,8 @@ export function buildFeedEntries({
         ? "Открыть игру"
         : needsResult
           ? "Внести результаты игры"
+          : isPastGame
+            ? "Открыть игру"
           : isCurrentUserParticipant
             ? "Открыть игру"
             : slotsLeft === 0
@@ -1412,9 +1507,9 @@ export function buildFeedEntries({
             dateDay: formatDateDayLabel(buildGameDateTime(post, game)),
             dateWeekday: formatWeekdayLabel(buildGameDateTime(post, game)),
             badgeLabel: formatGameBadgeLabel(buildGameDateTime(post, game)),
-            title: post.title,
+            title: extractGameCustomTitle(isRecord(game?.metadata) ? game.metadata : null) ?? post.title,
             datetimeText: buildGameDateLine(post, game),
-            duration: `${game?.booking?.durationMinutes ?? 60} мин`,
+            publishedLabel: formatRelativePublishedLabel(post.publishedAt),
             level: getGameLevel(community, post, game, players),
             slotsText: formatSlotsLabel(slotsLeft),
             datetime: buildGameDateTime(post, game),

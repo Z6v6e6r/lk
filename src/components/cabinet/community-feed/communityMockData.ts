@@ -46,7 +46,7 @@ export function buildCommunityMockFeedEntries(): FeedEntry[] {
           badgeLabel: "Игра • Сегодня",
           title: "Игра Терехово",
           datetimeText: "09:00–10:00",
-          duration: "60 мин",
+          publishedLabel: "12 мин назад",
           level: "D+/C+",
           slotsText: "2 места",
           players: mockPlayers,

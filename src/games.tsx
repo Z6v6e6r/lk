@@ -7,7 +7,6 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { OverlayScopeProvider } from "./context/OverlayScopeContext";
 import { AuthForm } from "./components/auth/AuthForm";
 import FindGamePage from "./components/games/FindGamePage";
-import GameJoinPage from "./components/games/GameJoinPage";
 import GamesPage from "./components/games/GamesPage";
 import {
   installGlobalErrorTracking,
@@ -15,7 +14,7 @@ import {
   trackClientError,
 } from "./utils/analytics";
 import { mountDevReleaseBadge } from "./utils/devReleaseBadge";
-import { PUBLIC_GAME_FIND_PATH } from "./consts/api_config";
+import { CABINET_URL, PUBLIC_GAME_FIND_PATH } from "./consts/api_config";
 import type { GamesMountData } from "./types/gamesOverlay";
 import { ensureFreshRelease } from "./utils/releaseGuard";
 
@@ -44,6 +43,17 @@ function GamesContent({ onClose, data }: { onClose?: () => void; data?: GamesMou
   const { isAuthenticated } = useAuth();
   const [ready, setReady] = useState(false);
   const isFindEntry = data?.publicFindEntry === true || isPublicFindRoute();
+  const openGameId = (data?.openGameId || data?.joinGameId || "").trim() || null;
+  const handleBack = () => {
+    if (onClose) {
+      onClose();
+      return;
+    }
+    const fallbackUrl = String(data?.cabinetUrl || CABINET_URL || "/lk_new").trim();
+    if (typeof window !== "undefined" && fallbackUrl) {
+      window.location.href = fallbackUrl;
+    }
+  };
 
   useEffect(() => {
     setReady(true);
@@ -57,19 +67,10 @@ function GamesContent({ onClose, data }: { onClose?: () => void; data?: GamesMou
     return <AuthForm onLogin={() => {}} />;
   }
 
-  if (data?.joinGameId) {
-    return (
-      <GameJoinPage
-        gameId={data.joinGameId}
-        cabinetUrl={data.cabinetUrl}
-      />
-    );
-  }
-
   if (isFindEntry) {
     return (
       <FindGamePage
-        onBack={() => onClose?.()}
+        onBack={handleBack}
         cabinetUrl={data?.cabinetUrl}
         presetStudioId={data?.presetStudioId ?? null}
         presetStudioName={data?.presetStudioName ?? null}
@@ -79,8 +80,8 @@ function GamesContent({ onClose, data }: { onClose?: () => void; data?: GamesMou
 
   return (
     <GamesPage
-      onBack={() => onClose?.()}
-      openGameId={data?.openGameId ?? null}
+      onBack={handleBack}
+      openGameId={openGameId}
       openChat={data?.openChat === true}
       createFromBooking={data?.createFromBooking ?? null}
       publicCreateEntry={data?.publicCreateEntry === true}

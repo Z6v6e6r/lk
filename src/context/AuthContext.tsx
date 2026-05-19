@@ -9,6 +9,11 @@ import {
   trackWidgetOpenOnce,
   useGlobalClickAnalytics,
 } from "../utils/analytics";
+import {
+  initializePushNotifications,
+  syncPushTokenWithBackend,
+  unregisterPushToken,
+} from "../utils/pushNotifications";
 
 type AuthContextType = {
   isAuthenticated: boolean;
@@ -50,6 +55,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       path: typeof window !== "undefined" ? window.location.pathname : null,
     });
   }, []);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      void initializePushNotifications();
+      void syncPushTokenWithBackend("auth_changed");
+    }
+  }, [isAuthenticated]);
 
   const clearError = () => setError(null);
 
@@ -181,6 +193,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const logout = () => {
     trackAnalyticsEvent("auth_logout", { phone }, { preferBeacon: true });
+    void unregisterPushToken("logout");
     deleteCookie(`${TENANT_KEY}AuthToken`);
     deleteCookie(`${TENANT_KEY}RefreshToken`);
     setIsAuthenticated(false);

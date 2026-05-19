@@ -23,6 +23,7 @@ import type {
   TournamentHistoryRecord,
 } from "../../utils/apiClient";
 import type { OpenGamesOptions } from "../../types/gamesOverlay";
+import type { OpenLevelsInfoOptions } from "../../types/levelsInfoOverlay";
 import type { OpenTournamentsOptions } from "../../types/tournamentsOverlay";
 import { useAuth } from "../../context/AuthContext";
 import { ButtonModule } from "./ButtonModele";
@@ -88,12 +89,13 @@ const TOURNAMENT_DIRECTION_ID = 2617;
 const TOURNAMENT_LOOKBACK_DAYS = 7;
 const TOURNAMENT_LOOKAHEAD_DAYS = 14;
 const DEV_TOURNAMENT_SCAN_DELAY_MS = 3000;
-const ACTIVE_EVENTS_PREVIEW_LIMIT = 3;
+const ACTIVE_RESULT_WINDOW_LIMIT = 20;
 const RESULT_ENTRY_GRACE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 interface CabinetProps {
   onOpenGames: (options?: OpenGamesOptions) => void;
   onOpenTournaments: (options?: OpenTournamentsOptions) => void;
+  onOpenLevelsInfo: (options?: OpenLevelsInfoOptions) => void;
   onOpenOnboarding: (data: {
     profile: UserProfileType;
     gamesLink: string;
@@ -108,6 +110,12 @@ interface CabinetProps {
 type ProfileUpdatedEventDetail = {
   levelLetter?: string;
   levelNumeric?: string;
+};
+
+type GamesUpdatedEventDetail = {
+  record?: PadelGameRecord | null;
+  records?: PadelGameRecord[];
+  source?: string;
 };
 
 type GameCancelState = "idle" | "confirm" | "done";
@@ -465,6 +473,44 @@ function resolveQuickActionHref(value: string | null | undefined): string {
   }
 }
 
+function resolvePublicGamesCabinetUrl(current: URL): string | null {
+  if (current.pathname.includes("/lk_dev")) {
+    return new URL("/lk_dev", current.origin).toString();
+  }
+  const configured = (CABINET_URL || "").trim();
+  return configured || null;
+}
+
+function resolveFindGameHref(value: string): string {
+  const raw = value.trim();
+  if (!raw) return raw;
+  if (typeof window === "undefined") return raw;
+
+  try {
+    const current = new URL(window.location.href);
+    const parsed = new URL(raw, current.origin);
+    const normalizedFindPath = GAME_FIND_PATH.replace(/\/+$/, "") || "/finde_game";
+    const parsedPath = parsed.pathname.replace(/\/+$/, "") || "/";
+    if (parsedPath !== normalizedFindPath) {
+      return parsed.toString();
+    }
+
+    const resolvedCabinetUrl = resolvePublicGamesCabinetUrl(current);
+    if (resolvedCabinetUrl) {
+      parsed.searchParams.set("cabinetUrl", resolvedCabinetUrl);
+    }
+
+    if (!isLocalHostname(parsed.hostname)) {
+      return parsed.toString();
+    }
+    const publicOrigin = resolvePublicGamesOrigin(current);
+    const normalized = new URL(`${parsed.pathname}${parsed.search}${parsed.hash}`, publicOrigin);
+    return normalized.toString();
+  } catch {
+    return raw;
+  }
+}
+
 function shouldShowCommunitiesSection(options?: {
   initialInviteCode?: string | null;
   initialInviteLink?: string | null;
@@ -510,6 +556,12 @@ function normalizePhoneForGame(value: string | null | undefined): string | null 
   if (digits.length === 10) return `7${digits}`;
   if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
   return digits;
+}
+
+function extractGameCustomTitle(metadata: Record<string, unknown> | null | undefined): string | null {
+  if (!metadata) return null;
+  const value = typeof metadata.gameTitle === "string" ? metadata.gameTitle.trim() : "";
+  return value || null;
 }
 
 function toDateKey(value: string | null | undefined): string | null {
@@ -601,6 +653,33 @@ function resolveBookingPaidState(booking: Booking): boolean | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function mergeCabinetGameRecords(
+  current: PadelGameRecord[],
+  incomingRecords: PadelGameRecord[],
+): PadelGameRecord[] {
+  const next = [...current];
+  incomingRecords.forEach((record) => {
+    if (!record?.id) return;
+    const existingIndex = next.findIndex((item) => item.id === record.id);
+    if (existingIndex < 0) {
+      next.unshift(record);
+      return;
+    }
+    next[existingIndex] = {
+      ...next[existingIndex],
+      ...record,
+      booking: record.booking ?? next[existingIndex].booking,
+      payment: record.payment ?? next[existingIndex].payment,
+      settings: record.settings ?? next[existingIndex].settings,
+      invite: record.invite ?? next[existingIndex].invite,
+      metadata: record.metadata ?? next[existingIndex].metadata,
+      participants: record.participants ?? next[existingIndex].participants,
+      waitlist: record.waitlist ?? next[existingIndex].waitlist,
+    };
+  });
+  return next;
 }
 
 function pickNumberValue(source: Record<string, unknown> | null, keys: string[]): number | null {
@@ -974,6 +1053,7 @@ function readChatReadMap(phoneNorm: string): Record<string, number> {
 export function Cabinet({
   onOpenGames,
   onOpenTournaments,
+  onOpenLevelsInfo,
   onOpenOnboarding,
   initialCommunityInviteCode,
   initialCommunityInviteLink,
@@ -1175,6 +1255,25 @@ export function Cabinet({
   }, [loadProfile]);
 
   useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<GamesUpdatedEventDetail>).detail;
+      const records = [
+        ...(detail?.record ? [detail.record] : []),
+        ...(Array.isArray(detail?.records) ? detail.records : []),
+      ].filter((record): record is PadelGameRecord => Boolean(record?.id));
+
+      if (records.length === 0) return;
+      setCreatedGames((prev) => mergeCabinetGameRecords(prev, records));
+      setCreatedGamesError(null);
+    };
+
+    window.addEventListener("lk-games-updated", handler);
+    return () => {
+      window.removeEventListener("lk-games-updated", handler);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!profile) return;
 
     const numericLevelValue = getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric);
@@ -1299,18 +1398,44 @@ export function Cabinet({
     setLoadingCreatedGames(true);
     setCreatedGamesError(null);
 
+    Promise.all([
       apiFetchPadelGamesByPhone(
         phone,
         profile?.id ?? null,
         false,
-        { limit: ACTIVE_EVENTS_PREVIEW_LIMIT },
-      )
-      .then((result) => {
+        {
+          limit: ACTIVE_RESULT_WINDOW_LIMIT,
+        },
+      ),
+      apiFetchPadelGamesByPhone(
+        phone,
+        profile?.id ?? null,
+        true,
+        {
+          limit: ACTIVE_RESULT_WINDOW_LIMIT,
+          windowHours: 24,
+          needsResult: true,
+        },
+      ),
+    ])
+      .then(([activeGamesResult, resultWindowGamesResult]) => {
         if (!alive) return;
-        setCreatedGames(Array.isArray(result.data?.games) ? result.data.games : []);
-        setActiveGameRecordsTotal(result.data?.total ?? 0);
-        if (result.error) {
-          setCreatedGamesError(result.error.message || "Не удалось загрузить игры");
+        const activeGames = Array.isArray(activeGamesResult.data?.games)
+          ? activeGamesResult.data.games
+          : [];
+        const resultWindowGames = Array.isArray(resultWindowGamesResult.data?.games)
+          ? resultWindowGamesResult.data.games
+          : [];
+        const mergedGames = mergeCabinetGameRecords(activeGames, resultWindowGames);
+        setCreatedGames(mergedGames);
+        setActiveGameRecordsTotal(Math.max(
+          activeGamesResult.data?.total ?? 0,
+          resultWindowGamesResult.data?.total ?? 0,
+          mergedGames.length,
+        ));
+        const error = activeGamesResult.error ?? resultWindowGamesResult.error;
+        if (error) {
+          setCreatedGamesError(error.message || "Не удалось загрузить игры");
         }
       })
       .catch(() => {
@@ -1786,6 +1911,14 @@ export function Cabinet({
     });
   };
 
+  const openLevelsInfo = () => {
+    trackAnalyticsEvent("levels_info_open_requested", {
+      source: "cabinet_avatar",
+      clientId: profile.id,
+    });
+    onOpenLevelsInfo({ profile });
+  };
+
   const handleCopyInviteFromFeed = async (game: PadelGameRecord) => {
     const url = resolveGameInviteUrl(game) || "";
     if (!url) return;
@@ -1903,7 +2036,7 @@ export function Cabinet({
   };
 
   const handleQuickActionPlay = (action: QuickAction) => {
-    const resolvedHref = resolveQuickActionHref(action.href);
+    const resolvedHref = resolveFindGameHref(resolveQuickActionHref(action.href));
     trackAnalyticsEvent("quick_action_click", {
       label: action.label,
       href: resolvedHref,
@@ -2028,8 +2161,12 @@ export function Cabinet({
       handleOpenGameChat(game);
     };
     const stationTitle = String(game.booking?.studioName || "").trim();
-    const cardTitle = stationTitle ? `Игра ${stationTitle}` : "Игра";
+    const customTitle = extractGameCustomTitle(isRecord(game.metadata) ? game.metadata : null);
+    const cardTitle = customTitle || (stationTitle ? `Игра ${stationTitle}` : "Игра");
     const courtTitle = String(game.booking?.roomName || "").trim();
+    const cardLocationTitle = customTitle
+      ? [stationTitle, courtTitle].filter(Boolean).join(" • ")
+      : courtTitle;
     const badge = getDateBadge(game.booking?.date);
     const timeFrom = game.booking?.timeFrom ?? "—:—";
     const timeTo = game.booking?.timeTo ?? "—:—";
@@ -2173,7 +2310,7 @@ export function Cabinet({
         <div className="game-created-head">
           <div className="game-created-head-main">
             <div className="game-created-date">{cardTitle}</div>
-            {courtTitle && <div className="game-created-court">{courtTitle}</div>}
+            {cardLocationTitle && <div className="game-created-court">{cardLocationTitle}</div>}
             <div className="game-created-time">{`${timeFrom} • ${timeTo}`}</div>
             <div className="game-created-tags">
               <span className={`game-created-tag ${game.settings?.ratingGame ? "game-created-tag-level" : "game-created-tag-neutral"}`}>
@@ -2234,11 +2371,7 @@ export function Cabinet({
         )}
 
         {showInlineResultEntry && (
-          <div
-            className="game-created-result-entry"
-            onClick={(event) => event.stopPropagation()}
-            onKeyDown={(event) => event.stopPropagation()}
-          >
+          <div className="game-created-result-entry">
             <div className="game-created-result-entry-head">
               <span>Команды</span>
               <span>{playersCount <= 2 ? "1 пара по 2 игрока" : "2 пары по 2 игрока"}</span>
@@ -2292,6 +2425,8 @@ export function Cabinet({
                 inputMode="numeric"
                 value={inlineResultScore.left}
                 onChange={(event) => handleInlineGameResultScoreChange(game.id, "left", event.target.value)}
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
                 disabled={inlineResultSaving}
                 aria-label="Счёт первой команды"
               />
@@ -2301,6 +2436,8 @@ export function Cabinet({
                 inputMode="numeric"
                 value={inlineResultScore.right}
                 onChange={(event) => handleInlineGameResultScoreChange(game.id, "right", event.target.value)}
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
                 disabled={inlineResultSaving}
                 aria-label="Счёт второй команды"
               />
@@ -2309,9 +2446,12 @@ export function Cabinet({
             <button
               type="button"
               className="game-created-action game-created-result-save"
-              onClick={() => {
+              onClick={(event) => {
+                event.stopPropagation();
                 void handleSaveInlineGameResult(game, teamSlots);
               }}
+              onKeyDown={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
               disabled={inlineResultSaving || !inlineResultCanSave}
             >
               {inlineResultSaving ? "Сохраняем..." : "Сохранить результат"}
@@ -2520,6 +2660,7 @@ export function Cabinet({
         <UserProfile
           profile={profile}
           openEditForm={() => setIsEditOpen(true)}
+          onAvatarClick={openLevelsInfo}
         />
       </div>
 

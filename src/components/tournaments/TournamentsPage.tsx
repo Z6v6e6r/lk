@@ -4,11 +4,14 @@ import {
   apiCancelBooking,
   apiFetchBookings,
   apiCreateAmericanoTournament,
+  apiFetchExercisesByPeriod,
   apiFetchExercisesByVisibleDate,
   apiFetchPadelLiveRatings,
   apiFetchProfile,
+  apiSearchPadelPlayers,
   apiFetchTournamentHistory,
   apiFetchTournamentParticipants,
+  apiLogTournamentRatingChange,
   apiSaveOnboardingLevel,
   getServ2Origin,
   apiUpdateAmericanoResults,
@@ -19,6 +22,7 @@ import type {
   Booking,
   Exercise,
   ExerciseBooking,
+  PadelPlayerCandidate,
   TournamentTypeKey,
   TournamentHistoryRecord,
   UserProfileType,
@@ -43,10 +47,18 @@ import {
   type AmericanoLabParticipant as ParticipantEntry,
   type AmericanoLabRound as TournamentRound,
 } from "./americanoLab";
+import {
+  appendMexicanoClassicRoundIfReady,
+  buildMexicanoClassicParams,
+  createMexicanoClassicInitialRound,
+  rebuildMexicanoClassicFutureRounds,
+  type MexicanoClassicOptions,
+} from "./mexicanoClassic";
 
 interface TournamentsPageProps {
   onBack: () => void;
   initialOpenTournamentId?: string | null;
+  initialOpenTournamentSlug?: string | null;
   initialOpenDate?: string | null;
 }
 
@@ -54,6 +66,8 @@ const TOURNAMENT_DIRECTION_ID = 2617;
 const DAYS_BEFORE_TODAY = 30;
 const DAYS_AFTER_TODAY = 30;
 const TODAY_DATE_INDEX = DAYS_BEFORE_TODAY;
+const DEEP_LINK_LOOKUP_DAYS_BEFORE_TODAY = 365;
+const DEEP_LINK_LOOKUP_DAYS_AFTER_TODAY = 365;
 
 type TournamentFamilyKey = "americano" | "mexicano";
 
@@ -69,19 +83,24 @@ const TOURNAMENT_SUBTYPES: Record<TournamentFamilyKey, Array<{
 }>> = {
   americano: [
     {
-      id: "americano_padelhub",
-      label: "ПадлхАБ",
-      description: "Текущее американо с мягким балансом повторов и уровней.",
-    },
-    {
       id: "americano_classic",
       label: "Классическое",
       description: "Каждый раунд новый напарник и новые соперники, баланс пар по остаточному принципу.",
     },
     {
+      id: "americano_flex",
+      label: "Флекс",
+      description: "Классическое американо с одним bye в раунде (4 × корты + 1 игрок).",
+    },
+    {
       id: "paired_americano",
       label: "Парное американо",
       description: "Фиксированные пары играют турнир между собой.",
+    },
+    {
+      id: "americano_padelhub",
+      label: "ПадлхАБ",
+      description: "Текущее американо с мягким балансом повторов и уровней.",
     },
   ],
   mexicano: [
@@ -100,6 +119,7 @@ const TOURNAMENT_SUBTYPES: Record<TournamentFamilyKey, Array<{
 
 const HTML_TO_IMAGE_CDN =
   "https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js";
+const TOURNAMENT_READY_STORAGE_PREFIX = "tournaments:ready";
 
 type HtmlToImageApi = {
   toPng: (node: HTMLElement, options?: Record<string, unknown>) => Promise<string>;
@@ -161,11 +181,189 @@ function formatTime(timeStr?: string) {
   return timeStr ? timeStr.slice(11, 16) : "";
 }
 
+function formatTournamentDateTimeLine(timeFrom?: string, timeTo?: string) {
+  const from = String(timeFrom || "").trim();
+  const to = String(timeTo || "").trim();
+  const fromTime = formatTime(from);
+  const toTime = formatTime(to);
+  const parsedFrom = from ? new Date(from) : null;
+  const hasDate = Boolean(parsedFrom && !Number.isNaN(parsedFrom.getTime()));
+
+  if (hasDate && parsedFrom) {
+    const dayMonth = parsedFrom.toLocaleDateString("ru-RU", {
+      day: "numeric",
+      month: "long",
+    });
+    if (fromTime && toTime) return `${dayMonth}, ${fromTime}—${toTime}`;
+    if (fromTime) return `${dayMonth}, ${fromTime}`;
+    return dayMonth;
+  }
+
+  if (fromTime && toTime) return `${fromTime}—${toTime}`;
+  return fromTime || toTime || "Дата и время не указаны";
+}
+
+function formatTournamentAddressLine(studio?: Exercise["studio"] | null) {
+  if (!studio) return "";
+  const city = String(studio.city || "").trim();
+  const address = String(studio.address || "").trim();
+  if (city && address) return `г ${city}, ${address}`;
+  if (address) return address;
+  if (city) return city;
+  return String(studio.name || "").trim();
+}
+
+function buildTournamentMapUrl(studio?: Exercise["studio"] | null) {
+  if (!studio) return null;
+  const lat = typeof studio.lat === "number" ? studio.lat : null;
+  const lng = typeof studio.lng === "number" ? studio.lng : null;
+  if (lat != null && lng != null) {
+    return `https://yandex.ru/maps/?ll=${lng}%2C${lat}&mode=whatshere&whatshere%5Bpoint%5D=${lng}%2C${lat}&whatshere%5Bzoom%5D=16`;
+  }
+  const query = [studio.city, studio.address, studio.name]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .join(", ");
+  if (!query) return null;
+  return `https://yandex.ru/maps/?text=${encodeURIComponent(query)}`;
+}
+
 function getExerciseDateKey(exercise?: Exercise | null) {
   if (!exercise?.timeFrom) return null;
   const parsed = new Date(exercise.timeFrom);
   if (Number.isNaN(parsed.getTime())) return null;
   return formatDate(parsed);
+}
+
+function shiftDateByDays(base: Date, delta: number) {
+  const next = new Date(base);
+  next.setDate(next.getDate() + delta);
+  return next;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeTournamentSlug(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  try {
+    return decodeURIComponent(raw).trim().toLowerCase() || null;
+  } catch {
+    return raw.toLowerCase();
+  }
+}
+
+function extractTournamentSlugFromUrl(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  try {
+    const parsed = new URL(raw, "https://padlhub.ru");
+    const querySlug =
+      parsed.searchParams.get("slug")
+      || parsed.searchParams.get("tournamentSlug");
+    if (querySlug) return normalizeTournamentSlug(querySlug);
+
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const publicIndex = parts.findIndex((part, index) => (
+      part === "public" && parts[index - 1] === "tournaments" && parts[index - 2] === "api"
+    ));
+    if (publicIndex >= 0) return normalizeTournamentSlug(parts[publicIndex + 1]);
+  } catch {
+    const match = raw.match(/\/api\/tournaments\/public\/([^/?#]+)/i);
+    if (match?.[1]) return normalizeTournamentSlug(match[1]);
+  }
+
+  return null;
+}
+
+function pickTournamentString(source: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" || typeof value === "number") {
+      const normalized = String(value).trim();
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
+const TOURNAMENT_SLUG_KEYS = [
+  "slug",
+  "publicSlug",
+  "tournamentSlug",
+  "linkSlug",
+  "shareSlug",
+];
+
+const TOURNAMENT_URL_KEYS = [
+  "publicUrl",
+  "joinUrl",
+  "url",
+  "link",
+];
+
+const TOURNAMENT_NESTED_RECORD_KEYS = [
+  "details",
+  "metadata",
+  "params",
+  "publicTournament",
+  "sourceTournamentSnapshot",
+  "customTournament",
+  "tournament",
+  "skin",
+  "tournamentSkin",
+];
+
+function getTournamentSlugCandidates(value: unknown, seen = new Set<unknown>()): string[] {
+  if (!isPlainRecord(value) || seen.has(value)) return [];
+  seen.add(value);
+
+  const candidates = [
+    normalizeTournamentSlug(pickTournamentString(value, TOURNAMENT_SLUG_KEYS)),
+    extractTournamentSlugFromUrl(pickTournamentString(value, TOURNAMENT_URL_KEYS)),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  TOURNAMENT_NESTED_RECORD_KEYS.forEach((key) => {
+    const nested = value[key];
+    if (isPlainRecord(nested)) {
+      candidates.push(...getTournamentSlugCandidates(nested, seen));
+    }
+  });
+
+  return Array.from(new Set(candidates));
+}
+
+function findTournamentBySlug(list: Exercise[], slug: string | null) {
+  if (!slug) return null;
+  return list.find((tournament) => getTournamentSlugCandidates(tournament).includes(slug)) ?? null;
+}
+
+function findTournamentByDeepLink(
+  list: Exercise[],
+  options: {
+    tournamentId?: string | null;
+    tournamentSlug?: string | null;
+  },
+) {
+  const targetTournamentId = String(options.tournamentId || "").trim();
+  if (targetTournamentId) {
+    const byId = list.find((tournament) => String(tournament.id) === targetTournamentId);
+    if (byId) return byId;
+  }
+
+  return findTournamentBySlug(list, options.tournamentSlug ?? null);
+}
+
+function readTournamentSlugFromLocation() {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  return normalizeTournamentSlug(
+    params.get("slug") || params.get("tournamentSlug"),
+  );
 }
 
 function mergeTournamentExercises(primary: Exercise[], bookings: Booking[], dateKey: string) {
@@ -199,13 +397,6 @@ function getClientName(booking: ExerciseBooking, index: number) {
   const parts = [client?.firstName, client?.lastName].filter(Boolean);
   if (parts.length > 0) return parts.join(" ");
   return `Участник ${index + 1}`;
-}
-
-function getInitials(booking: ExerciseBooking) {
-  const client = booking.client as ExerciseBooking["client"] | undefined;
-  const first = client?.firstName?.[0] || "";
-  const last = client?.lastName?.[0] || "";
-  return (first + last).toUpperCase() || "U";
 }
 
 function isCancelledTournamentBooking(booking: ExerciseBooking) {
@@ -281,11 +472,95 @@ function getInitialsFromName(name?: string | null) {
   return initials.toUpperCase() || "U";
 }
 
-function formatRating(value: number) {
+function formatRating(value: number, fractionDigits = 2) {
   return value.toLocaleString("ru-RU", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
   });
+}
+
+function normalizeReadyParticipantIdsInput(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return Array.from(
+      new Set(
+        value
+          .map((item) => String(item || "").trim())
+          .filter(Boolean),
+      ),
+    );
+  }
+  if (value && typeof value === "object") {
+    return Array.from(
+      new Set(
+        Object.entries(value as Record<string, unknown>)
+          .filter(([, flag]) => flag === true)
+          .map(([participantId]) => String(participantId || "").trim())
+          .filter(Boolean),
+      ),
+    );
+  }
+  return [];
+}
+
+function readyParticipantIdsToMap(ids: string[]): Record<string, boolean> {
+  return ids.reduce<Record<string, boolean>>((acc, participantId) => {
+    acc[participantId] = true;
+    return acc;
+  }, {});
+}
+
+function getTournamentReadyStorageKey(tournamentId: string) {
+  return `${TOURNAMENT_READY_STORAGE_PREFIX}:${tournamentId}`;
+}
+
+function readTournamentReadyState(tournamentId: string): Record<string, boolean> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(getTournamentReadyStorageKey(tournamentId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    return readyParticipantIdsToMap(normalizeReadyParticipantIdsInput(parsed));
+  } catch {
+    return {};
+  }
+}
+
+function writeTournamentReadyState(tournamentId: string, readyState: Record<string, boolean>) {
+  if (typeof window === "undefined") return;
+  const ids = Object.entries(readyState)
+    .filter(([, value]) => value === true)
+    .map(([participantId]) => participantId)
+    .filter(Boolean)
+    .sort();
+  try {
+    if (ids.length === 0) {
+      window.localStorage.removeItem(getTournamentReadyStorageKey(tournamentId));
+      return;
+    }
+    window.localStorage.setItem(getTournamentReadyStorageKey(tournamentId), JSON.stringify(ids));
+  } catch {
+    // ignore storage write errors
+  }
+}
+
+function splitParticipantFullName(value: string) {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) {
+    return {
+      firstName: "Игрок",
+      lastName: "",
+    };
+  }
+  if (parts.length === 1) {
+    return {
+      firstName: parts[0],
+      lastName: "",
+    };
+  }
+  return {
+    firstName: parts.slice(0, -1).join(" "),
+    lastName: parts[parts.length - 1],
+  };
 }
 
 function pickTournamentMinRatingSource(
@@ -328,6 +603,75 @@ function resolveTournamentMinRating(
     value: minRatingValue,
     display: rawMinRating?.trim() || formatRating(minRatingValue),
   };
+}
+
+function pickTournamentMaxRatingSource(
+  tournament: Exercise | null,
+  historyRecord?: TournamentHistoryRecord | null,
+) {
+  if (historyRecord?.maxRating) return historyRecord.maxRating;
+
+  const tournamentRecord = tournament as (Exercise & {
+    settings?: {
+      maxRating?: string | null;
+      ratingTo?: string | null;
+      ratingMax?: string | null;
+    };
+    maxRating?: string | null;
+    ratingTo?: string | null;
+    ratingMax?: string | null;
+  }) | null;
+
+  return (
+    tournamentRecord?.settings?.maxRating
+    ?? tournamentRecord?.settings?.ratingTo
+    ?? tournamentRecord?.settings?.ratingMax
+    ?? tournamentRecord?.maxRating
+    ?? tournamentRecord?.ratingTo
+    ?? tournamentRecord?.ratingMax
+    ?? null
+  );
+}
+
+function getRatingGradeLabel(value: number | null) {
+  if (value == null) return null;
+  return formatTournamentRatingGrade(value);
+}
+
+function formatTournamentRatingGrade(value: number | null) {
+  if (value == null) return null;
+  const grade = getLetterGrade(value);
+  if (grade === "D") return "D¹";
+  if (grade === "D+") return "D¹+";
+  return grade;
+}
+
+function resolveTournamentLevelRangeLabel(
+  tournament: Exercise | null,
+  historyRecord: TournamentHistoryRecord | null | undefined,
+  participants: Array<{ rating?: string | number | null }>,
+) {
+  const explicitMin = parseTournamentRatingValue(pickTournamentMinRatingSource(tournament, historyRecord));
+  const explicitMax = parseTournamentRatingValue(pickTournamentMaxRatingSource(tournament, historyRecord));
+
+  const participantLevels = participants
+    .map((participant) => parseTournamentRatingValue(participant.rating))
+    .filter((value): value is number => value != null);
+  const fallbackMin = participantLevels.length > 0 ? Math.min(...participantLevels) : null;
+  const fallbackMax = participantLevels.length > 0 ? Math.max(...participantLevels) : null;
+
+  const minLevel = explicitMin ?? fallbackMin;
+  const maxLevel = explicitMax ?? fallbackMax;
+  const minLabel = getRatingGradeLabel(minLevel);
+  const maxLabel = getRatingGradeLabel(maxLevel);
+
+  if (minLabel && maxLabel) {
+    if (minLabel === maxLabel) return minLabel;
+    return `от ${minLabel} до ${maxLabel}`;
+  }
+  if (minLabel) return `от ${minLabel}`;
+  if (maxLabel) return `до ${maxLabel}`;
+  return "уровень не указан";
 }
 
 function parseBoundedIntegerInput(value: string, min: number, max: number) {
@@ -387,7 +731,14 @@ function applyPartialRoundUpdates(
   const incomingRoundIds = new Set(incomingRounds.map((round) => round.id));
   const hasFullSchedule =
     incomingRounds.length >= currentRounds.length
-    && currentRounds.every((round) => incomingRoundIds.has(round.id));
+    && currentRounds.every((round) => {
+      if (!incomingRoundIds.has(round.id)) return false;
+      const incomingRound = incomingRounds.find((candidate) => candidate.id === round.id);
+      if (!incomingRound) return false;
+      // Guard against partial server replies that contain only saved matches for a round.
+      // In that case we must keep the local schedule shape to avoid dropping unsaved matches.
+      return incomingRound.matches.length >= round.matches.length;
+    });
 
   if (hasFullSchedule) {
     return incomingRounds;
@@ -402,8 +753,9 @@ function applyPartialRoundUpdates(
     });
   });
 
-  return currentRounds.map((round) => {
+  const mergedRounds = currentRounds.map((round) => {
     const incomingRound = incomingRoundMap.get(round.id);
+    const currentMatchIds = new Set(round.matches.map((match) => match.id));
     const nextMatches = round.matches.map((match) => {
       const incomingMatch =
         incomingMatchMap.get(`${round.id}::${match.id}`)
@@ -416,13 +768,29 @@ function applyPartialRoundUpdates(
         saved: incomingMatch.score1 != null && incomingMatch.score2 != null,
       };
     });
+    const extraIncomingMatches = incomingRound
+      ? incomingRound.matches
+          .filter((match) => !currentMatchIds.has(match.id))
+          .map((match) => ({
+            ...match,
+            saved: match.score1 != null && match.score2 != null,
+          }))
+      : [];
+    const mergedMatches = [...nextMatches, ...extraIncomingMatches];
 
     return {
       ...round,
-      matches: nextMatches,
-      saved: nextMatches.length > 0 && nextMatches.every((match) => match.saved),
+      byes: incomingRound?.byes ?? round.byes,
+      quality: incomingRound?.quality ?? round.quality,
+      matches: mergedMatches,
+      saved: mergedMatches.length > 0 && mergedMatches.every((match) => match.saved),
     };
   });
+
+  const currentRoundIds = new Set(currentRounds.map((round) => round.id));
+  const extraIncomingRounds = incomingRounds.filter((round) => !currentRoundIds.has(round.id));
+
+  return [...mergedRounds, ...extraIncomingRounds].sort((left, right) => left.index - right.index);
 }
 
 function findTournamentMatch(
@@ -537,6 +905,14 @@ function normalizeTournamentTypeKey(value: string | null | undefined) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return null;
   if (
+    normalized.includes("americano_flex")
+    || normalized.includes("flex_americano")
+    || normalized.includes("flex americano")
+    || normalized.includes("americano flex")
+    || normalized.includes("флекс американо")
+    || normalized.includes("американо флекс")
+  ) return "americano_flex";
+  if (
     normalized.includes("americano_classic")
     || normalized.includes("classic_americano")
     || normalized.includes("классическое американо")
@@ -570,6 +946,7 @@ function getTournamentFamilyByType(value: string | null | undefined): Tournament
     typeKey === "americano"
     || typeKey === "americano_padelhub"
     || typeKey === "americano_classic"
+    || typeKey === "americano_flex"
     || typeKey === "paired_americano"
   ) {
     return "americano";
@@ -582,10 +959,63 @@ function getTournamentTypeLabel(value: string | null | undefined) {
   const typeKey = normalizeTournamentTypeKey(value);
   if (typeKey === "americano" || typeKey === "americano_padelhub") return "Американо · ПадлхАБ";
   if (typeKey === "americano_classic") return "Американо · Классическое";
+  if (typeKey === "americano_flex") return "Американо · Флекс";
   if (typeKey === "paired_americano") return "Американо · Парное";
   if (typeKey === "paired_mexicano") return "Парный мексикано";
   if (typeKey === "mexicano") return "Мексикано · Классическое";
   return String(value || "").trim() || "Турнир";
+}
+
+function resolveAmericanoScheduleMode(value: string | null | undefined) {
+  const typeKey = normalizeTournamentTypeKey(value);
+  if (typeKey === "americano_classic") return "classic" as const;
+  if (typeKey === "americano_flex") return "flex" as const;
+  return "padelhub" as const;
+}
+
+const MEXICANO_RECOMMENDED_ROUNDS = 8;
+const MEXICANO_MIN_ROUNDS_BEFORE_FINISH = 5;
+
+function parseMexicanoOptions(value: unknown): MexicanoClassicOptions {
+  const params = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+  const firstRoundModeRaw = String(params.firstRoundMode ?? "").trim().toLowerCase();
+  const firstRoundMode = firstRoundModeRaw === "by_level" ? "by_level" : "random";
+  const byeModeRaw = String(params.byeMode ?? "").trim().toLowerCase();
+  const byeMode = byeModeRaw === "strict" ? "strict" : "rotating_bye";
+  const seedRaw = params.seed;
+  const seed = typeof seedRaw === "string" || typeof seedRaw === "number"
+    ? seedRaw
+    : "mexicano";
+  const totalRoundsRaw = typeof params.totalRounds === "number"
+    ? params.totalRounds
+    : Number(params.totalRounds);
+  const totalRounds = Number.isFinite(totalRoundsRaw)
+    ? Math.max(MEXICANO_MIN_ROUNDS_BEFORE_FINISH, Math.floor(totalRoundsRaw))
+    : MEXICANO_RECOMMENDED_ROUNDS;
+
+  return {
+    firstRoundMode,
+    byeMode,
+    seed,
+    totalRounds,
+  };
+}
+
+function parseMexicanoMinRoundsBeforeFinish(value: unknown, totalRounds: number | undefined) {
+  const params = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+  const rawValue = typeof params.minRoundsBeforeFinish === "number"
+    ? params.minRoundsBeforeFinish
+    : Number(params.minRoundsBeforeFinish);
+  const fallback = Math.min(
+    MEXICANO_MIN_ROUNDS_BEFORE_FINISH,
+    totalRounds ?? MEXICANO_RECOMMENDED_ROUNDS,
+  );
+  if (!Number.isFinite(rawValue)) return fallback;
+  return Math.max(1, Math.min(totalRounds ?? MEXICANO_RECOMMENDED_ROUNDS, Math.floor(rawValue)));
 }
 
 function isCompletedHistoryMatch(value: unknown) {
@@ -594,8 +1024,65 @@ function isCompletedHistoryMatch(value: unknown) {
   return record.score1 != null && record.score2 != null;
 }
 
+function isTournamentMarkedFinished(
+  paramsInput: unknown,
+  summaryInput: unknown,
+) {
+  const params = paramsInput && typeof paramsInput === "object"
+    ? paramsInput as Record<string, unknown>
+    : null;
+  const summary = summaryInput && typeof summaryInput === "object"
+    ? summaryInput as Record<string, unknown>
+    : null;
+  const statusList = [
+    params?.status,
+    params?.state,
+    params?.tournamentStatus,
+    summary?.status,
+    summary?.state,
+    summary?.tournamentStatus,
+  ]
+    .map((value) => String(value ?? "").trim().toLowerCase())
+    .filter(Boolean);
+
+  if (statusList.some((status) => (
+    status === "completed"
+    || status === "finished"
+    || status === "closed"
+    || status === "done"
+    || status === "завершен"
+    || status === "завершён"
+  ))) {
+    return true;
+  }
+
+  const finishMarkers = [
+    params?.finishedAt,
+    params?.completedAt,
+    params?.manualFinishedAt,
+    summary?.finishedAt,
+    summary?.completedAt,
+  ];
+  if (finishMarkers.some((value) => value != null && String(value).trim() !== "")) {
+    return true;
+  }
+
+  const booleanFlags = [
+    params?.finished,
+    params?.isFinished,
+    params?.tournamentFinished,
+    params?.manualFinish,
+    summary?.finished,
+    summary?.isFinished,
+    summary?.tournamentFinished,
+    summary?.manualFinish,
+  ];
+  return booleanFlags.some((value) => value === true || value === "true" || value === 1 || value === "1");
+}
+
 function getTournamentProgressState(history: TournamentHistoryRecord | null | undefined): TournamentProgressState {
   if (!history) return "not_started";
+  if (isTournamentMarkedFinished(history.params, history.summary)) return "completed";
   const matches = Array.isArray(history.rounds)
     ? history.rounds.flatMap((round) => {
       if (!round || typeof round !== "object") return [];
@@ -627,8 +1114,10 @@ function buildTournamentPayloadFromHistory(history: TournamentHistoryRecord): Am
   if (
     typeKey !== "americano_padelhub"
     && typeKey !== "americano_classic"
+    && typeKey !== "americano_flex"
     && typeKey !== "paired_americano"
     && typeKey !== "paired_mexicano"
+    && typeKey !== "mexicano"
   ) return null;
 
   return {
@@ -754,6 +1243,7 @@ function TournamentDetailsModal({
   const [manualRatings, setManualRatings] = useState<Record<string, string>>({});
   const [ratingSaveStateById, setRatingSaveStateById] = useState<Record<string, "idle" | "saving">>({});
   const [ratingSaveErrors, setRatingSaveErrors] = useState<Record<string, string>>({});
+  const [ratingEditModeById, setRatingEditModeById] = useState<Record<string, boolean>>({});
   const [refreshingRatings, setRefreshingRatings] = useState(false);
   const [refreshRatingsError, setRefreshRatingsError] = useState<string | null>(null);
   const [missingRatingConfirmation, setMissingRatingConfirmation] =
@@ -763,6 +1253,17 @@ function TournamentDetailsModal({
   const [leaveError, setLeaveError] = useState<string | null>(null);
   const [autoRefreshedParticipantsKey, setAutoRefreshedParticipantsKey] = useState("");
   const [pairedMexicanoPairs, setPairedMexicanoPairs] = useState<string[][]>([]);
+  const [readyParticipantIds, setReadyParticipantIds] = useState<Record<string, boolean>>({});
+  const [readyStateHydrated, setReadyStateHydrated] = useState(false);
+  const [replacementWaitlist, setReplacementWaitlist] = useState<TournamentParticipantEntry[]>([]);
+  const [replaceParticipantId, setReplaceParticipantId] = useState<string | null>(null);
+  const [replaceSearchQuery, setReplaceSearchQuery] = useState("");
+  const [replaceSearchResults, setReplaceSearchResults] = useState<PadelPlayerCandidate[]>([]);
+  const [replaceSearchLoading, setReplaceSearchLoading] = useState(false);
+  const [replaceSearchError, setReplaceSearchError] = useState<string | null>(null);
+  const [replaceSubmitLoading, setReplaceSubmitLoading] = useState(false);
+  const [openTournamentTypeHintId, setOpenTournamentTypeHintId] = useState<TournamentTypeKey | null>(null);
+  const ratingLastTapTsRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     if (!selectedFamily && !selectedType) {
@@ -774,6 +1275,7 @@ function TournamentDetailsModal({
       setManualRatings({});
       setRatingSaveStateById({});
       setRatingSaveErrors({});
+      setRatingEditModeById({});
       setRefreshingRatings(false);
       setRefreshRatingsError(null);
       setMissingRatingConfirmation(null);
@@ -782,6 +1284,17 @@ function TournamentDetailsModal({
       setLeaveError(null);
       setAutoRefreshedParticipantsKey("");
       setPairedMexicanoPairs([]);
+      setReadyParticipantIds({});
+      setReadyStateHydrated(false);
+      setReplacementWaitlist([]);
+      setReplaceParticipantId(null);
+      setReplaceSearchQuery("");
+      setReplaceSearchResults([]);
+      setReplaceSearchLoading(false);
+      setReplaceSearchError(null);
+      setReplaceSubmitLoading(false);
+      setOpenTournamentTypeHintId(null);
+      ratingLastTapTsRef.current = {};
     }
   }, [selectedFamily, selectedType]);
 
@@ -801,6 +1314,7 @@ function TournamentDetailsModal({
     setManualRatings({});
     setRatingSaveStateById({});
     setRatingSaveErrors({});
+    setRatingEditModeById({});
     setRefreshingRatings(false);
     setRefreshRatingsError(null);
     setMissingRatingConfirmation(null);
@@ -808,6 +1322,27 @@ function TournamentDetailsModal({
     setLeavingParticipantId(null);
     setLeaveError(null);
     setAutoRefreshedParticipantsKey("");
+    const tournamentReadyFromHistory = normalizeReadyParticipantIdsInput(
+      historyRecord?.params?.readyParticipantIds ?? historyRecord?.params?.participantReadyIds,
+    );
+    const tournamentIdValue = tournament?.id ? String(tournament.id) : "";
+    const tournamentReadyFromStorage = tournamentIdValue
+      ? readTournamentReadyState(tournamentIdValue)
+      : {};
+    setReadyParticipantIds({
+      ...readyParticipantIdsToMap(tournamentReadyFromHistory),
+      ...tournamentReadyFromStorage,
+    });
+    setReadyStateHydrated(true);
+    setReplacementWaitlist([]);
+    setReplaceParticipantId(null);
+    setReplaceSearchQuery("");
+    setReplaceSearchResults([]);
+    setReplaceSearchLoading(false);
+    setReplaceSearchError(null);
+    setReplaceSubmitLoading(false);
+    setOpenTournamentTypeHintId(null);
+    ratingLastTapTsRef.current = {};
     const restoredPairs = Array.isArray(historyRecord?.params?.pairAssignments)
       ? historyRecord.params.pairAssignments
         .filter((pair): pair is PairedMexicanoPairAssignment => (
@@ -890,18 +1425,37 @@ function TournamentDetailsModal({
       setSaveState("error");
       return;
     }
+    if (tournamentType === "americano_flex" && americanoFlexError) {
+      setSaveState("error");
+      return;
+    }
+    const scheduleMode = resolveAmericanoScheduleMode(tournamentType);
+    const mexicanoOptions = parseMexicanoOptions(historyRecord?.params);
+    const mexicanoParams = buildMexicanoClassicParams(sortedParticipants.length, {
+      ...mexicanoOptions,
+      seed: mexicanoOptions.seed ?? String(tournament.id),
+    });
 
     const roundsForServer = serializeAmericanoRounds(
       tournamentType === "paired_mexicano"
         ? createPairedMexicanoInitialRounds(participantsForRounds, courtNames, completedMexicanoPairs)
         : tournamentType === "paired_americano"
           ? createPairedAmericanoRounds(participantsForRounds, courtNames, completedMexicanoPairs)
+          : tournamentType === "mexicano"
+            ? createMexicanoClassicInitialRound(
+                participantsForRounds,
+                courtNames,
+                mexicanoParams,
+              )
           : createAmericanoRounds(
               participantsForRounds,
               courtNames,
-              { mode: tournamentType === "americano_classic" ? "classic" : "padelhub" },
+              { mode: scheduleMode },
             ),
     );
+    const readyParticipantIdsForPayload = sortedParticipants
+      .filter((participant) => readyParticipantIds[participant.id] === true)
+      .map((participant) => participant.id);
 
     const payload: AmericanoTournamentPayload = {
       tournamentId: String(tournament.id),
@@ -923,21 +1477,38 @@ function TournamentDetailsModal({
               mexicanoMode: "paired",
               totalRounds: Math.max(1, completedMexicanoPairs.length - 1),
               pairAssignments: completedMexicanoPairs,
+              readyParticipantIds: readyParticipantIdsForPayload,
             }
           : tournamentType === "paired_americano"
             ? {
                 tournamentFamily: "americano",
                 tournamentSubtype: "paired",
                 pairAssignments: completedMexicanoPairs,
+                readyParticipantIds: readyParticipantIdsForPayload,
               }
+            : tournamentType === "americano_flex"
+              ? {
+                  tournamentFamily: "americano",
+                  tournamentSubtype: "flex",
+                  readyParticipantIds: readyParticipantIdsForPayload,
+                }
             : tournamentType === "americano_classic"
               ? {
                   tournamentFamily: "americano",
                   tournamentSubtype: "classic",
+                  readyParticipantIds: readyParticipantIdsForPayload,
                 }
+              : tournamentType === "mexicano"
+                ? {
+                    tournamentFamily: "mexicano",
+                    tournamentSubtype: "classic",
+                    ...mexicanoParams,
+                    readyParticipantIds: readyParticipantIdsForPayload,
+                  }
               : {
                   tournamentFamily: selectedFamily,
-                  tournamentSubtype: tournamentType === "mexicano" ? "classic" : "padelhub",
+                  tournamentSubtype: "padelhub",
+                  readyParticipantIds: readyParticipantIdsForPayload,
                 },
       participants: participantsForRounds.map((participant) => ({
         id: participant.id ?? null,
@@ -960,6 +1531,11 @@ function TournamentDetailsModal({
   };
 
   const tournamentId = tournament?.id ? String(tournament.id) : null;
+
+  useEffect(() => {
+    if (!isOpen || !tournamentId || !readyStateHydrated) return;
+    writeTournamentReadyState(tournamentId, readyParticipantIds);
+  }, [isOpen, readyParticipantIds, readyStateHydrated, tournamentId]);
 
   const loadParticipants = async (nextTournamentId: string) => {
     setLoading(true);
@@ -1032,12 +1608,13 @@ function TournamentDetailsModal({
 
   const shouldAutoIncludeOrganizerSlot = useMemo(() => {
     if (!organizerSlotParticipant) return false;
+    if (selectedType === "americano_flex") return false;
     if (baseParticipantEntries.length === 0 || baseParticipantEntries.length % 2 === 0) return false;
 
     return !baseParticipantEntries.some((participant) => (
       (participant.clientId && organizerSlotParticipant.clientId && participant.clientId === organizerSlotParticipant.clientId)
     ));
-  }, [baseParticipantEntries, organizerSlotParticipant]);
+  }, [baseParticipantEntries, organizerSlotParticipant, selectedType]);
 
   const participantEntries = useMemo((): TournamentParticipantEntry[] => {
     if (!shouldAutoIncludeOrganizerSlot || !organizerSlotParticipant) {
@@ -1114,11 +1691,13 @@ function TournamentDetailsModal({
           ? item.ratingNumeric
           : parseTournamentRatingValue(item.rating);
       const nextRating =
-        typeof item.rating === "string" && item.rating.trim()
-          ? item.rating.trim()
-          : parsedNumeric != null
-            ? parsedNumeric.toFixed(5)
-            : null;
+        parsedNumeric != null
+          ? parsedNumeric.toFixed(3)
+          : (
+            typeof item.rating === "string" && item.rating.trim()
+              ? item.rating.trim()
+              : null
+          );
 
       if (clientId) liveByClientId.set(clientId, nextRating);
     });
@@ -1193,13 +1772,14 @@ function TournamentDetailsModal({
   const handleParticipantRatingSave = async (participant: TournamentParticipantEntry) => {
     const rawRating = manualRatings[participant.id] ?? "";
     const parsedRating = parseTournamentRatingValue(rawRating);
+    const previousRating = parseTournamentRatingValue(participant.rating);
 
     if (!participant.clientId) {
       setRatingSaveErrors((prev) => ({
         ...prev,
         [participant.id]: "Не найден clientId для сохранения рейтинга",
       }));
-      return;
+      return false;
     }
 
     if (parsedRating == null) {
@@ -1207,7 +1787,7 @@ function TournamentDetailsModal({
         ...prev,
         [participant.id]: "Введите рейтинг больше 0",
       }));
-      return;
+      return false;
     }
 
     setRatingSaveStateById((prev) => ({
@@ -1237,7 +1817,7 @@ function TournamentDetailsModal({
         ...prev,
         [participant.id]: response.error?.message || "Не удалось сохранить рейтинг",
       }));
-      return;
+      return false;
     }
 
     if (participant.isOrganizerSlot) {
@@ -1264,6 +1844,69 @@ function TournamentDetailsModal({
       ...prev,
       [participant.id]: "idle",
     }));
+    if (tournamentId) {
+      const changedByName = profile
+        ? [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim() || null
+        : null;
+      void apiLogTournamentRatingChange({
+        tournamentId,
+        participantId: participant.clientId,
+        participantName: participant.name,
+        previousRating,
+        nextRating: parsedRating,
+        changedById: profile?.id ?? null,
+        changedByName,
+        changedAt: new Date().toISOString(),
+      }).catch(() => null);
+    }
+    return true;
+  };
+
+  const handleOpenParticipantRatingEdit = (participant: TournamentParticipantEntry) => {
+    if (!participant.clientId) return;
+    const parsedRating = parseTournamentRatingValue(participant.rating);
+    setRatingEditModeById((prev) => ({
+      ...prev,
+      [participant.id]: true,
+    }));
+    if (parsedRating == null) return;
+    setManualRatings((prev) => {
+      if ((prev[participant.id] || "").trim() !== "") return prev;
+      return {
+        ...prev,
+        [participant.id]: parsedRating.toFixed(3),
+      };
+    });
+  };
+
+  const handleCloseParticipantRatingEdit = (participantId: string) => {
+    setRatingEditModeById((prev) => {
+      if (!prev[participantId]) return prev;
+      const next = { ...prev };
+      delete next[participantId];
+      return next;
+    });
+    setManualRatings((prev) => {
+      if (!prev[participantId]) return prev;
+      const next = { ...prev };
+      delete next[participantId];
+      return next;
+    });
+    setRatingSaveErrors((prev) => {
+      if (!prev[participantId]) return prev;
+      const next = { ...prev };
+      delete next[participantId];
+      return next;
+    });
+  };
+
+  const handleParticipantRatingTap = (participant: TournamentParticipantEntry) => {
+    const nowTs = Date.now();
+    const lastTs = ratingLastTapTsRef.current[participant.id] ?? 0;
+    ratingLastTapTsRef.current[participant.id] = nowTs;
+    if (nowTs - lastTs <= 360) {
+      handleOpenParticipantRatingEdit(participant);
+    }
   };
 
   const handleParticipantLeave = async (participant: TournamentParticipantEntry) => {
@@ -1310,6 +1953,243 @@ function TournamentDetailsModal({
     () => sortedParticipants.map((participant) => participant.id),
     [sortedParticipants],
   );
+  const replaceTargetParticipant = useMemo(
+    () => sortedParticipants.find((participant) => participant.id === replaceParticipantId) ?? null,
+    [replaceParticipantId, sortedParticipants],
+  );
+
+  const closeReplaceParticipantPanel = () => {
+    setReplaceParticipantId(null);
+    setReplaceSearchQuery("");
+    setReplaceSearchResults([]);
+    setReplaceSearchLoading(false);
+    setReplaceSearchError(null);
+    setReplaceSubmitLoading(false);
+  };
+
+  const handleOpenReplaceParticipant = (participant: TournamentParticipantEntry) => {
+    if (participant.isOrganizerSlot) return;
+    setReplaceParticipantId(participant.id);
+    setReplaceSearchQuery("");
+    setReplaceSearchResults([]);
+    setReplaceSearchLoading(false);
+    setReplaceSearchError(null);
+    setReplaceSubmitLoading(false);
+  };
+
+  const handleReplaceParticipantWithCandidate = async (candidate: PadelPlayerCandidate) => {
+    if (!replaceTargetParticipant || replaceSubmitLoading) return;
+    const candidateClientId = String(candidate.id || "").trim();
+    if (!candidateClientId) {
+      setReplaceSearchError("У выбранного игрока нет clientId.");
+      return;
+    }
+    const duplicateParticipant = participantEntries.find((participant) => {
+      const clientId = String(participant.clientId || "").trim();
+      if (!clientId) return false;
+      if (replaceTargetParticipant.clientId && clientId === replaceTargetParticipant.clientId) return false;
+      return clientId === candidateClientId;
+    });
+    if (duplicateParticipant) {
+      setReplaceSearchError("Этот игрок уже есть в составе турнира.");
+      return;
+    }
+
+    const candidateName = String(candidate.name || "").trim() || "Игрок";
+    const nameParts = splitParticipantFullName(candidateName);
+    const candidateRatingNumeric =
+      typeof candidate.ratingNumeric === "number" && Number.isFinite(candidate.ratingNumeric)
+        ? candidate.ratingNumeric
+        : null;
+    const candidateRating =
+      candidateRatingNumeric != null
+        ? candidateRatingNumeric.toFixed(3)
+        : (candidate.rating?.trim() || null);
+    const targetClientId = String(replaceTargetParticipant.clientId || "").trim();
+    const targetBookingId = String(replaceTargetParticipant.bookingId || "").trim();
+    const targetId = replaceTargetParticipant.id;
+
+    setReplaceSubmitLoading(true);
+    setReplaceSearchError(null);
+
+    setParticipants((prev) => {
+      let replaced = false;
+      const next = prev.map((booking) => {
+        const bookingClientId = String(booking.client?.id || "").trim();
+        const bookingId = String(booking.id || "").trim();
+        const isTarget = (
+          (targetClientId && bookingClientId === targetClientId)
+          || (targetBookingId && bookingId === targetBookingId)
+        );
+        if (!isTarget) return booking;
+        replaced = true;
+        return {
+          ...booking,
+          client: {
+            ...(booking.client ?? {}),
+            id: candidateClientId,
+            firstName: nameParts.firstName,
+            lastName: nameParts.lastName || undefined,
+            photo: candidate.photo ?? undefined,
+            phone: undefined,
+          },
+          rating: candidateRating ?? undefined,
+          ratingSource: candidateRating != null ? "level" : booking.ratingSource,
+        } satisfies ExerciseBooking;
+      });
+      return replaced ? normalizeTournamentParticipantBookings(next) : prev;
+    });
+
+    setReplacementWaitlist((prev) => {
+      const waitlistEntry: TournamentParticipantEntry = {
+        ...replaceTargetParticipant,
+        isOrganizerSlot: false,
+      };
+      const withoutSame = prev.filter((item) => {
+        const sameById = item.id === waitlistEntry.id;
+        const sameByClientId = Boolean(item.clientId && waitlistEntry.clientId && item.clientId === waitlistEntry.clientId);
+        const isSameCandidate = item.clientId === candidateClientId;
+        return !sameById && !sameByClientId && !isSameCandidate;
+      });
+      return [...withoutSame, waitlistEntry];
+    });
+
+    setReadyParticipantIds((prev) => {
+      const next = { ...prev };
+      const previousReady = prev[targetId] === true;
+      delete next[targetId];
+      if (previousReady) {
+        next[candidateClientId] = true;
+      }
+      return next;
+    });
+
+    setManualRatings((prev) => {
+      if (!prev[targetId]) return prev;
+      const next = { ...prev };
+      delete next[targetId];
+      return next;
+    });
+    setRatingSaveErrors((prev) => {
+      if (!prev[targetId]) return prev;
+      const next = { ...prev };
+      delete next[targetId];
+      return next;
+    });
+    setRatingSaveStateById((prev) => {
+      if (!prev[targetId]) return prev;
+      const next = { ...prev };
+      delete next[targetId];
+      return next;
+    });
+
+    closeReplaceParticipantPanel();
+  };
+
+  useEffect(() => {
+    if (!replaceTargetParticipant) return;
+    const query = replaceSearchQuery.trim();
+    if (query.length < 2) {
+      setReplaceSearchResults([]);
+      setReplaceSearchLoading(false);
+      setReplaceSearchError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setReplaceSearchLoading(true);
+    setReplaceSearchError(null);
+    const timeoutId = window.setTimeout(() => {
+      void apiSearchPadelPlayers(query, 8)
+        .then((result) => {
+          if (cancelled) return;
+          if (result.error) {
+            setReplaceSearchResults([]);
+            setReplaceSearchError(result.error.message || "Не удалось найти игроков Viva.");
+            return;
+          }
+          const unique = new Map<string, PadelPlayerCandidate>();
+          (result.data ?? []).forEach((item, index) => {
+            const key =
+              String(item.id || "").trim()
+              || `${String(item.phone || "").trim()}::${String(item.name || "").trim().toLowerCase()}::${index}`;
+            unique.set(key, item);
+          });
+          setReplaceSearchResults(Array.from(unique.values()));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setReplaceSearchResults([]);
+          setReplaceSearchError("Не удалось найти игроков Viva.");
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setReplaceSearchLoading(false);
+          }
+        });
+    }, 280);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [replaceSearchQuery, replaceTargetParticipant]);
+
+  useEffect(() => {
+    if (!replaceParticipantId) return;
+    if (replaceTargetParticipant) return;
+    closeReplaceParticipantPanel();
+  }, [replaceParticipantId, replaceTargetParticipant]);
+
+  useEffect(() => {
+    if (sortedParticipantIds.length === 0) return;
+    const allowedIds = new Set(sortedParticipantIds);
+    setReadyParticipantIds((prev) => {
+      let changed = false;
+      const next: Record<string, boolean> = {};
+      Object.entries(prev).forEach(([participantId, value]) => {
+        if (value !== true) return;
+        if (!allowedIds.has(participantId)) {
+          changed = true;
+          return;
+        }
+        next[participantId] = true;
+      });
+      if (!changed && Object.keys(next).length === Object.keys(prev).length) {
+        return prev;
+      }
+      return next;
+    });
+    setRatingEditModeById((prev) => {
+      let changed = false;
+      const next: Record<string, boolean> = {};
+      Object.entries(prev).forEach(([participantId, isOpen]) => {
+        if (!isOpen) return;
+        if (!allowedIds.has(participantId)) {
+          changed = true;
+          return;
+        }
+        next[participantId] = true;
+      });
+      if (!changed && Object.keys(next).length === Object.keys(prev).length) return prev;
+      return next;
+    });
+    const nextTapTimestamps: Record<string, number> = {};
+    Object.entries(ratingLastTapTsRef.current).forEach(([participantId, ts]) => {
+      if (allowedIds.has(participantId)) {
+        nextTapTimestamps[participantId] = ts;
+      }
+    });
+    ratingLastTapTsRef.current = nextTapTimestamps;
+  }, [sortedParticipantIds]);
+
+  const handleToggleParticipantReady = (participantId: string) => {
+    setReadyParticipantIds((prev) => ({
+      ...prev,
+      [participantId]: !(prev[participantId] === true),
+    }));
+  };
+
   const selectedPairPlayerIds = useMemo(
     () => new Set(pairedMexicanoPairs.flat()),
     [pairedMexicanoPairs],
@@ -1328,6 +2208,16 @@ function TournamentDetailsModal({
     ) return "Распределите всех игроков по парам.";
     return null;
   }, [pairedMexicanoPairCount, pairedMexicanoPairs, selectedType, sortedParticipants.length]);
+  const americanoFlexError = useMemo(() => {
+    if (selectedType !== "americano_flex") return null;
+    if (courtNames.length === 0) return "Укажите количество кортов.";
+    if (sortedParticipants.length < 5) return "Для флекс американо нужно минимум 5 игроков.";
+    const expectedPlayers = courtNames.length * 4 + 1;
+    if (sortedParticipants.length !== expectedPlayers) {
+      return `Для флекс американо на ${formatCourtsCountLabel(courtNames.length)} нужно ${expectedPlayers} игроков (4 × корты + 1). Сейчас: ${sortedParticipants.length}.`;
+    }
+    return null;
+  }, [courtNames.length, selectedType, sortedParticipants.length]);
 
   useEffect(() => {
     if (selectedType !== "paired_mexicano" && selectedType !== "paired_americano") return;
@@ -1369,6 +2259,8 @@ function TournamentDetailsModal({
   const selectedTypeUsesScores =
     selectedType === "americano_padelhub"
     || selectedType === "americano_classic"
+    || selectedType === "americano_flex"
+    || selectedType === "mexicano"
     || selectedType === "paired_americano"
     || selectedType === "paired_mexicano";
   const parsedTargetScoreDraft = selectedTypeUsesScores
@@ -1378,7 +2270,7 @@ function TournamentDetailsModal({
     ? parseBoundedIntegerInput(courtsCountDraft, 1, 12)
     : null;
   const canSaveTargetScore =
-    selectedTypeUsesScores && parsedTargetScoreDraft != null && parsedTargetScoreDraft !== targetScore;
+    selectedTypeUsesScores && parsedTargetScoreDraft != null;
   const canSaveCourtsCount =
     selectedType != null && parsedCourtsCountDraft != null && parsedCourtsCountDraft !== courtNames.length;
   const targetScoreNeedsConfirmation =
@@ -1388,6 +2280,11 @@ function TournamentDetailsModal({
     selectedType != null
     && (courtsCountDraft.trim() === "" || parsedCourtsCountDraft == null || parsedCourtsCountDraft !== courtNames.length);
   const settingsNeedConfirmation = targetScoreNeedsConfirmation || courtsCountNeedsConfirmation;
+  const tournamentDateTimeLine = formatTournamentDateTimeLine(tournament?.timeFrom, tournament?.timeTo);
+  const tournamentAddressLine = formatTournamentAddressLine(tournament?.studio);
+  const tournamentMapUrl = buildTournamentMapUrl(tournament?.studio);
+  const tournamentLevelRangeLabel = resolveTournamentLevelRangeLabel(tournament, historyRecord, sortedParticipants);
+  const trainerInitials = getInitialsFromName([trainer?.firstName, trainer?.lastName].filter(Boolean).join(" "));
 
   return (
     <Modal
@@ -1398,41 +2295,81 @@ function TournamentDetailsModal({
       bodyClassName="tournament-settings-modal-body"
     >
       <div className="tournaments-body tournament-settings-screen">
-        <div className="tournament-row">
-          <span>{formatTime(tournament?.timeFrom)} – {formatTime(tournament?.timeTo)}</span>
-          {tournament?.studio?.name && <span>{tournament.studio.name}</span>}
+        <div className="tournament-info-block">
+          <div className="tournament-info-line">
+            <span className="tournament-info-icon" aria-hidden="true">
+              <svg viewBox="0 0 12 12" role="presentation">
+                <path
+                  d="M3.5 1v1M8.5 1v1M2 4h8M2.5 2.5h7a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-6a.5.5 0 0 1 .5-.5z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+            <span className="tournament-info-text">{tournamentDateTimeLine}</span>
+          </div>
+          {tournamentAddressLine && (
+            <div className="tournament-info-line">
+              <span className="tournament-info-icon" aria-hidden="true">
+                <svg viewBox="0 0 12 12" role="presentation">
+                  <path
+                    d="M6 1.5a3 3 0 0 0-3 3c0 2.2 3 5.7 3 5.7s3-3.5 3-5.7a3 3 0 0 0-3-3zm0 4.2a1.2 1.2 0 1 1 0-2.4 1.2 1.2 0 0 1 0 2.4z"
+                    fill="currentColor"
+                  />
+                </svg>
+              </span>
+              <span className="tournament-info-text">{tournamentAddressLine}</span>
+              {tournamentMapUrl && (
+                <a
+                  className="tournament-info-map-link"
+                  href={tournamentMapUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  на карте
+                </a>
+              )}
+            </div>
+          )}
+          <div className="tournament-info-line">
+            <span className="tournament-info-icon" aria-hidden="true">
+              <svg viewBox="0 0 12 12" role="presentation">
+                <path d="M1.5 9.5h2V6h-2v3.5zm3.5 0h2V4.5h-2v5zm3.5 0h2V2.5h-2v7z" fill="currentColor" />
+              </svg>
+            </span>
+            <span className="tournament-info-text">{tournamentLevelRangeLabel}</span>
+          </div>
         </div>
-        {tournament?.studio?.address && (
-          <div className="tournament-address">{tournament.studio.address}</div>
-        )}
 
         {trainer && (
           <div className="tournament-section">
-            <div className="tournament-section-title">Исполнитель</div>
+            <div className="tournament-section-title">Организатор</div>
             <div className="tournament-participant tournament-trainer-card">
-              <div className="tournament-participant-avatar">
+              <div className={`tournament-participant-avatar ${trainer.photo ? "" : "no-photo"}`}>
                 {trainer.photo ? (
                   <img
                     src={trainer.photo}
                     alt={trainer.firstName}
                     onError={(e) => {
-                      e.currentTarget.style.display = "none";
+                      const target = e.currentTarget;
+                      target.style.display = "none";
+                      const parent = target.parentElement;
+                      if (parent) parent.classList.add("no-photo");
                     }}
                   />
-                ) : (
-                  <span>{getInitials({ client: { firstName: trainer.firstName, lastName: trainer.lastName } } as ExerciseBooking)}</span>
-                )}
-                <span className="tournament-participant-initials">
-                  {getInitials({ client: { firstName: trainer.firstName, lastName: trainer.lastName } } as ExerciseBooking)}
-                </span>
+                ) : null}
+                <span className="tournament-participant-initials">{trainerInitials}</span>
               </div>
               <div className="tournament-participant-info">
                 <div className="tournament-participant-name">
                   {[trainer.firstName, trainer.lastName].filter(Boolean).join(" ") || "Тренер"}
                 </div>
-                <div className="tournament-participant-spot">Исполнитель</div>
+                <div className="tournament-participant-spot">Организатор</div>
               </div>
-              <div className="tournament-participant-rating trainer">Тренер</div>
+              <div className="tournament-participant-rating trainer">Организатор</div>
             </div>
           </div>
         )}
@@ -1469,90 +2406,231 @@ function TournamentDetailsModal({
                   .join("")
                   .toUpperCase()
                   .slice(0, 2) || "U";
+                const nameParts = participant.name.trim().split(/\s+/).filter(Boolean);
+                const nameLineTop = nameParts[0] ?? participant.name;
+                const nameLineBottom = nameParts.length > 1 ? nameParts.slice(1).join(" ") : null;
                 const manualRating = manualRatings[participant.id] ?? "";
                 const savedRatingValue = parseTournamentRatingValue(participant.rating);
                 const hasSavedRating = savedRatingValue != null;
+                const ratingGradeDisplay = formatTournamentRatingGrade(savedRatingValue);
                 const manualParsedRating = parseTournamentRatingValue(manualRating);
+                const isEditingRating = ratingEditModeById[participant.id] === true;
                 const isSavingRating = ratingSaveStateById[participant.id] === "saving";
                 const canLeaveParticipant =
                   Boolean(participant.bookingId)
                   && isCurrentUserParticipant(participant);
                 const isLeavingParticipant = leavingParticipantId === participant.id;
+                const isReadyParticipant = readyParticipantIds[participant.id] === true;
+                const canReplaceParticipant = !participant.isOrganizerSlot;
+                const showReplacePanel = replaceTargetParticipant?.id === participant.id;
 
                 return (
-                  <div key={participant.id ?? idx} className="tournament-participant">
-                    <div className="tournament-participant-order">{idx + 1}</div>
-                    <div className={`tournament-participant-avatar ${participant.photo ? "" : "no-photo"}`}>
-                      {participant.photo ? (
-                        <img
-                          src={participant.photo}
-                          alt={participant.name}
-                          onError={(e) => {
-                            const target = e.currentTarget;
-                            target.style.display = "none";
-                            const parent = target.parentElement;
-                            if (parent) parent.classList.add("no-photo");
-                          }}
-                        />
-                      ) : null}
-                      <span className="tournament-participant-initials">{initials}</span>
-                    </div>
-                    <div className="tournament-participant-info">
-                      <div className="tournament-participant-name">{participant.name}</div>
-                      {participant.isOrganizerSlot && (
-                        <div className="tournament-participant-note">
-                          Тренер / организатор занимает свободный слот
-                        </div>
-                      )}
-                      {ratingSaveErrors[participant.id] && (
-                        <div className="tournament-participant-note error">
-                          {ratingSaveErrors[participant.id]}
-                        </div>
-                      )}
-                    </div>
-                    <div className="tournament-participant-actions">
-                      {hasSavedRating ? (
-                        <div className="tournament-participant-rating">
-                          {formatRating(savedRatingValue!)}
-                        </div>
-                      ) : (
-                        <div className="tournament-participant-rating-editor">
-                          <input
-                            className="tournament-participant-rating-input"
-                            type="text"
-                            inputMode="decimal"
-                            placeholder="Рейтинг"
-                            value={manualRating}
-                            onChange={(e) => handleParticipantRatingInput(participant.id, e.target.value)}
+                  <div key={participant.id ?? idx}>
+                    <div className={`tournament-participant${isReadyParticipant ? " is-ready" : ""}`}>
+                      <div className="tournament-participant-order">{idx + 1}</div>
+                      <div className={`tournament-participant-avatar ${participant.photo ? "" : "no-photo"}`}>
+                        {participant.photo ? (
+                          <img
+                            src={participant.photo}
+                            alt={participant.name}
+                            onError={(e) => {
+                              const target = e.currentTarget;
+                              target.style.display = "none";
+                              const parent = target.parentElement;
+                              if (parent) parent.classList.add("no-photo");
+                            }}
                           />
-                          {participant.clientId && manualParsedRating != null && (
+                        ) : null}
+                        <span className="tournament-participant-initials">{initials}</span>
+                      </div>
+                      <div className="tournament-participant-info">
+                        <div className="tournament-participant-name">
+                          <span>{nameLineTop}</span>
+                          {nameLineBottom && <span>{nameLineBottom}</span>}
+                        </div>
+                        {participant.isOrganizerSlot && (
+                          <div className="tournament-participant-note">
+                            Тренер / организатор занимает свободный слот
+                          </div>
+                        )}
+                        {ratingSaveErrors[participant.id] && (
+                          <div className="tournament-participant-note error">
+                            {ratingSaveErrors[participant.id]}
+                          </div>
+                        )}
+                      </div>
+                      <div className="tournament-participant-actions">
+                        <div className="tournament-participant-main-actions">
+                          {hasSavedRating && !isEditingRating ? (
                             <button
-                              className="tournament-participant-rating-save"
+                              className="tournament-participant-rating tournament-participant-rating-button"
                               type="button"
-                              onClick={() => void handleParticipantRatingSave(participant)}
-                              disabled={isSavingRating}
-                              aria-label="Сохранить рейтинг"
-                              title="Сохранить рейтинг"
+                              onClick={() => handleParticipantRatingTap(participant)}
+                              onDoubleClick={() => handleOpenParticipantRatingEdit(participant)}
+                              aria-label="Изменить рейтинг участника"
+                              title="Двойной тап для изменения рейтинга"
                             >
-                              {isSavingRating ? "…" : "✓"}
+                              {ratingGradeDisplay && (
+                                <span className="tournament-participant-rating-grade">{ratingGradeDisplay}</span>
+                              )}
+                              <span className="tournament-participant-rating-value">
+                                {formatRating(savedRatingValue, 3)}
+                              </span>
+                            </button>
+                          ) : (
+                            <div className="tournament-participant-rating-editor">
+                              <input
+                                className="tournament-participant-rating-input"
+                                type="text"
+                                inputMode="decimal"
+                                placeholder="Рейтинг"
+                                value={manualRating}
+                                onChange={(e) => handleParticipantRatingInput(participant.id, e.target.value)}
+                              />
+                              {isEditingRating && (
+                                <button
+                                  className="tournament-participant-rating-cancel"
+                                  type="button"
+                                  onClick={() => handleCloseParticipantRatingEdit(participant.id)}
+                                  disabled={isSavingRating}
+                                  aria-label="Отменить редактирование рейтинга"
+                                  title="Отменить редактирование"
+                                >
+                                  ×
+                                </button>
+                              )}
+                              <button
+                                className="tournament-participant-rating-save"
+                                type="button"
+                                onClick={async () => {
+                                  const saved = await handleParticipantRatingSave(participant);
+                                  if (saved) {
+                                    handleCloseParticipantRatingEdit(participant.id);
+                                  }
+                                }}
+                                disabled={!participant.clientId || manualParsedRating == null || isSavingRating}
+                                aria-label="Сохранить рейтинг"
+                                title="Сохранить рейтинг"
+                              >
+                                {isSavingRating ? "…" : "✓"}
+                              </button>
+                            </div>
+                          )}
+                          <button
+                            className={`tournament-participant-ready-toggle${isReadyParticipant ? " is-checked" : ""}`}
+                            type="button"
+                            aria-label={isReadyParticipant ? "Убрать готовность участника" : "Отметить готовность участника"}
+                            title={isReadyParticipant ? "Участник отмечен как готовый" : "Отметить как готовый"}
+                            onClick={() => handleToggleParticipantReady(participant.id)}
+                          >
+                            <span aria-hidden>{isReadyParticipant ? "✓" : ""}</span>
+                          </button>
+                          {canReplaceParticipant && (
+                            <button
+                              className="tournament-participant-replace"
+                              type="button"
+                              onClick={() => handleOpenReplaceParticipant(participant)}
+                              aria-label="Заменить игрока"
+                              title="Заменить игрока"
+                              disabled={replaceSubmitLoading}
+                            >
+                              <svg viewBox="0 0 24 24" role="presentation" aria-hidden="true">
+                                <path d="M6 7h9.2l-1.8-1.8 1.4-1.4L19 8l-4.2 4.2-1.4-1.4L15.2 9H6z" />
+                                <path d="M18 17H8.8l1.8 1.8-1.4 1.4L5 16l4.2-4.2 1.4 1.4L8.8 15H18z" />
+                              </svg>
                             </button>
                           )}
                         </div>
-                      )}
-                      {canLeaveParticipant && (
-                        <button
-                          className="tournament-participant-leave"
-                          type="button"
-                          onClick={() => void handleParticipantLeave(participant)}
-                          disabled={isLeavingParticipant}
-                        >
-                          {isLeavingParticipant ? "Выходим..." : "Покинуть"}
-                        </button>
-                      )}
+                        {canLeaveParticipant && (
+                          <button
+                            className="tournament-participant-leave"
+                            type="button"
+                            onClick={() => void handleParticipantLeave(participant)}
+                            disabled={isLeavingParticipant}
+                          >
+                            {isLeavingParticipant ? "Выходим..." : "Покинуть"}
+                          </button>
+                        )}
+                      </div>
                     </div>
+                    {showReplacePanel && (
+                      <div className="tournament-replace-panel">
+                        <div className="tournament-replace-panel-head">
+                          <div className="tournament-replace-panel-title">
+                            Замена игрока: {participant.name}
+                          </div>
+                          <button
+                            type="button"
+                            className="tournament-replace-panel-cancel"
+                            onClick={closeReplaceParticipantPanel}
+                          >
+                            Отмена
+                          </button>
+                        </div>
+                        <input
+                          className="tournament-replace-panel-input"
+                          type="text"
+                          placeholder="Найти игрока в Viva"
+                          value={replaceSearchQuery}
+                          onChange={(e) => setReplaceSearchQuery(e.target.value)}
+                        />
+                        {replaceSearchQuery.trim().length < 2 && (
+                          <div className="tournaments-muted">Введите минимум 2 символа для поиска.</div>
+                        )}
+                        {replaceSearchLoading && <div className="tournaments-muted">Ищем игроков...</div>}
+                        {!replaceSearchLoading && replaceSearchError && (
+                          <div className="tournament-participant-note error">{replaceSearchError}</div>
+                        )}
+                        {!replaceSearchLoading
+                          && !replaceSearchError
+                          && replaceSearchQuery.trim().length >= 2
+                          && replaceSearchResults.length === 0 && (
+                          <div className="tournaments-muted">Игроки не найдены.</div>
+                        )}
+                        {!replaceSearchLoading && replaceSearchResults.length > 0 && (
+                          <div className="tournament-replace-results">
+                            {replaceSearchResults.map((candidate, index) => {
+                              const candidateNumeric = parseTournamentRatingValue(candidate.ratingNumeric ?? candidate.rating ?? null);
+                              return (
+                                <button
+                                  key={`${candidate.id ?? "candidate"}-${index}`}
+                                  type="button"
+                                  className="tournament-replace-result"
+                                  onClick={() => void handleReplaceParticipantWithCandidate(candidate)}
+                                  disabled={replaceSubmitLoading}
+                                >
+                                  <span className="tournament-replace-result-name">{candidate.name || "Игрок"}</span>
+                                  <span className="tournament-replace-result-rating">
+                                    {candidateNumeric != null ? formatRating(candidateNumeric, 3) : "Без рейтинга"}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
+            </div>
+          )}
+          {!loading && !error && replacementWaitlist.length > 0 && (
+            <div className="tournament-waitlist">
+              <div className="tournament-waitlist-title">Лист ожидания</div>
+              <div className="tournament-waitlist-list">
+                {replacementWaitlist.map((participant, index) => {
+                  const waitlistRating = parseTournamentRatingValue(participant.rating);
+                  return (
+                    <div key={`${participant.id}-${index}`} className="tournament-waitlist-item">
+                      <span className="tournament-waitlist-name">{participant.name}</span>
+                      <span className="tournament-waitlist-rating">
+                        {waitlistRating != null ? formatRating(waitlistRating, 3) : "Без рейтинга"}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
           {!loading && !error && shouldAutoIncludeOrganizerSlot && (
@@ -1582,6 +2660,7 @@ function TournamentDetailsModal({
                   setSelectedType(null);
                   setPairedMexicanoPairs([]);
                   setSaveState("idle");
+                  setOpenTournamentTypeHintId(null);
                 }}
               >
                 {type.label}
@@ -1594,19 +2673,41 @@ function TournamentDetailsModal({
           <div className="tournament-section">
             <div className="tournament-section-title">Тип {selectedFamily === "americano" ? "американо" : "мексикано"}</div>
             <div className="tournament-type-list">
-              {TOURNAMENT_SUBTYPES[selectedFamily].map((type) => (
-                <button
-                  key={type.id}
-                  className={`tournament-type-option ${selectedType === type.id ? "active" : ""}`}
-                  type="button"
-                  onClick={() => setSelectedType(type.id)}
-                >
-                  <span>{type.label}</span>
-                  {type.description && (
-                    <span className="tournament-type-option-hint">{type.description}</span>
-                  )}
-                </button>
-              ))}
+              {TOURNAMENT_SUBTYPES[selectedFamily].map((type) => {
+                const isHintOpen = openTournamentTypeHintId === type.id;
+                return (
+                  <div key={type.id} className="tournament-type-option-row">
+                    <button
+                      className={`tournament-type-option ${selectedType === type.id ? "active" : ""}`}
+                      type="button"
+                      onClick={() => {
+                        setSelectedType(type.id);
+                        setOpenTournamentTypeHintId(null);
+                      }}
+                    >
+                      <span>{type.label}</span>
+                    </button>
+                    {type.description && (
+                      <button
+                        type="button"
+                        className={`tournament-type-help-trigger${isHintOpen ? " active" : ""}`}
+                        aria-label={`Описание типа ${type.label}`}
+                        title={`Описание типа ${type.label}`}
+                        onClick={() => {
+                          setOpenTournamentTypeHintId((prev) => (prev === type.id ? null : type.id));
+                        }}
+                      >
+                        ?
+                      </button>
+                    )}
+                    {type.description && isHintOpen && (
+                      <div className="tournament-type-help-popover" role="note">
+                        {type.description}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -1615,7 +2716,7 @@ function TournamentDetailsModal({
           <div className="tournament-section">
             {selectedType === "mexicano" && (
               <div className="tournament-settings-hint">
-                Классическое мексикано пока оставлено без автоматической генерации сетки.
+                Классическое Mexicano: стартовый раунд и далее динамическая сетка по текущей таблице (1+3 vs 2+4).
               </div>
             )}
             {selectedTypeUsesScores && (
@@ -1685,6 +2786,12 @@ function TournamentDetailsModal({
                 ))}
               </div>
             )}
+            {selectedType === "americano_flex" && (
+              <div className={americanoFlexError ? "tournaments-error" : "tournament-settings-hint"}>
+                {americanoFlexError
+                  ?? `Флекс американо: ${formatCourtsCountLabel(courtNames.length)} — ${courtNames.length * 4 + 1} игроков (по схеме 4 × корты + 1).`}
+              </div>
+            )}
 
             {(selectedType === "paired_mexicano" || selectedType === "paired_americano") && (
               <div className="tournament-pair-builder">
@@ -1752,7 +2859,7 @@ function TournamentDetailsModal({
                         <span className="tournament-pair-player-name">{participant.name}</span>
                         {ratingValue != null && (
                           <span className="tournament-pair-player-rating">
-                            {formatRating(ratingValue)}
+                            {formatRating(ratingValue, 3)}
                           </span>
                         )}
                       </button>
@@ -1786,6 +2893,7 @@ function TournamentDetailsModal({
                   || courtNames.length === 0
                   || settingsNeedConfirmation
                   || Boolean(pairedMexicanoPairError)
+                  || Boolean(americanoFlexError)
                 }
               >
                 {saveState === "loading"
@@ -1868,6 +2976,8 @@ function TournamentManagerModal({
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [savingMatchId, setSavingMatchId] = useState<string | null>(null);
+  const [finishingTournament, setFinishingTournament] = useState(false);
+  const [finishTournamentError, setFinishTournamentError] = useState<string | null>(null);
   const [matchSaveErrors, setMatchSaveErrors] = useState<Record<string, string>>({});
   const [serverTotals, setServerTotals] = useState<AmericanoResultsResponse["totals"] | null>(null);
   const [serverLogs, setServerLogs] = useState<AmericanoResultsResponse["playerLogs"] | null>(null);
@@ -1887,21 +2997,78 @@ function TournamentManagerModal({
       rating: p.rating ?? null,
     }));
   }, [data]);
+  const mexicanoOptions = useMemo(
+    () => (data?.tournamentType === "mexicano" ? parseMexicanoOptions(data.params) : null),
+    [data?.params, data?.tournamentType],
+  );
+  const mexicanoMinRoundsBeforeFinish = useMemo(
+    () => (
+      data?.tournamentType === "mexicano"
+        ? parseMexicanoMinRoundsBeforeFinish(data.params, mexicanoOptions?.totalRounds)
+        : null
+    ),
+    [data?.params, data?.tournamentType, mexicanoOptions?.totalRounds],
+  );
+  const tournamentFinished = useMemo(
+    () => isTournamentMarkedFinished(data?.params, null),
+    [data?.params],
+  );
 
   useEffect(() => {
     if (!data) return;
-    setRounds(hydrateAmericanoRounds(
+    const hydratedRounds = hydrateAmericanoRounds(
       data.rounds,
       normalizedParticipants,
       data.courts,
-      { mode: data.tournamentType === "americano_classic" ? "classic" : "padelhub" },
-    ));
+      { mode: resolveAmericanoScheduleMode(data.tournamentType) },
+    );
+    let nextRounds = hydratedRounds;
+    if (data.tournamentType === "mexicano" && !tournamentFinished) {
+      const partiallySavedRound = hydratedRounds.find((round) => {
+        const savedMatches = round.matches.reduce((sum, match) => sum + (isTournamentMatchSaved(match) ? 1 : 0), 0);
+        return savedMatches > 0 && savedMatches < round.matches.length;
+      });
+
+      if (partiallySavedRound) {
+        nextRounds = rebuildMexicanoClassicFutureRounds(
+          normalizedParticipants,
+          data.courts,
+          hydratedRounds,
+          partiallySavedRound.index,
+          mexicanoOptions ?? undefined,
+        );
+      } else {
+        const completedRounds = hydratedRounds.filter((round) => (
+          round.matches.length > 0 && round.matches.every((match) => isTournamentMatchSaved(match))
+        ));
+        if (completedRounds.length > 0) {
+          const lastCompletedRound = completedRounds[completedRounds.length - 1];
+          nextRounds = rebuildMexicanoClassicFutureRounds(
+            normalizedParticipants,
+            data.courts,
+            hydratedRounds,
+            lastCompletedRound.index,
+            mexicanoOptions ?? undefined,
+          );
+        } else {
+          nextRounds = appendMexicanoClassicRoundIfReady(
+            normalizedParticipants,
+            data.courts,
+            hydratedRounds,
+            mexicanoOptions ?? undefined,
+          );
+        }
+      }
+    }
+    setRounds(nextRounds);
     setActiveTab("tournament");
     setExpertMode(false);
     setServerTotals(initialTotals);
     setServerLogs(initialPlayerLogs);
     setMatchSaveErrors({});
-  }, [data, normalizedParticipants, initialTotals, initialPlayerLogs]);
+    setFinishingTournament(false);
+    setFinishTournamentError(null);
+  }, [data, normalizedParticipants, initialTotals, initialPlayerLogs, mexicanoOptions, tournamentFinished]);
 
   useEffect(() => {
     if (activeTab !== "tournament") return;
@@ -1966,6 +3133,13 @@ function TournamentManagerModal({
 
   const handleMatchSave = (roundId: string, matchId: string) => {
     if (!data) return;
+    if (tournamentFinished) {
+      setMatchSaveErrors((prev) => ({
+        ...prev,
+        [matchId]: "Турнир завершен. Изменение счетов недоступно.",
+      }));
+      return;
+    }
     const round = rounds.find((r) => r.id === roundId);
     const persistedRoundBeforeSave = (data.rounds ?? []).find((item) => item.id === roundId);
     const wasRoundPersistedCompleteBeforeSave =
@@ -1984,17 +3158,48 @@ function TournamentManagerModal({
       return;
     }
 
-    const results = [
-      {
-        roundId,
-        matchId,
-        score1: match.score1 as number,
-        score2: match.score2 as number,
-        court: match.court,
-        pair1: match.pair1.map((p) => p.id),
-        pair2: match.pair2.map((p) => p.id),
-      },
-    ];
+    const shouldSeedServerRoundLayout =
+      data.tournamentType === "mexicano"
+      && (
+        !persistedRoundBeforeSave
+        || !Array.isArray(persistedRoundBeforeSave.matches)
+        || persistedRoundBeforeSave.matches.length < round.matches.length
+      );
+
+    const results = shouldSeedServerRoundLayout
+      ? round.matches.map((roundMatch) => {
+          const shouldPersistScore = roundMatch.id === matchId || roundMatch.saved;
+          const payload: {
+            roundId: string;
+            matchId: string;
+            court: string;
+            courtIndex: number;
+            pair1: string[];
+            pair2: string[];
+            score1?: number;
+            score2?: number;
+          } = {
+            roundId,
+            matchId: roundMatch.id,
+            court: roundMatch.court,
+            courtIndex: roundMatch.courtIndex,
+            pair1: roundMatch.pair1.map((p) => p.id),
+            pair2: roundMatch.pair2.map((p) => p.id),
+          };
+          if (shouldPersistScore && roundMatch.score1 != null && roundMatch.score2 != null) {
+            payload.score1 = roundMatch.score1;
+            payload.score2 = roundMatch.score2;
+          }
+          return payload;
+        })
+      : [
+          {
+            roundId,
+            matchId,
+            score1: match.score1 as number,
+            score2: match.score2 as number,
+          },
+        ];
 
     setSavingMatchId(matchId);
     setMatchSaveErrors((prev) => {
@@ -2022,20 +3227,38 @@ function TournamentManagerModal({
               res.data.rounds,
               normalizedParticipants,
               data.courts,
-              { mode: data.tournamentType === "americano_classic" ? "classic" : "padelhub" },
+              { mode: resolveAmericanoScheduleMode(data.tournamentType) },
             ),
           );
-          const persistedRound = nextRounds.find((item) => item.id === roundId) ?? null;
+          const nextRoundsWithMexicano = data.tournamentType === "mexicano" && !tournamentFinished
+            ? appendMexicanoClassicRoundIfReady(
+                normalizedParticipants,
+                data.courts,
+                nextRounds,
+                mexicanoOptions ?? undefined,
+              )
+            : nextRounds;
+          const persistedRound = nextRoundsWithMexicano.find((item) => item.id === roundId) ?? null;
+          const roundsAfterMexicanoRebuild =
+            data.tournamentType === "mexicano" && !tournamentFinished && persistedRound
+              ? rebuildMexicanoClassicFutureRounds(
+                  normalizedParticipants,
+                  data.courts,
+                  nextRoundsWithMexicano,
+                  persistedRound.index,
+                  mexicanoOptions ?? undefined,
+                )
+              : nextRoundsWithMexicano;
           const shouldAdvanceRound =
             !wasRoundPersistedCompleteBeforeSave && Boolean(persistedRound?.saved);
           const {
             rounds: nextRoundsWithCollapse,
             nextMatch,
           } = shouldAdvanceRound
-            ? navigateTournamentAfterMatchSave(nextRounds, roundId, matchId)
+            ? navigateTournamentAfterMatchSave(roundsAfterMexicanoRebuild, roundId, matchId)
             : {
-                rounds: nextRounds,
-                nextMatch: findNextIncompleteTournamentMatch(nextRounds, roundId, matchId),
+                rounds: roundsAfterMexicanoRebuild,
+                nextMatch: findNextIncompleteTournamentMatch(roundsAfterMexicanoRebuild, roundId, matchId),
               };
           const nextRoundsWithNavigation = nextMatch
             ? nextRoundsWithCollapse.map((round) => (
@@ -2058,11 +3281,16 @@ function TournamentManagerModal({
           setRounds(nextRoundsWithNavigation);
           const nextTotals = res.data.totals ?? serverTotals ?? null;
           const nextPlayerLogs = res.data.playerLogs ?? serverLogs ?? null;
+          const nextParams =
+            res.data.params && typeof res.data.params === "object"
+              ? res.data.params
+              : data.params;
           if (res.data.totals) setServerTotals(res.data.totals);
           if (res.data.playerLogs) setServerLogs(res.data.playerLogs);
           onDataChange?.(
             {
               ...data,
+              params: nextParams,
               rounds: serializeAmericanoRounds(nextRoundsWithNavigation),
             },
             {
@@ -2086,9 +3314,83 @@ function TournamentManagerModal({
       .finally(() => setSavingMatchId(null));
   };
 
+  const handleFinishTournament = async () => {
+    if (!data || finishingTournament || tournamentFinished || !canFinishTournament) return;
+
+    setFinishingTournament(true);
+    setFinishTournamentError(null);
+
+    const finishedAt = new Date().toISOString();
+    const finishParams: Record<string, unknown> = {
+      ...(data.params && typeof data.params === "object" ? data.params : {}),
+      status: "completed",
+      finished: true,
+      manualFinish: true,
+      finishedAt,
+      completedAt: finishedAt,
+    };
+
+    try {
+      const res = await apiUpdateAmericanoResults({
+        tournamentId: data.tournamentId,
+        results: [],
+        params: finishParams,
+      });
+
+      if (!res.data) {
+        setFinishTournamentError(res.error?.message || "Не удалось завершить турнир");
+        return;
+      }
+
+      const nextTotals = res.data.totals ?? serverTotals ?? null;
+      const nextPlayerLogs = res.data.playerLogs ?? serverLogs ?? null;
+      const nextParams =
+        res.data.params && typeof res.data.params === "object"
+          ? res.data.params
+          : finishParams;
+      const nextRounds = Array.isArray(res.data.rounds)
+        ? hydrateAmericanoRounds(
+            res.data.rounds,
+            normalizedParticipants,
+            data.courts,
+            { mode: resolveAmericanoScheduleMode(data.tournamentType) },
+          )
+        : rounds;
+
+      setRounds(nextRounds);
+      if (res.data.totals) setServerTotals(res.data.totals);
+      if (res.data.playerLogs) setServerLogs(res.data.playerLogs);
+
+      onDataChange?.(
+        {
+          ...data,
+          params: nextParams,
+          rounds: serializeAmericanoRounds(nextRounds),
+        },
+        {
+          totals: nextTotals,
+          playerLogs: nextPlayerLogs,
+        },
+      );
+
+      onClose();
+    } catch {
+      setFinishTournamentError("Не удалось завершить турнир");
+    } finally {
+      setFinishingTournament(false);
+    }
+  };
+
   const standingsSnapshot = useMemo(
-    () => buildAmericanoStandings(normalizedParticipants, rounds, serverTotals),
-    [normalizedParticipants, rounds, serverTotals],
+    () => buildAmericanoStandings(
+      normalizedParticipants,
+      rounds,
+      serverTotals,
+      {
+        byePolicyMode: data?.tournamentType === "mexicano" ? "zero_points" : "round_average_points",
+      },
+    ),
+    [data?.tournamentType, normalizedParticipants, rounds, serverTotals],
   );
 
   const tableRows = standingsSnapshot.rows;
@@ -2105,10 +3407,59 @@ function TournamentManagerModal({
     () => rounds.every((round) => round.matches.every((match) => !match.saved)),
     [rounds],
   );
-  const canFinishTournament =
-    standingsSnapshot.totalMatches > 0
-    && standingsSnapshot.completedMatches === standingsSnapshot.totalMatches
-    && standingsSnapshot.completedRounds === standingsSnapshot.totalRounds;
+  const hasPartiallyCompletedRound = useMemo(
+    () => rounds.some((round) => {
+      const savedMatches = round.matches.reduce((sum, match) => sum + (isTournamentMatchSaved(match) ? 1 : 0), 0);
+      return savedMatches > 0 && savedMatches < round.matches.length;
+    }),
+    [rounds],
+  );
+  const canFinishTournament = useMemo(() => {
+    if (tournamentFinished) return false;
+    if (standingsSnapshot.totalMatches <= 0) return false;
+    if (data?.tournamentType !== "mexicano") {
+      return (
+        standingsSnapshot.completedMatches === standingsSnapshot.totalMatches
+        && standingsSnapshot.completedRounds === standingsSnapshot.totalRounds
+      );
+    }
+
+    const minRounds = mexicanoMinRoundsBeforeFinish ?? MEXICANO_MIN_ROUNDS_BEFORE_FINISH;
+    return standingsSnapshot.completedRounds >= minRounds && !hasPartiallyCompletedRound;
+  }, [
+    data?.tournamentType,
+    hasPartiallyCompletedRound,
+    mexicanoMinRoundsBeforeFinish,
+    standingsSnapshot.completedMatches,
+    standingsSnapshot.completedRounds,
+    standingsSnapshot.totalMatches,
+    standingsSnapshot.totalRounds,
+    tournamentFinished,
+  ]);
+  const finishTournamentNote = useMemo(() => {
+    if (tournamentFinished) {
+      return "Турнир завершен вручную.";
+    }
+    if (canFinishTournament) return null;
+    if (data?.tournamentType !== "mexicano") {
+      return "Кнопка станет активной после сохранения всех результатов.";
+    }
+    const minRounds = mexicanoMinRoundsBeforeFinish ?? MEXICANO_MIN_ROUNDS_BEFORE_FINISH;
+    if (hasPartiallyCompletedRound) {
+      return "Завершите текущий раунд: в раунде не должно быть частично сохраненных матчей.";
+    }
+    if (standingsSnapshot.completedRounds < minRounds) {
+      return `Кнопка станет активной после ${minRounds} завершенных раундов.`;
+    }
+    return null;
+  }, [
+    canFinishTournament,
+    data?.tournamentType,
+    hasPartiallyCompletedRound,
+    mexicanoMinRoundsBeforeFinish,
+    standingsSnapshot.completedRounds,
+    tournamentFinished,
+  ]);
 
   const splitName = (name: string) => {
     const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -2462,7 +3813,7 @@ function TournamentManagerModal({
                             className="tournament-round-save"
                             type="button"
                             onClick={() => handleMatchSave(round.id, match.id)}
-                            disabled={savingMatchId === match.id}
+                            disabled={savingMatchId === match.id || tournamentFinished}
                           >
                             {savingMatchId === match.id ? "Сохранение..." : "Сохранить"}
                           </button>
@@ -2478,18 +3829,25 @@ function TournamentManagerModal({
               ))}
             </div>
             <div className="tournament-manager-footer">
-              {!canFinishTournament && (
+              {finishTournamentNote && (
                 <div className="tournament-manager-footer-note">
-                  Кнопка станет активной после сохранения всех результатов.
+                  {finishTournamentNote}
                 </div>
+              )}
+              {finishTournamentError && (
+                <div className="tournaments-error">{finishTournamentError}</div>
               )}
               <button
                 type="button"
                 className="section-cta tournament-manager-finish"
-                onClick={onClose}
-                disabled={!canFinishTournament}
+                onClick={() => void handleFinishTournament()}
+                disabled={!canFinishTournament || finishingTournament || tournamentFinished}
               >
-                Завершить турнир
+                {finishingTournament
+                  ? "Завершение..."
+                  : tournamentFinished
+                    ? "Турнир завершен"
+                    : "Завершить турнир"}
               </button>
             </div>
           </>
@@ -2766,6 +4124,7 @@ function TournamentManagerModal({
 export default function TournamentsPage({
   onBack,
   initialOpenTournamentId = null,
+  initialOpenTournamentSlug = null,
   initialOpenDate = null,
 }: TournamentsPageProps) {
   const [loading, setLoading] = useState(false);
@@ -2779,9 +4138,18 @@ export default function TournamentsPage({
   const [managerPlayerLogs, setManagerPlayerLogs] = useState<AmericanoResultsResponse["playerLogs"] | null>(null);
   const [historyById, setHistoryById] = useState<Record<string, TournamentHistoryRecord | null>>({});
   const [openingTournamentId, setOpeningTournamentId] = useState<string | null>(null);
+  const [autoOpenNotice, setAutoOpenNotice] = useState<string | null>(null);
+  const [deepLinkTournament, setDeepLinkTournament] = useState<Exercise | null>(null);
+  const [deepLinkLookupPending, setDeepLinkLookupPending] = useState(false);
   const [dateIndex, setDateIndex] = useState(TODAY_DATE_INDEX);
   const autoOpenTournamentKeyRef = useRef<string | null>(null);
+  const deepLinkLookupKeyRef = useRef<string | null>(null);
   const activeDateRef = useRef<HTMLDivElement | null>(null);
+  const locationTournamentSlug = useMemo(() => readTournamentSlugFromLocation(), []);
+  const targetTournamentSlug = useMemo(
+    () => normalizeTournamentSlug(initialOpenTournamentSlug) ?? locationTournamentSlug,
+    [initialOpenTournamentSlug, locationTournamentSlug],
+  );
 
   const dates = useMemo(() => {
     const base = new Date();
@@ -2933,6 +4301,7 @@ export default function TournamentsPage({
   const handleTournamentOpen = async (tournament: Exercise) => {
     const tournamentId = String(tournament.id);
     if (openingTournamentId) return;
+    setAutoOpenNotice(null);
     setOpeningTournamentId(tournamentId);
 
     try {
@@ -2974,25 +4343,130 @@ export default function TournamentsPage({
 
   useEffect(() => {
     const targetTournamentId = String(initialOpenTournamentId || "").trim();
-    if (!targetTournamentId || loading || profileLoading || openingTournamentId) return;
+    const targetSlug = targetTournamentSlug;
+    const targetKey = targetTournamentId || targetSlug || "";
+    if (!targetKey || loading || profileLoading || openingTournamentId || deepLinkLookupPending) return;
 
     const targetTournament =
-      tournaments.find((item) => String(item.id) === targetTournamentId)
-      ?? items.find((item) => String(item.id) === targetTournamentId)
+      findTournamentByDeepLink(tournaments, {
+        tournamentId: targetTournamentId,
+        tournamentSlug: targetSlug,
+      })
+      ?? findTournamentByDeepLink(items, {
+        tournamentId: targetTournamentId,
+        tournamentSlug: targetSlug,
+      })
+      ?? findTournamentByDeepLink(deepLinkTournament ? [deepLinkTournament] : [], {
+        tournamentId: targetTournamentId,
+        tournamentSlug: targetSlug,
+      })
       ?? null;
-    if (!targetTournament) return;
 
-    const autoOpenKey = `${targetTournamentId}:${selectedDateStr}`;
+    if (targetTournament) return;
+    if (deepLinkLookupKeyRef.current === targetKey) return;
+    deepLinkLookupKeyRef.current = targetKey;
+
+    let alive = true;
+    setDeepLinkLookupPending(true);
+    setAutoOpenNotice("Ищем турнир по ссылке...");
+
+    void (async () => {
+      try {
+        const today = new Date();
+        const dateFrom = formatDate(shiftDateByDays(today, -DEEP_LINK_LOOKUP_DAYS_BEFORE_TODAY));
+        const dateTo = formatDate(shiftDateByDays(today, DEEP_LINK_LOOKUP_DAYS_AFTER_TODAY));
+        const lookupResult = await apiFetchExercisesByPeriod(dateFrom, dateTo, { size: 5000 });
+        if (!alive) return;
+
+        const resolvedTournament = findTournamentByDeepLink(lookupResult.data ?? [], {
+          tournamentId: targetTournamentId,
+          tournamentSlug: targetSlug,
+        });
+        if (!resolvedTournament) {
+          setDeepLinkTournament(null);
+          setAutoOpenNotice("Турнир не найден");
+          return;
+        }
+
+        setDeepLinkTournament(resolvedTournament);
+        setAutoOpenNotice(null);
+
+        const tournamentDateKey = getExerciseDateKey(resolvedTournament);
+        if (!tournamentDateKey) return;
+        const nextIndex = dates.findIndex((date) => formatDate(date) === tournamentDateKey);
+        if (nextIndex >= 0) {
+          setDateIndex(nextIndex);
+        }
+      } catch {
+        if (!alive) return;
+        setAutoOpenNotice("Не удалось открыть турнир по ссылке");
+      } finally {
+        if (alive) setDeepLinkLookupPending(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [
+    dates,
+    deepLinkLookupPending,
+    deepLinkTournament,
+    initialOpenTournamentId,
+    items,
+    loading,
+    openingTournamentId,
+    profileLoading,
+    targetTournamentSlug,
+    tournaments,
+  ]);
+
+  useEffect(() => {
+    const targetTournamentId = String(initialOpenTournamentId || "").trim();
+    const targetSlug = targetTournamentSlug;
+    if ((!targetTournamentId && !targetSlug) || loading || profileLoading || openingTournamentId) return;
+
+    const targetTournament =
+      findTournamentByDeepLink(tournaments, {
+        tournamentId: targetTournamentId,
+        tournamentSlug: targetSlug,
+      })
+      ?? findTournamentByDeepLink(items, {
+        tournamentId: targetTournamentId,
+        tournamentSlug: targetSlug,
+      })
+      ?? findTournamentByDeepLink(deepLinkTournament ? [deepLinkTournament] : [], {
+        tournamentId: targetTournamentId,
+        tournamentSlug: targetSlug,
+      })
+      ?? null;
+    const targetKey = targetTournamentId || targetSlug || "";
+    const autoOpenKey = `${targetKey}:${selectedDateStr}`;
+
     if (autoOpenTournamentKeyRef.current === autoOpenKey) return;
     autoOpenTournamentKeyRef.current = autoOpenKey;
+
+    if (!targetTournament) {
+      if (deepLinkLookupPending) return;
+      setAutoOpenNotice("Турнир не найден");
+      return;
+    }
+
+    if (deepLinkTournament && String(deepLinkTournament.id) === String(targetTournament.id)) {
+      setDeepLinkTournament(null);
+    }
+    setAutoOpenNotice(null);
     void handleTournamentOpen(targetTournament);
   }, [
+    deepLinkLookupPending,
+    deepLinkTournament,
     initialOpenTournamentId,
     items,
     loading,
     openingTournamentId,
     profileLoading,
     selectedDateStr,
+    targetTournamentSlug,
     tournaments,
   ]);
 
@@ -3097,6 +4571,9 @@ export default function TournamentsPage({
 
           {(loading || profileLoading) && <div className="tournaments-muted">Загрузка...</div>}
           {!loading && error && <div className="tournaments-error">{error}</div>}
+          {!loading && !error && autoOpenNotice && (
+            <div className="tournaments-muted">{autoOpenNotice}</div>
+          )}
           {!loading && !profileLoading && !error && visibleTournaments.length === 0 && (
             <div className="tournaments-muted">На выбранную дату турниров нет</div>
           )}

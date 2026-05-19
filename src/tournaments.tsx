@@ -26,9 +26,32 @@ mountDevReleaseBadge({ bundleFileNames: ["tournaments.js", "tournaments-dev.js"]
 installGlobalErrorTracking();
 trackAnalyticsEvent("widget_bundle_loaded", { entry: "tournaments" });
 
+function firstNonEmpty(...values: Array<string | null | undefined>) {
+  return values.map((value) => String(value || "").trim()).find(Boolean) ?? null;
+}
+
+function readTournamentsDataFromLocation(): TournamentsMountData {
+  if (typeof window === "undefined") return {};
+
+  const params = new URLSearchParams(window.location.search);
+  return {
+    tournamentId: firstNonEmpty(
+      params.get("tournamentId"),
+      params.get("id"),
+      params.get("exerciseId"),
+    ),
+    tournamentSlug: firstNonEmpty(
+      params.get("slug"),
+      params.get("tournamentSlug"),
+    ),
+    date: firstNonEmpty(params.get("date")),
+  };
+}
+
 function TournamentsContent({ data, onClose }: { data?: TournamentsMountData; onClose?: () => void }) {
   const { isAuthenticated } = useAuth();
   const [ready, setReady] = useState(false);
+  const locationData = readTournamentsDataFromLocation();
 
   useEffect(() => {
     setReady(true);
@@ -45,8 +68,9 @@ function TournamentsContent({ data, onClose }: { data?: TournamentsMountData; on
   return (
     <TournamentsPage
       onBack={() => onClose?.()}
-      initialOpenTournamentId={data?.tournamentId ?? null}
-      initialOpenDate={data?.date ?? null}
+      initialOpenTournamentId={data?.tournamentId ?? locationData.tournamentId ?? null}
+      initialOpenTournamentSlug={data?.tournamentSlug ?? locationData.tournamentSlug ?? null}
+      initialOpenDate={data?.date ?? locationData.date ?? null}
     />
   );
 }

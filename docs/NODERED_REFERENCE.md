@@ -99,6 +99,11 @@ Node-RED — визуальный инструмент автоматизаци�
 - `GET /api/support/analytics/daily` — дневная аналитика
 - `GET /api/support/outbox/pull?connector=MAX_BOT` — очередь для MAX
 
+### Push (FCM)
+- `POST /lk/push/register` — зарегистрировать/обновить device token
+- `POST /lk/push/unregister` — деактивировать token при logout
+- `POST /lk/push/admin/send` — отправить push из ЦУП по токену/фильтрам
+
 ---
 
 ## MAX-бот — схема работы
