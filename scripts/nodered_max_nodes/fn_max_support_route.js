@@ -84,6 +84,19 @@ function buildStationAttachment() {
   ];
 }
 
+function resolveEventType(update) {
+  if (update.command === "/start") {
+    return "START";
+  }
+  if (update.messageKind === "contact" && update.contact?.phone) {
+    return "CONTACT_SHARED";
+  }
+  if (update.messageKind === "station" && update.station) {
+    return "STATION_SELECTED";
+  }
+  return "MESSAGE";
+}
+
 const update = isObj(msg.maxUpdate) ? msg.maxUpdate : null;
 if (!update) {
   return [null, null, msg];
@@ -94,34 +107,65 @@ const client = isObj(lookupPayload.client) ? lookupPayload.client : null;
 const chatId = toStr(update.recipient?.chatId);
 const senderUserId = toStr(update.sender?.userId);
 const senderName = toStr(update.sender?.name) || "Клиент";
-const authVerified = Boolean(client && client.authStatus === "VERIFIED") || Boolean(update.contact?.phone);
-const currentStationId = toStr(client?.currentStationId) || null;
-const currentStationName = toStr(client?.currentStationName) || null;
+const authStatus = toStr(client?.authStatus)?.toUpperCase() || null;
+const authVerified = ["VERIFIED", "AUTHORIZED"].includes(authStatus || "") || Boolean(update.contact?.phone);
+const currentStationId = toStr(client?.currentStationId || client?.lastStationId) || null;
+const currentStationName = toStr(client?.currentStationName || client?.lastStationName) || null;
 const selectedStationId = update.station?.id || null;
 const selectedStationName = update.station?.name || null;
+const routeStationId = selectedStationId || currentStationId;
+const routeStationName = selectedStationName || currentStationName || routeStationId;
+const eventType = resolveEventType(update);
 
 const event = {
+  channel: "MAX",
   connector: "MAX_BOT",
+  provider: "MAX",
+  sourceChannel: "MAX",
+  sourceConnector: "MAX_BOT",
   externalUserId: senderUserId,
   externalChatId: chatId,
   externalMessageId: update.messageId || null,
   displayName: senderName,
+  senderName,
+  senderId: senderUserId,
+  channelUserId: senderUserId,
+  userId: senderUserId,
+  chatId,
   username: update.sender?.username || null,
   phone: update.contact?.phone || null,
+  primaryPhone: update.contact?.phone || null,
   text: update.text || null,
   direction: "INBOUND",
-  stationId: currentStationId,
-  stationName: currentStationName,
-  selectedStationId: selectedStationId,
-  selectedStationName: selectedStationName,
+  authorType: "CLIENT",
+  eventType,
+  stationId: routeStationId,
+  stationName: routeStationName,
+  currentStationId,
+  currentStationName,
+  selectedStationId,
+  selectedStationName,
+  routeStationId,
+  routeStationName,
   subject: senderName,
   kind: update.messageKind === "contact"
     ? "CONTACT"
     : update.messageKind === "station"
       ? "STATION_SELECTION"
-      : update.messageKind === "command"
-        ? "COMMAND"
-        : "TEXT",
+        : update.messageKind === "command"
+          ? "COMMAND"
+          : "TEXT",
+  attachments: Array.isArray(update.attachments) ? update.attachments : [],
+  metadata: {
+    provider: "max",
+    sourceConnector: "MAX_BOT",
+    command: update.command || null,
+    rawMessageKind: update.messageKind,
+    currentStationId,
+    currentStationName,
+    selectedStationId,
+    selectedStationName,
+  },
   meta: {
     provider: "max",
     command: update.command || null,
@@ -175,7 +219,7 @@ if (update.command === "/start") {
     "Подключить администратора мы можем только для авторизованных пользователей. Поделитесь номером телефона, и мы продолжим диалог.",
     buildContactRequestAttachment(),
   ));
-} else if (!currentStationId && !selectedStationId) {
+} else if (!routeStationId) {
   outbound.push(buildMessage(
     chatId,
     "Номер подтвержден, но станция еще не выбрана. Пожалуйста, выберите станцию.",

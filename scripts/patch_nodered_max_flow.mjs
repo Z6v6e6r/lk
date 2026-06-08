@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const workspaceRoot = process.cwd();
-const outPath = path.resolve(workspaceRoot, 'lk_max_webhook_nodes_import.json');
+const outPath = path.resolve(workspaceRoot, 'node-red/lk_max_webhook_nodes_import.json');
 const fnDir = path.resolve(workspaceRoot, 'scripts/nodered_max_nodes');
 const tabId = 'f9f8d8f2a833ab13';
 const botConfigId = '55b05444842e7b84';

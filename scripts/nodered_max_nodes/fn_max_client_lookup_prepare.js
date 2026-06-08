@@ -35,7 +35,11 @@ const addQuery = (key, value) => {
   queryParts.push(`${encodeURIComponent(key)}=${encodeURIComponent(normalized)}`);
 };
 
+addQuery("channel", "MAX");
 addQuery("connector", "MAX_BOT");
+addQuery("channelUserId", update.sender?.userId);
+addQuery("userId", update.sender?.userId);
+addQuery("chatId", update.recipient?.chatId);
 addQuery("externalUserId", update.sender?.userId);
 addQuery("externalChatId", update.recipient?.chatId);
 addQuery("phone", update.contact?.phone);
