@@ -9,6 +9,8 @@ import type {
   PadelGamePlayer,
   PadelGameRecord,
   PadelGameRecordPayload,
+  PadelGameResultActionResponse,
+  PadelGameResultSessionResponse,
   PadelSplitPaymentPromoConfig,
   Subscription,
   Studio,
@@ -18,9 +20,13 @@ import {
   apiCheckMasterServicePromoCode,
   apiFetchMasterServicePromoDiscounts,
   apiFetchBookings,
+  apiFetchExerciseById,
   apiFetchMasterServiceGameModes,
   apiCreatePadelGameRecord,
   apiCreatePadelSplitGamePayment,
+  apiCreatePadelSplitParticipantPayment,
+  apiCancelPadelSplitParticipantBookings,
+  apiCleanupPadelGameByOrganizer,
   apiFetchSubscriptions,
   apiFetchPadelChatsByPhone,
   apiFetchPadelGameChatMessages,
@@ -35,10 +41,21 @@ import {
   apiFetchMasterServiceTimeslots,
   apiFetchOnboardingStations,
   apiFetchPadelLiveRatings,
+  apiFetchTournamentParticipants,
   apiFetchPadelSplitPaymentPromoConfig,
+  apiFetchSubscriptioName,
   apiFetchProfile,
-  apiSaveOnboardingLevel,
+  apiAcceptPadelGameResultCorrection,
+  apiConfirmPadelGameResult,
+  apiDisputePadelGameResult,
+  apiExpirePadelGameResult,
+  apiFetchPadelGameResultState,
+  apiOpenPadelGameResultSession,
+  apiSubmitPadelGameResult,
+  apiUpdatePadelGameResultSession,
   DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG,
+  isPadelGameRecordRelevantToIdentity,
+  resolveExerciseCancellationState,
 } from "../../utils/apiClient";
 import {
   apiAddCommunityMember,
@@ -63,6 +80,7 @@ import {
   CUSTOM_FIELD_IDS,
   getCustomFieldValue,
   getLetterGrade,
+  normalizeLevelGradeLabel,
   parseNumericLevel,
 } from "../../utils/customFields";
 import type { GamesCreateFromBookingData } from "../../types/gamesOverlay";
@@ -76,13 +94,29 @@ import { trackAnalyticsEvent } from "../../utils/analytics";
 import { shareOrCopyGameInvitePayload } from "../../utils/gameInviteClipboard";
 import { addGameToCalendar } from "../../utils/calendarEvent";
 import logoHabBlack from "../../assets/logo hab black.svg";
+import logoHabBlackRaw from "../../assets/logo hab black.svg?raw";
 import logoHabWhite from "../../assets/logo hab white.svg";
+import logoHabWhiteRaw from "../../assets/logo hab white.svg?raw";
+import { SummerSubscriptionGallery } from "../UI/SummerSubscriptionGallery";
+import {
+  excludePlayersAlreadyInRoster,
+  playersShareRosterIdentity,
+  reconcileRosterWithViva,
+  type RosterSyncLeaveEvent,
+} from "./rosterSyncReconcile";
+import {
+  buildGameAllRelatedPhones,
+  shouldSkipRecentPaidGameBackgroundSync,
+  shouldSkipRecentSplitGameRosterSync,
+} from "./recentPaidGameStability";
+import { isSyntheticCabinetBookingGame } from "../cabinet/syntheticBookingGame";
 
 interface GamesPageProps {
   onBack: () => void;
   openChat?: boolean;
   openGameId?: string | null;
   createFromBooking?: GamesCreateFromBookingData | null;
+  initialGameRecord?: PadelGameRecord | null;
   publicCreateEntry?: boolean;
   presetStudioId?: string | null;
   presetStudioName?: string | null;
@@ -91,8 +125,38 @@ interface GamesPageProps {
 type Step = "create" | "place" | "time" | "details" | "chat";
 type GamePaymentMode = "self" | "split";
 type SplitShareCount = 2 | 4;
+type SplitCheckoutMode = "subscription" | "one_time";
 
 const RATING_LABELS = ["D", "D+", "C", "C+", "B", "B+", "A"];
+const PRECISE_RATING_GRADE_OPTIONS = ["D", "C", "B", "A"] as const;
+const PRECISE_RATING_LEVEL_OPTIONS = [0, 1, 2, 3, 4] as const;
+
+type PublicCreatePreciseRatingGrade = (typeof PRECISE_RATING_GRADE_OPTIONS)[number];
+type PublicCreatePreciseRatingLevel = (typeof PRECISE_RATING_LEVEL_OPTIONS)[number];
+
+type PublicCreatePreciseRatingBound = {
+  grade: PublicCreatePreciseRatingGrade;
+  level: PublicCreatePreciseRatingLevel;
+};
+
+type PublicCreatePreciseRatingRange = {
+  min: PublicCreatePreciseRatingBound;
+  max: PublicCreatePreciseRatingBound;
+};
+
+const PUBLIC_CREATE_COARSE_RATING_BUCKETS: Array<{
+  label: typeof RATING_LABELS[number];
+  min: PublicCreatePreciseRatingBound;
+  max: PublicCreatePreciseRatingBound;
+}> = [
+  { label: "D", min: { grade: "D", level: 0 }, max: { grade: "D", level: 1 } },
+  { label: "D+", min: { grade: "D", level: 2 }, max: { grade: "D", level: 4 } },
+  { label: "C", min: { grade: "C", level: 0 }, max: { grade: "C", level: 1 } },
+  { label: "C+", min: { grade: "C", level: 2 }, max: { grade: "C", level: 4 } },
+  { label: "B", min: { grade: "B", level: 0 }, max: { grade: "B", level: 1 } },
+  { label: "B+", min: { grade: "B", level: 2 }, max: { grade: "B", level: 4 } },
+  { label: "A", min: { grade: "A", level: 0 }, max: { grade: "A", level: 4 } },
+];
 
 const DAYS_BEFORE_TODAY = 0;
 const DAYS_AFTER_TODAY = 14;
@@ -100,10 +164,11 @@ const TODAY_DATE_INDEX = DAYS_BEFORE_TODAY;
 const MAX_DOUBLES_PLAYERS = 4;
 const MAX_SINGLES_PLAYERS = 2;
 const DETAILS_TEAM_SLOTS_COUNT = 4;
-const MAX_MATCH_RESULT_SETS = 5;
 const MAX_MATCH_RESULT_ATTACHMENTS = 6;
 const MATCH_RESULT_IMAGE_MAX_SIDE = 1600;
 const MATCH_RESULT_DISPUTE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const MATCH_RESULT_DISPUTE_OVERRIDE_START_TS = Date.parse("2026-05-31T00:00:00+03:00");
+const MATCH_RESULT_DISPUTE_OVERRIDE_END_TS = Date.parse("2026-06-10T23:59:59.999+03:00");
 const CHAT_READ_STORAGE_KEY_PREFIX = "padlhub.chat.lastRead.v1";
 const PUBLIC_GAMES_ORIGIN_FALLBACK = "https://padlhub.ru";
 const INVITE_JOIN_PATH = PUBLIC_INVITE_PATH;
@@ -126,10 +191,10 @@ const MATCH_RESULT_RATING_DEFAULT_PARAMS = {
 const ENABLE_GAME_COMMUNITY_AUTOPUBLISH = true;
 const ENABLE_SPLIT_GAME_PAYMENT = true;
 const SPLIT_PAYMENT_DEADLINE_MINUTES = 25;
-const SPLIT_PAYMENT_UNLOCK_TAP_COUNT = 8;
-const SPLIT_PAYMENT_UNLOCK_RESET_MS = 6000;
+const SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES = 10;
 const SPLIT_OPEN_GAME_EXERCISE_TYPE_ID = 1613;
 const SPLIT_OPEN_GAME_DIRECTION_ID = 4588;
+const PUBLIC_CREATE_SUBSCRIPTION_INFO_URL = "https://padlhub.ru/ab_leto";
 
 function resolveSplitShareAmount(
   shareCount: SplitShareCount,
@@ -144,6 +209,13 @@ function resolveSplitShareAmount(
 
 function resolveSplitBaseShareAmount(config: PadelSplitPaymentPromoConfig, durationMinutes = 60): number {
   return Math.round(config.baseShareAmount * Math.max(durationMinutes, 1) / 60);
+}
+
+function resolveSplitSubscriptionVisitCharge(durationMinutes: number | null | undefined): number {
+  const normalizedDuration = Number.isFinite(durationMinutes)
+    ? Math.max(0, Math.floor(Number(durationMinutes)))
+    : 0;
+  return normalizedDuration >= 90 ? 2 : 1;
 }
 
 function isSplitSubscriptionStatusActive(status: string | null | undefined): boolean {
@@ -166,17 +238,25 @@ function isSplitSubscriptionStatusActive(status: string | null | undefined): boo
   return !blockedMarkers.some((marker) => normalized.includes(marker));
 }
 
-function hasSplitSubscriptionBalance(subscription: Subscription): boolean {
+function hasSplitSubscriptionBalance(
+  subscription: Subscription,
+  requiredVisits: number,
+  requiredDurationMinutes: number | null | undefined,
+): boolean {
+  const normalizedRequiredVisits = Math.max(1, Math.floor(requiredVisits || 1));
+  const normalizedRequiredMinutes = Number.isFinite(requiredDurationMinutes)
+    ? Math.max(1, Math.floor(Number(requiredDurationMinutes)))
+    : null;
   const hasVisitsValue = Number.isFinite(subscription.visitsLeft);
   const hasMinutesValue = Number.isFinite(subscription.availableMinutes);
   const visitsLeft = hasVisitsValue ? subscription.visitsLeft : null;
   const minutesLeft = hasMinutesValue ? subscription.availableMinutes : null;
 
-  if (visitsLeft != null && visitsLeft > 0) return true;
-  if (minutesLeft != null && minutesLeft > 0) return true;
-  if (visitsLeft != null && minutesLeft != null) return false;
-  if (visitsLeft != null) return visitsLeft > 0;
-  if (minutesLeft != null) return minutesLeft > 0;
+  if (visitsLeft != null) return visitsLeft >= normalizedRequiredVisits;
+  if (minutesLeft != null) {
+    if (normalizedRequiredMinutes != null) return minutesLeft >= normalizedRequiredMinutes;
+    return minutesLeft > 0;
+  }
   return true;
 }
 
@@ -195,32 +275,57 @@ function hasIdIntersection(left: Set<string>, right: Set<string>): boolean {
   return false;
 }
 
+function subscriptionMatchesSplitStudio(
+  subscription: Subscription,
+  selectedStudioId: string | null | undefined,
+): boolean {
+  if (!subscription.hasStudioLimitation) return true;
+
+  const allowedStudios = new Set(
+    (subscription.availableStudios || [])
+      .map((item) => normalizeComparableId(item?.id))
+      .filter((value): value is string => Boolean(value)),
+  );
+  if (allowedStudios.size === 0) return false;
+
+  const normalizedSelectedStudioId = normalizeComparableId(selectedStudioId);
+  if (!normalizedSelectedStudioId) return true;
+
+  return allowedStudios.has(normalizedSelectedStudioId);
+}
+
 function subscriptionMatchesSplitCategory(
   subscription: Subscription,
   requiredExerciseTypeIds: Set<string>,
   requiredDirectionIds: Set<string>,
+  selectedStudioId: string | null | undefined,
 ): boolean {
-  if (subscription.hasTypeLimitation) {
-    const allowedTypes = new Set(
-      (subscription.availableTypes || [])
-        .map((item) => normalizeComparableId(item?.id))
-        .filter((value): value is string => Boolean(value)),
-    );
-    if (allowedTypes.size === 0 || !hasIdIntersection(allowedTypes, requiredExerciseTypeIds)) {
-      return false;
-    }
+  if (!subscriptionMatchesSplitStudio(subscription, selectedStudioId)) {
+    return false;
   }
 
-  if (subscription.hasDirectionLimitation) {
-    const allowedDirections = new Set(
-      (subscription.availableDirections || [])
-        .map((item) => normalizeComparableId(item?.id))
-        .filter((value): value is string => Boolean(value)),
-    );
-    if (allowedDirections.size === 0 || !hasIdIntersection(allowedDirections, requiredDirectionIds)) {
-      return false;
-    }
+  const allowedTypes = new Set(
+    (subscription.availableTypes || [])
+      .map((item) => normalizeComparableId(item?.id))
+      .filter((value): value is string => Boolean(value)),
+  );
+  const hasOpenGameTypeByName = (subscription.availableTypes || []).some((item) => {
+    const normalizedName = normalizeComparableName(item?.name);
+    return Boolean(normalizedName && normalizedName.includes("открытая игра"));
+  });
+
+  // For split-open-game flow we only show subscriptions explicitly allowing open games.
+  if (!subscription.hasTypeLimitation) {
+    return false;
   }
+  if (!hasIdIntersection(allowedTypes, requiredExerciseTypeIds) && !hasOpenGameTypeByName) {
+    return false;
+  }
+
+  // Direction constraints from subscription list are often stale/non-deterministic
+  // for open-game split booking. Keep type check strict and let Viva validate
+  // direction on actual booking/payment step.
+  void requiredDirectionIds;
 
   return true;
 }
@@ -229,39 +334,76 @@ function filterSplitEligibleSubscriptions(
   subscriptions: Subscription[],
   requiredExerciseTypeIds: Set<string>,
   requiredDirectionIds: Set<string>,
+  selectedStudioId: string | null | undefined,
+  requiredVisits: number,
+  requiredDurationMinutes: number | null | undefined,
 ): Subscription[] {
   return subscriptions.filter((subscription) => {
     if (!isSplitSubscriptionStatusActive(subscription.status)) return false;
-    if (!hasSplitSubscriptionBalance(subscription)) return false;
+    if (!hasSplitSubscriptionBalance(subscription, requiredVisits, requiredDurationMinutes)) return false;
     return subscriptionMatchesSplitCategory(
       subscription,
       requiredExerciseTypeIds,
       requiredDirectionIds,
+      selectedStudioId,
     );
   });
 }
 
-function buildSplitSubscriptionStatusLabel(subscriptions: Subscription[]): string {
+function resolveSplitSubscriptionDisplayName(
+  subscription: Subscription,
+  subscriptionNamesById: Record<string, string>,
+): string {
+  const key = normalizeComparableId(subscription.subscriptionId);
+  const byLookup = key ? subscriptionNamesById[key] : null;
+  const directName = typeof subscription.name === "string" ? subscription.name : null;
+  const resolved = String(byLookup || directName || "").trim();
+  return resolved || "Абонемент";
+}
+
+function formatSplitSubscriptionBalanceLabel(
+  subscription: Subscription,
+  options: { includePrefix?: boolean } = {},
+): string | null {
+  const visitsLeft = Number.isFinite(subscription.visitsLeft)
+    ? Math.max(0, Math.floor(subscription.visitsLeft))
+    : null;
+  if (visitsLeft != null) {
+    return options.includePrefix
+      ? `осталось занятий: ${visitsLeft}`
+      : `${visitsLeft} занятий`;
+  }
+
+  const minutesLeft = Number.isFinite(subscription.availableMinutes)
+    ? Math.max(0, Math.floor(subscription.availableMinutes))
+    : null;
+  if (minutesLeft != null && minutesLeft > 0) {
+    return options.includePrefix
+      ? `осталось минут: ${minutesLeft}`
+      : `${minutesLeft} мин`;
+  }
+
+  return null;
+}
+
+function buildSplitSubscriptionStatusLabel(
+  subscriptions: Subscription[],
+  subscriptionNamesById: Record<string, string>,
+  requiredVisits: number,
+): string {
   const primary = subscriptions[0];
   if (!primary) return "Найдено доступных абонементов: 0";
 
-  const name = typeof primary.name === "string" ? primary.name.trim() : "";
-  const visitsLeft = Number.isFinite(primary.visitsLeft)
-    ? Math.max(0, Math.floor(primary.visitsLeft))
-    : null;
+  const name = resolveSplitSubscriptionDisplayName(primary, subscriptionNamesById);
+  const balanceLabel = formatSplitSubscriptionBalanceLabel(primary, { includePrefix: true });
+  const visitsToWriteLabel = requiredVisits > 1 ? ` · списание: ${requiredVisits} посещ.` : "";
   const extraCount = Math.max(0, subscriptions.length - 1);
   const extraLabel = extraCount > 0 ? ` · еще ${extraCount}` : "";
 
-  if (name && visitsLeft != null) {
-    return `Абонемент «${name}» · осталось посещений: ${visitsLeft}${extraLabel}`;
+  if (balanceLabel) {
+    return `Абонемент «${name}» · ${balanceLabel}${visitsToWriteLabel}${extraLabel}`;
   }
-  if (name) {
-    return `Абонемент «${name}»${extraLabel}`;
-  }
-  if (visitsLeft != null) {
-    return `Найден абонемент · осталось посещений: ${visitsLeft}${extraLabel}`;
-  }
-  return `Найдено доступных абонементов: ${subscriptions.length}`;
+  return `Абонемент «${name}»${visitsToWriteLabel}${extraLabel}`;
 }
 
 function splitConfigListAllows(
@@ -686,6 +828,13 @@ function trackGameRecordCreateEvent(
   trackAnalyticsEvent(eventName, payload);
 }
 
+function trackRosterSyncEvent(
+  type: "started" | "applied" | "skipped" | "failed",
+  payload: Record<string, unknown>,
+) {
+  trackAnalyticsEvent(`games_roster_sync_${type}`, payload);
+}
+
 type MatchSnapshot = {
   studioName: string | null;
   roomName: string | null;
@@ -703,6 +852,7 @@ type PromoStateSnapshot = {
 };
 
 type TeamSlotStoredRef = {
+  memberKey?: string | null;
   id?: string | null;
   phone?: string | null;
   name?: string | null;
@@ -712,6 +862,14 @@ type EditableMatchResultSet = {
   left: string;
   right: string;
 };
+
+type MatchResultLifecycleStatus =
+  | "NO_RESULT"
+  | "PENDING_REVIEW"
+  | "CONFIRMED"
+  | "DISPUTED"
+  | "CORRECTION_PENDING"
+  | "NO_RESULT_EXPIRED";
 
 type MatchResultPairingOption = {
   key: string;
@@ -739,15 +897,13 @@ type MatchResultAttachment = {
 
 type MatchResultPhotoLogoVariant = "white" | "black";
 
-type GameLeaveEvent = {
-  playerId: string | null;
-  playerPhone: string | null;
-  playerName: string | null;
-  leftAt: string;
-  reason: string | null;
-  byId: string | null;
-  byPhone: string | null;
-  byName: string | null;
+type GameLeaveEvent = RosterSyncLeaveEvent;
+
+type VivaParticipantCancelOutcome = {
+  ok: boolean;
+  bookingIds: string[];
+  summary: Record<string, unknown> | null;
+  error: string | null;
 };
 
 type BookingLookupContext = {
@@ -810,6 +966,8 @@ type MatchResultVivaSyncState = {
   totalPlayers: number;
   syncedPlayers: number;
   failures: MatchResultVivaSyncFailure[];
+  syncSignature: string | null;
+  auditEventIds: string[];
 };
 
 function toFiniteNumber(value: unknown): number | null {
@@ -846,6 +1004,115 @@ function normalizeRatingNumeric(value: unknown): number | null {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function clampRatingWheelIndex(value: number): number {
+  return clampNumber(Math.round(value), 0, RATING_LABELS.length - 1);
+}
+
+function normalizePreciseRatingGrade(value: unknown): PublicCreatePreciseRatingGrade {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (PRECISE_RATING_GRADE_OPTIONS.includes(normalized as PublicCreatePreciseRatingGrade)) {
+    return normalized as PublicCreatePreciseRatingGrade;
+  }
+  return "D";
+}
+
+function normalizePreciseRatingLevel(value: unknown): PublicCreatePreciseRatingLevel {
+  const numeric = Math.round(toFiniteNumber(value) ?? 0);
+  if (PRECISE_RATING_LEVEL_OPTIONS.includes(numeric as PublicCreatePreciseRatingLevel)) {
+    return numeric as PublicCreatePreciseRatingLevel;
+  }
+  return 0;
+}
+
+function comparePreciseRatingBounds(
+  left: PublicCreatePreciseRatingBound,
+  right: PublicCreatePreciseRatingBound,
+): number {
+  const gradeDelta = PRECISE_RATING_GRADE_OPTIONS.indexOf(left.grade) - PRECISE_RATING_GRADE_OPTIONS.indexOf(right.grade);
+  if (gradeDelta !== 0) return gradeDelta;
+  return left.level - right.level;
+}
+
+function clonePreciseRatingBound(bound: PublicCreatePreciseRatingBound): PublicCreatePreciseRatingBound {
+  return {
+    grade: bound.grade,
+    level: bound.level,
+  };
+}
+
+function isSamePreciseRatingRange(
+  left: PublicCreatePreciseRatingRange,
+  right: PublicCreatePreciseRatingRange,
+): boolean {
+  return left.min.grade === right.min.grade
+    && left.min.level === right.min.level
+    && left.max.grade === right.max.grade
+    && left.max.level === right.max.level;
+}
+
+function normalizePreciseRatingRangeAfterBoundChange(
+  range: PublicCreatePreciseRatingRange,
+  changedBound: "min" | "max",
+): PublicCreatePreciseRatingRange {
+  if (comparePreciseRatingBounds(range.min, range.max) <= 0) return range;
+  if (changedBound === "min") {
+    return {
+      min: clonePreciseRatingBound(range.min),
+      max: clonePreciseRatingBound(range.min),
+    };
+  }
+  return {
+    min: clonePreciseRatingBound(range.max),
+    max: clonePreciseRatingBound(range.max),
+  };
+}
+
+function buildPreciseRatingRangeFromCoarse(
+  minIndex: number,
+  maxIndex: number,
+): PublicCreatePreciseRatingRange {
+  const safeMinIndex = clampRatingWheelIndex(Math.min(minIndex, maxIndex));
+  const safeMaxIndex = clampRatingWheelIndex(Math.max(minIndex, maxIndex));
+  const minBucket = PUBLIC_CREATE_COARSE_RATING_BUCKETS[safeMinIndex] ?? PUBLIC_CREATE_COARSE_RATING_BUCKETS[0];
+  const maxBucket = PUBLIC_CREATE_COARSE_RATING_BUCKETS[safeMaxIndex] ?? PUBLIC_CREATE_COARSE_RATING_BUCKETS[PUBLIC_CREATE_COARSE_RATING_BUCKETS.length - 1];
+  return {
+    min: clonePreciseRatingBound(minBucket.min),
+    max: clonePreciseRatingBound(maxBucket.max),
+  };
+}
+
+function mapPreciseRatingBoundToCoarseIndex(bound: PublicCreatePreciseRatingBound): number {
+  const matchedIndex = PUBLIC_CREATE_COARSE_RATING_BUCKETS.findIndex((bucket) => (
+    comparePreciseRatingBounds(bound, bucket.min) >= 0
+      && comparePreciseRatingBounds(bound, bucket.max) <= 0
+  ));
+  return matchedIndex >= 0 ? matchedIndex : 0;
+}
+
+function formatPreciseRatingBoundLabel(bound: PublicCreatePreciseRatingBound): string {
+  return `${bound.grade} ${bound.level}`;
+}
+
+function buildPreciseRatingMetadataFields(
+  enabled: boolean,
+  range: PublicCreatePreciseRatingRange,
+  touched: boolean,
+): Record<string, unknown> {
+  if (!enabled || !touched) return {};
+
+  return {
+    ratingRangePrecise: {
+      minGrade: range.min.grade,
+      minLevel: range.min.level,
+      maxGrade: range.max.grade,
+      maxLevel: range.max.level,
+      minLabel: formatPreciseRatingBoundLabel(range.min),
+      maxLabel: formatPreciseRatingBoundLabel(range.max),
+      touched: true,
+    },
+  };
 }
 
 function mapRatingGradeToNumeric(grade: unknown): number | null {
@@ -971,6 +1238,9 @@ function normalizeMatchResultVivaSync(payload: unknown): MatchResultVivaSyncStat
   const lastAttemptAt = typeof payload.lastAttemptAt === "string" ? payload.lastAttemptAt : null;
   const lastSuccessAt = typeof payload.lastSuccessAt === "string" ? payload.lastSuccessAt : null;
   const lastError = typeof payload.lastError === "string" ? payload.lastError.trim() || null : null;
+  const syncSignature = typeof payload.syncSignature === "string"
+    ? payload.syncSignature.trim() || null
+    : null;
   const totalPlayers = Math.max(
     0,
     Math.floor(toFiniteNumber(payload.totalPlayers) ?? toFiniteNumber(payload.totalCount) ?? 0),
@@ -999,6 +1269,14 @@ function normalizeMatchResultVivaSync(payload: unknown): MatchResultVivaSyncStat
       };
     })
     .filter((item): item is MatchResultVivaSyncFailure => Boolean(item));
+  const rawAuditEventIds = Array.isArray(payload.auditEventIds)
+    ? payload.auditEventIds
+    : Array.isArray(payload.auditIds)
+      ? payload.auditIds
+      : [];
+  const auditEventIds = rawAuditEventIds
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item): item is string => item.length > 0);
 
   if (
     !status
@@ -1006,9 +1284,11 @@ function normalizeMatchResultVivaSync(payload: unknown): MatchResultVivaSyncStat
     && !lastAttemptAt
     && !lastSuccessAt
     && !lastError
+    && !syncSignature
     && totalPlayers === 0
     && syncedPlayers === 0
     && failures.length === 0
+    && auditEventIds.length === 0
   ) {
     return null;
   }
@@ -1022,7 +1302,53 @@ function normalizeMatchResultVivaSync(payload: unknown): MatchResultVivaSyncStat
     totalPlayers,
     syncedPlayers,
     failures,
+    syncSignature,
+    auditEventIds,
   };
+}
+
+function normalizeMatchResultFromActionResponse(
+  response: PadelGameResultActionResponse | null | undefined,
+): Record<string, unknown> | null {
+  if (!response) return null;
+  const raw = (
+    isRecordObject(response.matchResult)
+      ? response.matchResult
+      : isRecordObject(response.result)
+        ? response.result
+        : isRecordObject(response.latestResult)
+          ? response.latestResult
+          : null
+  );
+  if (!raw) return null;
+
+  const status = normalizeMatchResultStatus(raw.status ?? response.status);
+  const nextMatchResult: Record<string, unknown> = {
+    ...raw,
+    ...(status ? { status } : {}),
+  };
+
+  if (
+    !Array.isArray(nextMatchResult.setPairings)
+    && Array.isArray(raw.effectiveSetPairings)
+  ) {
+    nextMatchResult.setPairings = raw.effectiveSetPairings;
+  }
+
+  const rawScore = isRecordObject(raw.score) ? raw.score : null;
+  if (!Array.isArray(nextMatchResult.sets) && rawScore) {
+    const scoreA = toFiniteNumber(rawScore.teamA ?? rawScore.scoreA ?? rawScore.left ?? rawScore.score1);
+    const scoreB = toFiniteNumber(rawScore.teamB ?? rawScore.scoreB ?? rawScore.right ?? rawScore.score2);
+    if (scoreA != null && scoreB != null) {
+      nextMatchResult.sets = [{ left: scoreA, right: scoreB }];
+    }
+  }
+
+  if (!nextMatchResult.disputeDeadlineAt && response.disputeDeadlineAt) {
+    nextMatchResult.disputeDeadlineAt = response.disputeDeadlineAt;
+  }
+
+  return nextMatchResult;
 }
 
 function buildMatchResultRatingImpact(
@@ -1081,15 +1407,453 @@ function isRecordObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function normalizeMatchResultStatus(value: unknown): string | null {
+function hasSplitPaymentSignal(splitPayment: Record<string, unknown> | null): boolean {
+  if (!splitPayment) return false;
+  if (splitPayment.enabled === true) return true;
+  if (splitPayment.enabled === false) return false;
+
+  const mode = typeof splitPayment.mode === "string" ? splitPayment.mode.trim().toLowerCase() : "";
+  if (mode.includes("split") || mode.includes("group")) return true;
+
+  const payments = Array.isArray(splitPayment.payments) ? splitPayment.payments : [];
+  if (payments.some((item) => isRecordObject(item))) return true;
+
+  const paymentModes = Array.isArray(splitPayment.paymentModes) ? splitPayment.paymentModes : [];
+  if (paymentModes.some((item) => typeof item === "string" && item.trim().length > 0)) return true;
+
+  if (typeof splitPayment.subscriptionProductId === "string" && splitPayment.subscriptionProductId.trim()) return true;
+  if (typeof splitPayment.oneTimeProductId === "string" && splitPayment.oneTimeProductId.trim()) return true;
+
+  const shareCount = toFiniteNumber(splitPayment.shareCount);
+  const shareAmount = toFiniteNumber(splitPayment.shareAmount ?? splitPayment.amount ?? splitPayment.toPay);
+  const totalAmount = toFiniteNumber(splitPayment.totalAmount);
+  const oneTimeBaseAmount = toFiniteNumber(splitPayment.oneTimeBaseAmount ?? splitPayment.baseShareAmount);
+  if (
+    (shareCount === 2 || shareCount === 4)
+    && ((shareAmount ?? 0) > 0 || (totalAmount ?? 0) > 0 || (oneTimeBaseAmount ?? 0) > 0)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function isInactiveSplitPaymentStatus(statusRaw: unknown): boolean {
+  const status = String(statusRaw || "").trim().toUpperCase();
+  if (!status) return false;
+  const inactiveMarkers = [
+    "CANCEL",
+    "DECLIN",
+    "FAIL",
+    "ERROR",
+    "EXPIRE",
+    "REFUND",
+    "REJECT",
+    "VOID",
+    "CLOSE",
+    "ARCHIVE",
+  ];
+  return inactiveMarkers.some((marker) => status.includes(marker));
+}
+
+function extractSplitPaymentPhones(splitPayment: Record<string, unknown> | null): string[] {
+  if (!splitPayment) return [];
+  const payments = Array.isArray(splitPayment.payments)
+    ? splitPayment.payments.filter((item) => isRecordObject(item))
+    : [];
+  const bucket = new Set<string>();
+
+  payments.forEach((item) => {
+    if (isInactiveSplitPaymentStatus(item.status)) return;
+    const directPhone = normalizePhoneForGame(
+      typeof item.phoneNorm === "string"
+        ? item.phoneNorm
+        : typeof item.clientPhoneNorm === "string"
+          ? item.clientPhoneNorm
+          : typeof item.phone === "string"
+            ? item.phone
+            : typeof item.clientPhone === "string"
+              ? item.clientPhone
+              : null,
+    );
+    if (directPhone) {
+      bucket.add(directPhone);
+    }
+  });
+
+  return Array.from(bucket);
+}
+
+function isSplitPaymentReservationActive(statusRaw: unknown): boolean {
+  const status = String(statusRaw || "").trim().toUpperCase();
+  if (!status) return true;
+  return !isInactiveSplitPaymentStatus(status);
+}
+
+function normalizeMatchResultStatus(value: unknown): MatchResultLifecycleStatus | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toUpperCase();
-  return normalized || null;
+  if (!normalized) return null;
+  if (normalized === "PENDING_CONFIRMATION" || normalized === "PENDING_DISPUTE") {
+    return "PENDING_REVIEW";
+  }
+  if (
+    normalized === "NO_RESULT"
+    || normalized === "PENDING_REVIEW"
+    || normalized === "CONFIRMED"
+    || normalized === "DISPUTED"
+    || normalized === "CORRECTION_PENDING"
+    || normalized === "NO_RESULT_EXPIRED"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function pickMatchResultString(source: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function summarizeMatchResultParticipantRef(value: unknown) {
+  if (!isRecordObject(value)) return null;
+  const memberKey = normalizeMemberKey(
+    pickMatchResultString(value, ["memberKey", "playerKey", "participantKey", "rosterMemberKey"]),
+  );
+  return {
+    memberKey,
+    id: pickMatchResultString(value, ["id", "clientId", "uuid"]),
+    phone: normalizePhoneForGame(
+      pickMatchResultString(value, ["phoneNorm", "phone", "clientPhone", "clientPhoneNorm"]),
+    ),
+    name: pickMatchResultString(value, ["name", "playerName", "clientName"]),
+  };
+}
+
+function buildMatchResultParticipantLookupKeys(value: unknown): string[] {
+  if (value === null || value === undefined) return [];
+
+  if (typeof value === "string" || typeof value === "number") {
+    const rawValue = String(value).trim();
+    if (!rawValue) return [];
+    const phone = normalizePhoneForGame(rawValue);
+    return Array.from(new Set([
+      buildPadelPlayerMemberLookupKey(rawValue),
+      `id:${rawValue}`,
+      phone ? `phone:${phone}` : "",
+      `name:${rawValue.toLowerCase()}`,
+    ].filter(Boolean)));
+  }
+
+  if (!isRecordObject(value)) return [];
+
+  const id = pickMatchResultString(value, ["id", "clientId", "uuid"]);
+  const phone = normalizePhoneForGame(
+    pickMatchResultString(value, ["phoneNorm", "phone", "clientPhone", "clientPhoneNorm"]),
+  );
+  const name = pickMatchResultString(value, ["name", "playerName", "clientName"]);
+  const memberKey = normalizeMemberKey(
+    pickMatchResultString(value, ["memberKey", "playerKey", "participantKey", "rosterMemberKey"]),
+  ) || buildFallbackPadelPlayerMemberKey({ id, phone, name });
+
+  return Array.from(new Set([
+    buildPadelPlayerMemberLookupKey(memberKey),
+    id ? `id:${id}` : "",
+    phone ? `phone:${phone}` : "",
+    name ? `name:${name.trim().toLowerCase()}` : "",
+  ].filter(Boolean)));
+}
+
+function normalizeMatchResultRosterPlayer(value: unknown): PadelGamePlayer | null {
+  if (value === null || value === undefined) return null;
+
+  if (typeof value === "string" || typeof value === "number") {
+    const rawValue = String(value).trim();
+    if (!rawValue) return null;
+    const memberKey = normalizeMemberKey(rawValue) || buildFallbackPadelPlayerMemberKey({ id: rawValue });
+    return {
+      memberKey,
+      id: null,
+      name: "Игрок",
+      phone: null,
+      photo: null,
+      rating: null,
+      ratingNumeric: null,
+    };
+  }
+
+  if (!isRecordObject(value)) return null;
+
+  const id = pickMatchResultString(value, ["id", "clientId", "uuid"]);
+  const phone = normalizePhoneForGame(
+    pickMatchResultString(value, ["phoneNorm", "phone", "clientPhone", "clientPhoneNorm", "mobile"]),
+  );
+  const name = pickMatchResultString(value, [
+    "name",
+    "playerName",
+    "clientName",
+    "fullName",
+    "displayName",
+  ]);
+  const photo = pickMatchResultString(value, ["photo", "avatar", "imageUrl"]);
+  const ratingNumeric = normalizeRatingNumeric(
+    toFiniteNumber(value.ratingNumeric ?? value.numericRating ?? value.levelNumeric),
+  );
+  const rating = pickMatchResultString(value, ["rating", "level", "grade", "levelLetter"])
+    ?? mapNumericToRatingGrade(ratingNumeric);
+  const sourceRaw = pickMatchResultString(value, ["source", "origin", "type"]);
+  const statusRaw = pickMatchResultString(value, ["status", "state"]);
+  const memberKey = normalizeMemberKey(
+    pickMatchResultString(value, ["memberKey", "playerKey", "participantKey", "rosterMemberKey"]),
+  ) || buildFallbackPadelPlayerMemberKey({ id, phone, name });
+
+  if (!memberKey && !id && !phone && !name) return null;
+
+  return {
+    memberKey,
+    id: id ?? null,
+    name: name || "Игрок",
+    phone: phone ?? null,
+    photo: photo ?? null,
+    rating: rating ?? null,
+    ratingNumeric,
+    source: sourceRaw ? (sourceRaw.toUpperCase() as PadelGamePlayer["source"]) : undefined,
+    status: statusRaw ? (statusRaw.toUpperCase() as PadelGamePlayer["status"]) : undefined,
+  };
+}
+
+function extractMatchResultSnapshotPlayers(value: unknown): PadelGamePlayer[] {
+  if (!isRecordObject(value)) return [];
+
+  const rawPlayers = [
+    ...(Array.isArray(value.members) ? value.members : []),
+    ...(Array.isArray(value.playerPool) ? value.playerPool : []),
+    ...(Array.isArray(value.players) ? value.players : []),
+    ...(Array.isArray(value.roster) ? value.roster : []),
+    ...(Array.isArray(value.waitlist) ? value.waitlist : []),
+    ...(Array.isArray(value.participants) ? value.participants : []),
+    ...(Array.isArray(value.initialTeamSlots) ? value.initialTeamSlots : []),
+  ];
+
+  return dedupePlayersByIdentity(
+    rawPlayers
+      .map((item) => normalizeMatchResultRosterPlayer(item))
+      .filter((item): item is PadelGamePlayer => Boolean(item)),
+  );
+}
+
+function summarizeMatchResultSet(value: unknown) {
+  if (!isRecordObject(value)) return null;
+  const left = toFiniteNumber(value.left ?? value.teamA ?? value.scoreA ?? value.score1);
+  const right = toFiniteNumber(value.right ?? value.teamB ?? value.scoreB ?? value.score2);
+  if (left == null || right == null) return null;
+  return { left, right };
+}
+
+function summarizeMatchResultSetPairing(value: unknown, fallbackIndex: number) {
+  const rawSlots = isRecordObject(value)
+    ? (
+        Array.isArray(value.teamSlots)
+          ? value.teamSlots
+          : Array.isArray(value.slots)
+            ? value.slots
+            : []
+      )
+    : Array.isArray(value)
+      ? value
+      : [];
+  if (!Array.isArray(rawSlots) || rawSlots.length === 0) return null;
+  return {
+    setIndex: isRecordObject(value)
+      ? (toFiniteNumber(value.setIndex) ?? ((toFiniteNumber(value.setNumber) ?? fallbackIndex + 1) - 1))
+      : fallbackIndex,
+    teamSlots: rawSlots.map(summarizeMatchResultParticipantRef),
+  };
+}
+
+function summarizeMatchResultAttachment(value: unknown, fallbackIndex: number) {
+  if (isRecordObject(value)) {
+    return {
+      id: pickMatchResultString(value, ["id"]),
+      name: pickMatchResultString(value, ["name"]),
+      type: pickMatchResultString(value, ["type", "mimeType"]),
+      size: toFiniteNumber(value.size),
+      createdAt: pickMatchResultString(value, ["createdAt"]),
+    };
+  }
+  if (typeof value === "string" && value.trim()) {
+    return { id: `url-${fallbackIndex}`, src: value.trim().slice(0, 96) };
+  }
+  return null;
+}
+
+function summarizeMatchResultRatingImpact(value: unknown, fallbackIndex: number) {
+  if (!isRecordObject(value)) return null;
+  return {
+    id: pickMatchResultString(value, ["id", "clientId"]),
+    phone: normalizePhoneForGame(pickMatchResultString(value, ["phoneNorm", "phone"])),
+    team: pickMatchResultString(value, ["team"]),
+    before: toFiniteNumber(value.before),
+    after: toFiniteNumber(value.after),
+    index: fallbackIndex,
+  };
+}
+
+function buildMatchResultSourceKey(
+  gameId: string | null | undefined,
+  rawMatchResult: Record<string, unknown> | null,
+): string {
+  const keyPrefix = (gameId || "game").trim() || "game";
+  if (!rawMatchResult) return `${keyPrefix}:empty`;
+
+  const status = normalizeMatchResultStatus(rawMatchResult.status) ?? "NO_RESULT";
+  const resultId = pickMatchResultString(rawMatchResult, ["id", "_id", "resultId"]);
+  const submittedAt = pickMatchResultString(rawMatchResult, ["submittedAt", "createdAt"]);
+  const confirmedAt = pickMatchResultString(rawMatchResult, ["confirmedAt"]);
+  const disputedAt = pickMatchResultString(rawMatchResult, ["disputedAt"]);
+  const disputeDeadlineAt = pickMatchResultString(rawMatchResult, ["disputeDeadlineAt", "reviewDeadlineAt"]);
+  const sets = Array.isArray(rawMatchResult.sets)
+    ? rawMatchResult.sets.map(summarizeMatchResultSet).filter(Boolean)
+    : [];
+  const setPairingsRaw = Array.isArray(rawMatchResult.setPairings)
+    ? rawMatchResult.setPairings
+    : Array.isArray(rawMatchResult.effectiveSetPairings)
+      ? rawMatchResult.effectiveSetPairings
+    : Array.isArray(rawMatchResult.pairings)
+      ? rawMatchResult.pairings
+      : [];
+  const setPairings = setPairingsRaw
+    .map(summarizeMatchResultSetPairing)
+    .filter(Boolean);
+  const attachmentsRaw = Array.isArray(rawMatchResult.photos)
+    ? rawMatchResult.photos
+    : Array.isArray(rawMatchResult.attachments)
+      ? rawMatchResult.attachments
+      : Array.isArray(rawMatchResult.images)
+        ? rawMatchResult.images
+        : [];
+  const attachments = attachmentsRaw
+    .map(summarizeMatchResultAttachment)
+    .filter(Boolean);
+  const ratingImpact = Array.isArray(rawMatchResult.ratingImpact)
+    ? rawMatchResult.ratingImpact.map(summarizeMatchResultRatingImpact).filter(Boolean)
+    : [];
+  const hasStoredResult = Boolean(
+    resultId
+    || submittedAt
+    || confirmedAt
+    || disputedAt
+    || disputeDeadlineAt
+    || sets.length
+    || setPairings.length
+    || attachments.length
+    || ratingImpact.length
+  );
+
+  if (status === "NO_RESULT" && !hasStoredResult) {
+    return `${keyPrefix}:empty`;
+  }
+
+  return `${keyPrefix}:${JSON.stringify({
+    status,
+    resultId,
+    submittedAt,
+    confirmedAt,
+    disputedAt,
+    disputeDeadlineAt,
+    sets,
+    setPairings,
+    attachments,
+    ratingImpact,
+  })}`;
+}
+
+function buildFallbackMatchResultFromGameRecord(
+  record: PadelGameRecord | null | undefined,
+): Record<string, unknown> | null {
+  if (!record) return null;
+  const status = normalizeMatchResultStatus(record.resultLifecycleState ?? record.resultStatus);
+  if (!status) return null;
+  return {
+    id: record.resultId ?? null,
+    resultId: record.resultId ?? null,
+    status,
+    submittedAt: record.lastResultAt ?? null,
+  };
+}
+
+function getMatchResultPairingsArray(
+  matchResult: Record<string, unknown> | null | undefined,
+): unknown[] {
+  if (!matchResult) return [];
+  if (Array.isArray(matchResult.setPairings)) return matchResult.setPairings;
+  if (Array.isArray(matchResult.effectiveSetPairings)) return matchResult.effectiveSetPairings;
+  if (Array.isArray(matchResult.pairings)) return matchResult.pairings;
+  return [];
+}
+
+function getMatchResultAttachmentsArray(
+  matchResult: Record<string, unknown> | null | undefined,
+): unknown[] {
+  if (!matchResult) return [];
+  if (Array.isArray(matchResult.photos)) return matchResult.photos;
+  if (Array.isArray(matchResult.attachments)) return matchResult.attachments;
+  if (Array.isArray(matchResult.images)) return matchResult.images;
+  return [];
+}
+
+function mergeMatchResultWithSessionDraft(
+  rawMatchResult: Record<string, unknown> | null,
+  sessionDraftMatchResult: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!rawMatchResult) return sessionDraftMatchResult;
+  if (!sessionDraftMatchResult) return rawMatchResult;
+
+  const mergedMatchResult: Record<string, unknown> = {
+    ...sessionDraftMatchResult,
+    ...rawMatchResult,
+  };
+
+  if (
+    (!Array.isArray(rawMatchResult.sets) || rawMatchResult.sets.length === 0)
+    && Array.isArray(sessionDraftMatchResult.sets)
+    && sessionDraftMatchResult.sets.length > 0
+  ) {
+    mergedMatchResult.sets = sessionDraftMatchResult.sets;
+  }
+
+  if (getMatchResultPairingsArray(rawMatchResult).length === 0) {
+    const sessionDraftPairings = getMatchResultPairingsArray(sessionDraftMatchResult);
+    if (sessionDraftPairings.length > 0) {
+      mergedMatchResult.setPairings = sessionDraftPairings;
+    }
+  }
+
+  if (getMatchResultAttachmentsArray(rawMatchResult).length === 0) {
+    const sessionDraftAttachments = getMatchResultAttachmentsArray(sessionDraftMatchResult);
+    if (sessionDraftAttachments.length > 0) {
+      mergedMatchResult.attachments = sessionDraftAttachments;
+    }
+  }
+
+  if (
+    !isRecordObject(rawMatchResult.rosterSnapshot)
+    && isRecordObject(sessionDraftMatchResult.rosterSnapshot)
+  ) {
+    mergedMatchResult.rosterSnapshot = sessionDraftMatchResult.rosterSnapshot;
+  }
+
+  return mergedMatchResult;
 }
 
 function isPendingMatchResultStatus(value: unknown): boolean {
   const normalized = normalizeMatchResultStatus(value);
-  return normalized === "PENDING_CONFIRMATION" || normalized === "PENDING_DISPUTE";
+  return normalized === "PENDING_REVIEW";
 }
 
 function isConfirmedMatchResultStatus(value: unknown): boolean {
@@ -1102,10 +1866,83 @@ function parseIsoTimestamp(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function resolveSplitPaymentItemDeadlineAt(
+  item: Record<string, unknown> | null | undefined,
+  splitPayment: Record<string, unknown> | null,
+): string | null {
+  if (!item) return null;
+  const directDeadline = typeof item.deadlineAt === "string" ? item.deadlineAt.trim() : "";
+  if (directDeadline) return directDeadline;
+  const directExpires = typeof item.expiresAt === "string" ? item.expiresAt.trim() : "";
+  if (directExpires) return directExpires;
+  const participantDeadline = typeof splitPayment?.participantDeadlineAt === "string"
+    ? splitPayment.participantDeadlineAt.trim()
+    : "";
+  if (participantDeadline) return participantDeadline;
+  const participantPaymentDeadline = typeof splitPayment?.participantPaymentDeadlineAt === "string"
+    ? splitPayment.participantPaymentDeadlineAt.trim()
+    : "";
+  if (participantPaymentDeadline) return participantPaymentDeadline;
+  return null;
+}
+
+function resolveSplitPaymentItemDeadlineTs(
+  item: Record<string, unknown> | null | undefined,
+  splitPayment: Record<string, unknown> | null,
+): number | null {
+  if (!item) return null;
+  const explicitDeadlineTs = parseIsoTimestamp(resolveSplitPaymentItemDeadlineAt(item, splitPayment));
+  const createdAtTs = parseIsoTimestamp(
+    typeof item.createdAt === "string"
+      ? item.createdAt
+      : (typeof item.updatedAt === "string" ? item.updatedAt : null),
+  );
+  const fallbackDeadlineTs = createdAtTs == null
+    ? null
+    : createdAtTs + SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES * 60 * 1000;
+  if (explicitDeadlineTs != null) {
+    return fallbackDeadlineTs == null ? explicitDeadlineTs : Math.min(explicitDeadlineTs, fallbackDeadlineTs);
+  }
+  return fallbackDeadlineTs;
+}
+
+function isSplitPaymentPendingExpired(
+  item: Record<string, unknown> | null | undefined,
+  splitPayment: Record<string, unknown> | null,
+  nowTs = Date.now(),
+): boolean {
+  if (!item) return false;
+  const status = String(item.status || "").trim().toUpperCase();
+  if (status !== "PAYMENT_PENDING") return false;
+  const deadlineTs = resolveSplitPaymentItemDeadlineTs(item, splitPayment);
+  return deadlineTs != null && nowTs >= deadlineTs;
+}
+
+function formatSplitPaymentTimeLeft(valueMs: number): string {
+  const safeMs = Math.max(0, valueMs);
+  const totalSeconds = Math.ceil(safeMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 function getMatchResultDisputeDeadlineAt(
   submittedAt: string | null | undefined,
   explicitDeadlineAt?: string | null | undefined,
+  gameDateKey?: string | null | undefined,
 ): string | null {
+  const gameDate = typeof gameDateKey === "string" ? gameDateKey.trim() : "";
+  if (gameDate) {
+    const gameDateTs = Date.parse(`${gameDate}T00:00:00+03:00`);
+    if (
+      Number.isFinite(gameDateTs)
+      && gameDateTs >= MATCH_RESULT_DISPUTE_OVERRIDE_START_TS
+      && gameDateTs <= MATCH_RESULT_DISPUTE_OVERRIDE_END_TS
+    ) {
+      return new Date(MATCH_RESULT_DISPUTE_OVERRIDE_END_TS).toISOString();
+    }
+  }
+
   const explicitTs = parseIsoTimestamp(explicitDeadlineAt);
   if (explicitTs != null) {
     return new Date(explicitTs).toISOString();
@@ -1158,12 +1995,37 @@ function normalizeEditableScoreSets(rawSets: EditableMatchResultSet[]): Editable
     last
     && last.left !== ""
     && last.right !== ""
-    && normalized.length < MAX_MATCH_RESULT_SETS
   ) {
     normalized.push({ left: "", right: "" });
   }
 
-  return normalized.slice(0, MAX_MATCH_RESULT_SETS);
+  return normalized;
+}
+
+function validateCompletedMatchResultSets(sets: EditableMatchResultSet[]): string | null {
+  if (sets.length === 0) return "Введите хотя бы один завершенный сет";
+  const normalizedScores = sets
+    .map((setItem) => ({
+      left: Number.parseInt(setItem.left, 10),
+      right: Number.parseInt(setItem.right, 10),
+    }))
+    .filter((setItem) => Number.isFinite(setItem.left) && Number.isFinite(setItem.right));
+
+  if (normalizedScores.length === 0) return "Введите хотя бы один завершенный сет";
+
+  const hasDrawSet = normalizedScores.some((setItem) => setItem.left === setItem.right);
+  if (hasDrawSet) return "Счет в сете не может быть равным";
+
+  const hasNegativeSet = normalizedScores.some((setItem) => setItem.left < 0 || setItem.right < 0);
+  if (hasNegativeSet) return "Счет в сете должен быть неотрицательным";
+
+  const hasEmptyGap = sets.some((setItem, index) => (
+    index < normalizedScores.length
+    && (setItem.left.trim() === "" || setItem.right.trim() === "")
+  ));
+  if (hasEmptyGap) return "Заполните оба значения сета или удалите пустую строку";
+
+  return null;
 }
 
 function isDataImageUrl(value: unknown): value is string {
@@ -1720,30 +2582,27 @@ function mergePadelGamePlayers(
   current: PadelGamePlayer[] = [],
   incoming: PadelGamePlayer[] = [],
 ): PadelGamePlayer[] {
-  const merged = new Map<string, PadelGamePlayer>();
+  return dedupePlayersByIdentity([...current, ...incoming]);
+}
 
-  [...current, ...incoming].forEach((player, index) => {
-    const key = getPadelPlayerIdentityKey(player) || `player:${index}`;
-    const existing = merged.get(key);
-    if (!existing) {
-      merged.set(key, player);
-      return;
-    }
-    merged.set(key, {
-      ...existing,
-      ...player,
-      id: player.id ?? existing.id,
-      name: player.name || existing.name,
-      phone: player.phone ?? existing.phone,
-      photo: player.photo ?? existing.photo,
-      rating: player.rating ?? existing.rating,
-      ratingNumeric: player.ratingNumeric ?? existing.ratingNumeric,
-      source: player.source ?? existing.source,
-      status: player.status ?? existing.status,
-    });
-  });
-
-  return Array.from(merged.values());
+function mergePadelGameMetadata(
+  current: Record<string, unknown> | null | undefined,
+  incoming: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  const currentMetadata = isRecordObject(current) ? current : null;
+  const incomingMetadata = isRecordObject(incoming) ? incoming : null;
+  if (!currentMetadata || !incomingMetadata) {
+    return incoming ?? current ?? null;
+  }
+  return {
+    ...currentMetadata,
+    ...incomingMetadata,
+    ...(
+      !isRecordObject(incomingMetadata.matchResult) && isRecordObject(currentMetadata.matchResult)
+        ? { matchResult: currentMetadata.matchResult }
+        : {}
+    ),
+  };
 }
 
 function mergePadelGameRecord(
@@ -1764,6 +2623,10 @@ function mergePadelGameRecord(
     ...incoming,
     inviteUrl: normalizedIncomingInvite ?? normalizedExistingInvite,
     status: incoming.status ?? current.status,
+    resultStatus: incoming.resultStatus ?? current.resultStatus ?? null,
+    resultLifecycleState: incoming.resultLifecycleState ?? current.resultLifecycleState ?? null,
+    resultId: incoming.resultId ?? current.resultId ?? null,
+    lastResultAt: incoming.lastResultAt ?? current.lastResultAt ?? null,
     organizer: incoming.organizer || current.organizer
       ? {
           ...(current.organizer ?? {}),
@@ -1780,7 +2643,7 @@ function mergePadelGameRecord(
     participants: mergePadelGamePlayers(current.participants ?? [], incoming.participants ?? []),
     waitlist: mergePadelGamePlayers(current.waitlist ?? [], incoming.waitlist ?? []),
     chatUrl: incoming.chatUrl ?? current.chatUrl ?? null,
-    metadata: incoming.metadata ?? current.metadata ?? null,
+    metadata: mergePadelGameMetadata(current.metadata, incoming.metadata),
     booking: incoming.booking ?? current.booking ?? null,
     payment: incoming.payment ?? current.payment ?? null,
   };
@@ -1796,6 +2659,45 @@ function getPlayerInitials(name: string | null | undefined): string {
     .map((part) => part[0] ?? "")
     .join("")
     .toUpperCase();
+}
+
+function normalizeMemberKey(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function buildFallbackPadelPlayerMemberKey(player: {
+  id?: string | null;
+  phone?: string | null;
+  name?: string | null;
+} | null | undefined): string | null {
+  if (!player) return null;
+  const id = (player.id || "").trim();
+  if (id) return `id:${id}`;
+  const phone = normalizePhoneForGame(player.phone);
+  if (phone) return `phone:${phone}`;
+  const name = (player.name || "").trim().toLowerCase();
+  if (name) return `name:${name}`;
+  return null;
+}
+
+function buildPadelPlayerMemberLookupKey(memberKey: string | null | undefined): string {
+  return memberKey ? `member:${memberKey}` : "";
+}
+
+function getPadelPlayerMemberKey(player: {
+  memberKey?: string | null;
+  id?: string | null;
+  phone?: string | null;
+  name?: string | null;
+} | null | undefined): string {
+  if (!player) return "";
+  return (
+    normalizeMemberKey(player.memberKey)
+    || buildFallbackPadelPlayerMemberKey(player)
+    || ""
+  );
 }
 
 function AvatarWithInitialsFallback({
@@ -1840,14 +2742,7 @@ function AvatarWithInitialsFallback({
 }
 
 function getPadelPlayerIdentityKey(player: PadelGamePlayer | null | undefined): string {
-  if (!player) return "";
-  const byPhone = normalizePhoneForGame(player.phone);
-  if (byPhone) return `phone:${byPhone}`;
-  const byId = (player.id || "").trim();
-  if (byId) return `id:${byId}`;
-  const byName = (player.name || "").trim().toLowerCase();
-  if (byName) return `name:${byName}`;
-  return "";
+  return buildPadelPlayerMemberLookupKey(getPadelPlayerMemberKey(player));
 }
 
 type EnrichedPadelPlayerData = {
@@ -1860,18 +2755,21 @@ type EnrichedPadelPlayerData = {
 };
 
 function getPadelPlayerLookupKeys(player: {
+  memberKey?: string | null;
   id?: string | null;
   phone?: string | null;
   name?: string | null;
 }) {
   const keys: string[] = [];
+  const memberKey = getPadelPlayerMemberKey(player);
   const id = (player.id || "").trim();
   const phone = normalizePhoneForGame(player.phone);
   const name = (player.name || "").trim().toLowerCase();
+  if (memberKey) keys.push(buildPadelPlayerMemberLookupKey(memberKey));
   if (id) keys.push(`id:${id}`);
   if (phone) keys.push(`phone:${phone}`);
   if (name) keys.push(`name:${name}`);
-  return keys;
+  return Array.from(new Set(keys.filter(Boolean)));
 }
 
 function mergePadelPlayerFreshData(
@@ -1938,14 +2836,121 @@ function mergePadelOrganizerFreshData(
 function dedupePlayersByIdentity(
   players: Array<PadelGamePlayer | null | undefined>,
 ): PadelGamePlayer[] {
-  const map = new Map<string, PadelGamePlayer>();
-  players.forEach((player, index) => {
-    if (!player) return;
-    const key = getPadelPlayerIdentityKey(player) || `slot-${index}`;
-    if (map.has(key)) return;
-    map.set(key, player);
+  type PlayerAggregate = {
+    player: PadelGamePlayer;
+    ids: Set<string>;
+    phones: Set<string>;
+    names: Set<string>;
+  };
+
+  const normalizeName = (value: string | null | undefined): string | null => {
+    const normalized = String(value || "")
+      .toLowerCase()
+      .replace(/ё/g, "е")
+      .replace(/[^a-zа-я0-9\s-]/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return normalized || null;
+  };
+  const isGenericName = (value: string | null | undefined): boolean => {
+    const normalized = normalizeName(value);
+    return !normalized || normalized === "игрок";
+  };
+  const preferStatus = (
+    current: PadelGamePlayer["status"] | null | undefined,
+    incoming: PadelGamePlayer["status"] | null | undefined,
+  ): PadelGamePlayer["status"] => {
+    const rank = (value: PadelGamePlayer["status"] | null | undefined): number => {
+      if (value === "CONFIRMED") return 3;
+      if (value === "PENDING") return 2;
+      if (value === "WAITLIST") return 1;
+      return 0;
+    };
+    return rank(incoming) > rank(current) ? (incoming ?? "CONFIRMED") : (current ?? "CONFIRMED");
+  };
+  const mergePlayers = (current: PadelGamePlayer, incoming: PadelGamePlayer): PadelGamePlayer => ({
+    ...current,
+    memberKey: current.memberKey ?? incoming.memberKey ?? null,
+    id: current.id ?? incoming.id ?? null,
+    name: isGenericName(current.name) && !isGenericName(incoming.name)
+      ? incoming.name
+      : (current.name || incoming.name || "Игрок"),
+    phone: current.phone ?? incoming.phone ?? null,
+    photo: current.photo ?? incoming.photo ?? null,
+    rating: current.rating ?? incoming.rating ?? null,
+    ratingNumeric: current.ratingNumeric ?? incoming.ratingNumeric ?? null,
+    source: current.source ?? incoming.source ?? "INVITE_LINK",
+    status: preferStatus(current.status, incoming.status),
   });
-  return Array.from(map.values());
+
+  const byId = new Map<string, PlayerAggregate>();
+  const byPhone = new Map<string, PlayerAggregate>();
+  const byName = new Map<string, PlayerAggregate>();
+  const aggregates: PlayerAggregate[] = [];
+
+  players.forEach((player) => {
+    if (!player) return;
+    const id = normalizeComparableId(player.id);
+    const phone = normalizePhoneForGame(player.phone);
+    const name = normalizeName(player.name);
+
+    let aggregate: PlayerAggregate | undefined;
+    if (id) aggregate = byId.get(id);
+    if (!aggregate && phone) aggregate = byPhone.get(phone);
+    if (!aggregate && name) {
+      const byNameCandidate = byName.get(name);
+      if (byNameCandidate) {
+        const candidateHasStrongIdentity = byNameCandidate.ids.size > 0 || byNameCandidate.phones.size > 0;
+        const incomingHasStrongIdentity = Boolean(id || phone);
+        if (!candidateHasStrongIdentity || !incomingHasStrongIdentity) {
+          aggregate = byNameCandidate;
+        }
+      }
+    }
+    if (!aggregate) {
+      aggregate = aggregates.find((candidate) => playersShareRosterIdentity(candidate.player, player));
+    }
+
+    if (!aggregate) {
+      aggregate = {
+        player,
+        ids: new Set<string>(),
+        phones: new Set<string>(),
+        names: new Set<string>(),
+      };
+      aggregates.push(aggregate);
+    } else {
+      aggregate.player = mergePlayers(aggregate.player, player);
+    }
+
+    if (id) {
+      aggregate.ids.add(id);
+      byId.set(id, aggregate);
+    }
+    if (phone) {
+      aggregate.phones.add(phone);
+      byPhone.set(phone, aggregate);
+    }
+    if (name) {
+      aggregate.names.add(name);
+      byName.set(name, aggregate);
+    }
+  });
+
+  return aggregates.map((aggregate) => aggregate.player);
+}
+
+function buildPlayersIdentitySignature(players: PadelGamePlayer[]): string {
+  return players
+    .map((player) => getPadelPlayerIdentityKey(player))
+    .filter(Boolean)
+    .sort()
+    .join("|");
+}
+
+function arePlayersEqualByIdentity(left: PadelGamePlayer[], right: PadelGamePlayer[]): boolean {
+  if (left.length !== right.length) return false;
+  return buildPlayersIdentitySignature(left) === buildPlayersIdentitySignature(right);
 }
 
 function buildPadelPlayersRefreshKey(
@@ -2005,8 +3010,20 @@ function buildStoredTeamSlotsRefs(
   });
 }
 
-function createEmptyMatchResultSetPairings(): Array<MatchResultSetPairingSlots | null> {
-  return Array.from({ length: MAX_MATCH_RESULT_SETS }, () => null);
+function createEmptyMatchResultSetPairings(size = 1): Array<MatchResultSetPairingSlots | null> {
+  return Array.from({ length: Math.max(1, size) }, () => null);
+}
+
+function buildMatchResultPairingSlotRef(
+  player: PadelGamePlayer | null | undefined,
+): TeamSlotStoredRef | null {
+  if (!player) return null;
+  const memberKey = getPadelPlayerMemberKey(player);
+  if (!memberKey && !player.name) return null;
+  return {
+    memberKey: memberKey || null,
+    name: player.name || null,
+  };
 }
 
 function buildMatchResultSetPairingsPayload(
@@ -2017,7 +3034,7 @@ function buildMatchResultSetPairingsPayload(
       if (!teamSlots || !teamSlots.some(Boolean)) return null;
       return {
         setIndex,
-        teamSlots: buildStoredTeamSlotsRefs(teamSlots),
+        teamSlots: cloneTeamSlots(teamSlots).map(buildMatchResultPairingSlotRef),
       };
     })
     .filter((item): item is MatchResultSetPairingStored => Boolean(item));
@@ -2027,10 +3044,10 @@ function materializeCompletedMatchResultSetPairings(
   pairings: Array<MatchResultSetPairingSlots | null>,
   completedSetCount: number,
 ): Array<MatchResultSetPairingSlots | null> {
-  const nextPairings = pairings.map((teamSlots) => (
-    teamSlots ? cloneTeamSlots(teamSlots) : null
+  const safeCompletedSetCount = Math.max(0, completedSetCount);
+  const nextPairings = Array.from({ length: Math.max(pairings.length, safeCompletedSetCount, 1) }, (_, index) => (
+    pairings[index] ? cloneTeamSlots(pairings[index]) : null
   ));
-  const safeCompletedSetCount = Math.max(0, Math.min(MAX_MATCH_RESULT_SETS, completedSetCount));
   let lastKnownPairing: MatchResultSetPairingSlots | null = null;
 
   for (let setIndex = 0; setIndex < safeCompletedSetCount; setIndex += 1) {
@@ -2052,23 +3069,54 @@ function buildVisibleMatchResultSetPairings(
   visibleSetCount: number,
   fallbackSlots?: Array<PadelGamePlayer | null | undefined>,
 ): Array<MatchResultSetPairingSlots | null> {
+  const explicitPairings = Array.from({ length: visibleSetCount }, (_, index) => (
+    pairings[index] ? cloneTeamSlots(pairings[index]) : null
+  ));
   const nextPairings = materializeCompletedMatchResultSetPairings(
-    Array.from({ length: visibleSetCount }, (_, index) => (
-      pairings[index] ? cloneTeamSlots(pairings[index]) : null
-    )),
+    explicitPairings,
     visibleSetCount,
   );
+
+  const fallbackPairing = fallbackSlots ? cloneTeamSlots(fallbackSlots) : null;
+  const lastExplicitPairingIndex = explicitPairings.reduce((lastIndex, teamSlots, index) => (
+    teamSlots && teamSlots.some(Boolean) ? index : lastIndex
+  ), -1);
+
+  if (
+    lastExplicitPairingIndex >= 0
+    && fallbackPairing
+    && fallbackPairing.some(Boolean)
+    && pairings.length <= visibleSetCount
+  ) {
+    for (let setIndex = lastExplicitPairingIndex + 1; setIndex < visibleSetCount; setIndex += 1) {
+      nextPairings[setIndex] = cloneTeamSlots(fallbackPairing);
+    }
+  }
 
   if (nextPairings.some((teamSlots) => teamSlots && teamSlots.some(Boolean))) {
     return nextPairings;
   }
 
-  const fallbackPairing = fallbackSlots ? cloneTeamSlots(fallbackSlots) : null;
   if (!fallbackPairing || !fallbackPairing.some(Boolean)) {
     return nextPairings;
   }
 
   return Array.from({ length: visibleSetCount }, () => cloneTeamSlots(fallbackPairing));
+}
+
+function buildMatchResultSubmitSetPairingsPayload(
+  pairings: Array<MatchResultSetPairingSlots | null>,
+  completedSetCount: number,
+  fallbackSlots: Array<PadelGamePlayer | null | undefined>,
+): MatchResultSetPairingStored[] {
+  if (completedSetCount <= 0) return [];
+  const visiblePairings = buildVisibleMatchResultSetPairings(
+    pairings,
+    completedSetCount,
+    fallbackSlots,
+  );
+
+  return buildMatchResultSetPairingsPayload(visiblePairings);
 }
 
 function formatMatchResultPairTeamLabel(
@@ -2091,26 +3139,11 @@ function getMatchResultPairTeamPlayers(
     .filter((player): player is PadelGamePlayer => Boolean(player));
 }
 
-function normalizePlayerRatingLabel(value: string | null | undefined): string | null {
-  const raw = String(value || "").trim().toUpperCase();
-  if (!raw) return null;
-
-  if (RATING_LABELS.includes(raw)) {
-    return raw;
-  }
-
-  const compact = raw.replace(/\s+/g, "");
-  if (RATING_LABELS.includes(compact)) {
-    return compact;
-  }
-
-  const numeric = Number.parseFloat(raw.replace(",", "."));
-  if (Number.isFinite(numeric)) {
-    const index = Math.max(0, Math.min(RATING_LABELS.length - 1, Math.round(numeric) - 1));
-    return RATING_LABELS[index] ?? null;
-  }
-
-  return null;
+function normalizePlayerRatingLabel(
+  value: string | null | undefined,
+  numericFallback: number | null = null,
+): string | null {
+  return normalizeLevelGradeLabel(value, numericFallback);
 }
 
 function getPlayerRatingProgress(label: string | null): number | null {
@@ -2658,7 +3691,25 @@ function normalizeComparableId(value: unknown): string | null {
 function normalizeComparableName(value: unknown): string | null {
   const normalized = normalizeBookingId(value);
   if (!normalized) return null;
-  return normalized.toLowerCase().replace(/\s+/g, " ");
+  return normalized
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isGenericComparableName(value: string | null | undefined): boolean {
+  const normalized = normalizeComparableName(value);
+  if (!normalized) return true;
+  return [
+    "игрок",
+    "организатор",
+    "участник",
+    "player",
+    "participant",
+    "organizer",
+  ].includes(normalized);
 }
 
 function findStudioByPreset(
@@ -2834,8 +3885,10 @@ function buildBookingLookupContext(
 function matchBookingsByLookupContext(
   bookings: Booking[],
   context: BookingLookupContext,
+  options?: { allowDateFallback?: boolean },
 ): Booking[] {
   if (!Array.isArray(bookings) || bookings.length === 0) return [];
+  const allowDateFallback = options?.allowDateFallback !== false;
 
   const bookingIdsSet = new Set(
     context.bookingIds
@@ -2878,6 +3931,7 @@ function matchBookingsByLookupContext(
     if (bySlot.length > 0) return bySlot;
   }
 
+  if (!allowDateFallback) return [];
   if (!context.date || !context.timeFrom) return [];
 
   const targetDate = context.date;
@@ -2913,6 +3967,329 @@ function matchBookingsByLookupContext(
         : true;
     return studioMatches && roomMatches;
   });
+}
+
+function resolveGameVivaExerciseId(game: PadelGameRecord | null | undefined): string | null {
+  if (!game) return null;
+  const booking = game.booking && isRecordObject(game.booking)
+    ? game.booking as Record<string, unknown>
+    : null;
+  const bookingExercise = booking && isRecordObject(booking.exercise)
+    ? booking.exercise as Record<string, unknown>
+    : null;
+  const metadata = isRecordObject(game.metadata) ? game.metadata : null;
+  const splitPayment = metadata && isRecordObject(metadata.splitPayment)
+    ? metadata.splitPayment as Record<string, unknown>
+    : null;
+
+  return (
+    normalizeBookingId(booking?.vivaExerciseId) ??
+    normalizeBookingId(booking?.exerciseId) ??
+    normalizeBookingId(bookingExercise?.id) ??
+    normalizeBookingId(bookingExercise?.vivaExerciseId) ??
+    normalizeBookingId(bookingExercise?.exerciseId) ??
+    normalizeBookingId(metadata?.vivaExerciseId) ??
+    normalizeBookingId(metadata?.exerciseId) ??
+    normalizeBookingId(metadata?.viva_exercise_id) ??
+    normalizeBookingId(metadata?.exercise_id) ??
+    normalizeBookingId(splitPayment?.vivaExerciseId) ??
+    normalizeBookingId(splitPayment?.exerciseId) ??
+    normalizeBookingId(splitPayment?.viva_exercise_id) ??
+    normalizeBookingId(splitPayment?.exercise_id) ??
+    null
+  );
+}
+
+function extractExerciseBookingRows(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (!isRecordObject(payload)) return [];
+  const keys = ["payload", "content", "data", "result", "items", "records", "participants", "bookings"];
+  for (const key of keys) {
+    if (Array.isArray(payload[key])) return payload[key];
+  }
+  return [];
+}
+
+function normalizeVivaBookingParticipant(raw: unknown): PadelGamePlayer | null {
+  if (!isRecordObject(raw)) return null;
+  if (raw.isCancelled === true || raw.cancelled === true || raw.canceled === true) return null;
+
+  const client = isRecordObject(raw.client) ? raw.client : null;
+  const id =
+    normalizeBookingId(client?.id) ??
+    normalizeBookingId(raw.clientId) ??
+    null;
+  const phone = normalizePhoneForGame(
+    typeof client?.phone === "string"
+      ? client.phone
+      : typeof raw.phone === "string"
+        ? raw.phone
+        : typeof raw.phoneNorm === "string"
+          ? raw.phoneNorm
+          : null,
+  );
+
+  const firstName = typeof client?.firstName === "string" ? client.firstName.trim() : "";
+  const lastName = typeof client?.lastName === "string" ? client.lastName.trim() : "";
+  const fallbackName =
+    (typeof raw.clientName === "string" ? raw.clientName.trim() : "")
+    || (typeof raw.playerName === "string" ? raw.playerName.trim() : "")
+    || (typeof raw.name === "string" ? raw.name.trim() : "");
+  const name = [firstName, lastName].filter(Boolean).join(" ").trim() || fallbackName || "Игрок";
+
+  const ratingRaw = typeof raw.rating === "string" ? raw.rating.trim() : "";
+  const rating = ratingRaw && ratingRaw.replace(/\D/g, "").length < 10 ? ratingRaw : null;
+
+  const stateToken = String(raw.status || raw.state || "").trim().toUpperCase();
+  const status: PadelGamePlayer["status"] =
+    stateToken.includes("WAITLIST") || stateToken.includes("RESERVE")
+      ? "WAITLIST"
+      : raw.visitConfirmed === false || stateToken.includes("PENDING")
+        ? "PENDING"
+        : "CONFIRMED";
+
+  if (!id && !phone && !name.trim()) return null;
+
+  return {
+    id,
+    name,
+    phone,
+    photo: typeof client?.photo === "string" ? client.photo : null,
+    rating,
+    ratingNumeric: null,
+    source: "ADMIN",
+    status,
+  };
+}
+
+function extractVivaBookingId(raw: unknown): string | null {
+  if (!isRecordObject(raw)) return null;
+  return (
+    normalizeBookingId(raw.id)
+    ?? normalizeBookingId(raw.bookingId)
+    ?? normalizeBookingId(raw.recordId)
+    ?? normalizeBookingId(raw.uuid)
+    ?? null
+  );
+}
+
+function extractVivaBookingPaymentTypes(raw: unknown): string[] {
+  if (!isRecordObject(raw)) return [];
+  const values = [
+    raw.paymentType,
+    raw.detailedPaymentType,
+    raw.bookingPaymentType,
+    raw.transactionStatus,
+  ];
+  const normalized = values
+    .map((value) => (typeof value === "string" ? value.trim().toUpperCase() : ""))
+    .filter(Boolean);
+  return Array.from(new Set(normalized));
+}
+
+function hasVivaSubscriptionBookingSignal(raw: unknown): boolean {
+  if (!isRecordObject(raw)) return false;
+  if (normalizeBookingId(raw.clientSubscriptionId)) return true;
+  if (normalizeBookingId(raw.subscriptionId)) return true;
+
+  const paymentTypes = extractVivaBookingPaymentTypes(raw);
+  if (paymentTypes.some((value) => value.includes("SUBSCRIPTION"))) return true;
+  if (paymentTypes.some((value) => value.includes("ABON"))) return true;
+
+  return false;
+}
+
+function isCabinetBookingConvertedGame(game: PadelGameRecord | null | undefined): boolean {
+  if (!game) return false;
+  const gameId = String(game.id || "").trim().toLowerCase();
+  if (gameId.startsWith("viva_")) return true;
+
+  const metadata = isRecordObject(game.metadata) ? game.metadata : null;
+  const source = typeof metadata?.source === "string"
+    ? metadata.source.trim().toLowerCase()
+    : "";
+  return source === "cabinet_booking_convert";
+}
+
+function extractVivaBookingClientId(raw: unknown): string | null {
+  if (!isRecordObject(raw)) return null;
+  const client = isRecordObject(raw.client) ? raw.client : null;
+  return (
+    normalizeBookingId(client?.id)
+    ?? normalizeBookingId(raw.clientId)
+    ?? normalizeBookingId(raw.playerId)
+    ?? normalizeBookingId(raw.userId)
+    ?? null
+  );
+}
+
+function vivaBookingMatchesPlayer(raw: unknown, player: PadelGamePlayer): boolean {
+  if (!isRecordObject(raw)) return false;
+  const client = isRecordObject(raw.client) ? raw.client : null;
+  const playerId = normalizeComparableId(player.id);
+  const playerPhone = normalizePhoneForGame(player.phone);
+  const playerName = normalizeComparableName(player.name);
+
+  const bookingIds = [
+    client?.id,
+    raw.clientId,
+    raw.playerId,
+    raw.userId,
+  ]
+    .map((value) => normalizeComparableId(value))
+    .filter((value): value is string => Boolean(value));
+  if (playerId && bookingIds.includes(playerId)) return true;
+
+  const bookingPhones = [
+    client?.phone,
+    raw.phone,
+    raw.phoneNorm,
+    raw.clientPhone,
+  ]
+    .map((value) => normalizePhoneForGame(typeof value === "string" ? value : null))
+    .filter((value): value is string => Boolean(value));
+  if (playerPhone && bookingPhones.includes(playerPhone)) return true;
+
+  if (!playerId && !playerPhone && playerName && !isGenericComparableName(playerName)) {
+    const firstName = typeof client?.firstName === "string" ? client.firstName.trim() : "";
+    const lastName = typeof client?.lastName === "string" ? client.lastName.trim() : "";
+    const bookingName = normalizeComparableName(
+      [firstName, lastName].filter(Boolean).join(" ")
+      || raw.clientName
+      || raw.playerName
+      || raw.name,
+    );
+    return Boolean(
+      bookingName
+      && !isGenericComparableName(bookingName)
+      && bookingName === playerName,
+    );
+  }
+
+  return false;
+}
+
+function splitPaymentItemMatchesPlayer(
+  item: Record<string, unknown>,
+  player: PadelGamePlayer,
+): boolean {
+  const playerId = normalizeComparableId(player.id);
+  const playerPhone = normalizePhoneForGame(player.phone);
+  const playerName = normalizeComparableName(player.name);
+
+  const itemIds = [
+    item.clientId,
+    item.playerId,
+    item.userId,
+    item.id,
+  ]
+    .map((value) => normalizeComparableId(value))
+    .filter((value): value is string => Boolean(value));
+  if (playerId && itemIds.includes(playerId)) return true;
+
+  const itemPhone = normalizePhoneForGame(
+    typeof item.phoneNorm === "string"
+      ? item.phoneNorm
+      : typeof item.clientPhoneNorm === "string"
+        ? item.clientPhoneNorm
+        : typeof item.phone === "string"
+          ? item.phone
+          : typeof item.clientPhone === "string"
+            ? item.clientPhone
+            : null,
+  );
+  if (playerPhone && itemPhone && playerPhone === itemPhone) return true;
+
+  if (!playerId && !playerPhone && playerName && !isGenericComparableName(playerName)) {
+    const itemName = normalizeComparableName(item.playerName ?? item.clientName ?? item.name);
+    return Boolean(
+      itemName
+      && !isGenericComparableName(itemName)
+      && itemName === playerName,
+    );
+  }
+
+  return false;
+}
+
+function extractSplitPaymentBookingTargetsForPlayer(
+  splitPayment: Record<string, unknown> | null,
+  player: PadelGamePlayer,
+): Array<{ bookingId: string; clientId: string | null }> {
+  if (!splitPayment) return [];
+  const payments = Array.isArray(splitPayment.payments)
+    ? splitPayment.payments.filter((item) => isRecordObject(item))
+    : [];
+  const byBookingId = new Map<string, { bookingId: string; clientId: string | null }>();
+  const pushBookingTarget = (bookingIdRaw: unknown, clientIdRaw: unknown) => {
+    const bookingId = normalizeBookingId(bookingIdRaw);
+    if (!bookingId) return;
+    const clientId = normalizeBookingId(clientIdRaw);
+    const existing = byBookingId.get(bookingId);
+    if (existing) {
+      if (!existing.clientId && clientId) {
+        existing.clientId = clientId;
+      }
+      return;
+    }
+    byBookingId.set(bookingId, {
+      bookingId,
+      clientId,
+    });
+  };
+
+  payments.forEach((item) => {
+    if (!isSplitPaymentReservationActive(item.status)) return;
+    if (!splitPaymentItemMatchesPlayer(item, player)) return;
+
+    const itemClientId =
+      normalizeBookingId(item.clientId)
+      ?? normalizeBookingId(item.playerId)
+      ?? normalizeBookingId(item.userId)
+      ?? null;
+    pushBookingTarget(item.bookingId, itemClientId);
+    if (Array.isArray(item.bookingIds)) {
+      item.bookingIds.forEach((value) => {
+        pushBookingTarget(value, itemClientId);
+      });
+    }
+  });
+
+  return Array.from(byBookingId.values());
+}
+
+function markSplitPaymentPlayerLeft(
+  splitPayment: Record<string, unknown> | null,
+  player: PadelGamePlayer,
+  leftAt: string,
+  vivaCancellation: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!splitPayment) return null;
+  const payments = Array.isArray(splitPayment.payments)
+    ? splitPayment.payments.filter((item) => isRecordObject(item))
+    : [];
+  let changed = false;
+  const nextPayments = payments.map((item) => {
+    if (!isSplitPaymentReservationActive(item.status) || !splitPaymentItemMatchesPlayer(item, player)) {
+      return item;
+    }
+    changed = true;
+    return {
+      ...item,
+      status: "CANCELLED",
+      cancelReason: "PLAYER_LEFT",
+      cancelledAt: leftAt,
+      leftAt,
+      vivaCancellation,
+    };
+  });
+
+  if (!changed) return splitPayment;
+  return {
+    ...splitPayment,
+    payments: nextPayments,
+    lastLeaveUpdateAt: leftAt,
+  };
 }
 
 function isGameCancelledStatus(statusRaw: string | null | undefined): boolean {
@@ -2972,8 +4349,53 @@ function findGameRecordByBookingData(
   return null;
 }
 
-function isSinglesCourtName(roomName: string): boolean {
-  return /сингл|single|1\s*на\s*1|1x1/i.test(roomName);
+function isSinglesFormat(value: unknown): boolean {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "singles"
+    || normalized.includes("1x1")
+    || normalized.includes("1х1")
+    || normalized.includes("1 на 1");
+}
+
+function isSinglesCourtName(roomName: unknown): boolean {
+  return /сингл|single|1\s*на\s*1|1\s*[xх]\s*1/i.test(String(roomName || ""));
+}
+
+function isSinglesGameRecord(game: PadelGameRecord | null | undefined): boolean {
+  if (!game) return false;
+  const metadata = isRecordObject(game.metadata) ? game.metadata : null;
+  if (isSinglesFormat(metadata?.gameFormat ?? metadata?.format)) return true;
+
+  const splitPayment = metadata && isRecordObject(metadata.splitPayment)
+    ? metadata.splitPayment as Record<string, unknown>
+    : null;
+  const splitShareCount = toFiniteNumber(splitPayment?.shareCount);
+  if (splitShareCount === 2) return true;
+
+  return [
+    game.booking?.roomName,
+    metadata?.roomName,
+    metadata?.courtName,
+    metadata?.courtTitle,
+  ].some((value) => isSinglesCourtName(value));
+}
+
+function resolveGameDetailsMaxPlayers(game: PadelGameRecord | null | undefined): number {
+  if (!game) return MAX_DOUBLES_PLAYERS;
+  if (isSinglesGameRecord(game)) return MAX_SINGLES_PLAYERS;
+
+  const inviteMaxPlayers = game.invite?.maxPlayers;
+  if (typeof inviteMaxPlayers === "number" && Number.isFinite(inviteMaxPlayers) && inviteMaxPlayers > 0) {
+    return Math.max(1, Math.floor(inviteMaxPlayers));
+  }
+
+  const metadata = isRecordObject(game.metadata) ? game.metadata : null;
+  const metadataMaxPlayers = toFiniteNumber(metadata?.maxPlayers ?? metadata?.playersLimit);
+  if (metadataMaxPlayers !== null && metadataMaxPlayers > 0) {
+    return Math.max(1, Math.floor(metadataMaxPlayers));
+  }
+
+  return MAX_DOUBLES_PLAYERS;
 }
 
 function matchesCourtNameByGameFormat(roomName: string, format: GamePlayFormat): boolean {
@@ -2981,6 +4403,14 @@ function matchesCourtNameByGameFormat(roomName: string, format: GamePlayFormat):
     return isSinglesCourtName(roomName);
   }
   return !isSinglesCourtName(roomName);
+}
+
+function resolveSplitShareCountByGameFormat(format: GamePlayFormat): SplitShareCount {
+  return format === "singles" ? 2 : 4;
+}
+
+function isOutdoorCourtName(roomName: string): boolean {
+  return /уличн|outdoor|open\s*air|под\s*открытым\s*небом/i.test(roomName);
 }
 
 interface StudioMapPoint extends Studio {
@@ -2994,6 +4424,9 @@ interface LeafletMap {
   setView: (center: LeafletPoint, zoom: number) => void;
   invalidateSize: () => void;
   fitBounds: (bounds: LeafletPoint[], options: { padding: [number, number]; maxZoom: number }) => void;
+  getZoom: () => number;
+  on: (event: "zoomend", handler: () => void) => void;
+  off: (event: "zoomend", handler: () => void) => void;
   remove: () => void;
 }
 
@@ -3007,6 +4440,8 @@ interface LeafletMarker {
   on: (event: "click", handler: () => void) => LeafletMarker;
   addTo: (group: LeafletLayerGroup) => LeafletMarker;
 }
+
+type LeafletDivIcon = object;
 
 interface LeafletCircleLayer {
   addTo: (group: LeafletLayerGroup) => void;
@@ -3026,6 +4461,20 @@ interface LeafletModule {
     options: { maxZoom: number },
   ) => LeafletTileLayer;
   layerGroup: () => LeafletLayerGroup;
+  divIcon: (options: {
+    className: string;
+    html: string;
+    iconSize: [number, number];
+    iconAnchor: [number, number];
+    tooltipAnchor?: [number, number];
+  }) => LeafletDivIcon;
+  marker: (
+    point: LeafletPoint,
+    options: {
+      icon: LeafletDivIcon;
+      zIndexOffset?: number;
+    },
+  ) => LeafletMarker;
   circleMarker: (
     point: LeafletPoint,
     options: {
@@ -3049,8 +4498,79 @@ interface LeafletModule {
 }
 
 const NEAREST_MAP_STUDIOS_LIMIT = 5;
+const STUDIO_MAP_MARKER_LOGO_COVERAGE = 0.85;
+const STUDIO_MAP_MARKER_LOGO_ASPECT_RATIO = 1330 / 726;
 
 let leafletLoader: Promise<LeafletModule> | null = null;
+
+interface StudioMapMarkerVisualSpec {
+  containerWidth: number;
+  containerHeight: number;
+  logoWidth: number;
+  logoHeight: number;
+}
+
+function resolveStudioMapMarkerLogoSize(containerWidth: number, containerHeight: number) {
+  const maxLogoWidth = containerWidth * STUDIO_MAP_MARKER_LOGO_COVERAGE;
+  const maxLogoHeight = containerHeight * STUDIO_MAP_MARKER_LOGO_COVERAGE;
+  const widthByHeight = maxLogoHeight * STUDIO_MAP_MARKER_LOGO_ASPECT_RATIO;
+
+  if (widthByHeight <= maxLogoWidth) {
+    return {
+      logoWidth: Math.max(1, Math.round(widthByHeight)),
+      logoHeight: Math.max(1, Math.round(maxLogoHeight)),
+    };
+  }
+
+  return {
+    logoWidth: Math.max(1, Math.round(maxLogoWidth)),
+    logoHeight: Math.max(1, Math.round(maxLogoWidth / STUDIO_MAP_MARKER_LOGO_ASPECT_RATIO)),
+  };
+}
+
+function resolveStudioMapMarkerVisualSpec(zoom: number, selected: boolean): StudioMapMarkerVisualSpec {
+  const safeZoom = Number.isFinite(zoom) ? zoom : 10;
+  let baseSpec: Pick<StudioMapMarkerVisualSpec, "containerWidth" | "containerHeight">;
+  if (safeZoom <= 5) {
+    baseSpec = { containerWidth: 24, containerHeight: 16 };
+  } else if (safeZoom <= 7) {
+    baseSpec = { containerWidth: 30, containerHeight: 20 };
+  } else if (safeZoom <= 9) {
+    baseSpec = { containerWidth: 36, containerHeight: 24 };
+  } else if (safeZoom <= 11) {
+    baseSpec = { containerWidth: 42, containerHeight: 28 };
+  } else {
+    baseSpec = { containerWidth: 48, containerHeight: 30 };
+  }
+
+  if (selected) {
+    baseSpec = {
+      containerWidth: baseSpec.containerWidth + 6,
+      containerHeight: baseSpec.containerHeight + 4,
+    };
+  }
+
+  return {
+    ...baseSpec,
+    ...resolveStudioMapMarkerLogoSize(baseSpec.containerWidth, baseSpec.containerHeight),
+  };
+}
+
+function buildStudioMapMarkerHtml(selected: boolean, spec: StudioMapMarkerVisualSpec) {
+  const logoMarkup = selected ? logoHabWhiteRaw : logoHabBlackRaw;
+  return `
+    <span
+      class="game-map-station-marker${selected ? " is-selected" : ""}"
+      aria-hidden="true"
+      style="width:${spec.containerWidth}px;height:${spec.containerHeight}px"
+    >
+      <span
+        class="game-map-station-marker-logo"
+        style="width:${spec.logoWidth}px;height:${spec.logoHeight}px"
+      >${logoMarkup}</span>
+    </span>
+  `;
+}
 
 function toFloat(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -3218,6 +4738,7 @@ export default function GamesPage({
   openGameId = null,
   openChat = false,
   createFromBooking = null,
+  initialGameRecord = null,
   publicCreateEntry = false,
   presetStudioId = null,
   presetStudioName = null,
@@ -3242,11 +4763,14 @@ export default function GamesPage({
   const [loadingPay, setLoadingPay] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
   const [paymentMode, setPaymentMode] = useState<GamePaymentMode>("self");
-  const [splitPaymentTesterUnlocked, setSplitPaymentTesterUnlocked] = useState(false);
+  const [splitCheckoutMode, setSplitCheckoutMode] = useState<SplitCheckoutMode>("one_time");
+  const [selectedSplitSubscriptionId, setSelectedSplitSubscriptionId] = useState<string | null>(null);
   const [splitShareCount, setSplitShareCount] = useState<SplitShareCount>(4);
   const [splitPaymentPromoConfig, setSplitPaymentPromoConfig] =
     useState<PadelSplitPaymentPromoConfig>(DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG);
   const [promoModalOpen, setPromoModalOpen] = useState(false);
+  const [outdoorCourtHintOpen, setOutdoorCourtHintOpen] = useState(false);
+  const [splitSubscriptionInfoModalOpen, setSplitSubscriptionInfoModalOpen] = useState(false);
   const [promoCodeDraft, setPromoCodeDraft] = useState("");
   const [promoCodeApplied, setPromoCodeApplied] = useState<string | null>(null);
   const [promoDiscountAmount, setPromoDiscountAmount] = useState<number | null>(null);
@@ -3256,10 +4780,16 @@ export default function GamesPage({
   const [splitSubscriptionsLoading, setSplitSubscriptionsLoading] = useState(false);
   const [splitSubscriptionsError, setSplitSubscriptionsError] = useState<string | null>(null);
   const [splitSubscriptions, setSplitSubscriptions] = useState<Subscription[]>([]);
+  const [splitSubscriptionNamesById, setSplitSubscriptionNamesById] = useState<Record<string, string>>({});
   const [applyingPromo, setApplyingPromo] = useState(false);
   const [ratingGame, setRatingGame] = useState(true);
   const [minRating, setMinRating] = useState(1);
   const [maxRating, setMaxRating] = useState(4);
+  const [publicCreatePreciseRatingRange, setPublicCreatePreciseRatingRange] = useState<PublicCreatePreciseRatingRange>(
+    () => buildPreciseRatingRangeFromCoarse(1, 4),
+  );
+  const [publicCreatePreciseRatingTouched, setPublicCreatePreciseRatingTouched] = useState(false);
+  const [publicCreatePreciseRatingModalOpen, setPublicCreatePreciseRatingModalOpen] = useState(false);
   const [isPrivate, setIsPrivate] = useState(false);
   const [gameTitleDraft, setGameTitleDraft] = useState("");
   const [gameParticipantCommentDraft, setGameParticipantCommentDraft] = useState("");
@@ -3288,6 +4818,8 @@ export default function GamesPage({
   const [gameDetailsMetaError, setGameDetailsMetaError] = useState<string | null>(null);
   const [updatingGameRoster, setUpdatingGameRoster] = useState(false);
   const [updatingGameMeta, setUpdatingGameMeta] = useState(false);
+  const [joiningSplitPayment, setJoiningSplitPayment] = useState(false);
+  const [splitPendingNowTs, setSplitPendingNowTs] = useState(() => Date.now());
   const [, setRestoringPaidGame] = useState(false);
   const [participants, setParticipants] = useState<PadelGamePlayer[]>([]);
   const [waitlistPlayers, setWaitlistPlayers] = useState<PadelGamePlayer[]>([]);
@@ -3311,10 +4843,11 @@ export default function GamesPage({
   const [communityAutopublishLoading, setCommunityAutopublishLoading] = useState(false);
   const [communityAutopublishError, setCommunityAutopublishError] = useState<string | null>(null);
   const [ringFraction, setRingFraction] = useState(0);
-  const [inviteCopied, setInviteCopied] = useState(false);
+  const [inviteFeedback, setInviteFeedback] = useState<"shared" | "copied" | null>(null);
   const [detailsServiceInfoVisible, setDetailsServiceInfoVisible] = useState(false);
   const [detailsPaymentHintOpen, setDetailsPaymentHintOpen] = useState(false);
   const [detailsActiveTab, setDetailsActiveTab] = useState<"game" | "result">("game");
+  const [detailsLeaveHistoryOpen, setDetailsLeaveHistoryOpen] = useState(false);
   const [detailsMatchResultAttachments, setDetailsMatchResultAttachments] = useState<MatchResultAttachment[]>([]);
   const [detailsMatchResultAttachmentsLoading, setDetailsMatchResultAttachmentsLoading] = useState(false);
   const [sharingMatchResultPhoto, setSharingMatchResultPhoto] = useState(false);
@@ -3331,8 +4864,11 @@ export default function GamesPage({
   const [detailsMatchResultSetPairings, setDetailsMatchResultSetPairings] = useState<
     Array<MatchResultSetPairingSlots | null>
   >(() => createEmptyMatchResultSetPairings());
+  const [detailsMatchResultSession, setDetailsMatchResultSession] =
+    useState<PadelGameResultSessionResponse | null>(null);
+  const [detailsMatchResultSessionLoading, setDetailsMatchResultSessionLoading] = useState(false);
   const [detailsPairComposerSetIndex, setDetailsPairComposerSetIndex] = useState<number | null>(null);
-  const [detailsMatchResultStatus, setDetailsMatchResultStatus] = useState<string | null>(null);
+  const [detailsMatchResultStatus, setDetailsMatchResultStatus] = useState<MatchResultLifecycleStatus | null>(null);
   const [detailsMatchResultSubmittedBy, setDetailsMatchResultSubmittedBy] = useState<{
     id: string | null;
     phone: string | null;
@@ -3353,7 +4889,6 @@ export default function GamesPage({
     name: string | null;
   } | null>(null);
   const [detailsMatchResultDisputedAt, setDetailsMatchResultDisputedAt] = useState<string | null>(null);
-  const [retryingMatchResultVivaSync, setRetryingMatchResultVivaSync] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
   const [mapLoading, setMapLoading] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
@@ -3381,10 +4916,6 @@ export default function GamesPage({
     timeoutId: null,
   });
   const splitSubscriptionRequestRef = useRef(0);
-  const splitPaymentUnlockTapStateRef = useRef<{ count: number; timeoutId: number | null }>({
-    count: 0,
-    timeoutId: null,
-  });
   const detailsCameraInputRef = useRef<HTMLInputElement | null>(null);
   const detailsGalleryInputRef = useRef<HTMLInputElement | null>(null);
   const publicCreateEntryHandledRef = useRef(false);
@@ -3396,10 +4927,25 @@ export default function GamesPage({
   const selectedCommunityAutopublishIdsRef = useRef<string[]>([]);
   const communityAutopublishSyncInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
   const communityAutopublishRepairAttemptRef = useRef<string | null>(null);
+  const splitRelatedPhonesRepairAttemptRef = useRef<string | null>(null);
+  const splitTimeoutCleanupInFlightRef = useRef(false);
+  const splitTimeoutCleanupAttemptAtRef = useRef<Record<string, number>>({});
   const previousStudioIdRef = useRef<string | null>(null);
   const previousResolvedGameFormatRef = useRef<GamePlayFormat | null>(null);
   const previousPromoSelectionKeyRef = useRef<string | null>(null);
   const autoConfirmingMatchResultRef = useRef<string | null>(null);
+  const resultStateFetchKeyRef = useRef<string | null>(null);
+  const detailsMatchResultSourceKeyRef = useRef<string | null>(null);
+  const detailsMatchResultDraftDirtyRef = useRef(false);
+  const detailsMatchResultSessionOpenKeyRef = useRef<string | null>(null);
+  const detailsMatchResultSessionSyncKeyRef = useRef<string | null>(null);
+  const detailsMatchResultSessionRevisionRef = useRef<number | null>(null);
+  const detailsMatchResultSessionSaveTimerRef = useRef<number | null>(null);
+  const initialOpenGameRecord = useMemo(() => {
+    const requestedGameId = openGameId?.trim() || "";
+    if (!requestedGameId || !initialGameRecord?.id) return null;
+    return initialGameRecord.id === requestedGameId ? initialGameRecord : null;
+  }, [initialGameRecord, openGameId]);
   const clearPromoState = useCallback((options?: { clearDraft?: boolean }) => {
     setPromoModalOpen(false);
     if (options?.clearDraft !== false) {
@@ -3411,6 +4957,18 @@ export default function GamesPage({
     setPromoStatusMessage(null);
     setPromoError(null);
     setApplyingPromo(false);
+  }, []);
+  const resetSelectedTime = useCallback(() => {
+    setTime(null);
+    setSlotPrice(null);
+    setLoadingSlotPrice(false);
+    setPayError(null);
+  }, []);
+  const resetSelectedCourt = useCallback(() => {
+    setCourtId(null);
+    setSlotPrice(null);
+    setLoadingSlotPrice(false);
+    setPayError(null);
   }, []);
   useEffect(() => {
     if (!ENABLE_SPLIT_GAME_PAYMENT) return;
@@ -3732,15 +5290,55 @@ export default function GamesPage({
     }
 
     const activeBookingsResult = await apiFetchBookings(false);
-    let matchedBookings = matchBookingsByLookupContext(activeBookingsResult.data?.content ?? [], lookup);
-
-    if (matchedBookings.length === 0) {
+    const activeBookings = activeBookingsResult.data?.content ?? [];
+    let historyBookings: Booking[] | null = null;
+    const loadHistoryBookings = async () => {
+      if (historyBookings) return historyBookings;
       const historyBookingsResult = await apiFetchBookings(true);
-      matchedBookings = matchBookingsByLookupContext(historyBookingsResult.data?.content ?? [], lookup);
+      historyBookings = historyBookingsResult.data?.content ?? [];
+      return historyBookings;
+    };
+
+    let strictMatchedBookings = matchBookingsByLookupContext(activeBookings, lookup, {
+      allowDateFallback: false,
+    });
+    if (strictMatchedBookings.length === 0) {
+      strictMatchedBookings = matchBookingsByLookupContext(await loadHistoryBookings(), lookup, {
+        allowDateFallback: false,
+      });
+    }
+
+    let matchedBookings = strictMatchedBookings;
+    if (matchedBookings.length === 0) {
+      matchedBookings = matchBookingsByLookupContext(activeBookings, lookup, {
+        allowDateFallback: true,
+      });
+      if (matchedBookings.length === 0) {
+        matchedBookings = matchBookingsByLookupContext(await loadHistoryBookings(), lookup, {
+          allowDateFallback: true,
+        });
+      }
     }
 
     const paid = matchedBookings.length > 0 ? resolvePaidStateByBookings(matchedBookings) : null;
-    const cancelled = matchedBookings.length > 0 ? resolveCancelledStateByBookings(matchedBookings) : false;
+    const cancelledByBookings = strictMatchedBookings.length > 0
+      ? resolveCancelledStateByBookings(strictMatchedBookings)
+      : false;
+    let cancelled = cancelledByBookings && lookup.exerciseIds.length === 0;
+    if (cancelledByBookings && lookup.exerciseIds.length > 0) {
+      for (const exerciseId of lookup.exerciseIds) {
+        const exerciseResult = await apiFetchExerciseById(exerciseId);
+        const exerciseCancelled = resolveExerciseCancellationState(exerciseResult.data);
+        if (exerciseCancelled === false) {
+          cancelled = false;
+          break;
+        }
+        if (exerciseCancelled === true) {
+          cancelled = true;
+          break;
+        }
+      }
+    }
     const paymentUrl = matchedBookings
       .map((item) => resolveBookingPaymentUrl(item))
       .find((value): value is string => Boolean(value))
@@ -3834,9 +5432,16 @@ export default function GamesPage({
       }
     });
     return Array.from(map.values()).sort((a, b) => {
+      const aOutdoor = isOutdoorCourtName(a.name);
+      const bOutdoor = isOutdoorCourtName(b.name);
+      if (aOutdoor !== bOutdoor) return aOutdoor ? -1 : 1;
+
       const aOrder = extractCourtOrder(a.name);
       const bOrder = extractCourtOrder(b.name);
-      if (aOrder !== null && bOrder !== null) return aOrder - bOrder;
+      if (aOrder !== null && bOrder !== null) {
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return a.name.localeCompare(b.name, "ru");
+      }
       if (aOrder !== null) return -1;
       if (bOrder !== null) return 1;
       return a.name.localeCompare(b.name, "ru");
@@ -3890,6 +5495,7 @@ export default function GamesPage({
     [selectedGameModeConfig?.preferredRoomIds],
   );
   const isSinglesGame = resolvedGameFormat === "singles";
+  const splitShareCountByGameFormat = resolveSplitShareCountByGameFormat(resolvedGameFormat);
   const createMaxPlayers = isSinglesGame ? MAX_SINGLES_PLAYERS : MAX_DOUBLES_PLAYERS;
   const createInviteSlotsCount = Math.max(0, createMaxPlayers - 1);
   const effectiveRatingGame = !isSinglesGame && ratingGame;
@@ -4133,6 +5739,7 @@ export default function GamesPage({
     if (!host) return;
 
     let cancelled = false;
+    let zoomEndHandler: (() => void) | null = null;
     setMapLoading(true);
     setMapError(null);
 
@@ -4156,11 +5763,65 @@ export default function GamesPage({
           mapMarkersRef.current = L.layerGroup().addTo(map);
         }
         const markers = mapMarkersRef.current;
-        markers.clearLayers();
+
+        const renderMapMarkers = () => {
+          markers.clearLayers();
+          const zoom = map.getZoom();
+
+          mapStudios.forEach((item) => {
+            const selected = item.id === studio?.id;
+            const markerSpec = resolveStudioMapMarkerVisualSpec(zoom, selected);
+            const tooltipOffsetY = -Math.max(12, Math.round(markerSpec.containerHeight * 0.6));
+            const marker = L.marker([item.lat, item.lng], {
+              icon: L.divIcon({
+                className: "game-map-station-icon",
+                html: buildStudioMapMarkerHtml(selected, markerSpec),
+                iconSize: [markerSpec.containerWidth, markerSpec.containerHeight],
+                iconAnchor: [
+                  Math.round(markerSpec.containerWidth / 2),
+                  Math.round(markerSpec.containerHeight / 2),
+                ],
+                tooltipAnchor: [0, tooltipOffsetY],
+              }),
+              zIndexOffset: selected ? 200 : 0,
+            });
+            marker.bindTooltip(item.name, { direction: "top", offset: [0, tooltipOffsetY] });
+            marker.on("click", () => {
+              setStudio(item);
+              setStep("time");
+              setMapOpen(false);
+            });
+            marker.addTo(markers);
+          });
+
+          if (userLocation) {
+            const meMarker = L.circleMarker([userLocation.lat, userLocation.lng], {
+              radius: 8,
+              color: "#0284c7",
+              fillColor: "#0ea5e9",
+              fillOpacity: 1,
+              weight: 2,
+            });
+            meMarker.bindTooltip("Вы здесь", { direction: "top", offset: [0, -8] });
+            meMarker.addTo(markers);
+            if (Number.isFinite(userLocation.accuracy) && userLocation.accuracy > 0) {
+              L.circle([userLocation.lat, userLocation.lng], {
+                radius: userLocation.accuracy,
+                color: "#0ea5e9",
+                fillColor: "#38bdf8",
+                fillOpacity: 0.14,
+                weight: 1,
+              }).addTo(markers);
+            }
+          }
+        };
 
         if (mapStudios.length === 0 && !userLocation) {
           map.setView([55.751244, 37.618423], 10);
-          window.setTimeout(() => map.invalidateSize(), 0);
+          window.setTimeout(() => {
+            map.invalidateSize();
+            renderMapMarkers();
+          }, 0);
           setMapLoading(false);
           return;
         }
@@ -4173,47 +5834,12 @@ export default function GamesPage({
               NEAREST_MAP_STUDIOS_LIMIT,
             )
           : mapStudios;
-        mapStudios.forEach((item) => {
-          const selected = item.id === studio?.id;
-          const marker = L.circleMarker([item.lat, item.lng], {
-            radius: selected ? 9 : 7,
-            color: selected ? "#7353d9" : "#4b5563",
-            fillColor: selected ? "#7353d9" : "#ffffff",
-            fillOpacity: 1,
-            weight: 2,
-          });
-          marker.bindTooltip(item.name, { direction: "top", offset: [0, -8] });
-          marker.on("click", () => {
-            setStudio(item);
-            setStep("time");
-            setMapOpen(false);
-          });
-          marker.addTo(markers);
-        });
 
         studiosForViewport.forEach((item) => {
           bounds.push([item.lat, item.lng]);
         });
 
         if (userLocation) {
-          const meMarker = L.circleMarker([userLocation.lat, userLocation.lng], {
-            radius: 8,
-            color: "#0284c7",
-            fillColor: "#0ea5e9",
-            fillOpacity: 1,
-            weight: 2,
-          });
-          meMarker.bindTooltip("Вы здесь", { direction: "top", offset: [0, -8] });
-          meMarker.addTo(markers);
-          if (Number.isFinite(userLocation.accuracy) && userLocation.accuracy > 0) {
-            L.circle([userLocation.lat, userLocation.lng], {
-              radius: userLocation.accuracy,
-              color: "#0ea5e9",
-              fillColor: "#38bdf8",
-              fillOpacity: 0.14,
-              weight: 1,
-            }).addTo(markers);
-          }
           bounds.push([userLocation.lat, userLocation.lng]);
         }
 
@@ -4223,7 +5849,20 @@ export default function GamesPage({
           map.fitBounds(bounds, { padding: [24, 24], maxZoom: 13 });
         }
 
-        window.setTimeout(() => map.invalidateSize(), 0);
+        zoomEndHandler = () => {
+          if (cancelled) return;
+          renderMapMarkers();
+        };
+
+        map.on("zoomend", zoomEndHandler);
+        renderMapMarkers();
+
+        window.setTimeout(() => {
+          if (cancelled) return;
+          map.invalidateSize();
+          renderMapMarkers();
+        }, 0);
+
         setMapLoading(false);
       })
       .catch(() => {
@@ -4234,6 +5873,9 @@ export default function GamesPage({
 
     return () => {
       cancelled = true;
+      if (zoomEndHandler && mapInstanceRef.current) {
+        mapInstanceRef.current.off("zoomend", zoomEndHandler);
+      }
     };
   }, [step, mapOpen, mapStudios, studio?.id, userLocation]);
 
@@ -4262,6 +5904,7 @@ export default function GamesPage({
     setInviteLink(null);
     setGameSnapshot(null);
     setActiveGameRecordStore((prev) => {
+      if (initialOpenGameRecord?.id === requestedGameId) return initialOpenGameRecord;
       if (prev?.id === requestedGameId) return prev;
       return communityGames.find((game) => game.id === requestedGameId) ?? null;
     });
@@ -4270,7 +5913,7 @@ export default function GamesPage({
     setChatDraft("");
     setConfirmCancelUnpaidGame(false);
     setStep(requestedOpenStep);
-  }, [openGameId, openChat]);
+  }, [communityGames, initialOpenGameRecord, openGameId, openChat]);
 
   useEffect(() => {
     const activeId = (gameRecordId || "").trim();
@@ -4409,7 +6052,6 @@ export default function GamesPage({
           payment: record.payment ?? fallbackRecord.payment,
         };
         upsertGameRecordInStores(nextRecord, { communityMode: "upsert" });
-        notifyGameRecordsUpdated([nextRecord], "games_payment_callback");
         void runPaidGameCommunityMembershipAndPublication(nextRecord, "payment_callback");
         setParticipants(
           Array.isArray(draftPayload.participants)
@@ -4424,7 +6066,6 @@ export default function GamesPage({
         setWaitlistEnabled(draftPayload.invite?.waitlistEnabled !== false);
       } else {
         upsertGameRecordInStores(record, { communityMode: "upsert" });
-        notifyGameRecordsUpdated([record], "games_payment_callback");
         void runPaidGameCommunityMembershipAndPublication(record, "payment_callback");
       }
 
@@ -4541,7 +6182,7 @@ export default function GamesPage({
       ? true
       : createFromBooking?.paid === false
         ? false
-        : false;
+        : null;
     const amount = typeof createFromBooking?.amount === "number" && Number.isFinite(createFromBooking.amount)
       ? Math.max(0, Math.round(createFromBooking.amount))
       : null;
@@ -4588,6 +6229,7 @@ export default function GamesPage({
     `${bookingPreset.durationMinutes} мин`,
     bookingPreset.roomName,
   ].filter(Boolean).join(" · ");
+  const usePublicCreateWizard = publicCreateEntry && !isBookingPresetMode;
   const communityAutopublishStationName = useMemo(() => {
     const rawName = isBookingPresetMode ? bookingPreset.studioName : studioName;
     return rawName?.trim() || null;
@@ -4595,6 +6237,12 @@ export default function GamesPage({
   const dateLabel = selectedDate
     ? selectedDate.toLocaleDateString("ru-RU", { day: "numeric", month: "long" })
     : "";
+  const selectedDateChipLabel = selectedDate
+    ? selectedDate
+        .toLocaleDateString("ru-RU", { day: "numeric", month: "short" })
+        .replace(".", "")
+        .trim()
+    : null;
   const badgeMonth = selectedDate
     ? selectedDate
         .toLocaleDateString("ru-RU", { month: "short" })
@@ -4671,6 +6319,102 @@ export default function GamesPage({
     : "Дружеская игра не влияет на уровень участников";
   const minPercent = (minRating / (RATING_LABELS.length - 1)) * 100;
   const maxPercent = (maxRating / (RATING_LABELS.length - 1)) * 100;
+  const publicCreateMinRatingLabel = RATING_LABELS[minRating] ?? "—";
+  const publicCreateMaxRatingLabel = RATING_LABELS[maxRating] ?? "—";
+  const publicCreateRatingSummaryLabel = "Подойдут игроки уровня";
+  const publicCreatePreciseRatingSummaryValue = publicCreatePreciseRatingTouched
+    ? `${formatPreciseRatingBoundLabel(publicCreatePreciseRatingRange.min)} — ${formatPreciseRatingBoundLabel(publicCreatePreciseRatingRange.max)}`
+    : `${publicCreateMinRatingLabel} — ${publicCreateMaxRatingLabel}`;
+  const publicCreatePreciseRatingMetadata = useMemo(
+    () => buildPreciseRatingMetadataFields(
+      Boolean(usePublicCreateWizard && effectiveRatingGame),
+      publicCreatePreciseRatingRange,
+      publicCreatePreciseRatingTouched,
+    ),
+    [
+      effectiveRatingGame,
+      publicCreatePreciseRatingRange,
+      publicCreatePreciseRatingTouched,
+      usePublicCreateWizard,
+    ],
+  );
+
+  const applyPublicCreateCoarseRatingRange = useCallback((nextMin: number, nextMax: number) => {
+    const safeMin = clampRatingWheelIndex(Math.min(nextMin, nextMax));
+    const safeMax = clampRatingWheelIndex(Math.max(nextMin, nextMax));
+    setMinRating((current) => (current === safeMin ? current : safeMin));
+    setMaxRating((current) => (current === safeMax ? current : safeMax));
+    setPublicCreatePreciseRatingTouched(false);
+    setPublicCreatePreciseRatingRange((current) => {
+      const nextRange = buildPreciseRatingRangeFromCoarse(safeMin, safeMax);
+      return isSamePreciseRatingRange(current, nextRange) ? current : nextRange;
+    });
+  }, []);
+
+  const handlePublicCreateRatingSegmentSelect = useCallback((index: number) => {
+    const normalizedIndex = clampRatingWheelIndex(index);
+    if (normalizedIndex <= minRating) {
+      applyPublicCreateCoarseRatingRange(normalizedIndex, maxRating);
+      return;
+    }
+    if (normalizedIndex >= maxRating) {
+      applyPublicCreateCoarseRatingRange(minRating, normalizedIndex);
+      return;
+    }
+
+    const distanceToMin = normalizedIndex - minRating;
+    const distanceToMax = maxRating - normalizedIndex;
+    if (distanceToMin <= distanceToMax) {
+      applyPublicCreateCoarseRatingRange(normalizedIndex, maxRating);
+    } else {
+      applyPublicCreateCoarseRatingRange(minRating, normalizedIndex);
+    }
+  }, [applyPublicCreateCoarseRatingRange, maxRating, minRating]);
+
+  const handlePublicCreatePreciseRatingBoundChange = useCallback((
+    bound: "min" | "max",
+    field: "grade" | "level",
+    rawValue: string,
+  ) => {
+    const nextRange = {
+      min: clonePreciseRatingBound(publicCreatePreciseRatingRange.min),
+      max: clonePreciseRatingBound(publicCreatePreciseRatingRange.max),
+    };
+    const target = nextRange[bound];
+    if (field === "grade") {
+      target.grade = normalizePreciseRatingGrade(rawValue);
+    } else {
+      target.level = normalizePreciseRatingLevel(rawValue);
+    }
+
+    const normalizedRange = normalizePreciseRatingRangeAfterBoundChange(nextRange, bound);
+    setPublicCreatePreciseRatingRange((current) => (
+      isSamePreciseRatingRange(current, normalizedRange) ? current : normalizedRange
+    ));
+    setPublicCreatePreciseRatingTouched(true);
+    setMinRating((current) => {
+      const nextIndex = mapPreciseRatingBoundToCoarseIndex(normalizedRange.min);
+      return current === nextIndex ? current : nextIndex;
+    });
+    setMaxRating((current) => {
+      const nextIndex = mapPreciseRatingBoundToCoarseIndex(normalizedRange.max);
+      return current === nextIndex ? current : nextIndex;
+    });
+  }, [publicCreatePreciseRatingRange]);
+
+  useEffect(() => {
+    if (publicCreatePreciseRatingTouched) return;
+    setPublicCreatePreciseRatingRange((current) => {
+      const nextRange = buildPreciseRatingRangeFromCoarse(minRating, maxRating);
+      return isSamePreciseRatingRange(current, nextRange) ? current : nextRange;
+    });
+  }, [maxRating, minRating, publicCreatePreciseRatingTouched]);
+
+  useEffect(() => {
+    if (ratingGame) return;
+    if (!publicCreatePreciseRatingModalOpen) return;
+    setPublicCreatePreciseRatingModalOpen(false);
+  }, [publicCreatePreciseRatingModalOpen, ratingGame]);
 
   const initials = profileName
     .split(" ")
@@ -4701,14 +6445,16 @@ export default function GamesPage({
     !noFormatSlots &&
     !noDurationSlots &&
     availableCourts.length === 0;
+  const hasCompleteTimeSelection = Boolean(studio && selectedDate && selectedCourt && selectedSlot && time);
   const isPlaceStepComplete = isBookingPresetMode ? bookingPreset.canCreateFromPreset : Boolean(studio);
   const isTimeStepComplete = isBookingPresetMode
     ? bookingPreset.canCreateFromPreset
-    : Boolean(studio && selectedDate && selectedCourt && selectedSlot && time);
+    : hasCompleteTimeSelection;
   const canContinueGameCreation = isBookingPresetMode
     ? bookingPreset.canCreateFromPreset
     : Boolean(isPlaceStepComplete && isTimeStepComplete);
-  const canProceedToPayment = Boolean(studio && selectedDate && selectedCourt && selectedSlot && time);
+  const isContinueDisabled = () => !(hasCompleteTimeSelection && paymentMode);
+  const canProceedToPayment = !isContinueDisabled();
   const showInlinePaymentSection = !isBookingPresetMode && canProceedToPayment;
   const basePaymentAmount = slotPrice ?? selectedSlot?.price ?? selectedCourt?.price ?? null;
   const paymentAmount = promoPricePreview ?? basePaymentAmount;
@@ -4720,43 +6466,56 @@ export default function GamesPage({
     roomId: courtId,
     roomName: selectedCourtName,
   });
-  const splitPaymentAvailable = ENABLE_SPLIT_GAME_PAYMENT && splitPaymentTesterUnlocked;
+  const splitPaymentAvailable = ENABLE_SPLIT_GAME_PAYMENT;
   const splitPaymentSelected = splitPaymentAvailable && paymentMode === "split";
+  const splitSharePartLabel = `1/${splitShareCount}`;
+  const splitRequiredSubscriptionVisits = resolveSplitSubscriptionVisitCharge(duration);
   const paymentModeSubLabel = splitPaymentSelected
-    ? "Разделить оплату на 4-ых"
-    : splitPaymentTesterUnlocked
-      ? "Тестовый режим активирован · оплачу игру один"
-      : "Оплачу игру один";
+    ? `Разделить оплату на ${splitShareCount === 2 ? "двоих" : "четверых"}`
+    : "Оплачу игру один";
   const splitShareAmount = paymentAmount != null && paymentAmount > 0
     ? Math.max(0, Math.round(paymentAmount / Math.max(splitShareCount, 1)))
     : resolveSplitShareAmount(splitShareCount, activeSplitPaymentPromoConfig, duration);
   const splitPaymentSummary = `${formatPrice(splitShareAmount)} ₽ × ${splitShareCount}`;
+  // Eligible subscriptions must match the actual open-game exercise type we create.
+  // Promo config may contain alternative Viva exercise type ids for pricing, but using
+  // them here shows subscriptions that cannot be used for this booking flow.
   const splitRequiredTypeIds = useMemo(
-    () => buildComparableIdSet([
-      SPLIT_OPEN_GAME_EXERCISE_TYPE_ID,
-      DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.vivaExerciseTypeId,
-      activeSplitPaymentPromoConfig.vivaExerciseTypeId,
-    ]),
-    [activeSplitPaymentPromoConfig.vivaExerciseTypeId],
+    () => buildComparableIdSet([SPLIT_OPEN_GAME_EXERCISE_TYPE_ID]),
+    [],
   );
   const splitRequiredDirectionIds = useMemo(
-    () => buildComparableIdSet([
-      SPLIT_OPEN_GAME_DIRECTION_ID,
-      DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.vivaDirectionId,
-      activeSplitPaymentPromoConfig.vivaDirectionId,
-    ]),
-    [activeSplitPaymentPromoConfig.vivaDirectionId],
+    () => buildComparableIdSet([SPLIT_OPEN_GAME_DIRECTION_ID]),
+    [],
   );
   const splitHasEligibleSubscriptions = splitSubscriptions.length > 0;
+  const splitSubscriptionPaymentOptions = useMemo(
+    () => splitSubscriptions
+      .map((subscription) => {
+        const subscriptionId = String(subscription.subscriptionId || "").trim();
+        if (!subscriptionId) return null;
+        const name = resolveSplitSubscriptionDisplayName(subscription, splitSubscriptionNamesById);
+        const balanceLabel = formatSplitSubscriptionBalanceLabel(subscription) || "Посещение";
+        return {
+          subscriptionId,
+          name,
+          balanceLabel,
+        };
+      })
+      .filter((item): item is { subscriptionId: string; name: string; balanceLabel: string } => Boolean(item)),
+    [splitSubscriptions, splitSubscriptionNamesById],
+  );
+  const splitHasSubscriptionPaymentOptions = splitSubscriptionPaymentOptions.length > 0;
   const normalizedGameTitle = gameTitleDraft.trim();
   const normalizedGameParticipantComment = gameParticipantCommentDraft.trim();
   const normalizedGameJoinPrice = gameJoinPriceDraft.replace(/[^\d]/g, "").replace(/^0+(?=\d)/, "");
   const splitJoinPriceAutoAmount = paymentAmount != null && paymentAmount > 0
-    ? Math.max(0, Math.round(paymentAmount / 4))
+    ? Math.max(0, Math.round(paymentAmount / Math.max(splitShareCount, 1)))
     : 0;
   const splitJoinPriceAutoValue = splitJoinPriceAutoAmount > 0 ? String(splitJoinPriceAutoAmount) : "";
   const hasSelectedCommunityAutopublish = selectedCommunityAutopublishIds.length > 0;
   const showPublicationFields = !isPrivate || hasSelectedCommunityAutopublish;
+  const shouldShowPublicationJoinPriceField = !usePublicCreateWizard;
   const publicationFieldsNote = !isPrivate
     ? (
       hasSelectedCommunityAutopublish
@@ -4776,7 +6535,7 @@ export default function GamesPage({
       loadingPay
         ? "Оплатить участие · подготовка..."
         : splitHasEligibleSubscriptions
-          ? `Оплатить 1/4 стоимости · ${formatPrice(splitShareAmount)} ₽`
+          ? `Оплатить ${splitSharePartLabel} стоимости · ${formatPrice(splitShareAmount)} ₽`
           : `Оплатить участие · ${formatPrice(splitShareAmount)} ₽`
     )
     : paymentTitle;
@@ -4799,12 +6558,220 @@ export default function GamesPage({
           : splitSubscriptionsError
             ? splitSubscriptionsError
             : splitSubscriptions.length > 0
-            ? buildSplitSubscriptionStatusLabel(splitSubscriptions)
-            : "Подходящий абонемент не найден, доступна оплата 1/4 стоимости."
+            ? buildSplitSubscriptionStatusLabel(
+              splitSubscriptions,
+              splitSubscriptionNamesById,
+              splitRequiredSubscriptionVisits,
+            )
+            : `Подходящий абонемент не найден, доступна оплата ${splitSharePartLabel} стоимости.`
     )
     : null;
   const splitPaymentAvailabilityLabel = splitPaymentSelected ? splitSubscriptionsLabel : null;
   const splitPaymentAvailabilityLabelIsError = splitPaymentSelected ? Boolean(splitSubscriptionsError) : false;
+  const publicCreateSplitShareLabel = `Оплачиваю только ${splitSharePartLabel} часть · ${formatPrice(splitShareAmount)} ₽`;
+  const publicCreatePaymentSummaryLabel = splitPaymentSelected
+    ? "Каждый платит за себя"
+    : "Я оплачиваю весь корт";
+  const publicCreateSummaryCourtLabel = selectedCourt?.name || "Корт";
+  const publicCreateSummaryTimeLabel = time ? `${time}-${addMinutesToTime(time, duration)}` : null;
+  const publicCreateSummaryPaymentLine = publicCreatePaymentSummaryLabel;
+  const publicCreateAutoStationCommunityId = usePublicCreateWizard && !isPrivate
+    ? communityAutopublishStationTarget?.id ?? null
+    : null;
+  const publicCreatePaymentMethodHelperText = splitSubscriptionPaymentOptions.length > 1
+    ? "Выберите абонемент ниже"
+    : "Абонемент доступен для списания";
+  const shouldShowPublicSplitPaymentAvailabilityLabel = Boolean(
+    splitPaymentAvailabilityLabel
+    && (splitSubscriptionsLoading || splitPaymentAvailabilityLabelIsError),
+  );
+  const publicCreateJoinersCountNoun = createInviteSlotsCount % 10 === 1 && createInviteSlotsCount % 100 !== 11
+    ? "игрок"
+    : createInviteSlotsCount % 10 >= 2
+      && createInviteSlotsCount % 10 <= 4
+      && (createInviteSlotsCount % 100 < 12 || createInviteSlotsCount % 100 > 14)
+      ? "игрока"
+      : "игроков";
+  const publicCreateJoinersCountVerb = createInviteSlotsCount === 1 ? "сможет" : "смогут";
+  const publicCreateJoinersPillLabel = createInviteSlotsCount > 0
+    ? `${createInviteSlotsCount} ${publicCreateJoinersCountNoun} ${publicCreateJoinersCountVerb} присоединиться`
+    : "Новых игроков присоединить нельзя";
+  const publicCreateJoinersSentenceLabel = createInviteSlotsCount > 0
+    ? `${publicCreateJoinersCountVerb} присоединиться ${createInviteSlotsCount} ${publicCreateJoinersCountNoun}`
+    : "нельзя присоединить новых игроков";
+  const publicCreateSplitPaymentDescription = createInviteSlotsCount > 0
+    ? `Вы оплачиваете только своё участие. Будет создана игра, к которой ${publicCreateJoinersSentenceLabel}, оплатив свою часть.`
+    : "Вы оплачиваете только своё участие.";
+  const publicCreateFullCourtDescription = "Вы оплачиваете весь корт; будет создана приватная игра, пригласить участников можно будет только по ссылке.";
+  const publicCreateVisibilityIntroLabel = "Выберите, будет ли игра видна всем или игра приглашённым.";
+  const publicCreateVisibilityOpenDescription = "К игре может присоединиться любой игрок подходящего уровня";
+  const publicCreateVisibilityPrivateDescription = "Присоединиться можно по ссылке или в сообществе, где игра опубликована";
+  const publicCreateVisibilityOpenPillLabel = "Быстрее собрать";
+  const publicCreateVisibilityPrivatePillLabel = "Для своих";
+  const shouldShowPublicSplitSubscriptionBadge = splitHasSubscriptionPaymentOptions
+    && !splitSubscriptionsLoading
+    && !splitPaymentAvailabilityLabelIsError;
+  const shouldShowPublicSplitSubscriptionInfoBadge = !splitHasSubscriptionPaymentOptions
+    && !splitSubscriptionsLoading
+    && !splitPaymentAvailabilityLabelIsError;
+  const renderSelectedParamsChips = () => (
+    <div className="game-selected-params-chips" role="list" aria-label="Выбранные параметры игры">
+      <div className="game-selected-param-chip" role="listitem">
+        <span>{`${duration} мин`}</span>
+      </div>
+      {selectedDateChipLabel && (
+        <div className="game-selected-param-chip" role="listitem">
+          <span>{selectedDateChipLabel}</span>
+        </div>
+      )}
+      {time && (
+        <div className="game-selected-param-chip game-selected-param-chip--dismissible" role="listitem">
+          <span>{time}</span>
+          <button
+            type="button"
+            className="game-selected-param-chip-remove"
+            onClick={resetSelectedTime}
+            aria-label="Сбросить выбранное время"
+          >
+            ×
+          </button>
+        </div>
+      )}
+      {selectedCourt && (
+        <div className="game-selected-param-chip game-selected-param-chip--dismissible" role="listitem">
+          <span>{selectedCourt.name}</span>
+          <button
+            type="button"
+            className="game-selected-param-chip-remove"
+            onClick={resetSelectedCourt}
+            aria-label="Сбросить выбранный корт"
+          >
+            ×
+          </button>
+        </div>
+      )}
+    </div>
+  );
+  const renderPublicCreateVisibilityFeatureIcon = (mode: "public" | "private") => (
+    mode === "public" ? (
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" strokeWidth="1.8" />
+        <path d="M2.75 10H17.25" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        <path d="M10 2.75C11.9 4.68 12.97 7.27 13 10C12.97 12.73 11.9 15.32 10 17.25C8.1 15.32 7.03 12.73 7 10C7.03 7.27 8.1 4.68 10 2.75Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      </svg>
+    ) : (
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <rect x="5" y="9" width="10" height="7" rx="2.2" fill="none" stroke="currentColor" strokeWidth="1.8" />
+        <path d="M7.25 9V7.4C7.25 5.86 8.49 4.6 10 4.6C11.51 4.6 12.75 5.86 12.75 7.4V9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        <circle cx="10" cy="12.4" r="1.1" fill="currentColor" />
+      </svg>
+    )
+  );
+  const renderPublicCreateVisibilityPillIcon = (mode: "public" | "private") => (
+    mode === "public" ? (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8.92 1.75L4.7 8.08H7.4L6.63 14.25L10.96 7.92H8.2L8.92 1.75Z" fill="currentColor" />
+      </svg>
+    ) : (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <rect x="4.2" y="7.2" width="7.6" height="5.7" rx="1.7" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M5.75 7.2V5.95C5.75 4.72 6.76 3.7 8 3.7C9.24 3.7 10.25 4.72 10.25 5.95V7.2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        <circle cx="8" cy="10" r="0.8" fill="currentColor" />
+      </svg>
+    )
+  );
+  const renderPublicCreateSummaryIcon = (kind: "place" | "calendar" | "clock" | "duration" | "players") => {
+    switch (kind) {
+      case "place":
+        return (
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M10 17C13.5 13.1 15.25 10.32 15.25 7.97C15.25 5.23 12.9 3 10 3C7.1 3 4.75 5.23 4.75 7.97C4.75 10.32 6.5 13.1 10 17Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+            <circle cx="10" cy="7.9" r="1.95" fill="none" stroke="currentColor" strokeWidth="1.8" />
+          </svg>
+        );
+      case "calendar":
+        return (
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <rect x="3.25" y="4.75" width="13.5" height="11.5" rx="2.25" fill="none" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M6.5 3.25V6.25" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <path d="M13.5 3.25V6.25" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <path d="M3.25 8H16.75" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        );
+      case "clock":
+        return (
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="10" cy="10" r="6.9" fill="none" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M10 6.6V10L12.55 11.55" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        );
+      case "duration":
+        return (
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="10" cy="11" r="5.9" fill="none" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M10 8.3V11L12.05 12.35" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M7.1 3.75H12.9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <path d="M6 5.2L4.9 4.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <path d="M14 5.2L15.1 4.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        );
+      case "players":
+        return (
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="7.1" cy="7.15" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.7" />
+            <path d="M3.9 14.6C4.1 12.6 5.43 11.25 7.1 11.25C8.77 11.25 10.1 12.6 10.3 14.6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            <circle cx="13.55" cy="8.05" r="1.8" fill="none" stroke="currentColor" strokeWidth="1.7" />
+            <path d="M11.55 14.25C11.78 12.82 12.78 11.85 13.97 11.85C15.16 11.85 16.16 12.82 16.39 14.25" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          </svg>
+        );
+      default:
+        return null;
+    }
+  };
+  const renderPublicCreateVisibilityVisual = (mode: "public" | "private") => (
+    mode === "public" ? (
+      <svg viewBox="0 0 132 108" aria-hidden="true">
+        <g opacity="0.24" stroke="currentColor" strokeWidth="2.6" fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M47 28C54.62 19.92 65.42 15 77.37 15C87.29 15 96.41 18.39 103.65 24.08" />
+          <path d="M54.4 28.6H100.2" />
+          <path d="M77.2 15C71.69 20.68 68.58 28.46 68.55 36.58" />
+          <path d="M77.2 15C82.71 20.68 85.82 28.46 85.85 36.58" />
+          <path d="M106.3 20.4L109.2 13.8" />
+          <path d="M112.1 27.8L118.9 26.5" />
+        </g>
+        <circle cx="77.3" cy="49.8" r="14.2" fill="currentColor" opacity="0.98" />
+        <path d="M54.2 97.2C54.2 83.95 65.04 73.2 78.4 73.2C91.76 73.2 102.6 83.95 102.6 97.2H54.2Z" fill="currentColor" opacity="0.98" />
+        <circle cx="46.6" cy="60.6" r="9.1" fill="currentColor" opacity="0.45" />
+        <path d="M32.2 95.5C32.2 86.27 39.77 78.8 49.1 78.8C54.54 78.8 59.39 81.35 62.48 85.34V95.5H32.2Z" fill="currentColor" opacity="0.45" />
+        <circle cx="106.2" cy="60.6" r="9.1" fill="currentColor" opacity="0.45" />
+        <path d="M92.2 95.5V85.84C95.23 81.58 100.23 78.8 105.88 78.8C115.21 78.8 122.78 86.27 122.78 95.5H92.2Z" fill="currentColor" opacity="0.45" />
+      </svg>
+    ) : (
+      <svg viewBox="0 0 132 108" aria-hidden="true">
+        <g opacity="0.26" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M70.8 17L101.2 29.3V52.6C101.2 72.42 87.4 90.72 67.9 96.7C48.4 90.72 34.6 72.42 34.6 52.6V29.3L65 17" />
+          <path d="M104.9 17.9L108.2 10.9" />
+          <path d="M111.1 25.5L118.2 24.1" />
+        </g>
+        <g opacity="0.95" fill="none" stroke="currentColor" strokeWidth="4.4" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M58.8 53.4V46.5C58.8 40.97 63.24 36.5 68.7 36.5C74.16 36.5 78.6 40.97 78.6 46.5V53.4" />
+          <rect x="51.6" y="53.4" width="34.2" height="27.8" rx="7.2" />
+        </g>
+        <circle cx="68.7" cy="67.4" r="3.8" fill="currentColor" />
+      </svg>
+    )
+  );
+  const publicCreateFinalSubmitTitle = splitPaymentSelected
+    ? (
+      splitCheckoutMode === "subscription"
+        ? "Создать игру и списать с абонемента"
+        : `Создать игру и оплатить ${formatPrice(splitShareAmount)} ₽`
+    )
+    : (
+      paymentAmount != null && paymentAmount > 0
+        ? `Создать игру и оплатить ${formatPrice(paymentAmount)} ₽`
+        : "Создать игру"
+    );
   const loadSplitSubscriptions = useCallback(async () => {
     const requestId = splitSubscriptionRequestRef.current + 1;
     splitSubscriptionRequestRef.current = requestId;
@@ -4816,70 +6783,118 @@ export default function GamesPage({
       if (splitSubscriptionRequestRef.current !== requestId) return;
       if (result.error) {
         setSplitSubscriptions([]);
+        setSplitSubscriptionNamesById({});
         setSplitSubscriptionsError(result.error.message || "Не удалось получить абонементы");
         return;
       }
 
       const subscriptions = Array.isArray(result.data?.content) ? result.data.content : [];
-      const eligible = filterSplitEligibleSubscriptions(subscriptions, splitRequiredTypeIds, splitRequiredDirectionIds);
+      const eligible = filterSplitEligibleSubscriptions(
+        subscriptions,
+        splitRequiredTypeIds,
+        splitRequiredDirectionIds,
+        studioId,
+        splitRequiredSubscriptionVisits,
+        duration,
+      );
+      const eligibleNameKeys = new Set(
+        eligible
+          .map((item) => normalizeComparableId(item.subscriptionId))
+          .filter((value): value is string => Boolean(value)),
+      );
+
       setSplitSubscriptions(eligible);
+      setSplitSubscriptionNamesById((current) => {
+        if (eligibleNameKeys.size === 0) return {};
+        const next: Record<string, string> = {};
+        eligibleNameKeys.forEach((key) => {
+          if (current[key]) {
+            next[key] = current[key];
+          }
+        });
+        return next;
+      });
       setSplitSubscriptionsError(null);
+
+      if (eligible.length > 0) {
+        try {
+          const profileResult = await apiFetchProfile();
+          if (splitSubscriptionRequestRef.current !== requestId) return;
+
+          const phone = String(profileResult.data?.phone || "").trim();
+          if (phone) {
+            const names = await Promise.all(
+              eligible.map(async (item) => {
+                const subscriptionId = String(item.subscriptionId || "").trim();
+                const key = normalizeComparableId(subscriptionId);
+                if (!subscriptionId || !key) return null;
+
+                const response = await apiFetchSubscriptioName(subscriptionId, phone);
+                const name = String(response.data?.sertName || "").trim();
+                if (!name) return null;
+                return { key, name };
+              }),
+            );
+            if (splitSubscriptionRequestRef.current !== requestId) return;
+            setSplitSubscriptionNamesById((current) => {
+              const next = { ...current };
+              names.forEach((entry) => {
+                if (!entry) return;
+                next[entry.key] = entry.name;
+              });
+              return next;
+            });
+          }
+        } catch {
+          // intentionally ignore name lookup errors; fallback labels are still usable
+        }
+      }
     } catch {
       if (splitSubscriptionRequestRef.current !== requestId) return;
       setSplitSubscriptions([]);
+      setSplitSubscriptionNamesById({});
       setSplitSubscriptionsError("Не удалось получить абонементы");
     } finally {
       if (splitSubscriptionRequestRef.current === requestId) {
         setSplitSubscriptionsLoading(false);
       }
     }
-  }, [splitRequiredTypeIds, splitRequiredDirectionIds]);
+  }, [duration, splitRequiredDirectionIds, splitRequiredSubscriptionVisits, splitRequiredTypeIds, studioId]);
   const handlePaymentModeSwitchTap = useCallback(() => {
-    if (!splitPaymentTesterUnlocked) {
-      const tapState = splitPaymentUnlockTapStateRef.current;
-      tapState.count += 1;
-
-      if (tapState.timeoutId != null && typeof window !== "undefined") {
-        window.clearTimeout(tapState.timeoutId);
-        tapState.timeoutId = null;
-      }
-
-      if (tapState.count >= SPLIT_PAYMENT_UNLOCK_TAP_COUNT) {
-        tapState.count = 0;
-        setSplitPaymentTesterUnlocked(true);
-        setPromoStatusMessage("Тестовый режим split-оплаты активирован");
-        setPromoError(null);
-        setPaymentMode((current) => {
-          const nextMode = current === "split" ? "self" : "split";
-          if (nextMode === "split") {
-            setSplitShareCount(4);
-          }
-          return nextMode;
-        });
-        return;
-      }
-
-      if (typeof window !== "undefined") {
-        tapState.timeoutId = window.setTimeout(() => {
-          splitPaymentUnlockTapStateRef.current.count = 0;
-          splitPaymentUnlockTapStateRef.current.timeoutId = null;
-        }, SPLIT_PAYMENT_UNLOCK_RESET_MS);
-      }
-      return;
-    }
-
     setPaymentMode((current) => {
       const nextMode = current === "split" ? "self" : "split";
       if (nextMode === "split") {
-        setSplitShareCount(4);
+        setSplitShareCount(splitShareCountByGameFormat);
       }
       return nextMode;
     });
-  }, [splitPaymentTesterUnlocked]);
+  }, [splitShareCountByGameFormat]);
+  useEffect(() => {
+    setSplitShareCount(splitShareCountByGameFormat);
+  }, [splitShareCountByGameFormat]);
   useEffect(() => {
     if (!splitPaymentSelected) return;
     void loadSplitSubscriptions();
   }, [splitPaymentSelected, loadSplitSubscriptions]);
+  useEffect(() => {
+    if (!splitPaymentSelected) {
+      setSplitCheckoutMode("one_time");
+      return;
+    }
+    setSplitCheckoutMode(splitHasSubscriptionPaymentOptions ? "subscription" : "one_time");
+  }, [splitPaymentSelected, splitHasSubscriptionPaymentOptions]);
+  useEffect(() => {
+    if (!splitHasSubscriptionPaymentOptions) {
+      setSelectedSplitSubscriptionId(null);
+      return;
+    }
+    setSelectedSplitSubscriptionId((current) => {
+      if (current && splitSubscriptionPaymentOptions.some((option) => option.subscriptionId === current)) {
+        return current;
+      }
+      return splitSubscriptionPaymentOptions[0]?.subscriptionId ?? null;
+    });
+  }, [splitHasSubscriptionPaymentOptions, splitSubscriptionPaymentOptions]);
   useEffect(() => {
     if (paymentMode === "split" && !splitPaymentAvailable) {
       setPaymentMode("self");
@@ -4959,6 +6974,7 @@ export default function GamesPage({
       }
       return prev;
     });
+    notifyGameRecordsUpdated([incoming], "games_upsert_record");
   }, [gameRecordId]);
   const removeGameRecordFromStores = useCallback((targetId: string) => {
     const normalizedId = targetId.trim();
@@ -4966,6 +6982,32 @@ export default function GamesPage({
     setCommunityGames((prev) => prev.filter((item) => item.id !== normalizedId));
     setActiveGameRecordStore((prev) => (prev?.id === normalizedId ? null : prev));
   }, []);
+  const hideCancelledGameRecord = useCallback(async (record: PadelGameRecord) => {
+    const normalizedId = (record.id || "").trim();
+    if (!normalizedId) return;
+
+    const cancelledRecord: PadelGameRecord = {
+      ...record,
+      status: "CANCELLED",
+    };
+    upsertGameRecordInStores(cancelledRecord, { communityMode: "if_exists" });
+    removeGameRecordFromStores(normalizedId);
+
+    setGameRecordStatus("CANCELLED");
+    setGamePaid(false);
+    setGamePaymentUrl(null);
+    setGameRecordError("Игра отменена и скрыта из списка");
+
+    const patchResult = await apiUpdatePadelGameRecord(normalizedId, {
+      status: "CANCELLED",
+    });
+    if (patchResult.data?.id) {
+      removeGameRecordFromStores(normalizedId);
+      setGameRecordStatus("CANCELLED");
+      setGamePaid(false);
+      setGamePaymentUrl(null);
+    }
+  }, [removeGameRecordFromStores, upsertGameRecordInStores]);
   const activeGameRecord = useMemo(
     () => {
       if (!gameRecordId) return null;
@@ -4973,6 +7015,10 @@ export default function GamesPage({
       return communityGames.find((item) => item.id === gameRecordId) ?? null;
     },
     [activeGameRecordStore, communityGames, gameRecordId],
+  );
+  const isReadOnlySyntheticGame = useMemo(
+    () => isSyntheticCabinetBookingGame(activeGameRecord),
+    [activeGameRecord],
   );
   const activeGameMetadata = isRecordObject(activeGameRecord?.metadata) ? activeGameRecord.metadata : null;
   const detailsGameTitle = extractGameCustomTitle(activeGameMetadata) ?? normalizedGameTitle ?? null;
@@ -5026,16 +7072,12 @@ export default function GamesPage({
     [activeGameRecord, isCurrentUserOrganizerOfGame],
   );
   const canCurrentUserInviteInDetails = isGamePaid !== false
-    && isCurrentUserOrganizerOfActiveGame
     && !isGameCancelledStatus(gameRecordStatus)
     && Boolean(inviteLink);
-  const detailsMaxPlayers = useMemo(() => {
-    const maxPlayers = activeGameRecord?.invite?.maxPlayers;
-    if (typeof maxPlayers === "number" && Number.isFinite(maxPlayers) && maxPlayers > 0) {
-      return Math.max(1, Math.floor(maxPlayers));
-    }
-    return MAX_DOUBLES_PLAYERS;
-  }, [activeGameRecord?.invite?.maxPlayers]);
+  const detailsMaxPlayers = useMemo(
+    () => resolveGameDetailsMaxPlayers(activeGameRecord),
+    [activeGameRecord],
+  );
   const detailsTeamPairIndexes = useMemo(() => {
     if (detailsMaxPlayers <= 2) return [[0, 1]];
     return [[0, 1], [2, 3]];
@@ -5105,9 +7147,21 @@ export default function GamesPage({
   );
   const detailsOrganizerPayload = useMemo(
     () => ({
-      id: activeGameRecord?.organizer?.id ?? detailsOrganizerPlayer?.id ?? null,
+      id:
+        activeGameRecord?.organizer?.id
+        ?? detailsOrganizerPlayer?.id
+        ?? (typeof activeGameMetadata?.organizerId === "string" ? activeGameMetadata.organizerId : null)
+        ?? null,
       name: activeGameRecord?.organizer?.name ?? detailsOrganizerPlayer?.name ?? "Организатор",
-      phone: activeGameRecord?.organizer?.phone ?? detailsOrganizerPlayer?.phone ?? null,
+      phone:
+        activeGameRecord?.organizer?.phone
+        ?? detailsOrganizerPlayer?.phone
+        ?? (
+          typeof activeGameMetadata?.organizerPhoneNorm === "string"
+            ? activeGameMetadata.organizerPhoneNorm
+            : (typeof activeGameMetadata?.organizerPhone === "string" ? activeGameMetadata.organizerPhone : null)
+        )
+        ?? null,
       photo: activeGameRecord?.organizer?.photo ?? detailsOrganizerPlayer?.photo ?? null,
       rating: activeGameRecord?.organizer?.rating ?? detailsOrganizerPlayer?.rating ?? null,
       ratingNumeric:
@@ -5117,9 +7171,16 @@ export default function GamesPage({
     }),
     [
       activeGameRecord?.organizer,
+      activeGameMetadata?.organizerId,
+      activeGameMetadata?.organizerPhone,
+      activeGameMetadata?.organizerPhoneNorm,
       detailsOrganizerPlayer,
     ],
   );
+  const detailsOrganizerHasIdentity = useMemo(() => Boolean(
+    normalizeComparableId(detailsOrganizerPayload.id)
+    || normalizePhoneForGame(detailsOrganizerPayload.phone),
+  ), [detailsOrganizerPayload.id, detailsOrganizerPayload.phone]);
   const detailsMetadata = useMemo<Record<string, unknown>>(
     () => (isRecordObject(activeGameRecord?.metadata) ? activeGameRecord.metadata : {}),
     [activeGameRecord?.metadata],
@@ -5233,35 +7294,31 @@ export default function GamesPage({
     setDetailsSelectedCommunityUnpublishIds([]);
   }, [activeGameRecord?.id, detailsPublishedCommunityCards.length]);
   const detailsParticipants = useMemo<PadelGamePlayer[]>(() => {
-    const map = new Map<string, PadelGamePlayer>();
+    const organizerParticipant = detailsOrganizerPlayer && detailsOrganizerInMatch
+      ? {
+          ...detailsOrganizerPlayer,
+          source: "ORGANIZER" as const,
+          status: "CONFIRMED" as const,
+        }
+      : null;
 
-    if (detailsOrganizerPlayer && detailsOrganizerInMatch) {
-      const organizerKey = getPadelPlayerIdentityKey(detailsOrganizerPlayer) || "organizer";
-      map.set(organizerKey, {
-        ...detailsOrganizerPlayer,
-        source: "ORGANIZER",
-        status: "CONFIRMED",
-      });
-    }
-
-    detailsSourceParticipants.forEach((player) => {
-      const key = getPadelPlayerIdentityKey(player)
-        || `participant-${map.size + 1}`;
-      if (!detailsOrganizerInMatch && detailsOrganizerKey && key === detailsOrganizerKey) {
-        return;
-      }
-      const existing = map.get(key);
-      const normalized: PadelGamePlayer = {
+    const rosterParticipants = detailsSourceParticipants
+      .filter((player) => {
+        if (!detailsOrganizerInMatch && detailsOrganizerKey) {
+          return getPadelPlayerIdentityKey(player) !== detailsOrganizerKey;
+        }
+        return true;
+      })
+      .map((player) => ({
         ...player,
-        source: existing?.source ?? player.source ?? "INVITE_LINK",
-        status: player.status ?? existing?.status ?? "CONFIRMED",
-      };
-      if (!existing || normalized.source === "ORGANIZER") {
-        map.set(key, normalized);
-      }
-    });
+        source: player.source ?? "INVITE_LINK",
+        status: player.status ?? "CONFIRMED",
+      }));
 
-    return Array.from(map.values()).slice(0, detailsMaxPlayers);
+    return dedupePlayersByIdentity([
+      organizerParticipant,
+      ...rosterParticipants,
+    ]).slice(0, detailsMaxPlayers);
   }, [
     detailsSourceParticipants,
     detailsOrganizerInMatch,
@@ -5274,17 +7331,37 @@ export default function GamesPage({
       activeGameRecord?.waitlist && activeGameRecord.waitlist.length > 0
         ? activeGameRecord.waitlist
         : waitlistPlayers;
-    const participantKeys = new Set(
-      detailsParticipants
-        .map((player) => getPadelPlayerIdentityKey(player))
-        .filter(Boolean),
-    );
-
-    return sourceWaitlist.filter((player) => {
-      const key = getPadelPlayerIdentityKey(player);
-      return !key || !participantKeys.has(key);
-    });
+    return excludePlayersAlreadyInRoster(sourceWaitlist, detailsParticipants);
   }, [activeGameRecord?.waitlist, waitlistPlayers, detailsParticipants]);
+  const detailsPlayerPool = useMemo<PadelGamePlayer[]>(() => {
+    const sessionRosterSnapshot = isRecordObject(detailsMatchResultSession?.rosterSnapshot)
+      ? detailsMatchResultSession.rosterSnapshot as Record<string, unknown>
+      : null;
+    const snapshotPool = sessionRosterSnapshot
+      ? extractMatchResultSnapshotPlayers(sessionRosterSnapshot)
+      : [];
+    const rawPool = snapshotPool.length > 0
+      ? snapshotPool
+      : Array.isArray(detailsMetadata.playerPool)
+        ? detailsMetadata.playerPool
+      : Array.isArray(detailsMetadata.playersPool)
+        ? detailsMetadata.playersPool
+        : Array.isArray(detailsMetadata.allPlayers)
+          ? detailsMetadata.allPlayers
+          : [];
+    return dedupePlayersByIdentity(
+      excludePlayersAlreadyInRoster(
+        rawPool
+          .map((item) => (
+            isRecordObject(item) && "name" in item
+              ? normalizeMatchResultRosterPlayer(item)
+              : normalizeVivaBookingParticipant(item)
+          ))
+          .filter((item): item is PadelGamePlayer => Boolean(item)),
+        detailsParticipants,
+      ),
+    );
+  }, [detailsMatchResultSession, detailsMetadata, detailsParticipants]);
   useEffect(() => {
     if ((step !== "details" && step !== "chat") || !activeGameRecord?.id) {
       return;
@@ -5596,12 +7673,15 @@ export default function GamesPage({
   const canManagePlayersInDetails = Boolean(
     gameRecordId && (isCurrentUserOrganizerOfActiveGame || isCurrentUserOrganizerByDetails),
   );
-  const detailsHasFreeSlots = detailsParticipants.length < detailsMaxPlayers;
   const isDetailsOrganizerPlayer = useCallback((player: PadelGamePlayer | null | undefined) => {
-    const organizerKey = getPadelPlayerIdentityKey(detailsOrganizerPlayer);
-    const playerKey = getPadelPlayerIdentityKey(player);
-    return Boolean(organizerKey && playerKey && organizerKey === playerKey);
-  }, [detailsOrganizerPlayer]);
+    if (!player) return false;
+    const source = String(player.source || "").trim().toUpperCase();
+    if (source === "ORGANIZER") return true;
+    if (detailsOrganizerPlayer && playersShareRosterIdentity(detailsOrganizerPlayer, player)) {
+      return true;
+    }
+    return playersShareRosterIdentity(detailsOrganizerPayload, player);
+  }, [detailsOrganizerPayload, detailsOrganizerPlayer]);
   const canCurrentUserSendChat = useMemo(() => {
     const myPhone = normalizePhoneForGame(profilePhone);
     if (!myPhone) return false;
@@ -5640,8 +7720,8 @@ export default function GamesPage({
   }, [activeGameRecord, profilePhone]);
   const isCurrentUserPlayer = useCallback((player: PadelGamePlayer | null | undefined) => {
     if (!player) return false;
-    const normalizedProfileId = (profileId || "").trim();
-    const playerId = (player.id || "").trim();
+    const normalizedProfileId = normalizeComparableId(profileId);
+    const playerId = normalizeComparableId(player.id);
     if (normalizedProfileId && playerId && normalizedProfileId === playerId) {
       return true;
     }
@@ -5667,23 +7747,256 @@ export default function GamesPage({
     [detailsWaitlist, isCurrentUserPlayer],
   );
   const hasCurrentUserIdentityInDetails = Boolean((profileId || "").trim() || profilePhoneNorm);
+  const detailsSplitPaymentMetadata = useMemo<Record<string, unknown> | null>(() => (
+    isRecordObject(detailsMetadata.splitPayment) ? detailsMetadata.splitPayment : null
+  ), [detailsMetadata]);
+  const detailsCurrentUserActiveSplitPayment = useMemo<Record<string, unknown> | null>(() => {
+    if (!hasCurrentUserIdentityInDetails || !detailsSplitPaymentMetadata) return null;
+    const currentUserId = normalizeComparableId(profileId);
+    const currentUserPhone = profilePhoneNorm ?? normalizePhoneForGame(profilePhone);
+    if (!currentUserId && !currentUserPhone) return null;
+
+    const payments = Array.isArray(detailsSplitPaymentMetadata.payments)
+      ? detailsSplitPaymentMetadata.payments.filter((item) => isRecordObject(item))
+      : [];
+    for (const item of payments) {
+      if (!isSplitPaymentReservationActive(item.status)) continue;
+      if (isSplitPaymentPendingExpired(item, detailsSplitPaymentMetadata, splitPendingNowTs)) continue;
+      const paymentId = normalizeComparableId(item.clientId);
+      const paymentPhone = normalizePhoneForGame(
+        typeof item.phoneNorm === "string"
+          ? item.phoneNorm
+          : (typeof item.phone === "string" ? item.phone : null),
+      );
+      if (currentUserId && paymentId && currentUserId === paymentId) return item;
+      if (currentUserPhone && paymentPhone && currentUserPhone === paymentPhone) return item;
+    }
+    return null;
+  }, [
+    hasCurrentUserIdentityInDetails,
+    detailsSplitPaymentMetadata,
+    profileId,
+    profilePhoneNorm,
+    profilePhone,
+    splitPendingNowTs,
+  ]);
+  const hasCurrentUserActiveSplitPayment = Boolean(detailsCurrentUserActiveSplitPayment);
+  const detailsCurrentUserPendingSplitPayment = useMemo<Record<string, unknown> | null>(() => {
+    if (!detailsCurrentUserActiveSplitPayment) return null;
+    const status = String(detailsCurrentUserActiveSplitPayment.status || "").trim().toUpperCase();
+    return status === "PAYMENT_PENDING" ? detailsCurrentUserActiveSplitPayment : null;
+  }, [detailsCurrentUserActiveSplitPayment]);
+  const detailsCurrentUserPendingSplitPaymentDeadlineTs = useMemo(() => (
+    resolveSplitPaymentItemDeadlineTs(detailsCurrentUserPendingSplitPayment, detailsSplitPaymentMetadata)
+  ), [detailsCurrentUserPendingSplitPayment, detailsSplitPaymentMetadata]);
+  const detailsCurrentUserPendingSplitPaymentRemainingMs = detailsCurrentUserPendingSplitPaymentDeadlineTs == null
+    ? null
+    : Math.max(0, detailsCurrentUserPendingSplitPaymentDeadlineTs - splitPendingNowTs);
+  const detailsCurrentUserPendingSplitPaymentPaymentUrl = typeof detailsCurrentUserPendingSplitPayment?.paymentUrl === "string"
+    ? detailsCurrentUserPendingSplitPayment.paymentUrl.trim()
+    : "";
+  const detailsCurrentUserPendingSplitPaymentIsExpired = Boolean(
+    detailsCurrentUserPendingSplitPayment
+    && detailsCurrentUserPendingSplitPaymentDeadlineTs != null
+    && detailsCurrentUserPendingSplitPaymentDeadlineTs <= splitPendingNowTs,
+  );
+  const detailsCurrentUserPendingSplitPaymentCountdownLabel = detailsCurrentUserPendingSplitPaymentRemainingMs == null
+    ? null
+    : formatSplitPaymentTimeLeft(detailsCurrentUserPendingSplitPaymentRemainingMs);
+  const isDetailsSplitPaymentGame = Boolean(
+    activeGameRecord?.settings?.payMode === "split"
+    || hasSplitPaymentSignal(detailsSplitPaymentMetadata),
+  );
+  const detailsNeedsVivaRosterSync = isDetailsSplitPaymentGame
+    || isCabinetBookingConvertedGame(activeGameRecord);
+  const detailsSplitReservedPlayersBySpot = useMemo(() => {
+    const bySpot = new Map<number, PadelGamePlayer>();
+    if (!isDetailsSplitPaymentGame || !detailsSplitPaymentMetadata) return bySpot;
+
+    const payments = Array.isArray(detailsSplitPaymentMetadata.payments)
+      ? detailsSplitPaymentMetadata.payments.filter((item) => isRecordObject(item))
+      : [];
+    payments.forEach((item) => {
+      const spotRaw = toFiniteNumber(item.spot);
+      const spotNumber = spotRaw != null ? Math.floor(spotRaw) : null;
+      if (spotNumber == null || spotNumber < 1 || spotNumber > detailsMaxPlayers) return;
+      if (!isSplitPaymentReservationActive(item.status)) return;
+      if (isSplitPaymentPendingExpired(item, detailsSplitPaymentMetadata, splitPendingNowTs)) return;
+
+      const phone = normalizePhoneForGame(
+        typeof item.phoneNorm === "string"
+          ? item.phoneNorm
+          : (typeof item.phone === "string" ? item.phone : null),
+      );
+      const clientId = typeof item.clientId === "string" ? item.clientId.trim() : "";
+      const candidateName = (
+        typeof item.clientName === "string"
+          ? item.clientName
+          : typeof item.playerName === "string"
+            ? item.playerName
+            : typeof item.name === "string"
+              ? item.name
+              : ""
+      ).trim();
+
+      bySpot.set(spotNumber - 1, {
+        id: clientId || (phone ? `split-phone-${phone}` : `split-spot-${spotNumber}`),
+        name: candidateName || `Участник ${spotNumber}`,
+        phone,
+        photo: null,
+        rating: null,
+        ratingNumeric: null,
+        source: "MANUAL_LIST",
+        status: "CONFIRMED",
+      });
+    });
+
+    return bySpot;
+  }, [isDetailsSplitPaymentGame, detailsSplitPaymentMetadata, detailsMaxPlayers, splitPendingNowTs]);
+  const detailsOccupiedSlotsCount = useMemo(() => {
+    if (!isDetailsSplitPaymentGame) {
+      return Math.min(detailsParticipants.length, detailsMaxPlayers);
+    }
+    return Math.min(
+      detailsMaxPlayers,
+      Math.max(detailsParticipants.length, detailsSplitReservedPlayersBySpot.size),
+    );
+  }, [
+    isDetailsSplitPaymentGame,
+    detailsParticipants.length,
+    detailsSplitReservedPlayersBySpot.size,
+    detailsMaxPlayers,
+  ]);
+  const detailsHasFreeSlots = detailsOccupiedSlotsCount < detailsMaxPlayers;
+  const detailsExpiredSplitPendingCleanupKeys = useMemo<string[]>(() => {
+    if (!isDetailsSplitPaymentGame || !detailsSplitPaymentMetadata) return [];
+    const payments = Array.isArray(detailsSplitPaymentMetadata.payments)
+      ? detailsSplitPaymentMetadata.payments.filter((item) => isRecordObject(item))
+      : [];
+
+    return payments
+      .map((item, index) => {
+        const status = String(item.status || "").trim().toUpperCase();
+        if (status !== "PAYMENT_PENDING") return null;
+        const deadlineTs = resolveSplitPaymentItemDeadlineTs(item, detailsSplitPaymentMetadata);
+        if (deadlineTs == null || deadlineTs > splitPendingNowTs) return null;
+
+        const paymentRef = typeof item.paymentRef === "string" ? item.paymentRef.trim().toLowerCase() : "";
+        const clientId = normalizeComparableId(item.clientId ?? item.playerId ?? item.userId) || "";
+        const phoneNorm = normalizePhoneForGame(
+          typeof item.phoneNorm === "string"
+            ? item.phoneNorm
+            : (typeof item.phone === "string" ? item.phone : null),
+        ) || "";
+        const bookingId = normalizeBookingId(item.bookingId) || "";
+        return `${paymentRef}|${clientId}|${phoneNorm}|${bookingId}|${index}`;
+      })
+      .filter((value): value is string => Boolean(value));
+  }, [isDetailsSplitPaymentGame, detailsSplitPaymentMetadata, splitPendingNowTs]);
+  const detailsWaitlistPaymentStateByKey = useMemo(() => {
+    const byPlayerKey = new Map<string, {
+      isPending: boolean;
+      isExpired: boolean;
+      countdownLabel: string | null;
+    }>();
+    if (!isDetailsSplitPaymentGame || !detailsSplitPaymentMetadata || detailsWaitlist.length === 0) {
+      return byPlayerKey;
+    }
+
+    const payments = Array.isArray(detailsSplitPaymentMetadata.payments)
+      ? detailsSplitPaymentMetadata.payments.filter((item) => isRecordObject(item))
+      : [];
+
+    detailsWaitlist.forEach((player, index) => {
+      const playerKey = getPadelPlayerIdentityKey(player) || `waitlist-${index}`;
+      const matchedPendingItem = payments
+        .filter((item) => splitPaymentItemMatchesPlayer(item, player))
+        .sort((left, right) => {
+          const leftTs = resolveSplitPaymentItemDeadlineTs(left, detailsSplitPaymentMetadata)
+            ?? parseIsoTimestamp(left.createdAt)
+            ?? 0;
+          const rightTs = resolveSplitPaymentItemDeadlineTs(right, detailsSplitPaymentMetadata)
+            ?? parseIsoTimestamp(right.createdAt)
+            ?? 0;
+          return rightTs - leftTs;
+        })
+        .find((item) => String(item.status || "").trim().toUpperCase() === "PAYMENT_PENDING");
+
+      if (!matchedPendingItem) return;
+      const deadlineTs = resolveSplitPaymentItemDeadlineTs(matchedPendingItem, detailsSplitPaymentMetadata);
+      const remainingMs = deadlineTs == null ? null : Math.max(0, deadlineTs - splitPendingNowTs);
+      byPlayerKey.set(playerKey, {
+        isPending: deadlineTs == null || (remainingMs ?? 0) > 0,
+        isExpired: deadlineTs != null && (remainingMs ?? 0) <= 0,
+        countdownLabel: remainingMs == null ? null : formatSplitPaymentTimeLeft(remainingMs),
+      });
+    });
+
+    return byPlayerKey;
+  }, [isDetailsSplitPaymentGame, detailsSplitPaymentMetadata, detailsWaitlist, splitPendingNowTs]);
+  const detailsSplitShareCount = useMemo<2 | 4>(() => {
+    const shareCount = toFiniteNumber(detailsSplitPaymentMetadata?.shareCount);
+    if (shareCount === 2) return 2;
+    return detailsMaxPlayers <= 2 ? 2 : 4;
+  }, [detailsSplitPaymentMetadata, detailsMaxPlayers]);
+  const detailsSplitShareAmount = useMemo(() => {
+    const fromSplit = toFiniteNumber(
+      detailsSplitPaymentMetadata?.shareAmount
+      ?? detailsSplitPaymentMetadata?.amount
+      ?? detailsSplitPaymentMetadata?.toPay,
+    );
+    if (fromSplit != null && fromSplit > 0) return Math.round(fromSplit);
+
+    const fromJoinPrice = toFiniteNumber(extractGameJoinPrice(detailsMetadata));
+    if (fromJoinPrice != null && fromJoinPrice > 0) return Math.round(fromJoinPrice);
+    return null;
+  }, [detailsSplitPaymentMetadata, detailsMetadata]);
   const isDetailsWaitlistEnabled = activeGameRecord?.invite?.waitlistEnabled ?? waitlistEnabled;
   const canCurrentUserJoinGameInDetails = Boolean(
     gameRecordId
+    && !isReadOnlySyntheticGame
     && !isCurrentUserOrganizerByDetails
     && !updatingGameRoster
     && !updatingGameMeta
+    && !joiningSplitPayment
     && hasCurrentUserIdentityInDetails
     && !isCurrentUserConfirmedParticipant
     && !isCurrentUserInWaitlist
+    && !isDetailsSplitPaymentGame
     && (detailsHasFreeSlots || isDetailsWaitlistEnabled),
   );
-  const canCurrentUserLeaveGameInDetails = Boolean(
+  const canCurrentUserJoinSplitGameInDetails = Boolean(
     gameRecordId
+    && !isReadOnlySyntheticGame
+    && isDetailsSplitPaymentGame
     && !isCurrentUserOrganizerByDetails
     && !updatingGameRoster
     && !updatingGameMeta
-    && (isCurrentUserConfirmedParticipant || detailsWaitlist.some((player) => isCurrentUserPlayer(player))),
+    && !joiningSplitPayment
+    && hasCurrentUserIdentityInDetails
+    && !isCurrentUserConfirmedParticipant
+    && !hasCurrentUserActiveSplitPayment
+    && detailsHasFreeSlots
+  );
+  const detailsSplitJoinSubscriptionLabel = joiningSplitPayment
+    ? "Готовим оплату..."
+    : "Списать с абонемента";
+  const detailsSplitJoinOneTimeLabel = joiningSplitPayment
+    ? "Готовим оплату..."
+    : `Оплатить стоимость${detailsSplitShareAmount != null ? ` · ${formatPrice(detailsSplitShareAmount)} ₽` : ""}`;
+  const shouldShowCurrentUserLeaveActionInDetails = !isCurrentUserOrganizerOfActiveGame
+    && !isCurrentUserOrganizerByDetails;
+  const canCurrentUserLeaveGameInDetails = Boolean(
+    gameRecordId
+    && !isReadOnlySyntheticGame
+    && shouldShowCurrentUserLeaveActionInDetails
+    && !updatingGameRoster
+    && !updatingGameMeta
+    && (
+      isCurrentUserConfirmedParticipant
+      || detailsWaitlist.some((player) => isCurrentUserPlayer(player))
+      || Boolean(detailsCurrentUserPendingSplitPayment && !detailsCurrentUserPendingSplitPaymentIsExpired)
+    ),
   );
   const detailsTeamSlotKeys = useMemo(
     () => detailsTeamSlots.map((player) => getPadelPlayerIdentityKey(player) || null),
@@ -5693,9 +8006,6 @@ export default function GamesPage({
     () => detailsTeamSlots.findIndex((player) => isCurrentUserPlayer(player)),
     [detailsTeamSlots, isCurrentUserPlayer],
   );
-  const detailsCurrentUserTeamIndex = detailsCurrentUserTeamSlotIndex < 0
-    ? null
-    : (detailsCurrentUserTeamSlotIndex < 2 ? 1 : 2);
   const detailsMatchStartAt = useMemo(() => {
     if (!detailsDateKey || !detailsTimeFrom) return null;
     const timeValue = /^\d{2}:\d{2}$/.test(detailsTimeFrom) ? `${detailsTimeFrom}:00` : detailsTimeFrom;
@@ -5706,11 +8016,347 @@ export default function GamesPage({
   const isDetailsMatchStarted = detailsMatchStartAt
     ? Date.now() >= detailsMatchStartAt.getTime()
     : false;
-  const canCurrentUserAccessResultTab = isCurrentUserOrganizerByDetails || isCurrentUserConfirmedParticipant;
+  const canCurrentUserAccessResultTab = !isReadOnlySyntheticGame && (
+    isDetailsMatchStarted
+    || isCurrentUserOrganizerByDetails
+    || isCurrentUserConfirmedParticipant
+  );
+  const canCurrentUserFetchResultState = Boolean(
+    !isReadOnlySyntheticGame
+    && profilePhoneNorm
+    && (isCurrentUserOrganizerByDetails || isCurrentUserConfirmedParticipant),
+  );
+
+  useEffect(() => {
+    if (step !== "details" && step !== "chat") return;
+    setSplitPendingNowTs(Date.now());
+    const timer = window.setInterval(() => {
+      setSplitPendingNowTs(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [step]);
+
+  useEffect(() => {
+    if ((step !== "details" && step !== "chat") || !activeGameRecord?.id) return;
+    if (!isDetailsSplitPaymentGame) return;
+    if (detailsExpiredSplitPendingCleanupKeys.length === 0) return;
+    if (splitTimeoutCleanupInFlightRef.current) return;
+
+    const nowTs = Date.now();
+    const RETRY_MS = 60 * 1000;
+    const shouldRunCleanup = detailsExpiredSplitPendingCleanupKeys.some((key) => (
+      nowTs - (splitTimeoutCleanupAttemptAtRef.current[key] ?? 0) >= RETRY_MS
+    ));
+    if (!shouldRunCleanup) return;
+
+    detailsExpiredSplitPendingCleanupKeys.forEach((key) => {
+      splitTimeoutCleanupAttemptAtRef.current[key] = nowTs;
+    });
+    splitTimeoutCleanupInFlightRef.current = true;
+
+    let alive = true;
+    void apiCleanupPadelGameByOrganizer(activeGameRecord.id, {
+      force: false,
+      dryRun: false,
+      limit: 1,
+      intent: "participant_timeout",
+    }).then(async (cleanupResult) => {
+      if (!alive || cleanupResult.error) return;
+
+      const refreshed = await apiFetchPadelGameRecord(activeGameRecord.id);
+      if (!alive || !refreshed.data?.id) return;
+
+      const refreshedRecord = refreshed.data as PadelGameRecord;
+      upsertGameRecordInStores(refreshedRecord, { communityMode: "if_exists" });
+      setActiveGameRecordStore((prev) => (prev?.id === refreshedRecord.id ? refreshedRecord : prev));
+      setParticipants(Array.isArray(refreshedRecord.participants) ? refreshedRecord.participants : []);
+      setWaitlistPlayers(Array.isArray(refreshedRecord.waitlist) ? refreshedRecord.waitlist : []);
+    }).finally(() => {
+      splitTimeoutCleanupInFlightRef.current = false;
+    });
+
+    return () => {
+      alive = false;
+    };
+  }, [
+    step,
+    activeGameRecord?.id,
+    isDetailsSplitPaymentGame,
+    detailsExpiredSplitPendingCleanupKeys,
+    upsertGameRecordInStores,
+  ]);
+
+  useEffect(() => {
+    if ((step !== "details" && step !== "chat") || !activeGameRecord?.id) return;
+    if (!detailsNeedsVivaRosterSync) return;
+    if (updatingGameRoster) return;
+
+    const exerciseId = resolveGameVivaExerciseId(activeGameRecord);
+    if (!exerciseId) return;
+
+    if (shouldSkipRecentSplitGameRosterSync({
+      record: activeGameRecord,
+      isSplitPaymentGame: isDetailsSplitPaymentGame,
+      sourceParticipantsCount: detailsSourceParticipants.length,
+      leaveEventsCount: detailsLeaveEvents.length,
+    })) {
+      trackRosterSyncEvent("skipped", {
+        gameId: activeGameRecord.id,
+        exerciseId,
+        reason: "recent_paid_create",
+        sourceParticipantsCount: detailsSourceParticipants.length,
+        leaveEventsCount: detailsLeaveEvents.length,
+        durationMs: 0,
+      });
+      return;
+    }
+
+    const syncStartedAt = Date.now();
+    trackRosterSyncEvent("started", {
+      gameId: activeGameRecord.id,
+      exerciseId,
+      sourceParticipantsCount: detailsSourceParticipants.length,
+      leaveEventsCount: detailsLeaveEvents.length,
+    });
+
+    let alive = true;
+    void apiFetchTournamentParticipants(exerciseId, { sanitize: false })
+      .then((result) => {
+        if (!alive || !result.data) return;
+
+        const vivaPlayers = extractExerciseBookingRows(result.data)
+          .map((item) => normalizeVivaBookingParticipant(item))
+          .filter((item): item is PadelGamePlayer => item !== null)
+          .filter((item) => item.status !== "WAITLIST");
+        if (vivaPlayers.length === 0) {
+          trackRosterSyncEvent("skipped", {
+            gameId: activeGameRecord.id,
+            exerciseId,
+            reason: "viva_empty",
+            sourceParticipantsCount: detailsSourceParticipants.length,
+            vivaParticipantsCount: 0,
+            leaveEventsCount: detailsLeaveEvents.length,
+            durationMs: Date.now() - syncStartedAt,
+          });
+          return;
+        }
+
+        const reconciliation = reconcileRosterWithViva({
+          sourceParticipants: detailsSourceParticipants,
+          vivaParticipants: vivaPlayers,
+          leaveEvents: detailsLeaveEvents,
+        });
+
+        const mergedParticipants = dedupePlayersByIdentity(reconciliation.mergedCandidates)
+          .slice(0, detailsMaxPlayers);
+        const participantsChanged = !arePlayersEqualByIdentity(mergedParticipants, detailsSourceParticipants);
+        const leaveEventsChanged = reconciliation.staleLeaveEventsRemoved > 0;
+        if (!participantsChanged && !leaveEventsChanged) {
+          trackRosterSyncEvent("skipped", {
+            gameId: activeGameRecord.id,
+            exerciseId,
+            reason: "no_changes",
+            sourceParticipantsCount: detailsSourceParticipants.length,
+            vivaParticipantsCount: vivaPlayers.length,
+            leaveEventsCount: detailsLeaveEvents.length,
+            staleLeaveEventsRemoved: 0,
+            staleSourcePlayersRemoved: 0,
+            durationMs: Date.now() - syncStartedAt,
+          });
+          return;
+        }
+
+        const patchPayload: Parameters<typeof apiUpdatePadelGameRecord>[1] = {
+          participants: mergedParticipants,
+        };
+        if (leaveEventsChanged) {
+          patchPayload.metadata = {
+            ...detailsMetadata,
+            leaveEvents: reconciliation.nextLeaveEvents,
+            lastLeaveUpdateAt: new Date().toISOString(),
+          };
+        }
+
+        void apiUpdatePadelGameRecord(activeGameRecord.id, patchPayload).then((patchResult) => {
+          if (!alive) return;
+          const durationMs = Date.now() - syncStartedAt;
+          const restoredPlayersCount = Math.max(
+            0,
+            mergedParticipants.length - detailsSourceParticipants.length + reconciliation.filteredSourcePlayersCount,
+          );
+          if (patchResult.data?.id) {
+            upsertGameRecordInStores(patchResult.data as PadelGameRecord, { communityMode: "if_exists" });
+            trackRosterSyncEvent("applied", {
+              gameId: activeGameRecord.id,
+              exerciseId,
+              sourceParticipantsCount: detailsSourceParticipants.length,
+              vivaParticipantsCount: vivaPlayers.length,
+              mergedParticipantsCount: mergedParticipants.length,
+              leaveEventsCount: detailsLeaveEvents.length,
+              staleLeaveEventsRemoved: reconciliation.staleLeaveEventsRemoved,
+              staleSourcePlayersRemoved: reconciliation.staleSourcePlayersRemoved,
+              restoredPlayersCount,
+              durationMs,
+            });
+            return;
+          }
+          upsertGameRecordInStores(
+            {
+              ...activeGameRecord,
+              participants: mergedParticipants,
+              ...(leaveEventsChanged
+                ? {
+                    metadata: {
+                      ...detailsMetadata,
+                      leaveEvents: reconciliation.nextLeaveEvents,
+                      lastLeaveUpdateAt: new Date().toISOString(),
+                    },
+                  }
+                : {}),
+            },
+            { communityMode: "if_exists" },
+          );
+          trackRosterSyncEvent("applied", {
+            gameId: activeGameRecord.id,
+            exerciseId,
+            sourceParticipantsCount: detailsSourceParticipants.length,
+            vivaParticipantsCount: vivaPlayers.length,
+            mergedParticipantsCount: mergedParticipants.length,
+            leaveEventsCount: detailsLeaveEvents.length,
+            staleLeaveEventsRemoved: reconciliation.staleLeaveEventsRemoved,
+            staleSourcePlayersRemoved: reconciliation.staleSourcePlayersRemoved,
+            restoredPlayersCount,
+            durationMs,
+            fallbackApplied: true,
+          });
+        }).catch(() => {
+          trackRosterSyncEvent("failed", {
+            gameId: activeGameRecord.id,
+            exerciseId,
+            sourceParticipantsCount: detailsSourceParticipants.length,
+            vivaParticipantsCount: vivaPlayers.length,
+            leaveEventsCount: detailsLeaveEvents.length,
+            staleLeaveEventsRemoved: reconciliation.staleLeaveEventsRemoved,
+            staleSourcePlayersRemoved: reconciliation.staleSourcePlayersRemoved,
+            durationMs: Date.now() - syncStartedAt,
+            reason: "patch_failed",
+          });
+          // Ignore sync errors: roster falls back to locally stored participants.
+        });
+      })
+      .catch(() => {
+        trackRosterSyncEvent("failed", {
+          gameId: activeGameRecord.id,
+          exerciseId,
+          sourceParticipantsCount: detailsSourceParticipants.length,
+          leaveEventsCount: detailsLeaveEvents.length,
+          durationMs: Date.now() - syncStartedAt,
+          reason: "viva_fetch_failed",
+        });
+        // Ignore sync errors: roster falls back to locally stored participants.
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [
+    step,
+    activeGameRecord,
+    detailsNeedsVivaRosterSync,
+    updatingGameRoster,
+    detailsSourceParticipants,
+    detailsLeaveEvents,
+    detailsMetadata,
+    detailsMaxPlayers,
+    upsertGameRecordInStores,
+  ]);
+
+  useEffect(() => {
+    if ((step !== "details" && step !== "chat") || !activeGameRecord?.id) return;
+    if (!isDetailsSplitPaymentGame || !detailsSplitPaymentMetadata) return;
+
+    const splitPhones = extractSplitPaymentPhones(detailsSplitPaymentMetadata);
+    if (splitPhones.length === 0) return;
+
+    const existingAllRelated = Array.isArray(detailsMetadata.allRelatedPhones)
+      ? detailsMetadata.allRelatedPhones
+          .map((value) => (typeof value === "string" ? normalizePhoneForGame(value) : null))
+          .filter((value): value is string => Boolean(value))
+      : [];
+    const nextAllRelatedPhones = Array.from(new Set([
+      normalizePhoneForGame(detailsOrganizerPayload.phone),
+      ...detailsParticipants
+        .map((player) => normalizePhoneForGame(player.phone))
+        .filter((value): value is string => Boolean(value)),
+      ...detailsWaitlist
+        .map((player) => normalizePhoneForGame(player.phone))
+        .filter((value): value is string => Boolean(value)),
+      ...splitPhones,
+    ].filter((value): value is string => Boolean(value))));
+    const existingKey = existingAllRelated.slice().sort().join(",");
+    const nextKey = nextAllRelatedPhones.slice().sort().join(",");
+    if (existingKey === nextKey) return;
+
+    const repairKey = `${activeGameRecord.id}:${nextKey}`;
+    if (splitRelatedPhonesRepairAttemptRef.current === repairKey) return;
+    splitRelatedPhonesRepairAttemptRef.current = repairKey;
+
+    let alive = true;
+    void apiUpdatePadelGameRecord(activeGameRecord.id, {
+      metadata: {
+        ...detailsMetadata,
+        allRelatedPhones: nextAllRelatedPhones,
+      },
+    }).then((result) => {
+      if (!alive) return;
+      if (result.data?.id) {
+        upsertGameRecordInStores(result.data as PadelGameRecord, { communityMode: "if_exists" });
+      } else {
+        splitRelatedPhonesRepairAttemptRef.current = null;
+      }
+    }).catch(() => {
+      if (!alive) return;
+      splitRelatedPhonesRepairAttemptRef.current = null;
+    });
+
+    return () => {
+      alive = false;
+    };
+  }, [
+    step,
+    activeGameRecord?.id,
+    isDetailsSplitPaymentGame,
+    detailsSplitPaymentMetadata,
+    detailsMetadata,
+    detailsOrganizerPayload.phone,
+    detailsParticipants,
+    detailsWaitlist,
+    upsertGameRecordInStores,
+  ]);
 
   useEffect(() => {
     setDetailsActiveTab(isDetailsMatchStarted && canCurrentUserAccessResultTab ? "result" : "game");
   }, [activeGameRecord?.id, isDetailsMatchStarted, canCurrentUserAccessResultTab]);
+
+  useEffect(() => {
+    detailsMatchResultSourceKeyRef.current = null;
+    detailsMatchResultDraftDirtyRef.current = false;
+    detailsMatchResultSessionOpenKeyRef.current = null;
+    detailsMatchResultSessionSyncKeyRef.current = null;
+    detailsMatchResultSessionRevisionRef.current = null;
+    if (detailsMatchResultSessionSaveTimerRef.current != null) {
+      window.clearTimeout(detailsMatchResultSessionSaveTimerRef.current);
+      detailsMatchResultSessionSaveTimerRef.current = null;
+    }
+    setDetailsMatchResultSession(null);
+    setDetailsMatchResultSessionLoading(false);
+  }, [activeGameRecord?.id]);
+
+  useEffect(() => {
+    setDetailsLeaveHistoryOpen(false);
+  }, [activeGameRecord?.id]);
 
   useEffect(() => {
     if (detailsActiveTab === "result" && !canCurrentUserAccessResultTab) {
@@ -5719,54 +8365,49 @@ export default function GamesPage({
   }, [detailsActiveTab, canCurrentUserAccessResultTab]);
 
   useEffect(() => {
+    const rawMatchResult = isRecordObject(detailsMetadata.matchResult)
+      ? detailsMetadata.matchResult
+      : buildFallbackMatchResultFromGameRecord(activeGameRecord);
+    const sessionRosterSnapshot = isRecordObject(detailsMatchResultSession?.rosterSnapshot)
+      ? detailsMatchResultSession.rosterSnapshot as Record<string, unknown>
+      : isRecordObject(rawMatchResult?.rosterSnapshot)
+        ? rawMatchResult.rosterSnapshot as Record<string, unknown>
+        : null;
+    const rosterPlayers = dedupePlayersByIdentity([
+      ...extractMatchResultSnapshotPlayers(sessionRosterSnapshot),
+      ...detailsParticipants,
+      ...detailsWaitlist,
+      ...detailsPlayerPool,
+    ]);
     const participantByKey = new Map<string, PadelGamePlayer>();
-    const participantById = new Map<string, string>();
-    const participantByPhone = new Map<string, string>();
-    const participantByName = new Map<string, string>();
+    const participantByLookupKey = new Map<string, PadelGamePlayer>();
 
-    detailsParticipants.forEach((player) => {
+    rosterPlayers.forEach((player) => {
       const key = getPadelPlayerIdentityKey(player);
       if (!key) return;
       participantByKey.set(key, player);
-      const id = (player.id || "").trim();
-      if (id) participantById.set(id, key);
-      const phone = normalizePhoneForGame(player.phone);
-      if (phone) participantByPhone.set(phone, key);
-      const name = (player.name || "").trim().toLowerCase();
-      if (name) participantByName.set(name, key);
+      getPadelPlayerLookupKeys(player).forEach((lookupKey) => {
+        if (!participantByLookupKey.has(lookupKey)) {
+          participantByLookupKey.set(lookupKey, player);
+        }
+      });
     });
 
-    const resolvePlayerKey = (value: unknown): string | null => {
-      if (typeof value === "string") {
-        const byString = value.trim();
-        if (participantByKey.has(byString)) return byString;
-        const byId = participantById.get(byString);
-        if (byId) return byId;
-        const byPhone = participantByPhone.get(normalizePhoneForGame(byString) || "");
-        if (byPhone) return byPhone;
+    const resolvePlayer = (value: unknown): PadelGamePlayer | null => {
+      const lookupKeys = buildMatchResultParticipantLookupKeys(value);
+      for (const lookupKey of lookupKeys) {
+        const player = participantByLookupKey.get(lookupKey);
+        if (player) return player;
       }
-
-      if (isRecordObject(value)) {
-        const maybeId = typeof value.id === "string" ? value.id.trim() : "";
-        if (maybeId && participantById.has(maybeId)) return participantById.get(maybeId) ?? null;
-
-        const maybePhone = typeof value.phone === "string"
-          ? normalizePhoneForGame(value.phone)
-          : null;
-        if (maybePhone && participantByPhone.has(maybePhone)) {
-          return participantByPhone.get(maybePhone) ?? null;
-        }
-
-        const maybeName = typeof value.name === "string" ? value.name.trim().toLowerCase() : "";
-        if (maybeName && participantByName.has(maybeName)) {
-          return participantByName.get(maybeName) ?? null;
-        }
-      }
-
       return null;
     };
+    const resolvePlayerKey = (value: unknown): string | null => getPadelPlayerIdentityKey(resolvePlayer(value)) || null;
 
-    const rawTeamSlots = Array.isArray(detailsMetadata.teamSlots) ? detailsMetadata.teamSlots : [];
+    const rawTeamSlots = Array.isArray(sessionRosterSnapshot?.initialTeamSlots)
+      ? sessionRosterSnapshot.initialTeamSlots
+      : Array.isArray(detailsMetadata.teamSlots)
+        ? detailsMetadata.teamSlots
+        : [];
     const parsedKeys = Array.from({ length: DETAILS_TEAM_SLOTS_COUNT }, (_, index) =>
       resolvePlayerKey(rawTeamSlots[index]),
     );
@@ -5792,9 +8433,9 @@ export default function GamesPage({
       usedKeys.add(key);
     });
 
-    setDetailsTeamSlots(
-      nextSlotKeys.map((key) => (key ? participantByKey.get(key) ?? null : null)),
-    );
+    const nextSlotPlayers = nextSlotKeys.map((key) => (key ? participantByKey.get(key) ?? null : null));
+
+    setDetailsTeamSlots(nextSlotPlayers);
     setDetailsTeamMenuSlotIndex(null);
     setDetailsPairComposerSetIndex(null);
 
@@ -5812,10 +8453,26 @@ export default function GamesPage({
       };
     };
 
-    const rawMatchResult = isRecordObject(detailsMetadata.matchResult)
-      ? detailsMetadata.matchResult
+    const sessionDraftMatchResult: Record<string, unknown> | null = detailsMatchResultSession
+      ? {
+          sets: detailsMatchResultSession.draftSets,
+          setPairings: detailsMatchResultSession.draftPairings,
+          attachments: detailsMatchResultSession.attachments,
+        }
       : null;
-    if (!rawMatchResult) {
+    const draftMatchResult = mergeMatchResultWithSessionDraft(rawMatchResult, sessionDraftMatchResult);
+    const matchResultSourceKey = buildMatchResultSourceKey(gameRecordId, draftMatchResult);
+    if (
+      detailsMatchResultDraftDirtyRef.current
+      && detailsMatchResultSourceKeyRef.current === matchResultSourceKey
+    ) {
+      return;
+    }
+
+    detailsMatchResultSourceKeyRef.current = matchResultSourceKey;
+    detailsMatchResultDraftDirtyRef.current = false;
+
+    if (!draftMatchResult) {
       setDetailsMatchResultSets([{ left: "", right: "" }]);
       setDetailsMatchResultSetPairings(createEmptyMatchResultSetPairings());
       setDetailsMatchResultStatus(null);
@@ -5832,28 +8489,31 @@ export default function GamesPage({
       return;
     }
 
-    const parsedSets = Array.isArray(rawMatchResult.sets)
-      ? rawMatchResult.sets
+    const parsedSets = Array.isArray(draftMatchResult.sets)
+      ? draftMatchResult.sets
           .map((item) => {
             if (!isRecordObject(item)) return null;
-            const leftNumber = Number(item.left);
-            const rightNumber = Number(item.right);
-            if (!Number.isFinite(leftNumber) || !Number.isFinite(rightNumber)) return null;
+            const leftRaw = item.left == null ? "" : String(item.left);
+            const rightRaw = item.right == null ? "" : String(item.right);
+            if (leftRaw.trim() !== "" && !Number.isFinite(Number(leftRaw))) return null;
+            if (rightRaw.trim() !== "" && !Number.isFinite(Number(rightRaw))) return null;
             return {
-              left: String(Math.max(0, Math.floor(leftNumber))),
-              right: String(Math.max(0, Math.floor(rightNumber))),
+              left: normalizeScoreInput(leftRaw),
+              right: normalizeScoreInput(rightRaw),
             };
           })
           .filter((item): item is EditableMatchResultSet => Boolean(item))
       : [];
-    const parsedSetPairings = createEmptyMatchResultSetPairings();
-    const rawSetPairings = Array.isArray(rawMatchResult.setPairings)
-      ? rawMatchResult.setPairings
-      : Array.isArray(rawMatchResult.pairings)
-        ? rawMatchResult.pairings
+    const parsedSetPairings = createEmptyMatchResultSetPairings(Math.max(parsedSets.length, 1));
+    const rawSetPairings = Array.isArray(draftMatchResult.setPairings)
+      ? draftMatchResult.setPairings
+      : Array.isArray(draftMatchResult.effectiveSetPairings)
+        ? draftMatchResult.effectiveSetPairings
+      : Array.isArray(draftMatchResult.pairings)
+        ? draftMatchResult.pairings
         : [];
 
-    rawSetPairings.forEach((item, rawIndex) => {
+    rawSetPairings.forEach((item: unknown, rawIndex: number) => {
       let setIndex = rawIndex;
       let rawTeamSlots: unknown = item;
 
@@ -5876,12 +8536,12 @@ export default function GamesPage({
       }
 
       if (!Array.isArray(rawTeamSlots)) return;
-      if (setIndex < 0 || setIndex >= MAX_MATCH_RESULT_SETS) return;
+      if (setIndex < 0) return;
 
       const resolvedSlots = cloneTeamSlots(
         rawTeamSlots.map((value) => {
-          const key = resolvePlayerKey(value);
-          return key ? participantByKey.get(key) ?? null : null;
+          const player = resolvePlayer(value);
+          return player ? participantByKey.get(getPadelPlayerIdentityKey(player)) ?? player : null;
         }),
       );
 
@@ -5893,45 +8553,62 @@ export default function GamesPage({
       parsedSets.length,
     );
 
-    const normalizedStatus = normalizeMatchResultStatus(rawMatchResult.status);
-    const submittedAt = typeof rawMatchResult.submittedAt === "string" ? rawMatchResult.submittedAt : null;
+    const normalizedStatus = draftMatchResult ? normalizeMatchResultStatus(draftMatchResult.status) : null;
+    const submittedAt = draftMatchResult && typeof draftMatchResult.submittedAt === "string"
+      ? draftMatchResult.submittedAt
+      : null;
 
     setDetailsMatchResultSets(
       normalizeEditableScoreSets(parsedSets.length > 0 ? parsedSets : [{ left: "", right: "" }]),
     );
     setDetailsMatchResultSetPairings(normalizedSetPairings);
     setDetailsMatchResultStatus(normalizedStatus || null);
-    setDetailsMatchResultSubmittedBy(toPerson(rawMatchResult.submittedBy));
+    setDetailsMatchResultSubmittedBy(toPerson(draftMatchResult?.submittedBy));
     setDetailsMatchResultSubmittedAt(submittedAt);
     setDetailsMatchResultDisputeDeadlineAt(
       getMatchResultDisputeDeadlineAt(
         submittedAt,
-        typeof rawMatchResult.disputeDeadlineAt === "string"
-          ? rawMatchResult.disputeDeadlineAt
-          : typeof rawMatchResult.reviewDeadlineAt === "string"
-            ? rawMatchResult.reviewDeadlineAt
+        draftMatchResult && typeof draftMatchResult.disputeDeadlineAt === "string"
+          ? draftMatchResult.disputeDeadlineAt
+          : draftMatchResult && typeof draftMatchResult.reviewDeadlineAt === "string"
+            ? draftMatchResult.reviewDeadlineAt
             : null,
+        detailsDateKey,
       ),
     );
-    setDetailsMatchResultConfirmedBy(toPerson(rawMatchResult.confirmedBy));
+    setDetailsMatchResultConfirmedBy(toPerson(draftMatchResult?.confirmedBy));
     setDetailsMatchResultConfirmedAt(
-      typeof rawMatchResult.confirmedAt === "string" ? rawMatchResult.confirmedAt : null,
+      draftMatchResult && typeof draftMatchResult.confirmedAt === "string" ? draftMatchResult.confirmedAt : null,
     );
-    setDetailsMatchResultRatingImpact(normalizeMatchResultRatingImpact(rawMatchResult.ratingImpact));
-    setDetailsMatchResultDisputedBy(toPerson(rawMatchResult.disputedBy));
+    setDetailsMatchResultRatingImpact(normalizeMatchResultRatingImpact(draftMatchResult?.ratingImpact));
+    setDetailsMatchResultDisputedBy(toPerson(draftMatchResult?.disputedBy));
     setDetailsMatchResultDisputedAt(
-      typeof rawMatchResult.disputedAt === "string" ? rawMatchResult.disputedAt : null,
+      draftMatchResult && typeof draftMatchResult.disputedAt === "string" ? draftMatchResult.disputedAt : null,
     );
     setDetailsMatchResultAttachments(
       normalizeMatchResultAttachments(
-        rawMatchResult.photos
-        ?? rawMatchResult.attachments
-        ?? rawMatchResult.images
+        draftMatchResult.photos
+        ?? draftMatchResult.attachments
+        ?? draftMatchResult.images
         ?? [],
       ),
     );
     setGameDetailsMetaError(null);
-  }, [detailsMetadata, detailsParticipants, detailsOrganizerInMatch, detailsOrganizerKey, gameRecordId]);
+  }, [
+    activeGameRecord?.lastResultAt,
+    activeGameRecord?.resultId,
+    activeGameRecord?.resultLifecycleState,
+    activeGameRecord?.resultStatus,
+    detailsMetadata,
+    detailsMatchResultSession,
+    detailsPlayerPool,
+    detailsParticipants,
+    detailsWaitlist,
+    detailsOrganizerInMatch,
+    detailsOrganizerKey,
+    detailsDateKey,
+    gameRecordId,
+  ]);
 
   useEffect(() => {
     if (!isPendingMatchResultStatus(detailsMatchResultStatus)) return;
@@ -5988,28 +8665,6 @@ export default function GamesPage({
     const submittedPhone = normalizePhoneForGame(detailsMatchResultSubmittedBy.phone);
     return Boolean(submittedPhone && profilePhoneNorm && submittedPhone === profilePhoneNorm);
   }, [detailsMatchResultSubmittedBy, profileId, profilePhoneNorm]);
-  const detailsSubmittedByPlayer = useMemo(() => {
-    if (!detailsMatchResultSubmittedBy) return null;
-    return (
-      detailsParticipants.find((player) => {
-        const submittedId = (detailsMatchResultSubmittedBy.id || "").trim();
-        const playerId = (player.id || "").trim();
-        if (submittedId && playerId && submittedId === playerId) return true;
-        const submittedPhone = normalizePhoneForGame(detailsMatchResultSubmittedBy.phone);
-        const playerPhone = normalizePhoneForGame(player.phone);
-        if (submittedPhone && playerPhone && submittedPhone === playerPhone) return true;
-        return false;
-      }) ?? null
-    );
-  }, [detailsMatchResultSubmittedBy, detailsParticipants]);
-  const detailsSubmittedByTeamIndex = useMemo(() => {
-    if (!detailsSubmittedByPlayer) return null;
-    const slotIndex = detailsTeamSlots.findIndex((player) =>
-      getPadelPlayerIdentityKey(player) === getPadelPlayerIdentityKey(detailsSubmittedByPlayer),
-    );
-    if (slotIndex < 0) return null;
-    return slotIndex < 2 ? 1 : 2;
-  }, [detailsTeamSlots, detailsSubmittedByPlayer]);
   const isMatchResultPendingReview = useMemo(
     () => isPendingMatchResultStatus(detailsMatchResultStatus),
     [detailsMatchResultStatus],
@@ -6033,18 +8688,192 @@ export default function GamesPage({
     && isCurrentUserConfirmedParticipant
     && !isMatchResultPendingReview
     && !isMatchResultAgreed;
+  const canEditMatchResultTeamsInDetails = canEditMatchResult;
+  const detailsMatchResultValidationError = validateCompletedMatchResultSets(detailsMatchResultSets);
   const canSubmitMatchResult = canEditMatchResult
     && detailsCompletedMatchResultSets.length > 0
+    && !detailsMatchResultValidationError
     && !updatingGameMeta;
   const canDisputeMatchResult = isDetailsMatchStarted
     && isCurrentUserConfirmedParticipant
     && isMatchResultPendingReview
     && !isMatchResultSubmittedByCurrentUser
-    && detailsCurrentUserTeamIndex != null
-    && detailsSubmittedByTeamIndex != null
-    && detailsCurrentUserTeamIndex !== detailsSubmittedByTeamIndex
     && (detailsMatchResultDisputeTimeLeftMs == null || detailsMatchResultDisputeTimeLeftMs > 0)
     && !updatingGameMeta;
+  const canConfirmMatchResult = isDetailsMatchStarted
+    && isCurrentUserConfirmedParticipant
+    && isMatchResultPendingReview
+    && !isMatchResultSubmittedByCurrentUser
+    && (detailsMatchResultDisputeTimeLeftMs == null || detailsMatchResultDisputeTimeLeftMs > 0)
+    && !updatingGameMeta;
+  const canAcceptMatchResultCorrection = isDetailsMatchStarted
+    && isCurrentUserConfirmedParticipant
+    && detailsMatchResultStatus === "CORRECTION_PENDING"
+    && !updatingGameMeta;
+  const buildMatchResultSessionSyncKey = useCallback((
+    draftSets: Array<{ left: unknown; right: unknown }>,
+    draftPairings: unknown[],
+    attachments: unknown[],
+  ) => JSON.stringify({
+    draftSets: draftSets.map((item) => ({
+      left: item?.left == null ? "" : String(item.left),
+      right: item?.right == null ? "" : String(item.right),
+    })),
+    draftPairings,
+    attachments: attachments.map((item) => {
+      if (!isRecordObject(item)) return item;
+      return {
+        id: typeof item.id === "string" ? item.id : null,
+        dataUrl: typeof item.dataUrl === "string" ? item.dataUrl : null,
+      };
+    }),
+  }), []);
+
+  useEffect(() => {
+    if (step !== "details" || detailsActiveTab !== "result" || !gameRecordId || !profilePhoneNorm || !canEditMatchResult) {
+      return;
+    }
+    const openKey = `${gameRecordId}:${profilePhoneNorm}`;
+    if (detailsMatchResultSessionOpenKeyRef.current === openKey || detailsMatchResultSessionLoading) {
+      return;
+    }
+
+    detailsMatchResultSessionOpenKeyRef.current = openKey;
+    let cancelled = false;
+    setDetailsMatchResultSessionLoading(true);
+
+    void apiOpenPadelGameResultSession(gameRecordId, {
+      phone: profilePhoneNorm,
+      submittedBy: {
+        id: profileId ?? null,
+        phone: profilePhoneNorm,
+        name: profileName || null,
+      },
+    }).then((result) => {
+      if (cancelled) return;
+      if (result.error || !result.data) {
+        detailsMatchResultSessionOpenKeyRef.current = null;
+        return;
+      }
+
+      setDetailsMatchResultSession(result.data);
+      detailsMatchResultSessionRevisionRef.current = typeof result.data.revision === "number"
+        ? result.data.revision
+        : null;
+      detailsMatchResultSessionSyncKeyRef.current = buildMatchResultSessionSyncKey(
+        Array.isArray(result.data.draftSets) ? result.data.draftSets : [],
+        Array.isArray(result.data.draftPairings) ? result.data.draftPairings : [],
+        Array.isArray(result.data.attachments) ? result.data.attachments : [],
+      );
+    }).catch(() => {
+      if (cancelled) return;
+      detailsMatchResultSessionOpenKeyRef.current = null;
+    }).finally(() => {
+      if (cancelled) return;
+      setDetailsMatchResultSessionLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    buildMatchResultSessionSyncKey,
+    canEditMatchResult,
+    detailsActiveTab,
+    detailsMatchResultSessionLoading,
+    gameRecordId,
+    profileId,
+    profileName,
+    profilePhoneNorm,
+    step,
+  ]);
+
+  useEffect(() => {
+    if (step !== "details" || detailsActiveTab !== "result" || !gameRecordId || !profilePhoneNorm || !canEditMatchResult) {
+      return;
+    }
+    const sessionId = (detailsMatchResultSession?.sessionId || "").trim();
+    if (!sessionId) return;
+
+    const draftSetsPayload = detailsMatchResultSets.map((setItem) => ({
+      left: setItem.left,
+      right: setItem.right,
+    }));
+    const draftPairingsPayload = buildMatchResultSetPairingsPayload(detailsMatchResultSetPairings);
+    const syncKey = buildMatchResultSessionSyncKey(
+      draftSetsPayload,
+      draftPairingsPayload,
+      detailsMatchResultAttachments,
+    );
+
+    if (!detailsMatchResultDraftDirtyRef.current || detailsMatchResultSessionSyncKeyRef.current === syncKey) {
+      return;
+    }
+
+    if (detailsMatchResultSessionSaveTimerRef.current != null) {
+      window.clearTimeout(detailsMatchResultSessionSaveTimerRef.current);
+    }
+
+    let cancelled = false;
+    detailsMatchResultSessionSaveTimerRef.current = window.setTimeout(() => {
+      void apiUpdatePadelGameResultSession(gameRecordId, sessionId, {
+        phone: profilePhoneNorm,
+        revision: detailsMatchResultSessionRevisionRef.current ?? detailsMatchResultSession?.revision ?? 1,
+        draftSets: draftSetsPayload,
+        draftPairings: draftPairingsPayload,
+        attachments: detailsMatchResultAttachments,
+        actor: {
+          id: profileId ?? null,
+          phone: profilePhoneNorm,
+          name: profileName || null,
+        },
+      }).then((result) => {
+        if (cancelled) return;
+        if (result.error || !result.data) {
+          if (result.error?.status === 409) {
+            detailsMatchResultSessionOpenKeyRef.current = null;
+            detailsMatchResultSessionSyncKeyRef.current = null;
+            setDetailsMatchResultSession(null);
+          }
+          return;
+        }
+
+        setDetailsMatchResultSession((prev) => ({ ...(prev ?? {}), ...result.data }));
+        detailsMatchResultSessionRevisionRef.current = typeof result.data.revision === "number"
+          ? result.data.revision
+          : detailsMatchResultSessionRevisionRef.current;
+        detailsMatchResultSessionSyncKeyRef.current = syncKey;
+        detailsMatchResultDraftDirtyRef.current = false;
+      }).catch(() => {
+        // autosave is additive; local draft remains the source until next sync
+      }).finally(() => {
+        if (detailsMatchResultSessionSaveTimerRef.current != null) {
+          detailsMatchResultSessionSaveTimerRef.current = null;
+        }
+      });
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      if (detailsMatchResultSessionSaveTimerRef.current != null) {
+        window.clearTimeout(detailsMatchResultSessionSaveTimerRef.current);
+        detailsMatchResultSessionSaveTimerRef.current = null;
+      }
+    };
+  }, [
+    buildMatchResultSessionSyncKey,
+    canEditMatchResult,
+    detailsActiveTab,
+    detailsMatchResultAttachments,
+    detailsMatchResultSession,
+    detailsMatchResultSetPairings,
+    detailsMatchResultSets,
+    gameRecordId,
+    profileId,
+    profileName,
+    profilePhoneNorm,
+    step,
+  ]);
   const detailsTeamMenuOptions = useMemo(() => {
     if (detailsTeamMenuSlotIndex == null) return [] as PadelGamePlayer[];
     const availablePlayers = new Map<string, PadelGamePlayer>();
@@ -6063,6 +8892,7 @@ export default function GamesPage({
       });
       if (detailsOrganizerInMatch) {
         detailsWaitlist.forEach((player) => pushAvailablePlayer(player));
+        detailsPlayerPool.forEach((player) => pushAvailablePlayer(player));
       } else if (detailsOrganizerPlayer && detailsHasFreeSlots) {
         pushAvailablePlayer({
           ...detailsOrganizerPlayer,
@@ -6073,6 +8903,7 @@ export default function GamesPage({
     } else {
       detailsParticipants.forEach((player) => pushAvailablePlayer(player));
       detailsWaitlist.forEach((player) => pushAvailablePlayer(player));
+      detailsPlayerPool.forEach((player) => pushAvailablePlayer(player));
     }
 
     const usedKeys = new Set<string>(
@@ -6097,6 +8928,7 @@ export default function GamesPage({
     detailsTeamMenuSlotIndex,
     detailsTeamSlotKeys,
     detailsParticipants,
+    detailsPlayerPool,
     detailsWaitlist,
     detailsOrganizerKey,
   ]);
@@ -6216,12 +9048,6 @@ export default function GamesPage({
     }
   }, []);
   useEffect(() => () => {
-    const tapState = splitPaymentUnlockTapStateRef.current;
-    if (tapState.timeoutId != null && typeof window !== "undefined") {
-      window.clearTimeout(tapState.timeoutId);
-    }
-  }, []);
-  useEffect(() => () => {
     splitSubscriptionRequestRef.current += 1;
   }, []);
 
@@ -6289,9 +9115,11 @@ export default function GamesPage({
     return {
       stationTarget,
       memberTargets,
-      defaultSelectedIds: [],
+      defaultSelectedIds: usePublicCreateWizard && !isPrivate && stationTarget?.id
+        ? [stationTarget.id]
+        : [],
     };
-  }, [communityAutopublishStationName, resolveCurrentClientProfile]);
+  }, [communityAutopublishStationName, isPrivate, resolveCurrentClientProfile, usePublicCreateWizard]);
 
   const resolveCurrentCommunityActor = useCallback(async () => {
     const profileResult = await apiFetchProfile();
@@ -6412,13 +9240,27 @@ export default function GamesPage({
     });
   }, []);
   const getCurrentCommunityAutopublishSelectionState = useCallback(
-    () => buildCommunityAutopublishSelectionState({
-      stationTarget: communityAutopublishStationTarget,
-      memberTargets: communityAutopublishMemberTargets,
-      selectedCommunityIds: selectedCommunityAutopublishIdsRef.current,
-      selectionTouched: communityAutopublishSelectionTouchedRef.current,
-    }),
-    [communityAutopublishMemberTargets, communityAutopublishStationTarget],
+    () => {
+      const baseState = buildCommunityAutopublishSelectionState({
+        stationTarget: communityAutopublishStationTarget,
+        memberTargets: communityAutopublishMemberTargets,
+        selectedCommunityIds: selectedCommunityAutopublishIdsRef.current,
+        selectionTouched: communityAutopublishSelectionTouchedRef.current,
+      });
+      if (publicCreateAutoStationCommunityId) {
+        return {
+          ...baseState,
+          stationCommunityId: publicCreateAutoStationCommunityId,
+          selectedCommunityIds: [publicCreateAutoStationCommunityId],
+        };
+      }
+      return baseState;
+    },
+    [
+      communityAutopublishMemberTargets,
+      communityAutopublishStationTarget,
+      publicCreateAutoStationCommunityId,
+    ],
   );
 
   const publishGameToMemberCommunitiesDev = useCallback(async (
@@ -6718,6 +9560,7 @@ export default function GamesPage({
 
   useEffect(() => {
     if ((step !== "details" && step !== "chat") || !gameRecordId) return;
+    if (isReadOnlySyntheticGame) return;
 
     let alive = true;
     const run = async () => {
@@ -6748,6 +9591,10 @@ export default function GamesPage({
             setGameRecordError(null);
           }
 
+          if (shouldSkipRecentPaidGameBackgroundSync(fetchedRecord)) {
+            return;
+          }
+
           const vivaStatus = await resolveGamePaymentByVivaBookings(
             fetchedRecord,
             fetchedRecord.payment?.paymentUrl ?? null,
@@ -6755,33 +9602,8 @@ export default function GamesPage({
           );
           if (!alive) return;
           if (vivaStatus.cancelled) {
-            setGamePaid(false);
-            setInviteLink(null);
-            setGamePaymentUrl(vivaStatus.paymentUrl ?? fetchedRecord.payment?.paymentUrl ?? null);
-            const nextRecord: PadelGameRecord = {
-              ...fetchedRecord,
-              status: "CANCELLED",
-              payment: {
-                amount: fetchedRecord.payment?.amount ?? null,
-                paymentUrl: vivaStatus.paymentUrl ?? fetchedRecord.payment?.paymentUrl ?? null,
-                paid: false,
-              },
-            };
-            upsertGameRecordInStores(nextRecord, { communityMode: "if_exists" });
-            setGameRecordStatus("CANCELLED");
-
-            const fetchedStatusUpper = String(fetchedRecord.status || "").trim().toUpperCase();
-            if (!fetchedStatusUpper.includes("CANCEL")) {
-              void apiUpdatePadelGameRecord(fetchedRecord.id, {
-                status: "CANCELLED",
-                payment: {
-                  amount: fetchedRecord.payment?.amount ?? null,
-                  paymentUrl: vivaStatus.paymentUrl ?? fetchedRecord.payment?.paymentUrl ?? null,
-                  paymentMethod: "WIDGET",
-                  paid: false,
-                },
-              });
-            }
+            await hideCancelledGameRecord(fetchedRecord);
+            if (!alive) return;
             return;
           }
           if (vivaStatus.paymentUrl && !fetchedRecord.payment?.paymentUrl) {
@@ -6863,6 +9685,8 @@ export default function GamesPage({
   }, [
     step,
     gameRecordId,
+    isReadOnlySyntheticGame,
+    hideCancelledGameRecord,
     resolveGamePaymentByVivaBookings,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
@@ -6939,7 +9763,7 @@ export default function GamesPage({
       setGameRecordError(errorMessage);
       return false;
     }
-    if (!splitPaymentSelected && !normalizedGameJoinPrice) {
+    if (!splitPaymentSelected && shouldShowPublicationJoinPriceField && !normalizedGameJoinPrice) {
       const errorMessage = "Укажите стоимость присоединения к игре перед публикацией в сообщества.";
       setPayError(errorMessage);
       setGameRecordError(errorMessage);
@@ -6952,6 +9776,7 @@ export default function GamesPage({
     normalizedGameTitle,
     normalizedGameParticipantComment,
     splitPaymentSelected,
+    shouldShowPublicationJoinPriceField,
     normalizedGameJoinPrice,
   ]);
   const communityAutopublishCards = useMemo(() => {
@@ -7110,7 +9935,10 @@ export default function GamesPage({
     resolveCurrentClientProfile,
   ]);
 
-  const handleSplitGamePay = useCallback(async (preferredPaymentMode?: "subscription" | "one_time") => {
+  const handleSplitGamePay = useCallback(async (
+    preferredPaymentMode?: "subscription" | "one_time",
+    preferredClientSubscriptionId?: string | null,
+  ) => {
     if (!studioId || !selectedDate || !courtId || !time || !selectedSlotId) return;
     if (!validateGamePublicationFields()) return;
     if (!splitPaymentAvailable) {
@@ -7141,6 +9969,14 @@ export default function GamesPage({
     const baseShareAmount = resolveSplitBaseShareAmount(activeSplitPaymentPromoConfig, duration);
     const discountAmount = Math.max(baseShareAmount - shareAmount, 0);
     const resolvedPaymentMode = preferredPaymentMode ?? (splitHasEligibleSubscriptions ? "subscription" : "one_time");
+    const resolvedClientSubscriptionId =
+      resolvedPaymentMode === "subscription"
+        ? (String(preferredClientSubscriptionId || "").trim() || null)
+        : null;
+    // Split subscription eligibility is calculated for the canonical open-game type.
+    // Use the same Viva direction/type for actual booking creation to avoid mismatches.
+    const resolvedSplitDirectionId = SPLIT_OPEN_GAME_DIRECTION_ID;
+    const resolvedSplitExerciseTypeId = SPLIT_OPEN_GAME_EXERCISE_TYPE_ID;
     const resolvedTotalAmount = paymentAmount != null && Number.isFinite(paymentAmount)
       ? Math.max(0, Math.round(paymentAmount))
       : null;
@@ -7157,6 +9993,7 @@ export default function GamesPage({
       clientPhone,
       paymentRef,
       paymentMode: resolvedPaymentMode,
+      clientSubscriptionId: resolvedClientSubscriptionId,
       baseRedirectUrl,
       successUrl: baseRedirectUrl,
       failUrl: baseRedirectUrl,
@@ -7168,8 +10005,8 @@ export default function GamesPage({
       durationMinutes: duration,
       maxClientsCount: splitShareCount,
       spot: 1,
-      vivaDirectionId: SPLIT_OPEN_GAME_DIRECTION_ID,
-      vivaExerciseTypeId: SPLIT_OPEN_GAME_EXERCISE_TYPE_ID,
+      vivaDirectionId: resolvedSplitDirectionId,
+      vivaExerciseTypeId: resolvedSplitExerciseTypeId,
     });
 
     if (paymentResult.error || !paymentResult.data) {
@@ -7242,6 +10079,7 @@ export default function GamesPage({
       oneTimeBaseAmount: resolvedOneTimeBaseAmount,
       selectedPaymentMode: paymentResult.data.selectedPaymentMode ?? resolvedPaymentMode,
       paymentModes: paymentResult.data.paymentModes,
+      clientSubscriptionId: resolvedClientSubscriptionId,
       subscriptionProductId: paymentResult.data.subscriptionProductId,
       subscriptionProductName: paymentResult.data.subscriptionProductName,
       oneTimeProductId: paymentResult.data.oneTimeProductId,
@@ -7264,6 +10102,12 @@ export default function GamesPage({
         },
       ],
     };
+    const allRelatedPhones = buildGameAllRelatedPhones({
+      organizerPhone: clientPhone ?? organizerPlayer.phone ?? null,
+      participants: normalizedParticipants.slice(0, splitShareCount),
+      waitlist: waitlistPlayers,
+      splitPaymentPhones: [clientPhone ?? organizerPlayer.phone ?? null],
+    });
 
     const payload: PadelGameRecordPayload = {
       paymentRef,
@@ -7292,6 +10136,8 @@ export default function GamesPage({
         durationMinutes: duration,
         slotId: selectedSlotId,
         bookingIds: resolvedBookingIds,
+        vivaExerciseId: paymentResult.data.exerciseId,
+        exerciseId: paymentResult.data.exerciseId,
       },
       payment: {
         amount: resolvedPaymentAmount,
@@ -7320,6 +10166,8 @@ export default function GamesPage({
       metadata: {
         paymentRef,
         bookingIds: resolvedBookingIds,
+        vivaExerciseId: paymentResult.data.exerciseId,
+        exerciseId: paymentResult.data.exerciseId,
         source: "games_split_widget",
         gameFormat: resolvedGameFormat,
         ...buildGameOptionalMetadataFields({
@@ -7327,7 +10175,10 @@ export default function GamesPage({
           participantComment: gameParticipantCommentDraft,
           joinPrice: gameJoinPriceDraft,
         }),
+        sourceMode: "create",
+        allRelatedPhones,
         splitPayment: splitMetadata,
+        ...publicCreatePreciseRatingMetadata,
         ...buildCommunityAutopublishMetadataFields(buildCommunityAutopublishMetadata()),
       },
     };
@@ -7352,7 +10203,6 @@ export default function GamesPage({
       const createdRecord = directCreateResult.data;
       const fallbackInviteUrl = buildInviteFallbackUrl(createdRecord.id);
       upsertGameRecordInStores(createdRecord, { communityMode: "upsert" });
-      notifyGameRecordsUpdated([createdRecord], "games_split_direct_create");
       void runPaidGameCommunityMembershipAndPublication(createdRecord, "direct_create");
       setGameRecordId(createdRecord.id);
       setGameRecordStatus(createdRecord.status ?? "PAID");
@@ -7397,6 +10247,7 @@ export default function GamesPage({
     profileGrade,
     profileRatingNumeric,
     profilePhoto,
+    paymentAmount,
     gameTitleDraft,
     gameParticipantCommentDraft,
     gameJoinPriceDraft,
@@ -7413,6 +10264,7 @@ export default function GamesPage({
     splitShareCount,
     splitHasEligibleSubscriptions,
     resolvedGameFormat,
+    publicCreatePreciseRatingMetadata,
     buildCommunityAutopublishMetadata,
     validateGamePublicationFields,
     resolveCurrentClientProfile,
@@ -7565,6 +10417,7 @@ export default function GamesPage({
             participantComment: gameParticipantCommentDraft,
             joinPrice: gameJoinPriceDraft,
           }),
+          ...publicCreatePreciseRatingMetadata,
           ...buildCommunityAutopublishMetadataFields(buildCommunityAutopublishMetadata()),
         },
       };
@@ -7601,7 +10454,6 @@ export default function GamesPage({
       const createdRecord = directCreateResult.data;
       const fallbackInviteUrl = buildInviteFallbackUrl(createdRecord.id);
       upsertGameRecordInStores(createdRecord, { communityMode: "upsert" });
-      notifyGameRecordsUpdated([createdRecord], "games_direct_create");
       void runPaidGameCommunityMembershipAndPublication(createdRecord, "direct_create");
       setGameRecordId(createdRecord.id);
       setGameRecordStatus(createdRecord.status ?? "PAID");
@@ -7684,6 +10536,7 @@ export default function GamesPage({
             participantComment: gameParticipantCommentDraft,
             joinPrice: gameJoinPriceDraft,
           }),
+          ...publicCreatePreciseRatingMetadata,
           ...buildCommunityAutopublishMetadataFields(buildCommunityAutopublishMetadata()),
         },
       };
@@ -7730,11 +10583,34 @@ export default function GamesPage({
     promoDiscountAmount,
     createMaxPlayers,
     resolvedGameFormat,
+    publicCreatePreciseRatingMetadata,
     buildCommunityAutopublishMetadata,
     validateGamePublicationFields,
     resolveCurrentClientProfile,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
+  ]);
+  const handleCreateSubmit = useCallback(() => {
+    if (splitPaymentSelected) {
+      if (splitCheckoutMode === "subscription") {
+        if (splitHasSubscriptionPaymentOptions && !selectedSplitSubscriptionId) {
+          setPayError("Выберите абонемент для списания");
+          return;
+        }
+        void handleSplitGamePay("subscription", selectedSplitSubscriptionId);
+        return;
+      }
+      void handleSplitGamePay("one_time");
+      return;
+    }
+    void handleMasterServicePay();
+  }, [
+    splitPaymentSelected,
+    splitCheckoutMode,
+    splitHasSubscriptionPaymentOptions,
+    selectedSplitSubscriptionId,
+    handleSplitGamePay,
+    handleMasterServicePay,
   ]);
 
   useEffect(() => {
@@ -7797,7 +10673,7 @@ export default function GamesPage({
         if (profileResult.data?.phone) setProfilePhone(profileResult.data.phone);
       }
 
-      const normalizedParticipants = participants.length > 0
+      const fallbackParticipants = participants.length > 0
         ? participants
         : [
             {
@@ -7811,11 +10687,58 @@ export default function GamesPage({
               status: "CONFIRMED" as const,
             },
           ];
-      const organizerPlayer = normalizedParticipants[0];
+      const organizerPlayer = fallbackParticipants[0];
+      let normalizedParticipants = fallbackParticipants;
+      let bookingIdsForPayload = Array.from(new Set([bookingPreset.bookingId].filter(Boolean)));
+      let bookingPaymentTypes: string[] = [];
+      let hasSubscriptionBooking = false;
+
+      if (bookingPreset.exerciseId) {
+        const rosterResult = await apiFetchTournamentParticipants(bookingPreset.exerciseId, { sanitize: false });
+        if (rosterResult.data) {
+          const rosterRows = extractExerciseBookingRows(rosterResult.data)
+            .filter((item) => !isRecordObject(item)
+              ? false
+              : !(item.isCancelled === true || item.cancelled === true || item.canceled === true));
+
+          const rosterParticipants = rosterRows
+            .map((item) => normalizeVivaBookingParticipant(item))
+            .filter((item): item is PadelGamePlayer => item !== null)
+            .filter((item) => item.status !== "WAITLIST");
+          if (rosterParticipants.length > 0) {
+            const fallbackOrganizerParticipant = organizerPlayer
+              ? {
+                  ...organizerPlayer,
+                  source: "ORGANIZER" as const,
+                  status: "CONFIRMED" as const,
+                }
+              : null;
+            normalizedParticipants = dedupePlayersByIdentity([
+              fallbackOrganizerParticipant,
+              ...rosterParticipants,
+            ]).slice(0, createMaxPlayers);
+          }
+
+          const rosterBookingIds = rosterRows
+            .map((item) => extractVivaBookingId(item))
+            .filter((item): item is string => Boolean(item));
+          bookingIdsForPayload = Array.from(new Set([
+            bookingPreset.bookingId,
+            ...rosterBookingIds,
+          ].filter(Boolean)));
+
+          bookingPaymentTypes = Array.from(new Set(
+            rosterRows.flatMap((item) => extractVivaBookingPaymentTypes(item)),
+          ));
+          hasSubscriptionBooking = rosterRows.some((item) => hasVivaSubscriptionBookingSignal(item));
+        }
+      }
+      const bookingPresetPaid = bookingPreset.paid;
+      const bookingPresetIsPaid = bookingPresetPaid !== false;
 
       const payload: PadelGameRecordPayload = {
         tenantKey: null,
-        status: bookingPreset.paid ? "PAID" : "PAYMENT_PENDING",
+        status: bookingPresetIsPaid ? "PAID" : "PAYMENT_PENDING",
         organizer: {
           id: clientId ?? organizerPlayer?.id ?? null,
           name: profileName || organizerPlayer?.name || "Организатор",
@@ -7838,15 +10761,15 @@ export default function GamesPage({
           timeToIso: `${bookingPreset.date}T${bookingPreset.timeTo}:00+03:00`,
           durationMinutes: bookingPreset.durationMinutes,
           slotId: bookingPreset.slotId,
-          bookingIds: [bookingPreset.bookingId],
+          bookingIds: bookingIdsForPayload,
         },
         payment: {
           amount: bookingPreset.amount,
           paymentUrl: bookingPreset.paymentUrl,
           paymentMethod: "WIDGET",
-          paid: bookingPreset.paid,
-          paidAt: bookingPreset.paid ? new Date().toISOString() : null,
-          bookingIds: [bookingPreset.bookingId],
+          ...(bookingPresetPaid === null ? {} : { paid: bookingPresetPaid }),
+          paidAt: bookingPresetPaid === true ? new Date().toISOString() : null,
+          bookingIds: bookingIdsForPayload,
         },
         settings: {
           ratingGame: effectiveRatingGame,
@@ -7864,18 +10787,22 @@ export default function GamesPage({
         waitlist: [],
         metadata: {
           source: "cabinet_booking_convert",
-          bookingId: bookingPreset.bookingId,
-          bookingIds: [bookingPreset.bookingId],
+          bookingId: bookingIdsForPayload[0] ?? bookingPreset.bookingId,
+          bookingIds: bookingIdsForPayload,
           slotId: bookingPreset.slotId,
           vivaExerciseId: bookingPreset.exerciseId,
           exerciseId: bookingPreset.exerciseId,
           directionName: bookingPreset.directionName,
+          bookingPaymentTypes,
+          hasSubscriptionBooking,
+          canJoinBySubscription: hasSubscriptionBooking,
           gameFormat: resolvedGameFormat,
           ...buildGameOptionalMetadataFields({
             gameTitle: gameTitleDraft,
             participantComment: gameParticipantCommentDraft,
             joinPrice: gameJoinPriceDraft,
           }),
+          ...publicCreatePreciseRatingMetadata,
           ...buildCommunityAutopublishMetadataFields(buildCommunityAutopublishMetadata()),
         },
       };
@@ -7888,7 +10815,6 @@ export default function GamesPage({
 
       const createdRecord = createResult.data;
       upsertGameRecordInStores(createdRecord, { communityMode: "upsert" });
-      notifyGameRecordsUpdated([createdRecord], "games_booking_create");
       void runPaidGameCommunityMembershipAndPublication(createdRecord, "booking_create");
       setGameRecordId(createdRecord.id);
       setGameRecordStatus(createdRecord.status ?? payload.status ?? null);
@@ -7930,6 +10856,7 @@ export default function GamesPage({
     waitlistEnabled,
     createMaxPlayers,
     resolvedGameFormat,
+    publicCreatePreciseRatingMetadata,
     buildCommunityAutopublishMetadata,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
@@ -7959,14 +10886,16 @@ export default function GamesPage({
   const handleCopyInvite = async () => {
     if (!inviteLink) return;
     try {
-      await shareOrCopyGameInvitePayload(inviteLink, activeGameRecord, {
+      const inviteResult = await shareOrCopyGameInvitePayload(inviteLink, activeGameRecord, {
         includePreviewImage: true,
-        preferNativeShare: false,
       });
-      setInviteCopied(true);
-      window.setTimeout(() => setInviteCopied(false), 1600);
-    } catch {
-      setInviteCopied(false);
+      setInviteFeedback(inviteResult);
+      window.setTimeout(() => {
+        setInviteFeedback((current) => (current === inviteResult ? null : current));
+      }, 1600);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setInviteFeedback(null);
     }
   };
 
@@ -8079,25 +11008,8 @@ export default function GamesPage({
         gamePaymentUrl,
         gameSnapshot,
       );
-      if (vivaStatus.cancelled) {
-        if (gameRecordId) {
-          void apiUpdatePadelGameRecord(gameRecordId, { status: "CANCELLED" });
-        }
-        if (activeGameRecord) {
-          upsertGameRecordInStores({
-            ...activeGameRecord,
-            status: "CANCELLED",
-            payment: {
-              amount: activeGameRecord.payment?.amount ?? detailsAmount ?? null,
-              paymentUrl: vivaStatus.paymentUrl ?? gamePaymentUrl ?? activeGameRecord.payment?.paymentUrl ?? null,
-              paid: false,
-            },
-          }, { communityMode: "if_exists" });
-        }
-        setGamePaid(false);
-        setGameRecordStatus("CANCELLED");
-        setInviteLink(null);
-        setGameRecordError("Бронь отменена");
+      if (vivaStatus.cancelled && activeGameRecord) {
+        await hideCancelledGameRecord(activeGameRecord);
         setRetryingPayment(false);
         return;
       }
@@ -8188,6 +11100,7 @@ export default function GamesPage({
     gameSnapshot,
     gameRecordId,
     detailsAmount,
+    hideCancelledGameRecord,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
   ]);
@@ -8198,9 +11111,37 @@ export default function GamesPage({
     setCancellingUnpaidGame(true);
     setGameRecordError(null);
 
-    const cancelResult = await apiUpdatePadelGameRecord(gameRecordId, {
-      status: "CANCELLED",
+    let cleanupHandled = false;
+    let cleanupSucceeded = false;
+
+    const cleanupResult = await apiCleanupPadelGameByOrganizer(gameRecordId, {
+      force: true,
+      dryRun: false,
+      limit: 1,
+      intent: "cancel_game",
     });
+    const cleanupData = cleanupResult.data;
+    const cleanupItems = Array.isArray(cleanupData?.items) ? cleanupData.items : [];
+    const cleanupItem = cleanupItems.find((item) => item.gameId === gameRecordId)
+      ?? cleanupItems[0]
+      ?? null;
+    const cleanupProcessed = (cleanupData?.processed ?? 0) > 0 || cleanupItem !== null;
+
+    if (cleanupProcessed) {
+      cleanupHandled = true;
+      cleanupSucceeded = cleanupItem?.cancelledInLk === true && cleanupItem?.withVivaErrors !== true;
+      if (!cleanupSucceeded) {
+        setGameRecordError("Не удалось удалить занятие в Viva");
+        setCancellingUnpaidGame(false);
+        return;
+      }
+    }
+
+    const cancelResult = cleanupHandled
+      ? { data: { id: gameRecordId }, error: null }
+      : await apiUpdatePadelGameRecord(gameRecordId, {
+        status: "CANCELLED",
+      });
 
     if (cancelResult.data?.id || !cancelResult.error) {
       const cancelledId = gameRecordId;
@@ -8372,16 +11313,20 @@ export default function GamesPage({
     setUpdatingGameMeta(true);
     setGameDetailsMetaError(null);
     try {
-      const updateResult = await apiUpdatePadelGameRecord(gameRecordId, {
-        organizer: detailsOrganizerPayload,
+      const payload: Parameters<typeof apiUpdatePadelGameRecord>[1] = {
         participants: detailsParticipants,
         waitlist: detailsWaitlist,
         invite: {
           waitlistEnabled: activeGameRecord?.invite?.waitlistEnabled ?? waitlistEnabled,
-          maxPlayers: activeGameRecord?.invite?.maxPlayers ?? detailsMaxPlayers,
+          maxPlayers: detailsMaxPlayers,
         },
         metadata: nextMetadata,
-      });
+      };
+      if (detailsOrganizerHasIdentity) {
+        payload.organizer = detailsOrganizerPayload;
+      }
+
+      const updateResult = await apiUpdatePadelGameRecord(gameRecordId, payload);
 
       if (updateResult.data?.id) {
         upsertGameRecordInStores(updateResult.data as PadelGameRecord, { communityMode: "if_exists" });
@@ -8399,6 +11344,7 @@ export default function GamesPage({
   }, [
     gameRecordId,
     detailsOrganizerPayload,
+    detailsOrganizerHasIdentity,
     detailsParticipants,
     detailsWaitlist,
     activeGameRecord?.invite?.maxPlayers,
@@ -8408,57 +11354,77 @@ export default function GamesPage({
     upsertGameRecordInStores,
   ]);
 
-  const buildDraftMatchResultMetadata = useCallback((options?: {
-    photos?: MatchResultAttachment[];
-    setPairings?: Array<MatchResultSetPairingSlots | null>;
-  }): Record<string, unknown> | null => {
-    const existingMatchResult = isRecordObject(detailsMetadata.matchResult)
-      ? detailsMetadata.matchResult
-      : {};
-    const completedSets = detailsCompletedMatchResultSets
-      .map((setItem) => ({
-        left: Number.parseInt(setItem.left, 10),
-        right: Number.parseInt(setItem.right, 10),
-      }))
-      .filter((setItem) => Number.isFinite(setItem.left) && Number.isFinite(setItem.right));
-    const nextPhotos = options?.photos ?? detailsMatchResultAttachments;
-    const nextSetPairings = options?.setPairings ?? detailsMatchResultSetPairings;
-    const setPairingsPayload = buildMatchResultSetPairingsPayload(
-      materializeCompletedMatchResultSetPairings(nextSetPairings, completedSets.length),
-    );
+  const applyMatchResultActionResponse = useCallback((
+    response: PadelGameResultActionResponse | null | undefined,
+  ) => {
+    if (!response) return false;
 
-    if (
-      Object.keys(existingMatchResult).length === 0
-      && completedSets.length === 0
-      && nextPhotos.length === 0
-      && setPairingsPayload.length === 0
-    ) {
-      return null;
+    if (response.game?.id) {
+      upsertGameRecordInStores(response.game, { communityMode: "if_exists" });
     }
 
-    const nextMatchResult: Record<string, unknown> = {
-      ...existingMatchResult,
-      photos: nextPhotos,
+    const nextMatchResult = normalizeMatchResultFromActionResponse(response);
+    if (!nextMatchResult) return Boolean(response.game?.id);
+
+    const nextMetadata: Record<string, unknown> = {
+      ...detailsMetadata,
+      matchResult: nextMatchResult,
     };
-    delete nextMatchResult.setPairings;
-    delete nextMatchResult.pairings;
+    const nextRecord = activeGameRecord
+      ? {
+          ...activeGameRecord,
+          metadata: nextMetadata,
+        }
+      : (
+        gameRecordId
+          ? {
+              id: gameRecordId,
+              inviteUrl: null,
+              status: gameRecordStatus,
+              metadata: nextMetadata,
+            } satisfies PadelGameRecord
+          : null
+      );
 
-    if (completedSets.length > 0) {
-      nextMatchResult.sets = completedSets;
-    } else {
-      delete nextMatchResult.sets;
+    if (nextRecord) {
+      upsertGameRecordInStores(nextRecord, { communityMode: "if_exists" });
+      setActiveGameRecordStore((prev) => (
+        prev?.id === nextRecord.id ? mergePadelGameRecord(prev, nextRecord) : nextRecord
+      ));
     }
 
-    if (setPairingsPayload.length > 0) {
-      nextMatchResult.setPairings = setPairingsPayload;
-    }
-
-    return nextMatchResult;
+    return true;
   }, [
-    detailsCompletedMatchResultSets,
-    detailsMatchResultAttachments,
-    detailsMatchResultSetPairings,
-    detailsMetadata.matchResult,
+    activeGameRecord,
+    detailsMetadata,
+    gameRecordId,
+    gameRecordStatus,
+    upsertGameRecordInStores,
+  ]);
+
+  useEffect(() => {
+    if (step !== "details" || !gameRecordId || !canCurrentUserFetchResultState) return;
+    const fetchKey = `${gameRecordId}:${profilePhoneNorm}`;
+    if (resultStateFetchKeyRef.current === fetchKey) return;
+    resultStateFetchKeyRef.current = fetchKey;
+
+    let cancelled = false;
+    void apiFetchPadelGameResultState(gameRecordId, { phone: profilePhoneNorm }).then((result) => {
+      if (cancelled || result.error || !result.data) return;
+      applyMatchResultActionResponse(result.data);
+    }).catch(() => {
+      // State endpoint is additive; existing game metadata remains the fallback.
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    applyMatchResultActionResponse,
+    canCurrentUserFetchResultState,
+    gameRecordId,
+    profilePhoneNorm,
+    step,
   ]);
 
   const patchGameRoster = useCallback(async (
@@ -8489,28 +11455,24 @@ export default function GamesPage({
 
     const normalizedParticipants = normalizePlayers(nextParticipantsRaw, "CONFIRMED")
       .slice(0, detailsMaxPlayers);
-    const participantKeys = new Set(
-      normalizedParticipants
-        .map((player) => getPadelPlayerIdentityKey(player))
-        .filter(Boolean),
+    const normalizedWaitlist = excludePlayersAlreadyInRoster(
+      normalizePlayers(nextWaitlistRaw, "WAITLIST"),
+      normalizedParticipants,
     );
-    const normalizedWaitlist = normalizePlayers(nextWaitlistRaw, "WAITLIST")
-      .filter((player) => {
-        const key = getPadelPlayerIdentityKey(player);
-        return !key || !participantKeys.has(key);
-      });
     setUpdatingGameRoster(true);
     setGameRosterError(null);
     try {
       const payload: Parameters<typeof apiUpdatePadelGameRecord>[1] = {
-        organizer: detailsOrganizerPayload,
         participants: normalizedParticipants,
         waitlist: normalizedWaitlist,
         invite: {
           waitlistEnabled: activeGameRecord?.invite?.waitlistEnabled ?? waitlistEnabled,
-          maxPlayers: activeGameRecord?.invite?.maxPlayers ?? detailsMaxPlayers,
+          maxPlayers: detailsMaxPlayers,
         },
       };
+      if (detailsOrganizerHasIdentity) {
+        payload.organizer = detailsOrganizerPayload;
+      }
       if (options?.metadata) {
         payload.metadata = options.metadata;
       }
@@ -8525,10 +11487,30 @@ export default function GamesPage({
           participants: normalizedParticipants,
           waitlist: normalizedWaitlist,
         };
-        upsertGameRecordInStores(recordWithRoster, { communityMode: "if_exists" });
+        const stillRelevantToCurrentProfile = isPadelGameRecordRelevantToIdentity(
+          recordWithRoster,
+          profilePhone,
+          profileId,
+        );
         setParticipants(normalizedParticipants);
         setWaitlistPlayers(normalizedWaitlist);
         setGameRosterError(null);
+
+        if (!stillRelevantToCurrentProfile) {
+          notifyGameRecordsUpdated([recordWithRoster], "games_roster_patch_irrelevant");
+          removeGameRecordFromStores(recordWithRoster.id);
+          setGameRecordId(null);
+          setStep("create");
+          return true;
+        }
+
+        upsertGameRecordInStores(recordWithRoster, { communityMode: "if_exists" });
+        setActiveGameRecordStore((prev) => (
+          prev?.id === recordWithRoster.id ? recordWithRoster : prev
+        ));
+        setCommunityGames((prev) => prev.map((item) => (
+          item.id === recordWithRoster.id ? recordWithRoster : item
+        )));
         return true;
       } else {
         setGameRosterError(
@@ -8548,10 +11530,14 @@ export default function GamesPage({
     gameRecordId,
     detailsMaxPlayers,
     detailsOrganizerPayload,
+    detailsOrganizerHasIdentity,
     activeGameRecord,
     activeGameRecord?.invite?.maxPlayers,
     activeGameRecord?.invite?.waitlistEnabled,
     upsertGameRecordInStores,
+    profileId,
+    profilePhone,
+    removeGameRecordFromStores,
     waitlistEnabled,
   ]);
 
@@ -8576,20 +11562,23 @@ export default function GamesPage({
       .map((player) => normalizePhoneForGame(player.phone))
       .filter((value): value is string => Boolean(value));
     const organizerPhone = normalizePhoneForGame(detailsOrganizerPayload.phone);
-    const draftMatchResult = buildDraftMatchResultMetadata({
-      setPairings: options?.setPairings,
-    });
-
+    const splitPaymentSource = isRecordObject(options?.extraMetadata?.splitPayment)
+      ? options?.extraMetadata?.splitPayment
+      : (isRecordObject(detailsMetadata.splitPayment) ? detailsMetadata.splitPayment : null);
+    const splitPaymentPhones = extractSplitPaymentPhones(splitPaymentSource);
     return {
       ...detailsMetadata,
-      ...(draftMatchResult ? { matchResult: draftMatchResult } : {}),
       ...(options?.extraMetadata ?? {}),
       organizerInMatch: options?.organizerInMatch ?? detailsOrganizerInMatch,
       teamSlots: buildStoredTeamSlots(options?.teamSlots ?? detailsTeamSlots),
+      organizerId: detailsOrganizerPayload.id ?? null,
+      organizerPhone: organizerPhone ?? null,
+      organizerPhoneNorm: organizerPhone ?? null,
       participantPhones,
       waitlistPhones,
       allRelatedPhones: Array.from(new Set([
         organizerPhone,
+        ...splitPaymentPhones,
         ...participantPhones,
         ...waitlistPhones,
       ].filter((value): value is string => Boolean(value)))),
@@ -8597,10 +11586,117 @@ export default function GamesPage({
   }, [
     detailsMetadata,
     detailsOrganizerInMatch,
+    detailsOrganizerPayload.id,
     detailsOrganizerPayload.phone,
-    buildDraftMatchResultMetadata,
     detailsTeamSlots,
     buildStoredTeamSlots,
+  ]);
+
+  const cancelVivaBookingsForPlayerFromDetails = useCallback(async (
+    player: PadelGamePlayer,
+    reason: "PLAYER_LEFT" | "REMOVED_BY_ORGANIZER",
+  ): Promise<VivaParticipantCancelOutcome> => {
+    if (!gameRecordId || !activeGameRecord || !isDetailsSplitPaymentGame) {
+      return { ok: true, bookingIds: [], summary: null, error: null };
+    }
+
+    const bookingTargets = new Map<string, { bookingId: string; clientId: string | null }>();
+    const upsertBookingTarget = (bookingIdRaw: unknown, clientIdRaw: unknown) => {
+      const bookingId = normalizeBookingId(bookingIdRaw);
+      if (!bookingId) return;
+      const clientId = normalizeBookingId(clientIdRaw);
+      const existing = bookingTargets.get(bookingId);
+      if (existing) {
+        if (!existing.clientId && clientId) {
+          existing.clientId = clientId;
+        }
+        return;
+      }
+      bookingTargets.set(bookingId, {
+        bookingId,
+        clientId,
+      });
+    };
+
+    extractSplitPaymentBookingTargetsForPlayer(detailsSplitPaymentMetadata, player)
+      .forEach((target) => upsertBookingTarget(target.bookingId, target.clientId));
+
+    const exerciseId = resolveGameVivaExerciseId(activeGameRecord);
+    if (exerciseId) {
+      const participantsResult = await apiFetchTournamentParticipants(exerciseId, { sanitize: false });
+      if (participantsResult.error && bookingTargets.size === 0) {
+        return {
+          ok: false,
+          bookingIds: [],
+          summary: null,
+          error: participantsResult.error.message || "Не удалось найти запись игрока в Viva",
+        };
+      }
+
+      if (!participantsResult.error) {
+        extractExerciseBookingRows(participantsResult.data)
+          .filter((row) => vivaBookingMatchesPlayer(row, player))
+          .forEach((row) => {
+            upsertBookingTarget(
+              extractVivaBookingId(row),
+              extractVivaBookingClientId(row),
+            );
+          });
+      }
+    }
+
+    const resolvedBookingTargets = Array.from(bookingTargets.values());
+    const resolvedBookingIds = resolvedBookingTargets.map((item) => item.bookingId);
+    if (resolvedBookingIds.length === 0) {
+      return {
+        ok: false,
+        bookingIds: [],
+        summary: null,
+        error: "В Viva не найдена запись игрока для отмены. Обновите состав игры и повторите попытку.",
+      };
+    }
+
+    const resolvedClientId =
+      resolvedBookingTargets.find((item) => item.clientId)?.clientId
+      ?? normalizeBookingId(player.id)
+      ?? null;
+
+    const cancelResult = await apiCancelPadelSplitParticipantBookings(gameRecordId, {
+      bookingIds: resolvedBookingIds,
+      bookingItems: resolvedBookingTargets,
+      clientId: resolvedClientId,
+      playerId: player.id ?? null,
+      playerPhone: normalizePhoneForGame(player.phone),
+      playerName: player.name || null,
+      reason,
+    });
+
+    const cancelPayload = isRecordObject(cancelResult.data)
+      ? cancelResult.data as Record<string, unknown>
+      : null;
+    const withVivaErrors = cancelPayload?.withVivaErrors === true || cancelPayload?.ok === false;
+    if (cancelResult.error || withVivaErrors) {
+      return {
+        ok: false,
+        bookingIds: resolvedBookingIds,
+        summary: cancelPayload,
+        error:
+          cancelResult.error?.message
+          || "Не удалось удалить игрока из групповой записи Viva",
+      };
+    }
+
+    return {
+      ok: true,
+      bookingIds: resolvedBookingIds,
+      summary: cancelPayload,
+      error: null,
+    };
+  }, [
+    activeGameRecord,
+    detailsSplitPaymentMetadata,
+    gameRecordId,
+    isDetailsSplitPaymentGame,
   ]);
 
   const buildNextSetPairingsForTeamSlots = useCallback((
@@ -8613,7 +11709,7 @@ export default function GamesPage({
       teamSlots ? cloneTeamSlots(teamSlots) : null
     ));
     const targetSetIndex = detailsLastCompletedMatchResultSetIndex + 1;
-    if (targetSetIndex < 0 || targetSetIndex >= MAX_MATCH_RESULT_SETS) {
+    if (targetSetIndex < 0) {
       return nextPairings;
     }
 
@@ -8640,6 +11736,7 @@ export default function GamesPage({
       setPairings?: Array<MatchResultSetPairingSlots | null>;
     },
   ) => {
+    detailsMatchResultDraftDirtyRef.current = true;
     const nextSetPairings = options?.setPairings ?? buildNextSetPairingsForTeamSlots(nextSlots);
     const nextMetadata = buildDetailsRosterMetadata(detailsParticipants, detailsWaitlist, {
       teamSlots: nextSlots,
@@ -8661,7 +11758,7 @@ export default function GamesPage({
   ) => {
     if (slotIndex < 0 || slotIndex >= DETAILS_TEAM_SLOTS_COUNT) return;
     if (updatingGameMeta) return;
-    if (!canManagePlayersInDetails) return;
+    if (!canManagePlayersInDetails && !canEditMatchResultTeamsInDetails) return;
 
     const organizerKey = detailsOrganizerKey;
     const targetKey = getPadelPlayerIdentityKey(player);
@@ -8704,6 +11801,7 @@ export default function GamesPage({
         nextSlots[0] = playerForSlot;
         const nextSetPairings = buildNextSetPairingsForTeamSlots(nextSlots);
 
+        detailsMatchResultDraftDirtyRef.current = true;
         setDetailsTeamSlots(nextSlots);
         setDetailsMatchResultSetPairings(nextSetPairings);
         setDetailsTeamMenuSlotIndex(null);
@@ -8748,6 +11846,7 @@ export default function GamesPage({
         nextSlots[0] = organizerPlayerForSlot;
         const nextSetPairings = buildNextSetPairingsForTeamSlots(nextSlots);
 
+        detailsMatchResultDraftDirtyRef.current = true;
         setDetailsTeamSlots(nextSlots);
         setDetailsMatchResultSetPairings(nextSetPairings);
         setDetailsTeamMenuSlotIndex(null);
@@ -8793,6 +11892,7 @@ export default function GamesPage({
     }
     const nextSetPairings = buildNextSetPairingsForTeamSlots(nextSlots);
 
+    detailsMatchResultDraftDirtyRef.current = true;
     setDetailsTeamSlots(nextSlots);
     setDetailsMatchResultSetPairings(nextSetPairings);
     setDetailsTeamMenuSlotIndex(null);
@@ -8848,6 +11948,7 @@ export default function GamesPage({
     }
   }, [
     updatingGameMeta,
+    canEditMatchResultTeamsInDetails,
     canManagePlayersInDetails,
     detailsHasFreeSlots,
     detailsOrganizerInMatch,
@@ -8868,7 +11969,7 @@ export default function GamesPage({
     if (slotIndex < 0 || slotIndex >= DETAILS_TEAM_SLOTS_COUNT) return;
     if (updatingGameMeta) return;
 
-    if (canManagePlayersInDetails) {
+    if (canManagePlayersInDetails || canEditMatchResultTeamsInDetails) {
       setDetailsTeamMenuSlotIndex((prev) => (prev === slotIndex ? null : slotIndex));
       return;
     }
@@ -8887,6 +11988,7 @@ export default function GamesPage({
       teamSlots ? cloneTeamSlots(teamSlots) : null
     ));
     const nextSetPairings = buildNextSetPairingsForTeamSlots(nextSlots);
+    detailsMatchResultDraftDirtyRef.current = true;
     setDetailsTeamSlots(nextSlots);
     setDetailsMatchResultSetPairings(nextSetPairings);
     void persistTeamSlots(nextSlots, { setPairings: nextSetPairings }).then((saved) => {
@@ -8896,6 +11998,7 @@ export default function GamesPage({
     });
   }, [
     updatingGameMeta,
+    canEditMatchResultTeamsInDetails,
     canManagePlayersInDetails,
     detailsOrganizerInMatch,
     detailsOrganizerPlayer,
@@ -8913,7 +12016,7 @@ export default function GamesPage({
   ) => {
     if (!canEditMatchResult || updatingGameMeta) return;
     const targetSetIndex = detailsLastCompletedMatchResultSetIndex + 1;
-    if (targetSetIndex < 0 || targetSetIndex >= MAX_MATCH_RESULT_SETS) return;
+    if (targetSetIndex < 0) return;
 
     if (areTeamSlotsEqualByIdentity(nextSlots, detailsTeamSlots)) {
       setDetailsPairComposerSetIndex(null);
@@ -8924,11 +12027,11 @@ export default function GamesPage({
     const previousSetPairings = detailsMatchResultSetPairings.map((teamSlots) => (
       teamSlots ? cloneTeamSlots(teamSlots) : null
     ));
-    const nextSetPairings = detailsMatchResultSetPairings.map((teamSlots) => (
-      teamSlots ? cloneTeamSlots(teamSlots) : null
-    ));
-    nextSetPairings[targetSetIndex] = cloneTeamSlots(nextSlots);
+    const nextSetPairings = buildNextSetPairingsForTeamSlots(nextSlots, {
+      basePairings: previousSetPairings,
+    });
     setDetailsTeamMenuSlotIndex(null);
+    detailsMatchResultDraftDirtyRef.current = true;
     setDetailsMatchResultSetPairings(nextSetPairings);
     setDetailsTeamSlots(nextSlots);
     const saved = await persistTeamSlots(nextSlots, { setPairings: nextSetPairings });
@@ -8954,6 +12057,7 @@ export default function GamesPage({
     value: string,
   ) => {
     if (!canEditMatchResult || updatingGameMeta) return;
+    detailsMatchResultDraftDirtyRef.current = true;
     setDetailsMatchResultSets((prev) => {
       const next = prev.map((setItem) => ({ ...setItem }));
       if (!next[setIndex]) {
@@ -8964,22 +12068,22 @@ export default function GamesPage({
     });
   }, [canEditMatchResult, updatingGameMeta]);
 
-  const persistMatchResultAttachments = useCallback(async (
-    nextAttachments: MatchResultAttachment[],
-    fallbackErrorMessage: string,
-  ) => {
-    if (!gameRecordId) return true;
-    const draftMatchResult = buildDraftMatchResultMetadata({
-      photos: nextAttachments,
+  const handleAddEmptyMatchResultSet = useCallback(() => {
+    if (!canEditMatchResult || updatingGameMeta) return;
+    detailsMatchResultDraftDirtyRef.current = true;
+    setDetailsMatchResultSets((prev) => normalizeEditableScoreSets([...prev, { left: "", right: "" }]));
+  }, [canEditMatchResult, updatingGameMeta]);
+
+  const handleRemoveMatchResultSet = useCallback((setIndex: number) => {
+    if (!canEditMatchResult || updatingGameMeta) return;
+    detailsMatchResultDraftDirtyRef.current = true;
+    setDetailsMatchResultSets((prev) => {
+      if (prev.length <= 1 || setIndex < 0 || setIndex >= prev.length) return prev;
+      const next = prev.filter((_, index) => index !== setIndex);
+      return normalizeEditableScoreSets(next);
     });
-
-    const nextMetadata: Record<string, unknown> = {
-      ...detailsMetadata,
-      ...(draftMatchResult ? { matchResult: draftMatchResult } : {}),
-    };
-
-    return saveDetailsMetadata(nextMetadata, fallbackErrorMessage);
-  }, [gameRecordId, buildDraftMatchResultMetadata, detailsMetadata, saveDetailsMetadata]);
+    setDetailsMatchResultSetPairings((prev) => prev.filter((_, index) => index !== setIndex));
+  }, [canEditMatchResult, updatingGameMeta]);
 
   const handleMatchResultAttachmentFiles = useCallback(async (
     files: FileList | null,
@@ -9037,13 +12141,10 @@ export default function GamesPage({
         return;
       }
 
+      detailsMatchResultDraftDirtyRef.current = true;
       const previousAttachments = [...detailsMatchResultAttachments];
       const nextAttachments = [...previousAttachments, ...nextItems].slice(0, MAX_MATCH_RESULT_ATTACHMENTS);
       setDetailsMatchResultAttachments(nextAttachments);
-      const saved = await persistMatchResultAttachments(nextAttachments, "Не удалось сохранить фото матча");
-      if (!saved) {
-        setDetailsMatchResultAttachments(previousAttachments);
-      }
 
       if (files.length > imageFiles.length) {
         setGameDetailsMetaError(
@@ -9061,20 +12162,14 @@ export default function GamesPage({
     isMatchResultPendingReview,
     updatingGameMeta,
     detailsMatchResultAttachments,
-    persistMatchResultAttachments,
   ]);
 
-  const handleRemoveMatchResultAttachment = useCallback(async (attachmentId: string) => {
+  const handleRemoveMatchResultAttachment = useCallback((attachmentId: string) => {
     if (!attachmentId.trim()) return;
     if (updatingGameMeta) return;
-    const previousAttachments = [...detailsMatchResultAttachments];
-    const nextAttachments = previousAttachments.filter((item) => item.id !== attachmentId);
-    setDetailsMatchResultAttachments(nextAttachments);
-    const saved = await persistMatchResultAttachments(nextAttachments, "Не удалось удалить фото матча");
-    if (!saved) {
-      setDetailsMatchResultAttachments(previousAttachments);
-    }
-  }, [updatingGameMeta, detailsMatchResultAttachments, persistMatchResultAttachments]);
+    detailsMatchResultDraftDirtyRef.current = true;
+    setDetailsMatchResultAttachments((prev) => prev.filter((item) => item.id !== attachmentId));
+  }, [updatingGameMeta]);
 
   const handleShareMatchResultPhoto = useCallback(async () => {
     const primaryAttachment = detailsMatchResultAttachments[0] ?? null;
@@ -9138,222 +12233,13 @@ export default function GamesPage({
     setGameDetailsMetaError,
   ]);
 
-  const syncMatchResultToViva = useCallback(async (
-    ratingImpact: MatchResultRatingImpactEntry[],
-    baseMetadata: Record<string, unknown>,
-    options?: {
-      liveRatingsWarning?: string | null;
-      persistErrorMessage?: string;
-    },
-  ) => {
-    const baseMatchResult = isRecordObject(baseMetadata.matchResult)
-      ? baseMetadata.matchResult
-      : {};
-    const previousSync = normalizeMatchResultVivaSync(
-      baseMatchResult.vivaSync
-      ?? baseMatchResult.viva_sync
-      ?? null,
-    );
-    const attemptAt = new Date().toISOString();
-    const attemptNumber = Math.max(0, previousSync?.attempts ?? 0) + 1;
-
-    const buildSyncMetadata = (
-      status: MatchResultVivaSyncStatus,
-      syncedPlayers: number,
-      totalPlayers: number,
-      failures: MatchResultVivaSyncFailure[],
-      lastError: string | null,
-    ): MatchResultVivaSyncState => ({
-      status,
-      attempts: attemptNumber,
-      lastAttemptAt: attemptAt,
-      lastSuccessAt: status === "SUCCESS"
-        ? attemptAt
-        : previousSync?.lastSuccessAt ?? null,
-      lastError,
-      totalPlayers,
-      syncedPlayers,
-      failures,
-    });
-
-    const persistSyncState = async (
-      syncState: MatchResultVivaSyncState,
-      persistFallbackMessage: string,
-    ) => {
-      const nextMetadata: Record<string, unknown> = {
-        ...baseMetadata,
-        matchResult: {
-          ...baseMatchResult,
-          vivaSync: syncState,
-        },
-      };
-
-      return saveDetailsMetadata(nextMetadata, persistFallbackMessage);
-    };
-
-    if (ratingImpact.length === 0) {
-      const syncState = buildSyncMetadata(
-        "FAILED",
-        0,
-        0,
-        [],
-        "Нет данных результата для отправки в Viva",
-      );
-      const saved = await persistSyncState(
-        syncState,
-        options?.persistErrorMessage || "Не удалось сохранить статус отправки результата в Viva",
-      );
-      return {
-        syncState,
-        saved,
-        uiMessage: saved
-          ? "Не удалось определить игроков для отправки результата в Viva"
-          : "Не удалось определить игроков для Viva, и статус попытки не сохранился",
-      };
-    }
-
-    const clientIdByPhone = new Map<string, string>();
-    const upsertClientId = (player: PadelGamePlayer | null | undefined) => {
-      if (!player) return;
-      const normalizedPhone = normalizePhoneForGame(player.phone);
-      const normalizedClientId = (player.id || "").trim();
-      if (!normalizedPhone || !normalizedClientId) return;
-      clientIdByPhone.set(normalizedPhone, normalizedClientId);
-    };
-    detailsParticipants.forEach((player) => upsertClientId(player));
-    detailsWaitlist.forEach((player) => upsertClientId(player));
-    detailsTeamSlots.forEach((player) => upsertClientId(player));
-    if (profilePhoneNorm && profileId) {
-      clientIdByPhone.set(profilePhoneNorm, profileId);
-    }
-
-    const failures: MatchResultVivaSyncFailure[] = [];
-    const vivaUpdateMap = new Map<string, {
-      clientId: string;
-      phone: string | null;
-      name: string | null;
-      levelLetter: string;
-      levelNumeric: number;
-    }>();
-
-    ratingImpact.forEach((item) => {
-      const normalizedPhone = normalizePhoneForGame(item.phoneNorm);
-      const directClientId = (item.id || "").trim();
-      const clientId = directClientId || (normalizedPhone ? (clientIdByPhone.get(normalizedPhone) || "") : "");
-
-      if (!clientId) {
-        failures.push({
-          id: item.id ?? null,
-          phone: normalizedPhone,
-          name: item.name || null,
-          reason: "Не найден clientId для отправки в Viva",
-        });
-        return;
-      }
-
-      const levelLetter = item.gradeAfter || mapNumericToRatingGrade(item.after) || "";
-      const levelNumeric = roundToPrecision(item.after, MATCH_RESULT_RATING_DEFAULT_PARAMS.round);
-      const key = `${clientId}|${normalizedPhone || ""}`;
-      vivaUpdateMap.set(key, {
-        clientId,
-        phone: normalizedPhone,
-        name: item.name || null,
-        levelLetter,
-        levelNumeric,
-      });
-    });
-
-    const vivaUpdates = Array.from(vivaUpdateMap.values());
-    if (vivaUpdates.length > 0) {
-      const settled = await Promise.allSettled(
-        vivaUpdates.map((entry) => apiSaveOnboardingLevel(entry)),
-      );
-
-      settled.forEach((result, index) => {
-        const entry = vivaUpdates[index];
-        if (!entry) return;
-
-        if (result.status === "rejected") {
-          failures.push({
-            id: entry.clientId,
-            phone: entry.phone,
-            name: entry.name,
-            reason: result.reason instanceof Error ? result.reason.message : String(result.reason),
-          });
-          return;
-        }
-
-        if (result.value.error || result.value.data?.ok === false) {
-          failures.push({
-            id: entry.clientId,
-            phone: entry.phone,
-            name: entry.name,
-            reason: result.value.error?.message || "Viva вернула неуспешный ответ",
-          });
-        }
-      });
-    }
-
-    const totalPlayers = ratingImpact.length;
-    const syncedPlayers = Math.max(0, totalPlayers - failures.length);
-    const failedNames = Array.from(new Set(
-      failures
-        .map((item) => item.name?.trim() || item.phone || null)
-        .filter((item): item is string => Boolean(item)),
-    ));
-    const failedNamesSuffix = failedNames.length > 0
-      ? `: ${failedNames.slice(0, 2).join(", ")}${failedNames.length > 2 ? ` и ещё ${failedNames.length - 2}` : ""}`
-      : "";
-    const lastError = failures.length === 0
-      ? null
-      : syncedPlayers > 0
-        ? `Viva обновлена не для всех игроков (${syncedPlayers}/${totalPlayers})${failedNamesSuffix}`
-        : `Не удалось обновить Viva для игроков${failedNamesSuffix}`;
-    const syncState = buildSyncMetadata(
-      failures.length === 0
-        ? "SUCCESS"
-        : syncedPlayers > 0
-          ? "PARTIAL_SUCCESS"
-          : "FAILED",
-      syncedPlayers,
-      totalPlayers,
-      failures,
-      lastError,
-    );
-    const saved = await persistSyncState(
-      syncState,
-      options?.persistErrorMessage || "Не удалось сохранить статус отправки результата в Viva",
-    );
-
-    let uiMessage = lastError;
-    if (!uiMessage && options?.liveRatingsWarning) {
-      uiMessage = options.liveRatingsWarning;
-    } else if (uiMessage && options?.liveRatingsWarning) {
-      uiMessage = `${uiMessage}. ${options.liveRatingsWarning}`;
-    }
-
-    if (!saved) {
-      uiMessage = uiMessage
-        ? `${uiMessage}. Статус попытки не сохранён`
-        : "Не удалось сохранить статус отправки результата в Viva";
-    }
-
-    return {
-      syncState,
-      saved,
-      uiMessage,
-    };
-  }, [
-    detailsParticipants,
-    detailsTeamSlots,
-    detailsWaitlist,
-    profileId,
-    profilePhoneNorm,
-    saveDetailsMetadata,
-  ]);
-
   const handleSubmitMatchResult = useCallback(async () => {
     if (!canSubmitMatchResult) return;
+    const validationError = validateCompletedMatchResultSets(detailsMatchResultSets);
+    if (validationError) {
+      setGameDetailsMetaError(validationError);
+      return;
+    }
     const completedSets = detailsCompletedMatchResultSets
       .map((setItem) => ({
         left: Number.parseInt(setItem.left, 10),
@@ -9366,53 +12252,68 @@ export default function GamesPage({
       return;
     }
 
-    const setPairings = buildMatchResultSetPairingsPayload(detailsMatchResultSetPairings);
-    const submittedAt = new Date().toISOString();
-    const disputeDeadlineAt = getMatchResultDisputeDeadlineAt(submittedAt);
-    const nextMetadata: Record<string, unknown> = {
-      ...detailsMetadata,
-      matchResult: {
-        sets: completedSets,
-        ...(setPairings.length > 0 ? { setPairings } : {}),
-        photos: detailsMatchResultAttachments,
-        status: "PENDING_DISPUTE",
-        vivaSync: null,
-        submittedAt,
-        disputeDeadlineAt,
-        submittedBy: {
-          id: profileId ?? null,
-          phone: normalizePhoneForGame(profilePhone),
-          name: profileName || null,
-        },
-      },
-    };
-
-    const saved = await saveDetailsMetadata(nextMetadata, "Не удалось отправить результат на согласование");
-    if (!saved) return;
-
-    setDetailsMatchResultStatus("PENDING_DISPUTE");
-    setDetailsMatchResultSubmittedAt(submittedAt);
-    setDetailsMatchResultDisputeDeadlineAt(disputeDeadlineAt);
-    setDetailsMatchResultSubmittedBy({
+    const setPairings = buildMatchResultSubmitSetPairingsPayload(
+      detailsMatchResultSetPairings,
+      completedSets.length,
+      detailsTeamSlots,
+    );
+    const scoreA = completedSets.reduce((total, setItem) => total + setItem.left, 0);
+    const scoreB = completedSets.reduce((total, setItem) => total + setItem.right, 0);
+    const actor = {
       id: profileId ?? null,
       phone: normalizePhoneForGame(profilePhone),
       name: profileName || null,
-    });
-    setDetailsMatchResultConfirmedBy(null);
-    setDetailsMatchResultConfirmedAt(null);
-    setDetailsMatchResultRatingImpact([]);
-    setDetailsMatchResultDisputedBy(null);
-    setDetailsMatchResultDisputedAt(null);
+    };
+
+    setUpdatingGameMeta(true);
+    setGameDetailsMetaError(null);
+    try {
+      const submitResult = await apiSubmitPadelGameResult(gameRecordId || "", {
+        phone: actor.phone,
+        sessionId: detailsMatchResultSession?.sessionId ?? null,
+        sessionRevision: detailsMatchResultSessionRevisionRef.current ?? detailsMatchResultSession?.revision ?? null,
+        resultSession: {
+          sessionId: detailsMatchResultSession?.sessionId ?? null,
+          sessionRevision: detailsMatchResultSessionRevisionRef.current ?? detailsMatchResultSession?.revision ?? null,
+          rosterSnapshot: isRecordObject(detailsMatchResultSession?.rosterSnapshot)
+            ? detailsMatchResultSession.rosterSnapshot as Record<string, unknown>
+            : null,
+        },
+        scoreA,
+        scoreB,
+        sets: completedSets,
+        ...(setPairings.length > 0 ? { setPairings } : {}),
+        photos: detailsMatchResultAttachments,
+        submittedBy: actor,
+      });
+
+      if (submitResult.error || !submitResult.data) {
+        setGameDetailsMetaError(
+          submitResult.error?.message || "Не удалось отправить результат на согласование",
+        );
+        return;
+      }
+
+      detailsMatchResultDraftDirtyRef.current = false;
+      applyMatchResultActionResponse(submitResult.data);
+    } catch {
+      setGameDetailsMetaError("Не удалось отправить результат на согласование");
+    } finally {
+      setUpdatingGameMeta(false);
+    }
   }, [
     canSubmitMatchResult,
+    detailsMatchResultSets,
     detailsCompletedMatchResultSets,
     detailsMatchResultAttachments,
+    detailsMatchResultSession,
     detailsMatchResultSetPairings,
-    detailsMetadata,
+    detailsTeamSlots,
+    gameRecordId,
+    applyMatchResultActionResponse,
     profileId,
     profileName,
     profilePhone,
-    saveDetailsMetadata,
   ]);
 
   const finalizeMatchResultAgreement = useCallback(async (options?: {
@@ -9425,153 +12326,57 @@ export default function GamesPage({
     autoConfirmed?: boolean;
     persistErrorMessage?: string;
   }) => {
-    const completedSets = detailsCompletedMatchResultSets
-      .map((setItem) => ({
-        left: Number.parseInt(setItem.left, 10),
-        right: Number.parseInt(setItem.right, 10),
-      }))
-      .filter((setItem) => Number.isFinite(setItem.left) && Number.isFinite(setItem.right));
+    if (!gameRecordId) return false;
+    if (!isMatchResultPendingReview) return false;
 
-    if (completedSets.length === 0) {
-      setGameDetailsMetaError("Нет заполненных сетов для согласования");
+    setUpdatingGameMeta(true);
+    setGameDetailsMetaError(null);
+    try {
+      const actorPhone = options?.confirmedBy?.phone ?? normalizePhoneForGame(profilePhone);
+      const actionResult = options?.autoConfirmed
+        ? await apiExpirePadelGameResult(gameRecordId, {
+            phone: actorPhone,
+            playerPhone: actorPhone,
+            actor: options?.confirmedBy ?? null,
+            reason: "DISPUTE_TIMEOUT",
+          })
+        : await apiConfirmPadelGameResult(gameRecordId, {
+            phone: actorPhone,
+            confirmerPhone: actorPhone,
+            playerPhone: actorPhone,
+            actor: options?.confirmedBy ?? {
+              id: profileId ?? null,
+              phone: actorPhone,
+              name: profileName || null,
+            },
+            reason: "MANUAL",
+          });
+
+      if (actionResult.error || !actionResult.data) {
+        setGameDetailsMetaError(
+          actionResult.error?.message
+          || options?.persistErrorMessage
+          || "Не удалось согласовать результат",
+        );
+        return false;
+      }
+
+      applyMatchResultActionResponse(actionResult.data);
+      return true;
+    } catch {
+      setGameDetailsMetaError(options?.persistErrorMessage || "Не удалось согласовать результат");
       return false;
+    } finally {
+      setUpdatingGameMeta(false);
     }
-
-    const scoreA = completedSets.reduce((total, setItem) => total + setItem.left, 0);
-    const scoreB = completedSets.reduce((total, setItem) => total + setItem.right, 0);
-    const setPairings = buildMatchResultSetPairingsPayload(detailsMatchResultSetPairings);
-    const hydratePlayerForRating = (player: PadelGamePlayer | null | undefined): PadelGamePlayer | null => {
-      if (!player) return null;
-      if (!matchesCurrentUserByIdentity(player.id, player.phone)) return player;
-      const normalizedNumeric = normalizeRatingNumeric(profileRatingNumeric ?? player.ratingNumeric);
-      return {
-        ...player,
-        ratingNumeric: normalizedNumeric,
-        rating:
-          profileGrade
-          ?? player.rating
-          ?? (normalizedNumeric != null ? mapNumericToRatingGrade(normalizedNumeric) : null),
-      };
-    };
-    const teamAPlayersBase = dedupePlayersByIdentity(
-      detailsTeamSlots.slice(0, 2).map((player) => hydratePlayerForRating(player)),
-    );
-    const teamBPlayersBase = dedupePlayersByIdentity(
-      detailsTeamSlots.slice(2, 4).map((player) => hydratePlayerForRating(player)),
-    );
-
-    const allPlayersForLive = dedupePlayersByIdentity([...teamAPlayersBase, ...teamBPlayersBase]);
-    const liveRatingsResult = await apiFetchPadelLiveRatings(
-      allPlayersForLive.map((player) => ({
-        clientId: (player.id || "").trim() || null,
-        phone: normalizePhoneForGame(player.phone),
-        name: player.name || null,
-        rating: player.rating ?? null,
-        ratingNumeric: normalizeRatingNumeric(player.ratingNumeric),
-      })),
-    );
-
-    const liveByClientId = new Map<string, { rating: string | null; ratingNumeric: number | null }>();
-    const liveByPhone = new Map<string, { rating: string | null; ratingNumeric: number | null }>();
-    (liveRatingsResult.data ?? []).forEach((item) => {
-      const clientId = (item.clientId || "").trim();
-      const phoneNorm = normalizePhoneForGame(item.phoneNorm);
-      const ratingNumeric = normalizeRatingNumeric(item.ratingNumeric);
-      const rating = item.rating || (ratingNumeric != null ? mapNumericToRatingGrade(ratingNumeric) : null);
-      const value = { rating, ratingNumeric };
-      if (clientId) liveByClientId.set(clientId, value);
-      if (phoneNorm) liveByPhone.set(phoneNorm, value);
-    });
-
-    const hydrateLiveRating = (player: PadelGamePlayer): PadelGamePlayer => {
-      const clientId = (player.id || "").trim();
-      const phoneNorm = normalizePhoneForGame(player.phone);
-      const fromClient = clientId ? liveByClientId.get(clientId) : undefined;
-      const fromPhone = phoneNorm ? liveByPhone.get(phoneNorm) : undefined;
-      const resolved = fromClient ?? fromPhone;
-      if (!resolved) return player;
-      return {
-        ...player,
-        ratingNumeric: resolved.ratingNumeric ?? player.ratingNumeric ?? null,
-        rating: resolved.rating ?? player.rating ?? null,
-      };
-    };
-
-    const teamAPlayers = teamAPlayersBase.map((player) => hydrateLiveRating(player));
-    const teamBPlayers = teamBPlayersBase.map((player) => hydrateLiveRating(player));
-
-    const ratingImpact = buildMatchResultRatingImpact(
-      teamAPlayers,
-      teamBPlayers,
-      scoreA,
-      scoreB,
-      detailsMetadata.matchResult,
-    );
-
-    const confirmedAt = options?.confirmedAt?.trim()
-      || detailsMatchResultDisputeDeadlineAt
-      || new Date().toISOString();
-    const confirmedBy = options?.confirmedBy ?? null;
-    const disputeDeadlineAt = detailsMatchResultDisputeDeadlineAt
-      || getMatchResultDisputeDeadlineAt(detailsMatchResultSubmittedAt);
-    const nextMetadata: Record<string, unknown> = {
-      ...detailsMetadata,
-      matchResult: {
-        sets: completedSets,
-        ...(setPairings.length > 0 ? { setPairings } : {}),
-        photos: detailsMatchResultAttachments,
-        status: "CONFIRMED",
-        vivaSync: null,
-        submittedAt: detailsMatchResultSubmittedAt,
-        disputeDeadlineAt,
-        submittedBy: detailsMatchResultSubmittedBy,
-        confirmedAt,
-        ratingImpact,
-        confirmedBy,
-        autoConfirmed: options?.autoConfirmed === true,
-        confirmedReason: options?.autoConfirmed === true ? "DISPUTE_TIMEOUT" : "MANUAL",
-        disputedBy: null,
-        disputedAt: null,
-      },
-    };
-
-    const saved = await saveDetailsMetadata(
-      nextMetadata,
-      options?.persistErrorMessage || "Не удалось согласовать результат",
-    );
-    if (!saved) return false;
-
-    setDetailsMatchResultStatus("CONFIRMED");
-    setDetailsMatchResultDisputeDeadlineAt(disputeDeadlineAt);
-    setDetailsMatchResultConfirmedAt(confirmedAt);
-    setDetailsMatchResultConfirmedBy(confirmedBy);
-    setDetailsMatchResultRatingImpact(ratingImpact);
-    setDetailsMatchResultDisputedBy(null);
-    setDetailsMatchResultDisputedAt(null);
-    const vivaSyncResult = await syncMatchResultToViva(ratingImpact, nextMetadata, {
-      liveRatingsWarning: liveRatingsResult.error
-        ? "Актуальные рейтинги Viva перед расчетом получить не удалось, использованы значения из игры"
-        : null,
-    });
-    if (vivaSyncResult.uiMessage) {
-      setGameDetailsMetaError(vivaSyncResult.uiMessage);
-    }
-    return true;
   }, [
-    detailsCompletedMatchResultSets,
-    detailsMatchResultSetPairings,
-    detailsTeamSlots,
-    detailsMatchResultAttachments,
-    detailsMatchResultDisputeDeadlineAt,
-    detailsMatchResultSubmittedAt,
-    detailsMatchResultSubmittedBy,
-    detailsMetadata,
-    matchesCurrentUserByIdentity,
-    profileGrade,
-    profileRatingNumeric,
-    saveDetailsMetadata,
+    applyMatchResultActionResponse,
+    gameRecordId,
+    isMatchResultPendingReview,
+    profileId,
+    profileName,
+    profilePhone,
     setGameDetailsMetaError,
-    syncMatchResultToViva,
   ]);
 
   useEffect(() => {
@@ -9608,105 +12413,99 @@ export default function GamesPage({
     updatingGameMeta,
   ]);
 
-  const handleRetryMatchResultVivaSync = useCallback(async () => {
-    if (retryingMatchResultVivaSync || updatingGameMeta) return;
-    if (!isMatchResultAgreed) return;
-
-    const ratingImpact = detailsMatchResultRatingImpact.length > 0
-      ? detailsMatchResultRatingImpact
-      : normalizeMatchResultRatingImpact(
-        isRecordObject(detailsMetadata.matchResult)
-          ? detailsMetadata.matchResult.ratingImpact
-          : null,
-      );
-
-    setRetryingMatchResultVivaSync(true);
-    setGameDetailsMetaError(null);
-    try {
-      const vivaSyncResult = await syncMatchResultToViva(ratingImpact, detailsMetadata);
-      if (vivaSyncResult.uiMessage) {
-        setGameDetailsMetaError(vivaSyncResult.uiMessage);
-      }
-    } finally {
-      setRetryingMatchResultVivaSync(false);
-    }
-  }, [
-    detailsMatchResultRatingImpact,
-    detailsMetadata,
-    isMatchResultAgreed,
-    retryingMatchResultVivaSync,
-    setGameDetailsMetaError,
-    syncMatchResultToViva,
-    updatingGameMeta,
-  ]);
-
   const handleDisputeMatchResult = useCallback(async () => {
     if (!canDisputeMatchResult) return;
 
-    const completedSets = detailsCompletedMatchResultSets
-      .map((setItem) => ({
-        left: Number.parseInt(setItem.left, 10),
-        right: Number.parseInt(setItem.right, 10),
-      }))
-      .filter((setItem) => Number.isFinite(setItem.left) && Number.isFinite(setItem.right));
-
-    if (completedSets.length === 0) {
-      setGameDetailsMetaError("Нет заполненных сетов для оспаривания");
-      return;
-    }
-
-    const setPairings = buildMatchResultSetPairingsPayload(detailsMatchResultSetPairings);
-    const disputedAt = new Date().toISOString();
-    const nextMetadata: Record<string, unknown> = {
-      ...detailsMetadata,
-      matchResult: {
-        sets: completedSets,
-        ...(setPairings.length > 0 ? { setPairings } : {}),
-        photos: detailsMatchResultAttachments,
-        status: "DISPUTED",
-        vivaSync: null,
-        submittedAt: detailsMatchResultSubmittedAt,
-        disputeDeadlineAt: detailsMatchResultDisputeDeadlineAt,
-        submittedBy: detailsMatchResultSubmittedBy,
-        disputedAt,
-        disputedBy: {
+    const actorPhone = normalizePhoneForGame(profilePhone);
+    setUpdatingGameMeta(true);
+    setGameDetailsMetaError(null);
+    try {
+      const disputeResult = await apiDisputePadelGameResult(gameRecordId || "", {
+        phone: actorPhone,
+        playerPhone: actorPhone,
+        disputerPhone: actorPhone,
+        actor: {
           id: profileId ?? null,
-          phone: normalizePhoneForGame(profilePhone),
+          phone: actorPhone,
           name: profileName || null,
         },
-      },
-    };
+      });
 
-    const saved = await saveDetailsMetadata(nextMetadata, "Не удалось оспорить результат");
-    if (!saved) return;
+      if (disputeResult.error || !disputeResult.data) {
+        setGameDetailsMetaError(disputeResult.error?.message || "Не удалось оспорить результат");
+        return;
+      }
 
-    setDetailsMatchResultStatus("DISPUTED");
-    setDetailsMatchResultDisputeDeadlineAt(detailsMatchResultDisputeDeadlineAt);
-    setDetailsMatchResultDisputedAt(disputedAt);
-    setDetailsMatchResultDisputedBy({
-      id: profileId ?? null,
-      phone: normalizePhoneForGame(profilePhone),
-      name: profileName || null,
-    });
-    setDetailsMatchResultConfirmedBy(null);
-    setDetailsMatchResultConfirmedAt(null);
-    setDetailsMatchResultRatingImpact([]);
+      applyMatchResultActionResponse(disputeResult.data);
+    } catch {
+      setGameDetailsMetaError("Не удалось оспорить результат");
+    } finally {
+      setUpdatingGameMeta(false);
+    }
   }, [
     canDisputeMatchResult,
-    detailsCompletedMatchResultSets,
-    detailsMatchResultAttachments,
-    detailsMatchResultSetPairings,
-    detailsMatchResultDisputeDeadlineAt,
-    detailsMatchResultSubmittedAt,
-    detailsMatchResultSubmittedBy,
-    detailsMetadata,
+    applyMatchResultActionResponse,
+    gameRecordId,
     profileId,
     profileName,
     profilePhone,
-    saveDetailsMetadata,
   ]);
 
-  const handleRemoveParticipantFromDetails = useCallback((player: PadelGamePlayer, index: number) => {
+  const handleConfirmMatchResult = useCallback(async () => {
+    if (!canConfirmMatchResult) return;
+    await finalizeMatchResultAgreement({
+      confirmedBy: {
+        id: profileId ?? null,
+        phone: normalizePhoneForGame(profilePhone),
+        name: profileName || null,
+      },
+      autoConfirmed: false,
+    });
+  }, [
+    canConfirmMatchResult,
+    finalizeMatchResultAgreement,
+    profileId,
+    profileName,
+    profilePhone,
+  ]);
+
+  const handleAcceptMatchResultCorrection = useCallback(async () => {
+    if (!canAcceptMatchResultCorrection) return;
+    const actorPhone = normalizePhoneForGame(profilePhone);
+    setUpdatingGameMeta(true);
+    setGameDetailsMetaError(null);
+    try {
+      const acceptResult = await apiAcceptPadelGameResultCorrection(gameRecordId || "", {
+        phone: actorPhone,
+        playerPhone: actorPhone,
+        actor: {
+          id: profileId ?? null,
+          phone: actorPhone,
+          name: profileName || null,
+        },
+      });
+
+      if (acceptResult.error || !acceptResult.data) {
+        setGameDetailsMetaError(acceptResult.error?.message || "Не удалось принять исправление результата");
+        return;
+      }
+
+      applyMatchResultActionResponse(acceptResult.data);
+    } catch {
+      setGameDetailsMetaError("Не удалось принять исправление результата");
+    } finally {
+      setUpdatingGameMeta(false);
+    }
+  }, [
+    applyMatchResultActionResponse,
+    canAcceptMatchResultCorrection,
+    gameRecordId,
+    profileId,
+    profileName,
+    profilePhone,
+  ]);
+
+  const handleRemoveParticipantFromDetails = useCallback(async (player: PadelGamePlayer, index: number) => {
     if (!canManagePlayersInDetails || updatingGameRoster) return;
     if (isDetailsOrganizerPlayer(player)) {
       setGameRosterError("Организатора нельзя удалить из игры");
@@ -9714,13 +12513,58 @@ export default function GamesPage({
     }
 
     const nextParticipants = detailsParticipants.filter((_, playerIndex) => playerIndex !== index);
-    void patchGameRoster(nextParticipants, detailsWaitlist);
+    const leftAt = new Date().toISOString();
+    const vivaCancellation = await cancelVivaBookingsForPlayerFromDetails(player, "REMOVED_BY_ORGANIZER");
+    if (!vivaCancellation.ok) {
+      setGameRosterError(vivaCancellation.error || "Не удалось удалить игрока из групповой записи Viva");
+      return;
+    }
+
+    const nextSplitPayment = markSplitPaymentPlayerLeft(
+      detailsSplitPaymentMetadata,
+      player,
+      leftAt,
+      vivaCancellation.summary,
+    );
+    const nextLeaveEvents = [
+      ...normalizeGameLeaveEvents(detailsMetadata.leaveEvents),
+      {
+        playerId: player.id ?? null,
+        playerPhone: normalizePhoneForGame(player.phone),
+        playerName: player.name || "Игрок",
+        leftAt,
+        reason: "ORGANIZER_REMOVED",
+        byId: profileId ?? null,
+        byPhone: profilePhoneNorm ?? normalizePhoneForGame(profilePhone),
+        byName: profileName || "Организатор",
+      } satisfies GameLeaveEvent,
+    ];
+    const nextMetadata = buildDetailsRosterMetadata(nextParticipants, detailsWaitlist, {
+      extraMetadata: {
+        leaveEvents: nextLeaveEvents,
+        lastLeaveUpdateAt: leftAt,
+        ...(nextSplitPayment ? { splitPayment: nextSplitPayment } : {}),
+      },
+    });
+
+    await patchGameRoster(nextParticipants, detailsWaitlist, {
+      metadata: nextMetadata,
+      fallbackErrorMessage: "Не удалось удалить игрока из игры",
+    });
   }, [
     canManagePlayersInDetails,
     updatingGameRoster,
     isDetailsOrganizerPlayer,
     detailsParticipants,
     detailsWaitlist,
+    detailsMetadata,
+    detailsSplitPaymentMetadata,
+    profileId,
+    profilePhone,
+    profilePhoneNorm,
+    profileName,
+    buildDetailsRosterMetadata,
+    cancelVivaBookingsForPlayerFromDetails,
     patchGameRoster,
   ]);
 
@@ -9757,6 +12601,7 @@ export default function GamesPage({
     nextSlots[0] = organizerPlayerForSlot;
     const nextSetPairings = buildNextSetPairingsForTeamSlots(nextSlots);
 
+    detailsMatchResultDraftDirtyRef.current = true;
     setDetailsTeamSlots(nextSlots);
     setDetailsMatchResultSetPairings(nextSetPairings);
     setDetailsTeamMenuSlotIndex(null);
@@ -9848,10 +12693,43 @@ export default function GamesPage({
   const handleLeaveCurrentUserFromDetails = useCallback(async () => {
     if (!canCurrentUserLeaveGameInDetails || !gameRecordId) return;
 
-    const currentPlayer =
+    const currentPlayerFromRoster =
       detailsParticipants.find((player) => isCurrentUserPlayer(player))
       ?? detailsWaitlist.find((player) => isCurrentUserPlayer(player))
       ?? null;
+    const currentPlayerFromPendingSplit = (
+      !currentPlayerFromRoster
+      && detailsCurrentUserPendingSplitPayment
+      && !detailsCurrentUserPendingSplitPaymentIsExpired
+    ) ? {
+      id: normalizeBookingId(
+        detailsCurrentUserPendingSplitPayment.clientId
+        ?? detailsCurrentUserPendingSplitPayment.playerId
+        ?? profileId,
+      ),
+      name: (
+        typeof detailsCurrentUserPendingSplitPayment.clientName === "string"
+          ? detailsCurrentUserPendingSplitPayment.clientName
+          : typeof detailsCurrentUserPendingSplitPayment.playerName === "string"
+            ? detailsCurrentUserPendingSplitPayment.playerName
+            : typeof detailsCurrentUserPendingSplitPayment.name === "string"
+              ? detailsCurrentUserPendingSplitPayment.name
+              : profileName
+      ) || "Игрок",
+      phone: normalizePhoneForGame(
+        typeof detailsCurrentUserPendingSplitPayment.phoneNorm === "string"
+          ? detailsCurrentUserPendingSplitPayment.phoneNorm
+          : typeof detailsCurrentUserPendingSplitPayment.phone === "string"
+            ? detailsCurrentUserPendingSplitPayment.phone
+            : profilePhoneNorm ?? profilePhone,
+      ),
+      photo: profilePhoto ?? null,
+      rating: profileGrade ?? null,
+      ratingNumeric: profileRatingNumeric ?? null,
+      source: "INVITE_LINK" as const,
+      status: "PENDING" as const,
+    } satisfies PadelGamePlayer : null;
+    const currentPlayer = currentPlayerFromRoster ?? currentPlayerFromPendingSplit;
     if (!currentPlayer) {
       setGameRosterError("Вы не состоите в этой игре");
       return;
@@ -9866,9 +12744,21 @@ export default function GamesPage({
       if (!accepted) return;
     }
 
+    const vivaCancellation = await cancelVivaBookingsForPlayerFromDetails(currentPlayer, "PLAYER_LEFT");
+    if (!vivaCancellation.ok) {
+      setGameRosterError(vivaCancellation.error || "Не удалось удалить вас из групповой записи Viva");
+      return;
+    }
+
     const nextParticipants = detailsParticipants.filter((player) => !isCurrentUserPlayer(player));
     const nextWaitlist = detailsWaitlist.filter((player) => !isCurrentUserPlayer(player));
     const leftAt = new Date().toISOString();
+    const nextSplitPayment = markSplitPaymentPlayerLeft(
+      detailsSplitPaymentMetadata,
+      currentPlayer,
+      leftAt,
+      vivaCancellation.summary,
+    );
     const nextLeaveEvents = [
       ...normalizeGameLeaveEvents(detailsMetadata.leaveEvents),
       {
@@ -9882,18 +12772,35 @@ export default function GamesPage({
         byName: profileName || currentPlayer.name || "Игрок",
       } satisfies GameLeaveEvent,
     ];
+    const nextAllRelatedPhones = [
+      normalizePhoneForGame(detailsOrganizerPayload.phone),
+      ...extractSplitPaymentPhones(nextSplitPayment ?? detailsSplitPaymentMetadata),
+      ...nextParticipants
+        .map((player) => normalizePhoneForGame(player.phone))
+        .filter((value): value is string => Boolean(value)),
+      ...nextWaitlist
+        .map((player) => normalizePhoneForGame(player.phone))
+        .filter((value): value is string => Boolean(value)),
+    ].filter((value): value is string => Boolean(value));
 
     const nextMetadata: Record<string, unknown> = {
       ...detailsMetadata,
       leaveEvents: nextLeaveEvents,
       lastLeaveUpdateAt: leftAt,
+      organizerId: detailsOrganizerPayload.id ?? null,
+      organizerPhone: normalizePhoneForGame(detailsOrganizerPayload.phone),
+      organizerPhoneNorm: normalizePhoneForGame(detailsOrganizerPayload.phone),
       participantPhones: nextParticipants
         .map((player) => normalizePhoneForGame(player.phone))
         .filter((value): value is string => Boolean(value)),
       waitlistPhones: nextWaitlist
         .map((player) => normalizePhoneForGame(player.phone))
         .filter((value): value is string => Boolean(value)),
+      allRelatedPhones: Array.from(new Set(nextAllRelatedPhones)),
     };
+    if (nextSplitPayment) {
+      nextMetadata.splitPayment = nextSplitPayment;
+    }
 
     const leftPlayerKey = getPadelPlayerIdentityKey(currentPlayer);
     const updated = await patchGameRoster(nextParticipants, nextWaitlist, {
@@ -9918,9 +12825,473 @@ export default function GamesPage({
     isCurrentUserPlayer,
     isDetailsOrganizerPlayer,
     detailsMetadata,
+    detailsOrganizerPayload.id,
+    detailsOrganizerPayload.phone,
+    detailsSplitPaymentMetadata,
+    detailsCurrentUserPendingSplitPayment,
+    detailsCurrentUserPendingSplitPaymentIsExpired,
     profileName,
     profileId,
+    profilePhone,
     profilePhoneNorm,
+    profilePhoto,
+    profileGrade,
+    profileRatingNumeric,
+    cancelVivaBookingsForPlayerFromDetails,
+    patchGameRoster,
+  ]);
+
+  const handleSplitJoinCurrentUserFromDetails = useCallback(async (
+    preferredPaymentMode: "subscription" | "one_time",
+  ) => {
+    if (!canCurrentUserJoinSplitGameInDetails || !gameRecordId || !activeGameRecord) return;
+    if (joiningSplitPayment) return;
+
+    const normalizedProfileId = normalizeComparableId(profileId);
+    const normalizedPhone = profilePhoneNorm ?? normalizePhoneForGame(profilePhone);
+    if (!normalizedProfileId && !normalizedPhone) {
+      setGameRosterError("Не удалось определить профиль. Обновите страницу и попробуйте снова.");
+      return;
+    }
+
+    const splitPayments = Array.isArray(detailsSplitPaymentMetadata?.payments)
+      ? detailsSplitPaymentMetadata.payments.filter((item) => isRecordObject(item))
+      : [];
+    const pendingPayment = splitPayments.find((item) => {
+      const itemClientId = normalizeComparableId(item.clientId);
+      const itemPhone = normalizePhoneForGame(
+        typeof item.phoneNorm === "string"
+          ? item.phoneNorm
+          : (typeof item.phone === "string" ? item.phone : null),
+      );
+      if (normalizedProfileId && itemClientId && normalizedProfileId === itemClientId) return true;
+      if (normalizedPhone && itemPhone && normalizedPhone === itemPhone) return true;
+      return false;
+    }) ?? null;
+    const pendingPaymentStatus = String(pendingPayment?.status || "").trim().toUpperCase();
+    const pendingPaymentUrl = typeof pendingPayment?.paymentUrl === "string"
+      ? pendingPayment.paymentUrl.trim()
+      : "";
+    const pendingPaymentExpired = isSplitPaymentPendingExpired(
+      pendingPayment,
+      detailsSplitPaymentMetadata,
+      splitPendingNowTs,
+    );
+    if (pendingPayment && isSplitPaymentReservationActive(pendingPayment.status) && !pendingPaymentExpired) {
+      if (pendingPaymentStatus === "PAYMENT_PENDING" && pendingPaymentUrl) {
+        navigateToExternalUrl(pendingPaymentUrl);
+        return;
+      }
+      setGameRosterError("Вы уже присоединились к этой игре");
+      return;
+    }
+
+    const booking = activeGameRecord.booking;
+    const bookingDate = booking?.date?.trim() || "";
+    const fromTime = booking?.timeFrom?.trim() || "";
+    const toTime = booking?.timeTo?.trim() || "";
+    const exerciseId = resolveGameVivaExerciseId(activeGameRecord);
+    const studioId = booking?.studioId?.trim() || "";
+    const roomId = booking?.roomId?.trim() || "";
+    if (!bookingDate || !fromTime || !toTime || !studioId || !roomId || !exerciseId) {
+      setGameRosterError("В игре нет данных для оплаты участия");
+      return;
+    }
+
+    const shareAmount = detailsSplitShareAmount ?? (detailsSplitShareCount === 2 ? 5000 : 2500);
+    const paymentRef = generatePaymentRef();
+    const callbackUrl = (() => {
+      if (typeof window === "undefined") return null;
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set(PAYMENT_REF_QUERY_KEY, paymentRef);
+        return url.toString();
+      } catch {
+        return window.location.href || null;
+      }
+    })();
+    const directionId = toFiniteNumber(
+      detailsSplitPaymentMetadata?.directionId ?? detailsSplitPaymentMetadata?.vivaDirectionId,
+    );
+    const exerciseTypeId = toFiniteNumber(
+      detailsSplitPaymentMetadata?.exerciseTypeId ?? detailsSplitPaymentMetadata?.vivaExerciseTypeId,
+    );
+    const totalAmount = toFiniteNumber(detailsSplitPaymentMetadata?.totalAmount);
+    const oneTimeBaseAmount = toFiniteNumber(
+      detailsSplitPaymentMetadata?.oneTimeBaseAmount ?? detailsSplitPaymentMetadata?.baseShareAmount,
+    );
+
+    setJoiningSplitPayment(true);
+    setGameRosterError(null);
+    try {
+      const profile = await resolveCurrentClientProfile();
+      const clientPhone = profile.clientPhone ?? normalizedPhone;
+      if (!clientPhone) {
+        setGameRosterError("В профиле отсутствует номер телефона");
+        return;
+      }
+
+      const paymentResult = await apiCreatePadelSplitParticipantPayment(gameRecordId, {
+        date: bookingDate,
+        fromTime,
+        toTime,
+        exerciseId,
+        studioId,
+        roomId,
+        clientId: profile.clientId ?? normalizedProfileId,
+        clientPhone,
+        paymentRef,
+        paymentMode: preferredPaymentMode,
+        baseRedirectUrl: callbackUrl,
+        successUrl: callbackUrl,
+        failUrl: callbackUrl,
+        shareCount: detailsSplitShareCount,
+        shareAmount,
+        totalAmount,
+        oneTimeBaseAmount,
+        shareAmountIncludesDuration: true,
+        durationMinutes: typeof booking?.durationMinutes === "number" && Number.isFinite(booking.durationMinutes)
+          ? booking.durationMinutes
+          : null,
+        maxClientsCount: Math.max(detailsMaxPlayers, detailsSplitShareCount),
+        spot: null,
+        vivaDirectionId: directionId != null ? Math.round(directionId) : SPLIT_OPEN_GAME_DIRECTION_ID,
+        vivaExerciseTypeId: exerciseTypeId != null ? Math.round(exerciseTypeId) : SPLIT_OPEN_GAME_EXERCISE_TYPE_ID,
+        paymentDeadlineMinutes: SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES,
+      });
+
+      if (paymentResult.error || !paymentResult.data) {
+        setGameRosterError(paymentResult.error?.message || "Не удалось создать оплату участия");
+        return;
+      }
+
+      const bookingIds = paymentResult.data.bookingId ? [paymentResult.data.bookingId] : [];
+      enqueuePendingPaymentSync(paymentRef, bookingIds, "details_split_join_pay_click");
+
+      const pendingCurrentClientId = profile.clientId ?? profileId ?? null;
+      const pendingCurrentClientPhone = profile.clientPhone ?? profilePhone ?? null;
+      const pendingCurrentClientPhoneNorm = normalizePhoneForGame(pendingCurrentClientPhone);
+      const pendingPaymentRef = paymentResult.data.paymentRef ?? paymentRef;
+      const pendingPaymentSpotRaw = toFiniteNumber(paymentResult.data.spot);
+      const pendingPaymentSpot = pendingPaymentSpotRaw != null
+        ? Math.max(1, Math.floor(pendingPaymentSpotRaw))
+        : null;
+      const pendingSplitPaymentSource = isRecordObject(detailsSplitPaymentMetadata)
+        ? detailsSplitPaymentMetadata
+        : (
+          isRecordObject(activeGameRecord.metadata)
+          && isRecordObject((activeGameRecord.metadata as Record<string, unknown>).splitPayment)
+            ? (activeGameRecord.metadata as Record<string, unknown>).splitPayment as Record<string, unknown>
+            : null
+        );
+      const pendingCurrentSplitPayments = Array.isArray(pendingSplitPaymentSource?.payments)
+        ? pendingSplitPaymentSource.payments.filter((item) => isRecordObject(item))
+        : [];
+      const pendingCurrentSplitBookingIds = parseBookingIdsFromUnknown(pendingSplitPaymentSource?.bookingIds);
+      const pendingCurrentMetadataBookingIds = parseBookingIdsFromUnknown(detailsMetadata.bookingIds);
+      const pendingFilteredSplitPayments = pendingCurrentSplitPayments.filter((item) => {
+        const itemClientId = normalizeComparableId(item.clientId);
+        const itemPhoneNorm = normalizePhoneForGame(
+          typeof item.phoneNorm === "string"
+            ? item.phoneNorm
+            : (typeof item.phone === "string" ? item.phone : null),
+        );
+        const currentClientIdNorm = normalizeComparableId(pendingCurrentClientId);
+        if (currentClientIdNorm && itemClientId && currentClientIdNorm === itemClientId) return false;
+        if (pendingCurrentClientPhoneNorm && itemPhoneNorm && pendingCurrentClientPhoneNorm === itemPhoneNorm) return false;
+        return true;
+      });
+      const pendingPlayer: PadelGamePlayer = {
+        id: pendingCurrentClientId,
+        name: profileName || "Игрок",
+        phone: pendingCurrentClientPhoneNorm ?? pendingCurrentClientPhone,
+        photo: profilePhoto ?? null,
+        rating: profileGrade ?? null,
+        ratingNumeric: profileRatingNumeric ?? null,
+        source: "INVITE_LINK",
+        status: "PENDING",
+      };
+      const pendingNextParticipants = dedupePlayersByIdentity(
+        detailsParticipants.filter((player) => !isCurrentUserPlayer(player)),
+      );
+      const pendingNextWaitlist = dedupePlayersByIdentity([
+        ...detailsWaitlist.filter((player) => !isCurrentUserPlayer(player)),
+        pendingPlayer,
+      ]);
+      const pendingNowIso = new Date().toISOString();
+      const pendingDeadlineAt = paymentResult.data.deadlineAt
+        ?? new Date(Date.now() + SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES * 60 * 1000).toISOString();
+      const pendingNextSplitPayment: Record<string, unknown> = {
+        ...(pendingSplitPaymentSource ?? {}),
+        enabled: true,
+        status: "ACTIVE",
+        shareCount: detailsSplitShareCount,
+        shareAmount,
+        bookingIds: Array.from(new Set([
+          ...pendingCurrentSplitBookingIds,
+          paymentResult.data.bookingId,
+        ].filter(Boolean))),
+        payments: [
+          ...pendingFilteredSplitPayments,
+          {
+            role: "PARTICIPANT",
+            status: "PAYMENT_PENDING",
+            paymentRef: pendingPaymentRef,
+            clientId: pendingCurrentClientId,
+            phone: pendingCurrentClientPhone,
+            phoneNorm: pendingCurrentClientPhoneNorm,
+            bookingId: paymentResult.data.bookingId ?? null,
+            productId: paymentResult.data.productId ?? null,
+            transactionId: paymentResult.data.transactionId ?? null,
+            paymentUrl: paymentResult.data.paymentUrl ?? null,
+            amount: paymentResult.data.toPay ?? null,
+            amountMinor: paymentResult.data.toPayMinor ?? null,
+            spot: pendingPaymentSpot,
+            deadlineAt: pendingDeadlineAt,
+            expiresAt: pendingDeadlineAt,
+            createdAt: pendingNowIso,
+            paidAt: null,
+          },
+        ],
+      };
+      const pendingMetadataBookingIds = Array.from(new Set([
+        ...pendingCurrentMetadataBookingIds,
+        ...pendingCurrentSplitBookingIds,
+        paymentResult.data.bookingId,
+      ].filter(Boolean)));
+      const pendingNextMetadata = buildDetailsRosterMetadata(
+        pendingNextParticipants,
+        pendingNextWaitlist,
+        {
+          extraMetadata: {
+            bookingIds: pendingMetadataBookingIds,
+            splitPayment: pendingNextSplitPayment,
+          },
+        },
+      );
+      const pendingSaved = await patchGameRoster(pendingNextParticipants, pendingNextWaitlist, {
+        metadata: pendingNextMetadata,
+        fallbackErrorMessage: "Не удалось сохранить ожидающую оплату участия",
+      });
+      if (!pendingSaved) {
+        return;
+      }
+
+      if (paymentResult.data.paymentUrl) {
+        if (!navigateToExternalUrl(paymentResult.data.paymentUrl)) {
+          setGameRosterError("Не удалось открыть страницу оплаты");
+        }
+        return;
+      }
+
+      if (paymentResult.data.toPay > 0) {
+        setGameRosterError("Не удалось получить ссылку на оплату участия");
+        return;
+      }
+
+      const isPaidWithoutRedirect = !paymentResult.data.paymentUrl && paymentResult.data.toPay <= 0;
+      const refreshed = await apiFetchPadelGameRecord(gameRecordId);
+      let resolvedRecord: PadelGameRecord | null = null;
+      let resolvedParticipants = detailsParticipants;
+      let resolvedWaitlist = detailsWaitlist;
+      if (refreshed.data?.id) {
+        const fetchedRecord = refreshed.data as PadelGameRecord;
+        resolvedRecord = fetchedRecord;
+        upsertGameRecordInStores(fetchedRecord, { communityMode: "if_exists" });
+        setActiveGameRecordStore((prev) => (prev?.id === fetchedRecord.id ? fetchedRecord : prev));
+        resolvedParticipants = Array.isArray(fetchedRecord.participants) ? fetchedRecord.participants : [];
+        resolvedWaitlist = Array.isArray(fetchedRecord.waitlist) ? fetchedRecord.waitlist : [];
+        setParticipants(resolvedParticipants);
+        setWaitlistPlayers(resolvedWaitlist);
+      }
+
+      if (isPaidWithoutRedirect) {
+        const currentClientId = profile.clientId ?? profileId ?? null;
+        const currentClientPhone = profile.clientPhone ?? profilePhone ?? null;
+        const currentClientPhoneNorm = normalizePhoneForGame(currentClientPhone);
+        const paymentRefResolved = paymentResult.data.paymentRef ?? paymentRef;
+        const paymentSpotRaw = toFiniteNumber(paymentResult.data.spot);
+        const paymentSpot = paymentSpotRaw != null ? Math.max(1, Math.floor(paymentSpotRaw)) : null;
+        const nowIso = new Date().toISOString();
+        const hasCurrentUserInParticipants = resolvedParticipants.some((player) => isCurrentUserPlayer(player));
+        const hasCurrentUserInWaitlist = resolvedWaitlist.some((player) => isCurrentUserPlayer(player));
+        const shouldJoinAsConfirmed = hasCurrentUserInParticipants
+          ? true
+          : hasCurrentUserInWaitlist
+            ? false
+            : (paymentSpot != null
+              ? paymentSpot <= detailsMaxPlayers
+              : resolvedParticipants.length < detailsMaxPlayers);
+
+        const joinPlayerBase: PadelGamePlayer = {
+          id: currentClientId,
+          name: profileName || "Игрок",
+          phone: currentClientPhoneNorm ?? currentClientPhone,
+          photo: profilePhoto ?? null,
+          rating: profileGrade ?? null,
+          ratingNumeric: profileRatingNumeric ?? null,
+          source: "INVITE_LINK",
+          status: shouldJoinAsConfirmed ? "CONFIRMED" : "WAITLIST",
+        };
+
+        const nextParticipants = dedupePlayersByIdentity([
+          ...resolvedParticipants.filter((player) => !isCurrentUserPlayer(player)),
+          ...(shouldJoinAsConfirmed
+            ? [{ ...joinPlayerBase, status: "CONFIRMED" as const }]
+            : []),
+        ]);
+        const nextWaitlist = dedupePlayersByIdentity([
+          ...resolvedWaitlist.filter((player) => !isCurrentUserPlayer(player)),
+          ...(!shouldJoinAsConfirmed
+            ? [{ ...joinPlayerBase, status: "WAITLIST" as const }]
+            : []),
+        ]);
+
+        const splitPaymentFromResolvedRecord = (
+          isRecordObject(resolvedRecord?.metadata)
+          && isRecordObject((resolvedRecord.metadata as Record<string, unknown>).splitPayment)
+            ? (resolvedRecord.metadata as Record<string, unknown>).splitPayment as Record<string, unknown>
+            : null
+        );
+        const splitPaymentSource = splitPaymentFromResolvedRecord
+          ?? pendingNextSplitPayment
+          ?? (isRecordObject(detailsSplitPaymentMetadata) ? detailsSplitPaymentMetadata : null);
+        const currentSplitPayments = Array.isArray(splitPaymentSource?.payments)
+          ? splitPaymentSource.payments.filter((item) => isRecordObject(item))
+          : [];
+        const currentBookingIds = Array.isArray(splitPaymentSource?.bookingIds)
+          ? splitPaymentSource.bookingIds
+          : [];
+        const matchedCurrentSplitPayment = currentSplitPayments.find((item) => {
+          const itemClientId = normalizeComparableId(item.clientId);
+          const itemPhoneNorm = normalizePhoneForGame(
+            typeof item.phoneNorm === "string"
+              ? item.phoneNorm
+              : (typeof item.phone === "string" ? item.phone : null),
+          );
+          const currentClientIdNorm = normalizeComparableId(currentClientId);
+          if (currentClientIdNorm && itemClientId && currentClientIdNorm === itemClientId) return true;
+          if (currentClientPhoneNorm && itemPhoneNorm && currentClientPhoneNorm === itemPhoneNorm) return true;
+          return false;
+        }) ?? null;
+        const filteredSplitPayments = currentSplitPayments.filter((item) => item !== matchedCurrentSplitPayment);
+        const existingBookingId = normalizeBookingId(matchedCurrentSplitPayment?.bookingId);
+        const existingSpotRaw = toFiniteNumber(matchedCurrentSplitPayment?.spot);
+        const existingSpot = existingSpotRaw != null ? Math.max(1, Math.floor(existingSpotRaw)) : null;
+        const resolvedDeadlineAt = paymentResult.data.deadlineAt
+          ?? (typeof matchedCurrentSplitPayment?.deadlineAt === "string"
+            ? matchedCurrentSplitPayment.deadlineAt
+            : pendingDeadlineAt);
+
+        const nextSplitPayment: Record<string, unknown> = {
+          ...(splitPaymentSource ?? {}),
+          enabled: true,
+          status: "ACTIVE",
+          shareCount: detailsSplitShareCount,
+          shareAmount,
+          bookingIds: Array.from(new Set([
+            ...parseBookingIdsFromUnknown(currentBookingIds),
+            ...parseBookingIdsFromUnknown(matchedCurrentSplitPayment?.bookingIds),
+            matchedCurrentSplitPayment?.bookingId,
+            paymentResult.data.bookingId,
+          ].filter(Boolean))),
+          payments: [
+            ...filteredSplitPayments,
+            {
+              ...(matchedCurrentSplitPayment ?? {}),
+              role: "PARTICIPANT",
+              status: shouldJoinAsConfirmed ? "PAID" : "WAITLIST",
+              paymentRef: paymentRefResolved,
+              clientId: currentClientId,
+              phone: currentClientPhone,
+              phoneNorm: currentClientPhoneNorm,
+              bookingId: paymentResult.data.bookingId ?? existingBookingId ?? null,
+              bookingIds: Array.from(new Set([
+                ...parseBookingIdsFromUnknown(matchedCurrentSplitPayment?.bookingIds),
+                paymentResult.data.bookingId,
+              ].filter(Boolean))),
+              productId: paymentResult.data.productId ?? (
+                typeof matchedCurrentSplitPayment?.productId === "string"
+                  ? (matchedCurrentSplitPayment.productId.trim() || null)
+                  : null
+              ),
+              transactionId: paymentResult.data.transactionId ?? (
+                typeof matchedCurrentSplitPayment?.transactionId === "string"
+                  ? (matchedCurrentSplitPayment.transactionId.trim() || null)
+                  : null
+              ),
+              paymentUrl: paymentResult.data.paymentUrl ?? (
+                typeof matchedCurrentSplitPayment?.paymentUrl === "string"
+                  ? (matchedCurrentSplitPayment.paymentUrl.trim() || null)
+                  : null
+              ),
+              amount: paymentResult.data.toPay ?? toFiniteNumber(matchedCurrentSplitPayment?.amount) ?? 0,
+              amountMinor: paymentResult.data.toPayMinor ?? toFiniteNumber(matchedCurrentSplitPayment?.amountMinor),
+              spot: paymentSpot ?? existingSpot,
+              deadlineAt: resolvedDeadlineAt,
+              expiresAt: resolvedDeadlineAt,
+              createdAt: typeof matchedCurrentSplitPayment?.createdAt === "string"
+                ? matchedCurrentSplitPayment.createdAt
+                : nowIso,
+              paidAt: shouldJoinAsConfirmed
+                ? (typeof matchedCurrentSplitPayment?.paidAt === "string"
+                  ? matchedCurrentSplitPayment.paidAt
+                  : nowIso)
+                : null,
+              cancelReason: null,
+              cancelledAt: null,
+              leftAt: null,
+            },
+          ],
+        };
+        const nextMetadataBookingIds = Array.from(new Set([
+          ...parseBookingIdsFromUnknown(detailsMetadata.bookingIds),
+          ...parseBookingIdsFromUnknown(currentBookingIds),
+          ...parseBookingIdsFromUnknown(matchedCurrentSplitPayment?.bookingIds),
+          matchedCurrentSplitPayment?.bookingId,
+          paymentResult.data.bookingId,
+        ].filter(Boolean)));
+
+        const nextMetadata = buildDetailsRosterMetadata(nextParticipants, nextWaitlist, {
+          extraMetadata: {
+            bookingIds: nextMetadataBookingIds,
+            splitPayment: nextSplitPayment,
+          },
+        });
+
+        await patchGameRoster(nextParticipants, nextWaitlist, {
+          metadata: nextMetadata,
+          fallbackErrorMessage: "Не удалось синхронизировать состав игры после списания абонемента",
+        });
+      }
+    } catch {
+      setGameRosterError("Не удалось создать оплату участия");
+    } finally {
+      setJoiningSplitPayment(false);
+    }
+  }, [
+    canCurrentUserJoinSplitGameInDetails,
+    gameRecordId,
+    activeGameRecord,
+    joiningSplitPayment,
+    profileId,
+    profilePhoneNorm,
+    profilePhone,
+    splitPendingNowTs,
+    detailsSplitPaymentMetadata,
+    detailsSplitShareAmount,
+    detailsSplitShareCount,
+    detailsMaxPlayers,
+    detailsParticipants,
+    detailsWaitlist,
+    detailsMetadata,
+    resolveCurrentClientProfile,
+    upsertGameRecordInStores,
+    isCurrentUserPlayer,
+    profileName,
+    profilePhoto,
+    profileGrade,
+    profileRatingNumeric,
     patchGameRoster,
   ]);
 
@@ -10016,7 +13387,7 @@ export default function GamesPage({
 
   if (step === "place") {
     return (
-      <div className="app-container game-container">
+      <div className="app-container game-container game-container-place-step">
         <div className="page-header">
           <button className="page-back" onClick={() => setStep("create")} type="button">
             ← Назад
@@ -10117,13 +13488,35 @@ export default function GamesPage({
 
   if (step === "time") {
     return (
-      <div className="app-container game-container">
+      <div className="app-container game-container game-container-time-step">
         <div className="page-header">
-          <button className="page-back" onClick={() => setStep("create")} type="button">
+          <button
+            className="page-back"
+            onClick={() => setStep(usePublicCreateWizard ? "place" : "create")}
+            type="button"
+          >
             ← Назад
           </button>
           <div className="page-title">Дата и время</div>
         </div>
+
+        {usePublicCreateWizard && studio && (
+          <div className="game-section">
+            <button
+              className="game-card game-create-summary-card"
+              onClick={() => setStep("place")}
+              type="button"
+            >
+              <div className="game-card-row">
+                <div>
+                  <div className="game-card-title">{studio.name}</div>
+                  {studio.address && <div className="game-card-sub">{studio.address}</div>}
+                </div>
+                <span className="game-card-arrow">›</span>
+              </div>
+            </button>
+          </div>
+        )}
 
         {studio && (loadingStudioGameModes || supportsSinglesMode) && (
           <div className="game-section">
@@ -10155,7 +13548,7 @@ export default function GamesPage({
             {[60, 90, 120].map((d) => (
               <button
                 key={d}
-                className={`duration-chip ${duration === d ? "active" : ""}`}
+                className={`duration-chip ${duration === d ? "active" : ""} ${usePublicCreateWizard && (d === 60 || d === 90) ? "duration-chip--friendship" : ""}`}
                 onClick={() => setDuration(d)}
                 type="button"
               >
@@ -10185,7 +13578,7 @@ export default function GamesPage({
                 <div key={d.toISOString()} className="date-item">
                   <div className="date-weekday">{weekdayLabel}</div>
                   <button
-                    className={`date-chip ${dateIndex === i ? "active" : ""}`}
+                    className={`date-chip ${dateIndex === i ? "active" : ""} ${usePublicCreateWizard && i < 4 && dateIndex !== i ? "date-chip--friendship" : ""}`}
                     data-date-index={i}
                     onClick={() => {
                       setDateIndex(i);
@@ -10202,6 +13595,18 @@ export default function GamesPage({
               );
             })}
           </div>
+          {!usePublicCreateWizard && selectedCourt && (
+            <div className="game-selection-filter-row">
+              <span className="game-selection-filter-text">{`Показано время для ${selectedCourt.name}`}</span>
+              <button
+                type="button"
+                className="game-selection-filter-reset"
+                onClick={resetSelectedCourt}
+              >
+                Сбросить корт
+              </button>
+            </div>
+          )}
           <div className="time-grid">
             {loadingTimeslots && <div className="game-empty">Загрузка времени...</div>}
             {!loadingTimeslots && timeslotsError && (
@@ -10219,21 +13624,56 @@ export default function GamesPage({
               <div className="game-empty">Нет доступного времени для выбранного корта</div>
             )}
             {!loadingTimeslots &&
-              availableTimeSlots.map((slot) => (
-                <button
-                  key={slot}
-                  className={`time-chip ${time === slot ? "active" : ""}`}
-                  onClick={() => setTime(slot)}
-                  type="button"
-                >
-                  {slot}
-                </button>
-              ))}
+              availableTimeSlots.map((slot) => {
+                const isSelectedTime = time === slot;
+                return (
+                  <div key={slot} className="game-time-chip-wrap">
+                    <button
+                      className={`time-chip ${isSelectedTime ? "active" : ""} ${usePublicCreateWizard && isSelectedTime ? "time-chip--dismissible" : ""}`}
+                      onClick={() => setTime(slot)}
+                      type="button"
+                    >
+                      {slot}
+                    </button>
+                    {usePublicCreateWizard && isSelectedTime && (
+                      <button
+                        type="button"
+                        className="game-time-chip-reset"
+                        onClick={resetSelectedTime}
+                        aria-label="Сбросить выбранное время"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
           </div>
         </div>
 
+        {!usePublicCreateWizard && (
+          <div className="game-section">
+            <div className="team-card game-selected-params-card">
+              <div className="game-card-title">Параметры игры</div>
+              {renderSelectedParamsChips()}
+            </div>
+          </div>
+        )}
+
         <div className="game-section">
           <div className="game-section-title">Корты</div>
+          {!usePublicCreateWizard && time && (
+            <div className="game-selection-filter-row">
+              <span className="game-selection-filter-text">{`Показаны корты на ${time}`}</span>
+              <button
+                type="button"
+                className="game-selection-filter-reset"
+                onClick={resetSelectedTime}
+              >
+                Сбросить время
+              </button>
+            </div>
+          )}
           <div className="game-stack">
             {loadingTimeslots && <div className="game-empty">Загрузка кортов...</div>}
             {!loadingTimeslots && timeslotsError && (
@@ -10253,35 +13693,227 @@ export default function GamesPage({
               <div className="game-empty">Нет доступных кортов для выбранного времени</div>
             )}
             {!loadingTimeslots &&
-              availableCourts.map((court) => (
-                <button
-                  key={court.id}
-                  className={`game-card ${courtId === court.id ? "selected" : ""}`}
-                  onClick={() => {
-                    setCourtId(court.id);
-                  }}
-                  type="button"
-                >
-                  <div className="game-card-title">{court.name}</div>
-                </button>
-              ))}
+              availableCourts.map((court) => {
+                const isOutdoorCourt = isOutdoorCourtName(court.name);
+                const isSelectedCourt = courtId === court.id;
+                return (
+                  <div className="game-court-option" key={court.id}>
+                    <button
+                      className={`game-card ${isOutdoorCourt ? "game-court-option-card--outdoor" : ""} ${isSelectedCourt ? "selected" : ""} ${usePublicCreateWizard && isSelectedCourt ? "game-card--dismissible" : ""}`}
+                      onClick={() => {
+                        setCourtId(court.id);
+                      }}
+                      type="button"
+                    >
+                      <div className="game-card-title">{court.name}</div>
+                    </button>
+                    {isOutdoorCourt && (
+                      <button
+                        className="game-court-info-button"
+                        onClick={() => {
+                          setOutdoorCourtHintOpen(true);
+                        }}
+                        type="button"
+                        aria-label={`Пояснение по корту ${court.name}`}
+                        title="Пояснение по уличным кортам"
+                      >
+                        ?
+                      </button>
+                    )}
+                    {usePublicCreateWizard && isSelectedCourt && (
+                      <button
+                        type="button"
+                        className="game-court-option-reset"
+                        onClick={resetSelectedCourt}
+                        aria-label="Сбросить выбранный корт"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
           </div>
         </div>
+
+        {usePublicCreateWizard && canProceedToPayment && (
+          <>
+            <div className="game-section">
+              <div className="team-card game-create-payment-card">
+                <div className="game-card-title">Кто оплачивает корт?</div>
+                <button
+                  type="button"
+                  className={`game-payment-choice-card game-payment-choice-card--payer ${splitPaymentSelected ? "selected" : ""}`}
+                  onClick={(event) => {
+                    const target = event.target;
+                    if (target instanceof HTMLElement && target.closest("[data-subscription-info-trigger='true']")) {
+                      setSplitSubscriptionInfoModalOpen(true);
+                      return;
+                    }
+                    setPaymentMode("split");
+                  }}
+                >
+                  <span className="game-payment-choice-radio" aria-hidden="true" />
+                  <span className="game-payment-choice-copy">
+                    <strong>Каждый платит за себя</strong>
+                    <span className="game-payment-choice-description">{publicCreateSplitPaymentDescription}</span>
+                    <span className="game-payment-choice-tag game-payment-choice-tag--accent">
+                      <svg
+                        className="game-payment-choice-tag-icon"
+                        viewBox="0 0 20 20"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                        aria-hidden="true"
+                      >
+                        <path
+                          d="M7.5 9.16667C9.34195 9.16667 10.8333 7.67528 10.8333 5.83333C10.8333 3.99138 9.34195 2.5 7.5 2.5C5.65805 2.5 4.16667 3.99138 4.16667 5.83333C4.16667 7.67528 5.65805 9.16667 7.5 9.16667Z"
+                          fill="currentColor"
+                        />
+                        <path
+                          d="M12.9167 9.99999C14.2988 9.99999 15.4167 8.8821 15.4167 7.49999C15.4167 6.11788 14.2988 5 12.9167 5C12.35 5 11.8273 5.18799 11.4073 5.50496C11.5461 5.90831 11.6224 6.34116 11.6224 6.79166C11.6224 7.8835 11.2078 8.87851 10.5277 9.62782C11.0011 9.86498 11.5348 9.99999 12.1 9.99999H12.9167Z"
+                          fill="currentColor"
+                        />
+                        <path
+                          d="M7.5 10.8333C4.73858 10.8333 2.5 13.0719 2.5 15.8333C2.5 16.2936 2.8731 16.6667 3.33333 16.6667H11.6667C12.1269 16.6667 12.5 16.2936 12.5 15.8333C12.5 13.0719 10.2614 10.8333 7.5 10.8333Z"
+                          fill="currentColor"
+                        />
+                        <path
+                          d="M13.75 10.8333C13.0818 10.8333 12.4456 10.9694 11.8677 11.2153C12.8994 12.1646 13.5417 13.5263 13.5417 15.0417V15.8333H16.6667C17.1269 15.8333 17.5 15.4602 17.5 15C17.5 12.6988 15.6345 10.8333 13.3333 10.8333H13.75Z"
+                          fill="currentColor"
+                        />
+                      </svg>
+                      <span>{publicCreateJoinersPillLabel}</span>
+                    </span>
+                  </span>
+                  <span className={`game-payment-choice-aside${shouldShowPublicSplitSubscriptionBadge ? " game-payment-choice-aside--subscription" : ""}`}>
+                    {shouldShowPublicSplitSubscriptionBadge ? (
+                      <span className="game-payment-choice-badge">Подписка</span>
+                    ) : (
+                      <strong className="game-payment-choice-price">{`${formatPrice(splitShareAmount)} ₽`}</strong>
+                    )}
+                    {shouldShowPublicSplitSubscriptionInfoBadge && (
+                      <span
+                        className="game-payment-choice-badge game-payment-choice-badge--outline"
+                        data-subscription-info-trigger="true"
+                      >
+                        Подписка
+                      </span>
+                    )}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={`game-payment-choice-card game-payment-choice-card--payer ${!splitPaymentSelected ? "selected" : ""}`}
+                  onClick={() => setPaymentMode("self")}
+                >
+                  <span className="game-payment-choice-radio" aria-hidden="true" />
+                  <span className="game-payment-choice-copy">
+                    <strong>Я оплачиваю весь корт</strong>
+                    <span className="game-payment-choice-description">{publicCreateFullCourtDescription}</span>
+                    <span className="game-payment-choice-tag game-payment-choice-tag--muted">
+                      <svg
+                        className="game-payment-choice-tag-icon"
+                        viewBox="0 0 20 20"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                        aria-hidden="true"
+                      >
+                        <path
+                          d="M7.08333 9.16667C8.69516 9.16667 10 7.86183 10 6.25C10 4.63817 8.69516 3.33333 7.08333 3.33333C5.4715 3.33333 4.16667 4.63817 4.16667 6.25C4.16667 7.86183 5.4715 9.16667 7.08333 9.16667Z"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <path
+                          d="M2.91667 15.8333C2.91667 13.5321 4.78148 11.6667 7.08333 11.6667C9.38518 11.6667 11.25 13.5321 11.25 15.8333"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <path
+                          d="M12.9167 7.08333V12.9167"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M10 10H15.8333"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                      <span>Соберу игроков сам</span>
+                    </span>
+                  </span>
+                  <span className="game-payment-choice-aside">
+                    <strong className="game-payment-choice-price">
+                      {paymentAmount != null && paymentAmount > 0 ? `${formatPrice(paymentAmount)} ₽` : "— ₽"}
+                    </strong>
+                  </span>
+                </button>
+                {shouldShowPublicSplitPaymentAvailabilityLabel && (
+                  <div className={`game-empty${splitPaymentAvailabilityLabelIsError ? " game-pay-error" : ""}`}>
+                    {splitPaymentAvailabilityLabel}
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
 
         <button
           className={`game-submit game-submit-booking ${canProceedToPayment ? "active" : ""}`}
           onClick={() => {
-            if (!canProceedToPayment) return;
+            if (isContinueDisabled()) return;
             setStep("create");
           }}
           type="button"
-          disabled={!canProceedToPayment}
+          disabled={isContinueDisabled()}
         >
-          <span className="game-submit-main">{paymentContinueTitle}</span>
-          <span className="game-submit-price">{paymentBookingAmount}</span>
+          <span className="game-submit-main">{usePublicCreateWizard ? "Продолжить" : paymentContinueTitle}</span>
+          {!usePublicCreateWizard && <span className="game-submit-price">{paymentBookingAmount}</span>}
           <span className="game-submit-meta">{paymentStationCourt}</span>
           <span className="game-submit-meta">{paymentTimeRange}</span>
         </button>
+
+        <Modal
+          isOpen={outdoorCourtHintOpen}
+          onClose={() => {
+            setOutdoorCourtHintOpen(false);
+          }}
+          title="Уличные корты"
+        >
+          <div className="game-outdoor-court-hint">
+            Открытые корты находятся на улице. Просьба приезжать на 10 минут раньше, по сравнению
+            с обычными кортами, чтобы начать играть вовремя.
+          </div>
+        </Modal>
+
+        <Modal
+          isOpen={splitSubscriptionInfoModalOpen}
+          onClose={() => {
+            setSplitSubscriptionInfoModalOpen(false);
+          }}
+          title="Подписка"
+          variant="dialog"
+        >
+          <div className="find-game-friendly-modal">
+            <p className="find-game-friendly-modal-text">Оплатить участие можно по летней подписке.</p>
+            <button
+              type="button"
+              className="section-cta"
+              onClick={() => {
+                navigateToExternalUrl(PUBLIC_CREATE_SUBSCRIPTION_INFO_URL);
+              }}
+            >
+              Узнать подробнее
+            </button>
+            <SummerSubscriptionGallery />
+          </div>
+        </Modal>
       </div>
     );
   }
@@ -10442,6 +14074,27 @@ export default function GamesPage({
   }
 
   if (step === "details") {
+    if (isGameCancelledStatus(gameRecordStatus)) {
+      return (
+        <div className="app-container game-container">
+          <div className="page-header">
+            <button className="back-btn" onClick={onBack}>← Назад</button>
+            <div className="page-title">Игра отменена</div>
+          </div>
+          <div className="game-section">
+            <div className="game-empty game-pay-error">
+              {gameRecordError || "Эта игра была отменена и больше не отображается в списке."}
+            </div>
+          </div>
+          <div className="game-section">
+            <button className="section-cta" type="button" onClick={onBack}>
+              Вернуться в кабинет
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     const paymentStatusLabel = isGamePaid === true ? "Оплачено" : "Не оплачено";
     const paymentStatusClass = isGamePaid === true ? "paid" : "unpaid";
     const paymentStatusIcon = (
@@ -10469,20 +14122,30 @@ export default function GamesPage({
     const isPendingDisputeWindowExpired = isMatchResultPendingReview
       && detailsMatchResultDisputeTimeLeftMs != null
       && detailsMatchResultDisputeTimeLeftMs <= 0;
-    const matchResultStatusLabel = isMatchResultAgreed
-      ? "Согласовано"
-      : isMatchResultPendingReview
-        ? (isPendingDisputeWindowExpired ? "Согласуется" : "На оспаривании")
-        : detailsMatchResultStatus === "DISPUTED"
-          ? "Оспорен"
-          : "Черновик";
-    const matchResultStatusClass = isMatchResultAgreed
-      ? "confirmed"
-      : isMatchResultPendingReview
-        ? "pending"
-        : detailsMatchResultStatus === "DISPUTED"
-          ? "disputed"
-          : "draft";
+    const isResultViewerParticipant = isCurrentUserConfirmedParticipant;
+    const isResultViewerSpectator = !isResultViewerParticipant;
+    const effectiveMatchResultStatus: MatchResultLifecycleStatus = isMatchResultAgreed
+      ? "CONFIRMED"
+      : detailsMatchResultStatus ?? "NO_RESULT";
+    const matchResultStatusLabel = (() => {
+      if (effectiveMatchResultStatus === "CONFIRMED") return "Итог матча";
+      if (effectiveMatchResultStatus === "PENDING_REVIEW") {
+        if (isPendingDisputeWindowExpired) return "Согласуется";
+        return isMatchResultSubmittedByCurrentUser ? "Результат внесен" : "На согласовании";
+      }
+      if (effectiveMatchResultStatus === "DISPUTED") return "Оспорен";
+      if (effectiveMatchResultStatus === "CORRECTION_PENDING") return "Нужна правка";
+      if (effectiveMatchResultStatus === "NO_RESULT_EXPIRED") return "Срок истек";
+      return isResultViewerParticipant ? "Ввод результата" : "Ждем результат";
+    })();
+    const matchResultStatusClass = (() => {
+      if (effectiveMatchResultStatus === "CONFIRMED") return "confirmed";
+      if (effectiveMatchResultStatus === "PENDING_REVIEW") return "pending";
+      if (effectiveMatchResultStatus === "DISPUTED") return "disputed";
+      if (effectiveMatchResultStatus === "CORRECTION_PENDING") return "pending";
+      if (effectiveMatchResultStatus === "NO_RESULT_EXPIRED") return "disputed";
+      return "draft";
+    })();
     const matchResultSubmittedMeta = detailsMatchResultSubmittedBy?.name
       ? `${detailsMatchResultSubmittedBy.name}${detailsMatchResultSubmittedAt ? ` · ${new Date(detailsMatchResultSubmittedAt).toLocaleString("ru-RU")}` : ""}`
       : null;
@@ -10499,13 +14162,40 @@ export default function GamesPage({
     const matchResultDisputedMeta = detailsMatchResultDisputedBy?.name
       ? `${detailsMatchResultDisputedBy.name}${detailsMatchResultDisputedAt ? ` · ${new Date(detailsMatchResultDisputedAt).toLocaleString("ru-RU")}` : ""}`
       : null;
-    const matchResultPendingNote = isMatchResultPendingReview && matchResultDisputeDeadlineMeta
-      ? (
-        detailsMatchResultDisputeTimeLeftMs != null && detailsMatchResultDisputeTimeLeftMs > 0
-          ? `До ${matchResultDisputeDeadlineMeta} результат можно оспорить. Затем он согласуется автоматически.`
-          : "Срок на оспаривание истек. Согласуем результат автоматически."
-      )
-      : null;
+    const matchResultLifecycleNote = (() => {
+      if (!isDetailsMatchStarted) return "Ввод результатов игры будет доступен после ее начала.";
+      if (effectiveMatchResultStatus === "NO_RESULT") {
+        return isResultViewerParticipant
+          ? "Внесите счет по сетам и отправьте результат на согласование участникам."
+          : "Участники еще не отправили результат матча.";
+      }
+      if (effectiveMatchResultStatus === "PENDING_REVIEW") {
+        if (isResultViewerSpectator) return "Результат на согласовании у участников матча.";
+        if (isMatchResultSubmittedByCurrentUser) {
+          return matchResultDisputeDeadlineMeta
+            ? `Результат внесен. До ${matchResultDisputeDeadlineMeta} другие участники могут подтвердить или оспорить его.`
+            : "Результат внесен. Ждем подтверждения или оспаривания от участников.";
+        }
+        if (detailsMatchResultDisputeTimeLeftMs != null && detailsMatchResultDisputeTimeLeftMs > 0) {
+          return `Проверьте результат: его можно подтвердить или оспорить до ${matchResultDisputeDeadlineMeta}.`;
+        }
+        return "Срок на оспаривание истек. Согласуем результат автоматически.";
+      }
+      if (effectiveMatchResultStatus === "DISPUTED") {
+        return isResultViewerParticipant
+          ? "Результат оспорен. Автору результата нужно отправить исправление или договориться с участниками."
+          : "Результат оспорен участниками, ждем исправление.";
+      }
+      if (effectiveMatchResultStatus === "CORRECTION_PENDING") {
+        return isResultViewerParticipant
+          ? "Отправлено исправление результата. Проверьте и примите его, если все верно."
+          : "Исправление результата ожидает решения участников.";
+      }
+      if (effectiveMatchResultStatus === "NO_RESULT_EXPIRED") {
+        return "Срок внесения результата истек.";
+      }
+      return null;
+    })();
     const matchResultSetsForDisplay = isMatchResultAgreed
       ? detailsCompletedMatchResultSets
       : detailsMatchResultSets;
@@ -10605,12 +14295,33 @@ export default function GamesPage({
       if (leftTeamOrder !== rightTeamOrder) return leftTeamOrder - rightTeamOrder;
       return left.name.localeCompare(right.name, "ru-RU");
     });
+    const isMatchResultRatingImpactFallback = isMatchResultAgreed
+      && detailsMatchResultRatingImpact.length === 0
+      && fallbackRatingImpactRows.length > 0;
     const isMatchResultVivaSynced = detailsMatchResultVivaSync?.status === "SUCCESS";
     const canRetryVivaMatchResultSync = isMatchResultAgreed
       && matchResultRatingImpactRows.length > 0
       && !updatingGameMeta
-      && !retryingMatchResultVivaSync
       && !isMatchResultVivaSynced;
+    const syncedPlayersCount = detailsMatchResultVivaSync?.syncedPlayers && detailsMatchResultVivaSync.syncedPlayers > 0
+      ? detailsMatchResultVivaSync.syncedPlayers
+      : matchResultRatingImpactRows.length;
+    const totalPlayersCount = detailsMatchResultVivaSync?.totalPlayers && detailsMatchResultVivaSync.totalPlayers > 0
+      ? detailsMatchResultVivaSync.totalPlayers
+      : matchResultRatingImpactRows.length;
+    const matchResultVivaSyncedMeta = isMatchResultAgreed && isMatchResultVivaSynced
+      ? [
+        `Рейтинг игроков изменен в Viva (${syncedPlayersCount}/${totalPlayersCount})`,
+        detailsMatchResultVivaSync?.lastSuccessAt
+          ? new Date(detailsMatchResultVivaSync.lastSuccessAt).toLocaleString("ru-RU")
+          : null,
+      ].filter(Boolean).join(" · ")
+      : null;
+    const matchResultVivaSyncWarning = isMatchResultAgreed
+      && detailsMatchResultVivaSync
+      && (detailsMatchResultVivaSync.status === "FAILED" || detailsMatchResultVivaSync.status === "PARTIAL_SUCCESS")
+      ? detailsMatchResultVivaSync.lastError || "Не удалось полностью обновить рейтинг в Viva"
+      : null;
     const useStartedMatchDetailsLayout = isDetailsMatchStarted;
     const detailsTeamCardTitle = useStartedMatchDetailsLayout ? "Команды" : "Команда";
     const detailsTeamEditorBlock = (
@@ -10629,7 +14340,10 @@ export default function GamesPage({
                 <div className="details-team-pair-slots">
                   {slotIndexes.map((slotIndex) => {
                     const slotPlayer = detailsTeamSlots[slotIndex];
-                    const slotLevelLabel = normalizePlayerRatingLabel(slotPlayer?.rating ?? null);
+                    const slotLevelLabel = normalizePlayerRatingLabel(
+                      slotPlayer?.rating ?? null,
+                      normalizeRatingNumeric(slotPlayer?.ratingNumeric),
+                    );
                     const slotLevelProgress = getPlayerRatingProgress(slotLevelLabel);
                     const slotRingProgressDeg = slotLevelProgress != null
                       ? `${Math.max(0, Math.min(360, Math.round(slotLevelProgress * 360)))}deg`
@@ -10688,6 +14402,9 @@ export default function GamesPage({
                 const isWaitlistPlayer = detailsWaitlist.some((item) => (
                   getPadelPlayerIdentityKey(item) === getPadelPlayerIdentityKey(player)
                 ));
+                const isPoolPlayer = !isWaitlistPlayer && detailsPlayerPool.some((item) => (
+                  getPadelPlayerIdentityKey(item) === getPadelPlayerIdentityKey(player)
+                ));
                 return (
                   <button
                     key={playerKey}
@@ -10700,6 +14417,7 @@ export default function GamesPage({
                   >
                     {player.name || "Игрок"}
                     {isWaitlistPlayer ? " · лист ожидания" : ""}
+                    {isPoolPlayer ? " · пул игроков" : ""}
                   </button>
                 );
               })}
@@ -10785,6 +14503,12 @@ export default function GamesPage({
         </div>
       </div>
     );
+    const detailsInviteActionLabel = inviteFeedback === "shared"
+      ? "Ссылка отправлена"
+      : inviteFeedback === "copied"
+        ? "Ссылка скопирована"
+        : "Пригласить в игру";
+    const showDetailsRosterInviteRow = !isMatchResultAgreed && canCurrentUserInviteInDetails;
     const detailsPlayersBlock = (
       <>
         {detailsOrganizerPlayer && !detailsOrganizerInMatch && (
@@ -10833,15 +14557,15 @@ export default function GamesPage({
           <div className="details-roster-head">
             <div className="details-roster-title">Игроки в матче</div>
             <div className="details-roster-count">
-              {`${detailsParticipants.length}/${detailsMaxPlayers}`}
+              {`${detailsOccupiedSlotsCount}/${detailsMaxPlayers}`}
             </div>
           </div>
           {gameRosterError && <div className="game-empty game-pay-error">{gameRosterError}</div>}
-          {detailsParticipants.length === 0 ? (
-            <div className="game-empty">Пока нет подтвержденных игроков</div>
-          ) : (
-            <div className="details-roster-list">
-              {detailsParticipants.map((player, index) => {
+          <div className="details-roster-list">
+            {detailsParticipants.length === 0 ? (
+              <div className="game-empty">Пока нет подтвержденных игроков</div>
+            ) : (
+              detailsParticipants.map((player, index) => {
                 const playerKey = getPadelPlayerIdentityKey(player) || `participant-${index}`;
                 const isOrganizer = isDetailsOrganizerPlayer(player);
                 return (
@@ -10879,14 +14603,16 @@ export default function GamesPage({
                           <button
                             type="button"
                             className="details-roster-action details-roster-remove"
-                            onClick={() => handleRemoveParticipantFromDetails(player, index)}
+                            onClick={() => {
+                              void handleRemoveParticipantFromDetails(player, index);
+                            }}
                             disabled={updatingGameRoster}
                           >
                             Удалить
                           </button>
                         </div>
                       ) : (
-                        isCurrentUserPlayer(player) && (
+                        shouldShowCurrentUserLeaveActionInDetails && isCurrentUserPlayer(player) && (
                           <button
                             type="button"
                             className="details-roster-action details-roster-leave"
@@ -10902,16 +14628,47 @@ export default function GamesPage({
                     )}
                   </div>
                 );
-              })}
-            </div>
-          )}
-
+              })
+            )}
+            {showDetailsRosterInviteRow && (
+              <button
+                type="button"
+                className="details-roster-row details-roster-row-invite"
+                onClick={handleCopyInvite}
+                disabled={!inviteLink}
+              >
+                <span className="details-roster-player">
+                  <span className="details-roster-avatar-wrap details-roster-avatar-wrap-invite" aria-hidden="true">
+                    <span className="details-roster-avatar details-roster-avatar-invite-plus">+</span>
+                  </span>
+                  <span className="details-roster-meta">
+                    <span className="details-roster-name">{detailsInviteActionLabel}</span>
+                  </span>
+                </span>
+              </button>
+            )}
+          </div>
           {detailsWaitlist.length > 0 && (
             <div className="details-roster-waitlist">
               <div className="details-roster-subtitle">Лист ожидания</div>
               <div className="details-roster-list">
                 {detailsWaitlist.map((player, index) => {
                   const playerKey = getPadelPlayerIdentityKey(player) || `waitlist-${index}`;
+                  const waitlistPaymentState = detailsWaitlistPaymentStateByKey.get(playerKey);
+                  const waitlistSubtitle = (() => {
+                    if (!canManagePlayersInDetails || !waitlistPaymentState) {
+                      return "Ожидает подтверждения";
+                    }
+                    if (waitlistPaymentState.isPending) {
+                      return waitlistPaymentState.countdownLabel
+                        ? `Без оплаты · удалить через ${waitlistPaymentState.countdownLabel}`
+                        : "Без оплаты";
+                    }
+                    if (waitlistPaymentState.isExpired) {
+                      return "Без оплаты · время ожидания вышло";
+                    }
+                    return "Ожидает подтверждения";
+                  })();
                   return (
                     <div className="details-roster-row" key={playerKey}>
                       <div className="details-roster-player">
@@ -10924,7 +14681,7 @@ export default function GamesPage({
                         />
                         <div className="details-roster-meta">
                           <div className="details-roster-name">{player.name || "Игрок"}</div>
-                          <div className="details-roster-sub">Ожидает подтверждения</div>
+                          <div className="details-roster-sub">{waitlistSubtitle}</div>
                         </div>
                       </div>
 
@@ -10939,7 +14696,7 @@ export default function GamesPage({
                           +
                         </button>
                       ) : (
-                        isCurrentUserPlayer(player) && (
+                        shouldShowCurrentUserLeaveActionInDetails && isCurrentUserPlayer(player) && (
                           <button
                             type="button"
                             className="details-roster-action details-roster-leave"
@@ -10961,31 +14718,55 @@ export default function GamesPage({
 
           {detailsLeaveEvents.length > 0 && (
             <div className="details-roster-leaves">
-              <div className="details-roster-subtitle">Игроки покинули игру</div>
-              <div className="details-roster-leave-list">
-                {detailsLeaveEvents.map((item, index) => {
-                  const playerName = item.playerName?.trim() || "Игрок";
-                  const leftAtLabel = new Date(item.leftAt).toLocaleString("ru-RU");
-                  const actionLabel = item.reason === "ORGANIZER_REMOVED"
-                    ? "удален из игры"
-                    : "покинул игру";
-                  const key = `${item.playerPhone || item.playerId || playerName}-${item.leftAt}-${index}`;
-                  return (
-                    <div className="details-roster-leave-row" key={key}>
-                      <span className="details-roster-leave-name">{`${playerName} ${actionLabel}`}</span>
-                      <span className="details-roster-leave-time">{leftAtLabel}</span>
-                    </div>
-                  );
-                })}
-              </div>
+              <button
+                type="button"
+                className="details-roster-history-toggle"
+                aria-expanded={detailsLeaveHistoryOpen}
+                aria-controls="details-roster-leave-list"
+                onClick={() => {
+                  setDetailsLeaveHistoryOpen((prev) => !prev);
+                }}
+              >
+                <span>История присоединений</span>
+                <span className={`details-roster-history-toggle-icon${detailsLeaveHistoryOpen ? " is-open" : ""}`}>v</span>
+              </button>
+              {detailsLeaveHistoryOpen && (
+                <div className="details-roster-leave-list" id="details-roster-leave-list">
+                  {detailsLeaveEvents.map((item, index) => {
+                    const playerName = item.playerName?.trim() || "Игрок";
+                    const leftAtLabel = new Date(item.leftAt).toLocaleString("ru-RU");
+                    const reason = String(item.reason || "").trim().toUpperCase();
+                    const actionLabel = reason === "ORGANIZER_REMOVED"
+                      ? "удален из игры"
+                      : (reason === "AUTO_PAYMENT_TIMEOUT" || reason.includes("PAYMENT_TIMEOUT"))
+                        ? "удален из-за неоплаты"
+                        : "покинул игру";
+                    const key = `${item.playerPhone || item.playerId || playerName}-${item.leftAt}-${index}`;
+                    return (
+                      <div className="details-roster-leave-row" key={key}>
+                        <span className="details-roster-leave-name">{`${playerName} ${actionLabel}`}</span>
+                        <span className="details-roster-leave-time">{leftAtLabel}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
       </>
     );
-    const matchResultRatingImpactBlock = isMatchResultAgreed && matchResultRatingImpactRows.length > 0 ? (
+    const matchResultRatingImpactBlock = (isMatchResultAgreed || isMatchResultPendingReview)
+      && matchResultRatingImpactRows.length > 0 ? (
       <div className="details-rating-impact">
-        <div className="details-rating-impact-title">Изменение рейтинга</div>
+        <div className="details-rating-impact-title">
+          {isMatchResultPendingReview ? "Предварительное изменение рейтинга" : "Изменение рейтинга"}
+        </div>
+        {isMatchResultRatingImpactFallback && (
+          <div className="details-result-note">
+            Предварительная оценка для отображения. Источник истины по рейтингу - backend ratingImpact.
+          </div>
+        )}
         <div className="details-rating-impact-list">
           {matchResultRatingImpactRows.map((item, index) => {
             const deltaClass = item.delta > 0
@@ -11327,31 +15108,25 @@ export default function GamesPage({
                 </div>
               )}
 
-              {isMatchResultAgreed && isMatchResultVivaSynced && (
-                <div className="details-result-meta">Уровень обновлен</div>
+              {matchResultVivaSyncedMeta && (
+                <div className="details-result-meta">{matchResultVivaSyncedMeta}</div>
+              )}
+
+              {matchResultVivaSyncWarning && (
+                <div className="details-result-note">
+                  {matchResultVivaSyncWarning}
+                </div>
               )}
 
               {canRetryVivaMatchResultSync && (
-                <button
-                  type="button"
-                  className="section-cta section-cta-secondary details-result-retry-sync"
-                  onClick={() => {
-                    void handleRetryMatchResultVivaSync();
-                  }}
-                  disabled={retryingMatchResultVivaSync || updatingGameMeta}
-                >
-                  {retryingMatchResultVivaSync ? "Отправляем..." : "Отправить результаты повторно"}
-                </button>
-              )}
-
-              {!isDetailsMatchStarted && (
                 <div className="details-result-note">
-                  Ввод результатов игры будет доступен после ее начала.
+                  Повторная синхронизация в Viva больше не запускается с фронта. Источник истины по рейтингу теперь backend lifecycle результата.
                 </div>
               )}
-              {matchResultPendingNote && (
+
+              {matchResultLifecycleNote && (
                 <div className="details-result-note">
-                  {matchResultPendingNote}
+                  {matchResultLifecycleNote}
                 </div>
               )}
 
@@ -11361,97 +15136,109 @@ export default function GamesPage({
                   const previousSetPairing = index > 0
                     ? (matchResultSetPairingsForDisplay[index - 1] ?? null)
                   : null;
-                const isEditableStartPairing = canEditMatchResult && index === 0;
-                const setPairingSlotsForDisplay = isEditableStartPairing
-                  ? cloneTeamSlots(detailsTeamSlots)
-                  : setPairing;
-                const setPairingTeamAPlayers = setPairingSlotsForDisplay
-                  ? getMatchResultPairTeamPlayers(setPairingSlotsForDisplay, [0, 1])
-                  : [];
-                const setPairingTeamBPlayers = setPairingSlotsForDisplay
-                  ? getMatchResultPairTeamPlayers(setPairingSlotsForDisplay, [2, 3])
-                  : [];
-                const setPairingTeamALabel = setPairingSlotsForDisplay
-                  ? formatMatchResultPairTeamLabel(setPairingSlotsForDisplay, [0, 1])
-                  : null;
-                const setPairingTeamBLabel = setPairingSlotsForDisplay
-                  ? formatMatchResultPairTeamLabel(setPairingSlotsForDisplay, [2, 3])
-                  : null;
-                const shouldShowSetPairingBlock = Boolean(
-                  (setPairingTeamALabel || setPairingTeamBLabel || isEditableStartPairing)
-                  && (isEditableStartPairing || !canEditMatchResult || index < detailsCompletedMatchResultSets.length)
-                  && (
+                  const isEditableStartPairing = canEditMatchResult
+                    && index === 0
+                    && detailsCompletedMatchResultSets.length === 0;
+                  const isUpcomingSetPairingBlock = canEditMatchResult
+                    && index > 0
+                    && index === detailsCompletedMatchResultSets.length;
+                  const setPairingSlotsForDisplay = isEditableStartPairing
+                    ? cloneTeamSlots(detailsTeamSlots)
+                    : setPairing;
+                  const setPairingTeamAPlayers = setPairingSlotsForDisplay
+                    ? getMatchResultPairTeamPlayers(setPairingSlotsForDisplay, [0, 1])
+                    : [];
+                  const setPairingTeamBPlayers = setPairingSlotsForDisplay
+                    ? getMatchResultPairTeamPlayers(setPairingSlotsForDisplay, [2, 3])
+                    : [];
+                  const setPairingTeamALabel = setPairingSlotsForDisplay
+                    ? formatMatchResultPairTeamLabel(setPairingSlotsForDisplay, [0, 1])
+                    : null;
+                  const setPairingTeamBLabel = setPairingSlotsForDisplay
+                    ? formatMatchResultPairTeamLabel(setPairingSlotsForDisplay, [2, 3])
+                    : null;
+                  const hasSetPairingContent = Boolean(
+                    setPairingTeamALabel || setPairingTeamBLabel || isEditableStartPairing
+                  );
+                  const hasSetPairingChange = Boolean(
                     isEditableStartPairing
-                    ||
-                    !previousSetPairing
+                    || !previousSetPairing
                     || !areTeamSlotsEqualByIdentity(setPairingSlotsForDisplay ?? [], previousSetPairing)
-                  )
-                );
-                const setPairingBlockTitle = index === 0
-                  ? "Стартовый состав"
-                  : `Новый состав перед сетом ${index + 1}`;
-                const renderResultPairingPlayer = (
-                  slotIndex: number,
-                  playerIndex: number,
-                  teamKey: "a" | "b",
-                ) => {
-                  const player = setPairingSlotsForDisplay?.[slotIndex] ?? null;
-                  if (!player && !isEditableStartPairing) return null;
-                  const playerLevelLabel = normalizePlayerRatingLabel(player?.rating ?? null);
-                  const playerLevelProgress = getPlayerRatingProgress(playerLevelLabel);
-                  const playerRingProgressDeg = playerLevelProgress != null
-                    ? `${Math.max(0, Math.min(360, Math.round(playerLevelProgress * 360)))}deg`
-                    : "0deg";
-                  const playerKey = getPadelPlayerIdentityKey(player) || `set-${index}-${teamKey}-${playerIndex}`;
-                  const slotIsOrganizerLocked =
-                    slotIndex === 0 && detailsOrganizerInMatch && Boolean(detailsOrganizerPlayer);
-                  const slotDisabled = updatingGameMeta
-                    || (slotIsOrganizerLocked && !canManagePlayersInDetails)
-                    || (!canManagePlayersInDetails
-                      && (!isCurrentUserConfirmedParticipant || (slotIndex === 0 && detailsOrganizerInMatch)));
-                  const playerContent = (
-                    <>
-                      <div
-                        className={`details-result-set-pairing-player-ring${playerLevelLabel ? " has-level" : ""}`}
-                        style={{ "--player-ring-progress": playerRingProgressDeg } as CSSProperties}
-                      >
-                        <AvatarWithInitialsFallback
-                          src={player?.photo}
-                          alt={player?.name || "Игрок"}
-                          imageClassName="details-result-set-pairing-player-avatar"
-                          fallbackClassName="details-result-set-pairing-player-avatar details-result-set-pairing-player-avatar-fallback"
-                          fallbackText={getPlayerInitials(player?.name || "") || "+"}
-                        />
-                      </div>
-                      {playerLevelLabel && (
-                        <div className="details-result-set-pairing-player-level">{playerLevelLabel}</div>
-                      )}
-                      <div className="details-result-set-pairing-player-name">{player?.name || "Свободно"}</div>
-                    </>
                   );
-
-                  if (isEditableStartPairing) {
-                    return (
-                      <button
-                        key={`slot-${slotIndex}`}
-                        type="button"
-                        className={`details-result-set-pairing-player details-result-set-pairing-player-action${player ? "" : " empty"}${slotIsOrganizerLocked ? " locked" : ""}`}
-                        onClick={() => {
-                          void handleTeamSlotTap(slotIndex);
-                        }}
-                        disabled={slotDisabled}
-                      >
-                        {playerContent}
-                      </button>
+                  const shouldShowSetPairingBlock = hasSetPairingContent && (
+                    isEditableStartPairing
+                    || !canEditMatchResult
+                    || index < detailsCompletedMatchResultSets.length
+                    || (isUpcomingSetPairingBlock && Boolean(setPairingSlotsForDisplay?.some(Boolean)))
+                  ) && hasSetPairingChange;
+                  const setPairingBlockTitle = index === 0
+                    ? "Стартовый состав"
+                    : `Новый состав перед сетом ${index + 1}`;
+                  const renderResultPairingPlayer = (
+                    slotIndex: number,
+                    playerIndex: number,
+                    teamKey: "a" | "b",
+                  ) => {
+                    const player = setPairingSlotsForDisplay?.[slotIndex] ?? null;
+                    if (!player && !isEditableStartPairing) return null;
+                    const playerLevelLabel = normalizePlayerRatingLabel(
+                      player?.rating ?? null,
+                      normalizeRatingNumeric(player?.ratingNumeric),
                     );
-                  }
+                    const playerLevelProgress = getPlayerRatingProgress(playerLevelLabel);
+                    const playerRingProgressDeg = playerLevelProgress != null
+                      ? `${Math.max(0, Math.min(360, Math.round(playerLevelProgress * 360)))}deg`
+                      : "0deg";
+                    const playerKey = getPadelPlayerIdentityKey(player) || `set-${index}-${teamKey}-${playerIndex}`;
+                    const slotIsOrganizerLocked =
+                      slotIndex === 0 && detailsOrganizerInMatch && Boolean(detailsOrganizerPlayer);
+                    const slotDisabled = updatingGameMeta
+                      || (slotIsOrganizerLocked && !canEditMatchResultTeamsInDetails)
+                      || (!canEditMatchResultTeamsInDetails
+                        && (!isCurrentUserConfirmedParticipant || (slotIndex === 0 && detailsOrganizerInMatch)));
+                    const playerContent = (
+                      <>
+                        <div
+                          className={`details-result-set-pairing-player-ring${playerLevelLabel ? " has-level" : ""}`}
+                          style={{ "--player-ring-progress": playerRingProgressDeg } as CSSProperties}
+                        >
+                          <AvatarWithInitialsFallback
+                            src={player?.photo}
+                            alt={player?.name || "Игрок"}
+                            imageClassName="details-result-set-pairing-player-avatar"
+                            fallbackClassName="details-result-set-pairing-player-avatar details-result-set-pairing-player-avatar-fallback"
+                            fallbackText={getPlayerInitials(player?.name || "") || "+"}
+                          />
+                        </div>
+                        {playerLevelLabel && (
+                          <div className="details-result-set-pairing-player-level">{playerLevelLabel}</div>
+                        )}
+                        <div className="details-result-set-pairing-player-name">{player?.name || "Свободно"}</div>
+                      </>
+                    );
 
-                  return (
-                    <div key={playerKey} className="details-result-set-pairing-player">
-                      {playerContent}
-                    </div>
-                  );
-                };
+                    if (isEditableStartPairing) {
+                      return (
+                        <button
+                          key={`slot-${slotIndex}`}
+                          type="button"
+                          className={`details-result-set-pairing-player details-result-set-pairing-player-action${player ? "" : " empty"}${slotIsOrganizerLocked ? " locked" : ""}`}
+                          onClick={() => {
+                            void handleTeamSlotTap(slotIndex);
+                          }}
+                          disabled={slotDisabled}
+                        >
+                          {playerContent}
+                        </button>
+                      );
+                    }
+
+                    return (
+                      <div key={playerKey} className="details-result-set-pairing-player">
+                        {playerContent}
+                      </div>
+                    );
+                  };
 
                 return (
                   <div className="details-result-set-row" key={`set-${index + 1}`}>
@@ -11484,7 +15271,7 @@ export default function GamesPage({
                             </div>
                           )}
                         </div>
-                        {isEditableStartPairing && detailsTeamMenuSlotIndex != null && canManagePlayersInDetails && (
+                        {isEditableStartPairing && detailsTeamMenuSlotIndex != null && canEditMatchResultTeamsInDetails && (
                           <div className="details-team-picker details-result-team-picker">
                             <div className="details-team-picker-title">
                               {`Слот ${detailsTeamMenuSlotIndex + 1}: выберите игрока`}
@@ -11493,6 +15280,9 @@ export default function GamesPage({
                               {detailsTeamMenuOptions.map((player) => {
                                 const playerKey = getPadelPlayerIdentityKey(player) || `${player.name}-${player.phone}`;
                                 const isWaitlistPlayer = detailsWaitlist.some((item) => (
+                                  getPadelPlayerIdentityKey(item) === getPadelPlayerIdentityKey(player)
+                                ));
+                                const isPoolPlayer = !isWaitlistPlayer && detailsPlayerPool.some((item) => (
                                   getPadelPlayerIdentityKey(item) === getPadelPlayerIdentityKey(player)
                                 ));
                                 return (
@@ -11507,6 +15297,7 @@ export default function GamesPage({
                                   >
                                     {player.name || "Игрок"}
                                     {isWaitlistPlayer ? " · лист ожидания" : ""}
+                                    {isPoolPlayer ? " · пул игроков" : ""}
                                   </button>
                                 );
                               })}
@@ -11551,6 +15342,21 @@ export default function GamesPage({
                         }}
                       />
                     </div>
+                    {canEditMatchResult
+                      && detailsMatchResultSets.length > 1
+                      && setItem.left.trim() === ""
+                      && setItem.right.trim() === "" && (
+                        <button
+                          type="button"
+                          className="details-result-pair-toggle"
+                          onClick={() => {
+                            handleRemoveMatchResultSet(index);
+                          }}
+                          disabled={updatingGameMeta}
+                        >
+                          Удалить пустой сет
+                        </button>
+                      )}
                   {index === detailsLastCompletedMatchResultSetIndex
                     && index + 1 < detailsMatchResultSets.length
                     && detailsPairingOptions.length > 1
@@ -11597,11 +15403,30 @@ export default function GamesPage({
               })}
               </div>
 
+              {canEditMatchResult && (
+                <div className="details-result-pair-change">
+                  <button
+                    type="button"
+                    className="details-result-pair-toggle"
+                    onClick={handleAddEmptyMatchResultSet}
+                    disabled={updatingGameMeta}
+                  >
+                    Добавить пустой сет
+                  </button>
+                </div>
+              )}
+
               {matchResultPhotosBlock}
 
               {matchResultRatingImpactBlock}
 
-              {!isMatchResultAgreed && detailsCompletedMatchResultSets.length > 0 && (
+              {canEditMatchResult && detailsMatchResultValidationError && hasAnyMatchResultScoreInput && (
+                <div className="details-result-note">
+                  {detailsMatchResultValidationError}
+                </div>
+              )}
+
+              {canEditMatchResult && detailsCompletedMatchResultSets.length > 0 && (
                 <button
                   type="button"
                   className="section-cta section-cta-secondary details-result-submit"
@@ -11611,6 +15436,18 @@ export default function GamesPage({
                   disabled={!canSubmitMatchResult}
                 >
                   {updatingGameMeta ? "Сохраняем..." : "Отправить на согласование"}
+                </button>
+              )}
+              {canConfirmMatchResult && (
+                <button
+                  type="button"
+                  className="section-cta section-cta-secondary details-result-confirm"
+                  onClick={() => {
+                    void handleConfirmMatchResult();
+                  }}
+                  disabled={updatingGameMeta}
+                >
+                  {updatingGameMeta ? "Сохраняем..." : "Подтвердить результат"}
                 </button>
               )}
               {canDisputeMatchResult && (
@@ -11625,29 +15462,97 @@ export default function GamesPage({
                   {updatingGameMeta ? "Сохраняем..." : "Оспорить результат"}
                 </button>
               )}
+              {canAcceptMatchResultCorrection && (
+                <button
+                  type="button"
+                  className="section-cta section-cta-secondary details-result-confirm"
+                  onClick={() => {
+                    void handleAcceptMatchResultCorrection();
+                  }}
+                  disabled={updatingGameMeta}
+                >
+                  {updatingGameMeta ? "Сохраняем..." : "Принять исправление"}
+                </button>
+              )}
             </div>
           )}
 
           {!isCurrentUserConfirmedParticipant && !isCurrentUserOrganizerByDetails && (
             <div className="details-action-row">
-              <button
-                className="section-cta"
-                type="button"
-                onClick={() => {
-                  void handleJoinCurrentUserFromDetails();
-                }}
-                disabled={!canCurrentUserJoinGameInDetails}
-              >
-                {isCurrentUserInWaitlist
-                  ? "Вы в листе ожидания"
-                  : updatingGameRoster
-                    ? "Сохраняем..."
-                    : detailsHasFreeSlots
-                      ? "Присоединиться к игре"
-                      : isDetailsWaitlistEnabled
-                        ? "В лист ожидания"
-                        : "Нет мест"}
-              </button>
+              {isDetailsSplitPaymentGame ? (
+                detailsCurrentUserPendingSplitPayment && !detailsCurrentUserPendingSplitPaymentIsExpired ? (
+                  <div className="game-join-split-pay-actions">
+                    <div className="game-empty">
+                      {detailsCurrentUserPendingSplitPaymentCountdownLabel
+                        ? `Ожидаем оплату участия · осталось ${detailsCurrentUserPendingSplitPaymentCountdownLabel}`
+                        : "Ожидаем оплату участия"}
+                    </div>
+                    <button
+                      className="game-join-split-pay-option game-join-split-pay-option-primary"
+                      type="button"
+                      disabled={!detailsCurrentUserPendingSplitPaymentPaymentUrl}
+                      onClick={() => {
+                        if (!detailsCurrentUserPendingSplitPaymentPaymentUrl) return;
+                        navigateToExternalUrl(detailsCurrentUserPendingSplitPaymentPaymentUrl);
+                      }}
+                    >
+                      Оплатить
+                    </button>
+                    <button
+                      className="game-join-split-pay-option"
+                      type="button"
+                      disabled={!canCurrentUserLeaveGameInDetails}
+                      onClick={() => {
+                        void handleLeaveCurrentUserFromDetails();
+                      }}
+                    >
+                      Покинуть игру
+                    </button>
+                  </div>
+                ) : (
+                  <div className="game-join-split-pay-actions">
+                    <button
+                      className="game-join-split-pay-option"
+                      type="button"
+                      disabled={!canCurrentUserJoinSplitGameInDetails}
+                      onClick={() => {
+                        void handleSplitJoinCurrentUserFromDetails("subscription");
+                      }}
+                    >
+                      {detailsSplitJoinSubscriptionLabel}
+                    </button>
+                    <button
+                      className="game-join-split-pay-option game-join-split-pay-option-primary"
+                      type="button"
+                      disabled={!canCurrentUserJoinSplitGameInDetails}
+                      onClick={() => {
+                        void handleSplitJoinCurrentUserFromDetails("one_time");
+                      }}
+                    >
+                      {detailsSplitJoinOneTimeLabel}
+                    </button>
+                  </div>
+                )
+              ) : (
+                <button
+                  className="section-cta"
+                  type="button"
+                  onClick={() => {
+                    void handleJoinCurrentUserFromDetails();
+                  }}
+                  disabled={!canCurrentUserJoinGameInDetails}
+                >
+                  {isCurrentUserInWaitlist
+                    ? "Вы в листе ожидания"
+                    : updatingGameRoster
+                      ? "Сохраняем..."
+                      : detailsHasFreeSlots
+                        ? "Присоединиться к игре"
+                        : isDetailsWaitlistEnabled
+                          ? "В лист ожидания"
+                          : "Нет мест"}
+                </button>
+              )}
               <button
                 className="section-cta section-cta-secondary"
                 type="button"
@@ -11705,16 +15610,18 @@ export default function GamesPage({
             </>
           )}
 
-          {!isMatchResultAgreed && (canCurrentUserInviteInDetails || canCurrentUserOpenDetailsChat) && (
+          {!isMatchResultAgreed
+          && ((!showDetailsRosterInviteRow && canCurrentUserInviteInDetails) || canCurrentUserOpenDetailsChat)
+          && (
             <div className="details-action-row">
-              {canCurrentUserInviteInDetails && (
+              {!showDetailsRosterInviteRow && canCurrentUserInviteInDetails && (
                 <button
                   className="section-cta details-action-invite"
                   onClick={handleCopyInvite}
                   type="button"
                   disabled={!inviteLink}
                 >
-                  {inviteCopied ? "Ссылка скопирована" : "Пригласить в игру"}
+                  {detailsInviteActionLabel}
                 </button>
               )}
 
@@ -11792,129 +15699,261 @@ export default function GamesPage({
       </div>
 
       <div className="game-stack">
-        <button
-          className={`game-card game-card-place-step game-card-step1 ${isBookingPresetMode ? "disabled" : ""}`}
-          onClick={() => {
-            if (isBookingPresetMode) return;
-            setStep("place");
-          }}
-          type="button"
-          disabled={isBookingPresetMode}
-        >
-          <span className="game-card-step-corner">Шаг 1</span>
-          <div className="game-card-row">
-            <div>
-              <div className="game-card-title">
-                {isBookingPresetMode
-                  ? bookingPreset.studioName
-                  : (studio ? studio.name : "Выберите станцию")}
+        {usePublicCreateWizard ? (
+          <div className="team-card game-create-summary-card game-create-summary-card--review">
+            <div className="game-card-row game-create-summary-row">
+              <div className="game-create-summary-copy">
+                <div className="game-card-title">{studio ? studio.name : "Станция"}</div>
+                <div className="game-create-summary-meta-row">
+                  <span className="game-create-summary-meta-item">
+                    <span className="game-create-summary-meta-icon" aria-hidden="true">
+                      {renderPublicCreateSummaryIcon("place")}
+                    </span>
+                    <span>{publicCreateSummaryCourtLabel}</span>
+                  </span>
+                  {dateLabel && (
+                    <>
+                      <span className="game-create-summary-meta-dot" aria-hidden="true">•</span>
+                      <span className="game-create-summary-meta-item">
+                        <span className="game-create-summary-meta-icon" aria-hidden="true">
+                          {renderPublicCreateSummaryIcon("calendar")}
+                        </span>
+                        <span>{dateLabel}</span>
+                      </span>
+                    </>
+                  )}
+                </div>
+                <div className="game-create-summary-meta-row">
+                  {publicCreateSummaryTimeLabel && (
+                    <span className="game-create-summary-meta-item">
+                      <span className="game-create-summary-meta-icon" aria-hidden="true">
+                        {renderPublicCreateSummaryIcon("clock")}
+                      </span>
+                      <span>{publicCreateSummaryTimeLabel}</span>
+                    </span>
+                  )}
+                  {publicCreateSummaryTimeLabel && (
+                    <span className="game-create-summary-meta-dot" aria-hidden="true">•</span>
+                  )}
+                  <span className="game-create-summary-meta-item">
+                    <span className="game-create-summary-meta-icon" aria-hidden="true">
+                      {renderPublicCreateSummaryIcon("duration")}
+                    </span>
+                    <span>{`${duration} мин`}</span>
+                  </span>
+                </div>
+                <div className="game-create-summary-meta-row game-create-summary-meta-row--payment">
+                  <span className="game-create-summary-meta-item">
+                    <span className="game-create-summary-meta-icon" aria-hidden="true">
+                      {renderPublicCreateSummaryIcon("players")}
+                    </span>
+                    <span>{publicCreateSummaryPaymentLine}</span>
+                  </span>
+                </div>
               </div>
-              {isBookingPresetMode && (
-                <div className="game-card-sub">Станция фиксирована по брони</div>
-              )}
-              {!isBookingPresetMode && studio && (
-                <div className="game-card-sub">{studio.address}</div>
-              )}
+              <button
+                type="button"
+                className="game-summary-edit-button"
+                onClick={() => setStep("time")}
+              >
+                Изменить
+              </button>
             </div>
-            <span className="game-card-arrow">›</span>
           </div>
-        </button>
+        ) : (
+          <>
+            <button
+              className={`game-card game-card-place-step game-card-step1 ${isBookingPresetMode ? "disabled" : ""}`}
+              onClick={() => {
+                if (isBookingPresetMode) return;
+                setStep("place");
+              }}
+              type="button"
+              disabled={isBookingPresetMode}
+            >
+              <span className="game-card-step-corner">Шаг 1</span>
+              <div className="game-card-row">
+                <div>
+                  <div className="game-card-title">
+                    {isBookingPresetMode
+                      ? bookingPreset.studioName
+                      : (studio ? studio.name : "Выберите станцию")}
+                  </div>
+                  {isBookingPresetMode && (
+                    <div className="game-card-sub">Станция фиксирована по брони</div>
+                  )}
+                  {!isBookingPresetMode && studio && (
+                    <div className="game-card-sub">{studio.address}</div>
+                  )}
+                </div>
+                <span className="game-card-arrow">›</span>
+              </div>
+            </button>
 
-        <button
-          className={`game-card game-card-place-step ${
-            (isBookingPresetMode || studio) ? "" : "disabled"
-          } ${isBookingPresetMode ? "disabled" : ""}`}
-          onClick={() => {
-            if (isBookingPresetMode || !studio) return;
-            setStep("time");
-          }}
-          type="button"
-          disabled={isBookingPresetMode || !studio}
-        >
-          <span className="game-card-step-corner">Шаг 2</span>
-          <div className="game-card-row">
-            <div>
-              <div className="game-card-title">
-                {isBookingPresetMode
-                  ? (bookingPresetDateLabel ? `Забронировано на ${bookingPresetDateLabel}` : "Бронь выбрана")
-                  : (time && selectedDate ? `Забронировано на ${dateLabel}` : "Выбери корт и время")}
+            <button
+              className={`game-card game-card-place-step ${
+                (isBookingPresetMode || studio) ? "" : "disabled"
+              } ${isBookingPresetMode ? "disabled" : ""}`}
+              onClick={() => {
+                if (isBookingPresetMode || !studio) return;
+                setStep("time");
+              }}
+              type="button"
+              disabled={isBookingPresetMode || !studio}
+            >
+              <span className="game-card-step-corner">Шаг 2</span>
+              <div className="game-card-row">
+                <div>
+                  <div className="game-card-title">
+                    {isBookingPresetMode
+                      ? (bookingPresetDateLabel ? `Забронировано на ${bookingPresetDateLabel}` : "Бронь выбрана")
+                      : (time && selectedDate ? `Забронировано на ${dateLabel}` : "Выбери корт и время")}
+                  </div>
+                  {isBookingPresetMode && (
+                    <div className="game-card-sub">{bookingPresetMeta}</div>
+                  )}
+                  {!isBookingPresetMode && time && selectedCourt && (
+                    <div className="game-card-sub">{`${time}, ${duration} мин · ${selectedCourt.name}`}</div>
+                  )}
+                </div>
+                <span className="game-card-arrow">›</span>
               </div>
-              {isBookingPresetMode && (
-                <div className="game-card-sub">{bookingPresetMeta}</div>
-              )}
-              {!isBookingPresetMode && time && selectedCourt && (
-                <div className="game-card-sub">{`${time}, ${duration} мин · ${selectedCourt.name}`}</div>
-              )}
-            </div>
-            <span className="game-card-arrow">›</span>
-          </div>
-        </button>
+            </button>
+          </>
+        )}
 
         {!isSinglesGame && (
-          <div className="game-toggle-row">
-            <div>
-              <div className="game-toggle-title">Игра на уровень</div>
-              <div className="game-toggle-sub">{ratingSubLabel}</div>
-            </div>
-            <button
-              className={`switch ${ratingGame ? "on" : ""}`}
-              onClick={() => setRatingGame((v) => !v)}
-              type="button"
-              aria-label="toggle rating"
-            >
-              <span />
-            </button>
-          </div>
-        )}
+          usePublicCreateWizard ? (
+            <div className="team-card game-create-level-card">
+              <div className="game-card-title">{ratingGame ? "Игра на уровень" : "Обычная игра"}</div>
+              <button
+                type="button"
+                className={`game-create-level-option ${!ratingGame ? "selected" : ""}`}
+                onClick={() => setRatingGame(false)}
+                aria-pressed={!ratingGame}
+              >
+                <span className="game-payment-choice-radio" aria-hidden="true" />
+                <span className="game-create-level-option-copy">
+                  <strong className="game-create-level-option-title">Обычная игра</strong>
+                  <span className="game-create-level-option-description">Результат не влияет на уровень участников</span>
+                </span>
+              </button>
 
-        {effectiveRatingGame && (
-          <div className="rating-card">
-            <div className="game-card-title">Допустимый уровень соперников</div>
-            <div className="rating-slider">
-              <div
-                className="rating-rail"
-                style={
-                  {
-                    "--min": `${minPercent}%`,
-                    "--max": `${maxPercent}%`,
-                  } as CSSProperties
-                }
-              />
-              <input
-                className="rating-range rating-range-min"
-                type="range"
-                min={0}
-                max={RATING_LABELS.length - 1}
-                value={minRating}
-                onChange={(e) =>
-                  setMinRating(Math.min(Number(e.target.value), maxRating))
-                }
-              />
-              <input
-                className="rating-range rating-range-max"
-                type="range"
-                min={0}
-                max={RATING_LABELS.length - 1}
-                value={maxRating}
-                onChange={(e) =>
-                  setMaxRating(Math.max(Number(e.target.value), minRating))
-                }
-              />
-              <div className="rating-labels">
-                {RATING_LABELS.map((label, idx) => (
-                  <span
-                    key={label}
-                    className={idx >= minRating && idx <= maxRating ? "active" : ""}
-                  >
-                    {label}
+              <div className={`game-create-level-option game-create-level-option--rating ${ratingGame ? "selected" : ""}`}>
+                <button
+                  type="button"
+                  className="game-create-level-option-header"
+                  onClick={() => setRatingGame(true)}
+                  aria-pressed={ratingGame}
+                >
+                  <span className="game-payment-choice-radio" aria-hidden="true" />
+                  <span className="game-create-level-option-copy">
+                    <strong className="game-create-level-option-title">Игра на уровень</strong>
+                    <span className="game-create-level-option-description">Результат влияет на уровень участников</span>
                   </span>
-                ))}
+                </button>
+
+                {ratingGame && (
+                  <div className="game-create-level-picker-panel">
+                    <div className="game-create-level-range-panel">
+                      <div className="game-create-level-range-strip-wrap">
+                        <div className="game-create-level-range-strip" role="group" aria-label="Допустимый уровень игроков">
+                          {RATING_LABELS.map((label, index) => {
+                            const selected = index >= minRating && index <= maxRating;
+                            return (
+                              <button
+                                key={`public-create-rating-segment-${label}`}
+                                type="button"
+                                className={`game-create-level-range-segment ${selected ? "is-selected" : ""}`}
+                                onClick={() => handlePublicCreateRatingSegmentSelect(index)}
+                                aria-pressed={selected}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="game-create-level-precise-trigger"
+                      onClick={() => setPublicCreatePreciseRatingModalOpen(true)}
+                    >
+                      настроить точнее
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
-          </div>
+          ) : (
+            <>
+              <div className="game-toggle-row">
+                <div>
+                  <div className="game-toggle-title">Игра на уровень</div>
+                  <div className="game-toggle-sub">{ratingSubLabel}</div>
+                </div>
+                <button
+                  className={`switch ${ratingGame ? "on" : ""}`}
+                  onClick={() => setRatingGame((v) => !v)}
+                  type="button"
+                  aria-label="toggle rating"
+                >
+                  <span />
+                </button>
+              </div>
+
+              {effectiveRatingGame && (
+                <div className="rating-card">
+                  <div className="game-card-title">Допустимый уровень соперников</div>
+                  <div className="rating-slider">
+                    <div
+                      className="rating-rail"
+                      style={
+                        {
+                          "--min": `${minPercent}%`,
+                          "--max": `${maxPercent}%`,
+                        } as CSSProperties
+                      }
+                    />
+                    <input
+                      className="rating-range rating-range-min"
+                      type="range"
+                      min={0}
+                      max={RATING_LABELS.length - 1}
+                      value={minRating}
+                      onChange={(e) =>
+                        setMinRating(Math.min(Number(e.target.value), maxRating))
+                      }
+                    />
+                    <input
+                      className="rating-range rating-range-max"
+                      type="range"
+                      min={0}
+                      max={RATING_LABELS.length - 1}
+                      value={maxRating}
+                      onChange={(e) =>
+                        setMaxRating(Math.max(Number(e.target.value), minRating))
+                      }
+                    />
+                    <div className="rating-labels">
+                      {RATING_LABELS.map((label, idx) => (
+                        <span
+                          key={label}
+                          className={idx >= minRating && idx <= maxRating ? "active" : ""}
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          )
         )}
 
-        {!isBookingPresetMode && (
+        {!isBookingPresetMode && !usePublicCreateWizard && (
           <div className="team-card">
             <div className="game-card-title">Команда</div>
             <div className="team-row">
@@ -11983,28 +16022,87 @@ export default function GamesPage({
           </div>
         )}
 
-        <div className="game-toggle-row">
-          <div>
-            <div className="game-toggle-title">
-              {isPrivate ? "Приватная" : "Открытая игра"}
-            </div>
-            <div className="game-toggle-sub">
-              {isPrivate
-                ? "Присоединиться смогут только те, у кого есть ссылка"
-                : "Игра будет опубликована в общем списке и доступна другим игрокам для присоединения."}
+        {usePublicCreateWizard ? (
+          <div className="team-card game-create-visibility-card">
+            <div className="game-card-title">Кто сможет присоединиться?</div>
+            <div className="game-create-visibility-card-intro">{publicCreateVisibilityIntroLabel}</div>
+            <div className="game-create-visibility-options">
+              <button
+                type="button"
+                className={`game-payment-choice-card game-visibility-option game-visibility-option--public ${!isPrivate ? "selected" : ""}`}
+                onClick={() => setIsPrivate(false)}
+              >
+                <span className="game-payment-choice-radio" aria-hidden="true" />
+                <span className="game-visibility-option-copy">
+                  <strong className="game-visibility-option-title">Открытая игра</strong>
+                  <span className="game-visibility-option-description-row">
+                    <span className="game-visibility-option-inline-icon" aria-hidden="true">
+                      {renderPublicCreateVisibilityFeatureIcon("public")}
+                    </span>
+                    <span className="game-visibility-option-description">{publicCreateVisibilityOpenDescription}</span>
+                  </span>
+                  <span className="game-visibility-option-pill">
+                    <span className="game-visibility-option-pill-icon" aria-hidden="true">
+                      {renderPublicCreateVisibilityPillIcon("public")}
+                    </span>
+                    <span>{publicCreateVisibilityOpenPillLabel}</span>
+                  </span>
+                </span>
+                <span className="game-visibility-option-visual" aria-hidden="true">
+                  {renderPublicCreateVisibilityVisual("public")}
+                </span>
+              </button>
+              <button
+                type="button"
+                className={`game-payment-choice-card game-visibility-option game-visibility-option--private ${isPrivate ? "selected" : ""}`}
+                onClick={() => setIsPrivate(true)}
+              >
+                <span className="game-payment-choice-radio" aria-hidden="true" />
+                <span className="game-visibility-option-copy">
+                  <strong className="game-visibility-option-title">Приватная игра</strong>
+                  <span className="game-visibility-option-description-row">
+                    <span className="game-visibility-option-inline-icon" aria-hidden="true">
+                      {renderPublicCreateVisibilityFeatureIcon("private")}
+                    </span>
+                    <span className="game-visibility-option-description">{publicCreateVisibilityPrivateDescription}</span>
+                  </span>
+                  <span className="game-visibility-option-pill">
+                    <span className="game-visibility-option-pill-icon" aria-hidden="true">
+                      {renderPublicCreateVisibilityPillIcon("private")}
+                    </span>
+                    <span>{publicCreateVisibilityPrivatePillLabel}</span>
+                  </span>
+                </span>
+                <span className="game-visibility-option-visual" aria-hidden="true">
+                  {renderPublicCreateVisibilityVisual("private")}
+                </span>
+              </button>
             </div>
           </div>
-          <button
-            className={`switch ${!isPrivate ? "on" : ""}`}
-            onClick={() => setIsPrivate((v) => !v)}
-            type="button"
-            aria-label="toggle game visibility"
-            aria-pressed={!isPrivate}
-          >
-            <span />
-          </button>
-        </div>
-        {!isBookingPresetMode && (
+        ) : (
+          <div className="game-toggle-row">
+            <div>
+              <div className="game-toggle-title">
+                {isPrivate ? "Приватная" : "Открытая игра"}
+              </div>
+              <div className="game-toggle-sub">
+                {isPrivate
+                  ? "Присоединиться смогут только те, у кого есть ссылка"
+                  : "Игра будет опубликована в общем списке и доступна другим игрокам для присоединения."}
+              </div>
+            </div>
+            <button
+              className={`switch ${!isPrivate ? "on" : ""}`}
+              onClick={() => setIsPrivate((v) => !v)}
+              type="button"
+              aria-label="toggle game visibility"
+              aria-pressed={!isPrivate}
+            >
+              <span />
+            </button>
+          </div>
+        )}
+        {!isBookingPresetMode && !usePublicCreateWizard && (
           <div className="game-toggle-row">
             <div>
               <div className="game-toggle-title">Тип оплаты</div>
@@ -12020,13 +16118,13 @@ export default function GamesPage({
             </button>
           </div>
         )}
-        {splitPaymentAvailabilityLabel && (
+        {!usePublicCreateWizard && splitPaymentAvailabilityLabel && (
           <div className={`game-empty${splitPaymentAvailabilityLabelIsError ? " game-pay-error" : ""}`}>
             {splitPaymentAvailabilityLabel}
           </div>
         )}
 
-        {ENABLE_GAME_COMMUNITY_AUTOPUBLISH && (
+        {ENABLE_GAME_COMMUNITY_AUTOPUBLISH && (!usePublicCreateWizard || isPrivate) && (
           <div className="team-card game-autopublish-panel">
             <div className="game-card-title">Публикация в сообщества</div>
             <div className="game-autopublish-row" role="group" aria-label="Выбор сообществ для публикации">
@@ -12071,13 +16169,17 @@ export default function GamesPage({
 
         {showPublicationFields && (
           <div className="team-card game-publish-fields">
-            <div className="game-publish-fields-note">
-              {publicationFieldsNote}
-            </div>
-            <div className="game-card-title">Данные для публикации</div>
+            {!usePublicCreateWizard && (
+              <div className="game-publish-fields-note">
+                {publicationFieldsNote}
+              </div>
+            )}
+            {!usePublicCreateWizard && <div className="game-card-title">Данные для публикации</div>}
             <div className="game-publish-fields-stack">
               <label className="game-publish-field">
-                <span className="game-publish-field-label">Название игры</span>
+                <span className="game-publish-field-label">
+                  {usePublicCreateWizard ? "Название игры для публикации" : "Название игры"}
+                </span>
                 <input
                   type="text"
                   className="game-input"
@@ -12100,24 +16202,80 @@ export default function GamesPage({
                   required
                 />
               </label>
-              <label className="game-publish-field">
-                <span className="game-publish-field-label">Стоимость присоединения к игре</span>
-                <input
-                  type="text"
-                  className="game-input"
-                  placeholder={splitPaymentSelected ? "Рассчитывается автоматически" : "Например, 2000"}
-                  value={gameJoinPriceDraft}
-                  onChange={(event) => {
-                    if (splitPaymentSelected) return;
-                    const nextValue = event.target.value.replace(/[^\d]/g, "").replace(/^0+(?=\d)/, "");
-                    setGameJoinPriceDraft(nextValue);
-                  }}
-                  inputMode="numeric"
-                  maxLength={8}
-                  readOnly={splitPaymentSelected}
-                />
-              </label>
+              {shouldShowPublicationJoinPriceField && (
+                <label className="game-publish-field">
+                  <span className="game-publish-field-label">Стоимость присоединения к игре</span>
+                  <input
+                    type="text"
+                    className="game-input"
+                    placeholder={splitPaymentSelected ? "Рассчитывается автоматически" : "Например, 2000"}
+                    value={gameJoinPriceDraft}
+                    onChange={(event) => {
+                      if (splitPaymentSelected) return;
+                      const nextValue = event.target.value.replace(/[^\d]/g, "").replace(/^0+(?=\d)/, "");
+                      setGameJoinPriceDraft(nextValue);
+                    }}
+                    inputMode="numeric"
+                    maxLength={8}
+                    readOnly={splitPaymentSelected}
+                  />
+                </label>
+              )}
             </div>
+          </div>
+        )}
+
+        {usePublicCreateWizard && splitPaymentSelected && (
+          <div className="team-card game-create-payment-method-card">
+            <div className="game-card-title">Способ оплаты записи</div>
+            {splitHasSubscriptionPaymentOptions && (
+              <>
+                <button
+                  type="button"
+                  className={`game-payment-choice-card ${splitCheckoutMode === "subscription" ? "selected" : ""}`}
+                  onClick={() => setSplitCheckoutMode("subscription")}
+                >
+                  <span className="game-payment-choice-radio" aria-hidden="true" />
+                  <span className="game-payment-choice-copy">
+                    <strong>Списать с абонемента</strong>
+                    <span>{publicCreatePaymentMethodHelperText}</span>
+                  </span>
+                </button>
+                {splitCheckoutMode === "subscription" && (
+                  <div className="game-split-subscription-options">
+                    <div className="game-split-subscription-title">Доступна оплата по подписке</div>
+                    {splitSubscriptionPaymentOptions.map((option) => (
+                      <button
+                        key={option.subscriptionId}
+                        type="button"
+                        className={`game-split-subscription-option${selectedSplitSubscriptionId === option.subscriptionId ? " selected" : ""}`}
+                        onClick={() => setSelectedSplitSubscriptionId(option.subscriptionId)}
+                        disabled={splitSubscriptionsLoading}
+                      >
+                        <span>{option.name}</span>
+                        <strong>{option.balanceLabel}</strong>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+            <button
+              type="button"
+              className={`game-payment-choice-card ${splitCheckoutMode === "one_time" ? "selected" : ""}`}
+              onClick={() => setSplitCheckoutMode("one_time")}
+            >
+              <span className="game-payment-choice-radio" aria-hidden="true" />
+              <span className="game-payment-choice-copy">
+                <strong>Оплатить картой</strong>
+                <span>{publicCreateSplitShareLabel}</span>
+              </span>
+            </button>
+            {shouldShowPublicSplitPaymentAvailabilityLabel && (
+              <div className={`game-empty${splitPaymentAvailabilityLabelIsError ? " game-pay-error" : ""}`}>
+                {splitPaymentAvailabilityLabel}
+              </div>
+            )}
           </div>
         )}
 
@@ -12130,21 +16288,47 @@ export default function GamesPage({
                 </div>
               </div>
             )}
-            {splitPaymentSelected && splitHasEligibleSubscriptions && (
-              <button
-                className="section-cta section-cta-secondary"
-                onClick={() => {
-                  void handleSplitGamePay("subscription");
-                }}
-                type="button"
-                disabled={!canProceedToPayment || loadingPay || splitSubscriptionsLoading}
-              >
-                {loadingPay ? "Списать с абонемента · подготовка..." : "Списать с абонемента"}
-              </button>
+            {!usePublicCreateWizard && splitPaymentSelected && splitHasEligibleSubscriptions && (
+              splitHasSubscriptionPaymentOptions
+                ? (
+                  <div className="game-split-subscription-options">
+                    <div className="game-split-subscription-title">Выберите абонемент для списания</div>
+                    {splitSubscriptionPaymentOptions.map((option) => (
+                      <button
+                        key={option.subscriptionId}
+                        className="game-split-subscription-option"
+                        onClick={() => {
+                          void handleSplitGamePay("subscription", option.subscriptionId);
+                        }}
+                        type="button"
+                        disabled={!canProceedToPayment || loadingPay || splitSubscriptionsLoading}
+                      >
+                        <span>{`Списать с «${option.name}»`}</span>
+                        <strong>{option.balanceLabel}</strong>
+                      </button>
+                    ))}
+                  </div>
+                )
+                : (
+                  <button
+                    className="section-cta section-cta-secondary"
+                    onClick={() => {
+                      void handleSplitGamePay("subscription");
+                    }}
+                    type="button"
+                    disabled={!canProceedToPayment || loadingPay || splitSubscriptionsLoading}
+                  >
+                    {loadingPay ? "Списать с абонемента · подготовка..." : "Списать с абонемента"}
+                  </button>
+                )
             )}
             <button
               className={`game-submit game-submit-booking game-submit-inline ${canProceedToPayment ? "active" : ""}`}
               onClick={() => {
+                if (usePublicCreateWizard) {
+                  handleCreateSubmit();
+                  return;
+                }
                 if (splitPaymentSelected) {
                   void handleSplitGamePay(splitHasEligibleSubscriptions ? "one_time" : undefined);
                 } else {
@@ -12154,7 +16338,9 @@ export default function GamesPage({
               type="button"
               disabled={!canProceedToPayment || loadingPay}
             >
-              <span className="game-submit-main">{paymentSubmitTitle}</span>
+              <span className="game-submit-main">
+                {usePublicCreateWizard ? publicCreateFinalSubmitTitle : paymentSubmitTitle}
+              </span>
               <span className="game-submit-meta">{paymentStationCourt}</span>
               <span className="game-submit-meta">{paymentTimeRange}</span>
             </button>
@@ -12196,9 +16382,11 @@ export default function GamesPage({
             type="button"
             disabled={!inviteLink}
           >
-            {inviteCopied
-              ? "Ссылка скопирована"
-              : (inviteLink ? "Скопировать ссылку приглашения" : "Ссылка появится после создания")}
+            {inviteFeedback === "shared"
+              ? "Ссылка отправлена"
+              : inviteFeedback === "copied"
+                ? "Ссылка скопирована"
+                : (inviteLink ? "Скопировать ссылку приглашения" : "Ссылка появится после создания")}
           </button>
         )}
       </div>
@@ -12216,6 +16404,84 @@ export default function GamesPage({
       {isBookingPresetMode && gameRecordError && (
         <div className="game-empty game-pay-error">{gameRecordError}</div>
       )}
+
+      <Modal
+        isOpen={publicCreatePreciseRatingModalOpen}
+        onClose={() => {
+          setPublicCreatePreciseRatingModalOpen(false);
+        }}
+        title="Настроить точнее"
+        variant="dialog"
+        bodyClassName="game-create-precise-rating-modal-body"
+      >
+        <div className="game-create-precise-rating-modal">
+          <div className="game-create-precise-rating-modal-grid">
+            <div className="game-create-precise-rating-modal-group">
+              <div className="game-create-precise-rating-modal-group-title">От</div>
+              <div className="game-create-precise-rating-modal-row">
+                <select
+                  className="game-input"
+                  value={publicCreatePreciseRatingRange.min.grade}
+                  onChange={(event) => {
+                    handlePublicCreatePreciseRatingBoundChange("min", "grade", event.target.value);
+                  }}
+                  aria-label="Минимальная буква уровня"
+                >
+                  {PRECISE_RATING_GRADE_OPTIONS.map((grade) => (
+                    <option key={`public-create-precise-min-grade-${grade}`} value={grade}>{grade}</option>
+                  ))}
+                </select>
+                <select
+                  className="game-input"
+                  value={String(publicCreatePreciseRatingRange.min.level)}
+                  onChange={(event) => {
+                    handlePublicCreatePreciseRatingBoundChange("min", "level", event.target.value);
+                  }}
+                  aria-label="Минимальная цифра уровня"
+                >
+                  {PRECISE_RATING_LEVEL_OPTIONS.map((level) => (
+                    <option key={`public-create-precise-min-level-${level}`} value={level}>{level}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="game-create-precise-rating-modal-group">
+              <div className="game-create-precise-rating-modal-group-title">До</div>
+              <div className="game-create-precise-rating-modal-row">
+                <select
+                  className="game-input"
+                  value={publicCreatePreciseRatingRange.max.grade}
+                  onChange={(event) => {
+                    handlePublicCreatePreciseRatingBoundChange("max", "grade", event.target.value);
+                  }}
+                  aria-label="Максимальная буква уровня"
+                >
+                  {PRECISE_RATING_GRADE_OPTIONS.map((grade) => (
+                    <option key={`public-create-precise-max-grade-${grade}`} value={grade}>{grade}</option>
+                  ))}
+                </select>
+                <select
+                  className="game-input"
+                  value={String(publicCreatePreciseRatingRange.max.level)}
+                  onChange={(event) => {
+                    handlePublicCreatePreciseRatingBoundChange("max", "level", event.target.value);
+                  }}
+                  aria-label="Максимальная цифра уровня"
+                >
+                  {PRECISE_RATING_LEVEL_OPTIONS.map((level) => (
+                    <option key={`public-create-precise-max-level-${level}`} value={level}>{level}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div className="game-create-precise-rating-modal-summary">
+            {publicCreateRatingSummaryLabel} <strong>{publicCreatePreciseRatingSummaryValue}</strong>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         isOpen={promoModalOpen}

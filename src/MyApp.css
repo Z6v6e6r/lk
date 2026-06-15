@@ -11,6 +11,12 @@
   --border: #E5E7EB;
   --red: #EF4444;
   --green: #22C55E;
+  --friendship-accent: #B8F467;
+  --friendship-tint: rgba(184, 244, 103, 0.18);
+  --friendship-tint-strong: rgba(184, 244, 103, 0.3);
+  --friendship-border: rgba(141, 176, 58, 0.36);
+  --friendship-surface: #F5FBF7;
+  --subscription-bubble-fill: #D8F7B8;
   --radius: 16px;
   --shadow: 0 2px 12px rgba(0,0,0,0.08);
   --ui-font: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -308,6 +314,19 @@
   margin-bottom: 12px;
 }
 
+.tournament-signup-auth-head strong {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.tournament-signup-auth-title,
+.tournament-signup-auth-balance {
+  display: block;
+}
+
 .tournament-signup-registration > div {
   border: 0;
   border-radius: 0;
@@ -360,6 +379,20 @@
   gap: 10px;
 }
 
+.tournament-signup-register-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tournament-signup-register-stack .tournament-signup-auth {
+  order: 1;
+}
+
+.tournament-signup-register-stack .tournament-signup-actions {
+  order: 2;
+}
+
 .tournament-signup-payment-options {
   display: grid;
   gap: 14px;
@@ -368,6 +401,10 @@
 .tournament-signup-payment-group {
   display: grid;
   gap: 8px;
+}
+
+.tournament-signup-payment-group + .tournament-signup-payment-group {
+  margin-top: 10px;
 }
 
 .tournament-signup-payment-title {
@@ -395,8 +432,113 @@
   overflow-wrap: anywhere;
 }
 
+.tournament-signup-payment-option-subscription {
+  background: linear-gradient(135deg, #8a6bff 0%, #6d4ee6 100%);
+  border-color: #6d4ee6;
+  box-shadow: 0 8px 18px rgba(109, 78, 230, 0.24);
+  color: #ffffff;
+}
+
+.tournament-signup-payment-option-subscription .tournament-signup-payment-option-note {
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.tournament-signup-payment-option-meta {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.tournament-signup-payment-option-note {
+  font-size: 11px;
+  color: #7a68c8;
+}
+
+.tournament-signup-payment-purchase-toggle {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #d2c7ff;
+  border-radius: 10px;
+  background: #f1edff;
+  color: #6f57d8;
+  font-size: 13px;
+  font-weight: 800;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+}
+
+.tournament-signup-payment-purchase-list {
+  display: grid;
+  gap: 8px;
+}
+
+.tournament-signup-payment-subscription-link {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #6d4ee6;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #8a6bff 0%, #6d4ee6 100%);
+  box-shadow: 0 8px 18px rgba(109, 78, 230, 0.24);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+}
+
+.tournament-signup-payment-subscription-link:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
 .tournament-signup-payment-option:disabled {
   opacity: 0.65;
+}
+
+.tournament-regulation-infographic {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid #e7e3f5;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 8px 22px rgba(43, 35, 84, 0.08);
+}
+
+.tournament-signup-station-modal {
+  gap: 12px;
+}
+
+.tournament-signup-station-facts {
+  display: grid;
+  gap: 8px;
+}
+
+.tournament-signup-station-fact {
+  border: 1px solid #e3e3de;
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.tournament-signup-station-fact span {
+  color: #686865;
+  font-size: 12px;
+}
+
+.tournament-signup-station-fact strong {
+  color: #1f1f1f;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.tournament-signup-station-map {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  text-decoration: none;
 }
 
 .tournament-signup-error {
@@ -453,7 +595,7 @@
 
 @font-face {
   font-family: 'RF Dewi UltraBold';
-  src: url('https://padlhub.su/lk/fonts/rf-dewi-ultrabold.ttf') format('truetype');
+  src: url('./fonts/rf-dewi-ultrabold.woff2') format('woff2');
   font-weight: 800;
   font-style: normal;
   font-display: swap;
@@ -461,7 +603,7 @@
 
 @font-face {
   font-family: 'RF Dewi Expanded UltraBold Italic';
-  src: url('https://padlhub.su/lk/fonts/rf-dewi-expanded-ultrabold-italic.ttf') format('truetype');
+  src: url('./fonts/rf-dewi-expanded-ultrabold-italic.woff2') format('woff2');
   font-weight: 800;
   font-style: italic;
   font-display: swap;
@@ -469,7 +611,7 @@
 
 @font-face {
   font-family: 'Source Code Pro';
-  src: url('https://padlhub.su/lk/fonts/SourceCodePro-Medium.ttf') format('truetype');
+  src: url('./fonts/SourceCodePro-Medium.woff2') format('woff2');
   font-weight: 500;
   font-style: normal;
   font-display: swap;
@@ -477,7 +619,7 @@
 
 @font-face {
   font-family: 'Source Code Pro Regular';
-  src: url('https://padlhub.su/lk/fonts/SourceCodePro-Regular.ttf') format('truetype');
+  src: url('./fonts/SourceCodePro-Regular.woff2') format('woff2');
   font-weight: 400;
   font-style: normal;
   font-display: swap;
@@ -632,12 +774,29 @@ h6,
 .auth-btn:active { transform: scale(0.98); }
 .auth-btn:disabled { background: #C4C4C4; cursor: not-allowed; }
 
+.auth-btn-secondary {
+  background: var(--white);
+  color: var(--purple);
+  border: 1.5px solid var(--purple);
+}
+
+.auth-btn-secondary:hover {
+  background: rgba(135, 102, 235, 0.06);
+}
+
 .auth-link {
   text-align: center;
   font-size: 14px;
   color: var(--purple);
   cursor: pointer;
   text-decoration: none;
+}
+
+.auth-link-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
 }
 
 .auth-error {
@@ -651,6 +810,165 @@ h6,
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.auth-card-chooser {
+  gap: 10px;
+  position: relative;
+}
+
+.auth-oauth-btn {
+  width: 100%;
+  min-height: 48px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  border: 1.5px solid var(--border);
+  background: var(--white);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--ui-font);
+  font-style: normal;
+  font-weight: 600;
+  transition: border-color 0.2s, transform 0.1s, background 0.2s;
+}
+
+.auth-oauth-btn:hover {
+  border-color: var(--purple);
+  background: rgba(135, 102, 235, 0.04);
+}
+
+.auth-oauth-btn:active {
+  transform: scale(0.98);
+}
+
+.auth-oauth-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.auth-oauth-btn__content {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 18px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.auth-oauth-btn__icon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 22px;
+}
+
+.auth-provider-icon-image {
+  width: 22px;
+  height: 22px;
+  display: block;
+  object-fit: contain;
+}
+
+.auth-brand-lockup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.auth-brand-logo {
+  width: min(182px, 72vw);
+  height: auto;
+  display: block;
+}
+
+.auth-title--brand {
+  max-width: 320px;
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.05;
+}
+
+.auth-more-options {
+  position: relative;
+}
+
+.auth-more-options-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text);
+  font-family: var(--ui-font);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.auth-more-options-btn svg {
+  width: 18px;
+  height: 18px;
+  color: var(--text-secondary);
+  transition: transform 0.2s ease;
+}
+
+.auth-more-options-btn[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.auth-more-options-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(180px, calc(100vw - 64px));
+  padding: 8px;
+  border: 1px solid rgba(135, 102, 235, 0.12);
+  border-radius: 16px;
+  background: var(--white);
+  box-shadow: 0 18px 44px rgba(17, 24, 39, 0.12);
+  z-index: 4;
+}
+
+.auth-more-options-item {
+  width: 100%;
+  min-height: 44px;
+  border: none;
+  border-radius: 12px;
+  background: #F7F7FB;
+  color: var(--text);
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: pointer;
+  font-family: var(--ui-font);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.auth-more-options-item:hover {
+  background: #F0EDFF;
+}
+
+.auth-more-options-item:active {
+  transform: scale(0.98);
+}
+
+.auth-icon-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
 }
 
 .resend-img {
@@ -669,7 +987,7 @@ h6,
 
 .cab-user-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   padding: 12px 0;
 }
 
@@ -892,6 +1210,69 @@ h6,
   background: var(--border);
 }
 
+.cab-referral-card {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(244, 230, 182, 0.22), rgba(120, 88, 243, 0.08));
+  border: 1px solid rgba(120, 88, 243, 0.14);
+}
+
+.cab-referral-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cab-referral-label {
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #6a627e;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.cab-referral-timer {
+  font-size: 24px;
+  line-height: 1;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+  color: #1f2230;
+}
+
+.cab-referral-note,
+.cab-referral-subscription-name,
+.cab-referral-error {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #585d6a;
+}
+
+.cab-referral-subscription-name {
+  color: #2c3140;
+  font-weight: 700;
+}
+
+.cab-referral-copy-btn {
+  margin-top: 10px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #7e60ff 0%, #4f67ff 100%);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: "Source Code Pro", "SF Pro Text", sans-serif;
+  cursor: pointer;
+  box-shadow: 0 10px 20px rgba(79, 103, 255, 0.18);
+}
+
+.cab-referral-error {
+  color: #d13f59;
+}
+
 .cab-user-phone {
   font-size: 13px;
   color: var(--text-secondary);
@@ -906,6 +1287,41 @@ h6,
   margin-left: auto;
   margin-right: 16px;
   align-items: center;
+}
+
+@media (max-width: 720px) {
+  .cab-user-row {
+    gap: 10px;
+  }
+
+  .cab-header-actions {
+    margin-right: 0;
+  }
+
+  .cab-referral-timer {
+    font-size: 21px;
+  }
+
+  .cab-referral-copy-btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .cab-user-row {
+    flex-wrap: wrap;
+  }
+
+  .cab-user-info {
+    min-width: 0;
+    margin-left: 12px;
+  }
+
+  .cab-header-actions {
+    width: 100%;
+    margin-left: 92px;
+    justify-content: flex-start;
+  }
 }
 
 .cab-icon-btn {
@@ -1257,6 +1673,15 @@ h6,
 .section-header--bookings {
   justify-content: space-between;
   padding: 12px 16px 8px;
+}
+
+.section-header--tournaments {
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.section-header--tournaments .section-title {
+  min-width: 0;
 }
 
 .section-title {
@@ -2063,6 +2488,67 @@ h6,
   box-shadow: 0 0 0 2px rgba(115, 83, 217, 0.12);
 }
 
+.game-card--dismissible {
+  padding-right: 48px;
+}
+
+.game-court-option {
+  position: relative;
+}
+
+.game-court-option-card--outdoor {
+  padding-right: 56px;
+}
+
+.game-court-info-button {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #f9fafb;
+  color: var(--text-secondary);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.game-court-option .game-card.selected + .game-court-info-button {
+  border-color: var(--purple);
+  color: var(--purple);
+  background: rgba(115, 83, 217, 0.08);
+}
+
+.game-court-option-reset {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(115, 83, 217, 0.1);
+  color: var(--purple);
+  font-size: 16px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.game-court-info-button:focus-visible {
+  outline: 2px solid rgba(115, 83, 217, 0.4);
+  outline-offset: 2px;
+}
+
 .game-card-row {
   display: flex;
   align-items: center;
@@ -2135,6 +2621,377 @@ h6,
 
 .game-created-card:has(.game-created-result-entry):active {
   transform: none;
+}
+
+.game-created-card--result-prompt {
+  box-sizing: border-box;
+  justify-content: center;
+  align-items: flex-start;
+  width: 100%;
+  min-height: 211px;
+  height: auto;
+  padding: 14px 12px;
+  gap: 20px;
+  background: #FAFAFA;
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.game-created-card--result-prompt:active {
+  transform: none;
+}
+
+.game-created-result-prompt-head {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  isolation: isolate;
+  width: 100%;
+  min-height: 39px;
+  flex: 0 0 auto;
+}
+
+.game-created-result-prompt-title-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-right: 56px;
+  min-height: 39px;
+}
+
+.game-created-result-prompt-tag {
+  display: inline-flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+  min-width: 109px;
+  height: 18px;
+  padding: 5px 6px;
+  gap: 3px;
+  box-sizing: border-box;
+  background: rgba(159, 207, 2, 0.1);
+  border-radius: 24px;
+  color: #9BBD05;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.game-created-result-prompt-tag--neutral {
+  background: rgba(136, 136, 137, 0.12);
+  color: #777779;
+}
+
+.game-created-result-prompt-tag-dot {
+  width: 8px;
+  height: 8px;
+  background: currentColor;
+  clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 56%, 79% 91%, 50% 70%, 21% 91%, 32% 56%, 2% 35%, 39% 35%);
+  flex: 0 0 auto;
+}
+
+.game-created-result-prompt-title {
+  width: min(190px, 100%);
+  color: #1F1E20;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.game-created-result-date-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 44px;
+  height: 51px;
+  padding: 8px;
+  border: none;
+  border-radius: 8px;
+  background: #FFFFFF;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.game-created-result-date-badge:disabled {
+  cursor: default;
+}
+
+.game-created-result-date-badge-day {
+  width: 28px;
+  color: #1F1E20;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.24;
+  text-align: center;
+}
+
+.game-created-result-date-badge-weekday {
+  width: 28px;
+  color: #8766EB;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.game-created-result-prompt-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 78px;
+  height: auto;
+  flex: 0 0 auto;
+}
+
+.game-created-result-info-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  height: 12px;
+  min-width: 0;
+  max-width: 100%;
+  gap: 4px;
+  color: #353436;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+.game-created-result-info-row:first-child {
+  width: min(146px, 100%);
+}
+
+.game-created-result-info-row > span:not(.game-created-result-info-icon),
+.game-created-result-info-row > button {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.game-created-result-info-row--place {
+  width: 100%;
+  height: 13px;
+}
+
+.game-created-result-info-row--level {
+  width: 100%;
+}
+
+.game-created-result-info-row--court {
+  width: 100%;
+}
+
+.game-created-result-info-icon {
+  width: 12px;
+  height: 12px;
+  color: #888889;
+  flex: 0 0 auto;
+}
+
+.game-created-result-info-icon svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+
+.game-created-result-info-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.15;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.game-created-result-info-row--level .game-created-result-info-icon path {
+  fill: currentColor;
+  stroke: none;
+}
+
+.game-created-result-station-trigger {
+  flex: 0 1 auto;
+  display: inline-block;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 0 1px;
+  border: none;
+  border-bottom: 1px dashed #8766EB;
+  background: transparent;
+  color: #8766EB;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: inherit;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-align: left;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.game-created-result-station-trigger:focus-visible {
+  outline: 2px solid rgba(135, 102, 235, 0.35);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.game-created-result-prompt-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  height: 47px;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1.5px dashed #E8E8E9;
+}
+
+.game-created-result-prompt-footer-row {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  min-height: 35px;
+  gap: 24px;
+}
+
+.game-created-result-prompt-avatars {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  width: 119px;
+  max-width: 119px;
+  height: 35px;
+  flex: 0 0 119px;
+  isolation: isolate;
+}
+
+.game-created-result-prompt-avatar {
+  width: 32px;
+  height: 32px;
+  margin-left: -6px;
+  border: 1.5px solid #FAFAFA;
+  border-radius: 24px;
+  background: #F1F1F1;
+  color: #6F6F75;
+  box-sizing: border-box;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.game-created-result-prompt-avatar:first-child {
+  margin-left: 0;
+}
+
+.game-created-result-prompt-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.game-created-result-prompt-avatar--empty {
+  background: #ECEEF4;
+}
+
+.game-created-result-prompt-cta {
+  width: 146px;
+  height: 32px;
+  padding: 10px 24px 10px 20px;
+  border: none;
+  border-radius: 24px;
+  background: #8766EB;
+  color: #FAFAFA;
+  display: inline-flex;
+  flex: 0 0 146px;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.game-created-station-modal {
+  gap: 12px;
+}
+
+.game-created-station-facts {
+  display: grid;
+  gap: 8px;
+}
+
+.game-created-station-fact {
+  border: 1px solid #E3E3DE;
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.game-created-station-fact span {
+  color: #686865;
+  font-size: 12px;
+}
+
+.game-created-station-fact strong {
+  color: #1F1F1F;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.game-created-station-map {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  text-decoration: none;
 }
 
 .game-created-top-badge-row {
@@ -2426,6 +3283,12 @@ h6,
   color: #ffffff;
 }
 
+.game-created-tag-cancelled {
+  background: #fde8e8;
+  color: #b42318;
+  border: 1px solid #f8d2d2;
+}
+
 .game-created-tag-waitlist {
   background: #fef7ef;
   color: #b3641e;
@@ -2578,6 +3441,11 @@ h6,
   padding: 14px 24px;
 }
 
+.game-created-action-danger {
+  background: #fde8e8;
+  color: #b42318;
+}
+
 .game-created-action-chat-icon {
   width: 56px;
   min-width: 56px;
@@ -2609,6 +3477,41 @@ h6,
 .game-map-canvas {
   width: 100%;
   height: 100%;
+}
+
+.leaflet-div-icon.game-map-station-icon {
+  background: transparent;
+  border: none;
+}
+
+.game-map-station-marker {
+  border-radius: 999px;
+  border: 1px solid rgba(135, 102, 235, 0.26);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 8px 18px rgba(31, 30, 32, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 4px 6px;
+}
+
+.game-map-station-marker.is-selected {
+  border-color: rgba(135, 102, 235, 0.72);
+  background: linear-gradient(135deg, #9983fb 0%, #8766eb 100%);
+  box-shadow: 0 12px 24px rgba(135, 102, 235, 0.28);
+}
+
+.game-map-station-marker-logo {
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+
+.game-map-station-marker-logo svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .game-map-locate {
@@ -2781,7 +3684,7 @@ h6,
 }
 
 .find-game-card-split {
-  background: #f5fbf7;
+  background: var(--friendship-surface);
 }
 
 .find-game-card-clickable {
@@ -3009,6 +3912,19 @@ h6,
   flex: none;
   order: 0;
   flex-grow: 0;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.find-game-friendly-tag:hover {
+  background: rgba(77, 179, 105, 0.14);
+}
+
+.find-game-friendly-tag:focus-visible {
+  outline: 2px solid rgba(77, 179, 105, 0.55);
+  outline-offset: 2px;
 }
 
 .find-game-friendly-tag-dot {
@@ -3039,6 +3955,32 @@ h6,
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.find-game-friendly-modal {
+  display: grid;
+  gap: 12px;
+}
+
+.find-game-friendly-modal-text {
+  margin: 0;
+  color: #1f1f1f;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.summer-subscription-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.summer-subscription-gallery__image {
+  width: 100%;
+  display: block;
+  border-radius: 18px;
+  border: 1px solid rgba(220, 217, 232, 0.72);
+  box-shadow: 0 10px 24px rgba(41, 31, 77, 0.08);
 }
 
 .find-game-split-join-info-row {
@@ -3243,6 +4185,990 @@ h6,
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.game-create-summary-card {
+  gap: 12px;
+}
+
+.game-create-summary-row {
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.game-create-summary-card .game-card-title {
+  color: #1f1e20;
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+}
+
+.game-create-summary-card--review .game-create-summary-meta-row {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.game-create-summary-card--review .game-create-summary-meta-icon {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
+}
+
+.game-create-summary-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.game-create-summary-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #807b91;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.game-create-summary-meta-row--payment {
+  color: #6e6982;
+}
+
+.game-create-summary-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.game-create-summary-meta-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  color: #9793ab;
+}
+
+.game-create-summary-meta-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.game-create-summary-meta-dot {
+  color: #c1bbd4;
+}
+
+.game-summary-edit-button {
+  border: none;
+  background: transparent;
+  color: var(--purple);
+  font-size: 14px;
+  font-weight: 700;
+  padding: 0;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.game-create-level-card {
+  gap: 14px;
+}
+
+.game-create-level-card .game-card-title {
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+}
+
+.game-create-level-option {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: linear-gradient(180deg, #ffffff 0%, rgba(250, 247, 255, 0.76) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94);
+  padding: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.game-create-level-option.selected {
+  border-color: rgba(115, 83, 217, 0.88);
+  background: linear-gradient(180deg, rgba(250, 247, 255, 0.98) 0%, rgba(237, 233, 255, 0.92) 100%);
+  box-shadow: 0 0 0 1px rgba(115, 83, 217, 0.12), 0 16px 30px rgba(115, 83, 217, 0.08);
+}
+
+.game-create-level-option .game-payment-choice-radio {
+  width: 24px;
+  height: 24px;
+  border-width: 3px;
+  margin-top: 3px;
+  flex: 0 0 24px;
+}
+
+.game-create-level-option.selected .game-payment-choice-radio {
+  border-color: var(--purple);
+}
+
+.game-create-level-option.selected .game-payment-choice-radio::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--purple);
+}
+
+.game-create-level-option-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.game-create-level-option-title {
+  display: block;
+  color: #1f1e20;
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+}
+
+.game-create-level-option-description {
+  color: #858099;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.game-create-level-option--rating {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.game-create-level-option-header {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  border: none;
+  background: transparent;
+  padding: 18px 18px 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.game-create-level-picker-panel {
+  margin: 0 18px 18px;
+  padding: 12px 14px 10px;
+  border: 1px solid rgba(115, 83, 217, 0.16);
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(244, 239, 255, 0.94) 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.game-create-level-picker-title {
+  text-align: center;
+  color: #2b253c;
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.game-create-level-range-panel {
+  padding: 10px 12px;
+  border-radius: 22px;
+  border: 1px solid rgba(221, 216, 236, 0.92);
+  background: linear-gradient(180deg, rgba(249, 247, 255, 0.96) 0%, rgba(255, 255, 255, 0.98) 100%);
+}
+
+.game-create-level-range-strip-wrap {
+  padding: 0;
+  overflow: visible;
+}
+
+.game-create-level-range-strip {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  width: 100%;
+  border-radius: 18px;
+  border: 1px solid rgba(213, 208, 229, 0.92);
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.game-create-level-range-segment {
+  min-height: 62px;
+  border: none;
+  border-right: 1px solid rgba(225, 221, 237, 0.92);
+  background: transparent;
+  color: #5a546b;
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.game-create-level-range-segment:last-child {
+  border-right: none;
+}
+
+.game-create-level-range-segment.is-selected {
+  background: linear-gradient(135deg, #6f4df6 0%, #8a68ef 100%);
+  color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.game-create-level-range-segment:first-child {
+  border-top-left-radius: 18px;
+  border-bottom-left-radius: 18px;
+}
+
+.game-create-level-range-segment:last-child {
+  border-top-right-radius: 18px;
+  border-bottom-right-radius: 18px;
+}
+
+.game-create-level-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.game-create-level-picker-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.game-create-level-picker-label {
+  color: #2f2947;
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.game-create-level-wheel-shell {
+  position: relative;
+  width: 100%;
+  height: 240px;
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(245, 243, 252, 0.9) 0%, rgba(255, 255, 255, 0.96) 100%);
+  border: 1px solid rgba(221, 216, 236, 0.92);
+  overflow: hidden;
+}
+
+.game-create-level-wheel {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  overflow-y: auto;
+  padding: 0 10px;
+  overscroll-behavior-y: contain;
+  scroll-padding-block: 96px;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+}
+
+.game-create-level-wheel::-webkit-scrollbar {
+  display: none;
+}
+
+.game-create-level-wheel-spacer {
+  width: 100%;
+  flex: 0 0 auto;
+}
+
+.game-create-level-wheel-option {
+  width: 100%;
+  height: 48px;
+  border: none;
+  background: transparent;
+  color: #b7afc9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  scroll-snap-align: start;
+  cursor: pointer;
+  transition: color 0.18s ease, transform 0.18s ease, opacity 0.18s ease;
+}
+
+.game-create-level-wheel-option.is-active {
+  color: var(--purple);
+  font-size: 28px;
+  transform: scale(1.02);
+}
+
+.game-create-level-wheel-highlight {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: calc(50% - 24px);
+  height: 48px;
+  border-radius: 18px;
+  background: #ffffff;
+  border: 1px solid rgba(213, 208, 229, 0.9);
+  box-shadow: 0 10px 22px rgba(78, 59, 145, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.98);
+  pointer-events: none;
+}
+
+.game-create-level-wheel-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 48px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.game-create-level-wheel-fade--top {
+  top: 0;
+  background: linear-gradient(180deg, rgba(247, 244, 253, 0.94) 0%, rgba(247, 244, 253, 0) 100%);
+}
+
+.game-create-level-wheel-fade--bottom {
+  bottom: 0;
+  background: linear-gradient(0deg, rgba(247, 244, 253, 0.94) 0%, rgba(247, 244, 253, 0) 100%);
+}
+
+.game-create-level-picker-summary {
+  text-align: center;
+  color: #7f7894;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.game-create-level-picker-summary strong {
+  color: var(--purple);
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.game-create-level-precise-trigger {
+  align-self: center;
+  border: none;
+  background: transparent;
+  padding: 2px 0 0;
+  color: #7a5bf1;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.game-create-level-precise-trigger:focus-visible {
+  outline: none;
+  text-decoration: underline;
+}
+
+.game-create-precise-rating-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.game-create-precise-rating-modal-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.game-create-precise-rating-modal-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.game-create-precise-rating-modal-group-title {
+  color: #2b253c;
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.game-create-precise-rating-modal-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.game-create-precise-rating-modal-row .game-input {
+  min-height: 46px;
+}
+
+.game-create-precise-rating-modal-summary {
+  text-align: center;
+  color: #7f7894;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.game-create-precise-rating-modal-summary strong {
+  color: var(--purple);
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+}
+
+.game-create-level-done {
+  width: 100%;
+  min-height: 48px;
+  border: none;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #6f4df6 0%, #8a68ef 100%);
+  color: #fafafa;
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow: 0 12px 24px rgba(115, 83, 217, 0.22);
+}
+
+.game-create-payment-card {
+  gap: 10px;
+}
+
+.game-create-payment-card .game-card-title {
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+}
+
+.game-create-visibility-card {
+  gap: 14px;
+}
+
+.game-create-payment-method-card {
+  gap: 10px;
+}
+
+.game-create-visibility-card .game-card-title {
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+}
+
+.game-create-visibility-card-intro {
+  margin-top: -6px;
+  color: #858099;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.game-create-visibility-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.game-visibility-option {
+  height: 100%;
+  grid-template-columns: 24px minmax(0, 1fr) 82px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px 14px;
+  border-radius: 24px;
+  background: linear-gradient(180deg, #ffffff 0%, rgba(250, 247, 255, 0.86) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.game-visibility-option.selected {
+  border-color: rgba(115, 83, 217, 0.82);
+  background: linear-gradient(180deg, rgba(250, 247, 255, 0.98) 0%, rgba(237, 233, 255, 0.92) 100%);
+  box-shadow: 0 0 0 1px rgba(115, 83, 217, 0.1), 0 14px 28px rgba(115, 83, 217, 0.08);
+}
+
+.game-visibility-option .game-payment-choice-radio {
+  width: 24px;
+  height: 24px;
+  border-width: 3px;
+  align-self: flex-start;
+  flex: 0 0 24px;
+  margin-top: 3px;
+}
+
+.game-visibility-option.selected .game-payment-choice-radio::after {
+  width: 10px;
+  height: 10px;
+}
+
+.game-visibility-option-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.game-visibility-option-title {
+  display: block;
+  color: #1f1e20;
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+}
+
+.game-visibility-option-description-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.game-visibility-option-inline-icon {
+  width: 20px;
+  height: 20px;
+  color: #7a5bf1;
+  flex: 0 0 20px;
+  margin-top: 1px;
+}
+
+.game-visibility-option-description {
+  color: #39334d;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.game-visibility-option-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(115, 83, 217, 0.12) 0%, rgba(115, 83, 217, 0.07) 100%);
+  color: var(--purple);
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.game-visibility-option-pill-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.game-visibility-option-inline-icon svg,
+.game-visibility-option-pill-icon svg,
+.game-visibility-option-visual svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.game-visibility-option-visual {
+  width: 82px;
+  height: 66px;
+  align-self: center;
+  justify-self: end;
+  color: #d1c9e4;
+}
+
+.game-visibility-option.selected .game-visibility-option-visual {
+  color: rgba(115, 83, 217, 0.8);
+}
+
+.game-visibility-option--private .game-visibility-option-visual {
+  color: #d7d1e8;
+}
+
+.game-visibility-option--private.selected .game-visibility-option-visual {
+  color: rgba(141, 121, 235, 0.82);
+}
+
+.game-visibility-option--private .game-visibility-option-inline-icon {
+  color: rgba(133, 103, 232, 0.92);
+}
+
+.game-visibility-option--private .game-visibility-option-pill {
+  color: #6f51dd;
+}
+
+.game-create-payment-price {
+  color: var(--purple);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.game-payment-choice-card {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--white);
+  padding: 14px 16px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+.game-payment-choice-card.selected {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 2px rgba(115, 83, 217, 0.12);
+  background: rgba(115, 83, 217, 0.03);
+}
+
+.game-payment-choice-radio {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid #c4c9d4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.game-payment-choice-card.selected .game-payment-choice-radio {
+  border-color: var(--purple);
+}
+
+.game-payment-choice-card.selected .game-payment-choice-radio::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--purple);
+}
+
+.game-payment-choice-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.game-payment-choice-copy strong {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.game-payment-choice-copy span {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.game-payment-choice-price {
+  font-size: 14px;
+  color: var(--purple);
+  white-space: nowrap;
+}
+
+.game-payment-choice-card--payer {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 22px;
+}
+
+.game-payment-choice-card--payer.selected {
+  background: var(--white);
+  box-shadow: 0 0 0 1px rgba(115, 83, 217, 0.2);
+}
+
+.game-payment-choice-card--payer .game-payment-choice-radio {
+  width: 28px;
+  height: 28px;
+  border-width: 3px;
+  margin-top: 3px;
+}
+
+.game-payment-choice-card--payer.selected .game-payment-choice-radio::after {
+  width: 12px;
+  height: 12px;
+}
+
+.game-payment-choice-card--payer .game-payment-choice-copy {
+  gap: 10px;
+}
+
+.game-payment-choice-card--payer .game-payment-choice-copy strong {
+  display: block;
+  color: #1f1e20;
+  font-family: "RF Dewi UltraBold", "Inter Display", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+
+.game-payment-choice-card--payer .game-payment-choice-copy > .game-payment-choice-description {
+  display: block;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.game-payment-choice-card--payer .game-payment-choice-copy > .game-payment-choice-tag,
+.game-payment-choice-card--payer .game-payment-choice-copy > .game-payment-choice-tag span {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.game-payment-choice-card--payer .game-payment-choice-copy > .game-payment-choice-tag--accent {
+  color: var(--purple);
+}
+
+.game-payment-choice-card--payer .game-payment-choice-copy > .game-payment-choice-tag--muted {
+  color: #6b7280;
+}
+
+.game-payment-choice-card--payer .game-payment-choice-copy > .game-payment-choice-tag span {
+  color: inherit;
+}
+
+.game-payment-choice-card--payer .game-payment-choice-aside {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.game-payment-choice-card--payer .game-payment-choice-aside--subscription {
+  padding-top: 0;
+}
+
+.game-payment-choice-card--payer .game-payment-choice-price {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.game-payment-choice-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #d8f7b8;
+  color: #2d9b3f;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.game-payment-choice-badge--outline {
+  border: 1px dashed #8766eb;
+  background: transparent;
+  color: #8766eb;
+  cursor: pointer;
+}
+
+.game-payment-choice-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  min-height: 34px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.game-payment-choice-tag--accent {
+  background: rgba(115, 83, 217, 0.12);
+  color: var(--purple);
+}
+
+.game-payment-choice-tag--muted {
+  background: #eef1f5;
+  color: #6b7280;
+}
+
+.game-payment-choice-tag-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+
+@media (max-width: 480px) {
+  .game-create-summary-card .game-card-title {
+    font-size: 17px;
+  }
+
+  .game-create-summary-meta-row {
+    font-size: 13px;
+  }
+
+  .game-create-summary-meta-icon {
+    width: 16px;
+    height: 16px;
+    flex-basis: 16px;
+  }
+
+  .game-summary-edit-button {
+    font-size: 15px;
+  }
+
+  .game-create-level-card .game-card-title {
+    font-size: 17px;
+  }
+
+  .game-create-level-option {
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .game-create-level-option-title {
+    font-size: 16px;
+  }
+
+  .game-create-level-option-description {
+    font-size: 13px;
+  }
+
+  .game-create-level-option-header {
+    gap: 12px;
+    padding: 16px 16px 12px;
+  }
+
+  .game-create-level-picker-panel {
+    margin: 0 16px 16px;
+    padding: 12px 12px 10px;
+    gap: 10px;
+  }
+
+  .game-create-level-range-panel {
+    padding: 10px;
+  }
+
+  .game-create-level-range-segment {
+    min-height: 58px;
+    font-size: 16px;
+  }
+
+  .game-create-level-picker-grid {
+    gap: 12px;
+  }
+
+  .game-create-level-picker-label {
+    font-size: 15px;
+  }
+
+  .game-create-level-wheel-shell {
+    height: 220px;
+  }
+
+  .game-create-level-wheel-option.is-active {
+    font-size: 24px;
+  }
+
+  .game-create-level-picker-summary {
+    font-size: 13px;
+  }
+
+  .game-create-level-precise-trigger {
+    font-size: 11px;
+  }
+
+  .game-create-precise-rating-modal-row {
+    grid-template-columns: 1fr;
+  }
+
+  .game-create-visibility-card .game-card-title {
+    font-size: 17px;
+  }
+
+  .game-create-visibility-card-intro {
+    font-size: 13px;
+  }
+
+  .game-visibility-option {
+    grid-template-columns: 24px minmax(0, 1fr) 96px;
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .game-visibility-option-title {
+    font-size: 16px;
+  }
+
+  .game-visibility-option-description {
+    font-size: 13px;
+  }
+
+  .game-visibility-option-pill {
+    min-height: 34px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+
+  .game-visibility-option-visual {
+    width: 84px;
+    height: 72px;
+  }
+
+  .game-payment-choice-card--payer {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .game-payment-choice-card--payer .game-payment-choice-radio {
+    width: 24px;
+    height: 24px;
+  }
+
+  .game-payment-choice-card--payer.selected .game-payment-choice-radio::after {
+    width: 10px;
+    height: 10px;
+  }
+
+  .game-payment-choice-card--payer .game-payment-choice-copy strong {
+    font-size: 16px;
+  }
+
+  .game-payment-choice-card--payer .game-payment-choice-price {
+    font-size: 15px;
+  }
 }
 
 .game-publish-field {
@@ -3823,6 +5749,54 @@ h6,
   color: var(--purple);
 }
 
+.game-split-subscription-options {
+  display: grid;
+  gap: 8px;
+}
+
+.game-split-subscription-title {
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.35;
+  padding: 0 2px;
+}
+
+.game-split-subscription-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid #e3e3de;
+  border-radius: 10px;
+  background: #fff;
+  color: #1f1f1f;
+  padding: 12px;
+  text-align: left;
+}
+
+.game-split-subscription-option span,
+.game-split-subscription-option strong {
+  overflow-wrap: anywhere;
+}
+
+.game-split-subscription-option strong {
+  color: #5b46cb;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.game-split-subscription-option.selected {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 2px rgba(115, 83, 217, 0.12);
+  background: rgba(115, 83, 217, 0.03);
+}
+
+.game-split-subscription-option:disabled {
+  opacity: 0.65;
+}
+
 .game-split-join-summary {
   display: flex;
   justify-content: space-between;
@@ -3884,6 +5858,12 @@ h6,
   color: #6b7280;
 }
 
+.game-outdoor-court-hint {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #374151;
+}
+
 .game-promo-feedback {
   margin-top: -2px;
 }
@@ -3902,6 +5882,11 @@ h6,
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+}
+
+.duration-chip--friendship:not(.active) {
+  border-color: var(--friendship-border);
+  background: var(--friendship-tint);
 }
 
 .duration-chip.active {
@@ -3940,28 +5925,183 @@ h6,
   cursor: pointer;
 }
 
+.game-selection-filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0 10px;
+}
+
+.game-selection-filter-text {
+  min-width: 0;
+  color: #596277;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.game-selection-filter-reset {
+  border: none;
+  background: transparent;
+  color: var(--purple);
+  padding: 0;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.game-selected-params-card {
+  gap: 10px;
+}
+
+.game-selected-params-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.game-selected-param-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  max-width: 100%;
+  border: 1px solid rgba(115, 83, 217, 0.34);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--purple);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.game-selected-param-chip span {
+  overflow-wrap: anywhere;
+}
+
+.game-selected-param-chip--dismissible {
+  padding-right: 8px;
+}
+
+.game-selected-param-chip-remove {
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  flex: 0 0 18px;
+}
+
 .time-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
 }
 
+.game-time-chip-wrap {
+  position: relative;
+}
+
 .time-chip {
+  width: 100%;
   padding: 8px 0;
   border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--white);
+  border: 1px solid #ededed;
+  background: #ffffff;
+  color: #1f1e20;
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 12px;
-  font-weight: 400;
-  font-family: var(--time-font);
-  letter-spacing: 0.2px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
   cursor: pointer;
 }
 
+.time-chip--dismissible {
+  padding-right: 18px;
+}
+
 .time-chip.active {
-  background: var(--purple);
-  border-color: var(--purple);
-  color: var(--white);
+  background: #8766eb;
+  border-color: #8766eb;
+  color: #fafafa;
+}
+
+.game-time-chip-reset {
+  position: absolute;
+  top: 5px;
+  right: 8px;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  color: #fafafa;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 1;
+}
+
+@media (max-width: 480px) {
+  .game-selection-filter-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .game-selection-filter-reset {
+    align-self: flex-start;
+  }
+}
+
+.game-container-time-step .page-title,
+.game-container-time-step .game-section-title,
+.game-container-time-step .game-card-title,
+.game-container-time-step .duration-chip,
+.game-container-time-step .game-create-payment-price,
+.game-container-time-step .game-payment-choice-price,
+.game-container-time-step .game-submit-main,
+.game-container-time-step .game-submit-price {
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.game-container-time-step .game-card-sub,
+.game-container-time-step .date-weekday,
+.game-container-time-step .game-selection-filter-text,
+.game-container-time-step .game-selected-param-chip,
+.game-container-time-step .game-payment-choice-description,
+.game-container-time-step .game-payment-choice-tag,
+.game-container-time-step .game-payment-choice-badge,
+.game-container-time-step .game-submit-meta,
+.game-container-time-step .game-empty {
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.game-container-place-step .page-back,
+.game-container-place-step .page-title,
+.game-container-place-step .game-section-title,
+.game-container-place-step .game-card-title,
+.game-container-place-step .game-card-arrow {
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.game-container-place-step .game-city-title,
+.game-container-place-step .game-card-sub,
+.game-container-place-step .game-input,
+.game-container-place-step .game-empty {
+  font-family: "Inter Display", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 .payment-toggle {
@@ -4021,6 +6161,11 @@ h6,
   align-items: flex-start;
   gap: 12px;
   min-height: 84px;
+}
+
+.details-row > .calendar-date-badge-button {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .details-main {
@@ -4127,6 +6272,25 @@ h6,
   color: var(--text);
 }
 
+.tournament-signup-station-link {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #6d4ee6;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.tournament-signup-station-link:focus-visible {
+  outline: 2px solid rgba(115, 83, 217, 0.35);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
 .details-tabs {
   display: flex;
   gap: 8px;
@@ -4207,6 +6371,18 @@ h6,
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.details-organizer-card {
+  margin-bottom: 4px;
+}
+
+.details-organizer-card + .tournament-signup-description {
+  margin-top: 0;
+}
+
+.tournament-signup-description {
+  margin-bottom: 16px;
 }
 
 .details-roster-head {
@@ -4341,6 +6517,40 @@ h6,
   white-space: nowrap;
 }
 
+.details-roster-row-invite {
+  width: 100%;
+  background: #f1edff;
+  border-color: #d2c7ff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.details-roster-row-invite .details-roster-name {
+  color: #6d4ee6;
+}
+
+.details-roster-row-invite:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.details-roster-avatar-wrap-invite {
+  background: linear-gradient(135deg, #8a6bff 0%, #6d4ee6 100%);
+  box-shadow: 0 6px 14px rgba(109, 78, 230, 0.24);
+}
+
+.details-roster-avatar-invite-plus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: #ffffff;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 800;
+}
+
 .details-organizer-invite {
   margin-top: 2px;
 }
@@ -4415,7 +6625,35 @@ h6,
   margin-top: 4px;
 }
 
+.details-roster-history-toggle {
+  width: 100%;
+  border: 1px solid #eceef5;
+  background: #ffffff;
+  border-radius: 10px;
+  padding: 7px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #6b7280;
+  cursor: pointer;
+}
+
+.details-roster-history-toggle-icon {
+  font-size: 12px;
+  line-height: 1;
+  color: #6d4ee6;
+  transition: transform 0.2s ease;
+}
+
+.details-roster-history-toggle-icon.is-open {
+  transform: rotate(180deg);
+}
+
 .details-roster-leave-list {
+  margin-top: 6px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -5599,6 +7837,40 @@ h6,
   width: 100%;
 }
 
+.game-join-split-pay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.game-join-split-pay-option {
+  border: 1px solid rgba(134, 106, 231, 0.32);
+  border-radius: 999px;
+  background: #ffffff;
+  color: #6f57d8;
+  min-height: 34px;
+  padding: 6px 12px;
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  font-family: "Source Code Pro Regular", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.game-join-split-pay-option:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.game-join-split-pay-option-primary {
+  border-color: transparent;
+  background: rgba(134, 106, 231, 0.12);
+  color: #7253df;
+}
+
 .community-invite-card {
   gap: 12px;
 }
@@ -5884,9 +8156,18 @@ h6,
   background: var(--white);
 }
 
+.date-chip--friendship:not(.active) .booking-date-badge {
+  border-color: var(--friendship-border);
+  background: var(--subscription-bubble-fill);
+}
+
 .date-chip .booking-date-badge-day {
   background: var(--white);
   color: var(--text);
+}
+
+.date-chip--friendship:not(.active) .booking-date-badge-day {
+  background: var(--subscription-bubble-fill);
 }
 
 .date-chip.active .booking-date-badge {
@@ -6518,6 +8799,10 @@ h6,
 
 .tournament-details-person-card {
   align-items: center;
+}
+
+.tournament-details-description {
+  margin-top: 0;
 }
 
 .tournament-details-avatar {
@@ -10075,13 +12360,22 @@ h6,
   box-shadow: 0 12px 24px rgba(97, 74, 176, 0.06);
 }
 
+.community-feed-screen.community-ranking-screen {
+  --community-bg: #fafafa;
+  background: #fafafa;
+}
+
+.community-feed-screen.community-ranking-screen .community-feed-screen-glow {
+  display: none;
+}
+
 .community-ranking-screen {
-  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 264px);
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 220px);
 }
 
 .community-ranking-stage {
-  width: min(359px, 100%);
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -10090,10 +12384,7 @@ h6,
 }
 
 .community-ranking-stage-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
+  display: none;
 }
 
 .community-ranking-stage-copy {
@@ -10137,15 +12428,31 @@ h6,
   gap: 4px;
 }
 
+.community-ranking-box {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: min(359px, 100%);
+  margin: 0 auto;
+  padding: 16px 0 0;
+  background: #ffffff;
+  border: 0.5px solid #ededed;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.02);
+  border-radius: 28px 28px 0 0;
+  overflow: hidden;
+}
+
 .community-ranking-filter-bar {
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 6px;
   width: 100%;
-  max-width: 359px;
+  max-width: none;
   height: 36px;
-  margin: 0 auto;
+  margin: 0;
   padding: 0 20px 8px;
   box-sizing: border-box;
   flex: none;
@@ -10169,11 +12476,14 @@ h6,
   flex-direction: row;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   flex: 0 0 auto;
   font-family: "Inter Display", Inter, sans-serif;
+  font-style: normal;
   font-size: 12px;
   font-weight: 500;
   line-height: 100%;
+  text-align: center;
   letter-spacing: 0.02em;
   white-space: nowrap;
   box-sizing: border-box;
@@ -10208,17 +12518,19 @@ h6,
   display: flex;
   align-items: center;
   gap: 8px;
-  width: min(359px, 100%);
-  margin: 0 auto;
+  width: 100%;
+  min-height: 36px;
+  margin: 0;
   padding: 0 20px;
   box-sizing: border-box;
 }
 
 .community-ranking-search {
   box-sizing: border-box;
-  flex: 1 1 auto;
+  flex: 1 1 275px;
+  width: 275px;
   min-width: 0;
-  min-height: 36px;
+  height: 36px;
   padding: 12px 16px;
   border-radius: 24px;
   background: #f6f6f6;
@@ -10256,7 +12568,6 @@ h6,
 .community-ranking-toolbar-filter {
   width: 36px;
   height: 36px;
-  border: none;
   border-radius: 40px;
   background: #f6f6f6;
   color: #353436;
@@ -10361,6 +12672,66 @@ h6,
   gap: 0;
 }
 
+.community-ranking-list-sticky-spacer {
+  height: calc(96px + env(safe-area-inset-bottom, 0px));
+  flex: 0 0 auto;
+}
+
+.community-feed-screen .community-ranking-sticky-shell {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(375px, 100vw);
+  padding: 0 8px;
+  box-sizing: border-box;
+  z-index: 12;
+  pointer-events: none;
+}
+
+.community-ranking-sticky-shell--top {
+  top: var(--community-ranking-sticky-top, 0px);
+  animation: community-ranking-sticky-top-enter 160ms cubic-bezier(0.2, 0.74, 0.28, 1);
+}
+
+.community-ranking-sticky-shell--bottom {
+  bottom: var(--community-ranking-sticky-bottom, calc(88px + env(safe-area-inset-bottom, 0px)));
+}
+
+@keyframes community-ranking-sticky-top-enter {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.community-ranking-sticky-button {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  display: block;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.community-ranking-sticky-button:focus-visible {
+  outline: 2px solid rgba(135, 102, 235, 0.56);
+  outline-offset: 2px;
+  border-radius: 22px;
+}
+
+.community-ranking-card--sticky-copy {
+  box-shadow: 0 10px 24px rgba(23, 20, 45, 0.08);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
 .community-ranking-card {
   width: 100%;
   padding: 16px 20px 0;
@@ -10379,8 +12750,44 @@ h6,
 }
 
 .community-ranking-card.is-current {
-  border-radius: 20px;
-  background: rgba(135, 102, 235, 0.08);
+  border-radius: 0;
+  background: rgba(135, 102, 235, 0.16);
+  padding-bottom: 16px;
+}
+
+.community-ranking-card.is-current.is-hidden-while-sticky {
+  visibility: hidden;
+}
+
+.community-ranking-card.is-current.is-docked {
+  position: sticky;
+  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  z-index: 6;
+  margin: 0;
+  padding: 16px 20px;
+  border-radius: 0;
+  border-top: 0.5px solid rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.community-ranking-card.is-current .community-ranking-rank-badge {
+  background: rgba(255, 255, 255, 0.48);
+  color: rgba(31, 30, 32, 0.52);
+}
+
+.community-ranking-card.is-current .community-ranking-you {
+  color: #fafafa;
+  background: rgba(31, 30, 32, 0.86);
+}
+
+.community-ranking-card.is-current .community-ranking-games-pill:not(.community-ranking-games-pill--dynamics) {
+  background: #8766eb;
+  color: #fafafa;
+}
+
+.community-ranking-card.is-current .community-ranking-games-pill-value {
+  color: #fafafa;
 }
 
 .community-ranking-card-player {
@@ -10394,17 +12801,22 @@ h6,
 .community-ranking-rank-badge {
   width: 24px;
   height: 19px;
+  box-sizing: border-box;
+  padding: 6px 2px;
+  gap: 10px;
   border-radius: 24px;
   background: #fafafa;
   color: #888889;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
   font-family: "Inter Display", Inter, sans-serif;
+  font-style: normal;
   font-size: 10px;
   font-weight: 600;
-  line-height: 1;
+  line-height: 100%;
+  text-align: center;
   letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
 }
@@ -10413,9 +12825,27 @@ h6,
   color: #aacd11;
 }
 
+.community-ranking-avatar-button {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.community-ranking-avatar-button:focus-visible {
+  outline: 2px solid rgba(135, 102, 235, 0.56);
+  outline-offset: 2px;
+}
+
 .community-ranking-leader-icon {
-  width: 12px;
-  height: 12px;
+  width: 24px;
+  height: 19px;
   display: block;
 }
 
@@ -10481,10 +12911,70 @@ h6,
   flex: 0 0 auto;
 }
 
+.community-ranking-games-pill-button {
+  border: none;
+  cursor: pointer;
+  font: inherit;
+}
+
+.community-ranking-games-pill-button:focus-visible {
+  outline: 2px solid rgba(135, 102, 235, 0.56);
+  outline-offset: 2px;
+}
+
+.community-ranking-games-pill--dynamics {
+  min-width: 53px;
+  min-height: 20px;
+  padding: 6px 8px;
+  gap: 4px;
+}
+
+.community-ranking-games-pill--dynamics-positive {
+  background: #4db369;
+  color: #fafafa;
+}
+
+.community-ranking-games-pill--dynamics-negative {
+  background: #f0705f;
+  color: #fafafa;
+}
+
+.community-ranking-games-pill--dynamics-neutral {
+  background: rgba(31, 30, 32, 0.08);
+  color: #8f8f90;
+}
+
+.community-ranking-card:not(.is-current) .community-ranking-games-pill--dynamics-positive {
+  background: rgba(77, 179, 105, 0.14);
+  color: #4db369;
+}
+
+.community-ranking-card:not(.is-current) .community-ranking-games-pill--dynamics-negative {
+  background: rgba(240, 112, 95, 0.14);
+  color: #f0705f;
+}
+
+.community-ranking-card:not(.is-current) .community-ranking-games-pill--dynamics-neutral {
+  background: rgba(31, 30, 32, 0.06);
+  color: #9e9ea0;
+}
+
 .community-ranking-games-pill-icon {
   width: 14px;
   height: 14px;
   display: block;
+}
+
+.community-ranking-games-pill-icon--overall {
+  width: 10px;
+  height: 10px;
+}
+
+.community-ranking-delta-arrow-icon {
+  width: 6px;
+  height: 4px;
+  display: block;
+  flex: 0 0 auto;
 }
 
 .community-ranking-games-pill-value {
@@ -10494,6 +12984,10 @@ h6,
   line-height: 1;
   letter-spacing: 0.02em;
   color: #1f1e20;
+}
+
+.community-ranking-games-pill-value--dynamics {
+  color: currentColor;
 }
 
 .community-ranking-summary-card--docked {
@@ -11523,6 +14017,14 @@ h6,
   margin-bottom: 8px;
 }
 
+.tournament-section-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .tournament-section-title {
   font-size: 14px;
   font-weight: 700;
@@ -11626,6 +14128,11 @@ h6,
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+}
+
+.tournament-participant-info--manual {
+  flex: 1.6;
+  gap: 6px;
 }
 
 .tournament-participant-name {
@@ -11740,6 +14247,26 @@ h6,
   border: 1px solid var(--border);
   font-size: 12px;
   text-align: center;
+}
+
+.tournament-manual-rating-input {
+  min-width: 72px;
+  max-width: 84px;
+  width: 78px;
+  padding: 5px 8px;
+}
+
+.tournament-manual-name-input {
+  min-height: 42px;
+  padding: 11px 12px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.tournament-manual-phone-input {
+  min-height: 38px;
+  padding: 9px 12px;
+  font-size: 13px;
 }
 
 .tournament-participant-rating-input:focus {
@@ -12263,6 +14790,12 @@ h6,
   margin-bottom: 12px;
 }
 
+.tournament-manual-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .tournament-settings-modal-body {
   gap: 18px;
   scroll-padding-bottom: 140px;
@@ -12602,6 +15135,12 @@ h6,
   background: rgba(34, 197, 94, 0.15);
 }
 
+.tournament-round-status.saved.local,
+.tournament-round-status.local {
+  color: #6f57d8;
+  background: rgba(134, 106, 231, 0.14);
+}
+
 .tournament-round-status.error {
   color: #dc2626;
   background: rgba(239, 68, 68, 0.15);
@@ -12734,6 +15273,12 @@ h6,
   font-weight: 600;
 }
 
+.tournament-round-save--local {
+  background: rgba(134, 106, 231, 0.1);
+  color: #6f57d8;
+  border: 1px solid rgba(134, 106, 231, 0.22);
+}
+
 .tournament-manager-footer {
   position: sticky;
   bottom: 0;
@@ -12753,6 +15298,16 @@ h6,
   font-size: 12px;
   line-height: 1.45;
   color: var(--text-secondary);
+}
+
+.tournament-manager-sync {
+  width: 100%;
+}
+
+.tournament-manager-sync.is-synced {
+  background: rgba(22, 163, 74, 0.1);
+  border-color: rgba(22, 163, 74, 0.18);
+  color: #15803d;
 }
 
 .tournament-manager-finish {
@@ -12852,12 +15407,45 @@ h6,
   font-size: 14px;
 }
 
+.tournament-table-row-pair {
+  grid-template-columns: minmax(150px, 1.5fr) repeat(3, minmax(0, 1fr));
+}
+
 .tournament-table-player {
   min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
+}
+
+.tournament-table-player-stack {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tournament-table-player-compact {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.tournament-table-player-compact .tournament-table-avatar-wrap {
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+}
+
+.tournament-table-player-compact .tournament-table-player-ring {
+  width: 46px;
+  height: 46px;
+}
+
+.tournament-table-player-compact .tournament-participant-avatar {
+  width: 42px;
+  height: 42px;
 }
 
 .tournament-table-avatar-wrap {
@@ -13011,6 +15599,12 @@ h6,
   color: #dc2626;
 }
 
+.tournament-table-rating-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .tournament-stats {
   display: flex;
   flex-direction: column;
@@ -13020,6 +15614,7 @@ h6,
 .tournament-stats-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -13212,6 +15807,10 @@ h6,
     grid-template-columns: 1fr;
   }
 
+  .tournament-manual-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
   .tournament-byes-header,
   .tournament-match-header,
   .tournament-match-row {
@@ -13236,6 +15835,10 @@ h6,
     padding: 12px;
   }
 
+  .tournament-table-row-pair {
+    grid-template-columns: minmax(132px, 1.35fr) repeat(3, minmax(0, 1fr));
+  }
+
   .tournament-table-avatar-wrap,
   .tournament-table-player-ring {
     width: 54px;
@@ -13252,6 +15855,17 @@ h6,
     min-height: 20px;
     padding: 2px 7px;
     font-size: 10px;
+  }
+
+  .tournament-table-player-compact .tournament-table-avatar-wrap,
+  .tournament-table-player-compact .tournament-table-player-ring {
+    width: 42px;
+    height: 42px;
+  }
+
+  .tournament-table-player-compact .tournament-participant-avatar {
+    width: 38px;
+    height: 38px;
   }
 
   .tournament-table-stat-head {
@@ -13310,6 +15924,42 @@ h6,
   color: var(--text-secondary);
 }
 
+.tournaments-access-denied {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid rgba(107, 114, 128, 0.2);
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.96);
+}
+
+.tournaments-access-denied-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.tournaments-access-denied-text {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.tournament-json-input {
+  display: none;
+}
+
+.tournaments-sync-notice {
+  padding: 10px 12px;
+  border: 1px solid rgba(84, 101, 255, 0.18);
+  border-radius: 10px;
+  background: rgba(84, 101, 255, 0.07);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .tournaments-error {
   font-size: 14px;
   color: var(--red);
@@ -13323,6 +15973,42 @@ h6,
   min-height: 100vh;
   font-size: 16px;
   color: var(--text-secondary);
+}
+
+.communities-widget-host {
+  position: relative;
+}
+
+.communities-widget-host > .loading {
+  position: relative;
+  min-height: 0;
+  height: 2px;
+  margin: 6px 10px 0;
+  border-radius: 999px;
+  background: rgba(135, 102, 235, 0.12);
+  color: transparent;
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
+.communities-widget-host > .loading::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 36%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(135, 102, 235, 0.26) 0%, #8766eb 48%, rgba(135, 102, 235, 0.24) 100%);
+  animation: communities-loading-line 1.05s linear infinite;
+}
+
+@keyframes communities-loading-line {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(320%);
+  }
 }
 
 .load-error {
@@ -15635,5 +18321,982 @@ h6,
   .community-feed-fab--nav {
     width: 88px;
     height: 72px;
+  }
+}
+
+.tournament-subscription-page {
+  position: relative;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 30px 24px 40px;
+  min-height: 100vh;
+  background: #26282c;
+  border-radius: 20px;
+  color: #f4f6f8;
+}
+
+.tournament-subscription-page--single {
+  max-width: 720px;
+  padding: 34px 18px 30px;
+  background: #4d535d;
+}
+
+.tournament-subscription-background {
+  position: absolute;
+  inset: 0;
+  background-position: center top;
+  background-repeat: no-repeat;
+  background-size: cover;
+  opacity: 0.42;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.tournament-subscription-background--sirius {
+  background:
+    linear-gradient(180deg, rgba(71, 78, 89, 0.14) 0%, rgba(63, 68, 79, 0.72) 100%),
+    radial-gradient(circle at 79% 82%, rgba(250, 190, 103, 0.22) 0%, transparent 17%),
+    radial-gradient(circle at 70% 76%, rgba(255, 255, 255, 0.18) 0%, transparent 14%),
+    radial-gradient(circle at 88% 68%, rgba(26, 28, 32, 0.28) 0%, transparent 13%),
+    linear-gradient(180deg, rgba(35, 39, 46, 0.12) 0%, rgba(35, 39, 46, 0.42) 100%);
+  opacity: 1;
+}
+
+.tournament-subscription-pattern {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.tournament-subscription-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 30px;
+  min-height: 56px;
+}
+
+.tournament-subscription-header--single {
+  margin-bottom: 22px;
+}
+
+.tournament-subscription-back {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  background: rgba(20, 22, 27, 0.56);
+  color: #f2f4f6;
+  border-radius: 12px;
+  height: 40px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+  font-style: italic;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.tournament-subscription-back:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+.tournament-subscription-logo {
+  width: clamp(200px, 24vw, 280px);
+  max-width: 100%;
+}
+
+.tournament-subscription-auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 16px;
+}
+
+.tournament-subscription-auth-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: rgba(11, 13, 18, 0.8);
+  cursor: pointer;
+}
+
+.tournament-subscription-auth-block {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 560px);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(57, 60, 67, 0.92);
+  backdrop-filter: blur(2px);
+  padding: 20px;
+  margin: 0;
+}
+
+.tournament-subscription-auth-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 50%;
+  color: rgba(245, 247, 249, 0.92);
+  background: rgba(18, 21, 27, 0.58);
+  cursor: pointer;
+  font-size: 26px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tournament-subscription-auth-title {
+  margin: 0;
+  font-size: clamp(28px, 8vw, 44px);
+  line-height: 0.96;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+  letter-spacing: 0.03em;
+}
+
+.tournament-subscription-auth-caption {
+  margin: 10px 0 18px;
+  color: rgba(244, 246, 248, 0.86);
+}
+
+.tournament-subscription-auth-block .auth-wrapper {
+  min-height: auto;
+  background: transparent;
+  padding: 0;
+  justify-content: flex-start;
+}
+
+.tournament-subscription-auth-block .auth-card {
+  max-width: none;
+}
+
+.tournament-subscription-plans {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.tournament-subscription-plans--single {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 620px;
+}
+
+.tournament-subscription-global-message {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(35, 38, 46, 0.82);
+}
+
+.tournament-subscription-mobile-scroll-hint {
+  display: none;
+}
+
+.tournament-subscription-plan {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(74, 77, 84, 0.93);
+  box-shadow: 0 20px 32px rgba(0, 0, 0, 0.26);
+  position: relative;
+}
+
+.tournament-subscription-plan--image {
+  gap: 12px;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.tournament-subscription-plan--image::after {
+  display: none;
+}
+
+.tournament-subscription-plan--showcase-featured {
+  grid-column: 1 / -1;
+  width: min(100%, 479px);
+  margin: 0 auto;
+}
+
+.tournament-subscription-plan--single {
+  border-radius: 18px;
+  background: rgba(128, 133, 141, 0.72);
+  border-color: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(2px);
+}
+
+.tournament-subscription-plan--sirius::before {
+  content: "";
+  position: absolute;
+  inset: auto -3% -8% 48%;
+  height: 54%;
+  background:
+    radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.28) 0%, transparent 23%),
+    radial-gradient(circle at 55% 20%, rgba(255, 255, 255, 0.2) 0%, transparent 26%),
+    radial-gradient(circle at 76% 34%, rgba(0, 0, 0, 0.22) 0%, transparent 24%),
+    linear-gradient(180deg, rgba(255, 194, 110, 0.12) 0%, rgba(52, 37, 27, 0.22) 100%);
+  opacity: 0.82;
+  filter: blur(2px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.tournament-subscription-plan::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.06) 0.65px, transparent 0.65px);
+  background-size: 12px 12px;
+  opacity: 0.22;
+  pointer-events: none;
+}
+
+.tournament-subscription-plan-head {
+  padding: 24px 20px 22px;
+  min-height: 180px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: flex-start;
+  gap: 12px;
+  text-align: left;
+}
+
+.tournament-subscription-plan-head--friendship {
+  background: linear-gradient(114deg, #928866 0%, #8f7c66 48%, #8f735f 100%);
+}
+
+.tournament-subscription-plan-head--sport {
+  background: linear-gradient(115deg, #3f557c 0%, #4f4f82 42%, #6f4f85 100%);
+}
+
+.tournament-subscription-plan-head--sirius {
+  background: linear-gradient(115deg, rgba(96, 122, 162, 0.92) 0%, rgba(123, 122, 181, 0.92) 45%, rgba(163, 125, 171, 0.92) 100%);
+}
+
+.tournament-subscription-plan-image-wrap {
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 20px 32px rgba(0, 0, 0, 0.26);
+}
+
+.tournament-subscription-plan-image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.tournament-subscription-plan-title {
+  margin: 0;
+  font-size: clamp(54px, 5.3vw, 74px);
+  line-height: 0.84;
+  letter-spacing: 0.03em;
+  color: #f3f4f6;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+  width: 100%;
+}
+
+.tournament-subscription-plan-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  padding-top: 4px;
+  white-space: nowrap;
+  color: #f6f7f9;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+  line-height: 0.96;
+  text-align: right;
+}
+
+.tournament-subscription-plan-price {
+  font-size: clamp(28px, 2.8vw, 40px);
+}
+
+.tournament-subscription-plan-duration {
+  font-size: clamp(22px, 2.2vw, 31px);
+  letter-spacing: 0.03em;
+}
+
+.tournament-subscription-plan-title span {
+  display: inline-block;
+  margin-top: 4px;
+  font-family: "RF Dewi Expanded UltraBold Italic", "Source Code Pro", sans-serif;
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+
+.tournament-subscription-plan-head--friendship .tournament-subscription-plan-title span {
+  background: linear-gradient(90deg, #f5df65 0%, #ff9d49 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.tournament-subscription-plan-head--sport .tournament-subscription-plan-title span {
+  background: linear-gradient(90deg, #b7efc9 0%, #9fd2ff 50%, #79a9ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.tournament-subscription-plan-head--sirius .tournament-subscription-plan-title span {
+  background: linear-gradient(90deg, #d8f7d8 0%, #89d4ff 54%, #8ab7ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.tournament-subscription-plan--single .tournament-subscription-plan-title {
+  font-size: clamp(46px, 5vw, 66px);
+  line-height: 0.86;
+}
+
+.tournament-subscription-plan--single .tournament-subscription-plan-head {
+  min-height: 148px;
+  padding: 22px 26px 20px;
+}
+
+.tournament-subscription-plan--single .tournament-subscription-plan-price {
+  font-size: clamp(34px, 4vw, 52px);
+}
+
+.tournament-subscription-plan-body-headline {
+  position: relative;
+  z-index: 1;
+  padding: 22px 18px 8px;
+  text-align: center;
+  font-family: "Source Code Pro", "SF Pro Text", sans-serif;
+  font-style: italic;
+  font-size: clamp(22px, 2.4vw, 36px);
+  font-weight: 700;
+  color: #f5f7fa;
+  letter-spacing: 0.04em;
+}
+
+.tournament-subscription-feature-list {
+  list-style: none;
+  margin: 0;
+  padding: 34px 18px 16px;
+  display: grid;
+  grid-template-rows: repeat(4, minmax(112px, 1fr));
+  gap: 14px;
+  flex: 1 1 auto;
+  position: relative;
+  z-index: 1;
+}
+
+.tournament-subscription-feature-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 112px;
+}
+
+.tournament-subscription-feature-label {
+  font-size: clamp(38px, 3.15vw, 45px);
+  line-height: 0.92;
+  font-family: "Source Code Pro", "SF Pro Text", sans-serif;
+  font-style: italic;
+  color: #f3f5f7;
+  max-width: 78%;
+}
+
+.tournament-subscription-feature-status {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.tournament-subscription-feature-status--badge.tournament-subscription-feature-status--on {
+  color: #193113;
+  background: #b8f467;
+}
+
+.tournament-subscription-feature-status--badge.tournament-subscription-feature-status--on::before {
+  content: "";
+  width: 26px;
+  height: 13px;
+  border-left: 3px solid #193113;
+  border-bottom: 3px solid #193113;
+  transform: translateY(-2px) rotate(-45deg);
+  transform-origin: center;
+}
+
+.tournament-subscription-feature-status--badge.tournament-subscription-feature-status--off {
+  color: #ffdfe5;
+  background: #ff616a;
+}
+
+.tournament-subscription-feature-status--badge.tournament-subscription-feature-status--off::before,
+.tournament-subscription-feature-status--badge.tournament-subscription-feature-status--off::after {
+  content: "";
+  position: absolute;
+  width: 30px;
+  height: 4px;
+  border-radius: 999px;
+  background: #ffdfe5;
+}
+
+.tournament-subscription-feature-status--badge.tournament-subscription-feature-status--off::before {
+  transform: rotate(45deg);
+}
+
+.tournament-subscription-feature-status--badge.tournament-subscription-feature-status--off::after {
+  transform: rotate(-45deg);
+}
+
+.tournament-subscription-feature-status--toggle {
+  width: 84px;
+  height: 40px;
+  border-radius: 999px;
+  background: #ff5b64;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.tournament-subscription-feature-status--toggle::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f7fafc;
+  box-shadow: 0 6px 12px rgba(8, 9, 13, 0.22);
+  transition: left 140ms ease;
+}
+
+.tournament-subscription-feature-status--toggle.tournament-subscription-feature-status--on {
+  background: #b8f467;
+}
+
+.tournament-subscription-feature-status--toggle.tournament-subscription-feature-status--on::before {
+  left: 48px;
+}
+
+.tournament-subscription-feature-status--toggle.tournament-subscription-feature-status--off {
+  background: #ff5b64;
+}
+
+.tournament-subscription-feature-list--single {
+  padding: 8px 26px 18px;
+  grid-template-rows: none;
+  gap: 16px;
+}
+
+.tournament-subscription-feature-item--single {
+  min-height: 58px;
+  position: relative;
+  z-index: 1;
+}
+
+.tournament-subscription-feature-label--single {
+  max-width: 68%;
+  font-size: clamp(20px, 2.2vw, 31px);
+  line-height: 1.02;
+  font-style: normal;
+}
+
+.tournament-subscription-purchase-block {
+  margin: 0 12px 14px;
+  padding: 14px 12px 16px;
+  border-radius: 13px;
+  background: rgba(29, 31, 38, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  position: relative;
+  z-index: 1;
+}
+
+.tournament-subscription-plan--single .tournament-subscription-purchase-block {
+  margin: 0 18px 18px;
+  padding: 18px 18px 20px;
+  background: rgba(102, 107, 114, 0.74);
+}
+
+.tournament-subscription-purchase-block--image {
+  margin: 0;
+  padding: 16px;
+}
+
+.tournament-subscription-remaining-wrap {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  text-align: center;
+}
+
+.tournament-subscription-remaining-label,
+.tournament-subscription-remaining-value {
+  font-family: "Source Code Pro", "SF Pro Text", sans-serif;
+  font-style: italic;
+  font-size: clamp(24px, 2.8vw, 38px);
+  line-height: 1.08;
+  font-weight: 500;
+  color: #f8fafc;
+  text-align: center;
+}
+
+.tournament-subscription-plan--image .tournament-subscription-remaining-label,
+.tournament-subscription-plan--image .tournament-subscription-remaining-value {
+  font-style: normal;
+  font-size: clamp(18px, 1.8vw, 24px);
+  line-height: 1.2;
+}
+
+.tournament-subscription-plan--image .tournament-subscription-remaining-wrap {
+  gap: 2px;
+}
+
+.tournament-subscription-remaining-caption {
+  font-size: 11px;
+  color: rgba(230, 236, 242, 0.82);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.tournament-subscription-facts {
+  margin: 10px 0 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.tournament-subscription-fact {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(30, 33, 38, 0.62);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tournament-subscription-fact span {
+  font-size: 12px;
+  color: rgba(209, 217, 225, 0.82);
+  text-transform: uppercase;
+}
+
+.tournament-subscription-fact strong {
+  font-size: 16px;
+  color: #f3f6f8;
+}
+
+.tournament-subscription-price {
+  margin: 12px 0 0;
+  font-size: 26px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.tournament-subscription-buy {
+  width: 100%;
+  margin: 10px 0 0;
+  border: none;
+  border-radius: 12px;
+  height: 48px;
+  background: linear-gradient(135deg, #8ae24e 0%, #53be6c 100%);
+  color: #1c2b16;
+  font-size: 16px;
+  font-family: "Source Code Pro", "SF Pro Text", sans-serif;
+  font-style: italic;
+  font-weight: 500;
+  letter-spacing: 0;
+  box-shadow: 0 12px 20px rgba(25, 58, 18, 0.28);
+  cursor: pointer;
+}
+
+.tournament-subscription-plan--single .tournament-subscription-buy {
+  height: 54px;
+  font-size: 17px;
+}
+
+.tournament-subscription-buy:hover:enabled {
+  filter: brightness(1.06);
+}
+
+.tournament-subscription-buy:disabled {
+  cursor: not-allowed;
+  opacity: 1;
+  background: #6f7680;
+  color: #e0e5ea;
+  box-shadow: none;
+}
+
+.tournament-subscription-warning,
+.tournament-subscription-error,
+.tournament-subscription-info,
+.tournament-subscription-updated {
+  margin: 9px 0 0;
+  font-size: 12px;
+}
+
+.tournament-subscription-warning,
+.tournament-subscription-updated {
+  color: rgba(224, 231, 239, 0.84);
+}
+
+.tournament-subscription-error {
+  color: #ffa5af;
+}
+
+.tournament-subscription-info {
+  color: #bbf58e;
+}
+
+@media (max-width: 980px) {
+  .tournament-subscription-page {
+    max-width: 680px;
+    padding: 18px 14px 28px;
+    border-radius: 0;
+  }
+
+  .tournament-subscription-header {
+    margin-bottom: 20px;
+    min-height: 48px;
+  }
+
+  .tournament-subscription-back {
+    height: 36px;
+    font-size: 11px;
+    padding: 0 12px;
+  }
+
+  .tournament-subscription-logo {
+    width: clamp(172px, 38vw, 236px);
+  }
+
+  .tournament-subscription-plans {
+    grid-template-columns: 1fr;
+    max-width: 520px;
+  }
+
+  .tournament-subscription-page--single {
+    max-width: 560px;
+    background: #4d535d;
+  }
+
+  .tournament-subscription-plans--single {
+    max-width: 100%;
+  }
+
+  .tournament-subscription-plan--single .tournament-subscription-plan-head {
+    min-height: 138px;
+  }
+
+  .tournament-subscription-feature-label--single {
+    font-size: clamp(19px, 4.8vw, 27px);
+  }
+
+  .tournament-subscription-feature-label {
+    font-size: clamp(30px, 6.4vw, 40px);
+  }
+
+  .tournament-subscription-plan-head {
+    min-height: 156px;
+  }
+
+  .tournament-subscription-plan-meta {
+    padding-top: 2px;
+  }
+}
+
+@media (max-width: 640px) {
+  .tournament-subscription-mobile-scroll-hint {
+    grid-column: 1 / -1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: fit-content;
+    margin: 0 auto 4px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: rgba(18, 21, 27, 0.66);
+    color: rgba(244, 246, 248, 0.92);
+    font-family: "Source Code Pro", "SF Pro Text", sans-serif;
+    font-size: 12px;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    box-shadow: 0 10px 24px rgba(8, 10, 14, 0.22);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+  }
+
+  .tournament-subscription-mobile-scroll-hint-arrow {
+    font-size: 15px;
+    line-height: 1;
+    animation: tournamentSubscriptionScrollHintArrowBounce 1.2s ease-in-out infinite;
+  }
+
+  .tournament-subscription-header {
+    margin-bottom: 16px;
+  }
+
+  .tournament-subscription-back {
+    left: 2px;
+  }
+
+  .tournament-subscription-auth-overlay {
+    padding: 16px 10px;
+  }
+
+  .tournament-subscription-auth-block {
+    max-height: calc(100vh - 32px);
+    padding: 16px 14px;
+  }
+
+  .tournament-subscription-auth-close {
+    top: 6px;
+    right: 6px;
+    width: 30px;
+    height: 30px;
+    font-size: 22px;
+  }
+
+  .tournament-subscription-plan {
+    border-radius: 12px;
+  }
+
+  .tournament-subscription-plan--image {
+    gap: 10px;
+  }
+
+  .tournament-subscription-plan--showcase-featured {
+    width: 100%;
+  }
+
+  .tournament-subscription-plan-title {
+    font-size: clamp(38px, 9.2vw, 46px);
+  }
+
+  .tournament-subscription-plan-price {
+    font-size: 27px;
+  }
+
+  .tournament-subscription-plan-duration {
+    font-size: 21px;
+  }
+
+  .tournament-subscription-feature-label {
+    font-size: clamp(21px, 5.8vw, 28px);
+    line-height: 0.98;
+  }
+
+  .tournament-subscription-feature-status {
+    width: 44px;
+    height: 44px;
+  }
+
+  .tournament-subscription-feature-status--on::before {
+    width: 20px;
+    height: 10px;
+  }
+
+  .tournament-subscription-feature-status--off::before,
+  .tournament-subscription-feature-status--off::after {
+    width: 24px;
+    height: 3px;
+  }
+
+  .tournament-subscription-feature-list {
+    grid-template-rows: repeat(4, minmax(112px, 1fr));
+  }
+
+  .tournament-subscription-feature-list--single {
+    padding: 8px 18px 16px;
+    gap: 12px;
+  }
+
+  .tournament-subscription-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .tournament-subscription-remaining-label,
+  .tournament-subscription-remaining-value {
+    font-size: 27px;
+  }
+
+  .tournament-subscription-buy {
+    font-size: 15px;
+  }
+
+  .tournament-subscription-page--single {
+    padding: 22px 10px 18px;
+  }
+
+  .tournament-subscription-plan--single {
+    border-radius: 16px;
+  }
+
+  .tournament-subscription-plan--single .tournament-subscription-plan-head {
+    padding: 18px 18px 16px;
+    min-height: 128px;
+  }
+
+  .tournament-subscription-plan--single .tournament-subscription-plan-title {
+    font-size: clamp(34px, 9.6vw, 44px);
+  }
+
+  .tournament-subscription-plan-body-headline {
+    padding: 18px 14px 6px;
+    font-size: 18px;
+  }
+
+  .tournament-subscription-feature-item--single {
+    min-height: 52px;
+  }
+
+  .tournament-subscription-feature-label--single {
+    max-width: 64%;
+    font-size: 18px;
+  }
+
+  .tournament-subscription-feature-status--toggle {
+    width: 74px;
+    height: 36px;
+  }
+
+  .tournament-subscription-feature-status--toggle::before {
+    top: 4px;
+    left: 4px;
+    width: 28px;
+    height: 28px;
+  }
+
+  .tournament-subscription-feature-status--toggle.tournament-subscription-feature-status--on::before {
+    left: 42px;
+  }
+
+  .tournament-subscription-plan--single .tournament-subscription-purchase-block {
+    margin: 0 14px 14px;
+    padding: 14px 14px 16px;
+  }
+
+  .tournament-subscription-purchase-block--image {
+    padding: 14px;
+  }
+}
+
+@keyframes tournamentSubscriptionScrollHintArrowBounce {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.72;
+  }
+  50% {
+    transform: translateY(3px);
+    opacity: 1;
+  }
+}
+
+@media (max-width: 420px) {
+  .tournament-subscription-plan-title {
+    font-size: 34px;
+  }
+
+  .tournament-subscription-plan-head {
+    gap: 8px;
+  }
+
+  .tournament-subscription-plan-price {
+    font-size: 22px;
+  }
+
+  .tournament-subscription-plan-duration {
+    font-size: 17px;
+  }
+
+  .tournament-subscription-feature-label {
+    font-size: 22px;
+    line-height: 1;
+  }
+
+  .tournament-subscription-plan-head {
+    min-height: 126px;
+    padding: 14px 14px 13px;
+  }
+
+  .tournament-subscription-feature-list {
+    padding: 18px 14px 10px;
+    grid-template-rows: repeat(4, minmax(104px, 1fr));
+  }
+
+  .tournament-subscription-purchase-block {
+    margin: 0 10px 10px;
+    padding: 12px 10px;
+  }
+
+  .tournament-subscription-remaining-label,
+  .tournament-subscription-remaining-value {
+    font-size: 24px;
+  }
+
+  .tournament-subscription-plan--single .tournament-subscription-plan-price {
+    font-size: 21px;
+  }
+
+  .tournament-subscription-feature-label--single {
+    font-size: 16px;
+  }
+
+  .tournament-subscription-feature-status--toggle {
+    width: 68px;
+    height: 34px;
+  }
+
+  .tournament-subscription-feature-status--toggle::before {
+    width: 26px;
+    height: 26px;
+  }
+
+  .tournament-subscription-feature-status--toggle.tournament-subscription-feature-status--on::before {
+    left: 38px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tournament-subscription-mobile-scroll-hint-arrow {
+    animation: none;
   }
 }
