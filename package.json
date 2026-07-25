@@ -18,6 +18,10 @@
     "package:upload:prod": "bash ./scripts/package-lk-upload.sh prod",
     "package:upload:dev": "bash ./scripts/package-lk-upload.sh dev",
     "package:upload:all": "bash ./scripts/package-lk-upload.sh all",
+    "release:preflight": "node scripts/assert-clean-deploy.mjs dist/release.json dist/release-dev.json",
+    "release:preflight:prod": "node scripts/assert-clean-deploy.mjs dist/release.json",
+    "release:preflight:dev": "node scripts/assert-clean-deploy.mjs dist/release-dev.json",
+    "test:release-provenance": "node --test scripts/tests/releaseProvenance.test.mjs",
     "build:analyze": "ANALYZE=1 vite build",
     "lint": "eslint .",
     "preview": "vite preview"

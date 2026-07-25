@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { readRepositoryProvenance } from "./lib/release-provenance.mjs";
 
 function formatUtcStamp(date) {
   const year = date.getUTCFullYear();
@@ -21,9 +22,23 @@ if (!outDir) {
 
 const now = new Date();
 const version = (process.env.LK_RELEASE_VERSION || "").trim() || formatUtcStamp(now);
+let provenance;
+try {
+  provenance = readRepositoryProvenance(process.cwd());
+} catch (error) {
+  console.warn(`Git provenance is unavailable: ${error.message}`);
+  provenance = {
+    sourceCommit: null,
+    sourceBranch: null,
+    sourceDirty: true,
+  };
+}
 const payload = {
   version,
   generatedAt: now.toISOString(),
+  sourceCommit: provenance.sourceCommit,
+  sourceBranch: provenance.sourceBranch,
+  sourceDirty: provenance.sourceDirty,
 };
 
 const cwd = process.cwd();

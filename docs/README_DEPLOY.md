@@ -1,5 +1,25 @@
 # Деплой — автоподгрузка скрипта в Tilda
 
+## 0. Обязательный clean-release preflight
+
+Деплой и сборка upload-пакета разрешены только из чистого Git checkout.
+`release.json` и `release-dev.json` содержат полный SHA исходного коммита и
+признак dirty-состояния. Команды `deploy:*` и `package:upload:*` автоматически
+проверяют, что:
+
+- в рабочем дереве нет tracked и untracked изменений;
+- манифест собран из текущего `HEAD`;
+- манифест не был создан из dirty checkout.
+
+Ручная проверка:
+
+```bash
+npm run release:preflight
+```
+
+Полный порядок стабилизации и переноса старых исправлений описан в
+`docs/MAIN_STABILIZATION.md`.
+
 ## 1. Установить зависимости и собрать
 ```bash
 npm install
