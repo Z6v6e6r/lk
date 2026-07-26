@@ -66,6 +66,16 @@ the separately counted 2 games-list orphans, 7 subscription mismatches, and
 pre-Mongo HTTP 200 defects are preserved, not silently fixed. Evidence is in
 `docs/NODERED_GAMES_CREATE_UPSERT_RECOVERY_2026-07-26.md`.
 
+Phase 12 normalizes the active tournament document prepare function behind
+`POST /lk/tournaments/americano` and guards its complete seven-node graph.
+This reduces unresolved audited legacy units from 6 to 5 and, more
+specifically, active mismatches from 5 to 4. The four active mismatches are
+`fn_patch` plus the three split-payment functions; the fifth unresolved unit is
+the orphan/retirement candidate `fn_write_result_response`. Raw/transformed
+active debug taps, missing-ID handling, pre-Mongo HTTP response, and
+caller-provided rating-change trust remain explicit holds. Evidence is in
+`docs/NODERED_TOURNAMENT_PREPARE_RECOVERY_2026-07-26.md`.
+
 ## Decision
 
 Do not run a broad build/deploy from either `origin/main` or the quarantine
@@ -234,11 +244,16 @@ review are mandatory before any Node-RED recovery commit or rollout.
    recovery cohort; audit output alone is not a deployable artifact.
 9. Review the three held chat function variants as separate business changes;
    do not fold them into source normalization.
-10. Direct lookup normalized one of the prior 8 legacy-dependency mismatches.
-    The 2 games-list orphans, 7 subscription mismatches, and 3 split-payment
-    mismatches remain separate holds.
-11. Review the 7 remaining legacy-dependency mismatches one at a time; no broad
-    games patch chain is authorized.
+10. After Phase 12 the authoritative audited queue is exactly 5 unresolved
+    units: 4 active function-body mismatches (`fn_patch` and the coupled three
+    split-payment functions) plus the orphan/retirement candidate
+    `fn_write_result_response`.
+11. Review `fn_patch` first, then review the split-payment trio together as one
+    coupled recovery cohort; do not split those three functions into separate
+    recovery changes. Review `fn_write_result_response` last as a retirement
+    decision. Its exact live body occurs zero times, repository code has no
+    references to it, and the remaining reference is documentation only; no
+    patcher reference is claimed.
 
 ### Hold / quarantine
 

@@ -39,6 +39,7 @@
     "test:games-list-identity-recovery": "node --test scripts/tests/gamesListIdentityRecovery.test.mjs",
     "test:games-direct-lookup-recovery": "node --test scripts/tests/gamesDirectLookupRecovery.test.mjs",
     "test:games-create-upsert-recovery": "node --test scripts/tests/gamesCreateUpsertRecovery.test.mjs",
+    "test:tournament-prepare-recovery": "node --test scripts/tests/tournamentPrepareRecovery.test.mjs",
     "build:analyze": "ANALYZE=1 vite build",
     "lint": "eslint .",
     "preview": "vite preview"

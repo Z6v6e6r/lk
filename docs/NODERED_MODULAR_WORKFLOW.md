@@ -137,3 +137,16 @@ node scripts/patch_live_games_create_upsert.mjs \
 This synchronizes only `Prepare game upsert` after verifying the exact six POST
 routes and their full 21-node reachable graph. It does not import or deploy the
 candidate. See `docs/NODERED_GAMES_CREATE_UPSERT_RECOVERY_2026-07-26.md`.
+
+## Guarded tournament prepare check
+
+```bash
+node scripts/patch_live_tournament_prepare.mjs \
+  --workspace /absolute/external/live-workspace \
+  --output /absolute/external/new-tournament-prepare/candidate.json \
+  --report /absolute/external/new-tournament-prepare/report.json
+```
+
+This synchronizes only `Prepare tournament doc` after verifying the exact
+Americano POST route and its seven-node graph. It does not import or deploy the
+candidate. See `docs/NODERED_TOURNAMENT_PREPARE_RECOVERY_2026-07-26.md`.
