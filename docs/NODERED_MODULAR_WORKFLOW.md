@@ -98,3 +98,16 @@ node scripts/patch_nodered_chat_flow.mjs \
 
 See `docs/NODERED_CHAT_RECOVERY_2026-07-26.md` for the fixed preimage and hold
 boundaries.
+
+## Guarded games-list identity check
+
+```bash
+node scripts/patch_live_games_list_identity.mjs \
+  --workspace /absolute/external/live-workspace \
+  --output /absolute/external/new-games-list-candidate/candidate.json \
+  --report /absolute/external/new-games-list-candidate/report.json
+```
+
+This synchronizes only the active query and normalizer. It does not run the
+legacy games constructor or touch similarly named orphan functions. See
+`docs/NODERED_GAMES_LIST_IDENTITY_RECOVERY_2026-07-26.md`.

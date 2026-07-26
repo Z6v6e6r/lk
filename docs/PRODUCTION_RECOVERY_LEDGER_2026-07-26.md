@@ -40,6 +40,16 @@ so the current candidate changes zero nodes. Three dirty chat variants remain
 on hold. Evidence is recorded in
 `docs/NODERED_CHAT_RECOVERY_2026-07-26.md`.
 
+Phase 9 recovers the exact live games-list identity query and normalizer as a
+two-function cohort. Fresh verification produces a byte-identical zero-change
+candidate. Within the 23 audited legacy dependencies, the prior chat cohort
+normalized 11 and this cohort normalized 2, leaving 8 legacy-dependency
+mismatches. Two similarly named orphan games-list nodes are counted separately.
+The broader recovery classification separately retains 7 subscription and
+3 split-payment function mismatches. The legacy broad constructor and dirty
+normalizer remain quarantined.
+Evidence is in `docs/NODERED_GAMES_LIST_IDENTITY_RECOVERY_2026-07-26.md`.
+
 ## Decision
 
 Do not run a broad build/deploy from either `origin/main` or the quarantine
@@ -208,6 +218,9 @@ review are mandatory before any Node-RED recovery commit or rollout.
    recovery cohort; audit output alone is not a deployable artifact.
 9. Review the three held chat function variants as separate business changes;
    do not fold them into source normalization.
+10. Review the 8 remaining legacy-dependency mismatches independently. The
+    2 games-list orphans, 7 subscription mismatches, and 3 split-payment
+    mismatches are separate holds; this cohort authorizes none of them.
 
 ### Hold / quarantine
 
