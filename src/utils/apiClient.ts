@@ -2342,6 +2342,12 @@ export interface Exercise {
   cancellationDeadline?: string | null;
 }
 
+export {
+  isTournamentDirectionId,
+  isTournamentExerciseCategory,
+  type TournamentExerciseLike,
+} from "./tournamentCategory";
+
 export interface ExerciseBookingClient {
   id: string;
   firstName?: string;

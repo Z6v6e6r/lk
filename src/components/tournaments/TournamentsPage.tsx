@@ -9,6 +9,7 @@ import {
   apiFetchProfile,
   apiFetchTournamentHistory,
   apiFetchTournamentParticipants,
+  isTournamentExerciseCategory,
   apiSaveOnboardingLevel,
   getServ2Origin,
   apiUpdateAmericanoResults,
@@ -50,7 +51,6 @@ interface TournamentsPageProps {
   initialOpenDate?: string | null;
 }
 
-const TOURNAMENT_DIRECTION_ID = 2617;
 const DAYS_BEFORE_TODAY = 30;
 const DAYS_AFTER_TODAY = 30;
 const TODAY_DATE_INDEX = DAYS_BEFORE_TODAY;
@@ -2877,10 +2877,7 @@ export default function TournamentsPage({
 
   const canHostTournaments = profile ? hasTournamentHostingAccess(profile) : false;
   const tournaments = useMemo(
-    () =>
-      items.filter((ex) =>
-        ex.direction?.id === TOURNAMENT_DIRECTION_ID || ex.type?.id === TOURNAMENT_DIRECTION_ID,
-      ),
+    () => items.filter((ex) => isTournamentExerciseCategory(ex)),
     [items],
   );
   const visibleTournaments = useMemo(

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -9,6 +10,10 @@ function summarizeNode(node) {
     name: node.name || node.label || "",
     z: node.z || "",
   };
+}
+
+function sha256Text(value) {
+  return createHash("sha256").update(String(value ?? ""), "utf8").digest("hex");
 }
 
 export function auditNodeRedFlowDrift(candidateFlow, liveFlow) {
@@ -38,10 +43,17 @@ export function auditNodeRedFlowDrift(candidateFlow, liveFlow) {
         (key) => !isDeepStrictEqual(candidateNode[key], liveNode[key]),
       )
       .sort();
-    changed.push({
+    const summary = {
       ...summarizeNode(liveNode),
       fields,
-    });
+    };
+    if (fields.includes("func")) {
+      summary.functionSha256 = {
+        candidate: sha256Text(candidateNode.func),
+        live: sha256Text(liveNode.func),
+      };
+    }
+    changed.push(summary);
   }
 
   for (const [id, candidateNode] of candidateById) {

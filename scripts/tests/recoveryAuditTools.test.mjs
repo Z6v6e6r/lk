@@ -53,14 +53,18 @@ test("Node-RED audit reports ID and changed-field drift without function bodies"
   assert.equal(result.liveCount, 3);
   assert.deepEqual(result.added.map((node) => node.id), ["added"]);
   assert.deepEqual(result.removed.map((node) => node.id), ["removed"]);
-  assert.deepEqual(result.changed, [
-    {
-      id: "changed",
-      type: "function",
-      name: "Changed",
-      z: "",
-      fields: ["func"],
-    },
-  ]);
+  assert.equal(result.changed.length, 1);
+  const [changedNode] = result.changed;
+  assert.equal(changedNode.id, "changed");
+  assert.equal(changedNode.type, "function");
+  assert.equal(changedNode.name, "Changed");
+  assert.equal(changedNode.z, "");
+  assert.deepEqual(changedNode.fields, ["func"]);
+  assert.match(changedNode.functionSha256.candidate, /^[a-f0-9]{64}$/);
+  assert.match(changedNode.functionSha256.live, /^[a-f0-9]{64}$/);
+  assert.notEqual(
+    changedNode.functionSha256.candidate,
+    changedNode.functionSha256.live,
+  );
   assert.equal(JSON.stringify(result).includes("return [msg]"), false);
 });

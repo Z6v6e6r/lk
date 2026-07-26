@@ -11,6 +11,7 @@ import {
   apiFetchPadelGamesByPhone,
   apiFetchTournamentHistory,
   apiUpdatePadelGameRecord,
+  isTournamentExerciseCategory,
 } from "../../utils/apiClient";
 import type {
   Booking,
@@ -84,7 +85,6 @@ const COMMUNITY_JOIN_PATH =
 const INVITE_JOIN_PATH = PUBLIC_INVITE_PATH;
 const CHAT_READ_STORAGE_KEY_PREFIX = "padlhub.chat.lastRead.v1";
 const RATING_LABELS = ["D", "D+", "C", "C+", "B", "B+", "A"];
-const TOURNAMENT_DIRECTION_ID = 2617;
 const TOURNAMENT_LOOKBACK_DAYS = 7;
 const TOURNAMENT_LOOKAHEAD_DAYS = 14;
 const DEV_TOURNAMENT_SCAN_DELAY_MS = 3000;
@@ -885,10 +885,7 @@ function isTournamentBookingCandidate(booking: Booking): boolean {
     .trim()
     .toLowerCase();
 
-  if (
-    booking.exercise?.direction?.id === TOURNAMENT_DIRECTION_ID
-    || booking.exercise?.type?.id === TOURNAMENT_DIRECTION_ID
-  ) {
+  if (isTournamentExerciseCategory(booking.exercise)) {
     return true;
   }
 
@@ -911,10 +908,7 @@ function isTournamentExercise(exercise: Booking["exercise"] | null | undefined):
     .trim()
     .toLowerCase();
 
-  if (
-    exercise.direction?.id === TOURNAMENT_DIRECTION_ID
-    || exercise.type?.id === TOURNAMENT_DIRECTION_ID
-  ) {
+  if (isTournamentExerciseCategory(exercise)) {
     return true;
   }
 

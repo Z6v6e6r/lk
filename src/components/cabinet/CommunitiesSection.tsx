@@ -20,6 +20,7 @@ import {
   apiFetchExercisesByVisibleDate,
   apiFetchPadelGameRecord,
   apiFetchTournamentParticipants,
+  isTournamentExerciseCategory,
   type Exercise,
   type ExerciseBooking,
   type PadelGamePlayer,
@@ -209,7 +210,6 @@ const COMMUNITY_GRAPH_ZOOM_STEP = 0.12;
 const COMMUNITY_GRAPH_BASE_NODE_SCALE = 1.5;
 const COMMUNITY_GRAPH_BASE_SPACING_MULTIPLIER = 2;
 const COMMUNITY_GRAPH_BASE_CLEARANCE_TO_PERCENT = 0.28;
-const COMMUNITY_TOURNAMENT_DIRECTION_ID = 2617;
 const COMMUNITY_TOURNAMENT_LOOKAHEAD_DAYS = 14;
 const COMMUNITY_TOURNAMENT_RECENT_GRACE_MS = 1000 * 60 * 60 * 6;
 const COMMUNITY_GRAPH_CREATE_NODE = {
@@ -1367,8 +1367,7 @@ function formatExerciseTime(value?: string | null) {
 }
 
 function isTournamentExercise(exercise: Exercise) {
-  return exercise.direction?.id === COMMUNITY_TOURNAMENT_DIRECTION_ID
-    || exercise.type?.id === COMMUNITY_TOURNAMENT_DIRECTION_ID;
+  return isTournamentExerciseCategory(exercise);
 }
 
 function getExerciseTimestamp(value?: string | null) {

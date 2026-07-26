@@ -25,6 +25,7 @@
     "audit:nodered-flow-drift": "node scripts/audit_nodered_flow_drift.mjs",
     "test:release-provenance": "node --test scripts/tests/releaseProvenance.test.mjs",
     "test:recovery-audits": "node --test scripts/tests/recoveryAuditTools.test.mjs",
+    "test:tournament-category": "node --experimental-strip-types --test scripts/tests/tournamentCategory.test.ts",
     "build:analyze": "ANALYZE=1 vite build",
     "lint": "eslint .",
     "preview": "vite preview"

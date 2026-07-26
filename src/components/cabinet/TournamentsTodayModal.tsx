@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../UI/Modal";
-import { apiFetchExercisesByVisibleDate } from "../../utils/apiClient";
+import { apiFetchExercisesByVisibleDate, isTournamentExerciseCategory } from "../../utils/apiClient";
 import type { Exercise } from "../../utils/apiClient";
 
 interface TournamentsTodayModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
-
-const TOURNAMENT_DIRECTION_ID = 2617;
 
 function formatDate(date: Date) {
   const year = date.getFullYear();
@@ -41,9 +39,7 @@ export function TournamentsTodayModal({ isOpen, onClose }: TournamentsTodayModal
       .finally(() => setLoading(false));
   }, [isOpen, todayStr]);
 
-  const tournaments = items.filter((ex) =>
-    ex.direction?.id === TOURNAMENT_DIRECTION_ID || ex.type?.id === TOURNAMENT_DIRECTION_ID,
-  );
+  const tournaments = items.filter((ex) => isTournamentExerciseCategory(ex));
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Турниры на сегодня">
