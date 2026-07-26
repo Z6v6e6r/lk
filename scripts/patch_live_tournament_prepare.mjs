@@ -38,12 +38,18 @@ export const TOURNAMENT_PREPARE_CONTRACT = Object.freeze({
     id: '4f0f1ce8189a9e8c',
     nodeSha256: '79575aa6149032f5a8dbb94408a3e3f9121a12965ce606c30bd9633eaea03ba3',
     funcSha256: '0b9a8c577a4fb0afb6f05888c7367b5806d2917e0ffd9d39edea191b8ce27688',
-    sourceSha256: '0b9a8c577a4fb0afb6f05888c7367b5806d2917e0ffd9d39edea191b8ce27688',
+    sourceSha256: '3dc83ec10d4faa69e901795e95982f0ebe94098f6b26fa6b92b2ce7560a22225',
+    postimageNodeSha256: '13fa95ee62ffc65398ea023ae44cb154b2bddfdebe2472677cb3109e519253c2',
     type: 'function',
     z: 'f9575c8726e29196',
     name: 'Prepare tournament doc',
     outputs: 1,
     wires: [['f476ee4e8d98c43b', 'c76ac8d5319455b4', 'bf7e8b4a95f35228']],
+    postimageOutputs: 2,
+    postimageWires: [
+      ['f476ee4e8d98c43b', 'c76ac8d5319455b4', 'bf7e8b4a95f35228'],
+      ['c76ac8d5319455b4'],
+    ],
   },
   graphNodes: [
     {
@@ -52,6 +58,8 @@ export const TOURNAMENT_PREPARE_CONTRACT = Object.freeze({
       type: 'debug',
       name: 'Americano save payload',
       active: true,
+      postimageActive: false,
+      postimageNodeSha256: 'c9bf3e08b8c38a90fc47bb01517b967942390a9139acb5461d100238cdd572b4',
       wires: [],
     },
     {
@@ -68,6 +76,9 @@ export const TOURNAMENT_PREPARE_CONTRACT = Object.freeze({
       nodeSha256: 'f0010f90832e9602000df4168874bc6aa6be42f5609c9dc92b8b83b0c6db923b',
       type: 'http response',
       name: '',
+      statusCode: '200',
+      postimageStatusCode: '',
+      postimageNodeSha256: 'c21521c45bdc38ec41c3653503fb0d249429cb382f5f2f36566bde747a23f51d',
       wires: [],
     },
     {
@@ -76,6 +87,8 @@ export const TOURNAMENT_PREPARE_CONTRACT = Object.freeze({
       type: 'debug',
       name: 'Americano save payload',
       active: true,
+      postimageActive: false,
+      postimageNodeSha256: '1f63ff59a8a39a3c03a747a17c697a900eb14996ac261f27f356913bf3e37d12',
       wires: [],
     },
     {
@@ -225,6 +238,7 @@ export function synchronizeTournamentPrepare(
     const fields = ['id', 'type', 'name', 'wires'];
     if (item.type === 'function') fields.push('outputs');
     if (item.type === 'debug') fields.push('active');
+    if (item.type === 'http response') fields.push('statusCode');
     if (item.type === 'mongodb4') {
       fields.push(
         'clientNode', 'mode', 'collection', 'operation',
@@ -246,6 +260,27 @@ export function synchronizeTournamentPrepare(
     fail('Tournament prepare tracked source contract mismatch');
   }
   target.func = prepareSource;
+  target.outputs = contract.target.postimageOutputs;
+  target.wires = structuredClone(contract.target.postimageWires);
+
+  const debugNodes = contract.graphNodes.filter((item) => item.type === 'debug');
+  for (const item of debugNodes) {
+    exactNode(flow, item.id, 'Tournament prepare debug').active = item.postimageActive;
+  }
+  const responseContract = contract.graphNodes.find((item) => item.type === 'http response');
+  if (!responseContract) fail('Tournament prepare response contract missing');
+  const responseNode = exactNode(flow, responseContract.id, 'Tournament prepare response');
+  responseNode.statusCode = responseContract.postimageStatusCode;
+
+  if (sha256Json(target) !== contract.target.postimageNodeSha256) {
+    fail('Tournament prepare target postimage mismatch');
+  }
+  for (const item of [...debugNodes, responseContract]) {
+    if (sha256Json(exactNode(flow, item.id, 'Tournament prepare approved postimage'))
+      !== item.postimageNodeSha256) {
+      fail(`Tournament prepare approved postimage mismatch for ${item.id}`);
+    }
+  }
 
   const changedNodes = flow.flatMap((node, index) => {
     const previous = before[index];
@@ -255,16 +290,26 @@ export function synchronizeTournamentPrepare(
       .sort();
     return [{ id: node.id, changedFields }];
   });
-  if (changedNodes.some((change) => (
-    change.id !== contract.target.id || !isDeepStrictEqual(change.changedFields, ['func'])
-  ))) {
-    fail('Candidate changed nodes or fields outside tournament prepare target');
+  const expectedChanges = [
+    { id: contract.target.id, changedFields: ['func', 'outputs', 'wires'] },
+    ...debugNodes.map((item) => ({ id: item.id, changedFields: ['active'] })),
+    { id: responseContract.id, changedFields: ['statusCode'] },
+  ].sort((left, right) => left.id.localeCompare(right.id));
+  if (!isDeepStrictEqual(
+    [...changedNodes].sort((left, right) => left.id.localeCompare(right.id)),
+    expectedChanges,
+  )) {
+    fail('Candidate changed nodes or fields outside tournament prepare hardening');
   }
 
   const afterInvariants = snapshotInvariants(flow);
+  const withoutTargetWires = (items) => items.filter((item) => item.id !== contract.target.id);
   if (
     !isDeepStrictEqual(beforeInvariants.ids, afterInvariants.ids)
-    || !isDeepStrictEqual(beforeInvariants.wires, afterInvariants.wires)
+    || !isDeepStrictEqual(
+      withoutTargetWires(beforeInvariants.wires),
+      withoutTargetWires(afterInvariants.wires),
+    )
     || !isDeepStrictEqual(beforeInvariants.links, afterInvariants.links)
     || !isDeepStrictEqual(beforeInvariants.routes, afterInvariants.routes)
   ) {

@@ -12,7 +12,30 @@ const toRating = (value) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 const organizer = body.organizer && typeof body.organizer === "object" ? body.organizer : {};
-const tournamentId = toText(body.tournamentId);
+const rawTournamentId = body.tournamentId;
+const tournamentId = typeof rawTournamentId === "string" ? rawTournamentId.trim() : null;
+if (rawTournamentId === null || rawTournamentId === undefined || tournamentId === "") {
+  const errorMsg = Object.assign({}, msg, {
+    statusCode: 400,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    payload: {
+      error: "tournamentId is required",
+      code: "TOURNAMENT_ID_REQUIRED",
+    },
+  });
+  return [null, errorMsg];
+}
+if (!tournamentId || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(tournamentId)) {
+  const errorMsg = Object.assign({}, msg, {
+    statusCode: 400,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    payload: {
+      error: "tournamentId is invalid",
+      code: "TOURNAMENT_ID_INVALID",
+    },
+  });
+  return [null, errorMsg];
+}
 const startedAt = toText(body.createdAt) || now;
 const startRatingChanges = (Array.isArray(body.startRatingChanges) ? body.startRatingChanges : [])
   .map((entry, index) => {
@@ -58,11 +81,12 @@ const params = body.params || {
   round: 5,
 };
 
-msg.query = { tournamentId: body.tournamentId };
+msg.query = { tournamentId };
+msg.statusCode = 200;
 
 msg.payload = {
   $set: {
-    tournamentId: body.tournamentId,
+    tournamentId,
     tenantKey: body.tenantKey || null,
     updatedAt: now,
     tournamentType: body.tournamentType || "americano",
@@ -94,4 +118,4 @@ msg.payload = {
   $setOnInsert: { createdAt: body.createdAt || now },
 };
 
-return msg;
+return [msg, null];

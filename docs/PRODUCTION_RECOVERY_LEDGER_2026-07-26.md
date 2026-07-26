@@ -76,6 +76,19 @@ active debug taps, missing-ID handling, pre-Mongo HTTP response, and
 caller-provided rating-change trust remain explicit holds. Evidence is in
 `docs/NODERED_TOURNAMENT_PREPARE_RECOVERY_2026-07-26.md`.
 
+Behavior/security cohort A builds, but does not deploy, a four-node hardening
+candidate from the exact Phase 12 live preimage. It requires and normalizes
+`tournamentId`, routes validation errors away from Mongo, disables both active
+debug taps, and enables dynamic HTTP 200/400 status handling. This candidate
+does not change the authoritative five-unit recovery queue. Mongo completion
+acknowledgement remains a separate hold. The POST endpoint itself is still
+unauthenticated and unauthorized: the frontend omits `auth: true`, Node-RED
+does not verify a token or organizer permission, and a caller that knows an ID
+can overwrite the caller-controlled tournament document, not only rating
+changes. Full endpoint authentication/authorization and server-owned audit and
+rating data are therefore a separate mandatory cohort; cohort A is not complete
+ingress security.
+
 ## Decision
 
 Do not run a broad build/deploy from either `origin/main` or the quarantine

@@ -147,6 +147,8 @@ node scripts/patch_live_tournament_prepare.mjs \
   --report /absolute/external/new-tournament-prepare/report.json
 ```
 
-This synchronizes only `Prepare tournament doc` after verifying the exact
-Americano POST route and its seven-node graph. It does not import or deploy the
-candidate. See `docs/NODERED_TOURNAMENT_PREPARE_RECOVERY_2026-07-26.md`.
+This verifies the exact live Americano POST route and seven-node graph, then
+builds the separate tournament-ID/debug hardening candidate. The live preimage
+remains unchanged until a later approved rollout; this command does not import
+or deploy the candidate. See
+`docs/NODERED_TOURNAMENT_PREPARE_RECOVERY_2026-07-26.md`.
