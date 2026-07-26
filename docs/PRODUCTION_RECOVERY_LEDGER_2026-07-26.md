@@ -27,6 +27,12 @@ IDs, wires, and HTTP routes. The normalized candidate is semantically
 deep-equal to current live. Evidence is recorded in
 `docs/NODERED_TOURNAMENT_HISTORY_LIMIT_RECOVERY_2026-07-26.md`.
 
+Phase 7 restores only a read-only Node-RED audit toolchain. A fresh raw flow,
+its redacted metadata, the modular candidate, and validation report are kept in
+a private external workspace and never in Git. The workflow has no patch,
+import, export, deploy, or runtime mutation operation. The former wide
+`sync-games-source`, `prepare-147`, and `exports` commands remain quarantined.
+
 ## Decision
 
 Do not run a broad build/deploy from either `origin/main` or the quarantine
@@ -191,6 +197,8 @@ review are mandatory before any Node-RED recovery commit or rollout.
    `bundle/games/group-schedule/communities` with its focused tests.
 7. Rebuild Node-RED only from a fresh live pull and source functions; never
    promote the quarantined full flow/import JSON directly.
+8. Use the external-workspace audit before defining any later node-specific
+   recovery cohort; audit output alone is not a deployable artifact.
 
 ### Hold / quarantine
 
