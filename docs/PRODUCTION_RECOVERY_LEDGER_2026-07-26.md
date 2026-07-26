@@ -89,6 +89,17 @@ changes. Full endpoint authentication/authorization and server-owned audit and
 rating data are therefore a separate mandatory cohort; cohort A is not complete
 ingress security.
 
+Behavior/security cohort B builds a combined A+B candidate directly from the
+same exact live preimage and proves the A intermediate before adding durable
+Mongo acknowledgement. Success no longer responds before persistence evidence;
+Mongo exceptions use a dedicated scoped Catch and redacted 503 formatter.
+Three deterministic nodes are added, `maxTimeMS="0"` remains unchanged, and
+the candidate is not deployed. Endpoint authentication/authorization and
+server-owned tournament/audit/rating data remain mandatory separate work.
+This hardening does not alter the authoritative five-unit source-recovery
+queue. Evidence is in
+`docs/NODERED_TOURNAMENT_PERSISTENCE_ACK_HARDENING_2026-07-26.md`.
+
 ## Decision
 
 Do not run a broad build/deploy from either `origin/main` or the quarantine

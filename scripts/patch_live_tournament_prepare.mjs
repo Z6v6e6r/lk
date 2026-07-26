@@ -13,10 +13,25 @@ export const TOURNAMENT_PREPARE_SOURCE_PATH = path.join(
   SCRIPT_DIR,
   'nodered_games_nodes/fn_tournament_prepare.js',
 );
+export const TOURNAMENT_PREPARE_A_SOURCE_PATH = path.join(
+  SCRIPT_DIR,
+  'nodered_games_nodes/fn_tournament_prepare_hardening_a.js',
+);
+export const TOURNAMENT_ACK_SOURCE_PATH = path.join(
+  SCRIPT_DIR,
+  'nodered_games_nodes/fn_tournament_save_ack.js',
+);
+export const TOURNAMENT_ERROR_SOURCE_PATH = path.join(
+  SCRIPT_DIR,
+  'nodered_games_nodes/fn_tournament_save_error.js',
+);
 
 export const TOURNAMENT_PREPARE_CONTRACT = Object.freeze({
   wholeFlowSha256: '6d66ef25bdb2a03a031e8be6471fd9333ff960ed980e14e7011e95c76e006a90',
+  hardeningAFlowSha256: '5b82c79c229a5f5ae51d7650c4ded4ae6ffe9f860ad051a6f3f5d62cfefe0cd1',
+  combinedFlowSha256: 'd9f84e4fd6b087752dc810b9fc247e3d532cc6580c19a4a822f2111ddebeca4c',
   nodeCount: 4614,
+  postimageNodeCount: 4617,
   httpRouteCount: 203,
   tab: {
     id: 'f9575c8726e29196',
@@ -38,16 +53,23 @@ export const TOURNAMENT_PREPARE_CONTRACT = Object.freeze({
     id: '4f0f1ce8189a9e8c',
     nodeSha256: '79575aa6149032f5a8dbb94408a3e3f9121a12965ce606c30bd9633eaea03ba3',
     funcSha256: '0b9a8c577a4fb0afb6f05888c7367b5806d2917e0ffd9d39edea191b8ce27688',
-    sourceSha256: '3dc83ec10d4faa69e901795e95982f0ebe94098f6b26fa6b92b2ce7560a22225',
-    postimageNodeSha256: '13fa95ee62ffc65398ea023ae44cb154b2bddfdebe2472677cb3109e519253c2',
+    hardeningASourceSha256: '3dc83ec10d4faa69e901795e95982f0ebe94098f6b26fa6b92b2ce7560a22225',
+    sourceSha256: '464c89cad0a6eef7483efbb8ff12c76e5777a324858b92cb428ad668f8e4b84f',
+    hardeningANodeSha256: '13fa95ee62ffc65398ea023ae44cb154b2bddfdebe2472677cb3109e519253c2',
+    postimageNodeSha256: 'a9dc252d2aac8e1997c54cf0c475ce2e944537ff7a493ca7862f88f420a077ed',
     type: 'function',
     z: 'f9575c8726e29196',
     name: 'Prepare tournament doc',
     outputs: 1,
     wires: [['f476ee4e8d98c43b', 'c76ac8d5319455b4', 'bf7e8b4a95f35228']],
+    hardeningAOutputs: 2,
+    hardeningAWires: [
+      ['f476ee4e8d98c43b', 'c76ac8d5319455b4', 'bf7e8b4a95f35228'],
+      ['c76ac8d5319455b4'],
+    ],
     postimageOutputs: 2,
     postimageWires: [
-      ['f476ee4e8d98c43b', 'c76ac8d5319455b4', 'bf7e8b4a95f35228'],
+      ['f476ee4e8d98c43b', 'bf7e8b4a95f35228'],
       ['c76ac8d5319455b4'],
     ],
   },
@@ -103,13 +125,78 @@ export const TOURNAMENT_PREPARE_CONTRACT = Object.freeze({
       output: 'toArray',
       maxTimeMS: '0',
       handleDocId: false,
+      postimageWires: [['745f991e11130b08']],
+      postimageNodeSha256: '65821b73c0aad425ecc980cb2cc4d329f587fcc69421dc5dd214b66cb4318215',
       wires: [[]],
+    },
+  ],
+  newNodes: [
+    {
+      id: '745f991e11130b08',
+      nodeSha256: '8cf84e44a0abe519a78936af5cbfabf111b46c1ee8c0c9956ba7daf9b4ee7da1',
+      funcSha256: '3099494d8ed9f3e4aa40473e23c3abc4bf5d00002370da046b023881acae2afc',
+      sourcePath: 'ack',
+      type: 'function',
+      z: 'f9575c8726e29196',
+      name: 'Build tournament save acknowledgement',
+      outputs: 1,
+      timeout: '',
+      noerr: 0,
+      initialize: '',
+      finalize: '',
+      libs: [],
+      x: 1210,
+      y: 1340,
+      wires: [['c76ac8d5319455b4']],
+    },
+    {
+      id: 'f9a12e4068858809',
+      nodeSha256: 'f4d55887a7ba47174b4e26c4d27c5fad74c95b5132676ec3f5f0b85f905e9413',
+      type: 'catch',
+      z: 'f9575c8726e29196',
+      name: 'Catch tournament save persistence failure',
+      scope: ['2d3808fb969990d4'],
+      uncaught: false,
+      x: 970,
+      y: 1420,
+      wires: [['fae579ef6d10446d']],
+    },
+    {
+      id: 'fae579ef6d10446d',
+      nodeSha256: '7af1c999508c6f06227bce9602e82245c7a9e30dec2275d1b5babf3d02397d62',
+      funcSha256: 'c55c9bb81bb4b41bc3a6ad3300d9821985e015220d06dac24512cc165e8412be',
+      sourcePath: 'error',
+      type: 'function',
+      z: 'f9575c8726e29196',
+      name: 'Build tournament save persistence error',
+      outputs: 1,
+      timeout: '',
+      noerr: 0,
+      initialize: '',
+      finalize: '',
+      libs: [],
+      x: 1240,
+      y: 1420,
+      wires: [['c76ac8d5319455b4']],
     },
   ],
   reachableNodeIds: [
     '2d3808fb969990d4',
     '4f0f1ce8189a9e8c',
     '662c4669cc17d82a',
+    '745f991e11130b08',
+    '8cab773c2cea526d',
+    'bf7e8b4a95f35228',
+    'c76ac8d5319455b4',
+    'f476ee4e8d98c43b',
+    'f9a12e4068858809',
+    'fae579ef6d10446d',
+  ],
+  wireReachableNodeIds: [
+    '2d3808fb969990d4',
+    '4f0f1ce8189a9e8c',
+    '662c4669cc17d82a',
+    '745f991e11130b08',
     '8cab773c2cea526d',
     'bf7e8b4a95f35228',
     'c76ac8d5319455b4',
@@ -184,8 +271,9 @@ function snapshotInvariants(flow) {
   };
 }
 
-function reachableIds(flow, start) {
+function reachableIds(flow, start, includeScopedCatch = true) {
   const byId = new Map(flow.map((node) => [node.id, node]));
+  const catchNodes = flow.filter((node) => node.type === 'catch');
   const visited = new Set();
   const pending = [start];
   while (pending.length) {
@@ -197,6 +285,13 @@ function reachableIds(flow, start) {
     for (const output of node.wires ?? []) {
       for (const next of output ?? []) pending.push(next);
     }
+    if (includeScopedCatch) {
+      for (const catchNode of catchNodes) {
+        if (Array.isArray(catchNode.scope) && catchNode.scope.includes(id)) {
+          pending.push(catchNode.id);
+        }
+      }
+    }
   }
   return [...visited].sort();
 }
@@ -206,6 +301,11 @@ export function synchronizeTournamentPrepare(
   prepareSource,
   sourceSha256,
   contract = TOURNAMENT_PREPARE_CONTRACT,
+  cohortSources = {
+    hardeningA: fs.readFileSync(TOURNAMENT_PREPARE_A_SOURCE_PATH, 'utf8'),
+    ack: fs.readFileSync(TOURNAMENT_ACK_SOURCE_PATH, 'utf8'),
+    error: fs.readFileSync(TOURNAMENT_ERROR_SOURCE_PATH, 'utf8'),
+  },
 ) {
   if (sourceSha256 !== contract.wholeFlowSha256) fail('Flow preimage SHA mismatch');
   if (flow.length !== contract.nodeCount) fail('Flow node count mismatch');
@@ -247,21 +347,43 @@ export function synchronizeTournamentPrepare(
     }
     assertFields(node, item, fields, 'Tournament prepare graph node');
   }
-  if (!isDeepStrictEqual(
-    reachableIds(flow, contract.route.id),
-    contract.reachableNodeIds,
-  )) {
-    fail('Tournament prepare reachable graph mismatch');
-  }
   if (
     typeof prepareSource !== 'string'
     || sha256(prepareSource) !== contract.target.sourceSha256
   ) {
     fail('Tournament prepare tracked source contract mismatch');
   }
-  target.func = prepareSource;
-  target.outputs = contract.target.postimageOutputs;
-  target.wires = structuredClone(contract.target.postimageWires);
+  if (
+    typeof cohortSources.hardeningA !== 'string'
+    || sha256(cohortSources.hardeningA) !== contract.target.hardeningASourceSha256
+  ) {
+    fail('Tournament prepare hardening A source contract mismatch');
+  }
+  const ackContract = contract.newNodes.find((item) => item.sourcePath === 'ack');
+  const errorContract = contract.newNodes.find((item) => item.sourcePath === 'error');
+  if (
+    !ackContract
+    || typeof cohortSources.ack !== 'string'
+    || sha256(cohortSources.ack) !== ackContract.funcSha256
+  ) {
+    fail('Tournament acknowledgement source contract mismatch');
+  }
+  if (
+    !errorContract
+    || typeof cohortSources.error !== 'string'
+    || sha256(cohortSources.error) !== errorContract.funcSha256
+  ) {
+    fail('Tournament persistence error source contract mismatch');
+  }
+  for (const item of contract.newNodes) {
+    if (flow.some((node) => node.id === item.id)) {
+      fail(`Tournament hardening node ID collision for ${item.id}`);
+    }
+  }
+
+  target.func = cohortSources.hardeningA;
+  target.outputs = contract.target.hardeningAOutputs;
+  target.wires = structuredClone(contract.target.hardeningAWires);
 
   const debugNodes = contract.graphNodes.filter((item) => item.type === 'debug');
   for (const item of debugNodes) {
@@ -272,8 +394,8 @@ export function synchronizeTournamentPrepare(
   const responseNode = exactNode(flow, responseContract.id, 'Tournament prepare response');
   responseNode.statusCode = responseContract.postimageStatusCode;
 
-  if (sha256Json(target) !== contract.target.postimageNodeSha256) {
-    fail('Tournament prepare target postimage mismatch');
+  if (sha256Json(target) !== contract.target.hardeningANodeSha256) {
+    fail('Tournament prepare hardening A target mismatch');
   }
   for (const item of [...debugNodes, responseContract]) {
     if (sha256Json(exactNode(flow, item.id, 'Tournament prepare approved postimage'))
@@ -281,9 +403,83 @@ export function synchronizeTournamentPrepare(
       fail(`Tournament prepare approved postimage mismatch for ${item.id}`);
     }
   }
+  const hardeningABytes = Buffer.from(`${JSON.stringify(flow, null, 2)}\n`, 'utf8');
+  if (sha256(hardeningABytes) !== contract.hardeningAFlowSha256) {
+    fail('Tournament prepare hardening A intermediate flow mismatch');
+  }
 
-  const changedNodes = flow.flatMap((node, index) => {
-    const previous = before[index];
+  target.func = prepareSource;
+  target.outputs = contract.target.postimageOutputs;
+  target.wires = structuredClone(contract.target.postimageWires);
+  if (sha256Json(target) !== contract.target.postimageNodeSha256) {
+    fail('Tournament prepare combined target postimage mismatch');
+  }
+
+  const mongoContract = contract.graphNodes.find((item) => item.type === 'mongodb4');
+  if (!mongoContract) fail('Tournament prepare Mongo contract missing');
+  const mongoNode = exactNode(flow, mongoContract.id, 'Tournament prepare Mongo');
+  mongoNode.wires = structuredClone(mongoContract.postimageWires);
+  if (sha256Json(mongoNode) !== mongoContract.postimageNodeSha256) {
+    fail('Tournament prepare Mongo postimage mismatch');
+  }
+
+  const makeNewNode = (item) => {
+    if (item.type === 'catch') {
+      return {
+        id: item.id,
+        type: item.type,
+        z: item.z,
+        name: item.name,
+        scope: structuredClone(item.scope),
+        uncaught: item.uncaught,
+        x: item.x,
+        y: item.y,
+        wires: structuredClone(item.wires),
+      };
+    }
+    const func = item.sourcePath === 'ack' ? cohortSources.ack : cohortSources.error;
+    return {
+      id: item.id,
+      type: item.type,
+      z: item.z,
+      name: item.name,
+      func,
+      outputs: item.outputs,
+      timeout: item.timeout,
+      noerr: item.noerr,
+      initialize: item.initialize,
+      finalize: item.finalize,
+      libs: structuredClone(item.libs),
+      x: item.x,
+      y: item.y,
+      wires: structuredClone(item.wires),
+    };
+  };
+  for (const item of contract.newNodes) {
+    const node = makeNewNode(item);
+    if (sha256Json(node) !== item.nodeSha256) {
+      fail(`Tournament hardening new node postimage mismatch for ${item.id}`);
+    }
+    flow.push(node);
+  }
+  if (flow.length !== contract.postimageNodeCount) fail('Candidate node count mismatch');
+  if (!isDeepStrictEqual(
+    reachableIds(flow, contract.route.id),
+    contract.reachableNodeIds,
+  )) {
+    fail('Tournament prepare reachable graph mismatch');
+  }
+  if (!isDeepStrictEqual(
+    reachableIds(flow, contract.route.id, false),
+    contract.wireReachableNodeIds,
+  )) {
+    fail('Tournament prepare wire-reachable graph mismatch');
+  }
+
+  const beforeById = new Map(before.map((node) => [node.id, node]));
+  const changedNodes = flow.flatMap((node) => {
+    const previous = beforeById.get(node.id);
+    if (!previous) return [{ id: node.id, changedFields: ['$added'] }];
     if (isDeepStrictEqual(node, previous)) return [];
     const changedFields = [...new Set([...Object.keys(previous), ...Object.keys(node)])]
       .filter((field) => !isDeepStrictEqual(previous[field], node[field]))
@@ -294,6 +490,8 @@ export function synchronizeTournamentPrepare(
     { id: contract.target.id, changedFields: ['func', 'outputs', 'wires'] },
     ...debugNodes.map((item) => ({ id: item.id, changedFields: ['active'] })),
     { id: responseContract.id, changedFields: ['statusCode'] },
+    { id: mongoContract.id, changedFields: ['wires'] },
+    ...contract.newNodes.map((item) => ({ id: item.id, changedFields: ['$added'] })),
   ].sort((left, right) => left.id.localeCompare(right.id));
   if (!isDeepStrictEqual(
     [...changedNodes].sort((left, right) => left.id.localeCompare(right.id)),
@@ -303,17 +501,27 @@ export function synchronizeTournamentPrepare(
   }
 
   const afterInvariants = snapshotInvariants(flow);
-  const withoutTargetWires = (items) => items.filter((item) => item.id !== contract.target.id);
+  const approvedWireIds = new Set([contract.target.id, mongoContract.id]);
+  const existingOnly = (items) => items.filter((item) => beforeById.has(item.id));
+  const withoutApprovedWires = (items) => existingOnly(items)
+    .filter((item) => !approvedWireIds.has(item.id));
   if (
-    !isDeepStrictEqual(beforeInvariants.ids, afterInvariants.ids)
-    || !isDeepStrictEqual(
-      withoutTargetWires(beforeInvariants.wires),
-      withoutTargetWires(afterInvariants.wires),
+    !isDeepStrictEqual(
+      beforeInvariants.ids,
+      afterInvariants.ids.filter((id) => beforeById.has(id)),
     )
-    || !isDeepStrictEqual(beforeInvariants.links, afterInvariants.links)
+    || !isDeepStrictEqual(
+      withoutApprovedWires(beforeInvariants.wires),
+      withoutApprovedWires(afterInvariants.wires),
+    )
+    || !isDeepStrictEqual(beforeInvariants.links, existingOnly(afterInvariants.links))
     || !isDeepStrictEqual(beforeInvariants.routes, afterInvariants.routes)
   ) {
     fail('Candidate changed flow topology');
+  }
+  const combinedBytes = Buffer.from(`${JSON.stringify(flow, null, 2)}\n`, 'utf8');
+  if (sha256(combinedBytes) !== contract.combinedFlowSha256) {
+    fail('Tournament prepare combined flow postimage mismatch');
   }
   return {
     candidate: flow,
@@ -322,6 +530,9 @@ export function synchronizeTournamentPrepare(
       nodeCount: flow.length,
       httpRouteCount: afterInvariants.routes.length,
       reachableNodeCount: contract.reachableNodeIds.length,
+      wireReachableNodeCount: contract.wireReachableNodeIds.length,
+      catchSupportNodeCount:
+        contract.reachableNodeIds.length - contract.wireReachableNodeIds.length,
       ...afterInvariants.hashes,
     },
   };

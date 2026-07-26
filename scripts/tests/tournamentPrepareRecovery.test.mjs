@@ -7,6 +7,9 @@ import test from 'node:test';
 import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
+  TOURNAMENT_ACK_SOURCE_PATH,
+  TOURNAMENT_ERROR_SOURCE_PATH,
+  TOURNAMENT_PREPARE_A_SOURCE_PATH,
   TOURNAMENT_PREPARE_CONTRACT,
   TOURNAMENT_PREPARE_SOURCE_PATH,
   publishTournamentPrepareCandidate,
@@ -30,9 +33,36 @@ function prepareSource() {
   return fs.readFileSync(TOURNAMENT_PREPARE_SOURCE_PATH, 'utf8');
 }
 
+function hardeningASource() {
+  return fs.readFileSync(TOURNAMENT_PREPARE_A_SOURCE_PATH, 'utf8');
+}
+
+function ackSource() {
+  return fs.readFileSync(TOURNAMENT_ACK_SOURCE_PATH, 'utf8');
+}
+
+function persistenceErrorSource() {
+  return fs.readFileSync(TOURNAMENT_ERROR_SOURCE_PATH, 'utf8');
+}
+
+const FIXED_NOW = '2026-07-26T18:45:00.000Z';
+class FixedDate extends Date {
+  constructor(value) {
+    super(value === undefined ? FIXED_NOW : value);
+  }
+
+  static now() {
+    return new Date(FIXED_NOW).getTime();
+  }
+}
+
+function executeSource(source, msg) {
+  return new Function('msg', 'Date', source)(msg, FixedDate);
+}
+
 function invokePrepare(payload) {
   const msg = { payload };
-  const result = new Function('msg', prepareSource())(msg);
+  const result = executeSource(prepareSource(), msg);
   assert.equal(Array.isArray(result), true);
   assert.equal(result.length, 2);
   return { msg, result };
@@ -58,6 +88,38 @@ test.after(() => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+function newNodeFromContract(item) {
+  if (item.type === 'catch') {
+    return {
+      id: item.id,
+      type: item.type,
+      z: item.z,
+      name: item.name,
+      scope: structuredClone(item.scope),
+      uncaught: item.uncaught,
+      x: item.x,
+      y: item.y,
+      wires: structuredClone(item.wires),
+    };
+  }
+  return {
+    id: item.id,
+    type: item.type,
+    z: item.z,
+    name: item.name,
+    func: item.sourcePath === 'ack' ? ackSource() : persistenceErrorSource(),
+    outputs: item.outputs,
+    timeout: item.timeout,
+    noerr: item.noerr,
+    initialize: item.initialize,
+    finalize: item.finalize,
+    libs: structuredClone(item.libs),
+    x: item.x,
+    y: item.y,
+    wires: structuredClone(item.wires),
+  };
+}
 
 function fixture() {
   const contract = structuredClone(TOURNAMENT_PREPARE_CONTRACT);
@@ -129,8 +191,14 @@ function fixture() {
   contract.route.nodeSha256 = sha256Json(route);
   contract.target.nodeSha256 = sha256Json(target);
   contract.target.funcSha256 = sha256(target.func);
+  contract.target.hardeningASourceSha256 = sha256(hardeningASource());
   contract.target.sourceSha256 = sha256(prepareSource());
-  const targetPostimage = structuredClone(target);
+  const targetA = structuredClone(target);
+  targetA.func = hardeningASource();
+  targetA.outputs = contract.target.hardeningAOutputs;
+  targetA.wires = structuredClone(contract.target.hardeningAWires);
+  contract.target.hardeningANodeSha256 = sha256Json(targetA);
+  const targetPostimage = structuredClone(targetA);
   targetPostimage.func = prepareSource();
   targetPostimage.outputs = contract.target.postimageOutputs;
   targetPostimage.wires = structuredClone(contract.target.postimageWires);
@@ -142,12 +210,49 @@ function fixture() {
     const postimage = structuredClone(node);
     if (node.type === 'debug') postimage.active = item.postimageActive;
     if (node.type === 'http response') postimage.statusCode = item.postimageStatusCode;
+    if (node.type === 'mongodb4') postimage.wires = structuredClone(item.postimageWires);
     if (item.postimageNodeSha256) item.postimageNodeSha256 = sha256Json(postimage);
+  }
+  for (const item of contract.newNodes) {
+    const node = newNodeFromContract(item);
+    item.nodeSha256 = sha256Json(node);
+    if (node.type === 'function') item.funcSha256 = sha256(node.func);
   }
   const raw = Buffer.from(`${JSON.stringify(flow, null, 2)}\n`);
   contract.wholeFlowSha256 = sha256(raw);
   contract.nodeCount = flow.length;
+  contract.postimageNodeCount = flow.length + contract.newNodes.length;
   contract.httpRouteCount = 1;
+  const intermediate = structuredClone(flow);
+  const intermediateTarget = intermediate.find((node) => node.id === contract.target.id);
+  Object.assign(intermediateTarget, {
+    func: hardeningASource(),
+    outputs: contract.target.hardeningAOutputs,
+    wires: structuredClone(contract.target.hardeningAWires),
+  });
+  for (const item of contract.graphNodes.filter((node) => node.type === 'debug')) {
+    intermediate.find((node) => node.id === item.id).active = item.postimageActive;
+  }
+  const responseContract = contract.graphNodes.find((node) => node.type === 'http response');
+  intermediate.find((node) => node.id === responseContract.id).statusCode =
+    responseContract.postimageStatusCode;
+  contract.hardeningAFlowSha256 = sha256(
+    Buffer.from(`${JSON.stringify(intermediate, null, 2)}\n`),
+  );
+  const combined = structuredClone(intermediate);
+  const combinedTarget = combined.find((node) => node.id === contract.target.id);
+  Object.assign(combinedTarget, {
+    func: prepareSource(),
+    outputs: contract.target.postimageOutputs,
+    wires: structuredClone(contract.target.postimageWires),
+  });
+  const mongoContract = contract.graphNodes.find((node) => node.type === 'mongodb4');
+  combined.find((node) => node.id === mongoContract.id).wires =
+    structuredClone(mongoContract.postimageWires);
+  combined.push(...contract.newNodes.map(newNodeFromContract));
+  contract.combinedFlowSha256 = sha256(
+    Buffer.from(`${JSON.stringify(combined, null, 2)}\n`),
+  );
   return { contract, flow, raw };
 }
 
@@ -179,12 +284,18 @@ function workspaceFixture() {
   return { root, workspace, sourcePath, ...built };
 }
 
-test('tracked hardening source is distinct from and guarded after the exact live preimage', () => {
+test('tracked A and B sources are distinct and guarded after the exact live preimage', () => {
   assert.equal(
     sha256(prepareSource()),
-    '3dc83ec10d4faa69e901795e95982f0ebe94098f6b26fa6b92b2ce7560a22225',
+    '464c89cad0a6eef7483efbb8ff12c76e5777a324858b92cb428ad668f8e4b84f',
   );
+  assert.equal(sha256(hardeningASource()),
+    '3dc83ec10d4faa69e901795e95982f0ebe94098f6b26fa6b92b2ce7560a22225');
   assert.equal(TOURNAMENT_PREPARE_CONTRACT.target.sourceSha256, sha256(prepareSource()));
+  assert.equal(
+    TOURNAMENT_PREPARE_CONTRACT.target.hardeningASourceSha256,
+    sha256(hardeningASource()),
+  );
   assert.equal(TOURNAMENT_PREPARE_CONTRACT.target.funcSha256,
     '0b9a8c577a4fb0afb6f05888c7367b5806d2917e0ffd9d39edea191b8ce27688');
   assert.notEqual(
@@ -227,6 +338,93 @@ test('tournamentId accepts normalized contract values and separates required fro
       code: 'TOURNAMENT_ID_INVALID',
     }), true);
   }
+});
+
+const persistenceFailurePayload = {
+  error: 'TOURNAMENT_PERSISTENCE_FAILED',
+  message: 'Не удалось сохранить турнир. Повторите попытку',
+  retryable: true,
+};
+
+function acknowledge(prepared, dbPayload, extra = {}) {
+  const msg = Object.assign(prepared, extra, { payload: dbPayload });
+  const result = executeSource(ackSource(), msg);
+  assert.equal(result === msg, true);
+  return msg;
+}
+
+test('valid business payload stays legacy-exact and is returned only after credible Mongo ack', () => {
+  const request = {
+    tournamentId: 'stable-legacy',
+    tournamentType: 'americano',
+    participants: [{ id: 'p1', name: 'Player' }],
+    rounds: [{ index: 1, matches: [] }],
+    standings: [{ id: 'p1', points: 0 }],
+  };
+  const legacyMsg = { payload: structuredClone(request) };
+  const legacyResult = executeSource(hardeningASource(), legacyMsg);
+  assert.equal(legacyResult[0] === legacyMsg, true);
+  const legacyPayload = structuredClone(legacyMsg.payload);
+
+  for (const dbPayload of [
+    { acknowledged: true, matchedCount: 1, modifiedCount: 0 },
+    [{ acknowledged: true, modifiedCount: 1 }],
+    { result: { acknowledged: true, upsertedCount: 1 } },
+    { payload: { acknowledged: true, upsertedId: 'mongo-id' } },
+    { acknowledged: true, result: { n: 1, nModified: 0 } },
+    { acknowledged: true, result: { n: 0, nModified: 1 } },
+    { acknowledged: true, result: { upserted: [{ _id: 'legacy-upsert' }] } },
+  ]) {
+    const prepared = runPrepare(structuredClone(request));
+    assert.equal(isDeepStrictEqual(prepared.payload, legacyPayload), true);
+    assert.equal(
+      isDeepStrictEqual(prepared._tournamentLegacySuccessPayload, legacyPayload),
+      true,
+    );
+    const response = acknowledge(prepared, dbPayload);
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['Cache-Control'], 'no-store');
+    assert.equal(isDeepStrictEqual(response.payload, legacyPayload), true);
+    assert.equal(Object.hasOwn(response, '_tournamentLegacySuccessPayload'), false);
+    assert.equal(Object.hasOwn(response, 'error'), false);
+  }
+});
+
+test('unacknowledged, malformed, zero-evidence, and raw-error results return one redacted 503', () => {
+  for (const [dbPayload, extra] of [
+    [{ acknowledged: false, matchedCount: 1 }, {}],
+    [{ acknowledged: true, matchedCount: 0, modifiedCount: 0, upsertedCount: 0 }, {}],
+    [{ matchedCount: 1 }, {}],
+    [{ acknowledged: true, matchedCount: 1, errmsg: 'driver-secret' }, {}],
+    [{ acknowledged: true, result: { acknowledged: false, n: 1 } }, {}],
+    [{ acknowledged: true, result: { n: 0, nModified: 0, upserted: [] } }, {}],
+    ['malformed', {}],
+    [{ acknowledged: true, matchedCount: 1 }, { error: new Error('source-secret') }],
+  ]) {
+    const response = acknowledge(runPrepare({ tournamentId: 'failure-case' }), dbPayload, extra);
+    assert.equal(response.statusCode, 503);
+    assert.equal(response.headers['Cache-Control'], 'no-store');
+    assert.equal(isDeepStrictEqual(response.payload, persistenceFailurePayload), true);
+    assert.equal(JSON.stringify(response.payload).includes('secret'), false);
+    assert.equal(Object.hasOwn(response, '_tournamentLegacySuccessPayload'), false);
+    assert.equal(Object.hasOwn(response, 'error'), false);
+  }
+});
+
+test('scoped Catch formatter deletes source/database detail and returns the same 503 contract', () => {
+  const msg = {
+    error: { message: 'driver-secret', source: { id: 'mongo-node' } },
+    payload: { errmsg: 'database-secret', codeName: 'WriteConflict' },
+    _tournamentLegacySuccessPayload: { private: 'request-secret' },
+  };
+  const result = executeSource(persistenceErrorSource(), msg);
+  assert.equal(result === msg, true);
+  assert.equal(msg.statusCode, 503);
+  assert.equal(msg.headers['Cache-Control'], 'no-store');
+  assert.equal(isDeepStrictEqual(msg.payload, persistenceFailurePayload), true);
+  assert.equal(Object.hasOwn(msg, 'error'), false);
+  assert.equal(Object.hasOwn(msg, '_tournamentLegacySuccessPayload'), false);
+  assert.equal(JSON.stringify(msg).includes('secret'), false);
 });
 
 test('default params are complete while a partial params object remains partial', () => {
@@ -353,8 +551,10 @@ test('query/update/insert shapes preserve normalized IDs and explicit-empty arra
   assert.equal(explicit.payload.$setOnInsert.createdAt, '2026-07-26T13:00:00.000Z');
 });
 
-test('the exact seven-node live preimage and approved hardening topology are both fixed', () => {
-  assert.equal(TOURNAMENT_PREPARE_CONTRACT.reachableNodeIds.length, 7);
+test('the exact live preimage, A intermediate, and combined ten-node support graph are fixed', () => {
+  assert.equal(TOURNAMENT_PREPARE_CONTRACT.reachableNodeIds.length, 10);
+  assert.equal(TOURNAMENT_PREPARE_CONTRACT.wireReachableNodeIds.length, 8);
+  assert.equal(TOURNAMENT_PREPARE_CONTRACT.newNodes.length, 3);
   assert.equal(isDeepStrictEqual(
     TOURNAMENT_PREPARE_CONTRACT.route.wires,
     [['4f0f1ce8189a9e8c', '662c4669cc17d82a']],
@@ -368,7 +568,7 @@ test('the exact seven-node live preimage and approved hardening topology are bot
   assert.equal(isDeepStrictEqual(
     TOURNAMENT_PREPARE_CONTRACT.target.postimageWires,
     [
-      ['f476ee4e8d98c43b', 'c76ac8d5319455b4', 'bf7e8b4a95f35228'],
+      ['f476ee4e8d98c43b', 'bf7e8b4a95f35228'],
       ['c76ac8d5319455b4'],
     ],
   ), true);
@@ -384,6 +584,29 @@ test('the exact seven-node live preimage and approved hardening topology are bot
     .find((node) => node.id === 'c76ac8d5319455b4');
   assert.equal(response.statusCode, '200');
   assert.equal(response.postimageStatusCode, '');
+  const mongo = TOURNAMENT_PREPARE_CONTRACT.graphNodes
+    .find((node) => node.id === '2d3808fb969990d4');
+  assert.equal(mongo.maxTimeMS, '0');
+  assert.equal(isDeepStrictEqual(mongo.postimageWires, [['745f991e11130b08']]), true);
+  const scopedCatch = TOURNAMENT_PREPARE_CONTRACT.newNodes
+    .find((node) => node.id === 'f9a12e4068858809');
+  assert.equal(isDeepStrictEqual(scopedCatch.scope, ['2d3808fb969990d4']), true);
+  const ack = TOURNAMENT_PREPARE_CONTRACT.newNodes
+    .find((node) => node.id === '745f991e11130b08');
+  const persistenceError = TOURNAMENT_PREPARE_CONTRACT.newNodes
+    .find((node) => node.id === 'fae579ef6d10446d');
+  assert.equal(
+    TOURNAMENT_PREPARE_CONTRACT.target.postimageWires[0]
+      .includes('c76ac8d5319455b4'),
+    false,
+  );
+  assert.equal(isDeepStrictEqual(
+    TOURNAMENT_PREPARE_CONTRACT.target.postimageWires[1],
+    ['c76ac8d5319455b4'],
+  ), true);
+  assert.equal(isDeepStrictEqual(ack.wires, [['c76ac8d5319455b4']]), true);
+  assert.equal(isDeepStrictEqual(scopedCatch.wires, [['fae579ef6d10446d']]), true);
+  assert.equal(isDeepStrictEqual(persistenceError.wires, [['c76ac8d5319455b4']]), true);
   assert.equal(
     TOURNAMENT_PREPARE_CONTRACT.graphNodes
       .every((node) => /^[a-f0-9]{64}$/.test(node.nodeSha256)),
@@ -391,10 +614,20 @@ test('the exact seven-node live preimage and approved hardening topology are bot
   );
 });
 
-test('hardening changes exactly four approved nodes and all other drift fails closed', () => {
+test('combined A+B changes exactly eight approved nodes and all other drift fails closed', () => {
   const built = fixture();
-  const sync = (flow, sha = built.contract.wholeFlowSha256, source = prepareSource()) => (
-    synchronizeTournamentPrepare(flow, source, sha, built.contract)
+  const sources = {
+    hardeningA: hardeningASource(),
+    ack: ackSource(),
+    error: persistenceErrorSource(),
+  };
+  const sync = (
+    flow,
+    sha = built.contract.wholeFlowSha256,
+    source = prepareSource(),
+    cohortSources = sources,
+  ) => (
+    synchronizeTournamentPrepare(flow, source, sha, built.contract, cohortSources)
   );
   const hardened = sync(structuredClone(built.flow));
   assert.equal(isDeepStrictEqual(
@@ -404,9 +637,15 @@ test('hardening changes exactly four approved nodes and all other drift fails cl
       { id: '662c4669cc17d82a', changedFields: ['active'] },
       { id: 'bf7e8b4a95f35228', changedFields: ['active'] },
       { id: 'c76ac8d5319455b4', changedFields: ['statusCode'] },
+      { id: '2d3808fb969990d4', changedFields: ['wires'] },
+      { id: '745f991e11130b08', changedFields: ['$added'] },
+      { id: 'f9a12e4068858809', changedFields: ['$added'] },
+      { id: 'fae579ef6d10446d', changedFields: ['$added'] },
     ].sort((left, right) => left.id.localeCompare(right.id)),
   ), true);
-  assert.equal(hardened.invariants.reachableNodeCount, 7);
+  assert.equal(hardened.invariants.reachableNodeCount, 10);
+  assert.equal(hardened.invariants.wireReachableNodeCount, 8);
+  assert.equal(hardened.invariants.catchSupportNodeCount, 2);
   const candidateTarget = hardened.candidate
     .find((node) => node.id === built.contract.target.id);
   assert.equal(candidateTarget.outputs, 2);
@@ -416,6 +655,11 @@ test('hardening changes exactly four approved nodes and all other drift fails cl
     .every((node) => node.active === false), true);
   assert.equal(hardened.candidate
     .find((node) => node.id === 'c76ac8d5319455b4').statusCode, '');
+  assert.equal(hardened.candidate.length, built.flow.length + 3);
+  assert.equal(isDeepStrictEqual(
+    hardened.candidate.find((node) => node.id === '2d3808fb969990d4').wires,
+    [['745f991e11130b08']],
+  ), true);
   assert.throws(() => sync(structuredClone(built.flow), '0'.repeat(64)), /Flow preimage SHA/);
 
   for (const [id, field, value, expected] of [
@@ -425,6 +669,7 @@ test('hardening changes exactly four approved nodes and all other drift fails cl
     [built.contract.target.id, 'wires', [[]], /target.*wires/],
     [built.contract.graphNodes[0].id, 'active', false, /graph node.*active/],
     [built.contract.graphNodes[1].id, 'unexpected', true, /graph node.*node preimage/],
+    ['2d3808fb969990d4', 'maxTimeMS', '1', /graph node.*maxTimeMS/],
     ['c76ac8d5319455b4', 'statusCode', '', /graph node.*statusCode/],
   ]) {
     const drift = structuredClone(built.flow);
@@ -437,6 +682,20 @@ test('hardening changes exactly four approved nodes and all other drift fails cl
   assert.throws(
     () => sync(structuredClone(built.flow), built.contract.wholeFlowSha256, `${prepareSource()}\n`),
     /tracked source contract mismatch/,
+  );
+  assert.throws(
+    () => sync(structuredClone(built.flow), built.contract.wholeFlowSha256, prepareSource(), {
+      ...sources,
+      hardeningA: `${hardeningASource()}\n`,
+    }),
+    /hardening A source contract mismatch/,
+  );
+  assert.throws(
+    () => sync(structuredClone(built.flow), built.contract.wholeFlowSha256, prepareSource(), {
+      ...sources,
+      ack: `${ackSource()}\n`,
+    }),
+    /acknowledgement source contract mismatch/,
   );
 
   for (const item of [built.contract.target, built.contract.graphNodes[0]]) {
@@ -458,11 +717,23 @@ test('hardening changes exactly four approved nodes and all other drift fails cl
       badPostimage.wholeFlowSha256,
       badPostimage,
     ),
-    /target postimage mismatch/,
+    /combined target postimage mismatch/,
+  );
+  const collisionContract = structuredClone(built.contract);
+  collisionContract.newNodes[0].id = built.contract.target.id;
+  assert.throws(
+    () => synchronizeTournamentPrepare(
+      structuredClone(built.flow),
+      prepareSource(),
+      collisionContract.wholeFlowSha256,
+      collisionContract,
+      sources,
+    ),
+    /node ID collision/,
   );
 });
 
-test('publication is private, atomic, redacted, four-node scoped, and TOCTOU-safe', () => {
+test('publication is private, atomic, redacted, eight-node scoped, and TOCTOU-safe', () => {
   const built = workspaceFixture();
   const publication = path.join(built.root, 'publication');
   const output = path.join(publication, 'candidate.json');
@@ -481,7 +752,10 @@ test('publication is private, atomic, redacted, four-node scoped, and TOCTOU-saf
   } finally {
     console.log = originalLog;
   }
-  assert.equal(result.changedNodeCount, 4);
+  assert.equal(result.changedNodeCount, 8);
+  assert.equal(result.invariants.reachableNodeCount, 10);
+  assert.equal(result.invariants.wireReachableNodeCount, 8);
+  assert.equal(result.invariants.catchSupportNodeCount, 2);
   assert.notEqual(result.sourceSha256, result.candidateSha256);
   assert.notEqual(sha256(fs.readFileSync(output)), sha256(built.raw));
   assert.equal(fs.statSync(publication).mode & 0o777, 0o700);
@@ -493,10 +767,15 @@ test('publication is private, atomic, redacted, four-node scoped, and TOCTOU-saf
   assert.equal(candidateText.includes('Prepare tournament doc'), true);
   const candidate = JSON.parse(candidateText);
   assert.equal(candidate.find((node) => node.id === built.contract.target.id).outputs, 2);
+  assert.equal(candidate.length, built.flow.length + 3);
   assert.equal(candidate
     .filter((node) => ['662c4669cc17d82a', 'bf7e8b4a95f35228'].includes(node.id))
     .every((node) => node.active === false), true);
   assert.equal(candidate.find((node) => node.id === 'c76ac8d5319455b4').statusCode, '');
+  assert.equal(isDeepStrictEqual(
+    candidate.find((node) => node.id === '2d3808fb969990d4').wires,
+    [['745f991e11130b08']],
+  ), true);
   assert.doesNotMatch(reportText, /\/lk\/|return msg|source\.flow|private\/tmp/);
   assert.doesNotMatch(stdout.join('\n'), /\/lk\/|return msg|source\.flow|private\/tmp/);
 

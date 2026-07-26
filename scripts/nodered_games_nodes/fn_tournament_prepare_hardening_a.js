@@ -118,5 +118,4 @@ msg.payload = {
   $setOnInsert: { createdAt: body.createdAt || now },
 };
 
-msg._tournamentLegacySuccessPayload = msg.payload;
 return [msg, null];
