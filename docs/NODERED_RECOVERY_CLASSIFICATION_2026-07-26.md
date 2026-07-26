@@ -3,7 +3,23 @@
 This is a read-only recovery checkpoint. No server flow, PM2 process, route, or
 database record was changed.
 
-## Verified preimage
+## Current live revalidation
+
+The live flow was read and hashed twice after the initial inventory:
+
+- current live SHA256:
+  `6d66ef25bdb2a03a031e8be6471fd9333ff960ed980e14e7011e95c76e006a90`;
+- drift from the preserved `0f5c...` snapshot is limited to two nodes;
+- function node `2e70b2e547e77c00` changed from SHA `8017f7cd...` to
+  `b46468ec...`;
+- Mongo node `ddc581fde0073e34` changed `limit` from absent to `"1"`.
+
+The function source and focused idempotency regression have been recovered.
+The Mongo `limit` change remains on hold and is not included. Full evidence and
+the guarded reconstruction procedure are recorded in
+`docs/NODERED_TOURNAMENT_RATING_RECOVERY_2026-07-26.md`.
+
+## Historical verified preimage
 
 - host: `lk-primary-147`
 - path: `/root/.node-red/flows.json`
