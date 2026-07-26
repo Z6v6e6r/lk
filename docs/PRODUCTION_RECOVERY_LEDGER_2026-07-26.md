@@ -33,6 +33,13 @@ a private external workspace and never in Git. The workflow has no patch,
 import, export, deploy, or runtime mutation operation. The former wide
 `sync-games-source`, `prepare-147`, and `exports` commands remain quarantined.
 
+Phase 8 normalizes the chat source mapping without changing chat business
+logic. The legacy constructor is replaced by an exact 11-node synchronizer for
+the active `LK Games` tab. All tracked functions match the fixed live preimage,
+so the current candidate changes zero nodes. Three dirty chat variants remain
+on hold. Evidence is recorded in
+`docs/NODERED_CHAT_RECOVERY_2026-07-26.md`.
+
 ## Decision
 
 Do not run a broad build/deploy from either `origin/main` or the quarantine
@@ -199,6 +206,8 @@ review are mandatory before any Node-RED recovery commit or rollout.
    promote the quarantined full flow/import JSON directly.
 8. Use the external-workspace audit before defining any later node-specific
    recovery cohort; audit output alone is not a deployable artifact.
+9. Review the three held chat function variants as separate business changes;
+   do not fold them into source normalization.
 
 ### Hold / quarantine
 

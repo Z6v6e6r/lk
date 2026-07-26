@@ -82,3 +82,19 @@ cohort and must not be run against a fresh live pull. A later recovery cohort
 may add node-specific candidate construction after every patcher has relative
 paths, exact preimage guards, focused tests, and a separate explicit deploy
 approval.
+
+## Guarded chat source check
+
+The chat recovery cohort consumes the same freshly verified external workspace
+and checks only 11 existing function nodes. It does not reconstruct chat routes
+or produce an import:
+
+```bash
+node scripts/patch_nodered_chat_flow.mjs \
+  --workspace /absolute/external/live-workspace \
+  --output /absolute/external/new-chat-candidate/candidate.json \
+  --report /absolute/external/new-chat-candidate/report.json
+```
+
+See `docs/NODERED_CHAT_RECOVERY_2026-07-26.md` for the fixed preimage and hold
+boundaries.
