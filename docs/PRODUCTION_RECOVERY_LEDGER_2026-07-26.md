@@ -8,6 +8,11 @@ Phase 3 recovered the shared tournament category gate and the production-proven
 Node-RED drift was also classified by live node ID and function-body hash in
 `docs/NODERED_RECOVERY_CLASSIFICATION_2026-07-26.md`.
 
+Phase 4 recovered the exact Classic Mexicano algorithm/test postimages and
+reintroduced the atomic score-plus-next-layout frontend contract. Evidence and
+the offline-queue scope boundary are recorded in
+`docs/CLASSIC_MEXICANO_RECOVERY_2026-07-26.md`.
+
 ## Decision
 
 Do not run a broad build/deploy from either `origin/main` or the quarantine
@@ -100,10 +105,11 @@ large mixed diff across that helper, `TournamentsPage.tsx`, API code, and
 tests. Copying those files would mix the production-proven next-round save with
 unrelated tournament and subscription work.
 
-Classic Mexicano therefore remains the next isolated recovery candidate. Its
-dependency baseline must be separated from `dev`, then the atomic
-score-plus-next-layout contract must be re-applied with focused tests. It is
-not included in the `direction.id=5278` classifier change.
+Classic Mexicano has now been recovered from blob-verified source/test
+postimages. The atomic score-plus-next-layout contract is integrated into the
+clean tournament manager. The production offline queue is still held because
+its infrastructure is absent from clean `main`; it must be recovered
+separately rather than pulled in through the current mixed `TournamentsPage`.
 
 ## Live Node-RED preimage
 
@@ -147,11 +153,13 @@ review are mandatory before any Node-RED recovery commit or rollout.
 ### Production-proven
 
 1. “Time for Friends” classifier: recovered as a focused tested change.
-2. Recover the current tournament dependency lineage, then classic Mexicano
-   next-round persistence as a separate tested commit.
-3. Recover the 2026-07-23 core performance cohort for
+2. Classic Mexicano online atomic next-round persistence: recovered as a
+   separate tested change.
+3. Recover the Classic Mexicano offline result queue as its own dependency
+   cohort.
+4. Recover the 2026-07-23 core performance cohort for
    `bundle/games/group-schedule/communities` with its focused tests.
-4. Rebuild Node-RED only from a fresh live pull and source functions; never
+5. Rebuild Node-RED only from a fresh live pull and source functions; never
    promote the quarantined full flow/import JSON directly.
 
 ### Hold / quarantine

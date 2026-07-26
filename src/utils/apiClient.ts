@@ -2473,9 +2473,10 @@ export interface AmericanoResultsPayload {
   results: Array<{
     roundId: string;
     matchId: string;
-    score1: number;
-    score2: number;
+    score1?: number;
+    score2?: number;
     court?: string;
+    courtIndex?: number;
     pair1?: string[];
     pair2?: string[];
   }>;

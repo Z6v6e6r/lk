@@ -44,6 +44,15 @@ import {
   type AmericanoLabParticipant as ParticipantEntry,
   type AmericanoLabRound as TournamentRound,
 } from "./americanoLab";
+import {
+  appendMexicanoClassicRoundIfReady,
+  buildClassicMexicanoMatchSaveResults,
+  buildMexicanoClassicParams,
+  createMexicanoClassicInitialRound,
+  isClassicMexicanoRoundLayoutComplete,
+  rebuildMexicanoClassicFutureRounds,
+  type MexicanoClassicOptions,
+} from "./mexicanoClassic";
 
 interface TournamentsPageProps {
   onBack: () => void;
@@ -563,6 +572,38 @@ function normalizeTournamentTypeKey(value: string | null | undefined) {
   return normalized;
 }
 
+function parseMexicanoOptions(value: unknown): MexicanoClassicOptions {
+  const params = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+  const firstRoundModeRaw = String(params.firstRoundMode ?? "").trim().toLowerCase();
+  const firstRoundMode =
+    firstRoundModeRaw === "random" || firstRoundModeRaw === "equal_pairs"
+      ? firstRoundModeRaw
+      : "by_level";
+  const byeMode = String(params.byeMode ?? "").trim().toLowerCase() === "strict"
+    ? "strict"
+    : "rotating_bye";
+  const tableSortMode = String(params.tableSortMode ?? "").trim().toLowerCase() === "point_diff"
+    ? "point_diff"
+    : "total_points";
+  const winnerSortMode = String(params.winnerSortMode ?? "").trim().toLowerCase() === "total_points"
+    ? "total_points"
+    : "point_diff";
+  const totalRoundsRaw = Number(params.totalRounds);
+
+  return {
+    firstRoundMode,
+    byeMode,
+    tableSortMode,
+    winnerSortMode,
+    seed: params.seed == null ? undefined : String(params.seed),
+    totalRounds: Number.isFinite(totalRoundsRaw) && totalRoundsRaw > 0
+      ? Math.floor(totalRoundsRaw)
+      : undefined,
+  };
+}
+
 function getTournamentFamilyByType(value: string | null | undefined): TournamentFamilyKey | null {
   const typeKey = normalizeTournamentTypeKey(value);
   if (!typeKey) return null;
@@ -628,6 +669,7 @@ function buildTournamentPayloadFromHistory(history: TournamentHistoryRecord): Am
     typeKey !== "americano_padelhub"
     && typeKey !== "americano_classic"
     && typeKey !== "paired_americano"
+    && typeKey !== "mexicano"
     && typeKey !== "paired_mexicano"
   ) return null;
 
@@ -890,12 +932,23 @@ function TournamentDetailsModal({
       setSaveState("error");
       return;
     }
+    const mexicanoOptions = parseMexicanoOptions(historyRecord?.params);
+    const mexicanoParams = buildMexicanoClassicParams(sortedParticipants.length, {
+      ...mexicanoOptions,
+      seed: mexicanoOptions.seed ?? String(tournament.id),
+    });
 
     const roundsForServer = serializeAmericanoRounds(
       tournamentType === "paired_mexicano"
         ? createPairedMexicanoInitialRounds(participantsForRounds, courtNames, completedMexicanoPairs)
         : tournamentType === "paired_americano"
           ? createPairedAmericanoRounds(participantsForRounds, courtNames, completedMexicanoPairs)
+          : tournamentType === "mexicano"
+            ? createMexicanoClassicInitialRound(
+                participantsForRounds,
+                courtNames,
+                mexicanoParams,
+              )
           : createAmericanoRounds(
               participantsForRounds,
               courtNames,
@@ -935,9 +988,15 @@ function TournamentDetailsModal({
                   tournamentFamily: "americano",
                   tournamentSubtype: "classic",
                 }
+              : tournamentType === "mexicano"
+                ? {
+                    tournamentFamily: "mexicano",
+                    tournamentSubtype: "classic",
+                    ...mexicanoParams,
+                  }
               : {
                   tournamentFamily: selectedFamily,
-                  tournamentSubtype: tournamentType === "mexicano" ? "classic" : "padelhub",
+                  tournamentSubtype: "padelhub",
                 },
       participants: participantsForRounds.map((participant) => ({
         id: participant.id ?? null,
@@ -1887,21 +1946,34 @@ function TournamentManagerModal({
       rating: p.rating ?? null,
     }));
   }, [data]);
+  const mexicanoOptions = useMemo(
+    () => (data?.tournamentType === "mexicano" ? parseMexicanoOptions(data.params) : null),
+    [data?.params, data?.tournamentType],
+  );
 
   useEffect(() => {
     if (!data) return;
-    setRounds(hydrateAmericanoRounds(
+    const hydratedRounds = hydrateAmericanoRounds(
       data.rounds,
       normalizedParticipants,
       data.courts,
       { mode: data.tournamentType === "americano_classic" ? "classic" : "padelhub" },
-    ));
+    );
+    const nextRounds = data.tournamentType === "mexicano"
+      ? appendMexicanoClassicRoundIfReady(
+          normalizedParticipants,
+          data.courts,
+          hydratedRounds,
+          mexicanoOptions ?? undefined,
+        )
+      : hydratedRounds;
+    setRounds(nextRounds);
     setActiveTab("tournament");
     setExpertMode(false);
     setServerTotals(initialTotals);
     setServerLogs(initialPlayerLogs);
     setMatchSaveErrors({});
-  }, [data, normalizedParticipants, initialTotals, initialPlayerLogs]);
+  }, [data, normalizedParticipants, initialTotals, initialPlayerLogs, mexicanoOptions]);
 
   useEffect(() => {
     if (activeTab !== "tournament") return;
@@ -1984,17 +2056,32 @@ function TournamentManagerModal({
       return;
     }
 
-    const results = [
-      {
-        roundId,
-        matchId,
-        score1: match.score1 as number,
-        score2: match.score2 as number,
-        court: match.court,
-        pair1: match.pair1.map((p) => p.id),
-        pair2: match.pair2.map((p) => p.id),
-      },
-    ];
+    const results = data.tournamentType === "mexicano"
+      ? buildClassicMexicanoMatchSaveResults(
+          normalizedParticipants,
+          data.courts,
+          rounds,
+          roundId,
+          matchId,
+          data.rounds,
+          mexicanoOptions ?? undefined,
+        )
+      : [
+          {
+            roundId,
+            matchId,
+            score1: match.score1 as number,
+            score2: match.score2 as number,
+            court: match.court,
+            pair1: match.pair1.map((p) => p.id),
+            pair2: match.pair2.map((p) => p.id),
+          },
+        ];
+    const generatedRoundIds = new Set(
+      results
+        .map((result) => result.roundId)
+        .filter((resultRoundId) => resultRoundId !== roundId),
+    );
 
     setSavingMatchId(matchId);
     setMatchSaveErrors((prev) => {
@@ -2015,6 +2102,22 @@ function TournamentManagerModal({
             }));
             return;
           }
+          const responseRounds = res.data.rounds as Array<Record<string, unknown>>;
+          const generatedLayoutsConfirmed = [...generatedRoundIds].every((generatedRoundId) => {
+            const responseRound = responseRounds.find(
+              (candidate) => String(candidate?.id ?? "") === generatedRoundId,
+            );
+            return isClassicMexicanoRoundLayoutComplete(
+              responseRound as Parameters<typeof isClassicMexicanoRoundLayoutComplete>[0],
+            );
+          });
+          if (!generatedLayoutsConfirmed) {
+            setMatchSaveErrors((prev) => ({
+              ...prev,
+              [matchId]: "Сервер не подтвердил раскладку следующего раунда",
+            }));
+            return;
+          }
 
           const nextRounds = applyPartialRoundUpdates(
             rounds,
@@ -2026,16 +2129,32 @@ function TournamentManagerModal({
             ),
           );
           const persistedRound = nextRounds.find((item) => item.id === roundId) ?? null;
+          const nextRoundsWithMexicano =
+            data.tournamentType === "mexicano" && persistedRound
+              ? rebuildMexicanoClassicFutureRounds(
+                  normalizedParticipants,
+                  data.courts,
+                  nextRounds,
+                  persistedRound.index,
+                  mexicanoOptions ?? undefined,
+                )
+              : nextRounds;
+          const confirmedPersistedRound =
+            nextRoundsWithMexicano.find((item) => item.id === roundId) ?? null;
           const shouldAdvanceRound =
-            !wasRoundPersistedCompleteBeforeSave && Boolean(persistedRound?.saved);
+            !wasRoundPersistedCompleteBeforeSave && Boolean(confirmedPersistedRound?.saved);
           const {
             rounds: nextRoundsWithCollapse,
             nextMatch,
           } = shouldAdvanceRound
-            ? navigateTournamentAfterMatchSave(nextRounds, roundId, matchId)
+            ? navigateTournamentAfterMatchSave(nextRoundsWithMexicano, roundId, matchId)
             : {
-                rounds: nextRounds,
-                nextMatch: findNextIncompleteTournamentMatch(nextRounds, roundId, matchId),
+                rounds: nextRoundsWithMexicano,
+                nextMatch: findNextIncompleteTournamentMatch(
+                  nextRoundsWithMexicano,
+                  roundId,
+                  matchId,
+                ),
               };
           const nextRoundsWithNavigation = nextMatch
             ? nextRoundsWithCollapse.map((round) => (
