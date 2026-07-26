@@ -99,3 +99,6 @@ worktree.
 | Change | Source files | Production evidence | Tests | Decision |
 |---|---|---|---|---|
 | Short issue identifier | Exact authored files, not generated output | Release/flow SHA and postcheck | Commands and results | recover / candidate / quarantine |
+
+Current production inventory:
+`docs/PRODUCTION_RECOVERY_LEDGER_2026-07-26.md`.

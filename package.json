@@ -21,7 +21,10 @@
     "release:preflight": "node scripts/assert-clean-deploy.mjs dist/release.json dist/release-dev.json",
     "release:preflight:prod": "node scripts/assert-clean-deploy.mjs dist/release.json",
     "release:preflight:dev": "node scripts/assert-clean-deploy.mjs dist/release-dev.json",
+    "audit:release-artifacts": "node scripts/audit_release_artifacts.mjs",
+    "audit:nodered-flow-drift": "node scripts/audit_nodered_flow_drift.mjs",
     "test:release-provenance": "node --test scripts/tests/releaseProvenance.test.mjs",
+    "test:recovery-audits": "node --test scripts/tests/recoveryAuditTools.test.mjs",
     "build:analyze": "ANALYZE=1 vite build",
     "lint": "eslint .",
     "preview": "vite preview"

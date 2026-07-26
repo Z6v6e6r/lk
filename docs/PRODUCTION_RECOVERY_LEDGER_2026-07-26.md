@@ -1,0 +1,152 @@
+# Production recovery ledger — 2026-07-26
+
+This is a read-only inventory of the deployed LK frontend and Node-RED state.
+No server files, services, data, or public manifests were changed.
+
+## Decision
+
+Do not run a broad build/deploy from either `origin/main` or the quarantine
+`dev` checkout.
+
+- `origin/main` does not contain the source history of the current production
+  bundles.
+- The quarantine `dist/` reproduces most, but not all, deployed artifacts.
+- A single release version currently points to bundles from several different
+  deployment cohorts.
+- The local modular Node-RED candidate does not match the live flow and cannot
+  be imported wholesale.
+
+The exact live frontend artifacts and live flow were copied into a local
+recovery set outside Git and verified with SHA256. The raw flow is intentionally
+not committed because it can contain production configuration and credentials.
+
+## Release manifests
+
+| Channel | Host | Public origin | Version | Manifest SHA256 | Git provenance |
+|---|---|---|---|---|---|
+| prod | `lk-primary-147` | `https://padlhub.su/lk/` | `20260725T082609Z` | `4a30a84821d9c703e6430ebf73765b77cd3b0b9c47592dc1789cfcbaff49eb4b` | absent |
+| dev | `lk-reserve-89` | `https://lk-reserve.89-108-64-209.sslip.io/lk/` | `20260725T082609Z` | `e0d088da0c96c372f66aff916277a0797ea917377d7e41efb5e7a04c76a59836` | absent |
+
+Server and public manifest bodies matched. Both manifests predate the new
+`sourceCommit/sourceBranch/sourceDirty` contract.
+
+## Production artifacts versus quarantine `dist/`
+
+| Artifact | Live SHA256 | Dirty `dist/` |
+|---|---|---|
+| `release.json` | `4a30a84821d9c703e6430ebf73765b77cd3b0b9c47592dc1789cfcbaff49eb4b` | exact |
+| `bundle.js` | `5e97603b665c536eb4275960466435fe99c0aee49bcc88d9887f9083f6c332e0` | exact |
+| `games.js` | `d26b4abaee965ef0424d26100c104989ec759dd5f5064731343f1e16da57c745` | exact |
+| `tournaments.js` | `5df868c676b92dcd16a72fd98369862ab3917f3f645d24a9ba050f0f8aaa24bc` | exact |
+| `tournament-signup.js` | `2762a709f5ec809d06a4e20734eb80d86d65c00f95618a3ae728a1d55c8330f4` | mismatch |
+| `group-schedule.js` | `ed682a85f9c5267190b6b62380bf7b110a85870ada764c775855ff470f36d50b` | exact |
+| `padel-day-schedule.js` | `5d17a183a697578f28825ad54591e0179cf910de8ddf680a0a7cf848b40bff27` | mismatch |
+| `tournament-subscription.js` | `193ea21f64ee7d08d6dd7b4df71673401231a700b7f35648fcb3c632c176b298` | exact |
+| `tournament-subscription-referral.js` | `0764e96e5689b3c700deca4e9a11b8e8287f8a977ea3a6dcdff99b22c00c4e9c` | exact |
+| `onboarding.js` | `ee66d4dcc333cd2712a41c62bfc45ec14e8973a9aec5f4ad5e8aa236a5664266` | exact |
+| `levels-info.js` | `5c8fb7b1576897de67cd2ffc99aecc1b65a52c024386a3bb3d59600f7112e57b` | exact |
+| `communities.js` | `74281e2d9f71e38656b118c1694dc6abfb08a40b7246adf3c8daa571609c10b0` | exact |
+
+Result: 10 of 12 prod entries match, including the manifest.
+
+## Development artifacts versus quarantine `dist/`
+
+| Artifact | Live SHA256 | Dirty `dist/` |
+|---|---|---|
+| `release-dev.json` | `e0d088da0c96c372f66aff916277a0797ea917377d7e41efb5e7a04c76a59836` | exact |
+| `bundle-dev.js` | `8417e3ea3b2f8c542a12a2a18ba6a3fb9e32bcd3fc3b65ac41ea8fbcb19ec99b` | exact |
+| `games-dev.js` | `886e3aebff1b48e9241898fabf21f8ea668146fe15f9843f3e261251f55500b6` | exact |
+| `tournaments-dev.js` | `70d9320101203ff10c5bcaea6053fbcdddddaa77005a23c422c72478752f7f8b` | exact |
+| `tournament-signup-dev.js` | `0dba5967ce8d7b6abae90123b0774b2709b1c523259b86e53a73e2a44f75f8ae` | mismatch |
+| `group-schedule-dev.js` | `8d4dfd9d8dcc3ce6c74d1e4b29feb4dd201d2e31e338b3b72782e9d409064d2e` | exact |
+| `padel-day-schedule-dev.js` | `e888ec2d631217598e582caed304d149abaf56294808786f7fcc3f533579c3d0` | mismatch |
+| `tournament-subscription-dev.js` | `2f2a66105649dd7931842a86e696641606a32431c77745a770c558a4b3d0d92a` | mismatch |
+| `tournament-subscription-referral-dev.js` | `8816d178b2ee874e443feb071c1d18808a75664bec8a52f1f02c6c360f407e8d` | mismatch |
+| `onboarding-dev.js` | `0c89db95a104504a233ce8aed86fbc29b71d4368fef7d61c1fb1c2dacda52a8f` | mismatch |
+| `levels-info-dev.js` | `533852bd8403860fb2aa5f2a8859b0c41f1e9855545991c73575c083d66bc215` | mismatch |
+| `communities-dev.js` | `a9df9c15b4d865e5e8425142a94e72af16ad103e568ea85cc6678d527e86a172` | exact |
+
+Result: 6 of 12 dev entries match, including the manifest.
+
+## Artifact cohorts
+
+The shared manifest version does not mean that every bundle was rebuilt
+together:
+
+- prod `tournaments.js` was replaced on 2026-07-25;
+- prod `bundle.js`, `games.js`, `group-schedule.js`, and `communities.js` are
+  from the 2026-07-23 rollout;
+- prod `tournament-signup.js` and several other standalone bundles are older;
+- the dev host contains even more mixed timestamps.
+
+The latest tournament cohort is attributable: the “Time for Friends”
+classification rollout produced release `20260725T082609Z`, prod SHA
+`5df868c6...`, and dev SHA `70d93201...`. Its focused source is
+`src/utils/tournamentCategory.ts` plus its test, but the bundle also contains
+all earlier tournament dependencies. Those dependencies must be recovered
+before this change can be reproduced from clean `main`.
+
+## Live Node-RED preimage
+
+| Field | Value |
+|---|---|
+| Host/path | `lk-primary-147:/root/.node-red/flows.json` |
+| SHA256 | `0f5cd853450a0bcc60e9d2349463b67c491b6a8653302d9a49f4389354c2adf0` |
+| Size | 8,148,734 bytes |
+| Modified | 2026-07-24 12:37:19 MSK |
+| Node count | 4,614 |
+| HTTP input nodes | 203 |
+| Function nodes | 1,099 |
+| PM2 sample | online; restart count 22 |
+
+The PM2 memory/CPU values were a point-in-time inventory sample, not a health
+conclusion.
+
+The quarantine modular metadata records an earlier live pull:
+
+- pulled at `2026-07-24T09:32:51Z`;
+- raw source SHA `0b2a4f5a59809bc547f63b21e247f003536afeaffb29859bd9c497d6962b67e8`;
+- patched local `source.flow.json` SHA
+  `56fedfb3f61f1538c2b8a83158d0deb16324a2119f04f809e93cc84745fcaaa6`.
+
+Compared with the current live flow, the patched local candidate has:
+
+- 37 IDs present only in live;
+- 37 IDs present only in the candidate;
+- 34 changed shared nodes;
+- 13 changed function bodies.
+
+The 37 added/removed IDs are largely same-named referral-subscription nodes
+with different IDs. Importing the candidate could therefore duplicate or
+replace active HTTP routes. The two active
+`Dedupe + normalize upcoming games` functions also differ from each other and
+from the current source function. A new live pull and node-specific preimage
+review are mandatory before any Node-RED recovery commit or rollout.
+
+## Recovery queue
+
+### Production-proven
+
+1. Recover the current tournament dependency lineage, then the classic
+   Mexicano next-round persistence and “Time for Friends” classifier as
+   separate tested commits.
+2. Recover the 2026-07-23 core performance cohort for
+   `bundle/games/group-schedule/communities` with its focused tests.
+3. Rebuild Node-RED only from a fresh live pull and source functions; never
+   promote the quarantined full flow/import JSON directly.
+
+### Hold / quarantine
+
+- Do not overwrite prod `tournament-signup.js` or `padel-day-schedule.js` from
+  the current dirty `dist/`.
+- Do not overwrite the six mismatching dev bundles.
+- Do not treat `release.json` version equality as proof of bundle parity.
+- Do not commit the raw live flow or recovery archives.
+
+## Reusable audit commands
+
+```bash
+npm run audit:release-artifacts -- /path/to/remote.sha256 dist
+npm run audit:nodered-flow-drift -- /path/to/candidate.json /path/to/live.json
+npm run test:recovery-audits
+```
