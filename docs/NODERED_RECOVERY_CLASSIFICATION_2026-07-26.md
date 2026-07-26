@@ -15,9 +15,12 @@ The live flow was read and hashed twice after the initial inventory:
 - Mongo node `ddc581fde0073e34` changed `limit` from absent to `"1"`.
 
 The function source and focused idempotency regression have been recovered.
-The Mongo `limit` change remains on hold and is not included. Full evidence and
-the guarded reconstruction procedure are recorded in
-`docs/NODERED_TOURNAMENT_RATING_RECOVERY_2026-07-26.md`.
+The Mongo `limit` change was then recovered as a separate node-specific cohort
+from the post-rating flow preimage. Full evidence and guarded reconstruction
+procedures are recorded in:
+
+- `docs/NODERED_TOURNAMENT_RATING_RECOVERY_2026-07-26.md`;
+- `docs/NODERED_TOURNAMENT_HISTORY_LIMIT_RECOVERY_2026-07-26.md`.
 
 ## Historical verified preimage
 
@@ -79,7 +82,7 @@ The other 21 shared nodes have no function-body change:
 - `662c4669cc17d82a`, `bf7e8b4a95f35228`, `7792fedede7d0730`:
   debug `active`;
 - `ccd7d6b82f8b90c1`, `f6a7b8c9d0e64212`: `wires`;
-- `ddc581fde0073e34`: history `limit`;
+- `ddc581fde0073e34`: history `limit` (recovered separately);
 - `ab1e202650000001` through `ab1e202650000006`: editor coordinates only;
 - `d223efc8797469a2`: comment `name/info`;
 - `127cf4d595cc30bc`, `result_rating_compatibility_write_001`:

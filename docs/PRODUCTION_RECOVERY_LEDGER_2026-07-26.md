@@ -20,6 +20,13 @@ while IDs, wires, and HTTP routes remain invariant. The adjacent Mongo history
 `limit="1"` drift remains quarantined. Evidence is recorded in
 `docs/NODERED_TOURNAMENT_RATING_RECOVERY_2026-07-26.md`.
 
+Phase 6 recovered that Mongo history `limit="1"` as its own guarded cohort.
+The patch is chained from the committed post-rating flow SHA, changes only node
+`ddc581fde0073e34`, and validates the route, JSONata query, inactive debug tap,
+IDs, wires, and HTTP routes. The normalized candidate is semantically
+deep-equal to current live. Evidence is recorded in
+`docs/NODERED_TOURNAMENT_HISTORY_LIMIT_RECOVERY_2026-07-26.md`.
+
 ## Decision
 
 Do not run a broad build/deploy from either `origin/main` or the quarantine
@@ -127,7 +134,7 @@ The current live flow was re-read and hashed twice after the initial inventory:
 | Current live SHA256 | `6d66ef25bdb2a03a031e8be6471fd9333ff960ed980e14e7011e95c76e006a90` |
 | Drift from preserved snapshot | two nodes |
 | Recovered node | `2e70b2e547e77c00`, function SHA `b46468ec...` |
-| Held node | `ddc581fde0073e34`, Mongo `limit="1"` |
+| Recovered second node | `ddc581fde0073e34`, Mongo `limit="1"` |
 
 The table below remains the preserved historical recovery snapshot used as the
 fail-closed reconstruction preimage.
@@ -176,11 +183,13 @@ review are mandatory before any Node-RED recovery commit or rollout.
    separate tested change.
 3. Tournament rating recalculation/current completion idempotency: recovered as
    an exact live function with a guarded node-specific builder.
-4. Recover the Classic Mexicano offline result queue as its own dependency
+4. Tournament history `limit="1"`: recovered as a separate guarded
+   configuration cohort chained from the rating candidate.
+5. Recover the Classic Mexicano offline result queue as its own dependency
    cohort.
-5. Recover the 2026-07-23 core performance cohort for
+6. Recover the 2026-07-23 core performance cohort for
    `bundle/games/group-schedule/communities` with its focused tests.
-6. Rebuild Node-RED only from a fresh live pull and source functions; never
+7. Rebuild Node-RED only from a fresh live pull and source functions; never
    promote the quarantined full flow/import JSON directly.
 
 ### Hold / quarantine
@@ -190,8 +199,6 @@ review are mandatory before any Node-RED recovery commit or rollout.
 - Do not overwrite the six mismatching dev bundles.
 - Do not treat `release.json` version equality as proof of bundle parity.
 - Do not commit the raw live flow or recovery archives.
-- Do not include Mongo history `limit="1"` until its query behavior is
-  independently justified and tested.
 
 ## Reusable audit commands
 

@@ -28,6 +28,7 @@
     "test:tournament-category": "node --experimental-strip-types --test scripts/tests/tournamentCategory.test.ts",
     "test:mexicano-classic": "node --experimental-strip-types --test scripts/tests/mexicanoClassic.test.ts scripts/tests/mexicanoRecoveryIntegration.test.ts",
     "test:nodered-tournament-finished-at": "node --experimental-strip-types --test scripts/tests/tournamentFinishedAtIdempotency.nodered.test.ts",
+    "test:nodered-tournament-history-limit": "node --experimental-strip-types --test scripts/tests/tournamentHistoryLimit.nodered.test.ts",
     "build:analyze": "ANALYZE=1 vite build",
     "lint": "eslint .",
     "preview": "vite preview"
