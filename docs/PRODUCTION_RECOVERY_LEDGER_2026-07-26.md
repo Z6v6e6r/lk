@@ -50,6 +50,13 @@ The broader recovery classification separately retains 7 subscription and
 normalizer remain quarantined.
 Evidence is in `docs/NODERED_GAMES_LIST_IDENTITY_RECOVERY_2026-07-26.md`.
 
+Phase 10 normalizes the one active direct game lookup query. The two confirmed
+`:gameId` routes and downstream Mongo/response chain remain unchanged. This
+reduces the remaining legacy-dependency mismatches from 8 to 7; the separately
+counted 2 games-list orphans, 7 subscription mismatches, and 3 split-payment
+mismatches remain quarantined. Evidence is recorded in
+`docs/NODERED_GAMES_DIRECT_LOOKUP_RECOVERY_2026-07-26.md`.
+
 ## Decision
 
 Do not run a broad build/deploy from either `origin/main` or the quarantine
@@ -218,9 +225,11 @@ review are mandatory before any Node-RED recovery commit or rollout.
    recovery cohort; audit output alone is not a deployable artifact.
 9. Review the three held chat function variants as separate business changes;
    do not fold them into source normalization.
-10. Review the 8 remaining legacy-dependency mismatches independently. The
-    2 games-list orphans, 7 subscription mismatches, and 3 split-payment
-    mismatches are separate holds; this cohort authorizes none of them.
+10. Direct lookup normalized one of the prior 8 legacy-dependency mismatches.
+    The 2 games-list orphans, 7 subscription mismatches, and 3 split-payment
+    mismatches remain separate holds.
+11. Review the 7 remaining legacy-dependency mismatches one at a time; no broad
+    games patch chain is authorized.
 
 ### Hold / quarantine
 

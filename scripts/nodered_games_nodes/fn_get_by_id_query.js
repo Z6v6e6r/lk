@@ -34,6 +34,8 @@ if (paymentRef) {
     archived: { $ne: true },
     $or: [
       { "metadata.paymentRef": paymentRef },
+      { "metadata.splitPayment.paymentRef": paymentRef },
+      { "metadata.splitPayment.payments.paymentRef": paymentRef },
       { "payment.paymentRef": paymentRef },
     ],
   };
@@ -45,8 +47,16 @@ if (bookingIds.length > 0) {
     archived: { $ne: true },
     $or: [
       { "booking.bookingIds": { $in: bookingIds } },
+      { "booking.bookingId": { $in: bookingIds } },
       { "metadata.bookingIds": { $in: bookingIds } },
+      { "metadata.bookingId": { $in: bookingIds } },
+      { "metadata.splitPayment.bookingIds": { $in: bookingIds } },
+      { "metadata.splitPayment.bookingId": { $in: bookingIds } },
+      { "metadata.splitPayment.organizerBookingId": { $in: bookingIds } },
+      { "metadata.splitPayment.payments.bookingIds": { $in: bookingIds } },
+      { "metadata.splitPayment.payments.bookingId": { $in: bookingIds } },
       { "payment.bookingIds": { $in: bookingIds } },
+      { "payment.bookingId": { $in: bookingIds } },
     ],
   };
   return [msg, null];

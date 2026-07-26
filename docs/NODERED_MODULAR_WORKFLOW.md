@@ -111,3 +111,16 @@ node scripts/patch_live_games_list_identity.mjs \
 This synchronizes only the active query and normalizer. It does not run the
 legacy games constructor or touch similarly named orphan functions. See
 `docs/NODERED_GAMES_LIST_IDENTITY_RECOVERY_2026-07-26.md`.
+
+## Guarded direct game lookup check
+
+```bash
+node scripts/patch_live_games_direct_lookup.mjs \
+  --workspace /absolute/external/live-workspace \
+  --output /absolute/external/new-direct-lookup/candidate.json \
+  --report /absolute/external/new-direct-lookup/report.json
+```
+
+This synchronizes only the active direct-lookup query. It does not add routes
+or alter the Mongo, response, HTTP response, or diagnostic nodes. See
+`docs/NODERED_GAMES_DIRECT_LOOKUP_RECOVERY_2026-07-26.md`.
