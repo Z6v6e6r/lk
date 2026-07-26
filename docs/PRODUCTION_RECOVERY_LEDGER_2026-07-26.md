@@ -57,6 +57,15 @@ counted 2 games-list orphans, 7 subscription mismatches, and 3 split-payment
 mismatches remain quarantined. Evidence is recorded in
 `docs/NODERED_GAMES_DIRECT_LOOKUP_RECOVERY_2026-07-26.md`.
 
+Phase 11 normalizes the active game create/upsert function and guards all 21
+nodes reachable from its six POST routes. The fresh live source already equals
+the tracked postimage, so publication is byte-identical and changes zero nodes.
+This reduces the remaining audited legacy-dependency mismatches from 7 to 6;
+the separately counted 2 games-list orphans, 7 subscription mismatches, and
+3 split-payment mismatches remain quarantined. The known confirm-alias mode and
+pre-Mongo HTTP 200 defects are preserved, not silently fixed. Evidence is in
+`docs/NODERED_GAMES_CREATE_UPSERT_RECOVERY_2026-07-26.md`.
+
 ## Decision
 
 Do not run a broad build/deploy from either `origin/main` or the quarantine

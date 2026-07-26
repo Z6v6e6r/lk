@@ -124,3 +124,16 @@ node scripts/patch_live_games_direct_lookup.mjs \
 This synchronizes only the active direct-lookup query. It does not add routes
 or alter the Mongo, response, HTTP response, or diagnostic nodes. See
 `docs/NODERED_GAMES_DIRECT_LOOKUP_RECOVERY_2026-07-26.md`.
+
+## Guarded games create/upsert check
+
+```bash
+node scripts/patch_live_games_create_upsert.mjs \
+  --workspace /absolute/external/live-workspace \
+  --output /absolute/external/new-create-upsert/candidate.json \
+  --report /absolute/external/new-create-upsert/report.json
+```
+
+This synchronizes only `Prepare game upsert` after verifying the exact six POST
+routes and their full 21-node reachable graph. It does not import or deploy the
+candidate. See `docs/NODERED_GAMES_CREATE_UPSERT_RECOVERY_2026-07-26.md`.
