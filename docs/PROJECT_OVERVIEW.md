@@ -144,3 +144,6 @@ npm run build:analyze # Сборка с анализатором бандла (d
 | `MAX_SUPPORT_SCENARIOS.md` | Сценарии MAX-бота и поддержки |
 | `SUPPORT_DIALOGS_MAX.md` | Техническое описание support-слоя и API эндпоинтов |
 | `ARCHITECTURE.md` | Детальная схема компонентов и потоков данных |
+| `MAIN_STABILIZATION.md` | Восстановление `main`, clean-release guard и правила переноса dirty-изменений |
+| `STABILIZATION_BASELINE_2026-07-25.md` | Исходные SHA, размер quarantine-слоя и результаты baseline-проверок |
+| `PRODUCTION_RECOVERY_LEDGER_2026-07-26.md` | Live release/Node-RED SHA, artifact cohorts и очередь восстановления |

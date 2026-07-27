@@ -67,6 +67,19 @@ case "$channel" in
     ;;
 esac
 
+manifest_files=()
+case "$channel" in
+  prod)
+    manifest_files=("dist/release.json")
+    ;;
+  dev)
+    manifest_files=("dist/release-dev.json")
+    ;;
+  all)
+    manifest_files=("dist/release.json" "dist/release-dev.json")
+    ;;
+esac
+
 missing_files=()
 for file_name in "${files[@]}"; do
   if [[ ! -f "$dist_dir/$file_name" ]]; then
@@ -86,6 +99,8 @@ if [[ ${#missing_files[@]} -gt 0 ]]; then
   echo "Run 'npm run build' first if dist/ is missing." >&2
   exit 1
 fi
+
+node "$repo_root/scripts/assert-clean-deploy.mjs" "${manifest_files[@]}"
 
 rm -rf "$staging_dir"
 mkdir -p "$staging_dir"

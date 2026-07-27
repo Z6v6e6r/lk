@@ -30,20 +30,62 @@ if (!gameId) {
 const body = isObj(msg.payload) ? msg.payload : {};
 const nowIso = new Date().toISOString();
 const setDoc = {};
+const responsePatch = {};
 
 const assignIfPresent = (key) => {
   if (Object.prototype.hasOwnProperty.call(body, key)) {
     setDoc[key] = body[key];
+    responsePatch[key] = body[key];
   }
 };
 
 ["status", "chatUrl", "inviteUrl", "metadata", "settings", "payment", "invite", "archived"].forEach(assignIfPresent);
 
+let organizerPhoneForRecalc = null;
+let organizerTouched = false;
 if (isObj(body.organizer)) {
-  setDoc.organizer = Object.assign({}, body.organizer, {
-    phone: normPhone(body.organizer.phone || body.organizer.phoneNumber || body.organizer.mobile),
-    phoneNorm: normPhone(body.organizer.phone || body.organizer.phoneNumber || body.organizer.mobile),
-  });
+  const organizerPatch = {};
+  const applyOrganizerField = (field, value) => {
+    if (value === null || value === undefined || value === "") return;
+    setDoc[`organizer.${field}`] = value;
+    organizerPatch[field] = value;
+    organizerTouched = true;
+  };
+
+  const organizerId = toStr(
+    body.organizer.id
+    || body.organizer.clientId
+    || body.organizer.userId
+    || body.organizer.uuid,
+  );
+  const organizerName = toStr(
+    body.organizer.name || [body.organizer.firstName, body.organizer.lastName].filter(Boolean).join(" "),
+  );
+  const organizerPhone = normPhone(
+    body.organizer.phone || body.organizer.phoneNumber || body.organizer.mobile || body.organizer.phoneNorm,
+  );
+  const organizerPhoto = toStr(body.organizer.photo || body.organizer.avatar || body.organizer.imageUrl);
+  const organizerRating = toStr(body.organizer.rating || body.organizer.level || body.organizer.grade);
+  const organizerRatingNumeric = toNum(
+    body.organizer.ratingNumeric || body.organizer.numericRating || body.organizer.levelNumeric,
+  );
+
+  applyOrganizerField("id", organizerId);
+  applyOrganizerField("name", organizerName);
+  applyOrganizerField("photo", organizerPhoto);
+  applyOrganizerField("rating", organizerRating);
+  if (organizerRatingNumeric !== null) {
+    applyOrganizerField("ratingNumeric", organizerRatingNumeric);
+  }
+  if (organizerPhone) {
+    applyOrganizerField("phone", organizerPhone);
+    applyOrganizerField("phoneNorm", organizerPhone);
+    organizerPhoneForRecalc = organizerPhone;
+  }
+
+  if (organizerTouched) {
+    responsePatch.organizer = organizerPatch;
+  }
 }
 
 if (isObj(body.booking)) {
@@ -67,6 +109,7 @@ if (isObj(body.booking)) {
   b.endTs = endIso ? Date.parse(endIso) : b.endTs;
 
   setDoc.booking = b;
+  responsePatch.booking = b;
 }
 
 const normalizePlayer = (p, fallbackSource) => {
@@ -84,20 +127,27 @@ const normalizePlayer = (p, fallbackSource) => {
 };
 
 if (Array.isArray(body.participants)) {
-  setDoc.participants = body.participants.map((p) => normalizePlayer(p, "INVITED")).filter(Boolean);
+  const participants = body.participants.map((p) => normalizePlayer(p, "INVITED")).filter(Boolean);
+  setDoc.participants = participants;
+  responsePatch.participants = participants;
 }
 if (Array.isArray(body.waitlist)) {
-  setDoc.waitlist = body.waitlist.map((p) => normalizePlayer(p, "WAITLIST")).filter(Boolean);
+  const waitlist = body.waitlist.map((p) => normalizePlayer(p, "WAITLIST")).filter(Boolean);
+  setDoc.waitlist = waitlist;
+  responsePatch.waitlist = waitlist;
 }
 
-const shouldRecalcPhones = isObj(body.organizer)
+const shouldRecalcPhones = organizerTouched
   || Array.isArray(body.participants)
   || Array.isArray(body.waitlist)
   || Array.isArray(body.invitedPhones)
   || Array.isArray(body.invites);
 
 if (shouldRecalcPhones) {
-  const organizerPhone = normPhone((setDoc.organizer || body.organizer || {}).phone);
+  const metadataOrganizerPhone = isObj(body.metadata)
+    ? normPhone(body.metadata.organizerPhone || body.metadata.organizerPhoneNorm)
+    : null;
+  const organizerPhone = organizerPhoneForRecalc || metadataOrganizerPhone;
   const participants = asArray(setDoc.participants || body.participants);
   const waitlist = asArray(setDoc.waitlist || body.waitlist);
   const participantPhones = uniq(participants.map((p) => normPhone(p.phone)));
@@ -110,15 +160,21 @@ if (shouldRecalcPhones) {
   setDoc.participantPhones = participantPhones;
   setDoc.waitlistPhones = waitlistPhones;
   setDoc.invitedPhones = invitedPhones;
+  responsePatch.participantPhones = participantPhones;
+  responsePatch.waitlistPhones = waitlistPhones;
+  responsePatch.invitedPhones = invitedPhones;
   setDoc.allRelatedPhones = uniq([
     organizerPhone,
+    ...asArray(isObj(body.metadata) ? body.metadata.allRelatedPhones : null).map((p) => normPhone(p)),
     ...participantPhones,
     ...waitlistPhones,
     ...invitedPhones,
   ]);
+  responsePatch.allRelatedPhones = setDoc.allRelatedPhones;
 }
 
 setDoc.updatedAt = nowIso;
+responsePatch.updatedAt = nowIso;
 
 if (Object.keys(setDoc).length === 1 && setDoc.updatedAt) {
   msg.statusCode = 400;
@@ -135,13 +191,13 @@ const dbMsg = Object.assign({}, msg, {
 const responseMsg = Object.assign({}, msg, {
   statusCode: 200,
   headers: { "Content-Type": "application/json; charset=utf-8" },
-  payload: Object.assign({ id: gameId }, setDoc),
+  payload: Object.assign({ id: gameId }, responsePatch),
 });
 
 const autojoinProbeMsg = Object.assign({}, msg, {
   _gameAutojoinPatch: {
     gameId,
-    patch: setDoc,
+    patch: responsePatch,
     source: "games_patch",
   },
   payload: { id: gameId, archived: { $ne: true } },

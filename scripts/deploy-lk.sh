@@ -83,6 +83,19 @@ case "$channel" in
     ;;
 esac
 
+manifest_files=()
+case "$channel" in
+  prod)
+    manifest_files=("dist/release.json")
+    ;;
+  dev)
+    manifest_files=("dist/release-dev.json")
+    ;;
+  all)
+    manifest_files=("dist/release.json" "dist/release-dev.json")
+    ;;
+esac
+
 missing_files=()
 for file_path in "${files[@]}"; do
   if [[ ! -f "$file_path" ]]; then
@@ -98,6 +111,8 @@ if [[ ${#missing_files[@]} -gt 0 ]]; then
   echo "Run 'npm run build' first." >&2
   exit 1
 fi
+
+node "$repo_root/scripts/assert-clean-deploy.mjs" "${manifest_files[@]}"
 
 scp_cmd=(scp -P "$deploy_port")
 if [[ "$deploy_use_sudo" == "1" ]]; then
