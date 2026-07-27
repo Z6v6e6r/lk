@@ -50,7 +50,6 @@ Node-RED — визуальный инструмент автоматизаци�
 | `fn_get_by_id_resp.js` | Ответ на запрос игры |
 | `fn_create.js` | Создание новой игры |
 | `fn_patch.js` | Изменение игры (join/leave/update) |
-| `fn_write_result_response.js` | Запись результата матча |
 | `fn_live_ratings_*.js` | 6 файлов для live-рейтингов (авторизация, запрос, парсинг, кэш) |
 
 ### 📁 `scripts/nodered_chat_nodes/`

@@ -96,6 +96,14 @@ unit is the orphan/retirement decision for `fn_write_result_response`.
 The normalization does not deploy, import, restart, or change the existing
 payment business contract.
 
+Phase 15 retires the last orphan source candidate
+`fn_write_result_response`. A fresh verified production flow contains neither
+its exact function body, node name, nor any string reference; the repository
+had no runtime or patcher reference. The stale source file and reference-only
+catalog entry are removed without changing Node-RED. The audited source
+recovery queue is now empty; future result-response work must start from an
+active live node, not this retired file.
+
 Behavior/security cohort A builds, but does not deploy, a four-node hardening
 candidate from the exact Phase 12 live preimage. It requires and normalizes
 `tournamentId`, routes validation errors away from Mongo, disables both active
