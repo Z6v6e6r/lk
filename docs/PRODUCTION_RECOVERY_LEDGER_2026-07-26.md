@@ -87,6 +87,15 @@ snapshot rebuild, and `$push` audit changes are explicitly not part of this
 normalization and need separate business-contract review. Evidence is in
 `docs/NODERED_GAMES_PATCH_RECOVERY_2026-07-27.md`.
 
+Phase 14 normalizes the coupled split-payment trio as one cohort: create,
+join, and Viva-router source bodies were taken only from the same fresh live
+preimage and tested together. The source synchronizer refuses stale snapshots,
+unexpected node identity/output shape, and unknown source preimages. This
+removes the final three active source mismatches; the only remaining recovery
+unit is the orphan/retirement decision for `fn_write_result_response`.
+The normalization does not deploy, import, restart, or change the existing
+payment business contract.
+
 Behavior/security cohort A builds, but does not deploy, a four-node hardening
 candidate from the exact Phase 12 live preimage. It requires and normalizes
 `tournamentId`, routes validation errors away from Mongo, disables both active
