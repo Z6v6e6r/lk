@@ -76,6 +76,17 @@ active debug taps, missing-ID handling, pre-Mongo HTTP response, and
 caller-provided rating-change trust remain explicit holds. Evidence is in
 `docs/NODERED_TOURNAMENT_PREPARE_RECOVERY_2026-07-26.md`.
 
+Phase 13 normalizes the active games PATCH source from the fresh production
+preimage after the deployed tournament A+B cohort. It guards the two confirmed
+PATCH routes, the 19-node reachable graph, full-flow SHA, target SHA, IDs,
+wires, and links; its publication is byte-identical and changes zero nodes.
+This reduces the authoritative source-recovery queue from five units to four:
+the coupled split-payment trio and the orphan/retirement decision for
+`fn_write_result_response`. The quarantine-only cancellation guard, roster
+snapshot rebuild, and `$push` audit changes are explicitly not part of this
+normalization and need separate business-contract review. Evidence is in
+`docs/NODERED_GAMES_PATCH_RECOVERY_2026-07-27.md`.
+
 Behavior/security cohort A builds, but does not deploy, a four-node hardening
 candidate from the exact Phase 12 live preimage. It requires and normalizes
 `tournamentId`, routes validation errors away from Mongo, disables both active
