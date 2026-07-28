@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { execFileSync } from "node:child_process";
 import QRCode from "qrcode";
 
 const ROOT = process.cwd();
@@ -90,13 +91,11 @@ ensureAssignments();
 const rows = readRows();
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 for (const row of rows) {
-  await QRCode.toFile(path.join(OUTPUT_DIR, `${row.qrCode}.png`), row.landingUrl, {
-    errorCorrectionLevel: "M",
-    margin: 2,
-    width: 768,
-  });
+  const svgPath = path.join(OUTPUT_DIR, `${row.qrCode}.svg`);
+  const pngPath = path.join(OUTPUT_DIR, `${row.qrCode}.png`);
   const svg = await QRCode.toString(row.landingUrl, { type: "svg", errorCorrectionLevel: "M", margin: 2, width: 768 });
-  fs.writeFileSync(path.join(OUTPUT_DIR, `${row.qrCode}.svg`), svg, "utf8");
+  fs.writeFileSync(svgPath, svg, "utf8");
+  execFileSync("rsvg-convert", [svgPath, "--output", pngPath]);
 }
 fs.writeFileSync(path.join(OUTPUT_DIR, "registry.csv"), rowsToRegistry(rows), "utf8");
 fs.writeFileSync(path.join(OUTPUT_DIR, "table.html"), tableHtml(rows), "utf8");
