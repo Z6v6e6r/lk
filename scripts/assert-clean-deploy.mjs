@@ -1,10 +1,14 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   readRepositoryProvenance,
   validateReleaseManifestProvenance,
 } from "./lib/release-provenance.mjs";
+import {
+  releaseArtifactNames,
+  validateBundleRuntimeConfig,
+} from "./lib/build-env.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repoRoot = resolve(scriptPath, "../..");
@@ -50,6 +54,33 @@ for (const manifestArg of manifestArgs) {
     }
     console.error("Rebuild the release from the current clean commit.");
     process.exit(1);
+  }
+
+  const artifactNames = releaseArtifactNames(basename(manifestPath));
+  if (artifactNames.length === 0) {
+    console.error(`Deploy blocked: unsupported release manifest ${manifestArg}.`);
+    process.exit(1);
+  }
+
+  for (const artifactName of artifactNames) {
+    const artifactPath = resolve(manifestPath, "..", artifactName);
+    let artifactSource;
+    try {
+      artifactSource = await readFile(artifactPath, "utf8");
+    } catch (error) {
+      console.error(`Deploy blocked: cannot read ${artifactName}: ${error.message}`);
+      process.exit(1);
+    }
+
+    const artifactErrors = validateBundleRuntimeConfig(artifactSource);
+    if (artifactErrors.length > 0) {
+      console.error(`Deploy blocked by ${artifactName}:`);
+      for (const error of artifactErrors) {
+        console.error(`  - ${error}`);
+      }
+      console.error("Rebuild the release with the required VITE_* environment.");
+      process.exit(1);
+    }
   }
 }
 
