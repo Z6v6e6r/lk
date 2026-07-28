@@ -1,0 +1,55 @@
+flowchart LR
+  user[Client Web User]
+  mobile[Future Android / iOS Apps]
+  operator[ЦУП Operator]
+
+  tilda[Tilda Pages and HTML Loaders]
+  bundles[LK IIFE Bundles\nbundle.js, games.js, tournaments.js, group-schedule.js]
+  api[Current SERV2 / Node-RED HTTP API]
+  mongo[(MongoDB\nLK local state and read models)]
+  viva[VivaCRM REST APIs]
+  auth[Keycloak / Viva Auth]
+  payments[Payment Provider]
+  max[MAX Bot / Messenger]
+  fcm[Firebase FCM\nFuture APNS]
+  scripts[Repair / Recalculate / Deploy Scripts]
+
+  target[Target PadlHub API / BFF\n/api/v1]
+  vk[Target VK Cloud Parallel Contour]
+
+  user --> tilda
+  tilda --> bundles
+  bundles --> auth
+  bundles --> api
+  bundles --> viva
+  bundles --> payments
+
+  mobile -. future stable contract .-> target
+  target -. legacy adapter .-> api
+  target -. adapter .-> viva
+  target -. reads/writes during migration .-> mongo
+  target -. deploy target .-> vk
+
+  api --> mongo
+  api --> viva
+  api --> payments
+  api --> max
+  api --> fcm
+
+  operator --> api
+  operator --> mongo
+
+  scripts --> mongo
+  scripts --> api
+  scripts --> viva
+
+  classDef current fill:#e8f1ff,stroke:#2563eb,color:#111827
+  classDef external fill:#fff7ed,stroke:#ea580c,color:#111827
+  classDef data fill:#ecfdf5,stroke:#059669,color:#111827
+  classDef target fill:#f5f3ff,stroke:#7c3aed,color:#111827
+  classDef risk fill:#fef2f2,stroke:#dc2626,color:#111827
+
+  class user,mobile,operator,tilda,bundles,api,scripts current
+  class viva,auth,payments,max,fcm external
+  class mongo data
+  class target,vk target

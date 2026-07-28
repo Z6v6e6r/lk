@@ -15,10 +15,15 @@ export const SUPPORT_WEB_CONNECTOR =
   (import.meta.env.VITE_SUPPORT_WEB_CONNECTOR as string | undefined) ?? "WEB_LK";
 export const ACADEMY_SUPPORT_CONNECTOR =
   (import.meta.env.VITE_ACADEMY_SUPPORT_CONNECTOR as string | undefined) ?? "WEB_ACADEMY";
+export const PUSH_REGISTRATION_URL =
+  import.meta.env.VITE_PUSH_REGISTRATION_URL as string | undefined;
+export const PUSH_UNREGISTRATION_URL =
+  import.meta.env.VITE_PUSH_UNREGISTRATION_URL as string | undefined;
 
 export const GAMES_BUNDLE_URL = import.meta.env.VITE_GAMES_BUNDLE_URL as string | undefined;
 export const TOURNAMENTS_BUNDLE_URL = import.meta.env.VITE_TOURNAMENTS_BUNDLE_URL as string | undefined;
 export const ONBOARDING_BUNDLE_URL = import.meta.env.VITE_ONBOARDING_BUNDLE_URL as string | undefined;
+export const LEVELS_INFO_BUNDLE_URL = import.meta.env.VITE_LEVELS_INFO_BUNDLE_URL as string | undefined;
 export const COMMUNITIES_BUNDLE_URL = import.meta.env.VITE_COMMUNITIES_BUNDLE_URL as string | undefined;
 export const TOURNAMENT_SIGNUP_BUNDLE_URL = import.meta.env.VITE_TOURNAMENT_SIGNUP_BUNDLE_URL as string | undefined;
 export const PHAB_API_BASE =

@@ -1,0 +1,216 @@
+<div id="root"></div>
+
+<script>
+  (function () {
+    var primaryAssetOrigin = "https://padlhub.su";
+
+    var scriptPath = "/lk/group-schedule.js";
+    var releasePath = "/lk/release.json";
+    var cabinetUrl = "https://padlhub.ru/lk_new";
+
+    var releaseTimeoutMs = 5000;
+    var scriptTimeoutMs = 12000;
+
+    var cacheBust = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+    var url = new URL(window.location.href);
+
+    function normalizeOrigin(value) {
+      return String(value || "").trim().replace(/\/+$/, "");
+    }
+
+    function dedupeStrings(values) {
+      var seen = {};
+      return values.filter(function (value) {
+        if (!value || seen[value]) return false;
+        seen[value] = true;
+        return true;
+      });
+    }
+
+    function firstNonEmpty() {
+      for (var index = 0; index < arguments.length; index += 1) {
+        var value = String(arguments[index] || "").trim();
+        if (value) return value;
+      }
+      return null;
+    }
+
+    var assetOrigins = dedupeStrings([normalizeOrigin(primaryAssetOrigin)].filter(Boolean));
+
+    function buildLkBaseUrl(origin) {
+      var normalized = normalizeOrigin(origin);
+      return normalized ? normalized + "/lk" : null;
+    }
+
+    window.__LK_BASE_URLS__ = assetOrigins.map(buildLkBaseUrl).filter(Boolean);
+    window.__LK_API_BASE_URLS__ = assetOrigins.slice();
+    window.__LK_AUTH_MODE__ = "viva";
+
+    var data = {
+      exerciseId: firstNonEmpty(
+        url.searchParams.get("exerciseId"),
+        url.searchParams.get("id"),
+        url.searchParams.get("groupExerciseId"),
+        url.searchParams.get("4lGIgL_exercise")
+      ),
+      date: firstNonEmpty(
+        url.searchParams.get("date"),
+        url.searchParams.get("groupDate"),
+        url.searchParams.get("4lGIgL_date")
+      ),
+      studioId: firstNonEmpty(
+        url.searchParams.get("studioId"),
+        url.searchParams.get("stationId"),
+        url.searchParams.get("4lGIgL_studio")
+      )
+    };
+
+    var backUrl = url.searchParams.get("cabinetUrl") || cabinetUrl;
+
+    function showError() {
+      var root = document.getElementById("root");
+      if (root) {
+        root.innerHTML =
+          "<div style='padding:16px;font-family:Arial,sans-serif;color:#333'>Не удалось загрузить расписание. Попробуйте позже.</div>";
+      }
+    }
+
+    function addParam(src, key, value) {
+      var scriptUrl = new URL(src, window.location.href);
+      scriptUrl.searchParams.set(key, value);
+      return scriptUrl.toString();
+    }
+
+    function buildReleaseUrl(origin) {
+      return addParam(origin + releasePath, "force_ts", cacheBust);
+    }
+
+    function buildScriptUrl(origin, version) {
+      var src = origin + scriptPath;
+      if (version) {
+        window.__LK_RELEASE_VERSION__ = String(version);
+        src = addParam(src, "v", String(version));
+      }
+      return addParam(src, "force_ts", cacheBust);
+    }
+
+    function fetchWithTimeout(src, timeoutMs) {
+      if (typeof AbortController === "undefined") {
+        return fetch(src, {
+          cache: "no-store"
+        });
+      }
+
+      var controller = new AbortController();
+      var timeoutId = setTimeout(function () {
+        controller.abort();
+      }, timeoutMs);
+
+      return fetch(src, {
+        cache: "no-store",
+        signal: controller.signal
+      }).finally(function () {
+        clearTimeout(timeoutId);
+      });
+    }
+
+    function mountWidget() {
+      if (!window.LKWidgetGroupSchedule || typeof window.LKWidgetGroupSchedule.mount !== "function") {
+        showError();
+        return;
+      }
+
+      window.LKWidgetGroupSchedule.mount({
+        targetId: "root",
+        onClose: function () {
+          window.location.href = backUrl || cabinetUrl;
+        },
+        data: data
+      });
+    }
+
+    function cleanupPreviousWidget() {
+      var old = document.getElementById("padlhub-group-schedule-script");
+      if (old && old.parentNode) old.parentNode.removeChild(old);
+
+      if (window.LKWidgetGroupSchedule && typeof window.LKWidgetGroupSchedule.unmount === "function") {
+        window.LKWidgetGroupSchedule.unmount("root");
+      }
+
+      window.LKWidgetGroupSchedule = undefined;
+    }
+
+    function loadScriptFromCandidates(candidates, version, index) {
+      if (index >= candidates.length) {
+        showError();
+        return;
+      }
+
+      cleanupPreviousWidget();
+
+      var origin = candidates[index];
+      var activeBaseUrl = buildLkBaseUrl(origin);
+      if (activeBaseUrl) {
+        window.__LK_ACTIVE_BASE_URL__ = activeBaseUrl;
+      } else {
+        delete window.__LK_ACTIVE_BASE_URL__;
+      }
+      var script = document.createElement("script");
+      var settled = false;
+      var timeoutId = setTimeout(function () {
+        retry();
+      }, scriptTimeoutMs);
+
+      function retry() {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+
+        if (script.parentNode) {
+          script.parentNode.removeChild(script);
+        }
+
+        loadScriptFromCandidates(candidates, version || String(Date.now()), index + 1);
+      }
+
+      script.id = "padlhub-group-schedule-script";
+      script.src = buildScriptUrl(origin, version);
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.onload = function () {
+        settled = true;
+        clearTimeout(timeoutId);
+        mountWidget();
+      };
+      script.onerror = retry;
+
+      document.head.appendChild(script);
+    }
+
+    function fetchReleaseVersion(index) {
+      if (index >= assetOrigins.length) {
+        loadScriptFromCandidates(assetOrigins, String(Date.now()), 0);
+        return;
+      }
+
+      var origin = assetOrigins[index];
+      var releaseUrl = buildReleaseUrl(origin);
+
+      fetchWithTimeout(releaseUrl, releaseTimeoutMs)
+        .then(function (response) {
+          if (!response.ok) throw new Error("release manifest unavailable");
+          return response.json();
+        })
+        .then(function (release) {
+          var version = release && release.version ? String(release.version) : null;
+          var orderedOrigins = assetOrigins.slice(index).concat(assetOrigins.slice(0, index));
+          loadScriptFromCandidates(orderedOrigins, version, 0);
+        })
+        .catch(function () {
+          fetchReleaseVersion(index + 1);
+        });
+    }
+
+    fetchReleaseVersion(0);
+  })();
+</script>

@@ -19,10 +19,10 @@ test("tournament creation uses the classic mexicano generator and params", () =>
 
 test("match save sends atomic next-round results and requires server layout confirmation", () => {
   assert.match(tournamentsPageSource, /buildClassicMexicanoMatchSaveResults\(/);
-  assert.match(tournamentsPageSource, /generatedLayoutsConfirmed/);
+  assert.match(tournamentsPageSource, /generatedRoundsPersisted/);
   assert.match(
     tournamentsPageSource,
-    /Сервер не подтвердил раскладку следующего раунда/,
+    /Сервер сохранил результат, но не подтвердил следующий раунд/,
   );
   assert.match(tournamentsPageSource, /rebuildMexicanoClassicFutureRounds\(/);
 });

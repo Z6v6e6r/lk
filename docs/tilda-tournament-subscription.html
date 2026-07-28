@@ -1,0 +1,253 @@
+<div id="root"></div>
+
+<script>
+  (function () {
+    var primaryAssetOrigin = "https://padlhub.su";
+    var fallbackAssetOrigins = [
+      "https://lk-reserve.89-108-64-209.sslip.io"
+    ];
+
+    var url = new URL(window.location.href);
+    var releaseTimeoutMs = 5000;
+    var scriptTimeoutMs = 10000;
+    var cacheBust = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+    var isLocalFilePreview = window.location.protocol === "file:";
+
+    function normalizeOrigin(value) {
+      return String(value || "").trim().replace(/\/+$/, "");
+    }
+
+    function dedupeStrings(values) {
+      var seen = {};
+      return values.filter(function (value) {
+        if (!value || seen[value]) return false;
+        seen[value] = true;
+        return true;
+      });
+    }
+
+    function buildLkBaseUrl(origin) {
+      var normalized = normalizeOrigin(origin);
+      return normalized ? normalized + "/lk" : null;
+    }
+
+    function isDevCabinetUrl(value) {
+      var raw = String(value || "").trim();
+      if (!raw) return false;
+      try {
+        return new URL(raw, window.location.origin).pathname.indexOf("/lk_dev") !== -1;
+      } catch (_) {
+        return raw.indexOf("/lk_dev") !== -1;
+      }
+    }
+
+    function resolveChannel() {
+      var explicitChannel = String(url.searchParams.get("channel") || "").trim().toLowerCase();
+      if (explicitChannel === "dev" || explicitChannel === "prod") return explicitChannel;
+      if (isDevCabinetUrl(url.searchParams.get("cabinetUrl"))) return "dev";
+      if (isDevCabinetUrl(url.searchParams.get("returnUrl"))) return "dev";
+      if (isDevCabinetUrl(document.referrer || "")) return "dev";
+      return "prod";
+    }
+
+    function resolveAssetOrigins(channel) {
+      var primaryOrigin = normalizeOrigin(primaryAssetOrigin);
+      var reserveOrigins = fallbackAssetOrigins.map(normalizeOrigin).filter(Boolean);
+
+      if (channel === "dev" && reserveOrigins.length > 0) {
+        return reserveOrigins;
+      }
+
+      return primaryOrigin ? [primaryOrigin] : reserveOrigins;
+    }
+
+    var channel = resolveChannel();
+    var assetOrigins = dedupeStrings(resolveAssetOrigins(channel));
+    window.__LK_BASE_URLS__ = assetOrigins.map(buildLkBaseUrl).filter(Boolean);
+    window.__LK_API_BASE_URLS__ = assetOrigins.slice();
+    var scriptPath = channel === "dev" ? "/lk/tournament-subscription-dev.js" : "/lk/tournament-subscription.js";
+    var releasePath = channel === "dev" ? "/lk/release-dev.json" : "/lk/release.json";
+    var localScriptPath = channel === "dev" ? "../dist/tournament-subscription-dev.js" : "../dist/tournament-subscription.js";
+    var defaultCabinetUrl = channel === "dev" ? "https://padlhub.ru/lk_dev" : "https://padlhub.ru/lk_new";
+    var cabinetUrl = url.searchParams.get("cabinetUrl") || url.searchParams.get("returnUrl") || defaultCabinetUrl;
+    var pageVariant = String(url.searchParams.get("variant") || "").trim();
+    var artworkKey = String(url.searchParams.get("artworkKey") || "").trim();
+    var offerKey = String(url.searchParams.get("offer") || url.searchParams.get("offerKey") || "").trim();
+    var autoPurchaseRaw = String(url.searchParams.get("autoPurchase") || "").trim().toLowerCase();
+    var autoPurchase = autoPurchaseRaw
+      ? autoPurchaseRaw !== "0" && autoPurchaseRaw !== "false" && autoPurchaseRaw !== "no" && autoPurchaseRaw !== "off"
+      : Boolean(offerKey);
+    var planKey = String(url.searchParams.get("planKey") || "").trim();
+    var campaignKey = String(url.searchParams.get("campaignKey") || "").trim();
+    var priceLabel = String(url.searchParams.get("priceLabel") || "").trim();
+    var totalLimitRaw = String(url.searchParams.get("totalLimit") || "").trim();
+    var totalLimit = totalLimitRaw ? Number(totalLimitRaw) : null;
+
+    if (!Number.isFinite(totalLimit) || totalLimit <= 0) {
+      totalLimit = null;
+    }
+
+    function showError() {
+      var root = document.getElementById("root");
+      if (root) {
+        root.innerHTML =
+          "<div style='padding:16px;font-family:Arial,sans-serif;color:#333'>Не удалось загрузить покупку абонемента. Попробуйте позже.</div>";
+      }
+    }
+
+    function addParam(src, key, value) {
+      var scriptUrl = new URL(src, window.location.href);
+      scriptUrl.searchParams.set(key, value);
+      return scriptUrl.toString();
+    }
+
+    function buildReleaseUrl(origin) {
+      return addParam(origin + releasePath, "force_ts", cacheBust);
+    }
+
+    function buildScriptUrl(origin, version) {
+      var src = isLocalFilePreview
+        ? new URL(localScriptPath, window.location.href).toString()
+        : origin + scriptPath;
+      if (version) {
+        window.__LK_RELEASE_VERSION__ = String(version);
+        src = addParam(src, "v", String(version));
+      }
+      return addParam(src, "force_ts", cacheBust);
+    }
+
+    function fetchWithTimeout(src, timeoutMs) {
+      if (typeof AbortController === "undefined") {
+        return fetch(src, {
+          cache: "no-store"
+        });
+      }
+
+      var controller = new AbortController();
+      var timeoutId = setTimeout(function () {
+        controller.abort();
+      }, timeoutMs);
+
+      return fetch(src, {
+        cache: "no-store",
+        signal: controller.signal
+      }).finally(function () {
+        clearTimeout(timeoutId);
+      });
+    }
+
+    function mountWidget() {
+      if (!window.LKWidgetTournamentSubscription || typeof window.LKWidgetTournamentSubscription.mount !== "function") {
+        showError();
+        return;
+      }
+
+      window.LKWidgetTournamentSubscription.mount({
+        targetId: "root",
+        onClose: function () {
+          window.location.href = cabinetUrl || defaultCabinetUrl;
+        },
+        data: {
+          artworkKey: artworkKey || undefined,
+          autoPurchase: autoPurchase,
+          cabinetUrl: cabinetUrl,
+          campaignKey: campaignKey || undefined,
+          offerKey: offerKey || undefined,
+          planKey: planKey || undefined,
+          priceLabel: priceLabel || undefined,
+          totalLimit: totalLimit || undefined,
+          variant: pageVariant || undefined
+        }
+      });
+    }
+
+    function cleanupPreviousWidget() {
+      var old = document.getElementById("padlhub-tournament-subscription-script");
+      if (old && old.parentNode) old.parentNode.removeChild(old);
+
+      if (window.LKWidgetTournamentSubscription && typeof window.LKWidgetTournamentSubscription.unmount === "function") {
+        window.LKWidgetTournamentSubscription.unmount();
+      }
+
+      window.LKWidgetTournamentSubscription = undefined;
+    }
+
+    function loadScriptFromCandidates(candidates, version, index) {
+      if (index >= candidates.length) {
+        showError();
+        return;
+      }
+
+      cleanupPreviousWidget();
+
+      var origin = candidates[index];
+      var activeBaseUrl = buildLkBaseUrl(origin);
+      if (activeBaseUrl) {
+        window.__LK_ACTIVE_BASE_URL__ = activeBaseUrl;
+      } else {
+        delete window.__LK_ACTIVE_BASE_URL__;
+      }
+      var script = document.createElement("script");
+      var settled = false;
+      var timeoutId = setTimeout(function () {
+        retry();
+      }, scriptTimeoutMs);
+
+      function retry() {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+
+        if (script.parentNode) {
+          script.parentNode.removeChild(script);
+        }
+
+        loadScriptFromCandidates(candidates, version || String(Date.now()), index + 1);
+      }
+
+      script.id = "padlhub-tournament-subscription-script";
+      script.src = buildScriptUrl(origin, version);
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.onload = function () {
+        settled = true;
+        clearTimeout(timeoutId);
+        mountWidget();
+      };
+      script.onerror = retry;
+
+      document.head.appendChild(script);
+    }
+
+    function fetchReleaseVersion(index) {
+      if (index >= assetOrigins.length) {
+        loadScriptFromCandidates(assetOrigins, String(Date.now()), 0);
+        return;
+      }
+
+      var origin = assetOrigins[index];
+      var releaseUrl = buildReleaseUrl(origin);
+
+      fetchWithTimeout(releaseUrl, releaseTimeoutMs)
+        .then(function (response) {
+          if (!response.ok) throw new Error("release manifest unavailable");
+          return response.json();
+        })
+        .then(function (release) {
+          var version = release && release.version ? String(release.version) : null;
+          var orderedOrigins = assetOrigins.slice(index).concat(assetOrigins.slice(0, index));
+          loadScriptFromCandidates(orderedOrigins, version, 0);
+        })
+        .catch(function () {
+          fetchReleaseVersion(index + 1);
+        });
+    }
+
+    if (isLocalFilePreview) {
+      loadScriptFromCandidates([""], String(Date.now()), 0);
+      return;
+    }
+
+    fetchReleaseVersion(0);
+  })();
+</script>

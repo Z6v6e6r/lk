@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const GAMES_MONGO4_CLIENT_ID = '4e820638cc39c730';
+const gamesMongoUri = String(process.env.NODERED_GAMES_MONGODB_URI || '').trim();
 
 export const GAMES_MONGO4_CLIENT_NODE = {
   id: GAMES_MONGO4_CLIENT_ID,
@@ -24,7 +25,7 @@ export const GAMES_MONGO4_CLIENT_NODE = {
   minPoolSize: '0',
   maxPoolSize: '100',
   maxIdleTimeMS: '0',
-  uri: 'mongodb://gen_user:l^RRk2kNPNqoC~@147.45.254.160:27017/games?authSource=admin&directConnection=true&retryWrites=false',
+  uri: gamesMongoUri,
   advanced: '{}',
   uriTabActive: 'tab-uri-advanced',
 };
@@ -52,13 +53,24 @@ function buildMongo4AdapterNode(node) {
     name: `${node.name || node.collection || 'Mongo update'} -> mongodb4 args`,
     func: [
       'const filter = msg.query || msg.mongoQuery || (Array.isArray(msg.payload) ? (msg.payload[0] || {}) : {}) || {};',
-      'const update = Array.isArray(msg.payload) ? (msg.payload[1] || {}) : (msg.payload || {});',
-      'const setDoc = update && typeof update === "object" && update.$set && typeof update.$set === "object" ? update.$set : null;',
-      'const setOnInsertDoc = update && typeof update === "object" && update.$setOnInsert && typeof update.$setOnInsert === "object" ? update.$setOnInsert : null;',
-      'if (setDoc && setOnInsertDoc) {',
-      '  for (const key of Object.keys(setOnInsertDoc)) {',
-      '    if (Object.prototype.hasOwnProperty.call(setDoc, key)) {',
-      '      delete setDoc[key];',
+      'const rawUpdate = Array.isArray(msg.payload) ? (msg.payload[1] || {}) : (msg.payload || {});',
+      'const update = Array.isArray(rawUpdate)',
+      '  ? rawUpdate',
+      '  : ((rawUpdate && typeof rawUpdate === "object") ? rawUpdate : {});',
+      'const hasAtomicOperators = Array.isArray(update)',
+      '  ? true',
+      '  : Object.keys(update).some((key) => String(key).startsWith("$"));',
+      'if (!hasAtomicOperators) {',
+      '  return null;',
+      '}',
+      'if (!Array.isArray(update)) {',
+      '  const setDoc = update.$set && typeof update.$set === "object" ? update.$set : null;',
+      '  const setOnInsertDoc = update.$setOnInsert && typeof update.$setOnInsert === "object" ? update.$setOnInsert : null;',
+      '  if (setDoc && setOnInsertDoc) {',
+      '    for (const key of Object.keys(setOnInsertDoc)) {',
+      '      if (Object.prototype.hasOwnProperty.call(setDoc, key)) {',
+      '        delete setDoc[key];',
+      '      }',
       '    }',
       '  }',
       '}',
@@ -183,6 +195,11 @@ export function transformFlowToMongo4(flow) {
 
   if (!usesGamesMongoClient) {
     return rewired;
+  }
+  if (!gamesMongoUri) {
+    throw new Error(
+      'NODERED_GAMES_MONGODB_URI is required when converting flows that use the games MongoDB client',
+    );
   }
 
   return [...rewired, clone(GAMES_MONGO4_CLIENT_NODE)];

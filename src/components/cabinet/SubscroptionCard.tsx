@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { apiFetchSubscriptioName } from "../../utils/apiClient";
 import type { Subscription } from "../../utils/apiClient";
+import {
+  resolveSubscriptionStatusTone,
+  resolveSubscriptionUsageDisplay,
+} from "../../utils/subscriptionValidity";
 
 interface SubscroptionCardProps {
   subscription: Subscription;
@@ -8,14 +12,8 @@ interface SubscroptionCardProps {
   openSubInfo: (sub: Subscription, subName: string) => void;
 }
 
-function formatDate(dateString: string | null): string {
-  if (!dateString) return "";
-  const d = new Date(dateString);
-  return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
-}
-
 export function SubscroptionCard({ subscription, phone, openSubInfo }: SubscroptionCardProps) {
-  const [name, setName] = useState("Абонемент");
+  const [name, setName] = useState(() => subscription.name?.trim() || "Абонемент");
 
   useEffect(() => {
     apiFetchSubscriptioName(subscription.subscriptionId, phone).then((res) => {
@@ -25,29 +23,30 @@ export function SubscroptionCard({ subscription, phone, openSubInfo }: Subscropt
 
   const isActive = subscription.status === "ACTIVE";
   const statusLabel = isActive ? "Активен" : subscription.activationDate == null ? "Не активирован" : "Истёк";
+  const displayName = name || subscription.name || "Абонемент";
+  const statusTone = resolveSubscriptionStatusTone(displayName);
+  const statusClassName = [
+    "sub-status-badge",
+    isActive ? "active" : "inactive",
+    statusTone ? `sub-status-badge--${statusTone}` : "",
+  ].filter(Boolean).join(" ");
 
-  const expiryStr = subscription.expirationDate
-    ? `до ${formatDate(subscription.expirationDate)}`
-    : subscription.availableDays
-      ? `осталось дней: ${subscription.availableDays}`
-      : null;
-
-  const visitsStr = subscription.visitsTotal > 0
-    ? `${subscription.visitsLeft} из ${subscription.visitsTotal} занятий`
-    : null;
+  const usageDisplay = resolveSubscriptionUsageDisplay({
+    subscriptionName: displayName,
+    validityDate: subscription.expirationDate,
+    visitsLeft: subscription.visitsLeft,
+  });
 
   return (
     <div className="sub-card" onClick={() => openSubInfo(subscription, name)}>
       <div className="sub-card-header">
         <span className="sub-card-name">■ {name}</span>
-        {visitsStr && (
-          <span className="sub-visits-badge">{visitsStr}</span>
+        {usageDisplay && (
+          <span className="sub-validity-badge">{usageDisplay.label}</span>
         )}
       </div>
 
-      {expiryStr && <div className="sub-expiry">{expiryStr}</div>}
-
-      <span className={`sub-status-badge ${isActive ? "active" : "inactive"}`}>
+      <span className={statusClassName}>
         {statusLabel}
       </span>
     </div>

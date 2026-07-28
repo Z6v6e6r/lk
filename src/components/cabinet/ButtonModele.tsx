@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "../../context/AuthContext";
-const tgLogo = "https://padlhub.su/lk/assets/telegram.svg";
-const vkLogo = "https://padlhub.su/lk/assets/vk.svg";
-const giftLogo = "https://padlhub.su/lk/assets/gift-card.png";
+import giftLogo from "../../assets/gift-card.png";
+import tgLogo from "../../assets/telegram.svg";
+import vkLogo from "../../assets/vk.svg";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;

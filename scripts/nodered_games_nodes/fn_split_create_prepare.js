@@ -20,6 +20,11 @@ const toNumber = (value) => {
   return null;
 };
 
+const resolvePositiveInt = (value, fallback) => {
+  const parsed = Math.floor(toNumber(value) ?? NaN);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
 const normalizeDate = (value) => {
   const text = toStr(value);
   if (!text) return null;
@@ -164,8 +169,14 @@ const maxClientsLimit = shareCount === 2 ? 2 : 4;
 const maxClientsCount = Math.max(1, Math.min(maxClientsLimit, Math.floor(toNumber(body.maxClientsCount) ?? shareCount)));
 const spot = Math.max(1, Math.min(maxClientsLimit, Math.floor(toNumber(body.spot) ?? 1)));
 const paymentRef = toStr(body.paymentRef) || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-const vivaDirectionId = DEFAULT_OPEN_GAME_DIRECTION_ID;
-const vivaExerciseTypeId = DEFAULT_OPEN_GAME_EXERCISE_TYPE_ID;
+const vivaDirectionId = resolvePositiveInt(
+  body.vivaDirectionId ?? body.directionId,
+  DEFAULT_OPEN_GAME_DIRECTION_ID,
+);
+const vivaExerciseTypeId = resolvePositiveInt(
+  body.vivaExerciseTypeId ?? body.exerciseTypeId,
+  DEFAULT_OPEN_GAME_EXERCISE_TYPE_ID,
+);
 const paymentMode = resolvePaymentMode(body.paymentMode || body.payMode || body.preferredPaymentMode);
 const clientSubscriptionId = toStr(
   body.clientSubscriptionId

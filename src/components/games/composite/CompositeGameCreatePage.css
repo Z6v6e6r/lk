@@ -1,0 +1,331 @@
+.composite-create {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top right, rgba(135, 102, 235, 0.12), transparent 28%),
+    linear-gradient(180deg, #f8f6ff 0%, #ffffff 32%);
+  color: #1f1636;
+}
+
+.composite-create__shell {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 20px 16px 48px;
+}
+
+.composite-create__header {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.composite-create__back {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  color: #4f3f7c;
+  font: 600 15px/1.2 "Inter", sans-serif;
+  padding: 0;
+  cursor: pointer;
+}
+
+.composite-create__eyebrow {
+  font: 700 12px/1.2 "Inter", sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8766eb;
+}
+
+.composite-create__title {
+  margin: 0;
+  font: 800 34px/0.95 "RF Dewi UltraBold", "Inter", sans-serif;
+}
+
+.composite-create__lead {
+  max-width: 720px;
+  margin: 0;
+  font: 500 15px/1.5 "Inter", sans-serif;
+  color: #594f73;
+}
+
+.composite-create__grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  align-items: start;
+}
+
+.composite-create__panel {
+  border: 1px solid rgba(135, 102, 235, 0.12);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 18px 48px rgba(27, 16, 61, 0.08);
+  padding: 18px;
+}
+
+.composite-create__section + .composite-create__section {
+  margin-top: 20px;
+}
+
+.composite-create__section-title {
+  margin: 0 0 10px;
+  font: 800 22px/1 "RF Dewi UltraBold", "Inter", sans-serif;
+}
+
+.composite-create__section-subtitle {
+  margin: 0 0 14px;
+  font: 500 14px/1.5 "Inter", sans-serif;
+  color: #665c80;
+}
+
+.composite-create__search {
+  width: 100%;
+  border: 1px solid rgba(79, 63, 124, 0.16);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: #fbfaff;
+  font: 500 15px/1.2 "Inter", sans-serif;
+  color: #1f1636;
+}
+
+.composite-create__search:focus-visible,
+.composite-create__duration-button:focus-visible,
+.composite-create__date-button:focus-visible,
+.composite-create__station-button:focus-visible,
+.composite-create__candidate:focus-visible {
+  outline: 2px solid rgba(135, 102, 235, 0.55);
+  outline-offset: 2px;
+}
+
+.composite-create__station-list,
+.composite-create__date-list,
+.composite-create__duration-list,
+.composite-create__candidate-list,
+.composite-create__summary-list {
+  display: grid;
+  gap: 10px;
+}
+
+.composite-create__station-button,
+.composite-create__date-button,
+.composite-create__duration-button,
+.composite-create__candidate {
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(79, 63, 124, 0.12);
+  border-radius: 18px;
+  background: #fff;
+  padding: 14px;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.composite-create__station-button:hover,
+.composite-create__date-button:hover,
+.composite-create__duration-button:hover,
+.composite-create__candidate:hover {
+  transform: translateY(-1px);
+  border-color: rgba(135, 102, 235, 0.4);
+  box-shadow: 0 10px 24px rgba(34, 22, 72, 0.08);
+}
+
+.composite-create__station-button.is-active,
+.composite-create__date-button.is-active,
+.composite-create__duration-button.is-active,
+.composite-create__candidate.is-active {
+  border-color: #8766eb;
+  background: linear-gradient(180deg, rgba(135, 102, 235, 0.12), rgba(135, 102, 235, 0.04));
+  box-shadow: 0 12px 28px rgba(67, 42, 144, 0.12);
+}
+
+.composite-create__station-name,
+.composite-create__candidate-title {
+  display: block;
+  font: 700 16px/1.3 "Inter", sans-serif;
+  color: #1f1636;
+}
+
+.composite-create__station-meta,
+.composite-create__candidate-meta,
+.composite-create__summary-meta,
+.composite-create__helper {
+  display: block;
+  margin-top: 4px;
+  font: 500 13px/1.45 "Inter", sans-serif;
+  color: #665c80;
+}
+
+.composite-create__date-list {
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+}
+
+.composite-create__duration-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.composite-create__date-day {
+  display: block;
+  font: 800 22px/1 "RF Dewi UltraBold", "Inter", sans-serif;
+}
+
+.composite-create__date-month,
+.composite-create__duration-label,
+.composite-create__summary-label {
+  display: block;
+  margin-top: 6px;
+  font: 700 12px/1.2 "Inter", sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8766eb;
+}
+
+.composite-create__candidate-list {
+  margin-top: 14px;
+}
+
+.composite-create__candidate-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.composite-create__candidate-price {
+  font: 800 18px/1 "RF Dewi UltraBold", "Inter", sans-serif;
+  color: #1f1636;
+  white-space: nowrap;
+}
+
+.composite-create__candidate-tags,
+.composite-create__summary-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.composite-create__tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(135, 102, 235, 0.1);
+  color: #5133a8;
+  font: 700 12px/1 "Inter", sans-serif;
+}
+
+.composite-create__status,
+.composite-create__placeholder {
+  border-radius: 18px;
+  padding: 14px;
+  font: 500 14px/1.5 "Inter", sans-serif;
+}
+
+.composite-create__status.is-error {
+  background: rgba(214, 64, 69, 0.08);
+  color: #99272b;
+}
+
+.composite-create__status.is-success {
+  margin-top: 12px;
+  background: rgba(59, 154, 96, 0.12);
+  color: #1f6b3f;
+}
+
+.composite-create__status.is-loading,
+.composite-create__placeholder {
+  background: rgba(135, 102, 235, 0.08);
+  color: #4f3f7c;
+}
+
+.composite-create__summary-card {
+  border: 1px dashed rgba(135, 102, 235, 0.35);
+  border-radius: 20px;
+  padding: 16px;
+  background: rgba(248, 246, 255, 0.8);
+}
+
+.composite-create__summary-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.composite-create__summary-title {
+  margin: 0;
+  font: 800 22px/1 "RF Dewi UltraBold", "Inter", sans-serif;
+}
+
+.composite-create__summary-price {
+  font: 800 22px/1 "RF Dewi UltraBold", "Inter", sans-serif;
+}
+
+.composite-create__summary-list {
+  margin-top: 16px;
+}
+
+.composite-create__summary-item {
+  border-radius: 16px;
+  background: #fff;
+  padding: 12px 14px;
+}
+
+.composite-create__cta {
+  width: 100%;
+  margin-top: 18px;
+  border: 0;
+  border-radius: 18px;
+  padding: 15px 18px;
+  background: linear-gradient(135deg, #8766eb 0%, #6b4ee0 100%);
+  color: #fff;
+  font: 800 16px/1.1 "Inter", sans-serif;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+.composite-create__cta:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 28px rgba(67, 42, 144, 0.2);
+}
+
+.composite-create__cta:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.composite-create__note {
+  margin-top: 12px;
+  font: 500 13px/1.5 "Inter", sans-serif;
+  color: #665c80;
+}
+
+@media (max-width: 900px) {
+  .composite-create__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .composite-create__shell {
+    padding: 18px 12px 40px;
+  }
+
+  .composite-create__panel {
+    padding: 16px;
+    border-radius: 20px;
+  }
+
+  .composite-create__title {
+    font-size: 28px;
+  }
+
+  .composite-create__duration-list {
+    grid-template-columns: 1fr;
+  }
+
+  .composite-create__candidate-top,
+  .composite-create__summary-header {
+    flex-direction: column;
+  }
+}

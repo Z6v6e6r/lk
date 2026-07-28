@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useCountdown } from "../../hooks/useCountdown";
-const resendImg = "https://padlhub.su/lk/assets/resend.png";
+import resendImg from "../../assets/resend.png";
 const maxBotUrl = "https://max.ru/id7722810381_bot";
 
 interface CodeStepProps {

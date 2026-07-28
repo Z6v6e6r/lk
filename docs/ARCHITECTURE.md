@@ -32,7 +32,8 @@
                                               │  overlay
                     ┌─────────────────────────▼────────────────┐
                     │         Overlay Modules (remote JS)        │
-                    │  games.js │ tournaments.js │ onboarding.js │
+                    │  games.js │ tournaments.js │ group-schedule.js │
+                    │  onboarding.js                                  │
                     └──────────────────────────────────────────┘
 ```
 
@@ -77,6 +78,13 @@ AuthProvider
 | Сообщества | `apiFetchCommunities*` и тд | Клубные сообщества |
 | Поддержка | `apiFetchSupportDialogs*`, `apiCreateSupportDialogEvent` | Диалоги со службой поддержки |
 | Онбординг | `apiFetchOnboardingStations` | Данные для первого входа |
+| Трансляция турнира | `apiFetchTournamentBroadcastState`, `apiSetTournamentBroadcastState` | Защищённый server-side proxy управления Android-приставкой |
+
+### Трансляция результатов турнира
+
+`TournamentsPage` не вызывает API приставки напрямую. Кнопка в менеджере турнира отправляет пользовательский Bearer, `tournamentId` и `stationId` на SERV2. Node-RED проверяет профиль Viva и доступ к турниру, берёт `boxId` из серверной проекции настроек станции ЦУП, подставляет отдельный integration Bearer и только затем вызывает Android integration API. Ответ в браузер содержит только `active`, `stationId`, `tournamentId` и `updatedAt`.
+
+Источник `stationId → tournamentBroadcastBoxId` — настройки станции ЦУП. Для Node-RED они публикуются как `CUP_STATION_SETTINGS_JSON`; тестовые tournament/box override разрешены только отдельными server env и не входят в frontend или flow JSON.
 
 ---
 
@@ -182,6 +190,18 @@ Patch-скрипты (scripts/patch_nodered_*.mjs) — сборка/патч flo
 | `support` | Диалоги поддержки, SLA, аналитика |
 | `max` | Webhook MAX-бота, очередь исходящих ответов |
 
+### Каноническая модель результата игры
+
+- Источник истины для ввода результата хранится в `lk_games.resultRosterSnapshot`.
+- `resultRosterSnapshot` является private backend-блоком: внутри допустимы `clientId`, `phoneNorm`, organizer binding, waitlist, historical replacements и booking context.
+- Во frontend нельзя отдавать `phoneNorm`, `clientId`, `allowedPhoneNorms`, `allRelatedPhones` и raw `playerPool`.
+- Для result UI backend отдает только sanitized roster c opaque `memberKey`, `displayName`, `photo`, `sourceRole`, `rosterState`.
+- В одном сете всегда играют ровно 4 слота, но между сетами состав может меняться, включая substitutions из waitlist.
+- Frontend отправляет только `sessionId`, `sessionRevision`, `sets` и `setPairings` по `memberKey[]`; backend сам валидирует, что каждый `memberKey` существует в snapshot.
+- Legacy-поля (`metadata.teamSlots`, `metadata.playerPool`, `allRelatedPhones` и похожие) можно сохранять как compatibility data, но они не должны участвовать в runtime resolution результата.
+- Расчет рейтинга выполняется backend-ом по всем distinct игрокам, которые реально участвовали в `setPairings` по сегментам сетов.
+- `lk_game_result_sessions` хранит sanitized draft/session view, а `lk_game_results` хранит immutable result aggregate со snapshot-ref и рассчитанными rating segments.
+
 ---
 
 ## Потоки данных — ключевые сценарии
@@ -192,6 +212,14 @@ PhoneStep → AuthContext.sendCode() → Keycloak SMS
 CodeStep  → AuthContext.login()   → Keycloak token → Cookie
 MyApp     → Cabinet (isAuthenticated = true)
 ```
+
+После успешного получения Viva/Keycloak token frontend отправляет staged-согласия на
+`POST /lk/analytics/auth-consents`. Staged-запись привязана к hash конкретного OAuth `state` или
+SMS-телефона; после привязки к verified `sub` доставка повторяется с bounded backoff, при `online`
+и возврате вкладки. Node-RED проверяет Bearer через Keycloak `clients/userinfo`, дополнительно
+fail-closed проверяет client `widget` и tenant `iSkq6G`, затем идемпотентно сохраняет серверную дату,
+verified `sub`, версии и URL документов в `lk_auth_consents`.
+До получения token очередь не содержит PII и переживает OAuth redirect через browser storage.
 
 ### Открытие игр
 ```

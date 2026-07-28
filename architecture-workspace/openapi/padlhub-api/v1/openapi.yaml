@@ -1,0 +1,200 @@
+openapi: 3.1.0
+info:
+  title: PadlHub API
+  version: 0.1.0
+  description: >
+    Draft contract for the future PadlHub API/BFF. This file is intentionally
+    small and will be expanded after the current-system mapping is complete.
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Local development
+  - url: https://api.padlhub.example/api/v1
+    description: Placeholder production URL
+tags:
+  - name: Health
+  - name: Identity
+  - name: Devices
+  - name: Games
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Check API health.
+      security: []
+      responses:
+        "200":
+          description: API is available.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /me:
+    get:
+      tags: [Identity]
+      operationId: getCurrentUser
+      summary: Get current authenticated user profile.
+      responses:
+        "200":
+          description: Current user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentUser"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /devices:
+    post:
+      tags: [Devices]
+      operationId: registerDevice
+      summary: Register or update a client device for push notifications.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterDeviceRequest"
+      responses:
+        "200":
+          description: Device registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceRegistration"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /games:
+    get:
+      tags: [Games]
+      operationId: listGames
+      summary: List public or user-relevant games.
+      parameters:
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: stationId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Games list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/GameSummary"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Unauthorized:
+      description: Authentication is required or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, timestamp]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        timestamp:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            requestId:
+              type: string
+    CurrentUser:
+      type: object
+      required: [id, displayName]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        phoneMasked:
+          type: string
+        photoUrl:
+          type: string
+          format: uri
+        level:
+          type:
+            - number
+            - "null"
+    RegisterDeviceRequest:
+      type: object
+      required: [platform, token]
+      properties:
+        platform:
+          type: string
+          enum: [web, android, ios]
+        token:
+          type: string
+        appVersion:
+          type: string
+        deviceId:
+          type: string
+    DeviceRegistration:
+      type: object
+      required: [deviceId, active]
+      properties:
+        deviceId:
+          type: string
+        active:
+          type: boolean
+    GameSummary:
+      type: object
+      required: [id, status, startsAt, title]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [draft, open, full, paid, cancelled, completed]
+        title:
+          type: string
+        startsAt:
+          type: string
+          format: date-time
+        stationId:
+          type: string
+        stationName:
+          type: string
+        availableSlots:
+          type: integer
+          minimum: 0
+        totalSlots:
+          type: integer
+          minimum: 0
+        viewerState:
+          type: string
+          enum: [guest, can_join, joined, organizer, waitlist, unavailable]
+security:
+  - bearerAuth: []

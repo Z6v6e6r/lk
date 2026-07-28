@@ -10,7 +10,21 @@ import {
   IS_DEV_RELEASE_CHANNEL,
   PUBLIC_COMMUNITY_JOIN_PATH,
   PUBLIC_INVITE_ORIGIN,
+  SERV2,
+  SERV2_FALLBACK,
 } from "../consts/api_config";
+import {
+  COMMUNITY_RATING_CALCULATION_VERSION,
+  normalizeCommunityRatingPeriod,
+  normalizeCommunityRatingTab,
+  toCommunityRatingTransportTab,
+  type CommunityRatingPeriod,
+  type CommunityRatingTab,
+  type CommunityRatingTabInput,
+} from "../services/community-rating/contract.ts";
+import { resolveLkApiBaseUrlCandidates } from "./lkApiBaseUrls";
+
+export type { CommunityRatingPeriod, CommunityRatingTab, CommunityRatingTabInput };
 
 export type CommunityVisibility = "OPEN" | "CLOSED";
 export type CommunityJoinRule = "INSTANT" | "MODERATED" | "INVITE_ONLY";
@@ -154,6 +168,45 @@ export interface CommunityRankingRow {
   levelPlace: number;
 }
 
+export interface CommunityRatingItem {
+  rank: number;
+  communityId: string | null;
+  playerId: string | null;
+  playerName: string;
+  avatarUrl: string | null;
+  currentLevel: number;
+  levelDelta: number;
+  lastRatingDelta: number | null;
+  lastRatingChangedAt: string | null;
+  gamesPlayed: number;
+  gamesWon: number;
+  gamesLost: number;
+  winRate: number;
+  setsWon: number;
+  gamesWonCount: number;
+  gamesDiff: number;
+  gamesRawScore: number;
+  gamesReliabilityFactor: number;
+  gamesScore: number;
+  gamesNormalized: number;
+  tournamentsPlayed: number;
+  tournamentMatchesWon: number;
+  tournamentPointsScored: number;
+  tournamentPointsDiff: number;
+  bestPlace: number | null;
+  averagePlace: number | null;
+  tournamentRawScore: number;
+  tournamentReliabilityFactor: number;
+  tournamentScore: number;
+  tournamentNormalized: number;
+  visitsAttended: number;
+  activityScore: number;
+  overallScore: number;
+  totalEventsPlayed: number;
+  lastActivityAt: string | null;
+  badges: string[];
+}
+
 export interface CommunityListResponse {
   communities: CommunityRecord[];
   connections: CommunityConnection[];
@@ -162,7 +215,12 @@ export interface CommunityListResponse {
 export interface CommunityRankingResponse {
   communityId: string;
   updatedAt: string | null;
-  rows: CommunityRankingRow[];
+  calculationVersion: string | null;
+  tab: CommunityRatingTab;
+  period: CommunityRatingPeriod;
+  confirmedGamesCount: number | null;
+  items: CommunityRatingItem[];
+  rows: CommunityRatingItem[];
 }
 
 export interface ArchiveCommunityFeedPostResponse {
@@ -701,6 +759,10 @@ function normalizeCommunityPost(value: unknown): CommunityPost | null {
     : sourceTournamentSnapshot
       ? { sourceTournamentSnapshot, publicTournament: sourceTournamentSnapshot }
       : null;
+  const publicTournament = details && isRecord(details.publicTournament) ? details.publicTournament : null;
+  const normalizedSourceTournamentSnapshot = details && isRecord(details.sourceTournamentSnapshot)
+    ? details.sourceTournamentSnapshot
+    : null;
 
   return {
     id,
@@ -716,7 +778,11 @@ function normalizeCommunityPost(value: unknown): CommunityPost | null {
     relatedGameId: pickString(value, ["relatedGameId", "gameId"]),
     relatedTournamentId:
       pickString(value, ["relatedTournamentId", "tournamentId"]) ??
-      (details ? pickString(details, ["tournamentId"]) : null),
+      (details ? pickString(details, ["relatedTournamentId", "tournamentId"]) : null) ??
+      (publicTournament ? pickString(publicTournament, ["exerciseId", "sourceTournamentId", "tournamentId", "id"]) : null) ??
+      (normalizedSourceTournamentSnapshot
+        ? pickString(normalizedSourceTournamentSnapshot, ["exerciseId", "sourceTournamentId", "tournamentId", "id"])
+        : null),
     details,
     authorId:
       pickString(value, ["authorId"]) ??
@@ -853,23 +919,62 @@ function normalizeCommunityChatMessage(value: unknown): CommunityChatMessage | n
   };
 }
 
-function normalizeCommunityRankingRow(value: unknown): CommunityRankingRow | null {
-  if (!isRecord(value)) return null;
-  const name = pickString(value, ["name", "playerName", "displayName"]);
-  if (!name) return null;
+function normalizeRatingTab(value: string | null | undefined): CommunityRatingTab {
+  return normalizeCommunityRatingTab(value);
+}
 
-  const levelScore = toNumeric(value.levelScore ?? value.ratingNumeric ?? value.levelNumeric) ?? 3.2;
+function normalizeRatingPeriod(value: string | null | undefined): CommunityRatingPeriod {
+  return normalizeCommunityRatingPeriod(value);
+}
+
+function normalizeCommunityRatingItem(
+  value: unknown,
+  index: number,
+  fallbackCommunityId: string | null,
+): CommunityRatingItem | null {
+  if (!isRecord(value)) return null;
+  const playerName = pickString(value, ["playerName", "name", "displayName"]);
+  if (!playerName) return null;
 
   return {
-    id: pickString(value, ["id", "clientId", "userId", "uuid"]),
-    phone: normalizePhone(value.phone ?? value.phoneNorm ?? value.phoneNumber ?? value.mobile),
-    name,
-    avatar: pickString(value, ["avatar", "photo", "imageUrl"]),
-    role: normalizeRole(value.role),
-    levelScore,
-    levelLabel: pickString(value, ["levelLabel", "rating", "level"]) ?? "C",
-    overallPlace: pickNumber(value, ["overallPlace", "place", "position"]) ?? 0,
-    levelPlace: pickNumber(value, ["levelPlace", "placeInLevel"]) ?? 0,
+    rank: pickNumber(value, ["rank", "overallPlace", "place", "position"]) ?? (index + 1),
+    communityId: pickString(value, ["communityId"]) ?? fallbackCommunityId,
+    playerId: pickString(value, ["playerId", "id", "clientId", "userId", "uuid"]),
+    playerName,
+    avatarUrl: pickString(value, ["avatarUrl", "avatar", "photo", "imageUrl"]),
+    currentLevel: toNumeric(value.currentLevel ?? value.levelScore ?? value.ratingNumeric ?? value.levelNumeric) ?? 0,
+    levelDelta: toNumeric(value.levelDelta) ?? 0,
+    lastRatingDelta: toNumeric(value.lastRatingDelta),
+    lastRatingChangedAt: pickString(value, ["lastRatingChangedAt"]),
+    gamesPlayed: pickNumber(value, ["gamesPlayed", "matchesPlayed"]) ?? 0,
+    gamesWon: pickNumber(value, ["gamesWon", "matchesWon"]) ?? 0,
+    gamesLost: pickNumber(value, ["gamesLost", "matchesLost"]) ?? 0,
+    winRate: toNumeric(value.winRate) ?? 0,
+    setsWon: pickNumber(value, ["setsWon"]) ?? 0,
+    gamesWonCount: pickNumber(value, ["gamesWonCount", "gamesWon"]) ?? 0,
+    gamesDiff: toNumeric(value.gamesDiff) ?? 0,
+    gamesRawScore: toNumeric(value.gamesRawScore) ?? 0,
+    gamesReliabilityFactor: toNumeric(value.gamesReliabilityFactor) ?? 0,
+    gamesScore: toNumeric(value.gamesScore) ?? 0,
+    gamesNormalized: toNumeric(value.gamesNormalized) ?? 0,
+    tournamentsPlayed: pickNumber(value, ["tournamentsPlayed"]) ?? 0,
+    tournamentMatchesWon: pickNumber(value, ["tournamentMatchesWon"]) ?? 0,
+    tournamentPointsScored: toNumeric(value.tournamentPointsScored) ?? 0,
+    tournamentPointsDiff: toNumeric(value.tournamentPointsDiff) ?? 0,
+    bestPlace: pickNumber(value, ["bestPlace"]),
+    averagePlace: toNumeric(value.averagePlace),
+    tournamentRawScore: toNumeric(value.tournamentRawScore) ?? 0,
+    tournamentReliabilityFactor: toNumeric(value.tournamentReliabilityFactor) ?? 0,
+    tournamentScore: toNumeric(value.tournamentScore) ?? 0,
+    tournamentNormalized: toNumeric(value.tournamentNormalized) ?? 0,
+    visitsAttended: pickNumber(value, ["visitsAttended", "visitsPlayed"]) ?? 0,
+    activityScore: toNumeric(value.activityScore) ?? 0,
+    overallScore: toNumeric(value.overallScore) ?? 0,
+    totalEventsPlayed: pickNumber(value, ["totalEventsPlayed"]) ?? 0,
+    lastActivityAt: pickString(value, ["lastActivityAt"]),
+    badges: Array.isArray(value.badges)
+      ? value.badges.map((item) => toTrimmedString(item)).filter((item): item is string => Boolean(item))
+      : [],
   };
 }
 
@@ -996,18 +1101,30 @@ function extractCommunityChatMessagesResponse(
 function extractCommunityRanking(payload: unknown): CommunityRankingResponse | null {
   if (!isRecord(payload)) return null;
 
-  const rows = extractArray(payload.rows ?? payload.items ?? payload.data ?? payload.result)
-    .map((item) => normalizeCommunityRankingRow(item))
-    .filter((item): item is CommunityRankingRow => item !== null);
-
   const communityId = pickString(payload, ["communityId"]);
   if (!communityId) return null;
 
+  const items = extractArray(payload.items ?? payload.rows ?? payload.data ?? payload.result)
+    .map((item, index) => normalizeCommunityRatingItem(item, index, communityId))
+    .filter((item): item is CommunityRatingItem => item !== null);
+  const payloadMeta = isRecord(payload.meta) ? payload.meta : null;
+  const confirmedGamesCount = pickNumber(payload, ["confirmedGamesCount", "gamesCount", "matchesCount"])
+    ?? (payloadMeta ? pickNumber(payloadMeta, ["confirmedGamesCount", "gamesCount", "matchesCount"]) : null);
+
   return {
     communityId,
+    tab: normalizeRatingTab(pickString(payload, ["tab"])),
+    period: normalizeRatingPeriod(pickString(payload, ["period"])),
     updatedAt: pickString(payload, ["updatedAt"]),
-    rows,
+    calculationVersion: pickString(payload, ["calculationVersion", "ratingVersion"]),
+    confirmedGamesCount,
+    items,
+    rows: items,
   };
+}
+
+export function isCurrentCommunityRatingCalculationVersion(value: unknown): boolean {
+  return String(value ?? "").trim() === COMMUNITY_RATING_CALCULATION_VERSION;
 }
 
 function extractCommunityRecord(payload: unknown): CommunityRecord | null {
@@ -1081,7 +1198,7 @@ function normalizeActionResponse(payload: unknown): CommunityActionResponse | nu
         normalizeCommunityPost(nestedData.post)
       )
       : null);
-  const ranking =
+  const extractedRanking =
     extractCommunityRanking(payload.ranking) ??
     (nestedData && isRecord(nestedData.ranking)
       ? extractCommunityRanking(nestedData.ranking)
@@ -1090,6 +1207,10 @@ function normalizeActionResponse(payload: unknown): CommunityActionResponse | nu
     (isRecord(payload.ranking)
       ? extractCommunityRanking(payload.ranking)
       : null);
+  const ranking = extractedRanking
+    && isCurrentCommunityRatingCalculationVersion(extractedRanking.calculationVersion)
+    ? extractedRanking
+    : null;
 
   return {
     ok: Boolean(payload.ok ?? nestedData?.ok ?? community),
@@ -1119,12 +1240,9 @@ function trimTrailingSlashes(value: string | null | undefined) {
 }
 
 function buildCommunityMutationBaseUrls() {
-  const candidates = [
-    typeof window !== "undefined" ? trimTrailingSlashes(window.location.origin) : "",
-    trimTrailingSlashes(getServ2Origin() || ""),
-  ].filter(Boolean);
-
-  return Array.from(new Set(candidates));
+  return resolveLkApiBaseUrlCandidates(SERV2, SERV2_FALLBACK)
+    .map((value) => trimTrailingSlashes(value))
+    .filter(Boolean);
 }
 
 function shouldRetryCommunityMutation(result: ApiResult<unknown>) {
@@ -1184,12 +1302,6 @@ const DEV_COMMUNITY_THREAD_CACHE_TTL_MS = 10_000;
 const DEV_COMMUNITY_CHAT_CACHE_TTL_MS = 5_000;
 const DEV_COMMUNITY_RANKING_CACHE_TTL_MS = 30_000;
 
-function maybeAppendCacheBuster(query: URLSearchParams) {
-  if (!IS_DEV_RELEASE_CHANNEL) {
-    query.set("_ts", String(Date.now()));
-  }
-}
-
 function appendForceFreshCacheBuster(query: URLSearchParams) {
   query.set("_ts", String(Date.now()));
 }
@@ -1212,6 +1324,22 @@ function buildCommunityGetOptions(ttlMs: number): Pick<
   };
 }
 
+function buildCommunityReadGetOptions(ttlMs: number): Pick<
+  RequestOptions,
+  "baseUrl" | "retries" | "cacheTtlMs" | "dedupe"
+> {
+  return {
+    baseUrl: buildBaseUrl(),
+    retries: 1,
+    ...(IS_DEV_RELEASE_CHANNEL
+      ? {
+          cacheTtlMs: ttlMs,
+          dedupe: true,
+        }
+      : {}),
+  };
+}
+
 function buildForceFreshCommunityGetOptions(): Pick<RequestOptions, "baseUrl" | "retries" | "cache"> {
   return {
     baseUrl: buildBaseUrl(),
@@ -1224,25 +1352,23 @@ export async function apiFetchCommunities(params: {
   phone?: string | null;
   clientId?: string | null;
   forceFresh?: boolean;
-  view?: "full" | "summary";
+  view?: "summary";
 }) {
   const query = new URLSearchParams();
   const phone = normalizePhone(params.phone);
   const clientId = params.clientId?.trim() || null;
   if (phone) query.set("phone", phone);
   if (clientId) query.set("clientId", clientId);
-  if (params.view === "summary") query.set("view", "summary");
+  query.set("view", "summary");
   if (params.forceFresh) {
     appendForceFreshCacheBuster(query);
-  } else {
-    maybeAppendCacheBuster(query);
   }
 
   const response = await request<unknown>(`/lk/communities?${query.toString()}`, {
     method: "GET",
     ...(params.forceFresh
       ? buildForceFreshCommunityGetOptions()
-      : buildCommunityGetOptions(DEV_COMMUNITIES_CACHE_TTL_MS)),
+      : buildCommunityReadGetOptions(DEV_COMMUNITIES_CACHE_TTL_MS)),
   });
 
   if (response.error) {
@@ -1280,8 +1406,6 @@ export async function apiFetchCommunity(
   if (clientId) query.set("clientId", clientId);
   if (params.forceFresh) {
     appendForceFreshCacheBuster(query);
-  } else {
-    maybeAppendCacheBuster(query);
   }
 
   const response = await request<unknown>(
@@ -1290,7 +1414,7 @@ export async function apiFetchCommunity(
       method: "GET",
       ...(params.forceFresh
         ? buildForceFreshCommunityGetOptions()
-        : buildCommunityGetOptions(DEV_COMMUNITIES_CACHE_TTL_MS)),
+        : buildCommunityReadGetOptions(DEV_COMMUNITIES_CACHE_TTL_MS)),
     },
   );
 
@@ -1571,8 +1695,6 @@ export async function apiFetchCommunityFeed(
   }
   if (params.forceFresh) {
     appendForceFreshCacheBuster(query);
-  } else {
-    maybeAppendCacheBuster(query);
   }
 
   const response = await request<unknown>(
@@ -1581,7 +1703,7 @@ export async function apiFetchCommunityFeed(
       method: "GET",
       ...(params.forceFresh
         ? buildForceFreshCommunityGetOptions()
-        : buildCommunityGetOptions(DEV_COMMUNITY_FEED_CACHE_TTL_MS)),
+        : buildCommunityReadGetOptions(DEV_COMMUNITY_FEED_CACHE_TTL_MS)),
     },
   );
 
@@ -1766,8 +1888,6 @@ export async function apiFetchCommunityPostThread(
   const clientId = params.clientId?.trim() || null;
   if (phone) query.set("phone", phone);
   if (clientId) query.set("clientId", clientId);
-  maybeAppendCacheBuster(query);
-
   const response = await request<unknown>(
     `/lk/communities/${encodeURIComponent(normalizedCommunityId)}/feed/${encodeURIComponent(normalizedPostId)}/thread?${query.toString()}`,
     {
@@ -1921,8 +2041,6 @@ export async function apiFetchCommunityChatMessages(
   if (typeof params.beforeTs === "number" && Number.isFinite(params.beforeTs) && params.beforeTs > 0) {
     query.set("beforeTs", String(Math.trunc(params.beforeTs)));
   }
-  maybeAppendCacheBuster(query);
-
   const response = await request<unknown>(
     `/lk/communities/${encodeURIComponent(normalizedCommunityId)}/messages?${query.toString()}`,
     {
@@ -2002,6 +2120,8 @@ export async function apiFetchCommunityRanking(
   params: {
     phone?: string | null;
     clientId?: string | null;
+    tab?: CommunityRatingTabInput | null;
+    period?: CommunityRatingPeriod | null;
   },
 ) {
   const normalizedCommunityId = communityId.trim();
@@ -2012,25 +2132,52 @@ export async function apiFetchCommunityRanking(
   const query = new URLSearchParams();
   const phone = normalizePhone(params.phone);
   const clientId = params.clientId?.trim() || null;
+  const tab = normalizeRatingTab(params.tab ?? "overall");
+  const period = normalizeRatingPeriod(params.period ?? "30d");
   if (phone) query.set("phone", phone);
   if (clientId) query.set("clientId", clientId);
-  maybeAppendCacheBuster(query);
-
-  const response = await request<unknown>(
-    `/lk/communities/${encodeURIComponent(normalizedCommunityId)}/ranking?${query.toString()}`,
-    {
-      method: "GET",
-      ...buildCommunityGetOptions(DEV_COMMUNITY_RANKING_CACHE_TTL_MS),
-    },
+  query.set("tab", toCommunityRatingTransportTab(tab));
+  query.set("period", period);
+  query.set("calculationVersion", COMMUNITY_RATING_CALCULATION_VERSION);
+  const requestOptions = {
+    method: "GET" as const,
+    ...buildCommunityGetOptions(DEV_COMMUNITY_RANKING_CACHE_TTL_MS),
+  };
+  let response = await request<unknown>(
+    `/lk/communities/${encodeURIComponent(normalizedCommunityId)}/rating?${query.toString()}`,
+    requestOptions,
   );
+  if (response.error && response.status === 404) {
+    response = await request<unknown>(
+      `/lk/communities/${encodeURIComponent(normalizedCommunityId)}/ranking?${query.toString()}`,
+      requestOptions,
+    );
+  }
 
   if (response.error) {
     return errorResult<CommunityRankingResponse>(response.status, response.error.message, null);
   }
 
-  const parsed = extractCommunityRanking(response.data);
+  let parsed = extractCommunityRanking(response.data);
+  if (!parsed) {
+    const fallbackResponse = await request<unknown>(
+      `/lk/communities/${encodeURIComponent(normalizedCommunityId)}/ranking?${query.toString()}`,
+      {
+        method: "GET",
+        ...buildCommunityGetOptions(DEV_COMMUNITY_RANKING_CACHE_TTL_MS),
+      },
+    );
+    if (!fallbackResponse.error) {
+      parsed = extractCommunityRanking(fallbackResponse.data);
+      response = fallbackResponse;
+    }
+  }
+
   if (!parsed) {
     return errorResult<CommunityRankingResponse>(response.status, "Не удалось разобрать рейтинг сообщества", null);
+  }
+  if (!isCurrentCommunityRatingCalculationVersion(parsed.calculationVersion)) {
+    return errorResult<CommunityRankingResponse>(409, "Рейтинг обновляется. Попробуйте ещё раз через минуту.", null);
   }
 
   return {

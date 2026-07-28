@@ -7,6 +7,8 @@ export const CUSTOM_FIELD_IDS = {
   tournamentsAccess: "e17a32f3-65f7-47c5-bda1-33d79932c884",
 } as const;
 
+const LEVEL_GRADE_LABELS = ["D", "D+", "C", "C+", "B", "B+", "A"] as const;
+
 export function getCustomFieldValue(
   profile: UserProfileType,
   fieldId: string,
@@ -50,6 +52,45 @@ export function getLetterGrade(value: number): string {
   if (value < 4.7) return "B";
   if (value < 5.5) return "B+";
   return "A";
+}
+
+export function normalizeLevelGradeLabel(
+  value: string | number | null | undefined,
+  numericFallback: number | null = null,
+): string | null {
+  if (typeof numericFallback === "number" && Number.isFinite(numericFallback)) {
+    return getLetterGrade(numericFallback);
+  }
+
+  const raw = String(value ?? "").trim().toUpperCase();
+  if (!raw) return null;
+
+  const compact = raw.replace(/\s+/g, "");
+  if ((LEVEL_GRADE_LABELS as readonly string[]).includes(compact)) {
+    return compact;
+  }
+
+  const normalized = compact
+    .replace(/¹/g, "1")
+    .replace(/²/g, "2")
+    .replace(/³/g, "3")
+    .replace(/⁴/g, "4");
+
+  if ((LEVEL_GRADE_LABELS as readonly string[]).includes(normalized)) {
+    return normalized;
+  }
+
+  const tokenMatch = normalized.match(/^([A-D])([1-4])?(\+)?$/);
+  if (tokenMatch) {
+    return `${tokenMatch[1]}${tokenMatch[3] || ""}`;
+  }
+
+  const numeric = Number.parseFloat(normalized.replace(",", "."));
+  if (Number.isFinite(numeric)) {
+    return getLetterGrade(numeric);
+  }
+
+  return null;
 }
 
 export function formatScoreDisplay(value: number): string {

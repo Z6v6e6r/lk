@@ -6,16 +6,17 @@ import { AppErrorBoundary } from "./components/UI/AppErrorBoundary";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { OverlayScopeProvider } from "./context/OverlayScopeContext";
 import { AuthForm } from "./components/auth/AuthForm";
+import CompositeGameCreatePage from "./components/games/composite/CompositeGameCreatePage";
 import FindGamePage from "./components/games/FindGamePage";
-import GameJoinPage from "./components/games/GameJoinPage";
 import GamesPage from "./components/games/GamesPage";
 import {
   installGlobalErrorTracking,
   trackAnalyticsEvent,
   trackClientError,
 } from "./utils/analytics";
+import { appendCurrentAuthModeToNavigableUrl } from "./utils/authMode";
 import { mountDevReleaseBadge } from "./utils/devReleaseBadge";
-import { PUBLIC_GAME_FIND_PATH } from "./consts/api_config";
+import { CABINET_URL, PUBLIC_GAME_FIND_PATH } from "./consts/api_config";
 import type { GamesMountData } from "./types/gamesOverlay";
 import { ensureFreshRelease } from "./utils/releaseGuard";
 
@@ -41,9 +42,22 @@ function isPublicFindRoute() {
 }
 
 function GamesContent({ onClose, data }: { onClose?: () => void; data?: GamesMountData }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isRestoringSession } = useAuth();
   const [ready, setReady] = useState(false);
   const isFindEntry = data?.publicFindEntry === true || isPublicFindRoute();
+  const includeGamePlusTrainer = isFindEntry && data?.includeGamePlusTrainer !== false;
+  const isCompositeCreateEntry = data?.compositeCreateEntry === true;
+  const openGameId = (data?.openGameId || data?.joinGameId || "").trim() || null;
+  const handleBack = () => {
+    if (onClose) {
+      onClose();
+      return;
+    }
+    const fallbackUrl = String(data?.cabinetUrl || CABINET_URL || "/lk_new").trim();
+    if (typeof window !== "undefined" && fallbackUrl) {
+      window.location.href = appendCurrentAuthModeToNavigableUrl(fallbackUrl).toString();
+    }
+  };
 
   useEffect(() => {
     setReady(true);
@@ -53,23 +67,30 @@ function GamesContent({ onClose, data }: { onClose?: () => void; data?: GamesMou
     return <div className="loading">Загрузка...</div>;
   }
 
-  if (!isAuthenticated) {
-    return <AuthForm onLogin={() => {}} />;
-  }
-
-  if (data?.joinGameId) {
+  if (isFindEntry) {
     return (
-      <GameJoinPage
-        gameId={data.joinGameId}
-        cabinetUrl={data.cabinetUrl}
+      <FindGamePage
+        onBack={handleBack}
+        cabinetUrl={data?.cabinetUrl}
+        presetStudioId={data?.presetStudioId ?? null}
+        presetStudioName={data?.presetStudioName ?? null}
+        includeGamePlusTrainer={includeGamePlusTrainer}
       />
     );
   }
 
-  if (isFindEntry) {
+  if (isRestoringSession) {
+    return <div className="loading">Проверяем сессию...</div>;
+  }
+
+  if (!isAuthenticated) {
+    return <AuthForm onLogin={() => {}} />;
+  }
+
+  if (isCompositeCreateEntry) {
     return (
-      <FindGamePage
-        onBack={() => onClose?.()}
+      <CompositeGameCreatePage
+        onBack={handleBack}
         cabinetUrl={data?.cabinetUrl}
         presetStudioId={data?.presetStudioId ?? null}
         presetStudioName={data?.presetStudioName ?? null}
@@ -79,10 +100,11 @@ function GamesContent({ onClose, data }: { onClose?: () => void; data?: GamesMou
 
   return (
     <GamesPage
-      onBack={() => onClose?.()}
-      openGameId={data?.openGameId ?? null}
+      onBack={handleBack}
+      openGameId={openGameId}
       openChat={data?.openChat === true}
       createFromBooking={data?.createFromBooking ?? null}
+      initialGameRecord={data?.initialGameRecord ?? null}
       publicCreateEntry={data?.publicCreateEntry === true}
       presetStudioId={data?.presetStudioId ?? null}
       presetStudioName={data?.presetStudioName ?? null}

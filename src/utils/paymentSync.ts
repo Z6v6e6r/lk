@@ -6,14 +6,20 @@ import {
   type PadelGameRecordPayload,
 } from "./apiClient";
 import { trackAnalyticsEvent } from "./analytics";
+import {
+  advancePaymentSyncFailure,
+  isPaymentSyncExhausted,
+  removePaymentSyncQueueItem,
+  shouldClaimPaymentSyncItem,
+  type PaymentSyncQueueStatus,
+} from "./paymentSyncPolicy";
 
 export const PAYMENT_REF_QUERY_KEY = "phPaymentRef";
 export const PENDING_GAME_DRAFT_KEY = "padlhub.pendingPaidGameDraft.v1";
 const PENDING_GAME_DRAFTS_MAP_KEY = "padlhub.pendingPaidGameDraft.map.v1";
 const PAYMENT_SYNC_QUEUE_KEY = "padlhub.pendingPaymentSyncQueue.v1";
+const PAYMENT_SYNC_WEB_LOCK_NAME = "padlhub.payment-sync.v1";
 
-const RETRY_BASE_MS = 10_000;
-const RETRY_MAX_MS = 10 * 60_000;
 const DEFAULT_MAX_BATCH = 4;
 const claimedPaymentRefs = new Set<string>();
 
@@ -34,6 +40,8 @@ interface PaymentSyncQueueItem {
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
+  status?: PaymentSyncQueueStatus;
+  exhaustedAt?: string | null;
 }
 
 interface PaymentSyncQueueStore {
@@ -59,6 +67,14 @@ export interface PaymentSyncProcessResult {
   pending: number;
   resolved: PaymentSyncResolvedItem[];
   failed: PaymentSyncFailedItem[];
+}
+
+export interface PaymentSyncProcessOptions {
+  forcePaymentRef?: string | null;
+  forceBookingIds?: string[];
+  source?: string;
+  keepalive?: boolean;
+  maxItems?: number;
 }
 
 const isBrowser = typeof window !== "undefined";
@@ -193,12 +209,6 @@ function getExistingBookingIdsFromPayload(payload: PadelGameRecordPayload): stri
     ...parseBookingIds(payload.booking?.bookingIds),
     ...parseBookingIds(payload.payment?.bookingIds),
   ]);
-}
-
-function computeRetryDelayMs(attempts: number): number {
-  const power = Math.max(0, attempts - 1);
-  const delay = RETRY_BASE_MS * (2 ** Math.min(power, 6));
-  return Math.min(delay, RETRY_MAX_MS);
 }
 
 function buildConfirmPayload(
@@ -380,11 +390,15 @@ export function enqueuePendingPaymentSync(
     paymentRef,
     bookingIds: mergedBookingIds,
     attempts: previous?.attempts ?? 0,
-    nextAttemptTs: now,
+    nextAttemptTs: previous && isPaymentSyncExhausted(previous)
+      ? previous.nextAttemptTs
+      : now,
     lastAttemptTs: previous?.lastAttemptTs ?? null,
     lastError: previous?.lastError ?? null,
     createdAt: previous?.createdAt ?? nowIso,
     updatedAt: nowIso,
+    status: previous && isPaymentSyncExhausted(previous) ? "exhausted" : "pending",
+    exhaustedAt: previous?.exhaustedAt ?? null,
   };
   writeQueue(queue);
 
@@ -404,17 +418,7 @@ export function registerPendingPaymentSyncFailure(
   const queue = readQueue();
   const current = queue[paymentRef];
   if (!current) return;
-  const now = Date.now();
-  const attempts = (current.attempts ?? 0) + 1;
-  const nextAttemptTs = now + computeRetryDelayMs(attempts);
-  queue[paymentRef] = {
-    ...current,
-    attempts,
-    nextAttemptTs,
-    lastAttemptTs: now,
-    lastError: messageRaw.trim() || "unknown",
-    updatedAt: new Date(now).toISOString(),
-  };
+  queue[paymentRef] = advancePaymentSyncFailure(current, messageRaw, Date.now());
   writeQueue(queue);
 }
 
@@ -423,8 +427,7 @@ export function markPendingPaymentSyncResolved(paymentRefRaw: string): void {
   if (!paymentRef) return;
   const queue = readQueue();
   if (queue[paymentRef]) {
-    delete queue[paymentRef];
-    writeQueue(queue);
+    writeQueue(removePaymentSyncQueueItem(queue, paymentRef));
   }
   removePendingPaidGameDraft(paymentRef);
 }
@@ -444,7 +447,11 @@ function claimQueueItems(
   const selected: PaymentSyncQueueItem[] = [];
   if (forcePaymentRef) {
     const forced = queue[forcePaymentRef];
-    if (forced && !claimedPaymentRefs.has(forced.paymentRef)) {
+    if (
+      forced
+      && shouldClaimPaymentSyncItem(forced, now, true)
+      && !claimedPaymentRefs.has(forced.paymentRef)
+    ) {
       claimedPaymentRefs.add(forced.paymentRef);
       selected.push(forced);
     }
@@ -453,7 +460,7 @@ function claimQueueItems(
   for (const item of items) {
     if (selected.length >= maxItems) break;
     if (forcePaymentRef && item.paymentRef === forcePaymentRef) continue;
-    if (item.nextAttemptTs > now) continue;
+    if (!shouldClaimPaymentSyncItem(item, now)) continue;
     if (claimedPaymentRefs.has(item.paymentRef)) continue;
     claimedPaymentRefs.add(item.paymentRef);
     selected.push(item);
@@ -462,13 +469,9 @@ function claimQueueItems(
   return selected;
 }
 
-export async function processPendingPaymentSyncQueue(options?: {
-  forcePaymentRef?: string | null;
-  forceBookingIds?: string[];
-  source?: string;
-  keepalive?: boolean;
-  maxItems?: number;
-}): Promise<PaymentSyncProcessResult> {
+async function processPendingPaymentSyncQueueUnlocked(
+  options?: PaymentSyncProcessOptions,
+): Promise<PaymentSyncProcessResult> {
   const forcePaymentRef = toStringSafe(options?.forcePaymentRef) ?? null;
   const maxItems = Number.isFinite(options?.maxItems)
     ? Math.max(1, Math.min(20, Math.floor(options?.maxItems as number)))
@@ -499,7 +502,7 @@ export async function processPendingPaymentSyncQueue(options?: {
         bookingIdsCount: bookingIds.length,
         attempt,
         source,
-        url: "/lk/games/by-payment-ref",
+        url: "/lk/games",
       });
 
       const byPaymentRef = await apiFetchPadelGameByPaymentRef(paymentRef, bookingIds);
@@ -513,6 +516,24 @@ export async function processPendingPaymentSyncQueue(options?: {
         });
         markPendingPaymentSyncResolved(paymentRef);
         resolved.push({ paymentRef, record: byPaymentRef.data });
+        continue;
+      }
+
+      const lookupErrorStatus = Number(byPaymentRef.error?.status ?? byPaymentRef.status);
+      if (
+        byPaymentRef.error
+        && (!Number.isFinite(lookupErrorStatus) || lookupErrorStatus >= 400)
+      ) {
+        const errorMessage = byPaymentRef.error.message || "Не удалось проверить созданную игру";
+        trackPaymentConfirmEvent("failed", {
+          stage: "lookup",
+          paymentRef,
+          status: byPaymentRef.status ?? null,
+          source,
+          message: errorMessage,
+        });
+        registerPendingPaymentSyncFailure(paymentRef, errorMessage);
+        failed.push({ paymentRef, error: errorMessage });
         continue;
       }
 
@@ -613,11 +634,50 @@ export async function processPendingPaymentSyncQueue(options?: {
     }
   }
 
-  const pending = Object.keys(readQueue()).length;
+  const pending = Object.values(readQueue())
+    .filter((item) => !isPaymentSyncExhausted(item))
+    .length;
   return {
     processed,
     pending,
     resolved,
     failed,
   };
+}
+
+function buildSkippedPaymentSyncResult(): PaymentSyncProcessResult {
+  return {
+    processed: 0,
+    pending: Object.values(readQueue()).filter((item) => !isPaymentSyncExhausted(item)).length,
+    resolved: [],
+    failed: [],
+  };
+}
+
+export async function processPendingPaymentSyncQueue(
+  options?: PaymentSyncProcessOptions,
+): Promise<PaymentSyncProcessResult> {
+  const lockManager = isBrowser && typeof navigator !== "undefined"
+    ? navigator.locks
+    : null;
+  if (!lockManager) {
+    return processPendingPaymentSyncQueueUnlocked(options);
+  }
+
+  if (toStringSafe(options?.forcePaymentRef)) {
+    return lockManager.request(
+      PAYMENT_SYNC_WEB_LOCK_NAME,
+      { mode: "exclusive" },
+      () => processPendingPaymentSyncQueueUnlocked(options),
+    );
+  }
+
+  return lockManager.request(
+    PAYMENT_SYNC_WEB_LOCK_NAME,
+    { mode: "exclusive", ifAvailable: true },
+    async (lock) => {
+      if (!lock) return buildSkippedPaymentSyncResult();
+      return processPendingPaymentSyncQueueUnlocked(options);
+    },
+  );
 }

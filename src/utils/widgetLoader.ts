@@ -1,4 +1,5 @@
 import { appendBundleVersion } from "./bundleVersion";
+import { buildLkAssetUrlCandidates } from "./lkAssetBaseUrls";
 
 export type WidgetMountOptions = {
   targetId?: string;
@@ -20,41 +21,12 @@ export type WidgetGlobalName =
   | "LKWidgetGames"
   | "LKWidgetTournaments"
   | "LKWidgetOnboarding"
+  | "LKWidgetLevelsInfo"
   | "LKWidgetCommunities";
 
 type AppWindow = Window & Record<WidgetGlobalName, WidgetModule | undefined>;
 
 const scriptPromises: Partial<Record<WidgetGlobalName, Promise<WidgetModule>>> = {};
-
-function dedupeUrls(urls: string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-
-  urls.forEach((url) => {
-    const normalized = url.trim();
-    if (!normalized || seen.has(normalized)) return;
-    seen.add(normalized);
-    result.push(normalized);
-  });
-
-  return result;
-}
-
-function swapPadlHubOrigin(url: URL): URL | null {
-  if (url.hostname === "padlhub.su") {
-    const next = new URL(url.toString());
-    next.hostname = "padlhub.ru";
-    return next;
-  }
-
-  if (url.hostname === "padlhub.ru") {
-    const next = new URL(url.toString());
-    next.hostname = "padlhub.su";
-    return next;
-  }
-
-  return null;
-}
 
 function buildCandidateSources(src: string): string[] {
   const baseUrl = typeof window !== "undefined" ? window.location.href : undefined;
@@ -71,26 +43,12 @@ function buildCandidateSources(src: string): string[] {
     }
   };
 
-  try {
-    const resolved = new URL(src, baseUrl);
-    const candidates = [resolved.toString()];
-
-    if (typeof window !== "undefined") {
-      const currentOrigin = window.location.origin;
-      if (resolved.origin !== currentOrigin) {
-        candidates.push(new URL(`${resolved.pathname}${resolved.search}${resolved.hash}`, currentOrigin).toString());
-      }
-    }
-
-    const swappedOrigin = swapPadlHubOrigin(resolved);
-    if (swappedOrigin) {
-      candidates.push(swappedOrigin.toString());
-    }
-
-    return dedupeUrls(candidates).map(withRuntimeCacheBust);
-  } catch {
+  const candidates = buildLkAssetUrlCandidates(src);
+  if (candidates.length === 0) {
     return [withRuntimeCacheBust(src)];
   }
+
+  return candidates.map(withRuntimeCacheBust);
 }
 
 function loadWidgetScript(src: string, globalName: WidgetGlobalName): Promise<WidgetModule> {

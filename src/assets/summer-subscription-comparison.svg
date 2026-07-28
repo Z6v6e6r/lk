@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1572" viewBox="0 0 1080 1572" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1080" y2="1572" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1B1D24"/>
+      <stop offset="1" stop-color="#161821"/>
+    </linearGradient>
+    <linearGradient id="friendHead" x1="50" y1="220" x2="520" y2="220" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8D8468"/>
+      <stop offset="1" stop-color="#8D725E"/>
+    </linearGradient>
+    <linearGradient id="sportHead" x1="560" y1="220" x2="1030" y2="220" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3D5579"/>
+      <stop offset="1" stop-color="#7A5A8F"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1080" height="1572" fill="url(#bg)"/>
+
+  <rect x="50" y="220" width="480" height="1280" rx="12" fill="#4E4F56"/>
+  <rect x="560" y="220" width="470" height="1280" rx="12" fill="#4E4F56"/>
+
+  <rect x="50" y="220" width="480" height="240" rx="12" fill="url(#friendHead)"/>
+  <rect x="560" y="220" width="470" height="240" rx="12" fill="url(#sportHead)"/>
+
+  <text x="540" y="120" fill="#E8E8EC" font-size="82" text-anchor="middle" font-weight="700">Падл ХАБ</text>
+
+  <text x="210" y="300" fill="#F4F4F7" font-size="74" font-weight="700">ЛЕТО.</text>
+  <text x="210" y="375" fill="#F4F4F7" font-size="74" font-weight="700">ПАДЕЛ.</text>
+  <text x="210" y="448" fill="#F0A64D" font-size="74" font-weight="700">ДРУЖБА</text>
+
+  <text x="710" y="300" fill="#F4F4F7" font-size="74" font-weight="700">ЛЕТО.</text>
+  <text x="710" y="375" fill="#F4F4F7" font-size="74" font-weight="700">ПАДЕЛ.</text>
+  <text x="710" y="448" fill="#B5D9E5" font-size="74" font-weight="700">СПОРТ</text>
+
+  <g fill="#F0F0F0" font-size="56">
+    <text x="90" y="700">создание игры</text>
+    <text x="90" y="925">присоединение</text>
+    <text x="90" y="995">к игре</text>
+    <text x="90" y="1215">участие в турнирах</text>
+    <text x="90" y="1285">ПадлхАБ</text>
+    <text x="90" y="1420">участие в сторонних</text>
+    <text x="90" y="1490">турнирах</text>
+
+    <text x="585" y="700">создание игры</text>
+    <text x="585" y="925">присоединение</text>
+    <text x="585" y="995">к игре</text>
+    <text x="585" y="1215">участие в турнирах</text>
+    <text x="585" y="1285">ПадлхАБ</text>
+    <text x="585" y="1420">участие в сторонних</text>
+    <text x="585" y="1490">турнирах</text>
+  </g>
+
+  <g font-size="74" text-anchor="middle" font-weight="700">
+    <circle cx="470" cy="680" r="35" fill="#B5F568"/><text x="470" y="705" fill="#1E4027">✓</text>
+    <circle cx="470" cy="905" r="35" fill="#B5F568"/><text x="470" y="930" fill="#1E4027">✓</text>
+    <circle cx="470" cy="1225" r="35" fill="#FF5D5D"/><text x="470" y="1250" fill="#FFEDED">✕</text>
+    <circle cx="470" cy="1425" r="35" fill="#FF5D5D"/><text x="470" y="1450" fill="#FFEDED">✕</text>
+
+    <circle cx="970" cy="680" r="35" fill="#B5F568"/><text x="970" y="705" fill="#1E4027">✓</text>
+    <circle cx="970" cy="905" r="35" fill="#B5F568"/><text x="970" y="930" fill="#1E4027">✓</text>
+    <circle cx="970" cy="1225" r="35" fill="#B5F568"/><text x="970" y="1250" fill="#1E4027">✓</text>
+    <circle cx="970" cy="1425" r="35" fill="#FF5D5D"/><text x="970" y="1450" fill="#FFEDED">✕</text>
+  </g>
+</svg>

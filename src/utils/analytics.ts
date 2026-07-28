@@ -1,9 +1,13 @@
 import { useEffect } from "react";
-import { SERV2, TENANT_KEY } from "../consts/api_config";
+import { SERV2, SERV2_FALLBACK, TENANT_KEY } from "../consts/api_config";
 import {
   identifyFirebaseAnalyticsUser,
   trackFirebaseAnalyticsEvent,
 } from "./firebase";
+import {
+  buildProjectUrlCandidates,
+  resolveLkApiBaseUrlCandidates,
+} from "./lkApiBaseUrls";
 
 type AnalyticsPayload = Record<string, unknown>;
 
@@ -82,6 +86,7 @@ const NON_RETRYABLE_HTTP_STATUSES = new Set([400, 401, 403, 404, 405, 410, 413, 
 const ANALYTICS_ERRORS_ONLY = String(
   import.meta.env.VITE_ANALYTICS_ERRORS_ONLY ?? "true",
 ).toLowerCase() !== "false";
+const ANALYTICS_EVENT_ALLOWLIST = new Set(["client_error", "subscription_page_opened"]);
 
 const sessionId = makeSessionId();
 let userContext: AnalyticsUserContext = restoreUserContext();
@@ -234,6 +239,10 @@ function saveUserContext() {
   saveToStorage(USER_STORAGE_KEY, JSON.stringify(userContext));
 }
 
+function dedupeEndpoints(values: Array<string | null | undefined>) {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
+}
+
 function resolveAnalyticsEndpoints(): string[] {
   const explicit = trimString(import.meta.env.VITE_ANALYTICS_URL as string | undefined);
   const explicitFallback = trimString(
@@ -242,18 +251,16 @@ function resolveAnalyticsEndpoints(): string[] {
 
   const configured = [explicit, explicitFallback].filter((value): value is string => Boolean(value));
   if (configured.length > 0) {
-    return Array.from(new Set(configured));
+    return dedupeEndpoints(
+      configured.flatMap((value) => buildProjectUrlCandidates(value, SERV2, SERV2_FALLBACK)),
+    );
   }
 
-  const base = trimString(SERV2) ?? trimString(import.meta.env.VITE_SERV2 as string | undefined);
-  if (!base) return [];
-
-  let analyticsBase = base.replace(/\/+$/, "");
-  try {
-    analyticsBase = new URL(base).origin;
-  } catch {
-    // keep raw base if URL parsing failed
-  }
+  const analyticsOrigins = resolveLkApiBaseUrlCandidates(
+    trimString(SERV2) ?? trimString(import.meta.env.VITE_SERV2 as string | undefined),
+    SERV2_FALLBACK,
+  );
+  if (analyticsOrigins.length === 0) return [];
 
   const primaryPath = normalizePath(
     trimString(import.meta.env.VITE_ANALYTICS_PATH as string | undefined) ?? "/lk/analytics/events",
@@ -262,11 +269,14 @@ function resolveAnalyticsEndpoints(): string[] {
     trimString(import.meta.env.VITE_ANALYTICS_FALLBACK_PATH as string | undefined) ?? "/lk/analytics/event",
   );
 
-  const endpoints = [`${analyticsBase}${primaryPath}`];
-  if (fallbackPath !== primaryPath) {
-    endpoints.push(`${analyticsBase}${fallbackPath}`);
-  }
-  return Array.from(new Set(endpoints));
+  return dedupeEndpoints(
+    analyticsOrigins.flatMap((origin) => {
+      const analyticsBase = origin.replace(/\/+$/, "");
+      return fallbackPath === primaryPath
+        ? [`${analyticsBase}${primaryPath}`]
+        : [`${analyticsBase}${primaryPath}`, `${analyticsBase}${fallbackPath}`];
+    }),
+  );
 }
 
 function normalizePath(path: string): string {
@@ -560,7 +570,7 @@ export function trackAnalyticsEvent(
 
   trackFirebaseAnalyticsEvent(eventName, payload);
 
-  if (ANALYTICS_ERRORS_ONLY && eventName !== "client_error") return;
+  if (ANALYTICS_ERRORS_ONLY && !ANALYTICS_EVENT_ALLOWLIST.has(eventName)) return;
   if (isAnalyticsTemporarilyDisabled()) return;
 
   const serializedEvent = JSON.stringify(buildEnvelope(eventName, payload));

@@ -1,0 +1,638 @@
+.group-schedule-page {
+  width: min(100%, 760px);
+  margin: 0 auto;
+  font-family: var(--ui-font);
+}
+
+.group-schedule-list {
+  gap: 14px;
+}
+
+.group-schedule-type-filter {
+  position: relative;
+  z-index: 10;
+  overflow: visible;
+}
+
+.group-schedule-type-filter-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  min-height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  appearance: none;
+  color: var(--text);
+  cursor: pointer;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: normal;
+  text-align: left;
+}
+
+.group-schedule-type-filter-value {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-schedule-type-filter-chevron {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  color: var(--text-secondary);
+  transition: transform 0.16s ease;
+}
+
+.group-schedule-type-filter-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.group-schedule-type-filter-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 40;
+  display: grid;
+  gap: 4px;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(360px, calc(100vh - 220px));
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--white);
+  box-shadow: var(--shadow);
+}
+
+.group-schedule-type-filter-option {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  padding: 9px 8px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--ui-font);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: left;
+}
+
+.group-schedule-type-filter-option.is-selected {
+  background: var(--purple-light);
+  color: var(--purple);
+}
+
+.group-schedule-type-filter-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--white);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.group-schedule-type-filter-option.is-selected .group-schedule-type-filter-check {
+  border-color: var(--purple);
+  background: var(--purple);
+}
+
+.group-schedule-type-filter-empty {
+  padding: 9px 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.group-schedule-detail {
+  gap: 12px;
+}
+
+.group-schedule-detail--trainer {
+  max-width: 430px;
+}
+
+.group-schedule-details-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-radius: 16px;
+}
+
+.group-schedule-details-card--trainer {
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.group-schedule-trainer-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.group-schedule-trainer-eyebrow {
+  color: var(--purple);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.group-schedule-trainer-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.group-schedule-trainer-title {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 1.02;
+  letter-spacing: 0;
+}
+
+.group-schedule-trainer-title span {
+  overflow-wrap: anywhere;
+}
+
+.group-schedule-level-pill {
+  display: inline-flex;
+  flex: 0 0 44px;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--purple-light);
+  color: var(--purple);
+  font-family: "RF Dewi UltraBold", "Source Code Pro", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+}
+
+.group-schedule-trainer-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: auto;
+  min-height: 36px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--community-primary-gradient);
+  color: var(--white);
+  box-shadow: none;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.group-schedule-trainer-status-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+
+.group-schedule-trainer-info-card,
+.group-schedule-trainer-description,
+.group-schedule-trainer-take-note {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--white);
+  box-shadow: none;
+}
+
+.group-schedule-trainer-info-card {
+  overflow: hidden;
+}
+
+.group-schedule-trainer-info-row {
+  display: grid;
+  grid-template-columns: 32px minmax(68px, 0.75fr) minmax(0, 1.25fr);
+  align-items: center;
+  gap: 8px;
+  height: 56px;
+  padding: 0 16px;
+}
+
+.group-schedule-trainer-info-row + .group-schedule-trainer-info-row {
+  border-top: 1px solid var(--border);
+}
+
+.group-schedule-trainer-info-row--person {
+  grid-template-columns: 40px minmax(0, 1fr) 20px;
+  gap: 12px;
+}
+
+.group-schedule-trainer-info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--purple);
+}
+
+.group-schedule-trainer-info-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.group-schedule-trainer-info-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.15;
+}
+
+.group-schedule-trainer-info-value {
+  min-width: 0;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.18;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.group-schedule-trainer-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--purple-light);
+  color: var(--purple);
+}
+
+.group-schedule-trainer-avatar span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  opacity: 1;
+}
+
+.group-schedule-trainer-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.group-schedule-trainer-person-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.group-schedule-trainer-person-name {
+  display: block;
+  text-align: left;
+}
+
+.group-schedule-trainer-row-arrow {
+  width: 20px;
+  height: 20px;
+  color: var(--text-secondary);
+}
+
+.group-schedule-trainer-description {
+  padding: 16px;
+  color: var(--text);
+}
+
+.group-schedule-trainer-description strong {
+  display: block;
+  color: var(--purple);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.group-schedule-trainer-description p {
+  display: -webkit-box;
+  margin: 10px 0 12px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.32;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+}
+
+.group-schedule-trainer-description ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.group-schedule-trainer-description li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.28;
+}
+
+.group-schedule-trainer-check {
+  width: 16px;
+  height: 16px;
+  color: var(--purple);
+  margin-top: 1px;
+}
+
+.group-schedule-trainer-take-note {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 16px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.group-schedule-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.group-schedule-detail-head h1 {
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1.12;
+  letter-spacing: 0;
+}
+
+.group-schedule-eyebrow {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.group-schedule-status-pill {
+  flex: 0 0 auto;
+  min-width: 86px;
+  padding: 8px 10px;
+  border: 1px solid var(--purple);
+  border-radius: 8px;
+  background: var(--purple-light);
+  color: var(--purple);
+  font-size: 13px;
+  font-weight: 800;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.group-schedule-facts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.group-schedule-copy {
+  white-space: pre-line;
+}
+
+.group-schedule-registration {
+  border-radius: 16px;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  padding: 16px;
+  overflow: visible;
+  background: var(--white);
+  box-shadow: none;
+}
+
+.group-schedule-registration--trainer {
+  gap: 12px;
+}
+
+.group-schedule-registration > div {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.group-schedule-registration > div + div {
+  border-left: 0;
+  border-top: 0;
+}
+
+.group-schedule-registration .auth-wrapper {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+.group-schedule-registration .auth-card {
+  max-width: none;
+}
+
+.group-schedule-registration .tournament-signup-auth-head {
+  margin-bottom: 0;
+}
+
+.group-schedule-registration .tournament-signup-auth-title,
+.group-schedule-registration .tournament-signup-payment-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.group-schedule-registration .tournament-signup-payment-options {
+  width: 100%;
+  gap: 8px;
+}
+
+.group-schedule-registration .tournament-signup-payment-group {
+  gap: 8px;
+}
+
+.group-schedule-registration .tournament-signup-payment-group + .tournament-signup-payment-group {
+  margin-top: 4px;
+}
+
+.group-schedule-registration .tournament-signup-payment-option {
+  min-height: 56px;
+  border-radius: 14px;
+  padding: 10px 12px;
+  border-color: var(--border);
+  box-shadow: none;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.group-schedule-registration .tournament-signup-payment-option strong {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.group-schedule-registration .tournament-signup-payment-option-subscription {
+  border-color: var(--purple);
+  background: var(--white);
+  color: var(--text);
+}
+
+.group-schedule-registration .tournament-signup-payment-option-subscription .tournament-signup-payment-option-meta strong {
+  color: var(--purple);
+}
+
+.group-schedule-registration .tournament-signup-payment-purchase-toggle {
+  min-height: 44px;
+  border-radius: 14px;
+  box-shadow: none;
+}
+
+.group-schedule-registration .tournament-signup-payment-purchase-list {
+  gap: 8px;
+}
+
+.group-schedule-registration .tournament-signup-payment-subscription-link,
+.group-schedule-registration .section-cta {
+  min-height: 48px;
+  border-radius: 14px;
+  box-shadow: none;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.group-schedule-success {
+  padding: 10px 12px;
+  border: 1px solid var(--green);
+  border-radius: 14px;
+  background: var(--white);
+  color: var(--green);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.group-schedule-registered {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--green);
+  border-radius: 14px;
+  background: var(--white);
+}
+
+.group-schedule-registered strong {
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+@media (max-width: 640px) {
+  .group-schedule-page {
+    width: 100%;
+  }
+
+  .group-schedule-detail {
+    max-width: none;
+  }
+
+  .group-schedule-trainer-title-row {
+    align-items: flex-start;
+  }
+
+  .group-schedule-trainer-title {
+    font-size: 34px;
+  }
+
+  .group-schedule-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .group-schedule-registered {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 360px) {
+  .group-schedule-trainer-title {
+    font-size: 31px;
+  }
+
+  .group-schedule-trainer-info-row {
+    grid-template-columns: 28px minmax(58px, 0.72fr) minmax(0, 1.28fr);
+    gap: 6px;
+    padding-inline: 12px;
+  }
+
+  .group-schedule-trainer-info-row--person {
+    grid-template-columns: 40px minmax(0, 1fr) 14px;
+  }
+
+  .group-schedule-trainer-info-value {
+    font-size: 16px;
+  }
+}

@@ -16,6 +16,7 @@ import {
   getLetterGrade,
   parseNumericLevel,
 } from "../../utils/customFields";
+import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 
 interface CommunityJoinPageProps {
   inviteCode?: string | null;
@@ -72,12 +73,14 @@ function buildCommunityActor(profile: UserProfileType) {
 function resolveInviteCabinetUrl(value: string | null | undefined): string {
   const fallback = (DEFAULT_CABINET_URL || "").trim();
   const raw = (value || "").trim();
-  if (!raw) return fallback;
+  if (!raw) return fallback ? appendCurrentAuthModeToNavigableUrl(fallback).toString() : fallback;
 
   try {
-    return new URL(raw, typeof window !== "undefined" ? window.location.origin : undefined).toString();
+    return appendCurrentAuthModeToNavigableUrl(
+      new URL(raw, typeof window !== "undefined" ? window.location.origin : undefined),
+    ).toString();
   } catch {
-    return raw || fallback;
+    return raw || (fallback ? appendCurrentAuthModeToNavigableUrl(fallback).toString() : fallback);
   }
 }
 

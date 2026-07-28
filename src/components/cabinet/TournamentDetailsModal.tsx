@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../UI/Modal";
 import { apiFetchPadelLiveRatings, apiFetchTournamentParticipants } from "../../utils/apiClient";
+import { getLetterGrade } from "../../utils/customFields";
 import type {
   Booking,
   ExerciseBooking,
@@ -15,7 +16,6 @@ type TournamentDetailsTab = "roster" | "rules" | "results";
 type TournamentParticipantView = {
   key: string;
   clientId: string | null;
-  phone: string | null;
   order: number;
   name: string;
   photo: string | null;
@@ -46,6 +46,17 @@ type TournamentResultRow = {
   pointsAgainst: number | null;
   delta: number | null;
 };
+
+type TournamentResultSortableRow = Omit<TournamentResultRow, "rank"> & {
+  tournamentPoints: number | null;
+  sourceRank?: number | null;
+};
+
+type TournamentStandingSortableRow = TournamentResultSortableRow & {
+  sourceRank: number | null;
+};
+
+type TournamentResultsSortMode = "point_diff" | "total_points";
 
 interface TournamentDetailsModalProps {
   isOpen: boolean;
@@ -189,6 +200,10 @@ function getBookingExerciseMeta(booking: Booking) {
 function normalizeLevelToken(value: string): string {
   const trimmed = value.trim().toUpperCase();
   if (!trimmed) return "";
+  if (/^[+-]?\d+(?:[.,]\d+)?$/.test(trimmed)) {
+    const numeric = Number.parseFloat(trimmed.replace(",", "."));
+    if (Number.isFinite(numeric)) return getLetterGrade(numeric);
+  }
   const normalizedSuperscripts = trimmed
     .replace(/¹/g, "1")
     .replace(/²/g, "2")
@@ -240,6 +255,31 @@ function normalizePhone(value: string | null | undefined): string | null {
   return digits;
 }
 
+function isPhoneLikeRatingValue(value: unknown): boolean {
+  if (typeof value !== "string" && typeof value !== "number") return false;
+  const digits = String(value).replace(/\D/g, "");
+  return digits.length >= 10;
+}
+
+function sanitizeTournamentParticipant(participant: ExerciseBooking): ExerciseBooking {
+  const raw = participant as ExerciseBooking & { ratingSource?: string | null };
+  const shouldDropRating =
+    String(raw.ratingSource || "").trim().toLowerCase() === "phone"
+    || isPhoneLikeRatingValue(raw.rating);
+
+  return {
+    ...participant,
+    rating: shouldDropRating ? undefined : participant.rating,
+    ratingSource: shouldDropRating ? undefined : participant.ratingSource,
+    client: participant.client
+      ? {
+          ...participant.client,
+          phone: undefined,
+        }
+      : participant.client,
+  };
+}
+
 function buildParticipantIdentityKey(clientId: string | null | undefined, phone: string | null | undefined, name: string) {
   const safeClientId = String(clientId || "").trim();
   if (safeClientId) return `id:${safeClientId}`;
@@ -255,13 +295,16 @@ function resolveParticipantRawRating(participant: ExerciseBooking): { rating: st
     levelNumeric?: number | string | null;
     level?: string | null;
     grade?: string | null;
+    ratingSource?: string | null;
   };
 
   const rating =
-    participant.rating
-    || (typeof raw.level === "string" ? raw.level : null)
-    || (typeof raw.grade === "string" ? raw.grade : null)
-    || null;
+    String(raw.ratingSource || "").trim().toLowerCase() === "phone"
+      ? null
+      : participant.rating
+        || (typeof raw.level === "string" ? raw.level : null)
+        || (typeof raw.grade === "string" ? raw.grade : null)
+        || null;
 
   const numericCandidate = raw.ratingNumeric ?? raw.numericRating ?? raw.levelNumeric ?? null;
   const ratingNumeric =
@@ -274,7 +317,10 @@ function resolveParticipantRawRating(participant: ExerciseBooking): { rating: st
           })()
         : null;
 
-  return { rating, ratingNumeric };
+  return {
+    rating: isPhoneLikeRatingValue(rating) ? null : rating,
+    ratingNumeric,
+  };
 }
 
 function buildTournamentLevelLabel(booking: Booking, customTournament?: TournamentHistoryRecord | null) {
@@ -392,6 +438,23 @@ function getTournamentDisplayMeta(
   };
 }
 
+function getTournamentDescription(
+  booking: Booking,
+  customTournament: TournamentHistoryRecord | null | undefined,
+): string | null {
+  const { exerciseRecord, settings, params, skin } = getBookingExerciseMeta(booking);
+  const customParams = isRecord(customTournament?.params) ? customTournament.params : null;
+  const customSummary = isRecord(customTournament?.summary) ? customTournament.summary : null;
+
+  return pickStringValue(skin, ["description", "body", "text", "details", "desc"])
+    || pickStringValue(settings, ["description", "body", "text", "details", "desc"])
+    || pickStringValue(params, ["description", "body", "text", "details", "desc"])
+    || pickStringValue(customParams, ["description", "body", "text", "details", "desc"])
+    || pickStringValue(customSummary, ["description", "body", "text", "details", "desc"])
+    || pickStringValue(exerciseRecord, ["description", "body", "text", "details", "desc"])
+    || null;
+}
+
 function getTrainerName(trainer: Trainer | null | undefined): string {
   if (!trainer) return "Исполнитель не назначен";
   return [trainer.firstName, trainer.lastName].filter(Boolean).join(" ").trim() || "Исполнитель";
@@ -447,19 +510,14 @@ function buildParticipantList(
       const firstName = participant.client?.firstName || "";
       const lastName = participant.client?.lastName || "";
       const name = `${firstName} ${lastName}`.trim() || `Участник ${index + 1}`;
-      const key = normalizeParticipantKey(
-        participant.client?.id || null,
-        participant.client?.phone || null,
-        name,
-      );
+      const key = normalizeParticipantKey(participant.client?.id || null, null, name);
       const liveRating = liveRatingsMap.get(
-        buildParticipantIdentityKey(participant.client?.id || null, participant.client?.phone || null, name),
+        buildParticipantIdentityKey(participant.client?.id || null, null, name),
       ) || null;
       const rawRating = resolveParticipantRawRating(participant);
       map.set(key, {
         key,
         clientId: participant.client?.id || null,
-        phone: participant.client?.phone || null,
         order: typeof participant.spot === "number" && Number.isFinite(participant.spot) ? participant.spot : index + 1,
         name,
         photo: participant.client?.photo || null,
@@ -470,16 +528,15 @@ function buildParticipantList(
 
   const fallbackOrderBase = map.size;
   historyParticipants.forEach((participant, index) => {
-    const key = normalizeParticipantKey(participant.id, participant.phone, participant.name);
+    const key = normalizeParticipantKey(participant.id, null, participant.name);
     if (map.has(key)) return;
     map.set(key, {
       key,
       clientId: participant.id,
-      phone: participant.phone,
       order: fallbackOrderBase + index + 1,
       name: participant.name,
       photo: participant.photo,
-      rating: participant.rating,
+      rating: isPhoneLikeRatingValue(participant.rating) ? null : participant.rating,
       ratingNumeric: null,
     });
   });
@@ -503,18 +560,146 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function resolveTournamentResultsSortMode(
+  customTournament: TournamentHistoryRecord | null | undefined,
+): TournamentResultsSortMode {
+  const params = isRecord(customTournament?.params) ? customTournament.params : null;
+  const summary = isRecord(customTournament?.summary) ? customTournament.summary : null;
+  const toText = (value: unknown) => String(value ?? "").trim().toLowerCase();
+  const toTruthy = (value: unknown) => (
+    value === true
+    || value === 1
+    || value === "1"
+    || toText(value) === "true"
+  );
+  const toMode = (value: unknown): TournamentResultsSortMode | null => {
+    const normalized = toText(value).replace(/\s+/g, "_");
+    if (!normalized) return null;
+    if (
+      normalized === "total_points"
+      || normalized === "points"
+      || normalized === "points_for"
+      || normalized === "pointsfor"
+      || normalized === "по_очкам"
+      || normalized === "набранные_очки"
+      || normalized === "набранныеочки"
+    ) {
+      return "total_points";
+    }
+    if (
+      normalized === "point_diff"
+      || normalized === "points_diff"
+      || normalized === "difference"
+      || normalized === "diff"
+      || normalized === "по_разнице"
+      || normalized === "разница"
+      || normalized === "разница_очков"
+    ) {
+      return "point_diff";
+    }
+    return null;
+  };
+
+  const winnerModeCandidates = [
+    params?.winnerSortMode,
+    params?.winnerSortBy,
+    params?.winnerBy,
+    params?.winnerCriteria,
+    params?.winnerMode,
+    params?.championBy,
+    params?.winnerRankingMode,
+    params?.finalRankBy,
+    params?.finalStandingsSort,
+    summary?.winnerSortMode,
+    summary?.winnerSortBy,
+    summary?.winnerBy,
+    summary?.winnerCriteria,
+    summary?.winnerMode,
+    summary?.championBy,
+    summary?.winnerRankingMode,
+    summary?.finalRankBy,
+    summary?.finalStandingsSort,
+  ];
+  for (const candidate of winnerModeCandidates) {
+    const mode = toMode(candidate);
+    if (mode) return mode;
+  }
+
+  const explicitPointsFlag = [
+    params?.winnerByTotalPoints,
+    params?.sortByTotalPoints,
+    params?.useTotalPointsRanking,
+    summary?.winnerByTotalPoints,
+    summary?.sortByTotalPoints,
+    summary?.useTotalPointsRanking,
+  ].some((value) => toTruthy(value));
+  if (explicitPointsFlag) return "total_points";
+
+  const explicitPointDiffFlag = [
+    params?.winnerByPointDiff,
+    params?.sortByPointDiff,
+    params?.usePointDiffRanking,
+    summary?.winnerByPointDiff,
+    summary?.sortByPointDiff,
+    summary?.usePointDiffRanking,
+  ].some((value) => toTruthy(value));
+  if (explicitPointDiffFlag) return "point_diff";
+
+  const modeCandidates = [
+    params?.resultsSortMode,
+    params?.rankingMode,
+    params?.rankBy,
+    params?.standingsSort,
+    summary?.resultsSortMode,
+    summary?.rankingMode,
+    summary?.rankBy,
+    summary?.standingsSort,
+  ];
+  for (const candidate of modeCandidates) {
+    const mode = toMode(candidate);
+    if (mode) return mode;
+  }
+
+  return "point_diff";
+}
+
 function buildResultRows(
   customTournament: TournamentHistoryRecord | null | undefined,
   participants: TournamentParticipantView[],
 ): TournamentResultRow[] {
+  const sortMode = resolveTournamentResultsSortMode(customTournament);
   const participantMap = new Map<string, TournamentParticipantView>();
   participants.forEach((participant) => {
     participantMap.set(participant.key, participant);
     participantMap.set(`name:${participant.name.trim().toLowerCase()}`, participant);
     if (participant.clientId) participantMap.set(participant.clientId, participant);
-    const normalizedPhone = normalizePhone(participant.phone);
-    if (normalizedPhone) participantMap.set(normalizedPhone, participant);
   });
+
+  const compareResultRows = (
+    left: TournamentResultSortableRow,
+    right: TournamentResultSortableRow,
+  ) => {
+    if (sortMode === "total_points") {
+      const pointsDiff = (right.tournamentPoints ?? 0) - (left.tournamentPoints ?? 0);
+      if (pointsDiff !== 0) return pointsDiff;
+    }
+    const pointDiff =
+      ((right.pointsFor ?? 0) - (right.pointsAgainst ?? 0))
+      - ((left.pointsFor ?? 0) - (left.pointsAgainst ?? 0));
+    if (pointDiff !== 0) return pointDiff;
+    if (sortMode !== "total_points") {
+      const pointsDiff = (right.tournamentPoints ?? 0) - (left.tournamentPoints ?? 0);
+      if (pointsDiff !== 0) return pointsDiff;
+    }
+    const winsDiff = (right.wins ?? Number.NEGATIVE_INFINITY) - (left.wins ?? Number.NEGATIVE_INFINITY);
+    if (winsDiff !== 0) return winsDiff;
+    const deltaDiff = (right.delta ?? Number.NEGATIVE_INFINITY) - (left.delta ?? Number.NEGATIVE_INFINITY);
+    if (deltaDiff !== 0) return deltaDiff;
+    const leftRank = left.sourceRank ?? Number.POSITIVE_INFINITY;
+    const rightRank = right.sourceRank ?? Number.POSITIVE_INFINITY;
+    if (leftRank !== rightRank) return leftRank - rightRank;
+    return left.name.localeCompare(right.name, "ru");
+  };
 
   const totals = customTournament?.totals;
   if (totals && typeof totals === "object") {
@@ -534,46 +719,43 @@ function buildResultRows(
           wins: parseNumber(value.wins),
           losses: parseNumber(value.losses),
           draws: parseNumber(value.draws),
+          tournamentPoints: parseNumber(value.tournamentPoints ?? value.playedPoints ?? value.pointsFor),
           pointsFor: parseNumber(value.pointsFor),
           pointsAgainst: parseNumber(value.pointsAgainst),
           delta: parseNumber(value.deltaTotal),
-        } satisfies Omit<TournamentResultRow, "rank">;
+        } satisfies TournamentResultSortableRow;
       })
-      .filter((row): row is Omit<TournamentResultRow, "rank"> => row !== null)
-      .sort((left, right) => {
-        const deltaDiff = (right.delta ?? Number.NEGATIVE_INFINITY) - (left.delta ?? Number.NEGATIVE_INFINITY);
-        if (deltaDiff !== 0) return deltaDiff;
-        const winsDiff = (right.wins ?? Number.NEGATIVE_INFINITY) - (left.wins ?? Number.NEGATIVE_INFINITY);
-        if (winsDiff !== 0) return winsDiff;
-        const pointsDiff = ((right.pointsFor ?? 0) - (right.pointsAgainst ?? 0)) - ((left.pointsFor ?? 0) - (left.pointsAgainst ?? 0));
-        if (pointsDiff !== 0) return pointsDiff;
-        return left.name.localeCompare(right.name, "ru");
-      });
+      .filter((row): row is TournamentResultSortableRow => row !== null)
+      .sort((left, right) => compareResultRows(left, right));
 
-    return rows.map((row, index) => ({ ...row, rank: index + 1 }));
+    return rows.map(({ tournamentPoints, sourceRank, ...row }, index) => ({ ...row, rank: index + 1 }));
   }
 
   if (Array.isArray(customTournament?.standings)) {
-    return customTournament.standings
+    const rows = customTournament.standings
       .map((item, index) => {
         if (!isRecord(item)) return null;
         const rawName = String(item.name || item.player || item.title || `Игрок ${index + 1}`).trim();
         const fallbackParticipant = participantMap.get(`name:${rawName.toLowerCase()}`) || null;
         return {
           key: String(item.id || rawName || index),
-          rank: index + 1,
+          sourceRank: parseNumber(item.rank ?? item.place ?? item.position),
           name: rawName,
           photo: typeof item.photo === "string" ? item.photo : fallbackParticipant?.photo || null,
           rating: typeof item.rating === "string" ? item.rating : fallbackParticipant?.rating || null,
           wins: parseNumber(item.wins),
           losses: parseNumber(item.losses),
           draws: parseNumber(item.draws),
+          tournamentPoints: parseNumber(item.tournamentPoints ?? item.totalPoints ?? item.playedPoints ?? item.pointsFor ?? item.points),
           pointsFor: parseNumber(item.pointsFor ?? item.points),
           pointsAgainst: parseNumber(item.pointsAgainst),
           delta: parseNumber(item.delta ?? item.deltaTotal),
-        } satisfies TournamentResultRow;
+        } satisfies TournamentStandingSortableRow;
       })
-      .filter((row): row is TournamentResultRow => row !== null);
+      .filter((row): row is TournamentStandingSortableRow => row !== null)
+      .sort((left, right) => compareResultRows(left, right));
+
+    return rows.map(({ sourceRank, tournamentPoints, ...row }, index) => ({ ...row, rank: index + 1 }));
   }
 
   return [];
@@ -585,10 +767,21 @@ function formatNumberValue(value: number | null): string {
   return value.toFixed(2).replace(".", ",");
 }
 
+function formatSignedNumberValue(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `${value > 0 ? "+" : ""}${formatNumberValue(value)}`;
+}
+
 function getResultDeltaClass(value: number | null) {
   if ((value ?? 0) > 0) return "is-positive";
   if ((value ?? 0) < 0) return "is-negative";
   return "is-neutral";
+}
+
+function getPointDifference(pointsFor: number | null, pointsAgainst: number | null): number | null {
+  if (pointsFor == null || pointsAgainst == null) return null;
+  if (!Number.isFinite(pointsFor) || !Number.isFinite(pointsAgainst)) return null;
+  return pointsFor - pointsAgainst;
 }
 
 function buildRulesRows(meta: TournamentDisplayMeta) {
@@ -640,7 +833,8 @@ export function TournamentDetailsModal({
           setParticipantsError(result.error.message || "Не удалось загрузить состав");
           return;
         }
-        const nextParticipants = extractTournamentBookings(result.data);
+        const nextParticipants = extractTournamentBookings(result.data)
+          .map((participant) => sanitizeTournamentParticipant(participant));
         setParticipants(nextParticipants);
 
         const ratingPlayers = nextParticipants.map((participant, index) => {
@@ -650,12 +844,12 @@ export function TournamentDetailsModal({
           const rawRating = resolveParticipantRawRating(participant);
           return {
             clientId: participant.client?.id || null,
-            phone: participant.client?.phone || null,
+            phone: null,
             name,
             rating: rawRating.rating,
             ratingNumeric: rawRating.ratingNumeric,
           };
-        }).filter((player) => player.clientId || player.phone);
+        }).filter((player) => player.clientId);
 
         if (ratingPlayers.length === 0) {
           setLiveRatingsMap(new Map());
@@ -665,7 +859,7 @@ export function TournamentDetailsModal({
         const liveRatingsResult = await apiFetchPadelLiveRatings(ratingPlayers);
         const nextRatingsMap = new Map<string, PadelLiveRatingItem>();
         (liveRatingsResult.data ?? []).forEach((item) => {
-          const key = buildParticipantIdentityKey(item.clientId, item.phoneNorm, item.name || "");
+          const key = buildParticipantIdentityKey(item.clientId, null, item.name || "");
           nextRatingsMap.set(key, item);
         });
         setLiveRatingsMap(nextRatingsMap);
@@ -703,6 +897,7 @@ export function TournamentDetailsModal({
   const subtitle = [booking.exercise?.studio?.city, booking.exercise?.studio?.address].filter(Boolean).join(", ");
   const displayMeta = getTournamentDisplayMeta(booking, customTournament);
   const rulesRows = buildRulesRows(displayMeta);
+  const tournamentDescription = getTournamentDescription(booking, customTournament);
 
   return (
     <Modal
@@ -761,6 +956,13 @@ export function TournamentDetailsModal({
                 </div>
                 <div className="tournament-details-person-badge">Тренер</div>
               </div>
+              {tournamentDescription ? (
+                <div className="details-match-comment tournament-details-description" aria-label="Описание турнира">
+                  <span className="details-match-comment-quote" aria-hidden="true">“</span>
+                  <span>{tournamentDescription}</span>
+                  <span className="details-match-comment-quote" aria-hidden="true">”</span>
+                </div>
+              ) : null}
             </div>
 
             <div className="tournament-details-block">
@@ -822,44 +1024,52 @@ export function TournamentDetailsModal({
               <div className="tournament-details-empty">Результаты пока не опубликованы</div>
             ) : (
               <div className="tournament-details-results">
-                {resultRows.map((row) => (
-                  <div key={row.key} className="tournament-details-result-row">
-                    <div className="tournament-details-result-rank">{row.rank}</div>
-                    <div className="tournament-details-result-avatar-wrap">
-                      <div className={`tournament-details-avatar-ring${row.rating ? " has-level" : ""}`}>
-                        <div className="tournament-details-avatar tournament-details-avatar--result">
-                          {row.photo ? (
-                            <img src={row.photo} alt={row.name} />
-                          ) : (
-                            <span>{getInitials(row.name)}</span>
-                          )}
+                {resultRows.map((row) => {
+                  const pointsDiff = getPointDifference(row.pointsFor, row.pointsAgainst);
+                  return (
+                    <div key={row.key} className="tournament-details-result-row">
+                      <div className="tournament-details-result-rank">{row.rank}</div>
+                      <div className="tournament-details-result-avatar-wrap">
+                        <div className={`tournament-details-avatar-ring${row.rating ? " has-level" : ""}`}>
+                          <div className="tournament-details-avatar tournament-details-avatar--result">
+                            {row.photo ? (
+                              <img src={row.photo} alt={row.name} />
+                            ) : (
+                              <span>{getInitials(row.name)}</span>
+                            )}
+                          </div>
+                        </div>
+                        {row.rating ? (
+                          <div className="tournament-details-result-avatar-badge">{renderLevelText(row.rating)}</div>
+                        ) : null}
+                      </div>
+                      <div className="tournament-details-result-main">
+                        <div className="tournament-details-result-name">{row.name}</div>
+                        <div className="tournament-details-result-stats">
+                          <span className="is-win">В {formatNumberValue(row.wins)}</span>
+                          <span>Н {formatNumberValue(row.draws)}</span>
+                          <span className="is-loss">П {formatNumberValue(row.losses)}</span>
                         </div>
                       </div>
-                      {row.rating ? (
-                        <div className="tournament-details-result-avatar-badge">{renderLevelText(row.rating)}</div>
-                      ) : null}
-                    </div>
-                    <div className="tournament-details-result-main">
-                      <div className="tournament-details-result-name">{row.name}</div>
-                      <div className="tournament-details-result-stats">
-                        <span className="is-win">В {formatNumberValue(row.wins)}</span>
-                        <span>Н {formatNumberValue(row.draws)}</span>
-                        <span className="is-loss">П {formatNumberValue(row.losses)}</span>
+                      <div className="tournament-details-result-side tournament-details-result-side--points">
+                        <div className={`tournament-details-result-point-diff ${getResultDeltaClass(pointsDiff)}`}>
+                          {formatSignedNumberValue(pointsDiff)}
+                        </div>
+                        <div className="tournament-details-result-score">
+                          <span className="is-for">{formatNumberValue(row.pointsFor)}</span>
+                          <span className="tournament-details-result-score-separator">:</span>
+                          <span className="is-against">{formatNumberValue(row.pointsAgainst)}</span>
+                        </div>
+                      </div>
+                      <div className="tournament-details-result-side tournament-details-result-side--level">
+                        <div className={`tournament-details-result-delta ${getResultDeltaClass(row.delta)}`}>
+                          <span className="tournament-details-result-delta-marker" aria-hidden="true">Δ</span>
+                          <span>{formatSignedNumberValue(row.delta)}</span>
+                        </div>
                       </div>
                     </div>
-                    <div className="tournament-details-result-side">
-                      <div className={`tournament-details-result-delta ${getResultDeltaClass(row.delta)}`}>
-                        {(row.delta ?? 0) > 0 ? "+" : ""}
-                        {formatNumberValue(row.delta)}
-                      </div>
-                      <div className="tournament-details-result-score">
-                        <span className="is-for">{formatNumberValue(row.pointsFor)}</span>
-                        <span className="tournament-details-result-score-separator">:</span>
-                        <span className="is-against">{formatNumberValue(row.pointsAgainst)}</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

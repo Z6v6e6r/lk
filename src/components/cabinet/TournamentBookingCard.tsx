@@ -1,9 +1,9 @@
 import { useState } from "react";
 import type { Booking, TournamentHistoryRecord } from "../../utils/apiClient";
-import { apiCancelBooking } from "../../utils/apiClient";
 import { addBookingToCalendar } from "../../utils/calendarEvent";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
 import styles from "./TournamentBookingCard.module.css";
+import { BookingCancellationDialog } from "./BookingCancellationDialog";
 
 interface TournamentBookingCardProps {
   booking: Booking;
@@ -94,7 +94,7 @@ function getTournamentRatingLabel(booking: Booking, customTournament?: Tournamen
 
   const text = `${booking.exercise?.direction?.name || ""} ${booking.exercise?.type?.name || ""}`;
   const prefixedMatch = text.match(
-    /\b(?:рейтинг|уровень)\s*[:\-]?\s*((?:[A-D]\+?)(?:\s*[–/-]\s*(?:[A-D]\+?))?|(?:\d(?:[.,]\d+)?)(?:\s*[–/-]\s*(?:\d(?:[.,]\d+)?))?)\b/i,
+    /\b(?:рейтинг|уровень)\s*[:-]?\s*((?:[A-D]\+?)(?:\s*[–/-]\s*(?:[A-D]\+?))?|(?:\d(?:[.,]\d+)?)(?:\s*[–/-]\s*(?:\d(?:[.,]\d+)?))?)\b/i,
   );
   if (prefixedMatch?.[1]) {
     return prefixedMatch[1].replace(/\s*[–-]\s*/g, "–").replace(/\s*\/\s*/g, "/");
@@ -155,8 +155,7 @@ export function TournamentBookingCard({
   loadBookings,
   onOpenDetails,
 }: TournamentBookingCardProps) {
-  const [cancelState, setCancelState] = useState<"idle" | "confirm" | "done">("idle");
-  const [cancelOk, setCancelOk] = useState(false);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
 
   const dateStr = booking.exercise?.timeFrom;
   const date = dateStr ? formatDate(dateStr) : null;
@@ -171,13 +170,6 @@ export function TournamentBookingCard({
   const canCancel = active && Boolean(
     booking.cancellationDeadline && new Date(booking.cancellationDeadline) > new Date(),
   );
-
-  const handleCancel = async () => {
-    const res = await apiCancelBooking(booking.id);
-    const ok = res.status !== null && res.status >= 200 && res.status < 300;
-    setCancelOk(ok);
-    setCancelState("done");
-  };
 
   const handleOpenDetails = () => {
     onOpenDetails?.(booking);
@@ -244,13 +236,13 @@ export function TournamentBookingCard({
         </div>
       </div>
 
-      {canCancel && cancelState === "idle" && (
+      {canCancel && (
         <div className={`booking-cancel-row ${styles.actionRow}`}>
           <button
             className="btn-cancel danger"
             onClick={(event) => {
               event.stopPropagation();
-              setCancelState("confirm");
+              setCancelDialogOpen(true);
             }}
           >
             Отменить запись
@@ -258,46 +250,18 @@ export function TournamentBookingCard({
         </div>
       )}
 
-      {cancelState === "confirm" && (
-        <div className={`booking-cancel-row ${styles.actionRow}`}>
-          <button
-            className="btn-cancel outline"
-            onClick={(event) => {
-              event.stopPropagation();
-              setCancelState("idle");
-            }}
-          >
-            Нет
-          </button>
-          <button
-            className="btn-cancel danger"
-            onClick={(event) => {
-              event.stopPropagation();
-              void handleCancel();
-            }}
-          >
-            Да, отменить
-          </button>
-        </div>
-      )}
-
-      {cancelState === "done" && (
-        <div className={`booking-cancel-row ${styles.actionRow}`}>
-          <button
-            className="btn-cancel primary"
-            onClick={(event) => {
-              event.stopPropagation();
-              if (loadBookings) loadBookings();
-            }}
-          >
-            {cancelOk ? "Запись отменена, продолжить" : "Ошибка — закрыть"}
-          </button>
-        </div>
-      )}
-
       {active && !canCancel && (
         <div className="booking-status-text">Отмена возможна только за 24 часа</div>
       )}
+
+      <BookingCancellationDialog
+        bookingId={booking.id}
+        isOpen={cancelDialogOpen}
+        onClose={() => setCancelDialogOpen(false)}
+        onSuccessClose={() => {
+          loadBookings?.();
+        }}
+      />
     </div>
   );
 }

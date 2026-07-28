@@ -1,4 +1,5 @@
 import { getBundleVersion } from "./bundleVersion";
+import { buildLkAssetFileCandidates, resolveLkAssetBaseUrlFromScript } from "./lkAssetBaseUrls";
 
 type ReleaseGuardOptions = {
   entry: string;
@@ -141,60 +142,11 @@ function resolveBundleScriptUrls(bundleFileNames: string[]): URL[] {
   return result;
 }
 
-function swapPadlHubOrigin(url: URL): URL | null {
-  if (url.hostname === "padlhub.su") {
-    const next = new URL(url.toString());
-    next.hostname = "padlhub.ru";
-    return next;
-  }
-
-  if (url.hostname === "padlhub.ru") {
-    const next = new URL(url.toString());
-    next.hostname = "padlhub.su";
-    return next;
-  }
-
-  return null;
-}
-
-function buildReleaseUrl(baseUrl: URL, releaseFileName: string): string {
-  const next = new URL(baseUrl.toString());
-  next.search = "";
-  next.hash = "";
-  next.pathname = next.pathname.replace(/\/[^/]*$/, `/${releaseFileName}`);
-  return next.toString();
-}
-
 function buildManifestCandidates(bundleScriptUrls: URL[], releaseFileName: string): string[] {
-  const candidates: string[] = [];
-  const seen = new Set<string>();
-
-  const addCandidate = (candidate: string | null | undefined) => {
-    const normalized = trimString(candidate);
-    if (!normalized || seen.has(normalized)) return;
-    seen.add(normalized);
-    candidates.push(normalized);
-  };
-
-  bundleScriptUrls.forEach((url) => {
-    addCandidate(buildReleaseUrl(url, releaseFileName));
-
-    if (typeof window !== "undefined" && url.origin !== window.location.origin) {
-      const currentOriginUrl = new URL(`${url.pathname}${url.search}${url.hash}`, window.location.origin);
-      addCandidate(buildReleaseUrl(currentOriginUrl, releaseFileName));
-    }
-
-    const swappedOrigin = swapPadlHubOrigin(url);
-    if (swappedOrigin) {
-      addCandidate(buildReleaseUrl(swappedOrigin, releaseFileName));
-    }
-  });
-
-  if (typeof window !== "undefined") {
-    addCandidate(new URL(`/lk/${releaseFileName}`, window.location.origin).toString());
-  }
-
-  return candidates;
+  return buildLkAssetFileCandidates(
+    releaseFileName,
+    bundleScriptUrls.map((url) => resolveLkAssetBaseUrlFromScript(url)),
+  );
 }
 
 function getCurrentVersion(bundleScriptUrls: URL[]): string | null {

@@ -1,4 +1,5 @@
 import type { PadelGamePlayer, PadelGameRecord } from "./apiClient";
+import { normalizeLevelGradeLabel } from "./customFields";
 
 const INVITE_TITLE = "Присоединяйся к игре";
 const INVITE_LINK_LABEL = "Ссылка на игру";
@@ -56,25 +57,11 @@ function getPlayerInitials(name: string): string {
 }
 
 function normalizePlayerRatingLabel(value: string | null | undefined): (typeof RATING_LABELS)[number] | null {
-  const raw = String(value || "").trim().toUpperCase();
-  if (!raw) return null;
-
-  if (RATING_LABELS.includes(raw as (typeof RATING_LABELS)[number])) {
-    return raw as (typeof RATING_LABELS)[number];
-  }
-
-  const compact = raw.replace(/\s+/g, "");
-  if (RATING_LABELS.includes(compact as (typeof RATING_LABELS)[number])) {
-    return compact as (typeof RATING_LABELS)[number];
-  }
-
-  const numeric = Number.parseFloat(raw.replace(",", "."));
-  if (Number.isFinite(numeric)) {
-    const index = Math.max(0, Math.min(RATING_LABELS.length - 1, Math.round(numeric) - 1));
-    return RATING_LABELS[index] ?? null;
-  }
-
-  return null;
+  const normalized = normalizeLevelGradeLabel(value);
+  if (!normalized) return null;
+  return RATING_LABELS.includes(normalized as (typeof RATING_LABELS)[number])
+    ? (normalized as (typeof RATING_LABELS)[number])
+    : null;
 }
 
 function getPlayerRatingProgress(label: (typeof RATING_LABELS)[number] | null): number | null {

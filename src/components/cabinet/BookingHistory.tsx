@@ -9,6 +9,7 @@ import type {
 import { BookingCard } from "./BookingCard";
 import type { ReactNode } from "react";
 import { TournamentBookingCard } from "./TournamentBookingCard";
+import { resolveCabinetBookingCategory } from "../../utils/exerciseCategory";
 
 const RESULT_ENTRY_GRACE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -27,25 +28,6 @@ interface BookingHistoryProps {
   resolveGameForBooking?: (booking: Booking) => PadelGameRecord | null;
   resolveTournamentForBooking?: (booking: Booking) => TournamentHistoryRecord | null;
   onOpenTournamentDetails?: (booking: Booking) => void;
-}
-
-function getBookingCategory(name: string): "games" | "trainings" | "tournaments" | "other" {
-  const n = name.toLowerCase();
-  if (
-    n.includes("турнир")
-    || n.includes("tournament")
-    || n.includes("американо")
-    || n.includes("americano")
-    || n.includes("мексикано")
-    || n.includes("mexicano")
-    || n.includes("round robin")
-    || n.includes("олимп")
-  ) {
-    return "tournaments";
-  }
-  if (n.includes("трен") || n.includes("training")) return "trainings";
-  if (n.includes("игр") || n.includes("game")) return "games";
-  return "other";
 }
 
 function getBookingTimestamp(booking: Booking): number {
@@ -100,24 +82,35 @@ function isCancelledGameRecord(game: PadelGameRecord): boolean {
 
 function hasCompletedMatchResult(game: PadelGameRecord): boolean {
   const metadata = game.metadata;
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
-  const matchResult = (metadata as Record<string, unknown>).matchResult;
-  if (!matchResult || typeof matchResult !== "object" || Array.isArray(matchResult)) return false;
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+    const matchResult = (metadata as Record<string, unknown>).matchResult;
+    if (matchResult && typeof matchResult === "object" && !Array.isArray(matchResult)) {
+      const status = String((matchResult as Record<string, unknown>).status || "").trim().toUpperCase();
+      if (status.includes("CONFIRM") || status.includes("COMPLET")) return true;
+      if ((matchResult as Record<string, unknown>).confirmedAt) return true;
+    }
+  }
 
-  const status = String((matchResult as Record<string, unknown>).status || "").trim().toUpperCase();
-  if (status.includes("CONFIRM") || status.includes("COMPLET")) return true;
-  return Boolean((matchResult as Record<string, unknown>).confirmedAt);
+  const topLevelStatus = String(game.resultLifecycleState ?? game.resultStatus ?? "").trim().toUpperCase();
+  return topLevelStatus.includes("CONFIRM") || topLevelStatus.includes("COMPLET");
 }
 
 function hasEnteredMatchResult(game: PadelGameRecord): boolean {
   const metadata = game.metadata;
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
-  const matchResult = (metadata as Record<string, unknown>).matchResult;
-  if (!matchResult || typeof matchResult !== "object" || Array.isArray(matchResult)) return false;
-  const sets = (matchResult as Record<string, unknown>).sets;
-  if (Array.isArray(sets) && sets.length > 0) return true;
-  const status = String((matchResult as Record<string, unknown>).status || "").trim();
-  return Boolean(status || (matchResult as Record<string, unknown>).submittedAt || (matchResult as Record<string, unknown>).confirmedAt);
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+    const matchResult = (metadata as Record<string, unknown>).matchResult;
+    if (matchResult && typeof matchResult === "object" && !Array.isArray(matchResult)) {
+      const sets = (matchResult as Record<string, unknown>).sets;
+      if (Array.isArray(sets) && sets.length > 0) return true;
+      const status = String((matchResult as Record<string, unknown>).status || "").trim();
+      if (status || (matchResult as Record<string, unknown>).submittedAt || (matchResult as Record<string, unknown>).confirmedAt) {
+        return true;
+      }
+    }
+  }
+
+  const topLevelStatus = String(game.resultLifecycleState ?? game.resultStatus ?? "").trim();
+  return Boolean(topLevelStatus || game.resultId || game.lastResultAt);
 }
 
 function shouldKeepGameActiveForResultEntry(game: PadelGameRecord): boolean {
@@ -241,9 +234,7 @@ export const BookingHistory: React.FC<BookingHistoryProps> = ({
                     </React.Fragment>
                   );
                 }
-                const category = getBookingCategory(
-                  item.booking.exercise?.direction?.name || item.booking.exercise?.type?.name || "",
-                );
+                const category = resolveCabinetBookingCategory(item.booking);
                 if (category === "tournaments") {
                   return (
                     <TournamentBookingCard

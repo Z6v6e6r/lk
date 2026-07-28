@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { type KeyboardEvent, type ReactNode } from "react";
 import {
   ChatIcon,
   EmptySlotAvatarIcon,
@@ -34,6 +34,7 @@ export type CommunityGameCardProps = {
   splitJoinPriceText?: string | null;
   splitCancelDeadlineAt?: string | null;
   isJoined?: boolean;
+  ctaLabel?: string;
   showWaitlist?: boolean;
   isPastGame?: boolean;
   needsResult?: boolean;
@@ -47,7 +48,7 @@ export type CommunityGameCardProps = {
     right: { id: string; avatarUrl?: string; name: string }[];
   } | null;
   badgeLabel?: string;
-  durationText?: string;
+  publishedText?: string;
   authorName?: string;
   authorHandle?: string;
   authorAvatarUrl?: string;
@@ -108,7 +109,7 @@ function formatLevelRange(levelText: string) {
   if (!normalized) return "Уровень уточняется";
 
   const rangeParts = normalized
-    .split(/[\/–-]/)
+    .split(/[/–-]/)
     .map((part) => part.trim())
     .filter(Boolean);
 
@@ -119,36 +120,32 @@ function formatLevelRange(levelText: string) {
   return normalized;
 }
 
+function formatMonthInDateLine(month: string) {
+  const normalized = month.trim().toUpperCase();
+  const monthByCase: Record<string, string> = {
+    ЯНВ: "января",
+    ФЕВ: "февраля",
+    МАРТ: "марта",
+    АПР: "апреля",
+    МАЙ: "мая",
+    ИЮН: "июня",
+    ИЮЛ: "июля",
+    АВГ: "августа",
+    СЕН: "сентября",
+    ОКТ: "октября",
+    НОЯ: "ноября",
+    ДЕК: "декабря",
+  };
+
+  return monthByCase[normalized] || month.toLowerCase();
+}
+
 function getGameTypeBadge(isRatingGame?: boolean | null) {
   if (isRatingGame) {
     return { label: "Рейтинговая игра", tone: styles.statusBadgeRating };
   }
 
   return { label: "Френдли игра", tone: styles.statusBadgeFriendly };
-}
-
-function formatCountdown(deadlineAt?: string | null, nowMs = Date.now()) {
-  if (!deadlineAt) return null;
-
-  const deadlineMs = Date.parse(deadlineAt);
-  if (!Number.isFinite(deadlineMs)) return null;
-
-  const totalMinutes = Math.max(0, Math.ceil((deadlineMs - nowMs) / 60000));
-  if (totalMinutes <= 0) return "0 мин";
-
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const minutes = totalMinutes % 60;
-
-  if (days > 0) {
-    return `${days} д ${hours} ч`;
-  }
-
-  if (hours > 0) {
-    return `${hours} ч ${minutes} мин`;
-  }
-
-  return `${minutes} мин`;
 }
 
 function renderAvatar(player: CardPlayer, index: number) {
@@ -207,6 +204,16 @@ function renderStat(
   );
 }
 
+function handleKeyboardCardOpen(
+  event: KeyboardEvent<HTMLDivElement>,
+  onOpen?: () => void,
+) {
+  if (!onOpen) return;
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  onOpen();
+}
+
 export function CommunityGameCard({
   month,
   day,
@@ -221,10 +228,10 @@ export function CommunityGameCard({
   totalSlots = 4,
   slotsLeft,
   splitJoinPriceText,
-  splitCancelDeadlineAt,
   isJoined = false,
+  ctaLabel,
   needsResult = false,
-  durationText,
+  publishedText,
   authorName,
   authorHandle,
   authorAvatarUrl,
@@ -233,39 +240,30 @@ export function CommunityGameCard({
   onPlay,
   onChat,
 }: CommunityGameCardProps) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const sanitizedPlayers = hideDuplicateAvatarUrls(players);
   const slotsCount = Math.max(2, Math.min(totalSlots, 4));
   const visiblePlayers = sanitizedPlayers.slice(0, slotsCount);
   const isGameFull = typeof slotsLeft === "number"
     ? slotsLeft <= 0
     : confirmedPlayersCount >= totalSlots;
-  const playButtonLabel = isJoined
-    ? "Открыть игру"
-    : isGameFull
-      ? "В лист ожидания"
-      : "Вступить в игру";
+  const normalizedCtaLabel = (ctaLabel || "").trim();
+  const playButtonLabel = normalizedCtaLabel || (
+    isJoined
+      ? "Открыть игру"
+      : isGameFull
+        ? "В лист ожидания"
+        : "Вступить в игру"
+  );
   const emptySlotsCount = Math.max(slotsCount - visiblePlayers.length, 0);
   const statusBadge = getGameTypeBadge(isRatingGame);
   const primaryAuthor = authorName || players[0]?.name || "Игрок";
   const primaryAuthorAvatar = normalizeAvatarUrl(authorAvatarUrl) || normalizeAvatarUrl(players[0]?.avatarUrl);
   const primaryAuthorHandle = buildAuthorHandle(primaryAuthor, authorHandle);
   const locationText = subtitleText.trim() || "Локация уточняется";
-  const dateLine = `${day} ${month.toLowerCase()}, ${timeText}`;
+  const dateLine = `${day} ${formatMonthInDateLine(month)}, ${timeText}`;
   const formattedLevelText = formatLevelRange(levelText);
   const secondaryAction = onChat || onPlay;
-  const splitCountdownText = formatCountdown(splitCancelDeadlineAt, nowMs);
-  const showSplitJoinInfo = !isGameFull && Boolean(splitJoinPriceText || splitCountdownText);
-
-  useEffect(() => {
-    if (!splitCancelDeadlineAt) return undefined;
-
-    const intervalId = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 30000);
-
-    return () => window.clearInterval(intervalId);
-  }, [splitCancelDeadlineAt]);
+  const showSplitJoinInfo = !isGameFull && Boolean(splitJoinPriceText);
 
   return (
     <article className={styles.card}>
@@ -295,7 +293,14 @@ export function CommunityGameCard({
         </button>
       </div>
 
-      <div className={styles.gameCard}>
+      <div
+        className={styles.gameCard}
+        role="button"
+        tabIndex={0}
+        onClick={onPlay}
+        onKeyDown={(event) => handleKeyboardCardOpen(event, onPlay)}
+        aria-label={`${playButtonLabel} ${title}`}
+      >
         <div className={styles.gameHeader}>
           <div className={styles.headerMain}>
             <div className={`${styles.statusBadge} ${statusBadge.tone}`}>
@@ -319,10 +324,7 @@ export function CommunityGameCard({
 
           <div className={styles.infoRow}>
             <GameLocationIcon className={styles.infoIcon} />
-            <div className={styles.locationRow}>
-              <span className={styles.infoText}>{locationText}</span>
-              <span className={styles.mapLink}>на карте</span>
-            </div>
+            <span className={styles.infoText}>{locationText}</span>
           </div>
 
           <div className={styles.infoRow}>
@@ -351,19 +353,16 @@ export function CommunityGameCard({
                       <strong>{splitJoinPriceText}</strong>
                     </div>
                   )}
-                  {splitCountdownText && (
-                    <div className={styles.splitJoinInfoRow}>
-                      <span>Отмена через</span>
-                      <strong>{splitCountdownText}</strong>
-                    </div>
-                  )}
                 </div>
               )}
 
               <button
                 type="button"
                 className={`${styles.playButton}${needsResult ? ` ${styles.playButtonAttention}` : ""}`}
-                onClick={onPlay}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onPlay?.();
+                }}
               >
                 {playButtonLabel}
               </button>
@@ -378,7 +377,7 @@ export function CommunityGameCard({
           {renderStat(<ChatIcon className={styles.inlineIcon} />, "Чат игры", commentsCount, onChat)}
         </div>
 
-        <span className={styles.durationText}>{durationText || "1 ч."}</span>
+        <span className={styles.metaText}>{publishedText || "только что"}</span>
       </div>
     </article>
   );

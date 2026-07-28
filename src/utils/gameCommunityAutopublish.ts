@@ -84,6 +84,40 @@ function buildCommunityAutopublishMetadataFields(
   };
 }
 
+function extractGameCustomTitle(metadata: Record<string, unknown> | null | undefined): string | null {
+  if (!metadata) return null;
+  const value = typeof metadata.gameTitle === "string" ? metadata.gameTitle.trim() : "";
+  return value || null;
+}
+
+function extractGameParticipantComment(metadata: Record<string, unknown> | null | undefined): string | null {
+  if (!metadata) return null;
+  const value = typeof metadata.participantComment === "string" ? metadata.participantComment.trim() : "";
+  return value || null;
+}
+
+function extractGameJoinPrice(metadata: Record<string, unknown> | null | undefined): string | null {
+  if (!metadata) return null;
+  if (typeof metadata.joinPrice === "number" && Number.isFinite(metadata.joinPrice)) {
+    const normalized = Math.max(0, Math.round(metadata.joinPrice));
+    return normalized > 0 ? String(normalized) : null;
+  }
+  const raw = typeof metadata.joinPrice === "string" ? metadata.joinPrice.trim() : "";
+  const digits = raw.replace(/[^\d]/g, "").replace(/^0+(?=\d)/, "");
+  return digits || null;
+}
+
+function formatPrice(value: number): string {
+  return value.toLocaleString("ru-RU");
+}
+
+function formatGameJoinPriceLabel(value: string | null): string | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return `${formatPrice(parsed)} ₽`;
+}
+
 function extractCommunityAutopublishSelectionState(
   metadata: Record<string, unknown> | null | undefined,
 ): {
@@ -194,6 +228,9 @@ function extractCommunityAutopublishSavedCommunities(
 }
 
 function buildCommunityGamePostBody(game: PadelGameRecord): string {
+  const metadata = isRecordObject(game.metadata) ? game.metadata : null;
+  const participantComment = extractGameParticipantComment(metadata);
+  const joinPriceLabel = formatGameJoinPriceLabel(extractGameJoinPrice(metadata));
   const date = game.booking?.date
     ? new Date(`${game.booking.date}T00:00:00`).toLocaleDateString("ru-RU", {
         day: "2-digit",
@@ -203,7 +240,13 @@ function buildCommunityGamePostBody(game: PadelGameRecord): string {
   const timeFrom = game.booking?.timeFrom ?? "—:—";
   const timeTo = game.booking?.timeTo ?? "—:—";
   const location = [game.booking?.studioName, game.booking?.roomName].filter(Boolean).join(", ");
-  return [date, `${timeFrom} - ${timeTo}`, location].filter(Boolean).join(" • ");
+  return [
+    [date, `${timeFrom} - ${timeTo}`, location].filter(Boolean).join(" • "),
+    joinPriceLabel ? `Стоимость присоединения: ${joinPriceLabel}` : null,
+    participantComment ? `Комментарий: ${participantComment}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function buildCommunityGamePreviewLabel(game: PadelGameRecord): string {
@@ -287,7 +330,6 @@ function getCommunityName(
 
 function shouldAutopublishGame(record: PadelGameRecord | null | undefined): record is PadelGameRecord {
   if (!record?.id) return false;
-  if (record.settings?.isPrivate) return false;
   if (String(record.status || "").trim().toUpperCase().includes("CANCEL")) return false;
   if (!isGamePaidForCommunityAutopublish(record)) return false;
 
@@ -333,7 +375,7 @@ async function syncSingleGameCommunityAutopublish(
     const response = await apiCreateCommunityFeedPost(communityId, {
       member: actor,
       kind: "GAME",
-      title: "Приглашение в игру",
+      title: extractGameCustomTitle(isRecordObject(record.metadata) ? record.metadata : null) ?? "Приглашение в игру",
       body: buildCommunityGamePostBody(record),
       imageUrl: null,
       previewLabel: buildCommunityGamePreviewLabel(record),

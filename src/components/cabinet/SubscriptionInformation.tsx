@@ -5,6 +5,7 @@ import type {
   SubscriptionAvailableStudios,
   SubscriptionAvailableTypes,
 } from "../../utils/apiClient";
+import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
 
 interface SubscriptionInformationProps {
   isOpen: boolean;
@@ -32,24 +33,13 @@ export const SubscriptionInformation: React.FC<
     }
   };
 
-  const getExpirationInfo = () => {
+  const getUsageInfo = () => {
     if (!sub) return null;
-
-    if (sub.expirationDate) {
-      const formattedDate = formatDate(sub.expirationDate);
-      return formattedDate ? `Действует до: ${formattedDate}` : null;
-    }
-
-    if (sub.availableDays) {
-      return `Осталось дней: ${sub.availableDays}`;
-    }
-
-    return null;
-  };
-
-  const getVisitsInfo = () => {
-    if (!sub || sub.visitsTotal <= 0) return null;
-    return `Посещений: ${sub.visitsLeft} из ${sub.visitsTotal}`;
+    return resolveSubscriptionUsageDisplay({
+      subscriptionName: subName || sub.name,
+      validityDate: sub.expirationDate,
+      visitsLeft: sub.visitsLeft,
+    });
   };
 
   if (!sub) {
@@ -76,25 +66,13 @@ export const SubscriptionInformation: React.FC<
             </span>
           </div>
 
-          {getVisitsInfo() && (
+          {getUsageInfo() && (
             <div className="infoRow">
-              <span className="label">Посещения:</span>
-              <span
-                className="visits"
-                style={{
-                  color: sub.visitsLeft > 0 ? "#228be6" : "#fa5252",
-                }}
-              >
-                {getVisitsInfo()}
+              <span className="label">
+                {getUsageInfo()?.kind === "visits" ? "Осталось:" : "Срок действия:"}
               </span>
-            </div>
-          )}
-
-          {getExpirationInfo() && (
-            <div className="infoRow">
-              <span className="label">Срок действия:</span>
               <span className="expirationInfo">
-                {getExpirationInfo()}
+                {getUsageInfo()?.label}
               </span>
             </div>
           )}

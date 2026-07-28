@@ -15,7 +15,7 @@ export type CommunityGameCard = {
   badgeLabel: string;
   title: string;
   datetimeText: string;
-  duration: string;
+  publishedLabel: string;
   level: string;
   slotsText: string;
   players: User[];
@@ -78,6 +78,21 @@ export type CommunityTournamentCard = {
   waitlistCount?: number;
   spotsLeft?: number | null;
   priceLabel?: string | null;
+  pricePopover?: {
+    triggerLabel: string;
+    rows: Array<{
+      id: string;
+      label: string;
+      value: string;
+    }>;
+  } | null;
+  pricePopoverLoading?: boolean;
+  hasFriendlySubscriptionTag?: boolean;
+  summerSubscriptionOffer?: {
+    id: string;
+    label: string;
+    value: string;
+  } | null;
 };
 
 export type CommunityNewsCard = {

@@ -7,20 +7,55 @@ import {
   type PadelGameRecord,
   type UserProfileType,
 } from "../../utils/apiClient";
-import { CABINET_URL, PUBLIC_GAME_CREATE_PATH, PUBLIC_INVITE_ORIGIN, PUBLIC_INVITE_PATH } from "../../consts/api_config";
-import { CUSTOM_FIELD_IDS, getCustomFieldValue, getLetterGrade, parseNumericLevel } from "../../utils/customFields";
+import {
+  CABINET_URL,
+  IS_DEV_RELEASE_CHANNEL,
+  PUBLIC_GAME_CREATE_PATH,
+  PUBLIC_INVITE_ORIGIN,
+  PUBLIC_INVITE_PATH,
+} from "../../consts/api_config";
+import {
+  apiFetchGroupTrainingsByDate,
+  isGamePlusTrainerSummary,
+  type GroupTrainingSummary,
+} from "../../utils/groupScheduleApi";
+import {
+  apiFetchTournamentVivaPublicCheckout,
+  type TournamentVivaCheckout,
+  type TournamentVivaProduct,
+} from "../../utils/tournamentSignupApi";
+import {
+  CUSTOM_FIELD_IDS,
+  getCustomFieldValue,
+  getLetterGrade,
+  normalizeLevelGradeLabel,
+  parseNumericLevel,
+} from "../../utils/customFields";
+import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import { addGameToCalendar } from "../../utils/calendarEvent";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
+import { Modal } from "../UI/Modal";
+import { SummerSubscriptionGallery } from "../UI/SummerSubscriptionGallery";
 
 interface FindGamePageProps {
   onBack?: () => void;
   cabinetUrl?: string | null;
   presetStudioId?: string | null;
   presetStudioName?: string | null;
+  includeGamePlusTrainer?: boolean;
 }
 
 type ViewerGameState = "participant" | "waitlist" | "none";
 type FindGameViewer = { id: string | null; phone: string | null; level: string | null; levelNumeric: number | null };
+type FindGameKindFilter = "all" | "game" | "game-plus-trainer";
+type FindGameTimeOfDayFilter = "all" | "morning" | "day" | "evening";
+type FindGameSelectOption = { value: string; label: string };
+type GamePlusTrainerMeta = {
+  priceLabel: string | null;
+};
+type FindGameListItem =
+  | { kind: "game"; id: string; sortTs: number; game: PadelGameRecord }
+  | { kind: "game-plus-trainer"; id: string; sortTs: number; training: GroupTrainingSummary };
 
 const PAGE_SIZE = 12;
 const DAYS_BEFORE_TODAY = 0;
@@ -31,6 +66,41 @@ const DEFAULT_GAME_CREATE_PATH =
   (PUBLIC_GAME_CREATE_PATH || "/game_create").replace(/\/+$/, "") || "/game_create";
 const DEFAULT_GAME_JOIN_PATH =
   (PUBLIC_INVITE_PATH || "/game_join").replace(/\/+$/, "") || "/game_join";
+const FRIENDLY_TAG_LABEL = "Лето.Падел";
+const FRIENDLY_TAG_SUBSCRIPTION_URL = "https://padlhub.ru/ab_leto";
+const GAME_PLUS_TRAINER_GROUP_PATH = "/group";
+const GAME_PLUS_TRAINER_DEFAULT_PRICE_VALUE_LABEL = "5500";
+const GAME_PLUS_TRAINER_INCLUDED_PRICE_LABELS = ["Энергия5", "академия", "РА"] as const;
+const GAME_PLUS_TRAINER_DEFAULT_PRICE_LABEL = [
+  GAME_PLUS_TRAINER_DEFAULT_PRICE_VALUE_LABEL,
+  ...GAME_PLUS_TRAINER_INCLUDED_PRICE_LABELS,
+].join("/");
+const FIND_GAME_FILTER_ALL_VALUE = "__all__";
+const FIND_GAME_KIND_OPTIONS: Array<{ value: FindGameKindFilter; label: string }> = [
+  { value: "all", label: "Все типы" },
+  { value: "game", label: "Игра" },
+  { value: "game-plus-trainer", label: "Игра+Тренер" },
+];
+const FIND_GAME_TIME_OF_DAY_OPTIONS: Array<{ value: FindGameTimeOfDayFilter; label: string }> = [
+  { value: "all", label: "Все" },
+  { value: "morning", label: "Утро до 11" },
+  { value: "day", label: "День с 11 до 18" },
+  { value: "evening", label: "Вечер после 18" },
+];
+const INACTIVE_GAME_MEMBERSHIP_STATUS_MARKERS = [
+  "CANCEL",
+  "DECLIN",
+  "FAIL",
+  "ERROR",
+  "EXPIRE",
+  "REFUND",
+  "REJECT",
+  "VOID",
+  "CLOSE",
+  "ARCHIVE",
+  "LEFT",
+  "REMOV",
+] as const;
 
 function normalizePhone(value: string | null | undefined): string | null {
   const digits = String(value || "").replace(/\D/g, "");
@@ -38,6 +108,16 @@ function normalizePhone(value: string | null | undefined): string | null {
   if (digits.length === 10) return `7${digits}`;
   if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
   return digits;
+}
+
+function isDevCabinetUrl(value: string | null | undefined): boolean {
+  const raw = String(value || "").trim();
+  if (!raw) return false;
+  try {
+    return new URL(raw, typeof window !== "undefined" ? window.location.origin : undefined).pathname.includes("/lk_dev");
+  } catch {
+    return raw.includes("/lk_dev");
+  }
 }
 
 function isRecordObject(value: unknown): value is Record<string, unknown> {
@@ -53,15 +133,16 @@ function toNumber(value: unknown): number | null {
   return null;
 }
 
-function pickString(source: Record<string, unknown> | null, keys: string[]): string | null {
-  if (!source) return null;
-  for (const key of keys) {
-    const value = source[key];
-    if (typeof value !== "string") continue;
-    const normalized = value.trim();
-    if (normalized) return normalized;
-  }
-  return null;
+function isSinglesFormat(value: unknown): boolean {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "singles"
+    || normalized.includes("1x1")
+    || normalized.includes("1х1")
+    || normalized.includes("1 на 1");
+}
+
+function isSinglesCourtName(value: unknown): boolean {
+  return /сингл|single|1\s*[xх]\s*1|1\s*на\s*1/i.test(String(value || ""));
 }
 
 function getSplitPaymentMetadata(game: PadelGameRecord | undefined): Record<string, unknown> | null {
@@ -69,16 +150,119 @@ function getSplitPaymentMetadata(game: PadelGameRecord | undefined): Record<stri
   return metadata && isRecordObject(metadata.splitPayment) ? metadata.splitPayment : null;
 }
 
+function hasSplitPaymentSignal(splitPayment: Record<string, unknown> | null): boolean {
+  if (!splitPayment) return false;
+  if (splitPayment.enabled === true) return true;
+  if (splitPayment.enabled === false) return false;
+
+  const mode = typeof splitPayment.mode === "string" ? splitPayment.mode.trim().toLowerCase() : "";
+  if (mode.includes("split") || mode.includes("group")) return true;
+
+  const payments = Array.isArray(splitPayment.payments) ? splitPayment.payments : [];
+  if (payments.some((item) => isRecordObject(item))) return true;
+
+  const paymentModes = Array.isArray(splitPayment.paymentModes) ? splitPayment.paymentModes : [];
+  if (paymentModes.some((item) => typeof item === "string" && item.trim().length > 0)) return true;
+
+  if (typeof splitPayment.subscriptionProductId === "string" && splitPayment.subscriptionProductId.trim()) return true;
+  if (typeof splitPayment.oneTimeProductId === "string" && splitPayment.oneTimeProductId.trim()) return true;
+
+  const shareCount = toNumber(splitPayment.shareCount);
+  const shareAmount = toNumber(splitPayment.shareAmount ?? splitPayment.amount ?? splitPayment.toPay);
+  const totalAmount = toNumber(splitPayment.totalAmount);
+  const oneTimeBaseAmount = toNumber(splitPayment.oneTimeBaseAmount ?? splitPayment.baseShareAmount);
+  if (
+    (shareCount === 2 || shareCount === 4)
+    && ((shareAmount ?? 0) > 0 || (totalAmount ?? 0) > 0 || (oneTimeBaseAmount ?? 0) > 0)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function isSplitPaymentGame(game: PadelGameRecord | undefined): boolean {
   if (!game) return false;
   if (game.settings?.payMode === "split") return true;
   const splitPayment = getSplitPaymentMetadata(game);
-  return Boolean(splitPayment?.enabled);
+  return hasSplitPaymentSignal(splitPayment);
+}
+
+function hasSubscriptionPaymentTypeToken(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toUpperCase();
+  if (!normalized) return false;
+  return normalized.includes("SUBSCRIPTION") || normalized.includes("ABON");
+}
+
+function hasFriendlySubscriptionSignal(game: PadelGameRecord | undefined): boolean {
+  if (!game) return false;
+  if (isSplitPaymentGame(game)) return true;
+
+  const metadata = isRecordObject(game.metadata) ? game.metadata : null;
+  if (!metadata) return false;
+
+  if (metadata.canJoinBySubscription === true) return true;
+  if (metadata.hasSubscriptionBooking === true) return true;
+
+  const paymentTypes = Array.isArray(metadata.bookingPaymentTypes)
+    ? metadata.bookingPaymentTypes
+    : [];
+  if (paymentTypes.some((value) => hasSubscriptionPaymentTypeToken(value))) return true;
+
+  return false;
+}
+
+function extractGameCustomTitle(game: PadelGameRecord | undefined): string | null {
+  const metadata = isRecordObject(game?.metadata) ? game.metadata : null;
+  if (!metadata) return null;
+  const value = typeof metadata.gameTitle === "string" ? metadata.gameTitle.trim() : "";
+  return value || null;
+}
+
+function extractGameJoinPrice(game: PadelGameRecord | undefined): number | null {
+  const metadata = isRecordObject(game?.metadata) ? game.metadata : null;
+  if (!metadata) return null;
+  if (typeof metadata.joinPrice === "number" && Number.isFinite(metadata.joinPrice)) {
+    const normalized = Math.max(0, Math.round(metadata.joinPrice));
+    return normalized > 0 ? normalized : null;
+  }
+  const raw = typeof metadata.joinPrice === "string" ? metadata.joinPrice.trim() : "";
+  const digits = raw.replace(/[^\d]/g, "").replace(/^0+(?=\d)/, "");
+  if (!digits) return null;
+  const numeric = Number.parseInt(digits, 10);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
 }
 
 function formatRubPrice(value: number | null): string | null {
   if (value === null || !Number.isFinite(value)) return null;
   return `${Math.round(value).toLocaleString("ru-RU")} ₽`;
+}
+
+function getGamePlusTrainerProductRubPrice(product: TournamentVivaProduct): number | null {
+  if (typeof product.targetAmount === "number" && Number.isFinite(product.targetAmount)) {
+    return Math.max(0, Math.round(product.targetAmount));
+  }
+  if (typeof product.priceLabel === "string" && product.priceLabel.trim()) {
+    const digits = product.priceLabel.replace(/[^\d]/g, "").replace(/^0+(?=\d)/, "");
+    if (digits) {
+      const parsed = Number.parseInt(digits, 10);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  if (typeof product.cost === "number" && Number.isFinite(product.cost)) {
+    return Math.max(0, Math.round(product.cost / 100));
+  }
+  return null;
+}
+
+function buildGamePlusTrainerPriceLabel(checkout: TournamentVivaCheckout | null): string | null {
+  if (!checkout) return null;
+  const oneTimePrice = checkout.oneTimes
+    .map(getGamePlusTrainerProductRubPrice)
+    .find((price): price is number => price !== null && price > 0);
+  const priceValueLabel = oneTimePrice ? String(oneTimePrice) : GAME_PLUS_TRAINER_DEFAULT_PRICE_VALUE_LABEL;
+  return [priceValueLabel, ...GAME_PLUS_TRAINER_INCLUDED_PRICE_LABELS].join("/");
 }
 
 function getSplitJoinPriceText(game: PadelGameRecord | undefined): string | null {
@@ -87,33 +271,9 @@ function getSplitJoinPriceText(game: PadelGameRecord | undefined): string | null
   const shareAmountMinor = toNumber(splitPayment?.shareAmountMinor ?? splitPayment?.amountMinor ?? splitPayment?.toPayMinor);
   const shareAmount =
     toNumber(splitPayment?.shareAmount ?? splitPayment?.amount ?? splitPayment?.toPay)
-    ?? (shareAmountMinor !== null ? shareAmountMinor / 100 : null);
+    ?? (shareAmountMinor !== null ? shareAmountMinor / 100 : null)
+    ?? extractGameJoinPrice(game);
   return formatRubPrice(shareAmount);
-}
-
-function getSplitCancelDeadlineAt(game: PadelGameRecord | undefined): string | null {
-  if (!isSplitPaymentGame(game)) return null;
-  const splitPayment = getSplitPaymentMetadata(game);
-  const deadlineAt = pickString(splitPayment, ["deadlineAt", "cancelAt", "expiresAt", "expires_at"]);
-  if (!deadlineAt || !Number.isFinite(Date.parse(deadlineAt))) return null;
-  return deadlineAt;
-}
-
-function formatCountdown(deadlineAt?: string | null, nowMs = Date.now()): string | null {
-  if (!deadlineAt) return null;
-  const deadlineMs = Date.parse(deadlineAt);
-  if (!Number.isFinite(deadlineMs)) return null;
-
-  const totalMinutes = Math.max(0, Math.ceil((deadlineMs - nowMs) / 60000));
-  if (totalMinutes <= 0) return "0 мин";
-
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const minutes = totalMinutes % 60;
-
-  if (days > 0) return `${days} д ${hours} ч`;
-  if (hours > 0) return `${hours} ч ${minutes} мин`;
-  return `${minutes} мин`;
 }
 
 function initialsFromName(value: string | null | undefined): string {
@@ -168,19 +328,61 @@ function isGamePendingPayment(game: PadelGameRecord): boolean {
   return status.includes("PAYMENT_PENDING") || status.includes("DRAFT") || game.payment?.paid === false;
 }
 
+function isInactiveMembershipStatus(value: string | null | undefined): boolean {
+  const status = String(value || "").trim().toUpperCase();
+  if (!status) return false;
+  return INACTIVE_GAME_MEMBERSHIP_STATUS_MARKERS.some((marker) => status.includes(marker));
+}
+
+function normalizePersonName(value: string | null | undefined): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/\s+/g, " ");
+}
+
+function isPlaceholderName(value: string | null | undefined): boolean {
+  const normalized = normalizePersonName(value);
+  return normalized === "игрок" || normalized === "организатор";
+}
+
+function hasMeaningfulPlayerIdentity(player: PadelGamePlayer | null | undefined): boolean {
+  if (!player || isInactiveMembershipStatus(player.status)) return false;
+  if (String(player.id || "").trim()) return true;
+  if (normalizePhone(player.phone)) return true;
+  const name = String(player.name || "").trim();
+  return Boolean(name && !isPlaceholderName(name));
+}
+
+function countActiveParticipants(game: PadelGameRecord): number {
+  return (game.participants ?? []).filter((player) => hasMeaningfulPlayerIdentity(player)).length;
+}
+
 function resolveMaxPlayers(game: PadelGameRecord): number {
+  const metadata = isRecordObject(game.metadata) ? game.metadata : null;
+  const splitPayment = getSplitPaymentMetadata(game);
+  const splitShareCount = toNumber(splitPayment?.shareCount);
+  const singlesByCourt = [
+    game.booking?.roomName,
+    metadata?.roomName,
+    metadata?.courtName,
+    metadata?.courtTitle,
+  ].some((value) => isSinglesCourtName(value));
+  if (isSinglesFormat(metadata?.gameFormat ?? metadata?.format) || splitShareCount === 2 || singlesByCourt) {
+    return 2;
+  }
+
   const inviteLimit = game.invite?.maxPlayers;
   if (typeof inviteLimit === "number" && Number.isFinite(inviteLimit) && inviteLimit > 0) {
     return Math.floor(inviteLimit);
   }
 
-  const metadata = game.metadata;
-  if (isRecordObject(metadata)) {
+  if (metadata) {
     const fromMeta = toNumber(metadata.maxPlayers ?? metadata.playersLimit);
     if (fromMeta !== null && fromMeta > 0) return Math.floor(fromMeta);
 
-    const format = String(metadata.gameFormat || metadata.format || "").trim().toLowerCase();
-    if (format === "singles" || format.includes("1x1") || format.includes("1 на 1")) return 2;
+    if (isSinglesFormat(metadata.gameFormat ?? metadata.format)) return 2;
   }
 
   return 4;
@@ -230,45 +432,6 @@ function getViewerLevel(profile: UserProfileType | null): string | null {
 function getViewerLevelNumeric(profile: UserProfileType | null): number | null {
   if (!profile) return null;
   return parseNumericLevel(getCustomFieldValue(profile, CUSTOM_FIELD_IDS.lkPadelLevelNumeric));
-}
-
-function getRatingRank(value: string | number | null | undefined): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-
-  const normalized = String(value || "")
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, "");
-  if (!normalized) return null;
-
-  const numeric = Number(normalized.replace(",", "."));
-  if (Number.isFinite(numeric)) return numeric;
-
-  const ranks: Record<string, number> = {
-    D: 1,
-    "D+": 2,
-    C: 3,
-    "C+": 4,
-    B: 5,
-    "B+": 6,
-    A: 7,
-  };
-
-  return ranks[normalized] ?? null;
-}
-
-function isViewerBelowGameLevel(game: PadelGameRecord, viewer: FindGameViewer): boolean {
-  if (game.settings?.ratingGame === false) return false;
-
-  const viewerRank = viewer.levelNumeric ?? getRatingRank(viewer.level);
-  if (viewerRank === null) return false;
-
-  const minRank = getRatingRank(game.settings?.minRating);
-  const maxRank = getRatingRank(game.settings?.maxRating);
-
-  return (minRank !== null && viewerRank < minRank) || (maxRank !== null && viewerRank > maxRank);
 }
 
 function getRatingTag(game: PadelGameRecord): string {
@@ -333,6 +496,74 @@ function formatLocationLine(game: PadelGameRecord): string {
   return [game.booking?.studioName, game.booking?.roomName].filter(Boolean).join(" · ") || "Станция уточняется";
 }
 
+function resolveTrainingTimestamp(value: string | null | undefined): number | null {
+  const parsed = new Date(String(value || "").trim());
+  return Number.isFinite(parsed.getTime()) ? parsed.getTime() : null;
+}
+
+function resolveTrainingStartTs(training: GroupTrainingSummary): number | null {
+  return resolveTrainingTimestamp(training.timeFrom);
+}
+
+function resolveTrainingEndTs(training: GroupTrainingSummary): number | null {
+  return resolveTrainingTimestamp(training.timeTo) ?? resolveTrainingTimestamp(training.timeFrom);
+}
+
+function formatTrainingDateLine(training: GroupTrainingSummary): string {
+  const parsed = parseLocalGameDate(training.date);
+  if (!parsed) return training.title || "Игра+Тренер";
+  return training.title || parsed.toLocaleDateString("ru-RU", {
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+  });
+}
+
+function getTrainingDateBadgeLabels(training: GroupTrainingSummary) {
+  const parsed = parseLocalGameDate(training.date);
+  if (!parsed) {
+    return {
+      monthLabel: "ИГРА",
+      dayLabel: "—",
+      weekdayLabel: "—",
+    };
+  }
+
+  return {
+    monthLabel: parsed
+      .toLocaleDateString("ru-RU", { month: "short" })
+      .replace(".", "")
+      .trim()
+      .slice(0, 3)
+      .toUpperCase(),
+    dayLabel: parsed.toLocaleDateString("ru-RU", { day: "2-digit" }),
+    weekdayLabel: parsed
+      .toLocaleDateString("ru-RU", { weekday: "short" })
+      .replace(".", "")
+      .toUpperCase(),
+  };
+}
+
+function formatTrainingLocationLine(training: GroupTrainingSummary): string {
+  return [training.studioName, training.roomName].filter(Boolean).join(" · ") || "Станция уточняется";
+}
+
+function getTrainingLevelTag(training: GroupTrainingSummary): string {
+  return training.levelLabel || "Игра+Тренер";
+}
+
+function resolveTrainingMaxPlayers(training: GroupTrainingSummary): number {
+  if (training.maxClientsCount > 0) return training.maxClientsCount;
+  return Math.max(3, training.clientsCount);
+}
+
+function isJoinableGamePlusTrainerTraining(training: GroupTrainingSummary): boolean {
+  if (!training.id || training.status === "CANCELLED") return false;
+  const endTs = resolveTrainingEndTs(training);
+  if (endTs !== null && endTs < Date.now()) return false;
+  return training.status === "AVAILABLE" || training.inBooking || training.inWaitlist;
+}
+
 function normalizeComparable(value: string | null | undefined): string | null {
   const normalized = String(value || "")
     .trim()
@@ -342,6 +573,86 @@ function normalizeComparable(value: string | null | undefined): string | null {
     .replace(/\s+/g, " ")
     .trim();
   return normalized || null;
+}
+
+function buildStationFilterValue(
+  studioId: string | null | undefined,
+  studioName: string | null | undefined,
+): string | null {
+  const normalizedStudioId = String(studioId || "").trim();
+  if (normalizedStudioId) return `id:${normalizedStudioId}`;
+  const normalizedStudioName = normalizeComparable(studioName);
+  return normalizedStudioName ? `name:${normalizedStudioName}` : null;
+}
+
+function matchesSelectedStationFilter(game: PadelGameRecord, stationFilterValue: string): boolean {
+  if (stationFilterValue === FIND_GAME_FILTER_ALL_VALUE) return true;
+  const gameStationValue = buildStationFilterValue(game.booking?.studioId, game.booking?.studioName);
+  return Boolean(gameStationValue && gameStationValue === stationFilterValue);
+}
+
+function matchesSelectedTrainingStationFilter(training: GroupTrainingSummary, stationFilterValue: string): boolean {
+  if (stationFilterValue === FIND_GAME_FILTER_ALL_VALUE) return true;
+  const trainingStationValue = buildStationFilterValue(training.studioId, training.studioName);
+  return Boolean(trainingStationValue && trainingStationValue === stationFilterValue);
+}
+
+function matchesSelectedLevelFilter(game: PadelGameRecord, levelFilterValue: string): boolean {
+  if (levelFilterValue === FIND_GAME_FILTER_ALL_VALUE) return true;
+  return getRatingTag(game) === levelFilterValue;
+}
+
+function matchesSelectedTrainingLevelFilter(training: GroupTrainingSummary, levelFilterValue: string): boolean {
+  if (levelFilterValue === FIND_GAME_FILTER_ALL_VALUE) return true;
+  return getTrainingLevelTag(training) === levelFilterValue;
+}
+
+function parseTimeMinutes(value: string | null | undefined): number | null {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return null;
+  const hours = Number.parseInt(match[1], 10);
+  const minutes = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function matchesTimeOfDayFilter(game: PadelGameRecord, timeOfDayFilter: FindGameTimeOfDayFilter): boolean {
+  if (timeOfDayFilter === "all") return true;
+  const startMinutes = parseTimeMinutes(game.booking?.timeFrom || game.booking?.timeTo);
+  if (startMinutes === null) return false;
+
+  if (timeOfDayFilter === "morning") {
+    return startMinutes >= 7 * 60 && startMinutes < 11 * 60;
+  }
+  if (timeOfDayFilter === "day") {
+    return startMinutes >= 11 * 60 && startMinutes < 18 * 60;
+  }
+  return startMinutes >= 18 * 60 && startMinutes < 24 * 60;
+}
+
+function getTrainingStartMinutes(training: GroupTrainingSummary): number | null {
+  const direct = parseTimeMinutes(training.timeFrom);
+  if (direct !== null) return direct;
+  const parsed = new Date(training.timeFrom);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed.getHours() * 60 + parsed.getMinutes();
+}
+
+function matchesTrainingTimeOfDayFilter(training: GroupTrainingSummary, timeOfDayFilter: FindGameTimeOfDayFilter): boolean {
+  if (timeOfDayFilter === "all") return true;
+  const startMinutes = getTrainingStartMinutes(training);
+  if (startMinutes === null) return false;
+
+  if (timeOfDayFilter === "morning") {
+    return startMinutes >= 7 * 60 && startMinutes < 11 * 60;
+  }
+  if (timeOfDayFilter === "day") {
+    return startMinutes >= 11 * 60 && startMinutes < 18 * 60;
+  }
+  return startMinutes >= 18 * 60 && startMinutes < 24 * 60;
 }
 
 function matchesStationFilter(
@@ -360,6 +671,22 @@ function matchesStationFilter(
   return Boolean(gameStudioName && (gameStudioName.includes(studioName) || studioName.includes(gameStudioName)));
 }
 
+function matchesTrainingStationFilter(
+  training: GroupTrainingSummary,
+  presetStudioId: string | null | undefined,
+  presetStudioName: string | null | undefined,
+): boolean {
+  const studioId = String(presetStudioId || "").trim();
+  const studioName = normalizeComparable(presetStudioName);
+  if (!studioId && !studioName) return true;
+
+  if (studioId && training.studioId === studioId) return true;
+  if (!studioName) return false;
+
+  const trainingStudioName = normalizeComparable(training.studioName);
+  return Boolean(trainingStudioName && (trainingStudioName.includes(studioName) || studioName.includes(trainingStudioName)));
+}
+
 function matchesDateFilter(game: PadelGameRecord, dateKey: string | null): boolean {
   if (!dateKey) return true;
   return game.booking?.date === dateKey;
@@ -373,6 +700,15 @@ function buildAbsolutePageUrl(path: string, fallbackOrigin?: string): URL {
     return new URL(path, "https://padlhub.ru");
   }
   return new URL(path, window.location.origin);
+}
+
+function buildFindGameReturnUrl(fallbackUrl: string): string {
+  if (typeof window === "undefined") return fallbackUrl;
+  try {
+    return new URL(window.location.href).toString();
+  } catch {
+    return fallbackUrl;
+  }
 }
 
 function normalizePadlHubInviteOrigin(url: URL): URL {
@@ -415,17 +751,35 @@ function isJoinablePublicGame(
   if (endTs !== null && endTs < Date.now()) return false;
 
   const maxPlayers = resolveMaxPlayers(game);
-  const participantCount = game.participants?.length ?? 0;
+  const participantCount = countActiveParticipants(game);
   const viewerState = resolveViewerState(game, viewer);
   if (viewerState !== "none") return true;
 
   return participantCount < maxPlayers || resolveWaitlistEnabled(game);
 }
 
+async function fetchGamePlusTrainerMeta(training: GroupTrainingSummary): Promise<[string, GamePlusTrainerMeta]> {
+  const checkoutResult = await apiFetchTournamentVivaPublicCheckout(
+    training.id,
+    { tournament: training.raw },
+  ).catch(() => ({ data: null }));
+  const checkout = checkoutResult.data ?? null;
+  return [
+    training.id,
+    {
+      priceLabel: buildGamePlusTrainerPriceLabel(checkout),
+    },
+  ];
+}
+
 function GamePlayerAvatar({ player, index }: { player: PadelGamePlayer; index: number }) {
   const [imageFailed, setImageFailed] = useState(false);
-  const level = player.rating || (typeof player.ratingNumeric === "number" ? getLetterGrade(player.ratingNumeric) : null);
-  const numeric = typeof player.ratingNumeric === "number" ? player.ratingNumeric : null;
+  const numeric = (
+    typeof player.ratingNumeric === "number" && Number.isFinite(player.ratingNumeric)
+      ? player.ratingNumeric
+      : toNumber(player.rating)
+  );
+  const level = normalizeLevelGradeLabel(player.rating, numeric);
   const photoSrc = (player.photo || "").trim();
   const showPhoto = Boolean(photoSrc) && !imageFailed;
   const progress = numeric !== null
@@ -455,6 +809,16 @@ function GamePlayerAvatar({ player, index }: { player: PadelGamePlayer; index: n
   );
 }
 
+function OccupiedPlayerSlot() {
+  return (
+    <div className="find-game-player find-game-player-occupied">
+      <span className="find-game-player-ring" aria-hidden="true">
+        <span className="find-game-player-avatar find-game-player-fallback">PH</span>
+      </span>
+    </div>
+  );
+}
+
 function EmptyPlayerSlot() {
   return (
     <div className="find-game-player find-game-player-empty">
@@ -463,42 +827,142 @@ function EmptyPlayerSlot() {
   );
 }
 
+function GamePlusTrainerCard({
+  training,
+  meta,
+  onOpen,
+}: {
+  training: GroupTrainingSummary;
+  meta: GamePlusTrainerMeta | null;
+  onOpen: (training: GroupTrainingSummary) => void;
+}) {
+  const maxPlayers = resolveTrainingMaxPlayers(training);
+  const participantCount = Math.min(training.clientsCount, maxPlayers);
+  const freeSlots = Math.max(0, maxPlayers - participantCount);
+  const badgeLabels = getTrainingDateBadgeLabels(training);
+  const priceLabel = meta?.priceLabel || GAME_PLUS_TRAINER_DEFAULT_PRICE_LABEL;
+  const actionLabel = training.inBooking ? "Открыть запись" : "Записаться";
+
+  return (
+    <article
+      className="find-game-card find-game-card-clickable find-game-card-trainer"
+      onClick={(event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest("button, a, input, textarea, select, label")) return;
+        onOpen(training);
+      }}
+    >
+      <div className="find-game-card-head">
+        <CalendarDateBadge
+          monthLabel={badgeLabels.monthLabel}
+          dayLabel={badgeLabels.dayLabel}
+          weekdayLabel={badgeLabels.weekdayLabel}
+          variant="game-card"
+          badgeClassName="game-created-date-badge"
+          buttonClassName="game-created-date-badge-button"
+          disabled
+        />
+        <div className="find-game-main">
+          <div className="find-game-date">{formatTrainingDateLine(training)}</div>
+          <div className="find-game-time">{training.timeLabel.replace("-", " - ")}</div>
+          <div className="find-game-location">{formatTrainingLocationLine(training)}</div>
+        </div>
+        <div className="find-game-count">{participantCount}/{maxPlayers}</div>
+      </div>
+
+      <div className="find-game-tags">
+        <span className="game-created-tag game-created-tag-level">{getTrainingLevelTag(training)}</span>
+        {training.girlsOnly && <span className="game-created-tag game-created-tag-range">м/ж</span>}
+        {freeSlots > 0 ? (
+          <span className="game-created-tag game-created-tag-neutral">Есть места</span>
+        ) : (
+          <span className="game-created-tag game-created-tag-waitlist">Лист ожидания</span>
+        )}
+      </div>
+
+      {training.trainerName && (
+        <div className="find-game-organizer find-game-training-coach">
+          {training.trainerAvatarUrl ? (
+            <img className="find-game-training-coach-avatar" src={training.trainerAvatarUrl} alt="" />
+          ) : (
+            <span className="find-game-training-coach-avatar find-game-training-coach-fallback" aria-hidden="true">
+              {initialsFromName(training.trainerName)}
+            </span>
+          )}
+          <span>Тренер: <span>{training.trainerName}</span></span>
+          <span className="find-game-friendly-tag find-game-friendly-tag-gold">
+            <span className="find-game-friendly-tag-dot" aria-hidden="true" />
+            <span className="find-game-friendly-tag-text">{FRIENDLY_TAG_LABEL}</span>
+          </span>
+        </div>
+      )}
+
+      <div className="find-game-footer">
+        <div className="find-game-footer-divider" />
+        <div className="find-game-footer-row">
+          <div className="find-game-players">
+            {Array.from({ length: participantCount }, (_, index) => (
+              <OccupiedPlayerSlot key={`occupied-${index}`} />
+            ))}
+            {Array.from({ length: freeSlots }, (_, index) => (
+              <EmptyPlayerSlot key={`empty-${index}`} />
+            ))}
+          </div>
+
+          <div className="find-game-footer-actions">
+            <div className="find-game-training-price" aria-label="Условия записи">
+              <strong>{priceLabel}</strong>
+            </div>
+            <button
+              type="button"
+              className="find-game-action"
+              onClick={() => onOpen(training)}
+            >
+              {actionLabel}
+            </button>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function FindGameCard({
   game,
   viewer,
   onOpen,
+  onOpenFriendlyTag,
 }: {
   game: PadelGameRecord;
   viewer: FindGameViewer;
   onOpen: (game: PadelGameRecord) => void;
+  onOpenFriendlyTag: (game: PadelGameRecord) => void;
 }) {
   const maxPlayers = resolveMaxPlayers(game);
   const participants = (game.participants ?? []).slice(0, maxPlayers);
   const freeSlots = Math.max(0, maxPlayers - participants.length);
   const viewerState = resolveViewerState(game, viewer);
-  const waitlistEnabled = resolveWaitlistEnabled(game);
-  const shouldUseWaitlistByLevel = viewerState === "none" && isViewerBelowGameLevel(game, viewer);
   const badgeLabels = getDateBadgeLabels(game);
-  const actionLabel = viewerState === "participant"
-    ? "Открыть игру"
-    : viewerState === "waitlist"
-      ? "Открыть заявку"
-      : shouldUseWaitlistByLevel
-        ? "В лист ожидания"
-        : freeSlots > 0
-        ? "Присоединиться"
-        : waitlistEnabled
-          ? "В лист ожидания"
-          : "Мест нет";
+  const cardTitle = extractGameCustomTitle(game) ?? formatDateLine(game);
+  const actionLabel = viewerState === "participant" ? "Открыть игру" : "Открыть";
   const participantsLabel = `${participants.length}/${maxPlayers}`;
   const waitlistCount = game.waitlist?.length ?? 0;
+  const splitPaymentGame = isSplitPaymentGame(game);
+  const friendlySubscriptionGame = hasFriendlySubscriptionSignal(game);
   const splitJoinPriceText = getSplitJoinPriceText(game);
-  const splitCancelDeadlineAt = getSplitCancelDeadlineAt(game);
-  const splitCountdownText = formatCountdown(splitCancelDeadlineAt, Date.now());
-  const showSplitJoinInfo = freeSlots > 0 && Boolean(splitJoinPriceText || splitCountdownText);
+  const showSplitJoinInfo = splitPaymentGame && freeSlots > 0 && Boolean(splitJoinPriceText);
+  const showFriendlyTag = friendlySubscriptionGame && freeSlots > 0;
+  const showDefaultActionButton = true;
 
   return (
-    <article className="find-game-card">
+    <article
+      className={`find-game-card find-game-card-clickable${splitPaymentGame ? " find-game-card-split" : ""}`}
+      onClick={(event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest("button, a, input, textarea, select, label")) return;
+        onOpen(game);
+      }}
+    >
       <div className="find-game-card-head">
         <CalendarDateBadge
           monthLabel={badgeLabels.monthLabel}
@@ -511,7 +975,7 @@ function FindGameCard({
           onClick={() => addGameToCalendar(game)}
         />
         <div className="find-game-main">
-          <div className="find-game-date">{formatDateLine(game)}</div>
+          <div className="find-game-date">{cardTitle}</div>
           <div className="find-game-time">{formatTimeLine(game)}</div>
           <div className="find-game-location">{formatLocationLine(game)}</div>
         </div>
@@ -528,7 +992,6 @@ function FindGameCard({
         ) : (
           <span className="game-created-tag game-created-tag-waitlist">Лист ожидания</span>
         )}
-        {viewer.level && <span className="game-created-tag game-created-tag-duration">Ваш {viewer.level}</span>}
         {waitlistCount > 0 && (
           <span className="game-created-tag game-created-tag-waitlist">Ожидают: {waitlistCount}</span>
         )}
@@ -536,7 +999,21 @@ function FindGameCard({
 
       {game.organizer?.name && (
         <div className="find-game-organizer">
-          Организатор: <span>{game.organizer.name}</span>
+          <span>Организатор: <span>{game.organizer.name}</span></span>
+          {showFriendlyTag && (
+            <button
+              type="button"
+              className="find-game-friendly-tag"
+              aria-label="Тег игры"
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenFriendlyTag(game);
+              }}
+            >
+              <span className="find-game-friendly-tag-dot" aria-hidden="true" />
+              <span className="find-game-friendly-tag-text">{FRIENDLY_TAG_LABEL}</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -555,28 +1032,21 @@ function FindGameCard({
           <div className="find-game-footer-actions">
             {showSplitJoinInfo && (
               <div className="find-game-split-join-info" aria-label="Условия присоединения к сборной игре">
-                {splitJoinPriceText && (
-                  <div className="find-game-split-join-info-row">
-                    <span>Вход</span>
-                    <strong>{splitJoinPriceText}</strong>
-                  </div>
-                )}
-                {splitCountdownText && (
-                  <div className="find-game-split-join-info-row">
-                    <span>Отмена через</span>
-                    <strong>{splitCountdownText}</strong>
-                  </div>
-                )}
+                <div className="find-game-split-join-info-row">
+                  <span>Присоединиться за</span>
+                  <strong>{splitJoinPriceText}</strong>
+                </div>
               </div>
             )}
-            <button
-              type="button"
-              className="find-game-action"
-              disabled={freeSlots <= 0 && !waitlistEnabled && viewerState === "none"}
-              onClick={() => onOpen(game)}
-            >
-              {actionLabel}
-            </button>
+            {showDefaultActionButton && (
+              <button
+                type="button"
+                className="find-game-action"
+                onClick={() => onOpen(game)}
+              >
+                {actionLabel}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -589,9 +1059,13 @@ export default function FindGamePage({
   cabinetUrl = DEFAULT_CABINET_URL,
   presetStudioId = null,
   presetStudioName = null,
+  includeGamePlusTrainer = false,
 }: FindGamePageProps) {
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [games, setGames] = useState<PadelGameRecord[]>([]);
+  const [gamePlusTrainerTrainings, setGamePlusTrainerTrainings] = useState<GroupTrainingSummary[]>([]);
+  const [gamePlusTrainerMetaById, setGamePlusTrainerMetaById] = useState<Record<string, GamePlusTrainerMeta>>({});
+  const [gamePlusTrainerLoading, setGamePlusTrainerLoading] = useState(false);
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(true);
@@ -599,8 +1073,20 @@ export default function FindGamePage({
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dateIndex, setDateIndex] = useState(TODAY_DATE_INDEX);
+  const [stationFilterValue, setStationFilterValue] = useState(
+    buildStationFilterValue(presetStudioId, presetStudioName) ?? FIND_GAME_FILTER_ALL_VALUE,
+  );
+  const [stationFilterLabel, setStationFilterLabel] = useState(
+    String(presetStudioName || "").trim() || "Выбранная станция",
+  );
+  const [levelFilterValue, setLevelFilterValue] = useState(FIND_GAME_FILTER_ALL_VALUE);
+  const [kindFilter, setKindFilter] = useState<FindGameKindFilter>("all");
+  const [timeOfDayFilter, setTimeOfDayFilter] = useState<FindGameTimeOfDayFilter>("all");
+  const [isFriendlyTagModalOpen, setFriendlyTagModalOpen] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const requestInFlightRef = useRef(false);
+  const isStationLockedByPreset = Boolean(buildStationFilterValue(presetStudioId, presetStudioName));
+  const shouldIncludeGamePlusTrainer = includeGamePlusTrainer === true;
 
   const dates = useMemo(() => {
     const base = new Date();
@@ -620,22 +1106,113 @@ export default function FindGamePage({
     levelNumeric: getViewerLevelNumeric(profile),
   }), [profile]);
 
+  const stationOptions = useMemo(() => {
+    const byValue = new Map<string, string>();
+    games.forEach((game) => {
+      const value = buildStationFilterValue(game.booking?.studioId, game.booking?.studioName);
+      const label = String(game.booking?.studioName || "").trim() || "Станция";
+      if (!value || byValue.has(value)) return;
+      byValue.set(value, label);
+    });
+    if (shouldIncludeGamePlusTrainer) {
+      gamePlusTrainerTrainings.forEach((training) => {
+        const value = buildStationFilterValue(training.studioId, training.studioName);
+        const label = String(training.studioName || "").trim() || "Станция";
+        if (!value || byValue.has(value)) return;
+        byValue.set(value, label);
+      });
+    }
+    const presetValue = buildStationFilterValue(presetStudioId, presetStudioName);
+    const presetLabel = String(presetStudioName || "").trim();
+    if (presetValue && presetLabel && !byValue.has(presetValue)) {
+      byValue.set(presetValue, presetLabel);
+    }
+
+    const options = Array.from(byValue.entries())
+      .map(([value, label]): FindGameSelectOption => ({ value, label }))
+      .sort((left, right) => left.label.localeCompare(right.label, "ru"));
+
+    const withDefault = isStationLockedByPreset
+      ? options
+      : [{ value: FIND_GAME_FILTER_ALL_VALUE, label: "Все станции" }, ...options];
+
+    if (
+      stationFilterValue !== FIND_GAME_FILTER_ALL_VALUE
+      && !withDefault.some((option) => option.value === stationFilterValue)
+    ) {
+      withDefault.push({
+        value: stationFilterValue,
+        label: stationFilterLabel || "Выбранная станция",
+      });
+    }
+
+    return withDefault;
+  }, [
+    games,
+    gamePlusTrainerTrainings,
+    isStationLockedByPreset,
+    presetStudioId,
+    presetStudioName,
+    shouldIncludeGamePlusTrainer,
+    stationFilterLabel,
+    stationFilterValue,
+  ]);
+
+  const levelOptions = useMemo(() => {
+    const uniqueLevels = new Set<string>();
+    games.forEach((game) => {
+      uniqueLevels.add(getRatingTag(game));
+    });
+    if (shouldIncludeGamePlusTrainer) {
+      gamePlusTrainerTrainings.forEach((training) => {
+        uniqueLevels.add(getTrainingLevelTag(training));
+      });
+    }
+    const options = Array.from(uniqueLevels)
+      .sort((left, right) => left.localeCompare(right, "ru"))
+      .map((level): FindGameSelectOption => ({ value: level, label: level }));
+    const withDefault: FindGameSelectOption[] = [
+      { value: FIND_GAME_FILTER_ALL_VALUE, label: "Любой уровень" },
+      ...options,
+    ];
+    if (
+      levelFilterValue !== FIND_GAME_FILTER_ALL_VALUE
+      && !withDefault.some((option) => option.value === levelFilterValue)
+    ) {
+      withDefault.push({ value: levelFilterValue, label: levelFilterValue });
+    }
+    return withDefault;
+  }, [games, gamePlusTrainerTrainings, levelFilterValue, shouldIncludeGamePlusTrainer]);
+
   const buildCreateUrl = useCallback(() => {
     const url = buildAbsolutePageUrl(DEFAULT_GAME_CREATE_PATH);
     const stationId = String(presetStudioId || "").trim();
     const stationName = String(presetStudioName || "").trim();
+    const resolvedCabinetUrl = String(cabinetUrl || DEFAULT_CABINET_URL || "").trim();
     if (stationId) {
       url.searchParams.set("stationId", stationId);
     }
     if (stationName) {
       url.searchParams.set("station", stationName);
     }
-    return url.toString();
-  }, [presetStudioId, presetStudioName]);
+    if (resolvedCabinetUrl) {
+      url.searchParams.set("cabinetUrl", resolvedCabinetUrl);
+    }
+    if (isDevCabinetUrl(resolvedCabinetUrl)) {
+      url.searchParams.set("channel", "dev");
+    }
+    return appendCurrentAuthModeToNavigableUrl(url).toString();
+  }, [cabinetUrl, presetStudioId, presetStudioName]);
 
   const buildJoinUrl = useCallback((game: PadelGameRecord) => {
     const normalizedInvite = normalizeUrl(game.inviteUrl);
-    if (normalizedInvite) return normalizedInvite;
+    if (normalizedInvite) {
+      try {
+        return appendCurrentAuthModeToNavigableUrl(new URL(normalizedInvite)).toString();
+      } catch {
+        return appendCurrentAuthModeToNavigableUrl(normalizedInvite).toString();
+      }
+    }
 
     const url = normalizePadlHubInviteOrigin(buildAbsolutePageUrl(DEFAULT_GAME_JOIN_PATH, PUBLIC_INVITE_ORIGIN));
     url.searchParams.set("joinGame", game.id);
@@ -643,7 +1220,29 @@ export default function FindGamePage({
     if (resolvedCabinetUrl) {
       url.searchParams.set("cabinetUrl", resolvedCabinetUrl);
     }
-    return url.toString();
+    return appendCurrentAuthModeToNavigableUrl(url).toString();
+  }, [cabinetUrl]);
+
+  const buildGroupTrainingUrl = useCallback((training: GroupTrainingSummary) => {
+    const url = buildAbsolutePageUrl(GAME_PLUS_TRAINER_GROUP_PATH);
+    url.searchParams.set("exerciseId", training.id);
+    url.searchParams.set("groupExerciseId", training.id);
+    if (training.date) {
+      url.searchParams.set("date", training.date);
+    }
+    if (training.studioId) {
+      url.searchParams.set("studioId", training.studioId);
+    }
+    const resolvedCabinetUrl = String(cabinetUrl || DEFAULT_CABINET_URL || "").trim();
+    const returnUrl = buildFindGameReturnUrl(resolvedCabinetUrl);
+    if (returnUrl) {
+      url.searchParams.set("cabinetUrl", returnUrl);
+    }
+    url.searchParams.set("returnTo", "finde_game");
+    if (isDevCabinetUrl(resolvedCabinetUrl) || IS_DEV_RELEASE_CHANNEL) {
+      url.searchParams.set("channel", "dev");
+    }
+    return appendCurrentAuthModeToNavigableUrl(url).toString();
   }, [cabinetUrl]);
 
   const handleBack = useCallback(() => {
@@ -651,7 +1250,9 @@ export default function FindGamePage({
       onBack();
       return;
     }
-    window.location.href = String(cabinetUrl || DEFAULT_CABINET_URL || "/lk_new");
+    window.location.href = appendCurrentAuthModeToNavigableUrl(
+      String(cabinetUrl || DEFAULT_CABINET_URL || "/lk_new"),
+    ).toString();
   }, [cabinetUrl, onBack]);
 
   const loadPage = useCallback(async (nextOffset: number, mode: "replace" | "append") => {
@@ -723,6 +1324,56 @@ export default function FindGamePage({
   }, [loadPage]);
 
   useEffect(() => {
+    let alive = true;
+
+    if (!shouldIncludeGamePlusTrainer || !selectedDateKey) {
+      setGamePlusTrainerTrainings([]);
+      setGamePlusTrainerMetaById({});
+      setGamePlusTrainerLoading(false);
+      return () => {
+        alive = false;
+      };
+    }
+
+    setGamePlusTrainerLoading(true);
+    setGamePlusTrainerTrainings([]);
+    setGamePlusTrainerMetaById({});
+
+    apiFetchGroupTrainingsByDate(selectedDateKey)
+      .then((response) => {
+        if (!alive) return;
+        const trainings = (response.data ?? [])
+          .filter(isGamePlusTrainerSummary)
+          .filter((training) => matchesTrainingStationFilter(training, presetStudioId, presetStudioName))
+          .filter(isJoinableGamePlusTrainerTraining);
+        setGamePlusTrainerTrainings(trainings);
+        setGamePlusTrainerLoading(false);
+
+        trainings.forEach((training) => {
+          void fetchGamePlusTrainerMeta(training)
+            .then(([id, meta]) => {
+              if (!alive) return;
+              setGamePlusTrainerMetaById((current) => ({
+                ...current,
+                [id]: meta,
+              }));
+            })
+            .catch(() => undefined);
+        });
+      })
+      .catch(() => {
+        if (!alive) return;
+        setGamePlusTrainerTrainings([]);
+        setGamePlusTrainerMetaById({});
+        setGamePlusTrainerLoading(false);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [presetStudioId, presetStudioName, selectedDateKey, shouldIncludeGamePlusTrainer]);
+
+  useEffect(() => {
     if (!hasMore || loading || loadingMore) return undefined;
 
     const node = loadMoreRef.current;
@@ -739,8 +1390,61 @@ export default function FindGamePage({
     return () => observer.disconnect();
   }, [hasMore, loading, loadingMore, loadPage, offset]);
 
-  const visibleCountLabel = games.length > 0
-    ? `${games.length}${total > games.length ? ` из ${total}` : ""}`
+  const filteredGames = useMemo(() => {
+    if (kindFilter === "game-plus-trainer") return [];
+    return games
+      .filter((game) => matchesSelectedStationFilter(game, stationFilterValue))
+      .filter((game) => matchesSelectedLevelFilter(game, levelFilterValue))
+      .filter((game) => matchesTimeOfDayFilter(game, timeOfDayFilter));
+  }, [
+    games,
+    kindFilter,
+    levelFilterValue,
+    stationFilterValue,
+    timeOfDayFilter,
+  ]);
+
+  const filteredGamePlusTrainerTrainings = useMemo(() => {
+    if (!shouldIncludeGamePlusTrainer || kindFilter === "game") return [];
+    return gamePlusTrainerTrainings
+      .filter((training) => matchesSelectedTrainingStationFilter(training, stationFilterValue))
+      .filter((training) => matchesSelectedTrainingLevelFilter(training, levelFilterValue))
+      .filter((training) => matchesTrainingTimeOfDayFilter(training, timeOfDayFilter));
+  }, [
+    gamePlusTrainerTrainings,
+    kindFilter,
+    levelFilterValue,
+    shouldIncludeGamePlusTrainer,
+    stationFilterValue,
+    timeOfDayFilter,
+  ]);
+
+  const filteredItems = useMemo<FindGameListItem[]>(() => [
+    ...filteredGames.map((game) => ({
+      kind: "game" as const,
+      id: game.id,
+      sortTs: resolveGameStartTs(game) ?? Number.MAX_SAFE_INTEGER,
+      game,
+    })),
+    ...filteredGamePlusTrainerTrainings.map((training) => ({
+      kind: "game-plus-trainer" as const,
+      id: training.id,
+      sortTs: resolveTrainingStartTs(training) ?? Number.MAX_SAFE_INTEGER,
+      training,
+    })),
+  ].sort((left, right) => left.sortTs - right.sortTs), [filteredGamePlusTrainerTrainings, filteredGames]);
+
+  const hasStationFilter = !isStationLockedByPreset && stationFilterValue !== FIND_GAME_FILTER_ALL_VALUE;
+  const hasActiveFilters = hasStationFilter
+    || levelFilterValue !== FIND_GAME_FILTER_ALL_VALUE
+    || kindFilter !== "all"
+    || timeOfDayFilter !== "all";
+  const totalWithGamePlusTrainer = total + (shouldIncludeGamePlusTrainer ? gamePlusTrainerTrainings.length : 0);
+
+  const visibleCountLabel = filteredItems.length > 0
+    ? (hasActiveFilters
+      ? `${filteredItems.length}`
+      : `${filteredItems.length}${totalWithGamePlusTrainer > filteredItems.length ? ` из ${totalWithGamePlusTrainer}` : ""}`)
     : "";
 
   return (
@@ -806,7 +1510,66 @@ export default function FindGamePage({
         </div>
       </div>
 
+      <div className="find-game-filterbar">
+        <label className="find-game-filter-control">
+          <span>Станция</span>
+          <select
+            value={stationFilterValue}
+            onChange={(event) => {
+              setStationFilterValue(event.target.value);
+              const selectedLabel = event.target.selectedOptions[0]?.textContent?.trim();
+              if (selectedLabel) {
+                setStationFilterLabel(selectedLabel);
+              }
+            }}
+            disabled={isStationLockedByPreset || stationOptions.length <= 1}
+          >
+            {stationOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="find-game-filter-control">
+          <span>Уровень</span>
+          <select
+            value={levelFilterValue}
+            onChange={(event) => setLevelFilterValue(event.target.value)}
+            disabled={levelOptions.length <= 1}
+          >
+            {levelOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="find-game-filter-control">
+          <span>Тип</span>
+          <select
+            value={kindFilter}
+            onChange={(event) => setKindFilter(event.target.value as FindGameKindFilter)}
+          >
+            {FIND_GAME_KIND_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <div className="find-game-time-of-day">
+          {FIND_GAME_TIME_OF_DAY_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={`find-game-time-chip${timeOfDayFilter === option.value ? " active" : ""}`}
+              onClick={() => setTimeOfDayFilter(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {loading && <div className="community-loading-note find-game-loading">Загружаем игры...</div>}
+      {!loading && shouldIncludeGamePlusTrainer && gamePlusTrainerLoading && (
+        <div className="community-loading-note find-game-loading">Подгружаем Игра+Тренер...</div>
+      )}
 
       {!loading && error && (
         <div className="find-game-empty">
@@ -817,24 +1580,60 @@ export default function FindGamePage({
         </div>
       )}
 
-      {!loading && !loadingMore && !hasMore && !error && games.length === 0 && (
+      {!loading && !loadingMore && !hasMore && !gamePlusTrainerLoading && !error && filteredItems.length === 0 && (
         <div className="find-game-empty">
-          <div className="find-game-empty-title">На выбранную дату нет открытых игр</div>
-          <div className="find-game-empty-text">Создайте игру первым, остальные игроки увидят ее в этом списке.</div>
+          <div className="find-game-empty-title">
+            {hasActiveFilters ? "Нет игр по выбранным фильтрам" : "На выбранную дату нет открытых игр"}
+          </div>
+          <div className="find-game-empty-text">
+            {hasActiveFilters
+              ? "Измените фильтры или прокрутите ниже для подгрузки игр."
+              : "Создайте игру первым, остальные игроки увидят ее в этом списке."}
+          </div>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              className="section-cta section-cta-secondary"
+              onClick={() => {
+                if (!isStationLockedByPreset) {
+                  setStationFilterValue(FIND_GAME_FILTER_ALL_VALUE);
+                }
+                setLevelFilterValue(FIND_GAME_FILTER_ALL_VALUE);
+                setKindFilter("all");
+                setTimeOfDayFilter("all");
+              }}
+            >
+              Сбросить фильтры
+            </button>
+          )}
         </div>
       )}
 
-      {!loading && !error && games.length > 0 && (
+      {!loading && !error && filteredItems.length > 0 && (
         <div className="find-game-list">
-          {games.map((game) => (
-            <FindGameCard
-              key={game.id}
-              game={game}
-              viewer={viewer}
-              onOpen={(targetGame) => {
-                window.location.href = buildJoinUrl(targetGame);
-              }}
-            />
+          {filteredItems.map((item) => (
+            item.kind === "game" ? (
+              <FindGameCard
+                key={`game-${item.id}`}
+                game={item.game}
+                viewer={viewer}
+                onOpen={(targetGame) => {
+                  window.location.href = buildJoinUrl(targetGame);
+                }}
+                onOpenFriendlyTag={() => {
+                  setFriendlyTagModalOpen(true);
+                }}
+              />
+            ) : (
+              <GamePlusTrainerCard
+                key={`game-plus-trainer-${item.id}`}
+                training={item.training}
+                meta={gamePlusTrainerMetaById[item.id] ?? null}
+                onOpen={(targetTraining) => {
+                  window.location.href = buildGroupTrainingUrl(targetTraining);
+                }}
+              />
+            )
           ))}
         </div>
       )}
@@ -844,6 +1643,27 @@ export default function FindGamePage({
           {loadingMore ? "Подгружаем еще игры..." : "Прокрутите ниже, чтобы подгрузить еще игры"}
         </div>
       )}
+
+      <Modal
+        isOpen={isFriendlyTagModalOpen}
+        onClose={() => setFriendlyTagModalOpen(false)}
+        title={FRIENDLY_TAG_LABEL}
+        variant="dialog"
+      >
+        <div className="find-game-friendly-modal">
+          <p className="find-game-friendly-modal-text">Присоединиться можно по подписке</p>
+          <button
+            type="button"
+            className="section-cta"
+            onClick={() => {
+              window.location.href = FRIENDLY_TAG_SUBSCRIPTION_URL;
+            }}
+          >
+            Оформить подписку
+          </button>
+          <SummerSubscriptionGallery />
+        </div>
+      </Modal>
     </div>
   );
 }

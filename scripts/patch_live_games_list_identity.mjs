@@ -80,7 +80,7 @@ export const GAMES_LIST_CONTRACT = Object.freeze({
     wires: [['7b8f8065271f5b4c'], ['62b2b0e16ed306e7']],
     file: 'fn_list_normalize.js',
     preimageSha256: 'aabbe49ef2b7547df800ae95ac0b59579279e3841c635fc8b66356dc52218886',
-    sourceSha256: 'aabbe49ef2b7547df800ae95ac0b59579279e3841c635fc8b66356dc52218886',
+    sourceSha256: 'e99d0311090ac280d6ff2c6d8d27a0034d63f6acb6bcbcd3f6a9fcc3d990287e',
   },
   orphanIds: ['fcb8b28e2ecb4e7c', 'f4cc88af12330122'],
 });

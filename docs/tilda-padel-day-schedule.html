@@ -1,0 +1,67 @@
+<div id="root"></div>
+
+<script>
+  (function () {
+    var assetOrigin = "https://padlhub.su";
+    var scriptPath = "/lk/padel-day-schedule.js";
+    var releasePath = "/lk/release.json";
+    var cabinetUrl = "https://padlhub.ru/lk_new";
+    var cacheBust = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+
+    function buildUrl(path, version, forceRefresh) {
+      var value = new URL(assetOrigin + path);
+      if (version) value.searchParams.set("v", String(version));
+      if (forceRefresh) value.searchParams.set("force_ts", cacheBust);
+      return value.toString();
+    }
+
+    function showError() {
+      var root = document.getElementById("root");
+      if (root) root.innerHTML = "<div style='padding:16px;font-family:Arial,sans-serif'>Не удалось загрузить расписание. Попробуйте позже.</div>";
+    }
+
+    function mount() {
+      if (!window.LKWidgetPadelDaySchedule || typeof window.LKWidgetPadelDaySchedule.mount !== "function") {
+        showError();
+        return;
+      }
+      window.LKWidgetPadelDaySchedule.mount({
+        targetId: "root",
+        onClose: function () {
+          window.location.href = new URL(window.location.href).searchParams.get("cabinetUrl") || cabinetUrl;
+        }
+      });
+    }
+
+    function load(version) {
+      window.__LK_BASE_URLS__ = [assetOrigin + "/lk"];
+      window.__LK_API_BASE_URLS__ = [assetOrigin];
+      window.__LK_ACTIVE_BASE_URL__ = assetOrigin + "/lk";
+      window.__LK_AUTH_MODE__ = "viva";
+      if (version) window.__LK_RELEASE_VERSION__ = String(version);
+
+      var previous = document.getElementById("padlhub-padel-day-schedule-script");
+      if (previous && previous.parentNode) previous.parentNode.removeChild(previous);
+      if (window.LKWidgetPadelDaySchedule && typeof window.LKWidgetPadelDaySchedule.unmount === "function") {
+        window.LKWidgetPadelDaySchedule.unmount();
+      }
+
+      var script = document.createElement("script");
+      script.id = "padlhub-padel-day-schedule-script";
+      script.src = buildUrl(scriptPath, version);
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.onload = mount;
+      script.onerror = showError;
+      document.head.appendChild(script);
+    }
+
+    fetch(buildUrl(releasePath, null, true), { cache: "no-store" })
+      .then(function (response) {
+        if (!response.ok) throw new Error("release unavailable");
+        return response.json();
+      })
+      .then(function (release) { load(release && release.version); })
+      .catch(function () { load(); });
+  })();
+</script>

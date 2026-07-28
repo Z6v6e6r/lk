@@ -3860,7 +3860,7 @@
     "minPoolSize": "0",
     "maxPoolSize": "100",
     "maxIdleTimeMS": "0",
-    "uri": "mongodb://gen_user:l^RRk2kNPNqoC~@147.45.254.160:27017/games?authSource=admin&directConnection=true&retryWrites=false",
+    "uri": "__MONGODB_URI_REQUIRED__",
     "advanced": "{}",
     "uriTabActive": "tab-uri-advanced"
   }

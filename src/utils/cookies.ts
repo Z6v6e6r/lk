@@ -7,8 +7,15 @@ export const getCookie = (name: string): string | null => {
   );
 };
 
-export const setCookie = (name: string, value: string, maxAge: number) => {
-  document.cookie = `${name}=${value}; path=/; max-age=${maxAge}`;
+export const setCookie = (name: string, value: string, maxAge?: number | null) => {
+  const parts = [`${name}=${value}`, "path=/"];
+  const normalizedMaxAge = typeof maxAge === "number" && Number.isFinite(maxAge) && maxAge > 0
+    ? Math.floor(maxAge)
+    : null;
+  if (normalizedMaxAge !== null) {
+    parts.push(`max-age=${normalizedMaxAge}`);
+  }
+  document.cookie = parts.join("; ");
 };
 
 export const deleteCookie = (name: string) => {

@@ -122,7 +122,7 @@ export type AmericanoStandingsSnapshot = {
   byePolicy: string;
 };
 
-type AmericanoScheduleMode = "padelhub" | "classic";
+type AmericanoScheduleMode = "padelhub" | "classic" | "flex" | "paired";
 
 type AmericanoScheduleOptions = {
   mode?: AmericanoScheduleMode;
@@ -145,10 +145,46 @@ type MatchDraft = {
   pair1: [RatedParticipant, RatedParticipant];
   pair2: [RatedParticipant, RatedParticipant];
   baseScore: number;
+  scheduleMode: AmericanoScheduleMode;
   summary: AmericanoLabMatch["summary"];
 };
 
 type PartnerDraft = [RatedParticipant, RatedParticipant];
+type ClassicPartnerRound = {
+  pairs: PartnerDraft[];
+  byes: RatedParticipant[];
+};
+
+type FixedPairEntry = {
+  id: string;
+  players: [RatedParticipant, RatedParticipant];
+  power: number;
+  seed: number;
+};
+
+type FixedPairRound = {
+  pairings: Array<[FixedPairEntry, FixedPairEntry]>;
+  byes: FixedPairEntry[];
+};
+
+type HeadToHeadEntry = {
+  leftId: string;
+  rightId: string;
+  matchesPlayed: number;
+  leftWins: number;
+  rightWins: number;
+  leftPointsFor: number;
+  rightPointsFor: number;
+};
+
+type StandingsComparable = {
+  id: string;
+  totalPoints: number;
+  pointDiff: number;
+  pointsFor: number;
+  wins: number;
+  pointsAgainst: number;
+};
 
 const DEFAULT_RATING = 3.5;
 const MAX_BEAM_STATES = 48;
@@ -156,6 +192,8 @@ const MAX_MATCH_CANDIDATES_FIRST = 24;
 const MAX_MATCH_CANDIDATES_NEXT = 14;
 const MAX_CLASSIC_PAIRING_STATES = 96;
 const BYE_POLICY = "round_average_points";
+const BYE_POLICY_ZERO = "zero_points";
+const CLASSIC_FLEX_GHOST_ID = "__classic-flex-bye__";
 
 const clampNumber = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const roundTo = (value: number, digits = 2) => Number(value.toFixed(digits));
@@ -197,6 +235,66 @@ function makePairKey(leftId: string, rightId: string) {
 
 function makeOpponentKey(leftId: string, rightId: string) {
   return [leftId, rightId].sort().join("::");
+}
+
+function makeHeadToHeadEntryKey(leftId: string, rightId: string) {
+  return [leftId, rightId].sort().join("::");
+}
+
+function updateHeadToHeadEntry(
+  headToHeadMap: Map<string, HeadToHeadEntry>,
+  leftId: string,
+  rightId: string,
+  leftScore: number,
+  rightScore: number,
+) {
+  const [entryLeftId, entryRightId] = leftId < rightId
+    ? [leftId, rightId]
+    : [rightId, leftId];
+  const key = makeHeadToHeadEntryKey(entryLeftId, entryRightId);
+  const entry = headToHeadMap.get(key) ?? {
+    leftId: entryLeftId,
+    rightId: entryRightId,
+    matchesPlayed: 0,
+    leftWins: 0,
+    rightWins: 0,
+    leftPointsFor: 0,
+    rightPointsFor: 0,
+  };
+
+  const normalizedLeftScore = leftId === entry.leftId ? leftScore : rightScore;
+  const normalizedRightScore = leftId === entry.leftId ? rightScore : leftScore;
+
+  entry.matchesPlayed += 1;
+  entry.leftPointsFor += normalizedLeftScore;
+  entry.rightPointsFor += normalizedRightScore;
+  if (normalizedLeftScore > normalizedRightScore) {
+    entry.leftWins += 1;
+  } else if (normalizedRightScore > normalizedLeftScore) {
+    entry.rightWins += 1;
+  }
+
+  headToHeadMap.set(key, entry);
+}
+
+function compareByHeadToHead(
+  left: AmericanoLabStanding,
+  right: AmericanoLabStanding,
+  headToHeadMap: Map<string, HeadToHeadEntry>,
+) {
+  const key = makeHeadToHeadEntryKey(left.id, right.id);
+  const entry = headToHeadMap.get(key);
+  if (!entry || entry.matchesPlayed === 0) return 0;
+
+  const leftWins = left.id === entry.leftId ? entry.leftWins : entry.rightWins;
+  const rightWins = left.id === entry.leftId ? entry.rightWins : entry.leftWins;
+  if (leftWins !== rightWins) return rightWins - leftWins;
+
+  const leftPointsFor = left.id === entry.leftId ? entry.leftPointsFor : entry.rightPointsFor;
+  const rightPointsFor = left.id === entry.leftId ? entry.rightPointsFor : entry.leftPointsFor;
+  if (leftPointsFor !== rightPointsFor) return rightPointsFor - leftPointsFor;
+
+  return 0;
 }
 
 function getCourtQualityLabel(score: number) {
@@ -351,9 +449,15 @@ function selectByePlayers(
     .slice(0, byeCount);
 }
 
-function buildMatchExplanation(summary: AmericanoLabMatch["summary"], courtRepeatPressure: number) {
+function buildMatchExplanation(
+  summary: AmericanoLabMatch["summary"],
+  courtRepeatPressure: number,
+  scheduleMode: AmericanoScheduleMode,
+) {
   const parts = [
-    summary.partnerRepeatCount > 0
+    scheduleMode === "paired"
+      ? "фиксированные пары"
+      : summary.partnerRepeatCount > 0
       ? `${summary.partnerRepeatCount} повтор партнера`
       : "новые пары",
     summary.opponentRepeatCount > 0
@@ -378,8 +482,10 @@ function evaluateMatchDraft(
   const [p1a, p1b] = pair1;
   const [p2a, p2b] = pair2;
   const progressRatio = getRoundProgress(roundIndex, totalRounds);
-  const partnerRepeatCount =
+  const scheduleMode = options?.mode ?? "padelhub";
+  const rawPartnerRepeatCount =
     getPartnerCount(history, p1a.id, p1b.id) + getPartnerCount(history, p2a.id, p2b.id);
+  const partnerRepeatCount = scheduleMode === "paired" ? 0 : rawPartnerRepeatCount;
   const opponentRepeatCount =
     getOpponentCount(history, p1a.id, p2a.id)
     + getOpponentCount(history, p1a.id, p2b.id)
@@ -396,14 +502,16 @@ function evaluateMatchDraft(
     + (getOpponentCount(history, p1a.id, p2b.id) === 0 ? 1 : 0)
     + (getOpponentCount(history, p1b.id, p2a.id) === 0 ? 1 : 0)
     + (getOpponentCount(history, p1b.id, p2b.id) === 0 ? 1 : 0);
-  const isClassicMode = (options?.mode ?? "padelhub") === "classic";
+  const isClassicMode = scheduleMode === "classic";
+  const isPairedMode = scheduleMode === "paired";
 
-  if (isClassicMode && partnerRepeatCount > 0) {
+  if (isClassicMode && rawPartnerRepeatCount > 0) {
     return {
       players: [p1a, p1b, p2a, p2b],
       pair1,
       pair2,
       baseScore: Number.NEGATIVE_INFINITY,
+      scheduleMode,
       summary: {
         pairPower1: roundTo(pairPower1, 3),
         pairPower2: roundTo(pairPower2, 3),
@@ -420,6 +528,11 @@ function evaluateMatchDraft(
         - getSelectionOpponentPenalty(opponentRepeatCount)
         - getSelectionBalancePenalty(balanceGap)
         + unseenOpponentEdges * 4
+      : isPairedMode
+        ? 280
+          - getSelectionOpponentPenalty(opponentRepeatCount)
+          - getSelectionBalancePenalty(balanceGap)
+          + unseenOpponentEdges * 3
       : 280
         - getSelectionPartnerPenalty(partnerRepeatCount, progressRatio)
         - getSelectionOpponentPenalty(opponentRepeatCount)
@@ -432,6 +545,7 @@ function evaluateMatchDraft(
     pair1,
     pair2,
     baseScore,
+    scheduleMode,
     summary: {
       pairPower1: roundTo(pairPower1, 3),
       pairPower2: roundTo(pairPower2, 3),
@@ -585,6 +699,7 @@ function materializeMatch(
   courtsCount: number,
 ): AmericanoLabMatch {
   const progressRatio = getRoundProgress(roundIndex, totalRounds);
+  const partnerRepeatCount = draft.scheduleMode === "paired" ? 0 : draft.summary.partnerRepeatCount;
   const courtRepeatPressure = getNormalizedCourtPressure(
     draft.players,
     courtIndex,
@@ -594,7 +709,7 @@ function materializeMatch(
   );
   const qualityScore = clampNumber(
     100
-      - getQualityPartnerPenalty(draft.summary.partnerRepeatCount, progressRatio)
+      - getQualityPartnerPenalty(partnerRepeatCount, progressRatio)
       - getQualityOpponentPenalty(draft.summary.opponentRepeatCount, progressRatio, totalPlayers)
       - getQualityBalancePenalty(draft.summary.balanceGap)
       - courtRepeatPressure * 5,
@@ -614,8 +729,8 @@ function materializeMatch(
     quality: {
       score: roundTo(qualityScore, 1),
       label: getCourtQualityLabel(qualityScore),
-      explanation: buildMatchExplanation(draft.summary, courtRepeatPressure),
-      partnerRepeatCount: draft.summary.partnerRepeatCount,
+      explanation: buildMatchExplanation(draft.summary, courtRepeatPressure, draft.scheduleMode),
+      partnerRepeatCount,
       opponentRepeatCount: draft.summary.opponentRepeatCount,
       balanceGap: draft.summary.balanceGap,
       courtRepeatPressure,
@@ -726,7 +841,7 @@ function planAmericanoRoundFromHistory(
   return { matches, byes };
 }
 
-function rotateClassicPool(pool: RatedParticipant[]) {
+function rotateClassicPool<T>(pool: T[]) {
   if (pool.length <= 2) return pool;
   return [
     pool[0],
@@ -735,24 +850,49 @@ function rotateClassicPool(pool: RatedParticipant[]) {
   ];
 }
 
-function generateClassicPartnerRounds(players: RatedParticipant[]) {
-  if (players.length < 4 || players.length % 2 !== 0) return [] as PartnerDraft[][];
+function generateClassicPartnerRounds(players: RatedParticipant[], allowSingleBye = false) {
+  if (players.length < 4) return [] as ClassicPartnerRound[];
 
   let pool = [...players].sort((left, right) => left.seed - right.seed);
-  const rounds: PartnerDraft[][] = [];
+  if (pool.length % 2 !== 0) {
+    if (!allowSingleBye) return [] as ClassicPartnerRound[];
+    pool = [
+      ...pool,
+      {
+        id: CLASSIC_FLEX_GHOST_ID,
+        name: "BYE",
+        photo: null,
+        phone: null,
+        spot: null,
+        rating: null,
+        ratingValue: DEFAULT_RATING,
+        seed: Number.MAX_SAFE_INTEGER,
+      },
+    ];
+  }
 
-  for (let roundIndex = 0; roundIndex < players.length - 1; roundIndex += 1) {
+  const rounds: ClassicPartnerRound[] = [];
+
+  for (let roundIndex = 0; roundIndex < pool.length - 1; roundIndex += 1) {
     const pairs: PartnerDraft[] = [];
+    const byes: RatedParticipant[] = [];
     for (let index = 0; index < pool.length / 2; index += 1) {
       const left = pool[index];
       const right = pool[pool.length - 1 - index];
-      if (roundIndex % 2 === 0) {
-        pairs.push([left, right]);
-      } else {
-        pairs.push([right, left]);
+      const first = roundIndex % 2 === 0 ? left : right;
+      const second = roundIndex % 2 === 0 ? right : left;
+      const firstIsGhost = first.id === CLASSIC_FLEX_GHOST_ID;
+      const secondIsGhost = second.id === CLASSIC_FLEX_GHOST_ID;
+      if (firstIsGhost || secondIsGhost) {
+        const byePlayer = firstIsGhost ? second : first;
+        if (byePlayer.id !== CLASSIC_FLEX_GHOST_ID) {
+          byes.push(byePlayer);
+        }
+        continue;
       }
+      pairs.push([first, second]);
     }
-    rounds.push(pairs);
+    rounds.push({ pairs, byes });
     pool = rotateClassicPool(pool);
   }
 
@@ -821,36 +961,95 @@ function buildClassicMatchupStates(
 function createClassicAmericanoRounds(
   players: RatedParticipant[],
   courts: string[],
+  allowSingleBye = false,
 ) {
-  const partnerRounds = generateClassicPartnerRounds(players);
+  const partnerRounds = generateClassicPartnerRounds(players, allowSingleBye);
   if (partnerRounds.length === 0) return null;
 
-  const pairsPerRound = partnerRounds[0]?.length ?? 0;
+  const pairsPerRound = partnerRounds[0]?.pairs.length ?? 0;
+  const byesPerRound = partnerRounds[0]?.byes.length ?? 0;
   if (pairsPerRound < 2 || pairsPerRound % 2 !== 0 || pairsPerRound / 2 > courts.length) {
     return null;
   }
+  if ((allowSingleBye && byesPerRound !== 1) || (!allowSingleBye && byesPerRound !== 0)) return null;
 
   const history = createHistory(players, courts);
   const totalRounds = partnerRounds.length;
   const rounds: AmericanoLabRound[] = [];
 
-  partnerRounds.forEach((partnerPairs, roundIndex) => {
-    const drafts = buildClassicMatchupStates(partnerPairs, history, roundIndex, totalRounds);
+  for (let roundIndex = 0; roundIndex < partnerRounds.length; roundIndex += 1) {
+    const partnerRound = partnerRounds[roundIndex];
+    if (partnerRound.pairs.length !== pairsPerRound) return null;
+    if ((allowSingleBye && partnerRound.byes.length !== 1) || (!allowSingleBye && partnerRound.byes.length !== 0)) {
+      return null;
+    }
+    const drafts = buildClassicMatchupStates(partnerRound.pairs, history, roundIndex, totalRounds);
     const matches = assignCourts(drafts, courts, history, roundIndex, totalRounds, players.length);
 
     const round: AmericanoLabRound = {
       id: `round-${roundIndex + 1}`,
       index: roundIndex + 1,
       matches,
-      byes: [],
+      byes: partnerRound.byes,
       collapsed: roundIndex !== 0,
       saved: false,
-      quality: buildRoundQuality(matches, []),
+      quality: buildRoundQuality(matches, partnerRound.byes),
     };
 
     rounds.push(round);
     applyRoundToHistory(round, history);
-  });
+    partnerRound.byes.forEach((player) => {
+      const prev = history.byeCounts.get(player.id) ?? { count: 0, lastRound: null };
+      history.byeCounts.set(player.id, {
+        count: prev.count + 1,
+        lastRound: roundIndex,
+      });
+    });
+  }
+
+  return rounds;
+}
+
+function createClassicFlexAmericanoRounds(
+  players: RatedParticipant[],
+  courts: string[],
+) {
+  if (players.length % 2 === 0) return null;
+  return createClassicAmericanoRounds(players, courts, true);
+}
+
+function createFixedPairRoundRobinRounds(pairs: FixedPairEntry[]) {
+  if (pairs.length < 2) return [] as FixedPairRound[];
+
+  let pool: Array<FixedPairEntry | null> = [...pairs];
+  if (pool.length % 2 !== 0) {
+    pool = [...pool, null];
+  }
+
+  const rounds: FixedPairRound[] = [];
+
+  for (let roundIndex = 0; roundIndex < pool.length - 1; roundIndex += 1) {
+    const pairings: FixedPairRound["pairings"] = [];
+    const byes: FixedPairRound["byes"] = [];
+
+    for (let index = 0; index < pool.length / 2; index += 1) {
+      const left = pool[index];
+      const right = pool[pool.length - 1 - index];
+      const first = roundIndex % 2 === 0 ? left : right;
+      const second = roundIndex % 2 === 0 ? right : left;
+
+      if (!first || !second) {
+        const byePair = first ?? second;
+        if (byePair) byes.push(byePair);
+        continue;
+      }
+
+      pairings.push([first, second]);
+    }
+
+    rounds.push({ pairings, byes });
+    pool = rotateClassicPool(pool);
+  }
 
   return rounds;
 }
@@ -896,9 +1095,16 @@ export function createAmericanoRounds(
 
   if (Math.min(courts.length, Math.floor(players.length / 4)) < 1) return [] as AmericanoLabRound[];
 
-  if ((options?.mode ?? "padelhub") === "classic") {
+  const mode = options?.mode ?? "padelhub";
+
+  if (mode === "classic") {
     const classicRounds = createClassicAmericanoRounds(players, courts);
     if (classicRounds) return classicRounds;
+  }
+
+  if (mode === "flex") {
+    const flexRounds = createClassicFlexAmericanoRounds(players, courts);
+    if (flexRounds) return flexRounds;
   }
 
   const roundCount = players.length % 2 === 0 ? players.length - 1 : players.length;
@@ -1034,7 +1240,7 @@ export function createPairedAmericanoRounds(
   }
 
   const playerMap = new Map(players.map((player) => [player.id, player]));
-  const pairs = pairAssignments
+  const pairs: FixedPairEntry[] = pairAssignments
     .map((pair, index) => {
       const left = playerMap.get(pair[0]);
       const right = playerMap.get(pair[1]);
@@ -1060,9 +1266,50 @@ export function createPairedAmericanoRounds(
 
   if (pairs.length < 2) return [] as AmericanoLabRound[];
 
+  const maxMatchesPerRound = Math.floor(pairs.length / 2);
+  if (courts.length >= maxMatchesPerRound) {
+    const history = createHistory(players, courts);
+    const pairRounds = createFixedPairRoundRobinRounds(pairs);
+    const totalRounds = pairRounds.length;
+
+    return pairRounds.map((pairRound, roundIndex) => {
+      const drafts = pairRound.pairings.map(([leftPair, rightPair]) => evaluateMatchDraft(
+        leftPair.players,
+        rightPair.players,
+        history,
+        roundIndex,
+        totalRounds,
+        { mode: "paired" },
+      ));
+      const matches = assignCourts(drafts, courts, history, roundIndex, totalRounds, players.length);
+      const byes = pairRound.byes.flatMap((pair) => pair.players);
+
+      const round: AmericanoLabRound = {
+        id: `round-${roundIndex + 1}`,
+        index: roundIndex + 1,
+        matches,
+        byes,
+        collapsed: roundIndex !== 0,
+        saved: false,
+        quality: buildRoundQuality(matches, byes),
+      };
+
+      applyRoundToHistory(round, history);
+      byes.forEach((player) => {
+        const prev = history.byeCounts.get(player.id) ?? { count: 0, lastRound: null };
+        history.byeCounts.set(player.id, {
+          count: prev.count + 1,
+          lastRound: roundIndex,
+        });
+      });
+
+      return round;
+    });
+  }
+
   const allMatchups: Array<{
-    left: typeof pairs[number];
-    right: typeof pairs[number];
+    left: FixedPairEntry;
+    right: FixedPairEntry;
     balanceGap: number;
   }> = [];
 
@@ -1110,7 +1357,7 @@ export function createPairedAmericanoRounds(
         history,
         roundIndex,
         Math.max(1, pairs.length - 1),
-        { mode: "padelhub" },
+        { mode: "paired" },
       );
       return materializeMatch(
         draft,
@@ -1302,6 +1549,32 @@ export function hydrateAmericanoRounds(
           : `round-${roundIndex + 1}-match-${matchIndex + 1}`;
         match.score1 = record.score1 == null ? null : safeNumber(record.score1, 0);
         match.score2 = record.score2 == null ? null : safeNumber(record.score2, 0);
+        if (record.quality && typeof record.quality === "object") {
+          const qualityRecord = record.quality as Record<string, unknown>;
+          match.quality = {
+            ...match.quality,
+            score: safeNumber(qualityRecord.score, match.quality.score),
+            label: typeof qualityRecord.label === "string" ? qualityRecord.label : match.quality.label,
+            explanation: typeof qualityRecord.explanation === "string"
+              ? qualityRecord.explanation
+              : match.quality.explanation,
+            partnerRepeatCount: safeNumber(qualityRecord.partnerRepeatCount, match.quality.partnerRepeatCount),
+            opponentRepeatCount: safeNumber(qualityRecord.opponentRepeatCount, match.quality.opponentRepeatCount),
+            balanceGap: safeNumber(qualityRecord.balanceGap, match.quality.balanceGap),
+            courtRepeatPressure: safeNumber(qualityRecord.courtRepeatPressure, match.quality.courtRepeatPressure),
+          };
+        }
+        if (record.summary && typeof record.summary === "object") {
+          const summaryRecord = record.summary as Record<string, unknown>;
+          match.summary = {
+            ...match.summary,
+            pairPower1: safeNumber(summaryRecord.pairPower1, match.summary.pairPower1),
+            pairPower2: safeNumber(summaryRecord.pairPower2, match.summary.pairPower2),
+            balanceGap: safeNumber(summaryRecord.balanceGap, match.summary.balanceGap),
+            partnerRepeatCount: safeNumber(summaryRecord.partnerRepeatCount, match.summary.partnerRepeatCount),
+            opponentRepeatCount: safeNumber(summaryRecord.opponentRepeatCount, match.summary.opponentRepeatCount),
+          };
+        }
         match.saved = match.score1 != null && match.score2 != null;
         return match;
       })
@@ -1322,6 +1595,24 @@ export function hydrateAmericanoRounds(
       byes = planned.byes;
     }
 
+    const computedRoundQuality = buildRoundQuality(matches, byes);
+    const roundQuality = rawRound.quality && typeof rawRound.quality === "object"
+      ? (() => {
+          const qualityRecord = rawRound.quality as Record<string, unknown>;
+          return {
+            ...computedRoundQuality,
+            score: safeNumber(qualityRecord.score, computedRoundQuality.score),
+            label: typeof qualityRecord.label === "string" ? qualityRecord.label : computedRoundQuality.label,
+            explanation: typeof qualityRecord.explanation === "string"
+              ? qualityRecord.explanation
+              : computedRoundQuality.explanation,
+            averageCourtScore: safeNumber(qualityRecord.averageCourtScore, computedRoundQuality.averageCourtScore),
+            minCourtScore: safeNumber(qualityRecord.minCourtScore, computedRoundQuality.minCourtScore),
+            byeCount: safeNumber(qualityRecord.byeCount, computedRoundQuality.byeCount),
+          };
+        })()
+      : computedRoundQuality;
+
     const round: AmericanoLabRound = {
       id: typeof rawRound.id === "string" && rawRound.id.trim()
         ? rawRound.id.trim()
@@ -1331,7 +1622,7 @@ export function hydrateAmericanoRounds(
       byes,
       collapsed: rawRound.collapsed === true ? true : roundIndex !== 0,
       saved: matches.length > 0 && matches.every((match) => match.saved),
-      quality: buildRoundQuality(matches, byes),
+      quality: roundQuality,
     };
 
     normalizedRounds.push(round);
@@ -1373,8 +1664,17 @@ export function buildAmericanoStandings(
   participants: AmericanoLabParticipant[],
   rounds: AmericanoLabRound[],
   serverTotals?: Record<string, AmericanoServerTotal> | null,
+  options?: {
+    byePolicyMode?: "round_average_points" | "zero_points";
+    sortMode?: "point_diff" | "total_points";
+    rankByPairs?: boolean;
+    pairAssignments?: PairedMexicanoPairAssignment[] | null;
+  },
 ): AmericanoStandingsSnapshot {
+  const byePolicyMode = options?.byePolicyMode ?? "round_average_points";
+  const sortMode = options?.sortMode ?? "point_diff";
   const rowsMap = new Map<string, AmericanoLabStanding>();
+  const headToHeadMap = new Map<string, HeadToHeadEntry>();
   const normalizedParticipants = normalizeParticipants(participants);
 
   normalizedParticipants.forEach((participant) => {
@@ -1453,6 +1753,18 @@ export function buildAmericanoStandings(
         else row.draws += 1;
       });
 
+      match.pair1.forEach((pair1Player) => {
+        match.pair2.forEach((pair2Player) => {
+          updateHeadToHeadEntry(
+            headToHeadMap,
+            pair1Player.id,
+            pair2Player.id,
+            match.score1 ?? 0,
+            match.score2 ?? 0,
+          );
+        });
+      });
+
       roundPlayedPoints += (match.score1 ?? 0) * match.pair1.length;
       roundPlayedPoints += (match.score2 ?? 0) * match.pair2.length;
     });
@@ -1461,8 +1773,16 @@ export function buildAmericanoStandings(
       completedRounds += 1;
     }
 
-    const byePoints = roundCompleted && round.byes.length > 0 && roundActivePlayers > 0
-      ? roundTo(roundPlayedPoints / roundActivePlayers, 2)
+    const byePoints = roundCompleted && round.byes.length > 0
+      ? (
+          byePolicyMode === "zero_points"
+            ? 0
+            : (
+                roundActivePlayers > 0
+                  ? roundTo(roundPlayedPoints / roundActivePlayers, 2)
+                  : null
+              )
+        )
       : null;
     roundByePoints[round.id] = byePoints;
 
@@ -1476,7 +1796,31 @@ export function buildAmericanoStandings(
     });
   });
 
-  const rows = [...rowsMap.values()]
+  const compareStandingMetrics = (
+    left: StandingsComparable,
+    right: StandingsComparable,
+    currentHeadToHeadMap: Map<string, HeadToHeadEntry>,
+  ) => {
+    if (sortMode === "total_points") {
+      if (right.totalPoints !== left.totalPoints) return right.totalPoints - left.totalPoints;
+      if (right.pointDiff !== left.pointDiff) return right.pointDiff - left.pointDiff;
+    } else {
+      if (right.pointDiff !== left.pointDiff) return right.pointDiff - left.pointDiff;
+      if (right.totalPoints !== left.totalPoints) return right.totalPoints - left.totalPoints;
+    }
+    if (right.pointsFor !== left.pointsFor) return right.pointsFor - left.pointsFor;
+    if (right.wins !== left.wins) return right.wins - left.wins;
+    const headToHeadCompare = compareByHeadToHead(
+      left as AmericanoLabStanding,
+      right as AmericanoLabStanding,
+      currentHeadToHeadMap,
+    );
+    if (headToHeadCompare !== 0) return headToHeadCompare;
+    if (left.pointsAgainst !== right.pointsAgainst) return left.pointsAgainst - right.pointsAgainst;
+    return 0;
+  };
+
+  const computedRows = [...rowsMap.values()]
     .map((row) => {
       const total = serverTotals?.[row.id];
       const pointsFor = total?.pointsFor != null ? safeNumber(total.pointsFor, row.pointsFor) : row.pointsFor;
@@ -1513,19 +1857,156 @@ export function buildAmericanoStandings(
         ratingDelta: roundTo(total?.deltaTotal != null ? safeNumber(total.deltaTotal, row.ratingDelta) : row.ratingDelta, 5),
         hasServerTotals: Boolean(total),
       };
-    })
-    .sort((left, right) => {
-      if (right.totalPoints !== left.totalPoints) return right.totalPoints - left.totalPoints;
-      if (right.pointDiff !== left.pointDiff) return right.pointDiff - left.pointDiff;
-      if (right.wins !== left.wins) return right.wins - left.wins;
-      if (right.pointsFor !== left.pointsFor) return right.pointsFor - left.pointsFor;
-      if (right.ratingDelta !== left.ratingDelta) return right.ratingDelta - left.ratingDelta;
-      return left.name.localeCompare(right.name, "ru");
-    })
-    .map((row, index) => ({
-      ...row,
-      rank: index + 1,
-    }));
+    });
+
+  const normalizedPairAssignments = options?.rankByPairs && Array.isArray(options.pairAssignments)
+    ? (() => {
+        const seen = new Set<string>();
+        return options.pairAssignments
+          .map((pair, index) => {
+            const leftId = String(pair?.[0] ?? "").trim();
+            const rightId = String(pair?.[1] ?? "").trim();
+            if (!leftId || !rightId || leftId === rightId) return null;
+            const key = makePairKey(leftId, rightId);
+            if (seen.has(key)) return null;
+            seen.add(key);
+            return {
+              key,
+              playerIds: [leftId, rightId] as [string, string],
+              seed: index,
+            };
+          })
+          .filter((value): value is {
+            key: string;
+            playerIds: [string, string];
+            seed: number;
+          } => Boolean(value));
+      })()
+    : [];
+
+  const rows = normalizedPairAssignments.length > 0
+    ? (() => {
+        const rowById = new Map(computedRows.map((row) => [row.id, row]));
+        const pairKeyByPlayerId = new Map<string, string>();
+        const pairMemberOrderById = new Map<string, number>();
+        normalizedPairAssignments.forEach((pair) => {
+          pair.playerIds.forEach((playerId, memberIndex) => {
+            if (!rowById.has(playerId)) return;
+            pairKeyByPlayerId.set(playerId, pair.key);
+            pairMemberOrderById.set(playerId, memberIndex);
+          });
+        });
+
+        const pairHeadToHeadMap = new Map<string, HeadToHeadEntry>();
+        rounds.forEach((round) => {
+          round.matches.forEach((match) => {
+            if (match.pair1.length !== 2 || match.pair2.length !== 2) return;
+            if (match.score1 == null || match.score2 == null) return;
+
+            const pair1Keys = match.pair1.map((player) => pairKeyByPlayerId.get(player.id)).filter(Boolean);
+            const pair2Keys = match.pair2.map((player) => pairKeyByPlayerId.get(player.id)).filter(Boolean);
+            if (pair1Keys.length !== 2 || pair2Keys.length !== 2) return;
+
+            const pair1Key = pair1Keys[0];
+            const pair2Key = pair2Keys[0];
+            if (!pair1Key || !pair2Key || pair1Key !== pair1Keys[1] || pair2Key !== pair2Keys[1] || pair1Key === pair2Key) {
+              return;
+            }
+
+            updateHeadToHeadEntry(pairHeadToHeadMap, pair1Key, pair2Key, match.score1, match.score2);
+          });
+        });
+
+        const pairEntries = normalizedPairAssignments
+          .map((pair) => {
+            const members = pair.playerIds
+              .map((playerId) => rowById.get(playerId))
+              .filter((row): row is AmericanoLabStanding => Boolean(row));
+            if (members.length === 0) return null;
+
+            return {
+              ...pair,
+              id: pair.key,
+              members,
+              totalPoints: roundTo(members.reduce((sum, row) => sum + row.totalPoints, 0), 2),
+              pointDiff: roundTo(members.reduce((sum, row) => sum + row.pointDiff, 0), 2),
+              pointsFor: roundTo(members.reduce((sum, row) => sum + row.pointsFor, 0), 2),
+              wins: roundTo(members.reduce((sum, row) => sum + row.wins, 0), 2),
+              pointsAgainst: roundTo(members.reduce((sum, row) => sum + row.pointsAgainst, 0), 2),
+            };
+          })
+          .filter((value): value is {
+            key: string;
+            id: string;
+            playerIds: [string, string];
+            seed: number;
+            members: AmericanoLabStanding[];
+            totalPoints: number;
+            pointDiff: number;
+            pointsFor: number;
+            wins: number;
+            pointsAgainst: number;
+          } => Boolean(value))
+          .sort((left, right) => {
+            const metricsCompare = compareStandingMetrics(left, right, pairHeadToHeadMap);
+            if (metricsCompare !== 0) return metricsCompare;
+            return left.seed - right.seed;
+          });
+
+        const pairedRowIds = new Set(pairEntries.flatMap((pair) => pair.members.map((row) => row.id)));
+        const pairRankByPlayerId = new Map<string, number>();
+        const pairOrderByPlayerId = new Map<string, number>();
+
+        pairEntries.forEach((pair, pairIndex) => {
+          pair.playerIds.forEach((playerId, memberIndex) => {
+            if (!rowById.has(playerId)) return;
+            pairRankByPlayerId.set(playerId, pairIndex + 1);
+            pairOrderByPlayerId.set(playerId, pairIndex);
+            if (!pairMemberOrderById.has(playerId)) {
+              pairMemberOrderById.set(playerId, memberIndex);
+            }
+          });
+        });
+
+        const pairedRows = computedRows
+          .filter((row) => pairedRowIds.has(row.id))
+          .sort((left, right) => {
+            const pairOrderGap = (pairOrderByPlayerId.get(left.id) ?? Number.MAX_SAFE_INTEGER)
+              - (pairOrderByPlayerId.get(right.id) ?? Number.MAX_SAFE_INTEGER);
+            if (pairOrderGap !== 0) return pairOrderGap;
+            const memberGap = (pairMemberOrderById.get(left.id) ?? 0) - (pairMemberOrderById.get(right.id) ?? 0);
+            if (memberGap !== 0) return memberGap;
+            return left.name.localeCompare(right.name, "ru");
+          })
+          .map((row) => ({
+            ...row,
+            rank: pairRankByPlayerId.get(row.id) ?? row.rank,
+          }));
+
+        const unpairedRows = computedRows
+          .filter((row) => !pairedRowIds.has(row.id))
+          .sort((left, right) => {
+            const metricsCompare = compareStandingMetrics(left, right, headToHeadMap);
+            if (metricsCompare !== 0) return metricsCompare;
+            return left.name.localeCompare(right.name, "ru");
+          })
+          .map((row, index) => ({
+            ...row,
+            rank: pairEntries.length + index + 1,
+          }));
+
+        return [...pairedRows, ...unpairedRows];
+      })()
+    : computedRows
+      .sort((left, right) => {
+        const metricsCompare = compareStandingMetrics(left, right, headToHeadMap);
+        if (metricsCompare !== 0) return metricsCompare;
+        return left.name.localeCompare(right.name, "ru");
+      })
+      .map((row, index) => ({
+        ...row,
+        rank: index + 1,
+      }));
 
   return {
     rows,
@@ -1534,6 +2015,6 @@ export function buildAmericanoStandings(
     completedRounds,
     totalMatches,
     completedMatches,
-    byePolicy: BYE_POLICY,
+    byePolicy: byePolicyMode === "zero_points" ? BYE_POLICY_ZERO : BYE_POLICY,
   };
 }

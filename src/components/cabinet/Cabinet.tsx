@@ -2,16 +2,24 @@ import { useState, useEffect, useRef, useMemo, useCallback, type CSSProperties }
 import { UserProfile } from "./UserProfile";
 import {
   apiCancelBooking,
+  apiCreateReferralSubscriptionInvite,
+  apiCleanupPadelGameByOrganizer,
+  apiFetchPadelGameRecord,
   apiFetchProfile,
   apiFetchBookings,
+  apiFetchExerciseById,
   apiFetchExercisesByDate,
   apiFetchExercisesByVisibleDate,
+  apiFetchSubscriptioName,
   apiFetchSubscriptions,
   apiFetchPadelChatsByPhone,
   apiFetchPadelGamesByPhone,
+  apiFetchPadelGameByPaymentRef,
   apiFetchTournamentHistory,
+  apiVerifyBookingCancellation,
   apiUpdatePadelGameRecord,
   isTournamentExerciseCategory,
+  resolveExerciseCancellationState,
 } from "../../utils/apiClient";
 import type {
   Booking,
@@ -22,8 +30,10 @@ import type {
   PadelGameRecord,
   PadelGamePlayer,
   TournamentHistoryRecord,
+  Exercise,
 } from "../../utils/apiClient";
 import type { OpenGamesOptions } from "../../types/gamesOverlay";
+import type { OpenLevelsInfoOptions } from "../../types/levelsInfoOverlay";
 import type { OpenTournamentsOptions } from "../../types/tournamentsOverlay";
 import { useAuth } from "../../context/AuthContext";
 import { ButtonModule } from "./ButtonModele";
@@ -32,13 +42,26 @@ import { BookingsContainer } from "./BookingsContainer";
 import { BookingHistory } from "./BookingHistory";
 import { SubscriptionsContainer } from "./SubscriptionsContainer";
 import { SubscriptionInformation } from "./SubscriptionInformation";
-import { BuySupscription } from "./BuySubscription";
 import { Advertisement } from "./Advertisement";
 import { CommunitiesSectionLoader } from "./CommunitiesSectionLoader";
 import { SupportChatWidget } from "./SupportChatWidget";
+import {
+  BookingCancellationDialog,
+  type BookingCancellationExecutionResult,
+} from "./BookingCancellationDialog";
+import {
+  buildSyntheticCabinetGameFromBooking,
+  isSyntheticCabinetBookingGame,
+} from "./syntheticBookingGame";
 import { TournamentDetailsModal } from "./TournamentDetailsModal";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
-import { CUSTOM_FIELD_IDS, getCustomFieldValue, hasTournamentHostingAccess } from "../../utils/customFields";
+import { Modal } from "../UI/Modal";
+import {
+  CUSTOM_FIELD_IDS,
+  getCustomFieldValue,
+  hasTournamentHostingAccess,
+  normalizeLevelGradeLabel,
+} from "../../utils/customFields";
 import {
   identifyAnalyticsUser,
   trackAnalyticsEvent,
@@ -57,11 +80,36 @@ import {
 } from "../../consts/api_config";
 import { shareOrCopyGameInvitePayload } from "../../utils/gameInviteClipboard";
 import { addGameToCalendar } from "../../utils/calendarEvent";
-import { resolveHashActionTarget, retriggerHashAction } from "../../utils/hashActions";
+import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
+import { apiFetchTournamentMechanicsSourceList } from "../../utils/tournamentSignupApi";
+import {
+  buildTournamentMechanicsFallbackExercises,
+  getTournamentMechanicsExerciseDateKey,
+  mergeTournamentMechanicsExercises,
+} from "../../utils/tournamentMechanicsExercises";
+import {
+  buildReferralSubscriptionUrl,
+  hydrateReferralSubscriptionsWithNames,
+  resolveReferralRenewalOwnerCandidate,
+  resolveReferralSubscriptionWindow,
+  resolveReferralShareOwnerCandidate,
+} from "../../utils/referralSubscription";
+import type { BookingCancellationAction } from "../../utils/bookingCancellation";
+import { forceAppRefresh } from "../../utils/forceAppRefresh";
+import { consumeCabinetFlashNotice } from "../../utils/cabinetFlashNotice";
+import {
+  EXERCISE_CATEGORY_OPEN_GAME,
+  isExerciseConvertibleToGameFromBooking,
+  resolveExerciseCategoryFromValue,
+} from "../../utils/exerciseCategory";
 
 const SHOW_COLLECT_FRIENDS_BUTTON = false;
-const GROUP_TRAININGS_HASH = "#9Rzqf";
+const GROUP_TRAININGS_URL = "https://padlhub.ru/group";
 const GAME_FIND_PATH = (PUBLIC_GAME_FIND_PATH || "/finde_game").replace(/\/+$/, "") || "/finde_game";
+const REFERRAL_SUBSCRIPTIONS_FETCH_OPTIONS = {
+  includeFinished: true,
+  size: 100,
+};
 
 type QuickAction = {
   icon: string;
@@ -71,7 +119,7 @@ type QuickAction = {
 
 const QUICK_ACTIONS: QuickAction[] = [
   { icon: "🎾", label: "Играть", href: GAME_FIND_PATH },
-  { icon: "👥", label: "Групповые тренировки", href: GROUP_TRAININGS_HASH },
+  { icon: "👥", label: "Групповые тренировки", href: GROUP_TRAININGS_URL },
   { icon: "🏆", label: "Турниры", href: "https://padlhub.ru/tournaments" },
   { icon: "🎯", label: "Индивидуальные тренировки", href: "https://padlhub.ru/indi_lk" },
 ];
@@ -88,12 +136,28 @@ const RATING_LABELS = ["D", "D+", "C", "C+", "B", "B+", "A"];
 const TOURNAMENT_LOOKBACK_DAYS = 7;
 const TOURNAMENT_LOOKAHEAD_DAYS = 14;
 const DEV_TOURNAMENT_SCAN_DELAY_MS = 3000;
-const ACTIVE_EVENTS_PREVIEW_LIMIT = 3;
+const ACTIVE_RESULT_WINDOW_LIMIT = 20;
 const RESULT_ENTRY_GRACE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const GAME_REMOVED_STATUS_MARKERS = ["CANCEL", "DELETE", "REMOV", "ARCHIV", "VOID", "MISSING", "NOT_FOUND"] as const;
+const GAME_REMOVED_METADATA_FLAGS = [
+  "deletedInViva",
+  "vivaDeleted",
+  "removedFromViva",
+  "vivaRemoved",
+  "bookingDeleted",
+  "bookingRemoved",
+  "bookingMissing",
+  "exerciseMissing",
+  "cancelledInViva",
+  "canceledInViva",
+] as const;
+
+type ExerciseCancellationCheckState = "active" | "cancelled" | "unknown";
 
 interface CabinetProps {
   onOpenGames: (options?: OpenGamesOptions) => void;
   onOpenTournaments: (options?: OpenTournamentsOptions) => void;
+  onOpenLevelsInfo: (options?: OpenLevelsInfoOptions) => void;
   onOpenOnboarding: (data: {
     profile: UserProfileType;
     gamesLink: string;
@@ -110,8 +174,20 @@ type ProfileUpdatedEventDetail = {
   levelNumeric?: string;
 };
 
-type GameCancelState = "idle" | "confirm" | "done";
-type InlineGameResultScore = { left: string; right: string };
+type GamesUpdatedEventDetail = {
+  record?: PadelGameRecord | null;
+  records?: PadelGameRecord[];
+  source?: string;
+};
+
+type GameCancelState = "idle" | "confirm";
+
+type ResultPromptStationModalState = {
+  stationTitle: string;
+  address: string | null;
+  courtTitle: string | null;
+  mapUrl: string | null;
+};
 
 function applyOnboardingLevels(
   source: UserProfileType,
@@ -151,26 +227,11 @@ function getPlayerInitials(name: string | null | undefined): string {
     .toUpperCase();
 }
 
-function normalizePlayerRatingLabel(value: string | null | undefined): string | null {
-  const raw = String(value || "").trim().toUpperCase();
-  if (!raw) return null;
-
-  if (RATING_LABELS.includes(raw)) {
-    return raw;
-  }
-
-  const compact = raw.replace(/\s+/g, "");
-  if (RATING_LABELS.includes(compact)) {
-    return compact;
-  }
-
-  const numeric = Number.parseFloat(raw.replace(",", "."));
-  if (Number.isFinite(numeric)) {
-    const index = Math.max(0, Math.min(RATING_LABELS.length - 1, Math.round(numeric) - 1));
-    return RATING_LABELS[index] ?? null;
-  }
-
-  return null;
+function normalizePlayerRatingLabel(
+  value: string | null | undefined,
+  numericFallback: number | null = null,
+): string | null {
+  return normalizeLevelGradeLabel(value, numericFallback);
 }
 
 function getPlayerRatingProgress(label: string | null): number | null {
@@ -198,6 +259,120 @@ function getDateBadge(dateValue: string | null | undefined) {
   };
 }
 
+function formatGameResultDateTimeLabel(
+  dateValue: string | null | undefined,
+  timeFrom: string | null | undefined,
+  timeTo: string | null | undefined,
+): string {
+  const parsed = dateValue ? new Date(`${dateValue}T00:00:00`) : null;
+  const dateText = parsed && !Number.isNaN(parsed.getTime())
+    ? parsed.toLocaleDateString("ru-RU", { day: "numeric", month: "long" })
+    : "Дата уточняется";
+  const from = String(timeFrom || "").trim();
+  const to = String(timeTo || "").trim();
+  if (from && to) return `${dateText}, ${from}—${to}`;
+  if (from) return `${dateText}, ${from}`;
+  return dateText;
+}
+
+function formatGameResultLevelLabel(game: PadelGameRecord): string {
+  if (game.settings?.ratingGame === false) return "Без уровня";
+  const min = String(game.settings?.minRating || "").trim();
+  const max = String(game.settings?.maxRating || "").trim();
+  if (min && max) return `от ${min} до ${max}`;
+  if (min) return `от ${min}`;
+  if (max) return `до ${max}`;
+  return "Уровень уточняется";
+}
+
+function formatGameResultStationLabel(
+  game: PadelGameRecord,
+  stationTitle: string,
+  locationTitle: string,
+): string {
+  const fallbackStation = String(locationTitle || "")
+    .split("•")[0]
+    ?.trim() || "";
+  const station = stationTitle || pickStringFromRecord(game.metadata, ["studioName", "stationName"]) || fallbackStation;
+  return station || "Станция уточняется";
+}
+
+function formatGameResultCourtLabel(
+  game: PadelGameRecord,
+  courtTitle: string,
+  locationTitle: string,
+): string {
+  const directCourt = String(courtTitle || "").trim();
+  if (directCourt) return directCourt;
+  const metadataCourt = pickStringFromRecord(game.metadata, ["roomName", "courtName", "courtTitle"]);
+  if (metadataCourt) return metadataCourt;
+  const fallbackParts = String(locationTitle || "")
+    .split("•")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (fallbackParts.length > 1) return fallbackParts.slice(1).join(" • ");
+  if (fallbackParts.length === 1) return fallbackParts[0];
+  return "Корт уточняется";
+}
+
+function formatGameResultStationAddress(game: PadelGameRecord): string | null {
+  const address = pickStringFromRecord(game.booking, [
+    "address",
+    "studioAddress",
+    "stationAddress",
+    "fullAddress",
+    "location",
+    "street",
+  ]) ?? pickStringFromRecord(game.metadata, [
+    "address",
+    "studioAddress",
+    "stationAddress",
+    "fullAddress",
+    "studioLocation",
+    "location",
+    "street",
+  ]);
+  return String(address || "").trim() || null;
+}
+
+function getGameResultMapUrl(stationTitle: string, locationTitle: string): string | null {
+  const query = [stationTitle, locationTitle]
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0 && item !== "Станция уточняется" && item !== "Корт уточняется")
+    .join(", ");
+  return query ? `https://yandex.ru/maps/?text=${encodeURIComponent(query)}` : null;
+}
+
+function renderGameResultInfoIcon(type: "date" | "location" | "level") {
+  if (type === "date") {
+    return (
+      <span className="game-created-result-info-icon" aria-hidden="true">
+        <svg viewBox="0 0 12 12" focusable="false">
+          <path d="M3.2 1.1v1.4M8.8 1.1v1.4M1.5 4.2h9M2.2 2.1h7.6c.6 0 1.1.5 1.1 1.1v6.2c0 .6-.5 1.1-1.1 1.1H2.2c-.6 0-1.1-.5-1.1-1.1V3.2c0-.6.5-1.1 1.1-1.1Z" />
+        </svg>
+      </span>
+    );
+  }
+
+  if (type === "location") {
+    return (
+      <span className="game-created-result-info-icon" aria-hidden="true">
+        <svg viewBox="0 0 12 12" focusable="false">
+          <path d="M6 1.1a3.7 3.7 0 0 0-3.7 3.7c0 2.5 3.1 5.8 3.4 6.1.2.2.4.2.6 0 .3-.3 3.4-3.6 3.4-6.1A3.7 3.7 0 0 0 6 1.1Zm0 5.1a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8Z" />
+        </svg>
+      </span>
+    );
+  }
+
+  return (
+    <span className="game-created-result-info-icon" aria-hidden="true">
+      <svg viewBox="0 0 12 12" focusable="false">
+        <path d="M2 10.7H1.3V6.6H2c.5 0 .8.3.8.8v2.5c0 .4-.3.8-.8.8Zm4.4 0h-.8V4.2h.8c.4 0 .7.4.7.8v4.9c0 .4-.3.8-.7.8Zm4.3 0H10V1.5h.7c.5 0 .8.3.8.8v7.6c0 .4-.3.8-.8.8Z" />
+      </svg>
+    </span>
+  );
+}
+
 function isGamePaidRecord(game: PadelGameRecord): boolean {
   if (game.payment?.paid != null) return game.payment.paid === true;
   const statusUpper = String(game.status || "").trim().toUpperCase();
@@ -223,18 +398,48 @@ function isGameExplicitlyUnpaidRecord(game: PadelGameRecord): boolean {
   );
 }
 
+function isSinglesFormat(value: unknown): boolean {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "singles"
+    || normalized.includes("1x1")
+    || normalized.includes("1х1")
+    || normalized.includes("1 на 1");
+}
+
+function isSinglesCourtName(value: unknown): boolean {
+  return /сингл|single|1\s*[xх]\s*1|1\s*на\s*1/i.test(String(value || ""));
+}
+
+function isSinglesGameCard(game: PadelGameRecord): boolean {
+  const metadata = isRecord(game.metadata) ? game.metadata : null;
+  if (isSinglesFormat(metadata?.gameFormat ?? metadata?.format)) return true;
+  const splitPayment = metadata && isRecord(metadata.splitPayment) ? metadata.splitPayment : null;
+  const splitShareCount = pickNumberValue(splitPayment, ["shareCount"]);
+  if (splitShareCount === 2) return true;
+  return [
+    game.booking?.roomName,
+    pickStringFromRecord(metadata, ["roomName", "courtName", "courtTitle"]),
+  ].some((value) => isSinglesCourtName(value));
+}
+
 function resolveGameCardPlayersCount(game: PadelGameRecord): number {
+  if (isSinglesGameCard(game)) return MAX_SINGLES_PLAYERS;
+
   const inviteMaxPlayers = game.invite?.maxPlayers;
   if (typeof inviteMaxPlayers === "number" && Number.isFinite(inviteMaxPlayers) && inviteMaxPlayers > 0) {
     return Math.max(1, Math.floor(inviteMaxPlayers));
   }
 
   const metadata = game.metadata;
+  const metadataPlayersLimit = pickNumberValue(isRecord(metadata) ? metadata : null, ["maxPlayers", "playersLimit"]);
+  if (metadataPlayersLimit !== null && metadataPlayersLimit > 0) {
+    return Math.max(1, Math.floor(metadataPlayersLimit));
+  }
   const metadataGameFormat =
     metadata && typeof metadata.gameFormat === "string"
       ? metadata.gameFormat.trim().toLowerCase()
       : "";
-  if (metadataGameFormat === "singles") {
+  if (isSinglesFormat(metadataGameFormat)) {
     return MAX_SINGLES_PLAYERS;
   }
 
@@ -293,11 +498,17 @@ function getGameDateKey(game: PadelGameRecord): string | null {
 function hasEnteredMatchResult(game: PadelGameRecord): boolean {
   const metadata = isRecord(game.metadata) ? game.metadata : null;
   const matchResult = metadata && isRecord(metadata.matchResult) ? metadata.matchResult : null;
-  if (!matchResult) return false;
-  const sets = matchResult.sets;
-  if (Array.isArray(sets) && sets.length > 0) return true;
-  const status = String(matchResult.status || "").trim();
-  return Boolean(status || matchResult.submittedAt || matchResult.confirmedAt);
+  if (matchResult) {
+    const sets = matchResult.sets;
+    if (Array.isArray(sets) && sets.length > 0) return true;
+    const status = String(matchResult.status || "").trim();
+    if (status || matchResult.submittedAt || matchResult.confirmedAt) {
+      return true;
+    }
+  }
+
+  const topLevelStatus = String(game.resultLifecycleState ?? game.resultStatus ?? "").trim();
+  return Boolean(topLevelStatus || game.resultId || game.lastResultAt);
 }
 
 function shouldShowInlineResultEntry(game: PadelGameRecord): boolean {
@@ -315,10 +526,6 @@ function shouldShowInlineResultEntry(game: PadelGameRecord): boolean {
   const endTs = getGameEndTimestamp(game);
   const now = Date.now();
   return Number.isFinite(endTs) && endTs < now && now - endTs <= RESULT_ENTRY_GRACE_WINDOW_MS;
-}
-
-function normalizeScoreInput(value: string): string {
-  return value.replace(/[^\d]/g, "").slice(0, 2);
 }
 
 function getPlayerIdentityKey(player: PadelGamePlayer | null | undefined): string | null {
@@ -437,15 +644,15 @@ function normalizePublicGamesUrl(value: string | null | undefined): string | nul
         if (normalizedKey === "cabineturl" || normalizedKey === "returnurl") return;
         normalized.searchParams.set(key, paramValue);
       });
-      return normalized.toString();
+      return appendCurrentAuthModeToNavigableUrl(normalized).toString();
     }
 
     if (!isLocalHostname(parsed.hostname)) {
-      return parsed.toString();
+      return appendCurrentAuthModeToNavigableUrl(parsed).toString();
     }
     const publicOrigin = resolvePublicGamesOrigin(current);
     const normalized = new URL(`${parsed.pathname}${parsed.search}${parsed.hash}`, publicOrigin);
-    return normalized.toString();
+    return appendCurrentAuthModeToNavigableUrl(normalized).toString();
   } catch {
     return raw;
   }
@@ -454,12 +661,70 @@ function normalizePublicGamesUrl(value: string | null | undefined): string | nul
 function resolveQuickActionHref(value: string | null | undefined): string {
   const raw = value?.trim();
   if (!raw) return "#";
-  if (!raw.startsWith("#")) return raw;
+  if (!raw.startsWith("#")) {
+    return appendCurrentAuthModeToNavigableUrl(raw).toString();
+  }
 
   try {
     const normalized = new URL(CABINET_URL);
     normalized.hash = raw;
-    return normalized.toString();
+    return appendCurrentAuthModeToNavigableUrl(normalized).toString();
+  } catch {
+    return raw;
+  }
+}
+
+function resolveGroupTrainingsHref(value: string): string {
+  const raw = value.trim();
+  if (!raw) return raw;
+  if (typeof window === "undefined") return raw;
+
+  try {
+    const current = new URL(window.location.href);
+    const parsed = new URL(raw, current.origin);
+    const resolvedCabinetUrl = resolvePublicGamesCabinetUrl(current);
+    if (resolvedCabinetUrl) {
+      parsed.searchParams.set("cabinetUrl", resolvedCabinetUrl);
+    }
+    return appendCurrentAuthModeToNavigableUrl(parsed).toString();
+  } catch {
+    return raw;
+  }
+}
+
+function resolvePublicGamesCabinetUrl(current: URL): string | null {
+  if (current.pathname.includes("/lk_dev")) {
+    return appendCurrentAuthModeToNavigableUrl(new URL("/lk_dev", current.origin)).toString();
+  }
+  const configured = (CABINET_URL || "").trim();
+  return configured ? appendCurrentAuthModeToNavigableUrl(configured).toString() : null;
+}
+
+function resolveFindGameHref(value: string): string {
+  const raw = value.trim();
+  if (!raw) return raw;
+  if (typeof window === "undefined") return raw;
+
+  try {
+    const current = new URL(window.location.href);
+    const parsed = new URL(raw, current.origin);
+    const normalizedFindPath = GAME_FIND_PATH.replace(/\/+$/, "") || "/finde_game";
+    const parsedPath = parsed.pathname.replace(/\/+$/, "") || "/";
+    if (parsedPath !== normalizedFindPath) {
+      return parsed.toString();
+    }
+
+    const resolvedCabinetUrl = resolvePublicGamesCabinetUrl(current);
+    if (resolvedCabinetUrl) {
+      parsed.searchParams.set("cabinetUrl", resolvedCabinetUrl);
+    }
+
+    if (!isLocalHostname(parsed.hostname)) {
+      return appendCurrentAuthModeToNavigableUrl(parsed).toString();
+    }
+    const publicOrigin = resolvePublicGamesOrigin(current);
+    const normalized = new URL(`${parsed.pathname}${parsed.search}${parsed.hash}`, publicOrigin);
+    return appendCurrentAuthModeToNavigableUrl(normalized).toString();
   } catch {
     return raw;
   }
@@ -491,7 +756,7 @@ function buildInviteFallbackUrl(gameId: string): string | null {
     const url = resolveInviteCabinetBaseUrl();
     if (!url) return null;
     url.searchParams.set("joinGame", id);
-    return `${url.origin}${url.pathname}?${url.searchParams.toString()}`;
+    return appendCurrentAuthModeToNavigableUrl(url).toString();
   } catch {
     return null;
   }
@@ -510,6 +775,78 @@ function normalizePhoneForGame(value: string | null | undefined): string | null 
   if (digits.length === 10) return `7${digits}`;
   if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
   return digits;
+}
+
+const INACTIVE_GAME_MEMBERSHIP_STATUS_MARKERS = [
+  "CANCEL",
+  "DECLIN",
+  "FAIL",
+  "ERROR",
+  "EXPIRE",
+  "REFUND",
+  "REJECT",
+  "VOID",
+  "CLOSE",
+  "ARCHIVE",
+  "LEFT",
+  "REMOV",
+] as const;
+
+function normalizeCabinetIdentityId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+function normalizeCabinetIdentityPhone(value: unknown): string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  return normalizePhoneForGame(String(value));
+}
+
+function isInactiveGameMembershipStatus(value: unknown): boolean {
+  const status = String(value || "").trim().toUpperCase();
+  if (!status) return false;
+  return INACTIVE_GAME_MEMBERSHIP_STATUS_MARKERS.some((marker) => status.includes(marker));
+}
+
+function getCabinetPlayerIdentityKey(player: PadelGamePlayer): string {
+  const id = String(player.id || "").trim();
+  if (id) return `id:${id}`;
+  const phone = normalizePhoneForGame(player.phone);
+  if (phone) return `phone:${phone}`;
+  const name = String(player.name || "").trim().toLowerCase();
+  return `name:${name}`;
+}
+
+function dedupePlayers(players: PadelGamePlayer[]): PadelGamePlayer[] {
+  const byKey = new Map<string, PadelGamePlayer>();
+  players.forEach((player) => {
+    const key = getCabinetPlayerIdentityKey(player);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, player);
+      return;
+    }
+    byKey.set(key, {
+      ...existing,
+      ...player,
+      id: existing.id ?? player.id ?? null,
+      phone: existing.phone ?? player.phone ?? null,
+      name: existing.name || player.name || "Игрок",
+      photo: existing.photo ?? player.photo ?? null,
+      rating: existing.rating ?? player.rating ?? null,
+      ratingNumeric: existing.ratingNumeric ?? player.ratingNumeric ?? null,
+      source: existing.source ?? player.source,
+      status: existing.status ?? player.status,
+    });
+  });
+  return Array.from(byKey.values());
+}
+
+function extractGameCustomTitle(metadata: Record<string, unknown> | null | undefined): string | null {
+  if (!metadata) return null;
+  const value = typeof metadata.gameTitle === "string" ? metadata.gameTitle.trim() : "";
+  return value || null;
 }
 
 function toDateKey(value: string | null | undefined): string | null {
@@ -539,6 +876,14 @@ function pickStringFromUnknown(value: unknown): string | null {
   if (value == null) return null;
   const normalized = String(value).trim();
   return normalized.length > 0 ? normalized : null;
+}
+
+function pickNumberFromUnknown(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+  const normalized = pickStringFromUnknown(value);
+  if (!normalized) return null;
+  const parsed = Number(normalized.replace(",", "."));
+  return Number.isFinite(parsed) ? Math.trunc(parsed) : null;
 }
 
 function pickStringFromRecord(source: unknown, keys: string[]): string | null {
@@ -603,6 +948,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function mergeCabinetGameRecords(
+  current: PadelGameRecord[],
+  incomingRecords: PadelGameRecord[],
+): PadelGameRecord[] {
+  const next = [...current];
+  incomingRecords.forEach((record) => {
+    if (!record?.id) return;
+    const existingIndex = next.findIndex((item) => item.id === record.id);
+    if (existingIndex < 0) {
+      next.unshift(record);
+      return;
+    }
+    next[existingIndex] = {
+      ...next[existingIndex],
+      ...record,
+      booking: record.booking ?? next[existingIndex].booking,
+      payment: record.payment ?? next[existingIndex].payment,
+      settings: record.settings ?? next[existingIndex].settings,
+      invite: record.invite ?? next[existingIndex].invite,
+      metadata: record.metadata ?? next[existingIndex].metadata,
+      participants: record.participants ?? next[existingIndex].participants,
+      waitlist: record.waitlist ?? next[existingIndex].waitlist,
+    };
+  });
+  return next;
+}
+
 function pickNumberValue(source: Record<string, unknown> | null, keys: string[]): number | null {
   if (!source) return null;
   for (const key of keys) {
@@ -632,6 +1004,107 @@ function getSplitPaymentMetadata(game: PadelGameRecord | null | undefined): Reco
   return metadata && isRecord(metadata.splitPayment) ? metadata.splitPayment : null;
 }
 
+function playerMatchesCabinetIdentity(
+  player: PadelGamePlayer | null | undefined,
+  clientId: string | null,
+  phone: string | null,
+): boolean {
+  if (!player || isInactiveGameMembershipStatus(player.status)) return false;
+  const playerId = normalizeCabinetIdentityId(player.id);
+  if (clientId && playerId && clientId === playerId) return true;
+  const playerPhone = normalizeCabinetIdentityPhone(player.phone);
+  return Boolean(phone && playerPhone && phone === playerPhone);
+}
+
+function recordListContainsCabinetIdentity(
+  value: unknown,
+  identity: string | null,
+  normalizer: (item: unknown) => string | null,
+): boolean {
+  if (!identity || !Array.isArray(value)) return false;
+  return value.some((item) => normalizer(item) === identity);
+}
+
+function splitPaymentItemMatchesCabinetIdentity(
+  item: Record<string, unknown>,
+  clientId: string | null,
+  phone: string | null,
+): boolean {
+  if (isInactiveGameMembershipStatus(item.status)) return false;
+  const itemIds = [item.clientId, item.playerId, item.userId, item.id]
+    .map((value) => normalizeCabinetIdentityId(value))
+    .filter((value): value is string => Boolean(value));
+  if (clientId && itemIds.includes(clientId)) return true;
+
+  const itemPhones = [
+    item.clientPhoneNorm,
+    item.phoneNorm,
+    item.clientPhone,
+    item.phone,
+    item.phoneNumber,
+    item.mobile,
+  ]
+    .map((value) => normalizeCabinetIdentityPhone(value))
+    .filter((value): value is string => Boolean(value));
+  return Boolean(phone && itemPhones.includes(phone));
+}
+
+function hasActiveSplitPaymentCabinetIdentity(
+  game: PadelGameRecord,
+  clientId: string | null,
+  phone: string | null,
+): boolean {
+  const splitPayment = getSplitPaymentMetadata(game);
+  const payments = Array.isArray(splitPayment?.payments)
+    ? splitPayment.payments.filter((item) => isRecord(item))
+    : [];
+  return payments.some((item) => splitPaymentItemMatchesCabinetIdentity(item, clientId, phone));
+}
+
+function isGameRelevantToCabinetIdentity(
+  game: PadelGameRecord,
+  profileId: string | null | undefined,
+  profilePhone: string | null | undefined,
+): boolean {
+  const clientId = normalizeCabinetIdentityId(profileId);
+  const phone = normalizeCabinetIdentityPhone(profilePhone);
+  if (!clientId && !phone) return true;
+
+  const organizerId = normalizeCabinetIdentityId(game.organizer?.id);
+  if (clientId && organizerId && clientId === organizerId) return true;
+  const organizerPhone = normalizeCabinetIdentityPhone(game.organizer?.phone);
+  if (phone && organizerPhone && phone === organizerPhone) return true;
+  const metadata = isRecord(game.metadata) ? game.metadata : null;
+  const metadataOrganizerId = normalizeCabinetIdentityId(metadata?.organizerId);
+  if (clientId && metadataOrganizerId && clientId === metadataOrganizerId) return true;
+  const metadataOrganizerPhone = normalizeCabinetIdentityPhone(
+    metadata?.organizerPhoneNorm ?? metadata?.organizerPhone,
+  );
+  if (phone && metadataOrganizerPhone && phone === metadataOrganizerPhone) return true;
+
+  if ((game.participants ?? []).some((player) => playerMatchesCabinetIdentity(player, clientId, phone))) {
+    return true;
+  }
+  if ((game.waitlist ?? []).some((player) => playerMatchesCabinetIdentity(player, clientId, phone))) {
+    return true;
+  }
+
+  if (recordListContainsCabinetIdentity(game.participantPhones, phone, normalizeCabinetIdentityPhone)) return true;
+  if (recordListContainsCabinetIdentity(game.waitlistPhones, phone, normalizeCabinetIdentityPhone)) return true;
+  if (recordListContainsCabinetIdentity(game.invitedPhones, phone, normalizeCabinetIdentityPhone)) return true;
+  if (hasActiveSplitPaymentCabinetIdentity(game, clientId, phone)) return true;
+
+  const gameAny = game as unknown as Record<string, unknown>;
+  if (recordListContainsCabinetIdentity(game.allRelatedPhones, phone, normalizeCabinetIdentityPhone)) {
+    return true;
+  }
+  if (recordListContainsCabinetIdentity(gameAny.allRelatedClientIds, clientId, normalizeCabinetIdentityId)) {
+    return true;
+  }
+
+  return false;
+}
+
 function isSplitPaymentGame(game: PadelGameRecord | null | undefined): boolean {
   if (!game) return false;
   if (game.settings?.payMode === "split") return true;
@@ -654,32 +1127,58 @@ function getSplitJoinPriceText(game: PadelGameRecord | null | undefined): string
   return formatRubPrice(shareAmount);
 }
 
-function getSplitCancelDeadlineAt(game: PadelGameRecord | null | undefined): string | null {
-  if (!isSplitPaymentGame(game)) return null;
-  const splitPayment = getSplitPaymentMetadata(game);
-  const deadlineAt = pickStringValue(splitPayment, ["deadlineAt", "cancelAt", "expiresAt", "expires_at"]);
-  if (!deadlineAt || !Number.isFinite(Date.parse(deadlineAt))) return null;
-  return deadlineAt;
-}
-
-function formatCountdown(deadlineAt?: string | null, nowMs = Date.now()): string | null {
-  if (!deadlineAt) return null;
-  const deadlineMs = Date.parse(deadlineAt);
-  if (!Number.isFinite(deadlineMs)) return null;
-  const totalMinutes = Math.max(0, Math.ceil((deadlineMs - nowMs) / 60000));
-  if (totalMinutes <= 0) return "0 мин";
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const minutes = totalMinutes % 60;
-  if (days > 0) return `${days} д ${hours} ч`;
-  if (hours > 0) return `${hours} ч ${minutes} мин`;
-  return `${minutes} мин`;
-}
-
 function normalizeBookingLikeId(value: unknown): string | null {
   if (value == null) return null;
   const normalized = String(value).trim().toLowerCase();
   return normalized.length > 0 ? normalized : null;
+}
+
+function normalizePaymentRefLike(value: unknown): string | null {
+  if (value == null) return null;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function parsePaymentRefsFromUnknown(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return Array.from(new Set(
+      value
+        .map((item) => normalizePaymentRefLike(item))
+        .filter((item): item is string => Boolean(item)),
+    ));
+  }
+  if (typeof value === "string") {
+    return Array.from(new Set(
+      value
+        .split(",")
+        .map((item) => normalizePaymentRefLike(item))
+        .filter((item): item is string => Boolean(item)),
+    ));
+  }
+  return [];
+}
+
+function extractPaymentRefFromUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    const ref =
+      parsed.searchParams.get("phPaymentRef")
+      ?? parsed.searchParams.get("paymentRef")
+      ?? parsed.searchParams.get("ref");
+    return normalizePaymentRefLike(ref);
+  } catch {
+    const matched = trimmed.match(/[?&](?:phPaymentRef|paymentRef|ref)=([^&#]+)/i);
+    if (!matched?.[1]) return null;
+    try {
+      return normalizePaymentRefLike(decodeURIComponent(matched[1]));
+    } catch {
+      return normalizePaymentRefLike(matched[1]);
+    }
+  }
 }
 
 function parseBookingIdsFromUnknown(value: unknown): string[] {
@@ -758,6 +1257,22 @@ function isGameCancelledStatus(value: string | null | undefined): boolean {
   return Boolean(status && status.includes("CANCEL"));
 }
 
+function isGameRemovedStatus(value: string | null | undefined): boolean {
+  const status = String(value || "").trim().toUpperCase();
+  if (!status) return false;
+  return GAME_REMOVED_STATUS_MARKERS.some((marker) => status.includes(marker));
+}
+
+function isGameMarkedDeletedInViva(game: PadelGameRecord): boolean {
+  const metadata = isRecord(game.metadata) ? game.metadata : null;
+  if (!metadata) return false;
+
+  return GAME_REMOVED_METADATA_FLAGS.some((key) => {
+    const value = metadata[key];
+    return value === true || value === "true" || value === 1 || value === "1";
+  });
+}
+
 function collectGameBookingIds(game: PadelGameRecord): string[] {
   const bucket = new Set<string>();
   const push = (value: unknown) => {
@@ -768,11 +1283,31 @@ function collectGameBookingIds(game: PadelGameRecord): string[] {
     parseBookingIdsFromUnknown(value).forEach((item) => bucket.add(item));
   };
 
-  if (isRecord(game.metadata)) {
-    pushMany(game.metadata.bookingIds);
-    push(game.metadata.bookingId);
-    pushMany(game.metadata.booking_ids);
-    push(game.metadata.booking_id);
+  const metadata = isRecord(game.metadata) ? game.metadata : null;
+  if (metadata) {
+    pushMany(metadata.bookingIds);
+    push(metadata.bookingId);
+    pushMany(metadata.booking_ids);
+    push(metadata.booking_id);
+
+    const splitPayment = isRecord(metadata.splitPayment) ? metadata.splitPayment : null;
+    if (splitPayment) {
+      pushMany(splitPayment.bookingIds);
+      push(splitPayment.bookingId);
+      pushMany(splitPayment.booking_ids);
+      push(splitPayment.booking_id);
+      push(splitPayment.organizerBookingId);
+
+      const payments = Array.isArray(splitPayment.payments)
+        ? splitPayment.payments.filter((item) => isRecord(item))
+        : [];
+      payments.forEach((item) => {
+        pushMany(item.bookingIds);
+        push(item.bookingId);
+        pushMany(item.booking_ids);
+        push(item.booking_id);
+      });
+    }
   }
 
   const gameAny = game as unknown as Record<string, unknown>;
@@ -788,6 +1323,78 @@ function collectGameBookingIds(game: PadelGameRecord): string[] {
   return Array.from(bucket);
 }
 
+function collectGamePaymentRefs(game: PadelGameRecord): string[] {
+  const bucket = new Set<string>();
+  const push = (value: unknown) => {
+    const normalized = normalizePaymentRefLike(value);
+    if (normalized) bucket.add(normalized);
+  };
+  const pushMany = (value: unknown) => {
+    parsePaymentRefsFromUnknown(value).forEach((item) => bucket.add(item));
+  };
+
+  const metadata = isRecord(game.metadata) ? game.metadata : null;
+  if (metadata) {
+    push(metadata.paymentRef);
+    const splitPayment = isRecord(metadata.splitPayment) ? metadata.splitPayment : null;
+    if (splitPayment) {
+      push(splitPayment.paymentRef);
+      const payments = Array.isArray(splitPayment.payments)
+        ? splitPayment.payments.filter((item) => isRecord(item))
+        : [];
+      payments.forEach((item) => {
+        push(item.paymentRef);
+      });
+    }
+  }
+
+  const gameAny = game as unknown as Record<string, unknown>;
+  push(gameAny.paymentRef);
+  if (isRecord(gameAny.payment)) {
+    push(gameAny.payment.paymentRef);
+    pushMany(gameAny.payment.paymentRefs);
+    push(extractPaymentRefFromUrl(gameAny.payment.paymentUrl));
+    push(extractPaymentRefFromUrl(gameAny.payment.redirectUrl));
+    push(extractPaymentRefFromUrl(gameAny.payment.baseRedirectUrl));
+  }
+
+  return Array.from(bucket);
+}
+
+function collectBookingPaymentRefs(booking: Booking): string[] {
+  const bucket = new Set<string>();
+  const push = (value: unknown) => {
+    const normalized = normalizePaymentRefLike(value);
+    if (normalized) bucket.add(normalized);
+  };
+
+  const bookingAny = booking as unknown as Record<string, unknown>;
+  push(bookingAny.paymentRef);
+  push(bookingAny.phPaymentRef);
+
+  if (isRecord(bookingAny.transactionStatus)) {
+    push(bookingAny.transactionStatus.paymentRef);
+    push(bookingAny.transactionStatus.transactionRef);
+    push(bookingAny.transactionStatus.transactionId);
+    if (isRecord(bookingAny.transactionStatus.cardPaymentStatus)) {
+      push(bookingAny.transactionStatus.cardPaymentStatus.paymentRef);
+      push(bookingAny.transactionStatus.cardPaymentStatus.paymentId);
+      push(bookingAny.transactionStatus.cardPaymentStatus.transactionId);
+      push(extractPaymentRefFromUrl(bookingAny.transactionStatus.cardPaymentStatus.paymentUrl));
+      push(extractPaymentRefFromUrl(bookingAny.transactionStatus.cardPaymentStatus.redirectUrl));
+    }
+  }
+
+  if (isRecord(bookingAny.payment)) {
+    push(bookingAny.payment.paymentRef);
+    push(bookingAny.payment.ref);
+    push(extractPaymentRefFromUrl(bookingAny.payment.paymentUrl));
+    push(extractPaymentRefFromUrl(bookingAny.payment.redirectUrl));
+  }
+
+  return Array.from(bucket);
+}
+
 function collectGameExerciseIds(game: PadelGameRecord): string[] {
   const bucket = new Set<string>();
   const push = (value: unknown) => {
@@ -795,11 +1402,20 @@ function collectGameExerciseIds(game: PadelGameRecord): string[] {
     if (normalized) bucket.add(normalized);
   };
 
-  if (isRecord(game.metadata)) {
-    push(game.metadata.exerciseId);
-    push(game.metadata.exercise_id);
-    push(game.metadata.vivaExerciseId);
-    push(game.metadata.viva_exercise_id);
+  const metadata = isRecord(game.metadata) ? game.metadata : null;
+  if (metadata) {
+    push(metadata.exerciseId);
+    push(metadata.exercise_id);
+    push(metadata.vivaExerciseId);
+    push(metadata.viva_exercise_id);
+
+    const splitPayment = isRecord(metadata.splitPayment) ? metadata.splitPayment : null;
+    if (splitPayment) {
+      push(splitPayment.exerciseId);
+      push(splitPayment.exercise_id);
+      push(splitPayment.vivaExerciseId);
+      push(splitPayment.viva_exercise_id);
+    }
   }
 
   const gameAny = game as unknown as Record<string, unknown>;
@@ -853,6 +1469,33 @@ function buildBookingSlotIdKey(booking: Booking): string | null {
   const roomId = normalizeBookingLikeId(booking.exercise?.room?.id ?? null);
   if (!date || !timeFrom || !timeTo || !studioId || !roomId) return null;
   return [date, timeFrom, timeTo, studioId, roomId].join("|");
+}
+
+function extractRoomNumberKey(value: unknown): string | null {
+  const normalized = normalizeSlotName(value);
+  if (!normalized) return null;
+  const matched = normalized.match(/\d+/);
+  return matched?.[0] ?? null;
+}
+
+function buildGameLooseSlotKey(game: PadelGameRecord): string | null {
+  const date = toBookingDateKey(game.booking?.date ?? null);
+  const timeFrom = toBookingTimeKey(game.booking?.timeFrom ?? null);
+  const timeTo = toBookingTimeKey(game.booking?.timeTo ?? null);
+  const studioName = normalizeSlotName(game.booking?.studioName ?? null);
+  const roomNumber = extractRoomNumberKey(game.booking?.roomName ?? null);
+  if (!date || !timeFrom || !timeTo || !studioName || !roomNumber) return null;
+  return [date, timeFrom, timeTo, studioName, roomNumber].join("|");
+}
+
+function buildBookingLooseSlotKey(booking: Booking): string | null {
+  const date = toBookingDateKey(booking.exercise?.timeFrom ?? null);
+  const timeFrom = toBookingTimeKey(booking.exercise?.timeFrom ?? null);
+  const timeTo = toBookingTimeKey(booking.exercise?.timeTo ?? null);
+  const studioName = normalizeSlotName(booking.exercise?.studio?.name ?? null);
+  const roomNumber = extractRoomNumberKey(booking.exercise?.room?.name ?? null);
+  if (!date || !timeFrom || !timeTo || !studioName || !roomNumber) return null;
+  return [date, timeFrom, timeTo, studioName, roomNumber].join("|");
 }
 
 function collectBookingExerciseIds(booking: Booking): string[] {
@@ -968,6 +1611,7 @@ function readChatReadMap(phoneNorm: string): Record<string, number> {
 export function Cabinet({
   onOpenGames,
   onOpenTournaments,
+  onOpenLevelsInfo,
   onOpenOnboarding,
   initialCommunityInviteCode,
   initialCommunityInviteLink,
@@ -984,18 +1628,22 @@ export function Cabinet({
   const [activeBookings, setActiveBookings] = useState<BookingsResponse | null>(null);
   const [loadingHistoryBookings, setLoadingHistoryBookings] = useState(false);
   const [userSubscriptions, setUserSubscriptions] = useState<SubscriptionResponse | null>(null);
+  const [referralUserSubscriptions, setReferralUserSubscriptions] = useState<SubscriptionResponse | null>(null);
+  const [referralSubscriptionNamesById, setReferralSubscriptionNamesById] = useState<Record<string, string>>({});
+  const [referralInviteUrlByKey, setReferralInviteUrlByKey] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isRefreshingApp, setIsRefreshingApp] = useState(false);
   const [isBookingHistoryOpen, setIsBookingHistoryOpen] = useState(false);
   const [isSubscriptionInfoOpen, SetSubscriptionInfoOpen] = useState(false);
   const [currenSub, SetCurrenSub] = useState<Subscription | null>(null);
   const [currenSubName, SetCurrenSubName] = useState<string>("Абонемент");
-  const [isOpenBuySub, setOpenBuySub] = useState<boolean>(false);
   const [createdGames, setCreatedGames] = useState<PadelGameRecord[]>([]);
   const [loadingCreatedGames, setLoadingCreatedGames] = useState(false);
   const [createdGamesError, setCreatedGamesError] = useState<string | null>(null);
+  const [cabinetFlashNotice] = useState<string | null>(() => consumeCabinetFlashNotice());
   const [activeGameRecordsTotal, setActiveGameRecordsTotal] = useState(0);
   const [hasLoadedAllActiveRecords, setHasLoadedAllActiveRecords] = useState(false);
   const [loadingMoreActiveRecords, setLoadingMoreActiveRecords] = useState(false);
@@ -1006,29 +1654,30 @@ export function Cabinet({
   const [, setChatReadMap] = useState<Record<string, number>>({});
   const [chatUnreadByGame, setChatUnreadByGame] = useState<Record<string, number>>({});
   const [gameCancelStateById, setGameCancelStateById] = useState<Record<string, GameCancelState>>({});
-  const [gameCancelOkById, setGameCancelOkById] = useState<Record<string, boolean>>({});
   const [cancellingGameId, setCancellingGameId] = useState<string | null>(null);
-  const [inlineGameResultScores, setInlineGameResultScores] = useState<Record<string, InlineGameResultScore>>({});
-  const [savingInlineGameResultId, setSavingInlineGameResultId] = useState<string | null>(null);
-  const [inlineGameResultErrorById, setInlineGameResultErrorById] = useState<Record<string, string>>({});
+  const [archivingGameId, setArchivingGameId] = useState<string | null>(null);
+  const [archiveGameErrorById, setArchiveGameErrorById] = useState<Record<string, string>>({});
+  const [resultPromptStationModal, setResultPromptStationModal] = useState<ResultPromptStationModalState | null>(null);
   const cabinetVisitTrackedRef = useRef(false);
   const onboardingStatusRef = useRef<boolean | null>(null);
   const cancellingGameIdsRef = useRef<Set<string>>(new Set());
+  const missingGameLookupBookingIdsRef = useRef<Set<string>>(new Set());
+  const missingGameLookupExpandedFetchTriedRef = useRef(false);
+  const historyPrefetchAttemptedRef = useRef(false);
   const historyBookingsRequestRef = useRef<Promise<BookingsResponse | null> | null>(null);
+  const exerciseCancellationCheckRef = useRef<Map<string, Promise<ExerciseCancellationCheckState>>>(new Map());
+  const referralSubscriptionNamesRequestRef = useRef(0);
+  const referralInviteRequestRef = useRef(0);
   const { logout } = useAuth();
 
-  useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-    if (window.location.hash !== GROUP_TRAININGS_HASH) return undefined;
-
-    const timeoutId = window.setTimeout(() => {
-      retriggerHashAction(GROUP_TRAININGS_HASH);
-    }, 300);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, []);
+  const activeBookingExerciseIds = useMemo(() => {
+    const ids = new Set<string>();
+    (activeBookings?.content ?? []).forEach((booking) => {
+      if (booking.isCancelled) return;
+      collectBookingExerciseIds(booking).forEach((exerciseId) => ids.add(exerciseId));
+    });
+    return Array.from(ids).sort();
+  }, [activeBookings?.content]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1041,12 +1690,14 @@ export function Cabinet({
       setLoadingMoreActiveRecords(false);
       setActiveGameRecordsTotal(0);
       setCustomTournaments([]);
+      setReferralUserSubscriptions(null);
       historyBookingsRequestRef.current = null;
       try {
-        const [profileRes, activeRes, subsRes] = await Promise.all([
+        const [profileRes, activeRes, subsRes, referralSubsRes] = await Promise.all([
           apiFetchProfile(),
           apiFetchBookings(false),
           apiFetchSubscriptions(),
+          apiFetchSubscriptions(REFERRAL_SUBSCRIPTIONS_FETCH_OPTIONS),
         ]);
         if (!isMounted) return;
         if (!profileRes?.data) {
@@ -1081,10 +1732,12 @@ export function Cabinet({
         setProfile(profileRes.data);
         setActiveBookings(activeRes?.data || null);
         setUserSubscriptions(subsRes?.data || null);
+        setReferralUserSubscriptions(referralSubsRes?.data || subsRes?.data || null);
         trackAnalyticsEvent("cabinet_data_loaded", {
           activeBookingsCount: activeRes?.data?.content?.length ?? 0,
           historyBookingsLoaded: false,
           subscriptionsCount: subsRes?.data?.content?.length ?? 0,
+          referralSubscriptionsCount: referralSubsRes?.data?.content?.length ?? 0,
         });
       } catch (error) {
         if (isMounted) {
@@ -1108,6 +1761,77 @@ export function Cabinet({
     loadData();
     return () => { isMounted = false; };
   }, [logout, reloadKey]);
+
+  const referralSubscriptionSource = useMemo(() => {
+    const finishedAwareContent = referralUserSubscriptions?.content;
+    if (Array.isArray(finishedAwareContent) && finishedAwareContent.length > 0) {
+      return finishedAwareContent;
+    }
+    return Array.isArray(userSubscriptions?.content) ? userSubscriptions.content : [];
+  }, [referralUserSubscriptions?.content, userSubscriptions?.content]);
+
+  useEffect(() => {
+    const phone = pickStringFromUnknown(profile?.phone);
+    const subscriptions = referralSubscriptionSource;
+
+    if (!phone || subscriptions.length === 0) {
+      setReferralSubscriptionNamesById((current) => (Object.keys(current).length > 0 ? {} : current));
+      return;
+    }
+
+    const nowMs = Date.now();
+    const pending = subscriptions
+      .map((subscription) => {
+        const subscriptionId = pickStringFromUnknown(subscription.subscriptionId);
+        if (!subscriptionId || pickStringFromUnknown(subscription.name)) return null;
+        const window = resolveReferralSubscriptionWindow(subscription.expirationDate);
+        const renewalWindowEndsAt = window ? Date.parse(window.renewalWindowEndsAt) : NaN;
+        if (!Number.isFinite(renewalWindowEndsAt) || nowMs >= renewalWindowEndsAt) return null;
+        if (pickStringFromUnknown(referralSubscriptionNamesById[subscriptionId])) return null;
+        return subscriptionId;
+      })
+      .filter((subscriptionId): subscriptionId is string => Boolean(subscriptionId));
+
+    if (pending.length === 0) return;
+
+    let cancelled = false;
+    const requestId = referralSubscriptionNamesRequestRef.current + 1;
+    referralSubscriptionNamesRequestRef.current = requestId;
+
+    void (async () => {
+      try {
+        const names = await Promise.all(
+          pending.map(async (subscriptionId) => {
+            const response = await apiFetchSubscriptioName(subscriptionId, phone);
+            const resolvedName = pickStringFromUnknown(response.data?.sertName);
+            if (!resolvedName) return null;
+            return { subscriptionId, resolvedName };
+          }),
+        );
+
+        if (cancelled || referralSubscriptionNamesRequestRef.current !== requestId) return;
+
+        setReferralSubscriptionNamesById((current) => {
+          let changed = false;
+          const next = { ...current };
+
+          names.forEach((entry) => {
+            if (!entry || next[entry.subscriptionId] === entry.resolvedName) return;
+            next[entry.subscriptionId] = entry.resolvedName;
+            changed = true;
+          });
+
+          return changed ? next : current;
+        });
+      } catch {
+        // Ignore missing-name lookup errors; referral CTA stays hidden until a name is available.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.phone, referralSubscriptionNamesById, referralSubscriptionSource]);
 
   const loadHistoryBookings = useCallback(async (force = false) => {
     if (!force && historyBookings) {
@@ -1167,6 +1891,36 @@ export function Cabinet({
       window.removeEventListener("lk-profile-updated", handler);
     };
   }, [loadProfile]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<GamesUpdatedEventDetail>).detail;
+      const records = [
+        ...(detail?.record ? [detail.record] : []),
+        ...(Array.isArray(detail?.records) ? detail.records : []),
+      ].filter((record): record is PadelGameRecord => Boolean(record?.id));
+
+      if (records.length === 0) return;
+      const relevantRecords = records.filter((record) => (
+        isGameRelevantToCabinetIdentity(record, profile?.id ?? null, profile?.phone ?? null)
+      ));
+      const removedRecordIds = new Set(
+        records
+          .filter((record) => !relevantRecords.some((item) => item.id === record.id))
+          .map((record) => record.id),
+      );
+      setCreatedGames((prev) => (
+        mergeCabinetGameRecords(prev, relevantRecords)
+          .filter((record) => !removedRecordIds.has(record.id))
+      ));
+      setCreatedGamesError(null);
+    };
+
+    window.addEventListener("lk-games-updated", handler);
+    return () => {
+      window.removeEventListener("lk-games-updated", handler);
+    };
+  }, [profile?.id, profile?.phone]);
 
   useEffect(() => {
     if (!profile) return;
@@ -1233,6 +1987,19 @@ export function Cabinet({
         { length: TOURNAMENT_LOOKBACK_DAYS + TOURNAMENT_LOOKAHEAD_DAYS + 1 },
         (_, index) => formatTournamentDateKey(addDays(today, index - TOURNAMENT_LOOKBACK_DAYS)),
       );
+      const fallbackSourceResult = await apiFetchTournamentMechanicsSourceList({
+        from: dateKeys[0] ?? todayKey,
+        to: dateKeys[dateKeys.length - 1] ?? todayKey,
+      }).catch(() => null);
+      const fallbackByDate = new Map<string, Exercise[]>();
+      const fallbackExercises = buildTournamentMechanicsFallbackExercises(fallbackSourceResult?.data ?? []);
+      fallbackExercises.forEach((exercise) => {
+        const dateKey = getTournamentMechanicsExerciseDateKey(exercise);
+        if (!dateKey) return;
+        const bucket = fallbackByDate.get(dateKey) ?? [];
+        bucket.push(exercise);
+        fallbackByDate.set(dateKey, bucket);
+      });
 
       const results = await Promise.allSettled(
         dateKeys.map((date) => (
@@ -1247,9 +2014,16 @@ export function Cabinet({
 
       if (cancelled) return;
 
-      const hasAssigned = results.some((result) => {
-        if (result.status !== "fulfilled") return false;
-        const exercises = Array.isArray(result.value.data) ? result.value.data : [];
+      const hasAssigned = dateKeys.some((dateKey, index) => {
+        const result = results[index];
+        const fallbackExercisesForDate = fallbackByDate.get(dateKey) ?? [];
+        const exercises = result?.status === "fulfilled"
+          ? mergeTournamentMechanicsExercises(
+            Array.isArray(result.value.data) ? result.value.data : [],
+            fallbackExercisesForDate,
+            dateKey,
+          )
+          : fallbackExercisesForDate;
         return exercises.some((exercise) => (
           isTournamentExercise(exercise) && isTournamentTrainer(exercise, profile.id)
         ));
@@ -1293,18 +2067,45 @@ export function Cabinet({
     setLoadingCreatedGames(true);
     setCreatedGamesError(null);
 
+    Promise.all([
       apiFetchPadelGamesByPhone(
         phone,
         profile?.id ?? null,
         false,
-        { limit: ACTIVE_EVENTS_PREVIEW_LIMIT },
-      )
-      .then((result) => {
+        {
+          limit: ACTIVE_RESULT_WINDOW_LIMIT,
+        },
+      ),
+      apiFetchPadelGamesByPhone(
+        phone,
+        profile?.id ?? null,
+        true,
+        {
+          limit: ACTIVE_RESULT_WINDOW_LIMIT,
+          windowHours: 24,
+          needsResult: true,
+        },
+      ),
+    ])
+      .then(([activeGamesResult, resultWindowGamesResult]) => {
         if (!alive) return;
-        setCreatedGames(Array.isArray(result.data?.games) ? result.data.games : []);
-        setActiveGameRecordsTotal(result.data?.total ?? 0);
-        if (result.error) {
-          setCreatedGamesError(result.error.message || "Не удалось загрузить игры");
+        const activeGames = Array.isArray(activeGamesResult.data?.games)
+          ? activeGamesResult.data.games
+          : [];
+        const resultWindowGames = Array.isArray(resultWindowGamesResult.data?.games)
+          ? resultWindowGamesResult.data.games
+          : [];
+        const mergedGames = mergeCabinetGameRecords(activeGames, resultWindowGames)
+          .filter((game) => isGameRelevantToCabinetIdentity(game, profile?.id ?? null, profile?.phone ?? null));
+        setCreatedGames(mergedGames);
+        setActiveGameRecordsTotal(Math.max(
+          activeGamesResult.data?.total ?? 0,
+          resultWindowGamesResult.data?.total ?? 0,
+          mergedGames.length,
+        ));
+        const error = activeGamesResult.error ?? resultWindowGamesResult.error;
+        if (error) {
+          setCreatedGamesError(error.message || "Не удалось загрузить игры");
         }
       })
       .catch(() => {
@@ -1340,7 +2141,11 @@ export function Cabinet({
       }
 
       if (gamesResult.data) {
-        setCreatedGames(gamesResult.data.games);
+        setCreatedGames(
+          gamesResult.data.games.filter((game) => (
+            isGameRelevantToCabinetIdentity(game, profile?.id ?? null, profile?.phone ?? null)
+          )),
+        );
         setActiveGameRecordsTotal(gamesResult.data.total);
       }
 
@@ -1360,6 +2165,26 @@ export function Cabinet({
     () => normalizePhoneForGame(profile?.phone ?? null),
     [profile?.phone],
   );
+  const currentUserSyntheticPlayer = useMemo<PadelGamePlayer | null>(() => {
+    const fullName = [profile?.firstName, profile?.lastName].filter(Boolean).join(" ").trim();
+    if (!profile?.id && !profilePhoneNorm && !fullName) return null;
+    return {
+      id: profile?.id ?? null,
+      name: fullName || "Игрок",
+      phone: profilePhoneNorm ?? null,
+      photo: profile?.photo ?? null,
+      rating: null,
+      ratingNumeric: null,
+      source: "MANUAL_PHONE",
+      status: "CONFIRMED",
+    };
+  }, [profile?.firstName, profile?.id, profile?.lastName, profile?.photo, profilePhoneNorm]);
+
+  useEffect(() => {
+    missingGameLookupBookingIdsRef.current.clear();
+    missingGameLookupExpandedFetchTriedRef.current = false;
+    historyPrefetchAttemptedRef.current = false;
+  }, [profile?.id, profile?.phone]);
 
   useEffect(() => {
     if (!profilePhoneNorm) {
@@ -1407,7 +2232,7 @@ export function Cabinet({
     const timer = window.setInterval(() => {
       if (document.hidden) return;
       void run();
-    }, 12000);
+    }, 20000);
 
     return () => {
       cancelled = true;
@@ -1449,6 +2274,18 @@ export function Cabinet({
     });
     return map;
   }, [createdGames]);
+  const gameByPaymentRef = useMemo(() => {
+    const map = new Map<string, PadelGameRecord>();
+    createdGames.forEach((game) => {
+      if (!game || isGameCancelledStatus(game.status)) return;
+      collectGamePaymentRefs(game).forEach((paymentRef) => {
+        if (!map.has(paymentRef)) {
+          map.set(paymentRef, game);
+        }
+      });
+    });
+    return map;
+  }, [createdGames]);
   const gameBySlotIdKey = useMemo(() => {
     const map = new Map<string, PadelGameRecord>();
     createdGames.forEach((game) => {
@@ -1459,11 +2296,32 @@ export function Cabinet({
     });
     return map;
   }, [createdGames]);
+  const gameByLooseSlotKey = useMemo(() => {
+    const map = new Map<string, PadelGameRecord>();
+    const collisions = new Set<string>();
+    createdGames.forEach((game) => {
+      if (!game || isGameCancelledStatus(game.status)) return;
+      const slotKey = buildGameLooseSlotKey(game);
+      if (!slotKey || collisions.has(slotKey)) return;
+      if (map.has(slotKey)) {
+        map.delete(slotKey);
+        collisions.add(slotKey);
+        return;
+      }
+      map.set(slotKey, game);
+    });
+    return map;
+  }, [createdGames]);
   const resolveGameForBooking = useCallback((booking: Booking): PadelGameRecord | null => {
     const bookingId = normalizeBookingLikeId(booking.id);
     if (bookingId) {
       const byId = gameByBookingId.get(bookingId);
       if (byId) return byId;
+    }
+    const paymentRefs = collectBookingPaymentRefs(booking);
+    for (const paymentRef of paymentRefs) {
+      const byPaymentRef = gameByPaymentRef.get(paymentRef);
+      if (byPaymentRef) return byPaymentRef;
     }
     const exerciseIds = collectBookingExerciseIds(booking);
     for (const exerciseId of exerciseIds) {
@@ -1476,14 +2334,24 @@ export function Cabinet({
       if (bySlotIdKey) return bySlotIdKey;
     }
     const slotKey = buildBookingSlotKey(booking);
-    if (!slotKey) return null;
-    return gameBySlotKey.get(slotKey) ?? null;
-  }, [gameByBookingId, gameByExerciseId, gameBySlotIdKey, gameBySlotKey]);
+    if (slotKey) {
+      const bySlotKey = gameBySlotKey.get(slotKey);
+      if (bySlotKey) return bySlotKey;
+    }
+    const looseSlotKey = buildBookingLooseSlotKey(booking);
+    if (!looseSlotKey) return null;
+    return gameByLooseSlotKey.get(looseSlotKey) ?? null;
+  }, [gameByBookingId, gameByExerciseId, gameByLooseSlotKey, gameByPaymentRef, gameBySlotIdKey, gameBySlotKey]);
   const resolveCancelledGameForBooking = useCallback((booking: Booking): PadelGameRecord | null => {
     const bookingId = normalizeBookingLikeId(booking.id);
     if (bookingId) {
       const byId = gameByBookingId.get(bookingId);
       if (byId) return byId;
+    }
+    const paymentRefs = collectBookingPaymentRefs(booking);
+    for (const paymentRef of paymentRefs) {
+      const byPaymentRef = gameByPaymentRef.get(paymentRef);
+      if (byPaymentRef) return byPaymentRef;
     }
     const exerciseIds = collectBookingExerciseIds(booking);
     for (const exerciseId of exerciseIds) {
@@ -1491,10 +2359,158 @@ export function Cabinet({
       if (byExerciseId) return byExerciseId;
     }
     return null;
-  }, [gameByBookingId, gameByExerciseId]);
+  }, [gameByBookingId, gameByExerciseId, gameByPaymentRef]);
+  const resolveDisplayGameForBooking = useCallback((booking: Booking): PadelGameRecord | null => {
+    const linkedGame = resolveGameForBooking(booking);
+    if (linkedGame) return linkedGame;
+
+    if (resolveExerciseCategoryFromValue(booking) !== EXERCISE_CATEGORY_OPEN_GAME) return null;
+
+    return buildSyntheticCabinetGameFromBooking(booking, {
+      paid: resolveBookingPaidState(booking),
+      currentUserPlayer: currentUserSyntheticPlayer,
+    });
+  }, [currentUserSyntheticPlayer, resolveGameForBooking]);
+  const checkExerciseCancellationState = useCallback((exerciseId: string): Promise<ExerciseCancellationCheckState> => {
+    const normalizedExerciseId = normalizeBookingLikeId(exerciseId);
+    if (!normalizedExerciseId) return Promise.resolve("unknown");
+
+    const cached = exerciseCancellationCheckRef.current.get(normalizedExerciseId);
+    if (cached) return cached;
+
+    const next = apiFetchExerciseById(normalizedExerciseId)
+      .then((result) => {
+        const state = resolveExerciseCancellationState(result.data);
+        if (state === true) return "cancelled" as const;
+        if (state === false) return "active" as const;
+        return "unknown" as const;
+      })
+      .catch(() => "unknown" as const);
+
+    exerciseCancellationCheckRef.current.set(normalizedExerciseId, next);
+    return next;
+  }, []);
+  const resolveGameExerciseCancellationState = useCallback(async (
+    game: PadelGameRecord,
+  ): Promise<ExerciseCancellationCheckState> => {
+    const exerciseIds = collectGameExerciseIds(game);
+    if (exerciseIds.length === 0) return "unknown";
+
+    let hasUnknown = false;
+    for (const exerciseId of exerciseIds) {
+      const state = await checkExerciseCancellationState(exerciseId);
+      if (state === "active") return "active";
+      if (state === "unknown") hasUnknown = true;
+    }
+
+    return hasUnknown ? "unknown" : "cancelled";
+  }, [checkExerciseCancellationState]);
+
+  useEffect(() => {
+    if (!profile?.phone) return;
+    if (historyPrefetchAttemptedRef.current) return;
+    if (historyBookings !== null || loadingHistoryBookings || historyBookingsRequestRef.current) return;
+    if (createdGames.length === 0) return;
+
+    const hasActiveCandidates = createdGames.some((game) => (
+      !isGameCancelledStatus(game.status)
+      && !isGameRemovedStatus(game.status)
+    ));
+    if (!hasActiveCandidates) return;
+
+    historyPrefetchAttemptedRef.current = true;
+    void loadHistoryBookings();
+  }, [
+    createdGames,
+    historyBookings,
+    loadHistoryBookings,
+    loadingHistoryBookings,
+    profile?.phone,
+  ]);
   const hasTeamGameForBooking = useCallback((booking: Booking): boolean => {
     return Boolean(resolveGameForBooking(booking));
   }, [resolveGameForBooking]);
+
+  useEffect(() => {
+    const bookings = activeBookings?.content ?? [];
+    if (bookings.length === 0) return;
+    if (!profile?.phone) return;
+
+    const currentBookingIds = new Set(
+      bookings
+        .map((booking) => normalizeBookingLikeId(booking.id))
+        .filter((value): value is string => Boolean(value)),
+    );
+    missingGameLookupBookingIdsRef.current.forEach((bookingId) => {
+      if (!currentBookingIds.has(bookingId)) {
+        missingGameLookupBookingIdsRef.current.delete(bookingId);
+      }
+    });
+
+    const missingBookingLookups = bookings
+      .filter((booking) => !booking.isCancelled)
+      .map((booking) => ({
+        booking,
+        bookingId: normalizeBookingLikeId(booking.id),
+      }))
+      .filter((entry): entry is { booking: Booking; bookingId: string } => Boolean(entry.bookingId))
+      .filter((entry) => !missingGameLookupBookingIdsRef.current.has(entry.bookingId))
+      .filter((entry) => !resolveGameForBooking(entry.booking))
+      .map((entry) => ({
+        bookingId: entry.bookingId,
+        paymentRef: collectBookingPaymentRefs(entry.booking)[0] ?? "",
+      }))
+      .slice(0, 8);
+
+    if (missingBookingLookups.length === 0) return;
+    missingBookingLookups.forEach(({ bookingId }) => {
+      missingGameLookupBookingIdsRef.current.add(bookingId);
+    });
+
+    let cancelled = false;
+    const shouldTryExpandedFetch = !missingGameLookupExpandedFetchTriedRef.current;
+    if (shouldTryExpandedFetch) {
+      missingGameLookupExpandedFetchTriedRef.current = true;
+    }
+    void Promise.allSettled(
+      missingBookingLookups.map(({ bookingId, paymentRef }) => (
+        apiFetchPadelGameByPaymentRef(paymentRef, [bookingId])
+      )),
+    ).then((results) => {
+      if (cancelled) return;
+      const recoveredGames = results
+        .flatMap((result) => {
+          if (result.status !== "fulfilled" || !result.value.data) return [];
+          return [result.value.data];
+        })
+        .filter((game, index, array) => array.findIndex((item) => item.id === game.id) === index);
+      if (recoveredGames.length === 0) return;
+
+      setCreatedGames((prev) => mergeCabinetGameRecords(prev, recoveredGames));
+      setCreatedGamesError(null);
+    });
+
+    if (shouldTryExpandedFetch) {
+      void apiFetchPadelGamesByPhone(
+        profile.phone,
+        profile?.id ?? null,
+        true,
+        { limit: 500 },
+      ).then((result) => {
+        if (cancelled || !result.data?.games?.length) return;
+        setCreatedGames((prev) => mergeCabinetGameRecords(prev, result.data?.games ?? []));
+        setActiveGameRecordsTotal((prevTotal) => Math.max(prevTotal, result.data?.total ?? 0));
+        if (!result.error) {
+          setCreatedGamesError(null);
+        }
+      });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBookings?.content, profile?.id, profile?.phone, resolveGameForBooking]);
+
   const activeBookingsLoadedCount = activeBookings?.content?.length ?? 0;
   const activeBookingsTotal = activeBookings?.totalElements ?? activeBookingsLoadedCount;
   const hasMoreActiveBookings = activeBookingsTotal > activeBookingsLoadedCount;
@@ -1507,97 +2523,92 @@ export function Cabinet({
     ],
     [activeBookings?.content, historyBookings?.content],
   );
-  const tournamentHistorySourceBookings = useMemo(() => {
-    if (!selectedTournamentBooking) return allBookings;
-    return allBookings.includes(selectedTournamentBooking) ? allBookings : [...allBookings, selectedTournamentBooking];
-  }, [allBookings, selectedTournamentBooking]);
-  const tournamentExerciseIds = useMemo(() => {
-    const bucket = new Set<string>();
-    tournamentHistorySourceBookings.forEach((booking) => {
-      if (!isTournamentBookingCandidate(booking)) return;
-      collectBookingExerciseIds(booking).forEach((exerciseId) => bucket.add(exerciseId));
-    });
-    return Array.from(bucket).sort();
-  }, [tournamentHistorySourceBookings]);
-  useEffect(() => {
-    if (tournamentExerciseIds.length === 0) {
-      setCustomTournaments([]);
-      return;
-    }
-
-    let alive = true;
-    void Promise.all(
-      tournamentExerciseIds.map(async (exerciseId) => {
-        const result = await apiFetchTournamentHistory(exerciseId);
-        return Array.isArray(result.data) ? result.data : [];
-      }),
-    ).then((results) => {
-      if (!alive) return;
-      const next = new Map<string, TournamentHistoryRecord>();
-      results.flat().forEach((record) => {
-        const normalizedTournamentId = normalizeBookingLikeId(record.tournamentId);
-        if (!normalizedTournamentId || next.has(normalizedTournamentId)) return;
-        next.set(normalizedTournamentId, record);
-      });
-      setCustomTournaments(Array.from(next.values()));
-    }).catch(() => {
-      if (!alive) return;
-      setCustomTournaments([]);
-    });
-
-    return () => {
-      alive = false;
-    };
-  }, [tournamentExerciseIds]);
   useEffect(() => {
     if (createdGames.length === 0 || allBookings.length === 0) return;
 
-    const cancelledGameIds = new Set<string>();
+    const activeLinkedGameIds = new Set<string>();
+    allBookings.forEach((booking) => {
+      if (booking.isCancelled) return;
+      const linkedGame = resolveGameForBooking(booking);
+      if (linkedGame?.id) {
+        activeLinkedGameIds.add(linkedGame.id);
+      }
+    });
+
+    const cancelledGameCandidates = new Map<string, PadelGameRecord>();
     allBookings.forEach((booking) => {
       if (!booking.isCancelled) return;
       const game = resolveCancelledGameForBooking(booking);
       if (game?.id) {
-        cancelledGameIds.add(game.id);
+        if (activeLinkedGameIds.has(game.id)) return;
+        cancelledGameCandidates.set(game.id, game);
       }
     });
 
-    if (cancelledGameIds.size === 0) return;
+    if (cancelledGameCandidates.size === 0) return;
 
-    setCreatedGames((prev) => {
-      let changed = false;
-      const next = prev.map((game) => {
-        if (!cancelledGameIds.has(game.id) || isGameCancelledStatus(game.status)) {
-          return game;
+    let alive = true;
+    void (async () => {
+      const cancelledGameIds = new Set<string>();
+      for (const [gameId, game] of cancelledGameCandidates) {
+        const exerciseIds = collectGameExerciseIds(game);
+        if (exerciseIds.length > 0) {
+          const exerciseState = await resolveGameExerciseCancellationState(game);
+          if (!alive) return;
+          if (exerciseState !== "cancelled") continue;
         }
-        changed = true;
-        return {
-          ...game,
-          status: "CANCELLED",
-        };
-      });
-      return changed ? next : prev;
-    });
-
-    const gameIdsToPersist = Array.from(cancelledGameIds).filter(
-      (gameId) => !cancellingGameIdsRef.current.has(gameId),
-    );
-    if (gameIdsToPersist.length === 0) return;
-
-    gameIdsToPersist.forEach((gameId) => {
-      cancellingGameIdsRef.current.add(gameId);
-    });
-
-    void Promise.all(gameIdsToPersist.map(async (gameId) => {
-      const result = await apiUpdatePadelGameRecord(gameId, { status: "CANCELLED" });
-      if (result.data?.id) {
-        setCreatedGames((prev) => prev.map((game) => (
-          game.id === result.data?.id ? (result.data as PadelGameRecord) : game
-        )));
-        return;
+        cancelledGameIds.add(gameId);
       }
-      cancellingGameIdsRef.current.delete(gameId);
-    }));
-  }, [allBookings, createdGames.length, resolveCancelledGameForBooking]);
+
+      if (!alive || cancelledGameIds.size === 0) return;
+
+      setCreatedGames((prev) => {
+        let changed = false;
+        const next = prev.map((game) => {
+          if (!cancelledGameIds.has(game.id) || isGameCancelledStatus(game.status)) {
+            return game;
+          }
+          changed = true;
+          return {
+            ...game,
+            status: "CANCELLED",
+          };
+        });
+        return changed ? next : prev;
+      });
+
+      const gameIdsToPersist = Array.from(cancelledGameIds).filter(
+        (gameId) => !cancellingGameIdsRef.current.has(gameId),
+      );
+      if (gameIdsToPersist.length === 0) return;
+
+      gameIdsToPersist.forEach((gameId) => {
+        cancellingGameIdsRef.current.add(gameId);
+      });
+
+      await Promise.all(gameIdsToPersist.map(async (gameId) => {
+        const result = await apiUpdatePadelGameRecord(gameId, { status: "CANCELLED" });
+        if (!alive) return;
+        if (result.data?.id) {
+          setCreatedGames((prev) => prev.map((game) => (
+            game.id === result.data?.id ? (result.data as PadelGameRecord) : game
+          )));
+          return;
+        }
+        cancellingGameIdsRef.current.delete(gameId);
+      }));
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [
+    allBookings,
+    createdGames.length,
+    resolveCancelledGameForBooking,
+    resolveGameExerciseCancellationState,
+    resolveGameForBooking,
+  ]);
   const bookingPaidById = useMemo(() => {
     const next = new Map<string, boolean | null>();
     allBookings.forEach((booking) => {
@@ -1634,6 +2645,49 @@ export function Cabinet({
     });
     return next;
   }, [customTournaments]);
+  useEffect(() => {
+    if (!selectedTournamentBooking || !isTournamentBookingCandidate(selectedTournamentBooking)) {
+      return;
+    }
+
+    const missingExerciseIds = collectBookingExerciseIds(selectedTournamentBooking)
+      .filter((exerciseId, index, array) => array.indexOf(exerciseId) === index)
+      .filter((exerciseId) => !tournamentByExerciseId.has(exerciseId));
+
+    if (missingExerciseIds.length === 0) {
+      return;
+    }
+
+    let alive = true;
+    void Promise.all(
+      missingExerciseIds.map(async (exerciseId) => {
+        const result = await apiFetchTournamentHistory(exerciseId);
+        return Array.isArray(result.data) ? result.data : [];
+      }),
+    ).then((results) => {
+      if (!alive) return;
+      setCustomTournaments((current) => {
+        const next = new Map<string, TournamentHistoryRecord>();
+        current.forEach((record) => {
+          const normalizedTournamentId = normalizeBookingLikeId(record.tournamentId);
+          if (!normalizedTournamentId || next.has(normalizedTournamentId)) return;
+          next.set(normalizedTournamentId, record);
+        });
+        results.flat().forEach((record) => {
+          const normalizedTournamentId = normalizeBookingLikeId(record.tournamentId);
+          if (!normalizedTournamentId || next.has(normalizedTournamentId)) return;
+          next.set(normalizedTournamentId, record);
+        });
+        return Array.from(next.values());
+      });
+    }).catch(() => {
+      // Tournament details can stay on booking fallback data when history is temporarily unavailable.
+    });
+
+    return () => {
+      alive = false;
+    };
+  }, [selectedTournamentBooking, tournamentByExerciseId]);
   const resolveTournamentForBooking = useCallback((booking: Booking): TournamentHistoryRecord | null => {
     const exerciseIds = collectBookingExerciseIds(booking);
     for (const exerciseId of exerciseIds) {
@@ -1708,20 +2762,154 @@ export function Cabinet({
     return null;
   }, [activeBookings?.content, bookingById, resolveGameForBooking]);
 
+  const referralSubscriptions = useMemo(
+    () => hydrateReferralSubscriptionsWithNames(referralSubscriptionSource, referralSubscriptionNamesById),
+    [referralSubscriptionNamesById, referralSubscriptionSource],
+  );
+  const shouldShowReferralHeaderCtas = useMemo(() => {
+    if (typeof window === "undefined") return IS_DEV_RELEASE_CHANNEL;
+    const pathname = window.location.pathname.replace(/\/+$/, "");
+    return (
+      pathname.includes("/lk_dev")
+      || pathname === "/lk"
+      || pathname.startsWith("/lk/")
+      || pathname === "/lk_new"
+      || pathname.startsWith("/lk_new/")
+    );
+  }, []);
+  const shareOwnerCandidate = useMemo(
+    () => (
+      shouldShowReferralHeaderCtas
+        ? resolveReferralShareOwnerCandidate(referralSubscriptions, profile?.phone ?? null)
+        : null
+    ),
+    [profile?.phone, referralSubscriptions, shouldShowReferralHeaderCtas],
+  );
+  const renewalOwnerCandidate = useMemo(
+    () => (
+      shouldShowReferralHeaderCtas
+        ? resolveReferralRenewalOwnerCandidate(referralSubscriptions, profile?.phone ?? null)
+        : null
+    ),
+    [profile?.phone, referralSubscriptions, shouldShowReferralHeaderCtas],
+  );
+  useEffect(() => {
+    const phone = profile?.phone?.trim() || "";
+    const targets = [
+      shareOwnerCandidate ? { candidate: shareOwnerCandidate, mode: "share" as const } : null,
+      renewalOwnerCandidate ? { candidate: renewalOwnerCandidate, mode: "renewal" as const } : null,
+    ].filter((entry): entry is { candidate: NonNullable<typeof shareOwnerCandidate>; mode: "share" | "renewal" } => Boolean(entry));
+
+    if (!phone || targets.length === 0) {
+      setReferralInviteUrlByKey((current) => (Object.keys(current).length > 0 ? {} : current));
+      return;
+    }
+
+    const pending = targets.filter(({ candidate, mode }) => {
+      const key = `${mode}:${candidate.subscriptionId}`;
+      return !referralInviteUrlByKey[key];
+    });
+    if (pending.length === 0) return;
+
+    let cancelled = false;
+    const requestId = referralInviteRequestRef.current + 1;
+    referralInviteRequestRef.current = requestId;
+
+    void (async () => {
+      const resolvedEntries = await Promise.all(
+        pending.map(async ({ candidate, mode }) => {
+          const result = await apiCreateReferralSubscriptionInvite({
+            ownerPhone: phone,
+            ownerSubscriptionId: candidate.subscriptionId,
+            mode,
+          });
+          const inviteId = result.data?.inviteId || null;
+          const url = buildReferralSubscriptionUrl(inviteId, mode, {
+            ownerPhone: phone,
+            ownerSubscriptionId: candidate.subscriptionId,
+          });
+          return url ? { key: `${mode}:${candidate.subscriptionId}`, url } : null;
+        }),
+      );
+
+      if (cancelled || referralInviteRequestRef.current !== requestId) return;
+
+      setReferralInviteUrlByKey((current) => {
+        let changed = false;
+        const next = { ...current };
+
+        resolvedEntries.forEach((entry) => {
+          if (!entry || next[entry.key] === entry.url) return;
+          next[entry.key] = entry.url;
+          changed = true;
+        });
+
+        return changed ? next : current;
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.phone, referralInviteUrlByKey, renewalOwnerCandidate, shareOwnerCandidate]);
+  const shareOffer = useMemo(() => {
+    if (!shouldShowReferralHeaderCtas) return null;
+    if (!shareOwnerCandidate) return null;
+    const url = referralInviteUrlByKey[`share:${shareOwnerCandidate.subscriptionId}`] || null;
+    if (!url) return null;
+
+    return {
+      subscriptionName: shareOwnerCandidate.subscriptionName,
+      url,
+    };
+  }, [referralInviteUrlByKey, shareOwnerCandidate, shouldShowReferralHeaderCtas]);
+  const renewalOffer = useMemo(() => {
+    if (!shouldShowReferralHeaderCtas) return null;
+    if (!renewalOwnerCandidate) return null;
+    const url = referralInviteUrlByKey[`renewal:${renewalOwnerCandidate.subscriptionId}`] || null;
+    if (!url) return null;
+
+    return {
+      renewalCountdownEndsAt: renewalOwnerCandidate.renewalWindowEndsAt,
+      renewalCountdownVisible: renewalOwnerCandidate.renewalWindowActive,
+      subscriptionName: renewalOwnerCandidate.subscriptionName,
+      url,
+    };
+  }, [referralInviteUrlByKey, renewalOwnerCandidate, shouldShowReferralHeaderCtas]);
+
+  const handleForceRefresh = useCallback(async () => {
+    if (isRefreshingApp) return;
+    setIsRefreshingApp(true);
+    try {
+      await forceAppRefresh();
+    } catch (error) {
+      trackClientError(
+        "cabinet.force_app_refresh_failed",
+        error,
+        { clientId: profile?.id ?? null },
+        { handled: true, severity: "warning" },
+      );
+      setIsRefreshingApp(false);
+    }
+  }, [isRefreshingApp, profile?.id]);
+
   const loadBookings = async () => {
     const shouldRefreshHistory = isBookingHistoryOpen || historyBookings !== null;
-    const [activeBookingsData, historyBookingsData, userSubscriptionsData] = await Promise.all([
+    const [activeBookingsData, historyBookingsData, userSubscriptionsData, referralSubscriptionsData] = await Promise.all([
       apiFetchBookings(false),
       shouldRefreshHistory ? loadHistoryBookings(true) : Promise.resolve(null),
       apiFetchSubscriptions(),
+      apiFetchSubscriptions(REFERRAL_SUBSCRIPTIONS_FETCH_OPTIONS),
     ]);
     if (activeBookingsData) setActiveBookings(activeBookingsData.data);
     if (userSubscriptionsData.data) setUserSubscriptions(userSubscriptionsData.data);
+    setReferralUserSubscriptions(referralSubscriptionsData.data || userSubscriptionsData.data || null);
     trackAnalyticsEvent("cabinet_data_refreshed", {
       activeBookingsCount: activeBookingsData?.data?.content?.length ?? 0,
       historyBookingsCount: historyBookingsData?.content?.length ?? (historyBookings?.content?.length ?? 0),
       historyBookingsLoaded: shouldRefreshHistory,
       subscriptionsCount: userSubscriptionsData?.data?.content?.length ?? 0,
+      referralSubscriptionsCount: referralSubscriptionsData?.data?.content?.length ?? 0,
     });
   };
 
@@ -1768,16 +2956,23 @@ export function Cabinet({
       source: "cabinet",
       clientId: profile.id,
     });
+    const groupTrainingsAction = QUICK_ACTIONS.find((action) => action.label === "Групповые тренировки");
     onOpenOnboarding({
       profile,
       gamesLink: resolveQuickActionHref(QUICK_ACTIONS.find((action) => action.label === "Играть")?.href || "#"),
-      trainingLink: resolveQuickActionHref(
-        QUICK_ACTIONS.find((action) => action.label === "Групповые тренировки")?.href || "#",
-      ),
+      trainingLink: groupTrainingsAction ? resolveGroupTrainingsHref(groupTrainingsAction.href) : "#",
       tournamentsLink: resolveQuickActionHref(
         QUICK_ACTIONS.find((action) => action.label === "Турниры")?.href || "#",
       ),
     });
+  };
+
+  const openLevelsInfo = () => {
+    trackAnalyticsEvent("levels_info_open_requested", {
+      source: "cabinet_avatar",
+      clientId: profile.id,
+    });
+    onOpenLevelsInfo({ profile });
   };
 
   const handleCopyInviteFromFeed = async (game: PadelGameRecord) => {
@@ -1798,26 +2993,193 @@ export function Cabinet({
   };
 
   const handleOpenGameChat = (game: PadelGameRecord) => {
+    if (isSyntheticCabinetBookingGame(game)) {
+      onOpenGames({ gameId: game.id, openChat: false, initialGameRecord: game });
+      return;
+    }
     onOpenGames({ gameId: game.id, openChat: true });
   };
 
   const handleOpenGameDetails = (game: PadelGameRecord) => {
+    if (isSyntheticCabinetBookingGame(game)) {
+      onOpenGames({ gameId: game.id, openChat: false, initialGameRecord: game });
+      return;
+    }
     onOpenGames({ gameId: game.id, openChat: false });
   };
 
-  const handleCancelGameBooking = async (gameId: string, bookingId: string) => {
-    if (!gameId || !bookingId || cancellingGameId) return;
+  const handleCancelGameBooking = async (
+    gameId: string,
+    bookingId: string,
+    action: BookingCancellationAction,
+  ): Promise<BookingCancellationExecutionResult> => {
+    if (!gameId || !bookingId || cancellingGameId) {
+      return {
+        ok: false,
+        message: "Не удалось отменить запись",
+      };
+    }
 
     setCancellingGameId(gameId);
-    const res = await apiCancelBooking(bookingId);
-    const ok = res.status !== null && res.status >= 200 && res.status < 300;
+    let ok = false;
+    let cleanupHandled = false;
+    let successMessage = action.successMessage;
+    const linkedGameSnapshot = createdGames.find((item) => item.id === gameId) ?? null;
+    const linkedGameResult = await apiFetchPadelGameRecord(gameId);
+    const linkedGame = linkedGameResult.data?.id
+      ? linkedGameResult.data as PadelGameRecord
+      : linkedGameSnapshot;
+    const hasExerciseIds = Boolean(linkedGame && collectGameExerciseIds(linkedGame).length > 0);
+    const hasBookingIds = Boolean(linkedGame && collectGameBookingIds(linkedGame).length > 0);
 
-    setGameCancelOkById((prev) => ({ ...prev, [gameId]: ok }));
-    setGameCancelStateById((prev) => ({ ...prev, [gameId]: "done" }));
+    if (hasExerciseIds || hasBookingIds) {
+      const cleanupResult = await apiCleanupPadelGameByOrganizer(gameId, {
+        force: true,
+        dryRun: false,
+        limit: 1,
+        intent: "cancel_game",
+        refundMethod: action.refundMethod ?? undefined,
+        cancellationActionId: action.id,
+      });
+      const cleanupData = cleanupResult.data;
+      const cleanupItems = Array.isArray(cleanupData?.items) ? cleanupData.items : [];
+      const cleanupItem = cleanupItems.find((item) => normalizeBookingLikeId(item.gameId) === normalizeBookingLikeId(gameId))
+        ?? cleanupItems[0]
+        ?? null;
+      const cleanupProcessed = (cleanupData?.processed ?? 0) > 0 || cleanupItem !== null;
+      const cleanupSucceeded = cleanupItem?.cancelledInLk === true && cleanupItem?.withVivaErrors !== true;
+
+      if (cleanupProcessed) {
+        cleanupHandled = true;
+        ok = cleanupSucceeded;
+        successMessage = cleanupItem?.refundMessage || action.successMessage;
+      }
+    }
+
+    if (!ok && !cleanupHandled) {
+      const res = await apiCancelBooking(bookingId, action);
+      const accepted = res.status !== null && res.status >= 200 && res.status < 300;
+      const verifiableConflict = res.status !== null && [400, 404, 409, 422].includes(res.status);
+      if (!accepted && !verifiableConflict) {
+        setCancellingGameId(null);
+        return {
+          ok: false,
+          message: res.error?.message || "Не удалось отменить запись",
+        };
+      }
+      const verification = await apiVerifyBookingCancellation(bookingId);
+      ok = !verification.error && verification.data?.state === "cancelled";
+      if (!ok) {
+        setCancellingGameId(null);
+        return {
+          ok: false,
+          message: verification.error?.message || "Не удалось подтвердить отмену записи",
+        };
+      }
+    }
+
     setCancellingGameId(null);
+    if (!ok) {
+      return {
+        ok: false,
+        message: "Не удалось отменить запись",
+      };
+    }
+
+    return {
+      ok: true,
+      message: successMessage,
+    };
+  };
+
+  const handleArchiveGameFromCabinet = async (gameId: string) => {
+    const normalizedGameId = gameId.trim();
+    if (!normalizedGameId || archivingGameId) return;
+
+    setArchivingGameId(normalizedGameId);
+    setArchiveGameErrorById((current) => {
+      if (!current[normalizedGameId]) return current;
+      const next = { ...current };
+      delete next[normalizedGameId];
+      return next;
+    });
+
+    try {
+      let archivedByCleanup = false;
+      const linkedGame = createdGames.find((item) => item.id === normalizedGameId) ?? null;
+      const hasExerciseIds = Boolean(linkedGame && collectGameExerciseIds(linkedGame).length > 0);
+      const hasBookingIds = Boolean(linkedGame && collectGameBookingIds(linkedGame).length > 0);
+
+      if (hasExerciseIds || hasBookingIds) {
+        const cleanupResult = await apiCleanupPadelGameByOrganizer(normalizedGameId, {
+          force: true,
+          dryRun: false,
+          limit: 1,
+          intent: "cancel_game",
+        });
+        const cleanupData = cleanupResult.data;
+        const cleanupItems = Array.isArray(cleanupData?.items) ? cleanupData.items : [];
+        const cleanupItem = cleanupItems.find((item) => (
+          normalizeBookingLikeId(item.gameId) === normalizeBookingLikeId(normalizedGameId)
+        )) ?? cleanupItems[0] ?? null;
+        const cleanupProcessed = (cleanupData?.processed ?? 0) > 0 || cleanupItem !== null;
+        const cleanupSucceeded = cleanupItem?.cancelledInLk === true && cleanupItem?.withVivaErrors !== true;
+
+        if (cleanupProcessed) {
+          if (!cleanupSucceeded) {
+            setArchiveGameErrorById((current) => ({
+              ...current,
+              [normalizedGameId]: "Не удалось удалить занятие в Viva",
+            }));
+            return;
+          }
+          archivedByCleanup = true;
+        }
+      }
+
+      if (!archivedByCleanup) {
+        const result = await apiUpdatePadelGameRecord(normalizedGameId, { archived: true });
+        if (result.error && !result.data?.id) {
+          setArchiveGameErrorById((current) => ({
+            ...current,
+            [normalizedGameId]: result.error?.message || "Не удалось удалить игру из личного кабинета",
+          }));
+          return;
+        }
+      }
+
+      setCreatedGames((current) => current.filter((item) => item.id !== normalizedGameId));
+      setChatUnreadByGame((current) => {
+        if (!current[normalizedGameId]) return current;
+        const next = { ...current };
+        delete next[normalizedGameId];
+        return next;
+      });
+      setGameCancelStateById((current) => {
+        if (!current[normalizedGameId]) return current;
+        const next = { ...current };
+        delete next[normalizedGameId];
+        return next;
+      });
+      setArchiveGameErrorById((current) => {
+        if (!current[normalizedGameId]) return current;
+        const next = { ...current };
+        delete next[normalizedGameId];
+        return next;
+      });
+    } catch {
+      setArchiveGameErrorById((current) => ({
+        ...current,
+        [normalizedGameId]: "Не удалось удалить игру из личного кабинета",
+      }));
+    } finally {
+      setArchivingGameId((current) => (current === normalizedGameId ? null : current));
+    }
   };
 
   const handleCreateTeamGameFromBooking = (booking: Booking) => {
+    if (!isExerciseConvertibleToGameFromBooking(booking)) return;
+
     const exercise = booking.exercise;
     const bookingId = String(booking.id || "").trim();
     if (!bookingId || !exercise?.timeFrom || !exercise?.timeTo) return;
@@ -1836,12 +3198,17 @@ export function Cabinet({
       pickStringFromUnknown(exercise.id) ??
       pickStringFromRecord(booking, ["exerciseId", "vivaExerciseId", "exercise_id", "viva_exercise_id"]);
     const durationMinutes = resolveDurationMinutes(exercise.timeFrom, exercise.timeTo);
+    const typeId = pickNumberFromUnknown(exercise.type?.id);
+    const directionId = pickNumberFromUnknown(exercise.direction?.id);
 
     onOpenGames({
       createFromBooking: {
         bookingId,
         slotId,
         exerciseId,
+        typeId,
+        typeName: pickStringFromUnknown(exercise.type?.name),
+        directionId,
         studioId: pickStringFromUnknown(exercise.studio?.id),
         studioName: pickStringFromUnknown(exercise.studio?.name),
         roomId: pickStringFromUnknown(exercise.room?.id),
@@ -1897,111 +3264,13 @@ export function Cabinet({
   };
 
   const handleQuickActionPlay = (action: QuickAction) => {
-    const resolvedHref = resolveQuickActionHref(action.href);
+    const resolvedHref = resolveFindGameHref(resolveQuickActionHref(action.href));
     trackAnalyticsEvent("quick_action_click", {
       label: action.label,
       href: resolvedHref,
       clientId: profile.id,
     });
     window.location.href = resolvedHref;
-  };
-
-  const handleInlineGameResultScoreChange = (
-    gameId: string,
-    side: keyof InlineGameResultScore,
-    value: string,
-  ) => {
-    setInlineGameResultScores((current) => ({
-      ...current,
-      [gameId]: {
-        left: current[gameId]?.left ?? "",
-        right: current[gameId]?.right ?? "",
-        [side]: normalizeScoreInput(value),
-      },
-    }));
-    setInlineGameResultErrorById((current) => {
-      if (!current[gameId]) return current;
-      const next = { ...current };
-      delete next[gameId];
-      return next;
-    });
-  };
-
-  const handleSaveInlineGameResult = async (
-    game: PadelGameRecord,
-    teamSlots: Array<PadelGamePlayer | null>,
-  ) => {
-    const score = inlineGameResultScores[game.id] ?? { left: "", right: "" };
-    const left = Number.parseInt(score.left, 10);
-    const right = Number.parseInt(score.right, 10);
-    if (!Number.isFinite(left) || !Number.isFinite(right)) {
-      setInlineGameResultErrorById((current) => ({
-        ...current,
-        [game.id]: "Введите счёт с обеих сторон",
-      }));
-      return;
-    }
-
-    setSavingInlineGameResultId(game.id);
-    setInlineGameResultErrorById((current) => {
-      if (!current[game.id]) return current;
-      const next = { ...current };
-      delete next[game.id];
-      return next;
-    });
-
-    const storedTeamSlots = teamSlots.map((player) => (
-      player
-        ? {
-            id: player.id ?? null,
-            phone: normalizePhoneForGame(player.phone),
-            name: player.name || null,
-          }
-        : null
-    ));
-    const nextMetadata = {
-      ...(isRecord(game.metadata) ? game.metadata : {}),
-      teamSlots: storedTeamSlots,
-      matchResult: {
-        ...(isRecord(game.metadata?.matchResult) ? game.metadata.matchResult : {}),
-        sets: [{ left, right }],
-        setPairings: [{ setIndex: 0, teamSlots: storedTeamSlots }],
-        status: "DRAFT",
-        savedAt: new Date().toISOString(),
-        savedBy: {
-          id: profile?.id ?? null,
-          phone: normalizePhoneForGame(profile?.phone ?? null),
-          name: [profile?.firstName, profile?.lastName].filter(Boolean).join(" ").trim() || null,
-        },
-      },
-    };
-
-    try {
-      const result = await apiUpdatePadelGameRecord(game.id, { metadata: nextMetadata });
-      if (!result.data?.id) {
-        setInlineGameResultErrorById((current) => ({
-          ...current,
-          [game.id]: result.error?.message || "Не удалось сохранить результат",
-        }));
-        return;
-      }
-
-      setCreatedGames((current) => current.map((item) => (
-        item.id === game.id ? (result.data as PadelGameRecord) : item
-      )));
-      setInlineGameResultScores((current) => {
-        const next = { ...current };
-        delete next[game.id];
-        return next;
-      });
-    } catch {
-      setInlineGameResultErrorById((current) => ({
-        ...current,
-        [game.id]: "Не удалось сохранить результат",
-      }));
-    } finally {
-      setSavingInlineGameResultId(null);
-    }
   };
 
   const renderGameCard = (
@@ -2022,8 +3291,12 @@ export function Cabinet({
       handleOpenGameChat(game);
     };
     const stationTitle = String(game.booking?.studioName || "").trim();
-    const cardTitle = stationTitle ? `Игра ${stationTitle}` : "Игра";
+    const customTitle = extractGameCustomTitle(isRecord(game.metadata) ? game.metadata : null);
+    const cardTitle = customTitle || (stationTitle ? `Игра ${stationTitle}` : "Игра");
     const courtTitle = String(game.booking?.roomName || "").trim();
+    const cardLocationTitle = customTitle
+      ? [stationTitle, courtTitle].filter(Boolean).join(" • ")
+      : courtTitle;
     const badge = getDateBadge(game.booking?.date);
     const timeFrom = game.booking?.timeFrom ?? "—:—";
     const timeTo = game.booking?.timeTo ?? "—:—";
@@ -2045,66 +3318,7 @@ export function Cabinet({
       const playerPhoneNorm = normalizePhoneForGame(player.phone);
       return Boolean(profilePhoneNorm && playerPhoneNorm && profilePhoneNorm === playerPhoneNorm);
     };
-    const waitlistPlayers = Array.isArray(game.waitlist) ? game.waitlist : [];
-    const topLevelWaitlistCount = Array.isArray(game.waitlistPhones)
-      ? game.waitlistPhones.reduce((count, phoneValue) => {
-          return normalizePhoneForGame(phoneValue) ? count + 1 : count;
-        }, 0)
-      : 0;
-    const metadataWaitlistCount = Array.isArray(game.metadata?.waitlistPhones)
-      ? game.metadata.waitlistPhones.reduce((count, phoneValue) => {
-          if (typeof phoneValue !== "string") return count;
-          return normalizePhoneForGame(phoneValue) ? count + 1 : count;
-        }, 0)
-      : 0;
-    const participantsWaitlistCount = Array.isArray(game.participants)
-      ? game.participants.reduce((count, player) => {
-          const status = String(player.status || "").trim().toUpperCase();
-          return status.includes("WAIT") ? count + 1 : count;
-        }, 0)
-      : 0;
-    const waitlistCount = Math.max(
-      waitlistPlayers.length,
-      topLevelWaitlistCount,
-      metadataWaitlistCount,
-      participantsWaitlistCount,
-    );
-    const isCurrentUserWaitlisted =
-      waitlistPlayers.some((player) => isCurrentUserPlayer(player))
-      || (Array.isArray(game.waitlistPhones)
-        && game.waitlistPhones.some((value) => normalizePhoneForGame(value) === profilePhoneNorm))
-      || (Array.isArray(game.participants)
-        && game.participants.some((player) => {
-          if (!isCurrentUserPlayer(player)) return false;
-          const status = String(player.status || "").trim().toUpperCase();
-          return status.includes("WAIT");
-        }))
-      || (Array.isArray(game.metadata?.waitlistPhones)
-        && game.metadata.waitlistPhones.some((value) => {
-          if (typeof value !== "string") return false;
-          return normalizePhoneForGame(value) === profilePhoneNorm;
-        }));
-    const isOrganizer = isCurrentUserOrganizer(game);
-    const showOrganizerWaitlistBadge = isOrganizer && waitlistCount > 0;
     const linkedBooking = resolveBookingForGameCancellation(game);
-    const inviteUrl = resolveGameInviteUrl(game);
-    const canInvite = Boolean(
-      inviteUrl
-      && isOrganizer
-      && !isGameCancelledStatus(game.status)
-      && isGamePaidForInvite(game)
-    );
-    const canCancelGameBooking = Boolean(
-      isOrganizer
-      && linkedBooking
-      && linkedBooking.cancellationDeadline
-      && new Date(linkedBooking.cancellationDeadline) > new Date(),
-    );
-    const showCancelDeadlineText = Boolean(isOrganizer && linkedBooking && !canCancelGameBooking);
-    const cancelState = gameCancelStateById[game.id] ?? "idle";
-    const cancelOk = gameCancelOkById[game.id] ?? false;
-    const isCancellingThisGame = cancellingGameId === game.id;
-    const unreadCount = chatUnreadByGame[game.id] ?? 0;
     const organizerPlayer: PadelGamePlayer | null = game.organizer
       ? {
           id: game.organizer.id ?? null,
@@ -2116,35 +3330,181 @@ export function Cabinet({
           status: "CONFIRMED",
         }
       : null;
-    const participants = game.participants && game.participants.length > 0
-      ? game.participants
-      : (organizerPlayer ? [organizerPlayer] : []);
+    const participants = dedupePlayers(
+      game.participants && game.participants.length > 0
+        ? game.participants
+        : (organizerPlayer ? [organizerPlayer] : []),
+    );
+    const hasWaitStatus = (statusValue: string | null | undefined): boolean => {
+      const status = String(statusValue || "").trim().toUpperCase();
+      return status.includes("WAIT");
+    };
+    const confirmedParticipants = participants.filter((player) => !hasWaitStatus(player.status));
+    const isCurrentUserParticipant = confirmedParticipants.some((player) => isCurrentUserPlayer(player));
+    const confirmedParticipantIdentityKeys = new Set<string>();
+    const confirmedParticipantPhoneSet = new Set<string>();
+    confirmedParticipants.forEach((player) => {
+      const normalizedId = String(player.id || "").trim();
+      if (normalizedId) {
+        confirmedParticipantIdentityKeys.add(`id:${normalizedId}`);
+      }
+      const normalizedPhone = normalizePhoneForGame(player.phone);
+      if (normalizedPhone) {
+        confirmedParticipantIdentityKeys.add(`phone:${normalizedPhone}`);
+        confirmedParticipantPhoneSet.add(normalizedPhone);
+      }
+    });
+    const participantPhonesFromRecord = Array.isArray(game.participantPhones)
+      ? game.participantPhones
+      : [];
+    participantPhonesFromRecord.forEach((value) => {
+      const normalizedPhone = normalizePhoneForGame(value);
+      if (!normalizedPhone) return;
+      confirmedParticipantIdentityKeys.add(`phone:${normalizedPhone}`);
+      confirmedParticipantPhoneSet.add(normalizedPhone);
+    });
+    const waitlistPlayers = Array.isArray(game.waitlist) ? game.waitlist : [];
+    const waitlistPlayersWithoutParticipants = waitlistPlayers.filter((player) => {
+      const playerId = String(player.id || "").trim();
+      if (playerId && confirmedParticipantIdentityKeys.has(`id:${playerId}`)) return false;
+      const playerPhone = normalizePhoneForGame(player.phone);
+      if (playerPhone && confirmedParticipantIdentityKeys.has(`phone:${playerPhone}`)) return false;
+      return true;
+    });
+    const topLevelWaitlistCount = Array.isArray(game.waitlistPhones)
+      ? game.waitlistPhones.reduce((count, phoneValue) => {
+          const normalizedPhone = normalizePhoneForGame(phoneValue);
+          if (!normalizedPhone || confirmedParticipantPhoneSet.has(normalizedPhone)) return count;
+          return count + 1;
+        }, 0)
+      : 0;
+    const metadataWaitlistCount = Array.isArray(game.metadata?.waitlistPhones)
+      ? game.metadata.waitlistPhones.reduce((count, phoneValue) => {
+          if (typeof phoneValue !== "string") return count;
+          const normalizedPhone = normalizePhoneForGame(phoneValue);
+          if (!normalizedPhone || confirmedParticipantPhoneSet.has(normalizedPhone)) return count;
+          return count + 1;
+        }, 0)
+      : 0;
+    const participantsWaitlistCount = Array.isArray(game.participants)
+      ? game.participants.reduce((count, player) => {
+          if (!hasWaitStatus(player.status)) return count;
+          const playerId = String(player.id || "").trim();
+          if (playerId && confirmedParticipantIdentityKeys.has(`id:${playerId}`)) return count;
+          const playerPhone = normalizePhoneForGame(player.phone);
+          if (playerPhone && confirmedParticipantPhoneSet.has(playerPhone)) return count;
+          return count + 1;
+        }, 0)
+      : 0;
+    const waitlistCount = Math.max(
+      waitlistPlayersWithoutParticipants.length,
+      topLevelWaitlistCount,
+      metadataWaitlistCount,
+      participantsWaitlistCount,
+    );
+    const isCurrentUserWaitlisted = !isCurrentUserParticipant && (
+      waitlistPlayersWithoutParticipants.some((player) => isCurrentUserPlayer(player))
+      || (Array.isArray(game.waitlistPhones)
+        && game.waitlistPhones.some((value) => {
+          const normalizedPhone = normalizePhoneForGame(value);
+          if (!normalizedPhone || confirmedParticipantPhoneSet.has(normalizedPhone)) return false;
+          return normalizedPhone === profilePhoneNorm;
+        }))
+      || (Array.isArray(game.participants)
+        && game.participants.some((player) => {
+          if (!isCurrentUserPlayer(player)) return false;
+          return hasWaitStatus(player.status);
+        }))
+      || (Array.isArray(game.metadata?.waitlistPhones)
+        && game.metadata.waitlistPhones.some((value) => {
+          if (typeof value !== "string") return false;
+          const normalizedPhone = normalizePhoneForGame(value);
+          if (!normalizedPhone || confirmedParticipantPhoneSet.has(normalizedPhone)) return false;
+          return normalizedPhone === profilePhoneNorm;
+        }))
+    );
+    const isOrganizer = isCurrentUserOrganizer(game);
+    const showOrganizerWaitlistBadge = isOrganizer && waitlistCount > 0;
+    const isSyntheticBookingGame = isSyntheticCabinetBookingGame(game);
+    const isCancelledForCabinet = Boolean(
+      isGameCancelledStatus(game.status)
+      || isGameRemovedStatus(game.status)
+      || isGameMarkedDeletedInViva(game)
+    );
+    const inviteUrl = resolveGameInviteUrl(game);
+    const canInvite = Boolean(
+      inviteUrl
+      && isOrganizer
+      && !isSyntheticBookingGame
+      && !isCancelledForCabinet
+      && isGamePaidForInvite(game)
+    );
+    const canOpenChat = !isSyntheticBookingGame;
+    const canCancelGameBooking = Boolean(
+      !isCancelledForCabinet
+      && isOrganizer
+      && linkedBooking
+      && linkedBooking.cancellationDeadline
+      && new Date(linkedBooking.cancellationDeadline) > new Date(),
+    );
+    const showCancelDeadlineText = Boolean(
+      !isCancelledForCabinet
+      && isOrganizer
+      && linkedBooking
+      && !canCancelGameBooking,
+    );
+    const showArchiveGameAction = isCancelledForCabinet;
+    const cancelState = gameCancelStateById[game.id] ?? "idle";
+    const isArchivingThisGame = archivingGameId === game.id;
+    const archiveGameError = archiveGameErrorById[game.id] ?? null;
+    const unreadCount = chatUnreadByGame[game.id] ?? 0;
     const playersCount = resolveGameCardPlayersCount(game);
     const splitJoinPriceText = getSplitJoinPriceText(game);
-    const splitCancelDeadlineAt = getSplitCancelDeadlineAt(game);
-    const splitCountdownText = formatCountdown(splitCancelDeadlineAt, Date.now());
     const showSplitJoinInfo = !isOrganizer && !isCurrentUserWaitlisted
       && (playersCount - Math.max(participants.length, 0)) > 0
-      && Boolean(splitJoinPriceText || splitCountdownText);
+      && Boolean(splitJoinPriceText);
     const playerSlots = Array.from({ length: playersCount }, (_, index) => (
       participants[index] ?? null
     ));
     const teamSlots = resolveStoredTeamSlots(game, playerSlots);
-    const showInlineResultEntry = shouldShowInlineResultEntry(game) && participants.some((player) => isCurrentUserPlayer(player));
-    const inlineResultScore = inlineGameResultScores[game.id] ?? { left: "", right: "" };
-    const inlineResultSaving = savingInlineGameResultId === game.id;
-    const inlineResultCanSave = inlineResultScore.left.trim() !== "" && inlineResultScore.right.trim() !== "";
-    const inlineResultError = inlineGameResultErrorById[game.id] ?? null;
+    const showInlineResultEntry = !isSyntheticBookingGame
+      && !isCancelledForCabinet
+      && shouldShowInlineResultEntry(game)
+      && isCurrentUserParticipant;
+    const resultDateTimeLabel = formatGameResultDateTimeLabel(
+      game.booking?.date,
+      game.booking?.timeFrom,
+      game.booking?.timeTo,
+    );
+    const resultStationLabel = formatGameResultStationLabel(game, stationTitle, cardLocationTitle);
+    const resultStationAddress = formatGameResultStationAddress(game);
+    const resultCourtLabel = formatGameResultCourtLabel(game, courtTitle, cardLocationTitle);
+    const resultMapUrl = getGameResultMapUrl(resultStationLabel, resultStationAddress || resultCourtLabel);
+    const resultLevelLabel = formatGameResultLevelLabel(game);
+    const resultTagLabel = game.settings?.ratingGame ? "Рейтинговая игра" : "Без рейтинга";
+    const resultCalendarDisabled = !game.booking?.date || (!game.booking?.timeFrom && !game.booking?.timeTo);
+    const statusBadgeLabel = isCancelledForCabinet ? "Отменена" : null;
     const waitlistBadgeLabel = isCurrentUserWaitlisted
       ? "В листе ожидания"
       : showOrganizerWaitlistBadge
         ? `Лист ожидания: ${waitlistCount}`
         : null;
+    const topBadges = [
+      ...(statusBadgeLabel
+        ? [{ label: statusBadgeLabel, className: "game-created-tag game-created-tag-cancelled" }]
+        : []),
+      ...(waitlistBadgeLabel
+        ? [{
+          label: waitlistBadgeLabel,
+          className: `game-created-tag game-created-tag-waitlist${isCurrentUserWaitlisted ? " game-created-tag-waitlist-user" : ""}`,
+        }]
+        : []),
+    ];
 
     return (
       <div
         key={game.id}
-        className="game-created-card game-created-card-clickable"
+        className={`game-created-card game-created-card-clickable${showInlineResultEntry ? " game-created-card--result-prompt" : ""}`}
         onClick={openGameDetails}
         role="button"
         tabIndex={0}
@@ -2155,46 +3515,53 @@ export function Cabinet({
           }
         }}
       >
-        {waitlistBadgeLabel && (
+        {topBadges.length > 0 && (
           <div className="game-created-top-badge-row">
-            <span
-              className={`game-created-tag game-created-tag-waitlist${isCurrentUserWaitlisted ? " game-created-tag-waitlist-user" : ""}`}
-            >
-              {waitlistBadgeLabel}
-            </span>
+            {topBadges.map((item) => (
+              <span key={`${game.id}-${item.label}`} className={item.className}>
+                {item.label}
+              </span>
+            ))}
           </div>
         )}
-        <div className="game-created-head">
-          <div className="game-created-head-main">
-            <div className="game-created-date">{cardTitle}</div>
-            {courtTitle && <div className="game-created-court">{courtTitle}</div>}
-            <div className="game-created-time">{`${timeFrom} • ${timeTo}`}</div>
-            <div className="game-created-tags">
-              <span className={`game-created-tag ${game.settings?.ratingGame ? "game-created-tag-level" : "game-created-tag-neutral"}`}>
-                {ratingTag}
-              </span>
-              {durationTag && <span className="game-created-tag game-created-tag-duration">{durationTag}</span>}
-              {ratingRangeTag && <span className="game-created-tag game-created-tag-range">{ratingRangeTag}</span>}
+        {!showInlineResultEntry && (
+          <div className="game-created-head">
+            <div className="game-created-head-main">
+              <div className="game-created-date">{cardTitle}</div>
+              {cardLocationTitle && <div className="game-created-court">{cardLocationTitle}</div>}
+              <div className="game-created-time">{`${timeFrom} • ${timeTo}`}</div>
+              <div className="game-created-tags">
+                <span className={`game-created-tag ${game.settings?.ratingGame ? "game-created-tag-level" : "game-created-tag-neutral"}`}>
+                  {ratingTag}
+                </span>
+                {durationTag && <span className="game-created-tag game-created-tag-duration">{durationTag}</span>}
+                {ratingRangeTag && <span className="game-created-tag game-created-tag-range">{ratingRangeTag}</span>}
+              </div>
+            </div>
+            <div className="game-created-head-right">
+              <CalendarDateBadge
+                monthLabel={badge.month}
+                dayLabel={badge.day}
+                weekdayLabel={badge.weekday}
+                badgeClassName="game-created-date-badge"
+                buttonClassName="game-created-date-badge-button"
+                variant="game-card"
+                disabled={!game.booking?.date || (!game.booking?.timeFrom && !game.booking?.timeTo)}
+                onClick={() => addGameToCalendar(game)}
+              />
             </div>
           </div>
-          <div className="game-created-head-right">
-            <CalendarDateBadge
-              monthLabel={badge.month}
-              dayLabel={badge.day}
-              weekdayLabel={badge.weekday}
-              badgeClassName="game-created-date-badge"
-              buttonClassName="game-created-date-badge-button"
-              variant="game-card"
-              disabled={!game.booking?.date || (!game.booking?.timeFrom && !game.booking?.timeTo)}
-              onClick={() => addGameToCalendar(game)}
-            />
-          </div>
-        </div>
+        )}
         {!showInlineResultEntry && (
           <div className={`game-created-players${playersCount <= 2 ? " game-created-players-singles" : ""}`}>
             {playerSlots.map((player, index) => {
               const initials = getPlayerInitials(player?.name);
-              const levelLabel = normalizePlayerRatingLabel(player?.rating ?? null);
+              const levelLabel = normalizePlayerRatingLabel(
+                player?.rating ?? null,
+                typeof player?.ratingNumeric === "number" && Number.isFinite(player.ratingNumeric)
+                  ? player.ratingNumeric
+                  : null,
+              );
               const levelProgress = getPlayerRatingProgress(levelLabel);
               const ringProgressDeg =
                 levelProgress != null ? `${Math.max(0, Math.min(360, Math.round(levelProgress * 360)))}deg` : "0deg";
@@ -2228,156 +3595,198 @@ export function Cabinet({
         )}
 
         {showInlineResultEntry && (
-          <div
-            className="game-created-result-entry"
-            onClick={(event) => event.stopPropagation()}
-            onKeyDown={(event) => event.stopPropagation()}
-          >
-            <div className="game-created-result-entry-head">
-              <span>Команды</span>
-              <span>{playersCount <= 2 ? "1 пара по 2 игрока" : "2 пары по 2 игрока"}</span>
-            </div>
-            <div className={`game-created-result-teams${playersCount <= 2 ? " game-created-result-teams-singles" : ""}`}>
-              {[
-                { label: "Команда 1", indexes: [0, 1] },
-                ...(playersCount <= 2 ? [] : [{ label: "Команда 2", indexes: [2, 3] }]),
-              ].map((team) => (
-                <div key={team.label} className="game-created-result-team">
-                  <div className="game-created-result-team-title">{team.label}</div>
-                  <div className="game-created-result-team-players">
-                    {team.indexes.map((slotIndex) => {
-                      const player = teamSlots[slotIndex] ?? null;
-                      const initials = getPlayerInitials(player?.name);
-                      const levelLabel = normalizePlayerRatingLabel(player?.rating ?? null);
-                      const levelProgress = getPlayerRatingProgress(levelLabel);
-                      const ringProgressDeg =
-                        levelProgress != null ? `${Math.max(0, Math.min(360, Math.round(levelProgress * 360)))}deg` : "0deg";
-                      return (
-                        <div key={`${game.id}-result-slot-${slotIndex}`} className="game-created-result-player">
-                          <div
-                            className={`game-created-player-ring${levelLabel ? " has-level" : ""}`}
-                            style={{ "--player-ring-progress": ringProgressDeg } as CSSProperties}
-                          >
-                            {player?.photo ? (
-                              <img
-                                src={player.photo}
-                                alt={player.name}
-                                className="game-created-player-avatar"
-                              />
-                            ) : (
-                              <div className="game-created-player-avatar game-created-player-fallback">
-                                {initials}
-                              </div>
-                            )}
-                          </div>
-                          {levelLabel && <div className="game-created-player-level">{levelLabel}</div>}
-                          <div className="game-created-result-player-name">{player?.name || "Свободно"}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
+          <>
+            <div className="game-created-result-prompt-head">
+              <div className="game-created-result-prompt-title-block">
+                <div className={`game-created-result-prompt-tag${game.settings?.ratingGame ? "" : " game-created-result-prompt-tag--neutral"}`}>
+                  <span className="game-created-result-prompt-tag-dot" aria-hidden="true" />
+                  <span>{resultTagLabel}</span>
                 </div>
-              ))}
+                <div className="game-created-result-prompt-title">{cardTitle}</div>
+              </div>
+              <button
+                type="button"
+                className="game-created-result-date-badge"
+                disabled={resultCalendarDisabled}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (!resultCalendarDisabled) {
+                    addGameToCalendar(game);
+                  }
+                }}
+                onKeyDown={(event) => event.stopPropagation()}
+                aria-label="Добавить игру в календарь"
+                title="Добавить в календарь"
+              >
+                <span className="game-created-result-date-badge-day">{badge.day}</span>
+                <span className="game-created-result-date-badge-weekday">{badge.weekday}</span>
+              </button>
             </div>
-            <div className="game-created-result-score">
-              <span>Сет 1</span>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={inlineResultScore.left}
-                onChange={(event) => handleInlineGameResultScoreChange(game.id, "left", event.target.value)}
-                disabled={inlineResultSaving}
-                aria-label="Счёт первой команды"
-              />
-              <b>-</b>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={inlineResultScore.right}
-                onChange={(event) => handleInlineGameResultScoreChange(game.id, "right", event.target.value)}
-                disabled={inlineResultSaving}
-                aria-label="Счёт второй команды"
-              />
+
+            <div className="game-created-result-prompt-info">
+              <div className="game-created-result-info-row">
+                {renderGameResultInfoIcon("date")}
+                <span>{resultDateTimeLabel}</span>
+              </div>
+              <div className="game-created-result-info-row game-created-result-info-row--place">
+                {renderGameResultInfoIcon("location")}
+                <button
+                  type="button"
+                  className="game-created-result-station-trigger"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setResultPromptStationModal({
+                      stationTitle: resultStationLabel,
+                      address: resultStationAddress,
+                      courtTitle: resultCourtLabel,
+                      mapUrl: resultMapUrl,
+                    });
+                  }}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => event.stopPropagation()}
+                >
+                  {resultStationLabel}
+                </button>
+              </div>
+              <div className="game-created-result-info-row game-created-result-info-row--court">
+                {renderGameResultInfoIcon("location")}
+                <span>{resultCourtLabel}</span>
+              </div>
+              <div className="game-created-result-info-row game-created-result-info-row--level">
+                {renderGameResultInfoIcon("level")}
+                <span>{resultLevelLabel}</span>
+              </div>
             </div>
-            {inlineResultError && <div className="game-created-result-error">{inlineResultError}</div>}
-            <button
-              type="button"
-              className="game-created-action game-created-result-save"
-              onClick={() => {
-                void handleSaveInlineGameResult(game, teamSlots);
-              }}
-              disabled={inlineResultSaving || !inlineResultCanSave}
-            >
-              {inlineResultSaving ? "Сохраняем..." : "Сохранить результат"}
-            </button>
-          </div>
+
+            <div className="game-created-result-prompt-footer">
+              <div className="game-created-result-prompt-footer-row">
+                <div className="game-created-result-prompt-avatars" aria-label="Участники">
+                  {teamSlots.map((player, index) => {
+                    const initials = getPlayerInitials(player?.name);
+                    return (
+                      <span
+                        key={`${game.id}-result-prompt-slot-${index}`}
+                        className={`game-created-result-prompt-avatar${player ? "" : " game-created-result-prompt-avatar--empty"}`}
+                      >
+                        {player?.photo ? (
+                          <img src={player.photo} alt={player.name || "Игрок"} />
+                        ) : (
+                          <span>{player ? initials : ""}</span>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  className="game-created-result-prompt-cta"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    openGameDetails();
+                  }}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  onMouseDown={(event) => event.stopPropagation()}
+                >
+                  Внести результат
+                </button>
+              </div>
+            </div>
+          </>
         )}
 
         {!showInlineResultEntry && (
-        <div className={`game-created-actions${canInvite ? " game-created-actions-organizer" : " game-created-actions-single"}`}>
-          {showSplitJoinInfo && (
-            <div className="game-created-split-join-info" aria-label="Условия присоединения к сборной игре">
-              {splitJoinPriceText && (
-                <div className="game-created-split-join-info-row">
-                  <span>Вход</span>
-                  <strong>{splitJoinPriceText}</strong>
-                </div>
-              )}
-              {splitCountdownText && (
-                <div className="game-created-split-join-info-row">
-                  <span>Отмена через</span>
-                  <strong>{splitCountdownText}</strong>
-                </div>
-              )}
-            </div>
-          )}
-          {canInvite && (
-            <button
-              className="game-created-action game-created-action-invite"
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                void handleCopyInviteFromFeed(game);
-              }}
-            >
-              {copiedGameInviteId === game.id ? "Скопировано" : "Пригласить в игру"}
-            </button>
-          )}
-          <button
-            className={`game-created-action game-chat-open-btn${canInvite ? " game-created-action-chat-icon" : ""}`}
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              openGameChat();
-            }}
-            aria-label="Открыть чат игры"
-            title="Чат"
-          >
-            {canInvite ? (
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path
-                  d="M3.333 10.667H2.667C1.93 10.667 1.333 10.07 1.333 9.333V2.667C1.333 1.93 1.93 1.333 2.667 1.333H9.333C10.07 1.333 10.667 1.93 10.667 2.667V3.333"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M6.667 5.333H13.333C14.07 5.333 14.667 5.93 14.667 6.667V11.333C14.667 12.07 14.07 12.667 13.333 12.667H10L7.333 14.667V12.667H6.667C5.93 12.667 5.333 12.07 5.333 11.333V6.667C5.333 5.93 5.93 5.333 6.667 5.333Z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+          <>
+            {showArchiveGameAction ? (
+              <div className="game-created-actions game-created-actions-single">
+                <button
+                  className="game-created-action game-created-action-danger"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void handleArchiveGameFromCabinet(game.id);
+                  }}
+                  disabled={isArchivingThisGame}
+                >
+                  {isArchivingThisGame ? "Удаляем..." : "Удалить"}
+                </button>
+              </div>
             ) : (
-              "Чат"
+              <div className={`game-created-actions${canInvite ? " game-created-actions-organizer" : " game-created-actions-single"}`}>
+                {showSplitJoinInfo && (
+                  <div className="game-created-split-join-info" aria-label="Условия присоединения к сборной игре">
+                    {splitJoinPriceText && (
+                      <div className="game-created-split-join-info-row">
+                        <span>Вход</span>
+                        <strong>{splitJoinPriceText}</strong>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {canInvite && (
+                  <button
+                    className="game-created-action game-created-action-invite"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleCopyInviteFromFeed(game);
+                    }}
+                  >
+                    {copiedGameInviteId === game.id ? "Скопировано" : "Пригласить в игру"}
+                  </button>
+                )}
+                {canOpenChat ? (
+                  <button
+                    className={`game-created-action game-chat-open-btn${canInvite ? " game-created-action-chat-icon" : ""}`}
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openGameChat();
+                    }}
+                    aria-label="Открыть чат игры"
+                    title="Чат"
+                  >
+                    {canInvite ? (
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <path
+                          d="M3.333 10.667H2.667C1.93 10.667 1.333 10.07 1.333 9.333V2.667C1.333 1.93 1.93 1.333 2.667 1.333H9.333C10.07 1.333 10.667 1.93 10.667 2.667V3.333"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <path
+                          d="M6.667 5.333H13.333C14.07 5.333 14.667 5.93 14.667 6.667V11.333C14.667 12.07 14.07 12.667 13.333 12.667H10L7.333 14.667V12.667H6.667C5.93 12.667 5.333 12.07 5.333 11.333V6.667C5.333 5.93 5.93 5.333 6.667 5.333Z"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    ) : (
+                      "Чат"
+                    )}
+                    {unreadCount > 0 && (
+                      <span className="game-chat-unread-badge">{unreadCount}</span>
+                    )}
+                  </button>
+                ) : (
+                  <button
+                    className="game-created-action"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openGameDetails();
+                    }}
+                  >
+                    Подробнее
+                  </button>
+                )}
+              </div>
             )}
-            {unreadCount > 0 && (
-              <span className="game-chat-unread-badge">{unreadCount}</span>
-            )}
-          </button>
-        </div>
+          </>
+        )}
+        {archiveGameError && (
+          <div className="booking-status-text">{archiveGameError}</div>
         )}
         {canCancelGameBooking && cancelState === "idle" && linkedBooking && (
           <div className="booking-cancel-row game-created-cancel-row">
@@ -2393,52 +3802,21 @@ export function Cabinet({
             </button>
           </div>
         )}
-        {cancelState === "confirm" && linkedBooking && (
-          <div className="booking-cancel-row game-created-cancel-row">
-            <button
-              className="btn-cancel outline"
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                setGameCancelStateById((prev) => ({ ...prev, [game.id]: "idle" }));
-              }}
-              disabled={isCancellingThisGame}
-            >
-              Нет
-            </button>
-            <button
-              className="btn-cancel danger"
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                void handleCancelGameBooking(game.id, linkedBooking.id);
-              }}
-              disabled={isCancellingThisGame}
-            >
-              {isCancellingThisGame ? "Отменяем..." : "Да, отменить"}
-            </button>
-          </div>
-        )}
-        {cancelState === "done" && (
-          <div className="booking-cancel-row game-created-cancel-row">
-            <button
-              className="btn-cancel primary"
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                if (cancelOk) {
-                  void loadBookings();
-                  return;
-                }
-                setGameCancelStateById((prev) => ({ ...prev, [game.id]: "idle" }));
-              }}
-            >
-              {cancelOk ? "Запись отменена, продолжить" : "Ошибка — закрыть"}
-            </button>
-          </div>
-        )}
         {showCancelDeadlineText && (
           <div className="booking-status-text">Отмена возможна только за 24 часа</div>
+        )}
+        {linkedBooking && (
+          <BookingCancellationDialog
+            bookingId={linkedBooking.id}
+            isOpen={cancelState === "confirm"}
+            onClose={() => {
+              setGameCancelStateById((prev) => ({ ...prev, [game.id]: "idle" }));
+            }}
+            onSuccessClose={() => {
+              window.location.reload();
+            }}
+            executeAction={(action) => handleCancelGameBooking(game.id, linkedBooking.id, action)}
+          />
         )}
       </div>
     );
@@ -2514,6 +3892,9 @@ export function Cabinet({
         <UserProfile
           profile={profile}
           openEditForm={() => setIsEditOpen(true)}
+          onAvatarClick={openLevelsInfo}
+          shareOffer={shareOffer}
+          renewalOffer={renewalOffer}
         />
       </div>
 
@@ -2521,8 +3902,10 @@ export function Cabinet({
         <CommunitiesSectionLoader
           profile={profile}
           createdGames={createdGames}
+          activeBookingExerciseIds={activeBookingExerciseIds}
           onOpenGames={onOpenGames}
           onOpenTournaments={handleOpenTournaments}
+          onOpenLevelsInfo={onOpenLevelsInfo}
           onOpenHome={handleOpenCabinetHomeFromCommunities}
           onOpenProfile={handleOpenProfileFromCommunities}
           initialInviteCode={initialCommunityInviteCode}
@@ -2547,8 +3930,10 @@ export function Cabinet({
       <div className="quick-actions">
         {QUICK_ACTIONS.map((action) => {
           const openInOverlay = action.label === "Играть";
-          const resolvedHref = resolveQuickActionHref(action.href);
-          const hashActionTarget = resolveHashActionTarget(action.href) ?? resolveHashActionTarget(resolvedHref);
+          const openGroupTrainings = action.label === "Групповые тренировки";
+          const resolvedHref = openGroupTrainings
+            ? resolveGroupTrainingsHref(action.href)
+            : resolveQuickActionHref(action.href);
           if (openInOverlay) {
             return (
               <button
@@ -2562,7 +3947,7 @@ export function Cabinet({
               </button>
             );
           }
-          if (hashActionTarget) {
+          if (openGroupTrainings) {
             return (
               <button
                 key={action.label}
@@ -2574,7 +3959,7 @@ export function Cabinet({
                     href: resolvedHref,
                     clientId: profile.id,
                   });
-                  retriggerHashAction(hashActionTarget);
+                  window.location.href = resolvedHref;
                 }}
               >
                 {renderActionIcon(action.label, action.icon)}
@@ -2610,6 +3995,12 @@ export function Cabinet({
         </div>
       )}
 
+      {cabinetFlashNotice && (
+        <div className="cabinet-flash-notice" role="status">
+          {cabinetFlashNotice}
+        </div>
+      )}
+
       {/* Записи */}
       <BookingsContainer
         activeBookings={activeBookings}
@@ -2630,6 +4021,7 @@ export function Cabinet({
         loadingGameRecords={loadingCreatedGames}
         gameRecordsError={createdGamesError}
         resolveGameForBooking={resolveGameForBooking}
+        resolveDisplayGameForBooking={resolveDisplayGameForBooking}
         resolveTournamentForBooking={resolveTournamentForBooking}
         onOpenTournamentDetails={handleOpenTournamentDetails}
       />
@@ -2642,7 +4034,6 @@ export function Cabinet({
         UserSubscriptions={userSubscriptions}
         phone={profile.phone}
         openSubInfo={openSubInfo}
-        openBuy={() => setOpenBuySub(true)}
       />
 
       {/* Турниры */}
@@ -2678,6 +4069,10 @@ export function Cabinet({
         onSaveSuccess={loadProfile}
         showVerifyLevel={hasLevel}
         onVerifyLevel={openOnboarding}
+        onForceRefresh={() => {
+          void handleForceRefresh();
+        }}
+        isRefreshingApp={isRefreshingApp}
       />
       <BookingHistory
         isOpen={isBookingHistoryOpen}
@@ -2699,16 +4094,47 @@ export function Cabinet({
         customTournament={selectedTournamentBooking ? resolveTournamentForBooking(selectedTournamentBooking) : null}
         onClose={closeTournamentDetails}
       />
+      <Modal
+        isOpen={resultPromptStationModal !== null}
+        onClose={() => setResultPromptStationModal(null)}
+        title={resultPromptStationModal?.stationTitle || "Станция"}
+        variant="dialog"
+        bodyClassName="game-created-station-modal"
+      >
+        <div className="game-created-station-facts">
+          <div className="game-created-station-fact">
+            <span>Станция</span>
+            <strong>{resultPromptStationModal?.stationTitle || "Станция уточняется"}</strong>
+          </div>
+          {resultPromptStationModal?.courtTitle && (
+            <div className="game-created-station-fact">
+              <span>Корт</span>
+              <strong>{resultPromptStationModal.courtTitle}</strong>
+            </div>
+          )}
+          {resultPromptStationModal?.address && (
+            <div className="game-created-station-fact">
+              <span>Адрес</span>
+              <strong>{resultPromptStationModal.address}</strong>
+            </div>
+          )}
+        </div>
+        {resultPromptStationModal?.mapUrl && (
+          <a
+            className="section-cta game-created-station-map"
+            href={resultPromptStationModal.mapUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Открыть на карте
+          </a>
+        )}
+      </Modal>
       <SubscriptionInformation
         isOpen={isSubscriptionInfoOpen}
         onClose={() => SetSubscriptionInfoOpen(false)}
         sub={currenSub}
         subName={currenSubName}
-      />
-      <BuySupscription
-        isOpen={isOpenBuySub}
-        onClose={() => setOpenBuySub(false)}
-        phone={profile.phone}
       />
       <SupportChatWidget profile={profile} />
     </div>

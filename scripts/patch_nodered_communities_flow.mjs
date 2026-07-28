@@ -504,6 +504,688 @@ const buildRankingRows = (members) => {
     };
   });
 };
+const roundNumber = (value, digits = 3) => {
+  const safe = Number.isFinite(Number(value)) ? Number(value) : 0;
+  const factor = 10 ** digits;
+  return Math.round(safe * factor) / factor;
+};
+const toLowerValue = (value) => toStr(value)?.toLowerCase() || '';
+const isTruthyValue = (value) => (
+  value === true
+  || value === 1
+  || value === '1'
+  || toLowerValue(value) === 'true'
+);
+const COMMUNITY_RATING_CALCULATION_VERSION = 'community-rating-v1.3.0';
+const normalizeRatingTab = (value) => {
+  const normalized = toStr(value)?.toLowerCase();
+  if (normalized === 'games' || normalized === 'tournaments' || normalized === 'overall') return normalized;
+  if (normalized === 'dynamics' || normalized === 'dynamic' || normalized === 'level') return 'dynamics';
+  return 'overall';
+};
+const normalizeRatingPeriod = (value) => {
+  const normalized = toStr(value)?.toLowerCase();
+  if (normalized === 'all' || normalized === 'alltime' || normalized === 'year') return 'all';
+  if (
+    normalized === 'month'
+    || normalized === '30days'
+    || normalized === '30d'
+    || normalized === '7d'
+    || normalized === '7days'
+    || normalized === 'week'
+    || normalized === '90d'
+    || normalized === '90days'
+    || normalized === 'quarter'
+  ) return '30d';
+  return '30d';
+};
+const getRatingPeriodStartTs = (period) => {
+  if (period === 'all') return null;
+  return nowTs - 30 * 24 * 60 * 60 * 1000;
+};
+const memberIdentityKeys = (value) => {
+  const member = buildMember(value, value?.role || 'MEMBER');
+  const keys = [];
+  if (member.id) keys.push('id:' + member.id);
+  if (member.phone) keys.push('phone:' + member.phone);
+  if (member.name) keys.push('name:' + member.name.trim().toLowerCase());
+  return uniq(keys);
+};
+const resolveGameMatchResult = (game) => (
+  isObj(game?.metadata?.matchResult)
+    ? game.metadata.matchResult
+    : null
+);
+const isConfirmedGameResult = (game) => {
+  const matchResult = resolveGameMatchResult(game);
+  if (!matchResult) return false;
+  const status = toStr(matchResult.status)?.toUpperCase() || '';
+  const gameStatus = toStr(game?.status || game?.resultStatus)?.toUpperCase() || '';
+  const excludedStatuses = ['DISPUTED', 'CORRECTION_PENDING', 'NO_RESULT_EXPIRED', 'PENDING_REVIEW'];
+  if (excludedStatuses.includes(status) || excludedStatuses.includes(gameStatus)) return false;
+  return status === 'CONFIRMED' || (!status && Boolean(matchResult.confirmedAt || matchResult.confirmedBy));
+};
+const resolveGameTimestamp = (game, fallbackTs = 0) => {
+  const bookingTimeToIso = parseIsoTs(game?.booking?.timeToIso);
+  if (Number.isFinite(bookingTimeToIso)) return bookingTimeToIso;
+  const bookingTimeFromIso = parseIsoTs(game?.booking?.timeFromIso);
+  if (Number.isFinite(bookingTimeFromIso)) return bookingTimeFromIso;
+  const bookingDate = toStr(game?.booking?.date);
+  const timeTo = toStr(game?.booking?.timeTo);
+  const timeFrom = toStr(game?.booking?.timeFrom);
+
+  if (bookingDate && timeTo) {
+    const parsed = Date.parse(bookingDate + 'T' + timeTo + ':00');
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (bookingDate && timeFrom) {
+    const parsed = Date.parse(bookingDate + 'T' + timeFrom + ':00');
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  const updatedAtTs = parseIsoTs(game?.updatedAt);
+  if (Number.isFinite(updatedAtTs)) return updatedAtTs;
+  const createdAtTs = parseIsoTs(game?.createdAt);
+  if (Number.isFinite(createdAtTs)) return createdAtTs;
+  return Number.isFinite(fallbackTs) ? fallbackTs : 0;
+};
+const resolveGameSets = (game) => {
+  const matchResult = resolveGameMatchResult(game);
+  return toArray(matchResult?.sets)
+    .map((item) => {
+      if (!isObj(item)) return null;
+      const left = toNum(item.left ?? item.scoreA ?? item.teamA);
+      const right = toNum(item.right ?? item.scoreB ?? item.teamB);
+      if (!Number.isFinite(left) || !Number.isFinite(right)) return null;
+      return {
+        left: Math.max(0, Math.floor(left)),
+        right: Math.max(0, Math.floor(right)),
+      };
+    })
+    .filter(Boolean);
+};
+const resolveGamePlayerPool = (game) => {
+  const matchResult = resolveGameMatchResult(game);
+  const participants = [
+    ...toArray(game?.participants),
+    ...toArray(game?.playerPool),
+    ...toArray(game?.metadata?.playerPool),
+    ...toArray(game?.waitlist),
+    ...toArray(game?.metadata?.waitlist),
+    ...toArray(matchResult?.playerPool),
+    ...toArray(matchResult?.waitlist),
+  ]
+    .map((item) => buildMember(item, item?.role || 'MEMBER'));
+  if (participants.length > 0) return participants;
+  if (isObj(game?.organizer)) return [buildMember(game.organizer, 'MEMBER')];
+  return [];
+};
+const buildFallbackSlotMember = (raw) => ({
+  id: toStr(raw),
+  phone: normPhone(raw),
+  name: toStr(raw) || 'Игрок',
+  avatar: null,
+  role: 'MEMBER',
+  status: 'ACTIVE',
+  levelScore: 3.2,
+  levelLabel: buildLevelLabel(3.2),
+  joinedAt: nowIso,
+});
+const resolveGameSlotMembers = (game, rawSlots) => {
+  const participants = resolveGamePlayerPool(game);
+  const participantByKey = new Map();
+  participants.forEach((player) => {
+    memberIdentityKeys(player).forEach((key) => {
+      participantByKey.set(key, player);
+    });
+  });
+
+  const resolveSlot = (slot) => {
+    if (typeof slot === 'string') {
+      const raw = toStr(slot);
+      if (!raw) return null;
+      return (
+        participantByKey.get('id:' + raw)
+        || participantByKey.get('phone:' + normPhone(raw))
+        || participantByKey.get('name:' + raw.toLowerCase())
+        || buildFallbackSlotMember(raw)
+      );
+    }
+    if (!isObj(slot)) return null;
+    const keys = memberIdentityKeys(slot);
+    for (const key of keys) {
+      const matched = participantByKey.get(key);
+      if (matched) return matched;
+    }
+    return buildMember(slot, slot?.role || 'MEMBER');
+  };
+
+  return toArray(rawSlots)
+    .map((slot) => resolveSlot(slot))
+    .filter(Boolean);
+};
+const resolveGameTeamsFromSlots = (game, rawSlots) => {
+  const participants = resolveGamePlayerPool(game);
+  const slotPlayers = resolveGameSlotMembers(game, rawSlots);
+
+  if (slotPlayers.length === 2) {
+    return { left: [slotPlayers[0]], right: [slotPlayers[1]] };
+  }
+  if (slotPlayers.length >= 3) {
+    return { left: uniq(slotPlayers.slice(0, 2)), right: uniq(slotPlayers.slice(2, 4)) };
+  }
+  if (participants.length === 2) {
+    return { left: [participants[0]], right: [participants[1]] };
+  }
+  const middle = Math.ceil(participants.length / 2);
+  return {
+    left: uniq(participants.slice(0, middle)),
+    right: uniq(participants.slice(middle, 4)),
+  };
+};
+const resolveGameTeams = (game) => resolveGameTeamsFromSlots(game, toArray(game?.metadata?.teamSlots).slice(0, 4));
+const resolvePairingRawSlots = (pairing) => {
+  if (Array.isArray(pairing)) {
+    if (Array.isArray(pairing[0]) || Array.isArray(pairing[1])) {
+      return { left: toArray(pairing[0]), right: toArray(pairing[1]) };
+    }
+    return { left: pairing.slice(0, 2), right: pairing.slice(2, 4) };
+  }
+  if (!isObj(pairing)) return null;
+  const left = toArray(pairing.left ?? pairing.teamA ?? pairing.a ?? pairing.team1 ?? pairing.first);
+  const right = toArray(pairing.right ?? pairing.teamB ?? pairing.b ?? pairing.team2 ?? pairing.second);
+  if (left.length > 0 || right.length > 0) return { left, right };
+  const slots = toArray(pairing.teamSlots ?? pairing.slots ?? pairing.players ?? pairing.pairing);
+  if (slots.length > 0) return { left: slots.slice(0, 2), right: slots.slice(2, 4) };
+  return null;
+};
+const resolveGamePairingTeams = (game, pairing) => {
+  const raw = resolvePairingRawSlots(pairing);
+  if (!raw) return null;
+  const teams = resolveGameTeamsFromSlots(game, [...raw.left, ...raw.right]);
+  const left = resolveGameSlotMembers(game, raw.left);
+  const right = resolveGameSlotMembers(game, raw.right);
+  const resolved = {
+    left: left.length > 0 ? left : teams.left,
+    right: right.length > 0 ? right : teams.right,
+  };
+  return resolved.left.length > 0 || resolved.right.length > 0 ? resolved : null;
+};
+const resolveGameSetTeams = (game, sets) => {
+  const matchResult = resolveGameMatchResult(game);
+  const setPairings = toArray(matchResult?.setPairings);
+  const fallbackTeams = resolveGameTeams(game);
+  let lastKnownTeams = null;
+  return toArray(sets).map((score, index) => {
+    const pairingTeams = resolveGamePairingTeams(game, setPairings[index]);
+    if (pairingTeams) lastKnownTeams = pairingTeams;
+    return {
+      score,
+      teams: pairingTeams || lastKnownTeams || fallbackTeams,
+    };
+  });
+};
+const getGamesReliabilityFactor = (gamesPlayed) => {
+  const value = Math.max(0, Math.floor(toNum(gamesPlayed) || 0));
+  if (value === 0) return 0;
+  if (value <= 2) return 0.6;
+  if (value <= 5) return 0.8;
+  return 1;
+};
+const calculateGamesRawScore = (row) => roundNumber(
+  (toNum(row.gamesWon) || 0) * 10
+  + (toNum(row.setsWon) || 0) * 3
+  + (toNum(row.gamesWonCount) || 0) * 0.5
+  + (toNum(row.gamesDiff) || 0)
+  + (toNum(row.levelDelta) || 0) * 100,
+);
+const calculatePlaceScore = (place, participantsCount) => {
+  const total = Math.max(0, Math.floor(toNum(participantsCount) || 0));
+  const rawPlace = Math.max(1, Math.floor(toNum(place) || 1));
+  if (total <= 0) return 0;
+  const safePlace = Math.min(rawPlace, total);
+  return roundNumber(((total - safePlace + 1) / total) * 100);
+};
+const getPlaceBonus = (place) => {
+  const safePlace = Math.max(1, Math.floor(toNum(place) || 1));
+  if (safePlace === 1) return 30;
+  if (safePlace === 2) return 20;
+  if (safePlace === 3) return 10;
+  return 0;
+};
+const getTournamentReliabilityFactor = (tournamentsPlayed) => {
+  const value = Math.max(0, Math.floor(toNum(tournamentsPlayed) || 0));
+  if (value === 0) return 0;
+  if (value === 1) return 0.8;
+  return 1;
+};
+const normalizeScore = (score, maxScore) => {
+  const safeScore = Math.max(0, toNum(score) || 0);
+  const safeMax = Math.max(0, toNum(maxScore) || 0);
+  if (safeMax <= 0) return 0;
+  return roundNumber((safeScore / safeMax) * 100);
+};
+const calculateActivityScore = (gamesPlayed, tournamentsPlayed, visitsAttended = 0) => (
+  Math.min(
+    100,
+    Math.max(0, Math.floor(toNum(gamesPlayed) || 0)) * 4
+    + Math.max(0, Math.floor(toNum(tournamentsPlayed) || 0)) * 12
+    + Math.max(0, Math.floor(toNum(visitsAttended) || 0)) * 2,
+  )
+);
+const calculateOverallScore = (gamesNormalized, tournamentNormalized, activityScore) => roundNumber(
+  (toNum(gamesNormalized) || 0) * 0.2
+  + (toNum(tournamentNormalized) || 0) * 0.6
+  + (toNum(activityScore) || 0) * 0.2,
+);
+const resolveTournamentRows = (tournament) => {
+  const standings = toArray(tournament?.standings);
+  if (standings.length > 0) {
+    return standings
+      .map((item, index) => {
+        if (!isObj(item)) return null;
+        const name = toStr(item.name || item.player || item.title);
+        const place = toNum(item.rank ?? item.place ?? item.position ?? (index + 1));
+        return {
+          id: toStr(item.id || item.playerId || item.clientId || item.userId),
+          phone: normPhone(item.phone || item.phoneNorm || item.phoneNumber),
+          name: name || ('Участник ' + (index + 1)),
+          place: Number.isFinite(place) ? Math.max(1, Math.floor(place)) : index + 1,
+          wins: toNum(item.wins ?? item.matchesWon) || 0,
+          pointsFor: toNum(item.pointsFor ?? item.points ?? item.totalPoints ?? item.tournamentPoints) || 0,
+          pointsAgainst: toNum(item.pointsAgainst) || 0,
+          pointDiff: toNum(item.pointDiff ?? item.pointsDiff ?? item.delta ?? item.deltaTotal) ?? ((toNum(item.pointsFor) || 0) - (toNum(item.pointsAgainst) || 0)),
+        };
+      })
+      .filter(Boolean);
+  }
+
+  if (isObj(tournament?.totals)) {
+    const totalsRows = Object.entries(tournament.totals)
+      .map(([key, value], index) => {
+        if (!isObj(value)) return null;
+        const place = toNum(value.rank ?? value.place ?? value.position ?? (index + 1));
+        const pointsFor = toNum(value.pointsFor ?? value.points ?? value.totalPoints ?? value.tournamentPoints) || 0;
+        const pointsAgainst = toNum(value.pointsAgainst) || 0;
+        return {
+          id: toStr(value.id || value.playerId || value.clientId || value.userId || key),
+          phone: normPhone(value.phone || value.phoneNorm || value.phoneNumber),
+          name: toStr(value.name || value.playerName || key) || ('Участник ' + (index + 1)),
+          place: Number.isFinite(place) ? Math.max(1, Math.floor(place)) : (index + 1),
+          wins: toNum(value.wins ?? value.matchesWon) || 0,
+          pointsFor,
+          pointsAgainst,
+          pointDiff: toNum(value.pointDiff ?? value.pointsDiff ?? value.delta ?? value.deltaTotal) ?? (pointsFor - pointsAgainst),
+        };
+      })
+      .filter(Boolean);
+
+    return totalsRows.sort((left, right) => {
+      if ((left.place || 0) !== (right.place || 0)) return (left.place || 0) - (right.place || 0);
+      return left.name.localeCompare(right.name, 'ru');
+    });
+  }
+
+  return [];
+};
+const resolveTournamentParticipantsCount = (tournament, rows) => {
+  const candidates = [
+    toArray(tournament?.participants).length,
+    toNum(tournament?.summary?.participantsCount ?? tournament?.summary?.joinedCount),
+    toNum(tournament?.params?.participantsCount ?? tournament?.params?.joinedCount),
+    rows.length,
+  ].filter((value) => Number.isFinite(value) && value > 0);
+  return candidates.length > 0 ? Math.max(...candidates.map((value) => Math.floor(value))) : 0;
+};
+const isTournamentFinalized = (tournament) => {
+  const statuses = [
+    tournament?.status,
+    tournament?.state,
+    tournament?.tournamentStatus,
+    tournament?.params?.status,
+    tournament?.params?.state,
+    tournament?.params?.tournamentStatus,
+    tournament?.summary?.status,
+    tournament?.summary?.state,
+    tournament?.summary?.tournamentStatus,
+  ]
+    .map((value) => toLowerValue(value))
+    .filter(Boolean);
+  if (statuses.some((status) => (
+    status === 'completed'
+    || status === 'finished'
+    || status === 'closed'
+    || status === 'done'
+    || status === 'завершен'
+    || status === 'завершён'
+  ))) {
+    return true;
+  }
+
+  const finishMarkers = [
+    tournament?.params?.finishedAt,
+    tournament?.params?.completedAt,
+    tournament?.params?.manualFinishedAt,
+    tournament?.summary?.finishedAt,
+    tournament?.summary?.completedAt,
+  ];
+  if (finishMarkers.some((value) => toStr(value))) return true;
+
+  return [
+    tournament?.params?.finished,
+    tournament?.params?.isFinished,
+    tournament?.params?.tournamentFinished,
+    tournament?.params?.manualFinish,
+    tournament?.summary?.finished,
+    tournament?.summary?.isFinished,
+    tournament?.summary?.tournamentFinished,
+    tournament?.summary?.manualFinish,
+  ].some((value) => isTruthyValue(value));
+};
+const resolveTournamentTimestamp = (tournament, fallbackTs = 0) => (
+  parseIsoTs(tournament?.params?.finishedAt)
+  ?? parseIsoTs(tournament?.params?.completedAt)
+  ?? parseIsoTs(tournament?.params?.manualFinishedAt)
+  ?? parseIsoTs(tournament?.summary?.finishedAt)
+  ?? parseIsoTs(tournament?.summary?.completedAt)
+  ?? parseIsoTs(tournament?.updatedAt)
+  ?? parseIsoTs(tournament?.createdAt)
+  ?? fallbackTs
+);
+const buildRatingBadges = (row) => {
+  const badges = [];
+  const totalEventsPlayed = Math.max(0, Math.floor(toNum(row.totalEventsPlayed) || 0));
+  if (totalEventsPlayed === 0) badges.push('no_activity');
+  if (row.gamesPlayed > 0 && row.gamesPlayed < 3) badges.push('low_games_data');
+  if (row.tournamentsPlayed === 1) badges.push('low_tournament_data');
+  if (totalEventsPlayed >= 6) badges.push('reliable');
+  if (row.lastActivityTs > 0 && row.lastActivityTs >= nowTs - 14 * 24 * 60 * 60 * 1000) badges.push('active');
+  if ((toNum(row.levelDelta) || 0) > 0) badges.push('growing');
+  if (row.bestPlace === 1) badges.push('tournament_winner');
+  return badges;
+};
+const sortCommunityRatingItems = (items, tab) => {
+  const safeTab = normalizeRatingTab(tab);
+  return [...items].sort((left, right) => {
+    if (safeTab === 'games') {
+      if (right.gamesScore !== left.gamesScore) return right.gamesScore - left.gamesScore;
+      if (right.winRate !== left.winRate) return right.winRate - left.winRate;
+      if (right.gamesDiff !== left.gamesDiff) return right.gamesDiff - left.gamesDiff;
+      if (right.levelDelta !== left.levelDelta) return right.levelDelta - left.levelDelta;
+      if (right.gamesPlayed !== left.gamesPlayed) return right.gamesPlayed - left.gamesPlayed;
+      if (right.lastActivityTs !== left.lastActivityTs) return right.lastActivityTs - left.lastActivityTs;
+      return left.playerName.localeCompare(right.playerName, 'ru');
+    }
+
+    if (safeTab === 'tournaments') {
+      if (right.tournamentScore !== left.tournamentScore) return right.tournamentScore - left.tournamentScore;
+      const leftBest = Number.isFinite(left.bestPlace) ? left.bestPlace : Number.POSITIVE_INFINITY;
+      const rightBest = Number.isFinite(right.bestPlace) ? right.bestPlace : Number.POSITIVE_INFINITY;
+      if (leftBest !== rightBest) return leftBest - rightBest;
+      if (right.tournamentMatchesWon !== left.tournamentMatchesWon) return right.tournamentMatchesWon - left.tournamentMatchesWon;
+      if (right.tournamentPointsDiff !== left.tournamentPointsDiff) return right.tournamentPointsDiff - left.tournamentPointsDiff;
+      if (right.tournamentsPlayed !== left.tournamentsPlayed) return right.tournamentsPlayed - left.tournamentsPlayed;
+      if (right.lastActivityTs !== left.lastActivityTs) return right.lastActivityTs - left.lastActivityTs;
+      return left.playerName.localeCompare(right.playerName, 'ru');
+    }
+
+    if (safeTab === 'dynamics') {
+      if (right.levelDelta !== left.levelDelta) return right.levelDelta - left.levelDelta;
+      if (right.currentLevel !== left.currentLevel) return right.currentLevel - left.currentLevel;
+      if (right.totalEventsPlayed !== left.totalEventsPlayed) return right.totalEventsPlayed - left.totalEventsPlayed;
+      if (right.lastActivityTs !== left.lastActivityTs) return right.lastActivityTs - left.lastActivityTs;
+      return left.playerName.localeCompare(right.playerName, 'ru');
+    }
+
+    if (right.overallScore !== left.overallScore) return right.overallScore - left.overallScore;
+    if (right.gamesScore !== left.gamesScore) return right.gamesScore - left.gamesScore;
+    if (right.tournamentScore !== left.tournamentScore) return right.tournamentScore - left.tournamentScore;
+    if (right.activityScore !== left.activityScore) return right.activityScore - left.activityScore;
+    if (right.lastActivityTs !== left.lastActivityTs) return right.lastActivityTs - left.lastActivityTs;
+    return left.playerName.localeCompare(right.playerName, 'ru');
+  });
+};
+const calculateCommunityRatingItems = ({ community, feedPosts, games, tournaments, period, tab }) => {
+  const safeTab = normalizeRatingTab(tab);
+  const safePeriod = normalizeRatingPeriod(period);
+  const periodStartTs = getRatingPeriodStartTs(safePeriod);
+  const members = toArray(community?.members).map((item) => buildMember(item, item?.role || 'MEMBER'));
+  if (members.length === 0) return [];
+
+  const items = [];
+  const itemByIdentity = new Map();
+  members.forEach((member, index) => {
+    const item = {
+      communityId: toStr(community?.id) || null,
+      playerId: member.id || member.phone || ('member:' + index),
+      playerName: member.name || ('Игрок ' + (index + 1)),
+      avatarUrl: member.avatar || null,
+      currentLevel: roundNumber(toNum(member.levelScore) || 0, 3),
+      levelDelta: 0,
+      gamesPlayed: 0,
+      gamesWon: 0,
+      gamesLost: 0,
+      winRate: 0,
+      setsWon: 0,
+      gamesWonCount: 0,
+      gamesDiff: 0,
+      gamesRawScore: 0,
+      gamesReliabilityFactor: 0,
+      gamesScore: 0,
+      gamesNormalized: 0,
+      tournamentsPlayed: 0,
+      tournamentMatchesWon: 0,
+      tournamentPointsScored: 0,
+      tournamentPointsDiff: 0,
+      bestPlace: null,
+      averagePlace: null,
+      tournamentRawScore: 0,
+      tournamentReliabilityFactor: 0,
+      tournamentScore: 0,
+      tournamentNormalized: 0,
+      visitsAttended: 0,
+      activityScore: 0,
+      overallScore: 0,
+      totalEventsPlayed: 0,
+      lastActivityAt: null,
+      badges: [],
+      _placesSum: 0,
+      lastActivityTs: 0,
+    };
+    items.push(item);
+    memberIdentityKeys(member).forEach((key) => {
+      itemByIdentity.set(key, item);
+    });
+  });
+
+  const gameById = new Map(
+    toArray(games)
+      .filter((item) => isObj(item))
+      .flatMap((item) => {
+        const keys = uniq([toStr(item.id), toStr(item.gameId)]).filter(Boolean);
+        return keys.map((key) => [key, item]);
+      }),
+  );
+  const tournamentById = new Map(
+    toArray(tournaments)
+      .filter((item) => isObj(item))
+      .flatMap((item) => {
+        const keys = collectTournamentRecordIds(item);
+        return keys.map((key) => [key, item]);
+      }),
+  );
+
+  toArray(feedPosts).forEach((post) => {
+    if (!isObj(post) || post.archived === true) return;
+    const kind = toStr(post.kind || post.type)?.toUpperCase();
+    const fallbackTs = resolveCreatedTs(post);
+    if (kind === 'GAME') {
+      const gameId = toStr(post.relatedGameId || post.gameId);
+      if (!gameId) return;
+      const game = gameById.get(gameId);
+      if (!game || !isConfirmedGameResult(game)) return;
+      const eventTs = resolveGameTimestamp(game, fallbackTs);
+      if (periodStartTs !== null && eventTs < periodStartTs) return;
+      const sets = resolveGameSets(game);
+      if (sets.length === 0) return;
+
+      const rowGameStats = new Map();
+      const addSetStats = (player, scoreFor, scoreAgainst) => {
+        const row = memberIdentityKeys(player).map((key) => itemByIdentity.get(key)).find(Boolean);
+        if (!row) return;
+        const stats = rowGameStats.get(row) || { setsWon: 0, setsLost: 0, gamesWonCount: 0, gamesLostCount: 0 };
+        stats.setsWon += scoreFor > scoreAgainst ? 1 : 0;
+        stats.setsLost += scoreAgainst > scoreFor ? 1 : 0;
+        stats.gamesWonCount += scoreFor;
+        stats.gamesLostCount += scoreAgainst;
+        rowGameStats.set(row, stats);
+        row.setsWon += scoreFor > scoreAgainst ? 1 : 0;
+        row.gamesWonCount += scoreFor;
+        row.gamesDiff += scoreFor - scoreAgainst;
+        row.lastActivityTs = Math.max(row.lastActivityTs, eventTs);
+      };
+      resolveGameSetTeams(game, sets).forEach(({ score, teams }) => {
+        uniq(teams.left).forEach((player) => addSetStats(player, score.left, score.right));
+        uniq(teams.right).forEach((player) => addSetStats(player, score.right, score.left));
+      });
+      rowGameStats.forEach((stats, row) => {
+        const playerWon = stats.setsWon > stats.setsLost
+          || (stats.setsWon === stats.setsLost && stats.gamesWonCount > stats.gamesLostCount);
+        const playerLost = stats.setsLost > stats.setsWon
+          || (stats.setsWon === stats.setsLost && stats.gamesLostCount > stats.gamesWonCount);
+        row.gamesPlayed += 1;
+        row.gamesWon += playerWon ? 1 : 0;
+        row.gamesLost += playerLost ? 1 : 0;
+      });
+
+      const matchResult = resolveGameMatchResult(game);
+      toArray(matchResult?.ratingImpact).forEach((impact) => {
+        if (!isObj(impact)) return;
+        const impactKeys = [];
+        const impactId = toStr(impact.id || impact.clientId || impact.playerId || impact.userId);
+        const impactPhone = normPhone(impact.phoneNorm || impact.phone || impact.phoneNumber);
+        const impactName = toStr(impact.name || impact.playerName);
+        if (impactId) impactKeys.push('id:' + impactId);
+        if (impactPhone) impactKeys.push('phone:' + impactPhone);
+        if (impactName) impactKeys.push('name:' + impactName.toLowerCase());
+        const row = impactKeys.map((key) => itemByIdentity.get(key)).find(Boolean);
+        if (!row) return;
+        row.levelDelta += toNum(impact.delta) || 0;
+        row.lastActivityTs = Math.max(row.lastActivityTs, eventTs);
+      });
+      return;
+    }
+
+    if (kind === 'TOURNAMENT') {
+      const tournamentId = resolvePostTournamentLinkId(post);
+      if (!tournamentId) return;
+      const tournament = tournamentById.get(tournamentId);
+      if (!tournament) return;
+      if (!isTournamentFinalized(tournament)) return;
+      const eventTs = resolveTournamentTimestamp(tournament, fallbackTs);
+      if (periodStartTs !== null && eventTs < periodStartTs) return;
+      const rows = resolveTournamentRows(tournament);
+      const participantsCount = resolveTournamentParticipantsCount(tournament, rows);
+      if (participantsCount <= 0 || rows.length === 0) return;
+
+      rows.forEach((standing, index) => {
+        const keys = [];
+        if (standing.id) keys.push('id:' + standing.id);
+        if (standing.phone) keys.push('phone:' + standing.phone);
+        if (standing.name) keys.push('name:' + standing.name.toLowerCase());
+        const row = keys.map((key) => itemByIdentity.get(key)).find(Boolean);
+        if (!row) return;
+        const place = Math.max(1, Math.floor(toNum(standing.place) || (index + 1)));
+        const placeScore = calculatePlaceScore(place, participantsCount);
+        const placeBonus = getPlaceBonus(place);
+        const rawTournamentScore = roundNumber(
+          placeScore
+          + (toNum(standing.wins) || 0) * 8
+          + (toNum(standing.pointsFor) || 0) * 0.5
+          + (toNum(standing.pointDiff) || 0)
+          + placeBonus,
+        );
+
+        row.tournamentsPlayed += 1;
+        row.tournamentMatchesWon += toNum(standing.wins) || 0;
+        row.tournamentPointsScored += toNum(standing.pointsFor) || 0;
+        row.tournamentPointsDiff += toNum(standing.pointDiff) || 0;
+        row.tournamentRawScore += rawTournamentScore;
+        row.bestPlace = Number.isFinite(row.bestPlace) ? Math.min(row.bestPlace, place) : place;
+        row._placesSum += place;
+        row.lastActivityTs = Math.max(row.lastActivityTs, eventTs);
+      });
+    }
+  });
+
+  let maxGamesScore = 0;
+  let maxTournamentScore = 0;
+  items.forEach((row) => {
+    row.levelDelta = roundNumber(row.levelDelta, 3);
+    row.gamesRawScore = calculateGamesRawScore(row);
+    row.gamesReliabilityFactor = getGamesReliabilityFactor(row.gamesPlayed);
+    row.gamesScore = roundNumber(row.gamesRawScore * row.gamesReliabilityFactor, 3);
+    row.winRate = row.gamesPlayed > 0 ? roundNumber(row.gamesWon / row.gamesPlayed, 3) : 0;
+
+    row.tournamentRawScore = roundNumber(row.tournamentRawScore, 3);
+    row.tournamentReliabilityFactor = getTournamentReliabilityFactor(row.tournamentsPlayed);
+    row.tournamentScore = roundNumber(row.tournamentRawScore * row.tournamentReliabilityFactor, 3);
+    row.averagePlace = row.tournamentsPlayed > 0
+      ? roundNumber(row._placesSum / row.tournamentsPlayed, 2)
+      : null;
+
+    row.activityScore = calculateActivityScore(row.gamesPlayed, row.tournamentsPlayed, row.visitsAttended);
+    row.totalEventsPlayed = row.gamesPlayed + row.tournamentsPlayed + row.visitsAttended;
+    row.lastActivityAt = row.lastActivityTs > 0 ? new Date(row.lastActivityTs).toISOString() : null;
+
+    if (row.gamesScore > maxGamesScore) maxGamesScore = row.gamesScore;
+    if (row.tournamentScore > maxTournamentScore) maxTournamentScore = row.tournamentScore;
+  });
+
+  items.forEach((row) => {
+    row.gamesNormalized = normalizeScore(row.gamesScore, maxGamesScore);
+    row.tournamentNormalized = normalizeScore(row.tournamentScore, maxTournamentScore);
+    row.overallScore = calculateOverallScore(row.gamesNormalized, row.tournamentNormalized, row.activityScore);
+    row.badges = buildRatingBadges(row);
+  });
+
+  return sortCommunityRatingItems(items, safeTab).map((row, index) => ({
+    rank: index + 1,
+    communityId: row.communityId,
+    playerId: row.playerId,
+    playerName: row.playerName,
+    avatarUrl: row.avatarUrl,
+    currentLevel: row.currentLevel,
+    levelDelta: row.levelDelta,
+    gamesPlayed: row.gamesPlayed,
+    gamesWon: row.gamesWon,
+    gamesLost: row.gamesLost,
+    winRate: row.winRate,
+    setsWon: row.setsWon,
+    gamesWonCount: row.gamesWonCount,
+    gamesDiff: row.gamesDiff,
+    gamesRawScore: row.gamesRawScore,
+    gamesReliabilityFactor: row.gamesReliabilityFactor,
+    gamesScore: row.gamesScore,
+    gamesNormalized: row.gamesNormalized,
+    tournamentsPlayed: row.tournamentsPlayed,
+    tournamentMatchesWon: row.tournamentMatchesWon,
+    tournamentPointsScored: row.tournamentPointsScored,
+    tournamentPointsDiff: row.tournamentPointsDiff,
+    bestPlace: row.bestPlace,
+    averagePlace: row.averagePlace,
+    tournamentRawScore: row.tournamentRawScore,
+    tournamentReliabilityFactor: row.tournamentReliabilityFactor,
+    tournamentScore: row.tournamentScore,
+    tournamentNormalized: row.tournamentNormalized,
+    visitsAttended: row.visitsAttended,
+    activityScore: row.activityScore,
+    overallScore: row.overallScore,
+    totalEventsPlayed: row.totalEventsPlayed,
+    lastActivityAt: row.lastActivityAt,
+    badges: row.badges,
+  }));
+};
 const buildConnections = (communities) => {
   const result = [];
   const safeCommunities = toArray(communities).map((item) => normalizeCommunityForResponse(item));
@@ -523,6 +1205,44 @@ const buildConnections = (communities) => {
 
   return result;
 };
+const isMongoObjectIdLike = (value) => /^[0-9a-f]{24}$/i.test(String(value || '').trim());
+const pickNestedRecord = (value, keys) => {
+  if (!isObj(value)) return null;
+  for (const key of keys) {
+    if (isObj(value[key])) return value[key];
+  }
+  return null;
+};
+const resolvePostTournamentLinkId = (post) => {
+  if (!isObj(post)) return null;
+  const direct = toStr(post.relatedTournamentId || post.tournamentId);
+  if (direct) return direct;
+
+  const details = pickNestedRecord(post, ['details']);
+  const nestedDetails = pickNestedRecord(details, ['details']);
+  const publicTournament = pickNestedRecord(details, ['publicTournament']);
+  const sourceTournamentSnapshot = pickNestedRecord(details, ['sourceTournamentSnapshot', 'sourceTournament']);
+  const stableNestedCandidate = toStr(details?.relatedTournamentId)
+    || toStr(nestedDetails?.relatedTournamentId)
+    || toStr(publicTournament?.exerciseId || publicTournament?.sourceTournamentId || publicTournament?.tournamentId || publicTournament?.id)
+    || toStr(sourceTournamentSnapshot?.exerciseId || sourceTournamentSnapshot?.sourceTournamentId || sourceTournamentSnapshot?.tournamentId || sourceTournamentSnapshot?.id);
+  if (stableNestedCandidate) return stableNestedCandidate;
+
+  const legacyCandidate = toStr(details?.tournamentId || nestedDetails?.tournamentId);
+  if (!legacyCandidate || isMongoObjectIdLike(legacyCandidate)) return null;
+  return legacyCandidate;
+};
+const collectTournamentRecordIds = (tournament) => {
+  const details = pickNestedRecord(tournament, ['details']);
+  const publicTournament = pickNestedRecord(details, ['publicTournament']);
+  const sourceTournamentSnapshot = pickNestedRecord(details, ['sourceTournamentSnapshot', 'sourceTournament']);
+  return uniq([
+    toStr(tournament?.tournamentId || tournament?.id || tournament?.exerciseId || tournament?.sourceTournamentId),
+    toStr(details?.tournamentId || details?.id || details?.exerciseId || details?.sourceTournamentId),
+    toStr(publicTournament?.tournamentId || publicTournament?.id || publicTournament?.exerciseId || publicTournament?.sourceTournamentId),
+    toStr(sourceTournamentSnapshot?.tournamentId || sourceTournamentSnapshot?.id || sourceTournamentSnapshot?.exerciseId || sourceTournamentSnapshot?.sourceTournamentId),
+  ]);
+};
 const extractInviteCode = (value) => {
   const raw = toStr(value);
   if (!raw) return null;
@@ -535,16 +1255,25 @@ const extractInviteCode = (value) => {
       return normalized;
     }
   };
-  try {
-    const parsed = new URL(raw);
-    const byParam = parsed.searchParams.get('invite') || parsed.searchParams.get('code');
-    if (byParam) return decodeInviteToken(byParam);
-    const parts = parsed.pathname.split('/').filter(Boolean);
-    return decodeInviteToken(parts.length ? parts[parts.length - 1] : null);
-  } catch {
-    const parts = raw.split('/').filter(Boolean);
-    return decodeInviteToken(parts.length ? parts[parts.length - 1] : null);
+  const queryIndex = raw.indexOf('?');
+  if (queryIndex >= 0) {
+    const query = raw.slice(queryIndex + 1).split('#')[0] || '';
+    const params = query.split('&').filter(Boolean);
+    for (const pair of params) {
+      const separatorIndex = pair.indexOf('=');
+      const key = separatorIndex >= 0 ? pair.slice(0, separatorIndex) : pair;
+      const paramValue = separatorIndex >= 0 ? pair.slice(separatorIndex + 1) : '';
+      const decodedKey = decodeInviteToken(key);
+      if (decodedKey === 'invite' || decodedKey === 'code') {
+        return decodeInviteToken(paramValue.replace(/\+/g, ' '));
+      }
+    }
   }
+
+  const pathWithoutHash = raw.split('#')[0] || '';
+  const pathWithoutQuery = pathWithoutHash.split('?')[0] || '';
+  const parts = pathWithoutQuery.split('/').filter(Boolean);
+  return decodeInviteToken(parts.length ? parts[parts.length - 1] : null);
 };
 const toReaction = (value) => {
   const normalized = toStr(value)?.toUpperCase();
@@ -814,7 +1543,74 @@ msg._communityList = {
   listMode,
 };
 
-msg.payload = { archived: { $ne: true } };
+const listQuery = { archived: { $ne: true } };
+if (listMode !== 'SUMMARY') {
+  msg.payload = listQuery;
+  return [msg, null, msg];
+}
+
+const viewerIdentityFilters = [];
+if (msg._communityList.clientId) {
+  ['id', 'clientId', 'userId', 'uuid'].forEach((field) => {
+    viewerIdentityFilters.push({ [field]: msg._communityList.clientId });
+  });
+}
+if (msg._communityList.phone) {
+  ['phone', 'phoneNorm', 'phoneNumber', 'mobile'].forEach((field) => {
+    viewerIdentityFilters.push({ [field]: msg._communityList.phone });
+  });
+}
+
+const summaryProjection = {
+  _id: 0,
+  id: 1,
+  communityId: 1,
+  name: 1,
+  title: 1,
+  slug: 1,
+  logo: 1,
+  logoUrl: 1,
+  logoThumbUrl: 1,
+  logoAssetId: 1,
+  logoLegacyDataUrl: 1,
+  imageUrl: 1,
+  visibility: 1,
+  description: 1,
+  body: 1,
+  city: 1,
+  focusTags: 1,
+  tags: 1,
+  minimumLevel: 1,
+  levelFrom: 1,
+  joinRule: 1,
+  rules: 1,
+  policy: 1,
+  inviteCode: 1,
+  inviteLink: 1,
+  link: 1,
+  createdAt: 1,
+  updatedAt: 1,
+  lastVisibleFeedActivityAt: 1,
+  lastVisibleFeedActivityTs: 1,
+  memberCount: 1,
+  isVerified: 1,
+  verified: 1,
+  isOfficial: 1,
+  official: 1,
+  verification: 1,
+  verificationInfo: 1,
+  verificationStatus: 1,
+  statusVerification: 1,
+  verifiedAt: 1,
+};
+if (viewerIdentityFilters.length > 0) {
+  const viewerMatch = { $or: viewerIdentityFilters };
+  summaryProjection.members = { $elemMatch: viewerMatch };
+  summaryProjection.pendingMembers = { $elemMatch: viewerMatch };
+}
+
+msg.payload = listQuery;
+msg.projection = summaryProjection;
 return [msg, null, msg];
 `;
 
@@ -838,7 +1634,7 @@ msg.statusCode = 200;
 msg.headers = jsonHeaders;
 msg.payload = {
   communities,
-  connections: buildConnections(scopedRows),
+  connections: isSummaryMode ? [] : buildConnections(scopedRows),
   total: communities.length,
 };
 return [msg, msg];
@@ -1312,7 +2108,7 @@ const rows = toArray(msg.payload);
 const ctx = isObj(msg._communityUpdate) ? msg._communityUpdate : {};
 if (rows.length === 0) {
   const errorMsg = withJson(msg, 404, { error: 'Community not found' });
-  return [null, null, errorMsg, errorMsg];
+  return [null, null, null, errorMsg, errorMsg];
 }
 
 const community = rows[0];
@@ -1801,7 +2597,8 @@ msg._communityPost = {
   previewLabel: toStr(body.previewLabel || body.preview),
   ctaLabel: toStr(body.ctaLabel || body.actionLabel),
   relatedGameId: toStr(body.relatedGameId || body.gameId),
-  relatedTournamentId: toStr(body.relatedTournamentId || body.tournamentId),
+  relatedTournamentId: resolvePostTournamentLinkId(body),
+  details: isObj(body.details) ? body.details : null,
 };
 msg.payload = { id: communityId, archived: { $ne: true } };
 return [msg, null, msg];
@@ -1819,12 +2616,12 @@ const community = rows[0];
 const isAllowed = toArray(community.members).some((item) => matchesIdentity(item, ctx.member?.id, ctx.member?.phone));
 if (!isAllowed) {
   const errorMsg = withJson(msg, 403, { error: 'Only community members can publish posts' });
-  return [null, null, errorMsg, errorMsg];
+  return [null, null, null, errorMsg, errorMsg];
 }
 const actorMember = findMemberByIdentity(community.members, ctx.member);
 if (ctx.kind === 'TOURNAMENT' && !canCreateTournamentFeedPost(actorMember?.role)) {
   const errorMsg = withJson(msg, 403, { error: 'Tournament posts are only available to moderators and administrators' });
-  return [null, null, errorMsg, errorMsg];
+  return [null, null, null, errorMsg, errorMsg];
 }
 
 const postDoc = {
@@ -1837,7 +2634,8 @@ const postDoc = {
   previewLabel: ctx.previewLabel || null,
   ctaLabel: ctx.ctaLabel || null,
   relatedGameId: ctx.relatedGameId || null,
-  relatedTournamentId: ctx.relatedTournamentId || null,
+  relatedTournamentId: resolvePostTournamentLinkId(ctx) || null,
+  details: ctx.details || null,
   author: {
     id: ctx.member?.id || null,
     phone: ctx.member?.phone || null,
@@ -2694,10 +3492,12 @@ if (!communityId) {
   return [null, errorMsg, errorMsg];
 }
 
-msg._communityRanking = {
+msg._communityRatingCtx = {
   communityId,
   clientId: toStr(msg.req?.query?.clientId),
   phone: normPhone(msg.req?.query?.phone || msg.req?.query?.phoneNumber || msg.req?.query?.mobile),
+  tab: normalizeRatingTab(msg.req?.query?.tab),
+  period: normalizeRatingPeriod(msg.req?.query?.period),
 };
 msg.payload = { id: communityId, archived: { $ne: true } };
 return [msg, null, msg];
@@ -2705,7 +3505,7 @@ return [msg, null, msg];
 
 const fnRankingQuery = `${commonHelpers}
 const rows = toArray(msg.payload);
-const ctx = isObj(msg._communityRanking) ? msg._communityRanking : {};
+const ctx = isObj(msg._communityRatingCtx) ? msg._communityRatingCtx : {};
 if (rows.length === 0) {
   const errorMsg = withJson(msg, 404, { error: 'Community not found' });
   return [null, errorMsg, errorMsg];
@@ -2721,28 +3521,132 @@ if (!canAccess) {
   return [null, errorMsg, errorMsg];
 }
 
-msg._communityRanking = Object.assign({}, ctx, {
+msg._communityRatingCtx = Object.assign({}, ctx, {
   community,
   communityId: toStr(community.id) || ctx.communityId,
 });
-msg.payload = { communityId: toStr(community.id) };
+msg.payload = {
+  communityId: toStr(community.id),
+  tab: normalizeRatingTab(ctx.tab),
+  period: normalizeRatingPeriod(ctx.period),
+  calculationVersion: COMMUNITY_RATING_CALCULATION_VERSION,
+};
 return [msg, null, msg];
 `;
 
+const fnRankingSnapshotResponse = `${commonHelpers}
+const ctx = isObj(msg._communityRatingCtx) ? msg._communityRatingCtx : {};
+const snapshots = toArray(msg.payload).filter((item) => isObj(item));
+const snapshot = snapshots[0] || null;
+
+if (snapshot && (Array.isArray(snapshot.rows) || Array.isArray(snapshot.items))) {
+  const snapshotRows = toArray(snapshot.rows || snapshot.items)
+    .map((row, index) => {
+      if (!isObj(row)) return null;
+      const rank = toNum(row.rank);
+      return Object.assign({}, row, {
+        rank: Number.isFinite(rank) && rank > 0 ? Math.floor(rank) : index + 1,
+      });
+    })
+    .filter(Boolean);
+
+  msg.statusCode = 200;
+  msg.headers = jsonHeaders;
+  msg.payload = {
+    communityId: ctx.communityId || snapshot.communityId || null,
+    tab: normalizeRatingTab(snapshot.tab || ctx.tab),
+    period: normalizeRatingPeriod(snapshot.period || ctx.period),
+    updatedAt: toStr(snapshot.updatedAt) || nowIso,
+    dataThrough: toStr(snapshot.dataThrough),
+    sourceVersion: toStr(snapshot.sourceVersion) || 'rating_events+player_rating_state+attendance-v1',
+    degraded: false,
+    calculationVersion: toStr(snapshot.calculationVersion) || COMMUNITY_RATING_CALCULATION_VERSION,
+    items: snapshotRows,
+    rows: snapshotRows,
+  };
+  return [msg, null, msg];
+}
+
+const errorMsg = withJson(msg, 503, {
+  error: 'RATING_SNAPSHOT_NOT_READY',
+  communityId: ctx.communityId || null,
+  tab: normalizeRatingTab(ctx.tab),
+  period: normalizeRatingPeriod(ctx.period),
+  calculationVersion: COMMUNITY_RATING_CALCULATION_VERSION,
+  degraded: true,
+});
+return [errorMsg, null, errorMsg];
+`;
+
+const fnRankingFeedQuery = `${commonHelpers}
+const ctx = isObj(msg._communityRatingCtx) ? msg._communityRatingCtx : {};
+const feedRows = toArray(msg.payload).filter((item) => item && item.archived !== true);
+const gameIds = uniq(feedRows
+  .filter((item) => toStr(item.kind || item.type)?.toUpperCase() === 'GAME')
+  .map((item) => toStr(item.relatedGameId || item.gameId)));
+const tournamentIds = uniq(feedRows
+  .filter((item) => toStr(item.kind || item.type)?.toUpperCase() === 'TOURNAMENT')
+  .map((item) => resolvePostTournamentLinkId(item)));
+
+msg._communityRatingCtx = Object.assign({}, ctx, {
+  feedRows,
+  gameIds,
+  tournamentIds,
+});
+msg.payload = gameIds.length > 0
+  ? {
+    $or: [
+      { id: { $in: gameIds } },
+      { gameId: { $in: gameIds } },
+    ],
+    archived: { $ne: true },
+  }
+  : { id: '__none__' };
+return [msg, msg];
+`;
+
+const fnRankingTournamentsQuery = `${commonHelpers}
+const ctx = isObj(msg._communityRatingCtx) ? msg._communityRatingCtx : {};
+const gamesRows = toArray(msg.payload).filter((item) => item && item.archived !== true);
+const tournamentIds = toArray(ctx.tournamentIds).map((item) => toStr(item)).filter(Boolean);
+
+msg._communityRatingCtx = Object.assign({}, ctx, { gamesRows });
+msg.payload = tournamentIds.length > 0
+  ? {
+    $or: [
+      { tournamentId: { $in: tournamentIds } },
+      { id: { $in: tournamentIds } },
+      { exerciseId: { $in: tournamentIds } },
+      { sourceTournamentId: { $in: tournamentIds } },
+    ],
+    archived: { $ne: true },
+  }
+  : { tournamentId: '__none__' };
+return [msg, msg];
+`;
+
 const fnRankingResponse = `${commonHelpers}
-const ctx = isObj(msg._communityRanking) ? msg._communityRanking : {};
-const rankingRows = toArray(msg.payload)
-  .sort((left, right) => Date.parse(toStr(right?.updatedAt) || nowIso) - Date.parse(toStr(left?.updatedAt) || nowIso))[0]?.rows;
-const rows = Array.isArray(rankingRows)
-  ? rankingRows
-  : buildRankingRows(toArray(ctx.community?.members));
+const ctx = isObj(msg._communityRatingCtx) ? msg._communityRatingCtx : {};
+const tournamentsRows = toArray(msg.payload).filter((item) => item && item.archived !== true);
+const items = calculateCommunityRatingItems({
+  community: ctx.community || {},
+  feedPosts: ctx.feedRows || [],
+  games: ctx.gamesRows || [],
+  tournaments: tournamentsRows,
+  period: normalizeRatingPeriod(ctx.period),
+  tab: normalizeRatingTab(ctx.tab),
+});
 
 msg.statusCode = 200;
 msg.headers = jsonHeaders;
 msg.payload = {
   communityId: ctx.communityId || null,
-  updatedAt: toStr(toArray(msg.payload)[0]?.updatedAt) || toStr(ctx.community?.updatedAt) || nowIso,
-  rows,
+  tab: normalizeRatingTab(ctx.tab),
+  period: normalizeRatingPeriod(ctx.period),
+  updatedAt: nowIso,
+  calculationVersion: COMMUNITY_RATING_CALCULATION_VERSION,
+  items,
+  rows: items,
 };
 return [msg, msg];
 `;
@@ -3543,6 +4447,8 @@ const nodes = [
   debugNode('community_chat_post_debug_001', 'community chat post debug', 1390, 5400),
 
   httpInNode('community_ranking_in_001', 'LK community ranking', '/lk/communities/:communityId/ranking', 'get', 160, 5520, 'community_ranking_fn_prepare_001'),
+  httpInNode('community_rating_in_001', 'LK community rating', '/lk/communities/:communityId/rating', 'get', 160, 5560, 'community_ranking_fn_prepare_001'),
+  httpInNode('community_rating_in_002', 'community rating (public path)', '/communities/:communityId/rating', 'get', 160, 5600, 'community_ranking_fn_prepare_001'),
   functionNode(
     'community_ranking_fn_prepare_001',
     'Prepare ranking request',
@@ -3560,20 +4466,50 @@ const nodes = [
     3,
     1000,
     5480,
-    [['community_ranking_find_rows_001'], ['community_ranking_http_resp_001'], ['community_ranking_debug_001']],
+    [['community_ranking_find_snapshot_001'], ['community_ranking_http_resp_001'], ['community_ranking_debug_001']],
   ),
-  mongoInNode('community_ranking_find_rows_001', 'Find ranking snapshot', 'lk_community_rankings', 1290, 5480, 'community_ranking_fn_response_001'),
+  mongoInNode('community_ranking_find_snapshot_001', 'Find rating snapshot', 'community_rating_snapshots', 1290, 5480, 'community_ranking_fn_snapshot_response_001'),
+  functionNode(
+    'community_ranking_fn_snapshot_response_001',
+    'Use rating snapshot or fallback',
+    fnRankingSnapshotResponse,
+    3,
+    1570,
+    5480,
+    [['community_ranking_http_resp_001'], ['community_ranking_find_rows_001'], ['community_ranking_debug_001']],
+  ),
+  mongoInNode('community_ranking_find_rows_001', 'Find feed posts for rating', 'lk_community_feed', 1840, 5480, 'community_ranking_fn_feed_query_001'),
+  functionNode(
+    'community_ranking_fn_feed_query_001',
+    'Build games query for rating',
+    fnRankingFeedQuery,
+    2,
+    2120,
+    5480,
+    [['community_ranking_find_games_001'], ['community_ranking_debug_001']],
+  ),
+  mongoInNode('community_ranking_find_games_001', 'Find games for rating', 'lk_games', 2370, 5480, 'community_ranking_fn_tournaments_query_001'),
+  functionNode(
+    'community_ranking_fn_tournaments_query_001',
+    'Build tournaments query for rating',
+    fnRankingTournamentsQuery,
+    2,
+    2630,
+    5480,
+    [['community_ranking_find_tournaments_001'], ['community_ranking_debug_001']],
+  ),
+  mongoInNode('community_ranking_find_tournaments_001', 'Find tournaments for rating', 'tournaments', 2900, 5480, 'community_ranking_fn_response_001'),
   functionNode(
     'community_ranking_fn_response_001',
-    'Build ranking response',
+    'Build rating response',
     fnRankingResponse,
     2,
-    1570,
+    3180,
     5480,
     [['community_ranking_http_resp_001'], ['community_ranking_debug_001']],
   ),
-  httpResponseNode('community_ranking_http_resp_001', 1850, 5520),
-  debugNode('community_ranking_debug_001', 'community ranking debug', 1840, 5560),
+  httpResponseNode('community_ranking_http_resp_001', 3450, 5520),
+  debugNode('community_ranking_debug_001', 'community ranking debug', 3450, 5560),
 ];
 
 const newIds = new Set(nodes.map((node) => node.id));

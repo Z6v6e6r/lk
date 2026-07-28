@@ -19,14 +19,20 @@ if (!gameId) {
   return [null, msg, msg];
 }
 
-const phone = normPhone(msg.req?.query?.phone || msg.req?.query?.phoneNumber || msg.req?.query?.mobile);
-if (!phone) {
-  msg.statusCode = 400;
-  msg.headers = { "Content-Type": "application/json; charset=utf-8" };
-  msg.payload = { error: "phone is required" };
-  return [null, msg, msg];
-}
-
-msg._resultState = { gameId, phone };
+const trustedActor = (msg._resultActor && typeof msg._resultActor === "object")
+  ? msg._resultActor
+  : null;
+const actor = trustedActor ? {
+  id: toStr(trustedActor.id || trustedActor.clientId || trustedActor.uuid),
+  phoneNorm: normPhone(trustedActor.phoneNorm || trustedActor.phone),
+  name: toStr(trustedActor.name || trustedActor.fullName || trustedActor.title),
+  verified: trustedActor.verified === true,
+} : {
+  id: toStr(msg.req?.query?.clientId || msg.req?.query?.playerId),
+  phoneNorm: normPhone(msg.req?.query?.phone || msg.req?.query?.phoneNumber || msg.req?.query?.mobile),
+  name: null,
+  verified: false,
+};
+msg._resultState = { gameId, phone: actor.phoneNorm, actor };
 msg.payload = { id: gameId, archived: { $ne: true } };
 return [msg, null, msg];

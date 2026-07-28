@@ -1,4 +1,5 @@
 import { TENANT_KEY } from "../consts/api_config";
+import { buildLkAssetFileCandidates, resolveLkAssetBaseUrlFromScript } from "./lkAssetBaseUrls";
 
 const REFRESH_QUERY_KEY = "__lk_refresh";
 const RELEASE_QUERY_KEY = "__lkv";
@@ -65,19 +66,12 @@ function resolveCurrentBundleScriptUrl(): URL | null {
   return null;
 }
 
-function resolveReleaseUrl(bundleUrl: URL | null): string {
-  if (bundleUrl) {
-    const releaseUrl = new URL(bundleUrl.toString());
-    const fileName = releaseUrl.pathname.toLowerCase().endsWith("/bundle-dev.js")
-      ? "release-dev.json"
-      : "release.json";
-    releaseUrl.pathname = releaseUrl.pathname.replace(/\/[^/]*$/, `/${fileName}`);
-    releaseUrl.search = "";
-    releaseUrl.hash = "";
-    return releaseUrl.toString();
-  }
+function resolveReleaseUrls(bundleUrl: URL | null): string[] {
+  const fileName = bundleUrl?.pathname.toLowerCase().endsWith("/bundle-dev.js")
+    ? "release-dev.json"
+    : "release.json";
 
-  return new URL("/lk/release.json", window.location.origin).toString();
+  return buildLkAssetFileCandidates(fileName, [resolveLkAssetBaseUrlFromScript(bundleUrl)]);
 }
 
 function resolveLkBaseUrl(bundleUrl: URL | null): URL {
@@ -93,20 +87,13 @@ function resolveLkBaseUrl(bundleUrl: URL | null): URL {
 }
 
 function buildRefreshAssetUrls(bundleUrl: URL | null): string[] {
-  const baseUrl = resolveLkBaseUrl(bundleUrl);
-  const seen = new Set<string>();
-  const addAsset = (fileName: string) => {
-    const url = new URL(fileName, baseUrl);
-    const key = url.toString();
-    if (seen.has(key)) return null;
-    seen.add(key);
-    return key;
-  };
-
   return [
     ...LK_RELEASE_FILE_NAMES,
     ...LK_SCRIPT_FILE_NAMES,
-  ].map(addAsset).filter((value): value is string => Boolean(value));
+  ].flatMap((fileName) => buildLkAssetFileCandidates(
+    fileName,
+    [resolveLkBaseUrl(bundleUrl)],
+  ));
 }
 
 async function deleteBrowserCaches() {
@@ -200,24 +187,33 @@ async function deleteIndexedDbDatabases() {
   }
 }
 
-async function fetchLatestReleaseVersion(releaseUrl: string): Promise<string | null> {
+async function fetchLatestReleaseVersion(releaseUrls: string[]): Promise<string | null> {
   if (typeof fetch !== "function") return null;
 
-  try {
-    const url = new URL(releaseUrl);
-    url.searchParams.set("force_ts", `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  for (const releaseUrl of releaseUrls) {
+    try {
+      const url = new URL(releaseUrl);
+      url.searchParams.set("force_ts", `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
-    const response = await fetch(url.toString(), {
-      method: "GET",
-      cache: "no-store",
-    });
-    if (!response.ok) return null;
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        continue;
+      }
 
-    const payload = (await response.json()) as { version?: unknown } | null;
-    return trimString(payload?.version);
-  } catch {
-    return null;
+      const payload = (await response.json()) as { version?: unknown } | null;
+      const version = trimString(payload?.version);
+      if (version) {
+        return version;
+      }
+    } catch {
+      // ignored
+    }
   }
+
+  return null;
 }
 
 async function refreshAsset(url: string, cacheBust: string) {
@@ -245,8 +241,8 @@ export async function forceAppRefresh() {
   if (typeof window === "undefined") return;
 
   const bundleUrl = resolveCurrentBundleScriptUrl();
-  const releaseUrl = resolveReleaseUrl(bundleUrl);
-  const latestVersion = await fetchLatestReleaseVersion(releaseUrl);
+  const releaseUrls = resolveReleaseUrls(bundleUrl);
+  const latestVersion = await fetchLatestReleaseVersion(releaseUrls);
 
   await Promise.all([
     deleteBrowserCaches(),

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { Capacitor } from "@capacitor/core";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { OverlayScopeProvider } from "./context/OverlayScopeContext";
 import { AuthForm } from "./components/auth/AuthForm";
@@ -7,10 +8,13 @@ import { RemoteWidgetHost } from "./components/UI/RemoteWidgetHost";
 import { Cabinet } from "./components/cabinet/Cabinet";
 import CommunityJoinPage from "./components/communities/CommunityJoinPage";
 import FindGamePage from "./components/games/FindGamePage";
+import GamesPage from "./components/games/GamesPage";
+import TournamentsPage from "./components/tournaments/TournamentsPage";
 import {
   CABINET_URL,
   PUBLIC_COMMUNITY_JOIN_PATH,
   GAMES_BUNDLE_URL,
+  LEVELS_INFO_BUNDLE_URL,
   ONBOARDING_BUNDLE_URL,
   PUBLIC_GAME_CREATE_PATH,
   PUBLIC_GAME_FIND_PATH,
@@ -21,9 +25,12 @@ import { loadWidget, type WidgetGlobalName, type WidgetModule } from "./utils/wi
 import { trackAnalyticsEvent, trackClientError } from "./utils/analytics";
 import { PAYMENT_REF_QUERY_KEY, processPendingPaymentSyncQueue } from "./utils/paymentSync";
 import { syncGamesCommunityAutopublish } from "./utils/gameCommunityAutopublish";
+import { resolveCommunityJoinRouteData } from "./utils/communityJoinRoute";
+import { appendCurrentAuthModeToNavigableUrl } from "./utils/authMode";
 import type { GamesMountData, OpenGamesOptions } from "./types/gamesOverlay";
+import type { LevelsInfoMountData, OpenLevelsInfoOptions } from "./types/levelsInfoOverlay";
 import type { OpenTournamentsOptions, TournamentsMountData } from "./types/tournamentsOverlay";
-import type { UserProfileType } from "./utils/apiClient";
+import type { PadelGameRecord, UserProfileType } from "./utils/apiClient";
 import "./MyApp.css";
 
 type OnboardingMountData = {
@@ -33,8 +40,8 @@ type OnboardingMountData = {
   tournamentsLink?: string;
 };
 
-type OverlayModuleName = "games" | "tournaments" | "onboarding";
-type OverlayData = GamesMountData | TournamentsMountData | OnboardingMountData | undefined;
+type OverlayModuleName = "games" | "tournaments" | "onboarding" | "levels-info";
+type OverlayData = GamesMountData | TournamentsMountData | OnboardingMountData | LevelsInfoMountData | undefined;
 
 type AppWindow = Window & Record<WidgetGlobalName, WidgetModule | undefined> & {
   __LK_ON_READY?: () => void;
@@ -57,6 +64,7 @@ type AppWindow = Window & Record<WidgetGlobalName, WidgetModule | undefined> & {
     stationId?: string | null;
     stationName?: string | null;
     cabinetUrl?: string | null;
+    includeGamePlusTrainer?: boolean | string | null;
   };
 };
 
@@ -64,11 +72,22 @@ const DEFAULT_CABINET_URL = CABINET_URL;
 const DEFAULT_INVITE_PATH = (PUBLIC_INVITE_PATH || "/game_join").replace(/\/+$/, "") || "/game_join";
 const DEFAULT_GAME_CREATE_PATH =
   (PUBLIC_GAME_CREATE_PATH || "/game_create").replace(/\/+$/, "") || "/game_create";
+const DEFAULT_GAME_CREATE_COMPOSITE_PATH = "/game_create_composite";
 const DEFAULT_GAME_FIND_PATH =
   (PUBLIC_GAME_FIND_PATH || "/finde_game").replace(/\/+$/, "") || "/finde_game";
 const DEFAULT_COMMUNITY_JOIN_PATH =
   (PUBLIC_COMMUNITY_JOIN_PATH || "/community_join").replace(/\/+$/, "") || "/community_join";
 const OPEN_GAME_QUERY_KEY = "openGameId";
+
+function notifyGamesUpdated(records: PadelGameRecord[], source: string): void {
+  if (typeof window === "undefined" || records.length === 0) return;
+  window.dispatchEvent(new CustomEvent("lk-games-updated", {
+    detail: {
+      records,
+      source,
+    },
+  }));
+}
 
 const OVERLAY_ID = "lk-overlay";
 let overlayRoot: ReturnType<typeof createRoot> | null = null;
@@ -128,43 +147,30 @@ function hideOverlay() {
 function normalizeInviteCabinetUrl(value: string | null | undefined): string {
   const fallback = (DEFAULT_CABINET_URL || "").trim();
   const raw = (value || "").trim();
-  if (!raw) return fallback;
+  if (!raw) return fallback ? appendCurrentAuthModeToNavigableUrl(fallback).toString() : fallback;
 
   try {
-    return new URL(raw, typeof window !== "undefined" ? window.location.origin : undefined).toString();
+    return appendCurrentAuthModeToNavigableUrl(
+      new URL(raw, typeof window !== "undefined" ? window.location.origin : undefined),
+    ).toString();
   } catch {
-    return raw || fallback;
-  }
-}
-
-function extractCommunityInviteCode(value: string | null | undefined): string | null {
-  const raw = (value || "").trim();
-  if (!raw) return null;
-
-  try {
-    const parsed = new URL(raw, typeof window !== "undefined" ? window.location.origin : undefined);
-    return (
-      parsed.searchParams.get("invite")
-      || parsed.searchParams.get("code")
-      || parsed.searchParams.get("inviteCode")
-      || parsed.pathname.split("/").filter(Boolean).at(-1)
-      || ""
-    ).trim() || null;
-  } catch {
-    return raw.split("/").filter(Boolean).at(-1)?.trim() || null;
+    return raw || (fallback ? appendCurrentAuthModeToNavigableUrl(fallback).toString() : fallback);
   }
 }
 
 function AppContent() {
-  const { isAuthenticated } = useAuth();
-  const [view, setView] = useState<"auth" | "cabinet">("auth");
+  const { isAuthenticated, logout, isRestoringSession } = useAuth();
+  const isAndroidTournamentMode = Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android";
+  const [view, setView] = useState<"auth" | "cabinet" | "tournaments">("auth");
   const [autoOpenFromPaymentHandled, setAutoOpenFromPaymentHandled] = useState(false);
+
   const joinRouteData = useMemo(() => {
     if (typeof window === "undefined") {
       return {
         enabled: false,
         gameId: null as string | null,
         cabinetUrl: DEFAULT_CABINET_URL,
+        openChat: false,
       };
     }
 
@@ -197,6 +203,12 @@ function AppContent() {
       || joinConfig?.gameId
       || ""
     ).trim();
+    const openChatRaw = (
+      current.searchParams.get("openChat")
+      || hashParams.get("openChat")
+      || ""
+    ).trim();
+    const openChat = /^(1|true|yes)$/i.test(openChatRaw);
     const byPath = current.pathname.replace(/\/+$/, "").endsWith(DEFAULT_INVITE_PATH);
     const enabled = byPath || Boolean(gameId);
     const cabinetUrl = normalizeInviteCabinetUrl((
@@ -210,8 +222,41 @@ function AppContent() {
       enabled,
       gameId: gameId || null,
       cabinetUrl,
+      openChat,
     };
   }, []);
+
+  useEffect(() => {
+    if (!joinRouteData.enabled || !joinRouteData.gameId) return;
+    if (typeof window === "undefined") return;
+
+    try {
+      const current = new URL(window.location.href);
+      if (current.searchParams.get("entry") !== "game_join") return;
+
+      const normalizedInvitePath = DEFAULT_INVITE_PATH.startsWith("/")
+        ? DEFAULT_INVITE_PATH
+        : `/${DEFAULT_INVITE_PATH}`;
+      const currentPath = current.pathname.replace(/\/+$/, "") || "/";
+      const targetPath = normalizedInvitePath.replace(/\/+$/, "") || "/";
+      if (currentPath === targetPath) return;
+
+      const next = new URL(targetPath, current.origin);
+      current.searchParams.forEach((value, key) => {
+        if (key.trim().toLowerCase() === "entry") return;
+        next.searchParams.append(key, value);
+      });
+      next.searchParams.set("joinGame", joinRouteData.gameId);
+
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${next.pathname}${next.search}${current.hash}`,
+      );
+    } catch {
+      // URL cleanup is best-effort only.
+    }
+  }, [joinRouteData.enabled, joinRouteData.gameId]);
 
   const createRouteData = useMemo(() => {
     if (typeof window === "undefined") {
@@ -220,6 +265,7 @@ function AppContent() {
         studioId: null as string | null,
         studioName: null as string | null,
         cabinetUrl: DEFAULT_CABINET_URL,
+        includeGamePlusTrainer: false,
       };
     }
 
@@ -275,6 +321,68 @@ function AppContent() {
     };
   }, []);
 
+  const compositeCreateRouteData = useMemo(() => {
+    if (typeof window === "undefined") {
+      return {
+        enabled: false,
+        studioId: null as string | null,
+        studioName: null as string | null,
+        cabinetUrl: DEFAULT_CABINET_URL,
+      };
+    }
+
+    const current = new URL(window.location.href);
+    const hashRaw = (current.hash || "").replace(/^#/, "");
+    const hashQueryIndex = hashRaw.indexOf("?");
+    const hashParams = new URLSearchParams(hashQueryIndex >= 0 ? hashRaw.slice(hashQueryIndex + 1) : "");
+    const createConfig =
+      (window as typeof window & {
+        __PADLHUB_CREATE_CONFIG__?: {
+          studioId?: string | null;
+          studioName?: string | null;
+          stationId?: string | null;
+          stationName?: string | null;
+          cabinetUrl?: string | null;
+        };
+      }).__PADLHUB_CREATE_CONFIG__ ?? null;
+    const studioId = (
+      current.searchParams.get("stationId")
+      || hashParams.get("stationId")
+      || current.searchParams.get("studioId")
+      || hashParams.get("studioId")
+      || createConfig?.stationId
+      || createConfig?.studioId
+      || ""
+    ).trim();
+    const studioName = (
+      current.searchParams.get("station")
+      || hashParams.get("station")
+      || current.searchParams.get("stationName")
+      || hashParams.get("stationName")
+      || current.searchParams.get("studio")
+      || hashParams.get("studio")
+      || current.searchParams.get("studioName")
+      || hashParams.get("studioName")
+      || createConfig?.stationName
+      || createConfig?.studioName
+      || ""
+    ).trim();
+    const byPath = current.pathname.replace(/\/+$/, "").endsWith(DEFAULT_GAME_CREATE_COMPOSITE_PATH);
+    const cabinetUrl = (
+      current.searchParams.get("cabinetUrl")
+      || current.searchParams.get("returnUrl")
+      || createConfig?.cabinetUrl
+      || DEFAULT_CABINET_URL
+    ).trim() || DEFAULT_CABINET_URL;
+
+    return {
+      enabled: byPath,
+      studioId: studioId || null,
+      studioName: studioName || null,
+      cabinetUrl,
+    };
+  }, []);
+
   const findRouteData = useMemo(() => {
     if (typeof window === "undefined") {
       return {
@@ -297,6 +405,7 @@ function AppContent() {
           stationId?: string | null;
           stationName?: string | null;
           cabinetUrl?: string | null;
+          includeGamePlusTrainer?: boolean | string | null;
         };
       }).__PADLHUB_FIND_GAME_CONFIG__ ?? null;
     const studioId = (
@@ -328,12 +437,23 @@ function AppContent() {
       || findConfig?.cabinetUrl
       || DEFAULT_CABINET_URL
     ).trim() || DEFAULT_CABINET_URL;
+    const includeGamePlusTrainerValue = (
+      current.searchParams.get("includeGamePlusTrainer")
+      ?? hashParams.get("includeGamePlusTrainer")
+      ?? findConfig?.includeGamePlusTrainer
+      ?? null
+    );
+    const includeGamePlusTrainerRaw = String(includeGamePlusTrainerValue ?? "").trim();
+    const includeGamePlusTrainer = includeGamePlusTrainerRaw
+      ? /^(1|true|yes)$/i.test(includeGamePlusTrainerRaw)
+      : byPath;
 
     return {
       enabled: byPath,
       studioId: studioId || null,
       studioName: studioName || null,
       cabinetUrl,
+      includeGamePlusTrainer,
     };
   }, []);
 
@@ -347,10 +467,6 @@ function AppContent() {
       };
     }
 
-    const current = new URL(window.location.href);
-    const hashRaw = (current.hash || "").replace(/^#/, "");
-    const hashQueryIndex = hashRaw.indexOf("?");
-    const hashParams = new URLSearchParams(hashQueryIndex >= 0 ? hashRaw.slice(hashQueryIndex + 1) : "");
     const communityJoinConfig = (
       window as typeof window & {
         __PADLHUB_COMMUNITY_JOIN_CONFIG__?: {
@@ -360,43 +476,13 @@ function AppContent() {
         };
       }
     ).__PADLHUB_COMMUNITY_JOIN_CONFIG__ ?? null;
-    const inviteLink = (
-      current.searchParams.get("inviteLink")
-      || current.searchParams.get("invite")
-      || hashParams.get("inviteLink")
-      || hashParams.get("invite")
-      || communityJoinConfig?.inviteLink
-      || ""
-    ).trim();
-    const inviteCode = (
-      current.searchParams.get("inviteCode")
-      || current.searchParams.get("code")
-      || current.searchParams.get("invite")
-      || hashParams.get("inviteCode")
-      || hashParams.get("code")
-      || hashParams.get("invite")
-      || current.searchParams.get("communityInvite")
-      || hashParams.get("communityInvite")
-      || communityJoinConfig?.inviteCode
-      || extractCommunityInviteCode(current.pathname.includes("/community/invite/") ? current.pathname : inviteLink)
-      || ""
-    ).trim();
-    const byPath = current.pathname.replace(/\/+$/, "").endsWith(DEFAULT_COMMUNITY_JOIN_PATH)
-      || current.pathname.includes("/community/invite/");
-    const enabled = byPath || Boolean(inviteCode);
-    const cabinetUrl = normalizeInviteCabinetUrl((
-      current.searchParams.get("cabinetUrl")
-      || current.searchParams.get("returnUrl")
-      || communityJoinConfig?.cabinetUrl
-      || DEFAULT_CABINET_URL
-    ));
 
-    return {
-      enabled,
-      inviteCode: inviteCode || null,
-      inviteLink: inviteLink || null,
-      cabinetUrl,
-    };
+    return resolveCommunityJoinRouteData({
+      href: window.location.href,
+      defaultCabinetUrl: DEFAULT_CABINET_URL,
+      defaultCommunityJoinPath: DEFAULT_COMMUNITY_JOIN_PATH,
+      config: communityJoinConfig,
+    });
   }, []);
 
   useEffect(() => {
@@ -456,6 +542,7 @@ function AppContent() {
                 openGameId={gamesData?.openGameId ?? null}
                 openChat={gamesData?.openChat === true}
                 createFromBooking={gamesData?.createFromBooking ?? null}
+                initialGameRecord={gamesData?.initialGameRecord ?? null}
               />
             </OverlayScopeProvider>,
           );
@@ -467,7 +554,19 @@ function AppContent() {
               <mod.default
                 onBack={onBack}
                 initialOpenTournamentId={tournamentsData?.tournamentId ?? null}
+                initialOpenTournamentSlug={tournamentsData?.tournamentSlug ?? null}
                 initialOpenDate={tournamentsData?.date ?? null}
+              />
+            </OverlayScopeProvider>,
+          );
+        } else if (module === "levels-info") {
+          const mod = await import("./components/levels-info/LevelsInfoOverlayPage");
+          const levelsInfoData = data as LevelsInfoMountData | undefined;
+          overlayRoot.render(
+            <OverlayScopeProvider value>
+              <mod.LevelsInfoOverlayPage
+                onBack={onBack}
+                data={levelsInfoData}
               />
             </OverlayScopeProvider>,
           );
@@ -545,14 +644,15 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
+    if (isRestoringSession) return;
     if (isAuthenticated) {
-      setView("cabinet");
+      setView(isAndroidTournamentMode ? "tournaments" : "cabinet");
     } else {
       setView("auth");
       hideOverlay();
       setAutoOpenFromPaymentHandled(false);
     }
-  }, [isAuthenticated]);
+  }, [isAndroidTournamentMode, isAuthenticated, isRestoringSession]);
 
   useEffect(() => {
     if (view !== "cabinet" || autoOpenFromPaymentHandled) return;
@@ -569,7 +669,9 @@ function AppContent() {
       keepalive: true,
       maxItems: 1,
     }).then(async (result) => {
-      await syncGamesCommunityAutopublish(result.resolved.map((item) => item.record));
+      const resolvedRecords = result.resolved.map((item) => item.record);
+      notifyGamesUpdated(resolvedRecords, "app_payment_callback");
+      await syncGamesCommunityAutopublish(resolvedRecords);
       const currentUrl = new URL(window.location.href);
       currentUrl.searchParams.delete(PAYMENT_REF_QUERY_KEY);
       const nextUrl = `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`;
@@ -612,7 +714,9 @@ function AppContent() {
         keepalive: true,
         maxItems: 3,
       });
-      await syncGamesCommunityAutopublish(result.resolved.map((item) => item.record));
+      const resolvedRecords = result.resolved.map((item) => item.record);
+      notifyGamesUpdated(resolvedRecords, source);
+      await syncGamesCommunityAutopublish(resolvedRecords);
       if (cancelled) return;
       if (result.resolved.length > 0 || result.failed.length > 0) {
         trackAnalyticsEvent("payment_sync_background", {
@@ -645,6 +749,23 @@ function AppContent() {
     };
   }, [view]);
 
+  if (isRestoringSession) {
+    return <div className="loading">Проверяем сессию...</div>;
+  }
+
+  if (isAndroidTournamentMode) {
+    if (!isAuthenticated) {
+      return <AuthForm onLogin={() => setView("tournaments")} allowPhoneLogin={false} />;
+    }
+
+    return (
+      <TournamentsPage
+        onBack={() => logout()}
+        backLabel="← Выйти"
+      />
+    );
+  }
+
   if (joinRouteData.enabled) {
     if (!isAuthenticated) {
       return <AuthForm onLogin={() => setView("cabinet")} />;
@@ -660,16 +781,18 @@ function AppContent() {
     }
 
     return (
-      <RemoteWidgetHost
-        src={GAMES_BUNDLE_URL}
-        globalName="LKWidgetGames"
-        forceReload
-        data={{
-          joinGameId: joinRouteData.gameId,
-          cabinetUrl: joinRouteData.cabinetUrl,
-        } satisfies GamesMountData}
-        loadingText="Загружаем игру..."
-        errorTitle="Не удалось открыть игру"
+      <GamesPage
+        onBack={() => {
+          window.location.href = appendCurrentAuthModeToNavigableUrl(
+            joinRouteData.cabinetUrl || DEFAULT_CABINET_URL,
+          ).toString();
+        }}
+        openGameId={joinRouteData.gameId}
+        openChat={joinRouteData.openChat}
+        createFromBooking={null}
+        publicCreateEntry={false}
+        presetStudioId={null}
+        presetStudioName={null}
       />
     );
   }
@@ -696,17 +819,36 @@ function AppContent() {
     );
   }
 
-  if (findRouteData.enabled) {
+  if (compositeCreateRouteData.enabled) {
     if (!isAuthenticated) {
       return <AuthForm onLogin={() => setView("cabinet")} />;
     }
 
+    return (
+      <RemoteWidgetHost
+        src={GAMES_BUNDLE_URL}
+        globalName="LKWidgetGames"
+        forceReload
+        data={{
+          compositeCreateEntry: true,
+          presetStudioId: compositeCreateRouteData.studioId,
+          presetStudioName: compositeCreateRouteData.studioName,
+          cabinetUrl: compositeCreateRouteData.cabinetUrl || DEFAULT_CABINET_URL,
+        } satisfies GamesMountData}
+        loadingText="Загружаем составную запись..."
+        errorTitle="Не удалось открыть составную запись"
+      />
+    );
+  }
+
+  if (findRouteData.enabled) {
     if (import.meta.env.DEV) {
       return (
         <FindGamePage
           cabinetUrl={findRouteData.cabinetUrl || DEFAULT_CABINET_URL}
           presetStudioId={findRouteData.studioId}
           presetStudioName={findRouteData.studioName}
+          includeGamePlusTrainer={findRouteData.includeGamePlusTrainer}
         />
       );
     }
@@ -721,6 +863,7 @@ function AppContent() {
           presetStudioId: findRouteData.studioId,
           presetStudioName: findRouteData.studioName,
           cabinetUrl: findRouteData.cabinetUrl || DEFAULT_CABINET_URL,
+          includeGamePlusTrainer: findRouteData.includeGamePlusTrainer,
         } satisfies GamesMountData}
         loadingText="Загружаем игры..."
         errorTitle="Не удалось открыть игры"
@@ -755,13 +898,41 @@ function AppContent() {
     return (
         <Cabinet
         onOpenGames={(options?: OpenGamesOptions) => {
-          const hasOptions = Boolean(options?.gameId || options?.joinGameId || options?.createFromBooking);
+          const directGameId = (options?.gameId || options?.joinGameId || "").trim();
+          if (directGameId && !options?.initialGameRecord && typeof window !== "undefined") {
+            const gameWindowUrl = new URL(window.location.href);
+            gameWindowUrl.searchParams.set("joinGame", directGameId);
+            if (options?.openChat) {
+              gameWindowUrl.searchParams.set("openChat", "1");
+            } else {
+              gameWindowUrl.searchParams.delete("openChat");
+            }
+            const returnUrl = normalizeInviteCabinetUrl(
+              options?.cabinetUrl ?? DEFAULT_CABINET_URL,
+            );
+            if (returnUrl) {
+              gameWindowUrl.searchParams.set("cabinetUrl", returnUrl);
+            } else {
+              gameWindowUrl.searchParams.delete("cabinetUrl");
+            }
+            const openedWindow = window.open(gameWindowUrl.toString(), "_blank", "noopener");
+            if (openedWindow) {
+              return;
+            }
+          }
+
+          const hasOptions = Boolean(
+            options?.gameId
+            || options?.joinGameId
+            || options?.createFromBooking
+            || options?.initialGameRecord,
+          );
           const data: GamesMountData | undefined = hasOptions
             ? {
-                openGameId: options?.gameId ?? null,
-                joinGameId: options?.joinGameId ?? null,
+                openGameId: options?.gameId ?? options?.joinGameId ?? null,
                 openChat: options?.openChat === true,
                 createFromBooking: options?.createFromBooking ?? null,
+                initialGameRecord: options?.initialGameRecord ?? null,
                 cabinetUrl: options?.cabinetUrl ?? DEFAULT_CABINET_URL,
               }
             : undefined;
@@ -777,12 +948,23 @@ function AppContent() {
             "tournaments",
             TOURNAMENTS_BUNDLE_URL,
             "LKWidgetTournaments",
-            options?.tournamentId || options?.date
+            options?.tournamentId || options?.tournamentSlug || options?.date
               ? {
                   tournamentId: options.tournamentId ?? null,
+                  tournamentSlug: options.tournamentSlug ?? null,
                   date: options.date ?? null,
                 }
               : undefined,
+          )}
+        onOpenLevelsInfo={(options?: OpenLevelsInfoOptions) =>
+          openOverlayModule(
+            "levels-info",
+            LEVELS_INFO_BUNDLE_URL,
+            "LKWidgetLevelsInfo",
+            options ? {
+              profile: options.profile,
+              ratingBreakdown: options.ratingBreakdown,
+            } : undefined,
           )}
         onOpenOnboarding={(data) =>
           openOverlayModule(
@@ -800,7 +982,9 @@ function AppContent() {
 
 export default function App() {
   return (
-    <AuthProvider>
+    <AuthProvider
+      authMode={Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android" ? "viva" : "auto"}
+    >
       <AppContent />
     </AuthProvider>
   );

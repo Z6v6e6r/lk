@@ -2,18 +2,50 @@
 
 <script>
   (function () {
-    var assetOrigin = "https://padlhub.su";
+    var primaryAssetOrigin = "https://padlhub.su";
+
     var scriptPath = "/lk/tournament-signup.js";
     var releasePath = "/lk/release.json";
     var cabinetUrl = "https://padlhub.ru/lk_new";
+
+    var releaseTimeoutMs = 5000;
+    var scriptTimeoutMs = 12000;
+
     var cacheBust = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
     var url = new URL(window.location.href);
+
+    function normalizeOrigin(value) {
+      return String(value || "").trim().replace(/\/+$/, "");
+    }
+
+    function dedupeStrings(values) {
+      var seen = {};
+      return values.filter(function (value) {
+        if (!value || seen[value]) return false;
+        seen[value] = true;
+        return true;
+      });
+    }
+
+    var assetOrigins = dedupeStrings([normalizeOrigin(primaryAssetOrigin)].filter(Boolean));
+
+    function buildLkBaseUrl(origin) {
+      var normalized = normalizeOrigin(origin);
+      return normalized ? normalized + "/lk" : null;
+    }
+
+    window.__LK_BASE_URLS__ = assetOrigins.map(buildLkBaseUrl).filter(Boolean);
+    window.__LK_API_BASE_URLS__ = assetOrigins.slice();
 
     var data = {
       tournamentId:
         url.searchParams.get("tournamentId") ||
         url.searchParams.get("id") ||
         url.searchParams.get("exerciseId") ||
+        null,
+      tournamentSlug:
+        url.searchParams.get("slug") ||
+        url.searchParams.get("tournamentSlug") ||
         null,
       date: url.searchParams.get("date") || null
     };
@@ -34,13 +66,37 @@
       return scriptUrl.toString();
     }
 
-    function buildScriptUrl(version) {
-      var src = assetOrigin + scriptPath;
+    function buildReleaseUrl(origin) {
+      return addParam(origin + releasePath, "force_ts", cacheBust);
+    }
+
+    function buildScriptUrl(origin, version) {
+      var src = origin + scriptPath;
       if (version) {
         window.__LK_RELEASE_VERSION__ = String(version);
         src = addParam(src, "v", String(version));
       }
       return addParam(src, "force_ts", cacheBust);
+    }
+
+    function fetchWithTimeout(src, timeoutMs) {
+      if (typeof AbortController === "undefined") {
+        return fetch(src, {
+          cache: "no-store"
+        });
+      }
+
+      var controller = new AbortController();
+      var timeoutId = setTimeout(function () {
+        controller.abort();
+      }, timeoutMs);
+
+      return fetch(src, {
+        cache: "no-store",
+        signal: controller.signal
+      }).finally(function () {
+        clearTimeout(timeoutId);
+      });
     }
 
     function mountWidget() {
@@ -58,42 +114,88 @@
       });
     }
 
-    function loadScript(version) {
+    function cleanupPreviousWidget() {
       var old = document.getElementById("padlhub-tournament-signup-script");
       if (old && old.parentNode) old.parentNode.removeChild(old);
 
       if (window.LKWidgetTournamentSignup && typeof window.LKWidgetTournamentSignup.unmount === "function") {
         window.LKWidgetTournamentSignup.unmount("root");
       }
-      window.LKWidgetTournamentSignup = undefined;
 
+      window.LKWidgetTournamentSignup = undefined;
+    }
+
+    function loadScriptFromCandidates(candidates, version, index) {
+      if (index >= candidates.length) {
+        showError();
+        return;
+      }
+
+      cleanupPreviousWidget();
+
+      var origin = candidates[index];
+      var activeBaseUrl = buildLkBaseUrl(origin);
+      if (activeBaseUrl) {
+        window.__LK_ACTIVE_BASE_URL__ = activeBaseUrl;
+      } else {
+        delete window.__LK_ACTIVE_BASE_URL__;
+      }
       var script = document.createElement("script");
+      var settled = false;
+      var timeoutId = setTimeout(function () {
+        retry();
+      }, scriptTimeoutMs);
+
+      function retry() {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+
+        if (script.parentNode) {
+          script.parentNode.removeChild(script);
+        }
+
+        loadScriptFromCandidates(candidates, version || String(Date.now()), index + 1);
+      }
+
       script.id = "padlhub-tournament-signup-script";
-      script.src = buildScriptUrl(version);
+      script.src = buildScriptUrl(origin, version);
       script.async = true;
       script.crossOrigin = "anonymous";
-      script.onload = mountWidget;
-      script.onerror = showError;
+      script.onload = function () {
+        settled = true;
+        clearTimeout(timeoutId);
+        mountWidget();
+      };
+      script.onerror = retry;
+
       document.head.appendChild(script);
     }
 
-    fetch(addParam(assetOrigin + releasePath, "force_ts", cacheBust), {
-      cache: "no-store",
-      headers: {
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache",
-        "Expires": "0"
+    function fetchReleaseVersion(index) {
+      if (index >= assetOrigins.length) {
+        loadScriptFromCandidates(assetOrigins, String(Date.now()), 0);
+        return;
       }
-    })
-      .then(function (response) {
-        if (!response.ok) throw new Error("release manifest unavailable");
-        return response.json();
-      })
-      .then(function (release) {
-        loadScript(release && release.version ? String(release.version) : null);
-      })
-      .catch(function () {
-        loadScript(String(Date.now()));
-      });
+
+      var origin = assetOrigins[index];
+      var releaseUrl = buildReleaseUrl(origin);
+
+      fetchWithTimeout(releaseUrl, releaseTimeoutMs)
+        .then(function (response) {
+          if (!response.ok) throw new Error("release manifest unavailable");
+          return response.json();
+        })
+        .then(function (release) {
+          var version = release && release.version ? String(release.version) : null;
+          var orderedOrigins = assetOrigins.slice(index).concat(assetOrigins.slice(0, index));
+          loadScriptFromCandidates(orderedOrigins, version, 0);
+        })
+        .catch(function () {
+          fetchReleaseVersion(index + 1);
+        });
+    }
+
+    fetchReleaseVersion(0);
   })();
 </script>

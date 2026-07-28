@@ -2,6 +2,7 @@ const ADMIN_API = "https://api.vivacrm.ru/api/v1";
 const SPLIT_DIRECTION_ID = 4588;
 const SPLIT_EXERCISE_TYPE_ID = 1613;
 const DEFAULT_ONE_TIME_PRODUCT_AMOUNT = 10000;
+const SUBSCRIPTION_DAILY_LIMIT_CODE = "SUBSCRIPTION_DAILY_LIMIT_REACHED";
 
 const isOk = (status) => Number(status) >= 200 && Number(status) < 300;
 
@@ -23,6 +24,18 @@ const toNumber = (value) => {
 const pickId = (value) => {
   if (!value || typeof value !== "object") return null;
   return toStr(value.id) || toStr(value.uuid);
+};
+
+const pickTransactionId = (value) => {
+  if (!value || typeof value !== "object") return null;
+  return (
+    toStr(value.transactionId)
+    || toStr(value.transactionUuid)
+    || pickId(value)
+    || pickId(value.transaction)
+    || toStr(value.transaction?.transactionId)
+    || toStr(value.transaction?.transactionUuid)
+  );
 };
 
 const resolvePaymentMode = (value) => {
@@ -69,6 +82,56 @@ const resolveSubscriptionVisitCount = (ctx) => {
   if (explicitCount > 0) return explicitCount;
   const durationMinutes = Math.max(0, Math.floor(toNumber(ctx?.durationMinutes) ?? 0));
   return durationMinutes >= 90 ? 2 : 1;
+};
+
+const findSubscriptionDailyLimitPayload = (value, seen = new Set()) => {
+  if (!value || typeof value !== "object" || seen.has(value)) return null;
+  seen.add(value);
+  if (toStr(value.code) === SUBSCRIPTION_DAILY_LIMIT_CODE) return value;
+  const details = findSubscriptionDailyLimitPayload(value.details, seen);
+  if (details) return details;
+  const raw = findSubscriptionDailyLimitPayload(value.raw, seen);
+  if (raw) return raw;
+  return null;
+};
+
+const isSubscriptionDailyLimitPayload = (value) => {
+  if (findSubscriptionDailyLimitPayload(value)) return true;
+  const text = JSON.stringify(value || "");
+  return (
+    text.includes(SUBSCRIPTION_DAILY_LIMIT_CODE)
+    || /1\s*раз\s*в\s*день/i.test(text)
+    || /daily.+subscription.+limit/i.test(text)
+  );
+};
+
+const formatSubscriptionDailyLimitMessage = (existingEvent) => {
+  const event = existingEvent && typeof existingEvent === "object" ? existingEvent : {};
+  const title = toStr(event.title) || "событие";
+  const station = toStr(event.studioName || event.stationName);
+  const time = toStr(event.timeLabel) || [
+    toStr(event.timeFrom),
+    toStr(event.timeTo),
+  ].filter(Boolean).join("-");
+  const locationPart = station ? ` на станции ${station}` : "";
+  const timePart = time ? ` в ${time}` : "";
+  return `Вы уже записаны на ${title}${locationPart}${timePart}. Подписка позволяет создавать или присоединяться к событию 1 раз в день. Создайте игру или присоединитесь к тренировке на завтра.`;
+};
+
+const buildSubscriptionDailyLimitFailure = (value) => {
+  const payload = findSubscriptionDailyLimitPayload(value) || {};
+  const existingEvent = payload.existingEvent && typeof payload.existingEvent === "object"
+    ? payload.existingEvent
+    : null;
+  const message = toStr(payload.message) || formatSubscriptionDailyLimitMessage(existingEvent);
+  return {
+    message,
+    details: {
+      code: SUBSCRIPTION_DAILY_LIMIT_CODE,
+      message,
+      existingEvent,
+    },
+  };
 };
 
 const extractConflictExerciseId = (value, ctx) => {
@@ -325,6 +388,7 @@ const pickBestSubscriptionProduct = (products, preferredSubscriptionId) => {
 const buildBookingRequest = (ctx) => {
   const bookingPaymentType = resolveBookingPaymentType(ctx);
   const clientSubscriptionId = toStr(ctx.clientSubscriptionId || ctx.subscriptionId);
+  const requestedSubscriptionId = toStr(ctx.subscriptionId);
   const subscriptionVisitCount = resolveSubscriptionVisitCount(ctx);
   const payload = {
     phone: ctx.clientPhone,
@@ -333,7 +397,9 @@ const buildBookingRequest = (ctx) => {
   };
   if (bookingPaymentType === "SUBSCRIPTION" && clientSubscriptionId) {
     payload.clientSubscriptionId = clientSubscriptionId;
-    payload.subscriptionId = clientSubscriptionId;
+    if (requestedSubscriptionId && requestedSubscriptionId !== clientSubscriptionId) {
+      payload.subscriptionId = requestedSubscriptionId;
+    }
     payload.count = subscriptionVisitCount;
     ctx.clientSubscriptionId = clientSubscriptionId;
   }
@@ -378,8 +444,8 @@ const pickTransactionDeadlineAt = (ctx, primaryPayload, fallbackPayload) => {
 
 const buildSplitPaymentResponse = (ctx, primaryPayload, fallbackPayload) => {
   const transactionId =
-    pickId(primaryPayload)
-    || pickId(fallbackPayload)
+    pickTransactionId(primaryPayload)
+    || pickTransactionId(fallbackPayload)
     || toStr(ctx.transactionId)
     || null;
   const paymentUrl = extractPaymentUrl(primaryPayload) || extractPaymentUrl(fallbackPayload);
@@ -450,6 +516,14 @@ if (ctx.step === "token") {
 }
 
 if (!isOk(msg.statusCode)) {
+  if (
+    ctx.step === "create_booking"
+    && resolveBookingPaymentType(ctx) === "SUBSCRIPTION"
+    && isSubscriptionDailyLimitPayload(msg.payload)
+  ) {
+    const dailyLimitFailure = buildSubscriptionDailyLimitFailure(msg.payload);
+    return fail(409, dailyLimitFailure.message, dailyLimitFailure.details);
+  }
   if (ctx.step === "transaction") {
     const errorMessage = String(
       msg.payload?.message
@@ -517,6 +591,25 @@ if (ctx.step === "create_booking") {
   }
 
   if (resolvePaymentMode(ctx.selectedPaymentMode || ctx.paymentMode) === "subscription") {
+    const requestedClientSubscriptionId = toStr(ctx.clientSubscriptionId || ctx.subscriptionId);
+    const actualClientSubscriptionId = toStr(
+      msg.payload?.clientSubscriptionId
+      || msg.payload?.subscriptionId
+      || msg.payload?.clientSubId
+      || msg.payload?.subscription?.id,
+    );
+    if (
+      requestedClientSubscriptionId
+      && actualClientSubscriptionId
+      && normalizeComparableId(requestedClientSubscriptionId) !== normalizeComparableId(actualClientSubscriptionId)
+    ) {
+      return fail(409, "Viva списала другой абонемент", {
+        requestedClientSubscriptionId,
+        actualClientSubscriptionId,
+        bookingId: ctx.bookingId,
+      });
+    }
+
     const shareCount = Math.max(1, Math.round(toNumber(ctx.shareCount) ?? 4));
     const oneTimeBaseAmount = Math.max(
       0,
@@ -565,13 +658,13 @@ if (ctx.step === "create_booking") {
           label: subscriptionVisitCount > 1
             ? `Списать ${subscriptionVisitCount} посещения с абонемента`
             : "Списать посещение с абонемента",
-          productId: ctx.clientSubscriptionId || null,
+          productId: actualClientSubscriptionId || requestedClientSubscriptionId || null,
           productName: null,
           type: "SUBSCRIPTION",
         },
       ],
       subscriptionVisitCount,
-      subscriptionProductId: ctx.clientSubscriptionId || null,
+      subscriptionProductId: actualClientSubscriptionId || requestedClientSubscriptionId || null,
       subscriptionProductName: null,
       oneTimeProductId: null,
       oneTimeProductName: null,
@@ -743,7 +836,7 @@ if (ctx.step === "available_products") {
 
 if (ctx.step === "transaction") {
   ctx.transaction = msg.payload;
-  ctx.transactionId = pickId(msg.payload) || ctx.transactionId || null;
+  ctx.transactionId = pickTransactionId(msg.payload) || ctx.transactionId || null;
 
   const directPaymentUrl = extractPaymentUrl(msg.payload);
   if (!directPaymentUrl && ctx.transactionId) {

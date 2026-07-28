@@ -1,0 +1,139 @@
+#!/usr/bin/env node
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const flowPath = process.env.NODERED_FLOW_PATH || "/root/.node-red/flows.json";
+const runtimeDir = process.env.RATING_WORKER_RUNTIME_DIR || "/var/lib/padlhub-rating-worker";
+const envFile = process.env.RATING_WORKER_ENV_FILE || "/etc/padlhub-rating-worker.env";
+const modeIndex = process.argv.indexOf("--mode");
+const mode = modeIndex >= 0 ? process.argv[modeIndex + 1] : "incremental";
+
+function isRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readEnvFile() {
+  if (!fs.existsSync(envFile)) return {};
+  return Object.fromEntries(fs.readFileSync(envFile, "utf8").split("\n").flatMap((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) return [];
+    const index = trimmed.indexOf("=");
+    if (index < 1) return [];
+    return [[trimmed.slice(0, index), trimmed.slice(index + 1)]];
+  }));
+}
+
+function readMongoUriFromFlow() {
+  const flow = JSON.parse(fs.readFileSync(flowPath, "utf8"));
+  const mongoNode = flow.find((item) => (
+    item?.type === "mongodb4-client"
+    && typeof item.uri === "string"
+    && item.uri.includes("/games")
+  ));
+  if (mongoNode?.uri) return mongoNode.uri;
+  const candidates = [];
+  const visit = (value) => {
+    if (typeof value === "string" && /mongodb(?:\+srv)?:\/\//i.test(value)) {
+      candidates.push(value);
+      return;
+    }
+    if (Array.isArray(value)) value.forEach(visit);
+    else if (isRecord(value)) Object.values(value).forEach(visit);
+  };
+  visit(flow);
+  return candidates.find((item) => item.includes("/games")) || candidates[0] || "";
+}
+
+function runNode(args, env, outPath) {
+  const result = spawnSync(process.execPath, args, {
+    cwd: rootDir,
+    env,
+    encoding: "utf8",
+    maxBuffer: 200 * 1024 * 1024,
+  });
+  fs.writeFileSync(outPath, result.stdout || "", { mode: 0o600 });
+  if (result.stderr) fs.writeFileSync(`${outPath}.stderr`, result.stderr, { mode: 0o600 });
+  if (result.status !== 0) {
+    throw new Error(`Child exited ${result.status}; stdout=${outPath}; stderr=${outPath}.stderr`);
+  }
+  const reportPath = outPath.endsWith(".stdout") ? outPath.slice(0, -".stdout".length) : null;
+  [outPath, `${outPath}.stderr`, reportPath]
+    .filter((target) => target && fs.existsSync(target))
+    .forEach((target) => fs.chmodSync(target, 0o600));
+  return result.stdout ? JSON.parse(result.stdout) : null;
+}
+
+function compactVisitReport(report) {
+  if (!report || typeof report !== "object") return report;
+  return {
+    ok: report.ok === true,
+    mode: report.mode || null,
+    dates: Array.isArray(report.dates) ? report.dates : [],
+    syncedAt: report.syncedAt || null,
+    stats: report.stats || null,
+    scannedExerciseIds: Number(report.scannedExerciseIds || 0),
+    records: Number(report.records || 0),
+    archiveCandidates: Number(report.archiveCandidates || 0),
+    writes: report.writes || null,
+  };
+}
+
+function dateAtOffset(days) {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+const runtimeEnv = { ...process.env, ...readEnvFile() };
+runtimeEnv.MONGODB_URI = runtimeEnv.MONGODB_URI || readMongoUriFromFlow();
+if (!runtimeEnv.MONGODB_URI) throw new Error("Mongo URI not found in active Node-RED flow");
+const runDate = new Date().toISOString().slice(0, 10);
+const runStamp = new Date().toISOString().replace(/[:.]/g, "-");
+const outDir = path.join(runtimeDir, "runs", runDate);
+fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
+fs.chmodSync(runtimeDir, 0o700);
+fs.chmodSync(path.join(runtimeDir, "runs"), 0o700);
+fs.chmodSync(outDir, 0o700);
+
+const hasVivaCredentials = Boolean(
+  runtimeEnv.VIVA_CLIENT_ID
+  && runtimeEnv.VIVA_USERNAME
+  && runtimeEnv.VIVA_PASSWORD,
+);
+let visits = { skipped: true, reason: "VIVA_CREDENTIALS_NOT_CONFIGURED" };
+if (hasVivaCredentials) {
+  const dateFrom = mode === "full" ? dateAtOffset(-7) : dateAtOffset(-1);
+  const visitOut = path.join(outDir, `training-visits-${mode}-${runStamp}.json`);
+  try {
+    visits = compactVisitReport(runNode([
+      path.join(rootDir, "scripts/sync_training_visits_from_viva.mjs"),
+      "--date-from", dateFrom,
+      "--date-to", dateAtOffset(0),
+      "--mongo-uri", runtimeEnv.MONGODB_URI,
+      "--apply",
+      "--out", visitOut,
+    ], runtimeEnv, `${visitOut}.stdout`));
+  } catch (error) {
+    visits = {
+      ok: false,
+      skipped: false,
+      reason: "VIVA_ATTENDANCE_SYNC_FAILED",
+      error: String(error?.message || error).slice(0, 500),
+    };
+    console.error("[rating-worker] Viva attendance sync failed; continuing canonical rating run");
+  }
+}
+
+const workerOut = path.join(outDir, `rating-worker-${mode}-${runStamp}.json`);
+const worker = runNode([
+  "--experimental-strip-types",
+  path.join(rootDir, "scripts/rating_worker.mjs"),
+  "--mode", mode,
+  "--mongo-uri", runtimeEnv.MONGODB_URI,
+  "--out", workerOut,
+], runtimeEnv, `${workerOut}.stdout`);
+
+console.log(JSON.stringify({ ok: true, mode, visits, worker }, null, 2));

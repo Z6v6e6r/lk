@@ -1,0 +1,44 @@
+sequenceDiagram
+  autonumber
+  participant U as User
+  participant T as Tilda Loader
+  participant R as React IIFE Bundle
+  participant A as Auth
+  participant N as Node-RED/SERV2
+  participant M as MongoDB
+  participant V as VivaCRM
+  participant P as Payment
+
+  rect rgb(235, 245, 255)
+    U->>T: Open LK page
+    T->>T: Load release.json
+    T->>R: Load bundle.js / overlay bundle
+    R->>A: Restore or request auth
+    A-->>R: Access/refresh state
+  end
+
+  rect rgb(236, 253, 245)
+    R->>N: GET games / support / communities
+    N->>M: Query local LK state
+    M-->>N: Documents/read models
+    N-->>R: Normalized response
+  end
+
+  rect rgb(255, 247, 237)
+    R->>V: Profile/bookings/subscriptions/group schedule
+    V-->>R: Viva data
+  end
+
+  rect rgb(254, 242, 242)
+    R->>N: Create/join/leave/payment operation
+    N->>V: External booking/cancel/payment-related call
+    N->>M: Persist local state/audit
+    N-->>R: Result
+  end
+
+  rect rgb(245, 243, 255)
+    U->>P: Payment page
+    P-->>R: Return/callback marker
+    R->>N: Confirm/reconcile payment
+    N->>M: Update sale/payment state
+  end

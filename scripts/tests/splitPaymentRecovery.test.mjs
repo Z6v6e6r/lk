@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SOURCES = {
-  create: ['fn_split_create_prepare.js', 'd76e532d8f9d3cba655a4fabadf21635c85ed360a4bfac18534e10fef5661bfa'],
-  join: ['fn_split_join_prepare.js', '707fdde66c340769a0c68e6e693bda22eb040b715ef33ad109e39c4709cea950'],
-  router: ['fn_split_router.js', 'd9d6d1f17c12f38b567cf226468caa6780ed3d6e707f55f4af26c066be86b1a4'],
+  create: ['fn_split_create_prepare.js', 'd76e532d8f9d3cba655a4fabadf21635c85ed360a4bfac18534e10fef5661bfa', 'c6172152ecc068e67545f625d7071a69580bde00c5d37b10c0fc9a51a2becfc2'],
+  join: ['fn_split_join_prepare.js', '707fdde66c340769a0c68e6e693bda22eb040b715ef33ad109e39c4709cea950', 'fe43d31b545ec8b74fc4783418c9dd0f59e632fac6052fc951078b7415b38084'],
+  router: ['fn_split_router.js', 'd9d6d1f17c12f38b567cf226468caa6780ed3d6e707f55f4af26c066be86b1a4', '2b0eef5efd231b525144ac38469029d3fc6c4caa5303220e4329fd86098637cf'],
 };
 
 class FixedDate extends Date {
@@ -20,9 +20,10 @@ class FixedDate extends Date {
 function source(key) { return fs.readFileSync(path.join(ROOT, 'scripts/nodered_games_nodes', SOURCES[key][0]), 'utf8'); }
 function run(key, msg) { return new Function('msg', 'Date', source(key))(msg, FixedDate); }
 
-test('three split-payment sources exactly match their verified live functions', () => {
-  for (const [key, [, expected]] of Object.entries(SOURCES)) {
-    assert.equal(crypto.createHash('sha256').update(source(key)).digest('hex'), expected, key);
+test('three split-payment candidates stay pinned separately from verified live preimages', () => {
+  for (const [key, [, livePreimage, candidate]] of Object.entries(SOURCES)) {
+    assert.notEqual(candidate, livePreimage, key);
+    assert.equal(crypto.createHash('sha256').update(source(key)).digest('hex'), candidate, key);
   }
 });
 

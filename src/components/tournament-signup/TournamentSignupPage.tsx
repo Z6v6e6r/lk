@@ -1,10 +1,22 @@
-import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthForm } from "../auth/AuthForm";
+import { BookingCancellationDialog } from "../cabinet/BookingCancellationDialog";
 import { CommunityTournamentCard } from "../cabinet/community-feed/CommunityTournamentCard";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
+import { Modal } from "../UI/Modal";
 import { useAuth } from "../../context/AuthContext";
-import { apiFetchPadelLiveRatings, type PadelLiveRatingItem } from "../../utils/apiClient";
-import { getLetterGrade } from "../../utils/customFields";
+import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
+import {
+  DEFAULT_PUBLIC_TOURNAMENT_SIGNUP_PATH,
+  normalizeTournamentSignupDate,
+  normalizeTournamentSignupSlug,
+} from "../../utils/tournamentSignupEntry";
+import {
+  apiFetchPadelLiveRatings,
+  apiFetchTournamentParticipants,
+  type PadelLiveRatingItem,
+} from "../../utils/apiClient";
+import { getLetterGrade, normalizeLevelGradeLabel } from "../../utils/customFields";
 import {
   apiCancelTournamentVivaRegistration,
   apiCreateTournamentVivaTransaction,
@@ -13,44 +25,112 @@ import {
   apiFetchTournamentSignupList,
   apiFetchTournamentVivaCheckout,
   apiFetchTournamentVivaMyRegistration,
+  apiFetchTournamentVivaPublicCheckout,
+  apiResolveTournamentVivaRegistrationBookingId,
   type TournamentRegistrationState,
   type TournamentSignupDetail,
   type TournamentSignupSummary,
   type TournamentVivaCheckout,
   type TournamentVivaProduct,
 } from "../../utils/tournamentSignupApi";
+import { findTournamentSkinPriceLabel } from "../../utils/tournamentCustomPricing";
+import {
+  buildTournamentPromoOnlyOfferFromProducts,
+  buildTournamentPricingPreviewFromCheckout,
+  hasPromoOnlyTournamentProducts,
+  isPromoOnlyTournamentProduct,
+  normalizeTournamentProductName,
+  type TournamentPricingPromoOnlyOffer,
+  type TournamentPricingPreview,
+} from "../../utils/tournamentPricingPreview";
+import {
+  getTournamentSignupParticipantsFromPayload,
+  normalizeTournamentSignupPublicRoster,
+  type TournamentSignupParticipant,
+  type TournamentSignupPublicRoster,
+} from "../../utils/tournamentSignupRoster";
+import {
+  pickSubscriptionValidityDate,
+  resolveSubscriptionUsageDisplay,
+} from "../../utils/subscriptionValidity";
 import type { CommunityTournamentCard as CommunityTournamentCardData } from "../cabinet/community-feed/feedTypes";
+import americanoRulesImage from "../../assets/americano-info.png?inline";
 
 interface TournamentSignupPageProps {
   onBack: () => void;
   initialTournamentId?: string | null;
+  initialTournamentSlug?: string | null;
   initialDate?: string | null;
 }
 
-type TournamentDetailTab = "roster" | "rules" | "result";
-
-type TournamentSignupParticipant = {
-  id: string;
-  name: string;
-  level: string | null;
-  ratingNumeric: number | null;
-  phone: string | null;
-  avatarUrl: string | null;
-  role: string | null;
-};
+type TournamentDetailTab = "roster" | "rules";
 
 type Rgb = { r: number; g: number; b: number };
 type LevelGrade = "D" | "D+" | "C" | "C+" | "B" | "B+" | "A";
+type TournamentRulesInfographic = {
+  alt: string;
+  src: string;
+  tokens: string[];
+};
 
 const TOURNAMENT_DETAIL_TABS: Array<{ id: TournamentDetailTab; label: string }> = [
   { id: "roster", label: "Состав" },
   { id: "rules", label: "Регламент" },
-  { id: "result", label: "Результат" },
+];
+const TOURNAMENT_RULES_INFOGRAPHICS: TournamentRulesInfographic[] = [
+  {
+    alt: "Как проходит Американо. Регламент турнира",
+    src: americanoRulesImage,
+    tokens: ["американо", "americano"],
+  },
 ];
 
 const ALL_FILTER_VALUE = "__all__";
 const DAYS_BEFORE_TODAY = 0;
 const DAYS_AFTER_TODAY = 14;
+const DEEP_LINK_LOOKUP_DAYS_BEFORE_TODAY = 30;
+const DEEP_LINK_LOOKUP_DAYS_AFTER_TODAY = 180;
+const TOURNAMENT_SHARE_ORIGIN = "https://padlhub.ru";
+const TOURNAMENT_SUMMER_SUBSCRIPTION_URL = "https://padlhub.ru/ab_leto";
+const TOURNAMENT_SHARE_SLUG_KEYS = [
+  "slug",
+  "publicSlug",
+  "tournamentSlug",
+  "linkSlug",
+  "shareSlug",
+];
+const TOURNAMENT_SHARE_URL_KEYS = [
+  "publicUrl",
+  "joinUrl",
+  "url",
+  "link",
+];
+const TOURNAMENT_SHARE_NESTED_KEYS = [
+  "details",
+  "metadata",
+  "params",
+  "publicTournament",
+  "sourceTournamentSnapshot",
+  "sourceTournament",
+  "customTournament",
+  "tournament",
+  "skin",
+  "tournamentSkin",
+];
+const TOURNAMENT_DESCRIPTION_NESTED_KEYS = [
+  "skin",
+  "tournamentSkin",
+  "customTournament",
+  "publicTournament",
+  "sourceTournamentSnapshot",
+  "sourceTournament",
+  "tournament",
+  "details",
+  "settings",
+  "params",
+  "metadata",
+  "exercise",
+];
 
 const LEVEL_RANGES: Record<LevelGrade, { min: number; max: number }> = {
   D: { min: 1, max: 2 },
@@ -108,13 +188,92 @@ function formatDate(date: Date) {
 }
 
 function getDateFromInput(value?: string | null) {
-  const raw = String(value || "").trim();
+  return normalizeTournamentSignupDate(value);
+}
+
+function normalizeTournamentSlug(value: unknown) {
+  return normalizeTournamentSignupSlug(value);
+}
+
+function extractTournamentSlugFromUrl(value: unknown) {
+  const raw = String(value ?? "").trim();
   if (!raw) return null;
-  const iso = raw.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
-  if (iso) return iso;
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return formatDate(parsed);
+  try {
+    const parsed = new URL(raw, TOURNAMENT_SHARE_ORIGIN);
+    const byQuery = parsed.searchParams.get("slug") || parsed.searchParams.get("tournamentSlug");
+    if (byQuery) return normalizeTournamentSlug(byQuery);
+
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const publicIndex = parts.findIndex((part, index) => (
+      part === "public" && parts[index - 1] === "tournaments" && parts[index - 2] === "api"
+    ));
+    if (publicIndex >= 0) return normalizeTournamentSlug(parts[publicIndex + 1]);
+  } catch {
+    const match = raw.match(/\/api\/tournaments\/public\/([^/?#]+)/i);
+    if (match?.[1]) return normalizeTournamentSlug(match[1]);
+  }
+  return null;
+}
+
+function collectTournamentSlugCandidates(value: unknown, seen = new Set<unknown>()): string[] {
+  if (!isRecord(value) || seen.has(value)) return [];
+  seen.add(value);
+
+  const candidates = [
+    normalizeTournamentSlug(pickString(value, TOURNAMENT_SHARE_SLUG_KEYS)),
+    extractTournamentSlugFromUrl(pickString(value, TOURNAMENT_SHARE_URL_KEYS)),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  TOURNAMENT_SHARE_NESTED_KEYS.forEach((key) => {
+    const nested = value[key];
+    if (isRecord(nested)) {
+      candidates.push(...collectTournamentSlugCandidates(nested, seen));
+    }
+  });
+
+  return Array.from(new Set(candidates));
+}
+
+function slugifyTournamentTitle(value: string | null | undefined) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/['"`]+/g, "")
+    .replace(/[^a-z0-9а-яё]+/gi, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || null;
+}
+
+function findTournamentByDeepLink(
+  list: TournamentSignupSummary[],
+  options: {
+    tournamentId?: string | null;
+    tournamentSlug?: string | null;
+  },
+) {
+  const targetTournamentId = String(options.tournamentId || "").trim();
+  if (targetTournamentId) {
+    const byId = list.find((tournament) => {
+      const candidates = new Set([
+        String(tournament.id || "").trim(),
+        String(tournament.exerciseId || "").trim(),
+      ]);
+      return candidates.has(targetTournamentId);
+    });
+    if (byId) return byId;
+  }
+
+  const targetTournamentSlug = normalizeTournamentSlug(options.tournamentSlug);
+  if (!targetTournamentSlug) return null;
+
+  return list.find((tournament) => {
+    const slugCandidates = new Set([
+      ...collectTournamentSlugCandidates(tournament.raw ?? tournament),
+      ...collectTournamentSlugCandidates(tournament),
+    ]);
+    return slugCandidates.has(targetTournamentSlug);
+  }) ?? null;
 }
 
 function getDateLabel(date: string | null) {
@@ -140,19 +299,6 @@ function getDateParts(date: string | null) {
   };
 }
 
-function getRegistrationText(registration: TournamentRegistrationState | null) {
-  if (!registration || registration.status === "NONE") return null;
-  if (registration.status === "PAYMENT_PENDING") return "Ожидаем оплату";
-  if (registration.status === "REGISTERED") {
-    return registration.placeNumber
-      ? `Вы записаны, место ${registration.placeNumber}`
-      : "Вы записаны на турнир";
-  }
-  return registration.waitlistNumber
-    ? `Вы в листе ожидания, позиция ${registration.waitlistNumber}`
-    : "Вы в листе ожидания";
-}
-
 function sortTournaments(items: TournamentSignupSummary[]) {
   return [...items].sort((left, right) => {
     const leftTs = Date.parse(left.startsAt || "");
@@ -169,6 +315,37 @@ function getTournamentTypeFilterValue(tournament: TournamentSignupSummary) {
 
 function getTournamentStationFilterValue(tournament: TournamentSignupSummary) {
   return tournament.studioName || tournament.address || "Станция уточняется";
+}
+
+function normalizeTournamentSearchText(value: unknown) {
+  return String(value || "")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/g, "е")
+    .replace(/[^a-zа-я0-9]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getTournamentRulesInfographic(
+  tournament: TournamentSignupSummary | TournamentSignupDetail | null,
+): TournamentRulesInfographic | null {
+  if (!tournament) return null;
+  const haystack = normalizeTournamentSearchText([
+    tournament.format,
+    tournament.title,
+  ].filter(Boolean).join(" "));
+  if (!haystack) return null;
+  return TOURNAMENT_RULES_INFOGRAPHICS.find((item) => (
+    item.tokens.some((token) => haystack.includes(normalizeTournamentSearchText(token)))
+  )) ?? null;
+}
+
+function getStationMapUrl(stationName: string | null, address: string | null) {
+  const query = [stationName, address]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .join(", ");
+  return query ? `https://yandex.ru/maps/?text=${encodeURIComponent(query)}` : null;
 }
 
 function getUniqueFilterValues(values: string[]) {
@@ -191,19 +368,113 @@ function formatMoneyMinor(value: number | null) {
   return `${(value / 100).toLocaleString("ru-RU")} ₽`;
 }
 
+function readTournamentPaymentNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.replace(",", "."));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function getTournamentPaymentProductRemainingVisits(product: TournamentVivaProduct) {
+  const raw = product.raw;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const payload = raw as Record<string, unknown>;
+    const direct = [
+      payload.visitsLeft,
+      payload.availableVisits,
+      payload.remainingVisits,
+      payload.visitsRemaining,
+      payload.left,
+      payload.balance,
+    ];
+    for (const value of direct) {
+      const parsed = readTournamentPaymentNumber(value);
+      if (parsed != null) return parsed;
+    }
+
+    const nested = payload.subscription;
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const nestedPayload = nested as Record<string, unknown>;
+      const nestedValues = [
+        nestedPayload.visitsLeft,
+        nestedPayload.availableVisits,
+        nestedPayload.remainingVisits,
+        nestedPayload.visitsRemaining,
+        nestedPayload.left,
+        nestedPayload.balance,
+      ];
+      for (const value of nestedValues) {
+        const parsed = readTournamentPaymentNumber(value);
+        if (parsed != null) return parsed;
+      }
+    }
+  }
+  return product.visitsTotal;
+}
+
+function formatTournamentPaymentProductPrice(product: TournamentVivaProduct) {
+  return product.priceLabel || formatMoneyMinor(product.cost);
+}
+
+function formatTournamentPaymentProductVisits(product: TournamentVivaProduct) {
+  if (product.source === "one-time" || product.source === "client-one-time") return " / 1 посещение";
+  if (product.isCustomTournamentEnergy || !product.visitsTotal) return "";
+  return ` / ${product.visitsTotal} посещ.`;
+}
+
+function formatTournamentPaymentProductValidity(product: TournamentVivaProduct) {
+  return resolveSubscriptionUsageDisplay({
+    subscriptionName: product.name,
+    validityDate: pickSubscriptionValidityDate(product.raw),
+    raw: product.raw,
+  })?.label || "срок уточняется";
+}
+
+const SUMMER_SUBSCRIPTION_PRODUCT_NAMES = new Set([
+  "лето падел дружба",
+  "лето падел спорт",
+]);
+
+function isPromoOnlyPurchasableProduct(product: TournamentVivaProduct) {
+  return isPromoOnlyTournamentProduct(product);
+}
+
+function getTournamentCheckoutProducts(checkout: TournamentVivaCheckout) {
+  return [
+    ...checkout.clientSubscriptions,
+    ...checkout.oneTimes,
+    ...checkout.subscriptions,
+  ];
+}
+
+function findMatchingTournamentPaymentProduct(
+  checkout: TournamentVivaCheckout,
+  product: TournamentVivaProduct,
+) {
+  const products = getTournamentCheckoutProducts(checkout);
+  return products.find((candidate) => candidate.source === product.source && candidate.id === product.id)
+    ?? products.find((candidate) => candidate.isCustomTournamentEnergy && product.isCustomTournamentEnergy)
+    ?? products.find((candidate) => candidate.id === product.id)
+    ?? products.find((candidate) => (
+      normalizeTournamentProductName(candidate.name) === normalizeTournamentProductName(product.name)
+      && candidate.source === product.source
+    ))
+    ?? (products.length === 1 ? products[0] : null);
+}
+
+function shouldShowSubscriptionHint(product: TournamentVivaProduct) {
+  if (!SUMMER_SUBSCRIPTION_PRODUCT_NAMES.has(normalizeTournamentProductName(product.name))) return false;
+  const visits = getTournamentPaymentProductRemainingVisits(product) ?? product.visitsTotal;
+  return visits === 30;
+}
+
 const PAYMENT_HOLD_MS = 20 * 60 * 1000;
 const PAYMENT_STORAGE_PREFIX = "padlhub:tournament-payment:";
 
 function getPaymentStorageKey(exerciseId: string) {
   return `${PAYMENT_STORAGE_PREFIX}${exerciseId}`;
-}
-
-function formatPaymentCountdown(ms: number) {
-  const safeMs = Math.max(0, ms);
-  const totalSeconds = Math.ceil(safeMs / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function readStoredPendingPayment(exerciseId: string) {
@@ -411,16 +682,50 @@ function resolveTournamentCardPriceLabel(tournament: TournamentSignupSummary) {
   if (skinPrice != null && sourcePrice == null && tournament.priceLabel) {
     return normalizeMoneyRubLabel(skinPrice) || tournament.priceLabel;
   }
+  const fallbackPriceLabel = normalizeCustomRubPriceLabel(String(tournament.priceLabel || "").trim());
+  if (fallbackPriceLabel) return fallbackPriceLabel;
   return "энергия";
 }
 
-function pickFirstArray(value: unknown, keys: string[]): unknown[] {
-  if (!isRecord(value)) return [];
-  for (const key of keys) {
-    const raw = value[key];
-    if (Array.isArray(raw)) return raw;
+function collectTournamentDescriptionRecords(
+  value: unknown,
+  seen = new Set<unknown>(),
+): Record<string, unknown>[] {
+  if (!isRecord(value) || seen.has(value)) return [];
+  seen.add(value);
+
+  const records: Record<string, unknown>[] = [value];
+  TOURNAMENT_DESCRIPTION_NESTED_KEYS.forEach((key) => {
+    const nested = value[key];
+    if (isRecord(nested)) {
+      records.push(...collectTournamentDescriptionRecords(nested, seen));
+    }
+  });
+  return records;
+}
+
+function resolveTournamentDescription(
+  detail: TournamentSignupDetail | null,
+  tournament: TournamentSignupSummary | TournamentSignupDetail | null,
+): string | null {
+  const detailDescription = String(detail?.description || "").trim();
+  if (detailDescription) return detailDescription;
+
+  for (const source of [detail?.raw, tournament?.raw, tournament]) {
+    for (const record of collectTournamentDescriptionRecords(source)) {
+      const value = pickString(record, [
+        "description",
+        "body",
+        "text",
+        "details",
+        "desc",
+        "skinDescription",
+      ]);
+      if (value) return value;
+    }
   }
-  return [];
+
+  return null;
 }
 
 function getInitials(value: string) {
@@ -483,9 +788,10 @@ function formatSuperscript(value: number | string) {
 
 function normalizeLevelLabel(value: string | null | undefined, numeric: number | null) {
   const numericGrade = numeric != null ? getLetterGrade(numeric) : null;
+  const normalizedGrade = normalizeLevelGradeLabel(value, numeric);
   const grade = numericGrade && isLevelGrade(numericGrade)
     ? numericGrade
-    : getNormalizedLevelGrade(value);
+    : (normalizedGrade && isLevelGrade(normalizedGrade) ? normalizedGrade : getNormalizedLevelGrade(value));
   if (grade) {
     const degree = getLevelDegree(grade, numeric);
     return degree ? `${grade}${formatSuperscript(degree)}` : grade;
@@ -493,7 +799,7 @@ function normalizeLevelLabel(value: string | null | undefined, numeric: number |
 
   const normalized = String(value || "").trim().toUpperCase();
   const token = normalized.match(/^([A-D])\s*([1-4])?(\+)?$/);
-  if (!token) return normalized || null;
+  if (!token) return null;
   return `${token[1]}${token[3] || ""}${token[2] ? formatSuperscript(token[2]) : ""}`;
 }
 
@@ -555,56 +861,101 @@ function getPlayerLevelMeta(
   };
 }
 
-function normalizeParticipant(item: unknown, index: number): TournamentSignupParticipant | null {
-  if (!isRecord(item)) return null;
-  const client = isRecord(item.client) ? item.client : isRecord(item.user) ? item.user : isRecord(item.player) ? item.player : null;
-  const source = client || item;
-  const firstName = pickString(source, ["firstName", "firstname", "givenName"]);
-  const lastName = pickString(source, ["lastName", "lastname", "familyName"]);
-  const name =
-    pickString(source, ["name", "displayName", "fullName"])
-    || [firstName, lastName].filter(Boolean).join(" ").trim()
-    || pickString(item, ["clientName", "playerName", "participantName"])
-    || "Игрок";
-  const id =
-    pickString(source, ["id", "clientId", "userId", "uuid"])
-    || pickString(item, ["id", "clientId", "userId", "bookingId"])
-    || `participant-${index}`;
-  const status = String(pickString(item, ["status", "state", "registrationStatus"]) || "").toUpperCase();
-  if (status === "CANCELLED" || status === "CANCELED") return null;
+function isLocalHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".local");
+}
 
-  return {
-    id,
-    name,
-    level:
-      pickString(source, ["level", "rating", "grade", "ratingLabel", "levelLabel", "levelLetter"])
-      || pickString(item, ["level", "rating", "grade", "ratingLabel", "levelLabel", "levelLetter"]),
-    ratingNumeric:
-      pickNumber(source, ["ratingNumeric", "numericRating", "levelNumeric"])
-      ?? pickNumber(item, ["ratingNumeric", "numericRating", "levelNumeric"]),
-    phone:
-      normalizePhone(pickString(source, ["phone", "phoneNumber", "phoneNorm"]))
-      || normalizePhone(pickString(item, ["phone", "phoneNumber", "phoneNorm"])),
-    avatarUrl:
-      pickString(source, ["avatarUrl", "avatar", "photo", "imageUrl"])
-      || pickString(item, ["avatarUrl", "avatar", "photo", "imageUrl"]),
-    role: pickString(item, ["role", "participantRole"]),
-  };
+function copyPlainTextFallback(text: string): boolean {
+  if (typeof document === "undefined") return false;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "0";
+  textarea.style.left = "-9999px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
+async function writeTextToClipboard(text: string): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (copyPlainTextFallback(text)) {
+    return;
+  }
+
+  throw new Error("Clipboard API is not available");
+}
+
+function buildTournamentShareUrl(
+  tournament: TournamentSignupSummary | TournamentSignupDetail | null,
+  fallbackDate: string | null,
+): string | null {
+  if (!tournament || typeof window === "undefined") return null;
+  const tournamentId = String(tournament.id || "").trim();
+  if (!tournamentId) return null;
+
+  let currentUrl: URL | null = null;
+  try {
+    currentUrl = new URL(window.location.href);
+  } catch {
+    // fallback below
+  }
+
+  const currentTournamentId = String(currentUrl?.searchParams.get("tournamentId") || "").trim();
+  const fromCurrentSlug = currentTournamentId === tournamentId
+    ? normalizeTournamentSlug(
+      currentUrl?.searchParams.get("slug")
+      || currentUrl?.searchParams.get("tournamentSlug"),
+    )
+    : null;
+  const fromRawSlug = collectTournamentSlugCandidates(tournament.raw)[0] ?? null;
+  const fromPublicUrlSlug = extractTournamentSlugFromUrl(tournament.publicUrl) ?? null;
+  const slug = fromCurrentSlug || fromRawSlug || fromPublicUrlSlug || slugifyTournamentTitle(tournament.title);
+
+  const date =
+    getDateFromInput(tournament.date)
+    || getDateFromInput(tournament.startsAt)
+    || getDateFromInput(currentUrl?.searchParams.get("date"))
+    || getDateFromInput(fallbackDate);
+
+  const origin = currentUrl && !isLocalHostname(currentUrl.hostname)
+    ? currentUrl.origin
+    : TOURNAMENT_SHARE_ORIGIN;
+  const shareUrl = new URL(DEFAULT_PUBLIC_TOURNAMENT_SIGNUP_PATH, origin);
+  shareUrl.searchParams.set("tournamentId", tournamentId);
+  if (date) shareUrl.searchParams.set("date", date);
+  if (slug) shareUrl.searchParams.set("slug", slug);
+  return appendCurrentAuthModeToNavigableUrl(shareUrl).toString();
 }
 
 function getTournamentParticipants(tournament: TournamentSignupSummary | TournamentSignupDetail | null): TournamentSignupParticipant[] {
-  const raw = tournament?.raw;
-  const directItems = pickFirstArray(raw, ["participants", "players", "clients", "registrations", "bookings"]);
-  const nestedItems = isRecord(raw) && isRecord(raw.registration)
-    ? pickFirstArray(raw.registration, ["participants", "players", "clients"])
-    : [];
-  return [...directItems, ...nestedItems]
-    .map(normalizeParticipant)
-    .filter((item): item is TournamentSignupParticipant => item !== null);
+  return getTournamentSignupParticipantsFromPayload(tournament?.raw);
 }
 
-function toCommunityTournamentCard(tournament: TournamentSignupSummary): CommunityTournamentCardData {
-  const participants = tournament.participantsCount ?? 0;
+function toCommunityTournamentCard(
+  tournament: TournamentSignupSummary,
+  pricingPreview: TournamentPricingPreview | null,
+  pricingPreviewLoading: boolean,
+  hasFriendlySubscriptionTag: boolean,
+  summerSubscriptionOffer: TournamentPricingPromoOnlyOffer | null,
+  publicRoster: TournamentSignupPublicRoster | null,
+): CommunityTournamentCardData {
+  const participants = publicRoster?.participantsCount ?? tournament.participantsCount ?? 0;
   const maxParticipants = tournament.maxParticipants ?? 0;
   const isFull = maxParticipants > 0 && participants >= maxParticipants;
   const spotsLeft = maxParticipants > 0 ? Math.max(0, maxParticipants - participants) : null;
@@ -636,18 +987,56 @@ function toCommunityTournamentCard(tournament: TournamentSignupSummary): Communi
     trainerAvatarUrl: tournament.trainerAvatarUrl || undefined,
     profileHandle: tournament.address || tournament.studioName || "Расписание турниров",
     publicUrl: tournament.publicUrl || undefined,
-    waitlistCount: tournament.waitlistCount ?? 0,
+    waitlistCount: publicRoster?.waitlistCount ?? tournament.waitlistCount ?? 0,
     spotsLeft,
-    priceLabel: resolveTournamentCardPriceLabel(tournament),
+    priceLabel: pricingPreview?.triggerLabel || resolveTournamentCardPriceLabel(tournament),
+    pricePopover: pricingPreview,
+    pricePopoverLoading: pricingPreviewLoading,
+    hasFriendlySubscriptionTag,
+    summerSubscriptionOffer,
+  };
+}
+
+function shouldRequestTournamentPricingPreview(tournament: TournamentSignupSummary) {
+  return !tournament.storedPricingPreview && !tournament.storedSummerSubscriptionOffer;
+}
+
+function buildStoredTournamentPricingState(items: TournamentSignupSummary[]) {
+  const pricingPreviewByExerciseId: Record<string, TournamentPricingPreview | null> = {};
+  const friendlySubscriptionTagByExerciseId: Record<string, boolean> = {};
+  const summerSubscriptionOfferByExerciseId: Record<string, TournamentPricingPromoOnlyOffer | null> = {};
+
+  items.forEach((item) => {
+    const exerciseId = String(item.exerciseId || "").trim();
+    if (!exerciseId) return;
+    if (item.storedPricingPreview) {
+      pricingPreviewByExerciseId[exerciseId] = item.storedPricingPreview;
+    }
+    if (item.storedHasFriendlySubscriptionTag) {
+      friendlySubscriptionTagByExerciseId[exerciseId] = true;
+    }
+    if (item.storedSummerSubscriptionOffer) {
+      summerSubscriptionOfferByExerciseId[exerciseId] = item.storedSummerSubscriptionOffer;
+    }
+  });
+
+  return {
+    pricingPreviewByExerciseId,
+    friendlySubscriptionTagByExerciseId,
+    summerSubscriptionOfferByExerciseId,
   };
 }
 
 export default function TournamentSignupPage({
   onBack,
   initialTournamentId,
+  initialTournamentSlug,
   initialDate,
 }: TournamentSignupPageProps) {
   const { isAuthenticated } = useAuth();
+  const targetTournamentId = String(initialTournamentId || "").trim() || null;
+  const targetTournamentSlug = normalizeTournamentSlug(initialTournamentSlug);
+  const targetDeepLinkKey = targetTournamentId || targetTournamentSlug || "";
   const dates = useMemo(() => {
     const base = new Date();
     base.setHours(0, 0, 0, 0);
@@ -662,26 +1051,49 @@ export default function TournamentSignupPage({
 
   const [dateIndex, setDateIndex] = useState(initialDateIndex >= 0 ? initialDateIndex : DAYS_BEFORE_TODAY);
   const [items, setItems] = useState<TournamentSignupSummary[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(initialTournamentId ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(targetTournamentId);
   const [detail, setDetail] = useState<TournamentSignupDetail | null>(null);
   const [registration, setRegistration] = useState<TournamentRegistrationState | null>(null);
   const [loadingList, setLoadingList] = useState(false);
+  const [deepLinkLookupPending, setDeepLinkLookupPending] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [authRequired, setAuthRequired] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cancelDialogBookingId, setCancelDialogBookingId] = useState<string | null>(null);
+  const [deepLinkMessage, setDeepLinkMessage] = useState<string | null>(null);
   const [checkout, setCheckout] = useState<TournamentVivaCheckout | null>(null);
   const [activeDetailTab, setActiveDetailTab] = useState<TournamentDetailTab>("roster");
   const [typeFilter, setTypeFilter] = useState(ALL_FILTER_VALUE);
   const [stationFilter, setStationFilter] = useState(ALL_FILTER_VALUE);
   const [liveRatings, setLiveRatings] = useState<Map<string, PadelLiveRatingItem>>(() => new Map());
-  const [nowTs, setNowTs] = useState(() => Date.now());
+  const [inviteSharing, setInviteSharing] = useState(false);
+  const [inviteFeedback, setInviteFeedback] = useState<"shared" | "copied" | null>(null);
+  const [checkoutPreparedFor, setCheckoutPreparedFor] = useState<string | null>(null);
+  const [pendingPaymentProduct, setPendingPaymentProduct] = useState<TournamentVivaProduct | null>(null);
+  const [isPurchasableListOpen, setPurchasableListOpen] = useState(false);
+  const [isStationModalOpen, setStationModalOpen] = useState(false);
+  const [pricingPreviewByExerciseId, setPricingPreviewByExerciseId] = useState<Record<string, TournamentPricingPreview | null>>({});
+  const [pricingPreviewLoadingByExerciseId, setPricingPreviewLoadingByExerciseId] = useState<Record<string, boolean>>({});
+  const [friendlySubscriptionTagByExerciseId, setFriendlySubscriptionTagByExerciseId] = useState<Record<string, boolean>>({});
+  const [summerSubscriptionOfferByExerciseId, setSummerSubscriptionOfferByExerciseId] = useState<
+    Record<string, TournamentPricingPromoOnlyOffer | null>
+  >({});
+  const [publicRosterByExerciseId, setPublicRosterByExerciseId] = useState<Record<string, TournamentSignupPublicRoster>>({});
+  const deepLinkLookupKeyRef = useRef<string>("");
+  const deepLinkAutoOpenKeyRef = useRef<string>("");
+  const requestedPricingPreviewIdsRef = useRef<Set<string>>(new Set());
+  const publicRosterByExerciseIdRef = useRef<Record<string, TournamentSignupPublicRoster>>({});
+  const publicRosterRequestsRef = useRef<Map<string, Promise<TournamentSignupPublicRoster | null>>>(new Map());
+  const publicRosterDetailAbortRef = useRef<AbortController | null>(null);
 
   const selectedDate = dates[dateIndex] ?? dates[DAYS_BEFORE_TODAY] ?? new Date();
   const selectedDateStr = formatDate(selectedDate);
-  const selectedTournament = selectedId
-    ? items.find((item) => item.id === selectedId) ?? detail
+  const selectedListTournament = selectedId
+    ? items.find((item) => item.id === selectedId) ?? null
     : null;
+  const selectedTournament = selectedListTournament ?? detail;
+  const selectedExerciseId = detail?.exerciseId ?? selectedListTournament?.exerciseId ?? selectedId;
   const typeFilterOptions = useMemo(
     () => getUniqueFilterValues(items.map(getTournamentTypeFilterValue)),
     [items],
@@ -698,6 +1110,89 @@ export default function TournamentSignupPage({
     [items, stationFilter, typeFilter],
   );
 
+  useEffect(() => {
+    publicRosterByExerciseIdRef.current = publicRosterByExerciseId;
+  }, [publicRosterByExerciseId]);
+
+  useEffect(() => () => {
+    publicRosterDetailAbortRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    if (selectedId) return;
+    publicRosterDetailAbortRef.current?.abort();
+    publicRosterDetailAbortRef.current = null;
+  }, [selectedId]);
+
+  useEffect(() => {
+    deepLinkLookupKeyRef.current = "";
+    deepLinkAutoOpenKeyRef.current = "";
+    setDeepLinkMessage(null);
+    if (targetTournamentId) {
+      setSelectedId(targetTournamentId);
+      return;
+    }
+    if (targetTournamentSlug) {
+      setSelectedId(null);
+    }
+  }, [targetTournamentId, targetTournamentSlug]);
+
+  useEffect(() => {
+    if (!initialDateKey) return;
+    const nextIndex = dates.findIndex((date) => formatDate(date) === initialDateKey);
+    if (nextIndex >= 0) {
+      setDateIndex(nextIndex);
+    }
+  }, [dates, initialDateKey]);
+
+  useEffect(() => {
+    if (initialDateKey || !targetDeepLinkKey || !detail) return;
+    const nextDateKey = getDateFromInput(detail.date) || getDateFromInput(detail.startsAt);
+    if (!nextDateKey) return;
+    const nextIndex = dates.findIndex((date) => formatDate(date) === nextDateKey);
+    if (nextIndex >= 0) {
+      setDateIndex(nextIndex);
+    }
+  }, [dates, detail, initialDateKey, targetDeepLinkKey]);
+
+  const loadPublicRoster = useCallback(async (
+    exerciseId: string,
+    options: { force?: boolean; signal?: AbortSignal } = {},
+  ) => {
+    const normalizedExerciseId = String(exerciseId || "").trim();
+    if (!normalizedExerciseId) return null;
+
+    const cachedRoster = publicRosterByExerciseIdRef.current[normalizedExerciseId] ?? null;
+    if (cachedRoster && !options.force) return cachedRoster;
+
+    const inFlight = publicRosterRequestsRef.current.get(normalizedExerciseId);
+    if (inFlight) return inFlight;
+
+    const requestPromise = apiFetchTournamentParticipants(normalizedExerciseId, {
+      auth: false,
+      retries: 0,
+      signal: options.signal,
+    })
+      .then((result) => {
+        if (!result.data) return cachedRoster;
+        const roster = normalizeTournamentSignupPublicRoster(result.data);
+        setPublicRosterByExerciseId((current) => ({
+          ...current,
+          [normalizedExerciseId]: roster,
+        }));
+        return roster;
+      });
+
+    publicRosterRequestsRef.current.set(normalizedExerciseId, requestPromise);
+    try {
+      return await requestPromise;
+    } finally {
+      if (publicRosterRequestsRef.current.get(normalizedExerciseId) === requestPromise) {
+        publicRosterRequestsRef.current.delete(normalizedExerciseId);
+      }
+    }
+  }, []);
+
   const loadList = useCallback(async () => {
     setLoadingList(true);
     setError(null);
@@ -706,7 +1201,21 @@ export default function TournamentSignupPage({
       setError(result.error.message || "Не удалось загрузить турниры");
       setItems([]);
     } else {
-      setItems(sortTournaments(result.data ?? []));
+      const sortedItems = sortTournaments(result.data ?? []);
+      const storedPricingState = buildStoredTournamentPricingState(sortedItems);
+      setItems(sortedItems);
+      setPricingPreviewByExerciseId((current) => ({
+        ...current,
+        ...storedPricingState.pricingPreviewByExerciseId,
+      }));
+      setFriendlySubscriptionTagByExerciseId((current) => ({
+        ...current,
+        ...storedPricingState.friendlySubscriptionTagByExerciseId,
+      }));
+      setSummerSubscriptionOfferByExerciseId((current) => ({
+        ...current,
+        ...storedPricingState.summerSubscriptionOfferByExerciseId,
+      }));
     }
     setLoadingList(false);
   }, [selectedDateStr]);
@@ -715,10 +1224,20 @@ export default function TournamentSignupPage({
     setLoadingDetail(true);
     setError(null);
     const detailResult = await apiFetchTournamentSignupDetail(tournamentId);
+    const fallbackExerciseId = items.find((item) => item.id === tournamentId)?.exerciseId ?? tournamentId;
+    const exerciseId = detailResult.data?.exerciseId || fallbackExerciseId;
+    publicRosterDetailAbortRef.current?.abort();
+    const rosterAbortController = new AbortController();
+    publicRosterDetailAbortRef.current = rosterAbortController;
+    void loadPublicRoster(exerciseId, { signal: rosterAbortController.signal }).finally(() => {
+      if (publicRosterDetailAbortRef.current === rosterAbortController) {
+        publicRosterDetailAbortRef.current = null;
+      }
+    });
     const [registrationResult, vivaRegistrationResult] = isAuthenticated
       ? await Promise.all([
           apiFetchTournamentMyRegistration(tournamentId),
-          apiFetchTournamentVivaMyRegistration(tournamentId),
+          apiFetchTournamentVivaMyRegistration(exerciseId),
         ])
       : [null, null];
 
@@ -730,16 +1249,161 @@ export default function TournamentSignupPage({
     }
     setRegistration(
       mergeStoredPendingPayment(
-        tournamentId,
+        exerciseId,
         vivaRegistrationResult?.data ?? registrationResult?.data ?? detailResult.data?.registration ?? null,
       ),
     );
     setLoadingDetail(false);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, items, loadPublicRoster]);
+
+  const ensurePricingPreviewLoaded = useCallback(async (tournament: TournamentSignupSummary | null | undefined) => {
+    if (!tournament) return;
+
+    const exerciseId = String(tournament.exerciseId || "").trim();
+    if (!exerciseId) return;
+
+    const requestedPricingPreviewIds = requestedPricingPreviewIdsRef.current;
+    if (requestedPricingPreviewIds.has(exerciseId)) return;
+    requestedPricingPreviewIds.add(exerciseId);
+
+    setPricingPreviewLoadingByExerciseId((current) => (
+      current[exerciseId]
+        ? current
+        : { ...current, [exerciseId]: true }
+    ));
+
+    const tournamentPayload = tournament.raw ?? tournament;
+    const result = await apiFetchTournamentVivaPublicCheckout(exerciseId, {
+      tournament: tournamentPayload,
+      skinPriceLabel: findTournamentSkinPriceLabel(tournamentPayload),
+    });
+
+    if (result.error) {
+      requestedPricingPreviewIds.delete(exerciseId);
+      setPricingPreviewLoadingByExerciseId((current) => ({ ...current, [exerciseId]: false }));
+      return;
+    }
+
+    const products = result.data ? getTournamentCheckoutProducts(result.data) : [];
+    setPricingPreviewByExerciseId((current) => ({
+      ...current,
+      [exerciseId]: result.data ? buildTournamentPricingPreviewFromCheckout(result.data) : null,
+    }));
+    setFriendlySubscriptionTagByExerciseId((current) => ({
+      ...current,
+      [exerciseId]: hasPromoOnlyTournamentProducts(products),
+    }));
+    setSummerSubscriptionOfferByExerciseId((current) => ({
+      ...current,
+      [exerciseId]: buildTournamentPromoOnlyOfferFromProducts(products),
+    }));
+    setPricingPreviewLoadingByExerciseId((current) => ({ ...current, [exerciseId]: false }));
+  }, []);
 
   useEffect(() => {
     void loadList();
   }, [loadList]);
+
+  useEffect(() => {
+    if (!targetDeepLinkKey || selectedId) return;
+
+    const targetTournament = findTournamentByDeepLink(items, {
+      tournamentId: targetTournamentId,
+      tournamentSlug: targetTournamentSlug,
+    });
+    if (!targetTournament) return;
+
+    const autoOpenKey = `${targetDeepLinkKey}:${targetTournament.id}`;
+    if (deepLinkAutoOpenKeyRef.current === autoOpenKey) return;
+    deepLinkAutoOpenKeyRef.current = autoOpenKey;
+
+    const targetDateKey = getDateFromInput(targetTournament.date) || getDateFromInput(targetTournament.startsAt);
+    if (targetDateKey) {
+      const nextIndex = dates.findIndex((date) => formatDate(date) === targetDateKey);
+      if (nextIndex >= 0) {
+        setDateIndex(nextIndex);
+      }
+    }
+
+    setDeepLinkMessage(null);
+    setSelectedId(targetTournament.id);
+  }, [
+    dates,
+    items,
+    selectedId,
+    targetDeepLinkKey,
+    targetTournamentId,
+    targetTournamentSlug,
+  ]);
+
+  useEffect(() => {
+    if (targetTournamentId || !targetTournamentSlug || selectedId || loadingList || deepLinkLookupPending) return;
+    if (findTournamentByDeepLink(items, { tournamentSlug: targetTournamentSlug })) return;
+    if (deepLinkLookupKeyRef.current === targetDeepLinkKey) return;
+
+    deepLinkLookupKeyRef.current = targetDeepLinkKey;
+    let alive = true;
+    setDeepLinkLookupPending(true);
+    setDeepLinkMessage("Ищем турнир по ссылке...");
+
+    void (async () => {
+      try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const dateFrom = new Date(today);
+        dateFrom.setDate(today.getDate() - DEEP_LINK_LOOKUP_DAYS_BEFORE_TODAY);
+
+        const dateTo = new Date(today);
+        dateTo.setDate(today.getDate() + DEEP_LINK_LOOKUP_DAYS_AFTER_TODAY);
+
+        const result = await apiFetchTournamentSignupList({
+          from: formatDate(dateFrom),
+          to: formatDate(dateTo),
+        });
+        if (!alive) return;
+
+        const resolvedTournament = findTournamentByDeepLink(
+          sortTournaments(result.data ?? []),
+          { tournamentSlug: targetTournamentSlug },
+        );
+
+        if (!resolvedTournament) {
+          setDeepLinkMessage("Турнир по ссылке не найден");
+          return;
+        }
+
+        const targetDateKey = getDateFromInput(resolvedTournament.date) || getDateFromInput(resolvedTournament.startsAt);
+        if (targetDateKey) {
+          const nextIndex = dates.findIndex((date) => formatDate(date) === targetDateKey);
+          if (nextIndex >= 0) {
+            setDateIndex(nextIndex);
+          }
+        }
+
+        setDeepLinkMessage(null);
+        setSelectedId((current) => current || resolvedTournament.id);
+      } catch {
+        if (!alive) return;
+        setDeepLinkMessage("Не удалось открыть турнир по ссылке");
+      } finally {
+        if (alive) setDeepLinkLookupPending(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [
+    dates,
+    deepLinkLookupPending,
+    items,
+    loadingList,
+    selectedId,
+    targetDeepLinkKey,
+    targetTournamentId,
+    targetTournamentSlug,
+  ]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -747,35 +1411,52 @@ export default function TournamentSignupPage({
       setRegistration(null);
       setCheckout(null);
       setAuthRequired(false);
+      setPendingPaymentProduct(null);
       setActiveDetailTab("roster");
+      setPurchasableListOpen(false);
+      setStationModalOpen(false);
       return;
     }
+    setCheckout(null);
+    setCheckoutPreparedFor(null);
+    setPendingPaymentProduct(null);
+    setPurchasableListOpen(false);
+    setStationModalOpen(false);
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
     void loadDetail(selectedId);
   }, [loadDetail, selectedId]);
 
   useEffect(() => {
-    if (!isAuthenticated || !selectedId) return;
-    void loadDetail(selectedId);
-  }, [isAuthenticated, loadDetail, selectedId]);
+    setInviteFeedback(null);
+    setInviteSharing(false);
+  }, [selectedId]);
 
-  useEffect(() => {
-    if (registration?.status !== "PAYMENT_PENDING") return;
-    setNowTs(Date.now());
-    const timer = window.setInterval(() => setNowTs(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [registration?.status, registration?.paymentExpiresAt]);
+  const completeVivaRegistration = useCallback(async (nextCheckout: TournamentVivaCheckout, product: TournamentVivaProduct) => {
+    if (!selectedId || !selectedExerciseId || actionLoading) return;
+    if (!isAuthenticated || !nextCheckout.profile) {
+      setPendingPaymentProduct(product);
+      setAuthRequired(true);
+      setError(null);
+      return;
+    }
 
-  const completeVivaRegistration = async (nextCheckout: TournamentVivaCheckout, product: TournamentVivaProduct) => {
-    if (!selectedId) return;
+    const profile = nextCheckout.profile;
     setActionLoading(true);
     setError(null);
     try {
       const result = await apiCreateTournamentVivaTransaction({
-        exerciseId: selectedId,
+        exerciseId: selectedExerciseId,
         studioId: nextCheckout.studioId,
-        clientId: nextCheckout.profile.id,
-        clientPhone: normalizePhone(nextCheckout.profile.phone) || nextCheckout.profile.phone,
+        clientId: profile.id,
+        profile,
+        clientPhone: normalizePhone(profile.phone) || profile.phone,
         product,
+        customPricing: nextCheckout.customPricing,
+        tournament: detail?.raw ?? selectedTournament?.raw ?? selectedTournament,
+        exercise: nextCheckout.exercise,
       });
       if (result.error || !result.data) {
         setError(result.error?.message || "Не удалось создать запись через Viva");
@@ -793,7 +1474,7 @@ export default function TournamentSignupPage({
           paymentUrl: result.data.paymentUrl,
           paymentExpiresAt: result.data.paymentExpiresAt ?? new Date(Date.now() + PAYMENT_HOLD_MS).toISOString(),
         };
-        storePendingPayment(selectedId, nextRegistration);
+        storePendingPayment(selectedExerciseId, nextRegistration);
         setRegistration(nextRegistration);
         if (!navigateToExternalUrl(result.data.paymentUrl)) {
           setError("Не удалось открыть страницу оплаты");
@@ -801,20 +1482,27 @@ export default function TournamentSignupPage({
         return;
       }
       setCheckout(null);
-      clearStoredPendingPayment(selectedId);
+      clearStoredPendingPayment(selectedExerciseId);
       await loadDetail(selectedId);
       await loadList();
     } finally {
       setActionLoading(false);
     }
-  };
+  }, [actionLoading, detail, isAuthenticated, loadDetail, loadList, selectedExerciseId, selectedId, selectedTournament]);
 
-  const performRegister = async () => {
-    if (!selectedId || actionLoading) return;
+  const loadCheckout = useCallback(async (mode: "auth" | "public") => {
+    if (!selectedId || !selectedExerciseId || actionLoading) return;
     setActionLoading(true);
     setError(null);
     setCheckout(null);
-    const result = await apiFetchTournamentVivaCheckout(selectedId);
+    const tournamentPayload = detail?.raw ?? selectedTournament?.raw ?? selectedTournament;
+    const fetchCheckout = mode === "auth"
+      ? apiFetchTournamentVivaCheckout
+      : apiFetchTournamentVivaPublicCheckout;
+    const result = await fetchCheckout(selectedExerciseId, {
+      tournament: tournamentPayload,
+      skinPriceLabel: findTournamentSkinPriceLabel(tournamentPayload),
+    });
     setActionLoading(false);
 
     if (result.error || !result.data) {
@@ -828,47 +1516,39 @@ export default function TournamentSignupPage({
       ...result.data.clientSubscriptions,
     ];
     if (availableProducts.length === 0) {
+      if (mode === "public") {
+        setCheckout(result.data);
+        return;
+      }
       setError(
-        result.data.purchasedProducts.length > 0
+        result.data.customPricing
+          ? "Для кастомной цены в Viva не найден продукт «Энергия турниры»"
+          : result.data.purchasedProducts.length > 0
           ? "У клиента есть подходящий продукт, но для списания нужен отдельный Viva-пейлоад. Покупаемые услуги для этого турнира не найдены."
           : "Для этого турнира в Viva нет доступных услуг или абонементов для покупки",
       );
       return;
     }
     setCheckout(result.data);
-  };
-
-  const handleRegister = async () => {
-    if (!isAuthenticated) {
-      setAuthRequired(true);
-      setError(null);
-      return;
-    }
-    await performRegister();
-  };
+  }, [actionLoading, detail, selectedExerciseId, selectedId, selectedTournament]);
 
   const handleCancel = async () => {
-    if (!selectedId || actionLoading) return;
+    if (!selectedId || !selectedExerciseId || actionLoading) return;
     if (!isAuthenticated) {
       setAuthRequired(true);
       setError(null);
       return;
     }
-    const accepted = window.confirm("Отменить запись на турнир?");
-    if (!accepted) return;
 
     setActionLoading(true);
     setError(null);
-    const result = await apiCancelTournamentVivaRegistration(selectedId, registration?.bookingId, {
+    const result = await apiResolveTournamentVivaRegistrationBookingId(selectedExerciseId, registration?.bookingId, {
       placeNumber: registration?.placeNumber ?? null,
     });
     if (result.error) {
       setError(result.error.message || "Не удалось отменить запись");
     } else {
-      clearStoredPendingPayment(selectedId);
-      setRegistration(result.data ?? null);
-      await loadDetail(selectedId);
-      await loadList();
+      setCancelDialogBookingId(result.data);
     }
     setActionLoading(false);
   };
@@ -884,22 +1564,48 @@ export default function TournamentSignupPage({
     }
   };
 
-  const registrationText = getRegistrationText(registration);
-  const registrationStatusText = isAuthenticated
-    ? (registrationText || "Вы пока не записаны")
-    : "Войдите, чтобы увидеть вашу запись";
-  const isPaymentPending = registration?.status === "PAYMENT_PENDING";
-  const paymentExpiresAtTs = isPaymentPending && registration?.paymentExpiresAt
-    ? Date.parse(registration.paymentExpiresAt)
-    : null;
-  const paymentRemainingMs = paymentExpiresAtTs && Number.isFinite(paymentExpiresAtTs)
-    ? paymentExpiresAtTs - nowTs
-    : null;
-  const paymentCountdownText = paymentRemainingMs == null
-    ? "до 20 минут"
-    : formatPaymentCountdown(paymentRemainingMs);
-  const paymentExpired = paymentRemainingMs != null && paymentRemainingMs <= 0;
-  const canPayPending = Boolean(isPaymentPending && registration?.paymentUrl);
+  const handleInviteFriend = useCallback(async () => {
+    if (!selectedTournament) return;
+
+    const shareUrl = buildTournamentShareUrl(selectedTournament, selectedDateStr);
+    if (!shareUrl) {
+      setError("Ссылка на этот турнир пока недоступна.");
+      return;
+    }
+
+    const tournamentTitle = selectedTournament.title || "Турнир PadelHub";
+    const inviteText = `Присоединяйся к турниру «${tournamentTitle}»`;
+    const shareMessage = `${inviteText}\n${shareUrl}`;
+
+    setError(null);
+    setInviteSharing(true);
+    setInviteFeedback(null);
+
+    try {
+      if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+        try {
+          await navigator.share({
+            text: shareMessage,
+          });
+          setInviteFeedback("shared");
+          window.setTimeout(() => setInviteFeedback((current) => (current === "shared" ? null : current)), 1600);
+          return;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+        }
+      }
+
+      await writeTextToClipboard(shareMessage);
+      setInviteFeedback("copied");
+      window.setTimeout(() => setInviteFeedback((current) => (current === "copied" ? null : current)), 1600);
+    } catch {
+      setError("Не удалось поделиться ссылкой на турнир.");
+    } finally {
+      setInviteSharing(false);
+    }
+  }, [selectedDateStr, selectedTournament]);
+
+  const canPayPending = Boolean(registration?.status === "PAYMENT_PENDING" && registration?.paymentUrl);
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
   const canRegister =
     !canCancel &&
@@ -912,15 +1618,77 @@ export default function TournamentSignupPage({
   const detailTimeLabel = detailStartTime && detailEndTime
     ? `${detailStartTime} • ${detailEndTime}`
     : selectedTournament?.timeLabel || "Время уточняется";
+  const detailStationLabel = selectedTournament?.studioName || selectedTournament?.address || "Станция уточняется";
+  const detailStationMapUrl = getStationMapUrl(selectedTournament?.studioName ?? null, selectedTournament?.address ?? null);
+  const detailPublicRoster = selectedExerciseId ? publicRosterByExerciseId[selectedExerciseId] ?? null : null;
   const detailParticipants = useMemo(
-    () => getTournamentParticipants(detail || selectedTournament),
-    [detail, selectedTournament],
+    () => detailPublicRoster?.participants ?? getTournamentParticipants(detail || selectedTournament),
+    [detail, detailPublicRoster, selectedTournament],
   );
   const detailTournamentTypeLabel = selectedTournament?.format || "Турнир";
+  const detailRulesInfographic = getTournamentRulesInfographic(selectedTournament);
   const detailMaxParticipants = selectedTournament?.maxParticipants ?? 0;
-  const detailParticipantCount = Math.max(detailParticipants.length, selectedTournament?.participantsCount ?? 0);
+  const detailParticipantCount = detailPublicRoster?.participantsCount
+    ?? Math.max(detailParticipants.length, selectedTournament?.participantsCount ?? 0);
   const detailTrainerName = detail?.trainerName || selectedTournament?.trainerName || null;
   const detailTrainerAvatarUrl = detail?.trainerAvatarUrl || selectedTournament?.trainerAvatarUrl || null;
+  const detailDescription = resolveTournamentDescription(detail, selectedTournament);
+  const inviteFriendLabel = inviteSharing
+    ? "Готовим ссылку..."
+    : inviteFeedback === "shared"
+      ? "Ссылка отправлена"
+      : inviteFeedback === "copied"
+        ? "Ссылка скопирована"
+        : "Пригласи друга";
+  const purchasableSubscriptionProducts = checkout
+    ? [...checkout.oneTimes, ...checkout.subscriptions]
+      .filter((product) => !isPromoOnlyPurchasableProduct(product))
+    : [];
+
+  useEffect(() => {
+    if (!selectedId || !selectedExerciseId) {
+      setCheckoutPreparedFor(null);
+      return;
+    }
+    if (!canRegister) {
+      setCheckout(null);
+      setCheckoutPreparedFor(null);
+      return;
+    }
+    const mode = isAuthenticated ? "auth" : "public";
+    const checkoutKey = `${selectedId}:${selectedExerciseId}:${mode}`;
+    if (checkoutPreparedFor === checkoutKey && checkout) return;
+    if (actionLoading) return;
+    setCheckoutPreparedFor(checkoutKey);
+    void loadCheckout(mode);
+  }, [
+    actionLoading,
+    canRegister,
+    checkout,
+    checkoutPreparedFor,
+    isAuthenticated,
+    loadCheckout,
+    selectedExerciseId,
+    selectedId,
+  ]);
+
+  useEffect(() => {
+    if (!pendingPaymentProduct || !isAuthenticated || !checkout?.profile || actionLoading) return;
+    const matchedProduct = findMatchingTournamentPaymentProduct(checkout, pendingPaymentProduct);
+    if (!matchedProduct) {
+      setPendingPaymentProduct(null);
+      setError("После входа выбранный способ оплаты не найден. Выберите способ записи ещё раз.");
+      return;
+    }
+    setPendingPaymentProduct(null);
+    void completeVivaRegistration(checkout, matchedProduct);
+  }, [
+    actionLoading,
+    checkout,
+    completeVivaRegistration,
+    isAuthenticated,
+    pendingPaymentProduct,
+  ]);
 
   useEffect(() => {
     if (!selectedId || detailParticipants.length === 0) {
@@ -968,7 +1736,6 @@ export default function TournamentSignupPage({
         </button>
         <div className="tournament-signup-header-title">
           <div className="page-title">Запись на турниры</div>
-          <div className="tournament-signup-subtitle">PadelHub</div>
         </div>
       </header>
 
@@ -1049,12 +1816,13 @@ export default function TournamentSignupPage({
             </button>
           </div>
 
+          {deepLinkMessage && <div className="tournament-signup-muted">{deepLinkMessage}</div>}
           {loadingList && <div className="tournament-signup-muted">Загрузка...</div>}
           {!loadingList && error && <div className="tournament-signup-error">{error}</div>}
-          {!loadingList && !error && items.length === 0 && (
+          {!loadingList && !deepLinkLookupPending && !deepLinkMessage && !error && items.length === 0 && (
             <div className="tournament-signup-muted">На выбранную дату турниров нет</div>
           )}
-          {!loadingList && !error && items.length > 0 && filteredItems.length === 0 && (
+          {!loadingList && !deepLinkLookupPending && !deepLinkMessage && !error && items.length > 0 && filteredItems.length === 0 && (
             <div className="tournament-signup-muted">По выбранным фильтрам турниров нет</div>
           )}
 
@@ -1062,11 +1830,23 @@ export default function TournamentSignupPage({
             {filteredItems.map((tournament) => (
               <CommunityTournamentCard
                 key={tournament.id}
-                card={toCommunityTournamentCard(tournament)}
+                card={toCommunityTournamentCard(
+                  tournament,
+                  pricingPreviewByExerciseId[tournament.exerciseId] ?? null,
+                  Boolean(pricingPreviewLoadingByExerciseId[tournament.exerciseId]),
+                  Boolean(friendlySubscriptionTagByExerciseId[tournament.exerciseId]),
+                  summerSubscriptionOfferByExerciseId[tournament.exerciseId] ?? null,
+                  publicRosterByExerciseId[tournament.exerciseId] ?? null,
+                )}
                 onOpen={() => {
                   setCheckout(null);
                   setSelectedId(tournament.id);
                 }}
+                onRequestPriceDetails={shouldRequestTournamentPricingPreview(tournament)
+                  ? () => {
+                    void ensurePricingPreviewLoaded(tournament);
+                  }
+                  : undefined}
               />
             ))}
           </div>
@@ -1079,14 +1859,21 @@ export default function TournamentSignupPage({
             <div className="tournament-signup-auth">
               <div className="tournament-signup-auth-head">
                 <strong>Вход для записи</strong>
-                <button className="tournament-signup-ghost" type="button" onClick={() => setAuthRequired(false)}>
+                <button
+                  className="tournament-signup-ghost"
+                  type="button"
+                  onClick={() => {
+                    setAuthRequired(false);
+                    setPendingPaymentProduct(null);
+                  }}
+                >
                   Закрыть
                 </button>
               </div>
               <AuthForm
+                allowPhoneLogin={false}
                 onLogin={() => {
                   setAuthRequired(false);
-                  void performRegister();
                 }}
               />
             </div>
@@ -1095,14 +1882,50 @@ export default function TournamentSignupPage({
           {!loadingDetail && error && <div className="tournament-signup-error">{error}</div>}
           {!loadingDetail && selectedTournament && (
             <>
+              {cancelDialogBookingId && selectedExerciseId && selectedId && (
+                <BookingCancellationDialog
+                  bookingId={cancelDialogBookingId}
+                  isOpen={Boolean(cancelDialogBookingId)}
+                  title="Отмена записи на турнир"
+                  onClose={() => setCancelDialogBookingId(null)}
+                  onSuccessClose={() => {
+                    clearStoredPendingPayment(selectedExerciseId);
+                    setCancelDialogBookingId(null);
+                    void loadDetail(selectedId);
+                    void loadList();
+                  }}
+                  executeAction={async (action) => {
+                    const result = await apiCancelTournamentVivaRegistration(
+                      selectedExerciseId,
+                      cancelDialogBookingId,
+                      {
+                        placeNumber: registration?.placeNumber ?? null,
+                        refundMethod: action.refundMethod,
+                      },
+                    );
+                    return {
+                      ok: !result.error,
+                      message: result.error?.message || result.data?.message || action.successMessage,
+                    };
+                  }}
+                />
+              )}
               <div className="details-card tournament-signup-details-card">
                 <div className="details-row">
-                  <div>
+                  <div className="details-main">
                     <div className="details-date details-date-capitalize">{getDateLabel(selectedTournament.date)}</div>
                     <div className="details-time">{detailTimeLabel}</div>
+                    <div className="details-time">
+                      <button
+                        type="button"
+                        className="tournament-signup-station-link"
+                        onClick={() => setStationModalOpen(true)}
+                      >
+                        {detailStationLabel}
+                      </button>
+                    </div>
                     <div className="details-time details-time-strong">{selectedTournament.title}</div>
                     <div className="details-time">{detailTournamentTypeLabel}</div>
-                    <div className="details-time">{selectedTournament.studioName || selectedTournament.address || "Станция уточняется"}</div>
                   </div>
                   <CalendarDateBadge
                     monthLabel={detailDateParts.month}
@@ -1134,7 +1957,7 @@ export default function TournamentSignupPage({
                   {detailTrainerName && (
                     <div className="details-roster-card details-organizer-card">
                       <div className="details-roster-head">
-                        <div className="details-roster-title">Исполнитель</div>
+                        <div className="details-roster-title">Организатор</div>
                       </div>
                       <div className="details-roster-list">
                         <div className="details-roster-row">
@@ -1146,12 +1969,18 @@ export default function TournamentSignupPage({
                             )}
                             <div className="details-roster-meta">
                               <div className="details-roster-name">{detailTrainerName}</div>
-                              <div className="details-roster-sub">Исполнитель турнира</div>
                             </div>
                           </div>
-                          <span className="details-roster-badge">Исполнитель</span>
+                          <span className="details-roster-badge">Организатор</span>
                         </div>
                       </div>
+                    </div>
+                  )}
+                  {detailDescription && (
+                    <div className="details-match-comment tournament-signup-description" aria-label="Описание турнира">
+                      <span className="details-match-comment-quote" aria-hidden="true">“</span>
+                      <span>{detailDescription}</span>
+                      <span className="details-match-comment-quote" aria-hidden="true">”</span>
                     </div>
                   )}
 
@@ -1162,11 +1991,11 @@ export default function TournamentSignupPage({
                         {detailMaxParticipants > 0 ? `${detailParticipantCount}/${detailMaxParticipants}` : detailParticipantCount}
                       </div>
                     </div>
-                    {detailParticipants.length === 0 ? (
-                      <div className="game-empty">Состав пока не сформирован</div>
-                    ) : (
-                      <div className="details-roster-list">
-                        {detailParticipants.map((participant, index) => {
+                    <div className="details-roster-list">
+                      {detailParticipants.length === 0 ? (
+                        <div className="game-empty">Стань первым участником</div>
+                      ) : (
+                        detailParticipants.map((participant, index) => {
                           const liveRating = getPlayerLiveRating(participant, liveRatings);
                           const levelMeta = getPlayerLevelMeta(participant, liveRating);
 
@@ -1198,131 +2027,157 @@ export default function TournamentSignupPage({
                               {participant.role && <span className="details-roster-badge">{participant.role}</span>}
                             </div>
                           );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="tournament-signup-registration">
-                    <div>
-                      <span>Статус записи</span>
-                      <strong>{registrationStatusText}</strong>
-                      {registration?.message && <p>{registration.message}</p>}
-                      {isPaymentPending && (
-                        <div className={`tournament-signup-payment-hold${paymentExpired ? " is-expired" : ""}`}>
-                          <span>{paymentExpired ? "Время оплаты истекло" : "Место удерживается"}</span>
-                          <strong>{paymentCountdownText}</strong>
-                        </div>
+                        })
                       )}
-                      {isPaymentPending && !registration?.paymentUrl && (
-                        <p>Ссылка на оплату пока не найдена. Обновите статус или отмените запись.</p>
-                      )}
-                    </div>
-                    <div>
-                      <span>Участники</span>
-                      <strong>
-                        {selectedTournament.participantsCount ?? 0}
-                        {selectedTournament.maxParticipants != null ? `/${selectedTournament.maxParticipants}` : ""}
-                      </strong>
-                      {selectedTournament.waitlistCount != null && <p>В ожидании: {selectedTournament.waitlistCount}</p>}
-                    </div>
-                  </div>
-
-                  <div className="tournament-signup-actions">
-                    {canPayPending && (
                       <button
-                        className="section-cta"
                         type="button"
-                        onClick={handlePayPendingRegistration}
-                        disabled={actionLoading}
+                        className="details-roster-row details-roster-row-invite"
+                        onClick={() => {
+                          void handleInviteFriend();
+                        }}
+                        disabled={inviteSharing}
                       >
-                        Оплатить
+                        <span className="details-roster-player">
+                          <span className="details-roster-avatar-wrap details-roster-avatar-wrap-invite" aria-hidden="true">
+                            <span className="details-roster-avatar details-roster-avatar-invite-plus">+</span>
+                          </span>
+                          <span className="details-roster-meta">
+                            <span className="details-roster-name">{inviteFriendLabel}</span>
+                          </span>
+                        </span>
                       </button>
-                    )}
-                    {canRegister && (
-                      <button className="section-cta" type="button" onClick={() => void handleRegister()} disabled={actionLoading}>
-                        {actionLoading ? "Записываем..." : "Записаться"}
-                      </button>
-                    )}
-                    {canCancel && (
-                      <button className="tournament-signup-danger" type="button" onClick={() => void handleCancel()} disabled={actionLoading}>
-                        {actionLoading ? "Отменяем..." : "Отменить запись"}
-                      </button>
-                    )}
+                    </div>
                   </div>
 
-                  {checkout && (
-                    <div className="tournament-signup-auth">
-                      <div className="tournament-signup-auth-head">
-                        <strong>Выберите способ записи</strong>
-                        <button className="tournament-signup-ghost" type="button" onClick={() => setCheckout(null)}>
-                          Закрыть
-                        </button>
-                      </div>
-                      <div className="tournament-signup-payment-options">
-                        <div className="tournament-signup-muted">
-                          Баланс депозита: {formatMoneyMinor(checkout.profile.deposit)}
+                  <div className="tournament-signup-register-stack">
+                    {canRegister && (
+                      <div className="tournament-signup-auth">
+                        <div className="tournament-signup-auth-head">
+                          <strong>
+                            <span className="tournament-signup-auth-title">Выбери способ записи</span>
+                          </strong>
                         </div>
-                        {checkout.oneTimes.length > 0 && (
-                          <div className="tournament-signup-payment-group">
-                            <div className="tournament-signup-payment-title">Разовая услуга</div>
-                            {checkout.oneTimes.map((product) => (
-                              <button
-                                key={`${product.source}-${product.id}`}
-                                className="tournament-signup-payment-option"
-                                type="button"
-                                onClick={() => void completeVivaRegistration(checkout, product)}
-                                disabled={actionLoading}
-                              >
-                                <span>{product.name}</span>
-                                <strong>{formatMoneyMinor(product.cost)}</strong>
-                              </button>
-                            ))}
+                        {checkout ? (
+                          <div className="tournament-signup-payment-options">
+                            {checkout.clientSubscriptions.length > 0 && (
+                              <div className="tournament-signup-payment-group">
+                                {checkout.clientSubscriptions.map((product) => (
+                                  <button
+                                    key={`${product.source}-${product.id}`}
+                                    className="tournament-signup-payment-option tournament-signup-payment-option-subscription"
+                                    type="button"
+                                    onClick={() => void completeVivaRegistration(checkout, product)}
+                                    disabled={actionLoading}
+                                  >
+                                    <span>{product.name}</span>
+                                    <div className="tournament-signup-payment-option-meta">
+                                      <strong>{formatTournamentPaymentProductValidity(product)}</strong>
+                                      {shouldShowSubscriptionHint(product) && (
+                                        <span className="tournament-signup-payment-option-note">подписка</span>
+                                      )}
+                                    </div>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {purchasableSubscriptionProducts.length > 0 && (
+                              <div className="tournament-signup-payment-group">
+                                <button
+                                  type="button"
+                                  className="tournament-signup-payment-purchase-toggle"
+                                  onClick={() => setPurchasableListOpen((current) => !current)}
+                                  disabled={actionLoading}
+                                >
+                                  {isPurchasableListOpen ? "Скрыть абонементы" : "Записаться разово или по абонементу"}
+                                </button>
+                                {isPurchasableListOpen && (
+                                  <div className="tournament-signup-payment-purchase-list">
+                                    {purchasableSubscriptionProducts.map((product) => (
+                                      <button
+                                        key={`${product.source}-${product.id}`}
+                                        className="tournament-signup-payment-option"
+                                        type="button"
+                                        onClick={() => void completeVivaRegistration(checkout, product)}
+                                        disabled={actionLoading}
+                                      >
+                                        <span>{product.name}</span>
+                                        <strong>
+                                          {formatTournamentPaymentProductPrice(product)}
+                                          {formatTournamentPaymentProductVisits(product)}
+                                        </strong>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {isAuthenticated ? (
+                              purchasableSubscriptionProducts.length > 0 && (
+                                <div className="tournament-signup-payment-group">
+                                  <button
+                                    type="button"
+                                    className="tournament-signup-payment-subscription-link"
+                                    onClick={() => {
+                                      if (!navigateToExternalUrl(TOURNAMENT_SUMMER_SUBSCRIPTION_URL)) {
+                                        setError("Не удалось открыть страницу подписки. Попробуйте снова.");
+                                      }
+                                    }}
+                                    disabled={actionLoading}
+                                  >
+                                    Записаться по подписке
+                                  </button>
+                                </div>
+                              )
+                            ) : (
+                              <div className="tournament-signup-payment-group">
+                                <button
+                                  type="button"
+                                  className="tournament-signup-payment-purchase-toggle"
+                                  onClick={() => {
+                                    setPendingPaymentProduct(null);
+                                    setAuthRequired(true);
+                                    setError(null);
+                                  }}
+                                  disabled={actionLoading}
+                                >
+                                  Войти и записаться по подписке
+                                </button>
+                              </div>
+                            )}
                           </div>
-                        )}
-                        {checkout.subscriptions.length > 0 && (
-                          <div className="tournament-signup-payment-group">
-                            <div className="tournament-signup-payment-title">Абонемент</div>
-                            {checkout.subscriptions.map((product) => (
-                              <button
-                                key={`${product.source}-${product.id}`}
-                                className="tournament-signup-payment-option"
-                                type="button"
-                                onClick={() => void completeVivaRegistration(checkout, product)}
-                                disabled={actionLoading}
-                              >
-                                <span>{product.name}</span>
-                                <strong>
-                                  {formatMoneyMinor(product.cost)}
-                                  {product.visitsTotal ? ` / ${product.visitsTotal} посещ.` : ""}
-                                </strong>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                        {checkout.clientSubscriptions.length > 0 && (
-                          <div className="tournament-signup-payment-group">
-                            <div className="tournament-signup-payment-title">Действующий абонемент</div>
-                            {checkout.clientSubscriptions.map((product) => (
-                              <button
-                                key={`${product.source}-${product.id}`}
-                                className="tournament-signup-payment-option"
-                                type="button"
-                                onClick={() => void completeVivaRegistration(checkout, product)}
-                                disabled={actionLoading}
-                              >
-                                <span>{product.name}</span>
-                                <strong>
-                                  {formatMoneyMinor(product.cost)}
-                                  {product.visitsTotal ? ` / ${product.visitsTotal} посещ.` : ""}
-                                </strong>
-                              </button>
-                            ))}
+                        ) : (
+                          <div className="tournament-signup-muted">
+                            {actionLoading ? "Подбираем способы записи..." : "Способы записи пока недоступны"}
                           </div>
                         )}
                       </div>
-                    </div>
-                  )}
+                    )}
+
+                    {(canPayPending || canCancel) && (
+                      <div className="tournament-signup-actions">
+                        {canPayPending && (
+                          <button
+                            className="section-cta"
+                            type="button"
+                            onClick={handlePayPendingRegistration}
+                            disabled={actionLoading}
+                          >
+                            Оплатить
+                          </button>
+                        )}
+                        {canCancel && (
+                          <button
+                            className="tournament-signup-danger"
+                            type="button"
+                            onClick={() => void handleCancel()}
+                            disabled={actionLoading}
+                          >
+                            {actionLoading ? "Отменяем..." : "Отменить запись"}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </>
               )}
 
@@ -1332,6 +2187,14 @@ export default function TournamentSignupPage({
                     <div className="details-result-title">Регламент</div>
                     <span className="details-result-status pending">{selectedTournament.format || "Турнир"}</span>
                   </div>
+                  {detailRulesInfographic && (
+                    <img
+                      className="tournament-regulation-infographic"
+                      src={detailRulesInfographic.src}
+                      alt={detailRulesInfographic.alt}
+                      loading="lazy"
+                    />
+                  )}
                   <div className="tournament-signup-facts">
                     {selectedTournament.studioName && <div><span>Клуб</span><strong>{selectedTournament.studioName}</strong></div>}
                     {selectedTournament.address && <div><span>Адрес</span><strong>{selectedTournament.address}</strong></div>}
@@ -1348,15 +2211,36 @@ export default function TournamentSignupPage({
                 </div>
               )}
 
-              {activeDetailTab === "result" && (
-                <div className="details-result-card">
-                  <div className="details-result-header">
-                    <div className="details-result-title">Результат турнира</div>
-                    <span className="details-result-status pending">Ожидается</span>
+              <Modal
+                isOpen={isStationModalOpen}
+                onClose={() => setStationModalOpen(false)}
+                title={detailStationLabel}
+                variant="dialog"
+                bodyClassName="tournament-signup-station-modal"
+              >
+                <div className="tournament-signup-station-facts">
+                  <div className="tournament-signup-station-fact">
+                    <span>Станция</span>
+                    <strong>{detailStationLabel}</strong>
                   </div>
-                  <div className="game-empty">Результат появится после завершения турнира</div>
+                  {selectedTournament.address && (
+                    <div className="tournament-signup-station-fact">
+                      <span>Адрес</span>
+                      <strong>{selectedTournament.address}</strong>
+                    </div>
+                  )}
                 </div>
-              )}
+                {detailStationMapUrl && (
+                  <a
+                    className="section-cta tournament-signup-station-map"
+                    href={detailStationMapUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Открыть на карте
+                  </a>
+                )}
+              </Modal>
             </>
           )}
         </section>

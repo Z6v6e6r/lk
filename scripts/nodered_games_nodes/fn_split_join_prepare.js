@@ -20,6 +20,11 @@ const toNumber = (value) => {
   return null;
 };
 
+const resolvePositiveInt = (value, fallback) => {
+  const parsed = Math.floor(toNumber(value) ?? NaN);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
 const normalizePhone = (value) => {
   const digits = String(value || "").replace(/\D/g, "");
   if (!digits) return null;
@@ -145,8 +150,15 @@ const splitPayment = metadata.splitPayment && typeof metadata.splitPayment === "
 const booking = game.booking && typeof game.booking === "object" ? game.booking : {};
 const exerciseId =
   toStr(splitPayment.vivaExerciseId) ||
+  toStr(splitPayment.viva_exercise_id) ||
   toStr(booking.vivaExerciseId) ||
-  toStr(booking.exerciseId);
+  toStr(booking.exerciseId) ||
+  toStr(metadata.vivaExerciseId) ||
+  toStr(metadata.exerciseId) ||
+  toStr(metadata.viva_exercise_id) ||
+  toStr(metadata.exercise_id) ||
+  toStr(splitPayment.exerciseId) ||
+  toStr(splitPayment.exercise_id);
 const clientPhone = normalizePhone(body.clientPhone || body.phone);
 const studioId = toStr(body.studioId) || toStr(booking.studioId);
 const isSinglesGame = resolveIsSinglesGame({ body, metadata, splitPayment, booking, game });
@@ -197,8 +209,24 @@ const clientSubscriptionId = toStr(
   || body.selectedSubscriptionId,
 );
 const transactionPaymentMethod = toStr(body.transactionPaymentMethod || body.paymentMethod);
-const vivaDirectionId = DEFAULT_OPEN_GAME_DIRECTION_ID;
-const vivaExerciseTypeId = DEFAULT_OPEN_GAME_EXERCISE_TYPE_ID;
+const vivaDirectionId = resolvePositiveInt(
+  body.vivaDirectionId
+  ?? body.directionId
+  ?? splitPayment.directionId
+  ?? splitPayment.vivaDirectionId
+  ?? metadata.directionId
+  ?? metadata.vivaDirectionId,
+  DEFAULT_OPEN_GAME_DIRECTION_ID,
+);
+const vivaExerciseTypeId = resolvePositiveInt(
+  body.vivaExerciseTypeId
+  ?? body.exerciseTypeId
+  ?? splitPayment.exerciseTypeId
+  ?? splitPayment.vivaExerciseTypeId
+  ?? metadata.exerciseTypeId
+  ?? metadata.vivaExerciseTypeId,
+  DEFAULT_OPEN_GAME_EXERCISE_TYPE_ID,
+);
 const paymentDeadlineMinutes = Math.max(
   1,
   Math.min(180, Math.floor(toNumber(body.paymentDeadlineMinutes) ?? DEFAULT_PAYMENT_DEADLINE_MINUTES)),

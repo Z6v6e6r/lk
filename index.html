@@ -9,6 +9,23 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <script src="https://supadb.vivacrm.ru/storage/v1/object/public/widgets/d5685aa2-221b-439e-8bec-c6fda0846bc3.js"></script>
+    <script>
+      (function () {
+        var vivaUrl = "https://supadb.vivacrm.ru/storage/v1/object/public/widgets/d5685aa2-221b-439e-8bec-c6fda0846bc3.js";
+        var host = String(window.location.hostname || "").toLowerCase();
+        var isLocalHost = host === "localhost"
+          || host === "127.0.0.1"
+          || host === "0.0.0.0"
+          || host === "::1"
+          || host === "[::1]";
+
+        if (isLocalHost) return;
+
+        var script = document.createElement("script");
+        script.src = vivaUrl;
+        script.async = true;
+        document.head.appendChild(script);
+      })();
+    </script>
   </body>
 </html>

@@ -5,19 +5,19 @@ interface SubscriptionsContainerProps {
   UserSubscriptions: SubscriptionResponse | null;
   phone: string;
   openSubInfo: (sub: Subscription, subName: string) => void;
-  openBuy: () => void;
 }
+
+const SUMMER_SUBSCRIPTION_URL = "https://padlhub.ru/ab_leto";
 
 export function SubscriptionsContainer({
   UserSubscriptions,
   phone,
   openSubInfo,
-  openBuy,
 }: SubscriptionsContainerProps) {
   return (
     <div className="section">
       <div className="section-header">
-        <span className="section-title">Абонементы</span>
+        <span className="section-title">Абонементы и подписки</span>
       </div>
 
       {UserSubscriptions?.content && UserSubscriptions.content.length > 0 ? (
@@ -35,9 +35,9 @@ export function SubscriptionsContainer({
         </div>
       )}
 
-      <button className="buy-btn" onClick={openBuy}>
-        Приобрести абонемент
-      </button>
+      <a className="buy-btn" href={SUMMER_SUBSCRIPTION_URL}>
+        Абонементы и подписки
+      </a>
     </div>
   );
 }

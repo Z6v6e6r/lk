@@ -20,20 +20,63 @@ if (!gameId) {
 }
 
 const body = (msg.payload && typeof msg.payload === 'object') ? msg.payload : {};
-const phone = normPhone(
-  body.phone
-  || body.disputerPhone
-  || body.playerPhone
-  || body.confirmerPhone
-  || msg.req?.query?.phone,
-);
-if (!phone) {
+const trustedActor = (msg._resultActor && typeof msg._resultActor === 'object')
+  ? msg._resultActor
+  : null;
+const actorHint = (body.actor && typeof body.actor === 'object')
+  ? body.actor
+  : (body.submittedBy && typeof body.submittedBy === 'object' ? body.submittedBy : {});
+const actor = {
+  id: toStr(
+    trustedActor?.id
+    || actorHint.id
+    || actorHint.clientId
+    || actorHint.uuid
+    || actorHint.userId
+    || actorHint.playerId,
+  ),
+  phoneNorm: normPhone(
+    trustedActor?.phoneNorm
+    || trustedActor?.phone
+    || actorHint.phoneNorm
+    || actorHint.phone
+    || body.phone
+    || body.confirmerPhone
+    || body.disputerPhone
+    || body.playerPhone
+    || msg.req?.query?.phone,
+  ),
+  name: toStr(trustedActor?.name || actorHint.name || actorHint.fullName || actorHint.title),
+  verified: trustedActor?.verified === true,
+};
+const phone = actor.phoneNorm;
+if (!actor.id && !phone) {
   msg.statusCode = 400;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };
-  msg.payload = { error: "phone is required" };
+  msg.payload = { error: "actor id or phone is required" };
   return [null, msg, msg];
 }
 
-msg._resultConfirm = { gameId, phone };
+const url = String(msg.req?.route?.path || msg.req?.url || msg.req?.originalUrl || '').toLowerCase();
+const bodyActionRaw = toStr(body.action || body.lifecycleAction);
+const bodyAction = String(bodyActionRaw || '').toUpperCase().replace(/-/g, '_');
+
+let action = 'CONFIRM';
+if (url.includes('/dispute') || url.includes('/revert') || bodyAction === 'DISPUTE' || bodyAction === 'REVERT') {
+  action = 'DISPUTE';
+} else if (url.includes('/accept-correction') || bodyAction === 'ACCEPT_CORRECTION') {
+  action = 'ACCEPT_CORRECTION';
+} else if (url.includes('/expire') || bodyAction === 'EXPIRE') {
+  action = 'EXPIRE';
+}
+
+msg._resultConfirm = {
+  gameId,
+  phone,
+  actor,
+  action,
+  correctionPayload: body.correction || body.correctionPayload || null,
+  reason: toStr(body.reason || body.disputeReason),
+};
 msg.payload = { id: gameId, archived: { $ne: true } };
 return [msg, null, msg];

@@ -8,6 +8,10 @@ import type {
 import { BookingCard } from "./BookingCard";
 import { Modal } from "../UI/Modal";
 import { TournamentBookingCard } from "./TournamentBookingCard";
+import {
+  isExerciseConvertibleToGameFromBooking,
+  resolveCabinetBookingCategory,
+} from "../../utils/exerciseCategory";
 
 interface BookingsContainerProps {
   activeBookings: BookingsResponse | null;
@@ -31,6 +35,7 @@ interface BookingsContainerProps {
   loadingGameRecords?: boolean;
   gameRecordsError?: string | null;
   resolveGameForBooking?: (booking: Booking) => PadelGameRecord | null;
+  resolveDisplayGameForBooking?: (booking: Booking) => PadelGameRecord | null;
   resolveTournamentForBooking?: (booking: Booking) => TournamentHistoryRecord | null;
   onOpenTournamentDetails?: (booking: Booking) => void;
 }
@@ -52,43 +57,6 @@ type GamesAwareItem = {
   game?: PadelGameRecord;
   booking?: Booking;
 };
-
-function getBookingCategory(name: string): "games" | "trainings" | "tournaments" | "other" {
-  const n = name.toLowerCase();
-  if (
-    n.includes("турнир")
-    || n.includes("tournament")
-    || n.includes("американо")
-    || n.includes("americano")
-    || n.includes("мексикано")
-    || n.includes("mexicano")
-    || n.includes("round robin")
-    || n.includes("олимп")
-  ) {
-    return "tournaments";
-  }
-  if (
-    n.includes("своя игра")
-    || n.includes("свою игру")
-    || n.includes("игр")
-    || n.includes("game")
-    || n.includes("сплит")
-    || n.includes("split")
-  ) {
-    return "games";
-  }
-  if (n.includes("трен") || n.includes("training")) return "trainings";
-  return "other";
-}
-
-function getBookingCategoryName(booking: Booking): string {
-  return [
-    booking.exercise?.direction?.name,
-    booking.exercise?.type?.name,
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
 
 function getBookingTimestamp(booking: Booking): number {
   const raw = booking.exercise?.timeFrom;
@@ -208,24 +176,35 @@ function isCancelledGameRecord(game: PadelGameRecord): boolean {
 
 function hasCompletedMatchResult(game: PadelGameRecord): boolean {
   const metadata = game.metadata;
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
-  const matchResult = (metadata as Record<string, unknown>).matchResult;
-  if (!matchResult || typeof matchResult !== "object" || Array.isArray(matchResult)) return false;
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+    const matchResult = (metadata as Record<string, unknown>).matchResult;
+    if (matchResult && typeof matchResult === "object" && !Array.isArray(matchResult)) {
+      const status = String((matchResult as Record<string, unknown>).status || "").trim().toUpperCase();
+      if (status.includes("CONFIRM") || status.includes("COMPLET")) return true;
+      if ((matchResult as Record<string, unknown>).confirmedAt) return true;
+    }
+  }
 
-  const status = String((matchResult as Record<string, unknown>).status || "").trim().toUpperCase();
-  if (status.includes("CONFIRM") || status.includes("COMPLET")) return true;
-  return Boolean((matchResult as Record<string, unknown>).confirmedAt);
+  const topLevelStatus = String(game.resultLifecycleState ?? game.resultStatus ?? "").trim().toUpperCase();
+  return topLevelStatus.includes("CONFIRM") || topLevelStatus.includes("COMPLET");
 }
 
 function hasEnteredMatchResult(game: PadelGameRecord): boolean {
   const metadata = game.metadata;
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
-  const matchResult = (metadata as Record<string, unknown>).matchResult;
-  if (!matchResult || typeof matchResult !== "object" || Array.isArray(matchResult)) return false;
-  const sets = (matchResult as Record<string, unknown>).sets;
-  if (Array.isArray(sets) && sets.length > 0) return true;
-  const status = String((matchResult as Record<string, unknown>).status || "").trim();
-  return Boolean(status || (matchResult as Record<string, unknown>).submittedAt || (matchResult as Record<string, unknown>).confirmedAt);
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+    const matchResult = (metadata as Record<string, unknown>).matchResult;
+    if (matchResult && typeof matchResult === "object" && !Array.isArray(matchResult)) {
+      const sets = (matchResult as Record<string, unknown>).sets;
+      if (Array.isArray(sets) && sets.length > 0) return true;
+      const status = String((matchResult as Record<string, unknown>).status || "").trim();
+      if (status || (matchResult as Record<string, unknown>).submittedAt || (matchResult as Record<string, unknown>).confirmedAt) {
+        return true;
+      }
+    }
+  }
+
+  const topLevelStatus = String(game.resultLifecycleState ?? game.resultStatus ?? "").trim();
+  return Boolean(topLevelStatus || game.resultId || game.lastResultAt);
 }
 
 function shouldKeepGameActiveForResultEntry(game: PadelGameRecord): boolean {
@@ -339,6 +318,7 @@ export function BookingsContainer({
   loadingGameRecords = false,
   gameRecordsError = null,
   resolveGameForBooking,
+  resolveDisplayGameForBooking,
   resolveTournamentForBooking,
   onOpenTournamentDetails,
 }: BookingsContainerProps) {
@@ -362,7 +342,7 @@ export function BookingsContainer({
   const filteredActive = activeTab === "all"
     ? sortedActive
     : sortedActive.filter((book) => {
-        return getBookingCategory(getBookingCategoryName(book)) === activeTab;
+        return resolveCabinetBookingCategory(book) === activeTab;
       });
   const gamesTabEnabled = activeTab === "games" && typeof renderGameCard === "function";
 
@@ -372,16 +352,18 @@ export function BookingsContainer({
     }
   }, [gamesTabEnabled, isGamesHistoryOpen]);
 
+  const displayGameResolver = resolveDisplayGameForBooking ?? resolveGameForBooking;
+
   const gamesActiveBookings = useMemo(() => {
     return sortedActive.filter((book) => {
-      return getBookingCategory(getBookingCategoryName(book)) === "games";
+      return resolveCabinetBookingCategory(book) === "games";
     });
   }, [sortedActive]);
 
   const gamesHistoryBookings = useMemo(() => {
     const source = historyBookings?.content || [];
     return source.filter((book) => {
-      return getBookingCategory(getBookingCategoryName(book)) === "games";
+      return resolveCabinetBookingCategory(book) === "games";
     });
   }, [historyBookings?.content]);
   const activeGameRecords = useMemo(
@@ -394,22 +376,22 @@ export function BookingsContainer({
   );
 
   const linkedGamesInGamesBookings = useMemo(
-    () => collectLinkedGameIds(gamesActiveBookings, resolveGameForBooking),
-    [gamesActiveBookings, resolveGameForBooking],
+    () => collectLinkedGameIds(gamesActiveBookings, displayGameResolver),
+    [displayGameResolver, gamesActiveBookings],
   );
   const filteredGamesHistoryBookings = useMemo(() => {
     return gamesHistoryBookings.filter((booking) => {
       const matchesTab = gamesHistoryType === "cancelled" ? booking.isCancelled === true : booking.isCancelled === false;
       if (!matchesTab) return false;
-      const linkedGame = resolveGameForBooking?.(booking) ?? null;
+      const linkedGame = displayGameResolver?.(booking) ?? null;
       if (!linkedGame) return true;
       if (linkedGamesInGamesBookings.has(linkedGame.id)) return false;
       return !isUpcomingGameRecord(getGameWithBookingSchedule(linkedGame, booking));
     });
-  }, [gamesHistoryBookings, gamesHistoryType, linkedGamesInGamesBookings, resolveGameForBooking]);
+  }, [displayGameResolver, gamesHistoryBookings, gamesHistoryType, linkedGamesInGamesBookings]);
   const linkedGamesInAllActiveBookings = useMemo(
-    () => collectLinkedGameIds(sortedActive, resolveGameForBooking),
-    [sortedActive, resolveGameForBooking],
+    () => collectLinkedGameIds(sortedActive, displayGameResolver),
+    [displayGameResolver, sortedActive],
   );
 
   const standaloneGamesForGamesTab = useMemo(
@@ -421,8 +403,8 @@ export function BookingsContainer({
     [activeGameRecords, linkedGamesInAllActiveBookings],
   );
   const linkedGamesInFilteredGamesHistoryBookings = useMemo(
-    () => collectLinkedGameIds(filteredGamesHistoryBookings, resolveGameForBooking),
-    [filteredGamesHistoryBookings, resolveGameForBooking],
+    () => collectLinkedGameIds(filteredGamesHistoryBookings, displayGameResolver),
+    [displayGameResolver, filteredGamesHistoryBookings],
   );
   const standaloneGamesForGamesHistory = useMemo(
     () =>
@@ -439,8 +421,8 @@ export function BookingsContainer({
   const historyDisabled = historyLoading || (gamesTabEnabled ? !hasGamesHistory : !hasAnyHistory);
 
   const gamesActiveItems = useMemo(
-    () => buildGamesAwareItems(gamesActiveBookings, standaloneGamesForGamesTab, resolveGameForBooking),
-    [gamesActiveBookings, resolveGameForBooking, standaloneGamesForGamesTab],
+    () => buildGamesAwareItems(gamesActiveBookings, standaloneGamesForGamesTab, displayGameResolver),
+    [displayGameResolver, gamesActiveBookings, standaloneGamesForGamesTab],
   );
 
   const gamesHistoryItems = useMemo(
@@ -448,14 +430,14 @@ export function BookingsContainer({
       buildGamesAwareItems(
         filteredGamesHistoryBookings,
         standaloneGamesForGamesHistory,
-        resolveGameForBooking,
+        displayGameResolver,
         "desc",
       ),
-    [filteredGamesHistoryBookings, resolveGameForBooking, standaloneGamesForGamesHistory],
+    [displayGameResolver, filteredGamesHistoryBookings, standaloneGamesForGamesHistory],
   );
   const mixedAllActiveItems = useMemo(
-    () => buildGamesAwareItems(filteredActive, standaloneGamesForAllTab, resolveGameForBooking),
-    [filteredActive, resolveGameForBooking, standaloneGamesForAllTab],
+    () => buildGamesAwareItems(filteredActive, standaloneGamesForAllTab, displayGameResolver),
+    [displayGameResolver, filteredActive, standaloneGamesForAllTab],
   );
   const visibleGamesActiveItems = useMemo(
     () => (
@@ -523,7 +505,7 @@ export function BookingsContainer({
   };
 
   const renderBookingByCategory = (booking: Booking, key: string, active: boolean) => {
-    const category = getBookingCategory(getBookingCategoryName(booking));
+    const category = resolveCabinetBookingCategory(booking);
 
     if (category === "tournaments") {
       return (
@@ -545,7 +527,9 @@ export function BookingsContainer({
         active={active}
         loadBookings={active ? loadBookings : undefined}
         showCreateTeamGame={
-          active && category === "games" && !(hasTeamGameForBooking?.(booking) ?? false)
+          active
+          && isExerciseConvertibleToGameFromBooking(booking)
+          && !(hasTeamGameForBooking?.(booking) ?? false)
         }
         onCreateTeamGame={onCreateTeamGame}
       />

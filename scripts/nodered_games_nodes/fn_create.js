@@ -267,8 +267,8 @@ const buildResultRosterSnapshot = ({
     const normalized = normalizeSnapshotMemberInput(value, options.fallbackSource, options.fallbackStatus);
     if (!normalized) return null;
     const identityKeys = uniq([
-      normalized.phoneNorm ? `phone:${normalized.phoneNorm}` : null,
       normalized.clientId ? `id:${normalized.clientId}` : null,
+      normalized.phoneNorm ? `phone:${normalized.phoneNorm}` : null,
       normalized.nameKey ? `name:${normalized.nameKey}` : null,
     ]);
     let memberKey = toStr(normalized.explicitMemberKey);
@@ -276,10 +276,10 @@ const buildResultRosterSnapshot = ({
       memberKey = identityKeys.map((key) => memberKeyMap.get(key)).find(Boolean) || null;
     }
     if (!memberKey) {
-      if (normalized.phoneNorm) {
-        memberKey = `phone:${normalized.phoneNorm}`;
-      } else if (normalized.clientId) {
+      if (normalized.clientId) {
         memberKey = `id:${sanitizeMemberKeyPart(normalized.clientId) || normalized.clientId}`;
+      } else if (normalized.phoneNorm) {
+        memberKey = `phone:${normalized.phoneNorm}`;
       } else if (normalized.nameKey) {
         memberKey = `name:${sanitizeMemberKeyPart(normalized.nameKey) || "player"}`;
       } else {
@@ -419,7 +419,8 @@ const buildResultRosterSnapshot = ({
       : (typeof bookingSeed?.waitlistEnabled === "boolean" ? bookingSeed.waitlistEnabled : true),
   };
   return {
-    version: 1,
+    version: 3,
+    schemaVersion: 3,
     canonical: true,
     source: toStr(source) || "games_create",
     capturedAt,
@@ -435,6 +436,7 @@ const buildResultRosterSnapshot = ({
     bookingContext,
     booking: bookingContext,
     allowedPhoneNorms: uniq(allPlayers.map((member) => member?.phoneNorm).filter(Boolean)),
+    allowedClientIds: uniq(allPlayers.map((member) => member?.clientId).filter(Boolean)),
   };
 };
 const dedupeByKey = (items) => {

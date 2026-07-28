@@ -1,0 +1,40 @@
+export type CommunityRankingTypeId = "overall" | "dynamics" | "games" | "tournaments";
+
+export interface CommunityRankingRowModel {
+  rank: number;
+  id: string | null;
+  phone: string | null;
+  name: string;
+  avatar: string | null;
+  role: string;
+  currentLevel: number;
+  matchesPlayed: number;
+  matchesWon: number;
+  matchesLost: number;
+  setsWon: number;
+  setsLost: number;
+  gamesWon: number;
+  gamesLost: number;
+  gamesDiff: number;
+  ratingDeltaSum: number;
+  lastRatingDelta: number | null;
+  lastRatingChangedAt: string | null;
+  gamesRawScore: number;
+  gamesReliabilityFactor: number;
+  gamesScore: number;
+  gamesNormalized: number;
+  activityScore: number;
+  visitsAttended: number;
+  tournamentsPlayed: number;
+  tournamentMatchesWon: number;
+  tournamentPointsScored: number;
+  tournamentPointsDiff: number;
+  bestPlace: number | null;
+  averagePlace: number | null;
+  tournamentRawScore: number;
+  tournamentReliabilityFactor: number;
+  tournamentScore: number;
+  tournamentNormalized: number;
+  overallScore: number;
+  lastActivityAt: string | null;
+}

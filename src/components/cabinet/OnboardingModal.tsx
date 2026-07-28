@@ -8,6 +8,7 @@ import {
   getCustomFieldValue,
   getLetterGrade,
 } from "../../utils/customFields";
+import { resolvePreferredLkAssetUrl } from "../../utils/lkAssetBaseUrls";
 import { identifyAnalyticsUser, trackAnalyticsEvent, trackClientError } from "../../utils/analytics";
 import { resolveHashActionTarget, retriggerHashAction } from "../../utils/hashActions";
 
@@ -35,7 +36,8 @@ const ONBOARDING_IMAGE_BASE =
   (import.meta.env.VITE_ONBOARDING_IMAGE_BASE as string | undefined)?.replace(/\/$/, "")
   || "https://padlhub.su/lk/assets";
 
-const onboardingImage = (num: number) => `${ONBOARDING_IMAGE_BASE}/${num}.webp`;
+const onboardingImage = (num: number) =>
+  resolvePreferredLkAssetUrl(`${ONBOARDING_IMAGE_BASE}/${num}.webp`) ?? `${ONBOARDING_IMAGE_BASE}/${num}.webp`;
 
 const BASE_QUESTION: Question = {
   id: "q1_1",

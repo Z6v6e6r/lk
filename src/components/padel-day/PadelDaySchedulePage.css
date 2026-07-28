@@ -1,0 +1,284 @@
+.padel-day-page {
+  width: min(100%, 920px);
+  margin: 0 auto;
+  padding: 20px 14px 40px;
+  color: var(--text, #161616);
+  font-family: var(--ui-font, Arial, sans-serif);
+}
+
+.padel-day-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.padel-day-header h1,
+.padel-day-modal h2 {
+  margin: 4px 0 8px;
+  font-size: clamp(25px, 5vw, 38px);
+  line-height: 1.05;
+}
+
+.padel-day-event-date { display: block; font-size: .85em; }
+
+.padel-day-header p,
+.padel-day-card p,
+.padel-day-modal p {
+  margin: 0;
+  color: var(--text-secondary, #6d6d74);
+  line-height: 1.4;
+}
+
+.padel-day-benefits {
+  display: grid;
+  gap: 3px;
+  margin: 6px 0 0;
+  padding: 0;
+  color: var(--text-secondary, #6d6d74);
+  font-size: 14px;
+  line-height: 1.4;
+  list-style: none;
+}
+
+.padel-day-benefits li::before { content: "• "; }
+
+.padel-day-eyebrow {
+  color: var(--purple, #6c3cff) !important;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.padel-day-back,
+.padel-day-modal-close {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 27px;
+}
+
+.padel-day-own {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid #bca9ff;
+  border-radius: 16px;
+  background: var(--purple-light, #f2efff);
+}
+
+.padel-day-own a { color: var(--purple, #6c3cff); font-weight: 800; }
+
+.padel-day-filters {
+  display: grid;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+
+.padel-day-filters h2 {
+  margin: 0 0 9px;
+  font-size: 14px;
+}
+
+.padel-day-filter-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+
+.padel-day-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  overflow: visible;
+  padding: 1px;
+}
+
+.padel-day-chips button {
+  flex: 0 1 auto;
+  min-height: 40px;
+  border: 1px solid var(--border, #dedee6);
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.padel-day-chips button.is-active {
+  border-color: var(--purple, #6c3cff);
+  background: var(--purple, #6c3cff);
+  color: #fff;
+}
+
+.padel-day-chips button:disabled { cursor: default; opacity: .32; }
+.padel-day-chips--time button { min-width: 66px; }
+.padel-day-chip-remove { margin-left: 6px; font-size: 16px; font-weight: 500; line-height: 0; vertical-align: -1px; }
+
+.padel-day-list { display: grid; gap: 10px; }
+
+.padel-day-card {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 15px;
+  border: 1px solid var(--border, #dedee6);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 6px 24px rgba(22, 22, 22, .05);
+}
+
+.padel-day-card.is-mine { border-color: var(--purple, #6c3cff); }
+.padel-day-card-time { padding-right: 6px; font-size: 17px; font-weight: 900; line-height: 1.05; white-space: nowrap; }
+.padel-day-card-time span { display: block; }
+.padel-day-card h3 { margin: 0 0 5px; font-size: 17px; }
+.padel-day-card p { font-size: 13px; }
+.padel-day-card-actions { display: flex; align-items: center; gap: 14px; }
+.padel-day-card-actions > span { color: var(--purple, #6c3cff); font-size: 12px; font-weight: 800; white-space: nowrap; }
+
+.padel-day-station-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text-secondary, #6d6d74);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 2px;
+}
+
+.padel-day-card-actions > button,
+.padel-day-purchase {
+  min-height: 42px;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 16px;
+  background: var(--purple, #6c3cff);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.padel-day-card-actions > button:disabled { cursor: default; opacity: .45; }
+.padel-day-state { padding: 30px 14px; color: var(--text-secondary, #6d6d74); text-align: center; }
+
+.padel-day-message {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #eef9ef;
+  color: #176b2c;
+}
+
+.padel-day-message--error { background: #fff0f0; color: #9d2525; }
+
+.padel-day-waitlist-callout,
+.padel-day-subscription-promo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 24px;
+  padding: 20px;
+  border-radius: 18px;
+}
+
+.padel-day-waitlist-callout { background: #17131f; color: #fff; }
+.padel-day-waitlist-callout h2,
+.padel-day-subscription-promo h2 { margin: 0 0 6px; font-size: 20px; }
+.padel-day-waitlist-callout p,
+.padel-day-subscription-promo p { margin: 0; line-height: 1.4; }
+.padel-day-waitlist-callout p { color: rgba(255, 255, 255, .78); }
+.padel-day-waitlist-callout > button {
+  flex: 0 0 auto;
+  min-height: 42px;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 16px;
+  background: #fff;
+  color: #17131f;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+}
+.padel-day-subscription-promo { border: 1px solid #d8ccff; background: #f2efff; }
+.padel-day-subscription-promo-button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; min-height: 42px; padding: 10px 16px; border-radius: 12px; background: var(--purple, #6c3cff); color: #fff; font-size: 13px; font-weight: 800; text-decoration: none; }
+
+.padel-day-modal-backdrop {
+  position: fixed;
+  z-index: 2147482000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(18, 16, 24, .55);
+}
+
+.padel-day-modal {
+  position: relative;
+  width: min(100%, 480px);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  border-radius: 20px;
+  padding: 24px;
+  background: #fff;
+}
+
+.padel-day-modal-close { position: absolute; top: 12px; right: 14px; }
+.padel-day-auth { margin-top: 18px; }
+.padel-day-auth .auth-wrapper {
+  min-height: 0;
+  padding: 12px 0;
+  background: transparent;
+  justify-content: flex-start;
+}
+.padel-day-purchase { width: 100%; margin-top: 20px; }
+.padel-day-station-address { margin-top: 12px !important; }
+.padel-day-station-actions { display: grid; gap: 10px; margin-top: 24px; }
+.padel-day-station-actions > a:not(.padel-day-purchase) { color: var(--purple, #6c3cff); font-weight: 800; }
+.padel-day-station-actions .padel-day-purchase { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; margin-top: 6px; text-decoration: none; }
+.padel-day-waitlist-form { display: grid; gap: 12px; margin-top: 20px; }
+.padel-day-waitlist-form > label:not(.padel-day-consent) { display: grid; gap: 6px; color: var(--text, #161616); font-size: 13px; font-weight: 800; }
+.padel-day-waitlist-form input:not([type="checkbox"]) { min-height: 42px; box-sizing: border-box; border: 1px solid var(--border, #dedee6); border-radius: 10px; padding: 9px 11px; font: inherit; }
+.padel-day-consent { display: flex; align-items: flex-start; gap: 9px; color: var(--text-secondary, #6d6d74); font-size: 12px; line-height: 1.35; }
+.padel-day-consent input { margin: 2px 0 0; }
+.padel-day-consent a,
+.padel-day-privacy-link { color: var(--purple, #6c3cff); text-decoration: underline; text-underline-offset: 2px; }
+.padel-day-privacy-link { justify-self: center; font-size: 12px; line-height: 1.35; }
+.padel-day-waitlist-error { margin: 0 !important; color: #9d2525 !important; font-size: 13px; }
+
+@media (max-width: 640px) {
+  .padel-day-page { padding-inline: 10px; }
+  .padel-day-chips--time button { flex: 1 0 calc(20% - 7px); min-width: 0; padding-inline: 8px; }
+  .padel-day-card { grid-template-columns: 1fr auto; column-gap: 10px; row-gap: 4px; padding-block: 12px; }
+  .padel-day-card-time { grid-column: 1 / -1; padding-right: 0; }
+  .padel-day-card-time span { display: inline; }
+  .padel-day-card-time span + span::before { content: "–"; }
+  .padel-day-card-main { display: contents; }
+  .padel-day-card h3 { grid-column: 1; grid-row: 2; margin-bottom: 0; }
+  .padel-day-station-link,
+  .padel-day-card-main p { grid-column: 1; grid-row: 3; }
+  .padel-day-card-actions {
+    grid-column: 2;
+    grid-row: 2 / 4;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: start;
+    gap: 4px;
+  }
+  .padel-day-card-actions > span { align-self: end; }
+  .padel-day-waitlist-callout,
+  .padel-day-subscription-promo { display: grid; gap: 14px; }
+  .padel-day-waitlist-callout > button,
+  .padel-day-subscription-promo-button { width: 100%; box-sizing: border-box; }
+}

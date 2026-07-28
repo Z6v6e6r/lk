@@ -14,6 +14,7 @@ let badgeRevealTapCount = 0;
 let badgeRevealResetTimer: number | null = null;
 let isBadgeVisible = false;
 let isRevealListenerMounted = false;
+let domReadyListenerAttached = false;
 
 function trimString(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -161,6 +162,9 @@ function ensureBadge(): HTMLDivElement | null {
   badge.style.boxShadow = "0 1px 3px rgba(0, 0, 0, 0.08)";
   badge.style.backdropFilter = "blur(6px)";
   badge.style.setProperty("-webkit-backdrop-filter", "blur(6px)");
+  if (!document.body) {
+    return null;
+  }
   document.body.appendChild(badge);
   return badge;
 }
@@ -184,4 +188,13 @@ export function mountDevReleaseBadge(options: DevReleaseBadgeOptions) {
   updateBadge();
   mountBadgeRevealListener();
   window.setTimeout(updateBadge, BADGE_REFRESH_DELAY_MS);
+
+  if (!document.body && !domReadyListenerAttached) {
+    const handleDomReady = () => {
+      domReadyListenerAttached = false;
+      updateBadge();
+    };
+    document.addEventListener("DOMContentLoaded", handleDomReady, { once: true });
+    domReadyListenerAttached = true;
+  }
 }

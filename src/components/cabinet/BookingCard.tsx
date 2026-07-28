@@ -1,8 +1,8 @@
 import { useState } from "react";
 import type { Booking } from "../../utils/apiClient";
-import { apiCancelBooking } from "../../utils/apiClient";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
 import { addBookingToCalendar } from "../../utils/calendarEvent";
+import { BookingCancellationDialog } from "./BookingCancellationDialog";
 
 interface BookingProps {
   booking: Booking;
@@ -42,8 +42,7 @@ export function BookingCard({
   showCreateTeamGame = false,
   onCreateTeamGame,
 }: BookingProps) {
-  const [cancelState, setCancelState] = useState<"idle" | "confirm" | "done">("idle");
-  const [cancelOk, setCancelOk] = useState(false);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
 
   const dateStr = booking.exercise?.timeFrom;
   const date = dateStr ? formatDate(dateStr) : null;
@@ -64,13 +63,6 @@ export function BookingCard({
     ? "https://yandex.ru/maps/213/moscow/?ll=37.523554%2C55.867424&mode=routes&rtext=~55.867046%2C37.523758&rtt=auto&ruri=~ymapsbm1%3A%2F%2Forg%3Foid%3D190285749872"
     : "https://yandex.ru/maps/?text=" + encodeURIComponent(studioAddr);
   const canAddToCalendar = Boolean(booking.exercise?.timeFrom && booking.exercise?.timeTo);
-
-  const handleCancel = async () => {
-    const res = await apiCancelBooking(booking.id);
-    const ok = res.status !== null && res.status >= 200 && res.status < 300;
-    setCancelOk(ok);
-    setCancelState("done");
-  };
 
   return (
     <div className="booking-card-new">
@@ -122,25 +114,10 @@ export function BookingCard({
         </div>
       )}
 
-      {canCancel && cancelState === "idle" && (
+      {canCancel && (
         <div className="booking-cancel-row">
-          <button className="btn-cancel danger" onClick={() => setCancelState("confirm")}>
+          <button className="btn-cancel danger" onClick={() => setCancelDialogOpen(true)}>
             Отменить запись
-          </button>
-        </div>
-      )}
-
-      {cancelState === "confirm" && (
-        <div className="booking-cancel-row">
-          <button className="btn-cancel outline" onClick={() => setCancelState("idle")}>Нет</button>
-          <button className="btn-cancel danger" onClick={handleCancel}>Да, отменить</button>
-        </div>
-      )}
-
-      {cancelState === "done" && (
-        <div className="booking-cancel-row">
-          <button className="btn-cancel primary" onClick={() => { if (loadBookings) loadBookings(); }}>
-            {cancelOk ? "Запись отменена, продолжить" : "Ошибка — закрыть"}
           </button>
         </div>
       )}
@@ -148,6 +125,15 @@ export function BookingCard({
       {active && !canCancel && (
         <div className="booking-status-text">Отмена возможна только за 24 часа</div>
       )}
+
+      <BookingCancellationDialog
+        bookingId={booking.id}
+        isOpen={cancelDialogOpen}
+        onClose={() => setCancelDialogOpen(false)}
+        onSuccessClose={() => {
+          loadBookings?.();
+        }}
+      />
     </div>
   );
 }

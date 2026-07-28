@@ -16,10 +16,19 @@ interface ProfileEditFormProps {
   onSaveSuccess: () => void;
   showVerifyLevel?: boolean;
   onVerifyLevel?: () => void;
+  onForceRefresh?: () => void;
+  isRefreshingApp?: boolean;
 }
 
 export const ProfileEditForm: React.FC<ProfileEditFormProps> = ({
-  isOpen, onClose, initialData, onSaveSuccess, showVerifyLevel = false, onVerifyLevel,
+  isOpen,
+  onClose,
+  initialData,
+  onSaveSuccess,
+  showVerifyLevel = false,
+  onVerifyLevel,
+  onForceRefresh,
+  isRefreshingApp = false,
 }) => {
   const [formData, setFormData] = useState({
     email: initialData.email || "",
@@ -121,6 +130,19 @@ export const ProfileEditForm: React.FC<ProfileEditFormProps> = ({
               disabled={saving}
             >
               Верифицировать уровень
+            </button>
+          </div>
+        )}
+
+        {onForceRefresh && (
+          <div className="form-verify-level">
+            <button
+              type="button"
+              className="onboarding-btn onboarding-btn--secondary"
+              onClick={onForceRefresh}
+              disabled={saving || isRefreshingApp}
+            >
+              {isRefreshingApp ? "Обновляем приложение..." : "Обновить приложение"}
             </button>
           </div>
         )}

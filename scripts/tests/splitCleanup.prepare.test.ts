@@ -1,0 +1,214 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+
+function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
+  const source = fs.readFileSync(file, "utf8");
+  return new Function("msg", source)(msg);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function asTaskList(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is Record<string, unknown> => Boolean(asRecord(item)));
+}
+
+function buildSplitGame(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "game-1",
+    status: "ACTIVE",
+    settings: { payMode: "split" },
+    booking: {
+      date: "2026-06-02",
+      timeFrom: "18:00",
+      timeTo: "20:00",
+    },
+    participants: [{ id: "p-1", name: "Player 1", phone: "79990000001" }],
+    waitlist: [],
+    metadata: {
+      splitPayment: {
+        shareCount: 4,
+        payments: [{ status: "CANCELLED", cancelReason: "PLAYER_LEFT" }],
+      },
+    },
+    ...overrides,
+  };
+}
+
+test("force cleanup ignores game when cancel intent is not explicitly allowed", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_prepare.js", {
+    payload: [buildSplitGame()],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-06-03T12:00:00+03:00"),
+      nowIso: "2026-06-03T09:00:00.000Z",
+      force: true,
+      gameId: "game-1",
+      dryRun: false,
+      limit: 10,
+      allowForceGameCancel: false,
+    },
+  }) as unknown[];
+
+  assert.equal(out[0], null);
+  const response = asRecord(out[1]);
+  assert.ok(response);
+  assert.equal(response.statusCode, 200);
+  const payload = asRecord(response.payload);
+  assert.ok(payload);
+  assert.deepEqual(payload.items, []);
+});
+
+test("force cleanup creates FORCED task only with explicit cancel intent", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_prepare.js", {
+    payload: [buildSplitGame()],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-06-03T12:00:00+03:00"),
+      nowIso: "2026-06-03T09:00:00.000Z",
+      force: true,
+      gameId: "game-1",
+      dryRun: false,
+      limit: 10,
+      allowForceGameCancel: true,
+      intent: "cancel_game",
+    },
+  }) as unknown[];
+
+  const prepared = asRecord(out[0]);
+  assert.ok(prepared);
+  const tasks = asTaskList(prepared.payload);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].gameId, "game-1");
+  assert.equal(tasks[0].mode, "GAME_CLEANUP");
+  assert.equal(tasks[0].reason, "FORCED");
+});
+
+test("force cleanup carries explicit preferred refund method into cleanup task", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_prepare.js", {
+    payload: [buildSplitGame()],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-06-03T12:00:00+03:00"),
+      nowIso: "2026-06-03T09:00:00.000Z",
+      force: true,
+      gameId: "game-1",
+      dryRun: false,
+      limit: 10,
+      allowForceGameCancel: true,
+      intent: "cancel_game",
+      preferredRefundMethod: "DEPOSIT",
+    },
+  }) as unknown[];
+
+  const prepared = asRecord(out[0]);
+  assert.ok(prepared);
+  const tasks = asTaskList(prepared.payload);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].preferredRefundMethod, "DEPOSIT");
+});
+
+test("cleanup query and prepare preserve the selected cancellation action", () => {
+  const queryOut = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_query.js", {
+    req: {
+      query: {},
+    },
+    payload: {
+      gameId: "game-1",
+      force: true,
+      intent: "cancel_game",
+      cancellationActionId: "subscription",
+    },
+  }) as unknown[];
+
+  const queryMsg = asRecord(queryOut[0]);
+  assert.ok(queryMsg);
+  const cleanupRequest = asRecord(queryMsg._splitCleanupRequest);
+  assert.ok(cleanupRequest);
+  assert.equal(cleanupRequest.cancellationActionId, "subscription");
+
+  queryMsg.payload = [buildSplitGame()];
+  const prepareOut = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_split_cleanup_prepare.js",
+    queryMsg,
+  ) as unknown[];
+
+  const prepared = asRecord(prepareOut[0]);
+  assert.ok(prepared);
+  const tasks = asTaskList(prepared.payload);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].cancellationActionId, "subscription");
+});
+
+test("participant timeout marks tasks without Viva targets as blocked", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_prepare.js", {
+    payload: [
+      buildSplitGame({
+        metadata: {
+          splitPayment: {
+            shareCount: 4,
+            payments: [
+              {
+                status: "PAYMENT_PENDING",
+                clientId: "p-1",
+                phone: "79990000001",
+                amountMinor: 150000,
+                createdAt: "2026-06-03T08:30:00.000Z",
+              },
+            ],
+          },
+        },
+      }),
+    ],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-06-03T12:00:00+03:00"),
+      nowIso: "2026-06-03T09:00:00.000Z",
+      force: false,
+      dryRun: false,
+      limit: 10,
+    },
+  }) as unknown[];
+
+  const prepared = asRecord(out[0]);
+  assert.ok(prepared);
+  const tasks = asTaskList(prepared.payload);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].mode, "PARTICIPANT_TIMEOUT");
+  assert.deepEqual(tasks[0].bookingIds, []);
+  assert.equal(tasks[0].blockLocalMutation, true);
+  assert.equal(tasks[0].blockReason, "missing_viva_targets");
+});
+
+test("assembly timeout cancels only empty roster split games", () => {
+  const gameWithRoster = buildSplitGame({
+    id: "game-with-roster",
+    participants: [{ id: "p-1", name: "Player 1", phone: "79990000001" }],
+    waitlist: [],
+  });
+  const emptyGame = buildSplitGame({
+    id: "game-empty",
+    participants: [],
+    waitlist: [],
+  });
+
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_prepare.js", {
+    payload: [gameWithRoster, emptyGame],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-06-03T12:00:00+03:00"),
+      nowIso: "2026-06-03T09:00:00.000Z",
+      force: false,
+      dryRun: false,
+      limit: 10,
+    },
+  }) as unknown[];
+
+  const prepared = asRecord(out[0]);
+  assert.ok(prepared);
+  const tasks = asTaskList(prepared.payload);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].gameId, "game-empty");
+  assert.equal(tasks[0].reason, "ASSEMBLY_TIMEOUT");
+  assert.equal(tasks[0].blockLocalMutation, true);
+  assert.equal(tasks[0].blockReason, "missing_viva_targets");
+});

@@ -106,7 +106,7 @@ export function Advertisement({ profile }: AdvertisementProps) {
   return (
     <div className="section section--ads">
       <div className="section-header">
-        <span className="section-title">Акции</span>
+        <span className="section-title">Спецпредложение</span>
       </div>
       <div className="adv-section">
         <a
@@ -114,7 +114,7 @@ export function Advertisement({ profile }: AdvertisementProps) {
           target={openInNewTab ? "_blank" : undefined}
           rel={openInNewTab ? "noopener noreferrer" : undefined}
         >
-          <img src={advertisement.imgUrl} alt={advertisement.title || "Акция"} className="adv-img" />
+          <img src={advertisement.imgUrl} alt={advertisement.title || "Спецпредложение"} className="adv-img" />
         </a>
       </div>
     </div>

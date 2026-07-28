@@ -230,12 +230,12 @@ function workspaceFixture() {
   return { root, workspace, sourcePath, ...built };
 }
 
-test('tracked create source matches the exact live target preimage', () => {
+test('tracked create source is a pinned candidate after the exact live target preimage', () => {
   assert.equal(
     sha256(createSource()),
-    '08c2b5ac7d2f5ee111efab6edb0c19c3eb663fd16e5bfa5798a1f717cc82312f',
+    'd44a8fd52c3b9818f3dc180bacc9feb3cc9dfd09bb98aa6df55d1b89e059f092',
   );
-  assert.equal(
+  assert.notEqual(
     CREATE_UPSERT_CONTRACT.target.sourceSha256,
     CREATE_UPSERT_CONTRACT.target.preimageSha256,
   );

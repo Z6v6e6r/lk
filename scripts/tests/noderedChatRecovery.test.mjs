@@ -62,12 +62,20 @@ function fixtureFlow() {
 }
 
 function fixtureContract(flow, raw) {
-  return {
+  const contract = {
     ...structuredClone(CHAT_CONTRACT),
     wholeFlowSha256: sha256(raw),
     nodeCount: flow.length,
     httpRouteCount: CHAT_CONTRACT.routes.length,
   };
+  for (const mapping of contract.functions) {
+    const fixtureSource = String(
+      flow.find((node) => node.id === mapping.id)?.func ?? '',
+    );
+    mapping.preimageSha256 = sha256(fixtureSource);
+    mapping.sourceSha256 = sha256(fixtureSource);
+  }
+  return contract;
 }
 
 function createVerifiedWorkspace() {
@@ -101,25 +109,26 @@ function createVerifiedWorkspace() {
   return { root, workspace, flow, raw, contract, sourcePath };
 }
 
-test('all 11 tracked chat sources match current live preimages', () => {
+test('all 11 tracked chat sources match pinned source contracts', () => {
   const sources = sourcesByFile();
   assert.equal(CHAT_CONTRACT.functions.length, 11);
   for (const mapping of CHAT_CONTRACT.functions) {
     const actual = sha256(sources[mapping.file]);
-    assert.equal(actual, mapping.preimageSha256, mapping.file);
     assert.equal(actual, mapping.sourceSha256, mapping.file);
   }
 });
 
-test('three unapproved quarantine variants remain explicitly outside the contract', () => {
-  const holdVariants = {
+test('three promoted chat candidates remain distinct from their live preimages', () => {
+  const promotedCandidates = {
     'fn_chat_get_build_query.js': '0a6bae2353a33db70df4122cf311a726d6bb51866fd41998efbdb47758cb3ef2',
     'fn_chat_post_build_insert.js': '029583aa83efb6becc0cf52b683e58d474bd01fa3bc80d81e76af8afabea7aa7',
     'fn_chat_read_insert.js': '0ad53e135d6f41111b013c796d485a25f621fab2aaef2863aecc9081351f873f',
   };
   const byFile = new Map(CHAT_CONTRACT.functions.map((mapping) => [mapping.file, mapping]));
-  for (const [file, holdSha256] of Object.entries(holdVariants)) {
-    assert.notEqual(byFile.get(file).sourceSha256, holdSha256);
+  for (const [file, candidateSha256] of Object.entries(promotedCandidates)) {
+    const mapping = byFile.get(file);
+    assert.equal(mapping.sourceSha256, candidateSha256);
+    assert.notEqual(mapping.preimageSha256, candidateSha256);
   }
 });
 

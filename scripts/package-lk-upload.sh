@@ -12,6 +12,7 @@ Creates:
 
 The archive includes:
   - selected LK bundles from dist/
+  - fonts/*.woff2
   - server-install-lk.sh
 EOF
 }
@@ -30,17 +31,30 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dist_dir="$repo_root/dist"
+font_source_dir="$repo_root/src/fonts"
 package_dir="$dist_dir/deploy"
 staging_dir="$package_dir/staging-$channel"
 timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
 archive_name="lk-upload-$channel-$timestamp.tar.gz"
 archive_path="$package_dir/$archive_name"
+font_files=(
+  "rf-dewi-ultrabold.woff2"
+  "rf-dewi-expanded-ultrabold-italic.woff2"
+  "SourceCodePro-Medium.woff2"
+  "SourceCodePro-Regular.woff2"
+)
 
 prod_files=(
   "bundle.js"
   "games.js"
   "tournaments.js"
+  "tournament-signup.js"
+  "group-schedule.js"
+  "padel-day-schedule.js"
+  "tournament-subscription.js"
+  "tournament-subscription-referral.js"
   "onboarding.js"
+  "levels-info.js"
   "communities.js"
   "release.json"
 )
@@ -49,7 +63,13 @@ dev_files=(
   "bundle-dev.js"
   "games-dev.js"
   "tournaments-dev.js"
+  "tournament-signup-dev.js"
+  "group-schedule-dev.js"
+  "padel-day-schedule-dev.js"
+  "tournament-subscription-dev.js"
+  "tournament-subscription-referral-dev.js"
   "onboarding-dev.js"
+  "levels-info-dev.js"
   "communities-dev.js"
   "release-dev.json"
 )
@@ -87,6 +107,12 @@ for file_name in "${files[@]}"; do
   fi
 done
 
+for file_name in "${font_files[@]}"; do
+  if [[ ! -f "$font_source_dir/$file_name" ]]; then
+    missing_files+=("$font_source_dir/$file_name")
+  fi
+done
+
 if [[ ! -f "$repo_root/scripts/server-install-lk.sh" ]]; then
   missing_files+=("$repo_root/scripts/server-install-lk.sh")
 fi
@@ -103,10 +129,14 @@ fi
 node "$repo_root/scripts/assert-clean-deploy.mjs" "${manifest_files[@]}"
 
 rm -rf "$staging_dir"
-mkdir -p "$staging_dir"
+mkdir -p "$staging_dir/fonts"
 
 for file_name in "${files[@]}"; do
   cp "$dist_dir/$file_name" "$staging_dir/$file_name"
+done
+
+for file_name in "${font_files[@]}"; do
+  cp "$font_source_dir/$file_name" "$staging_dir/fonts/$file_name"
 done
 
 cp "$repo_root/scripts/server-install-lk.sh" "$staging_dir/server-install-lk.sh"

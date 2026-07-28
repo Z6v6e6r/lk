@@ -76,7 +76,7 @@ export const CHAT_CONTRACT = Object.freeze({
       outputs: 3,
       wires: [['d323b4a2bc150c16'], ['98e207fde172bf95'], ['c3ee27b1b2b17c82']],
       preimageSha256: '20ac6e7b03e2c753ac827013e2e3d777e600e10a803ae3398d19893a6c90ccaa',
-      sourceSha256: '20ac6e7b03e2c753ac827013e2e3d777e600e10a803ae3398d19893a6c90ccaa',
+      sourceSha256: '029583aa83efb6becc0cf52b683e58d474bd01fa3bc80d81e76af8afabea7aa7',
     },
     {
       id: '542d0ca0536bd35a',
@@ -103,7 +103,7 @@ export const CHAT_CONTRACT = Object.freeze({
       outputs: 3,
       wires: [['4d967af31e8055fb'], ['303126e394d52ade'], ['645c9add7065c07b']],
       preimageSha256: 'd9bdd9e3ae0255b27f2a1481e0845481842bc7fc598c5047d3ec3ba3ada37959',
-      sourceSha256: 'd9bdd9e3ae0255b27f2a1481e0845481842bc7fc598c5047d3ec3ba3ada37959',
+      sourceSha256: '0a6bae2353a33db70df4122cf311a726d6bb51866fd41998efbdb47758cb3ef2',
     },
     {
       id: '4f232b7d6aedd97d',
@@ -130,7 +130,7 @@ export const CHAT_CONTRACT = Object.freeze({
       outputs: 3,
       wires: [['a4d6699abb8c7098'], ['893bbe1232021bd7'], ['b68cc60cabac2b81']],
       preimageSha256: '16d5918109e8b719b2a4604cf0d8932b109e33121b822fe38f33712c8b69498a',
-      sourceSha256: '16d5918109e8b719b2a4604cf0d8932b109e33121b822fe38f33712c8b69498a',
+      sourceSha256: '0ad53e135d6f41111b013c796d485a25f621fab2aaef2863aecc9081351f873f',
     },
     {
       id: 'ae9b1a8c2f1d5c24',

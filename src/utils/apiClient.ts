@@ -1,4 +1,3 @@
-import { getCookie } from "./cookies";
 import {
   TENANT_KEY,
   API_BASE,
@@ -8,10 +7,29 @@ import {
   SUCCESS_URL,
   FAIL_URL,
   GAMES_MASTER_SERVICE_ID,
-  BOOKING_CANCEL_REFUND_TYPE,
   IS_DEV_RELEASE_CHANNEL,
 } from "../consts/api_config";
+import { readAuthToken } from "./authTokenStorage";
 import { trackClientError } from "./analytics";
+import type {
+  BookingCancellationAction,
+  BookingCancellationOptionsResponse,
+  BookingCancellationRefundMethod,
+  BookingCancellationVerification,
+  BookingCancellationVerificationRecord,
+} from "./bookingCancellation";
+import {
+  buildBookingCancellationPayload,
+  pickAutomaticBookingCancellationAction,
+  resolveBookingCancellationVerification,
+  resolveBookingCancellationPlan,
+} from "./bookingCancellation";
+import {
+  buildProjectUrlCandidates,
+  resolveLkApiBaseUrlCandidates,
+  resolveLkApiFallbackTimeoutMs,
+  resolvePreferredLkApiBaseUrl,
+} from "./lkApiBaseUrls";
 
 const DEFAULT_GAMES_MASTER_SERVICE_ID =
   GAMES_MASTER_SERVICE_ID || "2f4155ad-7bc0-4a15-a12c-da7fce15c37a";
@@ -21,6 +39,7 @@ const DEV_EXERCISES_CACHE_TTL_MS = 30_000;
 const DEV_GAMES_CACHE_TTL_MS = 30_000;
 const DEV_CHAT_SUMMARY_CACHE_TTL_MS = 5_000;
 const DEV_TOURNAMENT_HISTORY_CACHE_TTL_MS = 60_000;
+const PROD_TOURNAMENT_HISTORY_EMPTY_CACHE_TTL_MS = 15_000;
 const DEV_CABINET_ADVERTISING_CACHE_TTL_MS = 30_000;
 const DEV_SPLIT_PAYMENT_PROMO_CACHE_TTL_MS = 30_000;
 
@@ -175,12 +194,12 @@ export const DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG: PadelSplitPaymentPromoCon
   roomIds: [],
   roomNameIncludes: ["new"],
   shareAmounts: {
-    twoTeams: 500,
-    fourPlayers: 250,
+    twoTeams: 5000,
+    fourPlayers: 2500,
   },
-  baseShareAmount: 2000,
-  vivaDirectionId: 4485,
-  vivaExerciseTypeId: 1208,
+  baseShareAmount: 10000,
+  vivaDirectionId: 4588,
+  vivaExerciseTypeId: 1613,
 };
 export interface apiSubscription {
   id: string;
@@ -376,6 +395,60 @@ function pickNumeric(source: Record<string, unknown>, keys: string[]): number | 
   return null;
 }
 
+const RATING_GRADE_LABELS = ["D", "D+", "C", "C+", "B", "B+", "A"] as const;
+
+function mapNumericToRatingGrade(value: number): string {
+  if (value < 2) return "D";
+  if (value < 3) return "D+";
+  if (value < 3.5) return "C";
+  if (value < 4) return "C+";
+  if (value < 4.7) return "B";
+  if (value < 5.5) return "B+";
+  return "A";
+}
+
+function normalizeRatingGradeToken(value: string | null | undefined): string | null {
+  const raw = String(value || "").trim().toUpperCase();
+  if (!raw) return null;
+
+  const compact = raw.replace(/\s+/g, "");
+  if ((RATING_GRADE_LABELS as readonly string[]).includes(compact)) {
+    return compact;
+  }
+
+  const normalized = compact
+    .replace(/¹/g, "1")
+    .replace(/²/g, "2")
+    .replace(/³/g, "3")
+    .replace(/⁴/g, "4");
+  if ((RATING_GRADE_LABELS as readonly string[]).includes(normalized)) {
+    return normalized;
+  }
+
+  const tokenMatch = normalized.match(/^([A-D])([1-4])?(\+)?$/);
+  if (tokenMatch) {
+    return `${tokenMatch[1]}${tokenMatch[3] || ""}`;
+  }
+
+  return null;
+}
+
+function normalizePadelRating(
+  ratingRaw: string | null | undefined,
+  ratingNumericRaw: number | null | undefined,
+): { rating: string | null; ratingNumeric: number | null } {
+  const ratingNumeric =
+    (typeof ratingNumericRaw === "number" && Number.isFinite(ratingNumericRaw))
+      ? ratingNumericRaw
+      : toNumeric(ratingRaw);
+  const gradeToken = normalizeRatingGradeToken(ratingRaw);
+  const rating = gradeToken ?? (ratingNumeric != null ? mapNumericToRatingGrade(ratingNumeric) : null);
+  return {
+    rating,
+    ratingNumeric: ratingNumeric ?? null,
+  };
+}
+
 function toCoordinateNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -561,6 +634,8 @@ function mergeFlatObject<T extends Record<string, unknown> | null | undefined>(c
 }
 
 function buildPadelGamePlayerKey(player: PadelGamePlayer): string {
+  const memberKey = String(player.memberKey || "").trim();
+  if (memberKey) return `member:${memberKey}`;
   const id = (player.id || "").trim();
   if (id) return `id:${id}`;
   const phone = normalizePhoneForChat(player.phone ?? "");
@@ -579,6 +654,7 @@ function mergePadelGamePlayers(current: PadelGamePlayer[] = [], incoming: PadelG
       return;
     }
     merged.set(key, {
+      memberKey: player.memberKey ?? existing.memberKey ?? null,
       id: player.id ?? existing.id,
       name: player.name || existing.name,
       phone: player.phone ?? existing.phone,
@@ -593,14 +669,59 @@ function mergePadelGamePlayers(current: PadelGamePlayer[] = [], incoming: PadelG
   return Array.from(merged.values());
 }
 
+function filterWaitlistPlayersNotInParticipants(
+  participants: PadelGamePlayer[] = [],
+  waitlist: PadelGamePlayer[] = [],
+): PadelGamePlayer[] {
+  const participantKeys = new Set(
+    participants
+      .map((player) => buildPadelGamePlayerKey(player))
+      .filter(Boolean),
+  );
+
+  return waitlist.filter((player) => {
+    const key = buildPadelGamePlayerKey(player);
+    return !key || !participantKeys.has(key);
+  });
+}
+
 function mergePadelGameRecord(current: PadelGameRecord | undefined, incoming: PadelGameRecord): PadelGameRecord {
   if (!current) return incoming;
+
+  const hasIncomingParticipants = Array.isArray(incoming.participants);
+  const hasIncomingWaitlist = Array.isArray(incoming.waitlist);
+  const nextParticipants = hasIncomingParticipants
+    ? mergePadelGamePlayers([], incoming.participants)
+    : mergePadelGamePlayers(current.participants, incoming.participants);
+  const nextWaitlist = filterWaitlistPlayersNotInParticipants(
+    nextParticipants,
+    hasIncomingWaitlist
+      ? mergePadelGamePlayers([], incoming.waitlist)
+      : mergePadelGamePlayers(current.waitlist, incoming.waitlist),
+  );
+  const currentMetadata = isRecord(current.metadata) ? current.metadata : null;
+  const incomingMetadata = isRecord(incoming.metadata) ? incoming.metadata : null;
+  const mergedMetadata = currentMetadata && incomingMetadata
+    ? {
+        ...currentMetadata,
+        ...incomingMetadata,
+        ...(
+          !isRecord(incomingMetadata.matchResult) && isRecord(currentMetadata.matchResult)
+            ? { matchResult: currentMetadata.matchResult }
+            : {}
+        ),
+      }
+    : (incoming.metadata ?? current.metadata ?? null);
 
   return {
     ...current,
     ...incoming,
     inviteUrl: incoming.inviteUrl ?? current.inviteUrl,
     status: incoming.status ?? current.status,
+    resultStatus: incoming.resultStatus ?? current.resultStatus ?? null,
+    resultLifecycleState: incoming.resultLifecycleState ?? current.resultLifecycleState ?? null,
+    resultId: incoming.resultId ?? current.resultId ?? null,
+    lastResultAt: incoming.lastResultAt ?? current.lastResultAt ?? null,
     participantPhones: uniqueIds([...(current.participantPhones ?? []), ...(incoming.participantPhones ?? [])]),
     waitlistPhones: uniqueIds([...(current.waitlistPhones ?? []), ...(incoming.waitlistPhones ?? [])]),
     allRelatedPhones: uniqueIds([...(current.allRelatedPhones ?? []), ...(incoming.allRelatedPhones ?? [])]),
@@ -609,13 +730,157 @@ function mergePadelGameRecord(current: PadelGameRecord | undefined, incoming: Pa
     updatedAt: incoming.updatedAt ?? current.updatedAt,
     organizer: mergeFlatObject(current.organizer, incoming.organizer),
     settings: mergeFlatObject(current.settings, incoming.settings),
-    participants: mergePadelGamePlayers(current.participants, incoming.participants),
-    waitlist: mergePadelGamePlayers(current.waitlist, incoming.waitlist),
+    participants: nextParticipants,
+    waitlist: nextWaitlist,
     invite: mergeFlatObject(current.invite, incoming.invite),
-    metadata: mergeFlatObject(current.metadata, incoming.metadata),
+    metadata: mergedMetadata,
     booking: mergeFlatObject(current.booking, incoming.booking),
     payment: mergeFlatObject(current.payment, incoming.payment),
   };
+}
+
+const INACTIVE_GAME_MEMBERSHIP_STATUS_MARKERS = [
+  "CANCEL",
+  "DECLIN",
+  "FAIL",
+  "ERROR",
+  "EXPIRE",
+  "REFUND",
+  "REJECT",
+  "VOID",
+  "CLOSE",
+  "ARCHIVE",
+  "LEFT",
+  "REMOV",
+] as const;
+
+function isInactiveGameMembershipStatus(value: unknown): boolean {
+  const status = String(value || "").trim().toUpperCase();
+  if (!status) return false;
+  return INACTIVE_GAME_MEMBERSHIP_STATUS_MARKERS.some((marker) => status.includes(marker));
+}
+
+function normalizeGameIdentityId(value: unknown): string | null {
+  const normalized = toTrimmedString(value);
+  return normalized ? normalized.toLowerCase() : null;
+}
+
+function normalizeGameIdentityPhone(value: unknown): string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  return normalizePhoneForChat(String(value));
+}
+
+function gamePlayerMatchesIdentity(
+  player: PadelGamePlayer | null | undefined,
+  clientId: string | null,
+  phone: string | null,
+): boolean {
+  if (!player || isInactiveGameMembershipStatus(player.status)) return false;
+  const playerId = normalizeGameIdentityId(player.id);
+  if (clientId && playerId && clientId === playerId) return true;
+  const playerPhone = normalizeGameIdentityPhone(player.phone);
+  return Boolean(phone && playerPhone && phone === playerPhone);
+}
+
+function recordListContainsIdentity(
+  value: unknown,
+  identity: string | null,
+  normalizer: (item: unknown) => string | null,
+): boolean {
+  if (!identity) return false;
+  return extractStringList(value).some((item) => normalizer(item) === identity);
+}
+
+function splitPaymentItemMatchesIdentity(
+  item: Record<string, unknown>,
+  clientId: string | null,
+  phone: string | null,
+): boolean {
+  if (isInactiveGameMembershipStatus(item.status)) return false;
+
+  const itemIds = [
+    item.clientId,
+    item.playerId,
+    item.userId,
+    item.id,
+  ]
+    .map((value) => normalizeGameIdentityId(value))
+    .filter((value): value is string => Boolean(value));
+  if (clientId && itemIds.includes(clientId)) return true;
+
+  const itemPhones = [
+    item.clientPhoneNorm,
+    item.phoneNorm,
+    item.clientPhone,
+    item.phone,
+    item.phoneNumber,
+    item.mobile,
+  ]
+    .map((value) => normalizeGameIdentityPhone(value))
+    .filter((value): value is string => Boolean(value));
+  return Boolean(phone && itemPhones.includes(phone));
+}
+
+function getGameSplitPaymentMetadata(game: PadelGameRecord): Record<string, unknown> | null {
+  const metadata = isRecord(game.metadata) ? game.metadata : null;
+  return metadata && isRecord(metadata.splitPayment) ? metadata.splitPayment : null;
+}
+
+function hasActiveSplitPaymentIdentity(
+  game: PadelGameRecord,
+  clientId: string | null,
+  phone: string | null,
+): boolean {
+  const splitPayment = getGameSplitPaymentMetadata(game);
+  const payments = Array.isArray(splitPayment?.payments)
+    ? splitPayment.payments.filter((item) => isRecord(item))
+    : [];
+  return payments.some((item) => splitPaymentItemMatchesIdentity(item, clientId, phone));
+}
+
+export function isPadelGameRecordRelevantToIdentity(
+  game: PadelGameRecord,
+  phoneRaw: string | null,
+  clientIdRaw: string | null,
+): boolean {
+  const phone = normalizeGameIdentityPhone(phoneRaw);
+  const clientId = normalizeGameIdentityId(clientIdRaw);
+  if (!phone && !clientId) return true;
+
+  const organizerId = normalizeGameIdentityId(game.organizer?.id);
+  if (clientId && organizerId && clientId === organizerId) return true;
+  const organizerPhone = normalizeGameIdentityPhone(game.organizer?.phone);
+  if (phone && organizerPhone && phone === organizerPhone) return true;
+  const metadata = isRecord(game.metadata) ? game.metadata : null;
+  const metadataOrganizerId = normalizeGameIdentityId(metadata?.organizerId);
+  if (clientId && metadataOrganizerId && clientId === metadataOrganizerId) return true;
+  const metadataOrganizerPhone = normalizeGameIdentityPhone(
+    metadata?.organizerPhoneNorm ?? metadata?.organizerPhone,
+  );
+  if (phone && metadataOrganizerPhone && phone === metadataOrganizerPhone) return true;
+
+  if ((game.participants ?? []).some((player) => gamePlayerMatchesIdentity(player, clientId, phone))) {
+    return true;
+  }
+  if ((game.waitlist ?? []).some((player) => gamePlayerMatchesIdentity(player, clientId, phone))) {
+    return true;
+  }
+
+  if (recordListContainsIdentity(game.participantPhones, phone, normalizeGameIdentityPhone)) return true;
+  if (recordListContainsIdentity(game.waitlistPhones, phone, normalizeGameIdentityPhone)) return true;
+  if (recordListContainsIdentity(game.invitedPhones, phone, normalizeGameIdentityPhone)) return true;
+
+  const gameAny = game as unknown as Record<string, unknown>;
+  if (recordListContainsIdentity(gameAny.participantIds, clientId, normalizeGameIdentityId)) return true;
+  if (recordListContainsIdentity(gameAny.waitlistIds, clientId, normalizeGameIdentityId)) return true;
+  if (recordListContainsIdentity(gameAny.invitedIds, clientId, normalizeGameIdentityId)) return true;
+
+  if (hasActiveSplitPaymentIdentity(game, clientId, phone)) return true;
+
+  if (recordListContainsIdentity(game.allRelatedPhones, phone, normalizeGameIdentityPhone)) return true;
+  if (recordListContainsIdentity(gameAny.allRelatedClientIds, clientId, normalizeGameIdentityId)) return true;
+
+  return false;
 }
 
 function extractPriceAmount(payload: unknown): number | null {
@@ -2340,6 +2605,12 @@ export interface Exercise {
   room: Room;
   trainers: Trainer[];
   cancellationDeadline?: string | null;
+  status?: string | null;
+  state?: string | null;
+  isCancelled?: boolean;
+  cancelled?: boolean;
+  canceled?: boolean;
+  archived?: boolean;
 }
 
 export {
@@ -2363,7 +2634,7 @@ export interface ExerciseBooking {
   isCancelled?: boolean;
   client?: ExerciseBookingClient;
   rating?: string;
-  ratingSource?: "level" | "phone";
+  ratingSource?: string | null;
 }
 
 export interface TournamentHistoryParticipant {
@@ -2396,6 +2667,7 @@ export interface TournamentHistoryRecord {
   summary: Record<string, unknown> | null;
   totals: AmericanoResultsResponse["totals"] | null;
   playerLogs: AmericanoResultsResponse["playerLogs"] | null;
+  startRatingChanges?: TournamentStartRatingChange[];
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -2404,9 +2676,36 @@ export type TournamentTypeKey =
   | "americano"
   | "americano_padelhub"
   | "americano_classic"
+  | "americano_flex"
   | "paired_americano"
   | "mexicano"
   | "paired_mexicano";
+
+export interface TournamentStartRatingChange {
+  eventId: string;
+  eventType: "TOURNAMENT_START_RATING_CHANGED";
+  occurredAt: string;
+  source: {
+    domain: "TOURNAMENT";
+    tournamentId: string;
+    reason: "MANUAL_OVERRIDE" | "MINIMUM_ASSIGNED";
+  };
+  player: {
+    participantId: string;
+    clientId: string | null;
+    name: string;
+    phone: string | null;
+  };
+  change: {
+    before: number | null;
+    after: number;
+  };
+  changedBy: {
+    id: string;
+    name: string | null;
+    phone: string | null;
+  };
+}
 
 export interface AmericanoTournamentPayload {
   tournamentId: string;
@@ -2416,6 +2715,7 @@ export interface AmericanoTournamentPayload {
     id: string | null;
     phone: string | null;
     tenantKey: string;
+    name?: string | null;
   };
   tournamentType: TournamentTypeKey;
   targetScore: number;
@@ -2428,6 +2728,7 @@ export interface AmericanoTournamentPayload {
     photo: string | null;
     name: string;
   }>;
+  startRatingChanges?: TournamentStartRatingChange[];
   rounds?: Array<{
     id: string;
     index: number;
@@ -2468,13 +2769,22 @@ export interface AmericanoTournamentPayload {
   }>;
 }
 
+export type TournamentBroadcastAction = "start" | "stop";
+
+export interface TournamentBroadcastState {
+  tournamentId: string;
+  stationId: string | null;
+  active: boolean;
+  updatedAt?: string | null;
+}
+
 export interface AmericanoResultsPayload {
   tournamentId: string;
   results: Array<{
     roundId: string;
     matchId: string;
-    score1?: number;
-    score2?: number;
+    score1?: number | null;
+    score2?: number | null;
     court?: string;
     courtIndex?: number;
     pair1?: string[];
@@ -2484,6 +2794,7 @@ export interface AmericanoResultsPayload {
 }
 
 export interface AmericanoResultsResponse {
+  params?: Record<string, unknown>;
   totals?: Record<
     string,
     {
@@ -2522,6 +2833,7 @@ export interface AmericanoResultsResponse {
 }
 
 export interface PadelGamePlayer {
+  memberKey?: string | null;
   id: string | null;
   name: string;
   phone: string | null;
@@ -2537,6 +2849,7 @@ export interface PadelGameRecordPayload {
   paymentRef?: string | null;
   tenantKey?: string | null;
   status?: "PAYMENT_PENDING" | "PAID" | "CANCELLED";
+  archived?: boolean;
   organizer: {
     id: string | null;
     name: string | null;
@@ -2560,6 +2873,8 @@ export interface PadelGameRecordPayload {
     durationMinutes: number;
     slotId: string | null;
     bookingIds?: string[];
+    exerciseId?: string | null;
+    vivaExerciseId?: string | null;
   };
   payment: {
     amount: number | null;
@@ -2592,6 +2907,11 @@ export interface PadelGameRecord {
   id: string;
   inviteUrl: string | null;
   status: string | null;
+  resultStatus?: string | null;
+  resultLifecycleState?: string | null;
+  resultId?: string | null;
+  lastResultAt?: string | null;
+  archived?: boolean | null;
   participantPhones?: string[];
   waitlistPhones?: string[];
   allRelatedPhones?: string[];
@@ -2641,6 +2961,133 @@ export interface PadelGameRecord {
     paymentUrl: string | null;
     paid: boolean | null;
   } | null;
+}
+
+export type PadelGameResultLifecycleStatus =
+  | "NO_RESULT"
+  | "PENDING_REVIEW"
+  | "CONFIRMED"
+  | "DISPUTED"
+  | "CORRECTION_PENDING"
+  | "NO_RESULT_EXPIRED";
+
+export interface PadelGameResultSetPayload {
+  left: number;
+  right: number;
+}
+
+export interface PadelGameResultDraftSetPayload {
+  left: number | string;
+  right: number | string;
+}
+
+export interface PadelGameResultParticipantRefPayload {
+  memberKey?: string | null;
+  id?: string | null;
+  phone?: string | null;
+  phoneNorm?: string | null;
+  name?: string | null;
+}
+
+export interface PadelGameResultSetPairingPayload {
+  setIndex: number;
+  teamSlots: Array<PadelGameResultParticipantRefPayload | null>;
+}
+
+export interface PadelGameResultActorPayload {
+  id?: string | null;
+  phone?: string | null;
+  phoneNorm?: string | null;
+  name?: string | null;
+}
+
+export interface PadelGameResultSessionSnapshotPayload {
+  capturedAt?: string | null;
+  capturedAtTs?: number | null;
+  playerPool?: Record<string, unknown>[];
+  initialTeamSlots?: Array<PadelGameResultParticipantRefPayload | null>;
+  allowedPhoneNorms?: string[];
+  booking?: Record<string, unknown> | null;
+}
+
+export interface PadelGameResultSessionRequestPayload {
+  phone?: string | null;
+  senderPhone?: string | null;
+  playerPhone?: string | null;
+  sessionId?: string | null;
+  revision?: number | null;
+  expectedRevision?: number | null;
+  draftSets?: PadelGameResultDraftSetPayload[];
+  draftPairings?: PadelGameResultSetPairingPayload[];
+  attachments?: unknown[];
+  photos?: unknown[];
+  actor?: PadelGameResultActorPayload | null;
+  submittedBy?: PadelGameResultActorPayload | null;
+}
+
+export interface PadelGameResultSessionResponse {
+  gameId?: string | null;
+  sessionId?: string | null;
+  status?: string | null;
+  revision?: number | null;
+  isRestored?: boolean;
+  rosterSnapshot?: PadelGameResultSessionSnapshotPayload | Record<string, unknown> | null;
+  draftSets?: PadelGameResultDraftSetPayload[];
+  draftPairings?: PadelGameResultSetPairingPayload[];
+  attachments?: unknown[];
+  openedBy?: PadelGameResultActorPayload | Record<string, unknown> | null;
+  lastTouchedBy?: PadelGameResultActorPayload | Record<string, unknown> | null;
+  lastTouchedAt?: string | null;
+  raw?: unknown;
+}
+
+export interface PadelGameResultSubmitPayload {
+  idempotencyKey?: string | null;
+  phone?: string | null;
+  senderPhone?: string | null;
+  playerPhone?: string | null;
+  scoreA?: number;
+  scoreB?: number;
+  sets?: PadelGameResultSetPayload[];
+  setPairings?: PadelGameResultSetPairingPayload[];
+  photos?: unknown[];
+  attachments?: unknown[];
+  submittedBy?: PadelGameResultActorPayload | null;
+  sessionId?: string | null;
+  sessionRevision?: number | null;
+  rosterSnapshot?: Record<string, unknown> | null;
+  resultSession?: {
+    sessionId?: string | null;
+    sessionRevision?: number | null;
+    revision?: number | null;
+    rosterSnapshot?: Record<string, unknown> | null;
+  } | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PadelGameResultActionPayload {
+  phone?: string | null;
+  playerPhone?: string | null;
+  confirmerPhone?: string | null;
+  disputerPhone?: string | null;
+  actor?: PadelGameResultActorPayload | null;
+  reason?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PadelGameResultActionResponse {
+  gameId?: string | null;
+  resultId?: string | null;
+  status?: PadelGameResultLifecycleStatus | string | null;
+  latestResult?: Record<string, unknown> | null;
+  result?: Record<string, unknown> | null;
+  matchResult?: Record<string, unknown> | null;
+  game?: PadelGameRecord | null;
+  canSubmit?: boolean;
+  canConfirm?: boolean;
+  canDispute?: boolean;
+  disputeDeadlineAt?: string | null;
+  raw?: unknown;
 }
 
 export interface PadelPlayerCandidate {
@@ -2852,6 +3299,11 @@ export interface Booking {
   spot: number;
   paymentType: string;
   isCancelled: boolean;
+  cancelled?: boolean;
+  cancellationDate?: string | null;
+  cancelledAt?: string | null;
+  bookingStatus?: string | null;
+  status?: string | null;
   cancellationReason?: string | null;
   visitConfirmed: boolean;
   exercise?: Exercise;
@@ -2931,11 +3383,213 @@ export interface PaymentUrl {
   paid?: boolean | null;
 }
 
+export interface TournamentSubscriptionStatus {
+  counterKey: string | null;
+  inventoryId: string | null;
+  unlimited: boolean;
+  planType: string | null;
+  campaignKey: string | null;
+  productId: string | null;
+  productName: string | null;
+  totalLimit: number;
+  paidCount: number;
+  reservedCount: number;
+  takenCount: number;
+  remainingCount: number;
+  canPurchase: boolean;
+  priceMinor: number | null;
+  price: number | null;
+  updatedAt: string | null;
+}
+
+export interface TournamentSubscriptionPurchaseParams {
+  clientPhone: string;
+  clientId?: string | null;
+  counterKey?: string | null;
+  planType?: string | null;
+  campaignKey?: string | null;
+  productId?: string | null;
+  paymentRef?: string | null;
+  successUrl?: string | null;
+  failUrl?: string | null;
+  baseRedirectUrl?: string | null;
+  trainerQrCode?: string | null;
+}
+
+export interface TournamentSubscriptionPurchaseResult {
+  counterKey: string | null;
+  inventoryId: string | null;
+  unlimited: boolean;
+  planType: string | null;
+  campaignKey: string | null;
+  paymentRef: string | null;
+  transactionId: string | null;
+  paymentUrl: string | null;
+  paymentExpiresAt: string | null;
+  productId: string | null;
+  productName: string | null;
+  toPayMinor: number | null;
+  toPay: number | null;
+  remainingBefore: number | null;
+  remainingAfterReservation: number | null;
+  status: string | null;
+}
+
+export interface TournamentSubscriptionConfirmResult {
+  counterKey: string | null;
+  inventoryId: string | null;
+  planType: string | null;
+  campaignKey: string | null;
+  paymentRef: string | null;
+  transactionId: string | null;
+  status: string | null;
+  paid: boolean;
+  failed: boolean;
+  paymentUrl: string | null;
+  expiresAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface TournamentSubscriptionStatusParams {
+  counterKey?: string | null;
+  planType?: string | null;
+  campaignKey?: string | null;
+}
+
+export interface TournamentSubscriptionConfirmParams {
+  counterKey?: string | null;
+  planType?: string | null;
+  campaignKey?: string | null;
+}
+
+export interface ReferralSubscriptionOwnerStatus {
+  inviteId?: string | null;
+  ownerPhone: string | null;
+  ownerSubscriptionId: string | null;
+  ownerCycleKey: string | null;
+  flowType: "share" | "renewal" | null;
+  subscriptionName: string | null;
+  expirationDate: string | null;
+  windowStartsAt: string | null;
+  windowEndsAt: string | null;
+  windowActive: boolean;
+  countdownVisible: boolean;
+  renewalPurchased?: boolean;
+}
+
+export interface ReferralSubscriptionPlanStatus {
+  planKey: string | null;
+  flowType?: "share" | "renewal" | null;
+  ownerCycleKey?: string | null;
+  productId: string | null;
+  productName: string | null;
+  totalLimit: number;
+  paidCount: number;
+  reservedCount: number;
+  takenCount: number;
+  remainingCount: number;
+  canPurchase: boolean;
+  priceMinor: number | null;
+  price: number | null;
+  updatedAt: string | null;
+  paymentStatus?: string | null;
+  subscriptionStatus?: string | null;
+  activePaymentRef?: string | null;
+  activePaymentUrl?: string | null;
+  activePaymentExpiresAt?: string | null;
+  issuedSubscriptionId?: string | null;
+  issuedAt?: string | null;
+}
+
+export interface ReferralSubscriptionStatusPayload {
+  owner: ReferralSubscriptionOwnerStatus | null;
+  plans: ReferralSubscriptionPlanStatus[];
+}
+
+export interface ReferralSubscriptionStatusParams {
+  inviteId?: string | null;
+  ownerPhone?: string | null;
+  ownerSubscriptionId?: string | null;
+  mode?: "share" | "renewal" | null;
+}
+
+export interface ReferralSubscriptionInviteParams {
+  ownerPhone: string;
+  ownerSubscriptionId: string;
+  mode?: "share" | "renewal" | null;
+}
+
+export interface ReferralSubscriptionInviteResult {
+  inviteId: string | null;
+  ownerSubscriptionId: string | null;
+  flowType?: "share" | "renewal" | null;
+}
+
+export interface ReferralSubscriptionPurchaseParams extends ReferralSubscriptionStatusParams {
+  clientPhone: string;
+  clientId?: string | null;
+  planKey: string;
+  paymentRef?: string | null;
+  successUrl?: string | null;
+  failUrl?: string | null;
+  baseRedirectUrl?: string | null;
+}
+
+export interface ReferralSubscriptionPurchaseResult {
+  inviteId?: string | null;
+  ownerPhone: string | null;
+  ownerSubscriptionId: string | null;
+  ownerCycleKey?: string | null;
+  flowType?: "share" | "renewal" | null;
+  planKey: string | null;
+  paymentRef: string | null;
+  transactionId: string | null;
+  paymentUrl: string | null;
+  paymentExpiresAt: string | null;
+  productId: string | null;
+  productName: string | null;
+  toPayMinor: number | null;
+  toPay: number | null;
+  remainingBefore: number | null;
+  remainingAfterReservation: number | null;
+  paymentStatus?: string | null;
+  subscriptionStatus?: string | null;
+  reusedExistingPayment?: boolean;
+  status: string | null;
+}
+
+export interface ReferralSubscriptionConfirmParams extends ReferralSubscriptionStatusParams {
+  planKey?: string | null;
+}
+
+export interface ReferralSubscriptionConfirmResult {
+  inviteId?: string | null;
+  ownerPhone: string | null;
+  ownerSubscriptionId: string | null;
+  ownerCycleKey?: string | null;
+  flowType?: "share" | "renewal" | null;
+  planKey: string | null;
+  paymentRef: string | null;
+  transactionId: string | null;
+  status: string | null;
+  paymentStatus?: string | null;
+  subscriptionStatus?: string | null;
+  paid: boolean;
+  failed: boolean;
+  paymentUrl: string | null;
+  expiresAt: string | null;
+  updatedAt: string | null;
+  issuedSubscriptionId?: string | null;
+  issuedAt?: string | null;
+  issuedExpirationDate?: string | null;
+}
+
 export interface PadelSplitPaymentParams {
   date: string;
   fromTime: string;
   toTime: string;
   activeTo?: string | null;
+  exerciseId?: string | null;
   studioId: string;
   roomId: string;
   studioName?: string | null;
@@ -2943,17 +3597,31 @@ export interface PadelSplitPaymentParams {
   clientId?: string | null;
   clientPhone?: string | null;
   paymentRef?: string | null;
+  paymentMode?: "subscription" | "one_time" | null;
+  clientSubscriptionId?: string | null;
+  subscriptionId?: string | null;
   baseRedirectUrl?: string | null;
   successUrl?: string | null;
   failUrl?: string | null;
   shareCount: 2 | 4;
   shareAmount: number;
+  totalAmount?: number | null;
+  oneTimeBaseAmount?: number | null;
   shareAmountIncludesDuration?: boolean;
   durationMinutes?: number | null;
   maxClientsCount?: number | null;
   spot?: number | null;
   vivaDirectionId?: number | null;
   vivaExerciseTypeId?: number | null;
+  paymentDeadlineMinutes?: number | null;
+}
+
+export interface PadelSplitPaymentModeOption {
+  id: string;
+  label: string | null;
+  productId: string | null;
+  productName: string | null;
+  type: string | null;
 }
 
 export interface PadelSplitPaymentResult {
@@ -2973,7 +3641,86 @@ export interface PadelSplitPaymentResult {
   productId: string | null;
   transactionId: string | null;
   spot: number | null;
+  directionId: number | null;
+  exerciseTypeId: number | null;
+  totalAmount: number | null;
+  oneTimeBaseAmount: number | null;
+  assembleDeadlineAt: string | null;
+  selectedPaymentMode: string | null;
+  paymentModes: PadelSplitPaymentModeOption[];
+  subscriptionProductId: string | null;
+  subscriptionProductName: string | null;
+  oneTimeProductId: string | null;
+  oneTimeProductName: string | null;
   raw?: unknown;
+}
+
+export interface PadelSplitParticipantCancelResult {
+  ok: boolean;
+  gameId: string | null;
+  playerId?: string | null;
+  playerPhone?: string | null;
+  playerName?: string | null;
+  reason?: string | null;
+  bookingIds: string[];
+  bookingSuccess: string[];
+  bookingFailed: string[];
+  withVivaErrors: boolean;
+  trace?: unknown[];
+  finishedAt?: string | null;
+}
+
+export type PadelSelfRemovalCancellationStatus =
+  | "cancelled_in_viva"
+  | "already_absent_in_viva"
+  | "needs_verification";
+
+export interface PadelSelfRemovalCancellationTraceEntry {
+  at: string;
+  step: string;
+  bookingId: string;
+  statusCode?: number | null;
+  actionId?: string | null;
+  response?: unknown;
+}
+
+export interface PadelSelfRemovalCancellationSummary {
+  ok: boolean;
+  bookingIds: string[];
+  bookingSuccess: string[];
+  bookingFailed: string[];
+  alreadyAbsent: string[];
+  withVivaErrors: boolean;
+  statusByBookingId: Record<string, PadelSelfRemovalCancellationStatus>;
+  trace: PadelSelfRemovalCancellationTraceEntry[];
+  finishedAt: string;
+}
+
+export interface PadelGameOrganizerCleanupItem {
+  gameId: string | null;
+  reason?: string | null;
+  dryRun?: boolean;
+  cancelledInLk?: boolean;
+  withVivaErrors?: boolean;
+  exerciseId?: string | null;
+  exerciseCancelled?: boolean;
+  bookingIds?: string[];
+  bookingSuccessCount?: number;
+  bookingFailedCount?: number;
+  refundMessage?: string | null;
+}
+
+export type PadelGameOrganizerCleanupIntent = "cancel_game" | "participant_timeout";
+
+export interface PadelGameOrganizerCleanupResult {
+  ok: boolean;
+  dryRun: boolean;
+  processed: number;
+  cancelled: number;
+  withVivaErrors: number;
+  byReason?: Record<string, number>;
+  now?: string | null;
+  items: PadelGameOrganizerCleanupItem[];
 }
 
 export interface PromoDiscountSummary {
@@ -3002,6 +3749,8 @@ export interface RequestOptions extends RequestInit {
   signal?: AbortSignal;
   cacheTtlMs?: number;
   dedupe?: boolean;
+  fallbackBaseUrls?: string[];
+  fallbackTimeoutMs?: number;
 }
 
 type CachedApiResult = ApiResult<unknown>;
@@ -3062,7 +3811,7 @@ function resolveRequestCacheConfig(url: string, options: RequestOptions) {
 
   const baseUrl = options.baseUrl ?? API_BASE;
   const fullUrl = url.startsWith("http") ? url : `${baseUrl}${url}`;
-  const authToken = options.auth ? getCookie(`${TENANT_KEY}AuthToken`) : null;
+  const authToken = options.auth ? readAuthToken() : null;
   const authScope = options.auth ? (authToken ? authToken.slice(-24) : "missing-auth") : "public";
 
   return {
@@ -3079,15 +3828,18 @@ async function rawRequest<T>(
   const {
     auth = false,
     baseUrl = API_BASE,
+    retries: _retries,
     cacheTtlMs: _cacheTtlMs,
     dedupe: _dedupe,
+    fallbackBaseUrls: _fallbackBaseUrls,
+    fallbackTimeoutMs: _fallbackTimeoutMs,
     ...fetchOptions
   } = options;
 
   const headers = new Headers(fetchOptions.headers ?? {});
 
   if (auth) {
-    const token = getCookie(`${TENANT_KEY}AuthToken`);
+    const token = readAuthToken();
     if (!token) {
       return {
         data: null,
@@ -3151,7 +3903,7 @@ async function rawRequest<T>(
 
   if (!response.ok) {
     const message =
-      (isRecord(payload) && (pickString(payload, ["message", "error_description"]) || null)) ||
+      (isRecord(payload) && (pickString(payload, ["message", "error", "error_description"]) || null)) ||
       `Ошибка запроса (${status})`;
 
     trackClientError(
@@ -3184,7 +3936,6 @@ export async function request<T>(
   url: string,
   options: RequestOptions = {},
 ): Promise<ApiResult<T>> {
-  const { retries = 0 } = options;
   const cacheConfig = resolveRequestCacheConfig(url, options);
 
   if (cacheConfig) {
@@ -3201,9 +3952,7 @@ export async function request<T>(
   }
 
   const executeRequest = async (): Promise<ApiResult<T>> => {
-    const result = retries > 0
-      ? await withRetry(() => rawRequest<T>(url, options), { retries })
-      : await rawRequest<T>(url, options);
+    const result = await executeRequestWithResolvedBaseUrls<T>(url, options);
 
     if (cacheConfig && result.status === 304) {
       const cached = readDevRequestCache(cacheConfig.key, { allowExpired: true });
@@ -3235,6 +3984,9 @@ export async function request<T>(
 }
 
 export function getServ2Origin() {
+  const preferredOrigin = resolvePreferredLkApiBaseUrl(SERV2, SERV2_FALLBACK);
+  if (preferredOrigin) return preferredOrigin;
+
   try {
     return new URL(SERV2).origin;
   } catch {
@@ -3246,16 +3998,267 @@ function shouldFallback(result: ApiResult<unknown>) {
   return result.status == null || result.status >= 500;
 }
 
-async function requestWithFallback<T>(
-  primaryUrl: string,
-  fallbackUrl: string | undefined,
+function isSuccessfulRequestResult(result: ApiResult<unknown>) {
+  return !result.error;
+}
+
+function getRequestMethod(options: RequestOptions) {
+  return String(options.method || "GET").toUpperCase();
+}
+
+function dedupeBaseUrls(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  values.forEach((value) => {
+    const normalized = typeof value === "string" ? value.trim().replace(/\/+$/, "") : "";
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    result.push(normalized);
+  });
+
+  return result;
+}
+
+function dedupeAbsoluteUrls(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  values.forEach((value) => {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    result.push(normalized);
+  });
+
+  return result;
+}
+
+function isServ2LkReadRequest(url: string, options: RequestOptions) {
+  if (url.startsWith("http")) return false;
+  if (!url.startsWith("/lk/")) return false;
+  return getRequestMethod(options) === "GET";
+}
+
+function createDelayedFallbackRequest<T>(
+  delayMs: number,
+  run: () => Promise<T>,
+) {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let cancelled = false;
+  const promise = new Promise<T>((resolve) => {
+    timeoutId = setTimeout(() => {
+      if (cancelled) return;
+      void run().then(resolve);
+    }, delayMs);
+  });
+
+  return {
+    promise,
+    cancel() {
+      cancelled = true;
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+    },
+  };
+}
+
+function resolveRequestBaseUrlCandidates(url: string, options: RequestOptions) {
+  const baseUrl = options.baseUrl ?? API_BASE;
+  const explicitFallbackBaseUrls = Array.isArray(options.fallbackBaseUrls)
+    ? options.fallbackBaseUrls
+    : [];
+
+  if (explicitFallbackBaseUrls.length > 0) {
+    return dedupeBaseUrls([baseUrl, ...explicitFallbackBaseUrls]);
+  }
+
+  if (!isServ2LkReadRequest(url, options)) {
+    return [baseUrl];
+  }
+
+  const serv2Candidates = resolveLkApiBaseUrlCandidates(SERV2, SERV2_FALLBACK);
+  if (serv2Candidates.length <= 1) {
+    return dedupeBaseUrls([baseUrl, ...serv2Candidates]);
+  }
+
+  return serv2Candidates;
+}
+
+async function requestWithBaseUrlFallback<T>(
+  url: string,
+  options: RequestOptions,
+  baseUrls: string[],
+): Promise<ApiResult<T>> {
+  const [primaryBaseUrl, ...fallbackBaseUrls] = baseUrls;
+  const { retries = 0 } = options;
+  const runRequest = (baseUrl: string) => {
+    const requestOptions = { ...options, baseUrl };
+    return retries > 0
+      ? withRetry(() => rawRequest<T>(url, requestOptions), { retries })
+      : rawRequest<T>(url, requestOptions);
+  };
+
+  const primaryRequest = runRequest(primaryBaseUrl).then((result) => ({
+    result,
+    source: "primary" as const,
+  }));
+
+  if (fallbackBaseUrls.length === 0) {
+    return (await primaryRequest).result;
+  }
+
+  const fallbackDelayMs = resolveLkApiFallbackTimeoutMs(options.fallbackTimeoutMs);
+  const fallbackRequest = createDelayedFallbackRequest(fallbackDelayMs, async () => {
+    let firstFallback: ApiResult<T> | null = null;
+
+    for (const fallbackBaseUrl of fallbackBaseUrls) {
+      const result = await runRequest(fallbackBaseUrl);
+      if (!firstFallback) {
+        firstFallback = result;
+      }
+      if (isSuccessfulRequestResult(result)) {
+        return {
+          result,
+          source: "fallback" as const,
+        };
+      }
+      if (!shouldFallback(result)) {
+        break;
+      }
+    }
+
+    return {
+      result: firstFallback ?? {
+        data: null,
+        error: { status: null, message: "Ошибка сети" },
+        status: null,
+      },
+      source: "fallback" as const,
+    };
+  });
+
+  const firstResult = await Promise.race([primaryRequest, fallbackRequest.promise]);
+  if (firstResult.source === "primary" && !shouldFallback(firstResult.result)) {
+    fallbackRequest.cancel();
+    return firstResult.result;
+  }
+  if (firstResult.source === "fallback" && isSuccessfulRequestResult(firstResult.result)) {
+    return firstResult.result;
+  }
+
+  const secondResult = firstResult.source === "primary"
+    ? await fallbackRequest.promise
+    : await primaryRequest;
+
+  if (isSuccessfulRequestResult(secondResult.result)) {
+    return secondResult.result;
+  }
+
+  return firstResult.result;
+}
+
+async function executeRequestWithResolvedBaseUrls<T>(
+  url: string,
+  options: RequestOptions,
+): Promise<ApiResult<T>> {
+  const { retries = 0 } = options;
+  const baseUrlCandidates = resolveRequestBaseUrlCandidates(url, options);
+  if (baseUrlCandidates.length > 1) {
+    return requestWithBaseUrlFallback<T>(url, options, baseUrlCandidates);
+  }
+
+  return retries > 0
+    ? withRetry(() => rawRequest<T>(url, options), { retries })
+    : rawRequest<T>(url, options);
+}
+
+async function requestAbsoluteUrlCandidates<T>(
+  candidates: string[],
   options: RequestOptions = {},
 ): Promise<ApiResult<T>> {
-  const primary = await request<T>(primaryUrl, options);
-  if (!fallbackUrl || fallbackUrl === primaryUrl) return primary;
-  if (!shouldFallback(primary)) return primary;
-  const fallback = await request<T>(fallbackUrl, options);
-  return fallback.data ? fallback : primary;
+  const normalizedCandidates = dedupeAbsoluteUrls(candidates);
+  const [firstCandidate, ...fallbackCandidates] = normalizedCandidates;
+  if (!firstCandidate) {
+    return {
+      data: null,
+      error: { status: 400, message: "Не указан URL для запроса" },
+      status: 400,
+    };
+  }
+
+  const firstUrl = new URL(firstCandidate);
+  const samePathAcrossCandidates = fallbackCandidates.every((candidate) => {
+    try {
+      const parsed = new URL(candidate);
+      return parsed.pathname === firstUrl.pathname && parsed.search === firstUrl.search;
+    } catch {
+      return false;
+    }
+  });
+
+  if (!samePathAcrossCandidates) {
+    const primaryRequest = request<T>(firstCandidate, { ...options, baseUrl: undefined }).then((result) => ({
+      result,
+      source: "primary" as const,
+    }));
+    if (fallbackCandidates.length === 0) return (await primaryRequest).result;
+
+    const fallbackDelayMs = resolveLkApiFallbackTimeoutMs(options.fallbackTimeoutMs);
+    const fallbackRequest = createDelayedFallbackRequest(fallbackDelayMs, async () => {
+      let firstFallback: ApiResult<T> | null = null;
+      for (const candidate of fallbackCandidates) {
+        const result = await request<T>(candidate, { ...options, baseUrl: undefined });
+        if (!firstFallback) {
+          firstFallback = result;
+        }
+        if (isSuccessfulRequestResult(result)) {
+          return {
+            result,
+            source: "fallback" as const,
+          };
+        }
+        if (!shouldFallback(result)) {
+          break;
+        }
+      }
+
+      return {
+        result: firstFallback ?? {
+          data: null,
+          error: { status: null, message: "Ошибка сети" },
+          status: null,
+        },
+        source: "fallback" as const,
+      };
+    });
+
+    const firstResult = await Promise.race([primaryRequest, fallbackRequest.promise]);
+    if (firstResult.source === "primary" && !shouldFallback(firstResult.result)) {
+      fallbackRequest.cancel();
+      return firstResult.result;
+    }
+    if (firstResult.source === "fallback" && isSuccessfulRequestResult(firstResult.result)) {
+      return firstResult.result;
+    }
+
+    const secondResult = firstResult.source === "primary"
+      ? await fallbackRequest.promise
+      : await primaryRequest;
+
+    if (isSuccessfulRequestResult(secondResult.result)) {
+      return secondResult.result;
+    }
+
+    return firstResult.result;
+  }
+
+  return request<T>(`${firstUrl.pathname}${firstUrl.search}`, {
+    ...options,
+    baseUrl: firstUrl.origin,
+    fallbackBaseUrls: fallbackCandidates.map((candidate) => new URL(candidate).origin),
+  });
 }
 
 async function withRetry<T>(
@@ -3319,6 +4322,16 @@ export interface OnboardingLevelPayload {
   phone?: string | null;
   levelLetter: string;
   levelNumeric: string | number;
+  source?: string | null;
+  gameId?: string | null;
+  playerName?: string | null;
+  previousRating?: number | string | null;
+  nextRating?: number | string | null;
+  confirmedAt?: string | null;
+  changedById?: string | null;
+  changedByName?: string | null;
+  changedByPhone?: string | null;
+  eventId?: string | null;
 }
 
 export async function apiSaveOnboardingLevel(payload: OnboardingLevelPayload) {
@@ -3388,15 +4401,6 @@ export async function apiUploadProfilePhoto(file: File) {
   );
 }
 
-function buildBookingCancelPayload(): Record<string, string> {
-  const refundType = BOOKING_CANCEL_REFUND_TYPE?.trim();
-  if (!refundType || refundType.toLowerCase() === "none") {
-    return {};
-  }
-
-  return { refundType };
-}
-
 export async function apiFetchBookings(
   includeCanceled: boolean,
   options: {
@@ -3417,21 +4421,318 @@ export async function apiFetchBookings(
   });
 }
 
-export async function apiCancelBooking(bookingId: string) {
-  return request<BookingsResponse>(
-    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/bookings/${bookingId}`,
+export async function apiVerifyBookingCancellation(
+  bookingIdRaw: string,
+  options: {
+    attempts?: number;
+    delayMs?: number;
+  } = {},
+): Promise<ApiResult<BookingCancellationVerification>> {
+  const bookingId = bookingIdRaw.trim();
+  if (!bookingId) {
+    return {
+      data: null,
+      error: {
+        status: 400,
+        message: "Не указана запись для проверки отмены",
+      },
+      status: 400,
+    };
+  }
+
+  const attempts = Number.isFinite(options.attempts)
+    ? Math.max(1, Math.min(5, Math.floor(options.attempts as number)))
+    : 4;
+  const delayMs = Number.isFinite(options.delayMs)
+    ? Math.max(0, Math.min(2000, Math.floor(options.delayMs as number)))
+    : 350;
+  let lastVerification: BookingCancellationVerification | null = null;
+  let lastStatus: ApiStatus = null;
+  let lastError: ApiError | null = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const [activeResult, historyResult] = await Promise.all([
+      apiFetchBookings(false, { size: 1000 }),
+      apiFetchBookings(true, { size: 1000 }),
+    ]);
+    lastStatus = historyResult.status ?? activeResult.status;
+    lastError = historyResult.error || activeResult.error;
+    lastVerification = resolveBookingCancellationVerification(
+      bookingId,
+      (activeResult.data?.content ?? []) as BookingCancellationVerificationRecord[],
+      (historyResult.data?.content ?? []) as BookingCancellationVerificationRecord[],
+    );
+
+    if (lastVerification.state === "cancelled") {
+      return {
+        data: lastVerification,
+        error: null,
+        status: lastStatus,
+      };
+    }
+
+    if (attempt < attempts - 1 && delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs * (attempt + 1)));
+    }
+  }
+
+  const activeBooking = lastVerification?.state === "active";
+  return {
+    data: lastVerification,
+    error: {
+      status: activeBooking ? 409 : (lastError?.status ?? lastStatus ?? 409),
+      message: activeBooking
+        ? "Viva всё ещё держит запись активной. Попробуйте отменить ещё раз."
+        : "Не удалось подтвердить отмену записи в Viva. Запись оставлена в личном кабинете.",
+      raw: {
+        verification: lastVerification,
+        cause: lastError?.raw ?? null,
+      },
+    },
+    status: activeBooking ? 409 : (lastError?.status ?? lastStatus ?? 409),
+  };
+}
+
+export async function apiFetchBookingCancellationOptions(bookingId: string) {
+  return request<BookingCancellationOptionsResponse>(
+    `/end-user/api/v1/${TENANT_KEY}/bookings/${encodeURIComponent(bookingId)}/cancel`,
     {
-      method: "DELETE",
+      method: "GET",
       auth: true,
       retries: 1,
-      body: JSON.stringify(buildBookingCancelPayload()),
     },
   );
 }
 
-export async function apiFetchSubscriptions() {
+function isAlreadyCancelledBookingResponse(
+  statusCode: number | null | undefined,
+  payload: unknown,
+): boolean {
+  if (statusCode == null || ![400, 409, 422].includes(statusCode)) return false;
+  const text = JSON.stringify(payload || {}).toLowerCase();
+  return (
+    (text.includes("already") && text.includes("cancel"))
+    || text.includes("уже отмен")
+  );
+}
+
+export async function apiCancelBooking(
+  bookingId: string,
+  actionOrRefundMethod?: BookingCancellationAction | BookingCancellationRefundMethod | null,
+) {
+  const payload = typeof actionOrRefundMethod === "string"
+    ? { refundMethod: actionOrRefundMethod }
+    : actionOrRefundMethod
+      ? buildBookingCancellationPayload(actionOrRefundMethod)
+      : null;
+  return request<unknown>(`/end-user/api/v1/${TENANT_KEY}/bookings/${encodeURIComponent(bookingId)}`, {
+    method: "DELETE",
+    auth: true,
+    retries: 1,
+    ...(payload ? { body: JSON.stringify(payload) } : {}),
+  });
+}
+
+export async function apiCancelPadelSelfRemovalBookings(
+  bookingIdsRaw: string[],
+  options: {
+    preferredRefundMethod?: BookingCancellationRefundMethod | null;
+  } = {},
+) {
+  const bookingIds = Array.from(new Set(
+    bookingIdsRaw
+      .map((item) => item.trim())
+      .filter(Boolean),
+  ));
+
+  const trace: PadelSelfRemovalCancellationTraceEntry[] = [];
+  const bookingSuccess: string[] = [];
+  const bookingFailed: string[] = [];
+  const alreadyAbsent: string[] = [];
+  const statusByBookingId: Record<string, PadelSelfRemovalCancellationStatus> = {};
+
+  const pushTrace = (entry: Omit<PadelSelfRemovalCancellationTraceEntry, "at">) => {
+    trace.push({
+      at: new Date().toISOString(),
+      ...entry,
+    });
+  };
+
+  const verifyCancelled = async (
+    bookingId: string,
+    context: {
+      actionId?: string | null;
+      sourceStatusCode?: number | null;
+    } = {},
+  ) => {
+    const verification = await apiVerifyBookingCancellation(bookingId);
+    if (!verification.error && verification.data?.state === "cancelled") {
+      pushTrace({
+        step: "cancel_booking_verified",
+        bookingId,
+        statusCode: verification.status,
+        actionId: context.actionId || null,
+      });
+      return true;
+    }
+    statusByBookingId[bookingId] = "needs_verification";
+    pushTrace({
+      step: verification.data?.state === "active"
+        ? "cancel_booking_still_active"
+        : "cancel_booking_unverified",
+      bookingId,
+      statusCode: verification.status ?? context.sourceStatusCode ?? null,
+      actionId: context.actionId || null,
+      response: verification.error?.raw ?? null,
+    });
+    return false;
+  };
+
+  for (const bookingId of bookingIds) {
+    const cancellationOptionsResult = await apiFetchBookingCancellationOptions(bookingId);
+    if (cancellationOptionsResult.error || !cancellationOptionsResult.data) {
+      const mayAlreadyBeCancelled = cancellationOptionsResult.status === 404
+        || isAlreadyCancelledBookingResponse(
+        cancellationOptionsResult.status,
+        cancellationOptionsResult.error?.raw,
+      );
+      if (mayAlreadyBeCancelled && await verifyCancelled(bookingId, {
+        sourceStatusCode: cancellationOptionsResult.status,
+      })) {
+        alreadyAbsent.push(bookingId);
+        statusByBookingId[bookingId] = "already_absent_in_viva";
+        pushTrace({
+          step: "cancel_options_verified_absent",
+          bookingId,
+          statusCode: cancellationOptionsResult.status,
+          response: cancellationOptionsResult.error?.raw ?? null,
+        });
+        continue;
+      }
+
+      bookingFailed.push(bookingId);
+      pushTrace({
+        step: "cancel_options_failed",
+        bookingId,
+        statusCode: cancellationOptionsResult.status,
+        response: cancellationOptionsResult.error?.raw ?? null,
+      });
+      continue;
+    }
+
+    const plan = resolveBookingCancellationPlan(cancellationOptionsResult.data);
+    const action = pickAutomaticBookingCancellationAction(plan, options.preferredRefundMethod);
+    if (!action) {
+      bookingFailed.push(bookingId);
+      pushTrace({
+        step: "cancel_action_unsupported",
+        bookingId,
+        statusCode: cancellationOptionsResult.status,
+        response: { unsupportedReason: plan.unsupportedReason || null },
+      });
+      continue;
+    }
+
+    pushTrace({
+      step: "cancel_action_selected",
+      bookingId,
+      statusCode: cancellationOptionsResult.status,
+      actionId: action.id,
+    });
+
+    const cancelResult = await apiCancelBooking(bookingId, action);
+    if (!cancelResult.error) {
+      pushTrace({
+        step: "cancel_booking_success",
+        bookingId,
+        statusCode: cancelResult.status,
+        actionId: action.id,
+      });
+      if (!await verifyCancelled(bookingId, {
+        actionId: action.id,
+        sourceStatusCode: cancelResult.status,
+      })) {
+        bookingFailed.push(bookingId);
+        continue;
+      }
+      bookingSuccess.push(bookingId);
+      statusByBookingId[bookingId] = "cancelled_in_viva";
+      continue;
+    }
+
+    const mayAlreadyBeCancelled = cancelResult.status === 404
+      || isAlreadyCancelledBookingResponse(cancelResult.status, cancelResult.error?.raw);
+    if (mayAlreadyBeCancelled && await verifyCancelled(bookingId, {
+      actionId: action.id,
+      sourceStatusCode: cancelResult.status,
+    })) {
+      alreadyAbsent.push(bookingId);
+      statusByBookingId[bookingId] = "already_absent_in_viva";
+      pushTrace({
+        step: "cancel_booking_verified_absent",
+        bookingId,
+        statusCode: cancelResult.status,
+        actionId: action.id,
+        response: cancelResult.error?.raw ?? null,
+      });
+      continue;
+    }
+
+    bookingFailed.push(bookingId);
+    pushTrace({
+      step: "cancel_booking_failed",
+      bookingId,
+      statusCode: cancelResult.status,
+      actionId: action.id,
+      response: cancelResult.error?.raw ?? null,
+    });
+  }
+
+  const summary: PadelSelfRemovalCancellationSummary = {
+    ok: bookingFailed.length === 0,
+    bookingIds,
+    bookingSuccess,
+    bookingFailed,
+    alreadyAbsent,
+    withVivaErrors: bookingFailed.length > 0,
+    statusByBookingId,
+    trace,
+    finishedAt: new Date().toISOString(),
+  };
+
+  return {
+    data: summary,
+    error: bookingFailed.length > 0
+      ? {
+          status: 409,
+          message: "Не удалось завершить отмену всех записей Viva",
+          raw: summary,
+        }
+      : null,
+    status: bookingFailed.length > 0 ? 409 : 200,
+  } satisfies ApiResult<PadelSelfRemovalCancellationSummary>;
+}
+
+export interface SubscriptionFetchOptions {
+  includeFinished?: boolean;
+  page?: number;
+  size?: number;
+  sort?: string[];
+}
+
+export async function apiFetchSubscriptions(options: SubscriptionFetchOptions = {}) {
+  const query = new URLSearchParams();
+  if (options.includeFinished) query.set("includeFinished", "true");
+  if (typeof options.page === "number") query.set("page", String(options.page));
+  if (typeof options.size === "number") query.set("size", String(options.size));
+  (options.sort || []).forEach((sort) => {
+    const value = sort.trim();
+    if (value) query.append("sort", value);
+  });
+
+  const suffix = query.toString() ? `?${query.toString()}` : "";
   return request<SubscriptionResponse>(
-    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/subscriptions`,
+    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/subscriptions${suffix}`,
     {
       method: "GET",
       auth: true,
@@ -3473,6 +4774,63 @@ export async function apiFetchExercisesByDate(
   );
 }
 
+export async function apiFetchExerciseById(exerciseId: string) {
+  const normalizedExerciseId = exerciseId.trim();
+  if (!normalizedExerciseId) {
+    return {
+      data: null,
+      error: { status: 400, message: "Не указан exerciseId" },
+      status: 400,
+    } satisfies ApiResult<Exercise>;
+  }
+
+  return request<Exercise>(
+    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/exercises/${encodeURIComponent(normalizedExerciseId)}`,
+    {
+      method: "GET",
+      auth: true,
+      retries: 1,
+      ...(IS_DEV_RELEASE_CHANNEL
+        ? {
+            cacheTtlMs: DEV_EXERCISES_CACHE_TTL_MS,
+            dedupe: true,
+          }
+        : {
+            cache: "no-store" as RequestCache,
+          }),
+    },
+  );
+}
+
+export function resolveExerciseCancellationState(exercise: Exercise | null | undefined): boolean | null {
+  if (!exercise) return null;
+  if (exercise.isCancelled === true || exercise.cancelled === true || exercise.canceled === true) return true;
+  if (exercise.archived === true) return true;
+
+  const status = String(exercise.status ?? exercise.state ?? "").trim().toUpperCase();
+  if (status) {
+    if (
+      status.includes("CANCEL")
+      || status.includes("DELETE")
+      || status.includes("ARCHIVE")
+      || status.includes("VOID")
+    ) {
+      return true;
+    }
+    if (
+      status.includes("ACTIVE")
+      || status.includes("OPEN")
+      || status.includes("AVAILABLE")
+      || status.includes("SCHEDULE")
+      || status.includes("PUBLISHED")
+    ) {
+      return false;
+    }
+  }
+
+  return exercise.id && exercise.timeFrom && exercise.timeTo ? false : null;
+}
+
 function extractExercisesResponse(data: unknown): Exercise[] {
   if (Array.isArray(data)) {
     return data as Exercise[];
@@ -3488,6 +4846,8 @@ export async function apiFetchExercisesByPeriod(
   dateTo: string,
   options: {
     size?: number;
+    signal?: AbortSignal;
+    retries?: number;
   } = {},
 ): Promise<ApiResult<Exercise[]>> {
   const query = new URLSearchParams({
@@ -3501,7 +4861,8 @@ export async function apiFetchExercisesByPeriod(
     {
       method: "GET",
       auth: true,
-      retries: 1,
+      retries: options.retries ?? 1,
+      signal: options.signal,
       ...(IS_DEV_RELEASE_CHANNEL
         ? {
             cacheTtlMs: DEV_EXERCISES_CACHE_TTL_MS,
@@ -3621,16 +4982,82 @@ export async function apiFetchExerciseBookings(exerciseId: string) {
   );
 }
 
-export async function apiFetchTournamentParticipants(exerciseId: string) {
+function isPhoneLikeRatingValue(value: unknown): boolean {
+  if (typeof value !== "string" && typeof value !== "number") return false;
+  const digits = String(value).replace(/\D/g, "");
+  return digits.length >= 10;
+}
+
+function sanitizeTournamentParticipantBooking(booking: ExerciseBooking): ExerciseBooking {
+  const ratingSource = String(booking.ratingSource || "").trim().toLowerCase();
+  const shouldDropRating = ratingSource === "phone" || isPhoneLikeRatingValue(booking.rating);
+
+  return {
+    ...booking,
+    rating: shouldDropRating ? undefined : booking.rating,
+    ratingSource: shouldDropRating ? undefined : booking.ratingSource,
+    client: booking.client
+      ? {
+          ...booking.client,
+          phone: undefined,
+        }
+      : booking.client,
+  };
+}
+
+function sanitizeTournamentParticipantsPayload<T>(payload: T): T {
+  if (Array.isArray(payload)) {
+    return payload.map((item) => (
+      isRecord(item)
+        ? sanitizeTournamentParticipantBooking(item as unknown as ExerciseBooking)
+        : item
+    )) as T;
+  }
+
+  if (!isRecord(payload)) return payload;
+
+  const keys = ["payload", "content", "data", "result", "items", "records", "participants", "bookings"];
+  let nextPayload: Record<string, unknown> | null = null;
+
+  keys.forEach((key) => {
+    const value = payload[key];
+    if (!Array.isArray(value)) return;
+    if (!nextPayload) nextPayload = { ...payload };
+    nextPayload[key] = value.map((item) => (
+      isRecord(item)
+        ? sanitizeTournamentParticipantBooking(item as unknown as ExerciseBooking)
+        : item
+    ));
+  });
+
+  return (nextPayload ?? payload) as T;
+}
+
+export async function apiFetchTournamentParticipants(
+  exerciseId: string,
+  options: {
+    sanitize?: boolean;
+    auth?: boolean;
+    retries?: number;
+    signal?: AbortSignal;
+  } = {},
+) {
   const base = getServ2Origin();
-  return request<ExerciseBooking[]>(
+  const result = await request<ExerciseBooking[]>(
     `${base}/lk/tournaments/participants?exerciseId=${exerciseId}`,
     {
       method: "GET",
-      auth: true,
-      retries: 1,
+      auth: options.auth ?? true,
+      retries: options.retries ?? 1,
+      signal: options.signal,
     },
   );
+  return {
+    ...result,
+    data: result.data && options.sanitize !== false
+      ? sanitizeTournamentParticipantsPayload(result.data)
+      : result.data,
+  };
 }
 
 function normalizeTournamentHistoryParticipant(
@@ -3644,13 +5071,14 @@ function normalizeTournamentHistoryParticipant(
   const displayName = pickString(value, ["displayName", "fullName", "title"]);
   const composedName = [firstName, lastName].filter(Boolean).join(" ").trim();
   const name = displayName || composedName || `Участник ${index + 1}`;
+  const rating = pickString(value, ["rating", "level", "grade"]);
 
   return {
     id: pickString(value, ["id", "clientId", "userId", "uuid"]),
     name,
     phone: pickString(value, ["phone", "phoneNumber", "mobile"]),
     photo: pickString(value, ["photo", "avatar", "imageUrl"]),
-    rating: pickString(value, ["rating", "level", "grade"]),
+    rating: isPhoneLikeRatingValue(rating) ? null : rating,
   };
 }
 
@@ -3757,12 +5185,65 @@ function normalizeTournamentHistoryRecord(value: unknown): TournamentHistoryReco
     summary: summaryPayload,
     totals: totalsPayload,
     playerLogs: playerLogsPayload,
+    startRatingChanges: Array.isArray(value.startRatingChanges)
+      ? value.startRatingChanges.filter(isRecord) as unknown as TournamentStartRatingChange[]
+      : [],
     createdAt: pickString(value, ["createdAt", "created"]),
     updatedAt: pickString(value, ["updatedAt", "updated"]),
   };
 }
 
-export async function apiFetchTournamentHistory(tournamentId: string) {
+type TournamentHistoryApiResult = ApiResult<TournamentHistoryRecord[]>;
+
+type ProdTournamentHistoryEmptyCacheEntry = {
+  expiresAt: number;
+  result: TournamentHistoryApiResult;
+};
+
+const prodTournamentHistoryInflight = new Map<string, Promise<TournamentHistoryApiResult>>();
+const prodTournamentHistoryEmptyCache = new Map<string, ProdTournamentHistoryEmptyCacheEntry>();
+
+function pruneProdTournamentHistoryEmptyCache() {
+  const now = Date.now();
+  prodTournamentHistoryEmptyCache.forEach((entry, key) => {
+    if (entry.expiresAt <= now) {
+      prodTournamentHistoryEmptyCache.delete(key);
+    }
+  });
+}
+
+function readProdTournamentHistoryEmptyCache(tournamentId: string): TournamentHistoryApiResult | null {
+  if (!tournamentId) return null;
+  const entry = prodTournamentHistoryEmptyCache.get(tournamentId);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    prodTournamentHistoryEmptyCache.delete(tournamentId);
+    return null;
+  }
+  return entry.result;
+}
+
+function isEmptyTournamentHistoryResult(result: TournamentHistoryApiResult) {
+  return !result.error && Array.isArray(result.data) && result.data.length === 0;
+}
+
+function writeProdTournamentHistoryEmptyCache(
+  tournamentId: string,
+  result: TournamentHistoryApiResult,
+) {
+  if (!tournamentId || !isEmptyTournamentHistoryResult(result)) return;
+  pruneProdTournamentHistoryEmptyCache();
+  prodTournamentHistoryEmptyCache.set(tournamentId, {
+    expiresAt: Date.now() + PROD_TOURNAMENT_HISTORY_EMPTY_CACHE_TTL_MS,
+    result: {
+      data: [],
+      error: null,
+      status: result.status,
+    },
+  });
+}
+
+async function fetchTournamentHistoryUncached(tournamentId: string): Promise<TournamentHistoryApiResult> {
   const base = getServ2Origin();
   const result = await request<unknown>(
     `${base}/lk/tournaments/americano/history?tournamentId=${encodeURIComponent(tournamentId)}`,
@@ -3796,6 +5277,42 @@ export async function apiFetchTournamentHistory(tournamentId: string) {
   };
 }
 
+export async function apiFetchTournamentHistory(tournamentId: string): Promise<TournamentHistoryApiResult> {
+  const normalizedTournamentId = String(tournamentId || "").trim();
+  const cachedEmptyResult = !IS_DEV_RELEASE_CHANNEL
+    ? readProdTournamentHistoryEmptyCache(normalizedTournamentId)
+    : null;
+  if (cachedEmptyResult) {
+    return cachedEmptyResult;
+  }
+
+  const inflightRequest = !IS_DEV_RELEASE_CHANNEL
+    ? prodTournamentHistoryInflight.get(normalizedTournamentId)
+    : null;
+  if (inflightRequest) {
+    return inflightRequest;
+  }
+
+  const requestPromise = fetchTournamentHistoryUncached(normalizedTournamentId);
+  if (IS_DEV_RELEASE_CHANNEL || !normalizedTournamentId) {
+    return requestPromise;
+  }
+
+  prodTournamentHistoryInflight.set(normalizedTournamentId, requestPromise);
+  void requestPromise
+    .then((result) => {
+      writeProdTournamentHistoryEmptyCache(normalizedTournamentId, result);
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      if (prodTournamentHistoryInflight.get(normalizedTournamentId) === requestPromise) {
+        prodTournamentHistoryInflight.delete(normalizedTournamentId);
+      }
+    });
+
+  return requestPromise;
+}
+
 export async function apiCreateAmericanoTournament(payload: AmericanoTournamentPayload) {
   const base = getServ2Origin();
   return request<{ ok?: boolean }>(`${base}/lk/tournaments/americano`, {
@@ -3812,6 +5329,45 @@ export async function apiUpdateAmericanoResults(payload: AmericanoResultsPayload
     retries: 1,
     body: JSON.stringify(payload),
   });
+}
+
+export async function apiFetchTournamentBroadcastState(
+  tournamentId: string,
+  stationId?: string | null,
+) {
+  const base = getServ2Origin();
+  const normalizedTournamentId = String(tournamentId || "").trim();
+  const normalizedStationId = String(stationId || "").trim();
+  const query = new URLSearchParams({ tournamentId: normalizedTournamentId });
+  if (normalizedStationId) query.set("stationId", normalizedStationId);
+  return request<TournamentBroadcastState>(
+    `${base}/lk/tournaments/broadcast/status?${query.toString()}`,
+    {
+      method: "GET",
+      auth: true,
+      retries: 1,
+    },
+  );
+}
+
+export async function apiSetTournamentBroadcastState(payload: {
+  tournamentId: string;
+  stationId?: string | null;
+  action: TournamentBroadcastAction;
+}) {
+  const base = getServ2Origin();
+  return request<TournamentBroadcastState>(
+    `${base}/lk/tournaments/broadcast/${payload.action}`,
+    {
+      method: "POST",
+      auth: true,
+      retries: 0,
+      body: JSON.stringify({
+        tournamentId: String(payload.tournamentId || "").trim(),
+        stationId: String(payload.stationId || "").trim() || null,
+      }),
+    },
+  );
 }
 
 export async function apiFetchStudios() {
@@ -3963,14 +5519,16 @@ export async function apiFetchOnboardingStations() {
 
 function normalizePadelGamePlayer(item: unknown): PadelGamePlayer | null {
   if (!isRecord(item)) return null;
+  const memberKey = pickString(item, ["memberKey", "playerKey", "participantKey", "rosterMemberKey"]);
   const id = pickString(item, ["id", "clientId", "userId", "uuid"]);
   const firstName = pickString(item, ["firstName", "name"]);
   const lastName = pickString(item, ["lastName", "surname"]);
   const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
   const phone = pickString(item, ["phone", "phoneNumber", "mobile"]);
   const photo = pickString(item, ["photo", "avatar", "imageUrl"]);
-  const rating = pickString(item, ["rating", "level", "grade"]);
-  const ratingNumeric = pickNumeric(item, ["ratingNumeric", "numericRating", "levelNumeric"]);
+  const ratingRaw = pickString(item, ["rating", "level", "grade"]);
+  const ratingNumericRaw = pickNumeric(item, ["ratingNumeric", "numericRating", "levelNumeric"]);
+  const normalizedRating = normalizePadelRating(ratingRaw, ratingNumericRaw);
   const sourceRaw = pickString(item, ["source", "origin", "type"]);
   const statusRaw = pickString(item, ["status", "state"]);
 
@@ -3984,12 +5542,13 @@ function normalizePadelGamePlayer(item: unknown): PadelGamePlayer | null {
   if (!fullName && !phone && !id) return null;
 
   return {
+    memberKey: memberKey ?? null,
     id: id ?? null,
     name: fullName || "Игрок",
     phone: phone ?? null,
     photo: photo ?? null,
-    rating: rating ?? null,
-    ratingNumeric,
+    rating: normalizedRating.rating,
+    ratingNumeric: normalizedRating.ratingNumeric,
     source,
     status,
   };
@@ -4064,12 +5623,18 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
       payload.waitingList ??
       (dataPayload ? dataPayload.waitingList : null);
 
-    const participants = extractPadelGamePlayerItems(participantsPayload)
+    const participantsRaw = extractPadelGamePlayerItems(participantsPayload)
       .map((item) => normalizePadelGamePlayer(item))
       .filter((item): item is PadelGamePlayer => item !== null);
-    const waitlist = extractPadelGamePlayerItems(waitlistPayload)
+    const participants = mergePadelGamePlayers([], participantsRaw);
+    const participantKeys = new Set(
+      participants.map((player) => buildPadelGamePlayerKey(player)),
+    );
+    const waitlistRaw = extractPadelGamePlayerItems(waitlistPayload)
       .map((item) => normalizePadelGamePlayer(item))
       .filter((item): item is PadelGamePlayer => item !== null);
+    const waitlist = mergePadelGamePlayers([], waitlistRaw)
+      .filter((player) => !participantKeys.has(buildPadelGamePlayerKey(player)));
     const participantPhones = extractPhoneList(
       payload.participantPhones
       ?? (dataPayload ? dataPayload.participantPhones : null)
@@ -4096,24 +5661,42 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
     const updatedAt =
       pickString(payload, ["updatedAt", "updated", "modifiedAt"]) ??
       (dataPayload ? pickString(dataPayload, ["updatedAt", "updated", "modifiedAt"]) : null);
+    const resultStatus =
+      pickString(payload, ["resultStatus"]) ??
+      (dataPayload ? pickString(dataPayload, ["resultStatus"]) : null);
+    const resultLifecycleState =
+      pickString(payload, ["resultLifecycleState"]) ??
+      (dataPayload ? pickString(dataPayload, ["resultLifecycleState"]) : null);
+    const resultId =
+      pickString(payload, ["resultId"]) ??
+      (dataPayload ? pickString(dataPayload, ["resultId"]) : null);
+    const lastResultAt =
+      pickString(payload, ["lastResultAt"]) ??
+      (dataPayload ? pickString(dataPayload, ["lastResultAt"]) : null);
 
     const organizer = organizerPayload
-      ? {
-          id: pickString(organizerPayload, ["id", "clientId", "userId", "uuid"]),
-          name: (() => {
-            const nameValue = pickString(organizerPayload, ["name", "firstName"]);
-            const lastName = pickString(organizerPayload, ["lastName", "surname"]);
-            return [nameValue, lastName].filter(Boolean).join(" ").trim() || nameValue;
-          })() ?? null,
-          phone: pickString(organizerPayload, ["phone", "phoneNumber", "mobile"]),
-          photo: pickString(organizerPayload, ["photo", "avatar", "imageUrl"]),
-          rating: pickString(organizerPayload, ["rating", "level", "grade"]),
-          ratingNumeric: pickNumeric(organizerPayload, ["ratingNumeric", "numericRating", "levelNumeric"]),
-        }
+      ? (() => {
+          const ratingRaw = pickString(organizerPayload, ["rating", "level", "grade"]);
+          const ratingNumericRaw = pickNumeric(organizerPayload, ["ratingNumeric", "numericRating", "levelNumeric"]);
+          const normalizedRating = normalizePadelRating(ratingRaw, ratingNumericRaw);
+          return {
+            id: pickString(organizerPayload, ["id", "clientId", "userId", "uuid"]),
+            name: (() => {
+              const nameValue = pickString(organizerPayload, ["name", "firstName"]);
+              const lastName = pickString(organizerPayload, ["lastName", "surname"]);
+              return [nameValue, lastName].filter(Boolean).join(" ").trim() || nameValue;
+            })() ?? null,
+            phone: pickString(organizerPayload, ["phone", "phoneNumber", "mobile"]),
+            photo: pickString(organizerPayload, ["photo", "avatar", "imageUrl"]),
+            rating: normalizedRating.rating,
+            ratingNumeric: normalizedRating.ratingNumeric,
+          };
+        })()
       : null;
 
     if (organizer && participants.length === 0) {
       participants.push({
+        memberKey: null,
         id: organizer.id ?? null,
         name: organizer.name || "Организатор",
         phone: organizer.phone ?? null,
@@ -4138,6 +5721,10 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
       id: directId,
       inviteUrl: inviteUrl ?? null,
       status: status ?? null,
+      resultStatus: resultStatus ?? null,
+      resultLifecycleState: resultLifecycleState ?? null,
+      resultId: resultId ?? null,
+      lastResultAt: lastResultAt ?? null,
       participantPhones,
       waitlistPhones,
       allRelatedPhones,
@@ -4667,6 +6254,9 @@ export async function apiFetchPadelGamesByPhone(
   includePast = false,
   options: {
     limit?: number;
+    offset?: number;
+    windowHours?: number;
+    needsResult?: boolean;
   } = {},
 ) {
   const normalizedPhone = phone.replace(/\D/g, "");
@@ -4683,6 +6273,13 @@ export async function apiFetchPadelGamesByPhone(
   const limit = Number.isFinite(options.limit)
     ? Math.max(1, Math.min(1000, Math.floor(options.limit as number)))
     : null;
+  const offset = Number.isFinite(options.offset)
+    ? Math.max(0, Math.floor(options.offset as number))
+    : null;
+  const windowHours = Number.isFinite(options.windowHours)
+    ? Math.max(1, Math.min(168, Math.floor(options.windowHours as number)))
+    : null;
+  const needsResult = options.needsResult === true;
   const buildQuery = (resolvedClientId?: string | null) => {
     const query = new URLSearchParams({ phone: normalizedPhone });
     const trimmedClientId = resolvedClientId?.trim() || "";
@@ -4696,6 +6293,17 @@ export async function apiFetchPadelGamesByPhone(
     }
     if (limit) {
       query.set("limit", String(limit));
+    }
+    if (offset !== null) {
+      query.set("offset", String(offset));
+    }
+    if (windowHours !== null) {
+      query.set("windowHours", String(windowHours));
+    }
+    if (needsResult) {
+      // Support both possible backend flags while endpoint is being rolled out.
+      query.set("needsResult", "true");
+      query.set("withoutConfirmedResult", "true");
     }
 
     if (!IS_DEV_RELEASE_CHANNEL) {
@@ -4771,8 +6379,12 @@ export async function apiFetchPadelGamesByPhone(
       };
       return toTimestamp(left) - toTimestamp(right);
     });
-    const total = Math.max(reportedTotal, sorted.length);
-    const games = limit ? sorted.slice(0, limit) : sorted;
+    const relevantRecords = sorted.filter((record) => (
+      isPadelGameRecordRelevantToIdentity(record, normalizedPhone, normalizedClientId)
+    ));
+    const filteredOutCount = sorted.length - relevantRecords.length;
+    const total = Math.max(Math.max(0, reportedTotal - filteredOutCount), relevantRecords.length);
+    const games = limit ? relevantRecords.slice(0, limit) : relevantRecords;
 
     return {
       data: { games, total },
@@ -5178,20 +6790,32 @@ function trimTrailingSlashes(value: string | null | undefined): string {
 }
 
 function buildSupportEndpointCandidates(suffix: string): string[] {
-  const origin = trimTrailingSlashes(getServ2Origin() || "");
   const explicitBase = trimTrailingSlashes(SUPPORT_API_BASE);
   const normalizedSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
 
   if (explicitBase) {
-    return [`${explicitBase}${normalizedSuffix}`];
+    return buildProjectUrlCandidates(
+      `${explicitBase}${normalizedSuffix}`,
+      SERV2,
+      SERV2_FALLBACK,
+    );
   }
 
-  const candidates = [
+  const originCandidates = resolveLkApiBaseUrlCandidates(SERV2, SERV2_FALLBACK);
+  return dedupeAbsoluteUrls(originCandidates.flatMap((origin) => [
     `${origin}/lk${normalizedSuffix}`,
     `${origin}/api${normalizedSuffix}`,
-  ];
+  ]));
+}
 
-  return Array.from(new Set(candidates.filter((value): value is string => Boolean(value))));
+function shouldRetrySupportWriteRequest(result: ApiResult<unknown>) {
+  if (!result.error) return false;
+  if (result.status == null) return true;
+  return result.status === 404
+    || result.status === 405
+    || result.status === 502
+    || result.status === 503
+    || result.status === 504;
 }
 
 async function requestSupportWithFallback<T>(
@@ -5220,13 +6844,7 @@ async function requestSupportWithFallback<T>(
 
     // For write operations we still allow safe routing fallbacks when the first endpoint
     // is clearly unavailable for this request and therefore could not have accepted a write.
-    if (
-      !isReadLikeMethod
-      && response.status !== 401
-      && response.status !== 403
-      && response.status !== 404
-      && response.status !== 405
-    ) {
+    if (!isReadLikeMethod && !shouldRetrySupportWriteRequest(response)) {
       return response;
     }
   }
@@ -5660,6 +7278,25 @@ async function writePadelGameRecord(
   };
 }
 
+async function hydratePadelGameRecordAfterWrite(
+  result: ApiResult<PadelGameRecord>,
+): Promise<ApiResult<PadelGameRecord>> {
+  if (result.error || !result.data?.id) {
+    return result;
+  }
+
+  const refreshed = await apiFetchPadelGameRecord(result.data.id);
+  if (!refreshed.data?.id) {
+    return result;
+  }
+
+  return {
+    data: mergePadelGameRecord(result.data, refreshed.data),
+    error: null,
+    status: result.status ?? refreshed.status,
+  };
+}
+
 export async function apiCreatePadelGameRecord(
   payload: PadelGameRecordPayload,
   requestOptions: {
@@ -5670,13 +7307,14 @@ export async function apiCreatePadelGameRecord(
   const fallbackId = payload.gameId?.trim() || null;
   const fallbackInviteUrl = payload.invite?.inviteUrl?.trim() || null;
 
-  return writePadelGameRecord(
+  const writeResult = await writePadelGameRecord(
     [{ url: "/lk/games", method: "POST" }],
     payload as unknown as Record<string, unknown>,
     fallbackId,
     fallbackInviteUrl,
     requestOptions,
   );
+  return hydratePadelGameRecordAfterWrite(writeResult);
 }
 
 export async function apiCreatePadelGameDraft(
@@ -5689,7 +7327,7 @@ export async function apiCreatePadelGameDraft(
   const fallbackId = payload.gameId?.trim() || null;
   const fallbackInviteUrl = payload.invite?.inviteUrl?.trim() || null;
 
-  return writePadelGameRecord(
+  const writeResult = await writePadelGameRecord(
     [
       { url: "/lk/games/drafts", method: "POST" },
       { url: "/lk/games/draft", method: "POST" },
@@ -5700,6 +7338,7 @@ export async function apiCreatePadelGameDraft(
     fallbackInviteUrl,
     requestOptions,
   );
+  return hydratePadelGameRecordAfterWrite(writeResult);
 }
 
 export async function apiConfirmPadelGamePayment(
@@ -5712,7 +7351,7 @@ export async function apiConfirmPadelGamePayment(
   const fallbackId = payload.gameId?.trim() || null;
   const fallbackInviteUrl = payload.invite?.inviteUrl?.trim() || null;
 
-  return writePadelGameRecord(
+  const writeResult = await writePadelGameRecord(
     [
       { url: "/lk/games/payment/confirm", method: "POST" },
       { url: "/lk/games/confirm", method: "POST" },
@@ -5723,6 +7362,7 @@ export async function apiConfirmPadelGamePayment(
     fallbackInviteUrl,
     requestOptions,
   );
+  return hydratePadelGameRecordAfterWrite(writeResult);
 }
 
 export async function apiFetchPadelGameByPaymentRef(
@@ -5743,74 +7383,47 @@ export async function apiFetchPadelGameByPaymentRef(
   }
 
   const baseUrl = getServ2Origin() || "";
-  const query = new URLSearchParams();
-  if (paymentRef) query.set("paymentRef", paymentRef);
-  if (bookingIds.length > 0) query.set("bookingIds", bookingIds.join(","));
+  const lookupQueries: URLSearchParams[] = [];
+  if (paymentRef) {
+    const paymentQuery = new URLSearchParams();
+    paymentQuery.set("paymentRef", paymentRef);
+    paymentQuery.set("includePast", "true");
+    lookupQueries.push(paymentQuery);
+  }
+  if (bookingIds.length > 0) {
+    const bookingQuery = new URLSearchParams();
+    bookingQuery.set("bookingIds", bookingIds.join(","));
+    bookingQuery.set("includePast", "true");
+    lookupQueries.push(bookingQuery);
+  }
 
-  const endpoints = [
-    `/lk/games/by-payment-ref?${query.toString()}`,
-    `/lk/games?${query.toString()}`,
-    `/lk/games/by-phone?${query.toString()}`,
-  ];
-
-  let firstError: ApiError | null = null;
-  let firstStatus: ApiStatus = null;
-  let firstSuccessStatus: ApiStatus = null;
-
-  for (const endpoint of endpoints) {
-    const response = await request<unknown>(endpoint, {
+  let lastStatus: ApiStatus = 200;
+  let lastRequestError: ApiError | null = null;
+  let lastRequestErrorStatus: ApiStatus = 200;
+  for (const query of lookupQueries) {
+    const response = await request<unknown>(`/lk/games?${query.toString()}`, {
       method: "GET",
       baseUrl,
       retries: 1,
     });
+    lastStatus = response.status;
     if (response.error) {
-      if (!firstError) {
-        firstError = response.error;
-        firstStatus = response.status;
-      }
+      lastRequestError = response.error;
+      lastRequestErrorStatus = response.status;
       continue;
     }
 
-    if (firstSuccessStatus == null) {
-      firstSuccessStatus = response.status;
-    }
-
     const single = normalizePadelGameRecord(response.data);
-    if (single) {
-      return {
-        data: single,
-        error: null,
-        status: response.status,
-      };
+    const record = single ?? extractPadelGameRecordList(response.data)[0] ?? null;
+    if (record) {
+      return { data: record, error: null, status: response.status };
     }
-
-    const records = extractPadelGameRecordList(response.data);
-    if (records.length > 0) {
-      return {
-        data: records[0],
-        error: null,
-        status: response.status,
-      };
-    }
-  }
-
-  if (firstSuccessStatus != null) {
-    return {
-      data: null as PadelGameRecord | null,
-      error: { status: firstSuccessStatus, message: "Игра по paymentRef не найдена" },
-      status: firstSuccessStatus,
-    };
   }
 
   return {
     data: null as PadelGameRecord | null,
-    error:
-      firstError
-      ?? {
-        status: firstStatus,
-        message: "Не удалось найти игру по paymentRef",
-      },
-    status: firstStatus,
+    error: lastRequestError ?? { status: lastStatus, message: "Игра по paymentRef не найдена" },
+    status: lastRequestError ? lastRequestErrorStatus : lastStatus,
   };
 }
 
@@ -5827,12 +7440,342 @@ export async function apiUpdatePadelGameRecord(
     };
   }
 
-  return writePadelGameRecord(
+  const writeResult = await writePadelGameRecord(
     [{ url: `/lk/games/${encodeURIComponent(normalizedGameId)}`, method: "PATCH" }],
     payload as unknown as Record<string, unknown>,
     normalizedGameId,
     payload.invite?.inviteUrl?.trim() || null,
   );
+  return hydratePadelGameRecordAfterWrite(writeResult);
+}
+
+function normalizePadelGameResultStatus(value: unknown): PadelGameResultLifecycleStatus | string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toUpperCase();
+  if (!normalized) return null;
+  if (normalized === "PENDING_CONFIRMATION" || normalized === "PENDING_DISPUTE") {
+    return "PENDING_REVIEW";
+  }
+  return normalized;
+}
+
+function extractPadelGameResultRecord(payload: unknown): Record<string, unknown> | null {
+  if (!isRecord(payload)) return null;
+  const direct = payload as Record<string, unknown>;
+  const nestedKeys = ["latestResult", "result", "matchResult"];
+  for (const key of nestedKeys) {
+    if (isRecord(direct[key])) {
+      return direct[key] as Record<string, unknown>;
+    }
+  }
+  if (
+    direct.status
+    || direct.sets
+    || direct.score
+    || direct.ratingImpact
+    || direct.submittedAt
+    || direct.confirmedAt
+  ) {
+    return direct;
+  }
+  return null;
+}
+
+function normalizePadelGameResultActionResponse(
+  payload: unknown,
+): PadelGameResultActionResponse {
+  const data = isRecord(payload) ? payload as Record<string, unknown> : {};
+  const game = normalizePadelGameRecord(data.game) ?? normalizePadelGameRecord(data.record);
+  const latestResult = isRecord(data.latestResult)
+    ? data.latestResult as Record<string, unknown>
+    : null;
+  const result = isRecord(data.result)
+    ? data.result as Record<string, unknown>
+    : extractPadelGameResultRecord(payload);
+  const matchResult = isRecord(data.matchResult)
+    ? data.matchResult as Record<string, unknown>
+    : result;
+  const status = normalizePadelGameResultStatus(
+    data.status
+    ?? data.state
+    ?? data.lifecycleState
+    ?? matchResult?.status
+    ?? matchResult?.state
+    ?? matchResult?.lifecycleState
+    ?? result?.status
+    ?? result?.state
+    ?? result?.lifecycleState
+    ?? latestResult?.status,
+  );
+
+  return {
+    gameId: pickString(data, ["gameId", "id"]) ?? null,
+    resultId: pickString(data, ["resultId"]) ?? pickString(result ?? {}, ["id", "resultId"]) ?? null,
+    status,
+    latestResult,
+    result,
+    matchResult,
+    game,
+    canSubmit: typeof data.canSubmit === "boolean" ? data.canSubmit : undefined,
+    canConfirm: typeof data.canConfirm === "boolean" ? data.canConfirm : undefined,
+    canDispute: typeof data.canDispute === "boolean" ? data.canDispute : undefined,
+    disputeDeadlineAt: pickString(data, ["disputeDeadlineAt", "reviewDeadlineAt"])
+      ?? pickString(result ?? {}, ["disputeDeadlineAt", "reviewDeadlineAt"]),
+    raw: payload,
+  };
+}
+
+function normalizePadelGameResultSessionResponse(
+  payload: unknown,
+): PadelGameResultSessionResponse {
+  const data = isRecord(payload) ? payload as Record<string, unknown> : {};
+
+  return {
+    gameId: pickString(data, ["gameId", "id"]) ?? null,
+    sessionId: pickString(data, ["sessionId", "id"]) ?? null,
+    status: pickString(data, ["status"]),
+    revision: pickNumeric(data, ["revision"]),
+    isRestored: typeof data.isRestored === "boolean" ? data.isRestored : undefined,
+    rosterSnapshot: isRecord(data.rosterSnapshot)
+      ? data.rosterSnapshot as Record<string, unknown>
+      : null,
+    draftSets: Array.isArray(data.draftSets)
+      ? data.draftSets as PadelGameResultDraftSetPayload[]
+      : [],
+    draftPairings: Array.isArray(data.draftPairings)
+      ? data.draftPairings as PadelGameResultSetPairingPayload[]
+      : [],
+    attachments: Array.isArray(data.attachments) ? data.attachments : [],
+    openedBy: isRecord(data.openedBy) ? data.openedBy as Record<string, unknown> : null,
+    lastTouchedBy: isRecord(data.lastTouchedBy) ? data.lastTouchedBy as Record<string, unknown> : null,
+    lastTouchedAt: pickString(data, ["lastTouchedAt"]),
+    raw: payload,
+  };
+}
+
+function pickSplitPaymentTransactionId(payload: unknown): string | null {
+  if (!isRecord(payload)) return null;
+
+  const direct = pickString(payload, ["transactionId", "transactionUuid", "id", "uuid"]);
+  if (direct) return direct;
+
+  const nested = isRecord(payload.transaction)
+    ? payload.transaction as Record<string, unknown>
+    : null;
+  return pickString(nested ?? {}, ["transactionId", "transactionUuid", "id", "uuid"]);
+}
+
+async function requestPadelGameResultAction(
+  gameId: string,
+  action: "state" | "submit" | "confirm" | "dispute" | "accept-correction" | "expire",
+  payload?: PadelGameResultSubmitPayload | PadelGameResultActionPayload,
+): Promise<ApiResult<PadelGameResultActionResponse>> {
+  const normalizedGameId = gameId.trim();
+  if (!normalizedGameId) {
+    return {
+      data: null,
+      error: { status: 400, message: "Не указан gameId для результата матча" },
+      status: 400,
+    };
+  }
+
+  const baseUrl = getServ2Origin() || "";
+  const encodedGameId = encodeURIComponent(normalizedGameId);
+  const method = action === "state" ? "GET" : "POST";
+  const query = new URLSearchParams();
+  const phone = isRecord(payload)
+    ? pickString(payload, ["phone", "playerPhone", "senderPhone", "confirmerPhone", "disputerPhone"])
+    : null;
+  if (method === "GET" && phone) {
+    query.set("phone", phone);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const url = `/lk/games/${encodedGameId}/result/${action}${suffix}`;
+
+  const submitController = action === "submit" ? new AbortController() : null;
+  let submitTimedOut = false;
+  const submitTimeoutId = submitController
+    ? globalThis.setTimeout(() => {
+        submitTimedOut = true;
+        submitController.abort();
+      }, 10_000)
+    : null;
+
+  let response: ApiResult<unknown>;
+  try {
+    response = await request<unknown>(url, {
+      method,
+      baseUrl,
+      auth: true,
+      retries: action === "submit" ? 0 : 1,
+      ...(submitController ? { signal: submitController.signal } : {}),
+      ...(method === "POST" ? { body: JSON.stringify(payload ?? {}) } : {}),
+    });
+  } finally {
+    if (submitTimeoutId != null) {
+      globalThis.clearTimeout(submitTimeoutId);
+    }
+  }
+
+  if (submitTimedOut && response.error && response.status == null) {
+    return {
+      data: null,
+      error: {
+        status: null,
+        message: "Сохранение заняло слишком много времени. Повторите отправку — результат не продублируется.",
+        raw: response.error.raw,
+      },
+      status: null,
+    };
+  }
+
+  if (response.error) {
+    return {
+      data: null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  return {
+    data: normalizePadelGameResultActionResponse(response.data),
+    error: null,
+    status: response.status,
+  };
+}
+
+async function requestPadelGameResultSession(
+  gameId: string,
+  action: "open" | "update",
+  payload: PadelGameResultSessionRequestPayload = {},
+  sessionId?: string,
+): Promise<ApiResult<PadelGameResultSessionResponse>> {
+  const normalizedGameId = gameId.trim();
+  if (!normalizedGameId) {
+    return {
+      data: null,
+      error: { status: 400, message: "Не указан gameId для сессии результата" },
+      status: 400,
+    };
+  }
+
+  const baseUrl = getServ2Origin() || "";
+  const encodedGameId = encodeURIComponent(normalizedGameId);
+  const normalizedSessionId = (sessionId || payload.sessionId || "").trim();
+  if (action === "update" && !normalizedSessionId) {
+    return {
+      data: null,
+      error: { status: 400, message: "Не указан sessionId для обновления черновика результата" },
+      status: 400,
+    };
+  }
+
+  const url = action === "open"
+    ? `/lk/games/${encodedGameId}/result/session/open`
+    : `/lk/games/${encodedGameId}/result/session/${encodeURIComponent(normalizedSessionId)}`;
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutId = globalThis.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, 8_000);
+  let response: ApiResult<unknown>;
+  try {
+    response = await request<unknown>(url, {
+      method: action === "open" ? "POST" : "PATCH",
+      baseUrl,
+      auth: true,
+      retries: action === "open" ? 1 : 0,
+      signal: controller.signal,
+      body: JSON.stringify(payload ?? {}),
+    });
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
+
+  if (timedOut && response.error && response.status == null) {
+    return {
+      data: null,
+      error: {
+        status: null,
+        message: "Не удалось быстро сохранить черновик. Финальная отправка результата останется доступна.",
+        raw: response.error.raw,
+      },
+      status: null,
+    };
+  }
+
+  if (response.error) {
+    return {
+      data: null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  return {
+    data: normalizePadelGameResultSessionResponse(response.data),
+    error: null,
+    status: response.status,
+  };
+}
+
+export async function apiFetchPadelGameResultState(
+  gameId: string,
+  params: { phone?: string | null } = {},
+) {
+  return requestPadelGameResultAction(gameId, "state", params);
+}
+
+export async function apiSubmitPadelGameResult(
+  gameId: string,
+  payload: PadelGameResultSubmitPayload,
+) {
+  return requestPadelGameResultAction(gameId, "submit", payload);
+}
+
+export async function apiConfirmPadelGameResult(
+  gameId: string,
+  payload: PadelGameResultActionPayload,
+) {
+  return requestPadelGameResultAction(gameId, "confirm", payload);
+}
+
+export async function apiDisputePadelGameResult(
+  gameId: string,
+  payload: PadelGameResultActionPayload,
+) {
+  return requestPadelGameResultAction(gameId, "dispute", payload);
+}
+
+export async function apiAcceptPadelGameResultCorrection(
+  gameId: string,
+  payload: PadelGameResultActionPayload,
+) {
+  return requestPadelGameResultAction(gameId, "accept-correction", payload);
+}
+
+export async function apiExpirePadelGameResult(
+  gameId: string,
+  payload: PadelGameResultActionPayload = {},
+) {
+  return requestPadelGameResultAction(gameId, "expire", payload);
+}
+
+export async function apiOpenPadelGameResultSession(
+  gameId: string,
+  payload: PadelGameResultSessionRequestPayload,
+) {
+  return requestPadelGameResultSession(gameId, "open", payload);
+}
+
+export async function apiUpdatePadelGameResultSession(
+  gameId: string,
+  sessionId: string,
+  payload: PadelGameResultSessionRequestPayload,
+) {
+  return requestPadelGameResultSession(gameId, "update", payload, sessionId);
 }
 
 function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentResult | null {
@@ -5844,6 +7787,18 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
   const toPay = toPayMinor != null
     ? toPayMinor / 100
     : (toPayRaw > 10000 ? toPayRaw / 100 : toPayRaw);
+  const paymentModes = Array.isArray(data.paymentModes)
+    ? data.paymentModes
+      .filter((item): item is Record<string, unknown> => isRecord(item))
+      .map((item) => ({
+        id: pickString(item, ["id"]) ?? "",
+        label: pickString(item, ["label"]),
+        productId: pickString(item, ["productId"]),
+        productName: pickString(item, ["productName"]),
+        type: pickString(item, ["type"]),
+      }))
+      .filter((item) => item.id.length > 0)
+    : [];
 
   return {
     paymentRef: pickString(data, ["paymentRef", "ref"]) ?? null,
@@ -5860,18 +7815,36 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
     exerciseId: pickString(data, ["exerciseId", "vivaExerciseId"]) ?? null,
     bookingId: pickString(data, ["bookingId"]) ?? null,
     productId: pickString(data, ["productId"]) ?? null,
-    transactionId: pickString(data, ["transactionId"]) ?? null,
+    transactionId: pickSplitPaymentTransactionId(data),
     spot: pickNumeric(data, ["spot"]) ?? null,
+    directionId: pickNumeric(data, ["directionId", "vivaDirectionId"]) ?? null,
+    exerciseTypeId: pickNumeric(data, ["exerciseTypeId", "vivaExerciseTypeId"]) ?? null,
+    totalAmount: pickNumeric(data, ["totalAmount"]) ?? null,
+    oneTimeBaseAmount: pickNumeric(data, ["oneTimeBaseAmount"]) ?? null,
+    assembleDeadlineAt: pickString(data, ["assembleDeadlineAt"]) ?? null,
+    selectedPaymentMode: pickString(data, ["selectedPaymentMode", "paymentMode"]) ?? null,
+    paymentModes,
+    subscriptionProductId: pickString(data, ["subscriptionProductId"]) ?? null,
+    subscriptionProductName: pickString(data, ["subscriptionProductName"]) ?? null,
+    oneTimeProductId: pickString(data, ["oneTimeProductId"]) ?? null,
+    oneTimeProductName: pickString(data, ["oneTimeProductName"]) ?? null,
     raw: payload,
   };
 }
 
 function buildPadelSplitPaymentPayload(params: PadelSplitPaymentParams): Record<string, unknown> {
+  const normalizedClientSubscriptionId =
+    params.clientSubscriptionId?.trim()
+    || null;
+  const normalizedSubscriptionId = params.subscriptionId?.trim() || null;
+
   return {
     date: params.date,
     fromTime: params.fromTime,
     toTime: params.toTime,
     activeTo: params.activeTo ?? null,
+    exerciseId: params.exerciseId ?? null,
+    vivaExerciseId: params.exerciseId ?? null,
     studioId: params.studioId,
     roomId: params.roomId,
     studioName: params.studioName ?? null,
@@ -5879,17 +7852,23 @@ function buildPadelSplitPaymentPayload(params: PadelSplitPaymentParams): Record<
     clientId: params.clientId ?? null,
     clientPhone: params.clientPhone ?? null,
     paymentRef: params.paymentRef ?? null,
+    paymentMode: params.paymentMode ?? null,
+    clientSubscriptionId: normalizedClientSubscriptionId,
+    subscriptionId: normalizedSubscriptionId,
     baseRedirectUrl: params.baseRedirectUrl ?? null,
     successUrl: params.successUrl ?? params.baseRedirectUrl ?? null,
     failUrl: params.failUrl ?? params.baseRedirectUrl ?? null,
     shareCount: params.shareCount,
     shareAmount: params.shareAmount,
+    totalAmount: params.totalAmount ?? null,
+    oneTimeBaseAmount: params.oneTimeBaseAmount ?? null,
     shareAmountIncludesDuration: params.shareAmountIncludesDuration === true,
     durationMinutes: params.durationMinutes ?? null,
     maxClientsCount: params.maxClientsCount ?? params.shareCount,
     spot: params.spot ?? null,
     vivaDirectionId: params.vivaDirectionId ?? null,
     vivaExerciseTypeId: params.vivaExerciseTypeId ?? null,
+    paymentDeadlineMinutes: params.paymentDeadlineMinutes ?? null,
   };
 }
 
@@ -5954,9 +7933,11 @@ export async function apiCreatePadelSplitParticipantPayment(
 ) {
   const normalizedGameId = gameId.trim();
   const baseUrl = getServ2Origin() || "";
+  const exerciseId = params.exerciseId?.trim() || null;
+  const studioId = params.studioId?.trim() || null;
   const clientPhone = params.clientPhone?.trim() || null;
 
-  if (!normalizedGameId || !clientPhone) {
+  if (!normalizedGameId || !exerciseId || !studioId || !clientPhone) {
     return {
       data: null as PadelSplitPaymentResult | null,
       error: {
@@ -6005,6 +7986,120 @@ export async function apiCreatePadelSplitParticipantPayment(
   };
 }
 
+export async function apiCancelPadelSplitParticipantBookings(
+  gameId: string,
+  payload: {
+    exerciseId?: string | null;
+    bookingIds: string[];
+    bookingItems?: Array<{
+      bookingId: string;
+      clientId?: string | null;
+    }>;
+    clientId?: string | null;
+    playerId?: string | null;
+    playerPhone?: string | null;
+    playerName?: string | null;
+    reason?: string | null;
+  },
+) {
+  const normalizedGameId = gameId.trim();
+  const baseUrl = getServ2Origin() || "";
+  const bookingItems = Array.from(new Map(
+    (payload.bookingItems ?? [])
+      .map((item) => {
+        const bookingId = String(item.bookingId || "").trim();
+        if (!bookingId) return null;
+        const clientId = String(item.clientId ?? "").trim() || null;
+        return [bookingId, { bookingId, clientId }] as const;
+      })
+      .filter((item): item is readonly [string, { bookingId: string; clientId: string | null }] => Boolean(item)),
+  ).values());
+  const bookingIds = Array.from(new Set(
+    [
+      ...(payload.bookingIds ?? []),
+      ...bookingItems.map((item) => item.bookingId),
+    ]
+      .map((item) => item.trim())
+      .filter(Boolean),
+  ));
+
+  if (!normalizedGameId || bookingIds.length === 0) {
+    return {
+      data: null as PadelSplitParticipantCancelResult | null,
+      error: {
+        status: 400,
+        message: "Недостаточно данных для удаления игрока из Viva",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  return request<PadelSplitParticipantCancelResult>(
+    `/lk/games/${encodeURIComponent(normalizedGameId)}/split/leave`,
+    {
+      method: "POST",
+      baseUrl,
+      retries: 0,
+      body: JSON.stringify({
+        bookingIds,
+        ...(bookingItems.length > 0 ? { bookingItems } : {}),
+        exerciseId: payload.exerciseId ?? null,
+        clientId: payload.clientId ?? payload.playerId ?? bookingItems.find((item) => item.clientId)?.clientId ?? null,
+        playerId: payload.playerId ?? null,
+        playerPhone: payload.playerPhone ?? null,
+        playerName: payload.playerName ?? null,
+        reason: payload.reason ?? "PLAYER_LEFT",
+      }),
+    },
+  );
+}
+
+export async function apiCleanupPadelGameByOrganizer(
+  gameId: string,
+  options: {
+    force?: boolean;
+    dryRun?: boolean;
+    limit?: number;
+    intent?: PadelGameOrganizerCleanupIntent;
+    refundMethod?: BookingCancellationRefundMethod | null;
+    cancellationActionId?: BookingCancellationAction["id"] | null;
+  } = {},
+) {
+  const normalizedGameId = gameId.trim();
+  if (!normalizedGameId) {
+    return {
+      data: null as PadelGameOrganizerCleanupResult | null,
+      error: {
+        status: 400,
+        message: "Не указан gameId для удаления игры организатором",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const baseUrl = getServ2Origin() || "";
+  const safeLimit = Number.isFinite(options.limit)
+    ? Math.max(1, Math.min(10, Math.floor(options.limit as number)))
+    : 1;
+
+  return request<PadelGameOrganizerCleanupResult>("/lk/games/split/cleanup", {
+    method: "POST",
+    baseUrl,
+    retries: 0,
+    body: JSON.stringify({
+      gameId: normalizedGameId,
+      force: options.force ?? true,
+      dryRun: options.dryRun === true,
+      limit: safeLimit,
+      ...(options.intent ? { intent: options.intent } : {}),
+      ...(options.refundMethod ? { refundMethod: options.refundMethod } : {}),
+      ...(options.cancellationActionId
+        ? { cancellationActionId: options.cancellationActionId }
+        : {}),
+    }),
+  });
+}
+
 function extractPadelPlayerItems(payload: unknown): unknown[] {
   if (Array.isArray(payload)) return payload;
   if (!isRecord(payload)) return [];
@@ -6027,16 +8122,17 @@ function normalizePadelPlayerCandidate(item: unknown): PadelPlayerCandidate | nu
   const name = fullName || pickString(item, ["displayName", "title"]) || "Игрок";
   const phone = pickString(item, ["phone", "phoneNumber", "mobile"]);
   const photo = pickString(item, ["photo", "avatar", "imageUrl"]);
-  const rating = pickString(item, ["rating", "level", "grade"]);
-  const ratingNumeric = pickNumeric(item, ["ratingNumeric", "numericRating", "levelNumeric"]);
+  const ratingRaw = pickString(item, ["rating", "level", "grade"]);
+  const ratingNumericRaw = pickNumeric(item, ["ratingNumeric", "numericRating", "levelNumeric"]);
+  const normalizedRating = normalizePadelRating(ratingRaw, ratingNumericRaw);
 
   return {
     id: id ?? null,
     name,
     phone: phone ?? null,
     photo: photo ?? null,
-    rating: rating ?? null,
-    ratingNumeric: ratingNumeric ?? null,
+    rating: normalizedRating.rating,
+    ratingNumeric: normalizedRating.ratingNumeric,
   };
 }
 
@@ -6098,16 +8194,23 @@ function normalizePadelLiveRatingItem(item: unknown): PadelLiveRatingItem | null
   const clientId = pickString(item, ["clientId", "id", "playerId"]);
   const phoneNorm = pickString(item, ["phoneNorm", "phone", "phoneNumber"]);
   const name = pickString(item, ["name", "playerName", "fullName"]);
-  const rating = pickString(item, ["rating", "level", "grade", "levelLetter"]);
-  const ratingNumeric = pickNumeric(item, ["ratingNumeric", "numericRating", "levelNumeric"]);
+  const ratingRaw = pickString(item, ["rating", "level", "grade", "levelLetter"]);
+  const ratingNumericRaw = pickNumeric(item, [
+    "ratingNumeric",
+    "numericRating",
+    "levelNumeric",
+    "levelScore",
+    "value",
+  ]);
+  const normalizedRating = normalizePadelRating(ratingRaw, ratingNumericRaw);
   const source = pickString(item, ["source", "ratingSource"]);
 
   return {
     clientId: clientId ?? null,
     phoneNorm: phoneNorm ?? null,
     name: name ?? null,
-    rating: rating ?? null,
-    ratingNumeric: ratingNumeric ?? null,
+    rating: normalizedRating.rating,
+    ratingNumeric: normalizedRating.ratingNumeric,
     source: source ?? null,
   };
 }
@@ -6929,11 +9032,9 @@ export async function apiFetchMasterServiceGameModes(options: {
 }
 
 export async function apiFetchSubscriptioName(subId: string, phone: string) {
-  const primary = `${SERV2}?type=get_sub_name&phone=${phone}&subId=${subId}`;
-  const fallback = SERV2_FALLBACK
-    ? `${SERV2_FALLBACK}?type=get_sub_name&phone=${phone}&subId=${subId}`
-    : undefined;
-  return requestWithFallback<SubscriptionName>(primary, fallback, {
+  const search = `?type=get_sub_name&phone=${encodeURIComponent(phone)}&subId=${encodeURIComponent(subId)}`;
+  const candidates = buildProjectUrlCandidates(`${SERV2}${search}`, SERV2, SERV2_FALLBACK);
+  return requestAbsoluteUrlCandidates<SubscriptionName>(candidates, {
     method: "GET",
     retries: 1,
   });
@@ -6942,7 +9043,16 @@ export async function apiFetchSubscriptioName(subId: string, phone: string) {
 export async function apiBuySubscroption(
   subscroptionId: string,
   phone: string,
+  options: {
+    successUrl?: string | null;
+    failUrl?: string | null;
+    baseRedirectUrl?: string | null;
+  } = {},
 ) {
+  const successUrl = options.successUrl?.trim() || options.baseRedirectUrl?.trim() || SUCCESS_URL;
+  const failUrl = options.failUrl?.trim() || options.baseRedirectUrl?.trim() || FAIL_URL;
+  const baseRedirectUrl = options.baseRedirectUrl?.trim() || successUrl;
+
   return request<PaymentUrl>(
     `${API_BASE}/end-user/api/v1/${TENANT_KEY}/transactions`,
     {
@@ -6951,7 +9061,9 @@ export async function apiBuySubscroption(
       retries: 1,
       body: JSON.stringify({
         clientPhone: phone,
-        failUrl: FAIL_URL,
+        failUrl,
+        failRedirectUrl: failUrl,
+        failureRedirectUrl: failUrl,
         paymentMethod: "WIDGET",
         products: [
           {
@@ -6963,25 +9075,792 @@ export async function apiBuySubscroption(
         count: 1,
         id: subscroptionId,
         type: "SUBSCRIPTION",
-        successUrl: SUCCESS_URL,
+        baseRedirectUrl,
+        redirectUrl: successUrl,
+        returnUrl: successUrl,
+        successRedirectUrl: successUrl,
+        successUrl,
       }),
     },
   );
 }
 
+const TOURNAMENT_SUBSCRIPTION_PLAN_TYPES = ["friendship", "sport"] as const;
+type TournamentSubscriptionPlanType = typeof TOURNAMENT_SUBSCRIPTION_PLAN_TYPES[number];
+
+function normalizeTournamentSubscriptionPlanTypeToken(value: unknown): TournamentSubscriptionPlanType | null {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return null;
+  const compact = raw.replace(/\s+/g, "");
+  if (!compact) return null;
+
+  if (compact.includes("friend") || compact.includes("druzh") || compact.includes("друж")) {
+    return "friendship";
+  }
+  if (compact.includes("sport") || compact.includes("спорт")) {
+    return "sport";
+  }
+  return null;
+}
+
+function normalizeTournamentSubscriptionStatusEntry(
+  payload: unknown,
+  fallbackPlanType?: string | null,
+): TournamentSubscriptionStatus | null {
+  if (!isRecord(payload)) return null;
+  const data = isRecord(payload.data) ? payload.data : payload;
+
+  const totalLimitRaw = pickNumeric(data, ["totalLimit", "limit", "total", "maxCount"]);
+  const paidCountRaw = pickNumeric(data, ["paidCount", "paid", "soldCount"]);
+  const reservedCountRaw = pickNumeric(data, ["reservedCount", "reserved", "bookingCount"]);
+  const takenCountRaw = pickNumeric(data, ["takenCount", "taken", "occupiedCount"]);
+  const remainingCountRaw = pickNumeric(data, ["remainingCount", "leftCount", "availableCount"]);
+  const priceMinor = pickNumeric(data, ["priceMinor", "toPayMinor", "amountMinor"]);
+  const price = pickNumeric(data, ["price", "toPay", "amount"]);
+  const canPurchaseRaw = toBoolean(data.canPurchase);
+
+  const totalLimit = Math.max(0, Math.floor(totalLimitRaw ?? 0));
+  const paidCount = Math.max(0, Math.floor(paidCountRaw ?? 0));
+  const reservedCount = Math.max(0, Math.floor(reservedCountRaw ?? 0));
+  const takenCount = Math.max(0, Math.floor(takenCountRaw ?? (paidCount + reservedCount)));
+  const remainingCount = Math.max(0, Math.floor(remainingCountRaw ?? (totalLimit - takenCount)));
+
+  const planType = (
+    normalizeTournamentSubscriptionPlanTypeToken(pickString(data, ["planType", "type", "planTypeKey", "tariff", "tariffType"]))
+    || normalizeTournamentSubscriptionPlanTypeToken(pickString(data, ["plan", "planKey", "subscriptionType", "category"]))
+    || normalizeTournamentSubscriptionPlanTypeToken(pickString(data, ["campaignKey", "productName", "productId"]))
+    || normalizeTournamentSubscriptionPlanTypeToken(fallbackPlanType)
+  );
+
+  return {
+    counterKey: pickString(data, ["counterKey", "statusKey"]),
+    inventoryId: pickString(data, ["inventoryId"]),
+    unlimited: toBoolean(data.unlimited) ?? false,
+    planType,
+    campaignKey: pickString(data, ["campaignKey"]),
+    productId: pickString(data, ["productId"]),
+    productName: pickString(data, ["productName"]),
+    totalLimit,
+    paidCount,
+    reservedCount,
+    takenCount,
+    remainingCount,
+    canPurchase: canPurchaseRaw ?? remainingCount > 0,
+    priceMinor: priceMinor == null ? null : Math.max(0, Math.round(priceMinor)),
+    price,
+    updatedAt: pickString(data, ["updatedAt"]),
+  };
+}
+
+function appendTournamentSubscriptionStatus(
+  target: TournamentSubscriptionStatus[],
+  candidate: TournamentSubscriptionStatus | null,
+) {
+  if (!candidate) return;
+  target.push(candidate);
+}
+
+function collectTournamentSubscriptionStatusesFromContainer(
+  container: unknown,
+  target: TournamentSubscriptionStatus[],
+) {
+  if (!container) return;
+
+  if (Array.isArray(container)) {
+    container.forEach((entry) => {
+      appendTournamentSubscriptionStatus(
+        target,
+        normalizeTournamentSubscriptionStatusEntry(entry),
+      );
+    });
+    return;
+  }
+
+  if (!isRecord(container)) return;
+
+  TOURNAMENT_SUBSCRIPTION_PLAN_TYPES.forEach((planType) => {
+    appendTournamentSubscriptionStatus(
+      target,
+      normalizeTournamentSubscriptionStatusEntry(container[planType], planType),
+    );
+  });
+
+  Object.entries(container).forEach(([key, value]) => {
+    const planType = normalizeTournamentSubscriptionPlanTypeToken(key);
+    if (!planType) return;
+    appendTournamentSubscriptionStatus(
+      target,
+      normalizeTournamentSubscriptionStatusEntry(value, planType),
+    );
+  });
+
+  appendTournamentSubscriptionStatus(
+    target,
+    normalizeTournamentSubscriptionStatusEntry(container),
+  );
+}
+
+function normalizeTournamentSubscriptionStatuses(payload: unknown): TournamentSubscriptionStatus[] | null {
+  const statuses: TournamentSubscriptionStatus[] = [];
+  const rootData = isRecord(payload) && isRecord(payload.data) ? payload.data : null;
+
+  collectTournamentSubscriptionStatusesFromContainer(
+    isRecord(payload) ? payload.plans : null,
+    statuses,
+  );
+  collectTournamentSubscriptionStatusesFromContainer(
+    isRecord(payload) ? payload.statuses : null,
+    statuses,
+  );
+  collectTournamentSubscriptionStatusesFromContainer(
+    rootData ? rootData.plans : null,
+    statuses,
+  );
+  collectTournamentSubscriptionStatusesFromContainer(
+    rootData ? rootData.statuses : null,
+    statuses,
+  );
+
+  if (statuses.length > 0) return statuses;
+
+  collectTournamentSubscriptionStatusesFromContainer(rootData ?? payload, statuses);
+  if (statuses.length > 0) return statuses;
+
+  return null;
+}
+
+function normalizeTournamentSubscriptionPurchaseResult(
+  payload: unknown,
+): TournamentSubscriptionPurchaseResult | null {
+  if (!isRecord(payload)) return null;
+  const data = isRecord(payload.data) ? payload.data : payload;
+
+  return {
+    counterKey: pickString(data, ["counterKey", "statusKey"]),
+    inventoryId: pickString(data, ["inventoryId"]),
+    unlimited: toBoolean(data.unlimited) ?? false,
+    planType:
+      normalizeTournamentSubscriptionPlanTypeToken(pickString(data, ["planType", "type", "plan", "planKey", "tariff"]))
+      || normalizeTournamentSubscriptionPlanTypeToken(pickString(data, ["campaignKey", "productName", "productId"])),
+    campaignKey: pickString(data, ["campaignKey"]),
+    paymentRef: pickString(data, ["paymentRef", "ref"]),
+    transactionId: pickString(data, ["transactionId"]),
+    paymentUrl: extractPaymentUrl(data),
+    paymentExpiresAt: pickString(data, ["paymentExpiresAt", "expiresAt", "paymentDueDate"]),
+    productId: pickString(data, ["productId"]),
+    productName: pickString(data, ["productName"]),
+    toPayMinor: pickNumeric(data, ["toPayMinor"]),
+    toPay: pickNumeric(data, ["toPay"]),
+    remainingBefore: pickNumeric(data, ["remainingBefore"]),
+    remainingAfterReservation: pickNumeric(data, ["remainingAfterReservation"]),
+    status: pickString(data, ["status"]),
+  };
+}
+
+function normalizeTournamentSubscriptionConfirmResult(
+  payload: unknown,
+): TournamentSubscriptionConfirmResult | null {
+  if (!isRecord(payload)) return null;
+  const data = isRecord(payload.data) ? payload.data : payload;
+  const status = pickString(data, ["status"]);
+
+  return {
+    counterKey: pickString(data, ["counterKey", "statusKey"]),
+    inventoryId: pickString(data, ["inventoryId"]),
+    planType:
+      normalizeTournamentSubscriptionPlanTypeToken(pickString(data, ["planType", "type", "plan", "planKey", "tariff"]))
+      || normalizeTournamentSubscriptionPlanTypeToken(pickString(data, ["campaignKey", "productName", "productId"])),
+    campaignKey: pickString(data, ["campaignKey"]),
+    paymentRef: pickString(data, ["paymentRef", "ref"]),
+    transactionId: pickString(data, ["transactionId"]),
+    status,
+    paid: data.paid === true || String(status || "").toUpperCase().includes("PAID"),
+    failed: data.failed === true || String(status || "").toUpperCase().includes("FAIL"),
+    paymentUrl: extractPaymentUrl(data),
+    expiresAt: pickString(data, ["expiresAt", "paymentExpiresAt", "paymentDueDate"]),
+    updatedAt: pickString(data, ["updatedAt"]),
+  };
+}
+
+export async function apiFetchTournamentSubscriptionStatus(
+  params: TournamentSubscriptionStatusParams = {},
+) {
+  const baseUrl = getServ2Origin() || "";
+  const query = new URLSearchParams();
+  if (params.counterKey?.trim()) {
+    query.set("counterKey", params.counterKey.trim());
+  }
+  if (params.planType?.trim()) {
+    query.set("planKey", params.planType.trim());
+  }
+  if (params.campaignKey?.trim()) {
+    query.set("campaignKey", params.campaignKey.trim());
+  }
+  const queryString = query.toString();
+  const path = queryString
+    ? `/lk/tournaments/summer-subscription/status?${queryString}`
+    : "/lk/tournaments/summer-subscription/status";
+  const response = await request<unknown>(path, {
+    method: "GET",
+    baseUrl,
+    retries: 0,
+  });
+
+  if (response.error) {
+    return {
+      data: null as TournamentSubscriptionStatus[] | null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  const parsed = normalizeTournamentSubscriptionStatuses(response.data);
+  if (!parsed) {
+    return {
+      data: null as TournamentSubscriptionStatus[] | null,
+      error: {
+        status: response.status,
+        message: "Не удалось разобрать статус лимитированного абонемента",
+        raw: response.data,
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: parsed,
+    error: null,
+    status: response.status,
+  };
+}
+
+export async function apiCreateTournamentSubscriptionPurchase(
+  params: TournamentSubscriptionPurchaseParams,
+) {
+  const clientPhone = params.clientPhone.trim();
+  if (!clientPhone) {
+    return {
+      data: null as TournamentSubscriptionPurchaseResult | null,
+      error: {
+        status: 400,
+        message: "Не указан номер телефона для оплаты абонемента",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const baseUrl = getServ2Origin() || "";
+  const response = await request<unknown>("/lk/tournaments/summer-subscription/purchase", {
+    method: "POST",
+    baseUrl,
+    retries: 0,
+    body: JSON.stringify({
+      clientPhone,
+      clientId: params.clientId ?? null,
+      counterKey: params.counterKey ?? null,
+      planType: params.planType ?? null,
+      plan: params.planType ?? null,
+      tariff: params.planType ?? null,
+      campaignKey: params.campaignKey ?? null,
+      productId: params.productId ?? null,
+      paymentRef: params.paymentRef ?? null,
+      successUrl: params.successUrl ?? params.baseRedirectUrl ?? null,
+      failUrl: params.failUrl ?? params.baseRedirectUrl ?? null,
+      baseRedirectUrl: params.baseRedirectUrl ?? null,
+      trainerQrCode: params.trainerQrCode ?? null,
+    }),
+  });
+
+  if (response.error) {
+    return {
+      data: null as TournamentSubscriptionPurchaseResult | null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  const parsed = normalizeTournamentSubscriptionPurchaseResult(response.data);
+  if (!parsed) {
+    return {
+      data: null as TournamentSubscriptionPurchaseResult | null,
+      error: {
+        status: response.status,
+        message: "Не удалось разобрать ответ оплаты абонемента",
+        raw: response.data,
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: parsed,
+    error: null,
+    status: response.status,
+  };
+}
+
+export async function apiConfirmTournamentSubscriptionPurchase(
+  paymentRef: string,
+  params: TournamentSubscriptionConfirmParams = {},
+) {
+  const normalizedPaymentRef = paymentRef.trim();
+  if (!normalizedPaymentRef) {
+    return {
+      data: null as TournamentSubscriptionConfirmResult | null,
+      error: {
+        status: 400,
+        message: "Не указан paymentRef для подтверждения оплаты",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const baseUrl = getServ2Origin() || "";
+  const response = await request<unknown>("/lk/tournaments/summer-subscription/confirm", {
+    method: "POST",
+    baseUrl,
+    retries: 0,
+    body: JSON.stringify({
+      paymentRef: normalizedPaymentRef,
+      counterKey: params.counterKey ?? null,
+      planType: params.planType ?? null,
+      plan: params.planType ?? null,
+      tariff: params.planType ?? null,
+      campaignKey: params.campaignKey ?? null,
+    }),
+  });
+
+  if (response.error) {
+    return {
+      data: null as TournamentSubscriptionConfirmResult | null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  const parsed = normalizeTournamentSubscriptionConfirmResult(response.data);
+  if (!parsed) {
+    return {
+      data: null as TournamentSubscriptionConfirmResult | null,
+      error: {
+        status: response.status,
+        message: "Не удалось разобрать ответ подтверждения оплаты",
+        raw: response.data,
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: parsed,
+    error: null,
+    status: response.status,
+  };
+}
+
+function normalizeReferralSubscriptionOwnerStatus(payload: unknown): ReferralSubscriptionOwnerStatus | null {
+  if (!isRecord(payload)) return null;
+  const data = isRecord(payload.data) ? payload.data : payload;
+
+  return {
+    inviteId: pickString(data, ["inviteId"]),
+    ownerPhone: pickString(data, ["ownerPhone"]),
+    ownerSubscriptionId: pickString(data, ["ownerSubscriptionId", "subscriptionId"]),
+    ownerCycleKey: pickString(data, ["ownerCycleKey"]),
+    flowType: pickString(data, ["flowType", "mode"]) as "share" | "renewal" | null,
+    subscriptionName: pickString(data, ["subscriptionName", "productName", "name"]),
+    expirationDate: pickString(data, ["expirationDate"]),
+    windowStartsAt: pickString(data, ["windowStartsAt"]),
+    windowEndsAt: pickString(data, ["windowEndsAt"]),
+    windowActive: toBoolean(data.windowActive) ?? false,
+    countdownVisible: toBoolean(data.countdownVisible) ?? false,
+    renewalPurchased: toBoolean(data.renewalPurchased) ?? false,
+  };
+}
+
+function normalizeReferralSubscriptionInviteResult(payload: unknown): ReferralSubscriptionInviteResult | null {
+  if (!isRecord(payload)) return null;
+  const data = isRecord(payload.data) ? payload.data : payload;
+
+  return {
+    inviteId: pickString(data, ["inviteId"]),
+    ownerSubscriptionId: pickString(data, ["ownerSubscriptionId", "subscriptionId"]),
+    flowType: pickString(data, ["flowType", "mode"]) as "share" | "renewal" | null,
+  };
+}
+
+function normalizeReferralSubscriptionPlanStatus(payload: unknown): ReferralSubscriptionPlanStatus | null {
+  if (!isRecord(payload)) return null;
+  const data = isRecord(payload.data) ? payload.data : payload;
+
+  const totalLimit = Math.max(0, Math.floor(pickNumeric(data, ["totalLimit", "limit"]) ?? 0));
+  const paidCount = Math.max(0, Math.floor(pickNumeric(data, ["paidCount", "paid"]) ?? 0));
+  const reservedCount = Math.max(0, Math.floor(pickNumeric(data, ["reservedCount", "reserved"]) ?? 0));
+  const takenCount = Math.max(0, Math.floor(pickNumeric(data, ["takenCount", "taken"]) ?? (paidCount + reservedCount)));
+  const remainingCount = Math.max(0, Math.floor(pickNumeric(data, ["remainingCount", "leftCount"]) ?? (totalLimit - takenCount)));
+
+  return {
+    planKey: pickString(data, ["planKey", "planType", "type"]),
+    flowType: pickString(data, ["flowType", "mode"]) as "share" | "renewal" | null,
+    ownerCycleKey: pickString(data, ["ownerCycleKey"]),
+    productId: pickString(data, ["productId"]),
+    productName: pickString(data, ["productName"]),
+    totalLimit,
+    paidCount,
+    reservedCount,
+    takenCount,
+    remainingCount,
+    canPurchase: toBoolean(data.canPurchase) ?? remainingCount > 0,
+    priceMinor: pickNumeric(data, ["priceMinor", "toPayMinor"]),
+    price: pickNumeric(data, ["price", "toPay"]),
+    updatedAt: pickString(data, ["updatedAt"]),
+    paymentStatus: pickString(data, ["paymentStatus"]),
+    subscriptionStatus: pickString(data, ["subscriptionStatus"]),
+    activePaymentRef: pickString(data, ["activePaymentRef", "paymentRef"]),
+    activePaymentUrl: extractPaymentUrl(data.activePaymentUrl ?? data.paymentUrl ?? data),
+    activePaymentExpiresAt: pickString(data, ["activePaymentExpiresAt", "paymentExpiresAt", "expiresAt"]),
+    issuedSubscriptionId: pickString(data, ["issuedSubscriptionId"]),
+    issuedAt: pickString(data, ["issuedAt"]),
+  };
+}
+
+function normalizeReferralSubscriptionStatusPayload(payload: unknown): ReferralSubscriptionStatusPayload | null {
+  if (!isRecord(payload)) return null;
+  const data = isRecord(payload.data) ? payload.data : payload;
+  const plansSource = Array.isArray(data.plans)
+    ? data.plans
+    : Array.isArray(data.statuses)
+      ? data.statuses
+      : [];
+
+  return {
+    owner: normalizeReferralSubscriptionOwnerStatus(data.owner),
+    plans: plansSource
+      .map((entry) => normalizeReferralSubscriptionPlanStatus(entry))
+      .filter((entry): entry is ReferralSubscriptionPlanStatus => Boolean(entry)),
+  };
+}
+
+function normalizeReferralSubscriptionPurchaseResult(payload: unknown): ReferralSubscriptionPurchaseResult | null {
+  if (!isRecord(payload)) return null;
+  const data = isRecord(payload.data) ? payload.data : payload;
+
+  return {
+    inviteId: pickString(data, ["inviteId"]),
+    ownerPhone: pickString(data, ["ownerPhone"]),
+    ownerSubscriptionId: pickString(data, ["ownerSubscriptionId", "subscriptionId"]),
+    ownerCycleKey: pickString(data, ["ownerCycleKey"]),
+    flowType: pickString(data, ["flowType", "mode"]) as "share" | "renewal" | null,
+    planKey: pickString(data, ["planKey", "planType", "type"]),
+    paymentRef: pickString(data, ["paymentRef", "ref"]),
+    transactionId: pickString(data, ["transactionId"]),
+    paymentUrl: extractPaymentUrl(data),
+    paymentExpiresAt: pickString(data, ["paymentExpiresAt", "expiresAt", "paymentDueDate"]),
+    productId: pickString(data, ["productId"]),
+    productName: pickString(data, ["productName"]),
+    toPayMinor: pickNumeric(data, ["toPayMinor"]),
+    toPay: pickNumeric(data, ["toPay"]),
+    remainingBefore: pickNumeric(data, ["remainingBefore"]),
+    remainingAfterReservation: pickNumeric(data, ["remainingAfterReservation"]),
+    paymentStatus: pickString(data, ["paymentStatus"]),
+    subscriptionStatus: pickString(data, ["subscriptionStatus"]),
+    reusedExistingPayment: toBoolean(data.reusedExistingPayment) ?? false,
+    status: pickString(data, ["status"]),
+  };
+}
+
+function normalizeReferralSubscriptionConfirmResult(payload: unknown): ReferralSubscriptionConfirmResult | null {
+  if (!isRecord(payload)) return null;
+  const data = isRecord(payload.data) ? payload.data : payload;
+  const status = pickString(data, ["status"]);
+
+  return {
+    inviteId: pickString(data, ["inviteId"]),
+    ownerPhone: pickString(data, ["ownerPhone"]),
+    ownerSubscriptionId: pickString(data, ["ownerSubscriptionId", "subscriptionId"]),
+    ownerCycleKey: pickString(data, ["ownerCycleKey"]),
+    flowType: pickString(data, ["flowType", "mode"]) as "share" | "renewal" | null,
+    planKey: pickString(data, ["planKey", "planType", "type"]),
+    paymentRef: pickString(data, ["paymentRef", "ref"]),
+    transactionId: pickString(data, ["transactionId"]),
+    status,
+    paymentStatus: pickString(data, ["paymentStatus"]) || status,
+    subscriptionStatus: pickString(data, ["subscriptionStatus"]),
+    paid: data.paid === true || String(status || "").toUpperCase().includes("PAID"),
+    failed: data.failed === true || String(status || "").toUpperCase().includes("FAIL"),
+    paymentUrl: extractPaymentUrl(data),
+    expiresAt: pickString(data, ["expiresAt", "paymentExpiresAt", "paymentDueDate"]),
+    updatedAt: pickString(data, ["updatedAt"]),
+    issuedSubscriptionId: pickString(data, ["issuedSubscriptionId"]),
+    issuedAt: pickString(data, ["issuedAt"]),
+    issuedExpirationDate: pickString(data, ["issuedExpirationDate"]),
+  };
+}
+
+export async function apiFetchReferralSubscriptionStatus(
+  params: ReferralSubscriptionStatusParams,
+) {
+  const inviteId = params.inviteId?.trim() || "";
+  const ownerPhone = params.ownerPhone?.trim() || "";
+  const ownerSubscriptionId = params.ownerSubscriptionId?.trim() || "";
+  const mode = params.mode === "renewal" ? "renewal" : "share";
+  if (!inviteId && (!ownerPhone || !ownerSubscriptionId)) {
+    return {
+      data: null as ReferralSubscriptionStatusPayload | null,
+      error: {
+        status: 400,
+        message: "Не хватает inviteId или пары ownerPhone/ownerSubscriptionId для реферальной страницы",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const baseUrl = getServ2Origin() || "";
+  const query = new URLSearchParams({ mode });
+  if (inviteId) {
+    query.set("inviteId", inviteId);
+  } else {
+    query.set("ownerPhone", ownerPhone);
+    query.set("ownerSubscriptionId", ownerSubscriptionId);
+  }
+  const response = await request<unknown>(`/lk/tournaments/referral-subscription/status?${query.toString()}`, {
+    method: "GET",
+    baseUrl,
+    retries: 0,
+  });
+
+  if (response.error) {
+    return {
+      data: null as ReferralSubscriptionStatusPayload | null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  const parsed = normalizeReferralSubscriptionStatusPayload(response.data);
+  if (!parsed) {
+    return {
+      data: null as ReferralSubscriptionStatusPayload | null,
+      error: {
+        status: response.status,
+        message: "Не удалось разобрать статус реферальной подписки",
+        raw: response.data,
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: parsed,
+    error: null,
+    status: response.status,
+  };
+}
+
+export async function apiCreateReferralSubscriptionInvite(
+  params: ReferralSubscriptionInviteParams,
+) {
+  const ownerPhone = params.ownerPhone.trim();
+  const ownerSubscriptionId = params.ownerSubscriptionId.trim();
+  const mode = params.mode === "renewal" ? "renewal" : "share";
+
+  if (!ownerPhone || !ownerSubscriptionId) {
+    return {
+      data: null as ReferralSubscriptionInviteResult | null,
+      error: {
+        status: 400,
+        message: "Не хватает ownerPhone или ownerSubscriptionId для создания реферальной ссылки",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const baseUrl = getServ2Origin() || "";
+  const response = await request<unknown>("/lk/tournaments/referral-subscription/invite", {
+    method: "POST",
+    baseUrl,
+    retries: 0,
+    body: JSON.stringify({
+      ownerPhone,
+      ownerSubscriptionId,
+      mode,
+    }),
+  });
+
+  if (response.error) {
+    return {
+      data: null as ReferralSubscriptionInviteResult | null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  const parsed = normalizeReferralSubscriptionInviteResult(response.data);
+  if (!parsed) {
+    return {
+      data: null as ReferralSubscriptionInviteResult | null,
+      error: {
+        status: response.status,
+        message: "Не удалось разобрать ответ создания реферальной ссылки",
+        raw: response.data,
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: parsed,
+    error: null,
+    status: response.status,
+  };
+}
+
+export async function apiCreateReferralSubscriptionPurchase(
+  params: ReferralSubscriptionPurchaseParams,
+) {
+  const inviteId = params.inviteId?.trim() || "";
+  const ownerPhone = params.ownerPhone?.trim() || "";
+  const ownerSubscriptionId = params.ownerSubscriptionId?.trim() || "";
+  const clientPhone = params.clientPhone.trim();
+  const planKey = params.planKey.trim();
+  const mode = params.mode === "renewal" ? "renewal" : "share";
+
+  if ((!inviteId && (!ownerPhone || !ownerSubscriptionId)) || !clientPhone || !planKey) {
+    return {
+      data: null as ReferralSubscriptionPurchaseResult | null,
+      error: {
+        status: 400,
+        message: "Не хватает inviteId или ownerPhone/ownerSubscriptionId, clientPhone или planKey",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const baseUrl = getServ2Origin() || "";
+  const response = await request<unknown>("/lk/tournaments/referral-subscription/purchase", {
+    method: "POST",
+    baseUrl,
+    retries: 0,
+    body: JSON.stringify({
+      inviteId: inviteId || null,
+      ownerPhone: inviteId ? null : ownerPhone,
+      ownerSubscriptionId: inviteId ? null : ownerSubscriptionId,
+      mode,
+      clientPhone,
+      clientId: params.clientId ?? null,
+      planKey,
+      planType: planKey,
+      paymentRef: params.paymentRef ?? null,
+      successUrl: params.successUrl ?? params.baseRedirectUrl ?? null,
+      failUrl: params.failUrl ?? params.baseRedirectUrl ?? null,
+      baseRedirectUrl: params.baseRedirectUrl ?? null,
+    }),
+  });
+
+  if (response.error) {
+    return {
+      data: null as ReferralSubscriptionPurchaseResult | null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  const parsed = normalizeReferralSubscriptionPurchaseResult(response.data);
+  if (!parsed) {
+    return {
+      data: null as ReferralSubscriptionPurchaseResult | null,
+      error: {
+        status: response.status,
+        message: "Не удалось разобрать ответ оплаты реферальной подписки",
+        raw: response.data,
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: parsed,
+    error: null,
+    status: response.status,
+  };
+}
+
+export async function apiConfirmReferralSubscriptionPurchase(
+  paymentRef: string,
+  params: ReferralSubscriptionConfirmParams,
+) {
+  const normalizedPaymentRef = paymentRef.trim();
+  const inviteId = params.inviteId?.trim() || "";
+  const ownerPhone = params.ownerPhone?.trim() || "";
+  const ownerSubscriptionId = params.ownerSubscriptionId?.trim() || "";
+  const mode = params.mode === "renewal" ? "renewal" : "share";
+
+  if (!normalizedPaymentRef || (!inviteId && (!ownerPhone || !ownerSubscriptionId))) {
+    return {
+      data: null as ReferralSubscriptionConfirmResult | null,
+      error: {
+        status: 400,
+        message: "Не хватает paymentRef и inviteId или ownerPhone/ownerSubscriptionId",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const baseUrl = getServ2Origin() || "";
+  const response = await request<unknown>("/lk/tournaments/referral-subscription/confirm", {
+    method: "POST",
+    baseUrl,
+    retries: 0,
+    body: JSON.stringify({
+      paymentRef: normalizedPaymentRef,
+      inviteId: inviteId || null,
+      ownerPhone: inviteId ? null : ownerPhone,
+      ownerSubscriptionId: inviteId ? null : ownerSubscriptionId,
+      mode,
+      planKey: params.planKey ?? null,
+      planType: params.planKey ?? null,
+    }),
+  });
+
+  if (response.error) {
+    return {
+      data: null as ReferralSubscriptionConfirmResult | null,
+      error: response.error,
+      status: response.status,
+    };
+  }
+
+  const parsed = normalizeReferralSubscriptionConfirmResult(response.data);
+  if (!parsed) {
+    return {
+      data: null as ReferralSubscriptionConfirmResult | null,
+      error: {
+        status: response.status,
+        message: "Не удалось разобрать ответ подтверждения реферальной подписки",
+        raw: response.data,
+      },
+      status: response.status,
+    };
+  }
+
+  return {
+    data: parsed,
+    error: null,
+    status: response.status,
+  };
+}
+
 export async function apiGetSubscriptionsForSale() {
-  const primary = `${SERV2}?type=sub_for_sale`;
-  const fallback = SERV2_FALLBACK ? `${SERV2_FALLBACK}?type=sub_for_sale` : undefined;
-  return requestWithFallback<apiSubscription[]>(primary, fallback, {
+  const candidates = buildProjectUrlCandidates(`${SERV2}?type=sub_for_sale`, SERV2, SERV2_FALLBACK);
+  return requestAbsoluteUrlCandidates<apiSubscription[]>(candidates, {
     method: "GET",
     retries: 1,
   });
 }
 
 export async function apiGetAdvertisement() {
-  const primary = `${SERV2}?type=advertisement`;
-  const fallback = SERV2_FALLBACK ? `${SERV2_FALLBACK}?type=advertisement` : undefined;
-  return requestWithFallback<AdvertisementType>(primary, fallback, {
+  const candidates = buildProjectUrlCandidates(`${SERV2}?type=advertisement`, SERV2, SERV2_FALLBACK);
+  return requestAbsoluteUrlCandidates<AdvertisementType>(candidates, {
     method: "GET",
     retries: 1,
   });

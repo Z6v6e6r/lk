@@ -5,6 +5,7 @@ import test from 'node:test';
 import { GAMES_PATCH_CONTRACT, PATCH_SOURCE_PATH } from '../patch_live_games_patch.mjs';
 
 const LIVE_PATCH_SHA256 = 'cd19171a18ec18a553418d5b1725bab50ee1df2788e5160143430aaeb758c8ad';
+const PATCH_CANDIDATE_SHA256 = '7d007ab69297b7ab4314bf23a21cb6fbebcdc6f149e0bfd9d931f0329718261c';
 
 class FixedDate extends Date {
   constructor(...args) { super(...(args.length ? args : ['2026-07-27T10:00:00.000Z'])); }
@@ -17,9 +18,10 @@ function run(payload, gameId = 'game-42') {
   return new Function('msg', 'Date', source())(msg, FixedDate);
 }
 
-test('tracked patch source is the exact verified live function', () => {
-  assert.equal(crypto.createHash('sha256').update(source()).digest('hex'), LIVE_PATCH_SHA256);
+test('tracked patch source is a pinned candidate after the exact verified live function', () => {
+  assert.equal(crypto.createHash('sha256').update(source()).digest('hex'), PATCH_CANDIDATE_SHA256);
   assert.equal(GAMES_PATCH_CONTRACT.target.preimageSha256, LIVE_PATCH_SHA256);
+  assert.equal(GAMES_PATCH_CONTRACT.target.sourceSha256, PATCH_CANDIDATE_SHA256);
 });
 
 test('both PATCH routes remain the only verified production inputs', () => {

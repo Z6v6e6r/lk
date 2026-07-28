@@ -126,8 +126,6 @@ const collectPhones = (doc) => {
   return uniq([
     organizerPhone,
     metadataOrganizerPhone,
-    ...asArray(doc?.participantPhones).map((p) => normPhone(p)),
-    ...asArray(doc?.waitlistPhones).map((p) => normPhone(p)),
     ...asArray(doc?.invitedPhones).map((p) => normPhone(p)),
     ...pPhones,
     ...wPhones,
@@ -177,8 +175,6 @@ const collectClientIds = (doc) => {
   return uniq([
     toStr(doc?.organizer?.id),
     toStr(doc?.metadata?.organizerId),
-    ...asArray(doc?.participantIds).map((item) => toStr(item)),
-    ...asArray(doc?.waitlistIds).map((item) => toStr(item)),
     ...asArray(doc?.participants).filter((item) => !isInactiveStatus(item?.status)).map((item) => toStr(item?.id)),
     ...asArray(doc?.waitlist).filter((item) => !isInactiveStatus(item?.status)).map((item) => toStr(item?.id)),
     ...splitPaymentClientIds,

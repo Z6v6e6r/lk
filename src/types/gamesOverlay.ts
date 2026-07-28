@@ -1,7 +1,12 @@
+import type { PadelGameRecord } from "../utils/apiClient";
+
 export type GamesCreateFromBookingData = {
   bookingId: string;
   slotId?: string | null;
   exerciseId?: string | null;
+  typeId?: number | null;
+  typeName?: string | null;
+  directionId?: number | null;
   studioId?: string | null;
   studioName?: string | null;
   roomId?: string | null;
@@ -21,6 +26,7 @@ export type OpenGamesOptions = {
   joinGameId?: string | null;
   openChat?: boolean;
   createFromBooking?: GamesCreateFromBookingData | null;
+  initialGameRecord?: PadelGameRecord | null;
   cabinetUrl?: string | null;
 };
 
@@ -28,8 +34,11 @@ export type GamesMountData = {
   openGameId?: string | null;
   openChat?: boolean;
   createFromBooking?: GamesCreateFromBookingData | null;
+  initialGameRecord?: PadelGameRecord | null;
   publicCreateEntry?: boolean;
+  compositeCreateEntry?: boolean;
   publicFindEntry?: boolean;
+  includeGamePlusTrainer?: boolean;
   joinGameId?: string | null;
   presetStudioId?: string | null;
   presetStudioName?: string | null;

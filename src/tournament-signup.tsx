@@ -13,9 +13,11 @@ import {
 } from "./utils/analytics";
 import { mountDevReleaseBadge } from "./utils/devReleaseBadge";
 import { ensureFreshRelease } from "./utils/releaseGuard";
+import { readTournamentSignupEntryDataFromHref } from "./utils/tournamentSignupEntry";
 
 type TournamentSignupMountData = {
   tournamentId?: string | null;
+  tournamentSlug?: string | null;
   date?: string | null;
 };
 type MountOptions = {
@@ -39,8 +41,14 @@ mountDevReleaseBadge({ bundleFileNames: ["tournament-signup.js", "tournament-sig
 installGlobalErrorTracking();
 trackAnalyticsEvent("widget_bundle_loaded", { entry: "tournament-signup" });
 
+function readTournamentSignupDataFromLocation(): TournamentSignupMountData {
+  if (typeof window === "undefined") return {};
+  return readTournamentSignupEntryDataFromHref(window.location.href);
+}
+
 function TournamentSignupContent({ data, onClose }: { data?: TournamentSignupMountData; onClose?: () => void }) {
   const [ready, setReady] = useState(false);
+  const locationData = readTournamentSignupDataFromLocation();
 
   useEffect(() => {
     setReady(true);
@@ -53,15 +61,16 @@ function TournamentSignupContent({ data, onClose }: { data?: TournamentSignupMou
   return (
     <TournamentSignupPage
       onBack={() => onClose?.()}
-      initialTournamentId={data?.tournamentId ?? null}
-      initialDate={data?.date ?? null}
+      initialTournamentId={data?.tournamentId ?? locationData.tournamentId ?? null}
+      initialTournamentSlug={data?.tournamentSlug ?? locationData.tournamentSlug ?? null}
+      initialDate={data?.date ?? locationData.date ?? null}
     />
   );
 }
 
 function TournamentSignupApp({ data, onClose }: { data?: TournamentSignupMountData; onClose?: () => void }) {
   return (
-    <AuthProvider>
+    <AuthProvider authMode="viva">
       <TournamentSignupContent data={data} onClose={onClose} />
     </AuthProvider>
   );

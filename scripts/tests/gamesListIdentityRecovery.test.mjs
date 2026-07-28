@@ -17,7 +17,7 @@ import { verifyWorkspace } from '../verify_nodered_source_origin.mjs';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SOURCE_DIR = path.join(REPO_ROOT, 'scripts/nodered_games_nodes');
 const TEMP_ROOTS = [];
-const DIRTY_NORMALIZER_HOLD_SHA256 =
+const NORMALIZER_CANDIDATE_SHA256 =
   'e99d0311090ac280d6ff2c6d8d27a0034d63f6acb6bcbcd3f6a9fcc3d990287e';
 
 function sha256(value) {
@@ -169,6 +169,10 @@ function fixtureFlowAndContract() {
   contract.normalizer.nodeSha256 = sha256Json(
     flow.find((node) => node.id === contract.normalizer.id),
   );
+  contract.query.preimageSha256 = sha256(sources[contract.query.file]);
+  contract.query.sourceSha256 = sha256(sources[contract.query.file]);
+  contract.normalizer.preimageSha256 = sha256(sources[contract.normalizer.file]);
+  contract.normalizer.sourceSha256 = sha256(sources[contract.normalizer.file]);
   return { flow, raw, contract };
 }
 
@@ -200,7 +204,7 @@ function createWorkspace() {
   return { root, workspace, sourcePath, ...fixture };
 }
 
-test('tracked query and normalizer are exact current live functions', () => {
+test('tracked query stays live-exact while the normalizer is a pinned candidate', () => {
   const sources = sourceByFile();
   assert.equal(sha256(sources[GAMES_LIST_CONTRACT.query.file]), GAMES_LIST_CONTRACT.query.sourceSha256);
   assert.equal(
@@ -208,14 +212,13 @@ test('tracked query and normalizer are exact current live functions', () => {
     GAMES_LIST_CONTRACT.normalizer.sourceSha256,
   );
   assert.equal(GAMES_LIST_CONTRACT.query.sourceSha256, GAMES_LIST_CONTRACT.query.preimageSha256);
-  assert.equal(
+  assert.notEqual(
     GAMES_LIST_CONTRACT.normalizer.sourceSha256,
     GAMES_LIST_CONTRACT.normalizer.preimageSha256,
   );
-  assert.notEqual(
-    DIRTY_NORMALIZER_HOLD_SHA256,
+  assert.equal(
+    NORMALIZER_CANDIDATE_SHA256,
     GAMES_LIST_CONTRACT.normalizer.sourceSha256,
-    'the dirty normalizer must remain quarantined instead of becoming the live source contract',
   );
 });
 
@@ -274,7 +277,7 @@ test('normalizer retains clientId-only participants and uses OR for current dual
   }, [idMatchPhoneMismatch]).games.length, 1);
 });
 
-test('participant/waitlist phone and ID projections work while inactive split identities do not', () => {
+test('active roster identities work while stale projections and inactive split identities do not', () => {
   const participantPhone = futureGame({
     participants: [{ id: 'p1', phone: '+7 999 111-22-33', status: 'ACTIVE' }],
   });
@@ -293,15 +296,15 @@ test('participant/waitlist phone and ID projections work while inactive split id
       waitlistIds: ['waitlist-projection'],
     },
   });
-  assert.equal(normalizeFor({ phone: '79991112233' }, [persistedProjections]).games.length, 1);
-  assert.equal(normalizeFor({ phone: '79992223344' }, [persistedProjections]).games.length, 1);
+  assert.equal(normalizeFor({ phone: '79991112233' }, [persistedProjections]).games.length, 0);
+  assert.equal(normalizeFor({ phone: '79992223344' }, [persistedProjections]).games.length, 0);
   assert.equal(
     normalizeFor({ clientId: 'participant-projection' }, [persistedProjections]).games.length,
-    1,
+    0,
   );
   assert.equal(
     normalizeFor({ clientId: 'waitlist-projection' }, [persistedProjections]).games.length,
-    1,
+    0,
   );
 
   const inactiveRoster = futureGame({

@@ -32,8 +32,10 @@ function CommunitiesApp({ data }: { data?: CommunitiesMountData }) {
     <CommunitiesSection
       profile={data.profile}
       createdGames={data.createdGames}
+      activeBookingExerciseIds={data.activeBookingExerciseIds}
       onOpenGames={data.onOpenGames}
       onOpenTournaments={data.onOpenTournaments}
+      onOpenLevelsInfo={data.onOpenLevelsInfo}
       onOpenHome={data.onOpenHome}
       onOpenProfile={data.onOpenProfile}
       initialInviteCode={data.initialInviteCode}

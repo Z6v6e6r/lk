@@ -38,6 +38,12 @@ source_dir="${SOURCE_DIR:-$script_dir}"
 target_dir="${TARGET_DIR:-/var/www/html/lk}"
 backup_dir="${BACKUP_DIR:-$target_dir/.deploy-backups}"
 dry_run=0
+font_files=(
+  "rf-dewi-ultrabold.woff2"
+  "rf-dewi-expanded-ultrabold-italic.woff2"
+  "SourceCodePro-Medium.woff2"
+  "SourceCodePro-Regular.woff2"
+)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -66,7 +72,13 @@ prod_files=(
   "bundle.js"
   "games.js"
   "tournaments.js"
+  "tournament-signup.js"
+  "group-schedule.js"
+  "padel-day-schedule.js"
+  "tournament-subscription.js"
+  "tournament-subscription-referral.js"
   "onboarding.js"
+  "levels-info.js"
   "communities.js"
   "release.json"
 )
@@ -75,7 +87,13 @@ dev_files=(
   "bundle-dev.js"
   "games-dev.js"
   "tournaments-dev.js"
+  "tournament-signup-dev.js"
+  "group-schedule-dev.js"
+  "padel-day-schedule-dev.js"
+  "tournament-subscription-dev.js"
+  "tournament-subscription-referral-dev.js"
   "onboarding-dev.js"
+  "levels-info-dev.js"
   "communities-dev.js"
   "release-dev.json"
 )
@@ -100,6 +118,12 @@ for file_name in "${files[@]}"; do
   fi
 done
 
+for file_name in "${font_files[@]}"; do
+  if [[ ! -f "$source_dir/fonts/$file_name" ]]; then
+    missing_files+=("$source_dir/fonts/$file_name")
+  fi
+done
+
 if [[ ${#missing_files[@]} -gt 0 ]]; then
   echo "Missing upload files:" >&2
   for file_path in "${missing_files[@]}"; do
@@ -119,6 +143,10 @@ echo "Files:"
 for file_name in "${files[@]}"; do
   echo "  - $file_name"
 done
+echo "Fonts:"
+for file_name in "${font_files[@]}"; do
+  echo "  - fonts/$file_name"
+done
 
 if [[ "$dry_run" == "1" ]]; then
   echo
@@ -126,7 +154,7 @@ if [[ "$dry_run" == "1" ]]; then
   exit 0
 fi
 
-mkdir -p "$target_dir" "$backup_target"
+mkdir -p "$target_dir" "$target_dir/fonts" "$backup_target" "$backup_target/fonts"
 
 for file_name in "${files[@]}"; do
   if [[ -f "$target_dir/$file_name" ]]; then
@@ -134,8 +162,18 @@ for file_name in "${files[@]}"; do
   fi
 done
 
+for file_name in "${font_files[@]}"; do
+  if [[ -f "$target_dir/fonts/$file_name" ]]; then
+    cp -p "$target_dir/fonts/$file_name" "$backup_target/fonts/$file_name"
+  fi
+done
+
 for file_name in "${files[@]}"; do
   install -m 0644 "$source_dir/$file_name" "$target_dir/$file_name"
+done
+
+for file_name in "${font_files[@]}"; do
+  install -m 0644 "$source_dir/fonts/$file_name" "$target_dir/fonts/$file_name"
 done
 
 echo

@@ -44,7 +44,7 @@ function OnboardingContent({
   onClose?: () => void;
   data?: OnboardingData;
 }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isRestoringSession } = useAuth();
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -53,6 +53,10 @@ function OnboardingContent({
 
   if (!ready) {
     return <div className="loading">Загрузка...</div>;
+  }
+
+  if (isRestoringSession) {
+    return <div className="loading">Проверяем сессию...</div>;
   }
 
   if (!isAuthenticated) {

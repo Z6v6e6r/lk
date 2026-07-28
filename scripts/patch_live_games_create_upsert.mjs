@@ -86,7 +86,7 @@ export const CREATE_UPSERT_CONTRACT = Object.freeze({
       ['9756d9125563753f'],
     ],
     preimageSha256: '08c2b5ac7d2f5ee111efab6edb0c19c3eb663fd16e5bfa5798a1f717cc82312f',
-    sourceSha256: '08c2b5ac7d2f5ee111efab6edb0c19c3eb663fd16e5bfa5798a1f717cc82312f',
+    sourceSha256: 'd44a8fd52c3b9818f3dc180bacc9feb3cc9dfd09bb98aa6df55d1b89e059f092',
   },
   graphNodes: GRAPH_NODES,
   reachableNodeIds: [...ROUTES.map(({ id }) => id), ...GRAPH_NODES.map(({ id }) => id)].sort(),

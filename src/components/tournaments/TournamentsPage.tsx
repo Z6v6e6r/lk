@@ -1,30 +1,46 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import { Modal } from "../UI/Modal";
+import { BookingCancellationDialog } from "../cabinet/BookingCancellationDialog";
 import {
-  apiCancelBooking,
   apiFetchBookings,
   apiCreateAmericanoTournament,
+  apiFetchExercisesByPeriod,
   apiFetchExercisesByVisibleDate,
   apiFetchPadelLiveRatings,
   apiFetchProfile,
+  apiSearchPadelPlayers,
   apiFetchTournamentHistory,
   apiFetchTournamentParticipants,
+  apiFetchTournamentBroadcastState,
   isTournamentExerciseCategory,
   apiSaveOnboardingLevel,
-  getServ2Origin,
+  apiSetTournamentBroadcastState,
   apiUpdateAmericanoResults,
+  getServ2Origin,
 } from "../../utils/apiClient";
 import type {
   AmericanoTournamentPayload,
   AmericanoResultsResponse,
+  AmericanoResultsPayload,
   Booking,
   Exercise,
   ExerciseBooking,
+  PadelPlayerCandidate,
   TournamentTypeKey,
   TournamentHistoryRecord,
   UserProfileType,
 } from "../../utils/apiClient";
 import { TENANT_KEY } from "../../consts/api_config";
+import { apiFetchTournamentMechanicsSourceList } from "../../utils/tournamentSignupApi";
+import {
+  buildTournamentMechanicsFallbackExercises,
+  mergeTournamentMechanicsExercises,
+} from "../../utils/tournamentMechanicsExercises";
+import { filterVisibleTournamentExercises } from "./tournamentVisibility";
+import {
+  buildTournamentRatingChangePayload,
+  buildTournamentStartRatingChanges,
+} from "./tournamentRatingAudit";
 import {
   CUSTOM_FIELD_IDS,
   getCustomFieldValue,
@@ -49,20 +65,67 @@ import {
   buildClassicMexicanoMatchSaveResults,
   buildMexicanoClassicParams,
   createMexicanoClassicInitialRound,
-  isClassicMexicanoRoundLayoutComplete,
   rebuildMexicanoClassicFutureRounds,
+  shouldPreferClassicMexicanoCachedSnapshot,
+  shouldPreferClassicMexicanoSnapshot,
   type MexicanoClassicOptions,
 } from "./mexicanoClassic";
+import {
+  buildTournamentFinishConfirmationCopy,
+  buildTournamentResumeParams,
+  getTournamentProgressState,
+  isTournamentManuallyFinished,
+  isTournamentMarkedFinished,
+} from "./tournamentLifecycle";
+import {
+  buildPairedTournamentStandingsGroups,
+  parseAmericanoStandingsSortMode,
+  resolveTournamentParticipantEntries,
+  resolveTournamentStandingsSortModeValue,
+  type TournamentStandingsSortMode,
+} from "./tournamentManagerConfig";
+import {
+  getPendingTournamentResultSyncCount,
+  hasPendingTournamentResultJobs,
+  flushPendingTournamentResultSyncJob,
+  clearPendingTournamentResultQueueByTournamentId,
+  loadPendingTournamentResultQueue,
+  loadCachedTournamentHistory,
+  loadCachedTournamentProfile,
+  loadCachedTournamentSchedule,
+  processPendingTournamentResultSyncQueue,
+  saveCachedTournamentHistory,
+  saveCachedTournamentProfile,
+  saveCachedTournamentSchedule,
+  submitTournamentResultsWithOfflineFallback,
+  type TournamentOfflineResultQueueRecord,
+} from "../../utils/tournamentOfflineSync";
+import {
+  listCachedTournamentDrafts,
+  loadCachedTournamentDraft,
+  saveCachedTournamentDraft,
+  type TournamentDraftSnapshot,
+} from "../../utils/tournamentDraftStorage";
+import { buildTournamentDraftExercise } from "../../utils/tournamentDraftExercise";
+import {
+  getTournamentJsonFileName,
+  parseTournamentJson,
+  serializeTournamentJson,
+} from "../../utils/tournamentJson";
 
 interface TournamentsPageProps {
   onBack: () => void;
+  backLabel?: string;
   initialOpenTournamentId?: string | null;
+  initialOpenTournamentSlug?: string | null;
   initialOpenDate?: string | null;
 }
 
 const DAYS_BEFORE_TODAY = 30;
 const DAYS_AFTER_TODAY = 30;
 const TODAY_DATE_INDEX = DAYS_BEFORE_TODAY;
+const DEEP_LINK_LOOKUP_DAYS_BEFORE_TODAY = 365;
+const DEEP_LINK_LOOKUP_DAYS_AFTER_TODAY = 365;
 
 type TournamentFamilyKey = "americano" | "mexicano";
 
@@ -78,19 +141,24 @@ const TOURNAMENT_SUBTYPES: Record<TournamentFamilyKey, Array<{
 }>> = {
   americano: [
     {
-      id: "americano_padelhub",
-      label: "ПадлхАБ",
-      description: "Текущее американо с мягким балансом повторов и уровней.",
-    },
-    {
       id: "americano_classic",
       label: "Классическое",
       description: "Каждый раунд новый напарник и новые соперники, баланс пар по остаточному принципу.",
     },
     {
+      id: "americano_flex",
+      label: "Флекс",
+      description: "Классическое американо с одним bye в раунде (4 × корты + 1 игрок).",
+    },
+    {
       id: "paired_americano",
       label: "Парное американо",
       description: "Фиксированные пары играют турнир между собой.",
+    },
+    {
+      id: "americano_padelhub",
+      label: "ПадлхАБ",
+      description: "Текущее американо с мягким балансом повторов и уровней.",
     },
   ],
   mexicano: [
@@ -109,6 +177,7 @@ const TOURNAMENT_SUBTYPES: Record<TournamentFamilyKey, Array<{
 
 const HTML_TO_IMAGE_CDN =
   "https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js";
+const TOURNAMENT_READY_STORAGE_PREFIX = "tournaments:ready";
 
 type HtmlToImageApi = {
   toPng: (node: HTMLElement, options?: Record<string, unknown>) => Promise<string>;
@@ -170,11 +239,197 @@ function formatTime(timeStr?: string) {
   return timeStr ? timeStr.slice(11, 16) : "";
 }
 
+function formatTournamentDateTimeLine(timeFrom?: string, timeTo?: string) {
+  const from = String(timeFrom || "").trim();
+  const to = String(timeTo || "").trim();
+  const fromTime = formatTime(from);
+  const toTime = formatTime(to);
+  const parsedFrom = from ? new Date(from) : null;
+  const hasDate = Boolean(parsedFrom && !Number.isNaN(parsedFrom.getTime()));
+
+  if (hasDate && parsedFrom) {
+    const dayMonth = parsedFrom.toLocaleDateString("ru-RU", {
+      day: "numeric",
+      month: "long",
+    });
+    if (fromTime && toTime) return `${dayMonth}, ${fromTime}—${toTime}`;
+    if (fromTime) return `${dayMonth}, ${fromTime}`;
+    return dayMonth;
+  }
+
+  if (fromTime && toTime) return `${fromTime}—${toTime}`;
+  return fromTime || toTime || "Дата и время не указаны";
+}
+
+function formatTournamentAddressLine(studio?: Exercise["studio"] | null) {
+  if (!studio) return "";
+  const city = String(studio.city || "").trim();
+  const address = String(studio.address || "").trim();
+  if (city && address) return `г ${city}, ${address}`;
+  if (address) return address;
+  if (city) return city;
+  return String(studio.name || "").trim();
+}
+
+function buildTournamentMapUrl(studio?: Exercise["studio"] | null) {
+  if (!studio) return null;
+  const lat = typeof studio.lat === "number" ? studio.lat : null;
+  const lng = typeof studio.lng === "number" ? studio.lng : null;
+  if (lat != null && lng != null) {
+    return `https://yandex.ru/maps/?ll=${lng}%2C${lat}&mode=whatshere&whatshere%5Bpoint%5D=${lng}%2C${lat}&whatshere%5Bzoom%5D=16`;
+  }
+  const query = [studio.city, studio.address, studio.name]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .join(", ");
+  if (!query) return null;
+  return `https://yandex.ru/maps/?text=${encodeURIComponent(query)}`;
+}
+
 function getExerciseDateKey(exercise?: Exercise | null) {
   if (!exercise?.timeFrom) return null;
   const parsed = new Date(exercise.timeFrom);
   if (Number.isNaN(parsed.getTime())) return null;
   return formatDate(parsed);
+}
+
+function shiftDateByDays(base: Date, delta: number) {
+  const next = new Date(base);
+  next.setDate(next.getDate() + delta);
+  return next;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeTournamentSlug(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  try {
+    return decodeURIComponent(raw).trim().toLowerCase() || null;
+  } catch {
+    return raw.toLowerCase();
+  }
+}
+
+function extractTournamentSlugFromUrl(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  try {
+    const parsed = new URL(raw, "https://padlhub.ru");
+    const querySlug =
+      parsed.searchParams.get("slug")
+      || parsed.searchParams.get("tournamentSlug");
+    if (querySlug) return normalizeTournamentSlug(querySlug);
+
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const publicIndex = parts.findIndex((part, index) => (
+      part === "public" && parts[index - 1] === "tournaments" && parts[index - 2] === "api"
+    ));
+    if (publicIndex >= 0) return normalizeTournamentSlug(parts[publicIndex + 1]);
+  } catch {
+    const match = raw.match(/\/api\/tournaments\/public\/([^/?#]+)/i);
+    if (match?.[1]) return normalizeTournamentSlug(match[1]);
+  }
+
+  return null;
+}
+
+function pickTournamentString(source: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" || typeof value === "number") {
+      const normalized = String(value).trim();
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
+const TOURNAMENT_SLUG_KEYS = [
+  "slug",
+  "publicSlug",
+  "tournamentSlug",
+  "linkSlug",
+  "shareSlug",
+];
+
+const TOURNAMENT_URL_KEYS = [
+  "publicUrl",
+  "joinUrl",
+  "url",
+  "link",
+];
+
+const TOURNAMENT_NESTED_RECORD_KEYS = [
+  "details",
+  "metadata",
+  "params",
+  "publicTournament",
+  "sourceTournamentSnapshot",
+  "customTournament",
+  "tournament",
+  "skin",
+  "tournamentSkin",
+];
+
+function getTournamentSlugCandidates(value: unknown, seen = new Set<unknown>()): string[] {
+  if (!isPlainRecord(value) || seen.has(value)) return [];
+  seen.add(value);
+
+  const candidates = [
+    normalizeTournamentSlug(pickTournamentString(value, TOURNAMENT_SLUG_KEYS)),
+    extractTournamentSlugFromUrl(pickTournamentString(value, TOURNAMENT_URL_KEYS)),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  TOURNAMENT_NESTED_RECORD_KEYS.forEach((key) => {
+    const nested = value[key];
+    if (isPlainRecord(nested)) {
+      candidates.push(...getTournamentSlugCandidates(nested, seen));
+    }
+  });
+
+  return Array.from(new Set(candidates));
+}
+
+function findTournamentBySlug(list: Exercise[], slug: string | null) {
+  if (!slug) return null;
+  return list.find((tournament) => getTournamentSlugCandidates(tournament).includes(slug)) ?? null;
+}
+
+function findTournamentByDeepLink(
+  list: Exercise[],
+  options: {
+    tournamentId?: string | null;
+    tournamentSlug?: string | null;
+  },
+) {
+  const targetTournamentId = String(options.tournamentId || "").trim();
+  if (targetTournamentId) {
+    const byId = list.find((tournament) => {
+      const candidates = new Set([
+        String(tournament.id || "").trim(),
+        String((tournament as Exercise & Record<string, unknown>).tournamentId || "").trim(),
+        String((tournament as Exercise & Record<string, unknown>).exerciseId || "").trim(),
+        String((tournament as Exercise & Record<string, unknown>).sourceTournamentId || "").trim(),
+      ]);
+      return candidates.has(targetTournamentId);
+    });
+    if (byId) return byId;
+  }
+
+  return findTournamentBySlug(list, options.tournamentSlug ?? null);
+}
+
+function readTournamentSlugFromLocation() {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  return normalizeTournamentSlug(
+    params.get("slug") || params.get("tournamentSlug"),
+  );
 }
 
 function mergeTournamentExercises(primary: Exercise[], bookings: Booking[], dateKey: string) {
@@ -203,18 +458,35 @@ function mergeTournamentExercises(primary: Exercise[], bookings: Booking[], date
   });
 }
 
+function getTournamentBookingItems(result: Awaited<ReturnType<typeof apiFetchBookings>> | null | undefined) {
+  return result?.data?.content ?? [];
+}
+
+async function fetchTournamentBookingItems(includePastTournaments: boolean): Promise<Booking[]> {
+  if (!includePastTournaments) return [];
+
+  const [activeBookingsResult, historyBookingsResult] = await Promise.all([
+    apiFetchBookings(false).catch(() => null),
+    apiFetchBookings(true).catch(() => null),
+  ]);
+
+  return [
+    ...getTournamentBookingItems(activeBookingsResult),
+    ...getTournamentBookingItems(historyBookingsResult),
+  ];
+}
+
+async function fetchTournamentMechanicsSourceItems(dateKey: string) {
+  return apiFetchTournamentMechanicsSourceList({ from: dateKey, to: dateKey })
+    .then((result) => result?.data ?? [])
+    .catch(() => []);
+}
+
 function getClientName(booking: ExerciseBooking, index: number) {
   const client = booking.client as ExerciseBooking["client"] | undefined;
   const parts = [client?.firstName, client?.lastName].filter(Boolean);
   if (parts.length > 0) return parts.join(" ");
   return `Участник ${index + 1}`;
-}
-
-function getInitials(booking: ExerciseBooking) {
-  const client = booking.client as ExerciseBooking["client"] | undefined;
-  const first = client?.firstName?.[0] || "";
-  const last = client?.lastName?.[0] || "";
-  return (first + last).toUpperCase() || "U";
 }
 
 function isCancelledTournamentBooking(booking: ExerciseBooking) {
@@ -290,11 +562,95 @@ function getInitialsFromName(name?: string | null) {
   return initials.toUpperCase() || "U";
 }
 
-function formatRating(value: number) {
+function formatRating(value: number, fractionDigits = 2) {
   return value.toLocaleString("ru-RU", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
   });
+}
+
+function normalizeReadyParticipantIdsInput(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return Array.from(
+      new Set(
+        value
+          .map((item) => String(item || "").trim())
+          .filter(Boolean),
+      ),
+    );
+  }
+  if (value && typeof value === "object") {
+    return Array.from(
+      new Set(
+        Object.entries(value as Record<string, unknown>)
+          .filter(([, flag]) => flag === true)
+          .map(([participantId]) => String(participantId || "").trim())
+          .filter(Boolean),
+      ),
+    );
+  }
+  return [];
+}
+
+function readyParticipantIdsToMap(ids: string[]): Record<string, boolean> {
+  return ids.reduce<Record<string, boolean>>((acc, participantId) => {
+    acc[participantId] = true;
+    return acc;
+  }, {});
+}
+
+function getTournamentReadyStorageKey(tournamentId: string) {
+  return `${TOURNAMENT_READY_STORAGE_PREFIX}:${tournamentId}`;
+}
+
+function readTournamentReadyState(tournamentId: string): Record<string, boolean> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(getTournamentReadyStorageKey(tournamentId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    return readyParticipantIdsToMap(normalizeReadyParticipantIdsInput(parsed));
+  } catch {
+    return {};
+  }
+}
+
+function writeTournamentReadyState(tournamentId: string, readyState: Record<string, boolean>) {
+  if (typeof window === "undefined") return;
+  const ids = Object.entries(readyState)
+    .filter(([, value]) => value === true)
+    .map(([participantId]) => participantId)
+    .filter(Boolean)
+    .sort();
+  try {
+    if (ids.length === 0) {
+      window.localStorage.removeItem(getTournamentReadyStorageKey(tournamentId));
+      return;
+    }
+    window.localStorage.setItem(getTournamentReadyStorageKey(tournamentId), JSON.stringify(ids));
+  } catch {
+    // ignore storage write errors
+  }
+}
+
+function splitParticipantFullName(value: string) {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) {
+    return {
+      firstName: "Игрок",
+      lastName: "",
+    };
+  }
+  if (parts.length === 1) {
+    return {
+      firstName: parts[0],
+      lastName: "",
+    };
+  }
+  return {
+    firstName: parts.slice(0, -1).join(" "),
+    lastName: parts[parts.length - 1],
+  };
 }
 
 function pickTournamentMinRatingSource(
@@ -339,6 +695,75 @@ function resolveTournamentMinRating(
   };
 }
 
+function pickTournamentMaxRatingSource(
+  tournament: Exercise | null,
+  historyRecord?: TournamentHistoryRecord | null,
+) {
+  if (historyRecord?.maxRating) return historyRecord.maxRating;
+
+  const tournamentRecord = tournament as (Exercise & {
+    settings?: {
+      maxRating?: string | null;
+      ratingTo?: string | null;
+      ratingMax?: string | null;
+    };
+    maxRating?: string | null;
+    ratingTo?: string | null;
+    ratingMax?: string | null;
+  }) | null;
+
+  return (
+    tournamentRecord?.settings?.maxRating
+    ?? tournamentRecord?.settings?.ratingTo
+    ?? tournamentRecord?.settings?.ratingMax
+    ?? tournamentRecord?.maxRating
+    ?? tournamentRecord?.ratingTo
+    ?? tournamentRecord?.ratingMax
+    ?? null
+  );
+}
+
+function getRatingGradeLabel(value: number | null) {
+  if (value == null) return null;
+  return formatTournamentRatingGrade(value);
+}
+
+function formatTournamentRatingGrade(value: number | null) {
+  if (value == null) return null;
+  const grade = getLetterGrade(value);
+  if (grade === "D") return "D¹";
+  if (grade === "D+") return "D¹+";
+  return grade;
+}
+
+function resolveTournamentLevelRangeLabel(
+  tournament: Exercise | null,
+  historyRecord: TournamentHistoryRecord | null | undefined,
+  participants: Array<{ rating?: string | number | null }>,
+) {
+  const explicitMin = parseTournamentRatingValue(pickTournamentMinRatingSource(tournament, historyRecord));
+  const explicitMax = parseTournamentRatingValue(pickTournamentMaxRatingSource(tournament, historyRecord));
+
+  const participantLevels = participants
+    .map((participant) => parseTournamentRatingValue(participant.rating))
+    .filter((value): value is number => value != null);
+  const fallbackMin = participantLevels.length > 0 ? Math.min(...participantLevels) : null;
+  const fallbackMax = participantLevels.length > 0 ? Math.max(...participantLevels) : null;
+
+  const minLevel = explicitMin ?? fallbackMin;
+  const maxLevel = explicitMax ?? fallbackMax;
+  const minLabel = getRatingGradeLabel(minLevel);
+  const maxLabel = getRatingGradeLabel(maxLevel);
+
+  if (minLabel && maxLabel) {
+    if (minLabel === maxLabel) return minLabel;
+    return `от ${minLabel} до ${maxLabel}`;
+  }
+  if (minLabel) return `от ${minLabel}`;
+  if (maxLabel) return `до ${maxLabel}`;
+  return "уровень не указан";
+}
+
 function parseBoundedIntegerInput(value: string, min: number, max: number) {
   const digits = value.replace(/[^\d]/g, "");
   if (!digits) return null;
@@ -359,6 +784,17 @@ function formatSignedTournamentNumber(value: number, maximumFractionDigits = 2) 
   if (value > 0) return `+${formatted}`;
   if (value < 0) return `-${formatted}`;
   return "0";
+}
+
+function formatPendingTournamentSyncNotice(count: number) {
+  if (count <= 0) return null;
+  const word =
+    count % 10 === 1 && count % 100 !== 11
+      ? "результат"
+      : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14)
+        ? "результата"
+        : "результатов";
+  return `${count} ${word} ожидает синхронизации`;
 }
 
 function formatStatsRatingBadge(value: number) {
@@ -396,7 +832,14 @@ function applyPartialRoundUpdates(
   const incomingRoundIds = new Set(incomingRounds.map((round) => round.id));
   const hasFullSchedule =
     incomingRounds.length >= currentRounds.length
-    && currentRounds.every((round) => incomingRoundIds.has(round.id));
+    && currentRounds.every((round) => {
+      if (!incomingRoundIds.has(round.id)) return false;
+      const incomingRound = incomingRounds.find((candidate) => candidate.id === round.id);
+      if (!incomingRound) return false;
+      // Guard against partial server replies that contain only saved matches for a round.
+      // In that case we must keep the local schedule shape to avoid dropping unsaved matches.
+      return incomingRound.matches.length >= round.matches.length;
+    });
 
   if (hasFullSchedule) {
     return incomingRounds;
@@ -411,8 +854,9 @@ function applyPartialRoundUpdates(
     });
   });
 
-  return currentRounds.map((round) => {
+  const mergedRounds = currentRounds.map((round) => {
     const incomingRound = incomingRoundMap.get(round.id);
+    const currentMatchIds = new Set(round.matches.map((match) => match.id));
     const nextMatches = round.matches.map((match) => {
       const incomingMatch =
         incomingMatchMap.get(`${round.id}::${match.id}`)
@@ -425,13 +869,98 @@ function applyPartialRoundUpdates(
         saved: incomingMatch.score1 != null && incomingMatch.score2 != null,
       };
     });
+    const extraIncomingMatches = incomingRound
+      ? incomingRound.matches
+          .filter((match) => !currentMatchIds.has(match.id))
+          .map((match) => ({
+            ...match,
+            saved: match.score1 != null && match.score2 != null,
+          }))
+      : [];
+    const mergedMatches = [...nextMatches, ...extraIncomingMatches];
 
     return {
       ...round,
-      matches: nextMatches,
-      saved: nextMatches.length > 0 && nextMatches.every((match) => match.saved),
+      byes: incomingRound?.byes ?? round.byes,
+      quality: incomingRound?.quality ?? round.quality,
+      matches: mergedMatches,
+      saved: mergedMatches.length > 0 && mergedMatches.every((match) => match.saved),
     };
   });
+
+  const currentRoundIds = new Set(currentRounds.map((round) => round.id));
+  const extraIncomingRounds = incomingRounds.filter((round) => !currentRoundIds.has(round.id));
+
+  return [...mergedRounds, ...extraIncomingRounds].sort((left, right) => left.index - right.index);
+}
+
+function applyLocalTournamentResultUpdates(
+  currentRounds: TournamentRound[],
+  results: AmericanoResultsPayload["results"],
+) {
+  const updateMap = new Map<string, { score1: number; score2: number }>();
+
+  results.forEach((result) => {
+    if (!result?.roundId || !result.matchId) return;
+    if (result.score1 == null || result.score2 == null) return;
+    updateMap.set(getTournamentMatchKey(result.roundId, result.matchId), {
+      score1: result.score1,
+      score2: result.score2,
+    });
+  });
+
+  return currentRounds.map((round) => {
+    const nextMatches = round.matches.map((match) => {
+      const nextScores = updateMap.get(getTournamentMatchKey(round.id, match.id));
+      if (!nextScores) return match;
+      return {
+        ...match,
+        score1: nextScores.score1,
+        score2: nextScores.score2,
+        saved: true,
+      };
+    });
+
+    return {
+      ...round,
+      saved: nextMatches.length > 0 && nextMatches.every((match) => match.saved),
+      matches: nextMatches,
+    };
+  });
+}
+
+type TournamentQueuedMatchState = {
+  jobId: string;
+  score1: number | null;
+  score2: number | null;
+};
+
+function buildTournamentQueuedMatchState(
+  queueRecords: TournamentOfflineResultQueueRecord[],
+) {
+  const matchStateByKey = new Map<string, TournamentQueuedMatchState>();
+  const roundJobById = new Map<string, string>();
+
+  queueRecords.forEach((record) => {
+    const results = Array.isArray(record.payload?.results) ? record.payload.results : [];
+    results.forEach((result) => {
+      const roundId = String(result?.roundId || "").trim();
+      const matchId = String(result?.matchId || "").trim();
+      if (!roundId || !matchId) return;
+      const key = getTournamentMatchKey(roundId, matchId);
+      matchStateByKey.set(key, {
+        jobId: record.jobId,
+        score1: result.score1 ?? null,
+        score2: result.score2 ?? null,
+      });
+      roundJobById.set(roundId, record.jobId);
+    });
+  });
+
+  return {
+    matchStateByKey,
+    roundJobById,
+  };
 }
 
 function findTournamentMatch(
@@ -525,8 +1054,6 @@ function toNumberSafe(value: unknown, fallback = 0) {
   return Number.isFinite(num) ? num : fallback;
 }
 
-type TournamentProgressState = "not_started" | "in_progress" | "completed";
-
 function toTimestamp(value?: string | null) {
   const parsed = value ? Date.parse(value) : Number.NaN;
   return Number.isFinite(parsed) ? parsed : 0;
@@ -545,6 +1072,14 @@ function pickLatestTournamentHistory(records: TournamentHistoryRecord[] | null |
 function normalizeTournamentTypeKey(value: string | null | undefined) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return null;
+  if (
+    normalized.includes("americano_flex")
+    || normalized.includes("flex_americano")
+    || normalized.includes("flex americano")
+    || normalized.includes("americano flex")
+    || normalized.includes("флекс американо")
+    || normalized.includes("американо флекс")
+  ) return "americano_flex";
   if (
     normalized.includes("americano_classic")
     || normalized.includes("classic_americano")
@@ -572,38 +1107,6 @@ function normalizeTournamentTypeKey(value: string | null | undefined) {
   return normalized;
 }
 
-function parseMexicanoOptions(value: unknown): MexicanoClassicOptions {
-  const params = value && typeof value === "object"
-    ? value as Record<string, unknown>
-    : {};
-  const firstRoundModeRaw = String(params.firstRoundMode ?? "").trim().toLowerCase();
-  const firstRoundMode =
-    firstRoundModeRaw === "random" || firstRoundModeRaw === "equal_pairs"
-      ? firstRoundModeRaw
-      : "by_level";
-  const byeMode = String(params.byeMode ?? "").trim().toLowerCase() === "strict"
-    ? "strict"
-    : "rotating_bye";
-  const tableSortMode = String(params.tableSortMode ?? "").trim().toLowerCase() === "point_diff"
-    ? "point_diff"
-    : "total_points";
-  const winnerSortMode = String(params.winnerSortMode ?? "").trim().toLowerCase() === "total_points"
-    ? "total_points"
-    : "point_diff";
-  const totalRoundsRaw = Number(params.totalRounds);
-
-  return {
-    firstRoundMode,
-    byeMode,
-    tableSortMode,
-    winnerSortMode,
-    seed: params.seed == null ? undefined : String(params.seed),
-    totalRounds: Number.isFinite(totalRoundsRaw) && totalRoundsRaw > 0
-      ? Math.floor(totalRoundsRaw)
-      : undefined,
-  };
-}
-
 function getTournamentFamilyByType(value: string | null | undefined): TournamentFamilyKey | null {
   const typeKey = normalizeTournamentTypeKey(value);
   if (!typeKey) return null;
@@ -611,6 +1114,7 @@ function getTournamentFamilyByType(value: string | null | undefined): Tournament
     typeKey === "americano"
     || typeKey === "americano_padelhub"
     || typeKey === "americano_classic"
+    || typeKey === "americano_flex"
     || typeKey === "paired_americano"
   ) {
     return "americano";
@@ -623,29 +1127,210 @@ function getTournamentTypeLabel(value: string | null | undefined) {
   const typeKey = normalizeTournamentTypeKey(value);
   if (typeKey === "americano" || typeKey === "americano_padelhub") return "Американо · ПадлхАБ";
   if (typeKey === "americano_classic") return "Американо · Классическое";
+  if (typeKey === "americano_flex") return "Американо · Флекс";
   if (typeKey === "paired_americano") return "Американо · Парное";
   if (typeKey === "paired_mexicano") return "Парный мексикано";
   if (typeKey === "mexicano") return "Мексикано · Классическое";
   return String(value || "").trim() || "Турнир";
 }
 
-function isCompletedHistoryMatch(value: unknown) {
-  if (!value || typeof value !== "object") return false;
-  const record = value as Record<string, unknown>;
-  return record.score1 != null && record.score2 != null;
+function resolveAmericanoScheduleMode(value: string | null | undefined) {
+  const typeKey = normalizeTournamentTypeKey(value);
+  if (typeKey === "paired_americano") return "paired" as const;
+  if (typeKey === "americano_classic") return "classic" as const;
+  if (typeKey === "americano_flex") return "flex" as const;
+  return "padelhub" as const;
 }
 
-function getTournamentProgressState(history: TournamentHistoryRecord | null | undefined): TournamentProgressState {
-  if (!history) return "not_started";
-  const matches = Array.isArray(history.rounds)
-    ? history.rounds.flatMap((round) => {
-      if (!round || typeof round !== "object") return [];
-      const roundMatches = (round as { matches?: unknown[] }).matches;
-      return Array.isArray(roundMatches) ? roundMatches : [];
-    })
-    : [];
-  if (matches.length === 0) return "in_progress";
-  return matches.every((match) => isCompletedHistoryMatch(match)) ? "completed" : "in_progress";
+const MEXICANO_RECOMMENDED_ROUNDS = 8;
+const MEXICANO_MIN_ROUNDS_BEFORE_FINISH = 5;
+const DEFAULT_AMERICANO_STANDINGS_SORT_MODE: TournamentStandingsSortMode = "point_diff";
+const DEFAULT_MEXICANO_FIRST_ROUND_MODE: NonNullable<MexicanoClassicOptions["firstRoundMode"]> = "by_level";
+const DEFAULT_MEXICANO_TABLE_SORT_MODE: NonNullable<MexicanoClassicOptions["tableSortMode"]> = "total_points";
+const DEFAULT_MEXICANO_WINNER_SORT_MODE: NonNullable<MexicanoClassicOptions["winnerSortMode"]> = "point_diff";
+
+function toLowerText(value: unknown) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function isTruthyValue(value: unknown) {
+  const normalized = toLowerText(value);
+  return value === true || value === 1 || value === "1" || normalized === "true";
+}
+
+function pickFirstDefined(params: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    if (params[key] != null) return params[key];
+  }
+  return null;
+}
+
+function resolveMexicanoFirstRoundMode(params: Record<string, unknown>): MexicanoClassicOptions["firstRoundMode"] {
+  const rawMode = pickFirstDefined(params, [
+    "firstRoundMode",
+    "firstRoundSortMode",
+    "firstRoundOrderMode",
+    "round1SortMode",
+    "initialRoundMode",
+  ]);
+  const normalized = toLowerText(rawMode).replace(/\s+/g, "_");
+
+  if (
+    normalized === "equal_pairs"
+    || normalized === "balanced_pairs"
+    || normalized === "равные_пары"
+    || normalized.includes("equal_pair")
+    || normalized.includes("balanced_pair")
+    || normalized.includes("равн")
+  ) {
+    return "equal_pairs";
+  }
+  if (
+    normalized === "by_level"
+    || normalized === "level"
+    || normalized === "по_уровню"
+    || normalized.includes("уров")
+  ) {
+    return "by_level";
+  }
+  if (
+    normalized === "random"
+    || normalized === "shuffle"
+    || normalized === "случайно"
+    || normalized.includes("рандом")
+    || normalized.includes("случ")
+  ) {
+    return "random";
+  }
+  return DEFAULT_MEXICANO_FIRST_ROUND_MODE;
+}
+
+function resolveMexicanoStandingsSortMode(
+  params: Record<string, unknown>,
+  options: {
+    modeKeys: string[];
+    totalPointsFlagKeys?: string[];
+    pointDiffFlagKeys?: string[];
+    fallback: "point_diff" | "total_points";
+  },
+) {
+  if ((options.totalPointsFlagKeys ?? []).some((key) => isTruthyValue(params[key]))) {
+    return "total_points" as const;
+  }
+  if ((options.pointDiffFlagKeys ?? []).some((key) => isTruthyValue(params[key]))) {
+    return "point_diff" as const;
+  }
+
+  for (const key of options.modeKeys) {
+    const mode = resolveTournamentStandingsSortModeValue(params[key]);
+    if (mode) return mode;
+  }
+
+  return options.fallback;
+}
+
+function parseMexicanoOptions(value: unknown): MexicanoClassicOptions {
+  const params = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+  const firstRoundMode = resolveMexicanoFirstRoundMode(params);
+  const byeModeRaw = String(params.byeMode ?? "").trim().toLowerCase();
+  const byeMode = byeModeRaw === "strict" ? "strict" : "rotating_bye";
+  const seedRaw = params.seed;
+  const seed = typeof seedRaw === "string" || typeof seedRaw === "number"
+    ? seedRaw
+    : "mexicano";
+  const totalRoundsRaw = typeof params.totalRounds === "number"
+    ? params.totalRounds
+    : Number(params.totalRounds);
+  const totalRounds = Number.isFinite(totalRoundsRaw)
+    ? Math.max(MEXICANO_MIN_ROUNDS_BEFORE_FINISH, Math.floor(totalRoundsRaw))
+    : MEXICANO_RECOMMENDED_ROUNDS;
+  const tableSortMode = resolveMexicanoStandingsSortMode(params, {
+    modeKeys: [
+      "tableSortMode",
+      "tableSortBy",
+      "roundTableSortMode",
+      "roundRankingMode",
+      "roundRankBy",
+      "roundStandingsSort",
+      "standingsSortMode",
+      "rankingMode",
+      "rankBy",
+      "standingsSort",
+    ],
+    totalPointsFlagKeys: [
+      "roundSortByTotalPoints",
+      "roundUseTotalPointsRanking",
+    ],
+    pointDiffFlagKeys: [
+      "roundSortByPointDiff",
+      "roundUsePointDiffRanking",
+    ],
+    fallback: DEFAULT_MEXICANO_TABLE_SORT_MODE,
+  });
+  const winnerSortMode = resolveMexicanoStandingsSortMode(params, {
+    modeKeys: [
+      "winnerSortMode",
+      "winnerSortBy",
+      "winnerBy",
+      "winnerCriteria",
+      "winnerMode",
+      "championBy",
+      "winnerRankingMode",
+      "finalRankBy",
+      "finalStandingsSort",
+      "resultsSortMode",
+      "standingsSortMode",
+      "rankingMode",
+      "rankBy",
+      "standingsSort",
+    ],
+    totalPointsFlagKeys: [
+      "winnerByTotalPoints",
+      "sortByTotalPoints",
+      "useTotalPointsRanking",
+    ],
+    pointDiffFlagKeys: [
+      "winnerByPointDiff",
+      "sortByPointDiff",
+      "usePointDiffRanking",
+    ],
+    fallback: DEFAULT_MEXICANO_WINNER_SORT_MODE,
+  });
+
+  return {
+    firstRoundMode,
+    byeMode,
+    tableSortMode,
+    winnerSortMode,
+    seed,
+    totalRounds,
+  };
+}
+
+function getTournamentProgressLabel(history: TournamentHistoryRecord | null | undefined): string | null {
+  if (!history) return null;
+  const params = history.params && typeof history.params === "object"
+    ? history.params as Record<string, unknown>
+    : null;
+  const syncStatus = String(params?.syncStatus ?? "").trim().toLowerCase();
+  const localStatus = String(params?.localStatus ?? "").trim().toLowerCase();
+
+  if (params?.manualTournament === true && syncStatus === "synced_viva") {
+    return "Проведен и синхронизирован";
+  }
+  if (params?.manualTournament === true && (
+    localStatus === "conducted_local"
+    || isTournamentMarkedFinished(history.params, history.summary)
+  )) {
+    return "Проведен локально";
+  }
+
+  const progressState = getTournamentProgressState(history);
+  if (progressState === "completed") return "Проведен и сохранен";
+  if (progressState === "in_progress") return "Не завершен";
+  return null;
 }
 
 function formatCourtsCountLabel(count: number) {
@@ -658,19 +1343,15 @@ function formatCourtsCountLabel(count: number) {
   return `${count} кортов`;
 }
 
-function isTournamentTrainer(exercise: Exercise, currentUserId: string | null) {
-  if (!currentUserId) return false;
-  return (exercise.trainers ?? []).some((trainer) => (trainer.id || "").trim() === currentUserId);
-}
-
 function buildTournamentPayloadFromHistory(history: TournamentHistoryRecord): AmericanoTournamentPayload | null {
   const typeKey = normalizeTournamentTypeKey(history.tournamentType);
   if (
     typeKey !== "americano_padelhub"
     && typeKey !== "americano_classic"
+    && typeKey !== "americano_flex"
     && typeKey !== "paired_americano"
-    && typeKey !== "mexicano"
     && typeKey !== "paired_mexicano"
+    && typeKey !== "mexicano"
   ) return null;
 
   return {
@@ -679,7 +1360,7 @@ function buildTournamentPayloadFromHistory(history: TournamentHistoryRecord): Am
     createdAt: history.createdAt ?? history.updatedAt ?? new Date().toISOString(),
     organizer: {
       id: history.organizer?.id ?? null,
-      phone: null,
+      phone: history.organizer?.phone ?? null,
       tenantKey: TENANT_KEY,
     },
     tournamentType: typeKey,
@@ -688,12 +1369,35 @@ function buildTournamentPayloadFromHistory(history: TournamentHistoryRecord): Am
     params: history.params ?? undefined,
     participants: history.participants.map((participant, index) => ({
       id: participant.id ?? `participant-${index}`,
-      phone: null,
+      phone: participant.phone ?? null,
       rating: participant.rating ?? null,
       photo: participant.photo ?? null,
       name: participant.name || `Участник ${index + 1}`,
     })),
     rounds: history.rounds as AmericanoTournamentPayload["rounds"],
+  };
+}
+
+function buildTournamentComparablePayloadFromHistory(
+  history: TournamentHistoryRecord | null | undefined,
+): AmericanoTournamentPayload | null {
+  return history ? buildTournamentPayloadFromHistory(history) : null;
+}
+
+function withTournamentStationContext(
+  payload: AmericanoTournamentPayload,
+  tournament: Exercise | null | undefined,
+): AmericanoTournamentPayload {
+  const stationId = String(tournament?.studio?.id || "").trim();
+  if (!stationId) return payload;
+
+  return {
+    ...payload,
+    params: {
+      ...(payload.params ?? {}),
+      stationId,
+      stationName: String(tournament?.studio?.name || "").trim() || null,
+    },
   };
 }
 
@@ -705,6 +1409,10 @@ function buildTournamentHistoryRecordFromPayload(
   playerLogs?: AmericanoResultsResponse["playerLogs"] | null,
 ): TournamentHistoryRecord {
   const girlsOnly = previousHistory?.girlsOnly ?? tournament?.girlsOnly ?? null;
+  const payloadParams = payload.params && typeof payload.params === "object"
+    ? payload.params as Record<string, unknown>
+    : null;
+  const organizerName = String(payloadParams?.organizerName ?? "").trim();
 
   return {
     id: payload.tournamentId,
@@ -719,7 +1427,7 @@ function buildTournamentHistoryRecordFromPayload(
     courts: [...payload.courts],
     participants: payload.participants.map((participant, index) => ({
       id: participant.id ?? `participant-${index}`,
-      phone: null,
+      phone: participant.phone ?? null,
       photo: participant.photo ?? null,
       rating: participant.rating ?? null,
       name: participant.name || `Участник ${index + 1}`,
@@ -732,17 +1440,17 @@ function buildTournamentHistoryRecordFromPayload(
     girlsOnly,
     mixed: previousHistory?.mixed ?? null,
     organizer: previousHistory?.organizer
-        ? {
-          ...previousHistory.organizer,
-          phone: null,
-        }
-      : (payload.organizer.id
+      ? {
+        ...previousHistory.organizer,
+        phone: previousHistory.organizer.phone ?? payload.organizer.phone ?? null,
+      }
+      : ((payload.organizer.id || payload.organizer.phone || organizerName)
         ? {
           id: payload.organizer.id ?? null,
-          phone: null,
+          phone: payload.organizer.phone ?? null,
           photo: null,
           rating: null,
-          name: "Организатор",
+          name: organizerName || "Организатор",
         }
         : null),
     params: payload.params ?? previousHistory?.params ?? null,
@@ -751,6 +1459,7 @@ function buildTournamentHistoryRecordFromPayload(
     summary: previousHistory?.summary ?? null,
     totals: totals ?? previousHistory?.totals ?? null,
     playerLogs: playerLogs ?? previousHistory?.playerLogs ?? null,
+    startRatingChanges: payload.startRatingChanges ?? previousHistory?.startRatingChanges ?? [],
     createdAt: previousHistory?.createdAt ?? payload.createdAt,
     updatedAt: new Date().toISOString(),
   };
@@ -761,6 +1470,7 @@ interface TournamentDetailsModalProps {
   onClose: () => void;
   tournament: Exercise | null;
   historyRecord?: TournamentHistoryRecord | null;
+  sourceDateKey?: string | null;
   onSaved: (data: AmericanoTournamentPayload) => void;
 }
 
@@ -770,16 +1480,79 @@ type TournamentParticipantEntry = ParticipantEntry & {
   isOrganizerSlot?: boolean;
 };
 
+type TournamentRosterMode = "bookings" | "manual";
+
+type TournamentManualParticipantDraft = {
+  id: string;
+  name: string;
+  phone: string;
+  rating: string;
+};
+
 type TournamentMissingRatingConfirmation = {
   missingCount: number;
   minRatingDisplay: string;
 };
+
+type TournamentSavedRatingChange = {
+  previousRating: number | null;
+  nextRating: number;
+};
+
+function createTournamentManualParticipantId(index: number) {
+  const randomSuffix =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
+  return `manual-participant-${index + 1}-${Date.now()}-${randomSuffix}`;
+}
+
+function createTournamentDraftId() {
+  const randomSuffix =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
+  return `manual-tournament-${Date.now()}-${randomSuffix}`;
+}
+
+function createTournamentManualParticipantDraft(
+  index: number,
+  participant?: {
+    id?: string | null;
+    name?: string | null;
+    phone?: string | null;
+    rating?: string | null;
+  },
+): TournamentManualParticipantDraft {
+  return {
+    id: String(participant?.id || "").trim() || createTournamentManualParticipantId(index),
+    name: String(participant?.name || "").trim(),
+    phone: String(participant?.phone || "").trim(),
+    rating: String(participant?.rating || "").trim(),
+  };
+}
+
+function compareTournamentParticipantsByRating(
+  left: { rating?: string | null; name?: string | null },
+  right: { rating?: string | null; name?: string | null },
+) {
+  const leftRating = parseTournamentRatingValue(left.rating);
+  const rightRating = parseTournamentRatingValue(right.rating);
+  if (leftRating == null && rightRating == null) return 0;
+  if (leftRating == null) return 1;
+  if (rightRating == null) return -1;
+  if (leftRating === rightRating) {
+    return String(left.name || "").localeCompare(String(right.name || ""));
+  }
+  return rightRating - leftRating;
+}
 
 function TournamentDetailsModal({
   isOpen,
   onClose,
   tournament,
   historyRecord = null,
+  sourceDateKey = null,
   onSaved,
 }: TournamentDetailsModalProps) {
   const [loading, setLoading] = useState(false);
@@ -787,48 +1560,154 @@ function TournamentDetailsModal({
   const [error, setError] = useState<string | null>(null);
   const [selectedFamily, setSelectedFamily] = useState<TournamentFamilyKey | null>(null);
   const [selectedType, setSelectedType] = useState<TournamentTypeKey | null>(null);
+  const [americanoStandingsSortMode, setAmericanoStandingsSortMode] =
+    useState<TournamentStandingsSortMode>(DEFAULT_AMERICANO_STANDINGS_SORT_MODE);
+  const [mexicanoFirstRoundMode, setMexicanoFirstRoundMode] =
+    useState<NonNullable<MexicanoClassicOptions["firstRoundMode"]>>(DEFAULT_MEXICANO_FIRST_ROUND_MODE);
+  const [mexicanoTableSortMode, setMexicanoTableSortMode] =
+    useState<NonNullable<MexicanoClassicOptions["tableSortMode"]>>(DEFAULT_MEXICANO_TABLE_SORT_MODE);
+  const [mexicanoWinnerSortMode, setMexicanoWinnerSortMode] =
+    useState<NonNullable<MexicanoClassicOptions["winnerSortMode"]>>(DEFAULT_MEXICANO_WINNER_SORT_MODE);
   const [courtsCountDraft, setCourtsCountDraft] = useState("");
   const [courtNames, setCourtNames] = useState<string[]>([]);
   const [targetScore, setTargetScore] = useState(21);
   const [targetScoreDraft, setTargetScoreDraft] = useState("21");
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [saveWasLocal, setSaveWasLocal] = useState(false);
+  const [rosterMode, setRosterMode] = useState<TournamentRosterMode>("bookings");
+  const [manualParticipants, setManualParticipants] = useState<TournamentManualParticipantDraft[]>([]);
+  const [manualStationName, setManualStationName] = useState("");
+  const [manualOrganizerName, setManualOrganizerName] = useState("");
   const [manualRatings, setManualRatings] = useState<Record<string, string>>({});
+  const [savedStartRatingChanges, setSavedStartRatingChanges] =
+    useState<Record<string, TournamentSavedRatingChange>>({});
   const [ratingSaveStateById, setRatingSaveStateById] = useState<Record<string, "idle" | "saving">>({});
   const [ratingSaveErrors, setRatingSaveErrors] = useState<Record<string, string>>({});
+  const [ratingEditModeById, setRatingEditModeById] = useState<Record<string, boolean>>({});
   const [refreshingRatings, setRefreshingRatings] = useState(false);
   const [refreshRatingsError, setRefreshRatingsError] = useState<string | null>(null);
   const [missingRatingConfirmation, setMissingRatingConfirmation] =
     useState<TournamentMissingRatingConfirmation | null>(null);
   const [organizerSlotRating, setOrganizerSlotRating] = useState<string | null>(null);
-  const [leavingParticipantId, setLeavingParticipantId] = useState<string | null>(null);
+  const [participantLeaveTarget, setParticipantLeaveTarget] = useState<TournamentParticipantEntry | null>(null);
   const [leaveError, setLeaveError] = useState<string | null>(null);
   const [autoRefreshedParticipantsKey, setAutoRefreshedParticipantsKey] = useState("");
   const [pairedMexicanoPairs, setPairedMexicanoPairs] = useState<string[][]>([]);
+  const [readyParticipantIds, setReadyParticipantIds] = useState<Record<string, boolean>>({});
+  const [readyStateHydrated, setReadyStateHydrated] = useState(false);
+  const [replacementWaitlist, setReplacementWaitlist] = useState<TournamentParticipantEntry[]>([]);
+  const [replaceParticipantId, setReplaceParticipantId] = useState<string | null>(null);
+  const [replaceSearchQuery, setReplaceSearchQuery] = useState("");
+  const [replaceSearchResults, setReplaceSearchResults] = useState<PadelPlayerCandidate[]>([]);
+  const [replaceSearchLoading, setReplaceSearchLoading] = useState(false);
+  const [replaceSearchError, setReplaceSearchError] = useState<string | null>(null);
+  const [replaceSubmitLoading, setReplaceSubmitLoading] = useState(false);
+  const [openTournamentTypeHintId, setOpenTournamentTypeHintId] = useState<TournamentTypeKey | null>(null);
+  const isCreationFlow = isOpen && !tournament;
+  const draftTournamentId = useMemo(
+    () => (isCreationFlow ? createTournamentDraftId() : null),
+    [isCreationFlow],
+  );
+  const ratingLastTapTsRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
-    if (!selectedFamily && !selectedType) {
+    if (!selectedFamily && !selectedType && !isCreationFlow) {
       setCourtsCountDraft("");
       setCourtNames([]);
       setTargetScore(21);
       setTargetScoreDraft("21");
       setSaveState("idle");
+      setSaveWasLocal(false);
+      setRosterMode("bookings");
+      setManualParticipants([]);
+      setManualStationName("");
+      setManualOrganizerName("");
       setManualRatings({});
+      setSavedStartRatingChanges({});
       setRatingSaveStateById({});
       setRatingSaveErrors({});
+      setRatingEditModeById({});
       setRefreshingRatings(false);
       setRefreshRatingsError(null);
       setMissingRatingConfirmation(null);
       setOrganizerSlotRating(null);
-      setLeavingParticipantId(null);
+      setParticipantLeaveTarget(null);
       setLeaveError(null);
       setAutoRefreshedParticipantsKey("");
       setPairedMexicanoPairs([]);
+      setReadyParticipantIds({});
+      setReadyStateHydrated(false);
+      setReplacementWaitlist([]);
+      setReplaceParticipantId(null);
+      setReplaceSearchQuery("");
+      setReplaceSearchResults([]);
+      setReplaceSearchLoading(false);
+      setReplaceSearchError(null);
+      setReplaceSubmitLoading(false);
+      setOpenTournamentTypeHintId(null);
+      setAmericanoStandingsSortMode(DEFAULT_AMERICANO_STANDINGS_SORT_MODE);
+      setMexicanoFirstRoundMode(DEFAULT_MEXICANO_FIRST_ROUND_MODE);
+      setMexicanoTableSortMode(DEFAULT_MEXICANO_TABLE_SORT_MODE);
+      setMexicanoWinnerSortMode(DEFAULT_MEXICANO_WINNER_SORT_MODE);
+      ratingLastTapTsRef.current = {};
     }
-  }, [selectedFamily, selectedType]);
+  }, [isCreationFlow, selectedFamily, selectedType]);
 
   useEffect(() => {
     if (!isOpen) return;
+    if (!tournament) {
+      setLoading(false);
+      setError(null);
+      setSelectedFamily(null);
+      setSelectedType(null);
+      setCourtsCountDraft("");
+      setCourtNames([]);
+      setTargetScore(21);
+      setTargetScoreDraft("21");
+      setSaveState("idle");
+      setSaveWasLocal(false);
+      setRosterMode("manual");
+      setManualParticipants([createTournamentManualParticipantDraft(0)]);
+      setManualStationName("");
+      setManualOrganizerName("");
+      setManualRatings({});
+      setSavedStartRatingChanges({});
+      setRatingSaveStateById({});
+      setRatingSaveErrors({});
+      setRatingEditModeById({});
+      setRefreshingRatings(false);
+      setRefreshRatingsError(null);
+      setMissingRatingConfirmation(null);
+      setOrganizerSlotRating(null);
+      setParticipantLeaveTarget(null);
+      setLeaveError(null);
+      setAutoRefreshedParticipantsKey("");
+      setReadyParticipantIds({});
+      setReadyStateHydrated(true);
+      setReplacementWaitlist([]);
+      setReplaceParticipantId(null);
+      setReplaceSearchQuery("");
+      setReplaceSearchResults([]);
+      setReplaceSearchLoading(false);
+      setReplaceSearchError(null);
+      setReplaceSubmitLoading(false);
+      setOpenTournamentTypeHintId(null);
+      setAmericanoStandingsSortMode(DEFAULT_AMERICANO_STANDINGS_SORT_MODE);
+      setMexicanoFirstRoundMode(DEFAULT_MEXICANO_FIRST_ROUND_MODE);
+      setMexicanoTableSortMode(DEFAULT_MEXICANO_TABLE_SORT_MODE);
+      setMexicanoWinnerSortMode(DEFAULT_MEXICANO_WINNER_SORT_MODE);
+      ratingLastTapTsRef.current = {};
+      setPairedMexicanoPairs([]);
+      return;
+    }
+    const restoredMexicanoOptions = parseMexicanoOptions(historyRecord?.params);
+    const restoredAmericanoStandingsSortMode = parseAmericanoStandingsSortMode(
+      historyRecord?.params && typeof historyRecord.params === "object"
+        ? historyRecord.params as Record<string, unknown>
+        : null,
+      DEFAULT_AMERICANO_STANDINGS_SORT_MODE,
+    );
     const restoredType = normalizeTournamentTypeKey(historyRecord?.tournamentType);
     const restoredFamily = getTournamentFamilyByType(restoredType);
     const restoredCourts = Array.isArray(historyRecord?.courts) ? historyRecord.courts : [];
@@ -840,16 +1719,48 @@ function TournamentDetailsModal({
     setTargetScore(restoredTargetScore);
     setTargetScoreDraft(String(restoredTargetScore));
     setSaveState("idle");
+    setSaveWasLocal(false);
+    setRosterMode("bookings");
+    setManualParticipants([]);
+    setManualStationName("");
+    setManualOrganizerName("");
     setManualRatings({});
+    setSavedStartRatingChanges({});
     setRatingSaveStateById({});
     setRatingSaveErrors({});
+    setRatingEditModeById({});
     setRefreshingRatings(false);
     setRefreshRatingsError(null);
     setMissingRatingConfirmation(null);
     setOrganizerSlotRating(null);
-    setLeavingParticipantId(null);
+    setParticipantLeaveTarget(null);
     setLeaveError(null);
     setAutoRefreshedParticipantsKey("");
+    const tournamentReadyFromHistory = normalizeReadyParticipantIdsInput(
+      historyRecord?.params?.readyParticipantIds ?? historyRecord?.params?.participantReadyIds,
+    );
+    const tournamentIdValue = tournament?.id ? String(tournament.id) : "";
+    const tournamentReadyFromStorage = tournamentIdValue
+      ? readTournamentReadyState(tournamentIdValue)
+      : {};
+    setReadyParticipantIds({
+      ...readyParticipantIdsToMap(tournamentReadyFromHistory),
+      ...tournamentReadyFromStorage,
+    });
+    setReadyStateHydrated(true);
+    setReplacementWaitlist([]);
+    setReplaceParticipantId(null);
+    setReplaceSearchQuery("");
+    setReplaceSearchResults([]);
+    setReplaceSearchLoading(false);
+    setReplaceSearchError(null);
+    setReplaceSubmitLoading(false);
+    setOpenTournamentTypeHintId(null);
+    setAmericanoStandingsSortMode(restoredAmericanoStandingsSortMode);
+    setMexicanoFirstRoundMode(restoredMexicanoOptions.firstRoundMode ?? DEFAULT_MEXICANO_FIRST_ROUND_MODE);
+    setMexicanoTableSortMode(restoredMexicanoOptions.tableSortMode ?? DEFAULT_MEXICANO_TABLE_SORT_MODE);
+    setMexicanoWinnerSortMode(restoredMexicanoOptions.winnerSortMode ?? DEFAULT_MEXICANO_WINNER_SORT_MODE);
+    ratingLastTapTsRef.current = {};
     const restoredPairs = Array.isArray(historyRecord?.params?.pairAssignments)
       ? historyRecord.params.pairAssignments
         .filter((pair): pair is PairedMexicanoPairAssignment => (
@@ -860,7 +1771,7 @@ function TournamentDetailsModal({
         ))
       : [];
     setPairedMexicanoPairs(restoredPairs);
-  }, [isOpen, historyRecord, tournament?.id]);
+  }, [historyRecord, isOpen, tournament, tournament?.id]);
 
   const applyCourtsCount = (count: number) => {
     setCourtNames((prev) =>
@@ -889,14 +1800,36 @@ function TournamentDetailsModal({
     });
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen || !isCreationFlow || !profile) return;
+    const profileName = [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim();
+    if (!profileName) return;
+    setManualOrganizerName((current) => (current.trim() ? current : profileName));
+  }, [isCreationFlow, isOpen, profile]);
+
   const handleSaveTournament = async (allowMissingRatings = false) => {
-    if (!tournament) return;
     if (!selectedType) return;
+    if (!profile?.id) {
+      setSaveState("error");
+      setError("Не удалось определить организатора для журнала изменений уровня");
+      return;
+    }
     const tournamentType = selectedType;
+    const resolvedTournamentId = String(tournament?.id || draftTournamentId || createTournamentDraftId());
+    const tournamentStartedAt = new Date().toISOString();
     const minRating = resolveTournamentMinRating(tournament, historyRecord);
+    const manualOrganizerResolvedName = [manualOrganizerName, profile ? [profile.firstName, profile.lastName].filter(Boolean).join(" ") : ""]
+      .map((value) => String(value ?? "").trim())
+      .find(Boolean) || "";
+    const manualStationResolvedName = manualStationName.trim();
+    const localDateKey = String(sourceDateKey || "").trim() || formatDate(new Date());
+    const getParticipantDraftRating = (participant: TournamentParticipantEntry) => (
+      rosterMode === "manual"
+        ? participant.rating
+        : manualRatings[participant.id] ?? participant.rating
+    );
     const missingParticipants = sortedParticipants.filter((participant) => {
-      const manualRating = manualRatings[participant.id];
-      const ratingValue = parseTournamentRatingValue(manualRating ?? participant.rating);
+      const ratingValue = parseTournamentRatingValue(getParticipantDraftRating(participant));
       return ratingValue == null;
     });
 
@@ -910,19 +1843,37 @@ function TournamentDetailsModal({
 
     setMissingRatingConfirmation(null);
     setSaveState("loading");
+    setSaveWasLocal(false);
 
     const participantsForRounds: ParticipantEntry[] = sortedParticipants.map((participant, idx) => {
-      const manualRating = manualRatings[participant.id];
       const ratingValue =
-        parseTournamentRatingValue(manualRating ?? participant.rating)
+        parseTournamentRatingValue(getParticipantDraftRating(participant))
         ?? (allowMissingRatings ? minRating.value : null);
       return {
         id: participant.id ?? `participant-${idx}`,
         name: participant.name || `Участник ${idx + 1}`,
         photo: participant.photo ?? null,
-        phone: null,
+        phone: String(participant.phone || "").trim() || null,
         rating: ratingValue != null ? String(ratingValue) : null,
       };
+    });
+    const startRatingChanges = buildTournamentStartRatingChanges({
+      tournamentId: resolvedTournamentId,
+      changedAt: tournamentStartedAt,
+      changedBy: profile,
+      participants: sortedParticipants.map((participant, index) => {
+        const draftRating = parseTournamentRatingValue(getParticipantDraftRating(participant));
+        const savedChange = savedStartRatingChanges[participant.id];
+        return {
+          participantId: participant.id,
+          clientId: participant.clientId,
+          name: participant.name,
+          phone: participant.phone ?? null,
+          previousRating: savedChange?.previousRating ?? parseTournamentRatingValue(participant.rating),
+          nextRating: parseTournamentRatingValue(participantsForRounds[index]?.rating),
+          reason: draftRating == null ? "MINIMUM_ASSIGNED" : "MANUAL_OVERRIDE",
+        };
+      }),
     });
 
     const completedMexicanoPairs = pairedMexicanoPairs
@@ -932,10 +1883,21 @@ function TournamentDetailsModal({
       setSaveState("error");
       return;
     }
-    const mexicanoOptions = parseMexicanoOptions(historyRecord?.params);
+    if (tournamentType === "americano_flex" && americanoFlexError) {
+      setSaveState("error");
+      return;
+    }
+    const scheduleMode = resolveAmericanoScheduleMode(tournamentType);
+    const mexicanoOptionsFromHistory = parseMexicanoOptions(historyRecord?.params);
+    const mexicanoOptions = {
+      ...mexicanoOptionsFromHistory,
+      firstRoundMode: mexicanoFirstRoundMode,
+      tableSortMode: mexicanoTableSortMode,
+      winnerSortMode: mexicanoWinnerSortMode,
+    } satisfies MexicanoClassicOptions;
     const mexicanoParams = buildMexicanoClassicParams(sortedParticipants.length, {
       ...mexicanoOptions,
-      seed: mexicanoOptions.seed ?? String(tournament.id),
+      seed: mexicanoOptions.seed ?? resolvedTournamentId,
     });
 
     const roundsForServer = serializeAmericanoRounds(
@@ -952,22 +1914,51 @@ function TournamentDetailsModal({
           : createAmericanoRounds(
               participantsForRounds,
               courtNames,
-              { mode: tournamentType === "americano_classic" ? "classic" : "padelhub" },
+              { mode: scheduleMode },
             ),
     );
+    const readyParticipantIdsForPayload = sortedParticipants
+      .filter((participant) => readyParticipantIds[participant.id] === true)
+      .map((participant) => participant.id);
 
     const payload: AmericanoTournamentPayload = {
-      tournamentId: String(tournament.id),
+      tournamentId: resolvedTournamentId,
       tenantKey: TENANT_KEY,
-      createdAt: new Date().toISOString(),
+      createdAt: tournamentStartedAt,
       organizer: {
         id: profile?.id ?? null,
-        phone: null,
+        phone: profile?.phone ?? null,
         tenantKey: TENANT_KEY,
+        name: [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim() || null,
       },
       tournamentType,
       targetScore,
       courts: courtNames,
+      params:
+        rosterMode === "manual"
+          ? {
+              manualTournament: true,
+              localStatus: "draft",
+              syncStatus: "pending_viva",
+              localDateKey,
+              stationName: manualStationResolvedName || null,
+              organizerName: manualOrganizerResolvedName || null,
+              organizerId: profile?.id ?? null,
+            }
+          : undefined,
+      participants: participantsForRounds.map((participant) => ({
+        id: participant.id ?? null,
+        phone: participant.phone ?? null,
+        rating: participant.rating ?? null,
+        photo: participant.photo ?? null,
+        name: participant.name,
+      })),
+      startRatingChanges,
+      rounds: roundsForServer,
+    };
+
+    const payloadWithTypeSpecificParams: AmericanoTournamentPayload = {
+      ...payload,
       params:
         tournamentType === "paired_mexicano"
           ? {
@@ -976,49 +1967,158 @@ function TournamentDetailsModal({
               mexicanoMode: "paired",
               totalRounds: Math.max(1, completedMexicanoPairs.length - 1),
               pairAssignments: completedMexicanoPairs,
+              readyParticipantIds: readyParticipantIdsForPayload,
+              ...(rosterMode === "manual"
+                ? {
+                    manualTournament: true,
+                    localStatus: "draft",
+                    syncStatus: "pending_viva",
+                    localDateKey,
+                    stationName: manualStationResolvedName || null,
+                    organizerName: manualOrganizerResolvedName || null,
+                    organizerId: profile?.id ?? null,
+                  }
+                : {}),
             }
           : tournamentType === "paired_americano"
             ? {
                 tournamentFamily: "americano",
                 tournamentSubtype: "paired",
+                standingsSortMode: americanoStandingsSortMode,
                 pairAssignments: completedMexicanoPairs,
+                readyParticipantIds: readyParticipantIdsForPayload,
+                ...(rosterMode === "manual"
+                  ? {
+                      manualTournament: true,
+                      localStatus: "draft",
+                      syncStatus: "pending_viva",
+                      localDateKey,
+                      stationName: manualStationResolvedName || null,
+                      organizerName: manualOrganizerResolvedName || null,
+                      organizerId: profile?.id ?? null,
+                    }
+                  : {}),
               }
-            : tournamentType === "americano_classic"
+            : tournamentType === "americano_flex"
               ? {
                   tournamentFamily: "americano",
-                  tournamentSubtype: "classic",
+                  tournamentSubtype: "flex",
+                  standingsSortMode: americanoStandingsSortMode,
+                  readyParticipantIds: readyParticipantIdsForPayload,
+                  ...(rosterMode === "manual"
+                    ? {
+                        manualTournament: true,
+                        localStatus: "draft",
+                        syncStatus: "pending_viva",
+                        localDateKey,
+                        stationName: manualStationResolvedName || null,
+                        organizerName: manualOrganizerResolvedName || null,
+                        organizerId: profile?.id ?? null,
+                      }
+                    : {}),
                 }
-              : tournamentType === "mexicano"
+              : tournamentType === "americano_classic"
                 ? {
-                    tournamentFamily: "mexicano",
+                    tournamentFamily: "americano",
                     tournamentSubtype: "classic",
-                    ...mexicanoParams,
+                    standingsSortMode: americanoStandingsSortMode,
+                    readyParticipantIds: readyParticipantIdsForPayload,
+                    ...(rosterMode === "manual"
+                      ? {
+                          manualTournament: true,
+                          localStatus: "draft",
+                          syncStatus: "pending_viva",
+                          localDateKey,
+                          stationName: manualStationResolvedName || null,
+                          organizerName: manualOrganizerResolvedName || null,
+                          organizerId: profile?.id ?? null,
+                        }
+                      : {}),
                   }
-              : {
-                  tournamentFamily: selectedFamily,
-                  tournamentSubtype: "padelhub",
-                },
-      participants: participantsForRounds.map((participant) => ({
-        id: participant.id ?? null,
-        phone: null,
-        rating: participant.rating ?? null,
-        photo: participant.photo ?? null,
-        name: participant.name,
-      })),
-      rounds: roundsForServer,
+                : tournamentType === "mexicano"
+                  ? {
+                      tournamentFamily: "mexicano",
+                      tournamentSubtype: "classic",
+                      ...mexicanoParams,
+                      readyParticipantIds: readyParticipantIdsForPayload,
+                      ...(rosterMode === "manual"
+                        ? {
+                            manualTournament: true,
+                            localStatus: "draft",
+                            syncStatus: "pending_viva",
+                            localDateKey,
+                            stationName: manualStationResolvedName || null,
+                            organizerName: manualOrganizerResolvedName || null,
+                            organizerId: profile?.id ?? null,
+                          }
+                        : {}),
+                    }
+                  : {
+                      tournamentFamily: selectedFamily,
+                      tournamentSubtype: "padelhub",
+                      standingsSortMode: americanoStandingsSortMode,
+                      readyParticipantIds: readyParticipantIdsForPayload,
+                      ...(rosterMode === "manual"
+                        ? {
+                            manualTournament: true,
+                            localStatus: "draft",
+                            syncStatus: "pending_viva",
+                            localDateKey,
+                            stationName: manualStationResolvedName || null,
+                            organizerName: manualOrganizerResolvedName || null,
+                            organizerId: profile?.id ?? null,
+                          }
+                        : {}),
+                    },
     };
 
-    const res = await apiCreateAmericanoTournament(payload);
-    if (res.data) {
+    const payloadWithStationContext = withTournamentStationContext(
+      payloadWithTypeSpecificParams,
+      tournament,
+    );
+    const res = await apiCreateAmericanoTournament(payloadWithStationContext);
+    const isSuccess = res.status != null && res.status >= 200 && res.status < 300;
+    if (isSuccess) {
       setSaveState("success");
-      onSaved(payload);
+      onSaved(payloadWithStationContext);
       onClose();
-    } else {
-      setSaveState("error");
+      return;
     }
+
+    const shouldSaveLocalDraft =
+      rosterMode === "manual"
+      && (res.status == null || res.status >= 500);
+
+    if (shouldSaveLocalDraft) {
+      const localPayload: AmericanoTournamentPayload = {
+        ...payloadWithStationContext,
+        params: {
+          ...(payloadWithStationContext.params ?? {}),
+          createdOffline: true,
+        },
+      };
+      saveCachedTournamentDraft({
+        payload: localPayload,
+        totals: null,
+        playerLogs: null,
+        updatedAt: new Date().toISOString(),
+      });
+      setSaveState("success");
+      setSaveWasLocal(true);
+      onSaved(localPayload);
+      onClose();
+      return;
+    }
+
+    setSaveState("error");
   };
 
   const tournamentId = tournament?.id ? String(tournament.id) : null;
+
+  useEffect(() => {
+    if (!isOpen || !tournamentId || !readyStateHydrated) return;
+    writeTournamentReadyState(tournamentId, readyParticipantIds);
+  }, [isOpen, readyParticipantIds, readyStateHydrated, tournamentId]);
 
   const loadParticipants = async (nextTournamentId: string) => {
     setLoading(true);
@@ -1042,12 +2142,12 @@ function TournamentDetailsModal({
   };
 
   useEffect(() => {
-    if (!isOpen || !tournamentId) return;
+    if (!isOpen || !tournamentId || rosterMode === "manual") return;
     void loadParticipants(tournamentId);
-  }, [isOpen, tournamentId]);
+  }, [isOpen, rosterMode, tournamentId]);
 
-  const title = tournament?.direction?.name || tournament?.type?.name || "Турнир";
   const trainer = tournament?.trainers?.[0];
+  const title = isCreationFlow ? "Создание турнира" : (tournament?.direction?.name || tournament?.type?.name || "Турнир");
 
   const baseParticipantEntries = useMemo((): TournamentParticipantEntry[] => {
     return normalizeTournamentParticipantBookings(participants).map((participant, idx) => ({
@@ -1061,6 +2161,23 @@ function TournamentDetailsModal({
       rating: participant.rating ?? null,
     }));
   }, [participants]);
+
+  const manualParticipantEntries = useMemo((): TournamentParticipantEntry[] => {
+    return manualParticipants.map((participant, idx) => ({
+      id: participant.id || `manual-participant-${idx}`,
+      bookingId: null,
+      clientId: null,
+      name: participant.name || `Игрок ${idx + 1}`,
+      photo: null,
+      phone: participant.phone || null,
+      spot: null,
+      rating: participant.rating || null,
+    }));
+  }, [manualParticipants]);
+
+  const activeParticipantBaseEntries = rosterMode === "manual"
+    ? manualParticipantEntries
+    : baseParticipantEntries;
 
   const organizerSlotParticipant = useMemo<TournamentParticipantEntry | null>(() => {
     if (!profile) return null;
@@ -1089,22 +2206,9 @@ function TournamentDetailsModal({
     };
   }, [organizerSlotRating, profile]);
 
-  const shouldAutoIncludeOrganizerSlot = useMemo(() => {
-    if (!organizerSlotParticipant) return false;
-    if (baseParticipantEntries.length === 0 || baseParticipantEntries.length % 2 === 0) return false;
-
-    return !baseParticipantEntries.some((participant) => (
-      (participant.clientId && organizerSlotParticipant.clientId && participant.clientId === organizerSlotParticipant.clientId)
-    ));
-  }, [baseParticipantEntries, organizerSlotParticipant]);
-
   const participantEntries = useMemo((): TournamentParticipantEntry[] => {
-    if (!shouldAutoIncludeOrganizerSlot || !organizerSlotParticipant) {
-      return baseParticipantEntries;
-    }
-
-    return [...baseParticipantEntries, organizerSlotParticipant];
-  }, [baseParticipantEntries, organizerSlotParticipant, shouldAutoIncludeOrganizerSlot]);
+    return resolveTournamentParticipantEntries(activeParticipantBaseEntries, organizerSlotParticipant);
+  }, [activeParticipantBaseEntries, organizerSlotParticipant]);
 
   const participantRatingsRefreshKey = useMemo(
     () =>
@@ -1138,8 +2242,136 @@ function TournamentDetailsModal({
     });
   };
 
+  const handleManualParticipantChange = (
+    participantId: string,
+    field: keyof Pick<TournamentManualParticipantDraft, "name" | "phone" | "rating">,
+    value: string,
+  ) => {
+    setManualParticipants((prev) => prev.map((participant) => (
+      participant.id === participantId
+        ? { ...participant, [field]: value }
+        : participant
+    )));
+    setSaveState("idle");
+    setSaveWasLocal(false);
+    setMissingRatingConfirmation(null);
+  };
+
+  const handleAddManualParticipant = () => {
+    setManualParticipants((prev) => [
+      ...prev,
+      createTournamentManualParticipantDraft(prev.length),
+    ]);
+    setSaveState("idle");
+    setSaveWasLocal(false);
+    setMissingRatingConfirmation(null);
+  };
+
+  const handleRemoveManualParticipant = (participantId: string) => {
+    setManualParticipants((prev) => prev.filter((participant) => participant.id !== participantId));
+    setReadyParticipantIds((prev) => {
+      if (!prev[participantId]) return prev;
+      const next = { ...prev };
+      delete next[participantId];
+      return next;
+    });
+    setManualRatings((prev) => {
+      if (!prev[participantId]) return prev;
+      const next = { ...prev };
+      delete next[participantId];
+      return next;
+    });
+    setRatingSaveStateById((prev) => {
+      if (!prev[participantId]) return prev;
+      const next = { ...prev };
+      delete next[participantId];
+      return next;
+    });
+    setRatingSaveErrors((prev) => {
+      if (!prev[participantId]) return prev;
+      const next = { ...prev };
+      delete next[participantId];
+      return next;
+    });
+    setRatingEditModeById((prev) => {
+      if (!prev[participantId]) return prev;
+      const next = { ...prev };
+      delete next[participantId];
+      return next;
+    });
+    setPairedMexicanoPairs((prev) => prev
+      .map((pair) => pair.filter((id) => id !== participantId))
+      .filter((pair) => pair.length > 0));
+    if (replaceParticipantId === participantId) {
+      setReplaceParticipantId(null);
+    }
+    setSaveState("idle");
+    setSaveWasLocal(false);
+    setMissingRatingConfirmation(null);
+  };
+
+  const handleEnableManualRoster = () => {
+    setRosterMode("manual");
+    setLoading(false);
+    setError(null);
+    setRefreshRatingsError(null);
+    setMissingRatingConfirmation(null);
+    setParticipantLeaveTarget(null);
+    setLeaveError(null);
+    setRatingSaveStateById({});
+    setRatingSaveErrors({});
+    setRatingEditModeById({});
+    setReplaceParticipantId(null);
+    setReplaceSearchQuery("");
+    setReplaceSearchResults([]);
+    setReplaceSearchLoading(false);
+    setReplaceSearchError(null);
+    setReplaceSubmitLoading(false);
+    setAutoRefreshedParticipantsKey("");
+    setSaveState("idle");
+    setSaveWasLocal(false);
+    setManualParticipants((prev) => {
+      if (prev.length > 0) return prev;
+      const seededParticipants = baseParticipantEntries
+        .map((participant) => ({
+          id: participant.id,
+          name: manualRatings[participant.id] ?? participant.name ?? "",
+          phone: participant.phone ?? "",
+          rating: manualRatings[participant.id] ?? participant.rating ?? "",
+        }))
+        .sort(compareTournamentParticipantsByRating)
+        .map((participant, index) => createTournamentManualParticipantDraft(index, participant));
+
+      return seededParticipants.length > 0
+        ? seededParticipants
+        : [createTournamentManualParticipantDraft(0)];
+    });
+  };
+
+  const handleReturnToBookingRoster = () => {
+    setRosterMode("bookings");
+    setLoading(false);
+    setError(null);
+    setRefreshRatingsError(null);
+    setMissingRatingConfirmation(null);
+    setParticipantLeaveTarget(null);
+    setLeaveError(null);
+    setRatingSaveStateById({});
+    setRatingSaveErrors({});
+    setRatingEditModeById({});
+    setReplaceParticipantId(null);
+    setReplaceSearchQuery("");
+    setReplaceSearchResults([]);
+    setReplaceSearchLoading(false);
+    setReplaceSearchError(null);
+    setReplaceSubmitLoading(false);
+    setAutoRefreshedParticipantsKey("");
+    setSaveState("idle");
+    setSaveWasLocal(false);
+  };
+
   const handleRefreshParticipantRatings = async (silent = false) => {
-    if (participantEntries.length === 0) return;
+    if (rosterMode === "manual" || participantEntries.length === 0) return;
 
     setRefreshingRatings(true);
     if (!silent) {
@@ -1173,11 +2405,13 @@ function TournamentDetailsModal({
           ? item.ratingNumeric
           : parseTournamentRatingValue(item.rating);
       const nextRating =
-        typeof item.rating === "string" && item.rating.trim()
-          ? item.rating.trim()
-          : parsedNumeric != null
-            ? parsedNumeric.toFixed(5)
-            : null;
+        parsedNumeric != null
+          ? parsedNumeric.toFixed(3)
+          : (
+            typeof item.rating === "string" && item.rating.trim()
+              ? item.rating.trim()
+              : null
+          );
 
       if (clientId) liveByClientId.set(clientId, nextRating);
     });
@@ -1236,6 +2470,7 @@ function TournamentDetailsModal({
   };
 
   useEffect(() => {
+    if (rosterMode === "manual") return;
     if (!isOpen || loading || refreshingRatings || participantEntries.length === 0) return;
     if (!participantRatingsRefreshKey || participantRatingsRefreshKey === autoRefreshedParticipantsKey) return;
     setAutoRefreshedParticipantsKey(participantRatingsRefreshKey);
@@ -1244,6 +2479,7 @@ function TournamentDetailsModal({
     autoRefreshedParticipantsKey,
     isOpen,
     loading,
+    rosterMode,
     participantEntries.length,
     participantRatingsRefreshKey,
     refreshingRatings,
@@ -1252,13 +2488,14 @@ function TournamentDetailsModal({
   const handleParticipantRatingSave = async (participant: TournamentParticipantEntry) => {
     const rawRating = manualRatings[participant.id] ?? "";
     const parsedRating = parseTournamentRatingValue(rawRating);
+    const previousRating = parseTournamentRatingValue(participant.rating);
 
     if (!participant.clientId) {
       setRatingSaveErrors((prev) => ({
         ...prev,
         [participant.id]: "Не найден clientId для сохранения рейтинга",
       }));
-      return;
+      return false;
     }
 
     if (parsedRating == null) {
@@ -1266,7 +2503,16 @@ function TournamentDetailsModal({
         ...prev,
         [participant.id]: "Введите рейтинг больше 0",
       }));
-      return;
+      return false;
+    }
+
+    const ratingChangeTournamentId = String(tournamentId || draftTournamentId || "").trim();
+    if (!ratingChangeTournamentId || !profile?.id) {
+      setRatingSaveErrors((prev) => ({
+        ...prev,
+        [participant.id]: "Не удалось определить турнир или автора изменения",
+      }));
+      return false;
     }
 
     setRatingSaveStateById((prev) => ({
@@ -1280,12 +2526,18 @@ function TournamentDetailsModal({
       return next;
     });
 
-    const response = await apiSaveOnboardingLevel({
+    const changedAt = new Date().toISOString();
+    const response = await apiSaveOnboardingLevel(buildTournamentRatingChangePayload({
+      tournamentId: ratingChangeTournamentId,
       clientId: participant.clientId,
-      phone: null,
+      playerName: participant.name,
+      playerPhone: participant.phone,
+      previousRating,
+      nextRating: parsedRating,
       levelLetter: getLetterGrade(parsedRating),
-      levelNumeric: parsedRating,
-    });
+      changedAt,
+      changedBy: profile,
+    }));
 
     if (response.error) {
       setRatingSaveStateById((prev) => ({
@@ -1296,7 +2548,7 @@ function TournamentDetailsModal({
         ...prev,
         [participant.id]: response.error?.message || "Не удалось сохранить рейтинг",
       }));
-      return;
+      return false;
     }
 
     if (participant.isOrganizerSlot) {
@@ -1314,6 +2566,13 @@ function TournamentDetailsModal({
         }),
       );
     }
+    setSavedStartRatingChanges((prev) => ({
+      ...prev,
+      [participant.id]: {
+        previousRating: prev[participant.id]?.previousRating ?? previousRating,
+        nextRating: parsedRating,
+      },
+    }));
     setManualRatings((prev) => {
       const next = { ...prev };
       delete next[participant.id];
@@ -1323,35 +2582,60 @@ function TournamentDetailsModal({
       ...prev,
       [participant.id]: "idle",
     }));
+    return true;
+  };
+
+  const handleOpenParticipantRatingEdit = (participant: TournamentParticipantEntry) => {
+    if (!participant.clientId) return;
+    const parsedRating = parseTournamentRatingValue(participant.rating);
+    setRatingEditModeById((prev) => ({
+      ...prev,
+      [participant.id]: true,
+    }));
+    if (parsedRating == null) return;
+    setManualRatings((prev) => {
+      if ((prev[participant.id] || "").trim() !== "") return prev;
+      return {
+        ...prev,
+        [participant.id]: parsedRating.toFixed(3),
+      };
+    });
+  };
+
+  const handleCloseParticipantRatingEdit = (participantId: string) => {
+    setRatingEditModeById((prev) => {
+      if (!prev[participantId]) return prev;
+      const next = { ...prev };
+      delete next[participantId];
+      return next;
+    });
+    setManualRatings((prev) => {
+      if (!prev[participantId]) return prev;
+      const next = { ...prev };
+      delete next[participantId];
+      return next;
+    });
+    setRatingSaveErrors((prev) => {
+      if (!prev[participantId]) return prev;
+      const next = { ...prev };
+      delete next[participantId];
+      return next;
+    });
+  };
+
+  const handleParticipantRatingTap = (participant: TournamentParticipantEntry) => {
+    const nowTs = Date.now();
+    const lastTs = ratingLastTapTsRef.current[participant.id] ?? 0;
+    ratingLastTapTsRef.current[participant.id] = nowTs;
+    if (nowTs - lastTs <= 360) {
+      handleOpenParticipantRatingEdit(participant);
+    }
   };
 
   const handleParticipantLeave = async (participant: TournamentParticipantEntry) => {
-    if (!participant.bookingId || leavingParticipantId) return;
-    const accepted = window.confirm("Покинуть турнир? Вы потеряете место в записи.");
-    if (!accepted) return;
-
-    setLeavingParticipantId(participant.id);
+    if (!participant.bookingId || participantLeaveTarget) return;
     setLeaveError(null);
-
-    try {
-      const response = await apiCancelBooking(participant.bookingId);
-      const ok = response.status != null && response.status >= 200 && response.status < 300;
-
-      if (!ok) {
-        setLeaveError(response.error?.message || "Не удалось покинуть турнир");
-        return;
-      }
-
-      if (tournamentId) {
-        await loadParticipants(tournamentId);
-      } else {
-        setParticipants((prev) => prev.filter((item) => item.id !== participant.bookingId));
-      }
-    } catch {
-      setLeaveError("Не удалось покинуть турнир");
-    } finally {
-      setLeavingParticipantId(null);
-    }
+    setParticipantLeaveTarget(participant);
   };
 
   const sortedParticipants = useMemo(() => {
@@ -1369,6 +2653,243 @@ function TournamentDetailsModal({
     () => sortedParticipants.map((participant) => participant.id),
     [sortedParticipants],
   );
+  const replaceTargetParticipant = useMemo(
+    () => sortedParticipants.find((participant) => participant.id === replaceParticipantId) ?? null,
+    [replaceParticipantId, sortedParticipants],
+  );
+
+  const closeReplaceParticipantPanel = () => {
+    setReplaceParticipantId(null);
+    setReplaceSearchQuery("");
+    setReplaceSearchResults([]);
+    setReplaceSearchLoading(false);
+    setReplaceSearchError(null);
+    setReplaceSubmitLoading(false);
+  };
+
+  const handleOpenReplaceParticipant = (participant: TournamentParticipantEntry) => {
+    if (participant.isOrganizerSlot) return;
+    setReplaceParticipantId(participant.id);
+    setReplaceSearchQuery("");
+    setReplaceSearchResults([]);
+    setReplaceSearchLoading(false);
+    setReplaceSearchError(null);
+    setReplaceSubmitLoading(false);
+  };
+
+  const handleReplaceParticipantWithCandidate = async (candidate: PadelPlayerCandidate) => {
+    if (!replaceTargetParticipant || replaceSubmitLoading) return;
+    const candidateClientId = String(candidate.id || "").trim();
+    if (!candidateClientId) {
+      setReplaceSearchError("У выбранного игрока нет clientId.");
+      return;
+    }
+    const duplicateParticipant = participantEntries.find((participant) => {
+      const clientId = String(participant.clientId || "").trim();
+      if (!clientId) return false;
+      if (replaceTargetParticipant.clientId && clientId === replaceTargetParticipant.clientId) return false;
+      return clientId === candidateClientId;
+    });
+    if (duplicateParticipant) {
+      setReplaceSearchError("Этот игрок уже есть в составе турнира.");
+      return;
+    }
+
+    const candidateName = String(candidate.name || "").trim() || "Игрок";
+    const nameParts = splitParticipantFullName(candidateName);
+    const candidateRatingNumeric =
+      typeof candidate.ratingNumeric === "number" && Number.isFinite(candidate.ratingNumeric)
+        ? candidate.ratingNumeric
+        : null;
+    const candidateRating =
+      candidateRatingNumeric != null
+        ? candidateRatingNumeric.toFixed(3)
+        : (candidate.rating?.trim() || null);
+    const targetClientId = String(replaceTargetParticipant.clientId || "").trim();
+    const targetBookingId = String(replaceTargetParticipant.bookingId || "").trim();
+    const targetId = replaceTargetParticipant.id;
+
+    setReplaceSubmitLoading(true);
+    setReplaceSearchError(null);
+
+    setParticipants((prev) => {
+      let replaced = false;
+      const next = prev.map((booking) => {
+        const bookingClientId = String(booking.client?.id || "").trim();
+        const bookingId = String(booking.id || "").trim();
+        const isTarget = (
+          (targetClientId && bookingClientId === targetClientId)
+          || (targetBookingId && bookingId === targetBookingId)
+        );
+        if (!isTarget) return booking;
+        replaced = true;
+        return {
+          ...booking,
+          client: {
+            ...(booking.client ?? {}),
+            id: candidateClientId,
+            firstName: nameParts.firstName,
+            lastName: nameParts.lastName || undefined,
+            photo: candidate.photo ?? undefined,
+            phone: undefined,
+          },
+          rating: candidateRating ?? undefined,
+          ratingSource: candidateRating != null ? "level" : booking.ratingSource,
+        } satisfies ExerciseBooking;
+      });
+      return replaced ? normalizeTournamentParticipantBookings(next) : prev;
+    });
+
+    setReplacementWaitlist((prev) => {
+      const waitlistEntry: TournamentParticipantEntry = {
+        ...replaceTargetParticipant,
+        isOrganizerSlot: false,
+      };
+      const withoutSame = prev.filter((item) => {
+        const sameById = item.id === waitlistEntry.id;
+        const sameByClientId = Boolean(item.clientId && waitlistEntry.clientId && item.clientId === waitlistEntry.clientId);
+        const isSameCandidate = item.clientId === candidateClientId;
+        return !sameById && !sameByClientId && !isSameCandidate;
+      });
+      return [...withoutSame, waitlistEntry];
+    });
+
+    setReadyParticipantIds((prev) => {
+      const next = { ...prev };
+      const previousReady = prev[targetId] === true;
+      delete next[targetId];
+      if (previousReady) {
+        next[candidateClientId] = true;
+      }
+      return next;
+    });
+
+    setManualRatings((prev) => {
+      if (!prev[targetId]) return prev;
+      const next = { ...prev };
+      delete next[targetId];
+      return next;
+    });
+    setRatingSaveErrors((prev) => {
+      if (!prev[targetId]) return prev;
+      const next = { ...prev };
+      delete next[targetId];
+      return next;
+    });
+    setRatingSaveStateById((prev) => {
+      if (!prev[targetId]) return prev;
+      const next = { ...prev };
+      delete next[targetId];
+      return next;
+    });
+
+    closeReplaceParticipantPanel();
+  };
+
+  useEffect(() => {
+    if (!replaceTargetParticipant) return;
+    const query = replaceSearchQuery.trim();
+    if (query.length < 2) {
+      setReplaceSearchResults([]);
+      setReplaceSearchLoading(false);
+      setReplaceSearchError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setReplaceSearchLoading(true);
+    setReplaceSearchError(null);
+    const timeoutId = window.setTimeout(() => {
+      void apiSearchPadelPlayers(query, 8)
+        .then((result) => {
+          if (cancelled) return;
+          if (result.error) {
+            setReplaceSearchResults([]);
+            setReplaceSearchError(result.error.message || "Не удалось найти игроков Viva.");
+            return;
+          }
+          const unique = new Map<string, PadelPlayerCandidate>();
+          (result.data ?? []).forEach((item, index) => {
+            const key =
+              String(item.id || "").trim()
+              || `${String(item.phone || "").trim()}::${String(item.name || "").trim().toLowerCase()}::${index}`;
+            unique.set(key, item);
+          });
+          setReplaceSearchResults(Array.from(unique.values()));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setReplaceSearchResults([]);
+          setReplaceSearchError("Не удалось найти игроков Viva.");
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setReplaceSearchLoading(false);
+          }
+        });
+    }, 280);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [replaceSearchQuery, replaceTargetParticipant]);
+
+  useEffect(() => {
+    if (!replaceParticipantId) return;
+    if (replaceTargetParticipant) return;
+    closeReplaceParticipantPanel();
+  }, [replaceParticipantId, replaceTargetParticipant]);
+
+  useEffect(() => {
+    if (sortedParticipantIds.length === 0) return;
+    const allowedIds = new Set(sortedParticipantIds);
+    setReadyParticipantIds((prev) => {
+      let changed = false;
+      const next: Record<string, boolean> = {};
+      Object.entries(prev).forEach(([participantId, value]) => {
+        if (value !== true) return;
+        if (!allowedIds.has(participantId)) {
+          changed = true;
+          return;
+        }
+        next[participantId] = true;
+      });
+      if (!changed && Object.keys(next).length === Object.keys(prev).length) {
+        return prev;
+      }
+      return next;
+    });
+    setRatingEditModeById((prev) => {
+      let changed = false;
+      const next: Record<string, boolean> = {};
+      Object.entries(prev).forEach(([participantId, isOpen]) => {
+        if (!isOpen) return;
+        if (!allowedIds.has(participantId)) {
+          changed = true;
+          return;
+        }
+        next[participantId] = true;
+      });
+      if (!changed && Object.keys(next).length === Object.keys(prev).length) return prev;
+      return next;
+    });
+    const nextTapTimestamps: Record<string, number> = {};
+    Object.entries(ratingLastTapTsRef.current).forEach(([participantId, ts]) => {
+      if (allowedIds.has(participantId)) {
+        nextTapTimestamps[participantId] = ts;
+      }
+    });
+    ratingLastTapTsRef.current = nextTapTimestamps;
+  }, [sortedParticipantIds]);
+
+  const handleToggleParticipantReady = (participantId: string) => {
+    setReadyParticipantIds((prev) => ({
+      ...prev,
+      [participantId]: !(prev[participantId] === true),
+    }));
+  };
+
   const selectedPairPlayerIds = useMemo(
     () => new Set(pairedMexicanoPairs.flat()),
     [pairedMexicanoPairs],
@@ -1387,6 +2908,16 @@ function TournamentDetailsModal({
     ) return "Распределите всех игроков по парам.";
     return null;
   }, [pairedMexicanoPairCount, pairedMexicanoPairs, selectedType, sortedParticipants.length]);
+  const americanoFlexError = useMemo(() => {
+    if (selectedType !== "americano_flex") return null;
+    if (courtNames.length === 0) return "Укажите количество кортов.";
+    if (sortedParticipants.length < 5) return "Для флекс американо нужно минимум 5 игроков.";
+    const expectedPlayers = courtNames.length * 4 + 1;
+    if (sortedParticipants.length !== expectedPlayers) {
+      return `Для флекс американо на ${formatCourtsCountLabel(courtNames.length)} нужно ${expectedPlayers} игроков (4 × корты + 1). Сейчас: ${sortedParticipants.length}.`;
+    }
+    return null;
+  }, [courtNames.length, selectedType, sortedParticipants.length]);
 
   useEffect(() => {
     if (selectedType !== "paired_mexicano" && selectedType !== "paired_americano") return;
@@ -1428,8 +2959,11 @@ function TournamentDetailsModal({
   const selectedTypeUsesScores =
     selectedType === "americano_padelhub"
     || selectedType === "americano_classic"
+    || selectedType === "americano_flex"
+    || selectedType === "mexicano"
     || selectedType === "paired_americano"
     || selectedType === "paired_mexicano";
+  const manualRosterIsEmpty = rosterMode === "manual" && manualParticipants.length === 0;
   const parsedTargetScoreDraft = selectedTypeUsesScores
     ? parseBoundedIntegerInput(targetScoreDraft, 1, 99)
     : null;
@@ -1437,7 +2971,7 @@ function TournamentDetailsModal({
     ? parseBoundedIntegerInput(courtsCountDraft, 1, 12)
     : null;
   const canSaveTargetScore =
-    selectedTypeUsesScores && parsedTargetScoreDraft != null && parsedTargetScoreDraft !== targetScore;
+    selectedTypeUsesScores && parsedTargetScoreDraft != null;
   const canSaveCourtsCount =
     selectedType != null && parsedCourtsCountDraft != null && parsedCourtsCountDraft !== courtNames.length;
   const targetScoreNeedsConfirmation =
@@ -1447,6 +2981,11 @@ function TournamentDetailsModal({
     selectedType != null
     && (courtsCountDraft.trim() === "" || parsedCourtsCountDraft == null || parsedCourtsCountDraft !== courtNames.length);
   const settingsNeedConfirmation = targetScoreNeedsConfirmation || courtsCountNeedsConfirmation;
+  const tournamentDateTimeLine = formatTournamentDateTimeLine(tournament?.timeFrom, tournament?.timeTo);
+  const tournamentAddressLine = formatTournamentAddressLine(tournament?.studio);
+  const tournamentMapUrl = buildTournamentMapUrl(tournament?.studio);
+  const tournamentLevelRangeLabel = resolveTournamentLevelRangeLabel(tournament, historyRecord, sortedParticipants);
+  const trainerInitials = getInitialsFromName([trainer?.firstName, trainer?.lastName].filter(Boolean).join(" "));
 
   return (
     <Modal
@@ -1457,41 +2996,81 @@ function TournamentDetailsModal({
       bodyClassName="tournament-settings-modal-body"
     >
       <div className="tournaments-body tournament-settings-screen">
-        <div className="tournament-row">
-          <span>{formatTime(tournament?.timeFrom)} – {formatTime(tournament?.timeTo)}</span>
-          {tournament?.studio?.name && <span>{tournament.studio.name}</span>}
+        <div className="tournament-info-block">
+          <div className="tournament-info-line">
+            <span className="tournament-info-icon" aria-hidden="true">
+              <svg viewBox="0 0 12 12" role="presentation">
+                <path
+                  d="M3.5 1v1M8.5 1v1M2 4h8M2.5 2.5h7a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-6a.5.5 0 0 1 .5-.5z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+            <span className="tournament-info-text">{tournamentDateTimeLine}</span>
+          </div>
+          {tournamentAddressLine && (
+            <div className="tournament-info-line">
+              <span className="tournament-info-icon" aria-hidden="true">
+                <svg viewBox="0 0 12 12" role="presentation">
+                  <path
+                    d="M6 1.5a3 3 0 0 0-3 3c0 2.2 3 5.7 3 5.7s3-3.5 3-5.7a3 3 0 0 0-3-3zm0 4.2a1.2 1.2 0 1 1 0-2.4 1.2 1.2 0 0 1 0 2.4z"
+                    fill="currentColor"
+                  />
+                </svg>
+              </span>
+              <span className="tournament-info-text">{tournamentAddressLine}</span>
+              {tournamentMapUrl && (
+                <a
+                  className="tournament-info-map-link"
+                  href={tournamentMapUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  на карте
+                </a>
+              )}
+            </div>
+          )}
+          <div className="tournament-info-line">
+            <span className="tournament-info-icon" aria-hidden="true">
+              <svg viewBox="0 0 12 12" role="presentation">
+                <path d="M1.5 9.5h2V6h-2v3.5zm3.5 0h2V4.5h-2v5zm3.5 0h2V2.5h-2v7z" fill="currentColor" />
+              </svg>
+            </span>
+            <span className="tournament-info-text">{tournamentLevelRangeLabel}</span>
+          </div>
         </div>
-        {tournament?.studio?.address && (
-          <div className="tournament-address">{tournament.studio.address}</div>
-        )}
 
         {trainer && (
           <div className="tournament-section">
-            <div className="tournament-section-title">Исполнитель</div>
+            <div className="tournament-section-title">Организатор</div>
             <div className="tournament-participant tournament-trainer-card">
-              <div className="tournament-participant-avatar">
+              <div className={`tournament-participant-avatar ${trainer.photo ? "" : "no-photo"}`}>
                 {trainer.photo ? (
                   <img
                     src={trainer.photo}
                     alt={trainer.firstName}
                     onError={(e) => {
-                      e.currentTarget.style.display = "none";
+                      const target = e.currentTarget;
+                      target.style.display = "none";
+                      const parent = target.parentElement;
+                      if (parent) parent.classList.add("no-photo");
                     }}
                   />
-                ) : (
-                  <span>{getInitials({ client: { firstName: trainer.firstName, lastName: trainer.lastName } } as ExerciseBooking)}</span>
-                )}
-                <span className="tournament-participant-initials">
-                  {getInitials({ client: { firstName: trainer.firstName, lastName: trainer.lastName } } as ExerciseBooking)}
-                </span>
+                ) : null}
+                <span className="tournament-participant-initials">{trainerInitials}</span>
               </div>
               <div className="tournament-participant-info">
                 <div className="tournament-participant-name">
                   {[trainer.firstName, trainer.lastName].filter(Boolean).join(" ") || "Тренер"}
                 </div>
-                <div className="tournament-participant-spot">Исполнитель</div>
+                <div className="tournament-participant-spot">Организатор</div>
               </div>
-              <div className="tournament-participant-rating trainer">Тренер</div>
+              <div className="tournament-participant-rating trainer">Организатор</div>
             </div>
           </div>
         )}
@@ -1499,132 +3078,416 @@ function TournamentDetailsModal({
         <div className="tournament-section">
           <div className="tournament-section-head">
             <div className="tournament-section-title">Участники</div>
-            <button
-              className="tournament-section-action"
-              type="button"
-              onClick={() => void handleRefreshParticipantRatings()}
-              disabled={refreshingRatings || loading || sortedParticipants.length === 0}
-            >
-              {refreshingRatings ? "Пересчет..." : "Пересчитать"}
-            </button>
-          </div>
-          {loading && <div className="tournaments-muted">Загрузка...</div>}
-          {!loading && error && <div className="tournaments-error">{error}</div>}
-          {!loading && !error && refreshRatingsError && (
-            <div className="tournaments-error">{refreshRatingsError}</div>
-          )}
-          {!loading && !error && leaveError && (
-            <div className="tournaments-error">{leaveError}</div>
-          )}
-          {!loading && !error && participants.length === 0 && (
-            <div className="tournaments-muted">Участников пока нет</div>
-          )}
-          {!loading && !error && sortedParticipants.length > 0 && (
-            <div className="tournament-participants">
-              {sortedParticipants.map((participant, idx) => {
-                const initials = participant.name
-                  .split(" ")
-                  .map((part) => part[0] || "")
-                  .join("")
-                  .toUpperCase()
-                  .slice(0, 2) || "U";
-                const manualRating = manualRatings[participant.id] ?? "";
-                const savedRatingValue = parseTournamentRatingValue(participant.rating);
-                const hasSavedRating = savedRatingValue != null;
-                const manualParsedRating = parseTournamentRatingValue(manualRating);
-                const isSavingRating = ratingSaveStateById[participant.id] === "saving";
-                const canLeaveParticipant =
-                  Boolean(participant.bookingId)
-                  && isCurrentUserParticipant(participant);
-                const isLeavingParticipant = leavingParticipantId === participant.id;
-
-                return (
-                  <div key={participant.id ?? idx} className="tournament-participant">
-                    <div className="tournament-participant-order">{idx + 1}</div>
-                    <div className={`tournament-participant-avatar ${participant.photo ? "" : "no-photo"}`}>
-                      {participant.photo ? (
-                        <img
-                          src={participant.photo}
-                          alt={participant.name}
-                          onError={(e) => {
-                            const target = e.currentTarget;
-                            target.style.display = "none";
-                            const parent = target.parentElement;
-                            if (parent) parent.classList.add("no-photo");
-                          }}
-                        />
-                      ) : null}
-                      <span className="tournament-participant-initials">{initials}</span>
-                    </div>
-                    <div className="tournament-participant-info">
-                      <div className="tournament-participant-name">{participant.name}</div>
-                      {participant.isOrganizerSlot && (
-                        <div className="tournament-participant-note">
-                          Тренер / организатор занимает свободный слот
-                        </div>
-                      )}
-                      {ratingSaveErrors[participant.id] && (
-                        <div className="tournament-participant-note error">
-                          {ratingSaveErrors[participant.id]}
-                        </div>
-                      )}
-                    </div>
-                    <div className="tournament-participant-actions">
-                      {hasSavedRating ? (
-                        <div className="tournament-participant-rating">
-                          {formatRating(savedRatingValue!)}
-                        </div>
-                      ) : (
-                        <div className="tournament-participant-rating-editor">
-                          <input
-                            className="tournament-participant-rating-input"
-                            type="text"
-                            inputMode="decimal"
-                            placeholder="Рейтинг"
-                            value={manualRating}
-                            onChange={(e) => handleParticipantRatingInput(participant.id, e.target.value)}
-                          />
-                          {participant.clientId && manualParsedRating != null && (
-                            <button
-                              className="tournament-participant-rating-save"
-                              type="button"
-                              onClick={() => void handleParticipantRatingSave(participant)}
-                              disabled={isSavingRating}
-                              aria-label="Сохранить рейтинг"
-                              title="Сохранить рейтинг"
-                            >
-                              {isSavingRating ? "…" : "✓"}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                      {canLeaveParticipant && (
-                        <button
-                          className="tournament-participant-leave"
-                          type="button"
-                          onClick={() => void handleParticipantLeave(participant)}
-                          disabled={isLeavingParticipant}
-                        >
-                          {isLeavingParticipant ? "Выходим..." : "Покинуть"}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="tournament-section-head-actions">
+              {rosterMode === "manual" ? (
+                <>
+                  <button
+                    className="tournament-section-action"
+                    type="button"
+                    onClick={handleAddManualParticipant}
+                    >
+                    Добавить игрока
+                  </button>
+                  {tournament && (
+                    <button
+                      className="tournament-section-action"
+                      type="button"
+                      onClick={handleReturnToBookingRoster}
+                    >
+                      К списку записей
+                    </button>
+                  )}
+                </>
+              ) : (
+                <button
+                  className="tournament-section-action"
+                  type="button"
+                  onClick={handleEnableManualRoster}
+                >
+                  Создать вручную
+                </button>
+              )}
             </div>
-          )}
-          {!loading && !error && shouldAutoIncludeOrganizerSlot && (
-            <div className="tournament-organizer-slot">
-              <div className="tournament-organizer-slot-copy">
-                <div className="tournament-organizer-slot-title">
-                  Нечетное количество игроков
+          </div>
+          {rosterMode === "manual" ? (
+            <>
+              <div className="tournament-settings-hint">
+                Вручную задайте состав и уровни игроков. Бронирования не подгружаются.
+              </div>
+              <div className="tournament-manual-meta-grid">
+                <div className="tournament-inline-field">
+                  <div className="tournament-section-title">Станция</div>
+                  <input
+                    className="tournament-input tournament-manual-station-input"
+                    type="text"
+                    placeholder="Например, Ск. ПхАБ"
+                    value={manualStationName}
+                    onChange={(e) => setManualStationName(e.target.value)}
+                  />
                 </div>
-                <div className="tournament-organizer-slot-text">
-                  Тренер или организатор автоматически добавлен в свободный четный слот.
+                <div className="tournament-inline-field">
+                  <div className="tournament-section-title">Организатор</div>
+                  <input
+                    className="tournament-input tournament-manual-organizer-input"
+                    type="text"
+                    placeholder="ФИО организатора"
+                    value={manualOrganizerName}
+                    onChange={(e) => setManualOrganizerName(e.target.value)}
+                  />
                 </div>
               </div>
-            </div>
+              {manualParticipants.length === 0 ? (
+                <div className="tournaments-muted">Добавьте хотя бы одного игрока.</div>
+              ) : (
+                <div className="tournament-participants">
+                  {manualParticipants.map((participant, idx) => {
+                    const initials = getInitialsFromName(participant.name);
+                    const manualRatingValue = parseTournamentRatingValue(participant.rating);
+                    const isReadyParticipant = readyParticipantIds[participant.id] === true;
+                    const hasInvalidRating =
+                      participant.rating.trim().length > 0 && manualRatingValue == null;
+                    const missingPhone = participant.phone.trim().length === 0;
+                    return (
+                      <div
+                        key={participant.id}
+                        className={`tournament-participant${isReadyParticipant ? " is-ready" : ""}`}
+                      >
+                        <div className="tournament-participant-order">{idx + 1}</div>
+                        <div className="tournament-participant-avatar no-photo">
+                          <span className="tournament-participant-initials">{initials}</span>
+                        </div>
+                        <div className="tournament-participant-info tournament-participant-info--manual">
+                          <input
+                            className="tournament-input tournament-manual-name-input"
+                            type="text"
+                            placeholder="Имя игрока"
+                            value={participant.name}
+                            onChange={(e) => handleManualParticipantChange(participant.id, "name", e.target.value)}
+                          />
+                          <input
+                            className="tournament-input tournament-manual-phone-input"
+                            type="tel"
+                            inputMode="tel"
+                            placeholder="Телефон для Viva"
+                            value={participant.phone}
+                            onChange={(e) => handleManualParticipantChange(participant.id, "phone", e.target.value)}
+                          />
+                          <div className="tournament-participant-note">
+                            Уровень вводится вручную
+                          </div>
+                          {missingPhone && (
+                            <div className="tournament-participant-note">
+                              Телефон нужен для синхронизации с Viva
+                            </div>
+                          )}
+                          {hasInvalidRating && (
+                            <div className="tournament-participant-note error">
+                              Уровень не распознан
+                            </div>
+                          )}
+                        </div>
+                        <div className="tournament-participant-actions">
+                          <div className="tournament-participant-main-actions">
+                            <input
+                              className="tournament-participant-rating-input tournament-manual-rating-input"
+                              type="text"
+                              inputMode="decimal"
+                              placeholder="Уровень"
+                              value={participant.rating}
+                              onChange={(e) => handleManualParticipantChange(participant.id, "rating", e.target.value)}
+                            />
+                            <button
+                              className="tournament-participant-rating-cancel"
+                              type="button"
+                              onClick={() => handleRemoveManualParticipant(participant.id)}
+                              aria-label="Удалить игрока"
+                              title="Удалить игрока"
+                            >
+                              ×
+                            </button>
+                          </div>
+                          <button
+                            className={`tournament-participant-ready-toggle${isReadyParticipant ? " is-checked" : ""}`}
+                            type="button"
+                            aria-label={isReadyParticipant ? "Убрать готовность участника" : "Отметить готовность участника"}
+                            title={isReadyParticipant ? "Участник отмечен как готовый" : "Отметить как готовый"}
+                            onClick={() => handleToggleParticipantReady(participant.id)}
+                          >
+                            <span aria-hidden>{isReadyParticipant ? "✓" : ""}</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {loading && <div className="tournaments-muted">Загрузка...</div>}
+              {!loading && error && <div className="tournaments-error">{error}</div>}
+              {!loading && !error && refreshRatingsError && (
+                <div className="tournaments-error">{refreshRatingsError}</div>
+              )}
+              {!loading && !error && leaveError && (
+                <div className="tournaments-error">{leaveError}</div>
+              )}
+              {participantLeaveTarget?.bookingId && (
+                <BookingCancellationDialog
+                  bookingId={participantLeaveTarget.bookingId}
+                  isOpen={Boolean(participantLeaveTarget)}
+                  onClose={() => setParticipantLeaveTarget(null)}
+                  onSuccessClose={() => {
+                    const closedTarget = participantLeaveTarget;
+                    setParticipantLeaveTarget(null);
+                    if (tournamentId) {
+                      void loadParticipants(tournamentId);
+                    } else if (closedTarget?.id) {
+                      setParticipants((prev) => prev.filter((item) => item.id !== closedTarget.id));
+                    }
+                  }}
+                />
+              )}
+              {!loading && !error && participants.length === 0 && (
+                <div className="tournaments-muted">Участников пока нет</div>
+              )}
+              {!loading && !error && sortedParticipants.length > 0 && (
+                <div className="tournament-participants">
+                  {sortedParticipants.map((participant, idx) => {
+                    const initials = participant.name
+                      .split(" ")
+                      .map((part) => part[0] || "")
+                      .join("")
+                      .toUpperCase()
+                      .slice(0, 2) || "U";
+                    const nameParts = participant.name.trim().split(/\s+/).filter(Boolean);
+                    const nameLineTop = nameParts[0] ?? participant.name;
+                    const nameLineBottom = nameParts.length > 1 ? nameParts.slice(1).join(" ") : null;
+                    const manualRating = manualRatings[participant.id] ?? "";
+                    const savedRatingValue = parseTournamentRatingValue(participant.rating);
+                    const hasSavedRating = savedRatingValue != null;
+                    const ratingGradeDisplay = formatTournamentRatingGrade(savedRatingValue);
+                    const manualParsedRating = parseTournamentRatingValue(manualRating);
+                    const isEditingRating = ratingEditModeById[participant.id] === true;
+                    const isSavingRating = ratingSaveStateById[participant.id] === "saving";
+                    const canLeaveParticipant =
+                      Boolean(participant.bookingId)
+                      && isCurrentUserParticipant(participant);
+                    const isLeavingParticipant = participantLeaveTarget?.id === participant.id;
+                    const isReadyParticipant = readyParticipantIds[participant.id] === true;
+                    const canReplaceParticipant = !participant.isOrganizerSlot;
+                    const showReplacePanel = replaceTargetParticipant?.id === participant.id;
+
+                    return (
+                      <div key={participant.id ?? idx}>
+                        <div className={`tournament-participant${isReadyParticipant ? " is-ready" : ""}`}>
+                          <div className="tournament-participant-order">{idx + 1}</div>
+                          <div className={`tournament-participant-avatar ${participant.photo ? "" : "no-photo"}`}>
+                            {participant.photo ? (
+                              <img
+                                src={participant.photo}
+                                alt={participant.name}
+                                onError={(e) => {
+                                  const target = e.currentTarget;
+                                  target.style.display = "none";
+                                  const parent = target.parentElement;
+                                  if (parent) parent.classList.add("no-photo");
+                                }}
+                              />
+                            ) : null}
+                            <span className="tournament-participant-initials">{initials}</span>
+                          </div>
+                          <div className="tournament-participant-info">
+                            <div className="tournament-participant-name">
+                              <span>{nameLineTop}</span>
+                              {nameLineBottom && <span>{nameLineBottom}</span>}
+                            </div>
+                            {participant.isOrganizerSlot && (
+                              <div className="tournament-participant-note">
+                                Тренер / организатор занимает свободный слот
+                              </div>
+                            )}
+                            {ratingSaveErrors[participant.id] && (
+                              <div className="tournament-participant-note error">
+                                {ratingSaveErrors[participant.id]}
+                              </div>
+                            )}
+                          </div>
+                          <div className="tournament-participant-actions">
+                            <div className="tournament-participant-main-actions">
+                              {hasSavedRating && !isEditingRating ? (
+                                <button
+                                  className="tournament-participant-rating tournament-participant-rating-button"
+                                  type="button"
+                                  onClick={() => handleParticipantRatingTap(participant)}
+                                  onDoubleClick={() => handleOpenParticipantRatingEdit(participant)}
+                                  aria-label="Изменить рейтинг участника"
+                                  title="Двойной тап для изменения рейтинга"
+                                >
+                                  {ratingGradeDisplay && (
+                                    <span className="tournament-participant-rating-grade">{ratingGradeDisplay}</span>
+                                  )}
+                                  <span className="tournament-participant-rating-value">
+                                    {formatRating(savedRatingValue, 3)}
+                                  </span>
+                                </button>
+                              ) : (
+                                <div className="tournament-participant-rating-editor">
+                                  <input
+                                    className="tournament-participant-rating-input"
+                                    type="text"
+                                    inputMode="decimal"
+                                    placeholder="Рейтинг"
+                                    value={manualRating}
+                                    onChange={(e) => handleParticipantRatingInput(participant.id, e.target.value)}
+                                  />
+                                  {isEditingRating && (
+                                    <button
+                                      className="tournament-participant-rating-cancel"
+                                      type="button"
+                                      onClick={() => handleCloseParticipantRatingEdit(participant.id)}
+                                      disabled={isSavingRating}
+                                      aria-label="Отменить редактирование рейтинга"
+                                      title="Отменить редактирование"
+                                    >
+                                      ×
+                                    </button>
+                                  )}
+                                  <button
+                                    className="tournament-participant-rating-save"
+                                    type="button"
+                                    onClick={async () => {
+                                      const saved = await handleParticipantRatingSave(participant);
+                                      if (saved) {
+                                        handleCloseParticipantRatingEdit(participant.id);
+                                      }
+                                    }}
+                                    disabled={!participant.clientId || manualParsedRating == null || isSavingRating}
+                                    aria-label="Сохранить рейтинг"
+                                    title="Сохранить рейтинг"
+                                  >
+                                    {isSavingRating ? "…" : "✓"}
+                                  </button>
+                                </div>
+                              )}
+                              <button
+                                className={`tournament-participant-ready-toggle${isReadyParticipant ? " is-checked" : ""}`}
+                                type="button"
+                                aria-label={isReadyParticipant ? "Убрать готовность участника" : "Отметить готовность участника"}
+                                title={isReadyParticipant ? "Участник отмечен как готовый" : "Отметить как готовый"}
+                                onClick={() => handleToggleParticipantReady(participant.id)}
+                              >
+                                <span aria-hidden>{isReadyParticipant ? "✓" : ""}</span>
+                              </button>
+                              {canReplaceParticipant && (
+                                <button
+                                  className="tournament-participant-replace"
+                                  type="button"
+                                  onClick={() => handleOpenReplaceParticipant(participant)}
+                                  aria-label="Заменить игрока"
+                                  title="Заменить игрока"
+                                  disabled={replaceSubmitLoading}
+                                >
+                                  <svg viewBox="0 0 24 24" role="presentation" aria-hidden="true">
+                                    <path d="M6 7h9.2l-1.8-1.8 1.4-1.4L19 8l-4.2 4.2-1.4-1.4L15.2 9H6z" />
+                                    <path d="M18 17H8.8l1.8 1.8-1.4 1.4L5 16l4.2-4.2 1.4 1.4L8.8 15H18z" />
+                                  </svg>
+                                </button>
+                              )}
+                            </div>
+                            {canLeaveParticipant && (
+                              <button
+                                className="tournament-participant-leave"
+                                type="button"
+                                onClick={() => void handleParticipantLeave(participant)}
+                                disabled={Boolean(participantLeaveTarget)}
+                              >
+                                {isLeavingParticipant ? "Выходим..." : "Покинуть"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        {showReplacePanel && (
+                          <div className="tournament-replace-panel">
+                            <div className="tournament-replace-panel-head">
+                              <div className="tournament-replace-panel-title">
+                                Замена игрока: {participant.name}
+                              </div>
+                              <button
+                                type="button"
+                                className="tournament-replace-panel-cancel"
+                                onClick={closeReplaceParticipantPanel}
+                              >
+                                Отмена
+                              </button>
+                            </div>
+                            <input
+                              className="tournament-replace-panel-input"
+                              type="text"
+                              placeholder="Найти игрока в Viva"
+                              value={replaceSearchQuery}
+                              onChange={(e) => setReplaceSearchQuery(e.target.value)}
+                            />
+                            {replaceSearchQuery.trim().length < 2 && (
+                              <div className="tournaments-muted">Введите минимум 2 символа для поиска.</div>
+                            )}
+                            {replaceSearchLoading && <div className="tournaments-muted">Ищем игроков...</div>}
+                            {!replaceSearchLoading && replaceSearchError && (
+                              <div className="tournament-participant-note error">{replaceSearchError}</div>
+                            )}
+                            {!replaceSearchLoading
+                              && !replaceSearchError
+                              && replaceSearchQuery.trim().length >= 2
+                              && replaceSearchResults.length === 0 && (
+                              <div className="tournaments-muted">Игроки не найдены.</div>
+                            )}
+                            {!replaceSearchLoading && replaceSearchResults.length > 0 && (
+                              <div className="tournament-replace-results">
+                                {replaceSearchResults.map((candidate, index) => {
+                                  const candidateNumeric = parseTournamentRatingValue(candidate.ratingNumeric ?? candidate.rating ?? null);
+                                  return (
+                                    <button
+                                      key={`${candidate.id ?? "candidate"}-${index}`}
+                                      type="button"
+                                      className="tournament-replace-result"
+                                      onClick={() => void handleReplaceParticipantWithCandidate(candidate)}
+                                      disabled={replaceSubmitLoading}
+                                    >
+                                      <span className="tournament-replace-result-name">{candidate.name || "Игрок"}</span>
+                                      <span className="tournament-replace-result-rating">
+                                        {candidateNumeric != null ? formatRating(candidateNumeric, 3) : "Без рейтинга"}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {!loading && !error && replacementWaitlist.length > 0 && (
+                <div className="tournament-waitlist">
+                  <div className="tournament-waitlist-title">Лист ожидания</div>
+                  <div className="tournament-waitlist-list">
+                    {replacementWaitlist.map((participant, index) => {
+                      const waitlistRating = parseTournamentRatingValue(participant.rating);
+                      return (
+                        <div key={`${participant.id}-${index}`} className="tournament-waitlist-item">
+                          <span className="tournament-waitlist-name">{participant.name}</span>
+                          <span className="tournament-waitlist-rating">
+                            {waitlistRating != null ? formatRating(waitlistRating, 3) : "Без рейтинга"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -1641,6 +3504,7 @@ function TournamentDetailsModal({
                   setSelectedType(null);
                   setPairedMexicanoPairs([]);
                   setSaveState("idle");
+                  setOpenTournamentTypeHintId(null);
                 }}
               >
                 {type.label}
@@ -1653,19 +3517,41 @@ function TournamentDetailsModal({
           <div className="tournament-section">
             <div className="tournament-section-title">Тип {selectedFamily === "americano" ? "американо" : "мексикано"}</div>
             <div className="tournament-type-list">
-              {TOURNAMENT_SUBTYPES[selectedFamily].map((type) => (
-                <button
-                  key={type.id}
-                  className={`tournament-type-option ${selectedType === type.id ? "active" : ""}`}
-                  type="button"
-                  onClick={() => setSelectedType(type.id)}
-                >
-                  <span>{type.label}</span>
-                  {type.description && (
-                    <span className="tournament-type-option-hint">{type.description}</span>
-                  )}
-                </button>
-              ))}
+              {TOURNAMENT_SUBTYPES[selectedFamily].map((type) => {
+                const isHintOpen = openTournamentTypeHintId === type.id;
+                return (
+                  <div key={type.id} className="tournament-type-option-row">
+                    <button
+                      className={`tournament-type-option ${selectedType === type.id ? "active" : ""}`}
+                      type="button"
+                      onClick={() => {
+                        setSelectedType(type.id);
+                        setOpenTournamentTypeHintId(null);
+                      }}
+                    >
+                      <span>{type.label}</span>
+                    </button>
+                    {type.description && (
+                      <button
+                        type="button"
+                        className={`tournament-type-help-trigger${isHintOpen ? " active" : ""}`}
+                        aria-label={`Описание типа ${type.label}`}
+                        title={`Описание типа ${type.label}`}
+                        onClick={() => {
+                          setOpenTournamentTypeHintId((prev) => (prev === type.id ? null : type.id));
+                        }}
+                      >
+                        ?
+                      </button>
+                    )}
+                    {type.description && isHintOpen && (
+                      <div className="tournament-type-help-popover" role="note">
+                        {type.description}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -1674,8 +3560,77 @@ function TournamentDetailsModal({
           <div className="tournament-section">
             {selectedType === "mexicano" && (
               <div className="tournament-settings-hint">
-                Классическое мексикано пока оставлено без автоматической генерации сетки.
+                Классическое Mexicano: стартовый раунд формируется по настройке карточки турнира,
+                далее динамическая сетка строится по текущей таблице.
               </div>
+            )}
+            {selectedFamily === "americano" && (
+              <div className="tournament-inline-field">
+                <div className="tournament-section-title">Победитель турнира</div>
+                <select
+                  className="tournament-input"
+                  value={americanoStandingsSortMode}
+                  onChange={(e) => {
+                    setAmericanoStandingsSortMode(
+                      e.target.value === "total_points" ? "total_points" : "point_diff",
+                    );
+                  }}
+                >
+                  <option value="point_diff">По разнице очков</option>
+                  <option value="total_points">По набранным очкам</option>
+                </select>
+              </div>
+            )}
+            {selectedType === "mexicano" && (
+              <>
+                <div className="tournament-inline-field">
+                  <div className="tournament-section-title">Сортировка первого раунда</div>
+                  <select
+                    className="tournament-input"
+                    value={mexicanoFirstRoundMode}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      if (next === "random" || next === "equal_pairs") {
+                        setMexicanoFirstRoundMode(next);
+                        return;
+                      }
+                      setMexicanoFirstRoundMode("by_level");
+                    }}
+                  >
+                    <option value="by_level">По уровню игроков</option>
+                    <option value="random">Случайным образом</option>
+                    <option value="equal_pairs">Равные пары</option>
+                  </select>
+                </div>
+
+                <div className="tournament-inline-field">
+                  <div className="tournament-section-title">Распределение по кортам</div>
+                  <select
+                    className="tournament-input"
+                    value={mexicanoTableSortMode}
+                    onChange={(e) => {
+                      setMexicanoTableSortMode(e.target.value === "point_diff" ? "point_diff" : "total_points");
+                    }}
+                  >
+                    <option value="total_points">По набранным очкам</option>
+                    <option value="point_diff">По разнице очков</option>
+                  </select>
+                </div>
+
+                <div className="tournament-inline-field">
+                  <div className="tournament-section-title">Победитель турнира</div>
+                  <select
+                    className="tournament-input"
+                    value={mexicanoWinnerSortMode}
+                    onChange={(e) => {
+                      setMexicanoWinnerSortMode(e.target.value === "total_points" ? "total_points" : "point_diff");
+                    }}
+                  >
+                    <option value="point_diff">По разнице очков</option>
+                    <option value="total_points">По набранным очкам</option>
+                  </select>
+                </div>
+              </>
             )}
             {selectedTypeUsesScores && (
               <div className="tournament-inline-field">
@@ -1742,6 +3697,12 @@ function TournamentDetailsModal({
                     />
                   </div>
                 ))}
+              </div>
+            )}
+            {selectedType === "americano_flex" && (
+              <div className={americanoFlexError ? "tournaments-error" : "tournament-settings-hint"}>
+                {americanoFlexError
+                  ?? `Флекс американо: ${formatCourtsCountLabel(courtNames.length)} — ${courtNames.length * 4 + 1} игроков (по схеме 4 × корты + 1).`}
               </div>
             )}
 
@@ -1811,7 +3772,7 @@ function TournamentDetailsModal({
                         <span className="tournament-pair-player-name">{participant.name}</span>
                         {ratingValue != null && (
                           <span className="tournament-pair-player-rating">
-                            {formatRating(ratingValue)}
+                            {formatRating(ratingValue, 3)}
                           </span>
                         )}
                       </button>
@@ -1844,16 +3805,20 @@ function TournamentDetailsModal({
                   || !selectedTypeUsesScores
                   || courtNames.length === 0
                   || settingsNeedConfirmation
+                  || manualRosterIsEmpty
                   || Boolean(pairedMexicanoPairError)
+                  || Boolean(americanoFlexError)
                 }
               >
                 {saveState === "loading"
                   ? "Сохранение..."
                   : saveState === "success"
-                    ? "Сохранено"
+                    ? (saveWasLocal ? "Сохранено локально" : "Сохранено")
                     : selectedType === "paired_mexicano" || selectedType === "paired_americano"
-                      ? "Начать турнир"
-                      : "Сохранить"}
+                      ? (rosterMode === "manual" ? "Создать турнир" : "Начать турнир")
+                      : rosterMode === "manual"
+                        ? "Создать турнир"
+                        : "Сохранить"}
               </button>
             </div>
           </div>
@@ -1903,6 +3868,7 @@ function TournamentManagerModal({
   initialTotals = null,
   initialPlayerLogs = null,
   onDataChange,
+  onReplaceData,
   onEditSettings,
 }: {
   isOpen: boolean;
@@ -1918,6 +3884,13 @@ function TournamentManagerModal({
       playerLogs: AmericanoResultsResponse["playerLogs"] | null;
     },
   ) => void;
+  onReplaceData?: (
+    payload: AmericanoTournamentPayload,
+    extras: {
+      totals: AmericanoResultsResponse["totals"] | null;
+      playerLogs: AmericanoResultsResponse["playerLogs"] | null;
+    },
+  ) => void;
   onEditSettings?: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<"tournament" | "table" | "stats">("tournament");
@@ -1926,15 +3899,35 @@ function TournamentManagerModal({
   const statsRef = useRef<HTMLDivElement | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [jsonError, setJsonError] = useState<string | null>(null);
   const [savingMatchId, setSavingMatchId] = useState<string | null>(null);
+  const [sendingQueuedJobId, setSendingQueuedJobId] = useState<string | null>(null);
+  const [finishingTournament, setFinishingTournament] = useState(false);
+  const [finishConfirmationOpen, setFinishConfirmationOpen] = useState(false);
+  const [finishTournamentError, setFinishTournamentError] = useState<string | null>(null);
+  const [resumingTournament, setResumingTournament] = useState(false);
+  const [resumeTournamentError, setResumeTournamentError] = useState<string | null>(null);
+  const [syncingWithViva, setSyncingWithViva] = useState(false);
+  const [syncWithVivaError, setSyncWithVivaError] = useState<string | null>(null);
+  const [syncWithVivaSuccess, setSyncWithVivaSuccess] = useState<string | null>(null);
+  const [broadcastActive, setBroadcastActive] = useState(false);
+  const [broadcastLoading, setBroadcastLoading] = useState(false);
+  const [broadcastError, setBroadcastError] = useState<string | null>(null);
   const [matchSaveErrors, setMatchSaveErrors] = useState<Record<string, string>>({});
   const [serverTotals, setServerTotals] = useState<AmericanoResultsResponse["totals"] | null>(null);
   const [serverLogs, setServerLogs] = useState<AmericanoResultsResponse["playerLogs"] | null>(null);
+  const [pendingQueueRecords, setPendingQueueRecords] = useState<TournamentOfflineResultQueueRecord[]>([]);
+  const [isOnline, setIsOnline] = useState(() => {
+    if (typeof navigator === "undefined") return true;
+    return navigator.onLine;
+  });
   const matchElementRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const matchInputRefs = useRef<
     Record<string, { score1: HTMLInputElement | null; score2: HTMLInputElement | null }>
   >({});
+  const tournamentJsonInputRef = useRef<HTMLInputElement | null>(null);
   const pendingMatchNavigationRef = useRef<TournamentMatchLocation | null>(null);
+  const draftHydratedSignatureRef = useRef<string | null>(null);
 
   const normalizedParticipants = useMemo<ParticipantEntry[]>(() => {
     if (!data) return [];
@@ -1942,7 +3935,7 @@ function TournamentManagerModal({
       id: p.id ?? `participant-${idx}`,
       name: p.name || `Участник ${idx + 1}`,
       photo: p.photo ?? null,
-      phone: null,
+      phone: p.phone ?? null,
       rating: p.rating ?? null,
     }));
   }, [data]);
@@ -1950,30 +3943,166 @@ function TournamentManagerModal({
     () => (data?.tournamentType === "mexicano" ? parseMexicanoOptions(data.params) : null),
     [data?.params, data?.tournamentType],
   );
+  const tournamentFinished = useMemo(
+    () => isTournamentMarkedFinished(data?.params, null),
+    [data?.params],
+  );
+  const draftDataSignature = useMemo(() => {
+    if (!data) return null;
+    return JSON.stringify({
+      tournamentId: data.tournamentId,
+      tenantKey: data.tenantKey,
+      createdAt: data.createdAt,
+      tournamentType: data.tournamentType,
+      targetScore: data.targetScore,
+      courts: data.courts,
+      participants: data.participants,
+      params: data.params ?? null,
+      rounds: data.rounds,
+    });
+  }, [data]);
 
   useEffect(() => {
-    if (!data) return;
+    if (!data) {
+      draftHydratedSignatureRef.current = null;
+      return;
+    }
     const hydratedRounds = hydrateAmericanoRounds(
       data.rounds,
       normalizedParticipants,
       data.courts,
-      { mode: data.tournamentType === "americano_classic" ? "classic" : "padelhub" },
+      { mode: resolveAmericanoScheduleMode(data.tournamentType) },
     );
-    const nextRounds = data.tournamentType === "mexicano"
-      ? appendMexicanoClassicRoundIfReady(
+    let nextRounds = hydratedRounds;
+    if (data.tournamentType === "mexicano" && !tournamentFinished) {
+      const partiallySavedRound = hydratedRounds.find((round) => {
+        const savedMatches = round.matches.reduce((sum, match) => sum + (isTournamentMatchSaved(match) ? 1 : 0), 0);
+        return savedMatches > 0 && savedMatches < round.matches.length;
+      });
+
+      if (partiallySavedRound) {
+        nextRounds = rebuildMexicanoClassicFutureRounds(
           normalizedParticipants,
           data.courts,
           hydratedRounds,
+          partiallySavedRound.index,
           mexicanoOptions ?? undefined,
-        )
-      : hydratedRounds;
+        );
+      } else {
+        const completedRounds = hydratedRounds.filter((round) => (
+          round.matches.length > 0 && round.matches.every((match) => isTournamentMatchSaved(match))
+        ));
+        if (completedRounds.length > 0) {
+          const lastCompletedRound = completedRounds[completedRounds.length - 1];
+          nextRounds = rebuildMexicanoClassicFutureRounds(
+            normalizedParticipants,
+            data.courts,
+            hydratedRounds,
+            lastCompletedRound.index,
+            mexicanoOptions ?? undefined,
+          );
+        } else {
+          nextRounds = appendMexicanoClassicRoundIfReady(
+            normalizedParticipants,
+            data.courts,
+            hydratedRounds,
+            mexicanoOptions ?? undefined,
+          );
+        }
+      }
+    }
     setRounds(nextRounds);
     setActiveTab("tournament");
     setExpertMode(false);
     setServerTotals(initialTotals);
     setServerLogs(initialPlayerLogs);
     setMatchSaveErrors({});
-  }, [data, normalizedParticipants, initialTotals, initialPlayerLogs, mexicanoOptions]);
+    setFinishingTournament(false);
+    setFinishConfirmationOpen(false);
+    setFinishTournamentError(null);
+    setResumingTournament(false);
+    setResumeTournamentError(null);
+    const savedBroadcast = data.params && typeof data.params === "object"
+      ? (data.params as Record<string, unknown>).broadcast
+      : null;
+    setBroadcastActive(Boolean(
+      savedBroadcast
+      && typeof savedBroadcast === "object"
+      && (savedBroadcast as Record<string, unknown>).active === true
+    ));
+    setBroadcastLoading(false);
+    setBroadcastError(null);
+    draftHydratedSignatureRef.current = draftDataSignature;
+  }, [data, draftDataSignature, normalizedParticipants, initialTotals, initialPlayerLogs, mexicanoOptions, tournamentFinished]);
+
+  useEffect(() => {
+    if (!isOpen || !data?.tournamentId || !isOnline) return;
+
+    let cancelled = false;
+    const stationId = data.params && typeof data.params === "object"
+      ? String((data.params as Record<string, unknown>).stationId ?? "").trim() || null
+      : null;
+    void apiFetchTournamentBroadcastState(data.tournamentId, stationId).then((result) => {
+      if (cancelled || result.error || !result.data) return;
+      setBroadcastActive(result.data.active === true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.tournamentId, isOnline, isOpen]);
+
+  const draftSnapshot = useMemo<TournamentDraftSnapshot | null>(() => {
+    if (!data || draftHydratedSignatureRef.current !== draftDataSignature) return null;
+    return {
+      payload: {
+        ...data,
+        rounds: serializeAmericanoRounds(rounds),
+      },
+      totals: serverTotals,
+      playerLogs: serverLogs,
+      updatedAt: new Date().toISOString(),
+    };
+  }, [data, draftDataSignature, rounds, serverLogs, serverTotals]);
+
+  useEffect(() => {
+    if (!draftSnapshot) return;
+    saveCachedTournamentDraft(draftSnapshot);
+  }, [draftSnapshot]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const updateOnlineState = () => {
+      setIsOnline(window.navigator.onLine);
+    };
+    updateOnlineState();
+    window.addEventListener("online", updateOnlineState);
+    window.addEventListener("offline", updateOnlineState);
+    return () => {
+      window.removeEventListener("online", updateOnlineState);
+      window.removeEventListener("offline", updateOnlineState);
+    };
+  }, []);
+
+  const refreshPendingTournamentQueue = useCallback(async () => {
+    if (!data?.tournamentId) {
+      setPendingQueueRecords([]);
+      return [];
+    }
+
+    const queue = await loadPendingTournamentResultQueue(data.tournamentId);
+    setPendingQueueRecords(queue);
+    return queue;
+  }, [data?.tournamentId]);
+
+  useEffect(() => {
+    if (!data?.tournamentId) {
+      setPendingQueueRecords([]);
+      return;
+    }
+
+    void refreshPendingTournamentQueue();
+  }, [data, refreshPendingTournamentQueue]);
 
   useEffect(() => {
     if (activeTab !== "tournament") return;
@@ -2036,8 +4165,15 @@ function TournamentManagerModal({
     );
   };
 
-  const handleMatchSave = (roundId: string, matchId: string) => {
+  const handleMatchSave = async (roundId: string, matchId: string) => {
     if (!data) return;
+    if (tournamentFinished) {
+      setMatchSaveErrors((prev) => ({
+        ...prev,
+        [matchId]: "Турнир завершен. Изменение счетов недоступно.",
+      }));
+      return;
+    }
     const round = rounds.find((r) => r.id === roundId);
     const persistedRoundBeforeSave = (data.rounds ?? []).find((item) => item.id === roundId);
     const wasRoundPersistedCompleteBeforeSave =
@@ -2072,9 +4208,6 @@ function TournamentManagerModal({
             matchId,
             score1: match.score1 as number,
             score2: match.score2 as number,
-            court: match.court,
-            pair1: match.pair1.map((p) => p.id),
-            pair2: match.pair2.map((p) => p.id),
           },
         ];
     const generatedRoundIds = new Set(
@@ -2089,130 +4222,769 @@ function TournamentManagerModal({
       delete next[matchId];
       return next;
     });
-    apiUpdateAmericanoResults({
-      tournamentId: data.tournamentId,
-      results,
-    })
-      .then((res) => {
-        if (res.data) {
-          if (!Array.isArray(res.data.rounds)) {
-            setMatchSaveErrors((prev) => ({
-              ...prev,
-              [matchId]: "Сервер не подтвердил сохранение результата",
-            }));
-            return;
-          }
-          const responseRounds = res.data.rounds as Array<Record<string, unknown>>;
-          const generatedLayoutsConfirmed = [...generatedRoundIds].every((generatedRoundId) => {
-            const responseRound = responseRounds.find(
-              (candidate) => String(candidate?.id ?? "") === generatedRoundId,
-            );
-            return isClassicMexicanoRoundLayoutComplete(
-              responseRound as Parameters<typeof isClassicMexicanoRoundLayoutComplete>[0],
-            );
-          });
-          if (!generatedLayoutsConfirmed) {
-            setMatchSaveErrors((prev) => ({
-              ...prev,
-              [matchId]: "Сервер не подтвердил раскладку следующего раунда",
-            }));
-            return;
-          }
 
-          const nextRounds = applyPartialRoundUpdates(
-            rounds,
-            hydrateAmericanoRounds(
-              res.data.rounds,
-              normalizedParticipants,
-              data.courts,
-              { mode: data.tournamentType === "americano_classic" ? "classic" : "padelhub" },
-            ),
-          );
-          const persistedRound = nextRounds.find((item) => item.id === roundId) ?? null;
-          const nextRoundsWithMexicano =
-            data.tournamentType === "mexicano" && persistedRound
-              ? rebuildMexicanoClassicFutureRounds(
+    try {
+      const submission = await submitTournamentResultsWithOfflineFallback(
+        {
+          tournamentId: data.tournamentId,
+          results,
+        },
+        {
+          tournamentId: data.tournamentId,
+          source: "tournament_match_save",
+        },
+      );
+
+      const applySavedRounds = (baseRounds: TournamentRound[]) => {
+        const nextRounds = data.tournamentType === "mexicano" && !tournamentFinished
+          ? (() => {
+              const partiallySavedRound = baseRounds.find((round) => {
+                const savedMatches = round.matches.reduce((sum, roundMatch) => sum + (isTournamentMatchSaved(roundMatch) ? 1 : 0), 0);
+                return savedMatches > 0 && savedMatches < round.matches.length;
+              });
+
+              if (partiallySavedRound) {
+                return rebuildMexicanoClassicFutureRounds(
                   normalizedParticipants,
                   data.courts,
-                  nextRounds,
-                  persistedRound.index,
+                  baseRounds,
+                  partiallySavedRound.index,
                   mexicanoOptions ?? undefined,
-                )
-              : nextRounds;
-          const confirmedPersistedRound =
-            nextRoundsWithMexicano.find((item) => item.id === roundId) ?? null;
-          const shouldAdvanceRound =
-            !wasRoundPersistedCompleteBeforeSave && Boolean(confirmedPersistedRound?.saved);
-          const {
-            rounds: nextRoundsWithCollapse,
-            nextMatch,
-          } = shouldAdvanceRound
-            ? navigateTournamentAfterMatchSave(nextRoundsWithMexicano, roundId, matchId)
-            : {
-                rounds: nextRoundsWithMexicano,
-                nextMatch: findNextIncompleteTournamentMatch(
-                  nextRoundsWithMexicano,
-                  roundId,
-                  matchId,
-                ),
-              };
-          const nextRoundsWithNavigation = nextMatch
-            ? nextRoundsWithCollapse.map((round) => (
-              round.id === nextMatch.roundId ? { ...round, collapsed: false } : round
-            ))
-            : nextRoundsWithCollapse;
-          const persistedMatch = findTournamentMatch(nextRoundsWithNavigation, roundId, matchId);
-          const persisted =
-            persistedMatch?.score1 === match.score1 && persistedMatch?.score2 === match.score2;
+                );
+              }
 
-          if (!persisted) {
-            setMatchSaveErrors((prev) => ({
-              ...prev,
-              [matchId]: "Результат не сохранился на сервере",
-            }));
-            return;
-          }
+              const completedRounds = baseRounds.filter((round) => (
+                round.matches.length > 0 && round.matches.every((roundMatch) => isTournamentMatchSaved(roundMatch))
+              ));
 
-          pendingMatchNavigationRef.current = nextMatch;
-          setRounds(nextRoundsWithNavigation);
-          const nextTotals = res.data.totals ?? serverTotals ?? null;
-          const nextPlayerLogs = res.data.playerLogs ?? serverLogs ?? null;
-          if (res.data.totals) setServerTotals(res.data.totals);
-          if (res.data.playerLogs) setServerLogs(res.data.playerLogs);
-          onDataChange?.(
-            {
-              ...data,
-              rounds: serializeAmericanoRounds(nextRoundsWithNavigation),
-            },
-            {
-              totals: nextTotals,
-              playerLogs: nextPlayerLogs,
-            },
-          );
-        } else {
+              if (completedRounds.length > 0) {
+                const lastCompletedRound = completedRounds[completedRounds.length - 1];
+                return rebuildMexicanoClassicFutureRounds(
+                  normalizedParticipants,
+                  data.courts,
+                  baseRounds,
+                  lastCompletedRound.index,
+                  mexicanoOptions ?? undefined,
+                );
+              }
+
+              return appendMexicanoClassicRoundIfReady(
+                normalizedParticipants,
+                data.courts,
+                baseRounds,
+                mexicanoOptions ?? undefined,
+              );
+            })()
+          : baseRounds;
+
+        const persistedRound = nextRounds.find((item) => item.id === roundId) ?? null;
+        const roundsAfterMexicanoRebuild =
+          data.tournamentType === "mexicano" && !tournamentFinished && persistedRound
+            ? rebuildMexicanoClassicFutureRounds(
+                normalizedParticipants,
+                data.courts,
+                nextRounds,
+                persistedRound.index,
+                mexicanoOptions ?? undefined,
+              )
+            : nextRounds;
+        const shouldAdvanceRound =
+          !wasRoundPersistedCompleteBeforeSave && Boolean(persistedRound?.saved);
+        const {
+          rounds: nextRoundsWithCollapse,
+          nextMatch,
+        } = shouldAdvanceRound
+          ? navigateTournamentAfterMatchSave(roundsAfterMexicanoRebuild, roundId, matchId)
+          : {
+              rounds: roundsAfterMexicanoRebuild,
+              nextMatch: findNextIncompleteTournamentMatch(roundsAfterMexicanoRebuild, roundId, matchId),
+            };
+        const nextRoundsWithNavigation = nextMatch
+          ? nextRoundsWithCollapse.map((round) => (
+            round.id === nextMatch.roundId ? { ...round, collapsed: false } : round
+          ))
+          : nextRoundsWithCollapse;
+
+        return {
+          nextRoundsWithNavigation,
+          nextMatch,
+        };
+      };
+
+      if (submission.mode === "queued") {
+        const localUpdatedRounds = applyLocalTournamentResultUpdates(rounds, results);
+        const { nextRoundsWithNavigation, nextMatch } = applySavedRounds(localUpdatedRounds);
+        const persistedMatch = findTournamentMatch(nextRoundsWithNavigation, roundId, matchId);
+        const persisted =
+          persistedMatch?.score1 === match.score1 && persistedMatch?.score2 === match.score2;
+
+        if (!persisted) {
           setMatchSaveErrors((prev) => ({
             ...prev,
-            [matchId]: res.error?.message || "Не удалось сохранить результаты",
+            [matchId]: "Не удалось сохранить результат локально",
           }));
+          return;
         }
-      })
-      .catch(() =>
-        setMatchSaveErrors((prev) => ({
-          ...prev,
-          [matchId]: "Не удалось сохранить результаты",
-        })),
-      )
-      .finally(() => setSavingMatchId(null));
+
+        pendingMatchNavigationRef.current = nextMatch;
+        setRounds(nextRoundsWithNavigation);
+        setServerTotals(null);
+        setServerLogs(null);
+        onDataChange?.(
+          {
+            ...data,
+            rounds: serializeAmericanoRounds(nextRoundsWithNavigation),
+          },
+          {
+            totals: null,
+            playerLogs: null,
+          },
+        );
+        await refreshPendingTournamentQueue();
+        return;
+      }
+
+      const res = submission.response;
+      if (res?.data) {
+        if (!Array.isArray(res.data.rounds)) {
+          setMatchSaveErrors((prev) => ({
+            ...prev,
+            [matchId]: "Сервер не подтвердил сохранение результата",
+          }));
+          return;
+        }
+
+        const hydratedServerRounds = hydrateAmericanoRounds(
+          res.data.rounds,
+          normalizedParticipants,
+          data.courts,
+          { mode: resolveAmericanoScheduleMode(data.tournamentType) },
+        );
+        const generatedRoundsPersisted = Array.from(generatedRoundIds).every(
+          (generatedRoundId) => hydratedServerRounds.some((serverRound) => (
+            serverRound.id === generatedRoundId
+            && serverRound.matches.length > 0
+            && serverRound.matches.every((serverMatch) => (
+              serverMatch.pair1.length === 2 && serverMatch.pair2.length === 2
+            ))
+          )),
+        );
+        if (!generatedRoundsPersisted) {
+          setMatchSaveErrors((prev) => ({
+            ...prev,
+            [matchId]: "Сервер сохранил результат, но не подтвердил следующий раунд. Повторите сохранение.",
+          }));
+          return;
+        }
+
+        const nextRounds = applyPartialRoundUpdates(
+          rounds,
+          hydratedServerRounds,
+        );
+        const nextRoundsWithMexicano = data.tournamentType === "mexicano" && !tournamentFinished
+          ? appendMexicanoClassicRoundIfReady(
+              normalizedParticipants,
+              data.courts,
+              nextRounds,
+              mexicanoOptions ?? undefined,
+            )
+          : nextRounds;
+        const persistedRound = nextRoundsWithMexicano.find((item) => item.id === roundId) ?? null;
+        const roundsAfterMexicanoRebuild =
+          data.tournamentType === "mexicano" && !tournamentFinished && persistedRound
+            ? rebuildMexicanoClassicFutureRounds(
+                normalizedParticipants,
+                data.courts,
+                nextRoundsWithMexicano,
+                persistedRound.index,
+                mexicanoOptions ?? undefined,
+              )
+            : nextRoundsWithMexicano;
+        const shouldAdvanceRound =
+          !wasRoundPersistedCompleteBeforeSave && Boolean(persistedRound?.saved);
+        const {
+          rounds: nextRoundsWithCollapse,
+          nextMatch,
+        } = shouldAdvanceRound
+          ? navigateTournamentAfterMatchSave(roundsAfterMexicanoRebuild, roundId, matchId)
+          : {
+              rounds: roundsAfterMexicanoRebuild,
+              nextMatch: findNextIncompleteTournamentMatch(roundsAfterMexicanoRebuild, roundId, matchId),
+            };
+        const nextRoundsWithNavigation = nextMatch
+          ? nextRoundsWithCollapse.map((round) => (
+            round.id === nextMatch.roundId ? { ...round, collapsed: false } : round
+          ))
+          : nextRoundsWithCollapse;
+        const persistedMatch = findTournamentMatch(nextRoundsWithNavigation, roundId, matchId);
+        const persisted =
+          persistedMatch?.score1 === match.score1 && persistedMatch?.score2 === match.score2;
+
+        if (!persisted) {
+          setMatchSaveErrors((prev) => ({
+            ...prev,
+            [matchId]: "Результат не сохранился на сервере",
+          }));
+          return;
+        }
+
+        pendingMatchNavigationRef.current = nextMatch;
+        setRounds(nextRoundsWithNavigation);
+        const nextTotals = res.data.totals ?? serverTotals ?? null;
+        const nextPlayerLogs = res.data.playerLogs ?? serverLogs ?? null;
+        const nextParams =
+          res.data.params && typeof res.data.params === "object"
+            ? res.data.params
+            : data.params;
+        if (res.data.totals) setServerTotals(res.data.totals);
+        if (res.data.playerLogs) setServerLogs(res.data.playerLogs);
+        onDataChange?.(
+          {
+            ...data,
+            params: nextParams,
+            rounds: serializeAmericanoRounds(nextRoundsWithNavigation),
+          },
+          {
+            totals: nextTotals,
+            playerLogs: nextPlayerLogs,
+          },
+        );
+        await refreshPendingTournamentQueue();
+        return;
+      }
+
+      setMatchSaveErrors((prev) => ({
+        ...prev,
+        [matchId]: res?.error?.message || "Не удалось сохранить результаты",
+      }));
+    } catch {
+      setMatchSaveErrors((prev) => ({
+        ...prev,
+        [matchId]: "Не удалось сохранить результаты",
+      }));
+    } finally {
+      setSavingMatchId(null);
+    }
   };
 
+  const handleFinishTournament = async () => {
+    if (!data || finishingTournament || tournamentFinished || !canFinishTournament) return;
+
+    setFinishingTournament(true);
+    setFinishTournamentError(null);
+
+    const finishedAt = new Date().toISOString();
+    const currentParams = data.params && typeof data.params === "object" ? data.params as Record<string, unknown> : {};
+    const isLocalManualTournament =
+      currentParams.manualTournament === true
+      || currentParams.createdOffline === true
+      || String(currentParams.localStatus ?? "").trim() === "draft";
+    const finishParams: Record<string, unknown> = {
+      ...currentParams,
+      status: "completed",
+      finished: true,
+      manualFinish: true,
+      finishedAt,
+      completedAt: finishedAt,
+      ...(isLocalManualTournament
+        ? {
+            localStatus: "conducted_local",
+            syncStatus: String(currentParams.syncStatus ?? "").trim() === "synced_viva"
+              ? "synced_viva"
+              : "pending_viva",
+          }
+        : {}),
+    };
+
+    try {
+      const submission = await submitTournamentResultsWithOfflineFallback({
+        tournamentId: data.tournamentId,
+        results: [],
+        params: finishParams,
+      }, {
+        tournamentId: data.tournamentId,
+        source: "tournament_finish",
+      });
+
+      const res = submission.response;
+
+      if (submission.mode === "queued") {
+        setRounds(rounds);
+        setServerTotals(null);
+        setServerLogs(null);
+        onDataChange?.(
+          {
+            ...data,
+            params: finishParams,
+            rounds: serializeAmericanoRounds(rounds),
+          },
+          {
+            totals: null,
+            playerLogs: null,
+          },
+        );
+        await refreshPendingTournamentQueue();
+        setFinishConfirmationOpen(false);
+        onClose();
+        return;
+      }
+
+      if (!res?.data) {
+        setFinishTournamentError(res?.error?.message || "Не удалось завершить турнир");
+        return;
+      }
+
+      const nextTotals = res.data.totals ?? serverTotals ?? null;
+      const nextPlayerLogs = res.data.playerLogs ?? serverLogs ?? null;
+      const nextParams: Record<string, unknown> = {
+        ...(res.data.params && typeof res.data.params === "object" ? res.data.params : {}),
+        ...finishParams,
+      };
+      const nextRounds = Array.isArray(res.data.rounds)
+        ? hydrateAmericanoRounds(
+            res.data.rounds,
+            normalizedParticipants,
+            data.courts,
+            { mode: resolveAmericanoScheduleMode(data.tournamentType) },
+          )
+        : rounds;
+
+      setRounds(nextRounds);
+      if (res.data.totals) setServerTotals(res.data.totals);
+      if (res.data.playerLogs) setServerLogs(res.data.playerLogs);
+
+      onDataChange?.(
+        {
+          ...data,
+          params: nextParams,
+          rounds: serializeAmericanoRounds(nextRounds),
+        },
+        {
+          totals: nextTotals,
+          playerLogs: nextPlayerLogs,
+        },
+      );
+
+      setFinishConfirmationOpen(false);
+      onClose();
+    } catch {
+      setFinishTournamentError("Не удалось завершить турнир");
+    } finally {
+      setFinishingTournament(false);
+    }
+  };
+
+  const handleResumeTournament = async () => {
+    if (!data || resumingTournament || !canResumeTournament) return;
+
+    setResumingTournament(true);
+    setResumeTournamentError(null);
+    setFinishTournamentError(null);
+
+    const resumeParams = buildTournamentResumeParams(data.params);
+
+    try {
+      const submission = await submitTournamentResultsWithOfflineFallback(
+        {
+          tournamentId: data.tournamentId,
+          results: [],
+          params: resumeParams,
+        },
+        {
+          tournamentId: data.tournamentId,
+          source: "tournament_resume",
+        },
+      );
+
+      if (submission.mode === "queued") {
+        onDataChange?.(
+          {
+            ...data,
+            params: resumeParams,
+            rounds: serializeAmericanoRounds(rounds),
+          },
+          {
+            totals: serverTotals,
+            playerLogs: serverLogs,
+          },
+        );
+        await refreshPendingTournamentQueue();
+        return;
+      }
+
+      const res = submission.response;
+      if (!res?.data) {
+        setResumeTournamentError(res?.error?.message || "Не удалось возобновить турнир");
+        return;
+      }
+
+      const nextTotals = res.data.totals ?? serverTotals ?? null;
+      const nextPlayerLogs = res.data.playerLogs ?? serverLogs ?? null;
+      const nextParams = res.data.params && typeof res.data.params === "object"
+        ? res.data.params as Record<string, unknown>
+        : resumeParams;
+      const nextRounds = Array.isArray(res.data.rounds)
+        ? hydrateAmericanoRounds(
+            res.data.rounds,
+            normalizedParticipants,
+            data.courts,
+            { mode: resolveAmericanoScheduleMode(data.tournamentType) },
+          )
+        : rounds;
+
+      setRounds(nextRounds);
+      if (res.data.totals) setServerTotals(res.data.totals);
+      if (res.data.playerLogs) setServerLogs(res.data.playerLogs);
+
+      onDataChange?.(
+        {
+          ...data,
+          params: nextParams,
+          rounds: serializeAmericanoRounds(nextRounds),
+        },
+        {
+          totals: nextTotals,
+          playerLogs: nextPlayerLogs,
+        },
+      );
+    } catch {
+      setResumeTournamentError("Не удалось возобновить турнир");
+    } finally {
+      setResumingTournament(false);
+    }
+  };
+
+  const handleSyncTournamentWithViva = async () => {
+    if (
+      !data
+      || syncingWithViva
+      || !canSyncWithViva
+      || !isLocalConductedTournament
+    ) {
+      return;
+    }
+
+    setSyncingWithViva(true);
+    setSyncWithVivaError(null);
+    setSyncWithVivaSuccess(null);
+
+    try {
+      const normalizePhoneDigits = (value: string | null | undefined) => String(value ?? "").replace(/\D/g, "");
+      const isSyntheticParticipantId = (value: string) => (
+        value.startsWith("manual-participant-")
+        || value.startsWith("manual-tournament-")
+        || value.startsWith("participant-")
+      );
+
+      const resolvedParticipants: Array<{
+        originalId: string;
+        clientId: string;
+        phone: string | null;
+        name: string;
+        photo: string | null;
+        rating: string | null;
+      }> = [];
+
+      for (const participant of normalizedParticipants) {
+        const originalId = String(participant.id || "").trim();
+        const trimmedPhone = String(participant.phone || "").trim();
+        const participantPhoneDigits = normalizePhoneDigits(trimmedPhone);
+
+        if (originalId && !isSyntheticParticipantId(originalId)) {
+          resolvedParticipants.push({
+            originalId,
+            clientId: originalId,
+            phone: trimmedPhone || null,
+            name: participant.name,
+            photo: participant.photo ?? null,
+            rating: participant.rating ?? null,
+          });
+          continue;
+        }
+
+        if (!participantPhoneDigits) {
+          throw new Error(`У игрока "${participant.name}" не указан телефон для синхронизации`);
+        }
+
+        const lookupQueries = Array.from(new Set([
+          trimmedPhone,
+          participantPhoneDigits,
+        ].filter((value): value is string => Boolean(value))));
+
+        let resolvedCandidate: PadelPlayerCandidate | null = null;
+        for (const query of lookupQueries) {
+          const searchResult = await apiSearchPadelPlayers(query, 8);
+          if (searchResult.error) {
+            continue;
+          }
+          resolvedCandidate = (searchResult.data ?? []).find((candidate) => {
+            const candidateDigits = normalizePhoneDigits(candidate.phone);
+            return candidateDigits === participantPhoneDigits;
+          }) ?? (searchResult.data?.[0] ?? null);
+          if (resolvedCandidate?.id) break;
+        }
+
+        if (!resolvedCandidate?.id) {
+          throw new Error(`Не удалось найти игрока "${participant.name}" в Viva по телефону ${trimmedPhone}`);
+        }
+
+        resolvedParticipants.push({
+          originalId,
+          clientId: resolvedCandidate.id,
+          phone: resolvedCandidate.phone ?? (trimmedPhone || null),
+          name: resolvedCandidate.name || participant.name,
+          photo: resolvedCandidate.photo ?? participant.photo ?? null,
+          rating: resolvedCandidate.rating ?? participant.rating ?? null,
+        });
+      }
+
+      const participantMap = new Map(resolvedParticipants.map((participant) => [participant.originalId, participant]));
+      const remappedRounds = rounds.map((round) => ({
+        ...round,
+        byes: round.byes.map((player) => {
+          const resolved = participantMap.get(player.id);
+          if (!resolved) return player;
+          return {
+            ...player,
+            id: resolved.clientId,
+            phone: resolved.phone ?? player.phone ?? null,
+            rating: resolved.rating ?? player.rating ?? null,
+            photo: resolved.photo ?? player.photo ?? null,
+            name: resolved.name || player.name,
+          };
+        }),
+        matches: round.matches.map((match) => ({
+          ...match,
+          pair1: match.pair1.map((player) => {
+            const resolved = participantMap.get(player.id);
+            if (!resolved) return player;
+            return {
+              ...player,
+              id: resolved.clientId,
+              phone: resolved.phone ?? player.phone ?? null,
+              rating: resolved.rating ?? player.rating ?? null,
+              photo: resolved.photo ?? player.photo ?? null,
+              name: resolved.name || player.name,
+            };
+          }),
+          pair2: match.pair2.map((player) => {
+            const resolved = participantMap.get(player.id);
+            if (!resolved) return player;
+            return {
+              ...player,
+              id: resolved.clientId,
+              phone: resolved.phone ?? player.phone ?? null,
+              rating: resolved.rating ?? player.rating ?? null,
+              photo: resolved.photo ?? player.photo ?? null,
+              name: resolved.name || player.name,
+            };
+          }),
+        })),
+      }));
+
+      const nowIso = new Date().toISOString();
+      const { createdOffline: _createdOffline, ...paramsWithoutCreatedOffline } = tournamentParams;
+      const syncedParams: Record<string, unknown> = {
+        ...paramsWithoutCreatedOffline,
+        manualTournament: true,
+        localStatus: "conducted_local",
+        syncStatus: "synced_viva",
+        syncedAt: nowIso,
+        syncedToVivaAt: nowIso,
+        status: "completed",
+        finished: true,
+        manualFinish: true,
+        finishedAt: String(tournamentParams.finishedAt ?? nowIso),
+        completedAt: String(tournamentParams.completedAt ?? nowIso),
+      };
+      const syncedPayload: AmericanoTournamentPayload = {
+        ...data,
+        organizer: {
+          ...data.organizer,
+          phone: data.organizer.phone ?? null,
+        },
+        participants: resolvedParticipants.map((participant) => ({
+          id: participant.clientId,
+          phone: participant.phone ?? null,
+          rating: participant.rating ?? null,
+          photo: participant.photo ?? null,
+          name: participant.name,
+        })),
+        rounds: serializeAmericanoRounds(remappedRounds),
+        params: syncedParams,
+      };
+
+      const createResponse = await apiCreateAmericanoTournament(syncedPayload);
+      if (createResponse.error || createResponse.status == null || createResponse.status >= 400) {
+        throw new Error(createResponse.error?.message || "Не удалось сохранить турнир в Viva");
+      }
+
+      const resultsPayload: AmericanoResultsPayload = {
+        tournamentId: data.tournamentId,
+        results: remappedRounds.flatMap((round) => (
+          round.matches
+            .filter((match) => match.score1 != null && match.score2 != null)
+            .map((match) => ({
+              roundId: round.id,
+              matchId: match.id,
+              score1: match.score1,
+              score2: match.score2,
+              court: match.court,
+              courtIndex: match.courtIndex,
+              pair1: match.pair1.map((player) => player.id),
+              pair2: match.pair2.map((player) => player.id),
+            }))
+        )),
+        params: syncedParams,
+      };
+
+      const resultsResponse = await apiUpdateAmericanoResults(resultsPayload);
+      if (resultsResponse.error || !resultsResponse.data) {
+        throw new Error(resultsResponse.error?.message || "Не удалось сохранить результаты турнира в Viva");
+      }
+
+      const nextTotals = resultsResponse.data.totals ?? null;
+      const nextPlayerLogs = resultsResponse.data.playerLogs ?? null;
+      const participantsById = new Map(resolvedParticipants.map((participant) => [participant.clientId, participant]));
+
+      for (const [clientId, total] of Object.entries(nextTotals ?? {})) {
+        const participant = participantsById.get(clientId);
+        const nextRating = typeof total.ratingAfter === "number" && Number.isFinite(total.ratingAfter)
+          ? total.ratingAfter
+          : null;
+        if (!participant || nextRating == null) continue;
+
+        const levelSaveResponse = await apiSaveOnboardingLevel({
+          clientId,
+          phone: participant.phone,
+          levelLetter: getLetterGrade(nextRating),
+          levelNumeric: nextRating,
+          source: "tournaments",
+          gameId: data.tournamentId,
+          playerName: participant.name,
+          previousRating: typeof total.ratingBefore === "number" ? total.ratingBefore : null,
+          nextRating,
+          confirmedAt: nowIso,
+          changedById: String(tournamentParams.organizerId ?? data.organizer.id ?? "").trim() || null,
+          changedByName: String(tournamentParams.organizerName ?? "").trim() || null,
+          changedByPhone: data.organizer.phone ?? null,
+          eventId: data.tournamentId,
+        });
+
+        if (levelSaveResponse.error) {
+          throw new Error(levelSaveResponse.error.message || `Не удалось обновить уровень игрока ${participant.name}`);
+        }
+      }
+
+      await clearPendingTournamentResultQueueByTournamentId(data.tournamentId);
+      const syncedFinalPayload: AmericanoTournamentPayload = {
+        ...syncedPayload,
+        params: {
+          ...syncedPayload.params,
+          syncStatus: "synced_viva",
+          syncedAt: nowIso,
+          syncedToVivaAt: nowIso,
+          localStatus: "conducted_local",
+        },
+      };
+
+      setRounds(remappedRounds);
+      setServerTotals(nextTotals);
+      setServerLogs(nextPlayerLogs);
+      setSyncWithVivaSuccess("Турнир синхронизирован с Viva");
+      onReplaceData?.(syncedFinalPayload, {
+        totals: nextTotals,
+        playerLogs: nextPlayerLogs,
+      });
+    } catch (error) {
+      setSyncWithVivaError(error instanceof Error ? error.message : "Не удалось синхронизировать турнир с Viva");
+    } finally {
+      setSyncingWithViva(false);
+    }
+  };
+
+  const tournamentStandingsSortMode = useMemo(
+    () => {
+      if (data?.tournamentType === "mexicano") {
+        const tableSortMode = mexicanoOptions?.tableSortMode ?? "point_diff";
+        const winnerSortMode = mexicanoOptions?.winnerSortMode ?? tableSortMode;
+        return tournamentFinished ? winnerSortMode : tableSortMode;
+      }
+
+      if (
+        data?.tournamentType === "americano_padelhub"
+        || data?.tournamentType === "americano_classic"
+        || data?.tournamentType === "americano_flex"
+        || data?.tournamentType === "paired_americano"
+      ) {
+        const params = data?.params && typeof data.params === "object"
+          ? data.params as Record<string, unknown>
+          : null;
+        return parseAmericanoStandingsSortMode(params, DEFAULT_AMERICANO_STANDINGS_SORT_MODE);
+      }
+
+      return "point_diff" as const;
+    },
+    [
+      data?.params,
+      data?.tournamentType,
+      mexicanoOptions?.tableSortMode,
+      mexicanoOptions?.winnerSortMode,
+      tournamentFinished,
+    ],
+  );
+  const pairedAmericanoPairAssignments = useMemo(() => {
+    if (data?.tournamentType !== "paired_americano") return null;
+    const params = data?.params && typeof data.params === "object"
+      ? data.params as Record<string, unknown>
+      : null;
+    const rawAssignments = params?.pairAssignments;
+    if (!Array.isArray(rawAssignments)) return null;
+
+    const normalized = rawAssignments
+      .map((pair) => {
+        if (!Array.isArray(pair)) return null;
+        const leftId = String(pair[0] ?? "").trim();
+        const rightId = String(pair[1] ?? "").trim();
+        if (!leftId || !rightId || leftId === rightId) return null;
+        return [leftId, rightId] as PairedMexicanoPairAssignment;
+      })
+      .filter((pair): pair is PairedMexicanoPairAssignment => Boolean(pair));
+
+    return normalized.length > 0 ? normalized : null;
+  }, [data?.params, data?.tournamentType]);
+
   const standingsSnapshot = useMemo(
-    () => buildAmericanoStandings(normalizedParticipants, rounds, serverTotals),
-    [normalizedParticipants, rounds, serverTotals],
+    () => buildAmericanoStandings(
+      normalizedParticipants,
+      rounds,
+      serverTotals,
+      {
+        byePolicyMode: data?.tournamentType === "mexicano" ? "zero_points" : "round_average_points",
+        sortMode: tournamentStandingsSortMode,
+        rankByPairs: data?.tournamentType === "paired_americano",
+        pairAssignments: pairedAmericanoPairAssignments,
+      },
+    ),
+    [
+      data?.tournamentType,
+      tournamentStandingsSortMode,
+      normalizedParticipants,
+      pairedAmericanoPairAssignments,
+      rounds,
+      serverTotals,
+    ],
   );
 
   const tableRows = standingsSnapshot.rows;
   const roundByePoints = standingsSnapshot.roundByePoints;
   const statsRows = standingsSnapshot.rows;
+  const pairedTableGroups = useMemo(
+    () => data?.tournamentType === "paired_americano"
+      ? buildPairedTournamentStandingsGroups(tableRows, pairedAmericanoPairAssignments)
+      : [],
+    [data?.tournamentType, pairedAmericanoPairAssignments, tableRows],
+  );
   const participantRatingById = useMemo(
     () => new Map(normalizedParticipants.map((participant) => [
       participant.id,
@@ -2220,14 +4992,94 @@ function TournamentManagerModal({
     ])),
     [normalizedParticipants],
   );
+  const queuedMatchState = useMemo(
+    () => buildTournamentQueuedMatchState(pendingQueueRecords),
+    [pendingQueueRecords],
+  );
   const canEditSettings = useMemo(
     () => rounds.every((round) => round.matches.every((match) => !match.saved)),
     [rounds],
   );
-  const canFinishTournament =
-    standingsSnapshot.totalMatches > 0
-    && standingsSnapshot.completedMatches === standingsSnapshot.totalMatches
-    && standingsSnapshot.completedRounds === standingsSnapshot.totalRounds;
+  const hasPartiallyCompletedRound = useMemo(
+    () => rounds.some((round) => {
+      const savedMatches = round.matches.reduce((sum, match) => sum + (isTournamentMatchSaved(match) ? 1 : 0), 0);
+      return savedMatches > 0 && savedMatches < round.matches.length;
+    }),
+    [rounds],
+  );
+  const canFinishTournament = useMemo(() => {
+    if (tournamentFinished) return false;
+    if (standingsSnapshot.totalMatches <= 0) return false;
+    return true;
+  }, [
+    standingsSnapshot.totalMatches,
+    tournamentFinished,
+  ]);
+  const tournamentParams = useMemo(() => (
+    data?.params && typeof data.params === "object"
+      ? data.params as Record<string, unknown>
+      : {}
+  ), [data?.params]);
+  const isManualTournament = tournamentParams.manualTournament === true;
+  const isSyncedWithViva = String(tournamentParams.syncStatus ?? "").trim().toLowerCase() === "synced_viva";
+  const isLocalConductedTournament =
+    isManualTournament
+    && (
+      String(tournamentParams.localStatus ?? "").trim().toLowerCase() === "conducted_local"
+      || tournamentFinished
+    );
+  const canSyncWithViva =
+    isManualTournament
+    && isLocalConductedTournament
+    && !isSyncedWithViva
+    && !syncingWithViva
+    && isOnline;
+  const canResumeTournament =
+    tournamentFinished
+    && isTournamentManuallyFinished(tournamentParams, null)
+    && !isSyncedWithViva
+    && !resumingTournament
+    && isOnline;
+  const finishConfirmationCopy = useMemo(
+    () => buildTournamentFinishConfirmationCopy({
+      completedMatches: standingsSnapshot.completedMatches,
+      totalMatches: standingsSnapshot.totalMatches,
+      hasPartiallyCompletedRound,
+    }),
+    [
+      hasPartiallyCompletedRound,
+      standingsSnapshot.completedMatches,
+      standingsSnapshot.totalMatches,
+    ],
+  );
+  const finishTournamentNote = useMemo(() => {
+    if (tournamentFinished) {
+      return canResumeTournament
+        ? "Турнир завершен вручную. Возобновление сохранит сетку и уже введенные результаты."
+        : "Турнир завершен вручную.";
+    }
+    if (canFinishTournament) {
+      if (hasPartiallyCompletedRound) {
+        return "Можно завершить сейчас: частично заполненные матчи не попадут в итоговый счет.";
+      }
+      if (standingsSnapshot.completedMatches < standingsSnapshot.totalMatches) {
+        return "Можно завершить сейчас: незаполненные матчи останутся без результата.";
+      }
+      return null;
+    }
+    if (data?.tournamentType !== "mexicano") {
+      return "Кнопка станет активной после формирования сетки турнира.";
+    }
+    return "Кнопка станет активной после формирования сетки турнира.";
+  }, [
+    canFinishTournament,
+    canResumeTournament,
+    data?.tournamentType,
+    hasPartiallyCompletedRound,
+    standingsSnapshot.completedMatches,
+    standingsSnapshot.totalMatches,
+    tournamentFinished,
+  ]);
 
   const splitName = (name: string) => {
     const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -2235,6 +5087,64 @@ function TournamentManagerModal({
       return { line1: name, line2: "" };
     }
     return { line1: parts[0], line2: parts.slice(1).join(" ") };
+  };
+
+  const renderTournamentTablePlayer = (
+    row: typeof tableRows[number],
+    options?: { compact?: boolean; showRank?: boolean },
+  ) => {
+    const compact = options?.compact === true;
+    const showRank = options?.showRank !== false;
+    const playerRating =
+      row.ratingAfter
+      ?? participantRatingById.get(row.id)
+      ?? row.ratingBefore
+      ?? null;
+    const playerBadgeStyle = getTournamentRatingBadgeStyle(playerRating);
+    const playerRingProgressDeg = `${Math.round(getTournamentRatingRingProgress(playerRating) * 360)}deg`;
+    const name = splitName(row.name);
+
+    return (
+      <div className={`tournament-table-player${compact ? " tournament-table-player-compact" : ""}`}>
+        <div className="tournament-table-avatar-wrap">
+          {showRank && <span className="tournament-table-rank">{row.rank}</span>}
+          <div
+            className={`tournament-table-player-ring${playerRating != null ? " has-level" : ""}`}
+            style={{ "--player-ring-progress": playerRingProgressDeg } as CSSProperties}
+          >
+            <div className={`tournament-participant-avatar ${row.photo ? "" : "no-photo"}`}>
+              {row.photo ? (
+                <img
+                  src={row.photo}
+                  alt={row.name}
+                  crossOrigin="anonymous"
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    target.style.display = "none";
+                    const parent = target.parentElement;
+                    if (parent) parent.classList.add("no-photo");
+                  }}
+                />
+              ) : null}
+              <span className="tournament-participant-initials">
+                {getInitialsFromName(row.name)}
+              </span>
+            </div>
+          </div>
+          {playerRating != null && (
+            <span className="tournament-table-level" style={playerBadgeStyle}>
+              {formatStatsRatingBadge(playerRating)}
+            </span>
+          )}
+        </div>
+        <div className="tournament-table-name">
+          <span className="tournament-table-name-line">{name.line1}</span>
+          {name.line2 && (
+            <span className="tournament-table-name-line secondary">{name.line2}</span>
+          )}
+        </div>
+      </div>
+    );
   };
 
   const historyRows = useMemo(() => {
@@ -2284,6 +5194,213 @@ function TournamentManagerModal({
     window.open(url, "_blank");
   };
 
+  const handleToggleTournamentBroadcast = async () => {
+    if (!data?.tournamentId || broadcastLoading || !isOnline) return;
+
+    const action = broadcastActive ? "stop" : "start";
+    const stationId = String(tournamentParams.stationId ?? "").trim() || null;
+    setBroadcastLoading(true);
+    setBroadcastError(null);
+
+    try {
+      const result = await apiSetTournamentBroadcastState({
+        tournamentId: data.tournamentId,
+        stationId,
+        action,
+      });
+      if (result.error || !result.data) {
+        setBroadcastError(result.error?.message || "Не удалось переключить трансляцию результатов");
+        return;
+      }
+
+      const active = result.data.active === true;
+      const updatedAt = result.data.updatedAt ?? new Date().toISOString();
+      setBroadcastActive(active);
+      onDataChange?.(
+        {
+          ...data,
+          params: {
+            ...tournamentParams,
+            broadcast: {
+              active,
+              stationId: result.data.stationId ?? stationId,
+              updatedAt,
+            },
+          },
+        },
+        {
+          totals: serverTotals,
+          playerLogs: serverLogs,
+        },
+      );
+    } catch {
+      setBroadcastError("Не удалось переключить трансляцию результатов");
+    } finally {
+      setBroadcastLoading(false);
+    }
+  };
+
+  const buildTournamentJsonPayload = (): AmericanoTournamentPayload | null => {
+    if (!data) return null;
+    return {
+      ...data,
+      rounds: serializeAmericanoRounds(rounds),
+    };
+  };
+
+  const handleDownloadTournamentJson = () => {
+    const payload = buildTournamentJsonPayload();
+    if (!payload) {
+      setJsonError("Не удалось подготовить JSON турнира");
+      return;
+    }
+
+    try {
+      const json = serializeTournamentJson(payload);
+      const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = getTournamentJsonFileName(payload);
+      link.click();
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 0);
+      setJsonError(null);
+    } catch (error) {
+      console.error(error);
+      setJsonError("Не удалось скачать JSON турнира");
+    }
+  };
+
+  const handleTournamentJsonFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0] ?? null;
+    event.currentTarget.value = "";
+    if (!file) return;
+
+    setJsonError(null);
+
+    try {
+      const parsed = parseTournamentJson(await file.text());
+      if (!parsed) {
+        setJsonError("JSON не похож на турнирный экспорт");
+        return;
+      }
+
+      const importedParticipants: ParticipantEntry[] = parsed.participants.map((participant, index) => ({
+        id: participant.id ?? `participant-${index}`,
+        name: participant.name || `Участник ${index + 1}`,
+        photo: participant.photo ?? null,
+        phone: participant.phone ?? null,
+        rating: participant.rating ?? null,
+      }));
+      const importedRounds = hydrateAmericanoRounds(
+        parsed.rounds ?? [],
+        importedParticipants,
+        parsed.courts,
+        { mode: resolveAmericanoScheduleMode(parsed.tournamentType) },
+      );
+      const nextPayload: AmericanoTournamentPayload = {
+        ...parsed,
+        rounds: serializeAmericanoRounds(importedRounds),
+      };
+
+      setRounds(importedRounds);
+      setServerTotals(null);
+      setServerLogs(null);
+      setMatchSaveErrors({});
+      setFinishTournamentError(null);
+      setActiveTab("tournament");
+      setExpertMode(false);
+      onReplaceData?.(nextPayload, {
+        totals: null,
+        playerLogs: null,
+      });
+    } catch (error) {
+      console.error(error);
+      setJsonError("Не удалось загрузить JSON турнира");
+    }
+  };
+
+  const handleSendQueuedTournamentResult = async (jobId: string) => {
+    if (!data?.tournamentId || !jobId || sendingQueuedJobId) return;
+    const queueRecord = pendingQueueRecords.find((record) => record.jobId === jobId) ?? null;
+    const affectedMatchIds = new Set(
+      (queueRecord?.payload.results ?? [])
+        .map((result) => String(result.matchId || "").trim())
+        .filter(Boolean),
+    );
+
+    if (affectedMatchIds.size > 0) {
+      setMatchSaveErrors((prev) => {
+        const next = { ...prev };
+        affectedMatchIds.forEach((matchId) => {
+          delete next[matchId];
+        });
+        return next;
+      });
+    }
+
+    setSendingQueuedJobId(jobId);
+    setJsonError(null);
+
+    try {
+      const result = await flushPendingTournamentResultSyncJob(jobId);
+      if (result.failed.length > 0) {
+        const message = result.failed[0]?.error || "Не удалось отправить результаты на сервер";
+        setMatchSaveErrors((prev) => {
+          const next = { ...prev };
+          affectedMatchIds.forEach((matchId) => {
+            next[matchId] = message;
+          });
+          return next;
+        });
+      }
+
+      if (result.resolved.length > 0) {
+        const cachedHistory = await loadCachedTournamentHistory(data.tournamentId);
+        if (cachedHistory) {
+          const restoredPayload = buildTournamentPayloadFromHistory(cachedHistory);
+          if (restoredPayload) {
+            const nextRounds = hydrateAmericanoRounds(
+              restoredPayload.rounds ?? [],
+              normalizedParticipants,
+              data.courts,
+              { mode: resolveAmericanoScheduleMode(data.tournamentType) },
+            );
+            setRounds(nextRounds);
+            setServerTotals(cachedHistory.totals ?? null);
+            setServerLogs(cachedHistory.playerLogs ?? null);
+            onDataChange?.(
+              {
+                ...restoredPayload,
+                rounds: serializeAmericanoRounds(nextRounds),
+              },
+              {
+                totals: cachedHistory.totals ?? null,
+                playerLogs: cachedHistory.playerLogs ?? null,
+              },
+            );
+          }
+        }
+
+        setMatchSaveErrors((prev) => {
+          const next = { ...prev };
+          affectedMatchIds.forEach((matchId) => {
+            delete next[matchId];
+          });
+          return next;
+        });
+      }
+    } catch (error) {
+      console.error(error);
+      setJsonError("Не удалось отправить локально сохранённый результат");
+    } finally {
+      await refreshPendingTournamentQueue();
+      setSendingQueuedJobId(null);
+    }
+  };
+
   const handleExportStats = async (format: "png" | "jpeg") => {
     if (!statsRef.current || exporting) return;
     setExporting(true);
@@ -2316,6 +5433,26 @@ function TournamentManagerModal({
   if (!isOpen || !data) return null;
   const completedRoundsLabel = `${standingsSnapshot.completedRounds}/${standingsSnapshot.totalRounds}`;
   const completedMatchesLabel = `${standingsSnapshot.completedMatches}/${standingsSnapshot.totalMatches}`;
+  const createdOfflineNotice =
+    data.params && typeof data.params === "object" && (data.params as Record<string, unknown>).createdOffline === true
+      ? "Турнир создан локально без связи. Черновик хранится на устройстве."
+      : null;
+  const localConductedNotice =
+    isLocalConductedTournament && !isSyncedWithViva
+      ? "Турнир проведен локально. После появления связи его можно синхронизировать с Viva."
+      : null;
+  const syncedWithVivaNotice = isSyncedWithViva
+    ? "Турнир синхронизирован с Viva."
+    : null;
+  const offlineNotice = !isOnline
+    ? localConductedNotice ?? createdOfflineNotice ?? "Нет связи. Черновик турнира и локально сохраненные результаты остаются на устройстве."
+    : syncWithVivaSuccess
+      ?? syncedWithVivaNotice
+      ?? localConductedNotice
+      ?? createdOfflineNotice
+      ?? (pendingQueueRecords.length > 0
+        ? "Есть локально сохраненные результаты. Они будут отправлены при появлении связи."
+        : null);
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={title || "Турнир"} variant="fullscreen">
@@ -2345,6 +5482,7 @@ function TournamentManagerModal({
             ))}
           </div>
         )}
+        {offlineNotice && <div className="tournaments-sync-notice">{offlineNotice}</div>}
         <div className="tournament-tabs">
           {[
             { key: "tournament", label: "Турнир" },
@@ -2501,6 +5639,21 @@ function TournamentManagerModal({
                           matchElementRefs.current[getTournamentMatchKey(round.id, match.id)] = node;
                         }}
                       >
+                        {(() => {
+                          const matchKey = getTournamentMatchKey(round.id, match.id);
+                          const queuedState = queuedMatchState.matchStateByKey.get(matchKey) ?? null;
+                          const queuedJobId = queuedState?.jobId ?? null;
+                          const isQueuedLocally = Boolean(queuedJobId && match.saved);
+                          const saveButtonLabel =
+                            isQueuedLocally
+                              ? sendingQueuedJobId === queuedJobId
+                                ? "Отправка..."
+                                : "Отправить на сервер"
+                              : savingMatchId === match.id
+                                ? "Сохранение..."
+                                : "Сохранить";
+                          return (
+                            <>
                         <div className="tournament-match-header">
                           <div className="tournament-match-court">
                             <span className="tournament-match-label">Корт</span>
@@ -2573,22 +5726,35 @@ function TournamentManagerModal({
                           <div className="tournament-match-status">
                             {matchSaveErrors[match.id] ? (
                               <span className="tournament-round-status error">Ошибка</span>
+                            ) : isQueuedLocally ? (
+                              <span className="tournament-round-status saved local">Сохранено локально</span>
                             ) : match.saved ? (
                               <span className="tournament-round-status saved">Сохранено</span>
                             ) : null}
                           </div>
                           <button
-                            className="tournament-round-save"
+                            className={`tournament-round-save${isQueuedLocally ? " tournament-round-save--local" : ""}`}
                             type="button"
-                            onClick={() => handleMatchSave(round.id, match.id)}
-                            disabled={savingMatchId === match.id}
+                            onClick={() =>
+                              void (isQueuedLocally && queuedState
+                                ? handleSendQueuedTournamentResult(queuedJobId!)
+                                : handleMatchSave(round.id, match.id))
+                            }
+                            disabled={
+                              tournamentFinished
+                              || savingMatchId === match.id
+                              || (isQueuedLocally && sendingQueuedJobId === queuedJobId)
+                            }
                           >
-                            {savingMatchId === match.id ? "Сохранение..." : "Сохранить"}
+                            {saveButtonLabel}
                           </button>
                         </div>
                         {matchSaveErrors[match.id] && (
                           <div className="tournaments-error">{matchSaveErrors[match.id]}</div>
                         )}
+                            </>
+                          );
+                        })()}
                       </div>
                     ))}
                     </div>
@@ -2596,88 +5762,41 @@ function TournamentManagerModal({
                 </div>
               ))}
             </div>
-            <div className="tournament-manager-footer">
-              {!canFinishTournament && (
-                <div className="tournament-manager-footer-note">
-                  Кнопка станет активной после сохранения всех результатов.
-                </div>
-              )}
-              <button
-                type="button"
-                className="section-cta tournament-manager-finish"
-                onClick={onClose}
-                disabled={!canFinishTournament}
-              >
-                Завершить турнир
-              </button>
-            </div>
           </>
         )}
 
         {activeTab === "table" && (
           <div className="tournament-table">
-            {tableRows.map((row) => {
-              const playerRating =
-                row.ratingAfter
-                ?? participantRatingById.get(row.id)
-                ?? row.ratingBefore
-                ?? null;
-              const playerBadgeStyle = getTournamentRatingBadgeStyle(playerRating);
-              const playerRingProgressDeg = `${Math.round(getTournamentRatingRingProgress(playerRating) * 360)}deg`;
-              const name = splitName(row.name);
+            {(data.tournamentType === "paired_americano" ? pairedTableGroups : tableRows.map((row) => ({
+              pairKey: row.id,
+              rank: row.rank,
+              members: [row],
+            })) ).map((group) => {
+              const leadRow = group.members[0];
+              if (!leadRow) return null;
+
               const pointDiffClass =
-                row.pointDiff > 0
+                leadRow.pointDiff > 0
                   ? "positive"
-                  : row.pointDiff < 0
+                  : leadRow.pointDiff < 0
                     ? "negative"
                     : "";
-              const ratingDeltaClass =
-                row.ratingDelta > 0
-                  ? "positive"
-                  : row.ratingDelta < 0
-                    ? "negative"
-                    : "";
+
               return (
-                <div key={row.id} className="tournament-table-row">
-                  <div className="tournament-table-player">
-                    <div className="tournament-table-avatar-wrap">
-                      <span className="tournament-table-rank">{row.rank}</span>
-                      <div
-                        className={`tournament-table-player-ring${playerRating != null ? " has-level" : ""}`}
-                        style={{ "--player-ring-progress": playerRingProgressDeg } as CSSProperties}
-                      >
-                        <div className={`tournament-participant-avatar ${row.photo ? "" : "no-photo"}`}>
-                          {row.photo ? (
-                            <img
-                              src={row.photo}
-                              alt={row.name}
-                              crossOrigin="anonymous"
-                              onError={(e) => {
-                                const target = e.currentTarget;
-                                target.style.display = "none";
-                                const parent = target.parentElement;
-                                if (parent) parent.classList.add("no-photo");
-                              }}
-                            />
-                          ) : null}
-                          <span className="tournament-participant-initials">
-                            {getInitialsFromName(row.name)}
-                          </span>
-                        </div>
-                      </div>
-                      {playerRating != null && (
-                        <span className="tournament-table-level" style={playerBadgeStyle}>
-                          {formatStatsRatingBadge(playerRating)}
-                        </span>
-                      )}
+                <div
+                  key={group.pairKey}
+                  className={`tournament-table-row${group.members.length > 1 ? " tournament-table-row-pair" : ""}`}
+                >
+                  {group.members.length > 1 ? (
+                    <div className="tournament-table-player-stack">
+                      {group.members.map((row, index) => renderTournamentTablePlayer(row, {
+                        compact: true,
+                        showRank: index === 0,
+                      }))}
                     </div>
-                    <div className="tournament-table-name">
-                      <span className="tournament-table-name-line">{name.line1}</span>
-                      {name.line2 && (
-                        <span className="tournament-table-name-line secondary">{name.line2}</span>
-                      )}
-                    </div>
-                  </div>
+                  ) : (
+                    renderTournamentTablePlayer(leadRow)
+                  )}
                   <div className="tournament-table-stat-group">
                     <div className="tournament-table-stat-head">
                       <span>В</span>
@@ -2685,9 +5804,9 @@ function TournamentManagerModal({
                       <span>П</span>
                     </div>
                     <div className="tournament-table-stat-values">
-                      <span className="positive">{formatTournamentNumber(row.wins, 0)}</span>
-                      <span>{formatTournamentNumber(row.draws, 0)}</span>
-                      <span className="negative">{formatTournamentNumber(row.losses, 0)}</span>
+                      <span className="positive">{formatTournamentNumber(leadRow.wins, 0)}</span>
+                      <span>{formatTournamentNumber(leadRow.draws, 0)}</span>
+                      <span className="negative">{formatTournamentNumber(leadRow.losses, 0)}</span>
                     </div>
                   </div>
                   <div className="tournament-table-stat-group">
@@ -2697,18 +5816,33 @@ function TournamentManagerModal({
                       <span>Δ</span>
                     </div>
                     <div className="tournament-table-stat-values">
-                      <span className="positive">{formatTournamentNumber(row.pointsFor, 0)}</span>
-                      <span className="negative">{formatTournamentNumber(row.pointsAgainst, 0)}</span>
+                      <span className="positive">{formatTournamentNumber(leadRow.pointsFor, 0)}</span>
+                      <span className="negative">{formatTournamentNumber(leadRow.pointsAgainst, 0)}</span>
                       <span className={pointDiffClass}>
-                        {formatSignedTournamentNumber(row.pointDiff, 0)}
+                        {formatSignedTournamentNumber(leadRow.pointDiff, 0)}
                       </span>
                     </div>
                   </div>
                   <div className="tournament-table-rating-group">
                     <span className="tournament-table-rating-label">Δ рейтинга</span>
-                    <span className={`tournament-table-rating-value ${ratingDeltaClass}`}>
-                      {formatSignedTournamentNumber(row.ratingDelta, 5)}
-                    </span>
+                    <div className="tournament-table-rating-stack">
+                      {group.members.map((row) => {
+                        const ratingDeltaClass =
+                          row.ratingDelta > 0
+                            ? "positive"
+                            : row.ratingDelta < 0
+                              ? "negative"
+                              : "";
+                        return (
+                          <span
+                            key={`${group.pairKey}-${row.id}-rating`}
+                            className={`tournament-table-rating-value ${ratingDeltaClass}`}
+                          >
+                            {formatSignedTournamentNumber(row.ratingDelta, 5)}
+                          </span>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               );
@@ -2749,8 +5883,30 @@ function TournamentManagerModal({
               >
                 XLSX
               </button>
+              <button
+                className="tournament-stats-export"
+                type="button"
+                onClick={handleDownloadTournamentJson}
+              >
+                JSON
+              </button>
+              <button
+                className="tournament-stats-export"
+                type="button"
+                onClick={() => tournamentJsonInputRef.current?.click()}
+              >
+                Импорт JSON
+              </button>
               {exportError && <span className="tournament-stats-error">{exportError}</span>}
+              {jsonError && <span className="tournament-stats-error">{jsonError}</span>}
             </div>
+            <input
+              ref={tournamentJsonInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="tournament-json-input"
+              onChange={(event) => void handleTournamentJsonFileChange(event)}
+            />
             <div className="tournament-stats-capture" ref={statsRef}>
               {statsRows.map((row) => {
                 const diff = row.pointDiff;
@@ -2877,19 +6033,135 @@ function TournamentManagerModal({
             )}
           </div>
         )}
+        <div className="tournament-manager-footer">
+          {finishTournamentNote && (
+            <div className="tournament-manager-footer-note">
+              {finishTournamentNote}
+            </div>
+          )}
+          {syncWithVivaError && (
+            <div className="tournaments-error">{syncWithVivaError}</div>
+          )}
+          {finishTournamentError && (
+            <div className="tournaments-error">{finishTournamentError}</div>
+          )}
+          {resumeTournamentError && (
+            <div className="tournaments-error">{resumeTournamentError}</div>
+          )}
+          {broadcastError && (
+            <div className="tournaments-error">{broadcastError}</div>
+          )}
+          <button
+            type="button"
+            className={`section-cta tournament-manager-broadcast${broadcastActive ? " is-active" : ""}`}
+            onClick={() => void handleToggleTournamentBroadcast()}
+            disabled={broadcastLoading || !isOnline}
+            aria-pressed={broadcastActive}
+          >
+            {broadcastLoading
+              ? (broadcastActive ? "Останавливаем трансляцию..." : "Запускаем трансляцию...")
+              : broadcastActive
+                ? "Остановить трансляцию результатов"
+                : "Трансляция результатов"}
+          </button>
+          {canResumeTournament && (
+            <button
+              type="button"
+              className="section-cta tournament-manager-resume"
+              onClick={() => void handleResumeTournament()}
+              disabled={!canResumeTournament}
+            >
+              <span aria-hidden="true">↻</span>
+              {resumingTournament ? "Возобновление..." : "Возобновить турнир"}
+            </button>
+          )}
+          {isManualTournament && (isLocalConductedTournament || isSyncedWithViva) && (
+            <button
+              type="button"
+              className={`section-cta tournament-manager-sync${isSyncedWithViva ? " is-synced" : ""}`}
+              onClick={() => void handleSyncTournamentWithViva()}
+              disabled={!canSyncWithViva}
+            >
+              {syncingWithViva
+                ? "Синхронизация..."
+                : isSyncedWithViva
+                  ? "Синхронизировано"
+                  : "Синхронизировать с Viva"}
+            </button>
+          )}
+          <button
+            type="button"
+            className="section-cta tournament-manager-finish"
+            onClick={() => {
+              setFinishTournamentError(null);
+              setFinishConfirmationOpen(true);
+            }}
+            disabled={!canFinishTournament || finishingTournament || tournamentFinished || resumingTournament}
+          >
+            {finishingTournament ? "Завершение..." : "Завершить турнир"}
+          </button>
+        </div>
       </div>
+      <Modal
+        isOpen={finishConfirmationOpen}
+        onClose={() => {
+          if (!finishingTournament) setFinishConfirmationOpen(false);
+        }}
+        title={finishConfirmationCopy.title}
+        variant="dialog"
+      >
+        <div className="tournament-finish-confirmation">
+          <div className="tournament-confirm-copy">
+            {finishConfirmationCopy.progress}
+          </div>
+          <div className="tournament-finish-confirmation-warning">
+            {finishConfirmationCopy.warning}
+          </div>
+          <div className="tournament-confirm-note">
+            {finishConfirmationCopy.reassurance}
+          </div>
+          {finishTournamentError && (
+            <div className="tournaments-error" role="alert">
+              {finishTournamentError}
+            </div>
+          )}
+          <div className="tournament-confirm-actions">
+            <button
+              type="button"
+              className="onboarding-btn onboarding-btn--secondary"
+              onClick={() => setFinishConfirmationOpen(false)}
+              disabled={finishingTournament}
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              className="onboarding-btn tournament-confirm-danger"
+              onClick={() => void handleFinishTournament()}
+              disabled={finishingTournament}
+            >
+              {finishingTournament ? "Завершаем..." : finishConfirmationCopy.confirmLabel}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </Modal>
   );
 }
 
 export default function TournamentsPage({
   onBack,
+  backLabel = "← Назад",
   initialOpenTournamentId = null,
-  initialOpenDate = null,
-}: TournamentsPageProps) {
+    initialOpenTournamentSlug = null,
+    initialOpenDate = null,
+  }: TournamentsPageProps) {
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<Exercise[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [cacheNotice, setCacheNotice] = useState<string | null>(null);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [localDraftSnapshots, setLocalDraftSnapshots] = useState<TournamentDraftSnapshot[]>([]);
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
   const [selectedTournament, setSelectedTournament] = useState<Exercise | null>(null);
@@ -2898,9 +6170,20 @@ export default function TournamentsPage({
   const [managerPlayerLogs, setManagerPlayerLogs] = useState<AmericanoResultsResponse["playerLogs"] | null>(null);
   const [historyById, setHistoryById] = useState<Record<string, TournamentHistoryRecord | null>>({});
   const [openingTournamentId, setOpeningTournamentId] = useState<string | null>(null);
+  const [autoOpenNotice, setAutoOpenNotice] = useState<string | null>(null);
+  const [deepLinkTournament, setDeepLinkTournament] = useState<Exercise | null>(null);
+  const [deepLinkLookupPending, setDeepLinkLookupPending] = useState(false);
+  const [manualTournamentCreationOpen, setManualTournamentCreationOpen] = useState(false);
   const [dateIndex, setDateIndex] = useState(TODAY_DATE_INDEX);
   const autoOpenTournamentKeyRef = useRef<string | null>(null);
+  const deepLinkLookupKeyRef = useRef<string | null>(null);
+  const openingTournamentIdRef = useRef<string | null>(null);
   const activeDateRef = useRef<HTMLDivElement | null>(null);
+  const locationTournamentSlug = useMemo(() => readTournamentSlugFromLocation(), []);
+  const targetTournamentSlug = useMemo(
+    () => normalizeTournamentSlug(initialOpenTournamentSlug) ?? locationTournamentSlug,
+    [initialOpenTournamentSlug, locationTournamentSlug],
+  );
 
   const dates = useMemo(() => {
     const base = new Date();
@@ -2916,10 +6199,17 @@ export default function TournamentsPage({
   const selectedDateStr = formatDate(selectedDate);
   const todayDateStr = formatDate(new Date());
   const includePastTournaments = selectedDateStr <= todayDateStr;
-  const selectedDateLabel = selectedDate.toLocaleDateString("ru-RU", {
-    day: "numeric",
-    month: "long",
-  });
+  const tournamentMechanicsLookupDate = selectedDateStr;
+
+  const refreshPendingSyncCount = useCallback(async () => {
+    const count = await getPendingTournamentResultSyncCount();
+    setPendingSyncCount(count);
+    return count;
+  }, []);
+
+  useEffect(() => {
+    setLocalDraftSnapshots(listCachedTournamentDrafts());
+  }, []);
 
   useEffect(() => {
     const dateKey = getDateKeyFromInput(initialOpenDate);
@@ -2941,41 +6231,76 @@ export default function TournamentsPage({
 
   useEffect(() => {
     let alive = true;
+    let appliedFreshItems = false;
     setLoading(true);
     setError(null);
+    setCacheNotice(null);
+
+    void loadCachedTournamentSchedule(selectedDateStr).then((cachedItems) => {
+      if (!alive || appliedFreshItems || !cachedItems) return;
+      setItems(cachedItems);
+      setCacheNotice("Показываем сохраненное расписание. Обновляем список...");
+      setLoading(false);
+    });
 
     void (async () => {
       try {
-        const [exercisesResult, activeBookingsResult, historyBookingsResult] = await Promise.all([
-          apiFetchExercisesByVisibleDate(selectedDateStr, {
-            includePast: includePastTournaments,
-            includeAdjacentDays: selectedDateStr === todayDateStr,
-          }),
-          includePastTournaments ? apiFetchBookings(false) : Promise.resolve(null),
-          includePastTournaments ? apiFetchBookings(true) : Promise.resolve(null),
-        ]);
+        const bookingItemsPromise = fetchTournamentBookingItems(includePastTournaments);
+        const sourceTournamentItemsPromise = fetchTournamentMechanicsSourceItems(tournamentMechanicsLookupDate);
+        const exercisesResult = await apiFetchExercisesByVisibleDate(selectedDateStr, {
+          includePast: includePastTournaments,
+          includeAdjacentDays: false,
+        });
 
         if (!alive) return;
+        if (exercisesResult.error && !exercisesResult.data) {
+          throw new Error(exercisesResult.error.message || "Не удалось загрузить упражнения турниров");
+        }
 
-        const exerciseItems = exercisesResult.data ?? [];
-        const bookingItems = [
-          ...(activeBookingsResult?.data?.content ?? []),
-          ...(historyBookingsResult?.data?.content ?? []),
-        ];
+        appliedFreshItems = true;
+        const baseItems = mergeTournamentMechanicsExercises(
+          exercisesResult.data ?? [],
+          [],
+          selectedDateStr,
+        );
+        setItems(baseItems);
+        setCacheNotice(null);
+        setLoading(false);
+        void saveCachedTournamentSchedule(selectedDateStr, baseItems);
 
-        setItems(mergeTournamentExercises(exerciseItems, bookingItems, selectedDateStr));
+        const [bookingItems, sourceTournamentItems] = await Promise.all([
+          bookingItemsPromise,
+          sourceTournamentItemsPromise,
+        ]);
+        if (!alive) return;
+
+        const fallbackExercises = buildTournamentMechanicsFallbackExercises(sourceTournamentItems);
+        const mergedExercises = mergeTournamentMechanicsExercises(
+          exercisesResult.data ?? [],
+          fallbackExercises,
+          selectedDateStr,
+        );
+        const finalItems = mergeTournamentExercises(mergedExercises, bookingItems, selectedDateStr);
+        setItems(finalItems);
+        void saveCachedTournamentSchedule(selectedDateStr, finalItems);
       } catch {
         if (!alive) return;
+        const cachedItems = await loadCachedTournamentSchedule(selectedDateStr);
+        if (cachedItems) {
+          setItems(cachedItems);
+          setCacheNotice("Показываем сохраненное расписание. Синхронизация восстановится при появлении связи.");
+          setLoading(false);
+          return;
+        }
         setError("Не удалось загрузить список турниров");
-      } finally {
-        if (alive) setLoading(false);
+        setLoading(false);
       }
     })();
 
     return () => {
       alive = false;
     };
-  }, [includePastTournaments, selectedDateStr]);
+  }, [includePastTournaments, selectedDateStr, tournamentMechanicsLookupDate]);
 
   useEffect(() => {
     let alive = true;
@@ -2984,6 +6309,19 @@ export default function TournamentsPage({
       .then((res) => {
         if (!alive) return;
         setProfile(res.data ?? null);
+        if (res.data) {
+          void saveCachedTournamentProfile(res.data);
+        }
+      })
+      .catch(async () => {
+        if (!alive) return;
+        const cachedProfile = await loadCachedTournamentProfile();
+        if (cachedProfile) {
+          setProfile(cachedProfile);
+          setCacheNotice("Показываем сохраненные данные профиля и расписания.");
+          return;
+        }
+        setProfile(null);
       })
       .finally(() => {
         if (alive) setProfileLoading(false);
@@ -2995,130 +6333,425 @@ export default function TournamentsPage({
   }, []);
 
   const canHostTournaments = profile ? hasTournamentHostingAccess(profile) : false;
-  const tournaments = useMemo(
+  const currentProfileId = profile?.id ?? null;
+  const localDraftExercises = useMemo(
+    () => localDraftSnapshots
+      .map((snapshot) => buildTournamentDraftExercise(snapshot, { currentProfileId }))
+      .filter((item): item is Exercise => item !== null),
+    [currentProfileId, localDraftSnapshots],
+  );
+  const localDraftHistoryById = useMemo(() => {
+    const next: Record<string, TournamentHistoryRecord | null> = {};
+    localDraftSnapshots.forEach((snapshot) => {
+      const draftExercise = buildTournamentDraftExercise(snapshot, { currentProfileId });
+      const draftHistory = buildTournamentHistoryRecordFromPayload(
+        snapshot.payload,
+        draftExercise,
+        null,
+        snapshot.totals,
+        snapshot.playerLogs,
+      );
+      next[snapshot.payload.tournamentId] = draftHistory;
+    });
+    return next;
+  }, [currentProfileId, localDraftSnapshots]);
+  const combinedHistoryById = useMemo(
+    () => ({ ...historyById, ...localDraftHistoryById }),
+    [historyById, localDraftHistoryById],
+  );
+  const serverTournaments = useMemo(
     () => items.filter((ex) => isTournamentExerciseCategory(ex)),
     [items],
   );
-  const visibleTournaments = useMemo(
-    () =>
-      tournaments.filter((exercise) => (
-        canHostTournaments || isTournamentTrainer(exercise, profile?.id ?? null)
-      )),
-    [canHostTournaments, profile?.id, tournaments],
+  const serverVisibleTournaments = useMemo(
+    () => filterVisibleTournamentExercises(
+      serverTournaments,
+      currentProfileId,
+      canHostTournaments,
+      Boolean(profile),
+    ),
+    [canHostTournaments, currentProfileId, profile, serverTournaments],
   );
-  const tournamentIdsKey = useMemo(
-    () => visibleTournaments.map((ex) => String(ex.id)).sort().join("|"),
-    [visibleTournaments],
+  const localVisibleTournaments = useMemo(
+    () => filterVisibleTournamentExercises(
+      localDraftExercises,
+      currentProfileId,
+      canHostTournaments,
+      Boolean(profile),
+    ),
+    [canHostTournaments, currentProfileId, localDraftExercises, profile],
+  );
+  const visibleTournaments = useMemo(
+    () => mergeTournamentMechanicsExercises(
+      serverVisibleTournaments,
+      localVisibleTournaments,
+      selectedDateStr,
+    ),
+    [localVisibleTournaments, selectedDateStr, serverVisibleTournaments],
+  );
+  const serverTournamentIdsKey = useMemo(
+    () => serverVisibleTournaments.map((ex) => String(ex.id)).sort().join("|"),
+    [serverVisibleTournaments],
+  );
+  const noTournamentModuleAccess = Boolean(
+    profile
+    && !canHostTournaments
+    && serverTournaments.length > 0
+    && visibleTournaments.length === 0,
   );
 
+  const upsertLocalDraftSnapshot = useCallback((
+    payload: AmericanoTournamentPayload,
+    extras?: {
+      totals: AmericanoResultsResponse["totals"] | null;
+      playerLogs: AmericanoResultsResponse["playerLogs"] | null;
+    },
+  ) => {
+    const nextSnapshot: TournamentDraftSnapshot = {
+      payload,
+      totals: extras?.totals ?? null,
+      playerLogs: extras?.playerLogs ?? null,
+      updatedAt: new Date().toISOString(),
+    };
+    saveCachedTournamentDraft(nextSnapshot);
+    setLocalDraftSnapshots((prev) => {
+      const next = prev.filter((item) => item.payload.tournamentId !== payload.tournamentId);
+      next.push(nextSnapshot);
+      return next.sort((left, right) => {
+        const leftTs = Date.parse(left.updatedAt || left.payload.createdAt || "");
+        const rightTs = Date.parse(right.updatedAt || right.payload.createdAt || "");
+        const safeLeftTs = Number.isFinite(leftTs) ? leftTs : 0;
+        const safeRightTs = Number.isFinite(rightTs) ? rightTs : 0;
+        return safeRightTs - safeLeftTs;
+      });
+    });
+  }, []);
+
   useEffect(() => {
-    if (!tournamentIdsKey) {
+    if (!serverTournamentIdsKey) {
       setHistoryById({});
       return;
     }
 
     let alive = true;
 
-    void Promise.all(
-      visibleTournaments.map(async (tournament) => {
-        const tournamentId = String(tournament.id);
-        const result = await apiFetchTournamentHistory(tournamentId);
-        return [tournamentId, pickLatestTournamentHistory(result.data)] as const;
-      }),
-    ).then((entries) => {
+    void (async () => {
+      const cachedEntries = await Promise.all(
+        serverVisibleTournaments.map(async (tournament) => {
+          const tournamentId = String(tournament.id);
+          const cachedHistory = await loadCachedTournamentHistory(tournamentId);
+          return [tournamentId, cachedHistory] as const;
+        }),
+      );
+
       if (!alive) return;
       const next: Record<string, TournamentHistoryRecord | null> = {};
-      entries.forEach(([tournamentId, historyRecord]) => {
+      cachedEntries.forEach(([tournamentId, historyRecord]) => {
         next[tournamentId] = historyRecord;
       });
       setHistoryById(next);
-    }).catch(() => {
-      if (!alive) return;
-      const next: Record<string, TournamentHistoryRecord | null> = {};
-      visibleTournaments.forEach((tournament) => {
-        next[String(tournament.id)] = null;
-      });
-      setHistoryById(next);
-    });
+    })();
 
     return () => {
       alive = false;
     };
-  }, [tournamentIdsKey, visibleTournaments]);
+  }, [serverTournamentIdsKey, serverVisibleTournaments]);
 
   const handleTournamentOpen = async (tournament: Exercise) => {
     const tournamentId = String(tournament.id);
-    if (openingTournamentId) return;
+    if (openingTournamentId || openingTournamentIdRef.current) return;
+    openingTournamentIdRef.current = tournamentId;
+    setAutoOpenNotice(null);
+    setManualTournamentCreationOpen(false);
     setOpeningTournamentId(tournamentId);
 
     try {
-      let historyRecord = historyById[tournamentId] ?? null;
+      let historyRecord = combinedHistoryById[tournamentId] ?? null;
+      const cachedDraft = loadCachedTournamentDraft(tournamentId);
+      const cachedHistory = await loadCachedTournamentHistory(tournamentId);
+      const hasPendingSync = await hasPendingTournamentResultJobs(tournamentId);
 
-      try {
-        const result = await apiFetchTournamentHistory(tournamentId);
-        const freshHistory = pickLatestTournamentHistory(result.data);
-        if (freshHistory || !historyRecord) {
-          historyRecord = freshHistory;
-        }
+      const currentHistory = historyRecord ?? cachedHistory ?? null;
+      const draftUpdatedAt = cachedDraft ? toTimestamp(cachedDraft.updatedAt) : 0;
+      const historyUpdatedAt = currentHistory
+        ? toTimestamp(currentHistory.updatedAt ?? currentHistory.createdAt)
+        : 0;
+      const currentHistoryPayload = buildTournamentComparablePayloadFromHistory(currentHistory);
+      const shouldPreferDraftBeforeFreshFetch = shouldPreferClassicMexicanoCachedSnapshot(
+        cachedDraft?.payload ?? null,
+        currentHistoryPayload,
+        {
+          hasPendingSync,
+          candidateUpdatedAt: draftUpdatedAt,
+          currentUpdatedAt: historyUpdatedAt,
+        },
+      );
+
+      if (cachedDraft && hasPendingSync && shouldPreferDraftBeforeFreshFetch) {
+        const draftHistory = buildTournamentHistoryRecordFromPayload(
+          cachedDraft.payload,
+          tournament,
+          currentHistory,
+          cachedDraft.totals,
+          cachedDraft.playerLogs,
+        );
+        setSelectedTournament(null);
+        setManagerTotals(cachedDraft.totals ?? null);
+        setManagerPlayerLogs(cachedDraft.playerLogs ?? null);
+        setManagerData(withTournamentStationContext(cachedDraft.payload, tournament));
         setHistoryById((prev) => ({
           ...prev,
-          [tournamentId]: historyRecord,
+          [tournamentId]: draftHistory,
         }));
-      } catch {
-        if (!historyRecord) {
+        return;
+      }
+
+      if (hasPendingSync && cachedHistory) {
+        historyRecord = cachedHistory;
+        setHistoryById((prev) => ({
+          ...prev,
+          [tournamentId]: cachedHistory,
+        }));
+      } else {
+        try {
+          const result = await apiFetchTournamentHistory(tournamentId);
+          const freshHistory = pickLatestTournamentHistory(result.data);
+          const freshHistoryIsNotStructurallyWorse = shouldPreferClassicMexicanoSnapshot(
+            buildTournamentComparablePayloadFromHistory(freshHistory),
+            buildTournamentComparablePayloadFromHistory(historyRecord ?? cachedHistory),
+            { hasPendingSync },
+          );
+          if (freshHistory && (freshHistoryIsNotStructurallyWorse || !currentHistory)) {
+            historyRecord = freshHistory;
+          } else if (!historyRecord && cachedHistory) {
+            historyRecord = cachedHistory;
+          }
+          if (freshHistory) {
+            void saveCachedTournamentHistory(freshHistory);
+          }
           setHistoryById((prev) => ({
             ...prev,
-            [tournamentId]: null,
+            [tournamentId]: historyRecord,
+          }));
+        } catch {
+          if (!historyRecord && cachedHistory) {
+            historyRecord = cachedHistory;
+          }
+          setHistoryById((prev) => ({
+            ...prev,
+            [tournamentId]: historyRecord,
           }));
         }
       }
 
-      const restoredPayload = historyRecord ? buildTournamentPayloadFromHistory(historyRecord) : null;
+      const shouldUseDraftFallback = Boolean(
+        cachedDraft
+        && !historyRecord
+        && shouldPreferClassicMexicanoCachedSnapshot(
+          cachedDraft.payload,
+          null,
+          {
+            hasPendingSync,
+            candidateUpdatedAt: draftUpdatedAt,
+            currentUpdatedAt: historyUpdatedAt,
+          },
+        ),
+      );
+      if (shouldUseDraftFallback && cachedDraft) {
+        const draftHistory = buildTournamentHistoryRecordFromPayload(
+          cachedDraft.payload,
+          tournament,
+          currentHistory,
+          cachedDraft.totals,
+          cachedDraft.playerLogs,
+        );
+        setSelectedTournament(null);
+        setManagerTotals(cachedDraft.totals ?? null);
+        setManagerPlayerLogs(cachedDraft.playerLogs ?? null);
+        setManagerData(withTournamentStationContext(cachedDraft.payload, tournament));
+        setHistoryById((prev) => ({
+          ...prev,
+          [tournamentId]: draftHistory,
+        }));
+        return;
+      }
+
+      const restoredPayload = historyRecord
+        ? buildTournamentPayloadFromHistory(historyRecord)
+        : currentHistory
+          ? buildTournamentPayloadFromHistory(currentHistory)
+          : null;
       if (restoredPayload) {
         setSelectedTournament(null);
-        setManagerTotals(historyRecord?.totals ?? null);
-        setManagerPlayerLogs(historyRecord?.playerLogs ?? null);
-        setManagerData(restoredPayload);
+        setManagerTotals((historyRecord ?? currentHistory)?.totals ?? null);
+        setManagerPlayerLogs((historyRecord ?? currentHistory)?.playerLogs ?? null);
+        setManagerData(withTournamentStationContext(restoredPayload, tournament));
         return;
       }
 
       setSelectedTournament(tournament);
     } finally {
+      if (openingTournamentIdRef.current === tournamentId) {
+        openingTournamentIdRef.current = null;
+      }
       setOpeningTournamentId((current) => (current === tournamentId ? null : current));
     }
   };
 
   useEffect(() => {
     const targetTournamentId = String(initialOpenTournamentId || "").trim();
-    if (!targetTournamentId || loading || profileLoading || openingTournamentId) return;
+    const targetSlug = targetTournamentSlug;
+    const targetKey = targetTournamentId || targetSlug || "";
+    if (!targetKey || loading || profileLoading || openingTournamentId || deepLinkLookupPending) return;
 
     const targetTournament =
-      tournaments.find((item) => String(item.id) === targetTournamentId)
-      ?? items.find((item) => String(item.id) === targetTournamentId)
+      findTournamentByDeepLink(visibleTournaments, {
+        tournamentId: targetTournamentId,
+        tournamentSlug: targetSlug,
+      })
+      ?? findTournamentByDeepLink(items, {
+        tournamentId: targetTournamentId,
+        tournamentSlug: targetSlug,
+      })
+      ?? findTournamentByDeepLink(deepLinkTournament ? [deepLinkTournament] : [], {
+        tournamentId: targetTournamentId,
+        tournamentSlug: targetSlug,
+      })
       ?? null;
-    if (!targetTournament) return;
 
-    const autoOpenKey = `${targetTournamentId}:${selectedDateStr}`;
+    if (targetTournament) return;
+    if (deepLinkLookupKeyRef.current === targetKey) return;
+    deepLinkLookupKeyRef.current = targetKey;
+
+    let alive = true;
+    setDeepLinkLookupPending(true);
+    setAutoOpenNotice("Ищем турнир по ссылке...");
+
+    void (async () => {
+      try {
+        const today = new Date();
+        const dateFrom = formatDate(shiftDateByDays(today, -DEEP_LINK_LOOKUP_DAYS_BEFORE_TODAY));
+        const dateTo = formatDate(shiftDateByDays(today, DEEP_LINK_LOOKUP_DAYS_AFTER_TODAY));
+        const lookupResult = await apiFetchExercisesByPeriod(dateFrom, dateTo, { size: 5000 });
+        if (!alive) return;
+
+        let resolvedTournament = findTournamentByDeepLink(lookupResult.data ?? [], {
+          tournamentId: targetTournamentId,
+          tournamentSlug: targetSlug,
+        });
+
+        if (!resolvedTournament) {
+          const sourceLookupResult = await apiFetchTournamentMechanicsSourceList({ from: dateFrom, to: dateTo }).catch(() => null);
+          if (!alive) return;
+          resolvedTournament = findTournamentByDeepLink([
+            ...(lookupResult.data ?? []),
+            ...buildTournamentMechanicsFallbackExercises(sourceLookupResult?.data ?? []),
+          ], {
+            tournamentId: targetTournamentId,
+            tournamentSlug: targetSlug,
+          });
+        }
+
+        if (!resolvedTournament) {
+          setDeepLinkTournament(null);
+          setAutoOpenNotice("Турнир не найден");
+          return;
+        }
+
+        setDeepLinkTournament(resolvedTournament);
+        setAutoOpenNotice(null);
+
+        const tournamentDateKey = getExerciseDateKey(resolvedTournament);
+        if (!tournamentDateKey) return;
+        const nextIndex = dates.findIndex((date) => formatDate(date) === tournamentDateKey);
+        if (nextIndex >= 0) {
+          setDateIndex(nextIndex);
+        }
+      } catch {
+        if (!alive) return;
+        setAutoOpenNotice("Не удалось открыть турнир по ссылке");
+      } finally {
+        if (alive) setDeepLinkLookupPending(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [
+    dates,
+    deepLinkLookupPending,
+    deepLinkTournament,
+    initialOpenTournamentId,
+    items,
+    loading,
+    openingTournamentId,
+    profileLoading,
+    targetTournamentSlug,
+    visibleTournaments,
+  ]);
+
+  useEffect(() => {
+    const targetTournamentId = String(initialOpenTournamentId || "").trim();
+    const targetSlug = targetTournamentSlug;
+    if ((!targetTournamentId && !targetSlug) || loading || profileLoading || openingTournamentId) return;
+
+    const targetTournament =
+      findTournamentByDeepLink(visibleTournaments, {
+        tournamentId: targetTournamentId,
+        tournamentSlug: targetSlug,
+      })
+      ?? findTournamentByDeepLink(items, {
+        tournamentId: targetTournamentId,
+        tournamentSlug: targetSlug,
+      })
+      ?? findTournamentByDeepLink(deepLinkTournament ? [deepLinkTournament] : [], {
+        tournamentId: targetTournamentId,
+        tournamentSlug: targetSlug,
+      })
+      ?? null;
+    const targetKey = targetTournamentId || targetSlug || "";
+    const autoOpenKey = `${targetKey}:${selectedDateStr}`;
+
     if (autoOpenTournamentKeyRef.current === autoOpenKey) return;
     autoOpenTournamentKeyRef.current = autoOpenKey;
+
+    if (!targetTournament) {
+      if (deepLinkLookupPending) return;
+      setAutoOpenNotice("Турнир не найден");
+      return;
+    }
+
+    if (deepLinkTournament && String(deepLinkTournament.id) === String(targetTournament.id)) {
+      setDeepLinkTournament(null);
+    }
+    setAutoOpenNotice(null);
     void handleTournamentOpen(targetTournament);
   }, [
+    deepLinkLookupPending,
+    deepLinkTournament,
     initialOpenTournamentId,
     items,
     loading,
     openingTournamentId,
     profileLoading,
     selectedDateStr,
-    tournaments,
+    targetTournamentSlug,
+    visibleTournaments,
   ]);
 
   const handleTournamentCreated = (payload: AmericanoTournamentPayload) => {
-    const previousHistory = historyById[payload.tournamentId] ?? null;
+    const previousHistory = combinedHistoryById[payload.tournamentId] ?? null;
     const nextHistory = buildTournamentHistoryRecordFromPayload(
       payload,
       selectedTournament,
       previousHistory,
     );
+    void saveCachedTournamentHistory(nextHistory);
+    upsertLocalDraftSnapshot(payload, {
+      totals: null,
+      playerLogs: null,
+    });
     setHistoryById((prev) => ({
       ...prev,
       [payload.tournamentId]: nextHistory,
@@ -3126,6 +6759,15 @@ export default function TournamentsPage({
     setManagerTotals(null);
     setManagerPlayerLogs(null);
     setManagerData(payload);
+  };
+
+  const handleCreateManualTournament = () => {
+    setSelectedTournament(null);
+    setManagerData(null);
+    setManagerTotals(null);
+    setManagerPlayerLogs(null);
+    setManualTournamentCreationOpen(true);
+    setAutoOpenNotice(null);
   };
 
   const handleManagerDataChange = (
@@ -3137,23 +6779,59 @@ export default function TournamentsPage({
   ) => {
     const currentTournament =
       visibleTournaments.find((item) => String(item.id) === payload.tournamentId) ?? selectedTournament ?? null;
+    const nextHistory = buildTournamentHistoryRecordFromPayload(
+      payload,
+      currentTournament,
+      combinedHistoryById[payload.tournamentId] ?? null,
+      extras.totals,
+      extras.playerLogs,
+    );
+    void saveCachedTournamentHistory(nextHistory);
+    upsertLocalDraftSnapshot(payload, extras);
     setHistoryById((prev) => ({
       ...prev,
-      [payload.tournamentId]: buildTournamentHistoryRecordFromPayload(
-        payload,
-        currentTournament,
-        prev[payload.tournamentId] ?? null,
-        extras.totals,
-        extras.playerLogs,
-      ),
+      [payload.tournamentId]: nextHistory,
     }));
+  };
+
+  const handleManagerDataReplace = (
+    payload: AmericanoTournamentPayload,
+    extras: {
+      totals: AmericanoResultsResponse["totals"] | null;
+      playerLogs: AmericanoResultsResponse["playerLogs"] | null;
+    },
+  ) => {
+    const replacementTournament =
+      visibleTournaments.find((item) => String(item.id) === payload.tournamentId)
+      ?? items.find((item) => String(item.id) === payload.tournamentId)
+      ?? (selectedTournament && String(selectedTournament.id) === payload.tournamentId
+        ? selectedTournament
+        : null)
+      ?? null;
+    const nextHistory = buildTournamentHistoryRecordFromPayload(
+      payload,
+      replacementTournament,
+      combinedHistoryById[payload.tournamentId] ?? null,
+      extras.totals,
+      extras.playerLogs,
+    );
+    void saveCachedTournamentHistory(nextHistory);
+    upsertLocalDraftSnapshot(payload, extras);
+    setHistoryById((prev) => ({
+      ...prev,
+      [payload.tournamentId]: nextHistory,
+    }));
+    setSelectedTournament(replacementTournament);
+    setManagerTotals(extras.totals);
+    setManagerPlayerLogs(extras.playerLogs);
+    setManagerData(payload);
   };
 
   const handleManagerEditSettings = () => {
     if (!managerData?.tournamentId) return;
     const currentTournament =
       visibleTournaments.find((item) => String(item.id) === managerData.tournamentId)
-      ?? items.find((item) => String(item.id) === managerData.tournamentId)
+      ?? serverTournaments.find((item) => String(item.id) === managerData.tournamentId)
       ?? null;
     if (!currentTournament) return;
 
@@ -3163,18 +6841,137 @@ export default function TournamentsPage({
     setSelectedTournament(currentTournament);
   };
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    let cancelled = false;
+    let timeoutId: number | null = null;
+    const syncDelayMs = 10_000;
+
+    const updatePendingNotice = async () => {
+      const count = await refreshPendingSyncCount();
+      if (cancelled) return count;
+      if (count > 0) {
+        setCacheNotice(formatPendingTournamentSyncNotice(count));
+      } else {
+        setCacheNotice((current) => (
+          current && current.startsWith("Показываем сохранен")
+            ? current
+            : null
+        ));
+      }
+      return count;
+    };
+
+    const syncQueuedResults = async (source: string) => {
+      if (navigator.onLine === false) {
+        await updatePendingNotice();
+        return;
+      }
+
+      const result = await processPendingTournamentResultSyncQueue({
+        source,
+        maxItems: 3,
+      });
+
+      if (cancelled) return;
+
+      const count = await updatePendingNotice();
+      if (cancelled) return;
+      setPendingSyncCount(count);
+
+      if (result.resolved.length > 0) {
+        const refreshedHistories = await Promise.all(
+          result.resolved.map(async (item) => {
+            const cachedHistory = await loadCachedTournamentHistory(item.tournamentId);
+            return [item.tournamentId, cachedHistory] as const;
+          }),
+        );
+
+        if (cancelled) return;
+
+        setHistoryById((prev) => {
+          const next = { ...prev };
+          refreshedHistories.forEach(([tournamentId, history]) => {
+            next[tournamentId] = history;
+          });
+          return next;
+        });
+
+        const activeManagerTournamentId = managerData?.tournamentId
+          ? String(managerData.tournamentId)
+          : null;
+        if (activeManagerTournamentId) {
+          const activeHistory = refreshedHistories.find(([tournamentId]) => tournamentId === activeManagerTournamentId)?.[1]
+            ?? null;
+          if (activeHistory) {
+            const restoredPayload = buildTournamentPayloadFromHistory(activeHistory);
+            if (restoredPayload) {
+              setManagerTotals(activeHistory.totals ?? null);
+              setManagerPlayerLogs(activeHistory.playerLogs ?? null);
+              setManagerData(restoredPayload);
+            }
+          }
+        }
+      }
+    };
+
+    const scheduleSync = (source: string) => {
+      if (timeoutId != null) {
+        window.clearTimeout(timeoutId);
+      }
+      timeoutId = window.setTimeout(() => {
+        void syncQueuedResults(source);
+      }, syncDelayMs);
+    };
+
+    void updatePendingNotice().then((count) => {
+      if (cancelled) return;
+      if (navigator.onLine !== false && count > 0) {
+        scheduleSync("tournaments_boot");
+      }
+    });
+
+    const onOnline = () => {
+      scheduleSync("tournaments_online");
+    };
+    const onFocus = () => {
+      scheduleSync("tournaments_focus");
+    };
+    const onVisibility = () => {
+      if (!document.hidden) {
+        scheduleSync("tournaments_visible");
+      }
+    };
+
+    window.addEventListener("online", onOnline);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      cancelled = true;
+      if (timeoutId != null) {
+        window.clearTimeout(timeoutId);
+      }
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [managerData?.tournamentId, refreshPendingSyncCount]);
+
   return (
     <div className="app-container">
       <div className="page-header">
-        <button className="page-back" onClick={onBack} type="button">← Назад</button>
+        <button className="page-back" onClick={onBack} type="button">{backLabel}</button>
         <div className="page-title">Турниры</div>
       </div>
 
       <div className="section">
-        <div className="section-header">
-          <span className="section-title">Турниры на {selectedDateLabel}</span>
-        </div>
         <div className="section-body tournaments-body">
+          {cacheNotice && <div className="tournaments-sync-notice">{cacheNotice}</div>}
+          {!cacheNotice && pendingSyncCount > 0 && (
+            <div className="tournaments-sync-notice">{formatPendingTournamentSyncNotice(pendingSyncCount)}</div>
+          )}
           <div className="date-row">
             {dates.map((date, idx) => {
               const monthLabel = date
@@ -3211,12 +7008,30 @@ export default function TournamentsPage({
             })}
           </div>
 
-          {(loading || profileLoading) && <div className="tournaments-muted">Загрузка...</div>}
+          {loading && <div className="tournaments-muted">Загрузка...</div>}
           {!loading && error && <div className="tournaments-error">{error}</div>}
-          {!loading && !profileLoading && !error && visibleTournaments.length === 0 && (
-            <div className="tournaments-muted">На выбранную дату турниров нет</div>
+          {!loading && !error && autoOpenNotice && (
+            <div className="tournaments-muted">{autoOpenNotice}</div>
           )}
-          {!loading && !profileLoading && !error && visibleTournaments.length > 0 && (
+          {!loading && profileLoading && !error && (
+            <div className="tournaments-muted">Уточняем доступ и ваши турниры...</div>
+          )}
+          {!loading && !error && visibleTournaments.length === 0 && (
+            noTournamentModuleAccess ? (
+              <div className="tournaments-access-denied">
+                <div className="tournaments-access-denied-title">
+                  Нет доступа к модулю "Турниры ПхАБ"
+                </div>
+                <div className="tournaments-access-denied-text">
+                  Вход по коду прошёл, но этот профиль не назначен в турнирную механику.
+                  Обратитесь к администратору или войдите под другим номером.
+                </div>
+              </div>
+            ) : (
+              <div className="tournaments-muted">На выбранную дату турниров нет</div>
+            )
+          )}
+          {!loading && !error && visibleTournaments.length > 0 && (
             <div className="tournaments-list">
               {!canHostTournaments && (
                 <div className="tournaments-muted">
@@ -3225,14 +7040,9 @@ export default function TournamentsPage({
               )}
               {visibleTournaments.map((ex) => {
                 const tournamentId = String(ex.id);
-                const historyRecord = historyById[tournamentId] ?? null;
+                const historyRecord = combinedHistoryById[tournamentId] ?? null;
                 const progressState = getTournamentProgressState(historyRecord);
-                const progressLabel =
-                  progressState === "completed"
-                    ? "Проведен и сохранен"
-                    : progressState === "in_progress"
-                      ? "Не завершен"
-                      : null;
+                const progressLabel = getTournamentProgressLabel(historyRecord);
 
                 return (
                   <button
@@ -3273,14 +7083,27 @@ export default function TournamentsPage({
               })}
             </div>
           )}
+          {!loading && (
+            <button
+              className="section-cta"
+              type="button"
+              onClick={handleCreateManualTournament}
+            >
+              Создать турнир
+            </button>
+          )}
         </div>
       </div>
 
       <TournamentDetailsModal
-        isOpen={Boolean(selectedTournament)}
-        onClose={() => setSelectedTournament(null)}
+        isOpen={Boolean(selectedTournament) || manualTournamentCreationOpen}
+        onClose={() => {
+          setSelectedTournament(null);
+          setManualTournamentCreationOpen(false);
+        }}
         tournament={selectedTournament}
-        historyRecord={selectedTournament ? historyById[String(selectedTournament.id)] ?? null : null}
+        historyRecord={selectedTournament ? combinedHistoryById[String(selectedTournament.id)] ?? null : null}
+        sourceDateKey={selectedDateStr}
         onSaved={handleTournamentCreated}
       />
 
@@ -3296,6 +7119,7 @@ export default function TournamentsPage({
         initialTotals={managerTotals}
         initialPlayerLogs={managerPlayerLogs}
         onDataChange={handleManagerDataChange}
+        onReplaceData={handleManagerDataReplace}
         onEditSettings={handleManagerEditSettings}
       />
     </div>

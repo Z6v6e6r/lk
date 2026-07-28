@@ -10,9 +10,8 @@ export default defineConfig([
     'dist',
     'dist-dev',
     'android/**',
-    'scripts/nodered_chat_nodes/**',
-    'scripts/nodered_games_nodes/**',
-    'scripts/nodered_result_nodes/**',
+    'scripts/nodered_*_nodes/**',
+    'tmp/**',
   ]),
   {
     files: ['**/*.{js,mjs,cjs}'],

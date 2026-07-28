@@ -1,0 +1,65 @@
+flowchart TB
+  subgraph web[Web Delivery]
+    tilda[Tilda pages\n/lk_new, /game_join, /game_create, /finde_game]
+    loader[Tilda loader\nrelease.json cache busting]
+    static[Static LK host\nJS bundles, fonts, manifests]
+    react[React IIFE bundles\nCabinet, Games, Tournaments, Group, Communities]
+  end
+
+  subgraph backend[Current Backend / Automation]
+    nodered[Node-RED runtime]
+    gamesFlow[LK Games tab]
+    tournamentsFlow[LK Tournaments tab]
+    supportFlow[LK Support tab]
+    communitiesFlow[LK Communities tab]
+    analyticsFlow[LK Analytics tab]
+  end
+
+  subgraph data[Current Data Stores]
+    mongo[(MongoDB)]
+    localStorage[(Browser localStorage/sessionStorage)]
+  end
+
+  subgraph external[External Systems]
+    viva[VivaCRM]
+    keycloak[Keycloak / Viva auth]
+    payment[Payment provider]
+    max[MAX API]
+    firebase[Firebase FCM]
+  end
+
+  subgraph ops[Ops and Repair]
+    scripts[Node/TS repair scripts]
+    deploy[Deploy scripts]
+    noderedBuild[Node-RED modular build and validate]
+  end
+
+  tilda --> loader --> static --> react
+  react --> nodered
+  react --> viva
+  react --> keycloak
+  react --> localStorage
+
+  nodered --> gamesFlow
+  nodered --> tournamentsFlow
+  nodered --> supportFlow
+  nodered --> communitiesFlow
+  nodered --> analyticsFlow
+
+  gamesFlow --> mongo
+  tournamentsFlow --> mongo
+  supportFlow --> mongo
+  communitiesFlow --> mongo
+  analyticsFlow --> mongo
+
+  gamesFlow --> viva
+  tournamentsFlow --> viva
+  supportFlow --> max
+  analyticsFlow --> firebase
+  gamesFlow --> payment
+  tournamentsFlow --> payment
+
+  scripts --> mongo
+  scripts --> viva
+  noderedBuild --> nodered
+  deploy --> static
