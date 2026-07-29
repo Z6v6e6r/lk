@@ -1,5 +1,3 @@
-const TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
-
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
   const text = String(value).trim();
@@ -70,10 +68,16 @@ const fail = (status, error, details) => {
   msg.statusCode = status;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };
   msg.payload = { ok: false, error, details: details || null };
-  return [null, msg, msg];
+  return [null, msg, null];
 };
 
 const body = msg.payload && typeof msg.payload === "object" ? msg.payload : {};
+const auth = msg._splitCleanupAuth && typeof msg._splitCleanupAuth === "object"
+  ? msg._splitCleanupAuth
+  : null;
+if (!auth || auth.verified !== true || (!toStr(auth.actorClientId) && !toStr(auth.actorPhoneNorm))) {
+  return fail(401, "Не удалось подтвердить авторизованного клиента");
+}
 const gameId = toStr(msg.req?.params?.gameId || body.gameId);
 const exerciseId = toStr(body.exerciseId);
 const playerClientId = toStr(body.clientId || body.playerId || body.userId);
@@ -105,15 +109,16 @@ msg._splitLeaveCtx = {
   playerPhone: normalizePhone(body.playerPhone || body.phone || body.clientPhone),
   playerName: toStr(body.playerName || body.name),
   reason: toStr(body.reason) || "PLAYER_LEFT",
+  actorClientId: toStr(auth.actorClientId),
+  actorPhoneNorm: normalizePhone(auth.actorPhoneNorm),
   token: null,
-  step: "token_request",
+  step: "authorize_leave",
   trace: [],
 };
 
-msg.method = "POST";
-msg.url = TOKEN_URL;
-msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
-msg.payload =
-  "grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ";
+msg.payload = {
+  id: gameId,
+  archived: { $ne: true },
+};
 
-return [msg, null, msg];
+return [msg, null, null];

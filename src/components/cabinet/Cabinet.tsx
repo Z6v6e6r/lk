@@ -3040,6 +3040,7 @@ export function Cabinet({
         intent: "cancel_game",
         refundMethod: action.refundMethod ?? undefined,
         cancellationActionId: action.id,
+        actorBookingId: bookingId,
       });
       const cleanupData = cleanupResult.data;
       const cleanupItems = Array.isArray(cleanupData?.items) ? cleanupData.items : [];
@@ -3049,10 +3050,16 @@ export function Cabinet({
       const cleanupProcessed = (cleanupData?.processed ?? 0) > 0 || cleanupItem !== null;
       const cleanupSucceeded = cleanupItem?.cancelledInLk === true && cleanupItem?.withVivaErrors !== true;
 
+      cleanupHandled = true;
       if (cleanupProcessed) {
-        cleanupHandled = true;
         ok = cleanupSucceeded;
         successMessage = cleanupItem?.refundMessage || action.successMessage;
+      } else {
+        setCancellingGameId(null);
+        return {
+          ok: false,
+          message: cleanupResult.error?.message || "Не удалось подтвердить отмену записи в Viva",
+        };
       }
     }
 

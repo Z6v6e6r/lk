@@ -58,11 +58,17 @@ const fail = (status, error, details) => {
     error,
     details: details || null,
   };
-  return [null, msg, msg];
+  return [null, msg, null];
 };
 
 const query = msg.req?.query && typeof msg.req.query === "object" ? msg.req.query : {};
 const body = msg.payload && typeof msg.payload === "object" ? msg.payload : {};
+const auth = msg._splitCleanupAuth && typeof msg._splitCleanupAuth === "object"
+  ? msg._splitCleanupAuth
+  : null;
+if (!auth || auth.verified !== true || (!toStr(auth.actorClientId) && !toStr(auth.actorPhoneNorm))) {
+  return fail(401, "Не удалось подтвердить авторизованного клиента");
+}
 
 const gameId = toStr(query.gameId ?? body.gameId);
 const force = toBoolean(query.force ?? body.force) === true;
@@ -72,6 +78,7 @@ const preferredRefundMethod = normalizeRefundMethod(query.refundMethod ?? body.r
 const cancellationActionId = normalizeCancellationActionId(
   query.cancellationActionId ?? body.cancellationActionId,
 );
+const actorBookingId = toStr(query.actorBookingId ?? body.actorBookingId);
 const limit = Math.max(
   1,
   Math.min(500, Math.floor(toNumber(query.limit ?? body.limit) ?? 200)),
@@ -108,6 +115,9 @@ msg._splitCleanupRequest = {
   intent,
   preferredRefundMethod,
   cancellationActionId,
+  actorBookingId,
+  actorClientId: toStr(auth.actorClientId),
+  actorPhoneNorm: toStr(auth.actorPhoneNorm),
   allowForceGameCancel: intent === "cancel_game",
 };
 msg.payload = mongoQuery;
@@ -116,4 +126,4 @@ if (!msg._splitCleanupRequest || typeof msg._splitCleanupRequest !== "object") {
   return fail(500, "Failed to prepare split cleanup request context");
 }
 
-return [msg, null, msg];
+return [msg, null, null];

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const gamesPageSource = fs.readFileSync("src/components/games/GamesPage.tsx", "utf8");
+const apiClientSource = fs.readFileSync("src/utils/apiClient.ts", "utf8");
 
 test("cabinet organizer remove still uses backend split leave helper", () => {
   const helperStart = gamesPageSource.indexOf("const cancelVivaBookingsForPlayerFromDetails = useCallback");
@@ -17,6 +18,17 @@ test("cabinet organizer remove still uses backend split leave helper", () => {
   assert.match(helperSource, /if \(!exerciseId\) \{/);
   assert.match(helperSource, /verificationResult\.error \|\| !verificationResult\.data/);
   assert.match(helperSource, /Viva ещё держит запись игрока, попробуйте повторить позже/);
+
+  const apiHelperStart = apiClientSource.indexOf(
+    "export async function apiCancelPadelSplitParticipantBookings",
+  );
+  const apiHelperEnd = apiClientSource.indexOf(
+    "export async function apiCleanupPadelGameByOrganizer",
+    apiHelperStart,
+  );
+  assert.ok(apiHelperStart >= 0);
+  assert.ok(apiHelperEnd > apiHelperStart);
+  assert.match(apiClientSource.slice(apiHelperStart, apiHelperEnd), /auth:\s*true/);
 });
 
 test("cabinet self-remove uses frontend end-user cancel contract with audit log", () => {

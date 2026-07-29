@@ -21,6 +21,7 @@ function buildSplitGame(overrides: Record<string, unknown> = {}) {
   return {
     id: "game-1",
     status: "ACTIVE",
+    organizer: { id: "organizer-1", phone: "79990000001" },
     settings: { payMode: "split" },
     booking: {
       date: "2026-06-02",
@@ -74,6 +75,7 @@ test("force cleanup creates FORCED task only with explicit cancel intent", () =>
       limit: 10,
       allowForceGameCancel: true,
       intent: "cancel_game",
+      actorClientId: "organizer-1",
     },
   }) as unknown[];
 
@@ -98,6 +100,7 @@ test("force cleanup carries explicit preferred refund method into cleanup task",
       limit: 10,
       allowForceGameCancel: true,
       intent: "cancel_game",
+      actorClientId: "organizer-1",
       preferredRefundMethod: "DEPOSIT",
     },
   }) as unknown[];
@@ -109,8 +112,73 @@ test("force cleanup carries explicit preferred refund method into cleanup task",
   assert.equal(tasks[0].preferredRefundMethod, "DEPOSIT");
 });
 
+test("force game cancellation rejects a verified user who is not the organizer", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_prepare.js", {
+    payload: [buildSplitGame()],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-06-03T12:00:00+03:00"),
+      nowIso: "2026-06-03T09:00:00.000Z",
+      force: true,
+      gameId: "game-1",
+      dryRun: false,
+      limit: 10,
+      allowForceGameCancel: true,
+      intent: "cancel_game",
+      actorClientId: "another-client",
+    },
+  }) as unknown[];
+
+  assert.equal(out[0], null);
+  const response = asRecord(out[1]);
+  assert.ok(response);
+  assert.equal(response.statusCode, 403);
+  assert.equal(
+    asRecord(response.payload)?.code,
+    "SPLIT_CLEANUP_ORGANIZER_REQUIRED",
+  );
+});
+
+test("force game cancellation rejects an actor booking not linked to the game", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_prepare.js", {
+    payload: [buildSplitGame({
+      booking: {
+        date: "2026-06-02",
+        timeFrom: "18:00",
+        timeTo: "20:00",
+        bookingId: "booking-linked",
+      },
+    })],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-06-03T12:00:00+03:00"),
+      nowIso: "2026-06-03T09:00:00.000Z",
+      force: true,
+      gameId: "game-1",
+      dryRun: false,
+      limit: 10,
+      allowForceGameCancel: true,
+      intent: "cancel_game",
+      actorClientId: "organizer-1",
+      actorBookingId: "booking-unrelated",
+    },
+  }) as unknown[];
+
+  assert.equal(out[0], null);
+  const response = asRecord(out[1]);
+  assert.ok(response);
+  assert.equal(response.statusCode, 403);
+  assert.equal(
+    asRecord(response.payload)?.code,
+    "SPLIT_CLEANUP_ACTOR_BOOKING_NOT_LINKED",
+  );
+});
+
 test("cleanup query and prepare preserve the selected cancellation action", () => {
   const queryOut = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_query.js", {
+    _splitCleanupAuth: {
+      verified: true,
+      actorClientId: "organizer-1",
+      actorPhoneNorm: "79990000001",
+    },
     req: {
       query: {},
     },
@@ -119,6 +187,7 @@ test("cleanup query and prepare preserve the selected cancellation action", () =
       force: true,
       intent: "cancel_game",
       cancellationActionId: "subscription",
+      actorBookingId: "booking-1",
     },
   }) as unknown[];
 
@@ -127,8 +196,17 @@ test("cleanup query and prepare preserve the selected cancellation action", () =
   const cleanupRequest = asRecord(queryMsg._splitCleanupRequest);
   assert.ok(cleanupRequest);
   assert.equal(cleanupRequest.cancellationActionId, "subscription");
+  assert.equal(cleanupRequest.actorBookingId, "booking-1");
 
-  queryMsg.payload = [buildSplitGame()];
+  queryMsg.payload = [buildSplitGame({
+    organizer: { id: "organizer-1", phone: "79990000001" },
+    booking: {
+      date: "2026-06-02",
+      timeFrom: "18:00",
+      timeTo: "20:00",
+      bookingId: "booking-1",
+    },
+  })];
   const prepareOut = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_split_cleanup_prepare.js",
     queryMsg,

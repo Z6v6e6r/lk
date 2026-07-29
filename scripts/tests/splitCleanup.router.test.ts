@@ -103,7 +103,7 @@ test("router blocks game cleanup cancellation when booking and exercise targets 
   assert.ok(trace.some((item) => item.step === "blocked_missing_viva_targets"));
 });
 
-test("cleanup starts with Viva cancel probe even when clientId is present", () => {
+test("related booking cleanup starts with the client-scoped Admin cancel probe", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
     statusCode: 200,
     payload: { access_token: "token-1" },
@@ -121,12 +121,42 @@ test("cleanup starts with Viva cancel probe even when clientId is present", () =
   const requestMsg = asRecord(out[0]);
   const ctx = asRecord(requestMsg._splitCleanupCtx);
   assert.equal(requestMsg.method, "GET");
-  assert.equal(requestMsg.url, "https://api.vivacrm.ru/api/v1/bookings/booking-1/cancel");
+  assert.equal(
+    requestMsg.url,
+    "https://api.vivacrm.ru/api/v1/clients/client-1/bookings/booking-1/cancel",
+  );
   assert.equal(requestMsg.payload, undefined);
   assert.equal(ctx.step, "cancel_booking_probe");
 });
 
-test("participant timeout cancel goes to Viva cancel probe after unpaid transaction check", () => {
+test("actor booking cleanup uses the authenticated End User cancel probe from the HAR", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
+    statusCode: 200,
+    payload: { access_token: "admin-token" },
+    _splitCleanupAuth: { authHeader: "Bearer user-token" },
+    _splitCleanupCtx: {
+      step: "token_request",
+      mode: "GAME_CLEANUP",
+      gameId: "game-1",
+      actorBookingId: "booking-1",
+      bookingQueue: [{ bookingId: "booking-1", clientId: "client-1" }],
+      bookingResults: [],
+      initialBookingIds: ["booking-1"],
+      trace: [],
+    },
+  }) as unknown[];
+
+  const requestMsg = asRecord(out[0]);
+  assert.equal(requestMsg.method, "GET");
+  assert.equal(
+    requestMsg.url,
+    "https://api.vivacrm.ru/end-user/api/v1/iSkq6G/bookings/booking-1/cancel",
+  );
+  assert.equal(asRecord(requestMsg.headers).Authorization, "Bearer user-token");
+  assert.equal(requestMsg.payload, undefined);
+});
+
+test("participant timeout cancel uses a client-scoped Admin probe after transaction check", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
     statusCode: 200,
     payload: { status: "FAILED" },
@@ -150,25 +180,29 @@ test("participant timeout cancel goes to Viva cancel probe after unpaid transact
   const requestMsg = asRecord(out[0]);
   const ctx = asRecord(requestMsg._splitCleanupCtx);
   assert.equal(requestMsg.method, "GET");
-  assert.equal(requestMsg.url, "https://api.vivacrm.ru/api/v1/bookings/booking-1/cancel");
+  assert.equal(
+    requestMsg.url,
+    "https://api.vivacrm.ru/api/v1/clients/client-1/bookings/booking-1/cancel",
+  );
   assert.equal(requestMsg.payload, undefined);
   assert.equal(ctx.step, "cancel_booking_probe");
 });
 
-test("cleanup uses preferred deposit refund when probe exposes both card and deposit", () => {
+test("actor subscription return follows the HAR DELETE contract with an empty object body", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
     statusCode: 200,
     payload: {
       cancellationOptions: {
-        money: { available: true, refundSum: 900, refundMethod: "ONLINE" },
-        deposit: { available: true, refundSum: 3000 },
+        subscription: { available: true },
       },
     },
+    _splitCleanupAuth: { authHeader: "Bearer user-token" },
     _splitCleanupCtx: {
       step: "cancel_booking_probe",
       mode: "GAME_CLEANUP",
-      preferredRefundMethod: "DEPOSIT",
+      cancellationActionId: "subscription",
       gameId: "game-1",
+      actorBookingId: "booking-1",
       currentBookingId: "booking-1",
       currentClientId: "client-1",
       bookingQueue: [],
@@ -181,12 +215,17 @@ test("cleanup uses preferred deposit refund when probe exposes both card and dep
   const requestMsg = asRecord(out[0]);
   const ctx = asRecord(requestMsg._splitCleanupCtx);
   assert.equal(requestMsg.method, "DELETE");
-  assert.equal(requestMsg.url, "https://api.vivacrm.ru/api/v1/bookings/booking-1");
-  assert.deepEqual(requestMsg.payload, { refundMethod: "DEPOSIT" });
+  assert.equal(
+    requestMsg.url,
+    "https://api.vivacrm.ru/end-user/api/v1/iSkq6G/bookings/booking-1",
+  );
+  assert.deepEqual(requestMsg.payload, {});
+  assert.equal(asRecord(requestMsg.headers).Authorization, "Bearer user-token");
+  assert.equal(ctx.refundMessage, "Вернули 1 занятие на абонемент.");
   assert.equal(ctx.step, "cancel_booking");
 });
 
-test("cleanup derives deposit refund from the selected action when refundMethod is absent", () => {
+test("actor deposit return sends the selected End User refund method", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
     statusCode: 200,
     payload: {
@@ -195,11 +234,13 @@ test("cleanup derives deposit refund from the selected action when refundMethod 
         deposit: { available: true, refundSum: 3000 },
       },
     },
+    _splitCleanupAuth: { authHeader: "Bearer user-token" },
     _splitCleanupCtx: {
       step: "cancel_booking_probe",
       mode: "GAME_CLEANUP",
       cancellationActionId: "deposit",
       gameId: "game-1",
+      actorBookingId: "booking-1",
       currentBookingId: "booking-1",
       currentClientId: "client-1",
       bookingQueue: [],
@@ -211,11 +252,14 @@ test("cleanup derives deposit refund from the selected action when refundMethod 
 
   const requestMsg = asRecord(out[0]);
   assert.equal(requestMsg.method, "DELETE");
-  assert.equal(requestMsg.url, "https://api.vivacrm.ru/api/v1/bookings/booking-1");
+  assert.equal(
+    requestMsg.url,
+    "https://api.vivacrm.ru/end-user/api/v1/iSkq6G/bookings/booking-1",
+  );
   assert.deepEqual(requestMsg.payload, { refundMethod: "DEPOSIT" });
 });
 
-test("cleanup blocks local mutation when Viva offers only service refund", () => {
+test("related client booking uses Admin SERVICE refund without cancelling the exercise", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
     statusCode: 200,
     payload: {
@@ -242,23 +286,23 @@ test("cleanup blocks local mutation when Viva offers only service refund", () =>
     },
   }) as unknown[];
 
-  assert.equal(out[0], null);
-  assert.equal(out[1], null);
-  const summaryMsg = asRecord(out[2]);
-  const payload = asRecord(summaryMsg.payload);
-  assert.equal(payload.withVivaErrors, true);
-  assert.equal(payload.cancelledInLk, false);
-  assert.equal(payload.blockLocalMutation, true);
-  assert.equal(payload.blockReason, "unsupported_exercise_refund");
-  const trace = asTrace(payload.trace);
-  assert.ok(trace.some((item) => item.step === "cancel_booking_probe_unsupported"));
+  const requestMsg = asRecord(out[0]);
+  assert.equal(requestMsg.method, "PUT");
+  assert.equal(
+    requestMsg.url,
+    "https://api.vivacrm.ru/api/v1/clients/client-1/bookings/booking-1/cancel",
+  );
+  assert.deepEqual(requestMsg.payload, {
+    refundMethod: "SERVICE",
+    cancelExercise: false,
+  });
 });
 
-test("participant timeout cleanup falls back to a real delete when probe returns 404", () => {
+test("probe 404 never triggers a blind cancellation request", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
     _splitCleanupCtx: {
       step: "cancel_booking_probe",
-      mode: "PARTICIPANT_TIMEOUT",
+      mode: "GAME_CLEANUP",
       token: "token-1",
       gameId: "game-1",
       currentBookingId: "booking-1",
@@ -268,19 +312,10 @@ test("participant timeout cleanup falls back to a real delete when probe returns
       initialBookingIds: ["booking-1"],
       trace: [],
       dryRun: false,
-      exerciseId: null,
+      exerciseId: "exercise-1",
       exerciseCancelled: true,
       blockLocalMutation: false,
       forceVivaErrors: false,
-      nextParticipants: [
-        { id: "org-1", phone: "79035107512", status: "CONFIRMED" },
-      ],
-      nextWaitlist: [],
-      nextSplitPayments: [
-        { clientId: "org-1", phoneNorm: "79035107512", status: "PAID" },
-        { clientId: "player-2", phoneNorm: "79998704790", status: "EXPIRED", cancelReason: "PAYMENT_TIMEOUT" },
-      ],
-      nextLeaveEvents: [],
       timedOutPayments: [],
     },
     statusCode: 404,
@@ -290,110 +325,17 @@ test("participant timeout cleanup falls back to a real delete when probe returns
   const requestMsg = asRecord(out[0]);
   const ctx = asRecord(requestMsg._splitCleanupCtx);
   assert.equal(out[1], null);
-  assert.equal(requestMsg.method, "DELETE");
-  assert.equal(requestMsg.url, "https://api.vivacrm.ru/api/v1/bookings/booking-1");
-  assert.deepEqual(requestMsg.payload, {});
-  assert.equal(ctx.step, "cancel_booking");
+  assert.equal(requestMsg.method, "GET");
+  assert.equal(
+    requestMsg.url,
+    "https://api.vivacrm.ru/api/v1/clients/player-2/bookings/booking-1",
+  );
+  assert.equal(requestMsg.payload, undefined);
+  assert.equal(ctx.step, "verify_booking_cancelled");
   assert.equal((ctx.bookingResults as unknown[]).length, 0);
   const trace = asTrace(ctx.trace);
   assert.ok(trace.some((item) => item.step === "cancel_booking_probe_not_found"));
-  assert.ok(trace.some((item) => (
-    item.step === "cancel_booking_request"
-    && item.fallbackFromProbe404 === true
-  )));
-});
-
-test("cleanup preserves selected card refund in the probe-404 delete fallback", () => {
-  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
-    statusCode: 404,
-    payload: { status: 404, error: "Not Found" },
-    _splitCleanupCtx: {
-      step: "cancel_booking_probe",
-      mode: "GAME_CLEANUP",
-      preferredRefundMethod: "CURRENCY",
-      token: "token-1",
-      gameId: "game-1",
-      currentBookingId: "booking-1",
-      currentClientId: "client-1",
-      bookingQueue: [],
-      bookingResults: [],
-      initialBookingIds: ["booking-1"],
-      trace: [],
-    },
-  }) as unknown[];
-
-  const requestMsg = asRecord(out[0]);
-  const ctx = asRecord(requestMsg._splitCleanupCtx);
-  assert.equal(requestMsg.method, "DELETE");
-  assert.equal(requestMsg.url, "https://api.vivacrm.ru/api/v1/bookings/booking-1");
-  assert.deepEqual(requestMsg.payload, { refundMethod: "CURRENCY" });
-  assert.equal(ctx.selectedRefundMethod, "CURRENCY");
-});
-
-test("cleanup preserves the selected subscription return in the probe-404 fallback", () => {
-  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
-    statusCode: 404,
-    payload: { status: 404, error: "Not Found" },
-    _splitCleanupCtx: {
-      step: "cancel_booking_probe",
-      mode: "GAME_CLEANUP",
-      cancellationActionId: "subscription",
-      token: "token-1",
-      gameId: "game-1",
-      currentBookingId: "booking-1",
-      currentClientId: "client-1",
-      bookingQueue: [],
-      bookingResults: [],
-      initialBookingIds: ["booking-1"],
-      trace: [],
-    },
-  }) as unknown[];
-
-  const requestMsg = asRecord(out[0]);
-  const ctx = asRecord(requestMsg._splitCleanupCtx);
-  assert.equal(requestMsg.method, "DELETE");
-  assert.equal(requestMsg.url, "https://api.vivacrm.ru/api/v1/bookings/booking-1");
-  assert.deepEqual(requestMsg.payload, {});
-  assert.equal(asRecord(ctx.currentCancelRequest).label, "delete_subscription_probe_404");
-  assert.equal(ctx.refundMessage, "Вернули 1 занятие на абонемент.");
-});
-
-test("game cleanup blocks a probe-404 fallback when the selected cancellation action is missing", () => {
-  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
-    statusCode: 404,
-    payload: { status: 404, error: "Not Found" },
-    _splitCleanupCtx: {
-      step: "cancel_booking_probe",
-      mode: "GAME_CLEANUP",
-      token: "token-1",
-      gameId: "game-1",
-      reason: "FORCED",
-      dryRun: false,
-      exerciseId: "exercise-1",
-      exerciseCancelled: null,
-      currentBookingId: "booking-1",
-      currentClientId: "client-1",
-      bookingQueue: [],
-      bookingResults: [],
-      initialBookingIds: ["booking-1"],
-      trace: [],
-      blockLocalMutation: false,
-      forceVivaErrors: false,
-      timedOutPayments: [],
-    },
-  }) as unknown[];
-
-  assert.equal(out[0], null);
-  assert.equal(out[1], null);
-  const summary = asRecord(asRecord(out[2]).payload);
-  assert.equal(summary.cancelledInLk, false);
-  assert.equal(summary.withVivaErrors, true);
-  assert.equal(summary.blockLocalMutation, true);
-  assert.equal(summary.blockReason, "missing_cancellation_action");
-  assert.equal(summary.bookingFailedCount, 1);
-  const trace = asTrace(summary.trace);
-  assert.ok(trace.some((item) => item.step === "cancel_booking_probe_unsupported"));
-  assert.ok(!trace.some((item) => item.step === "cancel_exercise_request"));
+  assert.ok(!trace.some((item) => item.step === "cancel_booking_request"));
 });
 
 test("subscription delete 404 is verified instead of retried without refund semantics", () => {
@@ -464,21 +406,26 @@ test("successful booking delete still requires exact Viva read-back", () => {
   assert.equal(asRecord(ctx.currentVerifyRequest).originStatusCode, 204);
 });
 
-test("cleanup retries a booking delete in exercise scope after a plain delete 404", () => {
+test("client read-back 404 falls through to the cancelled exercise history", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
     statusCode: 404,
     payload: { status: 404, error: "Not Found" },
     _splitCleanupCtx: {
-      step: "cancel_booking",
+      step: "verify_booking_cancelled",
       mode: "GAME_CLEANUP",
       token: "token-1",
       gameId: "game-1",
       exerciseId: "exercise-1",
       currentBookingId: "booking-1",
-      currentClientId: null,
+      currentClientId: "client-1",
       currentCancelRequest: {
-        label: "delete_plain_probe_404",
+        label: "end_user_delete_subscription",
         refundMethod: null,
+      },
+      currentVerifyRequest: {
+        label: "verify_client_booking",
+        scope: "client",
+        originStatusCode: 204,
       },
       bookingQueue: [],
       bookingResults: [],
@@ -489,13 +436,14 @@ test("cleanup retries a booking delete in exercise scope after a plain delete 40
 
   const requestMsg = asRecord(out[0]);
   const ctx = asRecord(requestMsg._splitCleanupCtx);
-  assert.equal(requestMsg.method, "DELETE");
+  assert.equal(requestMsg.method, "GET");
   assert.equal(
     requestMsg.url,
-    "https://api.vivacrm.ru/api/v1/exercises/exercise-1/bookings/booking-1",
+    "https://api.vivacrm.ru/api/v1/exercises/exercise-1/bookings?showCancelled=true&page=0&size=200",
   );
-  assert.deepEqual(requestMsg.payload, {});
-  assert.equal(asRecord(ctx.currentCancelRequest).label, "delete_exercise_booking");
+  assert.equal(requestMsg.payload, undefined);
+  assert.equal(asRecord(ctx.currentVerifyRequest).scope, "exercise");
+  assert.ok(asTrace(ctx.trace).some((item) => item.step === "cancel_booking_verify_history_request"));
 });
 
 test("cleanup verifies an exact client booking after the final delete returns 404", () => {
@@ -622,6 +570,8 @@ test("cleanup may persist only after client verification confirms cancellation",
       isCancelled: true,
       cancellationDate: "2026-07-28T10:00:00+03:00",
     },
+    headers: { Authorization: "Bearer admin-token" },
+    _splitCleanupAuth: { authHeader: "Bearer user-token" },
     _splitCleanupCtx: {
       step: "verify_booking_cancelled",
       mode: "GAME_CLEANUP",
@@ -653,8 +603,9 @@ test("cleanup may persist only after client verification confirms cancellation",
 
   assert.equal(out[0], null);
   const dbMsg = asRecord(out[1]);
+  const summaryMsg = asRecord(out[2]);
   const setDoc = asRecord(asRecord(dbMsg.payload).$set);
-  const summary = asRecord(asRecord(out[2]).payload);
+  const summary = asRecord(summaryMsg.payload);
   assert.equal(setDoc.status, "CANCELLED");
   assert.equal(setDoc.archived, true);
   assert.equal(summary.cancelledInLk, true);
@@ -662,6 +613,14 @@ test("cleanup may persist only after client verification confirms cancellation",
   assert.equal(summary.bookingSuccessCount, 1);
   const trace = asTrace(summary.trace);
   assert.ok(trace.some((item) => item.step === "cancel_booking_verified_cancelled"));
+  assert.equal(summaryMsg._splitCleanupAuth, undefined);
+  assert.equal(summaryMsg._splitCleanupCtx, undefined);
+  assert.equal(asRecord(summaryMsg.headers).Authorization, undefined);
+  assert.equal(summaryMsg.method, undefined);
+  assert.equal(summaryMsg.url, undefined);
+  assert.equal(dbMsg._splitCleanupAuth, undefined);
+  assert.equal(dbMsg._splitCleanupCtx, undefined);
+  assert.equal(dbMsg.headers, undefined);
 });
 
 test("verified participant timeout cleanup still rewrites identity projections", () => {
@@ -794,4 +753,62 @@ test("booking failure does not continue with whole-exercise cancellation", () =>
   assert.equal(summary.blockReason, "viva_cancel_failed");
   const trace = asTrace(summary.trace);
   assert.ok(!trace.some((item) => item.step === "cancel_exercise_request"));
+});
+
+test("whole-exercise cancellation requires an exact Viva read-back", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
+    statusCode: 204,
+    payload: null,
+    _splitCleanupCtx: {
+      step: "cancel_exercise",
+      mode: "GAME_CLEANUP",
+      token: "token-1",
+      gameId: "game-1",
+      exerciseId: "exercise-1",
+      exerciseAttempt: 0,
+      bookingQueue: [],
+      bookingResults: [],
+      initialBookingIds: [],
+      trace: [],
+    },
+  }) as unknown[];
+
+  const request = asRecord(out[0]);
+  assert.equal(request.method, "GET");
+  assert.equal(
+    request.url,
+    "https://api.vivacrm.ru/api/v1/exercises/exercise-1",
+  );
+  assert.equal(asRecord(request._splitCleanupCtx).step, "verify_exercise_cancelled");
+});
+
+test("active whole-exercise read-back blocks LK archival after final retry", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
+    statusCode: 200,
+    payload: { id: "exercise-1", status: "ACTIVE" },
+    _splitCleanupCtx: {
+      step: "verify_exercise_cancelled",
+      mode: "GAME_CLEANUP",
+      token: "token-1",
+      gameId: "game-1",
+      reason: "FORCED",
+      dryRun: false,
+      exerciseId: "exercise-1",
+      exerciseAttempt: 2,
+      bookingQueue: [],
+      bookingResults: [],
+      initialBookingIds: [],
+      trace: [],
+      blockLocalMutation: false,
+      forceVivaErrors: false,
+      timedOutPayments: [],
+    },
+  }) as unknown[];
+
+  assert.equal(out[1], null);
+  const summary = asRecord(asRecord(out[2]).payload);
+  assert.equal(summary.cancelledInLk, false);
+  assert.equal(summary.withVivaErrors, true);
+  assert.equal(summary.exerciseCancelled, false);
+  assert.ok(asTrace(summary.trace).some((item) => item.step === "verify_exercise_still_active"));
 });

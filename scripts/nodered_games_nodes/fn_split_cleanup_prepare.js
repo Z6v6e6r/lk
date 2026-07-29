@@ -73,6 +73,31 @@ const normalizeComparableId = (value) => {
   return text ? text.toLowerCase() : null;
 };
 
+const actorMatchesOrganizer = (game, request) => {
+  const actorClientId = normalizeComparableId(request.actorClientId);
+  const actorPhoneNorm = normalizePhone(request.actorPhoneNorm);
+  const organizerIds = [
+    game?.organizer?.id,
+    game?.organizer?.clientId,
+    game?.metadata?.organizerId,
+  ]
+    .map(normalizeComparableId)
+    .filter(Boolean);
+  const organizerPhones = [
+    game?.organizer?.phoneNorm,
+    game?.organizer?.phone,
+    game?.metadata?.organizerPhoneNorm,
+    game?.metadata?.organizerPhone,
+  ]
+    .map(normalizePhone)
+    .filter(Boolean);
+
+  return Boolean(
+    (actorClientId && organizerIds.includes(actorClientId))
+    || (actorPhoneNorm && organizerPhones.includes(actorPhoneNorm)),
+  );
+};
+
 const normalizeRefundMethod = (value) => {
   const raw = toStr(value);
   if (!raw) return null;
@@ -204,10 +229,12 @@ const requestIntent = toStr(request.intent)?.toLowerCase() || null;
 const allowForceGameCancel = request.allowForceGameCancel === true || requestIntent === "cancel_game";
 const preferredRefundMethod = normalizeRefundMethod(request.preferredRefundMethod);
 const cancellationActionId = normalizeCancellationActionId(request.cancellationActionId);
+const actorBookingId = toStr(request.actorBookingId);
 const limit = Math.max(1, Math.min(500, Math.floor(toNumber(request.limit) || 200)));
 const PARTICIPANT_PAYMENT_TIMEOUT_MS = 10 * 60 * 1000;
 
 const tasks = [];
+let authorizationFailure = null;
 
 rows.forEach((game) => {
   if (!isObj(game)) return;
@@ -228,6 +255,13 @@ rows.forEach((game) => {
     && requestGameId === gameId,
   );
   if (!splitEnabled && !explicitForceTarget) return;
+  if (explicitForceTarget && !actorMatchesOrganizer(game, request)) {
+    authorizationFailure = {
+      code: "SPLIT_CLEANUP_ORGANIZER_REQUIRED",
+      error: "Отменить игру может только её организатор",
+    };
+    return;
+  }
 
   const participants = asArray(game.participants).filter((item) => isObj(item));
   const waitlist = asArray(game.waitlist).filter((item) => isObj(item));
@@ -392,6 +426,21 @@ rows.forEach((game) => {
     })),
     ...asArray(splitPayment?.bookingTargets),
   ]);
+  const actorBookingLinked = !actorBookingId || (
+    bookingIds.some((bookingId) => (
+      normalizeComparableId(bookingId) === normalizeComparableId(actorBookingId)
+    ))
+    || bookingTargets.some((target) => (
+      normalizeComparableId(target.bookingId) === normalizeComparableId(actorBookingId)
+    ))
+  );
+  if (explicitForceTarget && !actorBookingLinked) {
+    authorizationFailure = {
+      code: "SPLIT_CLEANUP_ACTOR_BOOKING_NOT_LINKED",
+      error: "Запись клиента не связана с отменяемой игрой",
+    };
+    return;
+  }
 
   const exerciseId =
     toStr(splitPayment?.vivaExerciseId)
@@ -421,12 +470,24 @@ rows.forEach((game) => {
     exerciseId,
     preferredRefundMethod,
     cancellationActionId,
+    actorBookingId,
     blockLocalMutation: !hasVivaTargets,
     blockReason: hasVivaTargets ? null : "missing_viva_targets",
     dryRun,
     preparedAt: nowIso,
   });
 });
+
+if (authorizationFailure) {
+  msg.statusCode = 403;
+  msg.headers = { "Content-Type": "application/json; charset=utf-8" };
+  msg.payload = {
+    ok: false,
+    code: authorizationFailure.code,
+    error: authorizationFailure.error,
+  };
+  return [null, msg, null];
+}
 
 if (tasks.length === 0) {
   msg.statusCode = 200;
@@ -441,7 +502,7 @@ if (tasks.length === 0) {
     now: nowIso,
     items: [],
   };
-  return [null, msg, msg];
+  return [null, msg, null];
 }
 
 const selectedTasks = tasks.slice(0, limit);
@@ -457,4 +518,4 @@ msg._splitCleanupRequest = {
 };
 msg.payload = selectedTasks;
 
-return [msg, null, msg];
+return [msg, null, null];

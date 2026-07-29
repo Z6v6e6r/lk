@@ -1,5 +1,6 @@
 const TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
+const END_USER_API = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G";
 const KEY_TOKEN = "vivacrm_access_token";
 const KEY_EXPIRES_AT = "vivacrm_token_expires_at";
 const KEY_TOKEN_REQUEST_BODY = "vivacrm_token_request_body";
@@ -410,6 +411,27 @@ const adminRequest = (ctx, method, path, payload) => {
   return [msg, null, null, null];
 };
 
+const endUserRequest = (ctx, method, path, payload) => {
+  const cleanupAuth = msg._splitCleanupAuth && typeof msg._splitCleanupAuth === "object"
+    ? msg._splitCleanupAuth
+    : {};
+  msg._splitCleanupCtx = ctx;
+  msg.method = method;
+  msg.url = `${END_USER_API}${path}`;
+  msg.headers = {
+    Authorization: toStr(cleanupAuth.authHeader),
+    "Content-Type": "application/json",
+  };
+  msg.payload = payload;
+  return [msg, null, null, null];
+};
+
+const bookingApiRequest = (ctx, request) => (
+  request?.scope === "end_user"
+    ? endUserRequest(ctx, request.method, request.path, request.payload)
+    : adminRequest(ctx, request.method, request.path, request.payload)
+);
+
 const requestToken = (ctx) => {
   const cachedToken = readCachedAdminToken();
   if (cachedToken) {
@@ -464,15 +486,21 @@ const normalizeBookingQueueItem = (value, fallbackClientId = null) => {
 
 const uniqBookingQueue = (values) => {
   const result = [];
-  const used = new Set();
+  const indexByBookingId = new Map();
   asArray(values).forEach((item) => {
     const normalized = normalizeBookingQueueItem(item, null);
     const bookingId = toStr(normalized.bookingId);
     if (!bookingId) return;
     const clientId = toStr(normalized.clientId) || null;
-    const key = `${bookingId}|${clientId || ""}`;
-    if (used.has(key)) return;
-    used.add(key);
+    const key = bookingId.toLowerCase();
+    const existingIndex = indexByBookingId.get(key);
+    if (existingIndex !== undefined) {
+      if (!result[existingIndex].clientId && clientId) {
+        result[existingIndex].clientId = clientId;
+      }
+      return;
+    }
+    indexByBookingId.set(key, result.length);
     result.push({
       bookingId,
       clientId,
@@ -508,70 +536,93 @@ const resolvePreferredRefundMethod = (ctx) => {
   return null;
 };
 
-const buildBookingCancelProbe = (bookingId) => {
+const isActorBooking = (ctx, bookingId) => (
+  Boolean(
+    normalizeComparableId(ctx?.actorBookingId)
+    && normalizeComparableId(ctx?.actorBookingId) === normalizeComparableId(bookingId),
+  )
+);
+
+const buildBookingCancelProbe = (ctx, bookingId, clientId) => {
   const encodedId = encodeURIComponent(bookingId);
+  if (isActorBooking(ctx, bookingId)) {
+    return {
+      scope: "end_user",
+      method: "GET",
+      path: `/bookings/${encodedId}/cancel`,
+      payload: undefined,
+      label: "end_user_cancel_probe",
+    };
+  }
+  if (clientId) {
+    return {
+      scope: "admin",
+      method: "GET",
+      path: `/clients/${encodeURIComponent(clientId)}/bookings/${encodedId}/cancel`,
+      payload: undefined,
+      label: "admin_client_cancel_probe",
+    };
+  }
+  if (ctx.exerciseId) {
+    return {
+      scope: "admin",
+      method: "GET",
+      path: `/exercises/${encodeURIComponent(ctx.exerciseId)}/bookings/${encodedId}/cancel`,
+      payload: undefined,
+      label: "admin_exercise_cancel_probe",
+    };
+  }
   return {
-    method: "GET",
-    path: `/bookings/${encodedId}/cancel`,
-    payload: undefined,
-    label: "cancel_probe",
+    unsupportedReason: "Не удалось определить клиента или занятие для отмены записи",
+    unsupportedCode: "missing_scoped_booking_target",
   };
 };
 
-const buildDeleteBookingRequest = (bookingId, options) => {
+const buildScopedBookingCancelRequest = (ctx, bookingId, clientId, options) => {
   const encodedId = encodeURIComponent(bookingId);
+  if (isActorBooking(ctx, bookingId)) {
+    return {
+      scope: "end_user",
+      method: "DELETE",
+      path: `/bookings/${encodedId}`,
+      payload: options.endUserPayload ?? {},
+      label: `end_user_${options.label}`,
+      refundMethod: options.refundMethod || null,
+      refundMessage: options.refundMessage || null,
+    };
+  }
+
+  const adminPayload = {
+    refundMethod: options.adminRefundMethod,
+    cancelExercise: false,
+  };
+  if (clientId) {
+    return {
+      scope: "admin",
+      method: "PUT",
+      path: `/clients/${encodeURIComponent(clientId)}/bookings/${encodedId}/cancel`,
+      payload: adminPayload,
+      label: `admin_client_${options.label}`,
+      refundMethod: options.refundMethod || options.adminRefundMethod || null,
+      refundMessage: options.refundMessage || null,
+    };
+  }
+  if (ctx.exerciseId) {
+    return {
+      scope: "admin",
+      method: "DELETE",
+      path: `/exercises/${encodeURIComponent(ctx.exerciseId)}/bookings/${encodedId}`,
+      payload: adminPayload,
+      label: `admin_exercise_${options.label}`,
+      refundMethod: options.refundMethod || options.adminRefundMethod || null,
+      refundMessage: options.refundMessage || null,
+    };
+  }
   return {
-    method: "DELETE",
-    path: `/bookings/${encodedId}`,
-    payload: options.payload ?? {},
-    label: options.label,
-    refundMethod: options.refundMethod || null,
-    refundMessage: options.refundMessage || null,
+    unsupportedReason: "Не удалось определить клиента или занятие для отмены записи",
+    unsupportedCode: "missing_scoped_booking_target",
   };
 };
-
-const buildProbe404FallbackDeleteRequest = (ctx, bookingId) => {
-  const preferredRefundMethod = resolvePreferredRefundMethod(ctx);
-  const cancellationActionId = normalizeCancellationActionId(ctx.cancellationActionId);
-  if (preferredRefundMethod === "CURRENCY" || preferredRefundMethod === "DEPOSIT") {
-    return buildDeleteBookingRequest(bookingId, {
-      payload: { refundMethod: preferredRefundMethod },
-      label: `delete_${preferredRefundMethod.toLowerCase()}_probe_404`,
-      refundMethod: preferredRefundMethod,
-    });
-  }
-  if (cancellationActionId === "subscription") {
-    return buildDeleteBookingRequest(bookingId, {
-      payload: {},
-      label: "delete_subscription_probe_404",
-      refundMethod: null,
-      refundMessage: "Вернули 1 занятие на абонемент.",
-    });
-  }
-  if (cancellationActionId === "none" || ctx.mode === "PARTICIPANT_TIMEOUT") {
-    return buildDeleteBookingRequest(bookingId, {
-      payload: {},
-      label: "delete_plain_probe_404",
-      refundMethod: null,
-      refundMessage: cancellationActionId === "none"
-        ? "Запись отменена без возврата средств."
-        : null,
-    });
-  }
-  return {
-    unsupportedReason: "Не удалось подтвердить выбранный вариант возврата после ответа Viva 404",
-    unsupportedCode: "missing_cancellation_action",
-  };
-};
-
-const buildExerciseScopedDeleteBookingRequest = (exerciseId, bookingId) => ({
-  method: "DELETE",
-  path: `/exercises/${encodeURIComponent(exerciseId)}/bookings/${encodeURIComponent(bookingId)}`,
-  payload: {},
-  label: "delete_exercise_booking",
-  refundMethod: null,
-  refundMessage: null,
-});
 
 const buildClientBookingVerifyRequest = (clientId, bookingId) => ({
   method: "GET",
@@ -593,6 +644,16 @@ const isCancelledBookingRow = (row) => {
   if (toStr(row.cancellationDate || row.cancelledAt)) return true;
   const status = String(row.bookingStatus || row.status || row.state || "").trim().toUpperCase();
   return status.includes("CANCEL");
+};
+
+const isCancelledExercise = (value) => {
+  if (!value || typeof value !== "object") return false;
+  if (value.isCancelled === true || value.cancelled === true || value.deleted === true) return true;
+  if (toStr(value.cancellationDate || value.cancelledAt || value.deletedAt)) return true;
+  const status = String(
+    value.exerciseStatus || value.status || value.state || "",
+  ).trim().toUpperCase();
+  return status.includes("CANCEL") || status.includes("DELETE");
 };
 
 const extractBookingRows = (payload) => {
@@ -634,7 +695,7 @@ const resolveBookingCancellationOptions = (payload) => {
   };
 };
 
-const pickBookingCancellationRequest = (ctx, bookingId, payload) => {
+const pickBookingCancellationRequest = (ctx, bookingId, clientId, payload) => {
   const options = resolveBookingCancellationOptions(payload);
   const preferredRefundMethod = resolvePreferredRefundMethod(ctx);
   const cancellationActionId = normalizeCancellationActionId(ctx.cancellationActionId);
@@ -646,8 +707,9 @@ const pickBookingCancellationRequest = (ctx, bookingId, payload) => {
         unsupportedCode: "preferred_refund_method_unavailable",
       };
     }
-    return buildDeleteBookingRequest(bookingId, {
-      payload: { refundMethod: "DEPOSIT" },
+    return buildScopedBookingCancelRequest(ctx, bookingId, clientId, {
+      endUserPayload: { refundMethod: "DEPOSIT" },
+      adminRefundMethod: "DEPOSIT",
       label: "delete_deposit",
       refundMethod: "DEPOSIT",
     });
@@ -660,22 +722,24 @@ const pickBookingCancellationRequest = (ctx, bookingId, payload) => {
         unsupportedCode: "preferred_refund_method_unavailable",
       };
     }
-    return buildDeleteBookingRequest(bookingId, {
-      payload: { refundMethod: "CURRENCY" },
+    return buildScopedBookingCancelRequest(ctx, bookingId, clientId, {
+      endUserPayload: { refundMethod: "CURRENCY" },
+      adminRefundMethod: "CURRENCY",
       label: "delete_currency",
       refundMethod: "CURRENCY",
     });
   }
 
   if (cancellationActionId === "subscription") {
-    if (!options.subscription) {
+    if (!options.subscription && !options.exercise) {
       return {
         unsupportedReason: "Возврат занятия на абонемент недоступен для этой записи",
         unsupportedCode: "preferred_cancellation_action_unavailable",
       };
     }
-    return buildDeleteBookingRequest(bookingId, {
-      payload: undefined,
+    return buildScopedBookingCancelRequest(ctx, bookingId, clientId, {
+      endUserPayload: {},
+      adminRefundMethod: "SERVICE",
       label: "delete_subscription",
       refundMethod: null,
       refundMessage: "Вернули 1 занятие на абонемент.",
@@ -689,8 +753,9 @@ const pickBookingCancellationRequest = (ctx, bookingId, payload) => {
         unsupportedCode: "preferred_cancellation_action_unavailable",
       };
     }
-    return buildDeleteBookingRequest(bookingId, {
-      payload: undefined,
+    return buildScopedBookingCancelRequest(ctx, bookingId, clientId, {
+      endUserPayload: {},
+      adminRefundMethod: "NONE",
       label: "delete_plain",
       refundMethod: null,
       refundMessage: "Запись отменена без возврата средств.",
@@ -698,24 +763,27 @@ const pickBookingCancellationRequest = (ctx, bookingId, payload) => {
   }
 
   if (options.money) {
-    return buildDeleteBookingRequest(bookingId, {
-      payload: { refundMethod: "CURRENCY" },
+    return buildScopedBookingCancelRequest(ctx, bookingId, clientId, {
+      endUserPayload: { refundMethod: "CURRENCY" },
+      adminRefundMethod: "CURRENCY",
       label: "delete_currency",
       refundMethod: "CURRENCY",
     });
   }
 
   if (options.deposit) {
-    return buildDeleteBookingRequest(bookingId, {
-      payload: { refundMethod: "DEPOSIT" },
+    return buildScopedBookingCancelRequest(ctx, bookingId, clientId, {
+      endUserPayload: { refundMethod: "DEPOSIT" },
+      adminRefundMethod: "DEPOSIT",
       label: "delete_deposit",
       refundMethod: "DEPOSIT",
     });
   }
 
   if (options.subscription) {
-    return buildDeleteBookingRequest(bookingId, {
-      payload: undefined,
+    return buildScopedBookingCancelRequest(ctx, bookingId, clientId, {
+      endUserPayload: {},
+      adminRefundMethod: "SERVICE",
       label: "delete_subscription",
       refundMethod: null,
       refundMessage: "Вернули 1 занятие на абонемент.",
@@ -723,8 +791,9 @@ const pickBookingCancellationRequest = (ctx, bookingId, payload) => {
   }
 
   if (options.cancellationOnly) {
-    return buildDeleteBookingRequest(bookingId, {
-      payload: undefined,
+    return buildScopedBookingCancelRequest(ctx, bookingId, clientId, {
+      endUserPayload: {},
+      adminRefundMethod: "NONE",
       label: "delete_plain",
       refundMethod: null,
       refundMessage: "Запись отменена без возврата средств.",
@@ -739,10 +808,18 @@ const pickBookingCancellationRequest = (ctx, bookingId, payload) => {
   }
 
   if (options.exercise) {
-    return {
-      unsupportedReason: "Viva предлагает возврат только в виде услуги",
-      unsupportedCode: "unsupported_exercise_refund",
-    };
+    if (isActorBooking(ctx, bookingId)) {
+      return {
+        unsupportedReason: "Viva предлагает неподдержанный вариант возврата собственной записи",
+        unsupportedCode: "unsupported_exercise_refund",
+      };
+    }
+    return buildScopedBookingCancelRequest(ctx, bookingId, clientId, {
+      endUserPayload: {},
+      adminRefundMethod: "SERVICE",
+      label: "delete_service",
+      refundMethod: null,
+    });
   }
 
   return {
@@ -779,7 +856,25 @@ const buildExerciseAttempt = (ctx, attempt) => {
 };
 
 const startGenericBookingCancel = (ctx, bookingId, clientId, meta = {}) => {
-  const probeRequest = buildBookingCancelProbe(bookingId);
+  const probeRequest = buildBookingCancelProbe(ctx, bookingId, clientId);
+  if (!probeRequest || probeRequest.unsupportedReason) {
+    ctx.blockLocalMutation = true;
+    ctx.blockReason = probeRequest?.unsupportedCode || "missing_scoped_booking_target";
+    appendTrace(ctx, {
+      step: "cancel_booking_probe_unsupported",
+      bookingId,
+      clientId: clientId || null,
+      unsupportedReason: probeRequest?.unsupportedReason || null,
+      unsupportedCode: probeRequest?.unsupportedCode || null,
+      ...meta,
+    });
+    return pushBookingFailureAndContinue(ctx, {
+      bookingId,
+      clientId,
+      method: "scoped_booking",
+      unsupportedReason: probeRequest?.unsupportedReason || "Missing scoped booking target",
+    });
+  }
   ctx.currentBookingId = bookingId;
   ctx.currentClientId = clientId || null;
   ctx.currentCancelRequest = null;
@@ -789,9 +884,10 @@ const startGenericBookingCancel = (ctx, bookingId, clientId, meta = {}) => {
     bookingId,
     clientId: clientId || null,
     attemptLabel: probeRequest.label,
+    scope: probeRequest.scope,
     ...meta,
   });
-  return adminRequest(ctx, probeRequest.method, probeRequest.path, probeRequest.payload);
+  return bookingApiRequest(ctx, probeRequest);
 };
 
 const nextBookingRequest = (ctx) => {
@@ -891,8 +987,11 @@ const pushBookingSuccessAndContinue = (ctx, result) => {
 const startBookingVerification = (ctx, bookingId, clientId, meta = {}) => {
   let verifyRequest = null;
   let verifyScope = null;
-  if (clientId) {
-    verifyRequest = buildClientBookingVerifyRequest(clientId, bookingId);
+  const effectiveClientId = clientId || (
+    isActorBooking(ctx, bookingId) ? toStr(ctx.actorClientId) : null
+  );
+  if (effectiveClientId) {
+    verifyRequest = buildClientBookingVerifyRequest(effectiveClientId, bookingId);
     verifyScope = "client";
   } else if (ctx.exerciseId) {
     verifyRequest = buildExerciseBookingsVerifyRequest(ctx.exerciseId);
@@ -905,15 +1004,15 @@ const startBookingVerification = (ctx, bookingId, clientId, meta = {}) => {
     appendTrace(ctx, {
       step: "cancel_booking_unverified",
       bookingId,
-      clientId: clientId || null,
+      clientId: effectiveClientId || null,
       statusCode: meta.statusCode,
       reason: "missing_verification_target",
       response: clone(meta.response || null),
     });
     return pushBookingFailureAndContinue(ctx, {
       bookingId,
-      clientId,
-      method: "generic_booking",
+      clientId: effectiveClientId,
+      method: "scoped_booking",
       statusCode: meta.statusCode,
       response: meta.response || null,
     });
@@ -929,7 +1028,7 @@ const startBookingVerification = (ctx, bookingId, clientId, meta = {}) => {
   appendTrace(ctx, {
     step: "cancel_booking_verify_request",
     bookingId,
-    clientId: clientId || null,
+    clientId: effectiveClientId || null,
     exerciseId: ctx.exerciseId || null,
     verifyScope,
     attemptLabel: verifyRequest.label,
@@ -1081,8 +1180,18 @@ const finalizeTask = (ctx) => {
     finishedAt: nowIso,
   };
 
-  const summaryMsg = Object.assign({}, msg, {
-    _splitCleanupCtx: ctx,
+  const safeBaseMsg = Object.assign({}, msg);
+  delete safeBaseMsg._splitCleanupAuth;
+  delete safeBaseMsg._splitCleanupCtx;
+  delete safeBaseMsg.method;
+  delete safeBaseMsg.url;
+  const summaryMsg = Object.assign(safeBaseMsg, {
+    statusCode: 200,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-store",
+    },
     payload: summaryPayload,
   });
 
@@ -1103,7 +1212,9 @@ const finalizeTask = (ctx) => {
       .filter(Boolean),
   });
 
-  const dbMsg = Object.assign({}, msg, {
+  const dbMsg = Object.assign({}, safeBaseMsg, {
+    statusCode: undefined,
+    headers: undefined,
     query: {
       id: ctx.gameId,
       archived: { $ne: true },
@@ -1138,11 +1249,16 @@ if (!ctxFromMsg) {
     return [null, null, null, null];
   }
 
-  const queueFromTargets = uniqBookingQueue(payload?.bookingTargets);
+  const queueFromTargets = asArray(payload?.bookingTargets);
   const queueFromBookingIds = uniq(payload?.bookingIds || []);
-  const initialBookingIds = queueFromTargets.length > 0
-    ? uniq(queueFromTargets.map((item) => item.bookingId))
-    : queueFromBookingIds;
+  const bookingQueue = uniqBookingQueue([
+    ...queueFromTargets,
+    ...queueFromBookingIds,
+  ]);
+  const initialBookingIds = uniq(bookingQueue.map((item) => item.bookingId));
+  const cleanupAuth = msg._splitCleanupAuth && typeof msg._splitCleanupAuth === "object"
+    ? msg._splitCleanupAuth
+    : {};
 
   const initialCtx = {
     mode: toStr(payload?.mode) || "GAME_CLEANUP",
@@ -1152,8 +1268,11 @@ if (!ctxFromMsg) {
     exerciseId: toStr(payload.exerciseId),
     preferredRefundMethod: normalizeRefundMethod(payload?.preferredRefundMethod),
     cancellationActionId: normalizeCancellationActionId(payload?.cancellationActionId),
+    actorBookingId: toStr(payload?.actorBookingId),
+    actorClientId: toStr(cleanupAuth.actorClientId),
+    actorPhoneNorm: normalizePhone(cleanupAuth.actorPhoneNorm),
     initialBookingIds,
-    bookingQueue: queueFromTargets.length > 0 ? queueFromTargets : queueFromBookingIds,
+    bookingQueue,
     bookingResults: [],
     exerciseAttempt: 0,
     exerciseProcessed: false,
@@ -1197,6 +1316,16 @@ if (!ctxFromMsg) {
       mode: initialCtx.mode,
       bookingQueueSize: Array.isArray(initialCtx.bookingQueue) ? initialCtx.bookingQueue.length : 0,
       exerciseId: initialCtx.exerciseId || null,
+    });
+    return finalizeTask(initialCtx);
+  }
+  if (initialCtx.actorBookingId && !toStr(cleanupAuth.authHeader)) {
+    initialCtx.blockLocalMutation = true;
+    initialCtx.blockReason = "end_user_auth_missing";
+    initialCtx.forceVivaErrors = true;
+    appendTrace(initialCtx, {
+      step: "blocked_end_user_auth_missing",
+      bookingId: initialCtx.actorBookingId,
     });
     return finalizeTask(initialCtx);
   }
@@ -1322,54 +1451,17 @@ if (ctx.step === "cancel_booking_probe") {
   }
 
   if (statusCode === 404) {
-    const cancelRequest = buildProbe404FallbackDeleteRequest(ctx, bookingId);
-    if (!cancelRequest || cancelRequest.unsupportedReason) {
-      ctx.blockLocalMutation = true;
-      ctx.blockReason = cancelRequest?.unsupportedCode || ctx.blockReason || "missing_cancellation_action";
-      appendTrace(ctx, {
-        step: "cancel_booking_probe_unsupported",
-        bookingId,
-        clientId,
-        statusCode,
-        unsupportedReason: cancelRequest?.unsupportedReason || null,
-        unsupportedCode: cancelRequest?.unsupportedCode || null,
-        response: clone(msg.payload || null),
-      });
-      return pushBookingFailureAndContinue(ctx, {
-        bookingId,
-        clientId,
-        method: "generic_booking",
-        statusCode,
-        unsupportedReason: cancelRequest?.unsupportedReason || "Missing cancellation action",
-        response: msg.payload || null,
-      });
-    }
-    ctx.currentCancelRequest = cancelRequest;
-    if (cancelRequest.refundMethod && !ctx.selectedRefundMethod) {
-      ctx.selectedRefundMethod = cancelRequest.refundMethod;
-    }
-    if (cancelRequest.refundMessage && !ctx.refundMessage) {
-      ctx.refundMessage = cancelRequest.refundMessage;
-    }
-    ctx.step = "cancel_booking";
     appendTrace(ctx, {
       step: "cancel_booking_probe_not_found",
       bookingId,
       clientId,
       statusCode,
       response: clone(msg.payload || null),
-      attemptLabel: cancelRequest.label,
     });
-    appendTrace(ctx, {
-      step: "cancel_booking_request",
-      bookingId,
-      clientId,
+    return startBookingVerification(ctx, bookingId, clientId, {
       statusCode,
-      attemptLabel: cancelRequest.label,
-      refundMethod: cancelRequest.refundMethod || null,
-      fallbackFromProbe404: true,
+      response: msg.payload || null,
     });
-    return adminRequest(ctx, cancelRequest.method, cancelRequest.path, cancelRequest.payload);
   }
 
   if (!isOk(statusCode)) {
@@ -1389,7 +1481,12 @@ if (ctx.step === "cancel_booking_probe") {
     });
   }
 
-  const cancelRequest = pickBookingCancellationRequest(ctx, bookingId, msg.payload || null);
+  const cancelRequest = pickBookingCancellationRequest(
+    ctx,
+    bookingId,
+    clientId,
+    msg.payload || null,
+  );
   if (!cancelRequest || cancelRequest.unsupportedReason) {
     ctx.blockLocalMutation = true;
     ctx.blockReason = cancelRequest?.unsupportedCode || ctx.blockReason || "unsupported_refund_method";
@@ -1426,9 +1523,10 @@ if (ctx.step === "cancel_booking_probe") {
     clientId,
     statusCode,
     attemptLabel: cancelRequest.label,
+    scope: cancelRequest.scope,
     refundMethod: cancelRequest.refundMethod || null,
   });
-  return adminRequest(ctx, cancelRequest.method, cancelRequest.path, cancelRequest.payload);
+  return bookingApiRequest(ctx, cancelRequest);
 }
 
 if (ctx.step === "cancel_booking") {
@@ -1455,44 +1553,6 @@ if (ctx.step === "cancel_booking") {
       alreadyCancelled: !isOk(msg.statusCode),
       response: isOk(msg.statusCode) ? null : (msg.payload || null),
     });
-  }
-
-  if (
-    statusCode === 404
-    && ["delete_plain", "delete_plain_probe_404"].includes(cancelRequest?.label)
-    && toStr(ctx.exerciseId)
-  ) {
-    const exerciseScopedRequest = buildExerciseScopedDeleteBookingRequest(
-      toStr(ctx.exerciseId),
-      bookingId,
-    );
-    ctx.currentCancelRequest = exerciseScopedRequest;
-    appendTrace(ctx, {
-      step: "cancel_booking_retry_exercise_scope",
-      bookingId,
-      clientId,
-      exerciseId: toStr(ctx.exerciseId),
-      statusCode,
-      previousAttemptLabel: cancelRequest?.label || null,
-      attemptLabel: exerciseScopedRequest.label,
-      response: clone(msg.payload || null),
-    });
-    appendTrace(ctx, {
-      step: "cancel_booking_request",
-      bookingId,
-      clientId,
-      exerciseId: toStr(ctx.exerciseId),
-      statusCode,
-      attemptLabel: exerciseScopedRequest.label,
-      refundMethod: null,
-      retryAfterBooking404: true,
-    });
-    return adminRequest(
-      ctx,
-      exerciseScopedRequest.method,
-      exerciseScopedRequest.path,
-      exerciseScopedRequest.payload,
-    );
   }
 
   if (statusCode === 404) {
@@ -1542,26 +1602,39 @@ if (ctx.step === "verify_booking_cancelled") {
     : null;
 
   let verifiedCancelled = false;
-  let verifiedAbsent = false;
   let activeBooking = false;
 
-  if (statusCode === 404) {
-    verifiedAbsent = true;
-  } else if (isOk(statusCode) && verifyScope === "client") {
+  if (statusCode === 404 && verifyScope === "client" && toStr(ctx.exerciseId)) {
+    const historyRequest = buildExerciseBookingsVerifyRequest(toStr(ctx.exerciseId));
+    ctx.currentVerifyRequest = {
+      ...historyRequest,
+      scope: "exercise",
+      originAlreadyCancelled: verifyRequest?.originAlreadyCancelled === true,
+      originStatusCode: verifyRequest?.originStatusCode,
+    };
+    appendTrace(ctx, {
+      step: "cancel_booking_verify_history_request",
+      bookingId,
+      clientId,
+      exerciseId: toStr(ctx.exerciseId),
+      previousStatusCode: statusCode,
+      attemptLabel: historyRequest.label,
+    });
+    return adminRequest(ctx, historyRequest.method, historyRequest.path, historyRequest.payload);
+  }
+
+  if (isOk(statusCode) && verifyScope === "client") {
     verifiedCancelled = isCancelledBookingRow(msg.payload);
     activeBooking = !verifiedCancelled;
   } else if (isOk(statusCode) && verifyScope === "exercise") {
     const bookingRow = findBookingRow(msg.payload, bookingId);
-    verifiedAbsent = !bookingRow;
     verifiedCancelled = Boolean(bookingRow && isCancelledBookingRow(bookingRow));
     activeBooking = Boolean(bookingRow && !verifiedCancelled);
   }
 
-  if (verifiedCancelled || verifiedAbsent) {
+  if (verifiedCancelled) {
     appendTrace(ctx, {
-      step: verifiedAbsent
-        ? "cancel_booking_verified_absent"
-        : "cancel_booking_verified_cancelled",
+      step: "cancel_booking_verified_cancelled",
       bookingId,
       clientId,
       exerciseId: toStr(ctx.exerciseId),
@@ -1573,7 +1646,7 @@ if (ctx.step === "verify_booking_cancelled") {
       clientId,
       method: "generic_booking",
       refundMethod: cancelRequest?.refundMethod || null,
-      verifiedAbsent,
+      verifiedAbsent: false,
       alreadyCancelled: verifyRequest?.originAlreadyCancelled === true,
       statusCode,
     });
@@ -1612,9 +1685,19 @@ if (ctx.step === "cancel_exercise") {
       attempt,
       statusCode: msg.statusCode,
     });
-    ctx.exerciseProcessed = true;
-    ctx.exerciseCancelled = true;
-    return finalizeTask(ctx);
+    ctx.step = "verify_exercise_cancelled";
+    ctx.exerciseCancelOriginStatusCode = Number(msg.statusCode);
+    appendTrace(ctx, {
+      step: "verify_exercise_cancelled_request",
+      exerciseId: ctx.exerciseId,
+      attempt,
+    });
+    return adminRequest(
+      ctx,
+      "GET",
+      `/exercises/${encodeURIComponent(ctx.exerciseId)}`,
+      undefined,
+    );
   }
 
   if (attempt < 2) {
@@ -1641,6 +1724,55 @@ if (ctx.step === "cancel_exercise") {
   });
   ctx.exerciseProcessed = true;
   ctx.exerciseCancelled = false;
+  return finalizeTask(ctx);
+}
+
+if (ctx.step === "verify_exercise_cancelled") {
+  const attempt = Number.isFinite(Number(ctx.exerciseAttempt)) ? Number(ctx.exerciseAttempt) : 0;
+  const statusCode = Number(msg.statusCode);
+  const verifiedCancelled = statusCode === 404 || (
+    isOk(statusCode) && isCancelledExercise(msg.payload)
+  );
+  if (verifiedCancelled) {
+    appendTrace(ctx, {
+      step: statusCode === 404
+        ? "verify_exercise_cancelled_absent"
+        : "verify_exercise_cancelled_success",
+      exerciseId: ctx.exerciseId,
+      attempt,
+      statusCode,
+    });
+    ctx.exerciseProcessed = true;
+    ctx.exerciseCancelled = true;
+    return finalizeTask(ctx);
+  }
+
+  appendTrace(ctx, {
+    step: isOk(statusCode)
+      ? "verify_exercise_still_active"
+      : "verify_exercise_cancelled_failed",
+    exerciseId: ctx.exerciseId,
+    attempt,
+    statusCode,
+    response: clone(msg.payload || null),
+  });
+  if (attempt < 2) {
+    const nextAttempt = attempt + 1;
+    ctx.exerciseAttempt = nextAttempt;
+    const attemptPayload = buildExerciseAttempt(ctx, nextAttempt);
+    ctx.step = "cancel_exercise";
+    appendTrace(ctx, {
+      step: "cancel_exercise_retry_after_readback",
+      exerciseId: ctx.exerciseId,
+      attempt: nextAttempt,
+      attemptLabel: attemptPayload.label,
+    });
+    return adminRequest(ctx, attemptPayload.method, attemptPayload.path, attemptPayload.payload);
+  }
+
+  ctx.exerciseProcessed = true;
+  ctx.exerciseCancelled = false;
+  ctx.forceVivaErrors = true;
   return finalizeTask(ctx);
 }
 

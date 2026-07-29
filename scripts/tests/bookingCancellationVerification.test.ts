@@ -76,10 +76,16 @@ test("self-removal records an unverified booking as failure instead of local suc
 
 test("organizer cleanup carries the selected cancellation action through Viva execution", () => {
   assert.match(cabinetSource, /cancellationActionId: action\.id/);
+  assert.match(cabinetSource, /actorBookingId: bookingId/);
   assert.match(apiClientSource, /cancellationActionId\?: BookingCancellationAction\["id"\]/);
+  assert.match(apiClientSource, /actorBookingId\?: string/);
+  assert.match(apiClientSource, /auth: true/);
   assert.match(cleanupQuerySource, /cancellationActionId/);
+  assert.match(cleanupQuerySource, /actorBookingId/);
   assert.match(cleanupPrepareSource, /cancellationActionId/);
+  assert.match(cleanupPrepareSource, /actorMatchesOrganizer/);
   assert.match(cleanupRouterSource, /ctx\.cancellationActionId/);
-  assert.match(cleanupRouterSource, /delete_subscription_probe_404/);
-  assert.match(cleanupRouterSource, /missing_cancellation_action/);
+  assert.match(cleanupRouterSource, /END_USER_API/);
+  assert.match(cleanupRouterSource, /adminRefundMethod: "SERVICE"/);
+  assert.doesNotMatch(cleanupRouterSource, /ADMIN_API.*\/bookings\/\$\{encodedId\}/);
 });
