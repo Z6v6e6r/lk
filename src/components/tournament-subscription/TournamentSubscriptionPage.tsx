@@ -1094,7 +1094,7 @@ export default function TournamentSubscriptionPage({
     }
 
     const targetStatus = statusByCounterKey[counterKey || boundPlanId];
-    if (targetStatus && (targetStatus.remainingCount <= 0 || !targetStatus.canPurchase)) {
+    if (targetStatus && !targetStatus.unlimited && (targetStatus.remainingCount <= 0 || !targetStatus.canPurchase)) {
       setBuyErrorByDisplayId((prev) => ({ ...prev, [plan.id]: "Лимит абонементов уже исчерпан" }));
       return;
     }
@@ -1256,6 +1256,10 @@ export default function TournamentSubscriptionPage({
               : totalLimit,
           );
           const remainingCount = Math.max(0, status?.remainingCount ?? displayTotalLimit);
+          const hideTemporaryUnlimitedCounter = (
+            (plan.counterKey === "ra" || plan.counterKey === "friendship")
+            && status?.unlimited !== false
+          );
           const remainingValueText = plan.remainingValueText
             || (
               status
@@ -1322,14 +1326,17 @@ export default function TournamentSubscriptionPage({
               )}
 
               <div className={`tournament-subscription-purchase-block ${plan.artworkSrc ? "tournament-subscription-purchase-block--image" : ""}`}>
-                {!plan.hideRemainingBlock && (
+                {!plan.hideRemainingBlock && !hideTemporaryUnlimitedCounter && (
                   <div className="tournament-subscription-remaining-wrap">
                     <span className="tournament-subscription-remaining-label">{plan.remainingLabel}</span>
                     <span className="tournament-subscription-remaining-value">{remainingValueText}</span>
                   </div>
                 )}
 
-                {(plan.counterKey === "ra" || plan.counterKey === "friendship") && status && remainingCount === 0 && (
+                {!hideTemporaryUnlimitedCounter
+                  && (plan.counterKey === "ra" || plan.counterKey === "friendship")
+                  && status
+                  && remainingCount === 0 && (
                   <DailyDropCountdown onDrop={loadStatus} />
                 )}
 

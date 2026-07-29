@@ -81,4 +81,7 @@ test("limited storefront buttons rely on live availability instead of hardcoded 
   assert.doesNotMatch(sourceText, /usesTrackedCounter\s*&&\s*!plan\.hideRemainingBlock/);
   assert.match(sourceText, /trackedStatus && !trackedStatus\.unlimited/);
   assert.match(sourceText, /status && !status\.unlimited/);
+  assert.match(sourceText, /targetStatus && !targetStatus\.unlimited/);
+  assert.match(sourceText, /status\?\.unlimited !== false/);
+  assert.match(sourceText, /!plan\.hideRemainingBlock && !hideTemporaryUnlimitedCounter/);
 });
