@@ -29,13 +29,13 @@ test("QR code is sent to both page analytics and the paid-sale record", () => {
   assert.match(router, /trainerQrCode: toStr\(ctx\.trainerQrCode\)/);
 });
 
-test("temporary unlimited window applies only to Friendship and RA on July 29 Moscow time", () => {
+test("temporary unlimited window applies only to Friendship and RA on July 30 Moscow time", () => {
   for (const file of [
     "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
   ]) {
     const source = fs.readFileSync(file, "utf8");
-    assert.match(source, /AB_LETO_TEMPORARY_UNLIMITED_DATES = new Set\(\["2026-07-29"\]\)/);
+    assert.match(source, /AB_LETO_TEMPORARY_UNLIMITED_DATES = new Set\(\["2026-07-30"\]\)/);
     assert.match(source, /counterKey === "friendship" \|\| counterKey === "ra"/);
     assert.match(source, /isAbLetoTemporaryUnlimited\(counterKey\)/);
   }

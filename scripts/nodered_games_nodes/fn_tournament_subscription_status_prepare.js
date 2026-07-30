@@ -6,7 +6,7 @@ const AB_LETO_DAILY_DROP_LIMIT = 5;
 const AB_LETO_DAILY_DROP_START_HOUR = 10;
 const AB_LETO_DAILY_DROP_TIME_ZONE = "Europe/Moscow";
 const AB_LETO_DAILY_DROP_COUNTER_KEYS = new Set(["friendship", "ra"]);
-const AB_LETO_TEMPORARY_UNLIMITED_DATES = new Set(["2026-07-29"]);
+const AB_LETO_TEMPORARY_UNLIMITED_DATES = new Set(["2026-07-30"]);
 
 const DEFAULT_VISIBLE_COUNTER_KEYS = ["friendship", "sport", "academy", "ra", "energy5"];
 const AB_LETO_TOTAL_LIMIT_DEFAULTS = {
