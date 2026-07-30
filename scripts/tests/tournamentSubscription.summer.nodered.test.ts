@@ -173,7 +173,7 @@ test("summer subscription purchase-prepare uses default reservation window witho
   assert.equal(ctx.reservationMinutes, 30);
 });
 
-test("Friendship and RA are unlimited only during the Moscow July 29 window", () => {
+test("Friendship and RA are unlimited only during the Moscow July 30 window", () => {
   const createPurchaseContext = (nowIso: string, counterKey: string) => withFixedNow(nowIso, () => {
     const out = runNodeRedFunction(
       "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
@@ -189,10 +189,11 @@ test("Friendship and RA are unlimited only during the Moscow July 29 window", ()
     return asRecord(asRecord(out[0])._summerSubscriptionCtx);
   });
 
-  assert.equal(createPurchaseContext("2026-07-28T21:00:00.000Z", "friendship").unlimited, true);
-  assert.equal(createPurchaseContext("2026-07-29T20:59:59.000Z", "ra").unlimited, true);
-  assert.equal(createPurchaseContext("2026-07-29T21:00:00.000Z", "friendship").unlimited, false);
-  assert.equal(createPurchaseContext("2026-07-29T12:00:00.000Z", "sport").unlimited, false);
+  assert.equal(createPurchaseContext("2026-07-29T20:59:59.000Z", "friendship").unlimited, false);
+  assert.equal(createPurchaseContext("2026-07-29T21:00:00.000Z", "friendship").unlimited, true);
+  assert.equal(createPurchaseContext("2026-07-30T20:59:59.000Z", "ra").unlimited, true);
+  assert.equal(createPurchaseContext("2026-07-30T21:00:00.000Z", "friendship").unlimited, false);
+  assert.equal(createPurchaseContext("2026-07-30T12:00:00.000Z", "sport").unlimited, false);
 });
 
 test("summer subscription purchase-prepare binds buttons to Leto Padel products", () => {
@@ -308,17 +309,17 @@ test("summer subscription purchase-prepare keeps five-seat daily drops for Frien
   ];
 
   for (const expected of cases) {
-    const out = runNodeRedFunction(
-      "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
-      {
-        payload: {
-          clientPhone: "79990000000",
-          counterKey: expected.counterKey,
-          paymentRef: `payment-ref-limit-${expected.counterKey}`,
+    const out = withFixedNow("2026-07-31T12:00:00.000Z", () => runNodeRedFunction(
+        "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+        {
+          payload: {
+            clientPhone: "79990000000",
+            counterKey: expected.counterKey,
+            paymentRef: `payment-ref-limit-${expected.counterKey}`,
+          },
+          req: { query: {} },
         },
-        req: { query: {} },
-      },
-    ) as unknown[];
+      )) as unknown[];
 
     const ctx = asRecord(asRecord(out[0])._summerSubscriptionCtx);
     assert.equal(ctx.counterKey, expected.counterKey);
@@ -364,10 +365,10 @@ test("summer subscription status exposes Energy-5 as tracked and unlimited", () 
 });
 
 test("summer subscription status ignores cumulative rows for daily-drop counters", () => {
-  const prepareOut = runNodeRedFunction(
-    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
-    { req: { query: {} } },
-  ) as unknown[];
+  const prepareOut = withFixedNow("2026-07-31T12:00:00.000Z", () => runNodeRedFunction(
+      "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+      { req: { query: {} } },
+    )) as unknown[];
   const prepareCtx = asRecord(asRecord(prepareOut[0])._summerSubscriptionCtx);
   const paidRows = [
     ...Array.from({ length: 42 }, () => ({
@@ -416,10 +417,10 @@ test("summer subscription status ignores cumulative rows for daily-drop counters
 
 test("summer subscription status counts only the current Friendship and RA daily drops", () => {
   for (const counterKey of ["friendship", "ra"]) {
-    const prepareOut = runNodeRedFunction(
-      "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
-      { req: { query: { counterKey } } },
-    ) as unknown[];
+    const prepareOut = withFixedNow("2026-07-31T12:00:00.000Z", () => runNodeRedFunction(
+        "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+        { req: { query: { counterKey } } },
+      )) as unknown[];
     const prepareCtx = asRecord(asRecord(prepareOut[0])._summerSubscriptionCtx);
 
     const counter = (asRecord(prepareCtx).counters as Array<Record<string, unknown>>)
