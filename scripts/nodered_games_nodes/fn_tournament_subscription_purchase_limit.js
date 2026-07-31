@@ -1,4 +1,5 @@
 const TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
+const AB_LETO_DAILY_DROP_TIME_ZONE = "Europe/Moscow";
 const MANUAL_PAID_COUNT_DEFAULTS = {
   academy: 4,
   ra: 37,
@@ -25,6 +26,19 @@ const toInt = (value, fallback) => {
   const parsed = Number(text.replace(",", "."));
   if (!Number.isFinite(parsed)) return fallback;
   return Math.floor(parsed);
+};
+
+const resolveNextDailyDropAt = (completedAtTs) => {
+  if (!Number.isFinite(completedAtTs)) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: AB_LETO_DAILY_DROP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(completedAtTs));
+  const fields = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const dropTs = Date.parse(`${fields.year}-${fields.month}-${fields.day}T10:00:00+03:00`);
+  return new Date(completedAtTs < dropTs ? dropTs : dropTs + 24 * 60 * 60 * 1000).toISOString();
 };
 
 const resolveHttpTimeoutMs = () => {
@@ -136,6 +150,11 @@ const rows = Array.isArray(msg.payload) ? msg.payload : [];
 const now = Date.now();
 let paidCount = toStr(ctx?.inventoryId) ? 0 : readManualPaidCount(ctx?.counterKey);
 let reservedCount = 0;
+let launchPaidCount = 0;
+let launchReservedCount = 0;
+let dailyPaidCount = 0;
+let dailyReservedCount = 0;
+const launchPaidTimestamps = [];
 
 for (const row of rows) {
   if (!row || typeof row !== "object") continue;
@@ -143,7 +162,20 @@ for (const row of rows) {
   if (!matchesConfiguredProduct(row, ctx.productId)) continue;
 
   const status = normalizeStatus(row.status);
+  const stagedRelease = ctx.stagedRelease === true;
+  const releasePhase = toStr(row.releasePhase) === "daily" ? "daily" : "launch";
+  const isCurrentDailyDrop = releasePhase === "daily"
+    && toStr(row.dailyDropDate) === toStr(ctx.dailyDropDate);
   if (status === "PAID") {
+    if (stagedRelease) {
+      if (releasePhase === "launch") {
+        launchPaidCount += 1;
+        const paidAtTs = toTs(row.paidAt) ?? toTs(row.updatedAt) ?? toTs(row.createdAt);
+        if (paidAtTs != null) launchPaidTimestamps.push(paidAtTs);
+      }
+      if (isCurrentDailyDrop) dailyPaidCount += 1;
+      continue;
+    }
     paidCount += 1;
     continue;
   }
@@ -152,11 +184,36 @@ for (const row of rows) {
   const expiresAtTs = toTs(row.expiresAt);
   const activePending = expiresAtTs == null || expiresAtTs > now;
   if (activePending) {
+    if (stagedRelease) {
+      if (releasePhase === "launch") launchReservedCount += 1;
+      if (isCurrentDailyDrop) dailyReservedCount += 1;
+      continue;
+    }
     reservedCount += 1;
   }
 }
 
-const totalLimit = Math.max(0, Math.floor(Number(ctx.totalLimit) || 0));
+const stagedRelease = ctx.stagedRelease === true;
+const launchLimit = Math.max(0, Math.floor(Number(ctx.launchLimit) || 0));
+const dailyLimit = Math.max(0, Math.floor(Number(ctx.dailyLimit) || 0));
+launchPaidTimestamps.sort((left, right) => left - right);
+const launchComplete = stagedRelease && launchPaidCount >= launchLimit;
+const launchCompletedAtTs = launchComplete && launchPaidTimestamps.length >= launchLimit
+  ? launchPaidTimestamps[launchLimit - 1]
+  : null;
+const launchCompletedAt = launchCompletedAtTs == null ? null : new Date(launchCompletedAtTs).toISOString();
+const dailyDropStartsAt = launchComplete ? resolveNextDailyDropAt(launchCompletedAtTs) : null;
+const dailyDropActive = Boolean(dailyDropStartsAt && Date.parse(dailyDropStartsAt) <= now);
+const releasePhase = stagedRelease
+  ? (dailyDropActive ? "daily" : launchComplete ? "daily_pending" : "launch")
+  : null;
+if (stagedRelease) {
+  paidCount = dailyDropActive ? dailyPaidCount : launchPaidCount;
+  reservedCount = dailyDropActive ? dailyReservedCount : launchReservedCount;
+}
+const totalLimit = stagedRelease
+  ? (dailyDropActive ? dailyLimit : launchLimit)
+  : Math.max(0, Math.floor(Number(ctx.totalLimit) || 0));
 const takenCount = paidCount + reservedCount;
 const unlimited = ctx.unlimited === true;
 const remainingCount = unlimited ? null : Math.max(totalLimit - takenCount, 0);
@@ -173,9 +230,25 @@ if (!unlimited && remainingCount <= 0) {
     paidCount,
     reservedCount,
     remainingCount,
+    releasePhase,
+    dailyDropActive,
+    launchLimit,
+    launchPaidCount,
+    launchReservedCount,
+    launchCompletedAt,
+    dailyLimit,
+    dailyDropDate: toStr(ctx.dailyDropDate),
+    dailyDropStartsAt,
   });
 }
 
+ctx.releasePhase = releasePhase;
+ctx.dailyDropActive = dailyDropActive;
+ctx.totalLimit = totalLimit;
+ctx.launchPaidCount = launchPaidCount;
+ctx.launchReservedCount = launchReservedCount;
+ctx.launchCompletedAt = launchCompletedAt;
+ctx.dailyDropStartsAt = dailyDropStartsAt;
 ctx.remainingBefore = remainingCount;
 ctx.step = "token_purchase";
 ctx.httpRequestTimeoutMs = resolveHttpTimeoutMs();
@@ -200,6 +273,13 @@ const debugMsg = Object.assign({}, msg, {
     totalLimit,
     takenCount,
     remainingBefore: remainingCount,
+    releasePhase,
+    dailyDropActive,
+    launchPaidCount,
+    launchReservedCount,
+    launchCompletedAt,
+    dailyDropDate: toStr(ctx.dailyDropDate),
+    dailyDropStartsAt,
     vivaTimeoutMs: ctx.httpRequestTimeoutMs,
   },
 });

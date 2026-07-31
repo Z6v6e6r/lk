@@ -6,7 +6,10 @@ const AB_LETO_DAILY_DROP_LIMIT = 5;
 const AB_LETO_DAILY_DROP_START_HOUR = 10;
 const AB_LETO_DAILY_DROP_TIME_ZONE = "Europe/Moscow";
 const AB_LETO_DAILY_DROP_COUNTER_KEYS = new Set(["friendship", "ra"]);
-const AB_LETO_TEMPORARY_UNLIMITED_DATES = new Set(["2026-07-29"]);
+const AB_LETO_STAGED_RELEASE_START_DATE = "2026-08-01";
+const AB_LETO_STAGED_INVENTORY_ID = "ab_leto_2026_100_then_7_v1";
+const AB_LETO_STAGED_LAUNCH_LIMIT = 100;
+const AB_LETO_STAGED_DAILY_DROP_LIMIT = 7;
 const DEFAULT_RESERVATION_MINUTES = 30;
 const PAYMENT_REF_QUERY_KEY = "summerPaymentRef";
 const TRAINER_QR_CODE_PATTERN = /^TR-(?:00[1-9]|0[1-4]\d|050)$/;
@@ -126,9 +129,8 @@ const resolveMoscowDate = (now = new Date(Date.now())) => {
   return `${fields.year}-${fields.month}-${fields.day}`;
 };
 
-const isAbLetoTemporaryUnlimited = (counterKey, now = new Date(Date.now())) => (
-  (counterKey === "friendship" || counterKey === "ra")
-  && AB_LETO_TEMPORARY_UNLIMITED_DATES.has(resolveMoscowDate(now))
+const isAbLetoStagedReleaseActive = (now = new Date(Date.now())) => (
+  resolveMoscowDate(now) >= AB_LETO_STAGED_RELEASE_START_DATE
 );
 
 const readAbLetoInventoryId = (counterKey = null) => {
@@ -138,7 +140,25 @@ const readAbLetoInventoryId = (counterKey = null) => {
   if (!AB_LETO_DAILY_DROP_COUNTER_KEYS.has(normalizedCounterKey)) {
     return baseInventoryId;
   }
+  if (isAbLetoStagedReleaseActive()) {
+    return `${AB_LETO_STAGED_INVENTORY_ID}_${normalizedCounterKey}`;
+  }
   return `${baseInventoryId}_${normalizedCounterKey}_${resolveDailyDropDate()}`;
+};
+
+const withAbLetoStagedRelease = (counter) => {
+  const counterKey = String(counter?.counterKey || "").trim().toLowerCase();
+  if (!AB_LETO_DAILY_DROP_COUNTER_KEYS.has(counterKey) || !isAbLetoStagedReleaseActive()) {
+    return counter;
+  }
+  return Object.assign({}, counter, {
+    stagedRelease: true,
+    releaseStartDate: AB_LETO_STAGED_RELEASE_START_DATE,
+    launchLimit: AB_LETO_STAGED_LAUNCH_LIMIT,
+    dailyLimit: AB_LETO_STAGED_DAILY_DROP_LIMIT,
+    dailyDropDate: resolveDailyDropDate(),
+    totalLimit: AB_LETO_STAGED_LAUNCH_LIMIT,
+  });
 };
 
 const toInt = (value, fallback) => {
@@ -250,10 +270,9 @@ const readSummerPlanConfig = (planKey) => {
     };
   }
 
-  return {
+  return withAbLetoStagedRelease({
     counterKey: "friendship",
     inventoryId: readAbLetoInventoryId(planKey),
-    unlimited: isAbLetoTemporaryUnlimited("friendship"),
     saleType: "summer_campaign",
     planKey: "friendship",
     campaignKey:
@@ -271,7 +290,7 @@ const readSummerPlanConfig = (planKey) => {
     ),
     manualPaidCount: 0,
     totalLimit: toPlanLimit(global.get("summer_subscription_friendship_limit"), getDefaultTotalLimit("friendship")),
-  };
+  });
 };
 
 const readSiriusFriendshipConfig = (friendshipPlan) => ({
@@ -317,10 +336,10 @@ const readSiriusFriendshipConfig = (friendshipPlan) => ({
 const readDirectCounterConfig = (counterKey) => {
   const base = DIRECT_COUNTER_DEFAULTS[counterKey];
   if (!base) return null;
-  return {
+  return withAbLetoStagedRelease({
     counterKey,
     inventoryId: readAbLetoInventoryId(counterKey),
-    unlimited: counterKey === "energy5" || isAbLetoTemporaryUnlimited(counterKey),
+    unlimited: counterKey === "energy5",
     saleType: "direct_product",
     planKey: null,
     campaignKey: null,
@@ -338,7 +357,7 @@ const readDirectCounterConfig = (counterKey) => {
     totalLimit: counterKey === "energy5"
       ? 0
       : toPlanLimit(global.get(`summer_subscription_${counterKey}_limit`), getDefaultTotalLimit(counterKey)),
-  };
+  });
 };
 
 const buildCounterConfigMap = () => {
@@ -542,6 +561,11 @@ msg._summerSubscriptionCtx = {
   productId,
   productCostMinor: activeCounter.productCostMinor,
   totalLimit,
+  stagedRelease: activeCounter.stagedRelease === true,
+  releaseStartDate: toStr(activeCounter.releaseStartDate),
+  launchLimit: Math.max(0, Math.floor(Number(activeCounter.launchLimit) || 0)),
+  dailyLimit: Math.max(0, Math.floor(Number(activeCounter.dailyLimit) || 0)),
+  dailyDropDate: toStr(activeCounter.dailyDropDate),
   reservationMinutes,
   paymentRef,
   clientPhone,

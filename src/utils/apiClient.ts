@@ -3397,6 +3397,17 @@ export interface TournamentSubscriptionStatus {
   takenCount: number;
   remainingCount: number;
   canPurchase: boolean;
+  releasePhase: string | null;
+  dailyDropActive: boolean;
+  releaseStartDate: string | null;
+  launchLimit: number;
+  launchPaidCount: number;
+  launchReservedCount: number;
+  launchRemainingCount: number;
+  launchCompletedAt: string | null;
+  dailyLimit: number;
+  dailyDropDate: string | null;
+  dailyDropStartsAt: string | null;
   priceMinor: number | null;
   price: number | null;
   updatedAt: string | null;
@@ -9146,6 +9157,17 @@ function normalizeTournamentSubscriptionStatusEntry(
     takenCount,
     remainingCount,
     canPurchase: canPurchaseRaw ?? remainingCount > 0,
+    releasePhase: pickString(data, ["releasePhase"]),
+    dailyDropActive: toBoolean(data.dailyDropActive) ?? false,
+    releaseStartDate: pickString(data, ["releaseStartDate"]),
+    launchLimit: Math.max(0, Math.floor(pickNumeric(data, ["launchLimit"]) ?? 0)),
+    launchPaidCount: Math.max(0, Math.floor(pickNumeric(data, ["launchPaidCount"]) ?? 0)),
+    launchReservedCount: Math.max(0, Math.floor(pickNumeric(data, ["launchReservedCount"]) ?? 0)),
+    launchRemainingCount: Math.max(0, Math.floor(pickNumeric(data, ["launchRemainingCount"]) ?? 0)),
+    launchCompletedAt: pickString(data, ["launchCompletedAt"]),
+    dailyLimit: Math.max(0, Math.floor(pickNumeric(data, ["dailyLimit"]) ?? 0)),
+    dailyDropDate: pickString(data, ["dailyDropDate"]),
+    dailyDropStartsAt: pickString(data, ["dailyDropStartsAt"]),
     priceMinor: priceMinor == null ? null : Math.max(0, Math.round(priceMinor)),
     price,
     updatedAt: pickString(data, ["updatedAt"]),

@@ -11,6 +11,19 @@ const toTs = (value) => {
   return Number.isFinite(ts) ? ts : null;
 };
 
+const resolveNextDailyDropAt = (completedAtTs) => {
+  if (!Number.isFinite(completedAtTs)) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(completedAtTs));
+  const fields = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const dropTs = Date.parse(`${fields.year}-${fields.month}-${fields.day}T10:00:00+03:00`);
+  return new Date(completedAtTs < dropTs ? dropTs : dropTs + 24 * 60 * 60 * 1000).toISOString();
+};
+
 const normalizeCounterKey = (value) => {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return null;
@@ -108,6 +121,18 @@ const states = counters.map((counter) => {
     campaignKey: toStr(counter.campaignKey),
     productId: toStr(counter.productId),
     productName: toStr(counter.productName),
+    stagedRelease: counter.stagedRelease === true,
+    releaseStartDate: toStr(counter.releaseStartDate),
+    releasePhase: null,
+    dailyDropActive: false,
+    launchLimit: Math.max(0, Math.floor(Number(counter.launchLimit) || 0)),
+    launchPaidCount: 0,
+    launchReservedCount: 0,
+    launchRemainingCount: 0,
+    launchCompletedAt: null,
+    dailyLimit: Math.max(0, Math.floor(Number(counter.dailyLimit) || 0)),
+    dailyDropDate: toStr(counter.dailyDropDate),
+    dailyDropStartsAt: null,
     totalLimit,
     paidCount: manualPaidCount,
     reservedCount: 0,
@@ -119,6 +144,9 @@ const states = counters.map((counter) => {
     updatedAt: refreshedAt,
     sourceUpdatedAt: null,
     _lastUpdatedAtTs: null,
+    _dailyPaidCount: 0,
+    _dailyReservedCount: 0,
+    _launchPaidTimestamps: [],
   };
 });
 
@@ -127,6 +155,9 @@ rows.forEach((doc) => {
   if (!state) return;
 
   const status = normalizeStatus(doc.status);
+  const releasePhase = toStr(doc.releasePhase) === "daily" ? "daily" : "launch";
+  const isCurrentDailyDrop = releasePhase === "daily"
+    && toStr(doc.dailyDropDate) === state.dailyDropDate;
   const expiresAtTs = toTs(doc.expiresAt);
   const updatedAtTs = toTs(doc.updatedAt) ?? toTs(doc.createdAt);
   if (updatedAtTs != null) {
@@ -149,6 +180,15 @@ rows.forEach((doc) => {
   }
 
   if (status === "PAID") {
+    if (state.stagedRelease) {
+      if (releasePhase === "launch") {
+        state.launchPaidCount += 1;
+        const paidAtTs = toTs(doc.paidAt) ?? toTs(doc.updatedAt) ?? toTs(doc.createdAt);
+        if (paidAtTs != null) state._launchPaidTimestamps.push(paidAtTs);
+      }
+      if (isCurrentDailyDrop) state._dailyPaidCount += 1;
+      return;
+    }
     state.paidCount += 1;
     return;
   }
@@ -156,11 +196,34 @@ rows.forEach((doc) => {
   const isPending = status === "PAYMENT_PENDING";
   const isActivePending = isPending && (expiresAtTs == null || expiresAtTs > nowTs);
   if (isActivePending) {
+    if (state.stagedRelease) {
+      if (releasePhase === "launch") state.launchReservedCount += 1;
+      if (isCurrentDailyDrop) state._dailyReservedCount += 1;
+      return;
+    }
     state.reservedCount += 1;
   }
 });
 
 const updateMessages = states.map((state) => {
+  if (state.stagedRelease) {
+    state._launchPaidTimestamps.sort((left, right) => left - right);
+    const launchComplete = state.launchPaidCount >= state.launchLimit;
+    const launchCompletedAtTs = launchComplete && state._launchPaidTimestamps.length >= state.launchLimit
+      ? state._launchPaidTimestamps[state.launchLimit - 1]
+      : null;
+    state.launchCompletedAt = launchCompletedAtTs == null ? null : new Date(launchCompletedAtTs).toISOString();
+    state.dailyDropStartsAt = launchComplete ? resolveNextDailyDropAt(launchCompletedAtTs) : null;
+    state.dailyDropActive = Boolean(state.dailyDropStartsAt && Date.parse(state.dailyDropStartsAt) <= nowTs);
+    state.releasePhase = state.dailyDropActive ? "daily" : launchComplete ? "daily_pending" : "launch";
+    state.launchRemainingCount = Math.max(
+      state.launchLimit - state.launchPaidCount - state.launchReservedCount,
+      0,
+    );
+    state.totalLimit = state.dailyDropActive ? state.dailyLimit : state.launchLimit;
+    state.paidCount = state.dailyDropActive ? state._dailyPaidCount : state.launchPaidCount;
+    state.reservedCount = state.dailyDropActive ? state._dailyReservedCount : state.launchReservedCount;
+  }
   state.takenCount = state.paidCount + state.reservedCount;
   state.remainingCount = state.unlimited ? 0 : Math.max(state.totalLimit - state.takenCount, 0);
   state.canPurchase = state.unlimited || state.remainingCount > 0;
@@ -168,6 +231,9 @@ const updateMessages = states.map((state) => {
     ? null
     : new Date(state._lastUpdatedAtTs).toISOString();
   delete state._lastUpdatedAtTs;
+  delete state._dailyPaidCount;
+  delete state._dailyReservedCount;
+  delete state._launchPaidTimestamps;
 
   return {
     query: state.inventoryId

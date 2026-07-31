@@ -58,10 +58,10 @@ test("tournament subscription catalog does not override live remaining values", 
   assert.equal(resolveTournamentSubscriptionCounterDisplayText("friendship"), null);
 });
 
-test("tournament subscription catalog displays new drop sizes as counter totals", () => {
+test("tournament subscription catalog leaves staged counters on live API totals", () => {
   assert.equal(resolveTournamentSubscriptionCounterDisplayTotalLimit("academy"), 100);
-  assert.equal(resolveTournamentSubscriptionCounterDisplayTotalLimit("ra"), 5);
-  assert.equal(resolveTournamentSubscriptionCounterDisplayTotalLimit("friendship"), 5);
+  assert.equal(resolveTournamentSubscriptionCounterDisplayTotalLimit("ra"), null);
+  assert.equal(resolveTournamentSubscriptionCounterDisplayTotalLimit("friendship"), null);
   assert.equal(resolveTournamentSubscriptionCounterDisplayTotalLimit("sport"), 126);
   assert.equal(resolveTournamentSubscriptionCounterDisplayTotalLimit("energy5"), null);
 });

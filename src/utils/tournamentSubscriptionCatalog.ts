@@ -41,8 +41,6 @@ export const TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_OVERRIDE_KEYS = [] as const
 
 export const TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_TOTAL_LIMITS = {
   academy: 100,
-  friendship: 5,
-  ra: 5,
   sport: 126,
 } as const;
 
@@ -71,8 +69,6 @@ export function resolveTournamentSubscriptionCounterDisplayTotalLimit(value: str
   const key = String(value || "").trim().toLowerCase();
   if (
     key === "academy"
-    || key === "friendship"
-    || key === "ra"
     || key === "sport"
   ) {
     return TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_TOTAL_LIMITS[key];
