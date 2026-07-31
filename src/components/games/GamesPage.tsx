@@ -89,6 +89,7 @@ import {
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import { pushCabinetFlashNotice } from "../../utils/cabinetFlashNotice";
 import type { GamesCreateFromBookingData } from "../../types/gamesOverlay";
+import { resolveSplitPaymentOccupancy } from "./splitPaymentOccupancy";
 import {
   CABINET_URL,
   GAMES_BUNDLE_URL,
@@ -8007,63 +8008,31 @@ export default function GamesPage({
   );
   const detailsNeedsVivaRosterSync = isDetailsSplitPaymentGame
     || isCabinetBookingConvertedGame(activeGameRecord);
-  const detailsSplitReservedPlayersBySpot = useMemo(() => {
-    const bySpot = new Map<number, PadelGamePlayer>();
-    if (!isDetailsSplitPaymentGame || !detailsSplitPaymentMetadata) return bySpot;
-
-    const payments = Array.isArray(detailsSplitPaymentMetadata.payments)
-      ? detailsSplitPaymentMetadata.payments.filter((item) => isRecordObject(item))
-      : [];
-    payments.forEach((item) => {
-      const spotRaw = toFiniteNumber(item.spot);
-      const spotNumber = spotRaw != null ? Math.floor(spotRaw) : null;
-      if (spotNumber == null || spotNumber < 1 || spotNumber > detailsMaxPlayers) return;
-      if (!isSplitPaymentReservationActive(item.status)) return;
-      if (isSplitPaymentPendingExpired(item, detailsSplitPaymentMetadata, splitPendingNowTs)) return;
-
-      const phone = normalizePhoneForGame(
-        typeof item.phoneNorm === "string"
-          ? item.phoneNorm
-          : (typeof item.phone === "string" ? item.phone : null),
-      );
-      const clientId = typeof item.clientId === "string" ? item.clientId.trim() : "";
-      const candidateName = (
-        typeof item.clientName === "string"
-          ? item.clientName
-          : typeof item.playerName === "string"
-            ? item.playerName
-            : typeof item.name === "string"
-              ? item.name
-              : ""
-      ).trim();
-
-      bySpot.set(spotNumber - 1, {
-        id: clientId || (phone ? `split-phone-${phone}` : `split-spot-${spotNumber}`),
-        name: candidateName || `Участник ${spotNumber}`,
-        phone,
-        photo: null,
-        rating: null,
-        ratingNumeric: null,
-        source: "MANUAL_LIST",
-        status: "CONFIRMED",
-      });
-    });
-
-    return bySpot;
-  }, [isDetailsSplitPaymentGame, detailsSplitPaymentMetadata, detailsMaxPlayers, splitPendingNowTs]);
+  const detailsSplitOccupancy = useMemo(() => resolveSplitPaymentOccupancy({
+    participants: detailsParticipants,
+    payments: Array.isArray(detailsSplitPaymentMetadata?.payments)
+      ? detailsSplitPaymentMetadata.payments
+      : [],
+    maxPlayers: detailsMaxPlayers,
+    nowTs: splitPendingNowTs,
+    splitPayment: detailsSplitPaymentMetadata,
+    paymentDeadlineMinutes: SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES,
+  }), [
+    detailsParticipants,
+    detailsSplitPaymentMetadata,
+    detailsMaxPlayers,
+    splitPendingNowTs,
+  ]);
   const detailsOccupiedSlotsCount = useMemo(() => {
     if (!isDetailsSplitPaymentGame) {
       return Math.min(detailsParticipants.length, detailsMaxPlayers);
     }
-    return Math.min(
-      detailsMaxPlayers,
-      Math.max(detailsParticipants.length, detailsSplitReservedPlayersBySpot.size),
-    );
+    return detailsSplitOccupancy.occupiedSlotsCount;
   }, [
     isDetailsSplitPaymentGame,
     detailsParticipants.length,
-    detailsSplitReservedPlayersBySpot.size,
     detailsMaxPlayers,
+    detailsSplitOccupancy,
   ]);
   const detailsHasFreeSlots = detailsOccupiedSlotsCount < detailsMaxPlayers;
   const detailsExpiredSplitPendingCleanupKeys = useMemo<string[]>(() => {
@@ -8173,6 +8142,7 @@ export default function GamesPage({
     && !joiningSplitPayment
     && hasCurrentUserIdentityInDetails
     && !isCurrentUserConfirmedParticipant
+    && !isCurrentUserInWaitlist
     && !hasCurrentUserActiveSplitPayment
     && detailsHasFreeSlots
   );
