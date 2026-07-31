@@ -1,5 +1,6 @@
 const DEFAULT_RESERVATION_MINUTES = 30;
 const DEFAULT_INVENTORY_ID = "ab_leto_2026_50_v1";
+const STAGED_RELEASE_INVENTORY_ID = "ab_leto_2026_100_then_7_v1";
 
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -26,7 +27,8 @@ const reservationMinutes = resolveReservationMinutes();
 const nowTs = Date.now();
 const requestedAtIso = new Date(nowTs).toISOString();
 const createdAtCutoffIso = new Date(nowTs - reservationMinutes * 60 * 1000).toISOString();
-const inventoryIdPattern = `^${inventoryId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:_(?:friendship|ra)_.*)?$`;
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const inventoryIdPattern = `^(?:${escapeRegex(inventoryId)}(?:_(?:friendship|ra)_.*)?|${escapeRegex(STAGED_RELEASE_INVENTORY_ID)}_(?:friendship|ra))$`;
 
 const queryFilter = {
   inventoryId: { $regex: inventoryIdPattern },

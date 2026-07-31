@@ -1336,6 +1336,7 @@ export default function TournamentSubscriptionPage({
                 {!hideTemporaryUnlimitedCounter
                   && (plan.counterKey === "ra" || plan.counterKey === "friendship")
                   && status
+                  && status.releasePhase !== "launch"
                   && remainingCount === 0 && (
                   <DailyDropCountdown onDrop={loadStatus} />
                 )}

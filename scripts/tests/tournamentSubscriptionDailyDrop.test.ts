@@ -36,6 +36,7 @@ test("sold-out RA and Friendship cards render the countdown without the daily no
   );
 
   assert.match(sourceText, /plan\.counterKey === "ra" \|\| plan\.counterKey === "friendship"/);
+  assert.match(sourceText, /status\.releasePhase !== "launch"/);
   assert.match(sourceText, /<DailyDropCountdown onDrop=\{loadStatus\} \/>/);
   assert.match(sourceText, /До обновления счетчика/);
   assert.doesNotMatch(sourceText, /Следующий дроп через/);

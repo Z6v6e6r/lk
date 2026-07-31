@@ -6,6 +6,10 @@ const AB_LETO_DAILY_DROP_LIMIT = 5;
 const AB_LETO_DAILY_DROP_START_HOUR = 10;
 const AB_LETO_DAILY_DROP_TIME_ZONE = "Europe/Moscow";
 const AB_LETO_DAILY_DROP_COUNTER_KEYS = new Set(["friendship", "ra"]);
+const AB_LETO_STAGED_RELEASE_START_DATE = "2026-08-01";
+const AB_LETO_STAGED_INVENTORY_ID = "ab_leto_2026_100_then_7_v1";
+const AB_LETO_STAGED_LAUNCH_LIMIT = 100;
+const AB_LETO_STAGED_DAILY_DROP_LIMIT = 7;
 const DEFAULT_PLAN_KEY = "sport";
 const DEFAULT_VISIBLE_COUNTER_KEYS = ["friendship", "sport", "academy", "ra", "energy5"];
 const AB_LETO_TOTAL_LIMIT_DEFAULTS = {
@@ -200,6 +204,21 @@ const resolveDailyDropDate = (now = new Date(Date.now())) => {
   return new Date(dropDay).toISOString().slice(0, 10);
 };
 
+const resolveMoscowDate = (now = new Date(Date.now())) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: AB_LETO_DAILY_DROP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const fields = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${fields.year}-${fields.month}-${fields.day}`;
+};
+
+const isAbLetoStagedReleaseActive = (now = new Date(Date.now())) => (
+  resolveMoscowDate(now) >= AB_LETO_STAGED_RELEASE_START_DATE
+);
+
 const readAbLetoInventoryId = (counterKey = null) => {
   const baseInventoryId = readGlobalFirst(["summer_subscription_inventory_id"])
     || AB_LETO_INVENTORY_ID;
@@ -207,7 +226,25 @@ const readAbLetoInventoryId = (counterKey = null) => {
   if (!AB_LETO_DAILY_DROP_COUNTER_KEYS.has(normalizedCounterKey)) {
     return baseInventoryId;
   }
+  if (isAbLetoStagedReleaseActive()) {
+    return `${AB_LETO_STAGED_INVENTORY_ID}_${normalizedCounterKey}`;
+  }
   return `${baseInventoryId}_${normalizedCounterKey}_${resolveDailyDropDate()}`;
+};
+
+const withAbLetoStagedRelease = (counter) => {
+  const counterKey = String(counter?.counterKey || "").trim().toLowerCase();
+  if (!AB_LETO_DAILY_DROP_COUNTER_KEYS.has(counterKey) || !isAbLetoStagedReleaseActive()) {
+    return counter;
+  }
+  return Object.assign({}, counter, {
+    stagedRelease: true,
+    releaseStartDate: AB_LETO_STAGED_RELEASE_START_DATE,
+    launchLimit: AB_LETO_STAGED_LAUNCH_LIMIT,
+    dailyLimit: AB_LETO_STAGED_DAILY_DROP_LIMIT,
+    dailyDropDate: resolveDailyDropDate(),
+    totalLimit: AB_LETO_STAGED_LAUNCH_LIMIT,
+  });
 };
 
 const readSummerPlanConfig = (planKey) => {
@@ -240,7 +277,7 @@ const readSummerPlanConfig = (planKey) => {
     };
   }
 
-  return {
+  return withAbLetoStagedRelease({
     counterKey: "friendship",
     inventoryId: readAbLetoInventoryId(planKey),
     saleType: "summer_campaign",
@@ -260,7 +297,7 @@ const readSummerPlanConfig = (planKey) => {
     ),
     manualPaidCount: 0,
     totalLimit: toPlanLimit(global.get("summer_subscription_friendship_limit"), getDefaultTotalLimit("friendship")),
-  };
+  });
 };
 
 const readSiriusFriendshipConfig = (friendshipPlan) => ({
@@ -306,7 +343,7 @@ const readSiriusFriendshipConfig = (friendshipPlan) => ({
 const readDirectCounterConfig = (counterKey) => {
   const base = DIRECT_COUNTER_DEFAULTS[counterKey];
   if (!base) return null;
-  return {
+  return withAbLetoStagedRelease({
     counterKey,
     inventoryId: readAbLetoInventoryId(counterKey),
     unlimited: counterKey === "energy5",
@@ -327,7 +364,7 @@ const readDirectCounterConfig = (counterKey) => {
     totalLimit: counterKey === "energy5"
       ? 0
       : toPlanLimit(global.get(`summer_subscription_${counterKey}_limit`), getDefaultTotalLimit(counterKey)),
-  };
+  });
 };
 
 const buildCounterConfigMap = () => {
@@ -365,6 +402,16 @@ const createCounterState = (counter) => {
     campaignKey: toStr(counter?.campaignKey),
     productId: toStr(counter?.productId),
     productName: toStr(counter?.productName),
+    stagedRelease: counter?.stagedRelease === true,
+    releaseStartDate: toStr(counter?.releaseStartDate),
+    releasePhase: null,
+    dailyDropActive: false,
+    launchLimit: Math.max(0, Math.floor(Number(counter?.launchLimit) || 0)),
+    launchPaidCount: 0,
+    launchReservedCount: 0,
+    launchRemainingCount: 0,
+    dailyLimit: Math.max(0, Math.floor(Number(counter?.dailyLimit) || 0)),
+    dailyDropDate: toStr(counter?.dailyDropDate),
     totalLimit,
     paidCount: manualPaidCount,
     reservedCount: 0,
@@ -375,6 +422,8 @@ const createCounterState = (counter) => {
     price: priceMinor == null ? null : priceMinor / 100,
     updatedAt: null,
     _lastUpdatedAtTs: null,
+    _dailyPaidCount: 0,
+    _dailyReservedCount: 0,
   };
 };
 
@@ -472,6 +521,9 @@ for (const doc of docs) {
 
   const state = statesByCounterKey[matchedCounterKey];
   const status = normalizeStatus(doc.status);
+  const releasePhase = toStr(doc.releasePhase) === "daily" ? "daily" : "launch";
+  const isCurrentDailyDrop = releasePhase === "daily"
+    && toStr(doc.dailyDropDate) === state.dailyDropDate;
   const expiresAtTs = toTs(doc.expiresAt);
   const updatedAtTs = toTs(doc.updatedAt) ?? toTs(doc.createdAt);
   if (updatedAtTs != null) {
@@ -494,6 +546,11 @@ for (const doc of docs) {
   }
 
   if (status === "PAID") {
+    if (state.stagedRelease) {
+      if (releasePhase === "launch") state.launchPaidCount += 1;
+      if (isCurrentDailyDrop) state._dailyPaidCount += 1;
+      continue;
+    }
     state.paidCount += 1;
     continue;
   }
@@ -501,6 +558,11 @@ for (const doc of docs) {
   const isPending = status === "PAYMENT_PENDING";
   const isActivePending = isPending && (expiresAtTs == null || expiresAtTs > now);
   if (isActivePending) {
+    if (state.stagedRelease) {
+      if (releasePhase === "launch") state.launchReservedCount += 1;
+      if (isCurrentDailyDrop) state._dailyReservedCount += 1;
+      continue;
+    }
     state.reservedCount += 1;
   }
 }
@@ -509,6 +571,17 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
   .map((counterKey) => {
     const state = statesByCounterKey[counterKey];
     if (!state) return null;
+    if (state.stagedRelease) {
+      state.dailyDropActive = state.launchPaidCount >= state.launchLimit;
+      state.releasePhase = state.dailyDropActive ? "daily" : "launch";
+      state.launchRemainingCount = Math.max(
+        state.launchLimit - state.launchPaidCount - state.launchReservedCount,
+        0,
+      );
+      state.totalLimit = state.dailyDropActive ? state.dailyLimit : state.launchLimit;
+      state.paidCount = state.dailyDropActive ? state._dailyPaidCount : state.launchPaidCount;
+      state.reservedCount = state.dailyDropActive ? state._dailyReservedCount : state.launchReservedCount;
+    }
     state.takenCount = state.paidCount + state.reservedCount;
     state.remainingCount = state.unlimited ? 0 : Math.max(state.totalLimit - state.takenCount, 0);
     state.canPurchase = state.unlimited || state.remainingCount > 0;
@@ -516,6 +589,8 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
       ? new Date().toISOString()
       : new Date(state._lastUpdatedAtTs).toISOString();
     delete state._lastUpdatedAtTs;
+    delete state._dailyPaidCount;
+    delete state._dailyReservedCount;
     return state;
   })
   .filter((state) => Boolean(state));
@@ -571,6 +646,15 @@ msg.payload = {
   takenCount: toInt(selectedCounter.takenCount, 0),
   remainingCount: toInt(selectedCounter.remainingCount, 0),
   canPurchase: toBool(selectedCounter.canPurchase) ?? false,
+  releasePhase: toStr(selectedCounter.releasePhase),
+  dailyDropActive: selectedCounter.dailyDropActive === true,
+  releaseStartDate: toStr(selectedCounter.releaseStartDate),
+  launchLimit: toInt(selectedCounter.launchLimit, 0),
+  launchPaidCount: toInt(selectedCounter.launchPaidCount, 0),
+  launchReservedCount: toInt(selectedCounter.launchReservedCount, 0),
+  launchRemainingCount: toInt(selectedCounter.launchRemainingCount, 0),
+  dailyLimit: toInt(selectedCounter.dailyLimit, 0),
+  dailyDropDate: toStr(selectedCounter.dailyDropDate),
   priceMinor: selectedCounter.priceMinor == null ? null : Math.max(0, Math.round(Number(selectedCounter.priceMinor) || 0)),
   price: selectedCounter.price == null ? null : Number(selectedCounter.price),
   updatedAt: toStr(selectedCounter.updatedAt) || new Date().toISOString(),
