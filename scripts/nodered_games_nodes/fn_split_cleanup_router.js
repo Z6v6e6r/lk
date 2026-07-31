@@ -515,7 +515,7 @@ const normalizeRefundMethod = (value) => {
   const raw = toStr(value);
   if (!raw) return null;
   const normalized = raw.toUpperCase();
-  if (normalized === "CURRENCY" || normalized === "DEPOSIT") return normalized;
+  if (["CURRENCY", "DEPOSIT", "SERVICE", "NONE"].includes(normalized)) return normalized;
   return null;
 };
 
@@ -533,6 +533,8 @@ const resolvePreferredRefundMethod = (ctx) => {
   const cancellationActionId = normalizeCancellationActionId(ctx?.cancellationActionId);
   if (cancellationActionId === "card") return "CURRENCY";
   if (cancellationActionId === "deposit") return "DEPOSIT";
+  if (cancellationActionId === "subscription") return "SERVICE";
+  if (cancellationActionId === "none") return "NONE";
   return null;
 };
 
@@ -646,14 +648,67 @@ const isCancelledBookingRow = (row) => {
   return status.includes("CANCEL");
 };
 
-const isCancelledExercise = (value) => {
-  if (!value || typeof value !== "object") return false;
-  if (value.isCancelled === true || value.cancelled === true || value.deleted === true) return true;
-  if (toStr(value.cancellationDate || value.cancelledAt || value.deletedAt)) return true;
-  const status = String(
-    value.exerciseStatus || value.status || value.state || "",
-  ).trim().toUpperCase();
+const EXERCISE_READBACK_PAGE_SIZE = 200;
+const EXERCISE_READBACK_MAX_PAGES = 5;
+
+const buildExerciseListVerifyRequest = (exerciseDate, includeCanceled, page = 0) => ({
+  method: "GET",
+  path: `/exercises?date=${encodeURIComponent(exerciseDate)}`
+    + `&includeCanceled=${includeCanceled ? "true" : "false"}`
+    + `&page=${page}&size=${EXERCISE_READBACK_PAGE_SIZE}`,
+  payload: undefined,
+  label: includeCanceled
+    ? "verify_exercise_inclusive_list"
+    : "verify_exercise_active_list",
+});
+
+const extractExerciseRows = (payload) => {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  if (Array.isArray(payload.content)) return payload.content;
+  if (Array.isArray(payload.items)) return payload.items;
+  if (Array.isArray(payload.data)) return payload.data;
+  if (payload.data && typeof payload.data === "object") {
+    if (Array.isArray(payload.data.content)) return payload.data.content;
+    if (Array.isArray(payload.data.items)) return payload.data.items;
+  }
+  return [];
+};
+
+const findExerciseRow = (payload, exerciseId) => {
+  const normalizedExerciseId = normalizeComparableId(exerciseId);
+  if (!normalizedExerciseId) return null;
+  return extractExerciseRows(payload).find((row) => (
+    normalizeComparableId(row?.id || row?.exerciseId || row?.uuid) === normalizedExerciseId
+  )) || null;
+};
+
+const isCancelledExerciseRow = (row) => {
+  if (!row || typeof row !== "object") return false;
+  if (
+    row.isCancelled === true
+    || row.cancelled === true
+    || row.canceled === true
+    || row.deleted === true
+  ) return true;
+  if (toStr(row.cancellationDate || row.cancelledAt || row.canceledAt || row.deletedAt)) return true;
+  const status = String(row.exerciseStatus || row.status || row.state || "").trim().toUpperCase();
   return status.includes("CANCEL") || status.includes("DELETE");
+};
+
+const exerciseListPageComplete = (payload, page) => {
+  const root = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload
+    : null;
+  const data = root?.data && typeof root.data === "object" && !Array.isArray(root.data)
+    ? root.data
+    : null;
+  const pageInfo = data || root;
+  if (pageInfo?.last === true) return true;
+  if (pageInfo?.last === false) return false;
+  const totalPages = toNumber(pageInfo?.totalPages);
+  if (totalPages !== null) return page + 1 >= Math.max(0, Math.floor(totalPages));
+  return extractExerciseRows(payload).length < EXERCISE_READBACK_PAGE_SIZE;
 };
 
 const extractBookingRows = (payload) => {
@@ -730,6 +785,38 @@ const pickBookingCancellationRequest = (ctx, bookingId, clientId, payload) => {
     });
   }
 
+  if (preferredRefundMethod === "SERVICE") {
+    if (!options.subscription && !options.exercise) {
+      return {
+        unsupportedReason: "Возврат занятия на абонемент недоступен для этой записи",
+        unsupportedCode: "preferred_cancellation_action_unavailable",
+      };
+    }
+    return buildScopedBookingCancelRequest(ctx, bookingId, clientId, {
+      endUserPayload: {},
+      adminRefundMethod: "SERVICE",
+      label: "delete_subscription",
+      refundMethod: "SERVICE",
+      refundMessage: "Вернули 1 занятие на абонемент.",
+    });
+  }
+
+  if (preferredRefundMethod === "NONE") {
+    if (!options.cancellationOnly) {
+      return {
+        unsupportedReason: "Отмена без возврата недоступна для этой записи",
+        unsupportedCode: "preferred_cancellation_action_unavailable",
+      };
+    }
+    return buildScopedBookingCancelRequest(ctx, bookingId, clientId, {
+      endUserPayload: {},
+      adminRefundMethod: "NONE",
+      label: "delete_plain",
+      refundMethod: "NONE",
+      refundMessage: "Запись отменена без возврата средств.",
+    });
+  }
+
   if (cancellationActionId === "subscription") {
     if (!options.subscription && !options.exercise) {
       return {
@@ -741,7 +828,7 @@ const pickBookingCancellationRequest = (ctx, bookingId, clientId, payload) => {
       endUserPayload: {},
       adminRefundMethod: "SERVICE",
       label: "delete_subscription",
-      refundMethod: null,
+      refundMethod: "SERVICE",
       refundMessage: "Вернули 1 занятие на абонемент.",
     });
   }
@@ -757,7 +844,7 @@ const pickBookingCancellationRequest = (ctx, bookingId, clientId, payload) => {
       endUserPayload: {},
       adminRefundMethod: "NONE",
       label: "delete_plain",
-      refundMethod: null,
+      refundMethod: "NONE",
       refundMessage: "Запись отменена без возврата средств.",
     });
   }
@@ -785,7 +872,7 @@ const pickBookingCancellationRequest = (ctx, bookingId, clientId, payload) => {
       endUserPayload: {},
       adminRefundMethod: "SERVICE",
       label: "delete_subscription",
-      refundMethod: null,
+      refundMethod: "SERVICE",
       refundMessage: "Вернули 1 занятие на абонемент.",
     });
   }
@@ -795,7 +882,7 @@ const pickBookingCancellationRequest = (ctx, bookingId, clientId, payload) => {
       endUserPayload: {},
       adminRefundMethod: "NONE",
       label: "delete_plain",
-      refundMethod: null,
+      refundMethod: "NONE",
       refundMessage: "Запись отменена без возврата средств.",
     });
   }
@@ -878,6 +965,24 @@ const startGenericBookingCancel = (ctx, bookingId, clientId, meta = {}) => {
   ctx.currentBookingId = bookingId;
   ctx.currentClientId = clientId || null;
   ctx.currentCancelRequest = null;
+  const actorClientId = isActorBooking(ctx, bookingId) ? toStr(ctx.actorClientId) : null;
+  if (actorClientId) {
+    ctx.currentProbeRequest = probeRequest;
+    ctx.currentClientId = actorClientId;
+    ctx.step = "preflight_actor_booking";
+    appendTrace(ctx, {
+      step: "preflight_actor_booking_request",
+      bookingId,
+      clientId: actorClientId,
+      ...meta,
+    });
+    return adminRequest(
+      ctx,
+      "GET",
+      `/clients/${encodeURIComponent(actorClientId)}/bookings/${encodeURIComponent(bookingId)}`,
+      undefined,
+    );
+  }
   ctx.step = "cancel_booking_probe";
   appendTrace(ctx, {
     step: "cancel_booking_probe_request",
@@ -940,16 +1045,55 @@ const nextBookingRequest = (ctx) => {
   });
 };
 
-const nextExerciseRequest = (ctx) => {
-  if (!ctx.exerciseId || ctx.exerciseProcessed === true) return null;
+const failExerciseVerification = (ctx, reason, details = {}) => {
+  ctx.exerciseProcessed = true;
+  ctx.exerciseCancelled = false;
+  ctx.exerciseVerificationReason = reason;
+  ctx.blockLocalMutation = true;
+  ctx.blockReason = ctx.blockReason || reason;
+  ctx.forceVivaErrors = true;
+  appendTrace(ctx, {
+    step: "verify_exercise_unverified",
+    exerciseId: ctx.exerciseId || null,
+    reason,
+    ...details,
+  });
+};
 
-  const attempt = Number.isFinite(Number(ctx.exerciseAttempt))
-    ? Number(ctx.exerciseAttempt)
-    : 0;
+const startExerciseReadback = (ctx, phase, stage = "ACTIVE", page = 0) => {
+  const exerciseDate = toStr(ctx.exerciseDate);
+  if (!exerciseDate) {
+    failExerciseVerification(ctx, "missing_exercise_date");
+    return null;
+  }
+  if (stage === "ACTIVE" && page === 0) {
+    ctx.exerciseActiveSeen = false;
+    ctx.exerciseInclusiveSeen = false;
+  }
+  const includeCanceled = stage === "INCLUSIVE";
+  const request = buildExerciseListVerifyRequest(exerciseDate, includeCanceled, page);
+  ctx.exerciseReadbackPhase = phase;
+  ctx.exerciseReadbackStage = stage;
+  ctx.exerciseReadbackPage = page;
+  ctx.step = includeCanceled
+    ? "verify_exercise_inclusive_list"
+    : "verify_exercise_active_list";
+  ctx.exerciseReadbackAttempts = Number(ctx.exerciseReadbackAttempts || 0) + 1;
+  appendTrace(ctx, {
+    step: `${request.label}_request`,
+    exerciseId: ctx.exerciseId,
+    exerciseDate,
+    phase,
+    page,
+  });
+  return adminRequest(ctx, request.method, request.path, request.payload);
+};
+
+const startExerciseMutation = (ctx, attempt) => {
   const attemptPayload = buildExerciseAttempt(ctx, attempt);
-
   ctx.step = "cancel_exercise";
   ctx.exerciseAttempt = attempt;
+  ctx.upstreamMutationsAttempted = Number(ctx.upstreamMutationsAttempted || 0) + 1;
   appendTrace(ctx, {
     step: "cancel_exercise_request",
     exerciseId: ctx.exerciseId,
@@ -957,6 +1101,11 @@ const nextExerciseRequest = (ctx) => {
     attemptLabel: attemptPayload.label,
   });
   return adminRequest(ctx, attemptPayload.method, attemptPayload.path, attemptPayload.payload);
+};
+
+const nextExerciseRequest = (ctx) => {
+  if (!ctx.exerciseId || ctx.exerciseProcessed === true || ctx.blockLocalMutation === true) return null;
+  return startExerciseReadback(ctx, "PRE_CANCEL", "ACTIVE", 0);
 };
 
 const pushBookingSuccessAndContinue = (ctx, result) => {
@@ -1155,8 +1304,13 @@ const finalizeTask = (ctx) => {
   const bookingResults = Array.isArray(ctx.bookingResults) ? ctx.bookingResults : [];
   const bookingSuccessCount = bookingResults.filter((item) => item?.ok === true).length;
   const bookingFailedCount = bookingResults.filter((item) => item?.ok !== true).length;
-  const exerciseCancelled = ctx.exerciseId ? (ctx.exerciseCancelled === true) : true;
-  const hasVivaErrors = Boolean(ctx.forceVivaErrors) || bookingFailedCount > 0 || !exerciseCancelled;
+  const isDryRun = ctx.dryRun === true;
+  const exerciseCancelled = isDryRun
+    ? null
+    : (ctx.exerciseId ? (ctx.exerciseCancelled === true) : true);
+  const hasVivaErrors = isDryRun
+    ? false
+    : (Boolean(ctx.forceVivaErrors) || bookingFailedCount > 0 || !exerciseCancelled);
   const blockLocalMutation = ctx.blockLocalMutation === true || hasVivaErrors;
 
   const summaryPayload = {
@@ -1170,10 +1324,15 @@ const finalizeTask = (ctx) => {
     bookingFailedCount,
     exerciseId: ctx.exerciseId || null,
     exerciseCancelled,
-    cancelledInLk: ctx.dryRun !== true && !blockLocalMutation,
+    exerciseAlreadyCancelled: ctx.exerciseAlreadyCancelled === true,
+    exerciseVerificationReason: toStr(ctx.exerciseVerificationReason) || null,
+    operationKey: toStr(ctx.operationKey) || null,
+    upstreamMutationsAttempted: Number(ctx.upstreamMutationsAttempted || 0),
+    cancelledInLk: !isDryRun && !blockLocalMutation,
     withVivaErrors: hasVivaErrors,
     blockLocalMutation,
     blockReason: toStr(ctx.blockReason) || null,
+    refundMethod: ctx.selectedRefundMethod || null,
     refundMessage: toStr(ctx.refundMessage) || null,
     timedOutPayments: asArray(ctx.timedOutPayments),
     trace: clone(ctx.trace || []),
@@ -1266,6 +1425,7 @@ if (!ctxFromMsg) {
     reason: toStr(payload.reason) || "PAYMENT_TIMEOUT",
     dryRun: payload.dryRun === true,
     exerciseId: toStr(payload.exerciseId),
+    exerciseDate: toStr(payload.exerciseDate),
     preferredRefundMethod: normalizeRefundMethod(payload?.preferredRefundMethod),
     cancellationActionId: normalizeCancellationActionId(payload?.cancellationActionId),
     actorBookingId: toStr(payload?.actorBookingId),
@@ -1277,6 +1437,18 @@ if (!ctxFromMsg) {
     exerciseAttempt: 0,
     exerciseProcessed: false,
     exerciseCancelled: null,
+    exerciseAlreadyCancelled: false,
+    exerciseReadbackPhase: null,
+    exerciseReadbackStage: null,
+    exerciseReadbackPage: 0,
+    exerciseReadbackAttempts: 0,
+    exerciseActiveSeen: false,
+    exerciseInclusiveSeen: false,
+    exerciseVerificationReason: null,
+    exerciseCancelOriginStatusCode: null,
+    exerciseCancelOriginLabel: null,
+    upstreamMutationsAttempted: 0,
+    operationKey: `${gameId}:${toStr(payload.exerciseId) || "no-exercise"}:${toStr(payload.reason) || "PAYMENT_TIMEOUT"}`,
     token: null,
     step: "token_request",
     trace: [],
@@ -1319,6 +1491,19 @@ if (!ctxFromMsg) {
     });
     return finalizeTask(initialCtx);
   }
+  if (initialCtx.dryRun === true) {
+    appendTrace(initialCtx, {
+      step: "dry_run_no_upstream_mutation",
+      bookingQueueSize: Array.isArray(initialCtx.bookingQueue) ? initialCtx.bookingQueue.length : 0,
+      exerciseId: initialCtx.exerciseId || null,
+      exerciseDate: initialCtx.exerciseDate || null,
+    });
+    return finalizeTask(initialCtx);
+  }
+  if (initialCtx.exerciseId && !initialCtx.exerciseDate) {
+    failExerciseVerification(initialCtx, "missing_exercise_date");
+    return finalizeTask(initialCtx);
+  }
   if (initialCtx.actorBookingId && !toStr(cleanupAuth.authHeader)) {
     initialCtx.blockLocalMutation = true;
     initialCtx.blockReason = "end_user_auth_missing";
@@ -1344,8 +1529,8 @@ if (ctx.step === "token_request") {
     });
     ctx.token = null;
     ctx.forceVivaErrors = true;
-    // Avoid local roster mutation when Viva auth failed; retries should run against untouched game state.
-    ctx.dryRun = true;
+    ctx.blockLocalMutation = true;
+    ctx.blockReason = ctx.blockReason || "viva_admin_token_failed";
     return finalizeTask(ctx);
   }
 
@@ -1427,6 +1612,66 @@ if (ctx.step === "check_timeout_transaction") {
     fallback: "transaction_not_paid",
     transactionId,
     statusCode,
+  });
+}
+
+if (ctx.step === "preflight_actor_booking") {
+  const bookingId = toStr(ctx.currentBookingId);
+  const clientId = toStr(ctx.currentClientId);
+  const statusCode = Number(msg.statusCode);
+  const probeRequest = ctx.currentProbeRequest && typeof ctx.currentProbeRequest === "object"
+    ? ctx.currentProbeRequest
+    : null;
+
+  if (isOk(statusCode) && isCancelledBookingRow(msg.payload)) {
+    const refundMethod = null;
+    if (!ctx.refundMessage) ctx.refundMessage = "Запись уже отменена.";
+    ctx.currentProbeRequest = null;
+    appendTrace(ctx, {
+      step: "preflight_actor_booking_already_cancelled",
+      bookingId,
+      clientId,
+      statusCode,
+      refundMethod: refundMethod || null,
+    });
+    return pushBookingSuccessAndContinue(ctx, {
+      bookingId,
+      clientId,
+      method: "actor_booking_preflight",
+      refundMethod,
+      alreadyCancelled: true,
+      statusCode,
+    });
+  }
+
+  if (isOk(statusCode) && probeRequest) {
+    ctx.step = "cancel_booking_probe";
+    ctx.currentProbeRequest = null;
+    appendTrace(ctx, {
+      step: "preflight_actor_booking_active",
+      bookingId,
+      clientId,
+      statusCode,
+      attemptLabel: probeRequest.label || null,
+    });
+    return bookingApiRequest(ctx, probeRequest);
+  }
+
+  ctx.currentProbeRequest = null;
+  ctx.blockLocalMutation = true;
+  ctx.blockReason = ctx.blockReason || "viva_booking_preflight_unverified";
+  appendTrace(ctx, {
+    step: "preflight_actor_booking_unverified",
+    bookingId,
+    clientId,
+    statusCode,
+  });
+  return pushBookingFailureAndContinue(ctx, {
+    bookingId,
+    clientId,
+    method: "actor_booking_preflight",
+    statusCode,
+    response: msg.payload || null,
   });
 }
 
@@ -1526,6 +1771,7 @@ if (ctx.step === "cancel_booking_probe") {
     scope: cancelRequest.scope,
     refundMethod: cancelRequest.refundMethod || null,
   });
+  ctx.upstreamMutationsAttempted = Number(ctx.upstreamMutationsAttempted || 0) + 1;
   return bookingApiRequest(ctx, cancelRequest);
 }
 
@@ -1677,102 +1923,157 @@ if (ctx.step === "verify_booking_cancelled") {
 
 if (ctx.step === "cancel_exercise") {
   const attempt = Number.isFinite(Number(ctx.exerciseAttempt)) ? Number(ctx.exerciseAttempt) : 0;
-
-  if (isOk(msg.statusCode)) {
-    appendTrace(ctx, {
-      step: "cancel_exercise_success",
-      exerciseId: ctx.exerciseId,
-      attempt,
-      statusCode: msg.statusCode,
-    });
-    ctx.step = "verify_exercise_cancelled";
-    ctx.exerciseCancelOriginStatusCode = Number(msg.statusCode);
-    appendTrace(ctx, {
-      step: "verify_exercise_cancelled_request",
-      exerciseId: ctx.exerciseId,
-      attempt,
-    });
-    return adminRequest(
-      ctx,
-      "GET",
-      `/exercises/${encodeURIComponent(ctx.exerciseId)}`,
-      undefined,
-    );
-  }
-
-  if (attempt < 2) {
-    const nextAttempt = attempt + 1;
-    ctx.exerciseAttempt = nextAttempt;
-    const attemptPayload = buildExerciseAttempt(ctx, nextAttempt);
-    appendTrace(ctx, {
-      step: "cancel_exercise_retry",
-      exerciseId: ctx.exerciseId,
-      attempt: nextAttempt,
-      statusCode: msg.statusCode,
-      attemptLabel: attemptPayload.label,
-      response: clone(msg.payload || null),
-    });
-    return adminRequest(ctx, attemptPayload.method, attemptPayload.path, attemptPayload.payload);
-  }
-
+  const attemptPayload = buildExerciseAttempt(ctx, attempt);
+  ctx.exerciseCancelOriginStatusCode = Number(msg.statusCode);
+  ctx.exerciseCancelOriginLabel = attemptPayload.label;
   appendTrace(ctx, {
-    step: "cancel_exercise_failed",
+    step: isOk(msg.statusCode)
+      ? "cancel_exercise_response_ok"
+      : "cancel_exercise_response_requires_readback",
     exerciseId: ctx.exerciseId,
     attempt,
     statusCode: msg.statusCode,
-    response: clone(msg.payload || null),
+    attemptLabel: attemptPayload.label,
+    response: isOk(msg.statusCode) ? undefined : clone(msg.payload || null),
   });
-  ctx.exerciseProcessed = true;
-  ctx.exerciseCancelled = false;
-  return finalizeTask(ctx);
+  const readbackRequest = startExerciseReadback(ctx, "POST_CANCEL", "ACTIVE", 0);
+  return readbackRequest || finalizeTask(ctx);
 }
 
-if (ctx.step === "verify_exercise_cancelled") {
-  const attempt = Number.isFinite(Number(ctx.exerciseAttempt)) ? Number(ctx.exerciseAttempt) : 0;
+if (ctx.step === "verify_exercise_active_list") {
+  const phase = toStr(ctx.exerciseReadbackPhase) || "PRE_CANCEL";
+  const page = Number.isFinite(Number(ctx.exerciseReadbackPage))
+    ? Number(ctx.exerciseReadbackPage)
+    : 0;
   const statusCode = Number(msg.statusCode);
-  const verifiedCancelled = statusCode === 404 || (
-    isOk(statusCode) && isCancelledExercise(msg.payload)
-  );
-  if (verifiedCancelled) {
-    appendTrace(ctx, {
-      step: statusCode === 404
-        ? "verify_exercise_cancelled_absent"
-        : "verify_exercise_cancelled_success",
-      exerciseId: ctx.exerciseId,
-      attempt,
+  if (!isOk(statusCode)) {
+    failExerciseVerification(ctx, "exercise_active_list_failed", {
+      phase,
+      page,
       statusCode,
     });
-    ctx.exerciseProcessed = true;
-    ctx.exerciseCancelled = true;
     return finalizeTask(ctx);
   }
 
+  const activeRow = findExerciseRow(msg.payload, ctx.exerciseId);
+  const pageComplete = exerciseListPageComplete(msg.payload, page);
   appendTrace(ctx, {
-    step: isOk(statusCode)
-      ? "verify_exercise_still_active"
-      : "verify_exercise_cancelled_failed",
+    step: activeRow
+      ? "verify_exercise_active_list_found"
+      : "verify_exercise_active_list_absent",
     exerciseId: ctx.exerciseId,
-    attempt,
-    statusCode,
-    response: clone(msg.payload || null),
+    exerciseDate: ctx.exerciseDate || null,
+    phase,
+    page,
+    pageComplete,
   });
-  if (attempt < 2) {
-    const nextAttempt = attempt + 1;
-    ctx.exerciseAttempt = nextAttempt;
-    const attemptPayload = buildExerciseAttempt(ctx, nextAttempt);
-    ctx.step = "cancel_exercise";
-    appendTrace(ctx, {
-      step: "cancel_exercise_retry_after_readback",
-      exerciseId: ctx.exerciseId,
-      attempt: nextAttempt,
-      attemptLabel: attemptPayload.label,
+  if (activeRow) {
+    ctx.exerciseActiveSeen = true;
+    if (phase === "PRE_CANCEL") {
+      return startExerciseMutation(ctx, 0);
+    }
+
+    const attempt = Number.isFinite(Number(ctx.exerciseAttempt))
+      ? Number(ctx.exerciseAttempt)
+      : 0;
+    const originStatusCode = Number(ctx.exerciseCancelOriginStatusCode);
+    const fallbackAllowed = [404, 405].includes(originStatusCode);
+    if (fallbackAllowed && attempt < 2) return startExerciseMutation(ctx, attempt + 1);
+    failExerciseVerification(ctx, "viva_exercise_still_active_after_mutation", {
+      phase,
+      page,
+      statusCode,
+      originStatusCode,
     });
-    return adminRequest(ctx, attemptPayload.method, attemptPayload.path, attemptPayload.payload);
+    return finalizeTask(ctx);
   }
 
-  ctx.exerciseProcessed = true;
-  ctx.exerciseCancelled = false;
-  ctx.forceVivaErrors = true;
+  if (!pageComplete) {
+    const nextPage = page + 1;
+    if (nextPage >= EXERCISE_READBACK_MAX_PAGES) {
+      failExerciseVerification(ctx, "exercise_readback_truncated", {
+        phase,
+        stage: "ACTIVE",
+        page,
+      });
+      return finalizeTask(ctx);
+    }
+    return startExerciseReadback(ctx, phase, "ACTIVE", nextPage);
+  }
+
+  return startExerciseReadback(ctx, phase, "INCLUSIVE", 0);
+}
+
+if (ctx.step === "verify_exercise_inclusive_list") {
+  const phase = toStr(ctx.exerciseReadbackPhase) || "PRE_CANCEL";
+  const page = Number.isFinite(Number(ctx.exerciseReadbackPage))
+    ? Number(ctx.exerciseReadbackPage)
+    : 0;
+  const statusCode = Number(msg.statusCode);
+  if (!isOk(statusCode)) {
+    failExerciseVerification(ctx, "exercise_inclusive_list_failed", {
+      phase,
+      page,
+      statusCode,
+    });
+    return finalizeTask(ctx);
+  }
+
+  const inclusiveRow = findExerciseRow(msg.payload, ctx.exerciseId);
+  const pageComplete = exerciseListPageComplete(msg.payload, page);
+  appendTrace(ctx, {
+    step: inclusiveRow
+      ? "verify_exercise_inclusive_list_found"
+      : "verify_exercise_inclusive_list_absent",
+    exerciseId: ctx.exerciseId,
+    exerciseDate: ctx.exerciseDate || null,
+    phase,
+    page,
+    pageComplete,
+  });
+  if (inclusiveRow) {
+    if (!isCancelledExerciseRow(inclusiveRow)) {
+      failExerciseVerification(ctx, "viva_exercise_inclusive_row_ambiguous", {
+        phase,
+        page,
+      });
+      return finalizeTask(ctx);
+    }
+    ctx.exerciseInclusiveSeen = true;
+    ctx.exerciseProcessed = true;
+    ctx.exerciseCancelled = true;
+    ctx.exerciseAlreadyCancelled = phase === "PRE_CANCEL";
+    ctx.exerciseVerificationReason = phase === "PRE_CANCEL"
+      ? "verified_already_cancelled"
+      : "verified_cancelled_after_mutation";
+    appendTrace(ctx, {
+      step: "verify_exercise_cancelled_by_lists",
+      exerciseId: ctx.exerciseId,
+      exerciseDate: ctx.exerciseDate || null,
+      phase,
+      page,
+      alreadyCancelled: ctx.exerciseAlreadyCancelled === true,
+    });
+    return finalizeTask(ctx);
+  }
+
+  if (!pageComplete) {
+    const nextPage = page + 1;
+    if (nextPage >= EXERCISE_READBACK_MAX_PAGES) {
+      failExerciseVerification(ctx, "exercise_readback_truncated", {
+        phase,
+        stage: "INCLUSIVE",
+        page,
+      });
+      return finalizeTask(ctx);
+    }
+    return startExerciseReadback(ctx, phase, "INCLUSIVE", nextPage);
+  }
+
+  failExerciseVerification(ctx, "viva_exercise_state_unverified", {
+    phase,
+    page,
+  });
   return finalizeTask(ctx);
 }
 

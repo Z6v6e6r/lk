@@ -38,7 +38,7 @@ const normalizeRefundMethod = (value) => {
   const raw = toStr(value);
   if (!raw) return null;
   const normalized = raw.toUpperCase();
-  if (normalized === "CURRENCY" || normalized === "DEPOSIT") return normalized;
+  if (["CURRENCY", "DEPOSIT", "SERVICE", "NONE"].includes(normalized)) return normalized;
   return null;
 };
 

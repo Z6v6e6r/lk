@@ -1,4 +1,8 @@
-export type BookingCancellationRefundMethod = "CURRENCY" | "DEPOSIT";
+export type BookingCancellationRefundMethod =
+  | "CURRENCY"
+  | "DEPOSIT"
+  | "SERVICE"
+  | "NONE";
 
 export interface BookingCancellationMoneyOption {
   available?: boolean;
@@ -191,7 +195,7 @@ function buildSubscriptionAction(): BookingCancellationAction {
     description: "Будет возвращено 1 занятие на абонемент.",
     confirmLabel: "Вернуть занятие на абонемент",
     successMessage: "Вернули 1 занятие на абонемент.",
-    refundMethod: null,
+    refundMethod: "SERVICE",
     refundSumMinor: null,
   };
 }
@@ -203,7 +207,7 @@ function buildNoneAction(): BookingCancellationAction {
     description: "Возврат недоступен. Запись будет отменена без возврата средств.",
     confirmLabel: "Отменить без возврата",
     successMessage: "Запись отменена без возврата средств.",
-    refundMethod: null,
+    refundMethod: "NONE",
     refundSumMinor: null,
   };
 }
@@ -316,10 +320,13 @@ export function pickAutomaticBookingCancellationAction(
 export function buildBookingCancellationPayload(
   action: BookingCancellationAction,
 ): Record<string, string | boolean> | null {
-  if (action.id === "subscription" || action.id === "none") {
-    return {};
-  }
+  return buildBookingCancellationPayloadForRefundMethod(action.refundMethod);
+}
 
-  if (!action.refundMethod) return null;
-  return { refundMethod: action.refundMethod };
+export function buildBookingCancellationPayloadForRefundMethod(
+  refundMethod: BookingCancellationRefundMethod | null | undefined,
+): Record<string, string | boolean> | null {
+  if (!refundMethod) return null;
+  if (refundMethod === "SERVICE" || refundMethod === "NONE") return {};
+  return { refundMethod };
 }
