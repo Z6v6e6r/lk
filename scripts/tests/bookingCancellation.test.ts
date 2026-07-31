@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   buildBookingCancellationPayload,
+  buildBookingCancellationPayloadForRefundMethod,
   findBookingCancellationActionByRefundMethod,
   formatMinorCurrency,
   pickAutomaticBookingCancellationAction,
@@ -47,6 +48,7 @@ test("subscription cancellation returns visit to subscription", () => {
   assert.equal(plan.mode, "confirm");
   assert.equal(plan.actions.length, 1);
   assert.equal(plan.actions[0].id, "subscription");
+  assert.equal(plan.actions[0].refundMethod, "SERVICE");
   assert.equal(plan.actions[0].successMessage, "Вернули 1 занятие на абонемент.");
   assert.deepEqual(buildBookingCancellationPayload(plan.actions[0]), {});
 });
@@ -61,7 +63,19 @@ test("cancellation only keeps plain no-refund flow", () => {
 
   assert.equal(plan.mode, "confirm");
   assert.equal(plan.actions[0].id, "none");
+  assert.equal(plan.actions[0].refundMethod, "NONE");
   assert.deepEqual(buildBookingCancellationPayload(plan.actions[0]), {});
+});
+
+test("direct refund method payload keeps the proven End User wire contract", () => {
+  assert.deepEqual(buildBookingCancellationPayloadForRefundMethod("SERVICE"), {});
+  assert.deepEqual(buildBookingCancellationPayloadForRefundMethod("NONE"), {});
+  assert.deepEqual(buildBookingCancellationPayloadForRefundMethod("CURRENCY"), {
+    refundMethod: "CURRENCY",
+  });
+  assert.deepEqual(buildBookingCancellationPayloadForRefundMethod("DEPOSIT"), {
+    refundMethod: "DEPOSIT",
+  });
 });
 
 test("automatic cancellation keeps subscription when it is the supported action", () => {

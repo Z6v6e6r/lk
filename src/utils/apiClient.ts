@@ -20,6 +20,7 @@ import type {
 } from "./bookingCancellation";
 import {
   buildBookingCancellationPayload,
+  buildBookingCancellationPayloadForRefundMethod,
   pickAutomaticBookingCancellationAction,
   resolveBookingCancellationVerification,
   resolveBookingCancellationPlan,
@@ -3714,7 +3715,11 @@ export interface PadelGameOrganizerCleanupItem {
   cancelledInLk?: boolean;
   withVivaErrors?: boolean;
   exerciseId?: string | null;
-  exerciseCancelled?: boolean;
+  exerciseCancelled?: boolean | null;
+  exerciseAlreadyCancelled?: boolean;
+  exerciseVerificationReason?: string | null;
+  operationKey?: string | null;
+  upstreamMutationsAttempted?: number;
   bookingIds?: string[];
   bookingSuccessCount?: number;
   bookingFailedCount?: number;
@@ -4532,7 +4537,7 @@ export async function apiCancelBooking(
   actionOrRefundMethod?: BookingCancellationAction | BookingCancellationRefundMethod | null,
 ) {
   const payload = typeof actionOrRefundMethod === "string"
-    ? { refundMethod: actionOrRefundMethod }
+    ? buildBookingCancellationPayloadForRefundMethod(actionOrRefundMethod)
     : actionOrRefundMethod
       ? buildBookingCancellationPayload(actionOrRefundMethod)
       : null;
@@ -8074,6 +8079,7 @@ export async function apiCleanupPadelGameByOrganizer(
     intent?: PadelGameOrganizerCleanupIntent;
     refundMethod?: BookingCancellationRefundMethod | null;
     cancellationActionId?: BookingCancellationAction["id"] | null;
+    actorBookingId?: string | null;
   } = {},
 ) {
   const normalizedGameId = gameId.trim();
@@ -8092,10 +8098,12 @@ export async function apiCleanupPadelGameByOrganizer(
   const safeLimit = Number.isFinite(options.limit)
     ? Math.max(1, Math.min(10, Math.floor(options.limit as number)))
     : 1;
+  const actorBookingId = options.actorBookingId?.trim() || null;
 
   return request<PadelGameOrganizerCleanupResult>("/lk/games/split/cleanup", {
     method: "POST",
     baseUrl,
+    auth: true,
     retries: 0,
     body: JSON.stringify({
       gameId: normalizedGameId,
@@ -8107,6 +8115,7 @@ export async function apiCleanupPadelGameByOrganizer(
       ...(options.cancellationActionId
         ? { cancellationActionId: options.cancellationActionId }
         : {}),
+      ...(actorBookingId ? { actorBookingId } : {}),
     }),
   });
 }

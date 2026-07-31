@@ -3040,6 +3040,7 @@ export function Cabinet({
         intent: "cancel_game",
         refundMethod: action.refundMethod ?? undefined,
         cancellationActionId: action.id,
+        actorBookingId: bookingId,
       });
       const cleanupData = cleanupResult.data;
       const cleanupItems = Array.isArray(cleanupData?.items) ? cleanupData.items : [];
