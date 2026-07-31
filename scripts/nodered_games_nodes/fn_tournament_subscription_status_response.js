@@ -204,6 +204,19 @@ const resolveDailyDropDate = (now = new Date(Date.now())) => {
   return new Date(dropDay).toISOString().slice(0, 10);
 };
 
+const resolveNextDailyDropAt = (completedAtTs) => {
+  if (!Number.isFinite(completedAtTs)) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: AB_LETO_DAILY_DROP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(completedAtTs));
+  const fields = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const dropTs = Date.parse(`${fields.year}-${fields.month}-${fields.day}T10:00:00+03:00`);
+  return new Date(completedAtTs < dropTs ? dropTs : dropTs + 24 * 60 * 60 * 1000).toISOString();
+};
+
 const resolveMoscowDate = (now = new Date(Date.now())) => {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: AB_LETO_DAILY_DROP_TIME_ZONE,
@@ -410,8 +423,10 @@ const createCounterState = (counter) => {
     launchPaidCount: 0,
     launchReservedCount: 0,
     launchRemainingCount: 0,
+    launchCompletedAt: null,
     dailyLimit: Math.max(0, Math.floor(Number(counter?.dailyLimit) || 0)),
     dailyDropDate: toStr(counter?.dailyDropDate),
+    dailyDropStartsAt: null,
     totalLimit,
     paidCount: manualPaidCount,
     reservedCount: 0,
@@ -424,6 +439,7 @@ const createCounterState = (counter) => {
     _lastUpdatedAtTs: null,
     _dailyPaidCount: 0,
     _dailyReservedCount: 0,
+    _launchPaidTimestamps: [],
   };
 };
 
@@ -547,7 +563,11 @@ for (const doc of docs) {
 
   if (status === "PAID") {
     if (state.stagedRelease) {
-      if (releasePhase === "launch") state.launchPaidCount += 1;
+      if (releasePhase === "launch") {
+        state.launchPaidCount += 1;
+        const paidAtTs = toTs(doc.paidAt) ?? toTs(doc.updatedAt) ?? toTs(doc.createdAt);
+        if (paidAtTs != null) state._launchPaidTimestamps.push(paidAtTs);
+      }
       if (isCurrentDailyDrop) state._dailyPaidCount += 1;
       continue;
     }
@@ -572,8 +592,15 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
     const state = statesByCounterKey[counterKey];
     if (!state) return null;
     if (state.stagedRelease) {
-      state.dailyDropActive = state.launchPaidCount >= state.launchLimit;
-      state.releasePhase = state.dailyDropActive ? "daily" : "launch";
+      state._launchPaidTimestamps.sort((left, right) => left - right);
+      const launchComplete = state.launchPaidCount >= state.launchLimit;
+      const launchCompletedAtTs = launchComplete && state._launchPaidTimestamps.length >= state.launchLimit
+        ? state._launchPaidTimestamps[state.launchLimit - 1]
+        : null;
+      state.launchCompletedAt = launchCompletedAtTs == null ? null : new Date(launchCompletedAtTs).toISOString();
+      state.dailyDropStartsAt = launchComplete ? resolveNextDailyDropAt(launchCompletedAtTs) : null;
+      state.dailyDropActive = Boolean(state.dailyDropStartsAt && Date.parse(state.dailyDropStartsAt) <= now);
+      state.releasePhase = state.dailyDropActive ? "daily" : launchComplete ? "daily_pending" : "launch";
       state.launchRemainingCount = Math.max(
         state.launchLimit - state.launchPaidCount - state.launchReservedCount,
         0,
@@ -591,6 +618,7 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
     delete state._lastUpdatedAtTs;
     delete state._dailyPaidCount;
     delete state._dailyReservedCount;
+    delete state._launchPaidTimestamps;
     return state;
   })
   .filter((state) => Boolean(state));
@@ -653,8 +681,10 @@ msg.payload = {
   launchPaidCount: toInt(selectedCounter.launchPaidCount, 0),
   launchReservedCount: toInt(selectedCounter.launchReservedCount, 0),
   launchRemainingCount: toInt(selectedCounter.launchRemainingCount, 0),
+  launchCompletedAt: toStr(selectedCounter.launchCompletedAt),
   dailyLimit: toInt(selectedCounter.dailyLimit, 0),
   dailyDropDate: toStr(selectedCounter.dailyDropDate),
+  dailyDropStartsAt: toStr(selectedCounter.dailyDropStartsAt),
   priceMinor: selectedCounter.priceMinor == null ? null : Math.max(0, Math.round(Number(selectedCounter.priceMinor) || 0)),
   price: selectedCounter.price == null ? null : Number(selectedCounter.price),
   updatedAt: toStr(selectedCounter.updatedAt) || new Date().toISOString(),

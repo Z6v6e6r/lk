@@ -567,6 +567,7 @@ test("staged release changes to a seven-seat daily drop after 100 PAID launch sa
     counterKey: "friendship",
     releasePhase: "launch",
     status: "PAID",
+    updatedAt: "2026-08-01T06:00:00.000Z",
   }));
   const currentDailyRows = Array.from({ length: 6 }, () => ({
     inventoryId,
@@ -620,6 +621,53 @@ test("staged release changes to a seven-seat daily drop after 100 PAID launch sa
   assert.equal(blockedDetails.dailyDropActive, true);
 });
 
+test("staged release waits for the next 10:00 Moscow window after the launch pool sells out", () => {
+  const inventoryId = "ab_leto_2026_100_then_7_v1_ra";
+  const launchRows = Array.from({ length: 100 }, () => ({
+    inventoryId,
+    counterKey: "ra",
+    releasePhase: "launch",
+    status: "PAID",
+    updatedAt: "2026-08-01T12:00:00.000Z",
+  }));
+  const prepareAt = (nowIso: string) => withFixedNow(nowIso, () => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+    {
+      payload: {
+        clientPhone: "79990000000",
+        counterKey: "ra",
+        paymentRef: `next-drop-${nowIso}`,
+      },
+      req: { query: {} },
+    },
+  )) as unknown[];
+
+  const beforeNextDropIso = "2026-08-01T13:00:00.000Z";
+  const beforeCtx = asRecord(asRecord(prepareAt(beforeNextDropIso)[0])._summerSubscriptionCtx);
+  const blocked = withFixedNow(beforeNextDropIso, () => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
+    { _summerSubscriptionCtx: beforeCtx, payload: launchRows },
+  )) as unknown[];
+  const blockedDetails = asRecord(asRecord(asRecord(blocked[1]).payload).details);
+  assert.equal(asRecord(blocked[1]).statusCode, 409);
+  assert.equal(blockedDetails.releasePhase, "daily_pending");
+  assert.equal(blockedDetails.dailyDropActive, false);
+  assert.equal(blockedDetails.launchCompletedAt, "2026-08-01T12:00:00.000Z");
+  assert.equal(blockedDetails.dailyDropStartsAt, "2026-08-02T07:00:00.000Z");
+
+  const atNextDropIso = "2026-08-02T07:00:00.000Z";
+  const nextCtx = asRecord(asRecord(prepareAt(atNextDropIso)[0])._summerSubscriptionCtx);
+  const allowed = withFixedNow(atNextDropIso, () => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
+    { _summerSubscriptionCtx: nextCtx, payload: launchRows },
+  )) as unknown[];
+  const allowedCtx = asRecord(asRecord(allowed[0])._summerSubscriptionCtx);
+  assert.equal(allowedCtx.releasePhase, "daily");
+  assert.equal(allowedCtx.dailyDropActive, true);
+  assert.equal(allowedCtx.totalLimit, 7);
+  assert.equal(allowedCtx.remainingBefore, 7);
+});
+
 test("staged status exposes launch and daily phases independently per product", () => {
   const nowIso = "2026-08-01T12:00:00.000Z";
   const readStatus = (counterKey: "friendship" | "ra", rows: Array<Record<string, unknown>>) => {
@@ -664,6 +712,7 @@ test("staged status exposes launch and daily phases independently per product", 
       counterKey: "ra",
       releasePhase: "launch",
       status: "PAID",
+      updatedAt: "2026-08-01T06:00:00.000Z",
     })),
     ...Array.from({ length: 3 }, () => ({
       inventoryId,
@@ -1408,6 +1457,7 @@ test("summer subscription counter refresh materializes the staged daily phase", 
       inventoryId,
       releasePhase: "launch",
       status: "PAID",
+      updatedAt: "2026-08-02T06:00:00.000Z",
     })),
     ...Array.from({ length: 2 }, () => ({
       counterKey: "ra",
