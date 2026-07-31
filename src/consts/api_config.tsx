@@ -1,6 +1,8 @@
-export const API_BASE = import.meta.env.VITE_API_BASE as string;
+export const API_BASE =
+  (import.meta.env.VITE_API_BASE as string | undefined) || "https://api.vivacrm.ru";
 export const KEYCLOAK_BASE = import.meta.env.VITE_KEYCLOAK_BASE as string;
-export const TENANT_KEY = import.meta.env.VITE_TENANT_KEY as string;
+export const TENANT_KEY =
+  (import.meta.env.VITE_TENANT_KEY as string | undefined) || "iSkq6G";
 export const SERV2 = import.meta.env.VITE_SERV2 as string;
 export const SERV2_FALLBACK = import.meta.env.VITE_SERV2_FALLBACK as string | undefined;
 export const IS_DEV_RELEASE_CHANNEL = import.meta.env.MODE === "dev";
