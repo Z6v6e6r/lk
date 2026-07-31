@@ -1290,7 +1290,7 @@ const comment = findTabNode(
 );
 if (comment) {
   comment.name = 'LK game results lifecycle + CUP canonical rating ledger';
-    comment.info = 'States: NO_RESULT, PENDING_REVIEW, CONFIRMED, DISPUTED, CORRECTION_PENDING, NO_RESULT_EXPIRED. Session open/update return success only after Mongo persistence; update uses revision CAS. Submit writes immutable sets, public pairings, and internal rating facts first without reading rating state, then returns 202 and starts projections without delaying HTTP. Confirm loads player_rating_state, calculates per-set impact from the stored facts (including pair changes), and appends immutable rating_events before updating player_rating_state; player_ratings and Viva are compatibility projections during migration.';
+  comment.info = 'States: NO_RESULT, PENDING_REVIEW, CONFIRMED, DISPUTED, CORRECTION_PENDING, NO_RESULT_EXPIRED. Session open/update return success only after Mongo persistence; update uses revision CAS. V2 submit validates pairings, persists immutable score facts plus durable ratingWork=QUEUED, and returns 202 without calculating rating. The separate game-result worker leases work, stores a deterministic plan, appends immutable rating_events, replays player_rating_state, and writes compatibility/Viva projections. A dispute queues REVERTED work; an author correction creates a new scoreRevision and waits for predecessor compensation. Legacy V1 confirm-time rating nodes remain for existing records only.';
 }
 
 // Remove obsolete nodes from the pre-session / provisional-submit topology.

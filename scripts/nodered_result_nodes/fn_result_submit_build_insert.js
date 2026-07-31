@@ -98,14 +98,38 @@ const latestExpiredCorrection = latestStatus === "CORRECTION_PENDING"
   && latestCorrectionDeadlineTs <= Date.now();
 const latestActive = latest && ["PENDING_REVIEW", "CORRECTION_PENDING"].includes(latestStatus) && !latestExpiredCorrection;
 const incomingSignature = buildResultSignature(ctx);
+const latestSamePayload = Boolean(latest?.resultSignature && latest.resultSignature === incomingSignature);
+const correctionActor = ctx.actorMember || ctx.actor || {};
+const correctionActorMatchesAuthor = Boolean(
+  toStr(correctionActor?.id)
+    && toStr(latest?.submittedBy?.id || latest?.submittedBy?.clientId)
+    && toStr(correctionActor.id) === toStr(latest.submittedBy.id || latest.submittedBy.clientId)
+) || Boolean(
+  toStr(correctionActor?.memberKey)
+    && toStr(latest?.submittedBy?.memberKey)
+    && toStr(correctionActor.memberKey) === toStr(latest.submittedBy.memberKey)
+) || Boolean(
+  toStr(correctionActor?.phoneNorm)
+    && toStr(latest?.submittedBy?.phoneNorm)
+    && toStr(correctionActor.phoneNorm) === toStr(latest.submittedBy.phoneNorm)
+);
+const isCorrectionSubmission = latestStatus === "CORRECTION_PENDING"
+  && !latestExpiredCorrection
+  && !latestSamePayload;
 
-if (latestActive) {
-  const samePayload = latest.resultSignature && latest.resultSignature === incomingSignature;
-  msg.statusCode = samePayload ? 200 : 409;
+if (latestActive && !isCorrectionSubmission) {
+  msg.statusCode = latestSamePayload ? 200 : 409;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };
-  msg.payload = samePayload
+  msg.payload = latestSamePayload
     ? Object.assign({}, latest, { idempotent: true })
     : { error: "Active result review already exists", pendingResult: latest };
+  return [null, msg, msg, null, null, null];
+}
+
+if (isCorrectionSubmission && !correctionActorMatchesAuthor) {
+  msg.statusCode = 403;
+  msg.headers = { "Content-Type": "application/json; charset=utf-8" };
+  msg.payload = { error: "Only the original result author can submit a correction" };
   return [null, msg, msg, null, null, null];
 }
 
@@ -129,6 +153,14 @@ for (let index = 0; index < resultIdSeed.length; index += 1) {
 }
 const resultId = `res_${ctx.gameId}_${Math.abs(hash)}`;
 const ratingEventId = `rate_${resultId}`;
+const previousScoreRevision = Number.isInteger(Number(latest?.scoreRevision)) && Number(latest.scoreRevision) > 0
+  ? Number(latest.scoreRevision)
+  : 1;
+const scoreRevision = isCorrectionSubmission ? previousScoreRevision + 1 : 1;
+const lineageRootResultId = isCorrectionSubmission
+  ? (toStr(latest?.lineageRootResultId) || toStr(latest?.id) || resultId)
+  : resultId;
+const supersedesResultId = isCorrectionSubmission ? toStr(latest?.id) : null;
 const ratingFacts = buildInternalRatingFacts(ctx);
 const publicSetPairings = asArray(ctx.setPairings);
 const ratingEvent = ctx.ratingEnabled === false
@@ -149,6 +181,27 @@ const ratingEvent = ctx.ratingEnabled === false
     ratingImpact: [],
     ratingFactsVersion: ratingFacts.version,
   };
+const ratingWork = {
+  schemaVersion: 1,
+  executionMode: "ACTIVE",
+  jobKey: `game-result:${resultId}:score:${scoreRevision}:apply`,
+  generation: 1,
+  desiredState: "APPLIED",
+  status: ctx.ratingEnabled === false ? "SKIPPED" : "QUEUED",
+  applySemantics: isCorrectionSubmission ? "CORRECTION_TIME" : "INITIAL_APPLY",
+  attempts: 0,
+  queuedAt: nowIso,
+  queuedAtTs: nowTs,
+  nextAttemptAt: nowIso,
+  nextAttemptAtTs: nowTs,
+  leaseOwner: null,
+  leaseUntil: null,
+  leaseUntilTs: null,
+  preparedPlan: null,
+  appliedGeneration: null,
+  appliedEventIds: [],
+  lastError: null,
+};
 
 const doc = {
   _id: resultId,
@@ -157,6 +210,19 @@ const doc = {
   gameId: ctx.gameId,
   tenantKey: ctx.game?.tenantKey || null,
   vivaExerciseId: ctx.game?.booking?.vivaExerciseId || null,
+  resultModelVersion: 2,
+  scoreRevision,
+  lineageRootResultId,
+  supersedesResultId,
+  effectiveState: "EFFECTIVE",
+  review: {
+    state: "OPEN",
+    openedAt: nowIso,
+    openedAtTs: nowTs,
+    deadlineAt: disputeDeadlineAt,
+    deadlineAtTs: disputeDeadlineTs,
+  },
+  ratingWork,
   revision: 1,
   status: "PENDING_REVIEW",
   lifecycleState: "PENDING_REVIEW",

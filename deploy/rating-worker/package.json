@@ -1,7 +1,7 @@
 {
   "name": "padlhub-rating-worker",
   "private": true,
-  "version": "1.0.7",
+  "version": "1.1.0",
   "type": "module",
   "dependencies": {
     "mongodb": "7.2.0"

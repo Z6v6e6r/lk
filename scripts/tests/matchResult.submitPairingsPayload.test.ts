@@ -36,7 +36,7 @@ function transpileRuntime(code: string) {
   }).outputText;
 }
 
-const buildSubmitPairingsPayload = new Function(`
+const pairingRuntime = new Function(`
   ${transpileRuntime(`
     const DETAILS_TEAM_SLOTS_COUNT = 4;
     function normalizePhoneForGame(value: string | null | undefined): string | null {
@@ -84,13 +84,24 @@ const buildSubmitPairingsPayload = new Function(`
     ${extractFunctionBlock("function materializeCompletedMatchResultSetPairings")}
     ${extractFunctionBlock("function buildVisibleMatchResultSetPairings")}
     ${extractFunctionBlock("function buildMatchResultSubmitSetPairingsPayload")}
+    ${extractFunctionBlock("function validateCompletedMatchResultSetPairings")}
   `)}
-  return buildMatchResultSubmitSetPairingsPayload;
-`)() as (
-  pairings: Array<Array<Record<string, unknown> | null> | null>,
-  completedSetCount: number,
-  fallbackSlots: Array<Record<string, unknown> | null>,
-) => Array<{ setIndex: number; teamSlots: Array<{ memberKey: string | null; name: string | null } | null> }>;
+  return { buildMatchResultSubmitSetPairingsPayload, validateCompletedMatchResultSetPairings };
+`)() as {
+  buildMatchResultSubmitSetPairingsPayload: (
+    pairings: Array<Array<Record<string, unknown> | null> | null>,
+    completedSetCount: number,
+    fallbackSlots: Array<Record<string, unknown> | null>,
+  ) => Array<{ setIndex: number; teamSlots: Array<{ memberKey: string | null; name: string | null } | null> }>;
+  validateCompletedMatchResultSetPairings: (
+    pairings: Array<Array<Record<string, unknown> | null> | null>,
+    completedSetCount: number,
+    fallbackSlots: Array<Record<string, unknown> | null>,
+  ) => string | null;
+};
+
+const buildSubmitPairingsPayload = pairingRuntime.buildMatchResultSubmitSetPairingsPayload;
+const validateSubmitPairings = pairingRuntime.validateCompletedMatchResultSetPairings;
 
 function player(id: string, name: string) {
   return { id, name };
@@ -130,4 +141,61 @@ test("submit payload uses the current visible lineup for trailing completed sets
       ["id:p1", "id:p2", "id:p3", "id:p4"],
     ],
   );
+});
+
+test("submit pairing validation accepts four distinct players", () => {
+  const pairing = [
+    player("p1", "Андрей"),
+    player("p2", "Максим"),
+    player("p3", "Артем"),
+    player("p4", "Никита"),
+  ];
+
+  assert.equal(validateSubmitPairings([pairing], 1, pairing), null);
+});
+
+test("submit pairing validation rejects an incomplete explicit pairing", () => {
+  const incomplete = [
+    player("p1", "Андрей"),
+    player("p2", "Максим"),
+    player("p3", "Артем"),
+    null,
+  ];
+
+  assert.match(validateSubmitPairings([incomplete], 1, incomplete) || "", /сета 1.*четырех игроков/i);
+});
+
+test("submit pairing validation rejects duplicate players", () => {
+  const duplicate = [
+    player("p1", "Андрей"),
+    player("p2", "Максим"),
+    player("p3", "Артем"),
+    player("p1", "Андрей"),
+  ];
+
+  assert.match(validateSubmitPairings([duplicate], 1, duplicate) || "", /каждый игрок.*один раз/i);
+});
+
+test("submit pairing validation checks trailing completed sets materialized from fallback", () => {
+  const complete = [
+    player("p1", "Андрей"),
+    player("p2", "Максим"),
+    player("p3", "Артем"),
+    player("p4", "Никита"),
+  ];
+  const incomplete = [complete[0], complete[1], complete[2], null];
+
+  assert.equal(validateSubmitPairings([complete, null], 2, complete), null);
+  assert.match(validateSubmitPairings([incomplete, null], 2, incomplete) || "", /сета 1/i);
+});
+
+test("submit pairing validation ignores empty pairings for uncompleted sets", () => {
+  const complete = [
+    player("p1", "Андрей"),
+    player("p2", "Максим"),
+    player("p3", "Артем"),
+    player("p4", "Никита"),
+  ];
+
+  assert.equal(validateSubmitPairings([complete, null], 1, complete), null);
 });

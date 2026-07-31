@@ -74,6 +74,8 @@
     "rating:ledger:migrate": "node scripts/migrate_player_rating_ledger.mjs",
     "rating:state:migrate": "node --experimental-strip-types scripts/migrate_player_rating_state.mjs",
     "rating:worker": "node --experimental-strip-types scripts/rating_worker.mjs",
+    "rating:game-results:worker": "node --experimental-strip-types scripts/game_result_rating_worker.mjs",
+    "test:game-result-rating-worker": "node --experimental-strip-types --test scripts/tests/gameResultRatingWorker.test.ts",
     "rating:reconcile": "node --experimental-strip-types scripts/reconcile_player_rating.mjs",
     "preview": "vite preview"
   },

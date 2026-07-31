@@ -10,6 +10,7 @@ const runtimeDir = process.env.RATING_WORKER_RUNTIME_DIR || "/var/lib/padlhub-ra
 const envFile = process.env.RATING_WORKER_ENV_FILE || "/etc/padlhub-rating-worker.env";
 const modeIndex = process.argv.indexOf("--mode");
 const mode = modeIndex >= 0 ? process.argv[modeIndex + 1] : "incremental";
+const gameResultsOnly = process.argv.includes("--game-results-only");
 
 function isRecord(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -98,6 +99,42 @@ fs.chmodSync(runtimeDir, 0o700);
 fs.chmodSync(path.join(runtimeDir, "runs"), 0o700);
 fs.chmodSync(outDir, 0o700);
 
+const gameResultWorkerEnabled = String(runtimeEnv.GAME_RESULT_RATING_WORKER_ENABLED || "")
+  .trim()
+  .toLowerCase() === "true";
+let gameResults = {
+  skipped: true,
+  reason: gameResultWorkerEnabled ? "NOT_RUN" : "GAME_RESULT_RATING_WORKER_DISABLED",
+};
+if (gameResultWorkerEnabled) {
+  const gameResultOut = path.join(outDir, `game-result-rating-worker-${runStamp}.json`);
+  try {
+    gameResults = runNode([
+      "--experimental-strip-types",
+      path.join(rootDir, "scripts/game_result_rating_worker.mjs"),
+      "--mongo-uri", runtimeEnv.MONGODB_URI,
+      "--apply",
+      "--limit", runtimeEnv.GAME_RESULT_RATING_WORKER_LIMIT || "20",
+      "--out", gameResultOut,
+    ], runtimeEnv, `${gameResultOut}.stdout`);
+  } catch (error) {
+    gameResults = {
+      ok: false,
+      skipped: false,
+      reason: "GAME_RESULT_RATING_WORKER_FAILED",
+      error: String(error?.message || error).slice(0, 500),
+    };
+    if (!gameResultsOnly) {
+      console.error("[rating-worker] Game-result rating run failed; continuing scheduled canonical rating run");
+    }
+  }
+}
+
+if (gameResultsOnly) {
+  console.log(JSON.stringify({ ok: gameResults?.ok !== false, mode: "game-results", gameResults }, null, 2));
+  process.exit(gameResults?.ok === false ? 1 : 0);
+}
+
 const hasVivaCredentials = Boolean(
   runtimeEnv.VIVA_CLIENT_ID
   && runtimeEnv.VIVA_USERNAME
@@ -136,4 +173,4 @@ const worker = runNode([
   "--out", workerOut,
 ], runtimeEnv, `${workerOut}.stdout`);
 
-console.log(JSON.stringify({ ok: true, mode, visits, worker }, null, 2));
+console.log(JSON.stringify({ ok: true, mode, gameResults, visits, worker }, null, 2));

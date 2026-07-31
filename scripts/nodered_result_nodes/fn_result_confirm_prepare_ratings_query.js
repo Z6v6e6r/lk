@@ -177,6 +177,7 @@ if (isDisputeAction && Number.isFinite(disputeDeadlineTs) && disputeDeadlineTs <
 
 const requiresLiveRating = ratingEnabled
   && ["CONFIRM", "ACCEPT_CORRECTION", "EXPIRE"].includes(action)
+  && Number(latest?.resultModelVersion || 1) < 2
   && !latest?.alreadyFinal
   && !latest?.expiredToNoResult;
 const effectiveSetPairings = buildEffectiveSetPairings(latest);

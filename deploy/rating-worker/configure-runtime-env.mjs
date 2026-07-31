@@ -16,6 +16,8 @@ const values = {
   VIVA_CLIENT_ID: process.env.VIVA_CLIENT_ID || pick("vivaClientId", "VIVA_CLIENT_ID"),
   VIVA_USERNAME: process.env.VIVA_USERNAME || pick("vivaUsername", "VIVA_USERNAME"),
   VIVA_PASSWORD: process.env.VIVA_PASSWORD || pick("vivaPassword", "VIVA_PASSWORD"),
+  GAME_RESULT_RATING_WORKER_ENABLED: process.env.GAME_RESULT_RATING_WORKER_ENABLED || "false",
+  GAME_RESULT_RATING_WORKER_LIMIT: process.env.GAME_RESULT_RATING_WORKER_LIMIT || "20",
 };
 if (Object.values(values).some((value) => !value || /[\r\n]/.test(value))) {
   throw new Error("Viva runtime credentials are incomplete");

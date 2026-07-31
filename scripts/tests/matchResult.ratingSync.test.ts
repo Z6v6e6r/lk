@@ -39,8 +39,9 @@ test("result submit writes the aggregate without a player rating lookup", () => 
   assert.doesNotMatch(resultFlowPatchSource, /const submitPrepareRatings\s*=\s*ensureNode/);
 });
 
-test("result confirm queries canonical live ratings and calculates from per-set facts", () => {
+test("v2 confirm skips synchronous rating while the legacy path remains compatible", () => {
   assert.match(confirmPrepareRatingsQuerySource, /ratingFacts\?\.effectiveSetPairings/);
+  assert.match(confirmPrepareRatingsQuerySource, /resultModelVersion \|\| 1\) < 2/);
   assert.match(confirmCalculateRatingSource, /player_rating_state_at_confirm/);
   assert.match(confirmCalculateRatingSource, /pairings\.find/);
   assert.doesNotMatch(confirmCalculateRatingSource, /member\?\.ratingNumeric/);
