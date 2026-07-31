@@ -13,6 +13,7 @@ import {
 } from "./exerciseCategory.ts";
 
 export const SUBSCRIPTION_CATEGORY_DAILY_LIMIT_CODE = "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED";
+export const SUBSCRIPTION_CATEGORY_DAILY_LIMIT_SHARED_FROM = "2026-08-01";
 
 export const SUBSCRIPTION_CATEGORY_LIMIT_PRODUCT_IDS = {
   friendship: "b2e6a9d4-53b5-4f79-87ec-3fb076381e9b",
@@ -294,7 +295,11 @@ const getClientSubscriptionId = (booking: UnknownRecord): string | null => {
 const getStatusValues = (booking: UnknownRecord, exercise: UnknownRecord | null): string[] => [
   booking.status,
   booking.state,
+  booking.bookingStatus,
   booking.cancellationReason,
+  pickRecord(booking, ["transactionStatus"])?.transactionStatus,
+  pickRecord(pickRecord(booking, ["transactionStatus"]) || {}, ["cardPaymentStatus"])?.status,
+  pickRecord(pickRecord(booking, ["transactionStatus"]) || {}, ["cardPaymentStatus"])?.originalStatus,
   exercise?.status,
   exercise?.state,
 ].map((value) => String(value || "").trim().toUpperCase()).filter(Boolean);
@@ -305,6 +310,8 @@ const isBookingActive = (booking: UnknownRecord, exercise: UnknownRecord | null)
     || booking.cancelled === true
     || booking.canceled === true
     || booking.archived === true
+    || Boolean(toStr(booking.cancellationDate))
+    || Boolean(toStr(booking.cancelledAt))
     || exercise?.isCancelled === true
     || exercise?.cancelled === true
     || exercise?.canceled === true
@@ -417,6 +424,10 @@ export function formatSubscriptionCategoryDailyLimitMessage(
   const locationPart = studioName ? ` на станции ${studioName}` : "";
   const timePart = timeLabel ? ` в ${timeLabel}` : "";
   const datePart = dateLabel ? ` на ${dateLabel}` : "";
+  const eventDate = normalizeSubscriptionCategoryDailyLimitDate(existingEvent?.date);
+  if (eventDate && eventDate >= SUBSCRIPTION_CATEGORY_DAILY_LIMIT_SHARED_FROM) {
+    return `По этому абонементу доступно одно списание в день. У вас уже есть ${CATEGORY_LABELS[existingEvent?.category ?? options.category]}: ${eventTitle}${locationPart}${timePart}${datePart}. Выберите другую дату.`;
+  }
   return `Вам доступно использование абонемента на одно событие данной категории, у вас уже есть ${CATEGORY_LABELS[options.category]}: ${eventTitle}${locationPart}${timePart}${datePart}. Выберите другую дату или другую категорию записи.`;
 }
 
@@ -434,9 +445,11 @@ export function resolveSubscriptionCategoryDailyLimitConflictFromBookings(
   const targetDate = normalizeSubscriptionCategoryDailyLimitDate(options.targetDate);
   const category = options.category ?? null;
   const planKey = resolveSubscriptionCategoryDailyLimitPlanKey(options.currentSubscription);
-  if (!targetDate || !category || !planKey || !PLAN_CATEGORIES[planKey].includes(category) || !Array.isArray(bookings)) {
+  const planCategories = planKey ? PLAN_CATEGORIES[planKey] : [];
+  if (!targetDate || !category || !planKey || !planCategories.includes(category) || !Array.isArray(bookings)) {
     return null;
   }
+  const hasSharedDailyLimit = targetDate >= SUBSCRIPTION_CATEGORY_DAILY_LIMIT_SHARED_FROM;
 
   const currentClientSubscriptionId = normalizeComparableId(options.currentClientSubscriptionId);
   const currentExerciseId = normalizeComparableId(options.currentExerciseId);
@@ -454,18 +467,15 @@ export function resolveSubscriptionCategoryDailyLimitConflictFromBookings(
     const bookingClientSubscriptionId = normalizeComparableId(getClientSubscriptionId(item));
     if (currentBookingId && bookingId === currentBookingId) continue;
     if (currentExerciseId && exerciseId === currentExerciseId) continue;
-    if (
-      currentClientSubscriptionId
-      && bookingClientSubscriptionId
-      && bookingClientSubscriptionId !== currentClientSubscriptionId
-    ) {
+    if (currentClientSubscriptionId && bookingClientSubscriptionId !== currentClientSubscriptionId) {
       continue;
     }
 
     const bookingCategory = resolveSubscriptionCategoryDailyLimitCategoryFromEvent(item);
-    if (bookingCategory !== category) continue;
+    if (!bookingCategory) continue;
+    if (hasSharedDailyLimit ? !planCategories.includes(bookingCategory) : bookingCategory !== category) continue;
 
-    const existingEvent = normalizeEvent(item, category);
+    const existingEvent = normalizeEvent(item, bookingCategory);
     return {
       code: SUBSCRIPTION_CATEGORY_DAILY_LIMIT_CODE,
       category,

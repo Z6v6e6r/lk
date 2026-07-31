@@ -4432,6 +4432,62 @@ export async function apiFetchBookings(
   });
 }
 
+export interface SubscriptionDailyLimitBookingsResponse {
+  content: Booking[];
+}
+
+export async function apiFetchSubscriptionDailyLimitBookings(
+  options: {
+    size?: number;
+  } = {},
+): Promise<ApiResult<SubscriptionDailyLimitBookingsResponse>> {
+  const [activeResult, historyResult] = await Promise.all([
+    apiFetchBookings(false, options),
+    apiFetchBookings(true, options),
+  ]);
+  const failedResult = activeResult.error
+    ? { source: "active", result: activeResult }
+    : historyResult.error
+      ? { source: "history", result: historyResult }
+      : null;
+  if (failedResult) {
+    return {
+      data: null,
+      error: {
+        status: failedResult.result.error?.status ?? failedResult.result.status,
+        message: "Не удалось загрузить все записи для проверки дневного лимита",
+        raw: {
+          source: failedResult.source,
+          cause: failedResult.result.error?.raw ?? failedResult.result.error,
+        },
+      },
+      status: failedResult.result.status,
+    };
+  }
+
+  const mergedById = new Map<string, Booking>();
+  const withoutId: Booking[] = [];
+  [
+    ...(activeResult.data?.content ?? []),
+    ...(historyResult.data?.content ?? []),
+  ].forEach((booking) => {
+    const id = String(booking?.id || "").trim();
+    if (!id) {
+      withoutId.push(booking);
+      return;
+    }
+    const previous = mergedById.get(id);
+    mergedById.set(id, previous ? { ...previous, ...booking } : booking);
+  });
+  const content = [...mergedById.values(), ...withoutId];
+
+  return {
+    data: { content },
+    error: null,
+    status: historyResult.status ?? activeResult.status,
+  };
+}
+
 export async function apiVerifyBookingCancellation(
   bookingIdRaw: string,
   options: {

@@ -6,7 +6,7 @@ import {
   TENANT_KEY,
 } from "../consts/api_config";
 import {
-  apiFetchBookings,
+  apiFetchSubscriptionDailyLimitBookings,
   apiFetchSubscriptioName,
   apiVerifyBookingCancellation,
   request,
@@ -1373,15 +1373,9 @@ function normalizeVivaProduct(
   source: TournamentVivaProduct["source"],
 ): TournamentVivaProduct | null {
   if (!isRecord(value)) return null;
-  const id = pickString(value, [
-    "id",
-    "productId",
-    "subscriptionId",
-    "clientSubscriptionId",
-    "oneTimeId",
-    "clientOneTimeId",
-    "uuid",
-  ]);
+  const id = pickString(value, source === "client-subscription"
+    ? ["clientSubscriptionId", "subscriptionId", "id", "productId", "uuid"]
+    : ["id", "productId", "subscriptionId", "clientSubscriptionId", "oneTimeId", "clientOneTimeId", "uuid"]);
   if (!id) return null;
   const rawType = String(pickString(value, ["productType", "type"]) || "").trim().toUpperCase();
   const type: TournamentVivaProductType =
@@ -1416,7 +1410,7 @@ function normalizeVivaProducts(items: unknown[], source: TournamentVivaProduct["
 
 function pickSubscriptionLookupId(value: unknown) {
   if (!isRecord(value)) return null;
-  return pickString(value, ["subscriptionId", "clientSubscriptionId", "id"]);
+  return pickString(value, ["clientSubscriptionId", "subscriptionId", "id"]);
 }
 
 async function resolveClientSubscriptionProductNames(
@@ -2467,7 +2461,7 @@ async function apiCreateTournamentVivaBookingFromSubscription(
     && targetCategory
     && subscriptionPlanAllowsDailyLimitCategory(params.product, targetCategory)
   ) {
-    const bookingsResult = await apiFetchBookings(false, { size: 1000 });
+    const bookingsResult = await apiFetchSubscriptionDailyLimitBookings({ size: 1000 });
     if (bookingsResult.error) {
       return {
         data: null,
@@ -2486,7 +2480,7 @@ async function apiCreateTournamentVivaBookingFromSubscription(
         targetDate,
         category: targetCategory,
         currentSubscription: params.product,
-        currentClientSubscriptionId: params.product.id,
+        currentClientSubscriptionId: pickSubscriptionLookupId(params.product.raw) || params.product.id,
         currentExerciseId: params.exerciseId,
       },
     );

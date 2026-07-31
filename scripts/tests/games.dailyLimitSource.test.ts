@@ -13,6 +13,7 @@ test("split game create enriches client subscription before category daily limit
   const paymentIndex = gamesSource.indexOf("apiCreatePadelSplitGamePayment", functionStart);
   const candidateIndex = gamesSource.indexOf("resolveSplitSubscriptionDailyLimitCandidate", functionStart);
   const planIndex = gamesSource.indexOf("subscriptionPlanAllowsDailyLimitCategory", functionStart);
+  const bookingsIndex = gamesSource.indexOf("apiFetchSubscriptionDailyLimitBookings", functionStart);
   const currentSubscriptionIndex = gamesSource.indexOf("currentSubscription: dailyLimitSubscriptionCandidate", functionStart);
 
   assert.ok(helperIndex >= 0, "daily limit subscription enrichment helper must exist");
@@ -22,6 +23,7 @@ test("split game create enriches client subscription before category daily limit
   assert.ok(paymentIndex > functionStart, "split create payment call must exist");
   assert.ok(candidateIndex > functionStart, "split create must resolve daily limit candidate");
   assert.ok(planIndex > candidateIndex, "plan matrix must use enriched candidate");
+  assert.ok(bookingsIndex > planIndex, "split create must load active and history bookings");
   assert.ok(currentSubscriptionIndex > candidateIndex, "conflict resolver must receive enriched candidate");
   assert.ok(candidateIndex < paymentIndex, "enrichment must run before creating Viva booking/payment");
   assert.ok(planIndex < paymentIndex, "daily limit plan check must run before creating Viva booking/payment");
@@ -36,6 +38,7 @@ test("standalone game join enriches client subscription before category daily li
   const paymentIndex = gameJoinSource.indexOf("apiCreatePadelSplitParticipantPayment", functionStart);
   const candidateIndex = gameJoinSource.indexOf("resolveSubscriptionDailyLimitCandidate", functionStart);
   const planIndex = gameJoinSource.indexOf("subscriptionPlanAllowsDailyLimitCategory", functionStart);
+  const bookingsIndex = gameJoinSource.indexOf("apiFetchSubscriptionDailyLimitBookings", functionStart);
   const currentSubscriptionIndex = gameJoinSource.indexOf("currentSubscription: dailyLimitSubscriptionCandidate", functionStart);
 
   assert.ok(helperIndex >= 0, "standalone join enrichment helper must exist");
@@ -45,6 +48,7 @@ test("standalone game join enriches client subscription before category daily li
   assert.ok(paymentIndex > functionStart, "standalone join payment call must exist");
   assert.ok(candidateIndex > functionStart, "standalone join must resolve daily limit candidate");
   assert.ok(planIndex > candidateIndex, "standalone join plan matrix must use enriched candidate");
+  assert.ok(bookingsIndex > planIndex, "standalone join must load active and history bookings");
   assert.ok(currentSubscriptionIndex > candidateIndex, "standalone join conflict resolver must receive enriched candidate");
   assert.ok(candidateIndex < paymentIndex, "standalone join enrichment must run before creating Viva booking/payment");
   assert.ok(planIndex < paymentIndex, "standalone join plan check must run before creating Viva booking/payment");

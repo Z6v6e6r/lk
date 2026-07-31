@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   apiCancelPadelSelfRemovalBookings,
   apiCreatePadelSplitParticipantPayment,
-  apiFetchBookings,
+  apiFetchSubscriptionDailyLimitBookings,
   apiFetchPadelGameRecord,
   apiFetchTournamentParticipants,
   apiFetchProfile,
@@ -1431,7 +1431,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
             dailyLimitSubscriptionCandidate,
             SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME,
           )) {
-            const dailyLimitBookingsResult = await apiFetchBookings(false, { size: 1000 });
+            const dailyLimitBookingsResult = await apiFetchSubscriptionDailyLimitBookings({ size: 1000 });
             if (dailyLimitBookingsResult.error) {
               setSubmitting(null);
               setDecisionError("Не удалось проверить дневной лимит абонемента");

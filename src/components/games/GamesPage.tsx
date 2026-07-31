@@ -21,6 +21,7 @@ import {
   apiCancelPadelSelfRemovalBookings,
   apiFetchMasterServicePromoDiscounts,
   apiFetchBookings,
+  apiFetchSubscriptionDailyLimitBookings,
   apiFetchExerciseById,
   apiFetchMasterServiceGameModes,
   apiCreatePadelGameRecord,
@@ -10298,7 +10299,7 @@ export default function GamesPage({
         dailyLimitSubscriptionCandidate,
         SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME,
       )) {
-        const dailyLimitBookingsResult = await apiFetchBookings(false, { size: 1000 });
+        const dailyLimitBookingsResult = await apiFetchSubscriptionDailyLimitBookings({ size: 1000 });
         if (dailyLimitBookingsResult.error) {
           setPayError("Не удалось проверить дневной лимит абонемента");
           setLoadingPay(false);
@@ -13641,7 +13642,7 @@ export default function GamesPage({
           dailyLimitSubscriptionCandidate,
           SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME,
         )) {
-          const dailyLimitBookingsResult = await apiFetchBookings(false, { size: 1000 });
+          const dailyLimitBookingsResult = await apiFetchSubscriptionDailyLimitBookings({ size: 1000 });
           if (dailyLimitBookingsResult.error) {
             setGameRosterError("Не удалось проверить дневной лимит абонемента");
             return;
