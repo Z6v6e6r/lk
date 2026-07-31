@@ -136,6 +136,10 @@ const rows = Array.isArray(msg.payload) ? msg.payload : [];
 const now = Date.now();
 let paidCount = toStr(ctx?.inventoryId) ? 0 : readManualPaidCount(ctx?.counterKey);
 let reservedCount = 0;
+let launchPaidCount = 0;
+let launchReservedCount = 0;
+let dailyPaidCount = 0;
+let dailyReservedCount = 0;
 
 for (const row of rows) {
   if (!row || typeof row !== "object") continue;
@@ -143,7 +147,16 @@ for (const row of rows) {
   if (!matchesConfiguredProduct(row, ctx.productId)) continue;
 
   const status = normalizeStatus(row.status);
+  const stagedRelease = ctx.stagedRelease === true;
+  const releasePhase = toStr(row.releasePhase) === "daily" ? "daily" : "launch";
+  const isCurrentDailyDrop = releasePhase === "daily"
+    && toStr(row.dailyDropDate) === toStr(ctx.dailyDropDate);
   if (status === "PAID") {
+    if (stagedRelease) {
+      if (releasePhase === "launch") launchPaidCount += 1;
+      if (isCurrentDailyDrop) dailyPaidCount += 1;
+      continue;
+    }
     paidCount += 1;
     continue;
   }
@@ -152,11 +165,29 @@ for (const row of rows) {
   const expiresAtTs = toTs(row.expiresAt);
   const activePending = expiresAtTs == null || expiresAtTs > now;
   if (activePending) {
+    if (stagedRelease) {
+      if (releasePhase === "launch") launchReservedCount += 1;
+      if (isCurrentDailyDrop) dailyReservedCount += 1;
+      continue;
+    }
     reservedCount += 1;
   }
 }
 
-const totalLimit = Math.max(0, Math.floor(Number(ctx.totalLimit) || 0));
+const stagedRelease = ctx.stagedRelease === true;
+const launchLimit = Math.max(0, Math.floor(Number(ctx.launchLimit) || 0));
+const dailyLimit = Math.max(0, Math.floor(Number(ctx.dailyLimit) || 0));
+const dailyDropActive = stagedRelease && launchPaidCount >= launchLimit;
+const releasePhase = stagedRelease
+  ? (dailyDropActive ? "daily" : "launch")
+  : null;
+if (stagedRelease) {
+  paidCount = dailyDropActive ? dailyPaidCount : launchPaidCount;
+  reservedCount = dailyDropActive ? dailyReservedCount : launchReservedCount;
+}
+const totalLimit = stagedRelease
+  ? (dailyDropActive ? dailyLimit : launchLimit)
+  : Math.max(0, Math.floor(Number(ctx.totalLimit) || 0));
 const takenCount = paidCount + reservedCount;
 const unlimited = ctx.unlimited === true;
 const remainingCount = unlimited ? null : Math.max(totalLimit - takenCount, 0);
@@ -173,9 +204,21 @@ if (!unlimited && remainingCount <= 0) {
     paidCount,
     reservedCount,
     remainingCount,
+    releasePhase,
+    dailyDropActive,
+    launchLimit,
+    launchPaidCount,
+    launchReservedCount,
+    dailyLimit,
+    dailyDropDate: toStr(ctx.dailyDropDate),
   });
 }
 
+ctx.releasePhase = releasePhase;
+ctx.dailyDropActive = dailyDropActive;
+ctx.totalLimit = totalLimit;
+ctx.launchPaidCount = launchPaidCount;
+ctx.launchReservedCount = launchReservedCount;
 ctx.remainingBefore = remainingCount;
 ctx.step = "token_purchase";
 ctx.httpRequestTimeoutMs = resolveHttpTimeoutMs();
@@ -200,6 +243,11 @@ const debugMsg = Object.assign({}, msg, {
     totalLimit,
     takenCount,
     remainingBefore: remainingCount,
+    releasePhase,
+    dailyDropActive,
+    launchPaidCount,
+    launchReservedCount,
+    dailyDropDate: toStr(ctx.dailyDropDate),
     vivaTimeoutMs: ctx.httpRequestTimeoutMs,
   },
 });

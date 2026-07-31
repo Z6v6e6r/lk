@@ -1329,7 +1329,10 @@ export default function TournamentSubscriptionPage({
                   </div>
                 )}
 
-                {(plan.counterKey === "ra" || plan.counterKey === "friendship") && status && remainingCount === 0 && (
+                {(plan.counterKey === "ra" || plan.counterKey === "friendship")
+                  && status
+                  && status.releasePhase !== "launch"
+                  && remainingCount === 0 && (
                   <DailyDropCountdown onDrop={loadStatus} />
                 )}
 
