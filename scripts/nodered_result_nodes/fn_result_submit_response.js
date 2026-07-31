@@ -34,6 +34,21 @@ const sanitizeActor = (value) => {
     name: value.name || "Игрок",
   };
 };
+const sanitizeRatingWork = (value) => {
+  if (!value || typeof value !== "object") return null;
+  return {
+    status: toStr(value.status),
+    desiredState: toStr(value.desiredState),
+    applySemantics: toStr(value.applySemantics),
+    generation: Number.isInteger(Number(value.generation)) ? Number(value.generation) : null,
+    attempts: Math.max(0, Math.floor(Number(value.attempts || 0))),
+    queuedAt: toStr(value.queuedAt),
+    appliedAt: toStr(value.appliedAt),
+    revertedAt: toStr(value.revertedAt),
+    nextAttemptAt: toStr(value.nextAttemptAt),
+    lastError: toStr(value.lastError),
+  };
+};
 
 const doc = msg._resultSubmitDoc || null;
 msg.statusCode = msg.statusCode || 200;
@@ -41,12 +56,20 @@ msg.headers = { "Content-Type": "application/json; charset=utf-8" };
 if (doc) {
   const ratingImpact = sanitizeRatingImpact(doc.ratingImpact);
   const attachments = asArray(doc.resultPayload?.attachments);
+  const ratingWork = sanitizeRatingWork(doc.ratingWork);
   const result = {
     id: doc.id,
     resultId: doc.id,
     gameId: doc.gameId,
     status: doc.status,
     lifecycleState: doc.lifecycleState,
+    resultModelVersion: Number(doc.resultModelVersion || 1),
+    scoreRevision: Number(doc.scoreRevision || 1),
+    lineageRootResultId: toStr(doc.lineageRootResultId),
+    supersedesResultId: toStr(doc.supersedesResultId),
+    effectiveState: toStr(doc.effectiveState),
+    reviewState: toStr(doc?.review?.state),
+    ratingWork,
     idempotent: doc.idempotent === true,
     score: doc.score || null,
     sets: asArray(doc.sets),
@@ -80,6 +103,8 @@ if (doc) {
     idempotent: doc.idempotent === true,
     result,
     ratingEvent: result.ratingEvent,
+    ratingWork,
+    ratingStatus: ratingWork?.status || result.ratingEvent?.status || null,
     ratingImpact,
     disputeDeadlineAt: doc.disputeDeadlineAt,
   };

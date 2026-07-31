@@ -126,6 +126,7 @@ function isBaselineEvent(event: PlayerRatingEventDocument): boolean {
   return event.eventType === "RATING_INITIAL_IMPORTED"
     || event.eventType === "RATING_BOOTSTRAPPED_FROM_VIVA"
     || event.eventType === "RATING_BOOTSTRAPPED_FROM_TOURNAMENT"
+    || event.eventType === "RATING_BOOTSTRAPPED_FROM_GAME_RESULT"
     || event.eventType === "RATING_TOURNAMENT_CANONICAL_RECONCILED";
 }
 
@@ -168,6 +169,181 @@ export function replayPlayerRatingEvents(
     lastEventType: lastEvent.eventType,
     lastEventAt: lastEvent.occurredAt,
     appliedEvents,
+  };
+}
+
+export function buildGameResultBaselineEvent(input: {
+  resultId: string;
+  occurredAt: string;
+  player: Record<string, unknown>;
+  ratingNumeric: unknown;
+  createdAt?: string;
+}): PlayerRatingEventDocument | null {
+  const clientId = toStringOrNull(input.player.id ?? input.player.clientId);
+  const phoneNorm = normalizeRatingPhone(input.player.phoneNorm ?? input.player.phone);
+  const playerKey = buildPlayerRatingKey({
+    clientId,
+    phoneNorm,
+    fallback: input.player.memberKey,
+  });
+  const ratingNumeric = toFiniteRating(input.ratingNumeric);
+  if (!playerKey || ratingNumeric == null) return null;
+  const eventId = `rating_evt:game_result_bootstrap:${hashParts([playerKey])}`;
+  return {
+    _id: eventId,
+    id: eventId,
+    idempotencyKey: eventId,
+    schemaVersion: PLAYER_RATING_LEDGER_SCHEMA_VERSION,
+    eventType: "RATING_BOOTSTRAPPED_FROM_GAME_RESULT",
+    occurredAt: input.occurredAt,
+    createdAt: input.createdAt || new Date().toISOString(),
+    player: {
+      key: playerKey,
+      clientId,
+      phoneNorm,
+      name: toStringOrNull(input.player.name) || "Игрок",
+    },
+    actor: {
+      type: "SYSTEM",
+      id: "system:game-result-rating-worker",
+      name: "Game result rating worker",
+    },
+    source: {
+      domain: "GAME_RESULT_BOOTSTRAP",
+      sourceId: input.resultId,
+      resultId: input.resultId,
+    },
+    change: {
+      before: null,
+      delta: null,
+      after: roundPlayerRating(ratingNumeric),
+      gradeBefore: null,
+      gradeAfter: ratingGradeFromNumeric(ratingNumeric),
+    },
+    formula: null,
+    projectionIntent: { viva: "NONE_BOOTSTRAP" },
+  };
+}
+
+export function buildGameResultRatingEvent(input: {
+  gameId: string;
+  resultId: string;
+  scoreRevision: number;
+  occurredAt: string;
+  impact: Record<string, unknown>;
+  formula?: Record<string, unknown> | null;
+  actor?: Record<string, unknown> | null;
+  supersedesResultId?: string | null;
+  supersedesEventId?: string | null;
+  applySemantics?: string | null;
+  createdAt?: string;
+}): PlayerRatingEventDocument | null {
+  const clientId = toStringOrNull(input.impact.id ?? input.impact.clientId);
+  const phoneNorm = normalizeRatingPhone(input.impact.phoneNorm ?? input.impact.phone);
+  const memberKey = toStringOrNull(input.impact.memberKey);
+  const playerKey = buildPlayerRatingKey({ clientId, phoneNorm, fallback: memberKey });
+  const before = toFiniteRating(input.impact.before);
+  const after = toFiniteRating(input.impact.after);
+  const delta = toFiniteRating(input.impact.delta);
+  if (!playerKey || before == null || after == null || delta == null) return null;
+  const eventId = `rating_evt:game_result:${hashParts([
+    input.resultId,
+    input.scoreRevision,
+    "apply",
+    playerKey,
+  ])}`;
+  const actor = input.actor && typeof input.actor === "object" ? input.actor : {};
+  const actorId = toStringOrNull(actor.id);
+  return {
+    _id: eventId,
+    id: eventId,
+    idempotencyKey: eventId,
+    schemaVersion: PLAYER_RATING_LEDGER_SCHEMA_VERSION,
+    eventType: input.supersedesResultId
+      ? "GAME_RESULT_CORRECTION_APPLIED"
+      : "GAME_RESULT_SUBMITTED_APPLIED",
+    occurredAt: input.occurredAt,
+    createdAt: input.createdAt || new Date().toISOString(),
+    player: {
+      key: playerKey,
+      clientId,
+      phoneNorm,
+      name: toStringOrNull(input.impact.name) || "Игрок",
+    },
+    actor: {
+      type: actorId ? "PLAYER" : "SYSTEM",
+      id: actorId || "system:game-result-rating-worker",
+      name: toStringOrNull(actor.name) || (actorId ? "Игрок" : "Game result rating worker"),
+      phoneNorm: normalizeRatingPhone(actor.phoneNorm ?? actor.phone),
+    },
+    source: {
+      domain: "GAME_RESULT",
+      sourceId: input.gameId,
+      gameId: input.gameId,
+      resultId: input.resultId,
+      scoreRevision: input.scoreRevision,
+      supersedesResultId: input.supersedesResultId || null,
+      supersedesEventId: input.supersedesEventId || null,
+      applySemantics: input.applySemantics || "INITIAL_APPLY",
+    },
+    change: {
+      before: roundPlayerRating(before),
+      delta: roundRatingDelta(delta),
+      after: roundPlayerRating(after),
+      gradeBefore: ratingGradeFromNumeric(before),
+      gradeAfter: ratingGradeFromNumeric(after),
+    },
+    formula: input.formula || { version: "game-rating-v1" },
+    projectionIntent: { viva: "REQUIRED_DURING_MIGRATION" },
+  };
+}
+
+export function buildGameResultCompensationEvent(input: {
+  event: PlayerRatingEventDocument;
+  correctionResultId: string;
+  scoreRevision: number;
+  occurredAt: string;
+  canonicalBefore?: unknown;
+  createdAt?: string;
+}): PlayerRatingEventDocument | null {
+  const delta = toFiniteRating(input.event.change.delta);
+  const canonicalBefore = toFiniteRating(input.canonicalBefore) ?? toFiniteRating(input.event.change.after);
+  if (delta == null || canonicalBefore == null) return null;
+  const compensationDelta = roundRatingDelta(-delta);
+  const canonicalAfter = roundPlayerRating(canonicalBefore + compensationDelta);
+  const eventId = `rating_evt:game_result_compensation:${hashParts([
+    input.event.id,
+    input.correctionResultId,
+    input.scoreRevision,
+  ])}`;
+  return {
+    ...input.event,
+    _id: eventId,
+    id: eventId,
+    idempotencyKey: eventId,
+    eventType: "GAME_RESULT_CORRECTION_REVERTED",
+    occurredAt: input.occurredAt,
+    createdAt: input.createdAt || new Date().toISOString(),
+    actor: {
+      type: "SYSTEM",
+      id: "system:game-result-rating-worker",
+      name: "Game result rating worker",
+    },
+    source: {
+      ...input.event.source,
+      correctionResultId: input.correctionResultId,
+      correctionScoreRevision: input.scoreRevision,
+      compensatesEventId: input.event.id,
+      applySemantics: "CORRECTION_TIME",
+    },
+    change: {
+      before: roundPlayerRating(canonicalBefore),
+      delta: compensationDelta,
+      after: canonicalAfter,
+      gradeBefore: ratingGradeFromNumeric(canonicalBefore),
+      gradeAfter: ratingGradeFromNumeric(canonicalAfter),
+    },
+    projectionIntent: { viva: "REQUIRED_DURING_MIGRATION" },
   };
 }
 

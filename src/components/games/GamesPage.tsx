@@ -1780,6 +1780,14 @@ function buildMatchResultSourceKey(
   const ratingImpact = Array.isArray(rawMatchResult.ratingImpact)
     ? rawMatchResult.ratingImpact.map(summarizeMatchResultRatingImpact).filter(Boolean)
     : [];
+  const ratingWork = isRecordObject(rawMatchResult.ratingWork)
+    ? {
+        status: pickMatchResultString(rawMatchResult.ratingWork, ["status"]),
+        desiredState: pickMatchResultString(rawMatchResult.ratingWork, ["desiredState"]),
+        appliedAt: pickMatchResultString(rawMatchResult.ratingWork, ["appliedAt"]),
+        nextAttemptAt: pickMatchResultString(rawMatchResult.ratingWork, ["nextAttemptAt"]),
+      }
+    : null;
   const hasStoredResult = Boolean(
     resultId
     || submittedAt
@@ -1790,6 +1798,7 @@ function buildMatchResultSourceKey(
     || setPairings.length
     || attachments.length
     || ratingImpact.length
+    || ratingWork?.status
   );
 
   if (status === "NO_RESULT" && !hasStoredResult) {
@@ -1807,6 +1816,7 @@ function buildMatchResultSourceKey(
     setPairings,
     attachments,
     ratingImpact,
+    ratingWork,
   })}`;
 }
 
@@ -3154,6 +3164,34 @@ function buildMatchResultSubmitSetPairingsPayload(
   );
 
   return buildMatchResultSetPairingsPayload(visiblePairings);
+}
+
+function validateCompletedMatchResultSetPairings(
+  pairings: Array<MatchResultSetPairingSlots | null>,
+  completedSetCount: number,
+  fallbackSlots: Array<PadelGamePlayer | null | undefined>,
+): string | null {
+  if (completedSetCount <= 0) return null;
+  const visiblePairings = buildVisibleMatchResultSetPairings(
+    pairings,
+    completedSetCount,
+    fallbackSlots,
+  );
+
+  for (let setIndex = 0; setIndex < completedSetCount; setIndex += 1) {
+    const teamSlots = visiblePairings[setIndex] ?? null;
+    const memberKeys = Array.from({ length: DETAILS_TEAM_SLOTS_COUNT }, (_, slotIndex) => (
+      getPadelPlayerMemberKey(teamSlots?.[slotIndex] ?? null)
+    ));
+    if (memberKeys.some((memberKey) => !memberKey)) {
+      return `Для сета ${setIndex + 1} выберите четырех игроков`;
+    }
+    if (new Set(memberKeys).size !== DETAILS_TEAM_SLOTS_COUNT) {
+      return `В сете ${setIndex + 1} каждый игрок должен быть выбран один раз`;
+    }
+  }
+
+  return null;
 }
 
 function formatMatchResultPairTeamLabel(
@@ -7407,6 +7445,29 @@ export default function GamesPage({
       ?? rawMatchResult.vivaStatus,
     );
   }, [detailsMetadata]);
+  const detailsMatchResultRatingWork = useMemo(() => {
+    const rawMatchResult = isRecordObject(detailsMetadata.matchResult)
+      ? detailsMetadata.matchResult
+      : null;
+    const rawRatingWork = rawMatchResult && isRecordObject(rawMatchResult.ratingWork)
+      ? rawMatchResult.ratingWork
+      : null;
+    if (!rawRatingWork) return null;
+    return {
+      status: typeof rawRatingWork.status === "string" ? rawRatingWork.status.trim().toUpperCase() : null,
+      appliedAt: typeof rawRatingWork.appliedAt === "string" ? rawRatingWork.appliedAt : null,
+      revertedAt: typeof rawRatingWork.revertedAt === "string" ? rawRatingWork.revertedAt : null,
+      nextAttemptAt: typeof rawRatingWork.nextAttemptAt === "string" ? rawRatingWork.nextAttemptAt : null,
+      lastError: typeof rawRatingWork.lastError === "string" ? rawRatingWork.lastError : null,
+    };
+  }, [detailsMetadata]);
+  const detailsMatchResultModelVersion = useMemo(() => {
+    const rawMatchResult = isRecordObject(detailsMetadata.matchResult)
+      ? detailsMetadata.matchResult
+      : null;
+    const version = toFiniteNumber(rawMatchResult?.resultModelVersion);
+    return version != null ? Math.max(1, Math.floor(version)) : 1;
+  }, [detailsMetadata]);
   const detailsOrganizerKey = useMemo(
     () => getPadelPlayerIdentityKey(detailsOrganizerPlayer) || null,
     [detailsOrganizerPlayer],
@@ -8841,9 +8902,15 @@ export default function GamesPage({
   const canEditMatchResult = isDetailsMatchStarted
     && isCurrentUserConfirmedParticipant
     && !isMatchResultPendingReview
-    && !isMatchResultAgreed;
+    && !isMatchResultAgreed
+    && (detailsMatchResultStatus !== "CORRECTION_PENDING" || isMatchResultSubmittedByCurrentUser);
   const canEditMatchResultTeamsInDetails = canEditMatchResult;
-  const detailsMatchResultValidationError = validateCompletedMatchResultSets(detailsMatchResultSets);
+  const detailsMatchResultValidationError = validateCompletedMatchResultSets(detailsMatchResultSets)
+    || validateCompletedMatchResultSetPairings(
+      detailsMatchResultSetPairings,
+      detailsCompletedMatchResultSets.length,
+      detailsTeamSlots,
+    );
   const canSubmitMatchResult = canEditMatchResult
     && detailsCompletedMatchResultSets.length > 0
     && !detailsMatchResultValidationError
@@ -8862,7 +8929,9 @@ export default function GamesPage({
     && !updatingGameMeta;
   const canAcceptMatchResultCorrection = isDetailsMatchStarted
     && isCurrentUserConfirmedParticipant
+    && isMatchResultSubmittedByCurrentUser
     && detailsMatchResultStatus === "CORRECTION_PENDING"
+    && detailsMatchResultModelVersion < 2
     && !updatingGameMeta;
   const buildMatchResultSessionSyncKey = useCallback((
     draftSets: Array<{ left: unknown; right: unknown }>,
@@ -11783,6 +11852,42 @@ export default function GamesPage({
     step,
   ]);
 
+  useEffect(() => {
+    const ratingWorkStatus = detailsMatchResultRatingWork?.status;
+    const shouldPollRatingWork = ratingWorkStatus === "QUEUED"
+      || ratingWorkStatus === "RUNNING"
+      || ratingWorkStatus === "PREPARED"
+      || ratingWorkStatus === "RETRYABLE";
+    if (step !== "details" || !gameRecordId || !canCurrentUserFetchResultState || !shouldPollRatingWork) return;
+
+    let cancelled = false;
+    let requestInFlight = false;
+    const intervalId = window.setInterval(() => {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      void apiFetchPadelGameResultState(gameRecordId, { phone: profilePhoneNorm }).then((result) => {
+        if (cancelled || result.error || !result.data) return;
+        applyMatchResultActionResponse(result.data);
+      }).catch(() => {
+        // Background status polling must not block result interaction.
+      }).finally(() => {
+        requestInFlight = false;
+      });
+    }, ratingWorkStatus === "RETRYABLE" ? 10_000 : 4_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [
+    applyMatchResultActionResponse,
+    canCurrentUserFetchResultState,
+    detailsMatchResultRatingWork?.status,
+    gameRecordId,
+    profilePhoneNorm,
+    step,
+  ]);
+
   const patchGameRoster = useCallback(async (
     nextParticipantsRaw: PadelGamePlayer[],
     nextWaitlistRaw: PadelGamePlayer[],
@@ -12807,6 +12912,15 @@ export default function GamesPage({
       completedSets.length,
       detailsTeamSlots,
     );
+    const pairingValidationError = validateCompletedMatchResultSetPairings(
+      detailsMatchResultSetPairings,
+      completedSets.length,
+      detailsTeamSlots,
+    );
+    if (pairingValidationError) {
+      setGameDetailsMetaError(pairingValidationError);
+      return;
+    }
     const scoreA = completedSets.reduce((total, setItem) => total + setItem.left, 0);
     const scoreB = completedSets.reduce((total, setItem) => total + setItem.right, 0);
     const actor = {
@@ -12909,7 +13023,7 @@ export default function GamesPage({
 
       if (submitResult.error || !submitResult.data) {
         setGameDetailsMetaError(
-          submitResult.error?.message || "Не удалось отправить результат на согласование",
+          submitResult.error?.message || "Не удалось сохранить результат",
         );
         return;
       }
@@ -12923,7 +13037,7 @@ export default function GamesPage({
       detailsMatchResultSubmissionRef.current = null;
       applyMatchResultActionResponse(submitResult.data);
     } catch {
-      setGameDetailsMetaError("Не удалось отправить результат на согласование");
+      setGameDetailsMetaError("Не удалось сохранить результат");
     } finally {
       setUpdatingGameMeta(false);
     }
@@ -14875,6 +14989,31 @@ export default function GamesPage({
     const matchResultDisputedMeta = detailsMatchResultDisputedBy?.name
       ? `${detailsMatchResultDisputedBy.name}${detailsMatchResultDisputedAt ? ` · ${new Date(detailsMatchResultDisputedAt).toLocaleString("ru-RU")}` : ""}`
       : null;
+    const matchResultRatingWorkMeta = (() => {
+      const status = detailsMatchResultRatingWork?.status;
+      if (!status) return null;
+      if (status === "QUEUED" || status === "RUNNING" || status === "PREPARED") {
+        return "Счет сохранен. Рейтинг обновляется в фоне.";
+      }
+      if (status === "RETRYABLE") {
+        return "Счет сохранен. Расчет рейтинга будет повторен автоматически.";
+      }
+      if (status === "APPLIED") {
+        return detailsMatchResultRatingWork?.appliedAt
+          ? `Рейтинг рассчитан · ${new Date(detailsMatchResultRatingWork.appliedAt).toLocaleString("ru-RU")}`
+          : "Рейтинг рассчитан.";
+      }
+      if (status === "REVERTED") {
+        return detailsMatchResultRatingWork?.revertedAt
+          ? `Изменение рейтинга отменено · ${new Date(detailsMatchResultRatingWork.revertedAt).toLocaleString("ru-RU")}`
+          : "Изменение рейтинга отменено.";
+      }
+      if (status === "BLOCKED") {
+        return "Счет сохранен. Расчет рейтинга требует проверки администратора.";
+      }
+      if (status === "SKIPPED") return "Счет сохранен. Игра не влияет на рейтинг.";
+      return null;
+    })();
     const matchResultLifecycleNote = (() => {
       if (!isDetailsMatchStarted) return "Ввод результатов игры будет доступен после ее начала.";
       if (effectiveMatchResultStatus === "NO_RESULT") {
@@ -14886,8 +15025,8 @@ export default function GamesPage({
         if (isResultViewerSpectator) return "Результат на согласовании у участников матча.";
         if (isMatchResultSubmittedByCurrentUser) {
           return matchResultDisputeDeadlineMeta
-            ? `Результат внесен. До ${matchResultDisputeDeadlineMeta} другие участники могут подтвердить или оспорить его.`
-            : "Результат внесен. Ждем подтверждения или оспаривания от участников.";
+            ? `Счет зафиксирован. До ${matchResultDisputeDeadlineMeta} другие участники могут оспорить его.`
+            : "Счет зафиксирован. Другие участники могут оспорить его.";
         }
         if (detailsMatchResultDisputeTimeLeftMs != null && detailsMatchResultDisputeTimeLeftMs > 0) {
           return `Проверьте результат: его можно подтвердить или оспорить до ${matchResultDisputeDeadlineMeta}.`;
@@ -14900,6 +15039,11 @@ export default function GamesPage({
           : "Результат оспорен участниками, ждем исправление.";
       }
       if (effectiveMatchResultStatus === "CORRECTION_PENDING") {
+        if (detailsMatchResultModelVersion >= 2) {
+          return isMatchResultSubmittedByCurrentUser
+            ? "Результат оспорен. Исправьте счет и сохраните новую версию."
+            : "Результат оспорен. Ждем новую версию от автора.";
+        }
         return isResultViewerParticipant
           ? "Отправлено исправление результата. Проверьте и примите его, если все верно."
           : "Исправление результата ожидает решения участников.";
@@ -15821,6 +15965,10 @@ export default function GamesPage({
                 </div>
               )}
 
+              {matchResultRatingWorkMeta && (
+                <div className="details-result-meta">{matchResultRatingWorkMeta}</div>
+              )}
+
               {matchResultVivaSyncedMeta && (
                 <div className="details-result-meta">{matchResultVivaSyncedMeta}</div>
               )}
@@ -16148,7 +16296,7 @@ export default function GamesPage({
                   }}
                   disabled={!canSubmitMatchResult}
                 >
-                  {updatingGameMeta ? "Сохраняем..." : "Отправить на согласование"}
+                  {updatingGameMeta ? "Сохраняем..." : "Сохранить результат"}
                 </button>
               )}
               {canConfirmMatchResult && (

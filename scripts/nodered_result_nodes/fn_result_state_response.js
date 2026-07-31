@@ -146,6 +146,22 @@ const sanitizeVivaSync = (value) => {
   return result;
 };
 
+const sanitizeRatingWork = (value) => {
+  if (!value || typeof value !== "object") return null;
+  return {
+    status: toStr(value.status),
+    desiredState: toStr(value.desiredState),
+    applySemantics: toStr(value.applySemantics),
+    generation: Number.isInteger(Number(value.generation)) ? Number(value.generation) : null,
+    attempts: Math.max(0, Math.floor(Number(value.attempts || 0))),
+    queuedAt: toStr(value.queuedAt),
+    appliedAt: toStr(value.appliedAt),
+    revertedAt: toStr(value.revertedAt),
+    nextAttemptAt: toStr(value.nextAttemptAt),
+    lastError: toStr(value.lastError),
+  };
+};
+
 const sanitizeSnapshot = (snapshot) => {
   if (!snapshot || typeof snapshot !== "object") return null;
   return {
@@ -207,13 +223,22 @@ const isAuthor = viewerIsAuthor || viewerIsLegacyAuthor;
 const isParticipant = Boolean(ctx.viewerMember) || fallbackParticipant;
 const activePending = normalizedStatus === "PENDING_REVIEW";
 const correctionPending = normalizedStatus === "CORRECTION_PENDING";
-const canSubmit = Boolean(ctx.isFinished && isParticipant && (!latest || normalizedStatus === "NO_RESULT"));
+const resultModelVersion = Number(latest?.resultModelVersion || 1);
+const canSubmit = Boolean(
+  ctx.isFinished
+  && isParticipant
+  && (
+    !latest
+    || normalizedStatus === "NO_RESULT"
+    || (correctionPending && resultModelVersion >= 2 && isAuthor)
+  )
+);
 const canConfirm = Boolean(
   ctx.isFinished
   && isParticipant
   && (
     (activePending && !isAuthor)
-    || (correctionPending && isAuthor)
+    || (correctionPending && resultModelVersion < 2 && isAuthor)
   ),
 );
 const canDispute = Boolean(
@@ -229,6 +254,13 @@ const latestResult = latest ? {
   gameId: latest.gameId || ctx.gameId || null,
   status: normalizedStatus,
   lifecycleState: normalizedStatus,
+  resultModelVersion: Number(latest.resultModelVersion || 1),
+  scoreRevision: Number(latest.scoreRevision || 1),
+  lineageRootResultId: toStr(latest.lineageRootResultId),
+  supersedesResultId: toStr(latest.supersedesResultId),
+  effectiveState: toStr(latest.effectiveState),
+  reviewState: toStr(latest?.review?.state),
+  ratingWork: sanitizeRatingWork(latest.ratingWork),
   score: latest.score || null,
   sets: asArray(latest.sets),
   setPairings: sanitizeSetPairings(latest.setPairings),
@@ -273,6 +305,7 @@ msg.payload = {
     isAuthor,
   },
   latestResult,
+  ratingStatus: latestResult?.ratingWork?.status || latestResult?.ratingEvent?.status || null,
   canSubmit,
   canConfirm,
   canDispute,

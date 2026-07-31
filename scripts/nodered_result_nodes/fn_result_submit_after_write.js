@@ -48,6 +48,7 @@ const gameMsg = Object.assign({}, msg, {
         resultStatus: "PENDING_REVIEW",
         resultLifecycleState: "PENDING_REVIEW",
         resultId: doc.id,
+        resultRatingStatus: doc?.ratingWork?.status || (doc.ratingEnabled === false ? "SKIPPED" : "QUEUED"),
         lastResultAt: doc.submittedAt,
         updatedAt: doc.updatedAt,
       },

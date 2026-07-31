@@ -170,6 +170,16 @@ test("submit stores immutable pairings and rating facts before rating calculatio
   const eventMsg = afterWriteOut[2] as Record<string, any>;
   assert.equal(resultMsg.payload[1].$setOnInsert.status, "PENDING_REVIEW");
   assert.equal(resultMsg.payload[1].$setOnInsert.revision, 1);
+  assert.equal(resultMsg.payload[1].$setOnInsert.resultModelVersion, 2);
+  assert.equal(resultMsg.payload[1].$setOnInsert.scoreRevision, 1);
+  assert.equal(resultMsg.payload[1].$setOnInsert.supersedesResultId, null);
+  assert.equal(resultMsg.payload[1].$setOnInsert.effectiveState, "EFFECTIVE");
+  assert.equal(resultMsg.payload[1].$setOnInsert.review.state, "OPEN");
+  assert.equal(resultMsg.payload[1].$setOnInsert.ratingWork.status, "QUEUED");
+  assert.equal(
+    resultMsg.payload[1].$setOnInsert.ratingWork.jobKey,
+    `game-result:${resultMsg.payload[1].$setOnInsert.id}:score:1:apply`,
+  );
   assert.equal(resultMsg.payload[1].$setOnInsert.ratingEvent.status, "PENDING_CONFIRMATION");
   assert.equal(resultMsg.payload[1].$setOnInsert.ratingFormula, null);
   assert.deepEqual(resultMsg.payload[1].$setOnInsert.ratingImpact, []);
@@ -177,6 +187,7 @@ test("submit stores immutable pairings and rating facts before rating calculatio
   assert.equal(resultMsg.payload[1].$setOnInsert.ratingFacts.effectiveSetPairings.length, 3);
   assert.equal(acceptedMsg.statusCode, 202);
   assert.equal(gameMsg.payload[1].$set.resultStatus, "PENDING_REVIEW");
+  assert.equal(gameMsg.payload[1].$set.resultRatingStatus, "QUEUED");
   assert.equal(insertOut[3], null);
   assert.equal(eventMsg.payload[1].$set.status, "PENDING_CONFIRMATION");
 });
@@ -345,7 +356,7 @@ test("submit accepts ID-backed played lineups when a player has no phoneNorm", (
   assert.equal(queryOut[0]._resultSubmit.activeMembers.find((member: any) => member.id === "p4").phoneNorm, null);
 });
 
-test("submit does not depend on roster ratings and confirm requires complete live rating state", () => {
+test("v2 submit does not depend on roster ratings and confirm skips synchronous rating calculation", () => {
   const prepareOut = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_submit_prepare.js", {
     req: { params: { gameId: "game-1" }, query: {} },
     payload: {
@@ -389,9 +400,17 @@ test("submit does not depend on roster ratings and confirm requires complete liv
     "scripts/nodered_result_nodes/fn_result_confirm_calculate_rating.js",
     confirmMsg,
   ) as any[];
-  assert.equal(calculateOut[0], null);
-  assert.equal(calculateOut[1].statusCode, 409);
-  assert.equal(calculateOut[1].payload.code, "RATING_STATE_INCOMPLETE");
+  assert.ok(calculateOut[0]);
+  assert.equal(calculateOut[0]._resultRatingCalculationRequired, false);
+  assert.equal(calculateOut[1], null);
+
+  const confirmOut = runNodeRedFunction(
+    "scripts/nodered_result_nodes/fn_result_confirm_apply.js",
+    calculateOut[0],
+  ) as any[];
+  assert.equal(confirmOut[0].payload[1].$set.status, "CONFIRMED");
+  assert.deepEqual(confirmOut[0]._resultConfirmBundle.ratingsPayload, []);
+  assert.equal(confirmOut[4].payload.ratingApplied, false);
 });
 
 test("submit allows non-rating games without rating impact and confirm path skips rating query", () => {
@@ -754,6 +773,69 @@ test("repeat submit with same payload is idempotent and emits no second rating u
   assert.equal(out[3], null);
 });
 
+test("correction submit creates a new immutable score revision", () => {
+  const latest = {
+    id: "res-1",
+    gameId: "game-1",
+    status: "CORRECTION_PENDING",
+    scoreRevision: 1,
+    lineageRootResultId: "res-1",
+    submittedBy: { id: "p1", memberKey: "id:p1", phoneNorm: "79000000001" },
+    resultSignature: JSON.stringify({ scoreA: 6, scoreB: 4, sets: [{ left: 6, right: 4 }], setPairings: [] }),
+    submittedAtTs: Date.now(),
+    correctionContext: { expiresAtTs: Date.now() + 60_000 },
+  };
+  const out = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_submit_build_insert.js", {
+    _resultSubmit: {
+      gameId: "game-1",
+      idempotencyKey: "correction-2",
+      scoreA: 7,
+      scoreB: 5,
+      sets: [{ left: 7, right: 5 }],
+      scoringSets: [{ left: 7, right: 5 }],
+      setPairings: [],
+      resolvedSetPairings: [],
+      actorMember: { id: "p1", memberKey: "id:p1", phoneNorm: "79000000001", name: "Author" },
+      game: { id: "game-1", settings: { ratingGame: true } },
+      ratingEnabled: true,
+    },
+    payload: [latest],
+  }) as any[];
+
+  const corrected = out[0].payload[1].$setOnInsert;
+  assert.equal(corrected.id === latest.id, false);
+  assert.equal(corrected.scoreRevision, 2);
+  assert.equal(corrected.revision, 1);
+  assert.equal(corrected.lineageRootResultId, "res-1");
+  assert.equal(corrected.supersedesResultId, "res-1");
+  assert.equal(corrected.ratingWork.status, "QUEUED");
+  assert.equal(corrected.ratingWork.applySemantics, "CORRECTION_TIME");
+  assert.equal(latest.status, "CORRECTION_PENDING");
+});
+
+test("correction submit rejects a non-author", () => {
+  const out = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_submit_build_insert.js", {
+    _resultSubmit: {
+      gameId: "game-1",
+      scoreA: 7,
+      scoreB: 5,
+      sets: [{ left: 7, right: 5 }],
+      actorMember: { id: "p2", memberKey: "id:p2", phoneNorm: "79000000002" },
+    },
+    payload: [{
+      id: "res-1",
+      status: "CORRECTION_PENDING",
+      submittedBy: { id: "p1", memberKey: "id:p1", phoneNorm: "79000000001" },
+      resultSignature: "different",
+      submittedAtTs: Date.now(),
+      correctionContext: { expiresAtTs: Date.now() + 60_000 },
+    }],
+  }) as any[];
+
+  assert.equal(out[0], null);
+  assert.equal(out[1].statusCode, 403);
+});
+
 test("state response keeps launch-period results disputable until June 10 end", () => {
   withFixedNow("2026-06-09T09:00:00.000Z", () => {
     const out = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_state_response.js", {
@@ -897,6 +979,38 @@ test("dispute on pending review opens correction context without rating rollback
   assert.equal(out[1].payload.length, 0);
   assert.equal(out[4].payload.ratingEventStatus, "DISPUTED");
   assert.equal(out[4].payload.rollbackApplied, false);
+});
+
+test("v2 dispute keeps non-rating work skipped instead of queueing an unclaimable job", () => {
+  const pending = {
+    id: "res-no-rating",
+    gameId: "game-1",
+    resultModelVersion: 2,
+    scoreRevision: 1,
+    status: "PENDING_REVIEW",
+    lifecycleState: "PENDING_REVIEW",
+    ratingEnabled: false,
+    submittedBy: { phoneNorm: "79000000001" },
+    ratingEvent: null,
+    ratingWork: {
+      generation: 1,
+      desiredState: "APPLIED",
+      status: "SKIPPED",
+    },
+  };
+
+  const out = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_confirm_apply.js", {
+    _resultConfirm: { game: finishedGame(), phone: "79000000003", action: "DISPUTE", viewerTeam: "B" },
+    _resultPending: pending,
+    payload: [],
+  }) as any[];
+
+  assert.equal(out[0].payload[1].$set.status, "CORRECTION_PENDING");
+  assert.equal(out[0].payload[1].$set["ratingWork.status"], undefined);
+  assert.equal(out[0].payload[1].$set["ratingEvent.status"], undefined);
+  assert.equal(out[4].payload.ratingWork.status, "SKIPPED");
+  assert.equal(out[4].payload.ratingEventStatus, null);
+  assert.equal(out[5], null);
 });
 
 test("dispute rolls provisional impact back for legacy provisional-applied results", () => {
@@ -1136,7 +1250,7 @@ test("expire overdue correction rolls ratings back for legacy provisional-applie
   assert.equal(out[4].payload.rollbackApplied, true);
 });
 
-test("full lifecycle: submit -> dispute -> accept-correction applies rating only on final confirm", () => {
+test("v2 lifecycle: submit -> dispute queues revert -> author submits a new score revision", () => {
   const submitPrepareOut = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_submit_prepare.js", {
     req: { params: { gameId: "game-1" }, query: {} },
     payload: {
@@ -1161,6 +1275,11 @@ test("full lifecycle: submit -> dispute -> accept-correction applies rating only
     payload: [],
   }) as any[];
   const correctionSet = disputeOut[0].payload[1].$set;
+  assert.equal(correctionSet["ratingWork.desiredState"], "REVERTED");
+  assert.equal(correctionSet["ratingWork.status"], "QUEUED");
+  assert.equal(correctionSet["ratingEvent.status"], "REVERT_QUEUED");
+  assert.deepEqual(disputeOut[0]._resultConfirmBundle.ratingsPayload, []);
+  assert.equal(disputeOut[4].payload.rollbackApplied, false);
   const correctionPending = {
     ...createdResult,
     ...correctionSet,
@@ -1168,36 +1287,46 @@ test("full lifecycle: submit -> dispute -> accept-correction applies rating only
     lifecycleState: "CORRECTION_PENDING",
     ratingEvent: {
       ...(createdResult.ratingEvent || {}),
-      status: "DISPUTED",
+      status: "REVERT_QUEUED",
+    },
+    ratingWork: {
+      ...(createdResult.ratingWork || {}),
+      generation: correctionSet["ratingWork.generation"],
+      desiredState: correctionSet["ratingWork.desiredState"],
+      status: correctionSet["ratingWork.status"],
+      jobKey: correctionSet["ratingWork.jobKey"],
     },
   };
 
-  const acceptPrepareOut = runNodeRedFunction(
-    "scripts/nodered_result_nodes/fn_result_confirm_prepare_ratings_query.js",
-    {
-      _resultConfirm: { game: finishedGame(), phone: "79000000001", action: "ACCEPT_CORRECTION", viewerTeam: "A" },
-      payload: [correctionPending],
+  const correctionPrepareOut = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_submit_prepare.js", {
+    req: { params: { gameId: "game-1" }, query: {} },
+    payload: {
+      phone: "79000000001",
+      sets: [{ left: 4, right: 6 }],
+      setPairings: [],
     },
+  }) as any[];
+  const correctionPrepared = correctionPrepareOut[0];
+  correctionPrepared.payload = [finishedGame()];
+  const correctionQueryOut = runNodeRedFunction(
+    "scripts/nodered_result_nodes/fn_result_submit_build_query.js",
+    correctionPrepared,
   ) as any[];
-  const acceptRatingMsg = acceptPrepareOut[0];
-  acceptRatingMsg.payload = [
-    { phoneNorm: "79000000001", ratingNumeric: 3.1 },
-    { phoneNorm: "79000000002", ratingNumeric: 3.2 },
-    { phoneNorm: "79000000003", ratingNumeric: 3.3 },
-    { phoneNorm: "79000000004", ratingNumeric: 3.4 },
-  ];
-  const acceptCalculateOut = runNodeRedFunction(
-    "scripts/nodered_result_nodes/fn_result_confirm_calculate_rating.js",
-    acceptRatingMsg,
+  const correctionQueryMsg = correctionQueryOut[0];
+  correctionQueryMsg.payload = [correctionPending];
+  const correctionInsertOut = runNodeRedFunction(
+    "scripts/nodered_result_nodes/fn_result_submit_build_insert.js",
+    correctionQueryMsg,
   ) as any[];
-  const acceptOut = runNodeRedFunction(
-    "scripts/nodered_result_nodes/fn_result_confirm_apply.js",
-    acceptCalculateOut[0],
-  ) as any[];
+  const correctedResult = correctionInsertOut[0].payload[1].$setOnInsert;
 
-  assert.equal(acceptOut[0].payload[1].$set.status, "CONFIRMED");
-  assert.equal(acceptOut[1].payload.length > 0, true);
-  assert.equal(acceptOut[4].payload.ratingApplied, true);
+  assert.equal(correctedResult.status, "PENDING_REVIEW");
+  assert.equal(correctedResult.supersedesResultId, createdResult.id);
+  assert.equal(correctedResult.lineageRootResultId, createdResult.id);
+  assert.equal(correctedResult.scoreRevision, 2);
+  assert.equal(correctedResult.ratingWork.desiredState, "APPLIED");
+  assert.equal(correctedResult.ratingWork.status, "QUEUED");
+  assert.equal(correctedResult.ratingWork.applySemantics, "CORRECTION_TIME");
 });
 
 test("CAS router blocks downstream side effects on concurrent confirm conflict", () => {

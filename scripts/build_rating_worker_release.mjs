@@ -22,8 +22,11 @@ const files = [
   ["deploy/rating-worker/configure-runtime-env.mjs", "deploy/rating-worker/configure-runtime-env.mjs"],
   ["deploy/rating-worker/run-full.sh", "deploy/rating-worker/run-full.sh"],
   ["deploy/rating-worker/run-incremental.sh", "deploy/rating-worker/run-incremental.sh"],
+  ["deploy/rating-worker/run-game-results.sh", "deploy/rating-worker/run-game-results.sh"],
   ["deploy/rating-worker/package.json", "package.json"],
   ["scripts/rating_worker.mjs", "scripts/rating_worker.mjs"],
+  ["scripts/game_result_rating_worker.mjs", "scripts/game_result_rating_worker.mjs"],
+  ["scripts/lib/gameResultRating.mjs", "scripts/lib/gameResultRating.mjs"],
   ["scripts/run_rating_worker_147.mjs", "scripts/run_rating_worker_147.mjs"],
   ["scripts/sync_training_visits_from_viva.mjs", "scripts/sync_training_visits_from_viva.mjs"],
   ["scripts/recalculate_community_rating.mjs", "scripts/recalculate_community_rating.mjs"],
@@ -51,6 +54,11 @@ const workerVersion = readVersion(
   /PLAYER_RATING_WORKER_VERSION\s*=\s*["']([^"']+)/,
   "Worker version",
 );
+const gameResultWorkerVersion = readVersion(
+  "scripts/game_result_rating_worker.mjs",
+  /GAME_RESULT_RATING_WORKER_VERSION\s*=\s*["']([^"']+)/,
+  "Game result worker version",
+);
 const communityCalculationVersion = readVersion(
   "src/services/community-rating/contract.ts",
   /COMMUNITY_RATING_CALCULATION_VERSION\s*=\s*["']([^"']+)/,
@@ -69,6 +77,7 @@ files.forEach(([sourcePath, targetPath]) => {
 [
   "deploy/rating-worker/run-full.sh",
   "deploy/rating-worker/run-incremental.sh",
+  "deploy/rating-worker/run-game-results.sh",
   "scripts/run_community_rating_recalc_147.mjs",
   "scripts/postcheck_community_rating_147.mjs",
 ].forEach((relativePath) => fs.chmodSync(path.join(outDir, relativePath), 0o755));
@@ -89,6 +98,7 @@ const gitStatusResult = spawnSync("git", ["status", "--porcelain"], {
 const manifest = {
   releaseId: path.basename(outDir).replace(/^padlhub-rating-worker-/, ""),
   workerVersion,
+  gameResultWorkerVersion,
   communityCalculationVersion,
   generatedAt: new Date().toISOString(),
   gitSha: gitShaResult.status === 0 ? gitShaResult.stdout.trim() : null,

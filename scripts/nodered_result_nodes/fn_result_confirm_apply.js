@@ -295,6 +295,21 @@ const sanitizeVivaSync = (value) => {
   }
   return result;
 };
+const sanitizeRatingWork = (value) => {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    status: toStr(value.status),
+    desiredState: toStr(value.desiredState),
+    applySemantics: toStr(value.applySemantics),
+    generation: Number.isInteger(Number(value.generation)) ? Number(value.generation) : null,
+    attempts: Math.max(0, Math.floor(Number(value.attempts || 0))),
+    queuedAt: toStr(value.queuedAt),
+    appliedAt: toStr(value.appliedAt),
+    revertedAt: toStr(value.revertedAt),
+    nextAttemptAt: toStr(value.nextAttemptAt),
+    lastError: toStr(value.lastError),
+  };
+};
 const buildResponseMessage = (baseMsg, payload, statusCode = 200) => Object.assign({}, baseMsg, {
   statusCode,
   headers: { "Content-Type": "application/json; charset=utf-8" },
@@ -353,6 +368,13 @@ const buildPublicResult = ({
   status: lifecycleState,
   lifecycleState,
   revision: Number.isInteger(Number(pending?.revision)) ? Number(pending.revision) : 1,
+  resultModelVersion: Number(pending?.resultModelVersion || 1),
+  scoreRevision: Number(pending?.scoreRevision || 1),
+  lineageRootResultId: toStr(pending?.lineageRootResultId),
+  supersedesResultId: toStr(pending?.supersedesResultId),
+  effectiveState: toStr(pending?.effectiveState),
+  reviewState: toStr(pending?.review?.state),
+  ratingWork: sanitizeRatingWork(pending?.ratingWork),
   score: pending.score || null,
   sets: asArray(pending.sets),
   setPairings: sanitizeSetPairings(pending.setPairings),
@@ -469,8 +491,16 @@ const ratingImpact = asArray(pending.ratingImpact);
 const ratingEnabled = pending?.ratingEnabled !== false && pending?.ratingEvent?.ratingEnabled !== false;
 const ratingEventId = ratingEnabled ? (pending?.ratingEvent?.id || `rate_${pending.id}`) : null;
 const ratingEventStatus = String(pending?.ratingEvent?.status || '').toUpperCase();
-const shouldRollbackAppliedRating = ratingEnabled && (ratingEventStatus === 'PROVISIONAL_APPLIED' || ratingEventStatus === 'FINAL');
-const shouldApplyRatingNow = ratingEnabled && ratingEventStatus !== 'FINAL' && ratingEventStatus !== 'PROVISIONAL_APPLIED';
+const usesAsyncRatingWork = Number(pending?.resultModelVersion || 1) >= 2
+  && pending?.ratingWork
+  && typeof pending.ratingWork === 'object';
+const shouldRollbackAppliedRating = !usesAsyncRatingWork
+  && ratingEnabled
+  && (ratingEventStatus === 'PROVISIONAL_APPLIED' || ratingEventStatus === 'FINAL');
+const shouldApplyRatingNow = !usesAsyncRatingWork
+  && ratingEnabled
+  && ratingEventStatus !== 'FINAL'
+  && ratingEventStatus !== 'PROVISIONAL_APPLIED';
 const pendingStatus = String(pending?.status || '').toUpperCase();
 const hasGameRoster = Array.isArray(ctx.game?.participants) || Array.isArray(ctx.game?.waitlist);
 const actor = ctx.actorMember
@@ -480,7 +510,8 @@ const currentRevision = Number.isInteger(Number(pending?.revision)) && Number(pe
   : 1;
 const nextRevision = currentRevision + 1;
 const ratingFormula = pending?.ratingFormula || pending?.ratingEvent?.formula || null;
-const requiresLiveRatingAtConfirm = ratingEnabled
+const requiresLiveRatingAtConfirm = !usesAsyncRatingWork
+  && ratingEnabled
   && ['CONFIRM', 'ACCEPT_CORRECTION', 'EXPIRE'].includes(action)
   && pending?.ratingFacts?.version === 'game-result-rating-facts-v1'
   && !pending.alreadyFinal
@@ -507,6 +538,9 @@ const buildCanonicalRatingMutations = (mode, source, changedBy = actor) => build
 });
 
 if (pending.expiredToNoResult) {
+  const expiredRatingEventStatus = ratingEnabled
+    ? (shouldRollbackAppliedRating ? 'REVERTED' : 'EXPIRED')
+    : null;
   const syncBatch = shouldRollbackAppliedRating
     ? buildVivaSyncBatch({
       pending: Object.assign({}, pending, { confirmedAt: nowIso }),
@@ -528,14 +562,16 @@ if (pending.expiredToNoResult) {
     lifecycleState: 'NO_RESULT_EXPIRED',
     revision: nextRevision,
     'correctionContext.status': 'EXPIRED_NO_RESULT',
-    'ratingEvent.status': shouldRollbackAppliedRating ? 'REVERTED' : 'EXPIRED',
-    'ratingEvent.revertedAt': shouldRollbackAppliedRating ? nowIso : null,
-    'ratingEvent.revertedAtTs': shouldRollbackAppliedRating ? nowTs : null,
     expiredAt: nowIso,
     expiredAtTs: nowTs,
     vivaSync: syncBatch ? syncBatch.pendingState : (pending?.vivaSync || null),
     updatedAt: nowIso,
   };
+  if (ratingEnabled) {
+    resultSet['ratingEvent.status'] = expiredRatingEventStatus;
+    resultSet['ratingEvent.revertedAt'] = shouldRollbackAppliedRating ? nowIso : null;
+    resultSet['ratingEvent.revertedAtTs'] = shouldRollbackAppliedRating ? nowTs : null;
+  }
   const gameSet = {
     resultStatus: 'NO_RESULT_EXPIRED',
     resultLifecycleState: 'NO_RESULT_EXPIRED',
@@ -551,7 +587,7 @@ if (pending.expiredToNoResult) {
     resultId: pending.id,
     status: 'NO_RESULT_EXPIRED',
     lifecycleState: 'NO_RESULT_EXPIRED',
-    ratingEventStatus: shouldRollbackAppliedRating ? 'REVERTED' : 'EXPIRED',
+    ratingEventStatus: expiredRatingEventStatus,
     expiredAt: nowIso,
     rollbackApplied: shouldRollbackAppliedRating,
     ratingImpact: sanitizeRatingImpact(ratingImpact),
@@ -560,7 +596,7 @@ if (pending.expiredToNoResult) {
       gameId,
       lifecycleState: 'NO_RESULT_EXPIRED',
       ratingEventId,
-      ratingEventStatus: shouldRollbackAppliedRating ? 'REVERTED' : 'EXPIRED',
+      ratingEventStatus: expiredRatingEventStatus,
       vivaSync: syncBatch ? syncBatch.pendingState : (pending?.vivaSync || null),
     }),
   };
@@ -586,11 +622,11 @@ if (pending.expiredToNoResult) {
         { $set: gameSet },
         { upsert: false },
       ],
-      eventPayload: [
+      eventPayload: ratingEnabled ? [
         { _id: ratingEventId },
         {
           $set: {
-            status: shouldRollbackAppliedRating ? 'REVERTED' : 'EXPIRED',
+            status: expiredRatingEventStatus,
             revertedAt: shouldRollbackAppliedRating ? nowIso : null,
             revertedAtTs: shouldRollbackAppliedRating ? nowTs : null,
             expiredAt: nowIso,
@@ -599,7 +635,7 @@ if (pending.expiredToNoResult) {
           },
         },
         { upsert: true },
-      ],
+      ] : null,
       response: { statusCode: 200, headers: { "Content-Type": "application/json; charset=utf-8" }, payload: responsePayload },
       syncBatch,
     },
@@ -631,7 +667,13 @@ if (action === 'CONFIRM' || action === 'ACCEPT_CORRECTION' || action === 'EXPIRE
   }
 
   const correctionAccepted = pendingStatus === 'CORRECTION_PENDING' && (action === 'ACCEPT_CORRECTION' || action === 'CONFIRM');
-  const ratingApplyRequired = shouldApplyRatingNow || (ratingEnabled && correctionAccepted && ratingEventStatus === 'REVERTED');
+  const ratingApplyRequired = shouldApplyRatingNow
+    || (!usesAsyncRatingWork && ratingEnabled && correctionAccepted && ratingEventStatus === 'REVERTED');
+  const finalRatingEventStatus = usesAsyncRatingWork
+    ? (String(pending?.ratingWork?.status || '').toUpperCase() === 'APPLIED'
+      ? 'FINAL'
+      : (ratingEventStatus || 'PENDING_CONFIRMATION'))
+    : 'FINAL';
   const syncBatch = ratingApplyRequired
     ? buildVivaSyncBatch({
       pending: Object.assign({}, pending, { confirmedAt: nowIso }),
@@ -657,7 +699,18 @@ if (action === 'CONFIRM' || action === 'ACCEPT_CORRECTION' || action === 'EXPIRE
     vivaSync: syncBatch ? syncBatch.pendingState : (pending?.vivaSync || null),
     updatedAt: nowIso,
   };
-  if (ratingEnabled) {
+  if (usesAsyncRatingWork) {
+    resultSet['review.state'] = 'FINAL';
+    resultSet['review.finalizedAt'] = nowIso;
+    resultSet['review.finalizedAtTs'] = nowTs;
+  }
+  if (usesAsyncRatingWork && ratingEnabled) {
+    resultSet['ratingEvent.status'] = finalRatingEventStatus;
+    if (finalRatingEventStatus === 'FINAL') {
+      resultSet['ratingEvent.finalizedAt'] = nowIso;
+      resultSet['ratingEvent.finalizedAtTs'] = nowTs;
+    }
+  } else if (!usesAsyncRatingWork && ratingEnabled) {
     resultSet.ratingFormula = ratingFormula;
     resultSet.ratingImpact = ratingImpact;
     resultSet.intermediateResults = asArray(pending.intermediateResults);
@@ -699,7 +752,7 @@ if (action === 'CONFIRM' || action === 'ACCEPT_CORRECTION' || action === 'EXPIRE
     status: 'CONFIRMED',
     lifecycleState: 'CONFIRMED',
     confirmedAt: nowIso,
-    ratingEventStatus: ratingEnabled ? 'FINAL' : null,
+    ratingEventStatus: ratingEnabled ? finalRatingEventStatus : null,
     ratingImpact: sanitizeRatingImpact(ratingImpact),
     ratingApplied: ratingApplyRequired,
     result: buildPublicResult({
@@ -707,7 +760,7 @@ if (action === 'CONFIRM' || action === 'ACCEPT_CORRECTION' || action === 'EXPIRE
       gameId,
       lifecycleState: 'CONFIRMED',
       ratingEventId,
-      ratingEventStatus: ratingEnabled ? 'FINAL' : null,
+      ratingEventStatus: ratingEnabled ? finalRatingEventStatus : null,
       vivaSync: syncBatch ? syncBatch.pendingState : (pending?.vivaSync || null),
     }),
   };
@@ -734,12 +787,12 @@ if (action === 'CONFIRM' || action === 'ACCEPT_CORRECTION' || action === 'EXPIRE
         { _id: ratingEventId },
         {
           $set: {
-            status: 'FINAL',
+            status: finalRatingEventStatus,
             formula: ratingFormula,
             ratingImpact,
             ratingFactsVersion: pending?.ratingFacts?.version || null,
-            finalizedAt: nowIso,
-            finalizedAtTs: nowTs,
+            finalizedAt: finalRatingEventStatus === 'FINAL' ? nowIso : null,
+            finalizedAtTs: finalRatingEventStatus === 'FINAL' ? nowTs : null,
             updatedAt: nowIso,
           },
         },
@@ -767,12 +820,12 @@ if (action === 'CONFIRM' || action === 'ACCEPT_CORRECTION' || action === 'EXPIRE
       { _id: ratingEventId },
       {
         $set: {
-          status: 'FINAL',
+          status: finalRatingEventStatus,
           formula: ratingFormula,
           ratingImpact,
           ratingFactsVersion: pending?.ratingFacts?.version || null,
-          finalizedAt: nowIso,
-          finalizedAtTs: nowTs,
+          finalizedAt: finalRatingEventStatus === 'FINAL' ? nowIso : null,
+          finalizedAtTs: finalRatingEventStatus === 'FINAL' ? nowTs : null,
           updatedAt: nowIso,
         },
       },
@@ -804,6 +857,31 @@ if (pending.alreadyReverted || pending?.ratingEvent?.status === 'REVERTED') {
 
 const correctionExpiresAtTs = nowTs + CORRECTION_WINDOW_MS;
 const correctionExpiresAt = new Date(correctionExpiresAtTs).toISOString();
+const asyncRevertQueued = usesAsyncRatingWork && ratingEnabled;
+const disputeRatingEventStatus = ratingEnabled
+  ? (asyncRevertQueued
+    ? 'REVERT_QUEUED'
+    : (shouldRollbackAppliedRating ? 'REVERTED' : 'DISPUTED'))
+  : null;
+const asyncRevertGeneration = Number.isInteger(Number(pending?.ratingWork?.generation))
+  ? Number(pending.ratingWork.generation) + 1
+  : 2;
+const asyncRevertRatingWork = asyncRevertQueued ? Object.assign({}, pending.ratingWork, {
+  generation: asyncRevertGeneration,
+  desiredState: 'REVERTED',
+  status: 'QUEUED',
+  jobKey: `game-result:${pending.id}:score:${Number(pending.scoreRevision || 1)}:revert:${asyncRevertGeneration}`,
+  attempts: 0,
+  queuedAt: nowIso,
+  queuedAtTs: nowTs,
+  nextAttemptAt: nowIso,
+  nextAttemptAtTs: nowTs,
+  leaseOwner: null,
+  leaseUntil: null,
+  leaseUntilTs: null,
+  preparedPlan: null,
+  lastError: null,
+}) : null;
 const syncBatch = shouldRollbackAppliedRating
   ? buildVivaSyncBatch({
     pending: Object.assign({}, pending, { confirmedAt: nowIso }),
@@ -838,12 +916,36 @@ const resultSet = {
   disputedAt: nowIso,
   disputedAtTs: nowTs,
   correctionContext,
-  'ratingEvent.status': shouldRollbackAppliedRating ? 'REVERTED' : 'DISPUTED',
-  'ratingEvent.revertedAt': shouldRollbackAppliedRating ? nowIso : null,
-  'ratingEvent.revertedAtTs': shouldRollbackAppliedRating ? nowTs : null,
   vivaSync: syncBatch ? syncBatch.pendingState : (pending?.vivaSync || null),
   updatedAt: nowIso,
 };
+if (ratingEnabled) {
+  resultSet['ratingEvent.status'] = disputeRatingEventStatus;
+  resultSet['ratingEvent.revertedAt'] = shouldRollbackAppliedRating ? nowIso : null;
+  resultSet['ratingEvent.revertedAtTs'] = shouldRollbackAppliedRating ? nowTs : null;
+}
+if (usesAsyncRatingWork) {
+  resultSet.effectiveState = 'DISPUTED';
+  resultSet['review.state'] = 'DISPUTED';
+  resultSet['review.disputedAt'] = nowIso;
+  resultSet['review.disputedAtTs'] = nowTs;
+}
+if (asyncRevertQueued) {
+  resultSet['ratingWork.generation'] = asyncRevertGeneration;
+  resultSet['ratingWork.desiredState'] = 'REVERTED';
+  resultSet['ratingWork.status'] = 'QUEUED';
+  resultSet['ratingWork.jobKey'] = asyncRevertRatingWork.jobKey;
+  resultSet['ratingWork.attempts'] = 0;
+  resultSet['ratingWork.queuedAt'] = nowIso;
+  resultSet['ratingWork.queuedAtTs'] = nowTs;
+  resultSet['ratingWork.nextAttemptAt'] = nowIso;
+  resultSet['ratingWork.nextAttemptAtTs'] = nowTs;
+  resultSet['ratingWork.leaseOwner'] = null;
+  resultSet['ratingWork.leaseUntil'] = null;
+  resultSet['ratingWork.leaseUntilTs'] = null;
+  resultSet['ratingWork.preparedPlan'] = null;
+  resultSet['ratingWork.lastError'] = null;
+}
 const gameSet = {
   resultStatus: 'CORRECTION_PENDING',
   resultLifecycleState: 'CORRECTION_PENDING',
@@ -851,6 +953,11 @@ const gameSet = {
   resultId: pending.id,
   updatedAt: nowIso,
 };
+if (usesAsyncRatingWork) {
+  gameSet.resultRatingStatus = asyncRevertQueued
+    ? 'REVERT_QUEUED'
+    : (pending?.ratingWork?.status || null);
+}
 if (hasGameRoster && shouldRollbackAppliedRating) {
   gameSet.participants = applyImpactToPlayers(ctx.game?.participants, ratingImpact, 'revert');
   gameSet.waitlist = applyImpactToPlayers(ctx.game?.waitlist, ratingImpact, 'revert');
@@ -863,14 +970,21 @@ const responsePayload = {
   disputeState: 'DISPUTED',
   disputedAt: nowIso,
   correctionContext: sanitizeCorrectionContext(correctionContext),
-  ratingEventStatus: shouldRollbackAppliedRating ? 'REVERTED' : 'DISPUTED',
+  ratingEventStatus: disputeRatingEventStatus,
+  ratingWork: sanitizeRatingWork(asyncRevertRatingWork || pending.ratingWork),
   rollbackApplied: shouldRollbackAppliedRating,
   result: buildPublicResult({
-    pending: Object.assign({}, pending, resultSet),
+    pending: Object.assign({}, pending, resultSet, {
+      effectiveState: usesAsyncRatingWork ? 'DISPUTED' : pending.effectiveState,
+      review: usesAsyncRatingWork
+        ? Object.assign({}, pending.review, { state: 'DISPUTED', disputedAt: nowIso, disputedAtTs: nowTs })
+        : pending.review,
+      ratingWork: asyncRevertRatingWork || pending.ratingWork,
+    }),
     gameId,
     lifecycleState: 'CORRECTION_PENDING',
     ratingEventId,
-    ratingEventStatus: shouldRollbackAppliedRating ? 'REVERTED' : 'DISPUTED',
+    ratingEventStatus: disputeRatingEventStatus,
     vivaSync: syncBatch ? syncBatch.pendingState : (pending?.vivaSync || null),
   }),
 };
@@ -890,11 +1004,11 @@ const resultUpdateMsg = Object.assign({}, msg, {
       { $set: gameSet },
       { upsert: false },
     ],
-    eventPayload: [
+    eventPayload: ratingEnabled ? [
       { _id: ratingEventId },
-      { $set: { status: shouldRollbackAppliedRating ? 'REVERTED' : 'DISPUTED', revertedAt: shouldRollbackAppliedRating ? nowIso : null, revertedAtTs: shouldRollbackAppliedRating ? nowTs : null, updatedAt: nowIso } },
+      { $set: { status: disputeRatingEventStatus, revertedAt: shouldRollbackAppliedRating ? nowIso : null, revertedAtTs: shouldRollbackAppliedRating ? nowTs : null, updatedAt: nowIso } },
       { upsert: true },
-    ],
+    ] : null,
     response: { statusCode: 200, headers: { "Content-Type": "application/json; charset=utf-8" }, payload: responsePayload },
     syncBatch,
   },
@@ -915,11 +1029,11 @@ return [
   }),
   null,
   responseMsg,
-  Object.assign({}, msg, {
+  ratingEnabled ? Object.assign({}, msg, {
     payload: [
       { _id: ratingEventId },
-      { $set: { status: shouldRollbackAppliedRating ? 'REVERTED' : 'DISPUTED', revertedAt: shouldRollbackAppliedRating ? nowIso : null, revertedAtTs: shouldRollbackAppliedRating ? nowTs : null, updatedAt: nowIso } },
+      { $set: { status: disputeRatingEventStatus, revertedAt: shouldRollbackAppliedRating ? nowIso : null, revertedAtTs: shouldRollbackAppliedRating ? nowTs : null, updatedAt: nowIso } },
       { upsert: true },
     ],
-  }),
+  }) : null,
 ];

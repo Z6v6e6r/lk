@@ -13,13 +13,44 @@ Stable layout on `lk-primary-147`:
 Cron contract:
 
 ```cron
+* * * * * /opt/padlhub-rating-worker/current/deploy/rating-worker/run-game-results.sh
 */15 * * * * /opt/padlhub-rating-worker/current/deploy/rating-worker/run-incremental.sh
 17 3 * * * /opt/padlhub-rating-worker/current/deploy/rating-worker/run-full.sh
 ```
 
-Both entrypoints use the same `flock` lock. MongoDB URI is read at runtime from
+All entrypoints use the same `flock` lock. MongoDB URI is read at runtime from
 the active Node-RED flow. Viva credentials, when enabled for attendance sync,
 are read from root-only `/etc/padlhub-rating-worker.env`.
+
+Game-result processing is disabled by default. Enable it only after the matching
+Node-RED result flow and worker release have both passed postchecks:
+
+```env
+GAME_RESULT_RATING_WORKER_ENABLED=true
+GAME_RESULT_RATING_WORKER_LIMIT=20
+```
+
+The result endpoint persists the score and a versioned `ratingWork` envelope in
+one MongoDB write and returns immediately. The minute worker leases due work,
+stores a deterministic prepared plan, appends immutable ledger events, replays
+canonical player state, and only then marks the job `APPLIED`. A dispute queues
+the same result for `REVERTED`; an author correction is a new score revision and
+waits until the predecessor compensation has completed. Retries reuse event IDs,
+so a crash after event insertion does not apply the rating twice.
+
+Rollout order:
+
+1. Build and install the worker release with the flag still `false`.
+2. Import the result-flow patch built from a freshly pulled `lk-primary-147` flow.
+3. Run the game-result worker without `--apply` and inspect the candidate report.
+4. Set `GAME_RESULT_RATING_WORKER_ENABLED=true`, install the minute cron, and
+   submit one controlled rating game.
+5. Verify `lk_game_results.ratingWork`, immutable ledger events, canonical player
+   state, the game roster projection, and the Viva projection outbox before broad use.
+
+Rollback is two-part: disable the flag first so no new jobs are leased, then
+restore the backed-up Node-RED flow. Already persisted jobs and ledger events must
+be reconciled explicitly; do not delete them or edit player ratings in place.
 
 Every run writes `rating_job_runs`, advances `rating_job_registry.watermark`
 only after success, clears stale job errors, and includes `rating-worker-v1.0.11`
