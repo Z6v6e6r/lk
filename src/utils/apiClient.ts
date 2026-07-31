@@ -20,6 +20,7 @@ import type {
 } from "./bookingCancellation";
 import {
   buildBookingCancellationPayload,
+  buildBookingCancellationPayloadForRefundMethod,
   pickAutomaticBookingCancellationAction,
   resolveBookingCancellationVerification,
   resolveBookingCancellationPlan,
@@ -3714,7 +3715,11 @@ export interface PadelGameOrganizerCleanupItem {
   cancelledInLk?: boolean;
   withVivaErrors?: boolean;
   exerciseId?: string | null;
-  exerciseCancelled?: boolean;
+  exerciseCancelled?: boolean | null;
+  exerciseAlreadyCancelled?: boolean;
+  exerciseVerificationReason?: string | null;
+  operationKey?: string | null;
+  upstreamMutationsAttempted?: number;
   bookingIds?: string[];
   bookingSuccessCount?: number;
   bookingFailedCount?: number;
@@ -4588,7 +4593,7 @@ export async function apiCancelBooking(
   actionOrRefundMethod?: BookingCancellationAction | BookingCancellationRefundMethod | null,
 ) {
   const payload = typeof actionOrRefundMethod === "string"
-    ? { refundMethod: actionOrRefundMethod }
+    ? buildBookingCancellationPayloadForRefundMethod(actionOrRefundMethod)
     : actionOrRefundMethod
       ? buildBookingCancellationPayload(actionOrRefundMethod)
       : null;

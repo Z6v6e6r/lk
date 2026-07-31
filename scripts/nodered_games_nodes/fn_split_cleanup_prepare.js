@@ -102,7 +102,7 @@ const normalizeRefundMethod = (value) => {
   const raw = toStr(value);
   if (!raw) return null;
   const normalized = raw.toUpperCase();
-  if (normalized === "CURRENCY" || normalized === "DEPOSIT") return normalized;
+  if (["CURRENCY", "DEPOSIT", "SERVICE", "NONE"].includes(normalized)) return normalized;
   return null;
 };
 
@@ -127,6 +127,26 @@ const resolveStartTs = (game) => {
   const normalizedTime = /^\d{2}:\d{2}$/.test(fromTime) ? `${fromTime}:00` : fromTime;
   const ts = Date.parse(`${date}T${normalizedTime}+03:00`);
   return Number.isFinite(ts) ? ts : null;
+};
+
+const resolveExerciseDate = (game) => {
+  const booking = isObj(game?.booking) ? game.booking : null;
+  const explicitDate = toStr(booking?.date);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(explicitDate || "")) return explicitDate;
+
+  const timeFromIso = toStr(booking?.timeFromIso);
+  const parsed = timeFromIso ? new Date(timeFromIso) : null;
+  if (!parsed || !Number.isFinite(parsed.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(parsed);
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return byType.year && byType.month && byType.day
+    ? `${byType.year}-${byType.month}-${byType.day}`
+    : null;
 };
 
 const isPaidStatus = (value) => {
@@ -448,7 +468,9 @@ rows.forEach((game) => {
     || toStr(game?.booking?.exerciseId)
     || toStr(metadata.vivaExerciseId)
     || toStr(metadata.exerciseId);
+  const exerciseDate = resolveExerciseDate(game);
   const hasVivaTargets = bookingTargets.length > 0 || bookingIds.length > 0 || Boolean(exerciseId);
+  const missingExerciseDate = Boolean(exerciseId) && !exerciseDate;
 
   tasks.push({
     mode: "GAME_CLEANUP",
@@ -468,11 +490,14 @@ rows.forEach((game) => {
     bookingIds,
     bookingTargets,
     exerciseId,
+    exerciseDate,
     preferredRefundMethod,
     cancellationActionId,
     actorBookingId,
-    blockLocalMutation: !hasVivaTargets,
-    blockReason: hasVivaTargets ? null : "missing_viva_targets",
+    blockLocalMutation: !hasVivaTargets || missingExerciseDate,
+    blockReason: !hasVivaTargets
+      ? "missing_viva_targets"
+      : (missingExerciseDate ? "missing_exercise_date" : null),
     dryRun,
     preparedAt: nowIso,
   });

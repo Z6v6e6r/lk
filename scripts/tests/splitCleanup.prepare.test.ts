@@ -219,6 +219,57 @@ test("cleanup query and prepare preserve the selected cancellation action", () =
   assert.equal(tasks[0].cancellationActionId, "subscription");
 });
 
+test("forced cleanup carries the exact exercise date for authoritative read-back", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_prepare.js", {
+    payload: [buildSplitGame({
+      booking: {
+        exerciseId: "exercise-1",
+        timeFromIso: "2026-08-13T21:30:00.000Z",
+        timeToIso: "2026-08-13T22:30:00.000Z",
+      },
+    })],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-07-31T18:00:00+03:00"),
+      nowIso: "2026-07-31T15:00:00.000Z",
+      force: true,
+      gameId: "game-1",
+      dryRun: false,
+      limit: 1,
+      intent: "cancel_game",
+      actorClientId: "organizer-1",
+    },
+  }) as unknown[];
+
+  const tasks = asTaskList(asRecord(out[0])?.payload);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].exerciseId, "exercise-1");
+  assert.equal(tasks[0].exerciseDate, "2026-08-14");
+  assert.equal(tasks[0].blockLocalMutation, false);
+});
+
+test("forced cleanup with an exercise but no exact date fails closed", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_prepare.js", {
+    payload: [buildSplitGame({
+      booking: { exerciseId: "exercise-1" },
+    })],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-07-31T18:00:00+03:00"),
+      nowIso: "2026-07-31T15:00:00.000Z",
+      force: true,
+      gameId: "game-1",
+      dryRun: false,
+      limit: 1,
+      intent: "cancel_game",
+      actorClientId: "organizer-1",
+    },
+  }) as unknown[];
+
+  const tasks = asTaskList(asRecord(out[0])?.payload);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].blockLocalMutation, true);
+  assert.equal(tasks[0].blockReason, "missing_exercise_date");
+});
+
 test("participant timeout marks tasks without Viva targets as blocked", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_prepare.js", {
     payload: [
