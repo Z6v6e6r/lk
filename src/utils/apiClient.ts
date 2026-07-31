@@ -3404,8 +3404,10 @@ export interface TournamentSubscriptionStatus {
   launchPaidCount: number;
   launchReservedCount: number;
   launchRemainingCount: number;
+  launchCompletedAt: string | null;
   dailyLimit: number;
   dailyDropDate: string | null;
+  dailyDropStartsAt: string | null;
   priceMinor: number | null;
   price: number | null;
   updatedAt: string | null;
@@ -9167,8 +9169,10 @@ function normalizeTournamentSubscriptionStatusEntry(
     launchPaidCount: Math.max(0, Math.floor(pickNumeric(data, ["launchPaidCount"]) ?? 0)),
     launchReservedCount: Math.max(0, Math.floor(pickNumeric(data, ["launchReservedCount"]) ?? 0)),
     launchRemainingCount: Math.max(0, Math.floor(pickNumeric(data, ["launchRemainingCount"]) ?? 0)),
+    launchCompletedAt: pickString(data, ["launchCompletedAt"]),
     dailyLimit: Math.max(0, Math.floor(pickNumeric(data, ["dailyLimit"]) ?? 0)),
     dailyDropDate: pickString(data, ["dailyDropDate"]),
+    dailyDropStartsAt: pickString(data, ["dailyDropStartsAt"]),
     priceMinor: priceMinor == null ? null : Math.max(0, Math.round(priceMinor)),
     price,
     updatedAt: pickString(data, ["updatedAt"]),
