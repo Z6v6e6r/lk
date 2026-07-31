@@ -1,3 +1,5 @@
+import { resolveOverlayBundleUrl } from "../utils/overlayBundleUrl";
+
 export const API_BASE =
   (import.meta.env.VITE_API_BASE as string | undefined) || "https://api.vivacrm.ru";
 export const KEYCLOAK_BASE = import.meta.env.VITE_KEYCLOAK_BASE as string;
@@ -23,7 +25,11 @@ export const PUSH_UNREGISTRATION_URL =
   import.meta.env.VITE_PUSH_UNREGISTRATION_URL as string | undefined;
 
 export const GAMES_BUNDLE_URL = import.meta.env.VITE_GAMES_BUNDLE_URL as string | undefined;
-export const TOURNAMENTS_BUNDLE_URL = import.meta.env.VITE_TOURNAMENTS_BUNDLE_URL as string | undefined;
+export const TOURNAMENTS_BUNDLE_URL = resolveOverlayBundleUrl(
+  import.meta.env.VITE_TOURNAMENTS_BUNDLE_URL as string | undefined,
+  "tournaments",
+  IS_DEV_RELEASE_CHANNEL,
+);
 export const ONBOARDING_BUNDLE_URL = import.meta.env.VITE_ONBOARDING_BUNDLE_URL as string | undefined;
 export const LEVELS_INFO_BUNDLE_URL = import.meta.env.VITE_LEVELS_INFO_BUNDLE_URL as string | undefined;
 export const COMMUNITIES_BUNDLE_URL = import.meta.env.VITE_COMMUNITIES_BUNDLE_URL as string | undefined;
