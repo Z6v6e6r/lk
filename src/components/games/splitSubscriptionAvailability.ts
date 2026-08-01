@@ -3,7 +3,15 @@ import type { ApiError, Subscription } from "../../utils/apiClient";
 export type SplitSubscriptionCandidate = Pick<
   Subscription,
   "subscriptionId" | "name" | "status" | "expirationDate" | "visitsLeft" | "availableMinutes"
->;
+> & Partial<Pick<
+  Subscription,
+  "purchaseDate" | "autoActivationDate" | "activationDate" | "validityDays"
+>>;
+
+export type SplitSubscriptionLifecycle =
+  | "ACTIVE_USABLE"
+  | "NEW_FIRST_USE_CANDIDATE"
+  | "UNAVAILABLE";
 
 export type SplitSubscriptionCategoryCandidate = Pick<
   Subscription,
@@ -139,16 +147,28 @@ export function filterSplitEligibleSubscriptions<T extends SplitSubscriptionCand
   requiredDurationMinutes: number | null | undefined,
   gameDate: string | null | undefined,
 ): T[] {
-  return filterSplitCategoryCompatibleSubscriptions(
+  const eligible = filterSplitCategoryCompatibleSubscriptions(
     subscriptions,
     requiredExerciseTypeIds,
     requiredDirectionIds,
     selectedStudioId,
   ).filter((subscription) => {
-    if (!isSplitSubscriptionStatusActive(subscription.status)) return false;
     if (!hasSplitSubscriptionBalance(subscription, requiredVisits, requiredDurationMinutes)) return false;
-    return isSplitSubscriptionValidForGameDate(subscription, gameDate);
+    return resolveSplitSubscriptionLifecycle(subscription, gameDate) !== "UNAVAILABLE";
   });
+
+  return eligible
+    .map((subscription, index) => ({
+      subscription,
+      index,
+      lifecycle: resolveSplitSubscriptionLifecycle(subscription, gameDate),
+    }))
+    .sort((left, right) => {
+      const leftPriority = left.lifecycle === "ACTIVE_USABLE" ? 0 : 1;
+      const rightPriority = right.lifecycle === "ACTIVE_USABLE" ? 0 : 1;
+      return leftPriority - rightPriority || left.index - right.index;
+    })
+    .map(({ subscription }) => subscription);
 }
 
 function formatDateLabel(value: string | null | undefined): string | null {
@@ -159,24 +179,40 @@ function formatDateLabel(value: string | null | undefined): string | null {
   return parsed.toLocaleDateString("ru-RU");
 }
 
-function isSplitSubscriptionStatusActive(statusRaw: unknown): boolean {
+type SplitSubscriptionStatusKind = "ACTIVE" | "FIRST_USE_PENDING" | "BLOCKED" | "UNKNOWN";
+
+function classifySplitSubscriptionStatus(statusRaw: unknown): SplitSubscriptionStatusKind {
   const status = String(statusRaw || "").trim().toUpperCase();
-  if (!status) return true;
-  const blockedMarkers = [
-    "EXPIRED",
-    "CANCEL",
-    "BLOCK",
-    "ARCHIVE",
-    "INACTIVE",
-    "SUSPEND",
-    "FINISH",
-    "TERMINAT",
-    "ENDED",
-    "ЗАВЕРШ",
-    "ОТМЕН",
-    "ПРОСРОЧ",
-  ];
-  return !blockedMarkers.some((marker) => status.includes(marker));
+  if (!status) return "UNKNOWN";
+  if (status === "NEW") return "FIRST_USE_PENDING";
+  if (status === "ACTIVE") return "ACTIVE";
+  if (["HOLD", "EXPIRED", "REFUNDED", "NO_VISITS"].includes(status)) return "BLOCKED";
+
+  return "UNKNOWN";
+}
+
+function isSplitSubscriptionFirstUseCandidate(subscription: SplitSubscriptionCandidate): boolean {
+  if (classifySplitSubscriptionStatus(subscription.status) !== "FIRST_USE_PENDING") return false;
+  return !trimText(subscription.activationDate);
+}
+
+export function resolveSplitSubscriptionLifecycle(
+  subscription: SplitSubscriptionCandidate,
+  gameDate: string | null | undefined,
+): SplitSubscriptionLifecycle {
+  const statusKind = classifySplitSubscriptionStatus(subscription.status);
+  if (statusKind === "BLOCKED" || statusKind === "UNKNOWN") return "UNAVAILABLE";
+
+  if (isSplitSubscriptionFirstUseCandidate(subscription)) {
+    // autoActivationDate is a fallback deadline, not a not-before date. Viva
+    // remains responsible for setting activationDate/expirationDate on booking.
+    return "NEW_FIRST_USE_CANDIDATE";
+  }
+
+  if (statusKind !== "ACTIVE") return "UNAVAILABLE";
+  return isSplitSubscriptionValidForGameDate(subscription, gameDate)
+    ? "ACTIVE_USABLE"
+    : "UNAVAILABLE";
 }
 
 function hasSplitSubscriptionBalance(
@@ -220,7 +256,7 @@ function findLatestEligibleSplitSubscription(
   requiredDurationMinutes: number | null | undefined,
 ): SplitSubscriptionCandidate | null {
   const eligible = subscriptions
-    .filter((subscription) => isSplitSubscriptionStatusActive(subscription.status))
+    .filter((subscription) => classifySplitSubscriptionStatus(subscription.status) === "ACTIVE")
     .filter((subscription) => hasSplitSubscriptionBalance(subscription, requiredVisits, requiredDurationMinutes));
 
   if (eligible.length === 0) return null;
@@ -244,6 +280,12 @@ export function resolveSplitSubscriptionUnavailableMessage(params: {
   requiredVisits: number;
   requiredDurationMinutes: number | null | undefined;
 }): string | null {
+  const firstUseCandidate = params.subscriptions.some((subscription) => (
+    hasSplitSubscriptionBalance(subscription, params.requiredVisits, params.requiredDurationMinutes)
+    && resolveSplitSubscriptionLifecycle(subscription, params.gameDate) === "NEW_FIRST_USE_CANDIDATE"
+  ));
+  if (firstUseCandidate) return null;
+
   const fallback = findLatestEligibleSplitSubscription(
     params.subscriptions,
     params.gameDate,

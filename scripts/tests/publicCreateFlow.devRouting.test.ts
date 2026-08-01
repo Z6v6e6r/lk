@@ -155,9 +155,13 @@ test("public game create flow uses dedicated summary and split checkout selectio
   assert.match(gamesPageSource, /const splitHasEligibleSubscriptions = splitSubscriptions\.length > 0;/);
   assert.doesNotMatch(gamesPageSource, /duration < 120/);
   assert.doesNotMatch(gamesPageSource, /splitSubscriptionsAllowedForDuration/);
-  assert.match(
+  assert.doesNotMatch(
     gamesPageSource,
     /const resolvedPaymentMode = preferredPaymentMode === "subscription" && !canUseSplitSubscription[\s\S]*\? "one_time"/,
+  );
+  assert.match(
+    gamesPageSource,
+    /if \(preferredPaymentMode === "subscription" && !canUseSplitSubscription\) \{[\s\S]*Выбранный абонемент больше недоступен/,
   );
   assert.match(gamesPageSource, /shouldShowPublicSplitSubscriptionBadge \? \(\s*<span className="game-payment-choice-badge">Подписка<\/span>/);
   assert.match(gamesPageSource, /game-payment-choice-price\$\{shouldShowPublicSplitSubscriptionBadge \? " game-payment-choice-price--discounted" : ""\}/);

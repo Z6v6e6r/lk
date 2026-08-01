@@ -122,8 +122,9 @@ import {
 } from "../../utils/gameSelfRemoval";
 import { isSyntheticCabinetBookingGame } from "../cabinet/syntheticBookingGame";
 import {
+  filterSplitEligibleSubscriptions,
   isNoSubscriptionsAvailableError,
-  isSplitSubscriptionValidForGameDate,
+  resolveSplitSubscriptionLifecycle,
   resolveSplitSubscriptionUnavailableMessage,
 } from "./splitSubscriptionAvailability";
 import {
@@ -247,48 +248,6 @@ function resolveSplitSubscriptionVisitCharge(durationMinutes: number | null | un
   return normalizedDuration >= 90 ? 2 : 1;
 }
 
-function isSplitSubscriptionStatusActive(status: string | null | undefined): boolean {
-  const normalized = String(status || "").trim().toUpperCase();
-  if (!normalized) return true;
-  const blockedMarkers = [
-    "EXPIRED",
-    "CANCEL",
-    "BLOCK",
-    "ARCHIVE",
-    "INACTIVE",
-    "SUSPEND",
-    "FINISH",
-    "TERMINAT",
-    "ENDED",
-    "ЗАВЕРШ",
-    "ОТМЕН",
-    "ПРОСРОЧ",
-  ];
-  return !blockedMarkers.some((marker) => normalized.includes(marker));
-}
-
-function hasSplitSubscriptionBalance(
-  subscription: Subscription,
-  requiredVisits: number,
-  requiredDurationMinutes: number | null | undefined,
-): boolean {
-  const normalizedRequiredVisits = Math.max(1, Math.floor(requiredVisits || 1));
-  const normalizedRequiredMinutes = Number.isFinite(requiredDurationMinutes)
-    ? Math.max(1, Math.floor(Number(requiredDurationMinutes)))
-    : null;
-  const hasVisitsValue = Number.isFinite(subscription.visitsLeft);
-  const hasMinutesValue = Number.isFinite(subscription.availableMinutes);
-  const visitsLeft = hasVisitsValue ? subscription.visitsLeft : null;
-  const minutesLeft = hasMinutesValue ? subscription.availableMinutes : null;
-
-  if (visitsLeft != null) return visitsLeft >= normalizedRequiredVisits;
-  if (minutesLeft != null) {
-    if (normalizedRequiredMinutes != null) return minutesLeft >= normalizedRequiredMinutes;
-    return minutesLeft > 0;
-  }
-  return true;
-}
-
 function buildComparableIdSet(values: Array<string | number | null | undefined>): Set<string> {
   return new Set(
     values
@@ -359,28 +318,6 @@ function subscriptionMatchesSplitCategory(
   return true;
 }
 
-function filterSplitEligibleSubscriptions(
-  subscriptions: Subscription[],
-  requiredExerciseTypeIds: Set<string>,
-  requiredDirectionIds: Set<string>,
-  selectedStudioId: string | null | undefined,
-  requiredVisits: number,
-  requiredDurationMinutes: number | null | undefined,
-  gameDate: string | null | undefined,
-): Subscription[] {
-  return subscriptions.filter((subscription) => {
-    if (!isSplitSubscriptionStatusActive(subscription.status)) return false;
-    if (!hasSplitSubscriptionBalance(subscription, requiredVisits, requiredDurationMinutes)) return false;
-    if (!isSplitSubscriptionValidForGameDate(subscription, gameDate)) return false;
-    return subscriptionMatchesSplitCategory(
-      subscription,
-      requiredExerciseTypeIds,
-      requiredDirectionIds,
-      selectedStudioId,
-    );
-  });
-}
-
 function resolveSplitSubscriptionDisplayName(
   subscription: Subscription,
   subscriptionNamesById: Record<string, string>,
@@ -420,6 +357,9 @@ function formatSplitSubscriptionValidityLabel(
   subscriptionName: string,
   options: { includePrefix?: boolean } = {},
 ): string | null {
+  if (resolveSplitSubscriptionLifecycle(subscription, null) === "NEW_FIRST_USE_CANDIDATE") {
+    return "активируется при первой записи";
+  }
   return resolveSubscriptionUsageDisplay({
     subscriptionName,
     validityDate: subscription.expirationDate,
@@ -10304,9 +10244,12 @@ export default function GamesPage({
     const baseShareAmount = resolveSplitBaseShareAmount(activeSplitPaymentPromoConfig, duration);
     const discountAmount = Math.max(baseShareAmount - shareAmount, 0);
     const canUseSplitSubscription = splitHasEligibleSubscriptions;
-    const resolvedPaymentMode = preferredPaymentMode === "subscription" && !canUseSplitSubscription
-      ? "one_time"
-      : preferredPaymentMode ?? (canUseSplitSubscription ? "subscription" : "one_time");
+    if (preferredPaymentMode === "subscription" && !canUseSplitSubscription) {
+      setPayError("Выбранный абонемент больше недоступен. Обновите список и попробуйте снова.");
+      setLoadingPay(false);
+      return;
+    }
+    const resolvedPaymentMode = preferredPaymentMode ?? (canUseSplitSubscription ? "subscription" : "one_time");
     const resolvedClientSubscriptionId =
       resolvedPaymentMode === "subscription"
         ? (String(preferredClientSubscriptionId || "").trim() || null)
@@ -10317,6 +10260,11 @@ export default function GamesPage({
       )) ?? null
       : null;
     if (resolvedPaymentMode === "subscription") {
+      if (!resolvedClientSubscriptionId || !resolvedSplitSubscription) {
+        setPayError("Не удалось определить выбранный абонемент. Выберите его повторно.");
+        setLoadingPay(false);
+        return;
+      }
       const subscriptionDateMessage = resolveSplitSubscriptionUnavailableMessage({
         subscriptions: splitSubscriptions,
         gameDate: selectedDate ? formatDateLocalIso(selectedDate) : null,
