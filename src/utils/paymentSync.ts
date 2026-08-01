@@ -13,6 +13,12 @@ import {
   shouldClaimPaymentSyncItem,
   type PaymentSyncQueueStatus,
 } from "./paymentSyncPolicy";
+import {
+  attachPaymentSyncExerciseId,
+  collectPaymentSyncPayloadExerciseIds,
+  isGameExerciseIdMissingGuard,
+} from "./paymentSyncBookingResolution";
+import { recoverGameExerciseId } from "./gameExerciseIdRecovery";
 
 export const PAYMENT_REF_QUERY_KEY = "phPaymentRef";
 export const PENDING_GAME_DRAFT_KEY = "padlhub.pendingPaidGameDraft.v1";
@@ -553,7 +559,49 @@ async function processPendingPaymentSyncQueueUnlocked(
         continue;
       }
 
-      const confirmPayload = buildConfirmPayload(draft, bookingIds);
+      const confirmBookingIds = unique([
+        ...bookingIds,
+        ...getExistingBookingIdsFromPayload(draft.payload),
+      ]);
+      let confirmPayload = buildConfirmPayload(draft, confirmBookingIds);
+      const payloadExerciseIds = collectPaymentSyncPayloadExerciseIds(confirmPayload);
+      if (payloadExerciseIds.length === 0) {
+        trackPaymentConfirmEvent("requested", {
+          stage: "exercise_restore",
+          paymentRef,
+          bookingIdsCount: confirmBookingIds.length,
+          attempt,
+          source,
+        });
+      }
+      const exerciseRecovery = await recoverGameExerciseId({
+        exerciseIds: payloadExerciseIds,
+        bookingIds: confirmBookingIds,
+      });
+      if (!exerciseRecovery.ok) {
+        trackPaymentConfirmEvent("failed", {
+          stage: "exercise_restore",
+          paymentRef,
+          status: exerciseRecovery.status,
+          source,
+          code: exerciseRecovery.code,
+          message: exerciseRecovery.message,
+        });
+        registerPendingPaymentSyncFailure(paymentRef, exerciseRecovery.message);
+        failed.push({ paymentRef, error: exerciseRecovery.message });
+        continue;
+      }
+
+      confirmPayload = attachPaymentSyncExerciseId(confirmPayload, exerciseRecovery.exerciseId);
+      if (exerciseRecovery.source === "viva_bookings") {
+        trackPaymentConfirmEvent("success", {
+          stage: "exercise_restore",
+          paymentRef,
+          exerciseId: exerciseRecovery.exerciseId,
+          bookingIdsCount: exerciseRecovery.bookingIds.length,
+          source,
+        });
+      }
       trackPaymentConfirmEvent("requested", {
         stage: "confirm",
         paymentRef,
@@ -587,6 +635,14 @@ async function processPendingPaymentSyncQueueUnlocked(
         source,
         message: confirmResult.error?.message || "unknown",
       });
+
+      if (isGameExerciseIdMissingGuard(confirmResult.status, confirmResult.error?.raw)) {
+        const errorMessage = confirmResult.error?.message
+          || "Backend отклонил подтверждение без exerciseId";
+        registerPendingPaymentSyncFailure(paymentRef, errorMessage);
+        failed.push({ paymentRef, error: errorMessage });
+        continue;
+      }
 
       trackPaymentConfirmEvent("requested", {
         stage: "legacy_create",

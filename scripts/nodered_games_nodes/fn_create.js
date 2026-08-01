@@ -667,13 +667,35 @@ const endIso = toIso(date, timeTo, booking.timeToIso || body.timeToIso);
 const startTs = startIso ? Date.parse(startIso) : null;
 const endTs = endIso ? Date.parse(endIso) : null;
 
+// Internal seam for a future pre-upsert Viva lookup node. Do not accept this
+// value from the public request payload: only an upstream Node-RED node may
+// populate msg._gameConfirmExerciseLookup after resolving bookingIds in Viva.
+const confirmExerciseLookup = isObj(msg._gameConfirmExerciseLookup)
+  ? msg._gameConfirmExerciseLookup
+  : {};
+const confirmLookupBookingIds = uniq(parseBookingIds(confirmExerciseLookup.bookingIds));
+const confirmLookupMatchesBookings = (
+  bookingIds.length > 0
+  && confirmLookupBookingIds.length === bookingIds.length
+  && bookingIds.every((bookingId) => confirmLookupBookingIds.includes(bookingId))
+);
+const confirmLookupIsActive = (
+  (!hasOwn(confirmExerciseLookup, "active") || confirmExerciseLookup.active === true)
+  && (!hasOwn(confirmExerciseLookup, "notCancelled") || confirmExerciseLookup.notCancelled === true)
+  && (!hasOwn(confirmExerciseLookup, "cancelled") || confirmExerciseLookup.cancelled === false)
+  && (!hasOwn(confirmExerciseLookup, "isCancelled") || confirmExerciseLookup.isCancelled === false)
+);
+const confirmedLookupExerciseId = confirmLookupMatchesBookings && confirmLookupIsActive
+  ? toStr(confirmExerciseLookup.vivaExerciseId || confirmExerciseLookup.exerciseId)
+  : null;
 const vivaExerciseId = toStr(
   booking.vivaExerciseId
     || booking.exerciseId
     || metadataInput.vivaExerciseId
     || metadataInput.exerciseId
     || splitPaymentInput.vivaExerciseId
-    || splitPaymentInput.exerciseId,
+    || splitPaymentInput.exerciseId
+    || confirmedLookupExerciseId,
 );
 
 const slotKey = [studioId, roomId, date, timeFrom, timeTo, subServiceIds.join(",")].join("|");
@@ -713,6 +735,39 @@ const resolvedStatus =
     : resolvedPaid
       ? "PAID"
       : "PAYMENT_PENDING");
+
+const isPaidWidgetCreate = (
+  mode === "create"
+  && resolvedPaid === true
+  && ["games_widget", "games_widget_zero_pay"].includes(requestSource)
+);
+const requiresConfirmedExerciseId = mode === "confirm" || isPaidWidgetCreate;
+
+if (requiresConfirmedExerciseId && resolvedPaid === true && bookingIds.length > 0 && !vivaExerciseId) {
+  const errorPayload = {
+    error: "Не удалось связать оплаченную бронь с занятием Viva. Повторите синхронизацию.",
+    code: "GAME_EXERCISE_ID_MISSING",
+    paymentRef: paymentRef || null,
+    bookingIds,
+    retryable: true,
+    lookupRequired: true,
+  };
+  const errMsg = Object.assign({}, msg, {
+    statusCode: 409,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    payload: errorPayload,
+  });
+  const debugMsg = Object.assign({}, errMsg, {
+    payload: {
+      action: "paid_confirm_blocked_missing_exercise_id",
+      code: errorPayload.code,
+      paymentRef: errorPayload.paymentRef,
+      bookingIds,
+      lookupRequired: true,
+    },
+  });
+  return [null, errMsg, debugMsg, null];
+}
 
 const metadataForRecord = Object.assign({}, metadataInput);
 if (hasOwn(metadataForRecord, "resultRosterSnapshot")) delete metadataForRecord.resultRosterSnapshot;

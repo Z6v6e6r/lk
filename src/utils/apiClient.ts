@@ -31,6 +31,7 @@ import {
   resolveLkApiFallbackTimeoutMs,
   resolvePreferredLkApiBaseUrl,
 } from "./lkApiBaseUrls";
+import { isGameExerciseIdMissingGuard } from "./paymentSyncBookingResolution";
 
 const DEFAULT_GAMES_MASTER_SERVICE_ID =
   GAMES_MASTER_SERVICE_ID || "2f4155ad-7bc0-4a15-a12c-da7fce15c37a";
@@ -1290,6 +1291,94 @@ function extractBookingIdsFromPaymentPayload(payload: unknown): string[] {
 
   visit(payload);
   return Array.from(bucket);
+}
+
+function extractExerciseIdFromPaymentPayload(payload: unknown): string | null {
+  const normalizeId = (value: unknown): string | null => {
+    if (typeof value === "string") {
+      const normalized = value.trim();
+      return normalized || null;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+    return null;
+  };
+  const extractFromUrl = (value: unknown): string | null => {
+    if (typeof value !== "string") return null;
+    const normalized = value.trim();
+    if (!normalized) return null;
+    try {
+      const parsed = new URL(normalized);
+      for (const key of ["vivaExerciseId", "exerciseId", "viva_exercise_id", "exercise_id"]) {
+        const exerciseId = normalizeId(parsed.searchParams.get(key));
+        if (exerciseId) return exerciseId;
+      }
+    } catch {
+      // ignore invalid URLs
+    }
+    return null;
+  };
+
+  const visit = (value: unknown): string | null => {
+    if (value == null) return null;
+    if (typeof value === "string") return extractFromUrl(value);
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const nested = visit(item);
+        if (nested) return nested;
+      }
+      return null;
+    }
+    if (!isRecord(value)) return null;
+
+    for (const key of ["vivaExerciseId", "exerciseId", "viva_exercise_id", "exercise_id"]) {
+      const direct = normalizeId(value[key]);
+      if (direct) return direct;
+    }
+
+    for (const key of ["exercise", "createdExercise", "exerciseInfo"]) {
+      const exercise = value[key];
+      const directExerciseId = normalizeId(exercise);
+      if (directExerciseId) return directExerciseId;
+      if (isRecord(exercise)) {
+        for (const idKey of ["id", "uuid", "vivaExerciseId", "exerciseId"]) {
+          const nestedExerciseId = normalizeId(exercise[idKey]);
+          if (nestedExerciseId) return nestedExerciseId;
+        }
+      }
+    }
+
+    for (const key of ["paymentUrl", "redirectUrl", "paymentLink", "checkoutUrl", "url"]) {
+      const exerciseIdFromUrl = extractFromUrl(value[key]);
+      if (exerciseIdFromUrl) return exerciseIdFromUrl;
+    }
+
+    for (const key of [
+      "booking",
+      "bookings",
+      "bookingInfo",
+      "bookingPayload",
+      "createdBooking",
+      "createdBookings",
+      "payload",
+      "data",
+      "content",
+      "result",
+      "items",
+      "transaction",
+      "transactions",
+      "transactionStatus",
+    ]) {
+      if (!(key in value)) continue;
+      const nested = visit(value[key]);
+      if (nested) return nested;
+    }
+
+    return null;
+  };
+
+  return visit(payload);
 }
 
 function extractOneTimeFilterItems(payload: unknown): unknown[] {
@@ -3381,6 +3470,8 @@ export interface PaymentUrl {
   toPay: number;
   paymentUrl: string | null;
   bookingIds?: string[];
+  exerciseId?: string | null;
+  vivaExerciseId?: string | null;
   paid?: boolean | null;
 }
 
@@ -7312,6 +7403,9 @@ async function writePadelGameRecord(
         firstError = response.error;
         firstStatus = response.status;
       }
+      if (isGameExerciseIdMissingGuard(response.status, response.error.raw)) {
+        return { data: null, error: response.error, status: response.status };
+      }
       continue;
     }
 
@@ -8855,6 +8949,7 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
 
         const txPaymentUrl = extractPaymentUrl(txResult.data);
         const txBookingIds = extractBookingIdsFromPaymentPayload(txResult.data);
+        const txExerciseId = extractExerciseIdFromPaymentPayload(txResult.data);
         const txToPay =
           extractPriceAmountForSubServices(txResult.data, subServiceIds) ??
           extractPriceAmount(txResult.data) ??
@@ -8866,6 +8961,8 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
               paymentUrl: null,
               toPay: txToPay,
               bookingIds: txBookingIds,
+              exerciseId: txExerciseId,
+              vivaExerciseId: txExerciseId,
               paid: true,
             },
             error: null,
@@ -8879,6 +8976,8 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
             paymentUrl: txPaymentUrl,
             toPay: txToPay,
             bookingIds: txBookingIds,
+            exerciseId: txExerciseId,
+            vivaExerciseId: txExerciseId,
             paid: txToPay <= 0 ? true : null,
           },
           error: null,
@@ -8906,6 +9005,7 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
     0;
   const paymentUrl = extractPaymentUrl(payResult.data);
   const bookingIds = extractBookingIdsFromPaymentPayload(payResult.data);
+  const exerciseId = extractExerciseIdFromPaymentPayload(payResult.data);
   if (!paymentUrl) {
     if (toPay <= 0) {
       return {
@@ -8913,6 +9013,8 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
           paymentUrl: null,
           toPay,
           bookingIds,
+          exerciseId,
+          vivaExerciseId: exerciseId,
           paid: true,
         },
         error: null,
@@ -8935,6 +9037,8 @@ export async function apiPayMasterService(params: MasterServicePayParams) {
       paymentUrl,
       toPay,
       bookingIds,
+      exerciseId,
+      vivaExerciseId: exerciseId,
       paid: toPay <= 0 ? true : null,
     },
     error: null,

@@ -78,6 +78,7 @@ import {
   savePendingPaidGameDraft,
   type PendingPaidGameDraft,
 } from "../../utils/paymentSync";
+import { recoverGameExerciseId } from "../../utils/gameExerciseIdRecovery";
 import {
   CUSTOM_FIELD_IDS,
   getCustomFieldValue,
@@ -10664,7 +10665,28 @@ export default function GamesPage({
       ...bookingIdsFromPaymentResult,
       ...bookingIdsFromPaymentUrl,
     ]));
+    const paymentResponseExerciseId =
+      normalizeBookingId(paymentResult.data?.vivaExerciseId)
+      ?? normalizeBookingId(paymentResult.data?.exerciseId);
     const resolvedPaymentAmount = paymentResult.data?.toPay ?? paymentAmount ?? 0;
+    let resolvedExerciseId = paymentResponseExerciseId;
+    if (
+      paymentResult.data
+      && !paymentResult.data.paymentUrl
+      && resolvedPaymentAmount <= 0
+      && !resolvedExerciseId
+    ) {
+      const exerciseRecovery = await recoverGameExerciseId({
+        exerciseIds: [paymentResponseExerciseId],
+        bookingIds: resolvedBookingIds,
+      });
+      if (!exerciseRecovery.ok) {
+        setPayError(`Не удалось безопасно подтвердить бронь Viva. ${exerciseRecovery.message}`);
+        setLoadingPay(false);
+        return;
+      }
+      resolvedExerciseId = exerciseRecovery.exerciseId;
+    }
 
     if (paymentResult.data && !paymentResult.data.paymentUrl && resolvedPaymentAmount <= 0) {
       const paidAt = new Date().toISOString();
@@ -10695,6 +10717,8 @@ export default function GamesPage({
           durationMinutes: duration,
           slotId: selectedSlotId,
           bookingIds: resolvedBookingIds,
+          exerciseId: resolvedExerciseId,
+          vivaExerciseId: resolvedExerciseId,
         },
         payment: {
           amount: resolvedPaymentAmount,
@@ -10723,6 +10747,8 @@ export default function GamesPage({
         metadata: {
           paymentRef,
           bookingIds: resolvedBookingIds,
+          exerciseId: resolvedExerciseId,
+          vivaExerciseId: resolvedExerciseId,
           source: "games_widget_zero_pay",
           promoCode: promoCodeApplied,
           promoDiscount: promoDiscountAmount,
@@ -10815,6 +10841,8 @@ export default function GamesPage({
           durationMinutes: duration,
           slotId: selectedSlotId,
           bookingIds: resolvedBookingIds,
+          exerciseId: resolvedExerciseId,
+          vivaExerciseId: resolvedExerciseId,
         },
         payment: {
           amount: resolvedPaymentAmount,
@@ -10842,6 +10870,8 @@ export default function GamesPage({
         metadata: {
           paymentRef,
           bookingIds: resolvedBookingIds,
+          exerciseId: resolvedExerciseId,
+          vivaExerciseId: resolvedExerciseId,
           source: "games_widget",
           promoCode: promoCodeApplied,
           promoDiscount: promoDiscountAmount,
