@@ -8,6 +8,8 @@ function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
 }
 
 type RouterMessage = {
+  method?: string;
+  url?: string;
   statusCode?: number;
   payload?: {
     error?: string;
@@ -19,8 +21,35 @@ type RouterMessage = {
     paymentModes?: Array<{ productId?: string }>;
     transactionId?: string;
     paymentUrl?: string;
+    paymentType?: string;
+    clientSubscriptionId?: string;
+    count?: number;
   };
 };
+
+test("subscription booking request keeps the exact selected client subscription id", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: { access_token: "token" },
+    _splitCtx: {
+      step: "token",
+      action: "join",
+      paymentMode: "subscription",
+      clientSubscriptionId: "new-subscription",
+      clientPhone: "79990000001",
+      exerciseId: "exercise-1",
+      durationMinutes: 60,
+      spot: 1,
+    },
+  }) as unknown[];
+
+  const requestMsg = out[0] as RouterMessage;
+  assert.equal(requestMsg.method, "POST");
+  assert.match(requestMsg.url || "", /\/exercises\/exercise-1\/bookings$/);
+  assert.equal(requestMsg.payload?.paymentType, "SUBSCRIPTION");
+  assert.equal(requestMsg.payload?.clientSubscriptionId, "new-subscription");
+  assert.equal(requestMsg.payload?.count, 1);
+});
 
 test("subscription booking fails when Viva confirms a different client subscription", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {

@@ -9346,6 +9346,7 @@ function normalizeTournamentSubscriptionConfirmResult(
   if (!isRecord(payload)) return null;
   const data = isRecord(payload.data) ? payload.data : payload;
   const status = pickString(data, ["status"]);
+  const normalizedStatus = String(status || "").trim().toUpperCase();
 
   return {
     counterKey: pickString(data, ["counterKey", "statusKey"]),
@@ -9357,8 +9358,8 @@ function normalizeTournamentSubscriptionConfirmResult(
     paymentRef: pickString(data, ["paymentRef", "ref"]),
     transactionId: pickString(data, ["transactionId"]),
     status,
-    paid: data.paid === true || String(status || "").toUpperCase().includes("PAID"),
-    failed: data.failed === true || String(status || "").toUpperCase().includes("FAIL"),
+    paid: data.paid === true || normalizedStatus === "PAID",
+    failed: data.failed === true || normalizedStatus.includes("FAIL"),
     paymentUrl: extractPaymentUrl(data),
     expiresAt: pickString(data, ["expiresAt", "paymentExpiresAt", "paymentDueDate"]),
     updatedAt: pickString(data, ["updatedAt"]),
