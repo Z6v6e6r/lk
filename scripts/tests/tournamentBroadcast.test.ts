@@ -125,6 +125,60 @@ test("broadcast device is resolved from CUP station settings and never from requ
   assert.equal(mismatchResult[2].payload.code, "TOURNAMENT_STATION_MISMATCH");
 });
 
+test("status and stop use the saved broadcast station when tournament station became synthetic", () => {
+  const tournamentId = "tournament-1";
+  const stationId = "station-1";
+  const environment = {
+    CUP_STATION_SETTINGS_JSON: JSON.stringify({
+      [stationId]: { tournamentBroadcastBoxId: "box-1" },
+    }),
+    TOURNAMENT_BROADCAST_API_BASE_URL: "https://broadcast.example.test",
+    TOURNAMENT_BROADCAST_BEARER_TOKEN: "server-only-token",
+  };
+  const buildMessage = (action: "status" | "stop", requestedStationId: string) => ({
+    payload: [{
+      tournamentId,
+      organizer: { id: "manager-1" },
+      params: {
+        stationId: `local-studio:${tournamentId}`,
+        broadcast: {
+          active: true,
+          stationId,
+          updatedAt: "2026-07-31T16:08:29.940Z",
+        },
+      },
+    }],
+    _tournamentBroadcast: {
+      action,
+      tournamentId,
+      requestedStationId,
+      profileId: "manager-1",
+      hasHostingAccess: false,
+    },
+  });
+
+  const status = runFunctionNode(
+    "fn_tournament_broadcast_route.js",
+    buildMessage("status", `local-studio:${tournamentId}`),
+    environment,
+  );
+  assert.equal(status[0], null);
+  assert.equal(status[2], null);
+  assert.equal(status[1].statusCode, 200);
+  assert.equal(status[1].payload.stationId, stationId);
+  assert.equal(status[1].payload.active, true);
+
+  const stop = runFunctionNode(
+    "fn_tournament_broadcast_route.js",
+    buildMessage("stop", stationId),
+    environment,
+  );
+  assert.equal(stop[1], null);
+  assert.equal(stop[2], null);
+  assert.match(stop[0].url, /\/devices\/box-1\/tournament\/stop$/);
+  assert.equal(stop[0]._tournamentBroadcast.stationId, stationId);
+});
+
 test("stop command has no body and successful upstream response is persisted", () => {
   const routed = runFunctionNode(
     "fn_tournament_broadcast_route.js",
