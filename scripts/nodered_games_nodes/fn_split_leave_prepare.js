@@ -1,23 +1,9 @@
+const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
-  const text = String(value).trim();
-  return text ? text : null;
+  const normalized = String(value).trim();
+  return normalized || null;
 };
-
-const asArray = (value) => (Array.isArray(value) ? value : []);
-
-const uniq = (values) => {
-  const result = [];
-  const used = new Set();
-  values.forEach((item) => {
-    const normalized = toStr(item);
-    if (!normalized || used.has(normalized)) return;
-    used.add(normalized);
-    result.push(normalized);
-  });
-  return result;
-};
-
 const normalizePhone = (value) => {
   const digits = String(value || "").replace(/\D/g, "");
   if (!digits) return null;
@@ -25,100 +11,76 @@ const normalizePhone = (value) => {
   if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
   return digits;
 };
-
-const normalizeBookingItem = (value, fallbackClientId) => {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const bookingId = toStr(value.bookingId || value.id || value.uuid);
-    if (!bookingId) return null;
-    return {
-      bookingId,
-      clientId: toStr(value.clientId || value.playerId || value.userId) || fallbackClientId || null,
-    };
-  }
-
-  const bookingId = toStr(value);
-  if (!bookingId) return null;
-  return {
-    bookingId,
-    clientId: fallbackClientId || null,
+const respond = (statusCode, state, message) => {
+  msg.statusCode = statusCode;
+  msg.headers = {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store",
   };
-};
-
-const uniqBookingItems = (values) => {
-  const result = [];
-  const byBookingId = new Map();
-  values.forEach((item) => {
-    if (!item?.bookingId) return;
-    const existing = byBookingId.get(item.bookingId);
-    if (existing) {
-      if (!existing.clientId && item.clientId) existing.clientId = item.clientId;
-      return;
-    }
-    const next = {
-      bookingId: item.bookingId,
-      clientId: item.clientId || null,
-    };
-    byBookingId.set(item.bookingId, next);
-    result.push(next);
-  });
-  return result;
-};
-
-const fail = (status, error, details) => {
-  msg.statusCode = status;
-  msg.headers = { "Content-Type": "application/json; charset=utf-8" };
-  msg.payload = { ok: false, error, details: details || null };
+  msg.payload = { ok: false, state, message };
   return [null, msg, null];
 };
 
-const body = msg.payload && typeof msg.payload === "object" ? msg.payload : {};
-const auth = msg._splitCleanupAuth && typeof msg._splitCleanupAuth === "object"
-  ? msg._splitCleanupAuth
-  : null;
-if (!auth || auth.verified !== true || (!toStr(auth.actorClientId) && !toStr(auth.actorPhoneNorm))) {
-  return fail(401, "Не удалось подтвердить авторизованного клиента");
-}
-const gameId = toStr(msg.req?.params?.gameId || body.gameId);
-const exerciseId = toStr(body.exerciseId);
-const playerClientId = toStr(body.clientId || body.playerId || body.userId);
-const bookingItems = uniqBookingItems([
-  ...asArray(body.bookings).map((item) => normalizeBookingItem(item, playerClientId)),
-  ...asArray(body.bookingItems).map((item) => normalizeBookingItem(item, playerClientId)),
-  ...asArray(body.cancellations).map((item) => normalizeBookingItem(item, playerClientId)),
-  ...asArray(body.bookingIds).map((item) => normalizeBookingItem(item, playerClientId)),
-  normalizeBookingItem(body.bookingId, playerClientId),
-].filter(Boolean));
-const bookingIds = uniq(bookingItems.map((item) => item.bookingId));
-
-if (!gameId) {
-  return fail(400, "gameId is required");
+const auth = isObj(msg._splitCleanupAuth) ? msg._splitCleanupAuth : null;
+if (!auth || auth.verified !== true || (!toStr(auth.actorClientId) && !normalizePhone(auth.actorPhoneNorm))) {
+  return respond(401, "UNAUTHORIZED", "Не удалось подтвердить авторизованного клиента");
 }
 
-if (bookingIds.length === 0) {
-  return fail(400, "bookingIds are required");
+const body = isObj(msg.payload) ? msg.payload : {};
+const forbiddenFields = ["exerciseId", "gameId"];
+if (forbiddenFields.some((field) => Object.prototype.hasOwnProperty.call(body, field))) {
+  return respond(
+    400,
+    "CONFLICT",
+    "Идентификаторы участника и записи определяются сервером",
+  );
 }
+
+const gameId = toStr(msg.req?.params?.gameId);
+if (!gameId) return respond(400, "CONFLICT", "gameId is required");
+
+const actorClientId = toStr(auth.actorClientId);
+const actorPhoneNorm = normalizePhone(auth.actorPhoneNorm);
+const legacyBookingIds = [
+  ...(Array.isArray(body.bookingIds) ? body.bookingIds : []),
+  ...(Array.isArray(body.bookingItems) ? body.bookingItems.map((item) => item?.bookingId) : []),
+  body.bookingId,
+].map(toStr).filter(Boolean);
+const mode = legacyBookingIds.length > 0 ? "ORGANIZER_TARGET" : "SELF";
+const requestedRefundMethodRaw = toStr(body.refundMethod)?.toUpperCase() || null;
+const allowedRefundMethods = new Set(["CURRENCY", "DEPOSIT", "SERVICE", "NONE"]);
+if (requestedRefundMethodRaw && !allowedRefundMethods.has(requestedRefundMethodRaw)) {
+  return respond(400, "CONFLICT", "refundMethod имеет неверное значение");
+}
+const suppliedOperationId = mode === "ORGANIZER_TARGET" ? toStr(body.operationId) : null;
+if (suppliedOperationId && !/^[A-Za-z0-9._:-]{8,128}$/.test(suppliedOperationId)) {
+  return respond(400, "CONFLICT", "operationId имеет неверный формат");
+}
+const identityKey = actorClientId || actorPhoneNorm;
+const operationId = mode === "SELF"
+  ? `self-leave:${gameId}:${identityKey}`
+  : (suppliedOperationId || `organizer-leave:${gameId}:${Array.from(new Set(legacyBookingIds)).sort().join(",")}`);
+const claimToken = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
 
 msg._splitLeaveCtx = {
   gameId,
-  bookingQueue: bookingItems.map((item) => ({ ...item })),
-  initialBookingIds: [...bookingIds],
-  bookingResults: [],
-  exerciseId,
-  clientId: playerClientId,
-  playerId: toStr(body.playerId || body.clientId),
-  playerPhone: normalizePhone(body.playerPhone || body.phone || body.clientPhone),
-  playerName: toStr(body.playerName || body.name),
+  operationId,
+  claimToken,
   reason: toStr(body.reason) || "PLAYER_LEFT",
-  actorClientId: toStr(auth.actorClientId),
-  actorPhoneNorm: normalizePhone(auth.actorPhoneNorm),
-  token: null,
-  step: "authorize_leave",
+  requestedRefundMethod: requestedRefundMethodRaw,
+  actorClientId,
+  actorPhoneNorm,
+  actorAuthHeader: toStr(auth.authHeader),
+  mode,
+  legacyRequestedBookingIds: Array.from(new Set(legacyBookingIds)),
+  legacyRequestedClientId: toStr(body.clientId || body.playerId || body.userId),
+  legacyRequestedPhone: normalizePhone(body.playerPhone || body.phone || body.clientPhone),
+  bookingQueue: [],
+  initialBookingIds: [],
+  bookingResults: [],
   trace: [],
+  step: "authorize_leave",
 };
-
-msg.payload = {
-  id: gameId,
-  archived: { $ne: true },
-};
-
+msg.payload = { id: gameId, archived: { $ne: true } };
 return [msg, null, null];

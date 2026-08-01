@@ -14,6 +14,7 @@ import { Modal } from "../UI/Modal";
 export interface BookingCancellationExecutionResult {
   ok: boolean;
   message: string;
+  state?: "DONE" | "RETRY_REQUIRED";
 }
 
 interface BookingCancellationDialogProps {
@@ -66,6 +67,7 @@ export function BookingCancellationDialog({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submittingActionId, setSubmittingActionId] = useState<BookingCancellationAction["id"] | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [completionState, setCompletionState] = useState<"DONE" | "RETRY_REQUIRED" | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -75,6 +77,7 @@ export function BookingCancellationDialog({
       setSubmitError(null);
       setSubmittingActionId(null);
       setSuccessMessage(null);
+      setCompletionState(null);
       return;
     }
 
@@ -84,6 +87,7 @@ export function BookingCancellationDialog({
     setSubmitError(null);
     setSubmittingActionId(null);
     setSuccessMessage(null);
+    setCompletionState(null);
     setOptions(null);
 
     void apiFetchBookingCancellationOptions(bookingId).then((result) => {
@@ -116,6 +120,7 @@ export function BookingCancellationDialog({
     setSubmitError(null);
     setSubmittingActionId(null);
     setSuccessMessage(null);
+    setCompletionState(null);
     setLoading(true);
 
     void apiFetchBookingCancellationOptions(bookingId).then((result) => {
@@ -144,6 +149,7 @@ export function BookingCancellationDialog({
         return;
       }
       setSuccessMessage(result.message || action.successMessage);
+      setCompletionState(result.state ?? "DONE");
       setSubmittingActionId(null);
     } catch {
       setSubmitError("Не удалось отменить запись");
@@ -178,7 +184,14 @@ export function BookingCancellationDialog({
 
         {!loading && !loadError && successMessage && (
           <div className="booking-cancel-dialog__body">
-            <div className="booking-cancel-dialog__success">{successMessage}</div>
+            <div
+              className={completionState === "RETRY_REQUIRED"
+                ? "booking-cancel-dialog__text"
+                : "booking-cancel-dialog__success"}
+              role="status"
+            >
+              {successMessage}
+            </div>
             <div className="booking-cancel-dialog__footer">
               <button type="button" className="btn-cancel primary" onClick={handleClose}>
                 Продолжить

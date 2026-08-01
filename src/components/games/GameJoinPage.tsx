@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  apiCancelPadelSelfRemovalBookings,
   apiCreatePadelSplitParticipantPayment,
+  apiFetchBookings,
   apiFetchSubscriptionDailyLimitBookings,
+  apiLeavePadelGameAsCurrentUser,
   apiFetchPadelGameRecord,
   apiFetchTournamentParticipants,
   apiFetchProfile,
@@ -44,12 +45,6 @@ import {
   subscriptionPlanAllowsDailyLimitCategory,
   withSubscriptionCategoryDailyLimitResolvedName,
 } from "../../utils/subscriptionCategoryDailyLimit";
-import {
-  appendGameSelfRemovalAuditLog,
-  buildGameSelfRemovalAuditEntry,
-  type GameSelfRemovalAuditStatus,
-  type GameSelfRemovalAuditVerification,
-} from "../../utils/gameSelfRemoval";
 
 type JoinDecision = "JOINED" | "WAITLIST" | "DECLINED" | "NONE";
 
@@ -68,6 +63,8 @@ const OPEN_GAME_QUERY_KEY = "openGameId";
 const SPLIT_JOIN_QUERY_KEY = "splitJoin";
 const SPLIT_PAYMENT_MODE_QUERY_KEY = "splitPaymentMode";
 const SELF_REMOVE_SUCCESS_NOTICE = "Вы вышли из игры. 1 посещение вернули в абонемент.";
+const SELF_REMOVE_PENDING_NOTICE =
+  "Бронирование отменено, обновляем состав игры. Это может занять несколько минут.";
 
 function parseSplitPaymentMode(
   value: string | null | undefined,
@@ -569,205 +566,6 @@ function findMySplitPayment(game: PadelGameRecord, profile: UserProfileType): Re
   return null;
 }
 
-function splitPaymentItemMatchesProfile(item: Record<string, unknown>, profile: UserProfileType): boolean {
-  const profilePhone = normalizePhone(profile.phone);
-  const profileId = normalizeComparableId(profile.id);
-  const itemId = normalizeComparableId(item.clientId ?? item.playerId ?? item.userId);
-  const itemPhone = normalizePhone(
-    typeof item.phoneNorm === "string"
-      ? item.phoneNorm
-      : (typeof item.phone === "string" ? item.phone : null),
-  );
-  if (profileId && itemId && profileId === itemId) return true;
-  if (profilePhone && itemPhone && profilePhone === itemPhone) return true;
-  return false;
-}
-
-function findMySplitPaymentForLeave(game: PadelGameRecord, profile: UserProfileType): Record<string, unknown> | null {
-  const splitPayment = resolveSplitPaymentMetadata(game);
-  const payments = Array.isArray(splitPayment?.payments) ? splitPayment.payments : [];
-
-  for (const item of payments) {
-    if (!isRecord(item)) continue;
-    if (isSplitPaymentInactiveStatus(item.status)) continue;
-    if (splitPaymentItemMatchesProfile(item, profile)) return item;
-  }
-
-  return null;
-}
-
-function extractSplitPaymentBookingTargets(
-  item: Record<string, unknown> | null,
-  fallbackClientId: string | null,
-): Array<{ bookingId: string; clientId: string | null }> {
-  if (!item) return [];
-  const clientId = normalizeComparableId(item.clientId ?? item.playerId ?? item.userId) ?? fallbackClientId;
-  const byBookingId = new Map<string, { bookingId: string; clientId: string | null }>();
-  const addTarget = (bookingIdRaw: unknown) => {
-    const bookingId = normalizeComparableId(bookingIdRaw);
-    if (!bookingId) return;
-    const existing = byBookingId.get(bookingId);
-    if (existing) {
-      if (!existing.clientId && clientId) existing.clientId = clientId;
-      return;
-    }
-    byBookingId.set(bookingId, { bookingId, clientId });
-  };
-
-  addTarget(item.bookingId);
-  parseBookingIdsFromUnknown(item.bookingIds).forEach(addTarget);
-  return Array.from(byBookingId.values());
-}
-
-function extractVivaBookingId(raw: unknown): string | null {
-  if (!isRecord(raw)) return null;
-  return (
-    normalizeComparableId(raw.id)
-    ?? normalizeComparableId(raw.bookingId)
-    ?? normalizeComparableId(raw.recordId)
-    ?? normalizeComparableId(raw.uuid)
-    ?? null
-  );
-}
-
-function extractVivaBookingClientId(raw: unknown): string | null {
-  if (!isRecord(raw)) return null;
-  const client = isRecord(raw.client) ? raw.client : null;
-  return (
-    normalizeComparableId(client?.id)
-    ?? normalizeComparableId(raw.clientId)
-    ?? normalizeComparableId(raw.playerId)
-    ?? normalizeComparableId(raw.userId)
-    ?? null
-  );
-}
-
-function vivaBookingMatchesProfile(raw: unknown, profile: UserProfileType): boolean {
-  if (!isRecord(raw)) return false;
-  const client = isRecord(raw.client) ? raw.client : null;
-  const profileId = normalizeComparableId(profile.id);
-  const profilePhone = normalizePhone(profile.phone);
-
-  const bookingIds = [
-    client?.id,
-    raw.clientId,
-    raw.playerId,
-    raw.userId,
-  ]
-    .map((value) => normalizeComparableId(value))
-    .filter((value): value is string => Boolean(value));
-  if (profileId && bookingIds.includes(profileId)) return true;
-
-  const bookingPhones = [
-    client?.phone,
-    raw.phone,
-    raw.phoneNorm,
-    raw.clientPhone,
-  ]
-    .map((value) => normalizePhone(typeof value === "string" ? value : null))
-    .filter((value): value is string => Boolean(value));
-  if (profilePhone && bookingPhones.includes(profilePhone)) return true;
-
-  return false;
-}
-
-async function resolveLeaveBookingTargetsForProfile(
-  game: PadelGameRecord,
-  profile: UserProfileType,
-): Promise<{
-  bookingTargets: Array<{ bookingId: string; clientId: string | null }>;
-  lookupError: string | null;
-}> {
-  const bookingTargets = new Map<string, { bookingId: string; clientId: string | null }>();
-  let lookupError: string | null = null;
-  const upsertBookingTarget = (bookingIdRaw: unknown, clientIdRaw: unknown) => {
-    const bookingId = normalizeComparableId(bookingIdRaw);
-    if (!bookingId) return;
-    const clientId = normalizeComparableId(clientIdRaw);
-    const existing = bookingTargets.get(bookingId);
-    if (existing) {
-      if (!existing.clientId && clientId) {
-        existing.clientId = clientId;
-      }
-      return;
-    }
-    bookingTargets.set(bookingId, {
-      bookingId,
-      clientId,
-    });
-  };
-
-  const splitPaymentForLeave = findMySplitPaymentForLeave(game, profile);
-  extractSplitPaymentBookingTargets(splitPaymentForLeave, normalizeComparableId(profile.id))
-    .forEach((target) => upsertBookingTarget(target.bookingId, target.clientId));
-
-  const exerciseId = resolveGameExerciseId(game);
-  if (exerciseId) {
-    const participantsResult = await apiFetchTournamentParticipants(exerciseId, { sanitize: false });
-    if (participantsResult.error) {
-      lookupError = participantsResult.error.message || "Не удалось проверить запись игрока в Viva";
-    } else {
-      extractExerciseBookingRows(participantsResult.data)
-        .filter((row) => vivaBookingMatchesProfile(row, profile))
-        .forEach((row) => {
-          upsertBookingTarget(
-            extractVivaBookingId(row),
-            extractVivaBookingClientId(row),
-          );
-        });
-    }
-  }
-
-  return {
-    bookingTargets: Array.from(bookingTargets.values()),
-    lookupError,
-  };
-}
-
-function markSplitPaymentPlayerLeftForProfile(
-  splitPayment: Record<string, unknown> | null,
-  profile: UserProfileType,
-  leftAt: string,
-  vivaCancellation: Record<string, unknown> | null,
-): Record<string, unknown> | null {
-  if (!splitPayment) return null;
-  const payments = Array.isArray(splitPayment.payments)
-    ? splitPayment.payments.filter((item) => isRecord(item))
-    : [];
-  let changed = false;
-  const nextPayments = payments.map((item) => {
-    if (isSplitPaymentInactiveStatus(item.status) || !splitPaymentItemMatchesProfile(item, profile)) {
-      return item;
-    }
-    changed = true;
-    return {
-      ...item,
-      status: "CANCELLED",
-      cancelReason: "PLAYER_LEFT",
-      cancelledAt: leftAt,
-      leftAt,
-      vivaCancellation,
-    };
-  });
-
-  if (!changed) return splitPayment;
-  return {
-    ...splitPayment,
-    payments: nextPayments,
-    lastLeaveUpdateAt: leftAt,
-  };
-}
-
-function appendLeaveEvent(
-  value: unknown,
-  event: Record<string, unknown>,
-): Record<string, unknown>[] {
-  const current = Array.isArray(value)
-    ? value.filter((item): item is Record<string, unknown> => isRecord(item))
-    : [];
-  return [...current, event];
-}
-
 function buildCurrentJoinUrl(extraParams: Record<string, string>): string | null {
   if (typeof window === "undefined") return null;
   try {
@@ -1016,22 +814,21 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           : null;
 
         void apiUpdatePadelGameRecord(game.id, {
+          expectedUpdatedAt: game.updatedAt ?? null,
           participants: mergedParticipants,
           ...(nextMetadata ? { metadata: nextMetadata } : {}),
-        }).then((patchResult) => {
+        }).then(async (patchResult) => {
           if (!alive) return;
           const patchedRecord = patchResult.data;
           if (patchedRecord?.id) {
             setGame((prev) => (prev ? mergeRecord(prev, patchedRecord) : patchedRecord));
             return;
           }
+          const authoritative = await apiFetchPadelGameRecord(game.id);
+          if (!alive || !authoritative.data?.id) return;
           setGame((prev) => (prev
-            ? {
-              ...prev,
-              participants: mergedParticipants,
-              ...(nextMetadata ? { metadata: nextMetadata } : {}),
-            }
-            : prev));
+            ? mergeRecord(prev, authoritative.data as PadelGameRecord)
+            : authoritative.data));
         });
       })
       .catch(() => {
@@ -1142,6 +939,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       metadata.lastJoinUpdateAt = nowIso;
 
       const updateResult = await apiUpdatePadelGameRecord(actualGame.id, {
+        expectedUpdatedAt: actualGame.updatedAt ?? null,
         participants,
         waitlist,
         metadata,
@@ -1208,88 +1006,55 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       const freshRecordResult = await apiFetchPadelGameRecord(game.id);
       const actualGame = freshRecordResult.data ?? game;
 
-      if (target === "join") {
-        const existingSplitPayment = isSplitPaymentGame(actualGame)
-          ? findMySplitPayment(actualGame, profile)
-          : null;
-        if (existingSplitPayment && !isSplitPaymentInactiveStatus(existingSplitPayment.status)) {
-          const existingPaymentStatus = String(existingSplitPayment.status || "").trim().toUpperCase();
-          const existingPaymentUrl = typeof existingSplitPayment.paymentUrl === "string"
-            ? existingSplitPayment.paymentUrl.trim()
-            : "";
-          setSubmitting(null);
-          if (existingPaymentStatus === "PAYMENT_PENDING" && existingPaymentUrl) {
-            window.location.href = existingPaymentUrl;
-            return;
-          }
-          window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
+      if (target === "decline") {
+        const leaveResult = await apiLeavePadelGameAsCurrentUser(actualGame.id);
+        setSubmitting(null);
+        if (leaveResult.error || !leaveResult.data) {
+          setDecisionError(leaveResult.error?.message || "Не удалось покинуть игру");
           return;
         }
+        if (leaveResult.data.state === "RETRY_REQUIRED" || leaveResult.data.state === "IN_PROGRESS") {
+          pushCabinetFlashNotice(leaveResult.data.message || SELF_REMOVE_PENDING_NOTICE);
+          window.location.href = buildCabinetHomeUrl(cabinetUrl);
+          return;
+        }
+        if (leaveResult.data.state !== "DONE") {
+          setDecisionError(leaveResult.data.message || "Не удалось подтвердить выход из игры");
+          return;
+        }
+        pushCabinetFlashNotice(leaveResult.data.message || SELF_REMOVE_SUCCESS_NOTICE);
+        window.location.href = buildCabinetHomeUrl(cabinetUrl);
+        return;
+      }
 
-        const existingJoinDecision = resolveMyDecision(actualGame, profile);
-        if (existingJoinDecision === "JOINED" || existingJoinDecision === "WAITLIST") {
-          setSubmitting(null);
-          window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
+      const existingSplitPayment = isSplitPaymentGame(actualGame)
+        ? findMySplitPayment(actualGame, profile)
+        : null;
+      if (existingSplitPayment && !isSplitPaymentInactiveStatus(existingSplitPayment.status)) {
+        const existingPaymentStatus = String(existingSplitPayment.status || "").trim().toUpperCase();
+        const existingPaymentUrl = typeof existingSplitPayment.paymentUrl === "string"
+          ? existingSplitPayment.paymentUrl.trim()
+          : "";
+        setSubmitting(null);
+        if (existingPaymentStatus === "PAYMENT_PENDING" && existingPaymentUrl) {
+          window.location.href = existingPaymentUrl;
           return;
         }
+        window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
+        return;
+      }
+
+      const existingJoinDecision = resolveMyDecision(actualGame, profile);
+      if (existingJoinDecision === "JOINED" || existingJoinDecision === "WAITLIST") {
+        setSubmitting(null);
+        window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
+        return;
       }
 
       const myPlayer = buildMyPlayer(profile);
       let participants = dedupePlayers(actualGame.participants ?? []);
       let waitlist = dedupePlayers(actualGame.waitlist ?? []);
-      let splitLeaveSummary: Record<string, unknown> | null = null;
-      let selfRemovalAuditStatus: GameSelfRemovalAuditStatus | null = null;
-      let selfRemovalAuditVerification: GameSelfRemovalAuditVerification | null = null;
-      let selfRemovalAuditTrace: unknown[] = [];
-      let selfRemovalBookingIds: string[] = [];
       const exerciseId = resolveGameExerciseId(actualGame);
-
-      if (target === "decline") {
-        const { bookingTargets, lookupError } = await resolveLeaveBookingTargetsForProfile(actualGame, profile);
-        const bookingIds = bookingTargets.map((item) => item.bookingId);
-        selfRemovalBookingIds = bookingIds;
-        if (bookingIds.length > 0) {
-          const cancelResult = await apiCancelPadelSelfRemovalBookings(bookingIds);
-          splitLeaveSummary = isRecord(cancelResult.data)
-            ? cancelResult.data as Record<string, unknown>
-            : null;
-          selfRemovalAuditTrace = Array.isArray(cancelResult.data?.trace) ? cancelResult.data.trace : [];
-          const withVivaErrors = splitLeaveSummary?.withVivaErrors === true || splitLeaveSummary?.ok === false;
-          if (cancelResult.error || withVivaErrors) {
-            setSubmitting(null);
-            setDecisionError(cancelResult.error?.message || "Не удалось удалить вас из групповой записи Viva");
-            return;
-          }
-          selfRemovalAuditStatus = Array.isArray(cancelResult.data?.bookingSuccess) && cancelResult.data.bookingSuccess.length > 0
-            ? "cancelled_in_viva"
-            : "already_absent_in_viva";
-          if (exerciseId) {
-            const verificationResult = await apiFetchTournamentParticipants(exerciseId, { sanitize: false });
-            if (verificationResult.error || !verificationResult.data) {
-              setSubmitting(null);
-              setDecisionError(verificationResult.error?.message || "Не удалось проверить запись игрока в Viva");
-              return;
-            }
-            const stillPresentInViva = extractExerciseBookingRows(verificationResult.data)
-              .some((row) => vivaBookingMatchesProfile(row, profile));
-            if (stillPresentInViva) {
-              setSubmitting(null);
-              setDecisionError("Viva ещё держит запись игрока, попробуйте повторить позже");
-              return;
-            }
-            selfRemovalAuditVerification = "verified_absent";
-          } else {
-            selfRemovalAuditVerification = "verified_booking_history";
-          }
-        } else if (lookupError) {
-          setSubmitting(null);
-          setDecisionError(lookupError);
-          return;
-        } else {
-          selfRemovalAuditStatus = "no_viva_booking_target";
-          selfRemovalAuditVerification = "skipped_no_booking_target";
-        }
-      }
 
       participants = removePlayer(participants, myPhoneNorm, profile.id ?? null);
       waitlist = removePlayer(waitlist, myPhoneNorm, profile.id ?? null);
@@ -1298,7 +1063,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       const waitlistEnabled = resolveWaitlistEnabled(actualGame);
       let appliedStatus: JoinDecision = "NONE";
 
-      if (target === "join" && isSplitPaymentGame(actualGame)) {
+      if (isSplitPaymentGame(actualGame)) {
         const existingPayment = findMySplitPayment(actualGame, profile);
         const existingPaymentStatus = String(existingPayment?.status || "").trim().toUpperCase();
         const existingPaymentUrl =
@@ -1602,6 +1367,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         ].filter(Boolean)));
 
         const updateResult = await apiUpdatePadelGameRecord(actualGame.id, {
+          expectedUpdatedAt: actualGame.updatedAt ?? null,
           participants,
           waitlist,
           metadata,
@@ -1634,28 +1400,24 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         return;
       }
 
-      if (target === "join") {
-        if (participants.length < maxPlayers) {
-          participants.push({
-            ...myPlayer,
-            source: "INVITE_LINK",
-            status: "CONFIRMED",
-          });
-          appliedStatus = "JOINED";
-        } else if (waitlistEnabled) {
-          waitlist.push({
-            ...myPlayer,
-            source: "INVITE_LINK",
-            status: "WAITLIST",
-          });
-          appliedStatus = "WAITLIST";
-        } else {
-          setSubmitting(null);
-          setDecisionError("В игре нет свободных мест");
-          return;
-        }
+      if (participants.length < maxPlayers) {
+        participants.push({
+          ...myPlayer,
+          source: "INVITE_LINK",
+          status: "CONFIRMED",
+        });
+        appliedStatus = "JOINED";
+      } else if (waitlistEnabled) {
+        waitlist.push({
+          ...myPlayer,
+          source: "INVITE_LINK",
+          status: "WAITLIST",
+        });
+        appliedStatus = "WAITLIST";
       } else {
-        appliedStatus = "DECLINED";
+        setSubmitting(null);
+        setDecisionError("В игре нет свободных мест");
+        return;
       }
 
       const nowIso = new Date().toISOString();
@@ -1674,47 +1436,8 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       };
       metadata.joinResponses = joinResponses;
       metadata.lastJoinUpdateAt = nowIso;
-      if (target === "decline" && selfRemovalAuditStatus && selfRemovalAuditVerification) {
-        const nextSplitPayment = markSplitPaymentPlayerLeftForProfile(
-          resolveSplitPaymentMetadata(actualGame),
-          profile,
-          nowIso,
-          splitLeaveSummary,
-        );
-        if (nextSplitPayment) {
-          metadata.splitPayment = nextSplitPayment;
-        }
-        metadata.leaveEvents = appendLeaveEvent(metadata.leaveEvents, {
-          playerId: profile.id ?? null,
-          playerPhone: myPhoneNorm,
-          playerName: myPlayer.name,
-          leftAt: nowIso,
-          reason: "SELF",
-          byId: profile.id ?? null,
-          byPhone: myPhoneNorm,
-          byName: myPlayer.name,
-        });
-        metadata.lastLeaveUpdateAt = nowIso;
-        metadata.selfRemovalAuditLog = appendGameSelfRemovalAuditLog(
-          metadata.selfRemovalAuditLog,
-          buildGameSelfRemovalAuditEntry({
-            at: nowIso,
-            gameId: actualGame.id ?? null,
-            source: "game_join",
-            actor: "self",
-            playerId: profile.id ?? null,
-            playerPhone: myPhoneNorm,
-            playerName: myPlayer.name,
-            status: selfRemovalAuditStatus,
-            verification: selfRemovalAuditVerification,
-            bookingIds: selfRemovalBookingIds,
-            trace: selfRemovalAuditTrace,
-          }),
-        );
-        metadata.lastSelfRemovalAuditAt = nowIso;
-      }
-
       const updateResult = await apiUpdatePadelGameRecord(actualGame.id, {
+        expectedUpdatedAt: actualGame.updatedAt ?? null,
         participants,
         waitlist,
         metadata,
@@ -1736,15 +1459,8 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         notifyGameRecordUpdated(merged, "game_join_update");
       }
 
-      if (target === "join") {
-        setSubmitting(null);
-        window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
-        return;
-      }
-
       setSubmitting(null);
-      pushCabinetFlashNotice(SELF_REMOVE_SUCCESS_NOTICE);
-      window.location.href = buildCabinetHomeUrl(cabinetUrl);
+      window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
     },
     [cabinetUrl, comment, game, preferredSplitPaymentMode, profile],
   );

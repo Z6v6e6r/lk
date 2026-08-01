@@ -6,6 +6,8 @@ import type {
   TournamentHistoryRecord,
 } from "../../utils/apiClient";
 import { BookingCard } from "./BookingCard";
+import type { BookingCancellationExecutionResult } from "./BookingCancellationDialog";
+import type { BookingCancellationAction } from "../../utils/bookingCancellation";
 import { Modal } from "../UI/Modal";
 import { TournamentBookingCard } from "./TournamentBookingCard";
 import {
@@ -35,6 +37,15 @@ interface BookingsContainerProps {
   loadingGameRecords?: boolean;
   gameRecordsError?: string | null;
   resolveGameForBooking?: (booking: Booking) => PadelGameRecord | null;
+  isGameLinkAmbiguousForBooking?: (booking: Booking) => boolean;
+  resolveCancellationGameLink?: (booking: Booking) => {
+    gameId: string | null;
+    blocked: boolean;
+  };
+  executeBookingCancellation?: (
+    booking: Booking,
+    action: BookingCancellationAction,
+  ) => Promise<BookingCancellationExecutionResult>;
   resolveDisplayGameForBooking?: (booking: Booking) => PadelGameRecord | null;
   resolveTournamentForBooking?: (booking: Booking) => TournamentHistoryRecord | null;
   onOpenTournamentDetails?: (booking: Booking) => void;
@@ -246,6 +257,17 @@ function collectLinkedGameIds(
   return linkedIds;
 }
 
+function resolveActiveLinkedGameId(
+  booking: Booking,
+  resolveGameForBooking?: (booking: Booking) => PadelGameRecord | null,
+): string | null {
+  const linkedGame = resolveGameForBooking?.(booking) ?? null;
+  if (!linkedGame?.id || linkedGame.archived === true || isCancelledGameRecord(linkedGame)) {
+    return null;
+  }
+  return linkedGame.id;
+}
+
 function buildGamesAwareItems(
   bookings: Booking[],
   standaloneGames: PadelGameRecord[] = [],
@@ -318,6 +340,9 @@ export function BookingsContainer({
   loadingGameRecords = false,
   gameRecordsError = null,
   resolveGameForBooking,
+  isGameLinkAmbiguousForBooking,
+  resolveCancellationGameLink,
+  executeBookingCancellation,
   resolveDisplayGameForBooking,
   resolveTournamentForBooking,
   onOpenTournamentDetails,
@@ -520,6 +545,13 @@ export function BookingsContainer({
       );
     }
 
+    const cancellationGameLink = active
+      ? (resolveCancellationGameLink?.(booking) ?? {
+          gameId: resolveActiveLinkedGameId(booking, resolveGameForBooking),
+          blocked: isGameLinkAmbiguousForBooking?.(booking) ?? false,
+        })
+      : { gameId: null, blocked: false };
+
     return (
       <BookingCard
         key={key}
@@ -530,8 +562,14 @@ export function BookingsContainer({
           active
           && isExerciseConvertibleToGameFromBooking(booking)
           && !(hasTeamGameForBooking?.(booking) ?? false)
+          && !(isGameLinkAmbiguousForBooking?.(booking) ?? false)
         }
         onCreateTeamGame={onCreateTeamGame}
+        linkedGameId={cancellationGameLink.gameId}
+        linkedGameAmbiguous={cancellationGameLink.blocked}
+        executeCancellation={(action) => executeBookingCancellation
+          ? executeBookingCancellation(booking, action)
+          : Promise.resolve({ ok: false, message: "Не удалось безопасно проверить связь записи с игрой" })}
       />
     );
   };
@@ -604,15 +642,28 @@ export function BookingsContainer({
                 if (item.type === "game" && item.game) {
                   return renderGameCard?.(item.game);
                 }
-                if (!item.booking) return null;
+                const booking = item.booking;
+                if (!booking) return null;
+                const cancellationGameLink = resolveCancellationGameLink?.(booking) ?? {
+                  gameId: resolveActiveLinkedGameId(booking, resolveGameForBooking),
+                  blocked: isGameLinkAmbiguousForBooking?.(booking) ?? false,
+                };
                 return (
                   <BookingCard
                     key={item.key}
-                    booking={item.booking}
+                    booking={booking}
                     active={true}
                     loadBookings={loadBookings}
-                    showCreateTeamGame={!(resolveGameForBooking?.(item.booking) ?? null)}
+                    showCreateTeamGame={
+                      !(resolveGameForBooking?.(booking) ?? null)
+                      && !(isGameLinkAmbiguousForBooking?.(booking) ?? false)
+                    }
                     onCreateTeamGame={onCreateTeamGame}
+                    linkedGameId={cancellationGameLink.gameId}
+                    linkedGameAmbiguous={cancellationGameLink.blocked}
+                    executeCancellation={(action) => executeBookingCancellation
+                      ? executeBookingCancellation(booking, action)
+                      : Promise.resolve({ ok: false, message: "Не удалось безопасно проверить связь записи с игрой" })}
                   />
                 );
               })}

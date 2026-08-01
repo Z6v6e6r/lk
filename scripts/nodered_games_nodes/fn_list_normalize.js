@@ -58,6 +58,8 @@ const windowStartTs = windowHours ? nowTs - (windowHours * 60 * 60 * 1000) : nul
 
 const rows = Array.isArray(msg.payload) ? msg.payload : [];
 const byKey = new Map();
+const exactReferenceMode = Boolean(paymentRef || bookingIdsFilter.size > 0);
+let exactRowsWithoutId = 0;
 
 const stripHeavyPhotoPayload = (photo) => {
   if (!isObj(photo)) return photo;
@@ -310,7 +312,7 @@ rows.forEach((doc) => {
   if (!isObj(doc)) return;
 
   const status = String(doc.status || "").toUpperCase();
-  if (status.includes("CANCEL")) return;
+  if (status.includes("CANCEL") && !exactReferenceMode) return;
   if (publicMode && (status.includes("PAYMENT_PENDING") || status.includes("DRAFT"))) return;
 
   const endTs = Number(doc?.booking?.endTs);
@@ -386,11 +388,23 @@ rows.forEach((doc) => {
     asArray(doc?.booking?.subServiceIds).join(","),
   ].join("|");
 
-  const dedupeKey =
-    (docPaymentRef ? `paymentRef:${docPaymentRef}` : null)
-    || (vivaId ? `viva:${vivaId}` : null)
-    || doc.dedupeKey
-    || `slot:${slotFallback}`;
+  // Exact-reference lookups are used as a cancellation safety gate. Two
+  // persisted games that point to the same Viva/payment reference must remain
+  // two results so the caller can fail closed instead of selecting one by
+  // freshness. The regular discovery lists keep their historical dedupe.
+  const documentId = toStr(doc?.id);
+  if (exactReferenceMode && !documentId) {
+    exactRowsWithoutId += 1;
+    return;
+  }
+  const dedupeKey = exactReferenceMode
+    ? `id:${documentId}`
+    : (
+      (docPaymentRef ? `paymentRef:${docPaymentRef}` : null)
+      || (vivaId ? `viva:${vivaId}` : null)
+      || doc.dedupeKey
+      || `slot:${slotFallback}`
+    );
 
   const prev = byKey.get(dedupeKey);
   if (!prev || getUpdateTs(doc) >= getUpdateTs(prev)) {
@@ -399,7 +413,9 @@ rows.forEach((doc) => {
 });
 
 const games = Array.from(byKey.values()).sort((a, b) => getTs(a) - getTs(b));
-const total = games.length;
+// Counting an unrepresentable exact match keeps `total > games.length`, which
+// makes cancellation clients treat the lookup as incomplete and fail closed.
+const total = games.length + exactRowsWithoutId;
 const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : null;
 const slicedGames = safeLimit
   ? games.slice(offset, offset + safeLimit)

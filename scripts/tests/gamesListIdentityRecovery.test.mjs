@@ -18,7 +18,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const SOURCE_DIR = path.join(REPO_ROOT, 'scripts/nodered_games_nodes');
 const TEMP_ROOTS = [];
 const NORMALIZER_CANDIDATE_SHA256 =
-  'e99d0311090ac280d6ff2c6d8d27a0034d63f6acb6bcbcd3f6a9fcc3d990287e';
+  '33d5252688c6f25ab61ef9b3ad157b2ae970bc8d8b60e4264d30dac0a5296172';
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -63,12 +63,13 @@ function futureGame(overrides = {}) {
   };
 }
 
-function normalizeFor(identity, games) {
+function normalizeFor(identity, games, filters = {}) {
   const msg = {
     _lkPhone: identity.phone ?? null,
     _lkClientId: identity.clientId ?? null,
     _lkIncludePast: false,
-    _lkBookingIds: [],
+    _lkPaymentRef: filters.paymentRef ?? null,
+    _lkBookingIds: filters.bookingIds ?? [],
     _lkOffset: 0,
     _lkPublicMode: false,
     payload: games,
@@ -366,6 +367,45 @@ test('active roster identities work while stale projections and inactive split i
   });
   assert.equal(normalizeFor({ clientId: 'inactive-client' }, [inactiveSplit]).games.length, 0);
   assert.equal(normalizeFor({ phone: '79991112233' }, [inactiveSplit]).games.length, 0);
+});
+
+test('exact cancellation lookup preserves colliding game records instead of deduping them', () => {
+  const paymentRef = 'shared-payment-ref';
+  const bookingId = 'shared-booking-id';
+  const games = [
+    futureGame({
+      id: 'game-a',
+      metadata: {
+        paymentRef,
+        splitPayment: { payments: [{ bookingId, paymentRef, status: 'PAID' }] },
+      },
+    }),
+    futureGame({
+      id: 'game-b',
+      metadata: {
+        paymentRef,
+        splitPayment: { payments: [{ bookingId, paymentRef, status: 'PAID' }] },
+      },
+    }),
+  ];
+
+  assert.equal(normalizeFor({}, games, { paymentRef }).games.length, 2);
+  assert.equal(normalizeFor({}, games, { bookingIds: [bookingId] }).games.length, 2);
+  assert.equal(normalizeFor({}, games).games.length, 1);
+
+  const missingId = futureGame({ metadata: { paymentRef } });
+  delete missingId.id;
+  const incomplete = normalizeFor({}, [missingId], { paymentRef });
+  assert.equal(incomplete.games.length, 0);
+  assert.equal(incomplete.total, 1);
+
+  const cancelled = futureGame({
+    id: "cancelled-game",
+    metadata: { paymentRef },
+    extra: { status: "CANCELLED" },
+  });
+  assert.equal(normalizeFor({}, [cancelled]).games.length, 0);
+  assert.equal(normalizeFor({}, [cancelled], { paymentRef }).games.length, 1);
 });
 
 test('exact route and graph contracts remain fixed to the active LK Games chain', () => {

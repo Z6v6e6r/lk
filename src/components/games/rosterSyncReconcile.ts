@@ -198,6 +198,7 @@ export function reconcileRosterWithViva(params: {
   vivaParticipants: PadelGamePlayer[];
   leaveEvents: RosterSyncLeaveEvent[];
   organizerPlayer?: ComparableRosterPlayer;
+  authoritative?: boolean;
 }): RosterSyncReconcileResult {
   const sourceParticipants = Array.isArray(params.sourceParticipants)
     ? params.sourceParticipants
@@ -209,6 +210,7 @@ export function reconcileRosterWithViva(params: {
     ? params.leaveEvents
     : [];
   const organizerPlayer = params.organizerPlayer;
+  const authoritative = params.authoritative === true;
 
   const vivaIds = new Set(
     vivaParticipants
@@ -222,6 +224,7 @@ export function reconcileRosterWithViva(params: {
   );
 
   const nextLeaveEvents = leaveEvents.filter((event) => {
+    if (!authoritative) return true;
     const leftId = normalizeComparableId(event.playerId);
     if (leftId && vivaIds.has(leftId)) return false;
     const leftPhone = normalizePhone(event.playerPhone);
@@ -253,12 +256,13 @@ export function reconcileRosterWithViva(params: {
     if (presentInViva) return true;
 
     const source = String(player.source || "").trim().toUpperCase();
-    // ADMIN players are imported from live Viva roster. If they disappeared from Viva and
-    // there is no active leave-event for them, keeping them in LK creates a stale extra slot.
-    if (source === "ADMIN") return false;
     if (source === "ORGANIZER" && organizerPlayer) {
       return playersShareRosterIdentity(organizerPlayer, player);
     }
+    // Absence is meaningful only when the caller proves this is a fresh provider read.
+    // Cached/stale rosters must never remove or resurrect a member.
+    if (!authoritative) return true;
+    if (source === "ADMIN" || source === "INVITE_LINK" || source === "VIVA") return false;
     return true;
   });
   const staleSourcePlayersRemoved = Math.max(0, filteredSourceParticipants.length - nextSourceParticipants.length);

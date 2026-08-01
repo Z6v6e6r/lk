@@ -879,9 +879,6 @@ export function isPadelGameRecordRelevantToIdentity(
 
   if (hasActiveSplitPaymentIdentity(game, clientId, phone)) return true;
 
-  if (recordListContainsIdentity(game.allRelatedPhones, phone, normalizeGameIdentityPhone)) return true;
-  if (recordListContainsIdentity(gameAny.allRelatedClientIds, clientId, normalizeGameIdentityId)) return true;
-
   return false;
 }
 
@@ -2936,6 +2933,7 @@ export interface PadelGamePlayer {
 
 export interface PadelGameRecordPayload {
   gameId?: string | null;
+  expectedUpdatedAt?: string | null;
   paymentRef?: string | null;
   tenantKey?: string | null;
   status?: "PAYMENT_PENDING" | "PAID" | "CANCELLED";
@@ -3444,6 +3442,12 @@ export interface PadelGamesByPhoneResponse {
   total: number;
 }
 
+export interface PadelGamesExactLookupResponse {
+  games: PadelGameRecord[];
+  total: number;
+  complete: boolean;
+}
+
 export interface PadelAvailableGamesResponse {
   games: PadelGameRecord[];
   total: number;
@@ -3771,6 +3775,21 @@ export interface PadelSplitParticipantCancelResult {
   withVivaErrors: boolean;
   trace?: unknown[];
   finishedAt?: string | null;
+}
+
+export type PadelGameSelfLeaveState =
+  | "DONE"
+  | "IN_PROGRESS"
+  | "RETRY_REQUIRED"
+  | "VIVA_UNVERIFIED"
+  | "CONFLICT";
+
+export interface PadelGameSelfLeaveResult {
+  ok: boolean;
+  state: PadelGameSelfLeaveState;
+  operationId: string | null;
+  gameId: string | null;
+  message?: string | null;
 }
 
 export type PadelSelfRemovalCancellationStatus =
@@ -6732,6 +6751,7 @@ export async function apiFetchPadelGameChatMessages(params: {
     {
       method: "GET",
       baseUrl,
+      auth: true,
       retries: 1,
     },
   );
@@ -6790,6 +6810,7 @@ export async function apiSendPadelGameChatMessage(params: {
     {
       method: "POST",
       baseUrl,
+      auth: true,
       retries: 1,
       body: JSON.stringify({
         senderPhone,
@@ -6860,6 +6881,7 @@ export async function apiMarkPadelGameChatRead(params: {
     {
       method: "POST",
       baseUrl,
+      auth: true,
       retries: 0,
       body: JSON.stringify({ phone, lastReadTs }),
     },
@@ -6912,6 +6934,7 @@ export async function apiFetchPadelChatsByPhone(phoneRaw: string) {
   const response = await request<unknown>(`/lk/chats/by-phone?${query.toString()}`, {
     method: "GET",
     baseUrl,
+    auth: true,
     retries: 1,
     ...(IS_DEV_RELEASE_CHANNEL
       ? {
@@ -7532,6 +7555,101 @@ export async function apiConfirmPadelGamePayment(
     requestOptions,
   );
   return hydratePadelGameRecordAfterWrite(writeResult);
+}
+
+export async function apiFetchPadelGamesByBookingReferences(
+  paymentRefRaw: string | string[],
+  bookingIdsRaw: string[] = [],
+) {
+  const paymentRefs = Array.from(new Set(
+    (Array.isArray(paymentRefRaw) ? paymentRefRaw : [paymentRefRaw])
+      .map((item) => item.trim())
+      .filter(Boolean),
+  ));
+  const bookingIds = Array.from(new Set(
+    bookingIdsRaw.map((item) => item.trim()).filter(Boolean),
+  ));
+  if (paymentRefs.length === 0 && bookingIds.length === 0) {
+    return {
+      data: null as PadelGamesExactLookupResponse | null,
+      error: { status: 400, message: "Не указаны точные ссылки на запись" },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const baseUrl = getServ2Origin() || "";
+  const limit = 500;
+  const queryVariants: URLSearchParams[] = [];
+  if (bookingIds.length > 0) {
+    const query = new URLSearchParams({
+      bookingIds: bookingIds.join(","),
+      includePast: "true",
+      limit: String(limit),
+      offset: "0",
+    });
+    queryVariants.push(query);
+  }
+  paymentRefs.forEach((paymentRef) => {
+    const query = new URLSearchParams({
+      paymentRef,
+      includePast: "true",
+      limit: String(limit),
+      offset: "0",
+    });
+    queryVariants.push(query);
+  });
+
+  const recordsById = new Map<string, PadelGameRecord>();
+  let firstError: ApiError | null = null;
+  let firstErrorStatus: ApiStatus = null;
+  let firstSuccessStatus: ApiStatus = null;
+  let complete = true;
+  let reportedTotal = 0;
+
+  for (const query of queryVariants) {
+    if (!IS_DEV_RELEASE_CHANNEL) query.set("_ts", String(Date.now()));
+    const response = await request<unknown>(`/lk/games?${query.toString()}`, {
+      method: "GET",
+      baseUrl,
+      retries: 1,
+      cache: "no-store" as RequestCache,
+    });
+    if (response.error) {
+      complete = false;
+      if (!firstError) {
+        firstError = response.error;
+        firstErrorStatus = response.status;
+      }
+      continue;
+    }
+    if (firstSuccessStatus == null) firstSuccessStatus = response.status;
+    const records = extractPadelGameRecordList(response.data);
+    const endpointTotal = extractPadelGameRecordListTotal(response.data);
+    const endpointHasMore = extractPadelGameRecordListHasMore(response.data);
+    reportedTotal = Math.max(reportedTotal, endpointTotal ?? records.length);
+    if (
+      endpointHasMore === true
+      || (endpointTotal !== null && endpointTotal > records.length)
+      || (endpointTotal === null && endpointHasMore === null)
+    ) {
+      complete = false;
+    }
+    records.forEach((record) => {
+      if (!record.id) return;
+      recordsById.set(record.id, mergePadelGameRecord(recordsById.get(record.id), record));
+    });
+  }
+
+  const games = Array.from(recordsById.values());
+  return {
+    data: {
+      games,
+      total: Math.max(reportedTotal, games.length),
+      complete,
+    } satisfies PadelGamesExactLookupResponse,
+    error: firstError,
+    status: firstSuccessStatus ?? firstErrorStatus,
+  };
 }
 
 export async function apiFetchPadelGameByPaymentRef(
@@ -8219,6 +8337,40 @@ export async function apiCancelPadelSplitParticipantBookings(
         playerPhone: payload.playerPhone ?? null,
         playerName: payload.playerName ?? null,
         reason: payload.reason ?? "PLAYER_LEFT",
+      }),
+    },
+  );
+}
+
+export async function apiLeavePadelGameAsCurrentUser(
+  gameId: string,
+  options: {
+    refundMethod?: BookingCancellationRefundMethod | null;
+  } = {},
+) {
+  const normalizedGameId = gameId.trim();
+  if (!normalizedGameId) {
+    return {
+      data: null as PadelGameSelfLeaveResult | null,
+      error: {
+        status: 400,
+        message: "Не указан gameId для выхода из игры",
+      },
+      status: 400 as ApiStatus,
+    };
+  }
+
+  const baseUrl = getServ2Origin() || "";
+  return request<PadelGameSelfLeaveResult>(
+    `/lk/games/${encodeURIComponent(normalizedGameId)}/split/leave`,
+    {
+      method: "POST",
+      baseUrl,
+      auth: true,
+      retries: 0,
+      body: JSON.stringify({
+        reason: "PLAYER_LEFT",
+        ...(options.refundMethod ? { refundMethod: options.refundMethod } : {}),
       }),
     },
   );

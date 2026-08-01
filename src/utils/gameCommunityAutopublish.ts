@@ -432,6 +432,7 @@ async function syncSingleGameCommunityAutopublish(
   };
 
   await apiUpdatePadelGameRecord(record.id, {
+    expectedUpdatedAt: record.updatedAt ?? null,
     metadata: nextMetadata,
   });
 }

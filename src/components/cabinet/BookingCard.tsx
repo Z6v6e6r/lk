@@ -1,8 +1,13 @@
 import { useState } from "react";
-import type { Booking } from "../../utils/apiClient";
+import {
+  apiLeavePadelGameAsCurrentUser,
+  type Booking,
+} from "../../utils/apiClient";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
 import { addBookingToCalendar } from "../../utils/calendarEvent";
 import { BookingCancellationDialog } from "./BookingCancellationDialog";
+import type { BookingCancellationExecutionResult } from "./BookingCancellationDialog";
+import type { BookingCancellationAction } from "../../utils/bookingCancellation";
 
 interface BookingProps {
   booking: Booking;
@@ -10,7 +15,17 @@ interface BookingProps {
   loadBookings?: () => void;
   showCreateTeamGame?: boolean;
   onCreateTeamGame?: (booking: Booking) => void;
+  linkedGameId?: string | null;
+  linkedGameAmbiguous?: boolean;
+  executeCancellation?: (
+    action: BookingCancellationAction,
+  ) => Promise<BookingCancellationExecutionResult>;
 }
+
+const LINKED_GAME_LEAVE_PENDING_MESSAGE =
+  "Бронирование отменено, обновляем состав игры. Это может занять несколько минут.";
+const AMBIGUOUS_LINKED_GAME_MESSAGE =
+  "Не удалось безопасно подтвердить связь записи с игрой. Отмена остановлена — повторите позже или обратитесь в поддержку.";
 
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
@@ -41,6 +56,9 @@ export function BookingCard({
   loadBookings,
   showCreateTeamGame = false,
   onCreateTeamGame,
+  linkedGameId = null,
+  linkedGameAmbiguous = false,
+  executeCancellation,
 }: BookingProps) {
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
 
@@ -132,6 +150,42 @@ export function BookingCard({
         onClose={() => setCancelDialogOpen(false)}
         onSuccessClose={() => {
           loadBookings?.();
+        }}
+        executeAction={async (action) => {
+          if (executeCancellation) return executeCancellation(action);
+          if (linkedGameAmbiguous || !linkedGameId) {
+            return {
+              ok: false,
+              message: AMBIGUOUS_LINKED_GAME_MESSAGE,
+            };
+          }
+          const result = await apiLeavePadelGameAsCurrentUser(linkedGameId, {
+            refundMethod: action.refundMethod,
+          });
+          if (result.error || !result.data) {
+            return {
+              ok: false,
+              message: result.error?.message || "Не удалось покинуть игру",
+            };
+          }
+          if (result.data.state === "RETRY_REQUIRED" || result.data.state === "IN_PROGRESS") {
+            return {
+              ok: true,
+              state: "RETRY_REQUIRED",
+              message: result.data.message || LINKED_GAME_LEAVE_PENDING_MESSAGE,
+            };
+          }
+          if (result.data.state !== "DONE") {
+            return {
+              ok: false,
+              message: result.data.message || "Не удалось подтвердить выход из игры",
+            };
+          }
+          return {
+            ok: true,
+            state: "DONE",
+            message: action.successMessage,
+          };
         }}
       />
     </div>

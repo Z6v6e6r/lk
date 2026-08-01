@@ -7,7 +7,7 @@ const apiClientSource = fs.readFileSync("src/utils/apiClient.ts", "utf8");
 
 test("cabinet organizer remove still uses backend split leave helper", () => {
   const helperStart = gamesPageSource.indexOf("const cancelVivaBookingsForPlayerFromDetails = useCallback");
-  const helperEnd = gamesPageSource.indexOf("const cancelCurrentUserVivaBookingsFromDetails = useCallback", helperStart);
+  const helperEnd = gamesPageSource.indexOf("const buildNextSetPairingsForTeamSlots", helperStart);
   assert.ok(helperStart >= 0, "leave helper should exist");
   assert.ok(helperEnd > helperStart, "leave helper should have a bounded source slice");
 
@@ -31,25 +31,19 @@ test("cabinet organizer remove still uses backend split leave helper", () => {
   assert.match(apiClientSource.slice(apiHelperStart, apiHelperEnd), /auth:\s*true/);
 });
 
-test("cabinet self-remove uses frontend end-user cancel contract with audit log", () => {
-  const helperStart = gamesPageSource.indexOf("const cancelCurrentUserVivaBookingsFromDetails = useCallback");
-  const helperEnd = gamesPageSource.indexOf("const buildNextSetPairingsForTeamSlots", helperStart);
-  assert.ok(helperStart >= 0, "self-remove helper should exist");
-  assert.ok(helperEnd > helperStart, "self-remove helper should have a bounded source slice");
-
-  const helperSource = gamesPageSource.slice(helperStart, helperEnd);
-  assert.match(helperSource, /apiCancelPadelSelfRemovalBookings\(resolvedBookingIds\)/);
-  assert.doesNotMatch(helperSource, /apiCancelPadelSplitParticipantBookings/);
-  assert.doesNotMatch(helperSource, /if \(!exerciseId\) \{\s*return \{\s*ok:\s*false/);
-  assert.match(helperSource, /verificationResult\.error \|\| !verificationResult\.data/);
-
+test("cabinet self-remove delegates the whole operation to authenticated server leave", () => {
   const leaveHandlerStart = gamesPageSource.indexOf("const handleLeaveCurrentUserFromDetails = useCallback");
   const leaveHandlerEnd = gamesPageSource.indexOf("const handleSplitJoinCurrentUserFromDetails = useCallback", leaveHandlerStart);
   assert.ok(leaveHandlerStart >= 0, "self leave handler should exist");
   assert.ok(leaveHandlerEnd > leaveHandlerStart, "self leave handler should have a bounded source slice");
   const leaveHandlerSource = gamesPageSource.slice(leaveHandlerStart, leaveHandlerEnd);
-  assert.match(leaveHandlerSource, /selfRemovalAuditLog/);
-  assert.match(leaveHandlerSource, /lastSelfRemovalAuditAt/);
-  assert.match(leaveHandlerSource, /pushCabinetFlashNotice\(SELF_REMOVE_SUCCESS_NOTICE\)/);
+  assert.match(leaveHandlerSource, /apiLeavePadelGameAsCurrentUser\(gameRecordId\)/);
+  assert.match(leaveHandlerSource, /leaveResult\.data\.state === "RETRY_REQUIRED"/);
+  assert.doesNotMatch(leaveHandlerSource, /apiCancelPadelSelfRemovalBookings/);
+  assert.doesNotMatch(leaveHandlerSource, /patchGameRoster\(/);
+  assert.match(
+    leaveHandlerSource,
+    /pushCabinetFlashNotice\(leaveResult\.data\.message \|\| SELF_REMOVE_SUCCESS_NOTICE\)/,
+  );
   assert.match(leaveHandlerSource, /navigateToCabinetFromGamesDetails\(\)/);
 });

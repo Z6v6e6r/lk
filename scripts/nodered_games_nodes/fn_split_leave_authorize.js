@@ -1,20 +1,11 @@
-const TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
-
 const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
-
+const asArray = (value) => (Array.isArray(value) ? value : []);
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
   const normalized = String(value).trim();
   return normalized || null;
 };
-
-const asArray = (value) => (Array.isArray(value) ? value : []);
-
-const normalizeId = (value) => {
-  const normalized = toStr(value);
-  return normalized ? normalized.toLowerCase() : null;
-};
-
+const normalizeId = (value) => toStr(value)?.toLowerCase() || null;
 const normalizePhone = (value) => {
   const digits = String(value || "").replace(/\D/g, "");
   if (!digits) return null;
@@ -22,161 +13,291 @@ const normalizePhone = (value) => {
   if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
   return digits;
 };
-
-const respond = (statusCode, code, error) => {
+const inactiveStatus = (value) => /CANCEL|DECLIN|FAIL|ERROR|EXPIRE|REFUND|REJECT|VOID|CLOSE|ARCHIVE|LEFT|REMOV/i
+  .test(String(value || ""));
+const strongId = (value) => (isObj(value)
+  ? normalizeId(value.clientId || value.playerId || value.userId || value.id)
+  : null);
+const matchesActor = (value, actorId, actorPhone) => {
+  if (!isObj(value)) return false;
+  const recordId = strongId(value);
+  const phones = [
+    value.phoneNorm, value.phone, value.mobile, value.clientPhoneNorm, value.clientPhone,
+  ].map(normalizePhone).filter(Boolean);
+  if (actorId && recordId) return actorId === recordId;
+  return Boolean(actorPhone && phones.includes(actorPhone));
+};
+const phoneIdentityAmbiguous = (records, targetId, targetPhone) => {
+  if (!targetPhone) return false;
+  const phoneLinkedIds = asArray(records)
+    .filter((value) => isObj(value) && [
+      value.phoneNorm, value.phone, value.mobile, value.clientPhoneNorm, value.clientPhone,
+    ].map(normalizePhone).includes(targetPhone))
+    .map(strongId)
+    .filter(Boolean);
+  if (targetId) return phoneLinkedIds.some((recordId) => recordId !== targetId);
+  return new Set(phoneLinkedIds).size > 1;
+};
+const uniqBookingItems = (items) => {
+  const byId = new Map();
+  items.forEach((item) => {
+    const bookingId = toStr(item?.bookingId);
+    if (!bookingId || byId.has(bookingId.toLowerCase())) return;
+    byId.set(bookingId.toLowerCase(), {
+      bookingId,
+      clientId: toStr(item?.clientId) || null,
+    });
+  });
+  return Array.from(byId.values());
+};
+const stableVersion = (parts) => {
+  const stableParts = Array.from(new Set(asArray(parts).map(toStr).filter(Boolean))).sort();
+  if (stableParts.length === 0) return null;
+  const hashPart = (value) => {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
+  };
+  const seed = stableParts.join("|");
+  return `${hashPart(seed)}${hashPart([...seed].reverse().join(""))}`;
+};
+const respond = (statusCode, state, message, ctx) => {
   msg.statusCode = statusCode;
   msg.headers = {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
     "Cache-Control": "no-store",
   };
-  msg.payload = { ok: false, code, error };
+  msg.payload = {
+    ok: false,
+    state,
+    operationId: ctx?.operationId || null,
+    gameId: ctx?.gameId || null,
+    message,
+  };
   delete msg._splitCleanupAuth;
-  delete msg._splitLeaveCtx;
   return [null, msg, null];
-};
-
-const addBookingTarget = (targets, bookingIdRaw, clientIdRaw) => {
-  const bookingId = toStr(bookingIdRaw);
-  if (!bookingId) return;
-  const key = normalizeId(bookingId);
-  const clientId = toStr(clientIdRaw);
-  const existing = targets.get(key);
-  if (existing) {
-    if (!existing.clientId && clientId) existing.clientId = clientId;
-    return;
-  }
-  targets.set(key, { bookingId, clientId: clientId || null });
 };
 
 const ctx = isObj(msg._splitLeaveCtx) ? msg._splitLeaveCtx : null;
 if (!ctx || ctx.step !== "authorize_leave") {
-  return respond(
-    500,
-    "SPLIT_LEAVE_CONTEXT_MISSING",
-    "Не удалось проверить удаление игрока",
-  );
+  return respond(500, "CONFLICT", "Контекст удаления участника отсутствует", ctx);
 }
 
-const rows = asArray(msg.payload).filter(isObj);
-const game = rows.find((item) => toStr(item.id) === toStr(ctx.gameId)) || null;
-if (!game) {
-  return respond(404, "SPLIT_LEAVE_GAME_NOT_FOUND", "Игра не найдена");
-}
+const game = asArray(msg.payload).find((item) => isObj(item) && toStr(item.id) === toStr(ctx.gameId));
+if (!game) return respond(404, "CONFLICT", "Игра не найдена", ctx);
 
-const actorClientId = normalizeId(ctx.actorClientId);
-const actorPhoneNorm = normalizePhone(ctx.actorPhoneNorm);
-const organizerIds = [
-  game.organizer?.id,
-  game.organizer?.clientId,
-  game.metadata?.organizerId,
-]
-  .map(normalizeId)
-  .filter(Boolean);
-const organizerPhones = [
-  game.organizer?.phoneNorm,
-  game.organizer?.phone,
-  game.metadata?.organizerPhoneNorm,
-  game.metadata?.organizerPhone,
-]
-  .map(normalizePhone)
-  .filter(Boolean);
-const actorIsOrganizer = Boolean(
-  (actorClientId && organizerIds.includes(actorClientId))
-  || (actorPhoneNorm && organizerPhones.includes(actorPhoneNorm)),
-);
-if (!actorIsOrganizer) {
-  return respond(
-    403,
-    "SPLIT_LEAVE_ORGANIZER_REQUIRED",
-    "Удалить игрока может только организатор игры",
-  );
-}
-
+const actorId = normalizeId(ctx.actorClientId);
+const actorPhone = normalizePhone(ctx.actorPhoneNorm);
+const mode = ctx.mode === "ORGANIZER_TARGET" ? "ORGANIZER_TARGET" : "SELF";
 const metadata = isObj(game.metadata) ? game.metadata : {};
 const splitPayment = isObj(metadata.splitPayment) ? metadata.splitPayment : {};
-const booking = isObj(game.booking) ? game.booking : {};
-const targets = new Map();
+const payments = asArray(splitPayment.payments).filter(isObj);
+const identityRecords = [
+  game.organizer,
+  { id: metadata.organizerId, phoneNorm: metadata.organizerPhoneNorm || metadata.organizerPhone },
+  ...asArray(game.participants),
+  ...asArray(game.waitlist),
+  ...payments,
+].filter(isObj);
+if (phoneIdentityAmbiguous(identityRecords, actorId, actorPhone)) {
+  return respond(409, "CONFLICT", "Телефон связан с несколькими профилями игры", ctx);
+}
+const actorPayments = payments.filter((item) => matchesActor(item, actorId, actorPhone));
+const actorIsOrganizer = matchesActor(game.organizer, actorId, actorPhone)
+  || matchesActor({ id: metadata.organizerId, phone: metadata.organizerPhoneNorm || metadata.organizerPhone }, actorId, actorPhone);
+const actorParticipants = asArray(game.participants).filter((item) => matchesActor(item, actorId, actorPhone));
+const actorWaitlist = asArray(game.waitlist).filter((item) => matchesActor(item, actorId, actorPhone));
+const actorKnown = actorIsOrganizer || actorParticipants.length > 0 || actorWaitlist.length > 0 || actorPayments.length > 0;
+if (!actorKnown) return respond(403, "CONFLICT", "Профиль не связан с этой игрой", ctx);
 
-asArray(booking.bookingIds).forEach((bookingId) => addBookingTarget(targets, bookingId, null));
-addBookingTarget(targets, booking.bookingId, null);
-asArray(metadata.bookingIds).forEach((bookingId) => addBookingTarget(targets, bookingId, null));
-addBookingTarget(targets, metadata.bookingId, null);
-asArray(splitPayment.bookingIds).forEach((bookingId) => addBookingTarget(targets, bookingId, null));
-addBookingTarget(targets, splitPayment.bookingId, null);
-addBookingTarget(targets, splitPayment.organizerBookingId, game.organizer?.id);
-asArray(splitPayment.bookingTargets).forEach((item) => {
-  if (!isObj(item)) return;
-  addBookingTarget(
-    targets,
-    item.bookingId || item.id || item.uuid,
-    item.clientId || item.playerId || item.userId,
-  );
-});
-asArray(splitPayment.payments).forEach((item) => {
-  if (!isObj(item)) return;
-  const clientId = item.clientId || item.playerId || item.userId;
-  asArray(item.bookingIds).forEach((bookingId) => (
-    addBookingTarget(targets, bookingId, clientId)
-  ));
-  addBookingTarget(targets, item.bookingId, clientId);
-});
-
-const requestedQueue = asArray(ctx.bookingQueue).filter(isObj);
-const verifiedQueue = [];
-for (const requested of requestedQueue) {
-  const bookingId = toStr(requested.bookingId);
-  const linked = targets.get(normalizeId(bookingId));
-  if (!bookingId || !linked) {
-    return respond(
-      403,
-      "SPLIT_LEAVE_BOOKING_NOT_LINKED",
-      "Запись игрока не связана с этой игрой",
-    );
-  }
-  const requestedClientId = normalizeId(requested.clientId || ctx.clientId || ctx.playerId);
-  const linkedClientId = normalizeId(linked.clientId);
-  if (requestedClientId && linkedClientId && requestedClientId !== linkedClientId) {
-    return respond(
-      403,
-      "SPLIT_LEAVE_CLIENT_MISMATCH",
-      "Клиент записи не совпадает с участником игры",
-    );
-  }
-  verifiedQueue.push({
-    bookingId: linked.bookingId,
-    clientId: linked.clientId || toStr(requested.clientId || ctx.clientId || ctx.playerId),
-  });
+if (mode === "ORGANIZER_TARGET" && !actorIsOrganizer) {
+  return respond(403, "CONFLICT", "Удалить другого игрока может только организатор", ctx);
+}
+if (mode === "SELF" && actorIsOrganizer) {
+  return respond(409, "CONFLICT", "Организатор не может покинуть игру через participant leave", ctx);
 }
 
-const authoritativeExerciseId = toStr(
+let targetClientId = mode === "SELF" ? toStr(ctx.actorClientId) : null;
+let targetPhone = mode === "SELF" ? normalizePhone(ctx.actorPhoneNorm) : null;
+let targetPayments = mode === "SELF" ? actorPayments : [];
+let verifiedQueue = [];
+
+if (mode === "ORGANIZER_TARGET") {
+  const linkedTargets = new Map();
+  payments.forEach((payment) => {
+    const clientId = toStr(payment.clientId || payment.playerId || payment.userId);
+    const phone = normalizePhone(payment.phoneNorm || payment.phone || payment.clientPhoneNorm || payment.clientPhone);
+    [...asArray(payment.bookingIds), payment.bookingId].forEach((bookingIdRaw) => {
+      const bookingId = toStr(bookingIdRaw);
+      if (bookingId) linkedTargets.set(bookingId.toLowerCase(), { bookingId, clientId, phone, payment });
+    });
+  });
+  const requested = asArray(ctx.legacyRequestedBookingIds).map(toStr).filter(Boolean);
+  const selected = requested.map((bookingId) => linkedTargets.get(bookingId.toLowerCase()) || null);
+  if (selected.some((item) => !item) || selected.length === 0) {
+    return respond(403, "CONFLICT", "Запись игрока не связана с этой игрой", ctx);
+  }
+  const selectedClientIds = Array.from(new Set(selected.map((item) => normalizeId(item.clientId)).filter(Boolean)));
+  const selectedPhones = Array.from(new Set(selected.map((item) => normalizePhone(item.phone)).filter(Boolean)));
+  if (selectedClientIds.length > 1 || selectedPhones.length > 1) {
+    return respond(409, "CONFLICT", "Запрос затрагивает несколько участников", ctx);
+  }
+  targetClientId = selected[0].clientId;
+  targetPhone = selected[0].phone;
+  targetPayments = Array.from(new Set(selected.map((item) => item.payment)));
+  verifiedQueue = uniqBookingItems(selected);
+} else {
+  const bookingItems = [];
+  actorPayments.filter((payment) => !inactiveStatus(payment.status)).forEach((payment) => {
+    asArray(payment.bookingIds).forEach((bookingId) => bookingItems.push({
+      bookingId,
+      clientId: toStr(payment.clientId || payment.playerId || payment.userId || ctx.actorClientId),
+    }));
+    bookingItems.push({
+      bookingId: payment.bookingId,
+      clientId: toStr(payment.clientId || payment.playerId || payment.userId || ctx.actorClientId),
+    });
+  });
+  [...actorParticipants, ...actorWaitlist].filter((member) => !inactiveStatus(member.status)).forEach((member) => {
+    asArray(member.bookingIds).forEach((bookingId) => bookingItems.push({
+      bookingId,
+      clientId: toStr(member.clientId || member.playerId || member.userId || member.id || ctx.actorClientId),
+    }));
+    bookingItems.push({
+      bookingId: member.bookingId || member.vivaBookingId,
+      clientId: toStr(member.clientId || member.playerId || member.userId || member.id || ctx.actorClientId),
+    });
+  });
+  if (actorIsOrganizer) {
+    bookingItems.push({ bookingId: splitPayment.organizerBookingId, clientId: toStr(ctx.actorClientId) });
+    asArray(game.booking?.bookingIds).forEach((bookingId) => bookingItems.push({
+      bookingId,
+      clientId: toStr(ctx.actorClientId),
+    }));
+    bookingItems.push({ bookingId: game.booking?.bookingId, clientId: toStr(ctx.actorClientId) });
+  }
+  verifiedQueue = uniqBookingItems(bookingItems);
+}
+
+const targetId = normalizeId(targetClientId);
+const targetPhoneNorm = normalizePhone(targetPhone);
+if (phoneIdentityAmbiguous(identityRecords, targetId, targetPhoneNorm)) {
+  return respond(409, "CONFLICT", "Телефон участника связан с несколькими профилями игры", ctx);
+}
+const targetIsOrganizer = matchesActor(game.organizer, targetId, targetPhoneNorm)
+  || matchesActor({ id: metadata.organizerId, phone: metadata.organizerPhoneNorm || metadata.organizerPhone }, targetId, targetPhoneNorm);
+if (mode === "ORGANIZER_TARGET" && targetIsOrganizer) {
+  return respond(409, "CONFLICT", "Организатор не может удалить себя через participant leave", ctx);
+}
+const targetParticipants = asArray(game.participants).filter((item) => matchesActor(item, targetId, targetPhoneNorm));
+const targetWaitlist = asArray(game.waitlist).filter((item) => matchesActor(item, targetId, targetPhoneNorm));
+const targetJoinResponse = isObj(metadata.joinResponses) && targetPhoneNorm
+  && isObj(metadata.joinResponses[targetPhoneNorm])
+  && !inactiveStatus(metadata.joinResponses[targetPhoneNorm].status)
+  ? metadata.joinResponses[targetPhoneNorm]
+  : null;
+const activeTargetPayments = targetPayments.filter((item) => !inactiveStatus(item.status));
+const activeTargetParticipants = targetParticipants.filter((item) => !inactiveStatus(item.status));
+const activeTargetWaitlist = targetWaitlist.filter((item) => !inactiveStatus(item.status));
+const canonicalMembershipVersion = stableVersion([
+  ...activeTargetPayments.flatMap((item) => [
+    item.membershipId,
+    ...asArray(item.bookingIds),
+    item.bookingId,
+    item.paymentRef,
+  ]),
+  ...activeTargetParticipants.flatMap((item) => [item.membershipId, item.bookingId, item.paymentRef]),
+  ...activeTargetWaitlist.flatMap((item) => [item.membershipId, item.bookingId, item.paymentRef]),
+  targetJoinResponse?.membershipId,
+  targetJoinResponse?.paymentRef,
+]);
+if (mode === "SELF") {
+  if (canonicalMembershipVersion) {
+    ctx.membershipVersion = canonicalMembershipVersion;
+    ctx.operationId = `self-leave:${ctx.gameId}:${ctx.actorClientId || ctx.actorPhoneNorm}:${canonicalMembershipVersion}`;
+  } else {
+    const appliedOperationId = targetPayments.map((item) => toStr(item.leaveOperationId)).find(Boolean);
+    if (appliedOperationId) {
+      ctx.operationId = appliedOperationId;
+      ctx.membershipVersion = appliedOperationId.split(":").pop() || null;
+    } else {
+      ctx.membershipVersion = null;
+    }
+  }
+}
+if (mode === "ORGANIZER_TARGET") {
+  if (canonicalMembershipVersion) {
+    ctx.membershipVersion = canonicalMembershipVersion;
+    ctx.operationId = `organizer-leave:${ctx.gameId}:${ctx.actorClientId || ctx.actorPhoneNorm}:${targetClientId || targetPhoneNorm}:${canonicalMembershipVersion}`;
+  } else {
+    const appliedOperationId = targetPayments.map((item) => toStr(item.leaveOperationId)).find(Boolean);
+    ctx.operationId = appliedOperationId || ctx.operationId;
+    ctx.membershipVersion = appliedOperationId?.split(":").pop() || null;
+  }
+}
+
+const leaveOperations = asArray(metadata.leaveOperations).filter(isObj);
+const auditRows = asArray(metadata.selfRemovalAuditLog).filter(isObj);
+const operationApplied = leaveOperations.some((item) => toStr(item.operationId) === toStr(ctx.operationId) && item.state === "DONE")
+  || auditRows.some((item) => toStr(item.operationId) === toStr(ctx.operationId));
+const targetActive = targetIsOrganizer
+  || targetParticipants.some((item) => !inactiveStatus(item.status))
+  || targetWaitlist.some((item) => !inactiveStatus(item.status))
+  || targetPayments.some((item) => !inactiveStatus(item.status));
+const previouslyApplied = operationApplied || (!targetActive && targetPayments.some((item) => (
+  inactiveStatus(item.status) && (toStr(item.leftAt) || toStr(item.cancelledAt))
+)));
+const exerciseId = toStr(
   splitPayment.vivaExerciseId
-  || booking.vivaExerciseId
-  || booking.exerciseId
+  || game.booking?.vivaExerciseId
+  || game.booking?.exerciseId
   || metadata.vivaExerciseId
   || metadata.exerciseId,
 );
-if (
-  ctx.exerciseId
-  && authoritativeExerciseId
-  && normalizeId(ctx.exerciseId) !== normalizeId(authoritativeExerciseId)
-) {
-  return respond(
-    403,
-    "SPLIT_LEAVE_EXERCISE_MISMATCH",
-    "Занятие Viva не совпадает с игрой",
-  );
+if (!previouslyApplied && (
+  !exerciseId
+  || !targetId
+  || (mode === "ORGANIZER_TARGET" && !ctx.membershipVersion)
+  || (mode !== "SELF" && verifiedQueue.length === 0)
+)) {
+  return respond(409, "CONFLICT", "Не удалось однозначно связать профиль, игру и запись Viva", ctx);
 }
 
-ctx.bookingQueue = verifiedQueue;
-ctx.initialBookingIds = verifiedQueue.map((item) => item.bookingId);
-ctx.exerciseId = authoritativeExerciseId || toStr(ctx.exerciseId);
-ctx.step = "token_request";
-msg._splitLeaveCtx = ctx;
-msg.method = "POST";
-msg.url = TOKEN_URL;
-msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
-msg.payload =
-  "grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ";
+const upstreamAuthHeader = mode === "SELF"
+  ? toStr(ctx.actorAuthHeader)
+  : (toStr(global.get("vivacrm_access_token")) ? `Bearer ${toStr(global.get("vivacrm_access_token"))}` : null);
+if (!previouslyApplied && !upstreamAuthHeader) {
+  return respond(503, "CONFLICT", "Viva временно недоступна", ctx);
+}
 
-return [msg, null, null];
+ctx.game = game;
+ctx.exerciseId = exerciseId;
+ctx.bookingQueue = verifiedQueue.map((item) => ({ ...item }));
+ctx.initialBookingIds = verifiedQueue.map((item) => item.bookingId);
+ctx.needsBookingDiscovery = mode === "SELF" && verifiedQueue.length === 0;
+ctx.preOperationDiscovery = ctx.needsBookingDiscovery;
+ctx.bookingResults = [];
+ctx.upstreamAuthHeader = upstreamAuthHeader;
+ctx.localAlreadyApplied = previouslyApplied;
+ctx.targetClientId = targetClientId;
+ctx.targetPhoneNorm = targetPhoneNorm;
+ctx.targetWasOrganizer = targetIsOrganizer;
+ctx.step = previouslyApplied
+  ? "local_apply"
+  : (ctx.needsBookingDiscovery ? "start_verify_active" : "start_cancel");
+msg._splitLeaveCtx = ctx;
+delete msg.statusCode;
+delete msg._splitCleanupAuth;
+msg.payload = undefined;
+if (previouslyApplied) {
+  ctx.operationKey = `${ctx.gameId}:${ctx.operationId}`;
+  msg._splitLeaveCtx = ctx;
+  msg.payload = { _id: ctx.operationKey };
+  return [null, null, null, null, msg];
+}
+if (!previouslyApplied && ctx.needsBookingDiscovery) return [null, null, null, msg];
+return [msg, null, null, null, null];

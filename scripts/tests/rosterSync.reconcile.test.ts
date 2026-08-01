@@ -45,6 +45,7 @@ test("stale leave event does not hide a player present in Viva roster", () => {
     leaveEvents: [
       leaveEvent({ playerId: "p-1", playerPhone: "79626160919", playerName: "Светлана" }),
     ],
+    authoritative: true,
   });
 
   assert.equal(result.staleLeaveEventsRemoved, 1);
@@ -64,6 +65,7 @@ test("admin-added player without phone is enriched from active Viva booking by i
     sourceParticipants: [organizer, adminAdded],
     vivaParticipants: [organizer, vivaActive],
     leaveEvents: [],
+    authoritative: true,
   });
 
   assert.equal(result.staleLeaveEventsRemoved, 0);
@@ -87,6 +89,7 @@ test("admin-added player missing from Viva roster is pruned from LK roster", () 
     sourceParticipants: [organizer, staleAdmin, activePlayer],
     vivaParticipants: [organizer, activePlayer],
     leaveEvents: [],
+    authoritative: true,
   });
 
   assert.equal(result.staleLeaveEventsRemoved, 0);
@@ -108,6 +111,7 @@ test("stale organizer-sourced player missing from Viva roster is pruned when can
     vivaParticipants: [organizer, activePlayer],
     leaveEvents: [],
     organizerPlayer: organizer,
+    authoritative: true,
   });
 
   assert.equal(result.staleLeaveEventsRemoved, 0);
@@ -129,6 +133,7 @@ test("generic placeholder names with different viva client ids do not collapse i
     sourceParticipants: [organizer, staleMerged],
     vivaParticipants: [organizer, vivaSpot3, vivaSpot4],
     leaveEvents: [],
+    authoritative: true,
   });
 
   assert.equal(result.staleLeaveEventsRemoved, 0);
@@ -155,6 +160,7 @@ test("real leave event still excludes player when player is absent in Viva roste
     leaveEvents: [
       leaveEvent({ playerId: "p-left", playerPhone: "79100000000", playerName: "Ушедший игрок" }),
     ],
+    authoritative: true,
   });
 
   assert.equal(result.staleLeaveEventsRemoved, 0);
@@ -174,11 +180,13 @@ test("reconcile is idempotent when source and Viva rosters are already aligned",
     sourceParticipants: [organizer, activePlayer],
     vivaParticipants: [organizer, activePlayer],
     leaveEvents: [],
+    authoritative: true,
   });
   const second = reconcileRosterWithViva({
     sourceParticipants: first.mergedCandidates,
     vivaParticipants: [organizer, activePlayer],
     leaveEvents: first.nextLeaveEvents,
+    authoritative: true,
   });
 
   assert.equal(first.staleLeaveEventsRemoved, 0);
@@ -261,4 +269,53 @@ test("waitlist dedupe removes player already promoted into participants", () => 
     filteredWaitlist.map((item) => item.name),
     ["Мария"],
   );
+});
+
+test("cached or otherwise non-authoritative absence does not prune an invite-link participant", () => {
+  const organizer = player({ id: "org-1", name: "Организатор", phone: "79850000000", source: "ORGANIZER" });
+  const invited = player({ id: "p-invite", name: "Анна", phone: "79990000001", source: "INVITE_LINK" });
+
+  const result = reconcileRosterWithViva({
+    sourceParticipants: [organizer, invited],
+    vivaParticipants: [organizer],
+    leaveEvents: [],
+    organizerPlayer: organizer,
+    authoritative: false,
+  });
+
+  assert.deepEqual(result.mergedCandidates.map((item) => item.id), ["org-1", "p-invite"]);
+  assert.equal(result.staleSourcePlayersRemoved, 0);
+});
+
+test("fresh authoritative absence prunes an invite-link participant", () => {
+  const organizer = player({ id: "org-1", name: "Организатор", phone: "79850000000", source: "ORGANIZER" });
+  const invited = player({ id: "p-invite", name: "Анна", phone: "79990000001", source: "INVITE_LINK" });
+
+  const result = reconcileRosterWithViva({
+    sourceParticipants: [organizer, invited],
+    vivaParticipants: [organizer],
+    leaveEvents: [],
+    organizerPlayer: organizer,
+    authoritative: true,
+  });
+
+  assert.deepEqual(result.mergedCandidates.map((item) => item.id), ["org-1"]);
+  assert.equal(result.staleSourcePlayersRemoved, 1);
+});
+
+test("fresh authoritative empty roster keeps the canonical organizer and removes other members", () => {
+  const organizer = player({ id: "org-1", name: "Организатор", phone: "79850000000", source: "ORGANIZER" });
+  const invited = player({ id: "p-invite", name: "Анна", phone: "79990000001", source: "INVITE_LINK" });
+  const admin = player({ id: "p-admin", name: "Лев", phone: "79990000002", source: "ADMIN" });
+
+  const result = reconcileRosterWithViva({
+    sourceParticipants: [organizer, invited, admin],
+    vivaParticipants: [],
+    leaveEvents: [],
+    organizerPlayer: organizer,
+    authoritative: true,
+  });
+
+  assert.deepEqual(result.mergedCandidates.map((item) => item.id), ["org-1"]);
+  assert.equal(result.staleSourcePlayersRemoved, 2);
 });

@@ -4,7 +4,6 @@ import {
   apiCancelBooking,
   apiCreateReferralSubscriptionInvite,
   apiCleanupPadelGameByOrganizer,
-  apiFetchPadelGameRecord,
   apiFetchProfile,
   apiFetchBookings,
   apiFetchExerciseById,
@@ -14,7 +13,8 @@ import {
   apiFetchSubscriptions,
   apiFetchPadelChatsByPhone,
   apiFetchPadelGamesByPhone,
-  apiFetchPadelGameByPaymentRef,
+  apiFetchPadelGamesByBookingReferences,
+  apiLeavePadelGameAsCurrentUser,
   apiFetchTournamentHistory,
   apiVerifyBookingCancellation,
   apiUpdatePadelGameRecord,
@@ -53,6 +53,10 @@ import {
   buildSyntheticCabinetGameFromBooking,
   isSyntheticCabinetBookingGame,
 } from "./syntheticBookingGame";
+import {
+  buildUniqueGameLookup,
+  resolveUniqueGameForKeys,
+} from "./gameBookingLinkResolver";
 import { TournamentDetailsModal } from "./TournamentDetailsModal";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
 import { Modal } from "../UI/Modal";
@@ -153,6 +157,13 @@ const GAME_REMOVED_METADATA_FLAGS = [
 ] as const;
 
 type ExerciseCancellationCheckState = "active" | "cancelled" | "unknown";
+
+type ExactGameLinkState =
+  | { state: "loading" }
+  | { state: "none" }
+  | { state: "unique"; gameId: string }
+  | { state: "ambiguous" }
+  | { state: "error" };
 
 interface CabinetProps {
   onOpenGames: (options?: OpenGamesOptions) => void;
@@ -1094,14 +1105,6 @@ function isGameRelevantToCabinetIdentity(
   if (recordListContainsCabinetIdentity(game.invitedPhones, phone, normalizeCabinetIdentityPhone)) return true;
   if (hasActiveSplitPaymentCabinetIdentity(game, clientId, phone)) return true;
 
-  const gameAny = game as unknown as Record<string, unknown>;
-  if (recordListContainsCabinetIdentity(game.allRelatedPhones, phone, normalizeCabinetIdentityPhone)) {
-    return true;
-  }
-  if (recordListContainsCabinetIdentity(gameAny.allRelatedClientIds, clientId, normalizeCabinetIdentityId)) {
-    return true;
-  }
-
   return false;
 }
 
@@ -1641,6 +1644,9 @@ export function Cabinet({
   const [currenSub, SetCurrenSub] = useState<Subscription | null>(null);
   const [currenSubName, SetCurrenSubName] = useState<string>("Абонемент");
   const [createdGames, setCreatedGames] = useState<PadelGameRecord[]>([]);
+  const [exactGameLinkStateByBookingId, setExactGameLinkStateByBookingId] = useState<
+    Record<string, ExactGameLinkState>
+  >({});
   const [loadingCreatedGames, setLoadingCreatedGames] = useState(false);
   const [createdGamesError, setCreatedGamesError] = useState<string | null>(null);
   const [cabinetFlashNotice] = useState<string | null>(() => consumeCabinetFlashNotice());
@@ -1661,8 +1667,7 @@ export function Cabinet({
   const cabinetVisitTrackedRef = useRef(false);
   const onboardingStatusRef = useRef<boolean | null>(null);
   const cancellingGameIdsRef = useRef<Set<string>>(new Set());
-  const missingGameLookupBookingIdsRef = useRef<Set<string>>(new Set());
-  const missingGameLookupExpandedFetchTriedRef = useRef(false);
+  const exactGameLinkLookupBookingIdsRef = useRef<Set<string>>(new Set());
   const historyPrefetchAttemptedRef = useRef(false);
   const historyBookingsRequestRef = useRef<Promise<BookingsResponse | null> | null>(null);
   const exerciseCancellationCheckRef = useRef<Map<string, Promise<ExerciseCancellationCheckState>>>(new Map());
@@ -2181,8 +2186,8 @@ export function Cabinet({
   }, [profile?.firstName, profile?.id, profile?.lastName, profile?.photo, profilePhoneNorm]);
 
   useEffect(() => {
-    missingGameLookupBookingIdsRef.current.clear();
-    missingGameLookupExpandedFetchTriedRef.current = false;
+    exactGameLinkLookupBookingIdsRef.current.clear();
+    setExactGameLinkStateByBookingId({});
     historyPrefetchAttemptedRef.current = false;
   }, [profile?.id, profile?.phone]);
 
@@ -2241,123 +2246,201 @@ export function Cabinet({
   }, [createdGames, profilePhoneNorm]);
 
   const gameByBookingId = useMemo(() => {
-    const map = new Map<string, PadelGameRecord>();
-    createdGames.forEach((game) => {
-      if (!game || isGameCancelledStatus(game.status)) return;
-      collectGameBookingIds(game).forEach((bookingId) => {
-        if (!map.has(bookingId)) {
-          map.set(bookingId, game);
-        }
-      });
-    });
-    return map;
+    return buildUniqueGameLookup(
+      createdGames.filter((game) => game && !isGameCancelledStatus(game.status)),
+      collectGameBookingIds,
+    );
   }, [createdGames]);
   const gameBySlotKey = useMemo(() => {
-    const map = new Map<string, PadelGameRecord>();
-    createdGames.forEach((game) => {
-      if (!game || isGameCancelledStatus(game.status)) return;
-      const slotKey = buildGameSlotKey(game);
-      if (!slotKey || map.has(slotKey)) return;
-      map.set(slotKey, game);
-    });
-    return map;
+    return buildUniqueGameLookup(
+      createdGames.filter((game) => game && !isGameCancelledStatus(game.status)),
+      (game) => [buildGameSlotKey(game)],
+    );
   }, [createdGames]);
   const gameByExerciseId = useMemo(() => {
-    const map = new Map<string, PadelGameRecord>();
-    createdGames.forEach((game) => {
-      if (!game || isGameCancelledStatus(game.status)) return;
-      collectGameExerciseIds(game).forEach((exerciseId) => {
-        if (!map.has(exerciseId)) {
-          map.set(exerciseId, game);
-        }
-      });
-    });
-    return map;
+    return buildUniqueGameLookup(
+      createdGames.filter((game) => game && !isGameCancelledStatus(game.status)),
+      collectGameExerciseIds,
+    );
   }, [createdGames]);
   const gameByPaymentRef = useMemo(() => {
-    const map = new Map<string, PadelGameRecord>();
-    createdGames.forEach((game) => {
-      if (!game || isGameCancelledStatus(game.status)) return;
-      collectGamePaymentRefs(game).forEach((paymentRef) => {
-        if (!map.has(paymentRef)) {
-          map.set(paymentRef, game);
-        }
-      });
-    });
-    return map;
+    return buildUniqueGameLookup(
+      createdGames.filter((game) => game && !isGameCancelledStatus(game.status)),
+      collectGamePaymentRefs,
+    );
   }, [createdGames]);
   const gameBySlotIdKey = useMemo(() => {
-    const map = new Map<string, PadelGameRecord>();
-    createdGames.forEach((game) => {
-      if (!game || isGameCancelledStatus(game.status)) return;
-      const slotIdKey = buildGameSlotIdKey(game);
-      if (!slotIdKey || map.has(slotIdKey)) return;
-      map.set(slotIdKey, game);
-    });
-    return map;
+    return buildUniqueGameLookup(
+      createdGames.filter((game) => game && !isGameCancelledStatus(game.status)),
+      (game) => [buildGameSlotIdKey(game)],
+    );
   }, [createdGames]);
   const gameByLooseSlotKey = useMemo(() => {
-    const map = new Map<string, PadelGameRecord>();
-    const collisions = new Set<string>();
-    createdGames.forEach((game) => {
-      if (!game || isGameCancelledStatus(game.status)) return;
-      const slotKey = buildGameLooseSlotKey(game);
-      if (!slotKey || collisions.has(slotKey)) return;
-      if (map.has(slotKey)) {
-        map.delete(slotKey);
-        collisions.add(slotKey);
-        return;
-      }
-      map.set(slotKey, game);
-    });
-    return map;
+    return buildUniqueGameLookup(
+      createdGames.filter((game) => game && !isGameCancelledStatus(game.status)),
+      (game) => [buildGameLooseSlotKey(game)],
+    );
   }, [createdGames]);
-  const resolveGameForBooking = useCallback((booking: Booking): PadelGameRecord | null => {
+  const resolveGameLinkForBooking = useCallback((booking: Booking): {
+    game: PadelGameRecord | null;
+    ambiguous: boolean;
+  } => {
+    const asLinkResult = (match: { matched: boolean; value: PadelGameRecord | null }) => ({
+      game: match.value,
+      ambiguous: match.matched && !match.value,
+    });
     const bookingId = normalizeBookingLikeId(booking.id);
     if (bookingId) {
-      const byId = gameByBookingId.get(bookingId);
-      if (byId) return byId;
+      const byId = resolveUniqueGameForKeys(gameByBookingId, [bookingId]);
+      if (byId.matched) return asLinkResult(byId);
     }
-    const paymentRefs = collectBookingPaymentRefs(booking);
-    for (const paymentRef of paymentRefs) {
-      const byPaymentRef = gameByPaymentRef.get(paymentRef);
-      if (byPaymentRef) return byPaymentRef;
-    }
-    const exerciseIds = collectBookingExerciseIds(booking);
-    for (const exerciseId of exerciseIds) {
-      const byExerciseId = gameByExerciseId.get(exerciseId);
-      if (byExerciseId) return byExerciseId;
-    }
+    const byPaymentRef = resolveUniqueGameForKeys(gameByPaymentRef, collectBookingPaymentRefs(booking));
+    if (byPaymentRef.matched) return asLinkResult(byPaymentRef);
+    const byExerciseId = resolveUniqueGameForKeys(gameByExerciseId, collectBookingExerciseIds(booking));
+    if (byExerciseId.matched) return asLinkResult(byExerciseId);
     const slotIdKey = buildBookingSlotIdKey(booking);
     if (slotIdKey) {
-      const bySlotIdKey = gameBySlotIdKey.get(slotIdKey);
-      if (bySlotIdKey) return bySlotIdKey;
+      const bySlotIdKey = resolveUniqueGameForKeys(gameBySlotIdKey, [slotIdKey]);
+      if (bySlotIdKey.matched) return asLinkResult(bySlotIdKey);
     }
     const slotKey = buildBookingSlotKey(booking);
     if (slotKey) {
-      const bySlotKey = gameBySlotKey.get(slotKey);
-      if (bySlotKey) return bySlotKey;
+      const bySlotKey = resolveUniqueGameForKeys(gameBySlotKey, [slotKey]);
+      if (bySlotKey.matched) return asLinkResult(bySlotKey);
     }
     const looseSlotKey = buildBookingLooseSlotKey(booking);
-    if (!looseSlotKey) return null;
-    return gameByLooseSlotKey.get(looseSlotKey) ?? null;
+    if (!looseSlotKey) return { game: null, ambiguous: false };
+    const byLooseSlotKey = resolveUniqueGameForKeys(gameByLooseSlotKey, [looseSlotKey]);
+    return byLooseSlotKey.matched
+      ? asLinkResult(byLooseSlotKey)
+      : { game: null, ambiguous: false };
   }, [gameByBookingId, gameByExerciseId, gameByLooseSlotKey, gameByPaymentRef, gameBySlotIdKey, gameBySlotKey]);
+  const resolveGameForBooking = useCallback(
+    (booking: Booking): PadelGameRecord | null => resolveGameLinkForBooking(booking).game,
+    [resolveGameLinkForBooking],
+  );
+  const isGameLinkAmbiguousForBooking = useCallback(
+    (booking: Booking): boolean => resolveGameLinkForBooking(booking).ambiguous,
+    [resolveGameLinkForBooking],
+  );
+  const resolveCancellationGameLink = useCallback((booking: Booking): {
+    gameId: string | null;
+    blocked: boolean;
+  } => {
+    const bookingId = normalizeBookingLikeId(booking.id);
+    if (!bookingId) return { gameId: null, blocked: true };
+    const exactState = exactGameLinkStateByBookingId[bookingId];
+    if (exactState?.state === "none") return { gameId: null, blocked: false };
+    if (exactState?.state !== "unique") return { gameId: null, blocked: true };
+    const game = createdGames.find((item) => (
+      item.id === exactState.gameId
+      && item.archived !== true
+      && !isGameCancelledStatus(item.status)
+    ));
+    return game
+      ? { gameId: game.id, blocked: false }
+      : { gameId: null, blocked: true };
+  }, [createdGames, exactGameLinkStateByBookingId]);
+  const executeBookingCancellation = useCallback(async (
+    booking: Booking,
+    action: BookingCancellationAction,
+  ): Promise<BookingCancellationExecutionResult> => {
+    const bookingId = normalizeBookingLikeId(booking.id);
+    if (!bookingId) {
+      return { ok: false, message: "Не удалось определить запись для безопасной отмены" };
+    }
+
+    // The cached lookup is display-only. Re-read every exact reference at the
+    // mutation boundary so a newly linked game cannot be bypassed by a stale
+    // earlier `none` result.
+    const paymentRefs = collectBookingPaymentRefs(booking);
+    const exactResult = await apiFetchPadelGamesByBookingReferences(paymentRefs, [bookingId]);
+    if (exactResult.error || !exactResult.data?.complete) {
+      return {
+        ok: false,
+        message: "Не удалось безопасно подтвердить связь записи с игрой. Отмена остановлена — повторите позже.",
+      };
+    }
+    const bookingRefs = new Set([bookingId]);
+    const paymentRefSet = new Set(paymentRefs);
+    const activeLinkedGames = exactResult.data.games.filter((game) => {
+      if (game.archived === true || isGameCancelledStatus(game.status)) return false;
+      return collectGameBookingIds(game).some((id) => bookingRefs.has(id))
+        || collectGamePaymentRefs(game).some((ref) => paymentRefSet.has(ref));
+    });
+    if (activeLinkedGames.length > 1) {
+      return {
+        ok: false,
+        message: "Найдено несколько игр для одной записи. Отмена остановлена — обратитесь в поддержку.",
+      };
+    }
+    if (activeLinkedGames.length === 1) {
+      const leaveResult = await apiLeavePadelGameAsCurrentUser(activeLinkedGames[0].id, {
+        refundMethod: action.refundMethod,
+      });
+      if (leaveResult.error || !leaveResult.data) {
+        return {
+          ok: false,
+          message: leaveResult.error?.message || "Не удалось покинуть игру",
+        };
+      }
+      if (leaveResult.data.state === "RETRY_REQUIRED" || leaveResult.data.state === "IN_PROGRESS") {
+        return {
+          ok: true,
+          state: "RETRY_REQUIRED",
+          message: leaveResult.data.message
+            || "Бронирование отменено, обновляем состав игры. Это может занять несколько минут.",
+        };
+      }
+      if (leaveResult.data.state !== "DONE") {
+        return {
+          ok: false,
+          message: leaveResult.data.message || "Не удалось подтвердить выход из игры",
+        };
+      }
+      return { ok: true, state: "DONE", message: action.successMessage };
+    }
+
+    // Game-like bookings are never cancelled directly in Viva: a game may be
+    // linked concurrently just after the exact lookup. The server leave saga is
+    // the only allowed mutation path for that category.
+    if (isExerciseConvertibleToGameFromBooking(booking)) {
+      return {
+        ok: false,
+        message: "Для игровой записи не удалось подтвердить серверную игру. Отмена остановлена — обновите список и повторите.",
+      };
+    }
+
+    const response = await apiCancelBooking(bookingId, action);
+    const accepted = response.status !== null && response.status >= 200 && response.status < 300;
+    const verifiableConflict = response.status !== null
+      && [400, 404, 409, 422].includes(response.status);
+    if (!accepted && !verifiableConflict) {
+      return {
+        ok: false,
+        message: response.error?.message || "Не удалось отменить запись",
+      };
+    }
+    const verification = await apiVerifyBookingCancellation(bookingId);
+    const cancelled = !verification.error && verification.data?.state === "cancelled";
+    return {
+      ok: cancelled,
+      state: cancelled ? "DONE" : undefined,
+      message: cancelled
+        ? action.successMessage
+        : (verification.error?.message || "Не удалось подтвердить отмену записи"),
+    };
+  }, []);
   const resolveCancelledGameForBooking = useCallback((booking: Booking): PadelGameRecord | null => {
     const bookingId = normalizeBookingLikeId(booking.id);
     if (bookingId) {
-      const byId = gameByBookingId.get(bookingId);
-      if (byId) return byId;
+      const byId = resolveUniqueGameForKeys(gameByBookingId, [bookingId]);
+      if (byId.matched) return byId.value;
     }
-    const paymentRefs = collectBookingPaymentRefs(booking);
-    for (const paymentRef of paymentRefs) {
-      const byPaymentRef = gameByPaymentRef.get(paymentRef);
-      if (byPaymentRef) return byPaymentRef;
-    }
-    const exerciseIds = collectBookingExerciseIds(booking);
-    for (const exerciseId of exerciseIds) {
-      const byExerciseId = gameByExerciseId.get(exerciseId);
-      if (byExerciseId) return byExerciseId;
-    }
+    const byPaymentRef = resolveUniqueGameForKeys(gameByPaymentRef, collectBookingPaymentRefs(booking));
+    if (byPaymentRef.matched) return byPaymentRef.value;
+    const byExerciseId = resolveUniqueGameForKeys(gameByExerciseId, collectBookingExerciseIds(booking));
+    if (byExerciseId.matched) return byExerciseId.value;
     return null;
   }, [gameByBookingId, gameByExerciseId, gameByPaymentRef]);
   const resolveDisplayGameForBooking = useCallback((booking: Booking): PadelGameRecord | null => {
@@ -2428,88 +2511,115 @@ export function Cabinet({
     profile?.phone,
   ]);
   const hasTeamGameForBooking = useCallback((booking: Booking): boolean => {
-    return Boolean(resolveGameForBooking(booking));
-  }, [resolveGameForBooking]);
+    return Boolean(
+      resolveGameForBooking(booking)
+      || isGameLinkAmbiguousForBooking(booking),
+    );
+  }, [isGameLinkAmbiguousForBooking, resolveGameForBooking]);
 
   useEffect(() => {
     const bookings = activeBookings?.content ?? [];
-    if (bookings.length === 0) return;
-    if (!profile?.phone) return;
+    if (bookings.length === 0 || !profile?.phone) {
+      exactGameLinkLookupBookingIdsRef.current.clear();
+      setExactGameLinkStateByBookingId((current) => (
+        Object.keys(current).length === 0 ? current : {}
+      ));
+      return;
+    }
 
+    const lookupBookingIds = exactGameLinkLookupBookingIdsRef.current;
     const currentBookingIds = new Set(
       bookings
         .map((booking) => normalizeBookingLikeId(booking.id))
         .filter((value): value is string => Boolean(value)),
     );
-    missingGameLookupBookingIdsRef.current.forEach((bookingId) => {
+    lookupBookingIds.forEach((bookingId) => {
       if (!currentBookingIds.has(bookingId)) {
-        missingGameLookupBookingIdsRef.current.delete(bookingId);
+        lookupBookingIds.delete(bookingId);
       }
     });
+    setExactGameLinkStateByBookingId((current) => {
+      const entries = Object.entries(current);
+      const nextEntries = entries.filter(([bookingId]) => currentBookingIds.has(bookingId));
+      return nextEntries.length === entries.length ? current : Object.fromEntries(nextEntries);
+    });
 
-    const missingBookingLookups = bookings
+    const exactBookingLookups = bookings
       .filter((booking) => !booking.isCancelled)
       .map((booking) => ({
         booking,
         bookingId: normalizeBookingLikeId(booking.id),
       }))
       .filter((entry): entry is { booking: Booking; bookingId: string } => Boolean(entry.bookingId))
-      .filter((entry) => !missingGameLookupBookingIdsRef.current.has(entry.bookingId))
-      .filter((entry) => !resolveGameForBooking(entry.booking))
+      .filter((entry) => !lookupBookingIds.has(entry.bookingId))
       .map((entry) => ({
+        booking: entry.booking,
         bookingId: entry.bookingId,
-        paymentRef: collectBookingPaymentRefs(entry.booking)[0] ?? "",
-      }))
-      .slice(0, 8);
+        paymentRefs: collectBookingPaymentRefs(entry.booking),
+      }));
 
-    if (missingBookingLookups.length === 0) return;
-    missingBookingLookups.forEach(({ bookingId }) => {
-      missingGameLookupBookingIdsRef.current.add(bookingId);
+    if (exactBookingLookups.length === 0) return;
+    exactBookingLookups.forEach(({ bookingId }) => {
+      lookupBookingIds.add(bookingId);
     });
+    setExactGameLinkStateByBookingId((current) => ({
+      ...current,
+      ...Object.fromEntries(exactBookingLookups.map(({ bookingId }) => [bookingId, { state: "loading" }])),
+    }));
 
     let cancelled = false;
-    const shouldTryExpandedFetch = !missingGameLookupExpandedFetchTriedRef.current;
-    if (shouldTryExpandedFetch) {
-      missingGameLookupExpandedFetchTriedRef.current = true;
-    }
     void Promise.allSettled(
-      missingBookingLookups.map(({ bookingId, paymentRef }) => (
-        apiFetchPadelGameByPaymentRef(paymentRef, [bookingId])
+      exactBookingLookups.map(({ bookingId, paymentRefs }) => (
+        apiFetchPadelGamesByBookingReferences(paymentRefs, [bookingId])
       )),
     ).then((results) => {
       if (cancelled) return;
-      const recoveredGames = results
-        .flatMap((result) => {
-          if (result.status !== "fulfilled" || !result.value.data) return [];
-          return [result.value.data];
-        })
-        .filter((game, index, array) => array.findIndex((item) => item.id === game.id) === index);
-      if (recoveredGames.length === 0) return;
-
-      setCreatedGames((prev) => mergeCabinetGameRecords(prev, recoveredGames));
-      setCreatedGamesError(null);
-    });
-
-    if (shouldTryExpandedFetch) {
-      void apiFetchPadelGamesByPhone(
-        profile.phone,
-        profile?.id ?? null,
-        true,
-        { limit: 500 },
-      ).then((result) => {
-        if (cancelled || !result.data?.games?.length) return;
-        setCreatedGames((prev) => mergeCabinetGameRecords(prev, result.data?.games ?? []));
-        setActiveGameRecordsTotal((prevTotal) => Math.max(prevTotal, result.data?.total ?? 0));
-        if (!result.error) {
-          setCreatedGamesError(null);
+      const nextStates: Record<string, ExactGameLinkState> = {};
+      const recoveredGames: PadelGameRecord[] = [];
+      results.forEach((result, index) => {
+        const lookup = exactBookingLookups[index];
+        if (!lookup) return;
+        if (
+          result.status !== "fulfilled"
+          || result.value.error
+          || !result.value.data?.complete
+        ) {
+          nextStates[lookup.bookingId] = { state: "error" };
+          return;
+        }
+        const bookingRefs = new Set([lookup.bookingId]);
+        const paymentRefs = new Set(collectBookingPaymentRefs(lookup.booking));
+        const exactActiveCandidates = result.value.data.games.filter((game) => {
+          if (game.archived === true || isGameCancelledStatus(game.status)) return false;
+          const bookingMatch = collectGameBookingIds(game).some((id) => bookingRefs.has(id));
+          const paymentMatch = collectGamePaymentRefs(game).some((ref) => paymentRefs.has(ref));
+          return bookingMatch || paymentMatch;
+        });
+        recoveredGames.push(...exactActiveCandidates);
+        if (exactActiveCandidates.length === 0) {
+          nextStates[lookup.bookingId] = { state: "none" };
+        } else if (exactActiveCandidates.length === 1) {
+          nextStates[lookup.bookingId] = {
+            state: "unique",
+            gameId: exactActiveCandidates[0].id,
+          };
+        } else {
+          nextStates[lookup.bookingId] = { state: "ambiguous" };
         }
       });
-    }
+      setExactGameLinkStateByBookingId((current) => ({ ...current, ...nextStates }));
+      if (recoveredGames.length > 0) {
+        setCreatedGames((prev) => mergeCabinetGameRecords(prev, recoveredGames));
+      }
+    });
 
     return () => {
       cancelled = true;
+      exactBookingLookups.forEach(({ bookingId }) => {
+        lookupBookingIds.delete(bookingId);
+      });
     };
-  }, [activeBookings?.content, profile?.id, profile?.phone, resolveGameForBooking]);
+  }, [activeBookings?.content, profile?.phone]);
 
   const activeBookingsLoadedCount = activeBookings?.content?.length ?? 0;
   const activeBookingsTotal = activeBookings?.totalElements ?? activeBookingsLoadedCount;
@@ -2895,15 +3005,61 @@ export function Cabinet({
 
   const loadBookings = async () => {
     const shouldRefreshHistory = isBookingHistoryOpen || historyBookings !== null;
-    const [activeBookingsData, historyBookingsData, userSubscriptionsData, referralSubscriptionsData] = await Promise.all([
+    const phone = profile?.phone?.trim() || null;
+    const [
+      activeBookingsData,
+      historyBookingsData,
+      userSubscriptionsData,
+      referralSubscriptionsData,
+      activeGamesResult,
+      resultWindowGamesResult,
+    ] = await Promise.all([
       apiFetchBookings(false),
       shouldRefreshHistory ? loadHistoryBookings(true) : Promise.resolve(null),
       apiFetchSubscriptions(),
       apiFetchSubscriptions(REFERRAL_SUBSCRIPTIONS_FETCH_OPTIONS),
+      phone
+        ? apiFetchPadelGamesByPhone(
+            phone,
+            profile?.id ?? null,
+            false,
+            { limit: ACTIVE_RESULT_WINDOW_LIMIT },
+          )
+        : Promise.resolve(null),
+      phone
+        ? apiFetchPadelGamesByPhone(
+            phone,
+            profile?.id ?? null,
+            true,
+            {
+              limit: ACTIVE_RESULT_WINDOW_LIMIT,
+              windowHours: 24,
+              needsResult: true,
+            },
+          )
+        : Promise.resolve(null),
     ]);
     if (activeBookingsData) setActiveBookings(activeBookingsData.data);
     if (userSubscriptionsData.data) setUserSubscriptions(userSubscriptionsData.data);
     setReferralUserSubscriptions(referralSubscriptionsData.data || userSubscriptionsData.data || null);
+    if (activeGamesResult?.data || resultWindowGamesResult?.data) {
+      const activeGames = activeGamesResult?.data?.games ?? [];
+      const resultWindowGames = resultWindowGamesResult?.data?.games ?? [];
+      const mergedGames = mergeCabinetGameRecords(activeGames, resultWindowGames)
+        .filter((game) => isGameRelevantToCabinetIdentity(
+          game,
+          profile?.id ?? null,
+          profile?.phone ?? null,
+        ));
+      setCreatedGames(mergedGames);
+      setActiveGameRecordsTotal(Math.max(
+        activeGamesResult?.data?.total ?? 0,
+        resultWindowGamesResult?.data?.total ?? 0,
+        mergedGames.length,
+      ));
+    }
+    const gamesError = activeGamesResult?.error ?? resultWindowGamesResult?.error;
+    setCreatedGamesError(gamesError?.message ?? null);
     trackAnalyticsEvent("cabinet_data_refreshed", {
       activeBookingsCount: activeBookingsData?.data?.content?.length ?? 0,
       historyBookingsCount: historyBookingsData?.content?.length ?? (historyBookings?.content?.length ?? 0),
@@ -3021,75 +3177,32 @@ export function Cabinet({
     }
 
     setCancellingGameId(gameId);
-    let ok = false;
-    let cleanupHandled = false;
-    let successMessage = action.successMessage;
-    const linkedGameSnapshot = createdGames.find((item) => item.id === gameId) ?? null;
-    const linkedGameResult = await apiFetchPadelGameRecord(gameId);
-    const linkedGame = linkedGameResult.data?.id
-      ? linkedGameResult.data as PadelGameRecord
-      : linkedGameSnapshot;
-    const hasExerciseIds = Boolean(linkedGame && collectGameExerciseIds(linkedGame).length > 0);
-    const hasBookingIds = Boolean(linkedGame && collectGameBookingIds(linkedGame).length > 0);
-
-    if (hasExerciseIds || hasBookingIds) {
-      const cleanupResult = await apiCleanupPadelGameByOrganizer(gameId, {
-        force: true,
-        dryRun: false,
-        limit: 1,
-        intent: "cancel_game",
-        refundMethod: action.refundMethod ?? undefined,
-        cancellationActionId: action.id,
-        actorBookingId: bookingId,
-      });
-      const cleanupData = cleanupResult.data;
-      const cleanupItems = Array.isArray(cleanupData?.items) ? cleanupData.items : [];
-      const cleanupItem = cleanupItems.find((item) => normalizeBookingLikeId(item.gameId) === normalizeBookingLikeId(gameId))
-        ?? cleanupItems[0]
-        ?? null;
-      const cleanupProcessed = (cleanupData?.processed ?? 0) > 0 || cleanupItem !== null;
-      const cleanupSucceeded = cleanupItem?.cancelledInLk === true && cleanupItem?.withVivaErrors !== true;
-
-      cleanupHandled = true;
-      if (cleanupProcessed) {
-        ok = cleanupSucceeded;
-        successMessage = cleanupItem?.refundMessage || action.successMessage;
-      } else {
-        setCancellingGameId(null);
-        return {
-          ok: false,
-          message: cleanupResult.error?.message || "Не удалось подтвердить отмену записи в Viva",
-        };
-      }
-    }
-
-    if (!ok && !cleanupHandled) {
-      const res = await apiCancelBooking(bookingId, action);
-      const accepted = res.status !== null && res.status >= 200 && res.status < 300;
-      const verifiableConflict = res.status !== null && [400, 404, 409, 422].includes(res.status);
-      if (!accepted && !verifiableConflict) {
-        setCancellingGameId(null);
-        return {
-          ok: false,
-          message: res.error?.message || "Не удалось отменить запись",
-        };
-      }
-      const verification = await apiVerifyBookingCancellation(bookingId);
-      ok = !verification.error && verification.data?.state === "cancelled";
-      if (!ok) {
-        setCancellingGameId(null);
-        return {
-          ok: false,
-          message: verification.error?.message || "Не удалось подтвердить отмену записи",
-        };
-      }
-    }
+    const cleanupResult = await apiCleanupPadelGameByOrganizer(gameId, {
+      force: true,
+      dryRun: false,
+      limit: 1,
+      intent: "cancel_game",
+      refundMethod: action.refundMethod ?? undefined,
+      cancellationActionId: action.id,
+      actorBookingId: bookingId,
+    });
+    const cleanupItems = Array.isArray(cleanupResult.data?.items)
+      ? cleanupResult.data.items
+      : [];
+    const cleanupItem = cleanupItems.find((item) => (
+      normalizeBookingLikeId(item.gameId) === normalizeBookingLikeId(gameId)
+    )) ?? null;
+    const ok = !cleanupResult.error
+      && cleanupItem?.cancelledInLk === true
+      && cleanupItem.withVivaErrors !== true;
+    const successMessage = cleanupItem?.refundMessage || action.successMessage;
 
     setCancellingGameId(null);
     if (!ok) {
       return {
         ok: false,
-        message: "Не удалось отменить запись",
+        message: cleanupResult.error?.message
+          || "Не удалось подтвердить серверную отмену игры. Запись Viva не изменена этим экраном.",
       };
     }
 
@@ -4028,6 +4141,9 @@ export function Cabinet({
         loadingGameRecords={loadingCreatedGames}
         gameRecordsError={createdGamesError}
         resolveGameForBooking={resolveGameForBooking}
+        isGameLinkAmbiguousForBooking={isGameLinkAmbiguousForBooking}
+        resolveCancellationGameLink={resolveCancellationGameLink}
+        executeBookingCancellation={executeBookingCancellation}
         resolveDisplayGameForBooking={resolveDisplayGameForBooking}
         resolveTournamentForBooking={resolveTournamentForBooking}
         onOpenTournamentDetails={handleOpenTournamentDetails}

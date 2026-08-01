@@ -4,16 +4,29 @@ import test from "node:test";
 
 const FN_DIR = "scripts/nodered_tournament_participants_nodes";
 
-function createContext(initial: Record<string, unknown> = {}) {
+function createContext(
+  initial: Record<string, unknown> = {},
+  globalInitial: Record<string, unknown> = {},
+) {
   const values = new Map(Object.entries(initial));
+  const globalValues = new Map(Object.entries(globalInitial));
   return {
     values,
+    globalValues,
     flow: {
       get(key: string) {
         return values.get(key);
       },
       set(key: string, value: unknown) {
         values.set(key, value);
+      },
+    },
+    global: {
+      get(key: string) {
+        return globalValues.get(key);
+      },
+      set(key: string, value: unknown) {
+        globalValues.set(key, value);
       },
     },
   };
@@ -34,7 +47,7 @@ function runNodeRedFunction(
   const result = fn(
     options.msg ?? {},
     context.flow,
-    { get: () => "token" },
+    context.global,
     { send: (value: unknown) => sent.push(value) },
   );
   return { result, context, sent };
@@ -114,6 +127,8 @@ test("terminal stores a successful response and clears inflight", () => {
     statusCode: 200,
     payload,
     participantCacheKey: "exercise-1:100",
+    participantCacheExerciseId: "exercise-1",
+    participantCacheEpoch: 0,
   };
   const { result } = runNodeRedFunction("fn_terminal_v2.js", { context, msg });
   const state = context.values.get(cacheKey) as any;
@@ -121,6 +136,58 @@ test("terminal stores a successful response and clears inflight", () => {
   assert.equal(result, msg);
   assert.equal(result.headers["x-lk-participants-cache"], "miss");
   assert.equal(state.entries["exercise-1:100"].payload, payload);
+  assert.equal(state.entries["exercise-1:100"].epoch, 0);
+  assert.equal(state.inflight["exercise-1:100"], undefined);
+});
+
+test("epoch bump prevents serving a previously fresh participant cache entry", () => {
+  const cacheKey = "lkTournamentParticipantResponseCacheV2";
+  const context = createContext({
+    [cacheKey]: {
+      entries: {
+        "exercise-1:100": { at: Date.now(), epoch: 4, payload: [{ id: "stale" }] },
+      },
+      inflight: {},
+    },
+  }, {
+    lkTournamentParticipantEpochV1: { "exercise-1": 5 },
+  });
+  const { result } = runNodeRedFunction("fn_cache_gate_v2.js", {
+    context,
+    msg: { req: { query: { exerciseId: "exercise-1" } } },
+  });
+  const state = context.values.get(cacheKey) as any;
+
+  assert.notEqual(result[0], null);
+  assert.equal(result[1], null);
+  assert.equal(result[0].participantCacheEpoch, 5);
+  assert.equal(state.entries["exercise-1:100"], undefined);
+  assert.equal(state.inflight["exercise-1:100"].epoch, 5);
+});
+
+test("epoch bump during an upstream read suppresses its stale response and cache write", () => {
+  const cacheKey = "lkTournamentParticipantResponseCacheV2";
+  const context = createContext({
+    [cacheKey]: {
+      entries: {},
+      inflight: { "exercise-1:100": { startedAt: Date.now(), epoch: 8 } },
+    },
+  }, {
+    lkTournamentParticipantEpochV1: { "exercise-1": 9 },
+  });
+  const msg = {
+    statusCode: 200,
+    payload: [{ id: "pre-leave-roster" }],
+    participantCacheKey: "exercise-1:100",
+    participantCacheExerciseId: "exercise-1",
+    participantCacheEpoch: 8,
+  };
+  const { result } = runNodeRedFunction("fn_terminal_v2.js", { context, msg });
+  const state = context.values.get(cacheKey) as any;
+
+  assert.equal(result.statusCode, 409);
+  assert.equal(result.headers["x-lk-participants-cache"], "epoch-changed");
+  assert.equal(state.entries["exercise-1:100"], undefined);
   assert.equal(state.inflight["exercise-1:100"], undefined);
 });
 

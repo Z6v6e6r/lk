@@ -5,21 +5,17 @@ import fs from "node:fs";
 const cabinetSource = fs.readFileSync("src/components/cabinet/Cabinet.tsx", "utf8");
 const gamesPageSource = fs.readFileSync("src/components/games/GamesPage.tsx", "utf8");
 
-test("cabinet cancel refreshes authoritative game record before cleanup decision", () => {
-  assert.match(cabinetSource, /const linkedGameResult = await apiFetchPadelGameRecord\(gameId\);/);
-  assert.match(cabinetSource, /const linkedGame = linkedGameResult\.data\?\.id/);
-  assert.match(cabinetSource, /const hasExerciseIds = Boolean\(linkedGame && collectGameExerciseIds\(linkedGame\)\.length > 0\);/);
-  assert.match(cabinetSource, /const hasBookingIds = Boolean\(linkedGame && collectGameBookingIds\(linkedGame\)\.length > 0\);/);
-});
-
-test("cabinet cancel routes linked split games through organizer cleanup", () => {
-  assert.match(cabinetSource, /const cleanupResult = await apiCleanupPadelGameByOrganizer\(gameId,/);
-  assert.match(cabinetSource, /intent: "cancel_game"/);
-  assert.match(cabinetSource, /refundMethod: action\.refundMethod \?\? undefined,/);
-  assert.match(
-    cabinetSource,
-    /if \(!ok && !cleanupHandled\) {\s*const res = await apiCancelBooking\(bookingId,\s*action\);/,
-  );
+test("cabinet organizer cancellation is fail-closed around exact backend cleanup", () => {
+  const start = cabinetSource.indexOf("const handleCancelGameBooking = async");
+  const end = cabinetSource.indexOf("const handleArchiveGameFromCabinet = async", start);
+  assert.ok(start >= 0 && end > start);
+  const cancellationSource = cabinetSource.slice(start, end);
+  assert.match(cancellationSource, /const cleanupResult = await apiCleanupPadelGameByOrganizer\(gameId,/);
+  assert.match(cancellationSource, /intent: "cancel_game"/);
+  assert.match(cancellationSource, /refundMethod: action\.refundMethod \?\? undefined,/);
+  assert.match(cancellationSource, /cleanupItem\?\.cancelledInLk === true/);
+  assert.doesNotMatch(cancellationSource, /apiCancelBooking/);
+  assert.doesNotMatch(cancellationSource, /cleanupItems\[0\]/);
 });
 
 test("games details never treat organizer row as leaveable participant", () => {
@@ -45,16 +41,9 @@ test("games roster patch drops records that stop matching the current profile", 
   );
 });
 
-test("cabinet game relevance keeps leave-event records visible when they still belong to the profile", () => {
-  assert.match(
-    cabinetSource,
-    /if \(recordListContainsCabinetIdentity\(game\.allRelatedPhones, phone, normalizeCabinetIdentityPhone\)\) \{\s*return true;\s*\}/,
-  );
-  assert.match(
-    cabinetSource,
-    /if \(recordListContainsCabinetIdentity\(gameAny\.allRelatedClientIds, clientId, normalizeCabinetIdentityId\)\) \{\s*return true;\s*\}/,
-  );
-  assert.doesNotMatch(cabinetSource, /if \(!hasLeaveEventForCabinetIdentity\(game, clientId, phone\)\)/);
+test("cabinet game relevance ignores historical identity arrays after leave", () => {
+  assert.doesNotMatch(cabinetSource, /recordListContainsCabinetIdentity\(game\.allRelatedPhones/);
+  assert.doesNotMatch(cabinetSource, /recordListContainsCabinetIdentity\(gameAny\.allRelatedClientIds/);
 });
 
 test("games details invite action is available for any opened live game card with an invite link", () => {

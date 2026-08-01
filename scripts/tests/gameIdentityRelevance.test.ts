@@ -171,16 +171,16 @@ function buildCancelledSplitGameFixture() {
   };
 }
 
-test("cancelled split participant remains relevant after leave event when the game still belongs to the profile", () => {
+test("cancelled split participant is not relevant after leave event", () => {
   const game = buildCancelledSplitGameFixture();
 
   assert.equal(
     buildRelevanceChecker(game, "79629042211", "3cf04c20-2377-4fa8-aed0-55385f301797"),
-    true,
+    false,
   );
 });
 
-test("same split participant still matches when leave events are absent", () => {
+test("historical identity arrays alone never make a former participant relevant", () => {
   const game = buildCancelledSplitGameFixture();
   game.metadata.leaveEvents = [];
   game.allRelatedPhones = ["79264777769", "79629042211"];
@@ -191,7 +191,7 @@ test("same split participant still matches when leave events are absent", () => 
 
   assert.equal(
     buildRelevanceChecker(game, "79629042211", "3cf04c20-2377-4fa8-aed0-55385f301797"),
-    true,
+    false,
   );
 });
 

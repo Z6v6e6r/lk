@@ -1,4 +1,5 @@
 const CACHE_KEY = "lkTournamentParticipantResponseCacheV2";
+const EPOCH_KEY = "lkTournamentParticipantEpochV1";
 const STALE_TTL_MS = 10 * 60_000;
 const MAX_CACHE_ENTRIES = 500;
 const state = flow.get(CACHE_KEY) || { entries: {}, inflight: {} };
@@ -8,10 +9,25 @@ state.inflight = state.inflight || {};
 const key = String(msg.participantCacheKey || "").trim();
 const now = Date.now();
 const statusCode = Number(msg.statusCode) || 200;
+const exerciseId = String(msg.participantCacheExerciseId || "").trim();
+const requestEpoch = Math.max(0, Number(msg.participantCacheEpoch) || 0);
+const epochState = global.get(EPOCH_KEY) || {};
+const currentEpoch = exerciseId ? Math.max(0, Number(epochState[exerciseId]) || 0) : requestEpoch;
 const cached = key ? state.entries[key] : null;
 const cachedAgeMs = cached ? now - Number(cached.at || 0) : Number.POSITIVE_INFINITY;
 
 if (key) delete state.inflight[key];
+
+if (exerciseId && requestEpoch !== currentEpoch) {
+  msg.statusCode = 409;
+  msg.payload = { error: "Participants changed; retry with a fresh read" };
+  msg.headers = {
+    ...(msg.headers || {}),
+    "Retry-After": "0",
+    "x-lk-participants-cache": "epoch-changed",
+  };
+  msg.participantCacheBypassWrite = true;
+}
 
 if (
   key
@@ -20,7 +36,7 @@ if (
   && statusCode < 300
   && Array.isArray(msg.payload)
 ) {
-  state.entries[key] = { at: now, payload: msg.payload };
+  state.entries[key] = { at: now, epoch: requestEpoch, payload: msg.payload };
   const entries = Object.entries(state.entries);
   if (entries.length > MAX_CACHE_ENTRIES) {
     entries

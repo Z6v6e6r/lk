@@ -1,604 +1,327 @@
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
+const END_USER_V1 = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G";
+const END_USER_V2 = "https://api.vivacrm.ru/end-user/api/v2/iSkq6G";
 
-const isOk = (status) => Number(status) >= 200 && Number(status) < 300;
-
+const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
+const asArray = (value) => (Array.isArray(value) ? value : []);
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
-  const text = String(value).trim();
-  return text ? text : null;
+  const normalized = String(value).trim();
+  return normalized || null;
 };
-
-const asArray = (value) => (Array.isArray(value) ? value : []);
-
-const uniq = (values) => {
-  const result = [];
-  const used = new Set();
-  values.forEach((item) => {
-    const normalized = toStr(item);
-    if (!normalized || used.has(normalized)) return;
-    used.add(normalized);
-    result.push(normalized);
-  });
-  return result;
-};
-
-const clone = (value) => {
-  if (!value || typeof value !== "object") return value;
-  return JSON.parse(JSON.stringify(value));
-};
-
-const normalizeId = (value) => {
-  const normalized = toStr(value);
-  return normalized ? normalized.toLowerCase() : null;
-};
-
-const appendTrace = (ctx, entry) => {
-  if (!Array.isArray(ctx.trace)) ctx.trace = [];
-  ctx.trace.push({
-    at: new Date().toISOString(),
-    ...entry,
-  });
-};
-
-const adminRequest = (ctx, method, path, payload) => {
-  msg._splitLeaveCtx = ctx;
-  msg.method = method;
-  msg.url = `${ADMIN_API}${path}`;
-  msg.headers = {
-    Authorization: `Bearer ${ctx.token}`,
-    "Content-Type": "application/json",
-  };
-  msg.payload = payload;
-  return [msg, null, null];
-};
-
-const isAlreadyCancelledResponse = (statusCode, payload) => {
-  if (![400, 409, 422].includes(Number(statusCode))) return false;
-  const text = JSON.stringify(payload || {}).toLowerCase();
-  return (
-    text.includes("already") && text.includes("cancel")
-  ) || text.includes("уже отмен");
-};
-
-const isAvailableOption = (value) => value?.available === true;
-
-const resolveCancellationOptions = (payload) => {
-  const root = payload && typeof payload === "object" ? payload : {};
-  const options = root.cancellationOptions && typeof root.cancellationOptions === "object"
-    ? root.cancellationOptions
-    : {};
-  return {
-    money: isAvailableOption(options.money),
-    deposit: isAvailableOption(options.deposit),
-    subscription: isAvailableOption(options.subscription),
-    cancellationOnly: isAvailableOption(options.cancellationOnly),
-    settlementAccount: isAvailableOption(options.settlementAccount),
-    exercise: isAvailableOption(options.exercise),
-  };
-};
-
-const buildCancelProbe = (ctx, bookingId, clientId) => {
-  const encodedBookingId = encodeURIComponent(bookingId);
-  if (clientId) {
-    return {
-      method: "GET",
-      path: `/clients/${encodeURIComponent(clientId)}/bookings/${encodedBookingId}/cancel`,
-      payload: undefined,
-      label: "client_cancel_probe",
-      scope: "client",
-    };
-  }
-  if (ctx.exerciseId) {
-    return {
-      method: "GET",
-      path: `/exercises/${encodeURIComponent(ctx.exerciseId)}/bookings/${encodedBookingId}/cancel`,
-      payload: undefined,
-      label: "exercise_cancel_probe",
-      scope: "exercise",
-    };
-  }
-  return {
-    unsupportedReason: "Не удалось определить клиента или занятие Viva для отмены",
-    unsupportedCode: "missing_scoped_booking_target",
-  };
-};
-
-const buildCancelRequest = (ctx, bookingId, clientId, options) => {
-  const encodedBookingId = encodeURIComponent(bookingId);
-  const payload = {
-    refundMethod: options.refundMethod,
-    cancelExercise: false,
-  };
-  if (clientId) {
-    return {
-      method: "PUT",
-      path: `/clients/${encodeURIComponent(clientId)}/bookings/${encodedBookingId}/cancel`,
-      payload,
-      label: `client_cancel_${options.label}`,
-      scope: "client",
-      refundMethod: options.refundMethod === "NONE" ? null : options.refundMethod,
-      refundMessage: options.refundMessage || null,
-    };
-  }
-  if (ctx.exerciseId) {
-    return {
-      method: "DELETE",
-      path: `/exercises/${encodeURIComponent(ctx.exerciseId)}/bookings/${encodedBookingId}`,
-      payload,
-      label: `exercise_cancel_${options.label}`,
-      scope: "exercise",
-      refundMethod: options.refundMethod === "NONE" ? null : options.refundMethod,
-      refundMessage: options.refundMessage || null,
-    };
-  }
-  return {
-    unsupportedReason: "Не удалось определить клиента или занятие Viva для отмены",
-    unsupportedCode: "missing_scoped_booking_target",
-  };
-};
-
-const pickCancelRequest = (ctx, bookingId, clientId, payload) => {
-  const options = resolveCancellationOptions(payload);
-  if (options.money) {
-    return buildCancelRequest(ctx, bookingId, clientId, {
-      refundMethod: "CURRENCY",
-      label: "currency",
-    });
-  }
-  if (options.deposit) {
-    return buildCancelRequest(ctx, bookingId, clientId, {
-      refundMethod: "DEPOSIT",
-      label: "deposit",
-    });
-  }
-  if (options.subscription || options.exercise) {
-    return buildCancelRequest(ctx, bookingId, clientId, {
-      refundMethod: "SERVICE",
-      label: "service",
-      refundMessage: "Вернули 1 занятие на абонемент.",
-    });
-  }
-  if (options.cancellationOnly) {
-    return buildCancelRequest(ctx, bookingId, clientId, {
-      refundMethod: "NONE",
-      label: "none",
-      refundMessage: "Запись отменена без возврата средств.",
-    });
-  }
-  if (options.settlementAccount) {
-    return {
-      unsupportedReason: "Viva предлагает возврат только на лицевой счет",
-      unsupportedCode: "unsupported_settlement_account",
-    };
-  }
-  return {
-    unsupportedReason: "Для записи нет поддержанного сценария возврата",
-    unsupportedCode: "unsupported_refund_method",
-  };
-};
-
-const buildClientVerifyRequest = (clientId, bookingId) => ({
-  method: "GET",
-  path: `/clients/${encodeURIComponent(clientId)}/bookings/${encodeURIComponent(bookingId)}`,
-  payload: undefined,
-  label: "verify_client_booking",
-  scope: "client",
-});
-
-const buildExerciseVerifyRequest = (exerciseId) => ({
-  method: "GET",
-  path: `/exercises/${encodeURIComponent(exerciseId)}/bookings?showCancelled=true&page=0&size=200`,
-  payload: undefined,
-  label: "verify_exercise_bookings",
-  scope: "exercise",
-});
-
-const isCancelledBookingRow = (row) => {
-  if (!row || typeof row !== "object") return false;
-  if (row.isCancelled === true || row.cancelled === true) return true;
-  if (toStr(row.cancellationDate || row.cancelledAt)) return true;
-  const status = String(row.bookingStatus || row.status || row.state || "").trim().toUpperCase();
-  return status.includes("CANCEL");
-};
-
-const extractBookingRows = (payload) => {
+const normalizeId = (value) => toStr(value)?.toLowerCase() || null;
+const isOk = (statusCode) => Number(statusCode) >= 200 && Number(statusCode) < 300;
+const responseRows = (payload) => {
   if (Array.isArray(payload)) return payload;
-  if (!payload || typeof payload !== "object") return [];
+  if (!isObj(payload)) return [];
   if (Array.isArray(payload.content)) return payload.content;
   if (Array.isArray(payload.items)) return payload.items;
   if (Array.isArray(payload.data)) return payload.data;
-  if (payload.data && typeof payload.data === "object") {
-    if (Array.isArray(payload.data.content)) return payload.data.content;
-    if (Array.isArray(payload.data.items)) return payload.data.items;
-  }
+  if (isObj(payload.data) && Array.isArray(payload.data.content)) return payload.data.content;
   return [];
 };
-
-const findBookingRow = (payload, bookingId) => {
-  const normalizedBookingId = normalizeId(bookingId);
-  return extractBookingRows(payload).find((row) => (
-    normalizeId(row?.id || row?.bookingId || row?.uuid) === normalizedBookingId
-  )) || null;
+const rowBookingId = (row) => normalizeId(row?.id || row?.bookingId || row?.uuid);
+const rowClientId = (row) => normalizeId(
+  row?.client?.id || row?.clientId || row?.playerId || row?.userId,
+);
+const rowExerciseId = (row) => normalizeId(
+  row?.exercise?.id
+  || row?.exercise?.uuid
+  || row?.exerciseId
+  || row?.vivaExerciseId
+  || row?.timetable?.exerciseId,
+);
+const isCancelled = (row) => {
+  if (!isObj(row)) return false;
+  if (row.isCancelled === true || row.cancelled === true || row.canceled === true) return true;
+  if (toStr(row.cancellationDate || row.cancelledAt || row.canceledAt)) return true;
+  return /CANCEL/.test(String(row.bookingStatus || row.status || row.state || "").toUpperCase());
 };
-
-const normalizeBookingQueueItem = (value, fallbackClientId) => {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return {
-      bookingId: toStr(value.bookingId || value.id || value.uuid),
-      clientId: toStr(value.clientId || value.playerId || value.userId) || fallbackClientId || null,
-    };
-  }
-  return {
-    bookingId: toStr(value),
-    clientId: fallbackClientId || null,
+const appendTrace = (ctx, entry) => {
+  if (!Array.isArray(ctx.trace)) ctx.trace = [];
+  ctx.trace.push({ at: new Date().toISOString(), ...entry });
+  if (ctx.trace.length > 40) ctx.trace = ctx.trace.slice(-40);
+};
+const assignMembershipVersion = (ctx, parts) => {
+  const stableParts = Array.from(new Set(asArray(parts).map(toStr).filter(Boolean))).sort();
+  if (stableParts.length === 0) return false;
+  const hashPart = (value) => {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
   };
+  const membershipSeed = stableParts.join("|");
+  ctx.membershipVersion = `${hashPart(membershipSeed)}${hashPart([...membershipSeed].reverse().join(""))}`;
+  ctx.operationId = `self-leave:${ctx.gameId}:${ctx.actorClientId || ctx.actorPhoneNorm}:${ctx.membershipVersion}`;
+  return true;
 };
-
-const finalize = (ctx) => {
-  const bookingResults = asArray(ctx.bookingResults);
-  const bookingSuccess = bookingResults.filter((item) => item?.ok === true).map((item) => item.bookingId);
-  const bookingFailed = bookingResults.filter((item) => item?.ok !== true).map((item) => item.bookingId);
-  const withVivaErrors = bookingFailed.length > 0;
-  const safeMsg = Object.assign({}, msg);
-  delete safeMsg._splitCleanupAuth;
-  delete safeMsg._splitLeaveCtx;
-  delete safeMsg.method;
-  delete safeMsg.url;
-  safeMsg.statusCode = 200;
-  safeMsg.headers = {
+const upstream = (ctx, method, url, payload) => {
+  msg._splitLeaveCtx = ctx;
+  msg.method = method;
+  msg.url = url;
+  msg.headers = {
+    Authorization: ctx.upstreamAuthHeader,
+    Accept: "application/json",
+    "Content-Type": "application/json",
+  };
+  msg.payload = payload;
+  return [msg, null, null, null, null];
+};
+const fail = (ctx, statusCode, state, message) => {
+  msg.statusCode = statusCode;
+  msg.headers = {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
     "Cache-Control": "no-store",
   };
-  safeMsg.payload = {
-    ok: !withVivaErrors,
-    gameId: ctx.gameId || null,
-    clientId: ctx.clientId || null,
-    playerId: ctx.playerId || null,
-    playerPhone: ctx.playerPhone || null,
-    playerName: ctx.playerName || null,
-    reason: ctx.reason || "PLAYER_LEFT",
-    bookingIds: uniq(ctx.initialBookingIds || []),
-    bookingSuccess,
-    bookingFailed,
-    withVivaErrors,
-    refundMessage: toStr(ctx.refundMessage),
-    trace: clone(ctx.trace || []),
-    finishedAt: new Date().toISOString(),
-  };
-  return [null, safeMsg, safeMsg];
-};
-
-const pushFailureAndContinue = (ctx, failure) => {
-  ctx.bookingResults.push({
-    bookingId: failure.bookingId,
+  msg.payload = {
     ok: false,
-    clientId: failure.clientId || null,
-    method: "scoped_admin_booking",
-    statusCode: failure.statusCode,
-    unsupportedReason: failure.unsupportedReason || null,
-    response: clone(failure.response || null),
-  });
-  ctx.currentBookingId = null;
-  ctx.currentClientId = null;
-  ctx.currentCancelRequest = null;
-  ctx.currentVerifyRequest = null;
-  const next = nextBookingRequest(ctx);
-  return next || finalize(ctx);
-};
-
-const pushSuccessAndContinue = (ctx, result) => {
-  ctx.bookingResults.push({
-    bookingId: result.bookingId,
-    ok: true,
-    clientId: result.clientId || null,
-    method: "scoped_admin_booking",
-    refundMethod: result.refundMethod || null,
-    alreadyCancelled: result.alreadyCancelled === true,
-    statusCode: result.statusCode,
-  });
-  ctx.currentBookingId = null;
-  ctx.currentClientId = null;
-  ctx.currentCancelRequest = null;
-  ctx.currentVerifyRequest = null;
-  const next = nextBookingRequest(ctx);
-  return next || finalize(ctx);
-};
-
-const startVerification = (ctx, bookingId, clientId, meta = {}) => {
-  let request = null;
-  if (clientId) request = buildClientVerifyRequest(clientId, bookingId);
-  else if (ctx.exerciseId) request = buildExerciseVerifyRequest(ctx.exerciseId);
-  if (!request) {
-    appendTrace(ctx, {
-      step: "cancel_booking_unverified",
-      bookingId,
-      clientId: clientId || null,
-      reason: "missing_verification_target",
-    });
-    return pushFailureAndContinue(ctx, {
-      bookingId,
-      clientId,
-      statusCode: meta.statusCode,
-      unsupportedReason: "Cancellation cannot be verified",
-    });
-  }
-  ctx.step = "verify_booking_cancelled";
-  ctx.currentVerifyRequest = {
-    ...request,
-    originStatusCode: meta.statusCode,
-    originAlreadyCancelled: meta.alreadyCancelled === true,
+    state,
+    operationId: ctx.operationId || null,
+    gameId: ctx.gameId || null,
+    message,
   };
-  appendTrace(ctx, {
-    step: "cancel_booking_verify_request",
-    bookingId,
-    clientId: clientId || null,
-    verifyScope: request.scope,
-    attemptLabel: request.label,
-    previousStatusCode: meta.statusCode,
-  });
-  return adminRequest(ctx, request.method, request.path, request.payload);
+  delete msg._splitLeaveCtx;
+  return [null, msg, msg, null, null];
+};
+const toLocalApply = (ctx) => {
+  ctx.step = "local_apply";
+  msg._splitLeaveCtx = ctx;
+  delete msg.method;
+  delete msg.url;
+  delete msg.statusCode;
+  msg.payload = undefined;
+  return [null, null, null, msg, null];
+};
+const toOperationStart = (ctx) => {
+  msg._splitLeaveCtx = ctx;
+  delete msg.method;
+  delete msg.url;
+  delete msg.statusCode;
+  msg.payload = undefined;
+  return [null, null, null, null, msg];
 };
 
-const startCancel = (ctx, bookingId, clientId) => {
-  const probe = buildCancelProbe(ctx, bookingId, clientId);
-  if (!probe || probe.unsupportedReason) {
-    appendTrace(ctx, {
-      step: "cancel_booking_probe_unsupported",
-      bookingId,
-      clientId: clientId || null,
-      unsupportedCode: probe?.unsupportedCode || null,
-    });
-    return pushFailureAndContinue(ctx, {
-      bookingId,
-      clientId,
-      unsupportedReason: probe?.unsupportedReason || "Missing scoped booking target",
-    });
+const resolveOptions = (payload, requestedRefundMethod) => {
+  const options = isObj(payload?.cancellationOptions) ? payload.cancellationOptions : {};
+  const available = {
+    CURRENCY: options.money?.available === true,
+    DEPOSIT: options.deposit?.available === true,
+    SERVICE: options.subscription?.available === true || options.exercise?.available === true,
+    NONE: options.cancellationOnly?.available === true,
+  };
+  const preferred = toStr(requestedRefundMethod)?.toUpperCase() || null;
+  if (preferred) {
+    if (available[preferred] !== true) return null;
+    return {
+      refundMethod: preferred,
+      message: preferred === "SERVICE" ? "Вернули занятие на абонемент." : null,
+    };
   }
+  if (available.CURRENCY) return { refundMethod: "CURRENCY", message: null };
+  if (available.DEPOSIT) return { refundMethod: "DEPOSIT", message: null };
+  if (available.SERVICE) return { refundMethod: "SERVICE", message: "Вернули занятие на абонемент." };
+  if (available.NONE) return { refundMethod: "NONE", message: null };
+  return null;
+};
+const usesEndUser = (ctx) => ctx.mode === "SELF" && ctx.backgroundStartedRecovery !== true;
+const cancelProbeUrl = (ctx, bookingId, clientId) => (
+  usesEndUser(ctx)
+    ? `${END_USER_V1}/bookings/${encodeURIComponent(bookingId)}/cancel`
+    : `${ADMIN_API}/clients/${encodeURIComponent(clientId)}/bookings/${encodeURIComponent(bookingId)}/cancel`
+);
+const cancelUrl = (ctx, bookingId, clientId) => (
+  usesEndUser(ctx)
+    ? `${END_USER_V1}/bookings/${encodeURIComponent(bookingId)}`
+    : `${ADMIN_API}/clients/${encodeURIComponent(clientId)}/bookings/${encodeURIComponent(bookingId)}/cancel`
+);
+const startActiveVerification = (ctx) => {
+  ctx.step = "verify_active";
+  const url = usesEndUser(ctx)
+    ? `${END_USER_V2}/bookings?size=1000`
+    : `${ADMIN_API}/exercises/${encodeURIComponent(ctx.exerciseId)}/bookings?showCancelled=false&page=0&size=200`;
+  appendTrace(ctx, { step: "verify_active_request" });
+  return upstream(ctx, "GET", url, undefined);
+};
+const startNextBooking = (ctx) => {
+  const next = asArray(ctx.bookingQueue).shift();
+  ctx.bookingQueue = asArray(ctx.bookingQueue);
+  if (!next) return startActiveVerification(ctx);
+  const bookingId = toStr(next.bookingId);
+  const clientId = toStr(next.clientId || ctx.targetClientId);
+  if (!bookingId || !clientId) return fail(ctx, 409, "CONFLICT", "Не удалось определить запись Viva");
   ctx.currentBookingId = bookingId;
-  ctx.currentClientId = clientId || null;
-  ctx.currentCancelRequest = null;
+  ctx.currentClientId = clientId;
   ctx.step = "cancel_probe";
-  appendTrace(ctx, {
-    step: "cancel_probe_request",
-    bookingId,
-    clientId: clientId || null,
-    scope: probe.scope,
-    attemptLabel: probe.label,
-  });
-  return adminRequest(ctx, probe.method, probe.path, probe.payload);
+  appendTrace(ctx, { step: "cancel_probe_request", bookingId });
+  return upstream(ctx, "GET", cancelProbeUrl(ctx, bookingId, clientId), undefined);
 };
 
-const nextBookingRequest = (ctx) => {
-  if (!Array.isArray(ctx.bookingQueue) || ctx.bookingQueue.length === 0) return null;
-  const item = normalizeBookingQueueItem(
-    ctx.bookingQueue.shift(),
-    toStr(ctx.clientId || ctx.playerId),
-  );
-  if (!item.bookingId) return nextBookingRequest(ctx);
-  return startCancel(ctx, item.bookingId, item.clientId);
-};
-
-const ctx = msg._splitLeaveCtx && typeof msg._splitLeaveCtx === "object"
-  ? msg._splitLeaveCtx
-  : null;
-
+const ctx = isObj(msg._splitLeaveCtx) ? msg._splitLeaveCtx : null;
 if (!ctx) {
   msg.statusCode = 500;
-  msg.headers = { "Content-Type": "application/json; charset=utf-8" };
-  msg.payload = { ok: false, error: "split leave context missing" };
-  return [null, msg, msg];
+  msg.payload = { ok: false, state: "CONFLICT", message: "split leave context missing" };
+  return [null, msg, msg, null, null];
 }
-
-if (ctx.step === "token_request") {
-  if (!isOk(msg.statusCode) || !msg.payload?.access_token) {
-    appendTrace(ctx, {
-      step: "token_failed",
-      statusCode: msg.statusCode,
-      response: clone(msg.payload || null),
-    });
-    asArray(ctx.bookingQueue).forEach((item) => {
-      const normalized = normalizeBookingQueueItem(item, toStr(ctx.clientId || ctx.playerId));
-      if (!normalized.bookingId) return;
-      ctx.bookingResults.push({
-        bookingId: normalized.bookingId,
-        ok: false,
-        clientId: normalized.clientId,
-        method: "scoped_admin_booking",
-        statusCode: msg.statusCode,
-      });
-    });
-    ctx.bookingQueue = [];
-    return finalize(ctx);
-  }
-  ctx.token = msg.payload.access_token;
-  appendTrace(ctx, { step: "token_success" });
-  return nextBookingRequest(ctx) || finalize(ctx);
-}
+if (ctx.localAlreadyApplied === true || ctx.step === "local_apply") return toLocalApply(ctx);
+if (ctx.step === "start_verify_active") return startActiveVerification(ctx);
+if (ctx.step === "start_cancel") return startNextBooking(ctx);
 
 if (ctx.step === "cancel_probe") {
+  const statusCode = Number(msg.statusCode) || 0;
   const bookingId = toStr(ctx.currentBookingId);
   const clientId = toStr(ctx.currentClientId);
-  const statusCode = Number(msg.statusCode);
-
-  if (isAlreadyCancelledResponse(statusCode, msg.payload) || statusCode === 404) {
-    appendTrace(ctx, {
-      step: statusCode === 404
-        ? "cancel_booking_probe_not_found"
-        : "cancel_booking_already_cancelled",
-      bookingId,
-      clientId,
-      statusCode,
-      response: clone(msg.payload || null),
-    });
-    return startVerification(ctx, bookingId, clientId, {
-      statusCode,
-      alreadyCancelled: statusCode !== 404,
-    });
-  }
   if (!isOk(statusCode)) {
-    appendTrace(ctx, {
-      step: "cancel_booking_probe_failed",
-      bookingId,
-      clientId,
-      statusCode,
-      response: clone(msg.payload || null),
-    });
-    return pushFailureAndContinue(ctx, {
-      bookingId,
-      clientId,
-      statusCode,
-      response: msg.payload || null,
-    });
+    if ([400, 404, 409, 422].includes(statusCode)) {
+      ctx.bookingResults.push({ bookingId, clientId, provisional: "already_absent" });
+      appendTrace(ctx, { step: "cancel_probe_absent", bookingId, statusCode });
+      return startNextBooking(ctx);
+    }
+    return fail(ctx, 422, "VIVA_UNVERIFIED", "Viva не подтвердила сценарий отмены");
   }
-
-  const cancelRequest = pickCancelRequest(ctx, bookingId, clientId, msg.payload || null);
-  if (!cancelRequest || cancelRequest.unsupportedReason) {
-    appendTrace(ctx, {
-      step: "cancel_booking_probe_unsupported",
-      bookingId,
-      clientId,
-      statusCode,
-      unsupportedReason: cancelRequest?.unsupportedReason || null,
-      unsupportedCode: cancelRequest?.unsupportedCode || null,
-    });
-    return pushFailureAndContinue(ctx, {
-      bookingId,
-      clientId,
-      statusCode,
-      unsupportedReason: cancelRequest?.unsupportedReason || "Unsupported refund path",
-    });
-  }
-
-  ctx.currentCancelRequest = cancelRequest;
+  const selected = resolveOptions(msg.payload, ctx.requestedRefundMethod);
+  if (!selected) return fail(ctx, 409, "CONFLICT", "Для записи нет поддержанного сценария возврата");
+  ctx.currentRefundMethod = selected.refundMethod;
+  if (selected.message) ctx.refundMessage = selected.message;
   ctx.step = "cancel_booking";
-  if (cancelRequest.refundMessage && !ctx.refundMessage) {
-    ctx.refundMessage = cancelRequest.refundMessage;
-  }
-  appendTrace(ctx, {
-    step: "cancel_booking_request",
-    bookingId,
-    clientId,
-    scope: cancelRequest.scope,
-    attemptLabel: cancelRequest.label,
-    refundMethod: cancelRequest.refundMethod || null,
-  });
-  return adminRequest(ctx, cancelRequest.method, cancelRequest.path, cancelRequest.payload);
+  const payload = usesEndUser(ctx)
+    ? ((selected.refundMethod === "SERVICE" || selected.refundMethod === "NONE")
+      ? {}
+      : { refundMethod: selected.refundMethod })
+    : { refundMethod: selected.refundMethod, cancelExercise: false };
+  appendTrace(ctx, { step: "cancel_request", bookingId, refundMethod: selected.refundMethod });
+  return upstream(
+    ctx,
+    usesEndUser(ctx) ? "DELETE" : "PUT",
+    cancelUrl(ctx, bookingId, clientId),
+    payload,
+  );
 }
 
 if (ctx.step === "cancel_booking") {
+  const statusCode = Number(msg.statusCode) || 0;
   const bookingId = toStr(ctx.currentBookingId);
   const clientId = toStr(ctx.currentClientId);
-  const statusCode = Number(msg.statusCode);
-  const cancelRequest = ctx.currentCancelRequest && typeof ctx.currentCancelRequest === "object"
-    ? ctx.currentCancelRequest
-    : null;
-  if (isOk(statusCode) || isAlreadyCancelledResponse(statusCode, msg.payload) || statusCode === 404) {
-    appendTrace(ctx, {
-      step: isOk(statusCode)
-        ? "cancel_booking_success"
-        : (statusCode === 404 ? "cancel_booking_not_found" : "cancel_booking_already_cancelled"),
-      bookingId,
-      clientId,
-      statusCode,
-      refundMethod: cancelRequest?.refundMethod || null,
-      response: isOk(statusCode) ? undefined : clone(msg.payload || null),
-    });
-    return startVerification(ctx, bookingId, clientId, {
-      statusCode,
-      alreadyCancelled: !isOk(statusCode) && statusCode !== 404,
-    });
+  if (!isOk(statusCode) && ![400, 404, 409, 422].includes(statusCode)) {
+    return fail(ctx, 422, "VIVA_UNVERIFIED", "Viva не подтвердила отмену записи");
   }
-  appendTrace(ctx, {
-    step: "cancel_booking_failed",
+  ctx.bookingResults.push({
     bookingId,
     clientId,
-    statusCode,
-    refundMethod: cancelRequest?.refundMethod || null,
-    response: clone(msg.payload || null),
+    provisional: isOk(statusCode) ? "cancel_requested" : "already_absent",
+    refundMethod: ctx.currentRefundMethod || null,
   });
-  return pushFailureAndContinue(ctx, {
-    bookingId,
-    clientId,
-    statusCode,
-    response: msg.payload || null,
-  });
+  appendTrace(ctx, { step: "cancel_response", bookingId, statusCode });
+  ctx.currentBookingId = null;
+  ctx.currentClientId = null;
+  ctx.currentRefundMethod = null;
+  return startNextBooking(ctx);
 }
 
-if (ctx.step === "verify_booking_cancelled") {
-  const bookingId = toStr(ctx.currentBookingId);
-  const clientId = toStr(ctx.currentClientId);
-  const statusCode = Number(msg.statusCode);
-  const verifyRequest = ctx.currentVerifyRequest && typeof ctx.currentVerifyRequest === "object"
-    ? ctx.currentVerifyRequest
-    : null;
-  const verifyScope = toStr(verifyRequest?.scope);
-  const cancelRequest = ctx.currentCancelRequest && typeof ctx.currentCancelRequest === "object"
-    ? ctx.currentCancelRequest
-    : null;
-
-  if (statusCode === 404 && verifyScope === "client" && ctx.exerciseId) {
-    const historyRequest = buildExerciseVerifyRequest(ctx.exerciseId);
-    ctx.currentVerifyRequest = {
-      ...historyRequest,
-      originStatusCode: verifyRequest?.originStatusCode,
-      originAlreadyCancelled: verifyRequest?.originAlreadyCancelled === true,
-    };
-    appendTrace(ctx, {
-      step: "cancel_booking_verify_history_request",
-      bookingId,
-      clientId,
-      exerciseId: ctx.exerciseId,
-    });
-    return adminRequest(ctx, historyRequest.method, historyRequest.path, historyRequest.payload);
+if (ctx.step === "verify_active") {
+  if (!isOk(msg.statusCode)) return fail(ctx, 422, "VIVA_UNVERIFIED", "Не удалось проверить активные записи Viva");
+  const activeRows = responseRows(msg.payload).filter((row) => !isCancelled(row));
+  const bookingIds = new Set(asArray(ctx.initialBookingIds).map(normalizeId).filter(Boolean));
+  const targetClientId = normalizeId(ctx.targetClientId);
+  const exerciseId = normalizeId(ctx.exerciseId);
+  if (ctx.mode === "SELF" && bookingIds.size === 0) {
+    const exactExerciseRows = activeRows.filter((row) => (
+      ctx.backgroundStartedRecovery === true
+        ? Boolean(targetClientId && rowClientId(row) === targetClientId)
+        : Boolean(exerciseId && rowExerciseId(row) === exerciseId)
+    ));
+    const missingBookingId = exactExerciseRows.some((row) => !rowBookingId(row));
+    if (missingBookingId) {
+      return fail(ctx, 422, "VIVA_UNVERIFIED", "Активная запись Viva найдена без идентификатора");
+    }
+    const discoveredBookingIds = Array.from(new Set(
+      exactExerciseRows.map((row) => toStr(row?.id || row?.bookingId || row?.uuid)).filter(Boolean),
+    ));
+    if (discoveredBookingIds.length > 0) {
+      ctx.initialBookingIds = discoveredBookingIds;
+      ctx.bookingQueue = discoveredBookingIds.map((bookingId) => ({
+        bookingId,
+        clientId: ctx.targetClientId,
+      }));
+      ctx.discoveredBookingIds = discoveredBookingIds;
+      ctx.vivaTargetMode = "BOOKINGS";
+      if (!ctx.membershipVersion && !assignMembershipVersion(ctx, discoveredBookingIds)) {
+        return fail(ctx, 409, "CONFLICT", "Не удалось зафиксировать поколение записи");
+      }
+      ctx.preCancelVerification = false;
+      ctx.step = "start_cancel";
+      appendTrace(ctx, { step: "booking_ids_discovered", count: discoveredBookingIds.length });
+      if (ctx.preOperationDiscovery === true) {
+        ctx.preOperationDiscovery = false;
+        return toOperationStart(ctx);
+      }
+      return startNextBooking(ctx);
+    }
+    ctx.localOnlyNoBooking = true;
+    ctx.successMessage = "Вы вышли из игры";
+    ctx.vivaVerification = "no_active_booking_for_exercise";
   }
-
-  let verifiedCancelled = false;
-  let activeBooking = false;
-  if (isOk(statusCode) && verifyScope === "client") {
-    verifiedCancelled = isCancelledBookingRow(msg.payload);
-    activeBooking = !verifiedCancelled;
-  } else if (isOk(statusCode) && verifyScope === "exercise") {
-    const row = findBookingRow(msg.payload, bookingId);
-    verifiedCancelled = Boolean(row && isCancelledBookingRow(row));
-    activeBooking = Boolean(row && !verifiedCancelled);
+  const stillActive = activeRows.some((row) => (
+    !isCancelled(row)
+    && (
+      bookingIds.has(rowBookingId(row))
+      || (ctx.mode !== "SELF" && targetClientId && rowClientId(row) === targetClientId)
+    )
+  ));
+  if (stillActive && ctx.preCancelVerification === true) {
+    ctx.preCancelVerification = false;
+    ctx.step = "start_cancel";
+    return startNextBooking(ctx);
   }
-
-  if (verifiedCancelled) {
-    appendTrace(ctx, {
-      step: "cancel_booking_verified_cancelled",
-      bookingId,
-      clientId,
-      verifyScope,
-      statusCode,
-    });
-    return pushSuccessAndContinue(ctx, {
-      bookingId,
-      clientId,
-      refundMethod: cancelRequest?.refundMethod || null,
-      alreadyCancelled: verifyRequest?.originAlreadyCancelled === true,
-      statusCode,
-    });
-  }
-
-  appendTrace(ctx, {
-    step: activeBooking ? "cancel_booking_still_active" : "cancel_booking_unverified",
-    bookingId,
-    clientId,
-    verifyScope,
-    statusCode,
-    response: clone(msg.payload || null),
-  });
-  return pushFailureAndContinue(ctx, {
-    bookingId,
-    clientId,
-    statusCode,
-    response: msg.payload || null,
-  });
+  if (stillActive) return fail(ctx, 422, "VIVA_UNVERIFIED", "Viva всё ещё держит запись активной");
+  ctx.step = "verify_history";
+  const url = usesEndUser(ctx)
+    ? `${END_USER_V2}/bookings/history?includeCanceled=true&size=1000`
+    : `${ADMIN_API}/exercises/${encodeURIComponent(ctx.exerciseId)}/bookings?showCancelled=true&page=0&size=200`;
+  appendTrace(ctx, { step: "verify_history_request" });
+  return upstream(ctx, "GET", url, undefined);
 }
 
-appendTrace(ctx, {
-  step: "unknown_step",
-  currentStep: ctx.step,
-});
-return finalize(ctx);
+if (ctx.step === "verify_history") {
+  if (!isOk(msg.statusCode)) return fail(ctx, 422, "VIVA_UNVERIFIED", "Не удалось проверить историю записей Viva");
+  const rows = responseRows(msg.payload);
+  if (ctx.localOnlyNoBooking === true && asArray(ctx.initialBookingIds).length === 0) {
+    const exerciseId = normalizeId(ctx.exerciseId);
+    const exactHistoryRows = rows.filter((row) => exerciseId && rowExerciseId(row) === exerciseId);
+    if (exactHistoryRows.some((row) => !isCancelled(row))) {
+      return fail(ctx, 422, "VIVA_UNVERIFIED", "Запись Viva появилась во время проверки");
+    }
+    ctx.discoveredHistoryBookingIds = Array.from(new Set(
+      exactHistoryRows.map((row) => toStr(row?.id || row?.bookingId || row?.uuid)).filter(Boolean),
+    ));
+    ctx.preCancelVerification = false;
+    ctx.vivaVerifiedAt = new Date().toISOString();
+    ctx.vivaVerification = "no_active_booking_for_exercise";
+    ctx.successMessage = "Вы вышли из игры";
+    appendTrace(ctx, { step: "viva_verified_no_active_booking" });
+    if (!ctx.membershipVersion) {
+      return fail(ctx, 409, "CONFLICT", "Не удалось зафиксировать поколение записи");
+    }
+    ctx.vivaTargetMode = "NONE";
+    if (ctx.preOperationDiscovery === true) {
+      ctx.preOperationDiscovery = false;
+      return toOperationStart(ctx);
+    }
+    return toLocalApply(ctx);
+  }
+  const missing = asArray(ctx.initialBookingIds).filter((bookingId) => {
+    const row = rows.find((item) => rowBookingId(item) === normalizeId(bookingId));
+    return !row || !isCancelled(row);
+  });
+  if (missing.length > 0) return fail(ctx, 422, "VIVA_UNVERIFIED", "Отмена записи не подтверждена историей Viva");
+  ctx.preCancelVerification = false;
+  ctx.vivaVerifiedAt = new Date().toISOString();
+  ctx.vivaVerification = "active_absent_history_cancelled";
+  appendTrace(ctx, { step: "viva_verified" });
+  return toLocalApply(ctx);
+}
+
+return fail(ctx, 409, "CONFLICT", "Неизвестное состояние операции");
