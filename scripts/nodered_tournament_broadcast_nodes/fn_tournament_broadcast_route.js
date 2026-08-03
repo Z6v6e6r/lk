@@ -61,20 +61,33 @@ if (!context.hasHostingAccess && (!organizerId || organizerId !== context.profil
   return respond(403, "TOURNAMENT_BROADCAST_FORBIDDEN", "Нет доступа к трансляции этого турнира");
 }
 
-const storedStationId = toStr(
+const savedBroadcast = isObj(tournament.params?.broadcast) ? tournament.params.broadcast : {};
+const savedBroadcastStationId = toStr(savedBroadcast.stationId);
+const tournamentStationId = toStr(
   tournament.params?.stationId
-  || tournament.params?.broadcast?.stationId
   || tournament.stationId
   || tournament.studioId
   || tournament.studio?.id,
 );
-if (storedStationId && context.requestedStationId && storedStationId !== context.requestedStationId) {
+const isSyntheticStationId = (value) => /^local-studio:/i.test(toStr(value) || "");
+const requestedStationId = toStr(context.requestedStationId);
+const currentStationId = isSyntheticStationId(tournamentStationId) ? null : tournamentStationId;
+const requestedCurrentStationId = isSyntheticStationId(requestedStationId) ? null : requestedStationId;
+const useSavedBroadcastStation = context.action !== "start" && Boolean(savedBroadcastStationId);
+const storedStationId = useSavedBroadcastStation
+  ? savedBroadcastStationId
+  : currentStationId || requestedCurrentStationId || savedBroadcastStationId || tournamentStationId || requestedStationId;
+if (
+  !useSavedBroadcastStation
+  && currentStationId
+  && requestedCurrentStationId
+  && currentStationId !== requestedCurrentStationId
+) {
   return respond(409, "TOURNAMENT_STATION_MISMATCH", "Турнир привязан к другой станции");
 }
-const stationId = storedStationId || context.requestedStationId;
+const stationId = storedStationId;
 if (!stationId) return respond(409, "TOURNAMENT_STATION_MISSING", "Для турнира не указана станция");
 
-const savedBroadcast = isObj(tournament.params?.broadcast) ? tournament.params.broadcast : {};
 if (context.action === "status") {
   msg.statusCode = 200;
   msg.headers = {
