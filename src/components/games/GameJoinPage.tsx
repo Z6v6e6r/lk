@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   apiCreatePadelSplitParticipantPayment,
-  apiFetchBookings,
   apiFetchSubscriptionDailyLimitBookings,
   apiLeavePadelGameAsCurrentUser,
   apiFetchPadelGameRecord,
