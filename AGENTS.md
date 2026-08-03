@@ -92,6 +92,20 @@ For focused areas also read:
 - Do not amend commits unless explicitly requested.
 - Final reports must list changed files, checks run, and residual risks.
 
+## Mandatory Staged Delivery Workflow
+
+Every task uses the following stage gates. Approval of one stage never authorizes a later stage.
+
+1. **Implement and verify in isolation.** Identify the base `origin/main` SHA, use a focused branch/worktree, preserve all pre-existing dirty changes, implement only the requested scope, run relevant frontend/Node-RED tests and builds, and create a focused checkpoint commit in the task branch. Do not merge, push, or deploy.
+2. **User verification.** Provide the runnable URL/state, changed-file summary, checks, checkpoint SHA, and limitations. The user verifies the result. Corrections stay in the same task branch and get a new checkpoint commit.
+3. **Integrate into `main`.** Only after explicit approval, refresh `origin/main`, inspect the final diff, integrate only the approved task branch into local `main`, and rerun proportionate checks. Do not push or deploy.
+4. **Push `main`.** Only after separate explicit approval, show the outgoing commits, push local `main`, confirm the remote SHA, and check required CI. Do not deploy.
+5. **Deploy and post-check.** Only after another explicit approval, deploy artifacts built from the confirmed pushed SHA to the user-approved topology. Verification is part of the deploy stage: compare local/remote/public release manifests and touched bundle hashes, and test the affected UI/API/Node-RED/data path. Never deploy a dirty working tree or patch production files manually.
+
+At the end of every completed stage, stop, report evidence, and ask exactly one direct transition question: `Приступать к следующему этапу: <название этапа>?` Do not start it until the user explicitly agrees. Never infer permission for integration, `main` push, deploy, live data mutation, or rollback from an earlier approval.
+
+If a stage fails or is blocked, remain in that stage, report the blocker, and ask for direction. A post-deploy fix starts in a focused task/hotfix branch and follows the same gates.
+
 ## Agent Roles
 
 ### 1. Architect / Planner
