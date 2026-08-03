@@ -272,10 +272,10 @@ if (patchRoutes[0].url !== "/lk/games/:gameId" || patchRoutes[1].url !== "/lk/ga
   fail("PATCH route contract mismatch");
 }
 const patchMongo = exactNode(flow, ids.patchMongo, "mongodb4");
-const patchResponse = exactNode(flow, ids.patchResponse, "http response");
-const patchDebug = exactNode(flow, ids.patchDebug, "debug");
-const patchAutojoin = exactNode(flow, ids.patchAutojoin, "mongodb4");
-const chatListFindMessages = exactNode(flow, ids.chatListFindMessages, "mongodb4");
+exactNode(flow, ids.patchResponse, "http response");
+exactNode(flow, ids.patchDebug, "debug");
+exactNode(flow, ids.patchAutojoin, "mongodb4");
+exactNode(flow, ids.chatListFindMessages, "mongodb4");
 const chatListResponse = exactNode(flow, ids.chatListResponse, "http response");
 const chatListDebug = exactNode(flow, ids.chatListDebug, "debug");
 
@@ -309,7 +309,7 @@ if (patchCasEnabled) {
 
 const functionTemplate = router;
 const gameMongoTemplate = exactNode(flow, "591234d213742276", "mongodb4");
-const chatMongoTemplate = exactNode(flow, "d323b4a2bc150c16", "mongodb4");
+exactNode(flow, "d323b4a2bc150c16", "mongodb4");
 const findMongoTemplate = exactNode(flow, ids.gameFind, "mongodb4");
 const profileHttpTemplate = exactNode(flow, ids.profileHttp, "http request");
 const operationUpdate = (id, name, wires, x, y) => ({
