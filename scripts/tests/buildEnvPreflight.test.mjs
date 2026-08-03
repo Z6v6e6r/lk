@@ -55,6 +55,36 @@ test("accepts a bundle containing configured API routes", () => {
   );
 });
 
+test("rejects the production root bundle when embedded module URLs are absent", () => {
+  const errors = validateBundleRuntimeConfig(
+    'const communities=void 0; host({src:communities,globalName:"LKWidgetCommunities"})',
+    "bundle.js",
+  );
+
+  assert.match(errors.join("\n"), /bundle\.js is missing required runtime marker/);
+  assert.match(errors.join("\n"), /lk-runtime-config-v1:prod/);
+});
+
+test("accepts root bundles carrying every channel runtime marker", () => {
+  const runtimeAuditFields = [
+    "communitiesBundleUrl",
+    "levelsInfoBundleUrl",
+    "onboardingBundleUrl",
+    "pushRegistrationUrl",
+    "keycloakBase",
+    "serv2Fallback",
+  ].join(";");
+
+  assert.deepEqual(
+    validateBundleRuntimeConfig(`lk-runtime-config-v1:prod;${runtimeAuditFields}`, "bundle.js"),
+    [],
+  );
+  assert.deepEqual(
+    validateBundleRuntimeConfig(`lk-runtime-config-v1:dev;${runtimeAuditFields}`, "bundle-dev.js"),
+    [],
+  );
+});
+
 test("maps every release manifest to the artifacts it publishes", () => {
   assert.deepEqual(releaseArtifactNames("release.json"), [
     "bundle.js",

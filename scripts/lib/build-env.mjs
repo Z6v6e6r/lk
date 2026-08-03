@@ -3,6 +3,8 @@ export const REQUIRED_BUILD_ENV_KEYS = [
   "VITE_KEYCLOAK_BASE",
   "VITE_TENANT_KEY",
   "VITE_SERV2",
+  "VITE_SERV2_FALLBACK",
+  "VITE_SUPPORT_API_BASE",
   "VITE_SUCCESS_URL",
   "VITE_FAIL_URL",
   "VITE_GAMES_BUNDLE_URL",
@@ -11,6 +13,9 @@ export const REQUIRED_BUILD_ENV_KEYS = [
   "VITE_LEVELS_INFO_BUNDLE_URL",
   "VITE_COMMUNITIES_BUNDLE_URL",
   "VITE_CABINET_URL",
+  "VITE_LK_ASSET_FALLBACK_BASE_URLS",
+  "VITE_PUSH_REGISTRATION_URL",
+  "VITE_PUSH_UNREGISTRATION_URL",
 ];
 
 const PROD_RELEASE_ARTIFACTS = [
@@ -34,6 +39,20 @@ const DEV_RELEASE_ARTIFACTS = PROD_RELEASE_ARTIFACTS.map((fileName) =>
 const URL_BUILD_ENV_KEYS = REQUIRED_BUILD_ENV_KEYS.filter(
   (key) => key !== "VITE_TENANT_KEY",
 );
+
+const ROOT_BUNDLE_RUNTIME_AUDIT_FIELDS = [
+  "communitiesBundleUrl",
+  "levelsInfoBundleUrl",
+  "onboardingBundleUrl",
+  "pushRegistrationUrl",
+  "keycloakBase",
+  "serv2Fallback",
+];
+
+const ROOT_BUNDLE_RUNTIME_MARKERS = {
+  "bundle.js": ["lk-runtime-config-v1:prod", ...ROOT_BUNDLE_RUNTIME_AUDIT_FIELDS],
+  "bundle-dev.js": ["lk-runtime-config-v1:dev", ...ROOT_BUNDLE_RUNTIME_AUDIT_FIELDS],
+};
 
 export function validateBuildEnv(env) {
   const errors = [];
@@ -62,7 +81,7 @@ export function validateBuildEnv(env) {
   return errors;
 }
 
-export function validateBundleRuntimeConfig(source) {
+export function validateBundleRuntimeConfig(source, artifactName = "") {
   const errors = [];
   const invalidPatterns = [
     ["undefined/end-user", "contains an undefined API base or tenant path"],
@@ -73,6 +92,13 @@ export function validateBundleRuntimeConfig(source) {
 
   for (const [pattern, message] of invalidPatterns) {
     if (source.includes(pattern)) errors.push(message);
+  }
+
+  const requiredMarkers = ROOT_BUNDLE_RUNTIME_MARKERS[artifactName] ?? [];
+  for (const marker of requiredMarkers) {
+    if (!source.includes(marker)) {
+      errors.push(`${artifactName} is missing required runtime marker ${marker}`);
+    }
   }
 
   return [...new Set(errors)];

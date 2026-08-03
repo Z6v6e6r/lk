@@ -7332,8 +7332,11 @@ export async function apiCreateSupportDialogEvent(payload: SupportDialogEventPay
         phone,
         primaryPhone: phone,
         text,
+        kind: "TEXT",
         connector,
         channel: (payload.channel || "WEB").trim().toUpperCase(),
+        ...(stationId ? { stationId, selectedStationId: stationId } : {}),
+        ...(stationName ? { stationName, selectedStationName: stationName } : {}),
       };
 
   const response = await requestSupportWithFallback<unknown>(`/support/dialogs/events`, {

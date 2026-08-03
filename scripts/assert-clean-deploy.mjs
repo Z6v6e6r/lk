@@ -72,7 +72,7 @@ for (const manifestArg of manifestArgs) {
       process.exit(1);
     }
 
-    const artifactErrors = validateBundleRuntimeConfig(artifactSource);
+    const artifactErrors = validateBundleRuntimeConfig(artifactSource, artifactName);
     if (artifactErrors.length > 0) {
       console.error(`Deploy blocked by ${artifactName}:`);
       for (const error of artifactErrors) {

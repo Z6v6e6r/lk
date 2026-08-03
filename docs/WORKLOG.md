@@ -1019,3 +1019,9 @@
 - Precheck объединяет активные записи и историю Viva и завершается fail-closed при недоступности одного из источников. Во всех create/join, `/group` и tournament entrypoint используется фактический `clientSubscriptionId`.
 - Production rollout выполнен точечно из exact live commit `814620bdad2ae8cc0882eab2becfab83dfdbd52c`: опубликованы `bundle.js`, `games.js`, `tournament-signup.js`, `group-schedule.js` и `release.json`; Node-RED не менялся. Backup: `/var/www/html/lk/.codex-backups/subscription-daily-limit-20260731T124252Z/`; release `20260731T124111Z`.
 - Remote/public SHA совпали; browser postcheck `/lk_new`, `/group`, `/tournaments` и `/game_create` подтвердил загрузку новых бандлов и рабочий рендер. Фактическую вторую запись не создавали.
+
+# 2026-08-03 — Восстановление runtime-конфигурации основного ЛК
+
+- Production release `20260801T094351Z` и последующие были собраны без части `VITE_*`: в корневом `bundle.js` отсутствовали адреса communities, levels-info, onboarding, push registration, Keycloak и SERV2. Browser postcheck подтвердил отсутствие сообществ и предупреждение `Overlay module URL is not configured` при открытии информации об уровнях; backend `/lk/communities?view=summary` и отдельные overlay-бандлы оставались доступны.
+- В чистой ветке от `origin/main` добавлены channel-aware fallback-адреса для критичных runtime endpoints и overlay-модулей. Root bundle публикует безопасный audit-снимок конфигурации и обязательный channel marker; release preflight блокирует root artifact без этого маркера. Список обязательных build env расширен SERV2 fallback, support, asset fallback и push endpoints.
+- В исходники возвращён support-event hotfix, который присутствовал только в вручную исправленном production bundle: fallback payload передаёт `kind=TEXT` и canonical selected-station fields. Добавлены focused regression tests. Production не изменялся; полный merge боковой ветки отклонён как небезопасный из-за широкого конфликтного diff.

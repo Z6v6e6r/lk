@@ -53,6 +53,7 @@
     "lint": "eslint .",
     "test:release-provenance": "node --test scripts/tests/releaseProvenance.test.mjs",
     "test:build-env": "node --test scripts/tests/buildEnvPreflight.test.mjs",
+    "test:runtime-config": "node --experimental-strip-types --test scripts/tests/overlayBundleUrl.test.ts scripts/tests/supportEventPayload.apiClient.test.ts",
     "test:recovery-audits": "node --test scripts/tests/recoveryAuditTools.test.mjs",
     "test:tournament-category": "node --experimental-strip-types --test scripts/tests/tournamentCategory.test.ts",
     "test:mexicano-classic": "node --experimental-strip-types --test scripts/tests/mexicanoClassic.test.ts scripts/tests/mexicanoRecoveryIntegration.test.ts",
