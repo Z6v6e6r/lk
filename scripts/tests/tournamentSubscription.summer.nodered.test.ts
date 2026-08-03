@@ -227,7 +227,7 @@ test("summer subscription purchase-prepare binds buttons to Leto Padel products"
   ];
 
   for (const expected of cases) {
-    const out = runNodeRedFunction(
+    const out = withFixedNow("2026-07-10T06:59:00.000Z", () => runNodeRedFunction(
       "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
       {
         payload: {
@@ -237,7 +237,7 @@ test("summer subscription purchase-prepare binds buttons to Leto Padel products"
         },
         req: { query: {} },
       },
-    ) as unknown[];
+    )) as unknown[];
 
     const dbMsg = asRecord(out[0]);
     const ctx = asRecord(dbMsg._summerSubscriptionCtx);
@@ -1383,8 +1383,8 @@ test("summer subscription counter refresh builds materialized counter updates", 
   assert.equal(sportSet.remainingCount, 131);
 });
 
-test("summer subscription launch counters ignore legacy manual paid baselines", () => {
-  const prepareOut = runNodeRedFunction(
+test("summer subscription materialized counters ignore legacy manual paid baselines", () => {
+  const prepareOut = withFixedNow("2026-06-01T10:00:00.000Z", () => runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_counter_refresh_prepare.js",
     { payload: Date.now() },
     {
@@ -1392,7 +1392,7 @@ test("summer subscription launch counters ignore legacy manual paid baselines", 
       summer_subscription_ra_manual_paid_count: 27,
       summer_subscription_sport_manual_paid_count: 38,
     },
-  ) as Record<string, unknown>;
+  )) as Record<string, unknown>;
 
   const preparedMsg = asRecord(prepareOut);
   const refreshCtx = asRecord(preparedMsg._summerSubscriptionCtx);

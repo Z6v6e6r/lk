@@ -1040,6 +1040,6 @@
 
 # 2026-08-03 — Перенос prod-only коммитов в runtime recovery
 
-- Классифицированы diverged commits боковой production-ветки: `be097ca` перекрыт более новой subscription-реализацией в `main`, `812d1d8` перекрыт общим runtime overlay fallback из `7b31907`; повторный перенос обоих исключён как регрессивный.
+- Классифицированы diverged commits боковой production-ветки: `be097ca` перекрыт более новой subscription-реализацией в `main`, `812d1d8` — общим runtime overlay fallback из `7b31907`; пробный replay `be097ca` не дал функционального diff, а два найденных падения устранены фиксацией времени в недетерминированных regression tests.
 - Последовательно перенесены rating worker, split occupancy, cancellation context, cancellation consistency и phase-two CAS. При конфликтах сохранены subscription daily-limit precheck и runtime-config guards из recovery-base; split leave переведён на Bearer/profile auth без старого password-grant пути.
 - Focused suites подтвердили rating/result/community, occupancy/cancellation, durable leave/chat/CAS и phase-two builder. Fresh live flow `ffe60203...` read-only воспроизвёл phase-two candidate `28611b28...`: `4667 -> 4673` nodes, `203` routes, deploy не выполнялся.
