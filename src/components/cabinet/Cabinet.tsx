@@ -7,8 +7,6 @@ import {
   apiFetchProfile,
   apiFetchBookings,
   apiFetchExerciseById,
-  apiFetchExercisesByDate,
-  apiFetchExercisesByVisibleDate,
   apiFetchSubscriptioName,
   apiFetchSubscriptions,
   apiFetchPadelChatsByPhone,
@@ -30,7 +28,6 @@ import type {
   PadelGameRecord,
   PadelGamePlayer,
   TournamentHistoryRecord,
-  Exercise,
 } from "../../utils/apiClient";
 import type { OpenGamesOptions } from "../../types/gamesOverlay";
 import type { OpenLevelsInfoOptions } from "../../types/levelsInfoOverlay";
@@ -85,12 +82,6 @@ import {
 import { shareOrCopyGameInvitePayload } from "../../utils/gameInviteClipboard";
 import { addGameToCalendar } from "../../utils/calendarEvent";
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
-import { apiFetchTournamentMechanicsSourceList } from "../../utils/tournamentSignupApi";
-import {
-  buildTournamentMechanicsFallbackExercises,
-  getTournamentMechanicsExerciseDateKey,
-  mergeTournamentMechanicsExercises,
-} from "../../utils/tournamentMechanicsExercises";
 import {
   buildReferralSubscriptionUrl,
   hydrateReferralSubscriptionsWithNames,
@@ -137,9 +128,6 @@ const COMMUNITY_JOIN_PATH =
 const INVITE_JOIN_PATH = PUBLIC_INVITE_PATH;
 const CHAT_READ_STORAGE_KEY_PREFIX = "padlhub.chat.lastRead.v1";
 const RATING_LABELS = ["D", "D+", "C", "C+", "B", "B+", "A"];
-const TOURNAMENT_LOOKBACK_DAYS = 7;
-const TOURNAMENT_LOOKAHEAD_DAYS = 14;
-const DEV_TOURNAMENT_SCAN_DELAY_MS = 3000;
 const ACTIVE_RESULT_WINDOW_LIMIT = 20;
 const RESULT_ENTRY_GRACE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const GAME_REMOVED_STATUS_MARKERS = ["CANCEL", "DELETE", "REMOV", "ARCHIV", "VOID", "MISSING", "NOT_FOUND"] as const;
@@ -1547,47 +1535,6 @@ function isTournamentBookingCandidate(booking: Booking): boolean {
   );
 }
 
-function isTournamentExercise(exercise: Booking["exercise"] | null | undefined): boolean {
-  if (!exercise) return false;
-
-  const combinedName = `${exercise.direction?.name || ""} ${exercise.type?.name || ""}`
-    .trim()
-    .toLowerCase();
-
-  if (isTournamentExerciseCategory(exercise)) {
-    return true;
-  }
-
-  return (
-    combinedName.includes("турнир")
-    || combinedName.includes("tournament")
-    || combinedName.includes("американо")
-    || combinedName.includes("americano")
-    || combinedName.includes("мексикано")
-    || combinedName.includes("mexicano")
-    || combinedName.includes("round robin")
-    || combinedName.includes("олимп")
-  );
-}
-
-function formatTournamentDateKey(value: Date) {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function addDays(value: Date, amount: number) {
-  const next = new Date(value);
-  next.setDate(next.getDate() + amount);
-  return next;
-}
-
-function isTournamentTrainer(exercise: Booking["exercise"], currentUserId: string | null) {
-  if (!exercise || !currentUserId) return false;
-  return (exercise.trainers ?? []).some((trainer) => (trainer.id || "").trim() === currentUserId);
-}
-
 function getChatReadStorageKey(phoneNorm: string): string {
   return `${CHAT_READ_STORAGE_KEY_PREFIX}.${phoneNorm}`;
 }
@@ -1653,7 +1600,6 @@ export function Cabinet({
   const [activeGameRecordsTotal, setActiveGameRecordsTotal] = useState(0);
   const [hasLoadedAllActiveRecords, setHasLoadedAllActiveRecords] = useState(false);
   const [loadingMoreActiveRecords, setLoadingMoreActiveRecords] = useState(false);
-  const [hasAssignedTournamentAccess, setHasAssignedTournamentAccess] = useState(false);
   const [customTournaments, setCustomTournaments] = useState<TournamentHistoryRecord[]>([]);
   const [selectedTournamentBooking, setSelectedTournamentBooking] = useState<Booking | null>(null);
   const [copiedGameInviteId, setCopiedGameInviteId] = useState<string | null>(null);
@@ -1970,93 +1916,6 @@ export function Cabinet({
         levelNumeric: numericLevelValue ?? null,
       });
     }
-  }, [profile]);
-
-  useEffect(() => {
-    if (!profile?.id) {
-      setHasAssignedTournamentAccess(false);
-      return;
-    }
-    if (hasTournamentHostingAccess(profile)) {
-      setHasAssignedTournamentAccess(false);
-      return;
-    }
-
-    let cancelled = false;
-    let timeoutId: number | null = null;
-
-    const loadAssignedTournamentAccess = async () => {
-      const today = new Date();
-      const todayKey = formatTournamentDateKey(today);
-      const dateKeys = Array.from(
-        { length: TOURNAMENT_LOOKBACK_DAYS + TOURNAMENT_LOOKAHEAD_DAYS + 1 },
-        (_, index) => formatTournamentDateKey(addDays(today, index - TOURNAMENT_LOOKBACK_DAYS)),
-      );
-      const fallbackSourceResult = await apiFetchTournamentMechanicsSourceList({
-        from: dateKeys[0] ?? todayKey,
-        to: dateKeys[dateKeys.length - 1] ?? todayKey,
-      }).catch(() => null);
-      const fallbackByDate = new Map<string, Exercise[]>();
-      const fallbackExercises = buildTournamentMechanicsFallbackExercises(fallbackSourceResult?.data ?? []);
-      fallbackExercises.forEach((exercise) => {
-        const dateKey = getTournamentMechanicsExerciseDateKey(exercise);
-        if (!dateKey) return;
-        const bucket = fallbackByDate.get(dateKey) ?? [];
-        bucket.push(exercise);
-        fallbackByDate.set(dateKey, bucket);
-      });
-
-      const results = await Promise.allSettled(
-        dateKeys.map((date) => (
-          date === todayKey
-            ? apiFetchExercisesByVisibleDate(date, {
-              includePast: true,
-              includeAdjacentDays: true,
-            })
-            : apiFetchExercisesByDate(date, { includePast: date <= todayKey })
-        )),
-      );
-
-      if (cancelled) return;
-
-      const hasAssigned = dateKeys.some((dateKey, index) => {
-        const result = results[index];
-        const fallbackExercisesForDate = fallbackByDate.get(dateKey) ?? [];
-        const exercises = result?.status === "fulfilled"
-          ? mergeTournamentMechanicsExercises(
-            Array.isArray(result.value.data) ? result.value.data : [],
-            fallbackExercisesForDate,
-            dateKey,
-          )
-          : fallbackExercisesForDate;
-        return exercises.some((exercise) => (
-          isTournamentExercise(exercise) && isTournamentTrainer(exercise, profile.id)
-        ));
-      });
-
-      setHasAssignedTournamentAccess(hasAssigned);
-    };
-
-    const runTournamentAccessScan = () => {
-      void loadAssignedTournamentAccess().catch(() => {
-        if (!cancelled) {
-          setHasAssignedTournamentAccess(false);
-        }
-      });
-    };
-
-    if (IS_DEV_RELEASE_CHANNEL) {
-      timeoutId = window.setTimeout(runTournamentAccessScan, DEV_TOURNAMENT_SCAN_DELAY_MS);
-    } else {
-      runTournamentAccessScan();
-    }
-
-    return () => {
-      cancelled = true;
-      if (timeoutId !== null) {
-        window.clearTimeout(timeoutId);
-      }
-    };
   }, [profile]);
 
   useEffect(() => {
@@ -3105,7 +2964,7 @@ export function Cabinet({
   const hasLevel = numericLevelValue !== undefined && numericLevelValue !== null && numericLevelValue !== "";
   const onboardingLabel = "Определи свой уровень";
   const canHostTournaments = hasTournamentHostingAccess(profile);
-  const canOpenTournamentsBlock = canHostTournaments || hasAssignedTournamentAccess;
+  const canOpenTournamentsBlock = canHostTournaments;
 
   const openOnboarding = () => {
     trackAnalyticsEvent("onboarding_open_requested", {
