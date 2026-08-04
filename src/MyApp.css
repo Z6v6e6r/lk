@@ -20056,3 +20056,95 @@ h6,
     animation: none;
   }
 }
+
+body.lk-idle-data-stale {
+  overflow: hidden !important;
+}
+
+.lk-idle-data-guard[hidden] {
+  display: none !important;
+}
+
+.lk-idle-data-guard {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    max(20px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: rgba(18, 16, 24, 0.58);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-family: var(--ui-font);
+}
+
+.lk-idle-data-guard__panel {
+  width: min(100%, 420px);
+  box-sizing: border-box;
+  padding: 28px;
+  border: 1px solid rgba(115, 83, 217, 0.14);
+  border-radius: 24px;
+  background: var(--white);
+  box-shadow: 0 24px 70px rgba(18, 16, 24, 0.24);
+  color: var(--text);
+  text-align: center;
+}
+
+.lk-idle-data-guard__title {
+  margin: 0;
+  font-family: "RF Dewi UltraBold", var(--ui-font);
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.lk-idle-data-guard__description {
+  margin: 12px 0 22px;
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.lk-idle-data-guard__refresh {
+  width: 100%;
+  min-height: 52px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 16px;
+  background: var(--purple);
+  color: var(--white);
+  -webkit-text-fill-color: var(--white);
+  cursor: pointer;
+  font-family: var(--btn-font);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.lk-idle-data-guard__refresh:hover,
+.lk-idle-data-guard__refresh:focus-visible {
+  background: var(--purple-dark);
+}
+
+.lk-idle-data-guard__refresh:focus-visible {
+  outline: 3px solid rgba(115, 83, 217, 0.28);
+  outline-offset: 3px;
+}
+
+.lk-idle-data-guard__refresh:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+@media (max-width: 420px) {
+  .lk-idle-data-guard__panel {
+    padding: 24px 20px 20px;
+    border-radius: 20px;
+  }
+
+  .lk-idle-data-guard__title {
+    font-size: 22px;
+  }
+}

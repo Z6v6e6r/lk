@@ -2,6 +2,7 @@ import { SERV2, SERV2_FALLBACK, TENANT_KEY } from "../consts/api_config";
 import { readAuthToken } from "./authTokenStorage";
 import { trackAnalyticsEvent, trackClientError } from "./analytics";
 import { buildProjectUrlCandidates } from "./lkApiBaseUrls";
+import { isLkIdleRequestPausedError } from "./lkIdleDataGuard";
 import { extractJwtStringClaim } from "./vivaAuthJwt";
 
 export const AUTH_CONSENT_DOCUMENT_SET_VERSION = "2026-07-14";
@@ -336,6 +337,10 @@ export async function syncPendingAuthConsents(attempt?: AuthConsentAttempt): Pro
         if (!result.retryable) break;
       } catch (error) {
         lastError = error;
+        if (isLkIdleRequestPausedError(error)) {
+          shouldRetry = false;
+          break;
+        }
         shouldRetry = true;
         continue;
       }

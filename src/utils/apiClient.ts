@@ -31,6 +31,7 @@ import {
   resolveLkApiFallbackTimeoutMs,
   resolvePreferredLkApiBaseUrl,
 } from "./lkApiBaseUrls";
+import { isLkIdleRequestPausedError } from "./lkIdleDataGuard";
 import { isGameExerciseIdMissingGuard } from "./paymentSyncBookingResolution";
 
 const DEFAULT_GAMES_MASTER_SERVICE_ID =
@@ -3993,18 +3994,25 @@ async function rawRequest<T>(
   try {
     response = await fetch(fullUrl, { ...fetchOptions, headers });
   } catch (err) {
-    trackClientError(
-      "api.request_network_error",
-      err,
-      {
-        url: fullUrl,
-        method: fetchOptions.method ?? "GET",
-      },
-      { handled: true, severity: "error" },
-    );
+    const idlePaused = isLkIdleRequestPausedError(err);
+    if (!idlePaused) {
+      trackClientError(
+        "api.request_network_error",
+        err,
+        {
+          url: fullUrl,
+          method: fetchOptions.method ?? "GET",
+        },
+        { handled: true, severity: "error" },
+      );
+    }
     return {
       data: null,
-      error: { status: null, message: "Ошибка сети", raw: err },
+      error: {
+        status: null,
+        message: idlePaused ? "Данные ЛК устарели" : "Ошибка сети",
+        raw: err,
+      },
       status: null,
     };
   }
@@ -4121,6 +4129,7 @@ export function getServ2Origin() {
 }
 
 function shouldFallback(result: ApiResult<unknown>) {
+  if (isLkIdleRequestPausedError(result.error?.raw)) return false;
   return result.status == null || result.status >= 500;
 }
 
@@ -4401,6 +4410,9 @@ async function withRetry<T>(
   while (true) {
     try {
       const res = await fn();
+      if (isLkIdleRequestPausedError(res.error?.raw)) {
+        return res;
+      }
       if (!isSuccessStatus(res.status)) {
         attempt++;
         if (attempt > retries) {
@@ -4412,6 +4424,13 @@ async function withRetry<T>(
         return res;
       }
     } catch (err) {
+      if (isLkIdleRequestPausedError(err)) {
+        return {
+          data: null,
+          error: { status: null, message: "Данные ЛК устарели", raw: err },
+          status: null,
+        };
+      }
       attempt++;
       if (attempt > retries) {
         return {

@@ -1,5 +1,6 @@
 import { getBundleVersion } from "./bundleVersion";
 import { buildLkAssetFileCandidates, resolveLkAssetBaseUrlFromScript } from "./lkAssetBaseUrls";
+import { isLkIdleRequestPaused } from "./lkIdleDataGuard";
 
 type ReleaseGuardOptions = {
   entry: string;
@@ -230,7 +231,7 @@ export function ensureFreshRelease(options: ReleaseGuardOptions) {
 
   void (async () => {
     const latestVersion = await resolveLatestVersion(manifestCandidates);
-    if (!latestVersion) {
+    if (!latestVersion || isLkIdleRequestPaused()) {
       return;
     }
 
