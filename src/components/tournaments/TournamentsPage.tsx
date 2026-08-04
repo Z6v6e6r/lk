@@ -31,7 +31,10 @@ import type {
   UserProfileType,
 } from "../../utils/apiClient";
 import { TENANT_KEY } from "../../consts/api_config";
-import { apiFetchTournamentMechanicsSourceList } from "../../utils/tournamentSignupApi";
+import {
+  apiFetchTournamentMechanicsSourceList,
+  apiRefreshTournamentMechanicsFromViva,
+} from "../../utils/tournamentSignupApi";
 import {
   buildTournamentMechanicsFallbackExercises,
   mergeTournamentMechanicsExercises,
@@ -6160,6 +6163,9 @@ export default function TournamentsPage({
   const [items, setItems] = useState<Exercise[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [cacheNotice, setCacheNotice] = useState<string | null>(null);
+  const [vivaRefreshPending, setVivaRefreshPending] = useState(false);
+  const [vivaRefreshNotice, setVivaRefreshNotice] = useState<string | null>(null);
+  const [vivaRefreshError, setVivaRefreshError] = useState<string | null>(null);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [localDraftSnapshots, setLocalDraftSnapshots] = useState<TournamentDraftSnapshot[]>([]);
   const [profile, setProfile] = useState<UserProfileType | null>(null);
@@ -6179,6 +6185,7 @@ export default function TournamentsPage({
   const deepLinkLookupKeyRef = useRef<string | null>(null);
   const openingTournamentIdRef = useRef<string | null>(null);
   const activeDateRef = useRef<HTMLDivElement | null>(null);
+  const selectedDateKeyRef = useRef<string | null>(null);
   const locationTournamentSlug = useMemo(() => readTournamentSlugFromLocation(), []);
   const targetTournamentSlug = useMemo(
     () => normalizeTournamentSlug(initialOpenTournamentSlug) ?? locationTournamentSlug,
@@ -6200,6 +6207,7 @@ export default function TournamentsPage({
   const todayDateStr = formatDate(new Date());
   const includePastTournaments = selectedDateStr <= todayDateStr;
   const tournamentMechanicsLookupDate = selectedDateStr;
+  selectedDateKeyRef.current = selectedDateStr;
 
   const refreshPendingSyncCount = useCallback(async () => {
     const count = await getPendingTournamentResultSyncCount();
@@ -6228,6 +6236,11 @@ export default function TournamentsPage({
       inline: "center",
     });
   }, [dateIndex]);
+
+  useEffect(() => {
+    setVivaRefreshNotice(null);
+    setVivaRefreshError(null);
+  }, [selectedDateStr]);
 
   useEffect(() => {
     let alive = true;
@@ -6333,6 +6346,54 @@ export default function TournamentsPage({
   }, []);
 
   const canHostTournaments = profile ? hasTournamentHostingAccess(profile) : false;
+  const handleVivaRefresh = useCallback(async () => {
+    if (!canHostTournaments || vivaRefreshPending) return;
+
+    const requestedDate = selectedDateStr;
+    setVivaRefreshPending(true);
+    setVivaRefreshNotice(null);
+    setVivaRefreshError(null);
+
+    try {
+      const result = await apiRefreshTournamentMechanicsFromViva(requestedDate);
+      if (result.error || !result.data) {
+        throw new Error(result.error?.message || "Не удалось обновить турниры из Viva");
+      }
+      if (result.data.reason === "refresh_failed") {
+        throw new Error("Viva временно не вернула расписание. Текущий список сохранён.");
+      }
+      if (selectedDateKeyRef.current !== requestedDate) {
+        setVivaRefreshNotice("Viva обновлена для ранее выбранной даты.");
+        return;
+      }
+      if (result.data.reason === "cooldown") {
+        const retrySeconds = Math.max(1, Math.ceil((result.data.retryAfterMs ?? 0) / 1000));
+        setVivaRefreshNotice(`Эта дата уже обновлялась. Повторить можно через ${retrySeconds} сек.`);
+        return;
+      }
+
+      const freshExercises = buildTournamentMechanicsFallbackExercises(result.data.tournaments);
+      setItems(freshExercises);
+      setError(null);
+      setCacheNotice(null);
+      void saveCachedTournamentSchedule(requestedDate, freshExercises);
+
+      const countLabel = `турниров получено: ${result.data.tournaments.length}`;
+      setVivaRefreshNotice(
+        result.data.persisted === false
+          ? `Из Viva ${countLabel}, но серверный снимок не сохранился.`
+          : `Данные из Viva обновлены, ${countLabel}.`,
+      );
+    } catch (refreshError) {
+      setVivaRefreshError(
+        refreshError instanceof Error
+          ? refreshError.message
+          : "Не удалось обновить турниры из Viva",
+      );
+    } finally {
+      setVivaRefreshPending(false);
+    }
+  }, [canHostTournaments, selectedDateStr, vivaRefreshPending]);
   const currentProfileId = profile?.id ?? null;
   const localDraftExercises = useMemo(
     () => localDraftSnapshots
@@ -6971,6 +7032,31 @@ export default function TournamentsPage({
           {cacheNotice && <div className="tournaments-sync-notice">{cacheNotice}</div>}
           {!cacheNotice && pendingSyncCount > 0 && (
             <div className="tournaments-sync-notice">{formatPendingTournamentSyncNotice(pendingSyncCount)}</div>
+          )}
+          {canHostTournaments && (
+            <div className="tournaments-viva-refresh-toolbar">
+              <button
+                className={`tournaments-viva-refresh${vivaRefreshPending ? " is-loading" : ""}`}
+                type="button"
+                onClick={() => void handleVivaRefresh()}
+                disabled={vivaRefreshPending || loading}
+                aria-busy={vivaRefreshPending}
+              >
+                <span className="tournaments-viva-refresh-icon" aria-hidden="true">↻</span>
+                <span>{vivaRefreshPending ? "Обновляем из Viva..." : "Обновить из Viva"}</span>
+              </button>
+              <span className="tournaments-viva-refresh-hint">
+                Только выбранный день
+              </span>
+            </div>
+          )}
+          {vivaRefreshNotice && (
+            <div className="tournaments-viva-refresh-notice" role="status" aria-live="polite">
+              {vivaRefreshNotice}
+            </div>
+          )}
+          {vivaRefreshError && (
+            <div className="tournaments-error" role="alert">{vivaRefreshError}</div>
           )}
           <div className="date-row">
             {dates.map((date, idx) => {

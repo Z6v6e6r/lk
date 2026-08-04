@@ -82,6 +82,17 @@ export interface TournamentSignupDetail extends TournamentSignupSummary {
   registration: TournamentRegistrationState | null;
 }
 
+export interface TournamentMechanicsVivaRefreshResult {
+  refreshed: boolean;
+  reason: "refreshed" | "cooldown" | "refresh_failed";
+  date: string;
+  snapshotAvailable: boolean;
+  tournaments: TournamentSignupSummary[];
+  refreshedAt: string | null;
+  retryAfterMs: number | null;
+  persisted: boolean | null;
+}
+
 export interface TournamentRegistrationState {
   status: "NONE" | "REGISTERED" | "WAITLIST" | "PAYMENT_PENDING";
   bookingId?: string | null;
@@ -1856,6 +1867,43 @@ export async function apiFetchTournamentMechanicsSourceList(params: {
   return {
     ...result,
     data: normalizeTournamentSignupSummaries(result.data),
+  };
+}
+
+export async function apiRefreshTournamentMechanicsFromViva(
+  date: string,
+): Promise<ApiResult<TournamentMechanicsVivaRefreshResult>> {
+  const result = await request<unknown>(
+    "/tournaments/snapshot/refresh-day",
+    {
+      ...buildTournamentApiRequestOptions({ allowFallback: false }),
+      method: "POST",
+      auth: true,
+      headers: phabHeaders(),
+      retries: 0,
+      body: JSON.stringify({ date }),
+    },
+  );
+  const payload = isRecord(result.data) ? result.data : null;
+  const reasonRaw = String(payload?.reason ?? "").trim();
+  const reason = reasonRaw === "cooldown" || reasonRaw === "refresh_failed"
+    ? reasonRaw
+    : "refreshed";
+
+  return {
+    ...result,
+    data: payload
+      ? {
+          refreshed: payload.refreshed === true,
+          reason,
+          date: String(payload.date ?? date),
+          snapshotAvailable: payload.snapshotAvailable === true,
+          tournaments: normalizeTournamentSignupSummaries(payload.tournaments),
+          refreshedAt: pickString(payload, ["refreshedAt"]),
+          retryAfterMs: pickNumber(payload, ["retryAfterMs"]),
+          persisted: typeof payload.persisted === "boolean" ? payload.persisted : null,
+        }
+      : null,
   };
 }
 

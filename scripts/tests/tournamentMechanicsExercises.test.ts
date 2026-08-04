@@ -90,6 +90,22 @@ test("builds fallback exercises on exerciseId and preserves local tournament id 
   assert.equal(exercise.studio.name, "Сириус");
 });
 
+test("preserves direct trainer id returned by the bounded Viva refresh", () => {
+  const [exercise] = buildTournamentMechanicsFallbackExercises([
+    makeSummary({
+      trainerName: "Иван Турнирный",
+      raw: {
+        id: "mongo_tournament_1",
+        exerciseId: "92051094-9db6-4cfd-a400-b9ad360d0a4b",
+        trainerId: "trainer-direct-42",
+        studioId: "233c1405-1eac-40de-8ec6-1cf7e24c9276",
+      },
+    }),
+  ]);
+
+  assert.equal(exercise.trainers[0]?.id, "trainer-direct-42");
+});
+
 test("merge keeps fallback-only tournaments for the requested date", () => {
   const fallback = buildTournamentMechanicsFallbackExercises([makeSummary()]);
   const merged = mergeTournamentMechanicsExercises([], fallback, "2026-06-07");

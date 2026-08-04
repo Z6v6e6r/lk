@@ -14448,6 +14448,68 @@ h6,
   gap: 12px;
 }
 
+.tournaments-viva-refresh-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tournaments-viva-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 9px 14px;
+  border: 1px solid rgba(84, 101, 255, 0.28);
+  border-radius: 12px;
+  background: var(--white);
+  color: var(--purple);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tournaments-viva-refresh:hover:not(:disabled) {
+  background: var(--purple-light);
+}
+
+.tournaments-viva-refresh:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+
+.tournaments-viva-refresh-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.tournaments-viva-refresh.is-loading .tournaments-viva-refresh-icon {
+  animation: tournaments-viva-refresh-spin 0.9s linear infinite;
+}
+
+.tournaments-viva-refresh-hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.tournaments-viva-refresh-notice {
+  padding: 10px 12px;
+  border: 1px solid rgba(35, 143, 87, 0.2);
+  border-radius: 10px;
+  background: rgba(35, 143, 87, 0.07);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+@keyframes tournaments-viva-refresh-spin {
+  to { transform: rotate(360deg); }
+}
+
 .tournaments-list {
   display: flex;
   flex-direction: column;
