@@ -39,6 +39,7 @@ import {
   readPendingVivaOAuth,
   startVivaOAuthRedirect,
 } from "../utils/vivaOAuth";
+import { isLkIdleRequestPausedError } from "../utils/lkIdleDataGuard";
 
 const VIVA_REALM = "clients";
 const REFRESH_LEEWAY_MS = 60_000;
@@ -157,6 +158,9 @@ export function VivaAuthProvider({ children }: { children: React.ReactNode }) {
       });
       return true;
     } catch (refreshError) {
+      if (isLkIdleRequestPausedError(refreshError)) {
+        return false;
+      }
       trackClientError(
         "auth.refresh_failed",
         refreshError,

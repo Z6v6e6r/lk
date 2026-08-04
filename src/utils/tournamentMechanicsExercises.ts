@@ -104,7 +104,8 @@ function buildSyntheticTrainer(summary: TournamentSignupSummary): Trainer[] {
   if (!name) return [];
 
   const trainerId =
-    pickString(person, ["id", "uuid", "trainerId", "executorId", "performerId", "responsibleId"])
+    pickString(summary.raw, ["trainerId", "executorId", "performerId", "responsibleId"])
+    || pickString(person, ["id", "uuid", "trainerId", "executorId", "performerId", "responsibleId"])
     || "";
   const photo =
     summary.trainerAvatarUrl
@@ -146,7 +147,7 @@ function buildSyntheticTournamentExercise(summary: TournamentSignupSummary): Exe
     summary.startsAt ? { timeFrom: summary.startsAt } : null,
   );
   const directionId =
-    pickNumber(summary.raw, ["directionId", "vivaDirectionId"])
+    pickNumber(summary.raw, ["directionId", "vivaDirectionId", "gameId"])
     ?? pickNumber(direction, ["id", "directionId"])
     ?? DEFAULT_TOURNAMENT_DIRECTION_ID;
   const typeId =

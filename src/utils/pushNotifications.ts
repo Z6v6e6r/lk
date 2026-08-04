@@ -17,6 +17,7 @@ import {
 import { readAuthToken } from "./authTokenStorage";
 import { trackAnalyticsEvent, trackClientError } from "./analytics";
 import { buildProjectUrlCandidates } from "./lkApiBaseUrls";
+import { isLkIdleRequestPausedError } from "./lkIdleDataGuard";
 
 type PushSyncReason = "token_received" | "auth_changed" | "logout" | "manual";
 
@@ -261,6 +262,9 @@ async function postPushPayload(
       });
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
+      if (isLkIdleRequestPausedError(error)) {
+        throw lastError;
+      }
       continue;
     }
 

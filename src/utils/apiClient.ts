@@ -31,6 +31,7 @@ import {
   resolveLkApiFallbackTimeoutMs,
   resolvePreferredLkApiBaseUrl,
 } from "./lkApiBaseUrls";
+import { isLkIdleRequestPausedError } from "./lkIdleDataGuard";
 import { isGameExerciseIdMissingGuard } from "./paymentSyncBookingResolution";
 
 const DEFAULT_GAMES_MASTER_SERVICE_ID =
@@ -4022,18 +4023,25 @@ async function rawRequest<T>(
   try {
     response = await fetch(fullUrl, { ...fetchOptions, headers });
   } catch (err) {
-    trackClientError(
-      "api.request_network_error",
-      err,
-      {
-        url: fullUrl,
-        method: fetchOptions.method ?? "GET",
-      },
-      { handled: true, severity: "error" },
-    );
+    const idlePaused = isLkIdleRequestPausedError(err);
+    if (!idlePaused) {
+      trackClientError(
+        "api.request_network_error",
+        err,
+        {
+          url: fullUrl,
+          method: fetchOptions.method ?? "GET",
+        },
+        { handled: true, severity: "error" },
+      );
+    }
     return {
       data: null,
-      error: { status: null, message: "Ошибка сети", raw: err },
+      error: {
+        status: null,
+        message: idlePaused ? "Данные ЛК устарели" : "Ошибка сети",
+        raw: err,
+      },
       status: null,
     };
   }
@@ -4150,6 +4158,7 @@ export function getServ2Origin() {
 }
 
 function shouldFallback(result: ApiResult<unknown>) {
+  if (isLkIdleRequestPausedError(result.error?.raw)) return false;
   return result.status == null || result.status >= 500;
 }
 
@@ -4430,6 +4439,9 @@ async function withRetry<T>(
   while (true) {
     try {
       const res = await fn();
+      if (isLkIdleRequestPausedError(res.error?.raw)) {
+        return res;
+      }
       if (!isSuccessStatus(res.status)) {
         attempt++;
         if (attempt > retries) {
@@ -4441,6 +4453,13 @@ async function withRetry<T>(
         return res;
       }
     } catch (err) {
+      if (isLkIdleRequestPausedError(err)) {
+        return {
+          data: null,
+          error: { status: null, message: "Данные ЛК устарели", raw: err },
+          status: null,
+        };
+      }
       attempt++;
       if (attempt > retries) {
         return {
@@ -5268,6 +5287,74 @@ export async function apiFetchTournamentParticipants(
     data: result.data && options.sanitize !== false
       ? sanitizeTournamentParticipantsPayload(result.data)
       : result.data,
+  };
+}
+
+export type TournamentParticipantsRefreshReason =
+  | "refreshed"
+  | "cooldown"
+  | "in_progress"
+  | "overload"
+  | "unavailable"
+  | "stale_if_error";
+
+export interface TournamentParticipantsRefreshResult {
+  refreshed: boolean;
+  reason: TournamentParticipantsRefreshReason;
+  exerciseId: string;
+  participants: ExerciseBooking[];
+  refreshedAt: string | null;
+  retryAfterMs: number | null;
+}
+
+const TOURNAMENT_PARTICIPANTS_REFRESH_REASONS = new Set<TournamentParticipantsRefreshReason>([
+  "refreshed",
+  "cooldown",
+  "in_progress",
+  "overload",
+  "unavailable",
+  "stale_if_error",
+]);
+
+export async function apiRefreshTournamentParticipants(
+  exerciseId: string,
+  options: {
+    signal?: AbortSignal;
+  } = {},
+) {
+  const normalizedExerciseId = String(exerciseId || "").trim();
+  const base = getServ2Origin();
+  const result = await request<unknown>(
+    `${base}/lk/tournaments/participants/refresh?exerciseId=${encodeURIComponent(normalizedExerciseId)}`,
+    {
+      method: "POST",
+      auth: true,
+      retries: 0,
+      signal: options.signal,
+      body: JSON.stringify({ exerciseId: normalizedExerciseId }),
+    },
+  );
+  const payload = isRecord(result.data) ? result.data : null;
+  const reasonValue = String(payload?.reason ?? "").trim() as TournamentParticipantsRefreshReason;
+  const reason = TOURNAMENT_PARTICIPANTS_REFRESH_REASONS.has(reasonValue)
+    ? reasonValue
+    : "unavailable";
+  const participants = Array.isArray(payload?.participants)
+    ? payload.participants as ExerciseBooking[]
+    : [];
+
+  return {
+    ...result,
+    data: payload
+      ? {
+          refreshed: payload.refreshed === true,
+          reason,
+          exerciseId: String(payload.exerciseId ?? normalizedExerciseId).trim(),
+          participants: sanitizeTournamentParticipantsPayload(participants),
+          refreshedAt: pickString(payload, ["refreshedAt"]),
+          retryAfterMs: pickNumber(payload, ["retryAfterMs"]),
+        } satisfies TournamentParticipantsRefreshResult
+      : null,
   };
 }
 

@@ -8,6 +8,10 @@ import {
   buildProjectUrlCandidates,
   resolveLkApiBaseUrlCandidates,
 } from "./lkApiBaseUrls";
+import {
+  installLkIdleDataGuard,
+  isLkIdleRequestPaused,
+} from "./lkIdleDataGuard";
 
 type AnalyticsPayload = Record<string, unknown>;
 
@@ -102,6 +106,7 @@ interface SendEventResult {
   delivered: boolean;
   retryable: boolean;
   status: number | null;
+  paused: boolean;
 }
 
 function makeSessionId(): string {
@@ -378,12 +383,22 @@ async function sendEvent(
   serializedEvent: string,
   preferBeacon: boolean,
 ): Promise<SendEventResult> {
+  if (isLkIdleRequestPaused()) {
+    return {
+      delivered: false,
+      retryable: false,
+      status: null,
+      paused: true,
+    };
+  }
+
   const endpoints = resolveAnalyticsEndpoints();
   if (endpoints.length === 0) {
     return {
       delivered: false,
       retryable: false,
       status: null,
+      paused: false,
     };
   }
 
@@ -394,12 +409,21 @@ async function sendEvent(
   ) {
     const body = new Blob([serializedEvent], { type: "application/json" });
     for (const endpoint of endpoints) {
+      if (isLkIdleRequestPaused()) {
+        return {
+          delivered: false,
+          retryable: false,
+          status: null,
+          paused: true,
+        };
+      }
       try {
         if (navigator.sendBeacon(endpoint, body)) {
           return {
             delivered: true,
             retryable: true,
             status: 200,
+            paused: false,
           };
         }
       } catch {
@@ -424,6 +448,7 @@ async function sendEvent(
           delivered: true,
           retryable: true,
           status: response.status,
+          paused: false,
         };
       }
       lastStatus = response.status;
@@ -439,10 +464,12 @@ async function sendEvent(
     delivered: false,
     retryable: hasRetryableFailure,
     status: lastStatus,
+    paused: isLkIdleRequestPaused(),
   };
 }
 
 async function flushPendingEvents() {
+  if (isLkIdleRequestPaused()) return;
   if (isAnalyticsTemporarilyDisabled()) return;
   if (pendingFlush) {
     await pendingFlush;
@@ -455,10 +482,13 @@ async function flushPendingEvents() {
 
     const nextQueue: string[] = [];
     for (const eventPayload of queue) {
+      if (isLkIdleRequestPaused()) return;
       const result = await sendEvent(eventPayload, false);
       if (result.delivered) {
         continue;
       }
+
+      if (result.paused) return;
 
       if (result.retryable) {
         nextQueue.push(eventPayload);
@@ -480,6 +510,7 @@ async function flushPendingEvents() {
 }
 
 export function identifyAnalyticsUser(payload: IdentifyAnalyticsUserPayload) {
+  if (isLkIdleRequestPaused()) return;
   let changed = false;
   const nextContext: AnalyticsUserContext = { ...userContext };
 
@@ -565,6 +596,7 @@ export function trackAnalyticsEvent(
   payload: AnalyticsPayload = {},
   options?: { preferBeacon?: boolean },
 ) {
+  if (isLkIdleRequestPaused()) return;
   const eventName = trimString(event);
   if (!eventName) return;
 
@@ -584,6 +616,8 @@ export function trackAnalyticsEvent(
     if (result.delivered) {
       return;
     }
+
+    if (result.paused) return;
 
     if (result.retryable) {
       queuePendingEvent(serializedEvent);
@@ -762,6 +796,9 @@ function installConsoleErrorTracking() {
 
 export function installGlobalErrorTracking() {
   if (typeof window === "undefined") return;
+  // Every LK entrypoint calls this during bootstrap. The idle guard itself is
+  // shared through window, so separately bundled overlays install it only once.
+  installLkIdleDataGuard();
   if (window.__LK_GLOBAL_ERROR_TRACKING_INSTALLED__) return;
 
   window.__LK_GLOBAL_ERROR_TRACKING_INSTALLED__ = true;

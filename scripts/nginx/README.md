@@ -57,7 +57,9 @@ X-LK-Reserve-Proxy: primary-padlhub-su
 
 ## Tournament participants storm guard
 
-The production-only guard for `/lk/tournaments/participants` is split into:
+The production-only guard covers the cached GET
+`/lk/tournaments/participants` and the separately limited, authenticated POST
+`/lk/tournaments/participants/refresh`. It is split into:
 
 - `lk-tournament-participants-guard.conf` for the nginx `http` context;
 - `lk-tournament-participants-location.conf` for the `padlhub.su` server block.
