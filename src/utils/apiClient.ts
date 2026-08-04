@@ -2858,10 +2858,39 @@ export interface AmericanoTournamentPayload {
 
 export type TournamentBroadcastAction = "start" | "stop";
 
+export type TournamentBroadcastTarget = "right_arena" | "left_arena" | "both";
+
+export type TournamentBroadcastActiveTarget = Exclude<TournamentBroadcastTarget, "both">;
+
+export type TournamentBroadcastStatus = "active" | "inactive" | "partial" | "starting" | "stopping";
+
+export type TournamentBroadcastStateRequest = {
+  tournamentId: string;
+  stationId?: string | null;
+} & (
+  | {
+    action: "start";
+    target?: TournamentBroadcastTarget;
+  }
+  | {
+    action: "stop";
+    target?: never;
+  }
+);
+
 export interface TournamentBroadcastState {
   tournamentId: string;
   stationId: string | null;
   active: boolean;
+  activeTargets?: TournamentBroadcastActiveTarget[] | null;
+  requestedTarget?: TournamentBroadcastTarget | null;
+  selectionRequired?: boolean;
+  status?: TournamentBroadcastStatus | null;
+  partial?: boolean;
+  message?: string | null;
+  operationInProgress?: boolean;
+  operationLeaseUntil?: string | null;
+  recoveryRequired?: boolean;
   updatedAt?: string | null;
 }
 
@@ -5532,22 +5561,20 @@ export async function apiFetchTournamentBroadcastState(
   );
 }
 
-export async function apiSetTournamentBroadcastState(payload: {
-  tournamentId: string;
-  stationId?: string | null;
-  action: TournamentBroadcastAction;
-}) {
+export async function apiSetTournamentBroadcastState(payload: TournamentBroadcastStateRequest) {
   const base = getServ2Origin();
+  const body = {
+    tournamentId: String(payload.tournamentId || "").trim(),
+    stationId: String(payload.stationId || "").trim() || null,
+    ...(payload.action === "start" && payload.target ? { target: payload.target } : {}),
+  };
   return request<TournamentBroadcastState>(
     `${base}/lk/tournaments/broadcast/${payload.action}`,
     {
       method: "POST",
       auth: true,
       retries: 0,
-      body: JSON.stringify({
-        tournamentId: String(payload.tournamentId || "").trim(),
-        stationId: String(payload.stationId || "").trim() || null,
-      }),
+      body: JSON.stringify(body),
     },
   );
 }

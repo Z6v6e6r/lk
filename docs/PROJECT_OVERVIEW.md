@@ -101,7 +101,7 @@ src/
 
 **Скрипты-обёртки** (`scripts/patch_nodered_*.mjs`) автоматически патчат flow-файлы при обновлении.
 
-Турнирная механика также включает server-side proxy трансляции результатов на Android-приставку. Frontend не знает integration Bearer и не передаёт `boxId`: устройство выбирается на Node-RED по station ID из проекции настроек ЦУП.
+Турнирная механика также включает server-side proxy трансляции результатов на Android-приставки. Frontend не знает integration Bearer и не передаёт `boxId`: для обычной станции устройство выбирается на Node-RED по station ID из проекции настроек ЦУП, а для Сколково браузер передаёт только логический target `right_arena`, `left_arena` или `both`. Вариант `both` разворачивается в две device-команды только на backend.
 
 Для LK Games и связанных referral flow действует отдельное release-правило:
 

@@ -48,12 +48,18 @@ const IDS = {
   authorize: "lk_tournament_broadcast_authorize_20260719",
   tournamentFind: "lk_tournament_broadcast_find_20260719",
   route: "lk_tournament_broadcast_route_20260719",
+  dispatch: "lk_tournament_broadcast_dispatch_20260804",
+  claimUpdate: "lk_tournament_broadcast_claim_20260804",
   deviceRequest: "lk_tournament_broadcast_device_20260719",
+  deviceResult: "lk_tournament_broadcast_device_result_20260804",
+  deviceJoin: "lk_tournament_broadcast_device_join_20260804",
+  aggregate: "lk_tournament_broadcast_aggregate_20260804",
   persist: "lk_tournament_broadcast_persist_20260719",
   tournamentUpdate: "lk_tournament_broadcast_update_20260719",
   response: "lk_tournament_broadcast_response_20260719",
   httpResponse: "lk_tournament_broadcast_http_response_20260719",
   catch: "lk_tournament_broadcast_catch_20260719",
+  deviceCatch: "lk_tournament_broadcast_device_catch_20260804",
   error: "lk_tournament_broadcast_error_20260719",
   optionsActionIn: "lk_tournament_broadcast_options_action_20260719",
   options: "lk_tournament_broadcast_options_20260719",
@@ -114,6 +120,8 @@ const nodes = [
       "LK proxy for Android box tournament results broadcast.",
       "Bearer is verified through Viva profile before tournament authorization.",
       "Device token and station-to-box mapping remain server-side.",
+      "Skolkovo start is atomically claimed with a bounded recovery lease before device fan-out.",
+      "Every incomplete start compensates all intended targets; finalize uses Mongo CAS acknowledgement.",
     ].join("\n"),
     x: 250,
     y: 2380,
@@ -227,7 +235,39 @@ const nodes = [
     libs: [],
     x: 1760,
     y: 2460,
-    wires: [[IDS.deviceRequest], [IDS.httpResponse], [IDS.httpResponse]],
+    wires: [[IDS.dispatch], [IDS.httpResponse], [IDS.httpResponse]],
+  },
+  {
+    id: IDS.dispatch,
+    type: "function",
+    z: tournamentTab.id,
+    name: "Claim or dispatch tournament broadcast",
+    func: readFn("fn_tournament_broadcast_dispatch.js"),
+    outputs: 3,
+    timeout: "",
+    noerr: 0,
+    initialize: "",
+    finalize: "",
+    libs: [],
+    x: 2050,
+    y: 2460,
+    wires: [[IDS.claimUpdate], [IDS.deviceRequest], [IDS.httpResponse]],
+  },
+  {
+    id: IDS.claimUpdate,
+    type: "mongodb4",
+    z: tournamentTab.id,
+    clientNode: mongoClientId,
+    mode: "collection",
+    collection: "tournaments",
+    operation: "updateOne",
+    output: "toArray",
+    maxTimeMS: "5000",
+    handleDocId: false,
+    name: "Claim Skolkovo broadcast start",
+    x: 2350,
+    y: 2460,
+    wires: [[IDS.dispatch]],
   },
   {
     id: IDS.deviceRequest,
@@ -244,10 +284,68 @@ const nodes = [
     insecureHTTPParser: false,
     authType: "",
     senderr: true,
+    requestTimeout: "20000",
     headers: [],
-    x: 2080,
-    y: 2420,
-    wires: [[IDS.persist]],
+    x: 2350,
+    y: 2380,
+    wires: [[IDS.deviceResult]],
+  },
+  {
+    id: IDS.deviceResult,
+    type: "function",
+    z: tournamentTab.id,
+    name: "Normalize tournament box result",
+    func: readFn("fn_tournament_broadcast_result.js"),
+    outputs: 1,
+    timeout: "",
+    noerr: 0,
+    initialize: "",
+    finalize: "",
+    libs: [],
+    x: 2630,
+    y: 2380,
+    wires: [[IDS.deviceJoin]],
+  },
+  {
+    id: IDS.deviceJoin,
+    type: "join",
+    z: tournamentTab.id,
+    name: "Join tournament box results",
+    mode: "auto",
+    build: "array",
+    property: "payload",
+    propertyType: "msg",
+    key: "topic",
+    joiner: "\\n",
+    joinerType: "str",
+    useparts: true,
+    accumulate: false,
+    timeout: "25",
+    count: "",
+    reduceRight: false,
+    reduceExp: "",
+    reduceInit: "",
+    reduceInitType: "",
+    reduceFixup: "",
+    x: 2880,
+    y: 2380,
+    wires: [[IDS.aggregate]],
+  },
+  {
+    id: IDS.aggregate,
+    type: "function",
+    z: tournamentTab.id,
+    name: "Aggregate tournament box results",
+    func: readFn("fn_tournament_broadcast_aggregate.js"),
+    outputs: 3,
+    timeout: "",
+    noerr: 0,
+    initialize: "",
+    finalize: "",
+    libs: [],
+    x: 3150,
+    y: 2380,
+    wires: [[IDS.persist], [IDS.deviceRequest], [IDS.httpResponse]],
   },
   {
     id: IDS.persist,
@@ -261,7 +359,7 @@ const nodes = [
     initialize: "",
     finalize: "",
     libs: [],
-    x: 2390,
+    x: 2640,
     y: 2440,
     wires: [[IDS.tournamentUpdate], [IDS.httpResponse]],
   },
@@ -277,7 +375,7 @@ const nodes = [
     maxTimeMS: "5000",
     handleDocId: false,
     name: "Update tournament broadcast state",
-    x: 2690,
+    x: 2940,
     y: 2420,
     wires: [[IDS.response]],
   },
@@ -293,7 +391,7 @@ const nodes = [
     initialize: "",
     finalize: "",
     libs: [],
-    x: 2990,
+    x: 3240,
     y: 2420,
     wires: [[IDS.httpResponse]],
   },
@@ -304,7 +402,7 @@ const nodes = [
     name: "",
     statusCode: "",
     headers: {},
-    x: 3270,
+    x: 3500,
     y: 2460,
     wires: [],
   },
@@ -313,9 +411,19 @@ const nodes = [
     type: "catch",
     z: tournamentTab.id,
     name: "Catch tournament broadcast failure",
-    scope: [IDS.profileRequest, IDS.tournamentFind, IDS.deviceRequest, IDS.tournamentUpdate],
+    scope: [
+      IDS.profileRequest,
+      IDS.tournamentFind,
+      IDS.dispatch,
+      IDS.claimUpdate,
+      IDS.deviceResult,
+      IDS.deviceJoin,
+      IDS.aggregate,
+      IDS.persist,
+      IDS.tournamentUpdate,
+    ],
     uncaught: false,
-    x: 2370,
+    x: 2630,
     y: 2520,
     wires: [[IDS.error]],
   },
@@ -331,9 +439,20 @@ const nodes = [
     initialize: "",
     finalize: "",
     libs: [],
-    x: 2690,
+    x: 2940,
     y: 2520,
     wires: [[IDS.httpResponse]],
+  },
+  {
+    id: IDS.deviceCatch,
+    type: "catch",
+    z: tournamentTab.id,
+    name: "Catch tournament box request failure",
+    scope: [IDS.deviceRequest],
+    uncaught: false,
+    x: 2350,
+    y: 2520,
+    wires: [[IDS.deviceResult]],
   },
   {
     id: IDS.optionsActionIn,
@@ -378,9 +497,44 @@ const nodes = [
 ];
 
 const nextFlow = [...withoutManagedNodes, ...nodes];
-fs.writeFileSync(sourcePath, `${JSON.stringify(nextFlow, null, 2)}\n`, "utf8");
-fs.mkdirSync(path.dirname(importPath), { recursive: true });
-fs.writeFileSync(importPath, `${JSON.stringify(nodes, null, 2)}\n`, "utf8");
+const idCounts = new Map();
+nextFlow.forEach((node) => {
+  const id = String(node?.id || "").trim();
+  if (!id) throw new Error("Tournament broadcast candidate contains a node without ID");
+  idCounts.set(id, (idCounts.get(id) || 0) + 1);
+});
+const duplicateIds = Array.from(idCounts.entries())
+  .filter(([, count]) => count !== 1)
+  .map(([id]) => id);
+if (duplicateIds.length > 0) {
+  throw new Error(`Tournament broadcast candidate contains duplicate IDs: ${duplicateIds.join(", ")}`);
+}
+
+const knownIds = new Set(idCounts.keys());
+const brokenWires = [];
+const brokenLinks = [];
+nextFlow.forEach((node) => {
+  (Array.isArray(node?.wires) ? node.wires : []).forEach((row) => {
+    (Array.isArray(row) ? row : []).forEach((targetId) => {
+      if (!knownIds.has(targetId)) brokenWires.push(`${node.id}->${targetId}`);
+    });
+  });
+  (Array.isArray(node?.links) ? node.links : []).forEach((targetId) => {
+    if (!knownIds.has(targetId)) brokenLinks.push(`${node.id}->${targetId}`);
+  });
+});
+if (brokenWires.length > 0) {
+  throw new Error(`Tournament broadcast candidate contains broken wires: ${brokenWires.join(", ")}`);
+}
+if (brokenLinks.length > 0) {
+  throw new Error(`Tournament broadcast candidate contains broken links: ${brokenLinks.join(", ")}`);
+}
+
+for (const managedId of managedIds) {
+  if (idCounts.get(managedId) !== 1) {
+    throw new Error(`Tournament broadcast managed node is missing or duplicated: ${managedId}`);
+  }
+}
 
 for (const routeKey of managedRoutes) {
   const separatorIndex = routeKey.indexOf(":");
@@ -393,6 +547,10 @@ for (const routeKey of managedRoutes) {
   )).length;
   if (count !== 1) throw new Error(`Tournament broadcast route is not idempotent: ${routeKey}`);
 }
+
+fs.writeFileSync(sourcePath, `${JSON.stringify(nextFlow, null, 2)}\n`, "utf8");
+fs.mkdirSync(path.dirname(importPath), { recursive: true });
+fs.writeFileSync(importPath, `${JSON.stringify(nodes, null, 2)}\n`, "utf8");
 
 console.log(`Patched tournament broadcast nodes into tab ${tournamentTab.id}`);
 console.log(`Focused import written to ${importPath}`);
