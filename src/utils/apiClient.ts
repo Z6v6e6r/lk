@@ -5261,6 +5261,74 @@ export async function apiFetchTournamentParticipants(
   };
 }
 
+export type TournamentParticipantsRefreshReason =
+  | "refreshed"
+  | "cooldown"
+  | "in_progress"
+  | "overload"
+  | "unavailable"
+  | "stale_if_error";
+
+export interface TournamentParticipantsRefreshResult {
+  refreshed: boolean;
+  reason: TournamentParticipantsRefreshReason;
+  exerciseId: string;
+  participants: ExerciseBooking[];
+  refreshedAt: string | null;
+  retryAfterMs: number | null;
+}
+
+const TOURNAMENT_PARTICIPANTS_REFRESH_REASONS = new Set<TournamentParticipantsRefreshReason>([
+  "refreshed",
+  "cooldown",
+  "in_progress",
+  "overload",
+  "unavailable",
+  "stale_if_error",
+]);
+
+export async function apiRefreshTournamentParticipants(
+  exerciseId: string,
+  options: {
+    signal?: AbortSignal;
+  } = {},
+) {
+  const normalizedExerciseId = String(exerciseId || "").trim();
+  const base = getServ2Origin();
+  const result = await request<unknown>(
+    `${base}/lk/tournaments/participants/refresh?exerciseId=${encodeURIComponent(normalizedExerciseId)}`,
+    {
+      method: "POST",
+      auth: true,
+      retries: 0,
+      signal: options.signal,
+      body: JSON.stringify({ exerciseId: normalizedExerciseId }),
+    },
+  );
+  const payload = isRecord(result.data) ? result.data : null;
+  const reasonValue = String(payload?.reason ?? "").trim() as TournamentParticipantsRefreshReason;
+  const reason = TOURNAMENT_PARTICIPANTS_REFRESH_REASONS.has(reasonValue)
+    ? reasonValue
+    : "unavailable";
+  const participants = Array.isArray(payload?.participants)
+    ? payload.participants as ExerciseBooking[]
+    : [];
+
+  return {
+    ...result,
+    data: payload
+      ? {
+          refreshed: payload.refreshed === true,
+          reason,
+          exerciseId: String(payload.exerciseId ?? normalizedExerciseId).trim(),
+          participants: sanitizeTournamentParticipantsPayload(participants),
+          refreshedAt: pickString(payload, ["refreshedAt"]),
+          retryAfterMs: pickNumber(payload, ["retryAfterMs"]),
+        } satisfies TournamentParticipantsRefreshResult
+      : null,
+  };
+}
+
 function normalizeTournamentHistoryParticipant(
   value: unknown,
   index: number,

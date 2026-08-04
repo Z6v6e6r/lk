@@ -3,6 +3,9 @@ import fs from "node:fs";
 import test from "node:test";
 
 const FN_DIR = "scripts/nodered_tournament_participants_nodes";
+const EXERCISE_ID = "11111111-1111-4111-8111-111111111111";
+const EXERCISE_KEY = `${EXERCISE_ID}:100`;
+const vivaUuid = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
 
 function createContext(
   initial: Record<string, unknown> = {},
@@ -58,10 +61,10 @@ test("same-key cold refresh rejects without retaining req/res waiters", () => {
   const context = createContext({
     [cacheKey]: {
       entries: {},
-      inflight: { "exercise-1:100": { startedAt: Date.now() } },
+      inflight: { [EXERCISE_KEY]: { startedAt: Date.now() } },
     },
   });
-  const req = { query: { exerciseId: "exercise-1" } };
+  const req = { query: { exerciseId: EXERCISE_ID } };
   const res = { marker: "response" };
   const { result } = runNodeRedFunction("fn_cache_gate_v2.js", {
     context,
@@ -71,10 +74,13 @@ test("same-key cold refresh rejects without retaining req/res waiters", () => {
   assert.equal(result[0], null);
   assert.equal(result[1].statusCode, 429);
   assert.equal(result[1].headers["x-lk-participants-cache"], "busy-key");
-  assert.deepEqual(context.values.get(cacheKey), {
-    entries: {},
-    inflight: { "exercise-1:100": { startedAt: (context.values.get(cacheKey) as any).inflight["exercise-1:100"].startedAt } },
-  });
+  assert.equal(result[1].headers["Retry-After"], "30");
+  assert.equal(result[1].payload.error, "Participants refresh is busy");
+  assert.equal(result[1].payload.retryAfterMs > 29_000, true);
+  assert.equal(result[1].payload.retryAfterMs <= 30_000, true);
+  const state = context.values.get(cacheKey) as any;
+  assert.deepEqual(state.entries, {});
+  assert.equal(state.inflight[EXERCISE_KEY].startedAt > 0, true);
   assert.doesNotMatch(JSON.stringify(context.values.get(cacheKey)), /response|waiters/);
 });
 
@@ -83,31 +89,34 @@ test("same-key refresh serves stale immediately while one request refreshes", ()
   const payload = [{ id: "participant-1" }];
   const context = createContext({
     [cacheKey]: {
-      entries: { "exercise-1:100": { at: Date.now() - 90_000, payload } },
-      inflight: { "exercise-1:100": { startedAt: Date.now() } },
+      entries: { [EXERCISE_KEY]: { at: Date.now() - 90_000, payload } },
+      inflight: { [EXERCISE_KEY]: { startedAt: Date.now() } },
     },
   });
   const { result } = runNodeRedFunction("fn_cache_gate_v2.js", {
     context,
-    msg: { req: { query: { exerciseId: "exercise-1" } } },
+    msg: { req: { query: { exerciseId: EXERCISE_ID } } },
   });
 
   assert.equal(result[1].statusCode, 200);
   assert.equal(result[1].headers["x-lk-participants-cache"], "stale-refreshing");
-  assert.equal(result[1].payload, payload);
+  assert.deepEqual(result[1].payload, payload);
   assert.equal(result[1].participantCacheBypassWrite, true);
 });
 
 test("global refresh admission limit rejects a ninth cold exercise", () => {
   const inflight = Object.fromEntries(
-    Array.from({ length: 8 }, (_, index) => [`exercise-${index}:100`, { startedAt: Date.now() }]),
+    Array.from({ length: 8 }, (_, index) => {
+      const exerciseId = vivaUuid(index);
+      return [`${exerciseId}:100`, { startedAt: Date.now(), exerciseId }];
+    }),
   );
   const context = createContext({
     lkTournamentParticipantResponseCacheV2: { entries: {}, inflight },
   });
   const { result } = runNodeRedFunction("fn_cache_gate_v2.js", {
     context,
-    msg: { req: { query: { exerciseId: "exercise-9" } } },
+    msg: { req: { query: { exerciseId: vivaUuid(9) } } },
   });
 
   assert.equal(result[1].statusCode, 429);
@@ -119,25 +128,33 @@ test("terminal stores a successful response and clears inflight", () => {
   const context = createContext({
     [cacheKey]: {
       entries: {},
-      inflight: { "exercise-1:100": { startedAt: Date.now() } },
+      inflight: {
+        [EXERCISE_KEY]: {
+          startedAt: Date.now(),
+          exerciseId: EXERCISE_ID,
+          ownerId: "owner-1",
+        },
+      },
     },
   });
   const payload = [{ id: "participant-1" }];
   const msg = {
     statusCode: 200,
     payload,
-    participantCacheKey: "exercise-1:100",
-    participantCacheExerciseId: "exercise-1",
+    participantCacheKey: EXERCISE_KEY,
+    participantCacheExerciseId: EXERCISE_ID,
     participantCacheEpoch: 0,
+    participantCacheOwnsInflight: true,
+    participantCacheOwnerId: "owner-1",
   };
   const { result } = runNodeRedFunction("fn_terminal_v2.js", { context, msg });
   const state = context.values.get(cacheKey) as any;
 
   assert.equal(result, msg);
   assert.equal(result.headers["x-lk-participants-cache"], "miss");
-  assert.equal(state.entries["exercise-1:100"].payload, payload);
-  assert.equal(state.entries["exercise-1:100"].epoch, 0);
-  assert.equal(state.inflight["exercise-1:100"], undefined);
+  assert.equal(state.entries[EXERCISE_KEY].payload, payload);
+  assert.equal(state.entries[EXERCISE_KEY].epoch, 0);
+  assert.equal(state.inflight[EXERCISE_KEY], undefined);
 });
 
 test("epoch bump prevents serving a previously fresh participant cache entry", () => {
@@ -145,24 +162,24 @@ test("epoch bump prevents serving a previously fresh participant cache entry", (
   const context = createContext({
     [cacheKey]: {
       entries: {
-        "exercise-1:100": { at: Date.now(), epoch: 4, payload: [{ id: "stale" }] },
+        [EXERCISE_KEY]: { at: Date.now(), epoch: 4, payload: [{ id: "stale" }] },
       },
       inflight: {},
     },
   }, {
-    lkTournamentParticipantEpochV1: { "exercise-1": 5 },
+    lkTournamentParticipantEpochV1: { [EXERCISE_ID]: 5 },
   });
   const { result } = runNodeRedFunction("fn_cache_gate_v2.js", {
     context,
-    msg: { req: { query: { exerciseId: "exercise-1" } } },
+    msg: { req: { query: { exerciseId: EXERCISE_ID } } },
   });
   const state = context.values.get(cacheKey) as any;
 
   assert.notEqual(result[0], null);
   assert.equal(result[1], null);
   assert.equal(result[0].participantCacheEpoch, 5);
-  assert.equal(state.entries["exercise-1:100"], undefined);
-  assert.equal(state.inflight["exercise-1:100"].epoch, 5);
+  assert.equal(state.entries[EXERCISE_KEY], undefined);
+  assert.equal(state.inflight[EXERCISE_KEY].epoch, 5);
 });
 
 test("epoch bump during an upstream read suppresses its stale response and cache write", () => {
@@ -170,25 +187,34 @@ test("epoch bump during an upstream read suppresses its stale response and cache
   const context = createContext({
     [cacheKey]: {
       entries: {},
-      inflight: { "exercise-1:100": { startedAt: Date.now(), epoch: 8 } },
+      inflight: {
+        [EXERCISE_KEY]: {
+          startedAt: Date.now(),
+          epoch: 8,
+          exerciseId: EXERCISE_ID,
+          ownerId: "owner-8",
+        },
+      },
     },
   }, {
-    lkTournamentParticipantEpochV1: { "exercise-1": 9 },
+    lkTournamentParticipantEpochV1: { [EXERCISE_ID]: 9 },
   });
   const msg = {
     statusCode: 200,
     payload: [{ id: "pre-leave-roster" }],
-    participantCacheKey: "exercise-1:100",
-    participantCacheExerciseId: "exercise-1",
+    participantCacheKey: EXERCISE_KEY,
+    participantCacheExerciseId: EXERCISE_ID,
     participantCacheEpoch: 8,
+    participantCacheOwnsInflight: true,
+    participantCacheOwnerId: "owner-8",
   };
   const { result } = runNodeRedFunction("fn_terminal_v2.js", { context, msg });
   const state = context.values.get(cacheKey) as any;
 
   assert.equal(result.statusCode, 409);
   assert.equal(result.headers["x-lk-participants-cache"], "epoch-changed");
-  assert.equal(state.entries["exercise-1:100"], undefined);
-  assert.equal(state.inflight["exercise-1:100"], undefined);
+  assert.equal(state.entries[EXERCISE_KEY], undefined);
+  assert.equal(state.inflight[EXERCISE_KEY], undefined);
 });
 
 test("terminal falls back to stale on upstream error without extending its age", () => {
@@ -197,8 +223,14 @@ test("terminal falls back to stale on upstream error without extending its age",
   const payload = [{ id: "participant-stale" }];
   const context = createContext({
     [cacheKey]: {
-      entries: { "exercise-1:100": { at, payload } },
-      inflight: { "exercise-1:100": { startedAt: Date.now() } },
+      entries: { [EXERCISE_KEY]: { at, payload } },
+      inflight: {
+        [EXERCISE_KEY]: {
+          startedAt: Date.now(),
+          exerciseId: EXERCISE_ID,
+          ownerId: "owner-error",
+        },
+      },
     },
   });
   const { result } = runNodeRedFunction("fn_terminal_v2.js", {
@@ -206,15 +238,19 @@ test("terminal falls back to stale on upstream error without extending its age",
     msg: {
       statusCode: 502,
       payload: { error: "upstream" },
-      participantCacheKey: "exercise-1:100",
+      participantCacheKey: EXERCISE_KEY,
+      participantCacheExerciseId: EXERCISE_ID,
+      participantCacheEpoch: 0,
+      participantCacheOwnsInflight: true,
+      participantCacheOwnerId: "owner-error",
     },
   });
   const state = context.values.get(cacheKey) as any;
 
   assert.equal(result.statusCode, 200);
-  assert.equal(result.payload, payload);
+  assert.deepEqual(result.payload, payload);
   assert.equal(result.headers["x-lk-participants-cache"], "stale-if-error");
-  assert.equal(state.entries["exercise-1:100"].at, at);
+  assert.equal(state.entries[EXERCISE_KEY].at, at);
 });
 
 test("client queue is bounded and overflow fallback never exposes phone", () => {

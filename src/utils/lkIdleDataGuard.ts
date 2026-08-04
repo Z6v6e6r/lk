@@ -1,5 +1,6 @@
 export const LK_IDLE_DATA_TIMEOUT_MS = 5 * 60 * 1000;
 export const LK_IDLE_REQUEST_PAUSED_CODE = "LK_IDLE_REQUEST_PAUSED";
+export const LK_IDLE_DATA_STALE_EVENT_NAME = "lk-idle-data-stale";
 
 type LkIdleDataGuardStatus = "active" | "stale" | "refreshing";
 
@@ -23,7 +24,6 @@ type LkIdleDataGuardWindow = Window & {
 
 const ACTIVITY_THROTTLE_MS = 1000;
 const IDLE_GUARD_ELEMENT_ID = "lk-idle-data-guard";
-const STALE_EVENT_NAME = "lk-idle-data-stale";
 
 export class LkIdleRequestPausedError extends Error {
   readonly code = LK_IDLE_REQUEST_PAUSED_CODE;
@@ -147,7 +147,7 @@ function pauseForIdle(runtime: LkIdleDataGuardRuntime) {
     window.requestAnimationFrame(() => runtime.refreshButton?.focus());
   }
 
-  window.dispatchEvent(new CustomEvent(STALE_EVENT_NAME, {
+  window.dispatchEvent(new CustomEvent(LK_IDLE_DATA_STALE_EVENT_NAME, {
     detail: {
       idleForMs: Math.max(0, Date.now() - runtime.lastActivityAt),
       timeoutMs: LK_IDLE_DATA_TIMEOUT_MS,

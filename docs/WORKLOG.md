@@ -1051,3 +1051,14 @@
 - Классифицированы diverged commits боковой production-ветки: `be097ca` перекрыт более новой subscription-реализацией в `main`, `812d1d8` — общим runtime overlay fallback из `7b31907`; пробный replay `be097ca` не дал функционального diff, а два найденных падения устранены фиксацией времени в недетерминированных regression tests.
 - Последовательно перенесены rating worker, split occupancy, cancellation context, cancellation consistency и phase-two CAS. При конфликтах сохранены subscription daily-limit precheck и runtime-config guards из recovery-base; split leave переведён на Bearer/profile auth без старого password-grant пути.
 - Focused suites подтвердили rating/result/community, occupancy/cancellation, durable leave/chat/CAS и phase-two builder. Fresh live flow `ffe60203...` read-only воспроизвёл phase-two candidate `28611b28...`: `4667 -> 4673` nodes, `203` routes, deploy не выполнялся.
+
+# 2026-08-04 — Адаптивное обновление участников турнира
+
+- Read-only аудит свежего live flow с `lk-primary-147` зафиксировал SHA `cb109f30...`, `4673` ноды, `203` HTTP routes и действующий single-flight/cache контур `GET /lk/tournaments/participants`; production не менялся.
+- Для одного открытого Viva-турнира добавлена серверная адаптивная частота обновления состава `60 -> 120 -> 300` секунд. Состояние хранится по `exerciseId`, поэтому вкладки делят один `nextRefreshAt`, а только владелец refresh-lock обращается к Viva.
+- Добавлен отдельный `POST /lk/tournaments/participants/refresh` для оперативного обновления одного состава: Viva profile auth, точное право `проводит турниры`, общий single-flight/circuit/overload и cooldown 30 секунд. GET сохранил прежний array-контракт.
+- В деталях турнира фоновое чтение не очищает уже показанный состав, останавливается при закрытии, ручном roster и пяти минутах простоя. Кнопка `Обновить участников` доступна профилю с правом проведения турниров; ручной/local roster Viva не вызывает.
+- Для POST предусмотрен отдельный nginx limit `10r/m` на IP с burst `3`; deployment и production mutation на этом этапе не выполнялись.
+- Cache capacity разделена на bounded buckets `100/200`: меньший снимок не обслуживает больший запрос, а больший безопасно обрезается. Lease владельца single-flight увеличен до 30 секунд; duplicate GET получает согласованные `Retry-After` и `retryAfterMs` и не может запустить второй Viva fan-out, пока жив первый owner.
+- GET и POST принимают только canonical Viva exercise UUID: synthetic/manual ID завершается `400` до profile lookup, cache/inflight state и Viva. Rollout-runbook требует новый immediate predeploy backup текущих flows/nginx/`tournaments.js`/manifest; исторические backup 20 июля для этого кандидата запрещены.
+- Guarded candidate собран из fresh live SHA `cb109f30...`: SHA `e029f9d3...`, `4673 -> 4680` nodes, `203 -> 205` routes, изменены только две разрешённые function-ноды и добавлены семь refresh-нод, broken wires/links `0/0`; deployment не выполнялся.
