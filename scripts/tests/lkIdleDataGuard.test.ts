@@ -45,6 +45,10 @@ test("the page-wide idle gate blocks every browser transport without queueing re
 
 test("the stale dialog requires an explicit full-page refresh and cannot silently resume", () => {
   assert.match(guardSource, /title\.textContent = "Данные ЛК устарели";/);
+  assert.match(
+    guardSource,
+    /description\.textContent = "Вы не пользовались личным кабинетом продолжительное время, обновите страницу, чтобы продолжить\.";/,
+  );
   assert.match(guardSource, /refreshButton\.textContent = "Обновить";/);
   assert.match(guardSource, /runtime\.status = "refreshing";[\s\S]*window\.location\.reload\(\);/);
   assert.match(cssSource, /\.lk-idle-data-guard\s*\{[\s\S]*z-index: 2147483647;/);

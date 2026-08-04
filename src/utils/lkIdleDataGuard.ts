@@ -107,7 +107,7 @@ function ensureModal(runtime: LkIdleDataGuardRuntime): HTMLDivElement | null {
   const description = document.createElement("p");
   description.id = "lk-idle-data-guard-description";
   description.className = "lk-idle-data-guard__description";
-  description.textContent = "Вы не пользовались ЛК 5 минут. Обновите страницу, чтобы получить актуальные данные.";
+  description.textContent = "Вы не пользовались личным кабинетом продолжительное время, обновите страницу, чтобы продолжить.";
 
   const refreshButton = document.createElement("button");
   refreshButton.type = "button";
