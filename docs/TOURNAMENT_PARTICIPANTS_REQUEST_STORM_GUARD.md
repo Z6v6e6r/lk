@@ -48,6 +48,11 @@ array for backward compatibility.
 The public response strips phone numbers. Cache state is exposed in
 `X-LK-Participants-Cache` for the targeted nginx access log.
 
+At the final response boundary, the terminal removes `Connection`,
+`Content-Length`, and `Transfer-Encoding` case-insensitively. GET, manual
+refresh, fallback, and early validation responses keep their status, payload,
+and application headers while leaving HTTP framing to Node-RED.
+
 ## Nginx guard
 
 Install `scripts/nginx/lk-tournament-participants-guard.conf` in the nginx
@@ -77,7 +82,7 @@ running Node-RED instance.
 It was verified from live flow SHA-256
 `cb109f305bf48ff5f6026b5ff0ef944a3cfd49e81da247c757a90f1a880f43a2`.
 The candidate SHA-256 is
-`e029f9d37a76a3a6c20e94ecf27a96c70e858d480e67e8141be9a003f4a7889d`:
+`38452d4920cc629801892ddfddfd05081d20d8f0a644dc75bae5a6a1baefc1cc`:
 `4673 -> 4680` nodes, `203 -> 205` HTTP routes, two approved existing function
 bodies changed, seven refresh nodes added, and zero broken wire/link
 references. This candidate has not been deployed.
@@ -130,6 +135,7 @@ rollout could remove later Node-RED and frontend changes.
 - the explicit refresh button is visible only to a tournament host, refreshes
   one Viva exercise, and respects the shared single-flight and cooldown;
 - a manual/local roster never calls either participants route;
+- response framing headers are removed without changing the response contract;
 - cold overload returns stale data or `429` instead of accumulating waiters;
 - Node-RED RSS stabilizes and other LK routes stay responsive;
 - public roster payload contains no phone field.

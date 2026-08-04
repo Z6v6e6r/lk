@@ -157,6 +157,89 @@ test("terminal stores a successful response and clears inflight", () => {
   assert.equal(state.inflight[EXERCISE_KEY], undefined);
 });
 
+test("terminal removes upstream framing headers without changing response data", () => {
+  const payload = [{ id: "participant-1" }];
+  const context = createContext({
+    lkTournamentParticipantResponseCacheV2: {
+      entries: {},
+      inflight: {
+        [EXERCISE_KEY]: {
+          startedAt: Date.now(),
+          exerciseId: EXERCISE_ID,
+          ownerId: "owner-headers",
+        },
+      },
+    },
+  });
+  const msg = {
+    statusCode: 200,
+    payload,
+    participantCacheKey: EXERCISE_KEY,
+    participantCacheExerciseId: EXERCISE_ID,
+    participantCacheEpoch: 0,
+    participantCacheOwnsInflight: true,
+    participantCacheOwnerId: "owner-headers",
+    headers: {
+      "Content-Length": "123",
+      "TRANSFER-ENCODING": "chunked",
+      Connection: "keep-alive",
+      "Access-Control-Allow-Origin": "https://padlhub.ru",
+      "x-upstream-trace": "trace-1",
+    },
+  };
+  const { result } = runNodeRedFunction("fn_terminal_v2.js", { context, msg });
+
+  assert.equal(result, msg);
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(result.payload, payload);
+  assert.deepEqual(result.headers, {
+    "Access-Control-Allow-Origin": "https://padlhub.ru",
+    "x-upstream-trace": "trace-1",
+    "x-lk-participants-cache": "miss",
+  });
+});
+
+test("fresh cache hit keeps cache metadata and removes inherited framing headers", () => {
+  const payload = [{ id: "participant-hit" }];
+  const now = Date.now();
+  const context = createContext({
+    lkTournamentParticipantResponseCacheV2: {
+      entries: {
+        [EXERCISE_KEY]: {
+          at: now,
+          epoch: 0,
+          exerciseId: EXERCISE_ID,
+          capacity: 100,
+          nextRefreshAt: now + 60_000,
+          payload,
+        },
+      },
+      inflight: {},
+      refreshByExercise: {},
+    },
+  });
+  const { result: cacheResult } = runNodeRedFunction("fn_cache_gate_v2.js", {
+    context,
+    msg: {
+      req: { query: { exerciseId: EXERCISE_ID } },
+      headers: {
+        "content-length": "123",
+        "x-request-id": "request-hit",
+      },
+    },
+  });
+  const { result } = runNodeRedFunction("fn_terminal_v2.js", {
+    context,
+    msg: cacheResult[1],
+  });
+
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(result.payload, payload);
+  assert.equal(result.headers["x-lk-participants-cache"], "hit");
+  assert.equal(result.headers["content-length"], undefined);
+  assert.equal(result.headers["x-request-id"], "request-hit");
+});
+
 test("epoch bump prevents serving a previously fresh participant cache entry", () => {
   const cacheKey = "lkTournamentParticipantResponseCacheV2";
   const context = createContext({
@@ -207,12 +290,18 @@ test("epoch bump during an upstream read suppresses its stale response and cache
     participantCacheEpoch: 8,
     participantCacheOwnsInflight: true,
     participantCacheOwnerId: "owner-8",
+    headers: {
+      "Transfer-Encoding": "chunked",
+      "x-request-id": "epoch-change",
+    },
   };
   const { result } = runNodeRedFunction("fn_terminal_v2.js", { context, msg });
   const state = context.values.get(cacheKey) as any;
 
   assert.equal(result.statusCode, 409);
   assert.equal(result.headers["x-lk-participants-cache"], "epoch-changed");
+  assert.equal(result.headers["Transfer-Encoding"], undefined);
+  assert.equal(result.headers["x-request-id"], "epoch-change");
   assert.equal(state.entries[EXERCISE_KEY], undefined);
   assert.equal(state.inflight[EXERCISE_KEY], undefined);
 });
@@ -243,6 +332,11 @@ test("terminal falls back to stale on upstream error without extending its age",
       participantCacheEpoch: 0,
       participantCacheOwnsInflight: true,
       participantCacheOwnerId: "owner-error",
+      headers: {
+        "content-LENGTH": "321",
+        "Transfer-Encoding": "chunked",
+        "x-request-id": "request-1",
+      },
     },
   });
   const state = context.values.get(cacheKey) as any;
@@ -250,7 +344,52 @@ test("terminal falls back to stale on upstream error without extending its age",
   assert.equal(result.statusCode, 200);
   assert.deepEqual(result.payload, payload);
   assert.equal(result.headers["x-lk-participants-cache"], "stale-if-error");
+  assert.equal(result.headers["content-LENGTH"], undefined);
+  assert.equal(result.headers["Transfer-Encoding"], undefined);
+  assert.equal(result.headers["x-request-id"], "request-1");
   assert.equal(state.entries[EXERCISE_KEY].at, at);
+});
+
+test("uncached upstream error keeps its status and strips framing headers", () => {
+  const context = createContext();
+  const { result } = runNodeRedFunction("fn_terminal_v2.js", {
+    context,
+    msg: {
+      statusCode: 502,
+      payload: { error: "Participants temporarily unavailable" },
+      participantCacheKey: EXERCISE_KEY,
+      participantCacheExerciseId: EXERCISE_ID,
+      participantCacheEpoch: 0,
+      headers: {
+        Connection: "close",
+        "Content-Length": "55",
+        "Transfer-Encoding": "chunked",
+        "x-request-id": "request-error",
+      },
+    },
+  });
+
+  assert.equal(result.statusCode, 502);
+  assert.deepEqual(result.payload, { error: "Participants temporarily unavailable" });
+  assert.deepEqual(result.headers, { "x-request-id": "request-error" });
+});
+
+test("terminal sanitizes framing headers on early validation responses", () => {
+  const msg = {
+    statusCode: 400,
+    payload: { error: "EXERCISE_ID_INVALID" },
+    participantCacheSkipTerminalState: true,
+    headers: {
+      connection: "close",
+      "content-length": "44",
+      "x-request-id": "validation-error",
+    },
+  };
+  const { result } = runNodeRedFunction("fn_terminal_v2.js", { msg });
+
+  assert.equal(result.statusCode, 400);
+  assert.equal(result.participantCacheSkipTerminalState, undefined);
+  assert.deepEqual(result.headers, { "x-request-id": "validation-error" });
 });
 
 test("client queue is bounded and overflow fallback never exposes phone", () => {

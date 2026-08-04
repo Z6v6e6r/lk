@@ -63,7 +63,7 @@ export const TOURNAMENT_PARTICIPANT_REFRESH_CONTRACT = Object.freeze({
     },
     terminal: {
       file: "fn_terminal_v2.js",
-      sha256: "66d3089bdf319be05dc3b45e41a64512b50b9126217732c7590ae6e6a0dbb43b",
+      sha256: "b83a269ae242baab05c918bb427cda29341056494260cc34df235cd2760dbf23",
     },
     refreshPrepare: {
       file: "fn_manual_refresh_prepare_v1.js",

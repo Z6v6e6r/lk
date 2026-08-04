@@ -1,8 +1,22 @@
 const CACHE_KEY = "lkTournamentParticipantResponseCacheV2";
 const EPOCH_KEY = "lkTournamentParticipantEpochV1";
 const MANUAL_COOLDOWN_KEY = "lkTournamentParticipantManualRefreshCooldownV1";
+const NODE_RED_MANAGED_RESPONSE_HEADERS = new Set([
+  "connection",
+  "content-length",
+  "transfer-encoding",
+]);
+const sanitizeResponseHeaders = () => {
+  if (!msg.headers || typeof msg.headers !== "object" || Array.isArray(msg.headers)) return;
+  msg.headers = Object.fromEntries(
+    Object.entries(msg.headers).filter(
+      ([name]) => !NODE_RED_MANAGED_RESPONSE_HEADERS.has(String(name).trim().toLowerCase()),
+    ),
+  );
+};
 if (msg.participantCacheSkipTerminalState === true) {
   delete msg.participantCacheSkipTerminalState;
+  sanitizeResponseHeaders();
   return msg;
 }
 const STALE_TTL_MS = 10 * 60_000;
@@ -238,4 +252,8 @@ delete msg.participantCacheOwnsInflight;
 delete msg.participantCacheOwnerId;
 delete msg.participantManualRefreshReason;
 delete msg.participantManualRefreshRetryAfterMs;
+// The HTTP response node owns connection and body framing. Forwarding these
+// upstream headers can make nginx reject an otherwise valid response when
+// Node.js selects its own transfer mode.
+sanitizeResponseHeaders();
 return msg;

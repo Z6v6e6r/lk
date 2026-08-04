@@ -206,6 +206,12 @@ test("manual success and cooldown use an HTTP 200 observable envelope", () => {
 
   owner.statusCode = 200;
   owner.payload = [{ id: "participant-1" }];
+  owner.headers = {
+    Connection: "keep-alive",
+    "Content-Length": "123",
+    "Transfer-Encoding": "chunked",
+    "x-request-id": "manual-refresh-1",
+  };
   const success = atTime(now + 1_000, () => runNodeRedFunction("fn_terminal_v2.js", {
     context,
     msg: owner,
@@ -216,6 +222,11 @@ test("manual success and cooldown use an HTTP 200 observable envelope", () => {
   assert.equal(success.payload.reason, "refreshed");
   assert.deepEqual(success.payload.participants, [{ id: "participant-1" }]);
   assert.equal(success.payload.retryAfterMs, 29_000);
+  assert.equal(success.headers.Connection, undefined);
+  assert.equal(success.headers["Content-Length"], undefined);
+  assert.equal(success.headers["Transfer-Encoding"], undefined);
+  assert.equal(success.headers["Content-Type"], "application/json; charset=utf-8");
+  assert.equal(success.headers["x-request-id"], "manual-refresh-1");
 
   const cooldownBypass = atTime(now + 5_000, () => runNodeRedFunction("fn_cache_gate_v2.js", {
     context,
