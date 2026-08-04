@@ -11,33 +11,40 @@ const respond = (statusCode, code, message) => {
 };
 
 const context = isObj(msg._tournamentBroadcast) ? msg._tournamentBroadcast : null;
-const upstreamStatus = Number(msg.statusCode) || 0;
-if (!context) return respond(500, "BROADCAST_CONTEXT_MISSING", "Не удалось сохранить состояние трансляции");
-const upstreamMessage = isObj(msg.payload)
-  ? String(msg.payload.message || msg.payload.error || msg.payload.detail || "").trim()
-  : "";
-const alreadyStopped = context.action === "stop"
-  && upstreamStatus === 409
-  && /no active tournament session/i.test(upstreamMessage);
-const alreadyStarted = context.action === "start"
-  && upstreamStatus === 409
-  && /same state/i.test(upstreamMessage);
-if ((upstreamStatus < 200 || upstreamStatus >= 300) && !alreadyStopped && !alreadyStarted) {
-  return respond(
-    upstreamStatus >= 400 && upstreamStatus < 500 ? 502 : 503,
-    "TOURNAMENT_BROADCAST_UPSTREAM_FAILED",
-    upstreamMessage || "Приставка не подтвердила команду трансляции",
-  );
+const nextState = isObj(context?.nextState) ? context.nextState : null;
+if (!context || !nextState) {
+  return respond(500, "BROADCAST_CONTEXT_MISSING", "Не удалось сохранить состояние трансляции");
 }
 
+const activeTargets = Array.isArray(nextState.activeTargets)
+  ? Array.from(new Set(nextState.activeTargets.filter((target) => (
+    target === "right_arena" || target === "left_arena"
+  ))))
+  : [];
+const requestedTarget = ["right_arena", "left_arena", "both"].includes(nextState.requestedTarget)
+  ? nextState.requestedTarget
+  : null;
 const updatedAt = new Date().toISOString();
-msg._tournamentBroadcast.updatedAt = updatedAt;
-const filter = { tournamentId: context.tournamentId };
+msg._tournamentBroadcast = {
+  ...context,
+  nextState: {
+    ...nextState,
+    activeTargets,
+    requestedTarget,
+  },
+  updatedAt,
+};
+const filter = isObj(context.persistenceFilter)
+  ? context.persistenceFilter
+  : { tournamentId: context.tournamentId };
 const update = {
   $set: {
     "params.broadcast": {
-      active: context.action === "start",
+      active: nextState.active === true,
+      status: String(nextState.status || (nextState.active === true ? "active" : "inactive")),
       stationId: context.stationId,
+      requestedTarget,
+      activeTargets,
       updatedAt,
       updatedBy: context.profileId,
     },

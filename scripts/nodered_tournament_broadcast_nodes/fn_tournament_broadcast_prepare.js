@@ -38,10 +38,19 @@ if (requestedStationId && (requestedStationId.length > 160 || !/^[a-z0-9][a-z0-9
   return respond(400, "STATION_ID_INVALID", "Некорректный ID станции");
 }
 
+const requestedTarget = toStr(body.target)?.toLowerCase() || null;
+if (requestedTarget && !["right_arena", "left_arena", "both"].includes(requestedTarget)) {
+  return respond(400, "BROADCAST_TARGET_INVALID", "Неизвестная приставка для трансляции");
+}
+if (requestedTarget && action !== "start") {
+  return respond(400, "BROADCAST_TARGET_NOT_ALLOWED", "Выбор приставки доступен только при запуске трансляции");
+}
+
 msg._tournamentBroadcast = {
   action,
   tournamentId,
   requestedStationId,
+  requestedTarget,
   authHeader,
 };
 msg.method = "GET";

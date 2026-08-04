@@ -82,9 +82,9 @@ AuthProvider
 
 ### Трансляция результатов турнира
 
-`TournamentsPage` не вызывает API приставки напрямую. Кнопка в менеджере турнира отправляет пользовательский Bearer, `tournamentId` и `stationId` на SERV2. Node-RED проверяет профиль Viva и доступ к турниру, берёт `boxId` из серверной проекции настроек станции ЦУП, подставляет отдельный integration Bearer и только затем вызывает Android integration API. Ответ в браузер содержит только `active`, `stationId`, `tournamentId` и `updatedAt`.
+`TournamentsPage` не вызывает API приставки напрямую. Кнопка в менеджере турнира отправляет пользовательский Bearer, `tournamentId` и `stationId` на SERV2. Для Сколково при start дополнительно передаётся только логический target `right_arena`, `left_arena` или `both`; реальные device UUID не входят во frontend. Node-RED проверяет профиль Viva, доступ к турниру и канонический station ID из сохранённого документа, разрешает `boxId` из серверной проекции настроек ЦУП, подставляет отдельный integration Bearer и только затем вызывает Android integration API.
 
-Источник `stationId → tournamentBroadcastBoxId` — настройки станции ЦУП. Для Node-RED они публикуются как `CUP_STATION_SETTINGS_JSON`; тестовые tournament/box override разрешены только отдельными server env и не входят в frontend или flow JSON.
+Источник `stationId → tournamentBroadcastBoxId | tournamentBroadcastTargets` — настройки станции ЦУП. Для Node-RED они публикуются как `CUP_STATION_SETTINGS_JSON`; тестовые tournament/box override разрешены только отдельными server env и не входят в frontend или flow JSON. Перед Skolkovo fan-out Node-RED атомарно сохраняет bounded `starting` claim с safe intended target keys; конкурентный start не обращается к устройствам, а финальная запись выполняется CAS по server-generated operation. Для `both` отправляются две device-команды, ответы объединяются до единственного finalize; любой неполный start компенсируется stop всех intended targets. `boxId`, integration Bearer и upstream URL не сохраняются и не возвращаются.
 
 ---
 

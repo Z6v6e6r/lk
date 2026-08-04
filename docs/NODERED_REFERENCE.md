@@ -142,14 +142,19 @@ npm run nodered:modular:build
 ### Трансляция результатов турнира
 
 - `GET /lk/tournaments/broadcast/status?tournamentId=<id>` — вернуть сохранённое состояние трансляции.
-- `POST /lk/tournaments/broadcast/start` — запустить трансляцию; body: `{ "tournamentId": "...", "stationId": "..." }`.
-- `POST /lk/tournaments/broadcast/stop` — остановить трансляцию; body такой же.
+- `POST /lk/tournaments/broadcast/start` — запустить трансляцию; body для обычной станции: `{ "tournamentId": "...", "stationId": "..." }`; для Сколково обязательно добавляется `"target": "right_arena" | "left_arena" | "both"`.
+- `POST /lk/tournaments/broadcast/stop` — остановить ранее сохранённые active targets; body: `{ "tournamentId": "...", "stationId": "..." }`, новый выбор target не принимается.
 - `OPTIONS /lk/tournaments/broadcast/:action` — CORS preflight для status/start/stop.
 - Пользовательский Bearer проверяется через Viva `GET /end-user/api/v1/iSkq6G/profile`. После этого сервер проверяет право `Проводит турниры` либо совпадение с organizer сохранённого турнира.
-- `boxId` не принимается от frontend. Он разрешается по `stationId` из server-side проекции настроек станций ЦУП (`CUP_STATION_SETTINGS_JSON`, поле `tournamentBroadcastBoxId`).
+- `boxId` не принимается от frontend. Он разрешается по каноническому `stationId` из server-side проекции настроек станций ЦУП (`CUP_STATION_SETTINGS_JSON`): legacy-поле `tournamentBroadcastBoxId` для одной приставки или `tournamentBroadcastTargets.right_arena/left_arena` для Сколково.
+- Для Сколково target разрешён только при точном station ID `0d5504f6-ea6f-44bb-a9e4-947faf0273ab`; имя станции и `stationId` из request body не дают право включить multi-target режим.
+- Повторный start при сохранённой активной трансляции Сколково отклоняется: fresh transition возвращает `BROADCAST_OPERATION_IN_PROGRESS`, остальное active state — `BROADCAST_ALREADY_ACTIVE`; перед выбором другого target требуется штатный stop.
 - Внешний Bearer хранится только в `TOURNAMENT_BROADCAST_BEARER_TOKEN`; frontend его не получает.
 - Внешний API задаётся через `TOURNAMENT_BROADCAST_API_BASE_URL`. Node-RED вызывает `POST /integrations/v1/devices/{box_id}/tournament/start|stop`.
-- После подтверждённой команды состояние сохраняется в `tournaments.params.broadcast`; неуспешный upstream-ответ не меняет локальное состояние.
+- Для `both` server-side proxy отправляет две команды, агрегирует ответы и только затем обновляет `tournaments.params.broadcast`. При частичном start выполняется компенсирующий stop уже запущенной приставки; если компенсация или stop частично не удались, сохраняются `status=partial` и только безопасные `activeTargets`, чтобы следующий stop мог завершить очистку.
+- Перед Skolkovo start выполняется атомарный Mongo claim: `active=true`, `status=starting`, intended `activeTargets` и 60-секундный recovery lease. Device fan-out начинается только после `acknowledged=true`, `matched=1`, `modified=1`; финальная запись использует CAS. Fresh `starting` блокирует start/stop с `409 BROADCAST_OPERATION_IN_PROGRESS`, а после lease stop восстанавливает все intended targets.
+- Каждая исходящая device-команда явно несёт runtime-поле `msg.requestTimeout=20000`; конфигурационное поле HTTP Request node оставлено только как дополнительная документация и не считается источником таймаута. Join ограничен 25 секундами. Любой неполный Skolkovo start, включая transport timeout, запускает compensating stop для всех intended targets; claim очищается только после подтверждённой компенсации и Mongo CAS.
+- HTTP 200 возвращается только после Mongo `updateOne` с явным `acknowledged=true` и положительным matched/modified evidence. Тексты ошибок device API не проксируются в браузер: наружу возвращаются только фиксированные безопасные сообщения.
 - Source functions: `scripts/nodered_tournament_broadcast_nodes/`; patch: `scripts/patch_nodered_tournament_broadcast_flow.mjs`; focused import: `node-red/modular/imports/lk_tournament_broadcast.nodes.import.json`.
 
 ---

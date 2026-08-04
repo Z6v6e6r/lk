@@ -763,6 +763,21 @@ CUP_STATION_SETTINGS_JSON={"<station-id>":{"tournamentBroadcastBoxId":"<box-id>"
 
 `CUP_STATION_SETTINGS_JSON` — runtime-проекция настроек станций ЦУП, а не второй источник истины. ЦУП хранит поле `tournamentBroadcastBoxId`, а deployment/runtime sync публикует актуальный snapshot для Node-RED.
 
+Для Сколково (`0d5504f6-ea6f-44bb-a9e4-947faf0273ab`) проекция должна содержать две разные server-only привязки. Реальные UUID приставок подставляются в PM2/runtime env и не коммитятся:
+
+```json
+{
+  "0d5504f6-ea6f-44bb-a9e4-947faf0273ab": {
+    "tournamentBroadcastTargets": {
+      "right_arena": "<right-arena-box-id>",
+      "left_arena": "<left-arena-box-id>"
+    }
+  }
+}
+```
+
+Frontend отправляет только `target=right_arena|left_arena|both`. Node-RED повторно проверяет station ID сохранённого турнира, не принимает `boxId` из запроса и для `both` выполняет два upstream-вызова. Перед вызовами должен быть подтверждён атомарный `starting` claim; каждая device-команда должна нести `msg.requestTimeout=20000`, recovery lease — 60 секунд, finalize/cleanup — только по CAS.
+
 Для ограниченного теста одной связки допустимы server-only overrides:
 
 ```env
@@ -770,4 +785,4 @@ TOURNAMENT_BROADCAST_TEST_TOURNAMENT_ID=<test-tournament-id>
 TOURNAMENT_BROADCAST_TEST_BOX_ID=<test-box-id>
 ```
 
-После обновления env перезапустить Node-RED штатным способом, импортировать `node-red/modular/imports/lk_tournament_broadcast.nodes.import.json` в enabled tab `LK Tournaments` и проверить status → start → status → stop → status. Bearer нельзя добавлять в `.env` Vite, Tilda HTML, frontend source или flow JSON.
+После обновления env перезапустить Node-RED штатным способом, импортировать `node-red/modular/imports/lk_tournament_broadcast.nodes.import.json` в enabled tab `LK Tournaments` и проверить status → start → status → stop → status. Для Сколково отдельно проверить `right_arena`, `left_arena` и `both`, конкурентный start, fresh/stale `starting`, повторное открытие manager/status, подтверждённую Mongo-запись и остановку всех сохранённых `activeTargets`. Bearer и реальные UUID приставок нельзя добавлять в `.env` Vite, Tilda HTML, frontend source или flow JSON.
