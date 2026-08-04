@@ -392,6 +392,30 @@ test("terminal sanitizes framing headers on early validation responses", () => {
   assert.deepEqual(result.headers, { "x-request-id": "validation-error" });
 });
 
+test("uncached upstream error strips framing headers via upstream error path", () => {
+  const context = createContext();
+  const { result: upstreamError } = runNodeRedFunction("fn_upstream_error_v2.js", {
+    context,
+    msg: {
+      participantCacheKey: "exercise-1:100",
+      headers: {
+        Connection: "close",
+        "Content-Length": "55",
+        "Transfer-Encoding": "chunked",
+        "x-request-id": "request-error",
+      },
+    },
+  });
+  const { result } = runNodeRedFunction("fn_terminal_v2.js", {
+    context,
+    msg: upstreamError,
+  });
+
+  assert.equal(result.statusCode, 502);
+  assert.deepEqual(result.payload, { error: "Participants temporarily unavailable" });
+  assert.deepEqual(result.headers, { "x-request-id": "request-error" });
+});
+
 test("client queue is bounded and overflow fallback never exposes phone", () => {
   const queue = Array.from({ length: 30 }, (_, index) => ({
     _participantClientQueuedAt: Date.now(),
