@@ -173,6 +173,50 @@ const adminRequest = (ctx, method, path, payload) => {
   return [msg, null, msg];
 };
 
+const startSubscriptionBookingGateway = (ctx) => {
+  const requestHeaders = msg.req && msg.req.headers && typeof msg.req.headers === "object"
+    ? msg.req.headers
+    : {};
+  const authHeader = toStr(requestHeaders.authorization || requestHeaders.Authorization);
+  const operationId = toStr(
+    requestHeaders["idempotency-key"]
+    || requestHeaders["Idempotency-Key"]
+    || msg.req?.query?.operationId,
+  );
+  if (!authHeader || !/^Bearer\s+\S+/i.test(authHeader)) {
+    return fail(401, "Требуется авторизация Viva", {
+      code: "SUBSCRIPTION_BOOKING_AUTH_REQUIRED",
+    });
+  }
+  if (!operationId || !/^[A-Za-z0-9._:-]{8,200}$/.test(operationId)) {
+    return fail(400, "Требуется корректный operationId", {
+      code: "SUBSCRIPTION_BOOKING_OPERATION_ID_REQUIRED",
+    });
+  }
+
+  msg._splitCtx = ctx;
+  msg._subscriptionBooking = {
+    caller: "split",
+    step: "profile",
+    tenantKey: "iSkq6G",
+    operationId,
+    authHeader,
+    exerciseId: ctx.exerciseId,
+    clientSubscriptionId: ctx.clientSubscriptionId,
+    spot: ctx.spot || null,
+    subscriptionVisitCount: resolveSubscriptionVisitCount(ctx),
+    startedAt: new Date().toISOString(),
+  };
+  msg.method = "GET";
+  msg.url = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile";
+  msg.headers = {
+    Authorization: authHeader,
+    Accept: "application/json",
+  };
+  msg.payload = undefined;
+  return [null, null, null, msg];
+};
+
 const extractList = (value) => {
   if (Array.isArray(value)) return value;
   if (value && typeof value === "object") {
@@ -408,6 +452,13 @@ const buildBookingRequest = (ctx) => {
   ctx.bookingPaymentType = bookingPaymentType;
   ctx.subscriptionVisitCount = subscriptionVisitCount;
   ctx.selectedPaymentMode = resolvePaymentMode(ctx.paymentMode);
+  if (
+    bookingPaymentType === "SUBSCRIPTION"
+    && clientSubscriptionId
+    && ctx.subscriptionGuardDone !== true
+  ) {
+    return startSubscriptionBookingGateway(ctx);
+  }
   ctx.step = "create_booking";
   return adminRequest(
     ctx,

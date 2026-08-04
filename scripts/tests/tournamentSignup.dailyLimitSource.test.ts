@@ -16,9 +16,11 @@ test("client subscription products prefer the concrete client subscription id", 
   assert.ok(genericIdIndex > clientSubscriptionIdIndex, "generic id must come after client subscription id");
 });
 
-test("client subscription Viva booking checks category daily bookings before POST /bookings", () => {
+test("client subscription Viva booking keeps the UX precheck and delegates the debit to the atomic server gateway", () => {
   const functionStart = source.indexOf("async function apiCreateTournamentVivaBookingFromSubscription");
-  const postBookingsIndex = source.indexOf('`${API_BASE}/end-user/api/v2/${TENANT_KEY}/bookings`', functionStart);
+  const functionEnd = source.indexOf("function buildTournamentVivaTransactionPayload", functionStart);
+  const functionSource = source.slice(functionStart, functionEnd);
+  const gatewayIndex = functionSource.indexOf("/lk/subscription-bookings?operationId=");
   const fetchBookingsIndex = source.indexOf("apiFetchSubscriptionDailyLimitBookings", functionStart);
   const categoryIndex = source.indexOf("resolveSubscriptionCategoryDailyLimitCategoryFromEvent", functionStart);
   const planIndex = source.indexOf("subscriptionPlanAllowsDailyLimitCategory", functionStart);
@@ -30,7 +32,12 @@ test("client subscription Viva booking checks category daily bookings before POS
   const currentSubscriptionIndex = source.indexOf("currentSubscription: params.product", functionStart);
 
   assert.ok(functionStart >= 0, "subscription booking function must exist");
-  assert.ok(postBookingsIndex > functionStart, "direct booking POST must exist");
+  assert.ok(functionEnd > functionStart, "subscription booking function must have a bounded source block");
+  assert.ok(gatewayIndex > 0, "atomic subscription booking gateway call must exist");
+  assert.doesNotMatch(functionSource, /end-user\/api\/v2\/[^\n]+\/bookings/);
+  assert.match(functionSource, /operationId=\$\{encodeURIComponent\(idempotencyKey\)\}/);
+  assert.doesNotMatch(functionSource, /Idempotency-Key/);
+  assert.match(functionSource, /clientSubscriptionId/);
   assert.ok(categoryIndex > functionStart, "category resolver must be used");
   assert.ok(planIndex > functionStart, "subscription plan matrix must gate the check");
   assert.ok(fetchBookingsIndex > functionStart, "active and history bookings precheck must exist");
@@ -39,8 +46,8 @@ test("client subscription Viva booking checks category daily bookings before POS
   assert.ok(currentSubscriptionIndex > functionStart, "selected subscription product must be passed to resolver");
   assert.ok(categoryIndex < fetchBookingsIndex, "category must be resolved before loading bookings");
   assert.ok(planIndex < fetchBookingsIndex, "subscription plan matrix must run before loading bookings");
-  assert.ok(fetchBookingsIndex < postBookingsIndex, "active bookings precheck must run before POST /bookings");
-  assert.ok(conflictIndex < postBookingsIndex, "conflict resolver must run before POST /bookings");
-  assert.ok(subscriptionIdIndex < postBookingsIndex, "selected client subscription id must be checked before POST /bookings");
-  assert.ok(currentSubscriptionIndex < postBookingsIndex, "selected subscription product must be checked before POST /bookings");
+  assert.ok(fetchBookingsIndex - functionStart < gatewayIndex, "active bookings UX precheck must run before the gateway");
+  assert.ok(conflictIndex - functionStart < gatewayIndex, "UX conflict resolver must run before the gateway");
+  assert.ok(subscriptionIdIndex - functionStart < gatewayIndex, "selected client subscription id must be checked before the gateway");
+  assert.ok(currentSubscriptionIndex - functionStart < gatewayIndex, "selected subscription product must be checked before the gateway");
 });

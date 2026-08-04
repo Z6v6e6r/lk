@@ -253,6 +253,7 @@ const firstEventDate = (value: UnknownRecord | null): string | null => {
   const direct = pickString(value, [
     "date",
     "bookingDate",
+    "exerciseDate",
     "serviceDate",
     "visitDate",
     "startsAt",

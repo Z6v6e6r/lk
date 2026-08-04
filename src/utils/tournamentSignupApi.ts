@@ -9,6 +9,7 @@ import {
   apiFetchSubscriptionDailyLimitBookings,
   apiFetchSubscriptioName,
   apiVerifyBookingCancellation,
+  getServ2Origin,
   request,
   type ApiResult,
   type UserProfileType,
@@ -1737,11 +1738,6 @@ async function createVivaPaymentWatcher(clientId?: string | null) {
   );
 }
 
-function extractCorrelationId(payload: unknown): string | null {
-  if (!isRecord(payload)) return null;
-  return pickString(payload, ["correlationId", "requestId", "id"]);
-}
-
 function mapTournamentVivaFailureMessage(errorText: string | null | undefined): string | null {
   const normalized = String(errorText || "").trim().toLowerCase();
   if (!normalized) return null;
@@ -2541,69 +2537,46 @@ async function apiCreateTournamentVivaBookingFromSubscription(
     }
   }
 
-  const requestStartedAtMs = Date.now();
-  const payload = {
-    exerciseId: params.exerciseId,
-    paymentType: "SUBSCRIPTION",
-    comment: null,
-    marketingAttribution: {},
+  const clientSubscriptionId = pickSubscriptionLookupId(params.product.raw) || params.product.id;
+  const idempotencySeed = [
+    params.clientId,
+    clientSubscriptionId,
+    params.exerciseId,
+  ].map((value) => String(value || "").trim()).join("|");
+  const hashPart = (value: string) => {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
   };
-
+  const idempotencyKey = `lk-subscription-${hashPart(idempotencySeed)}${hashPart([...idempotencySeed].reverse().join(""))}`;
   const response = await request<unknown>(
-    `${API_BASE}/end-user/api/v2/${TENANT_KEY}/bookings`,
+    `/lk/subscription-bookings?operationId=${encodeURIComponent(idempotencyKey)}`,
     {
       method: "POST",
+      baseUrl: getServ2Origin(),
       auth: true,
-      retries: 1,
-      body: JSON.stringify(payload),
+      retries: 0,
+      body: JSON.stringify({
+        exerciseId: params.exerciseId,
+        clientSubscriptionId,
+      }),
     },
   );
   if (response.error) {
     return { data: null, error: response.error, status: response.status };
   }
-
-  const correlationId = extractCorrelationId(response.data);
-  const bookingWatcher = correlationId
-    ? await createVivaBookingWatcher(params.clientId, correlationId)
-    : null;
-
-  let bookingEvent: { status: string; action: string | null; error: string | null; raw: unknown } | null = null;
-  if (bookingWatcher) {
-    bookingEvent = await Promise.race([
-      bookingWatcher.wait,
-      wait(5000).then(() => null),
-    ]);
-    bookingWatcher.close();
-  }
-
-  if (bookingEvent && bookingEvent.status !== "COMPLETED") {
-    const mappedMessage = mapTournamentVivaFailureMessage(bookingEvent.error);
+  const gatewayState = pickString(response.data, ["state"]);
+  const bookingId = pickString(response.data, ["bookingId", "id"]);
+  if (gatewayState !== "CONFIRMED" || !bookingId) {
     return {
       data: null,
       error: {
         status: response.status,
-        message: mappedMessage || "Viva не подтвердила создание записи",
-        raw: bookingEvent.raw,
-      },
-      status: response.status,
-    };
-  }
-
-  const resolvedBooking = await pollTournamentVivaPaymentResolution(params.exerciseId, null);
-  const bookingId = resolvedBooking?.bookingId ?? extractBookingId(response.data);
-  const paid = resolvedBooking?.paid ?? Boolean(bookingEvent?.status === "COMPLETED");
-
-  if (!paid && !bookingId) {
-    return {
-      data: null,
-      error: {
-        status: response.status,
-        message: "Не удалось подтвердить запись по абонементу",
-        raw: {
-          booking: response.data,
-          event: bookingEvent?.raw ?? null,
-          resolvedBooking: resolvedBooking?.raw ?? null,
-        },
+        message: pickString(response.data, ["message"]) || "Запись ожидает подтверждения Viva. Повторите проверку.",
+        raw: response.data,
       },
       status: response.status,
     };
@@ -2613,14 +2586,10 @@ async function apiCreateTournamentVivaBookingFromSubscription(
     data: {
       paymentUrl: null,
       bookingId,
-      toPay: resolvedBooking?.toPay ?? 0,
-      paid,
-      paymentExpiresAt: paid ? null : buildPaymentExpiresAt(requestStartedAtMs),
-      raw: {
-        booking: response.data,
-        event: bookingEvent?.raw ?? null,
-        resolvedBooking: resolvedBooking?.raw ?? null,
-      },
+      toPay: 0,
+      paid: true,
+      paymentExpiresAt: null,
+      raw: response.data,
     },
     error: null,
     status: response.status,

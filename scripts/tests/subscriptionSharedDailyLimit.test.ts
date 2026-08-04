@@ -164,3 +164,23 @@ test("keeps different or unidentified client subscriptions independent", () => {
     subscriptionName: "Лето.Падел.Спорт",
   }), null);
 });
+
+test("counts flat Viva Admin bookings that expose exerciseDate without a nested exercise", () => {
+  const conflict = conflictFor([{
+    id: "flat-admin-booking",
+    paymentType: "SUBSCRIPTION",
+    clientSubscriptionId: subscriptionId,
+    exerciseId: "flat-open-game",
+    exerciseDate: "2026-08-01",
+    exerciseDirection: { id: 4588, name: "Открытая игра" },
+    exerciseType: { id: 1613, name: "Открытая игра" },
+    timeFrom: "10:00:00",
+    timeTo: "11:00:00",
+  }], {
+    category: SUBSCRIPTION_CATEGORY_LIMIT_TOURNAMENT,
+    subscriptionName: "Лето.Падел.Спорт",
+  });
+
+  assert.equal(conflict?.existingEvent.exerciseId, "flat-open-game");
+  assert.equal(conflict?.existingEvent.date, "2026-08-01");
+});

@@ -85,3 +85,31 @@ test("split payment payload passes distinct subscription id without mirroring cl
   assert.equal(payload.clientSubscriptionId, "client-sport");
   assert.equal(payload.subscriptionId, "product-sport");
 });
+
+test("split subscription requests authenticate and send a stable CORS-compatible operationId", () => {
+  const requestHelper = extractFunctionBlock("function buildPadelSplitSubscriptionRequest");
+  const createFunction = extractFunctionBlock("export async function apiCreatePadelSplitGamePayment");
+  const joinFunction = extractFunctionBlock("export async function apiCreatePadelSplitParticipantPayment");
+
+  assert.match(requestHelper, /paymentMode !== "subscription"/);
+  assert.match(requestHelper, /operationId=/);
+  assert.match(requestHelper, /auth:\s*true as const/);
+  assert.doesNotMatch(requestHelper, /Idempotency-Key/);
+  assert.match(requestHelper, /buildPadelSplitIdempotencyKey/);
+  for (const sourceBlock of [createFunction, joinFunction]) {
+    assert.match(sourceBlock, /buildPadelSplitSubscriptionRequest/);
+    assert.doesNotMatch(sourceBlock, /auth:\s*true/);
+  }
+});
+
+test("split callers treat PENDING_CONFIRMATION as an error instead of creating a local game", () => {
+  const pendingHelper = extractFunctionBlock("function resolvePadelSplitPendingError");
+  const createFunction = extractFunctionBlock("export async function apiCreatePadelSplitGamePayment");
+  const joinFunction = extractFunctionBlock("export async function apiCreatePadelSplitParticipantPayment");
+
+  assert.match(pendingHelper, /PENDING_CONFIRMATION/);
+  for (const sourceBlock of [createFunction, joinFunction]) {
+    assert.match(sourceBlock, /resolvePadelSplitPendingError/);
+    assert.match(sourceBlock, /data: null as PadelSplitPaymentResult \| null/);
+  }
+});

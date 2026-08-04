@@ -8233,6 +8233,17 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
   };
 }
 
+function resolvePadelSplitPendingError(payload: unknown, status: ApiStatus): ApiError | null {
+  if (!isRecord(payload)) return null;
+  const state = String(payload.state || "").trim().toUpperCase();
+  if (state !== "PENDING_CONFIRMATION") return null;
+  return {
+    status,
+    message: pickString(payload, ["message"]) || "Запись ожидает подтверждения Viva. Повторите проверку.",
+    raw: payload,
+  };
+}
+
 function buildPadelSplitPaymentPayload(params: PadelSplitPaymentParams): Record<string, unknown> {
   const normalizedClientSubscriptionId =
     params.clientSubscriptionId?.trim()
@@ -8273,6 +8284,49 @@ function buildPadelSplitPaymentPayload(params: PadelSplitPaymentParams): Record<
   };
 }
 
+function buildPadelSplitIdempotencyKey(
+  scope: "create" | "join",
+  params: PadelSplitPaymentParams,
+  gameId?: string | null,
+) {
+  const seed = [
+    scope,
+    gameId,
+    params.clientId,
+    params.clientPhone,
+    params.clientSubscriptionId,
+    params.exerciseId,
+    params.date,
+    params.fromTime,
+    params.toTime,
+    params.roomId,
+    params.spot,
+  ].map((value) => String(value ?? "").trim()).join("|");
+  const hashPart = (value: string) => {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
+  };
+  return `lk-split-${scope}-${hashPart(seed)}${hashPart([...seed].reverse().join(""))}`;
+}
+
+function buildPadelSplitSubscriptionRequest(
+  path: string,
+  scope: "create" | "join",
+  params: PadelSplitPaymentParams,
+  gameId?: string | null,
+) {
+  if (params.paymentMode !== "subscription") return { path, options: {} };
+  const operationId = buildPadelSplitIdempotencyKey(scope, params, gameId);
+  return {
+    path: `${path}?operationId=${encodeURIComponent(operationId)}`,
+    options: { auth: true as const },
+  };
+}
+
 export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentParams) {
   const baseUrl = getServ2Origin() || "";
   const studioId = params.studioId?.trim() || null;
@@ -8293,9 +8347,15 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
     };
   }
 
-  const response = await request<unknown>("/lk/games/split/create", {
+  const subscriptionRequest = buildPadelSplitSubscriptionRequest(
+    "/lk/games/split/create",
+    "create",
+    params,
+  );
+  const response = await request<unknown>(subscriptionRequest.path, {
     method: "POST",
     baseUrl,
+    ...subscriptionRequest.options,
     retries: 0,
     body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
   });
@@ -8304,6 +8364,15 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
     return {
       data: null as PadelSplitPaymentResult | null,
       error: response.error,
+      status: response.status,
+    };
+  }
+
+  const pendingError = resolvePadelSplitPendingError(response.data, response.status);
+  if (pendingError) {
+    return {
+      data: null as PadelSplitPaymentResult | null,
+      error: pendingError,
       status: response.status,
     };
   }
@@ -8349,11 +8418,18 @@ export async function apiCreatePadelSplitParticipantPayment(
     };
   }
 
-  const response = await request<unknown>(
+  const subscriptionRequest = buildPadelSplitSubscriptionRequest(
     `/lk/games/${encodeURIComponent(normalizedGameId)}/split/join`,
+    "join",
+    params,
+    normalizedGameId,
+  );
+  const response = await request<unknown>(
+    subscriptionRequest.path,
     {
       method: "POST",
       baseUrl,
+      ...subscriptionRequest.options,
       retries: 0,
       body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
     },
@@ -8363,6 +8439,15 @@ export async function apiCreatePadelSplitParticipantPayment(
     return {
       data: null as PadelSplitPaymentResult | null,
       error: response.error,
+      status: response.status,
+    };
+  }
+
+  const pendingError = resolvePadelSplitPendingError(response.data, response.status);
+  if (pendingError) {
+    return {
+      data: null as PadelSplitPaymentResult | null,
+      error: pendingError,
       status: response.status,
     };
   }

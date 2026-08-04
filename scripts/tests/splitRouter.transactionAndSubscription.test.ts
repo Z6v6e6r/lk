@@ -27,10 +27,16 @@ type RouterMessage = {
   };
 };
 
-test("subscription booking request keeps the exact selected client subscription id", () => {
+test("subscription booking request sends the exact selected client subscription id through the atomic gateway", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
     statusCode: 200,
     payload: { access_token: "token" },
+    req: {
+      headers: {
+        authorization: "Bearer user-token",
+      },
+      query: { operationId: "split-idem-1" },
+    },
     _splitCtx: {
       step: "token",
       action: "join",
@@ -38,17 +44,25 @@ test("subscription booking request keeps the exact selected client subscription 
       clientSubscriptionId: "new-subscription",
       clientPhone: "79990000001",
       exerciseId: "exercise-1",
-      durationMinutes: 60,
+      durationMinutes: 120,
       spot: 1,
     },
   }) as unknown[];
 
-  const requestMsg = out[0] as RouterMessage;
-  assert.equal(requestMsg.method, "POST");
-  assert.match(requestMsg.url || "", /\/exercises\/exercise-1\/bookings$/);
-  assert.equal(requestMsg.payload?.paymentType, "SUBSCRIPTION");
-  assert.equal(requestMsg.payload?.clientSubscriptionId, "new-subscription");
-  assert.equal(requestMsg.payload?.count, 1);
+  const requestMsg = out[3] as RouterMessage & {
+    _subscriptionBooking?: {
+      operationId?: string;
+      exerciseId?: string;
+      clientSubscriptionId?: string;
+      subscriptionVisitCount?: number;
+    };
+  };
+  assert.equal(requestMsg.method, "GET");
+  assert.match(requestMsg.url || "", /\/profile$/);
+  assert.equal(requestMsg._subscriptionBooking?.operationId, "split-idem-1");
+  assert.equal(requestMsg._subscriptionBooking?.exerciseId, "exercise-1");
+  assert.equal(requestMsg._subscriptionBooking?.clientSubscriptionId, "new-subscription");
+  assert.equal(requestMsg._subscriptionBooking?.subscriptionVisitCount, 2);
 });
 
 test("subscription booking fails when Viva confirms a different client subscription", () => {

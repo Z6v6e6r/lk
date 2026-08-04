@@ -51,6 +51,7 @@
     "nodered:modular:audit-147": "bash ./scripts/prepare_nodered_live_workspace.sh",
     "nodered:modular:build": "node scripts/nodered_modular_flow.mjs build",
     "nodered:modular:validate": "node scripts/nodered_modular_flow.mjs validate",
+    "nodered:subscription-booking:patch": "node scripts/patch_nodered_subscription_booking_flow.mjs",
     "nodered:games:cancellation:phase2": "node scripts/patch_live_games_split_leave_phase2_cas.mjs",
     "lint": "eslint .",
     "test:release-provenance": "node --test scripts/tests/releaseProvenance.test.mjs",

@@ -106,6 +106,21 @@ npm run nodered:modular:build
 - `GET /api/games/:id/ratings` — live-рейтинги
 - `POST /api/games/:id/result` — записать результат
 
+### Атомарная запись по абонементу
+
+- `POST /lk/subscription-bookings` — единственная серверная точка списания уже купленного абонемента для турниров и групповых тренировок. Обязательны Bearer, стабильный non-secret `operationId`, `exerciseId` и точный `clientSubscriptionId`.
+- `OPTIONS /lk/subscription-bookings` — CORS preflight для `Authorization` и `Content-Type`. Browser-клиенты передают `operationId` query-параметром, потому что текущий nginx CORS allowlist не пропускает отдельный idempotency header.
+- Split create/join сохраняют прежние публичные маршруты `/lk/games/split/create` и `/lk/games/:gameId/split/join`, но subscription-ветка внутри `Route Viva split payment` уходит в тот же атомарный контур. One-time ветка не меняется.
+- `clientId`, телефон, дата, категория и название абонемента из тела запроса не являются доверенными. Сервер получает actor через `GET /end-user/api/v1/iSkq6G/profile`, упражнение — через Viva по `exerciseId`, а выбранный `clientSubscriptionId` обязан присутствовать в `availableClientSubscriptions` этого упражнения. При необходимости название плана разрешается через server-side SERV2 lookup по проверенному телефону.
+- Проверка лимита fail-closed объединяет активные записи и history. Поддерживаются nested End User payload и flat Admin payload, включая `exerciseDate`, `exerciseDirection` и `exerciseType`. Отмена/refund освобождают дату; разные точные `clientSubscriptionId` независимы.
+- Атомарный ключ Mongo для общего лимита с `2026-08-01`: `_id = tenantKey + clientSubscriptionId + YYYY-MM-DD`, коллекция `lk_subscription_daily_booking_ops`. До этой даты ключ дополнительно содержит категорию, сохраняя прежний отдельный лимит; для абонементов вне дневной политики (например, `Энергия 5`) claim ограничен конкретным `exerciseId`. Состояния: `PREPARED -> PENDING_CONFIRMATION -> CONFIRMED|FAILED`. До upstream POST операция обязательно сохраняется как `PENDING_CONFIRMATION`.
+- Дневной claim считается по событию: split на 90/120 минут сохраняет прежний серверный `count=2` для фактического списания Viva, но занимает один ключ даты и не разрешает второе событие в тот же день.
+- Tournament/group вызывают Viva Admin v2 с точным `clientSubscriptionId` и `customFields: []`; split сохраняет проверенный Admin v1 + server-derived `count` контракт. Service token берётся только из Node-RED context `vivacrm_access_token`. В flow/import/frontend не добавляются credentials.
+- Transport timeout, 5xx или неполный readback не освобождают claim: наружу возвращается `202 PENDING_CONFIRMATION`. Повтор с тем же `operationId` сначала перечитывает Viva; другой operation не может выполнить второе списание.
+- Frontend-проверка active+history оставлена только как быстрый UX precheck. Источником соблюдения правила является серверный claim, а не браузер.
+- Source functions: `scripts/nodered_subscription_booking_nodes/`; guarded patch: `scripts/patch_nodered_subscription_booking_flow.mjs`; split dispatch source: `scripts/nodered_games_nodes/fn_split_router.js`.
+- Патчер принимает только отдельный свежий live-147 snapshot с корректным `source.flow.meta.json`, проверяет origin/SHA/свежесть до 30 минут и точный preimage SHA функции `Route Viva split payment`. Он пишет новый candidate, но не изменяет source snapshot и не деплоит его.
+
 ### Чат
 - `GET /api/game-chat/:gameId` — список чатов
 - `GET /api/game-chat/:gameId/messages` — сообщения
