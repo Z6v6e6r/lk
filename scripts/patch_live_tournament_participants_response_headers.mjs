@@ -36,7 +36,7 @@ export const PARTICIPANTS_HEADERS_CONTRACT = Object.freeze({
     outputs: 1,
     wires: [['afef710ac9f58b69']],
     preimageSha256: '2772af0a50c4ff0475179020417222d27e7aa296bf48ec2d0cc4e52139019429',
-    sourceSha256: '6d57e7b1827fe0f2bee7b7e18b499c13cac3c9fe6462ca927d935f194d4f4b8f',
+    sourceSha256: 'b83a269ae242baab05c918bb427cda29341056494260cc34df235cd2760dbf23',
     nodeSha256: '60b5eceec0a190159afb12340ed2bece34a8f6eb2e63680c2242cbd3cc554b35',
   },
   response: {
