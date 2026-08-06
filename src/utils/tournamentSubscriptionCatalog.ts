@@ -19,13 +19,6 @@ export const TOURNAMENT_SUBSCRIPTION_PROMO_OFFERS = {
     productId: "c079dc82-c716-4f0e-b9ad-6aab62fb789e",
     productName: "Лето.Падел.Дружба Акция",
   },
-  "sport-promo": {
-    accent: "СПОРТ",
-    planStyle: "sport",
-    priceLabel: "9 900 ₽",
-    productId: "9588a577-4cac-4f13-bf7f-72382acb0387",
-    productName: "Лето.Падел.Спорт Акция",
-  },
   "ra-promo": {
     accent: "РА",
     planStyle: "sport",

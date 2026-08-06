@@ -35,16 +35,14 @@ test("tournament subscription catalog exposes only direct-product bindings", () 
   );
 });
 
-test("promo links resolve only the four allowlisted Viva subscriptions", () => {
+test("promo links resolve only the three allowlisted Viva subscriptions", () => {
   assert.deepEqual(Object.keys(TOURNAMENT_SUBSCRIPTION_PROMO_OFFERS).sort(), [
     "academy-promo",
     "friendship-promo",
     "ra-promo",
-    "sport-promo",
   ]);
   assert.equal(resolveTournamentSubscriptionPromoOffer("academy-promo")?.priceLabel, "11 900 ₽");
   assert.equal(resolveTournamentSubscriptionPromoOffer("friendship-promo")?.priceLabel, "4 900 ₽");
-  assert.equal(resolveTournamentSubscriptionPromoOffer("sport-promo")?.priceLabel, "9 900 ₽");
   assert.equal(resolveTournamentSubscriptionPromoOffer("ra-promo")?.priceLabel, "11 900 ₽");
   assert.equal(resolveTournamentSubscriptionPromoOffer(" ACADEMY-PROMO ")?.productName, "Лето.Падел.Академия Акция");
   assert.equal(resolveTournamentSubscriptionPromoOffer("unknown"), null);
@@ -76,7 +74,7 @@ test("limited storefront buttons rely on live availability instead of hardcoded 
   assert.doesNotMatch(sourceText, /buttonDisabled: artworkKey === "ra" \|\| artworkKey === "sport"/);
   assert.match(sourceText, /resolveTournamentSubscriptionCounterDisplayTotalLimit\(plan\.counterKey\)/);
   assert.match(sourceText, /id: "academy"[\s\S]*?hideRemainingBlock: true/);
-  assert.match(sourceText, /id: "sport"[\s\S]*?hideRemainingBlock: true/);
+  assert.doesNotMatch(sourceText, /id: "sport"[\s\S]*?hideRemainingBlock: true/);
   assert.doesNotMatch(sourceText, /!plan\.hideRemainingBlock && trackedStatus/);
   assert.doesNotMatch(sourceText, /usesTrackedCounter\s*&&\s*!plan\.hideRemainingBlock/);
   assert.match(sourceText, /trackedStatus && !trackedStatus\.unlimited/);
