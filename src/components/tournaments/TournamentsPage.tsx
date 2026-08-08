@@ -136,10 +136,10 @@ import {
 } from "../../utils/tournamentJson";
 import {
   formatTournamentBroadcastTargets,
-  isSkolkovoTournamentBroadcastStation,
+  getTournamentBroadcastTargetOptions,
+  isTournamentBroadcastTargetSelectionStation,
   isTournamentBroadcastTarget,
   normalizeTournamentBroadcastTargets,
-  TOURNAMENT_BROADCAST_TARGET_OPTIONS,
 } from "./tournamentBroadcast";
 
 interface TournamentsPageProps {
@@ -4397,7 +4397,7 @@ function TournamentManagerModal({
     const partial = state.partial === true || status === "partial";
     const message = String(state.message ?? "").trim()
       || (partial
-        ? "Трансляция запущена не на всех выбранных манежах."
+        ? "Трансляция запущена не на всех выбранных экранах."
         : status === "starting"
           ? operationInProgress
             ? "Запуск выполняется. Дождитесь подтверждения перед остановкой."
@@ -5786,7 +5786,7 @@ function TournamentManagerModal({
       const selectionRequired = result.data.selectionRequired === true;
       const partial = result.data.partial === true;
       const message = String(result.data.message ?? "").trim()
-        || (partial ? "Трансляция запущена не на всех выбранных манежах." : null);
+        || (partial ? "Трансляция запущена не на всех выбранных экранах." : null);
       const updatedAt = result.data.updatedAt ?? new Date().toISOString();
       applyBroadcastServerState({
         ...result.data,
@@ -5851,7 +5851,7 @@ function TournamentManagerModal({
     }
 
     const stationId = String(tournamentParams.stationId ?? "").trim();
-    if (isSkolkovoTournamentBroadcastStation(stationId)) {
+    if (isTournamentBroadcastTargetSelectionStation(stationId)) {
       setBroadcastSelectedTarget(null);
       setBroadcastError(null);
       setBroadcastSelectionOpen(true);
@@ -6085,7 +6085,12 @@ function TournamentManagerModal({
       ?? (pendingQueueRecords.length > 0
         ? "Есть локально сохраненные результаты. Они будут отправлены при появлении связи."
         : null);
-  const broadcastActiveTargetsLabel = formatTournamentBroadcastTargets(broadcastActiveTargets);
+  const broadcastStationId = String(tournamentParams.stationId ?? "").trim();
+  const broadcastTargetOptions = getTournamentBroadcastTargetOptions(broadcastStationId);
+  const broadcastActiveTargetsLabel = formatTournamentBroadcastTargets(
+    broadcastActiveTargets,
+    broadcastStationId,
+  );
   const broadcastStateNeedsAttention = broadcastPartial
     || broadcastRecoveryRequired
     || broadcastStatus === "starting"
@@ -6099,7 +6104,7 @@ function TournamentManagerModal({
         ? `Остановка выполняется: ${broadcastActiveTargetsLabel}`
         : "Остановка трансляции выполняется"
       : broadcastActiveTargetsLabel
-        ? `Активные манежи: ${broadcastActiveTargetsLabel}`
+        ? `Активные экраны: ${broadcastActiveTargetsLabel}`
         : "Трансляция активна";
 
   return (
@@ -6774,8 +6779,8 @@ function TournamentManagerModal({
         variant="dialog"
         bodyClassName="tournament-broadcast-target-dialog"
       >
-        <div className="tournament-broadcast-target-options" role="radiogroup" aria-label="Манеж для трансляции">
-          {TOURNAMENT_BROADCAST_TARGET_OPTIONS.map((option) => (
+        <div className="tournament-broadcast-target-options" role="radiogroup" aria-label="Экран для трансляции">
+          {broadcastTargetOptions.map((option) => (
             <label
               key={option.value}
               className={`tournament-broadcast-target-option${broadcastSelectedTarget === option.value ? " is-selected" : ""}`}

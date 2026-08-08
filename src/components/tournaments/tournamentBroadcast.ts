@@ -6,6 +6,9 @@ import type {
 export const SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID =
   "0d5504f6-ea6f-44bb-a9e4-947faf0273ab";
 
+export const NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID =
+  "6b2d7e60-caff-4b22-89f6-6f19d7d311ab";
+
 export const TOURNAMENT_BROADCAST_TARGET_OPTIONS: ReadonlyArray<{
   value: TournamentBroadcastTarget;
   label: string;
@@ -15,12 +18,37 @@ export const TOURNAMENT_BROADCAST_TARGET_OPTIONS: ReadonlyArray<{
   { value: "both", label: "Оба" },
 ];
 
+export const NAGATINSKAYA_TOURNAMENT_BROADCAST_TARGET_OPTIONS: ReadonlyArray<{
+  value: TournamentBroadcastTarget;
+  label: string;
+}> = [
+  { value: "right_arena", label: "Экран Корт №1" },
+  { value: "left_arena", label: "Экран Корт №7" },
+  { value: "both", label: "Оба экрана" },
+];
+
+const TOURNAMENT_BROADCAST_TARGET_OPTIONS_BY_STATION = new Map<string, ReadonlyArray<{
+  value: TournamentBroadcastTarget;
+  label: string;
+}>>([
+  [SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID, TOURNAMENT_BROADCAST_TARGET_OPTIONS],
+  [NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID, NAGATINSKAYA_TOURNAMENT_BROADCAST_TARGET_OPTIONS],
+]);
+
 const TOURNAMENT_BROADCAST_TARGET_LABELS = new Map(
   TOURNAMENT_BROADCAST_TARGET_OPTIONS.map((option) => [option.value, option.label]),
 );
 
 export function isSkolkovoTournamentBroadcastStation(stationId: unknown): boolean {
   return String(stationId ?? "").trim() === SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID;
+}
+
+export function getTournamentBroadcastTargetOptions(stationId: unknown) {
+  return TOURNAMENT_BROADCAST_TARGET_OPTIONS_BY_STATION.get(String(stationId ?? "").trim()) ?? [];
+}
+
+export function isTournamentBroadcastTargetSelectionStation(stationId: unknown): boolean {
+  return getTournamentBroadcastTargetOptions(stationId).length > 0;
 }
 
 export function isTournamentBroadcastTarget(value: unknown): value is TournamentBroadcastTarget {
@@ -37,9 +65,13 @@ export function normalizeTournamentBroadcastTargets(value: unknown): TournamentB
   return orderedTargets.filter((target) => targets.has(target));
 }
 
-export function formatTournamentBroadcastTargets(value: unknown): string | null {
+export function formatTournamentBroadcastTargets(value: unknown, stationId?: unknown): string | null {
+  const options = getTournamentBroadcastTargetOptions(stationId);
+  const labelsByTarget = options.length > 0
+    ? new Map(options.map((option) => [option.value, option.label]))
+    : TOURNAMENT_BROADCAST_TARGET_LABELS;
   const labels = normalizeTournamentBroadcastTargets(value)
-    .map((target) => TOURNAMENT_BROADCAST_TARGET_LABELS.get(target))
+    .map((target) => labelsByTarget.get(target))
     .filter((label): label is string => Boolean(label));
   return labels.length > 0 ? labels.join(", ") : null;
 }

@@ -6,7 +6,11 @@ import path from "node:path";
 import test from "node:test";
 import {
   formatTournamentBroadcastTargets,
+  getTournamentBroadcastTargetOptions,
+  isTournamentBroadcastTargetSelectionStation,
   isSkolkovoTournamentBroadcastStation,
+  NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID,
+  NAGATINSKAYA_TOURNAMENT_BROADCAST_TARGET_OPTIONS,
   normalizeTournamentBroadcastTargets,
   SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID,
   TOURNAMENT_BROADCAST_TARGET_OPTIONS,
@@ -92,6 +96,18 @@ const skolkovoEnvironment = {
   }),
 };
 
+const nagatinskayaEnvironment = {
+  ...integrationEnvironment,
+  CUP_STATION_SETTINGS_JSON: JSON.stringify({
+    [NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID]: {
+      tournamentBroadcastTargets: {
+        right_arena: "box-court-1",
+        left_arena: { boxId: "box-court-7" },
+      },
+    },
+  }),
+};
+
 function buildSkolkovoRouteMessage(
   action: "start" | "stop" | "status",
   requestedTarget?: "right_arena" | "left_arena" | "both",
@@ -110,6 +126,31 @@ function buildSkolkovoRouteMessage(
       action,
       tournamentId: "tournament-1",
       requestedStationId: SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID,
+      requestedTarget: requestedTarget ?? null,
+      profileId: "manager-1",
+      hasHostingAccess: false,
+    },
+  };
+}
+
+function buildNagatinskayaRouteMessage(
+  action: "start" | "stop" | "status",
+  requestedTarget?: "right_arena" | "left_arena" | "both",
+  broadcast: Record<string, unknown> = {},
+) {
+  return {
+    payload: [{
+      tournamentId: "tournament-1",
+      organizer: { id: "manager-1" },
+      params: {
+        stationId: NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID,
+        broadcast,
+      },
+    }],
+    _tournamentBroadcast: {
+      action,
+      tournamentId: "tournament-1",
+      requestedStationId: NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID,
       requestedTarget: requestedTarget ?? null,
       profileId: "manager-1",
       hasHostingAccess: false,
@@ -195,7 +236,7 @@ function buildClaimedSkolkovoStartRequests(
   };
 }
 
-test("frontend exposes an exact Skolkovo selector without integration secrets or device addressing", () => {
+test("frontend exposes station-specific screen selectors without integration secrets or device addressing", () => {
   const pageSource = fs.readFileSync("src/components/tournaments/TournamentsPage.tsx", "utf8");
   const apiSource = fs.readFileSync("src/utils/apiClient.ts", "utf8");
   const combinedSource = `${pageSource}\n${apiSource}`;
@@ -205,7 +246,8 @@ test("frontend exposes an exact Skolkovo selector without integration secrets or
   assert.match(pageSource, /Где запустить трансляцию\?/);
   assert.match(pageSource, /setBroadcastSelectedTarget\(null\)/);
   assert.match(pageSource, /disabled=\{!broadcastSelectedTarget \|\| broadcastLoading \|\| !isOnline\}/);
-  assert.doesNotMatch(pageSource, /isSkolkovoTournamentBroadcastStation\(stationId\) \|\|/);
+  assert.match(pageSource, /isTournamentBroadcastTargetSelectionStation\(stationId\)/);
+  assert.match(pageSource, /getTournamentBroadcastTargetOptions\(broadcastStationId\)/);
   assert.match(pageSource, /aria-pressed=\{broadcastActive\}/);
   assert.match(pageSource, /withTournamentStationContext/);
   assert.match(apiSource, /\/lk\/tournaments\/broadcast\/status/);
@@ -278,6 +320,32 @@ test("Skolkovo broadcast selector exposes only ordered server-safe targets", () 
   assert.equal(
     formatTournamentBroadcastTargets(["left_arena", "right_arena"]),
     "Правый манеж, Левый манеж",
+  );
+});
+
+test("Nagatinskaya uses court 1, court 7 and both-screen labels with the same safe target values", () => {
+  assert.equal(
+    isTournamentBroadcastTargetSelectionStation(NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID),
+    true,
+  );
+  assert.deepEqual(
+    getTournamentBroadcastTargetOptions(NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID),
+    NAGATINSKAYA_TOURNAMENT_BROADCAST_TARGET_OPTIONS,
+  );
+  assert.deepEqual(
+    NAGATINSKAYA_TOURNAMENT_BROADCAST_TARGET_OPTIONS.map((option) => [option.value, option.label]),
+    [
+      ["right_arena", "Экран Корт №1"],
+      ["left_arena", "Экран Корт №7"],
+      ["both", "Оба экрана"],
+    ],
+  );
+  assert.equal(
+    formatTournamentBroadcastTargets(
+      ["right_arena", "left_arena"],
+      NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID,
+    ),
+    "Экран Корт №1, Экран Корт №7",
   );
 });
 
@@ -664,7 +732,7 @@ test("unknown or unconfirmed claim results never fan out to a device", () => {
   });
 });
 
-test("fresh starting state is safe in status and rejects start or stop with Retry-After", () => {
+test("external status resolves a stale transition while start and stop stay locked during its live lease", () => {
   const leaseUntil = new Date(Date.now() + 45_000).toISOString();
   const startingState = {
     active: true,
@@ -684,11 +752,43 @@ test("fresh starting state is safe in status and rejects start or stop with Retr
     buildSkolkovoRouteMessage("status", undefined, startingState),
     skolkovoEnvironment,
   );
-  const status = statusResult[1].payload;
+  const statusRequests = dispatchRouteToDeviceRequests(statusResult);
+  assert.equal(statusRequests.length, 2);
+  assert.equal(statusRequests.every((request) => request.method === "GET"), true);
+  assert.equal(statusRequests.every((request) => String(request.url).endsWith("/status")), true);
+  const statusAggregate = aggregateDeviceOutcomes(statusRequests, [
+    {
+      statusCode: 200,
+      payload: {
+        box_id: "secret-right",
+        online: true,
+        tournament_active: true,
+        tournament_id: "tournament-1",
+      },
+    },
+    {
+      statusCode: 200,
+      payload: {
+        box_id: "secret-left",
+        online: true,
+        tournament_active: true,
+        tournament_id: "tournament-1",
+      },
+    },
+  ]);
+  const statusPersist = runFunctionNode(
+    "fn_tournament_broadcast_persist.js",
+    statusAggregate[0],
+  )[0];
+  const statusResponse = runFunctionNode("fn_tournament_broadcast_response.js", {
+    ...statusPersist,
+    payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1 },
+  });
+  const status = statusResponse.payload;
   assert.equal(status.active, true);
-  assert.equal(status.status, "starting");
-  assert.equal(status.operationInProgress, true);
-  assert.equal(status.operationLeaseUntil, leaseUntil);
+  assert.equal(status.status, "active");
+  assert.equal(status.operationInProgress, false);
+  assert.equal(status.operationLeaseUntil, null);
   assert.equal(status.recoveryRequired, false);
   assert.equal(status.operationId, undefined);
   assert.doesNotMatch(
@@ -820,6 +920,42 @@ test("Skolkovo right, left and both resolve only through server-side target mapp
   assert.equal(duplicateResult[2].payload.code, "TOURNAMENT_BROADCAST_CONFIG_INVALID");
 });
 
+test("Nagatinskaya routes court 1, court 7 and both only through its server-side mapping", () => {
+  const expectations = [
+    { target: "right_arena" as const, boxes: ["box-court-1"], label: "Экран Корт №1" },
+    { target: "left_arena" as const, boxes: ["box-court-7"], label: "Экран Корт №7" },
+    { target: "both" as const, boxes: ["box-court-1", "box-court-7"], label: null },
+  ];
+
+  expectations.forEach(({ target, boxes, label }) => {
+    const route = runFunctionNode(
+      "fn_tournament_broadcast_route.js",
+      buildNagatinskayaRouteMessage("start", target),
+      nagatinskayaEnvironment,
+    );
+    const routed = getOutputMessagesAt(route, 0);
+    assert.equal(routed.length, 1);
+    const claim = getOutputMessagesAt(
+      runFunctionNode("fn_tournament_broadcast_dispatch.js", structuredClone(routed[0])),
+      0,
+    )[0];
+    const requests = getOutputMessagesAt(runFunctionNode("fn_tournament_broadcast_dispatch.js", {
+      ...structuredClone(claim),
+      payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1 },
+    }), 1);
+    assert.deepEqual(
+      requests.map((request) => String(request.url).match(/devices\/([^/]+)/)?.[1]),
+      boxes,
+    );
+    if (label) {
+      assert.equal(
+        (requests[0]._tournamentBroadcast as Record<string, unknown>).targetLabel,
+        label,
+      );
+    }
+  });
+});
+
 test("status exposes only safe target state and never a box identifier", () => {
   const result = runFunctionNode("fn_tournament_broadcast_route.js", buildSkolkovoRouteMessage(
     "status",
@@ -833,15 +969,92 @@ test("status exposes only safe target state and never a box identifier", () => {
       boxId: "secret-box",
       boxIds: ["secret-left", "secret-right"],
     },
-  ));
-  const payload = result[1].payload;
+  ), skolkovoEnvironment);
+  const requests = dispatchRouteToDeviceRequests(result);
+  const aggregate = aggregateDeviceOutcomes(requests, [
+    {
+      statusCode: 200,
+      payload: {
+        box_id: "secret-right",
+        online: true,
+        tournament_active: true,
+        tournament_id: "tournament-1",
+      },
+    },
+    {
+      statusCode: 200,
+      payload: {
+        box_id: "secret-left",
+        online: true,
+        tournament_active: true,
+        tournament_id: "another-tournament",
+      },
+    },
+  ]);
+  const persisted = runFunctionNode("fn_tournament_broadcast_persist.js", aggregate[0])[0];
+  const response = runFunctionNode("fn_tournament_broadcast_response.js", {
+    ...persisted,
+    payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1 },
+  });
+  const payload = response.payload;
   assert.equal(payload.active, true);
   assert.equal(payload.stationId, SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID);
   assert.equal(payload.selectionRequired, true);
   assert.equal(payload.partial, true);
-  assert.equal(payload.requestedTarget, "both");
+  assert.equal(payload.requestedTarget, "right_arena");
   assert.deepEqual(payload.activeTargets, ["right_arena"]);
-  assert.doesNotMatch(JSON.stringify(payload), /secret-box|secret-left|secret-right/);
+  assert.doesNotMatch(JSON.stringify(payload), /secret-box|secret-left|secret-right|box-right|box-left/);
+});
+
+test("legacy single-screen status uses box-control GET status and matches the current Viva tournament", () => {
+  const environment = {
+    ...integrationEnvironment,
+    CUP_STATION_SETTINGS_JSON: JSON.stringify({
+      "station-1": { tournamentBroadcastBoxId: "legacy-secret-box" },
+    }),
+  };
+  const buildMessage = () => ({
+    payload: [{
+      tournamentId: "tournament-1",
+      organizer: { id: "manager-1" },
+      params: { stationId: "station-1", broadcast: {} },
+    }],
+    _tournamentBroadcast: {
+      action: "status",
+      tournamentId: "tournament-1",
+      requestedStationId: "station-1",
+      requestedTarget: null,
+      profileId: "manager-1",
+      hasHostingAccess: false,
+    },
+  });
+
+  const resolve = (tournamentId: string) => {
+    const route = runFunctionNode(
+      "fn_tournament_broadcast_route.js",
+      buildMessage(),
+      environment,
+    );
+    const requests = dispatchRouteToDeviceRequests(route);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].method, "GET");
+    assert.match(String(requests[0].url), /\/devices\/legacy-secret-box\/status$/);
+    assert.equal(requests[0].payload, undefined);
+    const aggregate = aggregateDeviceOutcomes(requests, [{
+      statusCode: 200,
+      payload: {
+        box_id: "legacy-secret-box",
+        online: true,
+        tournament_active: true,
+        tournament_id: tournamentId,
+      },
+    }]);
+    return runFunctionNode("fn_tournament_broadcast_persist.js", aggregate[0])[0]
+      .payload[1].$set["params.broadcast"];
+  };
+
+  assert.equal(resolve("tournament-1").active, true);
+  assert.equal(resolve("another-tournament").active, false);
 });
 
 test("stop restores the saved station and fans out only to saved active targets", () => {
@@ -1124,7 +1337,7 @@ test("single-target Skolkovo start timeout compensates only the intended target"
   );
 });
 
-test("final start persistence uses operation CAS and failure leaves the starting claim discoverable", () => {
+test("final start persistence uses operation CAS and external status reconciles a failed finalize", () => {
   const { claimMessage, requests } = buildClaimedSkolkovoStartRequests(
     "both",
     {},
@@ -1175,10 +1388,26 @@ test("final start persistence uses operation CAS and failure leaves the starting
     buildSkolkovoRouteMessage("status", undefined, startingState),
     skolkovoEnvironment,
   );
-  const status = statusResult[1].payload;
+  const statusRequests = dispatchRouteToDeviceRequests(statusResult);
+  const statusAggregate = aggregateDeviceOutcomes(statusRequests, [
+    {
+      statusCode: 200,
+      payload: { online: true, tournament_active: true, tournament_id: "tournament-1" },
+    },
+    {
+      statusCode: 200,
+      payload: { online: true, tournament_active: true, tournament_id: "tournament-1" },
+    },
+  ]);
+  const statusPersist = runFunctionNode("fn_tournament_broadcast_persist.js", statusAggregate[0])[0];
+  const statusResponse = runFunctionNode("fn_tournament_broadcast_response.js", {
+    ...statusPersist,
+    payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1 },
+  });
+  const status = statusResponse.payload;
   assert.equal(status.active, true);
-  assert.equal(status.status, "starting");
-  assert.equal(status.operationInProgress, true);
+  assert.equal(status.status, "active");
+  assert.equal(status.operationInProgress, false);
   assert.equal(status.recoveryRequired, false);
   assert.equal(status.operationId, undefined);
   assert.equal(JSON.stringify(status).includes(operationId), false);

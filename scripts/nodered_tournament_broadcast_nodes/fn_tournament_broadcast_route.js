@@ -33,9 +33,22 @@ const readCupStationSettings = () => {
   }
 };
 const SKOLKOVO_STATION_ID = "0d5504f6-ea6f-44bb-a9e4-947faf0273ab";
-const SKOLKOVO_TARGETS = {
-  right_arena: { key: "right_arena", label: "Правый манеж" },
-  left_arena: { key: "left_arena", label: "Левый манеж" },
+const NAGATINSKAYA_STATION_ID = "6b2d7e60-caff-4b22-89f6-6f19d7d311ab";
+const TARGET_SELECTION_STATIONS = {
+  [SKOLKOVO_STATION_ID]: {
+    name: "Сколково",
+    targets: {
+      right_arena: { key: "right_arena", label: "Правый манеж" },
+      left_arena: { key: "left_arena", label: "Левый манеж" },
+    },
+  },
+  [NAGATINSKAYA_STATION_ID]: {
+    name: "Нагатинская",
+    targets: {
+      right_arena: { key: "right_arena", label: "Экран Корт №1" },
+      left_arena: { key: "left_arena", label: "Экран Корт №7" },
+    },
+  },
 };
 const readBoxId = (value) => {
   if (typeof value === "string") return toStr(value);
@@ -61,12 +74,13 @@ const resolveLegacyBoxId = (stationId, tournamentId) => {
   }
   return null;
 };
-const resolveSkolkovoTargets = () => {
-  const station = readCupStationSettings()[SKOLKOVO_STATION_ID];
+const resolveTargetSelectionStation = (stationId) => TARGET_SELECTION_STATIONS[stationId] || null;
+const resolveStationTargets = (stationId, profile) => {
+  const station = readCupStationSettings()[stationId];
   const targetMap = isObj(station?.tournamentBroadcastTargets)
     ? station.tournamentBroadcastTargets
     : (isObj(station?.tournament_broadcast_targets) ? station.tournament_broadcast_targets : {});
-  return Object.values(SKOLKOVO_TARGETS).map((target) => ({
+  return Object.values(profile.targets).map((target) => ({
     ...target,
     boxId: readBoxId(targetMap[target.key]),
   }));
@@ -103,13 +117,14 @@ const buildRequests = (baseMsg, context, targets) => {
       index,
       count: targets.length,
     },
-    method: "POST",
+    method: context.commandAction === "status" ? "GET" : "POST",
     requestTimeout: 20000,
     url: context.apiBaseUrl.replace(/\/+$/, "")
       + "/integrations/v1/devices/"
       + encodeURIComponent(target.boxId)
-      + "/tournament/"
-      + context.commandAction,
+      + (context.commandAction === "status"
+        ? "/status"
+        : "/tournament/" + context.commandAction),
     headers: {
       Authorization: `Bearer ${context.integrationToken}`,
       "Content-Type": "application/json",
@@ -158,7 +173,8 @@ if (
 const stationId = storedStationId;
 if (!stationId) return respond(409, "TOURNAMENT_STATION_MISSING", "Для турнира не указана станция");
 
-const isSkolkovo = stationId === SKOLKOVO_STATION_ID;
+const targetSelectionProfile = resolveTargetSelectionStation(stationId);
+const isTargetSelectionStation = Boolean(targetSelectionProfile);
 const savedActiveTargets = normalizeActiveTargets(savedBroadcast.activeTargets);
 const savedRequestedTarget = toStr(savedBroadcast.requestedTarget);
 const rawSavedStatus = toStr(savedBroadcast.status);
@@ -177,32 +193,7 @@ const safeRequestedTarget = ["right_arena", "left_arena", "both"].includes(saved
   ? savedRequestedTarget
   : targetForKeys(savedActiveTargets);
 
-if (context.action === "status") {
-  msg.statusCode = 200;
-  msg.headers = {
-    "Content-Type": "application/json; charset=utf-8",
-    "Access-Control-Allow-Origin": "*",
-    "Cache-Control": "no-store",
-  };
-  msg.payload = {
-    ok: true,
-    tournamentId: context.tournamentId,
-    stationId,
-    active: savedBroadcast.active === true,
-    status: savedStatus,
-    requestedTarget: isSkolkovo ? safeRequestedTarget : null,
-    activeTargets: isSkolkovo ? savedActiveTargets : [],
-    selectionRequired: isSkolkovo,
-    partial: savedStatus === "partial",
-    operationInProgress: isSkolkovo && operationInProgress,
-    operationLeaseUntil: isSkolkovo && isTransitionState ? savedOperationLeaseUntil : null,
-    recoveryRequired: isSkolkovo && recoveryRequired,
-    updatedAt: toStr(savedBroadcast.updatedAt),
-  };
-  return [null, msg, null];
-}
-
-if (context.action === "start" && isSkolkovo && savedBroadcast.active === true) {
+if (context.action === "start" && isTargetSelectionStation && savedBroadcast.active === true) {
   if (operationInProgress) {
     return respond(
       409,
@@ -214,10 +205,10 @@ if (context.action === "start" && isSkolkovo && savedBroadcast.active === true) 
   return respond(
     409,
     "BROADCAST_ALREADY_ACTIVE",
-    "Сначала остановите текущую трансляцию, затем выберите манеж для нового запуска",
+    "Сначала остановите текущую трансляцию, затем выберите экран для нового запуска",
   );
 }
-if (context.action === "stop" && isSkolkovo && operationInProgress) {
+if (context.action === "stop" && isTargetSelectionStation && operationInProgress) {
   return respond(
     409,
     "BROADCAST_OPERATION_IN_PROGRESS",
@@ -225,23 +216,29 @@ if (context.action === "stop" && isSkolkovo && operationInProgress) {
     { "Retry-After": "5" },
   );
 }
-if (context.requestedTarget && !isSkolkovo) {
+if (context.requestedTarget && !isTargetSelectionStation) {
   return respond(400, "BROADCAST_TARGET_NOT_ALLOWED", "Для этой станции выбор приставки недоступен");
 }
-if (context.action === "start" && isSkolkovo && currentStationId !== SKOLKOVO_STATION_ID) {
-  return respond(409, "TOURNAMENT_STATION_MISSING", "Турнир должен быть привязан к станции Сколково");
+if (context.action === "start" && isTargetSelectionStation && currentStationId !== stationId) {
+  return respond(
+    409,
+    "TOURNAMENT_STATION_MISSING",
+    `Турнир должен быть привязан к станции ${targetSelectionProfile.name}`,
+  );
 }
-if (context.action === "start" && isSkolkovo && !context.requestedTarget) {
-  return respond(400, "BROADCAST_TARGET_REQUIRED", "Выберите манеж для запуска трансляции");
+if (context.action === "start" && isTargetSelectionStation && !context.requestedTarget) {
+  return respond(400, "BROADCAST_TARGET_REQUIRED", "Выберите экран для запуска трансляции");
 }
 
 let commandTargets;
 let requestedTarget = null;
-if (isSkolkovo) {
-  const configuredTargets = resolveSkolkovoTargets();
+if (isTargetSelectionStation) {
+  const configuredTargets = resolveStationTargets(stationId, targetSelectionProfile);
   const targetKeys = context.action === "start"
     ? keysForTarget(context.requestedTarget)
-    : (savedActiveTargets.length > 0 ? savedActiveTargets : keysForTarget(safeRequestedTarget));
+    : context.action === "status"
+      ? ["right_arena", "left_arena"]
+      : (savedActiveTargets.length > 0 ? savedActiveTargets : keysForTarget(safeRequestedTarget));
   const effectiveTargetKeys = targetKeys.length > 0
     ? targetKeys
     : ["right_arena", "left_arena"];
@@ -251,10 +248,14 @@ if (isSkolkovo) {
     : (safeRequestedTarget || targetForKeys(effectiveTargetKeys));
 
   if (commandTargets.length !== effectiveTargetKeys.length || commandTargets.some((target) => !target.boxId)) {
-    return respond(409, "TOURNAMENT_BROADCAST_DEVICE_MISSING", "Для Сколково настроены не все выбранные приставки");
+    return respond(
+      409,
+      "TOURNAMENT_BROADCAST_DEVICE_MISSING",
+      `Для станции ${targetSelectionProfile.name} настроены не все выбранные приставки`,
+    );
   }
   if (new Set(commandTargets.map((target) => target.boxId)).size !== commandTargets.length) {
-    return respond(409, "TOURNAMENT_BROADCAST_CONFIG_INVALID", "Для манежей должны быть настроены разные приставки");
+    return respond(409, "TOURNAMENT_BROADCAST_CONFIG_INVALID", "Для экранов должны быть настроены разные приставки");
   }
 } else {
   const boxId = resolveLegacyBoxId(stationId, context.tournamentId);
@@ -272,7 +273,9 @@ const commandContext = {
   ...context,
   stationId,
   requestedTarget,
-  selectionRequired: isSkolkovo,
+  selectionRequired: isTargetSelectionStation,
+  savedRequestedTarget: safeRequestedTarget,
+  savedStatus,
   savedActiveTargets,
   phase: "command",
   commandAction: context.action,
@@ -290,7 +293,7 @@ const commandContext = {
           ? "studio.id"
           : null,
 };
-if (isSkolkovo && context.action === "stop") {
+if (isTargetSelectionStation && context.action === "stop") {
   const persistenceFilter = { tournamentId: context.tournamentId };
   if (tournament._id !== null && tournament._id !== undefined) persistenceFilter._id = tournament._id;
   if (commandContext.stationFilterField) persistenceFilter[commandContext.stationFilterField] = stationId;
@@ -306,7 +309,7 @@ if (isSkolkovo && context.action === "stop") {
   commandContext.persistenceFilter = persistenceFilter;
 }
 delete msg.statusCode;
-if (isSkolkovo && context.action === "start") {
+if (isTargetSelectionStation && context.action === "start") {
   msg._tournamentBroadcast = commandContext;
   msg.payload = undefined;
   return [msg, null, null];

@@ -769,7 +769,7 @@ CUP_STATION_SETTINGS_JSON={"<station-id>":{"tournamentBroadcastBoxId":"<box-id>"
 
 `CUP_STATION_SETTINGS_JSON` — runtime-проекция настроек станций ЦУП, а не второй источник истины. ЦУП хранит поле `tournamentBroadcastBoxId`, а deployment/runtime sync публикует актуальный snapshot для Node-RED.
 
-Для Сколково (`0d5504f6-ea6f-44bb-a9e4-947faf0273ab`) проекция должна содержать две разные server-only привязки. Реальные UUID приставок подставляются в PM2/runtime env и не коммитятся:
+Для Сколково (`0d5504f6-ea6f-44bb-a9e4-947faf0273ab`) и Нагатинской (`6b2d7e60-caff-4b22-89f6-6f19d7d311ab`) проекция должна содержать по две разные server-only привязки. Реальные UUID приставок подставляются в PM2/runtime env и не коммитятся:
 
 ```json
 {
@@ -777,6 +777,12 @@ CUP_STATION_SETTINGS_JSON={"<station-id>":{"tournamentBroadcastBoxId":"<box-id>"
     "tournamentBroadcastTargets": {
       "right_arena": "<right-arena-box-id>",
       "left_arena": "<left-arena-box-id>"
+    }
+  },
+  "6b2d7e60-caff-4b22-89f6-6f19d7d311ab": {
+    "tournamentBroadcastTargets": {
+      "right_arena": "<court-1-screen-box-id>",
+      "left_arena": "<court-7-screen-box-id>"
     }
   }
 }
@@ -791,4 +797,4 @@ TOURNAMENT_BROADCAST_TEST_TOURNAMENT_ID=<test-tournament-id>
 TOURNAMENT_BROADCAST_TEST_BOX_ID=<test-box-id>
 ```
 
-После обновления env перезапустить Node-RED штатным способом, импортировать `node-red/modular/imports/lk_tournament_broadcast.nodes.import.json` в enabled tab `LK Tournaments` и проверить status → start → status → stop → status. Для Сколково отдельно проверить `right_arena`, `left_arena` и `both`, конкурентный start, fresh/stale `starting`, повторное открытие manager/status, подтверждённую Mongo-запись и остановку всех сохранённых `activeTargets`. Bearer и реальные UUID приставок нельзя добавлять в `.env` Vite, Tilda HTML, frontend source или flow JSON.
+После обновления env перезапустить Node-RED штатным способом, импортировать `node-red/modular/imports/lk_tournament_broadcast.nodes.import.json` в enabled tab `LK Tournaments` и проверить status → start → status → stop → status. Status должен вызывать box-control `GET /integrations/v1/devices/{box_id}/status` и учитывать только точное совпадение `tournament_id`. Для Сколково и Нагатинской отдельно проверить каждый экран и `both`, конкурентный start, fresh/stale `starting`, повторное открытие manager/status, подтверждённую Mongo-запись и остановку всех сохранённых `activeTargets`. Терехово остаётся single-screen. Bearer и реальные UUID приставок нельзя добавлять в `.env` Vite, Tilda HTML, frontend source или flow JSON.

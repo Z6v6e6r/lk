@@ -16,7 +16,32 @@ const upstreamStatus = Number(msg.statusCode) || 0;
 const upstreamMessage = isObj(msg.payload)
   ? String(msg.payload.message || msg.payload.error || msg.payload.detail || "").trim()
   : String(msg.error?.message || msg.payload || "").trim();
-const commandAction = context.commandAction === "stop" ? "stop" : "start";
+const commandAction = ["start", "stop", "status"].includes(context.commandAction)
+  ? context.commandAction
+  : "start";
+if (commandAction === "status") {
+  const upstreamPayload = isObj(msg.payload) ? msg.payload : {};
+  const upstreamTournamentId = String(
+    upstreamPayload.tournament_id ?? upstreamPayload.tournamentId ?? "",
+  ).trim() || null;
+  const ok = upstreamStatus >= 200 && upstreamStatus < 300;
+  msg.payload = {
+    ok,
+    target: context.targetKey || null,
+    label: context.targetLabel || null,
+    statusCode: upstreamStatus,
+    online: ok && upstreamPayload.online === true,
+    tournamentActive: ok && upstreamPayload.tournament_active === true,
+    activeForTournament: ok
+      && upstreamPayload.online === true
+      && upstreamPayload.tournament_active === true
+      && upstreamTournamentId === String(context.tournamentId || "").trim(),
+    message: ok ? null : "Приставка не подтвердила состояние трансляции",
+  };
+  delete msg.statusCode;
+  delete msg.error;
+  return msg;
+}
 const alreadyStopped = commandAction === "stop"
   && upstreamStatus === 409
   && /no active tournament session/i.test(upstreamMessage);

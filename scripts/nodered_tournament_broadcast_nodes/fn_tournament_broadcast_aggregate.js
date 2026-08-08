@@ -77,6 +77,42 @@ const successfulKeys = expectedKeys.filter((key) => resultByKey.get(key)?.ok ===
 const failedKeys = expectedKeys.filter((key) => resultByKey.get(key)?.ok !== true);
 const selectedTargets = context.commandTargets.filter((target) => expectedKeys.includes(target.key));
 
+if (context.action === "status") {
+  if (failedKeys.length > 0) {
+    return respond(
+      503,
+      "TOURNAMENT_BROADCAST_STATUS_FAILED",
+      "Приставки не подтвердили состояние трансляции",
+    );
+  }
+
+  const activeKeys = expectedKeys.filter((key) => resultByKey.get(key)?.activeForTournament === true);
+  const active = activeKeys.length > 0;
+  const activeTargets = context.selectionRequired === true ? activeKeys : [];
+  const requestedTarget = context.selectionRequired === true && active
+    ? targetForKeys(activeTargets)
+    : null;
+  const partial = context.selectionRequired === true
+    && active
+    && context.savedRequestedTarget === "both"
+    && activeTargets.length < expectedKeys.length;
+
+  msg._tournamentBroadcast = {
+    ...context,
+    nextState: {
+      active,
+      status: partial ? "partial" : (active ? "active" : "inactive"),
+      requestedTarget,
+      activeTargets,
+      partial,
+      message: partial
+        ? `Трансляция активна не на всех выбранных экранах: ${labelList(activeTargets, selectedTargets)}`
+        : null,
+    },
+  };
+  return [msg, null, null];
+}
+
 if (context.phase === "compensation") {
   if (failedKeys.length === 0) {
     msg._tournamentBroadcast = {
