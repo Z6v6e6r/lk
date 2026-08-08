@@ -72,6 +72,7 @@
     "test:tournament-prepare-recovery": "node --test scripts/tests/tournamentPrepareRecovery.test.mjs",
     "test:community-rating": "node --experimental-strip-types --test scripts/tests/communityRating.calculations.test.ts scripts/tests/communityRating.facts.test.ts scripts/tests/communityRating.aggregates.test.ts scripts/tests/communityRating.persistence.test.ts scripts/tests/communityRating.recalculation.test.ts scripts/tests/communityRating.noderedFlow.test.ts scripts/tests/trainingVisitsSync.test.ts",
     "test:deploy-topology": "node --experimental-strip-types --test scripts/tests/deployTopology.test.ts",
+    "test:subscription-booking-nginx": "node --test scripts/tests/subscriptionBookingNginx.test.mjs",
     "test:padel-day": "node --experimental-strip-types --test scripts/tests/padelDaySchedule.test.ts scripts/tests/padelDay.nodered.test.ts scripts/tests/padelDay.deploy.test.ts",
     "test:referral-subscription": "node --experimental-strip-types --test scripts/tests/referralSubscription.nodered.test.ts",
     "rating:recalculate": "node --experimental-strip-types scripts/recalculate_community_rating.mjs",

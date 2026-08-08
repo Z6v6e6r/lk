@@ -34,6 +34,12 @@ npm run nodered:modular:prepare-147 -- /root/.node-red/flows.json
 
 Это обязательно делает `pull -> write/verify source.flow.meta.json -> patch local source functions -> build --allow-other-tabs=true -> validate`, чтобы не выкатывать Node-RED из устаревшего локального snapshot.
 
+Для `POST /lk/subscription-bookings` production nginx должен содержать точный
+proxy-location из `scripts/nginx/lk-subscription-booking-location.conf`.
+Кандидат строится и применяется только через guarded
+`scripts/nginx/patch_subscription_booking_proxy.mjs` с SHA текущего live-конфига,
+backup, последующими `nginx -t` и `systemctl reload nginx`.
+
 После сборки в `dist/` лежат два комплекта скриптов:
 
 - боевой комплект для пользователей: `bundle.js`, `games.js`, `tournaments.js`, `onboarding.js`, `levels-info.js`, `communities.js`

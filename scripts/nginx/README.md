@@ -66,3 +66,27 @@ The production-only guard covers the cached GET
 
 See `docs/TOURNAMENT_PARTICIPANTS_REQUEST_STORM_GUARD.md` for thresholds,
 verification, live backups, and rollback.
+
+## Subscription booking gateway
+
+`lk-subscription-booking-location.conf` is the exact production location for
+`POST/OPTIONS /lk/subscription-bookings`. It must be installed in the
+`padlhub.su` server block before the generic static `/lk/` handler so browser
+subscription bookings reach Node-RED on `127.0.0.1:1880`.
+
+Build a guarded candidate from a freshly copied live config, then apply it only
+if both the live source SHA and candidate SHA still match:
+
+```bash
+node scripts/nginx/patch_subscription_booking_proxy.mjs build \
+  /tmp/padlhub.su.live /tmp/padlhub.su.candidate LIVE_SHA
+node scripts/nginx/patch_subscription_booking_proxy.mjs apply \
+  /etc/nginx/sites-enabled/padlhub.su /tmp/padlhub.su.candidate \
+  LIVE_SHA CANDIDATE_SHA /etc/nginx/sites-enabled/padlhub.su.backup-subscription-booking-TIMESTAMP
+nginx -t
+systemctl reload nginx
+```
+
+If `nginx -t` fails, restore the named backup before any reload. Public
+post-checks are OPTIONS `204` with `POST, OPTIONS` and POST without Bearer
+`401 SUBSCRIPTION_BOOKING_AUTH_REQUIRED`.
