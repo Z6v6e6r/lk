@@ -13,6 +13,7 @@ import {
   apiFetchPadelGamesByPhone,
   apiFetchPadelGamesByBookingReferences,
   apiLeavePadelGameAsCurrentUser,
+  apiReleaseSubscriptionBookingClaim,
   apiFetchTournamentHistory,
   apiVerifyBookingCancellation,
   apiUpdatePadelGameRecord,
@@ -2257,6 +2258,15 @@ export function Cabinet({
           message: leaveResult.data.message || "Не удалось подтвердить выход из игры",
         };
       }
+      if (action.id === "subscription") {
+        const releaseResult = await apiReleaseSubscriptionBookingClaim(bookingId);
+        if (releaseResult.error || releaseResult.data?.state !== "RELEASED") {
+          return {
+            ok: false,
+            message: "Запись отменена в Viva, но дневной лимит ещё не синхронизирован. Повторите позже.",
+          };
+        }
+      }
       return { ok: true, state: "DONE", message: action.successMessage };
     }
 
@@ -2282,6 +2292,15 @@ export function Cabinet({
     }
     const verification = await apiVerifyBookingCancellation(bookingId);
     const cancelled = !verification.error && verification.data?.state === "cancelled";
+    if (cancelled && action.id === "subscription") {
+      const releaseResult = await apiReleaseSubscriptionBookingClaim(bookingId);
+      if (releaseResult.error || releaseResult.data?.state !== "RELEASED") {
+        return {
+          ok: false,
+          message: "Запись отменена в Viva, но дневной лимит ещё не синхронизирован. Повторите позже.",
+        };
+      }
+    }
     return {
       ok: cancelled,
       state: cancelled ? "DONE" : undefined,
@@ -3063,6 +3082,16 @@ export function Cabinet({
         message: cleanupResult.error?.message
           || "Не удалось подтвердить серверную отмену игры. Запись Viva не изменена этим экраном.",
       };
+    }
+
+    if (action.id === "subscription") {
+      const releaseResult = await apiReleaseSubscriptionBookingClaim(bookingId);
+      if (releaseResult.error || releaseResult.data?.state !== "RELEASED") {
+        return {
+          ok: false,
+          message: "Запись отменена в Viva, но дневной лимит ещё не синхронизирован. Повторите позже.",
+        };
+      }
     }
 
     return {

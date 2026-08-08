@@ -4763,6 +4763,48 @@ export async function apiCancelBooking(
   });
 }
 
+export interface SubscriptionBookingReleaseResponse {
+  ok: boolean;
+  state: "RELEASED" | "PENDING_CONFIRMATION";
+  operationId: string;
+  bookingId: string;
+  details?: Record<string, unknown> | null;
+  message?: string;
+}
+
+function buildSubscriptionBookingReleaseOperationId(bookingId: string) {
+  const normalized = bookingId.trim().replace(/[^A-Za-z0-9._:-]+/g, "-");
+  return `lk-subscription-release:${normalized}`.slice(0, 200);
+}
+
+export async function apiReleaseSubscriptionBookingClaim(
+  bookingIdRaw: string,
+): Promise<ApiResult<SubscriptionBookingReleaseResponse>> {
+  const bookingId = bookingIdRaw.trim();
+  if (!bookingId) {
+    return {
+      data: null,
+      error: { status: 400, message: "Не указана запись для освобождения дневного лимита" },
+      status: 400,
+    };
+  }
+  const baseUrlCandidates = resolveLkApiBaseUrlCandidates(SERV2, SERV2_FALLBACK);
+  const baseUrl = baseUrlCandidates[0] || getServ2Origin();
+  const operationId = buildSubscriptionBookingReleaseOperationId(bookingId);
+  return request<SubscriptionBookingReleaseResponse>(
+    `/lk/subscription-bookings?operationId=${encodeURIComponent(operationId)}`,
+    {
+      method: "POST",
+      auth: true,
+      retries: 1,
+      baseUrl,
+      fallbackBaseUrls: baseUrlCandidates.slice(1),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "release", bookingId }),
+    },
+  );
+}
+
 export async function apiCancelPadelSelfRemovalBookings(
   bookingIdsRaw: string[],
   options: {
@@ -4797,6 +4839,26 @@ export async function apiCancelPadelSelfRemovalBookings(
   ) => {
     const verification = await apiVerifyBookingCancellation(bookingId);
     if (!verification.error && verification.data?.state === "cancelled") {
+      if (context.actionId === "subscription") {
+        const releaseResult = await apiReleaseSubscriptionBookingClaim(bookingId);
+        if (releaseResult.error || releaseResult.data?.state !== "RELEASED") {
+          statusByBookingId[bookingId] = "needs_verification";
+          pushTrace({
+            step: "subscription_daily_claim_release_failed",
+            bookingId,
+            statusCode: releaseResult.status,
+            actionId: context.actionId,
+            response: releaseResult.error?.raw ?? releaseResult.data ?? null,
+          });
+          return false;
+        }
+        pushTrace({
+          step: "subscription_daily_claim_released",
+          bookingId,
+          statusCode: releaseResult.status,
+          actionId: context.actionId,
+        });
+      }
       pushTrace({
         step: "cancel_booking_verified",
         bookingId,

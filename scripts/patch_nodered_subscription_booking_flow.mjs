@@ -10,6 +10,7 @@ const importPath = process.argv[4]
   : path.resolve(ROOT, "node-red/modular/imports/lk_subscription_booking.nodes.import.json");
 const functionsDir = path.resolve(ROOT, "scripts/nodered_subscription_booking_nodes");
 const EXPECTED_LIVE_ROUTER_SHA256 = "d9d6d1f17c12f38b567cf226468caa6780ed3d6e707f55f4af26c066be86b1a4";
+const EXPECTED_MANAGED_ROUTER_SHA256 = "aba5f45ce45208997b188d5292194c49d357452673eee7b937650ec998348a04";
 const ROUTER_ID = "8f7bd5b482fe9763";
 const COLLECTION = "lk_subscription_daily_booking_ops";
 
@@ -288,7 +289,15 @@ const tabs = flow.filter((node) => node.type === "tab" && node.disabled !== true
 if (tabs.length !== 1) throw new Error(`Expected one enabled LK Games tab, found ${tabs.length}`);
 const tabId = tabs[0].id;
 const routerNode = flow.find((node) => node.id === ROUTER_ID && node.z === tabId && node.type === "function");
-if (!routerNode || routerNode.name !== "Route Viva split payment" || routerNode.outputs !== 3) {
+const routerSha = routerNode?.func ? sha256(routerNode.func) : null;
+const originalRouter = routerNode?.name === "Route Viva split payment"
+  && routerNode.outputs === 3
+  && routerSha === EXPECTED_LIVE_ROUTER_SHA256;
+const managedRouter = routerNode?.name === "Route Viva split payment"
+  && routerNode.outputs === 4
+  && routerNode.wires?.[3]?.[0] === IDS.http
+  && routerSha === EXPECTED_MANAGED_ROUTER_SHA256;
+if (!originalRouter && !managedRouter) {
   throw new Error("Live split router node preimage changed");
 }
 const mongoClientIds = Array.from(new Set(flow
@@ -308,9 +317,11 @@ if (unmanagedDuplicate) throw new Error("An unmanaged subscription booking route
 
 const next = flow.filter((node) => !managedIds.has(node.id));
 const nextRouter = next.find((node) => node.id === ROUTER_ID);
-nextRouter.func = patchSplitRouterSource(nextRouter.func);
-nextRouter.outputs = 4;
-nextRouter.wires = [...nextRouter.wires, [IDS.http]];
+if (originalRouter) {
+  nextRouter.func = patchSplitRouterSource(nextRouter.func);
+  nextRouter.outputs = 4;
+  nextRouter.wires = [...nextRouter.wires, [IDS.http]];
+}
 const managedNodes = buildManagedNodes(tabId, mongoClientId);
 const candidate = [...next, ...managedNodes];
 validateCandidate(candidate, tabId, mongoClientId);

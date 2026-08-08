@@ -32,6 +32,8 @@ const authHeader = requestHeader("authorization");
 const operationId = requestHeader("idempotency-key")
   || toStr(msg.req?.query?.operationId)
   || toStr(body.operationId);
+const action = toStr(body.action)?.toLowerCase() || "book";
+const releaseBookingId = toStr(body.bookingId);
 const exerciseId = toStr(body.exerciseId);
 const clientSubscriptionId = toStr(body.clientSubscriptionId);
 const spotNumber = Number(body.spot);
@@ -42,7 +44,17 @@ if (!authHeader || !/^Bearer\s+\S+/i.test(authHeader)) {
 if (!operationId || !/^[A-Za-z0-9._:-]{8,200}$/.test(operationId)) {
   return finish(400, "Требуется корректный operationId", { code: "SUBSCRIPTION_BOOKING_OPERATION_ID_REQUIRED" });
 }
-if (!exerciseId || !clientSubscriptionId) {
+if (!['book', 'release'].includes(action)) {
+  return finish(400, "Неизвестное действие с дневным посещением", {
+    code: "SUBSCRIPTION_BOOKING_ACTION_UNSUPPORTED",
+  });
+}
+if (action === "release" && !releaseBookingId) {
+  return finish(400, "bookingId обязателен для освобождения дневного посещения", {
+    code: "SUBSCRIPTION_BOOKING_RELEASE_BOOKING_ID_REQUIRED",
+  });
+}
+if (action === "book" && (!exerciseId || !clientSubscriptionId)) {
   return finish(400, "exerciseId и clientSubscriptionId обязательны", {
     code: "SUBSCRIPTION_BOOKING_TARGET_REQUIRED",
   });
@@ -50,12 +62,14 @@ if (!exerciseId || !clientSubscriptionId) {
 
 msg._subscriptionBooking = {
   caller: "http",
+  action,
   step: "profile",
   tenantKey: TENANT_KEY,
   operationId,
   authHeader,
-  exerciseId,
-  clientSubscriptionId,
+  releaseBookingId,
+  exerciseId: action === "book" ? exerciseId : null,
+  clientSubscriptionId: action === "book" ? clientSubscriptionId : null,
   spot: Number.isFinite(spotNumber) && spotNumber > 0 ? Math.floor(spotNumber) : null,
   startedAt: new Date().toISOString(),
 };

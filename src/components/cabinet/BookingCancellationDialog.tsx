@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   apiCancelBooking,
   apiFetchBookingCancellationOptions,
+  apiReleaseSubscriptionBookingClaim,
   apiVerifyBookingCancellation,
 } from "../../utils/apiClient";
 import {
@@ -45,9 +46,19 @@ async function defaultExecuteAction(
   }
 
   const verification = await apiVerifyBookingCancellation(bookingId);
+  const cancelled = !verification.error && verification.data?.state === "cancelled";
+  if (cancelled && action.id === "subscription") {
+    const releaseResult = await apiReleaseSubscriptionBookingClaim(bookingId);
+    if (releaseResult.error || releaseResult.data?.state !== "RELEASED") {
+      return {
+        ok: false,
+        message: "Запись отменена в Viva, но дневной лимит ещё не синхронизирован. Повторите позже.",
+      };
+    }
+  }
   return {
-    ok: !verification.error && verification.data?.state === "cancelled",
-    message: !verification.error && verification.data?.state === "cancelled"
+    ok: cancelled,
+    message: cancelled
       ? action.successMessage
       : (verification.error?.message || "Не удалось подтвердить отмену записи"),
   };

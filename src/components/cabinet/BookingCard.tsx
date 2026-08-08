@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   apiLeavePadelGameAsCurrentUser,
+  apiReleaseSubscriptionBookingClaim,
   type Booking,
 } from "../../utils/apiClient";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
@@ -180,6 +181,15 @@ export function BookingCard({
               ok: false,
               message: result.data.message || "Не удалось подтвердить выход из игры",
             };
+          }
+          if (action.id === "subscription") {
+            const releaseResult = await apiReleaseSubscriptionBookingClaim(booking.id);
+            if (releaseResult.error || releaseResult.data?.state !== "RELEASED") {
+              return {
+                ok: false,
+                message: "Запись отменена в Viva, но дневной лимит ещё не синхронизирован. Повторите позже.",
+              };
+            }
           }
           return {
             ok: true,

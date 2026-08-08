@@ -95,6 +95,21 @@ const finishConfirmed = (ctx, bookingId, statusCode = 200) => {
   return emit(OUTPUT_FINAL);
 };
 
+const finishReleased = (ctx, details = null) => {
+  msg._subscriptionBooking = ctx;
+  msg.statusCode = 200;
+  msg.headers = responseHeaders();
+  msg.payload = {
+    ok: true,
+    state: "RELEASED",
+    operationId: ctx.operationId,
+    bookingId: ctx.releaseBookingId,
+    details,
+  };
+  delete msg.error;
+  return emit(OUTPUT_FINAL);
+};
+
 const prepareHttp = (ctx, step, method, url, payload, headers = {}) => {
   ctx.step = step;
   msg._subscriptionBooking = ctx;
@@ -432,12 +447,40 @@ const mongoInserted = (value) => {
   return false;
 };
 
-const prepareOperationFind = (ctx) => {
+const prepareOperationFind = (ctx, query = { _id: ctx.operationKey }) => {
   ctx.step = "operation_find";
   msg._subscriptionBooking = ctx;
-  msg.payload = { _id: ctx.operationKey };
+  msg.payload = query;
   delete msg.error;
   return emit(OUTPUT_MONGO_FIND);
+};
+
+const prepareOperationRelease = (ctx, operation) => {
+  const nowIso = new Date().toISOString();
+  ctx.releaseOperationKey = toStr(operation._id);
+  ctx.releasePreviousState = toStr(operation.state);
+  return prepareMongoUpdate(ctx, "operation_release", {
+    _id: operation._id,
+    state: operation.state,
+    exerciseId: ctx.exerciseId,
+    clientSubscriptionId: ctx.clientSubscriptionId,
+    serviceDate: ctx.serviceDate,
+    releasedBookingIds: { $ne: ctx.releaseBookingId },
+  }, {
+    $set: {
+      state: "RELEASED",
+      releasedAt: nowIso,
+      releaseBookingId: ctx.releaseBookingId,
+      updatedAt: nowIso,
+    },
+    $addToSet: { releasedBookingIds: ctx.releaseBookingId },
+    $unset: {
+      leaseUntil: "",
+      pendingUntil: "",
+      failure: "",
+      failedAt: "",
+    },
+  });
 };
 
 const prepareMongoUpdate = (ctx, step, query, update) => {
@@ -492,6 +535,8 @@ const prepareOperationReclaim = (ctx, operation, now = new Date()) => prepareMon
     correlationId: "",
     acceptedAt: "",
     upstreamBookingId: "",
+    releaseBookingId: "",
+    releasedAt: "",
   },
 });
 
@@ -605,6 +650,9 @@ if (ctx.step === "profile") {
     return finishError(ctx, 502, "Профиль Viva не содержит устойчивую идентичность", {
       code: "SUBSCRIPTION_BOOKING_PROFILE_INCOMPLETE",
     });
+  }
+  if (ctx.action === "release") {
+    return prepareUserGet(ctx, "active_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
   }
   return prepareUserGet(
     ctx,
@@ -729,8 +777,46 @@ if (ctx.step === "history_bookings") {
       code: "SUBSCRIPTION_BOOKINGS_HISTORY_INCOMPLETE",
     });
   }
-  const bookings = mergeBookings(ctx.activeBookingsPayload, msg.payload);
+  const activeBookingsPayload = ctx.activeBookingsPayload;
+  const bookings = mergeBookings(activeBookingsPayload, msg.payload);
   delete ctx.activeBookingsPayload;
+  if (ctx.action === "release") {
+    const exactBookingId = normalizeId(ctx.releaseBookingId);
+    const exactBookings = [
+      ...extractItems(activeBookingsPayload),
+      ...extractItems(msg.payload),
+    ].filter((booking) => isObj(booking) && normalizeId(bookingId(booking)) === exactBookingId);
+    if (exactBookings.length === 0) {
+      return finishError(ctx, 409, "Отменённая запись не найдена в истории Viva", {
+        code: "SUBSCRIPTION_BOOKING_RELEASE_NOT_VERIFIED",
+      });
+    }
+    if (exactBookings.some((booking) => !isInactiveBooking(booking))) {
+      return finishError(ctx, 409, "Viva всё ещё считает запись активной", {
+        code: "SUBSCRIPTION_BOOKING_RELEASE_STILL_ACTIVE",
+      });
+    }
+    const cancelledBooking = exactBookings.find((booking) => (
+      isSubscriptionBooking(booking)
+      && bookingSubscriptionId(booking)
+      && bookingExerciseId(booking)
+      && eventDate(booking)
+    ));
+    if (!cancelledBooking) {
+      return finishError(ctx, 409, "Отменённая запись не содержит точной связи с абонементом", {
+        code: "SUBSCRIPTION_BOOKING_RELEASE_TARGET_UNRESOLVED",
+      });
+    }
+    ctx.exerciseId = bookingExerciseId(cancelledBooking);
+    ctx.clientSubscriptionId = bookingSubscriptionId(cancelledBooking);
+    ctx.serviceDate = eventDate(cancelledBooking);
+    return prepareOperationFind(ctx, {
+      tenantKey: ctx.tenantKey,
+      actorClientId: ctx.actorClientId,
+      serviceDate: ctx.serviceDate,
+      exerciseId: ctx.exerciseId,
+    });
+  }
   let sameExerciseBooking = null;
   let dailyConflict = null;
   let unresolvedBooking = null;
@@ -791,6 +877,46 @@ if (ctx.step === "history_bookings") {
 
 if (ctx.step === "operation_find") {
   const rows = asArray(msg.payload);
+  if (ctx.action === "release") {
+    if (rows.length === 0) {
+      return finishReleased(ctx, { operationFound: false });
+    }
+    if (rows.length > 1) {
+      return finishError(ctx, 502, "Найдено несколько операций для отменённой записи", {
+        code: "SUBSCRIPTION_BOOKING_RELEASE_OPERATION_AMBIGUOUS",
+      });
+    }
+    const releaseOperation = isObj(rows[0]) ? rows[0] : null;
+    if (!releaseOperation) {
+      return finishError(ctx, 502, "Операция дневного посещения имеет неизвестный формат", {
+        code: "SUBSCRIPTION_BOOKING_RELEASE_OPERATION_INVALID",
+      });
+    }
+    if (normalizeId(releaseOperation.clientSubscriptionId) !== normalizeId(ctx.clientSubscriptionId)) {
+      return finishError(ctx, 409, "Абонемент отменённой записи не совпал с дневной операцией", {
+        code: "SUBSCRIPTION_BOOKING_RELEASE_SUBSCRIPTION_MISMATCH",
+      });
+    }
+    if (asArray(releaseOperation.releasedBookingIds).some((id) => normalizeId(id) === normalizeId(ctx.releaseBookingId))) {
+      return finishReleased(ctx, { operationFound: true, alreadyReleased: true });
+    }
+    const operationBookingId = normalizeId(releaseOperation.bookingId || releaseOperation.upstreamBookingId);
+    if (operationBookingId && operationBookingId !== normalizeId(ctx.releaseBookingId)) {
+      return finishError(ctx, 409, "Отменённая запись не совпала с подтверждённой операцией", {
+        code: "SUBSCRIPTION_BOOKING_RELEASE_OPERATION_MISMATCH",
+      });
+    }
+    if (["FAILED", "RELEASED"].includes(String(releaseOperation.state || ""))) {
+      return finishReleased(ctx, { operationFound: true, alreadyReleased: true });
+    }
+    if (!["PREPARED", "PENDING_CONFIRMATION", "CONFIRMED"].includes(String(releaseOperation.state || ""))) {
+      return finishError(ctx, 409, "Операция дневного посещения требует ручной сверки", {
+        code: "SUBSCRIPTION_BOOKING_RELEASE_STATE_UNSUPPORTED",
+        state: toStr(releaseOperation.state),
+      });
+    }
+    return prepareOperationRelease(ctx, releaseOperation);
+  }
   const operation = isObj(rows[0]) ? rows[0] : null;
   if (ctx.sameExerciseBooking) {
     if (operation && toStr(operation.operationId) === ctx.operationId) {
@@ -971,6 +1097,23 @@ if (ctx.step === "operation_fail") {
     toStr(failure.message) || "Viva отклонила создание записи",
     { code: toStr(failure.rawCode) || "VIVA_SUBSCRIPTION_BOOKING_REJECTED" },
   );
+}
+
+if (ctx.step === "operation_release") {
+  if (msg.error) {
+    return finishError(ctx, 502, "Не удалось освободить дневное посещение", {
+      code: "SUBSCRIPTION_BOOKING_RELEASE_PERSISTENCE_FAILED",
+    });
+  }
+  if (Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Состояние дневного посещения изменилось; требуется повторная сверка", {
+      code: "SUBSCRIPTION_BOOKING_RELEASE_RACE",
+    });
+  }
+  return finishReleased(ctx, {
+    operationFound: true,
+    previousState: ctx.releasePreviousState || null,
+  });
 }
 
 return finishError(ctx, 500, "Неизвестный этап серверной записи по абонементу", {

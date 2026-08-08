@@ -87,6 +87,180 @@ test("gateway prepare requires Bearer and operationId and ignores client identit
   assert.equal(missingIdempotency[1].statusCode, 400);
 });
 
+test("release prepare accepts only an exact booking id and starts from the authenticated profile", () => {
+  const success = runFunction(PREPARE_FILE, {
+    payload: {
+      action: "release",
+      bookingId: "booking-cancelled",
+      exerciseId: "forged-exercise",
+      clientSubscriptionId: "forged-subscription",
+    },
+    req: {
+      headers: { authorization: "Bearer user-token" },
+      query: { operationId: "lk-subscription-release:booking-cancelled" },
+    },
+  });
+  assert.equal(success[0]._subscriptionBooking.action, "release");
+  assert.equal(success[0]._subscriptionBooking.releaseBookingId, "booking-cancelled");
+  assert.equal(success[0]._subscriptionBooking.exerciseId, null);
+  assert.equal(success[0]._subscriptionBooking.clientSubscriptionId, null);
+  assert.equal(success[0]._subscriptionBooking.step, "profile");
+  assert.match(success[0].url, /\/profile$/);
+
+  const missingBooking = runFunction(PREPARE_FILE, {
+    payload: { action: "release" },
+    req: {
+      headers: { authorization: "Bearer user-token" },
+      query: { operationId: "lk-subscription-release:missing" },
+    },
+  });
+  assert.equal(missingBooking[1].statusCode, 400);
+  assert.equal(
+    missingBooking[1].payload.details.code,
+    "SUBSCRIPTION_BOOKING_RELEASE_BOOKING_ID_REQUIRED",
+  );
+});
+
+test("release verifies the exact cancelled subscription booking before selecting its operation", () => {
+  const profile = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { id: "client-1", phone: "+79990000001" },
+    _subscriptionBooking: baseContext("profile", {
+      action: "release",
+      releaseBookingId: "booking-cancelled",
+      exerciseId: undefined,
+      clientSubscriptionId: undefined,
+    }),
+  });
+  assert.equal(profile[0]._subscriptionBooking.step, "active_bookings");
+
+  const active = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { content: [] },
+    _subscriptionBooking: profile[0]._subscriptionBooking,
+  });
+  assert.equal(active[0]._subscriptionBooking.step, "history_bookings");
+
+  const history = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { content: [flatBooking({
+      id: "booking-cancelled",
+      status: "CANCELLED",
+      exerciseId: "exercise-cancelled",
+    })] },
+    _subscriptionBooking: active[0]._subscriptionBooking,
+  });
+  assert.equal(history[1]._subscriptionBooking.step, "operation_find");
+  assert.deepEqual(history[1].payload, {
+    tenantKey: "iSkq6G",
+    actorClientId: "client-1",
+    serviceDate: "2026-08-10",
+    exerciseId: "exercise-cancelled",
+  });
+
+  const stillActive = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { content: [] },
+    _subscriptionBooking: baseContext("history_bookings", {
+      action: "release",
+      releaseBookingId: "booking-active",
+      activeBookingsPayload: { content: [flatBooking({ id: "booking-active" })] },
+    }),
+  });
+  assert.equal(stillActive[4].statusCode, 409);
+  assert.equal(stillActive[4].payload.details.code, "SUBSCRIPTION_BOOKING_RELEASE_STILL_ACTIVE");
+  assert.equal(stillActive[1], null);
+  assert.equal(stillActive[3], null);
+});
+
+test("release fails closed when Viva history subscription differs from the actor operation", () => {
+  const mismatch = runFunction(ROUTER_FILE, {
+    payload: [{
+      _id: "iSkq6G:another-subscription:2026-08-10",
+      tenantKey: "iSkq6G",
+      actorClientId: "client-1",
+      clientSubscriptionId: "another-subscription",
+      serviceDate: "2026-08-10",
+      exerciseId: "exercise-target",
+      state: "PENDING_CONFIRMATION",
+    }],
+    _subscriptionBooking: baseContext("operation_find", {
+      action: "release",
+      operationId: "lk-subscription-release:booking-cancelled",
+      releaseBookingId: "booking-cancelled",
+    }),
+  });
+  assert.equal(mismatch[4].statusCode, 409);
+  assert.equal(
+    mismatch[4].payload.details.code,
+    "SUBSCRIPTION_BOOKING_RELEASE_SUBSCRIPTION_MISMATCH",
+  );
+  assert.equal(mismatch[3], null);
+});
+
+test("exact cancelled booking releases a pending claim once and duplicate release is idempotent", () => {
+  const operation = {
+    _id: "iSkq6G:client-subscription-1:2026-08-10",
+    tenantKey: "iSkq6G",
+    clientSubscriptionId: "client-subscription-1",
+    serviceDate: "2026-08-10",
+    exerciseId: "exercise-target",
+    operationId: "original-book-operation",
+    state: "PENDING_CONFIRMATION",
+  };
+  const releaseContext = baseContext("operation_find", {
+    action: "release",
+    operationId: "lk-subscription-release:booking-cancelled",
+    releaseBookingId: "booking-cancelled",
+  });
+  const release = runFunction(ROUTER_FILE, {
+    payload: [operation],
+    _subscriptionBooking: releaseContext,
+  });
+  assert.equal(release[3]._subscriptionBooking.step, "operation_release");
+  assert.deepEqual(release[3].payload[0], {
+    _id: operation._id,
+    state: "PENDING_CONFIRMATION",
+    exerciseId: "exercise-target",
+    clientSubscriptionId: "client-subscription-1",
+    serviceDate: "2026-08-10",
+    releasedBookingIds: { $ne: "booking-cancelled" },
+  });
+  assert.equal(release[3].payload[1].$set.state, "RELEASED");
+  assert.equal(release[3].payload[1].$addToSet.releasedBookingIds, "booking-cancelled");
+
+  const done = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: release[3]._subscriptionBooking,
+  });
+  assert.equal(done[4].statusCode, 200);
+  assert.equal(done[4].payload.state, "RELEASED");
+
+  const duplicate = runFunction(ROUTER_FILE, {
+    payload: [{ ...operation, state: "PREPARED", releasedBookingIds: ["booking-cancelled"] }],
+    _subscriptionBooking: baseContext("operation_find", {
+      action: "release",
+      operationId: "lk-subscription-release:booking-cancelled",
+      releaseBookingId: "booking-cancelled",
+    }),
+  });
+  assert.equal(duplicate[4].statusCode, 200);
+  assert.equal(duplicate[4].payload.state, "RELEASED");
+  assert.equal(duplicate[3], null);
+
+  const nextBooking = runFunction(ROUTER_FILE, {
+    payload: [{ ...operation, state: "RELEASED", releasedBookingIds: ["booking-cancelled"] }],
+    _subscriptionBooking: baseContext("operation_find", {
+      operationId: "next-book-operation",
+    }),
+  });
+  assert.equal(nextBooking[3]._subscriptionBooking.step, "operation_reclaim");
+  assert.equal(nextBooking[3].payload[1].$set.state, "PREPARED");
+  assert.equal(nextBooking[3].payload[1].$set.operationId, "next-book-operation");
+  assert.equal(nextBooking[3].payload[1].$unset.releaseBookingId, "");
+  assert.equal(nextBooking[3].payload[1].$unset.releasedAt, "");
+});
+
 test("trusted exercise must expose the exact owned subscription and allowed plan category", () => {
   const allowed = runFunction(ROUTER_FILE, {
     statusCode: 200,
@@ -486,6 +660,9 @@ test("split caller receives a synthetic trusted booking only after gateway confi
 test("guarded patcher requires the exact live preimage and wires split subscriptions into the gateway", () => {
   const source = fs.readFileSync("scripts/patch_nodered_subscription_booking_flow.mjs", "utf8");
   assert.match(source, /EXPECTED_LIVE_ROUTER_SHA256/);
+  assert.match(source, /EXPECTED_MANAGED_ROUTER_SHA256/);
+  assert.match(source, /originalRouter/);
+  assert.match(source, /managedRouter/);
   assert.match(source, /sourceKind === "live-147"/);
   assert.match(source, /Date\.now\(\) - pulledAt <= 30 \* 60 \* 1000/);
   assert.match(source, /url: "\/lk\/subscription-bookings"/);

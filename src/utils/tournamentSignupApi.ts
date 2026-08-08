@@ -8,6 +8,7 @@ import {
 import {
   apiFetchSubscriptionDailyLimitBookings,
   apiFetchSubscriptioName,
+  apiReleaseSubscriptionBookingClaim,
   apiVerifyBookingCancellation,
   getServ2Origin,
   request,
@@ -2093,6 +2094,20 @@ export async function apiCancelTournamentVivaRegistration(
       },
       status: verificationResult.status,
     };
+  }
+
+  if (action.id === "subscription") {
+    const releaseResult = await apiReleaseSubscriptionBookingClaim(resolvedBookingId);
+    if (releaseResult.error || releaseResult.data?.state !== "RELEASED") {
+      return {
+        data: null,
+        error: releaseResult.error || {
+          status: 409,
+          message: "Запись отменена в Viva, но дневной лимит ещё не синхронизирован",
+        },
+        status: releaseResult.status,
+      };
+    }
   }
 
   return {
