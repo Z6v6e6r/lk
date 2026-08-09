@@ -2857,12 +2857,22 @@ export interface AmericanoTournamentPayload {
 }
 
 export type TournamentBroadcastAction = "start" | "stop";
+export type TournamentBroadcastTarget = "left_arena" | "right_arena" | "both";
+
+export interface TournamentBroadcastTargetOption {
+  key: TournamentBroadcastTarget;
+  label: string;
+}
 
 export interface TournamentBroadcastState {
   tournamentId: string;
   stationId: string | null;
   active: boolean;
   updatedAt?: string | null;
+  requestedTarget?: TournamentBroadcastTarget | null;
+  targetOptions?: TournamentBroadcastTargetOption[];
+  selectionRequired?: boolean;
+  activeTargets?: TournamentBroadcastTarget[];
 }
 
 export interface AmericanoResultsPayload {
@@ -5536,6 +5546,7 @@ export async function apiSetTournamentBroadcastState(payload: {
   tournamentId: string;
   stationId?: string | null;
   action: TournamentBroadcastAction;
+  requestedTarget?: TournamentBroadcastTarget | null;
 }) {
   const base = getServ2Origin();
   return request<TournamentBroadcastState>(
@@ -5547,6 +5558,7 @@ export async function apiSetTournamentBroadcastState(payload: {
       body: JSON.stringify({
         tournamentId: String(payload.tournamentId || "").trim(),
         stationId: String(payload.stationId || "").trim() || null,
+        ...(payload.requestedTarget ? { requestedTarget: payload.requestedTarget } : {}),
       }),
     },
   );

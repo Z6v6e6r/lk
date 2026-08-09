@@ -132,6 +132,10 @@ const TOURNAMENT_DESCRIPTION_NESTED_KEYS = [
   "exercise",
 ];
 
+const TOURNAMENT_SIGNUP_STATION_LABEL_BY_ID: Record<string, string> = {
+  "2dac2b9e-e9a7-425e-bca1-35ac182f6349": "Селигерская",
+};
+
 const LEVEL_RANGES: Record<LevelGrade, { min: number; max: number }> = {
   D: { min: 1, max: 2 },
   "D+": { min: 2, max: 3 },
@@ -313,8 +317,18 @@ function getTournamentTypeFilterValue(tournament: TournamentSignupSummary) {
   return tournament.format || "Турнир";
 }
 
+function getTournamentStationLabel(tournament: TournamentSignupSummary | TournamentSignupDetail | null) {
+  if (!tournament) return null;
+  const direct = (tournament.studioName || "").trim();
+  if (direct) return direct;
+  if (tournament.studioId) {
+    return TOURNAMENT_SIGNUP_STATION_LABEL_BY_ID[tournament.studioId] || "Станция уточняется";
+  }
+  return "Станция уточняется";
+}
+
 function getTournamentStationFilterValue(tournament: TournamentSignupSummary) {
-  return tournament.studioName || tournament.address || "Станция уточняется";
+  return getTournamentStationLabel(tournament) || tournament.address || "Станция уточняется";
 }
 
 function normalizeTournamentSearchText(value: unknown) {
@@ -965,7 +979,7 @@ function toCommunityTournamentCard(
     id: tournament.id,
     badgeLabel: tournament.format || "Турнир",
     title: tournament.title,
-    subtitle: tournament.studioName || "PadelHub",
+    subtitle: getTournamentStationLabel(tournament) || "PadelHub",
     metaText: tournament.address || "",
     progress,
     imageUrl: "",
@@ -977,7 +991,7 @@ function toCommunityTournamentCard(
     maxParticipants,
     startTime: formatClock(tournament.startsAt) || tournament.timeLabel,
     endTime: formatClock(tournament.endsAt) || undefined,
-    stationLabel: tournament.studioName || tournament.address || "Станция уточняется",
+    stationLabel: getTournamentStationLabel(tournament) || tournament.address || "Станция уточняется",
     tournamentTypeLabel: tournament.format || "Турнир",
     ratingLabel: tournament.levelLabel || undefined,
     genderLabel: undefined,
@@ -985,7 +999,7 @@ function toCommunityTournamentCard(
     ctaLabel: "Открыть",
     trainerName: tournament.trainerName || "PadelHub",
     trainerAvatarUrl: tournament.trainerAvatarUrl || undefined,
-    profileHandle: tournament.address || tournament.studioName || "Расписание турниров",
+    profileHandle: tournament.address || getTournamentStationLabel(tournament) || "Расписание турниров",
     publicUrl: tournament.publicUrl || undefined,
     waitlistCount: publicRoster?.waitlistCount ?? tournament.waitlistCount ?? 0,
     spotsLeft,
@@ -1618,8 +1632,8 @@ export default function TournamentSignupPage({
   const detailTimeLabel = detailStartTime && detailEndTime
     ? `${detailStartTime} • ${detailEndTime}`
     : selectedTournament?.timeLabel || "Время уточняется";
-  const detailStationLabel = selectedTournament?.studioName || selectedTournament?.address || "Станция уточняется";
-  const detailStationMapUrl = getStationMapUrl(selectedTournament?.studioName ?? null, selectedTournament?.address ?? null);
+  const detailStationLabel = getTournamentStationLabel(selectedTournament) || "Станция уточняется";
+  const detailStationMapUrl = getStationMapUrl(detailStationLabel, selectedTournament?.address ?? null);
   const detailPublicRoster = selectedExerciseId ? publicRosterByExerciseId[selectedExerciseId] ?? null : null;
   const detailParticipants = useMemo(
     () => detailPublicRoster?.participants ?? getTournamentParticipants(detail || selectedTournament),
@@ -2196,7 +2210,9 @@ export default function TournamentSignupPage({
                     />
                   )}
                   <div className="tournament-signup-facts">
-                    {selectedTournament.studioName && <div><span>Клуб</span><strong>{selectedTournament.studioName}</strong></div>}
+                    {(selectedTournament.studioName || getTournamentStationLabel(selectedTournament)) && (
+                      <div><span>Клуб</span><strong>{getTournamentStationLabel(selectedTournament)}</strong></div>
+                    )}
                     {selectedTournament.address && <div><span>Адрес</span><strong>{selectedTournament.address}</strong></div>}
                     {selectedTournament.format && <div><span>Формат</span><strong>{selectedTournament.format}</strong></div>}
                     {selectedTournament.levelLabel && <div><span>Уровень</span><strong>{selectedTournament.levelLabel}</strong></div>}
