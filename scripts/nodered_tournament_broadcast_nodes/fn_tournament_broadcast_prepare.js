@@ -37,6 +37,7 @@ const requestedStationId = toStr(body.stationId || msg.req?.query?.stationId);
 if (requestedStationId && (requestedStationId.length > 160 || !/^[a-z0-9][a-z0-9._:-]*$/i.test(requestedStationId))) {
   return respond(400, "STATION_ID_INVALID", "Некорректный ID станции");
 }
+const requestedTarget = toStr(body.requestedTarget || body.target);
 
 const requestedTarget = toStr(body.target)?.toLowerCase() || null;
 if (requestedTarget && !["right_arena", "left_arena", "both"].includes(requestedTarget)) {
