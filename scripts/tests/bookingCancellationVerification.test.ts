@@ -50,12 +50,30 @@ test("generic 404 is not classified as already cancelled without read-back", () 
 test("shared cancellation dialog waits for Viva read-back before success", () => {
   assert.match(dialogSource, /apiVerifyBookingCancellation\(bookingId\)/);
   assert.match(dialogSource, /verification\.data\?\.state === "cancelled"/);
+  assert.match(dialogSource, /action\.id === "subscription"/);
+  assert.match(dialogSource, /apiReleaseSubscriptionBookingClaim\(bookingId\)/);
 });
 
 test("cabinet direct fallback and tournament registration cancellation verify Viva state", () => {
   assert.match(cabinetSource, /apiVerifyBookingCancellation\(bookingId\)/);
   assert.match(tournamentApiSource, /apiVerifyBookingCancellation\(resolvedBookingId\)/);
   assert.match(tournamentApiSource, /verificationResult\.data\?\.state !== "cancelled"/);
+  assert.match(tournamentApiSource, /apiReleaseSubscriptionBookingClaim\(resolvedBookingId\)/);
+});
+
+test("subscription daily claim release is authenticated, exact-booking and post-verification only", () => {
+  const helperStart = apiClientSource.indexOf("export async function apiReleaseSubscriptionBookingClaim");
+  const helperEnd = apiClientSource.indexOf(
+    "export async function apiCancelPadelSelfRemovalBookings",
+    helperStart,
+  );
+  assert.ok(helperStart >= 0);
+  assert.ok(helperEnd > helperStart);
+  const helperSource = apiClientSource.slice(helperStart, helperEnd);
+  assert.match(helperSource, /\/lk\/subscription-bookings\?operationId=/);
+  assert.match(helperSource, /auth: true/);
+  assert.match(helperSource, /JSON\.stringify\(\{ action: "release", bookingId \}\)/);
+  assert.match(cabinetSource, /apiVerifyBookingCancellation\(bookingId\)[\s\S]*apiReleaseSubscriptionBookingClaim\(bookingId\)/);
 });
 
 test("self-removal records an unverified booking as failure instead of local success", () => {
