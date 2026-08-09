@@ -55,6 +55,7 @@ export type TournamentSignupStatus = "AVAILABLE" | "REGISTERED" | "WAITLIST" | "
 export interface TournamentSignupSummary {
   id: string;
   exerciseId: string;
+  studioId: string | null;
   title: string;
   startsAt: string | null;
   endsAt: string | null;
@@ -589,9 +590,9 @@ function normalizeTournamentSummary(value: unknown): TournamentSignupSummary | n
   const id = pickString(value, ["id", "tournamentId", "uuid", "exerciseId"]);
   if (!id) return null;
   const exerciseId = resolveTournamentSignupExerciseId(value) || id;
-  const storedPricing = buildStoredTournamentPricingSnapshot(value);
-
   const studio = pickNestedRecord(value, ["studio", "station", "club", "location"]);
+  const studioId = pickString(value, ["studioId", "stationId"]) || pickString(studio, ["id"]);
+  const storedPricing = buildStoredTournamentPricingSnapshot(value);
   const startsAt = pickString(value, ["startsAt", "startAt", "timeFrom", "dateTimeFrom", "startTime"]);
   const endsAt = pickString(value, ["endsAt", "endAt", "timeTo", "dateTimeTo", "endTime"]);
   const price = pickNumber(value, ["price", "amount", "cost"]);
@@ -604,6 +605,7 @@ function normalizeTournamentSummary(value: unknown): TournamentSignupSummary | n
   return {
     id,
     exerciseId,
+    studioId,
     title: pickString(value, ["title", "name", "displayName"]) || "Турнир",
     startsAt,
     endsAt,

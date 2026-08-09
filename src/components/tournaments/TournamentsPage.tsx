@@ -11,7 +11,6 @@ import {
   apiSearchPadelPlayers,
   apiFetchTournamentHistory,
   apiFetchTournamentParticipants,
-  apiRefreshTournamentParticipants,
   apiFetchTournamentBroadcastState,
   isTournamentExerciseCategory,
   apiSaveOnboardingLevel,
@@ -29,17 +28,12 @@ import type {
   PadelPlayerCandidate,
   TournamentTypeKey,
   TournamentHistoryRecord,
-  TournamentBroadcastActiveTarget,
-  TournamentBroadcastState,
-  TournamentBroadcastStatus,
-  TournamentBroadcastTarget,
   UserProfileType,
+  TournamentBroadcastTarget,
+  TournamentBroadcastTargetOption,
 } from "../../utils/apiClient";
 import { TENANT_KEY } from "../../consts/api_config";
-import {
-  apiFetchTournamentMechanicsSourceList,
-  apiRefreshTournamentMechanicsFromViva,
-} from "../../utils/tournamentSignupApi";
+import { apiFetchTournamentMechanicsSourceList } from "../../utils/tournamentSignupApi";
 import {
   buildTournamentMechanicsFallbackExercises,
   mergeTournamentMechanicsExercises,
@@ -116,31 +110,10 @@ import {
 } from "../../utils/tournamentDraftStorage";
 import { buildTournamentDraftExercise } from "../../utils/tournamentDraftExercise";
 import {
-  LK_IDLE_DATA_STALE_EVENT_NAME,
-  isLkIdleRequestPaused,
-  isLkIdleRequestPausedError,
-} from "../../utils/lkIdleDataGuard";
-import {
-  TOURNAMENT_PARTICIPANT_REFRESH_INTERVAL_MS,
-  buildTournamentParticipantRosterFingerprint,
-  resolveTournamentParticipantBusyRetryMs,
-  resolveTournamentParticipantRefreshDelay,
-  resolveVivaLinkedTournamentExerciseId,
-  shouldApplyTournamentParticipantRefreshRoster,
-  type TournamentParticipantRefreshOutcome,
-} from "./tournamentParticipantRefresh";
-import {
   getTournamentJsonFileName,
   parseTournamentJson,
   serializeTournamentJson,
 } from "../../utils/tournamentJson";
-import {
-  formatTournamentBroadcastTargets,
-  getTournamentBroadcastTargetOptions,
-  isTournamentBroadcastTargetSelectionStation,
-  isTournamentBroadcastTarget,
-  normalizeTournamentBroadcastTargets,
-} from "./tournamentBroadcast";
 
 interface TournamentsPageProps {
   onBack: () => void;
@@ -331,6 +304,70 @@ function shiftDateByDays(base: Date, delta: number) {
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
+
+const BROADCAST_TARGET_SELECTION_REQUIRED_STATIONS = new Set<string>([
+  "0d5504f6-ea6f-44bb-a9e4-947faf0273ab",
+  "6b2d7e60-caff-4b22-89f6-6f19d7d311ab",
+]);
+
+const resolveBroadcastStationId = (payload: {
+  params?: Record<string, unknown> | null;
+}) => {
+  const params = isPlainRecord(payload?.params) ? payload.params : null;
+  const payloadAsRecord = payload as Record<string, unknown> | null;
+  const studioCandidate = isPlainRecord(payloadAsRecord?.studio) ? payloadAsRecord.studio : null;
+  const candidates = [
+    params?.stationId,
+    payloadAsRecord?.stationId,
+    payloadAsRecord?.studioId,
+    studioCandidate?.id,
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate == null) continue;
+    const stationId = String(candidate).trim();
+    if (stationId) return stationId;
+  }
+
+  return null;
+};
+
+const shouldForceBroadcastTargetSelection = (
+  stationId: string | null | undefined,
+  targetOptions: TournamentBroadcastTargetOption[],
+  selectionRequired?: boolean,
+) => (
+  targetOptions.length > 1 && (
+    selectionRequired === true
+    || BROADCAST_TARGET_SELECTION_REQUIRED_STATIONS.has(String(stationId || "").trim().toLowerCase())
+  )
+);
+
+const normalizeTournamentBroadcastTarget = (value: unknown): TournamentBroadcastTarget | null => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "left_arena" || normalized === "right_arena" || normalized === "both") {
+    return normalized;
+  }
+  return null;
+};
+
+const normalizeBroadcastTargetOptions = (value: unknown): TournamentBroadcastTargetOption[] => {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (!isPlainRecord(item)) return null;
+      const key = normalizeTournamentBroadcastTarget(item.key);
+      if (!key) return null;
+      const rawLabel = String(item.label || item.name || "").trim();
+      const label = rawLabel || (key === "left_arena" ? "Левый корт" : key === "right_arena" ? "Правый корт" : "Оба экрана");
+      return {
+        key,
+        label,
+      };
+    })
+    .filter((target): target is TournamentBroadcastTargetOption => Boolean(target));
+};
 
 function normalizeTournamentSlug(value: unknown) {
   const raw = String(value ?? "").trim();
@@ -582,19 +619,6 @@ function normalizeTournamentParticipantBookings(list: ExerciseBooking[]) {
   });
 
   return Array.from(byKey.values());
-}
-
-function extractTournamentParticipantBookings(payload: unknown): ExerciseBooking[] | null {
-  if (Array.isArray(payload)) return payload as ExerciseBooking[];
-  if (!payload || typeof payload !== "object") return null;
-
-  const record = payload as Record<string, unknown>;
-  for (const key of ["participants", "bookings", "payload", "content", "data"]) {
-    if (Array.isArray(record[key])) {
-      return record[key] as ExerciseBooking[];
-    }
-  }
-  return null;
 }
 
 function getInitialsFromName(name?: string | null) {
@@ -1513,7 +1537,6 @@ interface TournamentDetailsModalProps {
   tournament: Exercise | null;
   historyRecord?: TournamentHistoryRecord | null;
   sourceDateKey?: string | null;
-  canRefreshParticipantsFromViva: boolean;
   onSaved: (data: AmericanoTournamentPayload) => void;
 }
 
@@ -1524,19 +1547,6 @@ type TournamentParticipantEntry = ParticipantEntry & {
 };
 
 type TournamentRosterMode = "bookings" | "manual";
-
-type TournamentParticipantRefreshUiState = {
-  status: "idle" | "pending" | "success" | "cooldown" | "error";
-  message: string | null;
-  retryBlocked?: boolean;
-};
-
-const TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE: TournamentParticipantRefreshUiState = {
-  status: "idle",
-  message: null,
-};
-
-const TOURNAMENT_PARTICIPANTS_LOAD_ERROR = "Не удалось загрузить участников";
 
 type TournamentManualParticipantDraft = {
   id: string;
@@ -1609,7 +1619,6 @@ function TournamentDetailsModal({
   tournament,
   historyRecord = null,
   sourceDateKey = null,
-  canRefreshParticipantsFromViva,
   onSaved,
 }: TournamentDetailsModalProps) {
   const [loading, setLoading] = useState(false);
@@ -1633,9 +1642,6 @@ function TournamentDetailsModal({
   const [saveState, setSaveState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [saveWasLocal, setSaveWasLocal] = useState(false);
   const [rosterMode, setRosterMode] = useState<TournamentRosterMode>("bookings");
-  const [participantRefreshState, setParticipantRefreshState] =
-    useState<TournamentParticipantRefreshUiState>(TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE);
-  const [participantLoadNotice, setParticipantLoadNotice] = useState<string | null>(null);
   const [manualParticipants, setManualParticipants] = useState<TournamentManualParticipantDraft[]>([]);
   const [manualStationName, setManualStationName] = useState("");
   const [manualOrganizerName, setManualOrganizerName] = useState("");
@@ -1670,15 +1676,6 @@ function TournamentDetailsModal({
     [isCreationFlow],
   );
   const ratingLastTapTsRef = useRef<Record<string, number>>({});
-  const participantActionControllerRef = useRef<AbortController | null>(null);
-  const participantRefreshCooldownTimerRef = useRef<number | null>(null);
-  const participantAutoPauseRef = useRef<(() => void) | null>(null);
-  const participantAutoRunRef = useRef<(() => void) | null>(null);
-  const participantAutoScheduleRef = useRef<(delayMs: number) => void>(() => undefined);
-  const participantAutoRescheduleRef = useRef<(
-    fingerprint: string | null,
-    outcomeOverride?: TournamentParticipantRefreshOutcome,
-  ) => void>(() => undefined);
 
   useEffect(() => {
     if (!selectedFamily && !selectedType && !isCreationFlow) {
@@ -2183,372 +2180,37 @@ function TournamentDetailsModal({
   };
 
   const tournamentId = tournament?.id ? String(tournament.id) : null;
-  const participantExerciseId = useMemo(
-    () => resolveVivaLinkedTournamentExerciseId(tournament, historyRecord),
-    [historyRecord, tournament],
-  );
 
   useEffect(() => {
     if (!isOpen || !tournamentId || !readyStateHydrated) return;
     writeTournamentReadyState(tournamentId, readyParticipantIds);
   }, [isOpen, readyParticipantIds, readyStateHydrated, tournamentId]);
 
-  useEffect(() => {
-    participantActionControllerRef.current?.abort();
-    participantActionControllerRef.current = null;
-    if (participantRefreshCooldownTimerRef.current !== null) {
-      window.clearTimeout(participantRefreshCooldownTimerRef.current);
-      participantRefreshCooldownTimerRef.current = null;
-    }
-    setParticipantRefreshState(TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE);
-    setParticipantLoadNotice(null);
-    setParticipants([]);
-
-    if (!isOpen || !participantExerciseId || rosterMode !== "bookings") {
-      setLoading(false);
-      setError((current) => current === TOURNAMENT_PARTICIPANTS_LOAD_ERROR ? null : current);
-      participantAutoPauseRef.current = null;
-      participantAutoRunRef.current = null;
-      participantAutoScheduleRef.current = () => undefined;
-      participantAutoRescheduleRef.current = () => undefined;
-      return;
-    }
-    const activeParticipantExerciseId = participantExerciseId;
-
-    let stopped = false;
-    let timerId: number | null = null;
-    let activeController: AbortController | null = null;
-    let previousFingerprint: string | null = null;
-    let currentDelayMs = 0;
-
-    function pauseCurrentRefresh() {
-      if (timerId !== null) {
-        window.clearTimeout(timerId);
-        timerId = null;
-      }
-      activeController?.abort();
-      activeController = null;
-    }
-
-    function stopRefreshCycle() {
-      if (stopped) return;
-      stopped = true;
-      pauseCurrentRefresh();
-      participantActionControllerRef.current?.abort();
-      participantActionControllerRef.current = null;
-    }
-
-    function scheduleRefresh(delayMs: number) {
-      if (stopped || isLkIdleRequestPaused()) {
-        stopRefreshCycle();
-        return;
-      }
-      if (timerId !== null) {
-        window.clearTimeout(timerId);
-      }
-      timerId = window.setTimeout(() => {
-        timerId = null;
-        void runRefresh(false);
-      }, delayMs);
-    }
-
-    function rescheduleRefresh(
-      fingerprint: string | null,
-      outcomeOverride?: TournamentParticipantRefreshOutcome,
-    ) {
-      const outcome = outcomeOverride
-        ?? (previousFingerprint === null
-          ? "initial"
-          : fingerprint === previousFingerprint
-            ? "unchanged"
-            : "changed");
-      if (fingerprint !== null) {
-        previousFingerprint = fingerprint;
-      }
-      currentDelayMs = resolveTournamentParticipantRefreshDelay(outcome, currentDelayMs);
-      scheduleRefresh(currentDelayMs);
-    }
-
-    async function runRefresh(initialLoad: boolean) {
-      if (stopped || isLkIdleRequestPaused()) {
-        stopRefreshCycle();
-        return;
-      }
-
-      const controller = new AbortController();
-      activeController = controller;
-      if (initialLoad) {
-        setLoading(true);
-        setError(null);
-      }
-
-      const result = await apiFetchTournamentParticipants(activeParticipantExerciseId, {
-        retries: 0,
-        signal: controller.signal,
-      });
-      if (stopped || controller.signal.aborted) return;
-      activeController = null;
-
-      if (isLkIdleRequestPausedError(result.error?.raw) || isLkIdleRequestPaused()) {
-        stopRefreshCycle();
-        return;
-      }
-
-      if (result.status === 429) {
-        setLoading(false);
-        setError(null);
-        setParticipantLoadNotice(
-          "Состав уже обновляется. Покажем актуальные данные через несколько секунд.",
-        );
-        scheduleRefresh(resolveTournamentParticipantBusyRetryMs(result.error?.raw));
-        return;
-      }
-
-      const rawParticipants = extractTournamentParticipantBookings(result.data);
-      if (result.error || rawParticipants === null) {
-        setParticipantLoadNotice(null);
-        if (initialLoad) {
-          setError(TOURNAMENT_PARTICIPANTS_LOAD_ERROR);
-          setLoading(false);
-        }
-        rescheduleRefresh(null, "error");
-        return;
-      }
-
-      const nextParticipants = normalizeTournamentParticipantBookings(rawParticipants);
-      const fingerprint = buildTournamentParticipantRosterFingerprint(nextParticipants);
-      setParticipantLoadNotice(null);
-      if (initialLoad || previousFingerprint === null || fingerprint !== previousFingerprint) {
-        setParticipants(nextParticipants);
-      }
-      setError((current) => current === TOURNAMENT_PARTICIPANTS_LOAD_ERROR ? null : current);
-      if (initialLoad) {
-        setLoading(false);
-      }
-      rescheduleRefresh(fingerprint);
-    }
-
-    participantAutoPauseRef.current = pauseCurrentRefresh;
-    participantAutoRunRef.current = () => {
-      void runRefresh(false);
-    };
-    participantAutoScheduleRef.current = scheduleRefresh;
-    participantAutoRescheduleRef.current = rescheduleRefresh;
-    window.addEventListener(LK_IDLE_DATA_STALE_EVENT_NAME, stopRefreshCycle);
-    void runRefresh(true);
-
-    return () => {
-      stopRefreshCycle();
-      window.removeEventListener(LK_IDLE_DATA_STALE_EVENT_NAME, stopRefreshCycle);
-      participantAutoPauseRef.current = null;
-      participantAutoRunRef.current = null;
-      participantAutoScheduleRef.current = () => undefined;
-      participantAutoRescheduleRef.current = () => undefined;
-      if (participantRefreshCooldownTimerRef.current !== null) {
-        window.clearTimeout(participantRefreshCooldownTimerRef.current);
-        participantRefreshCooldownTimerRef.current = null;
-      }
-    };
-  }, [isOpen, participantExerciseId, rosterMode]);
-
-  const loadParticipants = useCallback(async (nextTournamentId: string) => {
-    participantAutoPauseRef.current?.();
-    participantActionControllerRef.current?.abort();
-    const controller = new AbortController();
-    participantActionControllerRef.current = controller;
+  const loadParticipants = async (nextTournamentId: string) => {
     setLoading(true);
     setError(null);
-    setParticipantLoadNotice(null);
-
-    const result = await apiFetchTournamentParticipants(nextTournamentId, {
-      retries: 0,
-      signal: controller.signal,
-    });
-    if (controller.signal.aborted) return;
-    if (participantActionControllerRef.current === controller) {
-      participantActionControllerRef.current = null;
-    }
-    if (isLkIdleRequestPausedError(result.error?.raw) || isLkIdleRequestPaused()) {
-      return;
-    }
-
-    if (result.status === 429) {
+    try {
+      const res = await apiFetchTournamentParticipants(nextTournamentId);
+      const data = res.data as unknown;
+      const list = Array.isArray(data)
+        ? data
+        : Array.isArray((data as { payload?: ExerciseBooking[] })?.payload)
+          ? (data as { payload: ExerciseBooking[] }).payload
+          : Array.isArray((data as { content?: ExerciseBooking[] })?.content)
+            ? (data as { content: ExerciseBooking[] }).content
+            : [];
+      setParticipants(normalizeTournamentParticipantBookings(list));
+    } catch {
+      setError("Не удалось загрузить участников");
+    } finally {
       setLoading(false);
-      setError(null);
-      setParticipantLoadNotice(
-        "Состав уже обновляется. Покажем актуальные данные через несколько секунд.",
-      );
-      participantAutoScheduleRef.current(
-        resolveTournamentParticipantBusyRetryMs(result.error?.raw),
-      );
-      return;
     }
+  };
 
-    const rawParticipants = extractTournamentParticipantBookings(result.data);
-    if (result.error || rawParticipants === null) {
-      setParticipantLoadNotice(null);
-      setError(TOURNAMENT_PARTICIPANTS_LOAD_ERROR);
-      setLoading(false);
-      participantAutoRescheduleRef.current(null, "error");
-      return;
-    }
-
-    const nextParticipants = normalizeTournamentParticipantBookings(rawParticipants);
-    setParticipantLoadNotice(null);
-    setParticipants(nextParticipants);
-    setLoading(false);
-    participantAutoRescheduleRef.current(
-      buildTournamentParticipantRosterFingerprint(nextParticipants),
-    );
-  }, []);
-
-  const handleRefreshParticipantsFromViva = useCallback(async () => {
-    if (
-      !participantExerciseId
-      || !canRefreshParticipantsFromViva
-      || rosterMode !== "bookings"
-      || participantRefreshState.status === "pending"
-      || participantRefreshState.status === "cooldown"
-      || participantRefreshState.retryBlocked === true
-      || isLkIdleRequestPaused()
-    ) {
-      return;
-    }
-
-    participantAutoPauseRef.current?.();
-    participantActionControllerRef.current?.abort();
-    if (participantRefreshCooldownTimerRef.current !== null) {
-      window.clearTimeout(participantRefreshCooldownTimerRef.current);
-      participantRefreshCooldownTimerRef.current = null;
-    }
-
-    const requestedExerciseId = participantExerciseId;
-    const controller = new AbortController();
-    participantActionControllerRef.current = controller;
-    setParticipantLoadNotice(null);
-    setParticipantRefreshState({
-      status: "pending",
-      message: "Запрашиваем актуальный состав в Viva…",
-    });
-
-    const result = await apiRefreshTournamentParticipants(requestedExerciseId, {
-      signal: controller.signal,
-    });
-    if (controller.signal.aborted) return;
-    if (participantActionControllerRef.current === controller) {
-      participantActionControllerRef.current = null;
-    }
-    if (isLkIdleRequestPausedError(result.error?.raw) || isLkIdleRequestPaused()) {
-      return;
-    }
-    if (result.error || !result.data) {
-      setParticipantRefreshState({
-        status: "error",
-        message: result.error?.message || "Не удалось обновить участников из Viva",
-      });
-      participantAutoRescheduleRef.current(null, "error");
-      return;
-    }
-    if (result.data.exerciseId !== requestedExerciseId) {
-      setParticipantRefreshState({
-        status: "error",
-        message: "Сервер вернул состав другого турнира. Данные не применены.",
-      });
-      participantAutoRescheduleRef.current(null, "error");
-      return;
-    }
-
-    const nextParticipants = normalizeTournamentParticipantBookings(result.data.participants);
-    const applyReturnedParticipants = shouldApplyTournamentParticipantRefreshRoster(
-      result.data.reason,
-      result.data.refreshedAt,
-    );
-    const nextFingerprint = applyReturnedParticipants
-      ? buildTournamentParticipantRosterFingerprint(nextParticipants)
-      : null;
-    if (applyReturnedParticipants) {
-      setParticipants(nextParticipants);
-    }
-
-    if (result.data.reason === "refreshed") {
-      const retryAfterMs = Math.max(0, result.data.retryAfterMs ?? 0);
-      setParticipantRefreshState({
-        status: "success",
-        message: retryAfterMs > 0
-          ? `Участники обновлены: ${nextParticipants.length}. Повторное обновление будет доступно через ${Math.max(1, Math.ceil(retryAfterMs / 1_000))} сек.`
-          : `Участники обновлены: ${nextParticipants.length}.`,
-        retryBlocked: retryAfterMs > 0,
-      });
-      if (retryAfterMs > 0) {
-        participantRefreshCooldownTimerRef.current = window.setTimeout(() => {
-          participantRefreshCooldownTimerRef.current = null;
-          setParticipantRefreshState(TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE);
-        }, retryAfterMs);
-      }
-      participantAutoRescheduleRef.current(nextFingerprint);
-      return;
-    }
-
-    if (result.data.reason === "in_progress") {
-      const retryAfterMs = Math.max(
-        1_000,
-        result.data.retryAfterMs ?? TOURNAMENT_PARTICIPANT_REFRESH_INTERVAL_MS.active,
-      );
-      const retrySeconds = Math.max(1, Math.ceil(retryAfterMs / 1_000));
-      setParticipantRefreshState({
-        status: "cooldown",
-        message: `Обновление уже выполняется. Актуальный состав появится примерно через ${retrySeconds} сек.`,
-        retryBlocked: true,
-      });
-      participantRefreshCooldownTimerRef.current = window.setTimeout(() => {
-        participantRefreshCooldownTimerRef.current = null;
-        setParticipantRefreshState(TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE);
-        participantAutoRunRef.current?.();
-      }, retryAfterMs);
-      return;
-    }
-
-    if (result.data.reason === "cooldown") {
-      const retryAfterMs = Math.max(
-        1_000,
-        result.data.retryAfterMs ?? TOURNAMENT_PARTICIPANT_REFRESH_INTERVAL_MS.active,
-      );
-      const retrySeconds = Math.max(1, Math.ceil(retryAfterMs / 1_000));
-      setParticipantRefreshState({
-        status: "cooldown",
-        message: `Состав недавно обновлялся. Повторить можно через ${retrySeconds} сек.`,
-        retryBlocked: true,
-      });
-      participantRefreshCooldownTimerRef.current = window.setTimeout(() => {
-        participantRefreshCooldownTimerRef.current = null;
-        setParticipantRefreshState(TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE);
-      }, retryAfterMs);
-      participantAutoRescheduleRef.current(nextFingerprint);
-      return;
-    }
-
-    const retryAfterMs = Math.max(0, result.data.retryAfterMs ?? 0);
-    setParticipantRefreshState({
-      status: "error",
-      message: result.data.reason === "stale_if_error"
-        ? "Viva временно недоступна. Показан последний сохранённый состав."
-        : "Viva временно не может обновить состав. Попробуйте позже.",
-      retryBlocked: retryAfterMs > 0,
-    });
-    if (retryAfterMs > 0) {
-      participantRefreshCooldownTimerRef.current = window.setTimeout(() => {
-        participantRefreshCooldownTimerRef.current = null;
-        setParticipantRefreshState(TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE);
-      }, retryAfterMs);
-    }
-    participantAutoRescheduleRef.current(nextFingerprint, "error");
-  }, [
-    canRefreshParticipantsFromViva,
-    participantExerciseId,
-    participantRefreshState.retryBlocked,
-    participantRefreshState.status,
-    rosterMode,
-  ]);
+  useEffect(() => {
+    if (!isOpen || !tournamentId || rosterMode === "manual") return;
+    void loadParticipants(tournamentId);
+  }, [isOpen, rosterMode, tournamentId]);
 
   const trainer = tournament?.trainers?.[0];
   const title = isCreationFlow ? "Создание турнира" : (tournament?.direction?.name || tournament?.type?.name || "Турнир");
@@ -3503,54 +3165,16 @@ function TournamentDetailsModal({
                   )}
                 </>
               ) : (
-                <>
-                  {participantExerciseId && canRefreshParticipantsFromViva && (
-                    <button
-                      className={`tournament-section-action tournament-participant-refresh-action${participantRefreshState.status === "pending" ? " is-loading" : ""}`}
-                      type="button"
-                      onClick={() => void handleRefreshParticipantsFromViva()}
-                      disabled={
-                        loading
-                        || participantRefreshState.status === "pending"
-                        || participantRefreshState.status === "cooldown"
-                        || participantRefreshState.retryBlocked === true
-                      }
-                      aria-busy={participantRefreshState.status === "pending"}
-                    >
-                      {participantRefreshState.status === "pending"
-                        ? "Обновляем…"
-                        : "Обновить участников"}
-                    </button>
-                  )}
-                  <button
-                    className="tournament-section-action"
-                    type="button"
-                    onClick={handleEnableManualRoster}
-                  >
-                    Создать вручную
-                  </button>
-                </>
+                <button
+                  className="tournament-section-action"
+                  type="button"
+                  onClick={handleEnableManualRoster}
+                >
+                  Создать вручную
+                </button>
               )}
             </div>
           </div>
-          {rosterMode === "bookings" && participantRefreshState.message && (
-            <div
-              className={`tournament-participant-refresh-status is-${participantRefreshState.status}`}
-              role={participantRefreshState.status === "error" ? "alert" : "status"}
-              aria-live="polite"
-            >
-              {participantRefreshState.message}
-            </div>
-          )}
-          {rosterMode === "bookings" && participantLoadNotice && (
-            <div
-              className="tournament-participant-refresh-status"
-              role="status"
-              aria-live="polite"
-            >
-              {participantLoadNotice}
-            </div>
-          )}
           {rosterMode === "manual" ? (
             <>
               <div className="tournament-settings-hint">
@@ -3682,15 +3306,15 @@ function TournamentDetailsModal({
                   onSuccessClose={() => {
                     const closedTarget = participantLeaveTarget;
                     setParticipantLeaveTarget(null);
-                    if (participantExerciseId) {
-                      void loadParticipants(participantExerciseId);
+                    if (tournamentId) {
+                      void loadParticipants(tournamentId);
                     } else if (closedTarget?.id) {
                       setParticipants((prev) => prev.filter((item) => item.id !== closedTarget.id));
                     }
                   }}
                 />
               )}
-              {!loading && !error && !participantLoadNotice && participants.length === 0 && (
+              {!loading && !error && participants.length === 0 && (
                 <div className="tournaments-muted">Участников пока нет</div>
               )}
               {!loading && !error && sortedParticipants.length > 0 && (
@@ -4353,17 +3977,13 @@ function TournamentManagerModal({
   const [syncWithVivaError, setSyncWithVivaError] = useState<string | null>(null);
   const [syncWithVivaSuccess, setSyncWithVivaSuccess] = useState<string | null>(null);
   const [broadcastActive, setBroadcastActive] = useState(false);
-  const [broadcastActiveTargets, setBroadcastActiveTargets] = useState<TournamentBroadcastActiveTarget[]>([]);
-  const [broadcastSelectionOpen, setBroadcastSelectionOpen] = useState(false);
-  const [broadcastSelectedTarget, setBroadcastSelectedTarget] = useState<TournamentBroadcastTarget | null>(null);
-  const [broadcastStatus, setBroadcastStatus] = useState<TournamentBroadcastStatus>("inactive");
-  const [broadcastPartial, setBroadcastPartial] = useState(false);
-  const [broadcastMessage, setBroadcastMessage] = useState<string | null>(null);
-  const [broadcastOperationInProgress, setBroadcastOperationInProgress] = useState(false);
-  const [broadcastOperationLeaseUntil, setBroadcastOperationLeaseUntil] = useState<string | null>(null);
-  const [broadcastRecoveryRequired, setBroadcastRecoveryRequired] = useState(false);
   const [broadcastLoading, setBroadcastLoading] = useState(false);
   const [broadcastError, setBroadcastError] = useState<string | null>(null);
+  const [broadcastTargetOptions, setBroadcastTargetOptions] = useState<TournamentBroadcastTargetOption[]>([]);
+  const [broadcastTargetSelectionRequired, setBroadcastTargetSelectionRequired] = useState(false);
+  const [broadcastRequestedTarget, setBroadcastRequestedTarget] = useState<TournamentBroadcastTarget | null>(null);
+  const [broadcastTargetDialogOpen, setBroadcastTargetDialogOpen] = useState(false);
+  const [pendingBroadcastTarget, setPendingBroadcastTarget] = useState<TournamentBroadcastTarget>("both");
   const [matchSaveErrors, setMatchSaveErrors] = useState<Record<string, string>>({});
   const [serverTotals, setServerTotals] = useState<AmericanoResultsResponse["totals"] | null>(null);
   const [serverLogs, setServerLogs] = useState<AmericanoResultsResponse["playerLogs"] | null>(null);
@@ -4379,44 +3999,6 @@ function TournamentManagerModal({
   const tournamentJsonInputRef = useRef<HTMLInputElement | null>(null);
   const pendingMatchNavigationRef = useRef<TournamentMatchLocation | null>(null);
   const draftHydratedSignatureRef = useRef<string | null>(null);
-  const broadcastRequestGenerationRef = useRef(0);
-  const broadcastTournamentIdRef = useRef<string | null>(null);
-
-  const applyBroadcastServerState = useCallback((state: TournamentBroadcastState) => {
-    const active = state.active === true;
-    const status = state.status ?? (active ? "active" : "inactive");
-    const operationLeaseUntil = String(state.operationLeaseUntil ?? "").trim() || null;
-    const leaseTs = Date.parse(operationLeaseUntil || "");
-    const isTransition = status === "starting" || status === "stopping";
-    const operationInProgress = state.operationInProgress !== false
-      && isTransition
-      && Number.isFinite(leaseTs)
-      && leaseTs > Date.now();
-    const recoveryRequired = state.recoveryRequired === true
-      || (active && isTransition && !operationInProgress);
-    const partial = state.partial === true || status === "partial";
-    const message = String(state.message ?? "").trim()
-      || (partial
-        ? "Трансляция запущена не на всех выбранных экранах."
-        : status === "starting"
-          ? operationInProgress
-            ? "Запуск выполняется. Дождитесь подтверждения перед остановкой."
-            : "Запуск не подтверждён. Остановите трансляцию, чтобы восстановить безопасное состояние."
-          : status === "stopping"
-            ? operationInProgress
-              ? "Остановка выполняется. Дождитесь подтверждения."
-              : "Остановка не подтверждена. Повторите остановку."
-            : null);
-
-    setBroadcastActive(active);
-    setBroadcastActiveTargets(normalizeTournamentBroadcastTargets(state.activeTargets));
-    setBroadcastStatus(status);
-    setBroadcastPartial(partial);
-    setBroadcastMessage(message);
-    setBroadcastOperationInProgress(operationInProgress);
-    setBroadcastOperationLeaseUntil(operationLeaseUntil);
-    setBroadcastRecoveryRequired(recoveryRequired);
-  }, []);
 
   const normalizedParticipants = useMemo<ParticipantEntry[]>(() => {
     if (!data) return [];
@@ -4452,12 +4034,6 @@ function TournamentManagerModal({
   }, [data]);
 
   useEffect(() => {
-    const nextTournamentId = data?.tournamentId ?? null;
-    const tournamentChanged = broadcastTournamentIdRef.current !== nextTournamentId;
-    if (tournamentChanged) {
-      broadcastTournamentIdRef.current = nextTournamentId;
-      broadcastRequestGenerationRef.current += 1;
-    }
     if (!data) {
       draftHydratedSignatureRef.current = null;
       return;
@@ -4517,85 +4093,55 @@ function TournamentManagerModal({
     setFinishTournamentError(null);
     setResumingTournament(false);
     setResumeTournamentError(null);
-    if (tournamentChanged) {
-      const savedBroadcast = data.params && typeof data.params === "object"
-        ? (data.params as Record<string, unknown>).broadcast
-        : null;
-      const savedBroadcastState = savedBroadcast && typeof savedBroadcast === "object"
-        ? savedBroadcast as Record<string, unknown>
-        : null;
-      applyBroadcastServerState({
-        tournamentId: data.tournamentId,
-        stationId: String(savedBroadcastState?.stationId ?? "").trim() || null,
-        active: savedBroadcastState?.active === true,
-        activeTargets: normalizeTournamentBroadcastTargets(savedBroadcastState?.activeTargets),
-        status: ["active", "inactive", "partial", "starting", "stopping"].includes(String(savedBroadcastState?.status))
-          ? savedBroadcastState?.status as TournamentBroadcastStatus
-          : null,
-        partial: savedBroadcastState?.partial === true,
-        message: String(savedBroadcastState?.message ?? "").trim() || null,
-        operationInProgress: typeof savedBroadcastState?.operationInProgress === "boolean"
-          ? savedBroadcastState.operationInProgress
-          : undefined,
-        operationLeaseUntil: String(savedBroadcastState?.operationLeaseUntil ?? "").trim() || null,
-        recoveryRequired: savedBroadcastState?.recoveryRequired === true,
-      });
-      setBroadcastSelectedTarget(null);
-      setBroadcastSelectionOpen(false);
-      setBroadcastLoading(false);
-      setBroadcastError(null);
-    }
+    const savedBroadcast = data.params && typeof data.params === "object"
+      ? (data.params as Record<string, unknown>).broadcast
+      : null;
+    setBroadcastActive(Boolean(
+      savedBroadcast
+      && typeof savedBroadcast === "object"
+      && (savedBroadcast as Record<string, unknown>).active === true
+    ));
+    setBroadcastLoading(false);
+    setBroadcastError(null);
+    setBroadcastTargetOptions([]);
+    setBroadcastTargetSelectionRequired(false);
+    setBroadcastRequestedTarget(null);
+    setBroadcastTargetDialogOpen(false);
+    setPendingBroadcastTarget("both");
     draftHydratedSignatureRef.current = draftDataSignature;
-  }, [applyBroadcastServerState, data, draftDataSignature, normalizedParticipants, initialTotals, initialPlayerLogs, mexicanoOptions, tournamentFinished]);
+  }, [data, draftDataSignature, normalizedParticipants, initialTotals, initialPlayerLogs, mexicanoOptions, tournamentFinished]);
 
   useEffect(() => {
     if (!isOpen || !data?.tournamentId || !isOnline) return;
 
     let cancelled = false;
-    const requestGeneration = broadcastRequestGenerationRef.current;
-    const stationId = data.params && typeof data.params === "object"
-      ? String((data.params as Record<string, unknown>).stationId ?? "").trim() || null
-      : null;
+    const stationId = resolveBroadcastStationId(data);
     void apiFetchTournamentBroadcastState(data.tournamentId, stationId).then((result) => {
-      if (
-        cancelled
-        || requestGeneration !== broadcastRequestGenerationRef.current
-        || result.error
-        || !result.data
-      ) return;
-      applyBroadcastServerState(result.data);
+      if (cancelled || result.error || !result.data) return;
+      const response = result.data;
+      const targetOptions = normalizeBroadcastTargetOptions(response.targetOptions);
+      const requiresSelection = shouldForceBroadcastTargetSelection(
+        stationId,
+        targetOptions,
+        response.selectionRequired,
+      );
+      const requestedTarget = normalizeTournamentBroadcastTarget(response.requestedTarget);
+      const fallbackTarget = requestedTarget && targetOptions.some((target) => target.key === requestedTarget)
+        ? requestedTarget
+        : targetOptions.length > 1
+          ? "both"
+          : targetOptions[0]?.key ?? null;
+
+      setBroadcastActive(response.active === true);
+      setBroadcastTargetOptions(targetOptions);
+      setBroadcastTargetSelectionRequired(requiresSelection);
+      setBroadcastRequestedTarget(fallbackTarget);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [applyBroadcastServerState, data?.tournamentId, isOnline, isOpen]);
-
-  useEffect(() => {
-    if (!broadcastOperationInProgress || !broadcastOperationLeaseUntil) return;
-    const leaseTs = Date.parse(broadcastOperationLeaseUntil);
-    if (!Number.isFinite(leaseTs)) return;
-    const markRecoverable = () => {
-      setBroadcastOperationInProgress(false);
-      setBroadcastRecoveryRequired(true);
-      setBroadcastMessage(broadcastStatus === "stopping"
-        ? "Остановка не подтверждена. Повторите остановку трансляции."
-        : "Запуск не подтверждён. Остановите трансляцию, чтобы восстановить безопасное состояние.");
-    };
-    const delay = leaseTs - Date.now();
-    if (delay <= 0) {
-      markRecoverable();
-      return;
-    }
-    const timeoutId = window.setTimeout(markRecoverable, delay + 50);
-    return () => window.clearTimeout(timeoutId);
-  }, [broadcastOperationInProgress, broadcastOperationLeaseUntil, broadcastStatus]);
-
-  useEffect(() => {
-    if (isOpen) return;
-    setBroadcastSelectionOpen(false);
-    setBroadcastSelectedTarget(null);
-  }, [isOpen]);
+  }, [data?.tournamentId, isOnline, isOpen]);
 
   const draftSnapshot = useMemo<TournamentDraftSnapshot | null>(() => {
     if (!data || draftHydratedSignatureRef.current !== draftDataSignature) return null;
@@ -5585,6 +5131,18 @@ function TournamentManagerModal({
     && !isSyncedWithViva
     && !resumingTournament
     && isOnline;
+  const broadcastTargetChoiceOptions = useMemo(
+    () => (broadcastTargetOptions.length > 1
+      ? [
+          ...broadcastTargetOptions,
+          {
+            key: "both" as TournamentBroadcastTarget,
+            label: "Оба экрана",
+          },
+        ]
+      : broadcastTargetOptions),
+    [broadcastTargetOptions],
+  );
   const finishConfirmationCopy = useMemo(
     () => buildTournamentFinishConfirmationCopy({
       completedMatches: standingsSnapshot.completedMatches,
@@ -5739,137 +5297,116 @@ function TournamentManagerModal({
     window.open(url, "_blank");
   };
 
-  const handleSetTournamentBroadcast = async (
-    action: "start" | "stop",
-    target?: TournamentBroadcastTarget,
-  ) => {
+  const applyBroadcastStateFromResponse = (payload: {
+    stationId?: string | null;
+    active?: boolean;
+    requestedTarget?: TournamentBroadcastTarget | null;
+    targetOptions?: TournamentBroadcastTargetOption[];
+    selectionRequired?: boolean;
+    updatedAt?: string | null;
+  }) => {
+    const targetOptions = normalizeBroadcastTargetOptions(payload.targetOptions);
+    const stationId = payload.stationId ?? (String(tournamentParams.stationId ?? "").trim() || null);
+    const requiresSelection = shouldForceBroadcastTargetSelection(
+      stationId,
+      targetOptions,
+      payload.selectionRequired,
+    );
+    const requestedTarget = normalizeTournamentBroadcastTarget(payload.requestedTarget);
+    const fallbackTarget = requestedTarget && targetOptions.some((target) => target.key === requestedTarget)
+      ? requestedTarget
+      : targetOptions.length > 1
+        ? "both"
+        : targetOptions[0]?.key ?? null;
+
+    setBroadcastActive(payload.active === true);
+    setBroadcastTargetOptions(targetOptions);
+    setBroadcastTargetSelectionRequired(requiresSelection);
+    setBroadcastRequestedTarget(fallbackTarget);
+    setBroadcastTargetDialogOpen(false);
+
+    if (!data) return;
+
+    onDataChange?.(
+      {
+        ...data,
+        params: {
+          ...tournamentParams,
+          broadcast: {
+            active: payload.active === true,
+            stationId,
+            requestedTarget,
+            targetOptions,
+            selectionRequired: requiresSelection,
+            updatedAt: payload.updatedAt ?? new Date().toISOString(),
+          },
+        },
+      },
+      {
+        totals: serverTotals,
+        playerLogs: serverLogs,
+      },
+    );
+  };
+
+  const handleToggleTournamentBroadcast = async (requestedTarget?: TournamentBroadcastTarget | null) => {
     if (!data?.tournamentId || broadcastLoading || !isOnline) return;
 
-    const stationId = String(tournamentParams.stationId ?? "").trim() || null;
-    const requestGeneration = broadcastRequestGenerationRef.current + 1;
-    broadcastRequestGenerationRef.current = requestGeneration;
+    const action = broadcastActive ? "stop" : "start";
+    const stationId = resolveBroadcastStationId(data);
+    const needsTargetSelection = action === "start"
+      && broadcastTargetSelectionRequired
+      && broadcastTargetChoiceOptions.length > 1;
+    const requestedTargetForStart = action === "start"
+      ? requestedTarget
+      || broadcastRequestedTarget
+      || (broadcastTargetChoiceOptions.length > 1 ? "both" : broadcastTargetChoiceOptions[0]?.key || null)
+      : null;
+    const canAutoRun = !needsTargetSelection || Boolean(requestedTarget);
+
+    if (!canAutoRun) {
+      const fallbackTarget = broadcastRequestedTarget && broadcastTargetChoiceOptions.some((target) => target.key === broadcastRequestedTarget)
+        ? broadcastRequestedTarget
+        : broadcastTargetChoiceOptions.find((target) => target.key === "both")?.key
+          || broadcastTargetChoiceOptions[0]?.key
+          || "both";
+      setPendingBroadcastTarget(fallbackTarget);
+      setBroadcastTargetDialogOpen(true);
+      return;
+    }
+
     setBroadcastLoading(true);
     setBroadcastError(null);
 
     try {
-      const result = action === "start"
-        ? await apiSetTournamentBroadcastState({
-          tournamentId: data.tournamentId,
-          stationId,
-          action,
-          ...(target ? { target } : {}),
-        })
-        : await apiSetTournamentBroadcastState({
-          tournamentId: data.tournamentId,
-          stationId,
-          action,
-        });
-      if (requestGeneration !== broadcastRequestGenerationRef.current) return;
+      const result = await apiSetTournamentBroadcastState({
+        tournamentId: data.tournamentId,
+        stationId,
+        action,
+        ...(requestedTargetForStart ? { requestedTarget: requestedTargetForStart } : {}),
+      });
       if (result.error || !result.data) {
-        const stateResult = await apiFetchTournamentBroadcastState(data.tournamentId, stationId);
-        if (requestGeneration !== broadcastRequestGenerationRef.current) return;
-        if (!stateResult.error && stateResult.data) {
-          applyBroadcastServerState(stateResult.data);
-          if (stateResult.data.active === true) setBroadcastSelectionOpen(false);
-        }
         setBroadcastError(result.error?.message || "Не удалось переключить трансляцию результатов");
         return;
       }
 
-      const active = result.data.active === true;
-      const activeTargets = normalizeTournamentBroadcastTargets(result.data.activeTargets);
-      const requestedTarget = isTournamentBroadcastTarget(result.data.requestedTarget)
-        ? result.data.requestedTarget
-        : action === "start" && target
-          ? target
-          : null;
-      const selectionRequired = result.data.selectionRequired === true;
-      const partial = result.data.partial === true;
-      const message = String(result.data.message ?? "").trim()
-        || (partial ? "Трансляция запущена не на всех выбранных экранах." : null);
-      const updatedAt = result.data.updatedAt ?? new Date().toISOString();
-      applyBroadcastServerState({
-        ...result.data,
-        active,
-        activeTargets,
-        partial,
-        message,
+      applyBroadcastStateFromResponse({
+        stationId: result.data.stationId ?? stationId,
+        active: result.data.active,
+        requestedTarget: result.data.requestedTarget,
+        targetOptions: result.data.targetOptions,
+        selectionRequired: result.data.selectionRequired,
+        updatedAt: result.data.updatedAt,
       });
-      if (action === "start") setBroadcastSelectionOpen(false);
-      onDataChange?.(
-        {
-          ...data,
-          params: {
-            ...tournamentParams,
-            broadcast: {
-              active,
-              stationId: result.data.stationId ?? stationId,
-              activeTargets,
-              requestedTarget,
-              selectionRequired,
-              status: result.data.status ?? null,
-              partial,
-              message,
-              operationInProgress: result.data.operationInProgress === true,
-              operationLeaseUntil: result.data.operationLeaseUntil ?? null,
-              recoveryRequired: result.data.recoveryRequired === true,
-              updatedAt,
-            },
-          },
-        },
-        {
-          totals: serverTotals,
-          playerLogs: serverLogs,
-        },
-      );
     } catch {
-      const stateResult = await apiFetchTournamentBroadcastState(data.tournamentId, stationId);
-      if (
-        requestGeneration === broadcastRequestGenerationRef.current
-        && !stateResult.error
-        && stateResult.data
-      ) {
-        applyBroadcastServerState(stateResult.data);
-        if (stateResult.data.active === true) setBroadcastSelectionOpen(false);
-      }
-      if (requestGeneration === broadcastRequestGenerationRef.current) {
-        setBroadcastError("Не удалось переключить трансляцию результатов");
-      }
+      setBroadcastError("Не удалось переключить трансляцию результатов");
     } finally {
-      if (requestGeneration === broadcastRequestGenerationRef.current) {
-        setBroadcastLoading(false);
-      }
+      setBroadcastLoading(false);
     }
   };
 
-  const handleToggleTournamentBroadcast = async () => {
-    if (!data?.tournamentId || broadcastLoading || broadcastOperationInProgress || !isOnline) return;
-
-    if (broadcastActive) {
-      await handleSetTournamentBroadcast("stop");
-      return;
-    }
-
-    const stationId = String(tournamentParams.stationId ?? "").trim();
-    if (isTournamentBroadcastTargetSelectionStation(stationId)) {
-      setBroadcastSelectedTarget(null);
-      setBroadcastError(null);
-      setBroadcastSelectionOpen(true);
-      return;
-    }
-
-    await handleSetTournamentBroadcast("start");
-  };
-
-  const handleTournamentManagerClose = () => {
-    if (broadcastSelectionOpen) {
-      if (!broadcastLoading) {
-        setBroadcastSelectionOpen(false);
-        setBroadcastSelectedTarget(null);
-      }
-      return;
-    }
-    onClose();
+  const handleConfirmBroadcastTarget = async () => {
+    await handleToggleTournamentBroadcast(pendingBroadcastTarget);
   };
 
   const buildTournamentJsonPayload = (): AmericanoTournamentPayload | null => {
@@ -6085,30 +5622,9 @@ function TournamentManagerModal({
       ?? (pendingQueueRecords.length > 0
         ? "Есть локально сохраненные результаты. Они будут отправлены при появлении связи."
         : null);
-  const broadcastStationId = String(tournamentParams.stationId ?? "").trim();
-  const broadcastTargetOptions = getTournamentBroadcastTargetOptions(broadcastStationId);
-  const broadcastActiveTargetsLabel = formatTournamentBroadcastTargets(
-    broadcastActiveTargets,
-    broadcastStationId,
-  );
-  const broadcastStateNeedsAttention = broadcastPartial
-    || broadcastRecoveryRequired
-    || broadcastStatus === "starting"
-    || broadcastStatus === "stopping";
-  const broadcastStateTitle = broadcastStatus === "starting"
-    ? broadcastActiveTargetsLabel
-      ? `Запуск не подтверждён: ${broadcastActiveTargetsLabel}`
-      : "Запуск трансляции не подтверждён"
-    : broadcastStatus === "stopping"
-      ? broadcastActiveTargetsLabel
-        ? `Остановка выполняется: ${broadcastActiveTargetsLabel}`
-        : "Остановка трансляции выполняется"
-      : broadcastActiveTargetsLabel
-        ? `Активные экраны: ${broadcastActiveTargetsLabel}`
-        : "Трансляция активна";
 
   return (
-    <Modal isOpen={isOpen} onClose={handleTournamentManagerClose} title={title || "Турнир"} variant="fullscreen">
+    <Modal isOpen={isOpen} onClose={onClose} title={title || "Турнир"} variant="fullscreen">
       <div className="tournament-manager">
         <div className="tournament-manager-meta">
           <span className="tournament-manager-chip strong">{getTournamentTypeLabel(data.tournamentType)}</span>
@@ -6704,30 +6220,15 @@ function TournamentManagerModal({
           {broadcastError && (
             <div className="tournaments-error">{broadcastError}</div>
           )}
-          {broadcastActive && (
-            <div
-              className={`tournament-manager-broadcast-state${broadcastStateNeedsAttention ? " is-partial" : ""}`}
-              role={broadcastStateNeedsAttention ? "alert" : "status"}
-            >
-              <div>{broadcastStateTitle}</div>
-              {broadcastMessage && (
-                <div className="tournament-manager-broadcast-message">{broadcastMessage}</div>
-              )}
-            </div>
-          )}
           <button
             type="button"
             className={`section-cta tournament-manager-broadcast${broadcastActive ? " is-active" : ""}`}
             onClick={() => void handleToggleTournamentBroadcast()}
-            disabled={broadcastLoading || broadcastOperationInProgress || !isOnline}
+            disabled={broadcastLoading || !isOnline}
             aria-pressed={broadcastActive}
           >
             {broadcastLoading
               ? (broadcastActive ? "Останавливаем трансляцию..." : "Запускаем трансляцию...")
-              : broadcastOperationInProgress
-                ? broadcastStatus === "stopping"
-                  ? "Остановка трансляции..."
-                  : "Запуск трансляции..."
               : broadcastActive
                 ? "Остановить трансляцию результатов"
                 : "Трансляция результатов"}
@@ -6771,55 +6272,43 @@ function TournamentManagerModal({
         </div>
       </div>
       <Modal
-        isOpen={broadcastSelectionOpen}
-        onClose={() => {
-          if (!broadcastLoading) setBroadcastSelectionOpen(false);
-        }}
-        title="Где запустить трансляцию?"
+        isOpen={broadcastTargetDialogOpen}
+        onClose={() => setBroadcastTargetDialogOpen(false)}
+        title="Выбор экрана трансляции"
         variant="dialog"
-        bodyClassName="tournament-broadcast-target-dialog"
       >
-        <div className="tournament-broadcast-target-options" role="radiogroup" aria-label="Экран для трансляции">
-          {broadcastTargetOptions.map((option) => (
-            <label
-              key={option.value}
-              className={`tournament-broadcast-target-option${broadcastSelectedTarget === option.value ? " is-selected" : ""}`}
-            >
+        <div className="tournament-confirm-copy">
+          Выберите, на каком экране(ах) запускать трансляцию результатов.
+        </div>
+        <div className="tournament-broadcast-target-list">
+          {broadcastTargetChoiceOptions.map((target) => (
+            <label key={target.key} className="tournament-broadcast-target-option">
               <input
                 type="radio"
-                name="tournament-broadcast-target"
-                value={option.value}
-                checked={broadcastSelectedTarget === option.value}
-                onChange={() => setBroadcastSelectedTarget(option.value)}
-                disabled={broadcastLoading}
+                name="broadcastTarget"
+                value={target.key}
+                checked={pendingBroadcastTarget === target.key}
+                onChange={() => setPendingBroadcastTarget(target.key)}
               />
-              <span>{option.label}</span>
+              <span>{target.label}</span>
             </label>
           ))}
         </div>
-        {broadcastError && (
-          <div className="tournaments-error" role="alert">{broadcastError}</div>
-        )}
-        <div className="tournament-broadcast-target-actions">
+        <div className="tournament-confirm-actions">
           <button
             type="button"
             className="onboarding-btn onboarding-btn--secondary"
-            onClick={() => setBroadcastSelectionOpen(false)}
-            disabled={broadcastLoading}
+            onClick={() => setBroadcastTargetDialogOpen(false)}
           >
             Отмена
           </button>
           <button
             type="button"
             className="onboarding-btn"
-            onClick={() => {
-              if (broadcastSelectedTarget) {
-                void handleSetTournamentBroadcast("start", broadcastSelectedTarget);
-              }
-            }}
-            disabled={!broadcastSelectedTarget || broadcastLoading || !isOnline}
+            onClick={() => void handleConfirmBroadcastTarget()}
+            disabled={broadcastTargetChoiceOptions.length === 0}
           >
-            {broadcastLoading ? "Запускаем..." : "Запустить"}
+            Запустить
           </button>
         </div>
       </Modal>
@@ -6881,9 +6370,6 @@ export default function TournamentsPage({
   const [items, setItems] = useState<Exercise[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [cacheNotice, setCacheNotice] = useState<string | null>(null);
-  const [vivaRefreshPending, setVivaRefreshPending] = useState(false);
-  const [vivaRefreshNotice, setVivaRefreshNotice] = useState<string | null>(null);
-  const [vivaRefreshError, setVivaRefreshError] = useState<string | null>(null);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [localDraftSnapshots, setLocalDraftSnapshots] = useState<TournamentDraftSnapshot[]>([]);
   const [profile, setProfile] = useState<UserProfileType | null>(null);
@@ -6903,7 +6389,6 @@ export default function TournamentsPage({
   const deepLinkLookupKeyRef = useRef<string | null>(null);
   const openingTournamentIdRef = useRef<string | null>(null);
   const activeDateRef = useRef<HTMLDivElement | null>(null);
-  const selectedDateKeyRef = useRef<string | null>(null);
   const locationTournamentSlug = useMemo(() => readTournamentSlugFromLocation(), []);
   const targetTournamentSlug = useMemo(
     () => normalizeTournamentSlug(initialOpenTournamentSlug) ?? locationTournamentSlug,
@@ -6925,7 +6410,6 @@ export default function TournamentsPage({
   const todayDateStr = formatDate(new Date());
   const includePastTournaments = selectedDateStr <= todayDateStr;
   const tournamentMechanicsLookupDate = selectedDateStr;
-  selectedDateKeyRef.current = selectedDateStr;
 
   const refreshPendingSyncCount = useCallback(async () => {
     const count = await getPendingTournamentResultSyncCount();
@@ -6954,11 +6438,6 @@ export default function TournamentsPage({
       inline: "center",
     });
   }, [dateIndex]);
-
-  useEffect(() => {
-    setVivaRefreshNotice(null);
-    setVivaRefreshError(null);
-  }, [selectedDateStr]);
 
   useEffect(() => {
     let alive = true;
@@ -7064,54 +6543,6 @@ export default function TournamentsPage({
   }, []);
 
   const canHostTournaments = profile ? hasTournamentHostingAccess(profile) : false;
-  const handleVivaRefresh = useCallback(async () => {
-    if (!canHostTournaments || vivaRefreshPending) return;
-
-    const requestedDate = selectedDateStr;
-    setVivaRefreshPending(true);
-    setVivaRefreshNotice(null);
-    setVivaRefreshError(null);
-
-    try {
-      const result = await apiRefreshTournamentMechanicsFromViva(requestedDate);
-      if (result.error || !result.data) {
-        throw new Error(result.error?.message || "Не удалось обновить турниры из Viva");
-      }
-      if (result.data.reason === "refresh_failed") {
-        throw new Error("Viva временно не вернула расписание. Текущий список сохранён.");
-      }
-      if (selectedDateKeyRef.current !== requestedDate) {
-        setVivaRefreshNotice("Viva обновлена для ранее выбранной даты.");
-        return;
-      }
-      if (result.data.reason === "cooldown") {
-        const retrySeconds = Math.max(1, Math.ceil((result.data.retryAfterMs ?? 0) / 1000));
-        setVivaRefreshNotice(`Эта дата уже обновлялась. Повторить можно через ${retrySeconds} сек.`);
-        return;
-      }
-
-      const freshExercises = buildTournamentMechanicsFallbackExercises(result.data.tournaments);
-      setItems(freshExercises);
-      setError(null);
-      setCacheNotice(null);
-      void saveCachedTournamentSchedule(requestedDate, freshExercises);
-
-      const countLabel = `турниров получено: ${result.data.tournaments.length}`;
-      setVivaRefreshNotice(
-        result.data.persisted === false
-          ? `Из Viva ${countLabel}, но серверный снимок не сохранился.`
-          : `Данные из Viva обновлены, ${countLabel}.`,
-      );
-    } catch (refreshError) {
-      setVivaRefreshError(
-        refreshError instanceof Error
-          ? refreshError.message
-          : "Не удалось обновить турниры из Viva",
-      );
-    } finally {
-      setVivaRefreshPending(false);
-    }
-  }, [canHostTournaments, selectedDateStr, vivaRefreshPending]);
   const currentProfileId = profile?.id ?? null;
   const localDraftExercises = useMemo(
     () => localDraftSnapshots
@@ -7751,31 +7182,6 @@ export default function TournamentsPage({
           {!cacheNotice && pendingSyncCount > 0 && (
             <div className="tournaments-sync-notice">{formatPendingTournamentSyncNotice(pendingSyncCount)}</div>
           )}
-          {canHostTournaments && (
-            <div className="tournaments-viva-refresh-toolbar">
-              <button
-                className={`tournaments-viva-refresh${vivaRefreshPending ? " is-loading" : ""}`}
-                type="button"
-                onClick={() => void handleVivaRefresh()}
-                disabled={vivaRefreshPending || loading}
-                aria-busy={vivaRefreshPending}
-              >
-                <span className="tournaments-viva-refresh-icon" aria-hidden="true">↻</span>
-                <span>{vivaRefreshPending ? "Обновляем из Viva..." : "Обновить из Viva"}</span>
-              </button>
-              <span className="tournaments-viva-refresh-hint">
-                Только выбранный день
-              </span>
-            </div>
-          )}
-          {vivaRefreshNotice && (
-            <div className="tournaments-viva-refresh-notice" role="status" aria-live="polite">
-              {vivaRefreshNotice}
-            </div>
-          )}
-          {vivaRefreshError && (
-            <div className="tournaments-error" role="alert">{vivaRefreshError}</div>
-          )}
           <div className="date-row">
             {dates.map((date, idx) => {
               const monthLabel = date
@@ -7908,7 +7314,6 @@ export default function TournamentsPage({
         tournament={selectedTournament}
         historyRecord={selectedTournament ? combinedHistoryById[String(selectedTournament.id)] ?? null : null}
         sourceDateKey={selectedDateStr}
-        canRefreshParticipantsFromViva={canHostTournaments}
         onSaved={handleTournamentCreated}
       />
 

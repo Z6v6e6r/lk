@@ -31,7 +31,6 @@ import {
   resolveLkApiFallbackTimeoutMs,
   resolvePreferredLkApiBaseUrl,
 } from "./lkApiBaseUrls";
-import { isLkIdleRequestPausedError } from "./lkIdleDataGuard";
 import { isGameExerciseIdMissingGuard } from "./paymentSyncBookingResolution";
 
 const DEFAULT_GAMES_MASTER_SERVICE_ID =
@@ -2858,41 +2857,22 @@ export interface AmericanoTournamentPayload {
 }
 
 export type TournamentBroadcastAction = "start" | "stop";
+export type TournamentBroadcastTarget = "left_arena" | "right_arena" | "both";
 
-export type TournamentBroadcastTarget = "right_arena" | "left_arena" | "both";
-
-export type TournamentBroadcastActiveTarget = Exclude<TournamentBroadcastTarget, "both">;
-
-export type TournamentBroadcastStatus = "active" | "inactive" | "partial" | "starting" | "stopping";
-
-export type TournamentBroadcastStateRequest = {
-  tournamentId: string;
-  stationId?: string | null;
-} & (
-  | {
-    action: "start";
-    target?: TournamentBroadcastTarget;
-  }
-  | {
-    action: "stop";
-    target?: never;
-  }
-);
+export interface TournamentBroadcastTargetOption {
+  key: TournamentBroadcastTarget;
+  label: string;
+}
 
 export interface TournamentBroadcastState {
   tournamentId: string;
   stationId: string | null;
   active: boolean;
-  activeTargets?: TournamentBroadcastActiveTarget[] | null;
-  requestedTarget?: TournamentBroadcastTarget | null;
-  selectionRequired?: boolean;
-  status?: TournamentBroadcastStatus | null;
-  partial?: boolean;
-  message?: string | null;
-  operationInProgress?: boolean;
-  operationLeaseUntil?: string | null;
-  recoveryRequired?: boolean;
   updatedAt?: string | null;
+  requestedTarget?: TournamentBroadcastTarget | null;
+  targetOptions?: TournamentBroadcastTargetOption[];
+  selectionRequired?: boolean;
+  activeTargets?: TournamentBroadcastTarget[];
 }
 
 export interface AmericanoResultsPayload {
@@ -4023,25 +4003,18 @@ async function rawRequest<T>(
   try {
     response = await fetch(fullUrl, { ...fetchOptions, headers });
   } catch (err) {
-    const idlePaused = isLkIdleRequestPausedError(err);
-    if (!idlePaused) {
-      trackClientError(
-        "api.request_network_error",
-        err,
-        {
-          url: fullUrl,
-          method: fetchOptions.method ?? "GET",
-        },
-        { handled: true, severity: "error" },
-      );
-    }
+    trackClientError(
+      "api.request_network_error",
+      err,
+      {
+        url: fullUrl,
+        method: fetchOptions.method ?? "GET",
+      },
+      { handled: true, severity: "error" },
+    );
     return {
       data: null,
-      error: {
-        status: null,
-        message: idlePaused ? "Данные ЛК устарели" : "Ошибка сети",
-        raw: err,
-      },
+      error: { status: null, message: "Ошибка сети", raw: err },
       status: null,
     };
   }
@@ -4158,7 +4131,6 @@ export function getServ2Origin() {
 }
 
 function shouldFallback(result: ApiResult<unknown>) {
-  if (isLkIdleRequestPausedError(result.error?.raw)) return false;
   return result.status == null || result.status >= 500;
 }
 
@@ -4439,9 +4411,6 @@ async function withRetry<T>(
   while (true) {
     try {
       const res = await fn();
-      if (isLkIdleRequestPausedError(res.error?.raw)) {
-        return res;
-      }
       if (!isSuccessStatus(res.status)) {
         attempt++;
         if (attempt > retries) {
@@ -4453,13 +4422,6 @@ async function withRetry<T>(
         return res;
       }
     } catch (err) {
-      if (isLkIdleRequestPausedError(err)) {
-        return {
-          data: null,
-          error: { status: null, message: "Данные ЛК устарели", raw: err },
-          status: null,
-        };
-      }
       attempt++;
       if (attempt > retries) {
         return {
@@ -4763,48 +4725,6 @@ export async function apiCancelBooking(
   });
 }
 
-export interface SubscriptionBookingReleaseResponse {
-  ok: boolean;
-  state: "RELEASED" | "PENDING_CONFIRMATION";
-  operationId: string;
-  bookingId: string;
-  details?: Record<string, unknown> | null;
-  message?: string;
-}
-
-function buildSubscriptionBookingReleaseOperationId(bookingId: string) {
-  const normalized = bookingId.trim().replace(/[^A-Za-z0-9._:-]+/g, "-");
-  return `lk-subscription-release:${normalized}`.slice(0, 200);
-}
-
-export async function apiReleaseSubscriptionBookingClaim(
-  bookingIdRaw: string,
-): Promise<ApiResult<SubscriptionBookingReleaseResponse>> {
-  const bookingId = bookingIdRaw.trim();
-  if (!bookingId) {
-    return {
-      data: null,
-      error: { status: 400, message: "Не указана запись для освобождения дневного лимита" },
-      status: 400,
-    };
-  }
-  const baseUrlCandidates = resolveLkApiBaseUrlCandidates(SERV2, SERV2_FALLBACK);
-  const baseUrl = baseUrlCandidates[0] || getServ2Origin();
-  const operationId = buildSubscriptionBookingReleaseOperationId(bookingId);
-  return request<SubscriptionBookingReleaseResponse>(
-    `/lk/subscription-bookings?operationId=${encodeURIComponent(operationId)}`,
-    {
-      method: "POST",
-      auth: true,
-      retries: 1,
-      baseUrl,
-      fallbackBaseUrls: baseUrlCandidates.slice(1),
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "release", bookingId }),
-    },
-  );
-}
-
 export async function apiCancelPadelSelfRemovalBookings(
   bookingIdsRaw: string[],
   options: {
@@ -4839,26 +4759,6 @@ export async function apiCancelPadelSelfRemovalBookings(
   ) => {
     const verification = await apiVerifyBookingCancellation(bookingId);
     if (!verification.error && verification.data?.state === "cancelled") {
-      if (context.actionId === "subscription") {
-        const releaseResult = await apiReleaseSubscriptionBookingClaim(bookingId);
-        if (releaseResult.error || releaseResult.data?.state !== "RELEASED") {
-          statusByBookingId[bookingId] = "needs_verification";
-          pushTrace({
-            step: "subscription_daily_claim_release_failed",
-            bookingId,
-            statusCode: releaseResult.status,
-            actionId: context.actionId,
-            response: releaseResult.error?.raw ?? releaseResult.data ?? null,
-          });
-          return false;
-        }
-        pushTrace({
-          step: "subscription_daily_claim_released",
-          bookingId,
-          statusCode: releaseResult.status,
-          actionId: context.actionId,
-        });
-      }
       pushTrace({
         step: "cancel_booking_verified",
         bookingId,
@@ -5352,74 +5252,6 @@ export async function apiFetchTournamentParticipants(
   };
 }
 
-export type TournamentParticipantsRefreshReason =
-  | "refreshed"
-  | "cooldown"
-  | "in_progress"
-  | "overload"
-  | "unavailable"
-  | "stale_if_error";
-
-export interface TournamentParticipantsRefreshResult {
-  refreshed: boolean;
-  reason: TournamentParticipantsRefreshReason;
-  exerciseId: string;
-  participants: ExerciseBooking[];
-  refreshedAt: string | null;
-  retryAfterMs: number | null;
-}
-
-const TOURNAMENT_PARTICIPANTS_REFRESH_REASONS = new Set<TournamentParticipantsRefreshReason>([
-  "refreshed",
-  "cooldown",
-  "in_progress",
-  "overload",
-  "unavailable",
-  "stale_if_error",
-]);
-
-export async function apiRefreshTournamentParticipants(
-  exerciseId: string,
-  options: {
-    signal?: AbortSignal;
-  } = {},
-) {
-  const normalizedExerciseId = String(exerciseId || "").trim();
-  const base = getServ2Origin();
-  const result = await request<unknown>(
-    `${base}/lk/tournaments/participants/refresh?exerciseId=${encodeURIComponent(normalizedExerciseId)}`,
-    {
-      method: "POST",
-      auth: true,
-      retries: 0,
-      signal: options.signal,
-      body: JSON.stringify({ exerciseId: normalizedExerciseId }),
-    },
-  );
-  const payload = isRecord(result.data) ? result.data : null;
-  const reasonValue = String(payload?.reason ?? "").trim() as TournamentParticipantsRefreshReason;
-  const reason = TOURNAMENT_PARTICIPANTS_REFRESH_REASONS.has(reasonValue)
-    ? reasonValue
-    : "unavailable";
-  const participants = Array.isArray(payload?.participants)
-    ? payload.participants as ExerciseBooking[]
-    : [];
-
-  return {
-    ...result,
-    data: payload
-      ? {
-          refreshed: payload.refreshed === true,
-          reason,
-          exerciseId: String(payload.exerciseId ?? normalizedExerciseId).trim(),
-          participants: sanitizeTournamentParticipantsPayload(participants),
-          refreshedAt: pickString(payload, ["refreshedAt"]),
-          retryAfterMs: pickNumber(payload, ["retryAfterMs"]),
-        } satisfies TournamentParticipantsRefreshResult
-      : null,
-  };
-}
-
 function normalizeTournamentHistoryParticipant(
   value: unknown,
   index: number,
@@ -5710,20 +5542,24 @@ export async function apiFetchTournamentBroadcastState(
   );
 }
 
-export async function apiSetTournamentBroadcastState(payload: TournamentBroadcastStateRequest) {
+export async function apiSetTournamentBroadcastState(payload: {
+  tournamentId: string;
+  stationId?: string | null;
+  action: TournamentBroadcastAction;
+  requestedTarget?: TournamentBroadcastTarget | null;
+}) {
   const base = getServ2Origin();
-  const body = {
-    tournamentId: String(payload.tournamentId || "").trim(),
-    stationId: String(payload.stationId || "").trim() || null,
-    ...(payload.action === "start" && payload.target ? { target: payload.target } : {}),
-  };
   return request<TournamentBroadcastState>(
     `${base}/lk/tournaments/broadcast/${payload.action}`,
     {
       method: "POST",
       auth: true,
       retries: 0,
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        tournamentId: String(payload.tournamentId || "").trim(),
+        stationId: String(payload.stationId || "").trim() || null,
+        ...(payload.requestedTarget ? { requestedTarget: payload.requestedTarget } : {}),
+      }),
     },
   );
 }
@@ -8295,17 +8131,6 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
   };
 }
 
-function resolvePadelSplitPendingError(payload: unknown, status: ApiStatus): ApiError | null {
-  if (!isRecord(payload)) return null;
-  const state = String(payload.state || "").trim().toUpperCase();
-  if (state !== "PENDING_CONFIRMATION") return null;
-  return {
-    status,
-    message: pickString(payload, ["message"]) || "Запись ожидает подтверждения Viva. Повторите проверку.",
-    raw: payload,
-  };
-}
-
 function buildPadelSplitPaymentPayload(params: PadelSplitPaymentParams): Record<string, unknown> {
   const normalizedClientSubscriptionId =
     params.clientSubscriptionId?.trim()
@@ -8346,49 +8171,6 @@ function buildPadelSplitPaymentPayload(params: PadelSplitPaymentParams): Record<
   };
 }
 
-function buildPadelSplitIdempotencyKey(
-  scope: "create" | "join",
-  params: PadelSplitPaymentParams,
-  gameId?: string | null,
-) {
-  const seed = [
-    scope,
-    gameId,
-    params.clientId,
-    params.clientPhone,
-    params.clientSubscriptionId,
-    params.exerciseId,
-    params.date,
-    params.fromTime,
-    params.toTime,
-    params.roomId,
-    params.spot,
-  ].map((value) => String(value ?? "").trim()).join("|");
-  const hashPart = (value: string) => {
-    let hash = 2166136261;
-    for (let index = 0; index < value.length; index += 1) {
-      hash ^= value.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
-    }
-    return (hash >>> 0).toString(36);
-  };
-  return `lk-split-${scope}-${hashPart(seed)}${hashPart([...seed].reverse().join(""))}`;
-}
-
-function buildPadelSplitSubscriptionRequest(
-  path: string,
-  scope: "create" | "join",
-  params: PadelSplitPaymentParams,
-  gameId?: string | null,
-) {
-  if (params.paymentMode !== "subscription") return { path, options: {} };
-  const operationId = buildPadelSplitIdempotencyKey(scope, params, gameId);
-  return {
-    path: `${path}?operationId=${encodeURIComponent(operationId)}`,
-    options: { auth: true as const },
-  };
-}
-
 export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentParams) {
   const baseUrl = getServ2Origin() || "";
   const studioId = params.studioId?.trim() || null;
@@ -8409,15 +8191,9 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
     };
   }
 
-  const subscriptionRequest = buildPadelSplitSubscriptionRequest(
-    "/lk/games/split/create",
-    "create",
-    params,
-  );
-  const response = await request<unknown>(subscriptionRequest.path, {
+  const response = await request<unknown>("/lk/games/split/create", {
     method: "POST",
     baseUrl,
-    ...subscriptionRequest.options,
     retries: 0,
     body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
   });
@@ -8426,15 +8202,6 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
     return {
       data: null as PadelSplitPaymentResult | null,
       error: response.error,
-      status: response.status,
-    };
-  }
-
-  const pendingError = resolvePadelSplitPendingError(response.data, response.status);
-  if (pendingError) {
-    return {
-      data: null as PadelSplitPaymentResult | null,
-      error: pendingError,
       status: response.status,
     };
   }
@@ -8480,18 +8247,11 @@ export async function apiCreatePadelSplitParticipantPayment(
     };
   }
 
-  const subscriptionRequest = buildPadelSplitSubscriptionRequest(
-    `/lk/games/${encodeURIComponent(normalizedGameId)}/split/join`,
-    "join",
-    params,
-    normalizedGameId,
-  );
   const response = await request<unknown>(
-    subscriptionRequest.path,
+    `/lk/games/${encodeURIComponent(normalizedGameId)}/split/join`,
     {
       method: "POST",
       baseUrl,
-      ...subscriptionRequest.options,
       retries: 0,
       body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
     },
@@ -8501,15 +8261,6 @@ export async function apiCreatePadelSplitParticipantPayment(
     return {
       data: null as PadelSplitPaymentResult | null,
       error: response.error,
-      status: response.status,
-    };
-  }
-
-  const pendingError = resolvePadelSplitPendingError(response.data, response.status);
-  if (pendingError) {
-    return {
-      data: null as PadelSplitPaymentResult | null,
-      error: pendingError,
       status: response.status,
     };
   }
