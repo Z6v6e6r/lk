@@ -426,6 +426,19 @@ test("broadcast prepare requires Viva auth and accepts only a start target", () 
   assert.equal(prepared._tournamentBroadcast.requestedTarget, "right_arena");
   assert.equal(prepared._tournamentBroadcast.boxId, undefined);
 
+  const legacyPrepared = runFunctionNode("fn_tournament_broadcast_prepare.js", {
+    payload: {
+      tournamentId: "tournament-1",
+      stationId: "station-1",
+      requestedTarget: "LEFT_ARENA",
+    },
+    req: {
+      params: { action: "start" },
+      headers: { authorization: "Bearer user-token" },
+    },
+  })[0];
+  assert.equal(legacyPrepared._tournamentBroadcast.requestedTarget, "left_arena");
+
   const invalidTarget = runFunctionNode("fn_tournament_broadcast_prepare.js", {
     payload: { tournamentId: "tournament-1", target: "attacker-box" },
     req: {
