@@ -737,6 +737,148 @@ test("staged status exposes launch and daily phases independently per product", 
   assert.equal(dailyPayload.remainingCount, 4);
 });
 
+test("staged counters recover current daily sales that were persisted as launch", () => {
+  const nowIso = "2026-08-10T12:00:00.000Z";
+  const inventoryId = "ab_leto_2026_100_then_7_v1_ra";
+  const launchRows = Array.from({ length: 100 }, (_, index) => ({
+    inventoryId,
+    counterKey: "ra",
+    releasePhase: "launch",
+    status: "PAID",
+    paidAt: new Date(Date.parse("2026-08-08T16:00:00.000Z") + index * 60_000).toISOString(),
+  }));
+  const mislabeledPriorDrop = {
+    inventoryId,
+    counterKey: "ra",
+    releasePhase: "launch",
+    status: "PAID",
+    paidAt: "2026-08-10T06:59:59.000Z",
+  };
+  const mislabeledCurrentPaid = [
+    {
+      inventoryId,
+      counterKey: "ra",
+      releasePhase: "launch",
+      status: "PAID",
+      createdAt: "2026-08-10T06:59:59.000Z",
+      updatedAt: "2026-08-10T07:00:00.000Z",
+    },
+    {
+      inventoryId,
+      counterKey: "ra",
+      releasePhase: "launch",
+      status: "PAID",
+      paidAt: "2026-08-10T07:01:00.000Z",
+    },
+  ];
+  const mislabeledCurrentPending = {
+    inventoryId,
+    counterKey: "ra",
+    releasePhase: "launch",
+    status: "PAYMENT_PENDING",
+    createdAt: "2026-08-10T07:02:00.000Z",
+    expiresAt: "2026-08-10T13:00:00.000Z",
+  };
+  const mislabeledExpiredPending = {
+    inventoryId,
+    counterKey: "ra",
+    releasePhase: "launch",
+    status: "PAYMENT_PENDING",
+    createdAt: "2026-08-10T07:03:00.000Z",
+    expiresAt: "2026-08-10T11:00:00.000Z",
+  };
+  const rows = [
+    ...launchRows,
+    mislabeledPriorDrop,
+    ...mislabeledCurrentPaid,
+    mislabeledCurrentPending,
+    mislabeledExpiredPending,
+  ];
+
+  const purchasePrepare = withFixedNow(nowIso, () => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+    {
+      payload: {
+        clientPhone: "79990000000",
+        counterKey: "ra",
+        paymentRef: "mislabeled-daily-purchase",
+      },
+      req: { query: {} },
+    },
+  )) as unknown[];
+  const purchaseCtx = asRecord(asRecord(purchasePrepare[0])._summerSubscriptionCtx);
+  const purchaseOut = withFixedNow(nowIso, () => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
+    { _summerSubscriptionCtx: purchaseCtx, payload: rows },
+  )) as unknown[];
+  const allowedCtx = asRecord(asRecord(purchaseOut[0])._summerSubscriptionCtx);
+  assert.equal(allowedCtx.releasePhase, "daily");
+  assert.equal(allowedCtx.launchPaidCount, 100);
+  assert.equal(allowedCtx.remainingBefore, 4);
+
+  const statusPrepare = withFixedNow(nowIso, () => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "ra" } } },
+  )) as unknown[];
+  const statusCtx = asRecord(asRecord(statusPrepare[0])._summerSubscriptionCtx);
+  const statusOut = withFixedNow(nowIso, () => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    { _summerSubscriptionCtx: statusCtx, payload: rows },
+  )) as unknown[];
+  const statusPayload = asRecord(asRecord(statusOut[0]).payload);
+  assert.equal(statusPayload.releasePhase, "daily");
+  assert.equal(statusPayload.launchPaidCount, 100);
+  assert.equal(statusPayload.paidCount, 2);
+  assert.equal(statusPayload.reservedCount, 1);
+  assert.equal(statusPayload.remainingCount, 4);
+
+  const refreshPrepare = withFixedNow(nowIso, () => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_counter_refresh_prepare.js",
+    { payload: Date.now() },
+  )) as Record<string, unknown>;
+  const refreshCtx = asRecord(asRecord(refreshPrepare)._summerSubscriptionCtx);
+  const refreshOut = withFixedNow(nowIso, () => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_counter_refresh_response.js",
+    { _summerSubscriptionCtx: refreshCtx, payload: rows },
+  )) as unknown[];
+  const updates = refreshOut[0] as Array<Record<string, unknown>>;
+  const raUpdate = updates.find((entry) => asRecord(entry.query).counterKey === "ra");
+  assert.ok(raUpdate);
+  const refreshedState = asRecord(asRecord(raUpdate.payload).$set);
+  assert.equal(refreshedState.releasePhase, "daily");
+  assert.equal(refreshedState.launchPaidCount, 100);
+  assert.equal(refreshedState.paidCount, 2);
+  assert.equal(refreshedState.reservedCount, 1);
+  assert.equal(refreshedState.remainingCount, 4);
+
+  const sixMislabeledPaid = Array.from({ length: 6 }, (_, index) => ({
+    inventoryId,
+    counterKey: "ra",
+    releasePhase: "launch",
+    status: "PAID",
+    paidAt: new Date(Date.parse("2026-08-10T07:00:00.000Z") + index * 60_000).toISOString(),
+  }));
+  const blockedOut = withFixedNow(nowIso, () => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
+    {
+      _summerSubscriptionCtx: { ...purchaseCtx },
+      payload: [
+        ...launchRows,
+        mislabeledPriorDrop,
+        ...sixMislabeledPaid,
+        mislabeledCurrentPending,
+        mislabeledExpiredPending,
+      ],
+    },
+  )) as unknown[];
+  const blocked = asRecord(blockedOut[1]);
+  const blockedDetails = asRecord(asRecord(blocked.payload).details);
+  assert.equal(blocked.statusCode, 409);
+  assert.equal(blockedDetails.paidCount, 6);
+  assert.equal(blockedDetails.reservedCount, 1);
+  assert.equal(blockedDetails.remainingCount, 0);
+});
+
 test("summer subscription Energy-5 limit check never blocks on purchase count", () => {
   const out = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",

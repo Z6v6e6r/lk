@@ -24,6 +24,24 @@ const resolveNextDailyDropAt = (completedAtTs) => {
   return new Date(completedAtTs < dropTs ? dropTs : dropTs + 24 * 60 * 60 * 1000).toISOString();
 };
 
+const resolveDailyDropDate = (timestamp) => {
+  if (!Number.isFinite(timestamp)) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(timestamp)).reduce((result, part) => {
+    result[part.type] = part.value;
+    return result;
+  }, {});
+  const localDay = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+  const dropDay = Number(parts.hour) >= 10 ? localDay : localDay - 24 * 60 * 60 * 1000;
+  return new Date(dropDay).toISOString().slice(0, 10);
+};
+
 const normalizeCounterKey = (value) => {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return null;
@@ -147,6 +165,7 @@ const states = counters.map((counter) => {
     _dailyPaidCount: 0,
     _dailyReservedCount: 0,
     _launchPaidTimestamps: [],
+    _stagedRows: [],
   };
 });
 
@@ -156,9 +175,10 @@ rows.forEach((doc) => {
 
   const status = normalizeStatus(doc.status);
   const releasePhase = toStr(doc.releasePhase) === "daily" ? "daily" : "launch";
-  const isCurrentDailyDrop = releasePhase === "daily"
-    && toStr(doc.dailyDropDate) === state.dailyDropDate;
   const expiresAtTs = toTs(doc.expiresAt);
+  const eventTs = status === "PAID"
+    ? (toTs(doc.paidAt) ?? toTs(doc.updatedAt) ?? toTs(doc.createdAt))
+    : (toTs(doc.createdAt) ?? toTs(doc.updatedAt));
   const updatedAtTs = toTs(doc.updatedAt) ?? toTs(doc.createdAt);
   if (updatedAtTs != null) {
     if (state._lastUpdatedAtTs == null || updatedAtTs > state._lastUpdatedAtTs) {
@@ -181,12 +201,16 @@ rows.forEach((doc) => {
 
   if (status === "PAID") {
     if (state.stagedRelease) {
+      state._stagedRows.push({
+        status,
+        releasePhase,
+        dailyDropDate: toStr(doc.dailyDropDate),
+        eventTs,
+      });
       if (releasePhase === "launch") {
         state.launchPaidCount += 1;
-        const paidAtTs = toTs(doc.paidAt) ?? toTs(doc.updatedAt) ?? toTs(doc.createdAt);
-        if (paidAtTs != null) state._launchPaidTimestamps.push(paidAtTs);
+        if (eventTs != null) state._launchPaidTimestamps.push(eventTs);
       }
-      if (isCurrentDailyDrop) state._dailyPaidCount += 1;
       return;
     }
     state.paidCount += 1;
@@ -197,8 +221,12 @@ rows.forEach((doc) => {
   const isActivePending = isPending && (expiresAtTs == null || expiresAtTs > nowTs);
   if (isActivePending) {
     if (state.stagedRelease) {
-      if (releasePhase === "launch") state.launchReservedCount += 1;
-      if (isCurrentDailyDrop) state._dailyReservedCount += 1;
+      state._stagedRows.push({
+        status,
+        releasePhase,
+        dailyDropDate: toStr(doc.dailyDropDate),
+        eventTs,
+      });
       return;
     }
     state.reservedCount += 1;
@@ -215,6 +243,22 @@ const updateMessages = states.map((state) => {
     state.launchCompletedAt = launchCompletedAtTs == null ? null : new Date(launchCompletedAtTs).toISOString();
     state.dailyDropStartsAt = launchComplete ? resolveNextDailyDropAt(launchCompletedAtTs) : null;
     state.dailyDropActive = Boolean(state.dailyDropStartsAt && Date.parse(state.dailyDropStartsAt) <= nowTs);
+    const dailyDropStartsAtTs = toTs(state.dailyDropStartsAt);
+    state.launchPaidCount = launchComplete ? state.launchLimit : state.launchPaidCount;
+    for (const row of state._stagedRows) {
+      const isCurrentDailyDrop = row.releasePhase === "daily"
+        ? row.dailyDropDate === state.dailyDropDate
+        : dailyDropStartsAtTs != null
+          && row.eventTs != null
+          && row.eventTs >= dailyDropStartsAtTs
+          && resolveDailyDropDate(row.eventTs) === state.dailyDropDate;
+      if (row.status === "PAID") {
+        if (isCurrentDailyDrop) state._dailyPaidCount += 1;
+        continue;
+      }
+      if (isCurrentDailyDrop) state._dailyReservedCount += 1;
+      else if (row.releasePhase === "launch") state.launchReservedCount += 1;
+    }
     state.releasePhase = state.dailyDropActive ? "daily" : launchComplete ? "daily_pending" : "launch";
     state.launchRemainingCount = Math.max(
       state.launchLimit - state.launchPaidCount - state.launchReservedCount,
@@ -234,6 +278,7 @@ const updateMessages = states.map((state) => {
   delete state._dailyPaidCount;
   delete state._dailyReservedCount;
   delete state._launchPaidTimestamps;
+  delete state._stagedRows;
 
   return {
     query: state.inventoryId

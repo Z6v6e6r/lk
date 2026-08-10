@@ -41,6 +41,24 @@ const resolveNextDailyDropAt = (completedAtTs) => {
   return new Date(completedAtTs < dropTs ? dropTs : dropTs + 24 * 60 * 60 * 1000).toISOString();
 };
 
+const resolveDailyDropDate = (timestamp) => {
+  if (!Number.isFinite(timestamp)) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: AB_LETO_DAILY_DROP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(timestamp)).reduce((result, part) => {
+    result[part.type] = part.value;
+    return result;
+  }, {});
+  const localDay = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+  const dropDay = Number(parts.hour) >= 10 ? localDay : localDay - 24 * 60 * 60 * 1000;
+  return new Date(dropDay).toISOString().slice(0, 10);
+};
+
 const resolveHttpTimeoutMs = () => {
   const raw = toInt(global.get("summer_subscription_http_timeout_ms"), 20000);
   return Math.max(3000, Math.min(120000, raw));
@@ -155,6 +173,7 @@ let launchReservedCount = 0;
 let dailyPaidCount = 0;
 let dailyReservedCount = 0;
 const launchPaidTimestamps = [];
+const stagedRows = [];
 
 for (const row of rows) {
   if (!row || typeof row !== "object") continue;
@@ -164,16 +183,16 @@ for (const row of rows) {
   const status = normalizeStatus(row.status);
   const stagedRelease = ctx.stagedRelease === true;
   const releasePhase = toStr(row.releasePhase) === "daily" ? "daily" : "launch";
-  const isCurrentDailyDrop = releasePhase === "daily"
-    && toStr(row.dailyDropDate) === toStr(ctx.dailyDropDate);
+  const eventTs = status === "PAID"
+    ? (toTs(row.paidAt) ?? toTs(row.updatedAt) ?? toTs(row.createdAt))
+    : (toTs(row.createdAt) ?? toTs(row.updatedAt));
   if (status === "PAID") {
     if (stagedRelease) {
+      stagedRows.push({ status, releasePhase, dailyDropDate: toStr(row.dailyDropDate), eventTs });
       if (releasePhase === "launch") {
         launchPaidCount += 1;
-        const paidAtTs = toTs(row.paidAt) ?? toTs(row.updatedAt) ?? toTs(row.createdAt);
-        if (paidAtTs != null) launchPaidTimestamps.push(paidAtTs);
+        if (eventTs != null) launchPaidTimestamps.push(eventTs);
       }
-      if (isCurrentDailyDrop) dailyPaidCount += 1;
       continue;
     }
     paidCount += 1;
@@ -185,8 +204,7 @@ for (const row of rows) {
   const activePending = expiresAtTs == null || expiresAtTs > now;
   if (activePending) {
     if (stagedRelease) {
-      if (releasePhase === "launch") launchReservedCount += 1;
-      if (isCurrentDailyDrop) dailyReservedCount += 1;
+      stagedRows.push({ status, releasePhase, dailyDropDate: toStr(row.dailyDropDate), eventTs });
       continue;
     }
     reservedCount += 1;
@@ -204,6 +222,24 @@ const launchCompletedAtTs = launchComplete && launchPaidTimestamps.length >= lau
 const launchCompletedAt = launchCompletedAtTs == null ? null : new Date(launchCompletedAtTs).toISOString();
 const dailyDropStartsAt = launchComplete ? resolveNextDailyDropAt(launchCompletedAtTs) : null;
 const dailyDropActive = Boolean(dailyDropStartsAt && Date.parse(dailyDropStartsAt) <= now);
+if (stagedRelease) {
+  const dailyDropStartsAtTs = toTs(dailyDropStartsAt);
+  launchPaidCount = launchComplete ? launchLimit : launchPaidCount;
+  for (const row of stagedRows) {
+    const isCurrentDailyDrop = row.releasePhase === "daily"
+      ? row.dailyDropDate === toStr(ctx.dailyDropDate)
+      : dailyDropStartsAtTs != null
+        && row.eventTs != null
+        && row.eventTs >= dailyDropStartsAtTs
+        && resolveDailyDropDate(row.eventTs) === toStr(ctx.dailyDropDate);
+    if (row.status === "PAID") {
+      if (isCurrentDailyDrop) dailyPaidCount += 1;
+      continue;
+    }
+    if (isCurrentDailyDrop) dailyReservedCount += 1;
+    else if (row.releasePhase === "launch") launchReservedCount += 1;
+  }
+}
 const releasePhase = stagedRelease
   ? (dailyDropActive ? "daily" : launchComplete ? "daily_pending" : "launch")
   : null;

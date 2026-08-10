@@ -440,6 +440,7 @@ const createCounterState = (counter) => {
     _dailyPaidCount: 0,
     _dailyReservedCount: 0,
     _launchPaidTimestamps: [],
+    _stagedRows: [],
   };
 };
 
@@ -538,9 +539,10 @@ for (const doc of docs) {
   const state = statesByCounterKey[matchedCounterKey];
   const status = normalizeStatus(doc.status);
   const releasePhase = toStr(doc.releasePhase) === "daily" ? "daily" : "launch";
-  const isCurrentDailyDrop = releasePhase === "daily"
-    && toStr(doc.dailyDropDate) === state.dailyDropDate;
   const expiresAtTs = toTs(doc.expiresAt);
+  const eventTs = status === "PAID"
+    ? (toTs(doc.paidAt) ?? toTs(doc.updatedAt) ?? toTs(doc.createdAt))
+    : (toTs(doc.createdAt) ?? toTs(doc.updatedAt));
   const updatedAtTs = toTs(doc.updatedAt) ?? toTs(doc.createdAt);
   if (updatedAtTs != null) {
     if (state._lastUpdatedAtTs == null || updatedAtTs > state._lastUpdatedAtTs) {
@@ -563,12 +565,16 @@ for (const doc of docs) {
 
   if (status === "PAID") {
     if (state.stagedRelease) {
+      state._stagedRows.push({
+        status,
+        releasePhase,
+        dailyDropDate: toStr(doc.dailyDropDate),
+        eventTs,
+      });
       if (releasePhase === "launch") {
         state.launchPaidCount += 1;
-        const paidAtTs = toTs(doc.paidAt) ?? toTs(doc.updatedAt) ?? toTs(doc.createdAt);
-        if (paidAtTs != null) state._launchPaidTimestamps.push(paidAtTs);
+        if (eventTs != null) state._launchPaidTimestamps.push(eventTs);
       }
-      if (isCurrentDailyDrop) state._dailyPaidCount += 1;
       continue;
     }
     state.paidCount += 1;
@@ -579,8 +585,12 @@ for (const doc of docs) {
   const isActivePending = isPending && (expiresAtTs == null || expiresAtTs > now);
   if (isActivePending) {
     if (state.stagedRelease) {
-      if (releasePhase === "launch") state.launchReservedCount += 1;
-      if (isCurrentDailyDrop) state._dailyReservedCount += 1;
+      state._stagedRows.push({
+        status,
+        releasePhase,
+        dailyDropDate: toStr(doc.dailyDropDate),
+        eventTs,
+      });
       continue;
     }
     state.reservedCount += 1;
@@ -600,6 +610,22 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
       state.launchCompletedAt = launchCompletedAtTs == null ? null : new Date(launchCompletedAtTs).toISOString();
       state.dailyDropStartsAt = launchComplete ? resolveNextDailyDropAt(launchCompletedAtTs) : null;
       state.dailyDropActive = Boolean(state.dailyDropStartsAt && Date.parse(state.dailyDropStartsAt) <= now);
+      const dailyDropStartsAtTs = toTs(state.dailyDropStartsAt);
+      state.launchPaidCount = launchComplete ? state.launchLimit : state.launchPaidCount;
+      for (const row of state._stagedRows) {
+        const isCurrentDailyDrop = row.releasePhase === "daily"
+          ? row.dailyDropDate === state.dailyDropDate
+          : dailyDropStartsAtTs != null
+            && row.eventTs != null
+            && row.eventTs >= dailyDropStartsAtTs
+            && resolveDailyDropDate(new Date(row.eventTs)) === state.dailyDropDate;
+        if (row.status === "PAID") {
+          if (isCurrentDailyDrop) state._dailyPaidCount += 1;
+          continue;
+        }
+        if (isCurrentDailyDrop) state._dailyReservedCount += 1;
+        else if (row.releasePhase === "launch") state.launchReservedCount += 1;
+      }
       state.releasePhase = state.dailyDropActive ? "daily" : launchComplete ? "daily_pending" : "launch";
       state.launchRemainingCount = Math.max(
         state.launchLimit - state.launchPaidCount - state.launchReservedCount,
@@ -619,6 +645,7 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
     delete state._dailyPaidCount;
     delete state._dailyReservedCount;
     delete state._launchPaidTimestamps;
+    delete state._stagedRows;
     return state;
   })
   .filter((state) => Boolean(state));

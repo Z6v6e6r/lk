@@ -251,7 +251,6 @@ function buildDefaultPageViewConfig(): PageViewConfig {
         fallbackTotalLimit: DEFAULT_PLAN_LIMIT,
         remainingLabel: "Доступно",
         remainingValueText: resolveTournamentSubscriptionCounterDisplayText("academy"),
-        hideRemainingBlock: true,
         featureStatusAppearance: "badge",
         features: buildDefaultFeatures("sport"),
       },
@@ -1347,7 +1346,11 @@ export default function TournamentSubscriptionPage({
                   onClick={() => { handleBuy(plan); }}
                   disabled={buttonDisabled}
                 >
-                  {isBuying ? "Создаем оплату..." : (plan.buttonLabel || "Оформить подписку")}
+                  {isBuying
+                    ? "Создаем оплату..."
+                    : isOutOfStock
+                      ? "Лимит исчерпан"
+                      : (plan.buttonLabel || "Оформить подписку")}
                 </button>
 
                 {!isAuthenticated && authRequestedDisplayId === plan.id && (

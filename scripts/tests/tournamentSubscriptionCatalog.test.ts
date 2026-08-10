@@ -59,7 +59,7 @@ test("tournament subscription catalog does not override live remaining values", 
 });
 
 test("tournament subscription catalog leaves staged counters on live API totals", () => {
-  assert.equal(resolveTournamentSubscriptionCounterDisplayTotalLimit("academy"), 100);
+  assert.equal(resolveTournamentSubscriptionCounterDisplayTotalLimit("academy"), 125);
   assert.equal(resolveTournamentSubscriptionCounterDisplayTotalLimit("ra"), null);
   assert.equal(resolveTournamentSubscriptionCounterDisplayTotalLimit("friendship"), null);
   assert.equal(resolveTournamentSubscriptionCounterDisplayTotalLimit("sport"), 126);
@@ -75,8 +75,11 @@ test("limited storefront buttons rely on live availability instead of hardcoded 
   assert.doesNotMatch(sourceText, /id: "sport"[\s\S]*?buttonDisabled: true/);
   assert.doesNotMatch(sourceText, /buttonDisabled: artworkKey === "ra" \|\| artworkKey === "sport"/);
   assert.match(sourceText, /resolveTournamentSubscriptionCounterDisplayTotalLimit\(plan\.counterKey\)/);
-  assert.match(sourceText, /id: "academy"[\s\S]*?hideRemainingBlock: true/);
+  const academyPlanSource = sourceText.match(/id: "academy",[\s\S]*?\n\s*},\n\s*{\n\s*id: "ra"/)?.[0];
+  assert.ok(academyPlanSource);
+  assert.doesNotMatch(academyPlanSource, /hideRemainingBlock: true/);
   assert.match(sourceText, /id: "sport"[\s\S]*?hideRemainingBlock: true/);
+  assert.match(sourceText, /isOutOfStock[\s\S]*?"Лимит исчерпан"/);
   assert.doesNotMatch(sourceText, /!plan\.hideRemainingBlock && trackedStatus/);
   assert.doesNotMatch(sourceText, /usesTrackedCounter\s*&&\s*!plan\.hideRemainingBlock/);
   assert.match(sourceText, /trackedStatus && !trackedStatus\.unlimited/);

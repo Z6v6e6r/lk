@@ -40,7 +40,7 @@ export type TournamentSubscriptionPromoOfferKey = keyof typeof TOURNAMENT_SUBSCR
 export const TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_OVERRIDE_KEYS = [] as const;
 
 export const TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_TOTAL_LIMITS = {
-  academy: 100,
+  academy: 125,
   sport: 126,
 } as const;
 
