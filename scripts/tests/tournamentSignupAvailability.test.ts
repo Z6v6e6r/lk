@@ -11,6 +11,10 @@ const tournamentSignupPageSource = fs.readFileSync(
   "src/components/tournament-signup/TournamentSignupPage.tsx",
   "utf8",
 );
+const tournamentSignupApiSource = fs.readFileSync(
+  "src/utils/tournamentSignupApi.ts",
+  "utf8",
+);
 
 function registration(
   overrides: Partial<TournamentRegistrationState> = {},
@@ -34,6 +38,24 @@ test("phone lookup failure does not silently hide tournament signup", () => {
 
   assert.equal(isTournamentRegistrationLookupUnavailable(unavailableLookup), true);
   assert.equal(canOfferTournamentRegistration("AVAILABLE", unavailableLookup), true);
+});
+
+test("registration endpoint phone lookup wording also keeps signup available", () => {
+  const unavailableLookup = registration({
+    message: "Не удалось определить номер телефона для записи.",
+  });
+
+  assert.equal(isTournamentRegistrationLookupUnavailable(unavailableLookup), true);
+  assert.equal(canOfferTournamentRegistration("AVAILABLE", unavailableLookup), true);
+});
+
+test("personal registration lookup bypasses browser cache", () => {
+  const lookupSource = tournamentSignupApiSource.match(
+    /export async function apiFetchTournamentMyRegistration[\s\S]*?\n}/,
+  )?.[0];
+
+  assert.ok(lookupSource, "registration lookup source must exist");
+  assert.match(lookupSource, /cache: "no-store"/);
 });
 
 test("phone lookup failure does not render a warning in tournament detail", () => {

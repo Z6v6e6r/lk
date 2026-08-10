@@ -1935,6 +1935,7 @@ export async function apiFetchTournamentMyRegistration(
       auth: true,
       headers: phabHeaders(),
       retries: 1,
+      cache: "no-store",
     },
   );
   return {
