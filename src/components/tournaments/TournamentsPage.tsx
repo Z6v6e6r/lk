@@ -28,9 +28,11 @@ import type {
   PadelPlayerCandidate,
   TournamentTypeKey,
   TournamentHistoryRecord,
-  UserProfileType,
+  TournamentBroadcastActiveTarget,
+  TournamentBroadcastState,
+  TournamentBroadcastStatus,
   TournamentBroadcastTarget,
-  TournamentBroadcastTargetOption,
+  UserProfileType,
 } from "../../utils/apiClient";
 import { TENANT_KEY } from "../../consts/api_config";
 import { apiFetchTournamentMechanicsSourceList } from "../../utils/tournamentSignupApi";
@@ -114,6 +116,14 @@ import {
   parseTournamentJson,
   serializeTournamentJson,
 } from "../../utils/tournamentJson";
+import {
+  formatTournamentBroadcastTargets,
+  getTournamentBroadcastTargetOptions,
+  isTournamentBroadcastTargetSelectionStation,
+  isTournamentBroadcastTarget,
+  normalizeTournamentBroadcastTargets,
+  resolveTournamentBroadcastStationId,
+} from "./tournamentBroadcast";
 
 interface TournamentsPageProps {
   onBack: () => void;
@@ -304,70 +314,6 @@ function shiftDateByDays(base: Date, delta: number) {
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
-
-const BROADCAST_TARGET_SELECTION_REQUIRED_STATIONS = new Set<string>([
-  "0d5504f6-ea6f-44bb-a9e4-947faf0273ab",
-  "6b2d7e60-caff-4b22-89f6-6f19d7d311ab",
-]);
-
-const resolveBroadcastStationId = (payload: {
-  params?: Record<string, unknown> | null;
-}) => {
-  const params = isPlainRecord(payload?.params) ? payload.params : null;
-  const payloadAsRecord = payload as Record<string, unknown> | null;
-  const studioCandidate = isPlainRecord(payloadAsRecord?.studio) ? payloadAsRecord.studio : null;
-  const candidates = [
-    params?.stationId,
-    payloadAsRecord?.stationId,
-    payloadAsRecord?.studioId,
-    studioCandidate?.id,
-  ];
-
-  for (const candidate of candidates) {
-    if (candidate == null) continue;
-    const stationId = String(candidate).trim();
-    if (stationId) return stationId;
-  }
-
-  return null;
-};
-
-const shouldForceBroadcastTargetSelection = (
-  stationId: string | null | undefined,
-  targetOptions: TournamentBroadcastTargetOption[],
-  selectionRequired?: boolean,
-) => (
-  targetOptions.length > 1 && (
-    selectionRequired === true
-    || BROADCAST_TARGET_SELECTION_REQUIRED_STATIONS.has(String(stationId || "").trim().toLowerCase())
-  )
-);
-
-const normalizeTournamentBroadcastTarget = (value: unknown): TournamentBroadcastTarget | null => {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "left_arena" || normalized === "right_arena" || normalized === "both") {
-    return normalized;
-  }
-  return null;
-};
-
-const normalizeBroadcastTargetOptions = (value: unknown): TournamentBroadcastTargetOption[] => {
-  if (!Array.isArray(value)) return [];
-
-  return value
-    .map((item) => {
-      if (!isPlainRecord(item)) return null;
-      const key = normalizeTournamentBroadcastTarget(item.key);
-      if (!key) return null;
-      const rawLabel = String(item.label || item.name || "").trim();
-      const label = rawLabel || (key === "left_arena" ? "Левый корт" : key === "right_arena" ? "Правый корт" : "Оба экрана");
-      return {
-        key,
-        label,
-      };
-    })
-    .filter((target): target is TournamentBroadcastTargetOption => Boolean(target));
-};
 
 function normalizeTournamentSlug(value: unknown) {
   const raw = String(value ?? "").trim();
@@ -3977,13 +3923,18 @@ function TournamentManagerModal({
   const [syncWithVivaError, setSyncWithVivaError] = useState<string | null>(null);
   const [syncWithVivaSuccess, setSyncWithVivaSuccess] = useState<string | null>(null);
   const [broadcastActive, setBroadcastActive] = useState(false);
+  const [broadcastServerStationId, setBroadcastServerStationId] = useState<string | null>(null);
+  const [broadcastActiveTargets, setBroadcastActiveTargets] = useState<TournamentBroadcastActiveTarget[]>([]);
+  const [broadcastSelectionOpen, setBroadcastSelectionOpen] = useState(false);
+  const [broadcastSelectedTarget, setBroadcastSelectedTarget] = useState<TournamentBroadcastTarget | null>(null);
+  const [broadcastStatus, setBroadcastStatus] = useState<TournamentBroadcastStatus>("inactive");
+  const [broadcastPartial, setBroadcastPartial] = useState(false);
+  const [broadcastMessage, setBroadcastMessage] = useState<string | null>(null);
+  const [broadcastOperationInProgress, setBroadcastOperationInProgress] = useState(false);
+  const [broadcastOperationLeaseUntil, setBroadcastOperationLeaseUntil] = useState<string | null>(null);
+  const [broadcastRecoveryRequired, setBroadcastRecoveryRequired] = useState(false);
   const [broadcastLoading, setBroadcastLoading] = useState(false);
   const [broadcastError, setBroadcastError] = useState<string | null>(null);
-  const [broadcastTargetOptions, setBroadcastTargetOptions] = useState<TournamentBroadcastTargetOption[]>([]);
-  const [broadcastTargetSelectionRequired, setBroadcastTargetSelectionRequired] = useState(false);
-  const [broadcastRequestedTarget, setBroadcastRequestedTarget] = useState<TournamentBroadcastTarget | null>(null);
-  const [broadcastTargetDialogOpen, setBroadcastTargetDialogOpen] = useState(false);
-  const [pendingBroadcastTarget, setPendingBroadcastTarget] = useState<TournamentBroadcastTarget>("both");
   const [matchSaveErrors, setMatchSaveErrors] = useState<Record<string, string>>({});
   const [serverTotals, setServerTotals] = useState<AmericanoResultsResponse["totals"] | null>(null);
   const [serverLogs, setServerLogs] = useState<AmericanoResultsResponse["playerLogs"] | null>(null);
@@ -3999,6 +3950,45 @@ function TournamentManagerModal({
   const tournamentJsonInputRef = useRef<HTMLInputElement | null>(null);
   const pendingMatchNavigationRef = useRef<TournamentMatchLocation | null>(null);
   const draftHydratedSignatureRef = useRef<string | null>(null);
+  const broadcastRequestGenerationRef = useRef(0);
+  const broadcastTournamentIdRef = useRef<string | null>(null);
+
+  const applyBroadcastServerState = useCallback((state: TournamentBroadcastState) => {
+    const active = state.active === true;
+    const status = state.status ?? (active ? "active" : "inactive");
+    const operationLeaseUntil = String(state.operationLeaseUntil ?? "").trim() || null;
+    const leaseTs = Date.parse(operationLeaseUntil || "");
+    const isTransition = status === "starting" || status === "stopping";
+    const operationInProgress = state.operationInProgress !== false
+      && isTransition
+      && Number.isFinite(leaseTs)
+      && leaseTs > Date.now();
+    const recoveryRequired = state.recoveryRequired === true
+      || (active && isTransition && !operationInProgress);
+    const partial = state.partial === true || status === "partial";
+    const message = String(state.message ?? "").trim()
+      || (partial
+        ? "Трансляция запущена не на всех выбранных экранах."
+        : status === "starting"
+          ? operationInProgress
+            ? "Запуск выполняется. Дождитесь подтверждения перед остановкой."
+            : "Запуск не подтверждён. Остановите трансляцию, чтобы восстановить безопасное состояние."
+          : status === "stopping"
+            ? operationInProgress
+              ? "Остановка выполняется. Дождитесь подтверждения."
+              : "Остановка не подтверждена. Повторите остановку."
+            : null);
+
+    setBroadcastActive(active);
+    setBroadcastServerStationId(String(state.stationId ?? "").trim() || null);
+    setBroadcastActiveTargets(normalizeTournamentBroadcastTargets(state.activeTargets));
+    setBroadcastStatus(status);
+    setBroadcastPartial(partial);
+    setBroadcastMessage(message);
+    setBroadcastOperationInProgress(operationInProgress);
+    setBroadcastOperationLeaseUntil(operationLeaseUntil);
+    setBroadcastRecoveryRequired(recoveryRequired);
+  }, []);
 
   const normalizedParticipants = useMemo<ParticipantEntry[]>(() => {
     if (!data) return [];
@@ -4034,6 +4024,12 @@ function TournamentManagerModal({
   }, [data]);
 
   useEffect(() => {
+    const nextTournamentId = data?.tournamentId ?? null;
+    const tournamentChanged = broadcastTournamentIdRef.current !== nextTournamentId;
+    if (tournamentChanged) {
+      broadcastTournamentIdRef.current = nextTournamentId;
+      broadcastRequestGenerationRef.current += 1;
+    }
     if (!data) {
       draftHydratedSignatureRef.current = null;
       return;
@@ -4093,55 +4089,85 @@ function TournamentManagerModal({
     setFinishTournamentError(null);
     setResumingTournament(false);
     setResumeTournamentError(null);
-    const savedBroadcast = data.params && typeof data.params === "object"
-      ? (data.params as Record<string, unknown>).broadcast
-      : null;
-    setBroadcastActive(Boolean(
-      savedBroadcast
-      && typeof savedBroadcast === "object"
-      && (savedBroadcast as Record<string, unknown>).active === true
-    ));
-    setBroadcastLoading(false);
-    setBroadcastError(null);
-    setBroadcastTargetOptions([]);
-    setBroadcastTargetSelectionRequired(false);
-    setBroadcastRequestedTarget(null);
-    setBroadcastTargetDialogOpen(false);
-    setPendingBroadcastTarget("both");
+    if (tournamentChanged) {
+      const savedBroadcast = data.params && typeof data.params === "object"
+        ? (data.params as Record<string, unknown>).broadcast
+        : null;
+      const savedBroadcastState = savedBroadcast && typeof savedBroadcast === "object"
+        ? savedBroadcast as Record<string, unknown>
+        : null;
+      applyBroadcastServerState({
+        tournamentId: data.tournamentId,
+        stationId: String(savedBroadcastState?.stationId ?? "").trim() || null,
+        active: savedBroadcastState?.active === true,
+        activeTargets: normalizeTournamentBroadcastTargets(savedBroadcastState?.activeTargets),
+        status: ["active", "inactive", "partial", "starting", "stopping"].includes(String(savedBroadcastState?.status))
+          ? savedBroadcastState?.status as TournamentBroadcastStatus
+          : null,
+        partial: savedBroadcastState?.partial === true,
+        message: String(savedBroadcastState?.message ?? "").trim() || null,
+        operationInProgress: typeof savedBroadcastState?.operationInProgress === "boolean"
+          ? savedBroadcastState.operationInProgress
+          : undefined,
+        operationLeaseUntil: String(savedBroadcastState?.operationLeaseUntil ?? "").trim() || null,
+        recoveryRequired: savedBroadcastState?.recoveryRequired === true,
+      });
+      setBroadcastSelectedTarget(null);
+      setBroadcastSelectionOpen(false);
+      setBroadcastLoading(false);
+      setBroadcastError(null);
+    }
     draftHydratedSignatureRef.current = draftDataSignature;
-  }, [data, draftDataSignature, normalizedParticipants, initialTotals, initialPlayerLogs, mexicanoOptions, tournamentFinished]);
+  }, [applyBroadcastServerState, data, draftDataSignature, normalizedParticipants, initialTotals, initialPlayerLogs, mexicanoOptions, tournamentFinished]);
 
   useEffect(() => {
     if (!isOpen || !data?.tournamentId || !isOnline) return;
 
     let cancelled = false;
-    const stationId = resolveBroadcastStationId(data);
+    const requestGeneration = broadcastRequestGenerationRef.current;
+    const stationId = data.params && typeof data.params === "object"
+      ? String((data.params as Record<string, unknown>).stationId ?? "").trim() || null
+      : null;
     void apiFetchTournamentBroadcastState(data.tournamentId, stationId).then((result) => {
-      if (cancelled || result.error || !result.data) return;
-      const response = result.data;
-      const targetOptions = normalizeBroadcastTargetOptions(response.targetOptions);
-      const requiresSelection = shouldForceBroadcastTargetSelection(
-        stationId,
-        targetOptions,
-        response.selectionRequired,
-      );
-      const requestedTarget = normalizeTournamentBroadcastTarget(response.requestedTarget);
-      const fallbackTarget = requestedTarget && targetOptions.some((target) => target.key === requestedTarget)
-        ? requestedTarget
-        : targetOptions.length > 1
-          ? "both"
-          : targetOptions[0]?.key ?? null;
-
-      setBroadcastActive(response.active === true);
-      setBroadcastTargetOptions(targetOptions);
-      setBroadcastTargetSelectionRequired(requiresSelection);
-      setBroadcastRequestedTarget(fallbackTarget);
+      if (
+        cancelled
+        || requestGeneration !== broadcastRequestGenerationRef.current
+        || result.error
+        || !result.data
+      ) return;
+      applyBroadcastServerState(result.data);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [data?.tournamentId, isOnline, isOpen]);
+  }, [applyBroadcastServerState, data?.params, data?.tournamentId, isOnline, isOpen]);
+
+  useEffect(() => {
+    if (!broadcastOperationInProgress || !broadcastOperationLeaseUntil) return;
+    const leaseTs = Date.parse(broadcastOperationLeaseUntil);
+    if (!Number.isFinite(leaseTs)) return;
+    const markRecoverable = () => {
+      setBroadcastOperationInProgress(false);
+      setBroadcastRecoveryRequired(true);
+      setBroadcastMessage(broadcastStatus === "stopping"
+        ? "Остановка не подтверждена. Повторите остановку трансляции."
+        : "Запуск не подтверждён. Остановите трансляцию, чтобы восстановить безопасное состояние.");
+    };
+    const delay = leaseTs - Date.now();
+    if (delay <= 0) {
+      markRecoverable();
+      return;
+    }
+    const timeoutId = window.setTimeout(markRecoverable, delay + 50);
+    return () => window.clearTimeout(timeoutId);
+  }, [broadcastOperationInProgress, broadcastOperationLeaseUntil, broadcastStatus]);
+
+  useEffect(() => {
+    if (isOpen) return;
+    setBroadcastSelectionOpen(false);
+    setBroadcastSelectedTarget(null);
+  }, [isOpen]);
 
   const draftSnapshot = useMemo<TournamentDraftSnapshot | null>(() => {
     if (!data || draftHydratedSignatureRef.current !== draftDataSignature) return null;
@@ -5111,6 +5137,14 @@ function TournamentManagerModal({
       ? data.params as Record<string, unknown>
       : {}
   ), [data?.params]);
+  const broadcastStationId = resolveTournamentBroadcastStationId(
+    broadcastServerStationId,
+    tournamentParams.stationId,
+    broadcastActive
+      || broadcastStatus === "starting"
+      || broadcastStatus === "stopping"
+      || broadcastRecoveryRequired,
+  );
   const isManualTournament = tournamentParams.manualTournament === true;
   const isSyncedWithViva = String(tournamentParams.syncStatus ?? "").trim().toLowerCase() === "synced_viva";
   const isLocalConductedTournament =
@@ -5131,18 +5165,6 @@ function TournamentManagerModal({
     && !isSyncedWithViva
     && !resumingTournament
     && isOnline;
-  const broadcastTargetChoiceOptions = useMemo(
-    () => (broadcastTargetOptions.length > 1
-      ? [
-          ...broadcastTargetOptions,
-          {
-            key: "both" as TournamentBroadcastTarget,
-            label: "Оба экрана",
-          },
-        ]
-      : broadcastTargetOptions),
-    [broadcastTargetOptions],
-  );
   const finishConfirmationCopy = useMemo(
     () => buildTournamentFinishConfirmationCopy({
       completedMatches: standingsSnapshot.completedMatches,
@@ -5297,116 +5319,136 @@ function TournamentManagerModal({
     window.open(url, "_blank");
   };
 
-  const applyBroadcastStateFromResponse = (payload: {
-    stationId?: string | null;
-    active?: boolean;
-    requestedTarget?: TournamentBroadcastTarget | null;
-    targetOptions?: TournamentBroadcastTargetOption[];
-    selectionRequired?: boolean;
-    updatedAt?: string | null;
-  }) => {
-    const targetOptions = normalizeBroadcastTargetOptions(payload.targetOptions);
-    const stationId = payload.stationId ?? (String(tournamentParams.stationId ?? "").trim() || null);
-    const requiresSelection = shouldForceBroadcastTargetSelection(
-      stationId,
-      targetOptions,
-      payload.selectionRequired,
-    );
-    const requestedTarget = normalizeTournamentBroadcastTarget(payload.requestedTarget);
-    const fallbackTarget = requestedTarget && targetOptions.some((target) => target.key === requestedTarget)
-      ? requestedTarget
-      : targetOptions.length > 1
-        ? "both"
-        : targetOptions[0]?.key ?? null;
-
-    setBroadcastActive(payload.active === true);
-    setBroadcastTargetOptions(targetOptions);
-    setBroadcastTargetSelectionRequired(requiresSelection);
-    setBroadcastRequestedTarget(fallbackTarget);
-    setBroadcastTargetDialogOpen(false);
-
-    if (!data) return;
-
-    onDataChange?.(
-      {
-        ...data,
-        params: {
-          ...tournamentParams,
-          broadcast: {
-            active: payload.active === true,
-            stationId,
-            requestedTarget,
-            targetOptions,
-            selectionRequired: requiresSelection,
-            updatedAt: payload.updatedAt ?? new Date().toISOString(),
-          },
-        },
-      },
-      {
-        totals: serverTotals,
-        playerLogs: serverLogs,
-      },
-    );
-  };
-
-  const handleToggleTournamentBroadcast = async (requestedTarget?: TournamentBroadcastTarget | null) => {
+  const handleSetTournamentBroadcast = async (
+    action: "start" | "stop",
+    target?: TournamentBroadcastTarget,
+  ) => {
     if (!data?.tournamentId || broadcastLoading || !isOnline) return;
 
-    const action = broadcastActive ? "stop" : "start";
-    const stationId = resolveBroadcastStationId(data);
-    const needsTargetSelection = action === "start"
-      && broadcastTargetSelectionRequired
-      && broadcastTargetChoiceOptions.length > 1;
-    const requestedTargetForStart = action === "start"
-      ? requestedTarget
-      || broadcastRequestedTarget
-      || (broadcastTargetChoiceOptions.length > 1 ? "both" : broadcastTargetChoiceOptions[0]?.key || null)
-      : null;
-    const canAutoRun = !needsTargetSelection || Boolean(requestedTarget);
-
-    if (!canAutoRun) {
-      const fallbackTarget = broadcastRequestedTarget && broadcastTargetChoiceOptions.some((target) => target.key === broadcastRequestedTarget)
-        ? broadcastRequestedTarget
-        : broadcastTargetChoiceOptions.find((target) => target.key === "both")?.key
-          || broadcastTargetChoiceOptions[0]?.key
-          || "both";
-      setPendingBroadcastTarget(fallbackTarget);
-      setBroadcastTargetDialogOpen(true);
-      return;
-    }
-
+    const stationId = broadcastStationId || null;
+    const requestGeneration = broadcastRequestGenerationRef.current + 1;
+    broadcastRequestGenerationRef.current = requestGeneration;
     setBroadcastLoading(true);
     setBroadcastError(null);
 
     try {
-      const result = await apiSetTournamentBroadcastState({
-        tournamentId: data.tournamentId,
-        stationId,
-        action,
-        ...(requestedTargetForStart ? { requestedTarget: requestedTargetForStart } : {}),
-      });
+      const result = action === "start"
+        ? await apiSetTournamentBroadcastState({
+          tournamentId: data.tournamentId,
+          stationId,
+          action,
+          ...(target ? { target } : {}),
+        })
+        : await apiSetTournamentBroadcastState({
+          tournamentId: data.tournamentId,
+          stationId,
+          action,
+        });
+      if (requestGeneration !== broadcastRequestGenerationRef.current) return;
       if (result.error || !result.data) {
+        const stateResult = await apiFetchTournamentBroadcastState(data.tournamentId, stationId);
+        if (requestGeneration !== broadcastRequestGenerationRef.current) return;
+        if (!stateResult.error && stateResult.data) {
+          applyBroadcastServerState(stateResult.data);
+          if (stateResult.data.active === true) setBroadcastSelectionOpen(false);
+        }
         setBroadcastError(result.error?.message || "Не удалось переключить трансляцию результатов");
         return;
       }
 
-      applyBroadcastStateFromResponse({
-        stationId: result.data.stationId ?? stationId,
-        active: result.data.active,
-        requestedTarget: result.data.requestedTarget,
-        targetOptions: result.data.targetOptions,
-        selectionRequired: result.data.selectionRequired,
-        updatedAt: result.data.updatedAt,
+      const active = result.data.active === true;
+      const activeTargets = normalizeTournamentBroadcastTargets(result.data.activeTargets);
+      const requestedTarget = isTournamentBroadcastTarget(result.data.requestedTarget)
+        ? result.data.requestedTarget
+        : action === "start" && target
+          ? target
+          : null;
+      const selectionRequired = result.data.selectionRequired === true;
+      const partial = result.data.partial === true;
+      const message = String(result.data.message ?? "").trim()
+        || (partial ? "Трансляция запущена не на всех выбранных экранах." : null);
+      const updatedAt = result.data.updatedAt ?? new Date().toISOString();
+      applyBroadcastServerState({
+        ...result.data,
+        active,
+        activeTargets,
+        partial,
+        message,
       });
+      if (action === "start") setBroadcastSelectionOpen(false);
+      onDataChange?.(
+        {
+          ...data,
+          params: {
+            ...tournamentParams,
+            broadcast: {
+              active,
+              stationId: result.data.stationId ?? stationId,
+              activeTargets,
+              requestedTarget,
+              selectionRequired,
+              status: result.data.status ?? null,
+              partial,
+              message,
+              operationInProgress: result.data.operationInProgress === true,
+              operationLeaseUntil: result.data.operationLeaseUntil ?? null,
+              recoveryRequired: result.data.recoveryRequired === true,
+              updatedAt,
+            },
+          },
+        },
+        {
+          totals: serverTotals,
+          playerLogs: serverLogs,
+        },
+      );
     } catch {
-      setBroadcastError("Не удалось переключить трансляцию результатов");
+      const stateResult = await apiFetchTournamentBroadcastState(data.tournamentId, stationId);
+      if (
+        requestGeneration === broadcastRequestGenerationRef.current
+        && !stateResult.error
+        && stateResult.data
+      ) {
+        applyBroadcastServerState(stateResult.data);
+        if (stateResult.data.active === true) setBroadcastSelectionOpen(false);
+      }
+      if (requestGeneration === broadcastRequestGenerationRef.current) {
+        setBroadcastError("Не удалось переключить трансляцию результатов");
+      }
     } finally {
-      setBroadcastLoading(false);
+      if (requestGeneration === broadcastRequestGenerationRef.current) {
+        setBroadcastLoading(false);
+      }
     }
   };
 
-  const handleConfirmBroadcastTarget = async () => {
-    await handleToggleTournamentBroadcast(pendingBroadcastTarget);
+  const handleToggleTournamentBroadcast = async () => {
+    if (!data?.tournamentId || broadcastLoading || broadcastOperationInProgress || !isOnline) return;
+
+    if (broadcastActive) {
+      await handleSetTournamentBroadcast("stop");
+      return;
+    }
+
+    if (isTournamentBroadcastTargetSelectionStation(broadcastStationId)) {
+      setBroadcastSelectedTarget(null);
+      setBroadcastError(null);
+      setBroadcastSelectionOpen(true);
+      return;
+    }
+
+    await handleSetTournamentBroadcast("start");
+  };
+
+  const handleTournamentManagerClose = () => {
+    if (broadcastSelectionOpen) {
+      if (!broadcastLoading) {
+        setBroadcastSelectionOpen(false);
+        setBroadcastSelectedTarget(null);
+      }
+      return;
+    }
+    onClose();
   };
 
   const buildTournamentJsonPayload = (): AmericanoTournamentPayload | null => {
@@ -5622,9 +5664,29 @@ function TournamentManagerModal({
       ?? (pendingQueueRecords.length > 0
         ? "Есть локально сохраненные результаты. Они будут отправлены при появлении связи."
         : null);
+  const broadcastTargetOptions = getTournamentBroadcastTargetOptions(broadcastStationId);
+  const broadcastActiveTargetsLabel = formatTournamentBroadcastTargets(
+    broadcastActiveTargets,
+    broadcastStationId,
+  );
+  const broadcastStateNeedsAttention = broadcastPartial
+    || broadcastRecoveryRequired
+    || broadcastStatus === "starting"
+    || broadcastStatus === "stopping";
+  const broadcastStateTitle = broadcastStatus === "starting"
+    ? broadcastActiveTargetsLabel
+      ? `Запуск не подтверждён: ${broadcastActiveTargetsLabel}`
+      : "Запуск трансляции не подтверждён"
+    : broadcastStatus === "stopping"
+      ? broadcastActiveTargetsLabel
+        ? `Остановка выполняется: ${broadcastActiveTargetsLabel}`
+        : "Остановка трансляции выполняется"
+      : broadcastActiveTargetsLabel
+        ? `Активные экраны: ${broadcastActiveTargetsLabel}`
+        : "Трансляция активна";
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={title || "Турнир"} variant="fullscreen">
+    <Modal isOpen={isOpen} onClose={handleTournamentManagerClose} title={title || "Турнир"} variant="fullscreen">
       <div className="tournament-manager">
         <div className="tournament-manager-meta">
           <span className="tournament-manager-chip strong">{getTournamentTypeLabel(data.tournamentType)}</span>
@@ -6220,15 +6282,30 @@ function TournamentManagerModal({
           {broadcastError && (
             <div className="tournaments-error">{broadcastError}</div>
           )}
+          {broadcastActive && (
+            <div
+              className={`tournament-manager-broadcast-state${broadcastStateNeedsAttention ? " is-partial" : ""}`}
+              role={broadcastStateNeedsAttention ? "alert" : "status"}
+            >
+              <div>{broadcastStateTitle}</div>
+              {broadcastMessage && (
+                <div className="tournament-manager-broadcast-message">{broadcastMessage}</div>
+              )}
+            </div>
+          )}
           <button
             type="button"
             className={`section-cta tournament-manager-broadcast${broadcastActive ? " is-active" : ""}`}
             onClick={() => void handleToggleTournamentBroadcast()}
-            disabled={broadcastLoading || !isOnline}
+            disabled={broadcastLoading || broadcastOperationInProgress || !isOnline}
             aria-pressed={broadcastActive}
           >
             {broadcastLoading
               ? (broadcastActive ? "Останавливаем трансляцию..." : "Запускаем трансляцию...")
+              : broadcastOperationInProgress
+                ? broadcastStatus === "stopping"
+                  ? "Остановка трансляции..."
+                  : "Запуск трансляции..."
               : broadcastActive
                 ? "Остановить трансляцию результатов"
                 : "Трансляция результатов"}
@@ -6272,43 +6349,55 @@ function TournamentManagerModal({
         </div>
       </div>
       <Modal
-        isOpen={broadcastTargetDialogOpen}
-        onClose={() => setBroadcastTargetDialogOpen(false)}
-        title="Выбор экрана трансляции"
+        isOpen={broadcastSelectionOpen}
+        onClose={() => {
+          if (!broadcastLoading) setBroadcastSelectionOpen(false);
+        }}
+        title="Где запустить трансляцию?"
         variant="dialog"
+        bodyClassName="tournament-broadcast-target-dialog"
       >
-        <div className="tournament-confirm-copy">
-          Выберите, на каком экране(ах) запускать трансляцию результатов.
-        </div>
-        <div className="tournament-broadcast-target-list">
-          {broadcastTargetChoiceOptions.map((target) => (
-            <label key={target.key} className="tournament-broadcast-target-option">
+        <div className="tournament-broadcast-target-options" role="radiogroup" aria-label="Экран для трансляции">
+          {broadcastTargetOptions.map((option) => (
+            <label
+              key={option.value}
+              className={`tournament-broadcast-target-option${broadcastSelectedTarget === option.value ? " is-selected" : ""}`}
+            >
               <input
                 type="radio"
-                name="broadcastTarget"
-                value={target.key}
-                checked={pendingBroadcastTarget === target.key}
-                onChange={() => setPendingBroadcastTarget(target.key)}
+                name="tournament-broadcast-target"
+                value={option.value}
+                checked={broadcastSelectedTarget === option.value}
+                onChange={() => setBroadcastSelectedTarget(option.value)}
+                disabled={broadcastLoading}
               />
-              <span>{target.label}</span>
+              <span>{option.label}</span>
             </label>
           ))}
         </div>
-        <div className="tournament-confirm-actions">
+        {broadcastError && (
+          <div className="tournaments-error" role="alert">{broadcastError}</div>
+        )}
+        <div className="tournament-broadcast-target-actions">
           <button
             type="button"
             className="onboarding-btn onboarding-btn--secondary"
-            onClick={() => setBroadcastTargetDialogOpen(false)}
+            onClick={() => setBroadcastSelectionOpen(false)}
+            disabled={broadcastLoading}
           >
             Отмена
           </button>
           <button
             type="button"
             className="onboarding-btn"
-            onClick={() => void handleConfirmBroadcastTarget()}
-            disabled={broadcastTargetChoiceOptions.length === 0}
+            onClick={() => {
+              if (broadcastSelectedTarget) {
+                void handleSetTournamentBroadcast("start", broadcastSelectedTarget);
+              }
+            }}
+            disabled={!broadcastSelectedTarget || broadcastLoading || !isOnline}
           >
-            Запустить
+            {broadcastLoading ? "Запускаем..." : "Запустить"}
           </button>
         </div>
       </Modal>

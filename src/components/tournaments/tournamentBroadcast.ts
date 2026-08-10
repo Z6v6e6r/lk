@@ -43,6 +43,19 @@ export function isSkolkovoTournamentBroadcastStation(stationId: unknown): boolea
   return String(stationId ?? "").trim() === SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID;
 }
 
+export function resolveTournamentBroadcastStationId(
+  serverStationId: unknown,
+  payloadStationId: unknown,
+  preferServerStation = false,
+): string {
+  const serverStation = String(serverStationId ?? "").trim();
+  const rawPayloadStation = String(payloadStationId ?? "").trim();
+  const payloadStation = /^local-studio:/i.test(rawPayloadStation) ? "" : rawPayloadStation;
+  return preferServerStation
+    ? serverStation || payloadStation
+    : payloadStation || serverStation;
+}
+
 export function getTournamentBroadcastTargetOptions(stationId: unknown) {
   return TOURNAMENT_BROADCAST_TARGET_OPTIONS_BY_STATION.get(String(stationId ?? "").trim()) ?? [];
 }

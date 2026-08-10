@@ -2857,23 +2857,41 @@ export interface AmericanoTournamentPayload {
 }
 
 export type TournamentBroadcastAction = "start" | "stop";
-export type TournamentBroadcastTarget = "left_arena" | "right_arena" | "both";
+
+export type TournamentBroadcastTarget = "right_arena" | "left_arena" | "both";
+
 export type TournamentBroadcastActiveTarget = Exclude<TournamentBroadcastTarget, "both">;
 
-export interface TournamentBroadcastTargetOption {
-  key: TournamentBroadcastTarget;
-  label: string;
-}
+export type TournamentBroadcastStatus = "active" | "inactive" | "partial" | "starting" | "stopping";
+
+export type TournamentBroadcastStateRequest = {
+  tournamentId: string;
+  stationId?: string | null;
+} & (
+  | {
+    action: "start";
+    target?: TournamentBroadcastTarget;
+  }
+  | {
+    action: "stop";
+    target?: never;
+  }
+);
 
 export interface TournamentBroadcastState {
   tournamentId: string;
   stationId: string | null;
   active: boolean;
-  updatedAt?: string | null;
+  activeTargets?: TournamentBroadcastActiveTarget[] | null;
   requestedTarget?: TournamentBroadcastTarget | null;
-  targetOptions?: TournamentBroadcastTargetOption[];
   selectionRequired?: boolean;
-  activeTargets?: TournamentBroadcastActiveTarget[];
+  status?: TournamentBroadcastStatus | null;
+  partial?: boolean;
+  message?: string | null;
+  operationInProgress?: boolean;
+  operationLeaseUntil?: string | null;
+  recoveryRequired?: boolean;
+  updatedAt?: string | null;
 }
 
 export interface AmericanoResultsPayload {
@@ -5605,24 +5623,20 @@ export async function apiFetchTournamentBroadcastState(
   );
 }
 
-export async function apiSetTournamentBroadcastState(payload: {
-  tournamentId: string;
-  stationId?: string | null;
-  action: TournamentBroadcastAction;
-  requestedTarget?: TournamentBroadcastTarget | null;
-}) {
+export async function apiSetTournamentBroadcastState(payload: TournamentBroadcastStateRequest) {
   const base = getServ2Origin();
+  const body = {
+    tournamentId: String(payload.tournamentId || "").trim(),
+    stationId: String(payload.stationId || "").trim() || null,
+    ...(payload.action === "start" && payload.target ? { target: payload.target } : {}),
+  };
   return request<TournamentBroadcastState>(
     `${base}/lk/tournaments/broadcast/${payload.action}`,
     {
       method: "POST",
       auth: true,
       retries: 0,
-      body: JSON.stringify({
-        tournamentId: String(payload.tournamentId || "").trim(),
-        stationId: String(payload.stationId || "").trim() || null,
-        ...(payload.requestedTarget ? { requestedTarget: payload.requestedTarget } : {}),
-      }),
+      body: JSON.stringify(body),
     },
   );
 }

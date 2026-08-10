@@ -12,6 +12,7 @@ import {
   NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID,
   NAGATINSKAYA_TOURNAMENT_BROADCAST_TARGET_OPTIONS,
   normalizeTournamentBroadcastTargets,
+  resolveTournamentBroadcastStationId,
   SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID,
   TOURNAMENT_BROADCAST_TARGET_OPTIONS,
 } from "../../src/components/tournaments/tournamentBroadcast.ts";
@@ -246,7 +247,7 @@ test("frontend exposes station-specific screen selectors without integration sec
   assert.match(pageSource, /Где запустить трансляцию\?/);
   assert.match(pageSource, /setBroadcastSelectedTarget\(null\)/);
   assert.match(pageSource, /disabled=\{!broadcastSelectedTarget \|\| broadcastLoading \|\| !isOnline\}/);
-  assert.match(pageSource, /isTournamentBroadcastTargetSelectionStation\(stationId\)/);
+  assert.match(pageSource, /isTournamentBroadcastTargetSelectionStation\(broadcastStationId\)/);
   assert.match(pageSource, /getTournamentBroadcastTargetOptions\(broadcastStationId\)/);
   assert.match(pageSource, /aria-pressed=\{broadcastActive\}/);
   assert.match(pageSource, /withTournamentStationContext/);
@@ -265,6 +266,54 @@ test("frontend exposes station-specific screen selectors without integration sec
   assert.doesNotMatch(combinedSource, /TOURNAMENT_BROADCAST_BEARER_TOKEN/);
   assert.doesNotMatch(combinedSource, /integrations\/v1\/devices/);
   assert.doesNotMatch(combinedSource, /\bboxId\b/);
+});
+
+test("frontend uses the server station for active recovery and current station for the next inactive start", () => {
+  assert.equal(
+    resolveTournamentBroadcastStationId(
+      NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID,
+      "",
+      true,
+    ),
+    NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID,
+  );
+  assert.equal(
+    resolveTournamentBroadcastStationId(null, SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID),
+    SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID,
+  );
+  assert.equal(
+    resolveTournamentBroadcastStationId(
+      SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID,
+      NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID,
+      false,
+    ),
+    NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID,
+  );
+  assert.equal(
+    resolveTournamentBroadcastStationId(
+      SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID,
+      NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID,
+      true,
+    ),
+    SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID,
+  );
+  assert.equal(
+    resolveTournamentBroadcastStationId(
+      SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID,
+      "local-studio:legacy",
+      false,
+    ),
+    SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID,
+  );
+
+  const pageSource = fs.readFileSync("src/components/tournaments/TournamentsPage.tsx", "utf8");
+  assert.match(pageSource, /setBroadcastServerStationId\(String\(state\.stationId/);
+  assert.match(
+    pageSource,
+    /const broadcastStationId = resolveTournamentBroadcastStationId\([\s\S]*?broadcastServerStationId,[\s\S]*?tournamentParams\.stationId,[\s\S]*?broadcastActive/,
+  );
+  assert.match(pageSource, /const stationId = broadcastStationId \|\| null/);
+  assert.match(pageSource, /isTournamentBroadcastTargetSelectionStation\(broadcastStationId\)/);
 });
 
 test("frontend fences stale broadcast status reads and preserves transition leases from persisted state", () => {
@@ -631,6 +680,45 @@ test("multi-target mode is fail-closed to the saved Skolkovo station ID", () => 
   assert.equal(requestSpoofResult[2].payload.code, "TOURNAMENT_STATION_MISMATCH");
 });
 
+test("inactive status and the next start follow the tournament after a station change", () => {
+  const inactiveOldStation = {
+    active: false,
+    status: "inactive",
+    stationId: SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID,
+    updatedAt: "2026-08-04T10:00:00.000Z",
+  };
+  const statusResult = runFunctionNode(
+    "fn_tournament_broadcast_route.js",
+    buildNagatinskayaRouteMessage("status", undefined, inactiveOldStation),
+    nagatinskayaEnvironment,
+  );
+  const statusRequests = dispatchRouteToDeviceRequests(statusResult);
+  assert.deepEqual(
+    statusRequests.map((request) => String(request.url).match(/devices\/([^/]+)/)?.[1]),
+    ["box-court-1", "box-court-7"],
+  );
+  assert.equal(
+    statusRequests.every((request) => (
+      (request._tournamentBroadcast as Record<string, unknown>).stationId
+        === NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID
+    )),
+    true,
+  );
+
+  const startResult = runFunctionNode(
+    "fn_tournament_broadcast_route.js",
+    buildNagatinskayaRouteMessage("start", "right_arena", inactiveOldStation),
+    nagatinskayaEnvironment,
+  );
+  const routedStarts = getOutputMessagesAt(startResult, 0);
+  assert.equal(routedStarts.length, 1);
+  assert.deepEqual(getOutputMessagesAt(startResult, 2), []);
+  assert.equal(
+    (routedStarts[0]._tournamentBroadcast as Record<string, unknown>).stationId,
+    NAGATINSKAYA_TOURNAMENT_BROADCAST_STATION_ID,
+  );
+});
+
 test("an already-active Skolkovo broadcast must be stopped before any new target start", () => {
   (["right_arena", "left_arena", "both"] as const).forEach((target) => {
     const result = runFunctionNode(
@@ -732,7 +820,7 @@ test("unknown or unconfirmed claim results never fan out to a device", () => {
   });
 });
 
-test("external status resolves a stale transition while start and stop stay locked during its live lease", () => {
+test("start, stop, and status stay locked during a live transition lease", () => {
   const leaseUntil = new Date(Date.now() + 45_000).toISOString();
   const startingState = {
     active: true,
@@ -747,58 +835,10 @@ test("external status resolves a stale transition while start and stop stay lock
     updatedAt: "2026-08-04T10:00:00.000Z",
   };
 
-  const statusResult = runFunctionNode(
-    "fn_tournament_broadcast_route.js",
-    buildSkolkovoRouteMessage("status", undefined, startingState),
-    skolkovoEnvironment,
-  );
-  const statusRequests = dispatchRouteToDeviceRequests(statusResult);
-  assert.equal(statusRequests.length, 2);
-  assert.equal(statusRequests.every((request) => request.method === "GET"), true);
-  assert.equal(statusRequests.every((request) => String(request.url).endsWith("/status")), true);
-  const statusAggregate = aggregateDeviceOutcomes(statusRequests, [
-    {
-      statusCode: 200,
-      payload: {
-        box_id: "secret-right",
-        online: true,
-        tournament_active: true,
-        tournament_id: "tournament-1",
-      },
-    },
-    {
-      statusCode: 200,
-      payload: {
-        box_id: "secret-left",
-        online: true,
-        tournament_active: true,
-        tournament_id: "tournament-1",
-      },
-    },
-  ]);
-  const statusPersist = runFunctionNode(
-    "fn_tournament_broadcast_persist.js",
-    statusAggregate[0],
-  )[0];
-  const statusResponse = runFunctionNode("fn_tournament_broadcast_response.js", {
-    ...statusPersist,
-    payload: { acknowledged: true, matchedCount: 1, modifiedCount: 1 },
-  });
-  const status = statusResponse.payload;
-  assert.equal(status.active, true);
-  assert.equal(status.status, "active");
-  assert.equal(status.operationInProgress, false);
-  assert.equal(status.operationLeaseUntil, null);
-  assert.equal(status.recoveryRequired, false);
-  assert.equal(status.operationId, undefined);
-  assert.doesNotMatch(
-    JSON.stringify(status),
-    /secret-operation-id|secret-box|secret-token|box-right|box-left|server-only-token/,
-  );
-
   ([
     buildSkolkovoRouteMessage("start", "both", startingState),
     buildSkolkovoRouteMessage("stop", undefined, startingState),
+    buildSkolkovoRouteMessage("status", undefined, startingState),
   ]).forEach((message) => {
     const result = runFunctionNode(
       "fn_tournament_broadcast_route.js",
@@ -816,6 +856,50 @@ test("external status resolves a stale transition while start and stop stay lock
     );
     assert.equal((errors[0].headers as Record<string, unknown>)["Retry-After"], "5");
   });
+});
+
+test("external status uses snapshot CAS and cannot overwrite a newer broadcast operation", () => {
+  const savedState = {
+    active: false,
+    status: "inactive",
+    stationId: SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID,
+    updatedAt: "2026-08-04T10:00:00.000Z",
+  };
+  const routeMessage = buildSkolkovoRouteMessage("status", undefined, savedState);
+  Object.assign(routeMessage.payload[0], { _id: "mongo-tournament-1" });
+  const routeResult = runFunctionNode(
+    "fn_tournament_broadcast_route.js",
+    routeMessage,
+    skolkovoEnvironment,
+  );
+  const requests = dispatchRouteToDeviceRequests(routeResult);
+  assert.equal(requests.length, 2);
+  const expectedCas = {
+    tournamentId: "tournament-1",
+    _id: "mongo-tournament-1",
+    "params.stationId": SKOLKOVO_TOURNAMENT_BROADCAST_STATION_ID,
+    "params.broadcast.active": false,
+    "params.broadcast.status": "inactive",
+    "params.broadcast.operationId": { $exists: false },
+    "params.broadcast.updatedAt": "2026-08-04T10:00:00.000Z",
+  };
+  assert.deepEqual(
+    (requests[0]._tournamentBroadcast as Record<string, unknown>).persistenceFilter,
+    expectedCas,
+  );
+
+  const aggregated = aggregateDeviceOutcomes(requests, [
+    { statusCode: 200, payload: { online: true, tournament_active: false } },
+    { statusCode: 200, payload: { online: true, tournament_active: false } },
+  ]);
+  const persisted = runFunctionNode("fn_tournament_broadcast_persist.js", aggregated[0])[0];
+  assert.deepEqual(persisted.payload[0], expectedCas);
+  const staleResponse = runFunctionNode("fn_tournament_broadcast_response.js", {
+    ...persisted,
+    payload: { acknowledged: true, matchedCount: 0, modifiedCount: 0 },
+  });
+  assert.equal(staleResponse.statusCode, 503);
+  assert.equal(staleResponse.payload.code, "TOURNAMENT_BROADCAST_PERSISTENCE_FAILED");
 });
 
 test("expired starting state stops every intended target and uses operation CAS", () => {
@@ -1382,7 +1466,10 @@ test("final start persistence uses operation CAS and external status reconciles 
 
   const claimArgs = claimMessage.payload as Array<Record<string, unknown>>;
   const claimSet = (claimArgs[1].$set || {}) as Record<string, unknown>;
-  const startingState = claimSet["params.broadcast"] as Record<string, unknown>;
+  const startingState = {
+    ...claimSet["params.broadcast"] as Record<string, unknown>,
+    operationLeaseUntil: new Date(Date.now() - 5_000).toISOString(),
+  };
   const statusResult = runFunctionNode(
     "fn_tournament_broadcast_route.js",
     buildSkolkovoRouteMessage("status", undefined, startingState),
