@@ -28,6 +28,18 @@ test("organizer button applies the direct Viva response only for the selected da
 
   assert.ok(handlerSource, "manual refresh handler must exist");
   assert.match(handlerSource, /apiRefreshTournamentMechanicsFromViva\(requestedDate\)/);
+  assert.match(
+    handlerSource,
+    /const requestGeneration = scheduleRequestGenerationRef\.current \+ 1;[\s\S]*scheduleRequestGenerationRef\.current = requestGeneration/,
+  );
+  assert.match(
+    handlerSource,
+    /scheduleRequestGenerationRef\.current !== requestGeneration/,
+  );
+  assert.match(
+    handlerSource,
+    /catch \(refreshError\) \{\s*if \(\s*selectedDateKeyRef\.current !== requestedDate\s*\|\| scheduleRequestGenerationRef\.current !== requestGeneration\s*\) \{\s*return;\s*\}/,
+  );
   assert.match(handlerSource, /buildTournamentMechanicsFallbackExercises\(result\.data\.tournaments\)/);
   assert.match(handlerSource, /setItems\(freshExercises\)/);
   assert.doesNotMatch(handlerSource, /apiFetchExercisesByVisibleDate/);
@@ -35,4 +47,15 @@ test("organizer button applies the direct Viva response only for the selected da
   assert.match(pageSource, /Обновить из Viva/);
   assert.match(pageSource, /Только выбранный день/);
   assert.match(pageSource, /disabled=\{vivaRefreshPending \|\| loading\}/);
+});
+
+test("manual Viva refresh invalidates an older automatic load for the same day", () => {
+  const autoLoadSource = pageSource.match(
+    /useEffect\(\(\) => \{\s*let alive = true;\s*const requestGeneration = scheduleRequestGenerationRef\.current \+ 1;([\s\S]*?)\n\s{2}\}, \[includePastTournaments/,
+  )?.[1];
+
+  assert.ok(autoLoadSource, "automatic day load must own a request generation");
+  assert.match(autoLoadSource, /const isCurrentRequest = \(\) => \(/);
+  assert.equal((autoLoadSource.match(/if \(!isCurrentRequest\(\)\) return;/g) || []).length >= 4, true);
+  assert.match(autoLoadSource, /if \(!isCurrentRequest\(\) \|\| appliedFreshItems \|\| !cachedItems\) return;/);
 });

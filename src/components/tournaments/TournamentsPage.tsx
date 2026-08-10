@@ -11,6 +11,7 @@ import {
   apiSearchPadelPlayers,
   apiFetchTournamentHistory,
   apiFetchTournamentParticipants,
+  apiRefreshTournamentParticipants,
   apiFetchTournamentBroadcastState,
   isTournamentExerciseCategory,
   apiSaveOnboardingLevel,
@@ -35,7 +36,10 @@ import type {
   UserProfileType,
 } from "../../utils/apiClient";
 import { TENANT_KEY } from "../../consts/api_config";
-import { apiFetchTournamentMechanicsSourceList } from "../../utils/tournamentSignupApi";
+import {
+  apiFetchTournamentMechanicsSourceList,
+  apiRefreshTournamentMechanicsFromViva,
+} from "../../utils/tournamentSignupApi";
 import {
   buildTournamentMechanicsFallbackExercises,
   mergeTournamentMechanicsExercises,
@@ -111,6 +115,20 @@ import {
   type TournamentDraftSnapshot,
 } from "../../utils/tournamentDraftStorage";
 import { buildTournamentDraftExercise } from "../../utils/tournamentDraftExercise";
+import {
+  LK_IDLE_DATA_STALE_EVENT_NAME,
+  isLkIdleRequestPaused,
+  isLkIdleRequestPausedError,
+} from "../../utils/lkIdleDataGuard";
+import {
+  TOURNAMENT_PARTICIPANT_REFRESH_INTERVAL_MS,
+  buildTournamentParticipantRosterFingerprint,
+  resolveTournamentParticipantBusyRetryMs,
+  resolveTournamentParticipantRefreshDelay,
+  resolveVivaLinkedTournamentExerciseId,
+  shouldApplyTournamentParticipantRefreshRoster,
+  type TournamentParticipantRefreshOutcome,
+} from "./tournamentParticipantRefresh";
 import {
   getTournamentJsonFileName,
   parseTournamentJson,
@@ -565,6 +583,19 @@ function normalizeTournamentParticipantBookings(list: ExerciseBooking[]) {
   });
 
   return Array.from(byKey.values());
+}
+
+function extractTournamentParticipantBookings(payload: unknown): ExerciseBooking[] | null {
+  if (Array.isArray(payload)) return payload as ExerciseBooking[];
+  if (!payload || typeof payload !== "object") return null;
+
+  const record = payload as Record<string, unknown>;
+  for (const key of ["participants", "bookings", "payload", "content", "data"]) {
+    if (Array.isArray(record[key])) {
+      return record[key] as ExerciseBooking[];
+    }
+  }
+  return null;
 }
 
 function getInitialsFromName(name?: string | null) {
@@ -1483,6 +1514,7 @@ interface TournamentDetailsModalProps {
   tournament: Exercise | null;
   historyRecord?: TournamentHistoryRecord | null;
   sourceDateKey?: string | null;
+  canRefreshParticipantsFromViva: boolean;
   onSaved: (data: AmericanoTournamentPayload) => void;
 }
 
@@ -1493,6 +1525,19 @@ type TournamentParticipantEntry = ParticipantEntry & {
 };
 
 type TournamentRosterMode = "bookings" | "manual";
+
+type TournamentParticipantRefreshUiState = {
+  status: "idle" | "pending" | "success" | "cooldown" | "error";
+  message: string | null;
+  retryBlocked?: boolean;
+};
+
+const TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE: TournamentParticipantRefreshUiState = {
+  status: "idle",
+  message: null,
+};
+
+const TOURNAMENT_PARTICIPANTS_LOAD_ERROR = "Не удалось загрузить участников";
 
 type TournamentManualParticipantDraft = {
   id: string;
@@ -1565,6 +1610,7 @@ function TournamentDetailsModal({
   tournament,
   historyRecord = null,
   sourceDateKey = null,
+  canRefreshParticipantsFromViva,
   onSaved,
 }: TournamentDetailsModalProps) {
   const [loading, setLoading] = useState(false);
@@ -1588,6 +1634,9 @@ function TournamentDetailsModal({
   const [saveState, setSaveState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [saveWasLocal, setSaveWasLocal] = useState(false);
   const [rosterMode, setRosterMode] = useState<TournamentRosterMode>("bookings");
+  const [participantRefreshState, setParticipantRefreshState] =
+    useState<TournamentParticipantRefreshUiState>(TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE);
+  const [participantLoadNotice, setParticipantLoadNotice] = useState<string | null>(null);
   const [manualParticipants, setManualParticipants] = useState<TournamentManualParticipantDraft[]>([]);
   const [manualStationName, setManualStationName] = useState("");
   const [manualOrganizerName, setManualOrganizerName] = useState("");
@@ -1622,6 +1671,15 @@ function TournamentDetailsModal({
     [isCreationFlow],
   );
   const ratingLastTapTsRef = useRef<Record<string, number>>({});
+  const participantActionControllerRef = useRef<AbortController | null>(null);
+  const participantRefreshCooldownTimerRef = useRef<number | null>(null);
+  const participantAutoPauseRef = useRef<(() => void) | null>(null);
+  const participantAutoRunRef = useRef<(() => void) | null>(null);
+  const participantAutoScheduleRef = useRef<(delayMs: number) => void>(() => undefined);
+  const participantAutoRescheduleRef = useRef<(
+    fingerprint: string | null,
+    outcomeOverride?: TournamentParticipantRefreshOutcome,
+  ) => void>(() => undefined);
 
   useEffect(() => {
     if (!selectedFamily && !selectedType && !isCreationFlow) {
@@ -2126,37 +2184,372 @@ function TournamentDetailsModal({
   };
 
   const tournamentId = tournament?.id ? String(tournament.id) : null;
+  const participantExerciseId = useMemo(
+    () => resolveVivaLinkedTournamentExerciseId(tournament, historyRecord),
+    [historyRecord, tournament],
+  );
 
   useEffect(() => {
     if (!isOpen || !tournamentId || !readyStateHydrated) return;
     writeTournamentReadyState(tournamentId, readyParticipantIds);
   }, [isOpen, readyParticipantIds, readyStateHydrated, tournamentId]);
 
-  const loadParticipants = async (nextTournamentId: string) => {
+  useEffect(() => {
+    participantActionControllerRef.current?.abort();
+    participantActionControllerRef.current = null;
+    if (participantRefreshCooldownTimerRef.current !== null) {
+      window.clearTimeout(participantRefreshCooldownTimerRef.current);
+      participantRefreshCooldownTimerRef.current = null;
+    }
+    setParticipantRefreshState(TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE);
+    setParticipantLoadNotice(null);
+    setParticipants([]);
+
+    if (!isOpen || !participantExerciseId || rosterMode !== "bookings") {
+      setLoading(false);
+      setError((current) => current === TOURNAMENT_PARTICIPANTS_LOAD_ERROR ? null : current);
+      participantAutoPauseRef.current = null;
+      participantAutoRunRef.current = null;
+      participantAutoScheduleRef.current = () => undefined;
+      participantAutoRescheduleRef.current = () => undefined;
+      return;
+    }
+    const activeParticipantExerciseId = participantExerciseId;
+
+    let stopped = false;
+    let timerId: number | null = null;
+    let activeController: AbortController | null = null;
+    let previousFingerprint: string | null = null;
+    let currentDelayMs = 0;
+
+    function pauseCurrentRefresh() {
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+        timerId = null;
+      }
+      activeController?.abort();
+      activeController = null;
+    }
+
+    function stopRefreshCycle() {
+      if (stopped) return;
+      stopped = true;
+      pauseCurrentRefresh();
+      participantActionControllerRef.current?.abort();
+      participantActionControllerRef.current = null;
+    }
+
+    function scheduleRefresh(delayMs: number) {
+      if (stopped || isLkIdleRequestPaused()) {
+        stopRefreshCycle();
+        return;
+      }
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
+      timerId = window.setTimeout(() => {
+        timerId = null;
+        void runRefresh(false);
+      }, delayMs);
+    }
+
+    function rescheduleRefresh(
+      fingerprint: string | null,
+      outcomeOverride?: TournamentParticipantRefreshOutcome,
+    ) {
+      const outcome = outcomeOverride
+        ?? (previousFingerprint === null
+          ? "initial"
+          : fingerprint === previousFingerprint
+            ? "unchanged"
+            : "changed");
+      if (fingerprint !== null) {
+        previousFingerprint = fingerprint;
+      }
+      currentDelayMs = resolveTournamentParticipantRefreshDelay(outcome, currentDelayMs);
+      scheduleRefresh(currentDelayMs);
+    }
+
+    async function runRefresh(initialLoad: boolean) {
+      if (stopped || isLkIdleRequestPaused()) {
+        stopRefreshCycle();
+        return;
+      }
+
+      const controller = new AbortController();
+      activeController = controller;
+      if (initialLoad) {
+        setLoading(true);
+        setError(null);
+      }
+
+      const result = await apiFetchTournamentParticipants(activeParticipantExerciseId, {
+        retries: 0,
+        signal: controller.signal,
+      });
+      if (stopped || controller.signal.aborted) return;
+      activeController = null;
+
+      if (isLkIdleRequestPausedError(result.error?.raw) || isLkIdleRequestPaused()) {
+        stopRefreshCycle();
+        return;
+      }
+
+      if (result.status === 429) {
+        setLoading(false);
+        setError(null);
+        setParticipantLoadNotice(
+          "Состав уже обновляется. Покажем актуальные данные через несколько секунд.",
+        );
+        scheduleRefresh(resolveTournamentParticipantBusyRetryMs(result.error?.raw));
+        return;
+      }
+
+      const rawParticipants = extractTournamentParticipantBookings(result.data);
+      if (result.error || rawParticipants === null) {
+        setParticipantLoadNotice(null);
+        if (initialLoad) {
+          setError(TOURNAMENT_PARTICIPANTS_LOAD_ERROR);
+          setLoading(false);
+        }
+        rescheduleRefresh(null, "error");
+        return;
+      }
+
+      const nextParticipants = normalizeTournamentParticipantBookings(rawParticipants);
+      const fingerprint = buildTournamentParticipantRosterFingerprint(nextParticipants);
+      setParticipantLoadNotice(null);
+      if (initialLoad || previousFingerprint === null || fingerprint !== previousFingerprint) {
+        setParticipants(nextParticipants);
+      }
+      setError((current) => current === TOURNAMENT_PARTICIPANTS_LOAD_ERROR ? null : current);
+      if (initialLoad) {
+        setLoading(false);
+      }
+      rescheduleRefresh(fingerprint);
+    }
+
+    participantAutoPauseRef.current = pauseCurrentRefresh;
+    participantAutoRunRef.current = () => {
+      void runRefresh(false);
+    };
+    participantAutoScheduleRef.current = scheduleRefresh;
+    participantAutoRescheduleRef.current = rescheduleRefresh;
+    window.addEventListener(LK_IDLE_DATA_STALE_EVENT_NAME, stopRefreshCycle);
+    void runRefresh(true);
+
+    return () => {
+      stopRefreshCycle();
+      window.removeEventListener(LK_IDLE_DATA_STALE_EVENT_NAME, stopRefreshCycle);
+      participantAutoPauseRef.current = null;
+      participantAutoRunRef.current = null;
+      participantAutoScheduleRef.current = () => undefined;
+      participantAutoRescheduleRef.current = () => undefined;
+      if (participantRefreshCooldownTimerRef.current !== null) {
+        window.clearTimeout(participantRefreshCooldownTimerRef.current);
+        participantRefreshCooldownTimerRef.current = null;
+      }
+    };
+  }, [isOpen, participantExerciseId, rosterMode]);
+
+  const loadParticipants = useCallback(async (nextTournamentId: string) => {
+    participantAutoPauseRef.current?.();
+    participantActionControllerRef.current?.abort();
+    const controller = new AbortController();
+    participantActionControllerRef.current = controller;
     setLoading(true);
     setError(null);
-    try {
-      const res = await apiFetchTournamentParticipants(nextTournamentId);
-      const data = res.data as unknown;
-      const list = Array.isArray(data)
-        ? data
-        : Array.isArray((data as { payload?: ExerciseBooking[] })?.payload)
-          ? (data as { payload: ExerciseBooking[] }).payload
-          : Array.isArray((data as { content?: ExerciseBooking[] })?.content)
-            ? (data as { content: ExerciseBooking[] }).content
-            : [];
-      setParticipants(normalizeTournamentParticipantBookings(list));
-    } catch {
-      setError("Не удалось загрузить участников");
-    } finally {
-      setLoading(false);
-    }
-  };
+    setParticipantLoadNotice(null);
 
-  useEffect(() => {
-    if (!isOpen || !tournamentId || rosterMode === "manual") return;
-    void loadParticipants(tournamentId);
-  }, [isOpen, rosterMode, tournamentId]);
+    const result = await apiFetchTournamentParticipants(nextTournamentId, {
+      retries: 0,
+      signal: controller.signal,
+    });
+    if (controller.signal.aborted) return;
+    if (participantActionControllerRef.current === controller) {
+      participantActionControllerRef.current = null;
+    }
+    if (isLkIdleRequestPausedError(result.error?.raw) || isLkIdleRequestPaused()) {
+      return;
+    }
+
+    if (result.status === 429) {
+      setLoading(false);
+      setError(null);
+      setParticipantLoadNotice(
+        "Состав уже обновляется. Покажем актуальные данные через несколько секунд.",
+      );
+      participantAutoScheduleRef.current(
+        resolveTournamentParticipantBusyRetryMs(result.error?.raw),
+      );
+      return;
+    }
+
+    const rawParticipants = extractTournamentParticipantBookings(result.data);
+    if (result.error || rawParticipants === null) {
+      setParticipantLoadNotice(null);
+      setError(TOURNAMENT_PARTICIPANTS_LOAD_ERROR);
+      setLoading(false);
+      participantAutoRescheduleRef.current(null, "error");
+      return;
+    }
+
+    const nextParticipants = normalizeTournamentParticipantBookings(rawParticipants);
+    setParticipantLoadNotice(null);
+    setParticipants(nextParticipants);
+    setLoading(false);
+    participantAutoRescheduleRef.current(
+      buildTournamentParticipantRosterFingerprint(nextParticipants),
+    );
+  }, []);
+
+  const handleRefreshParticipantsFromViva = useCallback(async () => {
+    if (
+      !participantExerciseId
+      || !canRefreshParticipantsFromViva
+      || rosterMode !== "bookings"
+      || participantRefreshState.status === "pending"
+      || participantRefreshState.status === "cooldown"
+      || participantRefreshState.retryBlocked === true
+      || isLkIdleRequestPaused()
+    ) {
+      return;
+    }
+
+    participantAutoPauseRef.current?.();
+    participantActionControllerRef.current?.abort();
+    if (participantRefreshCooldownTimerRef.current !== null) {
+      window.clearTimeout(participantRefreshCooldownTimerRef.current);
+      participantRefreshCooldownTimerRef.current = null;
+    }
+
+    const requestedExerciseId = participantExerciseId;
+    const controller = new AbortController();
+    participantActionControllerRef.current = controller;
+    setParticipantLoadNotice(null);
+    setParticipantRefreshState({
+      status: "pending",
+      message: "Запрашиваем актуальный состав в Viva…",
+    });
+
+    const result = await apiRefreshTournamentParticipants(requestedExerciseId, {
+      signal: controller.signal,
+    });
+    if (controller.signal.aborted) return;
+    if (participantActionControllerRef.current === controller) {
+      participantActionControllerRef.current = null;
+    }
+    if (isLkIdleRequestPausedError(result.error?.raw) || isLkIdleRequestPaused()) {
+      return;
+    }
+    if (result.error || !result.data) {
+      setParticipantRefreshState({
+        status: "error",
+        message: result.error?.message || "Не удалось обновить участников из Viva",
+      });
+      participantAutoRescheduleRef.current(null, "error");
+      return;
+    }
+    if (result.data.exerciseId !== requestedExerciseId) {
+      setParticipantRefreshState({
+        status: "error",
+        message: "Сервер вернул состав другого турнира. Данные не применены.",
+      });
+      participantAutoRescheduleRef.current(null, "error");
+      return;
+    }
+
+    const nextParticipants = normalizeTournamentParticipantBookings(result.data.participants);
+    const applyReturnedParticipants = shouldApplyTournamentParticipantRefreshRoster(
+      result.data.reason,
+      result.data.refreshedAt,
+    );
+    const nextFingerprint = applyReturnedParticipants
+      ? buildTournamentParticipantRosterFingerprint(nextParticipants)
+      : null;
+    if (applyReturnedParticipants) {
+      setParticipants(nextParticipants);
+    }
+
+    if (result.data.reason === "refreshed") {
+      const retryAfterMs = Math.max(0, result.data.retryAfterMs ?? 0);
+      setParticipantRefreshState({
+        status: "success",
+        message: retryAfterMs > 0
+          ? `Участники обновлены: ${nextParticipants.length}. Повторное обновление будет доступно через ${Math.max(1, Math.ceil(retryAfterMs / 1_000))} сек.`
+          : `Участники обновлены: ${nextParticipants.length}.`,
+        retryBlocked: retryAfterMs > 0,
+      });
+      if (retryAfterMs > 0) {
+        participantRefreshCooldownTimerRef.current = window.setTimeout(() => {
+          participantRefreshCooldownTimerRef.current = null;
+          setParticipantRefreshState(TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE);
+        }, retryAfterMs);
+      }
+      participantAutoRescheduleRef.current(nextFingerprint);
+      return;
+    }
+
+    if (result.data.reason === "in_progress") {
+      const retryAfterMs = Math.max(
+        1_000,
+        result.data.retryAfterMs ?? TOURNAMENT_PARTICIPANT_REFRESH_INTERVAL_MS.active,
+      );
+      const retrySeconds = Math.max(1, Math.ceil(retryAfterMs / 1_000));
+      setParticipantRefreshState({
+        status: "cooldown",
+        message: `Обновление уже выполняется. Актуальный состав появится примерно через ${retrySeconds} сек.`,
+        retryBlocked: true,
+      });
+      participantRefreshCooldownTimerRef.current = window.setTimeout(() => {
+        participantRefreshCooldownTimerRef.current = null;
+        setParticipantRefreshState(TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE);
+        participantAutoRunRef.current?.();
+      }, retryAfterMs);
+      return;
+    }
+
+    if (result.data.reason === "cooldown") {
+      const retryAfterMs = Math.max(
+        1_000,
+        result.data.retryAfterMs ?? TOURNAMENT_PARTICIPANT_REFRESH_INTERVAL_MS.active,
+      );
+      const retrySeconds = Math.max(1, Math.ceil(retryAfterMs / 1_000));
+      setParticipantRefreshState({
+        status: "cooldown",
+        message: `Состав недавно обновлялся. Повторить можно через ${retrySeconds} сек.`,
+        retryBlocked: true,
+      });
+      participantRefreshCooldownTimerRef.current = window.setTimeout(() => {
+        participantRefreshCooldownTimerRef.current = null;
+        setParticipantRefreshState(TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE);
+      }, retryAfterMs);
+      participantAutoRescheduleRef.current(nextFingerprint);
+      return;
+    }
+
+    const retryAfterMs = Math.max(0, result.data.retryAfterMs ?? 0);
+    setParticipantRefreshState({
+      status: "error",
+      message: result.data.reason === "stale_if_error"
+        ? "Viva временно недоступна. Показан последний сохранённый состав."
+        : "Viva временно не может обновить состав. Попробуйте позже.",
+      retryBlocked: retryAfterMs > 0,
+    });
+    if (retryAfterMs > 0) {
+      participantRefreshCooldownTimerRef.current = window.setTimeout(() => {
+        participantRefreshCooldownTimerRef.current = null;
+        setParticipantRefreshState(TOURNAMENT_PARTICIPANT_REFRESH_IDLE_STATE);
+      }, retryAfterMs);
+    }
+    participantAutoRescheduleRef.current(nextFingerprint, "error");
+  }, [
+    canRefreshParticipantsFromViva,
+    participantExerciseId,
+    participantRefreshState.retryBlocked,
+    participantRefreshState.status,
+    rosterMode,
+  ]);
 
   const trainer = tournament?.trainers?.[0];
   const title = isCreationFlow ? "Создание турнира" : (tournament?.direction?.name || tournament?.type?.name || "Турнир");
@@ -2635,8 +3028,11 @@ function TournamentDetailsModal({
     });
   };
 
-  const handleParticipantRatingTap = (participant: TournamentParticipantEntry) => {
-    const nowTs = Date.now();
+  const handleParticipantRatingTap = (
+    participant: TournamentParticipantEntry,
+    eventTimeStamp: number,
+  ) => {
+    const nowTs = eventTimeStamp;
     const lastTs = ratingLastTapTsRef.current[participant.id] ?? 0;
     ratingLastTapTsRef.current[participant.id] = nowTs;
     if (nowTs - lastTs <= 360) {
@@ -3111,16 +3507,54 @@ function TournamentDetailsModal({
                   )}
                 </>
               ) : (
-                <button
-                  className="tournament-section-action"
-                  type="button"
-                  onClick={handleEnableManualRoster}
-                >
-                  Создать вручную
-                </button>
+                <>
+                  {participantExerciseId && canRefreshParticipantsFromViva && (
+                    <button
+                      className={`tournament-section-action tournament-participant-refresh-action${participantRefreshState.status === "pending" ? " is-loading" : ""}`}
+                      type="button"
+                      onClick={() => void handleRefreshParticipantsFromViva()}
+                      disabled={
+                        loading
+                        || participantRefreshState.status === "pending"
+                        || participantRefreshState.status === "cooldown"
+                        || participantRefreshState.retryBlocked === true
+                      }
+                      aria-busy={participantRefreshState.status === "pending"}
+                    >
+                      {participantRefreshState.status === "pending"
+                        ? "Обновляем…"
+                        : "Обновить участников"}
+                    </button>
+                  )}
+                  <button
+                    className="tournament-section-action"
+                    type="button"
+                    onClick={handleEnableManualRoster}
+                  >
+                    Создать вручную
+                  </button>
+                </>
               )}
             </div>
           </div>
+          {rosterMode === "bookings" && participantRefreshState.message && (
+            <div
+              className={`tournament-participant-refresh-status is-${participantRefreshState.status}`}
+              role={participantRefreshState.status === "error" ? "alert" : "status"}
+              aria-live="polite"
+            >
+              {participantRefreshState.message}
+            </div>
+          )}
+          {rosterMode === "bookings" && participantLoadNotice && (
+            <div
+              className="tournament-participant-refresh-status"
+              role="status"
+              aria-live="polite"
+            >
+              {participantLoadNotice}
+            </div>
+          )}
           {rosterMode === "manual" ? (
             <>
               <div className="tournament-settings-hint">
@@ -3252,15 +3686,15 @@ function TournamentDetailsModal({
                   onSuccessClose={() => {
                     const closedTarget = participantLeaveTarget;
                     setParticipantLeaveTarget(null);
-                    if (tournamentId) {
-                      void loadParticipants(tournamentId);
+                    if (participantExerciseId) {
+                      void loadParticipants(participantExerciseId);
                     } else if (closedTarget?.id) {
                       setParticipants((prev) => prev.filter((item) => item.id !== closedTarget.id));
                     }
                   }}
                 />
               )}
-              {!loading && !error && participants.length === 0 && (
+              {!loading && !error && !participantLoadNotice && participants.length === 0 && (
                 <div className="tournaments-muted">Участников пока нет</div>
               )}
               {!loading && !error && sortedParticipants.length > 0 && (
@@ -3331,7 +3765,7 @@ function TournamentDetailsModal({
                                 <button
                                   className="tournament-participant-rating tournament-participant-rating-button"
                                   type="button"
-                                  onClick={() => handleParticipantRatingTap(participant)}
+                                  onClick={(event) => handleParticipantRatingTap(participant, event.timeStamp)}
                                   onDoubleClick={() => handleOpenParticipantRatingEdit(participant)}
                                   aria-label="Изменить рейтинг участника"
                                   title="Двойной тап для изменения рейтинга"
@@ -6459,6 +6893,9 @@ export default function TournamentsPage({
   const [items, setItems] = useState<Exercise[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [cacheNotice, setCacheNotice] = useState<string | null>(null);
+  const [vivaRefreshPending, setVivaRefreshPending] = useState(false);
+  const [vivaRefreshNotice, setVivaRefreshNotice] = useState<string | null>(null);
+  const [vivaRefreshError, setVivaRefreshError] = useState<string | null>(null);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [localDraftSnapshots, setLocalDraftSnapshots] = useState<TournamentDraftSnapshot[]>([]);
   const [profile, setProfile] = useState<UserProfileType | null>(null);
@@ -6478,6 +6915,8 @@ export default function TournamentsPage({
   const deepLinkLookupKeyRef = useRef<string | null>(null);
   const openingTournamentIdRef = useRef<string | null>(null);
   const activeDateRef = useRef<HTMLDivElement | null>(null);
+  const selectedDateKeyRef = useRef<string | null>(null);
+  const scheduleRequestGenerationRef = useRef(0);
   const locationTournamentSlug = useMemo(() => readTournamentSlugFromLocation(), []);
   const targetTournamentSlug = useMemo(
     () => normalizeTournamentSlug(initialOpenTournamentSlug) ?? locationTournamentSlug,
@@ -6499,6 +6938,7 @@ export default function TournamentsPage({
   const todayDateStr = formatDate(new Date());
   const includePastTournaments = selectedDateStr <= todayDateStr;
   const tournamentMechanicsLookupDate = selectedDateStr;
+  selectedDateKeyRef.current = selectedDateStr;
 
   const refreshPendingSyncCount = useCallback(async () => {
     const count = await getPendingTournamentResultSyncCount();
@@ -6529,14 +6969,24 @@ export default function TournamentsPage({
   }, [dateIndex]);
 
   useEffect(() => {
+    setVivaRefreshNotice(null);
+    setVivaRefreshError(null);
+  }, [selectedDateStr]);
+
+  useEffect(() => {
     let alive = true;
+    const requestGeneration = scheduleRequestGenerationRef.current + 1;
+    scheduleRequestGenerationRef.current = requestGeneration;
+    const isCurrentRequest = () => (
+      alive && scheduleRequestGenerationRef.current === requestGeneration
+    );
     let appliedFreshItems = false;
     setLoading(true);
     setError(null);
     setCacheNotice(null);
 
     void loadCachedTournamentSchedule(selectedDateStr).then((cachedItems) => {
-      if (!alive || appliedFreshItems || !cachedItems) return;
+      if (!isCurrentRequest() || appliedFreshItems || !cachedItems) return;
       setItems(cachedItems);
       setCacheNotice("Показываем сохраненное расписание. Обновляем список...");
       setLoading(false);
@@ -6551,7 +7001,7 @@ export default function TournamentsPage({
           includeAdjacentDays: false,
         });
 
-        if (!alive) return;
+        if (!isCurrentRequest()) return;
         if (exercisesResult.error && !exercisesResult.data) {
           throw new Error(exercisesResult.error.message || "Не удалось загрузить упражнения турниров");
         }
@@ -6571,7 +7021,7 @@ export default function TournamentsPage({
           bookingItemsPromise,
           sourceTournamentItemsPromise,
         ]);
-        if (!alive) return;
+        if (!isCurrentRequest()) return;
 
         const fallbackExercises = buildTournamentMechanicsFallbackExercises(sourceTournamentItems);
         const mergedExercises = mergeTournamentMechanicsExercises(
@@ -6583,8 +7033,9 @@ export default function TournamentsPage({
         setItems(finalItems);
         void saveCachedTournamentSchedule(selectedDateStr, finalItems);
       } catch {
-        if (!alive) return;
+        if (!isCurrentRequest()) return;
         const cachedItems = await loadCachedTournamentSchedule(selectedDateStr);
+        if (!isCurrentRequest()) return;
         if (cachedItems) {
           setItems(cachedItems);
           setCacheNotice("Показываем сохраненное расписание. Синхронизация восстановится при появлении связи.");
@@ -6632,6 +7083,65 @@ export default function TournamentsPage({
   }, []);
 
   const canHostTournaments = profile ? hasTournamentHostingAccess(profile) : false;
+  const handleVivaRefresh = useCallback(async () => {
+    if (!canHostTournaments || vivaRefreshPending) return;
+
+    const requestedDate = selectedDateStr;
+    const requestGeneration = scheduleRequestGenerationRef.current + 1;
+    scheduleRequestGenerationRef.current = requestGeneration;
+    setVivaRefreshPending(true);
+    setVivaRefreshNotice(null);
+    setVivaRefreshError(null);
+
+    try {
+      const result = await apiRefreshTournamentMechanicsFromViva(requestedDate);
+      if (result.error || !result.data) {
+        throw new Error(result.error?.message || "Не удалось обновить турниры из Viva");
+      }
+      if (result.data.reason === "refresh_failed") {
+        throw new Error("Viva временно не вернула расписание. Текущий список сохранён.");
+      }
+      if (
+        selectedDateKeyRef.current !== requestedDate
+        || scheduleRequestGenerationRef.current !== requestGeneration
+      ) {
+        setVivaRefreshNotice("Viva обновлена для ранее выбранной даты.");
+        return;
+      }
+      if (result.data.reason === "cooldown") {
+        const retrySeconds = Math.max(1, Math.ceil((result.data.retryAfterMs ?? 0) / 1000));
+        setVivaRefreshNotice(`Эта дата уже обновлялась. Повторить можно через ${retrySeconds} сек.`);
+        return;
+      }
+
+      const freshExercises = buildTournamentMechanicsFallbackExercises(result.data.tournaments);
+      setItems(freshExercises);
+      setError(null);
+      setCacheNotice(null);
+      void saveCachedTournamentSchedule(requestedDate, freshExercises);
+
+      const countLabel = `турниров получено: ${result.data.tournaments.length}`;
+      setVivaRefreshNotice(
+        result.data.persisted === false
+          ? `Из Viva ${countLabel}, но серверный снимок не сохранился.`
+          : `Данные из Viva обновлены, ${countLabel}.`,
+      );
+    } catch (refreshError) {
+      if (
+        selectedDateKeyRef.current !== requestedDate
+        || scheduleRequestGenerationRef.current !== requestGeneration
+      ) {
+        return;
+      }
+      setVivaRefreshError(
+        refreshError instanceof Error
+          ? refreshError.message
+          : "Не удалось обновить турниры из Viva",
+      );
+    } finally {
+      setVivaRefreshPending(false);
+    }
+  }, [canHostTournaments, selectedDateStr, vivaRefreshPending]);
   const currentProfileId = profile?.id ?? null;
   const localDraftExercises = useMemo(
     () => localDraftSnapshots
@@ -7271,6 +7781,31 @@ export default function TournamentsPage({
           {!cacheNotice && pendingSyncCount > 0 && (
             <div className="tournaments-sync-notice">{formatPendingTournamentSyncNotice(pendingSyncCount)}</div>
           )}
+          {canHostTournaments && (
+            <div className="tournaments-viva-refresh-toolbar">
+              <button
+                className={`tournaments-viva-refresh${vivaRefreshPending ? " is-loading" : ""}`}
+                type="button"
+                onClick={() => void handleVivaRefresh()}
+                disabled={vivaRefreshPending || loading}
+                aria-busy={vivaRefreshPending}
+              >
+                <span className="tournaments-viva-refresh-icon" aria-hidden="true">↻</span>
+                <span>{vivaRefreshPending ? "Обновляем из Viva..." : "Обновить из Viva"}</span>
+              </button>
+              <span className="tournaments-viva-refresh-hint">
+                Только выбранный день
+              </span>
+            </div>
+          )}
+          {vivaRefreshNotice && (
+            <div className="tournaments-viva-refresh-notice" role="status" aria-live="polite">
+              {vivaRefreshNotice}
+            </div>
+          )}
+          {vivaRefreshError && (
+            <div className="tournaments-error" role="alert">{vivaRefreshError}</div>
+          )}
           <div className="date-row">
             {dates.map((date, idx) => {
               const monthLabel = date
@@ -7403,6 +7938,7 @@ export default function TournamentsPage({
         tournament={selectedTournament}
         historyRecord={selectedTournament ? combinedHistoryById[String(selectedTournament.id)] ?? null : null}
         sourceDateKey={selectedDateStr}
+        canRefreshParticipantsFromViva={canHostTournaments}
         onSaved={handleTournamentCreated}
       />
 
