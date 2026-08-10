@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
-import { selectTournamentVivaBooking } from "../../src/utils/tournamentVivaBookingIdentity.ts";
+import {
+  createAvailableTournamentVivaRegistrationState,
+  isTournamentVivaBookingInactive,
+  selectTournamentVivaBooking,
+  selectTournamentVivaOwnBooking,
+} from "../../src/utils/tournamentVivaBookingIdentity.ts";
+
+const tournamentSignupApiSource = fs.readFileSync(
+  "src/utils/tournamentSignupApi.ts",
+  "utf8",
+);
 
 const profile = {
   id: "viewer-client-id",
@@ -56,4 +67,65 @@ test("uses place fallback only when a cancellation flow supplies the place", () 
     selectTournamentVivaBooking([placeBooking], profile, { placeNumber: 7 }),
     placeBooking,
   );
+});
+
+test("inactive Viva booking statuses do not block a new registration", () => {
+  const inactiveStatuses = [
+    "CANCELLED",
+    "DECLINED",
+    "FAILED",
+    "EXPIRED",
+    "REFUNDED",
+    "REJECTED",
+    "VOID",
+    "CLOSED",
+    "ARCHIVED",
+    "REMOVED",
+  ];
+
+  inactiveStatuses.forEach((status) => {
+    const inactiveBooking = booking({ status });
+    assert.equal(isTournamentVivaBookingInactive(inactiveBooking), true, status);
+    assert.equal(
+      selectTournamentVivaOwnBooking([inactiveBooking], "exercise-id"),
+      null,
+      status,
+    );
+  });
+});
+
+test("successful own-bookings lookup selects only an active matching exercise", () => {
+  const otherExercise = booking({ exerciseId: "other-exercise" });
+  const inactiveMatch = booking({ id: "inactive", status: "DECLINED" });
+  const activeMatch = booking({ id: "active", status: "CONFIRMED" });
+
+  assert.equal(
+    selectTournamentVivaOwnBooking([otherExercise, inactiveMatch, activeMatch], "exercise-id"),
+    activeMatch,
+  );
+  assert.equal(selectTournamentVivaOwnBooking([], "exercise-id"), null);
+});
+
+test("resolved empty Viva lookup explicitly keeps registration available", () => {
+  assert.deepEqual(createAvailableTournamentVivaRegistrationState(), {
+    status: "NONE",
+    bookingId: null,
+    placeNumber: null,
+    waitlistNumber: null,
+    canRegister: true,
+    canCancel: false,
+    message: null,
+    paymentUrl: null,
+    paymentExpiresAt: null,
+  });
+});
+
+test("authenticated checkout falls back to public products with the verified profile", () => {
+  const checkoutSource = tournamentSignupApiSource.match(
+    /export async function apiFetchTournamentVivaCheckout[\s\S]*?\n}\n\nexport async function apiFetchTournamentVivaPublicCheckout/,
+  )?.[0];
+
+  assert.ok(checkoutSource, "authenticated checkout source must exist");
+  assert.match(checkoutSource, /apiFetchTournamentVivaPublicCheckout\(exerciseId, options\)/);
+  assert.match(checkoutSource, /profile: profileResult\.data/);
 });

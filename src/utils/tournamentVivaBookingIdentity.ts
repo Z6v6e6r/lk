@@ -3,6 +3,21 @@ export type TournamentVivaProfileIdentity = {
   phone: string | null | undefined;
 };
 
+const INACTIVE_TOURNAMENT_VIVA_BOOKING_STATUS_MARKERS = [
+  "CANCEL",
+  "DECLIN",
+  "FAIL",
+  "ERROR",
+  "EXPIRE",
+  "REFUND",
+  "REJECT",
+  "VOID",
+  "CLOSE",
+  "ARCHIVE",
+  "LEFT",
+  "REMOV",
+] as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -36,6 +51,46 @@ function normalizePhone(value: string | null | undefined) {
   if (digits.length === 10) return `7${digits}`;
   if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
   return digits;
+}
+
+export function isTournamentVivaBookingInactive(value: unknown) {
+  if (!isRecord(value)) return false;
+  if (value.isCancelled === true || value.cancelled === true || value.canceled === true) return true;
+
+  const status = String(pickString(value, ["status", "state"]) || "").trim().toUpperCase();
+  return INACTIVE_TOURNAMENT_VIVA_BOOKING_STATUS_MARKERS.some((marker) => status.includes(marker));
+}
+
+export function isTournamentVivaBookingForExercise(value: unknown, exerciseId: string) {
+  if (!isRecord(value)) return false;
+  const exercise = isRecord(value.exercise) ? value.exercise : null;
+  const nestedExerciseId = pickString(exercise, ["id", "exerciseId", "uuid"]);
+  const directExerciseId = pickString(value, ["exerciseId", "vivaExerciseId"]);
+  return [nestedExerciseId, directExerciseId].some((id) => id === exerciseId);
+}
+
+export function selectTournamentVivaOwnBooking(
+  ownBookings: unknown[],
+  exerciseId: string,
+) {
+  return ownBookings.find((item) => (
+    isTournamentVivaBookingForExercise(item, exerciseId)
+    && !isTournamentVivaBookingInactive(item)
+  )) ?? null;
+}
+
+export function createAvailableTournamentVivaRegistrationState() {
+  return {
+    status: "NONE" as const,
+    bookingId: null,
+    placeNumber: null,
+    waitlistNumber: null,
+    canRegister: true,
+    canCancel: false,
+    message: null,
+    paymentUrl: null,
+    paymentExpiresAt: null,
+  };
 }
 
 export function isTournamentVivaBookingOwnedByProfile(

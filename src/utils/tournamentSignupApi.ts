@@ -42,7 +42,13 @@ import {
   type TournamentPricingPromoOnlyOffer,
 } from "./tournamentPricingPreview";
 import { isTournamentSignupPayloadCancelled } from "./tournamentSignupCancellation";
-import { selectTournamentVivaBooking } from "./tournamentVivaBookingIdentity";
+import {
+  createAvailableTournamentVivaRegistrationState,
+  isTournamentVivaBookingForExercise,
+  isTournamentVivaBookingInactive,
+  selectTournamentVivaBooking,
+  selectTournamentVivaOwnBooking,
+} from "./tournamentVivaBookingIdentity";
 import {
   buildSubscriptionCategoryDailyLimitApiError,
   resolveSubscriptionCategoryDailyLimitCategoryFromEvent,
@@ -1064,7 +1070,7 @@ function findTournamentVivaPaymentResolution(
 ): TournamentVivaPaymentResolution | null {
   const candidates = extractItems(payload)
     .filter((item) => isRecord(item))
-    .filter((item) => isVivaBookingForExercise(item, exerciseId))
+    .filter((item) => isTournamentVivaBookingForExercise(item, exerciseId))
     .filter((item) => !isVivaBookingCancelled(item));
 
   const matched = transactionId
@@ -1228,20 +1234,9 @@ async function awaitPreferredTournamentPaymentResolution(
   });
 }
 
-function isVivaBookingForExercise(value: unknown, exerciseId: string) {
-  if (!isRecord(value)) return false;
-  const exercise = isRecord(value.exercise) ? value.exercise : null;
-  const nestedExerciseId = pickString(exercise, ["id", "exerciseId", "uuid"]);
-  const directExerciseId = pickString(value, ["exerciseId", "vivaExerciseId"]);
-  return [nestedExerciseId, directExerciseId].some((id) => id === exerciseId);
-}
-
 function normalizeVivaOwnBookingRegistration(value: unknown): TournamentRegistrationState | null {
   if (!isRecord(value)) return null;
-
-  const cancelled = String(pickString(value, ["status", "state"]) || "").toUpperCase().includes("CANCEL")
-    || value.isCancelled === true;
-  if (cancelled) return null;
+  if (isTournamentVivaBookingInactive(value)) return null;
 
   return normalizeRegistration({
     ...value,
@@ -1277,6 +1272,7 @@ async function fetchTournamentVivaMyBooking(
       method: "GET",
       auth: true,
       retries: 1,
+      cache: "no-store",
     }),
   ]);
 
@@ -1285,6 +1281,14 @@ async function fetchTournamentVivaMyBooking(
       data: null,
       error: profileResult.error || { status: 401, message: "Не удалось получить профиль Viva" },
       status: profileResult.status,
+    };
+  }
+
+  if (!ownBookingsResult.error) {
+    return {
+      data: selectTournamentVivaOwnBooking(extractItems(ownBookingsResult.data), exerciseId),
+      error: null,
+      status: ownBookingsResult.status,
     };
   }
 
@@ -1299,19 +1303,6 @@ async function fetchTournamentVivaMyBooking(
     }
   }
 
-  if (!ownBookingsResult.error) {
-    const ownBooking = extractItems(ownBookingsResult.data)
-      .find((item) => isVivaBookingForExercise(item, exerciseId) && normalizeVivaOwnBookingRegistration(item) !== null)
-      ?? null;
-    if (ownBooking) {
-      return {
-        data: ownBooking,
-        error: null,
-        status: ownBookingsResult.status,
-      };
-    }
-  }
-
   if (bookingsResult.error) {
     return {
       data: null,
@@ -1321,13 +1312,8 @@ async function fetchTournamentVivaMyBooking(
   }
 
   const exerciseBookings = extractItems(bookingsResult.data)
-    .filter((item) => isVivaBookingForExercise(item, exerciseId))
-    .filter((item) => {
-      if (!isRecord(item)) return false;
-      const cancelled = String(pickString(item, ["status", "state"]) || "").toUpperCase().includes("CANCEL")
-        || item.isCancelled === true;
-      return !cancelled;
-    });
+    .filter((item) => isTournamentVivaBookingForExercise(item, exerciseId))
+    .filter((item) => !isTournamentVivaBookingInactive(item));
 
   const booking = selectTournamentVivaBooking(
     exerciseBookings,
@@ -1920,8 +1906,11 @@ export async function apiFetchTournamentVivaMyRegistration(
     };
   }
 
+  const registration = normalizeVivaOwnBookingRegistration(bookingResult.data)
+    ?? createAvailableTournamentVivaRegistrationState();
+
   return {
-    data: normalizeVivaOwnBookingRegistration(bookingResult.data),
+    data: registration,
     error: null,
     status: bookingResult.status,
   };
@@ -2157,7 +2146,24 @@ export async function apiFetchTournamentVivaCheckout(
     return { data: null, error: profileResult.error || { status: 401, message: "Не удалось получить профиль Viva" }, status: profileResult.status };
   }
   if (exerciseResult.error || !isRecord(exerciseResult.data)) {
-    return { data: null, error: exerciseResult.error || { status: 404, message: "Не удалось получить карточку турнира Viva" }, status: exerciseResult.status };
+    const publicCheckoutResult = await apiFetchTournamentVivaPublicCheckout(exerciseId, options);
+    if (publicCheckoutResult.error || !publicCheckoutResult.data) {
+      return {
+        data: null,
+        error: publicCheckoutResult.error
+          || exerciseResult.error
+          || { status: 404, message: "Не удалось получить карточку турнира Viva" },
+        status: publicCheckoutResult.status || exerciseResult.status,
+      };
+    }
+
+    return {
+      ...publicCheckoutResult,
+      data: {
+        ...publicCheckoutResult.data,
+        profile: profileResult.data,
+      },
+    };
   }
 
   const exercise = exerciseResult.data;
