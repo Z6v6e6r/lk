@@ -3,7 +3,7 @@ import type {
   TournamentSignupStatus,
 } from "./tournamentSignupApi";
 
-const PHONE_LOOKUP_UNAVAILABLE_PATTERN = /не удалось определить номер телефона для (?:проверки )?записи/i;
+const PHONE_LOOKUP_UNAVAILABLE_PATTERN = /(?:номер )?телефон|\bphone\b/i;
 
 export function isTournamentRegistrationLookupUnavailable(
   registration: TournamentRegistrationState | null | undefined,

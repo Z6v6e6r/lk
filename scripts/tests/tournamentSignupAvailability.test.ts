@@ -49,6 +49,20 @@ test("registration endpoint phone lookup wording also keeps signup available", (
   assert.equal(canOfferTournamentRegistration("AVAILABLE", unavailableLookup), true);
 });
 
+test("live phone lookup wording keeps signup available", () => {
+  const liveWordings = [
+    "Не удалось определить телефон для записи.",
+    "Невозможно проверить номер телефона.",
+    "Phone lookup is unavailable.",
+  ];
+
+  liveWordings.forEach((message) => {
+    const unavailableLookup = registration({ message });
+    assert.equal(isTournamentRegistrationLookupUnavailable(unavailableLookup), true);
+    assert.equal(canOfferTournamentRegistration("AVAILABLE", unavailableLookup), true);
+  });
+});
+
 test("personal registration lookup bypasses browser cache", () => {
   const lookupSource = tournamentSignupApiSource.match(
     /export async function apiFetchTournamentMyRegistration[\s\S]*?\n}/,
