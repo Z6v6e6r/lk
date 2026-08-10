@@ -49,10 +49,7 @@ import {
   type TournamentSignupParticipant,
   type TournamentSignupPublicRoster,
 } from "../../utils/tournamentSignupRoster";
-import {
-  canOfferTournamentRegistration,
-  isTournamentRegistrationLookupUnavailable,
-} from "../../utils/tournamentSignupAvailability";
+import { canOfferTournamentRegistration } from "../../utils/tournamentSignupAvailability";
 import {
   pickSubscriptionValidityDate,
   resolveSubscriptionUsageDisplay,
@@ -1625,7 +1622,6 @@ export default function TournamentSignupPage({
 
   const canPayPending = Boolean(registration?.status === "PAYMENT_PENDING" && registration?.paymentUrl);
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
-  const registrationLookupUnavailable = isTournamentRegistrationLookupUnavailable(registration);
   const canRegister = canOfferTournamentRegistration(detail?.status, registration);
   const detailDateParts = getDateParts(selectedTournament?.date ?? null);
   const detailStartTime = formatClock(selectedTournament?.startsAt ?? null);
@@ -2065,11 +2061,6 @@ export default function TournamentSignupPage({
                   </div>
 
                   <div className="tournament-signup-register-stack">
-                    {registrationLookupUnavailable && canRegister && (
-                      <div className="tournament-signup-muted" role="status">
-                        Не удалось проверить текущую запись по номеру телефона. Выберите способ записи — доступность будет проверена при подтверждении.
-                      </div>
-                    )}
                     {canRegister && (
                       <div className="tournament-signup-auth">
                         <div className="tournament-signup-auth-head">

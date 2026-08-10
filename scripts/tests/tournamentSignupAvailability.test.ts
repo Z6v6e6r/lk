@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 import {
   canOfferTournamentRegistration,
   isTournamentRegistrationLookupUnavailable,
 } from "../../src/utils/tournamentSignupAvailability.ts";
 import type { TournamentRegistrationState } from "../../src/utils/tournamentSignupApi.ts";
+
+const tournamentSignupPageSource = fs.readFileSync(
+  "src/components/tournament-signup/TournamentSignupPage.tsx",
+  "utf8",
+);
 
 function registration(
   overrides: Partial<TournamentRegistrationState> = {},
@@ -28,6 +34,13 @@ test("phone lookup failure does not silently hide tournament signup", () => {
 
   assert.equal(isTournamentRegistrationLookupUnavailable(unavailableLookup), true);
   assert.equal(canOfferTournamentRegistration("AVAILABLE", unavailableLookup), true);
+});
+
+test("phone lookup failure does not render a warning in tournament detail", () => {
+  assert.doesNotMatch(
+    tournamentSignupPageSource,
+    /Не удалось проверить текущую запись по номеру телефона/,
+  );
 });
 
 test("other explicit registration denials remain fail closed", () => {
