@@ -59,7 +59,7 @@
     "test:runtime-config": "node --experimental-strip-types --test scripts/tests/overlayBundleUrl.test.ts scripts/tests/supportEventPayload.apiClient.test.ts",
     "test:recovery-audits": "node --test scripts/tests/recoveryAuditTools.test.mjs",
     "test:tournament-category": "node --experimental-strip-types --test scripts/tests/tournamentCategory.test.ts",
-    "test:tournament-signup-availability": "node --experimental-strip-types --test scripts/tests/tournamentSignupAvailability.test.ts",
+    "test:tournament-signup-availability": "node --experimental-strip-types --test scripts/tests/tournamentSignupAvailability.test.ts scripts/tests/tournamentSignupVivaBookingIdentity.test.ts",
     "test:mexicano-classic": "node --experimental-strip-types --test scripts/tests/mexicanoClassic.test.ts scripts/tests/mexicanoRecoveryIntegration.test.ts",
     "test:nodered-tournament-finished-at": "node --experimental-strip-types --test scripts/tests/tournamentFinishedAtIdempotency.nodered.test.ts",
     "test:nodered-tournament-history-limit": "node --experimental-strip-types --test scripts/tests/tournamentHistoryLimit.nodered.test.ts",

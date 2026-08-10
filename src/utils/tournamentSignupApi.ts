@@ -42,6 +42,7 @@ import {
   type TournamentPricingPromoOnlyOffer,
 } from "./tournamentPricingPreview";
 import { isTournamentSignupPayloadCancelled } from "./tournamentSignupCancellation";
+import { selectTournamentVivaBooking } from "./tournamentVivaBookingIdentity";
 import {
   buildSubscriptionCategoryDailyLimitApiError,
   resolveSubscriptionCategoryDailyLimitCategoryFromEvent,
@@ -1227,39 +1228,6 @@ async function awaitPreferredTournamentPaymentResolution(
   });
 }
 
-function normalizePhone(value: string | null | undefined) {
-  const digits = String(value || "").replace(/\D/g, "");
-  if (!digits) return null;
-  if (digits.length === 10) return `7${digits}`;
-  if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
-  return digits;
-}
-
-function normalizeVivaBookingRegistration(value: unknown, profile: UserProfileType): TournamentRegistrationState | null {
-  if (!isRecord(value)) return null;
-  const client = isRecord(value.client) ? value.client : null;
-  const profilePhone = normalizePhone(profile.phone);
-  const bookingPhone = normalizePhone(pickString(client, ["phone", "phoneNumber"]) || pickString(value, ["phone", "clientPhone"]));
-  const profileId = String(profile.id || "").trim();
-  const bookingClientId = pickString(client, ["id", "clientId"]) || pickString(value, ["clientId"]);
-  const isMine = Boolean(
-    (profileId && bookingClientId && profileId === bookingClientId)
-    || (profilePhone && bookingPhone && profilePhone === bookingPhone),
-  );
-  if (!isMine) return null;
-
-  const cancelled = String(pickString(value, ["status", "state"]) || "").toUpperCase().includes("CANCEL")
-    || value.isCancelled === true;
-  if (cancelled) return null;
-
-  return normalizeRegistration({
-    ...value,
-    bookingId: pickString(value, ["id", "bookingId"]),
-    status: hasPendingPaymentStatus(value) ? "PAYMENT_PENDING" : "REGISTERED",
-    placeNumber: pickNumber(value, ["spot", "placeNumber", "position"]),
-  });
-}
-
 function isVivaBookingForExercise(value: unknown, exerciseId: string) {
   if (!isRecord(value)) return false;
   const exercise = isRecord(value.exercise) ? value.exercise : null;
@@ -1361,15 +1329,11 @@ async function fetchTournamentVivaMyBooking(
       return !cancelled;
     });
 
-  const booking = exerciseBookings
-    .find((item) => normalizeVivaBookingRegistration(item, profileResult.data as UserProfileType) !== null)
-    ?? (
-      options.placeNumber != null
-        ? exerciseBookings.find((item) => pickNumber(item, ["spot", "placeNumber", "position"]) === options.placeNumber)
-        : null
-    )
-    ?? (exerciseBookings.length === 1 ? exerciseBookings[0] : null)
-    ?? null;
+  const booking = selectTournamentVivaBooking(
+    exerciseBookings,
+    profileResult.data as UserProfileType,
+    options,
+  );
 
   return {
     data: booking,
