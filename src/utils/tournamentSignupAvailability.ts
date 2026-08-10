@@ -8,12 +8,13 @@ const PHONE_LOOKUP_UNAVAILABLE_PATTERN = /(?:номер )?телефон|\bphone
 export function isTournamentRegistrationLookupUnavailable(
   registration: TournamentRegistrationState | null | undefined,
 ) {
+  const message = registration?.message?.trim() || "";
   return Boolean(
     registration
     && registration.status === "NONE"
     && registration.canRegister === false
     && registration.canCancel === false
-    && PHONE_LOOKUP_UNAVAILABLE_PATTERN.test(registration.message || ""),
+    && (!message || PHONE_LOOKUP_UNAVAILABLE_PATTERN.test(message)),
   );
 }
 

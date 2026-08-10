@@ -63,6 +63,13 @@ test("live phone lookup wording keeps signup available", () => {
   });
 });
 
+test("empty lookup denial keeps signup available", () => {
+  const unavailableLookup = registration({ message: null });
+
+  assert.equal(isTournamentRegistrationLookupUnavailable(unavailableLookup), true);
+  assert.equal(canOfferTournamentRegistration("AVAILABLE", unavailableLookup), true);
+});
+
 test("personal registration lookup bypasses browser cache", () => {
   const lookupSource = tournamentSignupApiSource.match(
     /export async function apiFetchTournamentMyRegistration[\s\S]*?\n}/,
