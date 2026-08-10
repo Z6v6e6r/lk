@@ -50,9 +50,9 @@ const COUNTERS = [
     campaignKey: null,
     productId: "9eb8a7a4-c195-492a-95e4-3fb82899ac10",
     productName: "Лето.Падел.Академия",
-    totalLimit: 125,
+    totalLimit: 0,
     priceMinor: 2380000,
-    unlimited: false,
+    unlimited: true,
   },
   {
     counterKey: "ra",

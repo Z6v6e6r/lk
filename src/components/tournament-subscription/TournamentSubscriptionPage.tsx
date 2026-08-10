@@ -12,6 +12,7 @@ import {
 } from "../../utils/apiClient";
 import {
   TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_OVERRIDE_KEYS,
+  isTournamentSubscriptionStorefrontPlanRetired,
   resolveTournamentSubscriptionCounterDisplayText,
   resolveTournamentSubscriptionCounterDisplayTotalLimit,
   resolveTournamentSubscriptionDirectProductId,
@@ -251,6 +252,7 @@ function buildDefaultPageViewConfig(): PageViewConfig {
         fallbackTotalLimit: DEFAULT_PLAN_LIMIT,
         remainingLabel: "Доступно",
         remainingValueText: resolveTournamentSubscriptionCounterDisplayText("academy"),
+        hideRemainingBlock: true,
         featureStatusAppearance: "badge",
         features: buildDefaultFeatures("sport"),
       },
@@ -271,26 +273,6 @@ function buildDefaultPageViewConfig(): PageViewConfig {
         fallbackTotalLimit: DEFAULT_PLAN_LIMIT,
         remainingLabel: "Доступно",
         remainingValueText: resolveTournamentSubscriptionCounterDisplayText("ra"),
-        featureStatusAppearance: "badge",
-        features: buildDefaultFeatures("sport"),
-      },
-      {
-        id: "sport",
-        counterKey: "sport",
-        planId: "sport",
-        cardClassName: "tournament-subscription-plan--image",
-        artworkAlt: "Абонемент Лето.Падел.Спорт за 19 800 ₽",
-        artworkSrc: summerSubscriptionSportImage,
-        headClassName: "tournament-subscription-plan-head--sport",
-        purchaseMode: "summer_campaign",
-        accent: "СПОРТ",
-        titleLines: ["ЛЕТО.", "ПАДЕЛ."],
-        priceLabel: "19 800 ₽",
-        metaLabel: "30 ДНЕЙ",
-        fallbackTotalLimit: DEFAULT_PLAN_LIMIT,
-        remainingLabel: "Доступно",
-        remainingValueText: resolveTournamentSubscriptionCounterDisplayText("sport"),
-        hideRemainingBlock: true,
         featureStatusAppearance: "badge",
         features: buildDefaultFeatures("sport"),
       },
@@ -390,6 +372,18 @@ function buildSingleArtworkPageViewConfig(
     ? config.planKey
     : null;
   const artworkKey = normalizeArtworkKey(config?.artworkKey) || (explicitPlanId === "sport" ? "sport" : "friendship");
+  if (
+    isTournamentSubscriptionStorefrontPlanRetired(explicitPlanId)
+    || isTournamentSubscriptionStorefrontPlanRetired(artworkKey)
+  ) {
+    return {
+      pageClassName: "tournament-subscription-page--single",
+      plansClassName: "tournament-subscription-plans--single",
+      showBackButton: true,
+      plans: [],
+      pageError: "Этот абонемент больше не продаётся на странице.",
+    };
+  }
   const implicitPlanId = artworkKey === "friendship"
     ? "friendship"
     : artworkKey === "sport"

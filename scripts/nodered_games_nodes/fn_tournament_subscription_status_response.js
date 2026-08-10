@@ -356,10 +356,11 @@ const readSiriusFriendshipConfig = (friendshipPlan) => ({
 const readDirectCounterConfig = (counterKey) => {
   const base = DIRECT_COUNTER_DEFAULTS[counterKey];
   if (!base) return null;
+  const unlimited = counterKey === "academy" || counterKey === "energy5";
   return withAbLetoStagedRelease({
     counterKey,
     inventoryId: readAbLetoInventoryId(counterKey),
-    unlimited: counterKey === "energy5",
+    unlimited,
     saleType: "direct_product",
     planKey: null,
     campaignKey: null,
@@ -374,7 +375,7 @@ const readDirectCounterConfig = (counterKey) => {
       base.productCostMinor,
     ),
     manualPaidCount: 0,
-    totalLimit: counterKey === "energy5"
+    totalLimit: unlimited
       ? 0
       : toPlanLimit(global.get(`summer_subscription_${counterKey}_limit`), getDefaultTotalLimit(counterKey)),
   });

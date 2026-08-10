@@ -218,7 +218,7 @@ const readDirectCounterConfig = (counterKey) => {
     productName:
       readGlobalFirst([`summer_subscription_${counterKey}_product_name`])
       || base.productName,
-    unlimited: counterKey === "energy5",
+    unlimited: counterKey === "academy" || counterKey === "energy5",
   };
 };
 

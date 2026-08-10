@@ -4,6 +4,10 @@ export const TOURNAMENT_SUBSCRIPTION_DIRECT_PRODUCT_IDS = {
   ra: "b91e14d1-fe6e-4d0b-be39-3e45ad86b759",
 } as const;
 
+// Sport remains valid for existing subscriptions, but it is intentionally retired
+// from every sales entry point of the public /ab_leto storefront.
+export const TOURNAMENT_SUBSCRIPTION_RETIRED_STOREFRONT_PLAN_KEYS = ["sport"] as const;
+
 export const TOURNAMENT_SUBSCRIPTION_PROMO_OFFERS = {
   "academy-promo": {
     accent: "АКАДЕМИЯ",
@@ -19,13 +23,6 @@ export const TOURNAMENT_SUBSCRIPTION_PROMO_OFFERS = {
     productId: "c079dc82-c716-4f0e-b9ad-6aab62fb789e",
     productName: "Лето.Падел.Дружба Акция",
   },
-  "sport-promo": {
-    accent: "СПОРТ",
-    planStyle: "sport",
-    priceLabel: "9 900 ₽",
-    productId: "9588a577-4cac-4f13-bf7f-72382acb0387",
-    productName: "Лето.Падел.Спорт Акция",
-  },
   "ra-promo": {
     accent: "РА",
     planStyle: "sport",
@@ -39,10 +36,14 @@ export type TournamentSubscriptionPromoOfferKey = keyof typeof TOURNAMENT_SUBSCR
 
 export const TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_OVERRIDE_KEYS = [] as const;
 
-export const TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_TOTAL_LIMITS = {
-  academy: 125,
-  sport: 126,
-} as const;
+export const TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_TOTAL_LIMITS = {} as const;
+
+export function isTournamentSubscriptionStorefrontPlanRetired(value: string | null | undefined) {
+  const key = String(value || "").trim().toLowerCase();
+  return TOURNAMENT_SUBSCRIPTION_RETIRED_STOREFRONT_PLAN_KEYS.includes(
+    key as typeof TOURNAMENT_SUBSCRIPTION_RETIRED_STOREFRONT_PLAN_KEYS[number],
+  );
+}
 
 export function resolveTournamentSubscriptionDirectProductId(value: string | null | undefined) {
   const key = String(value || "").trim().toLowerCase();
@@ -66,12 +67,6 @@ export function resolveTournamentSubscriptionCounterDisplayText(value: string | 
 }
 
 export function resolveTournamentSubscriptionCounterDisplayTotalLimit(value: string | null | undefined) {
-  const key = String(value || "").trim().toLowerCase();
-  if (
-    key === "academy"
-    || key === "sport"
-  ) {
-    return TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_TOTAL_LIMITS[key];
-  }
+  void value;
   return null;
 }

@@ -122,6 +122,33 @@ test("summer subscription confirm-resolve clamps configured reservation and HTTP
   assert.equal(requestMsg.httpRequestTimeout, 120000);
 });
 
+test("summer subscription confirm-resolve keeps Academy unlimited for legacy pending rows", () => {
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js",
+    {
+      _summerSubscriptionCtx: {
+        action: "confirm",
+        step: "resolve_record",
+        counterKey: "academy",
+        paymentRef: "academy-payment-ref",
+      },
+      payload: [
+        {
+          counterKey: "academy",
+          inventoryId: "ab_leto_2026_50_v1",
+          paymentRef: "academy-payment-ref",
+          productId: "9eb8a7a4-c195-492a-95e4-3fb82899ac10",
+          status: "PAYMENT_PENDING",
+        },
+      ],
+    },
+  ) as unknown[];
+
+  const requestCtx = asRecord(asRecord(out[1])._summerSubscriptionCtx);
+  assert.equal(requestCtx.counterKey, "academy");
+  assert.equal(requestCtx.unlimited, true);
+});
+
 test("summer subscription confirm-resolve revalidates stale PAID records during reconcile", () => {
   const out = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_confirm_resolve.js",
@@ -263,6 +290,7 @@ test("summer subscription purchase-prepare supports all tracked direct-product c
       productId: "9eb8a7a4-c195-492a-95e4-3fb82899ac10",
       productName: "Лето.Падел.Академия",
       productCostMinor: 2380000,
+      unlimited: true,
     },
     {
       counterKey: "ra",
@@ -315,7 +343,7 @@ test("summer subscription purchase-prepare keeps five-seat daily drops for Frien
   const cases = [
     { counterKey: "friendship", totalLimit: 5, unlimited: false },
     { counterKey: "sport", totalLimit: 132, unlimited: false },
-    { counterKey: "academy", totalLimit: 125, unlimited: false },
+    { counterKey: "academy", totalLimit: 0, unlimited: true },
     { counterKey: "ra", totalLimit: 5, unlimited: false },
     { counterKey: "energy5", totalLimit: 0, unlimited: true },
   ];
@@ -376,6 +404,36 @@ test("summer subscription status exposes Energy-5 as tracked and unlimited", () 
   assert.equal(payload.unlimited, true);
 });
 
+test("summer subscription status exposes Academy as tracked and unlimited", () => {
+  const prepareOut = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "academy" } } },
+  ) as unknown[];
+  const prepared = asRecord(prepareOut[0]);
+  const prepareCtx = asRecord(prepared._summerSubscriptionCtx);
+  const academyCounter = asRecord((prepareCtx.counters as Array<Record<string, unknown>>)[0]);
+  assert.equal(academyCounter.totalLimit, 0);
+  assert.equal(academyCounter.unlimited, true);
+
+  const responseOut = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    {
+      _summerSubscriptionCtx: prepareCtx,
+      payload: Array.from({ length: 125 }, () => ({
+        inventoryId: "ab_leto_2026_50_v1",
+        counterKey: "academy",
+        productId: "9eb8a7a4-c195-492a-95e4-3fb82899ac10",
+        status: "PAID",
+      })),
+    },
+  ) as unknown[];
+  const payload = asRecord(asRecord(responseOut[0]).payload);
+  assert.equal(payload.paidCount, 125);
+  assert.equal(payload.remainingCount, 0);
+  assert.equal(payload.canPurchase, true);
+  assert.equal(payload.unlimited, true);
+});
+
 test("summer subscription status ignores cumulative rows for daily-drop counters", () => {
   const prepareOut = withFixedNow("2026-07-31T12:00:00.000Z", () => runNodeRedFunction(
       "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
@@ -421,8 +479,10 @@ test("summer subscription status ignores cumulative rows for daily-drop counters
   assert.equal(asRecord(byCounter.get("friendship")).remainingCount, 5);
   assert.equal(asRecord(byCounter.get("sport")).totalLimit, 132);
   assert.equal(asRecord(byCounter.get("sport")).remainingCount, 126);
-  assert.equal(asRecord(byCounter.get("academy")).totalLimit, 125);
-  assert.equal(asRecord(byCounter.get("academy")).remainingCount, 100);
+  assert.equal(asRecord(byCounter.get("academy")).totalLimit, 0);
+  assert.equal(asRecord(byCounter.get("academy")).remainingCount, 0);
+  assert.equal(asRecord(byCounter.get("academy")).canPurchase, true);
+  assert.equal(asRecord(byCounter.get("academy")).unlimited, true);
   assert.equal(asRecord(byCounter.get("ra")).totalLimit, 5);
   assert.equal(asRecord(byCounter.get("ra")).remainingCount, 5);
 });
@@ -1517,7 +1577,9 @@ test("summer subscription counter refresh builds materialized counter updates", 
   assert.equal(academySet.paidCount, 1);
   assert.equal(academySet.reservedCount, 1);
   assert.equal(academySet.takenCount, 2);
-  assert.equal(academySet.remainingCount, 123);
+  assert.equal(academySet.remainingCount, 0);
+  assert.equal(academySet.canPurchase, true);
+  assert.equal(academySet.unlimited, true);
 
   assert.equal(sportSet.paidCount, 1);
   assert.equal(sportSet.reservedCount, 0);
@@ -1573,7 +1635,9 @@ test("summer subscription materialized counters ignore legacy manual paid baseli
   const sportSet = asRecord(asRecord(sportUpdate!.payload).$set);
 
   assert.equal(academySet.paidCount, 1);
-  assert.equal(academySet.remainingCount, 124);
+  assert.equal(academySet.remainingCount, 0);
+  assert.equal(academySet.canPurchase, true);
+  assert.equal(academySet.unlimited, true);
   assert.equal(raSet.paidCount, 1);
   assert.equal(raSet.remainingCount, 4);
   assert.equal(sportSet.paidCount, 0);
