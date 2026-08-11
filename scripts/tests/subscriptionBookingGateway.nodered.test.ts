@@ -342,6 +342,71 @@ test("trusted exercise must expose the exact owned subscription and allowed plan
   assert.equal(nestedTemplateIdMustNotMatch[4].statusCode, 409);
 });
 
+test("Friendship is allowed for tournaments but remains blocked for group training", () => {
+  const tournament = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      id: "exercise-target",
+      timeFrom: "2026-08-14T18:00:00+03:00",
+      direction: { id: 4769, name: "Турнир Сириус" },
+      type: { id: 839, name: "Падел Турнир" },
+      studio: { id: "studio-1" },
+      availableClientSubscriptions: [{
+        clientSubscriptionId: "client-subscription-1",
+        name: "Лето.Падел.Дружба",
+      }],
+    },
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined,
+      category: undefined,
+      planKey: undefined,
+      trackedDailyLimit: undefined,
+      limitMode: undefined,
+    }),
+  });
+  assert.equal(tournament[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(tournament[0]._subscriptionBooking.planKey, "friendship");
+  assert.equal(tournament[0]._subscriptionBooking.category, "tournament");
+  assert.equal(tournament[0]._subscriptionBooking.limitMode, "shared_day");
+
+  const serv2Hydrated = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { sertName: "Лето.Падел.Дружба" },
+    _subscriptionBooking: baseContext("subscription_name", {
+      serviceDate: "2026-08-14",
+      category: "tournament",
+      planKey: undefined,
+      subscriptionName: undefined,
+      trackedDailyLimit: undefined,
+      limitMode: undefined,
+    }),
+  });
+  assert.equal(serv2Hydrated[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(serv2Hydrated[0]._subscriptionBooking.planKey, "friendship");
+
+  const groupTraining = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      id: "exercise-target",
+      timeFrom: "2026-08-14T18:00:00+03:00",
+      direction: { name: "Групповая тренировка" },
+      type: { id: 605, name: "Групповая тренировка" },
+      availableClientSubscriptions: [{
+        clientSubscriptionId: "client-subscription-1",
+        name: "Лето.Падел.Дружба",
+      }],
+    },
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined,
+      category: undefined,
+      planKey: undefined,
+    }),
+  });
+  assert.equal(groupTraining[4].statusCode, 409);
+  assert.equal(groupTraining[4].payload.details.code, "SUBSCRIPTION_CATEGORY_NOT_ALLOWED");
+  assert.equal(groupTraining[4].payload.details.category, "group_training");
+});
+
 test("flat Viva Admin booking blocks another allowed event for the same subscription and date", () => {
   const out = runFunction(ROUTER_FILE, {
     statusCode: 200,

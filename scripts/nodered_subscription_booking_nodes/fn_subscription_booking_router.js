@@ -260,7 +260,7 @@ const resolvePlanKey = (value) => {
 };
 
 const PLAN_CATEGORIES = {
-  friendship: ["open_game"],
+  friendship: ["open_game", "tournament"],
   sport: ["open_game", "tournament"],
   academy: ["open_game", "group_training"],
   ra: ["open_game", "group_training", "tournament"],
