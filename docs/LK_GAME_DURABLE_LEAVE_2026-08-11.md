@@ -19,9 +19,9 @@ and the game document.
 2. While the LK page remains open, the same verified self actor may CAS-reclaim
    the same `STARTED` operation and perform another End User attempt. The UI
    makes five bounded attempts and displays `Покидает игру` with a spinner.
-3. A `STARTED` claim lease is 90 seconds. The existing two-minute worker may
-   then reclaim the operation with the service token and use the Admin API.
-   Recovery remains bounded by `recoveryAttempts < 20`.
+3. `STARTED` and `VIVA_CONFIRMED` claim leases are 90 seconds. The existing
+   two-minute worker may then reclaim either Viva cancellation or local/daily
+   synchronization on its next tick. Recovery remains bounded by 20 attempts.
 4. Viva success requires both exact readbacks: the target booking is absent
    from active bookings and present as cancelled in history. Only then persist
    `VIVA_CONFIRMED`.
@@ -50,7 +50,7 @@ uses the same backend state machine.
 
 The guarded candidate builder is
 `scripts/patch_live_games_durable_leave_v2.mjs`. It accepts only the exact
-verified live preimage, preserves all HTTP routes, changes seven existing
+verified live preimage, preserves all HTTP routes, changes eight existing
 nodes, and adds six nodes inside the active `LK Games` tab. Building a
 candidate does not import, restart, deploy, or mutate production data.
 

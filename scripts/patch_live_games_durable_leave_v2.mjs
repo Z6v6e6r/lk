@@ -19,6 +19,7 @@ const ids = Object.freeze({
   operationStart: "lk_split_leave_operation_start_build_20260801",
   operationClaim: "lk_split_leave_operation_claim_build_20260801",
   operationDone: "lk_split_leave_operation_done_build_20260801",
+  operationVivaBuild: "lk_split_leave_operation_viva_build_20260801",
   operationVivaAck: "lk_split_leave_operation_viva_ack_20260801",
   retryHydrate: "lk_split_leave_retry_hydrate_20260801",
   retrySelect: "lk_split_leave_retry_select_20260801",
@@ -42,6 +43,7 @@ const expectedLiveFunctionHashes = Object.freeze({
   [ids.operationStart]: "ecdf9de8fdf439bf5d6c5a0a925d51bad5975ad5e018f423a07991a402069b23",
   [ids.operationClaim]: "33473bed64b8a85da354e386adf95970e90dcd47492c17b3bbca20391924d6bb",
   [ids.operationDone]: "e790731745e62541c328b61f0739de23b3fe5a178005b7804ec73b3acde1749f",
+  [ids.operationVivaBuild]: "1d63b8e5e5b69dac805cd8c22cafeb5bcd9e25ebb85ecacc1ae27842eb9021e6",
   [ids.operationVivaAck]: "b7d649b24426f52213bb5b9a08bd633162156a379e21ea55591bec8c628ca21e",
   [ids.retryHydrate]: "a5ddd5f07bdf7773901901f532578550036cf2308e67d1b93e6f4d8f5888bc25",
   [ids.retrySelect]: "a992603bc6fa816516c208a3e5aa342507e6ceeec326d25da057dec5b435cf77",
@@ -55,7 +57,8 @@ const expectedCandidateSourceHashes = Object.freeze({
   "fn_split_leave_daily_limit_find.js": "bee0f2c1b31ac47df3e11efc48fe2445eb92f2864668211a84995c76290099a0",
   "fn_split_leave_daily_limit_route.js": "fa66bc2dab9ed9e6106129483bf44a8d61e28496b18c697b762cbaf26ded1ac6",
   "fn_split_leave_daily_limit_ack.js": "7e5abe293062a71cba10795c3579760a4976f9199d0dd617c57be7d246c20e98",
-  "fn_split_leave_retry_select.js": "b8b62a96f63cb588bf05fb3b520e10185d849748dc05d0f767f06638376a6cf3",
+  "fn_split_leave_operation_viva_confirmed.js": "e1c8af75fefa2f825d8bf859e493628b8bba21e28f6271c75acb669460960d50",
+  "fn_split_leave_retry_select.js": "29c63bf42a71651dc8255969bbf2e430623fcfee41272e629630034c9266b954",
 });
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
@@ -98,10 +101,11 @@ const operationRoute = exactNode(flow, ids.operationRoute, "function");
 const operationStart = exactNode(flow, ids.operationStart, "function");
 const operationClaim = exactNode(flow, ids.operationClaim, "function");
 const operationDone = exactNode(flow, ids.operationDone, "function");
+const operationVivaBuild = exactNode(flow, ids.operationVivaBuild, "function");
 const operationVivaAck = exactNode(flow, ids.operationVivaAck, "function");
 const retryHydrate = exactNode(flow, ids.retryHydrate, "function");
 const retrySelect = exactNode(flow, ids.retrySelect, "function");
-for (const node of [operationRoute, operationStart, operationClaim, operationDone, operationVivaAck, retryHydrate, retrySelect]) {
+for (const node of [operationRoute, operationStart, operationClaim, operationDone, operationVivaBuild, operationVivaAck, retryHydrate, retrySelect]) {
   if (sha256(String(node.func || "")) !== expectedLiveFunctionHashes[node.id]) {
     fail(`Function preimage mismatch for ${node.id}`);
   }
@@ -117,6 +121,7 @@ operationRoute.func = readFn("fn_split_leave_operation_route.js");
 operationStart.func = readFn("fn_split_leave_operation_start.js");
 operationClaim.func = readFn("fn_split_leave_operation_claim.js");
 operationDone.func = readFn("fn_split_leave_operation_done.js");
+operationVivaBuild.func = readFn("fn_split_leave_operation_viva_confirmed.js");
 retrySelect.func = readFn("fn_split_leave_retry_select.js");
 operationVivaAck.wires = [[ids.dailyFindBuild], [ids.retry], [ids.dailyFindBuild]];
 retryHydrate.wires = [[ids.dailyFindBuild], [ids.router], [ids.debug], [ids.dailyFindBuild]];
@@ -211,6 +216,7 @@ for (const source of [
   operationStart.func,
   operationClaim.func,
   operationDone.func,
+  operationVivaBuild.func,
   retrySelect.func,
   ...newNodes.filter((node) => node.type === "function").map((node) => node.func),
 ]) {
@@ -224,6 +230,7 @@ const allowedChanges = new Map([
   [ids.operationStart, ["func"]],
   [ids.operationClaim, ["func"]],
   [ids.operationDone, ["func"]],
+  [ids.operationVivaBuild, ["func"]],
   [ids.operationVivaAck, ["wires"]],
   [ids.retryHydrate, ["wires"]],
   [ids.retrySelect, ["func"]],

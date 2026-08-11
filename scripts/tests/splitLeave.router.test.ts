@@ -813,6 +813,10 @@ test("VIVA_CONFIRMED is persisted before local mutation and a foreign live lease
   assert.equal(persist.payload[1].$set.vivaConfirmedAt, "2026-08-01T09:05:00.000Z");
   assert.equal(persist.payload[1].$set.localApplyClaimToken, msg._splitLeaveCtx.claimToken);
   assert.equal(persist.payload[1].$inc.localApplyAttempts, 1);
+  assert.ok(
+    Date.parse(persist.payload[1].$set.localApplyLeaseUntil) - Date.parse(persist.payload[1].$set.lastAttemptAt) <= 90_500,
+    "Viva-confirmed local synchronization must be retryable on the next worker interval",
+  );
 
   const concurrent = authorizeSelf();
   concurrent._splitLeaveCtx.operationKey = msg._splitLeaveCtx.operationKey;
@@ -863,6 +867,9 @@ test("background retry atomically claims and increments an eligible local apply"
   assert.equal(selected.payload[0].localApplyAttempts.$lt, 20);
   assert.equal(selected.payload[1].$inc.localApplyAttempts, 1);
   assert.match(selected.payload[1].$set.localApplyClaimToken, /^retry-/);
+  assert.ok(
+    Date.parse(selected.payload[1].$set.localApplyLeaseUntil) - Date.parse(selected.payload[1].$set.lastAttemptAt) <= 90_500,
+  );
 
   const lostRace = structuredClone(selected);
   lostRace.payload = { acknowledged: true, matchedCount: 0, modifiedCount: 0 };

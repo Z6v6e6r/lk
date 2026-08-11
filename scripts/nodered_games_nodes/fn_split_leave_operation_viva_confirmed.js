@@ -5,7 +5,7 @@ if (!ctx) {
   return [null, msg];
 }
 const nowIso = new Date().toISOString();
-const leaseUntilIso = new Date(Date.now() + 3 * 60_000).toISOString();
+const leaseUntilIso = new Date(Date.now() + 90_000).toISOString();
 const update = {
   $set: {
     state: "VIVA_CONFIRMED",
