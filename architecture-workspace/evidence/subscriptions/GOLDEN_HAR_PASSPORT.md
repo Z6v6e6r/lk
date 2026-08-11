@@ -49,6 +49,67 @@ browser action
 Только `APPROVED` evidence может переводить provider field из
 `evidence-gated` в runtime contract.
 
+## Инвентаризация исторических HAR
+
+11 августа 2026 года выполнена read-only инвентаризация ранее сохранённых HAR.
+Исходные файлы не копировались в репозиторий и не изменялись. Ни один из них не
+считается Golden HAR для годовой подписки; статусы обязательной матрицы ниже
+остаются `MISSING`.
+
+| Source label | SHA-256 prefix | Наблюдение | Почему не Golden | Disposition |
+|---|---|---|---|---|
+| `subscription-booking` | `90e0f7e97c14` | `GET subscriptions/available`, затем `POST v2/bookings` `202`, `paymentType=SUBSCRIPTION` | Нет полного pre/post active/history/balance, purchase/annual contract и доказательства 90/120 минут | `HISTORICAL_ONLY` |
+| `viva-cancel-1` | `d2612489f0bf` | Cancellation options и `DELETE booking` `204` с money refund | В options нет subscription return; нет visit balance/readback | `REJECT_FOR_SERVICE_CASE` |
+| `viva-cancel-2` | `1d29bbad437d` | Повтор currency cancellation | Те же пробелы; не является независимым доказательством | `REJECT_FOR_SERVICE_CASE` |
+| `viva-cancel-3` | `79a72a4c6c3a` | Active/history и cancellation path | One-time/currency сценарий; исходник содержит PII и credential-like token; нет `SERVICE`/balance delta | `SANITIZER_TEST_ONLY` |
+| `cup-create-game` | `687e38e871c5` | Admin create exercise и booking `ON_PLACE` | Не subscription и не current end-user create/join contract | `HISTORICAL_ONLY` |
+| `cup-create-split-game` | `22be49b63718` | Create exercise, unpaid products/transactions | Нет subscription entitlement, exact balance и current LK projection | `HISTORICAL_ONLY` |
+| `cup-split-game` | `bb02fbed92d5` | Admin exercise/booking/payment chain | Не подтверждает годовой продукт или entitlement rules | `HISTORICAL_ONLY` |
+| `tournament-subscription-entry` | `0387e66ac51f` | Widget transaction для tournament product | Нет annual contract activation, benefit price snapshot и refund lifecycle | `HISTORICAL_ONLY` |
+
+Browser timestamps этих файлов относятся к апрелю–маю 2026 года. Они полезны
+как указатели на кандидатов endpoint, но не подтверждают актуальный Viva
+контракт на дату проектирования. Отдельного пригодного исторического HAR с
+`refundMethod=SERVICE` и доказанным balance delta на диске не найдено.
+
+## Безопасное обезличивание
+
+Для нового capture используется локальный санитайзер без внешних зависимостей:
+
+```bash
+npm run test:har-sanitizer
+
+npm run har:sanitize-viva -- \
+  --input /absolute/private/source.har \
+  --output /absolute/private/GHAR-BKG-JOIN-060.sanitized.har \
+  --manifest /absolute/private/GHAR-BKG-JOIN-060.manifest.json \
+  --case-id GHAR-BKG-JOIN-060 \
+  --host api.vivacrm.ru \
+  --path-prefix '/end-user/api/v1/{tenant}/subscriptions/available' \
+  --path-prefix '/end-user/api/v2/{tenant}/bookings'
+```
+
+Правила применения:
+
+1. Source, output и manifest должны быть разными файлами вне Git; существующий
+   output санитайзер не перезаписывает.
+2. Для каждого case задаются минимальные `--host` и `--path-prefix`; запросы
+   авторизации, аналитики и соседних сценариев исключаются до сериализации.
+3. Удаляются authorization/cookies, PII, credential-like values, browser
+   fingerprint headers, IP/connection, binary и non-JSON bodies. Идентификаторы
+   заменяются стабильными aliases только внутри очищенного файла.
+4. Manifest со статусом `SANITIZED` хранит SHA исходника/результата, счётчики и
+   endpoint summary, но не raw ids и не alias map.
+5. После автоматической очистки отдельный reviewer проверяет HAR поиском PII и
+   secrets, сверяет семантику request/response/readback и только затем меняет
+   статус evidence. Санитайзер сам не присваивает `REVIEWED`/`APPROVED`.
+
+Проверка инструмента на двух исторических исходниках выполнена полностью в
+памяти, без записи очищенных копий: subscription-booking `15 -> 4` entries
+(11 удалено), cancellation-with-token `35 -> 12` entries (23 удалено). В обоих
+случаях проверка source-token leakage прошла; это доказывает работу инструмента,
+но не бизнес-контракт этих HAR.
+
 ## Capture protocol
 
 Для каждого сценария:

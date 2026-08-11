@@ -86,3 +86,6 @@ After that, define the first stable `/api/v1` contract.
   CUP, the current LK and the new LK. It is not a deployed-route inventory.
 - `evidence/subscriptions/GOLDEN_HAR_PASSPORT.md` lists provider contracts and
   multi-tester E2E evidence required before runtime implementation.
+- `../scripts/sanitize_viva_har.mjs` creates a fail-closed, host/path-filtered HAR
+  copy and a manifest. Run `npm run test:har-sanitizer` before using it; a
+  `SANITIZED` manifest is still not `REVIEWED` or `APPROVED` evidence.

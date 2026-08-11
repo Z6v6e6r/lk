@@ -47,6 +47,8 @@
     "subscriptions:report": "node scripts/report_ab_leto_subscriptions.mjs",
     "subscriptions:reconcile-viva": "node scripts/reconcile_ab_leto_viva_sales.mjs",
     "subscriptions:reset-limits": "node scripts/reset_ab_leto_limits.mjs",
+    "har:sanitize-viva": "node scripts/sanitize_viva_har.mjs",
+    "test:har-sanitizer": "node --test scripts/tests/sanitizeVivaHar.test.mjs",
     "visits:sync-viva": "node scripts/sync_training_visits_from_viva.mjs",
     "nodered:modular:pull-147": "bash ./scripts/pull_nodered_source_from_147.sh",
     "nodered:modular:verify": "node scripts/verify_nodered_source_origin.mjs",
