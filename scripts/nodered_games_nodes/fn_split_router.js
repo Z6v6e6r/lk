@@ -419,6 +419,7 @@ const pickBestSubscriptionProduct = (products, preferredSubscriptionId) => {
 
   const explicitlySelected = candidates.find((item) => productMatchesSubscriptionId(item, preferredSubscriptionId));
   if (explicitlySelected) return explicitlySelected;
+  if (toStr(preferredSubscriptionId)) return null;
 
   const sorted = candidates.slice().sort((left, right) => {
     const leftPreferred = /лето|падел|дружб/i.test(left.name || "") ? 1 : 0;
@@ -431,7 +432,7 @@ const pickBestSubscriptionProduct = (products, preferredSubscriptionId) => {
 
 const buildBookingRequest = (ctx) => {
   const bookingPaymentType = resolveBookingPaymentType(ctx);
-  const clientSubscriptionId = toStr(ctx.clientSubscriptionId || ctx.subscriptionId);
+  const clientSubscriptionId = toStr(ctx.clientSubscriptionId);
   const requestedSubscriptionId = toStr(ctx.subscriptionId);
   const subscriptionVisitCount = resolveSubscriptionVisitCount(ctx);
   const payload = {
@@ -439,6 +440,11 @@ const buildBookingRequest = (ctx) => {
     paymentType: bookingPaymentType,
     familyMemberId: "",
   };
+  if (bookingPaymentType === "SUBSCRIPTION" && !clientSubscriptionId) {
+    return fail(400, "clientSubscriptionId is required for subscription payment", {
+      code: "SUBSCRIPTION_SELECTION_REQUIRED",
+    });
+  }
   if (bookingPaymentType === "SUBSCRIPTION" && clientSubscriptionId) {
     payload.clientSubscriptionId = clientSubscriptionId;
     if (requestedSubscriptionId && requestedSubscriptionId !== clientSubscriptionId) {
@@ -642,7 +648,7 @@ if (ctx.step === "create_booking") {
   }
 
   if (resolvePaymentMode(ctx.selectedPaymentMode || ctx.paymentMode) === "subscription") {
-    const requestedClientSubscriptionId = toStr(ctx.clientSubscriptionId || ctx.subscriptionId);
+    const requestedClientSubscriptionId = toStr(ctx.clientSubscriptionId);
     const actualClientSubscriptionId = toStr(
       msg.payload?.clientSubscriptionId
       || msg.payload?.subscriptionId
@@ -749,7 +755,7 @@ if (ctx.step === "available_products") {
     Math.round((toNumber(ctx.oneTimeBaseAmount) ?? DEFAULT_ONE_TIME_PRODUCT_AMOUNT) * 100),
   );
   const oneTimeProduct = pickBestOneTimeProduct(products, oneTimeBaseMinor);
-  const requestedClientSubscriptionId = toStr(ctx.clientSubscriptionId || ctx.subscriptionId);
+  const requestedClientSubscriptionId = toStr(ctx.clientSubscriptionId);
   const subscriptionProduct = pickBestSubscriptionProduct(products, requestedClientSubscriptionId);
 
   const availableModes = [];
@@ -781,16 +787,8 @@ if (ctx.step === "available_products") {
   const requestedSubscriptionMatched = requestedClientSubscriptionId
     ? productMatchesSubscriptionId(subscriptionProduct, requestedClientSubscriptionId)
     : false;
-  let selectedMode = requestedMode;
-  if (selectedMode === "subscription" && !subscriptionProduct) {
-    selectedMode = "one_time";
-  }
-  if (selectedMode === "one_time" && !oneTimeProduct && subscriptionProduct) {
-    selectedMode = "subscription";
-  }
-
   if (
-    selectedMode === "subscription"
+    requestedMode === "subscription"
     && requestedClientSubscriptionId
     && !requestedSubscriptionMatched
   ) {
@@ -800,6 +798,13 @@ if (ctx.step === "available_products") {
         .filter((item) => isSubscriptionProduct(item))
         .map((item) => ({ id: item.id, name: item.name })),
     });
+  }
+  let selectedMode = requestedMode;
+  if (selectedMode === "subscription" && !subscriptionProduct) {
+    selectedMode = "one_time";
+  }
+  if (selectedMode === "one_time" && !oneTimeProduct && subscriptionProduct) {
+    selectedMode = "subscription";
   }
 
   const selectedProduct = selectedMode === "subscription"

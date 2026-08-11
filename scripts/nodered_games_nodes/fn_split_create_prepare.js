@@ -178,11 +178,12 @@ const vivaExerciseTypeId = resolvePositiveInt(
   DEFAULT_OPEN_GAME_EXERCISE_TYPE_ID,
 );
 const paymentMode = resolvePaymentMode(body.paymentMode || body.payMode || body.preferredPaymentMode);
-const clientSubscriptionId = toStr(
-  body.clientSubscriptionId
-  || body.subscriptionId
-  || body.selectedSubscriptionId,
-);
+const clientSubscriptionId = toStr(body.clientSubscriptionId);
+if (paymentMode === "subscription" && !clientSubscriptionId) {
+  return fail(400, "clientSubscriptionId is required for subscription payment", {
+    code: "SUBSCRIPTION_SELECTION_REQUIRED",
+  });
+}
 const transactionPaymentMethod = toStr(body.transactionPaymentMethod || body.paymentMethod);
 const paymentDeadlineMinutes = Math.max(
   1,

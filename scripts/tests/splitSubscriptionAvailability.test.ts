@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildSplitComparableIdSet,
+  findExplicitSplitSubscriptionById,
   filterSplitCategoryCompatibleSubscriptions,
   filterSplitEligibleSubscriptions,
   isNoSubscriptionsAvailableError,
+  resolveSplitSubscriptionSelectionId,
   isSplitSubscriptionValidForGameDate,
   resolveSplitSubscriptionLifecycle,
   resolveSplitSubscriptionUnavailableMessage,
@@ -200,6 +202,33 @@ test("ACTIVE is preferred over NEW and unusable ACTIVE falls back to NEW", () =>
 
   assert.deepEqual(filter([newSubscription, activeSubscription]), ["sub-active", "sub-new"]);
   assert.deepEqual(filter([newSubscription, { ...activeSubscription, expirationDate: "2026-07-31" }]), ["sub-new"]);
+});
+
+test("explicit split subscription selection is independent from provider response order", () => {
+  const friendship = { subscriptionId: "friendship", name: "Дружба" };
+  const control = { subscriptionId: "control", name: "РА" };
+
+  assert.equal(
+    findExplicitSplitSubscriptionById([friendship, control], "friendship"),
+    friendship,
+  );
+  assert.equal(
+    findExplicitSplitSubscriptionById([control, friendship], "friendship"),
+    friendship,
+  );
+  assert.equal(findExplicitSplitSubscriptionById([friendship, control], null), null);
+  assert.equal(findExplicitSplitSubscriptionById([friendship, control], "missing"), null);
+});
+
+test("multiple eligible subscriptions never receive an implicit default", () => {
+  const friendship = { subscriptionId: "friendship" };
+  const control = { subscriptionId: "control" };
+
+  assert.equal(resolveSplitSubscriptionSelectionId([friendship], null), "friendship");
+  assert.equal(resolveSplitSubscriptionSelectionId([friendship, control], null), null);
+  assert.equal(resolveSplitSubscriptionSelectionId([control, friendship], null), null);
+  assert.equal(resolveSplitSubscriptionSelectionId([control, friendship], "friendship"), "friendship");
+  assert.equal(resolveSplitSubscriptionSelectionId([control], "friendship"), null);
 });
 
 test("unsupported and inconsistent lifecycle states stay fail-closed", () => {

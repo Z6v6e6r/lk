@@ -118,8 +118,10 @@ import {
 } from "./recentPaidGameStability";
 import { isSyntheticCabinetBookingGame } from "../cabinet/syntheticBookingGame";
 import {
+  findExplicitSplitSubscriptionById,
   filterSplitEligibleSubscriptions,
   isNoSubscriptionsAvailableError,
+  resolveSplitSubscriptionSelectionId,
   resolveSplitSubscriptionLifecycle,
   resolveSplitSubscriptionUnavailableMessage,
 } from "./splitSubscriptionAvailability";
@@ -4864,6 +4866,10 @@ export default function GamesPage({
   const [splitSubscriptionsError, setSplitSubscriptionsError] = useState<string | null>(null);
   const [splitSubscriptions, setSplitSubscriptions] = useState<Subscription[]>([]);
   const [splitSubscriptionNamesById, setSplitSubscriptionNamesById] = useState<Record<string, string>>({});
+  const [detailsSplitSubscriptionsLoading, setDetailsSplitSubscriptionsLoading] = useState(false);
+  const [detailsSplitSubscriptionsError, setDetailsSplitSubscriptionsError] = useState<string | null>(null);
+  const [detailsSplitSubscriptions, setDetailsSplitSubscriptions] = useState<Subscription[]>([]);
+  const [detailsSplitSubscriptionNamesById, setDetailsSplitSubscriptionNamesById] = useState<Record<string, string>>({});
   const [applyingPromo, setApplyingPromo] = useState(false);
   const [ratingGame, setRatingGame] = useState(true);
   const [minRating, setMinRating] = useState(1);
@@ -4999,6 +5005,7 @@ export default function GamesPage({
     timeoutId: null,
   });
   const splitSubscriptionRequestRef = useRef(0);
+  const detailsSplitSubscriptionRequestRef = useRef(0);
   const detailsCameraInputRef = useRef<HTMLInputElement | null>(null);
   const detailsGalleryInputRef = useRef<HTMLInputElement | null>(null);
   const publicCreateEntryHandledRef = useRef(false);
@@ -6919,7 +6926,16 @@ export default function GamesPage({
         return null;
     }
   };
-  const publicCreateFinalSubmitTitle = splitPaymentSelected
+  const publicCreateNeedsSplitSubscriptionSelection = Boolean(
+    usePublicCreateWizard
+    && splitPaymentSelected
+    && splitCheckoutMode === "subscription"
+    && splitHasSubscriptionPaymentOptions
+    && !selectedSplitSubscriptionId,
+  );
+  const publicCreateFinalSubmitTitle = publicCreateNeedsSplitSubscriptionSelection
+    ? "Выберите абонемент для списания"
+    : splitPaymentSelected
     ? (
       splitCheckoutMode === "subscription" && splitHasSubscriptionPaymentOptions
         ? "Создать игру с помощью подписки"
@@ -7055,12 +7071,10 @@ export default function GamesPage({
       setSelectedSplitSubscriptionId(null);
       return;
     }
-    setSelectedSplitSubscriptionId((current) => {
-      if (current && splitSubscriptionPaymentOptions.some((option) => option.subscriptionId === current)) {
-        return current;
-      }
-      return splitSubscriptionPaymentOptions[0]?.subscriptionId ?? null;
-    });
+    setSelectedSplitSubscriptionId((current) => resolveSplitSubscriptionSelectionId(
+      splitSubscriptionPaymentOptions,
+      current,
+    ));
   }, [splitHasSubscriptionPaymentOptions, splitSubscriptionPaymentOptions]);
   useEffect(() => {
     if (paymentMode === "split" && !splitPaymentAvailable) {
@@ -8154,9 +8168,128 @@ export default function GamesPage({
     && !hasCurrentUserActiveSplitPayment
     && detailsHasFreeSlots
   );
-  const detailsSplitJoinSubscriptionLabel = joiningSplitPayment
-    ? "Готовим оплату..."
-    : "Списать с абонемента";
+  const detailsSplitSubscriptionOptions = useMemo(() => (
+    detailsSplitSubscriptions
+      .map((subscription) => {
+        const subscriptionId = String(subscription.subscriptionId || "").trim();
+        if (!subscriptionId) return null;
+        const name = resolveSplitSubscriptionDisplayName(
+          subscription,
+          detailsSplitSubscriptionNamesById,
+        );
+        const balanceLabel = formatSplitSubscriptionValidityLabel(subscription, name) || "срок уточняется";
+        return { subscriptionId, name, balanceLabel };
+      })
+      .filter((item): item is { subscriptionId: string; name: string; balanceLabel: string } => Boolean(item))
+  ), [detailsSplitSubscriptions, detailsSplitSubscriptionNamesById]);
+  const loadDetailsSplitSubscriptions = useCallback(async () => {
+    const requestId = detailsSplitSubscriptionRequestRef.current + 1;
+    detailsSplitSubscriptionRequestRef.current = requestId;
+    setDetailsSplitSubscriptionsLoading(true);
+    setDetailsSplitSubscriptionsError(null);
+
+    try {
+      const booking = activeGameRecord?.booking;
+      const studioId = String(booking?.studioId || "").trim();
+      const bookingDate = String(booking?.date || detailsDateKey || "").trim();
+      const bookingDurationMinutes = typeof booking?.durationMinutes === "number"
+        && Number.isFinite(booking.durationMinutes)
+        ? booking.durationMinutes
+        : detailsDurationMinutes;
+      if (!activeGameRecord || !studioId || !bookingDate) {
+        setDetailsSplitSubscriptions([]);
+        setDetailsSplitSubscriptionNamesById({});
+        setDetailsSplitSubscriptionsError("В игре недостаточно данных для проверки абонементов");
+        return;
+      }
+
+      const subscriptionsResult = await apiFetchSubscriptions();
+      if (detailsSplitSubscriptionRequestRef.current !== requestId) return;
+      if (subscriptionsResult.error) {
+        setDetailsSplitSubscriptions([]);
+        setDetailsSplitSubscriptionNamesById({});
+        setDetailsSplitSubscriptionsError(
+          subscriptionsResult.error.message || "Не удалось получить абонементы",
+        );
+        return;
+      }
+
+      const subscriptions = Array.isArray(subscriptionsResult.data?.content)
+        ? subscriptionsResult.data.content
+        : [];
+      const exerciseTypeId = toFiniteNumber(
+        detailsSplitPaymentMetadata?.exerciseTypeId
+        ?? detailsSplitPaymentMetadata?.vivaExerciseTypeId,
+      );
+      const directionId = toFiniteNumber(
+        detailsSplitPaymentMetadata?.directionId
+        ?? detailsSplitPaymentMetadata?.vivaDirectionId,
+      );
+      const eligible = filterSplitEligibleSubscriptions(
+        subscriptions,
+        buildComparableIdSet([
+          exerciseTypeId != null ? Math.round(exerciseTypeId) : SPLIT_OPEN_GAME_EXERCISE_TYPE_ID,
+        ]),
+        buildComparableIdSet([
+          directionId != null ? Math.round(directionId) : SPLIT_OPEN_GAME_DIRECTION_ID,
+        ]),
+        studioId,
+        resolveSplitSubscriptionVisitCharge(bookingDurationMinutes),
+        bookingDurationMinutes,
+        bookingDate,
+      );
+      setDetailsSplitSubscriptions(eligible);
+      setDetailsSplitSubscriptionNamesById({});
+      setDetailsSplitSubscriptionsError(null);
+
+      const phone = String(profilePhone || "").trim();
+      if (!phone || eligible.length === 0) return;
+      const names = await Promise.all(eligible.map(async (subscription) => {
+        const subscriptionId = String(subscription.subscriptionId || "").trim();
+        const key = normalizeComparableId(subscriptionId);
+        if (!subscriptionId || !key) return null;
+        try {
+          const response = await apiFetchSubscriptioName(subscriptionId, phone);
+          const name = String(response.data?.sertName || "").trim();
+          return name ? { key, name } : null;
+        } catch {
+          return null;
+        }
+      }));
+      if (detailsSplitSubscriptionRequestRef.current !== requestId) return;
+      const resolvedNames: Record<string, string> = {};
+      names.forEach((entry) => {
+        if (entry) resolvedNames[entry.key] = entry.name;
+      });
+      setDetailsSplitSubscriptionNamesById(resolvedNames);
+    } catch {
+      if (detailsSplitSubscriptionRequestRef.current !== requestId) return;
+      setDetailsSplitSubscriptions([]);
+      setDetailsSplitSubscriptionNamesById({});
+      setDetailsSplitSubscriptionsError("Не удалось получить абонементы");
+    } finally {
+      if (detailsSplitSubscriptionRequestRef.current === requestId) {
+        setDetailsSplitSubscriptionsLoading(false);
+      }
+    }
+  }, [
+    activeGameRecord,
+    detailsDateKey,
+    detailsDurationMinutes,
+    detailsSplitPaymentMetadata,
+    profilePhone,
+  ]);
+  useEffect(() => {
+    if (!canCurrentUserJoinSplitGameInDetails) {
+      detailsSplitSubscriptionRequestRef.current += 1;
+      setDetailsSplitSubscriptionsLoading(false);
+      setDetailsSplitSubscriptionsError(null);
+      setDetailsSplitSubscriptions([]);
+      setDetailsSplitSubscriptionNamesById({});
+      return;
+    }
+    void loadDetailsSplitSubscriptions();
+  }, [canCurrentUserJoinSplitGameInDetails, loadDetailsSplitSubscriptions]);
   const detailsSplitJoinOneTimeLabel = joiningSplitPayment
     ? "Готовим оплату..."
     : `Оплатить стоимость${detailsSplitShareAmount != null ? ` · ${formatPrice(detailsSplitShareAmount)} ₽` : ""}`;
@@ -13355,6 +13488,7 @@ export default function GamesPage({
 
   const handleSplitJoinCurrentUserFromDetails = useCallback(async (
     preferredPaymentMode: "subscription" | "one_time",
+    preferredClientSubscriptionId?: string | null,
   ) => {
     if (!canCurrentUserJoinSplitGameInDetails || !gameRecordId || !activeGameRecord) return;
     if (joiningSplitPayment) return;
@@ -13451,6 +13585,11 @@ export default function GamesPage({
       let eligibleSubscriptionCandidates: Subscription[] = [];
       let resolvedClientSubscriptionId: string | null = null;
       if (preferredPaymentMode === "subscription") {
+        const requestedClientSubscriptionId = String(preferredClientSubscriptionId || "").trim();
+        if (!requestedClientSubscriptionId) {
+          setGameRosterError("Выберите абонемент для списания");
+          return;
+        }
         const subscriptionsResult = await apiFetchSubscriptions();
         if (subscriptionsResult.error) {
           setGameRosterError(subscriptionsResult.error.message || "Не удалось проверить абонемент");
@@ -13481,9 +13620,17 @@ export default function GamesPage({
           bookingDurationMinutes,
           bookingDate,
         );
-        resolvedClientSubscriptionId =
-          String(eligibleSubscriptionCandidates[0]?.subscriptionId || "").trim() || null;
-        const resolvedSubscriptionCandidate = eligibleSubscriptionCandidates[0] ?? null;
+        const resolvedSubscriptionCandidate = findExplicitSplitSubscriptionById(
+          eligibleSubscriptionCandidates,
+          requestedClientSubscriptionId,
+        );
+        resolvedClientSubscriptionId = resolvedSubscriptionCandidate
+          ? String(resolvedSubscriptionCandidate.subscriptionId || "").trim() || null
+          : null;
+        if (!resolvedSubscriptionCandidate || !resolvedClientSubscriptionId) {
+          setGameRosterError("Выбранный абонемент больше недоступен. Обновите список и попробуйте снова.");
+          return;
+        }
         const subscriptionDateMessage = resolveSplitSubscriptionUnavailableMessage({
           subscriptions: compatibleSubscriptionCandidates,
           gameDate: bookingDate,
@@ -16141,16 +16288,53 @@ export default function GamesPage({
                   </div>
                 ) : (
                   <div className="game-join-split-pay-actions">
-                    <button
-                      className="game-join-split-pay-option"
-                      type="button"
-                      disabled={!canCurrentUserJoinSplitGameInDetails}
-                      onClick={() => {
-                        void handleSplitJoinCurrentUserFromDetails("subscription");
-                      }}
-                    >
-                      {detailsSplitJoinSubscriptionLabel}
-                    </button>
+                    {detailsSplitSubscriptionsLoading && (
+                      <div className="game-empty">Проверяем доступные абонементы...</div>
+                    )}
+                    {!detailsSplitSubscriptionsLoading && detailsSplitSubscriptionsError && (
+                      <div className="game-empty game-pay-error">
+                        {detailsSplitSubscriptionsError}
+                        <button
+                          className="game-join-split-pay-option"
+                          type="button"
+                          disabled={joiningSplitPayment}
+                          onClick={() => {
+                            void loadDetailsSplitSubscriptions();
+                          }}
+                        >
+                          Проверить снова
+                        </button>
+                      </div>
+                    )}
+                    {!detailsSplitSubscriptionsLoading
+                      && !detailsSplitSubscriptionsError
+                      && detailsSplitSubscriptionOptions.length === 0 && (
+                      <div className="game-empty">Подходящий абонемент не найден</div>
+                    )}
+                    {!detailsSplitSubscriptionsLoading
+                      && !detailsSplitSubscriptionsError
+                      && detailsSplitSubscriptionOptions.length > 0 && (
+                      <div className="game-split-subscription-options">
+                        <div className="game-split-subscription-title">Выберите абонемент для списания</div>
+                        {detailsSplitSubscriptionOptions.map((option) => (
+                          <button
+                            key={option.subscriptionId}
+                            className="game-split-subscription-option"
+                            type="button"
+                            disabled={!canCurrentUserJoinSplitGameInDetails}
+                            onClick={() => {
+                              void handleSplitJoinCurrentUserFromDetails(
+                                "subscription",
+                                option.subscriptionId,
+                              );
+                            }}
+                          >
+                            <span>{`Списать с «${option.name}»`}</span>
+                            <strong>{option.balanceLabel}</strong>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <button
                       className="game-join-split-pay-option game-join-split-pay-option-primary"
                       type="button"
@@ -16896,16 +17080,9 @@ export default function GamesPage({
                   </div>
                 )
                 : (
-                  <button
-                    className="section-cta section-cta-secondary"
-                    onClick={() => {
-                      void handleSplitGamePay("subscription");
-                    }}
-                    type="button"
-                    disabled={!canProceedToPayment || loadingPay || splitSubscriptionsLoading}
-                  >
-                    {loadingPay ? "Списать с абонемента · подготовка..." : "Списать с абонемента"}
-                  </button>
+                  <div className="game-empty game-pay-error">
+                    Не удалось определить доступный абонемент. Обновите список и попробуйте снова.
+                  </div>
                 )
             )}
             <button
@@ -16922,7 +17099,7 @@ export default function GamesPage({
                 }
               }}
               type="button"
-              disabled={!canProceedToPayment || loadingPay}
+              disabled={!canProceedToPayment || loadingPay || publicCreateNeedsSplitSubscriptionSelection}
             >
               <span className="game-submit-main">
                 {usePublicCreateWizard ? publicCreateFinalSubmitTitle : paymentSubmitTitle}

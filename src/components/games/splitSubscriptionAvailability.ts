@@ -171,6 +171,29 @@ export function filterSplitEligibleSubscriptions<T extends SplitSubscriptionCand
     .map(({ subscription }) => subscription);
 }
 
+export function findExplicitSplitSubscriptionById<T extends Pick<Subscription, "subscriptionId">>(
+  subscriptions: T[],
+  selectedSubscriptionId: string | null | undefined,
+): T | null {
+  const selectedId = normalizeComparableId(selectedSubscriptionId);
+  if (!selectedId) return null;
+
+  return subscriptions.find((subscription) => (
+    normalizeComparableId(subscription.subscriptionId) === selectedId
+  )) ?? null;
+}
+
+export function resolveSplitSubscriptionSelectionId<T extends Pick<Subscription, "subscriptionId">>(
+  subscriptions: T[],
+  currentSelectionId: string | null | undefined,
+): string | null {
+  const current = findExplicitSplitSubscriptionById(subscriptions, currentSelectionId);
+  if (current) return String(current.subscriptionId || "").trim() || null;
+  if (normalizeComparableId(currentSelectionId)) return null;
+  if (subscriptions.length !== 1) return null;
+  return String(subscriptions[0]?.subscriptionId || "").trim() || null;
+}
+
 function formatDateLabel(value: string | null | undefined): string | null {
   const dateKey = toDateKey(value);
   if (!dateKey) return null;

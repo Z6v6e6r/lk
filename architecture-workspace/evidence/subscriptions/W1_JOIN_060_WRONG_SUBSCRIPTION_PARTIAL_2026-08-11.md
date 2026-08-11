@@ -212,6 +212,46 @@ capture a sanitized HAR covering:
 Do not infer the Viva contract from LK source code. Preserve raw HAR privately,
 sanitize it with the repository tool and commit only the manifest/status.
 
+## Local remediation checkpoint
+
+The fail-closed remediation has been implemented in the isolated task branch,
+but is not integrated, pushed or deployed:
+
+- public create no longer implicitly selects the first item when two or more
+  subscription candidates are eligible;
+- both game-details and standalone invite join surfaces load and display each
+  eligible subscription by explicit id, resolved name and balance/validity;
+- subscription join is blocked until the user chooses one of those options;
+- both frontend join handlers re-fetch eligibility and match only the chosen
+  id, independent of provider response order;
+- split create/join Node-RED prepare functions reject missing
+  `clientSubscriptionId` with `SUBSCRIPTION_SELECTION_REQUIRED`;
+- split router rejects a missing selected product and never falls back to a
+  different subscription or one-time payment;
+- a focused source-driven patcher was verified against a fresh read-only
+  live-147 snapshot and produced a private three-function candidate without
+  changing routes, wires or node count.
+
+Checkpoint checks:
+
+- split selection/router source and contract suite: `21/21`;
+- guarded patcher and live-preimage suite: `7/7`;
+- HAR sanitizer suite: `4/4`;
+- changed-file ESLint: no errors;
+- TypeScript plus all production and development bundles: pass;
+- final private patcher run: `4696 -> 4696` nodes, `207 -> 207` HTTP routes,
+  exactly three `func` fields changed, `deploymentPerformed=false`.
+
+The local widget shell was rendered successfully at the isolated Vite URL.
+The exact multi-subscription option state could not be rendered there without
+an authenticated fixture, so authenticated rendered verification remains a
+separate user-verification gate.
+
+This implementation still requires authenticated rendered UI verification,
+explicit user approval for integration, separate approval for push and
+separate approval for deploy/post-check. The failed live evidence remains
+failed; code existence does not promote it to Golden evidence.
+
 ## Regression test matrix
 
 ### Automated unit/contract tests

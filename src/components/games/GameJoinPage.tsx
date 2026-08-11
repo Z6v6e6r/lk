@@ -32,6 +32,7 @@ import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import { pushCabinetFlashNotice } from "../../utils/cabinetFlashNotice";
 import {
   buildSplitComparableIdSet,
+  findExplicitSplitSubscriptionById,
   filterSplitCategoryCompatibleSubscriptions,
   filterSplitEligibleSubscriptions,
   isNoSubscriptionsAvailableError,
@@ -65,6 +66,29 @@ const SPLIT_PAYMENT_MODE_QUERY_KEY = "splitPaymentMode";
 const SELF_REMOVE_SUCCESS_NOTICE = "Вы вышли из игры. 1 посещение вернули в абонемент.";
 const SELF_REMOVE_PENDING_NOTICE =
   "Бронирование отменено, обновляем состав игры. Это может занять несколько минут.";
+
+type SplitJoinSubscriptionOption = {
+  subscriptionId: string;
+  name: string;
+  balanceLabel: string;
+};
+
+function formatSplitJoinSubscriptionBalance(subscription: Subscription): string {
+  const parts: string[] = [];
+  if (Number.isFinite(subscription.visitsLeft)) {
+    parts.push(`Осталось ${Math.max(0, Math.floor(subscription.visitsLeft as number))} занятий`);
+  } else if (Number.isFinite(subscription.availableMinutes)) {
+    parts.push(`Осталось ${Math.max(0, Math.floor(subscription.availableMinutes as number))} минут`);
+  }
+  const expirationDate = String(subscription.expirationDate || "").trim();
+  if (expirationDate) {
+    const parsed = new Date(`${expirationDate.slice(0, 10)}T00:00:00`);
+    if (!Number.isNaN(parsed.getTime())) {
+      parts.push(`до ${parsed.toLocaleDateString("ru-RU")}`);
+    }
+  }
+  return parts.join(" · ") || "срок и остаток уточняются";
+}
 
 function parseSplitPaymentMode(
   value: string | null | undefined,
@@ -719,6 +743,9 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const [submitting, setSubmitting] = useState<"join" | "decline" | null>(null);
   const [confirmingSplitPaymentRef, setConfirmingSplitPaymentRef] = useState<string | null>(null);
   const [comment, setComment] = useState("");
+  const [splitSubscriptionsLoading, setSplitSubscriptionsLoading] = useState(false);
+  const [splitSubscriptionsError, setSplitSubscriptionsError] = useState<string | null>(null);
+  const [splitSubscriptionOptions, setSplitSubscriptionOptions] = useState<SplitJoinSubscriptionOption[]>([]);
   const preferredSplitPaymentMode = useMemo(() => {
     if (typeof window === "undefined") return null;
     try {
@@ -860,6 +887,85 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
     }
   }, [game, myDecision]);
 
+  const loadSplitSubscriptionOptions = useCallback(async () => {
+    if (!game || !profile || !isSplitPaymentGame(game) || myDecision === "JOINED") {
+      setSplitSubscriptionsLoading(false);
+      setSplitSubscriptionsError(null);
+      setSplitSubscriptionOptions([]);
+      return;
+    }
+
+    const booking = game.booking;
+    const studioId = String(booking?.studioId || "").trim();
+    const bookingDate = String(booking?.date || "").trim();
+    const durationMinutes = typeof booking?.durationMinutes === "number"
+      && Number.isFinite(booking.durationMinutes)
+      ? booking.durationMinutes
+      : null;
+    if (!studioId || !bookingDate) {
+      setSplitSubscriptionOptions([]);
+      setSplitSubscriptionsError("В игре недостаточно данных для проверки абонементов");
+      return;
+    }
+
+    setSplitSubscriptionsLoading(true);
+    setSplitSubscriptionsError(null);
+    try {
+      const subscriptionsResult = await apiFetchSubscriptions();
+      if (subscriptionsResult.error) {
+        setSplitSubscriptionOptions([]);
+        setSplitSubscriptionsError(
+          subscriptionsResult.error.message || "Не удалось получить абонементы",
+        );
+        return;
+      }
+
+      const subscriptions = Array.isArray(subscriptionsResult.data?.content)
+        ? subscriptionsResult.data.content
+        : [];
+      const requiredVisits = durationMinutes != null && durationMinutes >= 90 ? 2 : 1;
+      const eligible = filterSplitEligibleSubscriptions(
+        subscriptions,
+        buildSplitComparableIdSet([SPLIT_OPEN_GAME_EXERCISE_TYPE_ID]),
+        buildSplitComparableIdSet([SPLIT_OPEN_GAME_DIRECTION_ID]),
+        studioId,
+        requiredVisits,
+        durationMinutes,
+        bookingDate,
+      );
+      const options = await Promise.all(eligible.map(async (subscription) => {
+        const subscriptionId = String(subscription.subscriptionId || "").trim();
+        if (!subscriptionId) return null;
+        let resolvedName = String(subscription.name || "").trim();
+        if (profile.phone) {
+          try {
+            const response = await apiFetchSubscriptioName(subscriptionId, profile.phone);
+            resolvedName = String(response.data?.sertName || "").trim() || resolvedName;
+          } catch {
+            // The id and balance remain explicit even if the optional name lookup fails.
+          }
+        }
+        return {
+          subscriptionId,
+          name: resolvedName || "Абонемент",
+          balanceLabel: formatSplitJoinSubscriptionBalance(subscription),
+        };
+      }));
+      setSplitSubscriptionOptions(
+        options.filter((option): option is SplitJoinSubscriptionOption => Boolean(option)),
+      );
+    } catch {
+      setSplitSubscriptionOptions([]);
+      setSplitSubscriptionsError("Не удалось получить абонементы");
+    } finally {
+      setSplitSubscriptionsLoading(false);
+    }
+  }, [game, myDecision, profile]);
+
+  useEffect(() => {
+    void loadSplitSubscriptionOptions();
+  }, [loadSplitSubscriptionOptions]);
+
   const confirmSplitJoinPayment = useCallback(
     async (paymentRef: string) => {
       if (!game || !profile || !isSplitPaymentGame(game)) return;
@@ -994,6 +1100,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
     async (
       target: "join" | "decline",
       explicitSplitPaymentMode?: "subscription" | "one_time",
+      explicitClientSubscriptionId?: string | null,
     ) => {
       if (!game || !profile) {
         setDecisionError("Не удалось определить профиль или игру");
@@ -1151,6 +1258,12 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         let eligibleSubscriptionCandidates: Subscription[] = [];
         let resolvedClientSubscriptionId: string | null = null;
         if (resolvedPaymentMode === "subscription") {
+          const requestedClientSubscriptionId = String(explicitClientSubscriptionId || "").trim();
+          if (!requestedClientSubscriptionId) {
+            setSubmitting(null);
+            setDecisionError("Выберите абонемент для списания");
+            return;
+          }
           const subscriptionsResult = await apiFetchSubscriptions();
           if (subscriptionsResult.error) {
             setSubmitting(null);
@@ -1181,8 +1294,18 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
             bookingDurationMinutes,
             bookingDate,
           );
-          resolvedClientSubscriptionId = String(eligibleSubscriptionCandidates[0]?.subscriptionId || "").trim() || null;
-          const resolvedSubscriptionCandidate = eligibleSubscriptionCandidates[0] ?? null;
+          const resolvedSubscriptionCandidate = findExplicitSplitSubscriptionById(
+            eligibleSubscriptionCandidates,
+            requestedClientSubscriptionId,
+          );
+          resolvedClientSubscriptionId = resolvedSubscriptionCandidate
+            ? String(resolvedSubscriptionCandidate.subscriptionId || "").trim() || null
+            : null;
+          if (!resolvedSubscriptionCandidate || !resolvedClientSubscriptionId) {
+            setSubmitting(null);
+            setDecisionError("Выбранный абонемент больше недоступен. Обновите список и попробуйте снова.");
+            return;
+          }
           const subscriptionDateMessage = resolveSplitSubscriptionUnavailableMessage({
             subscriptions: compatibleSubscriptionCandidates,
             gameDate: bookingDate,
@@ -1516,10 +1639,6 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const splitShareCount = getSplitShareCount(game) ?? (resolveMaxPlayers(game) <= DEFAULT_SINGLES_MAX_PLAYERS ? 2 : 4);
   const canPrimaryAction = submitting === null && !confirmingSplitPaymentRef;
   const canDecline = submitting === null && !confirmingSplitPaymentRef;
-  const splitJoinSubscriptionLabel =
-    submitting === "join"
-      ? "Готовим оплату..."
-      : "Списать с абонемента";
   const splitJoinOneTimeLabel =
     submitting === "join"
       ? "Готовим оплату..."
@@ -1588,16 +1707,50 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       <div className="game-section game-join-actions">
         {splitPaymentGame && !alreadyJoined ? (
           <div className="game-join-split-pay-actions">
-            <button
-              className="game-join-split-pay-option"
-              type="button"
-              disabled={!canPrimaryAction}
-              onClick={() => {
-                void applyDecision("join", "subscription");
-              }}
-            >
-              {splitJoinSubscriptionLabel}
-            </button>
+            {splitSubscriptionsLoading && (
+              <div className="game-empty">Проверяем доступные абонементы...</div>
+            )}
+            {!splitSubscriptionsLoading && splitSubscriptionsError && (
+              <div className="game-empty game-pay-error">
+                {splitSubscriptionsError}
+                <button
+                  className="game-join-split-pay-option"
+                  type="button"
+                  disabled={!canPrimaryAction}
+                  onClick={() => {
+                    void loadSplitSubscriptionOptions();
+                  }}
+                >
+                  Проверить снова
+                </button>
+              </div>
+            )}
+            {!splitSubscriptionsLoading
+              && !splitSubscriptionsError
+              && splitSubscriptionOptions.length === 0 && (
+              <div className="game-empty">Подходящий абонемент не найден</div>
+            )}
+            {!splitSubscriptionsLoading
+              && !splitSubscriptionsError
+              && splitSubscriptionOptions.length > 0 && (
+              <div className="game-split-subscription-options">
+                <div className="game-split-subscription-title">Выберите абонемент для списания</div>
+                {splitSubscriptionOptions.map((option) => (
+                  <button
+                    key={option.subscriptionId}
+                    className="game-split-subscription-option"
+                    type="button"
+                    disabled={!canPrimaryAction}
+                    onClick={() => {
+                      void applyDecision("join", "subscription", option.subscriptionId);
+                    }}
+                  >
+                    <span>{`Списать с «${option.name}»`}</span>
+                    <strong>{option.balanceLabel}</strong>
+                  </button>
+                ))}
+              </div>
+            )}
             <button
               className="game-join-split-pay-option game-join-split-pay-option-primary"
               type="button"

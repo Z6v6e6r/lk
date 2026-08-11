@@ -203,11 +203,12 @@ const spotRaw = toNumber(body.spot);
 const spot = spotRaw === null ? null : Math.max(1, Math.min(maxClientsLimit, Math.floor(spotRaw)));
 const paymentRef = toStr(body.paymentRef) || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 const paymentMode = resolvePaymentMode(body.paymentMode || body.payMode || body.preferredPaymentMode);
-const clientSubscriptionId = toStr(
-  body.clientSubscriptionId
-  || body.subscriptionId
-  || body.selectedSubscriptionId,
-);
+const clientSubscriptionId = toStr(body.clientSubscriptionId);
+if (paymentMode === "subscription" && !clientSubscriptionId) {
+  return fail(400, "clientSubscriptionId is required for subscription payment", {
+    code: "SUBSCRIPTION_SELECTION_REQUIRED",
+  });
+}
 const transactionPaymentMethod = toStr(body.transactionPaymentMethod || body.paymentMethod);
 const vivaDirectionId = resolvePositiveInt(
   body.vivaDirectionId

@@ -70,6 +70,8 @@ test("split join accepts exerciseId stored in top-level metadata", () => {
       clientPhone: "79104303190",
       studioId: "studio-1",
       paymentMode: "subscription",
+      subscriptionId: "product-template-only",
+      clientSubscriptionId: "client-subscription-1",
     },
   }) as unknown[];
 
@@ -77,4 +79,52 @@ test("split join accepts exerciseId stored in top-level metadata", () => {
   assert.ok(prepared);
   assert.equal(prepared._splitCtx.exerciseId, "exercise-from-metadata");
   assert.equal(prepared._splitCtx.clientPhone, "79104303190");
+  assert.equal(prepared._splitCtx.clientSubscriptionId, "client-subscription-1");
+});
+
+test("split join rejects ambiguous subscription payment without an explicit client subscription id", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_join_prepare.js", {
+    payload: [{
+      id: "game-1",
+      settings: { payMode: "split" },
+      booking: {
+        studioId: "studio-1",
+        date: "2026-06-04",
+        timeFrom: "12:00",
+        timeTo: "13:00",
+      },
+      metadata: { vivaExerciseId: "exercise-1" },
+    }],
+    _splitJoinBody: {
+      clientPhone: "79990000002",
+      studioId: "studio-1",
+      paymentMode: "subscription",
+      subscriptionId: "product-template-only",
+    },
+  }) as unknown[];
+
+  const error = out[1] as Record<string, any>;
+  assert.equal(error.statusCode, 400);
+  assert.equal(error.payload.error, "clientSubscriptionId is required for subscription payment");
+  assert.equal(error.payload.details.code, "SUBSCRIPTION_SELECTION_REQUIRED");
+});
+
+test("split create rejects ambiguous subscription payment without an explicit client subscription id", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_create_prepare.js", {
+    payload: {
+      date: "2026-06-04",
+      fromTime: "12:00",
+      toTime: "13:00",
+      roomId: "room-1",
+      studioId: "studio-1",
+      clientPhone: "79990000002",
+      paymentMode: "subscription",
+      subscriptionId: "product-template-only",
+    },
+  }) as unknown[];
+
+  const error = out[1] as Record<string, any>;
+  assert.equal(error.statusCode, 400);
+  assert.equal(error.payload.error, "clientSubscriptionId is required for subscription payment");
+  assert.equal(error.payload.details.code, "SUBSCRIPTION_SELECTION_REQUIRED");
 });

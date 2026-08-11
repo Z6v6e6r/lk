@@ -65,6 +65,31 @@ test("subscription booking request sends the exact selected client subscription 
   assert.equal(requestMsg._subscriptionBooking?.subscriptionVisitCount, 2);
 });
 
+test("subscription booking router rejects a product id used in place of clientSubscriptionId", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: { access_token: "token" },
+    req: {
+      headers: { authorization: "Bearer user-token" },
+      query: { operationId: "split-idem-missing-selection" },
+    },
+    _splitCtx: {
+      step: "token",
+      action: "join",
+      paymentMode: "subscription",
+      subscriptionId: "product-template-only",
+      clientPhone: "79990000001",
+      exerciseId: "exercise-1",
+      durationMinutes: 60,
+      spot: 1,
+    },
+  }) as unknown[];
+
+  const errorMsg = out[1] as RouterMessage;
+  assert.equal(errorMsg.statusCode, 400);
+  assert.equal(errorMsg.payload?.error, "clientSubscriptionId is required for subscription payment");
+});
+
 test("subscription booking fails when Viva confirms a different client subscription", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
     statusCode: 200,
@@ -136,6 +161,50 @@ test("subscription booking response keeps the actual matched client subscription
   assert.equal(responseMsg.statusCode, 201);
   assert.equal(responseMsg.payload?.subscriptionProductId, "sport-subscription");
   assert.equal(responseMsg.payload?.paymentModes?.[0]?.productId, "sport-subscription");
+});
+
+test("subscription product resolution never falls back to another subscription or one-time payment", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: [
+      {
+        id: "control-subscription",
+        clientSubscriptionId: "control-subscription",
+        productType: "SUBSCRIPTION",
+        name: "РА",
+        status: "ACTIVE",
+        cost: 0,
+      },
+      {
+        id: "one-time-product",
+        productType: "BOOKING_PAYMENT",
+        name: "Разовая оплата",
+        status: "ACTIVE",
+        cost: 250000,
+      },
+    ],
+    _splitCtx: {
+      step: "available_products",
+      action: "join",
+      paymentMode: "subscription",
+      clientSubscriptionId: "friendship-subscription",
+      clientPhone: "79990000001",
+      exerciseId: "exercise-1",
+      bookingId: "booking-1",
+      studioId: "studio-1",
+      shareCount: 4,
+      shareAmount: 2500,
+      oneTimeBaseAmount: 10000,
+    },
+  }) as unknown[];
+
+  const errorMsg = out[1] as RouterMessage;
+  assert.equal(errorMsg.statusCode, 409);
+  assert.equal(errorMsg.payload?.error, "Выбранный абонемент недоступен для списания");
+  assert.equal(
+    errorMsg.payload?.details?.requestedClientSubscriptionId,
+    "friendship-subscription",
+  );
 });
 
 test("transaction step preserves transactionId when Viva returns transactionId field without id", () => {
