@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const gamesPageSource = fs.readFileSync("src/components/games/GamesPage.tsx", "utf8");
+const gamesEntrySource = fs.readFileSync("src/games.tsx", "utf8");
+const selfLeavePreviewSource = fs.readFileSync("dev/self-leave-preview.html", "utf8");
 const apiClientSource = fs.readFileSync("src/utils/apiClient.ts", "utf8");
 
 test("cabinet organizer remove still uses backend split leave helper", () => {
@@ -37,7 +39,8 @@ test("cabinet self-remove delegates the whole operation to authenticated server 
   assert.ok(leaveHandlerStart >= 0, "self leave handler should exist");
   assert.ok(leaveHandlerEnd > leaveHandlerStart, "self leave handler should have a bounded source slice");
   const leaveHandlerSource = gamesPageSource.slice(leaveHandlerStart, leaveHandlerEnd);
-  assert.match(leaveHandlerSource, /apiLeavePadelGameAsCurrentUser\(gameRecordId\)/);
+  assert.match(gamesPageSource, /selfLeavePreview\?\.request \?\? apiLeavePadelGameAsCurrentUser/);
+  assert.match(leaveHandlerSource, /leaveCurrentUserRequest\(gameRecordId\)/);
   assert.match(leaveHandlerSource, /SELF_REMOVE_RETRY_DELAYS_MS\.length/);
   assert.match(leaveHandlerSource, /await delay\(retryDelayMs\)/);
   assert.match(leaveHandlerSource, /\["VIVA_UNVERIFIED", "IN_PROGRESS", "RETRY_REQUIRED"\]\.includes\(state\)/);
@@ -57,4 +60,15 @@ test("self leave renders an in-roster pending spinner and keeps the background s
   assert.match(gamesPageSource, /details-roster-leave-spinner/);
   assert.match(gamesPageSource, /isCurrentUserLeaving \? "Покидает игру"/);
   assert.match(gamesPageSource, /если закрыть её, повтор продолжится в фоне/);
+});
+
+test("self leave browser preview is loopback-only and cannot call the real leave API", () => {
+  assert.match(gamesEntrySource, /\["127\.0\.0\.1", "localhost", "::1"\]\.includes\(window\.location\.hostname\)/);
+  assert.match(gamesEntrySource, /searchParams\.get\("leavePreview"\) === "1"/);
+  assert.match(gamesEntrySource, /state: "IN_PROGRESS"/);
+  assert.match(gamesEntrySource, /state: "DONE"/);
+  assert.match(gamesEntrySource, /selfLeavePreview=\{selfLeavePreview\}/);
+  assert.doesNotMatch(gamesEntrySource, /apiLeavePadelGameAsCurrentUser/);
+  assert.match(gamesPageSource, /typeof window !== "undefined" && !isSelfLeavePreviewMode/);
+  assert.match(selfLeavePreviewSource, /openGameId: "dev-self-leave-preview"/);
 });

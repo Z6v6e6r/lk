@@ -7090,6 +7090,22 @@ h6,
   }
 }
 
+.self-leave-preview-banner {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  width: min(100%, 448px);
+  margin: 0 auto 8px;
+  padding: 8px 12px;
+  border: 1px solid #b9a6ff;
+  border-radius: 12px;
+  background: #f1edff;
+  color: #5e3dd7;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+}
+
 .details-roster-action:disabled {
   opacity: 0.55;
   cursor: not-allowed;

@@ -149,6 +149,14 @@ interface GamesPageProps {
   publicCreateEntry?: boolean;
   presetStudioId?: string | null;
   presetStudioName?: string | null;
+  selfLeavePreview?: SelfLeavePreviewOptions | null;
+}
+
+export type SelfLeaveRequest = typeof apiLeavePadelGameAsCurrentUser;
+
+export interface SelfLeavePreviewOptions {
+  playerId: string;
+  request: SelfLeaveRequest;
 }
 
 type Step = "create" | "place" | "time" | "details" | "chat";
@@ -4814,7 +4822,14 @@ export default function GamesPage({
   publicCreateEntry = false,
   presetStudioId = null,
   presetStudioName = null,
+  selfLeavePreview = null,
 }: GamesPageProps) {
+  const isSelfLeavePreviewMode = Boolean(
+    selfLeavePreview
+    && typeof window !== "undefined"
+    && ["127.0.0.1", "localhost", "::1"].includes(window.location.hostname),
+  );
+  const leaveCurrentUserRequest = selfLeavePreview?.request ?? apiLeavePadelGameAsCurrentUser;
   const [step, setStep] = useState<Step>("create");
   const [studios, setStudios] = useState<Studio[]>([]);
   const [timeslots, setTimeslots] = useState<GameTimeSlot[]>([]);
@@ -5034,6 +5049,26 @@ export default function GamesPage({
     if (!requestedGameId || !initialGameRecord?.id) return null;
     return initialGameRecord.id === requestedGameId ? initialGameRecord : null;
   }, [initialGameRecord, openGameId]);
+  useEffect(() => {
+    if (!isSelfLeavePreviewMode || !initialOpenGameRecord) return;
+    setGameRecordId(initialOpenGameRecord.id);
+    setGameRecordStatus(initialOpenGameRecord.status ?? "PAID");
+    setGamePaid(initialOpenGameRecord.payment?.paid ?? true);
+    setSlotPrice(initialOpenGameRecord.payment?.amount ?? null);
+    setActiveGameRecordStore(initialOpenGameRecord);
+    setParticipants(initialOpenGameRecord.participants ?? []);
+    setWaitlistPlayers(initialOpenGameRecord.waitlist ?? []);
+    setWaitlistEnabled(initialOpenGameRecord.invite?.waitlistEnabled !== false);
+    setGameSnapshot(buildMatchSnapshotFromRecord(initialOpenGameRecord));
+    setStep(openChat ? "chat" : "details");
+  }, [
+    communityGames,
+    initialOpenGameRecord,
+    isSelfLeavePreviewMode,
+    openChat,
+    profileId,
+    profilePhone,
+  ]);
   useEffect(() => () => {
     selfLeaveAttemptRef.current += 1;
   }, []);
@@ -7933,6 +7968,13 @@ export default function GamesPage({
   }, [activeGameRecord, profilePhone]);
   const isCurrentUserPlayer = useCallback((player: PadelGamePlayer | null | undefined) => {
     if (!player) return false;
+    if (
+      isSelfLeavePreviewMode
+      && selfLeavePreview?.playerId
+      && player.id === selfLeavePreview.playerId
+    ) {
+      return true;
+    }
     const normalizedProfileId = normalizeComparableId(profileId);
     const playerId = normalizeComparableId(player.id);
     if (normalizedProfileId && playerId && normalizedProfileId === playerId) {
@@ -7940,7 +7982,7 @@ export default function GamesPage({
     }
     const playerPhoneNorm = normalizePhoneForGame(player.phone);
     return Boolean(profilePhoneNorm && playerPhoneNorm && profilePhoneNorm === playerPhoneNorm);
-  }, [profileId, profilePhoneNorm]);
+  }, [isSelfLeavePreviewMode, profileId, profilePhoneNorm, selfLeavePreview?.playerId]);
   const detailsLeaveEvents = useMemo(
     () => normalizeGameLeaveEvents(
       detailsMetadata.leaveEvents
@@ -8289,7 +8331,7 @@ export default function GamesPage({
     && !isCurrentUserOrganizerByDetails;
   const canCurrentUserLeaveGameInDetails = Boolean(
     gameRecordId
-    && !isReadOnlySyntheticGame
+    && (!isReadOnlySyntheticGame || isSelfLeavePreviewMode)
     && shouldShowCurrentUserLeaveActionInDetails
     && !updatingGameRoster
     && !updatingGameMeta
@@ -13435,7 +13477,7 @@ export default function GamesPage({
       return;
     }
 
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && !isSelfLeavePreviewMode) {
       const accepted = window.confirm("Покинуть игру? Вы потеряете место в составе.");
       if (!accepted) return;
     }
@@ -13453,7 +13495,7 @@ export default function GamesPage({
       if (retryDelayMs > 0) await delay(retryDelayMs);
       if (selfLeaveAttemptRef.current !== leaveAttemptId) return;
 
-      const leaveResult = await apiLeavePadelGameAsCurrentUser(gameRecordId);
+      const leaveResult = await leaveCurrentUserRequest(gameRecordId);
       if (selfLeaveAttemptRef.current !== leaveAttemptId) return;
       if (leaveResult.error || !leaveResult.data) {
         const state = isRecordObject(leaveResult.error?.raw)
@@ -13517,6 +13559,8 @@ export default function GamesPage({
     profilePhoto,
     profileGrade,
     profileRatingNumeric,
+    leaveCurrentUserRequest,
+    isSelfLeavePreviewMode,
     onBack,
   ]);
 
