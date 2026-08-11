@@ -2,10 +2,13 @@
 
 Date: 2026-08-11
 
-Status: `READY_FOR_TEST_DATA_ASSIGNMENT`. Runtime mutations have not started.
+Status: `LIVE_PARTIAL_CREATE_060`. One explicitly approved synthetic create was
+performed; cancellation is paused pending provider balance readback.
 
-First live read-only result: `W0_PREFLIGHT_2026-08-11.md`. W1 remains `NO_GO`
-until a synthetic tester, exact provider ids, balance and safe target are assigned.
+First live read-only result: `W0_PREFLIGHT_2026-08-11.md`. The assigned tester,
+exact private ids and safe 60-minute target are now recorded. Partial create
+evidence is in `W1_CREATE_060_PARTIAL_2026-08-11.md`; cancellation remains
+`NO_GO` until the post-create Viva balance is captured.
 
 This document turns the Golden HAR passport into an executable QA and evidence
 plan. It does not approve production testing by itself. Every write requires an

@@ -200,13 +200,18 @@ Open provider decisions:
 
 | Case ID | Duration | Обязательные before/after | Status |
 |---|---:|---|---|
-| `GHAR-BKG-CREATE-060` | 60 | Contract, visits, active/history, exercise, exact booking, LK game | `MISSING` |
+| `GHAR-BKG-CREATE-060` | 60 | Contract, visits, active/history, exercise, exact booking, LK game | `PARTIAL_NO_HAR_BALANCE_READBACK_PENDING` |
 | `GHAR-BKG-CREATE-090` | 90 | То же плюс фактический provider visit delta | `MISSING` |
 | `GHAR-BKG-CREATE-120` | 120 | То же плюс фактический provider visit delta | `MISSING` |
 
 Для каждого case фиксируются create exercise и create booking отдельно. Должно
 быть доказано, может ли exercise существовать после неуспешного booking и какой
 cleanup безопасен.
+
+Live partial evidence is recorded in `W1_CREATE_060_PARTIAL_2026-08-11.md`.
+Create/exercise/booking/LK exact-id correlation is available in the private run
+registry, but the case is not Golden evidence until raw HAR and the exact
+`B0 -> B1` Viva balance transition are preserved.
 
 ### C. Присоединение к игре
 

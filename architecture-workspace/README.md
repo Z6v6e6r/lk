@@ -60,6 +60,7 @@ architecture-workspace/
     subscriptions/GOLDEN_HAR_EXECUTION_PLAN.md
     subscriptions/GOLDEN_HAR_RUN.example.json
     subscriptions/W0_PREFLIGHT_2026-08-11.md
+    subscriptions/W1_CREATE_060_PARTIAL_2026-08-11.md
   structurizr/
     workspace.dsl
   adr/
@@ -95,6 +96,10 @@ After that, define the first stable `/api/v1` contract.
   Git before raw ids, operators or private paths are filled in.
 - `evidence/subscriptions/W0_PREFLIGHT_2026-08-11.md` records the first live
   read-only candidate audit and its explicit W1 `NO_GO` decision.
+- `evidence/subscriptions/W1_CREATE_060_PARTIAL_2026-08-11.md` records the
+  explicitly approved synthetic `CREATE 60` result, exact-id readback boundary,
+  publication-removal observation and the balance/HAR gates still blocking
+  cancellation certification.
 - `../scripts/sanitize_viva_har.mjs` creates a fail-closed, host/path-filtered HAR
   copy and a manifest. Run `npm run test:har-sanitizer` before using it; a
   `SANITIZED` manifest is still not `REVIEWED` or `APPROVED` evidence.

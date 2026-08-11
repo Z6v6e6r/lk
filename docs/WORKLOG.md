@@ -1114,3 +1114,10 @@
 - Recalculation теперь предварительно создаёт base rows из текущих `lk_communities.members`, гидратирует уровень из `player_rating_state` и сохраняет нулевые строки с `no_activity`, не создавая синтетические facts.
 - Добавлен focused Node-RED API `GET /lk/communities/:communityId/players/:playerId/rating` с public alias, exact-ID membership guard, минимальным PII-free ответом и fail-closed `404/503`; guarded patcher требует свежий verified live-147 source и сам не выполняет deploy.
 - Isolation-проверки: community rating `78/78`, focused API `4/4`, TFF backfill `25/25`, tournament category `7/7`, TypeScript, targeted ESLint и diff check — PASS. Live flow, production data, `main`, push и deploy в рамках этой реализации не изменялись.
+# 2026-08-11 — Managed annual subscriptions: synthetic CREATE 60 evidence
+
+- Пользователь назначил отдельного synthetic tester и передал Viva action-history screenshot с исходным остатком `B0=15`; exact PII и provider ids записаны только в приватный registry вне Git.
+- В production LK одним кликом создана тестовая 60-минутная игра на 22 августа в Ясенево по активной подписке: один synthetic organizer, три свободных места, нулевая реальная сумма, exact game/exercise/booking/subscription correlation подтверждена read-only API readback.
+- Игра настроена private. В detail view всё равно появилась station-community publication row; публикация снята и исчезла после readback. Это зафиксировано как contract gap до raw HAR.
+- Повтор create не выполнялся во время задержанного submit. Игра видна в кабинете и оставлена активной до снимка Viva `15 -> 14`; cancellation и `14 -> 15` намеренно не запускались без промежуточного balance evidence.
+- `GHAR-BKG-CREATE-060` переведён из `MISSING` в `PARTIAL_NO_HAR_BALANCE_READBACK_PENDING`; raw HAR, post-create balance и cancellation option остаются обязательными gates.
