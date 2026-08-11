@@ -217,7 +217,7 @@ registry, but the case is not Golden evidence until raw HAR and the exact
 
 | Case ID | Duration | Обязательные before/after | Status |
 |---|---:|---|---|
-| `GHAR-BKG-JOIN-060` | 60 | Active/history, visits, roster, exact booking, LK participant | `MISSING` |
+| `GHAR-BKG-JOIN-060` | 60 | Active/history, visits, roster, exact booking, LK participant | `FAIL_WRONG_SUBSCRIPTION_PARTIAL_NO_HAR` |
 | `GHAR-BKG-JOIN-090` | 90 | То же плюс provider visit delta | `MISSING` |
 | `GHAR-BKG-JOIN-120` | 120 | То же плюс provider visit delta | `MISSING` |
 
@@ -229,7 +229,7 @@ registry, but the case is not Golden evidence until raw HAR and the exact
 
 | Case ID | Сценарий | Обязательное доказательство | Status |
 |---|---|---|---|
-| `GHAR-CAN-SELF-SERVICE` | Игрок выходит сам, возвращается посещение | cancellation options, exact cancel request, active/history, visit balance, LK/public reload | `PARTIAL_EXTERNAL_ACTION_NO_HAR_AMBIGUOUS_BALANCE` |
+| `GHAR-CAN-SELF-SERVICE` | Игрок выходит сам, возвращается посещение | cancellation options, exact cancel request, active/history, visit balance, LK/public reload | `PARTIAL_REFUND_HISTORY_PROVIDER_VIEW_STALE_NO_HAR` |
 | `GHAR-CAN-ORG-SERVICE` | Организатор удаляет игрока | Actor authorization, same exact booking proof, roster event, return | `MISSING` |
 | `GHAR-CAN-NO-REFUND` | Отмена без возврата | Provider предлагает именно этот вариант, balance не увеличен | `MISSING` |
 | `GHAR-CAN-CURRENCY` | Возврат денег | Transaction/refund/receipt readback, booking cancelled | `MISSING` |

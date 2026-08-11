@@ -308,6 +308,16 @@ PASS: provider readback до/после идентичен; существующ
 
 ## 8. W1-B — `GHAR-CAN-SELF-SERVICE`
 
+Live finding from 2026-08-11: a multi-subscription tester exposed only a
+generic subscription CTA. The join path selected the first eligible provider
+item and debited the control subscription instead of the intended
+subscription. Roster became `CONFIRMED` while split-payment metadata remained
+`WAITLIST`. One compensating leave removed the participant authoritatively,
+but the cabinet retained a stale waitlist card until reload; Viva history
+showed a refund while the same unrefreshed detail still rendered the old
+balance and usage. Treat this as `NO_GO`; see
+`W1_JOIN_060_WRONG_SUBSCRIPTION_PARTIAL_2026-08-11.md`.
+
 Этот capture начинается только после PASS или однозначного provider-confirmed
 join из W1-A.
 
