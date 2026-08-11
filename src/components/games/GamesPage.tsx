@@ -1480,6 +1480,7 @@ function isInactiveSplitPaymentStatus(statusRaw: unknown): boolean {
     "VOID",
     "CLOSE",
     "ARCHIVE",
+    "LEFT",
   ];
   return inactiveMarkers.some((marker) => status.includes(marker));
 }

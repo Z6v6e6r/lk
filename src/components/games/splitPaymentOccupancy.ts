@@ -50,6 +50,7 @@ function isInactiveStatus(status: string): boolean {
     "VOID",
     "CLOSE",
     "ARCHIVE",
+    "LEFT",
   ].some((marker) => status.includes(marker));
 }
 

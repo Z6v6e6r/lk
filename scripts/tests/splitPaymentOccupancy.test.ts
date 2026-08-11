@@ -28,6 +28,21 @@ test("stale WAITLIST payment rows do not fill free split-game spots", () => {
   assert.equal(result.reservedPaymentsBySpot.size, 0);
 });
 
+test("LEFT payment rows do not fill free split-game spots", () => {
+  const result = resolveSplitPaymentOccupancy({
+    participants,
+    maxPlayers: 4,
+    nowTs: NOW_TS,
+    payments: [
+      { clientId: "organizer", phoneNorm: "79850000001", status: "PAID", spot: 1 },
+      { clientId: "former-player", status: "LEFT", spot: 4 },
+    ],
+  });
+
+  assert.equal(result.occupiedSlotsCount, 3);
+  assert.equal(result.reservedPaymentsBySpot.size, 0);
+});
+
 test("unexpired PAYMENT_PENDING holds one spot until its deadline", () => {
   const result = resolveSplitPaymentOccupancy({
     participants,
@@ -271,6 +286,11 @@ test("Games details use shared occupancy for the counter and both join CTAs", ()
   );
   assert.ok(firstCtaIndex > joinGuardIndex, "subscription CTA must use corrected join guard");
   assert.ok(secondCtaIndex > firstCtaIndex, "one-time CTA must use corrected join guard");
+  assert.match(
+    source,
+    /const inactiveMarkers = \[[\s\S]*?"LEFT",[\s\S]*?\];/,
+    "LEFT payments must be inactive for details payment checks too",
+  );
   assert.match(source, /const nextWaitlist = excludePlayersAlreadyInRoster\(detailsWaitlist, mergedParticipants\)/);
   assert.match(source, /waitlistChanged = !arePlayersEqualByIdentity\(nextWaitlist, detailsWaitlist\)/);
   assert.match(source, /waitlistChanged \? \{ waitlist: nextWaitlist \} : \{\}/);
