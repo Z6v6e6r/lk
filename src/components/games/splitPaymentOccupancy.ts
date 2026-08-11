@@ -38,7 +38,9 @@ function normalizeStatus(value: unknown): string {
   return String(value || "").trim().toUpperCase();
 }
 
-function isInactiveStatus(status: string): boolean {
+export function isInactiveSplitPaymentReservationStatus(statusRaw: unknown): boolean {
+  const status = normalizeStatus(statusRaw);
+  if (!status) return false;
   return [
     "CANCEL",
     "DECLIN",
@@ -51,6 +53,8 @@ function isInactiveStatus(status: string): boolean {
     "CLOSE",
     "ARCHIVE",
     "LEFT",
+    "REMOV",
+    "RELEASE",
   ].some((marker) => status.includes(marker));
 }
 
@@ -92,7 +96,7 @@ function isPaymentHoldingSpot(
   paymentDeadlineMinutes: number,
 ): boolean {
   const status = normalizeStatus(payment.status);
-  if (isInactiveStatus(status) || isWaitlistStatus(status)) return false;
+  if (isInactiveSplitPaymentReservationStatus(status) || isWaitlistStatus(status)) return false;
   if (status === "PAYMENT_PENDING") {
     const deadlineTs = resolvePaymentDeadline(payment, splitPayment, paymentDeadlineMinutes);
     return deadlineTs == null || deadlineTs > nowTs;

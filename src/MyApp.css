@@ -7662,6 +7662,22 @@ h6,
   width: 100%;
 }
 
+.details-join-action-row {
+  flex-direction: column;
+}
+
+.details-join-action-row .game-join-split-pay-actions,
+.details-join-action-row .game-split-subscription-options,
+.details-join-action-row .game-empty {
+  width: 100%;
+}
+
+.details-join-action-row .game-join-split-pay-option {
+  flex: 1 1 100%;
+  white-space: normal;
+  text-align: center;
+}
+
 .details-action-invite {
   flex: 1 1 auto;
   min-width: 0;

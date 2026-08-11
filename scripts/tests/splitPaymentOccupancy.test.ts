@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-import { resolveSplitPaymentOccupancy } from "../../src/components/games/splitPaymentOccupancy.ts";
+import {
+  isInactiveSplitPaymentReservationStatus,
+  resolveSplitPaymentOccupancy,
+} from "../../src/components/games/splitPaymentOccupancy.ts";
 
 const NOW_TS = Date.parse("2026-07-31T19:00:00.000Z");
 const participants = [
@@ -155,6 +158,9 @@ test("inactive payment statuses never occupy a spot", () => {
     "VOID",
     "CLOSED",
     "ARCHIVED",
+    "LEFT",
+    "REMOVED_BY_ORGANIZER",
+    "RELEASED",
   ];
   const result = resolveSplitPaymentOccupancy({
     participants,
@@ -169,6 +175,9 @@ test("inactive payment statuses never occupy a spot", () => {
 
   assert.equal(result.occupiedSlotsCount, 3);
   assert.equal(result.reservedPaymentsBySpot.size, 0);
+  statuses.forEach((status) => {
+    assert.equal(isInactiveSplitPaymentReservationStatus(status), true, status);
+  });
 });
 
 test("paid payment already represented by participant is not counted twice", () => {
@@ -286,14 +295,13 @@ test("Games details use shared occupancy for the counter and both join CTAs", ()
   );
   assert.ok(firstCtaIndex > joinGuardIndex, "subscription CTA must use corrected join guard");
   assert.ok(secondCtaIndex > firstCtaIndex, "one-time CTA must use corrected join guard");
-  assert.match(
-    source,
-    /const inactiveMarkers = \[[\s\S]*?"LEFT",[\s\S]*?\];/,
-    "LEFT payments must be inactive for details payment checks too",
-  );
   assert.match(source, /const nextWaitlist = excludePlayersAlreadyInRoster\(detailsWaitlist, mergedParticipants\)/);
   assert.match(source, /waitlistChanged = !arePlayersEqualByIdentity\(nextWaitlist, detailsWaitlist\)/);
   assert.match(source, /waitlistChanged \? \{ waitlist: nextWaitlist \} : \{\}/);
+  assert.match(source, /details-action-row details-join-action-row/);
+  const css = fs.readFileSync("src/MyApp.css", "utf8");
+  assert.match(css, /\.details-join-action-row\s*\{[\s\S]*?flex-direction:\s*column/);
+  assert.match(css, /\.details-join-action-row \.game-join-split-pay-actions,[\s\S]*?width:\s*100%/);
   assert.equal(
     source.includes("Math.max(detailsParticipants.length, detailsSplitReservedPlayersBySpot.size)"),
     false,

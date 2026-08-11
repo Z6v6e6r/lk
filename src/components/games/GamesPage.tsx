@@ -89,7 +89,10 @@ import {
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import { pushCabinetFlashNotice } from "../../utils/cabinetFlashNotice";
 import type { GamesCreateFromBookingData } from "../../types/gamesOverlay";
-import { resolveSplitPaymentOccupancy } from "./splitPaymentOccupancy";
+import {
+  isInactiveSplitPaymentReservationStatus,
+  resolveSplitPaymentOccupancy,
+} from "./splitPaymentOccupancy";
 import {
   CABINET_URL,
   GAMES_BUNDLE_URL,
@@ -1468,25 +1471,6 @@ function hasSplitPaymentSignal(splitPayment: Record<string, unknown> | null): bo
   return false;
 }
 
-function isInactiveSplitPaymentStatus(statusRaw: unknown): boolean {
-  const status = String(statusRaw || "").trim().toUpperCase();
-  if (!status) return false;
-  const inactiveMarkers = [
-    "CANCEL",
-    "DECLIN",
-    "FAIL",
-    "ERROR",
-    "EXPIRE",
-    "REFUND",
-    "REJECT",
-    "VOID",
-    "CLOSE",
-    "ARCHIVE",
-    "LEFT",
-  ];
-  return inactiveMarkers.some((marker) => status.includes(marker));
-}
-
 function extractSplitPaymentPhones(splitPayment: Record<string, unknown> | null): string[] {
   if (!splitPayment) return [];
   const payments = Array.isArray(splitPayment.payments)
@@ -1495,7 +1479,7 @@ function extractSplitPaymentPhones(splitPayment: Record<string, unknown> | null)
   const bucket = new Set<string>();
 
   payments.forEach((item) => {
-    if (isInactiveSplitPaymentStatus(item.status)) return;
+    if (isInactiveSplitPaymentReservationStatus(item.status)) return;
     const directPhone = normalizePhoneForGame(
       typeof item.phoneNorm === "string"
         ? item.phoneNorm
@@ -1518,7 +1502,7 @@ function extractSplitPaymentPhones(splitPayment: Record<string, unknown> | null)
 function isSplitPaymentReservationActive(statusRaw: unknown): boolean {
   const status = String(statusRaw || "").trim().toUpperCase();
   if (!status) return true;
-  return !isInactiveSplitPaymentStatus(status);
+  return !isInactiveSplitPaymentReservationStatus(status);
 }
 
 function normalizeMatchResultStatus(value: unknown): MatchResultLifecycleStatus | null {
@@ -16255,7 +16239,7 @@ export default function GamesPage({
           )}
 
           {!isCurrentUserConfirmedParticipant && !isCurrentUserOrganizerByDetails && (
-            <div className="details-action-row">
+            <div className="details-action-row details-join-action-row">
               {isDetailsSplitPaymentGame ? (
                 detailsCurrentUserPendingSplitPayment && !detailsCurrentUserPendingSplitPaymentIsExpired ? (
                   <div className="game-join-split-pay-actions">

@@ -516,6 +516,7 @@ test("local apply removes active roster while historical chat projection remains
   assert.equal(gameSet.metadata.leaveOperations[0].operationId, authorized._splitLeaveCtx.operationId);
   assert.equal(gameSet.metadata.selfRemovalAuditLog[0].status, "cancelled_in_viva");
   assert.equal(gameSet.metadata.selfRemovalAuditLog[0].verification, "active_absent_history_cancelled");
+  assert.equal(gameUpdate.payload[1].$unset.resultRosterSnapshot, "");
 
   gameUpdate.payload = { acknowledged: true, matchedCount: 1, modifiedCount: 1 };
   const gameAck = run("fn_split_leave_game_ack.js", gameUpdate).result[0];

@@ -160,6 +160,9 @@ const update = {
     metadata,
     updatedAt: nowIso,
   },
+  $unset: {
+    resultRosterSnapshot: "",
+  },
 };
 msg.payload = [query, update, {}];
 return [msg, null, null];

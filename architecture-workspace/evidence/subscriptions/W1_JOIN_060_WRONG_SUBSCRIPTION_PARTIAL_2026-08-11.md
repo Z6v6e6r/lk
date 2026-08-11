@@ -239,7 +239,7 @@ Checkpoint checks:
 - HAR sanitizer suite: `4/4`;
 - changed-file ESLint: no errors;
 - TypeScript plus all production and development bundles: pass;
-- final private patcher run: `4696 -> 4696` nodes, `207 -> 207` HTTP routes,
+- final private patcher run: `4707 -> 4707` nodes, `209 -> 209` HTTP routes,
   exactly three `func` fields changed, `deploymentPerformed=false`.
 
 The local widget shell was rendered successfully at the isolated Vite URL.
@@ -251,6 +251,60 @@ This implementation still requires authenticated rendered UI verification,
 explicit user approval for integration, separate approval for push and
 separate approval for deploy/post-check. The failed live evidence remains
 failed; code existence does not promote it to Golden evidence.
+
+## Stage 2 authenticated checkpoint verification
+
+The isolated checkpoint was authenticated as `tester-entitlement-b` through
+the standard SMS flow. No create, join, leave, payment or subscription button
+was clicked during this verification.
+
+The first rendered readback exposed another projection defect:
+
+- authoritative game fields contained one participant and an empty waitlist;
+- the tester's exact split payment row was terminal `LEFT`;
+- a stale root `resultRosterSnapshot` still contained the tester as
+  `CONFIRMED`;
+- frontend occupancy treated `LEFT` as an active reservation, rendered `2/4`
+  and blocked subscription selection.
+
+The correction now uses one shared inactive-reservation predicate for
+`LEFT`, `REMOVED_*` and `RELEASED`, and future split-leave CAS updates unset
+the stale `resultRosterSnapshot` atomically with the active-membership removal.
+
+Authenticated read-only postcheck after hot reload:
+
+- occupancy rendered `1/4`;
+- only the organizer was present in the active roster;
+- the UI rendered two separate subscription actions, one for
+  `subscription-ra-b` and one for `subscription-friendship-b`;
+- each action displayed its own name and expiry;
+- the one-time payment action remained a separate choice;
+- no payment/subscription action was clicked.
+
+The private screenshot SHA-256 is
+`893ec945e39aca3a7a31b21c04a4a015091d7491c41e4c818594245682582a9f`.
+No screenshot or direct payload containing personal data is committed.
+
+The fresh read-only live-147 source had `4707` nodes and `209` HTTP routes.
+Two disjoint guarded candidates were produced from the same source:
+
+- explicit selection: exactly three function bodies changed;
+- leave projection invalidation: exactly one function body changed;
+- both candidates preserve node count, routes and wires;
+- both reports record `deploymentPerformed=false`.
+
+Stage 2 checks:
+
+- combined split selection, occupancy and leave contracts: `74/74`;
+- guarded source/preimage suites: `9/9`;
+- HAR sanitizer: `4/4`;
+- changed-file ESLint: no errors;
+- TypeScript plus all production and development bundles: pass;
+- `git diff --check`: pass.
+
+This is an authenticated local UI pass, not a live booking pass. The original
+Golden case remains `FAIL_WRONG_SUBSCRIPTION_PARTIAL_NO_HAR` until integration,
+deploy and a controlled debit/refund rerun succeed.
 
 ## Regression test matrix
 

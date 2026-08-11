@@ -14,32 +14,14 @@ const EXPECTED_NODE_COUNT = 4707;
 const EXPECTED_HTTP_ROUTE_COUNT = 209;
 const TAB_ID = "4b91e2a2413688db";
 
-export const SPLIT_SUBSCRIPTION_SELECTION_TARGETS = Object.freeze([
-  {
-    id: "f3f9a60354d394da",
-    name: "Prepare split game payment",
-    fileName: "fn_split_create_prepare.js",
-    outputs: 3,
-    liveSha256: "d76e532d8f9d3cba655a4fabadf21635c85ed360a4bfac18534e10fef5661bfa",
-    candidateSha256: "a62d72cdaec7bf50f023bf1fcebfb71453df5b02d638cf9793c63a98b112ea8e",
-  },
-  {
-    id: "e92e68bf3f08a70c",
-    name: "Prepare split join payment",
-    fileName: "fn_split_join_prepare.js",
-    outputs: 3,
-    liveSha256: "707fdde66c340769a0c68e6e693bda22eb040b715ef33ad109e39c4709cea950",
-    candidateSha256: "bf241c1197090e52a01e5414a81675cc19279fcb26f9231bb15914561401cc17",
-  },
-  {
-    id: "8f7bd5b482fe9763",
-    name: "Route Viva split payment",
-    fileName: "fn_split_router.js",
-    outputs: 4,
-    liveSha256: "aba5f45ce45208997b188d5292194c49d357452673eee7b937650ec998348a04",
-    candidateSha256: "a311b8ddc6e7752ee87deb278b25ac2ddc8fb9af8b273deea66b07702ac571c8",
-  },
-]);
+export const SPLIT_LEAVE_PROJECTION_TARGET = Object.freeze({
+  id: "lk_split_leave_game_update_build_20260801",
+  name: "Build split leave game CAS",
+  fileName: "fn_split_leave_game_update.js",
+  outputs: 3,
+  liveSha256: "a2ad7eee05e157a2672bd73a54a315205c5a3e14ba8ee4e00c32db0866d8c82d",
+  candidateSha256: "8111395a5e34319e122158ef347fa37a994346c19f7c00424817e2cb11366354",
+});
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const fail = (message) => { throw new Error(message); };
@@ -65,7 +47,7 @@ function writePrivateJson(filePath, value) {
   });
 }
 
-export function buildSplitSubscriptionSelectionCandidate(source) {
+export function buildSplitLeaveProjectionCandidate(source) {
   if (!Array.isArray(source)) fail("Node-RED source must be an array");
   if (source.length !== EXPECTED_NODE_COUNT) fail("Live Node-RED node count mismatch");
   if (source.filter((node) => node.type === "http in").length !== EXPECTED_HTTP_ROUTE_COUNT) {
@@ -78,62 +60,56 @@ export function buildSplitSubscriptionSelectionCandidate(source) {
     fail("LK Games tab contract mismatch");
   }
 
-  const importNodes = [];
-  const changes = [];
-  for (const target of SPLIT_SUBSCRIPTION_SELECTION_TARGETS) {
-    const node = exactNode(flow, target.id);
-    if (
-      node.type !== "function"
-      || node.z !== TAB_ID
-      || node.name !== target.name
-      || node.outputs !== target.outputs
-      || !Array.isArray(node.wires)
-      || node.wires.length !== target.outputs
-    ) {
-      fail(`Split subscription node contract mismatch: ${target.id}`);
-    }
-    if (sha256(String(node.func || "")) !== target.liveSha256) {
-      fail(`Split subscription live preimage changed: ${target.id}`);
-    }
-
-    const candidateSource = fs.readFileSync(path.join(SOURCE_DIR, target.fileName), "utf8");
-    if (sha256(candidateSource) !== target.candidateSha256) {
-      fail(`Tracked split subscription source changed: ${target.fileName}`);
-    }
-    node.func = candidateSource;
-    importNodes.push(structuredClone(node));
-    changes.push({ id: target.id, name: target.name, changedFields: ["func"] });
+  const target = SPLIT_LEAVE_PROJECTION_TARGET;
+  const node = exactNode(flow, target.id);
+  if (
+    node.type !== "function"
+    || node.z !== TAB_ID
+    || node.name !== target.name
+    || node.outputs !== target.outputs
+    || !Array.isArray(node.wires)
+    || node.wires.length !== target.outputs
+  ) {
+    fail("Split leave projection node contract mismatch");
+  }
+  if (sha256(String(node.func || "")) !== target.liveSha256) {
+    fail("Split leave projection live preimage changed");
   }
 
-  const beforeById = new Map(source.map((node) => [node.id, node]));
-  const changedNodes = flow.filter((node) => !isDeepStrictEqual(beforeById.get(node.id), node));
-  if (changedNodes.length !== SPLIT_SUBSCRIPTION_SELECTION_TARGETS.length) {
-    fail("Focused Node-RED change budget mismatch");
+  const candidateSource = fs.readFileSync(path.join(SOURCE_DIR, target.fileName), "utf8");
+  if (sha256(candidateSource) !== target.candidateSha256) {
+    fail("Tracked split leave projection source changed");
   }
-  for (const node of changedNodes) {
-    if (!SPLIT_SUBSCRIPTION_SELECTION_TARGETS.some((target) => target.id === node.id)) {
-      fail(`Unexpected Node-RED node changed: ${node.id}`);
-    }
-    const before = beforeById.get(node.id);
-    const changedFields = [...new Set([...Object.keys(before), ...Object.keys(node)])]
-      .filter((key) => !isDeepStrictEqual(before[key], node[key]));
-    if (!isDeepStrictEqual(changedFields, ["func"])) {
-      fail(`Unexpected fields changed for ${node.id}: ${changedFields.join(",")}`);
-    }
+  node.func = candidateSource;
+
+  const beforeById = new Map(source.map((item) => [item.id, item]));
+  const changedNodes = flow.filter((item) => !isDeepStrictEqual(beforeById.get(item.id), item));
+  if (changedNodes.length !== 1 || changedNodes[0].id !== target.id) {
+    fail("Focused split leave projection change budget mismatch");
+  }
+  const before = beforeById.get(target.id);
+  const changedFields = [...new Set([...Object.keys(before), ...Object.keys(node)])]
+    .filter((key) => !isDeepStrictEqual(before[key], node[key]));
+  if (!isDeepStrictEqual(changedFields, ["func"])) {
+    fail(`Unexpected fields changed for ${target.id}: ${changedFields.join(",")}`);
   }
 
-  const byId = new Map(flow.map((node) => [node.id, node]));
+  const byId = new Map(flow.map((item) => [item.id, item]));
   if (byId.size !== flow.length) fail("Candidate contains duplicate node ids");
-  for (const node of flow) {
-    for (const targetId of (Array.isArray(node.wires) ? node.wires : []).flat()) {
-      if (!byId.has(targetId)) fail(`Broken wire ${node.id} -> ${targetId}`);
+  for (const item of flow) {
+    for (const targetId of (Array.isArray(item.wires) ? item.wires : []).flat()) {
+      if (!byId.has(targetId)) fail(`Broken wire ${item.id} -> ${targetId}`);
     }
   }
-  if (flow.filter((node) => node.type === "http in").length !== EXPECTED_HTTP_ROUTE_COUNT) {
+  if (flow.filter((item) => item.type === "http in").length !== EXPECTED_HTTP_ROUTE_COUNT) {
     fail("Focused candidate changed HTTP routes");
   }
 
-  return { flow, importNodes, changes };
+  return {
+    flow,
+    importNodes: [structuredClone(node)],
+    changes: [{ id: target.id, name: target.name, changedFields: ["func"] }],
+  };
 }
 
 function parseArgs(argv) {
@@ -147,13 +123,13 @@ function parseArgs(argv) {
   return result;
 }
 
-export function runSplitSubscriptionSelectionBuild(argv) {
+export function runSplitLeaveProjectionBuild(argv) {
   const args = parseArgs(argv);
   const verified = verifyWorkspace(args["--workspace"], { quiet: true });
   if (verified.sourceSha256 !== EXPECTED_SOURCE_SHA256) {
     fail("Live Node-RED source SHA changed; refresh and review before rebuilding");
   }
-  const { flow, importNodes, changes } = buildSplitSubscriptionSelectionCandidate(verified.source);
+  const { flow, importNodes, changes } = buildSplitLeaveProjectionCandidate(verified.source);
   const outputPath = path.resolve(args["--output"]);
   const importPath = path.resolve(args["--import"]);
   const reportPath = path.resolve(args["--report"]);
@@ -162,7 +138,7 @@ export function runSplitSubscriptionSelectionBuild(argv) {
   const outputText = fs.readFileSync(outputPath);
   const importText = fs.readFileSync(importPath);
   const report = {
-    caseId: "split-subscription-explicit-selection",
+    caseId: "split-leave-projection-consistency",
     sourceSha256: verified.sourceSha256,
     candidateSha256: sha256(outputText),
     importSha256: sha256(importText),
@@ -179,7 +155,7 @@ export function runSplitSubscriptionSelectionBuild(argv) {
 const invokedPath = process.argv[1] ? fs.realpathSync(process.argv[1]) : "";
 if (invokedPath === fileURLToPath(import.meta.url)) {
   try {
-    process.stdout.write(`${JSON.stringify(runSplitSubscriptionSelectionBuild(process.argv.slice(2)))}\n`);
+    process.stdout.write(`${JSON.stringify(runSplitLeaveProjectionBuild(process.argv.slice(2)))}\n`);
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;
