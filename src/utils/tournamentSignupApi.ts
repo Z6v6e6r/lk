@@ -56,6 +56,7 @@ import {
   resolveSubscriptionCategoryDailyLimitDateFromEvent,
   subscriptionPlanAllowsDailyLimitCategory,
 } from "./subscriptionCategoryDailyLimit";
+import { pollSubscriptionBookingConfirmation } from "./subscriptionBookingConfirmation";
 
 export type TournamentSignupStatus = "AVAILABLE" | "REGISTERED" | "WAITLIST" | "FULL" | "CLOSED" | "CANCELLED";
 
@@ -2540,7 +2541,7 @@ async function apiCreateTournamentVivaBookingFromSubscription(
     return (hash >>> 0).toString(36);
   };
   const idempotencyKey = `lk-subscription-${hashPart(idempotencySeed)}${hashPart([...idempotencySeed].reverse().join(""))}`;
-  const response = await request<unknown>(
+  const bookingRequest = () => request<unknown>(
     `/lk/subscription-bookings?operationId=${encodeURIComponent(idempotencyKey)}`,
     {
       method: "POST",
@@ -2553,6 +2554,7 @@ async function apiCreateTournamentVivaBookingFromSubscription(
       }),
     },
   );
+  const response = await pollSubscriptionBookingConfirmation(bookingRequest);
   if (response.error) {
     return { data: null, error: response.error, status: response.status };
   }

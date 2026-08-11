@@ -1084,6 +1084,8 @@ export default function TournamentSignupPage({
   const [liveRatings, setLiveRatings] = useState<Map<string, PadelLiveRatingItem>>(() => new Map());
   const [inviteSharing, setInviteSharing] = useState(false);
   const [inviteFeedback, setInviteFeedback] = useState<"shared" | "copied" | null>(null);
+  const [confirmingSubscriptionProductKey, setConfirmingSubscriptionProductKey] = useState<string | null>(null);
+  const [subscriptionConfirmationNotice, setSubscriptionConfirmationNotice] = useState<string | null>(null);
   const [checkoutPreparedFor, setCheckoutPreparedFor] = useState<string | null>(null);
   const [pendingPaymentProduct, setPendingPaymentProduct] = useState<TournamentVivaProduct | null>(null);
   const [isPurchasableListOpen, setPurchasableListOpen] = useState(false);
@@ -1427,6 +1429,8 @@ export default function TournamentSignupPage({
       setCheckout(null);
       setAuthRequired(false);
       setPendingPaymentProduct(null);
+      setConfirmingSubscriptionProductKey(null);
+      setSubscriptionConfirmationNotice(null);
       setActiveDetailTab("roster");
       setPurchasableListOpen(false);
       setStationModalOpen(false);
@@ -1435,6 +1439,8 @@ export default function TournamentSignupPage({
     setCheckout(null);
     setCheckoutPreparedFor(null);
     setPendingPaymentProduct(null);
+    setConfirmingSubscriptionProductKey(null);
+    setSubscriptionConfirmationNotice(null);
     setPurchasableListOpen(false);
     setStationModalOpen(false);
   }, [selectedId]);
@@ -1459,8 +1465,13 @@ export default function TournamentSignupPage({
     }
 
     const profile = nextCheckout.profile;
+    const subscriptionProductKey = product.source === "client-subscription"
+      ? `${product.source}:${product.id}`
+      : null;
     setActionLoading(true);
     setError(null);
+    setSubscriptionConfirmationNotice(null);
+    setConfirmingSubscriptionProductKey(subscriptionProductKey);
     try {
       const result = await apiCreateTournamentVivaTransaction({
         exerciseId: selectedExerciseId,
@@ -1474,6 +1485,17 @@ export default function TournamentSignupPage({
         exercise: nextCheckout.exercise,
       });
       if (result.error || !result.data) {
+        if (result.status === 202 && subscriptionProductKey) {
+          setError(null);
+          setSubscriptionConfirmationNotice(
+            "Viva приняла запись. Подтверждение может занять до минуты — состав обновится автоматически.",
+          );
+          setCheckout(null);
+          await loadPublicRoster(selectedExerciseId, { force: true });
+          await loadDetail(selectedId);
+          await loadList();
+          return;
+        }
         setError(result.error?.message || "Не удалось создать запись через Viva");
         return;
       }
@@ -1498,12 +1520,14 @@ export default function TournamentSignupPage({
       }
       setCheckout(null);
       clearStoredPendingPayment(selectedExerciseId);
+      await loadPublicRoster(selectedExerciseId, { force: true });
       await loadDetail(selectedId);
       await loadList();
     } finally {
+      setConfirmingSubscriptionProductKey(null);
       setActionLoading(false);
     }
-  }, [actionLoading, detail, isAuthenticated, loadDetail, loadList, selectedExerciseId, selectedId, selectedTournament]);
+  }, [actionLoading, detail, isAuthenticated, loadDetail, loadList, loadPublicRoster, selectedExerciseId, selectedId, selectedTournament]);
 
   const loadCheckout = useCallback(async (mode: "auth" | "public") => {
     if (!selectedId || !selectedExerciseId || actionLoading) return;
@@ -1622,7 +1646,8 @@ export default function TournamentSignupPage({
 
   const canPayPending = Boolean(registration?.status === "PAYMENT_PENDING" && registration?.paymentUrl);
   const canCancel = Boolean(registration?.canCancel && registration.status !== "NONE");
-  const canRegister = canOfferTournamentRegistration(detail?.status, registration);
+  const canRegister = !subscriptionConfirmationNotice
+    && canOfferTournamentRegistration(detail?.status, registration);
   const detailDateParts = getDateParts(selectedTournament?.date ?? null);
   const detailStartTime = formatClock(selectedTournament?.startsAt ?? null);
   const detailEndTime = formatClock(selectedTournament?.endsAt ?? null);
@@ -1891,6 +1916,11 @@ export default function TournamentSignupPage({
           )}
           {loadingDetail && <div className="tournament-signup-muted">Загрузка турнира...</div>}
           {!loadingDetail && error && <div className="tournament-signup-error">{error}</div>}
+          {!loadingDetail && subscriptionConfirmationNotice && (
+            <div className="tournament-signup-notice" role="status" aria-live="polite">
+              {subscriptionConfirmationNotice}
+            </div>
+          )}
           {!loadingDetail && selectedTournament && (
             <>
               {cancelDialogBookingId && selectedExerciseId && selectedId && (
@@ -2072,23 +2102,31 @@ export default function TournamentSignupPage({
                           <div className="tournament-signup-payment-options">
                             {checkout.clientSubscriptions.length > 0 && (
                               <div className="tournament-signup-payment-group">
-                                {checkout.clientSubscriptions.map((product) => (
-                                  <button
-                                    key={`${product.source}-${product.id}`}
-                                    className="tournament-signup-payment-option tournament-signup-payment-option-subscription"
-                                    type="button"
-                                    onClick={() => void completeVivaRegistration(checkout, product)}
-                                    disabled={actionLoading}
-                                  >
-                                    <span>{product.name}</span>
-                                    <div className="tournament-signup-payment-option-meta">
-                                      <strong>{formatTournamentPaymentProductValidity(product)}</strong>
-                                      {shouldShowSubscriptionHint(product) && (
-                                        <span className="tournament-signup-payment-option-note">подписка</span>
-                                      )}
-                                    </div>
-                                  </button>
-                                ))}
+                                {checkout.clientSubscriptions.map((product) => {
+                                  const productKey = `${product.source}:${product.id}`;
+                                  const isConfirming = confirmingSubscriptionProductKey === productKey;
+                                  return (
+                                    <button
+                                      key={productKey}
+                                      className="tournament-signup-payment-option tournament-signup-payment-option-subscription"
+                                      type="button"
+                                      onClick={() => void completeVivaRegistration(checkout, product)}
+                                      disabled={actionLoading}
+                                    >
+                                      <span>{product.name}</span>
+                                      <div className="tournament-signup-payment-option-meta">
+                                        <strong>
+                                          {isConfirming
+                                            ? "Подтверждаем запись…"
+                                            : formatTournamentPaymentProductValidity(product)}
+                                        </strong>
+                                        {!isConfirming && shouldShowSubscriptionHint(product) && (
+                                          <span className="tournament-signup-payment-option-note">подписка</span>
+                                        )}
+                                      </div>
+                                    </button>
+                                  );
+                                })}
                               </div>
                             )}
                             {purchasableSubscriptionProducts.length > 0 && (

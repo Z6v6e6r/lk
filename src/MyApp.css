@@ -562,6 +562,15 @@
   margin: 10px 0;
 }
 
+.tournament-signup-notice {
+  border: 1px solid #cfc2ff;
+  background: #f5f1ff;
+  color: #5f3fd7;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 10px 0;
+}
+
 @media (max-width: 640px) {
   .tournament-signup-page {
     padding: 12px;
