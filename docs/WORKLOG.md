@@ -1121,3 +1121,9 @@
 - Игра настроена private. В detail view всё равно появилась station-community publication row; публикация снята и исчезла после readback. Это зафиксировано как contract gap до raw HAR.
 - Повтор create не выполнялся во время задержанного submit. Игра видна в кабинете и оставлена активной до снимка Viva `15 -> 14`; cancellation и `14 -> 15` намеренно не запускались без промежуточного balance evidence.
 - `GHAR-BKG-CREATE-060` переведён из `MISSING` в `PARTIAL_NO_HAR_BALANCE_READBACK_PENDING`; raw HAR, post-create balance и cancellation option остаются обязательными gates.
+
+# 2026-08-11 — Managed annual subscriptions: concurrent cancellation follow-up
+
+- Второй Viva screenshot подтвердил списание CREATE 60 `15 -> 14` в 10:40 МСК. Первый последующий Client event показывает `14 -> 15`, но далее в том же окне есть несколько чужих изменений до остатка `17`, поэтому причинная атрибуция возврата загрязнена параллельными мутациями.
+- Перед нажатием cancel выполнен fail-closed readback: тестовой игры уже нет в active cabinet, direct LK lookup возвращает `Game not found`, а exact 22 августа 07:00–08:00 Ясенево присутствует в `Отменённых`. Повторный cancel не отправлялся.
+- Create case повышен до `PARTIAL_BALANCE_CONFIRMED_NO_HAR`; cancellation case отмечен `PARTIAL_EXTERNAL_ACTION_NO_HAR_AMBIGUOUS_BALANCE`. Для Golden rerun обязательны exclusive mutation window, видимый refund option и raw HAR.

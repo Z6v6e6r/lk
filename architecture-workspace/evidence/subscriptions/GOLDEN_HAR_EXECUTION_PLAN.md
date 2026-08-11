@@ -2,13 +2,14 @@
 
 Date: 2026-08-11
 
-Status: `LIVE_PARTIAL_CREATE_060`. One explicitly approved synthetic create was
-performed; cancellation is paused pending provider balance readback.
+Status: `LIVE_PARTIAL_EXTERNAL_CANCELLATION`. Create debit is confirmed; the
+target was cancelled externally before the controlled cancellation step.
 
 First live read-only result: `W0_PREFLIGHT_2026-08-11.md`. The assigned tester,
 exact private ids and safe 60-minute target are now recorded. Partial create
-evidence is in `W1_CREATE_060_PARTIAL_2026-08-11.md`; cancellation remains
-`NO_GO` until the post-create Viva balance is captured.
+evidence is in `W1_CREATE_060_PARTIAL_2026-08-11.md`. The follow-up is in
+`W1_CANCEL_060_EXTERNAL_PARTIAL_2026-08-11.md`; a clean cancellation rerun
+remains `NO_GO` until an exclusive mutation window and raw HAR are available.
 
 This document turns the Golden HAR passport into an executable QA and evidence
 plan. It does not approve production testing by itself. Every write requires an

@@ -5,7 +5,7 @@ Observed at: `2026-08-11T07:40:56Z`–`2026-08-11T07:41:46Z` /
 
 Case: `GHAR-BKG-CREATE-060`
 
-Evidence status: `PARTIAL_NO_HAR_BALANCE_READBACK_PENDING`.
+Evidence status: `PARTIAL_BALANCE_CONFIRMED_NO_HAR`.
 
 This report contains aliases and non-sensitive runtime values only. Exact
 client, subscription, booking, exercise, station, court and payment references
@@ -97,20 +97,18 @@ default station routing, or a stale UI projection.
 | `B0 = 15` | `GO`, user-supplied Viva screenshot |
 | Create exact-id readback | `GO` |
 | Game removed from station publication | `GO`, LK detail readback |
-| Post-create balance `B1` | `NO_GO`, Viva readback missing |
+| Post-create balance `B1` | `GO`, `15 -> 14` confirmed by follow-up Viva screenshot |
 | Raw create HAR | `NO_GO`, browser transport unavailable |
 | Approved cancellation/refund option | `NO_GO`, not yet captured |
 | Post-cancel balance `B2` | `NO_GO`, cancellation intentionally paused |
 
-Decision: keep `game-create-060-a` active and unpublished until Viva action
-history confirms the expected `15 -> 14` transition. Do not repeat create. Do
-not cancel before that evidence is preserved.
+Follow-up: `game-create-060-a` was already cancelled by an external/concurrent
+actor before Codex attempted cancellation. No duplicate cancel was sent. See
+`W1_CANCEL_060_EXTERNAL_PARTIAL_2026-08-11.md` for the fail-closed readback and
+the contaminated balance timeline.
 
 ## Next safe action
 
-1. Capture a new Viva action-history screenshot for the assigned tester.
-2. Confirm an exact `15 -> 14` row tied to this create window.
-3. Record the actual subscription-return cancellation option before submit.
-4. Cancel the same empty game once.
-5. Confirm `14 -> 15`, cancelled/history state, LK disappearance and no
-   publication residue after hard reload.
+1. Preserve the confirmed `15 -> 14` screenshot in private evidence.
+2. Do not retry cancellation for the already-cancelled target.
+3. Repeat the lifecycle only in an exclusive mutation window with raw HAR.

@@ -61,6 +61,7 @@ architecture-workspace/
     subscriptions/GOLDEN_HAR_RUN.example.json
     subscriptions/W0_PREFLIGHT_2026-08-11.md
     subscriptions/W1_CREATE_060_PARTIAL_2026-08-11.md
+    subscriptions/W1_CANCEL_060_EXTERNAL_PARTIAL_2026-08-11.md
   structurizr/
     workspace.dsl
   adr/
@@ -100,6 +101,9 @@ After that, define the first stable `/api/v1` contract.
   explicitly approved synthetic `CREATE 60` result, exact-id readback boundary,
   publication-removal observation and the balance/HAR gates still blocking
   cancellation certification.
+- `evidence/subscriptions/W1_CANCEL_060_EXTERNAL_PARTIAL_2026-08-11.md` records
+  the fail-closed discovery that the same target was already cancelled by a
+  concurrent actor, plus active/direct/history and interleaved balance evidence.
 - `../scripts/sanitize_viva_har.mjs` creates a fail-closed, host/path-filtered HAR
   copy and a manifest. Run `npm run test:har-sanitizer` before using it; a
   `SANITIZED` manifest is still not `REVIEWED` or `APPROVED` evidence.

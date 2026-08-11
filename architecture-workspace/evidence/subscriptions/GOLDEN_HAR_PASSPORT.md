@@ -200,7 +200,7 @@ Open provider decisions:
 
 | Case ID | Duration | Обязательные before/after | Status |
 |---|---:|---|---|
-| `GHAR-BKG-CREATE-060` | 60 | Contract, visits, active/history, exercise, exact booking, LK game | `PARTIAL_NO_HAR_BALANCE_READBACK_PENDING` |
+| `GHAR-BKG-CREATE-060` | 60 | Contract, visits, active/history, exercise, exact booking, LK game | `PARTIAL_BALANCE_CONFIRMED_NO_HAR` |
 | `GHAR-BKG-CREATE-090` | 90 | То же плюс фактический provider visit delta | `MISSING` |
 | `GHAR-BKG-CREATE-120` | 120 | То же плюс фактический provider visit delta | `MISSING` |
 
@@ -229,7 +229,7 @@ registry, but the case is not Golden evidence until raw HAR and the exact
 
 | Case ID | Сценарий | Обязательное доказательство | Status |
 |---|---|---|---|
-| `GHAR-CAN-SELF-SERVICE` | Игрок выходит сам, возвращается посещение | cancellation options, exact cancel request, active/history, visit balance, LK/public reload | `MISSING` |
+| `GHAR-CAN-SELF-SERVICE` | Игрок выходит сам, возвращается посещение | cancellation options, exact cancel request, active/history, visit balance, LK/public reload | `PARTIAL_EXTERNAL_ACTION_NO_HAR_AMBIGUOUS_BALANCE` |
 | `GHAR-CAN-ORG-SERVICE` | Организатор удаляет игрока | Actor authorization, same exact booking proof, roster event, return | `MISSING` |
 | `GHAR-CAN-NO-REFUND` | Отмена без возврата | Provider предлагает именно этот вариант, balance не увеличен | `MISSING` |
 | `GHAR-CAN-CURRENCY` | Возврат денег | Transaction/refund/receipt readback, booking cancelled | `MISSING` |
@@ -239,6 +239,12 @@ registry, but the case is not Golden evidence until raw HAR and the exact
 `refundMethod=SERVICE` и обязательным active/history readback. В этом паспорте
 это **кандидат**, а не утверждённый актуальный контракт: endpoint version,
 request body, cancellation options и balance delta должны быть повторно сняты.
+
+The first live follow-up is recorded in
+`W1_CANCEL_060_EXTERNAL_PARTIAL_2026-08-11.md`. The target is absent from active
+and direct LK readback and present in cancelled history, but cancellation was
+performed by an external/concurrent actor and the balance timeline contains
+other mutations. It is not Golden provider-contract evidence.
 
 ### E. Отмена всей игры
 
