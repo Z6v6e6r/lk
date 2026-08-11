@@ -58,6 +58,37 @@ direction, and nested studio snapshots. New tournament mechanics documents also
 persist `params.directionId`, `params.directionName`, and `params.stationId`.
 Names are display data only and never select an enrollment target.
 
+## Server-owned publication validation
+
+`POST /lk/communities/:communityId/feed` requires the LK Bearer token. The
+server verifies it through the Viva profile endpoint and derives the publisher
+identity from that response. Client-supplied `member`, `actor`, author ids,
+direction and station fields never grant publication or enrollment authority.
+
+For a tournament post the server then reads the exact Viva exercise before
+creating the post. The provider exercise id must equal `relatedTournamentId`,
+and exact direction and station ids must be present. If the exercise is Time for
+Friends (`direction=5278`) and the community carries
+`ratingProgram.programKey=TIME_FOR_FRIENDS`, its provider station must equal the
+community's approved `ratingProgram.stationId`; a mismatch rejects the post.
+
+An accepted scoped TFF post receives immutable server evidence and the same
+request appends this exact relation to the server-owned community metadata:
+
+```json
+{
+  "publicationId": "server-generated-feed-post-id",
+  "tournamentId": "provider-verified-exercise-id",
+  "stationId": "provider-verified-station-id",
+  "status": "VALIDATED"
+}
+```
+
+The relation is written under `ratingProgram.validatedPublications` while
+preserving the separately controlled `autoEnrollmentEnabled` value. A verified
+moderator may mark one publication `RATING_PRIMARY`; multiple unmarked
+publications remain ambiguous and fail closed in the worker.
+
 ## Automatic enrollment
 
 `scripts/rating_worker.mjs` runs the enrollment step before community rating
@@ -104,6 +135,13 @@ The audit row is prepared before membership mutation. A failed conditional updat
 is read back and classified as an exact existing member, ban, inactive community,
 or read-back failure. Unsafe outcomes fail the worker and do not advance its
 watermark.
+
+Activation remains a separate operational stage. Before setting
+`autoEnrollmentEnabled=true` or the worker environment flags, deploy the
+server-owned publication flow, create a synthetic validated tournament post,
+verify the community readback and worker dry-run, and approve an exact cutover
+timestamp. Historical repair and quarantined publication mappings are not
+implicitly activated.
 
 ## Node-RED candidate
 

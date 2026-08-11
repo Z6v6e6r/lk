@@ -2567,13 +2567,14 @@ if (!communityId) {
   return [null, errorMsg, errorMsg];
 }
 
-const body = isObj(msg.payload) ? msg.payload : {};
-const member = buildMember(body.member || body.actor || body.user, 'MEMBER');
-if (!member.id && !member.phone) {
-  const errorMsg = withJson(msg, 400, { error: 'member id or phone is required' });
+const reqHeaders = isObj(msg.req?.headers) ? msg.req.headers : {};
+const authHeader = toStr(reqHeaders.authorization || reqHeaders.Authorization);
+if (!authHeader || !/^Bearer[ \t]+[^ \t]+$/i.test(authHeader)) {
+  const errorMsg = withJson(msg, 401, { error: 'AUTH_TOKEN_REQUIRED' });
   return [null, errorMsg, errorMsg];
 }
 
+const body = isObj(msg.payload) ? msg.payload : {};
 const kind = toStr(body.kind)?.toUpperCase();
 if (kind !== 'PHOTO' && kind !== 'GAME' && kind !== 'TOURNAMENT') {
   const errorMsg = withJson(msg, 400, { error: 'kind must be PHOTO, GAME or TOURNAMENT' });
@@ -2589,7 +2590,7 @@ if (!title || !postBody) {
 
 msg._communityPost = {
   communityId,
-  member,
+  authHeader,
   kind,
   title,
   body: postBody,
@@ -2600,11 +2601,53 @@ msg._communityPost = {
   relatedTournamentId: resolvePostTournamentLinkId(body),
   details: isObj(body.details) ? body.details : null,
 };
-msg.payload = { id: communityId, archived: { $ne: true } };
+msg.method = 'GET';
+msg.url = 'https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile';
+msg.headers = { Authorization: authHeader, Accept: 'application/json' };
+msg.payload = undefined;
 return [msg, null, msg];
 `;
 
-const fnFeedPostApply = `${commonHelpers}
+const fnFeedPostProfileAuthorize = `${commonHelpers}
+const ctx = isObj(msg._communityPost) ? msg._communityPost : null;
+if (!ctx) {
+  const errorMsg = withJson(msg, 500, { error: 'COMMUNITY_POST_CONTEXT_MISSING' });
+  return [null, errorMsg, errorMsg];
+}
+const upstreamStatus = Number(msg.statusCode) || 0;
+if (upstreamStatus === 401 || upstreamStatus === 403) {
+  const errorMsg = withJson(msg, 401, { error: 'AUTH_TOKEN_INVALID' });
+  return [null, errorMsg, errorMsg];
+}
+if (upstreamStatus < 200 || upstreamStatus >= 300 || !isObj(msg.payload)) {
+  const errorMsg = withJson(msg, 503, { error: 'AUTH_SERVICE_UNAVAILABLE' });
+  return [null, errorMsg, errorMsg];
+}
+const profile = msg.payload;
+const profileId = toStr(profile.id || profile.clientId || profile.uuid);
+if (!profileId) {
+  const errorMsg = withJson(msg, 403, { error: 'PROFILE_ID_MISSING' });
+  return [null, errorMsg, errorMsg];
+}
+const verifiedActor = buildMember({
+  id: profileId,
+  phone: profile.phone || profile.phoneNorm || profile.phoneNumber || profile.mobile,
+  name: profile.name || profile.displayName || [profile.firstName, profile.lastName].filter(Boolean).join(' '),
+  avatar: profile.avatar || profile.photo || profile.imageUrl,
+}, 'MEMBER');
+const verifiedContext = Object.assign({}, ctx, {
+  verifiedActor,
+  verifiedActorProfileId: profileId,
+});
+delete verifiedContext.authHeader;
+msg._communityPost = verifiedContext;
+msg.payload = { id: ctx.communityId, archived: { $ne: true } };
+msg.headers = {};
+delete msg.statusCode;
+return [msg, null, msg];
+`;
+
+const fnFeedPostAuthorize = `${commonHelpers}
 const rows = toArray(msg.payload);
 const ctx = isObj(msg._communityPost) ? msg._communityPost : {};
 if (rows.length === 0) {
@@ -2613,19 +2656,145 @@ if (rows.length === 0) {
 }
 
 const community = rows[0];
-const isAllowed = toArray(community.members).some((item) => matchesIdentity(item, ctx.member?.id, ctx.member?.phone));
-if (!isAllowed) {
-  const errorMsg = withJson(msg, 403, { error: 'Only community members can publish posts' });
-  return [null, null, null, errorMsg, errorMsg];
+const verifiedActor = isObj(ctx.verifiedActor) ? ctx.verifiedActor : null;
+if (!verifiedActor || !ctx.verifiedActorProfileId) {
+  const errorMsg = withJson(msg, 403, { error: 'VERIFIED_ACTOR_REQUIRED' });
+  return [null, null, errorMsg, errorMsg];
 }
-const actorMember = findMemberByIdentity(community.members, ctx.member);
+const actorMember = findMemberByIdentity(community.members, verifiedActor);
+if (!actorMember) {
+  const errorMsg = withJson(msg, 403, { error: 'Only community members can publish posts' });
+  return [null, null, errorMsg, errorMsg];
+}
 if (ctx.kind === 'TOURNAMENT' && !canCreateTournamentFeedPost(actorMember?.role)) {
   const errorMsg = withJson(msg, 403, { error: 'Tournament posts are only available to moderators and administrators' });
+  return [null, null, errorMsg, errorMsg];
+}
+
+msg._communityPost = Object.assign({}, ctx, {
+  community,
+  actorMember,
+});
+if (ctx.kind !== 'TOURNAMENT') {
+  msg.payload = null;
+  delete msg.statusCode;
+  return [msg, null, null, null];
+}
+const tournamentId = resolvePostTournamentLinkId(ctx);
+if (!tournamentId) {
+  const errorMsg = withJson(msg, 400, { error: 'TOURNAMENT_ID_REQUIRED' });
+  return [null, null, errorMsg, errorMsg];
+}
+msg.method = 'GET';
+msg.url = 'https://api.vivacrm.ru/end-user/api/v1/iSkq6G/exercises/' + encodeURIComponent(tournamentId);
+msg.headers = { Accept: 'application/json' };
+msg.payload = undefined;
+delete msg.statusCode;
+return [null, msg, null, null];
+`;
+
+const fnFeedPostTournamentValidate = `${commonHelpers}
+const ctx = isObj(msg._communityPost) ? msg._communityPost : null;
+if (!ctx || ctx.kind !== 'TOURNAMENT') {
+  const errorMsg = withJson(msg, 500, { error: 'TOURNAMENT_VALIDATION_CONTEXT_MISSING' });
+  return [null, errorMsg, errorMsg];
+}
+const upstreamStatus = Number(msg.statusCode) || 0;
+if (upstreamStatus < 200 || upstreamStatus >= 300 || !isObj(msg.payload)) {
+  const errorMsg = withJson(msg, 503, { error: 'TOURNAMENT_METADATA_UNAVAILABLE' });
+  return [null, errorMsg, errorMsg];
+}
+const exercise = msg.payload;
+const requestedTournamentId = resolvePostTournamentLinkId(ctx);
+const providerTournamentId = toStr(exercise.id || exercise.exerciseId);
+if (!providerTournamentId || providerTournamentId !== requestedTournamentId) {
+  const errorMsg = withJson(msg, 409, { error: 'TOURNAMENT_ID_NOT_VERIFIED' });
+  return [null, errorMsg, errorMsg];
+}
+const directionId = toStr(exercise.direction?.id || exercise.directionId);
+const stationId = toStr(exercise.studio?.id || exercise.station?.id || exercise.studioId || exercise.stationId);
+if (!directionId || !stationId) {
+  const errorMsg = withJson(msg, 409, { error: 'TOURNAMENT_METADATA_NOT_EXACT' });
+  return [null, errorMsg, errorMsg];
+}
+
+const program = isObj(ctx.community?.ratingProgram)
+  ? ctx.community.ratingProgram
+  : (isObj(ctx.community?.metadata?.ratingProgram) ? ctx.community.metadata.ratingProgram : null);
+let validation = null;
+if (directionId === '5278' && toStr(program?.programKey || program?.key) === 'TIME_FOR_FRIENDS') {
+  const approvedStationId = toStr(program?.stationId);
+  if (!approvedStationId || approvedStationId !== stationId) {
+    const errorMsg = withJson(msg, 409, { error: 'TOURNAMENT_STATION_SCOPE_CONFLICT' });
+    return [null, errorMsg, errorMsg];
+  }
+  validation = {
+    tournamentId: requestedTournamentId,
+    stationId,
+    status: 'VALIDATED',
+  };
+}
+msg._communityPost = Object.assign({}, ctx, {
+  providerTournament: {
+    tournamentId: requestedTournamentId,
+    directionId,
+    directionName: toStr(exercise.direction?.name || exercise.directionName),
+    stationId,
+    stationName: toStr(exercise.studio?.name || exercise.station?.name || exercise.studioName || exercise.stationName),
+  },
+  pendingServerValidation: validation,
+});
+msg.payload = null;
+delete msg.statusCode;
+return [msg, null, null];
+`;
+
+const fnFeedPostFinalize = `${commonHelpers}
+const ctx = isObj(msg._communityPost) ? msg._communityPost : {};
+const actorMember = isObj(ctx.actorMember) ? ctx.actorMember : null;
+if (!actorMember || !ctx.verifiedActorProfileId) {
+  const errorMsg = withJson(msg, 500, { error: 'VERIFIED_ACTOR_CONTEXT_MISSING' });
+  return [null, null, null, errorMsg, errorMsg];
+}
+if (ctx.kind === 'TOURNAMENT' && !isObj(ctx.providerTournament)) {
+  const errorMsg = withJson(msg, 500, { error: 'TOURNAMENT_METADATA_CONTEXT_MISSING' });
   return [null, null, null, errorMsg, errorMsg];
 }
 
+const postId = toStr(ctx.communityId) + ':post:' + nowTs + ':' + String(ctx.kind || 'post').toLowerCase();
+const requestedRole = toStr(
+  ctx.details?.publicationRole
+  || ctx.details?.ratingRole
+  || ctx.details?.publicTournament?.publicationRole
+  || ctx.details?.publicTournament?.ratingRole
+)?.toUpperCase();
+const publicationRole = requestedRole === 'RATING_PRIMARY' ? 'RATING_PRIMARY' : 'DISCOVERY_ONLY';
+const providerTournament = isObj(ctx.providerTournament) ? ctx.providerTournament : null;
+const details = providerTournament
+  ? Object.assign({}, isObj(ctx.details) ? ctx.details : {}, {
+    publicationRole,
+    directionId: providerTournament.directionId,
+    direction: { id: providerTournament.directionId, name: providerTournament.directionName || null },
+    studioId: providerTournament.stationId,
+    studio: { id: providerTournament.stationId, name: providerTournament.stationName || null },
+    publicTournament: Object.assign({}, isObj(ctx.details?.publicTournament) ? ctx.details.publicTournament : {}, {
+      exerciseId: providerTournament.tournamentId,
+      direction: { id: providerTournament.directionId, name: providerTournament.directionName || null },
+      studio: { id: providerTournament.stationId, name: providerTournament.stationName || null },
+      publicationRole,
+    }),
+  })
+  : (ctx.details || null);
+const pendingValidation = isObj(ctx.pendingServerValidation) ? ctx.pendingServerValidation : null;
+const validationRow = pendingValidation ? {
+  publicationId: postId,
+  tournamentId: pendingValidation.tournamentId,
+  stationId: pendingValidation.stationId,
+  status: 'VALIDATED',
+} : null;
+
 const postDoc = {
-  id: toStr(ctx.communityId) + ':post:' + nowTs + ':' + String(ctx.kind || 'post').toLowerCase(),
+  id: postId,
   communityId: toStr(ctx.communityId),
   kind: ctx.kind,
   title: ctx.title,
@@ -2635,13 +2804,23 @@ const postDoc = {
   ctaLabel: ctx.ctaLabel || null,
   relatedGameId: ctx.relatedGameId || null,
   relatedTournamentId: resolvePostTournamentLinkId(ctx) || null,
-  details: ctx.details || null,
+  publicationRole: ctx.kind === 'TOURNAMENT' ? publicationRole : null,
+  details,
+  serverValidation: ctx.kind === 'TOURNAMENT' ? {
+    version: 'tff-publication-validation-v1',
+    status: validationRow ? 'VALIDATED' : 'NOT_APPLICABLE',
+    validatedAt: nowIso,
+    actorProfileId: ctx.verifiedActorProfileId,
+    tournamentId: providerTournament?.tournamentId || null,
+    directionId: providerTournament?.directionId || null,
+    stationId: providerTournament?.stationId || null,
+  } : null,
   author: {
-    id: ctx.member?.id || null,
-    phone: ctx.member?.phone || null,
-    name: ctx.member?.name || 'Игрок',
+    id: actorMember.id || null,
+    phone: actorMember.phone || null,
+    name: actorMember.name || 'Игрок',
   },
-  authorName: ctx.member?.name || 'Игрок',
+  authorName: actorMember.name || 'Игрок',
   publishedAt: nowIso,
   createdAt: nowIso,
   createdTs: nowTs,
@@ -2653,27 +2832,34 @@ const eventDoc = {
   communityId: toStr(ctx.communityId),
   type: 'FEED_POST_CREATED',
   actor: {
-    id: ctx.member?.id || null,
-    phone: ctx.member?.phone || null,
-    name: ctx.member?.name || 'Игрок',
+    id: actorMember.id || null,
+    phone: actorMember.phone || null,
+    name: actorMember.name || 'Игрок',
   },
   createdAt: nowIso,
   createdTs: nowTs,
   payload: {
     postId: postDoc.id,
     kind: postDoc.kind,
+    serverValidationStatus: postDoc.serverValidation?.status || null,
   },
 };
 
+const communityUpdate = {
+  $set: {
+    updatedAt: nowIso,
+    lastVisibleFeedActivityAt: nowIso,
+    lastVisibleFeedActivityTs: nowTs,
+  },
+};
+if (validationRow) {
+  communityUpdate.$addToSet = {
+    'ratingProgram.validatedPublications': validationRow,
+  };
+}
 const communityUpdateMsg = Object.assign({}, msg, {
   query: { id: toStr(ctx.communityId), archived: { $ne: true } },
-  payload: {
-    $set: {
-      updatedAt: nowIso,
-      lastVisibleFeedActivityAt: nowIso,
-      lastVisibleFeedActivityTs: nowTs,
-    },
-  },
+  payload: communityUpdate,
 });
 const feedMsg = Object.assign({}, msg, { payload: postDoc });
 const eventMsg = Object.assign({}, msg, { payload: eventDoc });
@@ -3699,6 +3885,29 @@ function functionNode(id, name, func, outputs, x, y, wires) {
   };
 }
 
+function httpRequestNode(id, name, x, y, nextId) {
+  return {
+    id,
+    type: 'http request',
+    z: tabId,
+    name,
+    method: 'use',
+    ret: 'obj',
+    paytoqs: 'ignore',
+    url: '',
+    tls: '',
+    persist: false,
+    proxy: '',
+    insecureHTTPParser: false,
+    authType: '',
+    senderr: true,
+    headers: [],
+    x,
+    y,
+    wires: [[nextId]],
+  };
+}
+
 function mongoInNode(id, name, collection, x, y, nextId) {
   return {
     id,
@@ -4157,20 +4366,66 @@ const nodes = [
   httpInNode('community_feed_post_in_001', 'LK community feed create', '/lk/communities/:communityId/feed', 'post', 150, 5060, 'community_feed_post_fn_prepare_001'),
   functionNode(
     'community_feed_post_fn_prepare_001',
-    'Prepare feed post',
+    'Prepare verified feed post actor',
     fnFeedPostPrepare,
     3,
     400,
     5060,
+    [['community_feed_post_profile_request_20260811'], ['community_feed_post_http_resp_001'], ['community_feed_post_debug_001']],
+  ),
+  httpRequestNode(
+    'community_feed_post_profile_request_20260811',
+    'Verify community publisher via Viva profile',
+    710,
+    5020,
+    'community_feed_post_profile_authorize_20260811',
+  ),
+  functionNode(
+    'community_feed_post_profile_authorize_20260811',
+    'Resolve verified community publisher',
+    fnFeedPostProfileAuthorize,
+    3,
+    1020,
+    5020,
     [['community_feed_post_find_community_001'], ['community_feed_post_http_resp_001'], ['community_feed_post_debug_001']],
   ),
-  mongoInNode('community_feed_post_find_community_001', 'Find community for post create', 'lk_communities', 710, 5020, 'community_feed_post_fn_apply_001'),
+  mongoInNode('community_feed_post_find_community_001', 'Find community for post create', 'lk_communities', 1320, 5020, 'community_feed_post_fn_apply_001'),
   functionNode(
     'community_feed_post_fn_apply_001',
-    'Build feed post docs',
-    fnFeedPostApply,
+    'Authorize verified community publisher',
+    fnFeedPostAuthorize,
+    4,
+    1600,
+    5020,
+    [
+      ['community_feed_post_finalize_20260811'],
+      ['community_feed_post_tournament_request_20260811'],
+      ['community_feed_post_http_resp_001'],
+      ['community_feed_post_debug_001'],
+    ],
+  ),
+  httpRequestNode(
+    'community_feed_post_tournament_request_20260811',
+    'Verify published tournament via Viva',
+    1880,
+    5060,
+    'community_feed_post_tournament_validate_20260811',
+  ),
+  functionNode(
+    'community_feed_post_tournament_validate_20260811',
+    'Validate TFF publication station scope',
+    fnFeedPostTournamentValidate,
+    3,
+    2160,
+    5060,
+    [['community_feed_post_finalize_20260811'], ['community_feed_post_http_resp_001'], ['community_feed_post_debug_001']],
+  ),
+  functionNode(
+    'community_feed_post_finalize_20260811',
+    'Build server-validated feed post docs',
+    fnFeedPostFinalize,
     5,
-    1000,
+    2440,
     5020,
     [
       ['community_feed_post_insert_001'],
@@ -4180,11 +4435,11 @@ const nodes = [
       ['community_feed_post_debug_001'],
     ],
   ),
-  mongoOutNode('community_feed_post_insert_001', 'Insert feed post', 'lk_community_feed', 'insert', false, 1290, 4980),
-  mongoOutNode('community_feed_post_event_insert_001', 'Insert feed post event', 'lk_community_events', 'insert', false, 1290, 5020),
-  mongoOutNode('community_feed_post_update_community_001', 'Update community feed activity', 'lk_communities', 'update', false, 1290, 5060),
-  httpResponseNode('community_feed_post_http_resp_001', 1290, 5100),
-  debugNode('community_feed_post_debug_001', 'community feed post debug', 1290, 5140),
+  mongoOutNode('community_feed_post_insert_001', 'Insert feed post', 'lk_community_feed', 'insert', false, 2740, 4940),
+  mongoOutNode('community_feed_post_event_insert_001', 'Insert feed post event', 'lk_community_events', 'insert', false, 2740, 4980),
+  mongoOutNode('community_feed_post_update_community_001', 'Update community feed activity and validation', 'lk_communities', 'update', false, 2740, 5020),
+  httpResponseNode('community_feed_post_http_resp_001', 2740, 5060),
+  debugNode('community_feed_post_debug_001', 'community feed post debug', 2740, 5100),
 
   httpInNode('community_feed_archive_in_001', 'LK community feed archive', '/lk/communities/:communityId/feed/:postId/archive', 'post', 150, 5220, 'community_feed_archive_fn_prepare_001'),
   functionNode(

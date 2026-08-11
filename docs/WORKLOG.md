@@ -1138,3 +1138,10 @@
 - После строгого review runtime enrollment переведён в default-off режим с обязательным cutover; full job ограничен тем же cutover и не выполняет исторический backfill.
 - Mutation authority не доверяет client feed author/member: требуется server-owned exact `validatedPublications` relation в `TIME_FOR_FRIENDS` metadata целевой community и совпадение трёх station IDs. Roster без active/capacity/positive spot и provisional standings fail closed.
 - Турнирная карточка показывает названия/ID всех сообществ публикации и отдельно сигнализирует ambiguous rating target; приставка не получает scalar community ID до разрешения ambiguity.
+
+# 2026-08-11 — Server-owned validation новых TFF-публикаций
+
+- Создание community feed post теперь отправляет LK Bearer; Node-RED проверяет его через Viva profile и использует только подтверждённый profile id/phone для membership и moderator-role authorization. Клиентский `body.member` не участвует в решении.
+- Перед созданием tournament post сервер читает exact Viva exercise и сверяет provider exercise, direction и station. Для `direction=5278` в `TIME_FOR_FRIENDS` community несовпадение `ratingProgram.stationId` блокирует публикацию.
+- Успешная scoped TFF-публикация получает server evidence, а exact `{publicationId,tournamentId,stationId,status=VALIDATED}` добавляется в `ratingProgram.validatedPublications`; `autoEnrollmentEnabled` не изменяется.
+- Focused regressions покрывают spoofed actor, missing Bearer, verified role, provider ID/station conflicts, non-TFF isolation, server metadata override и exact validation mutation. PASS: validation 6/6, community rating 78/78, tournament context 21/21, TFF backfill 25/25, category 7/7, TypeScript и targeted ESLint; сгенерированные function nodes компилируются, broken wires=0. Полный build ожидаемо остановлен preflight из-за отсутствующих ignored production env, modular validate требует отдельный external live-source workspace. Runtime activation, live flow, push и deploy на этом этапе не выполнялись.

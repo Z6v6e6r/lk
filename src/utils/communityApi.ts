@@ -1737,6 +1737,7 @@ export async function apiCreateCommunityFeedPost(
     `/lk/communities/${encodeURIComponent(normalizedCommunityId)}/feed`,
     {
       method: "POST",
+      auth: true,
       retries: 1,
       body: JSON.stringify({
         member: buildMemberPayload(payload.member),

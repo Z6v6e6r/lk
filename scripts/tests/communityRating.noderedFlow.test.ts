@@ -74,8 +74,11 @@ test("community rating live fallback queries linked game and tournament document
 
 test("community tournament post flow preserves nested details and resolves stable tournament link ids", () => {
   assert.match(flowPatchSource, /const resolvePostTournamentLinkId =/);
-  assert.match(flowPatchSource, /details: ctx\.details \|\| null/);
-  assert.match(flowPatchSource, /publicTournament/);
+  assert.match(flowPatchSource, /const details = providerTournament/);
+  assert.match(flowPatchSource, /Object\.assign\(\{\}, isObj\(ctx\.details\) \? ctx\.details : \{\}, \{/);
+  assert.match(flowPatchSource, /publicTournament: Object\.assign/);
+  assert.match(flowPatchSource, /directionId: providerTournament\.directionId/);
+  assert.match(flowPatchSource, /studioId: providerTournament\.stationId/);
   assert.match(flowPatchSource, /sourceTournamentSnapshot/);
 });
 
