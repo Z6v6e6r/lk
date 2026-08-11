@@ -57,6 +57,8 @@ architecture-workspace/
     subscriptions/v1/openapi.yaml
   evidence/
     subscriptions/GOLDEN_HAR_PASSPORT.md
+    subscriptions/GOLDEN_HAR_EXECUTION_PLAN.md
+    subscriptions/GOLDEN_HAR_RUN.example.json
   structurizr/
     workspace.dsl
   adr/
@@ -86,6 +88,10 @@ After that, define the first stable `/api/v1` contract.
   CUP, the current LK and the new LK. It is not a deployed-route inventory.
 - `evidence/subscriptions/GOLDEN_HAR_PASSPORT.md` lists provider contracts and
   multi-tester E2E evidence required before runtime implementation.
+- `evidence/subscriptions/GOLDEN_HAR_EXECUTION_PLAN.md` defines the executable
+  test waves, first `JOIN 60 + SERVICE cancellation` run and GO/NO-GO gates.
+- `evidence/subscriptions/GOLDEN_HAR_RUN.example.json` must be copied outside
+  Git before raw ids, operators or private paths are filled in.
 - `../scripts/sanitize_viva_har.mjs` creates a fail-closed, host/path-filtered HAR
   copy and a manifest. Run `npm run test:har-sanitizer` before using it; a
   `SANITIZED` manifest is still not `REVIEWED` or `APPROVED` evidence.

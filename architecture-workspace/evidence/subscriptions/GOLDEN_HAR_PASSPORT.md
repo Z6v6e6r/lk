@@ -5,6 +5,9 @@ Date: 2026-08-11
 Status: evidence collection required; no current Golden HAR is approved by this
 checkpoint.
 
+Пошаговый порядок выполнения, роли, private run registry и первый безопасный
+capture описаны в `GOLDEN_HAR_EXECUTION_PLAN.md`.
+
 ## Назначение
 
 Этот паспорт фиксирует минимальный набор наблюдений Viva, без которого нельзя

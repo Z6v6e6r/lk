@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "notice": "COPY OUTSIDE GIT. Fill raw ids and PII only in the private copy.",
+  "status": "DRAFT",
+  "run": {
+    "runId": "<private-run-id>",
+    "environment": "<staging-or-explicitly-approved-production>",
+    "windowStartsAt": "<ISO-8601>",
+    "windowEndsAt": "<ISO-8601>",
+    "stationTimezone": "<IANA-timezone>",
+    "mutationApprovedBy": "<private-owner>",
+    "testOwner": "<private-owner>",
+    "cleanupOwner": "<private-owner>",
+    "evidenceReviewer": "<independent-private-owner>"
+  },
+  "runtime": {
+    "lkReleaseSha": "<sha>",
+    "lkGamesBundleSha256": "<sha256>",
+    "nodeRedFlowSha256": "<sha256>",
+    "cupApiSha": "<sha>",
+    "browserNameVersion": "<value>",
+    "browserTimezone": "<IANA-timezone>"
+  },
+  "station": {
+    "alias": "station-test-a",
+    "providerStationId": "<private-exact-id>",
+    "providerStudioId": "<private-exact-id>"
+  },
+  "tester": {
+    "alias": "tester-entitlement-a",
+    "providerClientId": "<private-exact-id>",
+    "phoneOrLogin": "<private-do-not-copy-to-git>"
+  },
+  "subscription": {
+    "alias": "subscription-test-a",
+    "clientSubscriptionId": "<private-exact-id>",
+    "providerProductId": "<private-exact-id>",
+    "providerTypeId": "<private-exact-id>",
+    "statusBefore": "ACTIVE",
+    "validFrom": "<ISO-8601>",
+    "validTo": "<ISO-8601>",
+    "visitsBalanceBefore": "<integer>",
+    "expectedVisitDelta60": "<integer-approved-before-run>"
+  },
+  "target": {
+    "gameAlias": "game-join-060-a",
+    "lkGameId": "<private-exact-id>",
+    "providerExerciseId": "<private-exact-id>",
+    "providerEventTypeId": "<private-exact-id>",
+    "organizerClientId": "<private-exact-id>",
+    "startsAt": "<ISO-8601>",
+    "endsAt": "<ISO-8601>",
+    "durationMinutes": 60,
+    "realCustomersPresent": false,
+    "realMoneyPresent": false
+  },
+  "cases": [
+    {
+      "caseId": "GHAR-BKG-JOIN-060",
+      "mutationApproved": false,
+      "rawHarPath": "<private-path>",
+      "sanitizedHarPath": "<private-path>",
+      "manifestPath": "<private-path>"
+    },
+    {
+      "caseId": "GHAR-CAN-SELF-SERVICE",
+      "mutationApproved": false,
+      "approvedRefundOption": "<private-provider-value-after-read-only-confirmation>",
+      "rawHarPath": "<private-path>",
+      "sanitizedHarPath": "<private-path>",
+      "manifestPath": "<private-path>"
+    }
+  ],
+  "preflight": {
+    "exactIdsConsistent": false,
+    "activeReadbackAvailable": false,
+    "historyReadbackAvailable": false,
+    "balanceReadbackAvailable": false,
+    "targetHasNoRealCustomers": false,
+    "targetHasNoRealMoney": false,
+    "cleanupProcedureApproved": false,
+    "privateEvidenceStorageReady": false,
+    "goDecision": "NO_GO"
+  },
+  "results": {
+    "joinOperationId": null,
+    "providerBookingId": null,
+    "balanceAfterJoin": null,
+    "cancelOperationId": null,
+    "balanceAfterCancel": null,
+    "cleanupCompleted": false,
+    "joinEvidenceStatus": "MISSING",
+    "cancelEvidenceStatus": "MISSING"
+  }
+}
