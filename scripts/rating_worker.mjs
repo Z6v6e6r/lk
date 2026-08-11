@@ -29,6 +29,13 @@ import {
   replayPlayerRatingEvents,
   toFiniteRating,
 } from "../src/services/player-rating/ledger.ts";
+import {
+  buildTimeForFriendsAutoEnrollmentMutation,
+  planTimeForFriendsAutoEnrollment,
+} from "./lib/tournamentCommunityContext.mjs";
+import {
+  collectPublicationTournamentIds,
+} from "./lib/timeForFriendsCommunityBackfill.mjs";
 
 export const RATING_WORKER_JOB_KEY = "rating-worker-incremental";
 export const RATING_WORKER_FULL_JOB_KEY = "rating-worker-full-safety";
@@ -635,6 +642,205 @@ export async function processTournamentLedger(db, { sinceIso, notBeforeIso, nowI
   };
 }
 
+export async function processTimeForFriendsAutoEnrollments(db, {
+  sinceIso,
+  nowIso,
+  dryRun,
+  enabled = false,
+  cutoverIso = null,
+}) {
+  const normalizedCutoverIso = toIso(cutoverIso);
+  if (!enabled || !normalizedCutoverIso) {
+    return {
+      enabled: false,
+      cutoverIso: normalizedCutoverIso,
+      scanned: 0,
+      planned: 0,
+      applied: 0,
+      alreadyMembers: 0,
+      quarantined: 0,
+      skipped: 0,
+      affectedCommunityIds: [],
+    };
+  }
+  const effectiveSinceIso = new Date(Math.max(
+    Date.parse(toIso(sinceIso, normalizedCutoverIso)),
+    Date.parse(normalizedCutoverIso),
+  )).toISOString();
+  const changedFilter = changedSinceFilter(effectiveSinceIso);
+  const changedFeed = await db.collection("lk_community_feed").find(
+    changedFilter,
+    { projection: { relatedTournamentId: 1, tournamentId: 1, details: 1 } },
+  ).toArray();
+  const changedTournamentIds = unique(changedFeed.flatMap(collectPublicationTournamentIds));
+  const tournamentFilter = {
+    $or: [
+      ...changedFilter.$or,
+      ...(changedTournamentIds.length > 0 ? [
+        { tournamentId: { $in: changedTournamentIds } },
+        { exerciseId: { $in: changedTournamentIds } },
+        { id: { $in: changedTournamentIds } },
+      ] : []),
+    ],
+  };
+  const discoveredTournaments = await db.collection("tournaments").find(tournamentFilter).toArray();
+  const tournaments = discoveredTournaments.filter((tournament) => {
+    const sourceAt = toIso(
+      tournament?.timeFrom
+      || tournament?.startsAt
+      || tournament?.params?.timeFrom
+      || tournament?.params?.startsAt
+      || tournament?.createdAt,
+    );
+    return Boolean(sourceAt && Date.parse(sourceAt) >= Date.parse(normalizedCutoverIso));
+  });
+  const skippedBeforeCutover = discoveredTournaments.length - tournaments.length;
+  const tournamentIds = unique(tournaments.map(resolveTournamentId));
+  if (tournamentIds.length === 0) {
+    return {
+      scanned: 0,
+      planned: 0,
+      applied: 0,
+      alreadyMembers: 0,
+      quarantined: 0,
+      skipped: 0,
+      skippedBeforeCutover,
+      affectedCommunityIds: [],
+    };
+  }
+
+  const feedPosts = await db.collection("lk_community_feed").find({
+    archived: { $ne: true },
+    kind: "TOURNAMENT",
+    $or: [
+      { relatedTournamentId: { $in: tournamentIds } },
+      { tournamentId: { $in: tournamentIds } },
+      { "details.relatedTournamentId": { $in: tournamentIds } },
+      { "details.publicTournament.exerciseId": { $in: tournamentIds } },
+      { "details.publicTournament.tournamentId": { $in: tournamentIds } },
+    ],
+  }).toArray();
+  const communityIds = unique(feedPosts.map((post) => toStr(post.communityId)));
+  const communities = communityIds.length > 0
+    ? await db.collection("lk_communities").find({
+      id: { $in: communityIds },
+      archived: { $ne: true },
+    }).toArray()
+    : [];
+  const feedByTournamentId = new Map();
+  feedPosts.forEach((post) => {
+    collectPublicationTournamentIds(post).forEach((tournamentId) => {
+      const rows = feedByTournamentId.get(tournamentId) || [];
+      rows.push(post);
+      feedByTournamentId.set(tournamentId, rows);
+    });
+  });
+
+  const plans = tournaments.map((tournament) => planTimeForFriendsAutoEnrollment({
+    tournament,
+    feedPosts: feedByTournamentId.get(resolveTournamentId(tournament)) || [],
+    communities,
+  }));
+  const operations = plans.flatMap((plan) => plan.operations);
+  const skipped = plans.flatMap((plan) => plan.skipped);
+  const quarantined = plans.flatMap((plan) => plan.quarantined);
+  const affectedCommunityIds = new Set();
+  let applied = 0;
+  let alreadyMembers = skipped.filter((row) => row.reason === "ALREADY_MEMBER").length;
+
+  if (!dryRun) {
+    for (const operation of operations) {
+      const auditId = `auto:${operation.operationId}`;
+      const auditCollection = db.collection("lk_tournament_community_enrollments");
+      const previousAudit = await auditCollection.findOne({ _id: auditId });
+      const previousApplied = ["APPLIED", "APPLIED_IDEMPOTENT", "RECOVERED_APPLIED"].includes(previousAudit?.status);
+      if (!previousApplied) {
+        await auditCollection.updateOne(
+          { _id: auditId },
+          {
+            $set: { status: "PREPARED", updatedAt: nowIso },
+            $setOnInsert: {
+              _id: auditId,
+              operationId: operation.operationId,
+              source: "TIME_FOR_FRIENDS_TOURNAMENT_AUTO_ENROLLMENT",
+              tournamentId: operation.tournamentId,
+              communityId: operation.communityId,
+              playerId: operation.playerId,
+              createdAt: nowIso,
+            },
+          },
+          { upsert: true },
+        );
+      }
+      const mutation = buildTimeForFriendsAutoEnrollmentMutation(operation, nowIso);
+      const result = await db.collection("lk_communities").updateOne(mutation.filter, mutation.update);
+      let status = result?.matchedCount > 0 ? "APPLIED" : null;
+      if (!status) {
+        const current = await db.collection("lk_communities").findOne({ id: operation.communityId });
+        if (!current || current.archived === true) status = "COMMUNITY_NOT_ACTIVE";
+        else if (asArray(current.bannedMembers).some((row) => (
+          toStr(row?.id || row?.clientId || row?.playerId || row?.userId) === operation.playerId
+          || Boolean(operation.phoneNorm && normalizeRatingPhone(row?.phoneNorm || row?.phone) === operation.phoneNorm)
+        ))) status = "PLAYER_BANNED";
+        else {
+          const member = asArray(current.members).find((row) => (
+            toStr(row?.id || row?.clientId || row?.playerId || row?.userId) === operation.playerId
+            || Boolean(operation.phoneNorm && normalizeRatingPhone(row?.phoneNorm || row?.phone) === operation.phoneNorm)
+          ));
+          if (member) {
+            const ownedByOperation = member?.joinSource?.type === operation.joinSourceType
+              && asArray(member?.joinSource?.tournamentIds).includes(operation.tournamentId);
+            status = previousApplied
+              ? "APPLIED_IDEMPOTENT"
+              : (previousAudit?.status === "PREPARED" && ownedByOperation ? "RECOVERED_APPLIED" : "ALREADY_MEMBER");
+          } else status = "READBACK_FAILED";
+        }
+      }
+      if (status === "APPLIED") {
+        applied += 1;
+        affectedCommunityIds.add(operation.communityId);
+      } else if (["ALREADY_MEMBER", "APPLIED_IDEMPOTENT"].includes(status)) {
+        alreadyMembers += 1;
+      } else if (status === "RECOVERED_APPLIED") {
+        applied += 1;
+        affectedCommunityIds.add(operation.communityId);
+      }
+      await auditCollection.updateOne(
+        { _id: auditId },
+        {
+          $set: {
+            status,
+            updatedAt: nowIso,
+          },
+        },
+        { upsert: false },
+      );
+      if (!["APPLIED", "ALREADY_MEMBER", "APPLIED_IDEMPOTENT", "RECOVERED_APPLIED"].includes(status)) {
+        throw new Error(`TFF auto-enrollment ${operation.operationId} failed safe: ${status}`);
+      }
+    }
+  } else {
+    operations.forEach((operation) => affectedCommunityIds.add(operation.communityId));
+  }
+
+  return {
+    enabled: true,
+    cutoverIso: normalizedCutoverIso,
+    scanned: tournaments.length,
+    planned: operations.length,
+    applied,
+    alreadyMembers,
+    quarantined: quarantined.length,
+    skipped: skipped.length,
+    skippedBeforeCutover,
+    quarantinedByReason: Object.fromEntries(Object.entries(quarantined.reduce((counts, row) => {
+      counts[row.reason] = (counts[row.reason] || 0) + 1;
+      return counts;
+    }, {})).sort(([left], [right]) => left.localeCompare(right))),
+    affectedCommunityIds: [...affectedCommunityIds].sort(),
+  };
+}
+
 async function projectChangedLedgerPlayers(db, sinceIso, nowIso, dryRun) {
   const events = await db.collection(PLAYER_RATING_COLLECTIONS.events).find({
     "source.applyToState": { $ne: false },
@@ -697,14 +903,14 @@ function changedSinceFilter(sinceIso) {
   };
 }
 
-async function resolveIncrementalCommunityIds(db, sinceIso, firstRun) {
+export async function resolveIncrementalCommunityIds(db, sinceIso, firstRun) {
   if (firstRun) return activeCommunityIds(db);
   const changedFilter = changedSinceFilter(sinceIso);
   const [communities, feed, games, tournaments, visits, states, events] = await Promise.all([
     db.collection("lk_communities").find(changedFilter, { projection: { id: 1, communityId: 1 } }).toArray(),
-    db.collection("lk_community_feed").find(changedFilter, { projection: { communityId: 1, relatedGameId: 1, relatedTournamentId: 1 } }).toArray(),
+    db.collection("lk_community_feed").find(changedFilter, { projection: { communityId: 1, relatedGameId: 1, relatedTournamentId: 1, tournamentId: 1, details: 1 } }).toArray(),
     db.collection("lk_games").find(changedFilter, { projection: { id: 1, gameId: 1 } }).toArray(),
-    db.collection("tournaments").find(changedFilter, { projection: { tournamentId: 1, id: 1 } }).toArray(),
+    db.collection("tournaments").find(changedFilter, { projection: { tournamentId: 1, exerciseId: 1, id: 1 } }).toArray(),
     db.collection("lk_training_visits").find(changedFilter, { projection: { communityId: 1, relatedCommunityId: 1, studioId: 1 } }).toArray(),
     db.collection(PLAYER_RATING_COLLECTIONS.state).find(changedFilter, { projection: { clientId: 1, phoneNorm: 1 } }).toArray(),
     db.collection(PLAYER_RATING_COLLECTIONS.events).find(changedFilter, { projection: { player: 1, source: 1 } }).toArray(),
@@ -713,7 +919,7 @@ async function resolveIncrementalCommunityIds(db, sinceIso, firstRun) {
   communities.forEach((row) => ids.add(toStr(row.id || row.communityId)));
   feed.forEach((row) => ids.add(toStr(row.communityId)));
   const gameIds = unique(games.map((row) => toStr(row.id || row.gameId)));
-  const tournamentIds = unique(tournaments.map((row) => toStr(row.tournamentId || row.id)));
+  const tournamentIds = unique(tournaments.map((row) => toStr(row.tournamentId || row.exerciseId || row.id)));
   events.forEach((event) => {
     if (event?.source?.domain === "GAME_RESULT") gameIds.push(toStr(event?.source?.sourceId));
     if (["TOURNAMENT", "TOURNAMENT_START"].includes(event?.source?.domain)) {
@@ -725,7 +931,13 @@ async function resolveIncrementalCommunityIds(db, sinceIso, firstRun) {
       archived: { $ne: true },
       $or: [
         ...(gameIds.length ? [{ relatedGameId: { $in: unique(gameIds) } }, { gameId: { $in: unique(gameIds) } }] : []),
-        ...(tournamentIds.length ? [{ relatedTournamentId: { $in: unique(tournamentIds) } }, { tournamentId: { $in: unique(tournamentIds) } }] : []),
+        ...(tournamentIds.length ? [
+          { relatedTournamentId: { $in: unique(tournamentIds) } },
+          { tournamentId: { $in: unique(tournamentIds) } },
+          { "details.relatedTournamentId": { $in: unique(tournamentIds) } },
+          { "details.publicTournament.exerciseId": { $in: unique(tournamentIds) } },
+          { "details.publicTournament.tournamentId": { $in: unique(tournamentIds) } },
+        ] : []),
       ],
     }, { projection: { communityId: 1 } }).toArray();
     linked.forEach((row) => ids.add(toStr(row.communityId)));
@@ -860,6 +1072,8 @@ async function runWorker() {
   const dryRun = hasFlag("--dry-run");
   const outPath = getArg("--out");
   const projectionUrl = getArg("--projection-url", process.env.RATING_PROJECTION_URL || "http://127.0.0.1:1880/lk/onboarding/level");
+  const tffAutoEnrollmentEnabled = String(process.env.TFF_AUTO_ENROLLMENT_ENABLED || "").trim().toLowerCase() === "true";
+  const tffAutoEnrollmentCutoverIso = toIso(process.env.TFF_AUTO_ENROLLMENT_CUTOVER_ISO);
   if (!mongoUri) throw new Error("Provide --mongo-uri or MONGO_URI/MONGODB_URI");
   if (!["incremental", "full", "postcheck"].includes(mode)) throw new Error(`Unknown mode: ${mode}`);
   const client = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10_000, connectTimeoutMS: 10_000 });
@@ -908,6 +1122,13 @@ async function runWorker() {
       nowIso: startedAt,
       dryRun,
     });
+    const timeForFriendsEnrollment = await processTimeForFriendsAutoEnrollments(db, {
+      sinceIso: mode === "full" ? notBeforeIso : overlapStart,
+      nowIso: startedAt,
+      dryRun,
+      enabled: tffAutoEnrollmentEnabled,
+      cutoverIso: tffAutoEnrollmentCutoverIso,
+    });
     const eventProjection = await projectChangedLedgerPlayers(db, overlapStart, startedAt, dryRun);
     const compatibilityReconciliation = mode === "full"
       ? await reconcileCompatibilityProjection(db, startedAt, dryRun)
@@ -915,7 +1136,9 @@ async function runWorker() {
     const communityIds = mode === "full"
       ? await activeCommunityIds(db)
       : await resolveIncrementalCommunityIds(db, overlapStart, !registry?.watermark);
-    const community = await recalculateCommunities(db, communityIds, startedAt, dryRun);
+    timeForFriendsEnrollment.affectedCommunityIds.forEach((communityId) => communityIds.push(communityId));
+    const uniqueCommunityIds = unique(communityIds);
+    const community = await recalculateCommunities(db, uniqueCommunityIds, startedAt, dryRun);
     const vivaProjection = await processProjectionOutbox(db, projectionUrl, startedAt, dryRun);
     const finishedAt = new Date().toISOString();
     const summary = {
@@ -930,6 +1153,7 @@ async function runWorker() {
       watermarkBefore,
       watermarkAfter: startedAt,
       ledger,
+      timeForFriendsEnrollment,
       eventProjection,
       compatibilityReconciliation,
       community,
@@ -938,7 +1162,7 @@ async function runWorker() {
     if (!dryRun) {
       await db.collection(PLAYER_RATING_COLLECTIONS.jobRuns).updateOne(
         { runId },
-        { $set: { status: "SUCCEEDED", finishedAt, durationMs: summary.durationMs, counts: { ledger, eventProjection, compatibilityReconciliation, community, vivaProjection } } },
+        { $set: { status: "SUCCEEDED", finishedAt, durationMs: summary.durationMs, counts: { ledger, timeForFriendsEnrollment, eventProjection, compatibilityReconciliation, community, vivaProjection } } },
       );
       await releaseLease(db, jobKey, owner, {
         jobKey,

@@ -131,7 +131,23 @@ const buildRequests = (baseMsg, context, targets) => {
       Accept: "application/json",
     },
     payload: context.commandAction === "start"
-      ? { tournament_id: context.tournamentId }
+      ? {
+        tournament_id: context.tournamentId,
+        ...(context.publishedCommunities.length > 0
+          ? {
+            ...(context.ratingCommunityId
+              ? {
+                community_id: context.ratingCommunityId,
+                rating_community_id: context.ratingCommunityId,
+              }
+              : {}),
+            published_communities: context.publishedCommunities.map((row) => ({
+              community_id: row.communityId,
+              role: row.role,
+            })),
+          }
+          : {}),
+      }
       : undefined,
   }));
 };
@@ -140,6 +156,15 @@ const context = isObj(msg._tournamentBroadcast) ? msg._tournamentBroadcast : nul
 const rows = Array.isArray(msg.payload) ? msg.payload : [];
 const tournament = rows.find((row) => isObj(row) && toStr(row.tournamentId) === context?.tournamentId) || null;
 if (!context || !tournament) return respond(404, "TOURNAMENT_NOT_FOUND", "Турнир не найден");
+const publishedCommunities = Array.isArray(tournament.publishedCommunities)
+  ? tournament.publishedCommunities
+    .filter((row) => isObj(row) && toStr(row.communityId))
+    .map((row) => ({
+      communityId: toStr(row.communityId),
+      role: toStr(row.role) === "RATING_PRIMARY" ? "RATING_PRIMARY" : "DISCOVERY_ONLY",
+    }))
+  : [];
+const ratingCommunityId = toStr(tournament.ratingCommunityId);
 
 const organizerId = toStr(tournament.organizer?.id || tournament.params?.organizerId);
 if (!context.hasHostingAccess && (!organizerId || organizerId !== context.profileId)) {
@@ -296,6 +321,8 @@ const commandContext = {
   apiBaseUrl,
   integrationToken,
   tournamentMongoId: tournament._id ?? null,
+  publishedCommunities,
+  ratingCommunityId,
   stationFilterField: toStr(tournament.params?.stationId) === stationId
     ? "params.stationId"
     : toStr(tournament.stationId) === stationId

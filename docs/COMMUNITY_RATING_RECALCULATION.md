@@ -152,6 +152,10 @@ Legacy request aliases such as `7d`, `week`, `90d`, and `quarter` are normalized
 
 Recommended production schedule:
 
+- before each community recalculation, the worker plans exact Time for Friends
+  participant enrollment from active tournament publications; ambiguous targets
+  are quarantined and never selected by station/community name;
+
 - run after confirmed game result publication;
 - run after tournament standings finalization;
 - run after training visit confirmation sync;

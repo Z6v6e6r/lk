@@ -1127,3 +1127,14 @@
 - Второй Viva screenshot подтвердил списание CREATE 60 `15 -> 14` в 10:40 МСК. Первый последующий Client event показывает `14 -> 15`, но далее в том же окне есть несколько чужих изменений до остатка `17`, поэтому причинная атрибуция возврата загрязнена параллельными мутациями.
 - Перед нажатием cancel выполнен fail-closed readback: тестовой игры уже нет в active cabinet, direct LK lookup возвращает `Game not found`, а exact 22 августа 07:00–08:00 Ясенево присутствует в `Отменённых`. Повторный cancel не отправлялся.
 - Create case повышен до `PARTIAL_BALANCE_CONFIRMED_NO_HAR`; cancellation case отмечен `PARTIAL_EXTERNAL_ACTION_NO_HAR_AMBIGUOUS_BALANCE`. Для Golden rerun обязательны exclusive mutation window, видимый refund option и raw HAR.
+
+# 2026-08-11 — Публикации турнира и runtime auto-enrollment
+
+- От свежего live Node-RED SHA `08d7c2f9…` спроектирован source-first candidate: history турнира обогащается `publishedCommunities/ratingCommunityId`, а broadcast start передаёт приставке точные community IDs без данных игроков.
+- Новые tournament/community publication snapshots сохраняют точные Viva `directionId=5278` и `studioId`; имена не участвуют в выборе группы.
+- Rating worker `v1.0.12` перед пересчётом атомарно добавляет новых участников «Время на друзей» только при единственной активной публикации либо единственном `RATING_PRIMARY`; ambiguity, ban, station/direction conflicts и legacy phone-only identity fail closed.
+- Исторические standings не синтезируются: auto-enrollment создаёт членство/base row, но турнирные очки появляются только из финализированного локального результата.
+- Этап изолированной реализации: live deploy/data mutation, интеграция в `main` и push не выполнялись.
+- После строгого review runtime enrollment переведён в default-off режим с обязательным cutover; full job ограничен тем же cutover и не выполняет исторический backfill.
+- Mutation authority не доверяет client feed author/member: требуется server-owned exact `validatedPublications` relation в `TIME_FOR_FRIENDS` metadata целевой community и совпадение трёх station IDs. Roster без active/capacity/positive spot и provisional standings fail closed.
+- Турнирная карточка показывает названия/ID всех сообществ публикации и отдельно сигнализирует ambiguous rating target; приставка не получает scalar community ID до разрешения ambiguity.

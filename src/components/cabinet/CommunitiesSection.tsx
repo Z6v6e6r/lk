@@ -1257,9 +1257,17 @@ function buildTournamentPostDetails(option: FeedTournamentOption) {
 
   return {
     tournamentId: tournamentLinkId,
+    directionId: tournament.direction?.id ?? null,
+    studioId: tournament.studio?.id ?? null,
     publicTournament: {
       tournamentId: tournamentLinkId,
       exerciseId: tournamentLinkId,
+      direction: tournament.direction
+        ? { id: tournament.direction.id, name: tournament.direction.name ?? null }
+        : null,
+      studio: tournament.studio
+        ? { id: tournament.studio.id, name: tournament.studio.name ?? null }
+        : null,
       name: buildTournamentTitle(tournament),
       startsAt: tournament.timeFrom,
       endsAt: tournament.timeTo,
@@ -4532,7 +4540,12 @@ export function CommunitiesSection({
       relatedTournamentId: selectedTournamentOption
         ? resolveCommunityTournamentLinkId(selectedTournamentOption.tournament)
         : null,
-      details: selectedTournamentOption ? buildTournamentPostDetails(selectedTournamentOption) : null,
+      details: selectedTournamentOption
+        ? {
+          ...buildTournamentPostDetails(selectedTournamentOption),
+          communityName: selectedCommunity.name,
+        }
+        : null,
     };
 
     const response = editingFeedPostId

@@ -1416,6 +1416,8 @@ function buildTournamentPayloadFromHistory(history: TournamentHistoryRecord): Am
       rating: participant.rating ?? null,
       photo: participant.photo ?? null,
       name: participant.name || `Участник ${index + 1}`,
+      spot: participant.spot ?? null,
+      isCancelled: participant.isCancelled ?? false,
     })),
     rounds: history.rounds as AmericanoTournamentPayload["rounds"],
   };
@@ -1433,6 +1435,7 @@ function withTournamentStationContext(
 ): AmericanoTournamentPayload {
   const stationId = String(tournament?.studio?.id || "").trim();
   if (!stationId) return payload;
+  const directionId = Number(tournament?.direction?.id);
 
   return {
     ...payload,
@@ -1440,6 +1443,11 @@ function withTournamentStationContext(
       ...(payload.params ?? {}),
       stationId,
       stationName: String(tournament?.studio?.name || "").trim() || null,
+      ...(Number.isFinite(directionId) ? { directionId } : {}),
+      directionName: String(tournament?.direction?.name || "").trim() || null,
+      maxParticipants: Number.isFinite(Number(tournament?.maxClientsCount))
+        ? Number(tournament?.maxClientsCount)
+        : null,
     },
   };
 }
@@ -1474,6 +1482,8 @@ function buildTournamentHistoryRecordFromPayload(
       photo: participant.photo ?? null,
       rating: participant.rating ?? null,
       name: participant.name || `Участник ${index + 1}`,
+      spot: participant.spot ?? null,
+      isCancelled: participant.isCancelled ?? false,
     })),
     participantsCount: payload.participants.length,
     maxParticipants: previousHistory?.maxParticipants ?? tournament?.maxClientsCount ?? null,
@@ -1503,6 +1513,9 @@ function buildTournamentHistoryRecordFromPayload(
     totals: totals ?? previousHistory?.totals ?? null,
     playerLogs: playerLogs ?? previousHistory?.playerLogs ?? null,
     startRatingChanges: payload.startRatingChanges ?? previousHistory?.startRatingChanges ?? [],
+    publishedCommunities: previousHistory?.publishedCommunities ?? [],
+    ratingCommunityId: previousHistory?.ratingCommunityId ?? null,
+    ratingCommunityStatus: previousHistory?.ratingCommunityStatus ?? "NOT_PUBLISHED",
     createdAt: previousHistory?.createdAt ?? payload.createdAt,
     updatedAt: new Date().toISOString(),
   };
@@ -2022,6 +2035,8 @@ function TournamentDetailsModal({
         rating: participant.rating ?? null,
         photo: participant.photo ?? null,
         name: participant.name,
+        spot: participant.spot ?? null,
+        isCancelled: false,
       })),
       startRatingChanges,
       rounds: roundsForServer,
@@ -7911,6 +7926,27 @@ export default function TournamentsPage({
                   )}
                   {ex.studio?.address && (
                     <div className="tournament-address">{ex.studio.address}</div>
+                  )}
+                  {historyRecord?.publishedCommunities && historyRecord.publishedCommunities.length > 0 && (
+                    <div className="tournament-community-publications" aria-label="Сообщества публикации">
+                      <span className="tournament-community-publications__label">Опубликован:</span>
+                      {historyRecord.publishedCommunities.map((publication) => (
+                        <span
+                          className={`tournament-community-chip${
+                            publication.communityId === historyRecord.ratingCommunityId
+                              ? " tournament-community-chip--rating"
+                              : ""
+                          }`}
+                          key={publication.communityId}
+                          title={`ID сообщества: ${publication.communityId}`}
+                        >
+                          {publication.communityName || publication.communityId}
+                        </span>
+                      ))}
+                      {historyRecord.ratingCommunityStatus === "AMBIGUOUS" && (
+                        <span className="tournament-community-warning">Нужно выбрать рейтинговое сообщество</span>
+                      )}
+                    </div>
                   )}
                   </button>
                 );

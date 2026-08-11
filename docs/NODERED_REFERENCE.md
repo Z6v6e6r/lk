@@ -113,6 +113,13 @@ npm run nodered:modular:build
 - Endpoint одного игрока читает только `community_rating_snapshots`, не сопоставляет телефон/имя и не возвращает имя, телефон или аватар. Отсутствующий/stale snapshot завершается fail-closed `503`.
 - Source functions: `scripts/nodered_community_player_rating_nodes/`; guarded patch: `scripts/patch_nodered_community_player_rating_flow.mjs`.
 
+### Сообщества публикации турнира
+
+- `GET /lk/tournaments/americano/history?tournamentId=<id>` возвращает `publishedCommunities`, `ratingCommunityId` и `ratingCommunityStatus` из активных точных публикаций `lk_community_feed`.
+- Команда `POST /lk/tournaments/broadcast/start` передаёт приставке `community_id`, `rating_community_id` и `published_communities`, если публикации существуют; без публикаций сохраняется старый request body.
+- Несколько публикаций без единственного `RATING_PRIMARY` дают `ratingCommunityId=null` и статус `AMBIGUOUS`.
+- Source functions: `scripts/nodered_tournament_community_nodes/`; guarded source-first patch: `scripts/patch_live_tournament_community_context.mjs`.
+
 ### Атомарная запись по абонементу
 
 - `POST /lk/subscription-bookings` — единая серверная точка дневного claim. Для `action=book` обязательны Bearer, стабильный non-secret `operationId`, `exerciseId` и точный `clientSubscriptionId`; для `action=release` — Bearer, отдельный стабильный `operationId` и точный `bookingId` подтверждённо отменённой записи.

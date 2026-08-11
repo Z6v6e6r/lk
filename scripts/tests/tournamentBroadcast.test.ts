@@ -578,6 +578,87 @@ test("legacy single-box stations keep their existing no-target contract", () => 
   assert.equal(mismatchResult[2].payload.code, "TOURNAMENT_STATION_MISMATCH");
 });
 
+test("broadcast start passes resolved community context to the box without member data", () => {
+  const message = {
+    payload: [{
+      tournamentId: "tournament-1",
+      organizer: { id: "manager-1" },
+      params: { stationId: "station-1" },
+      ratingCommunityId: "community-rating",
+      publishedCommunities: [
+        { communityId: "community-rating", role: "RATING_PRIMARY" },
+        { communityId: "community-discovery", role: "DISCOVERY_ONLY" },
+      ],
+    }],
+    _tournamentBroadcast: {
+      action: "start",
+      tournamentId: "tournament-1",
+      requestedStationId: "station-1",
+      requestedTarget: null,
+      profileId: "manager-1",
+      hasHostingAccess: false,
+    },
+  };
+  const result = runFunctionNode(
+    "fn_tournament_broadcast_route.js",
+    message,
+    {
+      ...integrationEnvironment,
+      CUP_STATION_SETTINGS_JSON: JSON.stringify({
+        "station-1": { tournamentBroadcastBoxId: "box-from-cup" },
+      }),
+    },
+  );
+  const requests = dispatchRouteToDeviceRequests(result);
+  assert.deepEqual(requests[0].payload, {
+    tournament_id: "tournament-1",
+    community_id: "community-rating",
+    rating_community_id: "community-rating",
+    published_communities: [
+      { community_id: "community-rating", role: "RATING_PRIMARY" },
+      { community_id: "community-discovery", role: "DISCOVERY_ONLY" },
+    ],
+  });
+  assert.equal(JSON.stringify(requests[0].payload).includes("player"), false);
+});
+
+test("ambiguous publication list omits unresolved scalar community ids", () => {
+  const result = runFunctionNode(
+    "fn_tournament_broadcast_route.js",
+    {
+      payload: [{
+        tournamentId: "tournament-1",
+        organizer: { id: "manager-1" },
+        params: { stationId: "station-1" },
+        ratingCommunityId: null,
+        ratingCommunityStatus: "AMBIGUOUS",
+        publishedCommunities: [
+          { communityId: "community-a", role: "DISCOVERY_ONLY" },
+          { communityId: "community-b", role: "DISCOVERY_ONLY" },
+        ],
+      }],
+      _tournamentBroadcast: {
+        action: "start",
+        tournamentId: "tournament-1",
+        requestedStationId: "station-1",
+        requestedTarget: null,
+        profileId: "manager-1",
+        hasHostingAccess: false,
+      },
+    },
+    {
+      ...integrationEnvironment,
+      CUP_STATION_SETTINGS_JSON: JSON.stringify({
+        "station-1": { tournamentBroadcastBoxId: "box-from-cup" },
+      }),
+    },
+  );
+  const [request] = dispatchRouteToDeviceRequests(result);
+  assert.equal("community_id" in request.payload, false);
+  assert.equal("rating_community_id" in request.payload, false);
+  assert.equal(request.payload.published_communities.length, 2);
+});
+
 test("legacy single-box start and stop still complete through aggregate and persistence", () => {
   const environment = {
     ...integrationEnvironment,

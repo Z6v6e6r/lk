@@ -160,6 +160,10 @@ exits non-zero. Retries are idempotent.
 The script does not create feed posts and does not remove members after a
 tournament.
 
+Future tournaments are handled separately by the rating-worker runtime described
+in `docs/TIME_FOR_FRIENDS_RUNTIME_ENROLLMENT.md`. The backfill remains a bounded,
+operator-reviewed historical repair and is not a scheduler.
+
 ## Rating recalculation
 
 After membership apply and readback, first dry-run only the affected communities

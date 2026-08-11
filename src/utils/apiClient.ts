@@ -2731,6 +2731,16 @@ export interface TournamentHistoryParticipant {
   phone: string | null;
   photo: string | null;
   rating: string | null;
+  spot?: number | null;
+  isCancelled?: boolean;
+}
+
+export interface TournamentPublishedCommunity {
+  communityId: string;
+  communityName?: string | null;
+  publicationId: string | null;
+  role: "RATING_PRIMARY" | "DISCOVERY_ONLY";
+  stationId: string | null;
 }
 
 export interface TournamentHistoryRecord {
@@ -2756,6 +2766,9 @@ export interface TournamentHistoryRecord {
   totals: AmericanoResultsResponse["totals"] | null;
   playerLogs: AmericanoResultsResponse["playerLogs"] | null;
   startRatingChanges?: TournamentStartRatingChange[];
+  publishedCommunities?: TournamentPublishedCommunity[];
+  ratingCommunityId?: string | null;
+  ratingCommunityStatus?: "RESOLVED" | "NOT_PUBLISHED" | "AMBIGUOUS" | "TOURNAMENT_ID_MISSING";
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -2815,6 +2828,8 @@ export interface AmericanoTournamentPayload {
     rating: string | null;
     photo: string | null;
     name: string;
+    spot?: number | null;
+    isCancelled?: boolean;
   }>;
   startRatingChanges?: TournamentStartRatingChange[];
   rounds?: Array<{
@@ -5439,6 +5454,8 @@ function normalizeTournamentHistoryParticipant(
     phone: pickString(value, ["phone", "phoneNumber", "mobile"]),
     photo: pickString(value, ["photo", "avatar", "imageUrl"]),
     rating: isPhoneLikeRatingValue(rating) ? null : rating,
+    spot: pickNumber(value, ["spot", "placeNumber", "position"]),
+    isCancelled: toBoolean(value.isCancelled) ?? undefined,
   };
 }
 
@@ -5507,6 +5524,30 @@ function normalizeTournamentHistoryRecord(value: unknown): TournamentHistoryReco
     )
     ?? (girlsOnly ? "Женщины" : null)
     ?? (mixed ? "Микст" : null);
+  const publishedCommunities = Array.isArray(value.publishedCommunities)
+    ? value.publishedCommunities
+      .map((entry): TournamentPublishedCommunity | null => {
+        if (!isRecord(entry)) return null;
+        const communityId = pickString(entry, ["communityId"]);
+        if (!communityId) return null;
+        return {
+          communityId,
+          communityName: pickString(entry, ["communityName", "name"]),
+          publicationId: pickString(entry, ["publicationId", "postId"]),
+          role: pickString(entry, ["role", "publicationRole"]) === "RATING_PRIMARY"
+            ? "RATING_PRIMARY"
+            : "DISCOVERY_ONLY",
+          stationId: pickString(entry, ["stationId", "studioId"]),
+        };
+      })
+      .filter((entry): entry is TournamentPublishedCommunity => entry !== null)
+    : [];
+  const ratingCommunityId = pickString(value, ["ratingCommunityId"]);
+  const rawRatingCommunityStatus = pickString(value, ["ratingCommunityStatus"]);
+  const ratingCommunityStatus = ["RESOLVED", "NOT_PUBLISHED", "AMBIGUOUS", "TOURNAMENT_ID_MISSING"]
+    .includes(rawRatingCommunityStatus || "")
+    ? rawRatingCommunityStatus as TournamentHistoryRecord["ratingCommunityStatus"]
+    : (ratingCommunityId ? "RESOLVED" : publishedCommunities.length > 0 ? "AMBIGUOUS" : "NOT_PUBLISHED");
 
   return {
     id: tournamentId,
@@ -5548,6 +5589,9 @@ function normalizeTournamentHistoryRecord(value: unknown): TournamentHistoryReco
     startRatingChanges: Array.isArray(value.startRatingChanges)
       ? value.startRatingChanges.filter(isRecord) as unknown as TournamentStartRatingChange[]
       : [],
+    publishedCommunities,
+    ratingCommunityId,
+    ratingCommunityStatus,
     createdAt: pickString(value, ["createdAt", "created"]),
     updatedAt: pickString(value, ["updatedAt", "updated"]),
   };

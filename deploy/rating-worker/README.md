@@ -53,7 +53,7 @@ restore the backed-up Node-RED flow. Already persisted jobs and ledger events mu
 be reconciled explicitly; do not delete them or edit player ratings in place.
 
 Every run writes `rating_job_runs`, advances `rating_job_registry.watermark`
-only after success, clears stale job errors, and includes `rating-worker-v1.0.11`
+only after success, clears stale job errors, and includes `rating-worker-v1.0.12`
 in the registry.
 
 Detailed visit/worker reports are stored under `/var/lib` with mode `0600`;
@@ -61,6 +61,18 @@ the common cron logs contain aggregate summaries only. Historical backfill is
 never part of cron: run `scripts/reconcile_player_rating.mjs` in dry-run mode,
 review its report, and pass its exact confirmation token explicitly before
 `--apply-backfill`.
+
+Time for Friends runtime enrollment is also disabled by default. Enable it only
+after approved communities carry exact `ratingProgram` metadata and a dry-run from
+the intended cutover has no unresolved quarantine:
+
+```env
+TFF_AUTO_ENROLLMENT_ENABLED=true
+TFF_AUTO_ENROLLMENT_CUTOVER_ISO=2026-08-12T00:00:00.000Z
+```
+
+Both incremental and full jobs respect the cutover; they never replace the guarded
+historical membership backfill.
 
 Viva attendance synchronization is best-effort for this wrapper: a provider
 authentication or transport failure is reported in `visits`, but does not

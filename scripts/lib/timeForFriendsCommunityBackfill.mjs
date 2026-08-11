@@ -800,8 +800,8 @@ export function buildTimeForFriendsAtomicMembershipMutation(operation, nowIso) {
     status: "ACTIVE",
     joinedAt,
     joinSource: {
-      type: "TIME_FOR_FRIENDS_TOURNAMENT_BACKFILL",
-      version: TIME_FOR_FRIENDS_BACKFILL_VERSION,
+      type: toStringOrNull(operation.joinSourceType) || "TIME_FOR_FRIENDS_TOURNAMENT_BACKFILL",
+      version: toStringOrNull(operation.joinSourceVersion) || TIME_FOR_FRIENDS_BACKFILL_VERSION,
       tournamentIds: asArray(operation.tournamentIds),
     },
   };
