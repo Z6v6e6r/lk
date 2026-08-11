@@ -1086,6 +1086,7 @@ export default function TournamentSignupPage({
   const [inviteFeedback, setInviteFeedback] = useState<"shared" | "copied" | null>(null);
   const [confirmingSubscriptionProductKey, setConfirmingSubscriptionProductKey] = useState<string | null>(null);
   const [subscriptionConfirmationNotice, setSubscriptionConfirmationNotice] = useState<string | null>(null);
+  const [registrationResolvedFor, setRegistrationResolvedFor] = useState<string | null>(null);
   const [checkoutPreparedFor, setCheckoutPreparedFor] = useState<string | null>(null);
   const [pendingPaymentProduct, setPendingPaymentProduct] = useState<TournamentVivaProduct | null>(null);
   const [isPurchasableListOpen, setPurchasableListOpen] = useState(false);
@@ -1240,6 +1241,7 @@ export default function TournamentSignupPage({
   const loadDetail = useCallback(async (tournamentId: string) => {
     setLoadingDetail(true);
     setError(null);
+    setRegistrationResolvedFor(null);
     const detailResult = await apiFetchTournamentSignupDetail(tournamentId);
     const fallbackExerciseId = items.find((item) => item.id === tournamentId)?.exerciseId ?? tournamentId;
     const exerciseId = detailResult.data?.exerciseId || fallbackExerciseId;
@@ -1264,12 +1266,12 @@ export default function TournamentSignupPage({
     } else {
       setDetail(detailResult.data ?? null);
     }
-    setRegistration(
-      mergeStoredPendingPayment(
-        exerciseId,
-        vivaRegistrationResult?.data ?? registrationResult?.data ?? detailResult.data?.registration ?? null,
-      ),
+    const resolvedRegistration = mergeStoredPendingPayment(
+      exerciseId,
+      vivaRegistrationResult?.data ?? registrationResult?.data ?? detailResult.data?.registration ?? null,
     );
+    setRegistration(resolvedRegistration);
+    setRegistrationResolvedFor(`${tournamentId}:${exerciseId}`);
     setLoadingDetail(false);
   }, [isAuthenticated, items, loadPublicRoster]);
 
@@ -1431,6 +1433,7 @@ export default function TournamentSignupPage({
       setPendingPaymentProduct(null);
       setConfirmingSubscriptionProductKey(null);
       setSubscriptionConfirmationNotice(null);
+      setRegistrationResolvedFor(null);
       setActiveDetailTab("roster");
       setPurchasableListOpen(false);
       setStationModalOpen(false);
@@ -1441,6 +1444,7 @@ export default function TournamentSignupPage({
     setPendingPaymentProduct(null);
     setConfirmingSubscriptionProductKey(null);
     setSubscriptionConfirmationNotice(null);
+    setRegistrationResolvedFor(null);
     setPurchasableListOpen(false);
     setStationModalOpen(false);
   }, [selectedId]);
@@ -1686,6 +1690,12 @@ export default function TournamentSignupPage({
       setCheckoutPreparedFor(null);
       return;
     }
+    const registrationResolutionKey = `${selectedId}:${selectedExerciseId}`;
+    if (registrationResolvedFor !== registrationResolutionKey) {
+      setCheckout(null);
+      setCheckoutPreparedFor(null);
+      return;
+    }
     if (!canRegister) {
       setCheckout(null);
       setCheckoutPreparedFor(null);
@@ -1704,6 +1714,7 @@ export default function TournamentSignupPage({
     checkoutPreparedFor,
     isAuthenticated,
     loadCheckout,
+    registrationResolvedFor,
     selectedExerciseId,
     selectedId,
   ]);
