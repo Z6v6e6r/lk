@@ -4,6 +4,9 @@ Date: 2026-08-11
 
 Status: `READY_FOR_TEST_DATA_ASSIGNMENT`. Runtime mutations have not started.
 
+First live read-only result: `W0_PREFLIGHT_2026-08-11.md`. W1 remains `NO_GO`
+until a synthetic tester, exact provider ids, balance and safe target are assigned.
+
 This document turns the Golden HAR passport into an executable QA and evidence
 plan. It does not approve production testing by itself. Every write requires an
 exact test record, a cleanup owner, and an explicit mutation window.

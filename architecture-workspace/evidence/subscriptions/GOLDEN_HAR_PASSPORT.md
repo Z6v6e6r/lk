@@ -8,6 +8,9 @@ checkpoint.
 Пошаговый порядок выполнения, роли, private run registry и первый безопасный
 capture описаны в `GOLDEN_HAR_EXECUTION_PLAN.md`.
 
+Первый live read-only preflight зафиксирован в `W0_PREFLIGHT_2026-08-11.md`;
+он не изменил статусы Golden cases и завершён решением `NO_GO` для W1.
+
 ## Назначение
 
 Этот паспорт фиксирует минимальный набор наблюдений Viva, без которого нельзя

@@ -59,6 +59,7 @@ architecture-workspace/
     subscriptions/GOLDEN_HAR_PASSPORT.md
     subscriptions/GOLDEN_HAR_EXECUTION_PLAN.md
     subscriptions/GOLDEN_HAR_RUN.example.json
+    subscriptions/W0_PREFLIGHT_2026-08-11.md
   structurizr/
     workspace.dsl
   adr/
@@ -92,6 +93,8 @@ After that, define the first stable `/api/v1` contract.
   test waves, first `JOIN 60 + SERVICE cancellation` run and GO/NO-GO gates.
 - `evidence/subscriptions/GOLDEN_HAR_RUN.example.json` must be copied outside
   Git before raw ids, operators or private paths are filled in.
+- `evidence/subscriptions/W0_PREFLIGHT_2026-08-11.md` records the first live
+  read-only candidate audit and its explicit W1 `NO_GO` decision.
 - `../scripts/sanitize_viva_har.mjs` creates a fail-closed, host/path-filtered HAR
   copy and a manifest. Run `npm run test:har-sanitizer` before using it; a
   `SANITIZED` manifest is still not `REVIEWED` or `APPROVED` evidence.
