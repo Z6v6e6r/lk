@@ -1,0 +1,2124 @@
+openapi: 3.1.0
+info:
+  title: PadlHub Managed Subscriptions API
+  version: 0.1.0
+  description: >
+    Draft contract for managed annual subscriptions. It is the shared boundary
+    for the current LK, the new LK and CUP. No path in this document is claimed
+    to be deployed. Provider-specific write shapes remain gated by the Golden
+    HAR passport.
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Local development placeholder
+tags:
+  - name: Subscription Storefront
+  - name: Subscription Usage
+  - name: Subscription Operations
+  - name: Subscription Admin
+  - name: Subscription Analytics
+  - name: Subscription Reconciliation
+security:
+  - bearerAuth: []
+paths:
+  /subscription-offers:
+    get:
+      tags: [Subscription Storefront]
+      operationId: listSubscriptionOffers
+      summary: List currently visible offers for one station.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/StationIdQuery"
+      responses:
+        "200":
+          description: Visible offers and authoritative release countdowns.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, generatedAt]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SubscriptionOffer"
+                  generatedAt:
+                    type: string
+                    format: date-time
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /subscription-purchase-quotes:
+    post:
+      tags: [Subscription Storefront]
+      operationId: quoteSubscriptionPurchase
+      summary: Quote an offer without reserving inventory.
+      parameters:
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchaseQuoteRequest"
+      responses:
+        "200":
+          description: Short-lived purchase quote.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurchaseQuote"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /subscription-purchase-reservations:
+    post:
+      tags: [Subscription Storefront]
+      operationId: reserveSubscriptionPurchase
+      summary: Atomically reserve one unit from the quoted release phase.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchaseReservationRequest"
+      responses:
+        "201":
+          description: Inventory reserved and payment preparation started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionPurchase"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /subscription-purchases/{purchaseId}/confirm:
+    post:
+      tags: [Subscription Storefront]
+      operationId: confirmSubscriptionPurchase
+      summary: Reconcile payment and provider contract state.
+      description: >
+        This endpoint performs provider readback. A browser redirect or a
+        payment HTTP 2xx is not sufficient to mark the contract ACTIVE.
+      parameters:
+        - $ref: "#/components/parameters/PurchaseIdPath"
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      responses:
+        "200":
+          description: Purchase is in a known non-ambiguous state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionPurchase"
+        "202":
+          description: Durable reconciliation is still in progress.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionPurchase"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /me/subscriptions:
+    get:
+      tags: [Subscription Usage]
+      operationId: listMySubscriptions
+      summary: List the authenticated customer's subscription contracts.
+      parameters:
+        - name: includeExpired
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Contracts with current policy and usage summaries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SubscriptionContractSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /subscription-eligibility-quotes:
+    post:
+      tags: [Subscription Usage]
+      operationId: quoteSubscriptionEligibility
+      summary: Evaluate entitlement, limits and price for one intended action.
+      description: >
+        The quote is explanatory and short-lived. Execution revalidates all
+        rules and must not trust UI state.
+      parameters:
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EligibilityQuoteRequest"
+      responses:
+        "200":
+          description: Eligibility decision, including blockers when rejected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EligibilityQuote"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /subscription-operations:
+    post:
+      tags: [Subscription Operations]
+      operationId: createSubscriptionOperation
+      summary: Execute a subscription-related command through a durable saga.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubscriptionCommand"
+      responses:
+        "200":
+          description: Operation completed synchronously.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionOperation"
+        "202":
+          description: Durable operation accepted; completion is not implied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionOperation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /subscription-operations/{operationId}:
+    get:
+      tags: [Subscription Operations]
+      operationId: getSubscriptionOperation
+      summary: Read the durable outcome and projection status of an operation.
+      parameters:
+        - $ref: "#/components/parameters/OperationIdPath"
+      responses:
+        "200":
+          description: Operation state and sanitized evidence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionOperation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /admin/subscription-types:
+    get:
+      tags: [Subscription Admin]
+      operationId: listAdminSubscriptionTypes
+      summary: List managed and imported subscription types.
+      parameters:
+        - $ref: "#/components/parameters/StationIdOptionalQuery"
+        - $ref: "#/components/parameters/PageCursorQuery"
+      responses:
+        "200":
+          description: Subscription types visible to the operator.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionTypePage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [Subscription Admin]
+      operationId: createAdminSubscriptionType
+      summary: Create a draft subscription type.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSubscriptionTypeRequest"
+      responses:
+        "201":
+          description: Draft type created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionType"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /admin/subscription-types/{subscriptionTypeId}/policy-versions:
+    post:
+      tags: [Subscription Admin]
+      operationId: createSubscriptionPolicyVersion
+      summary: Create an immutable-candidate draft policy version.
+      parameters:
+        - $ref: "#/components/parameters/SubscriptionTypeIdPath"
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePolicyVersionRequest"
+      responses:
+        "201":
+          description: Draft policy version created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionPolicyVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /admin/subscription-types/{subscriptionTypeId}/policy-versions/{version}/publish:
+    post:
+      tags: [Subscription Admin]
+      operationId: publishSubscriptionPolicyVersion
+      summary: Publish a policy after impact validation.
+      parameters:
+        - $ref: "#/components/parameters/SubscriptionTypeIdPath"
+        - $ref: "#/components/parameters/PolicyVersionPath"
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, expectedDraftRevision]
+              properties:
+                reason:
+                  type: string
+                  minLength: 10
+                expectedDraftRevision:
+                  type: integer
+                  minimum: 1
+      responses:
+        "200":
+          description: Published version and impact summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [policy, impact]
+                properties:
+                  policy:
+                    $ref: "#/components/schemas/SubscriptionPolicyVersion"
+                  impact:
+                    $ref: "#/components/schemas/PolicyImpact"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /admin/subscription-release-programs:
+    get:
+      tags: [Subscription Admin]
+      operationId: listSubscriptionReleasePrograms
+      summary: List release programs and inventory counters.
+      parameters:
+        - $ref: "#/components/parameters/StationIdOptionalQuery"
+        - $ref: "#/components/parameters/PageCursorQuery"
+      responses:
+        "200":
+          description: Release programs visible to the operator.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ReleaseProgram"
+                  nextCursor:
+                    type: [string, "null"]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [Subscription Admin]
+      operationId: createSubscriptionReleaseProgram
+      summary: Create a draft phased release program.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReleaseProgramRequest"
+      responses:
+        "201":
+          description: Draft release program created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleaseProgram"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /admin/subscription-release-programs/{releaseProgramId}/actions:
+    post:
+      tags: [Subscription Admin]
+      operationId: changeSubscriptionReleaseProgramState
+      summary: Publish, activate, pause, resume or close a release program.
+      parameters:
+        - $ref: "#/components/parameters/ReleaseProgramIdPath"
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, reason, expectedRevision]
+              properties:
+                action:
+                  type: string
+                  enum: [PUBLISH, ACTIVATE, PAUSE, RESUME, CLOSE]
+                reason:
+                  type: string
+                  minLength: 10
+                expectedRevision:
+                  type: integer
+                  minimum: 1
+      responses:
+        "200":
+          description: Updated program.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleaseProgram"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /admin/subscription-buyers:
+    get:
+      tags: [Subscription Admin]
+      operationId: listSubscriptionBuyers
+      summary: List purchases and linked provider contracts.
+      parameters:
+        - $ref: "#/components/parameters/StationIdOptionalQuery"
+        - name: subscriptionTypeId
+          in: query
+          schema:
+            type: string
+        - name: releasePhaseId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/PurchaseState"
+        - $ref: "#/components/parameters/PageCursorQuery"
+      responses:
+        "200":
+          description: Masked buyer records.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SubscriptionBuyer"
+                  nextCursor:
+                    type: [string, "null"]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/subscription-provider-catalog:
+    get:
+      tags: [Subscription Admin]
+      operationId: listSubscriptionProviderCatalog
+      summary: Discover provider products and existing-contract counts read-only.
+      description: >
+        Discovery never changes provider contracts. Ambiguous and unmapped
+        candidates remain quarantined until an operator approves a mapping.
+      parameters:
+        - $ref: "#/components/parameters/StationIdOptionalQuery"
+        - name: mappingStatus
+          in: query
+          schema:
+            type: string
+            enum: [UNMAPPED, MAPPED, AMBIGUOUS, QUARANTINED]
+        - $ref: "#/components/parameters/PageCursorQuery"
+      responses:
+        "200":
+          description: Sanitized provider product candidates.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProviderProductCandidate"
+                  nextCursor:
+                    type: [string, "null"]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/subscription-provider-mappings:
+    post:
+      tags: [Subscription Admin]
+      operationId: createSubscriptionProviderMapping
+      summary: Map one discovered provider product to a managed type.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [providerProductCandidateId, subscriptionTypeId, reason]
+              properties:
+                providerProductCandidateId:
+                  type: string
+                subscriptionTypeId:
+                  type: string
+                reason:
+                  type: string
+                  minLength: 10
+      responses:
+        "201":
+          description: Mapping created without mutating the provider product.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderProductMapping"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /admin/subscription-import-jobs:
+    post:
+      tags: [Subscription Admin]
+      operationId: createSubscriptionImportJob
+      summary: Dry-run or apply local links for existing provider contracts.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [providerMappingIds, mode, reason]
+              properties:
+                providerMappingIds:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items:
+                    type: string
+                mode:
+                  type: string
+                  enum: [DRY_RUN, APPLY_LOCAL_LINKS]
+                expectedCandidateCount:
+                  type: [integer, "null"]
+                  minimum: 0
+                reason:
+                  type: string
+                  minLength: 10
+      responses:
+        "202":
+          description: Durable import job accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionImportJob"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /admin/subscription-import-jobs/{importJobId}:
+    get:
+      tags: [Subscription Admin]
+      operationId: getSubscriptionImportJob
+      summary: Read dry-run/apply results and unresolved candidates.
+      parameters:
+        - $ref: "#/components/parameters/ImportJobIdPath"
+      responses:
+        "200":
+          description: Import job and preserved postcheck summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionImportJob"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /admin/subscription-analytics/ltv:
+    get:
+      tags: [Subscription Analytics]
+      operationId: getSubscriptionLtv
+      summary: Return source-backed gross and net LTV cohorts.
+      parameters:
+        - $ref: "#/components/parameters/StationIdOptionalQuery"
+        - name: subscriptionTypeId
+          in: query
+          schema:
+            type: string
+        - name: cohortFrom
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: cohortTo
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: LTV report with metric definitions and completeness.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LtvReport"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/subscription-reconciliation-cases:
+    get:
+      tags: [Subscription Reconciliation]
+      operationId: listSubscriptionReconciliationCases
+      summary: List ambiguous and partial lifecycle operations.
+      parameters:
+        - $ref: "#/components/parameters/StationIdOptionalQuery"
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [OPEN, IN_PROGRESS, RESOLVED, ESCALATED]
+        - $ref: "#/components/parameters/PageCursorQuery"
+      responses:
+        "200":
+          description: Reconciliation cases.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ReconciliationCase"
+                  nextCursor:
+                    type: [string, "null"]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/subscription-reconciliation-cases/{caseId}/actions:
+    post:
+      tags: [Subscription Reconciliation]
+      operationId: actOnSubscriptionReconciliationCase
+      summary: Run a reviewed readback, retry projection or explicit repair.
+      parameters:
+        - $ref: "#/components/parameters/CaseIdPath"
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+        - $ref: "#/components/parameters/CorrelationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, reason, expectedRevision]
+              properties:
+                action:
+                  type: string
+                  enum: [READBACK, RETRY_PROJECTIONS, ESCALATE, RESOLVE_NO_CHANGE, APPLY_REVIEWED_REPAIR]
+                reason:
+                  type: string
+                  minLength: 10
+                expectedRevision:
+                  type: integer
+                  minimum: 1
+      responses:
+        "200":
+          description: Updated case after an idempotent action.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationCase"
+        "202":
+          description: Durable action accepted and still running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationCase"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Stable caller-generated key. Reuse with a different payload is a conflict.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+    CorrelationIdHeader:
+      name: X-Correlation-Id
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+    StationIdQuery:
+      name: stationId
+      in: query
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    StationIdOptionalQuery:
+      name: stationId
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 1
+    PageCursorQuery:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+    PurchaseIdPath:
+      name: purchaseId
+      in: path
+      required: true
+      schema:
+        type: string
+    OperationIdPath:
+      name: operationId
+      in: path
+      required: true
+      schema:
+        type: string
+    SubscriptionTypeIdPath:
+      name: subscriptionTypeId
+      in: path
+      required: true
+      schema:
+        type: string
+    PolicyVersionPath:
+      name: version
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    ReleaseProgramIdPath:
+      name: releaseProgramId
+      in: path
+      required: true
+      schema:
+        type: string
+    CaseIdPath:
+      name: caseId
+      in: path
+      required: true
+      schema:
+        type: string
+    ImportJobIdPath:
+      name: importJobId
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: Request shape or query is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: Authentication is missing or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Actor lacks permission for the station or action.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource is absent or not visible to the actor.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Current state, inventory, policy or idempotency conflicts with the command.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    UnprocessableEntity:
+      description: Domain validation failed before any external mutation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    Money:
+      type: object
+      required: [amountMinor, currency]
+      properties:
+        amountMinor:
+          type: integer
+          minimum: 0
+        currency:
+          type: string
+          enum: [RUB]
+
+    ErrorCode:
+      type: string
+      enum:
+        - VALIDATION_ERROR
+        - AUTH_REQUIRED
+        - FORBIDDEN
+        - NOT_FOUND
+        - POLICY_VERSION_CONFLICT
+        - SUBSCRIPTION_NOT_ACTIVE
+        - SUBSCRIPTION_ACTION_DISABLED
+        - STATION_NOT_ALLOWED
+        - EVENT_TYPE_NOT_ALLOWED
+        - DURATION_NOT_ALLOWED
+        - BOOKING_WINDOW_EXCEEDED
+        - ACTIVE_SERVICE_LIMIT_REACHED
+        - DAILY_USAGE_LIMIT_REACHED
+        - RELEASE_NOT_ACTIVE
+        - RELEASE_SOLD_OUT
+        - PURCHASE_LIMIT_REACHED
+        - RESERVATION_EXPIRED
+        - PAYMENT_PENDING
+        - PRICE_CHANGED
+        - IDEMPOTENCY_CONFLICT
+        - UPSTREAM_UNAVAILABLE
+        - UPSTREAM_STATE_UNVERIFIED
+        - UNSUPPORTED_REFUND_METHOD
+        - RECONCILIATION_REQUIRED
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, correlationId, retryable]
+          properties:
+            code:
+              $ref: "#/components/schemas/ErrorCode"
+            message:
+              type: string
+            correlationId:
+              type: string
+            retryable:
+              type: boolean
+              description: True never authorizes a blind retry with a new idempotency key.
+            operationId:
+              type: [string, "null"]
+            details:
+              type: object
+              additionalProperties: true
+
+    SubscriptionOffer:
+      type: object
+      required:
+        - offerId
+        - subscriptionTypeId
+        - stationId
+        - title
+        - price
+        - availability
+        - policyVersion
+      properties:
+        offerId:
+          type: string
+        subscriptionTypeId:
+          type: string
+        stationId:
+          type: string
+        title:
+          type: string
+        description:
+          type: [string, "null"]
+        price:
+          $ref: "#/components/schemas/Money"
+        policyVersion:
+          type: integer
+          minimum: 1
+        availability:
+          type: object
+          required: [state, availableCount, reservedCount, soldCount]
+          properties:
+            state:
+              type: string
+              enum: [AVAILABLE, PAUSED, SOLD_OUT, SCHEDULED, CLOSED]
+            availableCount:
+              type: integer
+              minimum: 0
+            reservedCount:
+              type: integer
+              minimum: 0
+            soldCount:
+              type: integer
+              minimum: 0
+            releasePhaseId:
+              type: [string, "null"]
+            nextReleaseAt:
+              type: [string, "null"]
+              format: date-time
+
+    PurchaseQuoteRequest:
+      type: object
+      required: [offerId]
+      properties:
+        offerId:
+          type: string
+
+    PurchaseQuote:
+      type: object
+      required:
+        - quoteId
+        - offerId
+        - subscriptionTypeId
+        - stationId
+        - releasePhaseId
+        - policyVersion
+        - price
+        - expiresAt
+      properties:
+        quoteId:
+          type: string
+        offerId:
+          type: string
+        subscriptionTypeId:
+          type: string
+        stationId:
+          type: string
+        releasePhaseId:
+          type: string
+        policyVersion:
+          type: integer
+          minimum: 1
+        price:
+          $ref: "#/components/schemas/Money"
+        expiresAt:
+          type: string
+          format: date-time
+
+    PurchaseReservationRequest:
+      type: object
+      required: [quoteId]
+      properties:
+        quoteId:
+          type: string
+        returnUrl:
+          type: [string, "null"]
+          format: uri
+
+    PurchaseState:
+      type: string
+      enum:
+        - RESERVED
+        - PAYMENT_PENDING
+        - PAID_PENDING_CONTRACT
+        - ACTIVE
+        - FAILED
+        - EXPIRED
+        - REFUND_PENDING
+        - REFUNDED
+        - PENDING_RECONCILIATION
+
+    SubscriptionPurchase:
+      type: object
+      required:
+        - purchaseId
+        - state
+        - subscriptionTypeId
+        - stationId
+        - releasePhaseId
+        - policyVersion
+        - price
+        - createdAt
+        - updatedAt
+      properties:
+        purchaseId:
+          type: string
+        state:
+          $ref: "#/components/schemas/PurchaseState"
+        subscriptionTypeId:
+          type: string
+        stationId:
+          type: string
+        releasePhaseId:
+          type: string
+        policyVersion:
+          type: integer
+          minimum: 1
+        price:
+          $ref: "#/components/schemas/Money"
+        reservationExpiresAt:
+          type: [string, "null"]
+          format: date-time
+        paymentUrl:
+          type: [string, "null"]
+          format: uri
+        contractId:
+          type: [string, "null"]
+        operationId:
+          type: [string, "null"]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    SubscriptionContractSummary:
+      type: object
+      required:
+        - contractId
+        - subscriptionTypeId
+        - stationIds
+        - state
+        - startsAt
+        - expiresAt
+        - policyVersion
+        - usage
+      properties:
+        contractId:
+          type: string
+        subscriptionTypeId:
+          type: string
+        title:
+          type: string
+        stationIds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        state:
+          type: string
+          enum: [PENDING, ACTIVE, SUSPENDED, EXPIRED, CANCELLED]
+        startsAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        policyVersion:
+          type: integer
+          minimum: 1
+        usage:
+          type: object
+          required: [activeServices, maxActiveServices, dailyUsed, dailyLimit]
+          properties:
+            activeServices:
+              type: integer
+              minimum: 0
+            maxActiveServices:
+              type: integer
+              minimum: 0
+            dailyUsed:
+              type: integer
+              minimum: 0
+            dailyLimit:
+              type: integer
+              minimum: 0
+            serviceDate:
+              type: string
+              format: date
+
+    SubscriptionAction:
+      type: string
+      enum:
+        - CREATE_GAME
+        - JOIN_GAME
+        - BOOK_GROUP_EVENT
+        - BOOK_TOURNAMENT
+        - LEAVE_BOOKING
+        - REMOVE_PARTICIPANT
+        - CANCEL_GAME
+        - UNPUBLISH
+        - HIDE_FROM_CABINET
+        - ARCHIVE
+        - MARK_ATTENDANCE
+        - EXPIRE_UNPAID
+
+    EventCategory:
+      type: string
+      enum: [GAME, GROUP_TRAINING, TOURNAMENT]
+
+    EligibilityTarget:
+      type: object
+      required: [stationId, category, startsAt]
+      properties:
+        stationId:
+          type: string
+        category:
+          $ref: "#/components/schemas/EventCategory"
+        externalEventTypeId:
+          type: [string, "null"]
+        eventId:
+          type: [string, "null"]
+        durationMinutes:
+          type: [integer, "null"]
+          minimum: 1
+        startsAt:
+          type: string
+          format: date-time
+        basePrice:
+          oneOf:
+            - $ref: "#/components/schemas/Money"
+            - type: "null"
+
+    NewGameTargetRequest:
+      type: object
+      required: [targetKind, stationId, startsAt, durationMinutes]
+      properties:
+        targetKind:
+          type: string
+          const: NEW_GAME
+        stationId:
+          type: string
+        startsAt:
+          type: string
+          format: date-time
+        durationMinutes:
+          type: integer
+          enum: [60, 90, 120]
+
+    ExistingEventTargetRequest:
+      type: object
+      required: [targetKind, eventId]
+      properties:
+        targetKind:
+          type: string
+          const: EXISTING_EVENT
+        eventId:
+          type: string
+
+    ExistingBookingTargetRequest:
+      type: object
+      required: [targetKind, bookingId]
+      properties:
+        targetKind:
+          type: string
+          const: EXISTING_BOOKING
+        bookingId:
+          type: string
+
+    GameAggregateTargetRequest:
+      type: object
+      required: [targetKind, gameId]
+      properties:
+        targetKind:
+          type: string
+          const: GAME_AGGREGATE
+        gameId:
+          type: string
+
+    EligibilityTargetRequest:
+      oneOf:
+        - $ref: "#/components/schemas/NewGameTargetRequest"
+        - $ref: "#/components/schemas/ExistingEventTargetRequest"
+        - $ref: "#/components/schemas/ExistingBookingTargetRequest"
+        - $ref: "#/components/schemas/GameAggregateTargetRequest"
+      discriminator:
+        propertyName: targetKind
+
+    EligibilityQuoteRequest:
+      type: object
+      required: [contractId, action, target]
+      properties:
+        contractId:
+          type: string
+        action:
+          $ref: "#/components/schemas/SubscriptionAction"
+        target:
+          $ref: "#/components/schemas/EligibilityTargetRequest"
+
+    EligibilityBlocker:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    AppliedBenefit:
+      type: object
+      required: [kind, ruleId, finalPrice]
+      properties:
+        kind:
+          type: string
+          enum: [FREE_ENTITLEMENT, FIXED_PRICE, PERCENT_DISCOUNT, FIXED_DISCOUNT, NONE]
+        ruleId:
+          type: [string, "null"]
+        finalPrice:
+          $ref: "#/components/schemas/Money"
+        discount:
+          $ref: "#/components/schemas/Money"
+
+    EligibilityQuote:
+      type: object
+      required:
+        - quoteId
+        - eligible
+        - policyVersion
+        - resolvedTarget
+        - blockers
+        - activeServices
+        - maxActiveServices
+        - dailyUsed
+        - dailyLimit
+        - expiresAt
+      properties:
+        quoteId:
+          type: string
+        eligible:
+          type: boolean
+        policyVersion:
+          type: integer
+          minimum: 1
+        blockers:
+          type: array
+          items:
+            $ref: "#/components/schemas/EligibilityBlocker"
+        resolvedTarget:
+          $ref: "#/components/schemas/EligibilityTarget"
+        benefit:
+          oneOf:
+            - $ref: "#/components/schemas/AppliedBenefit"
+            - type: "null"
+        usageUnits:
+          type: [integer, "null"]
+          minimum: 0
+        activeServices:
+          type: integer
+          minimum: 0
+        maxActiveServices:
+          type: integer
+          minimum: 0
+        dailyUsed:
+          type: integer
+          minimum: 0
+        dailyLimit:
+          type: integer
+          minimum: 0
+        expiresAt:
+          type: string
+          format: date-time
+
+    SubscriptionCommand:
+      type: object
+      required: [quoteId, contractId, action, target]
+      properties:
+        quoteId:
+          type: string
+        contractId:
+          type: string
+        action:
+          $ref: "#/components/schemas/SubscriptionAction"
+        target:
+          $ref: "#/components/schemas/EligibilityTargetRequest"
+        reason:
+          type: [string, "null"]
+          description: Required for elevated administrative commands.
+
+    OperationState:
+      type: string
+      enum:
+        - REQUESTED
+        - ELIGIBILITY_CONFIRMED
+        - CLAIM_RESERVED
+        - UPSTREAM_PENDING
+        - UPSTREAM_CONFIRMED
+        - LOCAL_CONFIRMED
+        - PROJECTIONS_PENDING
+        - COMPLETED
+        - REJECTED
+        - PENDING_RECONCILIATION
+        - REPAIR_REQUIRED
+        - CANCELLED
+
+    OperationEvidence:
+      type: object
+      required: [kind, observedAt, verified]
+      properties:
+        kind:
+          type: string
+          enum:
+            - PAYMENT_READBACK
+            - CONTRACT_READBACK
+            - ACTIVE_BOOKING_READBACK
+            - HISTORY_BOOKING_READBACK
+            - EXERCISE_READBACK
+            - VISIT_BALANCE_READBACK
+            - TRANSACTION_READBACK
+            - PROJECTION_READBACK
+        observedAt:
+          type: string
+          format: date-time
+        verified:
+          type: boolean
+        externalReferenceMasked:
+          type: [string, "null"]
+        summary:
+          type: object
+          additionalProperties: true
+
+    SubscriptionOperation:
+      type: object
+      required:
+        - operationId
+        - correlationId
+        - state
+        - action
+        - contractId
+        - policyVersion
+        - retryable
+        - createdAt
+        - updatedAt
+        - evidence
+      properties:
+        operationId:
+          type: string
+        correlationId:
+          type: string
+        state:
+          $ref: "#/components/schemas/OperationState"
+        action:
+          $ref: "#/components/schemas/SubscriptionAction"
+        contractId:
+          type: string
+        policyVersion:
+          type: integer
+          minimum: 1
+        entitlementClaimId:
+          type: [string, "null"]
+        providerBookingIdMasked:
+          type: [string, "null"]
+        retryable:
+          type: boolean
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/OperationEvidence"
+        error:
+          oneOf:
+            - $ref: "#/components/schemas/ErrorResponse"
+            - type: "null"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    BenefitRule:
+      type: object
+      required: [ruleId, enabled, category, stationIds, kind, priority]
+      properties:
+        ruleId:
+          type: string
+        enabled:
+          type: boolean
+        category:
+          $ref: "#/components/schemas/EventCategory"
+        externalEventTypeIds:
+          type: array
+          items:
+            type: string
+        stationIds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        kind:
+          type: string
+          enum: [FREE_ENTITLEMENT, FIXED_PRICE, PERCENT_DISCOUNT, FIXED_DISCOUNT, DISABLED]
+        valueMinor:
+          type: [integer, "null"]
+          minimum: 0
+        percentage:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+        priority:
+          type: integer
+
+    SubscriptionPolicyVersion:
+      type: object
+      required:
+        - subscriptionTypeId
+        - version
+        - status
+        - effectiveAt
+        - applyTo
+        - validityDays
+        - createGame
+        - joinGame
+        - maxActiveServices
+        - bookingWindowDays
+        - dailyUsageLimit
+        - activeServiceScope
+        - usageUnitsByDuration
+        - benefitRules
+      properties:
+        subscriptionTypeId:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+        revision:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [DRAFT, PUBLISHED, SUPERSEDED]
+        effectiveAt:
+          type: string
+          format: date-time
+        applyTo:
+          type: string
+          enum: [NEW_ONLY, ACTIVE_AND_NEW]
+        validityDays:
+          type: integer
+          minimum: 1
+        createGame:
+          type: object
+          required: [enabled, durationsMinutes]
+          properties:
+            enabled:
+              type: boolean
+            durationsMinutes:
+              type: array
+              uniqueItems: true
+              items:
+                type: integer
+                enum: [60, 90, 120]
+        joinGame:
+          type: object
+          required: [enabled, minDurationMinutes, maxDurationMinutes]
+          properties:
+            enabled:
+              type: boolean
+            minDurationMinutes:
+              type: integer
+              minimum: 1
+            maxDurationMinutes:
+              type: integer
+              minimum: 1
+        maxActiveServices:
+          type: integer
+          minimum: 0
+        bookingWindowDays:
+          type: integer
+          minimum: 1
+          maximum: 31
+        dailyUsageLimit:
+          type: integer
+          minimum: 0
+        activeServiceScope:
+          type: string
+          enum: [SUBSCRIPTION_BENEFIT_ONLY, ALL_BOOKINGS]
+        usageUnitsByDuration:
+          type: object
+          required: ["60", "90", "120"]
+          properties:
+            "60":
+              type: integer
+              minimum: 0
+            "90":
+              type: integer
+              minimum: 0
+            "120":
+              type: integer
+              minimum: 0
+        benefitRules:
+          type: array
+          items:
+            $ref: "#/components/schemas/BenefitRule"
+
+    CreatePolicyVersionRequest:
+      type: object
+      required:
+        - effectiveAt
+        - applyTo
+        - validityDays
+        - createGame
+        - joinGame
+        - maxActiveServices
+        - bookingWindowDays
+        - dailyUsageLimit
+        - activeServiceScope
+        - usageUnitsByDuration
+        - benefitRules
+      properties:
+        effectiveAt:
+          type: string
+          format: date-time
+        applyTo:
+          type: string
+          enum: [NEW_ONLY, ACTIVE_AND_NEW]
+        validityDays:
+          type: integer
+          minimum: 1
+        createGame:
+          type: object
+          required: [enabled, durationsMinutes]
+          properties:
+            enabled:
+              type: boolean
+            durationsMinutes:
+              type: array
+              uniqueItems: true
+              items:
+                type: integer
+                enum: [60, 90, 120]
+        joinGame:
+          type: object
+          required: [enabled, minDurationMinutes, maxDurationMinutes]
+          properties:
+            enabled:
+              type: boolean
+            minDurationMinutes:
+              type: integer
+              minimum: 1
+            maxDurationMinutes:
+              type: integer
+              minimum: 1
+        maxActiveServices:
+          type: integer
+          minimum: 0
+        bookingWindowDays:
+          type: integer
+          minimum: 1
+          maximum: 31
+        dailyUsageLimit:
+          type: integer
+          minimum: 0
+        activeServiceScope:
+          type: string
+          enum: [SUBSCRIPTION_BENEFIT_ONLY, ALL_BOOKINGS]
+        usageUnitsByDuration:
+          type: object
+          required: ["60", "90", "120"]
+          properties:
+            "60":
+              type: integer
+              minimum: 0
+            "90":
+              type: integer
+              minimum: 0
+            "120":
+              type: integer
+              minimum: 0
+        benefitRules:
+          type: array
+          items:
+            $ref: "#/components/schemas/BenefitRule"
+
+    SubscriptionType:
+      type: object
+      required: [subscriptionTypeId, code, title, state, revision, createdAt, updatedAt]
+      properties:
+        subscriptionTypeId:
+          type: string
+        code:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9_-]{2,63}$"
+        title:
+          type: string
+        description:
+          type: [string, "null"]
+        state:
+          type: string
+          enum: [DRAFT, ACTIVE, ARCHIVED]
+        currentPolicyVersion:
+          type: [integer, "null"]
+          minimum: 1
+        revision:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateSubscriptionTypeRequest:
+      type: object
+      required: [code, title]
+      properties:
+        code:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9_-]{2,63}$"
+        title:
+          type: string
+        description:
+          type: [string, "null"]
+
+    SubscriptionTypePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubscriptionType"
+        nextCursor:
+          type: [string, "null"]
+
+    PolicyImpact:
+      type: object
+      required: [activeContractsAffected, stationsAffected, existingBookingsCancelled]
+      properties:
+        activeContractsAffected:
+          type: integer
+          minimum: 0
+        stationsAffected:
+          type: array
+          items:
+            type: string
+        existingBookingsCancelled:
+          type: integer
+          const: 0
+        warnings:
+          type: array
+          items:
+            type: string
+
+    ReleasePhase:
+      type: object
+      required:
+        - releasePhaseId
+        - order
+        - mode
+        - totalQuantity
+        - price
+        - activation
+        - counters
+      properties:
+        releasePhaseId:
+          type: string
+        order:
+          type: integer
+          minimum: 1
+        mode:
+          type: string
+          enum: [BULK, DAILY_DROP, MANUAL]
+        totalQuantity:
+          type: integer
+          minimum: 1
+        dailyDropQuantity:
+          type: [integer, "null"]
+          minimum: 1
+        dailyDropLocalTime:
+          type: [string, "null"]
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+        price:
+          $ref: "#/components/schemas/Money"
+        activation:
+          type: string
+          enum: [MANUAL, SCHEDULED, PREVIOUS_SOLD_OUT]
+        scheduledAt:
+          type: [string, "null"]
+          format: date-time
+        providerProductRef:
+          type: [string, "null"]
+          description: Masked/configuration reference; not a provider credential.
+        counters:
+          type: object
+          required: [available, reserved, sold, refunded]
+          properties:
+            available:
+              type: integer
+              minimum: 0
+            reserved:
+              type: integer
+              minimum: 0
+            sold:
+              type: integer
+              minimum: 0
+            refunded:
+              type: integer
+              minimum: 0
+        nextReleaseAt:
+          type: [string, "null"]
+          format: date-time
+
+    ReleaseProgram:
+      type: object
+      required:
+        - releaseProgramId
+        - subscriptionTypeId
+        - stationId
+        - timezone
+        - state
+        - revision
+        - phases
+      properties:
+        releaseProgramId:
+          type: string
+        subscriptionTypeId:
+          type: string
+        stationId:
+          type: string
+        timezone:
+          type: string
+          example: Europe/Moscow
+        state:
+          type: string
+          enum: [DRAFT, SCHEDULED, ACTIVE, PAUSED, SOLD_OUT, CLOSED]
+        revision:
+          type: integer
+          minimum: 1
+        phases:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReleasePhase"
+
+    CreateReleasePhaseRequest:
+      type: object
+      required: [order, mode, totalQuantity, price, activation]
+      properties:
+        order:
+          type: integer
+          minimum: 1
+        mode:
+          type: string
+          enum: [BULK, DAILY_DROP, MANUAL]
+        totalQuantity:
+          type: integer
+          minimum: 1
+        dailyDropQuantity:
+          type: [integer, "null"]
+          minimum: 1
+        dailyDropLocalTime:
+          type: [string, "null"]
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+        price:
+          $ref: "#/components/schemas/Money"
+        activation:
+          type: string
+          enum: [MANUAL, SCHEDULED, PREVIOUS_SOLD_OUT]
+        scheduledAt:
+          type: [string, "null"]
+          format: date-time
+        providerProductRef:
+          type: [string, "null"]
+          description: Masked/configuration reference; not a provider credential.
+
+    CreateReleaseProgramRequest:
+      type: object
+      required: [subscriptionTypeId, stationId, timezone, phases]
+      properties:
+        subscriptionTypeId:
+          type: string
+        stationId:
+          type: string
+        timezone:
+          type: string
+        phases:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CreateReleasePhaseRequest"
+
+    SubscriptionBuyer:
+      type: object
+      required:
+        - purchaseId
+        - customerId
+        - customerDisplayMasked
+        - subscriptionTypeId
+        - stationId
+        - releasePhaseId
+        - state
+        - price
+        - purchasedAt
+      properties:
+        purchaseId:
+          type: string
+        customerId:
+          type: string
+        customerDisplayMasked:
+          type: string
+        subscriptionTypeId:
+          type: string
+        stationId:
+          type: string
+        releasePhaseId:
+          type: string
+        state:
+          $ref: "#/components/schemas/PurchaseState"
+        price:
+          $ref: "#/components/schemas/Money"
+        contractId:
+          type: [string, "null"]
+        providerContractLinked:
+          type: boolean
+        purchasedAt:
+          type: string
+          format: date-time
+
+    ProviderProductCandidate:
+      type: object
+      required:
+        - providerProductCandidateId
+        - provider
+        - displayName
+        - stationIds
+        - observedActiveContractCount
+        - mappingStatus
+        - evidenceStatus
+      properties:
+        providerProductCandidateId:
+          type: string
+          description: Opaque local discovery id; not a provider credential.
+        provider:
+          type: string
+          enum: [VIVA]
+        displayName:
+          type: string
+        externalProductRefMasked:
+          type: string
+        stationIds:
+          type: array
+          items:
+            type: string
+        observedActiveContractCount:
+          type: integer
+          minimum: 0
+        mappingStatus:
+          type: string
+          enum: [UNMAPPED, MAPPED, AMBIGUOUS, QUARANTINED]
+        mappedSubscriptionTypeId:
+          type: [string, "null"]
+        evidenceStatus:
+          type: string
+          enum: [MISSING, CAPTURED, SANITIZED, REVIEWED, APPROVED, REJECTED]
+
+    ProviderProductMapping:
+      type: object
+      required:
+        - providerMappingId
+        - providerProductCandidateId
+        - subscriptionTypeId
+        - state
+        - revision
+        - createdAt
+      properties:
+        providerMappingId:
+          type: string
+        providerProductCandidateId:
+          type: string
+        subscriptionTypeId:
+          type: string
+        state:
+          type: string
+          enum: [ACTIVE, DISABLED]
+        revision:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+
+    SubscriptionImportJob:
+      type: object
+      required:
+        - importJobId
+        - mode
+        - state
+        - discoveredCount
+        - linkedCount
+        - quarantinedCount
+        - issues
+        - createdAt
+        - updatedAt
+      properties:
+        importJobId:
+          type: string
+        mode:
+          type: string
+          enum: [DRY_RUN, APPLY_LOCAL_LINKS]
+        state:
+          type: string
+          enum: [QUEUED, RUNNING, COMPLETED, FAILED, REQUIRES_REVIEW]
+        discoveredCount:
+          type: integer
+          minimum: 0
+        linkedCount:
+          type: integer
+          minimum: 0
+        quarantinedCount:
+          type: integer
+          minimum: 0
+        issues:
+          type: array
+          items:
+            type: object
+            required: [code, message]
+            properties:
+              code:
+                type: string
+              message:
+                type: string
+              providerProductCandidateId:
+                type: [string, "null"]
+        reportRef:
+          type: [string, "null"]
+          description: Internal audit artifact reference, never a raw HAR URL.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    LtvBucket:
+      type: object
+      required: [label, customers, grossRevenue, refunds, netRevenue]
+      properties:
+        label:
+          type: string
+          enum: [D30, D90, D180, D365, LIFETIME]
+        customers:
+          type: integer
+          minimum: 0
+        grossRevenue:
+          $ref: "#/components/schemas/Money"
+        refunds:
+          $ref: "#/components/schemas/Money"
+        netRevenue:
+          $ref: "#/components/schemas/Money"
+
+    LtvReport:
+      type: object
+      required: [cohortFrom, cohortTo, generatedAt, completeness, buckets]
+      properties:
+        cohortFrom:
+          type: string
+          format: date
+        cohortTo:
+          type: string
+          format: date
+        generatedAt:
+          type: string
+          format: date-time
+        completeness:
+          type: object
+          required: [status, missingSources]
+          properties:
+            status:
+              type: string
+              enum: [COMPLETE, PARTIAL]
+            missingSources:
+              type: array
+              items:
+                type: string
+        buckets:
+          type: array
+          items:
+            $ref: "#/components/schemas/LtvBucket"
+        usageRate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+        renewalRate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+
+    ReconciliationCase:
+      type: object
+      required:
+        - caseId
+        - operationId
+        - stationId
+        - status
+        - reasonCode
+        - revision
+        - observedStates
+        - createdAt
+        - updatedAt
+      properties:
+        caseId:
+          type: string
+        operationId:
+          type: string
+        stationId:
+          type: string
+        status:
+          type: string
+          enum: [OPEN, IN_PROGRESS, RESOLVED, ESCALATED]
+        reasonCode:
+          type: string
+          enum:
+            - UPSTREAM_TIMEOUT_AFTER_WRITE
+            - BOOKING_STATE_MISMATCH
+            - VISIT_BALANCE_MISMATCH
+            - PAYMENT_STATE_MISMATCH
+            - CONTRACT_LINK_MISSING
+            - ROSTER_PROJECTION_FAILED
+            - CABINET_PROJECTION_FAILED
+            - PUBLICATION_PROJECTION_FAILED
+            - LATE_PAYMENT_AFTER_CANCELLATION
+        revision:
+          type: integer
+          minimum: 1
+        observedStates:
+          type: object
+          additionalProperties: true
+        resolution:
+          type: [string, "null"]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time

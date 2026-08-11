@@ -54,10 +54,15 @@ architecture-workspace/
     endpoints-to-map.md
   openapi/
     padlhub-api/v1/openapi.yaml
+    subscriptions/v1/openapi.yaml
+  evidence/
+    subscriptions/GOLDEN_HAR_PASSPORT.md
   structurizr/
     workspace.dsl
   adr/
     0001-isolated-architecture-workspace.md
+    0002-cup-canonical-player-rating-ledger.md
+    0003-managed-annual-subscriptions.md
 ```
 
 ## First Milestone
@@ -71,3 +76,13 @@ Create a truthful current-state map:
 5. Pain points and migration seams.
 
 After that, define the first stable `/api/v1` contract.
+
+## Current Contract Checkpoints
+
+- `adr/0003-managed-annual-subscriptions.md` defines the proposed ownership,
+  inventory, policy, operation-ledger and migration boundaries for managed
+  annual subscriptions.
+- `openapi/subscriptions/v1/openapi.yaml` is the draft shared API boundary for
+  CUP, the current LK and the new LK. It is not a deployed-route inventory.
+- `evidence/subscriptions/GOLDEN_HAR_PASSPORT.md` lists provider contracts and
+  multi-tester E2E evidence required before runtime implementation.
