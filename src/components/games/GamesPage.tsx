@@ -13450,7 +13450,8 @@ export default function GamesPage({
       return;
     }
     if (leaveResult.data.state === "RETRY_REQUIRED" || leaveResult.data.state === "IN_PROGRESS") {
-      pushCabinetFlashNotice(leaveResult.data.message || SELF_REMOVE_PENDING_NOTICE);
+      setLeavePendingMessage(leaveResult.data.message || SELF_REMOVE_PENDING_NOTICE);
+      return;
     } else if (leaveResult.data.state === "DONE") {
       pushCabinetFlashNotice(leaveResult.data.message || SELF_REMOVE_SUCCESS_NOTICE);
     } else {
@@ -15386,7 +15387,7 @@ export default function GamesPage({
                             onClick={() => {
                               void handleLeaveCurrentUserFromDetails();
                             }}
-                            disabled={!canCurrentUserLeaveGameInDetails}
+                            disabled={!canCurrentUserLeaveGameInDetails || Boolean(leavePendingMessage)}
                           >
                             Покинуть игру
                           </button>
@@ -15470,7 +15471,7 @@ export default function GamesPage({
                             onClick={() => {
                               void handleLeaveCurrentUserFromDetails();
                             }}
-                            disabled={!canCurrentUserLeaveGameInDetails}
+                            disabled={!canCurrentUserLeaveGameInDetails || Boolean(leavePendingMessage)}
                           >
                             Покинуть лист
                           </button>
@@ -16272,7 +16273,7 @@ export default function GamesPage({
                     <button
                       className="game-join-split-pay-option"
                       type="button"
-                      disabled={!canCurrentUserLeaveGameInDetails}
+                      disabled={!canCurrentUserLeaveGameInDetails || Boolean(leavePendingMessage)}
                       onClick={() => {
                         void handleLeaveCurrentUserFromDetails();
                       }}

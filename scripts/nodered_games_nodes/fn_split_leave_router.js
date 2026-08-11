@@ -71,6 +71,10 @@ const upstream = (ctx, method, url, payload) => {
   return [msg, null, null, null, null];
 };
 const fail = (ctx, statusCode, state, message) => {
+  const retryScheduled = state === "VIVA_UNVERIFIED"
+    && ctx.operationState === "STARTED"
+    && Boolean(ctx.operationKey)
+    && Boolean(ctx.claimToken);
   msg.statusCode = statusCode;
   msg.headers = {
     "Content-Type": "application/json; charset=utf-8",
@@ -78,12 +82,15 @@ const fail = (ctx, statusCode, state, message) => {
     "Cache-Control": "no-store",
   };
   msg.payload = {
-    ok: false,
-    state,
+    ok: retryScheduled,
+    state: retryScheduled ? "IN_PROGRESS" : state,
     operationId: ctx.operationId || null,
     gameId: ctx.gameId || null,
-    message,
+    message: retryScheduled
+      ? "Запрос на выход обрабатывается. Проверяем отмену записи — это может занять несколько минут."
+      : message,
   };
+  if (retryScheduled) msg.statusCode = 202;
   delete msg._splitLeaveCtx;
   return [null, msg, msg, null, null];
 };

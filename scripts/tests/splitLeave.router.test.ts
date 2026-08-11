@@ -363,6 +363,27 @@ test("active Viva row blocks every local mutation", () => {
   assert.equal(out[1].payload.state, "VIVA_UNVERIFIED");
 });
 
+test("durable STARTED leave reports neutral pending state while background retry owns Viva recovery", () => {
+  let msg = authorizeSelf();
+  msg._splitLeaveCtx.operationState = "STARTED";
+  msg._splitLeaveCtx.operationKey = "game-1:self-leave:game-1:client-1";
+  msg._splitLeaveCtx.claimToken = "claim-1";
+  let out = run("fn_split_leave_router.js", msg).result;
+  msg = out[0];
+  msg.statusCode = 404;
+  msg.payload = {};
+  out = run("fn_split_leave_router.js", msg).result;
+  msg = out[0];
+  msg.statusCode = 200;
+  msg.payload = { content: [{ id: "booking-1", isCancelled: false }] };
+  out = run("fn_split_leave_router.js", msg).result;
+  assert.equal(out[0], null);
+  assert.equal(out[1].statusCode, 202);
+  assert.equal(out[1].payload.ok, true);
+  assert.equal(out[1].payload.state, "IN_PROGRESS");
+  assert.doesNotMatch(out[1].payload.message, /Viva/i);
+});
+
 test("self leave discovers a missing game bookingId from the exact active Viva exercise", () => {
   const game = selfGame();
   delete game.metadata.splitPayment.payments[0].bookingId;

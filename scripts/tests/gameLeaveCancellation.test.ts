@@ -39,6 +39,8 @@ test("cabinet self-remove delegates the whole operation to authenticated server 
   const leaveHandlerSource = gamesPageSource.slice(leaveHandlerStart, leaveHandlerEnd);
   assert.match(leaveHandlerSource, /apiLeavePadelGameAsCurrentUser\(gameRecordId\)/);
   assert.match(leaveHandlerSource, /state === "VIVA_UNVERIFIED"/);
+  assert.match(leaveHandlerSource, /leaveResult\.data\.state === "RETRY_REQUIRED" \|\| leaveResult\.data\.state === "IN_PROGRESS"/);
+  assert.match(leaveHandlerSource, /setLeavePendingMessage\(leaveResult\.data\.message \|\| SELF_REMOVE_PENDING_NOTICE\)/);
   assert.match(leaveHandlerSource, /Запрос на выход обрабатывается\. Проверяем отмену записи/);
   assert.match(leaveHandlerSource, /leaveResult\.data\.state === "RETRY_REQUIRED"/);
   assert.doesNotMatch(leaveHandlerSource, /apiCancelPadelSelfRemovalBookings/);
