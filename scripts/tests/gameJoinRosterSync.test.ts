@@ -9,6 +9,9 @@ test("game join page syncs split roster with live Viva participants", () => {
   assert.match(gameJoinPageSource, /reconcileRosterWithViva\(/);
   assert.match(gameJoinPageSource, /const splitPaymentGame = isSplitPaymentGame\(game\)/);
   assert.match(gameJoinPageSource, /shouldSkipRecentSplitGameRosterSync\(/);
+  assert.match(gameJoinPageSource, /const nextWaitlist = excludePlayersAlreadyInRoster\(/);
+  assert.match(gameJoinPageSource, /waitlistChanged = !arePlayersEqualByIdentity\(nextWaitlist, game\.waitlist \?\? \[\]\)/);
+  assert.match(gameJoinPageSource, /waitlistChanged \? \{ waitlist: nextWaitlist \} : \{\}/);
   assert.match(gameJoinPageSource, /useEffect\(\(\) => \{\s*if \(!game \|\| !profile\) return;/);
 });
 

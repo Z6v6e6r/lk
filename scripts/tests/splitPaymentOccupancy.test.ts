@@ -271,6 +271,9 @@ test("Games details use shared occupancy for the counter and both join CTAs", ()
   );
   assert.ok(firstCtaIndex > joinGuardIndex, "subscription CTA must use corrected join guard");
   assert.ok(secondCtaIndex > firstCtaIndex, "one-time CTA must use corrected join guard");
+  assert.match(source, /const nextWaitlist = excludePlayersAlreadyInRoster\(detailsWaitlist, mergedParticipants\)/);
+  assert.match(source, /waitlistChanged = !arePlayersEqualByIdentity\(nextWaitlist, detailsWaitlist\)/);
+  assert.match(source, /waitlistChanged \? \{ waitlist: nextWaitlist \} : \{\}/);
   assert.equal(
     source.includes("Math.max(detailsParticipants.length, detailsSplitReservedPlayersBySpot.size)"),
     false,

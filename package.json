@@ -38,6 +38,7 @@
     "fcm:send": "node ./scripts/fcm/send-fcm.mjs",
     "build:analyze": "ANALYZE=1 vite build",
     "repair:split-timeout": "node scripts/repair_split_timeout_false_positives.mjs",
+    "repair:split-waitlist-duplicates": "node scripts/repair_split_waitlist_duplicates.mjs",
     "repair:hide-cancelled-games": "node scripts/hide_cancelled_viva_games.mjs",
     "repair:game-participant-membership": "node scripts/repair_game_participant_membership.mjs",
     "repair:result-launch-period": "node scripts/repair_result_launch_period.mjs",

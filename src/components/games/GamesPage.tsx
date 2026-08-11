@@ -8328,9 +8328,11 @@ export default function GamesPage({
 
         const mergedParticipants = dedupePlayersByIdentity(reconciliation.mergedCandidates)
           .slice(0, detailsMaxPlayers);
+        const nextWaitlist = excludePlayersAlreadyInRoster(detailsWaitlist, mergedParticipants);
         const participantsChanged = !arePlayersEqualByIdentity(mergedParticipants, detailsSourceParticipants);
+        const waitlistChanged = !arePlayersEqualByIdentity(nextWaitlist, detailsWaitlist);
         const leaveEventsChanged = reconciliation.staleLeaveEventsRemoved > 0;
-        if (!participantsChanged && !leaveEventsChanged) {
+        if (!participantsChanged && !waitlistChanged && !leaveEventsChanged) {
           trackRosterSyncEvent("skipped", {
             gameId: activeGameRecord.id,
             exerciseId,
@@ -8348,6 +8350,7 @@ export default function GamesPage({
         const patchPayload: Parameters<typeof apiUpdatePadelGameRecord>[1] = {
           expectedUpdatedAt: activeGameRecord.updatedAt ?? null,
           participants: mergedParticipants,
+          ...(waitlistChanged ? { waitlist: nextWaitlist } : {}),
         };
         if (leaveEventsChanged) {
           patchPayload.metadata = {

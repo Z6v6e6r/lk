@@ -15,6 +15,7 @@ import {
   type UserProfileType,
 } from "../../utils/apiClient";
 import {
+  excludePlayersAlreadyInRoster,
   playersShareRosterIdentity,
   reconcileRosterWithViva,
   type RosterSyncLeaveEvent,
@@ -800,9 +801,14 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           organizerPlayer,
         });
         const mergedParticipants = dedupePlayers(reconciliation.mergedCandidates).slice(0, maxPlayers);
+        const nextWaitlist = excludePlayersAlreadyInRoster(
+          dedupePlayers(game.waitlist ?? []),
+          mergedParticipants,
+        );
         const participantsChanged = !arePlayersEqualByIdentity(mergedParticipants, sourceParticipants);
+        const waitlistChanged = !arePlayersEqualByIdentity(nextWaitlist, game.waitlist ?? []);
         const leaveEventsChanged = reconciliation.staleLeaveEventsRemoved > 0;
-        if (!participantsChanged && !leaveEventsChanged) return;
+        if (!participantsChanged && !waitlistChanged && !leaveEventsChanged) return;
 
         const nextMetadata: Record<string, unknown> | null = leaveEventsChanged
           ? {
@@ -815,6 +821,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         void apiUpdatePadelGameRecord(game.id, {
           expectedUpdatedAt: game.updatedAt ?? null,
           participants: mergedParticipants,
+          ...(waitlistChanged ? { waitlist: nextWaitlist } : {}),
           ...(nextMetadata ? { metadata: nextMetadata } : {}),
         }).then(async (patchResult) => {
           if (!alive) return;
