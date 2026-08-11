@@ -38,16 +38,23 @@ test("cabinet self-remove delegates the whole operation to authenticated server 
   assert.ok(leaveHandlerEnd > leaveHandlerStart, "self leave handler should have a bounded source slice");
   const leaveHandlerSource = gamesPageSource.slice(leaveHandlerStart, leaveHandlerEnd);
   assert.match(leaveHandlerSource, /apiLeavePadelGameAsCurrentUser\(gameRecordId\)/);
-  assert.match(leaveHandlerSource, /state === "VIVA_UNVERIFIED"/);
+  assert.match(leaveHandlerSource, /SELF_REMOVE_RETRY_DELAYS_MS\.length/);
+  assert.match(leaveHandlerSource, /await delay\(retryDelayMs\)/);
+  assert.match(leaveHandlerSource, /\["VIVA_UNVERIFIED", "IN_PROGRESS", "RETRY_REQUIRED"\]\.includes\(state\)/);
+  assert.match(leaveHandlerSource, /transientStatus === 408/);
+  assert.match(leaveHandlerSource, /transientStatus >= 500/);
   assert.match(leaveHandlerSource, /leaveResult\.data\.state === "RETRY_REQUIRED" \|\| leaveResult\.data\.state === "IN_PROGRESS"/);
   assert.match(leaveHandlerSource, /setLeavePendingMessage\(leaveResult\.data\.message \|\| SELF_REMOVE_PENDING_NOTICE\)/);
-  assert.match(leaveHandlerSource, /Запрос на выход обрабатывается\. Проверяем отмену записи/);
-  assert.match(leaveHandlerSource, /leaveResult\.data\.state === "RETRY_REQUIRED"/);
+  assert.match(leaveHandlerSource, /setLeavePendingMessage\(SELF_REMOVE_START_NOTICE\)/);
   assert.doesNotMatch(leaveHandlerSource, /apiCancelPadelSelfRemovalBookings/);
   assert.doesNotMatch(leaveHandlerSource, /patchGameRoster\(/);
-  assert.match(
-    leaveHandlerSource,
-    /pushCabinetFlashNotice\(leaveResult\.data\.message \|\| SELF_REMOVE_SUCCESS_NOTICE\)/,
-  );
+  assert.match(leaveHandlerSource, /pushCabinetFlashNotice\(finalMessage\)/);
   assert.match(leaveHandlerSource, /navigateToCabinetFromGamesDetails\(\)/);
+});
+
+test("self leave renders an in-roster pending spinner and keeps the background state visible", () => {
+  assert.match(gamesPageSource, /SELF_REMOVE_START_NOTICE/);
+  assert.match(gamesPageSource, /details-roster-leave-spinner/);
+  assert.match(gamesPageSource, /isCurrentUserLeaving \? "Покидает игру"/);
+  assert.match(gamesPageSource, /если закрыть её, повтор продолжится в фоне/);
 });

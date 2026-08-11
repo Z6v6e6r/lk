@@ -25,6 +25,22 @@ if (ctx.operationState === "DONE") {
 }
 if (ctx.operationState === "STARTED") {
   if (String(operation.claimToken || "") !== String(ctx.claimToken || "")) {
+    const currentActorId = String(ctx.actorClientId || "").trim().toLowerCase();
+    const operationActorId = String(operation.actorClientId || "").trim().toLowerCase();
+    const currentActorPhone = String(ctx.actorPhoneNorm || "").trim();
+    const operationActorPhone = String(operation.actorPhoneNorm || "").trim();
+    const sameActorIdentity = currentActorId && operationActorId
+      ? currentActorId === operationActorId
+      : Boolean(currentActorPhone && operationActorPhone && currentActorPhone === operationActorPhone);
+    const sameSelfActor = ctx.mode === "SELF"
+      && String(operation.mode || "").toUpperCase() === "SELF"
+      && sameActorIdentity;
+    if (sameSelfActor) {
+      ctx.foregroundReclaim = true;
+      ctx.previousClaimToken = String(operation.claimToken || "");
+      ctx.previousClaimLeaseUntil = operation.claimLeaseUntil || null;
+      return [null, null, null, msg];
+    }
     const leaseUntilMs = Date.parse(String(operation.claimLeaseUntil || ""));
     if (Number.isFinite(leaseUntilMs) && leaseUntilMs > Date.now()) {
       return respond(202, "IN_PROGRESS", "Удаление уже выполняется");

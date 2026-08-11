@@ -192,9 +192,12 @@ const DAYS_AFTER_TODAY = 14;
 const TODAY_DATE_INDEX = DAYS_BEFORE_TODAY;
 const MAX_DOUBLES_PLAYERS = 4;
 const MAX_SINGLES_PLAYERS = 2;
-const SELF_REMOVE_SUCCESS_NOTICE = "Вы вышли из игры. 1 посещение вернули в абонемент.";
+const SELF_REMOVE_SUCCESS_NOTICE = "Вы вышли из игры.";
+const SELF_REMOVE_START_NOTICE =
+  "Запустили процесс выхода из игры. Ждём подтверждения Viva и освобождения места — не закрывайте страницу.";
 const SELF_REMOVE_PENDING_NOTICE =
-  "Бронирование отменено, обновляем состав игры. Это может занять несколько минут.";
+  "Выход ещё обрабатывается. Можно оставить страницу открытой; если закрыть её, повтор продолжится в фоне.";
+const SELF_REMOVE_RETRY_DELAYS_MS = [0, 1_200, 2_500, 5_000, 10_000] as const;
 const DETAILS_TEAM_SLOTS_COUNT = 4;
 const MAX_MATCH_RESULT_ATTACHMENTS = 6;
 const MATCH_RESULT_DRAFT_FLUSH_TIMEOUT_MS = 750;
@@ -4991,6 +4994,7 @@ export default function GamesPage({
   });
   const splitSubscriptionRequestRef = useRef(0);
   const detailsSplitSubscriptionRequestRef = useRef(0);
+  const selfLeaveAttemptRef = useRef(0);
   const detailsCameraInputRef = useRef<HTMLInputElement | null>(null);
   const detailsGalleryInputRef = useRef<HTMLInputElement | null>(null);
   const publicCreateEntryHandledRef = useRef(false);
@@ -5030,6 +5034,9 @@ export default function GamesPage({
     if (!requestedGameId || !initialGameRecord?.id) return null;
     return initialGameRecord.id === requestedGameId ? initialGameRecord : null;
   }, [initialGameRecord, openGameId]);
+  useEffect(() => () => {
+    selfLeaveAttemptRef.current += 1;
+  }, []);
   const clearPromoState = useCallback((options?: { clearDraft?: boolean }) => {
     setPromoModalOpen(false);
     if (options?.clearDraft !== false) {
@@ -13433,31 +13440,64 @@ export default function GamesPage({
       if (!accepted) return;
     }
 
+    const leaveAttemptId = selfLeaveAttemptRef.current + 1;
+    selfLeaveAttemptRef.current = leaveAttemptId;
     setUpdatingGameRoster(true);
     setGameRosterError(null);
-    setLeavePendingMessage(null);
-    const leaveResult = await apiLeavePadelGameAsCurrentUser(gameRecordId);
-    setUpdatingGameRoster(false);
-    if (leaveResult.error || !leaveResult.data) {
-      const state = isRecordObject(leaveResult.error?.raw)
-        ? String(leaveResult.error.raw.state || "").toUpperCase()
-        : "";
-      if (state === "VIVA_UNVERIFIED") {
-        setLeavePendingMessage("Запрос на выход обрабатывается. Проверяем отмену записи — это может занять несколько минут.");
-        return;
+    setLeavePendingMessage(SELF_REMOVE_START_NOTICE);
+
+    let finalMessage: string | null = null;
+    let hardError: string | null = null;
+    for (let attemptIndex = 0; attemptIndex < SELF_REMOVE_RETRY_DELAYS_MS.length; attemptIndex += 1) {
+      const retryDelayMs = SELF_REMOVE_RETRY_DELAYS_MS[attemptIndex];
+      if (retryDelayMs > 0) await delay(retryDelayMs);
+      if (selfLeaveAttemptRef.current !== leaveAttemptId) return;
+
+      const leaveResult = await apiLeavePadelGameAsCurrentUser(gameRecordId);
+      if (selfLeaveAttemptRef.current !== leaveAttemptId) return;
+      if (leaveResult.error || !leaveResult.data) {
+        const state = isRecordObject(leaveResult.error?.raw)
+          ? String(leaveResult.error.raw.state || "").toUpperCase()
+          : "";
+        const transientStatus = Number(leaveResult.error?.status ?? leaveResult.status ?? 0);
+        const shouldRetry = ["VIVA_UNVERIFIED", "IN_PROGRESS", "RETRY_REQUIRED"].includes(state)
+          || !Number.isFinite(transientStatus)
+          || transientStatus === 0
+          || transientStatus === 408
+          || transientStatus === 429
+          || transientStatus >= 500;
+        if (shouldRetry) {
+          setLeavePendingMessage(leaveResult.error?.message || SELF_REMOVE_PENDING_NOTICE);
+          continue;
+        }
+        hardError = leaveResult.error?.message || "Не удалось покинуть игру";
+        break;
       }
-      setGameRosterError(leaveResult.error?.message || "Не удалось покинуть игру");
+      if (leaveResult.data.state === "DONE") {
+        finalMessage = leaveResult.data.message || SELF_REMOVE_SUCCESS_NOTICE;
+        break;
+      }
+      if (leaveResult.data.state === "RETRY_REQUIRED" || leaveResult.data.state === "IN_PROGRESS") {
+        setLeavePendingMessage(leaveResult.data.message || SELF_REMOVE_PENDING_NOTICE);
+        continue;
+      }
+      hardError = leaveResult.data.message || "Не удалось подтвердить выход из игры";
+      break;
+    }
+
+    if (selfLeaveAttemptRef.current !== leaveAttemptId) return;
+    setUpdatingGameRoster(false);
+    if (hardError) {
+      setLeavePendingMessage(null);
+      setGameRosterError(hardError);
       return;
     }
-    if (leaveResult.data.state === "RETRY_REQUIRED" || leaveResult.data.state === "IN_PROGRESS") {
-      setLeavePendingMessage(leaveResult.data.message || SELF_REMOVE_PENDING_NOTICE);
-      return;
-    } else if (leaveResult.data.state === "DONE") {
-      pushCabinetFlashNotice(leaveResult.data.message || SELF_REMOVE_SUCCESS_NOTICE);
-    } else {
-      setGameRosterError(leaveResult.data.message || "Не удалось подтвердить выход из игры");
+    if (!finalMessage) {
+      setLeavePendingMessage(SELF_REMOVE_PENDING_NOTICE);
       return;
     }
+    setLeavePendingMessage(null);
+    pushCabinetFlashNotice(finalMessage);
     if (!navigateToCabinetFromGamesDetails()) {
       onBack();
     }
@@ -15328,7 +15368,7 @@ export default function GamesPage({
             </div>
           </div>
           {gameRosterError && <div className="game-empty game-pay-error">{gameRosterError}</div>}
-          {leavePendingMessage && <div className="game-empty">{leavePendingMessage}</div>}
+          {leavePendingMessage && <div className="game-empty" role="status" aria-live="polite">{leavePendingMessage}</div>}
           <div className="details-roster-list">
             {detailsParticipants.length === 0 ? (
               <div className="game-empty">Пока нет подтвержденных игроков</div>
@@ -15336,6 +15376,8 @@ export default function GamesPage({
               detailsParticipants.map((player, index) => {
                 const playerKey = getPadelPlayerIdentityKey(player) || `participant-${index}`;
                 const isOrganizer = isDetailsOrganizerPlayer(player);
+                const isCurrentUserLeaving = isCurrentUserPlayer(player)
+                  && (updatingGameRoster || Boolean(leavePendingMessage));
                 return (
                   <div className="details-roster-row" key={playerKey}>
                     <div className="details-roster-player">
@@ -15389,7 +15431,10 @@ export default function GamesPage({
                             }}
                             disabled={!canCurrentUserLeaveGameInDetails || Boolean(leavePendingMessage)}
                           >
-                            Покинуть игру
+                            {isCurrentUserLeaving && (
+                              <span className="details-roster-leave-spinner" aria-hidden="true" />
+                            )}
+                            {isCurrentUserLeaving ? "Покидает игру" : "Покинуть игру"}
                           </button>
                         )
                       )
@@ -15422,6 +15467,8 @@ export default function GamesPage({
               <div className="details-roster-list">
                 {detailsWaitlist.map((player, index) => {
                   const playerKey = getPadelPlayerIdentityKey(player) || `waitlist-${index}`;
+                  const isCurrentUserLeaving = isCurrentUserPlayer(player)
+                    && (updatingGameRoster || Boolean(leavePendingMessage));
                   const waitlistPaymentState = detailsWaitlistPaymentStateByKey.get(playerKey);
                   const waitlistSubtitle = (() => {
                     if (!canManagePlayersInDetails || !waitlistPaymentState) {
@@ -15473,7 +15520,10 @@ export default function GamesPage({
                             }}
                             disabled={!canCurrentUserLeaveGameInDetails || Boolean(leavePendingMessage)}
                           >
-                            Покинуть лист
+                            {isCurrentUserLeaving && (
+                              <span className="details-roster-leave-spinner" aria-hidden="true" />
+                            )}
+                            {isCurrentUserLeaving ? "Покидает игру" : "Покинуть лист"}
                           </button>
                         )
                       )}
