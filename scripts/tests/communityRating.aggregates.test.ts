@@ -451,3 +451,35 @@ test("builds full snapshot matrix for requested tabs and periods", () => {
   );
   assert.equal(snapshots.every((snapshot) => snapshot.rows.length === 1), true);
 });
+
+test("keeps current community members in every period without inventing activity facts", () => {
+  const members = [{
+    playerKey: "id:p-base",
+    playerId: "p-base",
+    playerPhone: null,
+    playerName: "Новый участник",
+    playerAvatarUrl: null,
+    currentLevel: 4.35,
+  }];
+
+  const snapshots = buildCommunityRatingSnapshots({
+    communityId: "community-1",
+    facts: [],
+    members,
+    tabs: ["overall"],
+    periods: ["30d", "all"],
+    nowTs: NOW_TS,
+    updatedAt: UPDATED_AT,
+  });
+
+  assert.equal(snapshots.length, 2);
+  snapshots.forEach((snapshot) => {
+    assert.equal(snapshot.rows.length, 1);
+    assert.equal(snapshot.rows[0]?.playerId, "p-base");
+    assert.equal(snapshot.rows[0]?.currentLevel, 4.35);
+    assert.equal(snapshot.rows[0]?.totalEventsPlayed, 0);
+    assert.equal(snapshot.rows[0]?.overallScore, 0);
+    assert.equal(snapshot.rows[0]?.lastActivityAt, null);
+    assert.deepEqual(snapshot.rows[0]?.badges, ["no_activity"]);
+  });
+});

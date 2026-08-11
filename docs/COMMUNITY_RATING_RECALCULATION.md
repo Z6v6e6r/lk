@@ -15,6 +15,21 @@ This worker fills the rating storage collections from authoritative community so
 
 The client must not calculate ratings. It should read the prepared snapshot through the community rating API.
 
+Every current `lk_communities.members` entry is materialized in every requested snapshot period, including members with no game, tournament, or visit facts. Such a base row keeps the canonical `currentLevel` from `player_rating_state`, has zero scores/counters and the `no_activity` badge. It does not create a synthetic row in `community_rating_facts`.
+
+## Player Rating API
+
+`GET /lk/communities/:communityId/players/:playerId/rating` returns one minimal rating row for a station device or another ID-aware client. The public-path alias is `GET /communities/:communityId/players/:playerId/rating`.
+
+- `playerId` must exactly match one of the member ID fields (`id`, `clientId`, `userId`, `uuid`, `playerId`); phone and name are never identity fallbacks for this endpoint.
+- query parameters `tab=overall|dynamics|games|tournaments` and `period=all|30d` select the prepared snapshot;
+- the response contains rating metrics and snapshot metadata only, without player name, phone or avatar;
+- missing community/member returns `404`;
+- missing snapshot returns `503 RATING_SNAPSHOT_NOT_READY`;
+- an existing member missing from a stale snapshot returns `503 PLAYER_RATING_NOT_READY` until recalculation completes.
+
+The Node-RED source functions live in `scripts/nodered_community_player_rating_nodes/`. The focused patcher `scripts/patch_nodered_community_player_rating_flow.mjs` accepts the default modular source only when its metadata proves a fresh exact live-147 pull; it produces a focused import and does not deploy it.
+
 ## Overall Formula
 
 The overall score uses normalized component values on the 0–100 scale:

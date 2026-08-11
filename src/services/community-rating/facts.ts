@@ -172,6 +172,15 @@ interface RatingMember extends RatingIdentity {
   identityKeys: string[];
 }
 
+export interface CommunityRatingMemberSeed {
+  playerKey: string;
+  playerId: string | null;
+  playerPhone: string | null;
+  playerName: string;
+  playerAvatarUrl: string | null;
+  currentLevel: number | null;
+}
+
 interface RatingSetScore {
   left: number;
   right: number;
@@ -515,6 +524,24 @@ function hydrateMemberLevelsFromState(members: RatingMember[], stateIndex: Map<s
       .find((value) => value != null);
     return canonicalLevel == null ? member : { ...member, currentLevel: canonicalLevel };
   });
+}
+
+export function extractCommunityRatingMemberSeeds(params: Pick<
+  ExtractCommunityRatingFactsParams,
+  "community" | "ratingStates"
+>): CommunityRatingMemberSeed[] {
+  const stateIndex = buildRatingStateIndex(toArray(params.ratingStates));
+  return dedupeMembers(hydrateMemberLevelsFromState(toArray(params.community.members)
+    .map((member, index) => buildRatingMember(member, index))
+    .filter((member): member is RatingMember => member !== null), stateIndex))
+    .map((member) => ({
+      playerKey: member.playerKey,
+      playerId: member.id,
+      playerPhone: member.phone,
+      playerName: member.name,
+      playerAvatarUrl: member.avatarUrl,
+      currentLevel: member.currentLevel,
+    }));
 }
 
 function buildRatingLedgerImpactIndex(rows: unknown[]): RatingLedgerImpactIndex {
@@ -1395,11 +1422,20 @@ export function extractCommunityRatingFacts(params: ExtractCommunityRatingFactsP
   const communityId = toTrimmedString(params.community.id);
   if (!communityId) return [];
 
-  const stateIndex = buildRatingStateIndex(toArray(params.ratingStates));
   const ratingLedger = buildRatingLedgerImpactIndex(toArray(params.ratingEvents));
-  const members = hydrateMemberLevelsFromState(toArray(params.community.members)
-    .map((member, index) => buildRatingMember(member, index))
-    .filter((member): member is RatingMember => member !== null), stateIndex);
+  const members = extractCommunityRatingMemberSeeds(params).map((member) => ({
+    id: member.playerId,
+    phone: member.playerPhone,
+    name: member.playerName,
+    playerKey: member.playerKey,
+    avatarUrl: member.playerAvatarUrl,
+    currentLevel: member.currentLevel,
+    identityKeys: getIdentityKeys({
+      id: member.playerId,
+      phone: member.playerPhone,
+      name: member.playerName,
+    }),
+  }));
   const memberByKey = buildMemberIndex(members);
   const collectedAt = params.collectedAt || new Date().toISOString();
 

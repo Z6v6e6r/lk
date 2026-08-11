@@ -106,6 +106,13 @@ npm run nodered:modular:build
 - `GET /api/games/:id/ratings` — live-рейтинги
 - `POST /api/games/:id/result` — записать результат
 
+### Рейтинг сообщества
+
+- `GET /lk/communities/:communityId/rating` — полный подготовленный рейтинг сообщества.
+- `GET /lk/communities/:communityId/players/:playerId/rating` — минимальный рейтинг одного текущего участника по точным ID сообщества и игрока; public alias без `/lk` имеет тот же контракт.
+- Endpoint одного игрока читает только `community_rating_snapshots`, не сопоставляет телефон/имя и не возвращает имя, телефон или аватар. Отсутствующий/stale snapshot завершается fail-closed `503`.
+- Source functions: `scripts/nodered_community_player_rating_nodes/`; guarded patch: `scripts/patch_nodered_community_player_rating_flow.mjs`.
+
 ### Атомарная запись по абонементу
 
 - `POST /lk/subscription-bookings` — единая серверная точка дневного claim. Для `action=book` обязательны Bearer, стабильный non-secret `operationId`, `exerciseId` и точный `clientSubscriptionId`; для `action=release` — Bearer, отдельный стабильный `operationId` и точный `bookingId` подтверждённо отменённой записи.

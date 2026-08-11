@@ -8,6 +8,7 @@ import {
   COMMUNITY_RATING_COLLECTIONS,
   COMMUNITY_RATING_STORAGE_INDEXES,
   extractCommunityRatingFacts,
+  extractCommunityRatingMemberSeeds,
   resolveCommunityRatingVisitPostLinkId,
   resolveCommunityRatingTournamentPostLinkId,
   type CommunityRatingFact,
@@ -432,9 +433,14 @@ export function buildCommunityRatingRecalculationPlan(
     ratingStates: params.source.ratingStates,
     collectedAt: updatedAt,
   }).filter((fact) => fact.calculationVersion === calculationVersion);
+  const members = extractCommunityRatingMemberSeeds({
+    community: params.source.community,
+    ratingStates: params.source.ratingStates,
+  });
   const batch = buildCommunityRatingPersistenceBatch({
     communityId,
     facts,
+    members,
     periods: params.periods,
     tabs: params.tabs,
     nowTs: params.nowTs,

@@ -17,6 +17,7 @@ import {
 import {
   COMMUNITY_RATING_COLLECTIONS,
   type CommunityRatingFact,
+  type CommunityRatingMemberSeed,
 } from "./facts.ts";
 
 type CommunityRatingCollectionName =
@@ -62,6 +63,7 @@ export interface CommunityRatingPersistenceBatch {
 export interface BuildCommunityRatingPersistenceBatchParams {
   communityId: string;
   facts: CommunityRatingFact[];
+  members?: CommunityRatingMemberSeed[] | null;
   periods?: Array<CommunityRatingPeriod | string> | null;
   tabs?: Array<CommunityRatingTabInput | string> | null;
   nowTs?: number;
@@ -179,6 +181,7 @@ export function buildCommunityRatingPersistenceBatch(
     buildCommunityRatingAggregates({
       communityId,
       facts,
+      members: params.members,
       period,
       nowTs: params.nowTs,
       updatedAt: params.updatedAt,
@@ -197,6 +200,7 @@ export function buildCommunityRatingPersistenceBatch(
   const snapshots = buildCommunityRatingSnapshots({
     communityId,
     facts,
+    members: params.members,
     periods,
     tabs,
     nowTs: params.nowTs,

@@ -1099,3 +1099,10 @@
 - GET и POST принимают только canonical Viva exercise UUID: synthetic/manual ID завершается `400` до profile lookup, cache/inflight state и Viva. Rollout-runbook требует новый immediate predeploy backup текущих flows/nginx/`tournaments.js`/manifest; исторические backup 20 июля для этого кандидата запрещены.
 - Общий response terminal теперь регистронезависимо удаляет `Connection`, `Content-Length` и `Transfer-Encoding` после формирования GET/manual/fallback/validation ответа, сохраняя status, payload и безопасные application headers, чтобы Node-RED и nginx не конфликтовали за framing.
 - Guarded candidate собран из fresh live SHA `cb109f30...`: SHA `38452d49...`, `4673 -> 4680` nodes, `203 -> 205` routes, изменены только две разрешённые function-ноды и добавлены семь refresh-нод, broken wires/links `0/0`; deployment не выполнялся.
+
+# 2026-08-11 — Точный API рейтинга участника сообщества
+
+- Анализ подтвердил, что агрегаты строились только из игровых/турнирных/visit facts, поэтому уже добавленные участники без фактов отсутствовали в `community_rating_snapshots`, а существующий общий endpoint игнорировал `playerId` как фильтр.
+- Recalculation теперь предварительно создаёт base rows из текущих `lk_communities.members`, гидратирует уровень из `player_rating_state` и сохраняет нулевые строки с `no_activity`, не создавая синтетические facts.
+- Добавлен focused Node-RED API `GET /lk/communities/:communityId/players/:playerId/rating` с public alias, exact-ID membership guard, минимальным PII-free ответом и fail-closed `404/503`; guarded patcher требует свежий verified live-147 source и сам не выполняет deploy.
+- Isolation-проверки: community rating `78/78`, focused API `4/4`, TFF backfill `25/25`, tournament category `7/7`, TypeScript, targeted ESLint и diff check — PASS. Live flow, production data, `main`, push и deploy в рамках этой реализации не изменялись.

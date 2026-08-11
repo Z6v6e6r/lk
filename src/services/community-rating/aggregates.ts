@@ -16,13 +16,14 @@ import {
   type CommunityRatingTab,
   type CommunityRatingTabInput,
 } from "./contract.ts";
-import type { CommunityRatingFact } from "./facts.ts";
+import type { CommunityRatingFact, CommunityRatingMemberSeed } from "./facts.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface BuildCommunityRatingAggregatesParams {
   communityId: string;
   facts: CommunityRatingFact[];
+  members?: CommunityRatingMemberSeed[] | null;
   period?: CommunityRatingPeriod | string | null;
   nowTs?: number;
   updatedAt?: string | null;
@@ -135,6 +136,38 @@ function createEmptyState(fact: CommunityRatingFact): AggregateState {
     avatarUrl: fact.playerAvatarUrl,
     currentLevel: fact.currentLevel ?? 0,
     identityTs: fact.occurredAtTs,
+    levelDelta: 0,
+    lastRatingDelta: null,
+    lastRatingChangedAtTs: 0,
+    lastRatingEventKey: null,
+    gamesPlayed: 0,
+    gamesWon: 0,
+    gamesLost: 0,
+    setsWon: 0,
+    gamesWonCount: 0,
+    gamesDiff: 0,
+    tournamentsPlayed: 0,
+    tournamentMatchesWon: 0,
+    tournamentPointsScored: 0,
+    tournamentPointsDiff: 0,
+    tournamentRawScore: 0,
+    bestPlace: null,
+    placesSum: 0,
+    visitsAttended: 0,
+    lastActivityTs: 0,
+  };
+}
+
+function createEmptyMemberState(communityId: string, member: CommunityRatingMemberSeed): AggregateState {
+  return {
+    communityId,
+    playerKey: member.playerKey,
+    playerId: member.playerId,
+    playerPhone: member.playerPhone,
+    playerName: member.playerName,
+    avatarUrl: member.playerAvatarUrl,
+    currentLevel: member.currentLevel ?? 0,
+    identityTs: 0,
     levelDelta: 0,
     lastRatingDelta: null,
     lastRatingChangedAtTs: 0,
@@ -302,6 +335,11 @@ export function buildCommunityRatingAggregates(
   const calculationVersion = params.calculationVersion || COMMUNITY_RATING_CALCULATION_VERSION;
   const stateByPlayerKey = new Map<string, AggregateState>();
 
+  (params.members || []).forEach((member) => {
+    if (!member.playerKey || stateByPlayerKey.has(member.playerKey)) return;
+    stateByPlayerKey.set(member.playerKey, createEmptyMemberState(communityId, member));
+  });
+
   params.facts.forEach((fact) => {
     if (fact.communityId !== communityId) return;
     if (fact.calculationVersion !== calculationVersion) return;
@@ -357,8 +395,7 @@ export function buildCommunityRatingAggregates(
   });
 
   const rows = Array.from(stateByPlayerKey.values())
-    .map((state) => toRatingItem(state, period, updatedAt, updatedAtTs, calculationVersion))
-    .filter((item) => item.totalEventsPlayed > 0);
+    .map((state) => toRatingItem(state, period, updatedAt, updatedAtTs, calculationVersion));
 
   const maxGamesScore = rows.reduce((maxScore, row) => Math.max(maxScore, row.gamesScore), 0);
   const maxTournamentScore = rows.reduce((maxScore, row) => Math.max(maxScore, row.tournamentScore), 0);

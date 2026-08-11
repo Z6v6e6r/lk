@@ -205,3 +205,29 @@ test("empty recalculation still deletes stale aggregates and writes empty snapsh
   });
   assert.equal(batch.operations.community_rating_snapshots[0]?.replaceOne.replacement.rows.length, 0);
 });
+
+test("persists member-only rating rows without creating synthetic facts", () => {
+  const batch = buildCommunityRatingPersistenceBatch({
+    communityId: "community-1",
+    facts: [],
+    members: [{
+      playerKey: "id:p-base",
+      playerId: "p-base",
+      playerPhone: null,
+      playerName: "Новый участник",
+      playerAvatarUrl: null,
+      currentLevel: 4.25,
+    }],
+    periods: ["30d", "all"],
+    tabs: ["overall"],
+    nowTs: NOW_TS,
+    updatedAt: UPDATED_AT,
+  });
+
+  assert.equal(batch.summary.factsUpserts, 0);
+  assert.equal(batch.summary.aggregateUpserts, 2);
+  assert.equal(batch.summary.snapshotUpserts, 2);
+  assert.equal(batch.operations.community_rating_facts.length, 1);
+  assert.equal(batch.operations.community_rating_snapshots[0]?.replaceOne.replacement.rows[0]?.playerId, "p-base");
+  assert.equal(batch.operations.community_rating_snapshots[0]?.replaceOne.replacement.rows[0]?.totalEventsPlayed, 0);
+});

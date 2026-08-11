@@ -6,6 +6,7 @@ import {
   COMMUNITY_RATING_COLLECTIONS,
   COMMUNITY_RATING_STORAGE_INDEXES,
   extractCommunityRatingFacts,
+  extractCommunityRatingMemberSeeds,
 } from "../../src/services/community-rating/index.ts";
 
 const members = [
@@ -25,6 +26,25 @@ test("rating fact id is deterministic and versioned", () => {
     }),
     `community-1:game:game-1:id%3Ap1:${COMMUNITY_RATING_CALCULATION_VERSION}`,
   );
+});
+
+test("builds member seeds with canonical level state and no activity facts", () => {
+  const seeds = extractCommunityRatingMemberSeeds({
+    community: {
+      id: "community-1",
+      members: [{ clientId: "p-new", name: "Новый участник", levelScore: 3.1 }],
+    },
+    ratingStates: [{ clientId: "p-new", ratingNumeric: 4.45 }],
+  });
+
+  assert.deepEqual(seeds, [{
+    playerKey: "id:p-new",
+    playerId: "p-new",
+    playerPhone: null,
+    playerName: "Новый участник",
+    playerAvatarUrl: null,
+    currentLevel: 4.45,
+  }]);
 });
 
 test("rating storage plan has unique facts and snapshots indexes", () => {
