@@ -4888,6 +4888,7 @@ export default function GamesPage({
   const [confirmCancelUnpaidGame, setConfirmCancelUnpaidGame] = useState(false);
   const [gameRecordError, setGameRecordError] = useState<string | null>(null);
   const [gameRosterError, setGameRosterError] = useState<string | null>(null);
+  const [leavePendingMessage, setLeavePendingMessage] = useState<string | null>(null);
   const [gameDetailsMetaError, setGameDetailsMetaError] = useState<string | null>(null);
   const [updatingGameRoster, setUpdatingGameRoster] = useState(false);
   const [updatingGameMeta, setUpdatingGameMeta] = useState(false);
@@ -13434,9 +13435,17 @@ export default function GamesPage({
 
     setUpdatingGameRoster(true);
     setGameRosterError(null);
+    setLeavePendingMessage(null);
     const leaveResult = await apiLeavePadelGameAsCurrentUser(gameRecordId);
     setUpdatingGameRoster(false);
     if (leaveResult.error || !leaveResult.data) {
+      const state = isRecordObject(leaveResult.error?.raw)
+        ? String(leaveResult.error.raw.state || "").toUpperCase()
+        : "";
+      if (state === "VIVA_UNVERIFIED") {
+        setLeavePendingMessage("Запрос на выход обрабатывается. Проверяем отмену записи — это может занять несколько минут.");
+        return;
+      }
       setGameRosterError(leaveResult.error?.message || "Не удалось покинуть игру");
       return;
     }
@@ -15318,6 +15327,7 @@ export default function GamesPage({
             </div>
           </div>
           {gameRosterError && <div className="game-empty game-pay-error">{gameRosterError}</div>}
+          {leavePendingMessage && <div className="game-empty">{leavePendingMessage}</div>}
           <div className="details-roster-list">
             {detailsParticipants.length === 0 ? (
               <div className="game-empty">Пока нет подтвержденных игроков</div>
