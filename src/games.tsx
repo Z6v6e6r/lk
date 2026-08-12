@@ -144,7 +144,7 @@ function GamesContent({ onClose, data }: { onClose?: () => void; data?: GamesMou
           state: "IN_PROGRESS",
           operationId: "dev-self-leave-operation",
           gameId,
-          message: "Viva ещё подтверждает отмену. Место пока остаётся занятым.",
+          message: "Отмена ещё подтверждается. Место пока остаётся занятым.",
         },
         error: null,
         status: 202,
@@ -157,7 +157,7 @@ function GamesContent({ onClose, data }: { onClose?: () => void; data?: GamesMou
         state: "DONE",
         operationId: "dev-self-leave-operation",
         gameId,
-        message: "Проверка завершена: Viva подтверждена, место и дневной лимит освобождены.",
+        message: "Проверка завершена: отмена подтверждена, место и дневной лимит освобождены.",
       },
       error: null,
       status: 200,
@@ -225,7 +225,7 @@ function GamesContent({ onClose, data }: { onClose?: () => void; data?: GamesMou
     <>
       {selfLeavePreviewMode && (
         <div className="self-leave-preview-banner" role="status">
-          Локальная проверка · запросы выхода не отправляются в Viva
+          Локальная проверка · реальные записи и лимиты не изменяются
         </div>
       )}
       <GamesPage

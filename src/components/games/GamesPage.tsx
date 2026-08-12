@@ -202,7 +202,7 @@ const MAX_DOUBLES_PLAYERS = 4;
 const MAX_SINGLES_PLAYERS = 2;
 const SELF_REMOVE_SUCCESS_NOTICE = "Вы вышли из игры.";
 const SELF_REMOVE_START_NOTICE =
-  "Запустили процесс выхода из игры. Ждём подтверждения Viva и освобождения места — не закрывайте страницу.";
+  "Запустили процесс выхода из игры. Ждём подтверждения отмены и освобождения места — не закрывайте страницу.";
 const SELF_REMOVE_PENDING_NOTICE =
   "Выход ещё обрабатывается. Можно оставить страницу открытой; если закрыть её, повтор продолжится в фоне.";
 const SELF_REMOVE_RETRY_DELAYS_MS = [0, 1_200, 2_500, 5_000, 10_000] as const;

@@ -57,6 +57,7 @@ test("cabinet self-remove delegates the whole operation to authenticated server 
 
 test("self leave renders an in-roster pending spinner and keeps the background state visible", () => {
   assert.match(gamesPageSource, /SELF_REMOVE_START_NOTICE/);
+  assert.match(gamesPageSource, /Ждём подтверждения отмены и освобождения места/);
   assert.match(gamesPageSource, /details-roster-leave-spinner/);
   assert.match(gamesPageSource, /isCurrentUserLeaving \? "Покидает игру"/);
   assert.match(gamesPageSource, /если закрыть её, повтор продолжится в фоне/);
@@ -69,6 +70,7 @@ test("self leave browser preview is loopback-only and cannot call the real leave
   assert.match(gamesEntrySource, /state: "DONE"/);
   assert.match(gamesEntrySource, /selfLeavePreview=\{selfLeavePreview\}/);
   assert.doesNotMatch(gamesEntrySource, /apiLeavePadelGameAsCurrentUser/);
+  assert.doesNotMatch(gamesEntrySource, /Viva/);
   assert.match(gamesPageSource, /typeof window !== "undefined" && !isSelfLeavePreviewMode/);
   assert.match(selfLeavePreviewSource, /openGameId: "dev-self-leave-preview"/);
 });
