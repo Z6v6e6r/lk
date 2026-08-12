@@ -298,7 +298,7 @@ function buildDefaultPageViewConfig(): PageViewConfig {
         id: "energy5",
         counterKey: "energy5",
         planId: null,
-        cardClassName: "tournament-subscription-plan--image tournament-subscription-plan--showcase-featured",
+        cardClassName: "tournament-subscription-plan--image",
         artworkAlt: "Абонемент Энергия-5 за 19 800 ₽",
         artworkSrc: summerSubscriptionEnergy5Image,
         directSubscriptionProductId: resolveTournamentSubscriptionDirectProductId("energy5"),
