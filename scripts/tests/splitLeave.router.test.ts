@@ -363,6 +363,154 @@ test("active Viva row blocks every local mutation", () => {
   assert.equal(out[1].payload.state, "VIVA_UNVERIFIED");
 });
 
+test("durable STARTED leave reports neutral pending state while background retry owns Viva recovery", () => {
+  let msg = authorizeSelf();
+  msg._splitLeaveCtx.operationState = "STARTED";
+  msg._splitLeaveCtx.operationKey = "game-1:self-leave:game-1:client-1";
+  msg._splitLeaveCtx.claimToken = "claim-1";
+  let out = run("fn_split_leave_router.js", msg).result;
+  msg = out[0];
+  msg.statusCode = 404;
+  msg.payload = {};
+  out = run("fn_split_leave_router.js", msg).result;
+  msg = out[0];
+  msg.statusCode = 200;
+  msg.payload = { content: [{ id: "booking-1", isCancelled: false }] };
+  out = run("fn_split_leave_router.js", msg).result;
+  assert.equal(out[0], null);
+  assert.equal(out[1].statusCode, 202);
+  assert.equal(out[1].payload.ok, true);
+  assert.equal(out[1].payload.state, "IN_PROGRESS");
+  assert.doesNotMatch(out[1].payload.message, /Viva/i);
+});
+
+test("same authenticated self actor can CAS-reclaim STARTED leave for another End User attempt", () => {
+  const authorized = authorizeSelf();
+  authorized._splitLeaveCtx.operationKey = `game-1:${authorized._splitLeaveCtx.operationId}`;
+  authorized._splitLeaveCtx.claimToken = "new-user-claim";
+  authorized.payload = [{
+    _id: authorized._splitLeaveCtx.operationKey,
+    operationId: authorized._splitLeaveCtx.operationId,
+    state: "STARTED",
+    mode: "SELF",
+    actorClientId: "client-1",
+    actorPhoneNorm: "79990000001",
+    targetClientId: "client-1",
+    targetPhoneNorm: "79990000001",
+    claimToken: "previous-user-claim",
+    claimLeaseUntil: "2099-01-01T00:00:00.000Z",
+    bookingIds: ["booking-1"],
+    membershipVersion: authorized._splitLeaveCtx.membershipVersion,
+  }];
+
+  const routed = run("fn_split_leave_operation_route.js", authorized).result;
+  assert.ok(routed[3]);
+  assert.equal(routed[3]._splitLeaveCtx.foregroundReclaim, true);
+  const claim = run("fn_split_leave_operation_claim.js", routed[3]).result[0];
+  assert.equal(claim.payload[0].claimToken, "previous-user-claim");
+  assert.equal(claim.payload[0].claimLeaseUntil, undefined);
+  assert.equal(claim.payload[1].$inc.foregroundRecoveryAttempts, 1);
+});
+
+test("different actor cannot reclaim an active STARTED self leave lease", () => {
+  const authorized = authorizeSelf();
+  authorized._splitLeaveCtx.operationKey = `game-1:${authorized._splitLeaveCtx.operationId}`;
+  authorized._splitLeaveCtx.claimToken = "foreign-claim";
+  authorized._splitLeaveCtx.actorClientId = "client-2";
+  authorized._splitLeaveCtx.actorPhoneNorm = "79990000001";
+  authorized.payload = [{
+    _id: authorized._splitLeaveCtx.operationKey,
+    state: "STARTED",
+    mode: "SELF",
+    actorClientId: "client-1",
+    actorPhoneNorm: "79990000001",
+    claimToken: "owner-claim",
+    claimLeaseUntil: "2099-01-01T00:00:00.000Z",
+    bookingIds: ["booking-1"],
+    membershipVersion: authorized._splitLeaveCtx.membershipVersion,
+  }];
+
+  const routed = run("fn_split_leave_operation_route.js", authorized).result;
+  assert.equal(routed[2].statusCode, 202);
+  assert.equal(routed[2].payload.state, "IN_PROGRESS");
+  assert.equal(routed[3], undefined);
+});
+
+test("Viva-confirmed leave releases the exact daily subscription operation before local apply", () => {
+  const baseCtx = {
+    operationId: "self-leave:game-1:client-1:generation-1",
+    gameId: "game-1",
+    targetClientId: "client-1",
+    exerciseId: "exercise-1",
+    initialBookingIds: ["booking-1"],
+  };
+  const find = run("fn_split_leave_daily_limit_find.js", {
+    _splitLeaveCtx: { ...baseCtx },
+  }).result[0];
+  assert.deepEqual(find.payload, {
+    tenantKey: "iSkq6G",
+    actorClientId: "client-1",
+    exerciseId: "exercise-1",
+  });
+
+  find.payload = [{
+    _id: "iSkq6G:subscription-1:2026-08-11",
+    tenantKey: "iSkq6G",
+    actorClientId: "client-1",
+    exerciseId: "exercise-1",
+    clientSubscriptionId: "subscription-1",
+    bookingId: "booking-1",
+    state: "CONFIRMED",
+  }];
+  const release = run("fn_split_leave_daily_limit_route.js", find).result[0];
+  assert.equal(release.payload[0]._id, "iSkq6G:subscription-1:2026-08-11");
+  assert.equal(release.payload[0].state, "CONFIRMED");
+  assert.equal(release.payload[1].$set.state, "RELEASED");
+  assert.equal(release.payload[1].$set.releaseSource, "GAME_LEAVE");
+  assert.deepEqual(release.payload[1].$addToSet.releasedBookingIds.$each, ["booking-1"]);
+
+  release.payload = { acknowledged: true, matchedCount: 1 };
+  const acknowledged = run("fn_split_leave_daily_limit_ack.js", release).result;
+  assert.ok(acknowledged[0]);
+  assert.equal(acknowledged[0]._splitLeaveCtx.dailyLimitReleaseOutcome, "RELEASED");
+  assert.equal(acknowledged[2], null);
+});
+
+test("daily limit release is idempotent, skips money bookings, and fails closed on ambiguity", () => {
+  const ctx = {
+    operationId: "self-leave:game-1:client-1:generation-1",
+    gameId: "game-1",
+    targetClientId: "client-1",
+    exerciseId: "exercise-1",
+    initialBookingIds: ["booking-1"],
+  };
+  const noClaim = run("fn_split_leave_daily_limit_route.js", {
+    _splitLeaveCtx: { ...ctx },
+    payload: [],
+  }).result;
+  assert.ok(noClaim[1]);
+  assert.equal(noClaim[1]._splitLeaveCtx.dailyLimitReleaseOutcome, "NOT_APPLICABLE");
+
+  const alreadyReleased = run("fn_split_leave_daily_limit_route.js", {
+    _splitLeaveCtx: { ...ctx },
+    payload: [{
+      _id: "daily-1",
+      bookingId: "booking-1",
+      state: "RELEASED",
+      releasedBookingIds: ["booking-1"],
+    }],
+  }).result;
+  assert.ok(alreadyReleased[1]);
+  assert.equal(alreadyReleased[1]._splitLeaveCtx.dailyLimitReleaseOutcome, "ALREADY_RELEASED");
+
+  const ambiguous = run("fn_split_leave_daily_limit_route.js", {
+    _splitLeaveCtx: { ...ctx },
+    payload: [{ _id: "daily-1" }, { _id: "daily-2" }],
+  }).result;
+  assert.equal(ambiguous[3].statusCode, 202);
+  assert.equal(ambiguous[3].payload.state, "RETRY_REQUIRED");
+});
+
 test("self leave discovers a missing game bookingId from the exact active Viva exercise", () => {
   const game = selfGame();
   delete game.metadata.splitPayment.payments[0].bookingId;
@@ -590,6 +738,10 @@ test("durable STARTED record is written before Viva and only its owner proceeds"
   assert.equal(update.$setOnInsert.state, "STARTED");
   assert.equal(update.$setOnInsert.claimToken, start._splitLeaveCtx.claimToken);
   assert.match(update.$setOnInsert.claimLeaseUntil, /^2026-|^2027-/);
+  assert.ok(
+    Date.parse(update.$setOnInsert.claimLeaseUntil) - Date.parse(update.$setOnInsert.lastAttemptAt) <= 90_500,
+    "foreground lease must hand off to the background worker promptly",
+  );
   assert.deepEqual(options, { upsert: true });
 
   start.payload = { acknowledged: true, upsertedCount: 1, matchedCount: 0 };
@@ -661,6 +813,10 @@ test("VIVA_CONFIRMED is persisted before local mutation and a foreign live lease
   assert.equal(persist.payload[1].$set.vivaConfirmedAt, "2026-08-01T09:05:00.000Z");
   assert.equal(persist.payload[1].$set.localApplyClaimToken, msg._splitLeaveCtx.claimToken);
   assert.equal(persist.payload[1].$inc.localApplyAttempts, 1);
+  assert.ok(
+    Date.parse(persist.payload[1].$set.localApplyLeaseUntil) - Date.parse(persist.payload[1].$set.lastAttemptAt) <= 90_500,
+    "Viva-confirmed local synchronization must be retryable on the next worker interval",
+  );
 
   const concurrent = authorizeSelf();
   concurrent._splitLeaveCtx.operationKey = msg._splitLeaveCtx.operationKey;
@@ -711,6 +867,9 @@ test("background retry atomically claims and increments an eligible local apply"
   assert.equal(selected.payload[0].localApplyAttempts.$lt, 20);
   assert.equal(selected.payload[1].$inc.localApplyAttempts, 1);
   assert.match(selected.payload[1].$set.localApplyClaimToken, /^retry-/);
+  assert.ok(
+    Date.parse(selected.payload[1].$set.localApplyLeaseUntil) - Date.parse(selected.payload[1].$set.lastAttemptAt) <= 90_500,
+  );
 
   const lostRace = structuredClone(selected);
   lostRace.payload = { acknowledged: true, matchedCount: 0, modifiedCount: 0 };
@@ -775,6 +934,10 @@ test("STARTED retry rebuilds the exact booking queue before any Viva attempt", (
   }, { global: { vivacrm_access_token: "service-token" } }).result[0];
   assert.equal(selected.payload[0].state, "STARTED");
   assert.equal(selected.payload[1].$inc.recoveryAttempts, 1);
+  assert.ok(
+    Date.parse(selected.payload[1].$set.claimLeaseUntil) - Date.parse(selected.payload[1].$set.lastAttemptAt) <= 90_500,
+    "background retry lease must remain shorter than the two-minute worker interval",
+  );
   selected.payload = { acknowledged: true, matchedCount: 1 };
   const claimed = run("fn_split_leave_retry_claim_ack.js", selected).result[0];
   claimed.payload = [selfGame()];

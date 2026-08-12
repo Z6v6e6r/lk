@@ -23,6 +23,9 @@ msg.payload = [
       doneAt: nowIso,
       successMessage: ctx.refundMessage || ctx.successMessage || "Вы вышли из игры",
       outcome: superseded ? "REJOIN_PRESERVED" : "REMOVED",
+      dailyLimitReleaseOutcome: ctx.dailyLimitReleaseOutcome || "NOT_APPLICABLE",
+      dailyLimitOperationKey: ctx.dailyLimitOperationKey || null,
+      dailyLimitReleasedAt: ctx.dailyLimitReleasedAt || null,
       updatedAt: nowIso,
     },
     $unset: {

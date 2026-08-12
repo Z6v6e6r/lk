@@ -55,7 +55,7 @@ if (operationState === "STARTED") {
     {
       $set: {
         claimToken,
-        claimLeaseUntil: new Date(Date.now() + 5 * 60_000).toISOString(),
+        claimLeaseUntil: new Date(Date.now() + 90_000).toISOString(),
         lastAttemptAt: nowIso,
         updatedAt: nowIso,
       },
@@ -78,7 +78,7 @@ if (operationState === "STARTED") {
     {
       $set: {
         localApplyClaimToken: claimToken,
-        localApplyLeaseUntil: new Date(Date.now() + 3 * 60_000).toISOString(),
+        localApplyLeaseUntil: new Date(Date.now() + 90_000).toISOString(),
         lastAttemptAt: nowIso,
         updatedAt: nowIso,
       },

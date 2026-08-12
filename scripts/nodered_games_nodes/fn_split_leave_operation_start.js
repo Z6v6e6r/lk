@@ -11,7 +11,7 @@ if (!ctx.membershipVersion || (bookingIds.length === 0 && ctx.vivaTargetMode !==
   return [null, msg];
 }
 const nowIso = new Date().toISOString();
-const leaseUntilIso = new Date(Date.now() + 5 * 60_000).toISOString();
+const leaseUntilIso = new Date(Date.now() + 90_000).toISOString();
 const operationKey = `${ctx.gameId}:${ctx.operationId}`;
 ctx.operationKey = operationKey;
 msg._splitLeaveCtx = ctx;
