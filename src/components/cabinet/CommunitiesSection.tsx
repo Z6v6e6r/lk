@@ -231,7 +231,8 @@ const COMMUNITY_GRAPH_BASE_SPACING_MULTIPLIER = 2;
 const COMMUNITY_GRAPH_BASE_CLEARANCE_TO_PERCENT = 0.28;
 const COMMUNITY_TOURNAMENT_LOOKAHEAD_DAYS = 14;
 const COMMUNITY_TOURNAMENT_RECENT_GRACE_MS = 1000 * 60 * 60 * 6;
-const COMMUNITY_TOURNAMENT_DISCOVERY_TIMEOUT_MS = 6_000;
+const COMMUNITY_TOURNAMENT_DISCOVERY_TIMEOUT_MS = 15_000;
+const COMMUNITY_TOURNAMENT_STATS_TIMEOUT_MS = 6_000;
 const COMMUNITY_GRAPH_CREATE_NODE = {
   left: 16,
   top: 16,
@@ -4684,7 +4685,7 @@ export function CommunitiesSection({
     const abortController = new AbortController();
     const timeoutId = window.setTimeout(() => {
       abortController.abort();
-    }, COMMUNITY_TOURNAMENT_DISCOVERY_TIMEOUT_MS);
+    }, COMMUNITY_TOURNAMENT_STATS_TIMEOUT_MS);
 
     try {
       const response = await apiFetchTournamentParticipants(normalizedTournamentId, {

@@ -41,6 +41,26 @@ test("community tournament composer performs one abortable period request and no
   assert.doesNotMatch(discoverySource, /apiFetchTournamentParticipants/);
 });
 
+test("community tournament discovery allows the current Viva period response latency", () => {
+  assert.match(communitiesSource, /const COMMUNITY_TOURNAMENT_DISCOVERY_TIMEOUT_MS = 15_000;/);
+  assert.match(communitiesSource, /const COMMUNITY_TOURNAMENT_STATS_TIMEOUT_MS = 6_000;/);
+
+  const discoverySource = sourceSlice(
+    communitiesSource,
+    "if (!isFeedComposerOpen || feedFormState.kind !== \"TOURNAMENT\") {",
+    "const feedGameRecords = useMemo(() => {",
+  );
+  assert.match(discoverySource, /COMMUNITY_TOURNAMENT_DISCOVERY_TIMEOUT_MS/);
+
+  const warmupSource = sourceSlice(
+    communitiesSource,
+    "const warmFeedTournamentStats = useCallback(async (tournamentId: string) => {",
+    "const handlePlayCommunityGame =",
+  );
+  assert.match(warmupSource, /COMMUNITY_TOURNAMENT_STATS_TIMEOUT_MS/);
+  assert.doesNotMatch(warmupSource, /COMMUNITY_TOURNAMENT_DISCOVERY_TIMEOUT_MS/);
+});
+
 test("community-only participant stat warmup is single-flight, abortable and has no retry", () => {
   const warmupSource = sourceSlice(
     communitiesSource,
