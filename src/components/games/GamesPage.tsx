@@ -15412,7 +15412,12 @@ export default function GamesPage({
             </div>
           </div>
           {gameRosterError && <div className="game-empty game-pay-error">{gameRosterError}</div>}
-          {leavePendingMessage && <div className="game-empty" role="status" aria-live="polite">{leavePendingMessage}</div>}
+          {leavePendingMessage && (
+            <div className="game-empty details-roster-leave-status" role="status" aria-live="polite">
+              <span className="details-roster-leave-spinner" aria-hidden="true" />
+              <span>{leavePendingMessage}</span>
+            </div>
+          )}
           <div className="details-roster-list">
             {detailsParticipants.length === 0 ? (
               <div className="game-empty">Пока нет подтвержденных игроков</div>

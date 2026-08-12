@@ -7084,6 +7084,17 @@ h6,
   flex: 0 0 12px;
 }
 
+.details-roster-leave-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.details-roster-leave-status .details-roster-leave-spinner {
+  margin-top: 2px;
+  color: #6d4ee6;
+}
+
 @keyframes details-roster-leave-spin {
   to {
     transform: rotate(360deg);

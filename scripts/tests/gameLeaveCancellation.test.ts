@@ -59,6 +59,11 @@ test("self leave renders an in-roster pending spinner and keeps the background s
   assert.match(gamesPageSource, /SELF_REMOVE_START_NOTICE/);
   assert.match(gamesPageSource, /Ждём подтверждения отмены и освобождения места/);
   assert.match(gamesPageSource, /details-roster-leave-spinner/);
+  assert.match(gamesPageSource, /game-empty details-roster-leave-status/);
+  assert.match(
+    gamesPageSource,
+    /details-roster-leave-status[\s\S]*details-roster-leave-spinner[\s\S]*leavePendingMessage/,
+  );
   assert.match(gamesPageSource, /isCurrentUserLeaving \? "Покидает игру"/);
   assert.match(gamesPageSource, /если закрыть её, повтор продолжится в фоне/);
 });
