@@ -200,7 +200,7 @@ test("summer subscription purchase-prepare uses default reservation window witho
   assert.equal(ctx.reservationMinutes, 30);
 });
 
-test("Friendship and RA switch to staged 100-then-7 release on August 1 Moscow time", () => {
+test("Friendship and RA switch to their staged daily limits on August 1 Moscow time", () => {
   const createPurchaseContext = (nowIso: string, counterKey: string) => withFixedNow(nowIso, () => {
     const out = runNodeRedFunction(
       "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
@@ -225,7 +225,7 @@ test("Friendship and RA switch to staged 100-then-7 release on August 1 Moscow t
     assert.equal(after.stagedRelease, true);
     assert.equal(after.totalLimit, 100);
     assert.equal(after.launchLimit, 100);
-    assert.equal(after.dailyLimit, 7);
+    assert.equal(after.dailyLimit, counterKey === "ra" ? 10 : 7);
     assert.equal(after.releaseStartDate, "2026-08-01");
     assert.equal(after.inventoryId, `ab_leto_2026_100_then_7_v1_${counterKey}`);
   }
@@ -681,7 +681,7 @@ test("staged release changes to a seven-seat daily drop after 100 PAID launch sa
   assert.equal(blockedDetails.dailyDropActive, true);
 });
 
-test("staged release waits for the next 10:00 Moscow window after the launch pool sells out", () => {
+test("RA staged release waits for the next 10:00 Moscow window after the launch pool sells out", () => {
   const inventoryId = "ab_leto_2026_100_then_7_v1_ra";
   const launchRows = Array.from({ length: 100 }, () => ({
     inventoryId,
@@ -724,8 +724,8 @@ test("staged release waits for the next 10:00 Moscow window after the launch poo
   const allowedCtx = asRecord(asRecord(allowed[0])._summerSubscriptionCtx);
   assert.equal(allowedCtx.releasePhase, "daily");
   assert.equal(allowedCtx.dailyDropActive, true);
-  assert.equal(allowedCtx.totalLimit, 7);
-  assert.equal(allowedCtx.remainingBefore, 7);
+  assert.equal(allowedCtx.totalLimit, 10);
+  assert.equal(allowedCtx.remainingBefore, 10);
 });
 
 test("staged status exposes launch and daily phases independently per product", () => {
@@ -792,9 +792,9 @@ test("staged status exposes launch and daily phases independently per product", 
   const dailyPayload = asRecord(asRecord(readStatus("ra", dailyRows)[0]).payload);
   assert.equal(dailyPayload.releasePhase, "daily");
   assert.equal(dailyPayload.dailyDropActive, true);
-  assert.equal(dailyPayload.totalLimit, 7);
+  assert.equal(dailyPayload.totalLimit, 10);
   assert.equal(dailyPayload.paidCount, 3);
-  assert.equal(dailyPayload.remainingCount, 4);
+  assert.equal(dailyPayload.remainingCount, 7);
 });
 
 test("staged counters recover current daily sales that were persisted as launch", () => {
@@ -874,7 +874,7 @@ test("staged counters recover current daily sales that were persisted as launch"
   const allowedCtx = asRecord(asRecord(purchaseOut[0])._summerSubscriptionCtx);
   assert.equal(allowedCtx.releasePhase, "daily");
   assert.equal(allowedCtx.launchPaidCount, 100);
-  assert.equal(allowedCtx.remainingBefore, 4);
+  assert.equal(allowedCtx.remainingBefore, 7);
 
   const statusPrepare = withFixedNow(nowIso, () => runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
@@ -890,7 +890,7 @@ test("staged counters recover current daily sales that were persisted as launch"
   assert.equal(statusPayload.launchPaidCount, 100);
   assert.equal(statusPayload.paidCount, 2);
   assert.equal(statusPayload.reservedCount, 1);
-  assert.equal(statusPayload.remainingCount, 4);
+  assert.equal(statusPayload.remainingCount, 7);
 
   const refreshPrepare = withFixedNow(nowIso, () => runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_counter_refresh_prepare.js",
@@ -909,9 +909,9 @@ test("staged counters recover current daily sales that were persisted as launch"
   assert.equal(refreshedState.launchPaidCount, 100);
   assert.equal(refreshedState.paidCount, 2);
   assert.equal(refreshedState.reservedCount, 1);
-  assert.equal(refreshedState.remainingCount, 4);
+  assert.equal(refreshedState.remainingCount, 7);
 
-  const sixMislabeledPaid = Array.from({ length: 6 }, (_, index) => ({
+  const nineMislabeledPaid = Array.from({ length: 9 }, (_, index) => ({
     inventoryId,
     counterKey: "ra",
     releasePhase: "launch",
@@ -925,7 +925,7 @@ test("staged counters recover current daily sales that were persisted as launch"
       payload: [
         ...launchRows,
         mislabeledPriorDrop,
-        ...sixMislabeledPaid,
+        ...nineMislabeledPaid,
         mislabeledCurrentPending,
         mislabeledExpiredPending,
       ],
@@ -934,7 +934,7 @@ test("staged counters recover current daily sales that were persisted as launch"
   const blocked = asRecord(blockedOut[1]);
   const blockedDetails = asRecord(asRecord(blocked.payload).details);
   assert.equal(blocked.statusCode, 409);
-  assert.equal(blockedDetails.paidCount, 6);
+  assert.equal(blockedDetails.paidCount, 9);
   assert.equal(blockedDetails.reservedCount, 1);
   assert.equal(blockedDetails.remainingCount, 0);
 });
@@ -1684,9 +1684,9 @@ test("summer subscription counter refresh materializes the staged daily phase", 
   assert.equal(state.releasePhase, "daily");
   assert.equal(state.dailyDropActive, true);
   assert.equal(state.launchPaidCount, 100);
-  assert.equal(state.totalLimit, 7);
+  assert.equal(state.totalLimit, 10);
   assert.equal(state.paidCount, 2);
-  assert.equal(state.remainingCount, 5);
+  assert.equal(state.remainingCount, 8);
 });
 
 test("summer subscription reconciliation selects only live pending payments from the launch inventory", () => {

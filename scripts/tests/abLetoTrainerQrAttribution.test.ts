@@ -38,6 +38,8 @@ test("staged release constants are aligned for status and purchase flows", () =>
     assert.match(source, /AB_LETO_STAGED_RELEASE_START_DATE = "2026-08-01"/);
     assert.match(source, /AB_LETO_STAGED_LAUNCH_LIMIT = 100/);
     assert.match(source, /AB_LETO_STAGED_DAILY_DROP_LIMIT = 7/);
+    assert.match(source, /AB_LETO_STAGED_RA_DAILY_DROP_LIMIT = 10/);
+    assert.match(source, /counterKey === "ra"/);
     assert.match(source, /AB_LETO_DAILY_DROP_COUNTER_KEYS = new Set\(\["friendship", "ra"\]\)/);
     assert.doesNotMatch(source, /AB_LETO_TEMPORARY_UNLIMITED_DATES/);
   }

@@ -10,6 +10,7 @@ const AB_LETO_STAGED_RELEASE_START_DATE = "2026-08-01";
 const AB_LETO_STAGED_INVENTORY_ID = "ab_leto_2026_100_then_7_v1";
 const AB_LETO_STAGED_LAUNCH_LIMIT = 100;
 const AB_LETO_STAGED_DAILY_DROP_LIMIT = 7;
+const AB_LETO_STAGED_RA_DAILY_DROP_LIMIT = 10;
 const DEFAULT_RESERVATION_MINUTES = 30;
 const PAYMENT_REF_QUERY_KEY = "summerPaymentRef";
 const TRAINER_QR_CODE_PATTERN = /^TR-(?:00[1-9]|0[1-4]\d|050)$/;
@@ -155,7 +156,9 @@ const withAbLetoStagedRelease = (counter) => {
     stagedRelease: true,
     releaseStartDate: AB_LETO_STAGED_RELEASE_START_DATE,
     launchLimit: AB_LETO_STAGED_LAUNCH_LIMIT,
-    dailyLimit: AB_LETO_STAGED_DAILY_DROP_LIMIT,
+    dailyLimit: counterKey === "ra"
+      ? AB_LETO_STAGED_RA_DAILY_DROP_LIMIT
+      : AB_LETO_STAGED_DAILY_DROP_LIMIT,
     dailyDropDate: resolveDailyDropDate(),
     totalLimit: AB_LETO_STAGED_LAUNCH_LIMIT,
   });
