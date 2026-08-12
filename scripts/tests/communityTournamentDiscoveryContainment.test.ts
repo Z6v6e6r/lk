@@ -26,7 +26,7 @@ test("community tournament discovery reuses the cabinet active-booking exercise 
   assert.match(entrySource, /activeBookingExerciseIds=\{data\.activeBookingExerciseIds\}/);
 });
 
-test("community tournament composer performs one abortable period request and no participant fan-out", () => {
+test("community tournament composer requests every Viva period page with no participant fan-out", () => {
   const discoverySource = sourceSlice(
     communitiesSource,
     "const loadFeedTournamentOptions = async () => {",
@@ -34,15 +34,27 @@ test("community tournament composer performs one abortable period request and no
   );
 
   assert.match(discoverySource, /apiFetchExercisesByPeriod\(todayKey, lastDateKey/);
+  assert.match(discoverySource, /size: 2_000/);
+  assert.match(discoverySource, /fetchAllPages: true/);
   assert.match(discoverySource, /retries: 0/);
   assert.match(discoverySource, /signal: abortController\.signal/);
   assert.match(discoverySource, /activeBookingExerciseIdSet\.has\(exerciseId\)/);
-  assert.doesNotMatch(discoverySource, /Promise\.all/);
   assert.doesNotMatch(discoverySource, /apiFetchTournamentParticipants/);
+
+  const periodApiSource = sourceSlice(
+    apiClientSource,
+    "export async function apiFetchExercisesByPeriod(",
+    "function formatExerciseQueryDate",
+  );
+  assert.match(periodApiSource, /query\.set\("page", String\(page\)\)/);
+  assert.match(periodApiSource, /if \(!options\.fetchAllPages\)/);
+  assert.match(periodApiSource, /extractExercisesTotalPages\(result\.data\)/);
+  assert.match(periodApiSource, /Promise\.all\(Array\.from/);
+  assert.match(periodApiSource, /exercisesById/);
 });
 
 test("community tournament discovery allows the current Viva period response latency", () => {
-  assert.match(communitiesSource, /const COMMUNITY_TOURNAMENT_DISCOVERY_TIMEOUT_MS = 15_000;/);
+  assert.match(communitiesSource, /const COMMUNITY_TOURNAMENT_DISCOVERY_TIMEOUT_MS = 30_000;/);
   assert.match(communitiesSource, /const COMMUNITY_TOURNAMENT_STATS_TIMEOUT_MS = 6_000;/);
 
   const discoverySource = sourceSlice(

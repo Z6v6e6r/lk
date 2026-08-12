@@ -231,7 +231,7 @@ const COMMUNITY_GRAPH_BASE_SPACING_MULTIPLIER = 2;
 const COMMUNITY_GRAPH_BASE_CLEARANCE_TO_PERCENT = 0.28;
 const COMMUNITY_TOURNAMENT_LOOKAHEAD_DAYS = 14;
 const COMMUNITY_TOURNAMENT_RECENT_GRACE_MS = 1000 * 60 * 60 * 6;
-const COMMUNITY_TOURNAMENT_DISCOVERY_TIMEOUT_MS = 15_000;
+const COMMUNITY_TOURNAMENT_DISCOVERY_TIMEOUT_MS = 30_000;
 const COMMUNITY_TOURNAMENT_STATS_TIMEOUT_MS = 6_000;
 const COMMUNITY_GRAPH_CREATE_NODE = {
   left: 16,
@@ -2964,7 +2964,8 @@ export function CommunitiesSection({
       const todayKey = formatCommunityApiDate(today);
       const lastDateKey = formatCommunityApiDate(addDays(today, COMMUNITY_TOURNAMENT_LOOKAHEAD_DAYS));
       const exerciseResponse = await apiFetchExercisesByPeriod(todayKey, lastDateKey, {
-        size: 5_000,
+        size: 2_000,
+        fetchAllPages: true,
         retries: 0,
         signal: abortController.signal,
       });

@@ -5148,38 +5148,50 @@ function extractExercisesResponse(data: unknown): Exercise[] {
   return [];
 }
 
+function extractExercisesTotalPages(data: unknown): number {
+  if (!isRecord(data)) return 1;
+  const totalPages = Number(data.totalPages);
+  return Number.isInteger(totalPages) && totalPages > 1 ? totalPages : 1;
+}
+
 export async function apiFetchExercisesByPeriod(
   dateFrom: string,
   dateTo: string,
   options: {
     size?: number;
+    fetchAllPages?: boolean;
     signal?: AbortSignal;
     retries?: number;
   } = {},
 ): Promise<ApiResult<Exercise[]>> {
-  const query = new URLSearchParams({
-    dateFrom,
-    dateTo,
-    size: String(options.size ?? 5000),
-  });
+  const fetchPage = (page: number) => {
+    const query = new URLSearchParams({
+      dateFrom,
+      dateTo,
+      size: String(options.size ?? 5000),
+    });
+    if (options.fetchAllPages) query.set("page", String(page));
 
-  const result = await request<unknown>(
-    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/exercises/period?${query.toString()}`,
-    {
-      method: "GET",
-      auth: true,
-      retries: options.retries ?? 1,
-      signal: options.signal,
-      ...(IS_DEV_RELEASE_CHANNEL
-        ? {
-            cacheTtlMs: DEV_EXERCISES_CACHE_TTL_MS,
-            dedupe: true,
-          }
-        : {
-            cache: "no-store" as RequestCache,
-          }),
-    },
-  );
+    return request<unknown>(
+      `${API_BASE}/end-user/api/v1/${TENANT_KEY}/exercises/period?${query.toString()}`,
+      {
+        method: "GET",
+        auth: true,
+        retries: options.retries ?? 1,
+        signal: options.signal,
+        ...(IS_DEV_RELEASE_CHANNEL
+          ? {
+              cacheTtlMs: DEV_EXERCISES_CACHE_TTL_MS,
+              dedupe: true,
+            }
+          : {
+              cache: "no-store" as RequestCache,
+            }),
+      },
+    );
+  };
+
+  const result = await fetchPage(0);
 
   if (result.error) {
     return {
@@ -5189,8 +5201,35 @@ export async function apiFetchExercisesByPeriod(
     };
   }
 
+  const firstPage = extractExercisesResponse(result.data);
+  if (!options.fetchAllPages) {
+    return {
+      data: firstPage,
+      error: null,
+      status: result.status,
+    };
+  }
+
+  const totalPages = extractExercisesTotalPages(result.data);
+  const remainingResults = totalPages > 1
+    ? await Promise.all(Array.from({ length: totalPages - 1 }, (_, index) => fetchPage(index + 1)))
+    : [];
+  const failedResult = remainingResults.find((pageResult) => pageResult.error);
+  if (failedResult?.error) {
+    return {
+      data: null,
+      error: failedResult.error,
+      status: failedResult.status,
+    };
+  }
+
+  const exercisesById = new Map<string, Exercise>();
+  [firstPage, ...remainingResults.map((pageResult) => extractExercisesResponse(pageResult.data))]
+    .flat()
+    .forEach((exercise) => exercisesById.set(exercise.id, exercise));
+
   return {
-    data: extractExercisesResponse(result.data),
+    data: Array.from(exercisesById.values()),
     error: null,
     status: result.status,
   };
