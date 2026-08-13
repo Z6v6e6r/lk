@@ -747,6 +747,17 @@ test("ambiguous upstream result remains pending while definitive rejection is pe
   assert.equal(rejected[3].payload[1].$set.state, "FAILED");
 });
 
+test("ambiguous upstream claim expires into Viva reconciliation after fifteen minutes", () => {
+  const preaccept = runFunction(ROUTER_FILE, {
+    payload: { acknowledged: true, insertedId: "operation" },
+    _subscriptionBooking: baseContext("operation_insert"),
+  });
+  const pendingUntil = Date.parse(preaccept[3].payload[1].$set.pendingUntil);
+  const upstreamAttemptedAt = Date.parse(preaccept[3].payload[1].$set.upstreamAttemptedAt);
+  assert.ok(Number.isFinite(pendingUntil));
+  assert.equal(pendingUntil - upstreamAttemptedAt, 15 * 60 * 1000);
+});
+
 test("accepted booking is confirmed only after exact-subscription readback", () => {
   const accept = runFunction(ROUTER_FILE, {
     statusCode: 202,

@@ -3,7 +3,8 @@ const SERV2_URL = "https://padlhub.su/seliger";
 const DAILY_LIMIT_CODE = "SUBSCRIPTION_CATEGORY_DAILY_LIMIT_REACHED";
 const SHARED_LIMIT_FROM = "2026-08-01";
 const PREPARED_LEASE_MS = 2 * 60 * 1000;
-const PENDING_CONFIRMATION_MS = 24 * 60 * 60 * 1000;
+// Viva normally confirms in seconds; keep the dedupe window short, then reconcile safely.
+const PENDING_CONFIRMATION_MS = 15 * 60 * 1000;
 
 const OUTPUT_HTTP = 0;
 const OUTPUT_MONGO_FIND = 1;
