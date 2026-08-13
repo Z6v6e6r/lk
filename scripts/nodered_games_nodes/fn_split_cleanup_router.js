@@ -696,7 +696,15 @@ const isCancelledExerciseRow = (row) => {
   return status.includes("CANCEL") || status.includes("DELETE");
 };
 
-const exerciseListPageComplete = (payload, page) => {
+const exerciseListPageFingerprint = (payload) => {
+  const rows = extractExerciseRows(payload);
+  if (!rows.length) return null;
+  const ids = rows.map((row) => normalizeComparableId(row?.id || row?.exerciseId || row?.uuid));
+  if (ids.some((id) => !id)) return null;
+  return `${ids.length}:${ids.join("|")}`;
+};
+
+const exerciseListPageState = (ctx, payload, phase, stage, page) => {
   const root = payload && typeof payload === "object" && !Array.isArray(payload)
     ? payload
     : null;
@@ -704,11 +712,30 @@ const exerciseListPageComplete = (payload, page) => {
     ? root.data
     : null;
   const pageInfo = data || root;
-  if (pageInfo?.last === true) return true;
-  if (pageInfo?.last === false) return false;
+  if (pageInfo?.last === true) return { complete: true, repeated: false };
+  if (pageInfo?.last === false) return { complete: false, repeated: false };
   const totalPages = toNumber(pageInfo?.totalPages);
-  if (totalPages !== null) return page + 1 >= Math.max(0, Math.floor(totalPages));
-  return extractExerciseRows(payload).length < EXERCISE_READBACK_PAGE_SIZE;
+  if (totalPages !== null) {
+    return {
+      complete: page + 1 >= Math.max(0, Math.floor(totalPages)),
+      repeated: false,
+    };
+  }
+
+  const fingerprint = exerciseListPageFingerprint(payload);
+  const scope = `${phase}:${stage}`;
+  const repeated = Boolean(
+    page > 0
+    && fingerprint
+    && ctx.exerciseReadbackPageFingerprintScope === scope
+    && ctx.exerciseReadbackPageFingerprint === fingerprint
+  );
+  ctx.exerciseReadbackPageFingerprintScope = scope;
+  ctx.exerciseReadbackPageFingerprint = fingerprint;
+  return {
+    complete: repeated || extractExerciseRows(payload).length < EXERCISE_READBACK_PAGE_SIZE,
+    repeated,
+  };
 };
 
 const extractBookingRows = (payload) => {
@@ -1956,7 +1983,8 @@ if (ctx.step === "verify_exercise_active_list") {
   }
 
   const activeRow = findExerciseRow(msg.payload, ctx.exerciseId);
-  const pageComplete = exerciseListPageComplete(msg.payload, page);
+  const pageState = exerciseListPageState(ctx, msg.payload, phase, "ACTIVE", page);
+  const pageComplete = pageState.complete;
   appendTrace(ctx, {
     step: activeRow
       ? "verify_exercise_active_list_found"
@@ -1966,6 +1994,7 @@ if (ctx.step === "verify_exercise_active_list") {
     phase,
     page,
     pageComplete,
+    pageRepeated: pageState.repeated,
   });
   if (activeRow) {
     ctx.exerciseActiveSeen = true;
@@ -2020,7 +2049,8 @@ if (ctx.step === "verify_exercise_inclusive_list") {
   }
 
   const inclusiveRow = findExerciseRow(msg.payload, ctx.exerciseId);
-  const pageComplete = exerciseListPageComplete(msg.payload, page);
+  const pageState = exerciseListPageState(ctx, msg.payload, phase, "INCLUSIVE", page);
+  const pageComplete = pageState.complete;
   appendTrace(ctx, {
     step: inclusiveRow
       ? "verify_exercise_inclusive_list_found"
@@ -2030,6 +2060,7 @@ if (ctx.step === "verify_exercise_inclusive_list") {
     phase,
     page,
     pageComplete,
+    pageRepeated: pageState.repeated,
   });
   if (inclusiveRow) {
     if (!isCancelledExerciseRow(inclusiveRow)) {

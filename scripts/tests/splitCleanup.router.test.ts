@@ -1255,6 +1255,95 @@ test("exercise read-back paginates and finds the exact id on page two", () => {
   assert.equal(asRecord(next[0]).method, "DELETE");
 });
 
+test("exercise read-back treats an exact repeated unpaginated page as complete", () => {
+  const repeatedRows = Array.from({ length: 221 }, (_, index) => ({
+    id: `active-exercise-${index}`,
+  }));
+  const ctx = {
+    step: "verify_exercise_active_list",
+    exerciseReadbackPhase: "PRE_CANCEL",
+    exerciseReadbackPage: 0,
+    mode: "GAME_CLEANUP",
+    token: "token-1",
+    gameId: "game-1",
+    exerciseId: "cancelled-exercise",
+    exerciseDate: "2026-08-26",
+    bookingQueue: [],
+    bookingResults: [],
+    initialBookingIds: [],
+    trace: [],
+    upstreamMutationsAttempted: 0,
+  };
+
+  let out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
+    statusCode: 200,
+    payload: repeatedRows,
+    _splitCleanupCtx: ctx,
+  }) as unknown[];
+  let request = asRecord(out[0]);
+  assert.match(String(request.url), /includeCanceled=false/);
+  assert.match(String(request.url), /page=1/);
+
+  out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
+    statusCode: 200,
+    payload: repeatedRows,
+    _splitCleanupCtx: request._splitCleanupCtx,
+  }) as unknown[];
+  request = asRecord(out[0]);
+  assert.match(String(request.url), /includeCanceled=true/);
+  assert.match(String(request.url), /page=0/);
+  const repeatedTrace = asTrace(asRecord(request._splitCleanupCtx).trace)
+    .find((item) => item.step === "verify_exercise_active_list_absent" && item.page === 1);
+  assert.equal(repeatedTrace?.pageRepeated, true);
+
+  out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
+    statusCode: 200,
+    payload: [{ id: "cancelled-exercise", canceled: true }],
+    _splitCleanupCtx: request._splitCleanupCtx,
+  }) as unknown[];
+  const summary = asRecord(asRecord(out[2]).payload);
+  assert.equal(summary.exerciseCancelled, true);
+  assert.equal(summary.exerciseAlreadyCancelled, true);
+  assert.equal(summary.upstreamMutationsAttempted, 0);
+  assert.equal(summary.cancelledInLk, true);
+});
+
+test("exercise read-back keeps paginating when unpaginated pages differ", () => {
+  const firstPageRows = Array.from({ length: 200 }, (_, index) => ({ id: `page-0-${index}` }));
+  const secondPageRows = Array.from({ length: 200 }, (_, index) => ({ id: `page-1-${index}` }));
+  const baseCtx = {
+    step: "verify_exercise_active_list",
+    exerciseReadbackPhase: "PRE_CANCEL",
+    exerciseReadbackPage: 0,
+    mode: "GAME_CLEANUP",
+    token: "token-1",
+    gameId: "game-1",
+    exerciseId: "exercise-on-later-page",
+    exerciseDate: "2026-08-26",
+    bookingQueue: [],
+    bookingResults: [],
+    initialBookingIds: [],
+    trace: [],
+  };
+
+  let out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
+    statusCode: 200,
+    payload: firstPageRows,
+    _splitCleanupCtx: baseCtx,
+  }) as unknown[];
+  let request = asRecord(out[0]);
+  assert.match(String(request.url), /page=1/);
+
+  out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
+    statusCode: 200,
+    payload: secondPageRows,
+    _splitCleanupCtx: request._splitCleanupCtx,
+  }) as unknown[];
+  request = asRecord(out[0]);
+  assert.match(String(request.url), /includeCanceled=false/);
+  assert.match(String(request.url), /page=2/);
+});
+
 test("exercise list failure blocks local mutation", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
     statusCode: 503,

@@ -11,33 +11,17 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = fs.realpathSync(path.resolve(SCRIPT_DIR, ".."));
 
 export const SPLIT_CLEANUP_READBACK_CONTRACT = Object.freeze({
-  wholeFlowSha256: "3dbe13059e4e105254c8d0b7b44ff6710d8a0127ed29ad3407473ba5da4a97f8",
-  nodeCount: 4628,
-  httpRouteCount: 203,
+  wholeFlowSha256: "4a5f3af35c5cb3f7b6e89e43b83437c8f8e1474060bfc07ff2502487e3417d9e",
+  nodeCount: 4734,
+  httpRouteCount: 211,
   targets: [
-    {
-      id: "dcd649158bd8df8e",
-      name: "Build split cleanup query",
-      source: "fn_split_cleanup_query.js",
-      nodeSha256: "e58a3506adc4014dc740e52245c1d539fa3784414f7dd788ebc586e97321e544",
-      funcSha256: "0f344c78dbe9dbe5ec0b14667ce5da83dd2f26253dd514e46ae0dcaffc07e9a9",
-      postFuncSha256: "0f7434e9a7893d796062afafb54b42652687caa70f6e2f379f90690c907145db",
-    },
-    {
-      id: "9508f8e0ae8d282a",
-      name: "Prepare split cleanup tasks",
-      source: "fn_split_cleanup_prepare.js",
-      nodeSha256: "7decba323737d6548870cc9d5d9d43791c58c7bc321eeb078e18a8402cf79a43",
-      funcSha256: "f1f68c57999886ac14f5865ee0c18521544faf12f583121c6c49c2c874c57092",
-      postFuncSha256: "610f8a8f1f7254c2c72bedec5437c38e1f46a633b751286f8b2a0e8b24f93845",
-    },
     {
       id: "bcc3dccf8d64f9bb",
       name: "Route split cleanup action",
       source: "fn_split_cleanup_router.js",
-      nodeSha256: "38dfd6e13e6608fec4b24e18bdb412e2cb268eb6204c90541917b039e1e9d2aa",
-      funcSha256: "af775ca938b1f89236b162fa7d63a3ffce159b5bb59df160c8777bcefba23f96",
-      postFuncSha256: "73830d7576f59733c9cc5d194759db32d67b55192aee689cd5648c18a9d461f1",
+      nodeSha256: "fb37fdba59dce4af804facf3f99d6097a8214fb80716aafb35e99d13e5dd3cec",
+      funcSha256: "73830d7576f59733c9cc5d194759db32d67b55192aee689cd5648c18a9d461f1",
+      postFuncSha256: "ef80ddb8930e7e9e9146b799ab8a986a40efd2f7af79e16c5e4124d05b359e26",
     },
   ],
 });
