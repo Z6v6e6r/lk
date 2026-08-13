@@ -1104,6 +1104,9 @@ export default function TournamentSignupPage({
   const publicRosterByExerciseIdRef = useRef<Record<string, TournamentSignupPublicRoster>>({});
   const publicRosterRequestsRef = useRef<Map<string, Promise<TournamentSignupPublicRoster | null>>>(new Map());
   const publicRosterDetailAbortRef = useRef<AbortController | null>(null);
+  const listRequestIdRef = useRef(0);
+  const listForegroundRequestIdRef = useRef(0);
+  const listMountedRef = useRef(true);
 
   const selectedDate = dates[dateIndex] ?? dates[DAYS_BEFORE_TODAY] ?? new Date();
   const selectedDateStr = formatDate(selectedDate);
@@ -1211,13 +1214,34 @@ export default function TournamentSignupPage({
     }
   }, []);
 
-  const loadList = useCallback(async () => {
-    setLoadingList(true);
-    setError(null);
-    const result = await apiFetchTournamentSignupList({ date: selectedDateStr });
+  const loadList = useCallback(async (options: {
+    requestRefresh?: boolean;
+    background?: boolean;
+  } = {}): Promise<void> => {
+    const requestId = listRequestIdRef.current + 1;
+    listRequestIdRef.current = requestId;
+    if (!options.background) {
+      listForegroundRequestIdRef.current = requestId;
+      setLoadingList(true);
+      setError(null);
+    }
+    const result = await apiFetchTournamentSignupList({
+      date: selectedDateStr,
+      refresh: options.requestRefresh ? "if-stale" : null,
+    });
+    if (!listMountedRef.current) return;
+    if (requestId !== listRequestIdRef.current) {
+      if (!options.background && listForegroundRequestIdRef.current === requestId) {
+        setLoadingList(false);
+      }
+      return;
+    }
+
     if (result.error) {
-      setError(result.error.message || "Не удалось загрузить турниры");
-      setItems([]);
+      if (!options.background) {
+        setError(result.error.message || "Не удалось загрузить турниры");
+        setItems([]);
+      }
     } else {
       const sortedItems = sortTournaments(result.data ?? []);
       const storedPricingState = buildStoredTournamentPricingState(sortedItems);
@@ -1235,8 +1259,14 @@ export default function TournamentSignupPage({
         ...storedPricingState.summerSubscriptionOfferByExerciseId,
       }));
     }
-    setLoadingList(false);
+    if (!options.background && listForegroundRequestIdRef.current === requestId) {
+      setLoadingList(false);
+    }
   }, [selectedDateStr]);
+
+  const refreshTournamentList = useCallback(async () => {
+    await loadList({ requestRefresh: true });
+  }, [loadList]);
 
   const loadDetail = useCallback(async (tournamentId: string) => {
     setLoadingDetail(true);
@@ -1320,8 +1350,13 @@ export default function TournamentSignupPage({
   }, []);
 
   useEffect(() => {
-    void loadList();
-  }, [loadList]);
+    listMountedRef.current = true;
+    void refreshTournamentList();
+    return () => {
+      listMountedRef.current = false;
+      listRequestIdRef.current += 1;
+    };
+  }, [refreshTournamentList]);
 
   useEffect(() => {
     if (!targetDeepLinkKey || selectedId) return;
@@ -1849,7 +1884,7 @@ export default function TournamentSignupPage({
             <button
               className="tournament-signup-refresh"
               type="button"
-              onClick={() => void loadList()}
+              onClick={() => void refreshTournamentList()}
               disabled={loadingList}
               aria-label="Обновить турниры"
               title="Обновить"

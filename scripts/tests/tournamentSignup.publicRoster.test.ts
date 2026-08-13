@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import {
+  normalizeTournamentSignupListSnapshotState,
+} from "../../src/utils/tournamentSignupListSnapshot.ts";
 import { normalizeTournamentSignupPublicRoster } from "../../src/utils/tournamentSignupRoster.ts";
 
 test("public tournament roster keeps confirmed participants and waitlist separately", () => {
@@ -98,7 +101,7 @@ test("public tournament page loads roster through anonymous participants endpoin
 
 test("public tournament list never fans out participant requests", () => {
   const pageSource = fs.readFileSync("src/components/tournament-signup/TournamentSignupPage.tsx", "utf8");
-  const loadListStart = pageSource.indexOf("const loadList = useCallback(async () => {");
+  const loadListStart = pageSource.indexOf("const loadList = useCallback(async");
   const loadDetailStart = pageSource.indexOf("const loadDetail = useCallback(async", loadListStart);
 
   assert.notEqual(loadListStart, -1);
@@ -108,6 +111,62 @@ test("public tournament list never fans out participant requests", () => {
   assert.doesNotMatch(loadListSource, /loadPublicRoster/);
   assert.doesNotMatch(loadListSource, /apiFetchTournamentParticipants/);
   assert.doesNotMatch(loadListSource, /\.forEach\s*\(/);
+});
+
+test("public tournament list requests one server-coordinated day revalidation", () => {
+  const pageSource = fs.readFileSync("src/components/tournament-signup/TournamentSignupPage.tsx", "utf8");
+  const apiSource = fs.readFileSync("src/utils/tournamentSignupApi.ts", "utf8");
+  const loadListStart = pageSource.indexOf("const loadList = useCallback(async");
+  const loadDetailStart = pageSource.indexOf("const loadDetail = useCallback(async", loadListStart);
+  const listSource = pageSource.slice(loadListStart, loadDetailStart);
+  const apiListStart = apiSource.indexOf("export async function apiFetchTournamentSignupList");
+  const apiListEnd = apiSource.indexOf("export async function apiFetchTournamentMechanicsSourceList", apiListStart);
+  const apiListSource = apiSource.slice(apiListStart, apiListEnd);
+
+  assert.match(listSource, /refresh:\s*options\.requestRefresh\s*\?\s*"if-stale"\s*:\s*null/);
+  assert.match(listSource, /const refreshTournamentList = useCallback\(async \(\) =>/);
+  assert.doesNotMatch(listSource, /setTimeout/);
+  assert.doesNotMatch(listSource, /setInterval/);
+  assert.doesNotMatch(listSource, /apiFetchTournamentParticipants/);
+  assert.match(pageSource, /if \(!listMountedRef\.current\) return/);
+  assert.match(pageSource, /listMountedRef\.current = false;\s*listRequestIdRef\.current \+= 1/);
+  assert.match(apiListSource, /allowFallback:\s*!params\.refresh/);
+  assert.match(apiListSource, /retries:\s*params\.refresh\s*\?\s*0\s*:\s*1/);
+  assert.match(apiListSource, /snapshot\s*\?\s*filterSnapshotVisibleTournamentSummaries\(data\)/);
+  assert.doesNotMatch(apiListSource, /snapshot\s*\?\s*await filterVisibleTournamentSummaries/);
+});
+
+test("tournament list snapshot envelope exposes revalidation state", () => {
+  assert.deepEqual(
+    normalizeTournamentSignupListSnapshotState({
+      items: [],
+      snapshotAgeMs: 120000,
+      lastSuccessfulAt: "2026-08-13T09:00:00.000Z",
+      stale: true,
+      refreshInProgress: true,
+      snapshotAvailable: true,
+      snapshotRefreshEnabled: true,
+      snapshotReadModelEnabled: true,
+      refreshScheduled: false,
+      refreshCompleted: true,
+      refreshReason: "refreshed",
+      retryAfterMs: 60000,
+    }),
+    {
+      snapshotAgeMs: 120000,
+      lastSuccessfulAt: "2026-08-13T09:00:00.000Z",
+      stale: true,
+      refreshInProgress: true,
+      snapshotAvailable: true,
+      snapshotRefreshEnabled: true,
+      snapshotReadModelEnabled: true,
+      refreshScheduled: false,
+      refreshCompleted: true,
+      refreshReason: "refreshed",
+      retryAfterMs: 60000,
+    },
+  );
+  assert.equal(normalizeTournamentSignupListSnapshotState([]), null);
 });
 
 test("public tournament detail performs one abortable no-retry roster request", () => {

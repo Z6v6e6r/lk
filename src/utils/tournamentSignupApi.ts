@@ -56,7 +56,13 @@ import {
   resolveSubscriptionCategoryDailyLimitDateFromEvent,
   subscriptionPlanAllowsDailyLimitCategory,
 } from "./subscriptionCategoryDailyLimit";
+import {
+  normalizeTournamentSignupListSnapshotState,
+  type TournamentSignupListSnapshotState,
+} from "./tournamentSignupListSnapshot";
 import { pollSubscriptionBookingConfirmation } from "./subscriptionBookingConfirmation";
+
+export type { TournamentSignupListSnapshotState } from "./tournamentSignupListSnapshot";
 
 export type TournamentSignupStatus = "AVAILABLE" | "REGISTERED" | "WAITLIST" | "FULL" | "CLOSED" | "CANCELLED";
 
@@ -86,6 +92,10 @@ export interface TournamentSignupSummary {
   storedSummerSubscriptionOffer: TournamentPricingPromoOnlyOffer | null;
   raw: unknown;
 }
+
+export type TournamentSignupListResult = ApiResult<TournamentSignupSummary[]> & {
+  snapshot: TournamentSignupListSnapshotState | null;
+};
 
 export interface TournamentSignupDetail extends TournamentSignupSummary {
   description: string | null;
@@ -736,6 +746,14 @@ async function shouldShowTournamentSummary(summary: TournamentSignupSummary) {
 async function filterVisibleTournamentSummaries(items: TournamentSignupSummary[]) {
   const visibility = await Promise.all(items.map((item) => shouldShowTournamentSummary(item)));
   return items.filter((_, index) => visibility[index]);
+}
+
+function filterSnapshotVisibleTournamentSummaries(items: TournamentSignupSummary[]) {
+  return items.filter((item) => (
+    item.status !== "CANCELLED"
+    && !isHiddenTournamentPayload(item.raw)
+    && Boolean(resolvePublicTournamentPath(item.raw))
+  ));
 }
 
 function extractItems(payload: unknown): unknown[] {
@@ -1782,20 +1800,25 @@ export async function apiFetchTournamentSignupList(params: {
   date?: string | null;
   from?: string | null;
   to?: string | null;
-} = {}): Promise<ApiResult<TournamentSignupSummary[]>> {
+  refresh?: "if-stale" | null;
+} = {}): Promise<TournamentSignupListResult> {
   const result = await request<unknown>(
     `/tournaments${buildQuery(params)}`,
     {
-      ...buildTournamentApiRequestOptions(),
+      ...buildTournamentApiRequestOptions({ allowFallback: !params.refresh }),
       method: "GET",
       headers: phabHeaders(),
-      retries: 1,
+      retries: params.refresh ? 0 : 1,
     },
   );
+  const snapshot = normalizeTournamentSignupListSnapshotState(result.data);
   const data = normalizeTournamentSignupSummaries(result.data);
   return {
     ...result,
-    data: await filterVisibleTournamentSummaries(data),
+    data: snapshot
+      ? filterSnapshotVisibleTournamentSummaries(data)
+      : await filterVisibleTournamentSummaries(data),
+    snapshot,
   };
 }
 
