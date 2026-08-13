@@ -61,6 +61,20 @@ Successful output contains hashes and counts only. The workspace layout is:
 Symlink and hardlink aliases are rejected. Existing or partial build outputs
 are rejected rather than overwritten.
 
+## Runtime hardening outside flows
+
+MongoDB URI logging guard не является function node и не должен добавляться в
+flow candidate. Его focused test и отдельный deploy выполняются командами:
+
+```bash
+npm run nodered:runtime-hardening:test
+npm run nodered:runtime-hardening:install-147
+```
+
+После любого обновления зависимостей `/root/.node-red` установленный
+`postinstall` повторно применяет exact guarded patch. Если upstream-модуль
+изменил logging preimage, установка fail-closed завершается ошибкой.
+
 ## Individual gates
 
 ```bash

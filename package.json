@@ -57,6 +57,8 @@
     "nodered:modular:validate": "node scripts/nodered_modular_flow.mjs validate",
     "nodered:subscription-booking:patch": "node scripts/patch_nodered_subscription_booking_flow.mjs",
     "nodered:games:cancellation:phase2": "node scripts/patch_live_games_split_leave_phase2_cas.mjs",
+    "nodered:runtime-hardening:test": "node --test scripts/tests/noderedMongoLoggingGuard.test.mjs",
+    "nodered:runtime-hardening:install-147": "bash scripts/install_nodered_mongodb_logging_guard_147.sh",
     "lint": "eslint .",
     "test:release-provenance": "node --test scripts/tests/releaseProvenance.test.mjs",
     "test:build-env": "node --test scripts/tests/buildEnvPreflight.test.mjs",

@@ -40,6 +40,35 @@ proxy-location из `scripts/nginx/lk-subscription-booking-location.conf`.
 `scripts/nginx/patch_subscription_booking_proxy.mjs` с SHA текущего live-конфига,
 backup, последующими `nginx -t` и `systemctl reload nginx`.
 
+### Защита Node-RED MongoDB URI в логах
+
+Установленный `@pafum/node-red-node-mongodb` по умолчанию печатает полный URI
+при старте. На `147` защита устанавливается отдельным staged workflow и не
+является частью flow import:
+
+```bash
+npm run nodered:runtime-hardening:test
+npm run nodered:runtime-hardening:install-147
+```
+
+Installer работает только с `lk-primary-147` и точным userdir
+`/root/.node-red`. Он:
+
+- сохраняет приватные backup `package.json` и MongoDB-модуля;
+- устанавливает guard вне `node_modules`;
+- добавляет guard первым шагом `postinstall`, сохраняя существующий hook;
+- сразу применяет и проверяет точные два URI logging call;
+- сохраняет PM2 node arg `--disable-warning=DEP0170`;
+- проверяет, что `flows.json` не изменился, Node-RED `online`, а в текущих и
+  ротированных Node-RED логах нет MongoDB URI;
+- проверяет публичный games API после рестарта.
+
+Guard идемпотентен. Неизвестный формат новой версии MongoDB-модуля завершает
+`npm install` ошибкой до рестарта, чтобы изменение logging contract прошло
+отдельный review. Скрипт не меняет и не ротирует credentials и не удаляет
+исторические логи: если post-check находит старый URI, installer останавливается
+и требует отдельной подтверждённой редакции логов.
+
 После сборки в `dist/` лежат два комплекта скриптов:
 
 - боевой комплект для пользователей: `bundle.js`, `games.js`, `tournaments.js`, `onboarding.js`, `levels-info.js`, `communities.js`
