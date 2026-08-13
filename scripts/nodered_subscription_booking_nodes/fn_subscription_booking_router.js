@@ -131,6 +131,28 @@ const prepareUserGet = (ctx, step, path) => prepareHttp(
   { Authorization: ctx.authHeader, Accept: "application/json" },
 );
 
+const prepareAdminGet = (ctx, step, path) => {
+  let serviceToken = null;
+  try {
+    serviceToken = toStr(global.get("vivacrm_access_token"));
+  } catch {
+    serviceToken = null;
+  }
+  if (!serviceToken) {
+    return finishError(ctx, 503, "Сервисный токен Viva временно недоступен", {
+      code: "VIVA_SERVICE_TOKEN_UNAVAILABLE",
+    });
+  }
+  return prepareHttp(
+    ctx,
+    step,
+    "GET",
+    `${VIVA_API_BASE}${path}`,
+    undefined,
+    { Authorization: `Bearer ${serviceToken}`, Accept: "application/json" },
+  );
+};
+
 const unwrapRecord = (value) => {
   if (!isObj(value)) return null;
   if (toStr(value.id || value.uuid || value.exerciseId || value.clientId)) return value;
@@ -340,6 +362,13 @@ const bookingSubscriptionId = (value) => {
     || subscription?.uuid,
   );
 };
+const bookingClientId = (value) => toStr(
+  value?.clientId
+  || value?.client?.id
+  || value?.client?.clientId
+  || value?.playerId
+  || value?.userId,
+);
 const isSubscriptionBooking = (value) => {
   const paymentType = String(value?.paymentType || value?.paymentMethod || "").trim().toUpperCase();
   return paymentType === "SUBSCRIPTION" || Boolean(bookingSubscriptionId(value));
@@ -539,6 +568,42 @@ const prepareOperationReclaim = (ctx, operation, now = new Date()) => prepareMon
     releasedAt: "",
   },
 });
+
+const prepareExpiredPendingRelease = (ctx, operation) => {
+  const nowIso = new Date().toISOString();
+  ctx.expiredPendingOperation = operation;
+  return prepareMongoUpdate(ctx, "operation_expired_pending_release", {
+    _id: operation._id,
+    operationId: operation.operationId,
+    state: "PENDING_CONFIRMATION",
+    pendingUntil: operation.pendingUntil,
+    $and: [
+      { $or: [{ bookingId: { $exists: false } }, { bookingId: null }, { bookingId: "" }] },
+      { $or: [{ upstreamBookingId: { $exists: false } }, { upstreamBookingId: null }, { upstreamBookingId: "" }] },
+    ],
+  }, {
+    $set: {
+      state: "RELEASED",
+      releasedAt: nowIso,
+      updatedAt: nowIso,
+      reconciliation: {
+        source: "expired_pending_viva_readback",
+        decision: "SAFE_TO_RELEASE",
+        reconciledAt: nowIso,
+      },
+    },
+    $unset: { pendingUntil: "", leaseUntil: "" },
+  });
+};
+
+const prepareExpiredPendingReconciliation = (ctx, operation) => {
+  ctx.expiredPendingOperation = operation;
+  return prepareAdminGet(
+    ctx,
+    "expired_pending_reconciliation",
+    `/api/v1/exercises/${encodeURIComponent(ctx.exerciseId)}/bookings?showCancelled=true&size=200`,
+  );
+};
 
 const prepareConfirmedUpdate = (ctx, booking) => {
   const nowIso = new Date().toISOString();
@@ -976,17 +1041,26 @@ if (ctx.step === "operation_find") {
       return prepareOperationReclaim(ctx, operation, now);
     }
     if (operation.state === "PENDING_CONFIRMATION") {
-      return finishPending(ctx, "Предыдущая попытка ещё ожидает подтверждения Viva");
+      const pendingUntil = Date.parse(String(operation.pendingUntil || ""));
+      if (!Number.isFinite(pendingUntil) || pendingUntil > now.getTime()) {
+        return finishPending(ctx, "Предыдущая попытка ещё ожидает подтверждения Viva");
+      }
+      return prepareExpiredPendingReconciliation(ctx, operation);
     }
     if (operation.state === "PREPARED") return preparePreaccept(ctx);
   }
 
   const leaseUntil = Date.parse(String(operation.leaseUntil || ""));
+  const pendingUntil = Date.parse(String(operation.pendingUntil || ""));
   if (
-    operation.state === "PENDING_CONFIRMATION"
+    (operation.state === "PENDING_CONFIRMATION" && (!Number.isFinite(pendingUntil) || pendingUntil > now.getTime()))
     || (operation.state === "PREPARED" && Number.isFinite(leaseUntil) && leaseUntil > now.getTime())
   ) {
     return finishPending(ctx, "Другая операция уже резервирует дневное посещение");
+  }
+
+  if (operation.state === "PENDING_CONFIRMATION") {
+    return prepareExpiredPendingReconciliation(ctx, operation);
   }
 
   const reclaimable = ["FAILED", "RELEASED"].includes(String(operation.state || ""))
@@ -999,6 +1073,38 @@ if (ctx.step === "operation_find") {
     return finishPending(ctx, "Дневное посещение уже обрабатывается или требует сверки с Viva", details);
   }
   return prepareOperationReclaim(ctx, operation, now);
+}
+
+if (ctx.step === "expired_pending_reconciliation") {
+  const operation = ctx.expiredPendingOperation;
+  if (!operation || !isHttpOk(msg.statusCode) || !hasCompleteBookingList(msg.payload)) {
+    return finishPending(ctx, "Просроченная операция требует сверки с Viva");
+  }
+  const actorClientId = normalizeId(operation.actorClientId);
+  const clientSubscriptionId = normalizeId(operation.clientSubscriptionId);
+  if (!actorClientId || !clientSubscriptionId) {
+    return finishPending(ctx, "Просроченная операция не содержит устойчивой идентичности для сверки");
+  }
+  const actorBookings = extractItems(msg.payload).filter((booking) => (
+    isObj(booking) && normalizeId(bookingClientId(booking)) === actorClientId
+  ));
+  if (actorBookings.some((booking) => !bookingSubscriptionId(booking))) {
+    return finishPending(ctx, "Viva вернула запись без связи с абонементом; требуется сверка");
+  }
+  const exactBookings = actorBookings.filter((booking) => (
+    normalizeId(bookingSubscriptionId(booking)) === clientSubscriptionId
+  ));
+  if (exactBookings.some((booking) => !isInactiveBooking(booking))) {
+    return finishPending(ctx, "Просроченная операция подтверждена активной записью Viva");
+  }
+  return prepareExpiredPendingRelease(ctx, operation);
+}
+
+if (ctx.step === "operation_expired_pending_release") {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Просроченная операция была изменена параллельно и требует повторной проверки");
+  }
+  return prepareOperationFind(ctx);
 }
 
 if (ctx.step === "operation_insert") {

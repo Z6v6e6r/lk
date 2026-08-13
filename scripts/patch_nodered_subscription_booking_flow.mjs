@@ -10,7 +10,11 @@ const importPath = process.argv[4]
   : path.resolve(ROOT, "node-red/modular/imports/lk_subscription_booking.nodes.import.json");
 const functionsDir = path.resolve(ROOT, "scripts/nodered_subscription_booking_nodes");
 const EXPECTED_LIVE_ROUTER_SHA256 = "d9d6d1f17c12f38b567cf226468caa6780ed3d6e707f55f4af26c066be86b1a4";
-const EXPECTED_MANAGED_ROUTER_SHA256 = "aba5f45ce45208997b188d5292194c49d357452673eee7b937650ec998348a04";
+const EXPECTED_MANAGED_ROUTER_SHA256 = new Set([
+  "aba5f45ce45208997b188d5292194c49d357452673eee7b937650ec998348a04",
+  // Fresh live-147 router, reviewed 2026-08-13: gateway dispatch remains intact.
+  "a311b8ddc6e7752ee87deb278b25ac2ddc8fb9af8b273deea66b07702ac571c8",
+]);
 const ROUTER_ID = "8f7bd5b482fe9763";
 const COLLECTION = "lk_subscription_daily_booking_ops";
 
@@ -296,7 +300,7 @@ const originalRouter = routerNode?.name === "Route Viva split payment"
 const managedRouter = routerNode?.name === "Route Viva split payment"
   && routerNode.outputs === 4
   && routerNode.wires?.[3]?.[0] === IDS.http
-  && routerSha === EXPECTED_MANAGED_ROUTER_SHA256;
+  && EXPECTED_MANAGED_ROUTER_SHA256.has(routerSha);
 if (!originalRouter && !managedRouter) {
   throw new Error("Live split router node preimage changed");
 }

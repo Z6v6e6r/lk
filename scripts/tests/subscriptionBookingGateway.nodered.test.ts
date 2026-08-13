@@ -594,6 +594,80 @@ test("active lease and pending confirmation never dispatch a second Viva booking
   assert.equal(prepared[0], null);
 });
 
+test("expired pending claim is released only after an exact Viva readback finds no booking", () => {
+  const expired = {
+    _id: "iSkq6G:client-subscription-1:2026-08-10",
+    operationId: "another-operation",
+    actorClientId: "client-1",
+    clientSubscriptionId: "client-subscription-1",
+    state: "PENDING_CONFIRMATION",
+    pendingUntil: "2000-01-01T00:00:00.000Z",
+  };
+  const reconciliation = runFunction(ROUTER_FILE, {
+    payload: [expired],
+    _subscriptionBooking: baseContext("operation_find"),
+  });
+  assert.equal(reconciliation[0]._subscriptionBooking.step, "expired_pending_reconciliation");
+  assert.match(reconciliation[0].url, /\/api\/v1\/exercises\/exercise-target\/bookings\?showCancelled=true&size=200$/);
+  assert.equal(reconciliation[2], null);
+  assert.equal(reconciliation[3], null);
+
+  const release = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { content: [] },
+    _subscriptionBooking: reconciliation[0]._subscriptionBooking,
+  });
+  assert.equal(release[3]._subscriptionBooking.step, "operation_expired_pending_release");
+  assert.deepEqual(release[3].payload[0], {
+    _id: expired._id,
+    operationId: expired.operationId,
+    state: "PENDING_CONFIRMATION",
+    pendingUntil: expired.pendingUntil,
+    $and: [
+      { $or: [{ bookingId: { $exists: false } }, { bookingId: null }, { bookingId: "" }] },
+      { $or: [{ upstreamBookingId: { $exists: false } }, { upstreamBookingId: null }, { upstreamBookingId: "" }] },
+    ],
+  });
+  assert.equal(release[3].payload[1].$set.state, "RELEASED");
+  assert.equal(release[3].payload[1].$unset.pendingUntil, "");
+
+  const refetch = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: release[3]._subscriptionBooking,
+  });
+  assert.equal(refetch[1]._subscriptionBooking.step, "operation_find");
+});
+
+test("expired pending claim stays blocked when Viva has an active exact booking or incomplete identity", () => {
+  const expired = {
+    _id: "iSkq6G:client-subscription-1:2026-08-10",
+    operationId: "another-operation",
+    actorClientId: "client-1",
+    clientSubscriptionId: "client-subscription-1",
+    state: "PENDING_CONFIRMATION",
+    pendingUntil: "2000-01-01T00:00:00.000Z",
+  };
+  const reconciliation = runFunction(ROUTER_FILE, {
+    payload: [expired],
+    _subscriptionBooking: baseContext("operation_find"),
+  });
+  const active = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { content: [flatBooking({ clientId: "client-1", exerciseId: "exercise-target" })] },
+    _subscriptionBooking: reconciliation[0]._subscriptionBooking,
+  });
+  assert.equal(active[4].statusCode, 202);
+  assert.equal(active[3], null);
+
+  const incomplete = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { content: [{ id: "opaque", clientId: "client-1" }] },
+    _subscriptionBooking: reconciliation[0]._subscriptionBooking,
+  });
+  assert.equal(incomplete[4].statusCode, 202);
+  assert.equal(incomplete[3], null);
+});
+
 test("definitive failed attempt can be retried without releasing an ambiguous pending claim", () => {
   const failed = runFunction(ROUTER_FILE, {
     payload: [{
