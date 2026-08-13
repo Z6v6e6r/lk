@@ -206,6 +206,7 @@ test("147 installer scripts preserve the narrow production safety contract", () 
   assert.match(localInstaller, /host="lk-primary-147"/);
   assert.match(localInstaller, /publicGamesApiStatus/);
   assert.match(remoteInstaller, /--disable-warning=DEP0170/);
+  assert.match(remoteInstaller, /' -- "\$expected_node_arg"/);
   assert.match(remoteInstaller, /pm2 save/);
   assert.match(remoteInstaller, /mongodbUrisRemaining/);
   assert.match(remoteInstaller, /flow_sha_after.*flow_sha_before/);
@@ -213,4 +214,12 @@ test("147 installer scripts preserve the narrow production safety contract", () 
   assert.match(remoteInstaller, /module_backup/);
   assert.doesNotMatch(localInstaller, /rm -rf/);
   assert.doesNotMatch(remoteInstaller, /rm -rf/);
+
+  const nodeArgumentProbe = spawnSync(
+    process.execPath,
+    ["-e", "process.stdout.write(JSON.stringify(process.argv.slice(1)))", "--", "--disable-warning=DEP0170"],
+    { encoding: "utf8" },
+  );
+  assert.equal(nodeArgumentProbe.status, 0, nodeArgumentProbe.stderr);
+  assert.deepEqual(JSON.parse(nodeArgumentProbe.stdout), ["--disable-warning=DEP0170"]);
 });

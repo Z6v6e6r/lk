@@ -131,7 +131,7 @@ pm2 jlist | node -e '
     if (processInfo?.pm2_env?.status !== "online") process.exit(22);
     if (args.length !== 1 || args[0] !== expectedArg) process.exit(23);
   });
-' "$expected_node_arg"
+' -- "$expected_node_arg"
 
 remaining_uri_count=0
 while IFS= read -r -d '' log_file; do
