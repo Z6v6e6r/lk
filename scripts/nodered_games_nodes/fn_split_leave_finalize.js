@@ -11,6 +11,11 @@ const respond = (statusCode, state, message) => {
   msg.payload = {
     ok: true,
     state,
+    ...(ctx?.mode === "STAFF_TARGET" ? {
+      status: state,
+      visitAction: ctx.requestedRefundMethod === "SERVICE" ? "RETURN_VISIT" : "NO_RETURN",
+      playerId: ctx.targetClientId || null,
+    } : {}),
     operationId: ctx?.operationId || null,
     gameId: ctx?.gameId || null,
     ...(message ? { message } : {}),

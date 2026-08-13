@@ -95,6 +95,7 @@ if (ctx.targetWasOrganizer === true) {
   delete metadata.organizerPhoneNorm;
 }
 const leaveEventExists = asArray(metadata.leaveEvents).some((item) => toStr(item?.operationId) === toStr(ctx.operationId));
+const auditActor = ctx.mode === "SELF" ? "self" : (ctx.mode === "STAFF_TARGET" ? "staff" : "organizer");
 if (!leaveEventExists) {
   metadata.leaveEvents = [...asArray(metadata.leaveEvents), {
     operationId: ctx.operationId,
@@ -102,7 +103,8 @@ if (!leaveEventExists) {
     playerPhone: targetPhone,
     leftAt: nowIso,
     reason: ctx.reason || "PLAYER_LEFT",
-    actor: ctx.mode === "SELF" ? "self" : "organizer",
+    actor: auditActor,
+    ...(ctx.mode === "STAFF_TARGET" ? { staffActorId: ctx.staffActorId || null } : {}),
   }].slice(-100);
 }
 const auditExists = asArray(metadata.selfRemovalAuditLog).some((item) => toStr(item?.operationId) === toStr(ctx.operationId));
@@ -112,8 +114,9 @@ if (!auditExists) {
   metadata.selfRemovalAuditLog = [...asArray(metadata.selfRemovalAuditLog), {
     operationId: ctx.operationId,
     at: nowIso,
-    source: "split_leave_server",
-    actor: ctx.mode === "SELF" ? "self" : "organizer",
+    source: ctx.mode === "STAFF_TARGET" ? "cup_staff" : "split_leave_server",
+    actor: auditActor,
+    ...(ctx.mode === "STAFF_TARGET" ? { staffActorId: ctx.staffActorId || null } : {}),
     status: localOnlyNoBooking ? "no_viva_booking_target" : "cancelled_in_viva",
     verification: ctx.vivaVerification || (localOnlyNoBooking
       ? "no_active_booking_for_exercise"

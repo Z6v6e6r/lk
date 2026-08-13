@@ -4,11 +4,26 @@ const operation = rows[0] && typeof rows[0] === "object" ? rows[0] : null;
 const respond = (statusCode, state, message) => {
   msg.statusCode = statusCode;
   msg.headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
-  msg.payload = { ok: statusCode < 300, state, operationId: ctx?.operationId || null, gameId: ctx?.gameId || null, ...(message ? { message } : {}) };
+  const staffFields = ctx?.mode === "STAFF_TARGET"
+    ? {
+      status: state,
+      visitAction: ctx.requestedRefundMethod === "SERVICE" ? "RETURN_VISIT" : "NO_RETURN",
+      playerId: ctx.targetClientId || null,
+    }
+    : {};
+  msg.payload = { ok: statusCode < 300, state, ...staffFields, operationId: ctx?.operationId || null, gameId: ctx?.gameId || null, ...(message ? { message } : {}) };
   delete msg._splitLeaveCtx;
   return [null, null, msg];
 };
 if (!ctx || !operation) return respond(503, "CONFLICT", "Операция удаления не найдена после записи");
+if (ctx.mode === "STAFF_TARGET" && (
+  String(operation.mode || "").toUpperCase() !== "STAFF_TARGET"
+  || String(operation.targetClientId || "").trim().toLowerCase() !== String(ctx.targetClientId || "").trim().toLowerCase()
+  || String(operation.membershipVersion || "") !== String(ctx.membershipVersion || "")
+  || String(operation.requestedRefundMethod || "") !== String(ctx.requestedRefundMethod || "")
+)) {
+  return respond(409, "CONFLICT", "Existing operation has different removal parameters");
+}
 ctx.operationState = String(operation.state || "STARTED").toUpperCase();
 ctx.operationKey = String(operation._id || ctx.operationKey);
 ctx.requestedRefundMethod = operation.requestedRefundMethod || ctx.requestedRefundMethod || null;

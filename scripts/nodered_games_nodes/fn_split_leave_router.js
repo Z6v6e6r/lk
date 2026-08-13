@@ -84,6 +84,11 @@ const fail = (ctx, statusCode, state, message) => {
   msg.payload = {
     ok: retryScheduled,
     state: retryScheduled ? "IN_PROGRESS" : state,
+    ...(ctx.mode === "STAFF_TARGET" ? {
+      status: retryScheduled ? "IN_PROGRESS" : state,
+      visitAction: ctx.requestedRefundMethod === "SERVICE" ? "RETURN_VISIT" : "NO_RETURN",
+      playerId: ctx.targetClientId || null,
+    } : {}),
     operationId: ctx.operationId || null,
     gameId: ctx.gameId || null,
     message: retryScheduled

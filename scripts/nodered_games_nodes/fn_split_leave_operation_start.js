@@ -7,7 +7,16 @@ if (!ctx) {
 const bookingIds = Array.isArray(ctx.initialBookingIds) ? ctx.initialBookingIds.filter(Boolean) : [];
 if (!ctx.membershipVersion || (bookingIds.length === 0 && ctx.vivaTargetMode !== "NONE")) {
   msg.statusCode = 409;
-  msg.payload = { ok: false, state: "CONFLICT", message: "Stable membership target is required" };
+  msg.payload = {
+    ok: false,
+    state: "CONFLICT",
+    ...(ctx.mode === "STAFF_TARGET" ? {
+      status: "CONFLICT",
+      visitAction: ctx.requestedRefundMethod === "SERVICE" ? "RETURN_VISIT" : "NO_RETURN",
+      playerId: ctx.targetClientId || null,
+    } : {}),
+    message: "Stable membership target is required",
+  };
   return [null, msg];
 }
 const nowIso = new Date().toISOString();
@@ -30,6 +39,9 @@ msg.payload = [
       actorPhoneNorm: ctx.actorPhoneNorm || null,
       targetClientId: ctx.targetClientId || null,
       targetPhoneNorm: ctx.targetPhoneNorm || null,
+      source: ctx.source || "LK",
+      staffActorId: ctx.staffActorId || null,
+      idempotencyDigest: ctx.idempotencyDigest || null,
       membershipVersion: ctx.membershipVersion || null,
       bookingIds,
       vivaTargetMode: ctx.vivaTargetMode || "BOOKINGS",
