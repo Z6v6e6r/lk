@@ -75,6 +75,7 @@
     "test:nodered-tournament-history-limit": "node --experimental-strip-types --test scripts/tests/tournamentHistoryLimit.nodered.test.ts",
     "test:nodered-modular-toolchain": "node --test scripts/tests/noderedModularToolchain.test.mjs",
     "test:viva-user-agent": "node --test scripts/tests/vivaUserAgent.test.mjs",
+    "test:rating-worker-release": "node --test scripts/tests/ratingWorkerRelease.test.mjs",
     "test:nodered-chat-recovery": "node --test scripts/tests/noderedChatRecovery.test.mjs",
     "test:games-list-identity-recovery": "node --test scripts/tests/gamesListIdentityRecovery.test.mjs",
     "test:games-direct-lookup-recovery": "node --test scripts/tests/gamesDirectLookupRecovery.test.mjs",

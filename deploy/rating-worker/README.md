@@ -84,6 +84,10 @@ Build an immutable source-only release locally with:
 node scripts/build_rating_worker_release.mjs --out /private/tmp/padlhub-rating-worker-<release-id>
 ```
 
+The source-only package includes the shared Viva request helper used by attendance
+sync. Run `npm run test:rating-worker-release` to verify the packaged manifest,
+helper checksum, and clean module resolution before installing a release.
+
 Copy the already verified `node_modules` from the active release on the server,
 run `scripts/run_community_rating_recalc_147.mjs` first without `--apply`, and
 switch `current` only after `scripts/postcheck_community_rating_147.mjs` succeeds.

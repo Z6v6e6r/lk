@@ -26,6 +26,7 @@ const files = [
   ["deploy/rating-worker/package.json", "package.json"],
   ["scripts/rating_worker.mjs", "scripts/rating_worker.mjs"],
   ["scripts/game_result_rating_worker.mjs", "scripts/game_result_rating_worker.mjs"],
+  ["scripts/lib/vivaUserAgent.mjs", "scripts/lib/vivaUserAgent.mjs"],
   ["scripts/lib/gameResultRating.mjs", "scripts/lib/gameResultRating.mjs"],
   ["scripts/lib/tournamentCommunityContext.mjs", "scripts/lib/tournamentCommunityContext.mjs"],
   ["scripts/lib/timeForFriendsCommunityBackfill.mjs", "scripts/lib/timeForFriendsCommunityBackfill.mjs"],

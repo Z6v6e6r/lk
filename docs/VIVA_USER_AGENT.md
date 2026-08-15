@@ -96,3 +96,8 @@ the provider received.
 hostname guard. Scripts should call `createVivaFetch()` rather than setting the
 header independently. Existing `Authorization`, `Accept` and `Content-Type`
 headers are preserved; a conflicting caller-supplied `User-Agent` fails closed.
+
+The immutable rating-worker package must include this helper because scheduled
+attendance sync imports it at process startup. `npm run test:rating-worker-release`
+builds a source-only release, verifies the helper entry and checksum in its
+manifest, and proves that the packaged attendance-sync module resolves locally.
