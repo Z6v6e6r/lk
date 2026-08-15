@@ -11,6 +11,22 @@ const normPhone = (value) => {
   if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
   return digits;
 };
+const readEnv = (name) => {
+  try {
+    if (typeof env !== "undefined" && env && typeof env.get === "function") {
+      return toStr(env.get(name));
+    }
+  } catch (_error) {
+    return null;
+  }
+  return null;
+};
+const isCupTarget = (target) => {
+  if (target !== "state") return false;
+  const configured = (readEnv("RESULT_AUTH_CUP_TARGETS") || "none").toLowerCase();
+  const targets = new Set(configured.split(",").map((value) => value.trim()).filter(Boolean));
+  return targets.has("state");
+};
 const respond = (statusCode, code, error) => {
   msg.statusCode = statusCode;
   msg.headers = {
@@ -48,7 +64,7 @@ else if (requestPath.includes("/result/session/")) target = "session-update";
 
 msg._resultAuth = {
   target,
-  authHeader,
+  authSource: isCupTarget(target) ? "cup-jwt" : "viva-profile",
   requestPayload,
   actorHint: {
     id: toStr(actorHint.id || actorHint.clientId || actorHint.uuid || actorHint.userId || actorHint.playerId),
@@ -64,11 +80,30 @@ msg._resultAuth = {
     name: toStr(actorHint.name || actorHint.fullName || actorHint.title),
   },
 };
-msg.method = "GET";
-msg.url = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile";
-msg.headers = {
-  Authorization: authHeader,
-  Accept: "application/json",
-};
+if (msg._resultAuth.authSource === "cup-jwt") {
+  const integrationToken = readEnv("CUP_LK_IDENTITY_TOKEN");
+  if (!integrationToken) {
+    return respond(503, "RESULT_AUTH_CUP_NOT_CONFIGURED", "Проверка профиля временно недоступна");
+  }
+  const apiBase = (
+    readEnv("CUP_API_BASE_URL")
+    || readEnv("SUPPORT_API_BASE_URL")
+    || "http://127.0.0.1:3000/api"
+  ).replace(/\/+$/, "");
+  msg.method = "POST";
+  msg.url = `${apiBase}/internal/lk/identity/verify`;
+  msg.headers = {
+    Authorization: authHeader,
+    "X-CUP-Integration-Token": integrationToken,
+    Accept: "application/json",
+  };
+} else {
+  msg.method = "GET";
+  msg.url = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile";
+  msg.headers = {
+    Authorization: authHeader,
+    Accept: "application/json",
+  };
+}
 msg.payload = undefined;
 return [msg, null];

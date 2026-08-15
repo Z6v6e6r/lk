@@ -11,7 +11,16 @@ const normPhone = (value) => {
   if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
   return digits;
 };
+const scrubAuth = () => {
+  if (isObj(msg.req?.headers)) {
+    delete msg.req.headers.authorization;
+    delete msg.req.headers.Authorization;
+  }
+  delete msg._resultAuth;
+  msg.headers = {};
+};
 const respond = (statusCode, code, error) => {
+  scrubAuth();
   msg.statusCode = statusCode;
   msg.headers = {
     "Content-Type": "application/json; charset=utf-8",
@@ -26,33 +35,38 @@ const context = isObj(msg._resultAuth) ? msg._resultAuth : null;
 if (!context) return respond(500, "RESULT_AUTH_CONTEXT_MISSING", "Не удалось проверить участника");
 
 const upstreamStatus = Number(msg.statusCode) || 0;
-if (upstreamStatus === 401 || upstreamStatus === 403) {
+const authSource = context.authSource === "cup-jwt" ? "cup-jwt" : "viva-profile";
+if (upstreamStatus === 401 || (upstreamStatus === 403 && authSource === "viva-profile")) {
   return respond(401, "RESULT_AUTH_TOKEN_INVALID", "Сессия истекла. Войдите снова");
 }
-const rawProfile = isObj(msg.payload) && isObj(msg.payload.data) ? msg.payload.data : msg.payload;
+const rawProfile = authSource === "cup-jwt"
+  ? (
+      isObj(msg.payload)
+      && msg.payload.ok === true
+      && isObj(msg.payload.actor)
+      && msg.payload.actor.verified === true
+      && msg.payload.actor.source === "cup-keycloak-jwt"
+      && Boolean(toStr(msg.payload.actor.subject))
+        ? msg.payload.actor
+        : null
+    )
+  : (isObj(msg.payload) && isObj(msg.payload.data) ? msg.payload.data : msg.payload);
 if (upstreamStatus < 200 || upstreamStatus >= 300 || !isObj(rawProfile)) {
   return respond(503, "RESULT_AUTH_SERVICE_UNAVAILABLE", "Не удалось проверить профиль участника");
 }
 
-const profileId = toStr(
-  rawProfile.id
-  || rawProfile.clientId
-  || rawProfile.uuid
-  || rawProfile.userId
-  || rawProfile.playerId,
-);
-const profilePhone = normPhone(
-  rawProfile.phoneNorm
-  || rawProfile.phone
-  || rawProfile.phoneNumber
-  || rawProfile.mobile,
-);
+const profileId = authSource === "cup-jwt"
+  ? toStr(rawProfile.clientId)
+  : toStr(rawProfile.id || rawProfile.clientId || rawProfile.uuid || rawProfile.userId || rawProfile.playerId);
+const profilePhone = authSource === "cup-jwt"
+  ? normPhone(rawProfile.phoneNorm)
+  : normPhone(rawProfile.phoneNorm || rawProfile.phone || rawProfile.phoneNumber || rawProfile.mobile);
 if (!profileId && !profilePhone) {
   return respond(403, "RESULT_AUTH_IDENTITY_MISSING", "В профиле отсутствует идентификатор участника");
 }
 
 const hint = isObj(context.actorHint) ? context.actorHint : {};
-if (hint.id && profileId && hint.id !== profileId) {
+if (hint.id && ((authSource === "cup-jwt" && hint.id !== profileId) || (profileId && hint.id !== profileId))) {
   return respond(403, "RESULT_AUTH_ID_MISMATCH", "ID участника не совпадает с авторизованным профилем");
 }
 if (hint.phoneNorm && profilePhone && hint.phoneNorm !== profilePhone) {
@@ -62,9 +76,10 @@ if (hint.phoneNorm && profilePhone && hint.phoneNorm !== profilePhone) {
 msg._resultActor = {
   id: profileId,
   phoneNorm: profilePhone,
-  name: toStr(rawProfile.name || rawProfile.fullName || rawProfile.title || rawProfile.displayName) || hint.name,
+  name: toStr(rawProfile.name || rawProfile.fullName || rawProfile.title || rawProfile.displayName)
+    || (authSource === "viva-profile" ? hint.name : null),
   verified: true,
-  source: "viva-profile",
+  source: authSource === "cup-jwt" ? "cup-keycloak-jwt" : "viva-profile",
 };
 msg.payload = isObj(context.requestPayload) ? context.requestPayload : {};
 delete msg.statusCode;
@@ -79,6 +94,8 @@ const outputIndex = {
 if (!Number.isInteger(outputIndex)) {
   return respond(500, "RESULT_AUTH_TARGET_INVALID", "Не удалось продолжить обработку результата");
 }
+// Never carry Bearer/context or the server-only CUP token into Mongo/debug nodes.
+scrubAuth();
 const outputs = [null, null, null, null, null, null];
 outputs[outputIndex] = msg;
 return outputs;

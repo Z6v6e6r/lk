@@ -201,6 +201,9 @@ Patch-скрипты (scripts/patch_nodered_*.mjs) — сборка/патч flo
 - Legacy-поля (`metadata.teamSlots`, `metadata.playerPool`, `allRelatedPhones` и похожие) можно сохранять как compatibility data, но они не должны участвовать в runtime resolution результата.
 - Расчет рейтинга выполняется backend-ом по всем distinct игрокам, которые реально участвовали в `setPairings` по сегментам сетов.
 - `lk_game_result_sessions` хранит sanitized draft/session view, а `lk_game_results` хранит immutable result aggregate со snapshot-ref и рассчитанными rating segments.
+- Канонический current rating и immutable history живут в CUP MongoDB (`player_rating_state` + `rating_events`); Viva custom fields являются только переходной проекцией.
+- Частый `GET result/state` может проверять Bearer локально через внутренний CUP JWT verifier (`RESULT_AUTH_CUP_TARGETS=state`), не вызывая Viva `/profile`; result mutations остаются на Viva profile auth до отдельного rollout gate.
+- Browser polling для незавершённого rating work использует visibility-aware `12 s` (`30 s` для `RETRYABLE`) и полностью останавливается в скрытой вкладке.
 
 ---
 

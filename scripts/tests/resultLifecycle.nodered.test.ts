@@ -2,9 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
+function runNodeRedFunction(
+  file: string,
+  msg: Record<string, unknown>,
+  environment: Record<string, string> = {},
+) {
   const source = fs.readFileSync(file, "utf8");
-  return new Function("msg", source)(msg);
+  const env = { get: (name: string) => environment[name] };
+  return new Function("msg", "env", source)(msg, env);
 }
 
 function withFixedNow<T>(nowIso: string, callback: () => T): T {
@@ -77,6 +82,112 @@ test("result auth verifies Bearer profile and restores the original request payl
   assert.equal(profileOut[1]._resultActor.id, "p1");
   assert.equal(profileOut[1]._resultActor.verified, true);
   assert.deepEqual(profileOut[1].payload.sets, [{ left: 6, right: 4 }]);
+});
+
+test("result state can verify the signed actor through CUP without a Viva profile call", () => {
+  const prepareOut = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_auth_prepare.js", {
+    req: {
+      route: { path: "/lk/games/:gameId/result/state" },
+      headers: { authorization: "Bearer token-1" },
+    },
+    payload: { phone: "79000000001" },
+  }, {
+    RESULT_AUTH_CUP_TARGETS: "state",
+    CUP_API_BASE_URL: "http://127.0.0.1:3000/api/",
+    CUP_LK_IDENTITY_TOKEN: "server-only-token",
+  }) as any[];
+
+  assert.ok(prepareOut[0]);
+  assert.equal(prepareOut[0]._resultAuth.target, "state");
+  assert.equal(prepareOut[0]._resultAuth.authSource, "cup-jwt");
+  assert.equal(prepareOut[0].method, "POST");
+  assert.equal(prepareOut[0].url, "http://127.0.0.1:3000/api/internal/lk/identity/verify");
+  assert.equal(prepareOut[0].headers["X-CUP-Integration-Token"], "server-only-token");
+
+  const profileOut = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_auth_profile.js", {
+    ...prepareOut[0],
+    statusCode: 200,
+    payload: {
+      ok: true,
+      actor: {
+        subject: "keycloak-subject-1",
+        phoneNorm: "79000000001",
+        name: "Player 1",
+        verified: true,
+        source: "cup-keycloak-jwt",
+      },
+    },
+  }) as any[];
+
+  assert.ok(profileOut[0]);
+  assert.equal(profileOut[0]._resultActor.id, null, "Keycloak sub must not become Viva clientId");
+  assert.equal(profileOut[0]._resultActor.phoneNorm, "79000000001");
+  assert.equal(profileOut[0]._resultActor.source, "cup-keycloak-jwt");
+  assert.deepEqual(profileOut[0].headers, {}, "server-only auth headers must be cleared after verification");
+  assert.equal(profileOut[0]._resultAuth, undefined, "Bearer auth context must be removed after verification");
+  assert.equal(profileOut[0].req.headers.authorization, undefined);
+  assert.deepEqual(profileOut[0].payload, { phone: "79000000001" });
+});
+
+test("CUP result auth is opt-in per target and fails closed when its secret is missing", () => {
+  const submitOut = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_auth_prepare.js", {
+    req: {
+      route: { path: "/lk/games/:gameId/result/submit" },
+      headers: { authorization: "Bearer token-1" },
+    },
+    payload: {},
+  }, {
+    RESULT_AUTH_CUP_TARGETS: "state",
+    CUP_LK_IDENTITY_TOKEN: "server-only-token",
+  }) as any[];
+  assert.equal(submitOut[0]._resultAuth.authSource, "viva-profile");
+  assert.match(submitOut[0].url, /vivacrm\.ru/);
+
+  const stateOut = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_auth_prepare.js", {
+    req: {
+      route: { path: "/lk/games/:gameId/result/state" },
+      headers: { authorization: "Bearer token-1" },
+    },
+    payload: {},
+  }, { RESULT_AUTH_CUP_TARGETS: "state" }) as any[];
+  assert.equal(stateOut[0], null);
+  assert.equal(stateOut[1].statusCode, 503);
+  assert.equal(stateOut[1].payload.code, "RESULT_AUTH_CUP_NOT_CONFIGURED");
+});
+
+test("CUP result auth never falls back to an unsigned actor id or name", () => {
+  const profileOut = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_auth_profile.js", {
+    req: {
+      route: { path: "/lk/games/:gameId/result/submit" },
+      headers: { authorization: "Bearer token-1" },
+    },
+    _resultAuth: {
+      target: "submit",
+      authSource: "cup-jwt",
+      requestPayload: {
+        submittedBy: { id: "spoofed-client-id", name: "Spoofed Name" },
+        phone: "79000000001",
+      },
+      actorHint: {
+        id: "spoofed-client-id",
+        phoneNorm: "79000000001",
+        name: "Spoofed Name",
+      },
+    },
+    statusCode: 200,
+    payload: {
+      ok: true,
+      actor: {
+        subject: "keycloak-subject-1",
+        phoneNorm: "79000000001",
+        verified: true,
+        source: "cup-keycloak-jwt",
+      },
+    },
+  }) as any[];
+  assert.equal(profileOut[1], null);
+  assert.equal(profileOut[5].statusCode, 403);
+  assert.equal(profileOut[5].payload.code, "RESULT_AUTH_ID_MISMATCH");
 });
 
 test("result auth rejects a payload actor that differs from the verified profile", () => {

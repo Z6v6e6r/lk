@@ -684,7 +684,7 @@ ensureNode({
   id: 'result_actor_auth_profile_request_001',
   type: 'http request',
   z: tabId,
-  name: 'Verify result actor via Viva profile',
+  name: 'Verify result actor via CUP JWT or Viva profile',
   method: 'use',
   ret: 'obj',
   paytoqs: 'ignore',

@@ -1190,3 +1190,21 @@
   non-Viva literal destinations on shared branches. One display-name-only
   `Viva sync` node resolves to the local onboarding API and was intentionally
   excluded. No live import or restart was performed.
+
+## 2026-08-15 — CUP auth for result-state polling
+
+- Analysis: traced the active result path from `GamesPage` through
+  `/lk/games/:gameId/result/state`, the shared Node-RED Viva `/profile` auth hop,
+  local result MongoDB and the canonical `player_rating_state`/`rating_events`
+  worker. Confirmed that rating calculation is already CUP-canonical; the
+  high-frequency Viva dependency was authentication of the read poll.
+- Implementation: added a strict CUP Keycloak JWT verifier, switched only the
+  feature-flagged `state` target to that verifier, and changed frontend polling
+  from a fixed four-second interval to visibility-aware `12 s`/`30 s` timeouts.
+  Mutating result routes keep Viva profile verification in phase one.
+- Verification: pulled fresh live Node-RED SHA `44f28ff5…` read-only, produced a
+  focused three-node candidate (`4734` nodes, `211` routes, broken wires/links
+  `0/0`), and covered CUP routing, fail-closed configuration, actor identity,
+  polling cadence/visibility and token verification with focused tests. No
+  merge, push, deploy, live rating mutation, baseline repair or job requeue was
+  performed.

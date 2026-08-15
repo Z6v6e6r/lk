@@ -903,6 +903,9 @@ type MatchResultLifecycleStatus =
   | "CORRECTION_PENDING"
   | "NO_RESULT_EXPIRED";
 
+const MATCH_RESULT_RATING_POLL_MS = 12_000;
+const MATCH_RESULT_RATING_RETRYABLE_POLL_MS = 30_000;
+
 type MatchResultPairingOption = {
   key: string;
   label: string;
@@ -11979,6 +11982,11 @@ export default function GamesPage({
   ]);
 
   useEffect(() => {
+    if (step === "details" && gameRecordId && canCurrentUserFetchResultState) return;
+    resultStateFetchKeyRef.current = null;
+  }, [canCurrentUserFetchResultState, gameRecordId, step]);
+
+  useEffect(() => {
     if (step !== "details" || !gameRecordId || !canCurrentUserFetchResultState) return;
     const fetchKey = `${gameRecordId}:${profilePhoneNorm}`;
     if (resultStateFetchKeyRef.current === fetchKey) return;
@@ -12013,8 +12021,28 @@ export default function GamesPage({
 
     let cancelled = false;
     let requestInFlight = false;
-    const intervalId = window.setInterval(() => {
-      if (requestInFlight) return;
+    let timeoutId: number | null = null;
+    const pollDelayMs = ratingWorkStatus === "RETRYABLE"
+      ? MATCH_RESULT_RATING_RETRYABLE_POLL_MS
+      : MATCH_RESULT_RATING_POLL_MS;
+
+    const clearScheduledPoll = () => {
+      if (timeoutId === null) return;
+      window.clearTimeout(timeoutId);
+      timeoutId = null;
+    };
+    const scheduleNextPoll = () => {
+      clearScheduledPoll();
+      if (cancelled || document.hidden) return;
+      timeoutId = window.setTimeout(runPoll, pollDelayMs);
+    };
+    const runPoll = () => {
+      timeoutId = null;
+      if (cancelled || document.hidden) return;
+      if (requestInFlight) {
+        scheduleNextPoll();
+        return;
+      }
       requestInFlight = true;
       void apiFetchPadelGameResultState(gameRecordId, { phone: profilePhoneNorm }).then((result) => {
         if (cancelled || result.error || !result.data) return;
@@ -12023,12 +12051,24 @@ export default function GamesPage({
         // Background status polling must not block result interaction.
       }).finally(() => {
         requestInFlight = false;
+        scheduleNextPoll();
       });
-    }, ratingWorkStatus === "RETRYABLE" ? 10_000 : 4_000);
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        clearScheduledPoll();
+        return;
+      }
+      void runPoll();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    scheduleNextPoll();
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
+      clearScheduledPoll();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [
     applyMatchResultActionResponse,

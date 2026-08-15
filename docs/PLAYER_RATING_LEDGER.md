@@ -40,6 +40,12 @@
 4. Viva fallback не имеет права перезаписывать уже существующий state, даже если значения расходятся.
 5. Отсутствующий уровень не заменяется нулём или дефолтом.
 
+Для v2 game-result worker и частого `result/state` read-path Viva fallback
+запрещён: worker при неполном `player_rating_state` завершается
+`RATING_STATE_INCOMPLETE`, а восстановление baseline выполняется только отдельным
+bounded dry-run/apply процессом. Переключение auth read-path на CUP описано в
+[`RESULT_AUTH_CUP_MIGRATION.md`](RESULT_AUTH_CUP_MIGRATION.md).
+
 Ручное изменение выполняется как canonical command в ЦУП: immutable event → CAS state update → Viva projection outbox. Ошибка Viva не откатывает state ЦУП и показывается как отдельный projection status.
 
 ## Контракт `player_rating_state` v1
