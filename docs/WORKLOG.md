@@ -1208,3 +1208,15 @@
   polling cadence/visibility and token verification with focused tests. No
   merge, push, deploy, live rating mutation, baseline repair or job requeue was
   performed.
+
+## 2026-08-15 — Managed subscription DEV shadow runtime in LK
+
+- Added a DEV-only LK page and Vite middleware that load an explicitly pinned
+  DRAFT policy from DEV CUP and evaluate it with the existing managed-subscription
+  server evaluator; the promotion to `PUBLISHED` exists only in process memory.
+- Added a server-owned synthetic scenario catalogue, masked tester, quote,
+  serialized reserve/release, configurable 0–3 active-service seed, bounded
+  append-only test ledger and idempotency replay/conflict behavior.
+- Covered positive pricing, station/window/event blockers, active-service release,
+  concurrent final-slot reservation and client-injection rejection. No Viva,
+  payment, MongoDB, Node-RED, production, push or deploy mutation was performed.

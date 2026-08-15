@@ -1,0 +1,874 @@
+import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Plugin } from "vite";
+import type {
+  ManagedSubscriptionAction,
+  ManagedSubscriptionPolicyDecision,
+  ManagedSubscriptionPolicyEvaluationInput,
+  ManagedSubscriptionResolvedTarget,
+  ManagedSubscriptionRuntimeInstance,
+  ManagedSubscriptionRuntimePolicy,
+} from "../src/types/managedSubscriptionRuntime.ts";
+
+const API_PREFIX = "/__dev/managed-subscriptions";
+const EVALUATED_AT = "2026-08-15T10:00:00.000Z";
+const TESTER_REF = "synthetic-3190";
+const TESTER_LABEL = "+7 ••• •••-31-90";
+const DEFAULT_CUP_BASE_URL = "http://127.0.0.1:3010";
+const DEFAULT_TYPE_CODE = "annual-dev-ac6396e";
+const MAX_BODY_BYTES = 16_384;
+
+type JsonRecord = Record<string, unknown>;
+
+export interface ManagedSubscriptionDevTarget {
+  targetId: string;
+  title: string;
+  description: string;
+  action: ManagedSubscriptionAction;
+  target: ManagedSubscriptionResolvedTarget;
+}
+
+export interface ManagedSubscriptionDevReservation {
+  reservationId: string;
+  targetId: string;
+  title: string;
+  status: "ACTIVE" | "RELEASED";
+  startsAt: string;
+  localDate: string;
+  usageUnits: number;
+  finalPriceMinor: number | null;
+  createdAt: string;
+  releasedAt: string | null;
+  source: "SEED" | "USER";
+}
+
+export interface ManagedSubscriptionDevLedgerEvent {
+  eventId: string;
+  type:
+    | "TEST_STATE_SEEDED"
+    | "POLICY_PINNED"
+    | "ELIGIBILITY_QUOTED"
+    | "ELIGIBILITY_BLOCKED"
+    | "RESERVATION_CREATED"
+    | "RESERVATION_RELEASED";
+  occurredAt: string;
+  operationId: string | null;
+  targetId: string | null;
+  reservationId: string | null;
+  policyVersion: number | null;
+  details: JsonRecord;
+}
+
+interface PolicySource {
+  subscriptionTypeId: string;
+  code: string;
+  title: string;
+  sourceStatus: string;
+  sourceModelVersion: number | null;
+  loadedAt: string;
+  digest: string;
+  policy: ManagedSubscriptionRuntimePolicy;
+}
+
+interface OperationReplay {
+  fingerprint: string;
+  response: unknown;
+}
+
+interface DevRuntimeOptions {
+  policyLoader: () => Promise<PolicySource>;
+}
+
+class DevRuntimeError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly details: JsonRecord | null;
+
+  constructor(status: number, code: string, message: string, details: JsonRecord | null = null) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+const evaluatorSource = readFileSync(
+  new URL("./nodered_subscription_booking_nodes/fn_managed_subscription_policy_evaluate.js", import.meta.url),
+  "utf8",
+);
+const evaluator = new Function("msg", evaluatorSource) as (msg: JsonRecord) => unknown;
+
+const asRecord = (value: unknown): JsonRecord => (
+  value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {}
+);
+
+const asNumber = (value: unknown, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const asNullableNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const asStringArray = (value: unknown): string[] => (
+  Array.isArray(value)
+    ? value.map((item) => String(item).trim()).filter(Boolean)
+    : []
+);
+
+const stableDigest = (value: unknown): string => createHash("sha256")
+  .update(JSON.stringify(value))
+  .digest("hex");
+
+const localDate = (iso: string): string => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(iso));
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${byType.year}-${byType.month}-${byType.day}`;
+};
+
+const clone = <T>(value: T): T => structuredClone(value);
+
+const evaluatePolicy = (
+  input: ManagedSubscriptionPolicyEvaluationInput,
+): ManagedSubscriptionPolicyDecision => {
+  const msg: JsonRecord = { _managedSubscriptionPolicyInput: clone(input) };
+  evaluator(msg);
+  return clone(msg._managedSubscriptionPolicyDecision as ManagedSubscriptionPolicyDecision);
+};
+
+export const compileDraftPolicy = (
+  subscriptionType: JsonRecord,
+  draftPolicy: JsonRecord,
+  loadedAt = new Date().toISOString(),
+): PolicySource => {
+  const capabilities = asRecord(draftPolicy.capabilities);
+  const lifecycle = asRecord(capabilities.lifecycle);
+  const usage = asRecord(capabilities.usage);
+  const version = asNumber(draftPolicy.version, 0);
+  const subscriptionTypeId = String(
+    draftPolicy.subscriptionTypeId || subscriptionType.subscriptionTypeId || "",
+  ).trim();
+  if (!subscriptionTypeId || !Number.isInteger(version) || version < 1) {
+    throw new DevRuntimeError(
+      503,
+      "CUP_POLICY_INVALID",
+      "DEV ЦУП вернул неподходящую версию правил",
+    );
+  }
+
+  const activeLimit = asRecord(draftPolicy.activeServicesLimit);
+  const bookingWindow = asRecord(draftPolicy.bookingWindow);
+  const createGame = asRecord(draftPolicy.createGame);
+  const joinGame = asRecord(draftPolicy.joinGame);
+  const policy: ManagedSubscriptionRuntimePolicy = {
+    runtimeSchemaVersion: 1,
+    subscriptionTypeId,
+    policyVersion: version,
+    // This promotion exists only inside the loopback DEV process. It is never written to CUP.
+    status: "PUBLISHED",
+    effectiveAt: String(draftPolicy.effectiveAt || EVALUATED_AT),
+    timeZone: "Europe/Moscow",
+    createGame: {
+      enabled: createGame.enabled === true,
+      durationsMinutes: asStringArray(createGame.durationsMinutes)
+        .map(Number)
+        .filter((duration): duration is 60 | 90 | 120 => [60, 90, 120].includes(duration)),
+    },
+    joinGame: {
+      enabled: joinGame.enabled === true,
+      minDurationMinutes: asNumber(joinGame.minDurationMinutes, 0),
+      maxDurationMinutes: asNumber(joinGame.maxDurationMinutes, 0),
+    },
+    activeServicesLimit: {
+      enabled: activeLimit.enabled === true,
+      max: activeLimit.enabled === true ? asNullableNumber(activeLimit.max) : null,
+      scope: activeLimit.scope === "ALL_BOOKINGS" ? "ALL_BOOKINGS" : "SUBSCRIPTION_BENEFIT_ONLY",
+    },
+    bookingWindow: {
+      enabled: bookingWindow.enabled === true,
+      days: bookingWindow.enabled === true ? asNullableNumber(bookingWindow.days) : null,
+    },
+    dailyUsageLimit: asNumber(draftPolicy.dailyUsageLimit, 0),
+    usageUnitsByDuration: {
+      "60": asNumber(asRecord(draftPolicy.usageUnitsByDuration)["60"], 0),
+      "90": asNumber(asRecord(draftPolicy.usageUnitsByDuration)["90"], 0),
+      "120": asNumber(asRecord(draftPolicy.usageUnitsByDuration)["120"], 0),
+    },
+    stationAccessRules: clone(Array.isArray(draftPolicy.stationAccessRules)
+      ? draftPolicy.stationAccessRules
+      : []) as ManagedSubscriptionRuntimePolicy["stationAccessRules"],
+    benefitRules: clone(Array.isArray(draftPolicy.benefitRules)
+      ? draftPolicy.benefitRules
+      : []) as ManagedSubscriptionRuntimePolicy["benefitRules"],
+    lifecycle: {
+      allowBookingsAfterExpiry: lifecycle.allowBookingsAfterExpiry === true,
+    },
+    usage: {
+      weeklyUsageLimit: asNullableNumber(usage.weeklyUsageLimit),
+      monthlyUsageLimit: asNullableNumber(usage.monthlyUsageLimit),
+      maxFutureBookings: asNullableNumber(usage.maxFutureBookings),
+      minHoursBetweenUses: asNumber(usage.minHoursBetweenUses, 0),
+      blackoutDates: asStringArray(usage.blackoutDates),
+    },
+  };
+
+  return {
+    subscriptionTypeId,
+    code: String(subscriptionType.code || "").trim(),
+    title: String(subscriptionType.title || "DEV подписка").trim(),
+    sourceStatus: String(draftPolicy.status || "DRAFT"),
+    sourceModelVersion: asNullableNumber(draftPolicy.modelVersion),
+    loadedAt,
+    digest: stableDigest(policy),
+    policy,
+  };
+};
+
+export const loadPolicyFromCup = async (options: {
+  baseUrl?: string;
+  typeCode?: string;
+  policyVersion?: number | string;
+  fetchImpl?: typeof fetch;
+} = {}): Promise<PolicySource> => {
+  const baseUrl = String(options.baseUrl || DEFAULT_CUP_BASE_URL).replace(/\/+$/, "");
+  const typeCode = String(options.typeCode || DEFAULT_TYPE_CODE).trim();
+  const requestedVersion = options.policyVersion === undefined || options.policyVersion === ""
+    ? null
+    : Number(options.policyVersion);
+  if (requestedVersion !== null && (!Number.isInteger(requestedVersion) || requestedVersion < 1)) {
+    throw new DevRuntimeError(
+      503,
+      "CUP_POLICY_VERSION_INVALID",
+      "Некорректно задана версия правил для DEV runtime",
+    );
+  }
+  const fetchImpl = options.fetchImpl || fetch;
+  const headers = {
+    "X-User-Id": "lk-managed-subscriptions-dev-runtime",
+    "X-User-Role": "SUPER_ADMIN",
+  };
+
+  try {
+    const typesResponse = await fetchImpl(`${baseUrl}/api/v1/admin/subscription-types`, {
+      headers,
+      signal: AbortSignal.timeout(4_000),
+    });
+    if (!typesResponse.ok) throw new Error(`types:${typesResponse.status}`);
+    const typesPayload = asRecord(await typesResponse.json());
+    const types = Array.isArray(typesPayload.items) ? typesPayload.items.map(asRecord) : [];
+    const subscriptionType = types.find((item) => item.code === typeCode);
+    if (!subscriptionType) {
+      throw new DevRuntimeError(
+        503,
+        "CUP_TYPE_NOT_FOUND",
+        `В DEV ЦУП не найден тип ${typeCode}`,
+      );
+    }
+    const typeId = encodeURIComponent(String(subscriptionType.subscriptionTypeId));
+    const policiesResponse = await fetchImpl(
+      `${baseUrl}/api/v1/admin/subscription-types/${typeId}/policy-versions`,
+      { headers, signal: AbortSignal.timeout(4_000) },
+    );
+    if (!policiesResponse.ok) throw new Error(`policies:${policiesResponse.status}`);
+    const policiesPayload = await policiesResponse.json();
+    const policies = Array.isArray(policiesPayload) ? policiesPayload.map(asRecord) : [];
+    const drafts = policies
+      .filter((item) => item.status === "DRAFT")
+      .sort((left, right) => asNumber(right.version, 0) - asNumber(left.version, 0));
+    const draft = requestedVersion === null
+      ? drafts[0]
+      : drafts.find((item) => asNumber(item.version, 0) === requestedVersion);
+    if (!draft) {
+      throw new DevRuntimeError(
+        503,
+        "CUP_DRAFT_POLICY_NOT_FOUND",
+        requestedVersion === null
+          ? "У выбранного DEV-типа нет DRAFT-версии правил"
+          : `У выбранного DEV-типа нет DRAFT-версии ${requestedVersion}`,
+      );
+    }
+    return compileDraftPolicy(subscriptionType, draft);
+  } catch (error) {
+    if (error instanceof DevRuntimeError) throw error;
+    throw new DevRuntimeError(
+      503,
+      "CUP_DEV_UNAVAILABLE",
+      "DEV ЦУП недоступен: проверьте порт 3010 и SSH-туннель",
+      { reason: error instanceof Error ? error.message : String(error) },
+    );
+  }
+};
+
+export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
+  {
+    targetId: "create-station-a-60-aug18",
+    title: "Создать игру 60 минут",
+    description: "Станция A · 18 августа · базовая цена 4 000 ₽",
+    action: "CREATE_GAME",
+    target: {
+      resolutionSource: "SERVER",
+      stationId: "dev-station-a",
+      category: "GAME",
+      externalEventTypeId: "dev-open-game",
+      productTypeId: null,
+      eventId: "dev-event-create-a-60-aug18",
+      durationMinutes: 60,
+      startsAt: "2026-08-18T06:00:00.000Z",
+      basePriceMinor: 400_000,
+      currency: "RUB",
+    },
+  },
+  {
+    targetId: "create-station-a-90-aug18",
+    title: "Создать игру 90 минут",
+    description: "Станция A · 18 августа · ¼ цены, скидка 20%, доплата станции",
+    action: "CREATE_GAME",
+    target: {
+      resolutionSource: "SERVER",
+      stationId: "dev-station-a",
+      category: "GAME",
+      externalEventTypeId: "dev-open-game",
+      productTypeId: null,
+      eventId: "dev-event-create-a-90-aug18",
+      durationMinutes: 90,
+      startsAt: "2026-08-18T08:00:00.000Z",
+      basePriceMinor: 400_000,
+      currency: "RUB",
+    },
+  },
+  {
+    targetId: "create-home-120-aug18",
+    title: "Создать игру 120 минут",
+    description: "Домашняя станция · 18 августа · без подходящей ценовой льготы",
+    action: "CREATE_GAME",
+    target: {
+      resolutionSource: "SERVER",
+      stationId: "dev-station-home",
+      category: "GAME",
+      externalEventTypeId: "dev-open-game",
+      productTypeId: null,
+      eventId: "dev-event-create-home-120-aug18",
+      durationMinutes: 120,
+      startsAt: "2026-08-18T10:00:00.000Z",
+      basePriceMinor: 400_000,
+      currency: "RUB",
+    },
+  },
+  {
+    targetId: "join-station-b-60-aug18",
+    title: "Присоединиться к игре",
+    description: "Станция B · 60 минут · 18 августа",
+    action: "JOIN_GAME",
+    target: {
+      resolutionSource: "SERVER",
+      stationId: "dev-station-b",
+      category: "GAME",
+      externalEventTypeId: "dev-open-game",
+      productTypeId: null,
+      eventId: "dev-event-join-b-60-aug18",
+      durationMinutes: 60,
+      startsAt: "2026-08-18T12:00:00.000Z",
+      basePriceMinor: 400_000,
+      currency: "RUB",
+    },
+  },
+  {
+    targetId: "create-station-a-60-aug22",
+    title: "Создать игру 22 августа",
+    description: "Проверка окна записи · станция A · 60 минут",
+    action: "CREATE_GAME",
+    target: {
+      resolutionSource: "SERVER",
+      stationId: "dev-station-a",
+      category: "GAME",
+      externalEventTypeId: "dev-open-game",
+      productTypeId: null,
+      eventId: "dev-event-create-a-60-aug22",
+      durationMinutes: 60,
+      startsAt: "2026-08-22T06:00:00.000Z",
+      basePriceMinor: 400_000,
+      currency: "RUB",
+    },
+  },
+  {
+    targetId: "create-unknown-station-60-aug18",
+    title: "Создать игру на другой станции",
+    description: "Станция не включена в правила подписки",
+    action: "CREATE_GAME",
+    target: {
+      resolutionSource: "SERVER",
+      stationId: "dev-station-unknown",
+      category: "GAME",
+      externalEventTypeId: "dev-open-game",
+      productTypeId: null,
+      eventId: "dev-event-create-unknown-60-aug18",
+      durationMinutes: 60,
+      startsAt: "2026-08-18T14:00:00.000Z",
+      basePriceMinor: 400_000,
+      currency: "RUB",
+    },
+  },
+  {
+    targetId: "addon-racket-station-a-aug18",
+    title: "Добавить аренду ракетки",
+    description: "Доппродукт · станция A · базовая цена 1 000 ₽",
+    action: "PURCHASE_ADD_ON_PRODUCT",
+    target: {
+      resolutionSource: "SERVER",
+      stationId: "dev-station-a",
+      category: "ADD_ON_PRODUCT",
+      externalEventTypeId: "dev-rental-event",
+      productTypeId: "dev-racket-rental",
+      eventId: "dev-event-addon-racket-aug18",
+      durationMinutes: 60,
+      startsAt: "2026-08-18T16:00:00.000Z",
+      basePriceMinor: 100_000,
+      currency: "RUB",
+    },
+  },
+  {
+    targetId: "group-station-a-60-aug18",
+    title: "Записаться на групповую",
+    description: "Нет включённой льготы для групповой тренировки",
+    action: "BOOK_GROUP_TRAINING",
+    target: {
+      resolutionSource: "SERVER",
+      stationId: "dev-station-a",
+      category: "GROUP_TRAINING",
+      externalEventTypeId: "dev-group-training",
+      productTypeId: null,
+      eventId: "dev-event-group-a-60-aug18",
+      durationMinutes: 60,
+      startsAt: "2026-08-18T17:00:00.000Z",
+      basePriceMinor: 300_000,
+      currency: "RUB",
+    },
+  },
+];
+
+export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) => {
+  const targets = buildDevTargets();
+  const targetById = new Map(targets.map((target) => [target.targetId, target]));
+  const reservations = new Map<string, ManagedSubscriptionDevReservation>();
+  const operations = new Map<string, OperationReplay>();
+  const ledger: ManagedSubscriptionDevLedgerEvent[] = [];
+  let policySource: PolicySource | null = null;
+  let instance: ManagedSubscriptionRuntimeInstance | null = null;
+  let mutationTail: Promise<void> = Promise.resolve();
+
+  const mutate = <T>(operation: () => Promise<T>): Promise<T> => {
+    const execution = mutationTail.then(operation, operation);
+    mutationTail = execution.then(() => undefined, () => undefined);
+    return execution;
+  };
+
+  const appendEvent = (
+    type: ManagedSubscriptionDevLedgerEvent["type"],
+    data: Partial<ManagedSubscriptionDevLedgerEvent> = {},
+  ) => {
+    ledger.unshift({
+      eventId: `dev-event:${randomUUID()}`,
+      type,
+      occurredAt: new Date().toISOString(),
+      operationId: data.operationId || null,
+      targetId: data.targetId || null,
+      reservationId: data.reservationId || null,
+      policyVersion: data.policyVersion ?? policySource?.policy.policyVersion ?? null,
+      details: clone(data.details || {}),
+    });
+    if (ledger.length > 100) ledger.length = 100;
+  };
+
+  const pinPolicy = async () => {
+    policySource = await options.policyLoader();
+    instance = {
+      subscriptionInstanceId: "dev-instance:synthetic-3190",
+      subscriptionTypeId: policySource.subscriptionTypeId,
+      policyVersion: policySource.policy.policyVersion,
+      state: "ACTIVE",
+      activeFrom: "2026-08-15T00:00:00.000Z",
+      activeTo: "2027-08-14T20:59:59.999Z",
+      homeStationId: "dev-station-home",
+      frozenUntil: null,
+      noShowBlockedUntil: null,
+    };
+    appendEvent("POLICY_PINNED", {
+      details: { digest: policySource.digest, sourceStatus: policySource.sourceStatus },
+    });
+  };
+
+  const requireContext = async () => {
+    if (!policySource || !instance) await pinPolicy();
+    return { policySource: policySource as PolicySource, instance: instance as ManagedSubscriptionRuntimeInstance };
+  };
+
+  const activeReservations = () => [...reservations.values()]
+    .filter((reservation) => reservation.status === "ACTIVE");
+
+  const usageFor = (target: ManagedSubscriptionDevTarget, policy: ManagedSubscriptionRuntimePolicy) => {
+    const active = activeReservations();
+    const bucketDate = localDate(target.target.startsAt);
+    const daily = active.filter((reservation) => reservation.localDate === bucketDate);
+    return {
+      activeServiceScope: policy.activeServicesLimit.scope,
+      dailyBucketLocalDate: bucketDate,
+      activeServices: policy.activeServicesLimit.enabled ? active.length : null,
+      dailyUsed: daily.reduce((sum, reservation) => sum + reservation.usageUnits, 0),
+      weeklyUsed: active.reduce((sum, reservation) => sum + reservation.usageUnits, 0),
+      monthlyUsed: active.reduce((sum, reservation) => sum + reservation.usageUnits, 0),
+      futureBookings: active.length,
+      activeServiceStartsAt: active.map((reservation) => reservation.startsAt),
+    };
+  };
+
+  const targetOrThrow = (targetId: unknown): ManagedSubscriptionDevTarget => {
+    const normalized = String(targetId || "").trim();
+    const target = targetById.get(normalized);
+    if (!target) {
+      throw new DevRuntimeError(
+        400,
+        "DEV_TARGET_NOT_FOUND",
+        "Тестовое событие не найдено в серверном каталоге",
+      );
+    }
+    return target;
+  };
+
+  const decisionFor = async (targetId: unknown): Promise<{
+    target: ManagedSubscriptionDevTarget;
+    decision: ManagedSubscriptionPolicyDecision;
+  }> => {
+    const context = await requireContext();
+    const target = targetOrThrow(targetId);
+    const input: ManagedSubscriptionPolicyEvaluationInput = {
+      evaluatedAt: EVALUATED_AT,
+      action: target.action,
+      policy: clone(context.policySource.policy),
+      instance: clone(context.instance),
+      target: clone(target.target),
+      usage: usageFor(target, context.policySource.policy),
+    };
+    return { target, decision: evaluatePolicy(input) };
+  };
+
+  const seedUnlocked = async (count: number) => {
+    await requireContext();
+    if (!Number.isInteger(count) || count < 0 || count > 3) {
+      throw new DevRuntimeError(400, "DEV_SEED_INVALID", "Допустимо от 0 до 3 активных услуг");
+    }
+    reservations.clear();
+    operations.clear();
+    const seedDates = [
+      "2026-08-15T06:00:00.000Z",
+      "2026-08-16T06:00:00.000Z",
+      "2026-08-17T06:00:00.000Z",
+    ];
+    for (let index = 0; index < count; index += 1) {
+      const startsAt = seedDates[index];
+      if (!startsAt) continue;
+      const reservationId = `dev-seed:${index + 1}`;
+      reservations.set(reservationId, {
+        reservationId,
+        targetId: `seed-active-${index + 1}`,
+        title: `Тестовая активная услуга ${index + 1}`,
+        status: "ACTIVE",
+        startsAt,
+        localDate: localDate(startsAt),
+        usageUnits: 1,
+        finalPriceMinor: 0,
+        createdAt: EVALUATED_AT,
+        releasedAt: null,
+        source: "SEED",
+      });
+    }
+    appendEvent("TEST_STATE_SEEDED", { details: { activeServices: count } });
+    return snapshot();
+  };
+
+  const snapshot = async () => {
+    const context = await requireContext();
+    return {
+      mode: "DEV_SHADOW",
+      testOnly: true,
+      providerMode: "FAKE_NO_VIVA",
+      evaluatedAt: EVALUATED_AT,
+      tester: { testerRef: TESTER_REF, displayPhone: TESTER_LABEL },
+      policySource: {
+        subscriptionTypeId: context.policySource.subscriptionTypeId,
+        code: context.policySource.code,
+        title: context.policySource.title,
+        sourceStatus: context.policySource.sourceStatus,
+        runtimeStatus: context.policySource.policy.status,
+        sourceModelVersion: context.policySource.sourceModelVersion,
+        version: context.policySource.policy.policyVersion,
+        digest: context.policySource.digest,
+        loadedAt: context.policySource.loadedAt,
+      },
+      limits: {
+        activeServices: activeReservations().length,
+        activeServicesEnabled: context.policySource.policy.activeServicesLimit.enabled,
+        maxActiveServices: context.policySource.policy.activeServicesLimit.max,
+        bookingWindowEnabled: context.policySource.policy.bookingWindow.enabled,
+        bookingWindowDays: context.policySource.policy.bookingWindow.days,
+        dailyUsageLimit: context.policySource.policy.dailyUsageLimit,
+      },
+      instance: clone(context.instance),
+      targets: clone(targets),
+      reservations: clone([...reservations.values()]),
+      ledger: clone(ledger.slice(0, 20)),
+    };
+  };
+
+  return {
+    async initialize() {
+      if (!policySource) {
+        await mutate(async () => {
+          if (policySource) return;
+          await pinPolicy();
+          await seedUnlocked(2);
+        });
+      }
+      return snapshot();
+    },
+    snapshot,
+    async quote(targetId: unknown) {
+      const result = await decisionFor(targetId);
+      appendEvent(result.decision.eligible ? "ELIGIBILITY_QUOTED" : "ELIGIBILITY_BLOCKED", {
+        targetId: result.target.targetId,
+        details: {
+          blockerCodes: result.decision.blockers.map((blocker) => blocker.code),
+          finalPriceMinor: result.decision.benefit?.finalPriceMinor ?? null,
+        },
+      });
+      return { target: clone(result.target), decision: result.decision, snapshot: await snapshot() };
+    },
+    reserve(targetId: unknown, operationId: unknown) {
+      return mutate(async () => {
+        const normalizedOperationId = String(operationId || "").trim();
+        if (!/^[a-zA-Z0-9:_-]{8,100}$/.test(normalizedOperationId)) {
+          throw new DevRuntimeError(400, "IDEMPOTENCY_KEY_INVALID", "Некорректный operationId");
+        }
+        const target = targetOrThrow(targetId);
+        const fingerprint = stableDigest({ action: "reserve", targetId: target.targetId });
+        const replay = operations.get(normalizedOperationId);
+        if (replay) {
+          if (replay.fingerprint !== fingerprint) {
+            throw new DevRuntimeError(
+              409,
+              "IDEMPOTENCY_CONFLICT",
+              "operationId уже использован для другого тестового действия",
+            );
+          }
+          return { ...(clone(replay.response) as JsonRecord), replayed: true };
+        }
+
+        // All reserve/release/seed mutations use one in-process queue. The final
+        // evaluation and write therefore share one atomic DEV-only boundary.
+        const result = await decisionFor(target.targetId);
+        if (!result.decision.eligible) {
+          appendEvent("ELIGIBILITY_BLOCKED", {
+            operationId: normalizedOperationId,
+            targetId: target.targetId,
+            details: { blockerCodes: result.decision.blockers.map((blocker) => blocker.code) },
+          });
+          throw new DevRuntimeError(
+            409,
+            "MANAGED_SUBSCRIPTION_BLOCKED",
+            result.decision.blockers[0]?.message || "Действие заблокировано правилами подписки",
+            { decision: result.decision },
+          );
+        }
+        const reservationId = `dev-reservation:${randomUUID()}`;
+        const reservation: ManagedSubscriptionDevReservation = {
+          reservationId,
+          targetId: target.targetId,
+          title: target.title,
+          status: "ACTIVE",
+          startsAt: target.target.startsAt,
+          localDate: localDate(target.target.startsAt),
+          usageUnits: result.decision.usageUnits || 0,
+          finalPriceMinor: result.decision.benefit?.finalPriceMinor ?? null,
+          createdAt: new Date().toISOString(),
+          releasedAt: null,
+          source: "USER",
+        };
+        reservations.set(reservationId, reservation);
+        appendEvent("RESERVATION_CREATED", {
+          operationId: normalizedOperationId,
+          targetId: target.targetId,
+          reservationId,
+          details: { finalPriceMinor: reservation.finalPriceMinor, usageUnits: reservation.usageUnits },
+        });
+        const response = {
+          reservation: clone(reservation),
+          decision: result.decision,
+          snapshot: await snapshot(),
+          replayed: false,
+        };
+        operations.set(normalizedOperationId, { fingerprint, response: clone(response) });
+        return response;
+      });
+    },
+    release(reservationId: unknown, operationId: unknown) {
+      return mutate(async () => {
+        const normalizedReservationId = String(reservationId || "").trim();
+        const normalizedOperationId = String(operationId || "").trim();
+        if (!/^[a-zA-Z0-9:_-]{8,100}$/.test(normalizedOperationId)) {
+          throw new DevRuntimeError(400, "IDEMPOTENCY_KEY_INVALID", "Некорректный operationId");
+        }
+        const fingerprint = stableDigest({ action: "release", reservationId: normalizedReservationId });
+        const replay = operations.get(normalizedOperationId);
+        if (replay) {
+          if (replay.fingerprint !== fingerprint) {
+            throw new DevRuntimeError(409, "IDEMPOTENCY_CONFLICT", "operationId уже использован");
+          }
+          return { ...(clone(replay.response) as JsonRecord), replayed: true };
+        }
+        const reservation = reservations.get(normalizedReservationId);
+        if (!reservation) {
+          throw new DevRuntimeError(404, "RESERVATION_NOT_FOUND", "Тестовый резерв не найден");
+        }
+        if (reservation.status === "ACTIVE") {
+          reservation.status = "RELEASED";
+          reservation.releasedAt = new Date().toISOString();
+          appendEvent("RESERVATION_RELEASED", {
+            operationId: normalizedOperationId,
+            targetId: reservation.targetId,
+            reservationId: reservation.reservationId,
+            details: { usageUnits: reservation.usageUnits },
+          });
+        }
+        const response = { reservation: clone(reservation), snapshot: await snapshot(), replayed: false };
+        operations.set(normalizedOperationId, { fingerprint, response: clone(response) });
+        return response;
+      });
+    },
+    seed(count: number) {
+      return mutate(() => seedUnlocked(count));
+    },
+    reset() {
+      return mutate(async () => {
+        reservations.clear();
+        operations.clear();
+        policySource = null;
+        instance = null;
+        await pinPolicy();
+        return seedUnlocked(2);
+      });
+    },
+  };
+};
+
+const readJsonBody = async (request: IncomingMessage): Promise<JsonRecord> => {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > MAX_BODY_BYTES) {
+      throw new DevRuntimeError(413, "REQUEST_TOO_LARGE", "Слишком большой DEV-запрос");
+    }
+    chunks.push(buffer);
+  }
+  if (chunks.length === 0) return {};
+  try {
+    return asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+  } catch {
+    throw new DevRuntimeError(400, "REQUEST_JSON_INVALID", "Некорректный JSON");
+  }
+};
+
+const sendJson = (response: ServerResponse, status: number, payload: unknown) => {
+  response.statusCode = status;
+  response.setHeader("Content-Type", "application/json; charset=utf-8");
+  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.end(JSON.stringify(payload));
+};
+
+const assertLocalOrigin = (request: IncomingMessage) => {
+  const origin = String(request.headers.origin || "");
+  if (origin && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) {
+    throw new DevRuntimeError(403, "DEV_ORIGIN_FORBIDDEN", "DEV runtime доступен только локально");
+  }
+};
+
+export const managedSubscriptionDevPlugin = (options: {
+  enabled: boolean;
+  cupBaseUrl?: string;
+  typeCode?: string;
+  policyVersion?: number | string;
+}): Plugin => ({
+  name: "managed-subscription-dev-runtime",
+  apply: "serve",
+  configureServer(server) {
+    if (!options.enabled) return;
+    const runtime = createManagedSubscriptionDevRuntime({
+      policyLoader: () => loadPolicyFromCup({
+        baseUrl: options.cupBaseUrl,
+        typeCode: options.typeCode,
+        policyVersion: options.policyVersion,
+      }),
+    });
+
+    server.middlewares.use(async (request, response, next) => {
+      const url = new URL(request.url || "/", "http://127.0.0.1");
+      if (!url.pathname.startsWith(API_PREFIX)) {
+        next();
+        return;
+      }
+      try {
+        assertLocalOrigin(request);
+        if (request.method === "GET" && url.pathname === `${API_PREFIX}/session`) {
+          sendJson(response, 200, await runtime.initialize());
+          return;
+        }
+        if (request.method !== "POST") {
+          throw new DevRuntimeError(405, "METHOD_NOT_ALLOWED", "Метод не поддерживается");
+        }
+        const body = await readJsonBody(request);
+        if (url.pathname === `${API_PREFIX}/quote`) {
+          sendJson(response, 200, await runtime.quote(body.targetId));
+          return;
+        }
+        if (url.pathname === `${API_PREFIX}/reserve`) {
+          sendJson(response, 200, await runtime.reserve(body.targetId, body.operationId));
+          return;
+        }
+        if (url.pathname === `${API_PREFIX}/release`) {
+          sendJson(response, 200, await runtime.release(body.reservationId, body.operationId));
+          return;
+        }
+        if (url.pathname === `${API_PREFIX}/seed`) {
+          sendJson(response, 200, await runtime.seed(Number(body.activeServices)));
+          return;
+        }
+        if (url.pathname === `${API_PREFIX}/reset`) {
+          sendJson(response, 200, await runtime.reset());
+          return;
+        }
+        throw new DevRuntimeError(404, "DEV_ROUTE_NOT_FOUND", "DEV-маршрут не найден");
+      } catch (error) {
+        const safeError = error instanceof DevRuntimeError
+          ? error
+          : new DevRuntimeError(500, "DEV_RUNTIME_ERROR", "DEV runtime временно недоступен");
+        sendJson(response, safeError.status, {
+          error: {
+            code: safeError.code,
+            message: safeError.message,
+            details: safeError.details,
+          },
+        });
+      }
+    });
+  },
+});

@@ -10,6 +10,7 @@ import CommunityJoinPage from "./components/communities/CommunityJoinPage";
 import FindGamePage from "./components/games/FindGamePage";
 import GamesPage from "./components/games/GamesPage";
 import TournamentsPage from "./components/tournaments/TournamentsPage";
+import { ManagedSubscriptionDevPage } from "./components/subscriptions/ManagedSubscriptionDevPage";
 import {
   CABINET_URL,
   PUBLIC_COMMUNITY_JOIN_PATH,
@@ -981,6 +982,14 @@ function AppContent() {
 }
 
 export default function App() {
+  if (
+    import.meta.env.DEV
+    && typeof window !== "undefined"
+    && window.location.pathname.replace(/\/+$/, "") === "/lk_subscription_dev"
+  ) {
+    return <ManagedSubscriptionDevPage />;
+  }
+
   return (
     <AuthProvider
       authMode={Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android" ? "viva" : "auto"}

@@ -89,6 +89,7 @@
     "test:deploy-topology": "node --experimental-strip-types --test scripts/tests/deployTopology.test.ts",
     "test:subscription-booking-nginx": "node --test scripts/tests/subscriptionBookingNginx.test.mjs",
     "test:managed-subscription-policy": "node --experimental-strip-types --test scripts/tests/managedSubscriptionPolicyEvaluator.nodered.test.ts",
+    "test:managed-subscription-dev-runtime": "node --experimental-strip-types --test scripts/tests/managedSubscriptionDevRuntime.test.ts",
     "test:padel-day": "node --experimental-strip-types --test scripts/tests/padelDaySchedule.test.ts scripts/tests/padelDay.nodered.test.ts scripts/tests/padelDay.deploy.test.ts",
     "test:referral-subscription": "node --experimental-strip-types --test scripts/tests/referralSubscription.nodered.test.ts",
     "rating:recalculate": "node --experimental-strip-types scripts/recalculate_community_rating.mjs",
