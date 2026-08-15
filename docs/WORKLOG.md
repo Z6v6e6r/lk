@@ -1162,3 +1162,11 @@
 - Перед созданием tournament post сервер читает exact Viva exercise и сверяет provider exercise, direction и station. Для `direction=5278` в `TIME_FOR_FRIENDS` community несовпадение `ratingProgram.stationId` блокирует публикацию.
 - Успешная scoped TFF-публикация получает server evidence, а exact `{publicationId,tournamentId,stationId,status=VALIDATED}` добавляется в `ratingProgram.validatedPublications`; `autoEnrollmentEnabled` не изменяется.
 - Focused regressions покрывают spoofed actor, missing Bearer, verified role, provider ID/station conflicts, non-TFF isolation, server metadata override и exact validation mutation. PASS: validation 6/6, community rating 78/78, tournament context 21/21, TFF backfill 25/25, category 7/7, TypeScript и targeted ESLint; сгенерированные function nodes компилируются, broken wires=0. Полный build ожидаемо остановлен preflight из-за отсутствующих ignored production env, modular validate требует отдельный external live-source workspace. Runtime activation, live flow, push и deploy на этом этапе не выполнялись.
+## 2026-08-15 — Managed subscription configurable limits and analytics contract
+
+- made active-service and booking-window limits independently switchable;
+- replaced one global station mode with ordered station groups and per-row surcharge;
+- added duration/product-aware benefits, including partial-price percent discount;
+- specified CUP settings, instance-management and analytics sections, including
+  renewal cohorts, attendance, revenue, capacity utilization and overdraft risk;
+- kept all provider, payment, publication and live Node-RED mutations out of scope.

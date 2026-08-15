@@ -2,30 +2,54 @@ export type ManagedSubscriptionAction =
   | "CREATE_GAME"
   | "JOIN_GAME"
   | "BOOK_GROUP_TRAINING"
-  | "BOOK_TOURNAMENT";
+  | "BOOK_TOURNAMENT"
+  | "PURCHASE_ADD_ON_PRODUCT";
 
 export type ManagedSubscriptionEventCategory =
   | "GAME"
   | "GROUP_TRAINING"
-  | "TOURNAMENT";
+  | "TOURNAMENT"
+  | "ADD_ON_PRODUCT";
 
 export type ManagedSubscriptionBenefitKind =
   | "FREE_ENTITLEMENT"
   | "FIXED_PRICE"
   | "PERCENT_DISCOUNT"
   | "FIXED_DISCOUNT"
+  | "PARTIAL_PRICE_PERCENT_DISCOUNT"
   | "DISABLED";
 
 export interface ManagedSubscriptionBenefitRule {
   ruleId: string;
   enabled: boolean;
   category: ManagedSubscriptionEventCategory;
+  actions: ManagedSubscriptionAction[];
   externalEventTypeIds: string[];
+  productTypeIds: string[];
+  durationMinutes: number[];
   stationIds: string[];
   kind: ManagedSubscriptionBenefitKind;
   valueMinor: number | null;
   percentage: number | null;
+  partialPrice: {
+    numerator: number;
+    denominator: number;
+  } | null;
   priority: number;
+}
+
+export interface ManagedSubscriptionStationAccessRule {
+  ruleId: string;
+  enabled: boolean;
+  priority: number;
+  selector:
+    | { kind: "HOME_STATION"; stationIds: [] }
+    | { kind: "STATION_LIST"; stationIds: string[] }
+    | { kind: "ALL_STATIONS"; stationIds: [] };
+  surcharge: {
+    kind: "NONE" | "FIXED";
+    amountMinor: number;
+  };
 }
 
 export interface ManagedSubscriptionRuntimePolicy {
@@ -44,11 +68,18 @@ export interface ManagedSubscriptionRuntimePolicy {
     minDurationMinutes: number;
     maxDurationMinutes: number;
   };
-  maxActiveServices: number;
-  activeServiceScope: "SUBSCRIPTION_BENEFIT_ONLY" | "ALL_BOOKINGS";
-  bookingWindowDays: number;
+  activeServicesLimit: {
+    enabled: boolean;
+    max: number | null;
+    scope: "SUBSCRIPTION_BENEFIT_ONLY" | "ALL_BOOKINGS";
+  };
+  bookingWindow: {
+    enabled: boolean;
+    days: number | null;
+  };
   dailyUsageLimit: number;
   usageUnitsByDuration: Record<"60" | "90" | "120", number>;
+  stationAccessRules: ManagedSubscriptionStationAccessRule[];
   benefitRules: ManagedSubscriptionBenefitRule[];
   lifecycle: {
     allowBookingsAfterExpiry: boolean;
@@ -58,8 +89,6 @@ export interface ManagedSubscriptionRuntimePolicy {
     monthlyUsageLimit: number | null;
     maxFutureBookings: number | null;
     minHoursBetweenUses: number;
-    crossStationMode: "HOME_ONLY" | "ALLOWED" | "ALLOWED_WITH_SURCHARGE";
-    crossStationSurchargeMinor: number;
     blackoutDates: string[];
   };
 }
@@ -88,6 +117,7 @@ export interface ManagedSubscriptionResolvedTarget {
   stationId: string;
   category: ManagedSubscriptionEventCategory;
   externalEventTypeId: string | null;
+  productTypeId: string | null;
   eventId: string | null;
   durationMinutes: number;
   startsAt: string;
@@ -98,7 +128,7 @@ export interface ManagedSubscriptionResolvedTarget {
 export interface ManagedSubscriptionUsageSnapshot {
   activeServiceScope: "SUBSCRIPTION_BENEFIT_ONLY" | "ALL_BOOKINGS";
   dailyBucketLocalDate: string;
-  activeServices: number;
+  activeServices: number | null;
   dailyUsed: number;
   weeklyUsed: number;
   monthlyUsed: number;
@@ -128,6 +158,11 @@ export interface ManagedSubscriptionAppliedBenefit {
   discountMinor: number;
   surchargeMinor: number;
   finalPriceMinor: number | null;
+  partialPriceCalculation: {
+    numerator: number;
+    denominator: number;
+    chargeBeforeDiscountMinor: number;
+  } | null;
   currency: "RUB";
 }
 

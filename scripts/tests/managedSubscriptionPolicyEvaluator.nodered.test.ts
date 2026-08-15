@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import type {
+  ManagedSubscriptionBenefitRule,
   ManagedSubscriptionPolicyEvaluationInput,
   ManagedSubscriptionRuntimePolicy,
 } from "../../src/types/managedSubscriptionRuntime.ts";
@@ -23,11 +24,21 @@ function basePolicy(
     timeZone: "Europe/Moscow",
     createGame: { enabled: true, durationsMinutes: [60, 90, 120] },
     joinGame: { enabled: true, minDurationMinutes: 60, maxDurationMinutes: 120 },
-    maxActiveServices: 3,
-    bookingWindowDays: 4,
+    activeServicesLimit: {
+      enabled: true,
+      max: 3,
+      scope: "SUBSCRIPTION_BENEFIT_ONLY",
+    },
+    bookingWindow: { enabled: true, days: 4 },
     dailyUsageLimit: 1,
     usageUnitsByDuration: { "60": 1, "90": 1, "120": 1 },
-    activeServiceScope: "SUBSCRIPTION_BENEFIT_ONLY",
+    stationAccessRules: [{
+      ruleId: "all-stations",
+      enabled: true,
+      priority: 1,
+      selector: { kind: "ALL_STATIONS", stationIds: [] },
+      surcharge: { kind: "NONE", amountMinor: 0 },
+    }],
     benefitRules: [],
     lifecycle: { allowBookingsAfterExpiry: false },
     usage: {
@@ -35,10 +46,29 @@ function basePolicy(
       monthlyUsageLimit: null,
       maxFutureBookings: null,
       minHoursBetweenUses: 0,
-      crossStationMode: "ALLOWED",
-      crossStationSurchargeMinor: 0,
       blackoutDates: [],
     },
+    ...overrides,
+  };
+}
+
+function benefitRule(
+  overrides: Partial<ManagedSubscriptionBenefitRule>,
+): ManagedSubscriptionBenefitRule {
+  return {
+    ruleId: "benefit-rule",
+    enabled: true,
+    category: "GAME",
+    actions: ["CREATE_GAME"],
+    externalEventTypeIds: ["open-game"],
+    productTypeIds: [],
+    durationMinutes: [60],
+    stationIds: ["station-home"],
+    kind: "DISABLED",
+    valueMinor: null,
+    percentage: null,
+    partialPrice: null,
+    priority: 1,
     ...overrides,
   };
 }
@@ -66,6 +96,7 @@ function baseInput(
       stationId: "station-home",
       category: "GAME",
       externalEventTypeId: "open-game",
+      productTypeId: null,
       eventId: null,
       durationMinutes: 60,
       startsAt: "2026-08-15T07:00:00.000Z",
@@ -119,6 +150,7 @@ test("published policy allows a server-resolved 60 minute game", () => {
     discountMinor: 0,
     surchargeMinor: 0,
     finalPriceMinor: null,
+    partialPriceCalculation: null,
     currency: "RUB",
   });
 });
@@ -211,6 +243,37 @@ test("active-service and duration-unit daily limits include current reservations
   ));
 });
 
+test("active-service maximum can be disabled without requiring a limit or scope match", () => {
+  const input = baseInput({
+    policy: basePolicy({
+      activeServicesLimit: {
+        enabled: false,
+        max: null,
+        scope: "SUBSCRIPTION_BENEFIT_ONLY",
+      },
+    }),
+    usage: {
+      ...baseInput().usage,
+      activeServiceScope: "ALL_BOOKINGS",
+      activeServices: null,
+    },
+  });
+  const result = evaluate(input);
+  assert.equal(result.decision.eligible, true);
+  assert.equal(result.decision.activeServices, null);
+  assert.equal(result.decision.maxActiveServices, null);
+  assert.ok(!blockerCodes(input).includes("ACTIVE_SERVICES_LIMIT_REACHED"));
+});
+
+test("enabled active-service limit treats a missing counter as invalid instead of zero", () => {
+  const input = baseInput({
+    usage: { ...baseInput().usage, activeServices: null },
+  });
+  const codes = blockerCodes(input);
+  assert.ok(codes.includes("USAGE_SNAPSHOT_INVALID"));
+  assert.ok(codes.includes("ACTIVE_SERVICES_LIMIT_INVALID"));
+});
+
 test("bookingWindowDays uses station-local calendar dates", () => {
   const atMoscowLateNight = baseInput({
     evaluatedAt: "2026-08-14T20:30:00.000Z",
@@ -233,18 +296,36 @@ test("bookingWindowDays uses station-local calendar dates", () => {
   assert.ok(blockerCodes(outsideFourthDay).includes("BOOKING_WINDOW_EXCEEDED"));
 });
 
+test("booking window can be disabled while target-day bucket validation remains active", () => {
+  const input = baseInput({
+    policy: basePolicy({ bookingWindow: { enabled: false, days: null } }),
+    target: { ...baseInput().target, startsAt: "2026-12-20T07:00:00.000Z" },
+    usage: { ...baseInput().usage, dailyBucketLocalDate: "2026-12-20" },
+  });
+  assert.equal(evaluate(input).decision.eligible, true);
+  assert.ok(!blockerCodes(input).includes("BOOKING_WINDOW_EXCEEDED"));
+
+  const invalidZone = {
+    ...input,
+    policy: { ...input.policy, timeZone: "Invalid/Zone" },
+  };
+  assert.ok(blockerCodes(invalidZone).includes("TARGET_LOCAL_DATE_UNRESOLVED"));
+});
+
 test("group training requires exact event-type and station rule and calculates percent discount", () => {
-  const rule = {
+  const rule = benefitRule({
     ruleId: "group-yasenevo-20",
     enabled: true,
     category: "GROUP_TRAINING" as const,
+    actions: ["BOOK_GROUP_TRAINING"],
     externalEventTypeIds: ["group-d"],
+    durationMinutes: [60],
     stationIds: ["station-home"],
     kind: "PERCENT_DISCOUNT" as const,
     valueMinor: null,
     percentage: 20,
     priority: 100,
-  };
+  });
   const input = baseInput({
     action: "BOOK_GROUP_TRAINING",
     policy: basePolicy({ benefitRules: [rule] }),
@@ -265,6 +346,7 @@ test("group training requires exact event-type and station rule and calculates p
     discountMinor: 100000,
     surchargeMinor: 0,
     finalPriceMinor: 400000,
+    partialPriceCalculation: null,
     currency: "RUB",
   });
 
@@ -302,17 +384,19 @@ for (const scenario of [
     const input = baseInput({
       action: "BOOK_GROUP_TRAINING",
       policy: basePolicy({
-        benefitRules: [{
+        benefitRules: [benefitRule({
           ruleId: `group-${scenario.kind.toLowerCase()}`,
           enabled: true,
           category: "GROUP_TRAINING",
+          actions: ["BOOK_GROUP_TRAINING"],
           externalEventTypeIds: ["group-d"],
+          durationMinutes: [60],
           stationIds: ["station-home"],
           kind: scenario.kind,
           valueMinor: scenario.valueMinor,
           percentage: null,
           priority: 100,
-        }],
+        })],
       }),
       target: {
         ...baseInput().target,
@@ -332,7 +416,7 @@ for (const scenario of [
 test("disabled game benefit keeps create entitlement but disables only the discount", () => {
   const input = baseInput({
     policy: basePolicy({
-      benefitRules: [{
+      benefitRules: [benefitRule({
         ruleId: "game-discount-off",
         enabled: true,
         category: "GAME",
@@ -342,7 +426,7 @@ test("disabled game benefit keeps create entitlement but disables only the disco
         valueMinor: null,
         percentage: null,
         priority: 10,
-      }],
+      })],
     }),
     target: { ...baseInput().target, basePriceMinor: 100000 },
   });
@@ -355,7 +439,13 @@ test("disabled game benefit keeps create entitlement but disables only the disco
 test("home-only station blocks cross-station use and surcharge mode adds exact minor amount", () => {
   const blocked = baseInput({
     policy: basePolicy({
-      usage: { ...basePolicy().usage, crossStationMode: "HOME_ONLY" },
+      stationAccessRules: [{
+        ruleId: "home-only",
+        enabled: true,
+        priority: 100,
+        selector: { kind: "HOME_STATION", stationIds: [] },
+        surcharge: { kind: "NONE", amountMinor: 0 },
+      }],
     }),
     target: { ...baseInput().target, stationId: "station-other" },
   });
@@ -363,11 +453,13 @@ test("home-only station blocks cross-station use and surcharge mode adds exact m
 
   const surcharge = baseInput({
     policy: basePolicy({
-      usage: {
-        ...basePolicy().usage,
-        crossStationMode: "ALLOWED_WITH_SURCHARGE",
-        crossStationSurchargeMinor: 15000,
-      },
+      stationAccessRules: [{
+        ruleId: "other-stations-150",
+        enabled: true,
+        priority: 100,
+        selector: { kind: "STATION_LIST", stationIds: ["station-other"] },
+        surcharge: { kind: "FIXED", amountMinor: 15000 },
+      }],
     }),
     target: {
       ...baseInput().target,
@@ -379,6 +471,119 @@ test("home-only station blocks cross-station use and surcharge mode adds exact m
   assert.equal(result.decision.eligible, true);
   assert.equal(result.decision.benefit.surchargeMinor, 15000);
   assert.equal(result.decision.benefit.finalPriceMinor, 115000);
+});
+
+test("ordered station rows support different station groups and exact surcharges", () => {
+  const stationAccessRules = [
+    {
+      ruleId: "home-free",
+      enabled: true,
+      priority: 300,
+      selector: { kind: "HOME_STATION" as const, stationIds: [] as [] },
+      surcharge: { kind: "NONE" as const, amountMinor: 0 },
+    },
+    {
+      ruleId: "group-a-150",
+      enabled: true,
+      priority: 200,
+      selector: { kind: "STATION_LIST" as const, stationIds: ["station-a", "station-b"] },
+      surcharge: { kind: "FIXED" as const, amountMinor: 15000 },
+    },
+    {
+      ruleId: "group-b-300",
+      enabled: true,
+      priority: 100,
+      selector: { kind: "STATION_LIST" as const, stationIds: ["station-c"] },
+      surcharge: { kind: "FIXED" as const, amountMinor: 30000 },
+    },
+  ];
+  const stationA = baseInput({
+    policy: basePolicy({ stationAccessRules }),
+    target: { ...baseInput().target, stationId: "station-a", basePriceMinor: 100000 },
+  });
+  const stationC = baseInput({
+    policy: basePolicy({ stationAccessRules }),
+    target: { ...baseInput().target, stationId: "station-c", basePriceMinor: 100000 },
+  });
+  assert.equal(evaluate(stationA).decision.benefit.surchargeMinor, 15000);
+  assert.equal(evaluate(stationC).decision.benefit.surchargeMinor, 30000);
+  assert.ok(blockerCodes(baseInput({
+    policy: basePolicy({ stationAccessRules }),
+    target: { ...baseInput().target, stationId: "station-x" },
+  })).includes("STATION_NOT_ALLOWED"));
+});
+
+test("90 minute create can charge one quarter of full price with an additional percent discount", () => {
+  const input = baseInput({
+    policy: basePolicy({
+      benefitRules: [
+        benefitRule({
+          ruleId: "create-60-free",
+          actions: ["CREATE_GAME"],
+          durationMinutes: [60],
+          kind: "FREE_ENTITLEMENT",
+          priority: 100,
+        }),
+        benefitRule({
+          ruleId: "create-90-quarter-minus-20",
+          actions: ["CREATE_GAME"],
+          durationMinutes: [90],
+          kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
+          percentage: 20,
+          partialPrice: { numerator: 1, denominator: 4 },
+          priority: 100,
+        }),
+      ],
+    }),
+    target: { ...baseInput().target, durationMinutes: 90, basePriceMinor: 400000 },
+  });
+  const result = evaluate(input);
+  assert.equal(result.decision.eligible, true);
+  assert.equal(result.decision.benefit.discountMinor, 20000);
+  assert.equal(result.decision.benefit.finalPriceMinor, 80000);
+  assert.deepEqual(result.decision.benefit.partialPriceCalculation, {
+    numerator: 1,
+    denominator: 4,
+    chargeBeforeDiscountMinor: 100000,
+  });
+
+  const sixtyMinutes = {
+    ...input,
+    target: { ...input.target, durationMinutes: 60 },
+  };
+  assert.equal(evaluate(sixtyMinutes).decision.benefit.finalPriceMinor, 0);
+});
+
+test("add-on product benefit requires exact product, event type and station", () => {
+  const input = baseInput({
+    action: "PURCHASE_ADD_ON_PRODUCT",
+    policy: basePolicy({
+      benefitRules: [benefitRule({
+        ruleId: "racket-rental-fixed-price",
+        category: "ADD_ON_PRODUCT",
+        actions: ["PURCHASE_ADD_ON_PRODUCT"],
+        externalEventTypeIds: ["rental"],
+        productTypeIds: ["racket-rental"],
+        durationMinutes: [60],
+        kind: "FIXED_PRICE",
+        valueMinor: 30000,
+        priority: 100,
+      })],
+    }),
+    target: {
+      ...baseInput().target,
+      category: "ADD_ON_PRODUCT",
+      externalEventTypeId: "rental",
+      productTypeId: "racket-rental",
+      eventId: "add-on-1",
+      basePriceMinor: 50000,
+    },
+  });
+  assert.equal(evaluate(input).decision.benefit.finalPriceMinor, 30000);
+  assert.ok(blockerCodes({
+    ...input,
+    target: { ...input.target, productTypeId: "balls" },
+  }).includes("EVENT_NOT_INCLUDED"));
 });
 
 test("freeze, expiry, no-show block and blackout date are separate blockers", () => {
@@ -449,7 +654,7 @@ test("invalid lifecycle timestamps and benefit priority fail closed", () => {
       noShowBlockedUntil: "also-not-a-date",
     },
     policy: basePolicy({
-      benefitRules: [{
+      benefitRules: [benefitRule({
         ruleId: "invalid-priority",
         enabled: true,
         category: "GAME",
@@ -459,7 +664,7 @@ test("invalid lifecycle timestamps and benefit priority fail closed", () => {
         valueMinor: null,
         percentage: null,
         priority: Number.NaN,
-      }],
+      })],
     }),
   });
   const codes = blockerCodes(input);
@@ -469,16 +674,18 @@ test("invalid lifecycle timestamps and benefit priority fail closed", () => {
 });
 
 test("equal-priority overlapping benefit rules fail closed", () => {
-  const shared = {
+  const shared = benefitRule({
     enabled: true,
     category: "GROUP_TRAINING" as const,
+    actions: ["BOOK_GROUP_TRAINING"],
     externalEventTypeIds: ["group-d"],
+    durationMinutes: [60],
     stationIds: ["station-home"],
     kind: "FIXED_PRICE" as const,
     valueMinor: 200000,
     percentage: null,
     priority: 50,
-  };
+  });
   const input = baseInput({
     action: "BOOK_GROUP_TRAINING",
     policy: basePolicy({
@@ -501,17 +708,19 @@ test("price-based benefit fails closed without server base price", () => {
   const input = baseInput({
     action: "BOOK_TOURNAMENT",
     policy: basePolicy({
-      benefitRules: [{
+      benefitRules: [benefitRule({
         ruleId: "tournament-discount",
         enabled: true,
         category: "TOURNAMENT",
+        actions: ["BOOK_TOURNAMENT"],
         externalEventTypeIds: ["americano"],
+        durationMinutes: [60],
         stationIds: ["station-home"],
         kind: "FIXED_DISCOUNT",
         valueMinor: 50000,
         percentage: null,
         priority: 10,
-      }],
+      })],
     }),
     target: {
       ...baseInput().target,

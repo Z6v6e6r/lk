@@ -5,6 +5,7 @@ const toStr = (value) => {
   return text || null;
 };
 const toNonNegativeInt = (value) => {
+  if (value === null || value === undefined || value === "") return null;
   const number = Number(value);
   return Number.isInteger(number) && number >= 0 ? number : null;
 };
@@ -36,7 +37,9 @@ const decision = {
   blockers,
   usageUnits: null,
   activeServices: toNonNegativeInt(usage?.activeServices),
-  maxActiveServices: toNonNegativeInt(policy?.maxActiveServices),
+  maxActiveServices: policy?.activeServicesLimit?.enabled === true
+    ? toNonNegativeInt(policy?.activeServicesLimit?.max)
+    : null,
   dailyUsed: toNonNegativeInt(usage?.dailyUsed),
   dailyLimit: toNonNegativeInt(policy?.dailyUsageLimit),
   benefit: null,
@@ -144,6 +147,7 @@ const actionCategory = {
   JOIN_GAME: "GAME",
   BOOK_GROUP_TRAINING: "GROUP_TRAINING",
   BOOK_TOURNAMENT: "TOURNAMENT",
+  PURCHASE_ADD_ON_PRODUCT: "ADD_ON_PRODUCT",
 }[action];
 
 if (!startsAt || !durationMinutes || !stationId || !actionCategory) {
@@ -226,18 +230,28 @@ const localDateParts = (date, zone) => {
 
 const todayLocal = timeZone ? localDateParts(evaluatedAt, timeZone) : null;
 const targetLocal = startsAt && timeZone ? localDateParts(startsAt, timeZone) : null;
-const bookingWindowDays = toNonNegativeInt(policy.bookingWindowDays);
-if (!todayLocal || !targetLocal || !bookingWindowDays) {
-  block("BOOKING_WINDOW_UNRESOLVED", "Не удалось определить календарное окно записи");
-} else {
-  const dayOffset = targetLocal.dayNumber - todayLocal.dayNumber;
-  if (dayOffset < 0 || dayOffset >= bookingWindowDays) {
-    block("BOOKING_WINDOW_EXCEEDED", "Событие находится за пределами окна записи по подписке", {
-      bookingWindowDays,
-      targetLocalDate: targetLocal.key,
-      currentLocalDate: todayLocal.key,
-    });
+if (!targetLocal) {
+  block("TARGET_LOCAL_DATE_UNRESOLVED", "Не удалось определить локальную дату события");
+}
+const bookingWindowEnabled = policy.bookingWindow?.enabled === true;
+const bookingWindowDays = bookingWindowEnabled
+  ? toNonNegativeInt(policy.bookingWindow?.days)
+  : null;
+if (bookingWindowEnabled) {
+  if (!todayLocal || !targetLocal || !bookingWindowDays) {
+    block("BOOKING_WINDOW_UNRESOLVED", "Не удалось определить календарное окно записи");
+  } else {
+    const dayOffset = targetLocal.dayNumber - todayLocal.dayNumber;
+    if (dayOffset < 0 || dayOffset >= bookingWindowDays) {
+      block("BOOKING_WINDOW_EXCEEDED", "Событие находится за пределами окна записи по подписке", {
+        bookingWindowDays,
+        targetLocalDate: targetLocal.key,
+        currentLocalDate: todayLocal.key,
+      });
+    }
   }
+}
+if (targetLocal) {
   if (Array.isArray(policy.usage?.blackoutDates)
     && policy.usage.blackoutDates.includes(targetLocal.key)) {
     block("SUBSCRIPTION_BLACKOUT_DATE", "На выбранную дату подписка не действует", {
@@ -252,27 +266,34 @@ if (targetLocal && toStr(usage.dailyBucketLocalDate) !== targetLocal.key) {
     actualLocalDate: toStr(usage.dailyBucketLocalDate),
   });
 }
-if (usage.activeServiceScope !== policy.activeServiceScope) {
+if (policy.activeServicesLimit?.enabled === true
+  && usage.activeServiceScope !== policy.activeServicesLimit?.scope) {
   block("ACTIVE_SERVICE_SCOPE_MISMATCH", "Снимок активных услуг рассчитан для другого состава записей", {
-    expectedScope: toStr(policy.activeServiceScope),
+    expectedScope: toStr(policy.activeServicesLimit?.scope),
     actualScope: toStr(usage.activeServiceScope),
   });
 }
 
-const usageKeys = ["activeServices", "dailyUsed", "weeklyUsed", "monthlyUsed", "futureBookings"];
+const usageKeys = ["dailyUsed", "weeklyUsed", "monthlyUsed", "futureBookings"];
+if (policy.activeServicesLimit?.enabled === true) usageKeys.push("activeServices");
 if (usageKeys.some((key) => toNonNegativeInt(usage[key]) === null)) {
   block("USAGE_SNAPSHOT_INVALID", "Серверный снимок использования подписки некорректен");
 }
 
-const maxActiveServices = toNonNegativeInt(policy.maxActiveServices);
 const activeServices = toNonNegativeInt(usage.activeServices);
-if (maxActiveServices === null || activeServices === null) {
-  block("ACTIVE_SERVICES_LIMIT_INVALID", "Лимит активных услуг не настроен");
-} else if (activeServices >= maxActiveServices) {
-  block("ACTIVE_SERVICES_LIMIT_REACHED", "Достигнут лимит активных услуг по подписке", {
-    activeServices,
-    maxActiveServices,
-  });
+const activeServicesLimitEnabled = policy.activeServicesLimit?.enabled === true;
+const maxActiveServices = activeServicesLimitEnabled
+  ? toNonNegativeInt(policy.activeServicesLimit?.max)
+  : null;
+if (activeServicesLimitEnabled) {
+  if (maxActiveServices === null || maxActiveServices < 1 || activeServices === null) {
+    block("ACTIVE_SERVICES_LIMIT_INVALID", "Лимит активных услуг не настроен");
+  } else if (activeServices >= maxActiveServices) {
+    block("ACTIVE_SERVICES_LIMIT_REACHED", "Достигнут лимит активных услуг по подписке", {
+      activeServices,
+      maxActiveServices,
+    });
+  }
 }
 
 const usageUnits = durationMinutes
@@ -365,35 +386,72 @@ if (!Number.isFinite(minHoursBetweenUses) || minHoursBetweenUses < 0) {
 }
 
 const homeStationId = toStr(instance.homeStationId);
-const crossStationMode = toStr(policy.usage?.crossStationMode);
 let surchargeMinor = 0;
-if (!homeStationId || !stationId || !["HOME_ONLY", "ALLOWED", "ALLOWED_WITH_SURCHARGE"].includes(crossStationMode)) {
+const stationRuleMatches = Array.isArray(policy.stationAccessRules)
+  ? policy.stationAccessRules
+    .filter((rule) => {
+      if (!isObj(rule) || rule.enabled !== true || !isObj(rule.selector)) return false;
+      if (rule.selector.kind === "HOME_STATION") return stationId === homeStationId;
+      if (rule.selector.kind === "ALL_STATIONS") return true;
+      return rule.selector.kind === "STATION_LIST"
+        && Array.isArray(rule.selector.stationIds)
+        && rule.selector.stationIds.includes(stationId);
+    })
+    .sort((left, right) => Number(right.priority) - Number(left.priority))
+  : [];
+if (!homeStationId || !stationId || !Array.isArray(policy.stationAccessRules)) {
   block("STATION_POLICY_INVALID", "Правило использования на станциях не настроено");
-} else if (homeStationId !== stationId) {
-  if (crossStationMode === "HOME_ONLY") {
-    block("STATION_NOT_ALLOWED", "Подписка действует только на домашней станции");
-  } else if (crossStationMode === "ALLOWED_WITH_SURCHARGE") {
-    const configuredSurcharge = toNonNegativeInt(policy.usage?.crossStationSurchargeMinor);
-    if (configuredSurcharge === null) {
-      block("STATION_SURCHARGE_INVALID", "Доплата за другую станцию не настроена");
-    } else {
-      surchargeMinor = configuredSurcharge;
-    }
+}
+if (stationRuleMatches.some((rule) => !Number.isFinite(Number(rule.priority)))) {
+  block("STATION_RULE_PRIORITY_INVALID", "Приоритет правила станции некорректен");
+}
+const stationPriority = stationRuleMatches.length > 0 ? Number(stationRuleMatches[0].priority) : null;
+const selectedStationRules = stationPriority === null
+  ? []
+  : stationRuleMatches.filter((rule) => Number(rule.priority) === stationPriority);
+if (selectedStationRules.length > 1) {
+  block("AMBIGUOUS_STATION_RULE", "Для станции найдено несколько равноприоритетных правил");
+}
+const selectedStationRule = selectedStationRules.length === 1 ? selectedStationRules[0] : null;
+if (!selectedStationRule) {
+  block("STATION_NOT_ALLOWED", "Станция не включена в правила подписки");
+} else if (!toStr(selectedStationRule.ruleId)) {
+  block("STATION_RULE_ID_INVALID", "Идентификатор правила станции некорректен");
+} else if (!isObj(selectedStationRule.surcharge)) {
+  block("STATION_SURCHARGE_INVALID", "Доплата для станции не настроена");
+} else if (selectedStationRule.surcharge.kind === "FIXED") {
+  const configuredSurcharge = toNonNegativeInt(selectedStationRule.surcharge.amountMinor);
+  if (configuredSurcharge === null) {
+    block("STATION_SURCHARGE_INVALID", "Доплата для станции не настроена");
+  } else {
+    surchargeMinor = configuredSurcharge;
   }
+} else if (selectedStationRule.surcharge.kind !== "NONE") {
+  block("STATION_SURCHARGE_INVALID", "Тип доплаты для станции не поддерживается");
 }
 
 const externalEventTypeId = toStr(target.externalEventTypeId);
+const productTypeId = toStr(target.productTypeId);
 const matchingRules = Array.isArray(policy.benefitRules)
   ? policy.benefitRules
     .filter((rule) => (
       isObj(rule)
       && rule.enabled === true
       && rule.category === category
+      && Array.isArray(rule.actions)
+      && rule.actions.includes(action)
       && Array.isArray(rule.stationIds)
       && rule.stationIds.includes(stationId)
       && externalEventTypeId
       && Array.isArray(rule.externalEventTypeIds)
       && rule.externalEventTypeIds.includes(externalEventTypeId)
+      && Array.isArray(rule.durationMinutes)
+      && rule.durationMinutes.includes(durationMinutes)
+      && (category !== "ADD_ON_PRODUCT" || (
+        productTypeId
+        && Array.isArray(rule.productTypeIds)
+        && rule.productTypeIds.includes(productTypeId)
+      ))
     ))
     .sort((left, right) => Number(right.priority) - Number(left.priority))
   : [];
@@ -422,7 +480,7 @@ if (target.basePriceMinor !== null && target.basePriceMinor !== undefined && bas
 }
 
 if (!selectedRule) {
-  if (["GROUP_TRAINING", "TOURNAMENT"].includes(category)) {
+  if (["GROUP_TRAINING", "TOURNAMENT", "ADD_ON_PRODUCT"].includes(category)) {
     block("EVENT_NOT_INCLUDED", "Категория, тип события или станция не включены в подписку");
   }
   decision.benefit = {
@@ -432,10 +490,11 @@ if (!selectedRule) {
     discountMinor: 0,
     surchargeMinor,
     finalPriceMinor: basePriceMinor === null ? (surchargeMinor || null) : basePriceMinor + surchargeMinor,
+    partialPriceCalculation: null,
     currency: "RUB",
   };
 } else if (selectedRule.kind === "DISABLED") {
-  if (["GROUP_TRAINING", "TOURNAMENT"].includes(category)) {
+  if (["GROUP_TRAINING", "TOURNAMENT", "ADD_ON_PRODUCT"].includes(category)) {
     block("EVENT_NOT_INCLUDED", "Использование подписки для этого события отключено");
   }
   decision.benefit = {
@@ -445,11 +504,13 @@ if (!selectedRule) {
     discountMinor: 0,
     surchargeMinor,
     finalPriceMinor: basePriceMinor === null ? (surchargeMinor || null) : basePriceMinor + surchargeMinor,
+    partialPriceCalculation: null,
     currency: "RUB",
   };
 } else {
   let finalBeforeSurcharge = basePriceMinor;
   let discountMinor = 0;
+  let partialPriceCalculation = null;
   if (selectedRule.kind === "FREE_ENTITLEMENT") {
     finalBeforeSurcharge = 0;
     discountMinor = basePriceMinor || 0;
@@ -481,6 +542,22 @@ if (!selectedRule) {
       discountMinor = Math.min(basePriceMinor, fixedDiscount);
       finalBeforeSurcharge = Math.max(0, basePriceMinor - discountMinor);
     }
+  } else if (selectedRule.kind === "PARTIAL_PRICE_PERCENT_DISCOUNT") {
+    const numerator = toNonNegativeInt(selectedRule.partialPrice?.numerator);
+    const denominator = toNonNegativeInt(selectedRule.partialPrice?.denominator);
+    const percentage = Number(selectedRule.percentage);
+    if (basePriceMinor === null) {
+      block("BASE_PRICE_UNRESOLVED", "Для расчёта доли сервер должен подтвердить базовую цену");
+    } else if (!numerator || !denominator || numerator > denominator) {
+      block("BENEFIT_VALUE_INVALID", "Доля стоимости льготы некорректна");
+    } else if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
+      block("BENEFIT_VALUE_INVALID", "Процент скидки некорректен");
+    } else {
+      const chargeBeforeDiscountMinor = Math.round(basePriceMinor * numerator / denominator);
+      discountMinor = Math.round(chargeBeforeDiscountMinor * percentage / 100);
+      finalBeforeSurcharge = Math.max(0, chargeBeforeDiscountMinor - discountMinor);
+      partialPriceCalculation = { numerator, denominator, chargeBeforeDiscountMinor };
+    }
   } else {
     block("BENEFIT_KIND_UNSUPPORTED", "Тип льготы не поддерживается");
   }
@@ -493,6 +570,7 @@ if (!selectedRule) {
     finalPriceMinor: finalBeforeSurcharge === null
       ? (surchargeMinor || null)
       : finalBeforeSurcharge + surchargeMinor,
+    partialPriceCalculation,
     currency: "RUB",
   };
 }

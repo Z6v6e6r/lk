@@ -47,20 +47,53 @@ The caller places the input in `msg._managedSubscriptionPolicyInput`:
     "timeZone": "Europe/Moscow",
     "createGame": { "enabled": true, "durationsMinutes": [60, 90, 120] },
     "joinGame": { "enabled": true, "minDurationMinutes": 60, "maxDurationMinutes": 120 },
-    "maxActiveServices": 3,
-    "activeServiceScope": "SUBSCRIPTION_BENEFIT_ONLY",
-    "bookingWindowDays": 4,
+    "activeServicesLimit": {
+      "enabled": true,
+      "max": 3,
+      "scope": "SUBSCRIPTION_BENEFIT_ONLY"
+    },
+    "bookingWindow": { "enabled": true, "days": 4 },
     "dailyUsageLimit": 1,
     "usageUnitsByDuration": { "60": 1, "90": 1, "120": 1 },
-    "benefitRules": [],
+    "stationAccessRules": [
+      {
+        "ruleId": "home-free",
+        "enabled": true,
+        "priority": 300,
+        "selector": { "kind": "HOME_STATION", "stationIds": [] },
+        "surcharge": { "kind": "NONE", "amountMinor": 0 }
+      },
+      {
+        "ruleId": "stations-a-b-150",
+        "enabled": true,
+        "priority": 200,
+        "selector": { "kind": "STATION_LIST", "stationIds": ["station-a", "station-b"] },
+        "surcharge": { "kind": "FIXED", "amountMinor": 15000 }
+      }
+    ],
+    "benefitRules": [
+      {
+        "ruleId": "create-90-quarter-minus-20",
+        "enabled": true,
+        "priority": 100,
+        "category": "GAME",
+        "actions": ["CREATE_GAME"],
+        "externalEventTypeIds": ["open-game"],
+        "productTypeIds": [],
+        "durationMinutes": [90],
+        "stationIds": ["station-a"],
+        "kind": "PARTIAL_PRICE_PERCENT_DISCOUNT",
+        "valueMinor": null,
+        "percentage": 20,
+        "partialPrice": { "numerator": 1, "denominator": 4 }
+      }
+    ],
     "lifecycle": { "allowBookingsAfterExpiry": false },
     "usage": {
       "weeklyUsageLimit": null,
       "monthlyUsageLimit": null,
       "maxFutureBookings": null,
       "minHoursBetweenUses": 0,
-      "crossStationMode": "ALLOWED",
-      "crossStationSurchargeMinor": 0,
       "blackoutDates": []
     }
   },
@@ -80,6 +113,7 @@ The caller places the input in `msg._managedSubscriptionPolicyInput`:
     "stationId": "canonical-station-id",
     "category": "GAME",
     "externalEventTypeId": "canonical-event-type-id",
+    "productTypeId": null,
     "eventId": null,
     "durationMinutes": 60,
     "startsAt": "2026-08-15T07:00:00.000Z",
@@ -123,15 +157,23 @@ the same policy version.
 - server-resolved target and action/category match;
 - create toggle and exact 60/90/120 allow-list;
 - join toggle and configured duration range;
-- station-local calendar booking window (`4` means today plus three days);
+- independently enabled/disabled active-services maximum and station-local
+  booking window (`4` means today plus three days);
 - blackout local dates;
 - active-service maximum, including current reservations in the supplied count;
 - exact active-service scope and target-local daily bucket match;
 - duration-based units and daily/weekly/monthly usage limits;
 - maximum future bookings and minimum interval between services;
-- home-only, allowed and cross-station surcharge modes;
-- exact category + event type + station benefit selection;
+- ordered station rows: home station, selected station lists or all stations,
+  each with its own fixed surcharge; equal-priority overlaps fail closed;
+- exact action + category + event type + duration + product type + station
+  benefit selection;
 - `FREE_ENTITLEMENT`, fixed price, percent and fixed discount in RUB minor units;
+- duration-specific benefits can make a 60-minute create action free while a
+  confirmed 4,000 RUB 90-minute service uses a `1/4` share and 20% discount,
+  charging 800 RUB;
+- add-on products use the same appendable rule model with exact server-resolved
+  product type, event type and stations;
 - ambiguity and missing server base price fail closed;
 - a matching `DISABLED` game benefit disables the discount only, while group or
   tournament use remains unavailable without an enabled matching benefit.
@@ -167,3 +209,18 @@ sanitized Golden HAR confirms the provider contract:
 - refund, unpaid expiration and delayed payment behavior.
 
 HTTP success without exact read-back remains insufficient evidence.
+
+## No-show
+
+`No-show` means that a client had a confirmed booking, did not attend it and did
+not cancel within the allowed cancellation window. It is not the same as an
+ordinary cancellation. A no-show policy may independently consume an
+entitlement, charge a fee, add a strike or temporarily block new bookings.
+
+The LK must never infer a no-show merely because time passed or a client is not
+visible in one response. `noShowBlockedUntil` can be set only from authoritative
+Viva attendance/status evidence (or an explicit reviewed administrator action)
+with exact read-back and audit history.
+
+The three-section CUP module and analytics definitions are specified in
+`docs/MANAGED_SUBSCRIPTION_ADMIN_MODULE.md`.
