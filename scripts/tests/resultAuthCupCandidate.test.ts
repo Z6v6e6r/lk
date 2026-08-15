@@ -5,7 +5,10 @@ import fs from "node:fs";
 const source = fs.readFileSync("scripts/build_result_auth_cup_candidate.mjs", "utf8");
 
 test("focused result auth candidate is pinned to a verified live preimage", () => {
-  assert.match(source, /EXPECTED_SOURCE_SHA256 = "44f28ff5/);
+  assert.match(
+    source,
+    /EXPECTED_SOURCE_SHA256 = "7ad8c39769809d458fa9c36bb76ba38d11d756d2a1e72c99c63f0f6685e7c546"/,
+  );
   assert.match(source, /EXPECTED_NODE_COUNT = 4734/);
   assert.match(source, /EXPECTED_ROUTE_COUNT = 211/);
   assert.match(source, /Function preimage mismatch/);

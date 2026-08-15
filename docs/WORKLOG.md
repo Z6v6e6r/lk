@@ -1223,3 +1223,16 @@
 - Covered positive pricing, station/window/event blockers, active-service release,
   concurrent final-slot reservation and client-injection rejection. No Viva,
   payment, MongoDB, Node-RED, production, push or deploy mutation was performed.
+
+## 2026-08-15 — Result auth candidate live-preimage refresh
+
+- Deploy preflight pulled the current live Node-RED flow read-only and confirmed
+  SHA-256 `7ad8c397…`, 4,734 nodes and 211 routes after the separate Viva
+  User-Agent rollout; the previous `44f28ff5…` guard correctly rejected it.
+- Updated only the result-auth candidate's exact whole-flow preimage and focused
+  regression assertion. Function preimages, candidate function hashes, IDs,
+  routes, wires and rollout target `state` remain unchanged.
+- Verification rebuilt candidate `d9ae9ef5…` from the fresh live workspace:
+  focused result/rating tests `59/59`, exactly three changed nodes, 4,734 nodes,
+  211 routes and zero broken wires/links. CUP deploy, Node-RED import/restart and
+  rating-data mutations remain outside this checkpoint.

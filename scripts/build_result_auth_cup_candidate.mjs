@@ -9,7 +9,7 @@ import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FN_DIR = path.join(SCRIPT_DIR, "nodered_result_nodes");
-const EXPECTED_SOURCE_SHA256 = "44f28ff517feffc871d6892f103e6b4d768c071158141e9171b80528089dd6bf";
+const EXPECTED_SOURCE_SHA256 = "7ad8c39769809d458fa9c36bb76ba38d11d756d2a1e72c99c63f0f6685e7c546";
 const EXPECTED_NODE_COUNT = 4734;
 const EXPECTED_ROUTE_COUNT = 211;
 const TAB_ID = "4b91e2a2413688db";
