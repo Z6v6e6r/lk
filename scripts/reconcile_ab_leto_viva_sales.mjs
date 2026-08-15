@@ -4,6 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MongoClient } from "mongodb";
+import { createVivaFetch } from "./lib/vivaUserAgent.mjs";
+
+const vivaFetch = createVivaFetch();
 
 const TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
@@ -234,7 +237,7 @@ const buildUrl = (pathName, params) => {
 };
 
 const fetchJson = async (url, options = {}) => {
-  const response = await fetch(url, options);
+  const response = await vivaFetch(url, options);
   const raw = await response.text();
   let payload = null;
   try {

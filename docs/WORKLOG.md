@@ -1170,3 +1170,23 @@
 - specified CUP settings, instance-management and analytics sections, including
   renewal cohorts, attendance, revenue, capacity utilization and overdraft risk;
 - kept all provider, payment, publication and live Node-RED mutations out of scope.
+
+## 2026-08-15 — Viva User-Agent isolated implementation
+
+- Defined the stable server-side contract `User-Agent: PadlHub-LK/1.0` without
+  credentials, user IDs or build-specific values.
+- Added a guarded fresh-live Node-RED candidate builder that discovers exact
+  `*.vivacrm.ru` URL evidence and changes only configured request headers while
+  preserving IDs, wires, links and inbound routes.
+- Routed direct Viva calls in maintenance/repair scripts through a hostname-
+  guarded fetch wrapper; non-Viva destinations remain unchanged.
+- Added focused unit/publication tests and an operator runbook. Browser bundles,
+  live Node-RED, integration into `main`, push and deploy remain out of scope.
+- Fresh read-only live source verification: SHA-256 `44f28ff517feffc871d6892f103e6b4d768c071158141e9171b80528089dd6bf`,
+  4,734 nodes and 211 inbound HTTP routes. The private candidate SHA-256 is
+  `7ad8c39769809d458fa9c36bb76ba38d11d756d2a1e72c99c63f0f6685e7c546`:
+  exactly 92 discovered nodes, 92 header-only changes, zero conflicting or
+  pre-existing User-Agent values. Nine request nodes also have reviewed
+  non-Viva literal destinations on shared branches. One display-name-only
+  `Viva sync` node resolves to the local onboarding API and was intentionally
+  excluded. No live import or restart was performed.

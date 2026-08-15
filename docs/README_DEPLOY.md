@@ -827,3 +827,11 @@ TOURNAMENT_BROADCAST_TEST_BOX_ID=<test-box-id>
 ```
 
 После обновления env перезапустить Node-RED штатным способом, импортировать `node-red/modular/imports/lk_tournament_broadcast.nodes.import.json` в enabled tab `LK Tournaments` и проверить status → start → status → stop → status. Status должен вызывать box-control `GET /integrations/v1/devices/{box_id}/status` и учитывать только точное совпадение `tournament_id`. Для Сколково и Нагатинской отдельно проверить каждый экран и `both`, конкурентный start, fresh/stale `starting`, повторное открытие manager/status, подтверждённую Mongo-запись и остановку всех сохранённых `activeTargets`. Терехово остаётся single-screen. Bearer и реальные UUID приставок нельзя добавлять в `.env` Vite, Tilda HTML, frontend source или flow JSON.
+
+## Viva User-Agent
+
+Server-side обращения к Viva используют стабильный
+`User-Agent: PadlHub-LK/1.0`. Node-RED candidate формируется только отдельным
+guarded-патчером из свежего live-147 workspace; обычная frontend-сборка и её
+деплой этот заголовок не активируют. Полный порядок подготовки, review и
+provider postcheck: `docs/VIVA_USER_AGENT.md`.

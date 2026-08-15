@@ -10,6 +10,9 @@ import {
   hashBackfillPlan,
   validateBackfillScope,
 } from "./lib/timeForFriendsCommunityBackfill.mjs";
+import { createVivaFetch } from "./lib/vivaUserAgent.mjs";
+
+const vivaFetch = createVivaFetch();
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -145,7 +148,7 @@ async function fetchVivaInventory(options) {
     url.searchParams.set("date", date);
     url.searchParams.set("includePast", "true");
     url.searchParams.set("past", "true");
-    const response = await fetch(url, {
+    const response = await vivaFetch(url, {
       method: "GET",
       headers: {
         Accept: "application/json",
@@ -233,7 +236,7 @@ async function fetchParticipantRosters(feedPosts, options, inventoryExerciseIds 
       options.vivaBaseUrl,
     );
     try {
-      const exerciseResponse = await fetch(exerciseUrl, {
+      const exerciseResponse = await vivaFetch(exerciseUrl, {
         method: "GET",
         headers: {
           Accept: "application/json",
@@ -252,7 +255,7 @@ async function fetchParticipantRosters(feedPosts, options, inventoryExerciseIds 
     url.searchParams.set("size", "200");
     let response;
     try {
-      response = await fetch(url, {
+      response = await vivaFetch(url, {
         method: "GET",
         headers: { Accept: "application/json" },
         signal: AbortSignal.timeout(20_000),

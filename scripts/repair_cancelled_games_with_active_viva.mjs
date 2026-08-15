@@ -2,6 +2,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { MongoClient } from "mongodb";
+import { createVivaFetch } from "./lib/vivaUserAgent.mjs";
+
+const vivaFetch = createVivaFetch();
 
 const argv = process.argv.slice(2);
 
@@ -323,7 +326,7 @@ const writeReport = (report) => {
 };
 
 const fetchJson = async (url, options = {}) => {
-  const response = await fetch(url, options);
+  const response = await vivaFetch(url, options);
   const rawText = await response.text();
   let parsed = null;
   try {

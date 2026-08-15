@@ -166,3 +166,19 @@ intermediate, and builds the combined persistence-acknowledgement candidate.
 It does not import or deploy the candidate. See
 `docs/NODERED_TOURNAMENT_PREPARE_RECOVERY_2026-07-26.md` and
 `docs/NODERED_TOURNAMENT_PERSISTENCE_ACK_HARDENING_2026-07-26.md`.
+
+## Guarded Viva User-Agent candidate
+
+The cross-tab Viva transport header is built from the same fresh verified live
+workspace without editing function bodies or topology:
+
+```bash
+npm run nodered:viva-user-agent:patch -- \
+  --workspace /absolute/external/live-workspace \
+  --output /absolute/external/new-viva-user-agent/candidate.json \
+  --report /absolute/external/new-viva-user-agent/report.json
+```
+
+The patcher adds only the fixed `User-Agent: PadlHub-LK/1.0` configured header
+to bounded, URL-evidenced Viva HTTP Request nodes. It produces a candidate only;
+see `docs/VIVA_USER_AGENT.md` for scope, review and post-deploy evidence gates.

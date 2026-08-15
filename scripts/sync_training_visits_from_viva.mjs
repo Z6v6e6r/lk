@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MongoClient } from "mongodb";
+import { createVivaFetch } from "./lib/vivaUserAgent.mjs";
+
+const vivaFetch = createVivaFetch();
 
 export const TRAINING_VISITS_COLLECTION = "lk_training_visits";
 export const GROUP_TRAINING_TYPE_IDS = [605, 847, 963, 1208];
@@ -605,7 +608,7 @@ export function buildTrainingVisitBulkPlan({ records, scannedExerciseIds, archiv
 }
 
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await vivaFetch(url, options);
   const rawText = await response.text();
   let parsed = null;
   try {

@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { createVivaFetch } from "./lib/vivaUserAgent.mjs";
+
+const vivaFetch = createVivaFetch();
 
 const argv = process.argv.slice(2);
 
@@ -123,7 +126,7 @@ if (!vivaClientId || !vivaUsername || !vivaPassword) {
 }
 
 const fetchJsonStrict = async (url, options = {}) => {
-  const response = await fetch(url, options);
+  const response = await vivaFetch(url, options);
   const raw = await response.text();
   let parsed = null;
   try {
@@ -138,7 +141,7 @@ const fetchJsonStrict = async (url, options = {}) => {
 };
 
 const fetchJsonAny = async (url, options = {}) => {
-  const response = await fetch(url, options);
+  const response = await vivaFetch(url, options);
   const raw = await response.text();
   let parsed = null;
   try {

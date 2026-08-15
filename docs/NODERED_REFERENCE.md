@@ -243,3 +243,8 @@ node scripts/patch_nodered_max_flow.mjs
 Скрипт берёт содержимое JS-файлов и вставляет их в соответствующие function-ноды в JSON-потоке.
 
 Для актуального пути релиза `147` см. `docs/NODERED_MODULAR_WORKFLOW.md`: каноничный import для LK Games теперь находится в `node-red/modular/imports/lk_games.import.json` и `lk_games.nodes.import.json`.
+
+Общий server-side `User-Agent` для Viva строится отдельным guarded-патчером
+`scripts/patch_live_viva_user_agent.mjs` только из свежего verified live-147
+workspace. Он меняет исключительно configured headers HTTP Request-узлов и не
+импортирует candidate. Контракт и проверки описаны в `docs/VIVA_USER_AGENT.md`.
