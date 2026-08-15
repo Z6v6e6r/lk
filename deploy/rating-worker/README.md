@@ -91,3 +91,6 @@ helper checksum, and clean module resolution before installing a release.
 Copy the already verified `node_modules` from the active release on the server,
 run `scripts/run_community_rating_recalc_147.mjs` first without `--apply`, and
 switch `current` only after `scripts/postcheck_community_rating_147.mjs` succeeds.
+The postcheck report now treats orphan community snapshots as non-blocking
+aggregates (`orphanSnapshots` / `orphanSnapshotCommunities`) while keeping
+strict checks for active community matrix, uniqueness, formula, and last-change.

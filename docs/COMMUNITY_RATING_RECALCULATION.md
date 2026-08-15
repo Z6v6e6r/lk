@@ -175,6 +175,14 @@ After formula/version changes, run dry-run first and preserve the report:
 npm run rating:recalculate:all -- --mongo-uri "$MONGODB_URI" --dry-run > tmp/community-rating-recalc-all-dryrun.json
 ```
 
+## Postcheck behavior for versioned snapshots
+
+`scripts/postcheck_community_rating_147.mjs` now classifies versioned
+`community_rating_snapshots` by active community list (`archived !== true`) and
+uses active snapshots for matrix/unique/formula/`lastRatingChangedAt` checks.
+Snapshots for unknown communities are tracked as `orphan` aggregates and are not
+blocking; snapshots without a normalizable `communityId` remain fail-closed.
+
 When visit activity is involved, run the visit sync dry-run/apply before the rating recalculation dry-run/apply.
 
 ## Versioning

@@ -73,3 +73,41 @@ test("rating-worker release packages the Viva User-Agent helper used by attendan
     [importResult.stderr, importResult.stdout].filter(Boolean).join("\n"),
   );
 });
+
+test("rating-worker release packages the community postcheck helper", (t) => {
+  const tempRoot = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "padlhub-rating-worker-postcheck-release-test-")),
+  );
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+
+  const releaseDir = path.join(tempRoot, "padlhub-rating-worker-test");
+  const buildResult = spawnSync(
+    process.execPath,
+    [builderPath, "--out", releaseDir],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: 5 * 1024 * 1024,
+    },
+  );
+  assert.equal(
+    buildResult.status,
+    0,
+    [buildResult.stderr, buildResult.stdout].filter(Boolean).join("\n"),
+  );
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(releaseDir, "release-manifest.json"), "utf8"));
+  const helperRelativePath = "scripts/lib/communityRatingPostcheck.mjs";
+  const helperPath = path.join(releaseDir, helperRelativePath);
+  const postcheckSource = fs.readFileSync(path.join(releaseDir, "scripts/postcheck_community_rating_147.mjs"), "utf8");
+  const helperEntries = manifest.files.filter(({ path: filePath }) => filePath === helperRelativePath);
+
+  assert.equal(helperEntries.length, 1);
+  assert.equal(fs.existsSync(helperPath), true);
+  assert.equal(helperEntries[0].sha256, sha256File(helperPath));
+  assert.equal(
+    postcheckSource.includes('from "./lib/communityRatingPostcheck.mjs"'),
+    true,
+    "postcheck script should import communityRatingPostcheck helper",
+  );
+});
