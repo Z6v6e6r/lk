@@ -3,6 +3,10 @@ const SPLIT_DIRECTION_ID = 4588;
 const SPLIT_EXERCISE_TYPE_ID = 1613;
 const DEFAULT_ONE_TIME_PRODUCT_AMOUNT = 10000;
 const SUBSCRIPTION_DAILY_LIMIT_CODE = "SUBSCRIPTION_DAILY_LIMIT_REACHED";
+const KEY_TOKEN = "vivacrm_access_token";
+const KEY_EXPIRES_AT = "vivacrm_token_expires_at";
+const KEY_REFRESH_OWNER = "vivacrm_token_refresh_owner";
+const KEY_REFRESH_LOCK_UNTIL = "vivacrm_token_refresh_lock_until";
 
 const isOk = (status) => Number(status) >= 200 && Number(status) < 300;
 
@@ -10,6 +14,38 @@ const toStr = (value) => {
   if (value === null || value === undefined) return null;
   const text = String(value).trim();
   return text ? text : null;
+};
+
+const readGlobal = (key) => {
+  try {
+    return typeof global !== "undefined" && global && typeof global.get === "function"
+      ? global.get(key)
+      : null;
+  } catch (_error) {
+    return null;
+  }
+};
+
+const writeGlobal = (key, value) => {
+  if (typeof global !== "undefined" && global && typeof global.set === "function") {
+    global.set(key, value);
+  }
+};
+
+const clearRefreshLock = (owner) => {
+  const normalizedOwner = toStr(owner);
+  if (!normalizedOwner || toStr(readGlobal(KEY_REFRESH_OWNER)) !== normalizedOwner) return;
+  writeGlobal(KEY_REFRESH_OWNER, null);
+  writeGlobal(KEY_REFRESH_LOCK_UNTIL, 0);
+};
+
+const persistServiceToken = (token, expiresInRaw) => {
+  const normalizedToken = toStr(token);
+  if (!normalizedToken) return;
+  const expiresIn = Number(expiresInRaw);
+  const ttlSeconds = Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 300;
+  writeGlobal(KEY_TOKEN, normalizedToken);
+  writeGlobal(KEY_EXPIRES_AT, Date.now() + ttlSeconds * 1000);
 };
 
 const toNumber = (value) => {
@@ -156,7 +192,11 @@ const extractConflictExerciseId = (value, ctx) => {
 
 const fail = (status, error, details) => {
   msg.statusCode = status;
-  msg.headers = { "Content-Type": "application/json; charset=utf-8" };
+  msg.headers = {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    ...(Number(status) === 503 ? { "Retry-After": "2" } : {}),
+  };
   msg.payload = { error, details: details || null };
   return [null, msg, msg];
 };
@@ -170,7 +210,7 @@ const adminRequest = (ctx, method, path, payload) => {
     "Content-Type": "application/json",
   };
   msg.payload = payload;
-  return [msg, null, msg];
+  return [msg, null, null];
 };
 
 const startSubscriptionBookingGateway = (ctx) => {
@@ -551,9 +591,16 @@ if (!ctx) {
 
 if (ctx.step === "token") {
   if (!isOk(msg.statusCode) || !msg.payload?.access_token) {
-    return fail(500, "Viva token error", msg.payload || null);
+    clearRefreshLock(ctx.tokenRefreshOwner);
+    return fail(503, "Сервисная авторизация Viva временно недоступна", {
+      code: "VIVA_SERVICE_AUTH_UNAVAILABLE",
+    });
   }
   ctx.token = msg.payload.access_token;
+  if (ctx.tokenSource !== "cache") {
+    persistServiceToken(ctx.token, msg.payload?.expires_in);
+  }
+  clearRefreshLock(ctx.tokenRefreshOwner);
 
   if (ctx.action === "create") {
     ctx.step = "create_exercise";

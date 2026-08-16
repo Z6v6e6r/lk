@@ -1,4 +1,11 @@
-const TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
+const TOKEN_URL_DEFAULT = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
+const TOKEN_CLIENT_ID_DEFAULT = "React-auth-dev";
+const KEY_TOKEN = "vivacrm_access_token";
+const KEY_EXPIRES_AT = "vivacrm_token_expires_at";
+const KEY_REFRESH_OWNER = "vivacrm_token_refresh_owner";
+const KEY_REFRESH_LOCK_UNTIL = "vivacrm_token_refresh_lock_until";
+const TOKEN_CACHE_GRACE_MS = 30 * 1000;
+const TOKEN_REFRESH_LOCK_MS = 10 * 1000;
 const DEFAULT_OPEN_GAME_DIRECTION_ID = 4588;
 const DEFAULT_OPEN_GAME_EXERCISE_TYPE_ID = 1613;
 const DEFAULT_SPLIT_SHARE_COUNT = 4;
@@ -9,6 +16,56 @@ const toStr = (value) => {
   if (value === null || value === undefined) return null;
   const text = String(value).trim();
   return text ? text : null;
+};
+
+const readGlobal = (key) => {
+  try {
+    return typeof global !== "undefined" && global && typeof global.get === "function"
+      ? global.get(key)
+      : null;
+  } catch (_error) {
+    return null;
+  }
+};
+
+const writeGlobal = (key, value) => {
+  if (typeof global !== "undefined" && global && typeof global.set === "function") {
+    global.set(key, value);
+  }
+};
+
+const readEnv = (key) => {
+  try {
+    return typeof env !== "undefined" && env && typeof env.get === "function"
+      ? toStr(env.get(key))
+      : null;
+  } catch (_error) {
+    return null;
+  }
+};
+
+const readCachedServiceToken = () => {
+  const token = toStr(readGlobal(KEY_TOKEN));
+  const expiresAt = Number(readGlobal(KEY_EXPIRES_AT) || 0);
+  if (!token || !Number.isFinite(expiresAt) || expiresAt <= Date.now() + TOKEN_CACHE_GRACE_MS) {
+    return null;
+  }
+  return token;
+};
+
+const buildTokenRequestBody = () => {
+  const username = readEnv("VIVA_SERVICE_USERNAME");
+  const password = readEnv("VIVA_SERVICE_PASSWORD");
+  if (!username || !password) return null;
+  const clientId = readEnv("VIVA_SERVICE_CLIENT_ID") || TOKEN_CLIENT_ID_DEFAULT;
+  return [
+    ["grant_type", "password"],
+    ["client_id", clientId],
+    ["username", username],
+    ["password", password],
+  ]
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&");
 };
 
 const toNumber = (value) => {
@@ -227,10 +284,38 @@ msg._splitCtx = {
   assembleDeadlineAt,
 };
 
-msg.method = "POST";
-msg.url = TOKEN_URL;
-msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
-msg.payload =
-  "grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ";
+const cachedToken = readCachedServiceToken();
+if (cachedToken) {
+  msg._splitCtx.tokenSource = "cache";
+  msg.statusCode = 200;
+  msg.payload = { access_token: cachedToken };
+  return [null, null, null, msg];
+}
 
-return [msg, null, msg];
+const now = Date.now();
+const lockUntil = Number(readGlobal(KEY_REFRESH_LOCK_UNTIL) || 0);
+if (Number.isFinite(lockUntil) && lockUntil > now) {
+  return fail(503, "Авторизация Viva временно обновляется", {
+    code: "VIVA_SERVICE_TOKEN_REFRESH_IN_PROGRESS",
+    retryAfterSeconds: 1,
+  });
+}
+
+const tokenRequestBody = buildTokenRequestBody();
+if (!tokenRequestBody) {
+  return fail(503, "Сервисная авторизация Viva не настроена", {
+    code: "VIVA_SERVICE_AUTH_NOT_CONFIGURED",
+  });
+}
+
+const refreshOwner = `split-create:${now}:${Math.random().toString(36).slice(2, 10)}`;
+writeGlobal(KEY_REFRESH_OWNER, refreshOwner);
+writeGlobal(KEY_REFRESH_LOCK_UNTIL, now + TOKEN_REFRESH_LOCK_MS);
+msg._splitCtx.tokenRefreshOwner = refreshOwner;
+msg._splitCtx.tokenSource = "refresh";
+msg.method = "POST";
+msg.url = readEnv("VIVA_SERVICE_TOKEN_URL") || TOKEN_URL_DEFAULT;
+msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
+msg.payload = tokenRequestBody;
+
+return [msg, null, null, null];

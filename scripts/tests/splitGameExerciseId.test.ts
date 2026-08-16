@@ -4,7 +4,19 @@ import fs from "node:fs";
 
 function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
   const source = fs.readFileSync(file, "utf8");
-  return new Function("msg", source)(msg);
+  const values: Record<string, unknown> = {};
+  const globalContext = {
+    get(key: string) { return values[key]; },
+    set(key: string, value: unknown) { values[key] = value; },
+  };
+  const env = {
+    get(key: string) {
+      if (key === "VIVA_SERVICE_USERNAME") return "service@example.test";
+      if (key === "VIVA_SERVICE_PASSWORD") return "test-password";
+      return undefined;
+    },
+  };
+  return new Function("msg", "global", "env", source)(msg, globalContext, env);
 }
 
 test("game create promotes splitPayment vivaExerciseId into booking and metadata", () => {

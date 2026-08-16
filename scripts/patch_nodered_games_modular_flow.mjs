@@ -58,6 +58,8 @@ replaceAllFunctions("Prepare game upsert", "fn_create.js");
 replaceAllFunctions("Prepare split game payment", "fn_split_create_prepare.js");
 replaceAllFunctions("Prepare split join payment", "fn_split_join_prepare.js");
 replaceAllFunctions("Route Viva split payment", "fn_split_router.js");
+replaceAllFunctions("Get Viva token (live)", "fn_live_ratings_get_token.js");
+replaceAllFunctions("Store Viva token (live)", "fn_live_ratings_store_token.js");
 replaceFunction("Route split leave booking cancel", "fn_split_leave_router.js");
 replaceFunction("Build split cleanup query", "fn_split_cleanup_query.js");
 replaceFunction("Prepare split cleanup tasks", "fn_split_cleanup_prepare.js");
@@ -103,6 +105,47 @@ replaceAllFunctions(
   "fn_tournament_subscription_confirm_resolve.js",
 );
 replaceSummerSubscriptionLimitInit();
+
+const splitPrepareNodes = flow.filter((item) => (
+  item?.type === "function"
+  && ["Prepare split game payment", "Prepare split join payment"].includes(item?.name)
+));
+if (splitPrepareNodes.length === 0) {
+  throw new Error("Split payment prepare nodes not found in modular source");
+}
+splitPrepareNodes.forEach((node) => {
+  if (![3, 4].includes(Number(node.outputs)) || !Array.isArray(node.wires)) {
+    throw new Error(`Unexpected split prepare wiring: ${node.name} (${node.id})`);
+  }
+  const requestIds = Array.isArray(node.wires[0]) ? node.wires[0] : [];
+  const requestNodes = requestIds
+    .map((nodeId) => flow.find((item) => item?.id === nodeId))
+    .filter((item) => (
+      item?.z === node.z
+      && item?.type === "http request"
+      && item?.name === "Viva split payment request"
+    ));
+  if (requestNodes.length !== 1) {
+    throw new Error(`Unable to resolve split request node for ${node.name} (${node.id})`);
+  }
+  const routerNodes = (Array.isArray(requestNodes[0]?.wires?.[0]) ? requestNodes[0].wires[0] : [])
+    .map((nodeId) => flow.find((item) => item?.id === nodeId))
+    .filter((item) => (
+      item?.z === node.z
+      && item?.type === "function"
+      && item?.name === "Route Viva split payment"
+    ));
+  if (routerNodes.length !== 1) {
+    throw new Error(`Unable to resolve split router for ${node.name} (${node.id})`);
+  }
+  node.outputs = 4;
+  node.wires = [
+    Array.isArray(node.wires[0]) ? node.wires[0] : [],
+    Array.isArray(node.wires[1]) ? node.wires[1] : [],
+    Array.isArray(node.wires[2]) ? node.wires[2] : [],
+    [routerNodes[0].id],
+  ];
+});
 
 const activeTournamentTab = flow.find((item) => (
   item?.type === "tab"
@@ -152,6 +195,10 @@ const activeHistoryMongo = findActiveTournamentNode(
   "mongodb4",
   "Find tournament history",
 );
+const activeHistoryPublicationFeed = findActiveTournamentNode(
+  "mongodb4",
+  "Find active tournament publications",
+);
 const activeHistoryDebugNodes = flow.filter((item) => (
   item?.z === activeTournamentTab.id
   && item?.type === "debug"
@@ -177,6 +224,8 @@ activeHistoryDebugNodes.forEach((node) => {
 });
 activeHistoryMongo.limit = "1";
 activeHistoryMongo.maxTimeMS = "5000";
+activeHistoryPublicationFeed.limit = "50";
+activeHistoryPublicationFeed.maxTimeMS = "5000";
 
 const upsertNode = (node) => {
   const index = flow.findIndex((item) => item?.id === node.id);
@@ -186,6 +235,48 @@ const upsertNode = (node) => {
     flow.push(node);
   }
 };
+
+const historyStorageCatchId = "tournament_history_storage_catch_20260816";
+const historyStorageErrorId = "tournament_history_storage_error_20260816";
+const historyStorageResponseId = "tournament_history_storage_response_20260816";
+upsertNode({
+  id: historyStorageCatchId,
+  type: "catch",
+  z: activeTournamentTab.id,
+  name: "Catch tournament history storage errors",
+  scope: [activeHistoryMongo.id, activeHistoryPublicationFeed.id],
+  uncaught: false,
+  x: 1110,
+  y: 1620,
+  wires: [[historyStorageErrorId]],
+});
+upsertNode({
+  id: historyStorageErrorId,
+  type: "function",
+  z: activeTournamentTab.id,
+  name: "Build tournament history storage error",
+  func: readFn("fn_tournament_history_storage_error.js"),
+  outputs: 1,
+  timeout: "",
+  noerr: 0,
+  initialize: "",
+  finalize: "",
+  libs: [],
+  x: 1430,
+  y: 1620,
+  wires: [[historyStorageResponseId]],
+});
+upsertNode({
+  id: historyStorageResponseId,
+  type: "http response",
+  z: activeTournamentTab.id,
+  name: "Tournament history storage error response",
+  statusCode: "",
+  headers: {},
+  x: 1770,
+  y: 1620,
+  wires: [],
+});
 
 patchTournamentResultsPersistence(flow);
 

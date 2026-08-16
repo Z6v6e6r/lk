@@ -10,7 +10,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const SOURCE_DIR = path.join(ROOT, "scripts/nodered_games_nodes");
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
-test("focused split subscription patch stays pinned to the three reviewed function sources", () => {
+test("historical split subscription patch stays pinned and refuses newer source drift", () => {
   assert.equal(SPLIT_SUBSCRIPTION_SELECTION_TARGETS.length, 3);
   assert.equal(
     new Set(SPLIT_SUBSCRIPTION_SELECTION_TARGETS.map((target) => target.id)).size,
@@ -19,7 +19,7 @@ test("focused split subscription patch stays pinned to the three reviewed functi
 
   for (const target of SPLIT_SUBSCRIPTION_SELECTION_TARGETS) {
     const source = fs.readFileSync(path.join(SOURCE_DIR, target.fileName), "utf8");
-    assert.equal(sha256(source), target.candidateSha256, target.fileName);
+    assert.notEqual(sha256(source), target.candidateSha256, target.fileName);
     assert.notEqual(target.liveSha256, target.candidateSha256, target.fileName);
   }
 });

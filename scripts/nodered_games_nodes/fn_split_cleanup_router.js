@@ -3,10 +3,11 @@ const ADMIN_API = "https://api.vivacrm.ru/api/v1";
 const END_USER_API = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G";
 const KEY_TOKEN = "vivacrm_access_token";
 const KEY_EXPIRES_AT = "vivacrm_token_expires_at";
-const KEY_TOKEN_REQUEST_BODY = "vivacrm_token_request_body";
+const KEY_REFRESH_OWNER = "vivacrm_token_refresh_owner";
+const KEY_REFRESH_LOCK_UNTIL = "vivacrm_token_refresh_lock_until";
 const TOKEN_CACHE_GRACE_MS = 30 * 1000;
-const DEFAULT_TOKEN_REQUEST_BODY =
-  "grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ";
+const TOKEN_REFRESH_LOCK_MS = 10 * 1000;
+const TOKEN_CLIENT_ID_DEFAULT = "React-auth-dev";
 
 const isOk = (status) => Number(status) >= 200 && Number(status) < 300;
 
@@ -14,6 +15,32 @@ const toStr = (value) => {
   if (value === null || value === undefined) return null;
   const text = String(value).trim();
   return text ? text : null;
+};
+
+const readGlobal = (key) => {
+  try {
+    return typeof global !== "undefined" && global && typeof global.get === "function"
+      ? global.get(key)
+      : null;
+  } catch (_error) {
+    return null;
+  }
+};
+
+const writeGlobal = (key, value) => {
+  if (typeof global !== "undefined" && global && typeof global.set === "function") {
+    global.set(key, value);
+  }
+};
+
+const readEnv = (key) => {
+  try {
+    return typeof env !== "undefined" && env && typeof env.get === "function"
+      ? toStr(env.get(key))
+      : null;
+  } catch (_error) {
+    return null;
+  }
 };
 
 const toNumber = (value) => {
@@ -369,24 +396,30 @@ const appendTrace = (ctx, entry) => {
 };
 
 const readCachedAdminToken = () => {
-  const token = toStr(global.get(KEY_TOKEN));
-  const expiresAtRaw = Number(global.get(KEY_EXPIRES_AT) || 0);
+  const token = toStr(readGlobal(KEY_TOKEN));
+  const expiresAtRaw = Number(readGlobal(KEY_EXPIRES_AT) || 0);
   const expiresAt = Number.isFinite(expiresAtRaw) ? expiresAtRaw : 0;
   if (!token || expiresAt <= Date.now() + TOKEN_CACHE_GRACE_MS) return null;
   return token;
 };
 
 const resolveTokenRequestConfig = () => {
-  const payload = toStr(global.get(KEY_TOKEN_REQUEST_BODY));
-  if (payload) {
-    return {
-      payload,
-      source: KEY_TOKEN_REQUEST_BODY,
-    };
-  }
+  const username = readEnv("VIVA_SERVICE_USERNAME");
+  const password = readEnv("VIVA_SERVICE_PASSWORD");
+  if (!username || !password) return null;
+  const clientId = readEnv("VIVA_SERVICE_CLIENT_ID") || TOKEN_CLIENT_ID_DEFAULT;
+  const tokenUrl = readEnv("VIVA_SERVICE_TOKEN_URL") || TOKEN_URL;
   return {
-    payload: DEFAULT_TOKEN_REQUEST_BODY,
-    source: "default_inline",
+    url: tokenUrl,
+    payload: [
+      ["grant_type", "password"],
+      ["client_id", clientId],
+      ["username", username],
+      ["password", password],
+    ]
+      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+      .join("&"),
+    source: "environment",
   };
 };
 
@@ -395,8 +428,24 @@ const persistAdminToken = (token, expiresInRaw) => {
   if (!normalizedToken) return;
   const expiresIn = Number(expiresInRaw);
   const ttlSec = Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 300;
-  global.set(KEY_TOKEN, normalizedToken);
-  global.set(KEY_EXPIRES_AT, Date.now() + ttlSec * 1000);
+  writeGlobal(KEY_TOKEN, normalizedToken);
+  writeGlobal(KEY_EXPIRES_AT, Date.now() + ttlSec * 1000);
+};
+
+const clearRefreshLock = (owner) => {
+  const normalizedOwner = toStr(owner);
+  if (!normalizedOwner || toStr(readGlobal(KEY_REFRESH_OWNER)) !== normalizedOwner) return;
+  writeGlobal(KEY_REFRESH_OWNER, null);
+  writeGlobal(KEY_REFRESH_LOCK_UNTIL, 0);
+};
+
+const blockServiceAuth = (ctx, reason, step) => {
+  ctx.token = null;
+  ctx.forceVivaErrors = true;
+  ctx.blockLocalMutation = true;
+  ctx.blockReason = ctx.blockReason || reason;
+  appendTrace(ctx, { step });
+  return finalizeTask(ctx);
 };
 
 const adminRequest = (ctx, method, path, payload) => {
@@ -446,10 +495,31 @@ const requestToken = (ctx) => {
     return finalizeTask(ctx);
   }
 
+  const now = Date.now();
+  const refreshLockUntil = Number(readGlobal(KEY_REFRESH_LOCK_UNTIL) || 0);
+  if (Number.isFinite(refreshLockUntil) && refreshLockUntil > now) {
+    return blockServiceAuth(
+      ctx,
+      "viva_admin_token_refresh_in_progress",
+      "blocked_token_refresh_in_progress",
+    );
+  }
+
   const tokenRequest = resolveTokenRequestConfig();
+  if (!tokenRequest) {
+    return blockServiceAuth(
+      ctx,
+      "viva_admin_token_not_configured",
+      "blocked_token_not_configured",
+    );
+  }
+  const refreshOwner = `split-cleanup:${now}:${Math.random().toString(36).slice(2, 10)}`;
+  writeGlobal(KEY_REFRESH_OWNER, refreshOwner);
+  writeGlobal(KEY_REFRESH_LOCK_UNTIL, now + TOKEN_REFRESH_LOCK_MS);
+  ctx.tokenRefreshOwner = refreshOwner;
   msg._splitCleanupCtx = ctx;
   msg.method = "POST";
-  msg.url = TOKEN_URL;
+  msg.url = tokenRequest.url;
   msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
   msg.payload = tokenRequest.payload;
   appendTrace(ctx, {
@@ -1549,10 +1619,11 @@ const ctx = ctxFromMsg;
 
 if (ctx.step === "token_request") {
   if (!isOk(msg.statusCode) || !msg.payload?.access_token) {
+    clearRefreshLock(ctx.tokenRefreshOwner);
     appendTrace(ctx, {
       step: "token_failed",
       statusCode: msg.statusCode,
-      response: clone(msg.payload || null),
+      code: "VIVA_SERVICE_AUTH_UNAVAILABLE",
     });
     ctx.token = null;
     ctx.forceVivaErrors = true;
@@ -1563,6 +1634,7 @@ if (ctx.step === "token_request") {
 
   ctx.token = msg.payload.access_token;
   persistAdminToken(ctx.token, msg.payload?.expires_in);
+  clearRefreshLock(ctx.tokenRefreshOwner);
   appendTrace(ctx, {
     step: "token_success",
   });
