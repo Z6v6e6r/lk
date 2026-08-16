@@ -119,6 +119,11 @@ import {
   shouldSkipRecentPaidGameBackgroundSync,
   shouldSkipRecentSplitGameRosterSync,
 } from "./recentPaidGameStability";
+import {
+  checkGameBookingLeadTime,
+  GAME_BOOKING_MIN_LEAD_MINUTES,
+  hasRevalidatedGameSlot,
+} from "./bookingLeadTime";
 import { isSyntheticCabinetBookingGame } from "../cabinet/syntheticBookingGame";
 import {
   findExplicitSplitSubscriptionById,
@@ -4846,6 +4851,7 @@ export default function GamesPage({
   const [loadingStudioGameModes, setLoadingStudioGameModes] = useState(false);
   const [duration, setDuration] = useState(60);
   const [dateIndex, setDateIndex] = useState(TODAY_DATE_INDEX);
+  const [bookingLeadTimeNowTs, setBookingLeadTimeNowTs] = useState(() => Date.now());
   const [time, setTime] = useState<string | null>(null);
   const [courtId, setCourtId] = useState<string | null>(null);
   const [slotPrice, setSlotPrice] = useState<number | null>(null);
@@ -5148,6 +5154,15 @@ export default function GamesPage({
       return d;
     });
   }, []);
+  const selectedDate = dates[dateIndex];
+
+  useEffect(() => {
+    if (step !== "time") return;
+    const refreshNow = () => setBookingLeadTimeNowTs(Date.now());
+    refreshNow();
+    const timer = window.setInterval(refreshNow, 15_000);
+    return () => window.clearInterval(timer);
+  }, [step]);
 
   useEffect(() => {
     if (!publicCreateEntry || publicCreateEntryHandledRef.current) return;
@@ -5535,10 +5550,21 @@ export default function GamesPage({
 
   const durationScopedSlots = useMemo<GameTimeSlot[]>(() => {
     if (timeslots.length === 0) return [];
+    const selectedDateKey = selectedDate ? formatDateLocalIso(selectedDate) : null;
     return timeslots.filter(
-      (slot) => slot.durationMinutes == null || slot.durationMinutes >= duration,
+      (slot) => (
+        (slot.durationMinutes == null || slot.durationMinutes >= duration)
+        && (
+          !selectedDateKey
+          || checkGameBookingLeadTime(
+            slot.date ?? selectedDateKey,
+            slot.time,
+            bookingLeadTimeNowTs,
+          ).ok
+        )
+      ),
     );
-  }, [timeslots, duration]);
+  }, [timeslots, duration, selectedDate, bookingLeadTimeNowTs]);
 
   const availableCourts = useMemo<GameCourtOption[]>(() => {
     if (durationScopedSlots.length === 0) return [];
@@ -6241,7 +6267,6 @@ export default function GamesPage({
 
   const selectedCourt = availableCourts.find((c) => c.id === courtId);
   const selectedCourtName = selectedCourt?.name ?? null;
-  const selectedDate = dates[dateIndex];
   const selectedSlot = useMemo<GameTimeSlot | null>(() => {
     if (!courtId || !time) return null;
     const candidates = durationScopedSlots.filter(
@@ -6265,6 +6290,64 @@ export default function GamesPage({
         : activeModeSubServiceIds,
     [selectedSlotSubServiceIds, activeModeSubServiceIds],
   );
+  const revalidateSelectedSlotForPayment = useCallback(async (): Promise<boolean> => {
+    if (!studioId || !selectedDate || !courtId || !time) return false;
+    const selectedDateKey = formatDateLocalIso(selectedDate);
+    const leadTimeError = `Бронирование доступно минимум за ${GAME_BOOKING_MIN_LEAD_MINUTES / 60} часа до начала. Выберите другое время.`;
+    if (!checkGameBookingLeadTime(selectedDateKey, time).ok) {
+      setPayError(leadTimeError);
+      return false;
+    }
+
+    try {
+      const result = await apiFetchMasterServiceTimeslots(selectedDateKey, {
+        studioId,
+        masterServiceId: studioMasterServiceId,
+        preferredSubServiceId: activeModePreferredSubServiceId,
+        preferredSubServiceIds: activeModeSubServiceIds,
+        preferredRoomIds: activeModePreferredRoomIds,
+      });
+      if (result.error) {
+        setPayError("Не удалось перепроверить доступность слота. Обновите расписание и попробуйте снова.");
+        return false;
+      }
+
+      const preferredRoomSet = new Set(activeModePreferredRoomIds);
+      const refreshedSlots = (Array.isArray(result.data) ? result.data : []).filter((slot) => {
+        if (preferredRoomSet.size > 0) return preferredRoomSet.has(slot.roomId);
+        return matchesCourtNameByGameFormat(slot.roomName, resolvedGameFormat);
+      });
+      setTimeslots(refreshedSlots);
+
+      if (!checkGameBookingLeadTime(selectedDateKey, time).ok) {
+        setPayError(leadTimeError);
+        return false;
+      }
+      if (!hasRevalidatedGameSlot(refreshedSlots, {
+        roomId: courtId,
+        time,
+        durationMinutes: duration,
+      })) {
+        setPayError("Выбранный слот уже недоступен. Выберите другое время.");
+        return false;
+      }
+      return true;
+    } catch {
+      setPayError("Не удалось перепроверить доступность слота. Обновите расписание и попробуйте снова.");
+      return false;
+    }
+  }, [
+    studioId,
+    studioMasterServiceId,
+    selectedDate,
+    courtId,
+    time,
+    duration,
+    activeModePreferredSubServiceId,
+    activeModeSubServiceIds,
+    activeModePreferredRoomIds,
+    resolvedGameFormat,
+  ]);
   const promoSelectionKey = [
     studioId ?? "",
     selectedDate ? formatDateLocalIso(selectedDate) : "",
@@ -10497,6 +10580,11 @@ export default function GamesPage({
     const resolvedTotalAmount = paymentAmount != null && Number.isFinite(paymentAmount)
       ? Math.max(0, Math.round(paymentAmount))
       : null;
+    if (!await revalidateSelectedSlotForPayment()) {
+      setLoadingPay(false);
+      return;
+    }
+
     const paymentResult = await apiCreatePadelSplitGamePayment({
       date: fromDate,
       fromTime,
@@ -10803,6 +10891,7 @@ export default function GamesPage({
     publicCreatePreciseRatingMetadata,
     buildCommunityAutopublishMetadata,
     validateGamePublicationFields,
+    revalidateSelectedSlotForPayment,
     resolveCurrentClientProfile,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
@@ -10828,6 +10917,11 @@ export default function GamesPage({
     const profile = await resolveCurrentClientProfile();
     const clientId = profile.clientId;
     const clientPhone = profile.clientPhone;
+
+    if (!await revalidateSelectedSlotForPayment()) {
+      setLoadingPay(false);
+      return;
+    }
 
     const paymentResult = await apiPayMasterService({
       date: fromDate,
@@ -11151,6 +11245,7 @@ export default function GamesPage({
     publicCreatePreciseRatingMetadata,
     buildCommunityAutopublishMetadata,
     validateGamePublicationFields,
+    revalidateSelectedSlotForPayment,
     resolveCurrentClientProfile,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
