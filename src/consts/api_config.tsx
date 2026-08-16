@@ -35,6 +35,8 @@ export const SERV2 = resolveReleaseChannelUrl(
 export const SERV2_FALLBACK =
   (import.meta.env.VITE_SERV2_FALLBACK as string | undefined)?.trim()
   || (IS_DEV_RELEASE_CHANNEL ? PROD_SERV2_URL : DEV_SERV2_URL);
+export const LEGACY_ROSTER_BRIDGE_ENABLED =
+  String(import.meta.env.VITE_LEGACY_ROSTER_BRIDGE_ENABLED ?? "false").trim().toLowerCase() === "true";
 
 export const SUCCESS_URL = resolveReleaseChannelUrl(
   import.meta.env.VITE_SUCCESS_URL as string | undefined,
@@ -122,6 +124,7 @@ export const RUNTIME_CONFIG_AUDIT = Object.freeze({
   tenantKey: TENANT_KEY,
   serv2: SERV2,
   serv2Fallback: SERV2_FALLBACK,
+  legacyRosterBridgeEnabled: LEGACY_ROSTER_BRIDGE_ENABLED,
   supportApiBase: SUPPORT_API_BASE,
   gamesBundleUrl: GAMES_BUNDLE_URL,
   tournamentsBundleUrl: TOURNAMENTS_BUNDLE_URL,

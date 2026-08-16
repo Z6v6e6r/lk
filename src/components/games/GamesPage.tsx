@@ -18,6 +18,7 @@ import type {
 } from "../../utils/apiClient";
 import {
   apiCheckMasterServicePromoCode,
+  apiCommandPadelGameRoster,
   apiFetchMasterServicePromoDiscounts,
   apiFetchBookings,
   apiFetchSubscriptionDailyLimitBookings,
@@ -59,6 +60,7 @@ import {
   isPadelGameRecordRelevantToIdentity,
   resolveExerciseCancellationState,
 } from "../../utils/apiClient";
+import { LEGACY_ROSTER_BRIDGE_ENABLED } from "../../consts/api_config";
 import {
   apiAddCommunityMember,
   apiArchiveCommunityFeedPost,
@@ -14187,6 +14189,42 @@ export default function GamesPage({
       return;
     }
 
+    if (LEGACY_ROSTER_BRIDGE_ENABLED) {
+      setUpdatingGameRoster(true);
+      setGameRosterError(null);
+      try {
+        const commandResult = await apiCommandPadelGameRoster(
+          gameRecordId,
+          detailsHasFreeSlots ? "JOIN_GAME" : "JOIN_WAITLIST",
+        );
+        if (commandResult.error) {
+          setGameRosterError(
+            commandResult.error.message
+            || (detailsHasFreeSlots
+              ? "Не удалось присоединиться к игре"
+              : "Не удалось добавиться в лист ожидания"),
+          );
+          return;
+        }
+        const refreshed = await apiFetchPadelGameRecord(gameRecordId);
+        if (refreshed.data) {
+          setParticipants(refreshed.data.participants ?? []);
+          setWaitlistPlayers(refreshed.data.waitlist ?? []);
+          upsertGameRecordInStores(refreshed.data, { communityMode: "if_exists" });
+          setActiveGameRecordStore(refreshed.data);
+        }
+      } catch {
+        setGameRosterError(
+          detailsHasFreeSlots
+            ? "Не удалось присоединиться к игре"
+            : "Не удалось добавиться в лист ожидания",
+        );
+      } finally {
+        setUpdatingGameRoster(false);
+      }
+      return;
+    }
+
     const joinPlayerBase: PadelGamePlayer = {
       id: normalizedProfileId,
       name: profileName || "Игрок",
@@ -14235,6 +14273,7 @@ export default function GamesPage({
     isCurrentUserPlayer,
     buildDetailsRosterMetadata,
     patchGameRoster,
+    upsertGameRecordInStores,
   ]);
 
   const handleOpenCabinetFromDetails = useCallback(() => {

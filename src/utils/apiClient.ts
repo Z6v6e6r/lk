@@ -8,6 +8,7 @@ import {
   FAIL_URL,
   GAMES_MASTER_SERVICE_ID,
   IS_DEV_RELEASE_CHANNEL,
+  LEGACY_ROSTER_BRIDGE_ENABLED,
 } from "../consts/api_config";
 import { readAuthToken } from "./authTokenStorage";
 import { trackClientError } from "./analytics";
@@ -5445,7 +5446,7 @@ export async function apiRefreshTournamentParticipants(
     {
       method: "POST",
       auth: true,
-      retries: 0,
+      retries: 1,
       signal: options.signal,
       body: JSON.stringify({ exerciseId: normalizedExerciseId }),
     },
@@ -7746,6 +7747,93 @@ async function hydratePadelGameRecordAfterWrite(
     error: null,
     status: result.status ?? refreshed.status,
   };
+}
+
+export type PadelGameRosterCommand = "JOIN_GAME" | "JOIN_WAITLIST";
+
+export interface PadelGameRosterCommandResult {
+  commandId: string;
+  replayed: boolean;
+  relation: "SEAT_RESERVED" | "PARTICIPANT" | "WAITLISTED";
+  legacyGameId: string;
+  canonicalGameId: string;
+  aggregateRevision: number;
+}
+
+function generateRosterCommandIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `legacy-roster:${crypto.randomUUID()}`;
+  }
+  return `legacy-roster:${Date.now()}:${Math.random().toString(36).slice(2, 12)}`;
+}
+
+export async function apiCommandPadelGameRoster(
+  gameIdRaw: string,
+  command: PadelGameRosterCommand,
+  options: { invitationId?: string | null; idempotencyKey?: string } = {},
+): Promise<ApiResult<PadelGameRosterCommandResult>> {
+  const gameId = gameIdRaw.trim();
+  if (!gameId) {
+    return {
+      data: null,
+      error: { status: 400, message: "Не указан идентификатор игры" },
+      status: 400,
+    };
+  }
+  if (!LEGACY_ROSTER_BRIDGE_ENABLED) {
+    return {
+      data: null,
+      error: { status: 503, message: "Каноническая запись в игру пока не включена" },
+      status: 503,
+    };
+  }
+  const response = await request<unknown>(
+    `/lk/games/${encodeURIComponent(gameId)}/roster-command`,
+    {
+      method: "POST",
+      auth: true,
+      baseUrl: getServ2Origin() || "",
+      retries: 0,
+      headers: {
+        "Idempotency-Key": options.idempotencyKey?.trim() || generateRosterCommandIdempotencyKey(),
+      },
+      body: JSON.stringify({
+        command,
+        ...(options.invitationId?.trim() ? { invitationId: options.invitationId.trim() } : {}),
+      }),
+    },
+  );
+  if (response.error) {
+    return { data: null, error: response.error, status: response.status };
+  }
+  const payload = isRecord(response.data) ? response.data : null;
+  const projection = payload && isRecord(payload.projection) ? payload.projection : null;
+  const relation = projection ? pickString(projection, ["relation"]) : null;
+  const aggregateRevision = projection ? Number(projection.aggregateRevision) : Number.NaN;
+  const data = payload && projection && relation && ["SEAT_RESERVED", "PARTICIPANT", "WAITLISTED"].includes(relation)
+    ? {
+        commandId: pickString(payload, ["commandId"]) || "",
+        replayed: payload.replayed === true,
+        relation: relation as PadelGameRosterCommandResult["relation"],
+        legacyGameId: pickString(projection, ["legacyGameId"]) || "",
+        canonicalGameId: pickString(projection, ["canonicalGameId"]) || "",
+        aggregateRevision,
+      }
+    : null;
+  if (
+    !data?.commandId
+    || data.legacyGameId !== gameId
+    || !data.canonicalGameId
+    || !Number.isSafeInteger(data.aggregateRevision)
+    || data.aggregateRevision < 1
+  ) {
+    return {
+      data: null,
+      error: { status: response.status, message: "Не удалось разобрать результат записи в игру" },
+      status: response.status,
+    };
+  }
+  return { data, error: null, status: response.status };
 }
 
 export async function apiCreatePadelGameRecord(

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   apiCreatePadelSplitParticipantPayment,
+  apiCommandPadelGameRoster,
   apiFetchSubscriptionDailyLimitBookings,
   apiLeavePadelGameAsCurrentUser,
   apiFetchPadelGameRecord,
@@ -14,6 +15,7 @@ import {
   type Subscription,
   type UserProfileType,
 } from "../../utils/apiClient";
+import { CABINET_URL, LEGACY_ROSTER_BRIDGE_ENABLED } from "../../consts/api_config";
 import {
   excludePlayersAlreadyInRoster,
   playersShareRosterIdentity,
@@ -26,7 +28,6 @@ import {
   getLetterGrade,
   parseNumericLevel,
 } from "../../utils/customFields";
-import { CABINET_URL } from "../../consts/api_config";
 import { PAYMENT_REF_QUERY_KEY } from "../../utils/paymentSync";
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import { pushCabinetFlashNotice } from "../../utils/cabinetFlashNotice";
@@ -1159,6 +1160,34 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
 
       const existingJoinDecision = resolveMyDecision(actualGame, profile);
       if (existingJoinDecision === "JOINED" || existingJoinDecision === "WAITLIST") {
+        setSubmitting(null);
+        window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
+        return;
+      }
+
+      if (LEGACY_ROSTER_BRIDGE_ENABLED && !isSplitPaymentGame(actualGame)) {
+        const currentParticipants = dedupePlayers(actualGame.participants ?? []);
+        const maxPlayers = resolveMaxPlayers(actualGame);
+        const waitlistEnabled = resolveWaitlistEnabled(actualGame);
+        if (currentParticipants.length >= maxPlayers && !waitlistEnabled) {
+          setSubmitting(null);
+          setDecisionError("В игре нет свободных мест");
+          return;
+        }
+        const commandResult = await apiCommandPadelGameRoster(
+          actualGame.id,
+          currentParticipants.length < maxPlayers ? "JOIN_GAME" : "JOIN_WAITLIST",
+        );
+        if (commandResult.error) {
+          setSubmitting(null);
+          setDecisionError(commandResult.error.message || "Не удалось обновить участие");
+          return;
+        }
+        const reloaded = await apiFetchPadelGameRecord(actualGame.id);
+        if (reloaded.data) {
+          setGame(reloaded.data);
+          notifyGameRecordUpdated(reloaded.data, "game_join_canonical_command");
+        }
         setSubmitting(null);
         window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
         return;
