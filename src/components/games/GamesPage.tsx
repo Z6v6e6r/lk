@@ -19,6 +19,7 @@ import type {
 import {
   apiCheckMasterServicePromoCode,
   apiCommandPadelGameRoster,
+  apiConfirmPadelGameRosterPayment,
   apiFetchMasterServicePromoDiscounts,
   apiFetchBookings,
   apiFetchSubscriptionDailyLimitBookings,
@@ -80,6 +81,11 @@ import {
   savePendingPaidGameDraft,
   type PendingPaidGameDraft,
 } from "../../utils/paymentSync";
+import {
+  getPendingSplitRosterPaymentConfirmation,
+  removePendingSplitRosterPaymentConfirmation,
+  savePendingSplitRosterPaymentConfirmation,
+} from "../../utils/splitRosterPaymentConfirmation";
 import { recoverGameExerciseId } from "../../utils/gameExerciseIdRecovery";
 import {
   CUSTOM_FIELD_IDS,
@@ -3773,6 +3779,34 @@ function normalizeComparableId(value: unknown): string | null {
   return normalized ? normalized.toLowerCase() : null;
 }
 
+function resolveCanonicalReservationIdForPlayer(
+  game: PadelGameRecord,
+  playerId: string | null,
+  phoneNorm: string | null,
+): string | null {
+  if (!isRecordObject(game.metadata) || !isRecordObject(game.metadata.canonicalRosterProjection)) {
+    return null;
+  }
+  const reservations = game.metadata.canonicalRosterProjection.reservations;
+  if (!isRecordObject(reservations)) return null;
+  const player = [...(game.participants ?? []), ...(game.waitlist ?? [])].find((item) => {
+    const itemId = normalizeComparableId(item.id);
+    const itemPhone = normalizePhoneForGame(item.phone);
+    return Boolean(
+      (playerId && itemId && playerId === itemId)
+      || (phoneNorm && itemPhone && phoneNorm === itemPhone),
+    );
+  });
+  if (!player || !isRecordObject(player)) return null;
+  const canonicalUserId = typeof player.canonicalUserId === "string"
+    ? player.canonicalUserId.trim()
+    : (typeof player.userId === "string" ? player.userId.trim() : "");
+  const reservationId = canonicalUserId && typeof reservations[canonicalUserId] === "string"
+    ? reservations[canonicalUserId].trim()
+    : "";
+  return reservationId || null;
+}
+
 function normalizeComparableName(value: unknown): string | null {
   const normalized = normalizeBookingId(value);
   if (!normalized) return null;
@@ -6065,6 +6099,9 @@ export default function GamesPage({
     if (!paymentRef) return;
     const bookingIdsFromUrl = extractBookingIdsFromUrl(url);
     const parsedDraft: PendingPaidGameDraft | null = getPendingPaidGameDraft(paymentRef);
+    const pendingSplitConfirmation = LEGACY_ROSTER_BRIDGE_ENABLED
+      ? getPendingSplitRosterPaymentConfirmation(paymentRef)
+      : null;
 
     let alive = true;
     setRestoringPaidGame(true);
@@ -6204,6 +6241,47 @@ export default function GamesPage({
     };
 
     (async () => {
+      if (pendingSplitConfirmation) {
+        const confirmation = await apiConfirmPadelGameRosterPayment(
+          pendingSplitConfirmation.gameId,
+          pendingSplitConfirmation,
+        );
+        if (!alive) return;
+        if (confirmation.error || !confirmation.data) {
+          setGameRecordError(
+            confirmation.error?.message || "Не удалось подтвердить оплату участия по данным Viva",
+          );
+          setRestoringPaidGame(false);
+          return;
+        }
+
+        removePendingSplitRosterPaymentConfirmation(paymentRef);
+        const refreshed = await apiFetchPadelGameRecord(pendingSplitConfirmation.gameId);
+        if (!alive) return;
+        if (refreshed.error || !refreshed.data) {
+          setGameRecordError(
+            refreshed.error?.message || "Оплата подтверждена, но не удалось обновить состав игры",
+          );
+          cleanupUrl();
+          setRestoringPaidGame(false);
+          return;
+        }
+
+        const record = refreshed.data;
+        setGameRecordId(record.id);
+        setGameRecordStatus(record.status ?? null);
+        setInviteLink(normalizeInviteUrl(record.inviteUrl ?? buildInviteFallbackUrl(record.id)));
+        setGameSnapshot(buildMatchSnapshotFromRecord(record));
+        setActiveGameRecordStore(record);
+        setParticipants(Array.isArray(record.participants) ? record.participants : []);
+        setWaitlistPlayers(Array.isArray(record.waitlist) ? record.waitlist : []);
+        upsertGameRecordInStores(record, { communityMode: "if_exists" });
+        setStep("details");
+        cleanupUrl();
+        setRestoringPaidGame(false);
+        return;
+      }
+
       enqueuePendingPaymentSync(paymentRef, bookingIdsFromUrl, "games_callback");
 
       const syncResult = await processPendingPaymentSyncQueue({
@@ -13700,6 +13778,35 @@ export default function GamesPage({
         return;
       }
 
+      let canonicalReservationId = LEGACY_ROSTER_BRIDGE_ENABLED
+        ? resolveCanonicalReservationIdForPlayer(
+            activeGameRecord,
+            profile.clientId ?? normalizedProfileId,
+            normalizePhoneForGame(clientPhone),
+          )
+        : null;
+      if (LEGACY_ROSTER_BRIDGE_ENABLED && !canonicalReservationId) {
+        const reservation = await apiCommandPadelGameRoster(gameRecordId, "JOIN_GAME");
+        canonicalReservationId = reservation.data?.reservationId ?? null;
+        if (
+          reservation.error
+          || reservation.data?.relation !== "SEAT_RESERVED"
+          || !canonicalReservationId
+        ) {
+          setGameRosterError(
+            reservation.error?.message || "Не удалось зарезервировать место перед оплатой",
+          );
+          return;
+        }
+        const reservedRecord = await apiFetchPadelGameRecord(gameRecordId);
+        if (reservedRecord.data) {
+          setActiveGameRecordStore(reservedRecord.data);
+          setParticipants(Array.isArray(reservedRecord.data.participants) ? reservedRecord.data.participants : []);
+          setWaitlistPlayers(Array.isArray(reservedRecord.data.waitlist) ? reservedRecord.data.waitlist : []);
+          upsertGameRecordInStores(reservedRecord.data, { communityMode: "if_exists" });
+        }
+      }
+
       let subscriptionCandidates: Subscription[] = [];
       let compatibleSubscriptionCandidates: Subscription[] = [];
       let eligibleSubscriptionCandidates: Subscription[] = [];
@@ -13839,6 +13946,64 @@ export default function GamesPage({
           );
         } else {
           setGameRosterError(paymentResult.error?.message || "Не удалось создать оплату участия");
+        }
+        return;
+      }
+
+      if (LEGACY_ROSTER_BRIDGE_ENABLED) {
+        const bookingId = paymentResult.data.bookingId?.trim() || "";
+        const operationType = preferredPaymentMode === "subscription"
+          ? "SUBSCRIPTION_BOOKING" as const
+          : "TRANSACTION" as const;
+        const operationId = operationType === "SUBSCRIPTION_BOOKING"
+          ? bookingId
+          : paymentResult.data.transactionId?.trim() || "";
+        if (!canonicalReservationId || !bookingId || !operationId) {
+          setGameRosterError("Viva не вернула данные, необходимые для защищённой проверки оплаты");
+          return;
+        }
+        const pendingConfirmation = {
+          gameId: gameRecordId,
+          paymentRef,
+          reservationId: canonicalReservationId,
+          operationType,
+          operationId,
+          bookingId,
+          clientId: (profile.clientId ?? normalizedProfileId)?.trim() || null,
+          createdAt: new Date().toISOString(),
+        };
+        const isPaidWithoutRedirect = !paymentResult.data.paymentUrl && paymentResult.data.toPay <= 0;
+        const confirmationStored = savePendingSplitRosterPaymentConfirmation(pendingConfirmation);
+        if (!confirmationStored && !isPaidWithoutRedirect) {
+          setGameRosterError(
+            "Не удалось сохранить защищённые данные оплаты. Разрешите локальное хранилище и повторите.",
+          );
+          return;
+        }
+        if (isPaidWithoutRedirect) {
+          const confirmation = await apiConfirmPadelGameRosterPayment(gameRecordId, pendingConfirmation);
+          if (confirmation.error || !confirmation.data) {
+            setGameRosterError(
+              confirmation.error?.message || "Не удалось проверить списание абонемента",
+            );
+            return;
+          }
+          removePendingSplitRosterPaymentConfirmation(paymentRef);
+          const confirmedRecord = await apiFetchPadelGameRecord(gameRecordId);
+          if (confirmedRecord.data) {
+            setActiveGameRecordStore(confirmedRecord.data);
+            setParticipants(Array.isArray(confirmedRecord.data.participants) ? confirmedRecord.data.participants : []);
+            setWaitlistPlayers(Array.isArray(confirmedRecord.data.waitlist) ? confirmedRecord.data.waitlist : []);
+            upsertGameRecordInStores(confirmedRecord.data, { communityMode: "if_exists" });
+          }
+          return;
+        }
+        if (!paymentResult.data.paymentUrl) {
+          setGameRosterError("Не удалось получить ссылку на оплату участия");
+          return;
+        }
+        if (!navigateToExternalUrl(paymentResult.data.paymentUrl)) {
+          setGameRosterError("Не удалось открыть страницу оплаты");
         }
         return;
       }

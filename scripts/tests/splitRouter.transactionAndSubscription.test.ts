@@ -246,3 +246,78 @@ test("transaction step preserves transactionId when Viva returns transactionId f
   assert.equal(responseMsg.payload?.transactionId, "tx-1");
   assert.equal(responseMsg.payload?.paymentUrl, "https://pay.example/tx-1");
 });
+
+test("payment confirmation emits evidence only for a paid transaction bound to the booking and phone", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      id: "tx-confirmed-1",
+      status: "PAID",
+      client: { id: "client-1", phone: "+79990000001" },
+      products: [{ bookingIds: ["booking-confirmed-1"] }],
+      amountMinor: 250000,
+      currency: "RUB",
+    },
+    _splitCtx: {
+      step: "confirm_transaction_lookup",
+      action: "confirm_payment",
+      operationType: "TRANSACTION",
+      operationId: "tx-confirmed-1",
+      bookingId: "booking-confirmed-1",
+    },
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0], null);
+  assert.equal(out[1], null);
+  assert.equal(out[4]?._verifiedPaymentEvidence?.operationId, "tx-confirmed-1");
+  assert.equal(out[4]?._verifiedPaymentEvidence?.bookingId, "booking-confirmed-1");
+  assert.equal(out[4]?._verifiedPaymentEvidence?.clientPhoneE164, "+79990000001");
+});
+
+test("payment confirmation fails closed for a pending transaction", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      id: "tx-pending-1",
+      status: "PAYMENT_PENDING",
+      client: { phone: "+79990000001" },
+      products: [{ bookingIds: ["booking-pending-1"] }],
+    },
+    _splitCtx: {
+      step: "confirm_transaction_lookup",
+      action: "confirm_payment",
+      operationType: "TRANSACTION",
+      operationId: "tx-pending-1",
+      bookingId: "booking-pending-1",
+    },
+  }) as Array<RouterMessage | null>;
+
+  assert.equal(out[1]?.statusCode, 409);
+  assert.equal((out[1]?.payload?.details as Record<string, unknown>)?.code, "LEGACY_PAYMENT_NOT_CONFIRMED");
+});
+
+test("subscription confirmation binds the booking to the expected exercise and client", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      id: "booking-subscription-1",
+      status: "CONFIRMED",
+      paymentType: "SUBSCRIPTION",
+      clientSubscriptionId: "client-subscription-1",
+      client: { id: "client-1", phone: "+79990000001" },
+      exercise: { id: "exercise-1" },
+    },
+    _splitCtx: {
+      step: "confirm_subscription_booking_lookup",
+      action: "confirm_payment",
+      operationType: "SUBSCRIPTION_BOOKING",
+      operationId: "booking-subscription-1",
+      bookingId: "booking-subscription-1",
+      clientId: "client-1",
+      expectedExerciseId: "exercise-1",
+    },
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[4]?._verifiedPaymentEvidence?.operationType, "SUBSCRIPTION_BOOKING");
+  assert.equal(out[4]?._verifiedPaymentEvidence?.clientPhoneE164, "+79990000001");
+});

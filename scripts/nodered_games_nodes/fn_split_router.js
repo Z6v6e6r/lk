@@ -21,6 +21,73 @@ const toNumber = (value) => {
   return null;
 };
 
+const normalizePhone = (value) => {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.length === 10) return `+7${digits}`;
+  if (digits.length === 11 && digits.startsWith("8")) return `+7${digits.slice(1)}`;
+  if (digits.length >= 8 && digits.length <= 15 && !digits.startsWith("0")) return `+${digits}`;
+  return null;
+};
+
+const providerObjects = (value) => {
+  const result = [];
+  const seen = new Set();
+  const visit = (item, depth) => {
+    if (!item || typeof item !== "object" || seen.has(item) || depth > 6) return;
+    seen.add(item);
+    if (!Array.isArray(item)) result.push(item);
+    Object.values(item).forEach((nested) => visit(nested, depth + 1));
+  };
+  visit(value, 0);
+  return result;
+};
+
+const providerIds = (value, keys) => {
+  const ids = new Set();
+  providerObjects(value).forEach((item) => {
+    keys.forEach((key) => {
+      const candidate = item[key];
+      if (Array.isArray(candidate)) {
+        candidate.forEach((entry) => {
+          const id = toStr(entry && typeof entry === "object" ? (entry.id || entry.uuid || entry.bookingId) : entry);
+          if (id) ids.add(id);
+        });
+      } else {
+        const id = toStr(candidate && typeof candidate === "object" ? (candidate.id || candidate.uuid || candidate.bookingId) : candidate);
+        if (id) ids.add(id);
+      }
+    });
+  });
+  return Array.from(ids);
+};
+
+const providerPhone = (value) => {
+  for (const item of providerObjects(value)) {
+    for (const candidate of [item.clientPhone, item.phone, item.phoneNumber, item.mobile]) {
+      const phone = normalizePhone(candidate);
+      if (phone) return phone;
+    }
+  }
+  return null;
+};
+
+const providerStatus = (value) => {
+  for (const item of providerObjects(value)) {
+    const status = toStr(item.paymentStatus || item.transactionStatus || item.status || item.state);
+    if (status) return status.toUpperCase();
+  }
+  return null;
+};
+
+const statusIsConfirmed = (value) => {
+  const status = String(value || "").toUpperCase();
+  if (!status || /CANCEL|REFUND|FAIL|ERROR|PENDING|UNPAID|NOT_PAID/.test(status)) return false;
+  return /PAID|SUCCESS|CONFIRM|COMPLETE/.test(status);
+};
+
+const statusIsRejected = (value) => /CANCEL|REFUND|FAIL|ERROR|PENDING|UNPAID|NOT_PAID/i.test(String(value || ""));
+
 const pickId = (value) => {
   if (!value || typeof value !== "object") return null;
   return toStr(value.id) || toStr(value.uuid);
@@ -555,6 +622,24 @@ if (ctx.step === "token") {
   }
   ctx.token = msg.payload.access_token;
 
+  if (ctx.action === "confirm_payment") {
+    if (ctx.operationType === "TRANSACTION") {
+      ctx.step = "confirm_transaction_lookup";
+      return adminRequest(ctx, "GET", `/transactions/${encodeURIComponent(ctx.operationId)}`);
+    }
+    if (ctx.operationType === "SUBSCRIPTION_BOOKING" && ctx.clientId) {
+      ctx.step = "confirm_subscription_booking_lookup";
+      return adminRequest(
+        ctx,
+        "GET",
+        `/clients/${encodeURIComponent(ctx.clientId)}/bookings/${encodeURIComponent(ctx.bookingId)}`,
+      );
+    }
+    return fail(400, "Payment confirmation locator is invalid", {
+      code: "LEGACY_PAYMENT_CONFIRM_INVALID",
+    });
+  }
+
   if (ctx.action === "create") {
     ctx.step = "create_exercise";
     return adminRequest(ctx, "POST", "/exercises", {
@@ -614,6 +699,73 @@ if (!isOk(msg.statusCode)) {
     }
   }
   return fail(msg.statusCode || 502, "Viva request failed", msg.payload || null);
+}
+
+if (ctx.step === "confirm_transaction_lookup") {
+  const objects = providerObjects(msg.payload);
+  const transaction = objects.find((item) => pickTransactionId(item) === ctx.operationId) || null;
+  const bookingIds = providerIds(msg.payload, ["bookingId", "bookingIds", "bookings"]);
+  const status = providerStatus(transaction || msg.payload);
+  const clientPhoneE164 = providerPhone(transaction || msg.payload);
+  if (
+    !transaction
+    || !statusIsConfirmed(status)
+    || !bookingIds.includes(ctx.bookingId)
+    || !clientPhoneE164
+  ) {
+    return fail(409, "Viva transaction is not a confirmed payment for this booking", {
+      code: "LEGACY_PAYMENT_NOT_CONFIRMED",
+    });
+  }
+  const amountMinor = Math.floor(toNumber(
+    transaction.amountMinor
+    || transaction.totalAmountMinor
+    || transaction.paidAmountMinor,
+  ) ?? -1);
+  msg._verifiedPaymentEvidence = {
+    operationType: "TRANSACTION",
+    operationId: ctx.operationId,
+    bookingId: ctx.bookingId,
+    clientPhoneE164,
+    verifiedAt: new Date().toISOString(),
+    ...(amountMinor >= 0 ? { amountMinor } : {}),
+    currency: toStr(transaction.currency)?.toUpperCase() || "RUB",
+  };
+  return [null, null, null, null, msg];
+}
+
+if (ctx.step === "confirm_subscription_booking_lookup") {
+  const bookingIds = providerIds(msg.payload, ["id", "uuid", "bookingId", "bookingIds", "bookings"]);
+  const exerciseIds = providerIds(msg.payload, ["exerciseId", "exercise", "exerciseIds"]);
+  const clientIds = providerIds(msg.payload, ["clientId", "client"]);
+  const clientPhoneE164 = providerPhone(msg.payload);
+  const status = providerStatus(msg.payload);
+  const hasSubscription = providerObjects(msg.payload).some((item) => (
+    Boolean(toStr(item.clientSubscriptionId || item.subscriptionId || item.clientSubId))
+    || /SUBSCRIPTION/i.test(String(item.paymentType || item.paymentMethod || ""))
+  ));
+  if (
+    !bookingIds.includes(ctx.bookingId)
+    || !exerciseIds.includes(ctx.expectedExerciseId)
+    || (clientIds.length > 0 && !clientIds.includes(ctx.clientId))
+    || !clientPhoneE164
+    || !hasSubscription
+    || statusIsRejected(status)
+  ) {
+    return fail(409, "Viva subscription booking is not confirmed for this player and game", {
+      code: "LEGACY_SUBSCRIPTION_BOOKING_NOT_CONFIRMED",
+    });
+  }
+  msg._verifiedPaymentEvidence = {
+    operationType: "SUBSCRIPTION_BOOKING",
+    operationId: ctx.operationId,
+    bookingId: ctx.bookingId,
+    clientPhoneE164,
+    verifiedAt: new Date().toISOString(),
+    amountMinor: 0,
+    currency: "RUB",
+  };
+  return [null, null, null, null, msg];
 }
 
 if (ctx.step === "create_exercise") {

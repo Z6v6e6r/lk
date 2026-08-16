@@ -40,6 +40,7 @@ const legacyGameId = toStr(projection?.legacyGameId);
 const canonicalGameId = toStr(projection?.canonicalGameId);
 const relation = toStr(projection?.relation)?.toUpperCase();
 const aggregateRevision = Number(projection?.aggregateRevision);
+const reservationId = toStr(projection?.reservationId);
 const userId = toStr(player?.userId);
 const displayName = toStr(player?.displayName);
 const phoneE164 = toStr(player?.phoneE164);
@@ -59,6 +60,9 @@ if (
   || aggregateRevision < 1
   || !userId
   || !displayName
+  || ((relation === "SEAT_RESERVED" || ctx.command === "CONFIRM_PAYMENT")
+    && (!reservationId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reservationId)))
+  || (ctx.command === "CONFIRM_PAYMENT" && reservationId !== ctx.reservationId)
   || (phoneE164 && !/^\+[1-9][0-9]{7,14}$/.test(phoneE164))
   || (levelValue !== null && (!Number.isFinite(levelValue) || levelValue < 0 || levelValue > 10))
 ) {
@@ -72,6 +76,7 @@ msg._legacyRosterProjection = {
   canonicalGameId,
   aggregateRevision,
   relation,
+  reservationId,
   player: { userId, displayName, phoneE164, levelLabel, levelValue },
 };
 msg.payload = { id: legacyGameId, archived: { $ne: true } };

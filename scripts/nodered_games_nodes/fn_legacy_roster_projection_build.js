@@ -15,6 +15,7 @@ const normPhone = (value) => {
 const uniq = (values) => Array.from(new Set(values.filter(Boolean)));
 const ctx = isObj(msg._legacyRosterBridge) ? msg._legacyRosterBridge : null;
 const projection = isObj(msg._legacyRosterProjection) ? msg._legacyRosterProjection : null;
+const paymentEvidence = isObj(msg._legacyPaymentEvidence) ? msg._legacyPaymentEvidence : null;
 const fail = (statusCode, code, error) => {
   msg.statusCode = statusCode;
   msg.headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" };
@@ -32,6 +33,71 @@ const bridgeMetadata = isObj(metadata.canonicalRosterProjection)
   ? { ...metadata.canonicalRosterProjection }
   : {};
 const commandIds = uniq(asArray(bridgeMetadata.commandIds).map(toStr));
+if (ctx.command === "CONFIRM_PAYMENT") {
+  if (
+    !paymentEvidence
+    || toStr(paymentEvidence.bookingId) === null
+    || normPhone(paymentEvidence.clientPhoneE164) !== normPhone(projection.player.phoneE164)
+  ) {
+    return fail(503, "LEGACY_PAYMENT_EVIDENCE_MISSING", "Не удалось применить проверенное подтверждение оплаты");
+  }
+  const splitPayment = isObj(metadata.splitPayment) ? { ...metadata.splitPayment } : {};
+  const evidenceBookingId = toStr(paymentEvidence.bookingId);
+  const evidenceOperationId = toStr(paymentEvidence.operationId);
+  const evidencePhone = normPhone(paymentEvidence.clientPhoneE164);
+  const payments = asArray(splitPayment.payments).filter(isObj);
+  let matched = false;
+  const nextPayments = payments.map((payment) => {
+    const sameBooking = toStr(payment.bookingId) === evidenceBookingId
+      || asArray(payment.bookingIds).map(toStr).includes(evidenceBookingId);
+    const sameOperation = toStr(payment.transactionId) === evidenceOperationId;
+    const paymentPhone = normPhone(payment.phoneNorm || payment.phone);
+    const samePhone = evidencePhone && normPhone(payment.phoneNorm || payment.phone) === evidencePhone;
+    if ((!sameBooking && !sameOperation) || (paymentPhone && !samePhone)) return payment;
+    matched = true;
+    return {
+      ...payment,
+      status: "PAID",
+      bookingId: evidenceBookingId,
+      bookingIds: uniq([...asArray(payment.bookingIds).map(toStr), evidenceBookingId]),
+      transactionId: paymentEvidence.operationType === "TRANSACTION"
+        ? evidenceOperationId
+        : (toStr(payment.transactionId) || null),
+      phone: evidencePhone,
+      phoneNorm: evidencePhone,
+      paidAt: toStr(paymentEvidence.verifiedAt) || new Date().toISOString(),
+      verifiedBy: "VIVA_PROVIDER_LOOKUP",
+    };
+  });
+  if (!matched) {
+    nextPayments.push({
+      role: "PARTICIPANT",
+      status: "PAID",
+      paymentRef: null,
+      clientId: projection.player.userId,
+      phone: evidencePhone,
+      phoneNorm: evidencePhone,
+      bookingId: evidenceBookingId,
+      bookingIds: [evidenceBookingId],
+      transactionId: paymentEvidence.operationType === "TRANSACTION" ? evidenceOperationId : null,
+      amountMinor: Number.isSafeInteger(paymentEvidence.amountMinor) ? paymentEvidence.amountMinor : null,
+      paidAt: toStr(paymentEvidence.verifiedAt) || new Date().toISOString(),
+      verifiedBy: "VIVA_PROVIDER_LOOKUP",
+    });
+  }
+  metadata.splitPayment = {
+    ...splitPayment,
+    enabled: true,
+    status: "ACTIVE",
+    bookingIds: uniq([...asArray(splitPayment.bookingIds).map(toStr), evidenceBookingId]),
+    payments: nextPayments,
+  };
+  metadata.bookingIds = uniq([
+    ...asArray(metadata.bookingIds).map(toStr),
+    ...asArray(splitPayment.bookingIds).map(toStr),
+    evidenceBookingId,
+  ]);
+}
 const response = () => {
   const output = { ...msg };
   output.statusCode = projection.relation === "SEAT_RESERVED" ? 202 : 200;
@@ -77,13 +143,20 @@ else waitlist.push(player);
 
 const nowIso = new Date().toISOString();
 const nextCommandIds = [...commandIds, projection.commandId].slice(-200);
+const reservations = isObj(bridgeMetadata.reservations) ? { ...bridgeMetadata.reservations } : {};
+if (projection.relation === "SEAT_RESERVED" && projection.reservationId) {
+  reservations[projection.player.userId] = projection.reservationId;
+} else {
+  delete reservations[projection.player.userId];
+}
 metadata.canonicalRosterProjection = {
-  version: 1,
+  version: 2,
   commandIds: nextCommandIds,
   lastCommandId: projection.commandId,
   canonicalGameId: projection.canonicalGameId,
   aggregateRevision: projection.aggregateRevision,
   relation: projection.relation,
+  reservations,
   projectedAt: nowIso,
 };
 const snapshot = isObj(game.resultRosterSnapshot) ? { ...game.resultRosterSnapshot } : {};
@@ -164,6 +237,12 @@ const auditEvent = {
     aggregateRevision: projection.aggregateRevision,
     relation: projection.relation,
     userId: projection.player.userId,
+    ...(paymentEvidence
+      ? {
+          paymentOperationType: toStr(paymentEvidence.operationType),
+          paymentBookingId: toStr(paymentEvidence.bookingId),
+        }
+      : {}),
   },
 };
 const query = { id: ctx.gameId, archived: { $ne: true } };

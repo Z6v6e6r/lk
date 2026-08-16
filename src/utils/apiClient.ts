@@ -7758,6 +7758,7 @@ export interface PadelGameRosterCommandResult {
   legacyGameId: string;
   canonicalGameId: string;
   aggregateRevision: number;
+  reservationId: string | null;
 }
 
 function generateRosterCommandIdempotencyKey(): string {
@@ -7765,6 +7766,45 @@ function generateRosterCommandIdempotencyKey(): string {
     return `legacy-roster:${crypto.randomUUID()}`;
   }
   return `legacy-roster:${Date.now()}:${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function parsePadelGameRosterCommandResult(
+  response: ApiResult<unknown>,
+  gameId: string,
+): ApiResult<PadelGameRosterCommandResult> {
+  if (response.error) {
+    return { data: null, error: response.error, status: response.status };
+  }
+  const payload = isRecord(response.data) ? response.data : null;
+  const projection = payload && isRecord(payload.projection) ? payload.projection : null;
+  const relation = projection ? pickString(projection, ["relation"]) : null;
+  const aggregateRevision = projection ? Number(projection.aggregateRevision) : Number.NaN;
+  const data = payload && projection && relation && ["SEAT_RESERVED", "PARTICIPANT", "WAITLISTED"].includes(relation)
+    ? {
+        commandId: pickString(payload, ["commandId"]) || "",
+        replayed: payload.replayed === true,
+        relation: relation as PadelGameRosterCommandResult["relation"],
+        legacyGameId: pickString(projection, ["legacyGameId"]) || "",
+        canonicalGameId: pickString(projection, ["canonicalGameId"]) || "",
+        aggregateRevision,
+        reservationId: pickString(projection, ["reservationId"]),
+      }
+    : null;
+  if (
+    !data?.commandId
+    || data.legacyGameId !== gameId
+    || !data.canonicalGameId
+    || !Number.isSafeInteger(data.aggregateRevision)
+    || data.aggregateRevision < 1
+    || (data.relation === "SEAT_RESERVED" && !data.reservationId)
+  ) {
+    return {
+      data: null,
+      error: { status: response.status, message: "Не удалось разобрать результат записи в игру" },
+      status: response.status,
+    };
+  }
+  return { data, error: null, status: response.status };
 }
 
 export async function apiCommandPadelGameRoster(
@@ -7803,37 +7843,55 @@ export async function apiCommandPadelGameRoster(
       }),
     },
   );
-  if (response.error) {
-    return { data: null, error: response.error, status: response.status };
-  }
-  const payload = isRecord(response.data) ? response.data : null;
-  const projection = payload && isRecord(payload.projection) ? payload.projection : null;
-  const relation = projection ? pickString(projection, ["relation"]) : null;
-  const aggregateRevision = projection ? Number(projection.aggregateRevision) : Number.NaN;
-  const data = payload && projection && relation && ["SEAT_RESERVED", "PARTICIPANT", "WAITLISTED"].includes(relation)
-    ? {
-        commandId: pickString(payload, ["commandId"]) || "",
-        replayed: payload.replayed === true,
-        relation: relation as PadelGameRosterCommandResult["relation"],
-        legacyGameId: pickString(projection, ["legacyGameId"]) || "",
-        canonicalGameId: pickString(projection, ["canonicalGameId"]) || "",
-        aggregateRevision,
-      }
-    : null;
-  if (
-    !data?.commandId
-    || data.legacyGameId !== gameId
-    || !data.canonicalGameId
-    || !Number.isSafeInteger(data.aggregateRevision)
-    || data.aggregateRevision < 1
-  ) {
+  return parsePadelGameRosterCommandResult(response, gameId);
+}
+
+export async function apiConfirmPadelGameRosterPayment(
+  gameIdRaw: string,
+  input: {
+    reservationId: string;
+    operationType: "TRANSACTION" | "SUBSCRIPTION_BOOKING";
+    operationId: string;
+    bookingId: string;
+    clientId?: string | null;
+    idempotencyKey?: string;
+  },
+): Promise<ApiResult<PadelGameRosterCommandResult>> {
+  const gameId = gameIdRaw.trim();
+  if (!gameId || !input.reservationId.trim() || !input.operationId.trim() || !input.bookingId.trim()) {
     return {
       data: null,
-      error: { status: response.status, message: "Не удалось разобрать результат записи в игру" },
-      status: response.status,
+      error: { status: 400, message: "Не хватает данных для проверки оплаты" },
+      status: 400,
     };
   }
-  return { data, error: null, status: response.status };
+  if (!LEGACY_ROSTER_BRIDGE_ENABLED) {
+    return {
+      data: null,
+      error: { status: 503, message: "Каноническое подтверждение оплаты пока не включено" },
+      status: 503,
+    };
+  }
+  const response = await request<unknown>(
+    `/lk/games/${encodeURIComponent(gameId)}/roster-payment-confirm`,
+    {
+      method: "POST",
+      auth: true,
+      baseUrl: getServ2Origin() || "",
+      retries: 0,
+      headers: {
+        "Idempotency-Key": input.idempotencyKey?.trim() || generateRosterCommandIdempotencyKey(),
+      },
+      body: JSON.stringify({
+        reservationId: input.reservationId.trim(),
+        operationType: input.operationType,
+        operationId: input.operationId.trim(),
+        bookingId: input.bookingId.trim(),
+        ...(input.clientId?.trim() ? { clientId: input.clientId.trim() } : {}),
+      }),
+    },
+  );
+  return parsePadelGameRosterCommandResult(response, gameId);
 }
 
 export async function apiCreatePadelGameRecord(

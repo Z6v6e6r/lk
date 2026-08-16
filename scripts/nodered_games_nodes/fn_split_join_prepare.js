@@ -133,6 +133,58 @@ const fail = (status, error, details) => {
   msg.payload = { error, details: details || null };
   return [null, msg, msg];
 };
+const requestToken = () => {
+  msg.method = "POST";
+  msg.url = TOKEN_URL;
+  msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
+  msg.payload =
+    "grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ";
+  return [msg, null, msg];
+};
+
+if (msg._legacyPaymentConfirmTrusted === true) {
+  const confirmCtx = msg._legacyPaymentConfirm && typeof msg._legacyPaymentConfirm === "object"
+    ? msg._legacyPaymentConfirm
+    : null;
+  const confirmRows = Array.isArray(msg.payload) ? msg.payload : [];
+  const confirmGame = confirmRows[0] && typeof confirmRows[0] === "object" ? confirmRows[0] : null;
+  if (!confirmCtx || !confirmGame || toStr(confirmGame.id) !== toStr(confirmCtx.gameId)) {
+    return fail(404, "Game not found", { code: "LEGACY_PAYMENT_GAME_NOT_FOUND" });
+  }
+  const confirmMetadata = confirmGame.metadata && typeof confirmGame.metadata === "object"
+    ? confirmGame.metadata
+    : {};
+  const confirmSplitPayment = confirmMetadata.splitPayment && typeof confirmMetadata.splitPayment === "object"
+    ? confirmMetadata.splitPayment
+    : {};
+  const confirmBooking = confirmGame.booking && typeof confirmGame.booking === "object"
+    ? confirmGame.booking
+    : {};
+  const expectedExerciseId =
+    toStr(confirmSplitPayment.vivaExerciseId)
+    || toStr(confirmSplitPayment.exerciseId)
+    || toStr(confirmBooking.vivaExerciseId)
+    || toStr(confirmBooking.exerciseId)
+    || toStr(confirmMetadata.vivaExerciseId)
+    || toStr(confirmMetadata.exerciseId);
+  if (!expectedExerciseId) {
+    return fail(409, "Game has no verified Viva exercise", {
+      code: "LEGACY_PAYMENT_EXERCISE_MISSING",
+    });
+  }
+  msg._splitCtx = {
+    action: "confirm_payment",
+    step: "token",
+    gameId: confirmCtx.gameId,
+    reservationId: confirmCtx.reservationId,
+    operationType: confirmCtx.operationType,
+    operationId: confirmCtx.operationId,
+    bookingId: confirmCtx.bookingId,
+    clientId: confirmCtx.clientId,
+    expectedExerciseId,
+  };
+  return requestToken();
+}
 
 const rows = Array.isArray(msg.payload) ? msg.payload : [];
 if (rows.length === 0) {
@@ -275,10 +327,4 @@ msg._splitCtx = {
   assembleDeadlineAt: toStr(splitPayment.assembleDeadlineAt) || assembleDeadlineAt,
 };
 
-msg.method = "POST";
-msg.url = TOKEN_URL;
-msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
-msg.payload =
-  "grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ";
-
-return [msg, null, msg];
+return requestToken();

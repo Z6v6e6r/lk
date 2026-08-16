@@ -73,6 +73,53 @@ test("legacy roster bridge forwards only signed identity and server credential",
   assert.deepEqual(result[0].payload, { command: "JOIN_WAITLIST" });
 });
 
+test("payment confirmation accepts locators only and never accepts a browser paid flag", () => {
+  const valid = run(
+    "scripts/nodered_games_nodes/fn_legacy_payment_confirm_query.js",
+    {
+      req: {
+        params: { gameId: "pay_game" },
+        headers: {
+          authorization: "Bearer signed-token",
+          "idempotency-key": "legacy-payment:1234567890",
+        },
+      },
+      payload: {
+        reservationId: "238df6f5-fec4-44dd-ad8c-39e98ade8366",
+        operationType: "TRANSACTION",
+        operationId: "tx-1",
+        bookingId: "booking-1",
+      },
+    },
+    enabledEnv,
+  ) as any[];
+  assert.equal(valid[1], null);
+  assert.deepEqual(valid[0].payload, { id: "pay_game", archived: { $ne: true } });
+  assert.equal(valid[0]._legacyPaymentConfirmTrusted, true);
+
+  const forged = run(
+    "scripts/nodered_games_nodes/fn_legacy_payment_confirm_query.js",
+    {
+      req: {
+        params: { gameId: "pay_game" },
+        headers: {
+          authorization: "Bearer signed-token",
+          "idempotency-key": "legacy-payment:1234567890",
+        },
+      },
+      payload: {
+        reservationId: "238df6f5-fec4-44dd-ad8c-39e98ade8366",
+        operationType: "TRANSACTION",
+        operationId: "tx-1",
+        bookingId: "booking-1",
+        paid: true,
+      },
+    },
+    enabledEnv,
+  ) as any[];
+  assert.equal(forged[1].statusCode, 400);
+});
+
 function projectionContext(relation: "PARTICIPANT" | "WAITLISTED" | "SEAT_RESERVED") {
   const bridge = {
     gameId: "pay_game",
@@ -133,6 +180,103 @@ test("canonical projection uses a guarded CAS and rebuilds the result roster sna
     update.$set.metadata.canonicalRosterProjection.commandIds,
     [projection.commandId],
   );
+});
+
+test("verified payment projection marks server-matched payment paid", () => {
+  const { projection } = projectionContext("PARTICIPANT");
+  const reservationId = "238df6f5-fec4-44dd-ad8c-39e98ade8366";
+  const result = run("scripts/nodered_games_nodes/fn_legacy_roster_projection_build.js", {
+    _legacyRosterBridge: {
+      gameId: "pay_game",
+      idempotencyKey: "legacy-payment:1234567890",
+      command: "CONFIRM_PAYMENT",
+      reservationId,
+      retryCount: 0,
+    },
+    _legacyRosterProjection: { ...projection, reservationId },
+    _legacyPaymentEvidence: {
+      operationType: "TRANSACTION",
+      operationId: "tx-1",
+      bookingId: "booking-1",
+      clientPhoneE164: "+79000000001",
+      verifiedAt: "2026-08-16T18:05:00.000Z",
+      amountMinor: 250000,
+    },
+    payload: [{
+      id: "pay_game",
+      participants: [],
+      waitlist: [],
+      metadata: {
+        splitPayment: {
+          payments: [{ bookingId: "booking-1", phone: "79000000001", status: "PAYMENT_PENDING" }],
+        },
+      },
+      organizer: { id: "organizer", name: "Организатор", phone: "79000000003" },
+    }],
+  }) as any[];
+
+  const payment = result[0].payload[1].$set.metadata.splitPayment.payments[0];
+  assert.equal(payment.status, "PAID");
+  assert.equal(payment.transactionId, "tx-1");
+  assert.equal(payment.verifiedBy, "VIVA_PROVIDER_LOOKUP");
+});
+
+test("seat reservation is projected with a recoverable reservation id", () => {
+  const { bridge, projection } = projectionContext("SEAT_RESERVED");
+  const reservationId = "238df6f5-fec4-44dd-ad8c-39e98ade8366";
+  const result = run("scripts/nodered_games_nodes/fn_legacy_roster_projection_build.js", {
+    _legacyRosterBridge: bridge,
+    _legacyRosterProjection: { ...projection, reservationId },
+    payload: [{
+      id: "pay_game",
+      participants: [],
+      waitlist: [],
+      metadata: {},
+    }],
+  }) as any[];
+
+  const update = result[0].payload[1].$set;
+  assert.equal(update.waitlist[0].status, "PENDING");
+  assert.equal(
+    update.metadata.canonicalRosterProjection.reservations[projection.player.userId],
+    reservationId,
+  );
+});
+
+test("verified payment projection does not overwrite another player's pending payment", () => {
+  const { projection } = projectionContext("PARTICIPANT");
+  const result = run("scripts/nodered_games_nodes/fn_legacy_roster_projection_build.js", {
+    _legacyRosterBridge: {
+      gameId: "pay_game",
+      idempotencyKey: "legacy-payment:1234567891",
+      command: "CONFIRM_PAYMENT",
+      reservationId: "238df6f5-fec4-44dd-ad8c-39e98ade8366",
+      retryCount: 0,
+    },
+    _legacyRosterProjection: projection,
+    _legacyPaymentEvidence: {
+      operationType: "TRANSACTION",
+      operationId: "tx-2",
+      bookingId: "booking-2",
+      clientPhoneE164: "+79000000001",
+      verifiedAt: "2026-08-16T18:05:00.000Z",
+    },
+    payload: [{
+      id: "pay_game",
+      participants: [],
+      waitlist: [],
+      metadata: {
+        splitPayment: {
+          payments: [{ bookingId: "booking-2", phone: "79000000099", status: "PAYMENT_PENDING" }],
+        },
+      },
+    }],
+  }) as any[];
+
+  const payments = result[0].payload[1].$set.metadata.splitPayment.payments;
+  assert.equal(payments[0].status, "PAYMENT_PENDING");
+  assert.equal(payments[1].status, "PAID");
+  assert.equal(payments[1].phoneNorm, "79000000001");
 });
 
 test("canonical projection is idempotent and generic browser PATCH closes with the same flag", () => {

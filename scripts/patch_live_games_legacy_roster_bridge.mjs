@@ -9,8 +9,13 @@ const EXPECTED_PATCH_FUNC_SHA256 = "7d007ab69297b7ab4314bf23a21cb6fbebcdc6f149e0
 const PATCH_NODE_ID = "e0d7883bc1a9fa8c";
 const MONGO_TEMPLATE_ID = "591234d213742276";
 const AUTOJOIN_FIND_ID = "5fc5eaeab97f3f88";
+const SPLIT_JOIN_PREPARE_ID = "e92e68bf3f08a70c";
+const SPLIT_JOIN_PREPARE_SHA256 = "bf241c1197090e52a01e5414a81675cc19279fcb26f9231bb15914561401cc17";
+const SPLIT_ROUTER_ID = "8f7bd5b482fe9763";
+const SPLIT_ROUTER_SHA256 = "a311b8ddc6e7752ee87deb278b25ac2ddc8fb9af8b273deea66b07702ac571c8";
 const TAB_ID = "4b91e2a2413688db";
 const ROUTE = "/lk/games/:gameId/roster-command";
+const PAYMENT_ROUTE = "/lk/games/:gameId/roster-payment-confirm";
 const IDS = {
   post: "legacy_roster_bridge_post_20260816",
   options: "legacy_roster_bridge_options_20260816",
@@ -23,6 +28,12 @@ const IDS = {
   update: "legacy_roster_bridge_update_20260816",
   ack: "legacy_roster_bridge_ack_20260816",
   httpResponse: "legacy_roster_bridge_http_response_20260816",
+  paymentPost: "legacy_payment_confirm_post_20260816",
+  paymentOptions: "legacy_payment_confirm_options_20260816",
+  paymentQuery: "legacy_payment_confirm_query_20260816",
+  paymentFind: "legacy_payment_confirm_find_20260816",
+  paymentCanonicalPrepare: "legacy_payment_confirm_canonical_prepare_20260816",
+  paymentCanonicalRequest: "legacy_payment_confirm_canonical_http_20260816",
 };
 
 const argumentPairs = [];
@@ -55,9 +66,25 @@ if (flow.some((node) => Object.values(IDS).includes(node.id))) {
 if (flow.some((node) => node.type === "http in" && node.url === ROUTE)) {
   throw new Error("Legacy roster bridge route already exists");
 }
+if (flow.some((node) => node.type === "http in" && node.url === PAYMENT_ROUTE)) {
+  throw new Error("Legacy payment confirmation route already exists");
+}
 const sourceDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "nodered_games_nodes");
 const source = (name) => fs.readFileSync(path.join(sourceDir, name), "utf8");
 patchNode.func = source("fn_patch.js");
+
+const splitJoinPrepare = exactNode(SPLIT_JOIN_PREPARE_ID, "function");
+if (sha256(splitJoinPrepare.func) !== SPLIT_JOIN_PREPARE_SHA256) {
+  throw new Error("Live split join preparation drifted; refusing to attach payment verification");
+}
+splitJoinPrepare.func = source("fn_split_join_prepare.js");
+const splitRouter = exactNode(SPLIT_ROUTER_ID, "function");
+if (sha256(splitRouter.func) !== SPLIT_ROUTER_SHA256) {
+  throw new Error("Live split payment router drifted; refusing to attach payment verification");
+}
+splitRouter.func = source("fn_split_router.js");
+splitRouter.outputs = 5;
+splitRouter.wires = [...splitRouter.wires, [IDS.paymentCanonicalPrepare]];
 
 const mongoTemplate = exactNode(MONGO_TEMPLATE_ID, "mongodb4");
 exactNode(AUTOJOIN_FIND_ID, "mongodb4");
@@ -198,6 +225,79 @@ const added = [
     y: 3420,
     wires: [],
   },
+  {
+    id: IDS.paymentPost,
+    type: "http in",
+    z: TAB_ID,
+    name: "Verify and confirm legacy game payment",
+    url: PAYMENT_ROUTE,
+    method: "post",
+    upload: false,
+    swaggerDoc: "",
+    x: 170,
+    y: 3580,
+    wires: [[IDS.paymentQuery]],
+  },
+  {
+    id: IDS.paymentOptions,
+    type: "http in",
+    z: TAB_ID,
+    name: "OPTIONS verify legacy game payment",
+    url: PAYMENT_ROUTE,
+    method: "options",
+    upload: false,
+    swaggerDoc: "",
+    x: 180,
+    y: 3620,
+    wires: [[IDS.optionsFn]],
+  },
+  functionNode(
+    IDS.paymentQuery,
+    "Validate payment confirmation locator",
+    source("fn_legacy_payment_confirm_query.js"),
+    2,
+    490,
+    3580,
+    [[IDS.paymentFind], [IDS.httpResponse]],
+  ),
+  {
+    ...structuredClone(mongoTemplate),
+    id: IDS.paymentFind,
+    name: "Read game for payment verification",
+    operation: "find",
+    x: 770,
+    y: 3580,
+    wires: [[SPLIT_JOIN_PREPARE_ID]],
+  },
+  functionNode(
+    IDS.paymentCanonicalPrepare,
+    "Forward verified payment to canonical roster",
+    source("fn_legacy_payment_confirm_to_canonical.js"),
+    2,
+    1790,
+    3580,
+    [[IDS.paymentCanonicalRequest], [IDS.httpResponse]],
+  ),
+  {
+    id: IDS.paymentCanonicalRequest,
+    type: "http request",
+    z: TAB_ID,
+    name: "PadlHub canonical payment confirmation",
+    method: "use",
+    ret: "obj",
+    paytoqs: "ignore",
+    url: "",
+    tls: "",
+    persist: false,
+    proxy: "",
+    insecureHTTPParser: false,
+    authType: "",
+    senderr: true,
+    headers: [],
+    x: 2070,
+    y: 3580,
+    wires: [[IDS.response]],
+  },
 ];
 flow.push(...added);
 const idSet = new Set(flow.map((node) => node.id));
@@ -218,7 +318,7 @@ fs.writeFileSync(
     candidateSha256: sha256(output),
     patchedNodeId: PATCH_NODE_ID,
     addedNodeIds: added.map((node) => node.id),
-    route: ROUTE,
+    routes: [ROUTE, PAYMENT_ROUTE],
     featureFlag: "PADLHUB_LEGACY_ROSTER_BRIDGE_ENABLED",
     patchGuardFeatureFlag: "PADLHUB_LEGACY_ROSTER_PATCH_GUARD_ENABLED",
     serverSecretEnv: "PADLHUB_LEGACY_ROSTER_TOKEN",
