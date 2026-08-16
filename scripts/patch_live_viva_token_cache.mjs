@@ -12,11 +12,11 @@ const DEFAULT_FLOW_SHA256 = "d9ae9ef519f5f1e1bc474ebd7aff955b20721af3467c92f079c
 const targets = [
   {
     id: "880a87e38e41c38e",
-    name: "Get Viva token (live)",
+    name: "Get or request Viva token",
     file: "fn_live_ratings_get_token.js",
     beforeFuncSha256: "5310c608ff006d49570dc9b80f1cd2e12c6bd405571e228e46607bbd2bb30235",
     outputs: 3,
-    wires: [["1fd1dcd764da81fc"], ["4e8f1e4487c2a7e9"], ["d512f52a73f1427a"]],
+    wires: [["1fd1d27e74608f5b"], ["4e8fc55bbbd25474"], ["d51215cddf288d9f"]],
   },
   {
     id: "773fd272d093c306",
@@ -24,7 +24,7 @@ const targets = [
     file: "fn_live_ratings_store_token.js",
     beforeFuncSha256: "5d67f75f846462635edb79b579cfae115cd7f0352ee99691e5579c34459d5944",
     outputs: 3,
-    wires: [["1fd1dcd764da81fc"], ["d512f52a73f1427a"], ["89fa382fe1de52e2"]],
+    wires: [["1fd1d27e74608f5b"], ["d51215cddf288d9f"], ["89f8508ef3f6a603"]],
   },
   {
     id: "f3f9a60354d394da",

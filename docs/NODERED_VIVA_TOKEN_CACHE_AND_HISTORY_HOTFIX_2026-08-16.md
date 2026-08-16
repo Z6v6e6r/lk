@@ -37,6 +37,13 @@ Values must not be stored in Git, flow JSON, deployment reports, shell history, 
 Missing required variables blocks the affected operation with HTTP 503 and performs no Viva or
 local persistence mutation.
 
+The deploy helper migrates the exact credential already present in the four reviewed live target
+functions into `/root/.node-red/.padlhub-viva-service.json`. It accepts the migration only when all
+four functions contain the same credential and their complete function hashes, names, outputs, and
+wires match the reviewed contract. The file is owned by `root:root` with mode `0600`; PM2 receives
+the four values through `--update-env`, and its protected dump is backed up before each restart.
+Neither the values nor their hashes are printed.
+
 ## Tournament history resilience
 
 The history lookup remains a read-only chain. The candidate:
@@ -89,6 +96,25 @@ Before a deployment may be authorized:
    candidate, then run Node-RED validation and inspect the combined report.
 7. Obtain a separate deployment approval under the staged delivery workflow.
 
+The read-only inventory on the reviewed preimage found 27 active password-grant functions across
+10 tabs and three distinct credential sets. The four functions migrated by this hotfix use one of
+those sets. This is evidence for the narrow migration only; it does not authorize rotation or
+modification of the other 23 functions.
+
+The guarded deployment entrypoint is:
+
+```bash
+NODE_RED_VIVA_TOKEN_HISTORY_DEPLOY=CONFIRM_147 \
+  npm run nodered:viva-token-history:deploy-147
+```
+
+It runs only from a clean `main` whose HEAD equals freshly fetched `origin/main`, pulls the live
+flow again, checks digest `d9ae9ef5…`, builds both candidates in a private external workspace,
+validates the combined change budget locally and remotely, installs the protected environment,
+backs up the live flow and PM2 dump, replaces the flow atomically, restarts only `node-red`, and
+checks the public games and tournament-history routes. No deployment command is run as part of the
+checkpoint itself.
+
 ## Post-deploy checks
 
 Read-only and synthetic checks must record status/code and timings without tokens or personal data:
@@ -103,7 +129,9 @@ Read-only and synthetic checks must record status/code and timings without token
 
 ## Rollback
 
-Rollback restores the exact backed-up flow and the prior protected environment file, restarts only
-the reviewed Node-RED process, and then repeats the same route-specific smoke checks. Do not manually
-edit production flow JSON or recreate unrelated containers. Cache values are process-local and are
-discarded on restart.
+If restart, digest verification, or the public postchecks fail, the helper restores the exact
+reviewed flow backup and restarts only `node-red`. The protected service environment intentionally
+remains installed: it is additive, matches the credential already reviewed in the restored flow,
+and prevents an ambiguous PM2-env removal operation. Its pre-change PM2 dump remains available for
+a separately authorized recovery. Do not manually edit production flow JSON or recreate unrelated
+containers. Cache values are process-local and are discarded on restart.

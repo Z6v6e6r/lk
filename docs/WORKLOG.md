@@ -1239,3 +1239,20 @@
   focused result/rating tests `59/59`, exactly three changed nodes, 4,734 nodes,
   211 routes and zero broken wires/links. CUP deploy, Node-RED import/restart and
   rating-data mutations remain outside this checkpoint.
+
+## 2026-08-16 — Viva token/history deploy contract correction
+
+- Deploy preflight stopped before production mutation because the pushed token-cache patcher used
+  a stale display name and three stale downstream IDs for the two live token nodes. The current
+  reviewed flow remains `d9ae9ef5…`; Node-RED is online and the required PM2 service variables are
+  absent.
+- Corrected the exact live contracts and added a combined validator for six function replacements,
+  two split-route extensions, two Mongo limits, three scoped history error nodes, unchanged routes,
+  and zero broken wires.
+- Added an explicit clean-main deploy entrypoint. It migrates only the credential shared by four
+  reviewed target functions into a protected root-owned environment, backs up PM2 and flow state,
+  performs atomic publication, and restores the exact reviewed flow on restart/digest/public-smoke
+  failure without printing secret values.
+- Read-only inventory found 27 active password-grant functions across 10 tabs and three distinct
+  credential sets; the other 23 functions and any credential rotation remain outside this hotfix.
+  Production, `main`, remote refs, and live data are unchanged by this corrective checkpoint.

@@ -20,14 +20,14 @@ const baseline = (file: string) => {
 
 const makeFlow = () => ([
   {
-    id: "880a87e38e41c38e", type: "function", name: "Get Viva token (live)",
+    id: "880a87e38e41c38e", type: "function", name: "Get or request Viva token",
     outputs: 3, func: baseline("fn_live_ratings_get_token.js"),
-    wires: [["1fd1dcd764da81fc"], ["4e8f1e4487c2a7e9"], ["d512f52a73f1427a"]],
+    wires: [["1fd1d27e74608f5b"], ["4e8fc55bbbd25474"], ["d51215cddf288d9f"]],
   },
   {
     id: "773fd272d093c306", type: "function", name: "Store Viva token (live)",
     outputs: 3, func: baseline("fn_live_ratings_store_token.js"),
-    wires: [["1fd1dcd764da81fc"], ["d512f52a73f1427a"], ["89fa382fe1de52e2"]],
+    wires: [["1fd1d27e74608f5b"], ["d51215cddf288d9f"], ["89f8508ef3f6a603"]],
   },
   {
     id: "f3f9a60354d394da", type: "function", name: "Prepare split game payment",
@@ -99,6 +99,19 @@ test("guarded token-cache patch refuses whole-flow drift", (t) => {
   t.after(() => fs.rmSync(result.tempDir, { recursive: true, force: true }));
   assert.notEqual(result.result.status, 0);
   assert.match(result.result.stderr, /Flow preimage mismatch/);
+  assert.equal(fs.existsSync(result.output), false);
+  assert.equal(fs.existsSync(result.report), false);
+});
+
+test("guarded token-cache patch refuses a drifted target contract even with its matching whole-flow SHA", (t) => {
+  const drifted = makeFlow();
+  const target = drifted[0] as { name: string; wires: string[][] };
+  target.name = "Get Viva token";
+  target.wires = [["1fd1d27e74608f5b"], ["d51215cddf288d9f"], ["4e8fc55bbbd25474"]];
+  const result = run(drifted);
+  t.after(() => fs.rmSync(result.tempDir, { recursive: true, force: true }));
+  assert.notEqual(result.result.status, 0);
+  assert.match(result.result.stderr, /Node contract mismatch/);
   assert.equal(fs.existsSync(result.output), false);
   assert.equal(fs.existsSync(result.report), false);
 });
