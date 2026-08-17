@@ -28,6 +28,7 @@ import { PAYMENT_REF_QUERY_KEY, processPendingPaymentSyncQueue } from "./utils/p
 import { syncGamesCommunityAutopublish } from "./utils/gameCommunityAutopublish";
 import { resolveCommunityJoinRouteData } from "./utils/communityJoinRoute";
 import { appendCurrentAuthModeToNavigableUrl } from "./utils/authMode";
+import { readPostAuthReturnUrl } from "./utils/authReturn";
 import type { GamesMountData, OpenGamesOptions } from "./types/gamesOverlay";
 import type { LevelsInfoMountData, OpenLevelsInfoOptions } from "./types/levelsInfoOverlay";
 import type { OpenTournamentsOptions, TournamentsMountData } from "./types/tournamentsOverlay";
@@ -164,6 +165,18 @@ function AppContent() {
   const isAndroidTournamentMode = Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android";
   const [view, setView] = useState<"auth" | "cabinet" | "tournaments">("auth");
   const [autoOpenFromPaymentHandled, setAutoOpenFromPaymentHandled] = useState(false);
+  const postAuthReturnUrl = useMemo(() => (
+    typeof window === "undefined" ? null : readPostAuthReturnUrl(window.location.href)
+  ), []);
+
+  useEffect(() => {
+    if (isRestoringSession || !isAuthenticated || !postAuthReturnUrl) return;
+    trackAnalyticsEvent("auth_return_started", {
+      source: new URL(window.location.href).searchParams.get("source") || null,
+      targetOrigin: new URL(postAuthReturnUrl).origin,
+    });
+    window.location.replace(postAuthReturnUrl);
+  }, [isAuthenticated, isRestoringSession, postAuthReturnUrl]);
 
   const joinRouteData = useMemo(() => {
     if (typeof window === "undefined") {
