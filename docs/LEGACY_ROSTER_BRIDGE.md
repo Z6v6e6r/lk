@@ -45,8 +45,12 @@ node scripts/patch_live_games_legacy_roster_bridge.mjs \
   --report /absolute/report.json
 ```
 
-The script verifies the complete live source SHA and the generic PATCH function SHA before adding
-the route. It produces a candidate and report only; it does not import, deploy or mutate live data.
+The script verifies the complete live source SHA plus the generic PATCH, split-join preparation and
+split-payment router function preimages before adding the route. The audited source currently includes
+the August 17 tournament-history guard/cache nodes and the deployed split-payment changes; they are
+preserved in the generated candidate. The script produces a candidate and report only; it does not
+import, deploy or mutate live data. Both artifacts are exclusive-created as private `0600` files;
+existing paths are rejected rather than overwritten.
 
 ## Activation blockers
 

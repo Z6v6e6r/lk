@@ -4,15 +4,15 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const EXPECTED_FLOW_SHA256 = "d9ae9ef519f5f1e1bc474ebd7aff955b20721af3467c92f079cf6f68dc26c76a";
+const EXPECTED_FLOW_SHA256 = "2ff19d3543030ef14a7d551eca44dd44de9997d5641c36bdde828f8c4eec6861";
 const EXPECTED_PATCH_FUNC_SHA256 = "7d007ab69297b7ab4314bf23a21cb6fbebcdc6f149e0bfd9d931f0329718261c";
 const PATCH_NODE_ID = "e0d7883bc1a9fa8c";
 const MONGO_TEMPLATE_ID = "591234d213742276";
 const AUTOJOIN_FIND_ID = "5fc5eaeab97f3f88";
 const SPLIT_JOIN_PREPARE_ID = "e92e68bf3f08a70c";
-const SPLIT_JOIN_PREPARE_SHA256 = "bf241c1197090e52a01e5414a81675cc19279fcb26f9231bb15914561401cc17";
+const SPLIT_JOIN_PREPARE_SHA256 = "415a2131acd876a4a973d71f9478c2ccd127dee4d59fbc5043ca77db15b4a0e6";
 const SPLIT_ROUTER_ID = "8f7bd5b482fe9763";
-const SPLIT_ROUTER_SHA256 = "a311b8ddc6e7752ee87deb278b25ac2ddc8fb9af8b273deea66b07702ac571c8";
+const SPLIT_ROUTER_SHA256 = "6be5041a581846dc53ecf0ef02c4c7e90adff52b94c4ee0d9ca2ff9d6b82eaad";
 const TAB_ID = "4b91e2a2413688db";
 const ROUTE = "/lk/games/:gameId/roster-command";
 const PAYMENT_ROUTE = "/lk/games/:gameId/roster-payment-confirm";
@@ -43,6 +43,15 @@ for (let index = 2; index < process.argv.length; index += 2) {
 const args = Object.fromEntries(argumentPairs);
 if (!args["--input"] || !args["--output"] || !args["--report"]) {
   throw new Error("Usage: --input <fresh-live-flow.json> --output <candidate.json> --report <report.json>");
+}
+const artifactPaths = [args["--input"], args["--output"], args["--report"]].map((value) => path.resolve(value));
+if (new Set(artifactPaths).size !== artifactPaths.length) {
+  throw new Error("Input, candidate and report paths must be distinct");
+}
+for (const artifactPath of artifactPaths.slice(1)) {
+  if (fs.existsSync(artifactPath)) {
+    throw new Error(`Refusing to overwrite an existing artifact: ${artifactPath}`);
+  }
 }
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const inputRaw = fs.readFileSync(args["--input"]);
@@ -310,18 +319,26 @@ for (const node of flow) {
   }
 }
 const output = `${JSON.stringify(flow, null, 2)}\n`;
-fs.writeFileSync(args["--output"], output);
-fs.writeFileSync(
-  args["--report"],
-  `${JSON.stringify({
+const report = `${JSON.stringify({
     sourceFlowSha256: EXPECTED_FLOW_SHA256,
     candidateSha256: sha256(output),
     patchedNodeId: PATCH_NODE_ID,
+    auditedNodePreimages: {
+      [PATCH_NODE_ID]: EXPECTED_PATCH_FUNC_SHA256,
+      [SPLIT_JOIN_PREPARE_ID]: SPLIT_JOIN_PREPARE_SHA256,
+      [SPLIT_ROUTER_ID]: SPLIT_ROUTER_SHA256,
+    },
     addedNodeIds: added.map((node) => node.id),
     routes: [ROUTE, PAYMENT_ROUTE],
     featureFlag: "PADLHUB_LEGACY_ROSTER_BRIDGE_ENABLED",
     patchGuardFeatureFlag: "PADLHUB_LEGACY_ROSTER_PATCH_GUARD_ENABLED",
     serverSecretEnv: "PADLHUB_LEGACY_ROSTER_TOKEN",
     liveWritesPerformed: false,
-  }, null, 2)}\n`,
-);
+  }, null, 2)}\n`;
+fs.writeFileSync(args["--output"], output, { mode: 0o600, flag: "wx" });
+try {
+  fs.writeFileSync(args["--report"], report, { mode: 0o600, flag: "wx" });
+} catch (error) {
+  fs.unlinkSync(args["--output"]);
+  throw error;
+}
