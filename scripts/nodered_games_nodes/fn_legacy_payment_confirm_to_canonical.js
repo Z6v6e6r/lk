@@ -43,6 +43,8 @@ if (
   evidence.operationType !== ctx.operationType
   || evidence.operationId !== ctx.operationId
   || evidence.bookingId !== ctx.bookingId
+  || evidence.exerciseId !== ctx.expectedExerciseId
+  || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(toStr(evidence.exerciseId) || "")
   || !/^\+[1-9][0-9]{7,14}$/.test(toStr(evidence.clientPhoneE164) || "")
 ) {
   return respond(409, "LEGACY_PAYMENT_EVIDENCE_MISMATCH", "Проверка оплаты вернула противоречивые данные");
@@ -73,6 +75,7 @@ msg.payload = {
     operationType: evidence.operationType,
     operationId: evidence.operationId,
     bookingId: evidence.bookingId,
+    exerciseId: evidence.exerciseId,
     clientPhoneE164: evidence.clientPhoneE164,
     status: "CONFIRMED",
     verifiedAt: evidence.verifiedAt,

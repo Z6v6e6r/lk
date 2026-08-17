@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SOURCES = {
-  create: ['fn_split_create_prepare.js', 'd76e532d8f9d3cba655a4fabadf21635c85ed360a4bfac18534e10fef5661bfa', 'a62d72cdaec7bf50f023bf1fcebfb71453df5b02d638cf9793c63a98b112ea8e'],
-  join: ['fn_split_join_prepare.js', '707fdde66c340769a0c68e6e693bda22eb040b715ef33ad109e39c4709cea950', 'bf241c1197090e52a01e5414a81675cc19279fcb26f9231bb15914561401cc17'],
-  router: ['fn_split_router.js', 'aba5f45ce45208997b188d5292194c49d357452673eee7b937650ec998348a04', 'a311b8ddc6e7752ee87deb278b25ac2ddc8fb9af8b273deea66b07702ac571c8'],
+  create: ['fn_split_create_prepare.js', 'd76e532d8f9d3cba655a4fabadf21635c85ed360a4bfac18534e10fef5661bfa', 'd9d4ba36558fe797d7b36c3653ba9d82687d949c0910b03b26448396924b1942'],
+  join: ['fn_split_join_prepare.js', '707fdde66c340769a0c68e6e693bda22eb040b715ef33ad109e39c4709cea950', 'bc160999dff910630b07e13f823df7b740d748ee0e9702dc5c695bbf323d1865'],
+  router: ['fn_split_router.js', 'aba5f45ce45208997b188d5292194c49d357452673eee7b937650ec998348a04', 'd8accc8540f6b9f33e752a0a04673f9978f105e23f327540b1c72f4762560594'],
 };
 
 class FixedDate extends Date {
@@ -18,7 +18,14 @@ class FixedDate extends Date {
 }
 
 function source(key) { return fs.readFileSync(path.join(ROOT, 'scripts/nodered_games_nodes', SOURCES[key][0]), 'utf8'); }
-function run(key, msg) { return new Function('msg', 'Date', source(key))(msg, FixedDate); }
+function run(key, msg) {
+  return new Function('msg', 'Date', 'env', 'global', source(key))(
+    msg,
+    FixedDate,
+    { get: (name) => name === 'VIVACRM_TOKEN_REQUEST_BODY' ? 'test-token-request-body' : null },
+    { get: () => null },
+  );
+}
 
 test('three split-payment candidates stay pinned separately from verified live preimages', () => {
   for (const [key, [, livePreimage, candidate]] of Object.entries(SOURCES)) {

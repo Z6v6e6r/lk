@@ -62,7 +62,7 @@ if (
   || !["TRANSACTION", "SUBSCRIPTION_BOOKING"].includes(operationType || "")
   || !safeProviderId(operationId)
   || !safeProviderId(bookingId)
-  || (operationType === "SUBSCRIPTION_BOOKING" && !safeProviderId(clientId))
+  || !safeProviderId(clientId)
 ) {
   return respond(400, "LEGACY_PAYMENT_CONFIRM_INVALID", "Некорректные данные подтверждения оплаты");
 }

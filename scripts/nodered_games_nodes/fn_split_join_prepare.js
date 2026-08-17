@@ -134,11 +134,34 @@ const fail = (status, error, details) => {
   return [null, msg, msg];
 };
 const requestToken = () => {
+  const envTokenRequestBody = (() => {
+    try {
+      return typeof env !== "undefined" && env && typeof env.get === "function"
+        ? toStr(env.get("VIVACRM_TOKEN_REQUEST_BODY"))
+        : null;
+    } catch {
+      return null;
+    }
+  })();
+  const globalTokenRequestBody = (() => {
+    try {
+      return global && typeof global.get === "function"
+        ? toStr(global.get("vivacrm_token_request_body"))
+        : null;
+    } catch {
+      return null;
+    }
+  })();
+  const tokenRequestBody = envTokenRequestBody || globalTokenRequestBody;
+  if (!tokenRequestBody) {
+    return fail(503, "Viva token configuration is missing", {
+      code: "VIVA_TOKEN_CONFIG_MISSING",
+    });
+  }
   msg.method = "POST";
   msg.url = TOKEN_URL;
   msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
-  msg.payload =
-    "grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ";
+  msg.payload = tokenRequestBody;
   return [msg, null, msg];
 };
 
@@ -172,6 +195,7 @@ if (msg._legacyPaymentConfirmTrusted === true) {
       code: "LEGACY_PAYMENT_EXERCISE_MISSING",
     });
   }
+  confirmCtx.expectedExerciseId = expectedExerciseId;
   msg._splitCtx = {
     action: "confirm_payment",
     step: "token",

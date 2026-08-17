@@ -4,9 +4,8 @@ const END_USER_API = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G";
 const KEY_TOKEN = "vivacrm_access_token";
 const KEY_EXPIRES_AT = "vivacrm_token_expires_at";
 const KEY_TOKEN_REQUEST_BODY = "vivacrm_token_request_body";
+const KEY_TOKEN_REQUEST_ENV = "VIVACRM_TOKEN_REQUEST_BODY";
 const TOKEN_CACHE_GRACE_MS = 30 * 1000;
-const DEFAULT_TOKEN_REQUEST_BODY =
-  "grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ";
 
 const isOk = (status) => Number(status) >= 200 && Number(status) < 300;
 
@@ -119,7 +118,7 @@ const extractTransactionPayload = (payload) => {
   return payload;
 };
 
-const isPaidTransactionPayload = (payload) => {
+const isPaidTransactionPayload = (payload, expectedTransactionId) => {
   const tx = extractTransactionPayload(payload);
   const status = normalizeTransactionStatus(
     tx.status
@@ -127,28 +126,14 @@ const isPaidTransactionPayload = (payload) => {
     || tx.paymentStatus
     || tx.transactionStatus,
   );
-  if (
-    status.includes("PAID")
-    || status.includes("SUCCESS")
-    || status.includes("COMPLETE")
-    || status.includes("APPROV")
-    || status.includes("CONFIRM")
-  ) {
-    return true;
-  }
-  if (
-    status.includes("FAIL")
-    || status.includes("CANCEL")
-    || status.includes("REJECT")
-    || status.includes("ERROR")
-    || status.includes("EXPIRE")
-    || status.includes("REFUND")
-    || status.includes("VOID")
-  ) {
-    return false;
-  }
-  const toPay = toNumber(tx.toPay);
-  return toPay !== null && toPay <= 0;
+  const transactionId = toStr(
+    tx.transactionId
+    || tx.transaction_id
+    || tx.id,
+  );
+  return status === "PAID"
+    && Boolean(transactionId)
+    && transactionId === toStr(expectedTransactionId);
 };
 
 const buildTimedOutPaymentByBooking = (values) => {
@@ -377,17 +362,32 @@ const readCachedAdminToken = () => {
 };
 
 const resolveTokenRequestConfig = () => {
-  const payload = toStr(global.get(KEY_TOKEN_REQUEST_BODY));
+  const envPayload = (() => {
+    try {
+      return typeof env !== "undefined" && env && typeof env.get === "function"
+        ? toStr(env.get(KEY_TOKEN_REQUEST_ENV))
+        : null;
+    } catch {
+      return null;
+    }
+  })();
+  const globalPayload = (() => {
+    try {
+      return global && typeof global.get === "function"
+        ? toStr(global.get(KEY_TOKEN_REQUEST_BODY))
+        : null;
+    } catch {
+      return null;
+    }
+  })();
+  const payload = envPayload || globalPayload;
   if (payload) {
     return {
       payload,
-      source: KEY_TOKEN_REQUEST_BODY,
+      source: envPayload ? KEY_TOKEN_REQUEST_ENV : KEY_TOKEN_REQUEST_BODY,
     };
   }
-  return {
-    payload: DEFAULT_TOKEN_REQUEST_BODY,
-    source: "default_inline",
-  };
+  return null;
 };
 
 const persistAdminToken = (token, expiresInRaw) => {
@@ -447,6 +447,14 @@ const requestToken = (ctx) => {
   }
 
   const tokenRequest = resolveTokenRequestConfig();
+  if (!tokenRequest) {
+    appendTrace(ctx, {
+      step: "token_config_missing",
+      code: "VIVA_TOKEN_CONFIG_MISSING",
+    });
+    ctx.forceVivaErrors = true;
+    return finalizeTask(ctx);
+  }
   msg._splitCleanupCtx = ctx;
   msg.method = "POST";
   msg.url = TOKEN_URL;
@@ -1598,7 +1606,7 @@ if (ctx.step === "check_timeout_transaction") {
     });
   }
 
-  if (isOk(statusCode) && isPaidTransactionPayload(msg.payload)) {
+  if (isOk(statusCode) && isPaidTransactionPayload(msg.payload, transactionId)) {
     recoverPaidTimedOutState(ctx, timeoutMeta, msg.payload || null);
     appendTrace(ctx, {
       step: "check_timeout_transaction_paid",

@@ -227,10 +227,28 @@ msg._splitCtx = {
   assembleDeadlineAt,
 };
 
+const tokenRequestBody = (() => {
+  try {
+    const envValue = typeof env !== "undefined" && env && typeof env.get === "function"
+      ? toStr(env.get("VIVACRM_TOKEN_REQUEST_BODY"))
+      : null;
+    const globalValue = global && typeof global.get === "function"
+      ? toStr(global.get("vivacrm_token_request_body"))
+      : null;
+    return envValue || globalValue;
+  } catch {
+    return null;
+  }
+})();
+if (!tokenRequestBody) {
+  return fail(503, "Viva token configuration is missing", {
+    code: "VIVA_TOKEN_CONFIG_MISSING",
+  });
+}
+
 msg.method = "POST";
 msg.url = TOKEN_URL;
 msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
-msg.payload =
-  "grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ";
+msg.payload = tokenRequestBody;
 
 return [msg, null, msg];

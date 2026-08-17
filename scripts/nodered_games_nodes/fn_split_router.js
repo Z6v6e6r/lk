@@ -81,12 +81,8 @@ const providerStatus = (value) => {
 };
 
 const statusIsConfirmed = (value) => {
-  const status = String(value || "").toUpperCase();
-  if (!status || /CANCEL|REFUND|FAIL|ERROR|PENDING|UNPAID|NOT_PAID/.test(status)) return false;
-  return /PAID|SUCCESS|CONFIRM|COMPLETE/.test(status);
+  return String(value || "").trim().toUpperCase() === "PAID";
 };
-
-const statusIsRejected = (value) => /CANCEL|REFUND|FAIL|ERROR|PENDING|UNPAID|NOT_PAID/i.test(String(value || ""));
 
 const pickId = (value) => {
   if (!value || typeof value !== "object") return null;
@@ -623,7 +619,7 @@ if (ctx.step === "token") {
   ctx.token = msg.payload.access_token;
 
   if (ctx.action === "confirm_payment") {
-    if (ctx.operationType === "TRANSACTION") {
+    if (ctx.operationType === "TRANSACTION" && ctx.clientId) {
       ctx.step = "confirm_transaction_lookup";
       return adminRequest(ctx, "GET", `/transactions/${encodeURIComponent(ctx.operationId)}`);
     }
@@ -704,13 +700,17 @@ if (!isOk(msg.statusCode)) {
 if (ctx.step === "confirm_transaction_lookup") {
   const objects = providerObjects(msg.payload);
   const transaction = objects.find((item) => pickTransactionId(item) === ctx.operationId) || null;
-  const bookingIds = providerIds(msg.payload, ["bookingId", "bookingIds", "bookings"]);
-  const status = providerStatus(transaction || msg.payload);
-  const clientPhoneE164 = providerPhone(transaction || msg.payload);
+  const bookingIds = providerIds(transaction, ["bookingId", "bookingIds", "bookings"]);
+  const exerciseIds = providerIds(transaction, ["exerciseId", "exerciseIds", "exercise"]);
+  const clientIds = providerIds(transaction, ["clientId", "client"]);
+  const status = providerStatus(transaction);
+  const clientPhoneE164 = providerPhone(transaction);
   if (
     !transaction
     || !statusIsConfirmed(status)
     || !bookingIds.includes(ctx.bookingId)
+    || !exerciseIds.includes(ctx.expectedExerciseId)
+    || !clientIds.includes(ctx.clientId)
     || !clientPhoneE164
   ) {
     return fail(409, "Viva transaction is not a confirmed payment for this booking", {
@@ -726,6 +726,7 @@ if (ctx.step === "confirm_transaction_lookup") {
     operationType: "TRANSACTION",
     operationId: ctx.operationId,
     bookingId: ctx.bookingId,
+    exerciseId: ctx.expectedExerciseId,
     clientPhoneE164,
     verifiedAt: new Date().toISOString(),
     ...(amountMinor >= 0 ? { amountMinor } : {}),
@@ -735,22 +736,29 @@ if (ctx.step === "confirm_transaction_lookup") {
 }
 
 if (ctx.step === "confirm_subscription_booking_lookup") {
-  const bookingIds = providerIds(msg.payload, ["id", "uuid", "bookingId", "bookingIds", "bookings"]);
-  const exerciseIds = providerIds(msg.payload, ["exerciseId", "exercise", "exerciseIds"]);
-  const clientIds = providerIds(msg.payload, ["clientId", "client"]);
-  const clientPhoneE164 = providerPhone(msg.payload);
-  const status = providerStatus(msg.payload);
-  const hasSubscription = providerObjects(msg.payload).some((item) => (
-    Boolean(toStr(item.clientSubscriptionId || item.subscriptionId || item.clientSubId))
-    || /SUBSCRIPTION/i.test(String(item.paymentType || item.paymentMethod || ""))
+  const booking = providerObjects(msg.payload).find((item) => (
+    toStr(item.id || item.uuid || item.bookingId) === ctx.bookingId
+  )) || null;
+  const exerciseIds = providerIds(booking, ["exerciseId", "exercise", "exerciseIds"]);
+  const clientIds = providerIds(booking, ["clientId", "client"]);
+  const clientPhoneE164 = providerPhone(booking);
+  const hasSubscription = Boolean(booking && (
+    Boolean(toStr(booking.clientSubscriptionId || booking.subscriptionId || booking.clientSubId))
+    || /SUBSCRIPTION/i.test(String(booking.paymentType || booking.paymentMethod || ""))
   ));
+  const explicitlyActiveSubscriptionBooking = Boolean(
+    booking
+    && booking.isCancelled === false
+    && booking.cancelled === false
+    && String(booking.paymentType || booking.detailedPaymentType || "").trim().toUpperCase() === "SUBSCRIPTION"
+  );
   if (
-    !bookingIds.includes(ctx.bookingId)
+    !booking
     || !exerciseIds.includes(ctx.expectedExerciseId)
-    || (clientIds.length > 0 && !clientIds.includes(ctx.clientId))
+    || !clientIds.includes(ctx.clientId)
     || !clientPhoneE164
     || !hasSubscription
-    || statusIsRejected(status)
+    || !explicitlyActiveSubscriptionBooking
   ) {
     return fail(409, "Viva subscription booking is not confirmed for this player and game", {
       code: "LEGACY_SUBSCRIPTION_BOOKING_NOT_CONFIRMED",
@@ -760,6 +768,7 @@ if (ctx.step === "confirm_subscription_booking_lookup") {
     operationType: "SUBSCRIPTION_BOOKING",
     operationId: ctx.operationId,
     bookingId: ctx.bookingId,
+    exerciseId: ctx.expectedExerciseId,
     clientPhoneE164,
     verifiedAt: new Date().toISOString(),
     amountMinor: 0,

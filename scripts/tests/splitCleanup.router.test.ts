@@ -103,6 +103,35 @@ test("router blocks game cleanup cancellation when booking and exercise targets 
   assert.ok(trace.some((item) => item.step === "blocked_missing_viva_targets"));
 });
 
+test("cleanup fails closed when the Viva token request configuration is missing", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
+    payload: {
+      mode: "PARTICIPANT_TIMEOUT",
+      gameId: "game-token-config-missing",
+      reason: "PAYMENT_TIMEOUT",
+      dryRun: false,
+      bookingTargets: [{ bookingId: "booking-1", clientId: "client-1" }],
+      bookingIds: ["booking-1"],
+      nextParticipants: [],
+      nextWaitlist: [],
+      nextSplitPayments: [],
+      nextLeaveEvents: [],
+    },
+  }) as unknown[];
+
+  assert.equal(out[0], null);
+  assert.equal(out[1], null);
+  const summaryMsg = asRecord(out[2]);
+  const payload = asRecord(summaryMsg.payload);
+  assert.equal(payload.cancelledInLk, false);
+  assert.equal(payload.withVivaErrors, true);
+  assert.equal(payload.blockLocalMutation, true);
+  const trace = asTrace(payload.trace);
+  assert.ok(trace.some((item) => (
+    item.step === "token_config_missing" && item.code === "VIVA_TOKEN_CONFIG_MISSING"
+  )));
+});
+
 test("related booking cleanup starts with the client-scoped Admin cancel probe", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
     statusCode: 200,
@@ -289,6 +318,104 @@ test("participant timeout cancel uses a client-scoped Admin probe after transact
   );
   assert.equal(requestMsg.payload, undefined);
   assert.equal(ctx.step, "cancel_booking_probe");
+});
+
+test("participant timeout never restores an exact UNPAID transaction", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
+    statusCode: 200,
+    payload: { transactionId: "tx-unpaid", transactionStatus: "UNPAID", toPay: 0 },
+    _splitCleanupCtx: {
+      step: "check_timeout_transaction",
+      mode: "PARTICIPANT_TIMEOUT",
+      token: "token-1",
+      gameId: "game-1",
+      currentBookingId: "booking-unpaid",
+      currentClientId: "client-1",
+      currentTimedOutPayment: { transactionId: "tx-unpaid" },
+      bookingQueue: [],
+      bookingResults: [],
+      initialBookingIds: ["booking-unpaid"],
+      trace: [],
+    },
+  }) as unknown[];
+
+  const requestMsg = asRecord(out[0]);
+  const ctx = asRecord(requestMsg._splitCleanupCtx);
+  assert.equal(ctx.step, "cancel_booking_probe");
+});
+
+test("participant timeout never restores PAID evidence for another transaction", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
+    statusCode: 200,
+    payload: { transactionId: "tx-other", transactionStatus: "PAID" },
+    _splitCleanupCtx: {
+      step: "check_timeout_transaction",
+      mode: "PARTICIPANT_TIMEOUT",
+      token: "token-1",
+      gameId: "game-1",
+      currentBookingId: "booking-expected",
+      currentClientId: "client-1",
+      currentTimedOutPayment: { transactionId: "tx-expected" },
+      bookingQueue: [],
+      bookingResults: [],
+      initialBookingIds: ["booking-expected"],
+      trace: [],
+    },
+  }) as unknown[];
+
+  const requestMsg = asRecord(out[0]);
+  const ctx = asRecord(requestMsg._splitCleanupCtx);
+  assert.equal(ctx.step, "cancel_booking_probe");
+});
+
+test("participant timeout restores only exact PAID transaction evidence", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
+    statusCode: 200,
+    payload: { transactionId: "tx-exact", transactionStatus: "PAID" },
+    _splitCleanupCtx: {
+      step: "check_timeout_transaction",
+      mode: "PARTICIPANT_TIMEOUT",
+      token: "token-1",
+      gameId: "game-1",
+      reason: "PAYMENT_TIMEOUT",
+      dryRun: false,
+      currentBookingId: "booking-exact",
+      currentClientId: "client-1",
+      currentTimedOutPayment: {
+        transactionId: "tx-exact",
+        bookingIds: ["booking-exact"],
+        clientId: "client-1",
+        phone: "79990000001",
+        name: "Игрок",
+        playerBucket: "participants",
+      },
+      bookingQueue: [],
+      bookingResults: [],
+      initialBookingIds: ["booking-exact"],
+      trace: [],
+      exerciseId: null,
+      exerciseCancelled: true,
+      blockLocalMutation: false,
+      forceVivaErrors: false,
+      nextParticipants: [],
+      nextWaitlist: [],
+      nextSplitPayments: [{
+        transactionId: "tx-exact",
+        bookingIds: ["booking-exact"],
+        clientId: "client-1",
+        phone: "79990000001",
+        status: "EXPIRED",
+        cancelReason: "PAYMENT_TIMEOUT",
+      }],
+      nextLeaveEvents: [],
+      timedOutPayments: [],
+    },
+  }) as unknown[];
+
+  const setDoc = asRecord(asRecord(asRecord(out[1]).payload).$set);
+  const payments = setDoc["metadata.splitPayment.payments"] as Array<Record<string, unknown>>;
+  assert.equal(payments[0]?.status, "PAID");
+  assert.equal((setDoc.participants as Array<Record<string, unknown>>)[0]?.id, "client-1");
 });
 
 test("actor subscription keeps the proven empty End User payload and SERVICE audit semantics", () => {

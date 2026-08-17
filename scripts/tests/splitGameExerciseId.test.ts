@@ -4,7 +4,11 @@ import fs from "node:fs";
 
 function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
   const source = fs.readFileSync(file, "utf8");
-  return new Function("msg", source)(msg);
+  return new Function("msg", "env", "global", source)(
+    msg,
+    { get: (key: string) => key === "VIVACRM_TOKEN_REQUEST_BODY" ? "test-token-request-body" : null },
+    { get: () => null },
+  );
 }
 
 test("game create promotes splitPayment vivaExerciseId into booking and metadata", () => {
@@ -127,4 +131,46 @@ test("split create rejects ambiguous subscription payment without an explicit cl
   assert.equal(error.statusCode, 400);
   assert.equal(error.payload.error, "clientSubscriptionId is required for subscription payment");
   assert.equal(error.payload.details.code, "SUBSCRIPTION_SELECTION_REQUIRED");
+});
+
+test("split join fails closed when Viva token request configuration is missing", () => {
+  const source = fs.readFileSync("scripts/nodered_games_nodes/fn_split_join_prepare.js", "utf8");
+  const out = new Function("msg", "env", "global", source)(
+    {
+      payload: [{
+        id: "game-token-config",
+        settings: { payMode: "split" },
+        booking: {
+          studioId: "studio-1",
+          date: "2026-06-04",
+          timeFrom: "12:00",
+          timeTo: "13:00",
+        },
+        metadata: { vivaExerciseId: "exercise-1" },
+      }],
+      _splitJoinBody: {
+        clientPhone: "79990000003",
+        studioId: "studio-1",
+        paymentMode: "one_time",
+      },
+    },
+    { get: () => null },
+    { get: () => null },
+  ) as unknown[];
+
+  const error = out[1] as Record<string, any>;
+  assert.equal(error.statusCode, 503);
+  assert.equal(error.payload.details.code, "VIVA_TOKEN_CONFIG_MISSING");
+});
+
+test("split create and join sources contain no inline Viva password grant", () => {
+  for (const file of [
+    "scripts/nodered_games_nodes/fn_split_cleanup_router.js",
+    "scripts/nodered_games_nodes/fn_split_create_prepare.js",
+    "scripts/nodered_games_nodes/fn_split_join_prepare.js",
+  ]) {
+    const source = fs.readFileSync(file, "utf8");
+    assert.doesNotMatch(source, /grant_type=password|username=|password=/);
+    assert.match(source, /VIVACRM_TOKEN_REQUEST_BODY/);
+  }
 });
