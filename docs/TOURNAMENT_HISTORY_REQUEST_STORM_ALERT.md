@@ -201,6 +201,65 @@ Before rollout:
    not cause sustained read growth. The cache is not a distributed singleflight
    lock, so a small burst can still reach storage at a cache boundary.
 
+## Community Feed History Index Migration
+
+The publication fallback reads `games.lk_community_feed` through five `$or`
+branches. The 2026-08-17 production preflight found MongoDB `8.0.17-6`, 19,564
+documents (about 47 MB logical data), only `_id_`, and a `COLLSCAN` examining
+19,564 documents. Of 1,601 active tournament publications, the dominant lookup
+field was `details.publicTournament.exerciseId` (816 documents); the remaining
+legacy fields were absent or nearly absent. Use five indexes partial on
+`kind: "TOURNAMENT"` so every `$or` branch is eligible without indexing the
+roughly 18,000 unrelated community posts. Do not add a field `$type` condition:
+MongoDB 7 rehearsal kept the resulting `$or` plan on `COLLSCAN` because the
+query planner could not prove that partial-filter implication.
+
+The migration tool is catalog-digest guarded and never prints the connection
+URI. `plan` and `verify` are read-only. A private Node-RED flow file supplies
+the exact reviewed production Mongo config. `MONGO_URI` is accepted for
+`plan`/`verify` only with the explicit `CONFIRM_ISOLATED_DB` test-mode guard;
+`apply` always requires `--flow-path`.
+
+Create a read-only plan first:
+
+```bash
+npm run mongo:tournament-history-indexes -- plan \
+  --flow-path /root/.node-red/flows.json \
+  --out /root/tournament-history-index-plan.json
+```
+
+Review the five missing managed indexes, require zero catalog conflicts, and
+record the 64-character `planDigest`. Index creation is a separate deployment
+gate: the application storm guard, its rollout approval, and this plan do not
+authorize a production write.
+
+After explicit migration approval, apply only the unchanged plan:
+
+```bash
+TOURNAMENT_HISTORY_INDEX_APPLY=CONFIRM_LK_COMMUNITY_FEED \
+  npm run mongo:tournament-history-indexes -- apply \
+  --flow-path /root/.node-red/flows.json \
+  --expected-plan-digest <reviewed-plan-digest> \
+  --out /root/tournament-history-index-apply.json
+```
+
+The apply step creates only missing exact managed indexes and then requires all
+five names in the winning plan with no `COLLSCAN`. If that postcheck fails, it
+best-effort removes only exact managed indexes absent from the initial catalog
+and exits non-zero. Never drop a name/equivalent conflict automatically.
+
+Run the independent read-only postcheck:
+
+```bash
+npm run mongo:tournament-history-indexes -- verify \
+  --flow-path /root/.node-red/flows.json \
+  --out /root/tournament-history-index-verify.json
+```
+
+The isolated rehearsal uses MongoDB 7, while production currently reports
+MongoDB 8. Treat the production `plan` and post-apply `verify` as mandatory
+version-specific gates.
+
 ## Backend Rollout Postcheck
 
 Apply the Node-RED import from `node-red/modular/imports-tournaments-active/` before treating the backend route as hardened. The expected history route properties are covered by `scripts/tests/tournamentHistory.nodered.test.ts`: no reachable active debug node, `limit=1`, and `maxTimeMS=5000`.
