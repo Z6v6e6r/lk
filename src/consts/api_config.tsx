@@ -10,6 +10,8 @@ const PROD_CABINET_URL = "https://padlhub.ru/lk_new";
 const DEV_CABINET_URL = "https://padlhub.ru/lk_dev";
 
 export const IS_DEV_RELEASE_CHANNEL = import.meta.env.MODE === "dev";
+export const ALLOW_LOCAL_PRODUCTION_HISTORY_API =
+  String(import.meta.env.VITE_ALLOW_LOCAL_PRODUCTION_HISTORY_API || "").trim().toLowerCase() === "true";
 const ACTIVE_LK_ASSET_BASE_URL = resolveLkAssetBaseUrl(undefined, IS_DEV_RELEASE_CHANNEL);
 
 export const API_BASE = resolveReleaseChannelUrl(

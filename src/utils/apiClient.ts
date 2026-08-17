@@ -8,6 +8,7 @@ import {
   FAIL_URL,
   GAMES_MASTER_SERVICE_ID,
   IS_DEV_RELEASE_CHANNEL,
+  ALLOW_LOCAL_PRODUCTION_HISTORY_API,
 } from "../consts/api_config";
 import { readAuthToken } from "./authTokenStorage";
 import { trackClientError } from "./analytics";
@@ -33,6 +34,7 @@ import {
 } from "./lkApiBaseUrls";
 import { isLkIdleRequestPausedError } from "./lkIdleDataGuard";
 import { isGameExerciseIdMissingGuard } from "./paymentSyncBookingResolution";
+import { shouldBlockLocalProductionTournamentHistoryRequest } from "./tournamentHistoryRequestPolicy";
 
 const DEFAULT_GAMES_MASTER_SERVICE_ID =
   GAMES_MASTER_SERVICE_ID || "2f4155ad-7bc0-4a15-a12c-da7fce15c37a";
@@ -42,7 +44,7 @@ const DEV_EXERCISES_CACHE_TTL_MS = 30_000;
 const DEV_GAMES_CACHE_TTL_MS = 30_000;
 const DEV_CHAT_SUMMARY_CACHE_TTL_MS = 5_000;
 const DEV_TOURNAMENT_HISTORY_CACHE_TTL_MS = 60_000;
-const PROD_TOURNAMENT_HISTORY_EMPTY_CACHE_TTL_MS = 15_000;
+const PROD_TOURNAMENT_HISTORY_CACHE_TTL_MS = 10_000;
 const DEV_CABINET_ADVERTISING_CACHE_TTL_MS = 30_000;
 const DEV_SPLIT_PAYMENT_PROMO_CACHE_TTL_MS = 30_000;
 
@@ -5638,48 +5640,48 @@ function normalizeTournamentHistoryRecord(value: unknown): TournamentHistoryReco
 
 type TournamentHistoryApiResult = ApiResult<TournamentHistoryRecord[]>;
 
-type ProdTournamentHistoryEmptyCacheEntry = {
+type ProdTournamentHistoryCacheEntry = {
   expiresAt: number;
   result: TournamentHistoryApiResult;
 };
 
 const prodTournamentHistoryInflight = new Map<string, Promise<TournamentHistoryApiResult>>();
-const prodTournamentHistoryEmptyCache = new Map<string, ProdTournamentHistoryEmptyCacheEntry>();
+const prodTournamentHistoryCache = new Map<string, ProdTournamentHistoryCacheEntry>();
 
-function pruneProdTournamentHistoryEmptyCache() {
+function pruneProdTournamentHistoryCache() {
   const now = Date.now();
-  prodTournamentHistoryEmptyCache.forEach((entry, key) => {
+  prodTournamentHistoryCache.forEach((entry, key) => {
     if (entry.expiresAt <= now) {
-      prodTournamentHistoryEmptyCache.delete(key);
+      prodTournamentHistoryCache.delete(key);
     }
   });
 }
 
-function readProdTournamentHistoryEmptyCache(tournamentId: string): TournamentHistoryApiResult | null {
+function readProdTournamentHistoryCache(tournamentId: string): TournamentHistoryApiResult | null {
   if (!tournamentId) return null;
-  const entry = prodTournamentHistoryEmptyCache.get(tournamentId);
+  const entry = prodTournamentHistoryCache.get(tournamentId);
   if (!entry) return null;
   if (entry.expiresAt <= Date.now()) {
-    prodTournamentHistoryEmptyCache.delete(tournamentId);
+    prodTournamentHistoryCache.delete(tournamentId);
     return null;
   }
   return entry.result;
 }
 
-function isEmptyTournamentHistoryResult(result: TournamentHistoryApiResult) {
-  return !result.error && Array.isArray(result.data) && result.data.length === 0;
+function isCacheableTournamentHistoryResult(result: TournamentHistoryApiResult) {
+  return !result.error && Array.isArray(result.data);
 }
 
-function writeProdTournamentHistoryEmptyCache(
+function writeProdTournamentHistoryCache(
   tournamentId: string,
   result: TournamentHistoryApiResult,
 ) {
-  if (!tournamentId || !isEmptyTournamentHistoryResult(result)) return;
-  pruneProdTournamentHistoryEmptyCache();
-  prodTournamentHistoryEmptyCache.set(tournamentId, {
-    expiresAt: Date.now() + PROD_TOURNAMENT_HISTORY_EMPTY_CACHE_TTL_MS,
+  if (!tournamentId || !isCacheableTournamentHistoryResult(result)) return;
+  pruneProdTournamentHistoryCache();
+  prodTournamentHistoryCache.set(tournamentId, {
+    expiresAt: Date.now() + PROD_TOURNAMENT_HISTORY_CACHE_TTL_MS,
     result: {
-      data: [],
+      data: [...(result.data ?? [])],
       error: null,
       status: result.status,
     },
@@ -5688,6 +5690,21 @@ function writeProdTournamentHistoryEmptyCache(
 
 async function fetchTournamentHistoryUncached(tournamentId: string): Promise<TournamentHistoryApiResult> {
   const base = getServ2Origin();
+  const pageUrl = typeof window !== "undefined" ? window.location.href : null;
+  if (shouldBlockLocalProductionTournamentHistoryRequest({
+    pageUrl,
+    apiUrl: base,
+    allowLocalProductionApi: IS_DEV_RELEASE_CHANNEL && ALLOW_LOCAL_PRODUCTION_HISTORY_API,
+  })) {
+    return {
+      data: [],
+      error: {
+        status: null,
+        message: "Локальный стенд не может читать production-историю турниров без явного разрешения",
+      },
+      status: null,
+    };
+  }
   const result = await request<unknown>(
     `${base}/lk/tournaments/americano/history?tournamentId=${encodeURIComponent(tournamentId)}`,
     {
@@ -5722,11 +5739,11 @@ async function fetchTournamentHistoryUncached(tournamentId: string): Promise<Tou
 
 export async function apiFetchTournamentHistory(tournamentId: string): Promise<TournamentHistoryApiResult> {
   const normalizedTournamentId = String(tournamentId || "").trim();
-  const cachedEmptyResult = !IS_DEV_RELEASE_CHANNEL
-    ? readProdTournamentHistoryEmptyCache(normalizedTournamentId)
+  const cachedResult = !IS_DEV_RELEASE_CHANNEL
+    ? readProdTournamentHistoryCache(normalizedTournamentId)
     : null;
-  if (cachedEmptyResult) {
-    return cachedEmptyResult;
+  if (cachedResult) {
+    return cachedResult;
   }
 
   const inflightRequest = !IS_DEV_RELEASE_CHANNEL
@@ -5744,7 +5761,7 @@ export async function apiFetchTournamentHistory(tournamentId: string): Promise<T
   prodTournamentHistoryInflight.set(normalizedTournamentId, requestPromise);
   void requestPromise
     .then((result) => {
-      writeProdTournamentHistoryEmptyCache(normalizedTournamentId, result);
+      writeProdTournamentHistoryCache(normalizedTournamentId, result);
     })
     .catch(() => undefined)
     .finally(() => {

@@ -33,10 +33,10 @@ test("tournaments page guards explicit history open flow against repeated same-t
   );
 });
 
-test("api client dedupes prod tournament history requests and briefly caches empty misses", () => {
+test("api client dedupes and briefly caches every successful prod tournament history response", () => {
   assert.match(
     apiClientSource,
-    /const PROD_TOURNAMENT_HISTORY_EMPTY_CACHE_TTL_MS = 15_000;/,
+    /const PROD_TOURNAMENT_HISTORY_CACHE_TTL_MS = 10_000;/,
   );
   assert.match(
     apiClientSource,
@@ -44,15 +44,15 @@ test("api client dedupes prod tournament history requests and briefly caches emp
   );
   assert.match(
     apiClientSource,
-    /const prodTournamentHistoryEmptyCache = new Map<string, ProdTournamentHistoryEmptyCacheEntry>\(\);/,
+    /const prodTournamentHistoryCache = new Map<string, ProdTournamentHistoryCacheEntry>\(\);/,
   );
   assert.match(
     apiClientSource,
-    /return !result\.error && Array\.isArray\(result\.data\) && result\.data\.length === 0;/,
+    /return !result\.error && Array\.isArray\(result\.data\);/,
   );
   assert.match(
     apiClientSource,
-    /const cachedEmptyResult = !IS_DEV_RELEASE_CHANNEL\s*\?\s*readProdTournamentHistoryEmptyCache\(normalizedTournamentId\)\s*:\s*null;/,
+    /const cachedResult = !IS_DEV_RELEASE_CHANNEL\s*\?\s*readProdTournamentHistoryCache\(normalizedTournamentId\)\s*:\s*null;/,
   );
   assert.match(
     apiClientSource,
@@ -64,6 +64,6 @@ test("api client dedupes prod tournament history requests and briefly caches emp
   );
   assert.match(
     apiClientSource,
-    /writeProdTournamentHistoryEmptyCache\(normalizedTournamentId, result\);/,
+    /writeProdTournamentHistoryCache\(normalizedTournamentId, result\);/,
   );
 });

@@ -6,12 +6,12 @@ const DOC_PATH = "docs/TOURNAMENT_HISTORY_REQUEST_STORM_ALERT.md";
 const HISTORY_PATH = "/lk/tournaments/americano/history";
 
 const ALERT_THRESHOLDS = Object.freeze({
-  identityWindowRequestsWarning: 600,
-  identityWindowRequestsCritical: 2_000,
-  identityHourRequestsCritical: 10_000,
-  routeWindowRequestsWarning: 2_000,
-  routeWindowRequestsCritical: 5_000,
-  routeHourRequestsCritical: 25_000,
+  identityWindowRequestsWarning: 300,
+  identityWindowRequestsCritical: 1_200,
+  identityHourRequestsCritical: 2_000,
+  routeWindowRequestsWarning: 1_000,
+  routeWindowRequestsCritical: 3_000,
+  routeHourRequestsCritical: 15_000,
   windowMs: 10 * 60 * 1000,
   hourMs: 60 * 60 * 1000,
 });
@@ -255,13 +255,13 @@ test("tournament history request storm doc pins the external alert spec", () => 
 
   assert.match(doc, /Do not add this as a frontend analytics event/);
   assert.match(doc, /TournamentHistoryIdentityRequestStorm/);
-  assert.match(doc, />= 2000 requests in 10m/);
-  assert.match(doc, />= 10000 requests in 1h/);
+  assert.match(doc, />= 1200 requests in 10m/);
+  assert.match(doc, />= 2000 requests in 1h/);
   assert.match(doc, /TournamentHistoryRouteStorm/);
-  assert.match(doc, />= 5000 requests in 10m/);
-  assert.match(doc, />= 25000 requests in 1h/);
+  assert.match(doc, />= 3000 requests in 10m/);
+  assert.match(doc, />= 15000 requests in 1h/);
   assert.match(doc, /TournamentHistoryIdentityRequestStormWarning/);
-  assert.match(doc, />= 600 requests in 10m/);
+  assert.match(doc, />= 300 requests in 10m/);
   assert.match(doc, /TournamentHistoryRouteStormWarning/);
   assert.match(doc, /log_format lk_tournament_history_json/);
   assert.match(doc, /limit_req_zone \$binary_remote_addr\$arg_tournamentId/);

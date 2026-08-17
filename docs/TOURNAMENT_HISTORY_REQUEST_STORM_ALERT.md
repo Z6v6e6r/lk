@@ -16,12 +16,17 @@ Use 10-minute and 1-hour windows. Group identity alerts by `remote_addr + tourna
 
 | Rule | Severity | Condition |
 | --- | --- | --- |
-| `TournamentHistoryIdentityRequestStorm` | P0 / page | `>= 2000 requests in 10m` for one `remote_addr + tournamentId`, or `>= 10000 requests in 1h` for one `remote_addr + tournamentId` |
-| `TournamentHistoryRouteStorm` | P0 / page | `>= 5000 requests in 10m` for the route, or `>= 25000 requests in 1h` for the route |
-| `TournamentHistoryIdentityRequestStormWarning` | P1 / notify | `>= 600 requests in 10m` for one `remote_addr + tournamentId` |
-| `TournamentHistoryRouteStormWarning` | P1 / notify | `>= 2000 requests in 10m` for the route |
+| `TournamentHistoryIdentityRequestStorm` | P0 / page | `>= 1200 requests in 10m` for one `remote_addr + tournamentId`, or `>= 2000 requests in 1h` for one `remote_addr + tournamentId` |
+| `TournamentHistoryRouteStorm` | P0 / page | `>= 3000 requests in 10m` for the route, or `>= 15000 requests in 1h` for the route |
+| `TournamentHistoryIdentityRequestStormWarning` | P1 / notify | `>= 300 requests in 10m` for one `remote_addr + tournamentId` |
+| `TournamentHistoryRouteStormWarning` | P1 / notify | `>= 1000 requests in 10m` for the route |
 
 The 2026-06-28 incident had `38329` requests in one hour from `95.165.157.255` for `tournamentId=6c4d1403-b250-4d96-91bf-b7c1fd99343a`, so it would trigger the P0 identity alert and the P0 route alert.
+
+The 2026-08-17 incident was smaller but still cleared shared Mongo pools: one
+localhost-backed test contour produced about `2400` requests in one hour for a
+single non-empty history response. The previous warning threshold missed it;
+the revised hourly identity threshold catches this pattern.
 
 ## Nginx Log Spec
 
@@ -91,11 +96,11 @@ groups:
         expr: |
           sum by (remote_addr, tournamentId) (
             count_over_time({job="lk_tournament_history_nginx"} | json | method="GET" | tournamentId!="" [10m])
-          ) >= 2000
+          ) >= 1200
           or
           sum by (remote_addr, tournamentId) (
             count_over_time({job="lk_tournament_history_nginx"} | json | method="GET" | tournamentId!="" [1h])
-          ) >= 10000
+          ) >= 2000
         for: 2m
         labels:
           severity: page
@@ -106,9 +111,9 @@ groups:
 
       - alert: TournamentHistoryRouteStorm
         expr: |
-          sum(count_over_time({job="lk_tournament_history_nginx"} | json | method="GET" [10m])) >= 5000
+          sum(count_over_time({job="lk_tournament_history_nginx"} | json | method="GET" [10m])) >= 3000
           or
-          sum(count_over_time({job="lk_tournament_history_nginx"} | json | method="GET" [1h])) >= 25000
+          sum(count_over_time({job="lk_tournament_history_nginx"} | json | method="GET" [1h])) >= 15000
         for: 2m
         labels:
           severity: page
@@ -121,7 +126,7 @@ groups:
         expr: |
           sum by (remote_addr, tournamentId) (
             count_over_time({job="lk_tournament_history_nginx"} | json | method="GET" | tournamentId!="" [10m])
-          ) >= 600
+          ) >= 300
         for: 10m
         labels:
           severity: notify
@@ -131,7 +136,7 @@ groups:
 
       - alert: TournamentHistoryRouteStormWarning
         expr: |
-          sum(count_over_time({job="lk_tournament_history_nginx"} | json | method="GET" [10m])) >= 2000
+          sum(count_over_time({job="lk_tournament_history_nginx"} | json | method="GET" [10m])) >= 1000
         for: 10m
         labels:
           severity: notify
@@ -145,10 +150,10 @@ groups:
 This is a mitigation, not the alert. Apply only after checking the route's shared proxy/CORS config, because an exact `location = /lk/tournaments/americano/history` must preserve the same upstream headers as the current `/lk/tournaments` proxy.
 
 ```nginx
-limit_req_zone $binary_remote_addr$arg_tournamentId zone=lk_tournament_history_by_ip_tournament:20m rate=120r/m;
+limit_req_zone $binary_remote_addr$arg_tournamentId zone=lk_tournament_history_by_ip_tournament:20m rate=24r/m;
 
 location = /lk/tournaments/americano/history {
-    limit_req zone=lk_tournament_history_by_ip_tournament burst=240 nodelay;
+    limit_req zone=lk_tournament_history_by_ip_tournament burst=24 nodelay;
     # keep the existing /lk/tournaments proxy headers, CORS handling, timeouts and proxy_pass here
 }
 ```
@@ -158,7 +163,43 @@ Recommended response to P0:
 1. Confirm the top `remote_addr`, `tournamentId`, status mix, and request rate from `lk_tournament_history_access.log`.
 2. Temporarily block or rate-limit the offending identity if the storm continues.
 3. Verify backend hardening separately: disable accidental debug fan-out, create an index on `tournaments.tournamentId`, and constrain the history query with `findOne` or `limit`, projection and `maxTimeMS`.
-4. Verify frontend hardening separately: explicit-open fetch only, in-flight dedupe, and negative cache for empty future history.
+4. Verify frontend hardening separately: explicit-open fetch only, in-flight dedupe, and a short cache for both empty and non-empty history.
+
+## Application Guard Contract
+
+The guarded Node-RED candidate is built by
+`scripts/patch_live_tournament_history_storm_guard.mjs` from the exact active
+flow preimage. It adds no routes and preserves the existing `limit=1`,
+`limit=50`, `maxTimeMS=5000`, and scoped storage-error path.
+
+Before either Mongo read it applies a per `x-real-ip + tournamentId` fixed-window
+limit of 24 requests per minute and a shared 10-second response cache. A cache
+hit bypasses both Mongo reads. Missing IDs return `400`; excess traffic returns
+safe `429 TOURNAMENT_HISTORY_RATE_LIMITED` with `Retry-After`.
+
+The browser also caches every successful production history response for 10
+seconds. A page served from `localhost`, `127.0.0.1`, or `::1` cannot call the
+production PadlHub history API unless the build explicitly sets
+`VITE_ALLOW_LOCAL_PRODUCTION_HISTORY_API=true` in the `dev` release channel.
+The override is ignored by a production-channel bundle, is for a bounded,
+operator-controlled smoke only, and must not be present in ordinary local or
+DEV builds.
+
+Before rollout:
+
+1. Fresh-pull the protected `147` flow and require the exact reviewed SHA.
+2. Run the patcher outside the repository and confirm only two existing wire
+   changes plus two added function nodes.
+3. Verify the live nginx proxy overwrites `X-Real-IP`; do not trust a
+   browser-supplied forwarding header.
+4. Run a read-only `explain("executionStats")` for the five-field
+   `lk_community_feed` publication query. Treat `COLLSCAN` as a separate index
+   migration gate; the application guard does not authorize index creation.
+5. Load-test two callers every three seconds. Confirm that the shared cache
+   bounds serialized storage reads (the focused harness observes four in the
+   first minute), requests above 24 receive `429`, and parallel cold misses do
+   not cause sustained read growth. The cache is not a distributed singleflight
+   lock, so a small burst can still reach storage at a cache boundary.
 
 ## Backend Rollout Postcheck
 

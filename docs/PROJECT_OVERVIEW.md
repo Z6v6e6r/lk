@@ -134,6 +134,8 @@ VITE_GAMES_BUNDLE_URL=https://padlhub.su/lk/games.js
 VITE_TOURNAMENTS_BUNDLE_URL=https://padlhub.su/lk/tournaments.js
 VITE_ONBOARDING_BUNDLE_URL=https://padlhub.su/lk/onboarding.js
 VITE_CABINET_URL=https://padlhub.ru/lk_new
+# Только для явно разрешённого короткого local→production smoke истории турнира:
+# VITE_ALLOW_LOCAL_PRODUCTION_HISTORY_API=true
 ```
 
 `.env.dev` — аналог для dev-сборки (`build:dev`); dev-бандлы сначала собираются во временный `dist-dev/`, а затем копируются в `dist/` как `*-dev.js`. Во время сборки дополнительно создаются `release.json` и `release-dev.json`, которые используются внешним загрузчиком для принудительного обновления Safari.
