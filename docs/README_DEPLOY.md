@@ -40,6 +40,14 @@ proxy-location из `scripts/nginx/lk-subscription-booking-location.conf`.
 `scripts/nginx/patch_subscription_booking_proxy.mjs` с SHA текущего live-конфига,
 backup, последующими `nginx -t` и `systemctl reload nginx`.
 
+Legacy-маршруты roster и подтверждения оплаты требуют публичного CORS preflight
+с `Idempotency-Key` и `X-Correlation-ID`. Nginx-кандидат для вложенного
+`/lk/games/` строится только guarded-скриптом
+`scripts/nginx/patch_lk_games_cors.mjs`. Staged rollout, rollback и обратимый
+вынос backup-vhost из `sites-enabled` описаны в
+`docs/NGINX_LK_GAMES_CORS.md`. До успешного публичного preflight включать
+roster bridge нельзя.
+
 ### Защита Node-RED MongoDB URI в логах
 
 Установленный `@pafum/node-red-node-mongodb` по умолчанию печатает полный URI
