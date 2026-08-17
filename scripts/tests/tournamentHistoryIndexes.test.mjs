@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -160,6 +162,34 @@ test("apply fails closed before connecting when explicit confirmation is absent"
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Apply confirmation is absent/);
   assert.doesNotMatch(result.stderr, /Provide a protected --flow-path or MONGO_URI/);
+});
+
+test("CLI loads with the CommonJS export shape used by the production MongoDB driver", () => {
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "th-index-cjs-driver-"));
+  const temporaryScript = path.join(temporaryDirectory, "migration.mjs");
+  const packageDirectory = path.join(temporaryDirectory, "node_modules", "mongodb");
+
+  try {
+    fs.mkdirSync(packageDirectory, { recursive: true });
+    fs.copyFileSync(migrationScript, temporaryScript);
+    fs.writeFileSync(path.join(packageDirectory, "package.json"), JSON.stringify({
+      name: "mongodb",
+      version: "3.7.4-test-fixture",
+      main: "index.js",
+    }));
+    fs.writeFileSync(
+      path.join(packageDirectory, "index.js"),
+      "module.exports = { MongoClient: class MongoClient {} };\n",
+    );
+
+    const result = spawnSync(process.execPath, [temporaryScript, "--help"], {
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stderr, /Named export 'MongoClient' not found/);
+  } finally {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
 });
 
 test("apply rejects an environment URI even in explicit isolated test mode", () => {

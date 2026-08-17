@@ -5,7 +5,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { MongoClient } from "mongodb";
+import mongodb from "mongodb";
+
+const { MongoClient } = mongodb;
 
 export const TOURNAMENT_HISTORY_DB = "games";
 export const TOURNAMENT_HISTORY_COLLECTION = "lk_community_feed";
