@@ -1444,7 +1444,7 @@ const rows = toArray(msg.payload).filter((item) => !item?.archived);
 const ctx = isObj(msg._communityLogoAsset) ? msg._communityLogoAsset : {};
 if (rows.length === 0) {
   const errorMsg = withJson(msg, 404, { error: 'Logo asset not found' });
-  return [null, errorMsg, errorMsg];
+  return [errorMsg, errorMsg];
 }
 
 const asset = rows[0];
@@ -1454,14 +1454,14 @@ const storedPart = isObj(asset?.[variant])
   : (variant === 'thumb' && isObj(asset?.original) ? asset.original : null);
 if (!storedPart) {
   const errorMsg = withJson(msg, 404, { error: 'Logo variant not found' });
-  return [null, errorMsg, errorMsg];
+  return [errorMsg, errorMsg];
 }
 
 const encoding = toStr(storedPart.encoding)?.toLowerCase() === 'utf8' ? 'utf8' : 'base64';
 const rawBody = typeof storedPart.body === 'string' ? storedPart.body : '';
 if (!rawBody) {
   const errorMsg = withJson(msg, 404, { error: 'Logo asset is empty' });
-  return [null, errorMsg, errorMsg];
+  return [errorMsg, errorMsg];
 }
 
 try {
@@ -1472,7 +1472,7 @@ try {
   return [msg, msg];
 } catch {
   const errorMsg = withJson(msg, 500, { error: 'Failed to decode logo asset' });
-  return [null, errorMsg, errorMsg];
+  return [errorMsg, errorMsg];
 }
 `;
 
@@ -1496,7 +1496,7 @@ const rows = toArray(msg.payload).filter((item) => !item?.archived);
 const ctx = isObj(msg._communityLegacyLogo) ? msg._communityLegacyLogo : {};
 if (rows.length === 0) {
   const errorMsg = withJson(msg, 404, { error: 'Community not found' });
-  return [null, errorMsg, errorMsg];
+  return [errorMsg, errorMsg];
 }
 
 const community = rows[0];
@@ -1518,7 +1518,7 @@ const preferredSource = variant === 'thumb'
 const parsed = parseDataUrl(preferredSource);
 if (!parsed) {
   const errorMsg = withJson(msg, 404, { error: 'Legacy logo not found' });
-  return [null, errorMsg, errorMsg];
+  return [errorMsg, errorMsg];
 }
 
 try {
@@ -1529,7 +1529,7 @@ try {
   return [msg, msg];
 } catch {
   const errorMsg = withJson(msg, 500, { error: 'Failed to decode legacy logo' });
-  return [null, errorMsg, errorMsg];
+  return [errorMsg, errorMsg];
 }
 `;
 
