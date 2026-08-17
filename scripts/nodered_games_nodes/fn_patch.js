@@ -39,6 +39,31 @@ if (!gameId) {
 }
 
 const body = isObj(msg.payload) ? msg.payload : {};
+const canonicalRosterBridgeEnabled = (() => {
+  try {
+    return ["1", "true", "yes", "on"].includes(
+      String(env.get("PADLHUB_LEGACY_ROSTER_PATCH_GUARD_ENABLED") || "").trim().toLowerCase(),
+    );
+  } catch {
+    return false;
+  }
+})();
+if (
+  canonicalRosterBridgeEnabled
+  && (Object.prototype.hasOwnProperty.call(body, "participants")
+    || Object.prototype.hasOwnProperty.call(body, "waitlist"))
+) {
+  msg.statusCode = 403;
+  msg.headers = {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+  };
+  msg.payload = {
+    code: "GAME_ROSTER_COMMAND_REQUIRED",
+    error: "Состав игры изменяется только через защищённую команду записи",
+  };
+  return [null, msg, msg, null];
+}
 const reqPathRaw =
   toStr(msg.req?.path)
   || toStr(msg.req?.originalUrl)

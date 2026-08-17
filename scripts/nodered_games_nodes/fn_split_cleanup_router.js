@@ -146,7 +146,7 @@ const extractTransactionPayload = (payload) => {
   return payload;
 };
 
-const isPaidTransactionPayload = (payload) => {
+const isPaidTransactionPayload = (payload, expectedTransactionId) => {
   const tx = extractTransactionPayload(payload);
   const status = normalizeTransactionStatus(
     tx.status
@@ -154,28 +154,14 @@ const isPaidTransactionPayload = (payload) => {
     || tx.paymentStatus
     || tx.transactionStatus,
   );
-  if (
-    status.includes("PAID")
-    || status.includes("SUCCESS")
-    || status.includes("COMPLETE")
-    || status.includes("APPROV")
-    || status.includes("CONFIRM")
-  ) {
-    return true;
-  }
-  if (
-    status.includes("FAIL")
-    || status.includes("CANCEL")
-    || status.includes("REJECT")
-    || status.includes("ERROR")
-    || status.includes("EXPIRE")
-    || status.includes("REFUND")
-    || status.includes("VOID")
-  ) {
-    return false;
-  }
-  const toPay = toNumber(tx.toPay);
-  return toPay !== null && toPay <= 0;
+  const transactionId = toStr(
+    tx.transactionId
+    || tx.transaction_id
+    || tx.id,
+  );
+  return status === "PAID"
+    && Boolean(transactionId)
+    && transactionId === toStr(expectedTransactionId);
 };
 
 const buildTimedOutPaymentByBooking = (values) => {
@@ -1670,7 +1656,7 @@ if (ctx.step === "check_timeout_transaction") {
     });
   }
 
-  if (isOk(statusCode) && isPaidTransactionPayload(msg.payload)) {
+  if (isOk(statusCode) && isPaidTransactionPayload(msg.payload, transactionId)) {
     recoverPaidTimedOutState(ctx, timeoutMeta, msg.payload || null);
     appendTrace(ctx, {
       step: "check_timeout_transaction_paid",

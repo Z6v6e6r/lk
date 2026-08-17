@@ -140,3 +140,46 @@ test("split create rejects ambiguous subscription payment without an explicit cl
   assert.equal(error.payload.error, "clientSubscriptionId is required for subscription payment");
   assert.equal(error.payload.details.code, "SUBSCRIPTION_SELECTION_REQUIRED");
 });
+
+test("split join fails closed when Viva token request configuration is missing", () => {
+  const source = fs.readFileSync("scripts/nodered_games_nodes/fn_split_join_prepare.js", "utf8");
+  const out = new Function("msg", "env", "global", source)(
+    {
+      payload: [{
+        id: "game-token-config",
+        settings: { payMode: "split" },
+        booking: {
+          studioId: "studio-1",
+          date: "2026-06-04",
+          timeFrom: "12:00",
+          timeTo: "13:00",
+        },
+        metadata: { vivaExerciseId: "exercise-1" },
+      }],
+      _splitJoinBody: {
+        clientPhone: "79990000003",
+        studioId: "studio-1",
+        paymentMode: "one_time",
+      },
+    },
+    { get: () => null },
+    { get: () => null },
+  ) as unknown[];
+
+  const error = out[1] as Record<string, any>;
+  assert.equal(error.statusCode, 503);
+  assert.equal(error.payload.details.code, "VIVA_SERVICE_AUTH_NOT_CONFIGURED");
+});
+
+test("split sources load Viva service credentials from env and contain no inline credentials", () => {
+  for (const file of [
+    "scripts/nodered_games_nodes/fn_split_cleanup_router.js",
+    "scripts/nodered_games_nodes/fn_split_create_prepare.js",
+    "scripts/nodered_games_nodes/fn_split_join_prepare.js",
+  ]) {
+    const source = fs.readFileSync(file, "utf8");
+    assert.doesNotMatch(source, /grant_type=password|username=|password=/);
+    assert.match(source, /VIVA_SERVICE_USERNAME/);
+    assert.match(source, /VIVA_SERVICE_PASSWORD/);
+  }
+});

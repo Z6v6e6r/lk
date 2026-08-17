@@ -113,3 +113,17 @@ test("split callers treat PENDING_CONFIRMATION as an error instead of creating a
     assert.match(sourceBlock, /data: null as PadelSplitPaymentResult \| null/);
   }
 });
+
+test("split payment confirmation sends provider locators without a browser-owned paid flag", () => {
+  const start = source.indexOf("export async function apiConfirmPadelGameRosterPayment");
+  const end = source.indexOf("export async function apiCreatePadelGameRecord", start);
+  assert.ok(start >= 0 && end > start);
+  const confirmationFunction = source.slice(start, end);
+
+  assert.match(confirmationFunction, /roster-payment-confirm/);
+  assert.match(confirmationFunction, /reservationId:\s*input\.reservationId\.trim\(\)/);
+  assert.match(confirmationFunction, /operationType:\s*input\.operationType/);
+  assert.match(confirmationFunction, /operationId:\s*input\.operationId\.trim\(\)/);
+  assert.match(confirmationFunction, /bookingId:\s*input\.bookingId\.trim\(\)/);
+  assert.doesNotMatch(confirmationFunction, /\bpaid\s*:/);
+});
