@@ -551,6 +551,7 @@ function buildGuardedFriendshipPageViewConfig(options: {
   artworks: readonly string[];
   batchSize: number;
   fallbackTotalLimit?: number;
+  remainingLabel?: string;
 }): PageViewConfig {
   return {
     pageClassName: "tournament-subscription-page--single tournament-subscription-page--piter",
@@ -574,7 +575,7 @@ function buildGuardedFriendshipPageViewConfig(options: {
         titleLines: ["ПАДЕЛ.", "ДРУЖБА."],
         priceLabel: "19 800 ₽",
         fallbackTotalLimit: options.fallbackTotalLimit ?? options.batchSize * options.artworks.length,
-        remainingLabel: "Осталось в текущей партии",
+        remainingLabel: options.remainingLabel ?? "Осталось в текущей партии",
         featureStatusAppearance: "toggle",
         requiresConsent: true,
         terms: [...PITER_FRIENDSHIP_TERMS],
@@ -618,10 +619,11 @@ function resolvePageViewConfig(
   if (config?.variant === "network_friendship") {
     return buildGuardedFriendshipPageViewConfig({
       counterKey: "network_friendship",
-      kicker: "Падел.Дружба.Вся сеть",
+      kicker: "Падел.Дружба.Хаб",
       accent: "ВСЯ СЕТЬ",
       artworks: NETWORK_FRIENDSHIP_ARTWORKS,
       batchSize: NETWORK_FRIENDSHIP_BATCH_SIZE,
+      remainingLabel: "До повышения цены осталось",
     });
   }
   if (config?.variant === "single_artwork") {
@@ -1412,6 +1414,10 @@ export default function TournamentSubscriptionPage({
     if (!authRequestedDisplayId) return null;
     return pageViewConfig.plans.find((plan) => plan.id === authRequestedDisplayId)?.accent ?? null;
   }, [authRequestedDisplayId, pageViewConfig.plans]);
+  const hasGuardedTieredStorefront = useMemo(
+    () => pageViewConfig.plans.some((plan) => plan.purchaseMode === "tiered_counter" && Boolean(plan.counterKey)),
+    [pageViewConfig.plans],
+  );
   const showMobileScrollHint = pageViewConfig.plans.length > 1;
 
   const closeAuthOverlay = useCallback(() => {
@@ -1444,7 +1450,11 @@ export default function TournamentSubscriptionPage({
             {pageViewConfig.pageError}
           </div>
         )}
-        {statusError && <div className="tournament-subscription-global-message tournament-subscription-error">{statusError}</div>}
+        {statusError && (!hasGuardedTieredStorefront || statusError !== "Unsupported counterKey") && (
+          <div className="tournament-subscription-global-message tournament-subscription-error">
+            {statusError}
+          </div>
+        )}
         {buyInfo && <div className="tournament-subscription-global-message tournament-subscription-info">{buyInfo}</div>}
 
         {pageViewConfig.plans.map((plan) => {
@@ -1642,7 +1652,10 @@ export default function TournamentSubscriptionPage({
 
                 {isBindingUnavailable && (
                   <div className="tournament-subscription-warning">
-                    {status?.bindingError || "Текущая ценовая партия ещё не подключена к оплате."}
+                    {(status?.bindingError && status.bindingError !== "Unsupported counterKey")
+                      ? status.bindingError
+                      : "Текущая ценовая партия ещё не подключена к оплате."
+                    }
                   </div>
                 )}
 

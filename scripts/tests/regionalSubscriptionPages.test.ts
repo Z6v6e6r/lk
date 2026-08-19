@@ -40,9 +40,12 @@ test("network is a dedicated one-tier 50-unit guarded storefront", () => {
   assert.match(page, /counterKey: "network_friendship"/);
   assert.match(page, /NETWORK_FRIENDSHIP_BATCH_SIZE = 50/);
   assert.match(page, /NETWORK_FRIENDSHIP_ARTWORKS = \[networkSubscriptionImage\]/);
-  assert.match(page, /kicker: "Падел\.Дружба\.Вся сеть"/);
+  assert.match(page, /remainingLabel: "До повышения цены осталось"/);
+  assert.match(page, /kicker: "Падел\.Дружба\.Хаб"/);
   assert.match(page, /network-subscription\.webp/);
   assertOptimizedWebp("src/assets/network-subscription.webp");
+  assert.match(page, /hasGuardedTieredStorefront = useMemo/);
+  assert.match(page, /statusError && \(!hasGuardedTieredStorefront \|\| statusError !== "Unsupported counterKey"\)/);
 
   assert.match(networkLoader, /variant: "network_friendship"/);
   assert.match(networkLoader, /tournament-subscription-dev\.js/);
