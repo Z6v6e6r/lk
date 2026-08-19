@@ -12,6 +12,8 @@ test("Piter page is a dedicated storefront with its own counter and four 100-uni
   assert.match(page, /counterKey: "piter_friendship"/);
   assert.match(page, /PITER_FRIENDSHIP_BATCH_SIZE = 100/);
   assert.match(page, /PITER_FRIENDSHIP_ARTWORKS\.length/);
+  assert.match(page, /fallbackBatchSize: options\.batchSize/);
+  assert.match(page, /`\$\{fallbackBatchSize\} из \$\{fallbackBatchSize\}`/);
   for (const tier of [1, 2, 3, 4]) {
     assert.match(page, new RegExp(`piter-subscription-tier-${tier}\\.webp`));
     assert.ok(fs.statSync(`src/assets/piter-subscription-tier-${tier}.webp`).size > 0);

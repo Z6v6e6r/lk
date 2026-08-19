@@ -89,6 +89,7 @@ interface DisplayPlanConfig {
   metaLabel?: string | null;
   bodyHeadline?: string | null;
   fallbackTotalLimit: number;
+  fallbackBatchSize?: number;
   remainingLabel: string;
   featureStatusAppearance: "badge" | "toggle";
   featureListClassName?: string;
@@ -575,6 +576,7 @@ function buildGuardedFriendshipPageViewConfig(options: {
         titleLines: ["ПАДЕЛ.", "ДРУЖБА."],
         priceLabel: "19 800 ₽",
         fallbackTotalLimit: options.fallbackTotalLimit ?? options.batchSize * options.artworks.length,
+        fallbackBatchSize: options.batchSize,
         remainingLabel: options.remainingLabel ?? "Осталось в текущей партии",
         featureStatusAppearance: "toggle",
         requiresConsent: true,
@@ -1473,12 +1475,17 @@ export default function TournamentSubscriptionPage({
               : totalLimit,
           );
           const remainingCount = Math.max(0, status?.remainingCount ?? displayTotalLimit);
+          const fallbackBatchSize = Math.max(0, plan.fallbackBatchSize ?? displayTotalLimit);
           const hideTemporaryUnlimitedCounter = (
             (plan.counterKey === "ra" || plan.counterKey === "friendship")
             && status?.unlimited !== false
           );
-          const remainingValueText = isGuardedStorefront && status?.batchSize
-            ? `${status.batchRemainingCount} из ${status.batchSize}`
+          const remainingValueText = isGuardedStorefront
+            ? status?.batchSize
+              ? `${status.batchRemainingCount} из ${status.batchSize}`
+              : usesTrackedCounter && loadingStatus
+                ? "Проверяем..."
+                : `${fallbackBatchSize} из ${fallbackBatchSize}`
             : plan.remainingValueText
             || (
               status

@@ -1283,4 +1283,6 @@
   discounted add-ons, group training and tournaments.
 - The legacy booking gateway now fails closed for Piter until a reviewed
   published policy is wired, avoiding accidental fallback to Friendship rules.
+- Guarded regional storefronts show the current batch size, rather than the
+  campaign total, while their backend counter is still unavailable.
   No product creation, payment, Node-RED import, merge, push or deploy occurred.

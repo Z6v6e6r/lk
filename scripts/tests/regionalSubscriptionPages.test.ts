@@ -20,6 +20,7 @@ test("Kotelniki is a dedicated four-tier 4 x 50 guarded storefront", () => {
   assert.match(page, /counterKey: "kotelniki_friendship"/);
   assert.match(page, /KOTELNIKI_FRIENDSHIP_BATCH_SIZE = 50/);
   assert.match(page, /options\.batchSize \* options\.artworks\.length/);
+  assert.match(page, /fallbackBatchSize: options\.batchSize/);
   assert.match(page, /kicker: "Падел\.Дружба\.Котельники"/);
 
   for (const tier of [1, 2, 3, 4]) {
@@ -39,6 +40,7 @@ test("network is a dedicated one-tier 50-unit guarded storefront", () => {
   assert.match(page, /variant === "network_friendship"/);
   assert.match(page, /counterKey: "network_friendship"/);
   assert.match(page, /NETWORK_FRIENDSHIP_BATCH_SIZE = 50/);
+  assert.match(page, /`\$\{fallbackBatchSize\} из \$\{fallbackBatchSize\}`/);
   assert.match(page, /NETWORK_FRIENDSHIP_ARTWORKS = \[networkSubscriptionImage\]/);
   assert.match(page, /remainingLabel: "До повышения цены осталось"/);
   assert.match(page, /kicker: "Падел\.Дружба\.Хаб"/);
