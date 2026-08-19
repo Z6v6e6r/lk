@@ -269,6 +269,9 @@ export interface Studio {
   city: string;
   address: string;
   panoramicCourtsCount?: number | null;
+  singleCourtsCount?: number | null;
+  outdoorCourtsCount?: number | null;
+  isActive?: boolean;
   masterServiceId?: string | null;
   preferredSubServiceId?: string | null;
   subServiceIds?: string[];
@@ -2432,6 +2435,18 @@ function normalizeVivaStudio(item: unknown, index: number): Studio | null {
         ])
       : null) ??
     countPanoramicRooms(item.rooms);
+  const singleCourtsCount = pickNumber(item, [
+    "singleCourtsCount",
+    "singleCourts",
+    "singlesCount",
+    "courtsSingle",
+  ]);
+  const outdoorCourtsCount = pickNumber(item, [
+    "outdoorCourtsCount",
+    "outdoorCourts",
+    "openCourtsCount",
+    "courtsOutdoor",
+  ]);
 
   return {
     id,
@@ -2440,6 +2455,9 @@ function normalizeVivaStudio(item: unknown, index: number): Studio | null {
     city,
     address,
     panoramicCourtsCount,
+    singleCourtsCount,
+    outdoorCourtsCount,
+    isActive: true,
     masterServiceId,
     preferredSubServiceId,
     subServiceIds,
@@ -2455,6 +2473,9 @@ interface OnboardingStationSeed {
   city: string | null;
   address: string | null;
   panoramicCourtsCount: number | null;
+  singleCourtsCount: number | null;
+  outdoorCourtsCount: number | null;
+  isActive: boolean;
   masterServiceId: string | null;
   preferredSubServiceId: string | null;
   subServiceIds: string[];
@@ -2516,6 +2537,9 @@ function normalizeStationSeed(item: unknown): OnboardingStationSeed | null {
       city: null,
       address: null,
       panoramicCourtsCount: null,
+      singleCourtsCount: null,
+      outdoorCourtsCount: null,
+      isActive: true,
       masterServiceId: null,
       preferredSubServiceId: null,
       subServiceIds: [],
@@ -2558,6 +2582,30 @@ function normalizeStationSeed(item: unknown): OnboardingStationSeed | null {
           "panoramic",
         ])
       : null);
+  const singleCourtsCount =
+    pickNumber(item, ["singleCourtsCount", "singleCourts", "singlesCount", "courtsSingle"]) ??
+    (courtsPayload
+      ? pickNumber(courtsPayload, ["singleCourtsCount", "singleCourts", "singlesCount", "single"])
+      : null);
+  const outdoorCourtsCount =
+    pickNumber(item, [
+      "outdoorCourtsCount",
+      "outdoorCourts",
+      "openCourtsCount",
+      "courtsOutdoor",
+    ]) ??
+    (courtsPayload
+      ? pickNumber(courtsPayload, [
+          "outdoorCourtsCount",
+          "outdoorCourts",
+          "openCourtsCount",
+          "outdoor",
+        ])
+      : null);
+  const activeValue = item.isActive ?? item.active ?? item.enabled;
+  const isActive = activeValue === undefined
+    ? true
+    : activeValue !== false && String(activeValue).trim().toLowerCase() !== "false";
   const subServiceIds = uniqueIds([
     ...extractIdList(item.subServiceIds),
     ...extractIdList(item.sub_service_ids),
@@ -2584,6 +2632,9 @@ function normalizeStationSeed(item: unknown): OnboardingStationSeed | null {
     city: pickString(item, ["city", "cityName", "town", "locality"]),
     address: pickString(item, ["address", "fullAddress", "location", "street"]),
     panoramicCourtsCount,
+    singleCourtsCount,
+    outdoorCourtsCount,
+    isActive,
     masterServiceId: pickString(item, [
       "masterServiceId",
       "master_service_id",
@@ -2629,6 +2680,9 @@ function mergeStationWithViva(
       panoramicFromViva ??
       vivaStudio.panoramicCourtsCount ??
       null,
+    singleCourtsCount: seed.singleCourtsCount ?? vivaStudio.singleCourtsCount ?? null,
+    outdoorCourtsCount: seed.outdoorCourtsCount ?? vivaStudio.outdoorCourtsCount ?? null,
+    isActive: seed.isActive,
     masterServiceId:
       seed.masterServiceId ??
       vivaStudio.masterServiceId ??
@@ -2644,6 +2698,25 @@ function mergeStationWithViva(
     ]),
     lat: seed.lat ?? vivaStudio.lat ?? null,
     lng: seed.lng ?? vivaStudio.lng ?? null,
+  };
+}
+
+function buildInactiveStation(seed: OnboardingStationSeed, index: number): Studio {
+  return {
+    id: seed.id,
+    name: seed.name || `Станция ${index + 1}`,
+    country: seed.country || "Россия",
+    city: seed.city || "Другой город",
+    address: seed.address || "",
+    panoramicCourtsCount: seed.panoramicCourtsCount,
+    singleCourtsCount: seed.singleCourtsCount,
+    outdoorCourtsCount: seed.outdoorCourtsCount,
+    isActive: false,
+    masterServiceId: null,
+    preferredSubServiceId: null,
+    subServiceIds: [],
+    lat: seed.lat,
+    lng: seed.lng,
   };
 }
 
@@ -5927,6 +6000,9 @@ export async function apiFetchOnboardingStations() {
       city: existing.city ?? station.city,
       address: existing.address ?? station.address,
       panoramicCourtsCount: existing.panoramicCourtsCount ?? station.panoramicCourtsCount,
+      singleCourtsCount: existing.singleCourtsCount ?? station.singleCourtsCount,
+      outdoorCourtsCount: existing.outdoorCourtsCount ?? station.outdoorCourtsCount,
+      isActive: existing.isActive && station.isActive,
       masterServiceId: existing.masterServiceId ?? station.masterServiceId,
       preferredSubServiceId:
         existing.preferredSubServiceId ??
@@ -5960,7 +6036,9 @@ export async function apiFetchOnboardingStations() {
   const vivaById = new Map(vivaResult.data.map((studio) => [studio.id, studio]));
   const stations = uniqueSeeds.flatMap((seed, index) => {
     const vivaStudio = vivaById.get(seed.id);
-    if (!vivaStudio) return [];
+    if (!vivaStudio) {
+      return seed.isActive ? [] : [buildInactiveStation(seed, index)];
+    }
     return [mergeStationWithViva(seed, index, vivaStudio)];
   });
 

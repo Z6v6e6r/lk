@@ -104,3 +104,51 @@ test("MAX station selection persists selected station into support event payload
   assert.equal(outbound.length, 1);
   assert.match(String(outbound[0]?.payload?.text || outbound[0]?.payload), /Станция Терехово сохранена/);
 });
+
+test("MAX station catalog recognizes every new station callback", () => {
+  const stationCases = [
+    ["piter", "Питер"],
+    ["kotelniki", "Котельники"],
+    ["shcherbinka", "Щербинка"],
+    ["lyubertsy", "Люберцы"],
+    ["kolomna", "Коломна"],
+  ];
+
+  stationCases.forEach(([callback, expectedName]) => {
+    const result = runNodeRedFunction("scripts/nodered_max_nodes/fn_max_webhook_prepare.js", {
+      payload: {
+        message: {
+          body: {
+            callback_data: callback,
+            mid: `message-${callback}`,
+          },
+          sender: { user_id: `user-${callback}`, name: "Клиент" },
+          recipient: { chat_id: `chat-${callback}` },
+        },
+      },
+    }) as any[];
+    const normalized = result[0]?.maxUpdate;
+    assert.equal(normalized?.messageKind, "station");
+    assert.deepEqual(normalized?.station, { id: callback, name: expectedName });
+  });
+});
+
+test("MAX station keyboard includes every new station", () => {
+  const result = runNodeRedFunction("scripts/nodered_max_nodes/fn_max_support_route.js", {
+    maxUpdate: {
+      command: "/start",
+      messageKind: "command",
+      recipient: { chatId: "chat-1" },
+      sender: { userId: "user-1", name: "Клиент" },
+    },
+    payload: {
+      client: { authStatus: "AUTHORIZED" },
+    },
+  }) as any[];
+  const buttons = result[1]?.[0]?.payload?.attachments?.[0]?.payload?.buttons ?? [];
+  const payloads = buttons.flatMap((row: Array<{ payload?: string }>) => row.map((item) => item.payload));
+
+  for (const stationPayload of ["piter", "kotelniki", "shcherbinka", "lyubertsy", "kolomna"]) {
+    assert.ok(payloads.includes(stationPayload), `missing ${stationPayload} button`);
+  }
+});

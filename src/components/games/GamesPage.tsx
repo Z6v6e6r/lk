@@ -632,7 +632,7 @@ function formatPrice(value: number): string {
   return value.toLocaleString("ru-RU");
 }
 
-function formatCourtsLabel(count: number): string {
+function formatCourtCountLabel(label: string, count: number): string {
   const mod100 = count % 100;
   const mod10 = count % 10;
   let word = "кортов";
@@ -642,7 +642,11 @@ function formatCourtsLabel(count: number): string {
     else if (mod10 >= 2 && mod10 <= 4) word = "корта";
   }
 
-  return `Панорамик: ${count} ${word}`;
+  return `${label}: ${count} ${word}`;
+}
+
+function formatCourtsLabel(count: number): string {
+  return formatCourtCountLabel("Панорамик", count);
 }
 
 function extractCourtOrder(name: string): number | null {
@@ -5571,11 +5575,23 @@ export default function GamesPage({
       current.push(item);
       groups.set(city, current);
     });
-    return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b, "ru"));
+    const cityPriority = new Map([
+      ["москва", 0],
+      ["санкт-петербург", 1],
+      ["сириус", 2],
+      ["сочи", 2],
+    ]);
+    return Array.from(groups.entries()).sort(([left], [right]) => {
+      const leftPriority = cityPriority.get(left.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+      const rightPriority = cityPriority.get(right.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+      if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+      return left.localeCompare(right, "ru");
+    });
   }, [filteredStudios]);
 
   const mapStudios = useMemo<StudioMapPoint[]>(() => {
     return filteredStudios.flatMap((item) => {
+      if (item.isActive === false) return [];
       const fallback = geocodedCoords[item.id];
       const latSource = hasValidCoordinates(item.lat, item.lng) ? toFloat(item.lat) : fallback?.lat ?? null;
       const lngSource = hasValidCoordinates(item.lat, item.lng) ? toFloat(item.lng) : fallback?.lng ?? null;
@@ -14618,20 +14634,37 @@ export default function GamesPage({
                   {cityStudios.map((s) => (
                     <button
                       key={s.id}
-                      className={`game-card ${studio?.id === s.id ? "selected" : ""}`}
+                      className={`game-card game-station-card ${studio?.id === s.id ? "selected" : ""} ${s.isActive === false ? "game-station-card--inactive" : ""}`}
                       onClick={() => {
                         setStudio(s);
                         setStep("time");
                       }}
                       type="button"
+                      disabled={s.isActive === false}
                     >
                       <div className="game-card-title">{s.name}</div>
                       {s.address && <div className="game-card-sub">{s.address}</div>}
-                      <div className="game-card-sub">
-                        {typeof s.panoramicCourtsCount === "number"
-                          ? formatCourtsLabel(s.panoramicCourtsCount)
-                          : "Панорамик: —"}
-                      </div>
+                      {s.isActive === false ? (
+                        <div className="game-card-sub game-station-card-status">Скоро открытие</div>
+                      ) : (
+                        <>
+                          <div className="game-card-sub">
+                            {typeof s.panoramicCourtsCount === "number"
+                              ? formatCourtsLabel(s.panoramicCourtsCount)
+                              : "Панорамик: —"}
+                          </div>
+                          {typeof s.singleCourtsCount === "number" && (
+                            <div className="game-card-sub">
+                              {formatCourtCountLabel("Сингл", s.singleCourtsCount)}
+                            </div>
+                          )}
+                          {typeof s.outdoorCourtsCount === "number" && (
+                            <div className="game-card-sub">
+                              {formatCourtCountLabel("Открытых", s.outdoorCourtsCount)}
+                            </div>
+                          )}
+                        </>
+                      )}
                     </button>
                   ))}
                 </div>

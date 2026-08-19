@@ -2620,6 +2620,22 @@ h6,
   box-shadow: none;
 }
 
+.game-station-card--inactive:disabled {
+  opacity: 1;
+  color: #8a8f9d;
+  background: #eef0f4;
+  border-color: #dfe2e8;
+}
+
+.game-station-card--inactive .game-card-title,
+.game-station-card--inactive .game-card-sub {
+  color: #8a8f9d;
+}
+
+.game-station-card-status {
+  font-weight: 600;
+}
+
 .game-card.selected {
   border-color: var(--purple);
   box-shadow: 0 0 0 2px rgba(115, 83, 217, 0.12);

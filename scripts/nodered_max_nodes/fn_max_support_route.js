@@ -78,7 +78,12 @@ function buildStationAttachment() {
       [{ type: "callback", text: "Сколково", payload: "kuncev" }],
       [{ type: "callback", text: "Ясенево", payload: "yas" }],
       [{ type: "callback", text: "Селигерская", payload: "seleger" }],
+      [{ type: "callback", text: "Питер", payload: "piter" }],
       [{ type: "callback", text: "Сочи", payload: "sochi" }],
+      [{ type: "callback", text: "Котельники", payload: "kotelniki" }],
+      [{ type: "callback", text: "Щербинка", payload: "shcherbinka" }],
+      [{ type: "callback", text: "Люберцы", payload: "lyubertsy" }],
+      [{ type: "callback", text: "Коломна", payload: "kolomna" }],
       [{ type: "callback", text: "Точка сбора", payload: "t-sbora" }],
     ]),
   ];
