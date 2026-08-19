@@ -182,3 +182,21 @@ npm run nodered:viva-user-agent:patch -- \
 The patcher adds only the fixed `User-Agent: PadlHub-LK/1.0` configured header
 to bounded, URL-evidenced Viva HTTP Request nodes. It produces a candidate only;
 see `docs/VIVA_USER_AGENT.md` for scope, review and post-deploy evidence gates.
+
+## Guarded split exercise-create contract candidate
+
+The managed-subscription create-contract cohort replaces only the function body
+of the existing `Route Viva split payment` node after verifying its exact live
+flow and function preimages:
+
+```bash
+npm run nodered:split-create-contract:patch -- \
+  --workspace /absolute/external/live-workspace \
+  --output /absolute/external/new-split-create-candidate/candidate.json \
+  --report /absolute/external/new-split-create-candidate/report.json
+```
+
+The builder preserves node IDs, wires, links, and HTTP routes and never imports
+or deploys its output. It fails closed after any live drift. The separately
+approved provider-mutation and cleanup procedure is documented in
+`docs/MANAGED_SUBSCRIPTION_SYNTHETIC_CREATE_CANCEL_HAR.md`.

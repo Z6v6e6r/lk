@@ -686,13 +686,13 @@ if (ctx.step === "token") {
   if (ctx.action === "create") {
     ctx.step = "create_exercise";
     return adminRequest(ctx, "POST", "/exercises", {
-      direction: toNumber(ctx.vivaDirectionId) ?? SPLIT_DIRECTION_ID,
-      type: toNumber(ctx.vivaExerciseTypeId) ?? SPLIT_EXERCISE_TYPE_ID,
+      directionId: toNumber(ctx.vivaDirectionId) ?? SPLIT_DIRECTION_ID,
+      typeId: toNumber(ctx.vivaExerciseTypeId) ?? SPLIT_EXERCISE_TYPE_ID,
       timeFrom: `${ctx.date}T${ctx.fromTime}+03:00`,
       timeTo: `${ctx.date}T${ctx.toTime}+03:00`,
       maxClientsCount: ctx.maxClientsCount,
       roomId: ctx.roomId,
-      clientId: ctx.clientId || undefined,
+      trainers: [],
       requirements: [],
     });
   }

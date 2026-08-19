@@ -24,8 +24,55 @@ type RouterMessage = {
     paymentType?: string;
     clientSubscriptionId?: string;
     count?: number;
+    directionId?: number;
+    typeId?: number;
+    direction?: number;
+    type?: number;
+    timeFrom?: string;
+    timeTo?: string;
+    roomId?: string;
+    maxClientsCount?: number;
+    trainers?: string[];
+    requirements?: unknown[];
+    clientId?: string;
   };
 };
+
+test("exercise create request matches the current documented Viva ExerciseCreateRequest", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: { access_token: "service-token", expires_in: 300 },
+    _splitCtx: {
+      step: "token",
+      action: "create",
+      date: "2026-08-22",
+      fromTime: "11:30",
+      toTime: "13:00",
+      roomId: "room-1",
+      maxClientsCount: 4,
+      clientId: "client-must-not-be-forwarded",
+      vivaDirectionId: 4588,
+      vivaExerciseTypeId: 1613,
+    },
+  }) as unknown[];
+
+  const requestMsg = out[0] as RouterMessage;
+  assert.equal(requestMsg.method, "POST");
+  assert.equal(requestMsg.url, "https://api.vivacrm.ru/api/v1/exercises");
+  assert.deepEqual(requestMsg.payload, {
+    directionId: 4588,
+    typeId: 1613,
+    timeFrom: "2026-08-22T11:30+03:00",
+    timeTo: "2026-08-22T13:00+03:00",
+    maxClientsCount: 4,
+    roomId: "room-1",
+    trainers: [],
+    requirements: [],
+  });
+  assert.equal(Object.hasOwn(requestMsg.payload || {}, "direction"), false);
+  assert.equal(Object.hasOwn(requestMsg.payload || {}, "type"), false);
+  assert.equal(Object.hasOwn(requestMsg.payload || {}, "clientId"), false);
+});
 
 test("subscription booking request sends the exact selected client subscription id through the atomic gateway", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {

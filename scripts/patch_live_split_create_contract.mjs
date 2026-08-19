@@ -1,0 +1,314 @@
+#!/usr/bin/env node
+
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { fileURLToPath } from "node:url";
+import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
+
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = fs.realpathSync(path.resolve(SCRIPT_DIR, ".."));
+const ROUTER_SOURCE_PATH = path.join(
+  SCRIPT_DIR,
+  "nodered_games_nodes",
+  "fn_split_router.js",
+);
+
+export const LIVE_SPLIT_CREATE_CONTRACT = Object.freeze({
+  sourceFlowSha256: "5a9b52ae6fa0d8c457f9605d55bfb8e947e11d1dc582259616a96b9f3e34791b",
+  target: Object.freeze({
+    id: "8f7bd5b482fe9763",
+    name: "Route Viva split payment",
+    type: "function",
+    tabId: "4b91e2a2413688db",
+    outputs: 5,
+    wires: Object.freeze([
+      Object.freeze(["ee7ba8cdd68bdf74"]),
+      Object.freeze(["802af8a1810db60f"]),
+      Object.freeze(["ef42932e1ba864b8"]),
+      Object.freeze(["lk_subscription_booking_http_20260804"]),
+      Object.freeze(["legacy_payment_confirm_canonical_prepare_20260816"]),
+    ]),
+    liveFuncSha256: "624e4a233bcd6cf011cd0f0d61aa48243c6878393f31330d5a218e81003227a1",
+    candidateFuncSha256: "523bfce79fe86ace3000d58b6caf8ae9aae153ab9b0f65845f2f10da68c5b23e",
+  }),
+});
+
+function fail(message) {
+  throw new Error(message);
+}
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function sha256Json(value) {
+  return sha256(Buffer.from(JSON.stringify(value), "utf8"));
+}
+
+function snapshotInvariants(flow) {
+  const ids = flow.map((node) => node?.id);
+  if (ids.some((id) => typeof id !== "string" || !id.trim())) {
+    fail("Flow contains a node without a valid id");
+  }
+  if (new Set(ids).size !== ids.length) fail("Flow contains duplicate node ids");
+  const wires = flow.map((node) => ({
+    id: node.id,
+    wires: Object.hasOwn(node, "wires") ? node.wires : null,
+  }));
+  const links = flow.map((node) => ({
+    id: node.id,
+    links: Object.hasOwn(node, "links") ? node.links : null,
+  }));
+  const routes = flow
+    .filter((node) => node.type === "http in")
+    .map((node) => ({
+      id: node.id,
+      z: node.z ?? "",
+      method: node.method ?? "",
+      url: node.url ?? "",
+      name: node.name ?? "",
+      wires: node.wires ?? null,
+    }));
+  return {
+    ids,
+    wires,
+    links,
+    routes,
+    hashes: {
+      idsSha256: sha256Json(ids),
+      wiresSha256: sha256Json(wires),
+      linksSha256: sha256Json(links),
+      httpRoutesSha256: sha256Json(routes),
+    },
+  };
+}
+
+function assertTargetNode(node, contract) {
+  if (
+    node.type !== contract.type
+    || node.name !== contract.name
+    || node.z !== contract.tabId
+    || node.outputs !== contract.outputs
+    || !isDeepStrictEqual(node.wires, contract.wires)
+  ) {
+    fail("Split create target node contract mismatch");
+  }
+  const liveFuncSha256 = sha256(String(node.func ?? ""));
+  if (liveFuncSha256 !== contract.liveFuncSha256) {
+    fail("Split create target function preimage mismatch");
+  }
+}
+
+export function applySplitCreateContract(
+  inputFlow,
+  candidateSource,
+  contract = LIVE_SPLIT_CREATE_CONTRACT.target,
+) {
+  if (!Array.isArray(inputFlow)) fail("Node-RED flow must be an array");
+  if (typeof candidateSource !== "string" || !candidateSource.trim()) {
+    fail("Split create candidate source must be a non-empty string");
+  }
+  const candidateFuncSha256 = sha256(candidateSource);
+  if (candidateFuncSha256 !== contract.candidateFuncSha256) {
+    fail("Tracked split create candidate source mismatch");
+  }
+
+  const before = structuredClone(inputFlow);
+  const candidate = structuredClone(inputFlow);
+  const beforeInvariants = snapshotInvariants(before);
+  const matches = candidate.filter((node) => node.id === contract.id);
+  if (matches.length !== 1) {
+    fail("Split create target node must exist exactly once");
+  }
+  assertTargetNode(matches[0], contract);
+  matches[0].func = candidateSource;
+
+  const changedNodes = candidate.flatMap((node, index) => {
+    const previous = before[index];
+    if (isDeepStrictEqual(node, previous)) return [];
+    const changedFields = [...new Set([...Object.keys(previous), ...Object.keys(node)])]
+      .filter((field) => !isDeepStrictEqual(previous[field], node[field]))
+      .sort();
+    return [{ id: node.id, changedFields }];
+  });
+  if (!isDeepStrictEqual(changedNodes, [{ id: contract.id, changedFields: ["func"] }])) {
+    fail("Candidate changed fields outside the split create function body");
+  }
+
+  const afterInvariants = snapshotInvariants(candidate);
+  if (
+    !isDeepStrictEqual(beforeInvariants.ids, afterInvariants.ids)
+    || !isDeepStrictEqual(beforeInvariants.wires, afterInvariants.wires)
+    || !isDeepStrictEqual(beforeInvariants.links, afterInvariants.links)
+    || !isDeepStrictEqual(beforeInvariants.routes, afterInvariants.routes)
+  ) {
+    fail("Candidate changed Node-RED topology or HTTP routes");
+  }
+
+  return {
+    candidate,
+    changedNodes,
+    target: {
+      id: contract.id,
+      name: contract.name,
+      fromFuncSha256: contract.liveFuncSha256,
+      toFuncSha256: candidateFuncSha256,
+    },
+    invariants: {
+      nodeCount: candidate.length,
+      httpRouteCount: afterInvariants.routes.length,
+      ...afterInvariants.hashes,
+    },
+  };
+}
+
+function isWithin(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function publicationPaths(outputArg, reportArg, workspace) {
+  if (!path.isAbsolute(outputArg) || !path.isAbsolute(reportArg)) {
+    fail("Output and report paths must be absolute");
+  }
+  if (path.resolve(outputArg) === path.resolve(reportArg)) {
+    fail("Output and report must be distinct");
+  }
+  const directory = path.dirname(path.resolve(outputArg));
+  if (path.dirname(path.resolve(reportArg)) !== directory) {
+    fail("Output and report must share one new publication directory");
+  }
+  const parentArg = path.dirname(directory);
+  if (fs.existsSync(directory) || fs.lstatSync(parentArg).isSymbolicLink()) {
+    fail("Publication directory must not already exist or use a symlink parent");
+  }
+  const parent = fs.realpathSync(parentArg);
+  const canonicalDirectory = path.join(parent, path.basename(directory));
+  const output = path.join(canonicalDirectory, path.basename(outputArg));
+  const report = path.join(canonicalDirectory, path.basename(reportArg));
+  if (canonicalDirectory !== directory || output !== outputArg || report !== reportArg) {
+    fail("Output and report paths must be canonical");
+  }
+  if (isWithin(REPO_ROOT, directory)) {
+    fail("Publication directory must stay outside the repository");
+  }
+  if (isWithin(path.join(workspace, "input"), directory)) {
+    fail("Publication directory must not alias verified input");
+  }
+  const stagePrefix = `.${path.basename(directory)}.split-create-stage-`;
+  if (fs.readdirSync(parent).some((name) => name.startsWith(stagePrefix))) {
+    fail("Partial split create publication exists");
+  }
+  return { directory, parent, output, report, stagePrefix };
+}
+
+function writePrivate(filePath, value) {
+  const descriptor = fs.openSync(
+    filePath,
+    fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
+    0o600,
+  );
+  try {
+    fs.writeFileSync(descriptor, value);
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function readVerifiedFlowBytes(verified) {
+  const bytes = fs.readFileSync(verified.sourcePath);
+  if (sha256(bytes) !== verified.sourceSha256) {
+    fail("Verified Node-RED source changed after verification");
+  }
+  return bytes;
+}
+
+export function publishSplitCreateContractCandidate({ workspace, output, report }) {
+  const verified = verifyWorkspace(workspace, { quiet: true });
+  if (verified.sourceSha256 !== LIVE_SPLIT_CREATE_CONTRACT.sourceFlowSha256) {
+    fail("Live flow SHA does not match the reviewed split create preimage");
+  }
+  readVerifiedFlowBytes(verified);
+  const paths = publicationPaths(output, report, verified.workspace);
+  const candidateSource = fs.readFileSync(ROUTER_SOURCE_PATH, "utf8");
+  const result = applySplitCreateContract(verified.source, candidateSource);
+  const candidateBytes = Buffer.from(`${JSON.stringify(result.candidate, null, 2)}\n`, "utf8");
+  const candidateSha256 = sha256(candidateBytes);
+  const redactedReport = {
+    formatVersion: 1,
+    ok: true,
+    mutationPerformed: false,
+    sourceSha256: verified.sourceSha256,
+    candidateSha256,
+    changedNodeCount: result.changedNodes.length,
+    changedNodes: result.changedNodes,
+    target: result.target,
+    invariants: result.invariants,
+  };
+  const stage = path.join(
+    paths.parent,
+    `${paths.stagePrefix}${process.pid}-${crypto.randomUUID()}`,
+  );
+  fs.mkdirSync(stage, { mode: 0o700 });
+  try {
+    writePrivate(path.join(stage, path.basename(paths.output)), candidateBytes);
+    writePrivate(
+      path.join(stage, path.basename(paths.report)),
+      Buffer.from(`${JSON.stringify(redactedReport, null, 2)}\n`, "utf8"),
+    );
+    fs.renameSync(stage, paths.directory);
+  } catch (error) {
+    fs.rmSync(stage, { recursive: true, force: true });
+    throw error;
+  }
+
+  console.log(`sourceSha256=${verified.sourceSha256}`);
+  console.log(`candidateSha256=${candidateSha256}`);
+  console.log(`nodeCount=${result.invariants.nodeCount}`);
+  console.log(`httpRouteCount=${result.invariants.httpRouteCount}`);
+  console.log(`changedNodeCount=${result.changedNodes.length}`);
+  return redactedReport;
+}
+
+function parseArgs(argv) {
+  const values = {};
+  for (let index = 0; index < argv.length; index += 2) {
+    const key = argv[index];
+    const value = argv[index + 1];
+    if (!key?.startsWith("--") || !value || value.startsWith("--")) {
+      fail(`Invalid argument: ${key ?? ""}`);
+    }
+    if (Object.hasOwn(values, key)) fail(`Duplicate argument: ${key}`);
+    values[key] = value;
+  }
+  const allowed = new Set(["--workspace", "--output", "--report"]);
+  for (const key of Object.keys(values)) {
+    if (!allowed.has(key)) fail(`Unknown argument: ${key}`);
+  }
+  if (!values["--workspace"] || !values["--output"] || !values["--report"]) {
+    fail(
+      "Usage: node scripts/patch_live_split_create_contract.mjs "
+      + "--workspace /absolute/external/workspace "
+      + "--output /absolute/new-publication/candidate.json "
+      + "--report /absolute/new-publication/report.json",
+    );
+  }
+  return {
+    workspace: values["--workspace"],
+    output: values["--output"],
+    report: values["--report"],
+  };
+}
+
+const invokedPath = process.argv[1] ? fs.realpathSync(process.argv[1]) : "";
+if (invokedPath === fileURLToPath(import.meta.url)) {
+  try {
+    publishSplitCreateContractCandidate(parseArgs(process.argv.slice(2)));
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  }
+}
