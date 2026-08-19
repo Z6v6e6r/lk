@@ -1,6 +1,10 @@
 const TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const AB_LETO_DAILY_DROP_TIME_ZONE = "Europe/Moscow";
-const PITER_FRIENDSHIP_COUNTER_KEY = "piter_friendship";
+const REGIONAL_FRIENDSHIP_BINDING_LABELS = {
+  kotelniki_friendship: "Котельники",
+  network_friendship: "ХАБ",
+  piter_friendship: "Питер",
+};
 const MANUAL_PAID_COUNT_DEFAULTS = {
   academy: 4,
   ra: 37,
@@ -85,6 +89,8 @@ const normalizeCounterKey = (value) => {
     normalized === "academy"
     || normalized === "energy5"
     || normalized === "friendship"
+    || normalized === "kotelniki_friendship"
+    || normalized === "network_friendship"
     || normalized === "piter_friendship"
     || normalized === "ra"
     || normalized === "sirius_friendship"
@@ -256,7 +262,9 @@ const takenCount = paidCount + reservedCount;
 const unlimited = ctx.unlimited === true;
 const remainingCount = unlimited ? null : Math.max(totalLimit - takenCount, 0);
 
-if (normalizeCounterKey(ctx.counterKey) === PITER_FRIENDSHIP_COUNTER_KEY) {
+const regionalCounterKey = normalizeCounterKey(ctx.counterKey);
+const regionalBindingLabel = REGIONAL_FRIENDSHIP_BINDING_LABELS[regionalCounterKey];
+if (regionalBindingLabel) {
   const tiers = Array.isArray(ctx.tiers) ? ctx.tiers.filter((tier) => tier && typeof tier === "object") : [];
   const batchSize = Math.max(1, Math.floor(Number(ctx.batchSize) || 50));
   const batchIndex = Math.max(1, Math.min(tiers.length || 1, Math.floor(takenCount / batchSize) + 1));
@@ -273,8 +281,8 @@ if (normalizeCounterKey(ctx.counterKey) === PITER_FRIENDSHIP_COUNTER_KEY) {
     : null;
 
   if (remainingCount > 0 && (!ctx.productId || ctx.productCostMinor == null)) {
-    return failMsg(503, "Текущая ценовая партия Питер ещё не подключена к оплате", {
-      counterKey: PITER_FRIENDSHIP_COUNTER_KEY,
+    return failMsg(503, `Текущая ценовая партия ${regionalBindingLabel} ещё не подключена к оплате`, {
+      counterKey: regionalCounterKey,
       batchIndex,
       batchSize,
       bindingReady: false,

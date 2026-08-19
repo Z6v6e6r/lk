@@ -1286,3 +1286,21 @@
 - Guarded regional storefronts show the current batch size, rather than the
   campaign total, while their backend counter is still unavailable.
   No product creation, payment, Node-RED import, merge, push or deploy occurred.
+
+## 2026-08-19 — Regional subscription counter and station DRAFT
+
+- Verified the current public Viva studio catalogue read-only and pinned exact
+  station IDs for Piter and Kotelniki; the network offer uses the managed-policy
+  `ALL_STATIONS` selector and still requires a server-resolved exercise target.
+- Extended source functions for `piter_friendship`, `kotelniki_friendship` and
+  `network_friendship` counters with dedicated inventories, server-selected
+  price batches and fail-closed missing-product behavior.
+- Extended the legacy subscription-booking guard so Kotelniki and
+  `Падел.Дружба.ХАБ` cannot inherit ordinary Friendship rules before an
+  immutable managed policy is published.
+- Added a machine-readable `DRAFT_ONLY` binding file with null provider product
+  and subscription type IDs, `salesEnabled=false` and `usageEnabled=false`.
+- Pulled production Node-RED read-only at SHA-256 `5a9b52ae…` (4,756 nodes).
+  The active LK Tournaments functions differ from repository source and do not
+  contain Piter logic, so no broad import candidate, live import, restart,
+  product mutation, payment, merge, push or deploy was performed.

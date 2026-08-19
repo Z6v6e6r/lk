@@ -89,3 +89,6 @@ server-side отображение Viva product → `subscriptionTypeId`. Цел
 текущий legacy purchase flow сначала читает счётчик и только после ответа Viva
 пишет `PAYMENT_PENDING`, поэтому конкурентные запросы на границе 100 мест нельзя
 считать безопасными для открытия продаж.
+
+Проверенный station ID Питера и общий DRAFT-протокол для Питера, Котельников и
+сети находятся в `docs/REGIONAL_SUBSCRIPTION_RUNTIME_BINDINGS.md`.

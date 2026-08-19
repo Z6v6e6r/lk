@@ -713,8 +713,10 @@ fallback-лимит 200. Цены на изображениях партий: 19
 Обе страницы наследуют условия, переворот карточки, чекбокс согласия и
 авторизацию страницы Питера. Пока backend не вернул соответствующий счётчик с
 `bindingReady=true`, кнопка покупки остаётся fail-closed. Viva product ID и
-station ID в Tilda-вставках и frontend не задаются; их нужно привязать позже в
-управляемой серверной конфигурации.
+station ID в Tilda-вставках и frontend не задаются. Проверенные station ID,
+server counter keys, обязательные globals и fail-closed DRAFT правил собраны в
+`docs/REGIONAL_SUBSCRIPTION_RUNTIME_BINDINGS.md`. Этот DRAFT не публикует policy
+и не включает продажи или использование подписок.
 
 ## Реферальный турнирный абонемент (`/ab_leto_referral`)
 

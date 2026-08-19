@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "status": "DRAFT_ONLY",
+  "tenantKey": "iSkq6G",
+  "salesEnabled": false,
+  "usageEnabled": false,
+  "source": {
+    "kind": "VIVA_END_USER_STUDIOS_READ_ONLY",
+    "verifiedAt": "2026-08-19",
+    "url": "https://api.vivacrm.ru/end-user/api/v1/iSkq6G/studios?size=1000"
+  },
+  "storefronts": [
+    {
+      "counterKey": "piter_friendship",
+      "inventoryId": "piter_friendship_12m_2026_v1",
+      "batchSize": 100,
+      "tierPricesMinor": [1980000, 2380000, 3680000, 5680000],
+      "providerProductIds": [null, null, null, null],
+      "subscriptionTypeId": null,
+      "stationSelector": {
+        "kind": "STATION_LIST",
+        "stationIds": ["1ea77cbf-bc36-49a1-96d6-f35c216a409b"]
+      }
+    },
+    {
+      "counterKey": "kotelniki_friendship",
+      "inventoryId": "kotelniki_friendship_12m_2026_v1",
+      "batchSize": 50,
+      "tierPricesMinor": [1980000, 2380000, 3680000, 5680000],
+      "providerProductIds": [null, null, null, null],
+      "subscriptionTypeId": null,
+      "stationSelector": {
+        "kind": "STATION_LIST",
+        "stationIds": ["3b52e87f-33bb-436b-a1e3-19a3b62b4ed2"]
+      }
+    },
+    {
+      "counterKey": "network_friendship",
+      "inventoryId": "network_friendship_12m_2026_v1",
+      "batchSize": 50,
+      "tierPricesMinor": [5680000],
+      "providerProductIds": [null],
+      "subscriptionTypeId": null,
+      "stationSelector": {
+        "kind": "ALL_STATIONS",
+        "stationIds": []
+      }
+    }
+  ],
+  "policyDraft": {
+    "dailyUsageLimit": 1,
+    "dailyUsageActions": ["CREATE_GAME", "JOIN_GAME"],
+    "createGame": {
+      "enabled": true,
+      "durationsMinutes": [60]
+    },
+    "joinGame": {
+      "enabled": true,
+      "durationsMinutes": [60, 90, 120]
+    },
+    "createGameAddOnRules": null,
+    "groupTrainingBenefitRules": null,
+    "tournamentBenefitRules": null,
+    "failClosedWhenRuleMissing": true
+  }
+}

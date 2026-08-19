@@ -276,9 +276,21 @@ const resolvePlanKey = (value) => {
   }
   const normalized = markers.map(normalizeMarker).filter(Boolean);
   if (normalized.some((marker) => (
+    (marker.includes("котельник") || marker.includes("kotelniki") || marker.includes("kotelnik"))
+    && (marker.includes("дружба") || marker.includes("friendship") || marker.includes("druzhba"))
+  ))) return "kotelniki_friendship";
+  if (normalized.some((marker) => (
     (marker.includes("питер") || marker.includes("piter") || marker.includes("spb"))
     && (marker.includes("дружба") || marker.includes("friendship") || marker.includes("druzhba"))
   ))) return "piter_friendship";
+  if (normalized.some((marker) => (
+    marker.includes("networkfriendship")
+    || marker.includes("friendshipnetwork")
+    || marker.includes("паделдружбахаб")
+    || marker.includes("padldruzhbahub")
+    || marker.includes("padlhubfriendship")
+    || (marker.includes("всясеть") && marker.includes("дружба"))
+  ))) return "network_friendship";
   if (normalized.some((marker) => marker.includes("friendship") || marker.includes("дружба") || marker.includes("druzhba"))) return "friendship";
   if (normalized.some((marker) => marker.includes("sport") || marker.includes("спорт"))) return "sport";
   if (normalized.some((marker) => marker.includes("academy") || marker.includes("академ"))) return "academy";
@@ -288,11 +300,18 @@ const resolvePlanKey = (value) => {
 
 const PLAN_CATEGORIES = {
   friendship: ["open_game", "tournament"],
+  kotelniki_friendship: [],
+  network_friendship: [],
   piter_friendship: [],
   sport: ["open_game", "tournament"],
   academy: ["open_game", "group_training"],
   ra: ["open_game", "group_training", "tournament"],
 };
+const MANAGED_PLAN_KEYS = new Set([
+  "kotelniki_friendship",
+  "network_friendship",
+  "piter_friendship",
+]);
 
 const resolveLimitMode = (planKey, serviceDate) => {
   if (!planKey) return "event";
@@ -756,8 +775,8 @@ if (ctx.step === "exercise") {
   ctx.studioId = toStr(exercise.studio?.id || exercise.studioId);
   ctx.subscriptionName = pickName(ownedSubscription);
   ctx.planKey = resolvePlanKey(ownedSubscription) || resolvePlanKey(ctx.subscriptionName);
-  if (ctx.planKey === "piter_friendship") {
-    return finishError(ctx, 409, "Для подписки Питер требуется опубликованная версия правил", {
+  if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
+    return finishError(ctx, 409, "Для региональной подписки требуется опубликованная версия правил", {
       code: "MANAGED_SUBSCRIPTION_POLICY_REQUIRED",
       planKey: ctx.planKey,
     });
@@ -797,8 +816,8 @@ if (ctx.step === "subscription_name") {
   const payload = unwrapRecord(msg.payload) || msg.payload;
   ctx.subscriptionName = toStr(payload?.sertName || payload?.subscriptionName || payload?.name);
   ctx.planKey = resolvePlanKey(ctx.subscriptionName);
-  if (ctx.planKey === "piter_friendship") {
-    return finishError(ctx, 409, "Для подписки Питер требуется опубликованная версия правил", {
+  if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
+    return finishError(ctx, 409, "Для региональной подписки требуется опубликованная версия правил", {
       code: "MANAGED_SUBSCRIPTION_POLICY_REQUIRED",
       planKey: ctx.planKey,
     });

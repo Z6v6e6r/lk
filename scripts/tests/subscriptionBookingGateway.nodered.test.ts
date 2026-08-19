@@ -436,6 +436,46 @@ test("legacy booking gateway fails closed for Piter until the managed policy is 
   assert.equal(out[3], null);
 });
 
+for (const managedPlan of [
+  {
+    name: "Падел.Дружба.Котельники — 12 месяцев",
+    planKey: "kotelniki_friendship",
+  },
+  {
+    name: "Падел.Дружба.ХАБ — 12 месяцев",
+    planKey: "network_friendship",
+  },
+]) {
+  test(`legacy booking gateway fails closed for ${managedPlan.planKey}`, () => {
+    const out = runFunction(ROUTER_FILE, {
+      statusCode: 200,
+      payload: {
+        id: "exercise-target",
+        timeFrom: "2026-08-14T18:00:00+03:00",
+        direction: { name: "Открытая игра" },
+        type: { name: "Открытая игра" },
+        availableClientSubscriptions: [{
+          clientSubscriptionId: "client-subscription-1",
+          name: managedPlan.name,
+        }],
+      },
+      _subscriptionBooking: baseContext("exercise", {
+        serviceDate: undefined,
+        category: undefined,
+        planKey: undefined,
+      }),
+    });
+
+    assert.equal(out[4].statusCode, 409);
+    assert.equal(out[4].payload.details.code, "MANAGED_SUBSCRIPTION_POLICY_REQUIRED");
+    assert.equal(out[4].payload.details.planKey, managedPlan.planKey);
+    assert.equal(out[0], null);
+    assert.equal(out[1], null);
+    assert.equal(out[2], null);
+    assert.equal(out[3], null);
+  });
+}
+
 test("flat Viva Admin booking blocks another allowed event for the same subscription and date", () => {
   const out = runFunction(ROUTER_FILE, {
     statusCode: 200,

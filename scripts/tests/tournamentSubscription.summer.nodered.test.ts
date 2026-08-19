@@ -1567,8 +1567,14 @@ test("summer subscription counter refresh builds materialized counter updates", 
   assert.ok(Array.isArray(updates));
 
   const academyUpdate = updates.find((entry) => asRecord(entry.query).counterKey === "academy");
+  const kotelnikiUpdate = updates.find((entry) => asRecord(entry.query).counterKey === "kotelniki_friendship");
+  const networkUpdate = updates.find((entry) => asRecord(entry.query).counterKey === "network_friendship");
+  const piterUpdate = updates.find((entry) => asRecord(entry.query).counterKey === "piter_friendship");
   const sportUpdate = updates.find((entry) => asRecord(entry.query).counterKey === "sport");
   assert.ok(academyUpdate);
+  assert.ok(kotelnikiUpdate);
+  assert.ok(networkUpdate);
+  assert.ok(piterUpdate);
   assert.ok(sportUpdate);
 
   const academySet = asRecord(asRecord(academyUpdate!.payload).$set);
@@ -1585,6 +1591,25 @@ test("summer subscription counter refresh builds materialized counter updates", 
   assert.equal(sportSet.reservedCount, 0);
   assert.equal(sportSet.takenCount, 1);
   assert.equal(sportSet.remainingCount, 131);
+
+  const kotelnikiSet = asRecord(asRecord(kotelnikiUpdate!.payload).$set);
+  const networkSet = asRecord(asRecord(networkUpdate!.payload).$set);
+  const piterSet = asRecord(asRecord(piterUpdate!.payload).$set);
+  assert.equal(kotelnikiSet.totalLimit, 200);
+  assert.equal(kotelnikiSet.batchSize, 50);
+  assert.equal(kotelnikiSet.remainingCount, 200);
+  assert.equal(kotelnikiSet.bindingReady, false);
+  assert.equal(kotelnikiSet.canPurchase, false);
+  assert.equal(networkSet.totalLimit, 50);
+  assert.equal(networkSet.batchSize, 50);
+  assert.equal(networkSet.remainingCount, 50);
+  assert.equal(networkSet.bindingReady, false);
+  assert.equal(networkSet.canPurchase, false);
+  assert.equal(piterSet.totalLimit, 400);
+  assert.equal(piterSet.batchSize, 100);
+  assert.equal(piterSet.remainingCount, 400);
+  assert.equal(piterSet.bindingReady, false);
+  assert.equal(piterSet.canPurchase, false);
 });
 
 test("summer subscription materialized counters ignore legacy manual paid baselines", () => {
@@ -1946,4 +1971,123 @@ test("Piter storefront fails closed when the active server tier has no provider 
   assert.equal(purchase[0], null);
   assert.equal(asRecord(purchase[1]).statusCode, 503);
   assert.equal(asRecord(errorPayload.details).bindingReady, false);
+});
+
+const KOTELNIKI_PRODUCT_GLOBALS = {
+  summer_subscription_kotelniki_friendship_tier_1_product_id: "kotelniki-product-tier-1",
+  summer_subscription_kotelniki_friendship_tier_2_product_id: "kotelniki-product-tier-2",
+  summer_subscription_kotelniki_friendship_tier_3_product_id: "kotelniki-product-tier-3",
+  summer_subscription_kotelniki_friendship_tier_4_product_id: "kotelniki-product-tier-4",
+};
+const NETWORK_PRODUCT_GLOBALS = {
+  summer_subscription_network_friendship_tier_1_product_id: "network-product-tier-1",
+};
+
+function buildRegionalRows(counterKey: string, inventoryId: string, batchSize: number, count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    inventoryId,
+    counterKey,
+    productId: `${counterKey}-product-tier-${Math.floor(index / batchSize) + 1}`,
+    status: "PAID",
+  }));
+}
+
+test("Kotelniki status uses four server-side batches of 50", () => {
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "kotelniki_friendship" } } },
+    KOTELNIKI_PRODUCT_GLOBALS,
+  ) as unknown[];
+  const dbMsg = asRecord(prepared[0]);
+  const ctx = asRecord(dbMsg._summerSubscriptionCtx);
+  const counter = asRecord((ctx.counters as Array<Record<string, unknown>>)[0]);
+  assert.deepEqual(dbMsg.query, {
+    inventoryId: "kotelniki_friendship_12m_2026_v1",
+    counterKey: "kotelniki_friendship",
+  });
+  assert.equal(counter.totalLimit, 200);
+  assert.equal(counter.batchSize, 50);
+  assert.equal((counter.tiers as unknown[]).length, 4);
+
+  const status = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    {
+      _summerSubscriptionCtx: ctx,
+      payload: buildRegionalRows(
+        "kotelniki_friendship",
+        "kotelniki_friendship_12m_2026_v1",
+        50,
+        50,
+      ),
+    },
+    KOTELNIKI_PRODUCT_GLOBALS,
+  ) as unknown[];
+  const payload = asRecord(asRecord(status[0]).payload);
+  assert.equal(payload.batchIndex, 2);
+  assert.equal(payload.batchRemainingCount, 50);
+  assert.equal(payload.priceMinor, 2380000);
+  assert.equal(payload.productId, "kotelniki-product-tier-2");
+  assert.equal(payload.bindingReady, true);
+  assert.equal(payload.canPurchase, true);
+});
+
+test("network status uses one server-side batch of 50 at 56 800 RUB", () => {
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "network_friendship" } } },
+    NETWORK_PRODUCT_GLOBALS,
+  ) as unknown[];
+  const dbMsg = asRecord(prepared[0]);
+  const ctx = asRecord(dbMsg._summerSubscriptionCtx);
+  const counter = asRecord((ctx.counters as Array<Record<string, unknown>>)[0]);
+  assert.deepEqual(dbMsg.query, {
+    inventoryId: "network_friendship_12m_2026_v1",
+    counterKey: "network_friendship",
+  });
+  assert.equal(counter.totalLimit, 50);
+  assert.equal(counter.batchSize, 50);
+  assert.equal((counter.tiers as unknown[]).length, 1);
+
+  const status = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    { _summerSubscriptionCtx: ctx, payload: [] },
+    NETWORK_PRODUCT_GLOBALS,
+  ) as unknown[];
+  const payload = asRecord(asRecord(status[0]).payload);
+  assert.equal(payload.batchIndex, 1);
+  assert.equal(payload.batchRemainingCount, 50);
+  assert.equal(payload.priceMinor, 5680000);
+  assert.equal(payload.productId, "network-product-tier-1");
+  assert.equal(payload.bindingReady, true);
+  assert.equal(payload.canPurchase, true);
+});
+
+test("regional purchase ignores browser productId and fails closed without the active Viva product", () => {
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+    {
+      payload: {
+        clientPhone: "79990000000",
+        counterKey: "kotelniki_friendship",
+        productId: "forged-browser-product",
+        paymentRef: "kotelniki-payment-ref",
+      },
+      req: { query: {} },
+    },
+    {},
+  ) as unknown[];
+  const ctx = asRecord(asRecord(prepared[0])._summerSubscriptionCtx);
+  assert.equal(ctx.productId, null);
+  assert.equal(ctx.totalLimit, 200);
+
+  const limited = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
+    { _summerSubscriptionCtx: ctx, payload: [] },
+    {},
+  ) as unknown[];
+  const error = asRecord(limited[1]);
+  assert.equal(limited[0], null);
+  assert.equal(error.statusCode, 503);
+  assert.equal(asRecord(asRecord(error.payload).details).counterKey, "kotelniki_friendship");
+  assert.equal(asRecord(asRecord(error.payload).details).bindingReady, false);
 });

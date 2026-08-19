@@ -3,8 +3,11 @@ const toStr = (value) => {
   const text = String(value).trim();
   return text ? text : null;
 };
-const PITER_FRIENDSHIP_COUNTER_KEY = "piter_friendship";
-const PITER_FRIENDSHIP_BATCH_SIZE = 100;
+const REGIONAL_FRIENDSHIP_CONFIGS = {
+  kotelniki_friendship: { batchSize: 50, bindingLabel: "Котельники" },
+  network_friendship: { batchSize: 50, bindingLabel: "ХАБ" },
+  piter_friendship: { batchSize: 100, bindingLabel: "Питер" },
+};
 
 const toTs = (value) => {
   const text = toStr(value);
@@ -51,6 +54,8 @@ const normalizeCounterKey = (value) => {
     normalized === "academy"
     || normalized === "energy5"
     || normalized === "friendship"
+    || normalized === "kotelniki_friendship"
+    || normalized === "network_friendship"
     || normalized === "piter_friendship"
     || normalized === "ra"
     || normalized === "sirius_friendship"
@@ -280,9 +285,10 @@ const updateMessages = states.map((state) => {
   }
   state.takenCount = state.paidCount + state.reservedCount;
   state.remainingCount = state.unlimited ? 0 : Math.max(state.totalLimit - state.takenCount, 0);
-  if (state.counterKey === PITER_FRIENDSHIP_COUNTER_KEY) {
+  const regional = REGIONAL_FRIENDSHIP_CONFIGS[state.counterKey];
+  if (regional) {
     const tiers = Array.isArray(state._tiers) ? state._tiers : [];
-    const batchSize = Math.max(1, state.batchSize || PITER_FRIENDSHIP_BATCH_SIZE);
+    const batchSize = Math.max(1, state.batchSize || regional.batchSize);
     const batchIndex = Math.max(1, Math.min(tiers.length || 1, Math.floor(state.takenCount / batchSize) + 1));
     const activeTier = tiers[batchIndex - 1] || null;
     const takenInBatch = Math.max(0, state.takenCount - (batchIndex - 1) * batchSize);
@@ -299,7 +305,7 @@ const updateMessages = states.map((state) => {
     state.bindingReady = Boolean(state.productId && state.priceMinor != null);
     state.bindingError = state.bindingReady
       ? null
-      : "Текущая ценовая партия Питер ещё не подключена к оплате";
+      : `Текущая ценовая партия ${regional.bindingLabel} ещё не подключена к оплате`;
   }
   state.canPurchase = (state.unlimited || state.remainingCount > 0) && state.bindingReady;
   state.sourceUpdatedAt = state._lastUpdatedAtTs == null

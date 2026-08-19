@@ -75,10 +75,26 @@ const SIRIUS_FRIENDSHIP_DEFAULTS = {
   planKey: "friendship",
   campaignKey: "summer_padel_sirius_friendship_2026",
 };
-const PITER_FRIENDSHIP_COUNTER_KEY = "piter_friendship";
-const PITER_FRIENDSHIP_INVENTORY_ID = "piter_friendship_12m_2026_v1";
-const PITER_FRIENDSHIP_BATCH_SIZE = 100;
-const PITER_FRIENDSHIP_TIER_PRICES_MINOR = [1980000, 2380000, 3680000, 5680000];
+const REGIONAL_FRIENDSHIP_CONFIGS = {
+  kotelniki_friendship: {
+    inventoryId: "kotelniki_friendship_12m_2026_v1",
+    batchSize: 50,
+    tierPricesMinor: [1980000, 2380000, 3680000, 5680000],
+    productName: "Падел.Дружба.Котельники",
+  },
+  network_friendship: {
+    inventoryId: "network_friendship_12m_2026_v1",
+    batchSize: 50,
+    tierPricesMinor: [5680000],
+    productName: "Падел.Дружба.ХАБ",
+  },
+  piter_friendship: {
+    inventoryId: "piter_friendship_12m_2026_v1",
+    batchSize: 100,
+    tierPricesMinor: [1980000, 2380000, 3680000, 5680000],
+    productName: "Падел.Дружба.Питер",
+  },
+};
 
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -194,6 +210,8 @@ const normalizeCounterKey = (value) => {
     normalized === "academy"
     || normalized === "energy5"
     || normalized === "friendship"
+    || normalized === "kotelniki_friendship"
+    || normalized === "network_friendship"
     || normalized === "piter_friendship"
     || normalized === "ra"
     || normalized === "sirius_friendship"
@@ -290,22 +308,24 @@ const readSiriusFriendshipConfig = (friendshipPlan) => ({
   ),
 });
 
-const readPiterFriendshipConfig = () => {
-  const tiers = PITER_FRIENDSHIP_TIER_PRICES_MINOR.map((priceMinor, index) => {
+const readRegionalFriendshipConfig = (counterKey) => {
+  const regional = REGIONAL_FRIENDSHIP_CONFIGS[counterKey];
+  if (!regional) return null;
+  const tiers = regional.tierPricesMinor.map((priceMinor, index) => {
     const tierNumber = index + 1;
     return {
       batchIndex: tierNumber,
-      batchSize: PITER_FRIENDSHIP_BATCH_SIZE,
+      batchSize: regional.batchSize,
       priceMinor,
-      productId: readGlobalFirst([`summer_subscription_piter_friendship_tier_${tierNumber}_product_id`]),
-      productName: readGlobalFirst([`summer_subscription_piter_friendship_tier_${tierNumber}_product_name`])
-        || `Падел.Дружба.Питер — партия ${tierNumber}`,
+      productId: readGlobalFirst([`summer_subscription_${counterKey}_tier_${tierNumber}_product_id`]),
+      productName: readGlobalFirst([`summer_subscription_${counterKey}_tier_${tierNumber}_product_name`])
+        || `${regional.productName} — партия ${tierNumber}`,
     };
   });
   return {
-    counterKey: PITER_FRIENDSHIP_COUNTER_KEY,
-    inventoryId: readGlobalFirst(["summer_subscription_piter_friendship_inventory_id"])
-      || PITER_FRIENDSHIP_INVENTORY_ID,
+    counterKey,
+    inventoryId: readGlobalFirst([`summer_subscription_${counterKey}_inventory_id`])
+      || regional.inventoryId,
     saleType: "tiered_direct_product",
     planKey: null,
     campaignKey: null,
@@ -313,8 +333,8 @@ const readPiterFriendshipConfig = () => {
     productName: tiers[0].productName,
     productCostMinor: tiers[0].priceMinor,
     manualPaidCount: 0,
-    totalLimit: PITER_FRIENDSHIP_BATCH_SIZE * tiers.length,
-    batchSize: PITER_FRIENDSHIP_BATCH_SIZE,
+    totalLimit: regional.batchSize * tiers.length,
+    batchSize: regional.batchSize,
     tiers,
   };
 };
@@ -350,12 +370,16 @@ const buildCounterConfigMap = () => {
   const academy = readDirectCounterConfig("academy");
   const energy5 = readDirectCounterConfig("energy5");
   const ra = readDirectCounterConfig("ra");
-  const piterFriendship = readPiterFriendshipConfig();
+  const kotelnikiFriendship = readRegionalFriendshipConfig("kotelniki_friendship");
+  const networkFriendship = readRegionalFriendshipConfig("network_friendship");
+  const piterFriendship = readRegionalFriendshipConfig("piter_friendship");
 
   return {
     academy,
     energy5,
     friendship,
+    kotelniki_friendship: kotelnikiFriendship,
+    network_friendship: networkFriendship,
     piter_friendship: piterFriendship,
     ra,
     sirius_friendship: siriusFriendship,

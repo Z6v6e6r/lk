@@ -55,7 +55,20 @@ const SIRIUS_FRIENDSHIP_DEFAULTS = {
   planKey: "friendship",
   campaignKey: "summer_padel_sirius_friendship_2026",
 };
-const PITER_FRIENDSHIP_INVENTORY_ID = "piter_friendship_12m_2026_v1";
+const REGIONAL_FRIENDSHIP_CONFIGS = {
+  kotelniki_friendship: {
+    inventoryId: "kotelniki_friendship_12m_2026_v1",
+    productName: "Падел.Дружба.Котельники",
+  },
+  network_friendship: {
+    inventoryId: "network_friendship_12m_2026_v1",
+    productName: "Падел.Дружба.ХАБ",
+  },
+  piter_friendship: {
+    inventoryId: "piter_friendship_12m_2026_v1",
+    productName: "Падел.Дружба.Питер",
+  },
+};
 
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -93,6 +106,8 @@ const normalizeCounterKey = (value) => {
     normalized === "academy"
     || normalized === "energy5"
     || normalized === "friendship"
+    || normalized === "kotelniki_friendship"
+    || normalized === "network_friendship"
     || normalized === "piter_friendship"
     || normalized === "ra"
     || normalized === "sirius_friendship"
@@ -224,15 +239,15 @@ const readDirectCounterConfig = (counterKey) => {
   };
 };
 
-const readPiterFriendshipConfig = () => ({
-  counterKey: "piter_friendship",
-  inventoryId: readGlobalFirst(["summer_subscription_piter_friendship_inventory_id"])
-    || PITER_FRIENDSHIP_INVENTORY_ID,
+const readRegionalFriendshipConfig = (counterKey) => ({
+  counterKey,
+  inventoryId: readGlobalFirst([`summer_subscription_${counterKey}_inventory_id`])
+    || REGIONAL_FRIENDSHIP_CONFIGS[counterKey].inventoryId,
   saleType: "tiered_direct_product",
   planKey: null,
   campaignKey: null,
   productId: null,
-  productName: "Падел.Дружба.Питер",
+  productName: REGIONAL_FRIENDSHIP_CONFIGS[counterKey].productName,
   unlimited: false,
 });
 
@@ -242,7 +257,9 @@ const buildCounterConfigMap = () => {
     academy: readDirectCounterConfig("academy"),
     energy5: readDirectCounterConfig("energy5"),
     friendship,
-    piter_friendship: readPiterFriendshipConfig(),
+    kotelniki_friendship: readRegionalFriendshipConfig("kotelniki_friendship"),
+    network_friendship: readRegionalFriendshipConfig("network_friendship"),
+    piter_friendship: readRegionalFriendshipConfig("piter_friendship"),
     ra: readDirectCounterConfig("ra"),
     sirius_friendship: readSiriusFriendshipConfig(friendship),
     sport: readSummerPlanConfig("sport"),
