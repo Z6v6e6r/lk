@@ -3541,6 +3541,12 @@ export interface TournamentSubscriptionStatus {
   takenCount: number;
   remainingCount: number;
   canPurchase: boolean;
+  bindingReady: boolean;
+  bindingError: string | null;
+  batchSize: number;
+  batchIndex: number;
+  batchCount: number;
+  batchRemainingCount: number;
   releasePhase: string | null;
   dailyDropActive: boolean;
   releaseStartDate: string | null;
@@ -9961,6 +9967,7 @@ function normalizeTournamentSubscriptionStatusEntry(
   const priceMinor = pickNumeric(data, ["priceMinor", "toPayMinor", "amountMinor"]);
   const price = pickNumeric(data, ["price", "toPay", "amount"]);
   const canPurchaseRaw = toBoolean(data.canPurchase);
+  const bindingReadyRaw = toBoolean(data.bindingReady);
 
   const totalLimit = Math.max(0, Math.floor(totalLimitRaw ?? 0));
   const paidCount = Math.max(0, Math.floor(paidCountRaw ?? 0));
@@ -9989,6 +9996,12 @@ function normalizeTournamentSubscriptionStatusEntry(
     takenCount,
     remainingCount,
     canPurchase: canPurchaseRaw ?? remainingCount > 0,
+    bindingReady: bindingReadyRaw ?? true,
+    bindingError: pickString(data, ["bindingError"]),
+    batchSize: Math.max(0, Math.floor(pickNumeric(data, ["batchSize"]) ?? 0)),
+    batchIndex: Math.max(0, Math.floor(pickNumeric(data, ["batchIndex"]) ?? 0)),
+    batchCount: Math.max(0, Math.floor(pickNumeric(data, ["batchCount"]) ?? 0)),
+    batchRemainingCount: Math.max(0, Math.floor(pickNumeric(data, ["batchRemainingCount"]) ?? 0)),
     releasePhase: pickString(data, ["releasePhase"]),
     dailyDropActive: toBoolean(data.dailyDropActive) ?? false,
     releaseStartDate: pickString(data, ["releaseStartDate"]),

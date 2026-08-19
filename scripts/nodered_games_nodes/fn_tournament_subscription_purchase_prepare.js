@@ -81,6 +81,10 @@ const SIRIUS_FRIENDSHIP_DEFAULTS = {
   planKey: "friendship",
   campaignKey: "summer_padel_sirius_friendship_2026",
 };
+const PITER_FRIENDSHIP_COUNTER_KEY = "piter_friendship";
+const PITER_FRIENDSHIP_INVENTORY_ID = "piter_friendship_12m_2026_v1";
+const PITER_FRIENDSHIP_BATCH_SIZE = 50;
+const PITER_FRIENDSHIP_TIER_PRICES_MINOR = [1980000, 2380000, 3680000, 5680000];
 
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -220,6 +224,7 @@ const normalizeCounterKey = (value) => {
     normalized === "academy"
     || normalized === "energy5"
     || normalized === "friendship"
+    || normalized === "piter_friendship"
     || normalized === "ra"
     || normalized === "sirius_friendship"
     || normalized === "sport"
@@ -336,6 +341,35 @@ const readSiriusFriendshipConfig = (friendshipPlan) => ({
   ),
 });
 
+const readPiterFriendshipConfig = () => {
+  const tiers = PITER_FRIENDSHIP_TIER_PRICES_MINOR.map((priceMinor, index) => {
+    const tierNumber = index + 1;
+    return {
+      batchIndex: tierNumber,
+      batchSize: PITER_FRIENDSHIP_BATCH_SIZE,
+      priceMinor,
+      productId: readGlobalFirst([`summer_subscription_piter_friendship_tier_${tierNumber}_product_id`]),
+      productName: readGlobalFirst([`summer_subscription_piter_friendship_tier_${tierNumber}_product_name`])
+        || `Падел.Дружба.Питер — партия ${tierNumber}`,
+    };
+  });
+  return {
+    counterKey: PITER_FRIENDSHIP_COUNTER_KEY,
+    inventoryId: readGlobalFirst(["summer_subscription_piter_friendship_inventory_id"])
+      || PITER_FRIENDSHIP_INVENTORY_ID,
+    saleType: "tiered_direct_product",
+    planKey: null,
+    campaignKey: null,
+    productId: null,
+    productName: tiers[0].productName,
+    productCostMinor: tiers[0].priceMinor,
+    manualPaidCount: 0,
+    totalLimit: PITER_FRIENDSHIP_BATCH_SIZE * tiers.length,
+    batchSize: PITER_FRIENDSHIP_BATCH_SIZE,
+    tiers,
+  };
+};
+
 const readDirectCounterConfig = (counterKey) => {
   const base = DIRECT_COUNTER_DEFAULTS[counterKey];
   if (!base) return null;
@@ -371,11 +405,13 @@ const buildCounterConfigMap = () => {
   const academy = readDirectCounterConfig("academy");
   const energy5 = readDirectCounterConfig("energy5");
   const ra = readDirectCounterConfig("ra");
+  const piterFriendship = readPiterFriendshipConfig();
 
   return {
     academy,
     energy5,
     friendship,
+    piter_friendship: piterFriendship,
     ra,
     sirius_friendship: siriusFriendship,
     sport,
@@ -484,7 +520,9 @@ if (requestedCounterKey) {
   activeCounter = mappedByCampaign;
 }
 
-const productId = activeCounter.productId || requestedProductId;
+const productId = activeCounter.counterKey === PITER_FRIENDSHIP_COUNTER_KEY
+  ? null
+  : activeCounter.productId || requestedProductId;
 const totalLimit = activeCounter.totalLimit;
 const reservationMinutes = Math.max(
   5,
@@ -564,6 +602,8 @@ msg._summerSubscriptionCtx = {
   productName: activeCounter.productName,
   productId,
   productCostMinor: activeCounter.productCostMinor,
+  batchSize: Math.max(0, Math.floor(Number(activeCounter.batchSize) || 0)),
+  tiers: Array.isArray(activeCounter.tiers) ? activeCounter.tiers : [],
   totalLimit,
   stagedRelease: activeCounter.stagedRelease === true,
   releaseStartDate: toStr(activeCounter.releaseStartDate),

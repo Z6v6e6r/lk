@@ -168,7 +168,7 @@ function mount(options: MountOptions = {}) {
       subscriptionPageOpenTracked = true;
       trackAnalyticsEvent("subscription_page_opened", {
         entry: "tournament-subscription",
-        storefront: "ab_leto",
+        storefront: options.data?.variant === "piter_friendship" ? "piter_friendship" : "ab_leto",
         targetId,
         trainerQrCode: readAbLetoTrainerQrCode(),
       });

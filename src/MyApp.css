@@ -20289,6 +20289,201 @@ h6,
   }
 }
 
+.tournament-subscription-page--piter {
+  min-height: 100vh;
+  padding-bottom: 36px;
+  background:
+    radial-gradient(circle at 18% 8%, rgba(143, 93, 107, 0.24), transparent 34%),
+    linear-gradient(155deg, #172334 0%, #273240 52%, #101722 100%);
+}
+
+.tournament-subscription-header--piter {
+  width: min(100%, 560px);
+  margin-inline: auto;
+}
+
+.tournament-subscription-plans--piter {
+  width: min(100%, 560px);
+  margin-inline: auto;
+}
+
+.tournament-subscription-plan--piter {
+  gap: 14px;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.piter-subscription-flip {
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  perspective: 1600px;
+}
+
+.piter-subscription-flip-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform 620ms cubic-bezier(0.2, 0.72, 0.2, 1);
+}
+
+.piter-subscription-flip--flipped .piter-subscription-flip-inner {
+  transform: rotateY(180deg);
+}
+
+.piter-subscription-face {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 20px;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  box-shadow: 0 28px 70px rgba(3, 8, 16, 0.42);
+}
+
+.piter-subscription-face--front {
+  background: #1a2431;
+}
+
+.piter-subscription-artwork {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.piter-subscription-face--back {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: clamp(22px, 5vw, 38px);
+  transform: rotateY(180deg);
+  color: #fff;
+  background:
+    linear-gradient(180deg, rgba(142, 93, 106, 0.97) 0 22%, rgba(58, 66, 77, 0.98) 22% 100%),
+    #3a424d;
+}
+
+.piter-subscription-kicker {
+  margin-bottom: 8px;
+  color: #ff5962;
+  font-size: clamp(14px, 3.4vw, 18px);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.piter-subscription-face--back h2 {
+  margin: 0 0 clamp(18px, 4vw, 28px);
+  font-size: clamp(28px, 7vw, 44px);
+  line-height: 0.98;
+}
+
+.piter-subscription-face--back ul {
+  display: grid;
+  gap: clamp(10px, 2.6vw, 18px);
+  margin: 0;
+  padding: 0 0 0 1.2em;
+  font-size: clamp(14px, 3.2vw, 18px);
+  line-height: 1.25;
+}
+
+.piter-subscription-face--back li::marker {
+  color: #b5ff5b;
+}
+
+.piter-subscription-terms-button {
+  min-height: 48px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 999px;
+  padding: 11px 20px;
+  color: #fff;
+  background: rgba(20, 28, 38, 0.68);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.piter-subscription-terms-button:hover,
+.piter-subscription-terms-button:focus-visible {
+  border-color: #b5ff5b;
+  background: rgba(37, 49, 62, 0.92);
+}
+
+.piter-subscription-terms-button:active {
+  transform: translateY(1px);
+}
+
+.tournament-subscription-plan--piter .tournament-subscription-purchase-block {
+  margin: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  padding: 20px;
+  background: rgba(21, 29, 39, 0.86);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.tournament-subscription-plan--piter .tournament-subscription-remaining-wrap {
+  color: #fff;
+}
+
+.piter-subscription-consent {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  color: #fff;
+  font-size: 15px;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.piter-subscription-consent input {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  accent-color: #aaff52;
+}
+
+.piter-subscription-auth-state {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+}
+
+.tournament-subscription-plan--piter .tournament-subscription-buy {
+  background: linear-gradient(135deg, #b8ff60, #8fe53a);
+  color: #17202b;
+}
+
+@media (max-width: 560px) {
+  .tournament-subscription-page--piter {
+    padding-inline: 10px;
+  }
+
+  .piter-subscription-face {
+    border-radius: 16px;
+  }
+
+  .piter-subscription-face--back ul {
+    gap: 9px;
+    font-size: clamp(13px, 3.6vw, 16px);
+  }
+
+  .tournament-subscription-plan--piter .tournament-subscription-purchase-block {
+    padding: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .piter-subscription-flip-inner {
+    transition-duration: 1ms;
+  }
+}
+
 body.lk-idle-data-stale {
   overflow: hidden !important;
 }
