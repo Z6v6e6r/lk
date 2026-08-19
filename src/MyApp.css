@@ -20383,8 +20383,10 @@ h6,
 
 .piter-subscription-face--back ul {
   display: grid;
+  flex: 1 1 auto;
+  align-content: center;
   gap: clamp(10px, 2.6vw, 18px);
-  margin: 0;
+  margin: auto 0;
   padding: 0 0 0 1.2em;
   font-size: clamp(14px, 3.2vw, 18px);
   line-height: 1.25;
