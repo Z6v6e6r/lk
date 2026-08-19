@@ -1822,12 +1822,12 @@ function buildPiterRows(count: number) {
   return Array.from({ length: count }, (_, index) => ({
     inventoryId: "piter_friendship_12m_2026_v1",
     counterKey: "piter_friendship",
-    productId: `piter-product-tier-${Math.floor(index / 50) + 1}`,
+    productId: `piter-product-tier-${Math.floor(index / 100) + 1}`,
     status: "PAID",
   }));
 }
 
-test("Piter status uses a dedicated 200-unit inventory and server-side batches of 50", () => {
+test("Piter status uses a dedicated 400-unit inventory and server-side batches of 100", () => {
   const prepared = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
     { req: { query: { counterKey: "piter_friendship" } } },
@@ -1841,13 +1841,13 @@ test("Piter status uses a dedicated 200-unit inventory and server-side batches o
     inventoryId: "piter_friendship_12m_2026_v1",
     counterKey: "piter_friendship",
   });
-  assert.equal(counter.totalLimit, 200);
-  assert.equal(counter.batchSize, 50);
+  assert.equal(counter.totalLimit, 400);
+  assert.equal(counter.batchSize, 100);
   assert.equal((counter.tiers as unknown[]).length, 4);
 
   const firstBatch = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
-    { _summerSubscriptionCtx: ctx, payload: buildPiterRows(49) },
+    { _summerSubscriptionCtx: ctx, payload: buildPiterRows(99) },
     PITER_PRODUCT_GLOBALS,
   ) as unknown[];
   const firstPayload = asRecord(asRecord(firstBatch[0]).payload);
@@ -1860,12 +1860,12 @@ test("Piter status uses a dedicated 200-unit inventory and server-side batches o
 
   const secondBatch = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
-    { _summerSubscriptionCtx: ctx, payload: buildPiterRows(50) },
+    { _summerSubscriptionCtx: ctx, payload: buildPiterRows(100) },
     PITER_PRODUCT_GLOBALS,
   ) as unknown[];
   const secondPayload = asRecord(asRecord(secondBatch[0]).payload);
   assert.equal(secondPayload.batchIndex, 2);
-  assert.equal(secondPayload.batchRemainingCount, 50);
+  assert.equal(secondPayload.batchRemainingCount, 100);
   assert.equal(secondPayload.priceMinor, 2380000);
   assert.equal(secondPayload.productId, "piter-product-tier-2");
 });
@@ -1886,16 +1886,16 @@ test("Piter purchase ignores a browser productId and selects the current server 
   ) as unknown[];
   const preparedCtx = asRecord(asRecord(prepared[0])._summerSubscriptionCtx);
   assert.equal(preparedCtx.productId, null);
-  assert.equal(preparedCtx.totalLimit, 200);
+  assert.equal(preparedCtx.totalLimit, 400);
 
   const limited = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
-    { _summerSubscriptionCtx: preparedCtx, payload: buildPiterRows(50) },
+    { _summerSubscriptionCtx: preparedCtx, payload: buildPiterRows(100) },
     PITER_PRODUCT_GLOBALS,
   ) as unknown[];
   const selectedCtx = asRecord(asRecord(limited[0])._summerSubscriptionCtx);
   assert.equal(selectedCtx.batchIndex, 2);
-  assert.equal(selectedCtx.batchRemainingBefore, 50);
+  assert.equal(selectedCtx.batchRemainingBefore, 100);
   assert.equal(selectedCtx.productId, "piter-product-tier-2");
   assert.equal(selectedCtx.productCostMinor, 2380000);
 });
@@ -1913,7 +1913,7 @@ test("Piter storefront fails closed when the active server tier has no provider 
   const ctx = asRecord(asRecord(prepared[0])._summerSubscriptionCtx);
   const status = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
-    { _summerSubscriptionCtx: ctx, payload: buildPiterRows(50) },
+    { _summerSubscriptionCtx: ctx, payload: buildPiterRows(100) },
     globalsWithoutTierTwo,
   ) as unknown[];
   const statusPayload = asRecord(asRecord(status[0]).payload);
@@ -1938,7 +1938,7 @@ test("Piter storefront fails closed when the active server tier has no provider 
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
     {
       _summerSubscriptionCtx: asRecord(asRecord(purchasePrepared[0])._summerSubscriptionCtx),
-      payload: buildPiterRows(50),
+      payload: buildPiterRows(100),
     },
     globalsWithoutTierTwo,
   ) as unknown[];

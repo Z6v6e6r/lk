@@ -4,7 +4,7 @@ const toStr = (value) => {
   return text ? text : null;
 };
 const PITER_FRIENDSHIP_COUNTER_KEY = "piter_friendship";
-const PITER_FRIENDSHIP_BATCH_SIZE = 50;
+const PITER_FRIENDSHIP_BATCH_SIZE = 100;
 
 const toTs = (value) => {
   const text = toStr(value);

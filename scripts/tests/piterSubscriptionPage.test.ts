@@ -7,10 +7,10 @@ const entry = fs.readFileSync("src/tournament-subscription.tsx", "utf8");
 const css = fs.readFileSync("src/MyApp.css", "utf8");
 const loader = fs.readFileSync("docs/tilda-piter-subscription.html", "utf8");
 
-test("Piter page is a dedicated storefront with its own counter and four 50-unit artworks", () => {
+test("Piter page is a dedicated storefront with its own counter and four 100-unit artworks", () => {
   assert.match(page, /variant === "piter_friendship"/);
   assert.match(page, /counterKey: "piter_friendship"/);
-  assert.match(page, /PITER_FRIENDSHIP_BATCH_SIZE = 50/);
+  assert.match(page, /PITER_FRIENDSHIP_BATCH_SIZE = 100/);
   assert.match(page, /PITER_FRIENDSHIP_ARTWORKS\.length/);
   for (const tier of [1, 2, 3, 4]) {
     assert.match(page, new RegExp(`piter-subscription-tier-${tier}\\.webp`));

@@ -1269,7 +1269,7 @@
 ## 2026-08-19 — Piter subscription isolated storefront and guarded contour
 
 - Added the standalone `piter_friendship` storefront with four supplied visual
-  tiers, a dedicated 50-unit batch counter, consent-gated authentication and a
+  tiers, a dedicated 100-unit batch counter, consent-gated authentication and a
   reversible terms card.
 - Added server-owned tier selection for 19,800 / 23,800 / 36,800 / 56,800 RUB;
   browser `productId` is ignored and a missing active Viva product binding

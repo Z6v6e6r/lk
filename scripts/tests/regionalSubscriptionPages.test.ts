@@ -15,10 +15,10 @@ function assertOptimizedWebp(path: string) {
   assert.ok(file.length > 0 && file.length < 200_000, `${path} should be a non-empty optimized asset`);
 }
 
-test("Kotelniki is a dedicated four-tier 4 x 100 guarded storefront", () => {
+test("Kotelniki is a dedicated four-tier 4 x 50 guarded storefront", () => {
   assert.match(page, /variant === "kotelniki_friendship"/);
   assert.match(page, /counterKey: "kotelniki_friendship"/);
-  assert.match(page, /KOTELNIKI_FRIENDSHIP_BATCH_SIZE = 100/);
+  assert.match(page, /KOTELNIKI_FRIENDSHIP_BATCH_SIZE = 50/);
   assert.match(page, /options\.batchSize \* options\.artworks\.length/);
   assert.match(page, /kicker: "Падел\.Дружба\.Котельники"/);
 
@@ -31,8 +31,8 @@ test("Kotelniki is a dedicated four-tier 4 x 100 guarded storefront", () => {
   assert.match(kotelnikiLoader, /variant: "kotelniki_friendship"/);
   assert.match(kotelnikiLoader, /tournament-subscription-dev\.js/);
   assert.match(kotelnikiLoader, /tournament-subscription\.js/);
-  assert.match(deployDocs, /четыре ценовые партии по 100 подписок/);
-  assert.match(deployDocs, /fallback-лимит 400/);
+  assert.match(deployDocs, /четыре ценовые партии по 50 подписок/);
+  assert.match(deployDocs, /fallback-лимит 200/);
 });
 
 test("network is a dedicated one-tier 50-unit guarded storefront", () => {
