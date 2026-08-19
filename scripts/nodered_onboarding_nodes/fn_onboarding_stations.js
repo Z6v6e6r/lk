@@ -139,6 +139,11 @@ const serviceByStation = {
     preferredSubServiceId: null,
     subServiceIds: ["8fd8fe7b-9563-4b56-836c-1b63fe4698f5"],
   },
+  "1ea77cbf-bc36-49a1-96d6-f35c216a409b": {
+    masterServiceId: "899db365-5286-43f6-a3a4-efcf406a28eb",
+    preferredSubServiceId: "6a16a7a8-db84-422d-b5f8-5fd00fe0d54c",
+    subServiceIds: ["6a16a7a8-db84-422d-b5f8-5fd00fe0d54c"],
+  },
   "233c1405-1eac-40de-8ec6-1cf7e24c9276": {
     masterServiceId: "86e13da6-2282-4daf-9239-c0cd3ddefaf7",
     preferredSubServiceId: null,
