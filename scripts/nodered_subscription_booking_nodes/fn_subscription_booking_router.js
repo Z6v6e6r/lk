@@ -275,6 +275,10 @@ const resolvePlanKey = (value) => {
     if (markers.some((marker) => normalizeId(marker) === productId)) return planKey;
   }
   const normalized = markers.map(normalizeMarker).filter(Boolean);
+  if (normalized.some((marker) => (
+    (marker.includes("питер") || marker.includes("piter") || marker.includes("spb"))
+    && (marker.includes("дружба") || marker.includes("friendship") || marker.includes("druzhba"))
+  ))) return "piter_friendship";
   if (normalized.some((marker) => marker.includes("friendship") || marker.includes("дружба") || marker.includes("druzhba"))) return "friendship";
   if (normalized.some((marker) => marker.includes("sport") || marker.includes("спорт"))) return "sport";
   if (normalized.some((marker) => marker.includes("academy") || marker.includes("академ"))) return "academy";
@@ -284,6 +288,7 @@ const resolvePlanKey = (value) => {
 
 const PLAN_CATEGORIES = {
   friendship: ["open_game", "tournament"],
+  piter_friendship: [],
   sport: ["open_game", "tournament"],
   academy: ["open_game", "group_training"],
   ra: ["open_game", "group_training", "tournament"],
@@ -751,6 +756,12 @@ if (ctx.step === "exercise") {
   ctx.studioId = toStr(exercise.studio?.id || exercise.studioId);
   ctx.subscriptionName = pickName(ownedSubscription);
   ctx.planKey = resolvePlanKey(ownedSubscription) || resolvePlanKey(ctx.subscriptionName);
+  if (ctx.planKey === "piter_friendship") {
+    return finishError(ctx, 409, "Для подписки Питер требуется опубликованная версия правил", {
+      code: "MANAGED_SUBSCRIPTION_POLICY_REQUIRED",
+      planKey: ctx.planKey,
+    });
+  }
   if (!ctx.serviceDate || !ctx.category) {
     return finishError(ctx, 502, "Не удалось определить дату или категорию упражнения Viva", {
       code: "SUBSCRIPTION_BOOKING_TARGET_UNRESOLVED",
@@ -786,6 +797,12 @@ if (ctx.step === "subscription_name") {
   const payload = unwrapRecord(msg.payload) || msg.payload;
   ctx.subscriptionName = toStr(payload?.sertName || payload?.subscriptionName || payload?.name);
   ctx.planKey = resolvePlanKey(ctx.subscriptionName);
+  if (ctx.planKey === "piter_friendship") {
+    return finishError(ctx, 409, "Для подписки Питер требуется опубликованная версия правил", {
+      code: "MANAGED_SUBSCRIPTION_POLICY_REQUIRED",
+      planKey: ctx.planKey,
+    });
+  }
   if (!ctx.subscriptionName) {
     return finishError(ctx, 502, "Источник не вернул тип выбранного абонемента", {
       code: "SUBSCRIPTION_PLAN_UNRESOLVED",

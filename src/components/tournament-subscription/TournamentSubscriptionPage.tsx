@@ -29,11 +29,20 @@ import summerSubscriptionEnergy5Image from "../../assets/summer-subscription-ene
 import summerSubscriptionFriendshipImage from "../../assets/summer-subscription-friendship.webp";
 import summerSubscriptionRaImage from "../../assets/summer-subscription-ra.webp";
 import summerSubscriptionSportImage from "../../assets/summer-subscription-sport.webp";
+import piterSubscriptionTier1Image from "../../assets/piter-subscription-tier-1.webp";
+import piterSubscriptionTier2Image from "../../assets/piter-subscription-tier-2.webp";
+import piterSubscriptionTier3Image from "../../assets/piter-subscription-tier-3.webp";
+import piterSubscriptionTier4Image from "../../assets/piter-subscription-tier-4.webp";
+import kotelnikiSubscriptionTier1Image from "../../assets/kotelniki-subscription-tier-1.webp";
+import kotelnikiSubscriptionTier2Image from "../../assets/kotelniki-subscription-tier-2.webp";
+import kotelnikiSubscriptionTier3Image from "../../assets/kotelniki-subscription-tier-3.webp";
+import kotelnikiSubscriptionTier4Image from "../../assets/kotelniki-subscription-tier-4.webp";
+import networkSubscriptionImage from "../../assets/network-subscription.webp";
 
 export type SubscriptionPlanId = "friendship" | "sport";
-export type SubscriptionCounterKey = "academy" | "energy5" | "friendship" | "ra" | "sirius_friendship" | "sport";
+export type SubscriptionCounterKey = "academy" | "energy5" | "friendship" | "kotelniki_friendship" | "network_friendship" | "piter_friendship" | "ra" | "sirius_friendship" | "sport";
 export type SubscriptionArtworkKey = "academy" | "energy5" | "friendship" | "ra" | "sport";
-export type TournamentSubscriptionPageVariant = "default" | "single_artwork" | "sirius_friendship";
+export type TournamentSubscriptionPageVariant = "default" | "kotelniki_friendship" | "network_friendship" | "piter_friendship" | "single_artwork" | "sirius_friendship";
 
 export interface TournamentSubscriptionPageConfig {
   artworkKey?: SubscriptionArtworkKey | null;
@@ -57,7 +66,7 @@ interface DisplayFeatureConfig {
   enabled: boolean;
 }
 
-type DisplayPlanPurchaseMode = "catalog_subscription" | "summer_campaign";
+type DisplayPlanPurchaseMode = "catalog_subscription" | "summer_campaign" | "tiered_counter";
 
 interface DisplayPlanConfig {
   id: string;
@@ -85,6 +94,11 @@ interface DisplayPlanConfig {
   featureListClassName?: string;
   featureItemClassName?: string;
   featureLabelClassName?: string;
+  requiresConsent?: boolean;
+  terms?: string[];
+  guardedStorefrontKicker?: string;
+  guardedStorefrontArtworkAlt?: string;
+  guardedStorefrontArtworks?: readonly string[];
   features: DisplayFeatureConfig[];
 }
 
@@ -119,6 +133,9 @@ const EMPTY_PLAN_STATUSES: Record<SubscriptionCounterKey, TournamentSubscription
   academy: null,
   energy5: null,
   friendship: null,
+  kotelniki_friendship: null,
+  network_friendship: null,
+  piter_friendship: null,
   ra: null,
   sirius_friendship: null,
   sport: null,
@@ -128,6 +145,9 @@ const PAYMENT_REF_QUERY_KEY = "summerPaymentRef";
 const DEFAULT_PLAN_LIMIT = 50;
 const SIRIUS_PLAN_LIMIT = 100;
 const SIRIUS_FRIENDSHIP_CAMPAIGN_KEY = "summer_padel_sirius_friendship_2026";
+const PITER_FRIENDSHIP_BATCH_SIZE = 100;
+const KOTELNIKI_FRIENDSHIP_BATCH_SIZE = 50;
+const NETWORK_FRIENDSHIP_BATCH_SIZE = 50;
 const PENDING_PAYMENT_STORAGE_KEY = "padlhub_tournament_subscription_pending_refs";
 const PENDING_PAYMENT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
@@ -147,6 +167,33 @@ const SIRIUS_FRIENDSHIP_FEATURES = [
   { label: "участие в турнирах ПадлхАБ", enabled: true },
   { label: "участие в сторонних турнирах", enabled: false },
 ] as const;
+
+const PITER_FRIENDSHIP_TERMS = [
+  "Одна игра в день: создание или присоединение.",
+  "По подписке можно создать только игру длительностью 60 минут.",
+  "Присоединиться по подписке можно к игре длительностью 60, 90 или 120 минут.",
+  "При создании игры дольше часа дополнительные 30 или 60 минут оплачиваются отдельно со скидкой.",
+  "Групповые тренировки доступны на специальных условиях: скидка применяется при оформлении.",
+  "Турниры доступны на специальных условиях: скидка применяется при оформлении.",
+] as const;
+
+const PITER_FRIENDSHIP_ARTWORKS = [
+  piterSubscriptionTier1Image,
+  piterSubscriptionTier2Image,
+  piterSubscriptionTier3Image,
+  piterSubscriptionTier4Image,
+] as const;
+
+const PITER_FRIENDSHIP_FALLBACK_TOTAL = PITER_FRIENDSHIP_BATCH_SIZE * PITER_FRIENDSHIP_ARTWORKS.length;
+
+const KOTELNIKI_FRIENDSHIP_ARTWORKS = [
+  kotelnikiSubscriptionTier1Image,
+  kotelnikiSubscriptionTier2Image,
+  kotelnikiSubscriptionTier3Image,
+  kotelnikiSubscriptionTier4Image,
+] as const;
+
+const NETWORK_FRIENDSHIP_ARTWORKS = [networkSubscriptionImage] as const;
 
 const SUBSCRIPTION_ARTWORKS: Record<SubscriptionArtworkKey, { alt: string; priceLabel: string; src: string }> = {
   academy: {
@@ -197,7 +244,7 @@ function normalizePlanTypeToken(value: string | null | undefined): SubscriptionP
 function normalizeCounterKey(value: string | null | undefined): SubscriptionCounterKey | null {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return null;
-  if (raw === "academy" || raw === "energy5" || raw === "friendship" || raw === "ra" || raw === "sirius_friendship" || raw === "sport") {
+  if (raw === "academy" || raw === "energy5" || raw === "friendship" || raw === "kotelniki_friendship" || raw === "network_friendship" || raw === "piter_friendship" || raw === "ra" || raw === "sirius_friendship" || raw === "sport") {
     return raw;
   }
   return null;
@@ -497,6 +544,50 @@ function buildSiriusFriendshipPageViewConfig(
   };
 }
 
+function buildGuardedFriendshipPageViewConfig(options: {
+  counterKey: "kotelniki_friendship" | "network_friendship" | "piter_friendship";
+  kicker: string;
+  accent: string;
+  artworks: readonly string[];
+  batchSize: number;
+  fallbackTotalLimit?: number;
+  remainingLabel?: string;
+}): PageViewConfig {
+  return {
+    pageClassName: "tournament-subscription-page--single tournament-subscription-page--piter",
+    headerClassName: "tournament-subscription-header--single tournament-subscription-header--piter",
+    plansClassName: "tournament-subscription-plans--single tournament-subscription-plans--piter",
+    showBackButton: true,
+    singlePlanRequest: {
+      counterKey: options.counterKey,
+      planId: null,
+      campaignKey: null,
+    },
+    plans: [
+      {
+        id: options.counterKey,
+        counterKey: options.counterKey,
+        planId: null,
+        cardClassName: "tournament-subscription-plan--single tournament-subscription-plan--piter",
+        purchaseMode: "tiered_counter",
+        headClassName: "tournament-subscription-plan-head--friendship",
+        accent: options.accent,
+        titleLines: ["ПАДЕЛ.", "ДРУЖБА."],
+        priceLabel: "19 800 ₽",
+        fallbackTotalLimit: options.fallbackTotalLimit ?? options.batchSize * options.artworks.length,
+        remainingLabel: options.remainingLabel ?? "Осталось в текущей партии",
+        featureStatusAppearance: "toggle",
+        requiresConsent: true,
+        terms: [...PITER_FRIENDSHIP_TERMS],
+        guardedStorefrontKicker: options.kicker,
+        guardedStorefrontArtworkAlt: options.kicker,
+        guardedStorefrontArtworks: options.artworks,
+        features: [],
+      },
+    ],
+  };
+}
+
 function resolvePageViewConfig(
   config?: TournamentSubscriptionPageConfig,
 ): PageViewConfig {
@@ -505,6 +596,35 @@ function resolvePageViewConfig(
   }
   if (config?.variant === "sirius_friendship") {
     return buildSiriusFriendshipPageViewConfig(config);
+  }
+  if (config?.variant === "piter_friendship") {
+    return buildGuardedFriendshipPageViewConfig({
+      counterKey: "piter_friendship",
+      kicker: "Падел.Дружба.Питер",
+      accent: "ПИТЕР",
+      artworks: PITER_FRIENDSHIP_ARTWORKS,
+      batchSize: PITER_FRIENDSHIP_BATCH_SIZE,
+      fallbackTotalLimit: PITER_FRIENDSHIP_FALLBACK_TOTAL,
+    });
+  }
+  if (config?.variant === "kotelniki_friendship") {
+    return buildGuardedFriendshipPageViewConfig({
+      counterKey: "kotelniki_friendship",
+      kicker: "Падел.Дружба.Котельники",
+      accent: "КОТЕЛЬНИКИ",
+      artworks: KOTELNIKI_FRIENDSHIP_ARTWORKS,
+      batchSize: KOTELNIKI_FRIENDSHIP_BATCH_SIZE,
+    });
+  }
+  if (config?.variant === "network_friendship") {
+    return buildGuardedFriendshipPageViewConfig({
+      counterKey: "network_friendship",
+      kicker: "Падел.Дружба.Хаб",
+      accent: "ВСЯ СЕТЬ",
+      artworks: NETWORK_FRIENDSHIP_ARTWORKS,
+      batchSize: NETWORK_FRIENDSHIP_BATCH_SIZE,
+      remainingLabel: "До повышения цены осталось",
+    });
   }
   if (config?.variant === "single_artwork") {
     return buildSingleArtworkPageViewConfig(config);
@@ -519,6 +639,9 @@ function mapStatusesByCounter(
     academy: null,
     energy5: null,
     friendship: null,
+    kotelniki_friendship: null,
+    network_friendship: null,
+    piter_friendship: null,
     ra: null,
     sirius_friendship: null,
     sport: null,
@@ -650,6 +773,12 @@ function FeatureStatus({
   );
 }
 
+function resolveGuardedStorefrontArtwork(plan: DisplayPlanConfig, status: TournamentSubscriptionStatus | null) {
+  const artworks = plan.guardedStorefrontArtworks || [];
+  const batchIndex = Math.max(1, Math.min(artworks.length, status?.batchIndex || 1));
+  return artworks[batchIndex - 1];
+}
+
 function DailyDropCountdown({ onDrop }: { onDrop: () => void }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [nextDropAtMs, setNextDropAtMs] = useState(() =>
@@ -714,6 +843,8 @@ export default function TournamentSubscriptionPage({
   const [buyInfo, setBuyInfo] = useState<string | null>(null);
   const [authRequestedDisplayId, setAuthRequestedDisplayId] = useState<string | null>(null);
   const [pendingPurchaseRequest, setPendingPurchaseRequest] = useState<PendingPurchaseRequest | null>(null);
+  const [acceptedTermsByDisplayId, setAcceptedTermsByDisplayId] = useState<Record<string, boolean>>({});
+  const [flippedDisplayId, setFlippedDisplayId] = useState<string | null>(null);
   const statusRequestIdRef = useRef(0);
   const autoPurchaseStartedRef = useRef(false);
 
@@ -973,6 +1104,83 @@ export default function TournamentSubscriptionPage({
       return;
     }
 
+    if (plan.purchaseMode === "tiered_counter") {
+      if (!counterKey) {
+        setBuyErrorByDisplayId((prev) => ({ ...prev, [plan.id]: "Для этой страницы не настроен отдельный счётчик." }));
+        return;
+      }
+      const trackedStatus = statusByCounterKey[counterKey];
+      if (!trackedStatus) {
+        setBuyErrorByDisplayId((prev) => ({ ...prev, [plan.id]: "Не удалось подтвердить текущую цену и остаток партии." }));
+        return;
+      }
+      if (!trackedStatus.bindingReady) {
+        setBuyErrorByDisplayId((prev) => ({
+          ...prev,
+          [plan.id]: trackedStatus.bindingError || "Текущая ценовая партия ещё не подключена к оплате.",
+        }));
+        return;
+      }
+      if (!trackedStatus.canPurchase || trackedStatus.remainingCount <= 0 || trackedStatus.batchRemainingCount <= 0) {
+        setBuyErrorByDisplayId((prev) => ({ ...prev, [plan.id]: "Лимит подписок уже исчерпан" }));
+        return;
+      }
+
+      setBuyingDisplayId(plan.id);
+      setBuyingPlanId(null);
+      setBuyErrorByDisplayId((prev) => ({ ...prev, [plan.id]: null }));
+      setBuyInfo(null);
+
+      const paymentRef = `${counterKey}-${buildPaymentRef()}`;
+      const returnUrl = buildReturnUrl();
+      const result = await apiCreateTournamentSubscriptionPurchase({
+        clientPhone: profile.phone,
+        clientId: profile.id ?? null,
+        counterKey,
+        paymentRef,
+        baseRedirectUrl: returnUrl,
+        successUrl: returnUrl,
+        failUrl: returnUrl,
+      });
+
+      if (result.error || !result.data) {
+        setBuyErrorByDisplayId((prev) => ({
+          ...prev,
+          [plan.id]: result.error?.message || "Не удалось создать оплату подписки",
+        }));
+        setBuyingDisplayId(null);
+        await loadStatus();
+        return;
+      }
+
+      const resolvedPaymentRef = result.data.paymentRef || paymentRef;
+      if (!result.data.paymentUrl && (result.data.toPayMinor ?? 0) > 0) {
+        setBuyErrorByDisplayId((prev) => ({ ...prev, [plan.id]: "Банк не вернул ссылку на оплату" }));
+        setBuyingDisplayId(null);
+        removePendingPaymentEntry(resolvedPaymentRef);
+        await loadStatus();
+        return;
+      }
+
+      if (result.data.paymentUrl) {
+        upsertPendingPaymentEntry({
+          counterKey,
+          paymentRef: resolvedPaymentRef,
+          planId: null,
+          campaignKey: null,
+          createdAt: new Date().toISOString(),
+        });
+        window.location.href = result.data.paymentUrl;
+        return;
+      }
+
+      removePendingPaymentEntry(resolvedPaymentRef);
+      setBuyInfo("Оплата подтверждена без перехода в банк.");
+      setBuyingDisplayId(null);
+      await loadStatus();
+      return;
+    }
+
     if (plan.purchaseMode === "catalog_subscription") {
       const directSubscriptionProductId = plan.directSubscriptionProductId ?? null;
       if (!directSubscriptionProductId) {
@@ -1151,6 +1359,13 @@ export default function TournamentSubscriptionPage({
   }, [loadStatus, pageConfig?.offerKey, pageConfig?.trainerQrCode, profile, singlePlanRequest?.campaignKey, statusByCounterKey]);
 
   const handleBuy = useCallback((plan: DisplayPlanConfig) => {
+    if (plan.requiresConsent && !acceptedTermsByDisplayId[plan.id]) {
+      setBuyErrorByDisplayId((prev) => ({
+        ...prev,
+        [plan.id]: "Подтвердите согласие с условиями подписки.",
+      }));
+      return;
+    }
     if (!isAuthenticated) {
       setAuthRequestedDisplayId(plan.id);
       setPendingPurchaseRequest({ displayId: plan.id });
@@ -1158,7 +1373,7 @@ export default function TournamentSubscriptionPage({
       return;
     }
     void startPurchase(plan);
-  }, [isAuthenticated, startPurchase]);
+  }, [acceptedTermsByDisplayId, isAuthenticated, startPurchase]);
 
   useEffect(() => {
     autoPurchaseStartedRef.current = false;
@@ -1199,6 +1414,10 @@ export default function TournamentSubscriptionPage({
     if (!authRequestedDisplayId) return null;
     return pageViewConfig.plans.find((plan) => plan.id === authRequestedDisplayId)?.accent ?? null;
   }, [authRequestedDisplayId, pageViewConfig.plans]);
+  const hasGuardedTieredStorefront = useMemo(
+    () => pageViewConfig.plans.some((plan) => plan.purchaseMode === "tiered_counter" && Boolean(plan.counterKey)),
+    [pageViewConfig.plans],
+  );
   const showMobileScrollHint = pageViewConfig.plans.length > 1;
 
   const closeAuthOverlay = useCallback(() => {
@@ -1231,12 +1450,17 @@ export default function TournamentSubscriptionPage({
             {pageViewConfig.pageError}
           </div>
         )}
-        {statusError && <div className="tournament-subscription-global-message tournament-subscription-error">{statusError}</div>}
+        {statusError && (!hasGuardedTieredStorefront || statusError !== "Unsupported counterKey") && (
+          <div className="tournament-subscription-global-message tournament-subscription-error">
+            {statusError}
+          </div>
+        )}
         {buyInfo && <div className="tournament-subscription-global-message tournament-subscription-info">{buyInfo}</div>}
 
         {pageViewConfig.plans.map((plan) => {
           const boundPlanId = plan.planId ?? null;
           const status = plan.counterKey ? statusByCounterKey[plan.counterKey] : null;
+          const isGuardedStorefront = plan.purchaseMode === "tiered_counter";
           const usesSummerCampaignPurchase = plan.purchaseMode !== "catalog_subscription";
           const usesTrackedCounter = Boolean(plan.counterKey);
           const isBuying = buyingDisplayId === plan.id;
@@ -1253,7 +1477,9 @@ export default function TournamentSubscriptionPage({
             (plan.counterKey === "ra" || plan.counterKey === "friendship")
             && status?.unlimited !== false
           );
-          const remainingValueText = plan.remainingValueText
+          const remainingValueText = isGuardedStorefront && status?.batchSize
+            ? `${status.batchRemainingCount} из ${status.batchSize}`
+            : plan.remainingValueText
             || (
               status
                 ? `${remainingCount} из ${displayTotalLimit}`
@@ -1262,23 +1488,59 @@ export default function TournamentSubscriptionPage({
                   : `${remainingCount} из ${displayTotalLimit}`
             );
           const isOutOfStock = usesTrackedCounter
-            && Boolean(status && !status.unlimited && (!status.canPurchase || status.remainingCount <= 0));
+            && Boolean(status && !status.unlimited && (status.remainingCount <= 0 || (status.bindingReady && !status.canPurchase)));
+          const isBindingUnavailable = isGuardedStorefront && (!status || !status.bindingReady);
           const disableForProfile = isAuthenticated && !loadingProfile && !hasProfilePhone;
-          const hasPurchaseBinding = usesSummerCampaignPurchase
-            ? Boolean(boundPlanId)
-            : Boolean(plan.directSubscriptionProductId);
+          const hasPurchaseBinding = plan.purchaseMode === "tiered_counter"
+            ? Boolean(plan.counterKey)
+            : usesSummerCampaignPurchase
+              ? Boolean(boundPlanId)
+              : Boolean(plan.directSubscriptionProductId);
           const buttonDisabled = Boolean(
             plan.buttonDisabled
             || !hasPurchaseBinding
             || isPlanBusy
             || isOutOfStock
+            || isBindingUnavailable
             || disableForProfile
+            || (plan.requiresConsent && !acceptedTermsByDisplayId[plan.id])
             || plan.purchaseBindingError,
           );
 
           return (
             <article key={plan.id} className={`tournament-subscription-plan ${plan.cardClassName || ""}`}>
-              {plan.artworkSrc ? (
+              {isGuardedStorefront ? (
+                <>
+                  <div
+                    className={`piter-subscription-flip ${flippedDisplayId === plan.id ? "piter-subscription-flip--flipped" : ""}`}
+                  >
+                    <div className="piter-subscription-flip-inner">
+                      <div className="piter-subscription-face piter-subscription-face--front">
+                        <img
+                          src={resolveGuardedStorefrontArtwork(plan, status)}
+                          alt={`${plan.guardedStorefrontArtworkAlt}, ценовая партия ${status?.batchIndex || 1}`}
+                          className="piter-subscription-artwork"
+                        />
+                      </div>
+                      <div className="piter-subscription-face piter-subscription-face--back">
+                        <span className="piter-subscription-kicker">{plan.guardedStorefrontKicker}</span>
+                        <h2>Условия подписки</h2>
+                        <ul>
+                          {(plan.terms || []).map((term) => <li key={term}>{term}</li>)}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="piter-subscription-terms-button"
+                    aria-pressed={flippedDisplayId === plan.id}
+                    onClick={() => setFlippedDisplayId((current) => current === plan.id ? null : plan.id)}
+                  >
+                    {flippedDisplayId === plan.id ? "Вернуться к подписке" : "Узнать условия подписки"}
+                  </button>
+                </>
+              ) : plan.artworkSrc ? (
                 <div className="tournament-subscription-plan-image-wrap">
                   <img
                     src={plan.artworkSrc}
@@ -1326,6 +1588,29 @@ export default function TournamentSubscriptionPage({
                   </div>
                 )}
 
+                {isGuardedStorefront && (
+                  <label className="piter-subscription-consent">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(acceptedTermsByDisplayId[plan.id])}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setAcceptedTermsByDisplayId((prev) => ({ ...prev, [plan.id]: checked }));
+                        if (checked) {
+                          setBuyErrorByDisplayId((prev) => ({ ...prev, [plan.id]: null }));
+                        }
+                      }}
+                    />
+                    <span>Я ознакомился(ась) и согласен(на) с условиями подписки</span>
+                  </label>
+                )}
+
+                {isGuardedStorefront && (
+                  <div className="piter-subscription-auth-state">
+                    {isAuthenticated ? "Вы авторизованы" : "После подтверждения условий потребуется вход"}
+                  </div>
+                )}
+
                 {!hideTemporaryUnlimitedCounter
                   && (plan.counterKey === "ra" || plan.counterKey === "friendship")
                   && status
@@ -1344,7 +1629,9 @@ export default function TournamentSubscriptionPage({
                     ? "Создаем оплату..."
                     : isOutOfStock
                       ? "Лимит исчерпан"
-                      : (plan.buttonLabel || "Оформить подписку")}
+                      : isBindingUnavailable
+                        ? "Продажи скоро откроются"
+                        : (plan.buttonLabel || (isGuardedStorefront ? "Записаться и оформить" : "Оформить подписку"))}
                 </button>
 
                 {!isAuthenticated && authRequestedDisplayId === plan.id && (
@@ -1360,6 +1647,15 @@ export default function TournamentSubscriptionPage({
                 {plan.purchaseBindingError && (
                   <div className="tournament-subscription-warning">
                     {plan.purchaseBindingError}
+                  </div>
+                )}
+
+                {isBindingUnavailable && (
+                  <div className="tournament-subscription-warning">
+                    {(status?.bindingError && status.bindingError !== "Unsupported counterKey")
+                      ? status.bindingError
+                      : "Текущая ценовая партия ещё не подключена к оплате."
+                    }
                   </div>
                 )}
 

@@ -55,6 +55,7 @@ const SIRIUS_FRIENDSHIP_DEFAULTS = {
   planKey: "friendship",
   campaignKey: "summer_padel_sirius_friendship_2026",
 };
+const PITER_FRIENDSHIP_INVENTORY_ID = "piter_friendship_12m_2026_v1";
 
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -92,6 +93,7 @@ const normalizeCounterKey = (value) => {
     normalized === "academy"
     || normalized === "energy5"
     || normalized === "friendship"
+    || normalized === "piter_friendship"
     || normalized === "ra"
     || normalized === "sirius_friendship"
     || normalized === "sport"
@@ -222,12 +224,25 @@ const readDirectCounterConfig = (counterKey) => {
   };
 };
 
+const readPiterFriendshipConfig = () => ({
+  counterKey: "piter_friendship",
+  inventoryId: readGlobalFirst(["summer_subscription_piter_friendship_inventory_id"])
+    || PITER_FRIENDSHIP_INVENTORY_ID,
+  saleType: "tiered_direct_product",
+  planKey: null,
+  campaignKey: null,
+  productId: null,
+  productName: "Падел.Дружба.Питер",
+  unlimited: false,
+});
+
 const buildCounterConfigMap = () => {
   const friendship = readSummerPlanConfig("friendship");
   return {
     academy: readDirectCounterConfig("academy"),
     energy5: readDirectCounterConfig("energy5"),
     friendship,
+    piter_friendship: readPiterFriendshipConfig(),
     ra: readDirectCounterConfig("ra"),
     sirius_friendship: readSiriusFriendshipConfig(friendship),
     sport: readSummerPlanConfig("sport"),

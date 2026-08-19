@@ -1269,3 +1269,18 @@
 - Read-only inventory found 27 active password-grant functions across 10 tabs and three distinct
   credential sets; the other 23 functions and any credential rotation remain outside this hotfix.
   Production, `main`, remote refs, and live data are unchanged by this corrective checkpoint.
+
+## 2026-08-19 — Piter subscription isolated storefront and guarded contour
+
+- Added the standalone `piter_friendship` storefront with four supplied visual
+  tiers, a dedicated 100-unit batch counter, consent-gated authentication and a
+  reversible terms card.
+- Added server-owned tier selection for 19,800 / 23,800 / 36,800 / 56,800 RUB;
+  browser `productId` is ignored and a missing active Viva product binding
+  blocks checkout.
+- Reserved a separate inventory and documented the exact managed-policy target:
+  one shared game action per day, create 60, join 60/90/120, and server-resolved
+  discounted add-ons, group training and tournaments.
+- The legacy booking gateway now fails closed for Piter until a reviewed
+  published policy is wired, avoiding accidental fallback to Friendship rules.
+  No product creation, payment, Node-RED import, merge, push or deploy occurred.

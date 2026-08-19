@@ -1,5 +1,6 @@
 const TOKEN_URL = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const AB_LETO_DAILY_DROP_TIME_ZONE = "Europe/Moscow";
+const PITER_FRIENDSHIP_COUNTER_KEY = "piter_friendship";
 const MANUAL_PAID_COUNT_DEFAULTS = {
   academy: 4,
   ra: 37,
@@ -84,6 +85,7 @@ const normalizeCounterKey = (value) => {
     normalized === "academy"
     || normalized === "energy5"
     || normalized === "friendship"
+    || normalized === "piter_friendship"
     || normalized === "ra"
     || normalized === "sirius_friendship"
     || normalized === "sport"
@@ -254,6 +256,32 @@ const takenCount = paidCount + reservedCount;
 const unlimited = ctx.unlimited === true;
 const remainingCount = unlimited ? null : Math.max(totalLimit - takenCount, 0);
 
+if (normalizeCounterKey(ctx.counterKey) === PITER_FRIENDSHIP_COUNTER_KEY) {
+  const tiers = Array.isArray(ctx.tiers) ? ctx.tiers.filter((tier) => tier && typeof tier === "object") : [];
+  const batchSize = Math.max(1, Math.floor(Number(ctx.batchSize) || 50));
+  const batchIndex = Math.max(1, Math.min(tiers.length || 1, Math.floor(takenCount / batchSize) + 1));
+  const activeTier = tiers[batchIndex - 1] || null;
+  const takenInBatch = Math.max(0, takenCount - (batchIndex - 1) * batchSize);
+  ctx.batchSize = batchSize;
+  ctx.batchIndex = batchIndex;
+  ctx.batchCount = tiers.length;
+  ctx.batchRemainingBefore = remainingCount <= 0 ? 0 : Math.max(0, batchSize - takenInBatch);
+  ctx.productId = toStr(activeTier?.productId);
+  ctx.productName = toStr(activeTier?.productName);
+  ctx.productCostMinor = Number.isFinite(Number(activeTier?.priceMinor))
+    ? Math.max(0, Math.round(Number(activeTier.priceMinor)))
+    : null;
+
+  if (remainingCount > 0 && (!ctx.productId || ctx.productCostMinor == null)) {
+    return failMsg(503, "Текущая ценовая партия Питер ещё не подключена к оплате", {
+      counterKey: PITER_FRIENDSHIP_COUNTER_KEY,
+      batchIndex,
+      batchSize,
+      bindingReady: false,
+    });
+  }
+}
+
 if (!unlimited && remainingCount <= 0) {
   return failMsg(409, "Лимит абонементов исчерпан", {
     counterKey: normalizeCounterKey(ctx.counterKey),
@@ -309,6 +337,9 @@ const debugMsg = Object.assign({}, msg, {
     totalLimit,
     takenCount,
     remainingBefore: remainingCount,
+    batchIndex: Math.max(0, Math.floor(Number(ctx.batchIndex) || 0)),
+    batchSize: Math.max(0, Math.floor(Number(ctx.batchSize) || 0)),
+    batchRemainingBefore: Math.max(0, Math.floor(Number(ctx.batchRemainingBefore) || 0)),
     releasePhase,
     dailyDropActive,
     launchPaidCount,

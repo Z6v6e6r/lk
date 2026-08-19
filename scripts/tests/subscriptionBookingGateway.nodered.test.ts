@@ -407,6 +407,35 @@ test("Friendship is allowed for tournaments but remains blocked for group traini
   assert.equal(groupTraining[4].payload.details.category, "group_training");
 });
 
+test("legacy booking gateway fails closed for Piter until the managed policy is published", () => {
+  const out = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      id: "exercise-target",
+      timeFrom: "2026-08-14T18:00:00+03:00",
+      direction: { name: "Открытая игра" },
+      type: { name: "Открытая игра" },
+      availableClientSubscriptions: [{
+        clientSubscriptionId: "client-subscription-1",
+        name: "Падел.Дружба.Питер — 12 месяцев",
+      }],
+    },
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined,
+      category: undefined,
+      planKey: undefined,
+    }),
+  });
+
+  assert.equal(out[4].statusCode, 409);
+  assert.equal(out[4].payload.details.code, "MANAGED_SUBSCRIPTION_POLICY_REQUIRED");
+  assert.equal(out[4].payload.details.planKey, "piter_friendship");
+  assert.equal(out[0], null);
+  assert.equal(out[1], null);
+  assert.equal(out[2], null);
+  assert.equal(out[3], null);
+});
+
 test("flat Viva Admin booking blocks another allowed event for the same subscription and date", () => {
   const out = runFunction(ROUTER_FILE, {
     statusCode: 200,

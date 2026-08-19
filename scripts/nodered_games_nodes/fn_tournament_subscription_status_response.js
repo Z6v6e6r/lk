@@ -79,6 +79,10 @@ const SIRIUS_FRIENDSHIP_DEFAULTS = {
   planKey: "friendship",
   campaignKey: "summer_padel_sirius_friendship_2026",
 };
+const PITER_FRIENDSHIP_COUNTER_KEY = "piter_friendship";
+const PITER_FRIENDSHIP_INVENTORY_ID = "piter_friendship_12m_2026_v1";
+const PITER_FRIENDSHIP_BATCH_SIZE = 100;
+const PITER_FRIENDSHIP_TIER_PRICES_MINOR = [1980000, 2380000, 3680000, 5680000];
 
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -156,6 +160,7 @@ const normalizeCounterKey = (value) => {
     normalized === "academy"
     || normalized === "energy5"
     || normalized === "friendship"
+    || normalized === "piter_friendship"
     || normalized === "ra"
     || normalized === "sirius_friendship"
     || normalized === "sport"
@@ -356,6 +361,35 @@ const readSiriusFriendshipConfig = (friendshipPlan) => ({
   ),
 });
 
+const readPiterFriendshipConfig = () => {
+  const tiers = PITER_FRIENDSHIP_TIER_PRICES_MINOR.map((priceMinor, index) => {
+    const tierNumber = index + 1;
+    return {
+      batchIndex: tierNumber,
+      batchSize: PITER_FRIENDSHIP_BATCH_SIZE,
+      priceMinor,
+      productId: readGlobalFirst([`summer_subscription_piter_friendship_tier_${tierNumber}_product_id`]),
+      productName: readGlobalFirst([`summer_subscription_piter_friendship_tier_${tierNumber}_product_name`])
+        || `Падел.Дружба.Питер — партия ${tierNumber}`,
+    };
+  });
+  return {
+    counterKey: PITER_FRIENDSHIP_COUNTER_KEY,
+    inventoryId: readGlobalFirst(["summer_subscription_piter_friendship_inventory_id"])
+      || PITER_FRIENDSHIP_INVENTORY_ID,
+    saleType: "tiered_direct_product",
+    planKey: null,
+    campaignKey: null,
+    productId: null,
+    productName: tiers[0].productName,
+    productCostMinor: tiers[0].priceMinor,
+    manualPaidCount: 0,
+    totalLimit: PITER_FRIENDSHIP_BATCH_SIZE * tiers.length,
+    batchSize: PITER_FRIENDSHIP_BATCH_SIZE,
+    tiers,
+  };
+};
+
 const readDirectCounterConfig = (counterKey) => {
   const base = DIRECT_COUNTER_DEFAULTS[counterKey];
   if (!base) return null;
@@ -391,11 +425,13 @@ const buildCounterConfigMap = () => {
   const academy = readDirectCounterConfig("academy");
   const energy5 = readDirectCounterConfig("energy5");
   const ra = readDirectCounterConfig("ra");
+  const piterFriendship = readPiterFriendshipConfig();
 
   return {
     academy,
     energy5,
     friendship,
+    piter_friendship: piterFriendship,
     ra,
     sirius_friendship: siriusFriendship,
     sport,
@@ -437,6 +473,13 @@ const createCounterState = (counter) => {
     takenCount: manualPaidCount,
     remainingCount: Math.max(totalLimit - manualPaidCount, 0),
     canPurchase: counter?.unlimited === true || totalLimit - manualPaidCount > 0,
+    bindingReady: true,
+    bindingError: null,
+    batchSize: Math.max(0, Math.floor(Number(counter?.batchSize) || 0)),
+    batchIndex: 0,
+    batchCount: Array.isArray(counter?.tiers) ? counter.tiers.length : 0,
+    batchRemainingCount: 0,
+    _tiers: Array.isArray(counter?.tiers) ? counter.tiers : [],
     priceMinor,
     price: priceMinor == null ? null : priceMinor / 100,
     updatedAt: null,
@@ -641,7 +684,28 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
     }
     state.takenCount = state.paidCount + state.reservedCount;
     state.remainingCount = state.unlimited ? 0 : Math.max(state.totalLimit - state.takenCount, 0);
-    state.canPurchase = state.unlimited || state.remainingCount > 0;
+    if (state.counterKey === PITER_FRIENDSHIP_COUNTER_KEY) {
+      const tiers = Array.isArray(state._tiers) ? state._tiers : [];
+      const batchSize = Math.max(1, state.batchSize || PITER_FRIENDSHIP_BATCH_SIZE);
+      const batchIndex = Math.max(1, Math.min(tiers.length || 1, Math.floor(state.takenCount / batchSize) + 1));
+      const activeTier = tiers[batchIndex - 1] || null;
+      const takenInBatch = Math.max(0, state.takenCount - (batchIndex - 1) * batchSize);
+      state.batchSize = batchSize;
+      state.batchIndex = batchIndex;
+      state.batchCount = tiers.length;
+      state.batchRemainingCount = state.remainingCount <= 0 ? 0 : Math.max(0, batchSize - takenInBatch);
+      state.productId = toStr(activeTier?.productId);
+      state.productName = toStr(activeTier?.productName);
+      state.priceMinor = Number.isFinite(Number(activeTier?.priceMinor))
+        ? Math.max(0, Math.round(Number(activeTier.priceMinor)))
+        : null;
+      state.price = state.priceMinor == null ? null : state.priceMinor / 100;
+      state.bindingReady = Boolean(state.productId && state.priceMinor != null);
+      state.bindingError = state.bindingReady
+        ? null
+        : "Текущая ценовая партия Питер ещё не подключена к оплате";
+    }
+    state.canPurchase = (state.unlimited || state.remainingCount > 0) && state.bindingReady;
     state.updatedAt = state._lastUpdatedAtTs == null
       ? new Date().toISOString()
       : new Date(state._lastUpdatedAtTs).toISOString();
@@ -650,6 +714,7 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
     delete state._dailyReservedCount;
     delete state._launchPaidTimestamps;
     delete state._stagedRows;
+    delete state._tiers;
     return state;
   })
   .filter((state) => Boolean(state));
@@ -705,6 +770,12 @@ msg.payload = {
   takenCount: toInt(selectedCounter.takenCount, 0),
   remainingCount: toInt(selectedCounter.remainingCount, 0),
   canPurchase: toBool(selectedCounter.canPurchase) ?? false,
+  bindingReady: toBool(selectedCounter.bindingReady) ?? true,
+  bindingError: toStr(selectedCounter.bindingError),
+  batchSize: toInt(selectedCounter.batchSize, 0),
+  batchIndex: toInt(selectedCounter.batchIndex, 0),
+  batchCount: toInt(selectedCounter.batchCount, 0),
+  batchRemainingCount: toInt(selectedCounter.batchRemainingCount, 0),
   releasePhase: toStr(selectedCounter.releasePhase),
   dailyDropActive: selectedCounter.dailyDropActive === true,
   releaseStartDate: toStr(selectedCounter.releaseStartDate),

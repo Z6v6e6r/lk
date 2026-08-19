@@ -3,6 +3,8 @@ const toStr = (value) => {
   const text = String(value).trim();
   return text ? text : null;
 };
+const PITER_FRIENDSHIP_COUNTER_KEY = "piter_friendship";
+const PITER_FRIENDSHIP_BATCH_SIZE = 100;
 
 const toTs = (value) => {
   const text = toStr(value);
@@ -49,6 +51,7 @@ const normalizeCounterKey = (value) => {
     normalized === "academy"
     || normalized === "energy5"
     || normalized === "friendship"
+    || normalized === "piter_friendship"
     || normalized === "ra"
     || normalized === "sirius_friendship"
     || normalized === "sport"
@@ -157,6 +160,13 @@ const states = counters.map((counter) => {
     takenCount: manualPaidCount,
     remainingCount: Math.max(0, totalLimit - manualPaidCount),
     canPurchase: counter.unlimited === true || totalLimit - manualPaidCount > 0,
+    bindingReady: true,
+    bindingError: null,
+    batchSize: Math.max(0, Math.floor(Number(counter.batchSize) || 0)),
+    batchIndex: 0,
+    batchCount: Array.isArray(counter.tiers) ? counter.tiers.length : 0,
+    batchRemainingCount: 0,
+    _tiers: Array.isArray(counter.tiers) ? counter.tiers : [],
     priceMinor: Number.isFinite(Number(counter.productCostMinor)) ? Math.max(0, Math.round(Number(counter.productCostMinor))) : null,
     price: Number.isFinite(Number(counter.productCostMinor)) ? Math.round(Number(counter.productCostMinor)) / 100 : null,
     updatedAt: refreshedAt,
@@ -270,7 +280,28 @@ const updateMessages = states.map((state) => {
   }
   state.takenCount = state.paidCount + state.reservedCount;
   state.remainingCount = state.unlimited ? 0 : Math.max(state.totalLimit - state.takenCount, 0);
-  state.canPurchase = state.unlimited || state.remainingCount > 0;
+  if (state.counterKey === PITER_FRIENDSHIP_COUNTER_KEY) {
+    const tiers = Array.isArray(state._tiers) ? state._tiers : [];
+    const batchSize = Math.max(1, state.batchSize || PITER_FRIENDSHIP_BATCH_SIZE);
+    const batchIndex = Math.max(1, Math.min(tiers.length || 1, Math.floor(state.takenCount / batchSize) + 1));
+    const activeTier = tiers[batchIndex - 1] || null;
+    const takenInBatch = Math.max(0, state.takenCount - (batchIndex - 1) * batchSize);
+    state.batchSize = batchSize;
+    state.batchIndex = batchIndex;
+    state.batchCount = tiers.length;
+    state.batchRemainingCount = state.remainingCount <= 0 ? 0 : Math.max(0, batchSize - takenInBatch);
+    state.productId = toStr(activeTier?.productId);
+    state.productName = toStr(activeTier?.productName);
+    state.priceMinor = Number.isFinite(Number(activeTier?.priceMinor))
+      ? Math.max(0, Math.round(Number(activeTier.priceMinor)))
+      : null;
+    state.price = state.priceMinor == null ? null : state.priceMinor / 100;
+    state.bindingReady = Boolean(state.productId && state.priceMinor != null);
+    state.bindingError = state.bindingReady
+      ? null
+      : "Текущая ценовая партия Питер ещё не подключена к оплате";
+  }
+  state.canPurchase = (state.unlimited || state.remainingCount > 0) && state.bindingReady;
   state.sourceUpdatedAt = state._lastUpdatedAtTs == null
     ? null
     : new Date(state._lastUpdatedAtTs).toISOString();
@@ -279,6 +310,7 @@ const updateMessages = states.map((state) => {
   delete state._dailyReservedCount;
   delete state._launchPaidTimestamps;
   delete state._stagedRows;
+  delete state._tiers;
 
   return {
     query: state.inventoryId
