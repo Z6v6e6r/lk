@@ -46,6 +46,7 @@ type TournamentSubscriptionWidgetModule = {
 
 let subscriptionRoot: ReturnType<typeof createRoot> | null = null;
 let subscriptionPageOpenTracked = false;
+const DEFAULT_SUBSCRIPTION_PAGE_OPEN_DATA = { storefront: "ab_leto" } as const;
 
 ensureFreshRelease({
   entry: "tournament-subscription",
@@ -168,7 +169,14 @@ function mount(options: MountOptions = {}) {
       subscriptionPageOpenTracked = true;
       trackAnalyticsEvent("subscription_page_opened", {
         entry: "tournament-subscription",
-        storefront: options.data?.variant === "piter_friendship" ? "piter_friendship" : "ab_leto",
+        ...DEFAULT_SUBSCRIPTION_PAGE_OPEN_DATA,
+        storefront: options.data?.variant === "piter_friendship"
+          ? "piter_friendship"
+          : options.data?.variant === "kotelniki_friendship"
+            ? "kotelniki_friendship"
+            : options.data?.variant === "network_friendship"
+              ? "network_friendship"
+              : "ab_leto",
         targetId,
         trainerQrCode: readAbLetoTrainerQrCode(),
       });

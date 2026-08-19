@@ -33,11 +33,16 @@ import piterSubscriptionTier1Image from "../../assets/piter-subscription-tier-1.
 import piterSubscriptionTier2Image from "../../assets/piter-subscription-tier-2.webp";
 import piterSubscriptionTier3Image from "../../assets/piter-subscription-tier-3.webp";
 import piterSubscriptionTier4Image from "../../assets/piter-subscription-tier-4.webp";
+import kotelnikiSubscriptionTier1Image from "../../assets/kotelniki-subscription-tier-1.webp";
+import kotelnikiSubscriptionTier2Image from "../../assets/kotelniki-subscription-tier-2.webp";
+import kotelnikiSubscriptionTier3Image from "../../assets/kotelniki-subscription-tier-3.webp";
+import kotelnikiSubscriptionTier4Image from "../../assets/kotelniki-subscription-tier-4.webp";
+import networkSubscriptionImage from "../../assets/network-subscription.webp";
 
 export type SubscriptionPlanId = "friendship" | "sport";
-export type SubscriptionCounterKey = "academy" | "energy5" | "friendship" | "piter_friendship" | "ra" | "sirius_friendship" | "sport";
+export type SubscriptionCounterKey = "academy" | "energy5" | "friendship" | "kotelniki_friendship" | "network_friendship" | "piter_friendship" | "ra" | "sirius_friendship" | "sport";
 export type SubscriptionArtworkKey = "academy" | "energy5" | "friendship" | "ra" | "sport";
-export type TournamentSubscriptionPageVariant = "default" | "piter_friendship" | "single_artwork" | "sirius_friendship";
+export type TournamentSubscriptionPageVariant = "default" | "kotelniki_friendship" | "network_friendship" | "piter_friendship" | "single_artwork" | "sirius_friendship";
 
 export interface TournamentSubscriptionPageConfig {
   artworkKey?: SubscriptionArtworkKey | null;
@@ -91,6 +96,9 @@ interface DisplayPlanConfig {
   featureLabelClassName?: string;
   requiresConsent?: boolean;
   terms?: string[];
+  guardedStorefrontKicker?: string;
+  guardedStorefrontArtworkAlt?: string;
+  guardedStorefrontArtworks?: readonly string[];
   features: DisplayFeatureConfig[];
 }
 
@@ -125,6 +133,8 @@ const EMPTY_PLAN_STATUSES: Record<SubscriptionCounterKey, TournamentSubscription
   academy: null,
   energy5: null,
   friendship: null,
+  kotelniki_friendship: null,
+  network_friendship: null,
   piter_friendship: null,
   ra: null,
   sirius_friendship: null,
@@ -136,6 +146,8 @@ const DEFAULT_PLAN_LIMIT = 50;
 const SIRIUS_PLAN_LIMIT = 100;
 const SIRIUS_FRIENDSHIP_CAMPAIGN_KEY = "summer_padel_sirius_friendship_2026";
 const PITER_FRIENDSHIP_BATCH_SIZE = 50;
+const KOTELNIKI_FRIENDSHIP_BATCH_SIZE = 100;
+const NETWORK_FRIENDSHIP_BATCH_SIZE = 50;
 const PENDING_PAYMENT_STORAGE_KEY = "padlhub_tournament_subscription_pending_refs";
 const PENDING_PAYMENT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
@@ -171,6 +183,17 @@ const PITER_FRIENDSHIP_ARTWORKS = [
   piterSubscriptionTier3Image,
   piterSubscriptionTier4Image,
 ] as const;
+
+const PITER_FRIENDSHIP_FALLBACK_TOTAL = PITER_FRIENDSHIP_BATCH_SIZE * PITER_FRIENDSHIP_ARTWORKS.length;
+
+const KOTELNIKI_FRIENDSHIP_ARTWORKS = [
+  kotelnikiSubscriptionTier1Image,
+  kotelnikiSubscriptionTier2Image,
+  kotelnikiSubscriptionTier3Image,
+  kotelnikiSubscriptionTier4Image,
+] as const;
+
+const NETWORK_FRIENDSHIP_ARTWORKS = [networkSubscriptionImage] as const;
 
 const SUBSCRIPTION_ARTWORKS: Record<SubscriptionArtworkKey, { alt: string; priceLabel: string; src: string }> = {
   academy: {
@@ -221,7 +244,7 @@ function normalizePlanTypeToken(value: string | null | undefined): SubscriptionP
 function normalizeCounterKey(value: string | null | undefined): SubscriptionCounterKey | null {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return null;
-  if (raw === "academy" || raw === "energy5" || raw === "friendship" || raw === "piter_friendship" || raw === "ra" || raw === "sirius_friendship" || raw === "sport") {
+  if (raw === "academy" || raw === "energy5" || raw === "friendship" || raw === "kotelniki_friendship" || raw === "network_friendship" || raw === "piter_friendship" || raw === "ra" || raw === "sirius_friendship" || raw === "sport") {
     return raw;
   }
   return null;
@@ -521,33 +544,43 @@ function buildSiriusFriendshipPageViewConfig(
   };
 }
 
-function buildPiterFriendshipPageViewConfig(): PageViewConfig {
+function buildGuardedFriendshipPageViewConfig(options: {
+  counterKey: "kotelniki_friendship" | "network_friendship" | "piter_friendship";
+  kicker: string;
+  accent: string;
+  artworks: readonly string[];
+  batchSize: number;
+  fallbackTotalLimit?: number;
+}): PageViewConfig {
   return {
     pageClassName: "tournament-subscription-page--single tournament-subscription-page--piter",
     headerClassName: "tournament-subscription-header--single tournament-subscription-header--piter",
     plansClassName: "tournament-subscription-plans--single tournament-subscription-plans--piter",
     showBackButton: true,
     singlePlanRequest: {
-      counterKey: "piter_friendship",
+      counterKey: options.counterKey,
       planId: null,
       campaignKey: null,
     },
     plans: [
       {
-        id: "piter_friendship",
-        counterKey: "piter_friendship",
+        id: options.counterKey,
+        counterKey: options.counterKey,
         planId: null,
         cardClassName: "tournament-subscription-plan--single tournament-subscription-plan--piter",
         purchaseMode: "tiered_counter",
         headClassName: "tournament-subscription-plan-head--friendship",
-        accent: "ПИТЕР",
+        accent: options.accent,
         titleLines: ["ПАДЕЛ.", "ДРУЖБА."],
         priceLabel: "19 800 ₽",
-        fallbackTotalLimit: PITER_FRIENDSHIP_BATCH_SIZE * PITER_FRIENDSHIP_ARTWORKS.length,
+        fallbackTotalLimit: options.fallbackTotalLimit ?? options.batchSize * options.artworks.length,
         remainingLabel: "Осталось в текущей партии",
         featureStatusAppearance: "toggle",
         requiresConsent: true,
         terms: [...PITER_FRIENDSHIP_TERMS],
+        guardedStorefrontKicker: options.kicker,
+        guardedStorefrontArtworkAlt: options.kicker,
+        guardedStorefrontArtworks: options.artworks,
         features: [],
       },
     ],
@@ -564,7 +597,32 @@ function resolvePageViewConfig(
     return buildSiriusFriendshipPageViewConfig(config);
   }
   if (config?.variant === "piter_friendship") {
-    return buildPiterFriendshipPageViewConfig();
+    return buildGuardedFriendshipPageViewConfig({
+      counterKey: "piter_friendship",
+      kicker: "Падел.Дружба.Питер",
+      accent: "ПИТЕР",
+      artworks: PITER_FRIENDSHIP_ARTWORKS,
+      batchSize: PITER_FRIENDSHIP_BATCH_SIZE,
+      fallbackTotalLimit: PITER_FRIENDSHIP_FALLBACK_TOTAL,
+    });
+  }
+  if (config?.variant === "kotelniki_friendship") {
+    return buildGuardedFriendshipPageViewConfig({
+      counterKey: "kotelniki_friendship",
+      kicker: "Падел.Дружба.Котельники",
+      accent: "КОТЕЛЬНИКИ",
+      artworks: KOTELNIKI_FRIENDSHIP_ARTWORKS,
+      batchSize: KOTELNIKI_FRIENDSHIP_BATCH_SIZE,
+    });
+  }
+  if (config?.variant === "network_friendship") {
+    return buildGuardedFriendshipPageViewConfig({
+      counterKey: "network_friendship",
+      kicker: "Падел.Дружба.Вся сеть",
+      accent: "ВСЯ СЕТЬ",
+      artworks: NETWORK_FRIENDSHIP_ARTWORKS,
+      batchSize: NETWORK_FRIENDSHIP_BATCH_SIZE,
+    });
   }
   if (config?.variant === "single_artwork") {
     return buildSingleArtworkPageViewConfig(config);
@@ -579,6 +637,8 @@ function mapStatusesByCounter(
     academy: null,
     energy5: null,
     friendship: null,
+    kotelniki_friendship: null,
+    network_friendship: null,
     piter_friendship: null,
     ra: null,
     sirius_friendship: null,
@@ -711,9 +771,10 @@ function FeatureStatus({
   );
 }
 
-function resolvePiterArtwork(status: TournamentSubscriptionStatus | null) {
-  const batchIndex = Math.max(1, Math.min(PITER_FRIENDSHIP_ARTWORKS.length, status?.batchIndex || 1));
-  return PITER_FRIENDSHIP_ARTWORKS[batchIndex - 1];
+function resolveGuardedStorefrontArtwork(plan: DisplayPlanConfig, status: TournamentSubscriptionStatus | null) {
+  const artworks = plan.guardedStorefrontArtworks || [];
+  const batchIndex = Math.max(1, Math.min(artworks.length, status?.batchIndex || 1));
+  return artworks[batchIndex - 1];
 }
 
 function DailyDropCountdown({ onDrop }: { onDrop: () => void }) {
@@ -1389,7 +1450,7 @@ export default function TournamentSubscriptionPage({
         {pageViewConfig.plans.map((plan) => {
           const boundPlanId = plan.planId ?? null;
           const status = plan.counterKey ? statusByCounterKey[plan.counterKey] : null;
-          const isPiterPlan = plan.counterKey === "piter_friendship";
+          const isGuardedStorefront = plan.purchaseMode === "tiered_counter";
           const usesSummerCampaignPurchase = plan.purchaseMode !== "catalog_subscription";
           const usesTrackedCounter = Boolean(plan.counterKey);
           const isBuying = buyingDisplayId === plan.id;
@@ -1406,7 +1467,7 @@ export default function TournamentSubscriptionPage({
             (plan.counterKey === "ra" || plan.counterKey === "friendship")
             && status?.unlimited !== false
           );
-          const remainingValueText = isPiterPlan && status?.batchSize
+          const remainingValueText = isGuardedStorefront && status?.batchSize
             ? `${status.batchRemainingCount} из ${status.batchSize}`
             : plan.remainingValueText
             || (
@@ -1418,7 +1479,7 @@ export default function TournamentSubscriptionPage({
             );
           const isOutOfStock = usesTrackedCounter
             && Boolean(status && !status.unlimited && (status.remainingCount <= 0 || (status.bindingReady && !status.canPurchase)));
-          const isBindingUnavailable = isPiterPlan && (!status || !status.bindingReady);
+          const isBindingUnavailable = isGuardedStorefront && (!status || !status.bindingReady);
           const disableForProfile = isAuthenticated && !loadingProfile && !hasProfilePhone;
           const hasPurchaseBinding = plan.purchaseMode === "tiered_counter"
             ? Boolean(plan.counterKey)
@@ -1438,7 +1499,7 @@ export default function TournamentSubscriptionPage({
 
           return (
             <article key={plan.id} className={`tournament-subscription-plan ${plan.cardClassName || ""}`}>
-              {isPiterPlan ? (
+              {isGuardedStorefront ? (
                 <>
                   <div
                     className={`piter-subscription-flip ${flippedDisplayId === plan.id ? "piter-subscription-flip--flipped" : ""}`}
@@ -1446,13 +1507,13 @@ export default function TournamentSubscriptionPage({
                     <div className="piter-subscription-flip-inner">
                       <div className="piter-subscription-face piter-subscription-face--front">
                         <img
-                          src={resolvePiterArtwork(status)}
-                          alt={`Падел.Дружба.Питер, ценовая партия ${status?.batchIndex || 1}`}
+                          src={resolveGuardedStorefrontArtwork(plan, status)}
+                          alt={`${plan.guardedStorefrontArtworkAlt}, ценовая партия ${status?.batchIndex || 1}`}
                           className="piter-subscription-artwork"
                         />
                       </div>
                       <div className="piter-subscription-face piter-subscription-face--back">
-                        <span className="piter-subscription-kicker">Падел.Дружба.Питер</span>
+                        <span className="piter-subscription-kicker">{plan.guardedStorefrontKicker}</span>
                         <h2>Условия подписки</h2>
                         <ul>
                           {(plan.terms || []).map((term) => <li key={term}>{term}</li>)}
@@ -1517,7 +1578,7 @@ export default function TournamentSubscriptionPage({
                   </div>
                 )}
 
-                {isPiterPlan && (
+                {isGuardedStorefront && (
                   <label className="piter-subscription-consent">
                     <input
                       type="checkbox"
@@ -1534,7 +1595,7 @@ export default function TournamentSubscriptionPage({
                   </label>
                 )}
 
-                {isPiterPlan && (
+                {isGuardedStorefront && (
                   <div className="piter-subscription-auth-state">
                     {isAuthenticated ? "Вы авторизованы" : "После подтверждения условий потребуется вход"}
                   </div>
@@ -1560,7 +1621,7 @@ export default function TournamentSubscriptionPage({
                       ? "Лимит исчерпан"
                       : isBindingUnavailable
                         ? "Продажи скоро откроются"
-                        : (plan.buttonLabel || (isPiterPlan ? "Записаться и оформить" : "Оформить подписку"))}
+                        : (plan.buttonLabel || (isGuardedStorefront ? "Записаться и оформить" : "Оформить подписку"))}
                 </button>
 
                 {!isAuthenticated && authRequestedDisplayId === plan.id && (
