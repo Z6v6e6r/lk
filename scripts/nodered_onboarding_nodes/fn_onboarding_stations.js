@@ -71,7 +71,7 @@ const stations = [
     name: "Питер",
     city: "Санкт-Петербург",
     address: "г Санкт-Петербург, Пулковское шоссе, уч 25",
-    panoramicCourtsCount: null,
+    panoramicCourtsCount: 10,
   },
   {
     id: "233c1405-1eac-40de-8ec6-1cf7e24c9276",
