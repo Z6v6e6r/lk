@@ -206,6 +206,7 @@ Bootstrap ЛК не подключает legacy Viva-виджет `#9Rzqf`. Гр
 серверный `/lk/subscription-bookings`.
 
 ```html
+<meta charset="utf-8">
 <div id="root"></div>
 <script>
   (function () {
@@ -322,7 +323,8 @@ Bootstrap ЛК не подключает legacy Viva-виджет `#9Rzqf`. Гр
 
     function buildBundleUrl(baseUrl, version) {
       var normalizedVersion = (version || "").trim();
-      return baseUrl + "/" + getBundleFileName() + (normalizedVersion ? ("?v=" + encodeURIComponent(normalizedVersion)) : "");
+      return baseUrl + "/" + getBundleFileName() +
+        (normalizedVersion ? ("?v=" + encodeURIComponent(normalizedVersion) + "&charset=utf-8") : "?charset=utf-8");
     }
 
     function rotateBaseUrls(startIndex) {
@@ -353,6 +355,7 @@ Bootstrap ЛК не подключает legacy Viva-виджет `#9Rzqf`. Гр
         window.__LK_ACTIVE_BASE_URL__ = candidates[index];
 
         var script = document.createElement("script");
+        script.charset = "utf-8";
         script.src = bundleUrl;
         script.async = true;
         script.crossOrigin = "anonymous";

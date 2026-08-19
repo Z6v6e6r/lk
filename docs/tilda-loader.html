@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <div id="root"></div>
 <script>
   (function () {
@@ -114,7 +115,8 @@
 
     function buildBundleUrl(baseUrl, version) {
       var normalizedVersion = (version || "").trim();
-      return baseUrl + "/" + getBundleFileName() + (normalizedVersion ? ("?v=" + encodeURIComponent(normalizedVersion)) : "");
+      return baseUrl + "/" + getBundleFileName() +
+        (normalizedVersion ? ("?v=" + encodeURIComponent(normalizedVersion) + "&charset=utf-8") : "?charset=utf-8");
     }
 
     function rotateBaseUrls(startIndex) {
@@ -165,6 +167,7 @@
           tryNext(index + 1);
         }
 
+        script.charset = "utf-8";
         script.src = bundleUrl;
         script.async = true;
         script.crossOrigin = "anonymous";
