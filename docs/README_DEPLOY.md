@@ -200,6 +200,11 @@ location = /community_join {
 ```
 
 ## 3. Вставить в Tilda (блок T123 — HTML)
+
+Bootstrap ЛК не подключает legacy Viva-виджет `#9Rzqf`. Групповые тренировки
+открываются на `https://padlhub.ru/group`, а подписочная запись проходит через
+серверный `/lk/subscription-bookings`.
+
 ```html
 <div id="root"></div>
 <script>
@@ -207,10 +212,8 @@ location = /community_join {
     var primaryBaseUrl = "https://ваш-сервер/lk";
     var fallbackBaseUrls = ["https://lk-reserve.89-108-64-209.sslip.io/lk"];
     var analyticsUrl = "https://ваш-сервер/lk/analytics/events";
-    var vivaUrl = "https://supadb.vivacrm.ru/storage/v1/object/public/widgets/d5685aa2-221b-439e-8bec-c6fda0846bc3.js";
     var requestTimeoutMs = 8000;
     var scriptLoadTimeoutMs = 12000;
-    var cacheBust = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
 
     function normalizeBaseUrl(value) {
       return String(value || "").trim().replace(/\/+$/, "");
@@ -247,11 +250,6 @@ location = /community_join {
     var channel = resolveChannel();
     var baseUrls = resolveBaseUrls(channel);
     window.__LK_BASE_URLS__ = baseUrls.slice();
-
-    function addParam(url, key, value) {
-      return url + (url.indexOf("?") === -1 ? "?" : "&")
-        + encodeURIComponent(key) + "=" + encodeURIComponent(value);
-    }
 
     function sendBootstrapError(kind, payload) {
       try {
@@ -327,29 +325,6 @@ location = /community_join {
       return baseUrl + "/" + getBundleFileName() + (normalizedVersion ? ("?v=" + encodeURIComponent(normalizedVersion)) : "");
     }
 
-    function mountScript(id, src, onError) {
-      var old = document.getElementById(id);
-      if (old && old.parentNode) old.parentNode.removeChild(old);
-
-      var script = document.createElement("script");
-      script.id = id;
-      script.src = src;
-      script.async = true;
-      script.crossOrigin = "anonymous";
-      script.onerror = onError || function () {};
-      document.head.appendChild(script);
-    }
-
-    function mountVivaScript() {
-      mountScript(
-        "padlhub-viva-widget",
-        addParam(vivaUrl, "force_ts", cacheBust),
-        function () {
-          sendBootstrapError("viva.load_failed", { vivaUrl: vivaUrl });
-        }
-      );
-    }
-
     function rotateBaseUrls(startIndex) {
       return baseUrls.slice(startIndex).concat(baseUrls.slice(0, startIndex));
     }
@@ -362,8 +337,6 @@ location = /community_join {
       }
 
       var failedUrls = Array.isArray(errors) ? errors.slice() : [];
-
-      mountVivaScript();
 
       function tryNext(index) {
         if (index >= candidates.length) {
