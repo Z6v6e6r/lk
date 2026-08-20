@@ -722,6 +722,7 @@ test("subscription confirmation binds the booking to the expected exercise and c
       cancelled: false,
       paymentType: "SUBSCRIPTION",
       clientSubscriptionId: "client-subscription-1",
+      count: 1,
       client: { id: "client-1", phone: "+79990000001" },
       exercise: { id: "exercise-1" },
     },
@@ -738,6 +739,69 @@ test("subscription confirmation binds the booking to the expected exercise and c
 
   assert.equal(out[4]?._verifiedPaymentEvidence?.operationType, "SUBSCRIPTION_BOOKING");
   assert.equal(out[4]?._verifiedPaymentEvidence?.clientPhoneE164, "+79990000001");
+  assert.equal(out[4]?._verifiedPaymentEvidence?.clientSubscriptionId, "client-subscription-1");
+  assert.equal(out[4]?._verifiedPaymentEvidence?.subscriptionVisitCount, 1);
+});
+
+test("subscription confirmation uses the server-stored duration count when Viva omits count", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      id: "booking-subscription-2",
+      isCancelled: false,
+      cancelled: false,
+      paymentType: "SUBSCRIPTION",
+      clientSubscriptionId: "client-subscription-2",
+      client: { id: "client-2", phone: "+79990000002" },
+      exercise: { id: "exercise-2" },
+    },
+    _splitCtx: {
+      step: "confirm_subscription_booking_lookup",
+      action: "confirm_payment",
+      operationType: "SUBSCRIPTION_BOOKING",
+      operationId: "booking-subscription-2",
+      bookingId: "booking-subscription-2",
+      clientId: "client-2",
+      expectedExerciseId: "exercise-2",
+      expectedSubscriptionVisitCount: 2,
+    },
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[4]?._verifiedPaymentEvidence?.clientSubscriptionId, "client-subscription-2");
+  assert.equal(out[4]?._verifiedPaymentEvidence?.subscriptionVisitCount, 2);
+});
+
+test("subscription confirmation never treats a catalog subscriptionId as a client instance", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      id: "booking-catalog-only",
+      isCancelled: false,
+      cancelled: false,
+      paymentType: "SUBSCRIPTION",
+      subscriptionId: "catalog-product-id",
+      count: 1,
+      client: { id: "client-1", phone: "+79990000001" },
+      exercise: { id: "exercise-1" },
+    },
+    _splitCtx: {
+      step: "confirm_subscription_booking_lookup",
+      action: "confirm_payment",
+      operationType: "SUBSCRIPTION_BOOKING",
+      operationId: "booking-catalog-only",
+      bookingId: "booking-catalog-only",
+      clientId: "client-1",
+      expectedExerciseId: "exercise-1",
+      expectedSubscriptionVisitCount: 1,
+    },
+  }) as Array<RouterMessage | null>;
+
+  assert.equal(out[4], undefined);
+  assert.equal(out[1]?.statusCode, 409);
+  assert.equal(
+    (out[1]?.payload?.details as Record<string, unknown>)?.code,
+    "LEGACY_SUBSCRIPTION_BOOKING_NOT_CONFIRMED",
+  );
 });
 
 test("payment confirmation rejects a paid transaction bound to another exercise", () => {

@@ -13,6 +13,37 @@ const normalizePhone = (value) => {
   if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
   return digits;
 };
+const toNumber = (value) => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim().replace(",", "."));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+};
+const parseTimeMinutes = (value) => {
+  const matched = String(value || "").trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!matched) return null;
+  const hours = Number(matched[1]);
+  const minutes = Number(matched[2]);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+};
+const gameSubscriptionVisitCount = (game, splitPayment) => {
+  const booking = isObj(game?.booking) ? game.booking : {};
+  const explicitDuration = toNumber(booking.durationMinutes ?? splitPayment?.durationMinutes);
+  let durationMinutes = explicitDuration && explicitDuration > 0 ? explicitDuration : null;
+  if (durationMinutes === null) {
+    const from = parseTimeMinutes(booking.timeFrom);
+    const to = parseTimeMinutes(booking.timeTo);
+    if (from !== null && to !== null) {
+      const delta = to >= from ? to - from : to + 24 * 60 - from;
+      if (delta > 0) durationMinutes = delta;
+    }
+  }
+  if (durationMinutes === null) return null;
+  return durationMinutes >= 90 ? 2 : 1;
+};
 const inactiveStatus = (value) => /CANCEL|DECLIN|FAIL|ERROR|EXPIRE|REFUND|REJECT|VOID|CLOSE|ARCHIVE|LEFT|REMOV/i
   .test(String(value || ""));
 const strongId = (value) => (isObj(value)
@@ -283,7 +314,7 @@ ctx.preOperationDiscovery = ctx.needsBookingDiscovery;
 ctx.bookingResults = [];
 const subscriptionInstanceIds = Array.from(new Set(
   targetPayments
-    .map((item) => toStr(item.clientSubscriptionId || item.subscriptionProductId))
+    .map((item) => toStr(item.clientSubscriptionId))
     .filter(Boolean),
 ));
 const subscriptionVisitCounts = Array.from(new Set(
@@ -292,7 +323,9 @@ const subscriptionVisitCounts = Array.from(new Set(
     .filter((value) => Number.isSafeInteger(value) && value > 0),
 ));
 ctx.clientSubscriptionId = subscriptionInstanceIds.length === 1 ? subscriptionInstanceIds[0] : null;
-ctx.subscriptionVisitCount = subscriptionVisitCounts.length === 1 ? subscriptionVisitCounts[0] : null;
+ctx.subscriptionVisitCount = subscriptionVisitCounts.length === 1
+  ? subscriptionVisitCounts[0]
+  : (subscriptionVisitCounts.length === 0 ? gameSubscriptionVisitCount(game, splitPayment) : null);
 ctx.upstreamAuthHeader = upstreamAuthHeader;
 ctx.localAlreadyApplied = previouslyApplied;
 ctx.targetClientId = targetClientId;

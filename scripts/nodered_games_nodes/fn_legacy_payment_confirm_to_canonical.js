@@ -49,6 +49,16 @@ if (
 ) {
   return respond(409, "LEGACY_PAYMENT_EVIDENCE_MISMATCH", "Проверка оплаты вернула противоречивые данные");
 }
+if (
+  evidence.operationType === "SUBSCRIPTION_BOOKING"
+  && (
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(toStr(evidence.clientSubscriptionId) || "")
+    || !Number.isSafeInteger(evidence.subscriptionVisitCount)
+    || evidence.subscriptionVisitCount < 1
+  )
+) {
+  return respond(409, "LEGACY_SUBSCRIPTION_BINDING_MISSING", "Viva не подтвердила точный абонемент списания");
+}
 
 msg._legacyRosterBridge = {
   gameId: ctx.gameId,

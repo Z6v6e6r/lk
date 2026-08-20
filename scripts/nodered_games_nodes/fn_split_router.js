@@ -124,6 +124,29 @@ const providerPhone = (value) => {
   return null;
 };
 
+const providerClientSubscriptionId = (booking) => {
+  if (!booking || typeof booking !== "object") return null;
+  return toStr(
+    booking.clientSubscriptionId
+    || booking.clientSubId
+    || booking.subscription?.clientSubscriptionId
+    || booking.subscription?.subscriptionId,
+  );
+};
+
+const providerSubscriptionVisitCount = (booking, fallback) => {
+  if (!booking || typeof booking !== "object") return null;
+  const explicit = Math.floor(toNumber(
+    booking.count
+    ?? booking.visitsCount
+    ?? booking.visitCount
+    ?? booking.subscription?.count,
+  ) ?? 0);
+  if (explicit > 0) return explicit;
+  const expected = Math.floor(toNumber(fallback) ?? 0);
+  return expected > 0 ? expected : null;
+};
+
 const providerStatus = (value) => {
   for (const item of providerObjects(value)) {
     const status = toStr(item.paymentStatus || item.transactionStatus || item.status || item.state);
@@ -969,8 +992,13 @@ if (ctx.step === "confirm_subscription_booking_lookup") {
   const exerciseIds = providerIds(booking, ["exerciseId", "exercise", "exerciseIds"]);
   const clientIds = providerIds(booking, ["clientId", "client"]);
   const clientPhoneE164 = providerPhone(booking);
+  const clientSubscriptionId = providerClientSubscriptionId(booking);
+  const subscriptionVisitCount = providerSubscriptionVisitCount(
+    booking,
+    ctx.expectedSubscriptionVisitCount,
+  );
   const hasSubscription = Boolean(booking && (
-    Boolean(toStr(booking.clientSubscriptionId || booking.subscriptionId || booking.clientSubId))
+    Boolean(clientSubscriptionId || toStr(booking.subscriptionId))
     || /SUBSCRIPTION/i.test(String(booking.paymentType || booking.paymentMethod || ""))
   ));
   const explicitlyActiveSubscriptionBooking = Boolean(
@@ -986,6 +1014,8 @@ if (ctx.step === "confirm_subscription_booking_lookup") {
     || !clientPhoneE164
     || !hasSubscription
     || !explicitlyActiveSubscriptionBooking
+    || !clientSubscriptionId
+    || !subscriptionVisitCount
   ) {
     return fail(409, "Viva subscription booking is not confirmed for this player and game", {
       code: "LEGACY_SUBSCRIPTION_BOOKING_NOT_CONFIRMED",
@@ -997,6 +1027,8 @@ if (ctx.step === "confirm_subscription_booking_lookup") {
     bookingId: ctx.bookingId,
     exerciseId: ctx.expectedExerciseId,
     clientPhoneE164,
+    clientSubscriptionId,
+    subscriptionVisitCount,
     verifiedAt: new Date().toISOString(),
     amountMinor: 0,
     currency: "RUB",

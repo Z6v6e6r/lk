@@ -362,6 +362,65 @@ test("subscription cancellation stops before DELETE when the exact pre-return sn
   assert.match(blocked[1].payload.message, /активную запись/);
 });
 
+test("legacy subscription leave resolves one exact booking among three active subscriptions", () => {
+  const game = selfGame();
+  game.booking = { ...game.booking, durationMinutes: 60, timeFrom: "21:30", timeTo: "22:30" };
+  delete game.metadata.splitPayment.payments[0].clientSubscriptionId;
+  delete game.metadata.splitPayment.payments[0].subscriptionVisitCount;
+  game.metadata.splitPayment.payments[0].subscriptionProductId = "catalog-product-must-not-be-used";
+  let msg = authorizeSelf(game);
+  assert.equal(msg._splitLeaveCtx.clientSubscriptionId, null);
+  assert.equal(msg._splitLeaveCtx.subscriptionVisitCount, 1);
+
+  msg = run("fn_split_leave_router.js", msg).result[0];
+  msg.statusCode = 200;
+  msg.payload = { cancellationOptions: { subscription: { available: true } } };
+  msg = run("fn_split_leave_router.js", msg, {
+    global: { vivacrm_access_token: "server-token" },
+  }).result[0];
+  assert.equal(msg._splitLeaveCtx.step, "resolve_subscription_before");
+  assert.match(msg.url, /clients\/client-1\/subscriptions\?size=200$/);
+
+  msg.statusCode = 200;
+  msg.payload = {
+    content: [
+      { subscriptionId: "client-subscription-sport", visitsLeft: 30, bookings: [] },
+      { subscriptionId: "client-subscription-friendship", visitsLeft: 17, bookings: [{ id: "other-booking", isCancelled: false }] },
+      { subscriptionId: "client-subscription-annual", visitsLeft: 269, bookings: [{ id: "booking-1", isCancelled: false }] },
+    ],
+  };
+  const resolved = run("fn_split_leave_router.js", msg).result[0];
+  assert.equal(resolved.method, "DELETE");
+  assert.equal(resolved._splitLeaveCtx.clientSubscriptionId, "client-subscription-annual");
+  assert.equal(resolved._splitLeaveCtx.expectedReturnCount, 1);
+  assert.equal(resolved._splitLeaveCtx.subscriptionReturnChecks[0].clientSubscriptionId, "client-subscription-annual");
+});
+
+test("legacy subscription leave stays fail-closed when two subscriptions contain the booking", () => {
+  const game = selfGame();
+  game.booking = { ...game.booking, durationMinutes: 60 };
+  delete game.metadata.splitPayment.payments[0].clientSubscriptionId;
+  delete game.metadata.splitPayment.payments[0].subscriptionVisitCount;
+  let msg = authorizeSelf(game);
+  msg = run("fn_split_leave_router.js", msg).result[0];
+  msg.statusCode = 200;
+  msg.payload = { cancellationOptions: { subscription: { available: true } } };
+  msg = run("fn_split_leave_router.js", msg, {
+    global: { vivacrm_access_token: "server-token" },
+  }).result[0];
+  msg.statusCode = 200;
+  msg.payload = {
+    content: [
+      { subscriptionId: "client-subscription-a", visitsLeft: 10, bookings: [{ id: "booking-1", isCancelled: false }] },
+      { subscriptionId: "client-subscription-b", visitsLeft: 20, bookings: [{ id: "booking-1", isCancelled: false }] },
+    ],
+  };
+  const blocked = run("fn_split_leave_router.js", msg).result;
+  assert.equal(blocked[0], null);
+  assert.equal(blocked[1].statusCode, 409);
+  assert.match(blocked[1].payload.message, /однозначно/);
+});
+
 test("unchanged subscription balance becomes RETURN_PENDING without a false refund claim", () => {
   const msg = authorizeSelf();
   msg._splitLeaveCtx.step = "verify_subscription_return";

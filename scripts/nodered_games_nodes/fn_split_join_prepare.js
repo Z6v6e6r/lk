@@ -225,6 +225,43 @@ const fail = (status, error, details) => {
   msg.payload = { error, details: details || null };
   return [null, msg, msg];
 };
+const requestToken = () => {
+  const cachedToken = readCachedServiceToken();
+  if (cachedToken) {
+    msg._splitCtx.tokenSource = "cache";
+    msg.statusCode = 200;
+    msg.payload = { access_token: cachedToken };
+    return [null, null, null, msg];
+  }
+
+  const now = Date.now();
+  const lockUntil = Number(readGlobal(KEY_REFRESH_LOCK_UNTIL) || 0);
+  if (Number.isFinite(lockUntil) && lockUntil > now) {
+    return fail(503, "Авторизация Viva временно обновляется", {
+      code: "VIVA_SERVICE_TOKEN_REFRESH_IN_PROGRESS",
+      retryAfterSeconds: 1,
+    });
+  }
+
+  const tokenRequestBody = buildTokenRequestBody();
+  if (!tokenRequestBody) {
+    return fail(503, "Сервисная авторизация Viva не настроена", {
+      code: "VIVA_SERVICE_AUTH_NOT_CONFIGURED",
+    });
+  }
+
+  const refreshOwner = `split-join:${now}:${Math.random().toString(36).slice(2, 10)}`;
+  writeGlobal(KEY_REFRESH_OWNER, refreshOwner);
+  writeGlobal(KEY_REFRESH_LOCK_UNTIL, now + TOKEN_REFRESH_LOCK_MS);
+  msg._splitCtx.tokenRefreshOwner = refreshOwner;
+  msg._splitCtx.tokenSource = "refresh";
+  msg.method = "POST";
+  msg.url = readEnv("VIVA_SERVICE_TOKEN_URL") || TOKEN_URL_DEFAULT;
+  msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
+  msg.payload = tokenRequestBody;
+  msg.requestTimeout = TOKEN_REQUEST_TIMEOUT_MS;
+  return [msg, null, null, null];
+};
 if (msg._legacyPaymentConfirmTrusted === true) {
   const confirmCtx = msg._legacyPaymentConfirm && typeof msg._legacyPaymentConfirm === "object"
     ? msg._legacyPaymentConfirm
@@ -255,7 +292,13 @@ if (msg._legacyPaymentConfirmTrusted === true) {
       code: "LEGACY_PAYMENT_EXERCISE_MISSING",
     });
   }
+  const expectedSubscriptionVisitCount = resolveSubscriptionVisitCount(resolveDurationMinutes(
+    confirmBooking.timeFrom,
+    confirmBooking.timeTo,
+    confirmBooking.durationMinutes,
+  ));
   confirmCtx.expectedExerciseId = expectedExerciseId;
+  confirmCtx.expectedSubscriptionVisitCount = expectedSubscriptionVisitCount;
   msg._splitCtx = {
     action: "confirm_payment",
     step: "token",
@@ -266,6 +309,7 @@ if (msg._legacyPaymentConfirmTrusted === true) {
     bookingId: confirmCtx.bookingId,
     clientId: confirmCtx.clientId,
     expectedExerciseId,
+    expectedSubscriptionVisitCount,
   };
   return requestToken();
 }
@@ -476,39 +520,4 @@ msg._splitCtx = {
   assembleDeadlineAt: toStr(splitPayment.assembleDeadlineAt) || assembleDeadlineAt,
 };
 
-const cachedToken = readCachedServiceToken();
-if (cachedToken) {
-  msg._splitCtx.tokenSource = "cache";
-  msg.statusCode = 200;
-  msg.payload = { access_token: cachedToken };
-  return [null, null, null, msg];
-}
-
-const now = Date.now();
-const lockUntil = Number(readGlobal(KEY_REFRESH_LOCK_UNTIL) || 0);
-if (Number.isFinite(lockUntil) && lockUntil > now) {
-  return fail(503, "Авторизация Viva временно обновляется", {
-    code: "VIVA_SERVICE_TOKEN_REFRESH_IN_PROGRESS",
-    retryAfterSeconds: 1,
-  });
-}
-
-const tokenRequestBody = buildTokenRequestBody();
-if (!tokenRequestBody) {
-  return fail(503, "Сервисная авторизация Viva не настроена", {
-    code: "VIVA_SERVICE_AUTH_NOT_CONFIGURED",
-  });
-}
-
-const refreshOwner = `split-join:${now}:${Math.random().toString(36).slice(2, 10)}`;
-writeGlobal(KEY_REFRESH_OWNER, refreshOwner);
-writeGlobal(KEY_REFRESH_LOCK_UNTIL, now + TOKEN_REFRESH_LOCK_MS);
-msg._splitCtx.tokenRefreshOwner = refreshOwner;
-msg._splitCtx.tokenSource = "refresh";
-msg.method = "POST";
-msg.url = readEnv("VIVA_SERVICE_TOKEN_URL") || TOKEN_URL_DEFAULT;
-msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
-msg.payload = tokenRequestBody;
-msg.requestTimeout = TOKEN_REQUEST_TIMEOUT_MS;
-
-return [msg, null, null, null];
+return requestToken();

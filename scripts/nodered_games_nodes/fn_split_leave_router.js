@@ -32,13 +32,13 @@ const rowExerciseId = (row) => normalizeId(
   || row?.timetable?.exerciseId,
 );
 const rowClientSubscriptionId = (row) => toStr(
-  row?.clientSubscriptionId || row?.clientSubId || row?.subscription?.subscriptionId,
+  row?.clientSubscriptionId || row?.clientSubId || row?.subscription?.clientSubscriptionId || row?.subscription?.subscriptionId,
 );
 const rowSubscriptionVisitCount = (row) => {
   const value = Number(row?.count ?? row?.visitsCount ?? row?.visitCount);
   return Number.isSafeInteger(value) && value > 0 ? value : null;
 };
-const subscriptionInstanceId = (row) => toStr(row?.subscriptionId || row?.clientSubscriptionId);
+const subscriptionInstanceId = (row) => toStr(row?.clientSubscriptionId || row?.subscriptionId);
 const subscriptionVisitsLeft = (row) => {
   const value = Number(row?.visitsLeft);
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -102,6 +102,9 @@ const subscriptionBookingReturned = (row, bookingId) => {
   const exact = subscriptionBookings(row).filter((booking) => rowBookingId(booking) === normalizeId(bookingId));
   return exact.length === 0 || exact.every(isCancelled);
 };
+const exactActiveSubscriptionCandidates = (payload, bookingId) => responseRows(payload).filter((row) => (
+  subscriptionInstanceId(row) && subscriptionHasActiveBooking(row, bookingId)
+));
 const fail = (ctx, statusCode, state, message) => {
   const retryScheduled = state === "VIVA_UNVERIFIED"
     && ctx.operationState === "STARTED"
@@ -213,6 +216,33 @@ const issueCurrentCancellation = (ctx) => {
   appendTrace(ctx, { step: "cancel_request", bookingId, refundMethod });
   return upstream(ctx, usesEndUser(ctx) ? "DELETE" : "PUT", cancelUrl(ctx, bookingId, clientId), payload);
 };
+const captureSubscriptionBefore = (ctx, row, expectedReturnCount) => {
+  const clientSubscriptionId = row ? subscriptionInstanceId(row) : null;
+  const visitsLeft = row ? subscriptionVisitsLeft(row) : null;
+  if (
+    !clientSubscriptionId
+    || visitsLeft === null
+    || !Number.isSafeInteger(expectedReturnCount)
+    || expectedReturnCount < 1
+    || !subscriptionHasActiveBooking(row, ctx.currentBookingId)
+  ) {
+    return fail(ctx, 409, "CONFLICT", "Абонемент не подтверждает активную запись до отмены");
+  }
+  ctx.clientSubscriptionId = clientSubscriptionId;
+  ctx.expectedReturnCount = expectedReturnCount;
+  ctx.subscriptionVisitCount = expectedReturnCount;
+  ctx.subscriptionReturnChecks = asArray(ctx.subscriptionReturnChecks).filter((item) => (
+    normalizeId(item?.bookingId) !== normalizeId(ctx.currentBookingId)
+  ));
+  ctx.subscriptionReturnChecks.push({
+    bookingId: toStr(ctx.currentBookingId),
+    clientSubscriptionId,
+    visitsLeftBefore: visitsLeft,
+    expectedReturnCount,
+  });
+  appendTrace(ctx, { step: "subscription_before_verified", bookingId: toStr(ctx.currentBookingId) });
+  return issueCurrentCancellation(ctx);
+};
 const startActiveVerification = (ctx) => {
   ctx.step = "verify_active";
   const url = usesEndUser(ctx)
@@ -271,14 +301,40 @@ if (ctx.step === "cancel_probe") {
       : {};
     const clientSubscriptionId = toStr(evidence.clientSubscriptionId || ctx.clientSubscriptionId);
     const expectedReturnCount = Number(evidence.subscriptionVisitCount || ctx.subscriptionVisitCount);
-    if (!clientSubscriptionId || !Number.isSafeInteger(expectedReturnCount) || expectedReturnCount < 1) {
+    if (!Number.isSafeInteger(expectedReturnCount) || expectedReturnCount < 1) {
       return fail(ctx, 409, "CONFLICT", "Не удалось однозначно определить абонемент и число посещений");
     }
-    ctx.clientSubscriptionId = clientSubscriptionId;
     ctx.expectedReturnCount = expectedReturnCount;
+    if (!clientSubscriptionId) {
+      return startSubscriptionReadback(ctx, "resolve_subscription_before");
+    }
+    ctx.clientSubscriptionId = clientSubscriptionId;
     return startSubscriptionReadback(ctx, "snapshot_subscription_before");
   }
   return issueCurrentCancellation(ctx);
+}
+
+if (ctx.step === "resolve_subscription_before") {
+  if (!isOk(msg.statusCode)) {
+    return fail(ctx, 422, "VIVA_UNVERIFIED", "Не удалось проверить абонемент до отмены");
+  }
+  const candidates = exactActiveSubscriptionCandidates(msg.payload, ctx.currentBookingId);
+  if (candidates.length !== 1) {
+    return fail(ctx, 409, "CONFLICT", "Не удалось однозначно определить абонемент списания");
+  }
+  const nestedVisitCounts = Array.from(new Set(
+    subscriptionBookings(candidates[0])
+      .filter((booking) => rowBookingId(booking) === normalizeId(ctx.currentBookingId) && !isCancelled(booking))
+      .map(rowSubscriptionVisitCount)
+      .filter(Boolean),
+  ));
+  if (
+    nestedVisitCounts.length > 1
+    || (nestedVisitCounts[0] && nestedVisitCounts[0] !== ctx.expectedReturnCount)
+  ) {
+    return fail(ctx, 409, "CONFLICT", "Viva вернула другой объём списания по абонементу");
+  }
+  return captureSubscriptionBefore(ctx, candidates[0], nestedVisitCounts[0] || ctx.expectedReturnCount);
 }
 
 if (ctx.step === "snapshot_subscription_before") {
@@ -286,21 +342,7 @@ if (ctx.step === "snapshot_subscription_before") {
     return fail(ctx, 422, "VIVA_UNVERIFIED", "Не удалось проверить абонемент до отмены");
   }
   const row = exactSubscriptionRow(msg.payload, ctx.clientSubscriptionId);
-  const visitsLeft = row ? subscriptionVisitsLeft(row) : null;
-  if (!row || visitsLeft === null || !subscriptionHasActiveBooking(row, ctx.currentBookingId)) {
-    return fail(ctx, 409, "CONFLICT", "Абонемент не подтверждает активную запись до отмены");
-  }
-  ctx.subscriptionReturnChecks = asArray(ctx.subscriptionReturnChecks).filter((item) => (
-    normalizeId(item?.bookingId) !== normalizeId(ctx.currentBookingId)
-  ));
-  ctx.subscriptionReturnChecks.push({
-    bookingId: toStr(ctx.currentBookingId),
-    clientSubscriptionId: toStr(ctx.clientSubscriptionId),
-    visitsLeftBefore: visitsLeft,
-    expectedReturnCount: ctx.expectedReturnCount,
-  });
-  appendTrace(ctx, { step: "subscription_before_verified", bookingId: toStr(ctx.currentBookingId) });
-  return issueCurrentCancellation(ctx);
+  return captureSubscriptionBefore(ctx, row, ctx.expectedReturnCount);
 }
 
 if (ctx.step === "cancel_booking") {

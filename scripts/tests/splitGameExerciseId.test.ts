@@ -94,6 +94,36 @@ test("split join accepts exerciseId stored in top-level metadata", () => {
   assert.equal(prepared._splitCtx.clientSubscriptionId, "client-subscription-1");
 });
 
+test("legacy subscription confirmation derives visit count from the stored game duration", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_join_prepare.js", {
+    payload: [{
+      id: "game-confirm-1",
+      booking: {
+        timeFrom: "12:00",
+        timeTo: "13:30",
+      },
+      metadata: {
+        vivaExerciseId: "exercise-confirm-1",
+      },
+    }],
+    _legacyPaymentConfirmTrusted: true,
+    _legacyPaymentConfirm: {
+      gameId: "game-confirm-1",
+      reservationId: "reservation-1",
+      operationType: "SUBSCRIPTION_BOOKING",
+      operationId: "operation-1",
+      bookingId: "booking-1",
+      clientId: "client-1",
+    },
+  }) as unknown[];
+
+  const prepared = out[0] as Record<string, any>;
+  assert.ok(prepared);
+  assert.equal(prepared._splitCtx.expectedExerciseId, "exercise-confirm-1");
+  assert.equal(prepared._splitCtx.expectedSubscriptionVisitCount, 2);
+  assert.equal(prepared._legacyPaymentConfirm.expectedSubscriptionVisitCount, 2);
+});
+
 test("split join rejects ambiguous subscription payment without an explicit client subscription id", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_join_prepare.js", {
     payload: [{

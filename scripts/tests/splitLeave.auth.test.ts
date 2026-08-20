@@ -4,7 +4,12 @@ import fs from "node:fs";
 
 function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
   const source = fs.readFileSync(file, "utf8");
-  return new Function("msg", source)(msg);
+  const globalContext = {
+    get(key: string) {
+      return key === "vivacrm_access_token" ? "server-token" : null;
+    },
+  };
+  return new Function("msg", "global", source)(msg, globalContext);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -21,7 +26,6 @@ function preparedLeaveMsg(overrides: Record<string, unknown> = {}) {
     payload: {
       bookingIds: ["booking-1"],
       bookingItems: [{ bookingId: "booking-1", clientId: "player-1" }],
-      exerciseId: "exercise-1",
       playerId: "player-1",
     },
     _splitCleanupAuth: {
@@ -88,7 +92,7 @@ test("split leave prepare builds an exact game query before requesting Admin tok
   assert.equal(queryMsg.url, undefined);
 });
 
-test("split leave authorizer accepts only linked bookings of an organizer-owned game", () => {
+test("split leave authorizer accepts only linked bookings with a server token", () => {
   const prepareOut = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_split_leave_prepare.js",
     preparedLeaveMsg(),
@@ -101,21 +105,19 @@ test("split leave authorizer accepts only linked bookings of an organizer-owned 
     queryMsg,
   ) as unknown[];
 
-  const tokenMsg = asRecord(out[0]);
-  assert.equal(tokenMsg.method, "POST");
-  assert.equal(
-    tokenMsg.url,
-    "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token",
-  );
-  const ctx = asRecord(tokenMsg._splitLeaveCtx);
-  assert.equal(ctx.step, "token_request");
+  const authorizedMsg = asRecord(out[0]);
+  assert.equal(authorizedMsg.method, undefined);
+  assert.equal(authorizedMsg.url, undefined);
+  const ctx = asRecord(authorizedMsg._splitLeaveCtx);
+  assert.equal(ctx.step, "start_cancel");
+  assert.equal(ctx.upstreamAuthHeader, "Bearer server-token");
   assert.deepEqual(ctx.bookingQueue, [
     { bookingId: "booking-1", clientId: "player-1" },
   ]);
   assert.equal(ctx.exerciseId, "exercise-1");
 });
 
-test("split leave authorizer rejects a non-organizer", () => {
+test("split leave authorizer rejects an actor not linked to the game", () => {
   const msg = preparedLeaveMsg();
   const prepareOut = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_split_leave_prepare.js",
@@ -135,10 +137,8 @@ test("split leave authorizer rejects a non-organizer", () => {
   assert.equal(out[0], null);
   const response = asRecord(out[1]);
   assert.equal(response.statusCode, 403);
-  assert.equal(
-    asRecord(response.payload).code,
-    "SPLIT_LEAVE_ORGANIZER_REQUIRED",
-  );
+  assert.equal(asRecord(response.payload).state, "CONFLICT");
+  assert.equal(asRecord(response.payload).message, "Профиль не связан с этой игрой");
 });
 
 test("split leave authorizer rejects a booking not linked to the game", () => {
@@ -164,8 +164,6 @@ test("split leave authorizer rejects a booking not linked to the game", () => {
   assert.equal(out[0], null);
   const response = asRecord(out[1]);
   assert.equal(response.statusCode, 403);
-  assert.equal(
-    asRecord(response.payload).code,
-    "SPLIT_LEAVE_BOOKING_NOT_LINKED",
-  );
+  assert.equal(asRecord(response.payload).state, "CONFLICT");
+  assert.equal(asRecord(response.payload).message, "Запись игрока не связана с этой игрой");
 });

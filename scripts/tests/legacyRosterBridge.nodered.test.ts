@@ -223,6 +223,82 @@ test("verified payment projection marks server-matched payment paid", () => {
   assert.equal(payment.verifiedBy, "VIVA_PROVIDER_LOOKUP");
 });
 
+test("verified subscription projection persists the exact instance and visit count on one player", () => {
+  const { projection } = projectionContext("PARTICIPANT");
+  const reservationId = "238df6f5-fec4-44dd-ad8c-39e98ade8366";
+  const result = run("scripts/nodered_games_nodes/fn_legacy_roster_projection_build.js", {
+    _legacyRosterBridge: {
+      gameId: "pay_game",
+      idempotencyKey: "legacy-payment:subscription-binding",
+      command: "CONFIRM_PAYMENT",
+      reservationId,
+      retryCount: 0,
+    },
+    _legacyRosterProjection: { ...projection, reservationId },
+    _legacyPaymentEvidence: {
+      operationType: "SUBSCRIPTION_BOOKING",
+      operationId: "booking-annual",
+      bookingId: "booking-annual",
+      clientPhoneE164: "+79000000001",
+      clientSubscriptionId: "client-subscription-annual",
+      subscriptionVisitCount: 1,
+      verifiedAt: "2026-08-20T18:30:00.000Z",
+    },
+    payload: [{
+      id: "pay_game",
+      participants: [],
+      waitlist: [],
+      metadata: {
+        splitPayment: {
+          payments: [
+            { bookingId: "booking-other", phone: "79000000002", status: "PAID" },
+            { bookingId: "booking-annual", phone: "79000000001", status: "PAYMENT_PENDING" },
+          ],
+        },
+      },
+      organizer: { id: "organizer", name: "Организатор", phone: "79000000003" },
+    }],
+  }) as any[];
+
+  const payments = result[0].payload[1].$set.metadata.splitPayment.payments;
+  assert.equal(payments[0].clientSubscriptionId, undefined);
+  assert.equal(payments[1].clientSubscriptionId, "client-subscription-annual");
+  assert.equal(payments[1].subscriptionVisitCount, 1);
+  assert.equal(payments[1].status, "PAID");
+});
+
+test("canonical confirmation rejects subscription evidence without an exact instance binding", () => {
+  const result = run(
+    "scripts/nodered_games_nodes/fn_legacy_payment_confirm_to_canonical.js",
+    {
+      _legacyPaymentConfirm: {
+        gameId: "pay_game",
+        reservationId: "238df6f5-fec4-44dd-ad8c-39e98ade8366",
+        operationType: "SUBSCRIPTION_BOOKING",
+        operationId: "booking-1",
+        bookingId: "booking-1",
+        clientId: "client-1",
+        expectedExerciseId: "exercise-1",
+        authorization: "Bearer signed-token",
+        idempotencyKey: "legacy-payment:missing-binding",
+      },
+      _verifiedPaymentEvidence: {
+        operationType: "SUBSCRIPTION_BOOKING",
+        operationId: "booking-1",
+        bookingId: "booking-1",
+        exerciseId: "exercise-1",
+        clientPhoneE164: "+79000000001",
+        verifiedAt: "2026-08-20T18:30:00.000Z",
+      },
+    },
+    enabledEnv,
+  ) as any[];
+
+  assert.equal(result[0], null);
+  assert.equal(result[1].statusCode, 409);
+  assert.equal(result[1].payload.code, "LEGACY_SUBSCRIPTION_BINDING_MISSING");
+});
+
 test("seat reservation is projected with a recoverable reservation id", () => {
   const { bridge, projection } = projectionContext("SEAT_RESERVED");
   const reservationId = "238df6f5-fec4-44dd-ad8c-39e98ade8366";

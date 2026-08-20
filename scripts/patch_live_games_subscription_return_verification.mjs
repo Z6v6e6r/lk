@@ -15,8 +15,8 @@ const EXPECTED_NODE_COUNT = 4756;
 const EXPECTED_HTTP_INPUT_COUNT = 215;
 
 export const SUBSCRIPTION_RETURN_TARGETS = Object.freeze([
-  ["7c280001a0c1e015", "Authorize split leave booking targets", "fn_split_leave_authorize.js", 5, "37ca0d9a981232f1cd5d2cce6259ec666168e372bd4dd1b8bd707e7c17ffe33d", "fc094bb87e77f41f2a8e4b02eaaf93430074e99ba7a3bfbe556f12c651a3e00b"],
-  ["9878400d518ebcbd", "Route split leave booking cancel", "fn_split_leave_router.js", 5, "6d270142b759205835f67d14a3e7a21a6c4112b6418d60df4474834e928dd7fd", "fcf80d9a7b44ff6850013991f4bc6ae0541d6d4a00b2557c1d5a978e212fec1d"],
+  ["7c280001a0c1e015", "Authorize split leave booking targets", "fn_split_leave_authorize.js", 5, "37ca0d9a981232f1cd5d2cce6259ec666168e372bd4dd1b8bd707e7c17ffe33d", "c012028a32628f8ecd0154c53582001abdae4e9fb71e3bdb67c53fbeb5a7a2d9"],
+  ["9878400d518ebcbd", "Route split leave booking cancel", "fn_split_leave_router.js", 5, "6d270142b759205835f67d14a3e7a21a6c4112b6418d60df4474834e928dd7fd", "ae0819a6083ed9d264d719ea0414b3ca43db4aa093d78818929a147ed2475de4"],
   ["lk_split_leave_operation_start_build_20260801", "Build durable split leave operation", "fn_split_leave_operation_start.js", 2, "25d73d9cac26469ff4e5bdc73b922e2d469db8939ea2114f1e60346cb0da21c0", "c7b8b2be039439417898e8217787c8aa9cdb15407204102b54acb4a9c9434359"],
   ["lk_split_leave_operation_route_20260801", "Route durable split leave operation", "fn_split_leave_operation_route.js", 4, "f62dd41ee4ffdeaa39ab61e1a413629d9ddb72b91945d6550f3859883ac03790", "d5649238cb4cbcd22cd72edafcea0b57691ac7d7a981e8b83d15a2218706326d"],
   ["lk_split_leave_operation_viva_build_20260801", "Persist Viva-confirmed split leave", "fn_split_leave_operation_viva_confirmed.js", 2, "e1c8af75fefa2f825d8bf859e493628b8bba21e28f6271c75acb669460960d50", "3306759ab7ecac3e434b1dd88fcb7a70c01f267f009060277237fff0a3f21b0d"],

@@ -1328,3 +1328,17 @@
   TypeScript and all DEV bundles built successfully with the existing local DEV
   environment; targeted ESLint reported zero errors (17 `any` warnings in test
   harnesses), and `git diff --check` passed.
+
+## 2026-08-20 — Exact subscription binding for split-game return
+
+- Confirmed the leave ambiguity root cause: the legacy confirmation path did
+  not persist the provider-confirmed `clientSubscriptionId` and visit count in
+  the exact participant payment row; catalog subscription IDs remain forbidden
+  as client-instance evidence.
+- Added exact binding for future joins and a fail-closed compatibility lookup
+  for existing games: recovery requires one and only one client subscription
+  containing the exact active booking, while the visit count comes from the
+  stored game duration when provider evidence omits it.
+- Added focused confirmation/projection/leave regressions and a guarded
+  six-function Node-RED candidate builder. No live leave, Viva mutation,
+  Node-RED import, merge, push or deployment was performed in this stage.

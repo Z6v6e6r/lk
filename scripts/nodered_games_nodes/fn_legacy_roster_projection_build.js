@@ -34,10 +34,16 @@ const bridgeMetadata = isObj(metadata.canonicalRosterProjection)
   : {};
 const commandIds = uniq(asArray(bridgeMetadata.commandIds).map(toStr));
 if (ctx.command === "CONFIRM_PAYMENT") {
+  const subscriptionEvidenceValid = paymentEvidence?.operationType !== "SUBSCRIPTION_BOOKING" || (
+    toStr(paymentEvidence.clientSubscriptionId) !== null
+    && Number.isSafeInteger(paymentEvidence.subscriptionVisitCount)
+    && paymentEvidence.subscriptionVisitCount > 0
+  );
   if (
     !paymentEvidence
     || toStr(paymentEvidence.bookingId) === null
     || normPhone(paymentEvidence.clientPhoneE164) !== normPhone(projection.player.phoneE164)
+    || !subscriptionEvidenceValid
   ) {
     return fail(503, "LEGACY_PAYMENT_EVIDENCE_MISSING", "Не удалось применить проверенное подтверждение оплаты");
   }
@@ -67,6 +73,12 @@ if (ctx.command === "CONFIRM_PAYMENT") {
       phoneNorm: evidencePhone,
       paidAt: toStr(paymentEvidence.verifiedAt) || new Date().toISOString(),
       verifiedBy: "VIVA_PROVIDER_LOOKUP",
+      ...(paymentEvidence.operationType === "SUBSCRIPTION_BOOKING"
+        ? {
+            clientSubscriptionId: toStr(paymentEvidence.clientSubscriptionId),
+            subscriptionVisitCount: paymentEvidence.subscriptionVisitCount,
+          }
+        : {}),
     };
   });
   if (!matched) {
@@ -83,6 +95,12 @@ if (ctx.command === "CONFIRM_PAYMENT") {
       amountMinor: Number.isSafeInteger(paymentEvidence.amountMinor) ? paymentEvidence.amountMinor : null,
       paidAt: toStr(paymentEvidence.verifiedAt) || new Date().toISOString(),
       verifiedBy: "VIVA_PROVIDER_LOOKUP",
+      ...(paymentEvidence.operationType === "SUBSCRIPTION_BOOKING"
+        ? {
+            clientSubscriptionId: toStr(paymentEvidence.clientSubscriptionId),
+            subscriptionVisitCount: paymentEvidence.subscriptionVisitCount,
+          }
+        : {}),
     });
   }
   metadata.splitPayment = {

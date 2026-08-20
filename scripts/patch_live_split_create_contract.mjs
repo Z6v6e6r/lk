@@ -48,7 +48,7 @@ export const LIVE_SPLIT_CREATE_CONTRACT = Object.freeze({
         Object.freeze(["8f7bd5b482fe9763"]),
       ]),
       liveFuncSha256: "86711b7a968089f1bc0cceb5fcfd742bae2db64cbba8ef6594963b3bee49f0d3",
-      candidateFuncSha256: "acb2a2eb981f497681d592f257b1c69275da4c9de5307d69654d27980689a149",
+      candidateFuncSha256: "003bafe6a0fcdae03f1fcc6cfb1bb8392984e4d8cb880fc6fa884a45bc89e028",
     }),
     Object.freeze({
       sourceKey: "router",
@@ -65,7 +65,7 @@ export const LIVE_SPLIT_CREATE_CONTRACT = Object.freeze({
         Object.freeze(["legacy_payment_confirm_canonical_prepare_20260816"]),
       ]),
       liveFuncSha256: "3cfc57a3af5f8425bb4de72e4041c4b17398b5db50c304b9a1f23163cdd1eefb",
-      candidateFuncSha256: "34ba99f50ca025095d464aadd47af0aa1352a1679482f032abc30846b5fa1c80",
+      candidateFuncSha256: "2e16ee303fcae77e0d09f2a527d0fd77378bc8ea6af4027ef9636ebf8f36813f",
     }),
   ]),
   restorations: Object.freeze([
