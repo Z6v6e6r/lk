@@ -53,6 +53,13 @@ function fixture() {
   return { flow, liveSource, candidateSource, contract };
 }
 
+test("live flow is pinned to the reviewed deployment preimage", () => {
+  assert.equal(
+    LIVE_SPLIT_CREATE_CONTRACT.sourceFlowSha256,
+    "89a2f1174febbc249be33ef566f641917fb3b06a8c38b5a4a4dbf96a55caf8ea",
+  );
+});
+
 test("tracked split sources are pinned to the reviewed candidate hashes", () => {
   for (const target of LIVE_SPLIT_CREATE_CONTRACT.targets) {
     const fileByKey = {

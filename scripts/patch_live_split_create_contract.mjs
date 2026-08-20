@@ -16,7 +16,7 @@ const SOURCE_PATHS = Object.freeze({
 });
 
 export const LIVE_SPLIT_CREATE_CONTRACT = Object.freeze({
-  sourceFlowSha256: "74fc80f4645f634c94fa47ce00bfcec0a7a8606568197f14d204878def2d7cfe",
+  sourceFlowSha256: "89a2f1174febbc249be33ef566f641917fb3b06a8c38b5a4a4dbf96a55caf8ea",
   targets: Object.freeze([
     Object.freeze({
       sourceKey: "create",
