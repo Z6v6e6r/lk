@@ -18,9 +18,22 @@
     "createSubscriptionInstances": false,
     "publishRequest": null
   },
+  "requestedActivationRule": {
+    "appliesToStorefronts": ["piter_friendship", "network_friendship"],
+    "mode": "FIRST_CONFIRMED_BOOKING_OR_FIXED_DATE",
+    "firstUseTrigger": "FIRST_CONFIRMED_SUBSCRIPTION_BOOKING",
+    "automaticActivationAt": "2026-10-01T00:00:00+03:00",
+    "timeZone": "Europe/Moscow",
+    "validityStartsAt": "EARLIER_OF_FIRST_CONFIRMED_BOOKING_AND_AUTOMATIC_ACTIVATION_AT",
+    "validityDays": 365,
+    "contractRepresentation": "UNSUPPORTED_BY_PINNED_CUP_CONTRACT",
+    "providerReadBackRequired": true
+  },
   "commonPublicationBlockers": [
     "EFFECTIVE_AT_REQUIRES_OPERATOR_RECONFIRMATION",
     "VALIDITY_365_DAYS_REQUIRES_BUSINESS_CONFIRMATION",
+    "FIRST_USE_WITH_FIXED_DEADLINE_NOT_SUPPORTED_BY_CUP_CONTRACT",
+    "VIVA_AUTO_ACTIVATION_WRITE_READBACK_NOT_VERIFIED",
     "CUP_PUBLISH_COMMAND_NOT_IMPLEMENTED",
     "PROVIDER_MAPPING_PREVIEW_NOT_APPROVED",
     "PROVIDER_MAPPING_NOT_VERIFIED",
@@ -34,6 +47,9 @@
     "CREATE_90_120_ADD_ON_NOT_CONFIGURED"
   ],
   "normalizationNotes": [
+    "effectiveAt controls when the shared policy version becomes eligible; it is not the activation date of a customer SubscriptionInstance",
+    "the requested rule activates on the first confirmed subscription booking before 2026-10-01, otherwise automatically at 2026-10-01T00:00:00+03:00; the pinned CUP contract supports FIRST_USE and FIXED_DATE only as mutually exclusive modes",
+    "the unsupported combined activation rule is intentionally outside policyVersionRequest.body and must not be sent as an invented API field",
     "bookingWindowDays=1 is the required legacy DTO value; bookingWindow.enabled=false and days=null are authoritative",
     "maxActiveServices=0 is the required legacy DTO value; activeServicesLimit.enabled=false and max=null are authoritative",
     "capabilities is intentionally omitted; ph-ab c4e295f injects defaults, so publication stays blocked until lifecycle, cancellation and commerce defaults are approved",
