@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   assertProtectedFile,
+  assertProtectedFileModes,
   atomicWrite,
   sha256,
   validateReviewedFlowContract,
@@ -116,7 +117,7 @@ export function createReviewedFlowRuntime({
   const readPrepared = (candidatePathValue, contractPathValue, expectedDeploymentId) => {
     assertRoot();
     const { candidatePath, contractPath } = assertStagePath(candidatePathValue, contractPathValue);
-    assertProtectedFile(liveFlowPath, protectedFileOptions);
+    assertProtectedFileModes(liveFlowPath, { uid, gid, modes: [0o600, 0o644] });
     const liveBytes = fs.readFileSync(liveFlowPath);
     const candidateBytes = fs.readFileSync(candidatePath);
     const contractBytes = fs.readFileSync(contractPath);

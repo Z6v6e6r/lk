@@ -249,13 +249,21 @@ export function validateReviewedFlowContract(options) {
   throw new Error("Reviewed-flow contract version mismatch");
 }
 
-export function assertProtectedFile(filePath, { uid = 0, gid = 0, mode = 0o600 } = {}) {
+export function assertProtectedFileModes(
+  filePath,
+  { uid = 0, gid = 0, modes = [0o600] } = {},
+) {
   const stat = fs.lstatSync(filePath);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== uid || stat.gid !== gid) {
     throw new Error(`Protected file contract mismatch: ${filePath}`);
   }
-  if ((stat.mode & 0o777) !== mode) throw new Error(`Protected file mode mismatch: ${filePath}`);
+  const actualMode = stat.mode & 0o777;
+  if (!modes.includes(actualMode)) throw new Error(`Protected file mode mismatch: ${filePath}`);
   return stat;
+}
+
+export function assertProtectedFile(filePath, { uid = 0, gid = 0, mode = 0o600 } = {}) {
+  return assertProtectedFileModes(filePath, { uid, gid, modes: [mode] });
 }
 
 export function atomicWrite(destination, bytes, { uid = 0, gid = 0 } = {}) {

@@ -144,7 +144,10 @@ test("exact-graph contract pins exact changed fields and added nodes while prese
   }), /changed HTTP route/);
 });
 
-const prepareRuntime = (t, { failFirstRestart = false, exactGraph = false } = {}) => {
+const prepareRuntime = (
+  t,
+  { failFirstRestart = false, exactGraph = false, liveMode = 0o600 } = {},
+) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "reviewed-flow-runtime-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const uid = process.getuid();
@@ -178,7 +181,7 @@ const prepareRuntime = (t, { failFirstRestart = false, exactGraph = false } = {}
     [contractPath, Buffer.from(`${JSON.stringify(contract, null, 2)}\n`)],
   ]) {
     fs.writeFileSync(filePath, content, { mode: 0o600 });
-    fs.chmodSync(filePath, 0o600);
+    fs.chmodSync(filePath, filePath === liveFlowPath ? liveMode : 0o600);
   }
   let restartCount = 10;
   let failRemaining = failFirstRestart ? 1 : 0;
@@ -262,6 +265,33 @@ test("remote runtime applies and rolls back an exact-graph contract", (t) => {
     contractBackup: applied.contractBackup,
   });
   assert.equal(rolledBack.restoredFlowSha256, prepared.contract.sourceSha256);
+});
+
+test("remote runtime accepts historical 0644 live mode and normalizes publication to 0600", (t) => {
+  const prepared = prepareRuntime(t, { exactGraph: true, liveMode: 0o644 });
+  const common = {
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: "managed-subscription-rules",
+  };
+  assert.equal(prepared.runtime.preflight(common).sourceSha256, prepared.contract.sourceSha256);
+  const applied = prepared.runtime.apply({ ...common, stamp: "20260820T120000+0300" });
+  assert.equal(fs.statSync(prepared.liveFlowPath).mode & 0o777, 0o600);
+  prepared.runtime.rollback({
+    deploymentId: "managed-subscription-rules",
+    flowBackup: applied.flowBackup,
+    contractBackup: applied.contractBackup,
+  });
+  assert.equal(fs.statSync(prepared.liveFlowPath).mode & 0o777, 0o600);
+});
+
+test("remote preflight rejects every live mode outside exact 0600 or 0644", (t) => {
+  const prepared = prepareRuntime(t, { liveMode: 0o640 });
+  assert.throws(() => prepared.runtime.preflight({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: "subscription-binding",
+  }), /Protected file mode mismatch/);
 });
 
 test("remote preflight rejects hard-linked staged artifacts", (t) => {

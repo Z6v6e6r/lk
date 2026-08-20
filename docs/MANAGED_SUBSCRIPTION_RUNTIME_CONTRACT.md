@@ -216,6 +216,9 @@ change. The remote installer verifies the same source, candidate and per-node
 digests, writes private byte-identical backups, publishes atomically and
 restarts only the existing `node-red` PM2 process. A restart, digest, public
 games or subscription OPTIONS smoke failure requests the exact rollback.
+The preflight accepts only a root-owned, single-link, non-symlink live flow
+with mode `0600` or the historical Node-RED mode `0644`. Candidate, contract,
+backup and every newly published or restored active flow are always `0600`.
 
 The successful deploy prints a timestamped flow/contract backup pair. An
 explicit rollback of that exact active candidate is:
