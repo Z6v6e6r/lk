@@ -14655,12 +14655,12 @@ export default function GamesPage({
                           </div>
                           {typeof s.singleCourtsCount === "number" && (
                             <div className="game-card-sub">
-                              {formatCourtCountLabel("Сингл", s.singleCourtsCount)}
+                              Сингл: {s.singleCourtsCount}
                             </div>
                           )}
                           {typeof s.outdoorCourtsCount === "number" && (
                             <div className="game-card-sub">
-                              {formatCourtCountLabel("Открытых", s.outdoorCourtsCount)}
+                              Открытых кортов: {s.outdoorCourtsCount}
                             </div>
                           )}
                         </>
