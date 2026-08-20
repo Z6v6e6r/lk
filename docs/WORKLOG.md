@@ -1371,3 +1371,19 @@
   function bodies with no route, wire, node-ID or topology changes.
 - Production flow, PM2, Viva and MongoDB were not changed; staging, restart,
   push and deployment were not performed in this checkpoint.
+
+## 2026-08-20 — Subscription binding production canary closed
+
+- Guarded function-only deployment from repository commit `3c63432e…` moved the
+  verified live flow from `2cbb00db…` to `5b2c0808…`; the exact flow and
+  contract backups were retained and automatic rollback was not required.
+- One approved synthetic self-leave canary completed the durable chain
+  `STARTED -> VIVA_CONFIRMED -> LK_APPLIED -> DONE`. The operation remained
+  `RETURN_VERIFIED`, returned exactly one visit (`269 -> 270`), removed only the
+  tester from the game and retained the organizer.
+- A 15-minute soak completed 30/30 green samples with the active flow digest
+  unchanged, Node-RED online and the public Games API returning HTTP `200`.
+  Final game and operation read-backs matched the canary result; no retry,
+  second return or rollback was performed.
+- Full sanitized evidence, residual scope and the guarded rollback boundary are
+  recorded in `docs/SUBSCRIPTION_RETURN_CANARY_2026-08-20.md`.
