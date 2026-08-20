@@ -126,7 +126,14 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
         priority: 2,
       },
     ],
-    lifecycle: { allowBookingsAfterExpiry: false },
+    lifecycle: {
+      activationMode: "FIRST_USE_OR_FIXED_DATE",
+      activationWindowDays: 0,
+      fixedActivationAt: "2026-09-30T21:00:00.000Z",
+      fixedActivationTimeZone: "Europe/Moscow",
+      validityDays: 365,
+      allowBookingsAfterExpiry: false,
+    },
     usage: {
       weeklyUsageLimit: null,
       monthlyUsageLimit: null,
@@ -622,6 +629,96 @@ test("published managed policy is evaluated before Mongo and persists its audit 
   assert.equal(routed[1]._subscriptionBooking.managedDecision.subscriptionInstanceId,
     "subscription-instance-1");
   assert.equal(routed[1]._subscriptionBooking.managedDecision.benefit.kind, "FREE_ENTITLEMENT");
+});
+
+test("HUB accepts the exact first-use deadline lifecycle with an all-stations policy", () => {
+  const runtime = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse({
+      allStations: true,
+      subscriptionTypeId: "subscription-type:hub",
+    }),
+    _subscriptionBooking: baseContext("managed_runtime_context", {
+      serviceDate: "2026-08-21",
+      category: "open_game",
+      planKey: "network_friendship",
+      managedAction: "JOIN_GAME",
+      managedTarget: {
+        resolutionSource: "SERVER", stationId: "studio-1", category: "GAME",
+        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        durationMinutes: 120, startsAt: "2026-08-21T15:00:00.000Z",
+        basePriceMinor: null, currency: "RUB",
+      },
+    }),
+  }, MANAGED_GLOBALS);
+
+  assert.equal(runtime[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(runtime[0]._subscriptionBooking.managedRuntime.policy.lifecycle.activationMode,
+    "FIRST_USE_OR_FIXED_DATE");
+});
+
+test("regional policy requires the exact first-use deadline lifecycle before any booking read", () => {
+  const variants = [
+    {},
+    {
+      activationMode: "FIRST_USE",
+      activationWindowDays: 0,
+      fixedActivationAt: "2026-09-30T21:00:00.000Z",
+      fixedActivationTimeZone: "Europe/Moscow",
+      validityDays: 365,
+      allowBookingsAfterExpiry: false,
+    },
+    {
+      activationMode: "FIRST_USE_OR_FIXED_DATE",
+      activationWindowDays: 0,
+      fixedActivationAt: "2026-10-01T00:00:00.000Z",
+      fixedActivationTimeZone: "Europe/Moscow",
+      validityDays: 365,
+      allowBookingsAfterExpiry: false,
+    },
+    {
+      activationMode: "FIRST_USE_OR_FIXED_DATE",
+      activationWindowDays: "0",
+      fixedActivationAt: "2026-09-30T21:00:00.000Z",
+      fixedActivationTimeZone: "Europe/Moscow",
+      validityDays: "365",
+      allowBookingsAfterExpiry: false,
+    },
+    {
+      activationMode: "FIRST_USE_OR_FIXED_DATE",
+      activationWindowDays: false,
+      fixedActivationAt: "2026-09-30T21:00:00.000Z",
+      fixedActivationTimeZone: "Europe/Moscow",
+      validityDays: 365,
+      allowBookingsAfterExpiry: false,
+    },
+  ];
+
+  for (const lifecycle of variants) {
+    const runtime = runFunction(ROUTER_FILE, {
+      statusCode: 200,
+      payload: managedRuntimeResponse({ policy: { lifecycle } }),
+      _subscriptionBooking: baseContext("managed_runtime_context", {
+        serviceDate: "2026-08-21",
+        category: "open_game",
+        planKey: "piter_friendship",
+        managedAction: "CREATE_GAME",
+        managedTarget: {
+          resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
+          externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+          durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
+          basePriceMinor: null, currency: "RUB",
+        },
+      }),
+    }, MANAGED_GLOBALS);
+
+    assert.equal(runtime[4].statusCode, 409);
+    assert.equal(runtime[4].payload.details.code, "MANAGED_SUBSCRIPTION_POLICY_UNSUPPORTED");
+    assert.equal(runtime[0], null);
+    assert.equal(runtime[1], null);
+    assert.equal(runtime[2], null);
+    assert.equal(runtime[3], null);
+  }
 });
 
 test("Piter rejects an all-stations policy and regional tournament discounts stay closed", () => {

@@ -606,6 +606,30 @@ test("freeze, expiry, no-show block and blackout date are separate blockers", ()
   assert.ok(codes.includes("SUBSCRIPTION_BLACKOUT_DATE"));
 });
 
+test("pending first-use subscription stays fail closed until CUP supplies activation dates", () => {
+  const input = baseInput({
+    policy: basePolicy({
+      lifecycle: {
+        activationMode: "FIRST_USE_OR_FIXED_DATE",
+        activationWindowDays: 0,
+        fixedActivationAt: "2026-09-30T21:00:00.000Z",
+        fixedActivationTimeZone: "Europe/Moscow",
+        validityDays: 365,
+        allowBookingsAfterExpiry: false,
+      },
+    }),
+    instance: {
+      ...baseInput().instance,
+      state: "PENDING_ACTIVATION",
+      activeFrom: null,
+      activeTo: null,
+    },
+  });
+  const codes = blockerCodes(input);
+  assert.ok(codes.includes("SUBSCRIPTION_VALIDITY_INVALID"));
+  assert.ok(codes.includes("SUBSCRIPTION_NOT_ACTIVE"));
+});
+
 test("weekly, monthly, future-booking and minimum-interval limits are enforced independently", () => {
   const input = baseInput({
     policy: basePolicy({

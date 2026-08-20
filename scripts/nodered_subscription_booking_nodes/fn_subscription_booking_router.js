@@ -6,6 +6,10 @@ const PREPARED_LEASE_MS = 2 * 60 * 1000;
 // Viva normally confirms in seconds; keep the dedupe window short, then reconcile safely.
 const PENDING_CONFIRMATION_MS = 15 * 60 * 1000;
 const PITER_STATION_ID = "1ea77cbf-bc36-49a1-96d6-f35c216a409b";
+const REGIONAL_ACTIVATION_MODE = "FIRST_USE_OR_FIXED_DATE";
+const REGIONAL_ACTIVATION_FALLBACK_AT = "2026-09-30T21:00:00.000Z";
+const REGIONAL_ACTIVATION_TIME_ZONE = "Europe/Moscow";
+const REGIONAL_VALIDITY_DAYS = 365;
 
 const OUTPUT_HTTP = 0;
 const OUTPUT_MONGO_FIND = 1;
@@ -1044,12 +1048,21 @@ if (ctx.step === "managed_runtime_context") {
       && enabledStationRules.length > 0 && enabledStationRules.every((rule) => (
         rule.selector?.kind === "ALL_STATIONS" && rule.surcharge?.kind === "NONE"
       ));
+  const regionalLifecycleSupported = policy.lifecycle?.activationMode === REGIONAL_ACTIVATION_MODE
+    && Number.isInteger(policy.lifecycle?.activationWindowDays)
+    && policy.lifecycle.activationWindowDays === 0
+    && toStr(policy.lifecycle?.fixedActivationAt) === REGIONAL_ACTIVATION_FALLBACK_AT
+    && policy.lifecycle?.fixedActivationTimeZone === REGIONAL_ACTIVATION_TIME_ZONE
+    && Number.isInteger(policy.lifecycle?.validityDays)
+    && policy.lifecycle.validityDays === REGIONAL_VALIDITY_DAYS
+    && policy.lifecycle?.allowBookingsAfterExpiry === false;
   const regionalRulesUnsupported = policy.createGame?.enabled !== true
     || createDurations.length !== 1 || createDurations[0] !== 60
     || policy.joinGame?.enabled !== true
     || Number(policy.joinGame?.minDurationMinutes) !== 60
     || Number(policy.joinGame?.maxDurationMinutes) !== 120
     || !stationPolicySupported
+    || !regionalLifecycleSupported
     || (Array.isArray(policy.benefitRules) && policy.benefitRules.some((rule) => (
       rule?.enabled === true && ["GROUP_TRAINING", "TOURNAMENT", "ADD_ON_PRODUCT"].includes(rule.category)
     )));

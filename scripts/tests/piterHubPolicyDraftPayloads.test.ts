@@ -58,6 +58,19 @@ const artifact = JSON.parse(fs.readFileSync(
   status: string;
   mutationAllowed: boolean;
   cupContract: { gitSha: string; requiredPermission: string };
+  candidateContract: {
+    branch: string;
+    baseGitSha: string;
+    candidateGitSha: string;
+    released: boolean;
+    activationPayload: {
+      activationMode: string;
+      activationWindowDays: number;
+      fixedActivationAt: string;
+      fixedActivationTimeZone: string;
+      validityDays: number;
+    };
+  };
   executionBoundary: Record<string, boolean | null>;
   requestedActivationRule: {
     appliesToStorefronts: string[];
@@ -89,12 +102,12 @@ test("Piter and HUB artifacts contain DRAFT-only CUP requests and no publication
   assert.equal(artifact.executionBoundary.publishRequest, null);
   assert.deepEqual([...byStorefront.keys()].sort(), ["network_friendship", "piter_friendship"]);
   assert.ok(artifact.commonPublicationBlockers.includes("CUP_PUBLISH_COMMAND_NOT_IMPLEMENTED"));
-  assert.ok(artifact.commonPublicationBlockers.includes("NODE_RED_RUNTIME_BINDING_NOT_CONFIGURED"));
+  assert.ok(artifact.commonPublicationBlockers.includes("NODE_RED_RUNTIME_BINDING_NOT_RELEASED"));
   assert.ok(artifact.commonPublicationBlockers.includes("CUP_CAPABILITIES_DEFAULTS_NOT_BUSINESS_APPROVED"));
   assert.ok(artifact.commonPublicationBlockers.includes("EXISTING_SALES_INSTANCE_IMPORT_NOT_APPROVED"));
   assert.ok(artifact.commonPublicationBlockers.includes("CREATE_90_120_ADD_ON_NOT_CONFIGURED"));
   assert.ok(artifact.commonPublicationBlockers.includes(
-    "FIRST_USE_WITH_FIXED_DEADLINE_NOT_SUPPORTED_BY_CUP_CONTRACT",
+    "CUP_HYBRID_ACTIVATION_CONTRACT_NOT_RELEASED",
   ));
   assert.ok(artifact.commonPublicationBlockers.includes(
     "VIVA_AUTO_ACTIVATION_WRITE_READBACK_NOT_VERIFIED",
@@ -112,8 +125,22 @@ test("requested activation is first confirmed booking with a fixed 1 October fal
     timeZone: "Europe/Moscow",
     validityStartsAt: "EARLIER_OF_FIRST_CONFIRMED_BOOKING_AND_AUTOMATIC_ACTIVATION_AT",
     validityDays: 365,
-    contractRepresentation: "UNSUPPORTED_BY_PINNED_CUP_CONTRACT",
+    contractRepresentation: "SUPPORTED_BY_UNRELEASED_CUP_CANDIDATE",
     providerReadBackRequired: true,
+  });
+
+  assert.deepEqual(artifact.candidateContract, {
+    branch: "codex/subscription-first-use-deadline-20260820",
+    baseGitSha: "c4e295fb59177a38de7c908aa05a2535e229033f",
+    candidateGitSha: "6adc6c8c64b403d12e1983020a3c23575ced6145",
+    released: false,
+    activationPayload: {
+      activationMode: "FIRST_USE_OR_FIXED_DATE",
+      activationWindowDays: 0,
+      fixedActivationAt: "2026-09-30T21:00:00.000Z",
+      fixedActivationTimeZone: "Europe/Moscow",
+      validityDays: 365,
+    },
   });
 
   for (const draft of artifact.drafts) {
@@ -123,7 +150,8 @@ test("requested activation is first confirmed booking with a fixed 1 October fal
     note.includes("effectiveAt") && note.includes("not the activation date")
   )));
   assert.ok(artifact.normalizationNotes.some((note) => note.includes("mutually exclusive modes")));
-  assert.ok(artifact.normalizationNotes.some((note) => note.includes("outside policyVersionRequest.body")));
+  assert.ok(artifact.normalizationNotes.some((note) => note.includes("unreleased")));
+  assert.ok(artifact.normalizationNotes.some((note) => note.includes("capabilities remain outside")));
 });
 
 test("both request bodies match the supported first runtime policy invariant", () => {

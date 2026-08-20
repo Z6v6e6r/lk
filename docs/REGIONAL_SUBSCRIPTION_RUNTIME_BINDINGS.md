@@ -21,11 +21,11 @@ DRAFT-артефакт ничего не включает. После read-only 
 Проверенное бизнес-требование для Питера и ХАБ: экземпляр подписки начинает
 365-дневный срок при первой подтверждённой записи по подписке; если такой записи
 нет, он автоматически активируется `2026-10-01T00:00:00+03:00`. Это не
-`effectiveAt` общей policy version. Текущий pinned-контракт ЦУП предлагает
-взаимоисключающие режимы `FIRST_USE` и `FIXED_DATE`, поэтому комбинация
-«первое использование, но не позднее фиксированной даты» сохранена в DRAFT как
-обязательное требование и остаётся publication blocker. Неподдерживаемое поле в
-`policyVersionRequest.body` намеренно не добавлено.
+`effectiveAt` общей policy version. Изолированный кандидат ЦУП добавляет режим
+`FIRST_USE_OR_FIXED_DATE`, `activationWindowDays=0`, фиксированную UTC-дату
+`2026-09-30T21:00:00.000Z`, зону `Europe/Moscow` и `validityDays=365`.
+Опубликованный контракт пока этого режима не содержит, а полный capabilities
+payload нельзя формировать до утверждения cancellation/commerce defaults.
 
 ## Проверенные станции Viva
 
@@ -86,7 +86,8 @@ summer_subscription_<counterKey>_inventory_id            # optional override
   `POST /api/internal/subscriptions/runtime-context`;
 - ЦУП возвращает только закреплённые за этим клиентом immutable
   `PUBLISHED` policy/instance; ЛК проверяет действие, длительность, станцию и
-  дневной лимит, затем сохраняет `policyVersion`, `policyDigest` и
+  точный lifecycle `FIRST_USE_OR_FIXED_DATE` с дедлайном 1 октября, дневной
+  лимит, затем сохраняет `policyVersion`, `policyDigest` и
   `subscriptionInstanceId` в атомарной операции;
 - Котельники отвечают `MANAGED_SUBSCRIPTION_PLAN_NOT_ACTIVATED` и не переходят
   к Viva mutation;
@@ -98,6 +99,12 @@ summer_subscription_<counterKey>_inventory_id            # optional override
 нужно создать проверенные provider mappings/instances из Viva read-back,
 опубликовать immutable policies Питера и ХАБ и включить runtime feature flags.
 До этого `usageEnabled=false` и запросы завершаются fail closed.
+
+Этот срез не выполняет переход `PENDING_ACTIVATION -> ACTIVE`. Первая запись
+может активировать экземпляр только после подтверждённого read-back Viva и
+идемпотентного CAS-перехода в ЦУП; автоматическая активация 1 октября требует
+отдельного фонового обработчика. Пока обе части не реализованы, экземпляр без
+`activeFrom`/`activeTo` блокируется до Mongo/Viva mutation.
 
 Поддерживаемая первая версия policy ограничена безопасным счётчиком: одна
 единица на 60/90/120 минут, `dailyUsageLimit=1`, без weekly/monthly/future и

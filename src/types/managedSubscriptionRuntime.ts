@@ -82,6 +82,15 @@ export interface ManagedSubscriptionRuntimePolicy {
   stationAccessRules: ManagedSubscriptionStationAccessRule[];
   benefitRules: ManagedSubscriptionBenefitRule[];
   lifecycle: {
+    activationMode?:
+      | "PURCHASE"
+      | "FIRST_USE"
+      | "FIXED_DATE"
+      | "FIRST_USE_OR_FIXED_DATE";
+    activationWindowDays?: number;
+    fixedActivationAt?: string | null;
+    fixedActivationTimeZone?: "Europe/Moscow";
+    validityDays?: number;
     allowBookingsAfterExpiry: boolean;
   };
   usage: {
@@ -105,8 +114,8 @@ export interface ManagedSubscriptionRuntimeInstance {
     | "CANCELLED"
     | "REFUNDED"
     | "REVOKED";
-  activeFrom: string;
-  activeTo: string;
+  activeFrom: string | null;
+  activeTo: string | null;
   homeStationId: string;
   frozenUntil: string | null;
   noShowBlockedUntil: string | null;

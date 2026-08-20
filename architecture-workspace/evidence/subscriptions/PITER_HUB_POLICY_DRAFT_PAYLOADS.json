@@ -9,6 +9,19 @@
     "apiPrefix": "/api/v1/admin",
     "requiredPermission": "subscriptions:catalog:write"
   },
+  "candidateContract": {
+    "branch": "codex/subscription-first-use-deadline-20260820",
+    "baseGitSha": "c4e295fb59177a38de7c908aa05a2535e229033f",
+    "candidateGitSha": "6adc6c8c64b403d12e1983020a3c23575ced6145",
+    "released": false,
+    "activationPayload": {
+      "activationMode": "FIRST_USE_OR_FIXED_DATE",
+      "activationWindowDays": 0,
+      "fixedActivationAt": "2026-09-30T21:00:00.000Z",
+      "fixedActivationTimeZone": "Europe/Moscow",
+      "validityDays": 365
+    }
+  },
   "executionBoundary": {
     "createDraftTypes": false,
     "createDraftPolicyVersions": false,
@@ -26,19 +39,19 @@
     "timeZone": "Europe/Moscow",
     "validityStartsAt": "EARLIER_OF_FIRST_CONFIRMED_BOOKING_AND_AUTOMATIC_ACTIVATION_AT",
     "validityDays": 365,
-    "contractRepresentation": "UNSUPPORTED_BY_PINNED_CUP_CONTRACT",
+    "contractRepresentation": "SUPPORTED_BY_UNRELEASED_CUP_CANDIDATE",
     "providerReadBackRequired": true
   },
   "commonPublicationBlockers": [
     "EFFECTIVE_AT_REQUIRES_OPERATOR_RECONFIRMATION",
     "VALIDITY_365_DAYS_REQUIRES_BUSINESS_CONFIRMATION",
-    "FIRST_USE_WITH_FIXED_DEADLINE_NOT_SUPPORTED_BY_CUP_CONTRACT",
+    "CUP_HYBRID_ACTIVATION_CONTRACT_NOT_RELEASED",
     "VIVA_AUTO_ACTIVATION_WRITE_READBACK_NOT_VERIFIED",
     "CUP_PUBLISH_COMMAND_NOT_IMPLEMENTED",
     "PROVIDER_MAPPING_PREVIEW_NOT_APPROVED",
     "PROVIDER_MAPPING_NOT_VERIFIED",
     "SUBSCRIPTION_INSTANCE_READBACK_NOT_AVAILABLE",
-    "NODE_RED_RUNTIME_BINDING_NOT_CONFIGURED",
+    "NODE_RED_RUNTIME_BINDING_NOT_RELEASED",
     "CUP_RUNTIME_FEATURE_FLAGS_NOT_VERIFIED",
     "CUP_CAPABILITIES_DEFAULTS_NOT_BUSINESS_APPROVED",
     "EXISTING_SALES_INSTANCE_IMPORT_NOT_APPROVED",
@@ -48,8 +61,8 @@
   ],
   "normalizationNotes": [
     "effectiveAt controls when the shared policy version becomes eligible; it is not the activation date of a customer SubscriptionInstance",
-    "the requested rule activates on the first confirmed subscription booking before 2026-10-01, otherwise automatically at 2026-10-01T00:00:00+03:00; the pinned CUP contract supports FIRST_USE and FIXED_DATE only as mutually exclusive modes",
-    "the unsupported combined activation rule is intentionally outside policyVersionRequest.body and must not be sent as an invented API field",
+    "the requested rule activates on the first confirmed subscription booking before 2026-10-01, otherwise automatically at 2026-10-01T00:00:00+03:00; the released pinned CUP contract supports FIRST_USE and FIXED_DATE only as mutually exclusive modes",
+    "the isolated CUP candidate adds FIRST_USE_OR_FIXED_DATE, but it is unreleased; capabilities remain outside policyVersionRequest.body until the full cancellation and commerce defaults are business-approved",
     "bookingWindowDays=1 is the required legacy DTO value; bookingWindow.enabled=false and days=null are authoritative",
     "maxActiveServices=0 is the required legacy DTO value; activeServicesLimit.enabled=false and max=null are authoritative",
     "capabilities is intentionally omitted; ph-ab c4e295f injects defaults, so publication stays blocked until lifecycle, cancellation and commerce defaults are approved",
