@@ -86,6 +86,9 @@ const REGIONAL_FRIENDSHIP_CONFIGS = {
     tierPricesMinor: [1980000, 2380000, 3680000, 5680000],
     productName: "Падел.Дружба.Котельники",
     bindingLabel: "Котельники",
+    launchEnabled: false,
+    providerProductId: null,
+    providerProductCostMinor: null,
   },
   network_friendship: {
     inventoryId: "network_friendship_12m_2026_v1",
@@ -93,6 +96,10 @@ const REGIONAL_FRIENDSHIP_CONFIGS = {
     tierPricesMinor: [5680000],
     productName: "Падел.Дружба.ХАБ",
     bindingLabel: "ХАБ",
+    launchEnabled: true,
+    providerProductId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+    providerProductName: "Падел.Дружба.ХАБ — годовая",
+    providerProductCostMinor: 5680000,
   },
   piter_friendship: {
     inventoryId: "piter_friendship_12m_2026_v1",
@@ -100,6 +107,10 @@ const REGIONAL_FRIENDSHIP_CONFIGS = {
     tierPricesMinor: [1980000, 2380000, 3680000, 5680000],
     productName: "Падел.Дружба.Питер",
     bindingLabel: "Питер",
+    launchEnabled: true,
+    providerProductId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+    providerProductName: "Падел.Дружба.Питер — годовая",
+    providerProductCostMinor: 5680000,
   },
 };
 
@@ -385,15 +396,28 @@ const readSiriusFriendshipConfig = (friendshipPlan) => ({
 const readRegionalFriendshipConfig = (counterKey) => {
   const regional = REGIONAL_FRIENDSHIP_CONFIGS[counterKey];
   if (!regional) return null;
+  const providerProductId = regional.launchEnabled
+    ? readGlobalFirst([`summer_subscription_${counterKey}_product_id`]) || regional.providerProductId
+    : null;
+  const providerProductName = readGlobalFirst([`summer_subscription_${counterKey}_product_name`])
+    || regional.providerProductName
+    || regional.productName;
+  const providerProductCostMinor = toMoneyMinor(
+    global.get(`summer_subscription_${counterKey}_product_cost_minor`),
+    regional.providerProductCostMinor,
+  );
   const tiers = regional.tierPricesMinor.map((priceMinor, index) => {
     const tierNumber = index + 1;
     return {
       batchIndex: tierNumber,
       batchSize: regional.batchSize,
       priceMinor,
-      productId: readGlobalFirst([`summer_subscription_${counterKey}_tier_${tierNumber}_product_id`]),
+      productId: regional.launchEnabled
+        ? readGlobalFirst([`summer_subscription_${counterKey}_tier_${tierNumber}_product_id`]) || providerProductId
+        : null,
       productName: readGlobalFirst([`summer_subscription_${counterKey}_tier_${tierNumber}_product_name`])
-        || `${regional.productName} — партия ${tierNumber}`,
+        || providerProductName,
+      providerProductCostMinor,
     };
   });
   return {
@@ -405,7 +429,7 @@ const readRegionalFriendshipConfig = (counterKey) => {
     campaignKey: null,
     productId: null,
     productName: tiers[0].productName,
-    productCostMinor: tiers[0].priceMinor,
+    productCostMinor: providerProductCostMinor,
     manualPaidCount: 0,
     totalLimit: regional.batchSize * tiers.length,
     batchSize: regional.batchSize,
@@ -507,6 +531,8 @@ const createCounterState = (counter) => {
     batchCount: Array.isArray(counter?.tiers) ? counter.tiers.length : 0,
     batchRemainingCount: 0,
     _tiers: Array.isArray(counter?.tiers) ? counter.tiers : [],
+    providerProductCostMinor: null,
+    discountMinor: null,
     priceMinor,
     price: priceMinor == null ? null : priceMinor / 100,
     updatedAt: null,
@@ -727,8 +753,20 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
       state.priceMinor = Number.isFinite(Number(activeTier?.priceMinor))
         ? Math.max(0, Math.round(Number(activeTier.priceMinor)))
         : null;
+      state.providerProductCostMinor = Number.isFinite(Number(activeTier?.providerProductCostMinor))
+        ? Math.max(0, Math.round(Number(activeTier.providerProductCostMinor)))
+        : null;
+      state.discountMinor = state.priceMinor != null && state.providerProductCostMinor != null
+        ? state.providerProductCostMinor - state.priceMinor
+        : null;
       state.price = state.priceMinor == null ? null : state.priceMinor / 100;
-      state.bindingReady = Boolean(state.productId && state.priceMinor != null);
+      state.bindingReady = Boolean(
+        state.productId
+        && state.priceMinor != null
+        && state.providerProductCostMinor != null
+        && state.discountMinor != null
+        && state.discountMinor >= 0
+      );
       state.bindingError = state.bindingReady
         ? null
         : `Текущая ценовая партия ${regional.bindingLabel} ещё не подключена к оплате`;
@@ -804,6 +842,12 @@ msg.payload = {
   batchIndex: toInt(selectedCounter.batchIndex, 0),
   batchCount: toInt(selectedCounter.batchCount, 0),
   batchRemainingCount: toInt(selectedCounter.batchRemainingCount, 0),
+  providerProductCostMinor: Number.isFinite(Number(selectedCounter.providerProductCostMinor))
+    ? Math.max(0, Math.round(Number(selectedCounter.providerProductCostMinor)))
+    : null,
+  discountMinor: Number.isFinite(Number(selectedCounter.discountMinor))
+    ? Math.max(0, Math.round(Number(selectedCounter.discountMinor)))
+    : null,
   releasePhase: toStr(selectedCounter.releasePhase),
   dailyDropActive: selectedCounter.dailyDropActive === true,
   releaseStartDate: toStr(selectedCounter.releaseStartDate),

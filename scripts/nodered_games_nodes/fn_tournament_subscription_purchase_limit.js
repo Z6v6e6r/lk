@@ -276,11 +276,26 @@ if (regionalBindingLabel) {
   ctx.batchRemainingBefore = remainingCount <= 0 ? 0 : Math.max(0, batchSize - takenInBatch);
   ctx.productId = toStr(activeTier?.productId);
   ctx.productName = toStr(activeTier?.productName);
-  ctx.productCostMinor = Number.isFinite(Number(activeTier?.priceMinor))
+  ctx.priceMinor = Number.isFinite(Number(activeTier?.priceMinor))
     ? Math.max(0, Math.round(Number(activeTier.priceMinor)))
     : null;
+  ctx.productCostMinor = Number.isFinite(Number(activeTier?.providerProductCostMinor))
+    ? Math.max(0, Math.round(Number(activeTier.providerProductCostMinor)))
+    : null;
+  ctx.discountMinor = ctx.priceMinor != null && ctx.productCostMinor != null
+    ? ctx.productCostMinor - ctx.priceMinor
+    : null;
 
-  if (remainingCount > 0 && (!ctx.productId || ctx.productCostMinor == null)) {
+  if (
+    remainingCount > 0
+    && (
+      !ctx.productId
+      || ctx.priceMinor == null
+      || ctx.productCostMinor == null
+      || ctx.discountMinor == null
+      || ctx.discountMinor < 0
+    )
+  ) {
     return failMsg(503, `Текущая ценовая партия ${regionalBindingLabel} ещё не подключена к оплате`, {
       counterKey: regionalCounterKey,
       batchIndex,
@@ -348,6 +363,9 @@ const debugMsg = Object.assign({}, msg, {
     batchIndex: Math.max(0, Math.floor(Number(ctx.batchIndex) || 0)),
     batchSize: Math.max(0, Math.floor(Number(ctx.batchSize) || 0)),
     batchRemainingBefore: Math.max(0, Math.floor(Number(ctx.batchRemainingBefore) || 0)),
+    priceMinor: Number.isFinite(Number(ctx.priceMinor)) ? Math.round(Number(ctx.priceMinor)) : null,
+    productCostMinor: Number.isFinite(Number(ctx.productCostMinor)) ? Math.round(Number(ctx.productCostMinor)) : null,
+    discountMinor: Number.isFinite(Number(ctx.discountMinor)) ? Math.round(Number(ctx.discountMinor)) : null,
     releasePhase,
     dailyDropActive,
     launchPaidCount,

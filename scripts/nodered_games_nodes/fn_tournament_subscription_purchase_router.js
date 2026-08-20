@@ -226,6 +226,7 @@ const pickTargetProduct = (products, ctx) => {
   if (configuredId) {
     const byId = products.find((item) => item.id === configuredId);
     if (byId) return byId;
+    if (ctx.saleType === "tiered_direct_product") return null;
     const configuredProduct = buildConfiguredProduct(ctx);
     if (configuredProduct) return configuredProduct;
   }
@@ -394,10 +395,41 @@ if (ctx.step === "load_products") {
     });
   }
 
+  const configuredProductCostMinor = Number.isFinite(Number(ctx.productCostMinor))
+    ? Math.max(0, Math.round(Number(ctx.productCostMinor)))
+    : null;
+  const configuredPriceMinor = Number.isFinite(Number(ctx.priceMinor))
+    ? Math.max(0, Math.round(Number(ctx.priceMinor)))
+    : null;
+  const isTieredDirectProduct = ctx.saleType === "tiered_direct_product";
+  if (
+    isTieredDirectProduct
+    && (
+      configuredProductCostMinor == null
+      || configuredPriceMinor == null
+      || targetProduct.costMinor !== configuredProductCostMinor
+      || configuredPriceMinor > targetProduct.costMinor
+    )
+  ) {
+    return fail(503, "Цена Viva-продукта не соответствует ценовой партии", {
+      counterKey: toStr(ctx.counterKey),
+      batchIndex: Math.max(0, Math.floor(Number(ctx.batchIndex) || 0)),
+      productId: targetProduct.id,
+      expectedProductCostMinor: configuredProductCostMinor,
+      actualProductCostMinor: targetProduct.costMinor,
+      priceMinor: configuredPriceMinor,
+    });
+  }
+
+  const priceMinor = isTieredDirectProduct ? configuredPriceMinor : targetProduct.costMinor;
+  const discountMinor = isTieredDirectProduct ? targetProduct.costMinor - priceMinor : 0;
   ctx.productId = targetProduct.id;
   ctx.productName = targetProduct.name;
   ctx.productType = targetProduct.type;
-  ctx.productCostMinor = targetProduct.costMinor;
+  ctx.providerProductCostMinor = targetProduct.costMinor;
+  ctx.productCostMinor = priceMinor;
+  ctx.priceMinor = priceMinor;
+  ctx.discountMinor = discountMinor;
 
   const transactionPayload = {
     clientPhone: ctx.clientPhone.startsWith("+") ? ctx.clientPhone : `+${ctx.clientPhone}`,
@@ -408,7 +440,7 @@ if (ctx.step === "load_products") {
         count: 1,
         customAmount: null,
         type: targetProduct.type,
-        discount: 0,
+        discount: discountMinor,
       },
     ],
     offlineTillId: null,
@@ -458,6 +490,19 @@ if (ctx.step === "create_transaction") {
   const transactionId = pickId(msg.payload);
   const paymentUrl = extractPaymentUrl(msg.payload);
   const toPayMinor = Math.max(0, Math.round(toNum(msg.payload?.toPay) ?? 0));
+  if (
+    ctx.saleType === "tiered_direct_product"
+    && toPayMinor !== Math.max(0, Math.round(Number(ctx.priceMinor) || 0))
+  ) {
+    return fail(502, "Viva вернула неверную сумму к оплате", {
+      counterKey: toStr(ctx.counterKey),
+      batchIndex: Math.max(0, Math.floor(Number(ctx.batchIndex) || 0)),
+      productId: toStr(ctx.productId),
+      expectedToPayMinor: Math.max(0, Math.round(Number(ctx.priceMinor) || 0)),
+      actualToPayMinor: toPayMinor,
+      transactionId: pickId(msg.payload),
+    });
+  }
   if (!paymentUrl && toPayMinor > 0) {
     return fail(502, "Viva transaction has no paymentUrl", {
       transactionId,
@@ -491,6 +536,8 @@ if (ctx.step === "create_transaction") {
     productName: ctx.productName,
     productType: ctx.productType || "SUBSCRIPTION",
     amountMinor: Math.max(0, Math.round(Number(ctx.productCostMinor) || 0)),
+    providerProductCostMinor: Math.max(0, Math.round(Number(ctx.providerProductCostMinor) || 0)),
+    discountMinor: Math.max(0, Math.round(Number(ctx.discountMinor) || 0)),
     toPayMinor,
     status: "PAYMENT_PENDING",
     paymentUrl,
@@ -534,6 +581,8 @@ if (ctx.step === "create_transaction") {
       paymentExpiresAt: expiresAt,
       productId: ctx.productId,
       productName: ctx.productName,
+      priceMinor: Math.max(0, Math.round(Number(ctx.priceMinor) || 0)),
+      discountMinor: Math.max(0, Math.round(Number(ctx.discountMinor) || 0)),
       toPayMinor,
       toPay: toPayMinor / 100,
       remainingBefore: Math.max(0, Math.floor(Number(ctx.remainingBefore) || 0)),

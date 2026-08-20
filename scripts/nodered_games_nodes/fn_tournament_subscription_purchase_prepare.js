@@ -87,18 +87,29 @@ const REGIONAL_FRIENDSHIP_CONFIGS = {
     batchSize: 50,
     tierPricesMinor: [1980000, 2380000, 3680000, 5680000],
     productName: "Падел.Дружба.Котельники",
+    launchEnabled: false,
+    providerProductId: null,
+    providerProductCostMinor: null,
   },
   network_friendship: {
     inventoryId: "network_friendship_12m_2026_v1",
     batchSize: 50,
     tierPricesMinor: [5680000],
     productName: "Падел.Дружба.ХАБ",
+    launchEnabled: true,
+    providerProductId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+    providerProductName: "Падел.Дружба.ХАБ — годовая",
+    providerProductCostMinor: 5680000,
   },
   piter_friendship: {
     inventoryId: "piter_friendship_12m_2026_v1",
     batchSize: 100,
     tierPricesMinor: [1980000, 2380000, 3680000, 5680000],
     productName: "Падел.Дружба.Питер",
+    launchEnabled: true,
+    providerProductId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+    providerProductName: "Падел.Дружба.Питер — годовая",
+    providerProductCostMinor: 5680000,
   },
 };
 const REGIONAL_FRIENDSHIP_COUNTER_KEYS = new Set(Object.keys(REGIONAL_FRIENDSHIP_CONFIGS));
@@ -363,15 +374,28 @@ const readSiriusFriendshipConfig = (friendshipPlan) => ({
 const readRegionalFriendshipConfig = (counterKey) => {
   const regional = REGIONAL_FRIENDSHIP_CONFIGS[counterKey];
   if (!regional) return null;
+  const providerProductId = regional.launchEnabled
+    ? readGlobalFirst([`summer_subscription_${counterKey}_product_id`]) || regional.providerProductId
+    : null;
+  const providerProductName = readGlobalFirst([`summer_subscription_${counterKey}_product_name`])
+    || regional.providerProductName
+    || regional.productName;
+  const providerProductCostMinor = toMoneyMinor(
+    global.get(`summer_subscription_${counterKey}_product_cost_minor`),
+    regional.providerProductCostMinor,
+  );
   const tiers = regional.tierPricesMinor.map((priceMinor, index) => {
     const tierNumber = index + 1;
     return {
       batchIndex: tierNumber,
       batchSize: regional.batchSize,
       priceMinor,
-      productId: readGlobalFirst([`summer_subscription_${counterKey}_tier_${tierNumber}_product_id`]),
+      productId: regional.launchEnabled
+        ? readGlobalFirst([`summer_subscription_${counterKey}_tier_${tierNumber}_product_id`]) || providerProductId
+        : null,
       productName: readGlobalFirst([`summer_subscription_${counterKey}_tier_${tierNumber}_product_name`])
-        || `${regional.productName} — партия ${tierNumber}`,
+        || providerProductName,
+      providerProductCostMinor,
     };
   });
   return {
@@ -383,7 +407,7 @@ const readRegionalFriendshipConfig = (counterKey) => {
     campaignKey: null,
     productId: null,
     productName: tiers[0].productName,
-    productCostMinor: tiers[0].priceMinor,
+    productCostMinor: providerProductCostMinor,
     manualPaidCount: 0,
     totalLimit: regional.batchSize * tiers.length,
     batchSize: regional.batchSize,

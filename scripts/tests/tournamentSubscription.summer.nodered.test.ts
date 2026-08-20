@@ -1603,13 +1603,13 @@ test("summer subscription counter refresh builds materialized counter updates", 
   assert.equal(networkSet.totalLimit, 50);
   assert.equal(networkSet.batchSize, 50);
   assert.equal(networkSet.remainingCount, 50);
-  assert.equal(networkSet.bindingReady, false);
-  assert.equal(networkSet.canPurchase, false);
+  assert.equal(networkSet.bindingReady, true);
+  assert.equal(networkSet.canPurchase, true);
   assert.equal(piterSet.totalLimit, 400);
   assert.equal(piterSet.batchSize, 100);
   assert.equal(piterSet.remainingCount, 400);
-  assert.equal(piterSet.bindingReady, false);
-  assert.equal(piterSet.canPurchase, false);
+  assert.equal(piterSet.bindingReady, true);
+  assert.equal(piterSet.canPurchase, true);
 });
 
 test("summer subscription materialized counters ignore legacy manual paid baselines", () => {
@@ -1837,17 +1837,14 @@ test("summer subscription confirm lookup does not treat UNPAID Viva transactions
 });
 
 const PITER_PRODUCT_GLOBALS = {
-  summer_subscription_piter_friendship_tier_1_product_id: "piter-product-tier-1",
-  summer_subscription_piter_friendship_tier_2_product_id: "piter-product-tier-2",
-  summer_subscription_piter_friendship_tier_3_product_id: "piter-product-tier-3",
-  summer_subscription_piter_friendship_tier_4_product_id: "piter-product-tier-4",
+  summer_subscription_piter_friendship_product_id: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
 };
 
 function buildPiterRows(count: number) {
-  return Array.from({ length: count }, (_, index) => ({
+  return Array.from({ length: count }, () => ({
     inventoryId: "piter_friendship_12m_2026_v1",
     counterKey: "piter_friendship",
-    productId: `piter-product-tier-${Math.floor(index / 100) + 1}`,
+    productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
     status: "PAID",
   }));
 }
@@ -1879,7 +1876,9 @@ test("Piter status uses a dedicated 400-unit inventory and server-side batches o
   assert.equal(firstPayload.batchIndex, 1);
   assert.equal(firstPayload.batchRemainingCount, 1);
   assert.equal(firstPayload.priceMinor, 1980000);
-  assert.equal(firstPayload.productId, "piter-product-tier-1");
+  assert.equal(firstPayload.productId, "8bf334ba-3050-4017-b40a-7eef2db1eb16");
+  assert.equal(firstPayload.providerProductCostMinor, 5680000);
+  assert.equal(firstPayload.discountMinor, 3700000);
   assert.equal(firstPayload.bindingReady, true);
   assert.equal(firstPayload.canPurchase, true);
 
@@ -1892,7 +1891,8 @@ test("Piter status uses a dedicated 400-unit inventory and server-side batches o
   assert.equal(secondPayload.batchIndex, 2);
   assert.equal(secondPayload.batchRemainingCount, 100);
   assert.equal(secondPayload.priceMinor, 2380000);
-  assert.equal(secondPayload.productId, "piter-product-tier-2");
+  assert.equal(secondPayload.productId, "8bf334ba-3050-4017-b40a-7eef2db1eb16");
+  assert.equal(secondPayload.discountMinor, 3300000);
 });
 
 test("Piter purchase ignores a browser productId and selects the current server tier", () => {
@@ -1921,66 +1921,112 @@ test("Piter purchase ignores a browser productId and selects the current server 
   const selectedCtx = asRecord(asRecord(limited[0])._summerSubscriptionCtx);
   assert.equal(selectedCtx.batchIndex, 2);
   assert.equal(selectedCtx.batchRemainingBefore, 100);
-  assert.equal(selectedCtx.productId, "piter-product-tier-2");
-  assert.equal(selectedCtx.productCostMinor, 2380000);
+  assert.equal(selectedCtx.productId, "8bf334ba-3050-4017-b40a-7eef2db1eb16");
+  assert.equal(selectedCtx.productCostMinor, 5680000);
+  assert.equal(selectedCtx.priceMinor, 2380000);
+  assert.equal(selectedCtx.discountMinor, 3300000);
 });
 
-test("Piter storefront fails closed when the active server tier has no provider product", () => {
-  const globalsWithoutTierTwo = {
-    ...PITER_PRODUCT_GLOBALS,
-    summer_subscription_piter_friendship_tier_2_product_id: "",
-  };
+test("Piter transaction uses the active tier discount and persists the advertised amount", () => {
   const prepared = runNodeRedFunction(
-    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
-    { req: { query: { counterKey: "piter_friendship" } } },
-    globalsWithoutTierTwo,
-  ) as unknown[];
-  const ctx = asRecord(asRecord(prepared[0])._summerSubscriptionCtx);
-  const status = runNodeRedFunction(
-    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
-    { _summerSubscriptionCtx: ctx, payload: buildPiterRows(100) },
-    globalsWithoutTierTwo,
-  ) as unknown[];
-  const statusPayload = asRecord(asRecord(status[0]).payload);
-  assert.equal(statusPayload.batchIndex, 2);
-  assert.equal(statusPayload.bindingReady, false);
-  assert.equal(statusPayload.canPurchase, false);
-  assert.match(String(statusPayload.bindingError), /не подключена к оплате/i);
-
-  const purchasePrepared = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
     {
       payload: {
         clientPhone: "79990000000",
         counterKey: "piter_friendship",
-        paymentRef: "piter-missing-tier-payment-ref",
+        productId: "forged-browser-product",
+        paymentRef: "piter-tier-two-transaction",
       },
       req: { query: {} },
     },
-    globalsWithoutTierTwo,
+    PITER_PRODUCT_GLOBALS,
   ) as unknown[];
-  const purchase = runNodeRedFunction(
+  const limited = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
     {
-      _summerSubscriptionCtx: asRecord(asRecord(purchasePrepared[0])._summerSubscriptionCtx),
+      _summerSubscriptionCtx: asRecord(asRecord(prepared[0])._summerSubscriptionCtx),
       payload: buildPiterRows(100),
     },
-    globalsWithoutTierTwo,
+    PITER_PRODUCT_GLOBALS,
   ) as unknown[];
-  const errorPayload = asRecord(asRecord(purchase[1]).payload);
-  assert.equal(purchase[0], null);
-  assert.equal(asRecord(purchase[1]).statusCode, 503);
-  assert.equal(asRecord(errorPayload.details).bindingReady, false);
+  const selectedCtx = asRecord(asRecord(limited[0])._summerSubscriptionCtx);
+  selectedCtx.step = "load_products";
+  selectedCtx.token = "token-1";
+
+  const routed = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: [{
+        id: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+        name: "Падел.Дружба.Питер — годовая",
+        cost: 5680000,
+        type: "SUBSCRIPTION",
+      }],
+      _summerSubscriptionCtx: selectedCtx,
+    },
+  ) as unknown[];
+  const transactionRequest = asRecord(routed[0]);
+  const transactionCtx = asRecord(transactionRequest._summerSubscriptionCtx);
+  const transactionProduct = asRecord((asRecord(transactionRequest.payload).products as unknown[])[0]);
+  assert.equal(transactionProduct.id, "8bf334ba-3050-4017-b40a-7eef2db1eb16");
+  assert.equal(transactionProduct.customAmount, null);
+  assert.equal(transactionProduct.discount, 3300000);
+  assert.equal(transactionCtx.priceMinor, 2380000);
+  assert.equal(transactionCtx.providerProductCostMinor, 5680000);
+
+  const persisted = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 201,
+      payload: {
+        id: "piter-tier-two-viva-transaction",
+        paymentUrl: "https://pay.example.test/piter-tier-two",
+        toPay: 2380000,
+      },
+      _summerSubscriptionCtx: transactionCtx,
+    },
+  ) as unknown[];
+  const dbSet = asRecord(asRecord(asRecord(persisted[1]).payload).$set);
+  const response = asRecord(asRecord(persisted[2]).payload);
+  assert.equal(dbSet.amountMinor, 2380000);
+  assert.equal(dbSet.providerProductCostMinor, 5680000);
+  assert.equal(dbSet.discountMinor, 3300000);
+  assert.equal(response.priceMinor, 2380000);
+  assert.equal(response.discountMinor, 3300000);
+  assert.equal(response.toPayMinor, 2380000);
 });
 
-const KOTELNIKI_PRODUCT_GLOBALS = {
-  summer_subscription_kotelniki_friendship_tier_1_product_id: "kotelniki-product-tier-1",
-  summer_subscription_kotelniki_friendship_tier_2_product_id: "kotelniki-product-tier-2",
-  summer_subscription_kotelniki_friendship_tier_3_product_id: "kotelniki-product-tier-3",
-  summer_subscription_kotelniki_friendship_tier_4_product_id: "kotelniki-product-tier-4",
-};
+test("Piter transaction fails closed when Viva returns a different amount", () => {
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 201,
+      payload: {
+        id: "piter-wrong-amount-transaction",
+        paymentUrl: "https://pay.example.test/piter-wrong-amount",
+        toPay: 5680000,
+      },
+      _summerSubscriptionCtx: {
+        action: "purchase",
+        step: "create_transaction",
+        saleType: "tiered_direct_product",
+        counterKey: "piter_friendship",
+        batchIndex: 2,
+        priceMinor: 2380000,
+        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+      },
+    },
+  ) as unknown[];
+  assert.equal(out[0], null);
+  assert.equal(out[1], null);
+  assert.equal(asRecord(out[2]).statusCode, 502);
+  assert.match(String(asRecord(asRecord(out[2]).payload).error), /неверную сумму/i);
+});
+
+const KOTELNIKI_PRODUCT_GLOBALS = {};
 const NETWORK_PRODUCT_GLOBALS = {
-  summer_subscription_network_friendship_tier_1_product_id: "network-product-tier-1",
+  summer_subscription_network_friendship_product_id: "db7a5250-7369-4f43-8ac5-9111be24bc74",
 };
 
 function buildRegionalRows(counterKey: string, inventoryId: string, batchSize: number, count: number) {
@@ -2026,9 +2072,9 @@ test("Kotelniki status uses four server-side batches of 50", () => {
   assert.equal(payload.batchIndex, 2);
   assert.equal(payload.batchRemainingCount, 50);
   assert.equal(payload.priceMinor, 2380000);
-  assert.equal(payload.productId, "kotelniki-product-tier-2");
-  assert.equal(payload.bindingReady, true);
-  assert.equal(payload.canPurchase, true);
+  assert.equal(payload.productId, null);
+  assert.equal(payload.bindingReady, false);
+  assert.equal(payload.canPurchase, false);
 });
 
 test("network status uses one server-side batch of 50 at 56 800 RUB", () => {
@@ -2057,7 +2103,9 @@ test("network status uses one server-side batch of 50 at 56 800 RUB", () => {
   assert.equal(payload.batchIndex, 1);
   assert.equal(payload.batchRemainingCount, 50);
   assert.equal(payload.priceMinor, 5680000);
-  assert.equal(payload.productId, "network-product-tier-1");
+  assert.equal(payload.productId, "db7a5250-7369-4f43-8ac5-9111be24bc74");
+  assert.equal(payload.providerProductCostMinor, 5680000);
+  assert.equal(payload.discountMinor, 0);
   assert.equal(payload.bindingReady, true);
   assert.equal(payload.canPurchase, true);
 });

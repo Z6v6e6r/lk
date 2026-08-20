@@ -172,6 +172,8 @@ const states = counters.map((counter) => {
     batchCount: Array.isArray(counter.tiers) ? counter.tiers.length : 0,
     batchRemainingCount: 0,
     _tiers: Array.isArray(counter.tiers) ? counter.tiers : [],
+    providerProductCostMinor: null,
+    discountMinor: null,
     priceMinor: Number.isFinite(Number(counter.productCostMinor)) ? Math.max(0, Math.round(Number(counter.productCostMinor))) : null,
     price: Number.isFinite(Number(counter.productCostMinor)) ? Math.round(Number(counter.productCostMinor)) / 100 : null,
     updatedAt: refreshedAt,
@@ -301,8 +303,20 @@ const updateMessages = states.map((state) => {
     state.priceMinor = Number.isFinite(Number(activeTier?.priceMinor))
       ? Math.max(0, Math.round(Number(activeTier.priceMinor)))
       : null;
+    state.providerProductCostMinor = Number.isFinite(Number(activeTier?.providerProductCostMinor))
+      ? Math.max(0, Math.round(Number(activeTier.providerProductCostMinor)))
+      : null;
+    state.discountMinor = state.priceMinor != null && state.providerProductCostMinor != null
+      ? state.providerProductCostMinor - state.priceMinor
+      : null;
     state.price = state.priceMinor == null ? null : state.priceMinor / 100;
-    state.bindingReady = Boolean(state.productId && state.priceMinor != null);
+    state.bindingReady = Boolean(
+      state.productId
+      && state.priceMinor != null
+      && state.providerProductCostMinor != null
+      && state.discountMinor != null
+      && state.discountMinor >= 0
+    );
     state.bindingError = state.bindingReady
       ? null
       : `Текущая ценовая партия ${regional.bindingLabel} ещё не подключена к оплате`;
