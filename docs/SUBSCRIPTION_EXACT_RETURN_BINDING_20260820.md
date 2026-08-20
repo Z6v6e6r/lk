@@ -85,11 +85,40 @@ whole-flow and function preimages, preserves routes and topology, and refuses
 source drift. The snapshot used during isolated verification is evidence only;
 its freshness must not be assumed at deployment time.
 
+After this checkpoint is integrated into a clean, pushed `main`, the reviewed
+candidate has one explicit production entrypoint:
+
+```bash
+NODE_RED_SUBSCRIPTION_BINDING_DEPLOY=CONFIRM_147 \
+  npm run nodered:subscription-binding:deploy-147
+```
+
+The command performs a new live pull, rebuilds the six-function candidate,
+constructs an exact function-only deployment contract, and stops on any source,
+node, route, wire or topology drift. The remote installer accepts only a
+root-owned private stage, verifies the same source/candidate digests again,
+creates byte-identical flow and contract backups, atomically replaces
+`flows.json`, and restarts the existing `node-red` PM2 process without changing
+its environment. A restart, digest or public games smoke failure triggers the
+exact reviewed rollback. This command is not a generic Node-RED importer and
+cannot add, remove or rewire nodes.
+
 ## Rollback
 
-Before import, preserve the byte-identical fresh live flow and the six original
-nodes. If authenticated smoke fails, restore that exact flow, restart the same
-Node-RED unit, and prove the prior flow digest plus health/read-only game smoke.
+The guarded entrypoint preserves the byte-identical fresh live flow and the
+deployment contract under
+`/root/.node-red/.padlhub-reviewed-flow-backups/`. If authenticated smoke fails
+after the public smoke, use the exact returned flow/contract backup pair for
+the explicit rollback action:
+
+```bash
+NODE_RED_SUBSCRIPTION_BINDING_ROLLBACK=CONFIRM_147 \
+  npm run nodered:subscription-binding:rollback-147 -- <backup-timestamp>
+```
+
+The rollback refuses any active digest other than the reviewed candidate and
+any backup digest other than its exact source. After rollback, prove the prior
+flow digest plus health/read-only game smoke.
 Rollback of code does not undo a Viva cancellation, so the first mutation
 canary must be a separately approved synthetic participant with recorded
 pre-state and a manual Viva reconciliation plan.

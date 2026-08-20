@@ -1342,3 +1342,18 @@
 - Added focused confirmation/projection/leave regressions and a guarded
   six-function Node-RED candidate builder. No live leave, Viva mutation,
   Node-RED import, merge, push or deployment was performed in this stage.
+
+## 2026-08-20 — Reviewed function-only Node-RED deploy boundary
+
+- Added a reusable remote installer for exact function-only candidates: the
+  reviewed contract pins source/candidate digests, node IDs, function hashes,
+  route count and the complete changed-node set while rejecting additions,
+  removals, rewiring and non-function changes.
+- Added the subscription-binding deploy entrypoint with a clean pushed-main
+  guard, fresh live pull, private staging, backup-first atomic publication,
+  unchanged PM2 environment, public games smoke and automatic rollback on any
+  failed restart/digest/smoke gate.
+- Covered contract drift, successful apply/explicit rollback, failed-restart
+  automatic rollback and wrapper safety with local fixtures. Production SSH was
+  unavailable during preparation; no flow import, restart, Viva/Mongo mutation,
+  push or deployment was performed.
