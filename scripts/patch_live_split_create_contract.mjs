@@ -16,7 +16,7 @@ const SOURCE_PATHS = Object.freeze({
 });
 
 export const LIVE_SPLIT_CREATE_CONTRACT = Object.freeze({
-  sourceFlowSha256: "89a2f1174febbc249be33ef566f641917fb3b06a8c38b5a4a4dbf96a55caf8ea",
+  sourceFlowSha256: "0067f0932fdc0539d624c9c8fcbba24f0da6467cdecc13a67d5af64c41db2932",
   targets: Object.freeze([
     Object.freeze({
       sourceKey: "create",
@@ -66,6 +66,28 @@ export const LIVE_SPLIT_CREATE_CONTRACT = Object.freeze({
       ]),
       liveFuncSha256: "3cfc57a3af5f8425bb4de72e4041c4b17398b5db50c304b9a1f23163cdd1eefb",
       candidateFuncSha256: "34ba99f50ca025095d464aadd47af0aa1352a1679482f032abc30846b5fa1c80",
+    }),
+  ]),
+  restorations: Object.freeze([
+    Object.freeze({
+      id: "ddc581fde0073e34",
+      name: "Find tournament history",
+      type: "mongodb4",
+      tabId: "f9575c8726e29196",
+      field: "limit",
+      candidateValue: "1",
+      liveNodeSha256: "10afa0786ef29f2a36cc8dcec2d0930cad091f25ade87da09bdf4c2ff59f237f",
+      candidateNodeSha256: "ecaa30747e454fbb0bec1d68003827b1af94cb8d8d5432d7308256d0257541ad",
+    }),
+    Object.freeze({
+      id: "tournament_community_history_feed_20260811",
+      name: "Find active tournament publications",
+      type: "mongodb4",
+      tabId: "f9575c8726e29196",
+      field: "limit",
+      candidateValue: "50",
+      liveNodeSha256: "cfdac4a1dbf9f00d52b8f6d7d259f4dfe22dd5494903e5dcb32c77e301c4353e",
+      candidateNodeSha256: "8ff1cee6d25f958f898da00af35c1fc1f9079e5dc7d3a9c12e466ce2da0f5a3a",
     }),
   ]),
 });
@@ -136,13 +158,31 @@ function assertTargetNode(node, contract) {
   }
 }
 
+function assertRestorationNode(node, contract) {
+  if (
+    node.type !== contract.type
+    || node.name !== contract.name
+    || node.z !== contract.tabId
+    || Object.hasOwn(node, contract.field)
+    || sha256Json(node) !== contract.liveNodeSha256
+  ) {
+    fail(`Restoration target node contract mismatch: ${contract.id}`);
+  }
+}
+
 export function applySplitCreateContract(
   inputFlow,
   candidateSources,
   contracts = LIVE_SPLIT_CREATE_CONTRACT.targets,
+  restorations,
 ) {
   if (!Array.isArray(inputFlow)) fail("Node-RED flow must be an array");
   const targetContracts = Array.isArray(contracts) ? contracts : [contracts];
+  const restorationContracts = restorations === undefined
+    ? (contracts === LIVE_SPLIT_CREATE_CONTRACT.targets
+      ? LIVE_SPLIT_CREATE_CONTRACT.restorations
+      : [])
+    : (Array.isArray(restorations) ? restorations : [restorations]);
   const sourceByKey = typeof candidateSources === "string"
     ? { [targetContracts[0]?.sourceKey || targetContracts[0]?.id]: candidateSources }
     : candidateSources;
@@ -177,6 +217,27 @@ export function applySplitCreateContract(
     };
   });
 
+  const restorationResults = restorationContracts.map((contract) => {
+    const matches = candidate.filter((node) => node.id === contract.id);
+    if (matches.length !== 1) {
+      fail(`Restoration target node must exist exactly once: ${contract.id}`);
+    }
+    assertRestorationNode(matches[0], contract);
+    matches[0][contract.field] = contract.candidateValue;
+    const candidateNodeSha256 = sha256Json(matches[0]);
+    if (candidateNodeSha256 !== contract.candidateNodeSha256) {
+      fail(`Restoration candidate node mismatch: ${contract.id}`);
+    }
+    return {
+      id: contract.id,
+      name: contract.name,
+      field: contract.field,
+      value: contract.candidateValue,
+      fromNodeSha256: contract.liveNodeSha256,
+      toNodeSha256: candidateNodeSha256,
+    };
+  });
+
   const changedNodes = candidate.flatMap((node, index) => {
     const previous = before[index];
     if (isDeepStrictEqual(node, previous)) return [];
@@ -185,12 +246,17 @@ export function applySplitCreateContract(
       .sort();
     return [{ id: node.id, changedFields }];
   });
-  const expectedChangedNodes = targetContracts.map((contract) => ({
-    id: contract.id,
-    changedFields: ["func"],
-  }));
+  const expectedFieldsById = new Map([
+    ...targetContracts.map((contract) => [contract.id, ["func"]]),
+    ...restorationContracts.map((contract) => [contract.id, [contract.field]]),
+  ]);
+  const expectedChangedNodes = candidate.flatMap((node) => (
+    expectedFieldsById.has(node.id)
+      ? [{ id: node.id, changedFields: expectedFieldsById.get(node.id) }]
+      : []
+  ));
   if (!isDeepStrictEqual(changedNodes, expectedChangedNodes)) {
-    fail("Candidate changed fields outside the reviewed split function bodies");
+    fail("Candidate changed fields outside the reviewed split and restoration contract");
   }
 
   const afterInvariants = snapshotInvariants(candidate);
@@ -208,6 +274,7 @@ export function applySplitCreateContract(
     changedNodes,
     target: targetResults.length === 1 ? targetResults[0] : null,
     targets: targetResults,
+    restorations: restorationResults,
     invariants: {
       nodeCount: candidate.length,
       httpRouteCount: afterInvariants.routes.length,
@@ -300,6 +367,7 @@ export function publishSplitCreateContractCandidate({ workspace, output, report 
     changedNodeCount: result.changedNodes.length,
     changedNodes: result.changedNodes,
     targets: result.targets,
+    restorations: result.restorations,
     invariants: result.invariants,
   };
   const stage = path.join(
