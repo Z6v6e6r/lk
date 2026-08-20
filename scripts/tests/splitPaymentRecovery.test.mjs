@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SOURCES = {
-  create: ['fn_split_create_prepare.js', '015848c8e0488adf6c23f2d44c48471d5aa27493998a5a0dbb86db9f4c56430a', 'bd8549b41fff84b4404fb95606548affe4858995594a2f6bf42fedd759fafbf4'],
-  join: ['fn_split_join_prepare.js', '13e89a54460924495ad280e0651c95dc80c68deedf36ee3b0ec9ebbbf03f0070', '86711b7a968089f1bc0cceb5fcfd742bae2db64cbba8ef6594963b3bee49f0d3'],
-  router: ['fn_split_router.js', '624e4a233bcd6cf011cd0f0d61aa48243c6878393f31330d5a218e81003227a1', '3cfc57a3af5f8425bb4de72e4041c4b17398b5db50c304b9a1f23163cdd1eefb'],
+  create: ['fn_split_create_prepare.js', 'bd8549b41fff84b4404fb95606548affe4858995594a2f6bf42fedd759fafbf4', '705401c591064e0d9ef2f3597166671abfc153d46025d250e215a6163a4f1384'],
+  join: ['fn_split_join_prepare.js', '86711b7a968089f1bc0cceb5fcfd742bae2db64cbba8ef6594963b3bee49f0d3', 'acb2a2eb981f497681d592f257b1c69275da4c9de5307d69654d27980689a149'],
+  router: ['fn_split_router.js', '3cfc57a3af5f8425bb4de72e4041c4b17398b5db50c304b9a1f23163cdd1eefb', '34ba99f50ca025095d464aadd47af0aa1352a1679482f032abc30846b5fa1c80'],
 };
 
 class FixedDate extends Date {
@@ -76,7 +76,129 @@ test('join preserves the participant deadline and detects singles from stored sp
   assert.equal(outputs[0]._splitCtx.deadlineAt, '2026-07-27T12:30:00.000Z');
   assert.equal(outputs[0]._splitCtx.vivaDirectionId, 4588);
   assert.equal(outputs[0]._splitCtx.durationMinutes, 120);
-  assert.equal(outputs[0]._splitCtx.step, 'pricing_policy');
+  assert.equal(outputs[0]._splitCtx.step, 'token');
+  assert.equal(outputs[0]._splitCtx.pricingPolicy, null);
+  assert.match(outputs[0].url, /protocol\/openid-connect\/token$/);
+  assert.equal(outputs[0].requestTimeout, 10000);
+});
+
+test('join keeps the stored pricing snapshot and never rereads the current CUP campaign', () => {
+  const pricingPolicy = {
+    id: 'piter-split-250-per-hour-v1',
+    title: 'Питер 250',
+    pricingMode: 'PER_PARTICIPANT_HOUR',
+    currency: 'RUB',
+    twoTeamsHourlyAmount: 500,
+    fourPlayersHourlyAmount: 250,
+    activeFrom: '2026-08-24',
+    activeTo: '2026-09-30',
+    version: 'revision-7',
+  };
+  const outputs = run('join', {
+    _splitJoinBody: { clientPhone: '+7 960 000 00 05', paymentMode: 'one_time' },
+    payload: [{
+      metadata: {
+        splitPayment: {
+          vivaExerciseId: 'exercise-piter',
+          shareCount: 4,
+          pricingPolicy,
+          organizerBookingId: 'booking-organizer-piter',
+          payments: [{
+            role: 'ORGANIZER',
+            transactionId: 'tx-organizer-piter',
+            bookingId: 'booking-organizer-piter',
+            clientId: 'client-organizer-piter',
+            phone: '+7 960 000 00 01',
+          }],
+        },
+      },
+      booking: {
+        studioId: '1ea77cbf-bc36-49a1-96d6-f35c216a409b',
+        roomId: 'room-piter-1',
+        date: '2026-08-24',
+        timeFrom: '10:00',
+        timeTo: '11:30',
+      },
+    }],
+  });
+
+  assert.equal(outputs[0]._splitCtx.step, 'token');
+  assert.deepEqual(outputs[0]._splitCtx.pricingPolicy, pricingPolicy);
+  assert.deepEqual(outputs[0]._splitCtx.pricingPolicyProof, {
+    transactionId: 'tx-organizer-piter',
+    bookingId: 'booking-organizer-piter',
+    clientId: 'client-organizer-piter',
+    clientPhone: '79600000001',
+    expectedAmountMinor: 37500,
+  });
+  assert.doesNotMatch(outputs[0].url, /split-payment-promo/);
+  assert.match(outputs[0].url, /protocol\/openid-connect\/token$/);
+  assert.equal(outputs[0].requestTimeout, 10000);
+});
+
+test('join refuses a stored policy without organizer payment evidence', () => {
+  const outputs = run('join', {
+    _splitJoinBody: { clientPhone: '+7 960 000 00 07', paymentMode: 'one_time' },
+    payload: [{
+      metadata: {
+        splitPayment: {
+          vivaExerciseId: 'exercise-piter-no-proof',
+          shareCount: 4,
+          pricingPolicy: {
+            id: 'piter-split-250-per-hour-v1',
+            pricingMode: 'PER_PARTICIPANT_HOUR',
+            currency: 'RUB',
+            twoTeamsHourlyAmount: 500,
+            fourPlayersHourlyAmount: 250,
+          },
+        },
+      },
+      booking: {
+        studioId: '1ea77cbf-bc36-49a1-96d6-f35c216a409b',
+        roomId: 'room-piter-1',
+        date: '2026-08-24',
+        timeFrom: '10:00',
+        timeTo: '11:00',
+      },
+    }],
+  });
+
+  assert.equal(outputs[0], null);
+  assert.equal(outputs[1].statusCode, 409);
+  assert.equal(outputs[1].payload.details.code, 'SPLIT_PRICING_POLICY_PROOF_MISSING');
+  assert.equal(outputs[1].url, undefined);
+});
+
+test('join rejects a malformed stored pricing snapshot before any external request', () => {
+  const outputs = run('join', {
+    _splitJoinBody: { clientPhone: '+7 960 000 00 06', paymentMode: 'one_time' },
+    payload: [{
+      metadata: {
+        splitPayment: {
+          vivaExerciseId: 'exercise-piter-invalid',
+          shareCount: 4,
+          pricingPolicy: {
+            id: 'piter-split-250-per-hour-v1',
+            pricingMode: 'PER_PARTICIPANT_HOUR',
+            currency: 'RUB',
+            fourPlayersHourlyAmount: 1,
+          },
+        },
+      },
+      booking: {
+        studioId: '1ea77cbf-bc36-49a1-96d6-f35c216a409b',
+        roomId: 'room-piter-1',
+        date: '2026-08-24',
+        timeFrom: '10:00',
+        timeTo: '11:00',
+      },
+    }],
+  });
+
+  assert.equal(outputs[0], null);
+  assert.equal(outputs[1].statusCode, 409);
+  assert.equal(outputs[1].payload.details.code, 'SPLIT_PRICING_POLICY_SNAPSHOT_INVALID');
+  assert.equal(outputs[1].url, undefined);
 });
 
 test('join ignores browser share count for a stored four-player game', () => {
@@ -91,6 +213,7 @@ test('join ignores browser share count for a stored four-player game', () => {
   const outputs = run('join', msg);
   assert.equal(outputs[0]._splitCtx.shareCount, 4);
   assert.equal(outputs[0]._splitCtx.durationMinutes, 120);
+  assert.doesNotMatch(outputs[0].url, /split-payment-promo/);
 });
 
 test('join never accepts browser location as a substitute for stored game location', () => {

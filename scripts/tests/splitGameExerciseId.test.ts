@@ -167,23 +167,10 @@ test("split join fails closed when Viva token request configuration is missing",
     { get: () => null },
   ) as unknown[];
 
-  const policyRequest = prepared[0] as Record<string, any>;
-  assert.equal(policyRequest._splitCtx.step, "pricing_policy");
-
-  const routerSource = fs.readFileSync("scripts/nodered_games_nodes/fn_split_router.js", "utf8");
-  const routed = new Function("msg", "env", "global", routerSource)(
-    {
-      ...policyRequest,
-      statusCode: 200,
-      payload: { enabled: false, selectedPromoId: null },
-    },
-    { get: () => null },
-    { get: () => null, set: () => undefined },
-  ) as unknown[];
-
-  const error = routed[1] as Record<string, any>;
+  const error = prepared[1] as Record<string, any>;
   assert.equal(error.statusCode, 503);
   assert.equal(error.payload.details.code, "VIVA_SERVICE_AUTH_NOT_CONFIGURED");
+  assert.equal(error.url, undefined);
 });
 
 test("split sources load Viva service credentials from env and contain no inline credentials", () => {

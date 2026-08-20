@@ -53,15 +53,19 @@ function fixture() {
   return { flow, liveSource, candidateSource, contract };
 }
 
-test("tracked split router is pinned to the reviewed candidate hash", () => {
-  const source = fs.readFileSync(
-    path.join(ROOT, "scripts/nodered_games_nodes/fn_split_router.js"),
-    "utf8",
-  );
-  assert.equal(
-    sha256(source),
-    LIVE_SPLIT_CREATE_CONTRACT.target.candidateFuncSha256,
-  );
+test("tracked split sources are pinned to the reviewed candidate hashes", () => {
+  for (const target of LIVE_SPLIT_CREATE_CONTRACT.targets) {
+    const fileByKey = {
+      create: "fn_split_create_prepare.js",
+      join: "fn_split_join_prepare.js",
+      router: "fn_split_router.js",
+    };
+    const source = fs.readFileSync(
+      path.join(ROOT, "scripts/nodered_games_nodes", fileByKey[target.sourceKey]),
+      "utf8",
+    );
+    assert.equal(sha256(source), target.candidateFuncSha256, target.sourceKey);
+  }
 });
 
 test("candidate builder changes only the exact target function body", () => {

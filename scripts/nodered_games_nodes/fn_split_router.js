@@ -6,6 +6,8 @@ const TOKEN_REFRESH_LOCK_MS = 10 * 1000;
 const SPLIT_DIRECTION_ID = 4588;
 const SPLIT_EXERCISE_TYPE_ID = 1613;
 const DEFAULT_ONE_TIME_PRODUCT_AMOUNT = 10000;
+const TOKEN_REQUEST_TIMEOUT_MS = 10000;
+const ADMIN_REQUEST_TIMEOUT_MS = 20000;
 const SUBSCRIPTION_DAILY_LIMIT_CODE = "SUBSCRIPTION_DAILY_LIMIT_REACHED";
 const KEY_TOKEN = "vivacrm_access_token";
 const KEY_EXPIRES_AT = "vivacrm_token_expires_at";
@@ -287,7 +289,7 @@ const adminRequest = (ctx, method, path, payload) => {
     "Content-Type": "application/json",
   };
   msg.payload = payload;
-  delete msg.requestTimeout;
+  msg.requestTimeout = ADMIN_REQUEST_TIMEOUT_MS;
   return [msg, null, null];
 };
 
@@ -323,7 +325,7 @@ const resolveSplitPricingPolicy = (value) => {
     twoTeamsHourlyAmount,
     fourPlayersHourlyAmount,
     activeFrom: toStr(source.activeFrom),
-    activeTo: toStr(source.expiresAt),
+    activeTo: toStr(source.activeTo || source.expiresAt),
     version: toStr(source.updatedAt) || selectedPromoId,
   };
 };
@@ -685,6 +687,20 @@ const startRoomStudioVerification = (ctx) => {
 };
 
 const continueSplitAfterToken = (ctx) => {
+  if (
+    ctx.action === "join"
+    && resolvePaymentMode(ctx.paymentMode) === "one_time"
+    && ctx.pricingPolicy
+    && ctx.pricingPolicyProof
+    && ctx.pricingPolicyProofVerified !== true
+  ) {
+    ctx.step = "pricing_policy_proof";
+    return adminRequest(
+      ctx,
+      "GET",
+      `/transactions/${encodeURIComponent(ctx.pricingPolicyProof.transactionId)}`,
+    );
+  }
   if (resolvePaymentMode(ctx.paymentMode) === "one_time") {
     return startRoomStudioVerification(ctx);
   }
@@ -733,7 +749,7 @@ const startVivaAuthorization = (ctx) => {
   ]
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
     .join("&");
-  delete msg.requestTimeout;
+  msg.requestTimeout = TOKEN_REQUEST_TIMEOUT_MS;
   return [msg, null, null];
 };
 
@@ -851,6 +867,11 @@ if (!isOk(msg.statusCode)) {
   if (ctx.step === "pricing_policy") {
     return fail(503, "Не удалось проверить тариф раздельной оплаты", {
       code: "SPLIT_PRICING_POLICY_UNAVAILABLE",
+    });
+  }
+  if (ctx.step === "pricing_policy_proof") {
+    return fail(503, "Не удалось подтвердить сохранённый тариф игры", {
+      code: "SPLIT_PRICING_POLICY_PROOF_UNAVAILABLE",
     });
   }
   if (ctx.step === "verify_room_studio") {
@@ -1134,6 +1155,46 @@ if (ctx.step === "pricing_policy") {
     });
   }
   return startVivaAuthorization(ctx);
+}
+
+if (ctx.step === "pricing_policy_proof") {
+  const proof = ctx.pricingPolicyProof && typeof ctx.pricingPolicyProof === "object"
+    ? ctx.pricingPolicyProof
+    : {};
+  const transactionId = toStr(proof.transactionId);
+  const bookingId = toStr(proof.bookingId);
+  const expectedAmountMinor = Math.floor(toNumber(proof.expectedAmountMinor) ?? -1);
+  const objects = providerObjects(msg.payload);
+  const transaction = objects.find((item) => pickTransactionId(item) === transactionId) || null;
+  const bookingIds = providerIds(transaction, ["bookingId", "bookingIds", "bookings"]);
+  const exerciseIds = providerIds(transaction, ["exerciseId", "exerciseIds", "exercise"]);
+  const clientIds = providerIds(transaction, ["clientId", "client"]);
+  const paidAmountMinor = Math.floor(toNumber(
+    transaction?.amountMinor
+    ?? transaction?.totalAmountMinor
+    ?? transaction?.paidAmountMinor
+    ?? transaction?.toPay
+    ?? transaction?.sum,
+  ) ?? -1);
+  const currency = toStr(transaction?.currency)?.toUpperCase() || "RUB";
+  const expectedClientId = toStr(proof.clientId);
+  if (
+    !transaction
+    || !statusIsConfirmed(providerStatus(transaction))
+    || !bookingId
+    || !bookingIds.includes(bookingId)
+    || !exerciseIds.includes(toStr(ctx.exerciseId))
+    || (expectedClientId && !clientIds.includes(expectedClientId))
+    || expectedAmountMinor < 0
+    || paidAmountMinor !== expectedAmountMinor
+    || currency !== "RUB"
+  ) {
+    return fail(409, "Сохранённый тариф игры не подтверждён оплатой организатора", {
+      code: "SPLIT_PRICING_POLICY_PROOF_INVALID",
+    });
+  }
+  ctx.pricingPolicyProofVerified = true;
+  return startRoomStudioVerification(ctx);
 }
 
 if (ctx.step === "available_products") {

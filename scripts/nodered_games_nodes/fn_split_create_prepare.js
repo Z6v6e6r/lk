@@ -12,6 +12,7 @@ const DEFAULT_OPEN_GAME_EXERCISE_TYPE_ID = 1613;
 const DEFAULT_SPLIT_SHARE_COUNT = 4;
 const DEFAULT_PAYMENT_DEADLINE_MINUTES = 25;
 const DEFAULT_ONE_TIME_PRODUCT_AMOUNT = 10000;
+const TOKEN_REQUEST_TIMEOUT_MS = 10000;
 
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -345,5 +346,6 @@ msg.method = "POST";
 msg.url = readEnv("VIVA_SERVICE_TOKEN_URL") || TOKEN_URL_DEFAULT;
 msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
 msg.payload = tokenRequestBody;
+msg.requestTimeout = TOKEN_REQUEST_TIMEOUT_MS;
 
 return [msg, null, null, null];

@@ -1304,3 +1304,27 @@
   The active LK Tournaments functions differ from repository source and do not
   contain Piter logic, so no broad import candidate, live import, restart,
   product mutation, payment, merge, push or deploy was performed.
+
+## 2026-08-20 — Piter split 250 DEV hardening
+
+- Analysis: traced create and join through the tracked Node-RED split functions
+  and confirmed that create resolves CUP before Viva mutation, but join still
+  reread the current campaign. A campaign change could therefore alter or block
+  the price of an already-created game despite the saved policy metadata.
+- Implementation: join now normalizes the stored pricing snapshot, never selects
+  a new CUP campaign, and proves the exact amount against the confirmed organizer
+  Viva transaction bound to the same exercise and booking before participant
+  mutation. Games without a snapshot stay on ordinary Viva split pricing, while
+  missing or malformed proof fails closed. Added 10-second token and 20-second
+  Viva Admin request timeouts; full-game and subscription behavior is unchanged.
+- Verification: added regressions for immutable snapshot reuse, no late campaign
+  adoption, malformed snapshot rejection, server-owned duration/share count and
+  bounded external requests. Focused tests pass `63/63`; a read-only live-147
+  audit at source SHA `74fc80f…` found 4,756 nodes, 312 selected LK Games nodes,
+  38 selected HTTP inputs and zero broken wires/links. The guarded candidate
+  SHA is `62fdd5e…`: exactly three function bodies changed, with all node IDs,
+  wires, links and 215 full-flow HTTP routes unchanged. No booking, payment,
+  CUP activation, Node-RED import, restart, merge, push or deploy was performed.
+  TypeScript and all DEV bundles built successfully with the existing local DEV
+  environment; targeted ESLint reported zero errors (17 `any` warnings in test
+  harnesses), and `git diff --check` passed.

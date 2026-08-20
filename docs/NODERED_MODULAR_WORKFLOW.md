@@ -183,11 +183,12 @@ The patcher adds only the fixed `User-Agent: PadlHub-LK/1.0` configured header
 to bounded, URL-evidenced Viva HTTP Request nodes. It produces a candidate only;
 see `docs/VIVA_USER_AGENT.md` for scope, review and post-deploy evidence gates.
 
-## Guarded split exercise-create contract candidate
+## Guarded split pricing contract candidate
 
-The managed-subscription create-contract cohort replaces only the function body
-of the existing `Route Viva split payment` node after verifying its exact live
-flow and function preimages:
+The split pricing cohort replaces only the function bodies of the existing
+`Prepare split game payment`, `Prepare split join payment`, and
+`Route Viva split payment` nodes after verifying the exact live flow and all
+three function preimages:
 
 ```bash
 npm run nodered:split-create-contract:patch -- \

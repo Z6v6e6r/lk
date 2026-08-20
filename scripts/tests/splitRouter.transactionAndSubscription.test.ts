@@ -118,7 +118,99 @@ test("fresh-token one-time join verifies room-studio binding before booking", ()
   const roomLookup = out[0];
   assert.equal(roomLookup?.method, "GET");
   assert.match(roomLookup?.url || "", /\/studios\/studio-1\/rooms\/room-1$/);
+  assert.equal(roomLookup?.requestTimeout, 20000);
   assert.equal(roomLookup?._splitCtx?.step, "verify_room_studio");
+});
+
+test("join proves the stored hourly rate against the organizer payment before booking", () => {
+  const tokenOut = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: { access_token: "service-token", expires_in: 300 },
+    _splitCtx: {
+      step: "token",
+      action: "join",
+      paymentMode: "one_time",
+      exerciseId: "exercise-piter-1",
+      studioId: "studio-piter",
+      roomId: "room-piter-1",
+      clientPhone: "79990000002",
+      pricingPolicy: {
+        id: "piter-split-250-per-hour-v1",
+        pricingMode: "PER_PARTICIPANT_HOUR",
+        currency: "RUB",
+        twoTeamsHourlyAmount: 500,
+        fourPlayersHourlyAmount: 250,
+      },
+      pricingPolicyProof: {
+        transactionId: "tx-organizer-piter-1",
+        bookingId: "booking-organizer-piter-1",
+        clientId: "client-organizer-piter-1",
+        expectedAmountMinor: 37500,
+      },
+    },
+  }) as Array<Record<string, any> | null>;
+
+  const proofLookup = tokenOut[0];
+  assert.equal(proofLookup?.method, "GET");
+  assert.match(proofLookup?.url || "", /\/transactions\/tx-organizer-piter-1$/);
+  assert.equal(proofLookup?.requestTimeout, 20000);
+  assert.equal(proofLookup?._splitCtx?.step, "pricing_policy_proof");
+
+  const proofOut = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    ...proofLookup,
+    statusCode: 200,
+    payload: {
+      id: "tx-organizer-piter-1",
+      status: "PAID",
+      client: { id: "client-organizer-piter-1", phone: "+79990000001" },
+      products: [{
+        bookingIds: ["booking-organizer-piter-1"],
+        bookingRequests: [{ exerciseId: "exercise-piter-1" }],
+      }],
+      amountMinor: 37500,
+      currency: "RUB",
+    },
+  }) as Array<Record<string, any> | null>;
+
+  const roomLookup = proofOut[0];
+  assert.equal(roomLookup?.method, "GET");
+  assert.match(roomLookup?.url || "", /\/studios\/studio-piter\/rooms\/room-piter-1$/);
+  assert.equal(roomLookup?._splitCtx?.pricingPolicyProofVerified, true);
+});
+
+test("join rejects a stored hourly rate that differs from the organizer payment", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      id: "tx-organizer-piter-2",
+      status: "PAID",
+      client: { id: "client-organizer-piter-2", phone: "+79990000001" },
+      products: [{
+        bookingIds: ["booking-organizer-piter-2"],
+        bookingRequests: [{ exerciseId: "exercise-piter-2" }],
+      }],
+      amountMinor: 50000,
+      currency: "RUB",
+    },
+    _splitCtx: {
+      step: "pricing_policy_proof",
+      action: "join",
+      paymentMode: "one_time",
+      exerciseId: "exercise-piter-2",
+      studioId: "studio-piter",
+      roomId: "room-piter-2",
+      pricingPolicyProof: {
+        transactionId: "tx-organizer-piter-2",
+        bookingId: "booking-organizer-piter-2",
+        clientId: "client-organizer-piter-2",
+        expectedAmountMinor: 25000,
+      },
+    },
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0], null);
+  assert.equal(out[1]?.statusCode, 409);
+  assert.equal(out[1]?.payload?.details?.code, "SPLIT_PRICING_POLICY_PROOF_INVALID");
 });
 
 test("subscription booking request sends the exact selected client subscription id through the atomic gateway", () => {
@@ -404,6 +496,7 @@ test("CUP response is accepted only when it contains an explicit selected hourly
 
   assert.equal(out[0]?.method, "POST");
   assert.match(out[0]?.url || "", /protocol\/openid-connect\/token$/);
+  assert.equal(out[0]?.requestTimeout, 10000);
   assert.equal(out[0]?._splitCtx?.pricingPolicy?.id, "piter-split-250-per-hour-v1");
   assert.equal(out[0]?._splitCtx?.pricingPolicy?.fourPlayersHourlyAmount, 250);
 });

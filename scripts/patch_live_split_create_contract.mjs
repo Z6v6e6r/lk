@@ -9,30 +9,65 @@ import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = fs.realpathSync(path.resolve(SCRIPT_DIR, ".."));
-const ROUTER_SOURCE_PATH = path.join(
-  SCRIPT_DIR,
-  "nodered_games_nodes",
-  "fn_split_router.js",
-);
+const SOURCE_PATHS = Object.freeze({
+  create: path.join(SCRIPT_DIR, "nodered_games_nodes", "fn_split_create_prepare.js"),
+  join: path.join(SCRIPT_DIR, "nodered_games_nodes", "fn_split_join_prepare.js"),
+  router: path.join(SCRIPT_DIR, "nodered_games_nodes", "fn_split_router.js"),
+});
 
 export const LIVE_SPLIT_CREATE_CONTRACT = Object.freeze({
-  sourceFlowSha256: "5a9b52ae6fa0d8c457f9605d55bfb8e947e11d1dc582259616a96b9f3e34791b",
-  target: Object.freeze({
-    id: "8f7bd5b482fe9763",
-    name: "Route Viva split payment",
-    type: "function",
-    tabId: "4b91e2a2413688db",
-    outputs: 5,
-    wires: Object.freeze([
-      Object.freeze(["ee7ba8cdd68bdf74"]),
-      Object.freeze(["802af8a1810db60f"]),
-      Object.freeze(["ef42932e1ba864b8"]),
-      Object.freeze(["lk_subscription_booking_http_20260804"]),
-      Object.freeze(["legacy_payment_confirm_canonical_prepare_20260816"]),
-    ]),
-    liveFuncSha256: "624e4a233bcd6cf011cd0f0d61aa48243c6878393f31330d5a218e81003227a1",
-    candidateFuncSha256: "523bfce79fe86ace3000d58b6caf8ae9aae153ab9b0f65845f2f10da68c5b23e",
-  }),
+  sourceFlowSha256: "74fc80f4645f634c94fa47ce00bfcec0a7a8606568197f14d204878def2d7cfe",
+  targets: Object.freeze([
+    Object.freeze({
+      sourceKey: "create",
+      id: "f3f9a60354d394da",
+      name: "Prepare split game payment",
+      type: "function",
+      tabId: "4b91e2a2413688db",
+      outputs: 4,
+      wires: Object.freeze([
+        Object.freeze(["ee7ba8cdd68bdf74"]),
+        Object.freeze(["802af8a1810db60f"]),
+        Object.freeze(["ef42932e1ba864b8"]),
+        Object.freeze(["8f7bd5b482fe9763"]),
+      ]),
+      liveFuncSha256: "bd8549b41fff84b4404fb95606548affe4858995594a2f6bf42fedd759fafbf4",
+      candidateFuncSha256: "705401c591064e0d9ef2f3597166671abfc153d46025d250e215a6163a4f1384",
+    }),
+    Object.freeze({
+      sourceKey: "join",
+      id: "e92e68bf3f08a70c",
+      name: "Prepare split join payment",
+      type: "function",
+      tabId: "4b91e2a2413688db",
+      outputs: 4,
+      wires: Object.freeze([
+        Object.freeze(["ee7ba8cdd68bdf74"]),
+        Object.freeze(["802af8a1810db60f"]),
+        Object.freeze(["ef42932e1ba864b8"]),
+        Object.freeze(["8f7bd5b482fe9763"]),
+      ]),
+      liveFuncSha256: "86711b7a968089f1bc0cceb5fcfd742bae2db64cbba8ef6594963b3bee49f0d3",
+      candidateFuncSha256: "acb2a2eb981f497681d592f257b1c69275da4c9de5307d69654d27980689a149",
+    }),
+    Object.freeze({
+      sourceKey: "router",
+      id: "8f7bd5b482fe9763",
+      name: "Route Viva split payment",
+      type: "function",
+      tabId: "4b91e2a2413688db",
+      outputs: 5,
+      wires: Object.freeze([
+        Object.freeze(["ee7ba8cdd68bdf74"]),
+        Object.freeze(["802af8a1810db60f"]),
+        Object.freeze(["ef42932e1ba864b8"]),
+        Object.freeze(["lk_subscription_booking_http_20260804"]),
+        Object.freeze(["legacy_payment_confirm_canonical_prepare_20260816"]),
+      ]),
+      liveFuncSha256: "3cfc57a3af5f8425bb4de72e4041c4b17398b5db50c304b9a1f23163cdd1eefb",
+      candidateFuncSha256: "34ba99f50ca025095d464aadd47af0aa1352a1679482f032abc30846b5fa1c80",
+    }),
+  ]),
 });
 
 function fail(message) {
@@ -103,27 +138,44 @@ function assertTargetNode(node, contract) {
 
 export function applySplitCreateContract(
   inputFlow,
-  candidateSource,
-  contract = LIVE_SPLIT_CREATE_CONTRACT.target,
+  candidateSources,
+  contracts = LIVE_SPLIT_CREATE_CONTRACT.targets,
 ) {
   if (!Array.isArray(inputFlow)) fail("Node-RED flow must be an array");
-  if (typeof candidateSource !== "string" || !candidateSource.trim()) {
-    fail("Split create candidate source must be a non-empty string");
-  }
-  const candidateFuncSha256 = sha256(candidateSource);
-  if (candidateFuncSha256 !== contract.candidateFuncSha256) {
-    fail("Tracked split create candidate source mismatch");
+  const targetContracts = Array.isArray(contracts) ? contracts : [contracts];
+  const sourceByKey = typeof candidateSources === "string"
+    ? { [targetContracts[0]?.sourceKey || targetContracts[0]?.id]: candidateSources }
+    : candidateSources;
+  if (!sourceByKey || typeof sourceByKey !== "object") {
+    fail("Split candidate sources must be provided");
   }
 
   const before = structuredClone(inputFlow);
   const candidate = structuredClone(inputFlow);
   const beforeInvariants = snapshotInvariants(before);
-  const matches = candidate.filter((node) => node.id === contract.id);
-  if (matches.length !== 1) {
-    fail("Split create target node must exist exactly once");
-  }
-  assertTargetNode(matches[0], contract);
-  matches[0].func = candidateSource;
+  const targetResults = targetContracts.map((contract) => {
+    const sourceKey = contract.sourceKey || contract.id;
+    const candidateSource = sourceByKey[sourceKey];
+    if (typeof candidateSource !== "string" || !candidateSource.trim()) {
+      fail(`Split candidate source is missing for ${sourceKey}`);
+    }
+    const candidateFuncSha256 = sha256(candidateSource);
+    if (candidateFuncSha256 !== contract.candidateFuncSha256) {
+      fail(`Tracked split candidate source mismatch for ${sourceKey}`);
+    }
+    const matches = candidate.filter((node) => node.id === contract.id);
+    if (matches.length !== 1) {
+      fail(`Split target node must exist exactly once: ${contract.id}`);
+    }
+    assertTargetNode(matches[0], contract);
+    matches[0].func = candidateSource;
+    return {
+      id: contract.id,
+      name: contract.name,
+      fromFuncSha256: contract.liveFuncSha256,
+      toFuncSha256: candidateFuncSha256,
+    };
+  });
 
   const changedNodes = candidate.flatMap((node, index) => {
     const previous = before[index];
@@ -133,8 +185,12 @@ export function applySplitCreateContract(
       .sort();
     return [{ id: node.id, changedFields }];
   });
-  if (!isDeepStrictEqual(changedNodes, [{ id: contract.id, changedFields: ["func"] }])) {
-    fail("Candidate changed fields outside the split create function body");
+  const expectedChangedNodes = targetContracts.map((contract) => ({
+    id: contract.id,
+    changedFields: ["func"],
+  }));
+  if (!isDeepStrictEqual(changedNodes, expectedChangedNodes)) {
+    fail("Candidate changed fields outside the reviewed split function bodies");
   }
 
   const afterInvariants = snapshotInvariants(candidate);
@@ -150,12 +206,8 @@ export function applySplitCreateContract(
   return {
     candidate,
     changedNodes,
-    target: {
-      id: contract.id,
-      name: contract.name,
-      fromFuncSha256: contract.liveFuncSha256,
-      toFuncSha256: candidateFuncSha256,
-    },
+    target: targetResults.length === 1 ? targetResults[0] : null,
+    targets: targetResults,
     invariants: {
       nodeCount: candidate.length,
       httpRouteCount: afterInvariants.routes.length,
@@ -233,8 +285,10 @@ export function publishSplitCreateContractCandidate({ workspace, output, report 
   }
   readVerifiedFlowBytes(verified);
   const paths = publicationPaths(output, report, verified.workspace);
-  const candidateSource = fs.readFileSync(ROUTER_SOURCE_PATH, "utf8");
-  const result = applySplitCreateContract(verified.source, candidateSource);
+  const candidateSources = Object.fromEntries(
+    Object.entries(SOURCE_PATHS).map(([key, sourcePath]) => [key, fs.readFileSync(sourcePath, "utf8")]),
+  );
+  const result = applySplitCreateContract(verified.source, candidateSources);
   const candidateBytes = Buffer.from(`${JSON.stringify(result.candidate, null, 2)}\n`, "utf8");
   const candidateSha256 = sha256(candidateBytes);
   const redactedReport = {
@@ -245,7 +299,7 @@ export function publishSplitCreateContractCandidate({ workspace, output, report 
     candidateSha256,
     changedNodeCount: result.changedNodes.length,
     changedNodes: result.changedNodes,
-    target: result.target,
+    targets: result.targets,
     invariants: result.invariants,
   };
   const stage = path.join(

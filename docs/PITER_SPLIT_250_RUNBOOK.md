@@ -9,6 +9,10 @@
 - Four-player rate: `250` RUB per participant-hour
 - Two-team rate: `500` RUB per team-hour
 - Full-game payment source: the Viva slot/product price; this policy must never override it
+- Create resolves the active CUP campaign once and stores the normalized policy snapshot in the game
+- Join never selects the current CUP campaign: it uses the stored snapshot, or ordinary Viva split pricing when the game has no snapshot
+- Before participant booking, a stored promo rate must exactly match the confirmed organizer Viva transaction for the same exercise and booking; browser metadata alone is never pricing authority
+- A malformed non-null stored snapshot fails closed before token, room, booking, product or transaction requests
 
 Expected participant charge:
 
@@ -33,12 +37,16 @@ Expected participant charge:
 - A modified browser `shareAmount`, `totalAmount`, or `studioId` does not change the server charge.
 - A room that does not belong to the quoted station is rejected before Viva creates an exercise or booking.
 - A non-Piter split game uses the Viva product price divided by the server share count.
+- A Piter game created under the campaign keeps its exact policy ID, version and hourly rates when a participant joins after the campaign is changed, expired or disabled; the rate is re-proved from the organizer transaction before each participant booking.
+- A game created without a policy snapshot never adopts a campaign enabled later.
 - Full payment uses the existing Viva full-payment path and the ordinary slot price.
 - Before `activeFrom` and after `expiresAt`, Piter split pricing falls back to the Viva product price divided by the server share count.
 - If CUP policy lookup is unavailable, one-time split payment fails closed; full payment remains available.
+- CUP lookup is required only when creating a one-time split game; joining an existing game does not depend on current CUP availability, but does require read-only Viva confirmation of the organizer transaction.
+- Viva token requests are bounded to 10 seconds and Viva Admin API requests to 20 seconds.
 
 ## Return to the ordinary scheme
 
-Set `expiresAt` to the end of the last eligible game date in Moscow time. Do not change the rate or reuse the policy ID for another price. Keep the campaign enabled until all games on or before that date have finished so late participants receive the same versioned rate. After that, disable/archive the campaign. Newer pricing must use a new policy ID.
+Set `expiresAt` to the end of the last eligible game date in Moscow time, or disable the campaign when new Piter games must return to the ordinary scheme. Do not change the rate or reuse the policy ID for another price. Games already created with this policy keep the immutable stored snapshot for later participants; games created after expiry/disable use ordinary Viva split pricing. Newer pricing must use a new policy ID.
 
-Rollback is configuration-only after all compatible code is deployed: an expired or unmatched policy makes Node-RED calculate the ordinary split share from the Viva product cost. No change is required in the full-payment path.
+Rollback is configuration-only after all compatible code is deployed: an expired, disabled or unmatched policy makes new games calculate the ordinary split share from the Viva product cost. Existing games preserve their stored policy snapshot. No change is required in the full-payment path.

@@ -1,5 +1,4 @@
 const TOKEN_URL_DEFAULT = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
-const CUP_API_DEFAULT = "https://padlhub.su/api";
 const TOKEN_CLIENT_ID_DEFAULT = "React-auth-dev";
 const KEY_TOKEN = "vivacrm_access_token";
 const KEY_EXPIRES_AT = "vivacrm_token_expires_at";
@@ -12,6 +11,7 @@ const DEFAULT_OPEN_GAME_EXERCISE_TYPE_ID = 1613;
 const DEFAULT_SPLIT_SHARE_COUNT = 4;
 const DEFAULT_PAYMENT_DEADLINE_MINUTES = 10;
 const DEFAULT_ONE_TIME_PRODUCT_AMOUNT = 10000;
+const TOKEN_REQUEST_TIMEOUT_MS = 10000;
 
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -45,26 +45,6 @@ const readEnv = (key) => {
   }
 };
 
-const startPricingPolicyRequest = (ctx) => {
-  const apiBase = (readEnv("CUP_API_BASE_URL") || CUP_API_DEFAULT).replace(/\/+$/, "");
-  const query = [
-    ["forDate", ctx.date],
-    ["stationId", ctx.studioId],
-    ["roomId", ctx.roomId],
-    ["force_ts", `${Date.now()}-${Math.random().toString(36).slice(2)}`],
-  ]
-    .filter(([, value]) => Boolean(toStr(value)))
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(toStr(value))}`)
-    .join("&");
-  ctx.step = "pricing_policy";
-  msg.method = "GET";
-  msg.url = `${apiBase}/advertising/split-payment-promo?${query}`;
-  msg.headers = { Accept: "application/json", "Cache-Control": "no-store" };
-  msg.payload = undefined;
-  msg.requestTimeout = 5000;
-  return [msg, null, null, null];
-};
-
 const readCachedServiceToken = () => {
   const token = toStr(readGlobal(KEY_TOKEN));
   const expiresAt = Number(readGlobal(KEY_EXPIRES_AT) || 0);
@@ -96,6 +76,37 @@ const toNumber = (value) => {
     if (Number.isFinite(parsed)) return parsed;
   }
   return null;
+};
+
+const resolveStoredPricingPolicy = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const id = toStr(value.id || value.pricingPolicyId);
+  const mode = toStr(value.pricingMode || value.model);
+  const currency = toStr(value.currency)?.toUpperCase();
+  const twoTeamsHourlyAmount = toNumber(value.twoTeamsHourlyAmount);
+  const fourPlayersHourlyAmount = toNumber(value.fourPlayersHourlyAmount);
+  if (
+    !id
+    || mode !== "PER_PARTICIPANT_HOUR"
+    || currency !== "RUB"
+    || twoTeamsHourlyAmount === null
+    || twoTeamsHourlyAmount < 0
+    || fourPlayersHourlyAmount === null
+    || fourPlayersHourlyAmount < 0
+  ) {
+    return null;
+  }
+  return {
+    id,
+    title: toStr(value.title),
+    pricingMode: mode,
+    currency,
+    twoTeamsHourlyAmount,
+    fourPlayersHourlyAmount,
+    activeFrom: toStr(value.activeFrom),
+    activeTo: toStr(value.activeTo || value.expiresAt),
+    version: toStr(value.version || value.revision || value.updatedAt) || id,
+  };
 };
 
 const resolvePositiveInt = (value, fallback) => {
@@ -307,6 +318,48 @@ const durationMinutes = resolveDurationMinutes(
   booking.timeTo,
   null,
 );
+const storedPricingPolicyPresent = paymentMode === "one_time"
+  && splitPayment.pricingPolicy !== null
+  && splitPayment.pricingPolicy !== undefined;
+const storedPricingPolicy = storedPricingPolicyPresent
+  ? resolveStoredPricingPolicy(splitPayment.pricingPolicy)
+  : null;
+if (storedPricingPolicyPresent && !storedPricingPolicy) {
+  return fail(409, "Сохранённый тариф раздельной оплаты повреждён", {
+    code: "SPLIT_PRICING_POLICY_SNAPSHOT_INVALID",
+  });
+}
+const splitPayments = Array.isArray(splitPayment.payments)
+  ? splitPayment.payments.filter((item) => item && typeof item === "object")
+  : [];
+const organizerPayment = splitPayments.find((item) => toStr(item.role)?.toUpperCase() === "ORGANIZER")
+  || splitPayments.find((item) => Number(item.spot) === 1)
+  || null;
+const pricingPolicyHourlyAmount = storedPricingPolicy
+  ? (shareCount === 2
+      ? storedPricingPolicy.twoTeamsHourlyAmount
+      : storedPricingPolicy.fourPlayersHourlyAmount)
+  : null;
+const pricingPolicyProof = storedPricingPolicy
+  ? {
+      transactionId: toStr(organizerPayment?.transactionId),
+      bookingId: toStr(organizerPayment?.bookingId) || toStr(splitPayment.organizerBookingId),
+      clientId: toStr(organizerPayment?.clientId),
+      clientPhone: normalizePhone(organizerPayment?.phone || organizerPayment?.phoneNorm),
+      expectedAmountMinor: Math.max(
+        0,
+        Math.round(pricingPolicyHourlyAmount * durationMinutes / 60 * 100),
+      ),
+    }
+  : null;
+if (
+  pricingPolicyProof
+  && (!pricingPolicyProof.transactionId || !pricingPolicyProof.bookingId || !durationMinutes)
+) {
+  return fail(409, "Не удалось подтвердить сохранённый тариф игры", {
+    code: "SPLIT_PRICING_POLICY_PROOF_MISSING",
+  });
+}
 const subscriptionVisitCount = resolveSubscriptionVisitCount(durationMinutes);
 const bodyShareAmount = toNumber(body.shareAmount);
 const storedShareAmount = toNumber(splitPayment.shareAmount);
@@ -396,9 +449,8 @@ msg._splitCtx = {
   exerciseId,
   studioId,
   roomId,
-  expectedPricingPolicy: splitPayment.pricingPolicy && typeof splitPayment.pricingPolicy === "object"
-    ? splitPayment.pricingPolicy
-    : null,
+  pricingPolicy: storedPricingPolicy,
+  pricingPolicyProof,
   clientId: toStr(body.clientId),
   clientPhone,
   shareCount,
@@ -423,10 +475,6 @@ msg._splitCtx = {
     || fallbackDeadlineAt,
   assembleDeadlineAt: toStr(splitPayment.assembleDeadlineAt) || assembleDeadlineAt,
 };
-
-if (paymentMode === "one_time") {
-  return startPricingPolicyRequest(msg._splitCtx);
-}
 
 const cachedToken = readCachedServiceToken();
 if (cachedToken) {
@@ -461,5 +509,6 @@ msg.method = "POST";
 msg.url = readEnv("VIVA_SERVICE_TOKEN_URL") || TOKEN_URL_DEFAULT;
 msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
 msg.payload = tokenRequestBody;
+msg.requestTimeout = TOKEN_REQUEST_TIMEOUT_MS;
 
 return [msg, null, null, null];
