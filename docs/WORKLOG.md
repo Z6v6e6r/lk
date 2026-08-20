@@ -1357,3 +1357,17 @@
   automatic rollback and wrapper safety with local fixtures. Production SSH was
   unavailable during preparation; no flow import, restart, Viva/Mongo mutation,
   push or deployment was performed.
+
+## 2026-08-20 — Subscription binding live-preimage refresh
+
+- The guarded deploy stopped before staging because live Node-RED had advanced
+  from `0067f093…` to `2cbb00db…` while preserving `4756` nodes and `215` HTTP
+  inputs. The five-node drift was traced to an already integrated reviewed
+  token/history and split-payment update; two changed functions overlap the
+  subscription-binding candidate.
+- Refreshed only the whole-flow preimage and those two live function hashes.
+  Candidate function hashes and business logic are unchanged. The rebased dry
+  candidate preserves the current live drift and still changes exactly six
+  function bodies with no route, wire, node-ID or topology changes.
+- Production flow, PM2, Viva and MongoDB were not changed; staging, restart,
+  push and deployment were not performed in this checkpoint.

@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   buildFocusedSubscriptionBindingCandidate,
+  SUBSCRIPTION_BINDING_LIVE_CONTRACT,
   SUBSCRIPTION_BINDING_TARGETS,
 } from "../patch_live_games_subscription_binding.mjs";
 
@@ -14,6 +15,11 @@ const FN_DIR = path.join(ROOT, "scripts", "nodered_games_nodes");
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
 test("subscription binding patch pins six unique reviewed live function nodes", () => {
+  assert.deepEqual(SUBSCRIPTION_BINDING_LIVE_CONTRACT, {
+    sourceSha256: "2cbb00db7983248b212fcd2fc227795277a4d90b7dd3ace804655829a68f3828",
+    nodeCount: 4756,
+    httpInputCount: 215,
+  });
   assert.equal(SUBSCRIPTION_BINDING_TARGETS.length, 6);
   assert.equal(new Set(SUBSCRIPTION_BINDING_TARGETS.map((target) => target.id)).size, 6);
   for (const target of SUBSCRIPTION_BINDING_TARGETS) {
@@ -22,6 +28,14 @@ test("subscription binding patch pins six unique reviewed live function nodes", 
     assert.equal(sha256(source), target.candidateSha256, target.fileName);
     assert.doesNotThrow(() => new Function("msg", "flow", "global", "node", "env", source));
   }
+  assert.equal(
+    SUBSCRIPTION_BINDING_TARGETS.find(({ id }) => id === "e92e68bf3f08a70c").liveSha256,
+    "acb2a2eb981f497681d592f257b1c69275da4c9de5307d69654d27980689a149",
+  );
+  assert.equal(
+    SUBSCRIPTION_BINDING_TARGETS.find(({ id }) => id === "8f7bd5b482fe9763").liveSha256,
+    "34ba99f50ca025095d464aadd47af0aa1352a1679482f032abc30846b5fa1c80",
+  );
 });
 
 test("subscription binding builder changes only one selected function body", () => {
