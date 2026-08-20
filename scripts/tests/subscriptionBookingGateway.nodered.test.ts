@@ -6,6 +6,16 @@ import fs from "node:fs";
 const ROUTER_FILE = "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js";
 const PREPARE_FILE = "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js";
 const FINALIZE_FILE = "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_finalize.js";
+const MANAGED_EVALUATOR_FILE =
+  "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_evaluate.js";
+const MANAGED_BLOCKED_FILE =
+  "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_blocked.js";
+const MANAGED_GLOBALS = {
+  vivacrm_access_token: "service-token",
+  subscriptions_runtime_api_base_url: "https://cup.example/api",
+  subscriptions_runtime_context_integration_token: "integration-token",
+};
+const PITER_STATION_ID = "1ea77cbf-bc36-49a1-96d6-f35c216a409b";
 
 function runFunction(
   file: string,
@@ -51,6 +61,93 @@ function flatBooking(overrides: Record<string, unknown> = {}) {
     timeFrom: "10:00:00",
     timeTo: "11:00:00",
     ...overrides,
+  };
+}
+
+function managedRuntimeResponse(overrides: Record<string, any> = {}) {
+  const stationId = overrides.stationId || PITER_STATION_ID;
+  const policy = {
+    runtimeSchemaVersion: 1,
+    subscriptionTypeId: overrides.subscriptionTypeId || "subscription-type:piter",
+    policyVersion: 1,
+    status: "PUBLISHED",
+    effectiveAt: "2026-08-01T00:00:00.000Z",
+    timeZone: "Europe/Moscow",
+    createGame: { enabled: true, durationsMinutes: [60] },
+    joinGame: { enabled: true, minDurationMinutes: 60, maxDurationMinutes: 120 },
+    activeServicesLimit: { enabled: false, max: null, scope: "SUBSCRIPTION_BENEFIT_ONLY" },
+    bookingWindow: { enabled: false, days: null },
+    dailyUsageLimit: 1,
+    usageUnitsByDuration: { "60": 1, "90": 1, "120": 1 },
+    stationAccessRules: [{
+      ruleId: "station-rule",
+      enabled: true,
+      priority: 1,
+      selector: overrides.allStations
+        ? { kind: "ALL_STATIONS", stationIds: [] }
+        : { kind: "STATION_LIST", stationIds: [stationId] },
+      surcharge: { kind: "NONE", amountMinor: 0 },
+    }],
+    benefitRules: [
+      {
+        ruleId: "create-free",
+        enabled: true,
+        category: "GAME",
+        actions: ["CREATE_GAME"],
+        externalEventTypeIds: ["1613"],
+        productTypeIds: [],
+        durationMinutes: [60],
+        stationIds: [stationId],
+        kind: "FREE_ENTITLEMENT",
+        valueMinor: null,
+        percentage: null,
+        partialPrice: null,
+        priority: 1,
+      },
+      {
+        ruleId: "join-free",
+        enabled: true,
+        category: "GAME",
+        actions: ["JOIN_GAME"],
+        externalEventTypeIds: ["1613"],
+        productTypeIds: [],
+        durationMinutes: [60, 90, 120],
+        stationIds: [stationId],
+        kind: "FREE_ENTITLEMENT",
+        valueMinor: null,
+        percentage: null,
+        partialPrice: null,
+        priority: 2,
+      },
+    ],
+    lifecycle: { allowBookingsAfterExpiry: false },
+    usage: {
+      weeklyUsageLimit: null,
+      monthlyUsageLimit: null,
+      maxFutureBookings: null,
+      minHoursBetweenUses: 0,
+      blackoutDates: [],
+    },
+    ...overrides.policy,
+  };
+  return {
+    schemaVersion: 1,
+    subscriptionInstanceId: "subscription-instance-1",
+    clientSubscriptionId: "client-subscription-1",
+    policyDigest: "a".repeat(64),
+    policy,
+    instance: {
+      subscriptionInstanceId: "subscription-instance-1",
+      subscriptionTypeId: policy.subscriptionTypeId,
+      policyVersion: policy.policyVersion,
+      state: "ACTIVE",
+      activeFrom: "2026-08-01T00:00:00.000Z",
+      activeTo: "2027-08-01T00:00:00.000Z",
+      frozenUntil: null,
+      noShowBlockedUntil: null,
+      homeStationId: stationId,
+    },
+    evidence: { mappingRevision: 1, instanceRevision: 1 },
   };
 }
 
@@ -407,14 +504,16 @@ test("Friendship is allowed for tournaments but remains blocked for group traini
   assert.equal(groupTraining[4].payload.details.category, "group_training");
 });
 
-test("legacy booking gateway fails closed for Piter until the managed policy is published", () => {
+test("Piter split create resolves a server target and requests the actor-owned CUP runtime context", () => {
   const out = runFunction(ROUTER_FILE, {
     statusCode: 200,
     payload: {
       id: "exercise-target",
-      timeFrom: "2026-08-14T18:00:00+03:00",
+      timeFrom: "2026-08-21T18:00:00+03:00",
+      timeTo: "2026-08-21T19:00:00+03:00",
       direction: { name: "Открытая игра" },
-      type: { name: "Открытая игра" },
+      type: { id: 1613, name: "Открытая игра" },
+      studio: { id: "studio-1" },
       availableClientSubscriptions: [{
         clientSubscriptionId: "client-subscription-1",
         name: "Падел.Дружба.Питер — 12 месяцев",
@@ -424,57 +523,195 @@ test("legacy booking gateway fails closed for Piter until the managed policy is 
       serviceDate: undefined,
       category: undefined,
       planKey: undefined,
+      managedAction: "CREATE_GAME",
     }),
-  });
+  }, MANAGED_GLOBALS);
 
-  assert.equal(out[4].statusCode, 409);
-  assert.equal(out[4].payload.details.code, "MANAGED_SUBSCRIPTION_POLICY_REQUIRED");
-  assert.equal(out[4].payload.details.planKey, "piter_friendship");
-  assert.equal(out[0], null);
+  assert.equal(out[0]._subscriptionBooking.step, "managed_runtime_context");
+  assert.equal(out[0]._subscriptionBooking.planKey, "piter_friendship");
+  assert.equal(out[0]._subscriptionBooking.managedTarget.durationMinutes, 60);
+  assert.equal(out[0]._subscriptionBooking.managedTarget.stationId, "studio-1");
+  assert.equal(out[0]._subscriptionBooking.managedTarget.externalEventTypeId, "1613");
+  assert.equal(out[0].url, "https://cup.example/api/internal/subscriptions/runtime-context");
+  assert.deepEqual(out[0].payload, { clientSubscriptionId: "client-subscription-1" });
+  assert.equal(out[0].headers.Authorization, "Bearer user-token");
+  assert.equal(out[0].headers["X-Subscriptions-Integration-Token"], "integration-token");
   assert.equal(out[1], null);
   assert.equal(out[2], null);
   assert.equal(out[3], null);
 });
 
-for (const managedPlan of [
-  {
-    name: "Падел.Дружба.Котельники — 12 месяцев",
-    planKey: "kotelniki_friendship",
-  },
-  {
-    name: "Падел.Дружба.ХАБ — 12 месяцев",
-    planKey: "network_friendship",
-  },
-]) {
-  test(`legacy booking gateway fails closed for ${managedPlan.planKey}`, () => {
-    const out = runFunction(ROUTER_FILE, {
-      statusCode: 200,
-      payload: {
-        id: "exercise-target",
-        timeFrom: "2026-08-14T18:00:00+03:00",
-        direction: { name: "Открытая игра" },
-        type: { name: "Открытая игра" },
-        availableClientSubscriptions: [{
-          clientSubscriptionId: "client-subscription-1",
-          name: managedPlan.name,
-        }],
-      },
-      _subscriptionBooking: baseContext("exercise", {
-        serviceDate: undefined,
-        category: undefined,
-        planKey: undefined,
-      }),
-    });
-
-    assert.equal(out[4].statusCode, 409);
-    assert.equal(out[4].payload.details.code, "MANAGED_SUBSCRIPTION_POLICY_REQUIRED");
-    assert.equal(out[4].payload.details.planKey, managedPlan.planKey);
-    assert.equal(out[0], null);
-    assert.equal(out[1], null);
-    assert.equal(out[2], null);
-    assert.equal(out[3], null);
+test("HUB split join uses the same CUP policy path while Kotelniki stays closed", () => {
+  const exercise = (name: string) => ({
+    id: "exercise-target",
+    timeFrom: "2026-08-21T18:00:00+03:00",
+    timeTo: "2026-08-21T20:00:00+03:00",
+    direction: { name: "Открытая игра" },
+    type: { id: 1613, name: "Открытая игра" },
+    studio: { id: "studio-1" },
+    availableClientSubscriptions: [{
+      clientSubscriptionId: "client-subscription-1",
+      name,
+    }],
   });
-}
+  const hub = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: exercise("Падел.Дружба.ХАБ — 12 месяцев"),
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "JOIN_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(hub[0]._subscriptionBooking.planKey, "network_friendship");
+  assert.equal(hub[0]._subscriptionBooking.managedTarget.durationMinutes, 120);
+  assert.equal(hub[0]._subscriptionBooking.managedAction, "JOIN_GAME");
+
+  const kotelniki = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: exercise("Падел.Дружба.Котельники — 12 месяцев"),
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(kotelniki[4].statusCode, 409);
+  assert.equal(kotelniki[4].payload.details.code, "MANAGED_SUBSCRIPTION_PLAN_NOT_ACTIVATED");
+});
+
+test("published managed policy is evaluated before Mongo and persists its audit identity", () => {
+  const runtime = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse(),
+    _subscriptionBooking: baseContext("managed_runtime_context", {
+      serviceDate: "2026-08-21",
+      category: "open_game",
+      planKey: "piter_friendship",
+      managedAction: "CREATE_GAME",
+      managedTarget: {
+        resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
+        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
+        basePriceMinor: null, currency: "RUB",
+      },
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(runtime[0]._subscriptionBooking.step, "active_bookings");
+
+  const active = runFunction(ROUTER_FILE, {
+    statusCode: 200, payload: { content: [] },
+    _subscriptionBooking: runtime[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  const history = runFunction(ROUTER_FILE, {
+    statusCode: 200, payload: { content: [] },
+    _subscriptionBooking: active[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(history[6]._subscriptionBooking.step, "managed_policy_decision");
+  assert.equal(history[1], null);
+
+  const evaluated = runFunction(MANAGED_EVALUATOR_FILE, history[6]);
+  assert.ok(evaluated[0]);
+  const routed = runFunction(ROUTER_FILE, evaluated[0], MANAGED_GLOBALS);
+  assert.equal(routed[1]._subscriptionBooking.step, "operation_find");
+  assert.equal(routed[1]._subscriptionBooking.managedDecision.policyVersion, 1);
+  assert.equal(routed[1]._subscriptionBooking.managedDecision.subscriptionInstanceId,
+    "subscription-instance-1");
+  assert.equal(routed[1]._subscriptionBooking.managedDecision.benefit.kind, "FREE_ENTITLEMENT");
+});
+
+test("Piter rejects an all-stations policy and regional tournament discounts stay closed", () => {
+  const invalidPolicy = managedRuntimeResponse({ allStations: true });
+  const runtime = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: invalidPolicy,
+    _subscriptionBooking: baseContext("managed_runtime_context", {
+      serviceDate: "2026-08-21", category: "open_game", planKey: "piter_friendship",
+      managedAction: "CREATE_GAME",
+      managedTarget: {
+        resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
+        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
+        basePriceMinor: null, currency: "RUB",
+      },
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(runtime[4].statusCode, 409);
+  assert.equal(runtime[4].payload.details.code, "MANAGED_SUBSCRIPTION_POLICY_UNSUPPORTED");
+
+  const tournament = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      id: "exercise-target",
+      timeFrom: "2026-08-21T18:00:00+03:00",
+      timeTo: "2026-08-21T19:00:00+03:00",
+      direction: { id: 2617, name: "Турнир" },
+      type: { id: 839, name: "Падел Турнир" },
+      studio: { id: PITER_STATION_ID },
+      availableClientSubscriptions: [{
+        clientSubscriptionId: "client-subscription-1",
+        name: "Падел.Дружба.Питер — 12 месяцев",
+      }],
+    },
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(tournament[4].statusCode, 409);
+  assert.equal(tournament[4].payload.details.code,
+    "MANAGED_SUBSCRIPTION_DISCOUNT_NOT_CONFIGURED");
+});
+
+test("90 minute create is blocked while 120 minute join is allowed by the same policy", () => {
+  const evaluateDuration = (action: "CREATE_GAME" | "JOIN_GAME", durationMinutes: number) => {
+    const ctx = baseContext("history_bookings", {
+      serviceDate: "2026-08-21", category: "open_game", planKey: "piter_friendship",
+      managedAction: action, managedRuntime: {
+        subscriptionInstanceId: "subscription-instance-1",
+        policyDigest: "a".repeat(64),
+        policy: managedRuntimeResponse().policy,
+        instance: managedRuntimeResponse().instance,
+      },
+      managedTarget: {
+        resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
+        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        durationMinutes, startsAt: "2026-08-21T15:00:00.000Z",
+        basePriceMinor: null, currency: "RUB",
+      },
+      activeBookingsPayload: { content: [] },
+    });
+    const history = runFunction(ROUTER_FILE, {
+      statusCode: 200, payload: { content: [] }, _subscriptionBooking: ctx,
+    }, MANAGED_GLOBALS);
+    return runFunction(MANAGED_EVALUATOR_FILE, history[6]);
+  };
+  const create = evaluateDuration("CREATE_GAME", 90);
+  assert.equal(create[0], null);
+  assert.ok(create[1]._managedSubscriptionPolicyDecision.blockers
+    .some((item: any) => item.code === "DURATION_NOT_ALLOWED"));
+  const join = evaluateDuration("JOIN_GAME", 120);
+  assert.ok(join[0]);
+  assert.equal(join[0]._managedSubscriptionPolicyDecision.eligible, true);
+});
+
+test("blocked managed policy exposes stable blocker codes without the runtime payload", () => {
+  const result = runFunction(MANAGED_BLOCKED_FILE, {
+    _managedSubscriptionPolicyInput: { secretRuntimePayload: true },
+    _managedSubscriptionPolicyDecision: {
+      eligible: false,
+      policyVersion: 1,
+      blockers: [
+        { code: "DURATION_NOT_ALLOWED", message: "Такая длительность недоступна" },
+        { code: "DAILY_USAGE_LIMIT_REACHED", message: "Лимит исчерпан" },
+      ],
+    },
+  });
+  assert.equal(result.statusCode, 409);
+  assert.equal(result.payload.details.code, "DURATION_NOT_ALLOWED");
+  assert.deepEqual(result.payload.details.blockerCodes, [
+    "DURATION_NOT_ALLOWED", "DAILY_USAGE_LIMIT_REACHED",
+  ]);
+  assert.equal(result._managedSubscriptionPolicyInput, undefined);
+  assert.doesNotMatch(JSON.stringify(result.payload), /secretRuntimePayload/);
+});
 
 test("flat Viva Admin booking blocks another allowed event for the same subscription and date", () => {
   const out = runFunction(ROUTER_FILE, {
@@ -885,6 +1122,9 @@ test("guarded patcher requires the exact live preimage and wires split subscript
   assert.match(source, /sourceKind === "live-147"/);
   assert.match(source, /Date\.now\(\) - pulledAt <= 30 \* 60 \* 1000/);
   assert.match(source, /url: "\/lk\/subscription-bookings"/);
+  assert.match(source, /managedAction: ctx\.action === "create"/);
+  assert.match(source, /readFunction\("fn_managed_subscription_policy_evaluate\.js"\)/);
+  assert.match(source, /\[IDS\.debug\], \[IDS\.managedPolicy\]/);
   assert.match(source, /nextRouter\.outputs = 4/);
   assert.match(source, /nextRouter\.wires = \[\.\.\.nextRouter\.wires, \[IDS\.http\]\]/);
 });

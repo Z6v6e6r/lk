@@ -5,6 +5,7 @@ const SHARED_LIMIT_FROM = "2026-08-01";
 const PREPARED_LEASE_MS = 2 * 60 * 1000;
 // Viva normally confirms in seconds; keep the dedupe window short, then reconcile safely.
 const PENDING_CONFIRMATION_MS = 15 * 60 * 1000;
+const PITER_STATION_ID = "1ea77cbf-bc36-49a1-96d6-f35c216a409b";
 
 const OUTPUT_HTTP = 0;
 const OUTPUT_MONGO_FIND = 1;
@@ -12,9 +13,10 @@ const OUTPUT_MONGO_INSERT = 2;
 const OUTPUT_MONGO_UPDATE = 3;
 const OUTPUT_FINAL = 4;
 const OUTPUT_DEBUG = 5;
+const OUTPUT_MANAGED_POLICY = 6;
 
 const emit = (index, value = msg) => {
-  const outputs = [null, null, null, null, null, null];
+  const outputs = [null, null, null, null, null, null, null];
   outputs[index] = value;
   return outputs;
 };
@@ -44,6 +46,14 @@ const normalizeMarker = (value) => String(value || "")
   .replace(/ё/g, "е")
   .replace(/[^a-z0-9а-я]+/gi, "");
 const isHttpOk = (status) => Number(status) >= 200 && Number(status) < 300;
+
+const readGlobal = (key) => {
+  try {
+    return toStr(global.get(key));
+  } catch (_) {
+    return null;
+  }
+};
 
 const responseHeaders = () => ({
   "Content-Type": "application/json; charset=utf-8",
@@ -131,6 +141,29 @@ const prepareUserGet = (ctx, step, path) => prepareHttp(
   undefined,
   { Authorization: ctx.authHeader, Accept: "application/json" },
 );
+
+const prepareManagedRuntimeContext = (ctx) => {
+  const apiBase = (readGlobal("subscriptions_runtime_api_base_url") || "").replace(/\/+$/, "");
+  const integrationToken = readGlobal("subscriptions_runtime_context_integration_token");
+  if (!apiBase || !/^https:\/\//i.test(apiBase) || !integrationToken) {
+    return finishError(ctx, 503, "Контур правил подписки временно недоступен", {
+      code: "MANAGED_SUBSCRIPTION_RUNTIME_NOT_CONFIGURED",
+    });
+  }
+  return prepareHttp(
+    ctx,
+    "managed_runtime_context",
+    "POST",
+    `${apiBase}/internal/subscriptions/runtime-context`,
+    { clientSubscriptionId: ctx.clientSubscriptionId },
+    {
+      Authorization: ctx.authHeader,
+      "X-Subscriptions-Integration-Token": integrationToken,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+  );
+};
 
 const prepareAdminGet = (ctx, step, path) => {
   let serviceToken = null;
@@ -365,6 +398,57 @@ const eventDate = (value) => {
   return null;
 };
 
+const finiteDate = (value) => {
+  const date = new Date(String(value || ""));
+  return Number.isFinite(date.getTime()) ? date : null;
+};
+
+const eventStartsAt = (exercise) => {
+  if (!isObj(exercise)) return null;
+  for (const value of [exercise.timeFrom, exercise.startsAt, exercise.startAt, exercise.fromTime]) {
+    const date = finiteDate(value);
+    if (date) return date.toISOString();
+  }
+  return null;
+};
+
+const eventDurationMinutes = (exercise) => {
+  if (!isObj(exercise)) return null;
+  const explicit = Number(exercise.durationMinutes ?? exercise.duration);
+  if (Number.isInteger(explicit) && explicit > 0 && explicit <= 1440) return explicit;
+  const from = finiteDate(exercise.timeFrom || exercise.startsAt || exercise.startAt);
+  const to = finiteDate(exercise.timeTo || exercise.endsAt || exercise.endAt);
+  if (from && to) {
+    const minutes = Math.round((to.getTime() - from.getTime()) / 60000);
+    if (minutes > 0 && minutes <= 1440) return minutes;
+  }
+  const parseClock = (value) => {
+    const match = String(value || "").match(/(?:^|T)(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+    return Number(match[1]) * 60 + Number(match[2]);
+  };
+  const startMinutes = parseClock(exercise.timeFrom || exercise.startsAt);
+  const endMinutes = parseClock(exercise.timeTo || exercise.endsAt);
+  if (startMinutes === null || endMinutes === null) return null;
+  const minutes = endMinutes > startMinutes
+    ? endMinutes - startMinutes
+    : endMinutes + 1440 - startMinutes;
+  return minutes > 0 && minutes <= 1440 ? minutes : null;
+};
+
+const managedActionForTarget = (ctx) => {
+  if (["CREATE_GAME", "JOIN_GAME"].includes(ctx.managedAction)) return ctx.managedAction;
+  if (ctx.category === "group_training") return "BOOK_GROUP_TRAINING";
+  if (ctx.category === "tournament") return "BOOK_TOURNAMENT";
+  return null;
+};
+
+const managedTargetCategory = (category) => ({
+  open_game: "GAME",
+  group_training: "GROUP_TRAINING",
+  tournament: "TOURNAMENT",
+}[category] || null);
+
 const bookingExercise = (value) => (isObj(value?.exercise) ? value.exercise : null);
 const bookingId = (value) => toStr(value?.id || value?.bookingId || value?.uuid);
 const bookingExerciseId = (value) => {
@@ -575,6 +659,7 @@ const prepareOperationReclaim = (ctx, operation, now = new Date()) => prepareMon
     category: ctx.category,
     planKey: ctx.planKey || null,
     limitMode: ctx.limitMode,
+    managedDecision: ctx.managedDecision || null,
     state: "PREPARED",
     attempts: 0,
     leaseUntil: new Date(now.getTime() + PREPARED_LEASE_MS).toISOString(),
@@ -776,10 +861,45 @@ if (ctx.step === "exercise") {
   ctx.subscriptionName = pickName(ownedSubscription);
   ctx.planKey = resolvePlanKey(ownedSubscription) || resolvePlanKey(ctx.subscriptionName);
   if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
-    return finishError(ctx, 409, "Для региональной подписки требуется опубликованная версия правил", {
-      code: "MANAGED_SUBSCRIPTION_POLICY_REQUIRED",
-      planKey: ctx.planKey,
-    });
+    if (ctx.planKey === "kotelniki_friendship") {
+      return finishError(ctx, 409, "Подписка Котельников ещё не подключена к правилам записи", {
+        code: "MANAGED_SUBSCRIPTION_PLAN_NOT_ACTIVATED",
+        planKey: ctx.planKey,
+      });
+    }
+    ctx.managedAction = managedActionForTarget(ctx);
+    if (["BOOK_GROUP_TRAINING", "BOOK_TOURNAMENT"].includes(ctx.managedAction)) {
+      return finishError(ctx, 409, "Скидка подписки для этого формата ещё не настроена", {
+        code: "MANAGED_SUBSCRIPTION_DISCOUNT_NOT_CONFIGURED",
+        action: ctx.managedAction,
+      });
+    }
+    ctx.managedTarget = {
+      resolutionSource: "SERVER",
+      stationId: ctx.studioId,
+      category: managedTargetCategory(ctx.category),
+      externalEventTypeId: toStr(
+        exercise.type?.id || exercise.exerciseType?.id || exercise.typeId
+        || exercise.direction?.id || exercise.exerciseDirection?.id || exercise.directionId,
+      ),
+      productTypeId: null,
+      eventId: actualExerciseId,
+      durationMinutes: eventDurationMinutes(exercise),
+      startsAt: eventStartsAt(exercise),
+      basePriceMinor: null,
+      currency: "RUB",
+    };
+    if (!ctx.managedAction || !ctx.managedTarget.stationId || !ctx.managedTarget.category
+      || !ctx.managedTarget.externalEventTypeId || !ctx.managedTarget.durationMinutes
+      || !ctx.managedTarget.startsAt) {
+      return finishError(ctx, 409, "Нельзя безопасно определить действие и параметры подписки", {
+        code: "MANAGED_SUBSCRIPTION_TARGET_UNRESOLVED",
+        planKey: ctx.planKey,
+      });
+    }
+    ctx.limitMode = "shared_day";
+    ctx.trackedDailyLimit = true;
+    return prepareManagedRuntimeContext(ctx);
   }
   if (!ctx.serviceDate || !ctx.category) {
     return finishError(ctx, 502, "Не удалось определить дату или категорию упражнения Viva", {
@@ -797,6 +917,21 @@ if (ctx.step === "exercise") {
   const nameMarker = normalizeMarker(ctx.subscriptionName);
   const isKnownUntrackedPlan = nameMarker.includes("энерг") || nameMarker.includes("energy");
   if (!ctx.planKey && !isKnownUntrackedPlan) {
+    ctx.serverTarget = {
+      resolutionSource: "SERVER",
+      stationId: ctx.studioId,
+      category: managedTargetCategory(ctx.category),
+      externalEventTypeId: toStr(
+        exercise.type?.id || exercise.exerciseType?.id || exercise.typeId
+        || exercise.direction?.id || exercise.exerciseDirection?.id || exercise.directionId,
+      ),
+      productTypeId: null,
+      eventId: actualExerciseId,
+      durationMinutes: eventDurationMinutes(exercise),
+      startsAt: eventStartsAt(exercise),
+      basePriceMinor: null,
+      currency: "RUB",
+    };
     const search = `?type=get_sub_name&phone=${encodeURIComponent(ctx.actorPhone)}&subId=${encodeURIComponent(ctx.clientSubscriptionId)}`;
     return prepareHttp(ctx, "subscription_name", "GET", `${SERV2_URL}${search}`, undefined, {
       Accept: "application/json",
@@ -817,11 +952,35 @@ if (ctx.step === "subscription_name") {
   ctx.subscriptionName = toStr(payload?.sertName || payload?.subscriptionName || payload?.name);
   ctx.planKey = resolvePlanKey(ctx.subscriptionName);
   if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
-    return finishError(ctx, 409, "Для региональной подписки требуется опубликованная версия правил", {
-      code: "MANAGED_SUBSCRIPTION_POLICY_REQUIRED",
-      planKey: ctx.planKey,
-    });
+    if (ctx.planKey === "kotelniki_friendship") {
+      return finishError(ctx, 409, "Подписка Котельников ещё не подключена к правилам записи", {
+        code: "MANAGED_SUBSCRIPTION_PLAN_NOT_ACTIVATED",
+        planKey: ctx.planKey,
+      });
+    }
+    ctx.managedAction = managedActionForTarget(ctx);
+    if (["BOOK_GROUP_TRAINING", "BOOK_TOURNAMENT"].includes(ctx.managedAction)) {
+      return finishError(ctx, 409, "Скидка подписки для этого формата ещё не настроена", {
+        code: "MANAGED_SUBSCRIPTION_DISCOUNT_NOT_CONFIGURED",
+        action: ctx.managedAction,
+      });
+    }
+    ctx.managedTarget = ctx.serverTarget;
+    delete ctx.serverTarget;
+    if (!ctx.managedAction || !isObj(ctx.managedTarget)
+      || !ctx.managedTarget.stationId || !ctx.managedTarget.category
+      || !ctx.managedTarget.externalEventTypeId || !ctx.managedTarget.durationMinutes
+      || !ctx.managedTarget.startsAt) {
+      return finishError(ctx, 409, "Нельзя безопасно определить действие и параметры подписки", {
+        code: "MANAGED_SUBSCRIPTION_TARGET_UNRESOLVED",
+        planKey: ctx.planKey,
+      });
+    }
+    ctx.limitMode = "shared_day";
+    ctx.trackedDailyLimit = true;
+    return prepareManagedRuntimeContext(ctx);
   }
+  delete ctx.serverTarget;
   if (!ctx.subscriptionName) {
     return finishError(ctx, 502, "Источник не вернул тип выбранного абонемента", {
       code: "SUBSCRIPTION_PLAN_UNRESOLVED",
@@ -836,6 +995,77 @@ if (ctx.step === "subscription_name") {
   }
   ctx.limitMode = resolveLimitMode(ctx.planKey, ctx.serviceDate);
   ctx.trackedDailyLimit = ctx.limitMode !== "event";
+  return prepareUserGet(ctx, "active_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
+}
+
+if (ctx.step === "managed_runtime_context") {
+  if (!isHttpOk(msg.statusCode)) {
+    return finishError(ctx, 409, "Опубликованные правила подписки сейчас недоступны", {
+      code: "MANAGED_SUBSCRIPTION_RUNTIME_CONTEXT_UNAVAILABLE",
+      upstreamStatus: Number(msg.statusCode) || null,
+    });
+  }
+  const runtime = unwrapRecord(msg.payload);
+  const policy = runtime?.policy;
+  const instance = runtime?.instance;
+  if (!runtime || runtime.schemaVersion !== 1
+    || normalizeId(runtime.clientSubscriptionId) !== normalizeId(ctx.clientSubscriptionId)
+    || !toStr(runtime.subscriptionInstanceId) || !toStr(runtime.policyDigest)
+    || !isObj(policy) || !isObj(instance)
+    || runtime.subscriptionInstanceId !== instance.subscriptionInstanceId
+    || policy.policyVersion !== instance.policyVersion
+    || policy.subscriptionTypeId !== instance.subscriptionTypeId) {
+    return finishError(ctx, 502, "ЦУП вернул несогласованный контекст подписки", {
+      code: "MANAGED_SUBSCRIPTION_RUNTIME_CONTEXT_INVALID",
+    });
+  }
+  const unsupportedUsage = policy.activeServicesLimit?.enabled === true
+    || policy.usage?.weeklyUsageLimit !== null
+    || policy.usage?.monthlyUsageLimit !== null
+    || policy.usage?.maxFutureBookings !== null
+    || Number(policy.usage?.minHoursBetweenUses || 0) !== 0
+    || Number(policy.dailyUsageLimit) !== 1
+    || ["60", "90", "120"].some((key) => Number(policy.usageUnitsByDuration?.[key]) !== 1);
+  const createDurations = Array.isArray(policy.createGame?.durationsMinutes)
+    ? policy.createGame.durationsMinutes.map(Number).sort((left, right) => left - right)
+    : [];
+  const enabledStationRules = Array.isArray(policy.stationAccessRules)
+    ? policy.stationAccessRules.filter((rule) => rule?.enabled === true)
+    : [];
+  const stationPolicySupported = ctx.planKey === "piter_friendship"
+    ? enabledStationRules.length > 0 && enabledStationRules.every((rule) => (
+      rule.selector?.kind === "STATION_LIST"
+      && Array.isArray(rule.selector.stationIds)
+      && rule.selector.stationIds.length === 1
+      && normalizeId(rule.selector.stationIds[0]) === normalizeId(PITER_STATION_ID)
+      && rule.surcharge?.kind === "NONE"
+    ))
+    : ctx.planKey === "network_friendship"
+      && enabledStationRules.length > 0 && enabledStationRules.every((rule) => (
+        rule.selector?.kind === "ALL_STATIONS" && rule.surcharge?.kind === "NONE"
+      ));
+  const regionalRulesUnsupported = policy.createGame?.enabled !== true
+    || createDurations.length !== 1 || createDurations[0] !== 60
+    || policy.joinGame?.enabled !== true
+    || Number(policy.joinGame?.minDurationMinutes) !== 60
+    || Number(policy.joinGame?.maxDurationMinutes) !== 120
+    || !stationPolicySupported
+    || (Array.isArray(policy.benefitRules) && policy.benefitRules.some((rule) => (
+      rule?.enabled === true && ["GROUP_TRAINING", "TOURNAMENT", "ADD_ON_PRODUCT"].includes(rule.category)
+    )));
+  if (unsupportedUsage || regionalRulesUnsupported) {
+    return finishError(ctx, 409, "Эта версия правил требует ещё не подключённого счётчика", {
+      code: "MANAGED_SUBSCRIPTION_POLICY_UNSUPPORTED",
+      policyVersion: policy.policyVersion ?? null,
+    });
+  }
+  ctx.managedRuntime = {
+    subscriptionInstanceId: runtime.subscriptionInstanceId,
+    policyDigest: runtime.policyDigest,
+    policy,
+    instance,
+    evidence: runtime.evidence || null,
+  };
   return prepareUserGet(ctx, "active_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
 }
 
@@ -947,7 +1177,7 @@ if (ctx.step === "history_bookings") {
       continue;
     }
     const consumesSameLimit = ctx.limitMode === "shared_day"
-      ? PLAN_CATEGORIES[ctx.planKey].includes(category)
+      ? (MANAGED_PLAN_KEYS.has(ctx.planKey) || PLAN_CATEGORIES[ctx.planKey].includes(category))
       : category === ctx.category;
     if (consumesSameLimit) {
       dailyConflict = booking;
@@ -974,6 +1204,56 @@ if (ctx.step === "history_bookings") {
   ctx.sameExerciseBooking = sameExerciseBooking;
   ctx.cancelledSubscriptionBookings = cancelledSubscriptionBookings;
   ctx.operationKey = buildOperationKey(ctx);
+  if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
+    if (!isObj(ctx.managedRuntime) || !isObj(ctx.managedTarget) || !ctx.managedAction) {
+      return finishError(ctx, 502, "Контекст проверки региональной подписки потерян", {
+        code: "MANAGED_SUBSCRIPTION_CONTEXT_MISSING",
+      });
+    }
+    ctx.step = "managed_policy_decision";
+    msg._subscriptionBooking = ctx;
+    msg._managedSubscriptionPolicyInput = {
+      evaluatedAt: new Date().toISOString(),
+      action: ctx.managedAction,
+      policy: ctx.managedRuntime.policy,
+      instance: ctx.managedRuntime.instance,
+      target: ctx.managedTarget,
+      usage: {
+        activeServiceScope: ctx.managedRuntime.policy.activeServicesLimit?.scope
+          || "SUBSCRIPTION_BENEFIT_ONLY",
+        dailyBucketLocalDate: ctx.serviceDate,
+        activeServices: 0,
+        dailyUsed: 0,
+        weeklyUsed: 0,
+        monthlyUsed: 0,
+        futureBookings: 0,
+        activeServiceStartsAt: [],
+      },
+    };
+    delete msg.error;
+    return emit(OUTPUT_MANAGED_POLICY);
+  }
+  return prepareOperationFind(ctx);
+}
+
+if (ctx.step === "managed_policy_decision") {
+  const decision = msg._managedSubscriptionPolicyDecision;
+  if (!isObj(decision) || decision.eligible !== true
+    || decision.policyVersion !== ctx.managedRuntime?.policy?.policyVersion) {
+    return finishError(ctx, 409, "Правила подписки не разрешили эту запись", {
+      code: "MANAGED_SUBSCRIPTION_POLICY_BLOCKED",
+    });
+  }
+  ctx.managedDecision = {
+    policyVersion: decision.policyVersion,
+    policyDigest: ctx.managedRuntime.policyDigest,
+    subscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
+    usageUnits: decision.usageUnits,
+    benefit: decision.benefit || null,
+    evaluatedAt: decision.evaluatedAt,
+  };
+  delete msg._managedSubscriptionPolicyInput;
+  delete msg._managedSubscriptionPolicyDecision;
   return prepareOperationFind(ctx);
 }
 
@@ -1055,6 +1335,7 @@ if (ctx.step === "operation_find") {
       category: ctx.category,
       planKey: ctx.planKey || null,
       limitMode: ctx.limitMode,
+      managedDecision: ctx.managedDecision || null,
       state: "PREPARED",
       attempts: 0,
       leaseUntil: new Date(now.getTime() + PREPARED_LEASE_MS).toISOString(),

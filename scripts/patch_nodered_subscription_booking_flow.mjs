@@ -31,6 +31,8 @@ const IDS = {
   prepare: "lk_subscription_booking_prepare_20260804",
   http: "lk_subscription_booking_http_20260804",
   router: "lk_subscription_booking_router_20260804",
+  managedPolicy: "lk_subscription_managed_policy_20260820",
+  managedPolicyBlocked: "lk_subscription_managed_policy_blocked_20260820",
   mongoFind: "lk_subscription_booking_find_20260804",
   mongoInsert: "lk_subscription_booking_insert_20260804",
   mongoUpdate: "lk_subscription_booking_update_20260804",
@@ -126,6 +128,11 @@ const startSubscriptionBookingGateway = (ctx) => {
     authHeader,
     exerciseId: ctx.exerciseId,
     clientSubscriptionId: ctx.clientSubscriptionId,
+    managedAction: ctx.action === "create"
+      ? "CREATE_GAME"
+      : ctx.action === "join"
+        ? "JOIN_GAME"
+        : null,
     spot: ctx.spot || null,
     subscriptionVisitCount: resolveSubscriptionVisitCount(ctx),
     startedAt: new Date().toISOString(),
@@ -218,8 +225,18 @@ function buildManagedNodes(tabId, mongoClientId) {
     },
     functionNode(
       tabId, IDS.router, "Route atomic subscription booking", readFunction("fn_subscription_booking_router.js"),
-      6, 1060, 5120,
-      [[IDS.http], [IDS.mongoFind], [IDS.mongoInsert], [IDS.mongoUpdate], [IDS.finalize], [IDS.debug]],
+      7, 1060, 5120,
+      [[IDS.http], [IDS.mongoFind], [IDS.mongoInsert], [IDS.mongoUpdate], [IDS.finalize], [IDS.debug], [IDS.managedPolicy]],
+    ),
+    functionNode(
+      tabId, IDS.managedPolicy, "Evaluate managed subscription policy",
+      readFunction("fn_managed_subscription_policy_evaluate.js"),
+      2, 1370, 5010, [[IDS.router], [IDS.managedPolicyBlocked]],
+    ),
+    functionNode(
+      tabId, IDS.managedPolicyBlocked, "Block managed subscription decision",
+      readFunction("fn_managed_subscription_policy_blocked.js"),
+      1, 1690, 5010, [[IDS.finalize]],
     ),
     mongoNode(tabId, IDS.mongoFind, "Find daily subscription operation", "find", mongoClientId, 1380, 5060, IDS.router),
     mongoNode(tabId, IDS.mongoInsert, "Insert daily subscription operation", "insertOne", mongoClientId, 1390, 5110, IDS.router),

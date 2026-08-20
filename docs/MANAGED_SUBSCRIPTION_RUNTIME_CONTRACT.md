@@ -2,18 +2,19 @@
 
 ## Status
 
-This checkpoint defines and tests the first server-side policy evaluator for the
-managed annual subscription model. It does not publish a CUP policy, activate a
-Viva product, create a client subscription, change the live Node-RED flow or
-perform a booking/payment mutation.
+This checkpoint defines, wires and tests the first server-side policy evaluator
+for the managed annual subscription model. It does not publish a CUP policy,
+activate a Viva product, create a client subscription, change the live Node-RED
+flow or perform a booking/payment mutation.
 
 The evaluator source is:
 
 `scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_evaluate.js`.
 
-The current `/lk/subscription-bookings` route remains unchanged until a later
-flow-wiring checkpoint can resolve a published policy and an owned client
-instance from authoritative server sources.
+The source-driven `/lk/subscription-bookings` candidate resolves a published
+policy and actor-owned client instance through CUP runtime context before the
+existing atomic claim and Viva read-back state machine. Production remains
+unchanged until a separately approved fresh-flow build and deploy.
 
 ## Boundary
 
@@ -178,24 +179,24 @@ the same policy version.
 - a matching `DISABLED` game benefit disables the discount only, while group or
   tournament use remains unavailable without an enabled matching benefit.
 
-## Required flow wiring (next checkpoint)
+## Implemented source-driven flow wiring
 
-The current booking gateway can use the evaluator only after these source-driven
-Node-RED steps exist:
+The booking gateway candidate performs these source-driven steps:
 
-1. read a reviewed CUP runtime projection by exact Viva product mapping;
-2. resolve the actor-owned local instance by exact `clientSubscriptionId`;
+1. send the authenticated LK Bearer and exact owned `clientSubscriptionId` to
+   the internal CUP runtime-context adapter;
+2. CUP resolves the actor-owned instance and verified provider mapping;
 3. resolve event fields from Viva/read model, never from browser price/category;
-4. merge complete active/history bookings with non-expired local reservations;
+4. merge complete active/history bookings and keep the atomic local day claim;
 5. execute the policy evaluator;
-6. on output 1, create one atomic entitlement reservation and continue the
+6. on output 1, create one atomic day reservation and continue the
    existing Viva mutation/read-back state machine;
 7. on output 2, return stable `409` blocker details without an upstream write;
 8. release a reservation only after exact inactive booking/refund evidence.
 
-The flow must preserve legacy plan behavior when no managed mapping exists.
+The flow preserves legacy plan behavior when no managed mapping exists.
 Once a product is explicitly mapped to managed runtime, missing/unpublished
-policy evidence must fail closed and must not fall back to hardcoded plan names.
+policy evidence fails closed and does not fall back to hardcoded plan names.
 
 ## Evidence gates
 

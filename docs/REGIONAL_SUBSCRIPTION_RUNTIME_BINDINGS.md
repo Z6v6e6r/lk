@@ -47,7 +47,7 @@ summer_subscription_<counterKey>_inventory_id            # optional override
 `bindingReady=false`, `canPurchase=false`; purchase отвечает fail closed и не
 делает Viva-запрос.
 
-## DRAFT правил использования
+## Реализованный fail-closed маршрут правил
 
 - общий дневной лимит: одна операция `CREATE_GAME` или `JOIN_GAME`;
 - создание: только 60 минут;
@@ -55,14 +55,28 @@ summer_subscription_<counterKey>_inventory_id            # optional override
 - add-on для создания 90/120 минут не задан и остаётся заблокированным;
 - скидки на групповые тренировки и турниры не заданы и остаются
   заблокированными;
-- legacy `/lk/subscription-bookings` распознаёт все три региональных плана и
-  отвечает `MANAGED_SUBSCRIPTION_POLICY_REQUIRED`, а не применяет правила
-  обычной «Дружбы».
+- `/lk/subscription-bookings` распознаёт Питер и ХАБ, после server-side чтения
+  упражнения и exact owned `clientSubscriptionId` запрашивает у ЦУП
+  `POST /api/internal/subscriptions/runtime-context`;
+- ЦУП возвращает только закреплённые за этим клиентом immutable
+  `PUBLISHED` policy/instance; ЛК проверяет действие, длительность, станцию и
+  дневной лимит, затем сохраняет `policyVersion`, `policyDigest` и
+  `subscriptionInstanceId` в атомарной операции;
+- Котельники отвечают `MANAGED_SUBSCRIPTION_PLAN_NOT_ACTIVATED` и не переходят
+  к Viva mutation;
+- ЛК1 и ЛК2 используют тот же split create/join router и один шлюз
+  `/lk/subscription-bookings`, поэтому отдельной клиентской реализации правил
+  нет.
 
-Чтобы включить использование, ЦУП должен опубликовать immutable policy version
-с точным `subscriptionTypeId`, station selector и benefit/add-on rules; LK затем
-должен связать actor-owned `clientSubscriptionId` с этой версией и подключить
-существующий evaluator к claim/state-machine. До этого `usageEnabled=false`.
+Код маршрута готов, но использование остаётся выключенным до отдельного этапа:
+нужно создать проверенные provider mappings/instances из Viva read-back,
+опубликовать immutable policies Питера и ХАБ и включить runtime feature flags.
+До этого `usageEnabled=false` и запросы завершаются fail closed.
+
+Поддерживаемая первая версия policy ограничена безопасным счётчиком: одна
+единица на 60/90/120 минут, `dailyUsageLimit=1`, без weekly/monthly/future и
+active-service ограничений. Если ЦУП опубликует пока неподдерживаемый счётчик,
+ЛК ответит `MANAGED_SUBSCRIPTION_POLICY_UNSUPPORTED` до Viva/Mongo mutation.
 
 ## Обязательные проверки перед активацией
 
