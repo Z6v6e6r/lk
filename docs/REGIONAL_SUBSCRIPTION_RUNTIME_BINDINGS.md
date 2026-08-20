@@ -33,7 +33,7 @@ managed-policy станция должна быть получена из server
 | --- | --- | --- | --- |
 | `piter_friendship` | `piter_friendship_12m_2026_v1` | 4 × 100 | `1980000`, `2380000`, `3680000`, `5680000` |
 | `kotelniki_friendship` | `kotelniki_friendship_12m_2026_v1` | 4 × 50 | `1980000`, `2380000`, `3680000`, `5680000` |
-| `network_friendship` | `network_friendship_12m_2026_v1` | 1 × 50 | `5680000` |
+| `network_friendship` | `network_friendship_12m_2026_v1` | 1 × 100 | `5680000` |
 
 Для каждой партии требуется отдельный подтверждённый Viva product ID:
 

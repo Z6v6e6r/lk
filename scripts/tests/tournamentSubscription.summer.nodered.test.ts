@@ -1600,9 +1600,9 @@ test("summer subscription counter refresh builds materialized counter updates", 
   assert.equal(kotelnikiSet.remainingCount, 200);
   assert.equal(kotelnikiSet.bindingReady, false);
   assert.equal(kotelnikiSet.canPurchase, false);
-  assert.equal(networkSet.totalLimit, 50);
-  assert.equal(networkSet.batchSize, 50);
-  assert.equal(networkSet.remainingCount, 50);
+  assert.equal(networkSet.totalLimit, 100);
+  assert.equal(networkSet.batchSize, 100);
+  assert.equal(networkSet.remainingCount, 100);
   assert.equal(networkSet.bindingReady, true);
   assert.equal(networkSet.canPurchase, true);
   assert.equal(piterSet.totalLimit, 400);
@@ -2077,7 +2077,7 @@ test("Kotelniki status uses four server-side batches of 50", () => {
   assert.equal(payload.canPurchase, false);
 });
 
-test("network status uses one server-side batch of 50 at 56 800 RUB", () => {
+test("network status uses one server-side batch of 100 at 56 800 RUB", () => {
   const prepared = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
     { req: { query: { counterKey: "network_friendship" } } },
@@ -2090,8 +2090,8 @@ test("network status uses one server-side batch of 50 at 56 800 RUB", () => {
     inventoryId: "network_friendship_12m_2026_v1",
     counterKey: "network_friendship",
   });
-  assert.equal(counter.totalLimit, 50);
-  assert.equal(counter.batchSize, 50);
+  assert.equal(counter.totalLimit, 100);
+  assert.equal(counter.batchSize, 100);
   assert.equal((counter.tiers as unknown[]).length, 1);
 
   const status = runNodeRedFunction(
@@ -2101,7 +2101,7 @@ test("network status uses one server-side batch of 50 at 56 800 RUB", () => {
   ) as unknown[];
   const payload = asRecord(asRecord(status[0]).payload);
   assert.equal(payload.batchIndex, 1);
-  assert.equal(payload.batchRemainingCount, 50);
+  assert.equal(payload.batchRemainingCount, 100);
   assert.equal(payload.priceMinor, 5680000);
   assert.equal(payload.productId, "db7a5250-7369-4f43-8ac5-9111be24bc74");
   assert.equal(payload.providerProductCostMinor, 5680000);

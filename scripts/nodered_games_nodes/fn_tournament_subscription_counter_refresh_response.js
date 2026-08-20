@@ -5,7 +5,7 @@ const toStr = (value) => {
 };
 const REGIONAL_FRIENDSHIP_CONFIGS = {
   kotelniki_friendship: { batchSize: 50, bindingLabel: "Котельники" },
-  network_friendship: { batchSize: 50, bindingLabel: "ХАБ" },
+  network_friendship: { batchSize: 100, bindingLabel: "ХАБ" },
   piter_friendship: { batchSize: 100, bindingLabel: "Питер" },
 };
 

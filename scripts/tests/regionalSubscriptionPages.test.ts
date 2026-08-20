@@ -36,10 +36,10 @@ test("Kotelniki is a dedicated four-tier 4 x 50 guarded storefront", () => {
   assert.match(deployDocs, /fallback-лимит 200/);
 });
 
-test("network is a dedicated one-tier 50-unit guarded storefront", () => {
+test("network is a dedicated one-tier 100-unit guarded storefront", () => {
   assert.match(page, /variant === "network_friendship"/);
   assert.match(page, /counterKey: "network_friendship"/);
-  assert.match(page, /NETWORK_FRIENDSHIP_BATCH_SIZE = 50/);
+  assert.match(page, /NETWORK_FRIENDSHIP_BATCH_SIZE = 100/);
   assert.match(page, /`\$\{fallbackBatchSize\} из \$\{fallbackBatchSize\}`/);
   assert.match(page, /NETWORK_FRIENDSHIP_ARTWORKS = \[networkSubscriptionImage\]/);
   assert.match(page, /remainingLabel: "До повышения цены осталось"/);
@@ -52,7 +52,7 @@ test("network is a dedicated one-tier 50-unit guarded storefront", () => {
   assert.match(networkLoader, /variant: "network_friendship"/);
   assert.match(networkLoader, /tournament-subscription-dev\.js/);
   assert.match(networkLoader, /tournament-subscription\.js/);
-  assert.match(deployDocs, /одна партия из 50 подписок/);
+  assert.match(deployDocs, /одна партия из 100 подписок/);
   assert.match(deployDocs, /56 800 ₽ вместо зачёркнутой 98 800 ₽/);
 });
 

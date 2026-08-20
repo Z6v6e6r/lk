@@ -87,7 +87,7 @@ const REGIONAL_FRIENDSHIP_CONFIGS = {
   },
   network_friendship: {
     inventoryId: "network_friendship_12m_2026_v1",
-    batchSize: 50,
+    batchSize: 100,
     tierPricesMinor: [5680000],
     productName: "Падел.Дружба.ХАБ",
     launchEnabled: true,
