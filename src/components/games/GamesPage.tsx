@@ -649,6 +649,23 @@ function formatCourtsLabel(count: number): string {
   return formatCourtCountLabel("Панорамик", count);
 }
 
+function formatStationCourtSummary(studio: Studio): string {
+  const labels = [
+    typeof studio.panoramicCourtsCount === "number"
+      ? formatCourtsLabel(studio.panoramicCourtsCount)
+      : "Панорамик: —",
+  ];
+
+  if (typeof studio.singleCourtsCount === "number") {
+    labels.push(`Сингл: ${studio.singleCourtsCount}`);
+  }
+  if (typeof studio.outdoorCourtsCount === "number") {
+    labels.push(`Открытых кортов: ${studio.outdoorCourtsCount}`);
+  }
+
+  return labels.join(", ");
+}
+
 function extractCourtOrder(name: string): number | null {
   const bySign = name.match(/№\s*(\d+)/i);
   if (bySign) {
@@ -14647,23 +14664,7 @@ export default function GamesPage({
                       {s.isActive === false ? (
                         <div className="game-card-sub game-station-card-status">Скоро открытие</div>
                       ) : (
-                        <>
-                          <div className="game-card-sub">
-                            {typeof s.panoramicCourtsCount === "number"
-                              ? formatCourtsLabel(s.panoramicCourtsCount)
-                              : "Панорамик: —"}
-                          </div>
-                          {typeof s.singleCourtsCount === "number" && (
-                            <div className="game-card-sub">
-                              Сингл: {s.singleCourtsCount}
-                            </div>
-                          )}
-                          {typeof s.outdoorCourtsCount === "number" && (
-                            <div className="game-card-sub">
-                              Открытых кортов: {s.outdoorCourtsCount}
-                            </div>
-                          )}
-                        </>
+                        <div className="game-card-sub">{formatStationCourtSummary(s)}</div>
                       )}
                     </button>
                   ))}

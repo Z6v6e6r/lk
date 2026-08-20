@@ -4,25 +4,27 @@ import test from "node:test";
 
 const gamesPageSource = fs.readFileSync("src/components/games/GamesPage.tsx", "utf8");
 
-test("station cards use the requested court count labels", () => {
+test("station cards render all court counts in one comma-separated row", () => {
   assert.ok(
-    gamesPageSource.includes("formatCourtsLabel(s.panoramicCourtsCount)"),
+    gamesPageSource.includes("formatCourtsLabel(studio.panoramicCourtsCount)"),
     "panoramic courts should keep the pluralized court label",
   );
   assert.ok(
-    /Сингл:\s*\{s\.singleCourtsCount\}/.test(gamesPageSource),
+    gamesPageSource.includes("labels.push(`Сингл: ${studio.singleCourtsCount}`)"),
     "single courts should render without a repeated court noun",
   );
   assert.ok(
-    /Открытых кортов:\s*\{s\.outdoorCourtsCount\}/.test(gamesPageSource),
+    gamesPageSource.includes("labels.push(`Открытых кортов: ${studio.outdoorCourtsCount}`)"),
     "outdoor courts should use the requested label without a trailing court noun",
   );
-  assert.equal(
-    /formatCourtCountLabel\("Сингл",\s*s\.singleCourtsCount\)/.test(gamesPageSource),
-    false,
+  assert.ok(
+    gamesPageSource.includes('return labels.join(", ");'),
+    "court labels should be joined into one comma-separated line",
   );
-  assert.equal(
-    /formatCourtCountLabel\("Открытых",\s*s\.outdoorCourtsCount\)/.test(gamesPageSource),
-    false,
+  assert.ok(
+    gamesPageSource.includes(
+      '<div className="game-card-sub">{formatStationCourtSummary(s)}</div>',
+    ),
+    "active station cards should render a single court summary row",
   );
 });
