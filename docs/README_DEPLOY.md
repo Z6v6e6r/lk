@@ -34,6 +34,12 @@ npm run nodered:modular:prepare-147 -- /root/.node-red/flows.json
 
 Это обязательно делает `pull -> write/verify source.flow.meta.json -> patch local source functions -> build --allow-other-tabs=true -> validate`, чтобы не выкатывать Node-RED из устаревшего локального snapshot.
 
+Managed subscription policy graph имеет отдельный exact-graph entrypoint
+`npm run nodered:managed-subscription-rules:deploy-147` с обязательным
+`NODE_RED_MANAGED_SUBSCRIPTION_RULES_DEPLOY=CONFIRM_147`. Он разрешает только
+закреплённые три изменения существующих узлов и два добавляемых policy-узла;
+общий function-only deploy для subscription binding остаётся отдельным gate.
+
 Для `POST /lk/subscription-bookings` production nginx должен содержать точный
 proxy-location из `scripts/nginx/lk-subscription-booking-location.conf`.
 Кандидат строится и применяется только через guarded

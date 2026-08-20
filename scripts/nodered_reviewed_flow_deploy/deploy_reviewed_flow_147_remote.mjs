@@ -7,7 +7,7 @@ import {
   assertProtectedFile,
   atomicWrite,
   sha256,
-  validateFunctionOnlyContract,
+  validateReviewedFlowContract,
 } from "./runtime_contract.mjs";
 
 const LIVE_FLOW_PATH = "/root/.node-red/flows.json";
@@ -123,7 +123,7 @@ export function createReviewedFlowRuntime({
     const contract = JSON.parse(contractBytes.toString("utf8"));
     const deploymentId = safeDeploymentId(expectedDeploymentId);
     if (contract.deploymentId !== deploymentId) throw new Error("Deployment ID differs from reviewed contract");
-    const validation = validateFunctionOnlyContract({ liveBytes, candidateBytes, contract });
+    const validation = validateReviewedFlowContract({ liveBytes, candidateBytes, contract });
     return { liveBytes, candidateBytes, contractBytes, contract, validation };
   };
 
@@ -136,9 +136,11 @@ export function createReviewedFlowRuntime({
       deploymentId: prepared.contract.deploymentId,
       sourceSha256: prepared.contract.sourceSha256,
       candidateSha256: prepared.contract.candidateSha256,
-      nodeCount: prepared.contract.nodeCount,
+      nodeCount: prepared.contract.nodeCount ?? prepared.contract.sourceNodeCount,
+      candidateNodeCount: prepared.contract.candidateNodeCount ?? prepared.contract.nodeCount,
       httpInputCount: prepared.contract.httpInputCount,
       changedNodeCount: prepared.contract.allowedChanges.length,
+      addedNodeCount: prepared.contract.allowedAdditions?.length ?? 0,
       nodeRedOnline: true,
       nodeRedPid: processInfo.pid,
       nodeRedRestartCount: processInfo.restartCount,

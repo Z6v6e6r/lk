@@ -65,6 +65,8 @@
     "nodered:viva-token-history:deploy-147": "bash scripts/deploy_nodered_viva_token_history_147.sh",
     "nodered:subscription-binding:deploy-147": "bash scripts/deploy_nodered_subscription_binding_147.sh",
     "nodered:subscription-binding:rollback-147": "bash scripts/rollback_nodered_subscription_binding_147.sh",
+    "nodered:managed-subscription-rules:deploy-147": "bash scripts/deploy_nodered_managed_subscription_rules_147.sh",
+    "nodered:managed-subscription-rules:rollback-147": "bash scripts/rollback_nodered_managed_subscription_rules_147.sh",
     "nodered:subscription-booking:patch": "node scripts/patch_nodered_subscription_booking_flow.mjs",
     "nodered:games:cancellation:phase2": "node scripts/patch_live_games_split_leave_phase2_cas.mjs",
     "nodered:runtime-hardening:test": "node --test scripts/tests/noderedMongoLoggingGuard.test.mjs",

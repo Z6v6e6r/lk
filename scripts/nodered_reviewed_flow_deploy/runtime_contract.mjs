@@ -4,6 +4,8 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 export const CONTRACT_FORMAT_VERSION = 1;
+export const EXACT_GRAPH_CONTRACT_FORMAT_VERSION = 2;
+export const EXACT_GRAPH_CONTRACT_KIND = "exact-graph";
 
 export const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -25,6 +27,24 @@ const changedFields = (before, after) => [...new Set([
   ...Object.keys(before),
   ...Object.keys(after),
 ])].filter((key) => !isDeepStrictEqual(before[key], after[key])).sort();
+
+const nodeSha256 = (node) => sha256(Buffer.from(JSON.stringify(node), "utf8"));
+
+const assertHttpInputsUnchanged = (liveFlow, candidateFlow) => {
+  const liveRoutes = liveFlow.filter((node) => node.type === "http in");
+  const candidateRoutes = candidateFlow.filter((node) => node.type === "http in");
+  const liveById = new Map(liveRoutes.map((node) => [node.id, node]));
+  const candidateById = new Map(candidateRoutes.map((node) => [node.id, node]));
+  const liveIds = [...liveById.keys()].sort();
+  const candidateIds = [...candidateById.keys()].sort();
+  if (!isDeepStrictEqual(liveIds, candidateIds)) throw new Error("Candidate changed HTTP routes");
+  for (const id of liveIds) {
+    if (!isDeepStrictEqual(liveById.get(id), candidateById.get(id))) {
+      throw new Error(`Candidate changed HTTP route: ${id}`);
+    }
+  }
+  return liveRoutes.length;
+};
 
 const assertDigest = (value, label) => {
   if (!/^[a-f0-9]{64}$/.test(String(value || ""))) throw new Error(`${label} is invalid`);
@@ -97,6 +117,81 @@ export function buildFunctionOnlyContract({ liveBytes, candidateBytes, deploymen
   };
 }
 
+export function buildExactGraphContract({
+  liveBytes,
+  candidateBytes,
+  deploymentId,
+  allowedChanges,
+  allowedAdditionIds,
+}) {
+  const normalizedDeploymentId = assertDeploymentId(deploymentId);
+  const normalizedChanges = (allowedChanges || []).map((change) => ({
+    id: String(change?.id || "").trim(),
+    fields: [...new Set((change?.fields || []).map((field) => String(field || "").trim()))].sort(),
+  }));
+  const normalizedAdditionIds = [...new Set(
+    (allowedAdditionIds || []).map((id) => String(id || "").trim()),
+  )].sort();
+  if (
+    !normalizedChanges.length
+    || normalizedChanges.some((change) => !change.id || !change.fields.length || change.fields.some((field) => !field))
+    || new Set(normalizedChanges.map((change) => change.id)).size !== normalizedChanges.length
+    || !normalizedAdditionIds.length
+    || normalizedAdditionIds.some((id) => !id)
+    || normalizedAdditionIds.length !== (allowedAdditionIds || []).length
+    || normalizedChanges.some((change) => normalizedAdditionIds.includes(change.id))
+  ) throw new Error("Exact-graph allowance must contain unique changed and added node contracts");
+
+  const liveFlow = JSON.parse(Buffer.from(liveBytes).toString("utf8"));
+  const candidateFlow = JSON.parse(Buffer.from(candidateBytes).toString("utf8"));
+  const liveById = exactNodeMap(liveFlow, "Live flow");
+  const candidateById = exactNodeMap(candidateFlow, "Candidate flow");
+  for (const id of liveById.keys()) {
+    if (!candidateById.has(id)) throw new Error(`Exact-graph candidate removed live node: ${id}`);
+  }
+
+  const actualChanges = [];
+  for (const [id, before] of liveById) {
+    const fields = changedFields(before, candidateById.get(id));
+    if (fields.length) actualChanges.push({ id, fields });
+  }
+  actualChanges.sort((left, right) => left.id.localeCompare(right.id));
+  normalizedChanges.sort((left, right) => left.id.localeCompare(right.id));
+  if (!isDeepStrictEqual(actualChanges, normalizedChanges)) {
+    throw new Error(`Exact-graph changed-node contract mismatch: ${actualChanges.map(({ id }) => id).join(",")}`);
+  }
+
+  const actualAdditionIds = [...candidateById.keys()]
+    .filter((id) => !liveById.has(id))
+    .sort();
+  if (!isDeepStrictEqual(actualAdditionIds, normalizedAdditionIds)) {
+    throw new Error(`Exact-graph added-node contract mismatch: ${actualAdditionIds.join(",")}`);
+  }
+  const httpInputCount = assertHttpInputsUnchanged(liveFlow, candidateFlow);
+
+  return {
+    formatVersion: EXACT_GRAPH_CONTRACT_FORMAT_VERSION,
+    contractKind: EXACT_GRAPH_CONTRACT_KIND,
+    deploymentId: normalizedDeploymentId,
+    sourceSha256: sha256(liveBytes),
+    candidateSha256: sha256(candidateBytes),
+    sourceNodeCount: liveFlow.length,
+    candidateNodeCount: candidateFlow.length,
+    httpInputCount,
+    allowedChanges: actualChanges.map(({ id, fields }) => ({
+      id,
+      fields,
+      sourceNodeSha256: nodeSha256(liveById.get(id)),
+      candidateNodeSha256: nodeSha256(candidateById.get(id)),
+    })),
+    allowedAdditions: actualAdditionIds.map((id) => ({
+      id,
+      type: candidateById.get(id).type,
+      candidateNodeSha256: nodeSha256(candidateById.get(id)),
+    })),
+  };
+}
+
 export function validateFunctionOnlyContract({ liveBytes, candidateBytes, contract }) {
   if (!contract || typeof contract !== "object" || Array.isArray(contract)) {
     throw new Error("Reviewed-flow contract must be an object");
@@ -116,6 +211,42 @@ export function validateFunctionOnlyContract({ liveBytes, candidateBytes, contra
   });
   if (!isDeepStrictEqual(rebuilt, contract)) throw new Error("Reviewed-flow contract content mismatch");
   return rebuilt;
+}
+
+export function validateExactGraphContract({ liveBytes, candidateBytes, contract }) {
+  if (!contract || typeof contract !== "object" || Array.isArray(contract)) {
+    throw new Error("Reviewed-flow contract must be an object");
+  }
+  if (
+    contract.formatVersion !== EXACT_GRAPH_CONTRACT_FORMAT_VERSION
+    || contract.contractKind !== EXACT_GRAPH_CONTRACT_KIND
+  ) throw new Error("Exact-graph contract version mismatch");
+  assertDeploymentId(contract.deploymentId);
+  assertDigest(contract.sourceSha256, "Source digest");
+  assertDigest(contract.candidateSha256, "Candidate digest");
+  if (sha256(liveBytes) !== contract.sourceSha256) throw new Error("Live flow digest differs from reviewed contract");
+  if (sha256(candidateBytes) !== contract.candidateSha256) throw new Error("Candidate digest differs from reviewed contract");
+  const allowedChanges = Array.isArray(contract.allowedChanges) ? contract.allowedChanges : [];
+  const allowedAdditions = Array.isArray(contract.allowedAdditions) ? contract.allowedAdditions : [];
+  const rebuilt = buildExactGraphContract({
+    liveBytes,
+    candidateBytes,
+    deploymentId: contract.deploymentId,
+    allowedChanges: allowedChanges.map((change) => ({ id: change?.id, fields: change?.fields })),
+    allowedAdditionIds: allowedAdditions.map((addition) => addition?.id),
+  });
+  if (!isDeepStrictEqual(rebuilt, contract)) throw new Error("Exact-graph contract content mismatch");
+  return rebuilt;
+}
+
+export function validateReviewedFlowContract(options) {
+  if (options?.contract?.formatVersion === CONTRACT_FORMAT_VERSION) {
+    return validateFunctionOnlyContract(options);
+  }
+  if (options?.contract?.formatVersion === EXACT_GRAPH_CONTRACT_FORMAT_VERSION) {
+    return validateExactGraphContract(options);
+  }
+  throw new Error("Reviewed-flow contract version mismatch");
 }
 
 export function assertProtectedFile(filePath, { uid = 0, gid = 0, mode = 0o600 } = {}) {

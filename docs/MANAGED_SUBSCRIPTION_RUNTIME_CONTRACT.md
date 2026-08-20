@@ -198,6 +198,37 @@ The flow preserves legacy plan behavior when no managed mapping exists.
 Once a product is explicitly mapped to managed runtime, missing/unpublished
 policy evidence fails closed and does not fall back to hardcoded plan names.
 
+## Reviewed production deployment
+
+The managed-policy graph is deployed only from a clean, pushed `main` through:
+
+```bash
+NODE_RED_MANAGED_SUBSCRIPTION_RULES_DEPLOY=CONFIRM_147 \
+  npm run nodered:managed-subscription-rules:deploy-147
+```
+
+The wrapper makes a new private live-147 pull, rebuilds the guarded candidate,
+and creates an `exact-graph` contract. That contract permits changes only to
+the exact fields of the split router, subscription HTTP request and atomic
+booking router, plus the two named managed-policy nodes. It rejects removals,
+any other existing-node change, any other added node and every HTTP-route
+change. The remote installer verifies the same source, candidate and per-node
+digests, writes private byte-identical backups, publishes atomically and
+restarts only the existing `node-red` PM2 process. A restart, digest, public
+games or subscription OPTIONS smoke failure requests the exact rollback.
+
+The successful deploy prints a timestamped flow/contract backup pair. An
+explicit rollback of that exact active candidate is:
+
+```bash
+NODE_RED_MANAGED_SUBSCRIPTION_RULES_ROLLBACK=CONFIRM_147 \
+  npm run nodered:managed-subscription-rules:rollback-147 -- \
+  YYYYMMDDTHHMMSS+ZZZZ
+```
+
+Neither command creates a booking, payment or Viva subscription. Authenticated
+mutation canaries remain a separate approval after read-only postchecks.
+
 ## Evidence gates
 
 These semantics are intentionally not implemented by this evaluator until a

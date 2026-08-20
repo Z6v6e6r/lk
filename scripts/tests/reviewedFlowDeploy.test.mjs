@@ -4,9 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  buildExactGraphContract,
   buildFunctionOnlyContract,
   sha256,
+  validateExactGraphContract,
   validateFunctionOnlyContract,
+  validateReviewedFlowContract,
 } from "../nodered_reviewed_flow_deploy/runtime_contract.mjs";
 import { createReviewedFlowRuntime } from "../nodered_reviewed_flow_deploy/deploy_reviewed_flow_147_remote.mjs";
 
@@ -23,6 +26,26 @@ const candidateFixture = () => {
   const flow = structuredClone(fixture());
   flow.find((node) => node.id === "fn-a").func = "msg.a = true; return msg;";
   flow.find((node) => node.id === "fn-b").func = "msg.b = true; return msg;";
+  return flow;
+};
+
+const exactGraphCandidateFixture = () => {
+  const flow = structuredClone(fixture());
+  const functionNode = flow.find((node) => node.id === "fn-a");
+  functionNode.func = "msg.policy = true; return msg;";
+  functionNode.outputs = 2;
+  functionNode.wires = [["response"], ["policy"]];
+  flow.push({
+    id: "policy",
+    type: "function",
+    z: "tab",
+    name: "Policy blocker",
+    func: "return msg;",
+    outputs: 1,
+    wires: [["response"]],
+  });
+  const routeIndex = flow.findIndex((node) => node.id === "route");
+  flow.push(flow.splice(routeIndex, 1)[0]);
   return flow;
 };
 
@@ -61,7 +84,67 @@ test("function-only contract pins exact digests, routes, IDs, and changed fields
   }), /changed-node set mismatch/);
 });
 
-const prepareRuntime = (t, { failFirstRestart = false } = {}) => {
+test("exact-graph contract pins exact changed fields and added nodes while preserving routes", () => {
+  const liveBytes = bytes(fixture());
+  const candidateBytes = bytes(exactGraphCandidateFixture());
+  const contract = buildExactGraphContract({
+    liveBytes,
+    candidateBytes,
+    deploymentId: "managed-subscription-rules",
+    allowedChanges: [{ id: "fn-a", fields: ["wires", "func", "outputs"] }],
+    allowedAdditionIds: ["policy"],
+  });
+  assert.equal(contract.sourceNodeCount, 5);
+  assert.equal(contract.candidateNodeCount, 6);
+  assert.equal(contract.httpInputCount, 1);
+  assert.deepEqual(contract.allowedChanges.map(({ id }) => id), ["fn-a"]);
+  assert.deepEqual(contract.allowedAdditions.map(({ id }) => id), ["policy"]);
+  assert.deepEqual(validateExactGraphContract({ liveBytes, candidateBytes, contract }), contract);
+  assert.deepEqual(validateReviewedFlowContract({ liveBytes, candidateBytes, contract }), contract);
+
+  const tamperedContract = structuredClone(contract);
+  tamperedContract.allowedAdditions[0].type = "debug";
+  assert.throws(() => validateExactGraphContract({
+    liveBytes,
+    candidateBytes,
+    contract: tamperedContract,
+  }), /contract content mismatch/);
+
+  const extraChange = exactGraphCandidateFixture();
+  extraChange.find((node) => node.id === "response").name = "changed";
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(extraChange),
+    deploymentId: "managed-subscription-rules",
+    allowedChanges: [{ id: "fn-a", fields: ["func", "outputs", "wires"] }],
+    allowedAdditionIds: ["policy"],
+  }), /changed-node contract mismatch/);
+
+  const extraAddition = exactGraphCandidateFixture();
+  extraAddition.push({ id: "unexpected", type: "debug", wires: [] });
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(extraAddition),
+    deploymentId: "managed-subscription-rules",
+    allowedChanges: [{ id: "fn-a", fields: ["func", "outputs", "wires"] }],
+    allowedAdditionIds: ["policy"],
+  }), /added-node contract mismatch/);
+
+  const routeDrift = exactGraphCandidateFixture();
+  routeDrift.find((node) => node.id === "route").url = "/lk/changed";
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(routeDrift),
+    deploymentId: "managed-subscription-rules",
+    allowedChanges: [
+      { id: "fn-a", fields: ["func", "outputs", "wires"] },
+      { id: "route", fields: ["url"] },
+    ],
+    allowedAdditionIds: ["policy"],
+  }), /changed HTTP route/);
+});
+
+const prepareRuntime = (t, { failFirstRestart = false, exactGraph = false } = {}) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "reviewed-flow-runtime-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const uid = process.getuid();
@@ -74,13 +157,21 @@ const prepareRuntime = (t, { failFirstRestart = false } = {}) => {
   fs.mkdirSync(stage, { mode: 0o700 });
   fs.chmodSync(stage, 0o700);
   const liveBytes = bytes(fixture());
-  const candidateBytes = bytes(candidateFixture());
-  const contract = buildFunctionOnlyContract({
-    liveBytes,
-    candidateBytes,
-    deploymentId: "subscription-binding",
-    allowedNodeIds: ["fn-a", "fn-b"],
-  });
+  const candidateBytes = bytes(exactGraph ? exactGraphCandidateFixture() : candidateFixture());
+  const contract = exactGraph
+    ? buildExactGraphContract({
+      liveBytes,
+      candidateBytes,
+      deploymentId: "managed-subscription-rules",
+      allowedChanges: [{ id: "fn-a", fields: ["func", "outputs", "wires"] }],
+      allowedAdditionIds: ["policy"],
+    })
+    : buildFunctionOnlyContract({
+      liveBytes,
+      candidateBytes,
+      deploymentId: "subscription-binding",
+      allowedNodeIds: ["fn-a", "fn-b"],
+    });
   for (const [filePath, content] of [
     [liveFlowPath, liveBytes],
     [candidatePath, candidateBytes],
@@ -150,6 +241,29 @@ test("remote runtime restores reviewed bytes when candidate restart fails", (t) 
   assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
 });
 
+test("remote runtime applies and rolls back an exact-graph contract", (t) => {
+  const prepared = prepareRuntime(t, { exactGraph: true });
+  const common = {
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: "managed-subscription-rules",
+  };
+  const preflight = prepared.runtime.preflight(common);
+  assert.equal(preflight.nodeCount, 5);
+  assert.equal(preflight.candidateNodeCount, 6);
+  assert.equal(preflight.changedNodeCount, 1);
+  assert.equal(preflight.addedNodeCount, 1);
+  const applied = prepared.runtime.apply({ ...common, stamp: "20260820T120000+0300" });
+  assert.equal(applied.activeFlowSha256, prepared.contract.candidateSha256);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.candidateBytes);
+  const rolledBack = prepared.runtime.rollback({
+    deploymentId: "managed-subscription-rules",
+    flowBackup: applied.flowBackup,
+    contractBackup: applied.contractBackup,
+  });
+  assert.equal(rolledBack.restoredFlowSha256, prepared.contract.sourceSha256);
+});
+
 test("remote preflight rejects hard-linked staged artifacts", (t) => {
   const prepared = prepareRuntime(t);
   fs.linkSync(prepared.candidatePath, `${prepared.candidatePath}.alias`);
@@ -189,5 +303,22 @@ test("subscription binding wrapper keeps deployment explicit and rollback guarde
   assert.match(wrapper, /publicGamesStatus/);
   assert.match(rollback, /NODE_RED_SUBSCRIPTION_BINDING_ROLLBACK=CONFIRM_147/);
   assert.match(rollback, /Active flow no longer matches|rollback --deployment-id/);
+  assert.doesNotMatch(wrapper + rollback, /rm\s+-rf|--update-env/);
+});
+
+test("managed subscription rules wrapper pins exact graph budget and guarded rollback", () => {
+  const wrapper = fs.readFileSync("scripts/deploy_nodered_managed_subscription_rules_147.sh", "utf8");
+  const rollback = fs.readFileSync("scripts/rollback_nodered_managed_subscription_rules_147.sh", "utf8");
+  assert.match(wrapper, /NODE_RED_MANAGED_SUBSCRIPTION_RULES_DEPLOY=CONFIRM_147/);
+  assert.match(wrapper, /pull_nodered_source_from_147\.sh/);
+  assert.match(wrapper, /patch_nodered_subscription_booking_flow\.mjs/);
+  assert.match(wrapper, /prepare_exact_graph_contract\.mjs/);
+  assert.match(wrapper, /--allow-change 8f7bd5b482fe9763:func/);
+  assert.match(wrapper, /--allow-add lk_subscription_managed_policy_20260820/);
+  assert.match(wrapper, /value\.changedNodeCount !== 3/);
+  assert.match(wrapper, /value\.addedNodeCount !== 2/);
+  assert.match(wrapper, /subscriptionOptionsStatus/);
+  assert.match(rollback, /NODE_RED_MANAGED_SUBSCRIPTION_RULES_ROLLBACK=CONFIRM_147/);
+  assert.match(rollback, /rollback --deployment-id/);
   assert.doesNotMatch(wrapper + rollback, /rm\s+-rf|--update-env/);
 });
