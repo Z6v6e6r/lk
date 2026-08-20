@@ -37,7 +37,20 @@ export const MANAGED_SUBSCRIPTION_ROUTER_CONTRACTS = Object.freeze([
       Object.freeze(["legacy_payment_confirm_canonical_prepare_20260816"]),
     ]),
     funcSha256: Object.freeze([
+      "2e16ee303fcae77e0d09f2a527d0fd77378bc8ea6af4027ef9636ebf8f36813f",
+    ]),
+    managedActionCandidateSha256:
+      "953c84c1885b77b4f7b7e826430b49a97e14656fa2a53e135aa35a93f72fe53d",
+  }),
+  Object.freeze({
+    outputs: 5,
+    wires: Object.freeze([
+      ...BASE_WIRES,
+      Object.freeze(["legacy_payment_confirm_canonical_prepare_20260816"]),
+    ]),
+    funcSha256: Object.freeze([
       "a9477e5e76419cc7317edb96cdbeda94a6745d07cb9aa0c5f1e82b2cebde2611",
+      "953c84c1885b77b4f7b7e826430b49a97e14656fa2a53e135aa35a93f72fe53d",
     ]),
     managedActionCandidateSha256: null,
   }),

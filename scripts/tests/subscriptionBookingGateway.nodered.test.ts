@@ -1174,6 +1174,36 @@ test("guarded patcher accepts the exact reviewed five-output router without drop
   );
 });
 
+test("guarded patcher accepts the reviewed split-create router and pins its managed-action postimage", () => {
+  const router = {
+    id: "8f7bd5b482fe9763",
+    type: "function",
+    name: "Route Viva split payment",
+    outputs: 5,
+    wires: [
+      ["ee7ba8cdd68bdf74"],
+      ["802af8a1810db60f"],
+      ["ef42932e1ba864b8"],
+      ["lk_subscription_booking_http_20260804"],
+      ["legacy_payment_confirm_canonical_prepare_20260816"],
+    ],
+  };
+  const splitCreateSha = "2e16ee303fcae77e0d09f2a527d0fd77378bc8ea6af4027ef9636ebf8f36813f";
+  const managedActionSha = "953c84c1885b77b4f7b7e826430b49a97e14656fa2a53e135aa35a93f72fe53d";
+
+  assert.equal(
+    resolveManagedSubscriptionRouterContract(router, splitCreateSha)
+      ?.managedActionCandidateSha256,
+    managedActionSha,
+  );
+  assert.equal(
+    resolveManagedSubscriptionRouterContract(router, managedActionSha)
+      ?.managedActionCandidateSha256,
+    null,
+  );
+  assert.deepEqual(router.wires[4], ["legacy_payment_confirm_canonical_prepare_20260816"]);
+});
+
 test("guarded patcher rejects hash and topology drift around the five-output router", () => {
   const contract = MANAGED_SUBSCRIPTION_ROUTER_CONTRACTS.find((item) => (
     item.outputs === 5 && item.managedActionCandidateSha256
