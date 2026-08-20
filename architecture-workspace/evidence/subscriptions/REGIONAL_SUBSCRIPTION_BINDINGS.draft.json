@@ -4,6 +4,7 @@
   "tenantKey": "iSkq6G",
   "salesEnabled": false,
   "usageEnabled": false,
+  "salesRuntimeVerifiedAt": "2026-08-20",
   "source": {
     "kind": "VIVA_END_USER_STUDIOS_READ_ONLY",
     "verifiedAt": "2026-08-19",
@@ -15,7 +16,13 @@
       "inventoryId": "piter_friendship_12m_2026_v1",
       "batchSize": 100,
       "tierPricesMinor": [1980000, 2380000, 3680000, 5680000],
-      "providerProductIds": [null, null, null, null],
+      "providerProductIds": [
+        "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+        "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+        "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+        "8bf334ba-3050-4017-b40a-7eef2db1eb16"
+      ],
+      "salesBindingReady": true,
       "subscriptionTypeId": null,
       "stationSelector": {
         "kind": "STATION_LIST",
@@ -28,6 +35,7 @@
       "batchSize": 50,
       "tierPricesMinor": [1980000, 2380000, 3680000, 5680000],
       "providerProductIds": [null, null, null, null],
+      "salesBindingReady": false,
       "subscriptionTypeId": null,
       "stationSelector": {
         "kind": "STATION_LIST",
@@ -37,9 +45,10 @@
     {
       "counterKey": "network_friendship",
       "inventoryId": "network_friendship_12m_2026_v1",
-      "batchSize": 50,
+      "batchSize": 100,
       "tierPricesMinor": [5680000],
-      "providerProductIds": [null],
+      "providerProductIds": ["db7a5250-7369-4f43-8ac5-9111be24bc74"],
+      "salesBindingReady": true,
       "subscriptionTypeId": null,
       "stationSelector": {
         "kind": "ALL_STATIONS",

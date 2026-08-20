@@ -1,0 +1,234 @@
+{
+  "schemaVersion": 1,
+  "status": "DRAFT_ONLY",
+  "mutationAllowed": false,
+  "preparedAt": "2026-08-20",
+  "cupContract": {
+    "repository": "Z6v6e6r/ph-admin",
+    "gitSha": "c4e295fb59177a38de7c908aa05a2535e229033f",
+    "apiPrefix": "/api/v1/admin",
+    "requiredPermission": "subscriptions:catalog:write"
+  },
+  "executionBoundary": {
+    "createDraftTypes": false,
+    "createDraftPolicyVersions": false,
+    "publishPolicyVersions": false,
+    "activateRuntime": false,
+    "createProviderMappings": false,
+    "createSubscriptionInstances": false,
+    "publishRequest": null
+  },
+  "commonPublicationBlockers": [
+    "EFFECTIVE_AT_REQUIRES_OPERATOR_RECONFIRMATION",
+    "VALIDITY_365_DAYS_REQUIRES_BUSINESS_CONFIRMATION",
+    "CUP_PUBLISH_COMMAND_NOT_IMPLEMENTED",
+    "PROVIDER_MAPPING_PREVIEW_NOT_APPROVED",
+    "PROVIDER_MAPPING_NOT_VERIFIED",
+    "SUBSCRIPTION_INSTANCE_READBACK_NOT_AVAILABLE",
+    "NODE_RED_RUNTIME_BINDING_NOT_CONFIGURED",
+    "CUP_RUNTIME_FEATURE_FLAGS_NOT_VERIFIED",
+    "CUP_CAPABILITIES_DEFAULTS_NOT_BUSINESS_APPROVED",
+    "EXISTING_SALES_INSTANCE_IMPORT_NOT_APPROVED",
+    "GROUP_TRAINING_DISCOUNT_NOT_CONFIGURED",
+    "TOURNAMENT_DISCOUNT_NOT_CONFIGURED",
+    "CREATE_90_120_ADD_ON_NOT_CONFIGURED"
+  ],
+  "normalizationNotes": [
+    "bookingWindowDays=1 is the required legacy DTO value; bookingWindow.enabled=false and days=null are authoritative",
+    "maxActiveServices=0 is the required legacy DTO value; activeServicesLimit.enabled=false and max=null are authoritative",
+    "capabilities is intentionally omitted; ph-ab c4e295f injects defaults, so publication stays blocked until lifecycle, cancellation and commerce defaults are approved",
+    "applyTo=NEW_ONLY does not migrate or authorize already sold subscriptions; exact provider read-back and explicit SubscriptionInstance import are separate gates"
+  ],
+  "drafts": [
+    {
+      "storefront": "piter_friendship",
+      "typeCode": "friendship-12m-piter-2026",
+      "typeRequest": {
+        "method": "POST",
+        "path": "/api/v1/admin/subscription-types",
+        "headers": {
+          "Idempotency-Key": "cup-subscription-piter-type-draft-20260820",
+          "X-Correlation-Id": "piter-type-draft-20260820"
+        },
+        "body": {
+          "code": "friendship-12m-piter-2026",
+          "title": "Падел.Дружба.Питер — 12 месяцев",
+          "description": "DRAFT правил годовой подписки Питера. Не публикует правила, не активирует использование и не меняет Viva."
+        }
+      },
+      "policyVersionRequest": {
+        "method": "POST",
+        "pathTemplate": "/api/v1/admin/subscription-types/{subscriptionTypeId}/policy-versions",
+        "headers": {
+          "Idempotency-Key": "cup-subscription-piter-policy-v1-draft-20260820",
+          "X-Correlation-Id": "piter-policy-v1-draft-20260820"
+        },
+        "body": {
+          "effectiveAt": "2026-08-21T00:00:00+03:00",
+          "applyTo": "NEW_ONLY",
+          "validityDays": 365,
+          "createGame": {
+            "enabled": true,
+            "durationsMinutes": [60]
+          },
+          "joinGame": {
+            "enabled": true,
+            "minDurationMinutes": 60,
+            "maxDurationMinutes": 120
+          },
+          "maxActiveServices": 0,
+          "activeServicesLimit": {
+            "enabled": false,
+            "max": null,
+            "scope": "SUBSCRIPTION_BENEFIT_ONLY"
+          },
+          "bookingWindowDays": 1,
+          "bookingWindow": {
+            "enabled": false,
+            "days": null
+          },
+          "dailyUsageLimit": 1,
+          "activeServiceScope": "SUBSCRIPTION_BENEFIT_ONLY",
+          "usageUnitsByDuration": {
+            "60": 1,
+            "90": 1,
+            "120": 1
+          },
+          "stationAccessRules": [
+            {
+              "ruleId": "piter-station-only",
+              "enabled": true,
+              "priority": 100,
+              "selector": {
+                "kind": "STATION_LIST",
+                "stationIds": ["1ea77cbf-bc36-49a1-96d6-f35c216a409b"]
+              },
+              "surcharge": {
+                "kind": "NONE",
+                "amountMinor": 0
+              }
+            }
+          ],
+          "benefitRules": [],
+          "providerBinding": {
+            "provider": "VIVA",
+            "externalId": "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+            "referenceKind": "PRODUCT_CANDIDATE"
+          }
+        }
+      },
+      "expectedRuntimeControlsAfterCupNormalization": {
+        "activeServicesLimit": {
+          "enabled": false,
+          "max": null,
+          "scope": "SUBSCRIPTION_BENEFIT_ONLY"
+        },
+        "bookingWindow": {
+          "enabled": false,
+          "days": null
+        },
+        "dailyUsageLimit": 1,
+        "weeklyUsageLimit": null,
+        "monthlyUsageLimit": null,
+        "maxFutureBookings": null,
+        "minHoursBetweenUses": 0,
+        "allowBookingsAfterExpiry": false
+      }
+    },
+    {
+      "storefront": "network_friendship",
+      "typeCode": "friendship-12m-hub-2026",
+      "typeRequest": {
+        "method": "POST",
+        "path": "/api/v1/admin/subscription-types",
+        "headers": {
+          "Idempotency-Key": "cup-subscription-hub-type-draft-20260820",
+          "X-Correlation-Id": "hub-type-draft-20260820"
+        },
+        "body": {
+          "code": "friendship-12m-hub-2026",
+          "title": "Падел.Дружба.ХАБ — 12 месяцев",
+          "description": "DRAFT правил годовой подписки всей сети. Не публикует правила, не активирует использование и не меняет Viva."
+        }
+      },
+      "policyVersionRequest": {
+        "method": "POST",
+        "pathTemplate": "/api/v1/admin/subscription-types/{subscriptionTypeId}/policy-versions",
+        "headers": {
+          "Idempotency-Key": "cup-subscription-hub-policy-v1-draft-20260820",
+          "X-Correlation-Id": "hub-policy-v1-draft-20260820"
+        },
+        "body": {
+          "effectiveAt": "2026-08-21T00:00:00+03:00",
+          "applyTo": "NEW_ONLY",
+          "validityDays": 365,
+          "createGame": {
+            "enabled": true,
+            "durationsMinutes": [60]
+          },
+          "joinGame": {
+            "enabled": true,
+            "minDurationMinutes": 60,
+            "maxDurationMinutes": 120
+          },
+          "maxActiveServices": 0,
+          "activeServicesLimit": {
+            "enabled": false,
+            "max": null,
+            "scope": "SUBSCRIPTION_BENEFIT_ONLY"
+          },
+          "bookingWindowDays": 1,
+          "bookingWindow": {
+            "enabled": false,
+            "days": null
+          },
+          "dailyUsageLimit": 1,
+          "activeServiceScope": "SUBSCRIPTION_BENEFIT_ONLY",
+          "usageUnitsByDuration": {
+            "60": 1,
+            "90": 1,
+            "120": 1
+          },
+          "stationAccessRules": [
+            {
+              "ruleId": "hub-all-stations",
+              "enabled": true,
+              "priority": 100,
+              "selector": {
+                "kind": "ALL_STATIONS",
+                "stationIds": []
+              },
+              "surcharge": {
+                "kind": "NONE",
+                "amountMinor": 0
+              }
+            }
+          ],
+          "benefitRules": [],
+          "providerBinding": {
+            "provider": "VIVA",
+            "externalId": "db7a5250-7369-4f43-8ac5-9111be24bc74",
+            "referenceKind": "PRODUCT_CANDIDATE"
+          }
+        }
+      },
+      "expectedRuntimeControlsAfterCupNormalization": {
+        "activeServicesLimit": {
+          "enabled": false,
+          "max": null,
+          "scope": "SUBSCRIPTION_BENEFIT_ONLY"
+        },
+        "bookingWindow": {
+          "enabled": false,
+          "days": null
+        },
+        "dailyUsageLimit": 1,
+        "weeklyUsageLimit": null,
+        "monthlyUsageLimit": null,
+        "maxFutureBookings": null,
+        "minHoursBetweenUses": 0,
+        "allowBookingsAfterExpiry": false
+      }
+    }
+  ]
+}
