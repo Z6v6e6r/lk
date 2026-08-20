@@ -20,7 +20,7 @@ export const SPLIT_LEAVE_PROJECTION_TARGET = Object.freeze({
   fileName: "fn_split_leave_game_update.js",
   outputs: 3,
   liveSha256: "a2ad7eee05e157a2672bd73a54a315205c5a3e14ba8ee4e00c32db0866d8c82d",
-  candidateSha256: "8111395a5e34319e122158ef347fa37a994346c19f7c00424817e2cb11366354",
+  candidateSha256: "fa40192d2fd5373c06c0a7c47350994ab55235e39279f0f41347856b20c7d040",
 });
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");

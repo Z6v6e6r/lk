@@ -127,9 +127,10 @@ const operationExists = asArray(metadata.leaveOperations).some((item) => toStr(i
 if (!operationExists) {
   metadata.leaveOperations = [...asArray(metadata.leaveOperations), {
     operationId: ctx.operationId,
-    state: "DONE",
+    state: ctx.subscriptionReturnState === "RETURN_PENDING" ? "RETURN_PENDING" : "DONE",
     at: nowIso,
     mode: ctx.mode,
+    ...(ctx.subscriptionReturnState ? { subscriptionReturnState: ctx.subscriptionReturnState } : {}),
   }].slice(-100);
 }
 metadata.lastLeaveUpdateAt = nowIso;

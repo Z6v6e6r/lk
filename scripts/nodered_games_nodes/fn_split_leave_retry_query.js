@@ -11,6 +11,15 @@ const candidates = [
   },
 ];
 const serviceToken = String(global.get("vivacrm_access_token") || "").trim();
+if (serviceToken) candidates.push({
+  state: "RETURN_PENDING",
+  returnVerificationAttempts: { $not: { $gte: 20 } },
+  $or: [
+    { localApplyLeaseUntil: { $exists: false } },
+    { localApplyLeaseUntil: null },
+    { localApplyLeaseUntil: { $lte: nowIso } },
+  ],
+});
 const startedLease = [
   { claimLeaseUntil: { $exists: false } },
   { claimLeaseUntil: null },

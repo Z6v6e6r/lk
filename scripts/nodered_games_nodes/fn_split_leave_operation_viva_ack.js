@@ -12,6 +12,11 @@ if (!ctx || msg.error || matched < 1) {
   return [null, msg, null];
 }
 ctx.step = "local_apply";
+if (ctx.localAlreadyApplied === true && ctx.subscriptionReturnState === "RETURN_VERIFIED") {
+  msg._splitLeaveCtx = ctx;
+  msg.payload = undefined;
+  return [null, null, msg];
+}
 if (ctx.localMutationDisabled === true && ctx.rejoinDetected === true) {
   ctx.supersededByRejoin = true;
   ctx.localAlreadyApplied = true;

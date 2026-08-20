@@ -35,4 +35,7 @@ if (exerciseId) {
   epochs[exerciseId] = Math.max(0, Number(epochs[exerciseId]) || 0) + 1;
   global.set(epochKey, epochs);
 }
+if (ctx.subscriptionReturnState === "RETURN_PENDING") {
+  return respond(202, "RETURN_PENDING", "Вы вышли из игры. Возврат посещения проверяется");
+}
 return respond(200, "DONE", ctx.refundMessage || ctx.successMessage || "Вы вышли из игры");

@@ -281,6 +281,18 @@ ctx.initialBookingIds = verifiedQueue.map((item) => item.bookingId);
 ctx.needsBookingDiscovery = mode === "SELF" && verifiedQueue.length === 0;
 ctx.preOperationDiscovery = ctx.needsBookingDiscovery;
 ctx.bookingResults = [];
+const subscriptionInstanceIds = Array.from(new Set(
+  targetPayments
+    .map((item) => toStr(item.clientSubscriptionId || item.subscriptionProductId))
+    .filter(Boolean),
+));
+const subscriptionVisitCounts = Array.from(new Set(
+  targetPayments
+    .map((item) => Number(item.subscriptionVisitCount))
+    .filter((value) => Number.isSafeInteger(value) && value > 0),
+));
+ctx.clientSubscriptionId = subscriptionInstanceIds.length === 1 ? subscriptionInstanceIds[0] : null;
+ctx.subscriptionVisitCount = subscriptionVisitCounts.length === 1 ? subscriptionVisitCounts[0] : null;
 ctx.upstreamAuthHeader = upstreamAuthHeader;
 ctx.localAlreadyApplied = previouslyApplied;
 ctx.targetClientId = targetClientId;

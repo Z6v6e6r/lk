@@ -31,6 +31,19 @@ const rowExerciseId = (row) => normalizeId(
   || row?.vivaExerciseId
   || row?.timetable?.exerciseId,
 );
+const rowClientSubscriptionId = (row) => toStr(
+  row?.clientSubscriptionId || row?.clientSubId || row?.subscription?.subscriptionId,
+);
+const rowSubscriptionVisitCount = (row) => {
+  const value = Number(row?.count ?? row?.visitsCount ?? row?.visitCount);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+};
+const subscriptionInstanceId = (row) => toStr(row?.subscriptionId || row?.clientSubscriptionId);
+const subscriptionVisitsLeft = (row) => {
+  const value = Number(row?.visitsLeft);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+};
+const subscriptionBookings = (row) => asArray(row?.bookings);
 const isCancelled = (row) => {
   if (!isObj(row)) return false;
   if (row.isCancelled === true || row.cancelled === true || row.canceled === true) return true;
@@ -58,17 +71,36 @@ const assignMembershipVersion = (ctx, parts) => {
   ctx.operationId = `self-leave:${ctx.gameId}:${ctx.actorClientId || ctx.actorPhoneNorm}:${ctx.membershipVersion}`;
   return true;
 };
-const upstream = (ctx, method, url, payload) => {
+const upstream = (ctx, method, url, payload, authHeader = ctx.upstreamAuthHeader) => {
   msg._splitLeaveCtx = ctx;
   msg.method = method;
   msg.url = url;
   msg.headers = {
-    Authorization: ctx.upstreamAuthHeader,
+    Authorization: authHeader,
     Accept: "application/json",
     "Content-Type": "application/json",
   };
   msg.payload = payload;
   return [msg, null, null, null, null];
+};
+const serviceAuthHeader = () => {
+  const token = toStr(global.get("vivacrm_access_token"));
+  return token ? `Bearer ${token}` : null;
+};
+const subscriptionListUrl = (ctx) => (
+  `${ADMIN_API}/clients/${encodeURIComponent(ctx.targetClientId)}/subscriptions?size=200`
+);
+const exactSubscriptionRow = (payload, clientSubscriptionId) => {
+  const target = normalizeId(clientSubscriptionId);
+  const rows = responseRows(payload).filter((row) => normalizeId(subscriptionInstanceId(row)) === target);
+  return rows.length === 1 ? rows[0] : null;
+};
+const subscriptionHasActiveBooking = (row, bookingId) => subscriptionBookings(row).some((booking) => (
+  rowBookingId(booking) === normalizeId(bookingId) && !isCancelled(booking)
+));
+const subscriptionBookingReturned = (row, bookingId) => {
+  const exact = subscriptionBookings(row).filter((booking) => rowBookingId(booking) === normalizeId(bookingId));
+  return exact.length === 0 || exact.every(isCancelled);
 };
 const fail = (ctx, statusCode, state, message) => {
   const retryScheduled = state === "VIVA_UNVERIFIED"
@@ -116,6 +148,26 @@ const toOperationStart = (ctx) => {
   msg.payload = undefined;
   return [null, null, null, null, msg];
 };
+const markReturnPendingAndApply = (ctx, reason) => {
+  ctx.subscriptionReturnState = "RETURN_PENDING";
+  ctx.subscriptionReturnReason = reason;
+  ctx.refundMessage = null;
+  ctx.successMessage = "Вы вышли из игры. Возврат посещения проверяется";
+  appendTrace(ctx, { step: "subscription_return_pending", reason });
+  return toLocalApply(ctx);
+};
+const startSubscriptionReadback = (ctx, step) => {
+  const authHeader = serviceAuthHeader();
+  if (!authHeader) {
+    if (step === "verify_subscription_return") {
+      return markReturnPendingAndApply(ctx, "service_token_unavailable");
+    }
+    return fail(ctx, 503, "VIVA_UNVERIFIED", "Не удалось проверить абонемент до отмены");
+  }
+  ctx.step = step;
+  appendTrace(ctx, { step: `${step}_request` });
+  return upstream(ctx, "GET", subscriptionListUrl(ctx), undefined, authHeader);
+};
 
 const resolveOptions = (payload, requestedRefundMethod) => {
   const options = isObj(payload?.cancellationOptions) ? payload.cancellationOptions : {};
@@ -150,6 +202,17 @@ const cancelUrl = (ctx, bookingId, clientId) => (
     ? `${END_USER_V1}/bookings/${encodeURIComponent(bookingId)}`
     : `${ADMIN_API}/clients/${encodeURIComponent(clientId)}/bookings/${encodeURIComponent(bookingId)}/cancel`
 );
+const issueCurrentCancellation = (ctx) => {
+  const bookingId = toStr(ctx.currentBookingId);
+  const clientId = toStr(ctx.currentClientId);
+  const refundMethod = toStr(ctx.currentRefundMethod);
+  ctx.step = "cancel_booking";
+  const payload = usesEndUser(ctx)
+    ? ((refundMethod === "SERVICE" || refundMethod === "NONE") ? {} : { refundMethod })
+    : { refundMethod, cancelExercise: false };
+  appendTrace(ctx, { step: "cancel_request", bookingId, refundMethod });
+  return upstream(ctx, usesEndUser(ctx) ? "DELETE" : "PUT", cancelUrl(ctx, bookingId, clientId), payload);
+};
 const startActiveVerification = (ctx) => {
   ctx.step = "verify_active";
   const url = usesEndUser(ctx)
@@ -178,7 +241,12 @@ if (!ctx) {
   msg.payload = { ok: false, state: "CONFLICT", message: "split leave context missing" };
   return [null, msg, msg, null, null];
 }
-if (ctx.localAlreadyApplied === true || ctx.step === "local_apply") return toLocalApply(ctx);
+if (ctx.step === "start_verify_subscription_return") {
+  return startSubscriptionReadback(ctx, "verify_subscription_return");
+}
+if ((ctx.localAlreadyApplied === true && ctx.step !== "verify_subscription_return") || ctx.step === "local_apply") {
+  return toLocalApply(ctx);
+}
 if (ctx.step === "start_verify_active") return startActiveVerification(ctx);
 if (ctx.step === "start_cancel") return startNextBooking(ctx);
 
@@ -197,20 +265,42 @@ if (ctx.step === "cancel_probe") {
   const selected = resolveOptions(msg.payload, ctx.requestedRefundMethod);
   if (!selected) return fail(ctx, 409, "CONFLICT", "Для записи нет поддержанного сценария возврата");
   ctx.currentRefundMethod = selected.refundMethod;
-  if (selected.message) ctx.refundMessage = selected.message;
-  ctx.step = "cancel_booking";
-  const payload = usesEndUser(ctx)
-    ? ((selected.refundMethod === "SERVICE" || selected.refundMethod === "NONE")
-      ? {}
-      : { refundMethod: selected.refundMethod })
-    : { refundMethod: selected.refundMethod, cancelExercise: false };
-  appendTrace(ctx, { step: "cancel_request", bookingId, refundMethod: selected.refundMethod });
-  return upstream(
-    ctx,
-    usesEndUser(ctx) ? "DELETE" : "PUT",
-    cancelUrl(ctx, bookingId, clientId),
-    payload,
-  );
+  if (selected.refundMethod === "SERVICE") {
+    const evidence = isObj(ctx.bookingSubscriptionEvidence?.[normalizeId(bookingId)])
+      ? ctx.bookingSubscriptionEvidence[normalizeId(bookingId)]
+      : {};
+    const clientSubscriptionId = toStr(evidence.clientSubscriptionId || ctx.clientSubscriptionId);
+    const expectedReturnCount = Number(evidence.subscriptionVisitCount || ctx.subscriptionVisitCount);
+    if (!clientSubscriptionId || !Number.isSafeInteger(expectedReturnCount) || expectedReturnCount < 1) {
+      return fail(ctx, 409, "CONFLICT", "Не удалось однозначно определить абонемент и число посещений");
+    }
+    ctx.clientSubscriptionId = clientSubscriptionId;
+    ctx.expectedReturnCount = expectedReturnCount;
+    return startSubscriptionReadback(ctx, "snapshot_subscription_before");
+  }
+  return issueCurrentCancellation(ctx);
+}
+
+if (ctx.step === "snapshot_subscription_before") {
+  if (!isOk(msg.statusCode)) {
+    return fail(ctx, 422, "VIVA_UNVERIFIED", "Не удалось проверить абонемент до отмены");
+  }
+  const row = exactSubscriptionRow(msg.payload, ctx.clientSubscriptionId);
+  const visitsLeft = row ? subscriptionVisitsLeft(row) : null;
+  if (!row || visitsLeft === null || !subscriptionHasActiveBooking(row, ctx.currentBookingId)) {
+    return fail(ctx, 409, "CONFLICT", "Абонемент не подтверждает активную запись до отмены");
+  }
+  ctx.subscriptionReturnChecks = asArray(ctx.subscriptionReturnChecks).filter((item) => (
+    normalizeId(item?.bookingId) !== normalizeId(ctx.currentBookingId)
+  ));
+  ctx.subscriptionReturnChecks.push({
+    bookingId: toStr(ctx.currentBookingId),
+    clientSubscriptionId: toStr(ctx.clientSubscriptionId),
+    visitsLeftBefore: visitsLeft,
+    expectedReturnCount: ctx.expectedReturnCount,
+  });
+  appendTrace(ctx, { step: "subscription_before_verified", bookingId: toStr(ctx.currentBookingId) });
+  return issueCurrentCancellation(ctx);
 }
 
 if (ctx.step === "cancel_booking") {
@@ -284,6 +374,29 @@ if (ctx.step === "verify_active") {
     )
   ));
   if (stillActive && ctx.preCancelVerification === true) {
+    const exactTargetRows = activeRows.filter((row) => bookingIds.has(rowBookingId(row)));
+    const subscriptionIds = Array.from(new Set(exactTargetRows.map(rowClientSubscriptionId).filter(Boolean)));
+    const visitCounts = Array.from(new Set(exactTargetRows.map(rowSubscriptionVisitCount).filter(Boolean)));
+    if (subscriptionIds.length > 1 || visitCounts.length > 1) {
+      return fail(ctx, 409, "CONFLICT", "Записи Viva ссылаются на разные абонементы или объёмы списания");
+    }
+    if (ctx.clientSubscriptionId && subscriptionIds[0]
+      && normalizeId(ctx.clientSubscriptionId) !== normalizeId(subscriptionIds[0])) {
+      return fail(ctx, 409, "CONFLICT", "Viva вернула другой экземпляр абонемента");
+    }
+    ctx.clientSubscriptionId = subscriptionIds[0] || ctx.clientSubscriptionId || null;
+    ctx.subscriptionVisitCount = visitCounts[0] || ctx.subscriptionVisitCount || null;
+    ctx.bookingSubscriptionEvidence = isObj(ctx.bookingSubscriptionEvidence)
+      ? ctx.bookingSubscriptionEvidence
+      : {};
+    exactTargetRows.forEach((row) => {
+      const bookingId = rowBookingId(row);
+      if (!bookingId) return;
+      ctx.bookingSubscriptionEvidence[bookingId] = {
+        clientSubscriptionId: rowClientSubscriptionId(row) || ctx.clientSubscriptionId || null,
+        subscriptionVisitCount: rowSubscriptionVisitCount(row) || ctx.subscriptionVisitCount || null,
+      };
+    });
     ctx.preCancelVerification = false;
     ctx.step = "start_cancel";
     return startNextBooking(ctx);
@@ -333,6 +446,37 @@ if (ctx.step === "verify_history") {
   ctx.vivaVerifiedAt = new Date().toISOString();
   ctx.vivaVerification = "active_absent_history_cancelled";
   appendTrace(ctx, { step: "viva_verified" });
+  if (asArray(ctx.subscriptionReturnChecks).length > 0) {
+    return startSubscriptionReadback(ctx, "verify_subscription_return");
+  }
+  return toLocalApply(ctx);
+}
+
+if (ctx.step === "verify_subscription_return") {
+  if (!isOk(msg.statusCode)) {
+    return markReturnPendingAndApply(ctx, "subscription_readback_unavailable");
+  }
+  const checks = asArray(ctx.subscriptionReturnChecks);
+  if (checks.length === 0) {
+    return markReturnPendingAndApply(ctx, "subscription_return_baseline_missing");
+  }
+  const verified = checks.every((check) => {
+    const row = exactSubscriptionRow(msg.payload, check.clientSubscriptionId);
+    const visitsLeft = row ? subscriptionVisitsLeft(row) : null;
+    return Boolean(
+      row
+      && visitsLeft !== null
+      && visitsLeft >= Number(check.visitsLeftBefore) + Number(check.expectedReturnCount)
+      && subscriptionBookingReturned(row, check.bookingId),
+    );
+  });
+  if (!verified) return markReturnPendingAndApply(ctx, "subscription_return_not_observed");
+  ctx.subscriptionReturnState = "RETURN_VERIFIED";
+  ctx.subscriptionReturnVerifiedAt = new Date().toISOString();
+  ctx.subscriptionReturnReason = null;
+  ctx.refundMessage = "Вернули занятие на абонемент.";
+  ctx.successMessage = ctx.refundMessage;
+  appendTrace(ctx, { step: "subscription_return_verified" });
   return toLocalApply(ctx);
 }
 

@@ -43,7 +43,16 @@ const game = (overrides = {}) => ({
     organizerPhoneNorm: "79990000001",
     splitPayment: {
       vivaExerciseId: "exercise-1",
-      payments: [{ clientId: "client-2", phoneNorm: "79990000002", bookingId: "booking-2", membershipId: "membership-2", paymentRef: "payment-2", status: "PAID" }],
+      payments: [{
+        clientId: "client-2",
+        phoneNorm: "79990000002",
+        bookingId: "booking-2",
+        membershipId: "membership-2",
+        paymentRef: "payment-2",
+        clientSubscriptionId: "subscription-2",
+        subscriptionVisitCount: 1,
+        status: "PAID",
+      }],
     },
   },
   ...overrides,
@@ -164,7 +173,20 @@ test("STAFF_TARGET cancellation always uses Admin API and preserves refund choic
   assert.doesNotMatch(routed[0].url, /end-user/);
   routed[0].statusCode = 200;
   routed[0].payload = { cancellationOptions: { subscription: { available: true } } };
-  const cancel = run("fn_split_leave_router.js", routed[0])[0];
+  const snapshot = run("fn_split_leave_router.js", routed[0], {
+    global: { vivacrm_access_token: "admin-token" },
+  })[0];
+  assert.equal(snapshot.method, "GET");
+  assert.match(snapshot.url, /clients\/client-2\/subscriptions\?size=200$/);
+  snapshot.statusCode = 200;
+  snapshot.payload = {
+    content: [{
+      subscriptionId: "subscription-2",
+      visitsLeft: 10,
+      bookings: [{ id: "booking-2", isCancelled: false }],
+    }],
+  };
+  const cancel = run("fn_split_leave_router.js", snapshot)[0];
   assert.equal(cancel.method, "PUT");
   assert.deepEqual(cancel.payload, { refundMethod: "SERVICE", cancelExercise: false });
 });

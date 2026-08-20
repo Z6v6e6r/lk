@@ -169,7 +169,9 @@ test('tracked cancellation router contains the HAR End User contract and no gene
   assert.doesNotMatch(source, /path: `\/bookings\/\$\{encodedId\}`,[\s\S]{0,120}scope: "admin"/);
   const leaveSource = fs.readFileSync(CANCELLATION_SOURCE_PATHS.leaveRouter, 'utf8');
   assert.match(leaveSource, /cancelExercise: false/);
-  assert.match(leaveSource, /cancel_booking_verified_cancelled/);
+  assert.match(leaveSource, /active_absent_history_cancelled/);
+  assert.match(leaveSource, /subscription_return_verified/);
+  assert.match(leaveSource, /RETURN_PENDING/);
   assert.doesNotMatch(leaveSource, /api\/v1\/bookings/);
   assert.doesNotMatch(leaveSource, /path: `\/bookings\//);
 });

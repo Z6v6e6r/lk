@@ -62,17 +62,17 @@ const expectedLiveFunctionHashes = Object.freeze({
 });
 const expectedSourceHashes = Object.freeze({
   "fn_staff_player_leave_prepare.js": "757ba258f19f755c1724c8efa220a6a9271baa9a6e6c49111ce61feeeabf8053",
-  "fn_staff_player_leave_authorize.js": "928f60aaa50bc1e25493ce4dd77429c8d9bc6e8a333115fbad530bae89cd090d",
+  "fn_staff_player_leave_authorize.js": "faed3e292041d954c43939ac0c0f14a78fb45ddf8bf0a84cd931c15bb0db3751",
   "fn_staff_player_leave_status_prepare.js": "b95000d99856cfd27e535b1689e3f61e444fca0f8a549e5bf0c499e249e37f39",
   "fn_staff_player_leave_status.js": "2a1dc413ae7544104d4d246df59f62d6ab105e4598a0888a6a40cc2345822076",
   "fn_staff_player_leave_persistence_error.js": "4618f2e3dba60ad85e8573cc3a50a43ea5c988c2c16e7d7f288c1cb74799ef0c",
-  "fn_split_leave_operation_start.js": "25d73d9cac26469ff4e5bdc73b922e2d469db8939ea2114f1e60346cb0da21c0",
-  "fn_split_leave_operation_route.js": "f62dd41ee4ffdeaa39ab61e1a413629d9ddb72b91945d6550f3859883ac03790",
-  "fn_split_leave_router.js": "6d270142b759205835f67d14a3e7a21a6c4112b6418d60df4474834e928dd7fd",
-  "fn_split_leave_finalize.js": "d245ae72f5b72319cdbe798a74a78216dd5c6a2c93391bf48a85fd47dc190719",
+  "fn_split_leave_operation_start.js": "c7b8b2be039439417898e8217787c8aa9cdb15407204102b54acb4a9c9434359",
+  "fn_split_leave_operation_route.js": "d5649238cb4cbcd22cd72edafcea0b57691ac7d7a981e8b83d15a2218706326d",
+  "fn_split_leave_router.js": "fcf80d9a7b44ff6850013991f4bc6ae0541d6d4a00b2557c1d5a978e212fec1d",
+  "fn_split_leave_finalize.js": "5af1a19c125c1094b911da0a62458237c0c50473351f197b611935c20bed8b19",
   "fn_split_leave_retry_response.js": "4f5229564a962f2cccfd5c18c69a67c960a9f0f3a55c13c6a9be609c308af3ba",
-  "fn_split_leave_game_update.js": "f78d98c33ceab669f0db9844036c8ecb402d064f05506e55a5dd6aea5ca25203",
-  "fn_split_leave_retry_select.js": "3b41205b4f3dce04e59d8757de6ccc1423a36e6f78c95f654e54448021b7d991",
+  "fn_split_leave_game_update.js": "fa40192d2fd5373c06c0a7c47350994ab55235e39279f0f41347856b20c7d040",
+  "fn_split_leave_retry_select.js": "01cbc9a774dff77e86deb3a5dd6f85d8e237d865be4e13c94805b09476fa82ab",
 });
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");

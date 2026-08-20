@@ -44,6 +44,12 @@ msg.payload = [
       idempotencyDigest: ctx.idempotencyDigest || null,
       membershipVersion: ctx.membershipVersion || null,
       bookingIds,
+      clientSubscriptionId: ctx.clientSubscriptionId || null,
+      subscriptionVisitCount: Number.isSafeInteger(ctx.subscriptionVisitCount)
+        ? ctx.subscriptionVisitCount
+        : null,
+      subscriptionReturnChecks: [],
+      subscriptionReturnState: null,
       vivaTargetMode: ctx.vivaTargetMode || "BOOKINGS",
       vivaVerifiedAt: ctx.vivaVerifiedAt || null,
       vivaVerification: ctx.vivaVerification || null,

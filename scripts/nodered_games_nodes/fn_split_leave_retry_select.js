@@ -30,6 +30,15 @@ msg._splitLeaveCtx = {
   membershipVersion: operation.membershipVersion || null,
   vivaTargetMode,
   initialBookingIds: Array.isArray(operation.bookingIds) ? operation.bookingIds : [],
+  subscriptionReturnChecks: Array.isArray(operation.subscriptionReturnChecks)
+    ? operation.subscriptionReturnChecks
+    : [],
+  clientSubscriptionId: operation.clientSubscriptionId || null,
+  subscriptionVisitCount: Number.isSafeInteger(operation.subscriptionVisitCount)
+    ? operation.subscriptionVisitCount
+    : null,
+  subscriptionReturnState: operation.subscriptionReturnState || null,
+  subscriptionReturnReason: operation.subscriptionReturnReason || null,
   bookingQueue: Array.isArray(operation.bookingIds) ? operation.bookingIds.filter(Boolean).map((bookingId) => ({
     bookingId,
     clientId: operation.targetClientId || null,
@@ -63,6 +72,29 @@ if (operationState === "STARTED") {
         updatedAt: nowIso,
       },
       $inc: { recoveryAttempts: 1 },
+    },
+    {},
+  ];
+} else if (operationState === "RETURN_PENDING") {
+  msg.payload = [
+    {
+      _id: operation._id,
+      state: "RETURN_PENDING",
+      returnVerificationAttempts: { $not: { $gte: 20 } },
+      $or: [
+        { localApplyLeaseUntil: { $exists: false } },
+        { localApplyLeaseUntil: null },
+        { localApplyLeaseUntil: { $lte: nowIso } },
+      ],
+    },
+    {
+      $set: {
+        localApplyClaimToken: claimToken,
+        localApplyLeaseUntil: new Date(Date.now() + 90_000).toISOString(),
+        lastAttemptAt: nowIso,
+        updatedAt: nowIso,
+      },
+      $inc: { returnVerificationAttempts: 1 },
     },
     {},
   ];

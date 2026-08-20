@@ -49,11 +49,21 @@ function selfGame(overrides: Msg = {}) {
           clientId: "client-1",
           phoneNorm: "79990000001",
           bookingId: "booking-1",
+          clientSubscriptionId: "subscription-1",
+          subscriptionVisitCount: 1,
           status: "PAID",
         }],
       },
     },
     ...overrides,
+  };
+}
+
+function subscriptionRow(visitsLeft: number, bookingId = "booking-1", cancelled = false) {
+  return {
+    subscriptionId: "subscription-1",
+    visitsLeft,
+    bookings: cancelled ? [{ id: bookingId, isCancelled: true }] : [{ id: bookingId, isCancelled: false }],
   };
 }
 
@@ -291,6 +301,15 @@ test("verified Viva cancellation reaches local apply only after active and histo
 
   msg.statusCode = 200;
   msg.payload = { cancellationOptions: { subscription: { available: true } } };
+  out = run("fn_split_leave_router.js", msg, {
+    global: { vivacrm_access_token: "server-token" },
+  }).result;
+  msg = out[0];
+  assert.match(msg.url, /clients\/client-1\/subscriptions\?size=200$/);
+  assert.equal(msg.method, "GET");
+
+  msg.statusCode = 200;
+  msg.payload = { content: [subscriptionRow(269)] };
   out = run("fn_split_leave_router.js", msg).result;
   msg = out[0];
   assert.equal(msg.method, "DELETE");
@@ -310,9 +329,113 @@ test("verified Viva cancellation reaches local apply only after active and histo
 
   msg.statusCode = 200;
   msg.payload = { content: [{ id: "booking-1", isCancelled: true }] };
+  out = run("fn_split_leave_router.js", msg, {
+    global: { vivacrm_access_token: "server-token" },
+  }).result;
+  msg = out[0];
+  assert.match(msg.url, /clients\/client-1\/subscriptions\?size=200$/);
+
+  msg.statusCode = 200;
+  msg.payload = { content: [subscriptionRow(270, "booking-1", true)] };
   out = run("fn_split_leave_router.js", msg).result;
   assert.equal(out[3]._splitLeaveCtx.step, "local_apply");
+  assert.equal(out[3]._splitLeaveCtx.subscriptionReturnState, "RETURN_VERIFIED");
+  assert.equal(out[3]._splitLeaveCtx.refundMessage, "Вернули занятие на абонемент.");
   assert.equal(out[1], null);
+});
+
+test("subscription cancellation stops before DELETE when the exact pre-return snapshot is missing", () => {
+  let msg = authorizeSelf();
+  msg = run("fn_split_leave_router.js", msg).result[0];
+  msg.statusCode = 200;
+  msg.payload = { cancellationOptions: { subscription: { available: true } } };
+  msg = run("fn_split_leave_router.js", msg, {
+    global: { vivacrm_access_token: "server-token" },
+  }).result[0];
+  assert.equal(msg.method, "GET");
+  msg.statusCode = 200;
+  msg.payload = { content: [{ subscriptionId: "subscription-1", visitsLeft: 269, bookings: [] }] };
+  const blocked = run("fn_split_leave_router.js", msg).result;
+  assert.equal(blocked[0], null);
+  assert.equal(blocked[1].statusCode, 409);
+  assert.equal(blocked[3], null);
+  assert.match(blocked[1].payload.message, /активную запись/);
+});
+
+test("unchanged subscription balance becomes RETURN_PENDING without a false refund claim", () => {
+  const msg = authorizeSelf();
+  msg._splitLeaveCtx.step = "verify_subscription_return";
+  msg._splitLeaveCtx.vivaVerifiedAt = "2026-08-20T07:00:00.000Z";
+  msg._splitLeaveCtx.vivaVerification = "active_absent_history_cancelled";
+  msg._splitLeaveCtx.subscriptionReturnChecks = [{
+    bookingId: "booking-1",
+    clientSubscriptionId: "subscription-1",
+    visitsLeftBefore: 269,
+    expectedReturnCount: 1,
+  }];
+  msg.statusCode = 200;
+  msg.payload = { content: [subscriptionRow(269, "booking-1", true)] };
+  const pending = run("fn_split_leave_router.js", msg).result[3];
+  assert.equal(pending._splitLeaveCtx.subscriptionReturnState, "RETURN_PENDING");
+  assert.equal(pending._splitLeaveCtx.refundMessage, null);
+  assert.match(pending._splitLeaveCtx.successMessage, /проверяется/);
+
+  const gameUpdate = run("fn_split_leave_game_update.js", pending).result[0];
+  const leaveOperation = gameUpdate.payload[1].$set.metadata.leaveOperations.at(-1);
+  assert.equal(leaveOperation.state, "RETURN_PENDING");
+  pending._splitLeaveCtx.gameApplyAcknowledged = true;
+  pending._splitLeaveCtx.chatCleanupSkipped = true;
+  const operationUpdate = run("fn_split_leave_operation_done.js", pending).result[0];
+  assert.equal(operationUpdate.payload[1].$set.state, "RETURN_PENDING");
+  assert.equal(operationUpdate.payload[1].$set.doneAt, undefined);
+  operationUpdate.payload = { acknowledged: true, matchedCount: 1 };
+  const finalized = run("fn_split_leave_finalize.js", operationUpdate, {
+    global: { lkTournamentParticipantEpochV1: {} },
+  }).result[0];
+  assert.equal(finalized.statusCode, 202);
+  assert.equal(finalized.payload.state, "RETURN_PENDING");
+  assert.doesNotMatch(finalized.payload.message, /Вернули занятие/);
+});
+
+test("RETURN_PENDING retry performs read-only subscription verification and completes without another DELETE", () => {
+  const msg = authorizeSelf();
+  msg._splitLeaveCtx.operationKey = `game-1:${msg._splitLeaveCtx.operationId}`;
+  msg.payload = [{
+    _id: msg._splitLeaveCtx.operationKey,
+    state: "RETURN_PENDING",
+    bookingIds: ["booking-1"],
+    clientSubscriptionId: "subscription-1",
+    subscriptionVisitCount: 1,
+    subscriptionReturnState: "RETURN_PENDING",
+    subscriptionReturnChecks: [{
+      bookingId: "booking-1",
+      clientSubscriptionId: "subscription-1",
+      visitsLeftBefore: 269,
+      expectedReturnCount: 1,
+    }],
+  }];
+  let routed = run("fn_split_leave_operation_route.js", msg, {
+    global: { vivacrm_access_token: "server-token" },
+  }).result[0];
+  routed = run("fn_split_leave_router.js", routed, {
+    global: { vivacrm_access_token: "server-token" },
+  }).result[0];
+  assert.equal(routed.method, "GET");
+  assert.match(routed.url, /subscriptions\?size=200$/);
+  routed.statusCode = 200;
+  routed.payload = { content: [subscriptionRow(270, "booking-1", true)] };
+  const verified = run("fn_split_leave_router.js", routed).result[3];
+  assert.equal(verified._splitLeaveCtx.subscriptionReturnState, "RETURN_VERIFIED");
+  const persisted = run("fn_split_leave_operation_viva_confirmed.js", verified).result[0];
+  assert.equal(persisted.payload[0].state, "RETURN_PENDING");
+  persisted.payload = { acknowledged: true, matchedCount: 1 };
+  const acknowledged = run("fn_split_leave_operation_viva_ack.js", persisted).result;
+  assert.equal(acknowledged[0], null);
+  assert.ok(acknowledged[2]);
+  acknowledged[2]._splitLeaveCtx.gameApplyAcknowledged = true;
+  acknowledged[2]._splitLeaveCtx.chatCleanupSkipped = true;
+  const done = run("fn_split_leave_operation_done.js", acknowledged[2]).result[0];
+  assert.equal(done.payload[1].$set.state, "DONE");
 });
 
 test("requested refund method is selected only when the exact Viva option is available", () => {
@@ -327,10 +450,18 @@ test("requested refund method is selected only when the exact Viva option is ava
         subscription: { available: true },
       },
     };
-    const cancel = run("fn_split_leave_router.js", msg).result[0];
+    let cancel = run("fn_split_leave_router.js", msg, {
+      global: { vivacrm_access_token: "server-token" },
+    }).result[0];
     if (requestedRefundMethod === "SERVICE") {
+      assert.equal(cancel.method, "GET");
+      assert.match(cancel.url, /subscriptions\?size=200$/);
+      assert.equal(cancel._splitLeaveCtx.refundMessage, undefined);
+      cancel.statusCode = 200;
+      cancel.payload = { content: [subscriptionRow(269)] };
+      cancel = run("fn_split_leave_router.js", cancel).result[0];
       assert.deepEqual(cancel.payload, {});
-      assert.equal(cancel._splitLeaveCtx.refundMessage, "Вернули занятие на абонемент.");
+      assert.equal(cancel._splitLeaveCtx.refundMessage, undefined);
     } else {
       assert.deepEqual(cancel.payload, { refundMethod: requestedRefundMethod });
       assert.equal(cancel._splitLeaveCtx.refundMessage, undefined);
@@ -557,6 +688,12 @@ test("self leave discovers a missing game bookingId from the exact active Viva e
 
   msg.statusCode = 200;
   msg.payload = { cancellationOptions: { subscription: { available: true } } };
+  msg = run("fn_split_leave_router.js", msg, {
+    global: { vivacrm_access_token: "server-token" },
+  }).result[0];
+  assert.match(msg.url, /subscriptions\?size=200$/);
+  msg.statusCode = 200;
+  msg.payload = { content: [subscriptionRow(269, "discovered-booking-1")] };
   msg = run("fn_split_leave_router.js", msg).result[0];
   assert.equal(msg.method, "DELETE");
   assert.deepEqual(msg.payload, {});
@@ -568,6 +705,11 @@ test("self leave discovers a missing game bookingId from the exact active Viva e
   msg = run("fn_split_leave_router.js", msg).result[0];
   msg.statusCode = 200;
   msg.payload = { content: [{ id: "discovered-booking-1", isCancelled: true }] };
+  msg = run("fn_split_leave_router.js", msg, {
+    global: { vivacrm_access_token: "server-token" },
+  }).result[0];
+  msg.statusCode = 200;
+  msg.payload = { content: [subscriptionRow(270, "discovered-booking-1", true)] };
   const verified = run("fn_split_leave_router.js", msg).result[3];
   verified._splitLeaveCtx.operationKey = "game-1:self-leave:game-1:client-1";
   verified._splitLeaveCtx.operationState = "STARTED";
@@ -910,8 +1052,11 @@ test("STARTED recovery is discoverable only when a service token exists", () => 
   const withToken = run("fn_split_leave_retry_query.js", {}, {
     global: { vivacrm_access_token: "service-token" },
   }).result;
-  assert.deepEqual(withToken.payload.$or.map((item: Msg) => item.state), ["VIVA_CONFIRMED", "STARTED", "STARTED"]);
-  assert.deepEqual(withToken.payload.$or[2].vivaTargetMode, { $ne: "NONE" });
+  assert.deepEqual(
+    withToken.payload.$or.map((item: Msg) => item.state),
+    ["VIVA_CONFIRMED", "RETURN_PENDING", "STARTED", "STARTED"],
+  );
+  assert.deepEqual(withToken.payload.$or[3].vivaTargetMode, { $ne: "NONE" });
 });
 
 test("STARTED retry rebuilds the exact booking queue before any Viva attempt", () => {
@@ -1008,6 +1153,8 @@ test("STARTED retry cancels the persisted old Viva booking before preserving a n
       vivaTargetMode: "BOOKINGS",
       initialBookingIds: ["booking-1"],
       bookingQueue: [{ bookingId: "booking-1", clientId: "client-1" }],
+      clientSubscriptionId: "subscription-1",
+      subscriptionVisitCount: 1,
     },
     payload: [rejoined],
   };
@@ -1026,6 +1173,11 @@ test("STARTED retry cancels the persisted old Viva booking before preserving a n
   assert.match(msg.url, /clients\/client-1\/bookings\/booking-1\/cancel$/);
   msg.statusCode = 200;
   msg.payload = { cancellationOptions: { subscription: { available: true } } };
+  msg = run("fn_split_leave_router.js", msg, {
+    global: { vivacrm_access_token: "service-token" },
+  }).result[0];
+  msg.statusCode = 200;
+  msg.payload = { content: [subscriptionRow(269)] };
   msg = run("fn_split_leave_router.js", msg).result[0];
   msg.statusCode = 200;
   msg.payload = {};
@@ -1035,6 +1187,11 @@ test("STARTED retry cancels the persisted old Viva booking before preserving a n
   msg = run("fn_split_leave_router.js", msg).result[0];
   msg.statusCode = 200;
   msg.payload = { content: [{ id: "booking-1", clientId: "client-1", isCancelled: true }] };
+  msg = run("fn_split_leave_router.js", msg, {
+    global: { vivacrm_access_token: "service-token" },
+  }).result[0];
+  msg.statusCode = 200;
+  msg.payload = { content: [subscriptionRow(270, "booking-1", true)] };
   const verified = run("fn_split_leave_router.js", msg).result[3];
   const persist = run("fn_split_leave_operation_viva_confirmed.js", verified).result[0];
   assert.equal(persist.payload[1].$set.state, "VIVA_CONFIRMED");

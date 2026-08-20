@@ -34,9 +34,28 @@ ctx.bookingQueue = ctx.initialBookingIds.map((bookingId) => ({ bookingId, client
 ctx.vivaVerifiedAt = operation.vivaVerifiedAt || ctx.vivaVerifiedAt || null;
 ctx.vivaVerification = operation.vivaVerification || ctx.vivaVerification || null;
 ctx.successMessage = operation.successMessage || ctx.successMessage || null;
+ctx.clientSubscriptionId = operation.clientSubscriptionId || ctx.clientSubscriptionId || null;
+ctx.subscriptionVisitCount = Number.isSafeInteger(operation.subscriptionVisitCount)
+  ? operation.subscriptionVisitCount
+  : (ctx.subscriptionVisitCount || null);
+ctx.subscriptionReturnChecks = Array.isArray(operation.subscriptionReturnChecks)
+  ? operation.subscriptionReturnChecks
+  : [];
+ctx.subscriptionReturnState = operation.subscriptionReturnState || null;
+ctx.subscriptionReturnReason = operation.subscriptionReturnReason || null;
 msg._splitLeaveCtx = ctx;
 if (ctx.operationState === "DONE") {
   return respond(200, "DONE", operation.refundMessage || operation.successMessage || "Вы вышли из игры");
+}
+if (ctx.operationState === "RETURN_PENDING") {
+  const serviceToken = String(global.get("vivacrm_access_token") || "").trim();
+  if (!serviceToken) {
+    return respond(202, "RETURN_PENDING", "Вы вышли из игры. Возврат посещения проверяется");
+  }
+  ctx.localAlreadyApplied = true;
+  ctx.upstreamAuthHeader = `Bearer ${serviceToken}`;
+  ctx.step = "start_verify_subscription_return";
+  return [msg, null, null, null];
 }
 if (ctx.operationState === "STARTED") {
   if (String(operation.claimToken || "") !== String(ctx.claimToken || "")) {

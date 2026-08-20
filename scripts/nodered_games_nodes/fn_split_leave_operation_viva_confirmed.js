@@ -6,6 +6,7 @@ if (!ctx) {
 }
 const nowIso = new Date().toISOString();
 const leaseUntilIso = new Date(Date.now() + 90_000).toISOString();
+const previousState = String(ctx.operationState || "STARTED").toUpperCase();
 const update = {
   $set: {
     state: "VIVA_CONFIRMED",
@@ -14,6 +15,16 @@ const update = {
     bookingIds: Array.isArray(ctx.initialBookingIds) ? ctx.initialBookingIds : [],
     refundMessage: ctx.refundMessage || null,
     successMessage: ctx.refundMessage || ctx.successMessage || "Вы вышли из игры",
+    clientSubscriptionId: ctx.clientSubscriptionId || null,
+    subscriptionVisitCount: Number.isSafeInteger(ctx.subscriptionVisitCount)
+      ? ctx.subscriptionVisitCount
+      : null,
+    subscriptionReturnChecks: Array.isArray(ctx.subscriptionReturnChecks)
+      ? ctx.subscriptionReturnChecks
+      : [],
+    subscriptionReturnState: ctx.subscriptionReturnState || null,
+    subscriptionReturnReason: ctx.subscriptionReturnReason || null,
+    subscriptionReturnVerifiedAt: ctx.subscriptionReturnVerifiedAt || null,
     localApplyClaimToken: ctx.claimToken || null,
     localApplyLeaseUntil: leaseUntilIso,
     lastAttemptAt: nowIso,
@@ -21,14 +32,14 @@ const update = {
   },
   $inc: { localApplyAttempts: 1 },
 };
-if (ctx.operationState !== "VIVA_CONFIRMED") {
+if (previousState !== "VIVA_CONFIRMED") {
   update.$push = { transitions: { state: "VIVA_CONFIRMED", at: nowIso } };
 }
 ctx.operationState = "VIVA_CONFIRMED";
 msg._splitLeaveCtx = ctx;
 msg.payload = [{
   _id: ctx.operationKey,
-  state: "STARTED",
-  claimToken: ctx.claimToken,
+  state: previousState === "RETURN_PENDING" ? "RETURN_PENDING" : "STARTED",
+  ...(previousState === "RETURN_PENDING" ? {} : { claimToken: ctx.claimToken }),
 }, update, {}];
 return [msg, null];

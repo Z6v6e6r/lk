@@ -130,6 +130,14 @@ if (!exerciseId || !serviceToken) {
 
 const claimToken = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
 const operationId = `staff-leave:${input.gameId}:${input.targetClientId}:${membershipVersion}`;
+const subscriptionInstanceIds = Array.from(new Set(
+  payments.map((row) => toStr(row.clientSubscriptionId || row.subscriptionProductId)).filter(Boolean),
+));
+const subscriptionVisitCounts = Array.from(new Set(
+  payments
+    .map((row) => Number(row.subscriptionVisitCount))
+    .filter((value) => Number.isSafeInteger(value) && value > 0),
+));
 msg._splitLeaveCtx = {
   gameId: input.gameId,
   operationId,
@@ -148,6 +156,8 @@ msg._splitLeaveCtx = {
   bookingQueue: queue.map((item) => ({ ...item })),
   initialBookingIds: queue.map((item) => item.bookingId),
   bookingResults: [],
+  clientSubscriptionId: subscriptionInstanceIds.length === 1 ? subscriptionInstanceIds[0] : null,
+  subscriptionVisitCount: subscriptionVisitCounts.length === 1 ? subscriptionVisitCounts[0] : null,
   trace: [],
   successMessage: "Игрок удалён из игры",
   upstreamAuthHeader: `Bearer ${serviceToken}`,

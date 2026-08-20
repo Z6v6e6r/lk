@@ -60,7 +60,16 @@ ctx.bookingResults = Array.isArray(ctx.bookingResults) ? ctx.bookingResults : []
 ctx.trace = Array.isArray(ctx.trace) ? ctx.trace : [];
 ctx.game = game;
 ctx.localAlreadyApplied = asArray(game.metadata?.leaveOperations)
-  .some((item) => item?.operationId === ctx.operationId && item?.state === "DONE");
+  .some((item) => item?.operationId === ctx.operationId && ["DONE", "RETURN_PENDING"].includes(item?.state));
+if (ctx.operationState === "RETURN_PENDING") {
+  const serviceToken = String(global.get("vivacrm_access_token") || "").trim();
+  if (!serviceToken || ctx.localAlreadyApplied !== true) return [null, null, msg, null];
+  ctx.upstreamAuthHeader = `Bearer ${serviceToken}`;
+  ctx.step = "start_verify_subscription_return";
+  msg._splitLeaveCtx = ctx;
+  msg.payload = undefined;
+  return [null, msg, null, null];
+}
 
 const targetId = normalizeId(ctx.targetClientId);
 const targetPhone = normalizePhone(ctx.targetPhoneNorm);

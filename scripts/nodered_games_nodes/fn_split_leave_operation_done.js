@@ -14,18 +14,23 @@ if (!ctx || msg.error || !gameApplied || !chatApplied) {
 }
 const nowIso = new Date().toISOString();
 const superseded = ctx.supersededByRejoin === true;
+const returnPending = ctx.subscriptionReturnState === "RETURN_PENDING";
+const finalState = returnPending ? "RETURN_PENDING" : "DONE";
 msg.payload = [
-  { _id: ctx.operationKey, state: { $ne: "DONE" } },
+  { _id: ctx.operationKey, state: { $nin: ["DONE", "RETURN_PENDING"] } },
   {
     $set: {
-      state: "DONE",
+      state: finalState,
       lkAppliedAt: ctx.localApplyAt || nowIso,
-      doneAt: nowIso,
+      ...(returnPending ? {} : { doneAt: nowIso }),
       successMessage: ctx.refundMessage || ctx.successMessage || "Вы вышли из игры",
       outcome: superseded ? "REJOIN_PRESERVED" : "REMOVED",
       dailyLimitReleaseOutcome: ctx.dailyLimitReleaseOutcome || "NOT_APPLICABLE",
       dailyLimitOperationKey: ctx.dailyLimitOperationKey || null,
       dailyLimitReleasedAt: ctx.dailyLimitReleasedAt || null,
+      subscriptionReturnState: ctx.subscriptionReturnState || null,
+      subscriptionReturnReason: ctx.subscriptionReturnReason || null,
+      subscriptionReturnVerifiedAt: ctx.subscriptionReturnVerifiedAt || null,
       updatedAt: nowIso,
     },
     $unset: {
@@ -38,7 +43,7 @@ msg.payload = [
           superseded
             ? { state: "SUPERSEDED", at: ctx.localApplyAt || nowIso, outcome: "REJOIN_PRESERVED" }
             : { state: "LK_APPLIED", at: ctx.localApplyAt || nowIso },
-          { state: "DONE", at: nowIso },
+          { state: finalState, at: nowIso },
         ],
       },
     },
