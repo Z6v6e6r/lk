@@ -53,10 +53,22 @@ returned.
 
 ## Release gates
 
-This checkpoint changes source functions and tests only. Before any deployment:
+This checkpoint changes tracked Node-RED source functions, a focused patcher,
+documentation and tests only. Before any deployment:
 
 1. Pull and verify the current live `147` flow as the release preimage.
-2. Rebuild the guarded candidate with the pinned source hashes.
+2. Rebuild the guarded candidate with the pinned source hashes:
+
+   ```bash
+   node scripts/patch_live_games_subscription_return_verification.mjs \
+     --workspace /absolute/fresh-live-workspace \
+     --output /absolute/fresh-live-workspace/candidate-return/full.flow.json \
+     --import /absolute/fresh-live-workspace/candidate-return/import.nodes.json \
+     --report /absolute/fresh-live-workspace/candidate-return/report.json
+   ```
+
+   The patcher replaces only 14 existing function bodies. It fails closed on
+   any source-flow, node-preimage, route-count, topology or source-file drift.
 3. Run the full split-leave, staff-leave, cancellation and Node-RED validation suites.
 4. Review the exact Node-RED diff and rollback artifact.
 5. Obtain separate approval for deployment.
