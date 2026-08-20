@@ -47,6 +47,13 @@ test("station catalog exposes corrected court counts, Piter, and planned inactiv
   assert.equal(byName.get("Нагатинская Премиум")?.singleCourtsCount, 2);
   assert.equal(byName.get("Ясенево")?.panoramicCourtsCount, 4);
   assert.equal(byName.get("Селигерская")?.singleCourtsCount, 1);
+  const stationNames = stations.map((station) => station.name as string);
+  const seligerIndex = stationNames.indexOf("Селигерская");
+  assert.ok(seligerIndex >= 0, "Селигерская должна быть в каталоге станций");
+  assert.equal(stationNames[seligerIndex + 1], "Котельники");
+  assert.equal(stationNames[seligerIndex + 2], "Щербинка");
+  assert.equal(stationNames[seligerIndex + 3], "Люберцы");
+  assert.equal(stationNames[seligerIndex + 4], "Коломенское");
   assert.deepEqual(
     {
       id: byName.get("Питер")?.id,
@@ -64,10 +71,15 @@ test("station catalog exposes corrected court counts, Piter, and planned inactiv
     },
   );
 
-  for (const name of ["Котельники", "Щербинка", "Люберцы", "Коломна"]) {
+  for (const name of ["Котельники", "Щербинка", "Люберцы", "Коломенское"]) {
     assert.equal(byName.get(name)?.isActive, false, `${name} must remain inactive`);
     assert.match(String(byName.get(name)?.id), /^planned-/);
+    assert.equal(byName.get(name)?.city, "Москва", `${name} should be shown in Москва group`);
+    assert.equal(byName.get(name)?.address, "");
   }
+  assert.equal(byName.get("Коломенское")?.id, "planned-kolomna");
+  assert.equal(stationNames[seligerIndex + 5], "Питер");
+  assert.equal(stationNames[seligerIndex + 6], "Сочи");
   assert.deepEqual(warnings, []);
 });
 
