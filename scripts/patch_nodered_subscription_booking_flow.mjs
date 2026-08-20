@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  matchesManagedSubscriptionRouterTopology,
+  resolveManagedSubscriptionRouterContract,
+} from "./nodered_subscription_booking_router_contract.mjs";
 
 const ROOT = process.cwd();
 const sourcePath = process.argv[2] ? path.resolve(process.argv[2]) : null;
@@ -10,11 +14,6 @@ const importPath = process.argv[4]
   : path.resolve(ROOT, "node-red/modular/imports/lk_subscription_booking.nodes.import.json");
 const functionsDir = path.resolve(ROOT, "scripts/nodered_subscription_booking_nodes");
 const EXPECTED_LIVE_ROUTER_SHA256 = "d9d6d1f17c12f38b567cf226468caa6780ed3d6e707f55f4af26c066be86b1a4";
-const EXPECTED_MANAGED_ROUTER_SHA256 = new Set([
-  "aba5f45ce45208997b188d5292194c49d357452673eee7b937650ec998348a04",
-  // Fresh live-147 router, reviewed 2026-08-13: gateway dispatch remains intact.
-  "a311b8ddc6e7752ee87deb278b25ac2ddc8fb9af8b273deea66b07702ac571c8",
-]);
 const ROUTER_ID = "8f7bd5b482fe9763";
 const COLLECTION = "lk_subscription_daily_booking_ops";
 
@@ -166,6 +165,24 @@ const startSubscriptionBookingGateway = (ctx) => {
   return next;
 }
 
+function patchManagedRouterSource(source, contract) {
+  if (!contract?.managedActionCandidateSha256) return source;
+  const before = `    clientSubscriptionId: ctx.clientSubscriptionId,
+    spot: ctx.spot || null,`;
+  const after = `    clientSubscriptionId: ctx.clientSubscriptionId,
+    managedAction: ctx.action === "create"
+      ? "CREATE_GAME"
+      : ctx.action === "join"
+        ? "JOIN_GAME"
+        : null,
+    spot: ctx.spot || null,`;
+  const next = replaceOnce(source, before, after, "managed subscription action");
+  if (sha256(next) !== contract.managedActionCandidateSha256) {
+    throw new Error("Managed split router candidate SHA changed");
+  }
+  return next;
+}
+
 function functionNode(tabId, id, name, func, outputs, x, y, wires) {
   return {
     id, type: "function", z: tabId, name, func, outputs, timeout: "", noerr: 0,
@@ -299,7 +316,7 @@ function validateCandidate(flow, tabId, mongoClientId) {
     throw new Error("Subscription booking nodes use an inconsistent Mongo client");
   }
   const splitRouter = flow.find((node) => node.id === ROUTER_ID);
-  if (splitRouter?.outputs !== 4 || splitRouter?.wires?.[3]?.[0] !== IDS.http) {
+  if (!matchesManagedSubscriptionRouterTopology(splitRouter)) {
     throw new Error("Split subscription dispatch was not wired to the atomic gateway");
   }
 }
@@ -314,10 +331,8 @@ const routerSha = routerNode?.func ? sha256(routerNode.func) : null;
 const originalRouter = routerNode?.name === "Route Viva split payment"
   && routerNode.outputs === 3
   && routerSha === EXPECTED_LIVE_ROUTER_SHA256;
-const managedRouter = routerNode?.name === "Route Viva split payment"
-  && routerNode.outputs === 4
-  && routerNode.wires?.[3]?.[0] === IDS.http
-  && EXPECTED_MANAGED_ROUTER_SHA256.has(routerSha);
+const managedRouterContract = resolveManagedSubscriptionRouterContract(routerNode, routerSha);
+const managedRouter = Boolean(managedRouterContract);
 if (!originalRouter && !managedRouter) {
   throw new Error("Live split router node preimage changed");
 }
@@ -342,6 +357,8 @@ if (originalRouter) {
   nextRouter.func = patchSplitRouterSource(nextRouter.func);
   nextRouter.outputs = 4;
   nextRouter.wires = [...nextRouter.wires, [IDS.http]];
+} else if (managedRouterContract?.managedActionCandidateSha256) {
+  nextRouter.func = patchManagedRouterSource(nextRouter.func, managedRouterContract);
 }
 const managedNodes = buildManagedNodes(tabId, mongoClientId);
 const candidate = [...next, ...managedNodes];

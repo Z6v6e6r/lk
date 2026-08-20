@@ -2,6 +2,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import {
+  MANAGED_SUBSCRIPTION_ROUTER_CONTRACTS,
+  matchesManagedSubscriptionRouterContract,
+  matchesManagedSubscriptionRouterTopology,
+  resolveManagedSubscriptionRouterContract,
+} from "../nodered_subscription_booking_router_contract.mjs";
 
 const ROUTER_FILE = "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js";
 const PREPARE_FILE = "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js";
@@ -1116,7 +1122,8 @@ test("split caller receives a synthetic trusted booking only after gateway confi
 test("guarded patcher requires the exact live preimage and wires split subscriptions into the gateway", () => {
   const source = fs.readFileSync("scripts/patch_nodered_subscription_booking_flow.mjs", "utf8");
   assert.match(source, /EXPECTED_LIVE_ROUTER_SHA256/);
-  assert.match(source, /EXPECTED_MANAGED_ROUTER_SHA256/);
+  assert.match(source, /resolveManagedSubscriptionRouterContract/);
+  assert.match(source, /matchesManagedSubscriptionRouterTopology/);
   assert.match(source, /originalRouter/);
   assert.match(source, /managedRouter/);
   assert.match(source, /sourceKind === "live-147"/);
@@ -1127,4 +1134,64 @@ test("guarded patcher requires the exact live preimage and wires split subscript
   assert.match(source, /\[IDS\.debug\], \[IDS\.managedPolicy\]/);
   assert.match(source, /nextRouter\.outputs = 4/);
   assert.match(source, /nextRouter\.wires = \[\.\.\.nextRouter\.wires, \[IDS\.http\]\]/);
+  assert.match(source, /patchManagedRouterSource/);
+  assert.match(source, /managedAction: ctx\.action === "create"/);
+});
+
+test("guarded patcher accepts the exact reviewed five-output router without dropping canonical payment", () => {
+  const contract = MANAGED_SUBSCRIPTION_ROUTER_CONTRACTS.find((item) => (
+    item.outputs === 5 && item.managedActionCandidateSha256
+  ));
+  assert.ok(contract);
+  const router = {
+    id: "8f7bd5b482fe9763",
+    type: "function",
+    name: "Route Viva split payment",
+    outputs: contract.outputs,
+    wires: structuredClone(contract.wires),
+  };
+
+  assert.equal(
+    matchesManagedSubscriptionRouterContract(router, contract.funcSha256[0]),
+    true,
+  );
+  assert.equal(matchesManagedSubscriptionRouterTopology(router), true);
+  assert.deepEqual(router.wires[4], ["legacy_payment_confirm_canonical_prepare_20260816"]);
+  assert.equal(
+    resolveManagedSubscriptionRouterContract(router, contract.funcSha256[0])
+      ?.managedActionCandidateSha256,
+    "a9477e5e76419cc7317edb96cdbeda94a6745d07cb9aa0c5f1e82b2cebde2611",
+  );
+
+  const postimage = MANAGED_SUBSCRIPTION_ROUTER_CONTRACTS.find((item) => (
+    item.outputs === 5 && item.managedActionCandidateSha256 === null
+  ));
+  assert.ok(postimage);
+  assert.equal(
+    resolveManagedSubscriptionRouterContract(router, postimage.funcSha256[0])
+      ?.managedActionCandidateSha256,
+    null,
+  );
+});
+
+test("guarded patcher rejects hash and topology drift around the five-output router", () => {
+  const contract = MANAGED_SUBSCRIPTION_ROUTER_CONTRACTS.find((item) => (
+    item.outputs === 5 && item.managedActionCandidateSha256
+  ));
+  assert.ok(contract);
+  const router = {
+    id: "8f7bd5b482fe9763",
+    type: "function",
+    name: "Route Viva split payment",
+    outputs: contract.outputs,
+    wires: structuredClone(contract.wires),
+  };
+
+  assert.equal(matchesManagedSubscriptionRouterContract(router, "0".repeat(64)), false);
+  router.wires[4] = ["unexpected-target"];
+  assert.equal(
+    matchesManagedSubscriptionRouterContract(router, contract.funcSha256[0]),
+    false,
+  );
+  assert.equal(matchesManagedSubscriptionRouterTopology(router), false);
 });
