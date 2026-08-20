@@ -1,4 +1,8 @@
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
+const TOKEN_URL_DEFAULT = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
+const TOKEN_CLIENT_ID_DEFAULT = "React-auth-dev";
+const TOKEN_CACHE_GRACE_MS = 30 * 1000;
+const TOKEN_REFRESH_LOCK_MS = 10 * 1000;
 const SPLIT_DIRECTION_ID = 4588;
 const SPLIT_EXERCISE_TYPE_ID = 1613;
 const DEFAULT_ONE_TIME_PRODUCT_AMOUNT = 10000;
@@ -14,6 +18,16 @@ const toStr = (value) => {
   if (value === null || value === undefined) return null;
   const text = String(value).trim();
   return text ? text : null;
+};
+
+const readEnv = (key) => {
+  try {
+    return typeof env !== "undefined" && env && typeof env.get === "function"
+      ? toStr(env.get(key))
+      : null;
+  } catch (_error) {
+    return null;
+  }
 };
 
 const readGlobal = (key) => {
@@ -273,7 +287,67 @@ const adminRequest = (ctx, method, path, payload) => {
     "Content-Type": "application/json",
   };
   msg.payload = payload;
+  delete msg.requestTimeout;
   return [msg, null, null];
+};
+
+const resolveSplitPricingPolicy = (value) => {
+  const source = value && typeof value === "object" && value.data && typeof value.data === "object"
+    ? value.data
+    : value;
+  if (!source || typeof source !== "object") return null;
+  const selectedPromoId = toStr(source.selectedPromoId);
+  const campaignId = toStr(source.id) || selectedPromoId;
+  const mode = toStr(source.pricingMode);
+  const currency = toStr(source.currency)?.toUpperCase();
+  const twoTeamsHourlyAmount = toNumber(source.shareAmounts?.twoTeams);
+  const fourPlayersHourlyAmount = toNumber(source.shareAmounts?.fourPlayers);
+  if (
+    source.enabled !== true
+    || !selectedPromoId
+    || campaignId !== selectedPromoId
+    || mode !== "PER_PARTICIPANT_HOUR"
+    || currency !== "RUB"
+    || twoTeamsHourlyAmount === null
+    || twoTeamsHourlyAmount < 0
+    || fourPlayersHourlyAmount === null
+    || fourPlayersHourlyAmount < 0
+  ) {
+    return null;
+  }
+  return {
+    id: selectedPromoId,
+    title: toStr(source.title),
+    pricingMode: mode,
+    currency,
+    twoTeamsHourlyAmount,
+    fourPlayersHourlyAmount,
+    activeFrom: toStr(source.activeFrom),
+    activeTo: toStr(source.expiresAt),
+    version: toStr(source.updatedAt) || selectedPromoId,
+  };
+};
+
+const pricingPolicyMatchesExpected = (actual, expected, shareCount) => {
+  if (!expected || typeof expected !== "object") return true;
+  if (!actual) return false;
+  const expectedId = toStr(expected.id || expected.pricingPolicyId);
+  const expectedMode = toStr(expected.pricingMode || expected.model);
+  const expectedCurrency = toStr(expected.currency)?.toUpperCase();
+  const expectedHourlyAmount = toNumber(
+    expected.hourlyAmount
+    ?? expected.rate
+    ?? (shareCount === 2 ? expected.twoTeamsHourlyAmount : expected.fourPlayersHourlyAmount),
+  );
+  const actualHourlyAmount = toNumber(
+    shareCount === 2 ? actual.twoTeamsHourlyAmount : actual.fourPlayersHourlyAmount,
+  );
+  return (
+    (!expectedId || expectedId === actual.id)
+    && (!expectedMode || expectedMode === actual.pricingMode)
+    && (!expectedCurrency || expectedCurrency === actual.currency)
+    && (expectedHourlyAmount === null || expectedHourlyAmount === actualHourlyAmount)
+  );
 };
 
 const startSubscriptionBookingGateway = (ctx) => {
@@ -577,6 +651,92 @@ const buildBookingRequest = (ctx) => {
   );
 };
 
+const continueSplitAfterTrustedLocation = (ctx) => {
+  if (ctx.action === "create") {
+    ctx.step = "create_exercise";
+    return adminRequest(ctx, "POST", "/exercises", {
+      directionId: toNumber(ctx.vivaDirectionId) ?? SPLIT_DIRECTION_ID,
+      typeId: toNumber(ctx.vivaExerciseTypeId) ?? SPLIT_EXERCISE_TYPE_ID,
+      timeFrom: `${ctx.date}T${ctx.fromTime}+03:00`,
+      timeTo: `${ctx.date}T${ctx.toTime}+03:00`,
+      maxClientsCount: ctx.maxClientsCount,
+      roomId: ctx.roomId,
+      trainers: [],
+      requirements: [],
+    });
+  }
+  return buildBookingRequest(ctx);
+};
+
+const startRoomStudioVerification = (ctx) => {
+  const studioId = toStr(ctx.studioId);
+  const roomId = toStr(ctx.roomId);
+  if (!studioId || !roomId) {
+    return fail(400, "Для раздельной оплаты нужны stationId и roomId", {
+      code: "SPLIT_PRICING_LOCATION_REQUIRED",
+    });
+  }
+  ctx.step = "verify_room_studio";
+  return adminRequest(
+    ctx,
+    "GET",
+    `/studios/${encodeURIComponent(studioId)}/rooms/${encodeURIComponent(roomId)}`,
+  );
+};
+
+const continueSplitAfterToken = (ctx) => {
+  if (resolvePaymentMode(ctx.paymentMode) === "one_time") {
+    return startRoomStudioVerification(ctx);
+  }
+  return continueSplitAfterTrustedLocation(ctx);
+};
+
+const startVivaAuthorization = (ctx) => {
+  const cachedToken = toStr(readGlobal(KEY_TOKEN));
+  const expiresAt = Number(readGlobal(KEY_EXPIRES_AT) || 0);
+  if (cachedToken && Number.isFinite(expiresAt) && expiresAt > Date.now() + TOKEN_CACHE_GRACE_MS) {
+    ctx.token = cachedToken;
+    ctx.tokenSource = "cache";
+    return continueSplitAfterToken(ctx);
+  }
+
+  const username = readEnv("VIVA_SERVICE_USERNAME");
+  const password = readEnv("VIVA_SERVICE_PASSWORD");
+  if (!username || !password) {
+    return fail(503, "Сервисная авторизация Viva не настроена", {
+      code: "VIVA_SERVICE_AUTH_NOT_CONFIGURED",
+    });
+  }
+  const now = Date.now();
+  const lockUntil = Number(readGlobal(KEY_REFRESH_LOCK_UNTIL) || 0);
+  if (Number.isFinite(lockUntil) && lockUntil > now) {
+    return fail(503, "Авторизация Viva временно обновляется", {
+      code: "VIVA_SERVICE_TOKEN_REFRESH_IN_PROGRESS",
+      retryAfterSeconds: 1,
+    });
+  }
+  const owner = `split-policy:${now}:${Math.random().toString(36).slice(2, 10)}`;
+  writeGlobal(KEY_REFRESH_OWNER, owner);
+  writeGlobal(KEY_REFRESH_LOCK_UNTIL, now + TOKEN_REFRESH_LOCK_MS);
+  ctx.step = "token";
+  ctx.tokenSource = "refresh";
+  ctx.tokenRefreshOwner = owner;
+  msg._splitCtx = ctx;
+  msg.method = "POST";
+  msg.url = readEnv("VIVA_SERVICE_TOKEN_URL") || TOKEN_URL_DEFAULT;
+  msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
+  msg.payload = [
+    ["grant_type", "password"],
+    ["client_id", readEnv("VIVA_SERVICE_CLIENT_ID") || TOKEN_CLIENT_ID_DEFAULT],
+    ["username", username],
+    ["password", password],
+  ]
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&");
+  delete msg.requestTimeout;
+  return [msg, null, null];
+};
+
 const pickTransactionToPayMinor = (primaryPayload, fallbackPayload, fallbackMinor) => {
   const values = [
     toNumber(primaryPayload?.toPay),
@@ -644,6 +804,7 @@ const buildSplitPaymentResponse = (ctx, primaryPayload, fallbackPayload) => {
     assembleDeadlineAt: ctx.assembleDeadlineAt || null,
     spot: ctx.spot ?? null,
     reusedConflictingExercise: Boolean(ctx.reusedConflictingExercise),
+    pricingPolicy: ctx.pricingPolicy || null,
   };
 };
 
@@ -683,24 +844,22 @@ if (ctx.step === "token") {
     });
   }
 
-  if (ctx.action === "create") {
-    ctx.step = "create_exercise";
-    return adminRequest(ctx, "POST", "/exercises", {
-      directionId: toNumber(ctx.vivaDirectionId) ?? SPLIT_DIRECTION_ID,
-      typeId: toNumber(ctx.vivaExerciseTypeId) ?? SPLIT_EXERCISE_TYPE_ID,
-      timeFrom: `${ctx.date}T${ctx.fromTime}+03:00`,
-      timeTo: `${ctx.date}T${ctx.toTime}+03:00`,
-      maxClientsCount: ctx.maxClientsCount,
-      roomId: ctx.roomId,
-      trainers: [],
-      requirements: [],
-    });
-  }
-
-  return buildBookingRequest(ctx);
+  return continueSplitAfterToken(ctx);
 }
 
 if (!isOk(msg.statusCode)) {
+  if (ctx.step === "pricing_policy") {
+    return fail(503, "Не удалось проверить тариф раздельной оплаты", {
+      code: "SPLIT_PRICING_POLICY_UNAVAILABLE",
+    });
+  }
+  if (ctx.step === "verify_room_studio") {
+    return fail(409, "Корт не принадлежит выбранной станции", {
+      code: "SPLIT_PRICING_ROOM_STUDIO_MISMATCH",
+      studioId: toStr(ctx.studioId),
+      roomId: toStr(ctx.roomId),
+    });
+  }
   if (
     ctx.step === "create_booking"
     && resolveBookingPaymentType(ctx) === "SUBSCRIPTION"
@@ -838,6 +997,21 @@ if (ctx.step === "create_exercise") {
   return buildBookingRequest(ctx);
 }
 
+if (ctx.step === "verify_room_studio") {
+  const verifiedRoomId = toStr(msg.payload?.id || msg.payload?.roomId);
+  if (!verifiedRoomId || verifiedRoomId !== toStr(ctx.roomId)) {
+    return fail(409, "Viva не подтвердила корт выбранной станции", {
+      code: "SPLIT_PRICING_ROOM_STUDIO_MISMATCH",
+      studioId: toStr(ctx.studioId),
+      requestedRoomId: toStr(ctx.roomId),
+      verifiedRoomId,
+    });
+  }
+  ctx.verifiedStudioId = toStr(ctx.studioId);
+  ctx.verifiedRoomId = verifiedRoomId;
+  return continueSplitAfterTrustedLocation(ctx);
+}
+
 if (ctx.step === "create_booking") {
   const bookingId = pickId(msg.payload);
   if (!bookingId) {
@@ -848,7 +1022,8 @@ if (ctx.step === "create_booking") {
   ctx.bookingId = bookingId;
   ctx.clientId = ctx.clientId || toStr(msg.payload?.client?.id);
   ctx.clientPhone = ctx.clientPhone || toStr(msg.payload?.client?.phone);
-  ctx.studioId = ctx.studioId || toStr(msg.payload?.studio?.id);
+  ctx.studioId = toStr(ctx.verifiedStudioId) || toStr(msg.payload?.studio?.id) || toStr(ctx.studioId);
+  ctx.roomId = toStr(ctx.verifiedRoomId) || toStr(msg.payload?.room?.id) || toStr(msg.payload?.roomId) || ctx.roomId;
   ctx.spot = toNumber(msg.payload?.spot) ?? ctx.spot ?? null;
 
   if (!ctx.clientId || !ctx.studioId) {
@@ -943,10 +1118,22 @@ if (ctx.step === "create_booking") {
 
   ctx.step = "available_products";
   return adminRequest(ctx, "POST", "/products/available/by-booking", {
-    bookingIds: [bookingId],
+    bookingIds: [ctx.bookingId],
     clientId: ctx.clientId,
     studioId: ctx.studioId,
   });
+}
+
+if (ctx.step === "pricing_policy") {
+  ctx.pricingPolicy = resolveSplitPricingPolicy(msg.payload);
+  if (!pricingPolicyMatchesExpected(ctx.pricingPolicy, ctx.expectedPricingPolicy, ctx.shareCount)) {
+    return fail(409, "Цена раздельной оплаты изменилась", {
+      code: "SPLIT_PRICING_POLICY_CHANGED",
+      expectedPricingPolicyId: toStr(ctx.expectedPricingPolicy?.id || ctx.expectedPricingPolicy?.pricingPolicyId),
+      actualPricingPolicyId: toStr(ctx.pricingPolicy?.id),
+    });
+  }
+  return startVivaAuthorization(ctx);
 }
 
 if (ctx.step === "available_products") {
@@ -957,7 +1144,6 @@ if (ctx.step === "available_products") {
     return fail(502, "No Viva booking payment product is available", msg.payload || null);
   }
 
-  const shareAmountMinor = Math.max(0, Math.round(Number(ctx.shareAmount || 0) * 100));
   const oneTimeBaseMinor = Math.max(
     0,
     Math.round((toNumber(ctx.oneTimeBaseAmount) ?? DEFAULT_ONE_TIME_PRODUCT_AMOUNT) * 100),
@@ -1031,6 +1217,17 @@ if (ctx.step === "available_products") {
     0,
     Math.round(toNumber(selectedProduct.raw?.cost) ?? selectedProduct.costMinor ?? 0),
   );
+  const shareCount = Math.max(1, Math.round(toNumber(ctx.shareCount) ?? 4));
+  const durationMinutes = Math.max(1, Math.round(toNumber(ctx.durationMinutes) ?? 60));
+  const policyHourlyAmount = toNumber(
+    shareCount === 2
+      ? ctx.pricingPolicy?.twoTeamsHourlyAmount
+      : ctx.pricingPolicy?.fourPlayersHourlyAmount,
+  );
+  const shareAmountMinor = selectedMode === "one_time" && policyHourlyAmount !== null
+    ? Math.max(0, Math.round(policyHourlyAmount * durationMinutes / 60 * 100))
+    : Math.max(0, Math.round(selectedProductCostMinor / shareCount));
+  ctx.shareAmount = shareAmountMinor / 100;
   const baseShareAmountMinor = Math.max(
     oneTimeProduct?.costMinor || 0,
     oneTimeBaseMinor,

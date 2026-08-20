@@ -86,6 +86,21 @@ test("split payment payload passes distinct subscription id without mirroring cl
   assert.equal(payload.subscriptionId, "product-sport");
 });
 
+test("split promo boundaries normalize legacy UTC timestamps to Moscow game dates", () => {
+  const normalizeMoscowGameDate = new Function(
+    "toTrimmedString",
+    "normalizeDateLabel",
+    `return ${toRunnableFunctionExpression("function normalizeMoscowGameDateLabel")};`,
+  )(
+    (value: unknown) => typeof value === "string" ? value.trim() || null : null,
+    () => null,
+  ) as (value: unknown) => string | null;
+
+  assert.equal(normalizeMoscowGameDate("2026-08-20"), "2026-08-20");
+  assert.equal(normalizeMoscowGameDate("2026-08-19T21:00:00.000Z"), "2026-08-20");
+  assert.equal(normalizeMoscowGameDate("2026-09-30T20:59:59.999Z"), "2026-09-30");
+});
+
 test("split subscription requests authenticate and send a stable CORS-compatible operationId", () => {
   const requestHelper = extractFunctionBlock("function buildPadelSplitSubscriptionRequest");
   const createFunction = extractFunctionBlock("export async function apiCreatePadelSplitGamePayment");

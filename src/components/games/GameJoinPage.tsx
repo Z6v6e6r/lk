@@ -1486,6 +1486,9 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           maxClientsCount: Math.max(maxPlayers, shareCount),
           spot: nextSpot,
           paymentDeadlineMinutes: SPLIT_PARTICIPANT_PAYMENT_DEADLINE_MINUTES,
+          expectedPricingPolicy: isRecord(splitPaymentMeta.pricingPolicy)
+            ? splitPaymentMeta.pricingPolicy
+            : null,
         });
 
         if (paymentResult.error || !paymentResult.data) {

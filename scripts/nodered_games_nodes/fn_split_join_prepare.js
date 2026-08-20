@@ -1,4 +1,5 @@
 const TOKEN_URL_DEFAULT = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
+const CUP_API_DEFAULT = "https://padlhub.su/api";
 const TOKEN_CLIENT_ID_DEFAULT = "React-auth-dev";
 const KEY_TOKEN = "vivacrm_access_token";
 const KEY_EXPIRES_AT = "vivacrm_token_expires_at";
@@ -44,6 +45,26 @@ const readEnv = (key) => {
   }
 };
 
+const startPricingPolicyRequest = (ctx) => {
+  const apiBase = (readEnv("CUP_API_BASE_URL") || CUP_API_DEFAULT).replace(/\/+$/, "");
+  const query = [
+    ["forDate", ctx.date],
+    ["stationId", ctx.studioId],
+    ["roomId", ctx.roomId],
+    ["force_ts", `${Date.now()}-${Math.random().toString(36).slice(2)}`],
+  ]
+    .filter(([, value]) => Boolean(toStr(value)))
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(toStr(value))}`)
+    .join("&");
+  ctx.step = "pricing_policy";
+  msg.method = "GET";
+  msg.url = `${apiBase}/advertising/split-payment-promo?${query}`;
+  msg.headers = { Accept: "application/json", "Cache-Control": "no-store" };
+  msg.payload = undefined;
+  msg.requestTimeout = 5000;
+  return [msg, null, null, null];
+};
+
 const readCachedServiceToken = () => {
   const token = toStr(readGlobal(KEY_TOKEN));
   const expiresAt = Number(readGlobal(KEY_EXPIRES_AT) || 0);
@@ -80,6 +101,13 @@ const toNumber = (value) => {
 const resolvePositiveInt = (value, fallback) => {
   const parsed = Math.floor(toNumber(value) ?? NaN);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const normalizeDate = (value) => {
+  const text = toStr(value);
+  if (!text) return null;
+  const matched = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return matched ? `${matched[1]}-${matched[2]}-${matched[3]}` : null;
 };
 
 const normalizePhone = (value) => {
@@ -160,23 +188,19 @@ const isSinglesFormat = (value) => {
 
 const isSinglesCourtName = (value) => /сингл|single|1\s*[xх]\s*1|1\s*на\s*1/i.test(String(value || ""));
 
-const resolveIsSinglesGame = ({ body, metadata, splitPayment, booking, game }) => {
-  const payload = body && typeof body === "object" ? body : {};
+const resolveIsSinglesGame = ({ metadata, splitPayment, booking, game }) => {
   const meta = metadata && typeof metadata === "object" ? metadata : {};
   const split = splitPayment && typeof splitPayment === "object" ? splitPayment : {};
   const bookingData = booking && typeof booking === "object" ? booking : {};
   const gameDoc = game && typeof game === "object" ? game : {};
 
-  if (isSinglesFormat(payload.gameFormat || payload.format || meta.gameFormat || meta.format)) return true;
+  if (isSinglesFormat(meta.gameFormat || meta.format)) return true;
   const splitShareCount = Math.floor(toNumber(split.shareCount) || 0);
   if (splitShareCount === 2) return true;
   const inviteMaxPlayers = Math.floor(toNumber(gameDoc?.invite?.maxPlayers) || 0);
   if (inviteMaxPlayers === 2) return true;
 
   return [
-    payload.roomName,
-    payload.courtName,
-    payload.courtTitle,
     bookingData.roomName,
     meta.roomName,
     meta.courtName,
@@ -261,13 +285,28 @@ const exerciseId =
   toStr(splitPayment.exerciseId) ||
   toStr(splitPayment.exercise_id);
 const clientPhone = normalizePhone(body.clientPhone || body.phone);
-const studioId = toStr(body.studioId) || toStr(booking.studioId);
-const isSinglesGame = resolveIsSinglesGame({ body, metadata, splitPayment, booking, game });
-const bodyShareCount = Math.floor(toNumber(body.shareCount) || 0);
-const shareCount = bodyShareCount === 2 || Number(splitPayment.shareCount) === 2 || isSinglesGame
+const paymentMode = resolvePaymentMode(body.paymentMode || body.payMode || body.preferredPaymentMode);
+const storedStudioId = toStr(booking.studioId) || toStr(metadata.studioId);
+const storedRoomId = toStr(booking.roomId) || toStr(metadata.roomId);
+const studioId = storedStudioId || (paymentMode === "subscription" ? toStr(body.studioId) : null);
+const roomId = storedRoomId || (paymentMode === "subscription" ? toStr(body.roomId) : null);
+const date = normalizeDate(
+  booking.date
+  || booking.timeFromIso
+  || game.date
+  || game.startAt
+  || metadata.date
+  || (paymentMode === "subscription" ? body.date : null)
+);
+const isSinglesGame = resolveIsSinglesGame({ metadata, splitPayment, booking, game });
+const shareCount = Number(splitPayment.shareCount) === 2 || isSinglesGame
   ? 2
   : DEFAULT_SPLIT_SHARE_COUNT;
-const durationMinutes = resolveDurationMinutes(booking.timeFrom, booking.timeTo, body.durationMinutes || booking.durationMinutes);
+const durationMinutes = resolveDurationMinutes(
+  booking.timeFrom,
+  booking.timeTo,
+  null,
+);
 const subscriptionVisitCount = resolveSubscriptionVisitCount(durationMinutes);
 const bodyShareAmount = toNumber(body.shareAmount);
 const storedShareAmount = toNumber(splitPayment.shareAmount);
@@ -303,7 +342,6 @@ const maxClientsCount = Math.max(1, Math.min(maxClientsLimit, Math.floor(toNumbe
 const spotRaw = toNumber(body.spot);
 const spot = spotRaw === null ? null : Math.max(1, Math.min(maxClientsLimit, Math.floor(spotRaw)));
 const paymentRef = toStr(body.paymentRef) || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-const paymentMode = resolvePaymentMode(body.paymentMode || body.payMode || body.preferredPaymentMode);
 const clientSubscriptionId = toStr(body.clientSubscriptionId);
 if (paymentMode === "subscription" && !clientSubscriptionId) {
   return fail(400, "clientSubscriptionId is required for subscription payment", {
@@ -344,13 +382,23 @@ const assembleDeadlineAt = Number.isFinite(startAtTs)
 if (!exerciseId || !clientPhone || !studioId) {
   return fail(400, "exerciseId, studioId and clientPhone are required");
 }
+if (paymentMode === "one_time" && (!roomId || !date)) {
+  return fail(400, "Stored split game location is incomplete", {
+    code: "SPLIT_GAME_LOCATION_INCOMPLETE",
+  });
+}
 
 msg._splitCtx = {
   action: "join",
   step: "token",
   paymentRef,
+  date,
   exerciseId,
   studioId,
+  roomId,
+  expectedPricingPolicy: splitPayment.pricingPolicy && typeof splitPayment.pricingPolicy === "object"
+    ? splitPayment.pricingPolicy
+    : null,
   clientId: toStr(body.clientId),
   clientPhone,
   shareCount,
@@ -375,6 +423,10 @@ msg._splitCtx = {
     || fallbackDeadlineAt,
   assembleDeadlineAt: toStr(splitPayment.assembleDeadlineAt) || assembleDeadlineAt,
 };
+
+if (paymentMode === "one_time") {
+  return startPricingPolicyRequest(msg._splitCtx);
+}
 
 const cachedToken = readCachedServiceToken();
 if (cachedToken) {

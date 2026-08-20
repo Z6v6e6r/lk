@@ -175,7 +175,11 @@ export interface PadelSplitPaymentPromoConfig {
   id?: string;
   title?: string;
   enabled: boolean;
+  activeFrom?: string;
   activeTo?: string;
+  pricingMode: "PER_PARTICIPANT_HOUR";
+  currency: "RUB";
+  selectedPromoId?: string;
   stationIds: string[];
   stationNameIncludes: string[];
   roomIds: string[];
@@ -194,7 +198,10 @@ export interface PadelSplitPaymentPromoConfig {
 
 export const DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG: PadelSplitPaymentPromoConfig = {
   enabled: true,
+  activeFrom: undefined,
   activeTo: undefined,
+  pricingMode: "PER_PARTICIPANT_HOUR",
+  currency: "RUB",
   stationIds: ["6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1"],
   stationNameIncludes: ["терехово", "terekhovo"],
   roomIds: [],
@@ -533,6 +540,24 @@ function normalizeDateLabel(value: unknown): string | null {
   const month = String(parsed.getMonth() + 1).padStart(2, "0");
   const day = String(parsed.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function normalizeMoscowGameDateLabel(value: unknown): string | null {
+  const raw = toTrimmedString(value);
+  if (!raw) return null;
+  const exactMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (exactMatch) return exactMatch[0];
+
+  const parsed = new Date(raw);
+  if (!Number.isFinite(parsed.getTime())) return normalizeDateLabel(raw);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(parsed);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
 function parseIsoDurationMinutes(value: string): number | null {
@@ -3848,6 +3873,7 @@ export interface PadelSplitPaymentParams {
   vivaDirectionId?: number | null;
   vivaExerciseTypeId?: number | null;
   paymentDeadlineMinutes?: number | null;
+  expectedPricingPolicy?: Record<string, unknown> | null;
 }
 
 export interface PadelSplitPaymentModeOption {
@@ -3886,6 +3912,7 @@ export interface PadelSplitPaymentResult {
   subscriptionProductName: string | null;
   oneTimeProductId: string | null;
   oneTimeProductName: string | null;
+  pricingPolicy: Record<string, unknown> | null;
   raw?: unknown;
 }
 
@@ -8621,6 +8648,7 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
     subscriptionProductName: pickString(data, ["subscriptionProductName"]) ?? null,
     oneTimeProductId: pickString(data, ["oneTimeProductId"]) ?? null,
     oneTimeProductName: pickString(data, ["oneTimeProductName"]) ?? null,
+    pricingPolicy: isRecord(data.pricingPolicy) ? data.pricingPolicy : null,
     raw: payload,
   };
 }
@@ -8673,6 +8701,7 @@ function buildPadelSplitPaymentPayload(params: PadelSplitPaymentParams): Record<
     vivaDirectionId: params.vivaDirectionId ?? null,
     vivaExerciseTypeId: params.vivaExerciseTypeId ?? null,
     paymentDeadlineMinutes: params.paymentDeadlineMinutes ?? null,
+    expectedPricingPolicy: params.expectedPricingPolicy ?? null,
   };
 }
 
@@ -10898,10 +10927,21 @@ function normalizePadelSplitPaymentPromoConfigPayload(
     id: pickString(data, ["id"]) ?? undefined,
     title: pickString(data, ["title"]) ?? undefined,
     enabled: toBoolean(data.enabled) ?? DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.enabled,
+    activeFrom:
+      normalizeMoscowGameDateLabel(
+        pickString(data, ["activeFrom", "dateFrom", "validFrom"]),
+      ) ?? undefined,
     activeTo:
-      normalizeDateLabel(
+      normalizeMoscowGameDateLabel(
         pickString(data, ["activeTo", "dateTo", "validUntil", "expiresAt"]),
       ) ?? undefined,
+    pricingMode: pickString(data, ["pricingMode"]) === "PER_PARTICIPANT_HOUR"
+      ? "PER_PARTICIPANT_HOUR"
+      : DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.pricingMode,
+    currency: pickString(data, ["currency"]) === "RUB"
+      ? "RUB"
+      : DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG.currency,
+    selectedPromoId: pickString(data, ["selectedPromoId"]) ?? undefined,
     stationIds:
       stationIds.length > 0
         ? stationIds

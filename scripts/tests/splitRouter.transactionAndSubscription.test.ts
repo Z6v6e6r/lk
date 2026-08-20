@@ -4,12 +4,25 @@ import fs from "node:fs";
 
 function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
   const source = fs.readFileSync(file, "utf8");
-  return new Function("msg", source)(msg);
+  const values = new Map<string, unknown>();
+  const env = {
+    get(name: string) {
+      if (name === "VIVA_SERVICE_USERNAME") return "service@example.test";
+      if (name === "VIVA_SERVICE_PASSWORD") return "test-password";
+      return undefined;
+    },
+  };
+  const globalContext = {
+    get(name: string) { return values.get(name); },
+    set(name: string, value: unknown) { values.set(name, value); },
+  };
+  return new Function("msg", "env", "global", source)(msg, env, globalContext);
 }
 
 type RouterMessage = {
   method?: string;
   url?: string;
+  requestTimeout?: number;
   statusCode?: number;
   payload?: {
     error?: string;
@@ -39,21 +52,33 @@ type RouterMessage = {
 };
 
 test("exercise create request matches the current documented Viva ExerciseCreateRequest", () => {
-  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+  const tokenOut = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
     statusCode: 200,
     payload: { access_token: "service-token", expires_in: 300 },
     _splitCtx: {
       step: "token",
       action: "create",
+      paymentMode: "one_time",
       date: "2026-08-22",
       fromTime: "11:30",
       toTime: "13:00",
+      studioId: "studio-1",
       roomId: "room-1",
       maxClientsCount: 4,
       clientId: "client-must-not-be-forwarded",
       vivaDirectionId: 4588,
       vivaExerciseTypeId: 1613,
     },
+  }) as Array<Record<string, any> | null>;
+
+  const roomLookup = tokenOut[0];
+  assert.equal(roomLookup?.method, "GET");
+  assert.match(roomLookup?.url || "", /\/studios\/studio-1\/rooms\/room-1$/);
+
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    ...roomLookup,
+    statusCode: 200,
+    payload: { id: "room-1" },
   }) as unknown[];
 
   const requestMsg = out[0] as RouterMessage;
@@ -72,6 +97,28 @@ test("exercise create request matches the current documented Viva ExerciseCreate
   assert.equal(Object.hasOwn(requestMsg.payload || {}, "direction"), false);
   assert.equal(Object.hasOwn(requestMsg.payload || {}, "type"), false);
   assert.equal(Object.hasOwn(requestMsg.payload || {}, "clientId"), false);
+});
+
+test("fresh-token one-time join verifies room-studio binding before booking", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: { access_token: "service-token", expires_in: 300 },
+    _splitCtx: {
+      step: "token",
+      action: "join",
+      paymentMode: "one_time",
+      exerciseId: "exercise-1",
+      studioId: "studio-1",
+      roomId: "room-1",
+      clientPhone: "79990000001",
+      tokenSource: "refresh",
+    },
+  }) as Array<Record<string, any> | null>;
+
+  const roomLookup = out[0];
+  assert.equal(roomLookup?.method, "GET");
+  assert.match(roomLookup?.url || "", /\/studios\/studio-1\/rooms\/room-1$/);
+  assert.equal(roomLookup?._splitCtx?.step, "verify_room_studio");
 });
 
 test("subscription booking request sends the exact selected client subscription id through the atomic gateway", () => {
@@ -208,6 +255,226 @@ test("subscription booking response keeps the actual matched client subscription
   assert.equal(responseMsg.statusCode, 201);
   assert.equal(responseMsg.payload?.subscriptionProductId, "sport-subscription");
   assert.equal(responseMsg.payload?.paymentModes?.[0]?.productId, "sport-subscription");
+});
+
+test("verified room-studio binding continues to create the exercise before any mutation", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: { id: "room-piter-1", name: "Панорамик 1" },
+    _splitCtx: {
+      step: "verify_room_studio",
+      action: "create",
+      paymentMode: "one_time",
+      studioId: "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+      roomId: "room-piter-1",
+      date: "2026-08-24",
+      fromTime: "12:00",
+      toTime: "13:30",
+      maxClientsCount: 4,
+      durationMinutes: 90,
+      shareCount: 4,
+    },
+  }) as Array<Record<string, any> | null>;
+
+  const requestMsg = out[0];
+  assert.equal(requestMsg?.method, "POST");
+  assert.match(requestMsg?.url || "", /\/exercises$/);
+  assert.equal(requestMsg?._splitCtx?.verifiedStudioId, "1ea77cbf-bc36-49a1-96d6-f35c216a409b");
+  assert.equal(requestMsg?._splitCtx?.verifiedRoomId, "room-piter-1");
+});
+
+test("room-studio mismatch is rejected before any Viva mutation", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: { id: "room-other-studio" },
+    _splitCtx: {
+      step: "verify_room_studio",
+      action: "create",
+      paymentMode: "one_time",
+      studioId: "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+      roomId: "room-piter-1",
+    },
+  }) as unknown[];
+
+  const errorMsg = out[1] as RouterMessage;
+  assert.equal(errorMsg.statusCode, 409);
+  assert.equal(errorMsg.payload?.error, "Viva не подтвердила корт выбранной станции");
+});
+
+test("missing room under the quoted studio is rejected before any Viva mutation", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 404,
+    payload: { error: "not found" },
+    _splitCtx: {
+      step: "verify_room_studio",
+      action: "create",
+      paymentMode: "one_time",
+      studioId: "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+      roomId: "room-other-studio",
+    },
+  }) as unknown[];
+
+  const errorMsg = out[1] as RouterMessage;
+  assert.equal(errorMsg.statusCode, 409);
+  assert.equal(errorMsg.payload?.error, "Корт не принадлежит выбранной станции");
+});
+
+test("one-time booking uses the preverified location when response omits studioId", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      id: "booking-without-studio",
+      client: { id: "client-1", phone: "79990000001" },
+    },
+    _splitCtx: {
+      step: "create_booking",
+      action: "create",
+      paymentMode: "one_time",
+      studioId: "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+      roomId: "room-piter-1",
+      verifiedStudioId: "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+      verifiedRoomId: "room-piter-1",
+    },
+  }) as Array<Record<string, any> | null>;
+
+  const requestMsg = out[0];
+  assert.equal(requestMsg?.method, "POST");
+  assert.match(requestMsg?.url || "", /products\/available\/by-booking$/);
+  assert.equal(requestMsg?._splitCtx?.studioId, "1ea77cbf-bc36-49a1-96d6-f35c216a409b");
+});
+
+test("Piter hourly policy resolves 60, 90 and 120 minutes and ignores browser amounts", () => {
+  for (const [durationMinutes, expectedRubles] of [[60, 250], [90, 375], [120, 500]]) {
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+      statusCode: 200,
+      payload: [{
+        id: "one-time-product",
+        productType: "BOOKING_PAYMENT",
+        name: "Полная стоимость корта",
+        status: "ACTIVE",
+        cost: 1000000,
+      }],
+      _splitCtx: {
+        step: "available_products",
+        action: "create",
+        paymentMode: "one_time",
+        clientPhone: "79990000001",
+        bookingId: "booking-piter-1",
+        studioId: "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+        shareCount: 4,
+        durationMinutes,
+        shareAmount: 1,
+        totalAmount: 1,
+        oneTimeBaseAmount: 10000,
+        pricingPolicy: {
+          id: "piter-split-250-per-hour-v1",
+          pricingMode: "PER_PARTICIPANT_HOUR",
+          currency: "RUB",
+          fourPlayersHourlyAmount: 250,
+          version: "2026-08-20T10:00:00.000Z",
+        },
+      },
+    }) as Array<Record<string, any> | null>;
+
+    const transactionRequest = out[0];
+    assert.equal(transactionRequest?._splitCtx?.shareAmount, expectedRubles);
+    assert.equal(transactionRequest?._splitCtx?.shareAmountMinor, expectedRubles * 100);
+    assert.equal(transactionRequest?._splitCtx?.discountAmountMinor, 1000000 - expectedRubles * 100);
+  }
+});
+
+test("CUP response is accepted only when it contains an explicit selected hourly promo", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      enabled: true,
+      selectedPromoId: "piter-split-250-per-hour-v1",
+      pricingMode: "PER_PARTICIPANT_HOUR",
+      currency: "RUB",
+      shareAmounts: { twoTeams: 500, fourPlayers: 250 },
+      updatedAt: "2026-08-20T10:00:00.000Z",
+    },
+    _splitCtx: {
+      step: "pricing_policy",
+      bookingId: "booking-piter-1",
+      clientId: "client-1",
+      studioId: "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+    },
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0]?.method, "POST");
+  assert.match(out[0]?.url || "", /protocol\/openid-connect\/token$/);
+  assert.equal(out[0]?._splitCtx?.pricingPolicy?.id, "piter-split-250-per-hour-v1");
+  assert.equal(out[0]?._splitCtx?.pricingPolicy?.fourPlayersHourlyAmount, 250);
+});
+
+test("changed CUP rate is rejected instead of silently charging a different amount", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      enabled: true,
+      selectedPromoId: "piter-split-250-per-hour-v1",
+      pricingMode: "PER_PARTICIPANT_HOUR",
+      currency: "RUB",
+      shareAmounts: { twoTeams: 500, fourPlayers: 300 },
+    },
+    _splitCtx: {
+      step: "pricing_policy",
+      shareCount: 4,
+      expectedPricingPolicy: {
+        id: "piter-split-250-per-hour-v1",
+        pricingMode: "PER_PARTICIPANT_HOUR",
+        currency: "RUB",
+        hourlyAmount: 250,
+      },
+    },
+  }) as unknown[];
+
+  const errorMsg = out[1] as RouterMessage;
+  assert.equal(errorMsg.statusCode, 409);
+  assert.equal(errorMsg.payload?.error, "Цена раздельной оплаты изменилась");
+});
+
+test("non-matching policy uses the Viva product cost divided by server share count", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: [{
+      id: "one-time-product",
+      productType: "BOOKING_PAYMENT",
+      name: "Полная стоимость корта",
+      status: "ACTIVE",
+      cost: 1000000,
+    }],
+    _splitCtx: {
+      step: "available_products",
+      action: "create",
+      paymentMode: "one_time",
+      clientPhone: "79990000001",
+      bookingId: "booking-moscow-1",
+      studioId: "moscow-station",
+      shareCount: 4,
+      durationMinutes: 90,
+      shareAmount: 1,
+      totalAmount: 1,
+      oneTimeBaseAmount: 10000,
+      pricingPolicy: null,
+    },
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0]?._splitCtx?.shareAmount, 2500);
+  assert.equal(out[0]?._splitCtx?.shareAmountMinor, 250000);
+});
+
+test("CUP policy outage fails one-time split pricing closed", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 502,
+    payload: { error: "upstream unavailable" },
+    _splitCtx: { step: "pricing_policy", action: "create" },
+  }) as unknown[];
+
+  const errorMsg = out[1] as RouterMessage;
+  assert.equal(errorMsg.statusCode, 503);
+  assert.equal(errorMsg.payload?.error, "Не удалось проверить тариф раздельной оплаты");
 });
 
 test("subscription product resolution never falls back to another subscription or one-time payment", () => {

@@ -1,4 +1,5 @@
 const TOKEN_URL_DEFAULT = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
+const CUP_API_DEFAULT = "https://padlhub.su/api";
 const TOKEN_CLIENT_ID_DEFAULT = "React-auth-dev";
 const KEY_TOKEN = "vivacrm_access_token";
 const KEY_EXPIRES_AT = "vivacrm_token_expires_at";
@@ -42,6 +43,26 @@ const readEnv = (key) => {
   } catch (_error) {
     return null;
   }
+};
+
+const startPricingPolicyRequest = (ctx) => {
+  const apiBase = (readEnv("CUP_API_BASE_URL") || CUP_API_DEFAULT).replace(/\/+$/, "");
+  const query = [
+    ["forDate", ctx.date],
+    ["stationId", ctx.studioId],
+    ["roomId", ctx.roomId],
+    ["force_ts", `${Date.now()}-${Math.random().toString(36).slice(2)}`],
+  ]
+    .filter(([, value]) => Boolean(toStr(value)))
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(toStr(value))}`)
+    .join("&");
+  ctx.step = "pricing_policy";
+  msg.method = "GET";
+  msg.url = `${apiBase}/advertising/split-payment-promo?${query}`;
+  msg.headers = { Accept: "application/json", "Cache-Control": "no-store" };
+  msg.payload = undefined;
+  msg.requestTimeout = 5000;
+  return [msg, null, null, null];
 };
 
 const readCachedServiceToken = () => {
@@ -193,7 +214,7 @@ if (!date || !fromTime || !toTime || !roomId || !clientPhone) {
 
 const bodyShareCount = Math.floor(toNumber(body.shareCount) || 0);
 const shareCount = bodyShareCount === 2 || isSinglesGame(body) ? 2 : DEFAULT_SPLIT_SHARE_COUNT;
-const durationMinutes = resolveDurationMinutes(fromTime, toTime, body.durationMinutes);
+const durationMinutes = resolveDurationMinutes(fromTime, toTime, null);
 const subscriptionVisitCount = resolveSubscriptionVisitCount(durationMinutes);
 const oneTimeBaseAmount = roundMoney(
   body.oneTimeBaseAmount
@@ -263,6 +284,9 @@ msg._splitCtx = {
   timeTo: `${date}T${toTime}:00+03:00`,
   studioId: toStr(body.studioId),
   roomId,
+  expectedPricingPolicy: body.expectedPricingPolicy && typeof body.expectedPricingPolicy === "object"
+    ? body.expectedPricingPolicy
+    : null,
   clientId: toStr(body.clientId),
   clientPhone,
   shareCount,
@@ -283,6 +307,10 @@ msg._splitCtx = {
   deadlineAt: new Date(Date.now() + paymentDeadlineMinutes * 60 * 1000).toISOString(),
   assembleDeadlineAt,
 };
+
+if (paymentMode === "one_time") {
+  return startPricingPolicyRequest(msg._splitCtx);
+}
 
 const cachedToken = readCachedServiceToken();
 if (cachedToken) {

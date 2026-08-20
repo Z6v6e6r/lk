@@ -457,6 +457,14 @@ function isSplitPaymentPromoAvailableForSelection(params: {
     return false;
   }
 
+  const promoActiveFrom = params.config.activeFrom?.trim();
+  if (promoActiveFrom) {
+    const selectedDate = formatDateLocalIso(params.date);
+    if (selectedDate < promoActiveFrom) {
+      return false;
+    }
+  }
+
   const promoActiveTo = params.config.activeTo?.trim();
   if (promoActiveTo) {
     const selectedDate = formatDateLocalIso(params.date);
@@ -496,7 +504,7 @@ function resolveSplitPaymentPromoConfigForSelection(params: {
         ...params,
         config: candidate,
       }),
-    ) ?? params.config
+    ) ?? { ...params.config, enabled: false }
   );
 }
 
@@ -6917,9 +6925,11 @@ export default function GamesPage({
   const paymentModeSubLabel = splitPaymentSelected
     ? `Разделить оплату на ${splitShareCount === 2 ? "двоих" : "четверых"}`
     : "Оплачу игру один";
-  const splitShareAmount = paymentAmount != null && paymentAmount > 0
-    ? Math.max(0, Math.round(paymentAmount / Math.max(splitShareCount, 1)))
-    : resolveSplitShareAmount(splitShareCount, activeSplitPaymentPromoConfig, duration);
+  const splitShareAmount = activeSplitPaymentPromoConfig.enabled
+    ? resolveSplitShareAmount(splitShareCount, activeSplitPaymentPromoConfig, duration)
+    : paymentAmount != null && paymentAmount > 0
+      ? Math.max(0, Math.round(paymentAmount / Math.max(splitShareCount, 1)))
+      : resolveSplitShareAmount(splitShareCount, DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG, duration);
   const splitPaymentSummary = `${formatPrice(splitShareAmount)} ₽ × ${splitShareCount}`;
   // Eligible subscriptions must match the actual open-game exercise type we create.
   // Promo config may contain alternative Viva exercise type ids for pricing, but using
@@ -10619,7 +10629,11 @@ export default function GamesPage({
     const clientId = profile.clientId;
     const clientPhone = profile.clientPhone;
 
-    const shareAmount = resolveSplitShareAmount(splitShareCount, activeSplitPaymentPromoConfig, duration);
+    const shareAmount = activeSplitPaymentPromoConfig.enabled
+      ? resolveSplitShareAmount(splitShareCount, activeSplitPaymentPromoConfig, duration)
+      : paymentAmount != null && paymentAmount > 0
+        ? Math.round(paymentAmount / Math.max(splitShareCount, 1))
+        : resolveSplitShareAmount(splitShareCount, DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG, duration);
     const baseShareAmount = resolveSplitBaseShareAmount(activeSplitPaymentPromoConfig, duration);
     const discountAmount = Math.max(baseShareAmount - shareAmount, 0);
     const canUseSplitSubscription = splitHasEligibleSubscriptions;
@@ -10725,6 +10739,16 @@ export default function GamesPage({
       spot: 1,
       vivaDirectionId: resolvedSplitDirectionId,
       vivaExerciseTypeId: resolvedSplitExerciseTypeId,
+      expectedPricingPolicy: activeSplitPaymentPromoConfig.enabled
+        ? {
+          id: activeSplitPaymentPromoConfig.id,
+          pricingMode: activeSplitPaymentPromoConfig.pricingMode,
+          currency: activeSplitPaymentPromoConfig.currency,
+          hourlyAmount: splitShareCount === 2
+            ? activeSplitPaymentPromoConfig.shareAmounts.twoTeams
+            : activeSplitPaymentPromoConfig.shareAmounts.fourPlayers,
+        }
+        : null,
     });
 
     if (paymentResult.error || !paymentResult.data) {
@@ -10818,6 +10842,7 @@ export default function GamesPage({
       subscriptionProductName: paymentResult.data.subscriptionProductName,
       oneTimeProductId: paymentResult.data.oneTimeProductId,
       oneTimeProductName: paymentResult.data.oneTimeProductName,
+      pricingPolicy: paymentResult.data.pricingPolicy,
       payments: [
         {
           role: "ORGANIZER",

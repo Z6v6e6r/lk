@@ -106,7 +106,12 @@ const validSplitJoinMsg = () => ({
     },
     metadata: { vivaExerciseId: "exercise-1" },
   }],
-  _splitJoinBody: { clientPhone: "79990000001", studioId: "studio-1" },
+  _splitJoinBody: {
+    clientPhone: "79990000001",
+    studioId: "studio-1",
+    paymentMode: "subscription",
+    clientSubscriptionId: "client-subscription-1",
+  },
 });
 
 test("split join sends a cached token directly to the router output", () => {
@@ -148,9 +153,10 @@ test("split router persists a refreshed token and does not extend a cached token
     payload: { access_token: "fresh-token", expires_in: 120 },
     _splitCtx: {
       step: "token",
-      action: "join",
-      exerciseId: "exercise-1",
-      clientPhone: "79990000001",
+      action: "confirm_payment",
+      operationType: "TRANSACTION",
+      operationId: "transaction-1",
+      clientId: "client-1",
       tokenSource: "refresh",
       tokenRefreshOwner: "owner-1",
     },
@@ -167,9 +173,10 @@ test("split router persists a refreshed token and does not extend a cached token
     payload: { access_token: "cached-token" },
     _splitCtx: {
       step: "token",
-      action: "join",
-      exerciseId: "exercise-1",
-      clientPhone: "79990000001",
+      action: "confirm_payment",
+      operationType: "TRANSACTION",
+      operationId: "transaction-1",
+      clientId: "client-1",
       tokenSource: "cache",
     },
   }, cacheContext);

@@ -142,14 +142,15 @@ test("split create rejects ambiguous subscription payment without an explicit cl
 });
 
 test("split join fails closed when Viva token request configuration is missing", () => {
-  const source = fs.readFileSync("scripts/nodered_games_nodes/fn_split_join_prepare.js", "utf8");
-  const out = new Function("msg", "env", "global", source)(
+  const prepareSource = fs.readFileSync("scripts/nodered_games_nodes/fn_split_join_prepare.js", "utf8");
+  const prepared = new Function("msg", "env", "global", prepareSource)(
     {
       payload: [{
         id: "game-token-config",
         settings: { payMode: "split" },
         booking: {
           studioId: "studio-1",
+          roomId: "room-1",
           date: "2026-06-04",
           timeFrom: "12:00",
           timeTo: "13:00",
@@ -166,7 +167,21 @@ test("split join fails closed when Viva token request configuration is missing",
     { get: () => null },
   ) as unknown[];
 
-  const error = out[1] as Record<string, any>;
+  const policyRequest = prepared[0] as Record<string, any>;
+  assert.equal(policyRequest._splitCtx.step, "pricing_policy");
+
+  const routerSource = fs.readFileSync("scripts/nodered_games_nodes/fn_split_router.js", "utf8");
+  const routed = new Function("msg", "env", "global", routerSource)(
+    {
+      ...policyRequest,
+      statusCode: 200,
+      payload: { enabled: false, selectedPromoId: null },
+    },
+    { get: () => null },
+    { get: () => null, set: () => undefined },
+  ) as unknown[];
+
+  const error = routed[1] as Record<string, any>;
   assert.equal(error.statusCode, 503);
   assert.equal(error.payload.details.code, "VIVA_SERVICE_AUTH_NOT_CONFIGURED");
 });
