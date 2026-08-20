@@ -56,7 +56,7 @@ function fixture() {
 test("live flow is pinned to the reviewed deployment preimage", () => {
   assert.equal(
     LIVE_SPLIT_CREATE_CONTRACT.sourceFlowSha256,
-    "89a2f1174febbc249be33ef566f641917fb3b06a8c38b5a4a4dbf96a55caf8ea",
+    "0067f0932fdc0539d624c9c8fcbba24f0da6467cdecc13a67d5af64c41db2932",
   );
 });
 
@@ -110,5 +110,81 @@ test("candidate builder rejects an unreviewed tracked postimage", () => {
   assert.throws(
     () => applySplitCreateContract(flow, "return msg;", contract),
     /candidate source mismatch/,
+  );
+});
+
+test("candidate builder restores only exact reviewed limits and preserves adjacent drift", () => {
+  const { flow, candidateSource, contract } = fixture();
+  const gsheet = {
+    id: "gsheet-node",
+    z: "certificate-tab",
+    type: "GSheet",
+    name: "3k",
+    cells: "'1-3k'!A2:F202",
+    wires: [[]],
+  };
+  const restorationNode = {
+    id: "history-node",
+    z: "tournaments-tab",
+    type: "mongodb4",
+    name: "Find tournament history",
+    wires: [[]],
+  };
+  flow.push(gsheet, restorationNode);
+  const restored = { ...restorationNode, limit: "1" };
+  const restoration = {
+    id: restorationNode.id,
+    name: restorationNode.name,
+    type: restorationNode.type,
+    tabId: restorationNode.z,
+    field: "limit",
+    candidateValue: "1",
+    liveNodeSha256: sha256(JSON.stringify(restorationNode)),
+    candidateNodeSha256: sha256(JSON.stringify(restored)),
+  };
+
+  const result = applySplitCreateContract(flow, candidateSource, contract, restoration);
+
+  assert.deepEqual(result.changedNodes, [
+    { id: "target-node", changedFields: ["func"] },
+    { id: "history-node", changedFields: ["limit"] },
+  ]);
+  assert.deepEqual(result.candidate.find((node) => node.id === "gsheet-node"), gsheet);
+  assert.equal(result.candidate.find((node) => node.id === "history-node").limit, "1");
+  assert.deepEqual(result.restorations, [{
+    id: "history-node",
+    name: "Find tournament history",
+    field: "limit",
+    value: "1",
+    fromNodeSha256: restoration.liveNodeSha256,
+    toNodeSha256: restoration.candidateNodeSha256,
+  }]);
+});
+
+test("candidate builder rejects drift in a restoration target", () => {
+  const { flow, candidateSource, contract } = fixture();
+  const restorationNode = {
+    id: "history-node",
+    z: "tournaments-tab",
+    type: "mongodb4",
+    name: "Find tournament history",
+    wires: [[]],
+  };
+  flow.push({ ...restorationNode, collection: "unexpected" });
+  const restored = { ...restorationNode, limit: "1" };
+  const restoration = {
+    id: restorationNode.id,
+    name: restorationNode.name,
+    type: restorationNode.type,
+    tabId: restorationNode.z,
+    field: "limit",
+    candidateValue: "1",
+    liveNodeSha256: sha256(JSON.stringify(restorationNode)),
+    candidateNodeSha256: sha256(JSON.stringify(restored)),
+  };
+
+  assert.throws(
+    () => applySplitCreateContract(flow, candidateSource, contract, restoration),
+    /Restoration target node contract mismatch/,
   );
 });
