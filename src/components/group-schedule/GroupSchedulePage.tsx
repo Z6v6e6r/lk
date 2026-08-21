@@ -29,11 +29,19 @@ import {
   apiCreateTournamentVivaTransaction,
   apiFetchTournamentVivaCheckout,
   apiFetchTournamentVivaMyRegistration,
+  apiPreviewTournamentVivaTransaction,
   apiResolveTournamentVivaRegistrationBookingId,
   type TournamentRegistrationState,
   type TournamentVivaCheckout,
   type TournamentVivaProduct,
 } from "../../utils/tournamentSignupApi";
+import {
+  getAppliedGroupSchedulePromoPreview,
+  isGroupSchedulePromoPreviewApplicable,
+  isGroupSchedulePromoProduct,
+  normalizeGroupSchedulePromoCode,
+  type AppliedGroupSchedulePromo,
+} from "../../utils/groupSchedulePromo";
 import {
   normalizeTournamentSignupPublicRoster,
   type TournamentSignupPublicRoster,
@@ -417,6 +425,11 @@ export default function GroupSchedulePage({
   const [registrationLoading, setRegistrationLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [promoInput, setPromoInput] = useState("");
+  const [promoLoading, setPromoLoading] = useState(false);
+  const [promoError, setPromoError] = useState<string | null>(null);
+  const [appliedPromo, setAppliedPromo] = useState<AppliedGroupSchedulePromo | null>(null);
+  const promoRequestIdRef = useRef(0);
   const [isPurchaseListOpen, setPurchaseListOpen] = useState(true);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelBookingId, setCancelBookingId] = useState<string | null>(null);
@@ -588,6 +601,18 @@ export default function GroupSchedulePage({
     void loadRegistrationState(selectedDetail);
   }, [isAuthenticated, isRestoringSession, loadRegistrationState, selectedDetail]);
 
+  useEffect(() => {
+    promoRequestIdRef.current += 1;
+    setPromoInput("");
+    setPromoError(null);
+    setAppliedPromo(null);
+    setPromoLoading(false);
+
+    return () => {
+      promoRequestIdRef.current += 1;
+    };
+  }, [isAuthenticated, selectedId]);
+
   const stationFilterOptions = useMemo(
     () => uniqueSorted(items.map((item) => item.studioName || "Станция уточняется")),
     [items],
@@ -644,10 +669,75 @@ export default function GroupSchedulePage({
     setSelectedId(null);
   }, [onBack, selectedId, shouldExitInitialDetail]);
 
+  const applyPromoCode = useCallback(async (
+    training: GroupTrainingSummary,
+    activeCheckout: TournamentVivaCheckout,
+  ) => {
+    const code = normalizeGroupSchedulePromoCode(promoInput);
+    if (!code) {
+      setPromoError("Введите промокод.");
+      setAppliedPromo(null);
+      return;
+    }
+    if (!activeCheckout.profile?.phone) {
+      setPromoError("Не удалось получить телефон профиля Viva.");
+      setAppliedPromo(null);
+      return;
+    }
+
+    const promoProducts = activeCheckout.oneTimes.filter(isGroupSchedulePromoProduct);
+    if (promoProducts.length === 0) {
+      setPromoError("Для этой тренировки нет разовой услуги, доступной по промокоду.");
+      setAppliedPromo(null);
+      return;
+    }
+
+    setPromoLoading(true);
+    setPromoError(null);
+    setAppliedPromo(null);
+    setPromoInput(code);
+    const requestId = ++promoRequestIdRef.current;
+
+    const previewResults = await Promise.all(promoProducts.map(async (product) => ({
+      product,
+      result: await apiPreviewTournamentVivaTransaction({
+        exerciseId: training.id,
+        studioId: activeCheckout.studioId,
+        clientPhone: activeCheckout.profile?.phone || "",
+        clientId: activeCheckout.profile?.id,
+        profile: activeCheckout.profile,
+        product,
+        exercise: activeCheckout.exercise,
+        tournament: training.raw,
+        promoCode: code,
+      }),
+    })));
+    if (promoRequestIdRef.current !== requestId) return;
+
+    const previewsByProductId = Object.fromEntries(previewResults.flatMap(({ product, result }) => (
+      result.data && isGroupSchedulePromoPreviewApplicable(result.data)
+        ? [[product.id, result.data] as const]
+        : []
+    )));
+    setPromoLoading(false);
+
+    if (Object.keys(previewsByProductId).length === 0) {
+      const firstError = previewResults.find(({ result }) => result.error)?.result.error;
+      setPromoError(getErrorMessage(
+        firstError,
+        "Промокод не подходит этому клиенту или выбранной тренировке.",
+      ));
+      return;
+    }
+
+    setAppliedPromo({ code, previewsByProductId });
+  }, [promoInput]);
+
   const completeRegistration = useCallback(async (
     training: GroupTrainingSummary,
     activeCheckout: TournamentVivaCheckout,
     product: TournamentVivaProduct,
+    promoCode?: string | null,
   ) => {
     if (!activeCheckout.profile?.phone) {
       setDetailError("Не удалось получить телефон профиля Viva.");
@@ -667,6 +757,7 @@ export default function GroupSchedulePage({
       product,
       exercise: activeCheckout.exercise,
       tournament: training.raw,
+      promoCode: promoCode || null,
       successUrl: returnUrls.successUrl,
       failUrl: returnUrls.failUrl,
     });
@@ -1075,6 +1166,45 @@ export default function GroupSchedulePage({
 
                     {!registrationLoading && !isRegistered && checkout && (
                       <div className="tournament-signup-payment-options">
+                        {checkout.oneTimes.some(isGroupSchedulePromoProduct) && (
+                          <div className="group-schedule-promo" aria-label="Промокод">
+                            <label className="group-schedule-promo-label" htmlFor="group-schedule-promo-code">
+                              Промокод
+                            </label>
+                            <div className="group-schedule-promo-controls">
+                              <input
+                                id="group-schedule-promo-code"
+                                className="group-schedule-promo-input"
+                                type="text"
+                                inputMode="text"
+                                autoComplete="off"
+                                value={promoInput}
+                                placeholder="Например, PIK-PADELHUB"
+                                onChange={(event) => {
+                                  setPromoInput(event.target.value);
+                                  setPromoError(null);
+                                  setAppliedPromo(null);
+                                }}
+                                disabled={promoLoading || actionLoading}
+                              />
+                              <button
+                                className="group-schedule-promo-apply"
+                                type="button"
+                                onClick={() => void applyPromoCode(selectedTraining, checkout)}
+                                disabled={promoLoading || actionLoading || !promoInput.trim()}
+                              >
+                                {promoLoading ? "Проверяем..." : "Применить"}
+                              </button>
+                            </div>
+                            {promoError && <div className="group-schedule-promo-error">{promoError}</div>}
+                            {appliedPromo && (
+                              <div className="group-schedule-promo-success">
+                                Промокод применён. Viva подтвердила специальную цену.
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         {checkout.clientSubscriptions.length > 0 && (
                           <div className="tournament-signup-payment-group">
                             {!isGamePlusTrainerDetail && (
@@ -1109,21 +1239,40 @@ export default function GroupSchedulePage({
                             </button>
                             {isPurchaseListOpen && (
                               <div className="tournament-signup-payment-purchase-list">
-                                {purchasableProducts.map((product) => (
-                                  <button
-                                    key={`${product.source}-${product.id}`}
-                                    className="tournament-signup-payment-option"
-                                    type="button"
-                                    onClick={() => void completeRegistration(selectedTraining, checkout, product)}
-                                    disabled={actionLoading}
-                                  >
-                                    <span>{product.name}</span>
-                                    <strong>
-                                      {formatProductPrice(product)}
-                                      {formatProductVisits(product)}
-                                    </strong>
-                                  </button>
-                                ))}
+                                {purchasableProducts.map((product) => {
+                                  const promoPreview = getAppliedGroupSchedulePromoPreview(appliedPromo, product);
+                                  return (
+                                    <button
+                                      key={`${product.source}-${product.id}`}
+                                      className="tournament-signup-payment-option"
+                                      type="button"
+                                      onClick={() => void completeRegistration(
+                                        selectedTraining,
+                                        checkout,
+                                        product,
+                                        promoPreview ? appliedPromo?.code : null,
+                                      )}
+                                      disabled={actionLoading || promoLoading}
+                                    >
+                                      <span>{product.name}</span>
+                                      <strong className={promoPreview ? "group-schedule-promo-price" : undefined}>
+                                        {promoPreview ? (
+                                          <>
+                                            <span className="group-schedule-promo-price-old">
+                                              {formatMoneyMinor(promoPreview.sumMinor)}
+                                            </span>
+                                            <span>{formatMoneyMinor(promoPreview.toPayMinor)}</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            {formatProductPrice(product)}
+                                            {formatProductVisits(product)}
+                                          </>
+                                        )}
+                                      </strong>
+                                    </button>
+                                  );
+                                })}
                               </div>
                             )}
                           </div>

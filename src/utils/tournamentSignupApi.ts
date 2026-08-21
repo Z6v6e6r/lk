@@ -171,6 +171,13 @@ export interface TournamentVivaTransactionResult {
   raw: unknown;
 }
 
+export interface TournamentVivaTransactionPreview {
+  sumMinor: number;
+  discountMinor: number;
+  toPayMinor: number;
+  raw: unknown;
+}
+
 type QueryValue = string | number | boolean | null | undefined;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2345,6 +2352,25 @@ type CreateTournamentVivaTransactionParams = {
   failUrl?: string | null;
 };
 
+function normalizeTournamentVivaTransactionPreview(
+  value: unknown,
+): TournamentVivaTransactionPreview | null {
+  const toPayMinor = pickNumber(value, ["toPayKopecks", "toPayMinor", "toPay"]);
+  if (toPayMinor == null) return null;
+
+  const rawDiscountMinor = pickNumber(value, ["discountKopecks", "discountMinor", "discount"]);
+  const rawSumMinor = pickNumber(value, ["sumKopecks", "sumMinor", "sum"]);
+  const discountMinor = Math.max(0, rawDiscountMinor ?? 0);
+  const sumMinor = Math.max(toPayMinor, rawSumMinor ?? (toPayMinor + discountMinor));
+
+  return {
+    sumMinor,
+    discountMinor: Math.max(discountMinor, sumMinor - toPayMinor),
+    toPayMinor: Math.max(0, toPayMinor),
+    raw: value,
+  };
+}
+
 function buildTournamentCustomEnergySnapshot(
   exerciseId: string,
   tournament: unknown,
@@ -2642,6 +2668,50 @@ function buildTournamentVivaTransactionPayload(
   };
 }
 
+export async function apiPreviewTournamentVivaTransaction(
+  params: CreateTournamentVivaTransactionParams,
+): Promise<ApiResult<TournamentVivaTransactionPreview>> {
+  if (params.product.source !== "one-time") {
+    return {
+      data: null,
+      error: {
+        status: 400,
+        message: "Промокод можно применить только к разовой услуге",
+      },
+      status: 400,
+    };
+  }
+
+  const payload = buildTournamentVivaTransactionPayload(params, null, null);
+  const result = await request<unknown>(
+    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/transactions/preview`,
+    {
+      method: "POST",
+      auth: true,
+      retries: 0,
+      body: JSON.stringify(payload),
+    },
+  );
+  if (result.error) {
+    return { data: null, error: result.error, status: result.status };
+  }
+
+  const preview = normalizeTournamentVivaTransactionPreview(result.data);
+  if (!preview) {
+    return {
+      data: null,
+      error: {
+        status: result.status,
+        message: "Viva не вернула расчет стоимости по промокоду",
+        raw: result.data,
+      },
+      status: result.status,
+    };
+  }
+
+  return { data: preview, error: null, status: result.status };
+}
+
 export async function apiCreateTournamentVivaTransaction(
   params: CreateTournamentVivaTransactionParams,
 ): Promise<ApiResult<TournamentVivaTransactionResult>> {
@@ -2664,11 +2734,61 @@ export async function apiCreateTournamentVivaTransaction(
     {
       method: "POST",
       auth: true,
-      retries: 1,
+      retries: 0,
       body: JSON.stringify(payload),
     },
   );
   if (result.error) {
+    const outcomeMayBeUnknown = result.status == null || result.status >= 500;
+    if (outcomeMayBeUnknown) {
+      const watcherResolution = paymentWatcher?.wait.then((url) => {
+        if (!url) return null;
+        return {
+          paymentUrl: url,
+          bookingId: null,
+          toPay: null,
+          paid: false,
+          paymentExpiresAt: buildPaymentExpiresAt(transactionStartedAtMs),
+          raw: { source: "payment_watcher_after_ambiguous_create" },
+        } satisfies TournamentVivaPaymentResolution;
+      }) ?? Promise.resolve<TournamentVivaPaymentResolution | null>(null);
+      const recovered = await awaitPreferredTournamentPaymentResolution([
+        Promise.race([
+          watcherResolution,
+          wait(6_500).then(() => null),
+        ]),
+        pollTournamentVivaPaymentResolution(params.exerciseId, null),
+      ]);
+      paymentWatcher?.close();
+
+      if (isResolvedTournamentVivaPayment(recovered)) {
+        return {
+          data: {
+            paymentUrl: recovered?.paymentUrl ?? null,
+            bookingId: recovered?.bookingId ?? null,
+            toPay: recovered?.toPay ?? null,
+            paid: recovered?.paid === true,
+            paymentExpiresAt: recovered?.paymentExpiresAt ?? null,
+            raw: recovered?.raw ?? null,
+          },
+          error: null,
+          status: result.status,
+        };
+      }
+
+      return {
+        data: null,
+        error: {
+          status: result.status,
+          message: "Не удалось подтвердить результат операции. Не повторяйте оплату до проверки записи.",
+          raw: {
+            outcome: "UNKNOWN",
+            cause: result.error.raw ?? result.error,
+          },
+        },
+        status: result.status,
+      };
+    }
     paymentWatcher?.close();
     return { data: null, error: result.error, status: result.status };
   }

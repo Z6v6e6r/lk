@@ -134,3 +134,20 @@ test("group schedule list cards hide redundant training badge and level metadata
   assert.match(appCssSource, /font-family: 'Inter Display';[\s\S]*?url\('\.\/fonts\/InterDisplay-Medium\.woff2'\) format\('woff2'\);/);
   assert.doesNotMatch(communityTournamentCardCssSource, /"Inter Display", "RF Dewi"/);
 });
+
+test("group schedule promo uses provider preview and applies the quote only to its product", () => {
+  assert.match(groupSchedulePageSource, /apiPreviewTournamentVivaTransaction/);
+  assert.match(groupSchedulePageSource, /normalizeGroupSchedulePromoCode/);
+  assert.match(groupSchedulePageSource, /isGroupSchedulePromoPreviewApplicable/);
+  assert.match(groupSchedulePageSource, /getAppliedGroupSchedulePromoPreview/);
+  assert.match(groupSchedulePageSource, /activeCheckout\.oneTimes\.filter\(isGroupSchedulePromoProduct\)/);
+  assert.match(groupSchedulePageSource, /checkout\.oneTimes\.some\(isGroupSchedulePromoProduct\)/);
+  assert.match(groupSchedulePageSource, /promoCode: code/);
+  assert.match(groupSchedulePageSource, /promoRequestIdRef\.current !== requestId/);
+  assert.match(groupSchedulePageSource, /promoPreview \? appliedPromo\?\.code : null/);
+  assert.match(groupSchedulePageSource, /Промокод применён\. Viva подтвердила специальную цену\./);
+  assert.match(groupSchedulePageSource, /formatMoneyMinor\(promoPreview\.toPayMinor\)/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-controls/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-input/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-price-old/);
+});

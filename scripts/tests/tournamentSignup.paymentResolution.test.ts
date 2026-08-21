@@ -150,7 +150,7 @@ test("transaction payload includes redirect aliases used by working Viva flows",
         type: "SERVICE",
         name: "Tournament ticket",
       },
-      promoCode: null,
+      promoCode: "PIK-PADELHUB",
     },
     "https://padlhub.ru/tournaments?success=1",
     "https://padlhub.ru/tournaments?failed=1",
@@ -164,6 +164,7 @@ test("transaction payload includes redirect aliases used by working Viva flows",
   assert.equal(payload.failUrl, "https://padlhub.ru/tournaments?failed=1");
   assert.equal(payload.failRedirectUrl, "https://padlhub.ru/tournaments?failed=1");
   assert.equal(payload.failureRedirectUrl, "https://padlhub.ru/tournaments?failed=1");
+  assert.equal(payload.promoCode, "PIK-PADELHUB");
 });
 
 test("transaction lookup falls back from v2 to v1 endpoint and keeps payment url", async () => {
