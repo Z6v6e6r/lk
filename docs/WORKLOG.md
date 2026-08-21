@@ -1391,3 +1391,17 @@
   second return or rollback was performed.
 - Full sanitized evidence, residual scope and the guarded rollback boundary are
   recorded in `docs/SUBSCRIPTION_RETURN_CANARY_2026-08-20.md`.
+
+## 2026-08-21 — Piter/HUB lifecycle correction candidate
+
+- Read-only provider evidence showed that the paid Piter annual subscription
+  was already ACTIVE with zero bookings because the product reported
+  `activationDays=0`; HUB still had no paid instance.
+- Added a pre-transaction fail-closed guard for Piter/HUB product type,
+  activation date, 365-day validity and 365 visits. Accepted evidence is copied
+  into the local sale reservation for later reconciliation.
+- Added a dry-run correction runbook. The already active Piter instance cannot
+  be represented as pending; provider-supported reset/reissue or an explicitly
+  approved grandfathered exception remains a separate mutation gate.
+- Viva, MongoDB, CUP policy/mapping/instance collections, Node-RED production,
+  runtime flags, merge, push and deploy were not changed.

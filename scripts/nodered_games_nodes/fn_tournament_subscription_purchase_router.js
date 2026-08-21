@@ -1,4 +1,17 @@
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
+const REGIONAL_ANNUAL_TIME_ZONE = "Europe/Moscow";
+const REGIONAL_ANNUAL_LIFECYCLE = {
+  network_friendship: {
+    activationNotBeforeDate: "2026-10-01",
+    validityDays: 365,
+    visits: 365,
+  },
+  piter_friendship: {
+    activationNotBeforeDate: "2026-10-01",
+    validityDays: 365,
+    visits: 365,
+  },
+};
 
 const isOk = (status) => Number(status) >= 200 && Number(status) < 300;
 
@@ -133,7 +146,57 @@ const normalizeProduct = (value) => {
     name: toStr(value.name || value.title || value.displayName) || "Абонемент",
     type: normalizeProductType(value.productType || value.type),
     costMinor: Math.max(0, Math.round(toNum(value.cost) ?? 0)),
+    reportedProductType: String(value.productType || value.type || "").trim().toUpperCase() || null,
+    activationDays: Number.isInteger(value.activationDays) ? value.activationDays : null,
+    validityDays: Number.isInteger(value.validityDays) ? value.validityDays : null,
+    visits: Number.isInteger(value.visits) ? value.visits : null,
     raw: value,
+  };
+};
+
+const resolveLocalDate = (now = new Date(Date.now())) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: REGIONAL_ANNUAL_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
+const addLocalDateDays = (localDate, days) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(localDate || ""))) return null;
+  if (!Number.isInteger(days) || days < 0) return null;
+  const [year, month, day] = localDate.split("-").map(Number);
+  const timestamp = Date.UTC(year, month - 1, day) + days * 24 * 60 * 60 * 1000;
+  if (!Number.isSafeInteger(timestamp)) return null;
+  return new Date(timestamp).toISOString().slice(0, 10);
+};
+
+const regionalAnnualLifecycleEvidence = (counterKey, product, now = new Date(Date.now())) => {
+  const expected = REGIONAL_ANNUAL_LIFECYCLE[counterKey];
+  if (!expected) return null;
+  const purchaseDate = resolveLocalDate(now);
+  const projectedAutoActivationDate = addLocalDateDays(purchaseDate, product.activationDays);
+  const compatible = (
+    product.reportedProductType === "SUBSCRIPTION"
+    && Number.isInteger(product.activationDays)
+    && product.activationDays >= 0
+    && product.validityDays === expected.validityDays
+    && product.visits === expected.visits
+    && projectedAutoActivationDate !== null
+    && projectedAutoActivationDate >= expected.activationNotBeforeDate
+  );
+  return {
+    compatible,
+    purchaseDate,
+    projectedAutoActivationDate,
+    activationNotBeforeDate: expected.activationNotBeforeDate,
+    activationDays: product.activationDays,
+    validityDays: product.validityDays,
+    visits: product.visits,
+    reportedProductType: product.reportedProductType,
   };
 };
 
@@ -421,6 +484,16 @@ if (ctx.step === "load_products") {
     });
   }
 
+  const lifecycleEvidence = regionalAnnualLifecycleEvidence(ctx.counterKey, targetProduct);
+  if (lifecycleEvidence && !lifecycleEvidence.compatible) {
+    return fail(503, "Параметры активации Viva-продукта не соответствуют годовому предложению", {
+      code: "REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE",
+      counterKey: toStr(ctx.counterKey),
+      productId: targetProduct.id,
+      ...lifecycleEvidence,
+    });
+  }
+
   const priceMinor = isTieredDirectProduct ? configuredPriceMinor : targetProduct.costMinor;
   const discountMinor = isTieredDirectProduct ? targetProduct.costMinor - priceMinor : 0;
   ctx.productId = targetProduct.id;
@@ -430,6 +503,13 @@ if (ctx.step === "load_products") {
   ctx.productCostMinor = priceMinor;
   ctx.priceMinor = priceMinor;
   ctx.discountMinor = discountMinor;
+  if (lifecycleEvidence) {
+    ctx.providerActivationDays = lifecycleEvidence.activationDays;
+    ctx.providerAutoActivationDate = lifecycleEvidence.projectedAutoActivationDate;
+    ctx.activationNotBeforeDate = lifecycleEvidence.activationNotBeforeDate;
+    ctx.providerValidityDays = lifecycleEvidence.validityDays;
+    ctx.providerVisits = lifecycleEvidence.visits;
+  }
 
   const transactionPayload = {
     clientPhone: ctx.clientPhone.startsWith("+") ? ctx.clientPhone : `+${ctx.clientPhone}`,
@@ -538,6 +618,15 @@ if (ctx.step === "create_transaction") {
     amountMinor: Math.max(0, Math.round(Number(ctx.productCostMinor) || 0)),
     providerProductCostMinor: Math.max(0, Math.round(Number(ctx.providerProductCostMinor) || 0)),
     discountMinor: Math.max(0, Math.round(Number(ctx.discountMinor) || 0)),
+    providerActivationDays: Number.isInteger(ctx.providerActivationDays)
+      ? ctx.providerActivationDays
+      : null,
+    providerAutoActivationDate: toStr(ctx.providerAutoActivationDate),
+    activationNotBeforeDate: toStr(ctx.activationNotBeforeDate),
+    providerValidityDays: Number.isInteger(ctx.providerValidityDays)
+      ? ctx.providerValidityDays
+      : null,
+    providerVisits: Number.isInteger(ctx.providerVisits) ? ctx.providerVisits : null,
     toPayMinor,
     status: "PAYMENT_PENDING",
     paymentUrl,

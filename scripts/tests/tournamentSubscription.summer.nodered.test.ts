@@ -1953,7 +1953,7 @@ test("Piter transaction uses the active tier discount and persists the advertise
   selectedCtx.step = "load_products";
   selectedCtx.token = "token-1";
 
-  const routed = runNodeRedFunction(
+  const routed = withFixedNow("2026-08-21T09:00:00.000Z", () => runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
     {
       statusCode: 200,
@@ -1961,11 +1961,14 @@ test("Piter transaction uses the active tier discount and persists the advertise
         id: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
         name: "Падел.Дружба.Питер — годовая",
         cost: 5680000,
-        type: "SUBSCRIPTION",
+        productType: "SUBSCRIPTION",
+        activationDays: 41,
+        validityDays: 365,
+        visits: 365,
       }],
       _summerSubscriptionCtx: selectedCtx,
     },
-  ) as unknown[];
+  )) as unknown[];
   const transactionRequest = asRecord(routed[0]);
   const transactionCtx = asRecord(transactionRequest._summerSubscriptionCtx);
   const transactionProduct = asRecord((asRecord(transactionRequest.payload).products as unknown[])[0]);
@@ -1974,6 +1977,9 @@ test("Piter transaction uses the active tier discount and persists the advertise
   assert.equal(transactionProduct.discount, 3300000);
   assert.equal(transactionCtx.priceMinor, 2380000);
   assert.equal(transactionCtx.providerProductCostMinor, 5680000);
+  assert.equal(transactionCtx.providerActivationDays, 41);
+  assert.equal(transactionCtx.providerAutoActivationDate, "2026-10-01");
+  assert.equal(transactionCtx.activationNotBeforeDate, "2026-10-01");
 
   const persisted = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
@@ -1992,9 +1998,186 @@ test("Piter transaction uses the active tier discount and persists the advertise
   assert.equal(dbSet.amountMinor, 2380000);
   assert.equal(dbSet.providerProductCostMinor, 5680000);
   assert.equal(dbSet.discountMinor, 3300000);
+  assert.equal(dbSet.providerActivationDays, 41);
+  assert.equal(dbSet.providerAutoActivationDate, "2026-10-01");
+  assert.equal(dbSet.activationNotBeforeDate, "2026-10-01");
+  assert.equal(dbSet.providerValidityDays, 365);
+  assert.equal(dbSet.providerVisits, 365);
   assert.equal(response.priceMinor, 2380000);
   assert.equal(response.discountMinor, 3300000);
   assert.equal(response.toPayMinor, 2380000);
+});
+
+test("regional annual checkout blocks Viva activation before 1 October", () => {
+  for (const candidate of [
+    {
+      counterKey: "piter_friendship",
+      productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+      productName: "Падел.Дружба.Питер — годовая",
+      priceMinor: 1980000,
+    },
+    {
+      counterKey: "network_friendship",
+      productId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+      productName: "Падел.Дружба.ХАБ — годовая",
+      priceMinor: 5680000,
+    },
+  ]) {
+    const out = withFixedNow("2026-08-21T09:00:00.000Z", () => runNodeRedFunction(
+      "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+      {
+        statusCode: 200,
+        payload: [{
+          id: candidate.productId,
+          name: candidate.productName,
+          cost: 5680000,
+          productType: "SUBSCRIPTION",
+          activationDays: 0,
+          validityDays: 365,
+          visits: 365,
+        }],
+        _summerSubscriptionCtx: {
+          action: "purchase",
+          step: "load_products",
+          token: "token-1",
+          saleType: "tiered_direct_product",
+          counterKey: candidate.counterKey,
+          clientPhone: "79990000000",
+          productId: candidate.productId,
+          productName: candidate.productName,
+          productCostMinor: 5680000,
+          priceMinor: candidate.priceMinor,
+          batchIndex: 1,
+        },
+      },
+    )) as unknown[];
+
+    assert.equal(out[0], null, `${candidate.counterKey} must not create a transaction`);
+    const error = asRecord(out[2]);
+    const details = asRecord(asRecord(error.payload).details);
+    assert.equal(error.statusCode, 503);
+    assert.equal(details.code, "REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE");
+    assert.equal(details.counterKey, candidate.counterKey);
+    assert.equal(details.purchaseDate, "2026-08-21");
+    assert.equal(details.projectedAutoActivationDate, "2026-08-21");
+    assert.equal(details.activationNotBeforeDate, "2026-10-01");
+  }
+});
+
+test("regional annual checkout rejects missing or coerced provider lifecycle fields", () => {
+  for (const product of [
+    {
+      productType: "SUBSCRIPTION",
+      validityDays: 365,
+      visits: 365,
+    },
+    {
+      productType: "SUBSCRIPTION",
+      activationDays: "365",
+      validityDays: 365,
+      visits: 365,
+    },
+    {
+      productType: "SUBSCRIPTION",
+      activationDays: 365,
+      validityDays: "365",
+      visits: 365,
+    },
+    {
+      productType: "INDIVIDUAL",
+      activationDays: 365,
+      validityDays: 365,
+      visits: 365,
+    },
+    {
+      productType: "SUBSCRIPTION",
+      activationDays: 365,
+      validityDays: 365,
+      visits: 364,
+    },
+  ]) {
+    const out = withFixedNow("2026-08-21T09:00:00.000Z", () => runNodeRedFunction(
+      "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+      {
+        statusCode: 200,
+        payload: [{
+          id: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+          name: "Падел.Дружба.Питер — годовая",
+          cost: 5680000,
+          ...product,
+        }],
+        _summerSubscriptionCtx: {
+          action: "purchase",
+          step: "load_products",
+          token: "token-1",
+          saleType: "tiered_direct_product",
+          counterKey: "piter_friendship",
+          clientPhone: "79990000000",
+          productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+          productName: "Падел.Дружба.Питер — годовая",
+          productCostMinor: 5680000,
+          priceMinor: 1980000,
+          batchIndex: 1,
+        },
+      },
+    )) as unknown[];
+
+    assert.equal(out[0], null);
+    assert.equal(asRecord(out[2]).statusCode, 503);
+  }
+});
+
+test("HUB transaction accepts an exact compatible annual lifecycle", () => {
+  const out = withFixedNow("2026-08-21T09:00:00.000Z", () => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: [{
+        id: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+        name: "Падел.Дружба.ХАБ — годовая",
+        cost: 5680000,
+        productType: "SUBSCRIPTION",
+        activationDays: 41,
+        validityDays: 365,
+        visits: 365,
+      }],
+      _summerSubscriptionCtx: {
+        action: "purchase",
+        step: "load_products",
+        token: "token-1",
+        saleType: "tiered_direct_product",
+        counterKey: "network_friendship",
+        clientPhone: "79990000000",
+        productId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
+        productName: "Падел.Дружба.ХАБ — годовая",
+        productCostMinor: 5680000,
+        priceMinor: 5680000,
+        batchIndex: 1,
+      },
+    },
+  )) as unknown[];
+
+  const transaction = asRecord(out[0]);
+  const transactionCtx = asRecord(transaction._summerSubscriptionCtx);
+  assert.equal(transaction.method, "POST");
+  assert.match(String(transaction.url), /\/transactions$/);
+  assert.equal(transactionCtx.providerAutoActivationDate, "2026-10-01");
+  assert.equal(transactionCtx.providerActivationDays, 41);
+  assert.equal(transactionCtx.providerValidityDays, 365);
+  assert.equal(transactionCtx.providerVisits, 365);
+});
+
+test("regional sales candidate pins the lifecycle guard marker", () => {
+  const router = fs.readFileSync(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    "utf8",
+  );
+  const candidateBuilder = fs.readFileSync(
+    "scripts/prepare_tournament_subscription_sales_candidate.mjs",
+    "utf8",
+  );
+  assert.match(router, /REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE/);
+  assert.match(candidateBuilder, /REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE/);
 });
 
 test("Piter transaction fails closed when Viva returns a different amount", () => {

@@ -82,6 +82,7 @@ for (const marker of [
   'launchEnabled: false',
   'discount: discountMinor',
   'Viva вернула неверную сумму к оплате',
+  'REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE',
 ]) {
   if (!markerSource.includes(marker)) fail(`Candidate marker is missing: ${marker}`);
 }
