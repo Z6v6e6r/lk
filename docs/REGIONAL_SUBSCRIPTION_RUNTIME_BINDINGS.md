@@ -100,11 +100,22 @@ summer_subscription_<counterKey>_inventory_id            # optional override
 опубликовать immutable policies Питера и ХАБ и включить runtime feature flags.
 До этого `usageEnabled=false` и запросы завершаются fail closed.
 
-Этот срез не выполняет переход `PENDING_ACTIVATION -> ACTIVE`. Первая запись
-может активировать экземпляр только после подтверждённого read-back Viva и
-идемпотентного CAS-перехода в ЦУП; автоматическая активация 1 октября требует
-отдельного фонового обработчика. Пока обе части не реализованы, экземпляр без
-`activeFrom`/`activeTo` блокируется до Mongo/Viva mutation.
+Изолированный кандидат маршрута выполняет переход
+`PENDING_ACTIVATION -> ACTIVE` только после того, как точная запись появилась в
+Viva read-back. До любой Viva mutation он требует отдельный server-side global
+`subscriptions_activation_integration_token`. После read-back ЛК передаёт в ЦУП
+точные `subscriptionInstanceId`, `clientSubscriptionId`, `providerBookingId` и
+ожидаемую ревизию экземпляра; ЦУП выполняет CAS и атомарно пишет operation,
+ledger и outbox. Если ЦУП временно недоступен, запись Viva не повторяется:
+локальная операция остаётся с `activationState=PENDING`, а следующий запрос по
+той же подтверждённой записи повторяет только активацию.
+
+Автоматическая активация 1 октября реализована отдельным выключенным по
+умолчанию воркером ЦУП. Он требует provider-instance evidence и read-back,
+актуальный на момент дедлайна; без них экземпляр остаётся
+`PENDING_ACTIVATION`, а ошибка попадает только в агрегированную метрику. Ни
+публикация policy, ни создание/изменение Viva-подписок, ни включение флагов в
+этот кандидат не входят.
 
 Поддерживаемая первая версия policy ограничена безопасным счётчиком: одна
 единица на 60/90/120 минут, `dailyUsageLimit=1`, без weekly/monthly/future и
@@ -121,3 +132,19 @@ active-service ограничений. Если ЦУП опубликует по
 6. 90/120 create без add-on, group и tournament без benefit rule блокируются.
 7. Граница партии при конкурентных purchase-reservation не перепродаётся.
 8. Отмена, неоплата, refund и возврат визита подтверждены provider read-back.
+9. Недоступность ЦУП после Viva read-back возвращает retryable `202`, а повтор
+   не создаёт вторую запись Viva.
+10. На дедлайне воркер активирует только экземпляр с read-back не старше
+    дедлайна; отсутствующее доказательство оставляет экземпляр pending.
+
+## Candidate-only globals LK
+
+```text
+subscriptions_runtime_api_base_url=https://<cup-host>/api
+subscriptions_runtime_context_integration_token=<secret reference>
+subscriptions_activation_integration_token=<separate secret reference>
+```
+
+Это Node-RED globals, а не браузерные переменные. Значения не должны попадать в
+flow JSON, Git, Tilda, логи или ответы клиенту. Их provisioning, импорт flow и
+включение runtime — отдельные этапы с отдельным подтверждением.

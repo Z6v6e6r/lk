@@ -21,6 +21,10 @@ const MANAGED_GLOBALS = {
   subscriptions_runtime_api_base_url: "https://cup.example/api",
   subscriptions_runtime_context_integration_token: "integration-token",
 };
+const MANAGED_ACTIVATION_GLOBALS = {
+  ...MANAGED_GLOBALS,
+  subscriptions_activation_integration_token: "activation-integration-token-1234567890",
+};
 const PITER_STATION_ID = "1ea77cbf-bc36-49a1-96d6-f35c216a409b";
 
 function runFunction(
@@ -159,6 +163,7 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
       frozenUntil: null,
       noShowBlockedUntil: null,
       homeStationId: stationId,
+      ...overrides.instance,
     },
     evidence: { mappingRevision: 1, instanceRevision: 1 },
   };
@@ -655,6 +660,176 @@ test("HUB accepts the exact first-use deadline lifecycle with an all-stations po
   assert.equal(runtime[0]._subscriptionBooking.step, "active_bookings");
   assert.equal(runtime[0]._subscriptionBooking.managedRuntime.policy.lifecycle.activationMode,
     "FIRST_USE_OR_FIXED_DATE");
+});
+
+test("pending annual subscription fails before Viva reads when CUP activation is not configured", () => {
+  const runtime = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse({
+      instance: { state: "PENDING_ACTIVATION", activeFrom: null, activeTo: null },
+    }),
+    _subscriptionBooking: baseContext("managed_runtime_context", {
+      serviceDate: "2026-08-21",
+      category: "open_game",
+      planKey: "piter_friendship",
+      managedAction: "CREATE_GAME",
+      managedTarget: {
+        resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
+        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
+        basePriceMinor: null, currency: "RUB",
+      },
+    }),
+  }, MANAGED_GLOBALS);
+
+  assert.equal(runtime[4].statusCode, 503);
+  assert.equal(runtime[4].payload.details.code, "SUBSCRIPTION_ACTIVATION_NOT_CONFIGURED");
+  assert.equal(runtime[0], null, "no Viva booking/read request is emitted");
+
+  const shortToken = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse({
+      instance: { state: "PENDING_ACTIVATION", activeFrom: null, activeTo: null },
+    }),
+    _subscriptionBooking: runtime[4]._subscriptionBooking,
+  }, {
+    ...MANAGED_GLOBALS,
+    subscriptions_activation_integration_token: "too-short",
+  });
+  assert.equal(shortToken[4].payload.details.code, "SUBSCRIPTION_ACTIVATION_NOT_CONFIGURED");
+  assert.equal(shortToken[0], null);
+});
+
+test("pending annual subscription is projected for policy and activates only after Viva read-back", () => {
+  const runtime = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse({
+      instance: { state: "PENDING_ACTIVATION", activeFrom: null, activeTo: null },
+    }),
+    _subscriptionBooking: baseContext("managed_runtime_context", {
+      serviceDate: "2026-08-21",
+      category: "open_game",
+      planKey: "piter_friendship",
+      managedAction: "CREATE_GAME",
+      managedTarget: {
+        resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
+        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
+        basePriceMinor: null, currency: "RUB",
+      },
+    }),
+  }, MANAGED_ACTIVATION_GLOBALS);
+  assert.equal(runtime[0]._subscriptionBooking.managedActivationRequired, true);
+  assert.equal(runtime[0]._subscriptionBooking.managedActivationExpectedRevision, 1);
+
+  const active = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { content: [] },
+    _subscriptionBooking: runtime[0]._subscriptionBooking,
+  }, MANAGED_ACTIVATION_GLOBALS);
+  const history = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { content: [] },
+    _subscriptionBooking: active[0]._subscriptionBooking,
+  }, MANAGED_ACTIVATION_GLOBALS);
+  assert.equal(history[6]._managedSubscriptionPolicyInput.instance.state, "ACTIVE");
+  assert.ok(history[6]._managedSubscriptionPolicyInput.instance.activeFrom);
+  assert.ok(history[6]._managedSubscriptionPolicyInput.instance.activeTo);
+
+  const activationRequest = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: baseContext("operation_confirm", {
+      managedActivationRequired: true,
+      managedActivationExpectedRevision: 1,
+      confirmedBookingId: "booking-first-use",
+      managedRuntime: {
+        subscriptionInstanceId: "subscription-instance-1",
+      },
+    }),
+  }, MANAGED_ACTIVATION_GLOBALS);
+  assert.equal(activationRequest[0]._subscriptionBooking.step, "managed_first_use_activation");
+  assert.equal(
+    activationRequest[0].url,
+    "https://cup.example/api/internal/subscriptions/activate-first-use",
+  );
+  assert.deepEqual(activationRequest[0].payload, {
+    subscriptionInstanceId: "subscription-instance-1",
+    clientSubscriptionId: "client-subscription-1",
+    providerBookingId: "booking-first-use",
+    expectedInstanceRevision: 1,
+  });
+  assert.equal(
+    activationRequest[0].headers["X-Subscriptions-Integration-Token"],
+    "activation-integration-token-1234567890",
+  );
+
+  const activationConfirmed = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      schemaVersion: 1,
+      outcome: "ACTIVATED",
+      subscriptionInstanceId: "subscription-instance-1",
+      state: "ACTIVE",
+      activeFrom: "2026-08-21T10:00:00.000Z",
+      activeTo: "2027-08-21T09:59:59.999Z",
+      revision: 2,
+    },
+    _subscriptionBooking: activationRequest[0]._subscriptionBooking,
+  }, MANAGED_ACTIVATION_GLOBALS);
+  assert.equal(
+    activationConfirmed[3]._subscriptionBooking.step,
+    "operation_activation_confirm",
+  );
+  assert.equal(activationConfirmed[3].payload[1].$set.activationState, "CONFIRMED");
+  assert.equal(activationConfirmed[3].payload[1].$set.activationRevision, 2);
+
+  const done = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: activationConfirmed[3]._subscriptionBooking,
+  }, MANAGED_ACTIVATION_GLOBALS);
+  assert.equal(done[4].statusCode, 201);
+  assert.equal(done[4].payload.state, "CONFIRMED");
+});
+
+test("temporary CUP activation failure stays retryable without another Viva create", () => {
+  const pending = runFunction(ROUTER_FILE, {
+    statusCode: 503,
+    payload: { error: { code: "UPSTREAM_UNAVAILABLE" } },
+    _subscriptionBooking: baseContext("managed_first_use_activation", {
+      managedActivationRequired: true,
+      managedActivationExpectedRevision: 1,
+      confirmedBookingId: "booking-first-use",
+      managedRuntime: { subscriptionInstanceId: "subscription-instance-1" },
+    }),
+  }, MANAGED_ACTIVATION_GLOBALS);
+  assert.equal(pending[4].statusCode, 202);
+  assert.equal(pending[4].payload.details.code, "SUBSCRIPTION_ACTIVATION_PENDING");
+  assert.equal(pending[0], null, "failure never emits a second Viva request");
+
+  const retry = runFunction(ROUTER_FILE, {
+    payload: [{
+      _id: "iSkq6G:client-subscription-1:2026-08-10",
+      operationId: "original-operation",
+      state: "CONFIRMED",
+      bookingId: "booking-first-use",
+      activationState: "PENDING",
+    }],
+    _subscriptionBooking: baseContext("operation_find", {
+      managedActivationRequired: true,
+      managedActivationExpectedRevision: 1,
+      confirmedBookingId: "booking-first-use",
+      sameExerciseBooking: flatBooking({
+        id: "booking-first-use",
+        exerciseId: "exercise-target",
+      }),
+      cancelledSubscriptionBookings: [],
+      managedRuntime: { subscriptionInstanceId: "subscription-instance-1" },
+    }),
+  }, MANAGED_ACTIVATION_GLOBALS);
+  assert.equal(retry[0]._subscriptionBooking.step, "managed_first_use_activation");
+  assert.equal(retry[0]._subscriptionBooking.activationOperationId, "original-operation");
+  assert.equal(retry[0].payload.providerBookingId, "booking-first-use");
+  assert.doesNotMatch(retry[0].url, /vivacrm/i);
 });
 
 test("regional policy requires the exact first-use deadline lifecycle before any booking read", () => {

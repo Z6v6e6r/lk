@@ -169,6 +169,67 @@ const prepareManagedRuntimeContext = (ctx) => {
   );
 };
 
+const managedActivationConfig = () => ({
+  apiBase: (readGlobal("subscriptions_runtime_api_base_url") || "").replace(/\/+$/, ""),
+  integrationToken: readGlobal("subscriptions_activation_integration_token"),
+});
+
+const validManagedActivationConfig = (config) => (
+  /^https:\/\//i.test(config.apiBase)
+  && Buffer.byteLength(config.integrationToken || "", "utf8") >= 32
+);
+
+const managedActivationConfigured = () => {
+  const config = managedActivationConfig();
+  return validManagedActivationConfig(config);
+};
+
+const projectedFirstUseInstance = (instance, lifecycle, evaluatedAt) => {
+  const now = finiteDate(evaluatedAt);
+  const deadline = finiteDate(lifecycle?.fixedActivationAt);
+  const validityDays = lifecycle?.validityDays;
+  if (!now || !deadline || !Number.isInteger(validityDays) || validityDays < 1) return null;
+  const activeFromMs = Math.min(now.getTime(), deadline.getTime());
+  const activeToMs = activeFromMs + validityDays * 24 * 60 * 60 * 1000 - 1;
+  if (!Number.isSafeInteger(activeToMs)) return null;
+  return {
+    ...instance,
+    state: "ACTIVE",
+    activeFrom: new Date(activeFromMs).toISOString(),
+    activeTo: new Date(activeToMs).toISOString(),
+    frozenUntil: null,
+  };
+};
+
+const prepareManagedFirstUseActivation = (ctx, providerBookingId) => {
+  const config = managedActivationConfig();
+  if (!validManagedActivationConfig(config)) {
+    return finishPending(ctx, "Запись подтверждена Viva; активация подписки ожидает настройки ЦУП", {
+      code: "SUBSCRIPTION_ACTIVATION_NOT_CONFIGURED",
+    });
+  }
+  ctx.step = "managed_first_use_activation";
+  msg._subscriptionBooking = ctx;
+  msg.method = "POST";
+  msg.url = `${config.apiBase}/internal/subscriptions/activate-first-use`;
+  msg.headers = {
+    Authorization: ctx.authHeader,
+    "X-Subscriptions-Integration-Token": config.integrationToken,
+    "X-Correlation-Id": ctx.operationId,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+  msg.payload = {
+    subscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
+    clientSubscriptionId: ctx.clientSubscriptionId,
+    providerBookingId,
+    expectedInstanceRevision: ctx.managedActivationExpectedRevision,
+  };
+  delete msg.error;
+  delete msg.statusCode;
+  return emit(OUTPUT_HTTP);
+};
+
 const prepareAdminGet = (ctx, step, path) => {
   let serviceToken = null;
   try {
@@ -664,6 +725,7 @@ const prepareOperationReclaim = (ctx, operation, now = new Date()) => prepareMon
     planKey: ctx.planKey || null,
     limitMode: ctx.limitMode,
     managedDecision: ctx.managedDecision || null,
+    activationState: ctx.managedActivationRequired ? "PENDING" : "NOT_REQUIRED",
     state: "PREPARED",
     attempts: 0,
     leaseUntil: new Date(now.getTime() + PREPARED_LEASE_MS).toISOString(),
@@ -735,6 +797,24 @@ const prepareConfirmedUpdate = (ctx, booking) => {
       updatedAt: nowIso,
     },
     $unset: { pendingUntil: "", failure: "" },
+  });
+};
+
+const prepareActivationConfirmedUpdate = (ctx, activation) => {
+  const nowIso = new Date().toISOString();
+  return prepareMongoUpdate(ctx, "operation_activation_confirm", {
+    _id: ctx.operationKey,
+    operationId: ctx.activationOperationId || ctx.operationId,
+    state: "CONFIRMED",
+    activationState: "PENDING",
+  }, {
+    $set: {
+      activationState: "CONFIRMED",
+      activationOutcome: activation.outcome,
+      activationRevision: activation.revision,
+      activationConfirmedAt: nowIso,
+      updatedAt: nowIso,
+    },
   });
 };
 
@@ -1018,6 +1098,7 @@ if (ctx.step === "managed_runtime_context") {
     || !isObj(policy) || !isObj(instance)
     || runtime.subscriptionInstanceId !== instance.subscriptionInstanceId
     || policy.policyVersion !== instance.policyVersion
+    || !Number.isInteger(runtime.evidence?.instanceRevision)
     || policy.subscriptionTypeId !== instance.subscriptionTypeId) {
     return finishError(ctx, 502, "ЦУП вернул несогласованный контекст подписки", {
       code: "MANAGED_SUBSCRIPTION_RUNTIME_CONTEXT_INVALID",
@@ -1072,6 +1153,14 @@ if (ctx.step === "managed_runtime_context") {
       policyVersion: policy.policyVersion ?? null,
     });
   }
+  const pendingFirstUse = instance.state === "PENDING_ACTIVATION"
+    && instance.activeFrom === null
+    && instance.activeTo === null;
+  if (pendingFirstUse && !managedActivationConfigured()) {
+    return finishError(ctx, 503, "Активация подписки после первой записи ещё не настроена", {
+      code: "SUBSCRIPTION_ACTIVATION_NOT_CONFIGURED",
+    });
+  }
   ctx.managedRuntime = {
     subscriptionInstanceId: runtime.subscriptionInstanceId,
     policyDigest: runtime.policyDigest,
@@ -1079,6 +1168,8 @@ if (ctx.step === "managed_runtime_context") {
     instance,
     evidence: runtime.evidence || null,
   };
+  ctx.managedActivationRequired = pendingFirstUse;
+  ctx.managedActivationExpectedRevision = runtime.evidence.instanceRevision;
   return prepareUserGet(ctx, "active_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
 }
 
@@ -1224,12 +1315,25 @@ if (ctx.step === "history_bookings") {
       });
     }
     ctx.step = "managed_policy_decision";
+    const evaluatedAt = new Date().toISOString();
+    const policyInstance = ctx.managedActivationRequired
+      ? projectedFirstUseInstance(
+        ctx.managedRuntime.instance,
+        ctx.managedRuntime.policy.lifecycle,
+        evaluatedAt,
+      )
+      : ctx.managedRuntime.instance;
+    if (!policyInstance) {
+      return finishError(ctx, 409, "Нельзя безопасно рассчитать период первой активации", {
+        code: "SUBSCRIPTION_ACTIVATION_RANGE_INVALID",
+      });
+    }
     msg._subscriptionBooking = ctx;
     msg._managedSubscriptionPolicyInput = {
-      evaluatedAt: new Date().toISOString(),
+      evaluatedAt,
       action: ctx.managedAction,
       policy: ctx.managedRuntime.policy,
-      instance: ctx.managedRuntime.instance,
+      instance: policyInstance,
       target: ctx.managedTarget,
       usage: {
         activeServiceScope: ctx.managedRuntime.policy.activeServicesLimit?.scope
@@ -1314,6 +1418,19 @@ if (ctx.step === "operation_find") {
   }
   const operation = isObj(rows[0]) ? rows[0] : null;
   if (ctx.sameExerciseBooking) {
+    if (operation
+      && ctx.managedActivationRequired
+      && operation.state === "CONFIRMED"
+      && operation.activationState === "PENDING") {
+      const stableBookingId = bookingId(ctx.sameExerciseBooking)
+        || toStr(operation.bookingId || operation.upstreamBookingId);
+      if (!stableBookingId) {
+        return finishPending(ctx, "Активная запись Viva найдена без устойчивого bookingId и требует сверки");
+      }
+      ctx.confirmedBookingId = stableBookingId;
+      ctx.activationOperationId = toStr(operation.operationId);
+      return prepareManagedFirstUseActivation(ctx, stableBookingId);
+    }
     if (operation && toStr(operation.operationId) === ctx.operationId) {
       const stableBookingId = bookingId(ctx.sameExerciseBooking)
         || toStr(operation.bookingId || operation.upstreamBookingId);
@@ -1349,6 +1466,7 @@ if (ctx.step === "operation_find") {
       planKey: ctx.planKey || null,
       limitMode: ctx.limitMode,
       managedDecision: ctx.managedDecision || null,
+      activationState: ctx.managedActivationRequired ? "PENDING" : "NOT_REQUIRED",
       state: "PREPARED",
       attempts: 0,
       leaseUntil: new Date(now.getTime() + PREPARED_LEASE_MS).toISOString(),
@@ -1522,6 +1640,35 @@ if (ctx.step === "confirmation_bookings") {
 if (ctx.step === "operation_confirm") {
   if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
     return finishPending(ctx, "Запись появилась в Viva; локальное подтверждение ещё выполняется");
+  }
+  if (ctx.managedActivationRequired) {
+    return prepareManagedFirstUseActivation(ctx, ctx.confirmedBookingId);
+  }
+  return finishConfirmed(ctx, ctx.confirmedBookingId, 201);
+}
+
+if (ctx.step === "managed_first_use_activation") {
+  const activation = unwrapRecord(msg.payload);
+  if (!isHttpOk(msg.statusCode)
+    || !activation
+    || activation.schemaVersion !== 1
+    || !["ACTIVATED", "ALREADY_ACTIVE"].includes(activation.outcome)
+    || activation.state !== "ACTIVE"
+    || activation.subscriptionInstanceId !== ctx.managedRuntime?.subscriptionInstanceId
+    || !Number.isInteger(activation.revision)
+    || !finiteDate(activation.activeFrom)
+    || !finiteDate(activation.activeTo)) {
+    return finishPending(ctx, "Запись подтверждена Viva; активация подписки в ЦУП ожидает повтора", {
+      code: "SUBSCRIPTION_ACTIVATION_PENDING",
+      upstreamStatus: Number(msg.statusCode) || null,
+    });
+  }
+  return prepareActivationConfirmedUpdate(ctx, activation);
+}
+
+if (ctx.step === "operation_activation_confirm") {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Подписка активирована; локальная операция ожидает повторной сверки");
   }
   return finishConfirmed(ctx, ctx.confirmedBookingId, 201);
 }
