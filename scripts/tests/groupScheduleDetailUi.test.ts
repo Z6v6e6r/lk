@@ -136,6 +136,11 @@ test("group schedule list cards hide redundant training badge and level metadata
 });
 
 test("group schedule promo uses provider preview and applies the quote only to its product", () => {
+  assert.match(groupSchedulePageSource, /const GROUP_SCHEDULE_PROMO_VISIBLE = false;/);
+  assert.match(
+    groupSchedulePageSource,
+    /GROUP_SCHEDULE_PROMO_VISIBLE && checkout\.oneTimes\.some\(isGroupSchedulePromoProduct\)/,
+  );
   assert.match(groupSchedulePageSource, /apiPreviewTournamentVivaTransaction/);
   assert.match(groupSchedulePageSource, /normalizeGroupSchedulePromoCode/);
   assert.match(groupSchedulePageSource, /isGroupSchedulePromoPreviewApplicable/);

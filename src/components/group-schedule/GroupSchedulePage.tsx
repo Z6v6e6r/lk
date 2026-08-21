@@ -76,6 +76,7 @@ const GAME_PLUS_TRAINER_DEFAULT_DESCRIPTION = {
     "Гибкие условия: разовое посещение или абонемент",
   ],
 };
+const GROUP_SCHEDULE_PROMO_VISIBLE = false;
 function formatDate(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -1166,7 +1167,7 @@ export default function GroupSchedulePage({
 
                     {!registrationLoading && !isRegistered && checkout && (
                       <div className="tournament-signup-payment-options">
-                        {checkout.oneTimes.some(isGroupSchedulePromoProduct) && (
+                        {GROUP_SCHEDULE_PROMO_VISIBLE && checkout.oneTimes.some(isGroupSchedulePromoProduct) && (
                           <div className="group-schedule-promo" aria-label="Промокод">
                             <label className="group-schedule-promo-label" htmlFor="group-schedule-promo-code">
                               Промокод
