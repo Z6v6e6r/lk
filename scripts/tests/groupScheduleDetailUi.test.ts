@@ -150,4 +150,5 @@ test("group schedule promo uses provider preview and applies the quote only to i
   assert.match(groupScheduleCssSource, /\.group-schedule-promo-controls/);
   assert.match(groupScheduleCssSource, /\.group-schedule-promo-input/);
   assert.match(groupScheduleCssSource, /\.group-schedule-promo-price-old/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-price > span[\s\S]*?white-space: nowrap/);
 });

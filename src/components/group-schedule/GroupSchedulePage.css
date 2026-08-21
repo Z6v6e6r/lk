@@ -635,6 +635,11 @@
   gap: 6px;
 }
 
+.group-schedule-registration .group-schedule-promo-price > span {
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
 .group-schedule-promo-price-old {
   color: var(--text-secondary);
   font-size: 12px;
