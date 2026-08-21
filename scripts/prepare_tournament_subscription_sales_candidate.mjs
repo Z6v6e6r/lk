@@ -52,7 +52,7 @@ for (const [nodeName, sourceFile] of TARGETS) {
   const nextSource = fs.readFileSync(path.join(FUNCTION_DIR, sourceFile), "utf8");
   const previousSource = String(matches[0].func || "");
   if (nextSource === previousSource) {
-    fail(`${nodeName} already matches the candidate source`);
+    continue;
   }
   matches[0].func = nextSource;
   changedNodes.push({
@@ -65,7 +65,10 @@ for (const [nodeName, sourceFile] of TARGETS) {
 
 const sourceById = new Map(verified.source.map((node) => [node.id, node]));
 const actualChanged = candidate.filter((node) => JSON.stringify(node) !== JSON.stringify(sourceById.get(node.id)));
-if (actualChanged.length !== TARGETS.length) {
+if (changedNodes.length === 0) {
+  fail("All tournament subscription sales functions already match the candidate source");
+}
+if (actualChanged.length !== changedNodes.length) {
   fail(`Unexpected changed node count: ${actualChanged.length}`);
 }
 if (!actualChanged.every((node) => changedNodes.some((entry) => entry.id === node.id))) {
@@ -73,8 +76,12 @@ if (!actualChanged.every((node) => changedNodes.some((entry) => entry.id === nod
 }
 
 const candidateText = `${JSON.stringify(candidate, null, 2)}\n`;
-const markerSource = changedNodes
-  .map((entry) => candidate.find((node) => node.id === entry.id)?.func || "")
+const markerSource = TARGETS
+  .map(([nodeName]) => candidate.find((node) => (
+    node?.type === "function"
+    && node?.z === tabs[0].id
+    && node?.name === nodeName
+  ))?.func || "")
   .join("\n");
 for (const marker of [
   "8bf334ba-3050-4017-b40a-7eef2db1eb16",
@@ -101,6 +108,7 @@ const report = {
   candidateSha256: sha256(candidateText),
   sourceNodeCount: verified.nodeCount,
   candidateNodeCount: candidate.length,
+  targetNodeCount: TARGETS.length,
   changedNodeCount: changedNodes.length,
   targetTab: { id: tabs[0].id, label: tabs[0].label },
   changedNodes,
