@@ -1290,7 +1290,7 @@ export default function GroupSchedulePage({
                                     inputMode="text"
                                     autoComplete="off"
                                     value={promoInput}
-                                    placeholder="Например, PIK-PADELHUB"
+                                    placeholder="Введите промокод"
                                     onChange={(event) => {
                                       setPromoInput(event.target.value);
                                       setPromoError(null);

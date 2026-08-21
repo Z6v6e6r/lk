@@ -144,6 +144,8 @@ test("group schedule promo uses provider preview and applies the quote only to i
   );
   assert.match(groupSchedulePageSource, /const \[isGroupSchedulePromoExpanded, setGroupSchedulePromoExpanded\] = useState\(false\);/);
   assert.match(groupSchedulePageSource, /const groupSchedulePromoSectionId = useId\(\);/);
+  assert.match(groupSchedulePageSource, /placeholder="Введите промокод"/);
+  assert.doesNotMatch(groupSchedulePageSource, /placeholder="Например, PIK-PADELHUB"/);
   assert.match(groupSchedulePageSource, /setGroupSchedulePromoExpanded\(false\);/);
   assert.match(groupSchedulePageSource, /aria-expanded={isGroupSchedulePromoExpanded}/);
   assert.match(groupSchedulePageSource, /aria-controls={groupSchedulePromoSectionId}/);
