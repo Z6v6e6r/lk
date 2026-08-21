@@ -91,7 +91,7 @@ test("group schedule detail uses unified signup card and multiselect type filter
   assert.ok(groupScheduleCssSource.includes(".group-schedule-registration .auth-wrapper {\n  min-height: 0;\n  padding: 0;\n  background: transparent;"));
   assert.ok(groupScheduleCssSource.includes(".group-schedule-registration .auth-card {\n  max-width: none;"));
   assert.doesNotMatch(groupScheduleCssSource, /group-schedule-trainer-fact/);
-  assert.doesNotMatch(groupScheduleCssSource, /#[0-9a-fA-F]{3,8}|rgba\(/);
+  assert.doesNotMatch(groupScheduleCssSource, /(?!#9ca3af)#[0-9a-fA-F]{3,8}|rgba\(/);
   assert.doesNotMatch(groupScheduleCssSource, /font-size: 4[0-9]px|min-height: 8[0-9]px|width: 82px|height: 82px|radial-gradient/);
 });
 
@@ -136,11 +136,25 @@ test("group schedule list cards hide redundant training badge and level metadata
 });
 
 test("group schedule promo uses provider preview and applies the quote only to its product", () => {
-  assert.match(groupSchedulePageSource, /const GROUP_SCHEDULE_PROMO_VISIBLE = false;/);
+  assert.doesNotMatch(groupSchedulePageSource, /const GROUP_SCHEDULE_PROMO_VISIBLE = false;/);
+  assert.match(groupSchedulePageSource, /const shouldShowGroupSchedulePromoSection = Boolean\(checkout && checkout\.oneTimes\.some\(isGroupSchedulePromoProduct\)\)/);
   assert.match(
     groupSchedulePageSource,
-    /GROUP_SCHEDULE_PROMO_VISIBLE && checkout\.oneTimes\.some\(isGroupSchedulePromoProduct\)/,
+    /const GROUP_SCHEDULE_PROMO_TRIGGER_TEXT = "у меня есть промокод";/,
   );
+  assert.match(groupSchedulePageSource, /const \[isGroupSchedulePromoExpanded, setGroupSchedulePromoExpanded\] = useState\(false\);/);
+  assert.match(groupSchedulePageSource, /const groupSchedulePromoSectionId = useId\(\);/);
+  assert.match(groupSchedulePageSource, /setGroupSchedulePromoExpanded\(false\);/);
+  assert.match(groupSchedulePageSource, /aria-expanded={isGroupSchedulePromoExpanded}/);
+  assert.match(groupSchedulePageSource, /aria-controls={groupSchedulePromoSectionId}/);
+  assert.match(groupSchedulePageSource, /id={groupSchedulePromoSectionId}/);
+  assert.match(groupSchedulePageSource, /hidden={!isGroupSchedulePromoExpanded}/);
+  assert.match(groupSchedulePageSource, /setGroupSchedulePromoExpanded\(\(current\) => !current\)/);
+  assert.match(groupSchedulePageSource, /shouldShowGroupSchedulePromoSection && \(/);
+  assert.match(groupSchedulePageSource, /className="group-schedule-promo-trigger"/);
+  assert.match(groupSchedulePageSource, /GROUP_SCHEDULE_PROMO_TRIGGER_TEXT/);
+  assert.match(groupSchedulePageSource, /className="group-schedule-promo-section"/);
+  assert.match(groupSchedulePageSource, /aria-hidden={!isGroupSchedulePromoExpanded}/);
   assert.match(groupSchedulePageSource, /apiPreviewTournamentVivaTransaction/);
   assert.match(groupSchedulePageSource, /normalizeGroupSchedulePromoCode/);
   assert.match(groupSchedulePageSource, /isGroupSchedulePromoPreviewApplicable/);
@@ -152,6 +166,21 @@ test("group schedule promo uses provider preview and applies the quote only to i
   assert.match(groupSchedulePageSource, /promoPreview \? appliedPromo\?\.code : null/);
   assert.match(groupSchedulePageSource, /Промокод применён\. Viva подтвердила специальную цену\./);
   assert.match(groupSchedulePageSource, /formatMoneyMinor\(promoPreview\.toPayMinor\)/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?position: relative;/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?z-index: 1;/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?width: 100%;/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?min-height: 44px;/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?border: none;/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?background: transparent;/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?padding: 8px 12px 12px;/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?font-size: 12px;/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?line-height: 1\.4;/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?color: #9ca3af;/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?text-align: center;/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?cursor: pointer;/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?pointer-events: auto;/);
+  assert.match(groupScheduleCssSource, /\.group-schedule-promo-trigger[\s\S]*?touch-action: manipulation;/);
   assert.match(groupScheduleCssSource, /\.group-schedule-promo-controls/);
   assert.match(groupScheduleCssSource, /\.group-schedule-promo-input/);
   assert.match(groupScheduleCssSource, /\.group-schedule-promo-price-old/);

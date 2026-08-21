@@ -66,6 +66,7 @@ interface GroupSchedulePageProps {
 const ALL_FILTER_VALUE = "__all__";
 const TYPE_FILTER_ALL_LABEL = "Все типы";
 const GROUP_SCHEDULE_SUBSCRIPTION_URL = "https://padlhub.ru/ab_leto";
+const GROUP_SCHEDULE_PROMO_TRIGGER_TEXT = "у меня есть промокод";
 const GAME_PLUS_TRAINER_DEFAULT_DESCRIPTION = {
   heading: "Игровая тренировка с тренером",
   lead: "Совершенствуйте удары и тактику прямо во время игры!",
@@ -76,7 +77,6 @@ const GAME_PLUS_TRAINER_DEFAULT_DESCRIPTION = {
     "Гибкие условия: разовое посещение или абонемент",
   ],
 };
-const GROUP_SCHEDULE_PROMO_VISIBLE = false;
 function formatDate(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -432,11 +432,13 @@ export default function GroupSchedulePage({
   const [appliedPromo, setAppliedPromo] = useState<AppliedGroupSchedulePromo | null>(null);
   const promoRequestIdRef = useRef(0);
   const [isPurchaseListOpen, setPurchaseListOpen] = useState(true);
+  const [isGroupSchedulePromoExpanded, setGroupSchedulePromoExpanded] = useState(false);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelBookingId, setCancelBookingId] = useState<string | null>(null);
   const initialOpenRef = useRef(false);
   const typeFilterRef = useRef<HTMLDivElement | null>(null);
   const typeFilterListboxId = useId();
+  const groupSchedulePromoSectionId = useId();
 
   const loadList = useCallback(async () => {
     setLoadingList(true);
@@ -608,6 +610,7 @@ export default function GroupSchedulePage({
     setPromoError(null);
     setAppliedPromo(null);
     setPromoLoading(false);
+    setGroupSchedulePromoExpanded(false);
 
     return () => {
       promoRequestIdRef.current += 1;
@@ -656,6 +659,7 @@ export default function GroupSchedulePage({
   const detailEyebrow = selectedTraining ? getTrainingDetailEyebrow(selectedTraining, isGamePlusTrainerDetail) : "";
   const detailTitleLines = selectedTraining ? getTrainingDetailTitleLines(selectedTraining, isGamePlusTrainerDetail) : [];
   const shouldShowSubscriptionPurchaseLink = Boolean(checkout && checkout.subscriptions.length > 0);
+  const shouldShowGroupSchedulePromoSection = Boolean(checkout && checkout.oneTimes.some(isGroupSchedulePromoProduct));
   const shouldExitInitialDetail = Boolean(returnToFindGame && initialExerciseId && selectedId === initialExerciseId);
 
   const handleBackClick = useCallback(() => {
@@ -1167,45 +1171,6 @@ export default function GroupSchedulePage({
 
                     {!registrationLoading && !isRegistered && checkout && (
                       <div className="tournament-signup-payment-options">
-                        {GROUP_SCHEDULE_PROMO_VISIBLE && checkout.oneTimes.some(isGroupSchedulePromoProduct) && (
-                          <div className="group-schedule-promo" aria-label="Промокод">
-                            <label className="group-schedule-promo-label" htmlFor="group-schedule-promo-code">
-                              Промокод
-                            </label>
-                            <div className="group-schedule-promo-controls">
-                              <input
-                                id="group-schedule-promo-code"
-                                className="group-schedule-promo-input"
-                                type="text"
-                                inputMode="text"
-                                autoComplete="off"
-                                value={promoInput}
-                                placeholder="Например, PIK-PADELHUB"
-                                onChange={(event) => {
-                                  setPromoInput(event.target.value);
-                                  setPromoError(null);
-                                  setAppliedPromo(null);
-                                }}
-                                disabled={promoLoading || actionLoading}
-                              />
-                              <button
-                                className="group-schedule-promo-apply"
-                                type="button"
-                                onClick={() => void applyPromoCode(selectedTraining, checkout)}
-                                disabled={promoLoading || actionLoading || !promoInput.trim()}
-                              >
-                                {promoLoading ? "Проверяем..." : "Применить"}
-                              </button>
-                            </div>
-                            {promoError && <div className="group-schedule-promo-error">{promoError}</div>}
-                            {appliedPromo && (
-                              <div className="group-schedule-promo-success">
-                                Промокод применён. Viva подтвердила специальную цену.
-                              </div>
-                            )}
-                          </div>
-                        )}
-
                         {checkout.clientSubscriptions.length > 0 && (
                           <div className="tournament-signup-payment-group">
                             {!isGamePlusTrainerDetail && (
@@ -1294,6 +1259,63 @@ export default function GroupSchedulePage({
                               Приобрести подписку РА / Академия
                             </button>
                           </div>
+                        )}
+
+                        {shouldShowGroupSchedulePromoSection && (
+                          <>
+                            <button
+                              type="button"
+                              className="group-schedule-promo-trigger"
+                              onClick={() => setGroupSchedulePromoExpanded((current) => !current)}
+                              aria-expanded={isGroupSchedulePromoExpanded}
+                              aria-controls={groupSchedulePromoSectionId}
+                            >
+                              {GROUP_SCHEDULE_PROMO_TRIGGER_TEXT}
+                            </button>
+                            <div
+                              className="group-schedule-promo-section"
+                              id={groupSchedulePromoSectionId}
+                              hidden={!isGroupSchedulePromoExpanded}
+                              aria-hidden={!isGroupSchedulePromoExpanded}
+                            >
+                              <div className="group-schedule-promo" aria-label="Промокод">
+                                <label className="group-schedule-promo-label" htmlFor="group-schedule-promo-code">
+                                  Промокод
+                                </label>
+                                <div className="group-schedule-promo-controls">
+                                  <input
+                                    id="group-schedule-promo-code"
+                                    className="group-schedule-promo-input"
+                                    type="text"
+                                    inputMode="text"
+                                    autoComplete="off"
+                                    value={promoInput}
+                                    placeholder="Например, PIK-PADELHUB"
+                                    onChange={(event) => {
+                                      setPromoInput(event.target.value);
+                                      setPromoError(null);
+                                      setAppliedPromo(null);
+                                    }}
+                                    disabled={promoLoading || actionLoading}
+                                  />
+                                  <button
+                                    className="group-schedule-promo-apply"
+                                    type="button"
+                                    onClick={() => void applyPromoCode(selectedTraining, checkout)}
+                                    disabled={promoLoading || actionLoading || !promoInput.trim()}
+                                  >
+                                    {promoLoading ? "Проверяем..." : "Применить"}
+                                  </button>
+                                </div>
+                                {promoError && <div className="group-schedule-promo-error">{promoError}</div>}
+                                {appliedPromo && (
+                                  <div className="group-schedule-promo-success">
+                                    Промокод применён. Viva подтвердила специальную цену.
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </>
                         )}
 
                         {checkout.clientSubscriptions.length === 0 && purchasableProducts.length === 0 && (

@@ -564,6 +564,23 @@
   background: var(--white);
 }
 
+.group-schedule-promo-trigger {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-height: 44px;
+  border: none;
+  background: transparent;
+  padding: 8px 12px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #9ca3af;
+  text-align: center;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
 .group-schedule-promo-label {
   color: var(--text-secondary);
   font-size: 12px;
