@@ -1714,14 +1714,14 @@ test("summer subscription counter refresh materializes the staged daily phase", 
   assert.equal(state.remainingCount, 8);
 });
 
-test("summer subscription reconciliation selects only live pending payments from the launch inventory", () => {
+test("summer subscription reconciliation selects only live pending payments from supported inventories", () => {
   const prepared = withFixedNow("2026-07-08T10:00:00.000Z", () => runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_reconcile_query.js",
     { payload: Date.now() },
   )) as Record<string, unknown>;
 
   assert.deepEqual(prepared.query, {
-    inventoryId: { $regex: "^(?:ab_leto_2026_50_v1(?:_(?:friendship|ra)_.*)?|ab_leto_2026_100_then_7_v1_(?:friendship|ra))$" },
+    inventoryId: { $regex: "^(?:ab_leto_2026_50_v1(?:_(?:friendship|ra)_.*)?|ab_leto_2026_100_then_7_v1_(?:friendship|ra)|kotelniki_friendship_12m_2026_v1|network_friendship_12m_2026_v1|piter_friendship_12m_2026_v1)$" },
     status: "PAYMENT_PENDING",
     transactionId: { $nin: [null, ""] },
     $or: [
@@ -1755,6 +1755,38 @@ test("summer subscription reconciliation selects only live pending payments from
   assert.equal(reconcileMeta.requestedAt, "2026-07-08T10:00:00.000Z");
   assert.equal(reconcileMeta.reservationMinutes, 30);
   assert.equal(reconcileMeta.createdAtCutoff, "2026-07-08T09:30:00.000Z");
+  assert.deepEqual(reconcileMeta.regionalInventoryIds, [
+    "kotelniki_friendship_12m_2026_v1",
+    "network_friendship_12m_2026_v1",
+    "piter_friendship_12m_2026_v1",
+  ]);
+});
+
+test("summer subscription reconciliation keeps regional inventory overrides exact and escaped", () => {
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_reconcile_query.js",
+    { payload: Date.now() },
+    {
+      summer_subscription_piter_friendship_inventory_id: "piter.special[1]",
+    },
+  ) as Record<string, unknown>;
+
+  const inventoryFilter = asRecord(asRecord(prepared.query).inventoryId);
+  const pattern = new RegExp(String(inventoryFilter.$regex));
+  assert.equal(pattern.test("piter_friendship_12m_2026_v1"), true);
+  assert.equal(pattern.test("network_friendship_12m_2026_v1"), true);
+  assert.equal(pattern.test("kotelniki_friendship_12m_2026_v1"), true);
+  assert.equal(pattern.test("piter.special[1]"), true);
+  assert.equal(pattern.test("piterXspecial1"), false);
+  assert.equal(pattern.test("piter.special[1]-unexpected"), false);
+
+  const reconcileMeta = asRecord(prepared._summerSubscriptionReconcile);
+  assert.deepEqual(reconcileMeta.regionalInventoryIds, [
+    "kotelniki_friendship_12m_2026_v1",
+    "network_friendship_12m_2026_v1",
+    "piter_friendship_12m_2026_v1",
+    "piter.special[1]",
+  ]);
 });
 
 test("summer subscription reconciliation converts a pending sale into confirm context", () => {

@@ -1,6 +1,11 @@
 const DEFAULT_RESERVATION_MINUTES = 30;
 const DEFAULT_INVENTORY_ID = "ab_leto_2026_50_v1";
 const STAGED_RELEASE_INVENTORY_ID = "ab_leto_2026_100_then_7_v1";
+const REGIONAL_FRIENDSHIP_INVENTORIES = {
+  kotelniki_friendship: "kotelniki_friendship_12m_2026_v1",
+  network_friendship: "network_friendship_12m_2026_v1",
+  piter_friendship: "piter_friendship_12m_2026_v1",
+};
 
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -28,7 +33,17 @@ const nowTs = Date.now();
 const requestedAtIso = new Date(nowTs).toISOString();
 const createdAtCutoffIso = new Date(nowTs - reservationMinutes * 60 * 1000).toISOString();
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const inventoryIdPattern = `^(?:${escapeRegex(inventoryId)}(?:_(?:friendship|ra)_.*)?|${escapeRegex(STAGED_RELEASE_INVENTORY_ID)}_(?:friendship|ra))$`;
+const regionalInventoryIds = Array.from(new Set(
+  Object.entries(REGIONAL_FRIENDSHIP_INVENTORIES).flatMap(([counterKey, defaultInventoryId]) => [
+    defaultInventoryId,
+    toStr(global.get(`summer_subscription_${counterKey}_inventory_id`)),
+  ]).filter(Boolean),
+));
+const inventoryIdPattern = `^(?:${[
+  `${escapeRegex(inventoryId)}(?:_(?:friendship|ra)_.*)?`,
+  `${escapeRegex(STAGED_RELEASE_INVENTORY_ID)}_(?:friendship|ra)`,
+  ...regionalInventoryIds.map(escapeRegex),
+].join("|")})$`;
 
 const queryFilter = {
   inventoryId: { $regex: inventoryIdPattern },
@@ -67,6 +82,7 @@ msg._summerSubscriptionReconcile = {
   requestedAt: requestedAtIso,
   reservationMinutes,
   createdAtCutoff: createdAtCutoffIso,
+  regionalInventoryIds,
 };
 
 return msg;
