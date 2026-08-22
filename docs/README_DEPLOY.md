@@ -34,6 +34,12 @@ npm run nodered:modular:prepare-147 -- /root/.node-red/flows.json
 
 Это обязательно делает `pull -> write/verify source.flow.meta.json -> patch local source functions -> build --allow-other-tabs=true -> validate`, чтобы не выкатывать Node-RED из устаревшего локального snapshot.
 
+Guarded reviewed-flow deploy дополнительно использует общий server-side `flock`
+и оставляет 15-минутный post-apply lease. Пока lease активен, следующий
+reviewed-flow preflight завершается fail-closed, а точный rollback владельца
+lease остаётся разрешён. Это предотвращает второй PM2 restart во время soak
+предыдущего rollout. Lease нельзя удалять вручную ради обхода очереди.
+
 Managed subscription policy graph имеет отдельный exact-graph entrypoint
 `npm run nodered:managed-subscription-rules:deploy-147` с обязательным
 `NODE_RED_MANAGED_SUBSCRIPTION_RULES_DEPLOY=CONFIRM_147`. Он разрешает только

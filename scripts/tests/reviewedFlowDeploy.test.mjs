@@ -146,7 +146,13 @@ test("exact-graph contract pins exact changed fields and added nodes while prese
 
 const prepareRuntime = (
   t,
-  { failFirstRestart = false, exactGraph = false, liveMode = 0o600 } = {},
+  {
+    failFirstRestart = false,
+    restartFailures = failFirstRestart ? 1 : 0,
+    exactGraph = false,
+    liveMode = 0o600,
+    deploymentLeaseMs = 15 * 60 * 1000,
+  } = {},
 ) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "reviewed-flow-runtime-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -154,6 +160,7 @@ const prepareRuntime = (
   const gid = process.getgid();
   const stage = path.join(root, ".padlhub-reviewed-flow-stage-20260820T120000+0300-123");
   const backupDirectory = path.join(root, ".padlhub-reviewed-flow-backups");
+  const deploymentLeasePath = path.join(root, ".padlhub-reviewed-flow-deploy.lease.json");
   const liveFlowPath = path.join(root, "flows.json");
   const candidatePath = path.join(stage, "candidate.flow.json");
   const contractPath = path.join(stage, "contract.json");
@@ -184,7 +191,9 @@ const prepareRuntime = (
     fs.chmodSync(filePath, filePath === liveFlowPath ? liveMode : 0o600);
   }
   let restartCount = 10;
-  let failRemaining = failFirstRestart ? 1 : 0;
+  let failRemaining = restartFailures;
+  let nowMs = Date.parse("2026-08-20T09:00:00.000Z");
+  let leaseSequence = 0;
   const pm2 = {
     assertOnline: () => ({ pid: 1234, restartCount }),
     restart(previous) {
@@ -201,12 +210,31 @@ const prepareRuntime = (
     liveFlowPath,
     stageParent: root,
     backupDirectory,
+    deploymentLeasePath,
+    deploymentLeaseMs,
     uid,
     gid,
     getUid: () => uid,
+    now: () => nowMs,
+    randomUUID: () => `reviewed-flow-lease-${++leaseSequence}`,
     pm2,
   });
-  return { runtime, liveFlowPath, candidatePath, contractPath, contract, liveBytes, candidateBytes };
+  return {
+    runtime,
+    liveFlowPath,
+    candidatePath,
+    contractPath,
+    contract,
+    liveBytes,
+    candidateBytes,
+    deploymentLeasePath,
+    advanceTime(milliseconds) {
+      nowMs += milliseconds;
+    },
+    setRestartFailures(count) {
+      failRemaining = count;
+    },
+  };
 };
 
 test("remote runtime is backup-first and supports exact explicit rollback", (t) => {
@@ -221,6 +249,8 @@ test("remote runtime is backup-first and supports exact explicit rollback", (t) 
   assert.equal(preflight.changedNodeCount, 2);
   const applied = prepared.runtime.apply({ ...common, stamp: "20260820T120000+0300" });
   assert.equal(applied.activeFlowSha256, prepared.contract.candidateSha256);
+  assert.equal(applied.deploymentLeaseSeconds, 15 * 60);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
   assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.candidateBytes);
   assert.deepEqual(fs.readFileSync(applied.flowBackup), prepared.liveBytes);
 
@@ -230,6 +260,8 @@ test("remote runtime is backup-first and supports exact explicit rollback", (t) 
     contractBackup: applied.contractBackup,
   });
   assert.equal(rolledBack.restoredFlowSha256, prepared.contract.sourceSha256);
+  assert.equal(rolledBack.deploymentLeaseReleased, true);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
   assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
 });
 
@@ -242,6 +274,74 @@ test("remote runtime restores reviewed bytes when candidate restart fails", (t) 
     stamp: "20260820T120000+0300",
   }), /rollback completed/);
   assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+});
+
+test("remote runtime keeps the lease when automatic rollback restart is incomplete", (t) => {
+  const prepared = prepareRuntime(t, { restartFailures: 2 });
+  assert.throws(() => prepared.runtime.apply({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: "subscription-binding",
+    stamp: "20260820T120000+0300",
+  }), /rollback is incomplete and deployment lease remains active/);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
+  assert.throws(() => prepared.runtime.preflight({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: "subscription-binding",
+  }), /deployment lease is active/);
+});
+
+test("successful apply blocks another reviewed deployment for the soak lease", (t) => {
+  const prepared = prepareRuntime(t);
+  const common = {
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: "subscription-binding",
+  };
+  prepared.runtime.apply({ ...common, stamp: "20260820T120000+0300" });
+  const lease = JSON.parse(fs.readFileSync(prepared.deploymentLeasePath, "utf8"));
+  assert.equal(lease.deploymentId, "subscription-binding");
+  assert.equal(lease.expiresAtMs - lease.acquiredAtMs, 15 * 60 * 1000);
+  assert.throws(() => prepared.runtime.preflight(common), /deployment lease is active/);
+
+  prepared.advanceTime(15 * 60 * 1000 + 1);
+  assert.throws(() => prepared.runtime.preflight(common), /Live flow digest differs/);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+});
+
+test("rollback after lease expiry reacquires protection and retains it on restart failure", (t) => {
+  const prepared = prepareRuntime(t);
+  const common = {
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: "subscription-binding",
+  };
+  const applied = prepared.runtime.apply({ ...common, stamp: "20260820T120000+0300" });
+  prepared.advanceTime(15 * 60 * 1000 + 1);
+  prepared.setRestartFailures(1);
+  assert.throws(() => prepared.runtime.rollback({
+    deploymentId: "subscription-binding",
+    flowBackup: applied.flowBackup,
+    contractBackup: applied.contractBackup,
+  }), /synthetic restart failure/);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
+  assert.throws(() => prepared.runtime.preflight(common), /deployment lease is active/);
+});
+
+test("remote preflight fails closed on a malformed protected lease", (t) => {
+  const prepared = prepareRuntime(t);
+  fs.writeFileSync(prepared.deploymentLeasePath, "{not-json}\n", { mode: 0o600 });
+  fs.chmodSync(prepared.deploymentLeasePath, 0o600);
+  assert.throws(() => prepared.runtime.preflight({
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: "subscription-binding",
+  }), /deployment lease is invalid/);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
 });
 
 test("remote runtime applies and rolls back an exact-graph contract", (t) => {
@@ -319,6 +419,19 @@ test("explicit rollback refuses a flow changed after the reviewed deployment", (
     flowBackup: applied.flowBackup,
     contractBackup: applied.contractBackup,
   }), /Active flow no longer matches/);
+});
+
+test("reviewed-flow remote CLI serializes every action with one fail-fast flock", () => {
+  const remoteHelper = fs.readFileSync(
+    "scripts/nodered_reviewed_flow_deploy/deploy_reviewed_flow_147_remote.mjs",
+    "utf8",
+  );
+  assert.match(remoteHelper, /\.padlhub-reviewed-flow-deploy\.lock/);
+  assert.match(remoteHelper, /\.padlhub-reviewed-flow-deploy\.lease\.json/);
+  assert.match(remoteHelper, /DEFAULT_DEPLOYMENT_LEASE_MS = 15 \* 60 \* 1000/);
+  assert.match(remoteHelper, /spawnSync\(\s*"flock"/);
+  assert.match(remoteHelper, /"-E",\s*String\(DEPLOYMENT_LOCK_CONFLICT_EXIT\),\s*"-n"/);
+  assert.match(remoteHelper, /PADLHUB_REVIEWED_FLOW_LOCK_HELD/);
 });
 
 test("subscription binding wrapper keeps deployment explicit and rollback guarded", () => {

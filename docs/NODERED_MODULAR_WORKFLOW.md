@@ -75,6 +75,24 @@ npm run nodered:runtime-hardening:install-147
 `postinstall` повторно применяет exact guarded patch. Если upstream-модуль
 изменил logging preimage, установка fail-closed завершается ошибкой.
 
+## Reviewed-flow deploy lock and soak lease
+
+Every invocation of `deploy_reviewed_flow_147_remote.mjs` is serialized by the
+same server-side `flock`. A successful apply also leaves a protected 15-minute
+lease in `/root/.node-red/.padlhub-reviewed-flow-deploy.lease.json`.
+
+- another reviewed-flow preflight or apply fails closed while the lease is active;
+- the deployment that owns the lease may still execute its exact guarded rollback;
+- a successful rollback releases its own lease;
+- rollback after lease expiry reacquires protection before changing the live flow;
+- a failed apply releases the lease only after automatic rollback is confirmed;
+- any incomplete rollback keeps the lease, preventing another restart over an
+  ambiguous runtime state;
+- an expired lease is removed only while the global OS lock is held.
+
+This lease is the minimum production soak window. Do not delete or edit it to
+force an unrelated rollout; wait for expiry or roll back the owning deployment.
+
 ## Individual gates
 
 ```bash
