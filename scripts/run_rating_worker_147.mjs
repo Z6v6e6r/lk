@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  resolveRatingWorkerChildTimeoutMs,
+  spawnRatingWorkerChild,
+} from "./lib/ratingWorkerChildProcess.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const flowPath = process.env.NODERED_FLOW_PATH || "/root/.node-red/flows.json";
@@ -49,16 +52,23 @@ function readMongoUriFromFlow() {
 }
 
 function runNode(args, env, outPath) {
-  const result = spawnSync(process.execPath, args, {
+  const timeoutMs = resolveRatingWorkerChildTimeoutMs(env);
+  const result = spawnRatingWorkerChild(args, {
     cwd: rootDir,
     env,
-    encoding: "utf8",
     maxBuffer: 200 * 1024 * 1024,
+    timeoutMs,
   });
   fs.writeFileSync(outPath, result.stdout || "", { mode: 0o600 });
   if (result.stderr) fs.writeFileSync(`${outPath}.stderr`, result.stderr, { mode: 0o600 });
+  if (result.error?.code === "ETIMEDOUT") {
+    throw new Error(`Child timed out after ${timeoutMs}ms; stdout=${outPath}; stderr=${outPath}.stderr`);
+  }
+  if (result.error) {
+    throw new Error(`Child spawn failed: ${result.error.message}; stdout=${outPath}; stderr=${outPath}.stderr`);
+  }
   if (result.status !== 0) {
-    throw new Error(`Child exited ${result.status}; stdout=${outPath}; stderr=${outPath}.stderr`);
+    throw new Error(`Child exited ${result.status} signal=${result.signal || "none"}; stdout=${outPath}; stderr=${outPath}.stderr`);
   }
   const reportPath = outPath.endsWith(".stdout") ? outPath.slice(0, -".stdout".length) : null;
   [outPath, `${outPath}.stderr`, reportPath]
@@ -112,7 +122,6 @@ if (gameResultWorkerEnabled) {
     gameResults = runNode([
       "--experimental-strip-types",
       path.join(rootDir, "scripts/game_result_rating_worker.mjs"),
-      "--mongo-uri", runtimeEnv.MONGODB_URI,
       "--apply",
       "--limit", runtimeEnv.GAME_RESULT_RATING_WORKER_LIMIT || "20",
       "--out", gameResultOut,
@@ -149,7 +158,6 @@ if (hasVivaCredentials) {
       path.join(rootDir, "scripts/sync_training_visits_from_viva.mjs"),
       "--date-from", dateFrom,
       "--date-to", dateAtOffset(0),
-      "--mongo-uri", runtimeEnv.MONGODB_URI,
       "--apply",
       "--out", visitOut,
     ], runtimeEnv, `${visitOut}.stdout`));
@@ -169,7 +177,6 @@ const worker = runNode([
   "--experimental-strip-types",
   path.join(rootDir, "scripts/rating_worker.mjs"),
   "--mode", mode,
-  "--mongo-uri", runtimeEnv.MONGODB_URI,
   "--out", workerOut,
 ], runtimeEnv, `${workerOut}.stdout`);
 

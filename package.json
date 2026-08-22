@@ -90,7 +90,7 @@
     "test:tournament-history-indexes:mongo": "node --test scripts/tests/tournamentHistoryIndexes.mongo.test.mjs",
     "test:nodered-modular-toolchain": "node --test scripts/tests/noderedModularToolchain.test.mjs",
     "test:viva-user-agent": "node --test scripts/tests/vivaUserAgent.test.mjs",
-    "test:rating-worker-release": "node --test scripts/tests/ratingWorkerRelease.test.mjs",
+    "test:rating-worker-release": "node --test scripts/tests/ratingWorkerRelease.test.mjs scripts/tests/ratingWorkerWatchdog.test.mjs",
     "test:nodered-chat-recovery": "node --test scripts/tests/noderedChatRecovery.test.mjs",
     "test:games-list-identity-recovery": "node --test scripts/tests/gamesListIdentityRecovery.test.mjs",
     "test:games-direct-lookup-recovery": "node --test scripts/tests/gamesDirectLookupRecovery.test.mjs",

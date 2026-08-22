@@ -22,6 +22,29 @@ All entrypoints use the same `flock` lock. MongoDB URI is read at runtime from
 the active Node-RED flow. Viva credentials, when enabled for attendance sync,
 are read from root-only `/etc/padlhub-rating-worker.env`.
 
+Every cron entrypoint delegates to `run-with-watchdog.sh`. A busy shared lock is
+an expected skip: it exits successfully and appends a structured
+`rating_worker_lock_skipped` event to the run log. A started process is bounded
+by GNU `timeout`; the defaults are 55 seconds for the minute game-result run and
+780 seconds for incremental/full runs. Timeout exits are non-zero and append a
+structured `rating_worker_watchdog_timeout` event. The 780-second ceiling is
+below the worker's 14-minute Mongo lease, so the next 15-minute cron can recover.
+
+The wrapper also limits each spawned Node child to 12 minutes and the canonical
+worker limits Mongo socket inactivity to 2 minutes. Operators may lower these
+limits for diagnosis with:
+
+```env
+RATING_WORKER_GAME_RESULTS_HARD_TIMEOUT_SECONDS=55
+RATING_WORKER_INCREMENTAL_HARD_TIMEOUT_SECONDS=780
+RATING_WORKER_FULL_HARD_TIMEOUT_SECONDS=780
+RATING_WORKER_CHILD_TIMEOUT_MS=720000
+RATING_WORKER_MONGO_SOCKET_TIMEOUT_MS=120000
+```
+
+MongoDB credentials are inherited through the child environment and are never
+placed in worker command-line arguments.
+
 Game-result processing is disabled by default. Enable it only after the matching
 Node-RED result flow and worker release have both passed postchecks:
 

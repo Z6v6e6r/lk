@@ -29,6 +29,7 @@ import {
   replayPlayerRatingEvents,
   toFiniteRating,
 } from "../src/services/player-rating/ledger.ts";
+import { resolveRatingWorkerMongoSocketTimeoutMs } from "./lib/ratingWorkerChildProcess.mjs";
 import {
   buildTimeForFriendsAutoEnrollmentMutation,
   planTimeForFriendsAutoEnrollment,
@@ -1076,7 +1077,11 @@ async function runWorker() {
   const tffAutoEnrollmentCutoverIso = toIso(process.env.TFF_AUTO_ENROLLMENT_CUTOVER_ISO);
   if (!mongoUri) throw new Error("Provide --mongo-uri or MONGO_URI/MONGODB_URI");
   if (!["incremental", "full", "postcheck"].includes(mode)) throw new Error(`Unknown mode: ${mode}`);
-  const client = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10_000, connectTimeoutMS: 10_000 });
+  const client = new MongoClient(mongoUri, {
+    serverSelectionTimeoutMS: 10_000,
+    connectTimeoutMS: 10_000,
+    socketTimeoutMS: resolveRatingWorkerMongoSocketTimeoutMs(),
+  });
   const startedAt = new Date().toISOString();
   const owner = `${process.pid}:${crypto.randomUUID()}`;
   const jobKey = mode === "full" ? RATING_WORKER_FULL_JOB_KEY : RATING_WORKER_JOB_KEY;

@@ -74,7 +74,7 @@ test("rating-worker release packages the Viva User-Agent helper used by attendan
   );
 });
 
-test("rating-worker release packages the community postcheck helper", (t) => {
+test("rating-worker release packages the community postcheck and watchdog helpers", (t) => {
   const tempRoot = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), "padlhub-rating-worker-postcheck-release-test-")),
   );
@@ -109,5 +109,20 @@ test("rating-worker release packages the community postcheck helper", (t) => {
     postcheckSource.includes('from "./lib/communityRatingPostcheck.mjs"'),
     true,
     "postcheck script should import communityRatingPostcheck helper",
+  );
+
+  [
+    "deploy/rating-worker/run-with-watchdog.sh",
+    "scripts/lib/ratingWorkerChildProcess.mjs",
+  ].forEach((relativePath) => {
+    const entries = manifest.files.filter(({ path: filePath }) => filePath === relativePath);
+    assert.equal(entries.length, 1, `${relativePath} should be packaged once`);
+    assert.equal(fs.existsSync(path.join(releaseDir, relativePath)), true);
+    assert.equal(entries[0].sha256, sha256File(path.join(releaseDir, relativePath)));
+  });
+  assert.notEqual(
+    fs.statSync(path.join(releaseDir, "deploy/rating-worker/run-with-watchdog.sh")).mode & 0o111,
+    0,
+    "packaged watchdog should be executable",
   );
 });
