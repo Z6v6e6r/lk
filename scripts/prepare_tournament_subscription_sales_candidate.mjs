@@ -17,6 +17,7 @@ const TARGETS = [
   ["Prepare tournament subscription purchase", "fn_tournament_subscription_purchase_prepare.js"],
   ["Check tournament subscription limit", "fn_tournament_subscription_purchase_limit.js"],
   ["Route tournament subscription payment", "fn_tournament_subscription_purchase_router.js"],
+  ["Prepare tournament subscription reconciliation", "fn_tournament_subscription_reconcile_query.js"],
 ];
 
 const fail = (message) => {
@@ -90,6 +91,7 @@ for (const marker of [
   'discount: discountMinor',
   'Viva вернула неверную сумму к оплате',
   'REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE',
+  'REGIONAL_FRIENDSHIP_INVENTORIES',
 ]) {
   if (!markerSource.includes(marker)) fail(`Candidate marker is missing: ${marker}`);
 }
