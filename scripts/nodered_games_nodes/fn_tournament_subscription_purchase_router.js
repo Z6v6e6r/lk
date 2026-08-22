@@ -186,7 +186,7 @@ const regionalAnnualLifecycleEvidence = (counterKey, product, now = new Date(Dat
     && product.validityDays === expected.validityDays
     && product.visits === expected.visits
     && projectedAutoActivationDate !== null
-    && projectedAutoActivationDate >= expected.activationNotBeforeDate
+    && projectedAutoActivationDate === expected.activationNotBeforeDate
   );
   return {
     compatible,

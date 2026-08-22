@@ -46,6 +46,7 @@
     "tff:memberships:backfill": "node scripts/backfill_time_for_friends_community_memberships.mjs",
     "subscriptions:report": "node scripts/report_ab_leto_subscriptions.mjs",
     "subscriptions:reconcile-viva": "node scripts/reconcile_ab_leto_viva_sales.mjs",
+    "subscriptions:audit-regional-sales": "node scripts/audit_regional_subscription_sales.mjs",
     "subscriptions:reset-limits": "node scripts/reset_ab_leto_limits.mjs",
     "har:sanitize-viva": "node scripts/sanitize_viva_har.mjs",
     "test:har-sanitizer": "node --test scripts/tests/sanitizeVivaHar.test.mjs",
