@@ -8,7 +8,8 @@ import {
   type ApiResult,
 } from "./apiClient";
 import {
-  buildGroupScheduleQuery,
+  buildGroupScheduleSourceQueries,
+  mergeGroupTrainingLists,
   normalizeGroupTraining,
   normalizeGroupTrainingList,
   type GroupTrainingSummary,
@@ -19,10 +20,13 @@ export {
   GROUP_SCHEDULE_AVAILABLE_STUDIO_IDS,
   GROUP_SCHEDULE_BOOKING_DAYS,
   GROUP_SCHEDULE_GAME_PLUS_TRAINER_TYPE_ID,
+  GROUP_SCHEDULE_PITER_STUDIO_ID,
+  buildGroupScheduleSourceQueries,
   getGroupTrainingTypeId,
   isGamePlusTrainerSummary,
   isGamePlusTrainerTraining,
   isGroupTrainingAllowed,
+  mergeGroupTrainingLists,
   normalizeGroupTraining,
   normalizeGroupTrainingList,
 } from "./groupScheduleModel";
@@ -32,35 +36,61 @@ export type {
   GroupTrainingSummary,
 } from "./groupScheduleModel";
 
+const groupScheduleRequestOptions = {
+  method: "GET" as const,
+  retries: 1,
+  ...(IS_DEV_RELEASE_CHANNEL
+    ? {
+        cacheTtlMs: 30_000,
+        dedupe: true,
+      }
+    : {
+        cache: "no-store" as RequestCache,
+      }),
+};
+
+function requestGroupTrainingsByDateRaw(
+  query: string,
+): Promise<ApiResult<unknown>> {
+  return request<unknown>(
+    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/exercises${query}`,
+    groupScheduleRequestOptions,
+  );
+}
+
 export async function apiFetchGroupTrainingsByDate(
   date: string,
 ): Promise<ApiResult<GroupTrainingSummary[]>> {
-  const result = await request<unknown>(
-    `${API_BASE}/end-user/api/v1/${TENANT_KEY}/exercises${buildGroupScheduleQuery({ date })}`,
-    {
-      method: "GET",
-      retries: 1,
-      ...(IS_DEV_RELEASE_CHANNEL
-        ? {
-            cacheTtlMs: 30_000,
-            dedupe: true,
-          }
-        : {
-            cache: "no-store" as RequestCache,
-          }),
-    },
-  );
-  if (result.error) {
+  const [baseQuery, piterQuery] = buildGroupScheduleSourceQueries(date);
+  const [baseResult, piterResult] = await Promise.all([
+    requestGroupTrainingsByDateRaw(baseQuery),
+    requestGroupTrainingsByDateRaw(piterQuery),
+  ]);
+
+  if (baseResult.error) {
     return {
       data: null,
-      error: result.error,
-      status: result.status,
+      error: baseResult.error,
+      status: baseResult.status,
     };
   }
+
+  const baseTrainings = normalizeGroupTrainingList(baseResult.data);
+
+  if (piterResult.error) {
+    return {
+      data: baseTrainings,
+      error: null,
+      status: baseResult.status,
+    };
+  }
+
+  const piterTrainings = normalizeGroupTrainingList(piterResult.data);
+
   return {
-    data: normalizeGroupTrainingList(result.data),
+    data: mergeGroupTrainingLists(baseTrainings, piterTrainings),
     error: null,
-    status: result.status,
+    status: baseResult.status,
   };
 }
 

@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  type GroupTrainingSummary,
+  GROUP_SCHEDULE_PITER_STUDIO_ID,
   GROUP_SCHEDULE_GAME_PLUS_TRAINER_TYPE_ID,
+  GROUP_SCHEDULE_AVAILABLE_STUDIO_IDS,
+  buildGroupScheduleSourceQueries,
   getGroupTrainingTypeId,
   isGamePlusTrainerSummary,
   isGamePlusTrainerTraining,
   isGroupTrainingAllowed,
+  mergeGroupTrainingLists,
   normalizeGroupTraining,
   normalizeGroupTrainingList,
 } from "../../src/utils/groupScheduleModel.ts";
@@ -59,9 +64,82 @@ function makeExercise(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function createTestSummary(overrides: Partial<GroupTrainingSummary> = {}) {
+  return {
+    id: "exercise-1",
+    title: "Тренировка",
+    typeId: 605,
+    typeName: "Групповая",
+    typeColor: null,
+    directionId: 1,
+    directionName: "Групповая",
+    directionDescription: null,
+    whatToTake: null,
+    timeFrom: "2026-06-27T10:00:00+03:00",
+    timeTo: "2026-06-27T11:00:00+03:00",
+    date: "2026-06-27",
+    timeLabel: "10:00-11:00",
+    clientsCount: 1,
+    maxClientsCount: 4,
+    spotsLeft: 3,
+    status: "AVAILABLE",
+    girlsOnly: false,
+    studioId: "0d5504f6-ea6f-44bb-a9e4-947faf0273ab",
+    studioName: "Сколково",
+    studioAddress: "ул",
+    roomId: "room-1",
+    roomName: "Корт №6",
+    trainers: [],
+    trainerName: null,
+    trainerAvatarUrl: null,
+    levelLabel: null,
+    inBooking: false,
+    inWaitlist: false,
+    inReserve: false,
+    cancellationDeadline: null,
+    raw: {},
+    ...overrides,
+  } as GroupTrainingSummary;
+}
+
 test("recognizes group training type ids from Viva exercise payloads", () => {
   assert.equal(getGroupTrainingTypeId(makeExercise()), 605);
   assert.equal(isGroupTrainingAllowed(makeExercise()), true);
+});
+
+test("adds Питер into allowed studios list", () => {
+  assert.ok(GROUP_SCHEDULE_AVAILABLE_STUDIO_IDS.includes(GROUP_SCHEDULE_PITER_STUDIO_ID));
+});
+
+test("builds the base and Питер requests with singular studioId", () => {
+  const [baseQuery, piterQuery] = buildGroupScheduleSourceQueries("2026-08-24");
+  const baseParams = new URLSearchParams(baseQuery);
+  const piterParams = new URLSearchParams(piterQuery);
+
+  assert.equal(baseParams.get("date"), "2026-08-24");
+  assert.equal(baseParams.has("studioId"), false);
+  assert.equal(piterParams.get("date"), "2026-08-24");
+  assert.equal(piterParams.get("studioId"), GROUP_SCHEDULE_PITER_STUDIO_ID);
+  assert.equal(piterParams.has("studioIds"), false);
+  assert.equal(piterParams.getAll("studioId").length, 1);
+});
+
+test("merges and dedupes group training lists keeping base-first duplicates and chronological order", () => {
+  const merged = mergeGroupTrainingLists(
+    [
+      { ...createTestSummary({ id: "base-1" }) },
+      { ...createTestSummary({ id: "shared-id", timeFrom: "2026-06-27T08:00:00+03:00" }) },
+    ],
+    [
+      { ...createTestSummary({ id: "shared-id", timeFrom: "2026-06-27T06:00:00+03:00" }) },
+      { ...createTestSummary({ id: "piter-1", timeFrom: "2026-06-27T07:00:00+03:00" }) },
+    ],
+  );
+
+  assert.deepEqual(
+    merged.map((item) => item.id),
+    ["piter-1", "shared-id", "base-1"],
+  );
 });
 
 test("recognizes game plus trainer exercises from Viva type and normalized summaries", () => {

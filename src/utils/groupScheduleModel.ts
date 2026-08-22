@@ -3,6 +3,8 @@ import { EXERCISE_CATEGORY_GROUP_TRAINING_TYPE_IDS } from "./exerciseCategory.ts
 export const GROUP_SCHEDULE_BOOKING_DAYS = 14;
 export const GROUP_SCHEDULE_GAME_PLUS_TRAINER_TYPE_ID = 847;
 export const GROUP_SCHEDULE_ALLOWED_TYPE_IDS = EXERCISE_CATEGORY_GROUP_TRAINING_TYPE_IDS;
+export const GROUP_SCHEDULE_PITER_STUDIO_ID =
+  "1ea77cbf-bc36-49a1-96d6-f35c216a409b";
 export const GROUP_SCHEDULE_AVAILABLE_STUDIO_IDS = [
   "6b2d7e60-caff-4b22-89f6-6f19d7d311ab",
   "42c6d4df-833d-480a-bdc8-986716569884",
@@ -10,6 +12,7 @@ export const GROUP_SCHEDULE_AVAILABLE_STUDIO_IDS = [
   "0d5504f6-ea6f-44bb-a9e4-947faf0273ab",
   "6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1",
   "3656cbaa-6426-490f-a44f-915404cbdd2b",
+  GROUP_SCHEDULE_PITER_STUDIO_ID,
 ] as const;
 
 export type GroupTrainingStatus = "AVAILABLE" | "FULL" | "CANCELLED";
@@ -247,6 +250,13 @@ export function buildGroupScheduleQuery(params: Record<string, QueryValue>) {
   return value ? `?${value}` : "";
 }
 
+export function buildGroupScheduleSourceQueries(date: string) {
+  return [
+    buildGroupScheduleQuery({ date }),
+    buildGroupScheduleQuery({ date, studioId: GROUP_SCHEDULE_PITER_STUDIO_ID }),
+  ] as const;
+}
+
 export function getGroupTrainingTypeId(value: unknown) {
   if (!isRecord(value)) return null;
   const type = pickNestedRecord(value, ["type", "exerciseType"]);
@@ -361,4 +371,31 @@ export function normalizeGroupTrainingList(payload: unknown) {
       const safeRight = Number.isFinite(rightTs) ? rightTs : Number.MAX_SAFE_INTEGER;
       return safeLeft - safeRight;
     });
+}
+
+export function mergeGroupTrainingLists(
+  base: GroupTrainingSummary[],
+  supplement: GroupTrainingSummary[],
+) {
+  const seen = new Set<string>();
+  const merged: GroupTrainingSummary[] = [];
+
+  for (const item of [...base, ...supplement]) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    merged.push(item);
+  }
+
+  return merged.sort((left, right) => {
+    const leftTs = Date.parse(left.timeFrom || "");
+    const rightTs = Date.parse(right.timeFrom || "");
+
+    if (Number.isFinite(leftTs) && Number.isFinite(rightTs)) {
+      return leftTs - rightTs;
+    }
+
+    if (Number.isFinite(leftTs)) return -1;
+    if (Number.isFinite(rightTs)) return 1;
+    return 0;
+  });
 }
