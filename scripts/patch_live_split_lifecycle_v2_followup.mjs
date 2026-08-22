@@ -126,8 +126,16 @@ export function buildCandidate(flow, sourceSha256, options = {}) {
 }
 
 function parseArgs(argv) {
+  if (argv.length % 2 !== 0) fail("Every argument must have a value");
+  const allowed = new Set(["--input", "--output", "--report"]);
   const values = {};
-  for (let index = 0; index < argv.length; index += 2) values[argv[index]] = argv[index + 1];
+  for (let index = 0; index < argv.length; index += 2) {
+    const key = argv[index];
+    const value = argv[index + 1];
+    if (!allowed.has(key) || !value || value.startsWith("--")) fail(`Invalid argument: ${key ?? ""}`);
+    if (Object.hasOwn(values, key)) fail(`Duplicate argument: ${key}`);
+    values[key] = value;
+  }
   if (!values["--input"] || !values["--output"] || !values["--report"]) {
     fail("Usage: node scripts/patch_live_split_lifecycle_v2_followup.mjs --input FLOW --output CANDIDATE --report REPORT");
   }
@@ -136,13 +144,27 @@ function parseArgs(argv) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (fs.existsSync(args["--output"]) || fs.existsSync(args["--report"])) fail("Output files must not exist");
-  const bytes = fs.readFileSync(args["--input"]);
+  const inputPath = path.resolve(args["--input"]);
+  const outputPath = path.resolve(args["--output"]);
+  const reportPath = path.resolve(args["--report"]);
+  if (new Set([inputPath, outputPath, reportPath]).size !== 3) fail("Input, output and report paths must be distinct");
+  if (fs.existsSync(outputPath) || fs.existsSync(reportPath)) fail("Output files must not exist");
+  const bytes = fs.readFileSync(inputPath);
   const result = buildCandidate(JSON.parse(bytes.toString("utf8")), sha256(bytes));
   const candidateBytes = Buffer.from(`${JSON.stringify(result.candidate, null, 2)}\n`);
   const report = { ...result.report, candidateSha256: sha256(candidateBytes) };
-  fs.writeFileSync(args["--output"], candidateBytes, { flag: "wx", mode: 0o600 });
-  fs.writeFileSync(args["--report"], `${JSON.stringify(report, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  let outputWritten = false;
+  let reportWritten = false;
+  try {
+    fs.writeFileSync(outputPath, candidateBytes, { flag: "wx", mode: 0o600 });
+    outputWritten = true;
+    fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    reportWritten = true;
+  } catch (error) {
+    if (reportWritten) fs.unlinkSync(reportPath);
+    if (outputWritten) fs.unlinkSync(outputPath);
+    throw error;
+  }
   console.log(JSON.stringify(report));
 }
 

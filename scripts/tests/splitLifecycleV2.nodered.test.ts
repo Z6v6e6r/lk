@@ -269,6 +269,87 @@ test("real Viva toPay must match the exact pending payment amount", () => {
   )));
 });
 
+test("real scheduler payload reaches only the exact UNPAID booking cancel probe", () => {
+  const prepared = runNodeRedFunction(cleanupPrepare, {
+    payload: [{
+      id: "pay-real-shape",
+      status: "PAID",
+      payment: { paid: true },
+      settings: { payMode: "split" },
+      booking: {
+        date: "2026-08-24",
+        timeFrom: "20:30",
+        timeTo: "22:00",
+        bookingIds: ["booking-1"],
+        vivaExerciseId: "exercise-real-shape",
+      },
+      participants: [{ id: "client-1", status: "CONFIRMED" }],
+      waitlist: [],
+      metadata: {
+        splitPayment: {
+          enabled: true,
+          shareCount: 4,
+          deadlineAt: "2026-08-21T15:29:50.535830252+03:00",
+          payments: [{
+            status: "PAYMENT_PENDING",
+            clientId: "client-1",
+            amountMinor: 37500,
+            bookingId: "booking-1",
+            transactionId: "transaction-1",
+            paymentRef: "payment-1",
+          }],
+        },
+      },
+    }],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-08-22T22:00:00+03:00"),
+      nowIso: "2026-08-22T19:00:00.000Z",
+      dryRun: false,
+      limit: 10,
+      internalScheduler: true,
+      lifecycleMode: "ENFORCE_NEW",
+    },
+  }) as Array<Record<string, any> | null>;
+  const task = prepared[0]?.payload?.[0];
+  assert.equal(task?.mode, "PARTICIPANT_TIMEOUT");
+  assert.deepEqual(task?.bookingIds, ["booking-1"]);
+  assert.equal(task?.timedOutPayments?.[0]?.transactionId, "transaction-1");
+
+  const globalValues = new Map<string, unknown>([
+    ["vivacrm_access_token", "cached-service-token"],
+    ["vivacrm_token_expires_at", Date.now() + 60_000],
+  ]);
+  const transactionReadback = runNodeRedFunction(cleanupRouter, {
+    payload: task,
+  }, { globalValues }) as Array<Record<string, any> | null>;
+  assert.equal(transactionReadback[0]?.method, "GET");
+  assert.equal(
+    transactionReadback[0]?.url,
+    "https://api.vivacrm.ru/api/v1/transactions/transaction-1",
+  );
+
+  const cancelProbe = runNodeRedFunction(cleanupRouter, {
+    ...transactionReadback[0],
+    statusCode: 200,
+    payload: {
+      id: "transaction-1",
+      status: "UNPAID",
+      toPay: 37500,
+      client: { id: "client-1" },
+      products: [{
+        paymentBookingIds: ["booking-1"],
+        pricingDetails: [{ clientBookingId: "booking-1" }],
+      }],
+    },
+  }, { globalValues }) as Array<Record<string, any> | null>;
+  assert.equal(cancelProbe[0]?.method, "GET");
+  assert.equal(
+    cancelProbe[0]?.url,
+    "https://api.vivacrm.ru/api/v1/clients/client-1/bookings/booking-1/cancel",
+  );
+  assert.equal(cancelProbe[0]?._splitCleanupCtx?.step, "cancel_booking_probe");
+});
+
 test("WAITING transaction is expired and then read back before cancellation", () => {
   const expire = runNodeRedFunction(cleanupRouter, {
     statusCode: 200,
