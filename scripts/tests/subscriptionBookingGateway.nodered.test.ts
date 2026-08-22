@@ -26,6 +26,41 @@ const MANAGED_ACTIVATION_GLOBALS = {
   subscriptions_activation_integration_token: "activation-integration-token-1234567890",
 };
 const PITER_STATION_ID = "1ea77cbf-bc36-49a1-96d6-f35c216a409b";
+const HUB_STATION_IDS = [
+  "0d5504f6-ea6f-44bb-a9e4-947faf0273ab",
+  "0ee057dd-908c-4b33-84b9-1a977480b710",
+  "14d6d441-635f-47d0-aa8c-553496294fb1",
+  "1c323ef3-7e6c-42eb-a6f7-653460540a8a",
+  "1cbb7201-2189-41a4-a3b4-4f543da0def6",
+  "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+  "233c1405-1eac-40de-8ec6-1cf7e24c9276",
+  "3266d827-2662-4540-9376-daac10f3875e",
+  "3656cbaa-6426-490f-a44f-915404cbdd2b",
+  "3b52e87f-33bb-436b-a1e3-19a3b62b4ed2",
+  "3db3fc06-00e2-445a-97eb-e354796f80a1",
+  "42c6d4df-833d-480a-bdc8-986716569884",
+  "4c564565-3918-40b2-8cb3-b7135c7cc992",
+  "5409fdc8-3db3-4e66-a6a9-8994bd591c8f",
+  "588b6151-f4f5-47d9-9449-80edf8cbc748",
+  "6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1",
+  "6b2d7e60-caff-4b22-89f6-6f19d7d311ab",
+  "76c67f10-70ee-4296-9145-1c040e4674ca",
+  "8380b5db-c12f-495b-a0d7-c7359168a777",
+  "855ec72a-d619-4add-ac92-8c64dafb17c2",
+  "8e31b902-1981-4b62-b803-6187b8f2a8da",
+  "b09d0015-5198-4a94-b88b-2448218e479d",
+  "c72eaaff-2163-47cd-87d0-b93499415acc",
+  "ed0e3bd4-6edb-43a9-8fe4-8fc3e7febec8",
+  "f82775cc-3dd7-4d02-98c8-e43cce470003",
+];
+const DAY_MS = 24 * 60 * 60 * 1000;
+const futureManagedTarget = () => {
+  const startsAt = new Date(Date.now() + DAY_MS);
+  return {
+    serviceDate: startsAt.toISOString().slice(0, 10),
+    startsAt: startsAt.toISOString(),
+  };
+};
 
 function runFunction(
   file: string,
@@ -76,6 +111,7 @@ function flatBooking(overrides: Record<string, unknown> = {}) {
 
 function managedRuntimeResponse(overrides: Record<string, any> = {}) {
   const stationId = overrides.stationId || PITER_STATION_ID;
+  const benefitStationIds = overrides.benefitStationIds || [stationId];
   const policy = {
     runtimeSchemaVersion: 1,
     subscriptionTypeId: overrides.subscriptionTypeId || "subscription-type:piter",
@@ -95,7 +131,10 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
       priority: 1,
       selector: overrides.allStations
         ? { kind: "ALL_STATIONS", stationIds: [] }
-        : { kind: "STATION_LIST", stationIds: [stationId] },
+        : {
+          kind: "STATION_LIST",
+          stationIds: overrides.stationIds || [stationId],
+        },
       surcharge: { kind: "NONE", amountMinor: 0 },
     }],
     benefitRules: [
@@ -107,7 +146,7 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
         externalEventTypeIds: ["1613"],
         productTypeIds: [],
         durationMinutes: [60],
-        stationIds: [stationId],
+        stationIds: benefitStationIds,
         kind: "FREE_ENTITLEMENT",
         valueMinor: null,
         percentage: null,
@@ -122,7 +161,7 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
         externalEventTypeIds: ["1613"],
         productTypeIds: [],
         durationMinutes: [60, 90, 120],
-        stationIds: [stationId],
+        stationIds: benefitStationIds,
         kind: "FREE_ENTITLEMENT",
         valueMinor: null,
         percentage: null,
@@ -158,8 +197,8 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
       subscriptionTypeId: policy.subscriptionTypeId,
       policyVersion: policy.policyVersion,
       state: "ACTIVE",
-      activeFrom: "2026-08-01T00:00:00.000Z",
-      activeTo: "2027-08-01T00:00:00.000Z",
+      activeFrom: new Date(Date.now() - DAY_MS).toISOString(),
+      activeTo: new Date(Date.now() + 365 * DAY_MS).toISOString(),
       frozenUntil: null,
       noShowBlockedUntil: null,
       homeStationId: stationId,
@@ -597,18 +636,19 @@ test("HUB split join uses the same CUP policy path while Kotelniki stays closed"
 });
 
 test("published managed policy is evaluated before Mongo and persists its audit identity", () => {
+  const futureTarget = futureManagedTarget();
   const runtime = runFunction(ROUTER_FILE, {
     statusCode: 200,
     payload: managedRuntimeResponse(),
     _subscriptionBooking: baseContext("managed_runtime_context", {
-      serviceDate: "2026-08-21",
+      serviceDate: futureTarget.serviceDate,
       category: "open_game",
       planKey: "piter_friendship",
       managedAction: "CREATE_GAME",
       managedTarget: {
         resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
         externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
-        durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
+        durationMinutes: 60, startsAt: futureTarget.startsAt,
         basePriceMinor: null, currency: "RUB",
       },
     }),
@@ -636,12 +676,52 @@ test("published managed policy is evaluated before Mongo and persists its audit 
   assert.equal(routed[1]._subscriptionBooking.managedDecision.benefit.kind, "FREE_ENTITLEMENT");
 });
 
-test("HUB accepts the exact first-use deadline lifecycle with an all-stations policy", () => {
+test("HUB accepts the exact first-use deadline lifecycle with the pinned station set", () => {
+  const futureTarget = futureManagedTarget();
   const runtime = runFunction(ROUTER_FILE, {
     statusCode: 200,
     payload: managedRuntimeResponse({
-      allStations: true,
+      stationId: HUB_STATION_IDS[0],
+      stationIds: [...HUB_STATION_IDS].reverse(),
+      benefitStationIds: [...HUB_STATION_IDS],
       subscriptionTypeId: "subscription-type:hub",
+    }),
+    _subscriptionBooking: baseContext("managed_runtime_context", {
+      serviceDate: futureTarget.serviceDate,
+      category: "open_game",
+      planKey: "network_friendship",
+      managedAction: "JOIN_GAME",
+      managedTarget: {
+        resolutionSource: "SERVER", stationId: HUB_STATION_IDS[0], category: "GAME",
+        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        durationMinutes: 120, startsAt: futureTarget.startsAt,
+        basePriceMinor: null, currency: "RUB",
+      },
+    }),
+  }, MANAGED_GLOBALS);
+
+  assert.equal(runtime[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(runtime[0]._subscriptionBooking.managedRuntime.policy.lifecycle.activationMode,
+    "FIRST_USE_OR_FIXED_DATE");
+  const active = runFunction(ROUTER_FILE, {
+    statusCode: 200, payload: { content: [] },
+    _subscriptionBooking: runtime[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  const history = runFunction(ROUTER_FILE, {
+    statusCode: 200, payload: { content: [] },
+    _subscriptionBooking: active[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  const evaluated = runFunction(MANAGED_EVALUATOR_FILE, history[6]);
+  assert.ok(evaluated[0]);
+  assert.equal(evaluated[0]._managedSubscriptionPolicyDecision.eligible, true);
+});
+
+test("HUB rejects all-stations, missing and additional station scopes before Viva or Mongo", () => {
+  const evaluate = (overrides: Record<string, unknown>) => runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse({
+      subscriptionTypeId: "subscription-type:hub",
+      ...overrides,
     }),
     _subscriptionBooking: baseContext("managed_runtime_context", {
       serviceDate: "2026-08-21",
@@ -657,9 +737,18 @@ test("HUB accepts the exact first-use deadline lifecycle with an all-stations po
     }),
   }, MANAGED_GLOBALS);
 
-  assert.equal(runtime[0]._subscriptionBooking.step, "active_bookings");
-  assert.equal(runtime[0]._subscriptionBooking.managedRuntime.policy.lifecycle.activationMode,
-    "FIRST_USE_OR_FIXED_DATE");
+  for (const output of [
+    evaluate({ allStations: true }),
+    evaluate({ stationIds: HUB_STATION_IDS.slice(0, -1) }),
+    evaluate({ stationIds: [...HUB_STATION_IDS, "station:unreviewed"] }),
+  ]) {
+    assert.equal(output[4].statusCode, 409);
+    assert.equal(output[4].payload.details.code, "MANAGED_SUBSCRIPTION_POLICY_UNSUPPORTED");
+    assert.equal(output[0], null);
+    assert.equal(output[1], null);
+    assert.equal(output[2], null);
+    assert.equal(output[3], null);
+  }
 });
 
 test("pending annual subscription fails before Viva reads when CUP activation is not configured", () => {
@@ -939,9 +1028,10 @@ test("Piter rejects an all-stations policy and regional tournament discounts sta
 });
 
 test("90 minute create is blocked while 120 minute join is allowed by the same policy", () => {
+  const futureTarget = futureManagedTarget();
   const evaluateDuration = (action: "CREATE_GAME" | "JOIN_GAME", durationMinutes: number) => {
     const ctx = baseContext("history_bookings", {
-      serviceDate: "2026-08-21", category: "open_game", planKey: "piter_friendship",
+      serviceDate: futureTarget.serviceDate, category: "open_game", planKey: "piter_friendship",
       managedAction: action, managedRuntime: {
         subscriptionInstanceId: "subscription-instance-1",
         policyDigest: "a".repeat(64),
@@ -951,7 +1041,7 @@ test("90 minute create is blocked while 120 minute join is allowed by the same p
       managedTarget: {
         resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
         externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
-        durationMinutes, startsAt: "2026-08-21T15:00:00.000Z",
+        durationMinutes, startsAt: futureTarget.startsAt,
         basePriceMinor: null, currency: "RUB",
       },
       activeBookingsPayload: { content: [] },

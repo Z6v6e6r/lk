@@ -37,10 +37,13 @@ payload нельзя формировать до утверждения cancella
 | --- | --- | --- |
 | Питер | `STATION_LIST` | `1ea77cbf-bc36-49a1-96d6-f35c216a409b` |
 | Котельники | `STATION_LIST` | `3b52e87f-33bb-436b-a1e3-19a3b62b4ed2` |
-| Падел.Дружба.ХАБ | `ALL_STATIONS` | список пуст; цель всегда резолвится сервером |
+| Падел.Дружба.ХАБ | `STATION_LIST` | точный 25-ID snapshot Viva, закреплённый в managed policy/router |
 
-`ALL_STATIONS` не разрешает доверять `stationId` из браузера. Перед решением
-managed-policy станция должна быть получена из server-side Viva exercise read.
+Для ХАБ `ALL_STATIONS` больше не является допустимым первым runtime-контрактом:
+он не фиксирует состав сети на момент публикации. ЛК принимает только точное
+множество из 25 reviewed station ID независимо от порядка; отсутствующий или
+добавленный ID блокирует действие до новой policy version. Во всех случаях
+станция цели берётся только из server-side Viva exercise read, не из браузера.
 
 ## Серверные счётчики
 
@@ -133,7 +136,8 @@ active-service ограничений. Если ЦУП опубликует по
 1. Golden HAR/read-back для создания client subscription и первой активации.
 2. 60-минутное создание и join 60/90/120 на разрешённой станции.
 3. Отказ чужой станции для Питера и Котельников.
-4. Network selector только по server-resolved exercise.
+4. ХАБ принимает только точный reviewed 25-station set и server-resolved exercise;
+   `ALL_STATIONS`, неполный или расширенный список блокируются.
 5. Вторая create/join операция в тот же локальный день блокируется.
 6. 90/120 create без add-on, group и tournament без benefit rule блокируются.
 7. Граница партии при конкурентных purchase-reservation не перепродаётся.

@@ -6,6 +6,33 @@ const PREPARED_LEASE_MS = 2 * 60 * 1000;
 // Viva normally confirms in seconds; keep the dedupe window short, then reconcile safely.
 const PENDING_CONFIRMATION_MS = 15 * 60 * 1000;
 const PITER_STATION_ID = "1ea77cbf-bc36-49a1-96d6-f35c216a409b";
+const HUB_STATION_IDS = Object.freeze([
+  "0d5504f6-ea6f-44bb-a9e4-947faf0273ab",
+  "0ee057dd-908c-4b33-84b9-1a977480b710",
+  "14d6d441-635f-47d0-aa8c-553496294fb1",
+  "1c323ef3-7e6c-42eb-a6f7-653460540a8a",
+  "1cbb7201-2189-41a4-a3b4-4f543da0def6",
+  "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+  "233c1405-1eac-40de-8ec6-1cf7e24c9276",
+  "3266d827-2662-4540-9376-daac10f3875e",
+  "3656cbaa-6426-490f-a44f-915404cbdd2b",
+  "3b52e87f-33bb-436b-a1e3-19a3b62b4ed2",
+  "3db3fc06-00e2-445a-97eb-e354796f80a1",
+  "42c6d4df-833d-480a-bdc8-986716569884",
+  "4c564565-3918-40b2-8cb3-b7135c7cc992",
+  "5409fdc8-3db3-4e66-a6a9-8994bd591c8f",
+  "588b6151-f4f5-47d9-9449-80edf8cbc748",
+  "6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1",
+  "6b2d7e60-caff-4b22-89f6-6f19d7d311ab",
+  "76c67f10-70ee-4296-9145-1c040e4674ca",
+  "8380b5db-c12f-495b-a0d7-c7359168a777",
+  "855ec72a-d619-4add-ac92-8c64dafb17c2",
+  "8e31b902-1981-4b62-b803-6187b8f2a8da",
+  "b09d0015-5198-4a94-b88b-2448218e479d",
+  "c72eaaff-2163-47cd-87d0-b93499415acc",
+  "ed0e3bd4-6edb-43a9-8fe4-8fc3e7febec8",
+  "f82775cc-3dd7-4d02-98c8-e43cce470003",
+]);
 const REGIONAL_ACTIVATION_MODE = "FIRST_USE_OR_FIXED_DATE";
 const REGIONAL_ACTIVATION_FALLBACK_AT = "2026-09-30T21:00:00.000Z";
 const REGIONAL_ACTIVATION_TIME_ZONE = "Europe/Moscow";
@@ -50,6 +77,13 @@ const normalizeMarker = (value) => String(value || "")
   .replace(/ё/g, "е")
   .replace(/[^a-z0-9а-я]+/gi, "");
 const isHttpOk = (status) => Number(status) >= 200 && Number(status) < 300;
+const normalizedIdSet = (values) => [...new Set(asArray(values).map(normalizeId).filter(Boolean))].sort();
+const exactIdSet = (values, expected) => {
+  const actualIds = normalizedIdSet(values);
+  const expectedIds = normalizedIdSet(expected);
+  return actualIds.length === expectedIds.length
+    && actualIds.every((stationId, index) => stationId === expectedIds[index]);
+};
 
 const readGlobal = (key) => {
   try {
@@ -1117,6 +1151,9 @@ if (ctx.step === "managed_runtime_context") {
   const enabledStationRules = Array.isArray(policy.stationAccessRules)
     ? policy.stationAccessRules.filter((rule) => rule?.enabled === true)
     : [];
+  const enabledStationIds = enabledStationRules.flatMap((rule) => (
+    rule?.selector?.kind === "STATION_LIST" ? asArray(rule.selector.stationIds) : []
+  ));
   const stationPolicySupported = ctx.planKey === "piter_friendship"
     ? enabledStationRules.length > 0 && enabledStationRules.every((rule) => (
       rule.selector?.kind === "STATION_LIST"
@@ -1127,8 +1164,11 @@ if (ctx.step === "managed_runtime_context") {
     ))
     : ctx.planKey === "network_friendship"
       && enabledStationRules.length > 0 && enabledStationRules.every((rule) => (
-        rule.selector?.kind === "ALL_STATIONS" && rule.surcharge?.kind === "NONE"
-      ));
+        rule.selector?.kind === "STATION_LIST"
+        && Array.isArray(rule.selector.stationIds)
+        && rule.surcharge?.kind === "NONE"
+      ))
+      && exactIdSet(enabledStationIds, HUB_STATION_IDS);
   const regionalLifecycleSupported = policy.lifecycle?.activationMode === REGIONAL_ACTIVATION_MODE
     && Number.isInteger(policy.lifecycle?.activationWindowDays)
     && policy.lifecycle.activationWindowDays === 0
