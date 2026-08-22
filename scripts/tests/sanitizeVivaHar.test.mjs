@@ -201,6 +201,29 @@ test("drops encoded and non-JSON bodies", () => {
   assert.match(result.sanitizedText, /NON_JSON_BODY_REDACTED/);
 });
 
+test("rounds browser timing precision that can look like a phone token", () => {
+  const entry = createEntry({
+    url: "https://api.vivacrm.ru/api/v1/exercises/types",
+    method: "GET",
+  });
+  entry.timings.wait = 777.12345678901;
+  const source = JSON.stringify({
+    log: {
+      version: "1.2",
+      entries: [entry],
+    },
+  });
+
+  const result = sanitizeHarText(source, {
+    allowedHosts: ["api.vivacrm.ru"],
+    allowedPathPrefixes: ["/api/v1/exercises/types"],
+    caseId: "GHAR-MAP-TYPES",
+  });
+
+  assert.equal(result.sanitizedText.includes("71234567890"), false);
+  assert.equal(result.sanitizedHar.log.entries[0].timings.wait, 777.123);
+});
+
 test("writes private files and refuses overwrite", () => {
   const { source } = createFixture();
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "padlhub-har-sanitizer-"));

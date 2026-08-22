@@ -373,7 +373,7 @@ const sanitizeResponse = (response, alias) => ({
 const sanitizeTimings = (timings) => Object.fromEntries(
   ["blocked", "dns", "connect", "send", "wait", "receive", "ssl"]
     .filter((key) => Number.isFinite(timings?.[key]))
-    .map((key) => [key, timings[key]]),
+    .map((key) => [key, Math.round(timings[key] * 1000) / 1000]),
 );
 
 const sanitizeEntry = (entry, alias) => ({
