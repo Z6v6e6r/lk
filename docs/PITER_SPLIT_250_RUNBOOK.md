@@ -36,11 +36,11 @@ Expected participant charge:
 - Piter, 60/90/120 minutes: 250/375/500 RUB in the UI and in the server payment response.
 - A modified browser `shareAmount`, `totalAmount`, or `studioId` does not change the server charge.
 - A room that does not belong to the quoted station is rejected before Viva creates an exercise or booking.
-- A non-Piter split game uses the Viva product price divided by the server share count.
+- A non-Piter split game fetches the exact Viva court price for the verified station, room, date/time, master service and sub-services, then divides that price by the server share count. The nominal transaction product cost is not pricing authority.
 - A Piter game created under the campaign keeps its exact policy ID, version and hourly rates when a participant joins after the campaign is changed, expired or disabled; the rate is re-proved from the organizer transaction before each participant booking.
 - A game created without a policy snapshot never adopts a campaign enabled later.
 - Full payment uses the existing Viva full-payment path and the ordinary slot price.
-- Before `activeFrom` and after `expiresAt`, Piter split pricing falls back to the Viva product price divided by the server share count.
+- Before `activeFrom` and after `expiresAt`, Piter split pricing falls back to the exact Viva court price divided by the server share count.
 - If CUP policy lookup is unavailable, one-time split payment fails closed; full payment remains available.
 - CUP lookup is required only when creating a one-time split game; joining an existing game does not depend on current CUP availability, but does require read-only Viva confirmation of the organizer transaction.
 - Viva token requests are bounded to 10 seconds and Viva Admin API requests to 20 seconds.
@@ -49,4 +49,4 @@ Expected participant charge:
 
 Set `expiresAt` to the end of the last eligible game date in Moscow time, or disable the campaign when new Piter games must return to the ordinary scheme. Do not change the rate or reuse the policy ID for another price. Games already created with this policy keep the immutable stored snapshot for later participants; games created after expiry/disable use ordinary Viva split pricing. Newer pricing must use a new policy ID.
 
-Rollback is configuration-only after all compatible code is deployed: an expired, disabled or unmatched policy makes new games calculate the ordinary split share from the Viva product cost. Existing games preserve their stored policy snapshot. No change is required in the full-payment path.
+Rollback is configuration-only after all compatible code is deployed: an expired, disabled or unmatched policy makes new games calculate the ordinary split share from the exact Viva court price. Existing games preserve their stored policy snapshot. No change is required in the full-payment path.

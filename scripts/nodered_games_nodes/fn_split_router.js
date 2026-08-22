@@ -1,4 +1,5 @@
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
+const END_USER_API = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G";
 const TOKEN_URL_DEFAULT = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const TOKEN_CLIENT_ID_DEFAULT = "React-auth-dev";
 const TOKEN_CACHE_GRACE_MS = 30 * 1000;
@@ -316,6 +317,103 @@ const adminRequest = (ctx, method, path, payload) => {
   return [msg, null, null];
 };
 
+const endUserRequest = (ctx, path) => {
+  msg._splitCtx = ctx;
+  msg.method = "GET";
+  msg.url = `${END_USER_API}${path}`;
+  msg.headers = {
+    Authorization: ctx.userAuthHeader,
+    Accept: "application/json",
+    "Cache-Control": "no-store",
+  };
+  msg.payload = undefined;
+  msg.requestTimeout = ADMIN_REQUEST_TIMEOUT_MS;
+  return [msg, null, null];
+};
+
+const buildQuery = (entries) => entries
+  .filter(([, value]) => value !== null && value !== undefined && String(value).length > 0)
+  .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+  .join("&");
+
+const extractDirectPriceAmount = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  for (const key of [
+    "appliedValueFrom",
+    "appliedValue",
+    "appliedAmount",
+    "from",
+    "price",
+    "cost",
+    "amount",
+    "fullPrice",
+    "total",
+    "value",
+    "finalPrice",
+    "valueFrom",
+  ]) {
+    const amount = toNumber(value[key]);
+    if (amount !== null) return amount;
+  }
+  return null;
+};
+
+const extractCalculatedPriceAmount = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const direct = extractDirectPriceAmount(value);
+  if (direct !== null) return direct;
+  const calculation = value.calculation;
+  if (!calculation || typeof calculation !== "object" || Array.isArray(calculation)) return null;
+  for (const item of Object.values(calculation)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const basePrice = item.basePrice && typeof item.basePrice === "object" ? item.basePrice : null;
+    const base = extractDirectPriceAmount(basePrice) ?? extractDirectPriceAmount(item);
+    if (base === null) continue;
+    const impacts = Array.isArray(item.impacts) ? item.impacts : [];
+    const impactsTotal = impacts.reduce((sum, impact) => {
+      if (!impact || typeof impact !== "object") return sum;
+      const impactPrice = impact.price && typeof impact.price === "object" ? impact.price : {};
+      const applied = toNumber(
+        impact.appliedValueFrom
+        ?? impact.appliedValue
+        ?? impact.appliedAmount
+        ?? impact.valueFrom
+        ?? impact.from
+        ?? impact.amount
+        ?? impactPrice.appliedValueFrom
+        ?? impactPrice.appliedValue
+        ?? impactPrice.appliedAmount
+        ?? impactPrice.valueFrom
+        ?? impactPrice.from
+        ?? impactPrice.amount,
+      );
+      if (applied !== null) return sum + applied;
+      const raw = toNumber(impact.value ?? impact.valueTo ?? impactPrice.value ?? impactPrice.valueTo);
+      if (raw === null) return sum;
+      return String(impact.impactDirection || impact.direction || "").toUpperCase() === "DISCOUNT"
+        ? sum - Math.abs(raw)
+        : sum + raw;
+    }, 0);
+    return base + impactsTotal;
+  }
+  return null;
+};
+
+const extractExactCourtPrice = (payload, subServiceIds) => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  for (const wrapperKey of ["data", "payload", "result", "pricing"]) {
+    const wrapped = payload[wrapperKey];
+    if (!wrapped || typeof wrapped !== "object" || wrapped === payload) continue;
+    const amount = extractExactCourtPrice(wrapped, subServiceIds);
+    if (amount !== null) return amount;
+  }
+  for (const subServiceId of subServiceIds) {
+    const amount = extractCalculatedPriceAmount(payload[subServiceId]);
+    if (amount !== null) return amount;
+  }
+  return extractCalculatedPriceAmount(payload);
+};
+
 const resolveSplitPricingPolicy = (value) => {
   const source = value && typeof value === "object" && value.data && typeof value.data === "object"
     ? value.data
@@ -405,6 +503,11 @@ const startSubscriptionBookingGateway = (ctx) => {
     authHeader,
     exerciseId: ctx.exerciseId,
     clientSubscriptionId: ctx.clientSubscriptionId,
+    managedAction: ctx.action === "create"
+      ? "CREATE_GAME"
+      : ctx.action === "join"
+        ? "JOIN_GAME"
+        : null,
     spot: ctx.spot || null,
     subscriptionVisitCount: resolveSubscriptionVisitCount(ctx),
     startedAt: new Date().toISOString(),
@@ -422,9 +525,15 @@ const startSubscriptionBookingGateway = (ctx) => {
 const extractList = (value) => {
   if (Array.isArray(value)) return value;
   if (value && typeof value === "object") {
-    if (Array.isArray(value.content)) return value.content;
-    if (Array.isArray(value.data)) return value.data;
-    if (Array.isArray(value.items)) return value.items;
+    for (const key of ["content", "data", "items", "result", "studios", "subServices", "services"]) {
+      if (Array.isArray(value[key])) return value[key];
+    }
+    for (const key of ["data", "payload", "result"]) {
+      const nested = value[key];
+      if (!nested || typeof nested !== "object" || nested === value) continue;
+      const items = extractList(nested);
+      if (items.length > 0) return items;
+    }
   }
   return [];
 };
@@ -676,7 +785,7 @@ const buildBookingRequest = (ctx) => {
   );
 };
 
-const continueSplitAfterTrustedLocation = (ctx) => {
+const continueSplitAfterVerifiedPrice = (ctx) => {
   if (ctx.action === "create") {
     ctx.step = "create_exercise";
     return adminRequest(ctx, "POST", "/exercises", {
@@ -691,6 +800,54 @@ const continueSplitAfterTrustedLocation = (ctx) => {
     });
   }
   return buildBookingRequest(ctx);
+};
+
+const startOrdinaryPriceVerification = (ctx) => {
+  const authHeader = toStr(ctx.userAuthHeader);
+  const masterServiceId = toStr(ctx.masterServiceId);
+  const subServiceIds = Array.isArray(ctx.subServiceIds)
+    ? Array.from(new Set(ctx.subServiceIds.map((item) => toStr(item)).filter(Boolean)))
+    : [];
+  if (!authHeader || !/^Bearer\s+\S+/i.test(authHeader)) {
+    return fail(401, "Требуется авторизация Viva для проверки стоимости корта", {
+      code: "SPLIT_EXACT_PRICE_AUTH_REQUIRED",
+    });
+  }
+  if (!masterServiceId || subServiceIds.length === 0 || !ctx.date || !ctx.fromTime || !ctx.toTime) {
+    return fail(409, "Не хватает данных Viva для точного расчёта стоимости корта", {
+      code: "SPLIT_EXACT_PRICE_CONTRACT_INCOMPLETE",
+    });
+  }
+  ctx.masterServiceId = masterServiceId;
+  ctx.subServiceIds = subServiceIds;
+  ctx.step = "ordinary_price_studios";
+  return endUserRequest(
+    ctx,
+    `/products/master-services/${encodeURIComponent(masterServiceId)}/studios?`,
+  );
+};
+
+const startOrdinarySubServiceVerification = (ctx) => {
+  ctx.step = "ordinary_price_subservices";
+  const query = buildQuery([
+    ["studioId", ctx.studioId],
+    ["showAll", "true"],
+  ]);
+  return endUserRequest(
+    ctx,
+    `/products/master-services/${encodeURIComponent(ctx.masterServiceId)}/subServices?${query}`,
+  );
+};
+
+const continueSplitAfterTrustedLocation = (ctx) => {
+  if (
+    resolvePaymentMode(ctx.paymentMode) === "one_time"
+    && !ctx.pricingPolicy
+    && ctx.exactCourtPriceVerified !== true
+  ) {
+    return startOrdinaryPriceVerification(ctx);
+  }
+  return continueSplitAfterVerifiedPrice(ctx);
 };
 
 const startRoomStudioVerification = (ctx) => {
@@ -905,6 +1062,21 @@ if (!isOk(msg.statusCode)) {
     });
   }
   if (
+    ctx.step === "ordinary_price_studios"
+    || ctx.step === "ordinary_price_subservices"
+    || ctx.step === "ordinary_exact_price"
+  ) {
+    if (Number(msg.statusCode) === 401 || Number(msg.statusCode) === 403) {
+      return fail(401, "Авторизация Viva не позволяет проверить стоимость корта", {
+        code: "SPLIT_EXACT_PRICE_AUTH_INVALID",
+      });
+    }
+    return fail(503, "Не удалось получить точную стоимость корта Viva", {
+      code: "SPLIT_EXACT_PRICE_UNAVAILABLE",
+      providerStatus: Number(msg.statusCode) || null,
+    });
+  }
+  if (
     ctx.step === "create_booking"
     && resolveBookingPaymentType(ctx) === "SUBSCRIPTION"
     && isSubscriptionDailyLimitPayload(msg.payload)
@@ -1034,6 +1206,69 @@ if (ctx.step === "confirm_subscription_booking_lookup") {
     currency: "RUB",
   };
   return [null, null, null, null, msg];
+}
+
+if (ctx.step === "ordinary_price_studios") {
+  const availableStudioIds = new Set(
+    extractList(msg.payload)
+      .map((item) => toStr(item?.id || item?.uuid || item?.studioId || item?.stationId))
+      .filter(Boolean),
+  );
+  if (!availableStudioIds.has(toStr(ctx.studioId))) {
+    return fail(409, "Master-service игры не принадлежит выбранной станции Viva", {
+      code: "SPLIT_EXACT_PRICE_MASTER_SERVICE_MISMATCH",
+    });
+  }
+  return startOrdinarySubServiceVerification(ctx);
+}
+
+if (ctx.step === "ordinary_price_subservices") {
+  const availableSubServiceIds = new Set(
+    extractList(msg.payload)
+      .flatMap((item) => (
+        item && typeof item === "object" && Array.isArray(item.subServices)
+          ? item.subServices
+          : [item]
+      ))
+      .map((item) => toStr(item?.id || item?.uuid || item?.subServiceId || item?.serviceId || item?.productId))
+      .filter(Boolean),
+  );
+  const requestedSubServiceIds = Array.isArray(ctx.subServiceIds) ? ctx.subServiceIds : [];
+  const invalidSubServiceIds = requestedSubServiceIds.filter((id) => !availableSubServiceIds.has(id));
+  if (availableSubServiceIds.size === 0 || invalidSubServiceIds.length > 0) {
+    return fail(409, "Подуслуга игры не принадлежит выбранной станции Viva", {
+      code: "SPLIT_EXACT_PRICE_SUBSERVICE_MISMATCH",
+      invalidSubServiceIds,
+    });
+  }
+
+  ctx.step = "ordinary_exact_price";
+  const query = buildQuery([
+    ["studioId", ctx.studioId],
+    ["roomId", ctx.roomId],
+    ["subServiceIds", requestedSubServiceIds.join(",")],
+    ["fromTime", ctx.fromTime],
+    ["toTime", ctx.toTime],
+    ["fromDate", ctx.date],
+  ]);
+  return endUserRequest(
+    ctx,
+    `/products/master-services/${encodeURIComponent(ctx.masterServiceId)}/price?${query}`,
+  );
+}
+
+if (ctx.step === "ordinary_exact_price") {
+  const exactCourtPrice = extractExactCourtPrice(msg.payload, ctx.subServiceIds || []);
+  if (exactCourtPrice === null || exactCourtPrice < 0) {
+    return fail(502, "Viva вернула некорректную стоимость корта", {
+      code: "SPLIT_EXACT_PRICE_INVALID",
+    });
+  }
+  const shareCount = Math.max(1, Math.round(toNumber(ctx.shareCount) ?? 4));
+  ctx.totalAmount = Math.round(exactCourtPrice * 100) / 100;
+  ctx.shareAmount = Math.round(exactCourtPrice / shareCount * 100) / 100;
+  ctx.exactCourtPriceVerified = true;
+  return continueSplitAfterVerifiedPrice(ctx);
 }
 
 if (ctx.step === "create_exercise") {
@@ -1242,6 +1477,7 @@ if (ctx.step === "available_products") {
     Math.round((toNumber(ctx.oneTimeBaseAmount) ?? DEFAULT_ONE_TIME_PRODUCT_AMOUNT) * 100),
   );
   const oneTimeProduct = pickBestOneTimeProduct(products, oneTimeBaseMinor);
+  const shareCount = Math.max(1, Math.round(toNumber(ctx.shareCount) ?? 4));
   const requestedClientSubscriptionId = toStr(ctx.clientSubscriptionId);
   const subscriptionProduct = pickBestSubscriptionProduct(products, requestedClientSubscriptionId);
 
@@ -1258,7 +1494,7 @@ if (ctx.step === "available_products") {
   if (oneTimeProduct) {
     availableModes.push({
       id: "one_time",
-      label: "Оплатить 1/4 стоимости",
+      label: `Оплатить 1/${shareCount} стоимости`,
       productId: oneTimeProduct.id,
       productName: oneTimeProduct.name,
       type: oneTimeProduct.type,
@@ -1310,16 +1546,32 @@ if (ctx.step === "available_products") {
     0,
     Math.round(toNumber(selectedProduct.raw?.cost) ?? selectedProduct.costMinor ?? 0),
   );
-  const shareCount = Math.max(1, Math.round(toNumber(ctx.shareCount) ?? 4));
   const durationMinutes = Math.max(1, Math.round(toNumber(ctx.durationMinutes) ?? 60));
   const policyHourlyAmount = toNumber(
     shareCount === 2
       ? ctx.pricingPolicy?.twoTeamsHourlyAmount
       : ctx.pricingPolicy?.fourPlayersHourlyAmount,
   );
+  const exactCourtPrice = toNumber(ctx.totalAmount);
+  if (
+    selectedMode === "one_time"
+    && policyHourlyAmount === null
+    && (ctx.exactCourtPriceVerified !== true || exactCourtPrice === null || exactCourtPrice < 0)
+  ) {
+    return fail(409, "Точная стоимость корта не была подтверждена Viva", {
+      code: "SPLIT_EXACT_PRICE_NOT_VERIFIED",
+    });
+  }
   const shareAmountMinor = selectedMode === "one_time" && policyHourlyAmount !== null
     ? Math.max(0, Math.round(policyHourlyAmount * durationMinutes / 60 * 100))
-    : Math.max(0, Math.round(selectedProductCostMinor / shareCount));
+    : selectedMode === "one_time"
+      ? Math.max(0, Math.round(exactCourtPrice * 100 / shareCount))
+      : 0;
+  if (selectedMode === "one_time" && shareAmountMinor > selectedProductCostMinor) {
+    return fail(409, "Viva product не покрывает рассчитанную долю стоимости корта", {
+      code: "SPLIT_TRANSACTION_PRODUCT_AMOUNT_TOO_LOW",
+    });
+  }
   ctx.shareAmount = shareAmountMinor / 100;
   const baseShareAmountMinor = Math.max(
     oneTimeProduct?.costMinor || 0,
@@ -1366,7 +1618,7 @@ if (ctx.step === "available_products") {
     studioId: ctx.studioId,
     discountReason: selectedMode === "subscription"
       ? `Открытая игра 4/4: списание ${subscriptionVisitCount} посещения(ий) абонемента`
-      : "Открытая игра 4/4: 1/4 стоимости корта",
+      : `Открытая игра ${shareCount}/${shareCount}: 1/${shareCount} стоимости корта`,
     offlineTillId: null,
     deposit: 0,
   };

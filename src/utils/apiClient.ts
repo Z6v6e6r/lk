@@ -3184,6 +3184,7 @@ export interface PadelGameRecord {
     durationMinutes: number | null;
     studioId?: string | null;
     roomId?: string | null;
+    masterServiceId?: string | null;
     bookingId?: string | null;
     bookingIds?: string[];
     exerciseId?: string | null;
@@ -3851,6 +3852,8 @@ export interface PadelSplitPaymentParams {
   exerciseId?: string | null;
   studioId: string;
   roomId: string;
+  masterServiceId?: string | null;
+  subServiceIds?: string[];
   studioName?: string | null;
   roomName?: string | null;
   clientId?: string | null;
@@ -6366,6 +6369,7 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
             ]),
             studioId: pickString(bookingPayload, ["studioId", "stationId"]),
             roomId: pickString(bookingPayload, ["roomId", "courtId"]),
+            masterServiceId: pickString(bookingPayload, ["masterServiceId", "master_service_id"]),
             bookingId: pickString(bookingPayload, ["bookingId", "id"]),
             bookingIds: uniqueIds(
               extractIdList(
@@ -8679,6 +8683,10 @@ function buildPadelSplitPaymentPayload(params: PadelSplitPaymentParams): Record<
     vivaExerciseId: params.exerciseId ?? null,
     studioId: params.studioId,
     roomId: params.roomId,
+    masterServiceId: params.masterServiceId?.trim() || null,
+    subServiceIds: Array.from(new Set(
+      (params.subServiceIds ?? []).map((value) => value.trim()).filter(Boolean),
+    )),
     studioName: params.studioName ?? null,
     roomName: params.roomName ?? null,
     clientId: params.clientId ?? null,
@@ -8734,13 +8742,15 @@ function buildPadelSplitIdempotencyKey(
   return `lk-split-${scope}-${hashPart(seed)}${hashPart([...seed].reverse().join(""))}`;
 }
 
-function buildPadelSplitSubscriptionRequest(
+function buildPadelSplitRequest(
   path: string,
   scope: "create" | "join",
   params: PadelSplitPaymentParams,
   gameId?: string | null,
 ) {
-  if (params.paymentMode !== "subscription") return { path, options: {} };
+  if (params.paymentMode !== "subscription") {
+    return { path, options: { auth: true as const } };
+  }
   const operationId = buildPadelSplitIdempotencyKey(scope, params, gameId);
   return {
     path: `${path}?operationId=${encodeURIComponent(operationId)}`,
@@ -8768,15 +8778,15 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
     };
   }
 
-  const subscriptionRequest = buildPadelSplitSubscriptionRequest(
+  const splitRequest = buildPadelSplitRequest(
     "/lk/games/split/create",
     "create",
     params,
   );
-  const response = await request<unknown>(subscriptionRequest.path, {
+  const response = await request<unknown>(splitRequest.path, {
     method: "POST",
     baseUrl,
-    ...subscriptionRequest.options,
+    ...splitRequest.options,
     retries: 0,
     body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
   });
@@ -8839,18 +8849,18 @@ export async function apiCreatePadelSplitParticipantPayment(
     };
   }
 
-  const subscriptionRequest = buildPadelSplitSubscriptionRequest(
+  const splitRequest = buildPadelSplitRequest(
     `/lk/games/${encodeURIComponent(normalizedGameId)}/split/join`,
     "join",
     params,
     normalizedGameId,
   );
   const response = await request<unknown>(
-    subscriptionRequest.path,
+    splitRequest.path,
     {
       method: "POST",
       baseUrl,
-      ...subscriptionRequest.options,
+      ...splitRequest.options,
       retries: 0,
       body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
     },

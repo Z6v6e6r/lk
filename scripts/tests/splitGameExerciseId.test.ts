@@ -171,6 +171,60 @@ test("split create rejects ambiguous subscription payment without an explicit cl
   assert.equal(error.payload.details.code, "SUBSCRIPTION_SELECTION_REQUIRED");
 });
 
+test("split create carries authenticated exact-pricing identifiers into server context", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_create_prepare.js", {
+    req: { headers: { authorization: "Bearer user-token" } },
+    payload: {
+      date: "2026-08-22",
+      fromTime: "12:00",
+      toTime: "13:30",
+      roomId: "room-1",
+      studioId: "studio-1",
+      masterServiceId: "master-1",
+      subServiceIds: ["sub-1", "sub-1", "sub-2"],
+      clientPhone: "79990000002",
+      paymentMode: "one_time",
+    },
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0]?._splitCtx?.userAuthHeader, "Bearer user-token");
+  assert.equal(out[0]?._splitCtx?.masterServiceId, "master-1");
+  assert.deepEqual(out[0]?._splitCtx?.subServiceIds, ["sub-1", "sub-2"]);
+});
+
+test("split join uses stored exact-pricing identifiers instead of browser replacements", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_join_prepare.js", {
+    req: { headers: { authorization: "Bearer user-token" } },
+    payload: [{
+      id: "game-price-contract-1",
+      booking: {
+        studioId: "stored-studio",
+        roomId: "stored-room",
+        masterServiceId: "stored-master",
+        subServiceIds: ["stored-sub"],
+        date: "2026-08-22",
+        timeFrom: "12:00",
+        timeTo: "13:00",
+      },
+      metadata: { vivaExerciseId: "exercise-1", splitPayment: {} },
+    }],
+    _splitJoinBody: {
+      clientPhone: "79990000002",
+      paymentMode: "one_time",
+      studioId: "browser-studio",
+      roomId: "browser-room",
+      masterServiceId: "browser-master",
+      subServiceIds: ["browser-sub"],
+    },
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0]?._splitCtx?.studioId, "stored-studio");
+  assert.equal(out[0]?._splitCtx?.roomId, "stored-room");
+  assert.equal(out[0]?._splitCtx?.masterServiceId, "stored-master");
+  assert.deepEqual(out[0]?._splitCtx?.subServiceIds, ["stored-sub"]);
+  assert.equal(out[0]?._splitCtx?.userAuthHeader, "Bearer user-token");
+});
+
 test("split join fails closed when Viva token request configuration is missing", () => {
   const prepareSource = fs.readFileSync("scripts/nodered_games_nodes/fn_split_join_prepare.js", "utf8");
   const prepared = new Function("msg", "env", "global", prepareSource)(

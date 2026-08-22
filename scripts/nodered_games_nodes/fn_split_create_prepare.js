@@ -119,6 +119,21 @@ const normalizePhone = (value) => {
   return digits;
 };
 
+const normalizeIdList = (value) => {
+  const raw = Array.isArray(value)
+    ? value
+    : (typeof value === "string" ? value.split(",") : []);
+  return Array.from(new Set(raw.map((item) => toStr(item)).filter(Boolean)));
+};
+
+const readUserAuthHeader = () => {
+  const headers = msg.req && msg.req.headers && typeof msg.req.headers === "object"
+    ? msg.req.headers
+    : {};
+  const authHeader = toStr(headers.authorization || headers.Authorization);
+  return authHeader && /^Bearer\s+\S+/i.test(authHeader) ? authHeader : null;
+};
+
 const parseTimeMinutes = (value) => {
   const text = toStr(value);
   if (!text) return null;
@@ -285,6 +300,9 @@ msg._splitCtx = {
   timeTo: `${date}T${toTime}:00+03:00`,
   studioId: toStr(body.studioId),
   roomId,
+  masterServiceId: toStr(body.masterServiceId),
+  subServiceIds: normalizeIdList(body.subServiceIds),
+  userAuthHeader: readUserAuthHeader(),
   expectedPricingPolicy: body.expectedPricingPolicy && typeof body.expectedPricingPolicy === "object"
     ? body.expectedPricingPolicy
     : null,

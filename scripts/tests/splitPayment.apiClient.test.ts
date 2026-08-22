@@ -55,6 +55,8 @@ test("split payment payload keeps client subscription id separate from optional 
     toTime: "19:00",
     studioId: "studio-1",
     roomId: "room-1",
+    masterServiceId: "master-service-1",
+    subServiceIds: ["sub-service-1", "sub-service-1", "sub-service-2"],
     shareCount: 4,
     shareAmount: 2500,
     clientSubscriptionId: "client-sport",
@@ -63,6 +65,8 @@ test("split payment payload keeps client subscription id separate from optional 
 
   assert.equal(payload.clientSubscriptionId, "client-sport");
   assert.equal(payload.subscriptionId, null);
+  assert.equal(payload.masterServiceId, "master-service-1");
+  assert.deepEqual(payload.subServiceIds, ["sub-service-1", "sub-service-2"]);
 });
 
 test("split payment payload passes distinct subscription id without mirroring client subscription id", () => {
@@ -101,18 +105,19 @@ test("split promo boundaries normalize legacy UTC timestamps to Moscow game date
   assert.equal(normalizeMoscowGameDate("2026-09-30T20:59:59.999Z"), "2026-09-30");
 });
 
-test("split subscription requests authenticate and send a stable CORS-compatible operationId", () => {
-  const requestHelper = extractFunctionBlock("function buildPadelSplitSubscriptionRequest");
+test("all split requests authenticate and subscription requests add a stable CORS-compatible operationId", () => {
+  const requestHelper = extractFunctionBlock("function buildPadelSplitRequest");
   const createFunction = extractFunctionBlock("export async function apiCreatePadelSplitGamePayment");
   const joinFunction = extractFunctionBlock("export async function apiCreatePadelSplitParticipantPayment");
 
   assert.match(requestHelper, /paymentMode !== "subscription"/);
+  assert.match(requestHelper, /return \{ path, options: \{ auth: true as const \} \}/);
   assert.match(requestHelper, /operationId=/);
   assert.match(requestHelper, /auth:\s*true as const/);
   assert.doesNotMatch(requestHelper, /Idempotency-Key/);
   assert.match(requestHelper, /buildPadelSplitIdempotencyKey/);
   for (const sourceBlock of [createFunction, joinFunction]) {
-    assert.match(sourceBlock, /buildPadelSplitSubscriptionRequest/);
+    assert.match(sourceBlock, /buildPadelSplitRequest/);
     assert.doesNotMatch(sourceBlock, /auth:\s*true/);
   }
 });

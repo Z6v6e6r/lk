@@ -10719,6 +10719,8 @@ export default function GamesPage({
       activeTo: null,
       studioId,
       roomId: courtId,
+      masterServiceId: studioMasterServiceId,
+      subServiceIds: resolvedSelectedSubServiceIds,
       studioName,
       roomName: selectedCourtName ?? null,
       clientId,

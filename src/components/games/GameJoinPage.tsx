@@ -1308,6 +1308,10 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         const bookingToTime = booking?.timeTo?.trim() || "";
         const bookingStudioId = booking?.studioId?.trim() || "";
         const bookingRoomId = booking?.roomId?.trim() || "";
+        const bookingMasterServiceId = booking?.masterServiceId?.trim() || "";
+        const bookingSubServiceIds = Array.isArray(booking?.subServiceIds)
+          ? booking.subServiceIds.map((value) => value.trim()).filter(Boolean)
+          : [];
         const bookingDurationMinutes = typeof booking?.durationMinutes === "number" && Number.isFinite(booking.durationMinutes)
           ? booking.durationMinutes
           : null;
@@ -1354,10 +1358,18 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
             break;
           }
         }
+        const resolvedPaymentMode = explicitSplitPaymentMode ?? preferredSplitPaymentMode ?? "one_time";
 
-        if (!bookingDate || !bookingFromTime || !bookingToTime || !bookingStudioId || !bookingRoomId) {
+        if (
+          !bookingDate
+          || !bookingFromTime
+          || !bookingToTime
+          || !bookingStudioId
+          || !bookingRoomId
+          || (resolvedPaymentMode === "one_time" && (!bookingMasterServiceId || bookingSubServiceIds.length === 0))
+        ) {
           setSubmitting(null);
-          setDecisionError("В игре нет данных для оплаты участия");
+          setDecisionError("В игре нет точных данных Viva для расчёта стоимости участия");
           return;
         }
         if (!exerciseId) {
@@ -1366,7 +1378,6 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           return;
         }
 
-        const resolvedPaymentMode = explicitSplitPaymentMode ?? preferredSplitPaymentMode ?? "one_time";
         let subscriptionCandidates: Subscription[] = [];
         let compatibleSubscriptionCandidates: Subscription[] = [];
         let eligibleSubscriptionCandidates: Subscription[] = [];
@@ -1469,6 +1480,8 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           exerciseId,
           studioId: bookingStudioId,
           roomId: bookingRoomId,
+          masterServiceId: bookingMasterServiceId || null,
+          subServiceIds: bookingSubServiceIds,
           clientId: profile.id ?? null,
           clientPhone: profile.phone ?? null,
           paymentRef,

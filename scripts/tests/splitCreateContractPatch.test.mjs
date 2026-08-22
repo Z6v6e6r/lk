@@ -56,7 +56,7 @@ function fixture() {
 test("live flow is pinned to the reviewed deployment preimage", () => {
   assert.equal(
     LIVE_SPLIT_CREATE_CONTRACT.sourceFlowSha256,
-    "0067f0932fdc0539d624c9c8fcbba24f0da6467cdecc13a67d5af64c41db2932",
+    "0496070e2fcab507a959996d8775182181acf3a37d95fa0a13a53fb645013fd1",
   );
 });
 

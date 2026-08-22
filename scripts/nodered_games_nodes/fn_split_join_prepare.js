@@ -129,6 +129,21 @@ const normalizePhone = (value) => {
   return digits;
 };
 
+const normalizeIdList = (value) => {
+  const raw = Array.isArray(value)
+    ? value
+    : (typeof value === "string" ? value.split(",") : []);
+  return Array.from(new Set(raw.map((item) => toStr(item)).filter(Boolean)));
+};
+
+const readUserAuthHeader = () => {
+  const headers = msg.req && msg.req.headers && typeof msg.req.headers === "object"
+    ? msg.req.headers
+    : {};
+  const authHeader = toStr(headers.authorization || headers.Authorization);
+  return authHeader && /^Bearer\s+\S+/i.test(authHeader) ? authHeader : null;
+};
+
 const parseTimeMinutes = (value) => {
   const text = toStr(value);
   if (!text) return null;
@@ -343,6 +358,11 @@ const clientPhone = normalizePhone(body.clientPhone || body.phone);
 const paymentMode = resolvePaymentMode(body.paymentMode || body.payMode || body.preferredPaymentMode);
 const storedStudioId = toStr(booking.studioId) || toStr(metadata.studioId);
 const storedRoomId = toStr(booking.roomId) || toStr(metadata.roomId);
+const storedMasterServiceId = toStr(booking.masterServiceId) || toStr(metadata.masterServiceId);
+const storedSubServiceIds = normalizeIdList(
+  booking.subServiceIds
+  || metadata.subServiceIds,
+);
 const studioId = storedStudioId || (paymentMode === "subscription" ? toStr(body.studioId) : null);
 const roomId = storedRoomId || (paymentMode === "subscription" ? toStr(body.roomId) : null);
 const date = normalizeDate(
@@ -490,9 +510,14 @@ msg._splitCtx = {
   step: "token",
   paymentRef,
   date,
+  fromTime: toStr(booking.timeFrom),
+  toTime: toStr(booking.timeTo),
   exerciseId,
   studioId,
   roomId,
+  masterServiceId: storedMasterServiceId,
+  subServiceIds: storedSubServiceIds,
+  userAuthHeader: readUserAuthHeader(),
   pricingPolicy: storedPricingPolicy,
   pricingPolicyProof,
   clientId: toStr(body.clientId),
