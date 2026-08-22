@@ -164,6 +164,7 @@ function cleanupContext(step = "check_timeout_transaction") {
       bookingIds: ["booking-1"],
       clientId: "client-1",
       paymentRef: "payment-1",
+      amountMinor: 37500,
     },
     bookingQueue: [],
     bookingResults: [],
@@ -198,6 +199,74 @@ test("verified UNPAID is the only direct path from transaction readback to booki
   assert.equal(out[0]?.method, "GET");
   assert.match(out[0]?.url || "", /\/clients\/client-1\/bookings\/booking-1\/cancel$/);
   assert.equal(out[0]?._splitCleanupCtx?.step, "cancel_booking_probe");
+});
+
+test("verified UNPAID accepts the real Viva payment booking binding shape", () => {
+  const out = runNodeRedFunction(cleanupRouter, {
+    statusCode: 200,
+    payload: {
+      id: "transaction-1",
+      status: "UNPAID",
+      toPay: 37500,
+      client: { id: "client-1" },
+      products: [{
+        paymentBookingIds: ["booking-1"],
+        pricingDetails: [{ clientBookingId: "booking-1" }],
+      }],
+    },
+    _splitCleanupCtx: cleanupContext(),
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0]?.method, "GET");
+  assert.match(out[0]?.url || "", /\/clients\/client-1\/bookings\/booking-1\/cancel$/);
+  assert.equal(out[0]?._splitCleanupCtx?.step, "cancel_booking_probe");
+});
+
+test("real Viva binding keys still fail closed when they point to another booking", () => {
+  const out = runNodeRedFunction(cleanupRouter, {
+    statusCode: 200,
+    payload: {
+      id: "transaction-1",
+      status: "UNPAID",
+      client: { id: "client-1" },
+      products: [{
+        paymentBookingIds: ["booking-other"],
+        pricingDetails: [{ clientBookingId: "booking-other" }],
+      }],
+    },
+    _splitCleanupCtx: cleanupContext(),
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0], null);
+  const summary = out[2]?.payload || out[3]?.payload;
+  assert.equal(summary?.blockLocalMutation, true);
+  assert.equal(summary?.bookingFailedCount, 1);
+  assert.ok(summary?.trace?.some((item: Record<string, unknown>) => (
+    item.step === "check_timeout_transaction_manual_review"
+    && (item.evidence as Record<string, unknown>)?.reason === "booking_binding_missing"
+  )));
+});
+
+test("real Viva toPay must match the exact pending payment amount", () => {
+  const out = runNodeRedFunction(cleanupRouter, {
+    statusCode: 200,
+    payload: {
+      id: "transaction-1",
+      status: "UNPAID",
+      toPay: 50000,
+      client: { id: "client-1" },
+      products: [{ paymentBookingIds: ["booking-1"] }],
+    },
+    _splitCleanupCtx: cleanupContext(),
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0], null);
+  const summary = out[2]?.payload || out[3]?.payload;
+  assert.equal(summary?.blockLocalMutation, true);
+  assert.ok(summary?.trace?.some((item: Record<string, unknown>) => (
+    item.step === "check_timeout_transaction_manual_review"
+    && (item.evidence as Record<string, unknown>)?.reason === "amount_mismatch"
+  )));
 });
 
 test("WAITING transaction is expired and then read back before cancellation", () => {

@@ -98,7 +98,7 @@
     "test:games-create-upsert-recovery": "node --test scripts/tests/gamesCreateUpsertRecovery.test.mjs",
     "test:games-patch-recovery": "node --test scripts/tests/gamesPatchRecovery.test.mjs",
     "test:split-payment-recovery": "node --test scripts/tests/splitPaymentRecovery.test.mjs",
-    "test:split-lifecycle-v2": "node --experimental-strip-types --test scripts/tests/splitLifecycleV2.nodered.test.ts",
+    "test:split-lifecycle-v2": "node --experimental-strip-types --test scripts/tests/splitLifecycleV2.nodered.test.ts && node --test scripts/tests/splitLifecycleV2FollowupPatch.test.mjs",
     "test:split-create-contract": "node --test scripts/tests/splitCreateContractPatch.test.mjs && node --experimental-strip-types --test scripts/tests/splitRouter.transactionAndSubscription.test.ts",
     "test:viva-token-cache": "node --experimental-strip-types --test scripts/tests/vivaServiceTokenCache.nodered.test.ts scripts/tests/vivaTokenCachePatcher.nodered.test.ts",
     "test:viva-token-history-deploy": "node --test scripts/tests/vivaTokenHistoryDeploy.test.mjs",

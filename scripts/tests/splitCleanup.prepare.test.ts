@@ -309,6 +309,60 @@ test("participant timeout marks tasks without Viva targets as blocked", () => {
   assert.equal(tasks[0].blockReason, "missing_viva_targets");
 });
 
+test("participant timeout falls back to the persisted split payment deadline", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_prepare.js", {
+    payload: [
+      buildSplitGame({
+        id: "pay-real-shape",
+        status: "PAID",
+        payment: { paid: true },
+        booking: {
+          date: "2026-08-24",
+          timeFrom: "20:30",
+          timeTo: "22:00",
+          bookingIds: ["booking-real-shape"],
+          vivaExerciseId: "exercise-real-shape",
+        },
+        participants: [{ id: "client-real-shape", status: "CONFIRMED" }],
+        metadata: {
+          splitPayment: {
+            enabled: true,
+            shareCount: 4,
+            deadlineAt: "2026-08-21T15:29:50.535830252+03:00",
+            payments: [
+              {
+                status: "PAYMENT_PENDING",
+                clientId: "client-real-shape",
+                amountMinor: 37500,
+                bookingId: "booking-real-shape",
+                transactionId: "transaction-real-shape",
+                paymentRef: "payment-real-shape",
+              },
+            ],
+          },
+        },
+      }),
+    ],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-08-22T22:00:00+03:00"),
+      nowIso: "2026-08-22T19:00:00.000Z",
+      force: false,
+      dryRun: true,
+      limit: 10,
+      internalScheduler: true,
+    },
+  }) as unknown[];
+
+  const tasks = asTaskList(asRecord(out[0])?.payload);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].mode, "PARTICIPANT_TIMEOUT");
+  assert.deepEqual(tasks[0].bookingIds, ["booking-real-shape"]);
+  assert.equal(tasks[0].blockLocalMutation, false);
+  const timedOutPayments = tasks[0].timedOutPayments as Array<Record<string, unknown>>;
+  assert.equal(timedOutPayments[0].transactionId, "transaction-real-shape");
+  assert.equal(timedOutPayments[0].deadlineAt, "2026-08-21T12:29:50.535Z");
+});
+
 test("assembly timeout cancels only empty roster split games", () => {
   const gameWithRoster = buildSplitGame({
     id: "game-with-roster",

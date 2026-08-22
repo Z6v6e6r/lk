@@ -190,7 +190,13 @@ const classifyTransactionPayload = (payload, expected) => {
   if (!transactionId || transactionId !== toStr(expected.transactionId)) {
     return { kind: "MANUAL_REVIEW", status, reason: "transaction_id_mismatch" };
   }
-  const bookingIds = collectProviderIds(payload, ["bookingId", "bookingIds", "bookings"]);
+  const bookingIds = collectProviderIds(payload, [
+    "bookingId",
+    "bookingIds",
+    "bookings",
+    "paymentBookingIds",
+    "clientBookingId",
+  ]);
   if (!bookingIds.includes(toStr(expected.bookingId))) {
     return { kind: "MANUAL_REVIEW", status, reason: "booking_binding_missing", bookingIds };
   }
@@ -202,7 +208,8 @@ const classifyTransactionPayload = (payload, expected) => {
   const providerAmountMinor = toNumber(
     tx.amountMinor
     ?? tx.totalAmountMinor
-    ?? tx.paidAmountMinor,
+    ?? tx.paidAmountMinor
+    ?? tx.toPay,
   );
   if (
     expectedAmountMinor !== null

@@ -189,7 +189,8 @@ const resolvePaymentDeadlineTs = (paymentItem, splitPayment, fallbackTimeoutMs) 
     paymentItem?.deadlineAt
     || paymentItem?.expiresAt
     || splitPayment?.participantDeadlineAt
-    || splitPayment?.participantPaymentDeadlineAt,
+    || splitPayment?.participantPaymentDeadlineAt
+    || splitPayment?.deadlineAt,
   );
   if (explicitDeadlineTs !== null) {
     if (fallbackDeadlineTs !== null) {
