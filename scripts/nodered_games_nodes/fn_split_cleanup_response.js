@@ -13,6 +13,15 @@ items.forEach((item) => {
   byReason[reason] = (byReason[reason] || 0) + 1;
 });
 
+const internalScheduler = items.length > 0 && items.every((item) => item.internalScheduler === true);
+if (internalScheduler) {
+  try {
+    global.set("lk_split_cleanup_scheduler_lease_until", 0);
+  } catch (_error) {
+    // The lease expires after five minutes even if the context backend is unavailable.
+  }
+}
+
 msg.statusCode = 200;
 msg.headers = { "Content-Type": "application/json; charset=utf-8" };
 msg.payload = {
@@ -24,6 +33,7 @@ msg.payload = {
   byReason,
   now: new Date().toISOString(),
   items,
+  source: internalScheduler ? "scheduler" : "http",
 };
 
-return [msg, msg];
+return internalScheduler ? [null, msg] : [msg, msg];

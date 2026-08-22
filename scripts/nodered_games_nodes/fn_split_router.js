@@ -1004,6 +1004,49 @@ const buildSplitPaymentResponse = (ctx, primaryPayload, fallbackPayload) => {
   };
 };
 
+const bookingRowsForExercise = (payload, exerciseId) => {
+  const expectedExerciseId = toStr(exerciseId);
+  const seen = new Set();
+  return providerObjects(payload).filter((item) => {
+    const bookingLike = Boolean(
+      item.bookingId
+      || item.exerciseId
+      || item.exercise
+      || item.client
+      || item.paymentType
+      || item.spot !== undefined,
+    );
+    if (!bookingLike) return false;
+    const bookingId = pickId(item) || toStr(item.bookingId);
+    if (!bookingId || seen.has(bookingId)) return false;
+    const itemExerciseIds = providerIds(item, ["exerciseId", "exerciseIds", "exercise"]);
+    if (itemExerciseIds.length > 0 && !itemExerciseIds.includes(expectedExerciseId)) return false;
+    seen.add(bookingId);
+    return true;
+  });
+};
+
+const bookingMatchesCreateActor = (booking, ctx) => {
+  const expectedPhone = normalizePhone(ctx.clientPhone);
+  const actualPhone = providerPhone(booking);
+  const expectedClientId = toStr(ctx.clientId);
+  const clientIds = providerIds(booking, ["clientId", "client"]);
+  return Boolean(
+    (expectedPhone && actualPhone && expectedPhone === actualPhone)
+    || (expectedClientId && clientIds.includes(expectedClientId)),
+  );
+};
+
+const originalBookingFailure = (ctx, code, error, extra) => ({
+  code,
+  error,
+  providerStatus: Number(ctx.bookingFailure?.statusCode) || null,
+  providerPayload: ctx.bookingFailure?.payload || null,
+  exerciseId: toStr(ctx.exerciseId),
+  paymentRef: toStr(ctx.paymentRef),
+  ...extra,
+});
+
 const ctx = msg._splitCtx && typeof msg._splitCtx === "object" ? msg._splitCtx : null;
 if (!ctx) {
   return fail(500, "Split payment context is missing");
@@ -1044,6 +1087,27 @@ if (ctx.step === "token") {
 }
 
 if (!isOk(msg.statusCode)) {
+  if (ctx.step === "compensate_verify_exercise" && Number(msg.statusCode) === 404) {
+    return fail(502, "Viva booking failed; empty exercise was removed", originalBookingFailure(
+      ctx,
+      "SPLIT_BOOKING_FAILED_EXERCISE_COMPENSATED",
+      "Booking creation failed after exercise creation",
+      { compensationVerified: true },
+    ));
+  }
+  if (ctx.step === "compensate_delete_exercise") {
+    ctx.compensationDeleteStatus = Number(msg.statusCode) || null;
+    ctx.step = "compensate_verify_exercise";
+    return adminRequest(ctx, "GET", `/exercises/${encodeURIComponent(ctx.exerciseId)}`);
+  }
+  if (ctx.step === "reconcile_booking_after_failure") {
+    return fail(503, "Booking result is ambiguous; exercise was not deleted", originalBookingFailure(
+      ctx,
+      "SPLIT_BOOKING_RECONCILIATION_REQUIRED",
+      "Viva booking readback failed",
+      { retryable: true, destructiveRetryBlocked: true },
+    ));
+  }
   if (ctx.step === "pricing_policy") {
     return fail(503, "Не удалось проверить тариф раздельной оплаты", {
       code: "SPLIT_PRICING_POLICY_UNAVAILABLE",
@@ -1113,10 +1177,70 @@ if (!isOk(msg.statusCode)) {
       ctx.exercise = msg.payload;
       ctx.exerciseId = conflictExerciseId;
       ctx.reusedConflictingExercise = true;
+      ctx.ownsExercise = false;
       return buildBookingRequest(ctx);
     }
   }
+  if (
+    ctx.step === "create_booking"
+    && ctx.action === "create"
+    && ctx.ownsExercise === true
+    && toStr(ctx.exerciseId)
+  ) {
+    ctx.bookingFailure = {
+      statusCode: Number(msg.statusCode) || null,
+      payload: msg.payload || null,
+    };
+    ctx.step = "reconcile_booking_after_failure";
+    return adminRequest(
+      ctx,
+      "GET",
+      `/exercises/${encodeURIComponent(ctx.exerciseId)}/bookings`,
+    );
+  }
   return fail(msg.statusCode || 502, "Viva request failed", msg.payload || null);
+}
+
+if (ctx.step === "reconcile_booking_after_failure") {
+  const rows = bookingRowsForExercise(msg.payload, ctx.exerciseId);
+  const matchingRows = rows.filter((item) => bookingMatchesCreateActor(item, ctx));
+  if (matchingRows.length === 1) {
+    ctx.step = "create_booking";
+    ctx.bookingRecoveredByReadback = true;
+    msg.payload = matchingRows[0];
+  } else if (rows.length === 0) {
+    ctx.step = "compensate_delete_exercise";
+    return adminRequest(ctx, "DELETE", `/exercises/${encodeURIComponent(ctx.exerciseId)}`);
+  } else {
+    return fail(409, "Booking result is ambiguous; exercise was not deleted", originalBookingFailure(
+      ctx,
+      "SPLIT_BOOKING_RECONCILIATION_AMBIGUOUS",
+      "Viva returned zero or multiple actor matches with non-empty bookings",
+      {
+        bookingRows: rows.map((item) => pickId(item) || toStr(item.bookingId)).filter(Boolean),
+        matchingBookingRows: matchingRows.map((item) => pickId(item) || toStr(item.bookingId)).filter(Boolean),
+        destructiveRetryBlocked: true,
+      },
+    ));
+  }
+}
+
+if (ctx.step === "compensate_delete_exercise") {
+  ctx.compensationDeleteStatus = Number(msg.statusCode) || null;
+  ctx.step = "compensate_verify_exercise";
+  return adminRequest(ctx, "GET", `/exercises/${encodeURIComponent(ctx.exerciseId)}`);
+}
+
+if (ctx.step === "compensate_verify_exercise") {
+  return fail(503, "Booking failed and exercise compensation was not verified", originalBookingFailure(
+    ctx,
+    "SPLIT_EXERCISE_COMPENSATION_UNVERIFIED",
+    "Exercise still exists after compensation request",
+    {
+      compensationDeleteStatus: ctx.compensationDeleteStatus || null,
+      destructiveRetryBlocked: true,
+    },
+  ));
 }
 
 if (ctx.step === "confirm_transaction_lookup") {
@@ -1279,6 +1403,7 @@ if (ctx.step === "create_exercise") {
 
   ctx.exercise = msg.payload;
   ctx.exerciseId = exerciseId;
+  ctx.ownsExercise = true;
   if (!ctx.studioId && msg.payload?.studio?.id) {
     ctx.studioId = msg.payload.studio.id;
   }

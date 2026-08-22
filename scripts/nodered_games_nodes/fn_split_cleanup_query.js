@@ -25,6 +25,19 @@ const toBoolean = (value) => {
   return null;
 };
 
+const readEnv = (key) => {
+  try {
+    return toStr(env.get(key));
+  } catch (_error) {
+    return null;
+  }
+};
+
+const resolveLifecycleMode = () => {
+  const mode = String(readEnv("SPLIT_LIFECYCLE_V2_MODE") || "SHADOW").trim().toUpperCase();
+  return ["OFF", "SHADOW", "ENFORCE_NEW"].includes(mode) ? mode : "SHADOW";
+};
+
 const normalizeIntent = (value) => {
   const raw = toStr(value);
   if (!raw) return null;
@@ -63,16 +76,54 @@ const fail = (status, error, details) => {
 
 const query = msg.req?.query && typeof msg.req.query === "object" ? msg.req.query : {};
 const body = msg.payload && typeof msg.payload === "object" ? msg.payload : {};
+const internal = msg._splitCleanupInternal && typeof msg._splitCleanupInternal === "object"
+  ? msg._splitCleanupInternal
+  : null;
+const internalScheduler = internal?.source === "scheduler";
 const auth = msg._splitCleanupAuth && typeof msg._splitCleanupAuth === "object"
   ? msg._splitCleanupAuth
   : null;
-if (!auth || auth.verified !== true || (!toStr(auth.actorClientId) && !toStr(auth.actorPhoneNorm))) {
+if (
+  !internalScheduler
+  && (!auth || auth.verified !== true || (!toStr(auth.actorClientId) && !toStr(auth.actorPhoneNorm)))
+) {
   return fail(401, "Не удалось подтвердить авторизованного клиента");
+}
+
+const SCHEDULER_LEASE_KEY = "lk_split_cleanup_scheduler_lease_until";
+if (internalScheduler) {
+  const lifecycleMode = resolveLifecycleMode();
+  if (lifecycleMode === "OFF") {
+    msg.payload = {
+      ok: true,
+      source: "scheduler",
+      mode: lifecycleMode,
+      skipped: true,
+      reason: "feature_off",
+    };
+    return [null, null, msg];
+  }
+  msg._splitCleanupLifecycleMode = lifecycleMode;
+  const nowTs = Date.now();
+  const leaseUntil = Number(global.get(SCHEDULER_LEASE_KEY) || 0);
+  if (Number.isFinite(leaseUntil) && leaseUntil > nowTs) {
+    msg.payload = {
+      ok: true,
+      source: "scheduler",
+      skipped: true,
+      reason: "lease_active",
+      leaseUntil: new Date(leaseUntil).toISOString(),
+    };
+    return [null, null, msg];
+  }
+  global.set(SCHEDULER_LEASE_KEY, nowTs + 5 * 60 * 1000);
 }
 
 const gameId = toStr(query.gameId ?? body.gameId);
 const force = toBoolean(query.force ?? body.force) === true;
-const dryRun = toBoolean(query.dryRun ?? body.dryRun) === true;
+const dryRun = internalScheduler && msg._splitCleanupLifecycleMode !== "ENFORCE_NEW"
+  ? true
+  : toBoolean(query.dryRun ?? body.dryRun) === true;
 const intent = normalizeIntent(query.intent ?? body.intent);
 const preferredRefundMethod = normalizeRefundMethod(query.refundMethod ?? body.refundMethod);
 const cancellationActionId = normalizeCancellationActionId(
@@ -116,9 +167,12 @@ msg._splitCleanupRequest = {
   preferredRefundMethod,
   cancellationActionId,
   actorBookingId,
-  actorClientId: toStr(auth.actorClientId),
-  actorPhoneNorm: toStr(auth.actorPhoneNorm),
+  actorClientId: internalScheduler ? null : toStr(auth.actorClientId),
+  actorPhoneNorm: internalScheduler ? null : toStr(auth.actorPhoneNorm),
   allowForceGameCancel: intent === "cancel_game",
+  internalScheduler,
+  schedulerLeaseKey: internalScheduler ? SCHEDULER_LEASE_KEY : null,
+  lifecycleMode: internalScheduler ? msg._splitCleanupLifecycleMode : null,
 };
 msg.payload = mongoQuery;
 

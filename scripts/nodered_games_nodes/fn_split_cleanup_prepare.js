@@ -395,7 +395,13 @@ rows.forEach((game) => {
         playerSnapshot: item.playerSnapshot ? clone(item.playerSnapshot) : null,
         bookingIds: item.bookingIds,
         deadlineAt: item.deadlineAt,
+        amountMinor: toNumber(item.paymentItem.amountMinor) !== null
+          ? Math.round(toNumber(item.paymentItem.amountMinor))
+          : (toNumber(item.paymentItem.amount) !== null
+            ? Math.round(toNumber(item.paymentItem.amount) * 100)
+            : null),
       })),
+      internalScheduler: request.internalScheduler === true,
     });
     return;
   }
@@ -500,6 +506,7 @@ rows.forEach((game) => {
       : (missingExerciseDate ? "missing_exercise_date" : null),
     dryRun,
     preparedAt: nowIso,
+    internalScheduler: request.internalScheduler === true,
   });
 });
 
@@ -527,6 +534,11 @@ if (tasks.length === 0) {
     now: nowIso,
     items: [],
   };
+  if (request.internalScheduler === true) {
+    const leaseKey = toStr(request.schedulerLeaseKey);
+    if (leaseKey) global.set(leaseKey, 0);
+    return [null, null, msg];
+  }
   return [null, msg, null];
 }
 

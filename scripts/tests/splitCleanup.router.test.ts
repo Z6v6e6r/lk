@@ -290,7 +290,12 @@ test("cancelled actor booking is accepted idempotently without another refund wr
 test("participant timeout cancel uses a client-scoped Admin probe after transaction check", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
     statusCode: 200,
-    payload: { status: "FAILED" },
+    payload: {
+      id: "tx-1",
+      status: "UNPAID",
+      client: { id: "client-1" },
+      products: [{ bookingIds: ["booking-1"] }],
+    },
     _splitCleanupCtx: {
       step: "check_timeout_transaction",
       mode: "PARTICIPANT_TIMEOUT",
@@ -322,7 +327,13 @@ test("participant timeout cancel uses a client-scoped Admin probe after transact
 test("participant timeout never restores an exact UNPAID transaction", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
     statusCode: 200,
-    payload: { transactionId: "tx-unpaid", transactionStatus: "UNPAID", toPay: 0 },
+    payload: {
+      transactionId: "tx-unpaid",
+      transactionStatus: "UNPAID",
+      toPay: 0,
+      client: { id: "client-1" },
+      products: [{ bookingIds: ["booking-unpaid"] }],
+    },
     _splitCleanupCtx: {
       step: "check_timeout_transaction",
       mode: "PARTICIPANT_TIMEOUT",
@@ -343,10 +354,15 @@ test("participant timeout never restores an exact UNPAID transaction", () => {
   assert.equal(ctx.step, "cancel_booking_probe");
 });
 
-test("participant timeout never restores PAID evidence for another transaction", () => {
+test("participant timeout blocks PAID evidence for another transaction", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
     statusCode: 200,
-    payload: { transactionId: "tx-other", transactionStatus: "PAID" },
+    payload: {
+      transactionId: "tx-other",
+      transactionStatus: "PAID",
+      client: { id: "client-1" },
+      products: [{ bookingIds: ["booking-expected"] }],
+    },
     _splitCleanupCtx: {
       step: "check_timeout_transaction",
       mode: "PARTICIPANT_TIMEOUT",
@@ -362,15 +378,21 @@ test("participant timeout never restores PAID evidence for another transaction",
     },
   }) as unknown[];
 
-  const requestMsg = asRecord(out[0]);
-  const ctx = asRecord(requestMsg._splitCleanupCtx);
-  assert.equal(ctx.step, "cancel_booking_probe");
+  assert.equal(out[0], null);
+  const summary = asRecord(asRecord(out[2]).payload);
+  assert.equal(summary.blockLocalMutation, true);
+  assert.equal(summary.bookingFailedCount, 1);
 });
 
 test("participant timeout restores only exact PAID transaction evidence", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_cleanup_router.js", {
     statusCode: 200,
-    payload: { transactionId: "tx-exact", transactionStatus: "PAID" },
+    payload: {
+      transactionId: "tx-exact",
+      transactionStatus: "PAID",
+      client: { id: "client-1" },
+      products: [{ bookingIds: ["booking-exact"] }],
+    },
     _splitCleanupCtx: {
       step: "check_timeout_transaction",
       mode: "PARTICIPANT_TIMEOUT",

@@ -1,5 +1,14 @@
 # 🔴 Node-RED Потоки — Справочник
 
+## Split booking lifecycle v2
+
+- Candidate builder: `scripts/patch_live_split_lifecycle_v2.mjs`.
+- Creation router: `scripts/nodered_games_nodes/fn_split_router.js` performs booking read-back and owned-empty-exercise compensation.
+- Cleanup query, prepare, router, response: `fn_split_cleanup_query.js`, `fn_split_cleanup_prepare.js`, `fn_split_cleanup_router.js`, `fn_split_cleanup_response.js`.
+- Scheduler: inject `lk_split_cleanup_scheduler_20260822`, every 120 seconds, five-minute overlap lease.
+- Runtime mode: `SPLIT_LIFECYCLE_V2_MODE=OFF|SHADOW|ENFORCE_NEW`; default `SHADOW`.
+- Full contract and acceptance tests: `docs/SPLIT_LIFECYCLE_V2.md`.
+
 ## Что это и зачем
 
 Node-RED — визуальный инструмент автоматизации. В этом проекте он выступает бэкенд-слоем между фронтендом (личный кабинет) и базой данных (MongoDB). Потоки обрабатывают HTTP-запросы от фронта и MAX-бота.

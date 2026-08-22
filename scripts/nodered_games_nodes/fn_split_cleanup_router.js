@@ -146,7 +146,35 @@ const extractTransactionPayload = (payload) => {
   return payload;
 };
 
-const isPaidTransactionPayload = (payload, expectedTransactionId) => {
+const collectProviderIds = (payload, keys) => {
+  const wanted = new Set(keys);
+  const ids = new Set();
+  const seen = new Set();
+  const visit = (value, depth) => {
+    if (!value || typeof value !== "object" || seen.has(value) || depth > 8) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, depth + 1));
+      return;
+    }
+    Object.entries(value).forEach(([key, candidate]) => {
+      if (wanted.has(key)) {
+        const values = Array.isArray(candidate) ? candidate : [candidate];
+        values.forEach((entry) => {
+          const id = toStr(entry && typeof entry === "object"
+            ? (entry.id || entry.uuid || entry.bookingId || entry.exerciseId || entry.clientId)
+            : entry);
+          if (id) ids.add(id);
+        });
+      }
+      visit(candidate, depth + 1);
+    });
+  };
+  visit(payload, 0);
+  return Array.from(ids);
+};
+
+const classifyTransactionPayload = (payload, expected) => {
   const tx = extractTransactionPayload(payload);
   const status = normalizeTransactionStatus(
     tx.status
@@ -159,9 +187,43 @@ const isPaidTransactionPayload = (payload, expectedTransactionId) => {
     || tx.transaction_id
     || tx.id,
   );
-  return status === "PAID"
-    && Boolean(transactionId)
-    && transactionId === toStr(expectedTransactionId);
+  if (!transactionId || transactionId !== toStr(expected.transactionId)) {
+    return { kind: "MANUAL_REVIEW", status, reason: "transaction_id_mismatch" };
+  }
+  const bookingIds = collectProviderIds(payload, ["bookingId", "bookingIds", "bookings"]);
+  if (!bookingIds.includes(toStr(expected.bookingId))) {
+    return { kind: "MANUAL_REVIEW", status, reason: "booking_binding_missing", bookingIds };
+  }
+  const clientIds = collectProviderIds(payload, ["clientId", "clientIds", "client"]);
+  if (toStr(expected.clientId) && clientIds.length > 0 && !clientIds.includes(toStr(expected.clientId))) {
+    return { kind: "MANUAL_REVIEW", status, reason: "client_binding_mismatch", clientIds };
+  }
+  const expectedAmountMinor = toNumber(expected.amountMinor);
+  const providerAmountMinor = toNumber(
+    tx.amountMinor
+    ?? tx.totalAmountMinor
+    ?? tx.paidAmountMinor,
+  );
+  if (
+    expectedAmountMinor !== null
+    && providerAmountMinor !== null
+    && Math.round(expectedAmountMinor) !== Math.round(providerAmountMinor)
+  ) {
+    return {
+      kind: "MANUAL_REVIEW",
+      status,
+      reason: "amount_mismatch",
+      expectedAmountMinor: Math.round(expectedAmountMinor),
+      providerAmountMinor: Math.round(providerAmountMinor),
+    };
+  }
+  if (status === "PAID") return { kind: "PAID", status, transactionId, bookingIds };
+  if (status === "UNPAID") return { kind: "UNPAID", status, transactionId, bookingIds };
+  if (status === "WAITING") return { kind: "WAITING", status, transactionId, bookingIds };
+  if (["REFUND", "PARTIALLY_REFUNDED", "PARTIALLY_PAID"].includes(status)) {
+    return { kind: "MANUAL_REVIEW", status, reason: "non_terminal_or_refunded_status" };
+  }
+  return { kind: "MANUAL_REVIEW", status, reason: "unknown_transaction_status" };
 };
 
 const buildTimedOutPaymentByBooking = (values) => {
@@ -1092,7 +1154,7 @@ const nextBookingRequest = (ctx) => {
   const transactionId = toStr(queueItem.transactionId) || toStr(timeoutMeta?.transactionId) || null;
   const paymentRef = toStr(queueItem.paymentRef) || toStr(timeoutMeta?.paymentRef) || null;
 
-  if (ctx.mode === "PARTICIPANT_TIMEOUT" && transactionId) {
+  if (ctx.mode === "PARTICIPANT_TIMEOUT") {
     ctx.currentBookingId = bookingId;
     ctx.currentClientId = effectiveClientId;
     ctx.currentTimedOutPayment = {
@@ -1105,6 +1167,21 @@ const nextBookingRequest = (ctx) => {
       paymentRef,
       clientId: effectiveClientId || timeoutMeta?.clientId || null,
     };
+    if (!transactionId) {
+      ctx.blockReason = ctx.blockReason || "timeout_transaction_id_missing";
+      appendTrace(ctx, {
+        step: "check_timeout_transaction_blocked",
+        bookingId,
+        clientId: effectiveClientId || null,
+        reason: "timeout_transaction_id_missing",
+      });
+      return pushBookingFailureAndContinue(ctx, {
+        bookingId,
+        clientId: effectiveClientId,
+        method: "transaction_recheck",
+        unsupportedReason: "Missing exact Viva transaction id",
+      });
+    }
     ctx.step = "check_timeout_transaction";
     appendTrace(ctx, {
       step: "check_timeout_transaction_request",
@@ -1420,6 +1497,7 @@ const finalizeTask = (ctx) => {
     timedOutPayments: asArray(ctx.timedOutPayments),
     trace: clone(ctx.trace || []),
     finishedAt: nowIso,
+    internalScheduler: ctx.internalScheduler === true,
   };
 
   const safeBaseMsg = Object.assign({}, msg);
@@ -1546,6 +1624,7 @@ if (!ctxFromMsg) {
     blockLocalMutation: payload?.blockLocalMutation === true,
     blockReason: toStr(payload?.blockReason),
     forceVivaErrors: false,
+    internalScheduler: payload?.internalScheduler === true,
   };
   if (initialCtx.mode === "PARTICIPANT_TIMEOUT") {
     initialCtx.exerciseId = null;
@@ -1651,12 +1730,41 @@ if (ctx.step === "check_timeout_transaction") {
       if (exerciseReq) return exerciseReq;
       return finalizeTask(ctx);
     }
-    return startGenericBookingCancel(ctx, bookingId, clientId, {
-      fallback: "missing_timeout_transaction_id",
+    ctx.blockReason = ctx.blockReason || "timeout_transaction_id_missing";
+    return pushBookingFailureAndContinue(ctx, {
+      bookingId,
+      clientId,
+      method: "transaction_recheck",
+      unsupportedReason: "Missing exact Viva transaction id",
     });
   }
 
-  if (isOk(statusCode) && isPaidTransactionPayload(msg.payload, transactionId)) {
+  if (!isOk(statusCode)) {
+    ctx.blockReason = ctx.blockReason || "timeout_transaction_readback_failed";
+    appendTrace(ctx, {
+      step: "check_timeout_transaction_failed_closed",
+      bookingId,
+      clientId,
+      transactionId,
+      statusCode,
+    });
+    return pushBookingFailureAndContinue(ctx, {
+      bookingId,
+      clientId,
+      method: "transaction_recheck",
+      statusCode,
+      response: msg.payload || null,
+    });
+  }
+
+  const evidence = classifyTransactionPayload(msg.payload, {
+    transactionId,
+    bookingId,
+    clientId,
+    amountMinor: timeoutMeta?.amountMinor,
+  });
+
+  if (evidence.kind === "PAID") {
     recoverPaidTimedOutState(ctx, timeoutMeta, msg.payload || null);
     appendTrace(ctx, {
       step: "check_timeout_transaction_paid",
@@ -1684,8 +1792,45 @@ if (ctx.step === "check_timeout_transaction") {
     return finalizeTask(ctx);
   }
 
+  if (evidence.kind === "WAITING") {
+    ctx.step = "expire_timeout_transaction";
+    appendTrace(ctx, {
+      step: "expire_timeout_transaction_request",
+      bookingId,
+      clientId,
+      transactionId,
+      transactionStatus: evidence.status,
+    });
+    return adminRequest(
+      ctx,
+      "POST",
+      `/transactions/${encodeURIComponent(transactionId)}/expire`,
+      undefined,
+    );
+  }
+
+  if (evidence.kind !== "UNPAID") {
+    ctx.blockReason = ctx.blockReason || "timeout_transaction_manual_review";
+    appendTrace(ctx, {
+      step: "check_timeout_transaction_manual_review",
+      bookingId,
+      clientId,
+      transactionId,
+      statusCode,
+      evidence,
+    });
+    return pushBookingFailureAndContinue(ctx, {
+      bookingId,
+      clientId,
+      method: "transaction_recheck",
+      statusCode,
+      unsupportedReason: `Transaction evidence requires manual review: ${evidence.reason || evidence.status || "unknown"}`,
+      response: msg.payload || null,
+    });
+  }
+
   appendTrace(ctx, {
-    step: isOk(statusCode) ? "check_timeout_transaction_not_paid" : "check_timeout_transaction_failed",
+    step: "check_timeout_transaction_unpaid_verified",
     bookingId,
     clientId,
     transactionId,
@@ -1694,9 +1839,97 @@ if (ctx.step === "check_timeout_transaction") {
   });
 
   return startGenericBookingCancel(ctx, bookingId, clientId, {
-    fallback: "transaction_not_paid",
+    fallback: "transaction_unpaid_verified",
     transactionId,
     statusCode,
+  });
+}
+
+if (ctx.step === "expire_timeout_transaction") {
+  const transactionId = toStr(ctx.currentTimedOutPayment?.transactionId);
+  const bookingId = toStr(ctx.currentBookingId);
+  const clientId = toStr(ctx.currentClientId) || null;
+  if (!transactionId || !bookingId) {
+    ctx.blockReason = ctx.blockReason || "timeout_transaction_context_missing";
+    return pushBookingFailureAndContinue(ctx, {
+      bookingId,
+      clientId,
+      method: "transaction_expire",
+      unsupportedReason: "Transaction expiration context is incomplete",
+    });
+  }
+  appendTrace(ctx, {
+    step: "expire_timeout_transaction_readback",
+    bookingId,
+    clientId,
+    transactionId,
+    expireStatusCode: Number(msg.statusCode) || null,
+  });
+  ctx.step = "check_timeout_transaction_after_expire";
+  return adminRequest(
+    ctx,
+    "GET",
+    `/transactions/${encodeURIComponent(transactionId)}`,
+    undefined,
+  );
+}
+
+if (ctx.step === "check_timeout_transaction_after_expire") {
+  const bookingId = toStr(ctx.currentBookingId);
+  const clientId = toStr(ctx.currentClientId) || null;
+  const timeoutMeta = ctx.currentTimedOutPayment && typeof ctx.currentTimedOutPayment === "object"
+    ? ctx.currentTimedOutPayment
+    : null;
+  const transactionId = toStr(timeoutMeta?.transactionId);
+  const statusCode = Number(msg.statusCode);
+  if (!bookingId || !transactionId || !isOk(statusCode)) {
+    ctx.blockReason = ctx.blockReason || "timeout_transaction_expire_readback_failed";
+    return pushBookingFailureAndContinue(ctx, {
+      bookingId,
+      clientId,
+      method: "transaction_expire_readback",
+      statusCode,
+      response: msg.payload || null,
+    });
+  }
+  const evidence = classifyTransactionPayload(msg.payload, {
+    transactionId,
+    bookingId,
+    clientId,
+    amountMinor: timeoutMeta?.amountMinor,
+  });
+  if (evidence.kind === "PAID") {
+    recoverPaidTimedOutState(ctx, timeoutMeta, msg.payload || null);
+    return pushBookingSuccessAndContinue(ctx, {
+      bookingId,
+      clientId,
+      method: "transaction_expire_readback",
+      statusCode,
+    });
+  }
+  if (evidence.kind === "UNPAID") {
+    return startGenericBookingCancel(ctx, bookingId, clientId, {
+      fallback: "transaction_unpaid_after_expire_verified",
+      transactionId,
+      statusCode,
+    });
+  }
+  ctx.blockReason = ctx.blockReason || "timeout_transaction_expire_manual_review";
+  appendTrace(ctx, {
+    step: "expire_timeout_transaction_manual_review",
+    bookingId,
+    clientId,
+    transactionId,
+    statusCode,
+    evidence,
+  });
+  return pushBookingFailureAndContinue(ctx, {
+    bookingId,
+    clientId,
+    method: "transaction_expire_readback",
+    statusCode,
+    unsupportedReason: `Transaction remained non-final after expire: ${evidence.status || evidence.reason || "unknown"}`,
+    response: msg.payload || null,
   });
 }
 
