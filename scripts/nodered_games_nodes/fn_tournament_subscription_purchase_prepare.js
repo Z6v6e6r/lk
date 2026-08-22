@@ -670,8 +670,10 @@ msg._summerSubscriptionCtx = {
   studioId: toStr(global.get("summer_subscription_studio_id")) || null,
 };
 
+const counterQuery = buildCounterQuery(activeCounter);
 const dbMsg = Object.assign({}, msg, {
-  query: buildCounterQuery(activeCounter),
+  query: counterQuery,
+  payload: counterQuery,
 });
 
 const debugMsg = Object.assign({}, msg, {

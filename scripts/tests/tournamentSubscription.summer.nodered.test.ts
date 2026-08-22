@@ -1927,6 +1927,61 @@ test("Piter purchase ignores a browser productId and selects the current server 
   assert.equal(selectedCtx.discountMinor, 3300000);
 });
 
+test("Piter purchase counts existing paid sales in Mongo before reporting reservation balances", () => {
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+    {
+      payload: {
+        clientPhone: "79990000000",
+        counterKey: "piter_friendship",
+        paymentRef: "piter-existing-paid-balance",
+      },
+      req: { query: {} },
+    },
+    PITER_PRODUCT_GLOBALS,
+  ) as unknown[];
+  const preparedDbMsg = asRecord(prepared[0]);
+  const expectedCounterQuery = {
+    inventoryId: "piter_friendship_12m_2026_v1",
+    counterKey: "piter_friendship",
+  };
+  assert.deepEqual(preparedDbMsg.query, expectedCounterQuery);
+  assert.deepEqual(preparedDbMsg.payload, expectedCounterQuery);
+
+  const limited = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
+    {
+      _summerSubscriptionCtx: asRecord(preparedDbMsg._summerSubscriptionCtx),
+      payload: buildPiterRows(2),
+    },
+    PITER_PRODUCT_GLOBALS,
+  ) as unknown[];
+  const selectedCtx = asRecord(asRecord(limited[0])._summerSubscriptionCtx);
+  assert.equal(selectedCtx.remainingBefore, 398);
+  assert.equal(selectedCtx.batchRemainingBefore, 98);
+  assert.equal(selectedCtx.batchIndex, 1);
+  assert.equal(selectedCtx.priceMinor, 1980000);
+
+  selectedCtx.step = "create_transaction";
+  const persisted = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 201,
+      payload: {
+        id: "piter-existing-paid-viva-transaction",
+        paymentUrl: "https://pay.example.test/piter-existing-paid",
+        toPay: 1980000,
+      },
+      _summerSubscriptionCtx: selectedCtx,
+    },
+  ) as unknown[];
+  const response = asRecord(asRecord(persisted[2]).payload);
+  assert.equal(response.remainingBefore, 398);
+  assert.equal(response.remainingAfterReservation, 397);
+  assert.equal(response.batchRemainingBefore, 98);
+  assert.equal(response.batchRemainingAfterReservation, 97);
+});
+
 test("Piter transaction uses the active tier discount and persists the advertised amount", () => {
   const prepared = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
