@@ -2119,6 +2119,47 @@ test("regional annual checkout blocks Viva activation before 1 October", () => {
   }
 });
 
+test("regional annual checkout blocks Viva activation after 1 October", () => {
+  const out = withFixedNow("2026-08-22T09:00:00.000Z", () => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: [{
+        id: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+        name: "Падел.Дружба.Питер — годовая",
+        cost: 5680000,
+        productType: "SUBSCRIPTION",
+        activationDays: 365,
+        validityDays: 365,
+        visits: 365,
+      }],
+      _summerSubscriptionCtx: {
+        action: "purchase",
+        step: "load_products",
+        token: "token-1",
+        saleType: "tiered_direct_product",
+        counterKey: "piter_friendship",
+        clientPhone: "79990000000",
+        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+        productName: "Падел.Дружба.Питер — годовая",
+        productCostMinor: 5680000,
+        priceMinor: 1980000,
+        batchIndex: 1,
+      },
+    },
+  )) as unknown[];
+
+  assert.equal(out[0], null);
+  const error = asRecord(out[2]);
+  const details = asRecord(asRecord(error.payload).details);
+  assert.equal(error.statusCode, 503);
+  assert.equal(details.code, "REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE");
+  assert.equal(details.counterKey, "piter_friendship");
+  assert.equal(details.purchaseDate, "2026-08-22");
+  assert.equal(details.projectedAutoActivationDate, "2027-08-22");
+  assert.equal(details.activationNotBeforeDate, "2026-10-01");
+});
+
 test("regional annual checkout rejects missing or coerced provider lifecycle fields", () => {
   for (const product of [
     {

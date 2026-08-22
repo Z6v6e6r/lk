@@ -38,19 +38,41 @@ is allowed only when all conditions are true:
 1. `productType` is exactly `SUBSCRIPTION`;
 2. `activationDays`, `validityDays` and `visits` are JSON integers;
 3. `validityDays=365` and `visits=365`;
-4. `purchaseDate(Europe/Moscow) + activationDays >= 2026-10-01`;
+4. `purchaseDate(Europe/Moscow) + activationDays = 2026-10-01`;
 5. the existing exact product, price and discount checks also pass.
 
-Missing, string-coerced or early-activation fields fail closed with
+Missing, string-coerced, early-activation or late-activation fields fail closed with
 `REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE`. No Viva transaction is
 created. Successful preflight fields are copied into the local reservation row
 so the later payment read-back can prove which lifecycle was sold.
 
-The guard does not choose or mutate `activationDays`. A candidate value such as
-`365` keeps provider auto activation after the fixed deadline for all pre-launch
-sales; the final value requires a separate Viva mutation gate and a controlled
-NEW-subscription canary proving that a first booking activates the provider
-instance.
+The guard does not choose or mutate `activationDays`. A value that projects an
+earlier or later date fails closed: accepting a later date would violate the
+fixed fallback date just as accepting an earlier date would. The final value
+requires a separate Viva mutation gate and a controlled NEW-subscription canary
+proving that a first booking activates the provider instance.
+
+## Read-only sales drift audit
+
+The regional sales audit consumes explicit local JSON exports only. It does not
+read Node-RED credentials, call Viva or MongoDB, write a report file, or expose
+an apply mode:
+
+```bash
+npm run subscriptions:audit-regional-sales -- \
+  --provider-file /absolute/path/viva-transactions.json \
+  --ledger-file /absolute/path/lk-sales.json \
+  --counter-key piter_friendship \
+  --product-id <exact-viva-product-id> \
+  --inventory-id piter_friendship_12m_2026_v1 \
+  --batch-size 100 \
+  --total-limit 400
+```
+
+The JSON result contains counts and truncated SHA-256 identifiers only. Any
+missing ledger rows remain a review plan; this command cannot mutate either
+system. A live exact reconciliation still requires a separately obtained safe
+Viva export and a separate approval for every later mutation.
 
 ## Existing Piter instance: dry-run decision
 
@@ -73,7 +95,7 @@ correction is provider-supported reset/reissue, not an invented API call.
 5. Preserve the paid amount, receipt/transaction link and one-subscription-per-
    client invariant. Do not silently create a second paid entitlement.
 6. Require read-back of a single replacement in `NEW`, matching the exact
-   product/client, with provider auto activation no earlier than 2026-10-01.
+   product/client, with provider auto activation exactly on 2026-10-01.
 7. Only then create a CUP `PENDING_ACTIVATION` instance pinned to the published
    policy digest and verified provider mapping.
 
