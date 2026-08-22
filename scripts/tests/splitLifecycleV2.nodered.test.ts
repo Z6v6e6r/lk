@@ -348,6 +348,50 @@ test("real scheduler payload reaches only the exact UNPAID booking cancel probe"
     "https://api.vivacrm.ru/api/v1/clients/client-1/bookings/booking-1/cancel",
   );
   assert.equal(cancelProbe[0]?._splitCleanupCtx?.step, "cancel_booking_probe");
+
+  const cancelRequest = runNodeRedFunction(cleanupRouter, {
+    ...cancelProbe[0],
+    statusCode: 200,
+    payload: {
+      cancellationOptions: {
+        money: { available: true },
+        cancellationOnly: { available: true },
+      },
+    },
+  }, { globalValues }) as Array<Record<string, any> | null>;
+  assert.equal(cancelRequest[0]?.method, "PUT");
+  assert.equal(
+    cancelRequest[0]?.url,
+    "https://api.vivacrm.ru/api/v1/clients/client-1/bookings/booking-1/cancel",
+  );
+  assert.deepEqual(cancelRequest[0]?.payload, {
+    refundMethod: "NONE",
+    cancelExercise: false,
+  });
+  assert.equal(cancelRequest[0]?._splitCleanupCtx?.selectedRefundMethod, "NONE");
+  assert.equal(cancelRequest[0]?._splitCleanupCtx?.step, "cancel_booking");
+});
+
+test("verified UNPAID fails closed when Viva offers only refund options", () => {
+  const out = runNodeRedFunction(cleanupRouter, {
+    statusCode: 200,
+    payload: {
+      cancellationOptions: {
+        money: { available: true },
+        deposit: { available: true },
+      },
+    },
+    _splitCleanupCtx: {
+      ...cleanupContext("cancel_booking_probe"),
+      currentTransactionUnpaidVerified: true,
+    },
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0], null);
+  const summary = out[2]?.payload || out[3]?.payload;
+  assert.equal(summary?.blockLocalMutation, true);
+  assert.equal(summary?.blockReason, "verified_unpaid_cancellation_only_unavailable");
+  assert.equal(summary?.upstreamMutationsAttempted, 0);
 });
 
 test("WAITING transaction is expired and then read back before cancellation", () => {
@@ -381,6 +425,24 @@ test("WAITING transaction is expired and then read back before cancellation", ()
   }) as Array<Record<string, any> | null>;
   assert.equal(cancel[0]?.method, "GET");
   assert.match(cancel[0]?.url || "", /\/bookings\/booking-1\/cancel$/);
+  assert.equal(cancel[0]?._splitCleanupCtx?.currentTransactionUnpaidVerified, true);
+
+  const cancelRequest = runNodeRedFunction(cleanupRouter, {
+    ...cancel[0],
+    statusCode: 200,
+    payload: {
+      cancellationOptions: {
+        money: { available: true },
+        cancellationOnly: { available: true },
+      },
+    },
+  }) as Array<Record<string, any> | null>;
+  assert.equal(cancelRequest[0]?.method, "PUT");
+  assert.deepEqual(cancelRequest[0]?.payload, {
+    refundMethod: "NONE",
+    cancelExercise: false,
+  });
+  assert.equal(cancelRequest[0]?._splitCleanupCtx?.selectedRefundMethod, "NONE");
 });
 
 test("provider error, partial payment and mismatched booking all fail closed", () => {

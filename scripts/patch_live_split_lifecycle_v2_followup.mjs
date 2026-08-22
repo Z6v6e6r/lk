@@ -26,7 +26,7 @@ export const CONTRACT = Object.freeze({
       name: "Route split cleanup action",
       source: "fn_split_cleanup_router.js",
       beforeFuncSha256: "6b1eb915e6dd6da8977df8968a565946889b187ea9cdb1e15402c1caa3ec4381",
-      afterFuncSha256: "b561ab102803cb5943fabb7b3ad2fcab8d83bbed9270552d22127dd8868ee9da",
+      afterFuncSha256: "676a2caff25cb948fb791e69c98dbdb58431f861957ef21fb9f481fc13bb3186",
     },
   ],
 });

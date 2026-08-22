@@ -907,6 +907,22 @@ const pickBookingCancellationRequest = (ctx, bookingId, clientId, payload) => {
   const preferredRefundMethod = resolvePreferredRefundMethod(ctx);
   const cancellationActionId = normalizeCancellationActionId(ctx.cancellationActionId);
 
+  if (ctx.currentTransactionUnpaidVerified === true) {
+    if (!options.cancellationOnly) {
+      return {
+        unsupportedReason: "Для подтверждённой неоплаченной транзакции недоступна отмена без возврата",
+        unsupportedCode: "verified_unpaid_cancellation_only_unavailable",
+      };
+    }
+    return buildScopedBookingCancelRequest(ctx, bookingId, clientId, {
+      endUserPayload: {},
+      adminRefundMethod: "NONE",
+      label: "delete_verified_unpaid",
+      refundMethod: "NONE",
+      refundMessage: "Неоплаченная запись отменена без возврата средств.",
+    });
+  }
+
   if (preferredRefundMethod === "DEPOSIT") {
     if (!options.deposit) {
       return {
@@ -1160,6 +1176,7 @@ const nextBookingRequest = (ctx) => {
   const effectiveClientId = clientId || fallbackClientId || null;
   const transactionId = toStr(queueItem.transactionId) || toStr(timeoutMeta?.transactionId) || null;
   const paymentRef = toStr(queueItem.paymentRef) || toStr(timeoutMeta?.paymentRef) || null;
+  ctx.currentTransactionUnpaidVerified = false;
 
   if (ctx.mode === "PARTICIPANT_TIMEOUT") {
     ctx.currentBookingId = bookingId;
@@ -1845,6 +1862,8 @@ if (ctx.step === "check_timeout_transaction") {
     response: clone(msg.payload || null),
   });
 
+  ctx.currentTransactionUnpaidVerified = true;
+
   return startGenericBookingCancel(ctx, bookingId, clientId, {
     fallback: "transaction_unpaid_verified",
     transactionId,
@@ -1915,6 +1934,7 @@ if (ctx.step === "check_timeout_transaction_after_expire") {
     });
   }
   if (evidence.kind === "UNPAID") {
+    ctx.currentTransactionUnpaidVerified = true;
     return startGenericBookingCancel(ctx, bookingId, clientId, {
       fallback: "transaction_unpaid_after_expire_verified",
       transactionId,
