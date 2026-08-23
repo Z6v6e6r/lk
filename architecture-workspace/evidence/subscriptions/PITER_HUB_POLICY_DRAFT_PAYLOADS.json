@@ -1,6 +1,9 @@
 {
   "schemaVersion": 1,
   "status": "DRAFT_ONLY",
+  "historicalOnly": true,
+  "doNotPublish": true,
+  "supersededBy": "architecture-workspace/evidence/subscriptions/PITER_HUB_ACTIVATION_PACKET_20260823.json",
   "mutationAllowed": false,
   "preparedAt": "2026-08-20",
   "cupContract": {

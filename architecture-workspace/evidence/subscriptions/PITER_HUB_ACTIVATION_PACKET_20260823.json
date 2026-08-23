@@ -1,0 +1,203 @@
+{
+  "schemaVersion": 1,
+  "status": "PREPARED_NOT_APPLIED",
+  "mutationAllowed": false,
+  "preparedAt": "2026-08-23",
+  "scope": ["piter_friendship", "network_friendship"],
+  "sourcePins": {
+    "lkOriginMainSha": "af798452c118406e4fbe545ca3914575346e482f",
+    "publicLkRelease": {
+      "version": "20260822T152225Z",
+      "sourceCommit": "430e39a9122db7f6833a6a5ae4132fdc9f43e4ae",
+      "sourceDirty": false
+    },
+    "nodeRed": {
+      "host": "lk-primary-147",
+      "flowSha256": "0cd277f345e03ccb42e2dd2ba236cbfe5d72f59cf80a39e6815be7344007dfeb",
+      "managedFunctionSha256": {
+        "prepare": "51c7b349a18ea04300fcc8649d87601e98c3952e6c57c6cb52ae35e2cf689e15",
+        "router": "11c4b80c2624ad97fc83f634139d0db7d36aebb8df8a525bdc7baae3e9bae0fd",
+        "evaluator": "47c5e8b751e2379a27ed969aaf29e82a84e6dc8472a0235bb05052e5a715c853",
+        "blocker": "0fcd9e7adcf983b061201297329136702d10fce4c65647aeb67cec0c71a16a7f",
+        "finalize": "71647c9058d58d5e81cf910ca2ad009341a10729f3dfecb70ac1b97387931636"
+      }
+    },
+    "cup": {
+      "releaseSha": "d5831753925e114129d8a8246ef1a4734161a1f5",
+      "releasePath": "/opt/ph-admin-releases/p31-d583175-20260822T130159MSK",
+      "candidateSource": "src/subscriptions/annual-subscription-policy-v2-candidate.ts",
+      "checkCommand": "npm run subscriptions:annual-v2:check"
+    }
+  },
+  "productionAudit": {
+    "checkedAt": "2026-08-23T06:25:16.480Z",
+    "subscriptionTypes": 3,
+    "policyVersions": 3,
+    "providerMappings": 0,
+    "policyPublications": 0,
+    "subscriptionInstances": 0,
+    "usageLedgerEvents": 0,
+    "runtimeFlagsEnabled": [],
+    "runtimeFlagsDisabled": [
+      "SUBSCRIPTIONS_RUNTIME_CONTRACTS_ENABLED",
+      "SUBSCRIPTIONS_RUNTIME_CONTEXT_ENABLED",
+      "SUBSCRIPTIONS_ACTIVATION_ENABLED",
+      "SUBSCRIPTIONS_ACTIVATION_DEADLINE_WORKER_ENABLED",
+      "SUBSCRIPTIONS_PUBLICATION_PREVIEW_ENABLED",
+      "SUBSCRIPTIONS_PUBLICATION_COMMAND_ENABLED",
+      "SUBSCRIPTIONS_PROVIDER_MAPPING_PREVIEW_ENABLED"
+    ]
+  },
+  "policyInvariants": {
+    "activationMode": "FIRST_USE_OR_FIXED_DATE",
+    "activationWindowDays": 0,
+    "fixedActivationAt": "2026-09-30T21:00:00.000Z",
+    "fixedActivationTimeZone": "Europe/Moscow",
+    "validityDays": 365,
+    "dailyUsageLimit": 1,
+    "createDurationsMinutes": [60],
+    "joinDurationsMinutes": [60, 90, 120],
+    "usageUnitsByDuration": { "60": 1, "90": 1, "120": 1 },
+    "groupTrainingBenefitConfigured": false,
+    "tournamentBenefitConfigured": false,
+    "create90Or120AddOnConfigured": false,
+    "canonicalExternalEventTypeId": "viva:direction:4588:type:1613"
+  },
+  "candidates": [
+    {
+      "scope": "PITER",
+      "storefront": "piter_friendship",
+      "subscriptionTypeId": "subscription_type:608f1030-580c-4438-b001-1f7fc2053a74",
+      "providerProductId": "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+      "currentVersion": 1,
+      "currentStatus": "DRAFT",
+      "currentSelectorKind": "STATION_LIST",
+      "targetVersion": 2,
+      "targetSelectorKind": "STATION_LIST",
+      "stationIds": ["1ea77cbf-bc36-49a1-96d6-f35c216a409b"],
+      "dictionaryRevision": "annual-v2-92348e70a06cc367128e8d3491b6c8acb9e1f1a28684b88063dda73ca2ad6e9f"
+    },
+    {
+      "scope": "HUB",
+      "storefront": "network_friendship",
+      "subscriptionTypeId": "subscription_type:1f2252e4-7599-454a-9bf4-1fdfe82b2c57",
+      "providerProductId": "db7a5250-7369-4f43-8ac5-9111be24bc74",
+      "currentVersion": 1,
+      "currentStatus": "DRAFT",
+      "currentSelectorKind": "ALL_STATIONS",
+      "targetVersion": 2,
+      "targetSelectorKind": "STATION_LIST",
+      "stationIds": [
+        "0d5504f6-ea6f-44bb-a9e4-947faf0273ab",
+        "0ee057dd-908c-4b33-84b9-1a977480b710",
+        "14d6d441-635f-47d0-aa8c-553496294fb1",
+        "1c323ef3-7e6c-42eb-a6f7-653460540a8a",
+        "1cbb7201-2189-41a4-a3b4-4f543da0def6",
+        "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+        "233c1405-1eac-40de-8ec6-1cf7e24c9276",
+        "3266d827-2662-4540-9376-daac10f3875e",
+        "3656cbaa-6426-490f-a44f-915404cbdd2b",
+        "3b52e87f-33bb-436b-a1e3-19a3b62b4ed2",
+        "3db3fc06-00e2-445a-97eb-e354796f80a1",
+        "42c6d4df-833d-480a-bdc8-986716569884",
+        "4c564565-3918-40b2-8cb3-b7135c7cc992",
+        "5409fdc8-3db3-4e66-a6a9-8994bd591c8f",
+        "588b6151-f4f5-47d9-9449-80edf8cbc748",
+        "6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1",
+        "6b2d7e60-caff-4b22-89f6-6f19d7d311ab",
+        "76c67f10-70ee-4296-9145-1c040e4674ca",
+        "8380b5db-c12f-495b-a0d7-c7359168a777",
+        "855ec72a-d619-4add-ac92-8c64dafb17c2",
+        "8e31b902-1981-4b62-b803-6187b8f2a8da",
+        "b09d0015-5198-4a94-b88b-2448218e479d",
+        "c72eaaff-2163-47cd-87d0-b93499415acc",
+        "ed0e3bd4-6edb-43a9-8fe4-8fc3e7febec8",
+        "f82775cc-3dd7-4d02-98c8-e43cce470003"
+      ],
+      "dictionaryRevision": "annual-v2-8ded8bf892be80b7d664ac00894ec4689d05958ab1d9b2fd0ec9c878c99d0c8a"
+    }
+  ],
+  "stationEvidence": {
+    "source": "https://api.vivacrm.ru/end-user/api/v1/iSkq6G/studios?size=1000",
+    "observedAt": "2026-08-23",
+    "providerStationCount": 25,
+    "providerStationSetSha256": "cc774da8899ecb71f4c0514f84240719588c51ed5049c84d716dd4ae79acf0f1",
+    "cupCandidateStationSetSha256": "cc774da8899ecb71f4c0514f84240719588c51ed5049c84d716dd4ae79acf0f1",
+    "matchesCupCandidate": true,
+    "direction4588Observed": true,
+    "type1613Observed": false,
+    "dictionaryEvidenceRef": null
+  },
+  "dynamicPublicationInputs": {
+    "providerPreviewStudioId": null,
+    "dictionaryEvidenceRef": null,
+    "expectedPolicyDigest": null,
+    "expectedImpactPreviewRef": null,
+    "approvalReason": null
+  },
+  "publicationBlockers": [
+    "OLD_HUB_V1_USES_ALL_STATIONS",
+    "CANONICAL_DICTIONARY_TYPE_EVIDENCE_REQUIRED",
+    "REAL_CANONICAL_TARGET_PRODUCER_EVIDENCE_REQUIRED",
+    "PROVIDER_PREVIEW_STUDIO_NOT_RECONFIRMED",
+    "CUP_POLICY_V2_NOT_CREATED",
+    "POST_PUBLICATION_POLICY_SUPERSESSION_NOT_IMPLEMENTED",
+    "CUP_INSTANCE_IMPORT_COMMAND_NOT_IMPLEMENTED",
+    "PITER_EXISTING_ACTIVE_INSTANCE_DECISION_REQUIRED",
+    "RUNTIME_SECRETS_NOT_PROVISIONED",
+    "CUP_RUNTIME_FLAGS_DISABLED"
+  ],
+  "runtimeFlagPlan": [
+    {
+      "order": 1,
+      "name": "publication-preview",
+      "flags": [
+        "SUBSCRIPTIONS_RUNTIME_CONTRACTS_ENABLED",
+        "SUBSCRIPTIONS_PROVIDER_MAPPING_PREVIEW_ENABLED",
+        "SUBSCRIPTIONS_PUBLICATION_PREVIEW_ENABLED"
+      ],
+      "commandFlagIncluded": false,
+      "authorized": false
+    },
+    {
+      "order": 2,
+      "name": "publication-command",
+      "flags": ["SUBSCRIPTIONS_PUBLICATION_COMMAND_ENABLED"],
+      "commandFlagIncluded": true,
+      "authorized": false
+    },
+    {
+      "order": 3,
+      "name": "runtime-context",
+      "flags": ["SUBSCRIPTIONS_RUNTIME_CONTEXT_ENABLED"],
+      "commandFlagIncluded": false,
+      "authorized": false
+    },
+    {
+      "order": 4,
+      "name": "first-use-activation",
+      "flags": ["SUBSCRIPTIONS_ACTIVATION_ENABLED"],
+      "commandFlagIncluded": true,
+      "authorized": false
+    },
+    {
+      "order": 5,
+      "name": "fixed-date-worker",
+      "flags": ["SUBSCRIPTIONS_ACTIVATION_DEADLINE_WORKER_ENABLED"],
+      "commandFlagIncluded": true,
+      "authorized": false
+    }
+  ],
+  "futureMutationGates": [
+    { "order": 1, "name": "implement-and-release-policy-supersession", "authorized": false, "command": null },
+    { "order": 2, "name": "create-policy-v2-drafts", "authorized": false, "command": null },
+    { "order": 3, "name": "enable-preview-only-flags", "authorized": false, "command": null },
+    { "order": 4, "name": "provider-and-publication-preview", "authorized": false, "command": null },
+    { "order": 5, "name": "publish-policy-v2", "authorized": false, "command": null },
+    { "order": 6, "name": "implement-and-release-instance-import", "authorized": false, "command": null },
+    { "order": 7, "name": "import-or-reconcile-instances", "authorized": false, "command": null },
+    { "order": 8, "name": "enable-runtime-context", "authorized": false, "command": null },
+    { "order": 9, "name": "controlled-first-use-canary", "authorized": false, "command": null },
+    { "order": 10, "name": "enable-fixed-date-worker", "authorized": false, "command": null }
+  ]
+}

@@ -6,26 +6,33 @@
 Он не публикует managed policy, не создаёт продукты Viva, не включает продажи
 и не активирует использование подписок в LK.
 
-Машиночитаемый DRAFT находится в
+Исторический машиночитаемый sales/runtime DRAFT находится в
 `architecture-workspace/evidence/subscriptions/REGIONAL_SUBSCRIPTION_BINDINGS.draft.json`.
 В нём `salesEnabled=false` и `usageEnabled=false`: эти поля означают, что сам
-DRAFT-артефакт ничего не включает. После read-only проверки production
-2026-08-20 в нём отражены действующие sales product binding Питера и ХАБ, но
-`subscriptionTypeId` остаётся `null`. Такой файл нельзя использовать как
-опубликованную policy или как основание для provider mutation.
+DRAFT-артефакт ничего не включает. Он отражает sales product binding Питера и
+ХАБа на 2026-08-20, но не текущее состояние ЦУП. Такой файл нельзя использовать
+как опубликованную policy или как основание для provider mutation.
 
-Точные request body для создания только DRAFT type/policy находятся в
+Исторические request body, из которых были созданы DRAFT v1, находятся в
 `architecture-workspace/evidence/subscriptions/PITER_HUB_POLICY_DRAFT_PAYLOADS.json`.
-Они ещё не отправлялись в ЦУП и не содержат publish/activate request.
+Read-only аудит production 2026-08-23 подтвердил в ЦУП оба типа и обе v1 в
+статусе `DRAFT`; публикаций, provider mappings и SubscriptionInstance нет.
+HUB v1 использует устаревший `ALL_STATIONS` и не подлежит публикации.
+
+Актуальный activation packet и точные v2 source pins находятся в
+`architecture-workspace/evidence/subscriptions/PITER_HUB_ACTIVATION_PACKET_20260823.json`
+и `docs/PITER_HUB_ACTIVATION_PACKET_20260823.md`. Packet подготовлен, но ничего
+не применяет.
 
 Проверенное бизнес-требование для Питера и ХАБ: экземпляр подписки начинает
 365-дневный срок при первой подтверждённой записи по подписке; если такой записи
 нет, он автоматически активируется `2026-10-01T00:00:00+03:00`. Это не
-`effectiveAt` общей policy version. Изолированный кандидат ЦУП добавляет режим
+`effectiveAt` общей policy version. Текущий production release ЦУП поддерживает режим
 `FIRST_USE_OR_FIXED_DATE`, `activationWindowDays=0`, фиксированную UTC-дату
 `2026-09-30T21:00:00.000Z`, зону `Europe/Moscow` и `validityDays=365`.
-Опубликованный контракт пока этого режима не содержит, а полный capabilities
-payload нельзя формировать до утверждения cancellation/commerce defaults.
+Piter/HUB v2 candidate формирует полный capabilities payload, но остаётся
+заблокированным до canonical dictionary/type evidence, real canonical target
+producer, provider preview и отдельного publication gate.
 
 ## Проверенные станции Viva
 

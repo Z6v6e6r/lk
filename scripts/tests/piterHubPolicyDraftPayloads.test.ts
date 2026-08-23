@@ -56,6 +56,9 @@ const artifact = JSON.parse(fs.readFileSync(
   "utf8",
 )) as {
   status: string;
+  historicalOnly: boolean;
+  doNotPublish: boolean;
+  supersededBy: string;
   mutationAllowed: boolean;
   cupContract: { gitSha: string; requiredPermission: string };
   candidateContract: {
@@ -92,6 +95,12 @@ const byStorefront = new Map(artifact.drafts.map((draft) => [draft.storefront, d
 
 test("Piter and HUB artifacts contain DRAFT-only CUP requests and no publication command", () => {
   assert.equal(artifact.status, "DRAFT_ONLY");
+  assert.equal(artifact.historicalOnly, true);
+  assert.equal(artifact.doNotPublish, true);
+  assert.equal(
+    artifact.supersededBy,
+    "architecture-workspace/evidence/subscriptions/PITER_HUB_ACTIVATION_PACKET_20260823.json",
+  );
   assert.equal(artifact.mutationAllowed, false);
   assert.equal(artifact.cupContract.gitSha, "c4e295fb59177a38de7c908aa05a2535e229033f");
   assert.equal(artifact.cupContract.requiredPermission, "subscriptions:catalog:write");
