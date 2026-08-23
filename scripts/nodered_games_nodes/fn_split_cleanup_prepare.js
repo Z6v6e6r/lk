@@ -60,6 +60,34 @@ const parseTs = (value) => {
   return Number.isFinite(ts) ? ts : null;
 };
 
+const parseStrictIsoTs = (value) => {
+  const text = toStr(value);
+  if (!text) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(text);
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second, fraction = ""] = match;
+  const millisecond = Number(fraction.slice(0, 3).padEnd(3, "0"));
+  const componentDate = new Date(Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+    millisecond,
+  ));
+  if (
+    componentDate.getUTCFullYear() !== Number(year)
+    || componentDate.getUTCMonth() !== Number(month) - 1
+    || componentDate.getUTCDate() !== Number(day)
+    || componentDate.getUTCHours() !== Number(hour)
+    || componentDate.getUTCMinutes() !== Number(minute)
+    || componentDate.getUTCSeconds() !== Number(second)
+  ) return null;
+  const ts = Date.parse(text);
+  return Number.isFinite(ts) ? ts : null;
+};
+
 const normalizePhone = (value) => {
   const digits = String(value || "").replace(/\D/g, "");
   if (!digits) return null;
@@ -252,13 +280,27 @@ const preferredRefundMethod = normalizeRefundMethod(request.preferredRefundMetho
 const cancellationActionId = normalizeCancellationActionId(request.cancellationActionId);
 const actorBookingId = toStr(request.actorBookingId);
 const limit = Math.max(1, Math.min(500, Math.floor(toNumber(request.limit) || 200)));
+const internalScheduler = request.internalScheduler === true;
+const activationCutoffTs = internalScheduler ? parseStrictIsoTs(request.activationCutoffIso) : null;
 const PARTICIPANT_PAYMENT_TIMEOUT_MS = 10 * 60 * 1000;
 
 const tasks = [];
 let authorizationFailure = null;
+let excludedBeforeActivationCount = 0;
 
 rows.forEach((game) => {
   if (!isObj(game)) return;
+  if (internalScheduler) {
+    const gameCreatedAtTs = parseStrictIsoTs(game.createdAt);
+    if (
+      activationCutoffTs === null
+      || gameCreatedAtTs === null
+      || gameCreatedAtTs < activationCutoffTs
+    ) {
+      excludedBeforeActivationCount += 1;
+      return;
+    }
+  }
   const gameId = toStr(game.id);
   if (!gameId) return;
 
@@ -532,6 +574,8 @@ if (tasks.length === 0) {
     processed: 0,
     cancelled: 0,
     withVivaErrors: 0,
+    eligibleChecked: rows.length - excludedBeforeActivationCount,
+    excludedBeforeActivation: excludedBeforeActivationCount,
     now: nowIso,
     items: [],
   };
@@ -552,6 +596,8 @@ msg._splitCleanupRequest = {
   force,
   limit,
   checkedCount: rows.length,
+  eligibleCheckedCount: rows.length - excludedBeforeActivationCount,
+  excludedBeforeActivationCount,
   selectedCount: selectedTasks.length,
 };
 msg.payload = selectedTasks;

@@ -28,6 +28,8 @@ This closes the observed `exercise created -> booking failed -> empty exercise r
 
 An internal Node-RED inject runs every 120 seconds with a five-minute overlap lease. It uses the existing split cleanup pipeline and never depends on an open browser tab.
 
+The autonomous scheduler is restricted to an explicit creation cohort. `SPLIT_LIFECYCLE_V2_ENFORCE_FROM` must be a valid RFC 3339 timestamp with a timezone. Only games whose canonical top-level `createdAt` is equal to or later than that cutoff are eligible. The Mongo query applies the cutoff first, and the prepare function validates it again before creating any provider task. A historical game, a missing or invalid `createdAt`, or a missing or invalid cutoff is excluded fail closed.
+
 Before cancelling a timed-out participant booking, the worker reads the exact Viva transaction and validates:
 
 - exact transaction ID;
@@ -53,10 +55,12 @@ Local game state is changed only after Viva cancellation is verified by the exis
 `SPLIT_LIFECYCLE_V2_MODE` controls only the autonomous scheduler:
 
 - `OFF`: scheduler is skipped.
-- `SHADOW`: default; selects due work and returns dry-run summaries without Viva mutations.
-- `ENFORCE_NEW`: enables the autonomous expire and cancel path.
+- `SHADOW`: default; with a valid activation cutoff, selects due work only from the new cohort and returns dry-run summaries without Viva mutations.
+- `ENFORCE_NEW`: with the same valid activation cutoff, enables the autonomous expire and cancel path only for that cohort.
 
-Changing this variable is a separate feature-activation gate. Deploying the candidate does not implicitly authorize `ENFORCE_NEW`.
+`SPLIT_LIFECYCLE_V2_ENFORCE_FROM` is mandatory for both `SHADOW` and `ENFORCE_NEW`. If it is absent or invalid, the scheduler returns `activation_cutoff_missing` or `activation_cutoff_invalid` before acquiring its lease or issuing a Mongo query. `OFF` does not require the cutoff. The authenticated manual cleanup route is not cohort-limited and keeps its existing authorization, exact-target, and provider read-back guards.
+
+Changing either runtime variable is a separate feature-activation gate. Deploying the candidate does not implicitly authorize a cutoff or `ENFORCE_NEW`.
 
 ## Regression test series
 
@@ -78,21 +82,27 @@ Payment cleanup:
 
 Scheduler:
 
-1. Default mode is `SHADOW`.
+1. Default mode is `SHADOW`, but it performs no query without a valid explicit cutoff.
 2. `OFF` performs no query lease or mutation.
-3. `ENFORCE_NEW` must be explicit.
-4. Overlapping ticks are skipped while the five-minute lease is active.
-5. Empty and completed passes release the lease and do not write to an HTTP response node.
+3. Missing, malformed, or impossible-date cutoffs stop before lease and Mongo.
+4. Mongo receives `createdAt >= cutoff`, and prepare independently excludes historical, missing-date, and invalid-date rows.
+5. The exact cutoff boundary is eligible; a row one millisecond earlier is not.
+6. `ENFORCE_NEW` must be explicit and never expands the cohort.
+7. Overlapping ticks are skipped while the five-minute lease is active.
+8. Empty and completed passes release the lease and do not write to an HTTP response node.
 
 ## Release and observation gates
 
-1. Build the candidate from the pinned live `flows.json` preimage with `scripts/patch_live_split_lifecycle_v2.mjs`.
-2. Validate changed node IDs, unchanged HTTP routes, and the single added inject node.
-3. Deploy with `SPLIT_LIFECYCLE_V2_MODE=SHADOW` only after the deploy gate is approved.
-4. Observe at least one full payment deadline window and inspect only aggregate debug summaries.
-5. Activate `ENFORCE_NEW` only after a separate approval.
-6. Post-check exact transaction, booking, exercise, and LK game state for a naturally occurring unpaid case. Do not create a payment or booking for the post-check without explicit authorization.
+1. Build the cutoff hotfix from its pinned live `flows.json` preimage with `scripts/patch_live_split_lifecycle_v2_cutoff_hotfix.mjs`.
+2. Validate that only `Build split cleanup query` and `Prepare split cleanup tasks` changed, with unchanged topology and HTTP routes.
+3. Deploy the hotfix while runtime remains `SHADOW` and no cutoff is configured; the scheduler must report `activation_cutoff_missing` and perform no Mongo query.
+4. Under a separate configuration gate, choose a fresh approved cohort timestamp and set `SPLIT_LIFECYCLE_V2_ENFORCE_FROM` while remaining in `SHADOW`.
+5. Observe at least one full payment deadline window and verify only aggregate summaries for the new cohort. Historical eligible/task counts must remain zero.
+6. Activate `ENFORCE_NEW` only after another separate approval, without changing the approved cutoff.
+7. Post-check exact transaction, booking, exercise, and LK game state for a naturally occurring post-cutoff unpaid case. Do not create a payment or booking for the post-check without explicit authorization.
 
 ## Residual risk
 
 A host or process loss after Viva accepts exercise creation but before Node-RED receives the exercise ID cannot be compensated by ID. The v2 flow never blindly retries that POST; such a case remains a manual reconciliation item. A durable provider-operation ledger with exact slot lookup is the next hardening layer for this narrower crash window.
+
+The Mongo prefilter relies on the existing create flow writing canonical ISO strings to top-level `createdAt`. The independent prepare check is the destructive-action boundary: it rejects any unexpected representation instead of trusting the database filter alone.

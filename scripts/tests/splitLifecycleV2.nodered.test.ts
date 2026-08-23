@@ -180,6 +180,40 @@ function cleanupContext(step = "check_timeout_transaction") {
   };
 }
 
+function schedulerTimedOutGame(createdAt: unknown = "2026-08-23T07:00:00.000Z") {
+  return {
+    id: "pay-real-shape",
+    createdAt,
+    status: "PAID",
+    payment: { paid: true },
+    settings: { payMode: "split" },
+    booking: {
+      date: "2026-08-24",
+      timeFrom: "20:30",
+      timeTo: "22:00",
+      bookingIds: ["booking-1"],
+      vivaExerciseId: "exercise-real-shape",
+    },
+    participants: [{ id: "client-1", status: "CONFIRMED" }],
+    waitlist: [],
+    metadata: {
+      splitPayment: {
+        enabled: true,
+        shareCount: 4,
+        deadlineAt: "2026-08-21T15:29:50.535830252+03:00",
+        payments: [{
+          status: "PAYMENT_PENDING",
+          clientId: "client-1",
+          amountMinor: 37500,
+          bookingId: "booking-1",
+          transactionId: "transaction-1",
+          paymentRef: "payment-1",
+        }],
+      },
+    },
+  };
+}
+
 function transaction(status: string, bookingId = "booking-1") {
   return {
     id: "transaction-1",
@@ -271,43 +305,16 @@ test("real Viva toPay must match the exact pending payment amount", () => {
 
 test("real scheduler payload reaches only the exact UNPAID booking cancel probe", () => {
   const prepared = runNodeRedFunction(cleanupPrepare, {
-    payload: [{
-      id: "pay-real-shape",
-      status: "PAID",
-      payment: { paid: true },
-      settings: { payMode: "split" },
-      booking: {
-        date: "2026-08-24",
-        timeFrom: "20:30",
-        timeTo: "22:00",
-        bookingIds: ["booking-1"],
-        vivaExerciseId: "exercise-real-shape",
-      },
-      participants: [{ id: "client-1", status: "CONFIRMED" }],
-      waitlist: [],
-      metadata: {
-        splitPayment: {
-          enabled: true,
-          shareCount: 4,
-          deadlineAt: "2026-08-21T15:29:50.535830252+03:00",
-          payments: [{
-            status: "PAYMENT_PENDING",
-            clientId: "client-1",
-            amountMinor: 37500,
-            bookingId: "booking-1",
-            transactionId: "transaction-1",
-            paymentRef: "payment-1",
-          }],
-        },
-      },
-    }],
+    payload: [schedulerTimedOutGame()],
     _splitCleanupRequest: {
-      nowTs: Date.parse("2026-08-22T22:00:00+03:00"),
-      nowIso: "2026-08-22T19:00:00.000Z",
+      nowTs: Date.parse("2026-08-23T11:00:00+03:00"),
+      nowIso: "2026-08-23T08:00:00.000Z",
       dryRun: false,
       limit: 10,
       internalScheduler: true,
       lifecycleMode: "ENFORCE_NEW",
+      activationCutoffTs: Date.parse("2026-08-23T07:00:00.000Z"),
+      activationCutoffIso: "2026-08-23T07:00:00.000Z",
     },
   }) as Array<Record<string, any> | null>;
   const task = prepared[0]?.payload?.[0];
@@ -468,17 +475,25 @@ test("internal cleanup scheduler acquires a bounded lease and skips overlap", ()
   const first = runNodeRedFunction(cleanupQuery, {
     _splitCleanupInternal: { source: "scheduler" },
     payload: {},
-  }, { globalValues: values }) as Array<Record<string, any> | null>;
+  }, {
+    globalValues: values,
+    envValues: { SPLIT_LIFECYCLE_V2_ENFORCE_FROM: "2026-08-23T10:00:00+03:00" },
+  }) as Array<Record<string, any> | null>;
   assert.equal(first[0]?._splitCleanupRequest?.internalScheduler, true);
   assert.equal(first[0]?._splitCleanupRequest?.lifecycleMode, "SHADOW");
   assert.equal(first[0]?._splitCleanupRequest?.dryRun, true);
+  assert.equal(first[0]?._splitCleanupRequest?.activationCutoffIso, "2026-08-23T07:00:00.000Z");
   assert.equal(first[0]?.payload?.archived?.$ne, true);
+  assert.deepEqual(first[0]?.payload?.createdAt, { $gte: "2026-08-23T07:00:00.000Z" });
   assert.ok(Number(values.get("lk_split_cleanup_scheduler_lease_until")) > Date.now());
 
   const second = runNodeRedFunction(cleanupQuery, {
     _splitCleanupInternal: { source: "scheduler" },
     payload: {},
-  }, { globalValues: values }) as Array<Record<string, any> | null>;
+  }, {
+    globalValues: values,
+    envValues: { SPLIT_LIFECYCLE_V2_ENFORCE_FROM: "2026-08-23T10:00:00+03:00" },
+  }) as Array<Record<string, any> | null>;
   assert.equal(second[0], null);
   assert.equal(second[2]?.payload?.reason, "lease_active");
 });
@@ -490,7 +505,10 @@ test("ENFORCE_NEW is explicit and OFF does not acquire a scheduler lease", () =>
     payload: {},
   }, {
     globalValues: enforceValues,
-    envValues: { SPLIT_LIFECYCLE_V2_MODE: "ENFORCE_NEW" },
+    envValues: {
+      SPLIT_LIFECYCLE_V2_MODE: "ENFORCE_NEW",
+      SPLIT_LIFECYCLE_V2_ENFORCE_FROM: "2026-08-23T07:00:00.000Z",
+    },
   }) as Array<Record<string, any> | null>;
   assert.equal(enforce[0]?._splitCleanupRequest?.dryRun, false);
   assert.equal(enforce[0]?._splitCleanupRequest?.lifecycleMode, "ENFORCE_NEW");
@@ -506,6 +524,108 @@ test("ENFORCE_NEW is explicit and OFF does not acquire a scheduler lease", () =>
   assert.equal(off[0], null);
   assert.equal(off[2]?.payload?.reason, "feature_off");
   assert.equal(offValues.has("lk_split_cleanup_scheduler_lease_until"), false);
+});
+
+test("SHADOW and ENFORCE_NEW fail closed before lease and Mongo when activation cutoff is missing or invalid", () => {
+  for (const mode of ["SHADOW", "ENFORCE_NEW"]) {
+    for (const cutoff of [undefined, "2026-08-23 10:00:00", "2026-02-30T10:00:00Z", "not-a-date"]) {
+      const values = new Map<string, unknown>();
+      const out = runNodeRedFunction(cleanupQuery, {
+        _splitCleanupInternal: { source: "scheduler" },
+        payload: {},
+      }, {
+        globalValues: values,
+        envValues: {
+          SPLIT_LIFECYCLE_V2_MODE: mode,
+          ...(cutoff ? { SPLIT_LIFECYCLE_V2_ENFORCE_FROM: cutoff } : {}),
+        },
+      }) as Array<Record<string, any> | null>;
+      assert.equal(out[0], null);
+      assert.equal(out[1], null);
+      assert.equal(out[2]?.payload?.mode, mode);
+      assert.equal(out[2]?.payload?.skipped, true);
+      assert.equal(
+        out[2]?.payload?.reason,
+        cutoff ? "activation_cutoff_invalid" : "activation_cutoff_missing",
+      );
+      assert.equal(values.has("lk_split_cleanup_scheduler_lease_until"), false);
+    }
+  }
+});
+
+test("prepare independently excludes historical, missing and invalid scheduler rows", () => {
+  const values = new Map<string, unknown>([["lk_split_cleanup_scheduler_lease_until", Date.now() + 90_000]]);
+  const out = runNodeRedFunction(cleanupPrepare, {
+    payload: [
+      schedulerTimedOutGame("2026-08-23T06:59:59.999Z"),
+      schedulerTimedOutGame(null),
+      schedulerTimedOutGame("invalid"),
+      schedulerTimedOutGame("2026-02-30T07:00:00.000Z"),
+    ],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-08-23T08:00:00.000Z"),
+      nowIso: "2026-08-23T08:00:00.000Z",
+      dryRun: false,
+      limit: 10,
+      internalScheduler: true,
+      schedulerLeaseKey: "lk_split_cleanup_scheduler_lease_until",
+      lifecycleMode: "ENFORCE_NEW",
+      activationCutoffTs: Date.parse("2026-08-23T07:00:00.000Z"),
+      activationCutoffIso: "2026-08-23T07:00:00.000Z",
+    },
+  }, { globalValues: values }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0], null);
+  assert.equal(out[1], null);
+  assert.equal(out[2]?.payload?.processed, 0);
+  assert.equal(out[2]?.payload?.eligibleChecked, 0);
+  assert.equal(out[2]?.payload?.excludedBeforeActivation, 4);
+  assert.equal(values.get("lk_split_cleanup_scheduler_lease_until"), 0);
+});
+
+test("prepare fails closed when scheduler cutoff context is missing or invalid", () => {
+  for (const activationCutoffIso of [undefined, "invalid"]) {
+    const out = runNodeRedFunction(cleanupPrepare, {
+      payload: [schedulerTimedOutGame("2026-08-23T07:00:00.000Z")],
+      _splitCleanupRequest: {
+        nowTs: Date.parse("2026-08-23T08:00:00.000Z"),
+        nowIso: "2026-08-23T08:00:00.000Z",
+        dryRun: false,
+        limit: 10,
+        internalScheduler: true,
+        lifecycleMode: "ENFORCE_NEW",
+        activationCutoffTs: Date.parse("2026-08-23T07:00:00.000Z"),
+        ...(activationCutoffIso ? { activationCutoffIso } : {}),
+      },
+    }) as Array<Record<string, any> | null>;
+
+    assert.equal(out[0], null);
+    assert.equal(out[1], null);
+    assert.equal(out[2]?.payload?.processed, 0);
+    assert.equal(out[2]?.payload?.eligibleChecked, 0);
+    assert.equal(out[2]?.payload?.excludedBeforeActivation, 1);
+  }
+});
+
+test("prepare accepts the exact activation boundary for scheduler work", () => {
+  const out = runNodeRedFunction(cleanupPrepare, {
+    payload: [schedulerTimedOutGame("2026-08-23T07:00:00.000Z")],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-08-23T08:00:00.000Z"),
+      nowIso: "2026-08-23T08:00:00.000Z",
+      dryRun: true,
+      limit: 10,
+      internalScheduler: true,
+      lifecycleMode: "SHADOW",
+      activationCutoffTs: Date.parse("2026-08-23T07:00:00.000Z"),
+      activationCutoffIso: "2026-08-23T07:00:00.000Z",
+    },
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0]?.payload?.length, 1);
+  assert.equal(out[0]?.payload?.[0]?.gameId, "pay-real-shape");
+  assert.equal(out[0]?.payload?.[0]?.dryRun, true);
+  assert.equal(out[0]?._splitCleanupRequest?.excludedBeforeActivationCount, 0);
 });
 
 test("scheduler empty result releases its lease without touching an HTTP response", () => {

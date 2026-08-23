@@ -195,6 +195,7 @@ test("cleanup query and prepare preserve the selected cancellation action", () =
   assert.ok(queryMsg);
   const cleanupRequest = asRecord(queryMsg._splitCleanupRequest);
   assert.ok(cleanupRequest);
+  assert.equal(asRecord(queryMsg.payload)?.createdAt, undefined);
   assert.equal(cleanupRequest.cancellationActionId, "subscription");
   assert.equal(cleanupRequest.actorBookingId, "booking-1");
 
@@ -314,6 +315,7 @@ test("participant timeout falls back to the persisted split payment deadline", (
     payload: [
       buildSplitGame({
         id: "pay-real-shape",
+        createdAt: "2026-08-22T18:00:00.000Z",
         status: "PAID",
         payment: { paid: true },
         booking: {
@@ -350,6 +352,8 @@ test("participant timeout falls back to the persisted split payment deadline", (
       dryRun: true,
       limit: 10,
       internalScheduler: true,
+      activationCutoffTs: Date.parse("2026-08-22T17:00:00.000Z"),
+      activationCutoffIso: "2026-08-22T17:00:00.000Z",
     },
   }) as unknown[];
 

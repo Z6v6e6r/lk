@@ -38,6 +38,38 @@ const resolveLifecycleMode = () => {
   return ["OFF", "SHADOW", "ENFORCE_NEW"].includes(mode) ? mode : "SHADOW";
 };
 
+const parseIsoTimestamp = (value) => {
+  const text = toStr(value);
+  if (!text) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(text);
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second, fraction = ""] = match;
+  const millisecond = Number(fraction.slice(0, 3).padEnd(3, "0"));
+  const componentDate = new Date(Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+    millisecond,
+  ));
+  if (
+    componentDate.getUTCFullYear() !== Number(year)
+    || componentDate.getUTCMonth() !== Number(month) - 1
+    || componentDate.getUTCDate() !== Number(day)
+    || componentDate.getUTCHours() !== Number(hour)
+    || componentDate.getUTCMinutes() !== Number(minute)
+    || componentDate.getUTCSeconds() !== Number(second)
+  ) return null;
+  const ts = Date.parse(text);
+  if (!Number.isFinite(ts)) return null;
+  return {
+    ts,
+    iso: new Date(ts).toISOString(),
+  };
+};
+
 const normalizeIntent = (value) => {
   const raw = toStr(value);
   if (!raw) return null;
@@ -103,7 +135,20 @@ if (internalScheduler) {
     };
     return [null, null, msg];
   }
+  const cutoffRaw = readEnv("SPLIT_LIFECYCLE_V2_ENFORCE_FROM");
+  const activationCutoff = parseIsoTimestamp(cutoffRaw);
+  if (!activationCutoff) {
+    msg.payload = {
+      ok: true,
+      source: "scheduler",
+      mode: lifecycleMode,
+      skipped: true,
+      reason: cutoffRaw ? "activation_cutoff_invalid" : "activation_cutoff_missing",
+    };
+    return [null, null, msg];
+  }
   msg._splitCleanupLifecycleMode = lifecycleMode;
+  msg._splitCleanupActivationCutoff = activationCutoff;
   const nowTs = Date.now();
   const leaseUntil = Number(global.get(SCHEDULER_LEASE_KEY) || 0);
   if (Number.isFinite(leaseUntil) && leaseUntil > nowTs) {
@@ -152,6 +197,9 @@ const mongoQuery = force && gameId
         { "metadata.splitPayment.enabled": true },
       ],
     };
+if (internalScheduler) {
+  mongoQuery.createdAt = { $gte: msg._splitCleanupActivationCutoff.iso };
+}
 if (gameId && !Object.prototype.hasOwnProperty.call(mongoQuery, "id")) {
   mongoQuery.id = gameId;
 }
@@ -173,6 +221,8 @@ msg._splitCleanupRequest = {
   internalScheduler,
   schedulerLeaseKey: internalScheduler ? SCHEDULER_LEASE_KEY : null,
   lifecycleMode: internalScheduler ? msg._splitCleanupLifecycleMode : null,
+  activationCutoffTs: internalScheduler ? msg._splitCleanupActivationCutoff.ts : null,
+  activationCutoffIso: internalScheduler ? msg._splitCleanupActivationCutoff.iso : null,
 };
 msg.payload = mongoQuery;
 
