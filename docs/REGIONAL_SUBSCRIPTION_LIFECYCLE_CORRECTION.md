@@ -38,19 +38,25 @@ is allowed only when all conditions are true:
 1. `productType` is exactly `SUBSCRIPTION`;
 2. `activationDays`, `validityDays` and `visits` are JSON integers;
 3. `validityDays=365` and `visits=365`;
-4. `purchaseDate(Europe/Moscow) + activationDays = 2026-10-01`;
-5. the existing exact product, price and discount checks also pass.
+4. `purchaseDate(Europe/Moscow)` is not later than `2026-10-01`;
+5. `purchaseDate(Europe/Moscow) + activationDays` is not earlier than
+   `2026-10-01`;
+6. the existing exact product, price and discount checks also pass.
 
-Missing, string-coerced, early-activation or late-activation fields fail closed with
-`REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE`. No Viva transaction is
-created. Successful preflight fields are copied into the local reservation row
-so the later payment read-back can prove which lifecycle was sold.
+Missing, string-coerced or early-activation fields fail closed with
+`REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE`. A later provider
+activation deadline is allowed because the immutable CUP lifecycle is designed
+to perform the earlier transition on the first confirmed booking or on 1
+October. No Viva
+transaction is created for an incompatible product. Successful preflight fields
+are copied into the local reservation row so the later payment read-back can
+prove which lifecycle was sold.
 
 The guard does not choose or mutate `activationDays`. A value that projects an
-earlier or later date fails closed: accepting a later date would violate the
-fixed fallback date just as accepting an earlier date would. The final value
-requires a separate Viva mutation gate and a controlled NEW-subscription canary
-proving that a first booking activates the provider instance.
+earlier date fails closed. A later provider deadline is only a safety window;
+it does not replace the CUP transition on first use or the fixed-date worker.
+Those runtime gates still require a controlled NEW-subscription canary proving
+that a first booking activates the provider instance.
 
 ## Read-only sales drift audit
 
