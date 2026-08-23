@@ -9,9 +9,9 @@
 - Four-player rate: `250` RUB per participant-hour
 - Two-team rate: `500` RUB per team-hour
 - Full-game payment source: the Viva slot/product price; this policy must never override it
-- Create resolves the active CUP campaign once and stores the normalized policy snapshot in the game
-- Join never selects the current CUP campaign: it uses the stored snapshot, or ordinary Viva split pricing when the game has no snapshot
-- Before participant booking, a stored promo rate must exactly match the confirmed organizer Viva transaction for the same exercise and booking; browser metadata alone is never pricing authority
+- Create resolves the active CUP campaign for both one-time and subscription organizer payment, canonicalizes the share server-side and stores the normalized policy snapshot in the game
+- A one-time organizer freezes the snapshot against the confirmed organizer transaction; a subscription organizer has no paid transaction, so participant join re-resolves the exact stored game date/station/room and validates any stored snapshot against the active CUP policy
+- Legacy subscription-created games without a snapshot may adopt only the campaign selected by CUP for their exact stored game date/station/room; browser metadata alone is never pricing authority
 - A malformed non-null stored snapshot fails closed before token, room, booking, product or transaction requests
 
 Expected participant charge:
@@ -37,16 +37,16 @@ Expected participant charge:
 - A modified browser `shareAmount`, `totalAmount`, or `studioId` does not change the server charge.
 - A room that does not belong to the quoted station is rejected before Viva creates an exercise or booking.
 - A non-Piter split game fetches the exact Viva court price for the verified station, room, date/time, master service and sub-services, then divides that price by the server share count. The nominal transaction product cost is not pricing authority.
-- A Piter game created under the campaign keeps its exact policy ID, version and hourly rates when a participant joins after the campaign is changed, expired or disabled; the rate is re-proved from the organizer transaction before each participant booking.
-- A game created without a policy snapshot never adopts a campaign enabled later.
+- A one-time Piter game created under the campaign keeps its exact policy ID, version and hourly rates; the rate is re-proved from the organizer transaction before each participant booking.
+- A subscription-created Piter game validates the exact stored snapshot against CUP on join. A legacy subscription-created game without a snapshot uses CUP only for its stored date/station/room, which repairs the pre-fix 1,500 RUB fallback without trusting browser fields.
 - Full payment uses the existing Viva full-payment path and the ordinary slot price.
 - Before `activeFrom` and after `expiresAt`, Piter split pricing falls back to the exact Viva court price divided by the server share count.
 - If CUP policy lookup is unavailable, one-time split payment fails closed; full payment remains available.
-- CUP lookup is required only when creating a one-time split game; joining an existing game does not depend on current CUP availability, but does require read-only Viva confirmation of the organizer transaction.
+- CUP lookup is required when creating any split game. Join requires either read-only Viva confirmation of the one-time organizer transaction or an exact CUP lookup for a subscription-created game.
 - Viva token requests are bounded to 10 seconds and Viva Admin API requests to 20 seconds.
 
 ## Return to the ordinary scheme
 
-Set `expiresAt` to the end of the last eligible game date in Moscow time, or disable the campaign when new Piter games must return to the ordinary scheme. Do not change the rate or reuse the policy ID for another price. Games already created with this policy keep the immutable stored snapshot for later participants; games created after expiry/disable use ordinary Viva split pricing. Newer pricing must use a new policy ID.
+Set `expiresAt` to the end of the last eligible game date in Moscow time, or disable the campaign when new Piter games must return to the ordinary scheme. Do not change the rate or reuse the policy ID for another price. One-time games keep the transaction-proved snapshot; subscription-created games require the campaign to remain resolvable for their eligible game date. Games created after expiry/disable use ordinary Viva split pricing. Newer pricing must use a new policy ID.
 
 Rollback is configuration-only after all compatible code is deployed: an expired, disabled or unmatched policy makes new games calculate the ordinary split share from the exact Viva court price. Existing games preserve their stored policy snapshot. No change is required in the full-payment path.

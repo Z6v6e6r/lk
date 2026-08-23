@@ -16,7 +16,7 @@ const SOURCE_PATHS = Object.freeze({
 });
 
 export const LIVE_SPLIT_CREATE_CONTRACT = Object.freeze({
-  sourceFlowSha256: "0496070e2fcab507a959996d8775182181acf3a37d95fa0a13a53fb645013fd1",
+  sourceFlowSha256: "774b3a4cffcdf174c7b3457093b939524e167e1981d9d6a7ac11a833f791d4a2",
   targets: Object.freeze([
     Object.freeze({
       sourceKey: "create",
@@ -31,8 +31,8 @@ export const LIVE_SPLIT_CREATE_CONTRACT = Object.freeze({
         Object.freeze(["ef42932e1ba864b8"]),
         Object.freeze(["8f7bd5b482fe9763"]),
       ]),
-      liveFuncSha256: "705401c591064e0d9ef2f3597166671abfc153d46025d250e215a6163a4f1384",
-      candidateFuncSha256: "2daf57341d845cc454db4aba7ea8147daef1faa1311f563a8b5f6c3840b3adc3",
+      liveFuncSha256: "2daf57341d845cc454db4aba7ea8147daef1faa1311f563a8b5f6c3840b3adc3",
+      candidateFuncSha256: "19a61024273a478f11bff3ff60c4601603c2af5bd7ec8ec08e4b83394ee7bd41",
     }),
     Object.freeze({
       sourceKey: "join",
@@ -47,8 +47,8 @@ export const LIVE_SPLIT_CREATE_CONTRACT = Object.freeze({
         Object.freeze(["ef42932e1ba864b8"]),
         Object.freeze(["8f7bd5b482fe9763"]),
       ]),
-      liveFuncSha256: "003bafe6a0fcdae03f1fcc6cfb1bb8392984e4d8cb880fc6fa884a45bc89e028",
-      candidateFuncSha256: "e077708db904b7c319ecb639933637f70028ba35d0daef8f35057e72e61ced60",
+      liveFuncSha256: "e077708db904b7c319ecb639933637f70028ba35d0daef8f35057e72e61ced60",
+      candidateFuncSha256: "bb9c70f29c31ed1f7b1acc1a3c6e1724bc6584df7570a61f7797604e05d3369d",
     }),
     Object.freeze({
       sourceKey: "router",
@@ -64,8 +64,8 @@ export const LIVE_SPLIT_CREATE_CONTRACT = Object.freeze({
         Object.freeze(["lk_subscription_booking_http_20260804"]),
         Object.freeze(["legacy_payment_confirm_canonical_prepare_20260816"]),
       ]),
-      liveFuncSha256: "953c84c1885b77b4f7b7e826430b49a97e14656fa2a53e135aa35a93f72fe53d",
-      candidateFuncSha256: "4713fd6bf49f498cd51d80da37f1332dda6934c4e9f926afec0b2ffe1a1290ef",
+      liveFuncSha256: "f0a350a3b39f5ffd3b4745752382dd83ff656380c96ed0496f483e383e139584",
+      candidateFuncSha256: "892ad51fcb8f2be2a194661e04f9c775d4345fea153e5dbc3758bd40967101f2",
     }),
   ]),
   restorations: Object.freeze([]),

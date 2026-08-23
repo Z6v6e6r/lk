@@ -56,14 +56,11 @@ function fixture() {
 test("live flow is pinned to the reviewed deployment preimage", () => {
   assert.equal(
     LIVE_SPLIT_CREATE_CONTRACT.sourceFlowSha256,
-    "0496070e2fcab507a959996d8775182181acf3a37d95fa0a13a53fb645013fd1",
+    "774b3a4cffcdf174c7b3457093b939524e167e1981d9d6a7ac11a833f791d4a2",
   );
 });
 
 test("tracked split sources are pinned to the reviewed candidate hashes", () => {
-  const supersedingCandidateHashes = {
-    router: "f0a350a3b39f5ffd3b4745752382dd83ff656380c96ed0496f483e383e139584",
-  };
   for (const target of LIVE_SPLIT_CREATE_CONTRACT.targets) {
     const fileByKey = {
       create: "fn_split_create_prepare.js",
@@ -76,7 +73,7 @@ test("tracked split sources are pinned to the reviewed candidate hashes", () => 
     );
     assert.equal(
       sha256(source),
-      supersedingCandidateHashes[target.sourceKey] || target.candidateFuncSha256,
+      target.candidateFuncSha256,
       target.sourceKey,
     );
   }

@@ -327,7 +327,10 @@ msg._splitCtx = {
   assembleDeadlineAt,
 };
 
-if (paymentMode === "one_time") {
+// Pricing is independent from how the organizer pays. Resolve it server-side
+// for subscription creates too, otherwise an old browser can persist the full
+// court share and omit the active campaign snapshot from the game record.
+if (paymentMode === "one_time" || paymentMode === "subscription") {
   return startPricingPolicyRequest(msg._splitCtx);
 }
 

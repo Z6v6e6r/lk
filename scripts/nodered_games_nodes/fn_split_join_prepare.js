@@ -1,4 +1,5 @@
 const TOKEN_URL_DEFAULT = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
+const CUP_API_DEFAULT = "https://padlhub.su/api";
 const TOKEN_CLIENT_ID_DEFAULT = "React-auth-dev";
 const KEY_TOKEN = "vivacrm_access_token";
 const KEY_EXPIRES_AT = "vivacrm_token_expires_at";
@@ -43,6 +44,26 @@ const readEnv = (key) => {
   } catch (_error) {
     return null;
   }
+};
+
+const startPricingPolicyRequest = (ctx) => {
+  const apiBase = (readEnv("CUP_API_BASE_URL") || CUP_API_DEFAULT).replace(/\/+$/, "");
+  const query = [
+    ["forDate", ctx.date],
+    ["stationId", ctx.studioId],
+    ["roomId", ctx.roomId],
+    ["force_ts", `${Date.now()}-${Math.random().toString(36).slice(2)}`],
+  ]
+    .filter(([, value]) => Boolean(toStr(value)))
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(toStr(value))}`)
+    .join("&");
+  ctx.step = "pricing_policy";
+  msg.method = "GET";
+  msg.url = `${apiBase}/advertising/split-payment-promo?${query}`;
+  msg.headers = { Accept: "application/json", "Cache-Control": "no-store" };
+  msg.payload = undefined;
+  msg.requestTimeout = 5000;
+  return [msg, null, null, null];
 };
 
 const readCachedServiceToken = () => {
@@ -399,12 +420,18 @@ const splitPayments = Array.isArray(splitPayment.payments)
 const organizerPayment = splitPayments.find((item) => toStr(item.role)?.toUpperCase() === "ORGANIZER")
   || splitPayments.find((item) => Number(item.spot) === 1)
   || null;
+const organizerUsedSubscription = resolvePaymentMode(
+  splitPayment.selectedPaymentMode
+  || splitPayment.organizerPaymentMode
+  || organizerPayment?.selectedPaymentMode
+  || organizerPayment?.paymentMode,
+) === "subscription";
 const pricingPolicyHourlyAmount = storedPricingPolicy
   ? (shareCount === 2
       ? storedPricingPolicy.twoTeamsHourlyAmount
       : storedPricingPolicy.fourPlayersHourlyAmount)
   : null;
-const pricingPolicyProof = storedPricingPolicy
+const pricingPolicyProof = storedPricingPolicy && !organizerUsedSubscription
   ? {
       transactionId: toStr(organizerPayment?.transactionId),
       bookingId: toStr(organizerPayment?.bookingId) || toStr(splitPayment.organizerBookingId),
@@ -519,6 +546,9 @@ msg._splitCtx = {
   subServiceIds: storedSubServiceIds,
   userAuthHeader: readUserAuthHeader(),
   pricingPolicy: storedPricingPolicy,
+  expectedPricingPolicy: organizerUsedSubscription && storedPricingPolicy
+    ? storedPricingPolicy
+    : null,
   pricingPolicyProof,
   clientId: toStr(body.clientId),
   clientPhone,
@@ -544,5 +574,13 @@ msg._splitCtx = {
     || fallbackDeadlineAt,
   assembleDeadlineAt: toStr(splitPayment.assembleDeadlineAt) || assembleDeadlineAt,
 };
+
+// Subscription organizers have no paid organizer transaction that can prove a
+// one-time tariff. Re-resolve the campaign from the exact stored game location
+// instead. This also repairs legacy subscription-created games that missed the
+// policy snapshot entirely.
+if (organizerUsedSubscription) {
+  return startPricingPolicyRequest(msg._splitCtx);
+}
 
 return requestToken();

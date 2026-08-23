@@ -1521,6 +1521,7 @@ if (ctx.step === "create_booking") {
       subscriptionProductName: null,
       oneTimeProductId: null,
       oneTimeProductName: null,
+      pricingPolicy: ctx.pricingPolicy || null,
       deadlineAt: ctx.deadlineAt,
       assembleDeadlineAt: ctx.assembleDeadlineAt || null,
       spot: ctx.spot ?? null,
@@ -1545,6 +1546,18 @@ if (ctx.step === "pricing_policy") {
       expectedPricingPolicyId: toStr(ctx.expectedPricingPolicy?.id || ctx.expectedPricingPolicy?.pricingPolicyId),
       actualPricingPolicyId: toStr(ctx.pricingPolicy?.id),
     });
+  }
+  if (ctx.pricingPolicy) {
+    const shareCount = Math.max(1, Math.round(toNumber(ctx.shareCount) ?? 4));
+    const durationMinutes = Math.max(1, Math.round(toNumber(ctx.durationMinutes) ?? 60));
+    const hourlyAmount = toNumber(
+      shareCount === 2
+        ? ctx.pricingPolicy.twoTeamsHourlyAmount
+        : ctx.pricingPolicy.fourPlayersHourlyAmount,
+    );
+    if (hourlyAmount !== null) {
+      ctx.shareAmount = Math.max(0, Math.round(hourlyAmount * durationMinutes / 60 * 100) / 100);
+    }
   }
   return startVivaAuthorization(ctx);
 }

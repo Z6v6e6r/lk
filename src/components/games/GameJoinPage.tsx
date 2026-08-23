@@ -6,6 +6,7 @@ import {
   apiFetchSubscriptionDailyLimitBookings,
   apiLeavePadelGameAsCurrentUser,
   apiFetchPadelGameRecord,
+  apiFetchPadelSplitPaymentPromoConfig,
   apiFetchTournamentParticipants,
   apiFetchProfile,
   apiFetchSubscriptioName,
@@ -13,6 +14,7 @@ import {
   apiUpdatePadelGameRecord,
   type PadelGamePlayer,
   type PadelGameRecord,
+  type PadelSplitPaymentPromoConfig,
   type Subscription,
   type UserProfileType,
 } from "../../utils/apiClient";
@@ -53,6 +55,7 @@ import {
   subscriptionPlanAllowsDailyLimitCategory,
   withSubscriptionCategoryDailyLimitResolvedName,
 } from "../../utils/subscriptionCategoryDailyLimit";
+import { resolveSplitPromoShareAmount } from "./splitPromoPricing";
 
 type JoinDecision = "JOINED" | "WAITLIST" | "DECLINED" | "NONE";
 
@@ -775,6 +778,9 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const [splitSubscriptionsLoading, setSplitSubscriptionsLoading] = useState(false);
   const [splitSubscriptionsError, setSplitSubscriptionsError] = useState<string | null>(null);
   const [splitSubscriptionOptions, setSplitSubscriptionOptions] = useState<SplitJoinSubscriptionOption[]>([]);
+  const [splitPaymentPromoConfig, setSplitPaymentPromoConfig] =
+    useState<PadelSplitPaymentPromoConfig | null>(null);
+  const splitPricingGameId = game && isSplitPaymentGame(game) ? game.id : null;
   const preferredSplitPaymentMode = useMemo(() => {
     if (typeof window === "undefined") return null;
     try {
@@ -817,6 +823,44 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (!splitPricingGameId) {
+      setSplitPaymentPromoConfig(null);
+      return;
+    }
+    let alive = true;
+    void apiFetchPadelSplitPaymentPromoConfig()
+      .then((result) => {
+        if (alive) setSplitPaymentPromoConfig(result.data);
+      })
+      .catch(() => {
+        if (alive) setSplitPaymentPromoConfig(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [splitPricingGameId]);
+
+  const resolvedSplitPromoShareAmount = useMemo(() => {
+    if (!game) return null;
+    const splitPayment = resolveSplitPaymentMetadata(game);
+    if (String(splitPayment?.selectedPaymentMode || "").trim().toLowerCase() !== "subscription") {
+      return null;
+    }
+    const shareCount = getSplitShareCount(game)
+      ?? (resolveMaxPlayers(game) <= DEFAULT_SINGLES_MAX_PLAYERS ? 2 : 4);
+    return resolveSplitPromoShareAmount({
+      config: splitPaymentPromoConfig,
+      date: game.booking?.date,
+      studioId: game.booking?.studioId,
+      studioName: game.booking?.studioName,
+      roomId: game.booking?.roomId,
+      roomName: game.booking?.roomName,
+      shareCount,
+      durationMinutes: game.booking?.durationMinutes,
+    });
+  }, [game, splitPaymentPromoConfig]);
 
   useEffect(() => {
     if (!game || !profile) return;
@@ -1318,13 +1362,30 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         const shareCountRaw = getSplitShareCount(actualGame);
         const fallbackShareCount = resolveMaxPlayers(actualGame) <= DEFAULT_SINGLES_MAX_PLAYERS ? 2 : 4;
         const shareCount = shareCountRaw === 2 || fallbackShareCount === 2 ? 2 : 4;
-        const shareAmount = getSplitShareAmount(actualGame) ?? (shareCount === 2 ? 5000 : 2500);
+        const splitPaymentMeta = resolveSplitPaymentMetadata(actualGame) ?? {};
+        const organizerUsedSubscription = String(
+          splitPaymentMeta.selectedPaymentMode || "",
+        ).trim().toLowerCase() === "subscription";
+        const promoShareAmount = organizerUsedSubscription
+          ? resolveSplitPromoShareAmount({
+              config: splitPaymentPromoConfig,
+              date: booking?.date,
+              studioId: booking?.studioId,
+              studioName: booking?.studioName,
+              roomId: booking?.roomId,
+              roomName: booking?.roomName,
+              shareCount,
+              durationMinutes: bookingDurationMinutes,
+            })
+          : null;
+        const shareAmount = promoShareAmount
+          ?? getSplitShareAmount(actualGame)
+          ?? (shareCount === 2 ? 5000 : 2500);
         const paymentRef = generatePaymentRef();
         const successUrl = buildCurrentJoinUrl({
           [PAYMENT_REF_QUERY_KEY]: paymentRef,
           [SPLIT_JOIN_QUERY_KEY]: "paid",
         });
-        const splitPaymentMeta = resolveSplitPaymentMetadata(actualGame) ?? {};
         const splitPaymentTotalAmount = (() => {
           const value = splitPaymentMeta.totalAmount;
           if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -1778,7 +1839,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       setSubmitting(null);
       window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
     },
-    [cabinetUrl, comment, game, preferredSplitPaymentMode, profile],
+    [cabinetUrl, comment, game, preferredSplitPaymentMode, profile, splitPaymentPromoConfig],
   );
 
   if (loading) {
@@ -1822,7 +1883,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const stationLabel = game.booking?.studioName || "Станция";
   const alreadyJoined = myDecision === "JOINED";
   const splitPaymentGame = isSplitPaymentGame(game);
-  const splitShareAmount = getSplitShareAmount(game);
+  const splitShareAmount = resolvedSplitPromoShareAmount ?? getSplitShareAmount(game);
   const splitShareCount = getSplitShareCount(game) ?? (resolveMaxPlayers(game) <= DEFAULT_SINGLES_MAX_PLAYERS ? 2 : 4);
   const canPrimaryAction = submitting === null && !confirmingSplitPaymentRef;
   const canDecline = submitting === null && !confirmingSplitPaymentRef;

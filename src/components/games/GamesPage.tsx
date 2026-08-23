@@ -141,6 +141,7 @@ import {
   resolveSplitSubscriptionLifecycle,
   resolveSplitSubscriptionUnavailableMessage,
 } from "./splitSubscriptionAvailability";
+import { resolveSplitPromoShareAmount } from "./splitPromoPricing";
 import {
   SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME,
   resolveSubscriptionCategoryDailyLimitConflictFromBookings,
@@ -8372,6 +8373,22 @@ export default function GamesPage({
     return detailsMaxPlayers <= 2 ? 2 : 4;
   }, [detailsSplitPaymentMetadata, detailsMaxPlayers]);
   const detailsSplitShareAmount = useMemo(() => {
+    const organizerUsedSubscription = String(
+      detailsSplitPaymentMetadata?.selectedPaymentMode || "",
+    ).trim().toLowerCase() === "subscription";
+    if (organizerUsedSubscription && activeGameRecord?.booking) {
+      const promoAmount = resolveSplitPromoShareAmount({
+        config: splitPaymentPromoConfig,
+        date: activeGameRecord.booking.date,
+        studioId: activeGameRecord.booking.studioId,
+        studioName: activeGameRecord.booking.studioName,
+        roomId: activeGameRecord.booking.roomId,
+        roomName: activeGameRecord.booking.roomName,
+        shareCount: detailsSplitShareCount,
+        durationMinutes: activeGameRecord.booking.durationMinutes,
+      });
+      if (promoAmount != null) return promoAmount;
+    }
     const fromSplit = toFiniteNumber(
       detailsSplitPaymentMetadata?.shareAmount
       ?? detailsSplitPaymentMetadata?.amount
@@ -8382,7 +8399,13 @@ export default function GamesPage({
     const fromJoinPrice = toFiniteNumber(extractGameJoinPrice(detailsMetadata));
     if (fromJoinPrice != null && fromJoinPrice > 0) return Math.round(fromJoinPrice);
     return null;
-  }, [detailsSplitPaymentMetadata, detailsMetadata]);
+  }, [
+    activeGameRecord,
+    detailsSplitPaymentMetadata,
+    detailsMetadata,
+    detailsSplitShareCount,
+    splitPaymentPromoConfig,
+  ]);
   const isDetailsWaitlistEnabled = activeGameRecord?.invite?.waitlistEnabled ?? waitlistEnabled;
   const canCurrentUserJoinGameInDetails = Boolean(
     gameRecordId

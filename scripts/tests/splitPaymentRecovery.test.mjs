@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SOURCES = {
-  create: ['fn_split_create_prepare.js', '705401c591064e0d9ef2f3597166671abfc153d46025d250e215a6163a4f1384', '2daf57341d845cc454db4aba7ea8147daef1faa1311f563a8b5f6c3840b3adc3'],
-  join: ['fn_split_join_prepare.js', '003bafe6a0fcdae03f1fcc6cfb1bb8392984e4d8cb880fc6fa884a45bc89e028', 'e077708db904b7c319ecb639933637f70028ba35d0daef8f35057e72e61ced60'],
-  router: ['fn_split_router.js', '953c84c1885b77b4f7b7e826430b49a97e14656fa2a53e135aa35a93f72fe53d', 'f0a350a3b39f5ffd3b4745752382dd83ff656380c96ed0496f483e383e139584'],
+  create: ['fn_split_create_prepare.js', '2daf57341d845cc454db4aba7ea8147daef1faa1311f563a8b5f6c3840b3adc3', '19a61024273a478f11bff3ff60c4601603c2af5bd7ec8ec08e4b83394ee7bd41'],
+  join: ['fn_split_join_prepare.js', 'e077708db904b7c319ecb639933637f70028ba35d0daef8f35057e72e61ced60', 'bb9c70f29c31ed1f7b1acc1a3c6e1724bc6584df7570a61f7797604e05d3369d'],
+  router: ['fn_split_router.js', 'f0a350a3b39f5ffd3b4745752382dd83ff656380c96ed0496f483e383e139584', '892ad51fcb8f2be2a194661e04f9c775d4345fea153e5dbc3758bd40967101f2'],
 };
 
 class FixedDate extends Date {
@@ -60,6 +60,27 @@ test('create prepares an open-game four-share payment with bounded deadline', ()
   assert.equal(outputs[0].method, 'GET');
   assert.match(outputs[0].url, /stationId=/);
   assert.equal(outputs[0].requestTimeout, 5000);
+});
+
+test('subscription create also resolves the exact server-side campaign before Viva mutation', () => {
+  const outputs = run('create', {
+    payload: {
+      date: '2026-08-24',
+      fromTime: '18:00',
+      toTime: '19:30',
+      studioId: 'studio-piter',
+      roomId: 'room-piter-1',
+      clientPhone: '8 960 000 00 01',
+      paymentMode: 'subscription',
+      clientSubscriptionId: 'client-subscription-1',
+      shareAmount: 1500,
+    },
+  });
+  assert.equal(outputs[0]._splitCtx.paymentMode, 'subscription');
+  assert.equal(outputs[0]._splitCtx.step, 'pricing_policy');
+  assert.equal(outputs[0].method, 'GET');
+  assert.match(outputs[0].url, /forDate=2026-08-24/);
+  assert.match(outputs[0].url, /stationId=studio-piter/);
 });
 
 test('join preserves the participant deadline and detects singles from stored split state', () => {
@@ -134,6 +155,77 @@ test('join keeps the stored pricing snapshot and never rereads the current CUP c
   assert.doesNotMatch(outputs[0].url, /split-payment-promo/);
   assert.match(outputs[0].url, /protocol\/openid-connect\/token$/);
   assert.equal(outputs[0].requestTimeout, 10000);
+});
+
+test('join re-resolves the campaign for a subscription-created legacy game without a snapshot', () => {
+  const outputs = run('join', {
+    _splitJoinBody: { clientPhone: '+7 960 000 00 08', paymentMode: 'one_time' },
+    payload: [{
+      metadata: {
+        splitPayment: {
+          vivaExerciseId: 'exercise-piter-subscription-legacy',
+          shareCount: 4,
+          shareAmount: 1500,
+          selectedPaymentMode: 'subscription',
+        },
+      },
+      booking: {
+        studioId: 'studio-piter',
+        roomId: 'room-piter-1',
+        date: '2026-08-24',
+        timeFrom: '18:00',
+        timeTo: '19:30',
+      },
+    }],
+  });
+
+  assert.equal(outputs[0]._splitCtx.step, 'pricing_policy');
+  assert.equal(outputs[0]._splitCtx.pricingPolicy, null);
+  assert.equal(outputs[0]._splitCtx.pricingPolicyProof, null);
+  assert.equal(outputs[0]._splitCtx.shareAmount, 1500);
+  assert.match(outputs[0].url, /split-payment-promo/);
+  assert.match(outputs[0].url, /forDate=2026-08-24/);
+});
+
+test('subscription-created game validates its stored campaign against current CUP policy', () => {
+  const pricingPolicy = {
+    id: 'piter-split-250-per-hour-v1',
+    pricingMode: 'PER_PARTICIPANT_HOUR',
+    currency: 'RUB',
+    twoTeamsHourlyAmount: 500,
+    fourPlayersHourlyAmount: 250,
+  };
+  const outputs = run('join', {
+    _splitJoinBody: { clientPhone: '+7 960 000 00 09', paymentMode: 'one_time' },
+    payload: [{
+      metadata: {
+        splitPayment: {
+          vivaExerciseId: 'exercise-piter-subscription-policy',
+          shareCount: 4,
+          selectedPaymentMode: 'subscription',
+          pricingPolicy,
+        },
+      },
+      booking: {
+        studioId: 'studio-piter',
+        roomId: 'room-piter-1',
+        date: '2026-08-24',
+        timeFrom: '18:00',
+        timeTo: '19:30',
+      },
+    }],
+  });
+
+  assert.equal(outputs[0]._splitCtx.step, 'pricing_policy');
+  assert.deepEqual(outputs[0]._splitCtx.expectedPricingPolicy, {
+    ...pricingPolicy,
+    title: null,
+    activeFrom: null,
+    activeTo: null,
+    version: 'piter-split-250-per-hour-v1',
+  });
+  assert.equal(outputs[0]._splitCtx.pricingPolicyProof, null);
+  assert.match(outputs[0].url, /split-payment-promo/);
 });
 
 test('join refuses a stored policy without organizer payment evidence', () => {
@@ -250,4 +342,48 @@ test('router completes a subscription booking without creating a payment transac
   assert.equal(outputs[1].payload.selectedPaymentMode, 'subscription');
   assert.equal(outputs[1].payload.toPay, 0);
   assert.equal(outputs[1].payload.bookingId, 'booking-1');
+});
+
+test('router canonicalizes a stale subscription share from the selected Piter campaign', () => {
+  const pricingOut = run('router', {
+    statusCode: 200,
+    payload: {
+      enabled: true,
+      selectedPromoId: 'piter-split-250-per-hour-v1',
+      pricingMode: 'PER_PARTICIPANT_HOUR',
+      currency: 'RUB',
+      shareAmounts: { twoTeams: 500, fourPlayers: 250 },
+    },
+    _splitCtx: {
+      step: 'pricing_policy',
+      action: 'create',
+      paymentMode: 'subscription',
+      shareCount: 4,
+      durationMinutes: 90,
+      shareAmount: 1500,
+    },
+  });
+  assert.equal(pricingOut[0]._splitCtx.shareAmount, 375);
+  assert.equal(pricingOut[0]._splitCtx.pricingPolicy.id, 'piter-split-250-per-hour-v1');
+
+  const responseOut = run('router', {
+    statusCode: 201,
+    payload: {
+      id: 'booking-subscription-piter',
+      clientSubscriptionId: 'client-subscription-piter',
+      client: { id: 'client-piter' },
+      studio: { id: 'studio-piter' },
+    },
+    _splitCtx: {
+      ...pricingOut[0]._splitCtx,
+      step: 'create_booking',
+      paymentRef: 'payment-subscription-piter',
+      exerciseId: 'exercise-subscription-piter',
+      clientSubscriptionId: 'client-subscription-piter',
+      selectedPaymentMode: 'subscription',
+      oneTimeBaseAmount: 10000,
+    },
+  });
+  assert.equal(responseOut[1].payload.shareAmount, 375);
+  assert.equal(responseOut[1].payload.pricingPolicy.id, 'piter-split-250-per-hour-v1');
 });
