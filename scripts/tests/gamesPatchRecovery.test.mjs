@@ -2,9 +2,14 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import test from 'node:test';
-import { GAMES_PATCH_CONTRACT, PATCH_SOURCE_PATH } from '../patch_live_games_patch.mjs';
+import {
+  GAMES_PATCH_CONTRACT,
+  PATCH_SOURCE_PATH,
+  synchronizeGamesPatch,
+} from '../patch_live_games_patch.mjs';
 
-const LIVE_PATCH_SHA256 = 'cd19171a18ec18a553418d5b1725bab50ee1df2788e5160143430aaeb758c8ad';
+const LIVE_FLOW_SHA256 = 'fc9daeecb23a15524f027fde746637e0f4fc8977fffa191073ee03485243ac25';
+const LIVE_PATCH_SHA256 = '323b78bf0acdee06ac86f838151a271fe7132a0f60a72e92a62a8e2a1fb8003e';
 const PATCH_CANDIDATE_SHA256 = '4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931';
 
 class FixedDate extends Date {
@@ -13,6 +18,42 @@ class FixedDate extends Date {
 }
 
 function source() { return fs.readFileSync(PATCH_SOURCE_PATH, 'utf8'); }
+const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
+const sha256Json = (value) => sha256(Buffer.from(JSON.stringify(value), 'utf8'));
+
+function syntheticFlowContract() {
+  const flow = [
+    { id: 'tab', type: 'tab', label: 'LK Games', disabled: false },
+    { id: 'route-a', type: 'http in', z: 'tab', name: 'route a', method: 'patch', url: '/a', wires: [['target']] },
+    { id: 'route-b', type: 'http in', z: 'tab', name: 'route b', method: 'patch', url: '/b', wires: [['target']] },
+    { id: 'target', type: 'function', z: 'tab', name: 'target', outputs: 1, func: 'return msg;\n', wires: [['terminal']] },
+    { id: 'terminal', type: 'debug', z: 'tab', name: 'terminal', wires: [] },
+  ];
+  const byId = new Map(flow.map((node) => [node.id, node]));
+  const candidateSource = 'msg.membershipId = "membership-1";\nreturn msg;\n';
+  const contract = {
+    wholeFlowSha256: sha256(Buffer.from(JSON.stringify(flow))),
+    nodeCount: flow.length,
+    httpRouteCount: 2,
+    tabId: 'tab',
+    routes: ['route-a', 'route-b'].map((id) => {
+      const node = byId.get(id);
+      return { id, name: node.name, url: node.url, nodeSha256: sha256Json(node) };
+    }),
+    target: {
+      id: 'target',
+      name: 'target',
+      outputs: 1,
+      wires: [['terminal']],
+      preimageSha256: sha256(byId.get('target').func),
+      sourceSha256: sha256(candidateSource),
+      nodeSha256: sha256Json(byId.get('target')),
+    },
+    graphNodes: [{ id: 'terminal', nodeSha256: sha256Json(byId.get('terminal')) }],
+  };
+  return { flow, contract, candidateSource };
+}
+
 function run(payload, gameId = 'game-42') {
   const msg = { req: { params: { gameId } }, payload };
   return new Function('msg', 'Date', source())(msg, FixedDate);
@@ -20,6 +61,9 @@ function run(payload, gameId = 'game-42') {
 
 test('tracked patch source is a pinned candidate after the exact verified live function', () => {
   assert.equal(crypto.createHash('sha256').update(source()).digest('hex'), PATCH_CANDIDATE_SHA256);
+  assert.equal(GAMES_PATCH_CONTRACT.wholeFlowSha256, LIVE_FLOW_SHA256);
+  assert.equal(GAMES_PATCH_CONTRACT.nodeCount, 4762);
+  assert.equal(GAMES_PATCH_CONTRACT.httpRouteCount, 215);
   assert.equal(GAMES_PATCH_CONTRACT.target.preimageSha256, LIVE_PATCH_SHA256);
   assert.equal(GAMES_PATCH_CONTRACT.target.sourceSha256, PATCH_CANDIDATE_SHA256);
 });
@@ -34,14 +78,49 @@ test('both PATCH routes remain the only verified production inputs', () => {
   ]);
 });
 
+test('guarded synchronization changes only the exact target function', () => {
+  const { flow, contract, candidateSource } = syntheticFlowContract();
+  const result = synchronizeGamesPatch(flow, candidateSource, contract.wholeFlowSha256, contract);
+  assert.deepEqual(result.changedNodes, [{ id: 'target', changedFields: ['func'] }]);
+  assert.equal(result.reachableNodeCount, 4);
+  assert.equal(result.candidate.find((node) => node.id === 'target').func, candidateSource);
+  assert.deepEqual(
+    result.candidate.map((node) => ({ id: node.id, wires: node.wires ?? null })),
+    flow.map((node) => ({ id: node.id, wires: node.wires ?? null })),
+  );
+});
+
+test('guarded synchronization fails closed on target or route drift', () => {
+  const { flow, contract, candidateSource } = syntheticFlowContract();
+  const targetDrift = structuredClone(flow);
+  targetDrift.find((node) => node.id === 'target').func = 'return null;\n';
+  assert.throws(
+    () => synchronizeGamesPatch(targetDrift, candidateSource, contract.wholeFlowSha256, contract),
+    /PATCH target preimage mismatch/,
+  );
+
+  const routeDrift = structuredClone(flow);
+  routeDrift.find((node) => node.id === 'route-a').wires = [['terminal']];
+  assert.throws(
+    () => synchronizeGamesPatch(routeDrift, candidateSource, contract.wholeFlowSha256, contract),
+    /PATCH route route-a contract mismatch/,
+  );
+});
+
 test('ordinary participant patch preserves the four-output Mongo, HTTP, debug, and autojoin contract', () => {
   const outputs = run({
-    participants: [{ id: 'p1', name: 'Player', phone: '8 (960) 000-00-01' }],
+    participants: [{
+      id: 'p1',
+      name: 'Player',
+      phone: '8 (960) 000-00-01',
+      membershipId: 'membership-join-1',
+    }],
     metadata: { allRelatedPhones: ['+7 960 000 00 02'] },
   });
   assert.equal(outputs.length, 4);
   assert.equal(outputs[0].query.id, 'game-42');
   assert.deepEqual(outputs[0].payload.$set.participantPhones, ['79600000001']);
+  assert.equal(outputs[0].payload.$set.participants[0].membershipId, 'membership-join-1');
   assert.deepEqual(outputs[0].payload.$set.allRelatedPhones, ['79600000002', '79600000001']);
   assert.equal(outputs[1].statusCode, 200);
   assert.equal(outputs[1].payload.id, 'game-42');

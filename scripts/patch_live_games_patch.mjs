@@ -36,17 +36,17 @@ const graphNodes = [
 ].map(([id, nodeSha256]) => ({ id, nodeSha256 }));
 
 export const GAMES_PATCH_CONTRACT = Object.freeze({
-  wholeFlowSha256: 'd9f84e4fd6b087752dc810b9fc247e3d532cc6580c19a4a822f2111ddebeca4c',
-  nodeCount: 4617,
-  httpRouteCount: 203,
+  wholeFlowSha256: 'fc9daeecb23a15524f027fde746637e0f4fc8977fffa191073ee03485243ac25',
+  nodeCount: 4762,
+  httpRouteCount: 215,
   tabId: '4b91e2a2413688db',
   routes,
   target: {
     id: 'e0d7883bc1a9fa8c', name: 'Prepare game patch', outputs: 4,
     wires: [['b2a10027fc45966c'], ['e17f8a411d4dfa91'], ['3b822085d5f18e97'], ['5fc5eaeab97f3f88']],
-    preimageSha256: 'cd19171a18ec18a553418d5b1725bab50ee1df2788e5160143430aaeb758c8ad',
+    preimageSha256: '323b78bf0acdee06ac86f838151a271fe7132a0f60a72e92a62a8e2a1fb8003e',
     sourceSha256: '4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931',
-    nodeSha256: '2c0f67b4a7b36a9511b6a6dd71e7037ca6cfc3cef905263d1f0515bbe23a26d4',
+    nodeSha256: '27b73e091f31257894b0da208cc482e02bbb4bce599a52c4d8e6672bcf2d566f',
   },
   graphNodes,
 });
