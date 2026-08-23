@@ -121,6 +121,51 @@ const readGlobalFirst = (keys) => {
   return null;
 };
 
+const readStrictBoolean = (value) => {
+  if (value === true || value === false) return value;
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "on"].includes(normalized)) return true;
+  if (["false", "0", "off"].includes(normalized)) return false;
+  return false;
+};
+
+const managedSaleReadiness = (counterKey) => {
+  const guardEnabled = readStrictBoolean(global.get("subscriptions_managed_sale_guard_enabled"));
+  if (!guardEnabled || !["network_friendship", "piter_friendship"].includes(counterKey)) {
+    return { guardEnabled, runtimeReady: true, runtimeError: null, runtimeReason: null };
+  }
+  const planReady = readStrictBoolean(global.get(`subscriptions_managed_sale_${counterKey}_ready`));
+  const runtimeUrl = toStr(global.get("subscriptions_runtime_api_base_url"));
+  const contextToken = toStr(global.get("subscriptions_runtime_context_integration_token"));
+  const activationToken = toStr(global.get("subscriptions_activation_integration_token"));
+  const validRuntimeUrl = (() => {
+    try {
+      return Boolean(runtimeUrl && new URL(runtimeUrl).protocol === "https:");
+    } catch {
+      return false;
+    }
+  })();
+  const tokenIsStrong = (token) => Boolean(token && Buffer.byteLength(token, "utf8") >= 32);
+  if (!planReady) {
+    return {
+      guardEnabled,
+      runtimeReady: false,
+      runtimeError: "MANAGED_SUBSCRIPTION_SALE_NOT_READY",
+      runtimeReason: "PLAN_READINESS_NOT_CONFIRMED",
+    };
+  }
+  if (!validRuntimeUrl || !tokenIsStrong(contextToken) || !tokenIsStrong(activationToken)) {
+    return {
+      guardEnabled,
+      runtimeReady: false,
+      runtimeError: "MANAGED_SUBSCRIPTION_RUNTIME_NOT_CONFIGURED",
+      runtimeReason: "RUNTIME_CONFIGURATION_MISSING",
+    };
+  }
+  return { guardEnabled, runtimeReady: true, runtimeError: null, runtimeReason: null };
+};
+
 const resolveDailyDropDate = (now = new Date(Date.now())) => {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: AB_LETO_DAILY_DROP_TIME_ZONE,
@@ -353,6 +398,7 @@ const readRegionalFriendshipConfig = (counterKey) => {
       providerProductCostMinor,
     };
   });
+  const readiness = managedSaleReadiness(counterKey);
   return {
     counterKey,
     inventoryId: readGlobalFirst([`summer_subscription_${counterKey}_inventory_id`])
@@ -367,6 +413,10 @@ const readRegionalFriendshipConfig = (counterKey) => {
     totalLimit: regional.batchSize * tiers.length,
     batchSize: regional.batchSize,
     tiers,
+    managedSaleGuardEnabled: readiness.guardEnabled,
+    runtimeReady: readiness.runtimeReady,
+    runtimeError: readiness.runtimeError,
+    runtimeReason: readiness.runtimeReason,
   };
 };
 

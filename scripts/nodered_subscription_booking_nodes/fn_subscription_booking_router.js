@@ -385,6 +385,26 @@ const PLAN_PRODUCT_IDS = {
   ra: "b91e14d1-fe6e-4d0b-be39-3e45ad86b759",
 };
 
+const MANAGED_PLAN_DEFAULT_PRODUCT_IDS = {
+  network_friendship: ["db7a5250-7369-4f43-8ac5-9111be24bc74"],
+  piter_friendship: ["8bf334ba-3050-4017-b40a-7eef2db1eb16"],
+};
+
+const managedPlanProductIds = () => {
+  const resolved = {};
+  for (const [planKey, defaults] of Object.entries(MANAGED_PLAN_DEFAULT_PRODUCT_IDS)) {
+    const ids = new Set(defaults);
+    const configured = toStr(global.get(`summer_subscription_${planKey}_product_id`));
+    if (configured) ids.add(normalizeId(configured));
+    for (let tier = 1; tier <= 4; tier += 1) {
+      const tierId = toStr(global.get(`summer_subscription_${planKey}_tier_${tier}_product_id`));
+      if (tierId) ids.add(normalizeId(tierId));
+    }
+    resolved[planKey] = ids;
+  }
+  return resolved;
+};
+
 const collectPlanMarkers = (value, seen = new Set()) => {
   if (value === null || value === undefined) return [];
   if (typeof value === "string" || typeof value === "number") return [String(value)];
@@ -401,8 +421,34 @@ const collectPlanMarkers = (value, seen = new Set()) => {
   return markers;
 };
 
+const collectExactProductIds = (value) => {
+  if (!isObj(value)) return [];
+  const ids = [value.productId, value.subscriptionProductId, value.templateId]
+    .map(normalizeId)
+    .filter(Boolean);
+  const addProductShapeIds = (nested) => {
+    if (!isObj(nested)) return;
+    ids.push(...[nested.id, nested.uuid, nested.productId].map(normalizeId).filter(Boolean));
+  };
+  addProductShapeIds(value.product);
+  addProductShapeIds(value.template);
+  if (isObj(value.subscription)) {
+    ids.push(...[value.subscription.productId, value.subscription.subscriptionProductId]
+      .map(normalizeId)
+      .filter(Boolean));
+    addProductShapeIds(value.subscription.product);
+    addProductShapeIds(value.subscription.template);
+  }
+  return ids;
+};
+
 const resolvePlanKey = (value) => {
   const markers = collectPlanMarkers(value);
+  const exactProductIds = collectExactProductIds(value);
+  const managedProductIds = managedPlanProductIds();
+  for (const [planKey, productIds] of Object.entries(managedProductIds)) {
+    if (exactProductIds.some((productId) => productIds.has(productId))) return planKey;
+  }
   for (const [planKey, productId] of Object.entries(PLAN_PRODUCT_IDS)) {
     if (markers.some((marker) => normalizeId(marker) === productId)) return planKey;
   }
@@ -445,6 +491,12 @@ const MANAGED_PLAN_KEYS = new Set([
   "piter_friendship",
 ]);
 
+const hasExactManagedProductId = (value, planKey) => {
+  const productIds = managedPlanProductIds()[planKey];
+  if (!productIds) return true;
+  return collectExactProductIds(value).some((productId) => productIds.has(productId));
+};
+
 const resolveLimitMode = (planKey, serviceDate) => {
   if (!planKey) return "event";
   return serviceDate >= SHARED_LIMIT_FROM ? "shared_day" : "category_day";
@@ -462,6 +514,19 @@ const numericId = (value) => {
   return Number(value);
 };
 const markerName = (value) => (isObj(value) ? toStr(value.name || value.title || value.label) : toStr(value));
+
+const managedExternalEventTypeId = (value) => {
+  const exercise = isObj(value?.exercise) ? value.exercise : value;
+  if (!isObj(exercise)) return null;
+  const type = exercise.type || exercise.exerciseType || exercise.serviceType || value?.exerciseType;
+  const direction = exercise.direction || exercise.exerciseDirection || value?.exerciseDirection;
+  const typeId = numericId(type ?? exercise.typeId ?? value?.exerciseTypeId);
+  const directionId = numericId(direction ?? exercise.directionId ?? value?.exerciseDirectionId);
+  if (!Number.isInteger(directionId) || directionId <= 0 || !Number.isInteger(typeId) || typeId <= 0) {
+    return null;
+  }
+  return `viva:direction:${directionId}:type:${typeId}`;
+};
 
 const resolveCategory = (value) => {
   const exercise = isObj(value?.exercise) ? value.exercise : value;
@@ -979,6 +1044,12 @@ if (ctx.step === "exercise") {
   ctx.subscriptionName = pickName(ownedSubscription);
   ctx.planKey = resolvePlanKey(ownedSubscription) || resolvePlanKey(ctx.subscriptionName);
   if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
+    if (!hasExactManagedProductId(ownedSubscription, ctx.planKey)) {
+      return finishError(ctx, 409, "Годовая подписка требует точной продуктовой привязки", {
+        code: "MANAGED_SUBSCRIPTION_PRODUCT_MAPPING_REQUIRED",
+        planKey: ctx.planKey,
+      });
+    }
     if (ctx.planKey === "kotelniki_friendship") {
       return finishError(ctx, 409, "Подписка Котельников ещё не подключена к правилам записи", {
         code: "MANAGED_SUBSCRIPTION_PLAN_NOT_ACTIVATED",
@@ -996,10 +1067,7 @@ if (ctx.step === "exercise") {
       resolutionSource: "SERVER",
       stationId: ctx.studioId,
       category: managedTargetCategory(ctx.category),
-      externalEventTypeId: toStr(
-        exercise.type?.id || exercise.exerciseType?.id || exercise.typeId
-        || exercise.direction?.id || exercise.exerciseDirection?.id || exercise.directionId,
-      ),
+      externalEventTypeId: managedExternalEventTypeId(exercise),
       productTypeId: null,
       eventId: actualExerciseId,
       durationMinutes: eventDurationMinutes(exercise),
@@ -1039,10 +1107,7 @@ if (ctx.step === "exercise") {
       resolutionSource: "SERVER",
       stationId: ctx.studioId,
       category: managedTargetCategory(ctx.category),
-      externalEventTypeId: toStr(
-        exercise.type?.id || exercise.exerciseType?.id || exercise.typeId
-        || exercise.direction?.id || exercise.exerciseDirection?.id || exercise.directionId,
-      ),
+      externalEventTypeId: managedExternalEventTypeId(exercise),
       productTypeId: null,
       eventId: actualExerciseId,
       durationMinutes: eventDurationMinutes(exercise),
@@ -1068,8 +1133,14 @@ if (ctx.step === "subscription_name") {
   }
   const payload = unwrapRecord(msg.payload) || msg.payload;
   ctx.subscriptionName = toStr(payload?.sertName || payload?.subscriptionName || payload?.name);
-  ctx.planKey = resolvePlanKey(ctx.subscriptionName);
+  ctx.planKey = resolvePlanKey(payload) || resolvePlanKey(ctx.subscriptionName);
   if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
+    if (!hasExactManagedProductId(payload, ctx.planKey)) {
+      return finishError(ctx, 409, "Годовая подписка требует точной продуктовой привязки", {
+        code: "MANAGED_SUBSCRIPTION_PRODUCT_MAPPING_REQUIRED",
+        planKey: ctx.planKey,
+      });
+    }
     if (ctx.planKey === "kotelniki_friendship") {
       return finishError(ctx, 409, "Подписка Котельников ещё не подключена к правилам записи", {
         code: "MANAGED_SUBSCRIPTION_PLAN_NOT_ACTIVATED",
@@ -1399,6 +1470,12 @@ if (ctx.step === "managed_policy_decision") {
     || decision.policyVersion !== ctx.managedRuntime?.policy?.policyVersion) {
     return finishError(ctx, 409, "Правила подписки не разрешили эту запись", {
       code: "MANAGED_SUBSCRIPTION_POLICY_BLOCKED",
+    });
+  }
+  if (["CREATE_GAME", "JOIN_GAME"].includes(ctx.managedAction)
+    && decision.benefit?.kind !== "FREE_ENTITLEMENT") {
+    return finishError(ctx, 409, "Правила подписки не покрывают это действие", {
+      code: "MANAGED_SUBSCRIPTION_BENEFIT_NOT_APPLICABLE",
     });
   }
   ctx.managedDecision = {

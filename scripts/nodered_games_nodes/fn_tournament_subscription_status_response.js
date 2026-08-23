@@ -526,6 +526,10 @@ const createCounterState = (counter) => {
     canPurchase: counter?.unlimited === true || totalLimit - manualPaidCount > 0,
     bindingReady: true,
     bindingError: null,
+    managedSaleGuardEnabled: counter?.managedSaleGuardEnabled === true,
+    runtimeReady: counter?.runtimeReady !== false,
+    runtimeError: toStr(counter?.runtimeError),
+    runtimeReason: toStr(counter?.runtimeReason),
     batchSize: Math.max(0, Math.floor(Number(counter?.batchSize) || 0)),
     batchIndex: 0,
     batchCount: Array.isArray(counter?.tiers) ? counter.tiers.length : 0,
@@ -771,7 +775,9 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
         ? null
         : `Текущая ценовая партия ${regional.bindingLabel} ещё не подключена к оплате`;
     }
-    state.canPurchase = (state.unlimited || state.remainingCount > 0) && state.bindingReady;
+    state.canPurchase = (state.unlimited || state.remainingCount > 0)
+      && state.bindingReady
+      && state.runtimeReady;
     state.updatedAt = state._lastUpdatedAtTs == null
       ? new Date().toISOString()
       : new Date(state._lastUpdatedAtTs).toISOString();
@@ -838,6 +844,10 @@ msg.payload = {
   canPurchase: toBool(selectedCounter.canPurchase) ?? false,
   bindingReady: toBool(selectedCounter.bindingReady) ?? true,
   bindingError: toStr(selectedCounter.bindingError),
+  managedSaleGuardEnabled: selectedCounter.managedSaleGuardEnabled === true,
+  runtimeReady: selectedCounter.runtimeReady !== false,
+  runtimeError: toStr(selectedCounter.runtimeError),
+  runtimeReason: toStr(selectedCounter.runtimeReason),
   batchSize: toInt(selectedCounter.batchSize, 0),
   batchIndex: toInt(selectedCounter.batchIndex, 0),
   batchCount: toInt(selectedCounter.batchCount, 0),

@@ -17,6 +17,48 @@ const toStr = (value) => {
   return text ? text : null;
 };
 
+const readStrictBoolean = (value) => {
+  if (value === true || value === false) return value;
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "on"].includes(normalized)) return true;
+  if (["false", "0", "off"].includes(normalized)) return false;
+  return false;
+};
+
+const managedSaleReadiness = (counterKey) => {
+  const guardEnabled = readStrictBoolean(global.get("subscriptions_managed_sale_guard_enabled"));
+  if (!guardEnabled || !["network_friendship", "piter_friendship"].includes(counterKey)) {
+    return { runtimeReady: true, runtimeError: null, runtimeReason: null };
+  }
+  if (!readStrictBoolean(global.get(`subscriptions_managed_sale_${counterKey}_ready`))) {
+    return {
+      runtimeReady: false,
+      runtimeError: "MANAGED_SUBSCRIPTION_SALE_NOT_READY",
+      runtimeReason: "PLAN_READINESS_NOT_CONFIRMED",
+    };
+  }
+  const runtimeUrl = toStr(global.get("subscriptions_runtime_api_base_url"));
+  const contextToken = toStr(global.get("subscriptions_runtime_context_integration_token"));
+  const activationToken = toStr(global.get("subscriptions_activation_integration_token"));
+  const validRuntimeUrl = (() => {
+    try {
+      return Boolean(runtimeUrl && new URL(runtimeUrl).protocol === "https:");
+    } catch {
+      return false;
+    }
+  })();
+  const tokenIsStrong = (token) => Boolean(token && Buffer.byteLength(token, "utf8") >= 32);
+  if (!validRuntimeUrl || !tokenIsStrong(contextToken) || !tokenIsStrong(activationToken)) {
+    return {
+      runtimeReady: false,
+      runtimeError: "MANAGED_SUBSCRIPTION_RUNTIME_NOT_CONFIGURED",
+      runtimeReason: "RUNTIME_CONFIGURATION_MISSING",
+    };
+  }
+  return { runtimeReady: true, runtimeError: null, runtimeReason: null };
+};
+
 const toTs = (value) => {
   const text = toStr(value);
   if (!text) return null;
@@ -170,6 +212,16 @@ const ctx = msg._summerSubscriptionCtx && typeof msg._summerSubscriptionCtx === 
 
 if (!ctx || ctx.action !== "purchase") {
   return failMsg(500, "Summer subscription purchase context is missing");
+}
+
+const managedReadiness = managedSaleReadiness(normalizeCounterKey(ctx.counterKey));
+if (!managedReadiness.runtimeReady) {
+  return failMsg(503, "Продажа годовой подписки временно недоступна", {
+    counterKey: normalizeCounterKey(ctx.counterKey),
+    runtimeReady: false,
+    runtimeError: managedReadiness.runtimeError,
+    runtimeReason: managedReadiness.runtimeReason,
+  });
 }
 
 const rows = Array.isArray(msg.payload) ? msg.payload : [];

@@ -2473,6 +2473,166 @@ test("network status uses one server-side batch of 100 at 56 800 RUB", () => {
   assert.equal(payload.canPurchase, true);
 });
 
+test("managed sale guard is opt-in and leaves regional storefront behavior unchanged by default", () => {
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "piter_friendship" } } },
+  ) as unknown[];
+  const status = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    { _summerSubscriptionCtx: asRecord(prepared[0])._summerSubscriptionCtx, payload: [] },
+  ) as unknown[];
+  const payload = asRecord(asRecord(status[0]).payload);
+  assert.equal(payload.runtimeReady, true);
+  assert.equal(payload.runtimeError, null);
+  assert.equal(payload.canPurchase, true);
+});
+
+test("managed sale guard closes Piter status and purchase before payment mutation when runtime readiness is missing", () => {
+  const globals = { subscriptions_managed_sale_guard_enabled: true };
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "piter_friendship" } } },
+    globals,
+  ) as unknown[];
+  const ctx = asRecord(asRecord(prepared[0])._summerSubscriptionCtx);
+  const status = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    { _summerSubscriptionCtx: ctx, payload: [] },
+    globals,
+  ) as unknown[];
+  const payload = asRecord(asRecord(status[0]).payload);
+  assert.equal(payload.canPurchase, false);
+  assert.equal(payload.runtimeReady, false);
+  assert.equal(payload.runtimeError, "MANAGED_SUBSCRIPTION_SALE_NOT_READY");
+
+  const purchasePrepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+    { payload: { clientPhone: "79990000000", counterKey: "piter_friendship" }, req: { query: {} } },
+    globals,
+  ) as unknown[];
+  const limited = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
+    { _summerSubscriptionCtx: asRecord(purchasePrepared[0])._summerSubscriptionCtx, payload: [] },
+    globals,
+  ) as unknown[];
+  assert.equal(limited[0], null);
+  assert.equal(asRecord(limited[1]).statusCode, 503);
+  assert.equal(asRecord(asRecord(limited[1]).payload).details.runtimeError, "MANAGED_SUBSCRIPTION_SALE_NOT_READY");
+});
+
+test("managed sale guard permits an explicitly ready Piter plan with complete runtime configuration", () => {
+  const globals = {
+    subscriptions_managed_sale_guard_enabled: true,
+    subscriptions_managed_sale_piter_friendship_ready: true,
+    subscriptions_runtime_api_base_url: "https://cup.example/api",
+    subscriptions_runtime_context_integration_token: "c".repeat(32),
+    subscriptions_activation_integration_token: "a".repeat(32),
+  };
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "piter_friendship" } } },
+    globals,
+  ) as unknown[];
+  const ctx = asRecord(asRecord(prepared[0])._summerSubscriptionCtx);
+  const status = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    { _summerSubscriptionCtx: ctx, payload: [] },
+    globals,
+  ) as unknown[];
+  const payload = asRecord(asRecord(status[0]).payload);
+  assert.equal(payload.runtimeReady, true);
+  assert.equal(payload.runtimeError, null);
+  assert.equal(payload.canPurchase, true);
+
+  const purchasePrepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+    { payload: { clientPhone: "79990000000", counterKey: "piter_friendship" }, req: { query: {} } },
+    globals,
+  ) as unknown[];
+  const limited = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
+    { _summerSubscriptionCtx: asRecord(purchasePrepared[0])._summerSubscriptionCtx, payload: [] },
+    globals,
+  ) as unknown[];
+  assert.ok(limited[0]);
+  assert.equal(limited[1], null);
+});
+
+test("managed sale guard accepts supported string globals consistently for status and purchase", () => {
+  const globals = {
+    subscriptions_managed_sale_guard_enabled: "true",
+    subscriptions_managed_sale_piter_friendship_ready: "on",
+    subscriptions_runtime_api_base_url: "https://cup.example/api",
+    subscriptions_runtime_context_integration_token: "c".repeat(32),
+    subscriptions_activation_integration_token: "a".repeat(32),
+  };
+  const statusPrepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "piter_friendship" } } },
+    globals,
+  ) as unknown[];
+  const status = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    { _summerSubscriptionCtx: asRecord(statusPrepared[0])._summerSubscriptionCtx, payload: [] },
+    globals,
+  ) as unknown[];
+  const statusPayload = asRecord(asRecord(status[0]).payload);
+  assert.equal(statusPayload.managedSaleGuardEnabled, true);
+  assert.equal(statusPayload.runtimeReady, true);
+  assert.equal(statusPayload.canPurchase, true);
+
+  const purchasePrepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+    { payload: { clientPhone: "79990000000", counterKey: "piter_friendship" }, req: { query: {} } },
+    globals,
+  ) as unknown[];
+  const limited = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
+    { _summerSubscriptionCtx: asRecord(purchasePrepared[0])._summerSubscriptionCtx, payload: [] },
+    globals,
+  ) as unknown[];
+  assert.ok(limited[0]);
+  assert.equal(limited[1], null);
+});
+
+test("managed sale guard rejects insecure runtime endpoints and short integration tokens", () => {
+  const baseGlobals = {
+    subscriptions_managed_sale_guard_enabled: true,
+    subscriptions_managed_sale_piter_friendship_ready: true,
+    subscriptions_runtime_api_base_url: "http://cup.example/api",
+    subscriptions_runtime_context_integration_token: "c".repeat(32),
+    subscriptions_activation_integration_token: "a".repeat(31),
+  };
+  const prepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "piter_friendship" } } },
+    baseGlobals,
+  ) as unknown[];
+  const status = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+    { _summerSubscriptionCtx: asRecord(prepared[0])._summerSubscriptionCtx, payload: [] },
+    baseGlobals,
+  ) as unknown[];
+  const payload = asRecord(asRecord(status[0]).payload);
+  assert.equal(payload.canPurchase, false);
+  assert.equal(payload.runtimeError, "MANAGED_SUBSCRIPTION_RUNTIME_NOT_CONFIGURED");
+
+  const purchasePrepared = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+    { payload: { clientPhone: "79990000000", counterKey: "piter_friendship" }, req: { query: {} } },
+    baseGlobals,
+  ) as unknown[];
+  const limited = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
+    { _summerSubscriptionCtx: asRecord(purchasePrepared[0])._summerSubscriptionCtx, payload: [] },
+    baseGlobals,
+  ) as unknown[];
+  assert.equal(limited[0], null);
+  assert.equal(asRecord(limited[1]).statusCode, 503);
+  assert.equal(asRecord(asRecord(limited[1]).payload).details.runtimeError, "MANAGED_SUBSCRIPTION_RUNTIME_NOT_CONFIGURED");
+});
+
 test("regional purchase ignores browser productId and fails closed without the active Viva product", () => {
   const prepared = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",

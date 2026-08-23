@@ -143,7 +143,7 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
         enabled: true,
         category: "GAME",
         actions: ["CREATE_GAME"],
-        externalEventTypeIds: ["1613"],
+        externalEventTypeIds: ["viva:direction:4588:type:1613"],
         productTypeIds: [],
         durationMinutes: [60],
         stationIds: benefitStationIds,
@@ -158,7 +158,7 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
         enabled: true,
         category: "GAME",
         actions: ["JOIN_GAME"],
-        externalEventTypeIds: ["1613"],
+        externalEventTypeIds: ["viva:direction:4588:type:1613"],
         productTypeIds: [],
         durationMinutes: [60, 90, 120],
         stationIds: benefitStationIds,
@@ -568,11 +568,12 @@ test("Piter split create resolves a server target and requests the actor-owned C
       id: "exercise-target",
       timeFrom: "2026-08-21T18:00:00+03:00",
       timeTo: "2026-08-21T19:00:00+03:00",
-      direction: { name: "Открытая игра" },
+      direction: { id: 4588, name: "Открытая игра" },
       type: { id: 1613, name: "Открытая игра" },
       studio: { id: "studio-1" },
       availableClientSubscriptions: [{
         clientSubscriptionId: "client-subscription-1",
+        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
         name: "Падел.Дружба.Питер — 12 месяцев",
       }],
     },
@@ -588,7 +589,7 @@ test("Piter split create resolves a server target and requests the actor-owned C
   assert.equal(out[0]._subscriptionBooking.planKey, "piter_friendship");
   assert.equal(out[0]._subscriptionBooking.managedTarget.durationMinutes, 60);
   assert.equal(out[0]._subscriptionBooking.managedTarget.stationId, "studio-1");
-  assert.equal(out[0]._subscriptionBooking.managedTarget.externalEventTypeId, "1613");
+  assert.equal(out[0]._subscriptionBooking.managedTarget.externalEventTypeId, "viva:direction:4588:type:1613");
   assert.equal(out[0].url, "https://cup.example/api/internal/subscriptions/runtime-context");
   assert.deepEqual(out[0].payload, { clientSubscriptionId: "client-subscription-1" });
   assert.equal(out[0].headers.Authorization, "Bearer user-token");
@@ -598,16 +599,161 @@ test("Piter split create resolves a server target and requests the actor-owned C
   assert.equal(out[3], null);
 });
 
+test("managed regional product IDs select Piter and HUB even when provider names change", () => {
+  for (const [product, expectedPlanKey] of [
+    [{ product: { id: "8bf334ba-3050-4017-b40a-7eef2db1eb16" } }, "piter_friendship"],
+    [{ productId: "db7a5250-7369-4f43-8ac5-9111be24bc74" }, "network_friendship"],
+  ]) {
+    const out = runFunction(ROUTER_FILE, {
+      statusCode: 200,
+      payload: {
+        id: "exercise-target",
+        timeFrom: "2026-08-21T18:00:00+03:00",
+        timeTo: "2026-08-21T19:00:00+03:00",
+        direction: { id: 4588, name: "Открытая игра" },
+        type: { id: 1613, name: "Открытая игра" },
+        studio: { id: "studio-1" },
+        availableClientSubscriptions: [{
+          clientSubscriptionId: "client-subscription-1",
+          name: "Переименованный годовой продукт",
+          ...product,
+        }],
+      },
+      _subscriptionBooking: baseContext("exercise", {
+        serviceDate: undefined,
+        category: undefined,
+        planKey: undefined,
+        managedAction: "CREATE_GAME",
+      }),
+    }, MANAGED_GLOBALS);
+    assert.equal(out[0]._subscriptionBooking.planKey, expectedPlanKey);
+    assert.equal(out[0]._subscriptionBooking.step, "managed_runtime_context");
+  }
+});
+
+test("unrelated nested IDs cannot select a managed regional product", () => {
+  const out = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      id: "exercise-target",
+      timeFrom: "2026-08-21T18:00:00+03:00",
+      timeTo: "2026-08-21T19:00:00+03:00",
+      direction: { id: 4588, name: "Открытая игра" },
+      type: { id: 1613, name: "Открытая игра" },
+      studio: { id: "studio-1" },
+      availableClientSubscriptions: [{
+        clientSubscriptionId: "client-subscription-1",
+        name: "Переименованный продукт",
+        metadata: { id: "8bf334ba-3050-4017-b40a-7eef2db1eb16" },
+      }],
+    },
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined,
+      category: undefined,
+      planKey: undefined,
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(out[0]._subscriptionBooking.step, "subscription_name");
+  assert.equal(out[0]._subscriptionBooking.planKey, null);
+});
+
+test("managed-looking regional name without product mapping fails before runtime or Mongo work", () => {
+  const out = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      id: "exercise-target",
+      timeFrom: "2026-08-21T18:00:00+03:00",
+      timeTo: "2026-08-21T19:00:00+03:00",
+      direction: { id: 4588, name: "Открытая игра" },
+      type: { id: 1613, name: "Открытая игра" },
+      studio: { id: "studio-1" },
+      availableClientSubscriptions: [{
+        clientSubscriptionId: "client-subscription-1",
+        name: "Падел.Дружба.Питер — переименованный",
+      }],
+    },
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined,
+      category: undefined,
+      planKey: undefined,
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(out[0], null);
+  assert.equal(out[4].statusCode, 409);
+  assert.equal(out[4].payload.details.code, "MANAGED_SUBSCRIPTION_PRODUCT_MAPPING_REQUIRED");
+});
+
+test("managed target requires both server-derived Viva direction and type IDs", () => {
+  const out = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      id: "exercise-target",
+      timeFrom: "2026-08-21T18:00:00+03:00",
+      timeTo: "2026-08-21T19:00:00+03:00",
+      direction: { name: "Открытая игра" },
+      type: { id: 1613, name: "Открытая игра" },
+      studio: { id: "studio-1" },
+      availableClientSubscriptions: [{
+        clientSubscriptionId: "client-subscription-1",
+        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+        name: "Переименованный годовой продукт",
+      }],
+    },
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined,
+      category: undefined,
+      planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(out[0], null);
+  assert.equal(out[4].statusCode, 409);
+  assert.equal(out[4].payload.details.code, "MANAGED_SUBSCRIPTION_TARGET_UNRESOLVED");
+});
+
+test("SERV2 nested exact managed product ID overrides a renamed subscription name", () => {
+  const out = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      subscription: { product: { id: "8bf334ba-3050-4017-b40a-7eef2db1eb16" } },
+      sertName: "Переименованный продукт",
+    },
+    _subscriptionBooking: baseContext("subscription_name", {
+      serviceDate: "2026-08-21",
+      category: "open_game",
+      planKey: null,
+      serverTarget: {
+        resolutionSource: "SERVER",
+        stationId: "studio-1",
+        category: "GAME",
+        externalEventTypeId: "viva:direction:4588:type:1613",
+        productTypeId: null,
+        eventId: "exercise-target",
+        durationMinutes: 60,
+        startsAt: "2026-08-21T15:00:00.000Z",
+        basePriceMinor: null,
+        currency: "RUB",
+      },
+      managedAction: "CREATE_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(out[0]._subscriptionBooking.planKey, "piter_friendship");
+  assert.equal(out[0]._subscriptionBooking.step, "managed_runtime_context");
+});
+
 test("HUB split join uses the same CUP policy path while Kotelniki stays closed", () => {
   const exercise = (name: string) => ({
     id: "exercise-target",
     timeFrom: "2026-08-21T18:00:00+03:00",
     timeTo: "2026-08-21T20:00:00+03:00",
-    direction: { name: "Открытая игра" },
+    direction: { id: 4588, name: "Открытая игра" },
     type: { id: 1613, name: "Открытая игра" },
     studio: { id: "studio-1" },
     availableClientSubscriptions: [{
       clientSubscriptionId: "client-subscription-1",
+      productId: name.includes("ХАБ")
+        ? "db7a5250-7369-4f43-8ac5-9111be24bc74"
+        : undefined,
       name,
     }],
   });
@@ -647,7 +793,7 @@ test("published managed policy is evaluated before Mongo and persists its audit 
       managedAction: "CREATE_GAME",
       managedTarget: {
         resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes: 60, startsAt: futureTarget.startsAt,
         basePriceMinor: null, currency: "RUB",
       },
@@ -676,6 +822,37 @@ test("published managed policy is evaluated before Mongo and persists its audit 
   assert.equal(routed[1]._subscriptionBooking.managedDecision.benefit.kind, "FREE_ENTITLEMENT");
 });
 
+test("a canonical event identity outside the published benefit is blocked before mutation", () => {
+  const futureTarget = futureManagedTarget();
+  const runtime = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse(),
+    _subscriptionBooking: baseContext("managed_runtime_context", {
+      serviceDate: futureTarget.serviceDate,
+      category: "open_game",
+      planKey: "piter_friendship",
+      managedAction: "CREATE_GAME",
+      managedTarget: {
+        resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
+        externalEventTypeId: "viva:direction:4589:type:1613", productTypeId: null, eventId: "exercise-target",
+        durationMinutes: 60, startsAt: futureTarget.startsAt,
+        basePriceMinor: null, currency: "RUB",
+      },
+    }),
+  }, MANAGED_GLOBALS);
+  const active = runFunction(ROUTER_FILE, {
+    statusCode: 200, payload: { content: [] }, _subscriptionBooking: runtime[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  const history = runFunction(ROUTER_FILE, {
+    statusCode: 200, payload: { content: [] }, _subscriptionBooking: active[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  const evaluated = runFunction(MANAGED_EVALUATOR_FILE, history[6]);
+  assert.ok(evaluated[0]);
+  const blocked = runFunction(ROUTER_FILE, evaluated[0], MANAGED_GLOBALS);
+  assert.equal(blocked[4].statusCode, 409);
+  assert.equal(blocked[4].payload.details.code, "MANAGED_SUBSCRIPTION_BENEFIT_NOT_APPLICABLE");
+});
+
 test("HUB accepts the exact first-use deadline lifecycle with the pinned station set", () => {
   const futureTarget = futureManagedTarget();
   const runtime = runFunction(ROUTER_FILE, {
@@ -693,7 +870,7 @@ test("HUB accepts the exact first-use deadline lifecycle with the pinned station
       managedAction: "JOIN_GAME",
       managedTarget: {
         resolutionSource: "SERVER", stationId: HUB_STATION_IDS[0], category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes: 120, startsAt: futureTarget.startsAt,
         basePriceMinor: null, currency: "RUB",
       },
@@ -730,7 +907,7 @@ test("HUB rejects all-stations, missing and additional station scopes before Viv
       managedAction: "JOIN_GAME",
       managedTarget: {
         resolutionSource: "SERVER", stationId: "studio-1", category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes: 120, startsAt: "2026-08-21T15:00:00.000Z",
         basePriceMinor: null, currency: "RUB",
       },
@@ -764,7 +941,7 @@ test("pending annual subscription fails before Viva reads when CUP activation is
       managedAction: "CREATE_GAME",
       managedTarget: {
         resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
         basePriceMinor: null, currency: "RUB",
       },
@@ -802,7 +979,7 @@ test("pending annual subscription is projected for policy and activates only aft
       managedAction: "CREATE_GAME",
       managedTarget: {
         resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
         basePriceMinor: null, currency: "RUB",
       },
@@ -969,7 +1146,7 @@ test("regional policy requires the exact first-use deadline lifecycle before any
         managedAction: "CREATE_GAME",
         managedTarget: {
           resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
-          externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+          externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
           durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
           basePriceMinor: null, currency: "RUB",
         },
@@ -995,7 +1172,7 @@ test("Piter rejects an all-stations policy and regional tournament discounts sta
       managedAction: "CREATE_GAME",
       managedTarget: {
         resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
         basePriceMinor: null, currency: "RUB",
       },
@@ -1015,6 +1192,7 @@ test("Piter rejects an all-stations policy and regional tournament discounts sta
       studio: { id: PITER_STATION_ID },
       availableClientSubscriptions: [{
         clientSubscriptionId: "client-subscription-1",
+        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
         name: "Падел.Дружба.Питер — 12 месяцев",
       }],
     },
@@ -1040,7 +1218,7 @@ test("90 minute create is blocked while 120 minute join is allowed by the same p
       },
       managedTarget: {
         resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes, startsAt: futureTarget.startsAt,
         basePriceMinor: null, currency: "RUB",
       },
