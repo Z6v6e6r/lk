@@ -81,10 +81,21 @@ test("buildSyntheticCabinetGameFromBooking creates a synthetic Viva game record"
 test("synthetic booking game wiring is passed through overlay entrypoints", () => {
   const myAppSource = fs.readFileSync("src/MyApp.tsx", "utf8");
   const gamesEntrySource = fs.readFileSync("src/games.tsx", "utf8");
+  const cabinetSource = fs.readFileSync("src/components/cabinet/Cabinet.tsx", "utf8");
   const gamesPageSource = fs.readFileSync("src/components/games/GamesPage.tsx", "utf8");
 
   assert.ok(myAppSource.includes("!options?.initialGameRecord"));
   assert.ok(myAppSource.includes("initialGameRecord: options?.initialGameRecord ?? null"));
-  assert.ok(gamesEntrySource.includes("initialGameRecord={data?.initialGameRecord ?? null}"));
+  assert.ok(gamesEntrySource.includes("initialGameRecord={selfLeavePreviewGame ?? data?.initialGameRecord ?? null}"));
   assert.ok(gamesPageSource.includes("const isReadOnlySyntheticGame = useMemo("));
+  assert.ok(cabinetSource.includes("Настроить и опубликовать"));
+  assert.ok(cabinetSource.includes("Запись есть в Viva, но ещё не добавлена в ЦУП."));
+  assert.match(
+    cabinetSource,
+    /isSyntheticCabinetBookingGame\(game\)[\s\S]{0,500}handleCreateTeamGameFromBooking\(booking\)/,
+  );
+  assert.match(
+    gamesPageSource,
+    /if \(\(step !== "details" && step !== "chat"\) \|\| !activeGameRecord\?\.id\) return;\s+if \(isReadOnlySyntheticGame\) return;\s+if \(!detailsNeedsVivaRosterSync\) return;/,
+  );
 });

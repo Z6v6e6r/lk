@@ -3292,6 +3292,13 @@ export function Cabinet({
     };
     const openGameDetails = () => {
       handleBeforeOpen();
+      if (isSyntheticCabinetBookingGame(game)) {
+        const booking = resolveBookingForGameCancellation(game);
+        if (booking && isExerciseConvertibleToGameFromBooking(booking)) {
+          handleCreateTeamGameFromBooking(booking);
+          return;
+        }
+      }
       handleOpenGameDetails(game);
     };
     const openGameChat = () => {
@@ -3434,6 +3441,11 @@ export function Cabinet({
     const isOrganizer = isCurrentUserOrganizer(game);
     const showOrganizerWaitlistBadge = isOrganizer && waitlistCount > 0;
     const isSyntheticBookingGame = isSyntheticCabinetBookingGame(game);
+    const canRecoverSyntheticGame = Boolean(
+      isSyntheticBookingGame
+      && linkedBooking
+      && isExerciseConvertibleToGameFromBooking(linkedBooking),
+    );
     const isCancelledForCabinet = Boolean(
       isGameCancelledStatus(game.status)
       || isGameRemovedStatus(game.status)
@@ -3742,7 +3754,18 @@ export function Cabinet({
                     {copiedGameInviteId === game.id ? "Скопировано" : "Пригласить в игру"}
                   </button>
                 )}
-                {canOpenChat ? (
+                {canRecoverSyntheticGame && linkedBooking ? (
+                  <button
+                    className="game-created-action game-created-action-invite"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleCreateTeamGameFromBooking(linkedBooking);
+                    }}
+                  >
+                    Настроить и опубликовать
+                  </button>
+                ) : canOpenChat ? (
                   <button
                     className={`game-created-action game-chat-open-btn${canInvite ? " game-created-action-chat-icon" : ""}`}
                     type="button"
@@ -3792,6 +3815,11 @@ export function Cabinet({
               </div>
             )}
           </>
+        )}
+        {canRecoverSyntheticGame && (
+          <div className="booking-status-text">
+            Запись есть в Viva, но ещё не добавлена в ЦУП.
+          </div>
         )}
         {archiveGameError && (
           <div className="booking-status-text">{archiveGameError}</div>

@@ -8643,6 +8643,7 @@ export default function GamesPage({
 
   useEffect(() => {
     if ((step !== "details" && step !== "chat") || !activeGameRecord?.id) return;
+    if (isReadOnlySyntheticGame) return;
     if (!detailsNeedsVivaRosterSync) return;
     if (updatingGameRoster) return;
 
@@ -8817,6 +8818,7 @@ export default function GamesPage({
   }, [
     step,
     activeGameRecord,
+    isReadOnlySyntheticGame,
     detailsNeedsVivaRosterSync,
     isDetailsSplitPaymentGame,
     updatingGameRoster,
