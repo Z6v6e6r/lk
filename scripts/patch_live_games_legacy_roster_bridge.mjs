@@ -5,7 +5,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const EXPECTED_FLOW_SHA256 = "2ff19d3543030ef14a7d551eca44dd44de9997d5641c36bdde828f8c4eec6861";
-const EXPECTED_PATCH_FUNC_SHA256 = "7d007ab69297b7ab4314bf23a21cb6fbebcdc6f149e0bfd9d931f0329718261c";
+const EXPECTED_PATCH_FUNC_SHA256 = "4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931";
 const PATCH_NODE_ID = "e0d7883bc1a9fa8c";
 const MONGO_TEMPLATE_ID = "591234d213742276";
 const AUTOJOIN_FIND_ID = "5fc5eaeab97f3f88";

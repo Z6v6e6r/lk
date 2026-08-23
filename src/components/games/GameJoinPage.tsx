@@ -56,6 +56,7 @@ import {
   withSubscriptionCategoryDailyLimitResolvedName,
 } from "../../utils/subscriptionCategoryDailyLimit";
 import { resolveSplitPromoShareAmount } from "./splitPromoPricing";
+import { createLocalMembershipId } from "./localMembershipGeneration";
 
 type JoinDecision = "JOINED" | "WAITLIST" | "DECLINED" | "NONE";
 
@@ -1777,16 +1778,22 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         return;
       }
 
+      const localMembershipId = createLocalMembershipId();
+      const localJoinPlayer: PadelGamePlayer = {
+        ...myPlayer,
+        membershipId: localMembershipId,
+      };
+
       if (participants.length < maxPlayers) {
         participants.push({
-          ...myPlayer,
+          ...localJoinPlayer,
           source: "INVITE_LINK",
           status: "CONFIRMED",
         });
         appliedStatus = "JOINED";
       } else if (waitlistEnabled) {
         waitlist.push({
-          ...myPlayer,
+          ...localJoinPlayer,
           source: "INVITE_LINK",
           status: "WAITLIST",
         });
@@ -1808,8 +1815,9 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         status: appliedStatus,
         comment: comment.trim() || null,
         updatedAt: nowIso,
-        playerName: myPlayer.name,
-        playerId: myPlayer.id ?? null,
+        playerName: localJoinPlayer.name,
+        playerId: localJoinPlayer.id ?? null,
+        membershipId: localMembershipId,
       };
       metadata.joinResponses = joinResponses;
       metadata.lastJoinUpdateAt = nowIso;

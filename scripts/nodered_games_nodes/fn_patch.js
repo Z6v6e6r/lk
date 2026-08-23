@@ -557,7 +557,7 @@ if (isObj(body.booking)) {
 
 const normalizePlayer = (p, fallbackSource) => {
   if (!isObj(p)) return null;
-  return {
+  const player = {
     id: toStr(p.id || p.clientId || p.userId || p.uuid),
     name: toStr(p.name || p.fullName || [p.firstName, p.lastName].filter(Boolean).join(" ")) || "Игрок",
     phone: normPhone(p.phone || p.phoneNumber || p.mobile),
@@ -567,6 +567,9 @@ const normalizePlayer = (p, fallbackSource) => {
     source: toStr(p.source || fallbackSource || "INVITED"),
     status: toStr(p.status || "CONFIRMED"),
   };
+  const membershipId = toStr(p.membershipId || p.membership_id);
+  if (membershipId) player.membershipId = membershipId;
+  return player;
 };
 
 if (Array.isArray(body.participants)) {

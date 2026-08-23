@@ -45,7 +45,7 @@ export const GAMES_PATCH_CONTRACT = Object.freeze({
     id: 'e0d7883bc1a9fa8c', name: 'Prepare game patch', outputs: 4,
     wires: [['b2a10027fc45966c'], ['e17f8a411d4dfa91'], ['3b822085d5f18e97'], ['5fc5eaeab97f3f88']],
     preimageSha256: 'cd19171a18ec18a553418d5b1725bab50ee1df2788e5160143430aaeb758c8ad',
-    sourceSha256: '7d007ab69297b7ab4314bf23a21cb6fbebcdc6f149e0bfd9d931f0329718261c',
+    sourceSha256: '4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931',
     nodeSha256: '2c0f67b4a7b36a9511b6a6dd71e7037ca6cfc3cef905263d1f0515bbe23a26d4',
   },
   graphNodes,

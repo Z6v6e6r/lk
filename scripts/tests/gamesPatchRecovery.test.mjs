@@ -5,7 +5,7 @@ import test from 'node:test';
 import { GAMES_PATCH_CONTRACT, PATCH_SOURCE_PATH } from '../patch_live_games_patch.mjs';
 
 const LIVE_PATCH_SHA256 = 'cd19171a18ec18a553418d5b1725bab50ee1df2788e5160143430aaeb758c8ad';
-const PATCH_CANDIDATE_SHA256 = '7d007ab69297b7ab4314bf23a21cb6fbebcdc6f149e0bfd9d931f0329718261c';
+const PATCH_CANDIDATE_SHA256 = '4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931';
 
 class FixedDate extends Date {
   constructor(...args) { super(...(args.length ? args : ['2026-07-27T10:00:00.000Z'])); }

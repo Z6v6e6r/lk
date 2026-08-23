@@ -1103,6 +1103,32 @@ test("legacy local-only self membership without an immutable key fails closed", 
   assert.match(result[1].payload.message, /поколение записи/);
 });
 
+test("local-only self membership uses participant membershipId as its immutable generation", () => {
+  const game = selfGame();
+  game.participants[0].membershipId = "local:membership-generation-1";
+  delete game.metadata.splitPayment.payments[0].bookingId;
+  delete game.booking.bookingId;
+
+  let msg = authorizeSelf(game);
+  assert.ok(msg._splitLeaveCtx.membershipVersion);
+  msg = run("fn_split_leave_router.js", msg).result[0];
+  msg.statusCode = 200;
+  msg.payload = { content: [] };
+  msg = run("fn_split_leave_router.js", msg).result[0];
+  msg.statusCode = 200;
+  msg.payload = { content: [] };
+
+  const verified = run("fn_split_leave_router.js", msg).result[4];
+  assert.ok(verified);
+  assert.equal(verified._splitLeaveCtx.localOnlyNoBooking, true);
+  const started = run("fn_split_leave_operation_start.js", verified).result[0];
+  assert.equal(
+    started.payload[1].$setOnInsert.membershipVersion,
+    verified._splitLeaveCtx.membershipVersion,
+  );
+  assert.equal(started.payload[1].$setOnInsert.vivaTargetMode, "NONE");
+});
+
 test("STARTED recovery is discoverable only when a service token exists", () => {
   const withoutToken = run("fn_split_leave_retry_query.js", {}, { global: {} }).result;
   assert.equal(withoutToken.payload.$or.length, 2);

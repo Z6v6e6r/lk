@@ -66,3 +66,27 @@ test("games patch records ignored client cancel even without metadata payload", 
   assert.equal(dbMsg.payload.$set["metadata.lastIgnoredClientCancelPatchReason"], "GENERIC_PATCH_CANCEL_GUARD");
   assert.equal(dbMsg.payload.$set["audit.lastEvent"]?.payload?.ignoredClientCancelPatch, true);
 });
+
+test("games patch preserves an immutable local membership generation", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_patch.js", {
+    req: {
+      params: { gameId: "game-1" },
+      path: "/lk/games/game-1",
+    },
+    payload: {
+      participants: [{
+        id: "client-2",
+        name: "Player",
+        phone: "+7 999 000-00-02",
+        membershipId: "local:membership-generation-1",
+      }],
+    },
+  }) as unknown[];
+
+  const dbMsg = out[0] as PatchDbMessage | undefined;
+  assert.ok(dbMsg);
+  const participants = dbMsg.payload.$set.participants as Array<Record<string, unknown>>;
+  assert.equal(participants[0]?.membershipId, "local:membership-generation-1");
+  const responseMsg = out[1] as { payload?: { participants?: Array<Record<string, unknown>> } } | undefined;
+  assert.equal(responseMsg?.payload?.participants?.[0]?.membershipId, "local:membership-generation-1");
+});

@@ -116,7 +116,7 @@ const expectedFunctionHashes = Object.freeze({
   [ids.chatReadPrepare]: "aa16ee2b4ab49077ee65968beeb9e2a293edee3e1e18f55d587295918629fdd8",
   [ids.chatReadBuild]: "16d5918109e8b719b2a4604cf0d8932b109e33121b822fe38f33712c8b69498a",
   [ids.chatListPrepare]: "ff24b11e0501d85dd3e584298b88d1af0eb2bbc6b147f527a23708288e0878a8",
-  [ids.patchPrepare]: "7d007ab69297b7ab4314bf23a21cb6fbebcdc6f149e0bfd9d931f0329718261c",
+  [ids.patchPrepare]: "4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931",
   [ids.patchArgs]: "e0e1e7bd925ccdfda7cf02b8582885822a889a4e82adeda7d7aa4cda68ead6f0",
   [ids.participantsGate]: "9929dbd80c9a2be0b34bce6f8f2d49578d8ffc36855a962b29bef9b73b9df926",
   [ids.participantsTerminal]: "b864560f9be90f6850e0663f991d43d5066b989b807770ba5c43aa99dcdb2628",

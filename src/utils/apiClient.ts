@@ -689,6 +689,7 @@ function mergePadelGamePlayers(current: PadelGamePlayer[] = [], incoming: PadelG
     }
     merged.set(key, {
       memberKey: player.memberKey ?? existing.memberKey ?? null,
+      membershipId: player.membershipId ?? existing.membershipId ?? null,
       id: player.id ?? existing.id,
       name: player.name || existing.name,
       phone: player.phone ?? existing.phone,
@@ -3067,6 +3068,7 @@ export interface AmericanoResultsResponse {
 
 export interface PadelGamePlayer {
   memberKey?: string | null;
+  membershipId?: string | null;
   id: string | null;
   name: string;
   phone: string | null;
@@ -6093,6 +6095,7 @@ export async function apiFetchOnboardingStations() {
 function normalizePadelGamePlayer(item: unknown): PadelGamePlayer | null {
   if (!isRecord(item)) return null;
   const memberKey = pickString(item, ["memberKey", "playerKey", "participantKey", "rosterMemberKey"]);
+  const membershipId = pickString(item, ["membershipId", "membership_id"]);
   const id = pickString(item, ["id", "clientId", "userId", "uuid"]);
   const firstName = pickString(item, ["firstName", "name"]);
   const lastName = pickString(item, ["lastName", "surname"]);
@@ -6116,6 +6119,7 @@ function normalizePadelGamePlayer(item: unknown): PadelGamePlayer | null {
 
   return {
     memberKey: memberKey ?? null,
+    membershipId: membershipId ?? null,
     id: id ?? null,
     name: fullName || "Игрок",
     phone: phone ?? null,

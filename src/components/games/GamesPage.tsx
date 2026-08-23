@@ -108,6 +108,7 @@ import {
   PUBLIC_INVITE_PATH,
 } from "../../consts/api_config";
 import { trackAnalyticsEvent } from "../../utils/analytics";
+import { createLocalMembershipId } from "./localMembershipGeneration";
 import { shareOrCopyGameInvitePayload } from "../../utils/gameInviteClipboard";
 import { addGameToCalendar } from "../../utils/calendarEvent";
 import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
@@ -2953,6 +2954,7 @@ function dedupePlayersByIdentity(
   const mergePlayers = (current: PadelGamePlayer, incoming: PadelGamePlayer): PadelGamePlayer => ({
     ...current,
     memberKey: current.memberKey ?? incoming.memberKey ?? null,
+    membershipId: incoming.membershipId ?? current.membershipId ?? null,
     id: current.id ?? incoming.id ?? null,
     name: isGenericName(current.name) && !isGenericName(incoming.name)
       ? incoming.name
@@ -14570,7 +14572,9 @@ export default function GamesPage({
       return;
     }
 
+    const localMembershipId = createLocalMembershipId();
     const joinPlayerBase: PadelGamePlayer = {
+      membershipId: localMembershipId,
       id: normalizedProfileId,
       name: profileName || "Игрок",
       phone: normalizedPhone,
@@ -14593,7 +14597,21 @@ export default function GamesPage({
         ? [{ ...joinPlayerBase, status: "WAITLIST" as const }]
         : []),
     ]);
-    const nextMetadata = buildDetailsRosterMetadata(nextParticipants, nextWaitlist);
+    const joinResponses = isRecordObject(detailsMetadata.joinResponses)
+      ? { ...detailsMetadata.joinResponses }
+      : {};
+    if (normalizedPhone) {
+      joinResponses[normalizedPhone] = {
+        status: detailsHasFreeSlots ? "JOINED" : "WAITLIST",
+        updatedAt: new Date().toISOString(),
+        playerName: joinPlayerBase.name,
+        playerId: joinPlayerBase.id ?? null,
+        membershipId: localMembershipId,
+      };
+    }
+    const nextMetadata = buildDetailsRosterMetadata(nextParticipants, nextWaitlist, {
+      extraMetadata: normalizedPhone ? { joinResponses } : undefined,
+    });
 
     await patchGameRoster(nextParticipants, nextWaitlist, {
       metadata: nextMetadata,
@@ -14615,6 +14633,7 @@ export default function GamesPage({
     profileRatingNumeric,
     detailsParticipants,
     detailsWaitlist,
+    detailsMetadata,
     isCurrentUserPlayer,
     buildDetailsRosterMetadata,
     patchGameRoster,
