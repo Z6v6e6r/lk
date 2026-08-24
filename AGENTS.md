@@ -11,22 +11,32 @@ The project includes:
 - Community rating, recalculation, and data repair scripts.
 - Android/Capacitor wrapper artifacts.
 
-## Read First
+## Read by trigger
 
-Before making non-trivial changes, read:
+For every task:
 
-- `docs/PROJECT_OVERVIEW.md`
-- `docs/ARCHITECTURE.md`
-- `docs/README_DEPLOY.md`
-- `docs/WORKLOG.md`
+- read the applicable `AGENTS.md` instruction chain;
+- inspect the relevant package, module, nearby code, and nearby tests;
+- search for the exact feature, endpoint, function node, integration, incident, or file
+  being changed.
 
-For focused areas also read:
+Read `docs/PROJECT_OVERVIEW.md` when system ownership, product boundaries, or domain
+responsibilities are relevant. Read `docs/ARCHITECTURE.md` for cross-module,
+public-contract, integration, data-flow, or architectural changes. Read
+`docs/README_DEPLOY.md` only for build, release, Node-RED import, runtime, staging,
+cache-busting, or deployment work.
 
-- `docs/NODERED_MODULAR_WORKFLOW.md` for Node-RED flow work.
-- `docs/NODERED_REFERENCE.md` for Node-RED endpoint/function references.
-- `docs/COMMUNITY_RATING_RECALCULATION.md` for rating and recalculation work.
-- `docs/FCM.md` for push notification work.
-- `docs/MAX_SUPPORT_SCENARIOS.md` and `docs/SUPPORT_DIALOGS_MAX.md` for support/MAX bot work.
+Do not read `docs/WORKLOG.md` from beginning to end by default. Search it by exact feature,
+file, endpoint, function node, incident, date, commit, or integration and open only the
+relevant entries.
+
+Read specialized documents only when their domain trigger applies:
+
+- `docs/NODERED_MODULAR_WORKFLOW.md` for Node-RED flow work;
+- `docs/NODERED_REFERENCE.md` for relevant endpoint/function references;
+- `docs/COMMUNITY_RATING_RECALCULATION.md` for rating or repair work;
+- `docs/FCM.md` for push notification work;
+- `docs/MAX_SUPPORT_SCENARIOS.md` and `docs/SUPPORT_DIALOGS_MAX.md` for support or MAX bot work.
 
 ## Commands
 
@@ -92,19 +102,45 @@ For focused areas also read:
 - Do not amend commits unless explicitly requested.
 - Final reports must list changed files, checks run, and residual risks.
 
-## Mandatory Staged Delivery Workflow
+## Risk-Based Delivery Workflow
 
-Every task uses the following stage gates. Approval of one stage never authorizes a later stage.
+Classify the highest-risk intended change as R0-R4 and use the global Fast, Spark, Main,
+or Critical lane. A scoped development request authorizes one continuous reversible
+task-branch loop: identify `origin/main`, create a focused worktree and `codex/*` or
+`agent/*` branch, implement the requested outcome, run proportionate checks, create
+focused commits, push only that task branch, open or update a Draft PR, read CI, and fix
+in-scope CI failures. Do not pause merely because one reversible step completed.
 
-1. **Implement and verify in isolation.** Identify the base `origin/main` SHA, use a focused branch/worktree, preserve all pre-existing dirty changes, implement only the requested scope, run relevant frontend/Node-RED tests and builds, and create a focused checkpoint commit in the task branch. Do not merge, push, or deploy.
-2. **User verification.** Provide the runnable URL/state, changed-file summary, checks, checkpoint SHA, and limitations. The user verifies the result. Corrections stay in the same task branch and get a new checkpoint commit.
-3. **Integrate into `main`.** Only after explicit approval, refresh `origin/main`, inspect the final diff, integrate only the approved task branch into local `main`, and rerun proportionate checks. Do not push or deploy.
-4. **Push `main`.** Only after separate explicit approval, show the outgoing commits, push local `main`, confirm the remote SHA, and check required CI. Do not deploy.
-5. **Deploy and post-check.** Only after another explicit approval, deploy artifacts built from the confirmed pushed SHA to the user-approved topology. Verification is part of the deploy stage: compare local/remote/public release manifests and touched bundle hashes, and test the affected UI/API/Node-RED/data path. Never deploy a dirty working tree or patch production files manually.
+Within an authorized task branch, the agent may write migration or backfill code,
+permission/RBAC/ACL/RLS code, secret-handling code without accessing real values, and
+tests; run fully local rehearsals on synthetic data; create commits; push only the task
+branch; create or update a Draft PR; read CI; and fix in-scope CI failures.
 
-At the end of every completed stage, stop, report evidence, and ask exactly one direct transition question: `Приступать к следующему этапу: <название этапа>?` Do not start it until the user explicitly agrees. Never infer permission for integration, `main` push, deploy, live data mutation, or rollback from an earlier approval.
+Human approval remains mandatory before:
 
-If a stage fails or is blocked, remain in that stage, report the blocker, and ask for direction. A post-deploy fix starts in a focused task/hotfix branch and follows the same gates.
+- merge or direct push to a protected branch;
+- deploy, service restart, or Node-RED import;
+- migration or backfill execution against a real or shared target;
+- live or shared data repair or mutation;
+- live permission, RBAC, ACL, or RLS mutation;
+- permission widening in a deployed environment;
+- secret or key access, installation, replacement, or rotation;
+- DNS, ingress, routing, or public-domain changes;
+- payment or refund execution;
+- external user messages;
+- destructive rollback or another irreversible operation.
+
+A Draft PR, green CI, local build, mock, local database rehearsal, or staging artifact does
+not authorize a live or provider mutation.
+
+Use focused frontend/Node-RED/API checks for R0-R2. Expand to full gates when the diff
+touches root/shared configuration, lockfiles/dependencies, public contracts, auth,
+payments, data/schema, deployment workflows, multiple workspaces, or cannot be scoped.
+Do not repeat an identical successful command without changed source, inputs,
+environment, acceptance target, or a new hypothesis. Continue independent in-scope work
+when one lane is blocked; stop for missing material product authority, suspected
+credential/PII exposure, material scope expansion, inseparable baseline failure,
+unavailable required access, or a prohibited next action.
 
 ## Agent Roles
 
@@ -116,14 +152,18 @@ Prompt:
 
 ```text
 Ты архитектор проекта PadlHub LK.
-Сначала изучи структуру репозитория, AGENTS.md, package.json, docs/PROJECT_OVERVIEW.md, docs/ARCHITECTURE.md и существующие паттерны.
+Сначала изучи применимую цепочку AGENTS.md, релевантные package/module/code/tests и
+существующие паттерны. Читай обзорные, архитектурные и deploy-документы только по
+соответствующему trigger; WORKLOG ищи точечно по задаче.
 Не пиши код сразу.
 Составь план:
 1. какие файлы менять,
 2. какие риски есть,
 3. какие альтернативы,
 4. какие тесты нужны.
-После плана жди подтверждения или явно отдели план от реализации.
+Явно отдели план от реализации и продолжай в утверждённом scope. Остановись только при
+отсутствующем существенном product choice, расширении scope или перед запрещённым
+live/irreversible действием.
 Учитывай React 19 + TypeScript + Vite IIFE bundles для Tilda, Node-RED flows, VivaCRM/Keycloak/SERV2 integrations и community rating scripts.
 ```
 
@@ -222,31 +262,26 @@ Prompt:
 После правок проверь мобильный и desktop сценарии, если возможно.
 ```
 
-## Recommended Workflows
+## Trigger-Based Review
 
-New feature:
+Do not run a generic agent chain for every task. R0 needs no independent reviewer; R1
+normally uses primary self-review; R2 uses at most one reviewer unless two distinct
+domain triggers apply. R3 requires one specialist per actual risk, and R4 requires two
+genuinely independent risk perspectives. Reviewers are read-only by default.
 
-```text
-Architect / Planner -> Feature Implementer -> Test Engineer -> Reviewer / Critic
-```
+- auth/session/permissions/PII: security review;
+- public API or event contract: compatibility review;
+- data/schema/migration: migration and rollback review;
+- Node-RED/deployment/image/release files: release review;
+- concurrent writes/retry/idempotency/recovery: reliability review;
+- payments/refunds/subscriptions: payment-safety review;
+- user-visible frontend: UI/accessibility review when behavior or layout changes.
 
-Bug:
-
-```text
-Debugger -> Feature Implementer -> Test Engineer -> Reviewer / Critic
-```
-
-UI-only task:
-
-```text
-UI/UX Frontend Agent -> Reviewer / Critic
-```
-
-Node-RED or integration change:
-
-```text
-Architect / Planner -> Feature Implementer -> Test Engineer -> Reviewer / Critic
-```
+Use `global_spark_worker` only for a bounded R1/R2 implementation with exact files,
+acceptance criteria, validation, and stop conditions. The primary owns architecture,
+critical boundaries, diff inspection, integration, and final acceptance. Never run two
+write agents against the same file or tightly coupled state; use at most two concurrent
+spawned agents.
 
 ## Final Report Template
 
