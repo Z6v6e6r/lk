@@ -1461,8 +1461,13 @@
   Fast, Spark, Main, and Critical lanes.
 - Task work may now continue through focused commits, same-branch push, Draft PR, CI
   readback, and in-scope CI correction without intermediate confirmation.
-- Merge, protected-branch push, deploy, Node-RED/live data mutation, migrations, secrets,
-  permissions, routing, payments, messages, and destructive actions retain explicit
-  target-specific approval gates.
+- Writing migration, permission, or secret-handling code without real secret access stays
+  inside that reversible loop; execution against real/shared targets remains a separate
+  human gate.
+- Merge, protected-branch push, deploy, Node-RED/live data mutation, real/shared migration
+  execution, secret/key access or rotation, live permission mutation, routing, payments,
+  messages, and destructive actions retain explicit target-specific approval gates.
 - Review and validation are now triggered by changed risk rather than a mandatory agent
   chain or unchanged duplicate full checks.
+- Large overview/architecture/deploy documents are read by trigger, while `WORKLOG` is
+  searched by exact task context rather than read end to end.

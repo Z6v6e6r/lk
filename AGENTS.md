@@ -11,22 +11,32 @@ The project includes:
 - Community rating, recalculation, and data repair scripts.
 - Android/Capacitor wrapper artifacts.
 
-## Read First
+## Read by trigger
 
-Before making non-trivial changes, read:
+For every task:
 
-- `docs/PROJECT_OVERVIEW.md`
-- `docs/ARCHITECTURE.md`
-- `docs/README_DEPLOY.md`
-- `docs/WORKLOG.md`
+- read the applicable `AGENTS.md` instruction chain;
+- inspect the relevant package, module, nearby code, and nearby tests;
+- search for the exact feature, endpoint, function node, integration, incident, or file
+  being changed.
 
-For focused areas also read:
+Read `docs/PROJECT_OVERVIEW.md` when system ownership, product boundaries, or domain
+responsibilities are relevant. Read `docs/ARCHITECTURE.md` for cross-module,
+public-contract, integration, data-flow, or architectural changes. Read
+`docs/README_DEPLOY.md` only for build, release, Node-RED import, runtime, staging,
+cache-busting, or deployment work.
 
-- `docs/NODERED_MODULAR_WORKFLOW.md` for Node-RED flow work.
-- `docs/NODERED_REFERENCE.md` for Node-RED endpoint/function references.
-- `docs/COMMUNITY_RATING_RECALCULATION.md` for rating and recalculation work.
-- `docs/FCM.md` for push notification work.
-- `docs/MAX_SUPPORT_SCENARIOS.md` and `docs/SUPPORT_DIALOGS_MAX.md` for support/MAX bot work.
+Do not read `docs/WORKLOG.md` from beginning to end by default. Search it by exact feature,
+file, endpoint, function node, incident, date, commit, or integration and open only the
+relevant entries.
+
+Read specialized documents only when their domain trigger applies:
+
+- `docs/NODERED_MODULAR_WORKFLOW.md` for Node-RED flow work;
+- `docs/NODERED_REFERENCE.md` for relevant endpoint/function references;
+- `docs/COMMUNITY_RATING_RECALCULATION.md` for rating or repair work;
+- `docs/FCM.md` for push notification work;
+- `docs/MAX_SUPPORT_SCENARIOS.md` and `docs/SUPPORT_DIALOGS_MAX.md` for support or MAX bot work.
 
 ## Commands
 
@@ -101,11 +111,27 @@ task-branch loop: identify `origin/main`, create a focused worktree and `codex/*
 focused commits, push only that task branch, open or update a Draft PR, read CI, and fix
 in-scope CI failures. Do not pause merely because one reversible step completed.
 
-Human approval remains mandatory before merge, direct push to `main` or another protected
-branch, force push, deploy, Node-RED import/restart, live/shared data repair, migration,
-secret/key change, permissions, DNS/ingress/routing, payment/refund, external messages,
-or destructive rollback. A Draft PR, green CI, local build, or staging rehearsal does not
-authorize production or provider mutation.
+Within an authorized task branch, the agent may write migration or backfill code,
+permission/RBAC/ACL/RLS code, secret-handling code without accessing real values, and
+tests; run fully local rehearsals on synthetic data; create commits; push only the task
+branch; create or update a Draft PR; read CI; and fix in-scope CI failures.
+
+Human approval remains mandatory before:
+
+- merge or direct push to a protected branch;
+- deploy, service restart, or Node-RED import;
+- migration or backfill execution against a real or shared target;
+- live or shared data repair or mutation;
+- live permission, RBAC, ACL, or RLS mutation;
+- permission widening in a deployed environment;
+- secret or key access, installation, replacement, or rotation;
+- DNS, ingress, routing, or public-domain changes;
+- payment or refund execution;
+- external user messages;
+- destructive rollback or another irreversible operation.
+
+A Draft PR, green CI, local build, mock, local database rehearsal, or staging artifact does
+not authorize a live or provider mutation.
 
 Use focused frontend/Node-RED/API checks for R0-R2. Expand to full gates when the diff
 touches root/shared configuration, lockfiles/dependencies, public contracts, auth,
@@ -126,7 +152,9 @@ Prompt:
 
 ```text
 Ты архитектор проекта PadlHub LK.
-Сначала изучи структуру репозитория, AGENTS.md, package.json, docs/PROJECT_OVERVIEW.md, docs/ARCHITECTURE.md и существующие паттерны.
+Сначала изучи применимую цепочку AGENTS.md, релевантные package/module/code/tests и
+существующие паттерны. Читай обзорные, архитектурные и deploy-документы только по
+соответствующему trigger; WORKLOG ищи точечно по задаче.
 Не пиши код сразу.
 Составь план:
 1. какие файлы менять,
