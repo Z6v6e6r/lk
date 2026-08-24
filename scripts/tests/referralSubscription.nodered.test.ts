@@ -41,9 +41,14 @@ function runNodeRedFunction(file: string, msg: NodeRedMsg, globalValues: GlobalV
         : undefined;
     },
   };
+  const env = {
+    get(key: string) {
+      return key === "VIVACRM_TOKEN_REQUEST_BODY" ? "test-token-body" : undefined;
+    },
+  };
 
   const input = JSON.parse(JSON.stringify(msg)) as NodeRedMsg;
-  return new Function("msg", "global", source)(input, globalContext);
+  return new Function("msg", "global", "env", source)(input, globalContext, env);
 }
 
 function runReferralFlowScriptsInFixture() {

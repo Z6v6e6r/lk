@@ -77,9 +77,10 @@ const vivaTokenUrl = toStr(getArg("--viva-token-url", process.env.VIVA_TOKEN_URL
   || "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const vivaApiBase = toStr(getArg("--viva-api-base", process.env.VIVA_API_BASE || "https://api.vivacrm.ru/api/v1"))
   || "https://api.vivacrm.ru/api/v1";
-const vivaClientId = toStr(getArg("--viva-client-id", process.env.VIVA_CLIENT_ID || "React-auth-dev")) || "React-auth-dev";
-const vivaUsername = toStr(getArg("--viva-username", process.env.VIVA_USERNAME || "it@citysport.pro")) || "it@citysport.pro";
-const vivaPassword = toStr(getArg("--viva-password", process.env.VIVA_PASSWORD || "mhF-ma6-4Ju-QsJ")) || "mhF-ma6-4Ju-QsJ";
+const vivaTokenRequestBody = toStr(process.env.VIVACRM_TOKEN_REQUEST_BODY);
+const vivaClientId = toStr(process.env.VIVA_SERVICE_CLIENT_ID) || "React-auth-dev";
+const vivaUsername = toStr(process.env.VIVA_SERVICE_USERNAME);
+const vivaPassword = toStr(process.env.VIVA_SERVICE_PASSWORD);
 
 const nowIso = new Date().toISOString();
 const nowSlug = nowIso.replace(/[:.]/g, "-");
@@ -113,15 +114,15 @@ Options:
 Viva options:
   --viva-token-url <url>
   --viva-api-base <url>
-  --viva-client-id <id>
-  --viva-username <user>
-  --viva-password <pass>
+
+Viva service authorization is read only from VIVACRM_TOKEN_REQUEST_BODY, or from
+VIVA_SERVICE_USERNAME, VIVA_SERVICE_PASSWORD and optional VIVA_SERVICE_CLIENT_ID.
 `);
   process.exit(0);
 }
 
-if (!vivaClientId || !vivaUsername || !vivaPassword) {
-  console.error("Missing Viva credentials (--viva-client-id, --viva-username, --viva-password)");
+if (!vivaTokenRequestBody && (!vivaUsername || !vivaPassword)) {
+  console.error("VIVA_SERVICE_AUTH_NOT_CONFIGURED");
   process.exit(1);
 }
 
@@ -253,11 +254,13 @@ const extractPhones = (game) => {
 };
 
 const fetchVivaToken = async () => {
-  const params = new URLSearchParams();
-  params.set("grant_type", "password");
-  params.set("client_id", vivaClientId);
-  params.set("username", vivaUsername);
-  params.set("password", vivaPassword);
+  const params = new URLSearchParams(vivaTokenRequestBody || undefined);
+  if (!vivaTokenRequestBody) {
+    params.set("grant_type", "password");
+    params.set("client_id", vivaClientId);
+    params.set("username", vivaUsername);
+    params.set("password", vivaPassword);
+  }
   const payload = await fetchJsonStrict(vivaTokenUrl, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },

@@ -6,6 +6,42 @@ const toStr = (value) => {
   const text = String(value).trim();
   return text ? text : null;
 };
+const readVivaServiceEnv = (key) => {
+  try {
+    return typeof env !== "undefined" && env && typeof env.get === "function"
+      ? toStr(env.get(key))
+      : null;
+  } catch (_error) {
+    return null;
+  }
+};
+
+const readVivaServiceGlobal = (key) => {
+  try {
+    return typeof global !== "undefined" && global && typeof global.get === "function"
+      ? toStr(global.get(key))
+      : null;
+  } catch (_error) {
+    return null;
+  }
+};
+
+const buildVivaServiceTokenRequestBody = () => {
+  const configuredBody = readVivaServiceEnv("VIVACRM_TOKEN_REQUEST_BODY")
+    || readVivaServiceGlobal("vivacrm_token_request_body");
+  if (configuredBody) return configuredBody;
+  const username = readVivaServiceEnv("VIVA_SERVICE_USERNAME");
+  const password = readVivaServiceEnv("VIVA_SERVICE_PASSWORD");
+  if (!username || !password) return null;
+  const clientId = readVivaServiceEnv("VIVA_SERVICE_CLIENT_ID") || "React-auth-dev";
+  return [
+    ["grant_type", "password"],
+    ["client_id", clientId],
+    ["username", username],
+    ["password", password],
+  ].map(([key, value]) => encodeURIComponent(key) + "=" + encodeURIComponent(value)).join("&");
+};
+
 
 const toNum = (value) => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -397,8 +433,12 @@ if (ctx.step === "resolve_record") {
     msg.method = "POST";
     msg.url = TOKEN_URL;
     msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
-    msg.payload =
-      "grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ";
+    msg.payload = buildVivaServiceTokenRequestBody();
+if (!msg.payload) {
+  return fail(503, "Сервисная авторизация Viva не настроена", {
+    code: "VIVA_SERVICE_AUTH_NOT_CONFIGURED",
+  });
+}
     return [msg, null, null, null];
   }
 
@@ -421,8 +461,12 @@ if (ctx.step === "resolve_record") {
   msg.method = "POST";
   msg.url = TOKEN_URL;
   msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
-  msg.payload =
-    "grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ";
+  msg.payload = buildVivaServiceTokenRequestBody();
+if (!msg.payload) {
+  return fail(503, "Сервисная авторизация Viva не настроена", {
+    code: "VIVA_SERVICE_AUTH_NOT_CONFIGURED",
+  });
+}
   return [msg, null, null, null];
 }
 

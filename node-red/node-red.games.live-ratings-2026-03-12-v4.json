@@ -47,7 +47,7 @@
     "type": "function",
     "z": "1e95dcebc274ac6c",
     "name": "Get or request Viva token",
-    "func": "msg.method = \"POST\";\nmsg.url = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\nmsg.headers = { \"Content-Type\": \"application/x-www-form-urlencoded\" };\nmsg.payload =\n  \"grant_type=password&client_id=React-auth-dev&username=it@citysport.pro&password=mhF-ma6-4Ju-QsJ\";\nreturn [null, msg, null];\n",
+    "func": "msg.method = \"POST\";\nmsg.url = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\nmsg.headers = { \"Content-Type\": \"application/x-www-form-urlencoded\" };\nmsg.payload =\n  \"grant_type=password&client_id=React-auth-dev&username=__REDACTED_VIVA_SERVICE_USERNAME__&password=__REDACTED_VIVA_SERVICE_PASSWORD__\";\nreturn [null, msg, null];\n",
     "outputs": 3,
     "timeout": "",
     "noerr": 0,

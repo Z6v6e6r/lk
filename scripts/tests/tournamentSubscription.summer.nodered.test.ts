@@ -27,7 +27,12 @@ function runNodeRedFunction(file: string, msg: NodeRedMsg, globalValues: GlobalV
         : undefined;
     },
   };
-  return new Function("msg", "global", source)(msg, globalContext);
+  const env = {
+    get(key: string) {
+      return key === "VIVACRM_TOKEN_REQUEST_BODY" ? "test-token-body" : undefined;
+    },
+  };
+  return new Function("msg", "global", "env", source)(msg, globalContext, env);
 }
 
 function withFixedNow<T>(nowIso: string, callback: () => T): T {
