@@ -1455,3 +1455,14 @@
 | 2026-08-22 | isolated | LK Games / ordinary split pricing analysis | Сопоставили frontend exact-price tuple, live-147 Node-RED `available_products`, Viva transaction product и публичные paid split records; определили, что fallback делил номинальный product `10 000 ₽`, а не цену station/room slot | Чтобы установить источник системных `2 500 ₽` и не исправлять симптом browser-суммой | Root cause локализован в server fallback; live flow прочитан без import/restart и без provider/data mutation |
 | 2026-08-22 | isolated | LK Games / ordinary split pricing implementation | One-time create/join переведены на server-side точную цену корта после проверок station/room/master-service/sub-services/date/time; Bearer и pricing identifiers проходят frontend → Node-RED, join использует сохранённый booking contract, browser суммы и nominal product не являются authority | Чтобы обычный игрок платил `точная стоимость корта / 2 или 4`, а Питерский hourly policy сохранился | Guarded patcher закреплён на live SHA `0496070e…` и меняет только три split function body; merge, push, deploy и импорт flow не выполнялись |
 | 2026-08-22 | isolated | LK Games / ordinary split pricing verification | Добавили регрессии для цен 6/8/9/10/12/16 тыс., singles, Piter 250/375/500, browser tampering, master/sub-service mismatch, provider calculation impacts, missing proof и недостаточного transaction product; прогнали split suites, TypeScript, targeted lint и games DEV build | Чтобы доказать формулу, fail-closed порядок до mutation и отсутствие регрессии специальных тарифов | PASS: split TypeScript suite `190/190`, create-contract `44/44`, recovery `9/9`, `tsc -b`, games DEV build; lint без errors (только существующие warnings), modular validate требует отдельный verified workspace |
+## 2026-08-24 — Risk-based Codex delivery workflow
+
+- Replaced universal approval stops for reversible task-branch development with R0-R4
+  Fast, Spark, Main, and Critical lanes.
+- Task work may now continue through focused commits, same-branch push, Draft PR, CI
+  readback, and in-scope CI correction without intermediate confirmation.
+- Merge, protected-branch push, deploy, Node-RED/live data mutation, migrations, secrets,
+  permissions, routing, payments, messages, and destructive actions retain explicit
+  target-specific approval gates.
+- Review and validation are now triggered by changed risk rather than a mandatory agent
+  chain or unchanged duplicate full checks.
