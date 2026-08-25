@@ -200,6 +200,42 @@ test("summer subscription purchase-prepare uses default reservation window witho
   assert.equal(ctx.reservationMinutes, 30);
 });
 
+test("summer subscription purchase attribution accepts only a paired opaque token and visit id", () => {
+  const valid = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+    {
+      payload: {
+        clientPhone: "79990000000",
+        planKey: "friendship",
+        paymentRef: "payment-ref-attributed",
+        referralToken: "abcdefghijklmnopqrstuvwx",
+        referralVisitId: "visit-12345678",
+      },
+      req: { query: {} },
+    },
+  ) as unknown[];
+  const validCtx = asRecord(asRecord(valid[0])._summerSubscriptionCtx);
+  assert.equal(validCtx.referralToken, "abcdefghijklmnopqrstuvwx");
+  assert.equal(validCtx.referralVisitId, "visit-12345678");
+
+  const malformed = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
+    {
+      payload: {
+        clientPhone: "79990000000",
+        planKey: "friendship",
+        paymentRef: "payment-ref-unattributed",
+        referralToken: "abcdefghijklmnopqrstuvwx",
+        referralVisitId: "bad visit",
+      },
+      req: { query: {} },
+    },
+  ) as unknown[];
+  const malformedCtx = asRecord(asRecord(malformed[0])._summerSubscriptionCtx);
+  assert.equal(malformedCtx.referralToken, null);
+  assert.equal(malformedCtx.referralVisitId, null);
+});
+
 test("Friendship and RA switch to their staged daily limits on August 1 Moscow time", () => {
   const createPurchaseContext = (nowIso: string, counterKey: string) => withFixedNow(nowIso, () => {
     const out = runNodeRedFunction(
@@ -1060,6 +1096,37 @@ test("summer subscription payment router persists the selected staged release ph
   assert.equal(response.releasePhase, "daily");
   assert.equal(response.dailyDropActive, true);
   assert.equal(response.remainingAfterReservation, 3);
+});
+
+test("summer subscription payment router persists referral attribution on the sale record", () => {
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 201,
+      payload: {
+        id: "transaction-referral-1",
+        paymentUrl: "https://pay.example.test/referral-1",
+        toPay: 980000,
+      },
+      _summerSubscriptionCtx: {
+        action: "purchase",
+        step: "create_transaction",
+        counterKey: "friendship",
+        inventoryId: "ab_leto_2026_100_then_7_v1_friendship",
+        paymentRef: "payment-ref-attributed",
+        clientPhone: "79990000000",
+        productId: "b2e6a9d4-53b5-4f79-87ec-3fb076381e9b",
+        productName: "Лето.Падел.Дружба",
+        productCostMinor: 980000,
+        remainingBefore: 4,
+        referralToken: "abcdefghijklmnopqrstuvwx",
+        referralVisitId: "visit-12345678",
+      },
+    },
+  ) as unknown[];
+  const dbSet = asRecord(asRecord(asRecord(out[1]).payload).$set);
+  assert.equal(dbSet.referralToken, "abcdefghijklmnopqrstuvwx");
+  assert.equal(dbSet.referralVisitId, "visit-12345678");
 });
 
 test("summer subscription purchase-limit uses default HTTP timeout without global config", () => {

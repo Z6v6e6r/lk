@@ -18,6 +18,7 @@ import { mountDevReleaseBadge } from "./utils/devReleaseBadge";
 import { ensureFreshRelease } from "./utils/releaseGuard";
 import { CABINET_URL } from "./consts/api_config";
 import { readAbLetoTrainerQrCode } from "./utils/abLetoTrainerQr";
+import { readReferralAttribution } from "./utils/referralAttribution";
 
 type TournamentSubscriptionMountData = {
   artworkKey?: TournamentSubscriptionPageConfig["artworkKey"];
@@ -30,6 +31,8 @@ type TournamentSubscriptionMountData = {
   priceLabel?: string | null;
   totalLimit?: number | null;
   trainerQrCode?: string | null;
+  referralToken?: string | null;
+  referralVisitId?: string | null;
 };
 
 type MountOptions = {
@@ -56,9 +59,9 @@ mountDevReleaseBadge({ bundleFileNames: ["tournament-subscription.js", "tourname
 installGlobalErrorTracking();
 trackAnalyticsEvent("widget_bundle_loaded", { entry: "tournament-subscription" });
 
-function readPromoLinkConfig(): Pick<TournamentSubscriptionPageConfig, "autoPurchase" | "offerKey" | "trainerQrCode"> {
+function readPromoLinkConfig(): Pick<TournamentSubscriptionPageConfig, "autoPurchase" | "offerKey" | "trainerQrCode" | "referralToken" | "referralVisitId"> {
   if (typeof window === "undefined") {
-    return { autoPurchase: false, offerKey: null, trainerQrCode: null };
+    return { autoPurchase: false, offerKey: null, trainerQrCode: null, referralToken: null, referralVisitId: null };
   }
 
   const url = new URL(window.location.href);
@@ -68,7 +71,14 @@ function readPromoLinkConfig(): Pick<TournamentSubscriptionPageConfig, "autoPurc
     ? autoPurchaseRaw !== "0" && autoPurchaseRaw !== "false" && autoPurchaseRaw !== "no" && autoPurchaseRaw !== "off"
     : Boolean(offerKey);
 
-  return { autoPurchase, offerKey, trainerQrCode: readAbLetoTrainerQrCode(url.search) };
+  const referral = readReferralAttribution(url.search);
+  return {
+    autoPurchase,
+    offerKey,
+    trainerQrCode: readAbLetoTrainerQrCode(url.search),
+    referralToken: referral?.referralToken ?? null,
+    referralVisitId: referral?.referralVisitId ?? null,
+  };
 }
 
 function TournamentSubscriptionContent({ data, onClose }: { data?: TournamentSubscriptionMountData; onClose?: () => void }) {
@@ -80,7 +90,7 @@ function TournamentSubscriptionContent({ data, onClose }: { data?: TournamentSub
 
   const fallbackCabinetUrl = (data?.cabinetUrl || CABINET_URL || "/lk_new").trim();
   const promoLinkConfig = readPromoLinkConfig();
-  const pageConfig: TournamentSubscriptionPageConfig | undefined = data || promoLinkConfig.offerKey || promoLinkConfig.trainerQrCode
+  const pageConfig: TournamentSubscriptionPageConfig | undefined = data || promoLinkConfig.offerKey || promoLinkConfig.trainerQrCode || promoLinkConfig.referralToken
       ? {
         artworkKey: data?.artworkKey ?? undefined,
         autoPurchase: data?.autoPurchase ?? promoLinkConfig.autoPurchase,
@@ -91,6 +101,8 @@ function TournamentSubscriptionContent({ data, onClose }: { data?: TournamentSub
         priceLabel: data?.priceLabel ?? undefined,
         totalLimit: data?.totalLimit ?? undefined,
         trainerQrCode: data?.trainerQrCode ?? promoLinkConfig.trainerQrCode,
+        referralToken: data?.referralToken ?? promoLinkConfig.referralToken,
+        referralVisitId: data?.referralVisitId ?? promoLinkConfig.referralVisitId,
       }
     : undefined;
 
@@ -179,6 +191,8 @@ function mount(options: MountOptions = {}) {
               : "ab_leto",
         targetId,
         trainerQrCode: readAbLetoTrainerQrCode(),
+        referralToken: readReferralAttribution()?.referralToken ?? null,
+        referralVisitId: readReferralAttribution()?.referralVisitId ?? null,
       });
     }
   } catch (error) {

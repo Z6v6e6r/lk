@@ -54,6 +54,8 @@ export interface TournamentSubscriptionPageConfig {
   offerKey?: string | null;
   autoPurchase?: boolean | null;
   trainerQrCode?: string | null;
+  referralToken?: string | null;
+  referralVisitId?: string | null;
 }
 
 interface TournamentSubscriptionPageProps {
@@ -1143,6 +1145,8 @@ export default function TournamentSubscriptionPage({
         baseRedirectUrl: returnUrl,
         successUrl: returnUrl,
         failUrl: returnUrl,
+        referralToken: pageConfig?.referralToken ?? null,
+        referralVisitId: pageConfig?.referralVisitId ?? null,
       });
 
       if (result.error || !result.data) {
@@ -1214,6 +1218,8 @@ export default function TournamentSubscriptionPage({
           successUrl: returnUrl,
           failUrl: returnUrl,
           trainerQrCode: pageConfig?.trainerQrCode ?? null,
+          referralToken: pageConfig?.referralToken ?? null,
+          referralVisitId: pageConfig?.referralVisitId ?? null,
         });
 
         if (result.error || !result.data) {
@@ -1320,6 +1326,8 @@ export default function TournamentSubscriptionPage({
       successUrl: returnUrl,
       failUrl: returnUrl,
       trainerQrCode: pageConfig?.trainerQrCode ?? null,
+      referralToken: pageConfig?.referralToken ?? null,
+      referralVisitId: pageConfig?.referralVisitId ?? null,
     });
 
     if (result.error || !result.data) {
@@ -1358,7 +1366,7 @@ export default function TournamentSubscriptionPage({
     setBuyingDisplayId(null);
     setBuyingPlanId(null);
     await loadStatus();
-  }, [loadStatus, pageConfig?.offerKey, pageConfig?.trainerQrCode, profile, singlePlanRequest?.campaignKey, statusByCounterKey]);
+  }, [loadStatus, pageConfig?.offerKey, pageConfig?.referralToken, pageConfig?.referralVisitId, pageConfig?.trainerQrCode, profile, singlePlanRequest?.campaignKey, statusByCounterKey]);
 
   const handleBuy = useCallback((plan: DisplayPlanConfig) => {
     if (plan.requiresConsent && !acceptedTermsByDisplayId[plan.id]) {

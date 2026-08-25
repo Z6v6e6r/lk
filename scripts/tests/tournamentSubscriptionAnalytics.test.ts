@@ -9,6 +9,8 @@ test("ab_leto emits one dedicated page-open analytics event", () => {
   assert.match(entrySource, /subscriptionPageOpenTracked/);
   assert.match(entrySource, /trackAnalyticsEvent\("subscription_page_opened"/);
   assert.match(entrySource, /storefront: "ab_leto"/);
+  assert.match(entrySource, /referralToken: readReferralAttribution\(\)\?\.referralToken/);
+  assert.match(entrySource, /referralVisitId: readReferralAttribution\(\)\?\.referralVisitId/);
 });
 
 test("page-open event is persisted even when general analytics is errors-only", () => {

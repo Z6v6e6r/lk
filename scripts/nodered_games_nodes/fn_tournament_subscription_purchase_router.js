@@ -613,6 +613,8 @@ if (ctx.step === "create_transaction") {
     clientPhone: ctx.clientPhone,
     clientId: ctx.clientId || null,
     trainerQrCode: toStr(ctx.trainerQrCode),
+    referralToken: toStr(ctx.referralToken),
+    referralVisitId: toStr(ctx.referralVisitId),
     productId: ctx.productId,
     productName: ctx.productName,
     productType: ctx.productType || "SUBSCRIPTION",

@@ -3676,6 +3676,8 @@ export interface TournamentSubscriptionPurchaseParams {
   failUrl?: string | null;
   baseRedirectUrl?: string | null;
   trainerQrCode?: string | null;
+  referralToken?: string | null;
+  referralVisitId?: string | null;
 }
 
 export interface TournamentSubscriptionPurchaseResult {
@@ -10357,6 +10359,8 @@ export async function apiCreateTournamentSubscriptionPurchase(
       failUrl: params.failUrl ?? params.baseRedirectUrl ?? null,
       baseRedirectUrl: params.baseRedirectUrl ?? null,
       trainerQrCode: params.trainerQrCode ?? null,
+      referralToken: params.referralToken ?? null,
+      referralVisitId: params.referralVisitId ?? null,
     }),
   });
 

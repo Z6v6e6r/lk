@@ -14,6 +14,8 @@ const AB_LETO_STAGED_RA_DAILY_DROP_LIMIT = 10;
 const DEFAULT_RESERVATION_MINUTES = 30;
 const PAYMENT_REF_QUERY_KEY = "summerPaymentRef";
 const TRAINER_QR_CODE_PATTERN = /^TR-(?:00[1-9]|0[1-4]\d|050)$/;
+const REFERRAL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{20,100}$/;
+const REFERRAL_VISIT_ID_PATTERN = /^[A-Za-z0-9_-]{8,100}$/;
 const DEFAULT_PLAN_KEY = "sport";
 const AB_LETO_TOTAL_LIMIT_DEFAULTS = {
   academy: 125,
@@ -267,6 +269,14 @@ const normalizeCounterKey = (value) => {
 const normalizeTrainerQrCode = (value) => {
   const code = String(value || "").trim().toUpperCase();
   return TRAINER_QR_CODE_PATTERN.test(code) ? code : null;
+};
+
+const normalizeReferralAttribution = (tokenValue, visitIdValue) => {
+  const referralToken = String(tokenValue || "").trim();
+  const referralVisitId = String(visitIdValue || "").trim();
+  if (!REFERRAL_TOKEN_PATTERN.test(referralToken)) return { referralToken: null, referralVisitId: null };
+  if (!REFERRAL_VISIT_ID_PATTERN.test(referralVisitId)) return { referralToken: null, referralVisitId: null };
+  return { referralToken, referralVisitId };
 };
 
 const readManualPaidCount = (counterKey) => {
@@ -583,6 +593,7 @@ const paymentRef =
   || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 const clientId = toStr(body.clientId);
 const trainerQrCode = normalizeTrainerQrCode(body.trainerQrCode || body.qr);
+const referralAttribution = normalizeReferralAttribution(body.referralToken || body.ref, body.referralVisitId || body.ref_visit);
 const successUrlInput =
   toStr(body.successUrl)
   || toStr(body.baseRedirectUrl)
@@ -664,6 +675,8 @@ msg._summerSubscriptionCtx = {
   clientPhone,
   clientId,
   trainerQrCode,
+  referralToken: referralAttribution.referralToken,
+  referralVisitId: referralAttribution.referralVisitId,
   transactionPaymentMethod,
   successUrl,
   failUrl,
@@ -692,6 +705,8 @@ const debugMsg = Object.assign({}, msg, {
     paymentRef,
     clientPhone,
     trainerQrCode,
+    referralToken: referralAttribution.referralToken,
+    referralVisitId: referralAttribution.referralVisitId,
     campaignKeyInput: requestedCampaignKey,
     campaignKeyInputIgnored,
     campaignKeyInputReason,
