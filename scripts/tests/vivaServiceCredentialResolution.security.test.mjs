@@ -73,31 +73,31 @@ test("reviewed sources contain no inline credential body and only dynamic constr
   }
 });
 
-test("legacy exact credential pairs are absent from tracked current sources and snapshots", () => {
+test("tracked current sources and snapshots contain no inline password grant credentials", () => {
   const trackedJson = execFileSync("git", ["ls-files", "-z", "--", "*.json"], {
     cwd: REPO_ROOT,
     encoding: "utf8",
   }).split("\0").filter(Boolean);
   const currentFiles = [...NODE_RED_SOURCES.map((name) => path.join("scripts/nodered_games_nodes", name)), ...REPAIR_SOURCES, ...trackedJson];
-  let matches = 0;
-  for (const name of NODE_RED_SOURCES) {
-    const legacy = execFileSync("git", ["show", `origin/main:scripts/nodered_games_nodes/${name}`], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-    });
-    const pair = legacy.match(/msg\.payload\s*=\s*(["'])([^\n]*(?:username|password)[^\n]*)\1/);
-    assert.ok(pair, `${name}: origin/main legacy body is available for count-only regression`);
-    const literal = pair[2];
-    for (const currentFile of currentFiles) {
-      const current = fs.readFileSync(path.join(REPO_ROOT, currentFile), "utf8");
-      let index = current.indexOf(literal);
-      while (index !== -1) {
-        matches += 1;
-        index = current.indexOf(literal, index + literal.length);
-      }
+  const inlineGrant = /grant_type=password&client_id=([^&"'\\\s]+)&username=([^&"'\\\s]+)&password=([^&"'\\\s]+)/g;
+  const isExplicitSentinel = (value, field) => {
+    const decoded = decodeURIComponent(value).trim();
+    if (!/^[A-Z0-9_:-]+$/.test(decoded)) return false;
+    if (!/(?:REDACTED|PLACEHOLDER|REQUIRED|YOUR)/.test(decoded)) return false;
+    return field === "username"
+      ? /(?:USERNAME|LOGIN|USER)/.test(decoded)
+      : /PASSWORD/.test(decoded);
+  };
+
+  for (const currentFile of currentFiles) {
+    const current = fs.readFileSync(path.join(REPO_ROOT, currentFile), "utf8");
+    for (const match of current.matchAll(inlineGrant)) {
+      assert.ok(
+        isExplicitSentinel(match[2], "username") && isExplicitSentinel(match[3], "password"),
+        `${currentFile}: inline password grant must contain explicit non-secret sentinels`,
+      );
     }
   }
-  assert.equal(matches, 0, "legacy exact credential-pair count");
 });
 
 test("repair CLIs reject missing service authorization before input or network work", () => {
