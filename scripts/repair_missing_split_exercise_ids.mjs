@@ -121,7 +121,7 @@ VIVA_SERVICE_USERNAME, VIVA_SERVICE_PASSWORD and optional VIVA_SERVICE_CLIENT_ID
   process.exit(0);
 }
 
-if (!vivaTokenRequestBody && (!vivaUsername || !vivaPassword)) {
+if (!noViva && !vivaTokenRequestBody && (!vivaUsername || !vivaPassword)) {
   console.error("VIVA_SERVICE_AUTH_NOT_CONFIGURED");
   process.exit(1);
 }

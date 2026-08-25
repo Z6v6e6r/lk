@@ -200,12 +200,20 @@ const readMongoUriFromFlow = (flowPath) => {
   return toStr(node?.uri);
 };
 
-const readVivaTokenBodyFromFlow = (flowPath) => {
-  const flow = readFlow(flowPath);
-  const source = asArray(flow)
-    .map((node) => (typeof node?.func === "string" ? node.func : ""))
-    .join("\n");
-  return toStr(source.match(/grant_type=password&client_id=React-auth-dev&username=it@citysport\.pro&password=[^"\\\n]+/)?.[0]);
+export const buildVivaServiceTokenRequestBody = (source = process.env) => {
+  const configuredBody = toStr(source.VIVACRM_TOKEN_REQUEST_BODY)
+    || toStr(source.VIVA_TOKEN_REQUEST_BODY);
+  if (configuredBody) return configuredBody;
+  const username = toStr(source.VIVA_SERVICE_USERNAME);
+  const password = toStr(source.VIVA_SERVICE_PASSWORD);
+  if (!username || !password) return null;
+  const clientId = toStr(source.VIVA_SERVICE_CLIENT_ID) || "React-auth-dev";
+  return new URLSearchParams({
+    grant_type: "password",
+    client_id: clientId,
+    username,
+    password,
+  }).toString();
 };
 
 const rewriteToLocalhost = (uri, enabled) => {
@@ -615,6 +623,10 @@ Options:
   --include-zero-to-pay      Include Viva rows with toPay=0 (default: excluded)
   --localhost                Rewrite Mongo host to 127.0.0.1:27017
   --apply                    Apply upserts (default: dry-run)
+
+Viva service authorization is read only from VIVACRM_TOKEN_REQUEST_BODY
+(legacy VIVA_TOKEN_REQUEST_BODY is accepted), or from VIVA_SERVICE_USERNAME,
+VIVA_SERVICE_PASSWORD and optional VIVA_SERVICE_CLIENT_ID.
 `);
 };
 
@@ -700,9 +712,9 @@ const main = async () => {
     throw new Error("--from must be before --to");
   }
 
-  const tokenBody = toStr(process.env.VIVA_TOKEN_REQUEST_BODY) || readVivaTokenBodyFromFlow(flowPath);
+  const tokenBody = buildVivaServiceTokenRequestBody();
   if (!tokenBody) {
-    throw new Error("Missing Viva token body: set VIVA_TOKEN_REQUEST_BODY or pass a flow containing token request");
+    throw new Error("VIVA_SERVICE_AUTH_NOT_CONFIGURED");
   }
 
   const mongoUri = rewriteToLocalhost(

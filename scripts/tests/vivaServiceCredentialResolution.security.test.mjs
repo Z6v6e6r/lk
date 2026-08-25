@@ -17,6 +17,7 @@ const NODE_RED_SOURCES = [
 const REPAIR_SOURCES = [
   "scripts/repair_missing_split_exercise_ids.mjs",
   "scripts/repair_split_timeout_false_positives.mjs",
+  "scripts/reconcile_ab_leto_viva_sales.mjs",
 ];
 
 const sourcePath = (name) => path.join(REPO_ROOT, "scripts/nodered_games_nodes", name);
@@ -73,13 +74,17 @@ test("reviewed sources contain no inline credential body and only dynamic constr
   }
 });
 
-test("tracked current sources and snapshots contain no inline password grant credentials", () => {
-  const trackedJson = execFileSync("git", ["ls-files", "-z", "--", "*.json"], {
+test("tracked current code and snapshots contain no inline password grant credentials", () => {
+  const trackedSources = execFileSync("git", ["ls-files", "-z", "--", "*.js", "*.mjs", "*.json"], {
     cwd: REPO_ROOT,
     encoding: "utf8",
   }).split("\0").filter(Boolean);
-  const currentFiles = [...NODE_RED_SOURCES.map((name) => path.join("scripts/nodered_games_nodes", name)), ...REPAIR_SOURCES, ...trackedJson];
-  const inlineGrant = /grant_type=password&client_id=([^&"'\\\s]+)&username=([^&"'\\\s]+)&password=([^&"'\\\s]+)/g;
+  const currentFiles = Array.from(new Set([
+    ...NODE_RED_SOURCES.map((name) => path.join("scripts/nodered_games_nodes", name)),
+    ...REPAIR_SOURCES,
+    ...trackedSources,
+  ]));
+  const inlineGrant = /(?:[A-Za-z_][A-Za-z0-9_]*=[^&"'\\\s]+&)*grant_type=password(?:&[A-Za-z_][A-Za-z0-9_]*=[^&"'\\\s]+)+/g;
   const isExplicitSentinel = (value, field) => {
     const decoded = decodeURIComponent(value).trim();
     if (!/^[A-Z0-9_:-]+$/.test(decoded)) return false;
@@ -88,15 +93,37 @@ test("tracked current sources and snapshots contain no inline password grant cre
       ? /(?:USERNAME|LOGIN|USER)/.test(decoded)
       : /PASSWORD/.test(decoded);
   };
-
-  for (const currentFile of currentFiles) {
-    const current = fs.readFileSync(path.join(REPO_ROOT, currentFile), "utf8");
+  const assertNoInlineCredential = (current, currentFile) => {
     for (const match of current.matchAll(inlineGrant)) {
+      const fields = new URLSearchParams(match[0]);
+      const username = fields.get("username");
+      const password = fields.get("password");
+      if (!username && !password) continue;
       assert.ok(
-        isExplicitSentinel(match[2], "username") && isExplicitSentinel(match[3], "password"),
+        Boolean(username && password)
+          && isExplicitSentinel(username, "username")
+          && isExplicitSentinel(password, "password"),
         `${currentFile}: inline password grant must contain explicit non-secret sentinels`,
       );
     }
+  };
+
+  assert.throws(
+    () => assertNoInlineCredential(
+      [
+        "username=unsafe-user",
+        "grant_type=password",
+        "password=unsafe-password",
+        "client_id=unsafe-client",
+      ].join("&"),
+      "synthetic-reordered-body",
+    ),
+    /inline password grant must contain explicit non-secret sentinels/,
+  );
+
+  for (const currentFile of currentFiles) {
+    const current = fs.readFileSync(path.join(REPO_ROOT, currentFile), "utf8");
+    assertNoInlineCredential(current, currentFile);
   }
 });
 
@@ -114,4 +141,25 @@ test("repair CLIs reject missing service authorization before input or network w
     assert.match(result.stderr, /VIVA_SERVICE_AUTH_NOT_CONFIGURED/, relativePath);
     assert.doesNotMatch(`${result.stdout}${result.stderr}`, /service-password|service-user/, relativePath);
   }
+});
+
+test("offline repair mode does not require Viva service authorization", () => {
+  const relativePath = "scripts/repair_missing_split_exercise_ids.mjs";
+  const result = spawnSync(process.execPath, [
+    relativePath,
+    "--no-viva",
+    "--lk-base",
+    "file:///definitely/not/a/real/lk",
+    "--out",
+    "/dev/null",
+  ], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH || "",
+      HOME: process.env.HOME || "",
+    },
+  });
+  assert.notEqual(result.status, 0, relativePath);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /VIVA_SERVICE_AUTH_NOT_CONFIGURED/, relativePath);
 });

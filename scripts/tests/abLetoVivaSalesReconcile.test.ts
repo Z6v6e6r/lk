@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AB_LETO_PLAN_CONFIGS,
+  buildVivaServiceTokenRequestBody,
   buildSaleRecordFromVivaTransaction,
   classifyVivaTransaction,
   isConflictingExistingRecord,
@@ -12,6 +13,26 @@ import {
 const friendship = AB_LETO_PLAN_CONFIGS.friendship;
 const academy = AB_LETO_PLAN_CONFIGS.academy;
 const ra = AB_LETO_PLAN_CONFIGS.ra;
+
+test("ab leto Viva reconciliation resolves service authorization without reading flow credentials", () => {
+  assert.equal(
+    buildVivaServiceTokenRequestBody({
+      VIVACRM_TOKEN_REQUEST_BODY: "configured-token-body",
+      VIVA_SERVICE_USERNAME: "ignored-user",
+      VIVA_SERVICE_PASSWORD: "ignored-password",
+    }),
+    "configured-token-body",
+  );
+  const perField = new URLSearchParams(buildVivaServiceTokenRequestBody({
+    VIVA_SERVICE_USERNAME: "service-user",
+    VIVA_SERVICE_PASSWORD: "service-password",
+    VIVA_SERVICE_CLIENT_ID: "service-client",
+  }));
+  assert.equal(perField.get("username"), "service-user");
+  assert.equal(perField.get("password"), "service-password");
+  assert.equal(perField.get("client_id"), "service-client");
+  assert.equal(buildVivaServiceTokenRequestBody({}), null);
+});
 
 test("ab leto Viva reconciliation treats paid toPay rows as billable", () => {
   const transaction = {
