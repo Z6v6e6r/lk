@@ -22,6 +22,23 @@ Expected participant charge:
 | 90 minutes | 375 RUB |
 | 120 minutes | 500 RUB |
 
+## Approved campaign window
+
+- Eligible Piter game dates: `2026-08-20` through `2026-09-07` inclusive, using the Moscow game date.
+- CUP target: `expiresAt=2026-09-07` for `piter-split-250-per-hour-v1`.
+- First post-campaign game date: `2026-09-08`; it must use ordinary Viva split pricing.
+- Updating this document does not change the live CUP setting. Apply the production configuration only from a fresh authenticated admin snapshot and preserve the other campaign unchanged.
+
+Guarded configuration update:
+
+1. Capture the complete authenticated admin snapshot and its `updatedAt` preimage.
+2. Construct the replacement payload from that snapshot, changing only Piter `expiresAt` from `2026-09-01` to `2026-09-07`; all other Piter fields and the complete non-Piter campaign must remain identical.
+3. Immediately before PATCH, read the admin snapshot again and abort on any preimage or `updatedAt` drift.
+4. Send the full two-campaign replacement once. Do not retry an ambiguous request; resolve its outcome with an independent authenticated GET.
+5. Compare the response and independent authenticated readback with the target, including the unchanged non-Piter campaign and the original rates, station, policy ID and start date.
+6. Verify the public API independently: Piter selects the policy on `2026-09-07`, does not select it on `2026-09-08`, and a non-Piter station remains unaffected. Do not create bookings, joins, transactions or payments.
+7. Retain the preimage for a separately authorized rollback; do not auto-rollback after an ambiguous outcome.
+
 ## Activation
 
 1. Deploy the additive CUP contract and admin UI while the Piter campaign remains disabled.
