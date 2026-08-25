@@ -20,6 +20,8 @@ export type SplitSubscriptionCategoryCandidate = Pick<
   | "availableStudios"
   | "hasTypeLimitation"
   | "availableTypes"
+  | "hasDirectionLimitation"
+  | "availableDirections"
 >;
 
 function trimText(value: string | null | undefined): string | null {
@@ -112,8 +114,23 @@ function subscriptionMatchesSplitCategory(
     return false;
   }
 
-  void requiredDirectionIds;
-  return true;
+  if (subscription.hasDirectionLimitation === false) {
+    return true;
+  }
+  if (subscription.hasDirectionLimitation !== true) {
+    return false;
+  }
+
+  const allowedDirections = new Set(
+    (subscription.availableDirections || [])
+      .map((item) => normalizeComparableId(item?.id))
+      .filter((value): value is string => Boolean(value)),
+  );
+  if (allowedDirections.size === 0 || requiredDirectionIds.size === 0) {
+    return false;
+  }
+
+  return hasIdIntersection(allowedDirections, requiredDirectionIds);
 }
 
 export function buildSplitComparableIdSet(values: Array<string | number | null | undefined>): Set<string> {

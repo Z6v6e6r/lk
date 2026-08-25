@@ -17,6 +17,8 @@ const openGameCategory = {
   availableStudios: [],
   hasTypeLimitation: true,
   availableTypes: [{ id: "1613", name: "Открытая игра" }],
+  hasDirectionLimitation: false,
+  availableDirections: [],
 };
 
 test("split subscription availability accepts subscriptions that cover the game date", () => {
@@ -89,6 +91,8 @@ test("split subscription filters ignore active unrelated subscriptions and keep 
       availableStudios: [],
       hasTypeLimitation: true,
       availableTypes: [{ id: "9999", name: "Тренировка" }],
+      hasDirectionLimitation: false,
+      availableDirections: [],
     },
     {
       subscriptionId: "sub-expired-open-game",
@@ -101,6 +105,8 @@ test("split subscription filters ignore active unrelated subscriptions and keep 
       availableStudios: [],
       hasTypeLimitation: true,
       availableTypes: [{ id: "1613", name: "Открытая игра" }],
+      hasDirectionLimitation: false,
+      availableDirections: [],
     },
   ];
   const requiredExerciseTypeIds = buildSplitComparableIdSet(["1613"]);
@@ -135,6 +141,70 @@ test("split subscription filters ignore active unrelated subscriptions and keep 
       requiredDurationMinutes: 60,
     }),
     "Вы не можете вступить в данную игру: ваша подписка действует до 21.06.2026, а игра запланирована на 22.06.2026.",
+  );
+});
+
+test("split subscription filters enforce provider direction limitations", () => {
+  const subscriptions = [
+    {
+      subscriptionId: "without-open-game-direction",
+      ...openGameCategory,
+      hasDirectionLimitation: true,
+      availableDirections: [{ id: "2680", name: "Тренировки" }],
+    },
+    {
+      subscriptionId: "open-game-direction",
+      ...openGameCategory,
+      hasDirectionLimitation: true,
+      availableDirections: [{ id: "4588", name: "Открытая игра для 4-х" }],
+    },
+    {
+      subscriptionId: "directions-unlimited",
+      ...openGameCategory,
+    },
+  ];
+
+  assert.deepEqual(
+    filterSplitCategoryCompatibleSubscriptions(
+      subscriptions,
+      buildSplitComparableIdSet(["1613"]),
+      buildSplitComparableIdSet(["4588"]),
+      "studio-1",
+    ).map((item) => item.subscriptionId),
+    ["open-game-direction", "directions-unlimited"],
+  );
+});
+
+test("direction-limited subscriptions fail closed when the game direction is unknown", () => {
+  assert.deepEqual(
+    filterSplitCategoryCompatibleSubscriptions(
+      [{
+        subscriptionId: "direction-limited",
+        ...openGameCategory,
+        hasDirectionLimitation: true,
+        availableDirections: [{ id: "4588", name: "Открытая игра для 4-х" }],
+      }],
+      buildSplitComparableIdSet(["1613"]),
+      buildSplitComparableIdSet([]),
+      "studio-1",
+    ),
+    [],
+  );
+});
+
+test("subscriptions fail closed when provider direction policy metadata is missing", () => {
+  assert.deepEqual(
+    filterSplitCategoryCompatibleSubscriptions(
+      [{
+        subscriptionId: "missing-direction-policy",
+        ...openGameCategory,
+        hasDirectionLimitation: undefined as unknown as boolean,
+      }],
+      buildSplitComparableIdSet(["1613"]),
+      buildSplitComparableIdSet(["4588"]),
+      "studio-1",
+    ),
+    [],
   );
 });
 

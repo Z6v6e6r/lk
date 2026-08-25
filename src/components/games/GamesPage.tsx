@@ -136,6 +136,7 @@ import {
 import { isSyntheticCabinetBookingGame } from "../cabinet/syntheticBookingGame";
 import {
   findExplicitSplitSubscriptionById,
+  filterSplitCategoryCompatibleSubscriptions,
   filterSplitEligibleSubscriptions,
   isNoSubscriptionsAvailableError,
   resolveSplitSubscriptionSelectionId,
@@ -283,68 +284,6 @@ function buildComparableIdSet(values: Array<string | number | null | undefined>)
       .map((value) => normalizeComparableId(value))
       .filter((value): value is string => Boolean(value)),
   );
-}
-
-function hasIdIntersection(left: Set<string>, right: Set<string>): boolean {
-  for (const value of left) {
-    if (right.has(value)) return true;
-  }
-  return false;
-}
-
-function subscriptionMatchesSplitStudio(
-  subscription: Subscription,
-  selectedStudioId: string | null | undefined,
-): boolean {
-  if (!subscription.hasStudioLimitation) return true;
-
-  const allowedStudios = new Set(
-    (subscription.availableStudios || [])
-      .map((item) => normalizeComparableId(item?.id))
-      .filter((value): value is string => Boolean(value)),
-  );
-  if (allowedStudios.size === 0) return false;
-
-  const normalizedSelectedStudioId = normalizeComparableId(selectedStudioId);
-  if (!normalizedSelectedStudioId) return true;
-
-  return allowedStudios.has(normalizedSelectedStudioId);
-}
-
-function subscriptionMatchesSplitCategory(
-  subscription: Subscription,
-  requiredExerciseTypeIds: Set<string>,
-  requiredDirectionIds: Set<string>,
-  selectedStudioId: string | null | undefined,
-): boolean {
-  if (!subscriptionMatchesSplitStudio(subscription, selectedStudioId)) {
-    return false;
-  }
-
-  const allowedTypes = new Set(
-    (subscription.availableTypes || [])
-      .map((item) => normalizeComparableId(item?.id))
-      .filter((value): value is string => Boolean(value)),
-  );
-  const hasOpenGameTypeByName = (subscription.availableTypes || []).some((item) => {
-    const normalizedName = normalizeComparableName(item?.name);
-    return Boolean(normalizedName && normalizedName.includes("открытая игра"));
-  });
-
-  // For split-open-game flow we only show subscriptions explicitly allowing open games.
-  if (!subscription.hasTypeLimitation) {
-    return false;
-  }
-  if (!hasIdIntersection(allowedTypes, requiredExerciseTypeIds) && !hasOpenGameTypeByName) {
-    return false;
-  }
-
-  // Direction constraints from subscription list are often stale/non-deterministic
-  // for open-game split booking. Keep type check strict and let Viva validate
-  // direction on actual booking/payment step.
-  void requiredDirectionIds;
-
-  return true;
 }
 
 function resolveSplitSubscriptionDisplayName(
@@ -14014,12 +13953,12 @@ export default function GamesPage({
         const requiredDirectionIds = buildComparableIdSet([
           directionId != null ? Math.round(directionId) : SPLIT_OPEN_GAME_DIRECTION_ID,
         ]);
-        compatibleSubscriptionCandidates = subscriptionCandidates.filter((subscription) => subscriptionMatchesSplitCategory(
-          subscription,
+        compatibleSubscriptionCandidates = filterSplitCategoryCompatibleSubscriptions(
+          subscriptionCandidates,
           requiredExerciseTypeIds,
           requiredDirectionIds,
           studioId,
-        ));
+        );
         eligibleSubscriptionCandidates = filterSplitEligibleSubscriptions(
           subscriptionCandidates,
           requiredExerciseTypeIds,
