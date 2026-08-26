@@ -208,6 +208,14 @@ if (!ctx || ctx.action !== "purchase") {
   return failMsg(500, "Summer subscription purchase context is missing");
 }
 
+const managedSaleBindingLabel = REGIONAL_FRIENDSHIP_BINDING_LABELS[normalizeCounterKey(ctx.counterKey)];
+if (managedSaleBindingLabel) {
+  return failMsg(503, "Продажа годовой подписки ожидает authoritative-привязку оплаты к экземпляру", {
+    code: "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE",
+    counterKey: normalizeCounterKey(ctx.counterKey),
+  });
+}
+
 const rows = Array.isArray(msg.payload) ? msg.payload : [];
 const now = Date.now();
 let paidCount = toStr(ctx?.inventoryId) ? 0 : readManualPaidCount(ctx?.counterKey);

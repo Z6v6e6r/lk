@@ -236,7 +236,7 @@ function buildManagedNodes(tabId, mongoClientId) {
     ),
     {
       id: IDS.http, type: "http request", z: tabId, name: "Subscription booking Viva request",
-      method: "use", ret: "obj", paytoqs: "ignore", url: "", requestTimeout: "20000",
+      method: "use", ret: "obj", paytoqs: "ignore", url: "",
       senderr: true, persist: false, authType: "", insecureHTTPParser: false,
       x: 760, y: 5100, wires: [[IDS.router]],
     },

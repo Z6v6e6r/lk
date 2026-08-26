@@ -606,6 +606,15 @@ test("freeze, expiry, no-show block and blackout date are separate blockers", ()
   assert.ok(codes.includes("SUBSCRIPTION_BLACKOUT_DATE"));
 });
 
+for (const state of ["CANCELLED", "REFUNDED", "EXPIRED", "REVOKED"]) {
+  test(`${state} subscription instance is never eligible`, () => {
+    const codes = blockerCodes(baseInput({
+      instance: { ...baseInput().instance, state },
+    }));
+    assert.ok(codes.includes(state === "EXPIRED" ? "SUBSCRIPTION_EXPIRED" : "SUBSCRIPTION_NOT_ACTIVE"));
+  });
+}
+
 test("pending first-use subscription stays fail closed until CUP supplies activation dates", () => {
   const input = baseInput({
     policy: basePolicy({

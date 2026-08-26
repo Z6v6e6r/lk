@@ -67,7 +67,7 @@ test("games patch records ignored client cancel even without metadata payload", 
   assert.equal(dbMsg.payload.$set["audit.lastEvent"]?.payload?.ignoredClientCancelPatch, true);
 });
 
-test("games patch preserves an immutable local membership generation", () => {
+test("games patch cannot bypass canonical roster commands with a membership generation", () => {
   const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_patch.js", {
     req: {
       params: { gameId: "game-1" },
@@ -83,10 +83,8 @@ test("games patch preserves an immutable local membership generation", () => {
     },
   }) as unknown[];
 
-  const dbMsg = out[0] as PatchDbMessage | undefined;
-  assert.ok(dbMsg);
-  const participants = dbMsg.payload.$set.participants as Array<Record<string, unknown>>;
-  assert.equal(participants[0]?.membershipId, "local:membership-generation-1");
-  const responseMsg = out[1] as { payload?: { participants?: Array<Record<string, unknown>> } } | undefined;
-  assert.equal(responseMsg?.payload?.participants?.[0]?.membershipId, "local:membership-generation-1");
+  assert.equal(out[0], null);
+  const responseMsg = out[1] as { statusCode?: number; payload?: { code?: string } } | undefined;
+  assert.equal(responseMsg?.statusCode, 403);
+  assert.equal(responseMsg?.payload?.code, "GAME_ROSTER_COMMAND_REQUIRED");
 });

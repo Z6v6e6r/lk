@@ -11,6 +11,11 @@ const AB_LETO_STAGED_INVENTORY_ID = "ab_leto_2026_100_then_7_v1";
 const AB_LETO_STAGED_LAUNCH_LIMIT = 100;
 const AB_LETO_STAGED_DAILY_DROP_LIMIT = 7;
 const AB_LETO_STAGED_RA_DAILY_DROP_LIMIT = 10;
+const MANAGED_FRIENDSHIP_COUNTER_KEYS = new Set([
+  "kotelniki_friendship",
+  "network_friendship",
+  "piter_friendship",
+]);
 const DEFAULT_PLAN_KEY = "sport";
 const DEFAULT_VISIBLE_COUNTER_KEYS = ["friendship", "sport", "academy", "ra", "energy5"];
 const AB_LETO_TOTAL_LIMIT_DEFAULTS = {
@@ -490,6 +495,8 @@ const buildCounterConfigMap = () => {
 };
 
 const createCounterState = (counter) => {
+  const counterKey = toStr(counter?.counterKey);
+  const managedSaleReady = !MANAGED_FRIENDSHIP_COUNTER_KEYS.has(counterKey);
   const totalLimit = Math.max(0, Math.floor(Number(counter?.totalLimit) || 0));
   const productCostMinor = Number(counter?.productCostMinor);
   const priceMinor = Number.isFinite(productCostMinor) ? Math.max(0, Math.round(productCostMinor)) : null;
@@ -498,7 +505,7 @@ const createCounterState = (counter) => {
     ? Math.max(0, Math.floor(configuredManualPaidCount))
     : readManualPaidCount(counter?.counterKey);
   return {
-    counterKey: toStr(counter?.counterKey),
+    counterKey,
     inventoryId: toStr(counter?.inventoryId),
     unlimited: counter?.unlimited === true,
     saleType: toStr(counter?.saleType),
@@ -523,7 +530,12 @@ const createCounterState = (counter) => {
     reservedCount: 0,
     takenCount: manualPaidCount,
     remainingCount: Math.max(totalLimit - manualPaidCount, 0),
-    canPurchase: counter?.unlimited === true || totalLimit - manualPaidCount > 0,
+    canPurchase: managedSaleReady
+      && (counter?.unlimited === true || totalLimit - manualPaidCount > 0),
+    managedSaleReady,
+    managedSaleError: managedSaleReady
+      ? null
+      : "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE",
     bindingReady: true,
     bindingError: null,
     batchSize: Math.max(0, Math.floor(Number(counter?.batchSize) || 0)),
@@ -771,7 +783,9 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
         ? null
         : `Текущая ценовая партия ${regional.bindingLabel} ещё не подключена к оплате`;
     }
-    state.canPurchase = (state.unlimited || state.remainingCount > 0) && state.bindingReady;
+    state.canPurchase = (state.unlimited || state.remainingCount > 0)
+      && state.bindingReady
+      && state.managedSaleReady;
     state.updatedAt = state._lastUpdatedAtTs == null
       ? new Date().toISOString()
       : new Date(state._lastUpdatedAtTs).toISOString();
@@ -838,6 +852,8 @@ msg.payload = {
   canPurchase: toBool(selectedCounter.canPurchase) ?? false,
   bindingReady: toBool(selectedCounter.bindingReady) ?? true,
   bindingError: toStr(selectedCounter.bindingError),
+  managedSaleReady: toBool(selectedCounter.managedSaleReady) ?? true,
+  managedSaleError: toStr(selectedCounter.managedSaleError),
   batchSize: toInt(selectedCounter.batchSize, 0),
   batchIndex: toInt(selectedCounter.batchIndex, 0),
   batchCount: toInt(selectedCounter.batchCount, 0),

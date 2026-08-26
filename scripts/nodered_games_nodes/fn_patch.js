@@ -39,19 +39,9 @@ if (!gameId) {
 }
 
 const body = isObj(msg.payload) ? msg.payload : {};
-const canonicalRosterBridgeEnabled = (() => {
-  try {
-    return ["1", "true", "yes", "on"].includes(
-      String(env.get("PADLHUB_LEGACY_ROSTER_PATCH_GUARD_ENABLED") || "").trim().toLowerCase(),
-    );
-  } catch {
-    return false;
-  }
-})();
 if (
-  canonicalRosterBridgeEnabled
-  && (Object.prototype.hasOwnProperty.call(body, "participants")
-    || Object.prototype.hasOwnProperty.call(body, "waitlist"))
+  Object.prototype.hasOwnProperty.call(body, "participants")
+    || Object.prototype.hasOwnProperty.call(body, "waitlist")
 ) {
   msg.statusCode = 403;
   msg.headers = {

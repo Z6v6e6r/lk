@@ -24,7 +24,7 @@ const roots = [];
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
-function createWorkspace({ staleReconcile = false, staleRouter = false } = {}) {
+function createWorkspace({ duplicateLegacy = false, staleReconcile = false, staleRouter = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "subscription-sales-candidate-")));
   roots.push(root);
   const workspace = path.join(root, "workspace");
@@ -58,6 +58,18 @@ function createWorkspace({ staleReconcile = false, staleRouter = false } = {}) {
         wires: [[], [], [], []],
       };
     }),
+    ...(duplicateLegacy ? [
+      { id: "tab-media2", type: "tab", label: "Media2", disabled: false },
+      ...TARGETS.slice(2, 7).map(([name], index) => ({
+        id: `legacy-target-${index}`,
+        type: "function",
+        z: "tab-media2",
+        name,
+        func: "return msg;",
+        outputs: name === "Route tournament subscription payment" ? 4 : (name.includes("status") ? 2 : 3),
+        wires: [],
+      })),
+    ] : []),
     { id: "unrelated", type: "function", z: "tab-tournaments", name: "Unrelated", func: "return msg;", wires: [] },
   ];
   const sourcePath = path.join(input, "source.flow.json");
@@ -149,6 +161,34 @@ test("builder changes only a stale regional subscription reconciliation query", 
   assert.match(candidate.find(({ id }) => id === "target-7").func, /REGIONAL_FRIENDSHIP_INVENTORIES/);
   assert.match(candidate.find(({ id }) => id === "target-7").func, /network_friendship_12m_2026_v1/);
   assert.equal(candidate.find(({ id }) => id === "unrelated").func, "return msg;");
+});
+
+test("builder patches every enabled duplicate legacy sales function, not only LK Tournaments", () => {
+  const { workspace } = createWorkspace({ duplicateLegacy: true });
+  const result = runBuilder(workspace);
+  assert.equal(result.status, 0, result.stderr);
+
+  const build = path.join(workspace, "build");
+  const candidate = JSON.parse(fs.readFileSync(
+    path.join(build, "tournament-subscription-sales.candidate.json"),
+    "utf8",
+  ));
+  const report = JSON.parse(fs.readFileSync(
+    path.join(build, "tournament-subscription-sales.report.json"),
+    "utf8",
+  ));
+  assert.equal(report.targetNodeCount, 13);
+  assert.equal(report.changedNodeCount, 5);
+  assert.ok(report.changedNodes.every(({ id, tabId }) => (
+    id.startsWith("legacy-target-") && tabId === "tab-media2"
+  )));
+  const legacyFunctions = candidate.filter((node) => node.z === "tab-media2" && node.type === "function");
+  assert.equal(legacyFunctions.length, 5);
+  assert.ok(legacyFunctions.every((node) => node.func !== "return msg;"));
+  assert.match(
+    legacyFunctions.find((node) => node.name === "Prepare tournament subscription purchase").func,
+    /MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE/,
+  );
 });
 
 test("builder fails closed when every target already matches", () => {

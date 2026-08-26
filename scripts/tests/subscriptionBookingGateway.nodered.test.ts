@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import test from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import {
   MANAGED_SUBSCRIPTION_ROUTER_CONTRACTS,
@@ -109,6 +110,28 @@ function flatBooking(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function trustedExercise({
+  directionId = 2617,
+  planName = "Лето.Падел.Спорт",
+  productId = "82caad6f-4d19-4d01-852b-932bdbb0f405",
+  studioId = "studio-1",
+  typeId = 839,
+} = {}) {
+  return {
+    id: "exercise-target",
+    timeFrom: "2026-08-10T10:00:00+03:00",
+    timeTo: "2026-08-10T11:00:00+03:00",
+    direction: { id: directionId, name: directionId === 4588 ? "Открытая игра" : "Турнир" },
+    type: { id: typeId, name: typeId === 1613 ? "Открытая игра" : "Турнир" },
+    studio: { id: studioId },
+    availableClientSubscriptions: [{
+      clientSubscriptionId: "client-subscription-1",
+      productId,
+      name: planName,
+    }],
+  };
+}
+
 function managedRuntimeResponse(overrides: Record<string, any> = {}) {
   const stationId = overrides.stationId || PITER_STATION_ID;
   const benefitStationIds = overrides.benefitStationIds || [stationId];
@@ -143,7 +166,7 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
         enabled: true,
         category: "GAME",
         actions: ["CREATE_GAME"],
-        externalEventTypeIds: ["1613"],
+        externalEventTypeIds: ["viva:direction:4588:type:1613"],
         productTypeIds: [],
         durationMinutes: [60],
         stationIds: benefitStationIds,
@@ -158,7 +181,7 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
         enabled: true,
         category: "GAME",
         actions: ["JOIN_GAME"],
-        externalEventTypeIds: ["1613"],
+        externalEventTypeIds: ["viva:direction:4588:type:1613"],
         productTypeIds: [],
         durationMinutes: [60, 90, 120],
         stationIds: benefitStationIds,
@@ -188,9 +211,9 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
   };
   return {
     schemaVersion: 1,
-    subscriptionInstanceId: "subscription-instance-1",
-    clientSubscriptionId: "client-subscription-1",
-    policyDigest: "a".repeat(64),
+    subscriptionInstanceId: overrides.subscriptionInstanceId || "subscription-instance-1",
+    clientSubscriptionId: overrides.clientSubscriptionId || "client-subscription-1",
+    policyDigest: overrides.policyDigest || "a".repeat(64),
     policy,
     instance: {
       subscriptionInstanceId: "subscription-instance-1",
@@ -204,7 +227,7 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
       homeStationId: stationId,
       ...overrides.instance,
     },
-    evidence: { mappingRevision: 1, instanceRevision: 1 },
+    evidence: overrides.evidence || { mappingRevision: 1, instanceRevision: 1 },
   };
 }
 
@@ -568,11 +591,12 @@ test("Piter split create resolves a server target and requests the actor-owned C
       id: "exercise-target",
       timeFrom: "2026-08-21T18:00:00+03:00",
       timeTo: "2026-08-21T19:00:00+03:00",
-      direction: { name: "Открытая игра" },
+      direction: { id: 4588, name: "Открытая игра" },
       type: { id: 1613, name: "Открытая игра" },
       studio: { id: "studio-1" },
       availableClientSubscriptions: [{
         clientSubscriptionId: "client-subscription-1",
+        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
         name: "Падел.Дружба.Питер — 12 месяцев",
       }],
     },
@@ -588,7 +612,8 @@ test("Piter split create resolves a server target and requests the actor-owned C
   assert.equal(out[0]._subscriptionBooking.planKey, "piter_friendship");
   assert.equal(out[0]._subscriptionBooking.managedTarget.durationMinutes, 60);
   assert.equal(out[0]._subscriptionBooking.managedTarget.stationId, "studio-1");
-  assert.equal(out[0]._subscriptionBooking.managedTarget.externalEventTypeId, "1613");
+  assert.equal(out[0]._subscriptionBooking.managedTarget.externalEventTypeId,
+    "viva:direction:4588:type:1613");
   assert.equal(out[0].url, "https://cup.example/api/internal/subscriptions/runtime-context");
   assert.deepEqual(out[0].payload, { clientSubscriptionId: "client-subscription-1" });
   assert.equal(out[0].headers.Authorization, "Bearer user-token");
@@ -598,22 +623,71 @@ test("Piter split create resolves a server target and requests the actor-owned C
   assert.equal(out[3], null);
 });
 
+test("managed annual identity requires an exact product and canonical direction plus type", () => {
+  const exercise = {
+    id: "exercise-target",
+    timeFrom: "2026-08-21T18:00:00+03:00",
+    timeTo: "2026-08-21T19:00:00+03:00",
+    direction: { id: 4588, name: "Открытая игра" },
+    type: { id: 1613, name: "Открытая игра" },
+    studio: { id: PITER_STATION_ID },
+    availableClientSubscriptions: [{
+      clientSubscriptionId: "client-subscription-1",
+      name: "Падел.Дружба.Питер — 12 месяцев",
+    }],
+  };
+  const byNameOnly = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: exercise,
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(byNameOnly[4].payload.details.code,
+    "MANAGED_SUBSCRIPTION_PRODUCT_MAPPING_REQUIRED");
+  assert.equal(byNameOnly[0], null);
+
+  const missingDirection = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      ...exercise,
+      direction: { name: "Открытая игра" },
+      availableClientSubscriptions: [{
+        ...exercise.availableClientSubscriptions[0],
+        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+      }],
+    },
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(missingDirection[4].payload.details.code,
+    "MANAGED_SUBSCRIPTION_TARGET_UNRESOLVED");
+  assert.equal(missingDirection[0], null);
+});
+
 test("HUB split join uses the same CUP policy path while Kotelniki stays closed", () => {
-  const exercise = (name: string) => ({
+  const exercise = (name: string, productId?: string) => ({
     id: "exercise-target",
     timeFrom: "2026-08-21T18:00:00+03:00",
     timeTo: "2026-08-21T20:00:00+03:00",
-    direction: { name: "Открытая игра" },
+    direction: { id: 4588, name: "Открытая игра" },
     type: { id: 1613, name: "Открытая игра" },
     studio: { id: "studio-1" },
     availableClientSubscriptions: [{
       clientSubscriptionId: "client-subscription-1",
+      productId,
       name,
     }],
   });
   const hub = runFunction(ROUTER_FILE, {
     statusCode: 200,
-    payload: exercise("Падел.Дружба.ХАБ — 12 месяцев"),
+    payload: exercise(
+      "Падел.Дружба.ХАБ — 12 месяцев",
+      "db7a5250-7369-4f43-8ac5-9111be24bc74",
+    ),
     _subscriptionBooking: baseContext("exercise", {
       serviceDate: undefined, category: undefined, planKey: undefined,
       managedAction: "JOIN_GAME",
@@ -647,7 +721,7 @@ test("published managed policy is evaluated before Mongo and persists its audit 
       managedAction: "CREATE_GAME",
       managedTarget: {
         resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes: 60, startsAt: futureTarget.startsAt,
         basePriceMinor: null, currency: "RUB",
       },
@@ -693,7 +767,7 @@ test("HUB accepts the exact first-use deadline lifecycle with the pinned station
       managedAction: "JOIN_GAME",
       managedTarget: {
         resolutionSource: "SERVER", stationId: HUB_STATION_IDS[0], category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes: 120, startsAt: futureTarget.startsAt,
         basePriceMinor: null, currency: "RUB",
       },
@@ -730,7 +804,7 @@ test("HUB rejects all-stations, missing and additional station scopes before Viv
       managedAction: "JOIN_GAME",
       managedTarget: {
         resolutionSource: "SERVER", stationId: "studio-1", category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes: 120, startsAt: "2026-08-21T15:00:00.000Z",
         basePriceMinor: null, currency: "RUB",
       },
@@ -764,7 +838,7 @@ test("pending annual subscription fails before Viva reads when CUP activation is
       managedAction: "CREATE_GAME",
       managedTarget: {
         resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
         basePriceMinor: null, currency: "RUB",
       },
@@ -802,7 +876,7 @@ test("pending annual subscription is projected for policy and activates only aft
       managedAction: "CREATE_GAME",
       managedTarget: {
         resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
         basePriceMinor: null, currency: "RUB",
       },
@@ -969,7 +1043,7 @@ test("regional policy requires the exact first-use deadline lifecycle before any
         managedAction: "CREATE_GAME",
         managedTarget: {
           resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
-          externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+          externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
           durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
           basePriceMinor: null, currency: "RUB",
         },
@@ -995,7 +1069,7 @@ test("Piter rejects an all-stations policy and regional tournament discounts sta
       managedAction: "CREATE_GAME",
       managedTarget: {
         resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes: 60, startsAt: "2026-08-21T15:00:00.000Z",
         basePriceMinor: null, currency: "RUB",
       },
@@ -1015,6 +1089,7 @@ test("Piter rejects an all-stations policy and regional tournament discounts sta
       studio: { id: PITER_STATION_ID },
       availableClientSubscriptions: [{
         clientSubscriptionId: "client-subscription-1",
+        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
         name: "Падел.Дружба.Питер — 12 месяцев",
       }],
     },
@@ -1040,7 +1115,7 @@ test("90 minute create is blocked while 120 minute join is allowed by the same p
       },
       managedTarget: {
         resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
-        externalEventTypeId: "1613", productTypeId: null, eventId: "exercise-target",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
         durationMinutes, startsAt: futureTarget.startsAt,
         basePriceMinor: null, currency: "RUB",
       },
@@ -1372,9 +1447,15 @@ test("new operation is inserted, persisted as pending, then posts exact subscrip
   assert.equal(preaccept[3]._subscriptionBooking.step, "operation_preaccept");
   assert.equal(preaccept[3].payload[1].$set.state, "PENDING_CONFIRMATION");
 
-  const create = runFunction(ROUTER_FILE, {
+  const recheck = runFunction(ROUTER_FILE, {
     payload: { acknowledged: true, matchedCount: 1 },
     _subscriptionBooking: preaccept[3]._subscriptionBooking,
+  });
+  assert.equal(recheck[0]._subscriptionBooking.step, "exercise_recheck");
+  const create = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: trustedExercise(),
+    _subscriptionBooking: recheck[0]._subscriptionBooking,
   });
   assert.equal(create[0]._subscriptionBooking.step, "booking_create");
   assert.match(create[0].url, /\/api\/v2\/exercises\/exercise-target\/bookings$/);
@@ -1385,12 +1466,17 @@ test("new operation is inserted, persisted as pending, then posts exact subscrip
   assert.equal("familyMemberId" in create[0].payload, false);
   assert.equal("count" in create[0].payload, false, "direct tournament/group booking remains one visit");
 
-  const splitCreate = runFunction(ROUTER_FILE, {
+  const splitRecheck = runFunction(ROUTER_FILE, {
     payload: { acknowledged: true, matchedCount: 1 },
     _subscriptionBooking: baseContext("operation_preaccept", {
       caller: "split",
       subscriptionVisitCount: 2,
     }),
+  });
+  const splitCreate = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: trustedExercise(),
+    _subscriptionBooking: splitRecheck[0]._subscriptionBooking,
   });
   assert.equal(splitCreate[0].payload.count, 2, "split keeps the existing 90/120-minute debit contract");
   assert.match(splitCreate[0].url, /\/api\/v1\/exercises\/exercise-target\/bookings$/);
@@ -1399,6 +1485,135 @@ test("new operation is inserted, persisted as pending, then posts exact subscrip
     "iSkq6G:client-subscription-1:2026-08-10",
     "the debit count still consumes one daily event slot",
   );
+});
+
+test("ordinary subscription eligibility is re-read after preaccept and fails if ownership disappeared", () => {
+  const missing = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { ...trustedExercise(), availableClientSubscriptions: [] },
+    _subscriptionBooking: baseContext("exercise_recheck"),
+  });
+  assert.equal(missing[0], null);
+  assert.equal(missing[3]._subscriptionBooking.step, "operation_fail");
+  assert.equal(missing[3].payload[1].$set.failure.rawCode,
+    "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE");
+});
+
+test("managed booking rechecks CUP identity and policy after preaccept before Viva write", () => {
+  const runtime = managedRuntimeResponse();
+  const target = futureManagedTarget();
+  const managedContext = baseContext("operation_preaccept", {
+    serviceDate: target.serviceDate,
+    studioId: PITER_STATION_ID,
+    planKey: "piter_friendship",
+    category: "open_game",
+    managedAction: "CREATE_GAME",
+    managedTarget: {
+      resolutionSource: "SERVER",
+      stationId: PITER_STATION_ID,
+      category: "GAME",
+      externalEventTypeId: "viva:direction:4588:type:1613",
+      productTypeId: null,
+      eventId: "exercise-target",
+      durationMinutes: 60,
+      startsAt: target.startsAt,
+      basePriceMinor: null,
+      currency: "RUB",
+    },
+    managedRuntime: {
+      subscriptionInstanceId: runtime.subscriptionInstanceId,
+      policyDigest: runtime.policyDigest,
+      policy: runtime.policy,
+      instance: runtime.instance,
+      evidence: runtime.evidence,
+    },
+    managedActivationRequired: false,
+    managedActivationExpectedRevision: 1,
+  });
+
+  const exerciseRecheck = runFunction(ROUTER_FILE, {
+    payload: { acknowledged: true, matchedCount: 1 },
+    _subscriptionBooking: managedContext,
+  }, MANAGED_GLOBALS);
+  assert.equal(exerciseRecheck[0]._subscriptionBooking.step, "exercise_recheck");
+  const recheck = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      ...trustedExercise({
+        directionId: 4588,
+        planName: "Падел.Дружба.Питер — 12 месяцев",
+        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+        studioId: PITER_STATION_ID,
+        typeId: 1613,
+      }),
+      timeFrom: target.startsAt,
+      timeTo: new Date(new Date(target.startsAt).getTime() + 60 * 60 * 1000).toISOString(),
+    },
+    _subscriptionBooking: exerciseRecheck[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(recheck[0]._subscriptionBooking.step, "managed_runtime_recheck");
+  assert.equal(recheck[0].url, "https://cup.example/api/internal/subscriptions/runtime-context");
+
+  const changed = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse({
+      policyDigest: "b".repeat(64),
+      evidence: { mappingRevision: 1, instanceRevision: 2 },
+    }),
+    _subscriptionBooking: structuredClone(recheck[0]._subscriptionBooking),
+  }, MANAGED_GLOBALS);
+  assert.equal(changed[3]._subscriptionBooking.step, "operation_fail");
+  assert.equal(changed[3].payload[1].$set.failure.rawCode,
+    "MANAGED_SUBSCRIPTION_RUNTIME_CHANGED_BEFORE_WRITE");
+  assert.equal(changed[0], null, "changed authoritative identity never reaches Viva");
+
+  const unchanged = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: runtime,
+    _subscriptionBooking: structuredClone(recheck[0]._subscriptionBooking),
+  }, MANAGED_GLOBALS);
+  assert.equal(unchanged[6]._subscriptionBooking.step, "managed_policy_recheck_decision");
+  const evaluated = runFunction(MANAGED_EVALUATOR_FILE, unchanged[6]);
+  const create = runFunction(ROUTER_FILE, evaluated[0], MANAGED_GLOBALS);
+  assert.equal(create[0]._subscriptionBooking.step, "booking_create");
+  assert.equal(create[0].payload.clientSubscriptionId, "client-subscription-1");
+  assert.equal(create[0].payload.paymentType, "SUBSCRIPTION");
+});
+
+test("managed lifecycle cancellation at the final recheck fails before Viva write", () => {
+  const runtime = managedRuntimeResponse();
+  const target = futureManagedTarget();
+  const rechecked = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse({ instance: { state: "CANCELLED" } }),
+    _subscriptionBooking: baseContext("managed_runtime_recheck", {
+      planKey: "piter_friendship",
+      serviceDate: target.serviceDate,
+      category: "open_game",
+      managedAction: "CREATE_GAME",
+      managedTarget: {
+        resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
+        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
+        durationMinutes: 60, startsAt: target.startsAt,
+        basePriceMinor: null, currency: "RUB",
+      },
+      managedRuntime: {
+        subscriptionInstanceId: runtime.subscriptionInstanceId,
+        policyDigest: runtime.policyDigest,
+        policy: runtime.policy,
+        instance: runtime.instance,
+        evidence: runtime.evidence,
+      },
+      managedActivationRequired: false,
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(rechecked[6]._subscriptionBooking.step, "managed_policy_recheck_decision");
+  const blocked = runFunction(MANAGED_EVALUATOR_FILE, rechecked[6]);
+  const failed = runFunction(ROUTER_FILE, blocked[1], MANAGED_GLOBALS);
+  assert.equal(failed[3]._subscriptionBooking.step, "operation_fail");
+  assert.equal(failed[3].payload[1].$set.failure.rawCode,
+    "MANAGED_SUBSCRIPTION_POLICY_BLOCKED");
+  assert.equal(failed[0], null);
 });
 
 test("ambiguous upstream result remains pending while definitive rejection is persisted", () => {
@@ -1498,6 +1713,28 @@ test("guarded patcher requires the exact live preimage and wires split subscript
   assert.match(source, /nextRouter\.wires = \[\.\.\.nextRouter\.wires, \[IDS\.http\]\]/);
   assert.match(source, /patchManagedRouterSource/);
   assert.match(source, /managedAction: ctx\.action === "create"/);
+});
+
+test("guarded patcher accepts the exact current tracked split router", () => {
+  const funcSha256 = crypto.createHash("sha256")
+    .update(fs.readFileSync("scripts/nodered_games_nodes/fn_split_router.js", "utf8"))
+    .digest("hex");
+  const router = {
+    id: "8f7bd5b482fe9763",
+    type: "function",
+    name: "Route Viva split payment",
+    outputs: 5,
+    wires: [
+      ["ee7ba8cdd68bdf74"],
+      ["802af8a1810db60f"],
+      ["ef42932e1ba864b8"],
+      ["lk_subscription_booking_http_20260804"],
+      ["legacy_payment_confirm_canonical_prepare_20260816"],
+    ],
+  };
+
+  assert.equal(funcSha256, "892ad51fcb8f2be2a194661e04f9c775d4345fea153e5dbc3758bd40967101f2");
+  assert.equal(resolveManagedSubscriptionRouterContract(router, funcSha256)?.managedActionCandidateSha256, null);
 });
 
 test("guarded patcher accepts the exact reviewed five-output router without dropping canonical payment", () => {

@@ -579,6 +579,13 @@ if (requestedCounterKey) {
   activeCounter = mappedByCampaign;
 }
 
+if (REGIONAL_FRIENDSHIP_COUNTER_KEYS.has(activeCounter.counterKey)) {
+  return fail(503, "Продажа годовой подписки ожидает authoritative-привязку оплаты к экземпляру", {
+    code: "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE",
+    counterKey: activeCounter.counterKey,
+  });
+}
+
 const productId = REGIONAL_FRIENDSHIP_COUNTER_KEYS.has(activeCounter.counterKey)
   ? null
   : activeCounter.productId || requestedProductId;

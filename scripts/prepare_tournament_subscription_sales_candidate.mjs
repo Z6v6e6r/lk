@@ -39,29 +39,35 @@ const tabs = candidate.filter((node) => node?.type === "tab" && node?.label === 
 if (tabs.length !== 1 || tabs[0].disabled === true) {
   fail(`Expected one enabled ${TARGET_TAB_LABEL} tab, found ${tabs.length}`);
 }
+const enabledTabIds = new Set(candidate
+  .filter((node) => node?.type === "tab" && node?.disabled !== true)
+  .map((node) => node.id));
 
 const changedNodes = [];
+let targetNodeCount = 0;
 for (const [nodeName, sourceFile] of TARGETS) {
   const matches = candidate.filter((node) => (
     node?.type === "function"
-    && node?.z === tabs[0].id
+    && enabledTabIds.has(node?.z)
     && node?.name === nodeName
   ));
-  if (matches.length !== 1) {
-    fail(`Expected one ${nodeName} function in ${TARGET_TAB_LABEL}, found ${matches.length}`);
+  if (matches.length < 1) {
+    fail(`Expected at least one enabled ${nodeName} function, found ${matches.length}`);
   }
+  targetNodeCount += matches.length;
   const nextSource = fs.readFileSync(path.join(FUNCTION_DIR, sourceFile), "utf8");
-  const previousSource = String(matches[0].func || "");
-  if (nextSource === previousSource) {
-    continue;
+  for (const match of matches) {
+    const previousSource = String(match.func || "");
+    if (nextSource === previousSource) continue;
+    match.func = nextSource;
+    changedNodes.push({
+      id: match.id,
+      name: nodeName,
+      tabId: match.z,
+      previousSha256: sha256(previousSource),
+      candidateSha256: sha256(nextSource),
+    });
   }
-  matches[0].func = nextSource;
-  changedNodes.push({
-    id: matches[0].id,
-    name: nodeName,
-    previousSha256: sha256(previousSource),
-    candidateSha256: sha256(nextSource),
-  });
 }
 
 const sourceById = new Map(verified.source.map((node) => [node.id, node]));
@@ -78,11 +84,11 @@ if (!actualChanged.every((node) => changedNodes.some((entry) => entry.id === nod
 
 const candidateText = `${JSON.stringify(candidate, null, 2)}\n`;
 const markerSource = TARGETS
-  .map(([nodeName]) => candidate.find((node) => (
+  .flatMap(([nodeName]) => candidate.filter((node) => (
     node?.type === "function"
-    && node?.z === tabs[0].id
+    && enabledTabIds.has(node?.z)
     && node?.name === nodeName
-  ))?.func || "")
+  )).map((node) => node.func || ""))
   .join("\n");
 for (const marker of [
   "8bf334ba-3050-4017-b40a-7eef2db1eb16",
@@ -110,7 +116,7 @@ const report = {
   candidateSha256: sha256(candidateText),
   sourceNodeCount: verified.nodeCount,
   candidateNodeCount: candidate.length,
-  targetNodeCount: TARGETS.length,
+  targetNodeCount,
   changedNodeCount: changedNodes.length,
   targetTab: { id: tabs[0].id, label: tabs[0].label },
   changedNodes,
