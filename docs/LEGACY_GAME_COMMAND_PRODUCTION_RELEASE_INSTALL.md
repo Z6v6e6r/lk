@@ -46,7 +46,10 @@ npm run release:legacy-game-command:build -- \
 RELEASE_BUNDLE='/absolute/private/padlhub-legacy-command-<commit>'
 EXPECTED_INSTALLER_SHA256='<independently-frozen-installer-sha256>'
 ACTUAL_INSTALLER_SHA256="$(shasum -a 256 "$RELEASE_BUNDLE/scripts/install_legacy_game_command_production_release.mjs" | awk '{print $1}')"
-test "$ACTUAL_INSTALLER_SHA256" = "$EXPECTED_INSTALLER_SHA256"
+if [ "$ACTUAL_INSTALLER_SHA256" != "$EXPECTED_INSTALLER_SHA256" ]; then
+  echo 'installer SHA-256 mismatch; refusing to execute' >&2
+  exit 1
+fi
 
 node "$RELEASE_BUNDLE/scripts/install_legacy_game_command_production_release.mjs" \
   --mode plan \
@@ -83,6 +86,40 @@ The exact install command is intentionally unusable without all of the following
 - the one-shot environment confirmation
   `LK_LEGACY_COMMAND_RELEASE_INSTALL=INSTALL_LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_V1`;
 - a separately approved live execution step with fresh remote/main and flow preimages.
+
+After those values have been independently frozen and the read-only plan has passed,
+the exact production installation invocation is:
+
+```bash
+RELEASE_BUNDLE='/absolute/private/padlhub-legacy-command-<commit>'
+EXPECTED_INSTALLER_SHA256='<independently-frozen-installer-sha256>'
+ACTUAL_INSTALLER_SHA256="$(shasum -a 256 "$RELEASE_BUNDLE/scripts/install_legacy_game_command_production_release.mjs" | awk '{print $1}')"
+if [ "$ACTUAL_INSTALLER_SHA256" != "$EXPECTED_INSTALLER_SHA256" ]; then
+  echo 'installer SHA-256 mismatch; refusing to execute' >&2
+  exit 1
+fi
+
+env LK_LEGACY_COMMAND_RELEASE_INSTALL=INSTALL_LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_V1 \
+  node "$RELEASE_BUNDLE/scripts/install_legacy_game_command_production_release.mjs" \
+  --mode install \
+  --bundle "$RELEASE_BUNDLE" \
+  --install-root /opt/padlhub/legacy-game-command \
+  --executor-uid '<dedicated-non-root-uid>' \
+  --expected-commit '<independently-frozen-40-hex-commit>' \
+  --expected-manifest-sha256 '<independently-frozen-release-manifest-sha256>' \
+  --expected-installer-sha256 "$EXPECTED_INSTALLER_SHA256" \
+  --environment production \
+  --deployment-id '<new-UUID>' \
+  --activated-at '<canonical-non-future-RFC3339>'
+```
+
+Run it only as the approved root custodian. A failed external installer digest guard
+must terminate the operator shell block before Node starts; do not continue manually.
+
+The required `installerSha256` field intentionally makes pre-hotfix schema-v1 manifests,
+attestations, compatibility reports, and execution packets fail closed. No legacy release
+or signed packet is grandfathered: the trust anchor is still `UNBOUND`, so new evidence
+must be generated from the new exact commit before any later binding or apply gate.
 
 At install time the attestation replaces only the build-host Node executable digest
 with the actual target `process.execPath` digest. All portable source and MongoDB runtime

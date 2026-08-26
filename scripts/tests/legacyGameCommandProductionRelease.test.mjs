@@ -82,37 +82,49 @@ test("release builder packages and authenticates the bootstrap installer and run
   );
 });
 
-test("failed verified-copy activation removes its private staging tree", async (t) => {
-  const { root, bundle, installerSha256, installer } = await buildFixture(t);
-  const runnerPath = path.join(bundle, "scripts/run_legacy_game_command_production_migration.mjs");
-  fs.writeFileSync(runnerPath, "throw new Error(\"authenticated rehearsal fault\");\n");
-  const manifestPath = path.join(bundle, "release-manifest.json");
-  const manifest = parseCanonicalJson(fs.readFileSync(manifestPath), "release manifest");
-  const runnerEntry = manifest.files.find((item) => item.path === "scripts/run_legacy_game_command_production_migration.mjs");
-  runnerEntry.size = fs.statSync(runnerPath).size;
-  runnerEntry.sha256 = fileSha256(runnerPath);
-  manifest.source.runnerSha256 = runnerEntry.sha256;
-  fs.writeFileSync(manifestPath, canonicalJson(manifest));
-  const expectedManifestSha256 = fileSha256(manifestPath);
+test("mid-copy failure removes its private partial staging tree", async (t) => {
+  const { root, bundle, manifestSha256, installerSha256, installer } = await buildFixture(t);
   const installRoot = path.join(root, "failed-install");
   const currentUid = typeof process.getuid === "function" ? process.getuid() : 501;
   const deploymentId = "33333333-3333-4333-8333-333333333333";
-
-  await assert.rejects(installer.prepareLegacyGameCommandReleaseInstall({
-    mode: "install",
-    bundlePath: bundle,
-    installRoot,
-    executorUid: currentUid + 1,
-    expectedCommit: commit,
-    expectedManifestSha256,
-    expectedInstallerSha256: installerSha256,
-    environment: "rehearsal",
-    deploymentId,
-    activatedAt: new Date(Date.now() - 1_000).toISOString(),
-    currentUid,
-  }), /authenticated rehearsal fault/);
+  const copyFileSync = fs.copyFileSync;
+  let copies = 0;
+  fs.copyFileSync = (...args) => {
+    copies += 1;
+    if (copies === 3) throw new Error("injected mid-copy fault");
+    return copyFileSync(...args);
+  };
+  try {
+    await assert.rejects(installer.prepareLegacyGameCommandReleaseInstall({
+      mode: "install",
+      bundlePath: bundle,
+      installRoot,
+      executorUid: currentUid + 1,
+      expectedCommit: commit,
+      expectedManifestSha256: manifestSha256,
+      expectedInstallerSha256: installerSha256,
+      environment: "rehearsal",
+      deploymentId,
+      activatedAt: new Date(Date.now() - 1_000).toISOString(),
+      currentUid,
+    }), /injected mid-copy fault/);
+  } finally {
+    fs.copyFileSync = copyFileSync;
+  }
+  assert.equal(copies, 3);
   assert.equal(fs.existsSync(path.join(installRoot, "releases", `.staging-${deploymentId}`)), false);
   assert.equal(fs.existsSync(path.join(installRoot, "releases", commit)), false);
+});
+
+test("installer omission and byte tampering are rejected by the bundle inventory", async (t) => {
+  const { bundle, installer } = await buildFixture(t);
+  const installerPath = path.join(bundle, "scripts/install_legacy_game_command_production_release.mjs");
+  const body = fs.readFileSync(installerPath);
+  fs.unlinkSync(installerPath);
+  assert.throws(() => installer.verifyLegacyGameCommandReleaseBundle(bundle), /inventory mismatch/);
+  fs.writeFileSync(installerPath, body);
+  fs.appendFileSync(installerPath, "\n");
+  assert.throws(() => installer.verifyLegacyGameCommandReleaseBundle(bundle), /inventory mismatch/);
 });
 
 test("Git-object source reads cannot be redirected by a tracked worktree mutation", (t) => {
