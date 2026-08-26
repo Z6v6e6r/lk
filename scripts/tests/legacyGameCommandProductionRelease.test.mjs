@@ -117,7 +117,7 @@ test("host-hardening plan keeps permission and executor mutations behind separat
   assert.match(plan, /H0 is audit-only and must prove through `flistxattr`/);
   assert.match(plan, /LK_ROOT_ACL_BOOTSTRAP_APPLY=APPLY_ROOT_MODE_0755_V1/);
   assert.match(plan, /Raw path-based `chmod` is\nforbidden/);
-  assert.match(plan, /Restoring the insecure preimage is a separate break-glass live gate/);
+  assert.match(plan, /Restoring the insecure\npreimage is a separate break-glass live gate/);
   assert.match(plan, /LK_ROOT_ACL_BOOTSTRAP_ROLLBACK=ROLLBACK_ROOT_MODE_0707_V1/);
   assert.match(plan, /host has no `getfacl`, `getfattr`, or `attr`/);
   assert.match(plan, /Unknown\/non-empty xattrs or incomplete read-back/);
