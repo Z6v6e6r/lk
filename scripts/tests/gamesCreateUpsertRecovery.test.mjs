@@ -31,13 +31,31 @@ function createSource() {
 }
 
 function runCreate(pathname, payload = {}, query = {}) {
+  const confirmMode = payload.action === 'confirm' || pathname === '/lk/games/payment/confirm';
+  const normalizedPayload = confirmMode
+    ? {
+        revision: 3,
+        updatedAt: '2026-08-26T12:00:00.000Z',
+        ...payload,
+      }
+    : payload;
   const msg = {
     req: {
       path: pathname,
       originalUrl: pathname,
       query,
     },
-    payload,
+    payload: normalizedPayload,
+    ...(confirmMode ? {
+      _gamePaymentVerified: {
+        verified: true,
+        source: 'viva_transaction_readback',
+        paymentRef: normalizedPayload.paymentRef,
+        transactionId: 'transaction-1',
+        bookingId: normalizedPayload.booking?.bookingIds?.[0] || normalizedPayload.bookingIds?.[0] || 'booking-1',
+        exerciseId: normalizedPayload.booking?.exerciseId || 'exercise-1',
+      },
+    } : {}),
   };
   return {
     msg,
@@ -233,7 +251,7 @@ function workspaceFixture() {
 test('tracked create source is a pinned candidate after the exact live target preimage', () => {
   assert.equal(
     sha256(createSource()),
-    'd44a8fd52c3b9818f3dc180bacc9feb3cc9dfd09bb98aa6df55d1b89e059f092',
+    '15f86c1e18b56ea5b95855bbe54f164bd0514d106bb5fddb03a686e14cefe0fb',
   );
   assert.notEqual(
     CREATE_UPSERT_CONTRACT.target.sourceSha256,
@@ -264,20 +282,20 @@ test('all six POST routes preserve the current mode matrix', () => {
   )), true);
 });
 
-test('explicit action overrides the path and missing paymentRef fails closed', () => {
+test('HTTP route mode overrides client action and missing paymentRef fails closed', () => {
   const explicitConfirm = runCreate('/lk/games', {
     id: 'explicit-confirm',
     action: 'confirm',
-    paymentRef: 'pay-explicit',
   }).outputs;
-  assert.equal(explicitConfirm[0]._requestMode, 'confirm');
+  assert.equal(explicitConfirm[0]._requestMode, 'create');
   assert.equal(explicitConfirm[0].payload.$set.payment.paid, true);
 
   const explicitCreate = runCreate('/lk/games/payment/confirm', {
     id: 'explicit-create',
     action: 'create',
+    paymentRef: 'pay-explicit-create',
   }).outputs;
-  assert.equal(explicitCreate[0]._requestMode, 'create');
+  assert.equal(explicitCreate[0]._requestMode, 'confirm');
 
   for (const route of ['/lk/games/payment/confirm', '/lk/games/draft']) {
     const outputs = runCreate(route, { id: 'missing-ref' }).outputs;
@@ -377,11 +395,12 @@ test('singles force maxPlayers=2 and canonical roster stays deduped, capped, see
   assert.equal(snapshot.initialTeamSlots[0].clientId, 'seed-player');
 });
 
-test('audit append is bounded and all four success outputs retain DB/response/debug/autojoin shapes', () => {
+test('confirm emits DB/debug only until durable write acknowledgement', () => {
   const outputs = runCreate('/lk/games/payment/confirm', {
     id: 'audit-game',
     paymentRef: 'audit-payment',
     bookingIds: ['booking-1'],
+    booking: { bookingIds: ['booking-1'], exerciseId: 'exercise-1' },
   }).outputs;
   const [db, response, debug, autojoin] = outputs;
   const event = db.payload.$push['audit.events'].$each[0];
@@ -392,14 +411,19 @@ test('audit append is bounded and all four success outputs retain DB/response/de
   assert.equal(db.payload.$set['audit.version'], 1);
   assert.equal(db.payload.$set['audit.lastEvent'].id, event.id);
   assert.equal(typeof db.payload.$setOnInsert.createdAt, 'string');
-  assert.equal(db.query.$or.some((item) => item['metadata.paymentRef'] === 'audit-payment'), true);
-  assert.equal(response.statusCode, 200);
-  assert.equal(response.payload.id, 'audit-game');
+  assert.equal(db.query.$and[0].$or.some((item) => item['metadata.paymentRef'] === 'audit-payment'), true);
+  assert.equal(response, null);
   assert.equal(debug.payload.mode, 'confirm');
   assert.equal(debug.payload.gameId, 'audit-game');
-  assert.equal(autojoin._requestMode, 'confirm');
-  assert.equal(autojoin._gameAutojoinSource, 'games_create');
-  assert.equal(autojoin.payload.id, 'audit-game');
+  assert.equal(autojoin, null);
+  assert.deepEqual(db._gameConfirmWriteAck, {
+    step: 'write_ack',
+    gameId: 'audit-game',
+    paymentRef: 'audit-payment',
+    transactionId: 'transaction-1',
+    bookingId: 'booking-1',
+    exerciseId: 'exercise-1',
+  });
 });
 
 test('exact 21-node graph and all node/function hashes remain fixed', () => {

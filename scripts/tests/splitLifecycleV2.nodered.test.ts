@@ -19,7 +19,12 @@ function runNodeRedFunction(
     set(name: string, value: unknown) { values.set(name, value); },
   };
   const env = {
-    get(name: string) { return options.envValues?.[name]; },
+    get(name: string) {
+      if (name === "PADLHUB_PLATFORM_TENANT_KEY") {
+        return options.envValues?.[name] ?? "tenant-test";
+      }
+      return options.envValues?.[name];
+    },
   };
   return new Function("msg", "env", "global", source)(msg, env, globalContext);
 }
@@ -29,6 +34,7 @@ const cleanupRouter = "scripts/nodered_games_nodes/fn_split_cleanup_router.js";
 const cleanupQuery = "scripts/nodered_games_nodes/fn_split_cleanup_query.js";
 const cleanupPrepare = "scripts/nodered_games_nodes/fn_split_cleanup_prepare.js";
 const cleanupResponse = "scripts/nodered_games_nodes/fn_split_cleanup_response.js";
+const cleanupWriteAck = "scripts/nodered_games_nodes/fn_split_cleanup_write_ack.js";
 
 function splitCreateContext(overrides: Record<string, unknown> = {}) {
   return {
@@ -157,9 +163,15 @@ function cleanupContext(step = "check_timeout_transaction") {
     step,
     token: "service-token",
     gameId: "game-1",
+    expectedRevision: 7,
+    expectedUpdatedAt: "2026-08-26T12:00:00.000Z",
+    paymentPaid: true,
+    paymentExerciseId: "exercise-1",
+    statusBefore: "PAYMENT_PENDING",
     currentBookingId: "booking-1",
     currentClientId: "client-1",
     currentTimedOutPayment: {
+      role: "ORGANIZER",
       transactionId: "transaction-1",
       bookingIds: ["booking-1"],
       clientId: "client-1",
@@ -172,7 +184,13 @@ function cleanupContext(step = "check_timeout_transaction") {
     trace: [],
     nextParticipants: [],
     nextWaitlist: [],
-    nextSplitPayments: [],
+    nextSplitPayments: [{
+      role: "ORGANIZER",
+      status: "EXPIRED",
+      transactionId: "transaction-1",
+      bookingId: "booking-1",
+      paymentRef: "payment-1",
+    }],
     nextLeaveEvents: [],
     timedOutPayments: [],
     blockLocalMutation: false,
@@ -183,6 +201,8 @@ function cleanupContext(step = "check_timeout_transaction") {
 function schedulerTimedOutGame(createdAt: unknown = "2026-08-23T07:00:00.000Z") {
   return {
     id: "pay-real-shape",
+    revision: 7,
+    updatedAt: "2026-08-26T12:00:00.000Z",
     createdAt,
     status: "PAID",
     payment: { paid: true },
@@ -214,14 +234,153 @@ function schedulerTimedOutGame(createdAt: unknown = "2026-08-23T07:00:00.000Z") 
   };
 }
 
-function transaction(status: string, bookingId = "booking-1") {
+function transaction(status: string, bookingId = "booking-1", exerciseId = "exercise-1") {
   return {
     id: "transaction-1",
     status,
+    toPay: 37500,
+    currency: "RUB",
     client: { id: "client-1" },
+    exercise: { id: exerciseId },
     products: [{ bookingIds: [bookingId] }],
   };
 }
+
+test("verified paid organizer timeout promotes the durable draft to PAID", () => {
+  const claimWrite = runNodeRedFunction(cleanupRouter, {
+    statusCode: 200,
+    payload: {
+      ...transaction("PAID"),
+      toPay: 37500,
+      exercise: { id: "exercise-1" },
+    },
+    _splitCleanupCtx: cleanupContext(),
+  }) as Array<Record<string, any> | null>;
+
+  assert.deepEqual(claimWrite[4]?.payload?.[2], { upsert: true });
+  const claimRead = runNodeRedFunction(cleanupRouter, {
+    ...claimWrite[4],
+    payload: { acknowledged: true },
+  }) as Array<Record<string, any> | null>;
+  const out = runNodeRedFunction(cleanupRouter, {
+    ...claimRead[5],
+    payload: [{
+      _id: "viva_transaction:transaction-1",
+      transactionId: "transaction-1",
+      bookingId: "booking-1",
+      clientId: "client-1",
+      exerciseId: "exercise-1",
+      gameId: "game-1",
+      paymentRef: "payment-1",
+    }],
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0], null);
+  assert.equal(out[1]?.payload?.$set?.status, "PAID");
+  assert.equal(out[1]?.payload?.$set?.["payment.paid"], true);
+  assert.equal(
+    out[1]?.payload?.$set?.["metadata.splitPayment.organizerPaymentConfirmationSource"],
+    "split_cleanup",
+  );
+  assert.equal(out[1]?.payload?.$set?.["metadata.splitPayment.payments"]?.[0]?.status, "PAID");
+  assert.equal(out[2], null);
+  assert.equal(out[3], null);
+
+  const readback = runNodeRedFunction(cleanupWriteAck, {
+    ...out[1],
+    payload: { acknowledged: true, matchedCount: 1 },
+  }) as Array<Record<string, any> | null>;
+  assert.deepEqual(readback[0]?.payload, { id: "game-1" });
+  const ackCtx = readback[0]?._splitCleanupWriteAck;
+  const acknowledged = runNodeRedFunction(cleanupWriteAck, {
+    ...readback[0],
+    payload: [{
+      id: "game-1",
+      updatedAt: ackCtx.expectedUpdatedAt,
+      status: ackCtx.expectedStatus,
+      payment: { paid: true },
+    }],
+  }) as Array<Record<string, any> | null>;
+  assert.equal(acknowledged[1]?.statusCode, 200);
+  assert.equal(acknowledged[1]?.payload?.cancelledInLk, true);
+  assert.equal(acknowledged[1]?.payload?.blockLocalMutation, false);
+});
+
+test("cleanup CAS miss never reports local cancellation success", () => {
+  const out = runNodeRedFunction(cleanupWriteAck, {
+    _splitCleanupWriteAck: {
+      step: "write_ack",
+      gameId: "game-1",
+      expectedUpdatedAt: "2026-08-26T12:01:00.000Z",
+      expectedStatus: "PAID",
+      expectedPaid: true,
+      summaryPayload: { gameId: "game-1", cancelledInLk: true },
+    },
+    payload: { acknowledged: true, matchedCount: 0 },
+  }) as Array<Record<string, any> | null>;
+  assert.equal(out[1]?.statusCode, 409);
+  assert.equal(out[1]?.payload?.cancelledInLk, false);
+  assert.equal(out[1]?.payload?.blockLocalMutation, true);
+  assert.equal(out[1]?.payload?.blockReason, "SPLIT_CLEANUP_CAS_MISS");
+});
+
+test("participant cleanup preserves an already-paid game through ACK readback", () => {
+  const write = runNodeRedFunction(cleanupRouter, {
+    _splitCleanupCtx: cleanupContext("finalize_after_test"),
+    payload: null,
+  }) as Array<Record<string, any> | null>;
+  assert.equal(write[1]?._splitCleanupWriteAck?.expectedPaid, true);
+  assert.equal(Object.hasOwn(write[1]?.payload?.$set || {}, "payment.paid"), false);
+
+  const readback = runNodeRedFunction(cleanupWriteAck, {
+    ...write[1],
+    payload: { acknowledged: true, matchedCount: 1 },
+  }) as Array<Record<string, any> | null>;
+  const ctx = readback[0]?._splitCleanupWriteAck;
+  const acknowledged = runNodeRedFunction(cleanupWriteAck, {
+    ...readback[0],
+    payload: [{
+      id: "game-1",
+      updatedAt: ctx.expectedUpdatedAt,
+      status: ctx.expectedStatus,
+      payment: { paid: true },
+    }],
+  }) as Array<Record<string, any> | null>;
+  assert.equal(acknowledged[1]?.statusCode, 200);
+  assert.equal(acknowledged[1]?.payload?.cancelledInLk, true);
+});
+
+test("cleanup cannot reuse transaction evidence claimed by another game", () => {
+  const ctx = cleanupContext("payment_claim_read");
+  ctx.paymentEvidenceClaim = {
+    claimId: "viva_transaction:transaction-1",
+    transactionId: "transaction-1",
+    bookingId: "booking-1",
+    paymentRef: "payment-1",
+    clientId: "client-1",
+    exerciseId: "exercise-1",
+    timeoutMeta: ctx.currentTimedOutPayment,
+    providerPayload: transaction("PAID"),
+    method: "transaction_recheck",
+    statusCode: 200,
+  };
+  const out = runNodeRedFunction(cleanupRouter, {
+    payload: [{
+      _id: "viva_transaction:transaction-1",
+      transactionId: "transaction-1",
+      bookingId: "booking-1",
+      clientId: "client-1",
+      exerciseId: "exercise-1",
+      gameId: "another-game",
+      paymentRef: "payment-other",
+    }],
+    _splitCleanupCtx: ctx,
+  }) as Array<Record<string, any> | null>;
+  assert.equal(out[1], null);
+  const summary = out[2]?.payload || out[3]?.payload;
+  assert.equal(summary?.blockLocalMutation, true);
+  assert.equal(summary?.blockReason, "payment_evidence_replay");
+});
 
 test("verified UNPAID is the only direct path from transaction readback to booking cancel", () => {
   const out = runNodeRedFunction(cleanupRouter, {
@@ -242,7 +401,9 @@ test("verified UNPAID accepts the real Viva payment booking binding shape", () =
       id: "transaction-1",
       status: "UNPAID",
       toPay: 37500,
+      currency: "RUB",
       client: { id: "client-1" },
+      exercise: { id: "exercise-1" },
       products: [{
         paymentBookingIds: ["booking-1"],
         pricingDetails: [{ clientBookingId: "booking-1" }],
@@ -262,7 +423,9 @@ test("real Viva binding keys still fail closed when they point to another bookin
     payload: {
       id: "transaction-1",
       status: "UNPAID",
+      currency: "RUB",
       client: { id: "client-1" },
+      exercise: { id: "exercise-1" },
       products: [{
         paymentBookingIds: ["booking-other"],
         pricingDetails: [{ clientBookingId: "booking-other" }],
@@ -288,7 +451,9 @@ test("real Viva toPay must match the exact pending payment amount", () => {
       id: "transaction-1",
       status: "UNPAID",
       toPay: 50000,
+      currency: "RUB",
       client: { id: "client-1" },
+      exercise: { id: "exercise-1" },
       products: [{ paymentBookingIds: ["booking-1"] }],
     },
     _splitCleanupCtx: cleanupContext(),
@@ -301,6 +466,105 @@ test("real Viva toPay must match the exact pending payment amount", () => {
     item.step === "check_timeout_transaction_manual_review"
     && (item.evidence as Record<string, unknown>)?.reason === "amount_mismatch"
   )));
+});
+
+test("missing expected amount and non-RUB provider currency fail closed before claim", () => {
+  for (const currentTimedOutPayment of [
+    { ...cleanupContext().currentTimedOutPayment, amountMinor: null },
+    cleanupContext().currentTimedOutPayment,
+  ]) {
+    const providerPayload = {
+      ...transaction("PAID"),
+      ...(currentTimedOutPayment.amountMinor === null ? {} : { currency: "USD" }),
+    };
+    const out = runNodeRedFunction(cleanupRouter, {
+      statusCode: 200,
+      payload: providerPayload,
+      _splitCleanupCtx: {
+        ...cleanupContext(),
+        currentTimedOutPayment,
+      },
+    }) as Array<Record<string, any> | null>;
+    assert.equal(Boolean(out[4]), false, "payment evidence claim must stay closed");
+    const summary = out[2]?.payload || out[3]?.payload;
+    assert.equal(summary?.blockLocalMutation, true);
+    assert.ok(summary?.trace?.some((item: Record<string, unknown>) => (
+      item.step === "check_timeout_transaction_manual_review"
+      && ["expected_amount_missing", "currency_mismatch"].includes(
+        String((item.evidence as Record<string, unknown>)?.reason || ""),
+      )
+    )));
+  }
+});
+
+test("cleanup PAID evidence requires provider client, exercise and currency", () => {
+  for (const [payload, reason] of [
+    [transaction("PAID", "booking-1", "exercise-1"), null],
+    [transaction("PAID", "booking-1", "exercise-other"), "exercise_binding_mismatch"],
+    [{ ...transaction("PAID"), client: undefined }, "client_binding_mismatch"],
+    [{ ...transaction("PAID"), currency: undefined }, "currency_mismatch"],
+  ] as const) {
+    if (reason === null) continue;
+    const out = runNodeRedFunction(cleanupRouter, {
+      statusCode: 200,
+      payload,
+      _splitCleanupCtx: cleanupContext(),
+    }) as Array<Record<string, any> | null>;
+    assert.equal(Boolean(out[4]), false);
+    const summary = out[2]?.payload || out[3]?.payload;
+    assert.ok(summary?.trace?.some((item: Record<string, unknown>) => (
+      item.step === "check_timeout_transaction_manual_review"
+      && (item.evidence as Record<string, unknown>)?.reason === reason
+    )));
+  }
+});
+
+test("forced game cleanup carries a CAS snapshot and missing guards stop before Viva", () => {
+  const prepared = runNodeRedFunction(cleanupPrepare, {
+    payload: [{
+      id: "forced-game-1",
+      revision: 9,
+      updatedAt: "2026-08-26T12:00:00.000Z",
+      status: "PAID",
+      organizer: { id: "organizer-1" },
+      payment: { paid: true },
+      settings: { payMode: "split" },
+      booking: {
+        date: "2026-08-30",
+        bookingIds: ["booking-1"],
+        vivaExerciseId: "exercise-1",
+      },
+      participants: [{ id: "organizer-1" }],
+      waitlist: [],
+      metadata: { splitPayment: { enabled: true, payments: [] } },
+    }],
+    _splitCleanupRequest: {
+      force: true,
+      allowForceGameCancel: true,
+      intent: "cancel_game",
+      gameId: "forced-game-1",
+      actorClientId: "organizer-1",
+      nowIso: "2026-08-26T12:05:00.000Z",
+    },
+  }) as Array<Record<string, any> | null>;
+  const task = prepared[0]?.payload?.[0];
+  assert.equal(task?.mode, "GAME_CLEANUP");
+  assert.equal(task?.expectedRevision, 9);
+  assert.equal(task?.expectedUpdatedAt, "2026-08-26T12:00:00.000Z");
+
+  const blocked = runNodeRedFunction(cleanupRouter, {
+    payload: {
+      ...task,
+      expectedRevision: null,
+      expectedUpdatedAt: null,
+    },
+  }) as Array<Record<string, any> | null>;
+  assert.equal(blocked[0], null, "no Viva request may escape without a stale-write guard");
+  assert.equal(blocked[1], null, "no Mongo write may escape without a stale-write guard");
+  const summary = blocked[2]?.payload || blocked[3]?.payload;
+  assert.equal(summary?.blockLocalMutation, true);
+  assert.equal(summary?.blockReason, "stale_write_guard_missing");
+  assert.equal(summary?.upstreamMutationsAttempted, 0);
 });
 
 test("real scheduler payload reaches only the exact UNPAID booking cancel probe", () => {
@@ -321,6 +585,8 @@ test("real scheduler payload reaches only the exact UNPAID booking cancel probe"
   assert.equal(task?.mode, "PARTICIPANT_TIMEOUT");
   assert.deepEqual(task?.bookingIds, ["booking-1"]);
   assert.equal(task?.timedOutPayments?.[0]?.transactionId, "transaction-1");
+  assert.equal(task?.timedOutPayments?.[0]?.amountMinor, 37500);
+  assert.equal(task?.expectedRevision, 7);
 
   const globalValues = new Map<string, unknown>([
     ["vivacrm_access_token", "cached-service-token"],
@@ -342,7 +608,9 @@ test("real scheduler payload reaches only the exact UNPAID booking cancel probe"
       id: "transaction-1",
       status: "UNPAID",
       toPay: 37500,
+      currency: "RUB",
       client: { id: "client-1" },
+      exercise: { id: "exercise-real-shape" },
       products: [{
         paymentBookingIds: ["booking-1"],
         pricingDetails: [{ clientBookingId: "booking-1" }],
@@ -377,6 +645,44 @@ test("real scheduler payload reaches only the exact UNPAID booking cancel probe"
   });
   assert.equal(cancelRequest[0]?._splitCleanupCtx?.selectedRefundMethod, "NONE");
   assert.equal(cancelRequest[0]?._splitCleanupCtx?.step, "cancel_booking");
+});
+
+test("real scheduler amount mismatch fails closed before paid promotion", () => {
+  const prepared = runNodeRedFunction(cleanupPrepare, {
+    payload: [schedulerTimedOutGame()],
+    _splitCleanupRequest: {
+      nowTs: Date.parse("2026-08-23T11:00:00+03:00"),
+      nowIso: "2026-08-23T08:00:00.000Z",
+      dryRun: false,
+      limit: 10,
+      internalScheduler: true,
+      lifecycleMode: "ENFORCE_NEW",
+      activationCutoffTs: Date.parse("2026-08-23T07:00:00.000Z"),
+      activationCutoffIso: "2026-08-23T07:00:00.000Z",
+    },
+  }) as Array<Record<string, any> | null>;
+  const globalValues = new Map<string, unknown>([
+    ["vivacrm_access_token", "cached-service-token"],
+    ["vivacrm_token_expires_at", Date.now() + 60_000],
+  ]);
+  const transactionReadback = runNodeRedFunction(cleanupRouter, {
+    payload: prepared[0]?.payload?.[0],
+  }, { globalValues }) as Array<Record<string, any> | null>;
+  const out = runNodeRedFunction(cleanupRouter, {
+    ...transactionReadback[0],
+    statusCode: 200,
+    payload: {
+      ...transaction("PAID", "booking-1", "exercise-real-shape"),
+      toPay: 50000,
+    },
+  }, { globalValues }) as Array<Record<string, any> | null>;
+  assert.equal(out[1], null);
+  const summary = out[2]?.payload || out[3]?.payload;
+  assert.equal(summary?.blockLocalMutation, true);
+  assert.ok(summary?.trace?.some((item: Record<string, unknown>) => (
+    item.step === "check_timeout_transaction_manual_review"
+    && (item.evidence as Record<string, unknown>)?.reason === "amount_mismatch"
+  )));
 });
 
 test("verified UNPAID fails closed when Viva offers only refund options", () => {

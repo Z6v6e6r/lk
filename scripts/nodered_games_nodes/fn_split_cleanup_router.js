@@ -201,8 +201,20 @@ const classifyTransactionPayload = (payload, expected) => {
     return { kind: "MANUAL_REVIEW", status, reason: "booking_binding_missing", bookingIds };
   }
   const clientIds = collectProviderIds(payload, ["clientId", "clientIds", "client"]);
-  if (toStr(expected.clientId) && clientIds.length > 0 && !clientIds.includes(toStr(expected.clientId))) {
+  const expectedClientId = toStr(expected.clientId);
+  if (!expectedClientId) {
+    return { kind: "MANUAL_REVIEW", status, reason: "expected_client_missing" };
+  }
+  if (!clientIds.includes(expectedClientId)) {
     return { kind: "MANUAL_REVIEW", status, reason: "client_binding_mismatch", clientIds };
+  }
+  const exerciseIds = collectProviderIds(payload, ["exerciseId", "exerciseIds", "exercise"]);
+  const expectedExerciseId = toStr(expected.exerciseId);
+  if (!expectedExerciseId) {
+    return { kind: "MANUAL_REVIEW", status, reason: "expected_exercise_missing" };
+  }
+  if (!exerciseIds.includes(expectedExerciseId)) {
+    return { kind: "MANUAL_REVIEW", status, reason: "exercise_binding_mismatch", exerciseIds };
   }
   const expectedAmountMinor = toNumber(expected.amountMinor);
   const providerAmountMinor = toNumber(
@@ -211,9 +223,26 @@ const classifyTransactionPayload = (payload, expected) => {
     ?? tx.paidAmountMinor
     ?? tx.toPay,
   );
+  if (expectedAmountMinor === null) {
+    return { kind: "MANUAL_REVIEW", status, reason: "expected_amount_missing" };
+  }
   if (
     expectedAmountMinor !== null
-    && providerAmountMinor !== null
+    && providerAmountMinor === null
+  ) {
+    return { kind: "MANUAL_REVIEW", status, reason: "amount_missing" };
+  }
+  const providerCurrency = toStr(tx.currency || tx.currencyCode || tx.paymentCurrency);
+  if (!providerCurrency || providerCurrency.toUpperCase() !== "RUB") {
+    return {
+      kind: "MANUAL_REVIEW",
+      status,
+      reason: "currency_mismatch",
+      providerCurrency: providerCurrency ? providerCurrency.toUpperCase() : null,
+    };
+  }
+  if (
+    expectedAmountMinor !== null
     && Math.round(expectedAmountMinor) !== Math.round(providerAmountMinor)
   ) {
     return {
@@ -243,8 +272,10 @@ const buildTimedOutPaymentByBooking = (values) => {
     ]);
     if (bookingIds.length === 0) return;
     const entry = {
+      role: toStr(item.role),
       paymentRef: toStr(item.paymentRef),
       transactionId: toStr(item.transactionId),
+      amountMinor: toNumber(item.amountMinor),
       clientId: toStr(item.clientId || item.playerId || item.userId),
       phone: normalizePhone(item.phone || item.phoneNorm || item.clientPhone || item.playerPhone),
       name: toStr(item.name || item.playerName || item.clientName) || "Игрок",
@@ -261,6 +292,7 @@ const buildTimedOutPaymentByBooking = (values) => {
         return;
       }
       if (!existing.transactionId && entry.transactionId) existing.transactionId = entry.transactionId;
+      if (existing.amountMinor === null && entry.amountMinor !== null) existing.amountMinor = entry.amountMinor;
       if (!existing.clientId && entry.clientId) existing.clientId = entry.clientId;
       if (!existing.phone && entry.phone) existing.phone = entry.phone;
       if (!existing.name && entry.name) existing.name = entry.name;
@@ -270,6 +302,56 @@ const buildTimedOutPaymentByBooking = (values) => {
     });
   });
   return map;
+};
+
+const startPaymentEvidenceClaim = (ctx, timeoutMeta, providerPayload, method, statusCode) => {
+  const transactionId = toStr(timeoutMeta?.transactionId);
+  const bookingId = toStr(ctx.currentBookingId);
+  const paymentRef = toStr(timeoutMeta?.paymentRef);
+  if (!transactionId || !bookingId || !paymentRef) {
+    ctx.blockLocalMutation = true;
+    ctx.forceVivaErrors = true;
+    ctx.blockReason = ctx.blockReason || "payment_claim_identity_missing";
+    return finalizeTask(ctx);
+  }
+  const claimId = `viva_transaction:${transactionId}`;
+  const nowIso = new Date().toISOString();
+  ctx.step = "payment_claim_write";
+  ctx.paymentEvidenceClaim = {
+    claimId,
+    transactionId,
+    bookingId,
+    paymentRef,
+    clientId: toStr(ctx.currentClientId),
+    exerciseId: toStr(ctx.paymentExerciseId),
+    timeoutMeta: clone(timeoutMeta),
+    providerPayload: clone(providerPayload || null),
+    method,
+    statusCode,
+  };
+  const claimMsg = Object.assign({}, msg, {
+    _splitCleanupCtx: ctx,
+    payload: [
+      { _id: claimId },
+      {
+        $setOnInsert: {
+          transactionId,
+          bookingId,
+          clientId: toStr(ctx.currentClientId),
+          exerciseId: toStr(ctx.paymentExerciseId),
+          gameId: ctx.gameId,
+          paymentRef,
+          createdAt: nowIso,
+        },
+      },
+      { upsert: true },
+    ],
+  });
+  delete claimMsg.method;
+  delete claimMsg.url;
+  delete claimMsg.statusCode;
+  delete claimMsg.headers;
+  return [null, null, null, null, claimMsg, null];
 };
 
 const removePlayersByIdentity = (list, identity) => asArray(list).filter((item) => !sameIdentity(item, identity));
@@ -440,6 +522,10 @@ const recoverPaidTimedOutState = (ctx, timeoutMeta, transactionPayload) => {
   }
 
   ctx.nextLeaveEvents = removeTimeoutLeaveEventsByIdentity(ctx.nextLeaveEvents, metaIdentity);
+  if (String(timeoutMeta.role || "").trim().toUpperCase() === "ORGANIZER") {
+    ctx.promoteGamePaid = true;
+    ctx.organizerPaidAt = nowIso;
+  }
 };
 
 const appendTrace = (ctx, entry) => {
@@ -1422,6 +1508,14 @@ const buildPersistSet = (ctx, nowIso) => {
     });
     const identityProjection = buildIdentityProjectionSet(ctx, nextSplitPayments);
     return {
+      ...(ctx.promoteGamePaid === true ? {
+        status: "PAID",
+        "payment.paid": true,
+        "payment.paidAt": toStr(ctx.organizerPaidAt) || nowIso,
+        "metadata.splitPayment.status": "ACTIVE",
+        "metadata.splitPayment.organizerPaymentConfirmedAt": toStr(ctx.organizerPaidAt) || nowIso,
+        "metadata.splitPayment.organizerPaymentConfirmationSource": "split_cleanup",
+      } : {}),
       updatedAt: nowIso,
       participants: asArray(ctx.nextParticipants),
       waitlist: asArray(ctx.nextWaitlist),
@@ -1555,6 +1649,7 @@ const finalizeTask = (ctx) => {
       .map((item) => toStr(item?.step))
       .filter(Boolean),
   });
+  const persistSet = buildPersistSet(ctx, nowIso);
 
   const dbMsg = Object.assign({}, safeBaseMsg, {
     statusCode: undefined,
@@ -1562,10 +1657,14 @@ const finalizeTask = (ctx) => {
     query: {
       id: ctx.gameId,
       archived: { $ne: true },
+      ...(ctx.expectedRevision !== null
+        ? { revision: ctx.expectedRevision }
+        : { updatedAt: ctx.expectedUpdatedAt }),
+      ...(toStr(ctx.statusBefore) ? { status: toStr(ctx.statusBefore) } : {}),
     },
     payload: {
       $set: {
-        ...buildPersistSet(ctx, nowIso),
+        ...persistSet,
         "audit.version": 1,
         "audit.updatedAt": nowIso,
         "audit.lastEvent": auditEvent,
@@ -1577,9 +1676,19 @@ const finalizeTask = (ctx) => {
         },
       },
     },
+    _splitCleanupWriteAck: {
+      step: "write_ack",
+      gameId: ctx.gameId,
+      expectedUpdatedAt: toStr(persistSet.updatedAt),
+      expectedStatus: toStr(persistSet.status),
+      expectedPaid: Object.prototype.hasOwnProperty.call(persistSet, "payment.paid")
+        ? persistSet["payment.paid"] === true
+        : (typeof ctx.paymentPaid === "boolean" ? ctx.paymentPaid : null),
+      summaryPayload,
+    },
   });
 
-  return [null, dbMsg, summaryMsg, summaryMsg];
+  return [null, dbMsg, null, null];
 };
 
 const ctxFromMsg = msg._splitCleanupCtx && typeof msg._splitCleanupCtx === "object"
@@ -1634,6 +1743,13 @@ if (!ctxFromMsg) {
     exerciseCancelOriginLabel: null,
     upstreamMutationsAttempted: 0,
     operationKey: `${gameId}:${toStr(payload.exerciseId) || "no-exercise"}:${toStr(payload.reason) || "PAYMENT_TIMEOUT"}`,
+    expectedRevision: payload?.expectedRevision !== null && payload?.expectedRevision !== undefined
+      && Number.isSafeInteger(Number(payload.expectedRevision))
+      ? Number(payload.expectedRevision)
+      : null,
+    expectedUpdatedAt: toStr(payload?.expectedUpdatedAt),
+    paymentPaid: typeof payload?.paymentPaid === "boolean" ? payload.paymentPaid : null,
+    paymentExerciseId: toStr(payload?.paymentExerciseId),
     token: null,
     step: "token_request",
     trace: [],
@@ -1665,6 +1781,16 @@ if (!ctxFromMsg) {
     (Array.isArray(initialCtx.bookingQueue) && initialCtx.bookingQueue.length > 0)
     || Boolean(initialCtx.exerciseId)
   );
+  if (initialCtx.expectedRevision === null && !initialCtx.expectedUpdatedAt) {
+    initialCtx.blockLocalMutation = true;
+    initialCtx.blockReason = initialCtx.blockReason || "stale_write_guard_missing";
+    initialCtx.forceVivaErrors = true;
+    appendTrace(initialCtx, {
+      step: "blocked_stale_write_guard_missing",
+      mode: initialCtx.mode,
+    });
+    return finalizeTask(initialCtx);
+  }
   if (!hasVivaTargets) {
     initialCtx.blockLocalMutation = true;
     initialCtx.blockReason = initialCtx.blockReason || "missing_viva_targets";
@@ -1705,6 +1831,67 @@ if (!ctxFromMsg) {
 }
 
 const ctx = ctxFromMsg;
+
+if (ctx.step === "payment_claim_write") {
+  const claim = ctx.paymentEvidenceClaim && typeof ctx.paymentEvidenceClaim === "object"
+    ? ctx.paymentEvidenceClaim
+    : null;
+  if (!claim?.claimId) {
+    ctx.blockLocalMutation = true;
+    ctx.forceVivaErrors = true;
+    ctx.blockReason = ctx.blockReason || "payment_claim_context_missing";
+    return finalizeTask(ctx);
+  }
+  ctx.step = "payment_claim_read";
+  msg._splitCleanupCtx = ctx;
+  msg.payload = { _id: claim.claimId };
+  msg.limit = 2;
+  msg.sort = { _id: 1 };
+  return [null, null, null, null, null, msg];
+}
+
+if (ctx.step === "payment_claim_read") {
+  const expected = ctx.paymentEvidenceClaim && typeof ctx.paymentEvidenceClaim === "object"
+    ? ctx.paymentEvidenceClaim
+    : null;
+  const claims = asArray(msg.payload).filter((item) => item && typeof item === "object");
+  const claim = claims.length === 1 ? claims[0] : null;
+  const exactOwner = (
+    claim
+    && expected
+    && toStr(claim.gameId) === toStr(ctx.gameId)
+    && toStr(claim.paymentRef) === toStr(expected.paymentRef)
+    && toStr(claim.transactionId) === toStr(expected.transactionId)
+    && toStr(claim.bookingId) === toStr(expected.bookingId)
+    && toStr(claim.clientId) === toStr(expected.clientId)
+    && toStr(claim.exerciseId) === toStr(expected.exerciseId)
+  );
+  if (!exactOwner) {
+    ctx.blockLocalMutation = true;
+    ctx.forceVivaErrors = true;
+    ctx.blockReason = ctx.blockReason || (claim ? "payment_evidence_replay" : "payment_claim_readback_failed");
+    appendTrace(ctx, {
+      step: claim ? "payment_evidence_replay" : "payment_claim_readback_failed",
+      transactionId: toStr(expected?.transactionId),
+      bookingId: toStr(expected?.bookingId),
+    });
+    return finalizeTask(ctx);
+  }
+  recoverPaidTimedOutState(ctx, expected.timeoutMeta, expected.providerPayload || null);
+  appendTrace(ctx, {
+    step: "payment_claim_verified",
+    transactionId: expected.transactionId,
+    bookingId: expected.bookingId,
+  });
+  return pushBookingSuccessAndContinue(ctx, {
+    bookingId: expected.bookingId,
+    clientId: expected.clientId || null,
+    method: expected.method || "transaction_recheck",
+    statusCode: Number(expected.statusCode) || null,
+    skippedAsPaid: true,
+    transactionId: expected.transactionId,
+  });
+}
 
 if (ctx.step === "token_request") {
   if (!isOk(msg.statusCode) || !msg.payload?.access_token) {
@@ -1785,35 +1972,18 @@ if (ctx.step === "check_timeout_transaction") {
     transactionId,
     bookingId,
     clientId,
+    exerciseId: ctx.paymentExerciseId,
     amountMinor: timeoutMeta?.amountMinor,
   });
 
   if (evidence.kind === "PAID") {
-    recoverPaidTimedOutState(ctx, timeoutMeta, msg.payload || null);
-    appendTrace(ctx, {
-      step: "check_timeout_transaction_paid",
-      bookingId,
-      clientId,
-      transactionId,
+    return startPaymentEvidenceClaim(
+      ctx,
+      timeoutMeta,
+      msg.payload || null,
+      "transaction_recheck",
       statusCode,
-    });
-    ctx.bookingResults.push({
-      bookingId,
-      ok: true,
-      clientId,
-      method: "transaction_recheck",
-      skippedAsPaid: true,
-      transactionId,
-      statusCode,
-    });
-    ctx.currentBookingId = null;
-    ctx.currentClientId = null;
-    ctx.currentTimedOutPayment = null;
-    const bookingReq = nextBookingRequest(ctx);
-    if (bookingReq) return bookingReq;
-    const exerciseReq = nextExerciseRequest(ctx);
-    if (exerciseReq) return exerciseReq;
-    return finalizeTask(ctx);
+    );
   }
 
   if (evidence.kind === "WAITING") {
@@ -1922,16 +2092,17 @@ if (ctx.step === "check_timeout_transaction_after_expire") {
     transactionId,
     bookingId,
     clientId,
+    exerciseId: ctx.paymentExerciseId,
     amountMinor: timeoutMeta?.amountMinor,
   });
   if (evidence.kind === "PAID") {
-    recoverPaidTimedOutState(ctx, timeoutMeta, msg.payload || null);
-    return pushBookingSuccessAndContinue(ctx, {
-      bookingId,
-      clientId,
-      method: "transaction_expire_readback",
+    return startPaymentEvidenceClaim(
+      ctx,
+      timeoutMeta,
+      msg.payload || null,
+      "transaction_expire_readback",
       statusCode,
-    });
+    );
   }
   if (evidence.kind === "UNPAID") {
     ctx.currentTransactionUnpaidVerified = true;
