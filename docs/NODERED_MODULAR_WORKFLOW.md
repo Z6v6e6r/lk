@@ -219,3 +219,24 @@ The builder preserves node IDs, wires, links, and HTTP routes and never imports
 or deploys its output. It fails closed after any live drift. The separately
 approved provider-mutation and cleanup procedure is documented in
 `docs/MANAGED_SUBSCRIPTION_SYNTHETIC_CREATE_CANCEL_HAR.md`.
+
+## Guarded legacy split pricing recovery candidate
+
+Games created before durable draft persistence can retain a zero-amount paid
+organizer booking while losing `selectedPaymentMode` and the pricing-policy
+snapshot. The focused recovery candidate replaces only `Prepare split join
+payment` and `Route Viva split payment` after verifying their exact live
+preimages:
+
+```bash
+npm run nodered:split-pricing-recovery:patch -- \
+  --workspace /absolute/external/live-workspace \
+  --output /absolute/external/new-split-pricing-recovery/candidate.json \
+  --import /absolute/external/new-split-pricing-recovery/nodes.import.json \
+  --report /absolute/external/new-split-pricing-recovery/report.json
+```
+
+Recovery is fail-closed: the exact stored organizer booking must be an active,
+non-cancelled Viva `SUBSCRIPTION` booking for the same exercise before the
+server requests the campaign for the stored date, station, and room. The
+builder does not import, deploy, restart Node-RED, or mutate game/provider data.

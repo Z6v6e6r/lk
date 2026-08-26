@@ -1,5 +1,6 @@
 const ADMIN_API = "https://api.vivacrm.ru/api/v1";
 const END_USER_API = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G";
+const CUP_API_DEFAULT = "https://padlhub.su/api";
 const TOKEN_URL_DEFAULT = "https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token";
 const TOKEN_CLIENT_ID_DEFAULT = "React-auth-dev";
 const TOKEN_CACHE_GRACE_MS = 30 * 1000;
@@ -336,6 +337,24 @@ const buildQuery = (entries) => entries
   .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
   .join("&");
 
+const startPricingPolicyRequest = (ctx) => {
+  const apiBase = (readEnv("CUP_API_BASE_URL") || CUP_API_DEFAULT).replace(/\/+$/, "");
+  const query = buildQuery([
+    ["forDate", ctx.date],
+    ["stationId", ctx.studioId],
+    ["roomId", ctx.roomId],
+    ["force_ts", `${Date.now()}-${Math.random().toString(36).slice(2)}`],
+  ]);
+  ctx.step = "pricing_policy";
+  msg._splitCtx = ctx;
+  msg.method = "GET";
+  msg.url = `${apiBase}/advertising/split-payment-promo?${query}`;
+  msg.headers = { Accept: "application/json", "Cache-Control": "no-store" };
+  msg.payload = undefined;
+  msg.requestTimeout = 5000;
+  return [msg, null, null];
+};
+
 const extractDirectPriceAmount = (value) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   for (const key of [
@@ -449,6 +468,20 @@ const resolveSplitPricingPolicy = (value) => {
     activeTo: toStr(source.activeTo || source.expiresAt),
     version: toStr(source.updatedAt) || selectedPromoId,
   };
+};
+
+const resolveSplitPricingPolicyResponse = (value) => {
+  const source = value && typeof value === "object" && value.data && typeof value.data === "object"
+    ? value.data
+    : value;
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return { valid: false, policy: null };
+  }
+  if (source.enabled === false) {
+    return { valid: !toStr(source.selectedPromoId), policy: null };
+  }
+  const policy = resolveSplitPricingPolicy(source);
+  return { valid: Boolean(policy), policy };
 };
 
 const pricingPolicyMatchesExpected = (actual, expected, shareCount) => {
@@ -867,6 +900,27 @@ const startRoomStudioVerification = (ctx) => {
 };
 
 const continueSplitAfterToken = (ctx) => {
+  const legacyPricingRecovery = ctx.legacyPricingRecovery && typeof ctx.legacyPricingRecovery === "object"
+    ? ctx.legacyPricingRecovery
+    : null;
+  if (
+    ctx.action === "join"
+    && legacyPricingRecovery
+    && legacyPricingRecovery.verified !== true
+  ) {
+    const organizerBookingId = toStr(legacyPricingRecovery.organizerBookingId);
+    if (!organizerBookingId || !toStr(ctx.exerciseId)) {
+      return fail(409, "Не удалось восстановить тариф игры", {
+        code: "SPLIT_LEGACY_PRICING_RECOVERY_EVIDENCE_MISSING",
+      });
+    }
+    ctx.step = "legacy_pricing_booking";
+    return adminRequest(
+      ctx,
+      "GET",
+      `/exercises/${encodeURIComponent(ctx.exerciseId)}/bookings`,
+    );
+  }
   if (
     ctx.action === "join"
     && resolvePaymentMode(ctx.paymentMode) === "one_time"
@@ -1118,6 +1172,11 @@ if (!isOk(msg.statusCode)) {
       code: "SPLIT_PRICING_POLICY_PROOF_UNAVAILABLE",
     });
   }
+  if (ctx.step === "legacy_pricing_booking") {
+    return fail(503, "Не удалось проверить способ оплаты организатора", {
+      code: "SPLIT_LEGACY_PRICING_RECOVERY_UNAVAILABLE",
+    });
+  }
   if (ctx.step === "verify_room_studio") {
     return fail(409, "Корт не принадлежит выбранной станции", {
       code: "SPLIT_PRICING_ROOM_STUDIO_MISMATCH",
@@ -1332,6 +1391,54 @@ if (ctx.step === "confirm_subscription_booking_lookup") {
   return [null, null, null, null, msg];
 }
 
+if (ctx.step === "legacy_pricing_booking") {
+  const recovery = ctx.legacyPricingRecovery && typeof ctx.legacyPricingRecovery === "object"
+    ? ctx.legacyPricingRecovery
+    : {};
+  const organizerBookingId = toStr(recovery.organizerBookingId);
+  const bookingCandidates = providerObjects(msg.payload).filter((item) => (
+    toStr(item.id || item.uuid || item.bookingId) === organizerBookingId
+  ));
+  const booking = bookingCandidates.length === 1 ? bookingCandidates[0] : null;
+  const exerciseIds = providerIds(booking, ["exerciseId", "exercise", "exerciseIds"]);
+  const clientIds = providerIds(booking, ["clientId", "client"]);
+  const expectedOrganizerClientId = toStr(recovery.organizerClientId);
+  const expectedOrganizerPhone = normalizePhone(recovery.organizerPhone);
+  const actualOrganizerPhone = providerPhone(booking);
+  const organizerIdentityMatches = expectedOrganizerClientId
+    ? clientIds.includes(expectedOrganizerClientId)
+    : Boolean(expectedOrganizerPhone && actualOrganizerPhone === expectedOrganizerPhone);
+  const clientSubscriptionId = providerClientSubscriptionId(booking);
+  const paymentType = String(
+    booking?.paymentType
+    || booking?.detailedPaymentType
+    || booking?.paymentMethod
+    || "",
+  ).trim().toUpperCase();
+  const isActiveSubscriptionBooking = Boolean(
+    booking
+    && organizerBookingId
+    && exerciseIds.includes(toStr(ctx.exerciseId))
+    && organizerIdentityMatches
+    && paymentType === "SUBSCRIPTION"
+    && clientSubscriptionId
+    && booking.isCancelled === false
+    && booking.cancelled === false
+  );
+  if (!isActiveSubscriptionBooking) {
+    return fail(409, "Абонемент организатора не подтверждён", {
+      code: "SPLIT_LEGACY_ORGANIZER_SUBSCRIPTION_NOT_CONFIRMED",
+    });
+  }
+  ctx.legacyPricingRecovery = {
+    organizerBookingId,
+    organizerClientId: expectedOrganizerClientId,
+    organizerPhone: expectedOrganizerPhone,
+    verified: true,
+  };
+  return startPricingPolicyRequest(ctx);
+}
+
 if (ctx.step === "ordinary_price_studios") {
   const availableStudioIds = new Set(
     extractList(msg.payload)
@@ -1539,7 +1646,13 @@ if (ctx.step === "create_booking") {
 }
 
 if (ctx.step === "pricing_policy") {
-  ctx.pricingPolicy = resolveSplitPricingPolicy(msg.payload);
+  const pricingPolicyResponse = resolveSplitPricingPolicyResponse(msg.payload);
+  if (!pricingPolicyResponse.valid) {
+    return fail(502, "CUP вернул некорректный тариф раздельной оплаты", {
+      code: "SPLIT_PRICING_POLICY_INVALID",
+    });
+  }
+  ctx.pricingPolicy = pricingPolicyResponse.policy;
   if (!pricingPolicyMatchesExpected(ctx.pricingPolicy, ctx.expectedPricingPolicy, ctx.shareCount)) {
     return fail(409, "Цена раздельной оплаты изменилась", {
       code: "SPLIT_PRICING_POLICY_CHANGED",

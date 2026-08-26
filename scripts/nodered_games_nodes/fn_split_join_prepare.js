@@ -420,12 +420,49 @@ const splitPayments = Array.isArray(splitPayment.payments)
 const organizerPayment = splitPayments.find((item) => toStr(item.role)?.toUpperCase() === "ORGANIZER")
   || splitPayments.find((item) => Number(item.spot) === 1)
   || null;
-const organizerUsedSubscription = resolvePaymentMode(
+const storedOrganizerPaymentMode = toStr(
   splitPayment.selectedPaymentMode
   || splitPayment.organizerPaymentMode
   || organizerPayment?.selectedPaymentMode
   || organizerPayment?.paymentMode,
-) === "subscription";
+);
+const organizerUsedSubscription = storedOrganizerPaymentMode
+  ? resolvePaymentMode(storedOrganizerPaymentMode) === "subscription"
+  : false;
+const recordPayment = game.payment && typeof game.payment === "object" ? game.payment : {};
+const gameOrganizer = game.organizer && typeof game.organizer === "object" ? game.organizer : {};
+const legacyZeroAmountOrganizer = (
+  paymentMode === "one_time"
+  && splitPayment.enabled === true
+  && !storedOrganizerPaymentMode
+  && !storedPricingPolicy
+  && recordPayment.paid === true
+  && toNumber(recordPayment.amount) === 0
+);
+const legacyOrganizerBookingIds = normalizeIdList(
+  splitPayment.organizerBookingId
+  || booking.bookingIds,
+);
+const legacyOrganizerClientId = toStr(gameOrganizer.id || gameOrganizer.clientId);
+const legacyOrganizerPhone = normalizePhone(gameOrganizer.phone || gameOrganizer.phoneNorm);
+if (
+  legacyZeroAmountOrganizer
+  && (
+    legacyOrganizerBookingIds.length !== 1
+    || (!legacyOrganizerClientId && !legacyOrganizerPhone)
+  )
+) {
+  return fail(409, "Не удалось восстановить тариф игры", {
+    code: "SPLIT_LEGACY_PRICING_RECOVERY_EVIDENCE_MISSING",
+  });
+}
+const legacyPricingRecovery = legacyZeroAmountOrganizer
+  ? {
+      organizerBookingId: legacyOrganizerBookingIds[0],
+      organizerClientId: legacyOrganizerClientId,
+      organizerPhone: legacyOrganizerPhone,
+    }
+  : null;
 const pricingPolicyHourlyAmount = storedPricingPolicy
   ? (shareCount === 2
       ? storedPricingPolicy.twoTeamsHourlyAmount
@@ -550,6 +587,7 @@ msg._splitCtx = {
     ? storedPricingPolicy
     : null,
   pricingPolicyProof,
+  legacyPricingRecovery,
   clientId: toStr(body.clientId),
   clientPhone,
   shareCount,

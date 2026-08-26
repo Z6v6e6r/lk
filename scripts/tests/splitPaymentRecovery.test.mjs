@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SOURCES = {
   create: ['fn_split_create_prepare.js', '19a61024273a478f11bff3ff60c4601603c2af5bd7ec8ec08e4b83394ee7bd41', '6f7d6ec86432f5f3a50d0eb080df8847954841a9fc4637d79cf58fb2742fd689'],
-  join: ['fn_split_join_prepare.js', 'e077708db904b7c319ecb639933637f70028ba35d0daef8f35057e72e61ced60', 'bb9c70f29c31ed1f7b1acc1a3c6e1724bc6584df7570a61f7797604e05d3369d'],
-  router: ['fn_split_router.js', 'f0a350a3b39f5ffd3b4745752382dd83ff656380c96ed0496f483e383e139584', '892ad51fcb8f2be2a194661e04f9c775d4345fea153e5dbc3758bd40967101f2'],
+  join: ['fn_split_join_prepare.js', 'e077708db904b7c319ecb639933637f70028ba35d0daef8f35057e72e61ced60', '70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462'],
+  router: ['fn_split_router.js', 'f0a350a3b39f5ffd3b4745752382dd83ff656380c96ed0496f483e383e139584', 'cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a'],
 };
 
 class FixedDate extends Date {
@@ -226,6 +226,325 @@ test('subscription-created game validates its stored campaign against current CU
   });
   assert.equal(outputs[0]._splitCtx.pricingPolicyProof, null);
   assert.match(outputs[0].url, /split-payment-promo/);
+});
+
+test('join recovers a lost subscription pricing projection only after Viva organizer proof', () => {
+  const prepared = run('join', {
+    _splitJoinBody: { clientPhone: '+7 960 000 00 10', paymentMode: 'one_time' },
+    payload: [{
+      payment: { paid: true, amount: 0, paymentMethod: 'WIDGET' },
+      organizer: { id: 'client-organizer', phone: '+7 960 000 00 01' },
+      metadata: {
+        splitPayment: {
+          enabled: true,
+          vivaExerciseId: 'exercise-piter-lost-projection',
+          shareCount: 4,
+          shareAmount: 2500,
+        },
+      },
+      booking: {
+        studioId: '1ea77cbf-bc36-49a1-96d6-f35c216a409b',
+        roomId: 'room-piter-10',
+        bookingIds: ['booking-organizer-subscription'],
+        date: '2026-08-26',
+        timeFrom: '19:00',
+        timeTo: '20:30',
+      },
+    }],
+  });
+
+  assert.equal(prepared[0]._splitCtx.step, 'token');
+  assert.deepEqual(prepared[0]._splitCtx.legacyPricingRecovery, {
+    organizerBookingId: 'booking-organizer-subscription',
+    organizerClientId: 'client-organizer',
+    organizerPhone: '79600000001',
+  });
+
+  const bookingLookup = run('router', {
+    statusCode: 200,
+    payload: { access_token: 'service-token', expires_in: 300 },
+    _splitCtx: prepared[0]._splitCtx,
+  });
+  assert.equal(bookingLookup[0]._splitCtx.step, 'legacy_pricing_booking');
+  assert.match(bookingLookup[0].url, /\/exercises\/exercise-piter-lost-projection\/bookings$/);
+
+  const pricingLookup = run('router', {
+    statusCode: 200,
+    payload: [{
+      id: 'booking-organizer-subscription',
+      exercise: { id: 'exercise-piter-lost-projection' },
+      client: { id: 'client-organizer', phone: '+7 960 000 00 01' },
+      clientSubscriptionId: 'client-subscription-organizer',
+      paymentType: 'SUBSCRIPTION',
+      isCancelled: false,
+      cancelled: false,
+    }],
+    _splitCtx: bookingLookup[0]._splitCtx,
+  });
+  assert.equal(pricingLookup[0]._splitCtx.step, 'pricing_policy');
+  assert.deepEqual(pricingLookup[0]._splitCtx.legacyPricingRecovery, {
+    organizerBookingId: 'booking-organizer-subscription',
+    organizerClientId: 'client-organizer',
+    organizerPhone: '+79600000001',
+    verified: true,
+  });
+  assert.match(pricingLookup[0].url, /split-payment-promo/);
+  assert.match(pricingLookup[0].url, /forDate=2026-08-26/);
+
+  const priced = run('router', {
+    statusCode: 200,
+    payload: {
+      enabled: true,
+      selectedPromoId: 'piter-split-250-per-hour-v1',
+      pricingMode: 'PER_PARTICIPANT_HOUR',
+      currency: 'RUB',
+      shareAmounts: { twoTeams: 500, fourPlayers: 250 },
+    },
+    _splitCtx: pricingLookup[0]._splitCtx,
+  });
+  assert.equal(priced[0]._splitCtx.shareAmount, 375);
+  assert.equal(priced[0]._splitCtx.pricingPolicy.id, 'piter-split-250-per-hour-v1');
+  assert.equal(priced[0]._splitCtx.step, 'token');
+});
+
+test('legacy pricing recovery rejects a malformed enabled CUP response before any Viva mutation', () => {
+  const outputs = run('router', {
+    statusCode: 200,
+    payload: {
+      enabled: true,
+      selectedPromoId: 'piter-split-250-per-hour-v1',
+      pricingMode: 'PER_PARTICIPANT_HOUR',
+      currency: 'RUB',
+      shareAmounts: { twoTeams: 500 },
+    },
+    _splitCtx: {
+      action: 'join',
+      step: 'pricing_policy',
+      legacyPricingRecovery: { verified: true },
+      expectedPricingPolicy: null,
+      shareCount: 4,
+    },
+  });
+
+  assert.equal(outputs[0], null);
+  assert.equal(outputs[1].statusCode, 502);
+  assert.equal(outputs[1].payload.details.code, 'SPLIT_PRICING_POLICY_INVALID');
+  assert.equal(outputs[1].url, undefined);
+});
+
+test('an explicit disabled CUP response remains the authoritative no-campaign result', () => {
+  const outputs = run('router', {
+    statusCode: 200,
+    payload: { enabled: false, selectedPromoId: null },
+    _splitCtx: {
+      action: 'join',
+      step: 'pricing_policy',
+      legacyPricingRecovery: { verified: true },
+      expectedPricingPolicy: null,
+      shareCount: 4,
+    },
+  });
+
+  assert.equal(outputs[0]._splitCtx.pricingPolicy, null);
+  assert.equal(outputs[0]._splitCtx.step, 'token');
+  assert.match(outputs[0].url, /protocol\/openid-connect\/token$/);
+});
+
+test('a disabled CUP response cannot simultaneously select a campaign', () => {
+  const outputs = run('router', {
+    statusCode: 200,
+    payload: { enabled: false, selectedPromoId: 'contradictory-campaign' },
+    _splitCtx: {
+      action: 'join',
+      step: 'pricing_policy',
+      legacyPricingRecovery: { verified: true },
+      expectedPricingPolicy: null,
+      shareCount: 4,
+    },
+  });
+
+  assert.equal(outputs[0], null);
+  assert.equal(outputs[1].statusCode, 502);
+  assert.equal(outputs[1].payload.details.code, 'SPLIT_PRICING_POLICY_INVALID');
+  assert.equal(outputs[1].url, undefined);
+});
+
+test('legacy pricing recovery fails closed when Viva does not prove the organizer subscription', () => {
+  const outputs = run('router', {
+    statusCode: 200,
+    payload: [{
+      id: 'booking-organizer-one-time',
+      exercise: { id: 'exercise-piter-ambiguous' },
+      paymentType: 'ONE_TIME',
+      isCancelled: false,
+      cancelled: false,
+    }],
+    _splitCtx: {
+      action: 'join',
+      step: 'legacy_pricing_booking',
+      exerciseId: 'exercise-piter-ambiguous',
+      legacyPricingRecovery: {
+        organizerBookingId: 'booking-organizer-one-time',
+        organizerClientId: 'client-organizer',
+      },
+    },
+  });
+
+  assert.equal(outputs[0], null);
+  assert.equal(outputs[1].statusCode, 409);
+  assert.equal(outputs[1].payload.details.code, 'SPLIT_LEGACY_ORGANIZER_SUBSCRIPTION_NOT_CONFIRMED');
+  assert.equal(outputs[1].url, undefined);
+});
+
+test('legacy pricing recovery rejects a subscription booking owned by another client', () => {
+  const outputs = run('router', {
+    statusCode: 200,
+    payload: [{
+      id: 'booking-organizer-subscription',
+      exercise: { id: 'exercise-piter-identity-mismatch' },
+      client: { id: 'different-client', phone: '+7 960 000 00 99' },
+      clientSubscriptionId: 'different-client-subscription',
+      paymentType: 'SUBSCRIPTION',
+      isCancelled: false,
+      cancelled: false,
+    }],
+    _splitCtx: {
+      action: 'join',
+      step: 'legacy_pricing_booking',
+      exerciseId: 'exercise-piter-identity-mismatch',
+      legacyPricingRecovery: {
+        organizerBookingId: 'booking-organizer-subscription',
+        organizerClientId: 'client-organizer',
+        organizerPhone: '79600000001',
+      },
+    },
+  });
+
+  assert.equal(outputs[0], null);
+  assert.equal(outputs[1].statusCode, 409);
+  assert.equal(outputs[1].payload.details.code, 'SPLIT_LEGACY_ORGANIZER_SUBSCRIPTION_NOT_CONFIRMED');
+  assert.equal(outputs[1].url, undefined);
+});
+
+test('legacy pricing recovery never downgrades a stored client id mismatch to phone-only success', () => {
+  const outputs = run('router', {
+    statusCode: 200,
+    payload: [{
+      id: 'booking-organizer-subscription',
+      exercise: { id: 'exercise-piter-client-id-mismatch' },
+      client: { id: 'different-client', phone: '+7 960 000 00 01' },
+      clientSubscriptionId: 'different-client-subscription',
+      paymentType: 'SUBSCRIPTION',
+      isCancelled: false,
+      cancelled: false,
+    }],
+    _splitCtx: {
+      action: 'join',
+      step: 'legacy_pricing_booking',
+      exerciseId: 'exercise-piter-client-id-mismatch',
+      legacyPricingRecovery: {
+        organizerBookingId: 'booking-organizer-subscription',
+        organizerClientId: 'client-organizer',
+        organizerPhone: '79600000001',
+      },
+    },
+  });
+
+  assert.equal(outputs[0], null);
+  assert.equal(outputs[1].statusCode, 409);
+  assert.equal(outputs[1].payload.details.code, 'SPLIT_LEGACY_ORGANIZER_SUBSCRIPTION_NOT_CONFIRMED');
+});
+
+test('legacy pricing recovery rejects duplicate provider rows for the exact booking id', () => {
+  const shared = {
+    id: 'booking-organizer-subscription',
+    exercise: { id: 'exercise-piter-duplicate-booking' },
+    client: { id: 'client-organizer', phone: '+7 960 000 00 01' },
+    clientSubscriptionId: 'client-subscription-organizer',
+    paymentType: 'SUBSCRIPTION',
+    isCancelled: false,
+    cancelled: false,
+  };
+  const outputs = run('router', {
+    statusCode: 200,
+    payload: [shared, { ...shared, clientSubscriptionId: 'conflicting-subscription' }],
+    _splitCtx: {
+      action: 'join',
+      step: 'legacy_pricing_booking',
+      exerciseId: 'exercise-piter-duplicate-booking',
+      legacyPricingRecovery: {
+        organizerBookingId: 'booking-organizer-subscription',
+        organizerClientId: 'client-organizer',
+        organizerPhone: '79600000001',
+      },
+    },
+  });
+
+  assert.equal(outputs[0], null);
+  assert.equal(outputs[1].statusCode, 409);
+  assert.equal(outputs[1].payload.details.code, 'SPLIT_LEGACY_ORGANIZER_SUBSCRIPTION_NOT_CONFIRMED');
+});
+
+test('legacy zero-amount game without one organizer booking fails before external payment calls', () => {
+  const outputs = run('join', {
+    _splitJoinBody: { clientPhone: '+7 960 000 00 11', paymentMode: 'one_time' },
+    payload: [{
+      payment: { paid: true, amount: 0 },
+      organizer: { id: 'client-organizer' },
+      metadata: {
+        splitPayment: {
+          enabled: true,
+          vivaExerciseId: 'exercise-piter-no-organizer-booking',
+          shareCount: 4,
+          shareAmount: 2500,
+        },
+      },
+      booking: {
+        studioId: 'studio-piter',
+        roomId: 'room-piter-1',
+        bookingIds: [],
+        date: '2026-08-26',
+        timeFrom: '19:00',
+        timeTo: '20:30',
+      },
+    }],
+  });
+
+  assert.equal(outputs[0], null);
+  assert.equal(outputs[1].statusCode, 409);
+  assert.equal(outputs[1].payload.details.code, 'SPLIT_LEGACY_PRICING_RECOVERY_EVIDENCE_MISSING');
+  assert.equal(outputs[1].url, undefined);
+});
+
+test('explicit one-time organizer mode never enters legacy subscription recovery', () => {
+  const outputs = run('join', {
+    _splitJoinBody: { clientPhone: '+7 960 000 00 12', paymentMode: 'one_time' },
+    payload: [{
+      payment: { paid: true, amount: 0 },
+      organizer: { id: 'client-organizer' },
+      metadata: {
+        splitPayment: {
+          enabled: true,
+          vivaExerciseId: 'exercise-explicit-one-time',
+          shareCount: 4,
+          shareAmount: 2500,
+          selectedPaymentMode: 'one_time',
+        },
+      },
+      booking: {
+        studioId: 'studio-ordinary',
+        roomId: 'room-ordinary',
+        bookingIds: ['booking-organizer-one-time'],
+        date: '2026-08-26',
+        timeFrom: '19:00',
+        timeTo: '20:30',
+      },
+    }],
+  });
+
+  assert.equal(outputs[0]._splitCtx.step, 'token');
+  assert.equal(outputs[0]._splitCtx.legacyPricingRecovery, null);
+  assert.doesNotMatch(outputs[0].url, /split-payment-promo/);
 });
 
 test('join refuses a stored policy without organizer payment evidence', () => {
