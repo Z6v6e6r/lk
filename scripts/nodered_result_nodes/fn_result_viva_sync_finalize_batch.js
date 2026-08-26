@@ -64,6 +64,7 @@ const summary = {
 const resultUpdateMsg = Object.assign({}, msg, {
   payload: [
     {
+      tenantKey: toStr(batch.tenantKey),
       id: batch.resultId,
       revision: Number.isInteger(Number(batch.resultRevision)) ? Number(batch.resultRevision) : null,
     },
@@ -73,7 +74,7 @@ const resultUpdateMsg = Object.assign({}, msg, {
         updatedAt: lastAttemptAt || new Date().toISOString(),
       },
     },
-    { upsert: false },
+    { upsert: false, writeConcern: { w: 'majority' } },
   ],
 });
 
@@ -93,4 +94,4 @@ const responseMsg = baseResponse
   })
   : null;
 
-return [resultUpdateMsg, responseMsg, Object.assign({}, msg, { payload: summary })];
+return [resultUpdateMsg, null, Object.assign({}, msg, { payload: { summary, responseDeferred: Boolean(responseMsg) } })];

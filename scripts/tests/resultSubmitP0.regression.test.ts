@@ -8,7 +8,25 @@ const apiClientSource = fs.readFileSync("src/utils/apiClient.ts", "utf8");
 
 function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
   const source = fs.readFileSync(file, "utf8");
-  return new Function("msg", source)(msg);
+  const env = { get: (name: string) => name === "PADLHUB_PLATFORM_TENANT_KEY" ? "tenant" : undefined };
+  const input = file.endsWith("fn_result_submit_prepare.js")
+    ? {
+        ...msg,
+        payload: {
+          idempotencyKey: "test-result-idempotency-key",
+          ...(msg.payload as Record<string, unknown>),
+        },
+      }
+    : file.endsWith("fn_result_submit_build_insert.js")
+      ? {
+          ...msg,
+          _resultSubmit: {
+            idempotencyKey: "test-result-idempotency-key",
+            ...(msg._resultSubmit as Record<string, unknown>),
+          },
+        }
+    : msg;
+  return new Function("msg", "env", source)(input, env);
 }
 
 function extractBalancedBlock(source: string, marker: string) {
@@ -428,7 +446,7 @@ test("result submit has stable client idempotency and no automatic POST retry", 
     "const handleSubmitMatchResult = useCallback",
   );
 
-  assert.match(resultPayloadInterface, /idempotencyKey\?:\s*string\s*\|\s*null\s*;/);
+  assert.match(resultPayloadInterface, /idempotencyKey:\s*string\s*;/);
   assert.match(resultRequest, /retries:\s*action\s*===\s*["']submit["']\s*\?\s*0\s*:\s*1/);
   assert.match(resultRequest, /action\s*===\s*["']submit["']\s*\?\s*new AbortController\(\)/);
   assert.match(resultRequest, /submitController\.abort\(\)/);

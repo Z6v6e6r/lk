@@ -22,12 +22,31 @@ function readNodeRedFunctionSource(file: string) {
 
 function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
   const source = readNodeRedFunctionSource(file);
-  return new Function("msg", source)(msg);
+  const env = { get: (name: string) => name === "PADLHUB_PLATFORM_TENANT_KEY" ? "tenant-1" : undefined };
+  const input = file.endsWith("fn_result_submit_prepare.js")
+    ? {
+        ...msg,
+        payload: {
+          idempotencyKey: "test-result-idempotency-key",
+          ...(msg.payload as Record<string, unknown>),
+        },
+      }
+    : file.endsWith("fn_result_submit_build_insert.js")
+      ? {
+          ...msg,
+          _resultSubmit: {
+            idempotencyKey: "test-result-idempotency-key",
+            ...(msg._resultSubmit as Record<string, unknown>),
+          },
+        }
+    : msg;
+  return new Function("msg", "env", source)(input, env);
 }
 
 function sessionGame(overrides: Record<string, unknown> = {}) {
   return {
     id: "game-1",
+    tenantKey: "tenant-1",
     booking: {
       date: "2026-06-03",
       timeFrom: "19:00",

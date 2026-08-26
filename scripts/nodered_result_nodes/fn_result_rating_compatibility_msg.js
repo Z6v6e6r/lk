@@ -13,7 +13,7 @@ const update = Object.assign({}, operation.update, {
     compatibilityUpdatedAt: new Date().toISOString(),
   }),
 });
-msg.payload = [operation.query, update, { upsert: true }];
+msg.payload = [operation.query, update, { upsert: true, writeConcern: { w: "majority" } }];
 delete msg.query;
 delete msg.mongoQuery;
 delete msg.mongoUpdate;

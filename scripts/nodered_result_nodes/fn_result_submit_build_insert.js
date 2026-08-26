@@ -118,6 +118,21 @@ const isCorrectionSubmission = latestStatus === "CORRECTION_PENDING"
   && !latestSamePayload;
 
 if (latestActive && !isCorrectionSubmission) {
+  const projectionApplied = ctx.game?.resultId === latest.id
+    && String(ctx.game?.resultLifecycleState || "").toUpperCase() === latestStatus;
+  if (latestSamePayload && !projectionApplied) {
+    msg.statusCode = 409;
+    msg.headers = { "Content-Type": "application/json; charset=utf-8" };
+    msg.payload = {
+      error: "Result is durable but its legacy game projection is incomplete. Reconcile before retrying.",
+      code: "LEGACY_GAME_PROJECTION_INCOMPLETE",
+      retryable: false,
+      recoveryRequired: true,
+      gameId: ctx.gameId || ctx.game?.id || null,
+      resultId: latest.id || null,
+    };
+    return [null, msg, msg, null, null, null];
+  }
   msg.statusCode = latestSamePayload ? 200 : 409;
   msg.headers = { "Content-Type": "application/json; charset=utf-8" };
   msg.payload = latestSamePayload
@@ -146,12 +161,22 @@ const nowTs = now.getTime();
 const disputeDeadlineTs = resolveResultDisputeDeadlineTs(nowTs, ctx.game);
 const disputeDeadlineAt = disputeDeadlineTs ? new Date(disputeDeadlineTs).toISOString() : null;
 const submitter = ctx.actorMember || { memberKey: null, id: null, name: "Игрок", phoneNorm: ctx.phone || null };
-const resultIdSeed = ctx.idempotencyKey || `${ctx.gameId}_${incomingSignature}`;
-let hash = 0;
-for (let index = 0; index < resultIdSeed.length; index += 1) {
-  hash = ((hash << 5) - hash + resultIdSeed.charCodeAt(index)) | 0;
+const tenantKey = toStr(ctx.game?.tenantKey);
+const contextTenantKey = toStr(ctx.tenantKey || ctx.game?.tenantKey);
+if (!tenantKey || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(tenantKey) || tenantKey !== contextTenantKey) {
+  msg.statusCode = 409;
+  msg.headers = { "Content-Type": "application/json; charset=utf-8" };
+  msg.payload = { error: "Result tenant context is invalid", code: "LEGACY_GAME_TENANT_CONFLICT" };
+  return [null, msg, msg, null, null, null];
 }
-const resultId = `res_${ctx.gameId}_${Math.abs(hash)}`;
+const idempotencyKey = toStr(ctx.idempotencyKey);
+if (!idempotencyKey || !/^[A-Za-z0-9][A-Za-z0-9:._-]{7,159}$/.test(idempotencyKey)) {
+  msg.statusCode = 409;
+  msg.headers = { "Content-Type": "application/json; charset=utf-8" };
+  msg.payload = { error: "Result idempotency identity is invalid", code: "RESULT_IDEMPOTENCY_KEY_INVALID" };
+  return [null, msg, msg, null, null, null];
+}
+const resultId = `res_v1_${tenantKey.length}_${tenantKey}_${idempotencyKey}`;
 const ratingEventId = `rate_${resultId}`;
 const previousScoreRevision = Number.isInteger(Number(latest?.scoreRevision)) && Number(latest.scoreRevision) > 0
   ? Number(latest.scoreRevision)
@@ -206,9 +231,9 @@ const ratingWork = {
 const doc = {
   _id: resultId,
   id: resultId,
-  idempotencyKey: ctx.idempotencyKey || null,
+  idempotencyKey,
   gameId: ctx.gameId,
-  tenantKey: ctx.game?.tenantKey || null,
+  tenantKey,
   vivaExerciseId: ctx.game?.booking?.vivaExerciseId || null,
   resultModelVersion: 2,
   scoreRevision,
@@ -278,7 +303,7 @@ const doc = {
 msg._resultSubmitDoc = doc;
 const resultMsg = Object.assign({}, msg, {
   payload: [
-    { _id: resultId },
+    { _id: resultId, tenantKey, id: resultId },
     { $setOnInsert: doc },
     { upsert: true },
   ],

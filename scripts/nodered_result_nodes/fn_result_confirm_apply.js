@@ -145,6 +145,27 @@ const buildRatingLedgerMutations = ({
     lastChangedBy: actorDoc,
     team: entry?.team || null,
   };
+  const stateFenceQuery = {
+    $and: [
+      stateIdentityQuery,
+      {
+        $or: [
+          { lastEventId: eventId },
+          {
+            $and: [
+              { $or: [{ lastEventAt: { $lte: nowIso } }, { lastEventAt: { $exists: false } }] },
+              {
+                $or: [
+                  { ratingNumeric: toFiniteNumber(before) },
+                  ...(toFiniteNumber(before) === null ? [{ ratingNumeric: { $exists: false } }] : []),
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
   if (clientId) stateSet.clientId = clientId;
   if (memberKey) stateSet.memberKey = memberKey;
   return {
@@ -154,13 +175,13 @@ const buildRatingLedgerMutations = ({
       update: { $setOnInsert: eventDoc },
     },
     stateOperation: {
-      query: stateIdentityQuery,
+      query: stateFenceQuery,
       update: {
         $set: stateSet,
         $setOnInsert: { createdAt: nowIso },
       },
     },
-    query: stateIdentityQuery,
+    query: stateFenceQuery,
     update: {
       $set: stateSet,
       $setOnInsert: { createdAt: nowIso },
@@ -316,21 +337,37 @@ const buildResponseMessage = (baseMsg, payload, statusCode = 200) => Object.assi
   payload,
 });
 const buildResponseSlot = (isCronExpireAction, responseMsg) => (isCronExpireAction ? null : responseMsg);
-const buildRevisionFilter = (pendingId, statusFilter, revision) => {
-  const filter = { id: pendingId, status: statusFilter };
+const buildRevisionFilter = (pendingId, statusFilter, revision, tenantKey, priorOutbox) => {
+  const filter = { tenantKey, id: pendingId, status: statusFilter };
+  const conditions = [];
   if (Number.isInteger(Number(revision)) && Number(revision) > 1) {
     filter.revision = Number(revision);
-    return filter;
+  } else {
+    conditions.push({
+      $or: [
+        { revision: 1 },
+        { revision: { $exists: false } },
+        { revision: null },
+      ],
+    });
   }
-  filter.$or = [
-    { revision: 1 },
-    { revision: { $exists: false } },
-    { revision: null },
-  ];
+  if (priorOutbox?.version === 2) {
+    filter['legacyGameProjectionOutbox.bundleId'] = priorOutbox.bundleId;
+    filter['legacyGameProjectionOutbox.status'] = 'DELIVERED';
+  } else {
+    conditions.push({
+      $or: [
+        { legacyGameProjectionOutbox: { $exists: false } },
+        { legacyGameProjectionOutbox: null },
+      ],
+    });
+  }
+  if (conditions.length) filter.$and = conditions;
   return filter;
 };
-const buildSyncSignature = (resultId, revision, mode, action) => uniq([
+const buildSyncSignature = (tenantKey, resultId, revision, mode, action) => uniq([
   'result_viva_sync',
+  toStr(tenantKey),
   toStr(resultId),
   Number.isInteger(Number(revision)) ? String(Number(revision)) : null,
   toStr(mode),
@@ -404,14 +441,16 @@ const buildVivaSyncBatch = ({
   mode,
   source,
 }) => {
-  const syncSignature = buildSyncSignature(pending.id, nextRevision, mode, action);
+  const tenantKey = toStr(pending?.tenantKey);
+  const syncSignature = buildSyncSignature(tenantKey, pending.id, nextRevision, mode, action);
   const tasks = asArray(ratingImpact).map((entry) => {
     const targetRating = mode === 'revert' ? entry.before : entry.after;
     const previousRating = mode === 'revert' ? entry.after : entry.before;
     const targetGrade = mode === 'revert' ? entry.gradeBefore : entry.gradeAfter;
     const auditEventId = buildAuditEventId(syncSignature, entry);
     return {
-      outboxId: uniq(['result_viva_sync', pending.id, String(nextRevision), mode, toStr(entry?.id), toStr(entry?.phoneNorm), toStr(entry?.memberKey)]).join(':'),
+      outboxId: uniq(['result_viva_sync', tenantKey, pending.id, String(nextRevision), mode, toStr(entry?.id), toStr(entry?.phoneNorm), toStr(entry?.memberKey)]).join(':'),
+      tenantKey,
       auditEventId,
       syncSignature,
       mode,
@@ -455,6 +494,7 @@ const buildVivaSyncBatch = ({
   return {
     batchId: syncSignature,
     syncSignature,
+    tenantKey,
     resultId: pending.id,
     resultRevision: nextRevision,
     gameId,
@@ -482,6 +522,7 @@ if (!pending) {
   const responseMsg = buildResponseMessage(msg, { error: 'No result context' }, 409);
   return [null, null, null, buildResponseSlot(isCronExpireAction, responseMsg), responseMsg, null];
 }
+const resultTenantKey = toStr(ctx.tenantKey || ctx.game?.tenantKey);
 
 const now = new Date();
 const nowIso = now.toISOString();
@@ -536,6 +577,170 @@ const buildCanonicalRatingMutations = (mode, source, changedBy = actor) => build
   lifecycleEventId: ratingEventId,
   formula: ratingFormula,
 });
+const attachDurableSideEffectOutbox = (resultUpdateMsg) => {
+  const bundle = resultUpdateMsg?._resultConfirmBundle;
+  const setDoc = resultUpdateMsg?.payload?.[1]?.$set;
+  const tenantKey = toStr(ctx.game?.tenantKey);
+  if (!bundle || !setDoc || !tenantKey || !pending?.id) return resultUpdateMsg;
+  const sourceGameRevision = Number(ctx.game?.revision);
+  if (!Number.isSafeInteger(sourceGameRevision) || sourceGameRevision < 1) {
+    throw new Error('Result side-effect outbox requires a positive source game revision');
+  }
+
+  if (bundle.eventPayload?.[0] && bundle.eventPayload?.[1]?.$set) {
+    bundle.eventPayload[0] = {
+      $and: [
+        bundle.eventPayload[0],
+        {
+          $or: [
+            { legacyProjectionRevision: { $exists: false } },
+            { legacyProjectionRevision: { $lte: nextRevision } },
+          ],
+        },
+      ],
+    };
+    bundle.eventPayload[1].$set.legacyProjectionRevision = nextRevision;
+    bundle.eventPayload[2] = Object.assign({}, bundle.eventPayload[2] || {}, { writeConcern: { w: 'majority' } });
+  }
+
+  const ratingSinks = asArray(bundle.ratingsPayload).map((item, index) => ({
+    key: `rating:${toStr(item?.eventId) || index}`,
+    kind: 'RATING',
+    retryPolicy: 'FENCED',
+    status: 'PENDING',
+    attempts: 0,
+    payloadIndex: index,
+  }));
+  const syncTasks = asArray(bundle.syncBatch?.tasks);
+  const providerSinks = syncTasks.map((task, index) => {
+    const dependency = ratingSinks.find((sink) => {
+      const item = bundle.ratingsPayload?.[sink.payloadIndex];
+      const state = item?.stateOperation?.update?.$set || item?.update?.$set || {};
+      return (state.clientId && task?.player?.id === state.clientId)
+        || (state.phoneNorm && task?.player?.phoneNorm === state.phoneNorm);
+    });
+    return {
+      key: `provider:${toStr(task?.outboxId) || index}`,
+      kind: 'PROVIDER',
+      retryPolicy: 'AT_MOST_ONCE',
+      status: task?.skipReason ? 'SKIPPED' : 'PENDING',
+      attempts: 0,
+      payloadIndex: index,
+      providerOutboxId: toStr(task?.outboxId),
+      dependsOnSinkKey: dependency?.key || null,
+      ...(task?.skipReason ? { completedAt: nowIso, lastError: toStr(task.skipReason) } : {}),
+    };
+  });
+  const eventSinks = bundle.eventPayload ? [{
+    key: `event:${toStr(ratingEventId) || pending.id}:${nextRevision}`,
+    kind: 'EVENT',
+    retryPolicy: 'FENCED',
+    status: 'PENDING',
+    attempts: 0,
+    payloadIndex: 0,
+  }] : [];
+  const sinks = [...ratingSinks, ...eventSinks, ...providerSinks];
+  const bundleId = `result-side-effects:${tenantKey}:${pending.id}:${nextRevision}:${action}`;
+  const outbox = {
+    version: 2,
+    stateRevision: 0,
+    bundleId,
+    transitionAction: action,
+    transitionStatus: toStr(setDoc.status || setDoc.lifecycleState),
+    tenantKey,
+    resultId: pending.id,
+    resultRevision: nextRevision,
+    gameId,
+    sourceGameRevision,
+    status: sinks.every((sink) => ['DELIVERED', 'SKIPPED', 'SUPERSEDED'].includes(sink.status)) ? 'DELIVERED' : 'PENDING',
+    response: bundle.response,
+    payloadJson: JSON.stringify(bundle),
+    sinks,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+  setDoc.legacyGameProjectionOutbox = outbox;
+  resultUpdateMsg.payload[2] = Object.assign({}, resultUpdateMsg.payload[2] || {}, { writeConcern: { w: 'majority' } });
+  resultUpdateMsg._resultConfirmOutbox = outbox;
+  return resultUpdateMsg;
+};
+
+if (pending.replayDurableOutbox) {
+  const expectedStatus = String(pending.lifecycleState || pending.status || '').toUpperCase();
+  const projectionApplied = ctx.game?.resultId === pending.id
+    && String(ctx.game?.resultLifecycleState || ctx.game?.resultStatus || '').toUpperCase() === expectedStatus;
+  const replayOutbox = pending?.legacyGameProjectionOutbox;
+  let replayBundle = null;
+  try {
+    replayBundle = replayOutbox?.payloadJson ? JSON.parse(replayOutbox.payloadJson) : null;
+  } catch {
+    replayBundle = null;
+  }
+  if (projectionApplied && replayOutbox?.version === 2 && replayBundle) {
+    return [null, null, null, null, null, null, Object.assign({}, msg, { _resultConfirmReplayOutbox: replayOutbox })];
+  }
+  if (!projectionApplied && replayOutbox?.version === 2 && replayBundle) {
+    const gamePayload = asArray(replayBundle.gamePayload);
+    const gameFilter = gamePayload[0] && typeof gamePayload[0] === 'object' ? gamePayload[0] : null;
+    const gameUpdate = gamePayload[1] && typeof gamePayload[1] === 'object' ? gamePayload[1] : null;
+    const gameOptions = gamePayload[2] && typeof gamePayload[2] === 'object' ? gamePayload[2] : null;
+    const gameSet = gameUpdate?.$set && typeof gameUpdate.$set === 'object' ? gameUpdate.$set : null;
+    const sourceGameRevision = Number(replayOutbox.sourceGameRevision);
+    const currentGameRevision = Number(ctx.game?.revision);
+    const recoveryPlanValid = replayOutbox.tenantKey === resultTenantKey
+      && replayOutbox.resultId === pending.id
+      && replayOutbox.gameId === gameId
+      && replayOutbox.transitionStatus === expectedStatus
+      && Number.isSafeInteger(sourceGameRevision)
+      && sourceGameRevision > 0
+      && Number.isSafeInteger(currentGameRevision)
+      && currentGameRevision === sourceGameRevision
+      && gamePayload.length === 3
+      && gameFilter?.id === gameId
+      && gameSet?.resultId === pending.id
+      && String(gameSet?.resultLifecycleState || gameSet?.resultStatus || '').toUpperCase() === expectedStatus
+      && gameOptions?.upsert === false;
+    if (recoveryPlanValid) {
+      const storedResponse = replayBundle.response && typeof replayBundle.response === 'object'
+        ? Object.assign({}, msg, {
+          statusCode: Number(replayBundle.response.statusCode || 200),
+          headers: replayBundle.response.headers || { 'Content-Type': 'application/json; charset=utf-8' },
+          payload: replayBundle.response.payload,
+        })
+        : null;
+      const recoveryMsg = Object.assign({}, msg, {
+        payload: gamePayload,
+        _resultConfirmBundle: replayBundle,
+        _resultConfirmOutbox: replayOutbox,
+        _resultConfirmRevisionDeferred: {
+          outbox: replayOutbox,
+          responseMsg: storedResponse,
+          hasSyncBatch: Boolean(replayBundle.syncBatch),
+        },
+        _resultConfirmRecovery: {
+          tenantKey: resultTenantKey,
+          gameId,
+          resultId: pending.id,
+          resultRevision: replayOutbox.resultRevision,
+          bundleId: replayOutbox.bundleId,
+          sourceGameRevision,
+        },
+      });
+      return [null, null, null, null, null, null, null, recoveryMsg];
+    }
+  }
+  const responseMsg = buildResponseMessage(msg, {
+    error: projectionApplied
+      ? 'Durable result side-effect replay state is invalid.'
+      : 'Result is durable but its fenced legacy game recovery plan is invalid.',
+    code: projectionApplied ? 'RESULT_SIDE_EFFECT_OUTBOX_INVALID' : 'LEGACY_GAME_PROJECTION_INCOMPLETE',
+    retryable: false,
+    recoveryRequired: true,
+    gameId,
+    resultId: pending.id || null,
+  }, 503);
+  return [null, null, null, buildResponseSlot(isCronExpireAction, responseMsg), responseMsg, null, null, null];
+}
 
 if (pending.expiredToNoResult) {
   const expiredRatingEventStatus = ratingEnabled
@@ -603,7 +808,7 @@ if (pending.expiredToNoResult) {
   const responseMsg = buildResponseMessage(msg, responsePayload);
   const resultUpdateMsg = Object.assign({}, msg, {
     payload: [
-      buildRevisionFilter(pending.id, 'CORRECTION_PENDING', currentRevision),
+      buildRevisionFilter(pending.id, 'CORRECTION_PENDING', currentRevision, resultTenantKey, pending.legacyGameProjectionOutbox),
       { $set: resultSet },
       { upsert: false },
     ],
@@ -640,11 +845,28 @@ if (pending.expiredToNoResult) {
       syncBatch,
     },
   });
-  return [resultUpdateMsg, null, null, null, responseMsg, null];
+  return [attachDurableSideEffectOutbox(resultUpdateMsg), null, null, null, responseMsg, null];
 }
 
 if (action === 'CONFIRM' || action === 'ACCEPT_CORRECTION' || action === 'EXPIRE') {
   if (pending.alreadyFinal || pendingStatus === 'CONFIRMED') {
+    const projectionApplied = ctx.game?.resultId === pending.id
+      && String(ctx.game?.resultLifecycleState || '').toUpperCase() === 'CONFIRMED';
+    if (!projectionApplied) {
+      const responseMsg = buildResponseMessage(msg, {
+        error: 'Result is durable but its tenant-bound legacy game projection is incomplete.',
+        code: 'LEGACY_GAME_PROJECTION_INCOMPLETE',
+        retryable: false,
+        recoveryRequired: true,
+        gameId,
+        resultId: pending.id || null,
+      }, 409);
+      return [null, Object.assign({}, msg, { payload: [] }), null, buildResponseSlot(isCronExpireAction, responseMsg), responseMsg, null, null];
+    }
+    const replayOutbox = pending?.legacyGameProjectionOutbox;
+    if (replayOutbox?.version === 2 && replayOutbox?.payloadJson) {
+      return [null, null, null, null, null, null, Object.assign({}, msg, { _resultConfirmReplayOutbox: replayOutbox })];
+    }
     const responsePayload = {
       gameId,
       resultId: pending.id,
@@ -767,7 +989,7 @@ if (action === 'CONFIRM' || action === 'ACCEPT_CORRECTION' || action === 'EXPIRE
   const responseMsg = buildResponseMessage(msg, responsePayload);
   const resultUpdateMsg = Object.assign({}, msg, {
     payload: [
-      buildRevisionFilter(pending.id, { $in: ['PENDING_REVIEW', 'CORRECTION_PENDING'] }, currentRevision),
+      buildRevisionFilter(pending.id, { $in: ['PENDING_REVIEW', 'CORRECTION_PENDING'] }, currentRevision, resultTenantKey, pending.legacyGameProjectionOutbox),
       { $set: resultSet },
       { upsert: false },
     ],
@@ -802,7 +1024,7 @@ if (action === 'CONFIRM' || action === 'ACCEPT_CORRECTION' || action === 'EXPIRE
       syncBatch,
     },
   });
-  return [resultUpdateMsg, Object.assign({}, msg, {
+  return [attachDurableSideEffectOutbox(resultUpdateMsg), Object.assign({}, msg, {
     payload: ratingApplyRequired
       ? buildCanonicalRatingMutations(
         'apply',
@@ -835,6 +1057,23 @@ if (action === 'CONFIRM' || action === 'ACCEPT_CORRECTION' || action === 'EXPIRE
 }
 
 if (pending.alreadyReverted || pending?.ratingEvent?.status === 'REVERTED') {
+  const projectionApplied = ctx.game?.resultId === pending.id
+    && String(ctx.game?.resultLifecycleState || '').toUpperCase() === String(pending.lifecycleState || pending.status || 'CORRECTION_PENDING').toUpperCase();
+  if (!projectionApplied) {
+    const responseMsg = buildResponseMessage(msg, {
+      error: 'Result is durable but its tenant-bound legacy game projection is incomplete.',
+      code: 'LEGACY_GAME_PROJECTION_INCOMPLETE',
+      retryable: false,
+      recoveryRequired: true,
+      gameId,
+      resultId: pending.id || null,
+    }, 409);
+    return [null, Object.assign({}, msg, { payload: [] }), null, buildResponseSlot(isCronExpireAction, responseMsg), responseMsg, null, null];
+  }
+  const replayOutbox = pending?.legacyGameProjectionOutbox;
+  if (replayOutbox?.version === 2 && replayOutbox?.payloadJson) {
+    return [null, null, null, null, null, null, Object.assign({}, msg, { _resultConfirmReplayOutbox: replayOutbox })];
+  }
   const responsePayload = {
     gameId,
     resultId: pending.id,
@@ -991,7 +1230,7 @@ const responsePayload = {
 const responseMsg = buildResponseMessage(msg, responsePayload);
 const resultUpdateMsg = Object.assign({}, msg, {
   payload: [
-    buildRevisionFilter(pending.id, 'PENDING_REVIEW', currentRevision),
+    buildRevisionFilter(pending.id, 'PENDING_REVIEW', currentRevision, resultTenantKey, pending.legacyGameProjectionOutbox),
     { $set: resultSet },
     { upsert: false },
   ],
@@ -1014,7 +1253,7 @@ const resultUpdateMsg = Object.assign({}, msg, {
   },
 });
 return [
-  resultUpdateMsg,
+  attachDurableSideEffectOutbox(resultUpdateMsg),
   Object.assign({}, msg, {
     payload: shouldRollbackAppliedRating
       ? buildCanonicalRatingMutations('revert', 'game_result_dispute_rollback')
