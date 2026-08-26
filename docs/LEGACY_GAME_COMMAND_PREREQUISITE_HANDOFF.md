@@ -26,6 +26,12 @@ separate from the tracked subscription-enforcement candidate fingerprint
 Relative to the historical prerequisite-only candidate, it changes exactly the
 `func` field of node `e0d7883bc1a9fa8c`; node counts, routes, the `47/36`
 changed/added-node budget, and broken-reference counts remain unchanged.
+The production migration runner remains pinned to the historical
+`035e9d93b70ee8d3b2817280f42539679e5a7ed270bf8f0c242b364ad57a0e02`
+candidate and rejects the combined
+`e730bf8c043e2f33f5a75c6825d56f39a580a10201f77c399d2323f70f9f7e4d`
+source-only identity. This handoff does not authorize either candidate for
+production.
 
 The subscription candidate remains byte-identical at
 `50a9819b9adcac336ac4f1bcbee68ed2902901896c78362fefb2969f1a3b8f1e`.

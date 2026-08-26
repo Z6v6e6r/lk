@@ -18,6 +18,7 @@ import {
 
 const digest = (character) => character.repeat(64);
 const releaseSha = "a".repeat(40);
+const COMBINED_SOURCE_ONLY_CANDIDATE_SHA256 = "e730bf8c043e2f33f5a75c6825d56f39a580a10201f77c399d2323f70f9f7e4d";
 
 const context = {
   target: { databaseName: "games", targetFingerprint: digest("1") },
@@ -99,6 +100,17 @@ test("production execution packet accepts exact short-lived stopped-writer evide
   assert.deepEqual(validate(buildPacket()), {
     deadlineMs: Date.parse("2026-08-26T12:20:00.000Z"),
   });
+});
+
+test("combined source-only candidate is not production-authorized", () => {
+  assert.notEqual(EXPECTED_CANDIDATE_FLOW_SHA256, COMBINED_SOURCE_ONLY_CANDIDATE_SHA256);
+  const combinedCandidate = buildPacket({
+    source: {
+      ...buildPacket().source,
+      candidateFlowSha256: COMBINED_SOURCE_ONLY_CANDIDATE_SHA256,
+    },
+  });
+  assert.throws(() => validate(combinedCandidate), /candidate flow digest mismatch/);
 });
 
 test("production execution packet rejects drift, weak quiescence, stale backup, and reused authority", () => {
