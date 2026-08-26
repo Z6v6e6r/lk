@@ -6357,7 +6357,7 @@ export default function GamesPage({
   const revalidateSelectedSlotForPayment = useCallback(async (): Promise<boolean> => {
     if (!studioId || !selectedDate || !courtId || !time) return false;
     const selectedDateKey = formatDateLocalIso(selectedDate);
-    const leadTimeError = `Бронирование доступно минимум за ${GAME_BOOKING_MIN_LEAD_MINUTES / 60} часа до начала. Выберите другое время.`;
+    const leadTimeError = `Бронирование доступно минимум за ${GAME_BOOKING_MIN_LEAD_MINUTES} минут до начала. Выберите другое время.`;
     if (!checkGameBookingLeadTime(selectedDateKey, time).ok) {
       setPayError(leadTimeError);
       return false;
