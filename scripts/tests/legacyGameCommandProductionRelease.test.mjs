@@ -100,7 +100,7 @@ test("production runbook freezes root custody and both digests before exec", () 
   assert.ok(custody > 0 && protection > custody);
   assert.ok(manifestDigest > protection && installerDigest > manifestDigest);
   assert.ok(execute > installerDigest);
-  assert.match(runbook, /never execute Node from `DELIVERY_BUNDLE`/);
+  assert.match(runbook, /never\s+execute Node from `DELIVERY_BUNDLE`/);
   assert.match(runbook, /! -user root -o -perm \/022/);
   assert.match(runbook, /\$ACTUAL_MANIFEST_SHA256.*\$EXPECTED_MANIFEST_SHA256/);
   assert.match(runbook, /\$ACTUAL_INSTALLER_SHA256.*\$EXPECTED_INSTALLER_SHA256/);
