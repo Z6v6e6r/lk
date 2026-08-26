@@ -18,6 +18,16 @@ import {
   LOCAL_MIGRATION_SENTINEL_ID,
   runLegacyPrerequisiteMode,
 } from "../migrate_legacy_game_command_prerequisites.mjs";
+import {
+  buildProductionMigrationContext,
+  executeProductionMigration,
+  EXPECTED_CANDIDATE_FLOW_SHA256,
+  EXPECTED_LIVE_FLOW_SHA256,
+  PRODUCTION_APPLY_CONFIRMATION,
+  PRODUCTION_MIGRATION_ID,
+  PRODUCTION_PACKET_SCHEMA_VERSION,
+  sha256,
+} from "../run_legacy_game_command_production_migration.mjs";
 
 const mongoUri = String(process.env.LEGACY_COMMAND_TEST_MONGO_URI || "").trim();
 const tenantKey = "local-padel";
@@ -41,6 +51,52 @@ const commandInput = (overrides = {}) => ({
     buildResult: (game) => ({ revision: game.revision, participantCount: game.participantIds.length }),
   }),
   ...overrides,
+});
+
+const isoOffset = (now, offsetMs) => new Date(now.getTime() + offsetMs).toISOString();
+
+const productionPacket = (context, releaseSha, nonce, now) => ({
+  schemaVersion: PRODUCTION_PACKET_SCHEMA_VERSION,
+  migrationId: PRODUCTION_MIGRATION_ID,
+  environment: "test",
+  target: { databaseName: context.target.databaseName, fingerprint: context.target.targetFingerprint },
+  source: {
+    repositoryCommit: releaseSha,
+    liveFlowSha256: EXPECTED_LIVE_FLOW_SHA256,
+    candidateFlowSha256: EXPECTED_CANDIDATE_FLOW_SHA256,
+    packageSha256: context.source.packageSha256,
+    writerRegistrySha256: context.source.writerRegistrySha256,
+    runnerSha256: context.source.runnerSha256,
+    migrationCoreSha256: context.source.migrationCoreSha256,
+  },
+  plan: { digest: context.planDigest, generatedAt: context.generatedAt },
+  backup: {
+    manifestSha256: "5".repeat(64),
+    snapshotIdentitySha256: "6".repeat(64),
+    restoreVerificationSha256: "7".repeat(64),
+    completedAt: isoOffset(now, -6 * 60_000),
+    restoreVerifiedAt: isoOffset(now, -5 * 60_000),
+  },
+  quiescence: {
+    attestationSha256: "8".repeat(64),
+    writerCount: 7,
+    writerRegistrySha256: context.source.writerRegistrySha256,
+    writersStoppedAt: isoOffset(now, -8 * 60_000),
+    observedFrom: isoOffset(now, -7 * 60_000),
+    observedTo: isoOffset(now, -2 * 60_000),
+    expiresAt: isoOffset(now, 20 * 60_000),
+  },
+  runtime: {
+    compatibilityReportSha256: "9".repeat(64),
+    nodeVersion: process.version,
+    mongodbDriverVersion: "test-installed-driver",
+    verifiedAt: isoOffset(now, -4 * 60_000),
+  },
+  authorization: {
+    approvedAt: isoOffset(now, -60_000),
+    expiresAt: isoOffset(now, 20 * 60_000),
+  },
+  execution: { nonce },
 });
 
 test("real replica set proves atomic command, revision, idempotency, recovery, and migrations", {
@@ -657,6 +713,63 @@ test("real replica set proves atomic command, revision, idempotency, recovery, a
     const missingRevision = await service.executeLegacyGameCommandTransaction(commandInput({ expectedRevision: 5 }));
     assert.equal(missingRevision.status, "REJECTED");
     assert.equal(missingRevision.error.code, "LEGACY_GAME_REVISION_REQUIRED");
+  } finally {
+    try { await client.db(databaseName).dropDatabase(); } catch { /* isolated best-effort cleanup */ }
+    await client.close();
+  }
+});
+
+test("production runner audits a disposable replica but blocks apply until an approval trust anchor is bound", {
+  skip: mongoUri ? false : "Set LEGACY_COMMAND_TEST_MONGO_URI to a disposable replica-set Mongo",
+  timeout: 120_000,
+}, async () => {
+  const client = new MongoClient(mongoUri, {
+    appName: "PadlHubLegacyCommandProductionMigrationRehearsal",
+    readPreference: "primary",
+    serverSelectionTimeoutMS: 10_000,
+  });
+  const databaseName = `lk_cmd_prod_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  const releaseSha = "b".repeat(40);
+  const executionNonce = crypto.randomUUID();
+  try {
+    await client.connect();
+    const db = client.db(databaseName);
+    await db.collection(LEGACY_COMMAND_COLLECTIONS.games).insertOne({ tenantKey, id: "needs-revision" });
+    const rating = db.collection("player_rating_state");
+    await rating.createIndex({ playerKey: 1 }, { name: "player_rating_state_key_uq", unique: true });
+    await rating.createIndex(
+      { clientId: 1 },
+      { name: "player_rating_state_client_uq", unique: true, partialFilterExpression: { clientId: { $type: "string" } } },
+    );
+    await rating.createIndex(
+      { phoneNorm: 1 },
+      { name: "player_rating_state_phone_uq", unique: true, partialFilterExpression: { phoneNorm: { $type: "string" } } },
+    );
+
+    const now = new Date();
+    const planTime = new Date(now.getTime() - 3 * 60_000);
+    const context = await buildProductionMigrationContext(db, { now: planTime });
+    assert.equal(context.readyForExecutionPacket, true);
+    assert.equal(context.audit.invalidRevisionCount, 1);
+    const packet = productionPacket(context, releaseSha, executionNonce, now);
+    const packetSha256 = sha256(Buffer.from(JSON.stringify(packet)));
+    await assert.rejects(() => executeProductionMigration(db, {
+      packet,
+      packetSha256,
+      actualPacketSha256: packetSha256,
+      releaseSha,
+      confirmation: PRODUCTION_APPLY_CONFIRMATION,
+      environment: "test",
+      now,
+      evidenceSha256: {
+        backupManifestSha256: "5".repeat(64),
+        restoreVerificationSha256: "7".repeat(64),
+        quiescenceAttestationSha256: "8".repeat(64),
+        runtimeCompatibilitySha256: "9".repeat(64),
+      },
+    }), /approval trust anchor is not bound/);
+    assert.equal((await db.collection(LEGACY_COMMAND_COLLECTIONS.games).findOne({ id: "needs-revision" })).revision, undefined);
+    assert.equal(await db.collection("lk_legacy_game_prerequisite_migration_executions").countDocuments({}), 0);
   } finally {
     try { await client.db(databaseName).dropDatabase(); } catch { /* isolated best-effort cleanup */ }
     await client.close();

@@ -612,6 +612,7 @@ test("new prerequisite sources contain no credential value or Mongo URI", () => 
     "node-red/custom-nodes/legacy-game-command-transaction/legacy-game-command-core.mjs",
     "node-red/custom-nodes/legacy-game-command-transaction/legacy-game-command-node.cjs",
     "scripts/migrate_legacy_game_command_prerequisites.mjs",
+    "scripts/run_legacy_game_command_production_migration.mjs",
     "scripts/patch_live_games_command_prerequisites.mjs",
     "scripts/nodered_legacy_command_prerequisite_nodes/fn_patch_revision_guard.js",
     "scripts/nodered_legacy_command_prerequisite_nodes/fn_patch_revision_query.js",

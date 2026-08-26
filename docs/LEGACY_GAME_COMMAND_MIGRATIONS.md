@@ -9,6 +9,7 @@ This runbook describes a future guarded production task. The current source-only
 - Fresh-flow candidate builder: `scripts/patch_live_games_command_prerequisites.mjs`
 - Writer audit: `scripts/audit_legacy_game_revision_writers.mjs`
 - Migration tool: `scripts/migrate_legacy_game_command_prerequisites.mjs`
+- Production packet runner: `scripts/run_legacy_game_command_production_migration.mjs`
 - Disposable replica gate: `scripts/run_legacy_game_command_replica_tests.sh`
 
 The migration tool supports `audit`, `dry-run`, `apply`, `postcheck`, and `rollback-plan`. It defaults to `audit`. Its current `apply` guard accepts only an explicitly confirmed local/test database through a direct single-host loopback URI and requires a pre-existing destination sentinel bound to the exact database name and a UUID `localTargetId`. Production/shared apply is intentionally disabled until a separate R4 migration task has deployed and verified all mandatory revision writers.
@@ -27,6 +28,8 @@ npm run mongo:legacy-game-command-prerequisites -- --mode rollback-plan
 
 The disposable replica test creates the sentinel itself. A manual local apply must create `lk_local_migration_sentinels/_id=legacy-game-command-prerequisites-local-v1` in advance with exact `databaseName`, `localTargetId`, and `purpose=DISPOSABLE_LEGACY_COMMAND_PREREQUISITE_TEST`. The sentinel is deliberately not auto-created by the migration tool. No command prints the Mongo URI. Audit output contains counts, not documents, user IDs, phones, or profile fields.
 
+The separate production runner is documented in `LEGACY_GAME_COMMAND_PRODUCTION_MIGRATION_RUNNER.md`. It does not weaken the local/test guard. Production apply is currently impossible because its independently controlled approval trust-anchor fingerprint is intentionally unbound; the runner rejects before opening Mongo. A later source task must bind and review detached Ed25519 approval/evidence verification. Even after that, apply also requires a fresh state digest and target fingerprint, exact source/package/runner hashes, protected backup/restore/quiescence/runtime evidence files, a short-lived signed packet, an explicit apply phrase, and a one-time majority-written execution receipt. This source-only task did not connect it to production Mongo or execute any apply mode.
+
 ## Required production order
 
 1. Fresh-pull `/root/.node-red/flows.json` from `lk-primary-147` into a private workspace and freeze its SHA.
@@ -41,6 +44,8 @@ The disposable replica test creates the sentinel itself. A manual local apply mu
 10. Prove active-flow SHA, node graph, Mongo ACK shape, runtime package resolution, and that create/PATCH/result/split/projection writers create or increment a positive revision exactly once. Before enabling result side-effect replay, independently postcheck the existing canonical rating migration indexes `player_rating_state_key_uq`, `player_rating_state_client_uq`, and `player_rating_state_phone_uq` with their exact key/unique/partial-filter contracts. Exercise existing draft/payment-confirm compatibility with explicit revision for every update-existing path.
 11. Resume writers only after a second primary/majority postcheck proves zero drift and exact index name/key/order/unique properties. Any write during steps 6-10 is STOP and restarts the audit.
 12. Only then may an approved mapping process add explicit mappings with trimmed tenant keys and canonical lowercase UUIDs. Keep the future gateway disabled until S2S secret injection, endpoint contract, supported JOIN/LEAVE business rules, and side-effect exclusions pass their own R4 gate.
+
+The runner automates only the safe subset of step 8: revision backfill and exact prerequisite indexes after all other blockers are zero. Historical result/provider identity repairs and mapping rows remain separate evidence-backed migrations.
 
 ## Mapping migration policy
 
