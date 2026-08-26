@@ -1,4 +1,4 @@
-export const GAME_BOOKING_MIN_LEAD_MINUTES = 120;
+export const GAME_BOOKING_MIN_LEAD_MINUTES = 30;
 
 const MOSCOW_UTC_OFFSET = "+03:00";
 const MINUTE_MS = 60_000;

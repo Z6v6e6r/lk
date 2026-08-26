@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SOURCES = {
-  create: ['fn_split_create_prepare.js', '2daf57341d845cc454db4aba7ea8147daef1faa1311f563a8b5f6c3840b3adc3', '19a61024273a478f11bff3ff60c4601603c2af5bd7ec8ec08e4b83394ee7bd41'],
+  create: ['fn_split_create_prepare.js', '19a61024273a478f11bff3ff60c4601603c2af5bd7ec8ec08e4b83394ee7bd41', '6f7d6ec86432f5f3a50d0eb080df8847954841a9fc4637d79cf58fb2742fd689'],
   join: ['fn_split_join_prepare.js', 'e077708db904b7c319ecb639933637f70028ba35d0daef8f35057e72e61ced60', 'bb9c70f29c31ed1f7b1acc1a3c6e1724bc6584df7570a61f7797604e05d3369d'],
   router: ['fn_split_router.js', 'f0a350a3b39f5ffd3b4745752382dd83ff656380c96ed0496f483e383e139584', '892ad51fcb8f2be2a194661e04f9c775d4345fea153e5dbc3758bd40967101f2'],
 };

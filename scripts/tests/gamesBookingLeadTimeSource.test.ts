@@ -4,7 +4,7 @@ import test from "node:test";
 
 const gamesSource = fs.readFileSync("src/components/games/GamesPage.tsx", "utf8");
 
-test("visible game slots are filtered by the 120-minute lead-time guard", () => {
+test("visible game slots are filtered by the 30-minute lead-time guard", () => {
   const slotsStart = gamesSource.indexOf("const durationScopedSlots = useMemo");
   const slotsEnd = gamesSource.indexOf("const availableCourts = useMemo", slotsStart);
   const slotsSource = gamesSource.slice(slotsStart, slotsEnd);
@@ -12,6 +12,13 @@ test("visible game slots are filtered by the 120-minute lead-time guard", () => 
   assert.ok(slotsStart >= 0 && slotsEnd > slotsStart, "duration-scoped slot selector must exist");
   assert.match(slotsSource, /checkGameBookingLeadTime\(/);
   assert.match(slotsSource, /bookingLeadTimeNowTs/);
+});
+
+test("payment rejection explains the 30-minute lead time", () => {
+  assert.match(
+    gamesSource,
+    /Бронирование доступно минимум за \$\{GAME_BOOKING_MIN_LEAD_MINUTES\} минут до начала/,
+  );
 });
 
 test("self payment revalidates the selected slot before calling Viva pay", () => {

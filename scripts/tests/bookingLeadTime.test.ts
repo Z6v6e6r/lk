@@ -17,21 +17,21 @@ test("parses game start in Moscow independently of the runtime timezone", () => 
   assert.equal(parseMoscowGameStart("16.08.2026", "20:20"), null);
 });
 
-test("allows a slot exactly 120 minutes ahead", () => {
+test("allows a slot exactly 30 minutes ahead", () => {
   const nowTs = Date.parse("2026-08-16T18:20:00+03:00");
-  const result = checkGameBookingLeadTime("2026-08-16", "20:20", nowTs);
+  const result = checkGameBookingLeadTime("2026-08-16", "18:50", nowTs);
 
-  assert.equal(GAME_BOOKING_MIN_LEAD_MINUTES, 120);
+  assert.equal(GAME_BOOKING_MIN_LEAD_MINUTES, 30);
   assert.equal(result.ok, true);
   assert.equal(result.startTs, result.earliestStartTs);
 });
 
 test("rejects a stale slot after checkout takes longer than the lead-time boundary", () => {
   const nowTs = Date.parse("2026-08-16T18:22:45+03:00");
-  const result = checkGameBookingLeadTime("2026-08-16", "20:20", nowTs);
+  const result = checkGameBookingLeadTime("2026-08-16", "18:50", nowTs);
 
   assert.equal(result.ok, false);
-  assert.equal(result.startTs, Date.parse("2026-08-16T20:20:00+03:00"));
+  assert.equal(result.startTs, Date.parse("2026-08-16T18:50:00+03:00"));
 });
 
 test("fails closed for malformed date or time", () => {

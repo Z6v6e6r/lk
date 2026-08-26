@@ -12,6 +12,7 @@ const DEFAULT_OPEN_GAME_EXERCISE_TYPE_ID = 1613;
 const DEFAULT_SPLIT_SHARE_COUNT = 4;
 const DEFAULT_PAYMENT_DEADLINE_MINUTES = 25;
 const DEFAULT_ONE_TIME_PRODUCT_AMOUNT = 10000;
+const MIN_BOOKING_LEAD_MINUTES = 30;
 const TOKEN_REQUEST_TIMEOUT_MS = 10000;
 
 const toStr = (value) => {
@@ -228,6 +229,20 @@ if (!date || !fromTime || !toTime || !roomId || !clientPhone) {
   return fail(400, "date, fromTime, toTime, roomId and clientPhone are required");
 }
 
+const startAtIso = `${date}T${fromTime}:00+03:00`;
+const startAtTs = Date.parse(startAtIso);
+if (!Number.isFinite(startAtTs)) {
+  return fail(400, "Некорректные дата или время начала", {
+    code: "INVALID_BOOKING_START",
+  });
+}
+if (startAtTs < Date.now() + MIN_BOOKING_LEAD_MINUTES * 60 * 1000) {
+  return fail(409, `Бронирование доступно минимум за ${MIN_BOOKING_LEAD_MINUTES} минут до начала. Выберите другое время.`, {
+    code: "BOOKING_LEAD_TIME_TOO_SHORT",
+    minLeadMinutes: MIN_BOOKING_LEAD_MINUTES,
+  });
+}
+
 const bodyShareCount = Math.floor(toNumber(body.shareCount) || 0);
 const shareCount = bodyShareCount === 2 || isSinglesGame(body) ? 2 : DEFAULT_SPLIT_SHARE_COUNT;
 const durationMinutes = resolveDurationMinutes(fromTime, toTime, null);
@@ -283,8 +298,6 @@ const paymentDeadlineMinutes = Math.max(
   1,
   Math.min(180, Math.floor(toNumber(body.paymentDeadlineMinutes) ?? DEFAULT_PAYMENT_DEADLINE_MINUTES)),
 );
-const startAtIso = `${date}T${fromTime}:00+03:00`;
-const startAtTs = Date.parse(startAtIso);
 const assembleDeadlineAt = Number.isFinite(startAtTs)
   ? new Date(startAtTs - 24 * 60 * 60 * 1000).toISOString()
   : null;

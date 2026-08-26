@@ -16,7 +16,16 @@ function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
       return undefined;
     },
   };
-  return new Function("msg", "global", "env", source)(msg, globalContext, env);
+  class FixedDate extends Date {
+    constructor(...args: ConstructorParameters<typeof Date>) {
+      super(...(args.length ? args : ["2026-06-01T00:00:00.000Z"]));
+    }
+
+    static now() {
+      return Date.parse("2026-06-01T00:00:00.000Z");
+    }
+  }
+  return new Function("msg", "Date", "global", "env", source)(msg, FixedDate, globalContext, env);
 }
 
 test("game create promotes splitPayment vivaExerciseId into booking and metadata", () => {
