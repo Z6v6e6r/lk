@@ -38,6 +38,10 @@ The current host permission and executor-identity prerequisites, including their
 independent mutation and recovery gates, are specified in
 `LEGACY_GAME_COMMAND_HOST_HARDENING_PLAN.md`; that source-only plan must be completed
 before custody transfer is attempted.
+Because the observed host lacks ACL inspection tools and `/` is other-writable, the H1
+gate additionally requires the package-free static audit/apply procedure in
+`LEGACY_GAME_COMMAND_ROOT_ACL_BOOTSTRAP.md`. Package installation, mode-only evidence,
+or raw path-based `chmod` cannot substitute for that prerequisite.
 
 ## Build and read-only plan
 
