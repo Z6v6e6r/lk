@@ -4,12 +4,13 @@ Status: source-only R4 prerequisite. This document and its runner do not authori
 production database connection, package installation, writer quiescence, migration,
 Node-RED import/restart, mapping import, deploy, or provider call.
 
-Production `apply` is additionally fail-closed in source because
-`PRODUCTION_APPROVAL_TRUST_ANCHOR_SHA256` is intentionally unbound. The runner rejects
-`apply` before opening a Mongo connection. Binding an independently controlled
-Ed25519 approval public-key fingerprint, defining detached-signature verification,
-and reviewing the strict evidence schemas is a separate R4 source task; generating or
-choosing that key is not authorized here.
+Production `apply` is additionally fail-closed in source because the source-controlled
+trust-anchor manifest remains `UNBOUND`. The runner now implements domain-separated
+detached Ed25519 verification, canonical JSON, exact evidence schemas, and public-key
+fingerprint binding before Mongo, but no production public-key fingerprint has been
+selected. The independent custody and exact binding procedure is documented in
+`LEGACY_GAME_COMMAND_PRODUCTION_TRUST_ANCHOR.md`; generating or choosing that key is not
+authorized by this source task.
 
 ## Purpose and boundaries
 
@@ -45,8 +46,12 @@ The current runner accepts only:
 - live full-flow SHA-256 `0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e`;
 - source-only candidate SHA-256 `035e9d93b70ee8d3b2817280f42539679e5a7ed270bf8f0c242b364ad57a0e02`;
 - all seven writers in `scripts/legacy_game_revision_writers.json`;
-- the exact custom-node package, runner, migration-core, and writer-registry hashes
-  calculated by the fresh audit process.
+- the exact custom-node package, runner, migration-core, writer-registry,
+  approval-verifier, source trust-anchor manifest, root package, dependency lock,
+  Node executable, and installed MongoDB driver package hashes calculated by the fresh
+  audit process;
+- a custodian-owned read-only release attestation that binds the deployed commit and
+  every executable source hash from outside the migration executor identity.
 
 The live flow was pulled read-only from
 `root@lk-primary-147:/root/.node-red/flows.json`: `4762` source nodes, `4798`
@@ -69,6 +74,7 @@ npm run mongo:legacy-game-command-prerequisites:production -- \
 
 npm run mongo:legacy-game-command-prerequisites:production -- \
   --mode dry-run \
+  --release-attestation /absolute/custodian/release-attestation.json \
   --out /absolute/private/dry-run.json
 ```
 
@@ -77,6 +83,11 @@ index classification, and `planDigest`. It contains no URI, hostname, document,
 user ID, phone, mapping identity, game ID, or result ID. The output path is created
 once with mode `0600`; an existing file is never overwritten.
 
+Without `--release-attestation`, read-only modes remain useful for an unbound audit but
+always report `readyForExecutionPacket=false`. The attested dry-run must execute from a
+custodian-owned read-only release under a separate unprivileged executor; the runner
+rejects source or release-attestation paths writable by that executor.
+
 `readyForExecutionPacket=true` means only that the automated migration surface is
 clean: identity/mapping/ledger/outbox duplicates and invalid rows are zero, index
 definitions do not conflict, and all three existing rating indexes exactly match.
@@ -84,14 +95,17 @@ It is not migration or deploy approval.
 
 ## Mandatory execution evidence
 
-An apply requires all five caller-owned private regular files, each with one hardlink
-and no group/other access:
+An apply requires a custodian-owned read-only release attestation, six caller-owned
+private regular files with one hardlink and no group/other access, plus the
+fingerprint-bound public key:
 
-1. execution packet, at most 64 KiB;
-2. backup manifest;
-3. restore-verification report;
-4. stopped-writer/quiescence attestation;
-5. runtime package/driver compatibility report.
+1. release attestation, at most 64 KiB and outside executor control;
+2. execution packet, at most 64 KiB;
+3. detached approval signature envelope;
+4. backup manifest;
+5. restore-verification report;
+6. stopped-writer/quiescence attestation;
+7. runtime package/driver compatibility report.
 
 The last four files may be up to 16 MiB. Their exact byte hashes must equal the
 hashes in the execution packet. A packet with invented hashes and no matching files
@@ -115,10 +129,18 @@ The reviewed packet has this shape (values are illustrative placeholders):
     "packageSha256": "<fresh audit value>",
     "writerRegistrySha256": "<fresh audit value>",
     "runnerSha256": "<fresh audit value>",
-    "migrationCoreSha256": "<fresh audit value>"
+    "migrationCoreSha256": "<fresh audit value>",
+    "approvalVerifierSha256": "<fresh audit value>",
+    "trustAnchorManifestSha256": "<fresh audit value>",
+    "rootPackageSha256": "<fresh audit value>",
+    "dependencyLockSha256": "<fresh audit value>",
+    "nodeExecutableSha256": "<fresh audit value>",
+    "mongodbRuntimeClosureSha256": "<fresh audit value>",
+    "releaseAttestationSha256": "<custodian release-attestation file SHA-256>"
   },
   "plan": {
     "digest": "<fresh dry-run planDigest>",
+    "stateDigest": "<fresh dry-run stateDigest>",
     "generatedAt": "<RFC3339 inside quiescence observation>"
   },
   "backup": {
@@ -158,10 +180,10 @@ must complete after writers stopped and before the observed window closes, resto
 verification must follow backup completion, and the fresh plan must be generated
 inside the attested quiescence window.
 
-## Apply gate (blocked pending trust-anchor task and future separate approval)
+## Apply gate (blocked pending exact public-key binding and future separate approval)
 
 The command below is documentary and cannot execute in the current source state.
-After a separate reviewed trust-anchor change and exact execution approval, repeat fresh fetch/source audit,
+After a separate reviewed manifest binding and exact execution approval, repeat fresh fetch/source audit,
 runtime proof, backup/restore proof, writer stop, quiescence observation, and
 production dry-run. Recompute the packet file SHA-256 without rewriting the file.
 
@@ -172,6 +194,9 @@ npm run mongo:legacy-game-command-prerequisites:production -- \
   --mode apply \
   --execution-packet /absolute/private/execution-packet.json \
   --expected-packet-sha256 '<exact packet file SHA-256>' \
+  --release-attestation /absolute/custodian/release-attestation.json \
+  --approval-public-key /absolute/private/approval-public-key.pem \
+  --approval-signature /absolute/private/approval-signature.json \
   --backup-manifest /absolute/private/backup-manifest.json \
   --restore-verification /absolute/private/restore-verification.json \
   --quiescence-attestation /absolute/private/quiescence-attestation.json \
@@ -179,11 +204,18 @@ npm run mongo:legacy-game-command-prerequisites:production -- \
   --out /absolute/private/apply-result.json
 ```
 
-After signature binding, before the first backfill/index mutation, the runner inserts a majority-written
-`APPLYING` receipt keyed by the one-time nonce. A reused nonce is rejected. A partial
-failure records `FAILED` best-effort and requires read-only postcheck plus an explicit
-recovery decision; blind retry is forbidden. A successful run requires an exact
-postcheck and majority acknowledgement of the `SUCCEEDED` receipt.
+After trust-anchor binding and signature verification, before the first backfill/index
+mutation, the runner inserts a majority-written `APPLYING` receipt keyed by the one-time
+nonce. Any insert error or unacknowledged result triggers a primary/majority read-back;
+an exact receipt becomes `RECOVERY_REQUIRED`, a conflicting nonce is rejected, and an
+absent or unreadable result remains `UNKNOWN`. None of those branches may start the
+migration. This bounded receipt read-back remains allowed after the short-lived mutation
+authority expires. The CLI emits a distinct safe code and, when `--out` was reserved,
+writes a private `STOPPED` failure report so the required recovery branch is not lost.
+A partial failure after an acknowledged receipt records `FAILED` best-effort
+and requires read-only postcheck plus an explicit recovery decision; blind retry is
+forbidden. A successful run requires an exact postcheck and majority acknowledgement
+of the `SUCCEEDED` receipt.
 
 ## Postcheck and recovery
 
@@ -214,5 +246,8 @@ npm run test:legacy-game-command-prerequisites:mongo
 
 It proves the existing sentinel-bound local revision backfill and exact index
 postcheck, then proves the production runner can generate a fresh target/state audit
-but performs zero writes while its approval trust anchor is unbound. The test creates
-a unique temporary database and removes it at the end.
+but performs zero writes while its source manifest is unbound. Unit tests separately
+prove valid and invalid detached Ed25519 signatures plus strict evidence schemas using
+in-memory temporary keys. They also bind the packet to the actual `process.version`,
+installed MongoDB driver version, dependency lock, and immutable runtime artifact
+digests. The replica test creates a unique temporary database and removes it at the end.
