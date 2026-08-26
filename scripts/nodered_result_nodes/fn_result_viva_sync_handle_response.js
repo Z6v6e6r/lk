@@ -16,7 +16,11 @@ const task = isObject(msg._resultVivaSyncTask)
     syncSignature: msg.payload.syncSignature || msg.payload.batchId || null,
   } : null);
 
-if (!task || !task.outboxId) {
+const tenantKey = toStr(task?.tenantKey);
+const resultId = toStr(task?.resultId);
+const resultRevision = Number(task?.resultRevision);
+if (!task || !task.outboxId || !tenantKey || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(tenantKey)
+  || !resultId || !Number.isSafeInteger(resultRevision) || resultRevision < 1) {
   return [null, null, msg];
 }
 
@@ -36,10 +40,10 @@ const errorReason = ok
 const lastSuccessAt = ok ? attemptedAt : null;
 
 const statusPayload = [
-  { _id: task.outboxId },
+  { _id: task.outboxId, id: task.outboxId, tenantKey, resultId, resultRevision },
   {
     $set: {
-      status: ok ? 'SYNCED' : 'FAILED',
+      status: ok ? 'SYNCED' : 'UNKNOWN',
       updatedAt: attemptedAt,
       lastAttemptAt: attemptedAt,
       lastSuccessAt,
@@ -48,18 +52,20 @@ const statusPayload = [
       responsePayload: payload || msg.payload || null,
       syncedAt: ok ? attemptedAt : null,
       auditEventId,
+      retryable: false,
     },
   },
-  { upsert: true },
+  { upsert: false, writeConcern: { w: 'majority' } },
 ];
 
 const joinPayload = {
   outboxId: task.outboxId,
+  tenantKey,
   ok,
-  status: ok ? 'SYNCED' : 'FAILED',
+  status: ok ? 'SYNCED' : 'UNKNOWN',
   player: task.player || null,
-    resultId: task.resultId || null,
-    resultRevision: Number.isInteger(Number(task.resultRevision)) ? Number(task.resultRevision) : null,
+    resultId,
+    resultRevision,
     syncSignature: toStr(task.syncSignature),
     attempts: nextAttempts,
     attemptedAt,
@@ -69,8 +75,5 @@ const joinPayload = {
   httpStatus,
 };
 
-return [
-  Object.assign({}, msg, { payload: statusPayload }),
-  msg._resultVivaSyncBatch ? Object.assign({}, msg, { payload: joinPayload }) : null,
-  Object.assign({}, msg, { payload: joinPayload }),
-];
+msg._resultVivaSyncDeferred = { ok, error: errorReason, joinPayload };
+return [Object.assign({}, msg, { payload: statusPayload }), null, null];

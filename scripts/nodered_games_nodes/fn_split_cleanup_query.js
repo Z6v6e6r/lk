@@ -165,6 +165,13 @@ if (internalScheduler) {
 }
 
 const gameId = toStr(query.gameId ?? body.gameId);
+let tenantKey = null;
+try { tenantKey = toStr(env.get("PADLHUB_PLATFORM_TENANT_KEY")); } catch { tenantKey = null; }
+if (!tenantKey || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(tenantKey)) {
+  msg.statusCode = 503;
+  msg.payload = { ok: false, code: "LEGACY_GAME_TENANT_CONFIG_INVALID", error: "Cleanup tenant is not configured" };
+  return [null, msg, msg];
+}
 const force = toBoolean(query.force ?? body.force) === true;
 const dryRun = internalScheduler && msg._splitCleanupLifecycleMode !== "ENFORCE_NEW"
   ? true
@@ -185,11 +192,13 @@ const nowIso = new Date(nowTs).toISOString();
 
 const mongoQuery = force && gameId
   ? {
+      tenantKey,
       archived: { $ne: true },
       status: { $nin: ["CANCELLED", "CANCELED"] },
       id: gameId,
     }
   : {
+      tenantKey,
       archived: { $ne: true },
       status: { $nin: ["CANCELLED", "CANCELED"] },
       $or: [
@@ -211,6 +220,7 @@ msg._splitCleanupRequest = {
   limit,
   force,
   gameId,
+  tenantKey,
   intent,
   preferredRefundMethod,
   cancellationActionId,

@@ -69,6 +69,14 @@ if (!gameId) {
   msg.payload = { error: "gameId is required" };
   return [null, msg, msg];
 }
+let tenantKey = null;
+try { tenantKey = toStr(env.get("PADLHUB_PLATFORM_TENANT_KEY")); } catch { tenantKey = null; }
+if (!tenantKey || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(tenantKey)) {
+  msg.statusCode = 503;
+  msg.headers = { "Content-Type": "application/json; charset=utf-8" };
+  msg.payload = { error: "Result tenant is not configured", code: "LEGACY_GAME_TENANT_CONFIG_INVALID" };
+  return [null, msg, msg];
+}
 
 const body = (msg.payload && typeof msg.payload === "object") ? msg.payload : {};
 const resultSession = (body.resultSession && typeof body.resultSession === "object") ? body.resultSession : {};
@@ -150,9 +158,20 @@ for (const pairing of setPairings) {
   }
   seenSetIndexes.add(pairing.setIndex);
 }
+const idempotencyKey = toStr(body.idempotencyKey || body.requestId || body.clientMutationId);
+if (!idempotencyKey || !/^[A-Za-z0-9][A-Za-z0-9:._-]{7,159}$/.test(idempotencyKey)) {
+  msg.statusCode = 400;
+  msg.headers = { "Content-Type": "application/json; charset=utf-8" };
+  msg.payload = {
+    error: "A canonical result idempotency key is required",
+    code: "RESULT_IDEMPOTENCY_KEY_INVALID",
+  };
+  return [null, msg, msg];
+}
 
 msg._resultSubmit = {
   gameId,
+  tenantKey,
   phone,
   actor,
   scoreA: Math.round(scoreA),
@@ -160,11 +179,11 @@ msg._resultSubmit = {
   sets,
   setPairings,
   attachments: asArray(body.photos || body.attachments),
-  idempotencyKey: toStr(body.idempotencyKey || body.requestId || body.clientMutationId),
+  idempotencyKey,
   sessionId: toStr(body.sessionId || resultSession.sessionId),
   sessionRevision: toNum(body.sessionRevision ?? resultSession.sessionRevision ?? resultSession.revision),
   rosterSnapshot,
 };
 
-msg.payload = { id: gameId, archived: { $ne: true } };
+msg.payload = { tenantKey, id: gameId, archived: { $ne: true } };
 return [msg, null, msg];

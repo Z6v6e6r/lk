@@ -479,5 +479,10 @@ msg._resultSubmit = Object.assign({}, ctx, {
     teamSlots: pairing.publicTeamSlots,
   })),
 });
-msg.payload = { gameId: game.id, deleted: { $ne: true } };
+if (!ctx.tenantKey || game.tenantKey !== ctx.tenantKey) {
+  msg.statusCode = 409;
+  msg.payload = { error: "Game tenant mismatch", code: "LEGACY_GAME_TENANT_CONFLICT" };
+  return [null, msg, msg];
+}
+msg.payload = { tenantKey: ctx.tenantKey, gameId: game.id, deleted: { $ne: true } };
 return [msg, null, msg];

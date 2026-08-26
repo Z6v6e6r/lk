@@ -18,6 +18,14 @@ if (!gameId) {
   msg.payload = { error: "gameId is required" };
   return [null, msg, msg];
 }
+let tenantKey = null;
+try { tenantKey = toStr(env.get("PADLHUB_PLATFORM_TENANT_KEY")); } catch { tenantKey = null; }
+if (!tenantKey || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(tenantKey)) {
+  msg.statusCode = 503;
+  msg.headers = { "Content-Type": "application/json; charset=utf-8" };
+  msg.payload = { error: "Result tenant is not configured", code: "LEGACY_GAME_TENANT_CONFIG_INVALID" };
+  return [null, msg, msg];
+}
 
 const body = (msg.payload && typeof msg.payload === 'object') ? msg.payload : {};
 const trustedActor = (msg._resultActor && typeof msg._resultActor === 'object')
@@ -72,11 +80,12 @@ if (url.includes('/dispute') || url.includes('/revert') || bodyAction === 'DISPU
 
 msg._resultConfirm = {
   gameId,
+  tenantKey,
   phone,
   actor,
   action,
   correctionPayload: body.correction || body.correctionPayload || null,
   reason: toStr(body.reason || body.disputeReason),
 };
-msg.payload = { id: gameId, archived: { $ne: true } };
+msg.payload = { tenantKey, id: gameId, archived: { $ne: true } };
 return [msg, null, msg];

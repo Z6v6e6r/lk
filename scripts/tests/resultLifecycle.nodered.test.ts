@@ -8,8 +8,26 @@ function runNodeRedFunction(
   environment: Record<string, string> = {},
 ) {
   const source = fs.readFileSync(file, "utf8");
-  const env = { get: (name: string) => environment[name] };
-  return new Function("msg", "env", source)(msg, env);
+  const values = { PADLHUB_PLATFORM_TENANT_KEY: "tenant-1", ...environment };
+  const env = { get: (name: string) => values[name] };
+  const input = file.endsWith("fn_result_submit_prepare.js")
+    ? {
+        ...msg,
+        payload: {
+          idempotencyKey: "test-result-idempotency-key",
+          ...(msg.payload as Record<string, unknown>),
+        },
+      }
+    : file.endsWith("fn_result_submit_build_insert.js")
+      ? {
+          ...msg,
+          _resultSubmit: {
+            idempotencyKey: "test-result-idempotency-key",
+            ...(msg._resultSubmit as Record<string, unknown>),
+          },
+        }
+    : msg;
+  return new Function("msg", "env", source)(input, env);
 }
 
 function withFixedNow<T>(nowIso: string, callback: () => T): T {
@@ -26,6 +44,8 @@ function withFixedNow<T>(nowIso: string, callback: () => T): T {
 function finishedGame(overrides: Record<string, unknown> = {}) {
   return {
     id: "game-1",
+    tenantKey: "tenant-1",
+    revision: 1,
     booking: { endTs: Date.now() - 60_000, vivaExerciseId: "viva-1" },
     participants: [
       { id: "p1", phoneNorm: "79000000001", name: "A1", ratingNumeric: 3.1 },
@@ -521,6 +541,7 @@ test("v2 submit does not depend on roster ratings and confirm skips synchronous 
   ) as any[];
   assert.equal(confirmOut[0].payload[1].$set.status, "CONFIRMED");
   assert.deepEqual(confirmOut[0]._resultConfirmBundle.ratingsPayload, []);
+  assert.equal(confirmOut[0]._resultConfirmOutbox.sourceGameRevision, 1);
   assert.equal(confirmOut[4].payload.ratingApplied, false);
 });
 
@@ -875,7 +896,15 @@ test("repeat submit with same payload is idempotent and emits no second rating u
     submittedAtTs: Date.now(),
   };
   const out = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_submit_build_insert.js", {
-    _resultSubmit: { gameId: "game-1", scoreA: 7, scoreB: 6, sets: [{ left: 7, right: 6 }], setPairings: [] },
+    _resultSubmit: {
+      tenantKey: "tenant-1",
+      gameId: "game-1",
+      game: { id: "game-1", tenantKey: "tenant-1", resultId: "res-1", resultLifecycleState: "PENDING_REVIEW" },
+      scoreA: 7,
+      scoreB: 6,
+      sets: [{ left: 7, right: 6 }],
+      setPairings: [],
+    },
     payload: [latest],
   }) as unknown[];
   assert.equal(out[0], null);
@@ -907,7 +936,8 @@ test("correction submit creates a new immutable score revision", () => {
       setPairings: [],
       resolvedSetPairings: [],
       actorMember: { id: "p1", memberKey: "id:p1", phoneNorm: "79000000001", name: "Author" },
-      game: { id: "game-1", settings: { ratingGame: true } },
+      tenantKey: "tenant-1",
+      game: { id: "game-1", tenantKey: "tenant-1", settings: { ratingGame: true } },
       ratingEnabled: true,
     },
     payload: [latest],
@@ -1084,7 +1114,8 @@ test("dispute on pending review opens correction context without rating rollback
   assert.equal(out[0].payload[1].$set.status, "CORRECTION_PENDING");
   assert.equal(out[0].payload[1].$set.disputeState, "DISPUTED");
   assert.equal(out[0].payload[1].$set["ratingEvent.status"], "DISPUTED");
-  assert.equal(Array.isArray(out[0].payload[0].$or), true);
+  assert.equal(out[0].payload[0].tenantKey, "tenant-1");
+  assert.equal(Array.isArray(out[0].payload[0].$and), true);
   assert.equal(out[0].payload[1].$set.revision, 2);
   assert.equal(out[0]._resultConfirmBundle.syncBatch, null);
   assert.equal(out[1].payload.length, 0);
@@ -1146,7 +1177,8 @@ test("dispute rolls provisional impact back for legacy provisional-applied resul
   assert.equal(out[0].payload[1].$set.status, "CORRECTION_PENDING");
   assert.equal(out[0].payload[1].$set.disputeState, "DISPUTED");
   assert.equal(out[0].payload[1].$set["ratingEvent.status"], "REVERTED");
-  assert.equal(Array.isArray(out[0].payload[0].$or), true);
+  assert.equal(out[0].payload[0].tenantKey, "tenant-1");
+  assert.equal(Array.isArray(out[0].payload[0].$and), true);
   assert.equal(out[0].payload[1].$set.revision, 2);
   assert.equal(out[0]._resultConfirmBundle.syncBatch.tasks.length, 2);
   assert.equal(out[1].payload[0].update.$set.ratingNumeric, 3);
@@ -1235,7 +1267,8 @@ test("accept-correction reapplies ratings and finalizes result", () => {
   }) as any[];
 
   assert.equal(out[0].payload[1].$set.status, "CONFIRMED");
-  assert.equal(Array.isArray(out[0].payload[0].$or), true);
+  assert.equal(out[0].payload[0].tenantKey, "tenant-1");
+  assert.equal(Array.isArray(out[0].payload[0].$and), true);
   assert.equal(out[0].payload[1].$set.revision, 2);
   assert.equal(out[0]._resultConfirmBundle.syncBatch.tasks.length, 2);
   assert.equal(out[1].payload[0].update.$set.ratingNumeric, 3.2);
@@ -1283,7 +1316,7 @@ test("canonical rating writer appends immutable event before preparing current s
   assert.deepEqual(eventMsg.payload, [
     mutation.eventOperation.query,
     mutation.eventOperation.update,
-    { upsert: true },
+    { upsert: true, writeConcern: { w: "majority" } },
   ]);
   assert.deepEqual(eventMsg._ratingLedgerStateOperation, mutation.stateOperation);
 
@@ -1292,7 +1325,7 @@ test("canonical rating writer appends immutable event before preparing current s
   assert.deepEqual(stateMsg.payload, [
     mutation.stateOperation.query,
     mutation.stateOperation.update,
-    { upsert: true },
+    { upsert: true, writeConcern: { w: "majority" } },
   ]);
   assert.equal(stateMsg._ratingLedgerStateOperation, undefined);
 
@@ -1486,6 +1519,7 @@ test("CAS router attaches Viva projection to canonical mutations instead of runn
 test("Viva sync finalize summarizes partial failures and prepares result summary update", () => {
   const out = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_viva_sync_finalize_batch.js", {
     _resultVivaSyncBatch: {
+      tenantKey: "tenant-1",
       syncSignature: "sync-1",
       resultId: "res-1",
       resultRevision: 2,
@@ -1507,10 +1541,12 @@ test("Viva sync finalize summarizes partial failures and prepares result summary
   }) as any[];
 
   assert.equal(out[0].payload[0].revision, 2);
+  assert.equal(out[0].payload[0].tenantKey, "tenant-1");
+  assert.equal(out[0].payload[2].writeConcern.w, "majority");
   assert.equal(out[0].payload[1].$set.vivaSync.status, "PARTIAL_SUCCESS");
   assert.equal(out[0].payload[1].$set.vivaSync.syncedPlayers, 1);
-  assert.equal(out[1].payload.vivaSync.status, "PARTIAL_SUCCESS");
-  assert.equal(out[1].payload.result.vivaSync.failures[0].reason, "Missing clientId for Viva sync");
+  assert.equal(out[1], null);
+  assert.equal(out[2].payload.responseDeferred, true);
 });
 
 test("state response returns sanitized vivaSync summary for latest result", () => {
@@ -1565,6 +1601,7 @@ test("retry prepare maps stored outbox row into sync task and skips exhausted ro
   const prepared = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_viva_sync_retry_prepare.js", {
     payload: {
       _id: "out-1",
+      tenantKey: "tenant-1",
       syncSignature: "sync-1",
       mode: "apply",
       source: "game_result_confirm",
@@ -1578,6 +1615,7 @@ test("retry prepare maps stored outbox row into sync task and skips exhausted ro
     },
   }) as any[];
   assert.equal(prepared[0].payload.outboxId, "out-1");
+  assert.equal(prepared[0].payload.tenantKey, "tenant-1");
   assert.equal(prepared[0].payload.attempts, 2);
   assert.equal(prepared[0].payload.payload.clientId, "p1");
 
@@ -1594,12 +1632,33 @@ test("retry prepare maps stored outbox row into sync task and skips exhausted ro
 });
 
 test("viva sync response increments attempts and summary rebuild reflects recovered success", () => {
+  const prepared = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_viva_sync_outbox_prepare.js", {
+    payload: {
+      outboxId: "result_viva_sync:tenant-1:out-1",
+      tenantKey: "tenant-1",
+      resultId: "res-1",
+      resultRevision: 2,
+      syncSignature: "sync-1",
+      payload: { clientId: "p1" },
+    },
+  }) as any;
+  assert.deepEqual(prepared.payload[0], {
+    _id: "result_viva_sync:tenant-1:out-1",
+    id: "result_viva_sync:tenant-1:out-1",
+    tenantKey: "tenant-1",
+    resultId: "res-1",
+    resultRevision: 2,
+  });
+  assert.equal(prepared.payload[1].$setOnInsert.resultId, "res-1");
+  assert.equal(prepared.payload[1].$setOnInsert.resultRevision, 2);
+
   const handled = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_viva_sync_handle_response.js", {
     statusCode: 200,
     payload: { ok: true, auditEventId: "evt-1" },
     _resultVivaSyncAttemptedAt: "2026-06-21T09:00:00.000Z",
     _resultVivaSyncTask: {
       outboxId: "out-1",
+      tenantKey: "tenant-1",
       auditEventId: "evt-1",
       player: { id: "p1", name: "A1", phoneNorm: "79000000001" },
       resultId: "res-1",
@@ -1610,13 +1669,24 @@ test("viva sync response increments attempts and summary rebuild reflects recove
   }) as any[];
 
   assert.equal(handled[0].payload[1].$set.attempts, 3);
-  assert.equal(handled[2].payload.attempts, 3);
+  assert.deepEqual(handled[0].payload[0], {
+    _id: "out-1",
+    id: "out-1",
+    tenantKey: "tenant-1",
+    resultId: "res-1",
+    resultRevision: 2,
+  });
+  assert.equal(handled[0].payload[2].upsert, false);
+  assert.equal(handled[0]._resultVivaSyncDeferred.joinPayload.attempts, 3);
+  assert.equal(handled[2], null);
 
   const rebuilt = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_viva_sync_rebuild_summary.js", {
     payload: [
       {
         status: "SYNCED",
+        tenantKey: "tenant-1",
         resultId: "res-1",
+        resultRevision: 2,
         syncSignature: "sync-1",
         attempts: 3,
         lastAttemptAt: "2026-06-21T09:00:00.000Z",
@@ -1626,7 +1696,9 @@ test("viva sync response increments attempts and summary rebuild reflects recove
       },
       {
         status: "SYNCED",
+        tenantKey: "tenant-1",
         resultId: "res-1",
+        resultRevision: 2,
         syncSignature: "sync-1",
         attempts: 1,
         lastAttemptAt: "2026-06-21T08:00:00.000Z",
@@ -1638,6 +1710,33 @@ test("viva sync response increments attempts and summary rebuild reflects recove
   }) as any[];
 
   assert.equal(rebuilt[0].payload[1].$set.vivaSync.status, "SUCCESS");
+  assert.deepEqual(rebuilt[0].payload[0], { tenantKey: "tenant-1", id: "res-1", revision: 2 });
+  assert.equal(rebuilt[0].payload[2].writeConcern.w, "majority");
   assert.equal(rebuilt[0].payload[1].$set.vivaSync.syncedPlayers, 2);
   assert.equal(rebuilt[0].payload[1].$set.vivaSync.attempts, 3);
+});
+
+test("Viva summary query and rebuild fail closed across tenant or revision boundaries", () => {
+  const prepared = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_viva_sync_prepare_summary_query.js", {
+    payload: {
+      tenantKey: "tenant-1",
+      syncSignature: "sync-1",
+      resultId: "res-1",
+      resultRevision: 2,
+    },
+  }) as any[];
+  assert.deepEqual(prepared[0].payload, {
+    tenantKey: "tenant-1",
+    syncSignature: "sync-1",
+    resultId: "res-1",
+    resultRevision: 2,
+    kind: "VIVA_ONBOARDING_LEVEL",
+  });
+  const mismatched = runNodeRedFunction("scripts/nodered_result_nodes/fn_result_viva_sync_rebuild_summary.js", {
+    payload: [
+      { tenantKey: "tenant-1", resultId: "res-1", resultRevision: 2, status: "SYNCED" },
+      { tenantKey: "tenant-2", resultId: "res-1", resultRevision: 2, status: "SYNCED" },
+    ],
+  }) as any[];
+  assert.equal(mismatched[0], null);
 });

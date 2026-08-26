@@ -53,7 +53,7 @@ const isExpireAction = action === "EXPIRE";
 const isAcceptCorrectionAction = action === "ACCEPT_CORRECTION";
 const isConfirmAction = action === "CONFIRM" || isExpireAction || isAcceptCorrectionAction;
 
-const activeStatuses = ["PENDING_REVIEW", "CORRECTION_PENDING", "CONFIRMED"];
+const activeStatuses = ["PENDING_REVIEW", "CORRECTION_PENDING", "CONFIRMED", "NO_RESULT_EXPIRED"];
 const latest = rows
   .filter((item) => item && typeof item === "object" && activeStatuses.includes(String(item.status || "").toUpperCase()))
   .sort((left, right) => Number(right?.submittedAtTs || right?.createdTs || 0) - Number(left?.submittedAtTs || left?.createdTs || 0))[0] || null;
@@ -81,6 +81,47 @@ const correctionExpired = status === "CORRECTION_PENDING"
   && Number.isFinite(correctionDeadlineTs)
   && correctionDeadlineTs > 0
   && correctionDeadlineTs <= nowTs;
+const priorOutbox = latest?.legacyGameProjectionOutbox;
+const priorTransitionAction = String(priorOutbox?.transitionAction || "").toUpperCase();
+const replayActionMatches = priorTransitionAction === action
+  || (status === "NO_RESULT_EXPIRED" && action === "EXPIRE" && priorTransitionAction === "EXPIRE_CRON");
+const sameTransitionReplay = priorOutbox?.version === 2
+  && replayActionMatches
+  && String(priorOutbox?.transitionStatus || "").toUpperCase() === status
+  && toStr(priorOutbox?.tenantKey) === toStr(latest?.tenantKey)
+  && toStr(priorOutbox?.resultId) === toStr(latest?.id || latest?._id)
+  && Number(priorOutbox?.resultRevision) === Number(latest?.revision)
+  && Boolean(toStr(priorOutbox?.payloadJson));
+if (!sameTransitionReplay && priorOutbox !== undefined && priorOutbox !== null) {
+  const successfulSinkStates = new Set(["DELIVERED", "SKIPPED", "SUPERSEDED"]);
+  const priorOutboxDelivered = priorOutbox?.version === 2
+    && priorOutbox?.status === "DELIVERED"
+    && Array.isArray(priorOutbox?.sinks)
+    && priorOutbox.sinks.every((sink) => successfulSinkStates.has(String(sink?.status || "").toUpperCase()));
+  if (!priorOutboxDelivered) {
+    const recoveryRequired = priorOutbox?.status === "RECOVERY_REQUIRED"
+      || priorOutbox?.sinks?.some?.((sink) => String(sink?.status || "").toUpperCase() === "UNKNOWN");
+    msg.statusCode = recoveryRequired ? 202 : 409;
+    msg.headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
+    msg.payload = {
+      error: recoveryRequired
+        ? "Previous result side effects require reconciliation"
+        : "Previous result side effects are not terminal",
+      code: recoveryRequired
+        ? "RESULT_SIDE_EFFECT_RECOVERY_REQUIRED"
+        : "RESULT_SIDE_EFFECTS_NOT_TERMINAL",
+      recoveryRequired: Boolean(recoveryRequired),
+      bundleId: toStr(priorOutbox?.bundleId),
+    };
+    return [null, msg, msg];
+  }
+}
+
+if (sameTransitionReplay) {
+  msg._resultPending = Object.assign({}, latest, { replayDurableOutbox: true });
+  msg.payload = { phoneNorm: { $in: [] } };
+  return [msg, null, msg];
+}
 
 if (correctionExpired && isConfirmAction) {
   msg._resultPending = Object.assign({}, latest, { expiredToNoResult: true });

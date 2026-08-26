@@ -10,7 +10,7 @@ if (!operation?.query || !operation?.update?.$setOnInsert || !stateOperation?.qu
 msg._ratingLedgerStateOperation = stateOperation;
 msg._ratingLedgerEventId = item.eventId || operation.update.$setOnInsert.id || null;
 msg._ratingLedgerProjectionTask = item.projectionTask || null;
-msg.payload = [operation.query, operation.update, { upsert: true }];
+msg.payload = [operation.query, operation.update, { upsert: true, writeConcern: { w: "majority" } }];
 delete msg.query;
 delete msg.mongoQuery;
 delete msg.mongoUpdate;

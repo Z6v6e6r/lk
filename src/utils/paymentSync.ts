@@ -19,6 +19,15 @@ import {
   isGameExerciseIdMissingGuard,
 } from "./paymentSyncBookingResolution";
 import { recoverGameExerciseId } from "./gameExerciseIdRecovery";
+import {
+  buildPendingPaidGameDraftFromRecord,
+  isPersistedGamePaymentTerminal,
+} from "./paymentSyncDraftRecovery";
+
+export {
+  buildPendingPaidGameDraftFromRecord,
+  isPersistedGamePaymentTerminal,
+} from "./paymentSyncDraftRecovery";
 
 export const PAYMENT_REF_QUERY_KEY = "phPaymentRef";
 export const PENDING_GAME_DRAFT_KEY = "padlhub.pendingPaidGameDraft.v1";
@@ -512,16 +521,17 @@ async function processPendingPaymentSyncQueueUnlocked(
       });
 
       const byPaymentRef = await apiFetchPadelGameByPaymentRef(paymentRef, bookingIds);
-      if (byPaymentRef.data?.id) {
+      const persistedRecord = byPaymentRef.data?.id ? byPaymentRef.data : null;
+      if (persistedRecord && isPersistedGamePaymentTerminal(persistedRecord)) {
         trackPaymentConfirmEvent("success", {
           stage: "lookup",
           paymentRef,
-          gameId: byPaymentRef.data.id,
+          gameId: persistedRecord.id,
           status: byPaymentRef.status ?? null,
           source,
         });
         markPendingPaymentSyncResolved(paymentRef);
-        resolved.push({ paymentRef, record: byPaymentRef.data });
+        resolved.push({ paymentRef, record: persistedRecord });
         continue;
       }
 
@@ -543,7 +553,10 @@ async function processPendingPaymentSyncQueueUnlocked(
         continue;
       }
 
-      const draft = getPendingPaidGameDraft(paymentRef);
+      const draft = getPendingPaidGameDraft(paymentRef)
+        ?? (persistedRecord
+          ? buildPendingPaidGameDraftFromRecord(persistedRecord, paymentRef)
+          : null);
       if (!draft) {
         const errorMessage =
           byPaymentRef.error?.message || "Черновик игры после оплаты не найден";

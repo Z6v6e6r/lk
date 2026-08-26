@@ -763,6 +763,7 @@ function mergePadelGameRecord(current: PadelGameRecord | undefined, incoming: Pa
     invitedPhones: uniqueIds([...(current.invitedPhones ?? []), ...(incoming.invitedPhones ?? [])]),
     createdAt: incoming.createdAt ?? current.createdAt,
     updatedAt: incoming.updatedAt ?? current.updatedAt,
+    revision: incoming.revision ?? current.revision ?? null,
     organizer: mergeFlatObject(current.organizer, incoming.organizer),
     settings: mergeFlatObject(current.settings, incoming.settings),
     participants: nextParticipants,
@@ -3081,6 +3082,7 @@ export interface PadelGamePlayer {
 
 export interface PadelGameRecordPayload {
   gameId?: string | null;
+  expectedRevision?: number | null;
   expectedUpdatedAt?: string | null;
   paymentRef?: string | null;
   tenantKey?: string | null;
@@ -3141,6 +3143,7 @@ export interface PadelGameRecordPayload {
 
 export interface PadelGameRecord {
   id: string;
+  revision?: number | null;
   inviteUrl: string | null;
   status: string | null;
   resultStatus?: string | null;
@@ -3279,7 +3282,7 @@ export interface PadelGameResultSessionResponse {
 }
 
 export interface PadelGameResultSubmitPayload {
-  idempotencyKey?: string | null;
+  idempotencyKey: string;
   phone?: string | null;
   senderPhone?: string | null;
   playerPhone?: string | null;
@@ -6240,6 +6243,9 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
     const updatedAt =
       pickString(payload, ["updatedAt", "updated", "modifiedAt"]) ??
       (dataPayload ? pickString(dataPayload, ["updatedAt", "updated", "modifiedAt"]) : null);
+    const revision =
+      pickNumeric(payload, ["revision"])
+      ?? (dataPayload ? pickNumeric(dataPayload, ["revision"]) : null);
     const resultStatus =
       pickString(payload, ["resultStatus"]) ??
       (dataPayload ? pickString(dataPayload, ["resultStatus"]) : null);
@@ -6298,6 +6304,7 @@ function normalizePadelGameRecord(payload: unknown): PadelGameRecord | null {
 
     return {
       id: directId,
+      revision: Number.isSafeInteger(revision) && Number(revision) > 0 ? Number(revision) : null,
       inviteUrl: inviteUrl ?? null,
       status: status ?? null,
       resultStatus: resultStatus ?? null,
