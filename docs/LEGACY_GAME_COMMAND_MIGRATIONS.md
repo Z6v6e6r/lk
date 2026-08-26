@@ -29,15 +29,22 @@ The disposable replica test creates the sentinel itself. A manual local apply mu
 
 ## Required production order
 
+This production order is currently **BLOCKED**. Before step 1, a separately
+reviewed unified release builder must exist and must compose all five
+subscription-enforcement nodes with the complete legacy command prerequisite
+graph from the same exact live preimage. Neither the subscription-only
+full-flow candidate nor the current combined prerequisite candidate may be
+imported, deployed, or applied sequentially.
+
 1. Fresh-pull `/root/.node-red/flows.json` from `lk-primary-147` into a private workspace and freeze its SHA.
 2. Re-run the writer inventory. Drift or an unregistered `lk_games` writer is STOP.
-3. Build the source-only flow candidate from the exact preimage and independently inspect the allowed change budget.
+3. Use the future unified release builder to build one full-flow candidate from the exact preimage and independently inspect the combined subscription-enforcement plus prerequisite change budget.
 4. Install the custom node package and its existing MongoDB peer dependency in a separate runtime task. Do not configure an endpoint.
 5. Enter a maintenance quiescence that stops every `lk_games` writer and verify the write counter remains unchanged. Do not deploy the candidate before quiescence.
 6. Run production audit/dry-run from a separately reviewed migration runner using primary/majority reads. Record invalid game/result identities and revisions, missing/invalid result idempotency keys, duplicate game/result identities, duplicate `(tenantKey,idempotencyKey)` result identities, invalid or duplicate tenant-qualified provider-outbox identities, mapping validation/raw duplicates/normalized aliases, ledger duplicates, command-intent duplicates, and cleanup-reconciliation duplicates.
 7. Resolve every invalid tenant/game id and duplicate `(tenantKey,id)` identity explicitly. The source-only tool will not trim, guess ownership, or select a duplicate.
 8. While writers remain quiesced, backfill only missing/invalid `lk_games.revision` values to `1`; explicitly repair tenant/id/revision/idempotency identity of historical `lk_game_results` and tenant-qualified identity of historical provider-outbox rows; create the exact game/result/outbox/cleanup plus other prerequisite indexes; and run exact postcheck. Historical result idempotency keys must come from reviewed request/ledger evidence: the tool never hashes a result into a guessed key, guesses a tenant, or accepts a collision.
-9. Still under quiescence, deploy the mandatory revision writer candidate under the normal Node-RED guarded import/restart stage.
+9. Still under quiescence, deploy only the independently reviewed unified full-flow candidate under the normal Node-RED guarded import/restart stage. The prerequisite-only, subscription-only, and current partial combined candidates remain forbidden.
 10. Prove active-flow SHA, node graph, Mongo ACK shape, runtime package resolution, and that create/PATCH/result/split/projection writers create or increment a positive revision exactly once. Before enabling result side-effect replay, independently postcheck the existing canonical rating migration indexes `player_rating_state_key_uq`, `player_rating_state_client_uq`, and `player_rating_state_phone_uq` with their exact key/unique/partial-filter contracts. Exercise existing draft/payment-confirm compatibility with explicit revision for every update-existing path.
 11. Resume writers only after a second primary/majority postcheck proves zero drift and exact index name/key/order/unique properties. Any write during steps 6-10 is STOP and restarts the audit.
 12. Only then may an approved mapping process add explicit mappings with trimmed tenant keys and canonical lowercase UUIDs. Keep the future gateway disabled until S2S secret injection, endpoint contract, supported JOIN/LEAVE business rules, and side-effect exclusions pass their own R4 gate.

@@ -4,9 +4,11 @@
 
 - Source-only candidate builder: `scripts/patch_live_games_command_prerequisites.mjs`; it is pinned to the exact fresh live-flow SHA and adds no HTTP endpoint.
 - Every registered `lk_games` writer must pass the source-fingerprint and graph-relation audit in `scripts/audit_legacy_game_revision_writers.mjs`.
+- The active live `fn_patch` fingerprint is verified from the frozen flow node, while the combined candidate fingerprint is verified from `scripts/nodered_games_nodes/fn_patch.js`; these identities must never be collapsed into one registry hash.
 - Result lifecycle replay recovers a missing saved game projection only when the current game revision still equals the durable outbox `sourceGameRevision`, then uses that exact revision for the fenced CAS before side effects are released.
 - Viva provider execution is released only after an exact primary/majority read-back of provider row id, tenant, result id, and result revision.
 - Runtime installation, migrations, mapping imports, flow import, provider calls, and gateway activation remain separate guarded R4 tasks.
+- The subscription and legacy-prerequisite full-flow candidates are source-only and are not sequentially deployable; a future unified release builder is mandatory before any import.
 
 ## Split booking lifecycle v2
 

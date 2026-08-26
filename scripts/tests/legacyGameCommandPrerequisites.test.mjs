@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -20,6 +21,22 @@ import {
 
 const registry = JSON.parse(fs.readFileSync("scripts/legacy_game_revision_writers.json", "utf8"));
 const liveFlowPath = process.env.LEGACY_COMMAND_LIVE_FLOW_FIXTURE;
+const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
+
+test("PATCH writer registry separates the active live preimage from the combined tracked candidate", () => {
+  const patchWriter = registry.writers.find((writer) => writer.nodeId === "591234d213742276");
+  const patchSource = patchWriter?.sourceNodes?.find((source) => source.nodeId === "e0d7883bc1a9fa8c");
+  assert.ok(patchSource);
+  assert.equal(patchSource.activeGenerated, true);
+  assert.equal(patchSource.activeSha256, "4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931");
+  assert.equal(patchSource.sourcePath, undefined);
+  assert.equal(patchSource.candidateSourcePath, "scripts/nodered_games_nodes/fn_patch.js");
+  assert.equal(
+    patchSource.candidateSha256,
+    sha256(fs.readFileSync(patchSource.candidateSourcePath, "utf8")),
+  );
+  assert.notEqual(patchSource.activeSha256, patchSource.candidateSha256);
+});
 
 test("migration CLI is read-only by default and production apply is impossible", () => {
   const localTargetId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -141,6 +158,14 @@ test("fresh live preimage builds a source-only revision candidate without adding
     source.filter((node) => node.type === "http in").length,
   );
   assert.equal(result.changes.filter((change) => change.kind === "changed").length, 47);
+  assert.equal(
+    sha256(result.flow.find((node) => node.id === "e0d7883bc1a9fa8c")?.func || ""),
+    "9c6aaf4578c69fa30daa2326506900a5ee0a265f2299f1f0e3ab20b11e01a130",
+  );
+  assert.equal(
+    sha256(`${JSON.stringify(result.flow, null, 2)}\n`),
+    "e730bf8c043e2f33f5a75c6825d56f39a580a10201f77c399d2323f70f9f7e4d",
+  );
   const disconnected = structuredClone(result.flow);
   const revisionQuery = disconnected.find((node) => node.id === "eb7060667c2da065");
   revisionQuery.wires = [[]];

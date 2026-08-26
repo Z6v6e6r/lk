@@ -109,6 +109,15 @@ jobs:
       - name: Validate deterministic Node-RED modular toolchain fixtures
         run: node --test scripts/tests/noderedModularToolchain.test.mjs
 
+      - name: Validate combined legacy game command prerequisites
+        run: npm run test:legacy-game-command-prerequisites
+
+      - name: Validate combined split draft persistence
+        run: >-
+          node --experimental-strip-types --test
+          scripts/tests/paymentSyncDraftRecovery.test.ts
+          scripts/tests/serverGameDraftPersistence.test.ts
+
       - name: Typecheck
         run: npx tsc -b --pretty false
 

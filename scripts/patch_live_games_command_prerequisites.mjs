@@ -519,6 +519,10 @@ export function buildLegacyGameCommandPrerequisiteCandidate(source) {
   exactNode(flow, IDS.cleanupDebug, "debug");
   const template = exactNode(flow, IDS.splitLeave, "function");
 
+  // The active flow preimage remains pinned above. The combined candidate must use
+  // the task-owned fail-closed PATCH source before the revision/CAS gates are wired.
+  patchPrepare.func = readFn("fn_patch.js");
+
   const expectedWires = new Map([
     [IDS.patchRoute, [[IDS.patchPrepare]]],
     [IDS.patchAliasRoute, [[IDS.patchPrepare]]],

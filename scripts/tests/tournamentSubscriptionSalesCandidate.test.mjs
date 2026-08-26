@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,20 +11,27 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const BUILDER = path.join(REPO_ROOT, "scripts/prepare_tournament_subscription_sales_candidate.mjs");
 const FUNCTION_DIR = path.join(REPO_ROOT, "scripts/nodered_games_nodes");
 const TARGETS = [
-  ["Prepare tournament subscription counter refresh", "fn_tournament_subscription_counter_refresh_prepare.js"],
-  ["Build tournament subscription counters", "fn_tournament_subscription_counter_refresh_response.js"],
-  ["Prepare tournament subscription status", "fn_tournament_subscription_status_prepare.js"],
-  ["Build tournament subscription status", "fn_tournament_subscription_status_response.js"],
-  ["Prepare tournament subscription purchase", "fn_tournament_subscription_purchase_prepare.js"],
-  ["Check tournament subscription limit", "fn_tournament_subscription_purchase_limit.js"],
-  ["Route tournament subscription payment", "fn_tournament_subscription_purchase_router.js"],
-  ["Prepare tournament subscription reconciliation", "fn_tournament_subscription_reconcile_query.js"],
+  ["519b6a6ca208e281", "Prepare tournament subscription counter refresh", "fn_tournament_subscription_counter_refresh_prepare.js"],
+  ["d4901c31b37eab6b", "Build tournament subscription counters", "fn_tournament_subscription_counter_refresh_response.js"],
+  ["8fdc7076a0c436a2", "Prepare tournament subscription status", "fn_tournament_subscription_status_prepare.js"],
+  ["c165e43eba668c25", "Build tournament subscription status", "fn_tournament_subscription_status_response.js"],
+  ["91dded2dc8cfebe4", "Prepare tournament subscription purchase", "fn_tournament_subscription_purchase_prepare.js"],
+  ["f8679e53edadc39b", "Check tournament subscription limit", "fn_tournament_subscription_purchase_limit.js"],
+  ["566ae4b886c37ae5", "Route tournament subscription payment", "fn_tournament_subscription_purchase_router.js"],
+  ["ab1e202650000002", "Prepare tournament subscription reconciliation", "fn_tournament_subscription_reconcile_query.js"],
+];
+const LEGACY_TARGETS = [
+  ["945c1f1c113a56b6", "Prepare tournament subscription status", "fn_tournament_subscription_status_prepare.js"],
+  ["ef90184a8c79cfc1", "Build tournament subscription status", "fn_tournament_subscription_status_response.js"],
+  ["d1ab6ebf91540479", "Prepare tournament subscription purchase", "fn_tournament_subscription_purchase_prepare.js"],
+  ["4ff8867d897b1315", "Check tournament subscription limit", "fn_tournament_subscription_purchase_limit.js"],
+  ["af0b35cce2883ebd", "Route tournament subscription payment", "fn_tournament_subscription_purchase_router.js"],
 ];
 const roots = [];
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
-function createWorkspace({ duplicateLegacy = false, staleReconcile = false, staleRouter = false } = {}) {
+function createWorkspace({ approvedNodeDrift = false, duplicateLegacy = false, staleRouter = false, unknownDuplicate = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "subscription-sales-candidate-")));
   roots.push(root);
   const workspace = path.join(root, "workspace");
@@ -34,43 +41,42 @@ function createWorkspace({ duplicateLegacy = false, staleReconcile = false, stal
   fs.chmodSync(input, 0o700);
 
   const flow = [
-    { id: "tab-tournaments", type: "tab", label: "LK Tournaments", disabled: false },
-    ...TARGETS.map(([name, fileName], index) => {
+    { id: "f9575c8726e29196", type: "tab", label: "LK Tournaments", disabled: false },
+    ...TARGETS.map(([id, name, fileName]) => {
       const candidateSource = fs.readFileSync(path.join(FUNCTION_DIR, fileName), "utf8");
       const func = staleRouter && name === "Route tournament subscription payment"
-        ? candidateSource.replace(
-          "REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE",
-          "REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_LEGACY",
-        )
-        : staleReconcile && name === "Prepare tournament subscription reconciliation"
-          ? candidateSource.replace(
-            "network_friendship_12m_2026_v1",
-            "network_friendship_12m_legacy_v1",
-          )
+        ? execFileSync("git", [
+          "show",
+          `d54144ea715516c00da9adcd229ec42ff8553881:${path.posix.join("scripts/nodered_games_nodes", fileName)}`,
+        ], { cwd: REPO_ROOT, encoding: "utf8" })
+        : approvedNodeDrift && name === "Prepare tournament subscription reconciliation"
+          ? candidateSource.replace("network_friendship_12m_2026_v1", "unreviewed-drift")
         : candidateSource;
       return {
-        id: `target-${index}`,
+        id,
         type: "function",
-        z: "tab-tournaments",
+        z: "f9575c8726e29196",
         name,
         func,
         outputs: 4,
         wires: [[], [], [], []],
       };
     }),
-    ...(duplicateLegacy ? [
-      { id: "tab-media2", type: "tab", label: "Media2", disabled: false },
-      ...TARGETS.slice(2, 7).map(([name], index) => ({
-        id: `legacy-target-${index}`,
+    { id: "8ccb70ac6befff79", type: "tab", label: "Media2", disabled: !duplicateLegacy },
+    ...LEGACY_TARGETS.map(([id, name, fileName]) => ({
+        id,
         type: "function",
-        z: "tab-media2",
+        z: "8ccb70ac6befff79",
         name,
-        func: "return msg;",
+        func: fs.readFileSync(path.join(FUNCTION_DIR, fileName), "utf8"),
         outputs: name === "Route tournament subscription payment" ? 4 : (name.includes("status") ? 2 : 3),
         wires: [],
       })),
+    ...(unknownDuplicate ? [
+      { id: "tab-other", type: "tab", label: "Other", disabled: false },
+      { id: "unknown-target", type: "function", z: "tab-other", name: TARGETS[0][1], func: "return msg;", wires: [] },
     ] : []),
-    { id: "unrelated", type: "function", z: "tab-tournaments", name: "Unrelated", func: "return msg;", wires: [] },
+    { id: "unrelated", type: "function", z: "f9575c8726e29196", name: "Unrelated", func: "return msg;", wires: [] },
   ];
   const sourcePath = path.join(input, "source.flow.json");
   const metaPath = path.join(input, "source.flow.meta.json");
@@ -127,44 +133,21 @@ test("builder accepts a partially synchronized flow and changes only the stale r
       (field) => JSON.stringify(node[field]) !== JSON.stringify(flow[index]?.[field]),
     ) }]
   ));
-  assert.deepEqual(changed, [{ id: "target-6", fields: ["func"] }]);
-  assert.match(candidate.find(({ id }) => id === "target-6").func, /REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE/);
+  assert.deepEqual(changed, [{ id: "566ae4b886c37ae5", fields: ["func"] }]);
+  assert.match(candidate.find(({ id }) => id === "566ae4b886c37ae5").func, /REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE/);
   assert.equal(candidate.find(({ id }) => id === "unrelated").func, "return msg;");
 });
 
-test("builder changes only a stale regional subscription reconciliation query", () => {
-  const { workspace, flow } = createWorkspace({ staleReconcile: true });
+test("builder fails closed on source drift inside an approved identity", () => {
+  const { workspace } = createWorkspace({ approvedNodeDrift: true });
   const result = runBuilder(workspace);
-  assert.equal(result.status, 0, result.stderr);
-
-  const build = path.join(workspace, "build");
-  const candidate = JSON.parse(fs.readFileSync(
-    path.join(build, "tournament-subscription-sales.candidate.json"),
-    "utf8",
-  ));
-  const report = JSON.parse(fs.readFileSync(
-    path.join(build, "tournament-subscription-sales.report.json"),
-    "utf8",
-  ));
-  assert.equal(report.targetNodeCount, 8);
-  assert.equal(report.changedNodeCount, 1);
-  assert.deepEqual(report.changedNodes.map(({ name }) => name), [
-    "Prepare tournament subscription reconciliation",
-  ]);
-
-  const changed = candidate.flatMap((node, index) => (
-    JSON.stringify(node) === JSON.stringify(flow[index]) ? [] : [{ id: node.id, fields: Object.keys(node).filter(
-      (field) => JSON.stringify(node[field]) !== JSON.stringify(flow[index]?.[field]),
-    ) }]
-  ));
-  assert.deepEqual(changed, [{ id: "target-7", fields: ["func"] }]);
-  assert.match(candidate.find(({ id }) => id === "target-7").func, /REGIONAL_FRIENDSHIP_INVENTORIES/);
-  assert.match(candidate.find(({ id }) => id === "target-7").func, /network_friendship_12m_2026_v1/);
-  assert.equal(candidate.find(({ id }) => id === "unrelated").func, "return msg;");
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Tournament subscription target preimage mismatch: ab1e202650000002/);
+  assert.equal(fs.existsSync(path.join(workspace, "build")), false);
 });
 
-test("builder patches every enabled duplicate legacy sales function, not only LK Tournaments", () => {
-  const { workspace } = createWorkspace({ duplicateLegacy: true });
+test("builder accepts only the approved enabled legacy sales identities", () => {
+  const { workspace } = createWorkspace({ duplicateLegacy: true, staleRouter: true });
   const result = runBuilder(workspace);
   assert.equal(result.status, 0, result.stderr);
 
@@ -178,17 +161,26 @@ test("builder patches every enabled duplicate legacy sales function, not only LK
     "utf8",
   ));
   assert.equal(report.targetNodeCount, 13);
-  assert.equal(report.changedNodeCount, 5);
-  assert.ok(report.changedNodes.every(({ id, tabId }) => (
-    id.startsWith("legacy-target-") && tabId === "tab-media2"
-  )));
-  const legacyFunctions = candidate.filter((node) => node.z === "tab-media2" && node.type === "function");
+  assert.equal(report.changedNodeCount, 1);
+  assert.deepEqual(report.changedNodes.map(({ id, tabId }) => ({ id, tabId })), [{
+    id: "566ae4b886c37ae5",
+    tabId: "f9575c8726e29196",
+  }]);
+  const legacyFunctions = candidate.filter((node) => node.z === "8ccb70ac6befff79" && node.type === "function");
   assert.equal(legacyFunctions.length, 5);
   assert.ok(legacyFunctions.every((node) => node.func !== "return msg;"));
   assert.match(
     legacyFunctions.find((node) => node.name === "Prepare tournament subscription purchase").func,
     /MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE/,
   );
+});
+
+test("builder fails closed on an unknown enabled same-name target", () => {
+  const { workspace } = createWorkspace({ staleRouter: true, unknownDuplicate: true });
+  const result = runBuilder(workspace);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Unexpected enabled tournament subscription target ids: unknown-target/);
+  assert.equal(fs.existsSync(path.join(workspace, "build")), false);
 });
 
 test("builder fails closed when every target already matches", () => {

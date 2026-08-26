@@ -1706,6 +1706,7 @@ test("guarded patcher requires the exact live preimage and wires split subscript
   assert.match(source, /sourceKind === "live-147"/);
   assert.match(source, /Date\.now\(\) - pulledAt <= 30 \* 60 \* 1000/);
   assert.match(source, /url: "\/lk\/subscription-bookings"/);
+  assert.match(source, /name: "Subscription booking Viva request"[\s\S]*requestTimeout: "20000"/);
   assert.match(source, /managedAction: ctx\.action === "create"/);
   assert.match(source, /readFunction\("fn_managed_subscription_policy_evaluate\.js"\)/);
   assert.match(source, /\[IDS\.debug\], \[IDS\.managedPolicy\]/);

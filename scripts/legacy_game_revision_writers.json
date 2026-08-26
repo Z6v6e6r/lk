@@ -38,9 +38,10 @@
       "sourceNodes": [
         {
           "nodeId": "e0d7883bc1a9fa8c",
-          "sourcePath": "scripts/nodered_games_nodes/fn_patch.js",
           "activeSha256": "4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931",
-          "candidateSha256": "4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931",
+          "activeGenerated": true,
+          "candidateSourcePath": "scripts/nodered_games_nodes/fn_patch.js",
+          "candidateSha256": "9c6aaf4578c69fa30daa2326506900a5ee0a265f2299f1f0e3ab20b11e01a130",
           "candidateRelation": "ancestor"
         },
         {
