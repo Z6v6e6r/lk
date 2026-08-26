@@ -1,5 +1,13 @@
 # 🔴 Node-RED Потоки — Справочник
 
+## Legacy game command prerequisites
+
+- Source-only candidate builder: `scripts/patch_live_games_command_prerequisites.mjs`; it is pinned to the exact fresh live-flow SHA and adds no HTTP endpoint.
+- Every registered `lk_games` writer must pass the source-fingerprint and graph-relation audit in `scripts/audit_legacy_game_revision_writers.mjs`.
+- Result lifecycle replay recovers a missing saved game projection only when the current game revision still equals the durable outbox `sourceGameRevision`, then uses that exact revision for the fenced CAS before side effects are released.
+- Viva provider execution is released only after an exact primary/majority read-back of provider row id, tenant, result id, and result revision.
+- Runtime installation, migrations, mapping imports, flow import, provider calls, and gateway activation remain separate guarded R4 tasks.
+
 ## Split booking lifecycle v2
 
 - Initial candidate builder: `scripts/patch_live_split_lifecycle_v2.mjs`.
@@ -263,3 +271,16 @@ node scripts/patch_nodered_max_flow.mjs
 `scripts/patch_live_viva_user_agent.mjs` только из свежего verified live-147
 workspace. Он меняет исключительно configured headers HTTP Request-узлов и не
 импортирует candidate. Контракт и проверки описаны в `docs/VIVA_USER_AGENT.md`.
+
+## Legacy game command transaction prerequisite
+
+The source-only prerequisite for future LK2-to-legacy commands is documented in
+`ADR_LEGACY_GAME_COMMAND_TRANSACTION_PREREQUISITES.md`. It adds no HTTP endpoint.
+The config node type `padlhub-legacy-game-command-store` exposes a server-side
+transaction service to a future custom node and reads its Mongo URI from server-only
+environment injection. Revision writer inventory and migration/runbook details are in
+`LEGACY_GAME_COMMAND_MIGRATIONS.md`. Result submission uses a mandatory canonical
+idempotency key with a collision-free tenant-qualified durable identity and
+primary/majority read-back. Result lifecycle side effects are asynchronous: the durable
+transition returns `202`, while rating/event/Viva sinks are driven by the versioned
+outbox and exact tenant/result/revision contracts.

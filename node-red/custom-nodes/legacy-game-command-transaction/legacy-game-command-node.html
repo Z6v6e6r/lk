@@ -1,0 +1,86 @@
+<script type="text/javascript">
+  RED.nodes.registerType("padlhub-legacy-game-command-store", {
+    category: "config",
+    defaults: {
+      name: { value: "Legacy game command store" },
+      mongoUriEnv: { value: "LK_LEGACY_COMMAND_MONGO_URI", required: true },
+      databaseNameEnv: { value: "LK_LEGACY_COMMAND_MONGO_DB", required: true }
+    },
+    label: function () {
+      return this.name || "Legacy game command store";
+    }
+  });
+</script>
+
+<script type="text/html" data-template-name="padlhub-legacy-game-command-store">
+  <div class="form-row">
+    <label for="node-config-input-name">Name</label>
+    <input type="text" id="node-config-input-name">
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-mongoUriEnv">Mongo URI env</label>
+    <input type="text" id="node-config-input-mongoUriEnv">
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-databaseNameEnv">Database env</label>
+    <input type="text" id="node-config-input-databaseNameEnv">
+  </div>
+</script>
+
+<script type="text/javascript">
+  RED.nodes.registerType("padlhub-legacy-game-command-operation", {
+    category: "PadlHub",
+    color: "#d8bfd8",
+    defaults: {
+      name: { value: "Legacy command operation" },
+      store: { value: "", type: "padlhub-legacy-game-command-store", required: true },
+      action: { value: "claim-result-sink", required: true },
+      leaseMs: { value: 30000 },
+      maxAttempts: { value: 3 }
+    },
+    inputs: 1,
+    outputs: 2,
+    icon: "font-awesome/fa-shield",
+    label: function () { return this.name || this.action; }
+  });
+</script>
+
+<script type="text/html" data-template-name="padlhub-legacy-game-command-operation">
+  <div class="form-row">
+    <label for="node-input-name">Name</label>
+    <input type="text" id="node-input-name">
+  </div>
+  <div class="form-row">
+    <label for="node-input-store">Store</label>
+    <input type="text" id="node-input-store">
+  </div>
+  <div class="form-row">
+    <label for="node-input-action">Action</label>
+    <select id="node-input-action">
+      <option value="claim-result-sink">Claim result sink</option>
+      <option value="complete-result-sink">Complete result sink</option>
+      <option value="read-result-idempotency">Read result idempotency identity</option>
+      <option value="read-provider-outbox-identity">Read provider outbox identity</option>
+      <option value="persist-cleanup-recovery">Persist cleanup recovery</option>
+    </select>
+  </div>
+  <div class="form-row">
+    <label for="node-input-leaseMs">Lease ms</label>
+    <input type="number" id="node-input-leaseMs">
+  </div>
+  <div class="form-row">
+    <label for="node-input-maxAttempts">Max attempts</label>
+    <input type="number" id="node-input-maxAttempts">
+  </div>
+</script>
+
+<script type="text/html" data-help-name="padlhub-legacy-game-command-operation">
+  <p>Server-only majority-backed identity read, result sink claim/ACK, and cleanup recovery operation.</p>
+</script>
+
+<script type="text/html" data-help-name="padlhub-legacy-game-command-store">
+  <p>
+    Server-only config node for a future versioned legacy game command endpoint.
+    It exposes no input port and reads the Mongo URI only from the named environment variable.
+  </p>
+</script>

@@ -128,6 +128,11 @@ if (!Number.isFinite(endTs) || endTs > Date.now()) {
   return [null, msg, msg];
 }
 
+if (!ctx.tenantKey || game.tenantKey !== ctx.tenantKey) {
+  msg.statusCode = 409;
+  msg.payload = { error: "Game tenant mismatch", code: "LEGACY_GAME_TENANT_CONFLICT" };
+  return [null, msg, msg];
+}
 msg._resultConfirm = Object.assign({}, ctx, { game, endTs, resultRosterSnapshot, actorMember });
-msg.payload = { gameId: game.id, deleted: { $ne: true } };
+msg.payload = { tenantKey: ctx.tenantKey, gameId: game.id, deleted: { $ne: true } };
 return [msg, null, msg];

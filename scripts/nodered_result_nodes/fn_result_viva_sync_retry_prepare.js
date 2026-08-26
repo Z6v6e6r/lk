@@ -12,8 +12,9 @@ const retryable = row.retryable !== false;
 const requestPayload = row.requestPayload && typeof row.requestPayload === 'object'
   ? row.requestPayload
   : null;
+const tenantKey = toStr(row.tenantKey);
 
-if (!retryable || attempts >= 30 || !requestPayload) {
+if (!retryable || attempts >= 30 || !requestPayload || !tenantKey || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(tenantKey)) {
   return [null, Object.assign({}, msg, {
     payload: {
       skipped: true,
@@ -22,13 +23,16 @@ if (!retryable || attempts >= 30 || !requestPayload) {
         ? 'Outbox entry is not retryable'
         : attempts >= 30
           ? 'Outbox entry exhausted retry limit'
-          : 'Outbox entry is missing requestPayload',
+          : !requestPayload
+            ? 'Outbox entry is missing requestPayload'
+            : 'Outbox entry is missing canonical tenant identity',
     },
   })];
 }
 
 msg.payload = {
   outboxId: toStr(row._id || row.id),
+  tenantKey,
   auditEventId: toStr(row.auditEventId),
   syncSignature: toStr(row.syncSignature || row.batchId),
   mode: toStr(row.mode),

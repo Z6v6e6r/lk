@@ -13,7 +13,12 @@ if (rows.length === 0) {
 
 const reference = rows[0];
 const resultId = toStr(reference.resultId);
-if (!resultId) {
+const tenantKey = toStr(reference.tenantKey);
+const resultRevision = Number(reference.resultRevision);
+const sameIdentity = rows.every((row) => toStr(row.tenantKey) === tenantKey
+  && toStr(row.resultId) === resultId
+  && Number(row.resultRevision) === resultRevision);
+if (!resultId || !tenantKey || !Number.isSafeInteger(resultRevision) || resultRevision < 1 || !sameIdentity) {
   return [null, null, msg];
 }
 
@@ -75,14 +80,14 @@ const summary = {
 
 const resultUpdateMsg = Object.assign({}, msg, {
   payload: [
-    { id: resultId },
+    { tenantKey, id: resultId, revision: resultRevision },
     {
       $set: {
         vivaSync: summary,
         updatedAt: lastAttemptAt,
       },
     },
-    { upsert: false },
+    { upsert: false, writeConcern: { w: 'majority' } },
   ],
 });
 

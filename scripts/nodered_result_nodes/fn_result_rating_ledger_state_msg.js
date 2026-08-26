@@ -16,7 +16,7 @@ if (setDoc && setOnInsertDoc) {
   }
 }
 
-msg.payload = [operation.query, operation.update, { upsert: true }];
+msg.payload = [operation.query, operation.update, { upsert: true, writeConcern: { w: "majority" } }];
 msg._ratingLedgerCompatibilityOperation = {
   query: operation.query,
   update: operation.update,

@@ -1,0 +1,192 @@
+{
+  "formatVersion": 2,
+  "provenance": {
+    "activeFlowSha256": "0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e",
+    "selectedTabCandidateSha256": "dbf0b04f54c1344cd3b7fde9a8d27fa4a0d9e84c74904f4783eea45948e97237",
+    "tabId": "4b91e2a2413688db",
+    "tabLabel": "LK Games",
+    "selectedNodeCount": 315
+  },
+  "writers": [
+    {
+      "nodeId": "5eaf4c087c0cc668",
+      "name": "Upsert lk game",
+      "affectsRosterOrLifecycle": true,
+      "sourceNodes": [
+        {
+          "nodeId": "e656cff36a8cd210",
+          "sourcePath": "scripts/nodered_games_nodes/fn_create.js",
+          "activeSha256": "08c2b5ac7d2f5ee111efab6edb0c19c3eb663fd16e5bfa5798a1f717cc82312f",
+          "candidateSha256": "5675a75ea29121aae5e4860b305be78d855658c83eb1069587e5102e4db6de64",
+          "activeGenerated": true,
+          "candidateGenerated": true,
+          "candidateRelation": "ancestor"
+        },
+        {
+          "nodeId": "lk_game_create_revision_ack_20260826",
+          "candidateSourcePath": "scripts/nodered_legacy_command_prerequisite_nodes/fn_create_revision_ack.js",
+          "candidateSha256": "63d6448a1b9b96bc12f0da86cac429cdf01e1c75075371c1fbcc4184757e2bf9",
+          "candidateRelation": "descendant"
+        }
+      ],
+      "revisionContract": "new identity increments missing revision to 1; existing identity requires positive expectedRevision CAS and increments exactly once"
+    },
+    {
+      "nodeId": "591234d213742276",
+      "name": "Update lk game",
+      "affectsRosterOrLifecycle": true,
+      "sourceNodes": [
+        {
+          "nodeId": "e0d7883bc1a9fa8c",
+          "sourcePath": "scripts/nodered_games_nodes/fn_patch.js",
+          "activeSha256": "4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931",
+          "candidateSha256": "4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931",
+          "candidateRelation": "ancestor"
+        },
+        {
+          "nodeId": "lk_game_patch_cas_guard_20260801",
+          "sourcePath": "scripts/nodered_games_nodes/fn_patch_cas_guard.js",
+          "candidateSourcePath": "scripts/nodered_legacy_command_prerequisite_nodes/fn_patch_revision_guard.js",
+          "candidateSha256": "ba6f90b5769ff20f3a3504319e4f24ca0d74e3903cb1f1ef4895f2de8ebd0df5",
+          "candidateRelation": "ancestor"
+        },
+        {
+          "nodeId": "lk_game_patch_apply_cas_20260801",
+          "sourcePath": "scripts/nodered_games_nodes/fn_patch_cas_query.js",
+          "candidateSourcePath": "scripts/nodered_legacy_command_prerequisite_nodes/fn_patch_revision_query.js",
+          "candidateSha256": "4e84f45735d79b585c5253946e3a15bcd35eea6113bc9bcae87db8f0ec4883f7",
+          "candidateRelation": "ancestor"
+        },
+        {
+          "nodeId": "lk_game_patch_after_write_20260801",
+          "sourcePath": "scripts/nodered_games_nodes/fn_patch_after_write.js",
+          "candidateSha256": "e2316241b7148bdc8a76de725215d542e67c57681ee2e2efc51a0b58145c3d88",
+          "candidateRelation": "descendant"
+        }
+      ],
+      "revisionContract": "positive expectedRevision CAS and exact increment"
+    },
+    {
+      "nodeId": "11079a30bf3cc6ad",
+      "name": "Archive split game after cleanup",
+      "affectsRosterOrLifecycle": true,
+      "sourceNodes": [
+        {
+          "nodeId": "9508f8e0ae8d282a",
+          "sourcePath": "scripts/nodered_games_nodes/fn_split_cleanup_prepare.js",
+          "activeSha256": "988bacd186c89d3901a60ab01433c4a928aa860e452ad14253bb0515b614acd6",
+          "candidateSha256": "da4dc1765f64fd568e0e581aa773657afe48950c76e98eb7d2de266069e1a1fb",
+          "candidateGenerated": true,
+          "candidateRelation": "ancestor"
+        },
+        {
+          "nodeId": "bcc3dccf8d64f9bb",
+          "sourcePath": "scripts/nodered_games_nodes/fn_split_cleanup_router.js",
+          "activeSha256": "676a2caff25cb948fb791e69c98dbdb58431f861957ef21fb9f481fc13bb3186",
+          "candidateSha256": "795b434defb670f7af44a50ac55e812a781494ddd10175f24aeffc7779491a66",
+          "candidateGenerated": true,
+          "candidateRelation": "ancestor"
+        },
+        {
+          "nodeId": "lk_split_cleanup_revision_ack_20260826",
+          "candidateSourcePath": "scripts/nodered_legacy_command_prerequisite_nodes/fn_cleanup_revision_ack.js",
+          "candidateSha256": "726259fd066e3d2223dc719a39c2e6ed13e0ebbd89154975d68c0645bc9618ed",
+          "candidateRelation": "descendant"
+        },
+        {
+          "nodeId": "lk_split_cleanup_revision_recovery_ack_20260826",
+          "candidateSourcePath": "scripts/nodered_legacy_command_prerequisite_nodes/fn_cleanup_revision_recovery_ack.js",
+          "candidateSha256": "06f59d2313434ca88c8b08b66a5b080e61ae7aa296fe22aecaaff9f04d92df7c",
+          "candidateRelation": "descendant"
+        }
+      ],
+      "revisionContract": "positive source revision CAS and exact increment"
+    },
+    {
+      "nodeId": "lk_split_leave_game_update_20260801",
+      "name": "Apply split leave game CAS",
+      "affectsRosterOrLifecycle": true,
+      "sourceNodes": [
+        {
+          "nodeId": "lk_split_leave_game_update_build_20260801",
+          "sourcePath": "scripts/nodered_games_nodes/fn_split_leave_game_update.js",
+          "activeSha256": "fa40192d2fd5373c06c0a7c47350994ab55235e39279f0f41347856b20c7d040",
+          "candidateSha256": "324034da9351610408cf8959ab43165087cb13fad364ddf7ddb916e9e7cf7deb",
+          "candidateGenerated": true,
+          "candidateRelation": "ancestor"
+        }
+      ],
+      "revisionContract": "positive source revision CAS and exact increment"
+    },
+    {
+      "nodeId": "legacy_roster_bridge_update_20260816",
+      "name": "Apply canonical roster projection CAS",
+      "affectsRosterOrLifecycle": true,
+      "sourceNodes": [
+        {
+          "nodeId": "legacy_roster_bridge_build_20260816",
+          "sourcePath": "scripts/nodered_games_nodes/fn_legacy_roster_projection_build.js",
+          "activeSha256": "a55ba88590866f93e7ebc7b432a00435acf022f463a1c8b6bd007f374e0e13b0",
+          "candidateSha256": "845d9e32736cbd6fdfc4ed9909461969e22dddac6d7c2409e514d50cd3621cd7",
+          "candidateGenerated": true,
+          "candidateRelation": "ancestor"
+        }
+      ],
+      "revisionContract": "positive source revision CAS and exact increment"
+    },
+    {
+      "nodeId": "42e62f98e51bf04a",
+      "name": "Update game result status",
+      "affectsRosterOrLifecycle": true,
+      "sourceNodes": [
+        {
+          "nodeId": "eb7060667c2da065",
+          "sourcePath": "scripts/patch_nodered_results_flow.mjs",
+          "candidateSourcePath": "scripts/nodered_legacy_command_prerequisite_nodes/fn_result_revision_query.js",
+          "activeSha256": "40c7d81d277d3fee543916266a80ae546f3a5dc4d17f457b12c55c275464207e",
+          "candidateSha256": "80462987e987d62fd7f9b89f8b8427fc12049493b8aa5e1085683956e8220f90",
+          "activeGenerated": true,
+          "candidateGenerated": true,
+          "candidateRelation": "ancestor"
+        },
+        {
+          "nodeId": "cb002a5dcea9ce51",
+          "candidateSourcePath": "scripts/nodered_legacy_command_prerequisite_nodes/fn_result_confirm_revision_route.js",
+          "candidateSha256": "cda9c21d3f0b6dab7fc6b00835d3b11d3554feb977742c4d4f183926268ccb02",
+          "candidateRelation": "ancestor"
+        },
+        {
+          "nodeId": "lk_result_confirm_game_revision_ack_20260826",
+          "candidateSourcePath": "scripts/nodered_legacy_command_prerequisite_nodes/fn_result_confirm_revision_ack.js",
+          "candidateSha256": "1929e813c84283e967ffe55ad74431f7f12b2c918fc6e7f091637f88ee90dc94",
+          "candidateRelation": "descendant"
+        }
+      ],
+      "revisionContract": "result lifecycle and rating roster projection requires exact source revision CAS and increments exactly once"
+    },
+    {
+      "nodeId": "ec61dea76846384b",
+      "name": "Update game provisional result status",
+      "affectsRosterOrLifecycle": true,
+      "sourceNodes": [
+        {
+          "nodeId": "result_submit_after_write_003",
+          "sourcePath": "scripts/nodered_result_nodes/fn_result_submit_after_write.js",
+          "candidateSourcePath": "scripts/nodered_legacy_command_prerequisite_nodes/fn_result_submit_revision_projection.js",
+          "activeSha256": "2dfaf311268660803543539310e254b8f5ab5ce86d5e0ce69bdf4c90d1435f3f",
+          "candidateSha256": "3ead6bc63191c95f963a8104bb87e35b98cb00333a5926c5317650cd50cb8495",
+          "activeGenerated": true,
+          "candidateGenerated": true,
+          "candidateRelation": "ancestor"
+        },
+        {
+          "nodeId": "lk_result_submit_game_revision_ack_20260826",
+          "candidateSourcePath": "scripts/nodered_legacy_command_prerequisite_nodes/fn_result_submit_revision_ack.js",
+          "candidateSha256": "95e0f853d1f316b3c6f0d3bd2e2e80fc7d8cacddd531ca5784a62dd723224848",
+          "candidateRelation": "descendant"
+        }
+      ],
+      "revisionContract": "provisional result projection requires exact source revision CAS and increments exactly once"
+    }
+  ]
+}
