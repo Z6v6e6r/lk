@@ -191,24 +191,29 @@ export function validateUnifiedCandidateSummary(summary, contract = LK1_ENFORCEM
     ])
     && summary.cleanupRecoveryNode === "lk_split_cleanup_revision_recovery_write_20260826"
   );
-  if (!exact) fail("Unified LK1 reviewed candidate contract mismatch");
+  if (!exact) fail(`Unified LK1 reviewed candidate contract mismatch (${summary.candidateSha256 || "missing-digest"})`);
   return true;
 }
 
-export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256) {
-  if (!Array.isArray(source) || source.length !== LK1_ENFORCEMENT_CONTRACT.nodeCount) {
+export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256, options = {}) {
+  const contract = options.contract ?? LK1_ENFORCEMENT_CONTRACT;
+  const buildPayment = options.buildPaymentCandidate ?? buildPaymentCandidate;
+  const buildLegacy = options.buildLegacyCandidate ?? buildLegacyGameCommandPrerequisiteCandidate;
+  const readSource = options.readSource ?? ((sourceFile) => fs.readFileSync(path.join(REPO_ROOT, sourceFile), "utf8"));
+  const auditWriters = options.auditWriters ?? auditLegacyGameRevisionWriters;
+  if (!Array.isArray(source) || source.length !== contract.nodeCount) {
     fail("Unified LK1 flow node count mismatch");
   }
-  if (sourceSha256 !== LK1_ENFORCEMENT_CONTRACT.sourceSha256) {
+  if (sourceSha256 !== contract.sourceSha256) {
     fail("Unified LK1 live source SHA mismatch");
   }
-  if (source.filter((node) => node.type === "http in").length !== LK1_ENFORCEMENT_CONTRACT.httpRouteCount) {
+  if (source.filter((node) => node.type === "http in").length !== contract.httpRouteCount) {
     fail("Unified LK1 HTTP route count mismatch");
   }
 
   const before = structuredClone(source);
-  const payment = buildPaymentCandidate(structuredClone(source), sourceSha256);
-  const legacy = buildLegacyGameCommandPrerequisiteCandidate(structuredClone(source));
+  const payment = buildPayment(structuredClone(source), sourceSha256);
+  const legacy = buildLegacy(structuredClone(source));
   const flow = legacy.flow;
   const paymentById = new Map(payment.candidate.map((node) => [node.id, node]));
   const sourceIds = new Set(source.map((node) => node.id));
@@ -217,23 +222,23 @@ export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256) {
     if (!sourceIds.has(node.id)) flow.push(structuredClone(node));
   }
 
-  for (const source of LK1_ENFORCEMENT_CONTRACT.composedSources) {
-    const sourceText = fs.readFileSync(path.join(REPO_ROOT, source.sourceFile), "utf8");
+  for (const source of contract.composedSources) {
+    const sourceText = readSource(source.sourceFile);
     if (sha256(sourceText) !== source.candidateSha256) {
       fail(`Unified composed source drift: ${source.id}`);
     }
     exactNode(flow, source.id).func = sourceText;
   }
-  for (const route of LK1_ENFORCEMENT_CONTRACT.targets.filter((item) => item.id !== "e0d7883bc1a9fa8c")) {
+  for (const route of contract.targets.filter((item) => item.id !== "e0d7883bc1a9fa8c")) {
     const liveNode = exactNode(before, route.id);
     if (sha256(String(liveNode.func || "")) !== route.preimageSha256) {
       fail(`Unified LK1 target ${route.id} preimage mismatch`);
     }
-    const sourceText = fs.readFileSync(path.join(REPO_ROOT, route.sourceFile), "utf8");
+    const sourceText = readSource(route.sourceFile);
     if (sha256(sourceText) !== route.candidateSha256) fail(`Unified LK1 target ${route.id} source mismatch`);
     exactNode(flow, route.id).func = sourceText;
   }
-  const patchTarget = LK1_ENFORCEMENT_CONTRACT.targets[0];
+  const patchTarget = contract.targets[0];
   if (sha256(exactNode(flow, patchTarget.id).func || "") !== patchTarget.candidateSha256) {
     fail("Unified LK1 PATCH source was not composed by the legacy prerequisite graph");
   }
@@ -298,17 +303,17 @@ export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256) {
 
   const health = graphHealth(flow);
   if (health.brokenWires || health.brokenLinks) fail("Unified LK1 candidate contains broken references");
-  if (flow.filter((node) => node.type === "http in").length !== LK1_ENFORCEMENT_CONTRACT.httpRouteCount) {
+  if (flow.filter((node) => node.type === "http in").length !== contract.httpRouteCount) {
     fail("Unified LK1 candidate changed HTTP route inventory");
   }
 
-  const registry = JSON.parse(fs.readFileSync(REGISTRY_PATH, "utf8"));
-  const composedHash = (nodeId) => LK1_ENFORCEMENT_CONTRACT.composedSources
+  const registry = structuredClone(options.registry ?? JSON.parse(fs.readFileSync(REGISTRY_PATH, "utf8")));
+  const composedHash = (nodeId) => contract.composedSources
     .find((item) => item.id === nodeId)?.candidateSha256 || fail(`Unified composed source contract missing: ${nodeId}`);
   replaceCandidateHash(registry, UNIFIED_IDS.createMongo, UNIFIED_IDS.create, composedHash(UNIFIED_IDS.create));
   replaceCandidateHash(registry, UNIFIED_IDS.cleanupMongo, UNIFIED_IDS.cleanupPrepare, composedHash(UNIFIED_IDS.cleanupPrepare));
   replaceCandidateHash(registry, UNIFIED_IDS.cleanupMongo, UNIFIED_IDS.cleanupRouter, composedHash(UNIFIED_IDS.cleanupRouter));
-  const writerAudit = auditLegacyGameRevisionWriters(flow, registry, { stage: "candidate" });
+  const writerAudit = auditWriters(flow, registry, { stage: "candidate" });
   const changes = flow.flatMap((node) => {
     const prior = before.find((item) => item.id === node.id);
     if (!prior) return [{ id: node.id, kind: "added", changedFields: Object.keys(node).sort() }];
@@ -319,7 +324,7 @@ export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256) {
   const changedExistingNodeCount = changes.filter((item) => item.kind === "changed").length;
   const candidateSha256 = sha256(`${JSON.stringify(flow, null, 2)}\n`);
   const composition = {
-    subscriptionFunctionCount: LK1_ENFORCEMENT_CONTRACT.targets.length,
+    subscriptionFunctionCount: contract.targets.length,
     legacyPrerequisiteChanges: legacy.changes.length,
     paymentAddedNodeCount: Object.keys(PAYMENT_NODE_IDS).length,
     splitPricingMutationCount: 0,
@@ -340,7 +345,7 @@ export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256) {
     brokenWires: health.brokenWires,
     brokenLinks: health.brokenLinks,
     ...composition,
-  });
+  }, contract);
   return {
     candidate: flow,
     candidateSha256,

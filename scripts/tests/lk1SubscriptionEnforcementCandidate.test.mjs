@@ -4,9 +4,11 @@ import fs from "node:fs";
 import test from "node:test";
 import {
   buildLk1EnforcementCandidate,
+  buildUnifiedLk1EnforcementCandidate,
   LK1_ENFORCEMENT_CONTRACT,
   validateUnifiedCandidateSummary,
 } from "../prepare_lk1_subscription_enforcement_candidate.mjs";
+import { PAYMENT_NODE_IDS } from "../patch_live_game_payment_confirmation.mjs";
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -30,6 +32,123 @@ function syntheticContract() {
     ],
   };
   return { flow, contract, sources };
+}
+
+function structuralUnifiedFixture({ omitConfirmReadback = false } = {}) {
+  const ids = {
+    tab: "4b91e2a2413688db",
+    patch: "e0d7883bc1a9fa8c",
+    create: "e656cff36a8cd210",
+    createMongo: "5eaf4c087c0cc668",
+    createAck: "lk_game_create_revision_ack_20260826",
+    cleanupPrepare: "9508f8e0ae8d282a",
+    cleanupRouter: "bcc3dccf8d64f9bb",
+    cleanupMongo: "11079a30bf3cc6ad",
+    cleanupAck: "lk_split_cleanup_revision_ack_20260826",
+    upsertArgs: "79307f9bcbc28b6c",
+    response: "ae5ee70de15fe66e",
+    debug: "60a3353902ae9973",
+    autojoin: "9756d9125563753f",
+    cleanupResponse: "e71d73fb91b0c3f0",
+    cleanupDebug: "ba322f367a4d4fcd",
+    cleanupRecovery: "lk_split_cleanup_revision_recovery_write_20260826",
+  };
+  const sourceTexts = new Map();
+  const composed = [
+    [ids.create, "create.js"],
+    [ids.cleanupPrepare, "cleanup-prepare.js"],
+    [ids.cleanupRouter, "cleanup-router.js"],
+    [ids.upsertArgs, "upsert-args.js"],
+    [PAYMENT_NODE_IDS.lookup, "payment-lookup.js"],
+    [PAYMENT_NODE_IDS.router, "payment-router.js"],
+    [PAYMENT_NODE_IDS.confirmWriteAck, "confirm-ack.js"],
+    [PAYMENT_NODE_IDS.cleanupWriteAck, "cleanup-ack.js"],
+  ].map(([id, sourceFile]) => {
+    const text = `msg.fixture = ${JSON.stringify(id)};\nreturn msg;\n`;
+    sourceTexts.set(sourceFile, text);
+    return { id, sourceFile, candidateSha256: sha256(text) };
+  });
+  const patchSource = "msg.fixturePatch = true;\nreturn msg;\n";
+  sourceTexts.set("patch.js", patchSource);
+  const source = [
+    { id: ids.tab, type: "tab", label: "LK Games", disabled: false },
+    { id: "fixture-route", type: "http in", z: ids.tab, method: "post", url: "/fixture", wires: [[ids.create]] },
+    { id: ids.patch, type: "function", z: ids.tab, name: "Prepare game patch", func: "return msg;\n", outputs: 1, wires: [[]] },
+    { id: ids.create, type: "function", z: ids.tab, name: "Prepare game upsert", func: "return msg;\n", outputs: 4, wires: [[], [], [], []] },
+    { id: ids.createMongo, type: "mongodb4", z: ids.tab, name: "Upsert lk game", wires: [[]] },
+    { id: ids.cleanupPrepare, type: "function", z: ids.tab, name: "Prepare split cleanup tasks", func: "return msg;\n", outputs: 1, wires: [[]] },
+    { id: ids.cleanupRouter, type: "function", z: ids.tab, name: "Route split cleanup action", func: "return msg;\n", outputs: 6, wires: [[], [], [], [], [], []] },
+    { id: ids.cleanupMongo, type: "mongodb4", z: ids.tab, name: "Archive split game after cleanup", wires: [[]] },
+    { id: ids.upsertArgs, type: "function", z: ids.tab, name: "Upsert lk game -> mongodb4 args", func: "return msg;\n", outputs: 1, wires: [[]] },
+    ...[ids.response, ids.debug, ids.autojoin, ids.cleanupResponse, ids.cleanupDebug, ids.cleanupRecovery]
+      .map((id) => ({ id, type: "debug", z: ids.tab, wires: [] })),
+  ];
+  const paymentNodes = Object.values(PAYMENT_NODE_IDS)
+    .filter((id) => !(omitConfirmReadback && id === PAYMENT_NODE_IDS.confirmWriteReadback))
+    .map((id) => ({
+      id,
+      type: composed.some((item) => item.id === id) ? "function" : "mongodb4",
+      z: ids.tab,
+      func: composed.some((item) => item.id === id)
+        ? sourceTexts.get(composed.find((item) => item.id === id).sourceFile)
+        : undefined,
+      outputs: composed.some((item) => item.id === id) ? 1 : undefined,
+      wires: id === PAYMENT_NODE_IDS.confirmWriteAck
+        ? [[PAYMENT_NODE_IDS.confirmWriteReadback]]
+        : [[]],
+    }));
+  const legacyFlow = structuredClone(source);
+  legacyFlow.find((node) => node.id === ids.patch).func = patchSource;
+  legacyFlow.push(
+    { id: ids.createAck, type: "function", z: ids.tab, func: "return msg;\n", outputs: 3, wires: [[], [], []] },
+    { id: ids.cleanupAck, type: "function", z: ids.tab, func: "return msg;\n", outputs: 2, wires: [[], []] },
+  );
+  const candidateNodeCount = source.length + 2 + paymentNodes.length + 2;
+  const contract = {
+    sourceSha256: "fixture-source",
+    candidateSha256: "6bc008ab4695fadbc7a0a2711cafd2570f881df152f28f430ad038799fb22645",
+    nodeCount: source.length,
+    candidateNodeCount,
+    httpRouteCount: 1,
+    tabCount: 1,
+    changedNodeCount: 23,
+    changedExistingNodeCount: 7,
+    addedNodeCount: 16,
+    writerCount: 7,
+    composedSources: composed,
+    targets: [{
+      id: ids.patch,
+      tabLabel: "LK Games",
+      name: "Prepare game patch",
+      sourceFile: "patch.js",
+      preimageSha256: sha256("return msg;\n"),
+      candidateSha256: sha256(patchSource),
+    }],
+  };
+  const registry = {
+    writers: [
+      { nodeId: ids.createMongo, sourceNodes: [{ nodeId: ids.create, candidateSha256: "old" }] },
+      { nodeId: ids.cleanupMongo, sourceNodes: [
+        { nodeId: ids.cleanupPrepare, candidateSha256: "old" },
+        { nodeId: ids.cleanupRouter, candidateSha256: "old" },
+      ] },
+    ],
+  };
+  return {
+    source,
+    contract,
+    options: {
+      contract,
+      registry,
+      readSource: (sourceFile) => sourceTexts.get(sourceFile),
+      buildPaymentCandidate: (flow) => ({
+        candidate: [...flow, ...structuredClone(paymentNodes)],
+        report: { changedNodeIds: [] },
+      }),
+      buildLegacyCandidate: () => ({ flow: structuredClone(legacyFlow), changes: [{}] }),
+      auditWriters: () => ({ ok: true, writerCount: 7, sourceChecks: [] }),
+    },
+  };
 }
 
 test("unified LK1 candidate changes only exact function bodies and preserves topology", () => {
@@ -119,6 +238,26 @@ test("reviewed unified composition contract pins digest, inventory, ACK order an
       /reviewed candidate contract mismatch/,
     );
   }
+});
+
+test("CI-safe structural fixture executes the full unified composition and rejects missing wiring", () => {
+  const fixture = structuralUnifiedFixture();
+  const result = buildUnifiedLk1EnforcementCandidate(
+    structuredClone(fixture.source),
+    fixture.contract.sourceSha256,
+    fixture.options,
+  );
+  assert.equal(result.candidateSha256, fixture.contract.candidateSha256);
+
+  const drift = structuralUnifiedFixture({ omitConfirmReadback: true });
+  assert.throws(
+    () => buildUnifiedLk1EnforcementCandidate(
+      structuredClone(drift.source),
+      drift.contract.sourceSha256,
+      drift.options,
+    ),
+    /broken references|exact node/,
+  );
 });
 
 test("unified ACK sources require tenant/revision readback and durable cleanup recovery", () => {
