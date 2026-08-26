@@ -35,6 +35,15 @@ function run(command, args, options = {}) {
   return String(result.stdout || "").trim();
 }
 
+function runBytes(command, args) {
+  const result = spawnSync(command, args, { cwd: repoRoot });
+  if (result.error || result.status !== 0) {
+    const safe = String(result.stderr || result.stdout || result.error?.message || "command failed").trim();
+    throw new Error(safe || `${command} failed`);
+  }
+  return Buffer.from(result.stdout);
+}
+
 function assertStaticAmd64Elf(buffer) {
   if (buffer.length < 64 || buffer.subarray(0, 4).toString("hex") !== "7f454c46"
     || buffer[4] !== 2 || buffer[5] !== 1 || buffer.readUInt16LE(18) !== 62) {
@@ -75,66 +84,93 @@ export function buildRootAclBootstrap(argv) {
   if (environment === "production" && status) throw new Error("production bootstrap build requires a clean checkout");
   const repositoryCommit = run("git", ["rev-parse", "HEAD"]);
   const sourcePath = path.join(repoRoot, sourceRelative);
-  const sourceBytes = fs.readFileSync(sourcePath);
+  const sourceBytes = environment === "production"
+    ? runBytes("git", ["show", `${repositoryCommit}:${sourceRelative}`])
+    : fs.readFileSync(sourcePath);
   const imageId = run("docker", ["image", "inspect", BUILD_IMAGE, "--format", "{{.Id}}"]).replace(/^sha256:/, "");
   const expectedImageId = BUILD_IMAGE.split("sha256:")[1];
   if (imageId !== expectedImageId) throw new Error("local build image identity mismatch");
 
-  fs.mkdirSync(out, { mode: 0o700 });
-  const firstName = binaryName;
-  const secondName = `${binaryName}.reproducibility-check`;
-  const compilerCommand = [
-    "gcc", ...BUILD_FLAGS, "-o", `/out/${firstName}`, `/src/${sourceRelative}`,
-    "&&", "gcc", ...BUILD_FLAGS, "-o", `/out/${secondName}`, `/src/${sourceRelative}`,
-    "&&", "gcc", "--version",
-  ].join(" ");
-  const compilerOutput = run("docker", [
-    "run", "--rm", "--network", "none", "--platform", "linux/amd64",
-    "--mount", `type=bind,src=${repoRoot},dst=/src,readonly`,
-    "--mount", `type=bind,src=${out},dst=/out`,
-    BUILD_IMAGE, "sh", "-lc", compilerCommand,
-  ]);
-  const binaryPath = path.join(out, firstName);
-  const secondPath = path.join(out, secondName);
-  const binary = fs.readFileSync(binaryPath);
-  const second = fs.readFileSync(secondPath);
-  if (!binary.equals(second)) throw new Error("bootstrap build is not reproducible");
-  fs.rmSync(secondPath);
-  assertStaticAmd64Elf(binary);
-  fs.chmodSync(binaryPath, 0o500);
+  const staging = fs.mkdtempSync(`${out}.staging-`);
+  fs.chmodSync(staging, 0o700);
+  try {
+    const firstName = binaryName;
+    const secondName = `${binaryName}.reproducibility-check`;
+    const snapshotName = "source.snapshot.c";
+    const compilerSource = environment === "production" ? `/out/${snapshotName}` : `/src/${sourceRelative}`;
+    if (environment === "production") {
+      fs.writeFileSync(path.join(staging, snapshotName), sourceBytes, { mode: 0o400, flag: "wx" });
+    }
+    const compilerCommand = [
+      "gcc", ...BUILD_FLAGS, "-o", `/out/${firstName}`, compilerSource,
+      "&&", "gcc", ...BUILD_FLAGS, "-o", `/out/${secondName}`, compilerSource,
+      "&&", "gcc", "--version",
+    ].join(" ");
+    const dockerArgs = ["run", "--rm", "--network", "none", "--platform", "linux/amd64"];
+    if (environment === "rehearsal") {
+      dockerArgs.push("--mount", `type=bind,src=${repoRoot},dst=/src,readonly`);
+    }
+    dockerArgs.push(
+      "--mount", `type=bind,src=${staging},dst=/out`,
+      BUILD_IMAGE, "sh", "-lc", compilerCommand,
+    );
+    const compilerOutput = run("docker", dockerArgs);
+    if (environment === "production") {
+      const compiledSource = fs.readFileSync(path.join(staging, snapshotName));
+      if (!compiledSource.equals(sourceBytes)) throw new Error("Git source snapshot changed during build");
+      fs.rmSync(path.join(staging, snapshotName));
+    }
+    const binaryPath = path.join(staging, firstName);
+    const secondPath = path.join(staging, secondName);
+    const binary = fs.readFileSync(binaryPath);
+    const second = fs.readFileSync(secondPath);
+    if (!binary.equals(second)) throw new Error("bootstrap build is not reproducible");
+    fs.rmSync(secondPath);
+    assertStaticAmd64Elf(binary);
+    fs.chmodSync(binaryPath, 0o500);
+    if (environment === "production"
+      && (run("git", ["rev-parse", "HEAD"]) !== repositoryCommit || run("git", ["status", "--porcelain=v1"]))) {
+      throw new Error("repository identity changed during production build");
+    }
 
-  const manifest = {
-    schemaVersion: 1,
-    artifactKind: "legacy-game-command-root-acl-bootstrap",
-    environment,
-    repositoryCommit,
-    dirtySource: Boolean(status),
-    source: {
-      path: sourceRelative,
-      sha256: sha256(sourceBytes),
-    },
-    build: {
-      image: BUILD_IMAGE,
-      imageId: `sha256:${imageId}`,
-      platform: "linux/amd64",
-      network: "none",
-      compiler: compilerOutput.split("\n")[0],
-      flags: BUILD_FLAGS,
-      reproducibleDoubleBuild: true,
-    },
-    artifact: {
-      path: binaryName,
-      size: binary.length,
-      sha256: sha256(binary),
-      mode: "0500",
-      elfClass: "ELF64",
-      machine: "x86_64",
-      staticallyLinked: true,
-    },
-    liveMutationAuthorized: false,
-  };
-  fs.writeFileSync(path.join(out, "manifest.json"), `${canonical(manifest)}\n`, { mode: 0o600, flag: "wx" });
-  return { out, manifest };
+    const manifest = {
+      schemaVersion: 1,
+      artifactKind: "legacy-game-command-root-acl-bootstrap",
+      environment,
+      repositoryCommit,
+      dirtySource: Boolean(status),
+      source: {
+        path: sourceRelative,
+        gitObject: environment === "production",
+        sha256: sha256(sourceBytes),
+      },
+      build: {
+        image: BUILD_IMAGE,
+        imageId: `sha256:${imageId}`,
+        platform: "linux/amd64",
+        network: "none",
+        compiler: compilerOutput.split("\n")[0],
+        flags: BUILD_FLAGS,
+        reproducibleDoubleBuild: true,
+      },
+      artifact: {
+        path: binaryName,
+        size: binary.length,
+        sha256: sha256(binary),
+        mode: "0500",
+        elfClass: "ELF64",
+        machine: "x86_64",
+        staticallyLinked: true,
+      },
+      liveMutationAuthorized: false,
+    };
+    fs.writeFileSync(path.join(staging, "manifest.json"), `${canonical(manifest)}\n`, { mode: 0o600, flag: "wx" });
+    fs.renameSync(staging, out);
+    return { out, manifest };
+  } catch (error) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

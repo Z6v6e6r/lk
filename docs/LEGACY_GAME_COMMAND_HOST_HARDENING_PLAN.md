@@ -44,19 +44,21 @@ directly under `/`; normal writes below established top-level directories are un
 
 Only after a separate approval for the exact frozen H0 record may H1 invoke the static
 helper's production `apply` mode through the already opened `/proc/self/fd/<fd>`, with
-the exact binary SHA-256, cwd and target device/inode pins, expected mode `0707`, target
-mode `0755`, and sentinel
+the exact binary SHA-256 independently verified against the already opened descriptor,
+cwd and target device/inode/mount ID/mount flags pins, a new `O_EXCL` durable evidence
+name, expected mode `0707`, target mode `0755`, and sentinel
 `LK_ROOT_ACL_BOOTSTRAP_APPLY=APPLY_ROOT_MODE_0755_V1`. Raw path-based `chmod` is
 forbidden. The helper must report the same target descriptor identity and ext4
-filesystem, empty xattrs, after mode `0755`, `mutationPerformed:true`, and
-`postcheckComplete:true`.
+filesystem and mount identity/options, empty xattrs, after mode `0755`,
+`mutationPerformed:true`, and `postcheckComplete:true` in fsynced evidence and stdout.
 
 Open a new SSH session, prove Node and the Node-RED supervisor can still read their
 existing paths, and run the already reviewed public LK Games read-only smoke. Do not
 combine this permission change with release upload, install, restart, or flow import.
 
-If an immediate postcheck fails, stop. Helper exit `69` means the mutation may already
-have happened and requires direct read-back plus incident review. Restoring the insecure
+If an immediate postcheck fails, stop. Any missing exact success evidence, signal,
+disconnect, abnormal exit, or helper exit `69` means the mutation may already have
+happened and requires independently verified descriptor read-back plus incident review. Restoring the insecure
 preimage is a separate break-glass live gate. It uses the same helper, exact custody and
 target identity pins, expected mode `0755`, target mode `0707`, and distinct sentinel
 `LK_ROOT_ACL_BOOTSTRAP_ROLLBACK=ROLLBACK_ROOT_MODE_0707_V1`; raw `chmod 0707 /` is not

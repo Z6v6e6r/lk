@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <linux/magic.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,15 +41,23 @@ typedef struct {
   const char *environment;
   const char *target;
   const char *expected_self_sha256;
+  const char *evidence_name;
   uint64_t expected_cwd_device;
   uint64_t expected_cwd_inode;
+  uint64_t expected_cwd_mount_id;
+  uint64_t expected_cwd_mount_flags;
   uint64_t expected_target_device;
   uint64_t expected_target_inode;
+  uint64_t expected_target_mount_id;
+  uint64_t expected_target_mount_flags;
   unsigned expected_mode;
   unsigned target_mode;
   unsigned rehearsal_pause_ms;
+  unsigned rehearsal_pause_after_mutation_ms;
   int has_expected_cwd;
+  int has_expected_cwd_mount;
   int has_expected_target;
+  int has_expected_target_mount;
   int has_expected_mode;
   int has_target_mode;
 } options;
@@ -61,6 +70,8 @@ typedef struct {
   unsigned mode;
   unsigned link_count;
   uint64_t fs_magic;
+  uint64_t mount_id;
+  uint64_t mount_flags;
   unsigned device_major;
   unsigned device_minor;
   ssize_t xattr_bytes;
@@ -213,6 +224,16 @@ static int safe_path(const char *value) {
   return strstr(value, "..") == NULL;
 }
 
+static int safe_evidence_name(const char *value) {
+  if (value == NULL || value[0] == '\0' || strcmp(value, ".") == 0 || strcmp(value, "..") == 0) return 0;
+  for (const char *cursor = value; *cursor != '\0'; cursor += 1) {
+    char character = *cursor;
+    if (!((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z')
+      || (character >= '0' && character <= '9') || character == '_' || character == '-' || character == '.')) return 0;
+  }
+  return 1;
+}
+
 static void mark_argument_seen(uint32_t *seen, uint32_t bit) {
   if ((*seen & bit) != 0U) fail_fixed(EXIT_ARGUMENT, "DUPLICATE_ARGUMENT");
   *seen |= bit;
@@ -241,6 +262,21 @@ static options parse_options(int argc, char **argv) {
       uint64_t parsed = parse_u64(value, "INVALID_REHEARSAL_PAUSE");
       if (parsed > 5000U) fail_fixed(EXIT_ARGUMENT, "INVALID_REHEARSAL_PAUSE");
       result.rehearsal_pause_ms = (unsigned)parsed;
+    } else if (strcmp(key, "--expected-cwd-mount-id") == 0) {
+      mark_argument_seen(&seen, 1U << 11); result.expected_cwd_mount_id = parse_u64(value, "INVALID_CWD_MOUNT_ID"); result.has_expected_cwd_mount |= 1;
+    } else if (strcmp(key, "--expected-cwd-mount-flags") == 0) {
+      mark_argument_seen(&seen, 1U << 12); result.expected_cwd_mount_flags = parse_u64(value, "INVALID_CWD_MOUNT_FLAGS"); result.has_expected_cwd_mount |= 2;
+    } else if (strcmp(key, "--expected-target-mount-id") == 0) {
+      mark_argument_seen(&seen, 1U << 13); result.expected_target_mount_id = parse_u64(value, "INVALID_TARGET_MOUNT_ID"); result.has_expected_target_mount |= 1;
+    } else if (strcmp(key, "--expected-target-mount-flags") == 0) {
+      mark_argument_seen(&seen, 1U << 14); result.expected_target_mount_flags = parse_u64(value, "INVALID_TARGET_MOUNT_FLAGS"); result.has_expected_target_mount |= 2;
+    } else if (strcmp(key, "--evidence-name") == 0) {
+      mark_argument_seen(&seen, 1U << 15); result.evidence_name = value;
+    } else if (strcmp(key, "--rehearsal-pause-after-mutation-ms") == 0) {
+      mark_argument_seen(&seen, 1U << 16);
+      uint64_t parsed = parse_u64(value, "INVALID_REHEARSAL_POST_MUTATION_PAUSE");
+      if (parsed > 5000U) fail_fixed(EXIT_ARGUMENT, "INVALID_REHEARSAL_POST_MUTATION_PAUSE");
+      result.rehearsal_pause_after_mutation_ms = (unsigned)parsed;
     } else fail_fixed(EXIT_ARGUMENT, "UNKNOWN_ARGUMENT");
   }
   if (result.mode == NULL || result.environment == NULL || result.target == NULL || !is_hex_sha256(result.expected_self_sha256)) {
@@ -255,7 +291,8 @@ static options parse_options(int argc, char **argv) {
   if (!safe_path(result.target)) fail_fixed(EXIT_ARGUMENT, "INVALID_TARGET_PATH");
   int mutating = strcmp(result.mode, "audit") != 0;
   if (strcmp(result.environment, "production") == 0) {
-    if (strcmp(result.target, "/") != 0 || result.rehearsal_pause_ms != 0) fail_fixed(EXIT_ARGUMENT, "PRODUCTION_SCOPE_REJECTED");
+    if (strcmp(result.target, "/") != 0 || result.rehearsal_pause_ms != 0
+      || result.rehearsal_pause_after_mutation_ms != 0) fail_fixed(EXIT_ARGUMENT, "PRODUCTION_SCOPE_REJECTED");
   } else if (strcmp(result.target, "/") == 0 || strncmp(result.target, "/rehearsal/", 11) != 0) {
     fail_fixed(EXIT_ARGUMENT, "REHEARSAL_SCOPE_REJECTED");
   }
@@ -263,13 +300,20 @@ static options parse_options(int argc, char **argv) {
     if (result.has_expected_cwd != 3 || result.has_expected_target != 3 || !result.has_expected_mode || !result.has_target_mode) {
       fail_fixed(EXIT_ARGUMENT, "MUTATION_PREIMAGE_REQUIRED");
     }
+    if (!safe_evidence_name(result.evidence_name)) fail_fixed(EXIT_ARGUMENT, "MUTATION_EVIDENCE_NAME_REQUIRED");
+    if (strcmp(result.environment, "production") == 0
+      && (result.has_expected_cwd_mount != 3 || result.has_expected_target_mount != 3)) {
+      fail_fixed(EXIT_ARGUMENT, "PRODUCTION_MOUNT_PREIMAGE_REQUIRED");
+    }
     if (strcmp(result.mode, "apply") == 0 && !(result.expected_mode == 0707U && result.target_mode == 0755U)) {
       fail_fixed(EXIT_ARGUMENT, "APPLY_TRANSITION_REJECTED");
     }
     if (strcmp(result.mode, "rollback") == 0 && !(result.expected_mode == 0755U && result.target_mode == 0707U)) {
       fail_fixed(EXIT_ARGUMENT, "ROLLBACK_TRANSITION_REJECTED");
     }
-  } else if (result.rehearsal_pause_ms != 0 || result.has_expected_cwd != 0 || result.has_expected_target != 0
+  } else if (result.rehearsal_pause_ms != 0 || result.rehearsal_pause_after_mutation_ms != 0
+    || result.evidence_name != NULL || result.has_expected_cwd != 0 || result.has_expected_target != 0
+    || result.has_expected_cwd_mount != 0 || result.has_expected_target_mount != 0
     || result.has_expected_mode || result.has_target_mode) {
     fail_fixed(EXIT_ARGUMENT, "AUDIT_MUTATION_ARGUMENT_REJECTED");
   }
@@ -303,7 +347,11 @@ static void digest_fd(int descriptor, char output[65]) {
 static snapshot inspect_descriptor(int descriptor, int require_empty_xattrs) {
   struct stat status;
   struct statfs filesystem;
-  if (fstat(descriptor, &status) != 0 || fstatfs(descriptor, &filesystem) != 0) {
+  struct statx extended;
+  memset(&extended, 0, sizeof(extended));
+  if (fstat(descriptor, &status) != 0 || fstatfs(descriptor, &filesystem) != 0
+    || statx(descriptor, "", AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW, STATX_MNT_ID, &extended) != 0
+    || (extended.stx_mask & STATX_MNT_ID) == 0U) {
     fail_fixed(EXIT_PRECONDITION, "TARGET_STAT_FAILED");
   }
   snapshot result = {
@@ -314,6 +362,8 @@ static snapshot inspect_descriptor(int descriptor, int require_empty_xattrs) {
     .mode = (unsigned)(status.st_mode & 07777U),
     .link_count = (unsigned)status.st_nlink,
     .fs_magic = (uint64_t)filesystem.f_type,
+    .mount_id = (uint64_t)extended.stx_mnt_id,
+    .mount_flags = (uint64_t)filesystem.f_flags,
     .device_major = major(status.st_dev),
     .device_minor = minor(status.st_dev),
     .xattr_bytes = flistxattr(descriptor, NULL, 0),
@@ -331,7 +381,7 @@ static void require_root_identity(void) {
   }
 }
 
-static snapshot verify_custody(const options *configuration, char self_sha256[65]) {
+static snapshot verify_custody(const options *configuration, char self_sha256[65], int *cwd_descriptor) {
   int executable = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
   if (executable < 0) fail_fixed(EXIT_CUSTODY, "SELF_OPEN_FAILED");
   struct stat executable_status;
@@ -349,12 +399,17 @@ static snapshot verify_custody(const options *configuration, char self_sha256[65
   int cwd = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
   if (cwd < 0) fail_fixed(EXIT_CUSTODY, "CWD_OPEN_FAILED");
   snapshot result = inspect_descriptor(cwd, 1);
-  close(cwd);
   if (result.uid != 0 || result.gid != 0 || result.mode != 0700U) fail_fixed(EXIT_CUSTODY, "CWD_CUSTODY_REJECTED");
   if (configuration->has_expected_cwd == 3
     && (result.device != configuration->expected_cwd_device || result.inode != configuration->expected_cwd_inode)) {
     fail_fixed(EXIT_CUSTODY, "CWD_IDENTITY_MISMATCH");
   }
+  if (configuration->has_expected_cwd_mount == 3
+    && (result.mount_id != configuration->expected_cwd_mount_id
+      || result.mount_flags != configuration->expected_cwd_mount_flags)) {
+    fail_fixed(EXIT_CUSTODY, "CWD_MOUNT_IDENTITY_MISMATCH");
+  }
+  *cwd_descriptor = cwd;
   return result;
 }
 
@@ -362,6 +417,11 @@ static void require_snapshot(const snapshot *observed, const options *configurat
   if (observed->uid != 0 || observed->gid != 0 || observed->mode != expected_mode
     || observed->device != configuration->expected_target_device || observed->inode != configuration->expected_target_inode) {
     fail_fixed(EXIT_PRECONDITION, "TARGET_PREIMAGE_MISMATCH");
+  }
+  if (configuration->has_expected_target_mount == 3
+    && (observed->mount_id != configuration->expected_target_mount_id
+      || observed->mount_flags != configuration->expected_target_mount_flags)) {
+    fail_fixed(EXIT_PRECONDITION, "TARGET_MOUNT_IDENTITY_MISMATCH");
   }
   if (strcmp(configuration->environment, "production") == 0 && observed->fs_magic != (uint64_t)EXT4_SUPER_MAGIC) {
     fail_fixed(EXIT_PRECONDITION, "TARGET_FILESYSTEM_REJECTED");
@@ -377,6 +437,25 @@ static void pause_rehearsal(unsigned milliseconds) {
   while (nanosleep(&requested, &requested) != 0) {
     if (errno != EINTR) fail_fixed(EXIT_PRECONDITION, "REHEARSAL_PAUSE_FAILED");
   }
+}
+
+static FILE *reserve_evidence(const options *configuration, int cwd_descriptor) {
+  int descriptor = openat(cwd_descriptor, configuration->evidence_name,
+    O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+  if (descriptor < 0) fail_fixed(EXIT_PRECONDITION, "EVIDENCE_RESERVATION_FAILED");
+  struct stat status;
+  snapshot evidence = inspect_descriptor(descriptor, 1);
+  if (fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode)
+    || evidence.uid != 0 || evidence.gid != 0 || evidence.mode != 0600U || evidence.link_count != 1) {
+    close(descriptor);
+    fail_fixed(EXIT_CUSTODY, "EVIDENCE_CUSTODY_REJECTED");
+  }
+  FILE *stream = fdopen(descriptor, "w");
+  if (stream == NULL) {
+    close(descriptor);
+    fail_fixed(EXIT_PRECONDITION, "EVIDENCE_STREAM_FAILED");
+  }
+  return stream;
 }
 
 static void require_mutation_authority(const options *configuration) {
@@ -400,23 +479,39 @@ static void require_mutation_authority(const options *configuration) {
   }
 }
 
-static void print_snapshot(const char *name, const snapshot *value) {
-  printf("\"%s\":{\"device\":\"%" PRIu64 "\",\"deviceMajor\":%u,\"deviceMinor\":%u,\"inode\":\"%" PRIu64 "\""
+static int print_snapshot(FILE *stream, const char *name, const snapshot *value) {
+  return fprintf(stream, "\"%s\":{\"device\":\"%" PRIu64 "\",\"deviceMajor\":%u,\"deviceMinor\":%u,\"inode\":\"%" PRIu64 "\""
     ",\"uid\":%" PRIu64 ",\"gid\":%" PRIu64 ",\"mode\":\"%04o\",\"linkCount\":%u,\"fsMagic\":\"0x%" PRIx64
+    "\",\"mountId\":\"%" PRIu64 "\",\"mountFlags\":\"%" PRIu64
     "\",\"xattrBytes\":%zd}", name, value->device, value->device_major, value->device_minor, value->inode,
-    value->uid, value->gid, value->mode, value->link_count, value->fs_magic, value->xattr_bytes);
+    value->uid, value->gid, value->mode, value->link_count, value->fs_magic, value->mount_id,
+    value->mount_flags, value->xattr_bytes);
+}
+
+static int print_result(FILE *stream, const options *configuration, const char *self_sha256,
+  const snapshot *custody, const snapshot *before, const snapshot *after, int mutation_performed) {
+  if (fprintf(stream, "{\"schemaVersion\":1,\"mode\":\"%s\",\"environment\":\"%s\",\"target\":\"%s\","
+    "\"selfSha256\":\"%s\",", configuration->mode, configuration->environment,
+    configuration->target, self_sha256) < 0) return -1;
+  if (print_snapshot(stream, "custody", custody) < 0 || fputc(',', stream) == EOF
+    || print_snapshot(stream, "before", before) < 0 || fputc(',', stream) == EOF
+    || print_snapshot(stream, "after", after) < 0) return -1;
+  return fprintf(stream, ",\"mutationPerformed\":%s,\"postcheckComplete\":true}\n",
+    mutation_performed ? "true" : "false");
 }
 
 int main(int argc, char **argv) {
   umask(077);
   options configuration = parse_options(argc, argv);
   require_root_identity();
+  if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) fail_fixed(EXIT_PRECONDITION, "SIGPIPE_POLICY_FAILED");
   if (prctl(PR_SET_DUMPABLE, 0) != 0 || prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
     fail_fixed(EXIT_PRECONDITION, "PROCESS_HARDENING_FAILED");
   }
 
   char self_sha256[65];
-  snapshot custody = verify_custody(&configuration, self_sha256);
+  int cwd_descriptor = -1;
+  snapshot custody = verify_custody(&configuration, self_sha256, &cwd_descriptor);
   int target = open(configuration.target, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
   if (target < 0) fail_fixed(EXIT_PRECONDITION, "TARGET_OPEN_FAILED");
   snapshot before = inspect_descriptor(target, 1);
@@ -432,37 +527,52 @@ int main(int argc, char **argv) {
 
   int mutation_performed = 0;
   snapshot after = before;
+  FILE *evidence_stream = NULL;
   if (strcmp(configuration.mode, "audit") != 0) {
     require_mutation_authority(&configuration);
     require_snapshot(&before, &configuration, configuration.expected_mode);
     pause_rehearsal(configuration.rehearsal_pause_ms);
     snapshot immediately_before = inspect_descriptor(target, 1);
     require_snapshot(&immediately_before, &configuration, configuration.expected_mode);
+    evidence_stream = reserve_evidence(&configuration, cwd_descriptor);
     if (fchmod(target, (mode_t)configuration.target_mode) != 0) {
+      fclose(evidence_stream);
       close(target);
       fail_fixed(EXIT_MUTATION, "TARGET_FCHMOD_FAILED");
     }
     mutation_performed = 1;
+    pause_rehearsal(configuration.rehearsal_pause_after_mutation_ms);
     if (fsync(target) != 0) {
       close(target);
       fail_fixed(EXIT_POSTCHECK, "TARGET_FSYNC_FAILED_AFTER_MUTATION");
     }
     after = inspect_descriptor(target, 1);
     if (after.device != before.device || after.inode != before.inode || after.uid != 0 || after.gid != 0
-      || after.mode != configuration.target_mode || after.fs_magic != before.fs_magic) {
+      || after.mode != configuration.target_mode || after.fs_magic != before.fs_magic
+      || after.mount_id != before.mount_id || after.mount_flags != before.mount_flags) {
       close(target);
       fail_fixed(EXIT_POSTCHECK, "TARGET_POSTCHECK_FAILED_AFTER_MUTATION");
     }
   }
   close(target);
 
-  printf("{\"schemaVersion\":1,\"mode\":\"%s\",\"environment\":\"%s\",\"target\":\"%s\","
-    "\"selfSha256\":\"%s\",", configuration.mode, configuration.environment, configuration.target, self_sha256);
-  print_snapshot("custody", &custody);
-  printf(",");
-  print_snapshot("before", &before);
-  printf(",");
-  print_snapshot("after", &after);
-  printf(",\"mutationPerformed\":%s,\"postcheckComplete\":true}\n", mutation_performed ? "true" : "false");
+  if (mutation_performed) {
+    int evidence_descriptor = fileno(evidence_stream);
+    int evidence_failed = print_result(evidence_stream, &configuration, self_sha256, &custody, &before, &after, 1) < 0
+      || fflush(evidence_stream) != 0 || fsync(evidence_descriptor) != 0;
+    if (fclose(evidence_stream) != 0) evidence_failed = 1;
+    if (fsync(cwd_descriptor) != 0) evidence_failed = 1;
+    if (evidence_failed) {
+      close(cwd_descriptor);
+      fail_fixed(EXIT_POSTCHECK, "EVIDENCE_WRITE_FAILED_AFTER_MUTATION");
+    }
+  }
+  if (print_result(stdout, &configuration, self_sha256, &custody, &before, &after, mutation_performed) < 0
+    || fflush(stdout) != 0) {
+    close(cwd_descriptor);
+    if (mutation_performed) fail_fixed(EXIT_POSTCHECK, "RESULT_OUTPUT_FAILED_AFTER_MUTATION");
+    fail_fixed(EXIT_PRECONDITION, "RESULT_OUTPUT_FAILED");
+  }
+  close(cwd_descriptor);
   return 0;
 }
