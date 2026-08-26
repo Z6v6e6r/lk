@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 45
     env:
       CI: "true"
+      TZ: "Europe/Moscow"
 
     steps:
       - name: Checkout exact pull-request head
