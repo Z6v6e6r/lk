@@ -61,8 +61,8 @@ test("release builder packages and authenticates the bootstrap installer and run
   const { bundle, manifest, installer, installerSha256 } = await buildFixture(t);
   const verified = installer.verifyLegacyGameCommandReleaseBundle(bundle);
   assert.equal(verified.manifest.repositoryCommit, commit);
-  assert.equal(manifest.source.liveFlowSha256, "42cbd9a4fc3e53aacadb24601c2a430e78f36d9b79a5f5725782667a87735c42");
-  assert.equal(manifest.source.candidateFlowSha256, "ccc71f8f54881f3bfd5424a7fc1acc0008d4c3eceb16f1ec4560c281c448c03a");
+  assert.equal(manifest.source.liveFlowSha256, "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350");
+  assert.equal(manifest.source.candidateFlowSha256, "6c8512eeffbf57edc720019487a60a2779b1ec180f1ae373a201519f96a6271e");
   assert.equal(manifest.source.installerSha256, installerSha256);
   assert.ok(manifest.files.some((item) => item.path === "scripts/install_legacy_game_command_production_release.mjs"
     && item.sha256 === installerSha256));
@@ -104,6 +104,22 @@ test("production runbook freezes root custody and both digests before exec", () 
   assert.match(runbook, /! -user root -o -perm \/022/);
   assert.match(runbook, /\$ACTUAL_MANIFEST_SHA256.*\$EXPECTED_MANIFEST_SHA256/);
   assert.match(runbook, /\$ACTUAL_INSTALLER_SHA256.*\$EXPECTED_INSTALLER_SHA256/);
+});
+
+test("host-hardening plan keeps permission and executor mutations behind separate gates", () => {
+  const plan = fs.readFileSync(
+    path.join(repositoryRoot, "docs/LEGACY_GAME_COMMAND_HOST_HARDENING_PLAN.md"),
+    "utf8",
+  );
+  assert.match(plan, /does not authorize `chmod`, `useradd`,/);
+  assert.match(plan, /preimage `0:0:0707`, and target `0:0:0755`/);
+  assert.match(plan, /chmod 0755 -- \/\n/);
+  assert.match(plan, /Restoring the insecure preimage is a separate break-glass live gate/);
+  assert.match(plan, /chmod 0707 -- \/\n/);
+  assert.match(plan, /useradd --system --user-group --no-create-home/);
+  assert.match(plan, /--home-dir \/nonexistent --shell \/usr\/sbin\/nologin/);
+  assert.match(plan, /userdel padlhub-legacy-command/);
+  assert.match(plan, /H1 and H2 do not authorize one another and do not authorize the release install/);
 });
 
 test("mid-copy failure removes its private partial staging tree", async (t) => {

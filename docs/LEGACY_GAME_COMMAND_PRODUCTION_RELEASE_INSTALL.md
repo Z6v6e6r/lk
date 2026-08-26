@@ -34,6 +34,10 @@ does not touch `/root/.node-red`, `flows.json`, PM2/systemd, MongoDB, credential
 network/provider state. Installed files are custodian-owned `0444`; directories are
 `0555`; enclosing release directories are custodian-owned and not group/other writable.
 The unprivileged migration executor UID must be different from the custodian UID.
+The current host permission and executor-identity prerequisites, including their
+independent mutation and recovery gates, are specified in
+`LEGACY_GAME_COMMAND_HOST_HARDENING_PLAN.md`; that source-only plan must be completed
+before custody transfer is attempted.
 
 ## Build and read-only plan
 

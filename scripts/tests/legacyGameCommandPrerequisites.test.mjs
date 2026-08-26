@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -19,7 +20,9 @@ import {
 } from "../../node-red/custom-nodes/legacy-game-command-transaction/legacy-game-command-core.mjs";
 
 const registry = JSON.parse(fs.readFileSync("scripts/legacy_game_revision_writers.json", "utf8"));
+const reconciliation = JSON.parse(fs.readFileSync("scripts/legacy_game_command_live_reconciliation.json", "utf8"));
 const liveFlowPath = process.env.LEGACY_COMMAND_LIVE_FLOW_FIXTURE;
+const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
 test("migration CLI is read-only by default and production apply is impossible", () => {
   const localTargetId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -134,6 +137,9 @@ test("fresh live preimage builds a source-only revision candidate without adding
 }, () => {
   const source = JSON.parse(fs.readFileSync(path.resolve(liveFlowPath), "utf8"));
   const result = buildLegacyGameCommandPrerequisiteCandidate(source);
+  assert.equal(reconciliation.schemaVersion, 2);
+  assert.equal(reconciliation.source.sha256, sha256(fs.readFileSync(path.resolve(liveFlowPath))));
+  assert.equal(reconciliation.candidate.sha256, sha256(`${JSON.stringify(result.flow, null, 2)}\n`));
   assert.equal(result.writerAudit.ok, true);
   assert.equal(result.flow.length, source.length + 36);
   assert.equal(
@@ -141,6 +147,21 @@ test("fresh live preimage builds a source-only revision candidate without adding
     source.filter((node) => node.type === "http in").length,
   );
   assert.equal(result.changes.filter((change) => change.kind === "changed").length, 47);
+  const currentTransition = reconciliation.liveTransitions.at(-1);
+  assert.equal(currentTransition.toFlowSha256, reconciliation.source.sha256);
+  assert.equal(currentTransition.drifts.length, 2);
+  for (const drift of currentTransition.drifts) {
+    const sourceNode = source.find((node) => node.id === drift.nodeId);
+    const candidateNode = result.flow.find((node) => node.id === drift.nodeId);
+    assert.equal(drift.changedFields.join(","), "func");
+    assert.equal(sha256(JSON.stringify(sourceNode.func)), drift.newFieldSha256);
+    assert.equal(candidateNode.func, sourceNode.func, `${drift.nodeId} must preserve parallel live source`);
+    assert.equal(drift.preservedInCandidate, true);
+  }
+  const selectedSource = source.filter((node) => node.type !== "tab" && node.z === reconciliation.selectedTab.tabId);
+  const selectedCandidate = result.flow.filter((node) => node.type !== "tab" && node.z === reconciliation.selectedTab.tabId);
+  assert.equal(sha256(`${JSON.stringify(selectedSource, null, 2)}\n`), reconciliation.selectedTab.sha256);
+  assert.equal(sha256(`${JSON.stringify(selectedCandidate, null, 2)}\n`), reconciliation.candidateSelectedTab.sha256);
   const disconnected = structuredClone(result.flow);
   const revisionQuery = disconnected.find((node) => node.id === "eb7060667c2da065");
   revisionQuery.wires = [[]];
