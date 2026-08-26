@@ -26,13 +26,19 @@ npm install
 npm run build
 ```
 
-Если релиз затрагивает Node-RED для LK Games / referral flow, сначала подготовить flow-артефакты от live состояния `147`:
+Если релиз затрагивает Node-RED для LK Games / referral flow, сначала создать новый
+приватный workspace вне репозитория и read-only получить live состояние `147`:
 
 ```bash
-npm run nodered:modular:prepare-147 -- /root/.node-red/flows.json
+npm run nodered:modular:pull-147 -- /absolute/new/private/workspace
+npm run nodered:modular:verify -- --workspace /absolute/new/private/workspace
 ```
 
-Это обязательно делает `pull -> write/verify source.flow.meta.json -> patch local source functions -> build --allow-other-tabs=true -> validate`, чтобы не выкатывать Node-RED из устаревшего локального snapshot.
+После этого используется только focused patcher конкретного контура с exact preimage,
+новыми output/report paths и отдельным reviewed deploy contract. Старые wide
+`sync-games-source`, `prepare-147` и `exports` находятся в карантине: они не должны
+применяться к свежему live pull, потому что способны затронуть параллельные изменения.
+Полный актуальный порядок зафиксирован в `docs/NODERED_MODULAR_WORKFLOW.md`.
 
 Guarded reviewed-flow deploy дополнительно использует общий server-side `flock`
 и оставляет 15-минутный post-apply lease. Пока lease активен, следующий
@@ -615,13 +621,11 @@ https://padlhub.ru/group?4lGIgL_date=2026-06-27
 
 Перед Viva-транзакцией frontend получает lock через `POST /lk/padel-day/guard`. Gate повторно читает активные Viva bookings и отклоняет любую активную запись с `direction.id=5245`, независимо от станции и даты. Параллельные попытки блокируются атомарной Mongo-записью в `lk_padel_day_transactions`; confirm/release идут через `POST /lk/padel-day/guard/:guardId/:action`.
 
-Node-RED артефакты создаются командой подготовки от live `147`:
-
-```bash
-npm run nodered:modular:prepare-147 -- /root/.node-red/flows.json
-```
-
-Для focused import используйте `node-red/modular/imports/lk_padel_day.import.json` (новая вкладка) или `lk_padel_day.nodes.import.json` (только ноды в уже существующей вкладке).
+Wide-сборка Padel Day через `prepare-147` находится в карантине.
+Не пересобирайте и не импортируйте checked-in
+`node-red/modular/imports/lk_padel_day*.json` как production candidate. До
+восстановления Padel Day-specific patcher с exact live preimage поддерживаемого
+source-driven release path для этих артефактов нет.
 
 ## Закрытый турнирный абонемент (`/tournament_subscription`)
 

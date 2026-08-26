@@ -6,6 +6,14 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
+import { auditLegacyGameRevisionWriters } from "./audit_legacy_game_revision_writers.mjs";
+import {
+  buildCandidate as buildPaymentCandidate,
+  PAYMENT_NODE_IDS,
+} from "./patch_live_game_payment_confirmation.mjs";
+import {
+  buildLegacyGameCommandPrerequisiteCandidate,
+} from "./patch_live_games_command_prerequisites.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = fs.realpathSync(path.resolve(SCRIPT_DIR, ".."));
@@ -13,7 +21,7 @@ const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex"
 const fail = (message) => { throw new Error(message); };
 
 export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
-  sourceSha256: "0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e",
+  sourceSha256: "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350",
   nodeCount: 4762,
   targets: Object.freeze([
     Object.freeze({
@@ -58,6 +66,188 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
     }),
   ]),
 });
+
+const UNIFIED_IDS = Object.freeze({
+  create: "e656cff36a8cd210",
+  createMongo: "5eaf4c087c0cc668",
+  createRevisionAck: "lk_game_create_revision_ack_20260826",
+  cleanupPrepare: "9508f8e0ae8d282a",
+  cleanupRouter: "bcc3dccf8d64f9bb",
+  cleanupMongo: "11079a30bf3cc6ad",
+  cleanupRevisionAck: "lk_split_cleanup_revision_ack_20260826",
+  cleanupReadbackCatch: "lk_split_cleanup_payment_readback_catch_20260827",
+  confirmReadbackCatch: "lk_game_payment_confirm_readback_catch_20260827",
+  upsertArgs: "79307f9bcbc28b6c",
+});
+const REGISTRY_PATH = path.join(SCRIPT_DIR, "legacy_game_revision_writers.json");
+
+const exactNode = (flow, id) => {
+  const matches = flow.filter((node) => node?.id === id);
+  if (matches.length !== 1) fail(`Unified candidate requires exact node ${id}`);
+  return matches[0];
+};
+const changedFields = (before, after) => [...new Set([...Object.keys(before), ...Object.keys(after)])]
+  .filter((key) => !isDeepStrictEqual(before[key], after[key]))
+  .sort();
+const graphHealth = (flow) => {
+  const ids = new Set(flow.map((node) => node.id));
+  let brokenWires = 0;
+  let brokenLinks = 0;
+  for (const node of flow) {
+    for (const targetId of (Array.isArray(node.wires) ? node.wires : []).flat()) {
+      if (!ids.has(targetId)) brokenWires += 1;
+    }
+    if ((node.type === "link in" || node.type === "link out") && Array.isArray(node.links)) {
+      for (const targetId of node.links) if (!ids.has(targetId)) brokenLinks += 1;
+    }
+    if (node.type === "function" && Number.isInteger(node.outputs)
+      && Array.isArray(node.wires) && node.outputs !== node.wires.length) {
+      fail(`Unified function output count mismatch for ${node.id}`);
+    }
+  }
+  return { brokenWires, brokenLinks };
+};
+
+function replaceCandidateHash(registry, writerId, sourceNodeId, candidateSha256) {
+  const writer = registry.writers.find((item) => item.nodeId === writerId);
+  const source = writer?.sourceNodes?.find((item) => item.nodeId === sourceNodeId);
+  if (!source) fail(`Unified writer provenance missing ${writerId}/${sourceNodeId}`);
+  source.candidateSha256 = candidateSha256;
+}
+
+export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256) {
+  if (!Array.isArray(source) || source.length !== LK1_ENFORCEMENT_CONTRACT.nodeCount) {
+    fail("Unified LK1 flow node count mismatch");
+  }
+  if (sourceSha256 !== LK1_ENFORCEMENT_CONTRACT.sourceSha256) {
+    fail("Unified LK1 live source SHA mismatch");
+  }
+  if (source.filter((node) => node.type === "http in").length !== 215) {
+    fail("Unified LK1 HTTP route count mismatch");
+  }
+
+  const before = structuredClone(source);
+  const payment = buildPaymentCandidate(structuredClone(source), sourceSha256);
+  const legacy = buildLegacyGameCommandPrerequisiteCandidate(structuredClone(source));
+  const flow = legacy.flow;
+  const paymentById = new Map(payment.candidate.map((node) => [node.id, node]));
+  const sourceIds = new Set(source.map((node) => node.id));
+
+  for (const node of payment.candidate) {
+    if (!sourceIds.has(node.id)) flow.push(structuredClone(node));
+  }
+
+  for (const [id, sourceFile] of [
+    [UNIFIED_IDS.create, "scripts/nodered_games_nodes/fn_create.js"],
+    [UNIFIED_IDS.cleanupPrepare, "scripts/nodered_games_nodes/fn_split_cleanup_prepare.js"],
+    [UNIFIED_IDS.cleanupRouter, "scripts/nodered_games_nodes/fn_split_cleanup_router.js"],
+  ]) exactNode(flow, id).func = fs.readFileSync(path.join(REPO_ROOT, sourceFile), "utf8");
+  exactNode(flow, UNIFIED_IDS.upsertArgs).func = paymentById.get(UNIFIED_IDS.upsertArgs).func;
+  for (const route of LK1_ENFORCEMENT_CONTRACT.targets.filter((item) => item.id !== "e0d7883bc1a9fa8c")) {
+    const liveNode = exactNode(before, route.id);
+    if (sha256(String(liveNode.func || "")) !== route.preimageSha256) {
+      fail(`Unified LK1 target ${route.id} preimage mismatch`);
+    }
+    const sourceText = fs.readFileSync(path.join(REPO_ROOT, route.sourceFile), "utf8");
+    if (sha256(sourceText) !== route.candidateSha256) fail(`Unified LK1 target ${route.id} source mismatch`);
+    exactNode(flow, route.id).func = sourceText;
+  }
+  const patchTarget = LK1_ENFORCEMENT_CONTRACT.targets[0];
+  if (sha256(exactNode(flow, patchTarget.id).func || "") !== patchTarget.candidateSha256) {
+    fail("Unified LK1 PATCH source was not composed by the legacy prerequisite graph");
+  }
+
+  for (const route of payment.report.changedNodeIds.filter((id) => {
+    const node = paymentById.get(id);
+    return node?.type === "http in";
+  })) {
+    exactNode(flow, route).wires = structuredClone(paymentById.get(route).wires);
+  }
+
+  const createRevisionAck = exactNode(flow, UNIFIED_IDS.createRevisionAck);
+  createRevisionAck.outputs = 4;
+  createRevisionAck.wires = [
+    ["ae5ee70de15fe66e"],
+    ["60a3353902ae9973"],
+    ["9756d9125563753f"],
+    [PAYMENT_NODE_IDS.confirmWriteAck],
+  ];
+  exactNode(flow, UNIFIED_IDS.createMongo).wires = [[UNIFIED_IDS.createRevisionAck]];
+
+  const cleanupRevisionAck = exactNode(flow, UNIFIED_IDS.cleanupRevisionAck);
+  cleanupRevisionAck.outputs = 3;
+  cleanupRevisionAck.wires = [
+    ["lk_split_cleanup_revision_recovery_write_20260826"],
+    ["e71d73fb91b0c3f0", "ba322f367a4d4fcd"],
+    [PAYMENT_NODE_IDS.cleanupWriteAck],
+  ];
+  exactNode(flow, UNIFIED_IDS.cleanupMongo).wires = [[UNIFIED_IDS.cleanupRevisionAck]];
+  const cleanupPaymentAck = exactNode(flow, PAYMENT_NODE_IDS.cleanupWriteAck);
+  cleanupPaymentAck.outputs = 4;
+  cleanupPaymentAck.wires = [
+    [PAYMENT_NODE_IDS.cleanupWriteReadback],
+    ["e71d73fb91b0c3f0"],
+    ["ba322f367a4d4fcd"],
+    [UNIFIED_IDS.cleanupRevisionAck],
+  ];
+  flow.push(
+    {
+      id: UNIFIED_IDS.confirmReadbackCatch,
+      type: "catch",
+      z: "4b91e2a2413688db",
+      name: "Catch confirmed game readback errors",
+      scope: [PAYMENT_NODE_IDS.confirmWriteReadback],
+      uncaught: false,
+      x: 1880,
+      y: 2960,
+      wires: [[PAYMENT_NODE_IDS.confirmWriteAck]],
+    },
+    {
+      id: UNIFIED_IDS.cleanupReadbackCatch,
+      type: "catch",
+      z: "4b91e2a2413688db",
+      name: "Catch split cleanup readback errors",
+      scope: [PAYMENT_NODE_IDS.cleanupWriteReadback],
+      uncaught: false,
+      x: 2100,
+      y: 2320,
+      wires: [[PAYMENT_NODE_IDS.cleanupWriteAck]],
+    },
+  );
+
+  const health = graphHealth(flow);
+  if (health.brokenWires || health.brokenLinks) fail("Unified LK1 candidate contains broken references");
+  if (flow.filter((node) => node.type === "http in").length !== 215) {
+    fail("Unified LK1 candidate changed HTTP route inventory");
+  }
+
+  const registry = JSON.parse(fs.readFileSync(REGISTRY_PATH, "utf8"));
+  replaceCandidateHash(registry, UNIFIED_IDS.createMongo, UNIFIED_IDS.create, sha256(exactNode(flow, UNIFIED_IDS.create).func));
+  replaceCandidateHash(registry, UNIFIED_IDS.cleanupMongo, UNIFIED_IDS.cleanupPrepare, sha256(exactNode(flow, UNIFIED_IDS.cleanupPrepare).func));
+  replaceCandidateHash(registry, UNIFIED_IDS.cleanupMongo, UNIFIED_IDS.cleanupRouter, sha256(exactNode(flow, UNIFIED_IDS.cleanupRouter).func));
+  const writerAudit = auditLegacyGameRevisionWriters(flow, registry, { stage: "candidate" });
+  const changes = flow.flatMap((node) => {
+    const prior = before.find((item) => item.id === node.id);
+    if (!prior) return [{ id: node.id, kind: "added", changedFields: Object.keys(node).sort() }];
+    if (isDeepStrictEqual(prior, node)) return [];
+    return [{ id: node.id, kind: "changed", changedFields: changedFields(prior, node) }];
+  });
+  return {
+    candidate: flow,
+    changedNodes: changes,
+    writerAudit,
+    graphHealth: health,
+    composition: {
+      subscriptionFunctionCount: LK1_ENFORCEMENT_CONTRACT.targets.length,
+      legacyPrerequisiteChanges: legacy.changes.length,
+      paymentAddedNodeCount: Object.keys(PAYMENT_NODE_IDS).length,
+      splitPricingMutationCount: 0,
+      createAckOrder: [UNIFIED_IDS.createRevisionAck, PAYMENT_NODE_IDS.confirmWriteAck, PAYMENT_NODE_IDS.confirmWriteReadback],
+      cleanupAckOrder: [UNIFIED_IDS.cleanupRevisionAck, PAYMENT_NODE_IDS.cleanupWriteAck, PAYMENT_NODE_IDS.cleanupWriteReadback],
+      cleanupRecoveryNode: "lk_split_cleanup_revision_recovery_write_20260826",
+    },
+  };
+}
 
 const topology = (flow) => flow.map((node) => ({
   id: node.id,
@@ -124,21 +314,25 @@ export function buildLk1EnforcementCandidate(
 
 export function publishLk1EnforcementCandidate(workspace) {
   const verified = verifyWorkspace(workspace, { quiet: true });
-  const result = buildLk1EnforcementCandidate(
-    structuredClone(verified.source),
-    verified.sourceSha256,
-  );
+  const result = buildUnifiedLk1EnforcementCandidate(verified.source, verified.sourceSha256);
   const candidateText = `${JSON.stringify(result.candidate, null, 2)}\n`;
   const report = {
-    formatVersion: 1,
+    formatVersion: 2,
     ok: true,
     sourceKind: "live-147",
     sourceSha256: verified.sourceSha256,
     candidateSha256: sha256(candidateText),
     sourceNodeCount: verified.nodeCount,
     candidateNodeCount: result.candidate.length,
+    httpRouteCount: result.candidate.filter((node) => node.type === "http in").length,
     changedNodeCount: result.changedNodes.length,
     changedNodes: result.changedNodes,
+    writerAudit: result.writerAudit,
+    graphHealth: result.graphHealth,
+    composition: result.composition,
+    productionCustodyState: "UNBOUND",
+    liveMutationAuthorized: false,
+    deploymentPerformed: false,
   };
   const buildDirectory = path.join(verified.workspace, "build");
   fs.mkdirSync(buildDirectory, { recursive: true, mode: 0o700 });

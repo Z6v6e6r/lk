@@ -56,10 +56,16 @@ const HUB_STATION_IDS = [
 ];
 const DAY_MS = 24 * 60 * 60 * 1000;
 const futureManagedTarget = () => {
-  const startsAt = new Date(Date.now() + DAY_MS);
+  const futureDate = new Date(Date.now() + 36 * 60 * 60 * 1000);
+  const serviceDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(futureDate);
   return {
-    serviceDate: startsAt.toISOString().slice(0, 10),
-    startsAt: startsAt.toISOString(),
+    serviceDate,
+    startsAt: `${serviceDate}T09:00:00.000Z`,
   };
 };
 
@@ -741,7 +747,7 @@ test("published managed policy is evaluated before Mongo and persists its audit 
   assert.equal(history[1], null);
 
   const evaluated = runFunction(MANAGED_EVALUATOR_FILE, history[6]);
-  assert.ok(evaluated[0]);
+  assert.ok(evaluated[0], JSON.stringify(evaluated[1]?._managedSubscriptionPolicyDecision));
   const routed = runFunction(ROUTER_FILE, evaluated[0], MANAGED_GLOBALS);
   assert.equal(routed[1]._subscriptionBooking.step, "operation_find");
   assert.equal(routed[1]._subscriptionBooking.managedDecision.policyVersion, 1);
@@ -1551,6 +1557,7 @@ test("managed booking rechecks CUP identity and policy after preaccept before Vi
     },
     _subscriptionBooking: exerciseRecheck[0]._subscriptionBooking,
   }, MANAGED_GLOBALS);
+  assert.ok(recheck[0], JSON.stringify(recheck[3]?.payload ?? recheck[4]?.payload));
   assert.equal(recheck[0]._subscriptionBooking.step, "managed_runtime_recheck");
   assert.equal(recheck[0].url, "https://cup.example/api/internal/subscriptions/runtime-context");
 
@@ -1734,7 +1741,7 @@ test("guarded patcher accepts the exact current tracked split router", () => {
     ],
   };
 
-  assert.equal(funcSha256, "892ad51fcb8f2be2a194661e04f9c775d4345fea153e5dbc3758bd40967101f2");
+  assert.equal(funcSha256, "cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a");
   assert.equal(resolveManagedSubscriptionRouterContract(router, funcSha256)?.managedActionCandidateSha256, null);
 });
 

@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import test from "node:test";
 
 import {
+  assertPinnedMongoRuntimeClosure,
   classifyAmbiguousExecutionReceipt,
   classifyIndexSpecs,
   executionReceiptIdentityMatches,
@@ -22,6 +24,7 @@ import {
   validateProductionReleaseAttestation,
 } from "../run_legacy_game_command_production_migration.mjs";
 
+const require = createRequire(import.meta.url);
 const digest = (character) => character.repeat(64);
 const releaseSha = "a".repeat(40);
 const COMBINED_SOURCE_ONLY_CANDIDATE_SHA256 = "e730bf8c043e2f33f5a75c6825d56f39a580a10201f77c399d2323f70f9f7e4d";
@@ -36,6 +39,7 @@ const context = {
     candidateFlowSha256: EXPECTED_CANDIDATE_FLOW_SHA256,
     packageSha256: digest("3"),
     writerRegistrySha256: digest("4"),
+    installerSha256: digest("9"),
     runnerSha256: digest("a"),
     migrationCoreSha256: digest("b"),
     approvalVerifierSha256: digest("c"),
@@ -59,6 +63,7 @@ const buildPacket = (overrides = {}) => ({
     candidateFlowSha256: EXPECTED_CANDIDATE_FLOW_SHA256,
     packageSha256: context.source.packageSha256,
     writerRegistrySha256: context.source.writerRegistrySha256,
+    installerSha256: context.source.installerSha256,
     runnerSha256: context.source.runnerSha256,
     migrationCoreSha256: context.source.migrationCoreSha256,
     approvalVerifierSha256: context.source.approvalVerifierSha256,
@@ -228,7 +233,8 @@ test("ambiguous majority receipt never authorizes writes and distinguishes recov
 test("runtime closure includes installed peers and fails on a missing required peer", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-command-runtime-closure-"));
   try {
-    const nodeModules = path.join(directory, "node_modules");
+    const projectDirectory = path.join(directory, "project");
+    const nodeModules = path.join(projectDirectory, "node_modules");
     const entryDirectory = path.join(nodeModules, "root-runtime");
     const peerDirectory = path.join(nodeModules, "peer-runtime");
     fs.mkdirSync(entryDirectory, { recursive: true });
@@ -259,9 +265,60 @@ test("runtime closure includes installed peers and fails on a missing required p
       peerDependencies: { "missing-required-runtime": "1.0.0" },
     }));
     assert.throws(() => resolveRuntimePackageClosure(entryManifestPath), /missing-required-runtime/);
+
+    const ambientDirectory = path.join(directory, "node_modules", "ambient-runtime");
+    fs.mkdirSync(ambientDirectory, { recursive: true });
+    fs.writeFileSync(path.join(ambientDirectory, "package.json"), JSON.stringify({
+      name: "ambient-runtime",
+      version: "9.9.9",
+    }));
+    fs.writeFileSync(path.join(ambientDirectory, "index.js"), "export const ambient = true;\n");
+    fs.writeFileSync(entryManifestPath, JSON.stringify({
+      name: "root-runtime",
+      version: "1.0.0",
+      peerDependencies: { "ambient-runtime": "9.9.9" },
+      peerDependenciesMeta: { "ambient-runtime": { optional: true } },
+    }));
+    assert.deepEqual(
+      resolveRuntimePackageClosure(entryManifestPath).map((item) => item.identity),
+      ["root-runtime@1.0.0"],
+    );
+    fs.writeFileSync(entryManifestPath, JSON.stringify({
+      name: "root-runtime",
+      version: "1.0.0",
+      dependencies: { "ambient-runtime": "9.9.9" },
+    }));
+    assert.throws(
+      () => resolveRuntimePackageClosure(entryManifestPath),
+      /outside the approved node_modules root/,
+    );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("release input rejects changed MongoDB dependency bytes with unchanged package metadata", (t) => {
+  const sourceEntry = require.resolve("mongodb/package.json");
+  const sourcePackages = resolveRuntimePackageClosure(sourceEntry);
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "legacy-command-pinned-runtime-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const runtimePackage of sourcePackages) {
+    const marker = `${path.sep}node_modules${path.sep}`;
+    const markerIndex = runtimePackage.directory.indexOf(marker);
+    const relative = runtimePackage.directory.slice(markerIndex + marker.length);
+    fs.cpSync(runtimePackage.directory, path.join(root, "node_modules", relative), {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+    });
+  }
+  const copiedEntry = path.join(root, "node_modules", "mongodb", "package.json");
+  assertPinnedMongoRuntimeClosure(copiedEntry);
+  fs.appendFileSync(path.join(root, "node_modules", "mongodb", "lib", "index.js"), "\n// tampered\n");
+  assert.throws(
+    () => assertPinnedMongoRuntimeClosure(copiedEntry),
+    /independently pinned npm ci digest/,
+  );
 });
 
 test("index classifier rejects same-name drift and equivalent indexes under another name", () => {

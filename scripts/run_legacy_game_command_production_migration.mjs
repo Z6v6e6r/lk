@@ -34,6 +34,7 @@ import {
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.dirname(SCRIPT_DIR);
 const RUNNER_PATH = fileURLToPath(import.meta.url);
+const INSTALLER_PATH = path.join(SCRIPT_DIR, "install_legacy_game_command_production_release.mjs");
 const MIGRATION_CORE_PATH = path.join(SCRIPT_DIR, "migrate_legacy_game_command_prerequisites.mjs");
 const PACKAGE_DIR = path.join(REPO_ROOT, "node-red/custom-nodes/legacy-game-command-transaction");
 const WRITER_REGISTRY_PATH = path.join(SCRIPT_DIR, "legacy_game_revision_writers.json");
@@ -60,8 +61,10 @@ const MONGODB_PACKAGE_VERSION = JSON.parse(fs.readFileSync(MONGODB_PACKAGE_PATH,
 export { PRODUCTION_MIGRATION_ID };
 export const PRODUCTION_PACKET_SCHEMA_VERSION = 1;
 export const PRODUCTION_APPLY_CONFIRMATION = "APPLY_LEGACY_GAME_COMMAND_PREREQUISITES_PRODUCTION_V1";
-export const EXPECTED_LIVE_FLOW_SHA256 = "0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e";
-export const EXPECTED_CANDIDATE_FLOW_SHA256 = "035e9d93b70ee8d3b2817280f42539679e5a7ed270bf8f0c242b364ad57a0e02";
+export const EXPECTED_LIVE_FLOW_SHA256 = "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350";
+export const EXPECTED_CANDIDATE_FLOW_SHA256 = "6c8512eeffbf57edc720019487a60a2779b1ec180f1ae373a201519f96a6271e";
+// Frozen from a new `npm ci --ignore-scripts --omit=dev` install of package-lock.json.
+export const EXPECTED_MONGODB_RUNTIME_CLOSURE_SHA256 = "0ca817b6104013a415c8766fa43ec5d5baaf8859ddffeba182d5a69dc609fcc7";
 export const MIN_QUIESCENCE_OBSERVATION_MS = 120_000;
 export const MAX_PACKET_LIFETIME_MS = 30 * 60_000;
 export const MAX_BACKUP_AGE_MS = 24 * 60 * 60_000;
@@ -171,9 +174,40 @@ function hashFileInventory(root, filePaths) {
 }
 
 export function resolveRuntimePackageClosure(entryPackageJsonPath) {
+  const resolvedEntry = fs.realpathSync(path.resolve(entryPackageJsonPath));
+  const nodeModulesMarker = `${path.sep}node_modules${path.sep}`;
+  const markerIndex = resolvedEntry.indexOf(nodeModulesMarker);
+  if (markerIndex < 0) throw new Error("Runtime package entry must be inside node_modules");
+  const allowedNodeModules = `${resolvedEntry.slice(0, markerIndex)}${path.sep}node_modules${path.sep}`;
+  const assertInsideRuntimeRoot = (candidate) => {
+    const resolved = fs.realpathSync(candidate);
+    if (!resolved.startsWith(allowedNodeModules)) {
+      throw new Error(`Runtime package resolved outside the approved node_modules root: ${resolved}`);
+    }
+    return resolved;
+  };
+  const resolveDependencyManifest = (packageRequire, dependency) => {
+    try {
+      return assertInsideRuntimeRoot(packageRequire.resolve(`${dependency}/package.json`));
+    } catch (error) {
+      if (error?.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") throw error;
+      let current = path.dirname(packageRequire.resolve(dependency));
+      while (true) {
+        const candidate = path.join(current, "package.json");
+        if (fs.existsSync(candidate)) {
+          const manifest = JSON.parse(fs.readFileSync(candidate, "utf8"));
+          if (manifest.name === dependency) return assertInsideRuntimeRoot(candidate);
+        }
+        const parent = path.dirname(current);
+        if (parent === current || path.basename(current) === "node_modules") break;
+        current = parent;
+      }
+      throw new Error(`Unable to resolve runtime package manifest for ${dependency}`);
+    }
+  };
   const packages = [];
   const visited = new Set();
-  const queue = [path.resolve(entryPackageJsonPath)];
+  const queue = [assertInsideRuntimeRoot(resolvedEntry)];
   while (queue.length > 0) {
     const packageJsonPath = queue.shift();
     if (visited.has(packageJsonPath)) continue;
@@ -185,20 +219,21 @@ export function resolveRuntimePackageClosure(entryPackageJsonPath) {
       directory,
       files: listRegularFilesRecursively(directory),
     });
+    const packageRequire = createRequire(packageJsonPath);
     const ordinaryDependencies = {
       ...(manifest.dependencies || {}),
       ...(manifest.optionalDependencies || {}),
     };
     for (const dependency of Object.keys(ordinaryDependencies).sort()) {
       try {
-        queue.push(resolveRuntimeDependencyManifest(packageJsonPath, dependency));
+        queue.push(resolveDependencyManifest(packageRequire, dependency));
       } catch (error) {
         if (!(dependency in (manifest.optionalDependencies || {}))) throw error;
       }
     }
     for (const dependency of Object.keys(manifest.peerDependencies || {}).sort()) {
       try {
-        queue.push(resolveRuntimeDependencyManifest(packageJsonPath, dependency));
+        queue.push(resolveDependencyManifest(packageRequire, dependency));
       } catch (error) {
         if (manifest.peerDependenciesMeta?.[dependency]?.optional !== true) throw error;
       }
@@ -207,30 +242,23 @@ export function resolveRuntimePackageClosure(entryPackageJsonPath) {
   return packages.sort((left, right) => left.identity.localeCompare(right.identity));
 }
 
-function resolveRuntimeDependencyManifest(packageJsonPath, dependency) {
-  const packageSegments = dependency.split("/");
-  let current = path.dirname(packageJsonPath);
-  while (true) {
-    const candidate = path.join(current, "node_modules", ...packageSegments, "package.json");
-    if (fs.existsSync(candidate)) return candidate;
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  throw new Error(`Unable to resolve runtime package manifest for ${dependency}`);
-}
-
 const mongodbRuntimePackages = () => resolveRuntimePackageClosure(MONGODB_PACKAGE_PATH);
 const mongodbRuntimeFiles = () => mongodbRuntimePackages().flatMap((item) => item.files);
-const mongodbRuntimeClosureSha256 = () => {
+export const hashRuntimePackageClosure = (entryPackageJsonPath) => {
   const digest = crypto.createHash("sha256");
-  for (const runtimePackage of mongodbRuntimePackages()) {
+  for (const runtimePackage of resolveRuntimePackageClosure(entryPackageJsonPath)) {
     digest.update(`${runtimePackage.identity}\u0000`);
     digest.update(hashFileInventory(runtimePackage.directory, runtimePackage.files));
   }
   return digest.digest("hex");
 };
-
+export const assertPinnedMongoRuntimeClosure = (entryPackageJsonPath = MONGODB_PACKAGE_PATH) => {
+  const actual = hashRuntimePackageClosure(entryPackageJsonPath);
+  if (actual !== EXPECTED_MONGODB_RUNTIME_CLOSURE_SHA256) {
+    throw new Error("MongoDB runtime closure does not match the independently pinned npm ci digest");
+  }
+  return actual;
+};
 export const writerRegistrySha256 = () => sha256(fs.readFileSync(WRITER_REGISTRY_PATH));
 
 function productionSourceCustodyPaths() {
@@ -239,6 +267,7 @@ function productionSourceCustodyPaths() {
     .map((entry) => path.join(PACKAGE_DIR, entry.name));
   return [
     RUNNER_PATH,
+    INSTALLER_PATH,
     MIGRATION_CORE_PATH,
     WRITER_REGISTRY_PATH,
     ROOT_PACKAGE_PATH,
@@ -251,27 +280,37 @@ function productionSourceCustodyPaths() {
   ];
 }
 
-export function buildProductionStaticSourceIdentity({ releaseAttestationSha256 = "UNBOUND" } = {}) {
+export function buildProductionStaticSourceIdentity({
+  releaseAttestationSha256 = "UNBOUND",
+  sourceRoot = REPO_ROOT,
+} = {}) {
+  const root = fs.realpathSync(sourceRoot);
+  const sourceScriptDirectory = path.join(root, "scripts");
+  const sourceRunnerPath = path.join(sourceScriptDirectory, "run_legacy_game_command_production_migration.mjs");
+  const sourcePackageDirectory = path.join(root, "node-red/custom-nodes/legacy-game-command-transaction");
+  const sourceRequire = createRequire(path.join(root, "package.json"));
+  const sourceMongoPackagePath = sourceRequire.resolve("mongodb/package.json");
   return {
     liveFlowSha256: EXPECTED_LIVE_FLOW_SHA256,
     candidateFlowSha256: EXPECTED_CANDIDATE_FLOW_SHA256,
-    packageSha256: hashPrivatePackage(),
-    writerRegistrySha256: writerRegistrySha256(),
-    runnerSha256: sha256(fs.readFileSync(RUNNER_PATH)),
-    migrationCoreSha256: sha256(fs.readFileSync(MIGRATION_CORE_PATH)),
-    approvalVerifierSha256: sha256(fs.readFileSync(APPROVAL_VERIFIER_PATH)),
-    trustAnchorManifestSha256: sha256(TRUST_ANCHOR_MANIFEST_BODY),
-    rootPackageSha256: sha256(fs.readFileSync(ROOT_PACKAGE_PATH)),
-    dependencyLockSha256: sha256(fs.readFileSync(DEPENDENCY_LOCK_PATH)),
+    packageSha256: hashPrivatePackage(sourcePackageDirectory),
+    writerRegistrySha256: sha256(fs.readFileSync(path.join(sourceScriptDirectory, "legacy_game_revision_writers.json"))),
+    installerSha256: sha256(fs.readFileSync(path.join(sourceScriptDirectory, "install_legacy_game_command_production_release.mjs"))),
+    runnerSha256: sha256(fs.readFileSync(sourceRunnerPath)),
+    migrationCoreSha256: sha256(fs.readFileSync(path.join(sourceScriptDirectory, "migrate_legacy_game_command_prerequisites.mjs"))),
+    approvalVerifierSha256: sha256(fs.readFileSync(path.join(sourceScriptDirectory, "lib/legacy_game_command_production_approval.mjs"))),
+    trustAnchorManifestSha256: sha256(fs.readFileSync(path.join(sourceScriptDirectory, "legacy_game_command_production_trust_anchor.json"))),
+    rootPackageSha256: sha256(fs.readFileSync(path.join(root, "package.json"))),
+    dependencyLockSha256: sha256(fs.readFileSync(path.join(root, "package-lock.json"))),
     nodeExecutableSha256: sha256(fs.readFileSync(NODE_EXECUTABLE_PATH)),
-    mongodbRuntimeClosureSha256: mongodbRuntimeClosureSha256(),
+    mongodbRuntimeClosureSha256: assertPinnedMongoRuntimeClosure(sourceMongoPackagePath),
     releaseAttestationSha256,
   };
 }
 
 const RELEASE_ATTESTATION_SOURCE_KEYS = [
   "liveFlowSha256", "candidateFlowSha256", "packageSha256", "writerRegistrySha256",
-  "runnerSha256", "migrationCoreSha256", "approvalVerifierSha256", "trustAnchorManifestSha256",
+  "installerSha256", "runnerSha256", "migrationCoreSha256", "approvalVerifierSha256", "trustAnchorManifestSha256",
   "rootPackageSha256", "dependencyLockSha256",
   "nodeExecutableSha256", "mongodbRuntimeClosureSha256",
 ];
@@ -468,7 +507,7 @@ function validateProductionExecutionPacketSchema(packet) {
   assertExactObjectKeys(packet.target, ["databaseName", "fingerprint"], "Execution packet target");
   assertExactObjectKeys(packet.source, [
     "repositoryCommit", "liveFlowSha256", "candidateFlowSha256", "packageSha256",
-    "writerRegistrySha256", "runnerSha256", "migrationCoreSha256",
+    "writerRegistrySha256", "installerSha256", "runnerSha256", "migrationCoreSha256",
     "approvalVerifierSha256", "trustAnchorManifestSha256", "rootPackageSha256",
     "dependencyLockSha256", "nodeExecutableSha256", "mongodbRuntimeClosureSha256",
     "releaseAttestationSha256",
@@ -511,6 +550,7 @@ export function validateProductionExecutionPacketStatic(packet, {
     packet.source.candidateFlowSha256,
     packet.source.packageSha256,
     packet.source.writerRegistrySha256,
+    packet.source.installerSha256,
     packet.source.runnerSha256,
     packet.source.migrationCoreSha256,
     packet.source.approvalVerifierSha256,
@@ -618,7 +658,7 @@ export function validateProductionEvidenceDocuments(packet, documents, { environ
   assertExactObjectKeys(runtime, [
     "schemaVersion", "migrationId", "environment", "targetFingerprint", "repositoryCommit",
     "liveFlowSha256", "candidateFlowSha256", "packageSha256", "writerRegistrySha256",
-    "runnerSha256", "migrationCoreSha256", "approvalVerifierSha256", "trustAnchorManifestSha256",
+    "installerSha256", "runnerSha256", "migrationCoreSha256", "approvalVerifierSha256", "trustAnchorManifestSha256",
     "rootPackageSha256", "dependencyLockSha256", "nodeExecutableSha256", "mongodbRuntimeClosureSha256",
     "releaseAttestationSha256", "nodeVersion", "mongodbDriverVersion", "verifiedAt", "status",
   ], "Runtime compatibility report");
@@ -628,6 +668,7 @@ export function validateProductionEvidenceDocuments(packet, documents, { environ
     [runtime.candidateFlowSha256, packet.source.candidateFlowSha256],
     [runtime.packageSha256, packet.source.packageSha256],
     [runtime.writerRegistrySha256, packet.source.writerRegistrySha256],
+    [runtime.installerSha256, packet.source.installerSha256],
     [runtime.runnerSha256, packet.source.runnerSha256],
     [runtime.migrationCoreSha256, packet.source.migrationCoreSha256],
     [runtime.approvalVerifierSha256, packet.source.approvalVerifierSha256],
@@ -735,6 +776,7 @@ export function validateProductionExecutionPacket(packet, context, {
     [packet.source?.candidateFlowSha256, EXPECTED_CANDIDATE_FLOW_SHA256, "candidate flow"],
     [packet.source?.packageSha256, context.source.packageSha256, "custom node package"],
     [packet.source?.writerRegistrySha256, context.source.writerRegistrySha256, "writer registry"],
+    [packet.source?.installerSha256, context.source.installerSha256, "release installer"],
     [packet.source?.runnerSha256, context.source.runnerSha256, "production runner"],
     [packet.source?.migrationCoreSha256, context.source.migrationCoreSha256, "migration core"],
     [packet.source?.approvalVerifierSha256, context.source.approvalVerifierSha256, "approval verifier"],

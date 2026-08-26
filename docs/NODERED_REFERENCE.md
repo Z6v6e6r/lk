@@ -8,8 +8,9 @@
 - Result lifecycle replay recovers a missing saved game projection only when the current game revision still equals the durable outbox `sourceGameRevision`, then uses that exact revision for the fenced CAS before side effects are released.
 - Viva provider execution is released only after an exact primary/majority read-back of provider row id, tenant, result id, and result revision.
 - The source-only production migration wrapper audits a fresh database state digest, target fingerprint, exact release/live/candidate/package/runner/verifier/manifest hashes, a custodian-owned read-only release attestation, strict canonical backup/restore/quiescence/runtime evidence files, a domain-separated detached Ed25519 approval, and a one-time execution nonce with ambiguous-ACK recovery. The verifier exists, but production apply remains fail-closed while the source manifest is `UNBOUND`; see `docs/LEGACY_GAME_COMMAND_PRODUCTION_MIGRATION_RUNNER.md` and `docs/LEGACY_GAME_COMMAND_PRODUCTION_TRUST_ANCHOR.md`.
+- The production release builder packages the exact runner/custom-node sources and complete installed MongoDB runtime closure. The guarded installer has a read-only `plan` mode and can only create a new commit-addressed custodian-owned release; it never updates a `current` symlink or restarts Node-RED. See `docs/LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_INSTALL.md`.
 - Runtime installation, migrations, mapping imports, flow import, provider calls, and gateway activation remain separate guarded R4 tasks.
-- The subscription and legacy-prerequisite full-flow candidates are source-only and are not sequentially deployable; a future unified release builder is mandatory before any import.
+- The subscription-only and legacy-prerequisite full-flow candidates are source-only and are not sequentially deployable. `scripts/prepare_lk1_subscription_enforcement_candidate.mjs` now builds the single unified source-only graph, but its production custody is `UNBOUND`; import/deploy remains forbidden until a separately approved R4 custody and rollout gate.
 
 ## Split booking lifecycle v2
 
@@ -21,6 +22,17 @@
 - Runtime mode: `SPLIT_LIFECYCLE_V2_MODE=OFF|SHADOW|ENFORCE_NEW`; default `SHADOW`.
 - Autonomous cohort cutoff: `SPLIT_LIFECYCLE_V2_ENFORCE_FROM=<RFC3339 timestamp with timezone>`; required in `SHADOW` and `ENFORCE_NEW`, otherwise the scheduler skips before lease and Mongo.
 - Full contract and acceptance tests: `docs/SPLIT_LIFECYCLE_V2.md`.
+
+## Split payment draft confirmation
+
+- `POST /lk/games/drafts` is the only browser write before Viva redirect. The draft remains `PAYMENT_PENDING`; aliases and generic `POST /lk/games` are not payment-confirmation fallbacks.
+- `POST /lk/games/payment/confirm` accepts `paymentRef` as lookup identity, loads the unique durable draft, and verifies the exact Viva transaction with server credentials. The client cannot supply authoritative paid status, amount, currency, transaction, booking, exercise, or player identity.
+- Confirmation succeeds only for Viva `PAID` and exact transaction, booking, exercise, amount, currency, and available client identity matches. Pending, cancelled, failed, missing, mismatched, or duplicate evidence fails closed and does not publish a paid game.
+- Before either callback or cleanup can publish, the verified Viva transaction is atomically claimed in `lk_game_payment_evidence_claims` under `_id=viva_transaction:<transactionId>` using only `$setOnInsert`, then read back and matched to exact game, `paymentRef`, transaction, and booking. A concurrent or replayed claim owned by another game fails closed.
+- Source functions: `fn_game_payment_confirm_lookup.js`, `fn_game_payment_confirm_router.js`, `fn_game_confirm_write_ack.js`, `fn_game_upsert_args.js`, and the internal proof guard in `fn_create.js`.
+- Confirm writes are fenced by the draft revision/`updatedAt`, use `upsert:false`, and do not emit a success response or autojoin before `acknowledged=true`, `matchedCount=1`, and an exact `PAID` Mongo read-back. Cleanup writes use the same stale-snapshot fence and emit `cancelledInLk=true` only after an acknowledged one-row update and exact status/paid/`updatedAt` read-back through `fn_split_cleanup_write_ack.js`.
+- The existing 120-second split cleanup scheduler reconciles users who never return from Viva. A verified and atomically claimed late organizer payment promotes the durable game to `PAID`; unverified entries remain non-public.
+- Guarded candidate builder: `npm run nodered:game-payment-confirmation:patch -- --input <fresh-live-flow> --output <candidate> --report <report>`. It is pinned to an exact live preimage, preserves the route set, and never imports or deploys the candidate.
 
 ## Что это и зачем
 
@@ -148,6 +160,7 @@ npm run nodered:modular:build
 - `OPTIONS /lk/subscription-bookings` — CORS preflight для `Authorization` и `Content-Type`. Browser-клиенты передают `operationId` query-параметром, потому что текущий nginx CORS allowlist не пропускает отдельный idempotency header.
 - Split create/join сохраняют прежние публичные маршруты `/lk/games/split/create` и `/lk/games/:gameId/split/join`, но subscription-ветка внутри `Route Viva split payment` уходит в тот же атомарный контур.
 - Split create всегда получает pricing policy из CUP по точным дате/станции/корту до provider mutation, включая оплату организатора абонементом. Для subscription-created игры join повторяет exact CUP lookup вместо доверия сохранённой/browser-сумме; legacy запись без snapshot получает промо только при совпадении её сохранённых location/date с текущим выбранным CUP campaign.
+- Если legacy split-запись потеряла и `selectedPaymentMode`, и snapshot тарифа, zero-amount организатора сам по себе не даёт промо. Join сначала подтверждает exact organizer booking у Viva: тот же exercise, `paymentType=SUBSCRIPTION`, точный `clientSubscriptionId`, `isCancelled=false` и `cancelled=false`; только затем перечитывает CUP campaign. Неоднозначность или provider outage завершаются fail-closed до создания новой транзакции.
 - One-time split требует пользовательский Bearer и server-side проверку точного тарифа до Viva mutation: Admin API подтверждает `stationId/roomId`, End User API подтверждает допустимые `masterServiceId/subServiceIds` для станции и возвращает цену по точным `station + room + date/time`. Обычная доля равна этой цене, делённой на серверный `shareCount`; `available product cost`, browser `totalAmount` и browser `shareAmount` не являются pricing authority.
 - Split create/join и cleanup получают form-urlencoded token request body только из env `VIVACRM_TOKEN_REQUEST_BODY` либо из защищённого Node-RED global context `vivacrm_token_request_body`. Inline fallback отсутствует: при пропущенной конфигурации новые операции отвечают `503 VIVA_TOKEN_CONFIG_MISSING`, а cleanup фиксирует fail-closed provider error. Значение нельзя хранить в flow/source/export или выводить в логи; действующие credentials после удаления legacy-литералов подлежат отдельной ротации до deploy.
 - Canonical payment confirmation для one-time требует точный Viva status `PAID` и совпадение transaction, booking, exercise и телефона игрока. Subscription confirmation требует точные booking/exercise/client, `paymentType=SUBSCRIPTION` и явные `isCancelled=false`, `cancelled=false`; отсутствие этих boolean-полей не считается успехом.

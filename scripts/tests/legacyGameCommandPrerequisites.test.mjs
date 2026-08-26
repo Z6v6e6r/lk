@@ -20,6 +20,7 @@ import {
 } from "../../node-red/custom-nodes/legacy-game-command-transaction/legacy-game-command-core.mjs";
 
 const registry = JSON.parse(fs.readFileSync("scripts/legacy_game_revision_writers.json", "utf8"));
+const reconciliation = JSON.parse(fs.readFileSync("scripts/legacy_game_command_live_reconciliation.json", "utf8"));
 const liveFlowPath = process.env.LEGACY_COMMAND_LIVE_FLOW_FIXTURE;
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -151,6 +152,9 @@ test("fresh live preimage builds a source-only revision candidate without adding
 }, () => {
   const source = JSON.parse(fs.readFileSync(path.resolve(liveFlowPath), "utf8"));
   const result = buildLegacyGameCommandPrerequisiteCandidate(source);
+  assert.equal(reconciliation.schemaVersion, 2);
+  assert.equal(reconciliation.source.sha256, sha256(fs.readFileSync(path.resolve(liveFlowPath))));
+  assert.equal(reconciliation.candidate.sha256, "6c8512eeffbf57edc720019487a60a2779b1ec180f1ae373a201519f96a6271e");
   assert.equal(result.writerAudit.ok, true);
   assert.equal(result.flow.length, source.length + 36);
   assert.equal(
@@ -164,7 +168,84 @@ test("fresh live preimage builds a source-only revision candidate without adding
   );
   assert.equal(
     sha256(`${JSON.stringify(result.flow, null, 2)}\n`),
-    "e730bf8c043e2f33f5a75c6825d56f39a580a10201f77c399d2323f70f9f7e4d",
+    "949c16d1be1d04672f33ab90fa3ac1c70a7eac7d1cf9ad50680b60edab0774aa",
+  );
+  assert.deepEqual(Object.keys(reconciliation).sort(), [
+    "candidate",
+    "candidateSelectedTab",
+    "deploymentPerformed",
+    "liveTransitions",
+    "schemaVersion",
+    "selectedTab",
+    "source",
+  ]);
+  assert.deepEqual(reconciliation.liveTransitions, [
+    {
+      changedNodeCount: 1,
+      drifts: [{
+        changedFields: ["func"],
+        newFieldSha256: "286ec1bf11b9c5abe65e5bf3affdd8c9183289104a764d97d34530f13ed38552",
+        nodeId: "f3f9a60354d394da",
+        nodeName: "Prepare split game payment",
+        nodeType: "function",
+        preservedInCandidate: true,
+        previousFieldSha256: "743a09502587b1ebab20d8ec9bb2a2ebe22341c3ea3a49214d5d0a0dc9a176fb",
+      }],
+      fromFlowSha256: "0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e",
+      toFlowSha256: "42cbd9a4fc3e53aacadb24601c2a430e78f36d9b79a5f5725782667a87735c42",
+    },
+    {
+      changedNodeCount: 2,
+      drifts: [
+        {
+          changedFields: ["func"],
+          newFieldSha256: "90bbd7f76a53d33336e83dc465b6676fcdd6ef5a25ff1fe98b9eeb39c0ba1a08",
+          nodeId: "e92e68bf3f08a70c",
+          nodeName: "Prepare split join payment",
+          nodeType: "function",
+          preservedInCandidate: true,
+          previousFieldSha256: "132a6b2ae0b445da6874e9a3f03f82987eb87f50b4cac7b2b1929f541f5ae983",
+        },
+        {
+          changedFields: ["func"],
+          newFieldSha256: "4fe085c17796439ef77576714305c8d7a754d90017e34bd50367eeafca001774",
+          nodeId: "8f7bd5b482fe9763",
+          nodeName: "Route Viva split payment",
+          nodeType: "function",
+          preservedInCandidate: true,
+          previousFieldSha256: "bc8b5630f52ff4315d64cb83c2e0df172444549a668573304aead17df49bb825",
+        },
+      ],
+      fromFlowSha256: "42cbd9a4fc3e53aacadb24601c2a430e78f36d9b79a5f5725782667a87735c42",
+      toFlowSha256: "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350",
+    },
+  ]);
+  const liveDrifts = reconciliation.liveTransitions.flatMap((transition) => {
+    assert.equal(transition.drifts.length, transition.changedNodeCount);
+    return transition.drifts;
+  });
+  assert.deepEqual(liveDrifts.map((drift) => drift.nodeId).sort(), [
+    "8f7bd5b482fe9763",
+    "e92e68bf3f08a70c",
+    "f3f9a60354d394da",
+  ]);
+  for (const drift of liveDrifts) {
+    const sourceNode = source.find((node) => node.id === drift.nodeId);
+    const candidateNode = result.flow.find((node) => node.id === drift.nodeId);
+    assert.equal(drift.changedFields.join(","), "func");
+    assert.match(drift.previousFieldSha256, /^[a-f0-9]{64}$/);
+    assert.notEqual(drift.previousFieldSha256, drift.newFieldSha256);
+    assert.equal(sha256(JSON.stringify(sourceNode.func)), drift.newFieldSha256);
+    assert.equal(candidateNode.func, sourceNode.func, `${drift.nodeId} must preserve parallel live source`);
+    assert.equal(drift.preservedInCandidate, true);
+    assert.equal(result.changes.some((change) => change.id === drift.nodeId), false);
+  }
+  const selectedSource = source.filter((node) => node.type !== "tab" && node.z === reconciliation.selectedTab.tabId);
+  assert.equal(sha256(`${JSON.stringify(selectedSource, null, 2)}\n`), reconciliation.selectedTab.sha256);
+  assert.equal(reconciliation.candidateSelectedTab.sha256, "490a5311a6be9ab7078bf5c00db608c36af35546614824e289ae2f0ce806741d");
+  assert.equal(
+    sha256(`${JSON.stringify(result.flow.filter((node) => node.type !== "tab" && node.z === reconciliation.selectedTab.tabId), null, 2)}\n`),
+    "0b5bfdf93302ac79bd9376cd8414c22d83d6e9ef3073d6210efd89e5dafaade4",
   );
   const disconnected = structuredClone(result.flow);
   const revisionQuery = disconnected.find((node) => node.id === "eb7060667c2da065");

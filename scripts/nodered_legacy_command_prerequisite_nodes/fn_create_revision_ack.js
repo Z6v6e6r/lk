@@ -3,10 +3,14 @@ const matchedCount = Number(raw?.matchedCount ?? raw?.result?.matchedCount ?? ra
 const modifiedCount = Number(raw?.modifiedCount ?? raw?.result?.modifiedCount ?? raw?.payload?.modifiedCount ?? 0);
 const upsertedCount = Number(raw?.upsertedCount ?? raw?.result?.upsertedCount ?? raw?.payload?.upsertedCount ?? 0);
 const upsertedId = raw?.upsertedId ?? raw?.result?.upsertedId ?? raw?.payload?.upsertedId ?? null;
-const acknowledged = raw?.acknowledged !== false;
+const acknowledged = raw?.acknowledged === true;
 const hasMongoError = Boolean(msg.error) || Boolean(raw?.error || raw?.errmsg || raw?.codeName || raw?.writeErrors);
-const persisted = acknowledged && !hasMongoError
-  && (matchedCount === 1 || modifiedCount === 1 || upsertedCount === 1 || Boolean(upsertedId));
+const paymentConfirm = msg._gameConfirmWriteAck && typeof msg._gameConfirmWriteAck === "object";
+const persisted = acknowledged && !hasMongoError && (
+  paymentConfirm
+    ? matchedCount === 1
+    : (matchedCount === 1 || modifiedCount === 1 || upsertedCount === 1 || Boolean(upsertedId))
+);
 
 if (!persisted || !msg._recordForResponse) {
   const errorMsg = Object.assign({}, msg, {
@@ -20,6 +24,10 @@ if (!persisted || !msg._recordForResponse) {
     },
   });
   return [errorMsg, errorMsg, null];
+}
+
+if (paymentConfirm) {
+  return [null, null, null, msg];
 }
 
 const responseMsg = Object.assign({}, msg, {
@@ -39,4 +47,4 @@ const autojoinMsg = Object.assign({}, msg, {
   _gameAutojoinSource: "games_create",
   payload: msg._recordForResponse,
 });
-return [responseMsg, debugMsg, autojoinMsg];
+return [responseMsg, debugMsg, autojoinMsg, null];

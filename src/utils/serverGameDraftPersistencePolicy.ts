@@ -27,7 +27,7 @@ export interface ServerGameDraftPersistenceResult {
   error: string | null;
 }
 
-const DEFAULT_READBACK_DELAYS_MS = [0, 150, 350, 750, 1_500];
+const DEFAULT_READBACK_DELAYS_MS = [0, 250, 750, 1_500, 3_000, 5_000];
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)));
@@ -99,7 +99,9 @@ export async function persistServerGameDraftWithReadback(
   }));
   const readbackDelaysMs = dependencies.readbackDelaysMs ?? DEFAULT_READBACK_DELAYS_MS;
 
-  const writeResult = await dependencies.createDraft(payload, { retries: 2, keepalive: true });
+  // The split/create request has already created Viva state. Never repeat a
+  // draft write after an ambiguous transport result; recover only by readback.
+  const writeResult = await dependencies.createDraft(payload, { retries: 0, keepalive: true });
   const writeError = writeResult.error?.message ?? null;
 
   let lastLookupError: string | null = null;

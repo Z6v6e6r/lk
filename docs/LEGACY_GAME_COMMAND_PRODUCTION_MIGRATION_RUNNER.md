@@ -43,8 +43,8 @@ repair task. A fresh `dry-run` is required after that repair.
 
 The current runner accepts only:
 
-- live full-flow SHA-256 `0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e`;
-- source-only candidate SHA-256 `035e9d93b70ee8d3b2817280f42539679e5a7ed270bf8f0c242b364ad57a0e02`;
+- live full-flow SHA-256 `14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350`;
+- source-only candidate SHA-256 `6c8512eeffbf57edc720019487a60a2779b1ec180f1ae373a201519f96a6271e`;
 - all seven writers in `scripts/legacy_game_revision_writers.json`;
 - the exact custom-node package, runner, migration-core, writer-registry,
   approval-verifier, source trust-anchor manifest, root package, dependency lock,
@@ -58,6 +58,10 @@ The live flow was pulled read-only from
 candidate nodes, `215` HTTP inputs, `47` changed nodes, `36` added nodes, and no
 added endpoint. Any changed live SHA requires a new source task, candidate, review,
 and execution packet.
+
+The exact immutable release builder and guarded install contract are documented in
+`LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_INSTALL.md`. A release build or install does
+not import the flow, bind the approval key, connect to MongoDB, or authorize migration.
 
 ## Read-only modes
 
@@ -124,10 +128,11 @@ The reviewed packet has this shape (values are illustrative placeholders):
   },
   "source": {
     "repositoryCommit": "<exact 40-hex deployed commit>",
-    "liveFlowSha256": "0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e",
-    "candidateFlowSha256": "035e9d93b70ee8d3b2817280f42539679e5a7ed270bf8f0c242b364ad57a0e02",
+    "liveFlowSha256": "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350",
+    "candidateFlowSha256": "6c8512eeffbf57edc720019487a60a2779b1ec180f1ae373a201519f96a6271e",
     "packageSha256": "<fresh audit value>",
     "writerRegistrySha256": "<fresh audit value>",
+    "installerSha256": "<fresh audit value>",
     "runnerSha256": "<fresh audit value>",
     "migrationCoreSha256": "<fresh audit value>",
     "approvalVerifierSha256": "<fresh audit value>",

@@ -32,16 +32,16 @@ The separate production runner is documented in `LEGACY_GAME_COMMAND_PRODUCTION_
 
 ## Required production order
 
-This production order is currently **BLOCKED**. Before step 1, a separately
-reviewed unified release builder must exist and must compose all five
-subscription-enforcement nodes with the complete legacy command prerequisite
-graph from the same exact live preimage. Neither the subscription-only
-full-flow candidate nor the current combined prerequisite candidate may be
-imported, deployed, or applied sequentially.
+This production order is currently **BLOCKED**. The unified source-only builder
+now composes all five subscription-enforcement nodes, payment ACK/read-back, and
+the complete legacy command prerequisite graph from the same exact live preimage.
+Its production custody remains `UNBOUND`. Neither the subscription-only nor the
+prerequisite-only full-flow candidate may be imported, deployed, or applied
+sequentially.
 
 1. Fresh-pull `/root/.node-red/flows.json` from `lk-primary-147` into a private workspace and freeze its SHA.
 2. Re-run the writer inventory. Drift or an unregistered `lk_games` writer is STOP.
-3. Use the future unified release builder to build one full-flow candidate from the exact preimage and independently inspect the combined subscription-enforcement plus prerequisite change budget.
+3. Use `prepare_lk1_subscription_enforcement_candidate.mjs` to build one full-flow candidate from the exact preimage and independently inspect its subscription, payment, and prerequisite change budget.
 4. Install the custom node package and its existing MongoDB peer dependency in a separate runtime task. Do not configure an endpoint.
 5. Enter a maintenance quiescence that stops every `lk_games` writer and verify the write counter remains unchanged. Do not deploy the candidate before quiescence.
 6. Run production audit/dry-run from a separately reviewed migration runner using primary/majority reads. Record invalid game/result identities and revisions, missing/invalid result idempotency keys, duplicate game/result identities, duplicate `(tenantKey,idempotencyKey)` result identities, invalid or duplicate tenant-qualified provider-outbox identities, mapping validation/raw duplicates/normalized aliases, ledger duplicates, command-intent duplicates, and cleanup-reconciliation duplicates.

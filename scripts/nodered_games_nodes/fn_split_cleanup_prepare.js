@@ -414,9 +414,23 @@ rows.forEach((game) => {
     tasks.push({
       mode: "PARTICIPANT_TIMEOUT",
       gameId,
+      tenantKey: game?.tenantKey,
+      revision: game?.revision,
       reason: "PAYMENT_TIMEOUT",
       statusBefore: status || null,
-      paymentPaid: game?.payment?.paid === true,
+      expectedRevision: game?.revision !== null && game?.revision !== undefined
+        && Number.isSafeInteger(Number(game.revision))
+        ? Number(game.revision)
+        : null,
+      expectedUpdatedAt: toStr(game?.updatedAt),
+      paymentPaid: typeof game?.payment?.paid === "boolean" ? game.payment.paid : null,
+      paymentExerciseId:
+        toStr(splitPayment?.vivaExerciseId)
+        || toStr(splitPayment?.exerciseId)
+        || toStr(game?.booking?.vivaExerciseId)
+        || toStr(game?.booking?.exerciseId)
+        || toStr(metadata.vivaExerciseId)
+        || toStr(metadata.exerciseId),
       bookingIds: timedOutBookingIds,
       bookingTargets: timedOutBookingTargets,
       exerciseId: null,
@@ -429,6 +443,7 @@ rows.forEach((game) => {
       blockLocalMutation: !hasVivaTargets,
       blockReason: hasVivaTargets ? null : "missing_viva_targets",
       timedOutPayments: timedOutPaymentItems.map((item) => ({
+        role: toStr(item.paymentItem.role),
         paymentRef: toStr(item.paymentItem.paymentRef),
         transactionId: item.transactionId || null,
         clientId: item.identity.clientId || null,
@@ -524,6 +539,8 @@ rows.forEach((game) => {
   tasks.push({
     mode: "GAME_CLEANUP",
     gameId,
+    tenantKey: game?.tenantKey,
+    revision: game?.revision,
     reason,
     shareCount,
     participantsCount,
@@ -533,7 +550,13 @@ rows.forEach((game) => {
     pendingPaymentsCount,
     allPartsPaid,
     statusBefore: status || null,
-    paymentPaid: game?.payment?.paid === true,
+    expectedRevision: game?.revision !== null && game?.revision !== undefined
+      && Number.isSafeInteger(Number(game.revision))
+      ? Number(game.revision)
+      : null,
+    expectedUpdatedAt: toStr(game?.updatedAt),
+    paymentPaid: typeof game?.payment?.paid === "boolean" ? game.payment.paid : null,
+    paymentExerciseId: exerciseId,
     deadlineAt: toStr(splitPayment?.deadlineAt),
     assembleDeadlineAt,
     bookingIds,

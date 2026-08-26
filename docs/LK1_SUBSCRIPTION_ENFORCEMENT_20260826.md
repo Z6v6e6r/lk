@@ -2,11 +2,11 @@
 
 ## Frozen inventory inputs
 
-- Fresh `origin/main`: `bf3964624cbb54249b264613e6aecffbb3f5b259`.
-- Fresh main tree: `f4a6739c5c4685ac78f6b2318d4bd13e95eae3e3`.
-- Identity snapshot: `2026-08-26T08:44:20Z`.
+- Fresh `origin/main`: `db6ef007aab39e6dd880019a6c45f9e11c616cba`.
+- Fresh main tree: `dc1ee5603cd2fa41afde1551d2bac9ec69cfe4d8`.
+- Identity snapshot: `2026-08-27T00:15:56+03:00`.
 - Live-147 read-only flow snapshot SHA-256:
-  `0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e`.
+  `14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350`.
 - Live snapshot contained 4,762 nodes and passed source-origin verification.
 - Merge owner: `NONE`.
 
@@ -14,12 +14,17 @@ The source snapshot was read only. No flow, provider, flag, payment, booking,
 subscription instance, or production data was mutated during the inventory.
 
 The unified guarded builder `prepare_lk1_subscription_enforcement_candidate.mjs`
-is pinned to that exact live SHA and the exact preimage/candidate hashes of five
-function nodes. It produced candidate SHA-256
-`50a9819b9adcac336ac4f1bcbee68ed2902901896c78362fefb2969f1a3b8f1e`,
-with 4,762 nodes before and after, five changed nodes, only `func` fields changed,
-and graph topology preserved. Any whole-flow, target, tracked-source, tab, or node
-count drift stops candidate generation.
+is pinned to that exact live SHA and composes the five subscription functions,
+legacy revision/CAS prerequisites, provider-authoritative payment confirmation,
+and split-cleanup recovery in one source-level graph. It produced source-only
+candidate SHA-256
+`abe74c8e0452f8e16939da8fa1744d0c4f0690f86ba9815386f97b22d8af71d3`,
+with `4762 -> 4812` nodes, `215` unchanged HTTP routes, `104` changed/added
+nodes, and broken wires/links `0/0`. Split-pricing recovery nodes already matched
+their current-main postimages and were not changed. Production custody is
+explicitly `UNBOUND`; this candidate is not authorized for import or deployment.
+Any whole-flow, target, tracked-source, route, writer, tab, or node-count drift
+stops candidate generation.
 
 ## Authoritative write-path inventory
 

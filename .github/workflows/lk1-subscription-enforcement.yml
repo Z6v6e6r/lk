@@ -118,6 +118,8 @@ jobs:
           node --experimental-strip-types --test
           scripts/tests/paymentSyncDraftRecovery.test.ts
           scripts/tests/serverGameDraftPersistence.test.ts
+          scripts/tests/gamePaymentConfirmation.nodered.test.ts
+          scripts/tests/splitLifecycleV2.nodered.test.ts
 
       - name: Typecheck
         run: npx tsc -b --pretty false

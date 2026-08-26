@@ -65,8 +65,35 @@ test("unified LK1 candidate fails closed on source, preimage, or enabled-tab dri
 });
 
 test("unified LK1 contract pins every tracked candidate source", () => {
+  assert.equal(
+    LK1_ENFORCEMENT_CONTRACT.sourceSha256,
+    "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350",
+  );
   assert.equal(LK1_ENFORCEMENT_CONTRACT.targets.length, 5);
   for (const target of LK1_ENFORCEMENT_CONTRACT.targets) {
     assert.equal(sha256(fs.readFileSync(target.sourceFile)), target.candidateSha256, target.id);
   }
+});
+
+test("unified ACK sources require tenant/revision readback and durable cleanup recovery", () => {
+  const create = fs.readFileSync("scripts/nodered_games_nodes/fn_create.js", "utf8");
+  const confirmAck = fs.readFileSync("scripts/nodered_games_nodes/fn_game_confirm_write_ack.js", "utf8");
+  const cleanup = fs.readFileSync("scripts/nodered_games_nodes/fn_split_cleanup_router.js", "utf8");
+  const cleanupAck = fs.readFileSync("scripts/nodered_games_nodes/fn_split_cleanup_write_ack.js", "utf8");
+  const cleanupRevisionAck = fs.readFileSync(
+    "scripts/nodered_legacy_command_prerequisite_nodes/fn_cleanup_revision_ack.js",
+    "utf8",
+  );
+
+  assert.match(create, /body\.expectedRevision/);
+  assert.doesNotMatch(create, /body\.revision/);
+  assert.match(create, /tenantKey,\n {2}id: gameId,\n {2}revision:/);
+  assert.match(create, /\$inc: \{ revision: 1 \}/);
+  assert.match(confirmAck, /tenantKey: ctx\.tenantKey, id: ctx\.gameId, revision: ctx\.expectedNextRevision/);
+  assert.match(confirmAck, /Number\(record\.revision\) === Number\(ctx\.expectedNextRevision\)/);
+  assert.match(cleanup, /tenantKey: ctx\.sourceTenantKey/);
+  assert.match(cleanup, /revision: ctx\.sourceRevision/);
+  assert.match(cleanup, /_splitCleanupRevisionDeferred/);
+  assert.match(cleanupAck, /return \[null, null, null, msg\]/);
+  assert.match(cleanupRevisionAck, /_legacyCleanupRecovery/);
 });
