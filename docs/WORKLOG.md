@@ -1493,6 +1493,9 @@
 - Removed all repository-local static imports from the installer. It now authenticates
   the canonical bundle with Node built-ins, requires an independently frozen installer
   digest, and must execute from inside that exact bundle before loading the copied runner.
+- The production runbook first copies delivery bytes into a new root-owned protected
+  custody tree, removes delivery-user write access, verifies protected ancestors plus
+  independent manifest/installer digests, and only then uses `exec node` on that path.
 - Added self-contained bundle CLI planning, installer/manifest drift rejection, sealed
   rehearsal installation, and failed-staging cleanup coverage. This source-only stage
   performed no upload, production installation, Node-RED/Mongo mutation, or deployment.

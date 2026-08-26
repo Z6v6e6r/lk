@@ -72,14 +72,38 @@ test("release builder packages and authenticates the bootstrap installer and run
     path.join(bundle, "scripts/install_legacy_game_command_production_release.mjs"),
     "utf8",
   );
-  const staticImports = [...installerBody.matchAll(/^import .* from ["']([^"']+)["'];$/gm)]
+  const staticImports = [...installerBody.matchAll(/^\s*import\s+(?:[\s\S]*?\s+from\s+)?["']([^"']+)["'];/gm)]
     .map((match) => match[1]);
-  assert.ok(staticImports.length > 0);
-  assert.ok(staticImports.every((specifier) => specifier.startsWith("node:")));
+  assert.deepEqual(staticImports.sort(), [
+    "node:crypto",
+    "node:fs",
+    "node:path",
+    "node:url",
+    "node:util",
+  ]);
   assert.equal(
     fs.readFileSync(path.join(bundle, "scripts/legacy_game_command_production_trust_anchor.json"), "utf8"),
     "{\"algorithm\":\"Ed25519\",\"keyId\":\"UNBOUND\",\"publicKeySpkiSha256\":\"UNBOUND\",\"schemaVersion\":1,\"status\":\"UNBOUND\"}\n",
   );
+});
+
+test("production runbook freezes root custody and both digests before exec", () => {
+  const runbook = fs.readFileSync(
+    path.join(repositoryRoot, "docs/LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_INSTALL.md"),
+    "utf8",
+  );
+  const custody = runbook.indexOf("chown -hR 0:0 \"$CUSTODY_BUNDLE\"");
+  const protection = runbook.indexOf("BAD_CUSTODY_ENTRY=");
+  const manifestDigest = runbook.indexOf("ACTUAL_MANIFEST_SHA256=");
+  const installerDigest = runbook.indexOf("ACTUAL_INSTALLER_SHA256=", manifestDigest);
+  const execute = runbook.indexOf("exec env LK_LEGACY_COMMAND_RELEASE_INSTALL=");
+  assert.ok(custody > 0 && protection > custody);
+  assert.ok(manifestDigest > protection && installerDigest > manifestDigest);
+  assert.ok(execute > installerDigest);
+  assert.match(runbook, /never execute Node from `DELIVERY_BUNDLE`/);
+  assert.match(runbook, /! -user root -o -perm \/022/);
+  assert.match(runbook, /\$ACTUAL_MANIFEST_SHA256.*\$EXPECTED_MANIFEST_SHA256/);
+  assert.match(runbook, /\$ACTUAL_INSTALLER_SHA256.*\$EXPECTED_INSTALLER_SHA256/);
 });
 
 test("mid-copy failure removes its private partial staging tree", async (t) => {

@@ -88,33 +88,75 @@ The exact install command is intentionally unusable without all of the following
 - a separately approved live execution step with fresh remote/main and flow preimages.
 
 After those values have been independently frozen and the read-only plan has passed,
-the exact production installation invocation is:
+the delivery principal must first lose write access to the exact host copy. Run the
+following as the approved root custodian. `CUSTODY_BUNDLE` must be a new path; never
+execute Node from `DELIVERY_BUNDLE`:
 
 ```bash
-RELEASE_BUNDLE='/absolute/private/padlhub-legacy-command-<commit>'
+DELIVERY_BUNDLE='/absolute/private/delivery/padlhub-legacy-command-<commit>'
+CUSTODY_PARENT='/root/padlhub-legacy-command-release-custody'
+CUSTODY_BUNDLE='/root/padlhub-legacy-command-release-custody/<commit>-<deployment-UUID>'
+EXPECTED_MANIFEST_SHA256='<independently-frozen-release-manifest-sha256>'
 EXPECTED_INSTALLER_SHA256='<independently-frozen-installer-sha256>'
-ACTUAL_INSTALLER_SHA256="$(shasum -a 256 "$RELEASE_BUNDLE/scripts/install_legacy_game_command_production_release.mjs" | awk '{print $1}')"
-if [ "$ACTUAL_INSTALLER_SHA256" != "$EXPECTED_INSTALLER_SHA256" ]; then
-  echo 'installer SHA-256 mismatch; refusing to execute' >&2
+
+umask 077
+if [ -e "$CUSTODY_BUNDLE" ] || [ -L "$CUSTODY_BUNDLE" ]; then
+  echo 'custody destination already exists; refusing to reuse it' >&2
+  exit 1
+fi
+install -d -o 0 -g 0 -m 0700 "$CUSTODY_PARENT"
+mkdir -m 0700 "$CUSTODY_BUNDLE"
+cp -a --no-preserve=ownership "$DELIVERY_BUNDLE/." "$CUSTODY_BUNDLE/"
+COPIED_SYMLINK="$(find "$CUSTODY_BUNDLE" -type l -print -quit)"
+if [ -n "$COPIED_SYMLINK" ]; then
+  echo 'custody copy contains a symlink; refusing it' >&2
+  exit 1
+fi
+chown -hR 0:0 "$CUSTODY_BUNDLE"
+find "$CUSTODY_BUNDLE" -type d -exec chmod 0700 {} +
+find "$CUSTODY_BUNDLE" -type f -exec chmod 0600 {} +
+
+BAD_ANCESTOR="$(find / /root "$CUSTODY_PARENT" -maxdepth 0 \
+  \( ! -type d -o ! -user root -o -perm /022 \) -print -quit)"
+BAD_CUSTODY_ENTRY="$(find "$CUSTODY_BUNDLE" -xdev \
+  \( ! -user root -o -perm /022 \) -print -quit)"
+MANIFEST_PATH="$CUSTODY_BUNDLE/release-manifest.json"
+INSTALLER_PATH="$CUSTODY_BUNDLE/scripts/install_legacy_game_command_production_release.mjs"
+if [ -n "$BAD_ANCESTOR" ] || [ -n "$BAD_CUSTODY_ENTRY" ] \
+  || [ ! -f "$MANIFEST_PATH" ] || [ -L "$MANIFEST_PATH" ] \
+  || [ ! -f "$INSTALLER_PATH" ] || [ -L "$INSTALLER_PATH" ] \
+  || [ "$(stat -c %h "$MANIFEST_PATH")" -ne 1 ] \
+  || [ "$(stat -c %h "$INSTALLER_PATH")" -ne 1 ]; then
+  echo 'root custody, regular-file, or ancestor protection check failed' >&2
   exit 1
 fi
 
-env LK_LEGACY_COMMAND_RELEASE_INSTALL=INSTALL_LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_V1 \
-  node "$RELEASE_BUNDLE/scripts/install_legacy_game_command_production_release.mjs" \
+ACTUAL_MANIFEST_SHA256="$(sha256sum "$MANIFEST_PATH" | awk '{print $1}')"
+ACTUAL_INSTALLER_SHA256="$(sha256sum "$INSTALLER_PATH" | awk '{print $1}')"
+if [ "$ACTUAL_MANIFEST_SHA256" != "$EXPECTED_MANIFEST_SHA256" ] \
+  || [ "$ACTUAL_INSTALLER_SHA256" != "$EXPECTED_INSTALLER_SHA256" ]; then
+  echo 'release manifest or installer SHA-256 mismatch; refusing to execute' >&2
+  exit 1
+fi
+
+exec env LK_LEGACY_COMMAND_RELEASE_INSTALL=INSTALL_LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_V1 \
+  node "$INSTALLER_PATH" \
   --mode install \
-  --bundle "$RELEASE_BUNDLE" \
+  --bundle "$CUSTODY_BUNDLE" \
   --install-root /opt/padlhub/legacy-game-command \
   --executor-uid '<dedicated-non-root-uid>' \
   --expected-commit '<independently-frozen-40-hex-commit>' \
-  --expected-manifest-sha256 '<independently-frozen-release-manifest-sha256>' \
+  --expected-manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
   --expected-installer-sha256 "$EXPECTED_INSTALLER_SHA256" \
   --environment production \
   --deployment-id '<new-UUID>' \
   --activated-at '<canonical-non-future-RFC3339>'
 ```
 
-Run it only as the approved root custodian. A failed external installer digest guard
-must terminate the operator shell block before Node starts; do not continue manually.
+The copied tree, installer, manifest, custody directory, `/root`, and filesystem root
+must already be root-owned and not group/other writable before either digest is read.
+The delivery user must have no write access to that copy. A failed custody or digest
+guard must terminate the operator shell block before Node starts; do not continue manually.
 
 The required `installerSha256` field intentionally makes pre-hotfix schema-v1 manifests,
 attestations, compatibility reports, and execution packets fail closed. No legacy release
