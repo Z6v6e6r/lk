@@ -81,6 +81,7 @@ import {
   savePendingPaidGameDraft,
   type PendingPaidGameDraft,
 } from "../../utils/paymentSync";
+import { persistServerGameDraftBeforeRedirect } from "../../utils/serverGameDraftPersistence";
 import {
   getPendingSplitRosterPaymentConfirmation,
   removePendingSplitRosterPaymentConfirmation,
@@ -10950,6 +10951,21 @@ export default function GamesPage({
 
     if (paymentResult.data.paymentUrl) {
       savePendingPaidGameDraft(paymentRef, payload, resolvedBookingIds);
+      const persistedDraft = await persistServerGameDraftBeforeRedirect(
+        paymentRef,
+        payload,
+        resolvedBookingIds,
+      );
+      if (!persistedDraft.record) {
+        setPayError(
+          `${persistedDraft.error || "Не удалось сохранить игру в ЛК"}. `
+          + "Бронь в Viva уже создана — не создавайте игру повторно.",
+        );
+        setLoadingPay(false);
+        return;
+      }
+
+      upsertGameRecordInStores(persistedDraft.record, { communityMode: "upsert" });
       enqueuePendingPaymentSync(paymentRef, resolvedBookingIds, "split_pay_click");
 
       if (!navigateToExternalUrl(paymentResult.data.paymentUrl)) {
