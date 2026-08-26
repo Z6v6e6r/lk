@@ -34,10 +34,11 @@ its result, or cannot represent the mounted filesystem ACL, H1 is blocked. Captu
 private root-owned evidence file with `stat -Lc '%u:%g:%a:%F' /`, mount
 identity/options, and the complete `getfacl -cp /` result. Stop if `/` is not a real
 directory owned by `0:0`, its mode is not exactly `0707`, it is unexpectedly remounted,
-or the ACL contains any named user/group or mask entry beyond the three base
-`user::`, `group::`, and `other::` entries. Also prove that no process, service, or
-deployment contract intentionally writes entries directly under `/`; normal writes
-below established top-level directories are unaffected.
+or the non-comment, non-blank ACL output is not exactly one access entry each for
+`user::`, `group::`, and `other::`. Any `default:`, named user/group, `mask::`, duplicate,
+or unknown ACL entry blocks H1. Also prove that no process, service, or deployment
+contract intentionally writes entries directly under `/`; normal writes below
+established top-level directories are unaffected.
 
 Only after that exact gate, the proposed mutation is:
 
@@ -46,7 +47,8 @@ chmod 0755 -- /
 ```
 
 Immediate read-back must prove owner `0:0`, mode `0755`, the same mount identity, and
-exactly the three expected base ACL entries through the same mandatory ACL-capable tool.
+exactly the same three-entry access ACL schema with no `default:` or other entry through
+the same mandatory ACL-capable tool.
 Open a new SSH session, prove Node and the Node-RED supervisor can still read their
 existing paths, and run the already reviewed public LK Games read-only smoke. Do not
 combine this permission change with release upload, install, restart, or flow import.
@@ -111,8 +113,10 @@ The exact UID becomes a frozen input to the separately reviewed release install 
 Creating and locking the account does not authorize using it, installing the release,
 exposing credentials, or connecting to MongoDB.
 
-Before any artifact, process, execution packet, or forensic record refers to the UID,
-an H2-only failure may be recovered under a separate destructive approval with:
+The H2 approval, precheck, postcheck, failure, and rollback evidence may and must refer
+to the exact UID/GID; those records are retained after rollback. Until any downstream
+operational binding has occurred, an H2-only failure may be recovered under a separate
+destructive approval with:
 
 ```bash
 userdel padlhub-legacy-command
@@ -123,9 +127,11 @@ If `groupadd` succeeded but `useradd` did not, recovery applies only the separat
 approved `groupdel`. After recovery, passwd and group names plus both frozen numeric IDs
 must all be absent through NSS; the ownership/ACL scan must still return zero matches.
 Any remaining process, object, ACL, passwd entry, or group entry is an incomplete
-rollback and blocks retry. Removal is forbidden once the UID/GID is referenced by
-installed files, attestations, processes, or evidence. At that point recovery requires a
-new identity/custody plan that preserves numeric ownership and forensic references.
+rollback and blocks retry. Removal is forbidden after any downstream install or
+attestation, file/ACL ownership, process execution, credential or service binding,
+migration execution packet, or other use outside H2-local evidence. At that point
+recovery requires a new identity/custody plan that preserves numeric ownership and
+forensic references.
 
 ## Release handoff after H1 and H2
 

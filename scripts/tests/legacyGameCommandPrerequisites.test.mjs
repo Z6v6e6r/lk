@@ -156,11 +156,47 @@ test("fresh live preimage builds a source-only revision candidate without adding
     "selectedTab",
     "source",
   ]);
-  assert.equal(reconciliation.liveTransitions.length, 2);
-  assert.deepEqual(reconciliation.liveTransitions.map((transition) => transition.changedNodeCount), [1, 2]);
-  assert.equal(reconciliation.liveTransitions[0].fromFlowSha256, "0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e");
-  assert.equal(reconciliation.liveTransitions[1].fromFlowSha256, reconciliation.liveTransitions[0].toFlowSha256);
-  assert.equal(reconciliation.liveTransitions.at(-1).toFlowSha256, reconciliation.source.sha256);
+  assert.deepEqual(reconciliation.liveTransitions, [
+    {
+      changedNodeCount: 1,
+      drifts: [{
+        changedFields: ["func"],
+        newFieldSha256: "286ec1bf11b9c5abe65e5bf3affdd8c9183289104a764d97d34530f13ed38552",
+        nodeId: "f3f9a60354d394da",
+        nodeName: "Prepare split game payment",
+        nodeType: "function",
+        preservedInCandidate: true,
+        previousFieldSha256: "743a09502587b1ebab20d8ec9bb2a2ebe22341c3ea3a49214d5d0a0dc9a176fb",
+      }],
+      fromFlowSha256: "0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e",
+      toFlowSha256: "42cbd9a4fc3e53aacadb24601c2a430e78f36d9b79a5f5725782667a87735c42",
+    },
+    {
+      changedNodeCount: 2,
+      drifts: [
+        {
+          changedFields: ["func"],
+          newFieldSha256: "90bbd7f76a53d33336e83dc465b6676fcdd6ef5a25ff1fe98b9eeb39c0ba1a08",
+          nodeId: "e92e68bf3f08a70c",
+          nodeName: "Prepare split join payment",
+          nodeType: "function",
+          preservedInCandidate: true,
+          previousFieldSha256: "132a6b2ae0b445da6874e9a3f03f82987eb87f50b4cac7b2b1929f541f5ae983",
+        },
+        {
+          changedFields: ["func"],
+          newFieldSha256: "4fe085c17796439ef77576714305c8d7a754d90017e34bd50367eeafca001774",
+          nodeId: "8f7bd5b482fe9763",
+          nodeName: "Route Viva split payment",
+          nodeType: "function",
+          preservedInCandidate: true,
+          previousFieldSha256: "bc8b5630f52ff4315d64cb83c2e0df172444549a668573304aead17df49bb825",
+        },
+      ],
+      fromFlowSha256: "42cbd9a4fc3e53aacadb24601c2a430e78f36d9b79a5f5725782667a87735c42",
+      toFlowSha256: "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350",
+    },
+  ]);
   const liveDrifts = reconciliation.liveTransitions.flatMap((transition) => {
     assert.equal(transition.drifts.length, transition.changedNodeCount);
     return transition.drifts;

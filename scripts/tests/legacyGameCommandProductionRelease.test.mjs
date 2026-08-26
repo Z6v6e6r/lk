@@ -117,7 +117,7 @@ test("host-hardening plan keeps permission and executor mutations behind separat
   assert.match(plan, /Restoring the insecure preimage is a separate break-glass live gate/);
   assert.match(plan, /chmod 0707 -- \/\n/);
   assert.match(plan, /if `getfacl` is absent, errors, truncates/);
-  assert.match(plan, /ACL contains any named user\/group or mask entry/);
+  assert.match(plan, /Any `default:`, named user\/group, `mask::`, duplicate,/);
   assert.match(plan, /scan each\nmount without crossing filesystem boundaries/);
   assert.match(plan, /report zero ownership and ACL matches/);
   assert.match(plan, /groupadd --system --gid <frozen-unused-gid>/);
@@ -129,6 +129,8 @@ test("host-hardening plan keeps permission and executor mutations behind separat
   assert.match(plan, /userdel padlhub-legacy-command/);
   assert.match(plan, /groupdel padlhub-legacy-command/);
   assert.match(plan, /passwd and group names plus both frozen numeric IDs\nmust all be absent/);
+  assert.match(plan, /H2 approval, precheck, postcheck, failure, and rollback evidence may and must refer/);
+  assert.match(plan, /Removal is forbidden after any downstream install or\nattestation/);
   assert.match(plan, /H1 and H2 do not authorize one another and do not authorize the release install/);
 });
 
