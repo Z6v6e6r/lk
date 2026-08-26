@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { canonicalJson, PRODUCTION_MIGRATION_ID } from "./lib/legacy_game_command_production_approval.mjs";
 import {
+  assertPinnedMongoRuntimeClosure,
   buildProductionStaticSourceIdentity,
   resolveRuntimePackageClosure,
 } from "./run_legacy_game_command_production_migration.mjs";
@@ -50,7 +51,7 @@ function gitIdentity(root) {
   return repositoryCommit;
 }
 
-function copyFile(source, target) {
+function copyRuntimeFile(source, target) {
   const stat = fs.lstatSync(source);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
     throw new Error(`Release source must be a single-link regular file: ${source}`);
@@ -58,6 +59,33 @@ function copyFile(source, target) {
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
   fs.chmodSync(target, 0o600);
+}
+
+export function readGitBlob(root, commit, relative) {
+  const treeEntry = spawnSync("git", ["ls-tree", commit, "--", relative], {
+    cwd: root,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+  });
+  const fields = treeEntry.status === 0 ? treeEntry.stdout.trim().split(/\s+/) : [];
+  if (fields[0] !== "100644" || fields[1] !== "blob") {
+    throw new Error(`Release source is not an exact regular Git blob: ${relative}`);
+  }
+  const blob = spawnSync("git", ["show", `${commit}:${relative}`], {
+    cwd: root,
+    encoding: null,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (blob.status !== 0 || !Buffer.isBuffer(blob.stdout)) {
+    throw new Error(`Unable to read exact release source from Git: ${relative}`);
+  }
+  return blob.stdout;
+}
+
+function copyGitBlob(root, commit, relative, target) {
+  const body = readGitBlob(root, commit, relative);
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(target, body, { mode: 0o600, flag: "wx" });
 }
 
 function runtimeRelativePath(directory) {
@@ -77,7 +105,7 @@ function copyRuntimePackage(packageDirectory, targetRoot) {
       const target = path.join(targetRoot, relativeRoot, path.relative(packageDirectory, source));
       if (entry.isSymbolicLink()) throw new Error(`Runtime package contains symlink: ${source}`);
       if (entry.isDirectory()) visit(source);
-      else if (entry.isFile()) copyFile(source, target);
+      else if (entry.isFile()) copyRuntimeFile(source, target);
       else throw new Error(`Runtime package contains unsupported entry: ${source}`);
     }
   };
@@ -119,31 +147,24 @@ function inventory(root) {
 
 export function buildLegacyGameCommandProductionRelease({
   outDir,
-  repositoryRoot = REPO_ROOT,
-  repositoryCommit,
-  requireClean = true,
 } = {}) {
-  const root = fs.realpathSync(repositoryRoot);
+  const root = fs.realpathSync(REPO_ROOT);
   const output = path.resolve(String(outDir || ""));
   if (!path.isAbsolute(output) || fs.existsSync(output)) {
     throw new Error("Release output must be a new absolute path");
   }
-  const cleanCommit = requireClean ? gitIdentity(root) : null;
-  if (repositoryCommit && cleanCommit && repositoryCommit !== cleanCommit) {
-    throw new Error("Requested repository commit does not match clean Git HEAD");
-  }
-  const commit = cleanCommit || repositoryCommit || "";
-  if (!COMMIT_PATTERN.test(String(commit || ""))) throw new Error("Repository commit is invalid");
+  const commit = gitIdentity(root);
 
   fs.mkdirSync(output, { mode: 0o700 });
   try {
-    for (const relative of RELEASE_SOURCE_FILES) copyFile(path.join(root, relative), path.join(output, relative));
+    for (const relative of RELEASE_SOURCE_FILES) copyGitBlob(root, commit, relative, path.join(output, relative));
     const require = createRequire(path.join(root, "package.json"));
     const mongodbManifest = require.resolve("mongodb/package.json");
     const runtimePackages = resolveRuntimePackageClosure(mongodbManifest);
-    assertRuntimeMatchesLock(runtimePackages, root);
+    assertRuntimeMatchesLock(runtimePackages, output);
+    assertPinnedMongoRuntimeClosure(mongodbManifest);
     for (const runtimePackage of runtimePackages) copyRuntimePackage(runtimePackage.directory, output);
-    const source = buildProductionStaticSourceIdentity();
+    const source = buildProductionStaticSourceIdentity({ sourceRoot: output });
     if (source.releaseAttestationSha256 !== "UNBOUND") throw new Error("Builder source must not claim an attestation");
     delete source.releaseAttestationSha256;
     for (const value of Object.values(source)) {

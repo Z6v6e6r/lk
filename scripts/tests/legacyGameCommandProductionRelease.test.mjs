@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,7 +7,10 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
-import { buildLegacyGameCommandProductionRelease } from "../build_legacy_game_command_production_release.mjs";
+import {
+  buildLegacyGameCommandProductionRelease,
+  readGitBlob,
+} from "../build_legacy_game_command_production_release.mjs";
 import {
   prepareLegacyGameCommandReleaseInstall,
   verifyLegacyGameCommandReleaseBundle,
@@ -15,7 +19,10 @@ import {
 import { canonicalJson, parseCanonicalJson } from "../lib/legacy_game_command_production_approval.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
-const commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const commit = execFileSync("git", ["rev-parse", "HEAD"], {
+  cwd: repositoryRoot,
+  encoding: "utf8",
+}).trim();
 
 function makeTempRoot(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "legacy-command-release-test-")));
@@ -39,9 +46,6 @@ function buildFixture(t) {
   const bundle = path.join(root, "bundle");
   const manifest = buildLegacyGameCommandProductionRelease({
     outDir: bundle,
-    repositoryRoot,
-    repositoryCommit: commit,
-    requireClean: false,
   });
   const verified = verifyLegacyGameCommandReleaseBundle(bundle);
   return { root, bundle, manifest, manifestSha256: verified.manifestSha256 };
@@ -61,14 +65,18 @@ test("release builder packages the exact runner sources and MongoDB runtime clos
   );
 });
 
-test("clean release build cannot override the repository HEAD identity", (t) => {
+test("Git-object source reads cannot be redirected by a tracked worktree mutation", (t) => {
   const root = makeTempRoot(t);
-  assert.throws(() => buildLegacyGameCommandProductionRelease({
-    outDir: path.join(root, "bundle"),
-    repositoryRoot,
-    repositoryCommit: commit,
-    requireClean: true,
-  }), /clean worktree|does not match clean Git HEAD/);
+  execFileSync("git", ["init", "--quiet"], { cwd: root });
+  fs.writeFileSync(path.join(root, "source.txt"), "committed\n");
+  execFileSync("git", ["add", "source.txt"], { cwd: root });
+  execFileSync("git", [
+    "-c", "user.name=Release Test", "-c", "user.email=release-test@example.invalid",
+    "commit", "--quiet", "-m", "fixture",
+  ], { cwd: root });
+  const fixtureCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  fs.writeFileSync(path.join(root, "source.txt"), "substituted\n");
+  assert.equal(readGitBlob(root, fixtureCommit, "source.txt").toString("utf8"), "committed\n");
 });
 
 test("install plan is read-only and bundle tampering is rejected", (t) => {

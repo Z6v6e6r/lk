@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import test from "node:test";
 
 import {
+  assertPinnedMongoRuntimeClosure,
   classifyAmbiguousExecutionReceipt,
   classifyIndexSpecs,
   executionReceiptIdentityMatches,
@@ -22,6 +24,7 @@ import {
   validateProductionReleaseAttestation,
 } from "../run_legacy_game_command_production_migration.mjs";
 
+const require = createRequire(import.meta.url);
 const digest = (character) => character.repeat(64);
 const releaseSha = "a".repeat(40);
 
@@ -277,6 +280,30 @@ test("runtime closure includes installed peers and fails on a missing required p
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("release input rejects changed MongoDB dependency bytes with unchanged package metadata", (t) => {
+  const sourceEntry = require.resolve("mongodb/package.json");
+  const sourcePackages = resolveRuntimePackageClosure(sourceEntry);
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "legacy-command-pinned-runtime-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const runtimePackage of sourcePackages) {
+    const marker = `${path.sep}node_modules${path.sep}`;
+    const markerIndex = runtimePackage.directory.indexOf(marker);
+    const relative = runtimePackage.directory.slice(markerIndex + marker.length);
+    fs.cpSync(runtimePackage.directory, path.join(root, "node_modules", relative), {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+    });
+  }
+  const copiedEntry = path.join(root, "node_modules", "mongodb", "package.json");
+  assertPinnedMongoRuntimeClosure(copiedEntry);
+  fs.appendFileSync(path.join(root, "node_modules", "mongodb", "lib", "index.js"), "\n// tampered\n");
+  assert.throws(
+    () => assertPinnedMongoRuntimeClosure(copiedEntry),
+    /independently pinned npm ci digest/,
+  );
 });
 
 test("index classifier rejects same-name drift and equivalent indexes under another name", () => {

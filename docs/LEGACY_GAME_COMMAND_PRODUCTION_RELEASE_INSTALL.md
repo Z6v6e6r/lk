@@ -12,7 +12,9 @@ core, writer registry, approval verifier, `UNBOUND` trust-anchor manifest, custo
 Node-RED transaction module, root package/lock, and the complete installed MongoDB
 runtime dependency closure. `release-manifest.json` is canonical JSON and binds every
 regular file by relative path, size, and SHA-256 plus the exact repository/live/candidate
-and runtime source identities.
+and runtime source identities. The MongoDB closure must additionally match the immutable
+SHA-256 frozen from a separate clean `npm ci --ignore-scripts --omit=dev` install; a
+same-version dependency tree with changed bytes is rejected before packaging.
 
 `scripts/install_legacy_game_command_production_release.mjs` verifies that inventory
 before doing anything. Its default-safe mode is `plan`, which performs no writes. A

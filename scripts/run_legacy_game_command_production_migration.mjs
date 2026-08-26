@@ -62,6 +62,8 @@ export const PRODUCTION_PACKET_SCHEMA_VERSION = 1;
 export const PRODUCTION_APPLY_CONFIRMATION = "APPLY_LEGACY_GAME_COMMAND_PREREQUISITES_PRODUCTION_V1";
 export const EXPECTED_LIVE_FLOW_SHA256 = "42cbd9a4fc3e53aacadb24601c2a430e78f36d9b79a5f5725782667a87735c42";
 export const EXPECTED_CANDIDATE_FLOW_SHA256 = "ccc71f8f54881f3bfd5424a7fc1acc0008d4c3eceb16f1ec4560c281c448c03a";
+// Frozen from a new `npm ci --ignore-scripts --omit=dev` install of package-lock.json.
+export const EXPECTED_MONGODB_RUNTIME_CLOSURE_SHA256 = "0ca817b6104013a415c8766fa43ec5d5baaf8859ddffeba182d5a69dc609fcc7";
 export const MIN_QUIESCENCE_OBSERVATION_MS = 120_000;
 export const MAX_PACKET_LIFETIME_MS = 30 * 60_000;
 export const MAX_BACKUP_AGE_MS = 24 * 60 * 60_000;
@@ -249,8 +251,13 @@ export const hashRuntimePackageClosure = (entryPackageJsonPath) => {
   }
   return digest.digest("hex");
 };
-const mongodbRuntimeClosureSha256 = () => hashRuntimePackageClosure(MONGODB_PACKAGE_PATH);
-
+export const assertPinnedMongoRuntimeClosure = (entryPackageJsonPath = MONGODB_PACKAGE_PATH) => {
+  const actual = hashRuntimePackageClosure(entryPackageJsonPath);
+  if (actual !== EXPECTED_MONGODB_RUNTIME_CLOSURE_SHA256) {
+    throw new Error("MongoDB runtime closure does not match the independently pinned npm ci digest");
+  }
+  return actual;
+};
 export const writerRegistrySha256 = () => sha256(fs.readFileSync(WRITER_REGISTRY_PATH));
 
 function productionSourceCustodyPaths() {
@@ -271,20 +278,29 @@ function productionSourceCustodyPaths() {
   ];
 }
 
-export function buildProductionStaticSourceIdentity({ releaseAttestationSha256 = "UNBOUND" } = {}) {
+export function buildProductionStaticSourceIdentity({
+  releaseAttestationSha256 = "UNBOUND",
+  sourceRoot = REPO_ROOT,
+} = {}) {
+  const root = fs.realpathSync(sourceRoot);
+  const sourceScriptDirectory = path.join(root, "scripts");
+  const sourceRunnerPath = path.join(sourceScriptDirectory, "run_legacy_game_command_production_migration.mjs");
+  const sourcePackageDirectory = path.join(root, "node-red/custom-nodes/legacy-game-command-transaction");
+  const sourceRequire = createRequire(path.join(root, "package.json"));
+  const sourceMongoPackagePath = sourceRequire.resolve("mongodb/package.json");
   return {
     liveFlowSha256: EXPECTED_LIVE_FLOW_SHA256,
     candidateFlowSha256: EXPECTED_CANDIDATE_FLOW_SHA256,
-    packageSha256: hashPrivatePackage(),
-    writerRegistrySha256: writerRegistrySha256(),
-    runnerSha256: sha256(fs.readFileSync(RUNNER_PATH)),
-    migrationCoreSha256: sha256(fs.readFileSync(MIGRATION_CORE_PATH)),
-    approvalVerifierSha256: sha256(fs.readFileSync(APPROVAL_VERIFIER_PATH)),
-    trustAnchorManifestSha256: sha256(TRUST_ANCHOR_MANIFEST_BODY),
-    rootPackageSha256: sha256(fs.readFileSync(ROOT_PACKAGE_PATH)),
-    dependencyLockSha256: sha256(fs.readFileSync(DEPENDENCY_LOCK_PATH)),
+    packageSha256: hashPrivatePackage(sourcePackageDirectory),
+    writerRegistrySha256: sha256(fs.readFileSync(path.join(sourceScriptDirectory, "legacy_game_revision_writers.json"))),
+    runnerSha256: sha256(fs.readFileSync(sourceRunnerPath)),
+    migrationCoreSha256: sha256(fs.readFileSync(path.join(sourceScriptDirectory, "migrate_legacy_game_command_prerequisites.mjs"))),
+    approvalVerifierSha256: sha256(fs.readFileSync(path.join(sourceScriptDirectory, "lib/legacy_game_command_production_approval.mjs"))),
+    trustAnchorManifestSha256: sha256(fs.readFileSync(path.join(sourceScriptDirectory, "legacy_game_command_production_trust_anchor.json"))),
+    rootPackageSha256: sha256(fs.readFileSync(path.join(root, "package.json"))),
+    dependencyLockSha256: sha256(fs.readFileSync(path.join(root, "package-lock.json"))),
     nodeExecutableSha256: sha256(fs.readFileSync(NODE_EXECUTABLE_PATH)),
-    mongodbRuntimeClosureSha256: mongodbRuntimeClosureSha256(),
+    mongodbRuntimeClosureSha256: assertPinnedMongoRuntimeClosure(sourceMongoPackagePath),
     releaseAttestationSha256,
   };
 }

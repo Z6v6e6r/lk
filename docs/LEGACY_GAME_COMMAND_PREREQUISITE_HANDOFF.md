@@ -3,8 +3,8 @@
 ## Frozen source provenance
 
 - Repository: `Z6v6e6r/lk`
-- Base commit: `33f846cea95128ab9df522005132a0f5bb7c63bd`
-- Base tree: `758177ea8b49b1a1659f7b819e661935a8085417`
+- Base commit: `cf1526f6cc7ae6d28c2d273104df18a64580e21e`
+- Base tree: `1e6ac1eae80a5f0a3ed4f87fd2a084f324ca8b9d`
 - Task branch: `codex/legacy-command-live-reconcile-install-20260826`
 - Fresh active full-flow SHA-256: `42cbd9a4fc3e53aacadb24601c2a430e78f36d9b79a5f5725782667a87735c42`
 - Active full-flow nodes: `4762`
