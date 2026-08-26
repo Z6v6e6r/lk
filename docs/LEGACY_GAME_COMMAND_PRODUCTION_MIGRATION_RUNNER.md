@@ -43,8 +43,8 @@ repair task. A fresh `dry-run` is required after that repair.
 
 The current runner accepts only:
 
-- live full-flow SHA-256 `0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e`;
-- source-only candidate SHA-256 `035e9d93b70ee8d3b2817280f42539679e5a7ed270bf8f0c242b364ad57a0e02`;
+- live full-flow SHA-256 `42cbd9a4fc3e53aacadb24601c2a430e78f36d9b79a5f5725782667a87735c42`;
+- source-only candidate SHA-256 `ccc71f8f54881f3bfd5424a7fc1acc0008d4c3eceb16f1ec4560c281c448c03a`;
 - all seven writers in `scripts/legacy_game_revision_writers.json`;
 - the exact custom-node package, runner, migration-core, writer-registry,
   approval-verifier, source trust-anchor manifest, root package, dependency lock,
@@ -58,6 +58,10 @@ The live flow was pulled read-only from
 candidate nodes, `215` HTTP inputs, `47` changed nodes, `36` added nodes, and no
 added endpoint. Any changed live SHA requires a new source task, candidate, review,
 and execution packet.
+
+The exact immutable release builder and guarded install contract are documented in
+`LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_INSTALL.md`. A release build or install does
+not import the flow, bind the approval key, connect to MongoDB, or authorize migration.
 
 ## Read-only modes
 
@@ -124,8 +128,8 @@ The reviewed packet has this shape (values are illustrative placeholders):
   },
   "source": {
     "repositoryCommit": "<exact 40-hex deployed commit>",
-    "liveFlowSha256": "0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e",
-    "candidateFlowSha256": "035e9d93b70ee8d3b2817280f42539679e5a7ed270bf8f0c242b364ad57a0e02",
+    "liveFlowSha256": "42cbd9a4fc3e53aacadb24601c2a430e78f36d9b79a5f5725782667a87735c42",
+    "candidateFlowSha256": "ccc71f8f54881f3bfd5424a7fc1acc0008d4c3eceb16f1ec4560c281c448c03a",
     "packageSha256": "<fresh audit value>",
     "writerRegistrySha256": "<fresh audit value>",
     "runnerSha256": "<fresh audit value>",

@@ -216,7 +216,8 @@ test("ambiguous majority receipt never authorizes writes and distinguishes recov
 test("runtime closure includes installed peers and fails on a missing required peer", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-command-runtime-closure-"));
   try {
-    const nodeModules = path.join(directory, "node_modules");
+    const projectDirectory = path.join(directory, "project");
+    const nodeModules = path.join(projectDirectory, "node_modules");
     const entryDirectory = path.join(nodeModules, "root-runtime");
     const peerDirectory = path.join(nodeModules, "peer-runtime");
     fs.mkdirSync(entryDirectory, { recursive: true });
@@ -246,6 +247,33 @@ test("runtime closure includes installed peers and fails on a missing required p
       peerDependencies: { "missing-required-runtime": "1.0.0" },
     }));
     assert.throws(() => resolveRuntimePackageClosure(entryManifestPath), /missing-required-runtime/);
+
+    const ambientDirectory = path.join(directory, "node_modules", "ambient-runtime");
+    fs.mkdirSync(ambientDirectory, { recursive: true });
+    fs.writeFileSync(path.join(ambientDirectory, "package.json"), JSON.stringify({
+      name: "ambient-runtime",
+      version: "9.9.9",
+    }));
+    fs.writeFileSync(path.join(ambientDirectory, "index.js"), "export const ambient = true;\n");
+    fs.writeFileSync(entryManifestPath, JSON.stringify({
+      name: "root-runtime",
+      version: "1.0.0",
+      peerDependencies: { "ambient-runtime": "9.9.9" },
+      peerDependenciesMeta: { "ambient-runtime": { optional: true } },
+    }));
+    assert.deepEqual(
+      resolveRuntimePackageClosure(entryManifestPath).map((item) => item.identity),
+      ["root-runtime@1.0.0"],
+    );
+    fs.writeFileSync(entryManifestPath, JSON.stringify({
+      name: "root-runtime",
+      version: "1.0.0",
+      dependencies: { "ambient-runtime": "9.9.9" },
+    }));
+    assert.throws(
+      () => resolveRuntimePackageClosure(entryManifestPath),
+      /outside the approved node_modules root/,
+    );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

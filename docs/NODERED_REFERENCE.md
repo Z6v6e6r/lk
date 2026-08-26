@@ -7,6 +7,7 @@
 - Result lifecycle replay recovers a missing saved game projection only when the current game revision still equals the durable outbox `sourceGameRevision`, then uses that exact revision for the fenced CAS before side effects are released.
 - Viva provider execution is released only after an exact primary/majority read-back of provider row id, tenant, result id, and result revision.
 - The source-only production migration wrapper audits a fresh database state digest, target fingerprint, exact release/live/candidate/package/runner/verifier/manifest hashes, a custodian-owned read-only release attestation, strict canonical backup/restore/quiescence/runtime evidence files, a domain-separated detached Ed25519 approval, and a one-time execution nonce with ambiguous-ACK recovery. The verifier exists, but production apply remains fail-closed while the source manifest is `UNBOUND`; see `docs/LEGACY_GAME_COMMAND_PRODUCTION_MIGRATION_RUNNER.md` and `docs/LEGACY_GAME_COMMAND_PRODUCTION_TRUST_ANCHOR.md`.
+- The production release builder packages the exact runner/custom-node sources and complete installed MongoDB runtime closure. The guarded installer has a read-only `plan` mode and can only create a new commit-addressed custodian-owned release; it never updates a `current` symlink or restarts Node-RED. See `docs/LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_INSTALL.md`.
 - Runtime installation, migrations, mapping imports, flow import, provider calls, and gateway activation remain separate guarded R4 tasks.
 
 ## Split booking lifecycle v2

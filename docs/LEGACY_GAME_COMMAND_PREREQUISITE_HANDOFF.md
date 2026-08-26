@@ -3,13 +3,14 @@
 ## Frozen source provenance
 
 - Repository: `Z6v6e6r/lk`
-- Base commit: `2c51123459ba12f137a15aea573fe224cfd54e95`
-- Base tree: `743b68399d8de6474a6ebe35c3773ba300d38a90`
-- Task branch: `codex/legacy-game-command-prerequisites-transactions-revision-mapping-20260825`
-- Fresh active full-flow SHA-256: `0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e`
+- Base commit: `33f846cea95128ab9df522005132a0f5bb7c63bd`
+- Base tree: `758177ea8b49b1a1659f7b819e661935a8085417`
+- Task branch: `codex/legacy-command-live-reconcile-install-20260826`
+- Fresh active full-flow SHA-256: `42cbd9a4fc3e53aacadb24601c2a430e78f36d9b79a5f5725782667a87735c42`
 - Active full-flow nodes: `4762`
 - Selected `LK Games` tab nodes: `315`
-- Hardened full-flow candidate SHA-256: `035e9d93b70ee8d3b2817280f42539679e5a7ed270bf8f0c242b364ad57a0e02`
+- Selected `LK Games` source SHA-256: `78819ff8b1588071d28015c96bb5e5c0a58983926275401deee57a6e849cbc99`
+- Hardened full-flow candidate SHA-256: `ccc71f8f54881f3bfd5424a7fc1acc0008d4c3eceb16f1ec4560c281c448c03a`
 - Candidate full-flow nodes: `4798`
 - Candidate selected `LK Games` tab nodes: `350`
 - Selected HTTP inputs: `38`
@@ -17,6 +18,12 @@
 - Candidate budget: `47` existing function/wire changes, `36` added CAS, claim/lease, ACK, exact provider-identity read-back, recovery, and catch nodes, `0` added endpoints
 
 The raw live flow and generated full-flow candidate remain outside Git in a private local workspace. Only source functions, a pinned patcher, fingerprints, tests, and documentation are committed.
+
+The predecessor flow differed from the fresh source in exactly one existing function,
+`Prepare split game payment` (`f3f9a60354d394da`), and only in its `func` field. The
+legacy-command builder does not own that node and preserves the fresh function body
+byte-for-byte. The redacted reconciliation evidence is committed in
+`scripts/legacy_game_command_live_reconciliation.json`.
 
 ## What this prerequisite delivers
 

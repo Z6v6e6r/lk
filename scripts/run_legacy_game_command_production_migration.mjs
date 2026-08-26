@@ -60,8 +60,8 @@ const MONGODB_PACKAGE_VERSION = JSON.parse(fs.readFileSync(MONGODB_PACKAGE_PATH,
 export { PRODUCTION_MIGRATION_ID };
 export const PRODUCTION_PACKET_SCHEMA_VERSION = 1;
 export const PRODUCTION_APPLY_CONFIRMATION = "APPLY_LEGACY_GAME_COMMAND_PREREQUISITES_PRODUCTION_V1";
-export const EXPECTED_LIVE_FLOW_SHA256 = "0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e";
-export const EXPECTED_CANDIDATE_FLOW_SHA256 = "035e9d93b70ee8d3b2817280f42539679e5a7ed270bf8f0c242b364ad57a0e02";
+export const EXPECTED_LIVE_FLOW_SHA256 = "42cbd9a4fc3e53aacadb24601c2a430e78f36d9b79a5f5725782667a87735c42";
+export const EXPECTED_CANDIDATE_FLOW_SHA256 = "ccc71f8f54881f3bfd5424a7fc1acc0008d4c3eceb16f1ec4560c281c448c03a";
 export const MIN_QUIESCENCE_OBSERVATION_MS = 120_000;
 export const MAX_PACKET_LIFETIME_MS = 30 * 60_000;
 export const MAX_BACKUP_AGE_MS = 24 * 60 * 60_000;
@@ -171,9 +171,40 @@ function hashFileInventory(root, filePaths) {
 }
 
 export function resolveRuntimePackageClosure(entryPackageJsonPath) {
+  const resolvedEntry = fs.realpathSync(path.resolve(entryPackageJsonPath));
+  const nodeModulesMarker = `${path.sep}node_modules${path.sep}`;
+  const markerIndex = resolvedEntry.indexOf(nodeModulesMarker);
+  if (markerIndex < 0) throw new Error("Runtime package entry must be inside node_modules");
+  const allowedNodeModules = `${resolvedEntry.slice(0, markerIndex)}${path.sep}node_modules${path.sep}`;
+  const assertInsideRuntimeRoot = (candidate) => {
+    const resolved = fs.realpathSync(candidate);
+    if (!resolved.startsWith(allowedNodeModules)) {
+      throw new Error(`Runtime package resolved outside the approved node_modules root: ${resolved}`);
+    }
+    return resolved;
+  };
+  const resolveDependencyManifest = (packageRequire, dependency) => {
+    try {
+      return assertInsideRuntimeRoot(packageRequire.resolve(`${dependency}/package.json`));
+    } catch (error) {
+      if (error?.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") throw error;
+      let current = path.dirname(packageRequire.resolve(dependency));
+      while (true) {
+        const candidate = path.join(current, "package.json");
+        if (fs.existsSync(candidate)) {
+          const manifest = JSON.parse(fs.readFileSync(candidate, "utf8"));
+          if (manifest.name === dependency) return assertInsideRuntimeRoot(candidate);
+        }
+        const parent = path.dirname(current);
+        if (parent === current || path.basename(current) === "node_modules") break;
+        current = parent;
+      }
+      throw new Error(`Unable to resolve runtime package manifest for ${dependency}`);
+    }
+  };
   const packages = [];
   const visited = new Set();
-  const queue = [path.resolve(entryPackageJsonPath)];
+  const queue = [assertInsideRuntimeRoot(resolvedEntry)];
   while (queue.length > 0) {
     const packageJsonPath = queue.shift();
     if (visited.has(packageJsonPath)) continue;
@@ -192,14 +223,14 @@ export function resolveRuntimePackageClosure(entryPackageJsonPath) {
     };
     for (const dependency of Object.keys(ordinaryDependencies).sort()) {
       try {
-        queue.push(packageRequire.resolve(`${dependency}/package.json`));
+        queue.push(resolveDependencyManifest(packageRequire, dependency));
       } catch (error) {
         if (!(dependency in (manifest.optionalDependencies || {}))) throw error;
       }
     }
     for (const dependency of Object.keys(manifest.peerDependencies || {}).sort()) {
       try {
-        queue.push(packageRequire.resolve(`${dependency}/package.json`));
+        queue.push(resolveDependencyManifest(packageRequire, dependency));
       } catch (error) {
         if (manifest.peerDependenciesMeta?.[dependency]?.optional !== true) throw error;
       }
@@ -210,14 +241,15 @@ export function resolveRuntimePackageClosure(entryPackageJsonPath) {
 
 const mongodbRuntimePackages = () => resolveRuntimePackageClosure(MONGODB_PACKAGE_PATH);
 const mongodbRuntimeFiles = () => mongodbRuntimePackages().flatMap((item) => item.files);
-const mongodbRuntimeClosureSha256 = () => {
+export const hashRuntimePackageClosure = (entryPackageJsonPath) => {
   const digest = crypto.createHash("sha256");
-  for (const runtimePackage of mongodbRuntimePackages()) {
+  for (const runtimePackage of resolveRuntimePackageClosure(entryPackageJsonPath)) {
     digest.update(`${runtimePackage.identity}\u0000`);
     digest.update(hashFileInventory(runtimePackage.directory, runtimePackage.files));
   }
   return digest.digest("hex");
 };
+const mongodbRuntimeClosureSha256 = () => hashRuntimePackageClosure(MONGODB_PACKAGE_PATH);
 
 export const writerRegistrySha256 = () => sha256(fs.readFileSync(WRITER_REGISTRY_PATH));
 

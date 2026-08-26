@@ -105,10 +105,10 @@ src/
 
 Для LK Games и связанных referral flow действует отдельное release-правило:
 
-- перед пересборкой import-артефактов нужно сначала забрать текущий live flow с сервера `147` в `node-red/modular/source.flow.json`;
-- только после этого накладывать локальные patch-скрипты и генерировать `node-red/modular/imports/*.json`;
-- рекомендуемая команда: `npm run nodered:modular:prepare-147 -- /root/.node-red/flows.json`.
-- `prepare-147` пишет и проверяет `node-red/modular/source.flow.meta.json`, чтобы релиз не собирался из stale snapshot.
+- raw live flow нужно забирать только в новый приватный workspace вне репозитория через `npm run nodered:modular:pull-147 -- /absolute/new/workspace`;
+- origin, SHA-256 и freshness проверяются через `npm run nodered:modular:verify -- --workspace /absolute/workspace`;
+- candidate строится только отдельным focused patcher с exact preimage и новым output path;
+- старые wide `sync-games-source` / `prepare-147` / `exports` находятся в карантине и не применяются к свежему live snapshot.
 
 ### Результаты игр
 
