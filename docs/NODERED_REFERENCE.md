@@ -21,6 +21,17 @@
 - Autonomous cohort cutoff: `SPLIT_LIFECYCLE_V2_ENFORCE_FROM=<RFC3339 timestamp with timezone>`; required in `SHADOW` and `ENFORCE_NEW`, otherwise the scheduler skips before lease and Mongo.
 - Full contract and acceptance tests: `docs/SPLIT_LIFECYCLE_V2.md`.
 
+## Split payment draft confirmation
+
+- `POST /lk/games/drafts` is the only browser write before Viva redirect. The draft remains `PAYMENT_PENDING`; aliases and generic `POST /lk/games` are not payment-confirmation fallbacks.
+- `POST /lk/games/payment/confirm` accepts `paymentRef` as lookup identity, loads the unique durable draft, and verifies the exact Viva transaction with server credentials. The client cannot supply authoritative paid status, amount, currency, transaction, booking, exercise, or player identity.
+- Confirmation succeeds only for Viva `PAID` and exact transaction, booking, exercise, amount, currency, and available client identity matches. Pending, cancelled, failed, missing, mismatched, or duplicate evidence fails closed and does not publish a paid game.
+- Before either callback or cleanup can publish, the verified Viva transaction is atomically claimed in `lk_game_payment_evidence_claims` under `_id=viva_transaction:<transactionId>` using only `$setOnInsert`, then read back and matched to exact game, `paymentRef`, transaction, and booking. A concurrent or replayed claim owned by another game fails closed.
+- Source functions: `fn_game_payment_confirm_lookup.js`, `fn_game_payment_confirm_router.js`, `fn_game_confirm_write_ack.js`, `fn_game_upsert_args.js`, and the internal proof guard in `fn_create.js`.
+- Confirm writes are fenced by the draft revision/`updatedAt`, use `upsert:false`, and do not emit a success response or autojoin before `acknowledged=true`, `matchedCount=1`, and an exact `PAID` Mongo read-back. Cleanup writes use the same stale-snapshot fence and emit `cancelledInLk=true` only after an acknowledged one-row update and exact status/paid/`updatedAt` read-back through `fn_split_cleanup_write_ack.js`.
+- The existing 120-second split cleanup scheduler reconciles users who never return from Viva. A verified and atomically claimed late organizer payment promotes the durable game to `PAID`; unverified entries remain non-public.
+- Guarded candidate builder: `npm run nodered:game-payment-confirmation:patch -- --input <fresh-live-flow> --output <candidate> --report <report>`. It is pinned to an exact live preimage, preserves the route set, and never imports or deploys the candidate.
+
 ## Что это и зачем
 
 Node-RED — визуальный инструмент автоматизации. В этом проекте он выступает бэкенд-слоем между фронтендом (личный кабинет) и базой данных (MongoDB). Потоки обрабатывают HTTP-запросы от фронта и MAX-бота.

@@ -84,7 +84,7 @@ test("draft persistence waits for an exact durable readback before success", asy
     [bookingId],
     {
       createDraft: async (_payload, options) => {
-        assert.deepEqual(options, { retries: 2, keepalive: true });
+        assert.deepEqual(options, { retries: 0, keepalive: true });
         return ok(record);
       },
       lookupDraft: async (_paymentRef, bookingIds) => {

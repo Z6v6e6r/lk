@@ -6308,10 +6308,12 @@ export default function GamesPage({
         ?? null;
       if (resolvedItem?.record?.id) {
         applyResolvedRecord(resolvedItem.record, parsedDraft?.payload ?? null);
+        cleanupUrl();
       } else {
         const failedItem = syncResult.failed.find((item) => item.paymentRef === paymentRef)
           ?? syncResult.failed[0]
           ?? null;
+        if (failedItem?.terminal) cleanupUrl();
         setGameRecordError(
           failedItem?.error
             || (parsedDraft
@@ -6320,7 +6322,6 @@ export default function GamesPage({
         );
       }
 
-      cleanupUrl();
       setRestoringPaidGame(false);
     })();
 

@@ -6462,7 +6462,7 @@ function collectPadelGameRecords(payload: unknown, bucket: Map<string, PadelGame
   }
 }
 
-function extractPadelGameRecordList(payload: unknown): PadelGameRecord[] {
+export function extractPadelGameRecordList(payload: unknown): PadelGameRecord[] {
   const bucket = new Map<string, PadelGameRecord>();
   collectPadelGameRecords(payload, bucket);
   return Array.from(bucket.values());
@@ -8070,11 +8070,7 @@ export async function apiCreatePadelGameDraft(
   const fallbackInviteUrl = payload.invite?.inviteUrl?.trim() || null;
 
   const writeResult = await writePadelGameRecord(
-    [
-      { url: "/lk/games/drafts", method: "POST" },
-      { url: "/lk/games/draft", method: "POST" },
-      { url: "/lk/games", method: "POST" },
-    ],
+    [{ url: "/lk/games/drafts", method: "POST" }],
     payload as unknown as Record<string, unknown>,
     fallbackId,
     fallbackInviteUrl,
@@ -8094,11 +8090,7 @@ export async function apiConfirmPadelGamePayment(
   const fallbackInviteUrl = payload.invite?.inviteUrl?.trim() || null;
 
   const writeResult = await writePadelGameRecord(
-    [
-      { url: "/lk/games/payment/confirm", method: "POST" },
-      { url: "/lk/games/confirm", method: "POST" },
-      { url: "/lk/games", method: "POST" },
-    ],
+    [{ url: "/lk/games/payment/confirm", method: "POST" }],
     payload as unknown as Record<string, unknown>,
     fallbackId,
     fallbackInviteUrl,
@@ -8238,10 +8230,11 @@ export async function apiFetchPadelGameByPaymentRef(
   let lastRequestError: ApiError | null = null;
   let lastRequestErrorStatus: ApiStatus = 200;
   for (const query of lookupQueries) {
+    query.set("_cb", `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
     const response = await request<unknown>(`/lk/games?${query.toString()}`, {
       method: "GET",
       baseUrl,
-      retries: 1,
+      retries: 0,
     });
     lastStatus = response.status;
     if (response.error) {
@@ -8250,8 +8243,18 @@ export async function apiFetchPadelGameByPaymentRef(
       continue;
     }
 
-    const single = normalizePadelGameRecord(response.data);
-    const record = single ?? extractPadelGameRecordList(response.data)[0] ?? null;
+    const records = extractPadelGameRecordList(response.data);
+    if (records.length > 1) {
+      return {
+        data: null as PadelGameRecord | null,
+        error: {
+          status: 409,
+          message: "Найдено несколько игр с одной ссылкой платежа",
+        },
+        status: 409 as ApiStatus,
+      };
+    }
+    const record = records[0] ?? normalizePadelGameRecord(response.data);
     if (record) {
       return { data: record, error: null, status: response.status };
     }

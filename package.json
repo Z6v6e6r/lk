@@ -60,6 +60,7 @@
     "nodered:viva-user-agent:patch": "node scripts/patch_live_viva_user_agent.mjs",
     "nodered:split-create-contract:patch": "node scripts/patch_live_split_create_contract.mjs",
     "nodered:split-pricing-recovery:patch": "node scripts/patch_live_split_pricing_recovery.mjs",
+    "nodered:game-payment-confirmation:patch": "node scripts/patch_live_game_payment_confirmation.mjs",
     "nodered:viva-token-cache:patch": "node scripts/patch_live_viva_token_cache.mjs",
     "nodered:tournament-history-resilience:patch": "node scripts/patch_live_tournament_history_resilience.mjs",
     "nodered:tournament-history-storm-guard:patch": "node scripts/patch_live_tournament_history_storm_guard.mjs",

@@ -39,10 +39,62 @@ function getExistingBookingIdsFromRecord(record: PadelGameRecord): string[] {
   ]));
 }
 
+export function resolvePaymentSyncExpectedGameId(...values: unknown[]): string | null {
+  for (const value of values) {
+    const normalized = toStringSafe(value);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+export function isConfirmedPaymentReadbackBound(
+  record: PadelGameRecord,
+  expected: { paymentRef: string; gameId: string; bookingIds: string[] },
+): boolean {
+  const metadata = record.metadata && typeof record.metadata === "object"
+    ? record.metadata as Record<string, unknown>
+    : {};
+  const splitPayment = metadata.splitPayment && typeof metadata.splitPayment === "object"
+    ? metadata.splitPayment as Record<string, unknown>
+    : {};
+  const payments = Array.isArray(splitPayment.payments)
+    ? splitPayment.payments as Array<Record<string, unknown>>
+    : [];
+  const payment = record.payment && typeof record.payment === "object"
+    ? record.payment as Record<string, unknown>
+    : {};
+  const paymentRefs = parseStringList([
+    metadata.paymentRef,
+    splitPayment.paymentRef,
+    payment.paymentRef,
+    ...payments.map((item) => item?.paymentRef),
+  ]);
+  const recordBookingIds = parseStringList([
+    record.booking?.bookingId,
+    ...(record.booking?.bookingIds ?? []),
+    ...parseStringList(metadata.bookingIds),
+    ...parseStringList(payment.bookingIds),
+    ...payments.flatMap((item) => parseStringList(item?.bookingId ?? item?.bookingIds)),
+  ]);
+  const expectedBookingIds = parseStringList(expected.bookingIds);
+  return (
+    record.id === expected.gameId
+    && paymentRefs.includes(expected.paymentRef)
+    && expectedBookingIds.length > 0
+    && expectedBookingIds.every((bookingId) => recordBookingIds.includes(bookingId))
+  );
+}
+
 export function isPersistedGamePaymentTerminal(record: PadelGameRecord): boolean {
-  if (record.payment?.paid === true) return true;
   const status = toStringSafe(record.status)?.toUpperCase() ?? "";
-  return status === "PAID" || status === "PAYED" || status === "CANCELLED";
+  if (["CANCELLED", "CANCELED", "FAILED", "EXPIRED", "REJECTED"].includes(status)) return false;
+  if (record.payment?.paid === true) return true;
+  return status === "PAID" || status === "PAYED";
+}
+
+export function isPersistedGamePaymentFailedTerminal(record: PadelGameRecord): boolean {
+  const status = toStringSafe(record.status)?.toUpperCase() ?? "";
+  return ["CANCELLED", "CANCELED", "FAILED", "EXPIRED", "REJECTED"].includes(status);
 }
 
 export function buildPendingPaidGameDraftFromRecord(
