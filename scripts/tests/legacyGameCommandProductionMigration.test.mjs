@@ -5,15 +5,21 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  classifyAmbiguousExecutionReceipt,
   classifyIndexSpecs,
+  executionReceiptIdentityMatches,
   EXPECTED_CANDIDATE_FLOW_SHA256,
   EXPECTED_LIVE_FLOW_SHA256,
   PRODUCTION_MIGRATION_ID,
   PRODUCTION_PACKET_SCHEMA_VERSION,
+  PRODUCTION_RUNTIME_IDENTITY,
   readProtectedExecutionPacket,
+  resolveRuntimePackageClosure,
   sanitizeProductionRunnerError,
   sha256,
+  stableStringify,
   validateProductionExecutionPacket,
+  validateProductionReleaseAttestation,
 } from "../run_legacy_game_command_production_migration.mjs";
 
 const digest = (character) => character.repeat(64);
@@ -23,6 +29,7 @@ const COMBINED_SOURCE_ONLY_CANDIDATE_SHA256 = "e730bf8c043e2f33f5a75c6825d56f39a
 const context = {
   target: { databaseName: "games", targetFingerprint: digest("1") },
   planDigest: digest("2"),
+  stateDigest: digest("0"),
   readyForExecutionPacket: true,
   source: {
     liveFlowSha256: EXPECTED_LIVE_FLOW_SHA256,
@@ -31,6 +38,13 @@ const context = {
     writerRegistrySha256: digest("4"),
     runnerSha256: digest("a"),
     migrationCoreSha256: digest("b"),
+    approvalVerifierSha256: digest("c"),
+    trustAnchorManifestSha256: digest("d"),
+    rootPackageSha256: digest("5"),
+    dependencyLockSha256: digest("6"),
+    nodeExecutableSha256: digest("7"),
+    mongodbRuntimeClosureSha256: digest("8"),
+    releaseAttestationSha256: digest("e"),
   },
 };
 
@@ -47,8 +61,15 @@ const buildPacket = (overrides = {}) => ({
     writerRegistrySha256: context.source.writerRegistrySha256,
     runnerSha256: context.source.runnerSha256,
     migrationCoreSha256: context.source.migrationCoreSha256,
+    approvalVerifierSha256: context.source.approvalVerifierSha256,
+    trustAnchorManifestSha256: context.source.trustAnchorManifestSha256,
+    rootPackageSha256: context.source.rootPackageSha256,
+    dependencyLockSha256: context.source.dependencyLockSha256,
+    nodeExecutableSha256: context.source.nodeExecutableSha256,
+    mongodbRuntimeClosureSha256: context.source.mongodbRuntimeClosureSha256,
+    releaseAttestationSha256: context.source.releaseAttestationSha256,
   },
-  plan: { digest: context.planDigest, generatedAt: "2026-08-26T11:53:00.000Z" },
+  plan: { digest: context.planDigest, stateDigest: context.stateDigest, generatedAt: "2026-08-26T11:53:00.000Z" },
   backup: {
     manifestSha256: digest("5"),
     snapshotIdentitySha256: digest("6"),
@@ -67,8 +88,8 @@ const buildPacket = (overrides = {}) => ({
   },
   runtime: {
     compatibilityReportSha256: digest("9"),
-    nodeVersion: "v22.0.0",
-    mongodbDriverVersion: "6.20.0",
+    nodeVersion: PRODUCTION_RUNTIME_IDENTITY.nodeVersion,
+    mongodbDriverVersion: PRODUCTION_RUNTIME_IDENTITY.mongodbDriverVersion,
     verifiedAt: "2026-08-26T11:55:00.000Z",
   },
   authorization: {
@@ -114,13 +135,25 @@ test("combined source-only candidate is not production-authorized", () => {
 });
 
 test("production execution packet rejects drift, weak quiescence, stale backup, and reused authority", () => {
-  const stalePlan = buildPacket({ plan: { digest: digest("f"), generatedAt: "2026-08-26T11:53:00.000Z" } });
+  assert.throws(() => validate({ ...buildPacket(), unreviewed: true }), /approved schema/);
+  assert.throws(() => validate(buildPacket({
+    authorization: { approvedAt: "2026-08-26T12:00:00Z", expiresAt: "2026-08-26T12:20:00.000Z" },
+  })), /canonical UTC RFC3339/);
+
+  const stalePlan = buildPacket({
+    plan: { digest: digest("f"), stateDigest: context.stateDigest, generatedAt: "2026-08-26T11:53:00.000Z" },
+  });
   assert.throws(() => validate(stalePlan), /plan digest is stale/);
 
   const sourceDrift = buildPacket({
     source: { ...buildPacket().source, liveFlowSha256: digest("e") },
   });
   assert.throws(() => validate(sourceDrift), /live flow digest mismatch/);
+
+  const runtimeDrift = buildPacket({
+    runtime: { ...buildPacket().runtime, nodeVersion: "v0.0.0" },
+  });
+  assert.throws(() => validate(runtimeDrift), /runtime identity differs/);
 
   const weakQuiescence = buildPacket({
     quiescence: { ...buildPacket().quiescence, observedTo: "2026-08-26T11:52:00.000Z" },
@@ -139,6 +172,96 @@ test("production execution packet rejects drift, weak quiescence, stale backup, 
 
   const wrongTarget = buildPacket({ target: { databaseName: "other", fingerprint: context.target.targetFingerprint } });
   assert.throws(() => validate(wrongTarget), /target identity mismatch/);
+});
+
+test("release attestation binds a custodian deployment to every local source digest", () => {
+  const packet = buildPacket();
+  const actualSource = { ...packet.source };
+  delete actualSource.repositoryCommit;
+  const attestation = {
+    schemaVersion: 1,
+    migrationId: PRODUCTION_MIGRATION_ID,
+    environment: "production",
+    deploymentId: "11111111-1111-4111-8111-111111111111",
+    repositoryCommit: packet.source.repositoryCommit,
+    source: Object.fromEntries(Object.entries(actualSource).filter(([key]) => key !== "releaseAttestationSha256")),
+    activatedAt: "2026-08-26T11:45:00.000Z",
+    status: "ACTIVE",
+  };
+  assert.equal(validateProductionReleaseAttestation(packet, attestation, {
+    attestationSha256: packet.source.releaseAttestationSha256,
+    actualSource,
+    now: new Date("2026-08-26T12:10:00.000Z"),
+  }), true);
+  assert.throws(() => validateProductionReleaseAttestation(packet, {
+    ...attestation,
+    source: { ...attestation.source, runnerSha256: digest("f") },
+  }, {
+    attestationSha256: packet.source.releaseAttestationSha256,
+    actualSource,
+    now: new Date("2026-08-26T12:10:00.000Z"),
+  }), /runnerSha256 mismatch/);
+});
+
+test("ambiguous majority receipt never authorizes writes and distinguishes recovery from conflict", async () => {
+  const expected = {
+    _id: "11111111-1111-4111-8111-111111111111",
+    migrationId: PRODUCTION_MIGRATION_ID,
+    packetSha256: digest("1"),
+    planDigest: digest("2"),
+    targetFingerprint: digest("3"),
+    repositoryCommit: releaseSha,
+    approvalKeyId: "operations-approval-2026-01",
+    approvalKeyFingerprintSha256: digest("4"),
+  };
+  assert.equal(executionReceiptIdentityMatches({ ...expected, status: "APPLYING" }, expected), true);
+  assert.equal(await classifyAmbiguousExecutionReceipt({
+    findOne: async () => ({ ...expected, status: "APPLYING" }),
+  }, expected), "RECOVERY_REQUIRED");
+  assert.equal(await classifyAmbiguousExecutionReceipt({
+    findOne: async () => ({ ...expected, packetSha256: digest("9") }),
+  }, expected), "CONFLICT");
+  assert.equal(await classifyAmbiguousExecutionReceipt({ findOne: async () => null }, expected), "UNKNOWN_ABSENT");
+  assert.equal(await classifyAmbiguousExecutionReceipt({ findOne: async () => { throw new Error("timeout"); } }, expected), "UNKNOWN_UNREADABLE");
+});
+
+test("runtime closure includes installed peers and fails on a missing required peer", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-command-runtime-closure-"));
+  try {
+    const nodeModules = path.join(directory, "node_modules");
+    const entryDirectory = path.join(nodeModules, "root-runtime");
+    const peerDirectory = path.join(nodeModules, "peer-runtime");
+    fs.mkdirSync(entryDirectory, { recursive: true });
+    fs.mkdirSync(peerDirectory, { recursive: true });
+    const entryManifestPath = path.join(entryDirectory, "package.json");
+    fs.writeFileSync(entryManifestPath, JSON.stringify({
+      name: "root-runtime",
+      version: "1.0.0",
+      peerDependencies: {
+        "peer-runtime": "2.0.0",
+        "missing-optional-runtime": "1.0.0",
+      },
+      peerDependenciesMeta: { "missing-optional-runtime": { optional: true } },
+    }));
+    fs.writeFileSync(path.join(peerDirectory, "package.json"), JSON.stringify({
+      name: "peer-runtime",
+      version: "2.0.0",
+      exports: "./index.js",
+    }));
+    fs.writeFileSync(path.join(peerDirectory, "index.js"), "export const peer = true;\n");
+    assert.deepEqual(
+      resolveRuntimePackageClosure(entryManifestPath).map((item) => item.identity),
+      ["peer-runtime@2.0.0", "root-runtime@1.0.0"],
+    );
+    fs.writeFileSync(entryManifestPath, JSON.stringify({
+      name: "root-runtime",
+      version: "1.0.0",
+      peerDependencies: { "missing-required-runtime": "1.0.0" },
+    }));
+    assert.throws(() => resolveRuntimePackageClosure(entryManifestPath), /missing-required-runtime/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("index classifier rejects same-name drift and equivalent indexes under another name", () => {
@@ -161,10 +284,12 @@ test("execution packet loader rejects permissive files and returns exact byte di
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-command-packet-"));
   try {
     const packetPath = path.join(directory, "packet.json");
-    const body = `${JSON.stringify(buildPacket())}\n`;
+    const body = `${stableStringify(buildPacket())}\n`;
     fs.writeFileSync(packetPath, body, { mode: 0o600 });
     const loaded = readProtectedExecutionPacket(packetPath);
     assert.equal(loaded.sha256, sha256(Buffer.from(body)));
+    fs.writeFileSync(packetPath, `${JSON.stringify(buildPacket())}\n`, { mode: 0o600 });
+    assert.throws(() => readProtectedExecutionPacket(packetPath), /canonical JSON/);
     fs.chmodSync(packetPath, 0o644);
     assert.throws(() => readProtectedExecutionPacket(packetPath), /owned private regular file/);
   } finally {
@@ -183,4 +308,7 @@ test("runner diagnostics redact Mongo credentials", () => {
   assert.equal(message.includes(password), false);
   assert.equal(message.includes(`${scheme}://`), false);
   assert.equal(message, "LEGACY_GAME_COMMAND_PRODUCTION_MIGRATION_FAILED");
+  assert.equal(sanitizeProductionRunnerError({
+    code: "LEGACY_GAME_COMMAND_RECEIPT_RECOVERY_REQUIRED",
+  }), "LEGACY_GAME_COMMAND_RECEIPT_RECOVERY_REQUIRED");
 });
