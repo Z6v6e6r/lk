@@ -7,6 +7,7 @@
 - The active live `fn_patch` fingerprint is verified from the frozen flow node, while the combined candidate fingerprint is verified from `scripts/nodered_games_nodes/fn_patch.js`; these identities must never be collapsed into one registry hash.
 - Result lifecycle replay recovers a missing saved game projection only when the current game revision still equals the durable outbox `sourceGameRevision`, then uses that exact revision for the fenced CAS before side effects are released.
 - Viva provider execution is released only after an exact primary/majority read-back of provider row id, tenant, result id, and result revision.
+- The source-only production migration wrapper audits a fresh database state digest, target fingerprint, exact release/live/candidate/package/runner hashes, protected backup/restore/quiescence/runtime evidence files, and a one-time execution nonce. Production apply remains fail-closed until a separate R4 task binds an independently controlled detached-signature trust anchor; see `docs/LEGACY_GAME_COMMAND_PRODUCTION_MIGRATION_RUNNER.md`.
 - Runtime installation, migrations, mapping imports, flow import, provider calls, and gateway activation remain separate guarded R4 tasks.
 - The subscription and legacy-prerequisite full-flow candidates are source-only and are not sequentially deployable; a future unified release builder is mandatory before any import.
 
