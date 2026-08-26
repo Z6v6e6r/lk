@@ -113,11 +113,14 @@ test("host-hardening plan keeps permission and executor mutations behind separat
   );
   assert.match(plan, /does not authorize `chmod`, `groupadd`,/);
   assert.match(plan, /preimage `0:0:0707`, and target `0:0:0755`/);
-  assert.match(plan, /chmod 0755 -- \/\n/);
+  assert.match(plan, /LEGACY_GAME_COMMAND_ROOT_ACL_BOOTSTRAP\.md/);
+  assert.match(plan, /H0 is audit-only and must prove through `flistxattr`/);
+  assert.match(plan, /LK_ROOT_ACL_BOOTSTRAP_APPLY=APPLY_ROOT_MODE_0755_V1/);
+  assert.match(plan, /Raw path-based `chmod` is\nforbidden/);
   assert.match(plan, /Restoring the insecure preimage is a separate break-glass live gate/);
-  assert.match(plan, /chmod 0707 -- \/\n/);
-  assert.match(plan, /if `getfacl` is absent, errors, truncates/);
-  assert.match(plan, /Any `default:`, named user\/group, `mask::`, duplicate,/);
+  assert.match(plan, /LK_ROOT_ACL_BOOTSTRAP_ROLLBACK=ROLLBACK_ROOT_MODE_0707_V1/);
+  assert.match(plan, /host has no `getfacl`, `getfattr`, or `attr`/);
+  assert.match(plan, /Unknown\/non-empty xattrs or incomplete read-back/);
   assert.match(plan, /scan each\nmount without crossing filesystem boundaries/);
   assert.match(plan, /report zero ownership and ACL matches/);
   assert.match(plan, /groupadd --system --gid <frozen-unused-gid>/);

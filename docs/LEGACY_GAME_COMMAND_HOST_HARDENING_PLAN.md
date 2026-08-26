@@ -28,43 +28,41 @@ mutation, repeat the read-only freeze below and stop on any drift.
 This is a standalone live permission mutation and requires explicit approval naming
 `lk-primary-147`, `/`, preimage `0:0:0707`, and target `0:0:0755`.
 
-Before the approval is consumed, require a working ACL-capable readback tool. On this
-host the reviewed command is `getfacl -cp /`; if `getfacl` is absent, errors, truncates
-its result, or cannot represent the mounted filesystem ACL, H1 is blocked. Capture a
-private root-owned evidence file with `stat -Lc '%u:%g:%a:%F' /`, mount
-identity/options, and the complete `getfacl -cp /` result. Stop if `/` is not a real
-directory owned by `0:0`, its mode is not exactly `0707`, it is unexpectedly remounted,
-or the non-comment, non-blank ACL output is not exactly one access entry each for
-`user::`, `group::`, and `other::`. Any `default:`, named user/group, `mask::`, duplicate,
-or unknown ACL entry blocks H1. Also prove that no process, service, or deployment
-contract intentionally writes entries directly under `/`; normal writes below
-established top-level directories are unaffected.
+The host has no `getfacl`, `getfattr`, or `attr`. Installing the `acl` package while `/`
+is other-writable is rejected: it would execute a broad package-manager workflow before
+root ancestor custody exists. Mode-only `ls`/`stat` output is not an ACL substitute.
+H1 therefore depends on the separately built, reviewed, digest-frozen static helper and
+the complete H0/H1 procedure in
+`LEGACY_GAME_COMMAND_ROOT_ACL_BOOTSTRAP.md`.
 
-Only after that exact gate, the proposed mutation is:
+H0 is audit-only and must prove through `flistxattr` on the opened `/` descriptor that
+the complete xattr set is empty, while also freezing ext4 mount, device/inode, owner,
+mode, executable SHA/custody, and private working-directory identity. Any xattr,
+read-back error/drift, custody drift, different filesystem, or target alias blocks H1.
+Also prove that no process, service, or deployment contract intentionally writes entries
+directly under `/`; normal writes below established top-level directories are unaffected.
 
-```bash
-chmod 0755 -- /
-```
+Only after a separate approval for the exact frozen H0 record may H1 invoke the static
+helper's production `apply` mode through the already opened `/proc/self/fd/<fd>`, with
+the exact binary SHA-256, cwd and target device/inode pins, expected mode `0707`, target
+mode `0755`, and sentinel
+`LK_ROOT_ACL_BOOTSTRAP_APPLY=APPLY_ROOT_MODE_0755_V1`. Raw path-based `chmod` is
+forbidden. The helper must report the same target descriptor identity and ext4
+filesystem, empty xattrs, after mode `0755`, `mutationPerformed:true`, and
+`postcheckComplete:true`.
 
-Immediate read-back must prove owner `0:0`, mode `0755`, the same mount identity, and
-exactly the same three-entry access ACL schema with no `default:` or other entry through
-the same mandatory ACL-capable tool.
 Open a new SSH session, prove Node and the Node-RED supervisor can still read their
 existing paths, and run the already reviewed public LK Games read-only smoke. Do not
 combine this permission change with release upload, install, restart, or flow import.
 
-If an immediate postcheck fails and the failure is causally attributable to this single
-mode change, stop. Restoring the insecure preimage is a separate break-glass live gate;
-before any later host or release mutation, its exact recovery command is:
-
-```bash
-chmod 0707 -- /
-```
-
-After recovery, repeat owner/mode, mount, mandatory ACL, new-SSH, supervisor, and public
-API read-back. If an extended ACL was present or ACL read-back was unavailable, H1 is
-blocked and this simple recovery is insufficient; prepare a separately reviewed
-ACL-aware plan instead.
+If an immediate postcheck fails, stop. Helper exit `69` means the mutation may already
+have happened and requires direct read-back plus incident review. Restoring the insecure
+preimage is a separate break-glass live gate. It uses the same helper, exact custody and
+target identity pins, expected mode `0755`, target mode `0707`, and distinct sentinel
+`LK_ROOT_ACL_BOOTSTRAP_ROLLBACK=ROLLBACK_ROOT_MODE_0707_V1`; raw `chmod 0707 /` is not
+an approved recovery path. After recovery, repeat helper xattr/identity read-back, new
+SSH, supervisor, and public API checks. Unknown/non-empty xattrs or incomplete read-back
+requires a separately reviewed ACL-aware recovery plan.
 
 ## Gate H2: create the dedicated executor identity
 
