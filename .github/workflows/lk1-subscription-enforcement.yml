@@ -77,13 +77,6 @@ jobs:
             exit 1
           fi
 
-      - name: Install pinned Rollup Linux optional binary
-        run: |
-          set -euo pipefail
-          npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund \
-            @rollup/rollup-linux-x64-gnu@4.57.0
-          node -e 'const value = require("./node_modules/@rollup/rollup-linux-x64-gnu/package.json").version; if (value !== "4.57.0") process.exit(1)'
-
       - name: Run critical subscription regression matrix
         run: >-
           node --experimental-strip-types --test
@@ -144,6 +137,13 @@ jobs:
           });
           fs.appendFileSync(process.env.GITHUB_ENV, `${lines.join("\n")}\n`);
           '
+
+      - name: Install pinned Rollup Linux optional binary
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund \
+            @rollup/rollup-linux-x64-gnu@4.57.0
+          node -e 'const value = require("./node_modules/@rollup/rollup-linux-x64-gnu/package.json").version; if (value !== "4.57.0") process.exit(1)'
 
       - name: Build with inert compile-time configuration
         run: npm run build
