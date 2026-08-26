@@ -111,14 +111,24 @@ test("host-hardening plan keeps permission and executor mutations behind separat
     path.join(repositoryRoot, "docs/LEGACY_GAME_COMMAND_HOST_HARDENING_PLAN.md"),
     "utf8",
   );
-  assert.match(plan, /does not authorize `chmod`, `useradd`,/);
+  assert.match(plan, /does not authorize `chmod`, `groupadd`,/);
   assert.match(plan, /preimage `0:0:0707`, and target `0:0:0755`/);
   assert.match(plan, /chmod 0755 -- \/\n/);
   assert.match(plan, /Restoring the insecure preimage is a separate break-glass live gate/);
   assert.match(plan, /chmod 0707 -- \/\n/);
-  assert.match(plan, /useradd --system --user-group --no-create-home/);
+  assert.match(plan, /if `getfacl` is absent, errors, truncates/);
+  assert.match(plan, /ACL contains any named user\/group or mask entry/);
+  assert.match(plan, /scan each\nmount without crossing filesystem boundaries/);
+  assert.match(plan, /report zero ownership and ACL matches/);
+  assert.match(plan, /groupadd --system --gid <frozen-unused-gid>/);
+  assert.match(plan, /useradd --system --uid <frozen-unused-uid>/);
+  assert.match(plan, /--gid <frozen-unused-gid> --no-user-group --no-create-home/);
   assert.match(plan, /--home-dir \/nonexistent --shell \/usr\/sbin\/nologin/);
+  assert.match(plan, /usermod --lock padlhub-legacy-command/);
+  assert.match(plan, /explicitly locked password\/account state/);
   assert.match(plan, /userdel padlhub-legacy-command/);
+  assert.match(plan, /groupdel padlhub-legacy-command/);
+  assert.match(plan, /passwd and group names plus both frozen numeric IDs\nmust all be absent/);
   assert.match(plan, /H1 and H2 do not authorize one another and do not authorize the release install/);
 });
 

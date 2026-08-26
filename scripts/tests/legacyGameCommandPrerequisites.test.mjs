@@ -147,16 +147,39 @@ test("fresh live preimage builds a source-only revision candidate without adding
     source.filter((node) => node.type === "http in").length,
   );
   assert.equal(result.changes.filter((change) => change.kind === "changed").length, 47);
-  const currentTransition = reconciliation.liveTransitions.at(-1);
-  assert.equal(currentTransition.toFlowSha256, reconciliation.source.sha256);
-  assert.equal(currentTransition.drifts.length, 2);
-  for (const drift of currentTransition.drifts) {
+  assert.deepEqual(Object.keys(reconciliation).sort(), [
+    "candidate",
+    "candidateSelectedTab",
+    "deploymentPerformed",
+    "liveTransitions",
+    "schemaVersion",
+    "selectedTab",
+    "source",
+  ]);
+  assert.equal(reconciliation.liveTransitions.length, 2);
+  assert.deepEqual(reconciliation.liveTransitions.map((transition) => transition.changedNodeCount), [1, 2]);
+  assert.equal(reconciliation.liveTransitions[0].fromFlowSha256, "0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e");
+  assert.equal(reconciliation.liveTransitions[1].fromFlowSha256, reconciliation.liveTransitions[0].toFlowSha256);
+  assert.equal(reconciliation.liveTransitions.at(-1).toFlowSha256, reconciliation.source.sha256);
+  const liveDrifts = reconciliation.liveTransitions.flatMap((transition) => {
+    assert.equal(transition.drifts.length, transition.changedNodeCount);
+    return transition.drifts;
+  });
+  assert.deepEqual(liveDrifts.map((drift) => drift.nodeId).sort(), [
+    "8f7bd5b482fe9763",
+    "e92e68bf3f08a70c",
+    "f3f9a60354d394da",
+  ]);
+  for (const drift of liveDrifts) {
     const sourceNode = source.find((node) => node.id === drift.nodeId);
     const candidateNode = result.flow.find((node) => node.id === drift.nodeId);
     assert.equal(drift.changedFields.join(","), "func");
+    assert.match(drift.previousFieldSha256, /^[a-f0-9]{64}$/);
+    assert.notEqual(drift.previousFieldSha256, drift.newFieldSha256);
     assert.equal(sha256(JSON.stringify(sourceNode.func)), drift.newFieldSha256);
     assert.equal(candidateNode.func, sourceNode.func, `${drift.nodeId} must preserve parallel live source`);
     assert.equal(drift.preservedInCandidate, true);
+    assert.equal(result.changes.some((change) => change.id === drift.nodeId), false);
   }
   const selectedSource = source.filter((node) => node.type !== "tab" && node.z === reconciliation.selectedTab.tabId);
   const selectedCandidate = result.flow.filter((node) => node.type !== "tab" && node.z === reconciliation.selectedTab.tabId);
