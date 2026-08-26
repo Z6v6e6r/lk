@@ -337,6 +337,32 @@ test("missing provider client or currency cannot produce a payment claim", () =>
   }
 });
 
+test("provider evidence cannot be assembled from a sibling record", () => {
+  const values = new Map<string, unknown>([
+    ["vivacrm_access_token", "cached-token"],
+    ["vivacrm_token_expires_at", Date.now() + 300_000],
+  ]);
+  const initial = runFunction(routerFile, {
+    payload: [draft],
+    _gamePaymentConfirmCtx: { step: "draft_lookup", paymentRef: "payment-ref-1" },
+  }, values)[0] as Record<string, any>;
+  const payload = {
+    transaction: transaction("PAID", {
+      client: { id: "client-other" },
+      exercise: { id: "exercise-other" },
+      products: [{ bookingIds: ["booking-other"] }],
+    }),
+    sibling: {
+      client: { id: "client-1" },
+      exercise: { id: "exercise-1" },
+      products: [{ bookingIds: ["booking-1"] }],
+    },
+  };
+  const out = runFunction(routerFile, { ...initial, statusCode: 200, payload }, values);
+  assert.equal(out[4], null);
+  assert.equal(out[2]?.payload?.code, "GAME_PAYMENT_EVIDENCE_MISMATCH");
+});
+
 test("waiting, failed and mismatched transactions cannot publish the game", () => {
   const values = new Map<string, unknown>([
     ["vivacrm_access_token", "cached-token"],

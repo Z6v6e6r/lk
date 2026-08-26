@@ -117,33 +117,34 @@ const sameIdentity = (left, right) => {
 
 const normalizeTransactionStatus = (value) => String(value || "").trim().toUpperCase();
 
-const extractTransactionPayload = (payload) => {
-  if (!payload || typeof payload !== "object") return {};
-  const candidates = [
-    payload,
-    payload.data,
-    payload.payload,
-    payload.result,
-    payload.transaction,
-    payload.transactionStatus,
-    payload.cardPaymentStatus,
-    payload.payment,
-    payload.paymentInfo,
-  ];
-  for (const candidate of candidates) {
-    if (!candidate || typeof candidate !== "object") continue;
-    const status = normalizeTransactionStatus(
-      candidate.status
-      || candidate.state
-      || candidate.paymentStatus
-      || candidate.transactionStatus,
-    );
-    const toPay = toNumber(candidate.toPay);
-    if (status || toPay !== null) {
-      return candidate;
+const findExactTransactionRecord = (payload, expectedTransactionId) => {
+  const expectedId = toStr(expectedTransactionId);
+  if (!expectedId) return { record: null, reason: "expected_transaction_missing" };
+  const matches = [];
+  const seen = new Set();
+  const visit = (value, depth) => {
+    if (!value || typeof value !== "object" || seen.has(value) || depth > 8) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, depth + 1));
+      return;
     }
+    const transactionId = toStr(value.transactionId || value.transaction_id || value.id);
+    const status = normalizeTransactionStatus(
+      value.status || value.state || value.paymentStatus || value.transactionStatus,
+    );
+    const amount = toNumber(value.amountMinor ?? value.totalAmountMinor ?? value.paidAmountMinor ?? value.toPay);
+    if (transactionId === expectedId && (status || amount !== null)) matches.push(value);
+    Object.values(value).forEach((candidate) => visit(candidate, depth + 1));
+  };
+  visit(payload, 0);
+  if (matches.length !== 1) {
+    return {
+      record: null,
+      reason: matches.length === 0 ? "transaction_record_missing" : "transaction_record_ambiguous",
+    };
   }
-  return payload;
+  return { record: matches[0], reason: null };
 };
 
 const collectProviderIds = (payload, keys) => {
@@ -175,7 +176,11 @@ const collectProviderIds = (payload, keys) => {
 };
 
 const classifyTransactionPayload = (payload, expected) => {
-  const tx = extractTransactionPayload(payload);
+  const exactTransaction = findExactTransactionRecord(payload, expected.transactionId);
+  if (!exactTransaction.record) {
+    return { kind: "MANUAL_REVIEW", status: "", reason: exactTransaction.reason };
+  }
+  const tx = exactTransaction.record;
   const status = normalizeTransactionStatus(
     tx.status
     || tx.state
@@ -190,7 +195,7 @@ const classifyTransactionPayload = (payload, expected) => {
   if (!transactionId || transactionId !== toStr(expected.transactionId)) {
     return { kind: "MANUAL_REVIEW", status, reason: "transaction_id_mismatch" };
   }
-  const bookingIds = collectProviderIds(payload, [
+  const bookingIds = collectProviderIds(tx, [
     "bookingId",
     "bookingIds",
     "bookings",
@@ -200,7 +205,7 @@ const classifyTransactionPayload = (payload, expected) => {
   if (!bookingIds.includes(toStr(expected.bookingId))) {
     return { kind: "MANUAL_REVIEW", status, reason: "booking_binding_missing", bookingIds };
   }
-  const clientIds = collectProviderIds(payload, ["clientId", "clientIds", "client"]);
+  const clientIds = collectProviderIds(tx, ["clientId", "clientIds", "client"]);
   const expectedClientId = toStr(expected.clientId);
   if (!expectedClientId) {
     return { kind: "MANUAL_REVIEW", status, reason: "expected_client_missing" };
@@ -208,7 +213,7 @@ const classifyTransactionPayload = (payload, expected) => {
   if (!clientIds.includes(expectedClientId)) {
     return { kind: "MANUAL_REVIEW", status, reason: "client_binding_mismatch", clientIds };
   }
-  const exerciseIds = collectProviderIds(payload, ["exerciseId", "exerciseIds", "exercise"]);
+  const exerciseIds = collectProviderIds(tx, ["exerciseId", "exerciseIds", "exercise"]);
   const expectedExerciseId = toStr(expected.exerciseId);
   if (!expectedExerciseId) {
     return { kind: "MANUAL_REVIEW", status, reason: "expected_exercise_missing" };
@@ -451,7 +456,7 @@ const buildIdentityProjectionSet = (ctx, splitPayments) => {
 const recoverPaidTimedOutState = (ctx, timeoutMeta, transactionPayload) => {
   if (!timeoutMeta || typeof timeoutMeta !== "object") return;
   const nowIso = new Date().toISOString();
-  const tx = extractTransactionPayload(transactionPayload);
+  const tx = findExactTransactionRecord(transactionPayload, timeoutMeta.transactionId).record || {};
   const txStatus = normalizeTransactionStatus(
     tx.status
     || tx.state

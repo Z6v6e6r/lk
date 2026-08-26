@@ -22,7 +22,57 @@ const fail = (message) => { throw new Error(message); };
 
 export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
   sourceSha256: "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350",
+  candidateSha256: "d88ea0afc5fd00e5f4e532415b57d33ed2691c320c3ba23fd2a54ba804fb139c",
   nodeCount: 4762,
+  candidateNodeCount: 4812,
+  httpRouteCount: 215,
+  tabCount: 55,
+  changedNodeCount: 104,
+  changedExistingNodeCount: 54,
+  addedNodeCount: 50,
+  writerCount: 7,
+  composedSources: Object.freeze([
+    Object.freeze({
+      id: "e656cff36a8cd210",
+      sourceFile: "scripts/nodered_games_nodes/fn_create.js",
+      candidateSha256: "cb2a3219b289d29c9b00bb90aff2582bfea229040690f51890ba55569cfa65a1",
+    }),
+    Object.freeze({
+      id: "9508f8e0ae8d282a",
+      sourceFile: "scripts/nodered_games_nodes/fn_split_cleanup_prepare.js",
+      candidateSha256: "0a4f899dea75e5807106f1fc19befc9a028b7aa5014e1eab2f7b8e85e67ee6b3",
+    }),
+    Object.freeze({
+      id: "bcc3dccf8d64f9bb",
+      sourceFile: "scripts/nodered_games_nodes/fn_split_cleanup_router.js",
+      candidateSha256: "cea42b3252af1fd060d4a268f7e46878660dd6337a50b5da10d1479ae5840038",
+    }),
+    Object.freeze({
+      id: "79307f9bcbc28b6c",
+      sourceFile: "scripts/nodered_games_nodes/fn_game_upsert_args.js",
+      candidateSha256: "3d90b6590e989d3babbae0246f63bbb2e63c71f1f941f71fbf7652ad090f01ea",
+    }),
+    Object.freeze({
+      id: "lk_game_payment_confirm_lookup_20260826",
+      sourceFile: "scripts/nodered_games_nodes/fn_game_payment_confirm_lookup.js",
+      candidateSha256: "ac9b30d2bef21ae0a4dcde840cb254139a8856d6a72ed77f02345a3b9693a548",
+    }),
+    Object.freeze({
+      id: "lk_game_payment_confirm_router_20260826",
+      sourceFile: "scripts/nodered_games_nodes/fn_game_payment_confirm_router.js",
+      candidateSha256: "a956766184f16afb4b6185fd5956776ba7a98c00140a44f207e4b470ebccf324",
+    }),
+    Object.freeze({
+      id: "lk_game_payment_confirm_write_ack_20260826",
+      sourceFile: "scripts/nodered_games_nodes/fn_game_confirm_write_ack.js",
+      candidateSha256: "3f08577e6f0014eae059d8a117e51eca5fbd7c52eba6105f1ba7bd9b07e10735",
+    }),
+    Object.freeze({
+      id: "lk_split_cleanup_write_ack_20260826",
+      sourceFile: "scripts/nodered_games_nodes/fn_split_cleanup_write_ack.js",
+      candidateSha256: "429ea002f312a23cf79d169de29e12ea0fcd0b1300b2229db9c169d17872456c",
+    }),
+  ]),
   targets: Object.freeze([
     Object.freeze({
       id: "e0d7883bc1a9fa8c",
@@ -115,6 +165,36 @@ function replaceCandidateHash(registry, writerId, sourceNodeId, candidateSha256)
   source.candidateSha256 = candidateSha256;
 }
 
+export function validateUnifiedCandidateSummary(summary, contract = LK1_ENFORCEMENT_CONTRACT) {
+  const exact = (
+    summary.sourceSha256 === contract.sourceSha256
+    && summary.candidateSha256 === contract.candidateSha256
+    && summary.candidateNodeCount === contract.candidateNodeCount
+    && summary.httpRouteCount === contract.httpRouteCount
+    && summary.tabCount === contract.tabCount
+    && summary.changedNodeCount === contract.changedNodeCount
+    && summary.changedExistingNodeCount === contract.changedExistingNodeCount
+    && summary.addedNodeCount === contract.addedNodeCount
+    && summary.writerCount === contract.writerCount
+    && summary.brokenWires === 0
+    && summary.brokenLinks === 0
+    && summary.splitPricingMutationCount === 0
+    && isDeepStrictEqual(summary.createAckOrder, [
+      UNIFIED_IDS.createRevisionAck,
+      PAYMENT_NODE_IDS.confirmWriteAck,
+      PAYMENT_NODE_IDS.confirmWriteReadback,
+    ])
+    && isDeepStrictEqual(summary.cleanupAckOrder, [
+      UNIFIED_IDS.cleanupRevisionAck,
+      PAYMENT_NODE_IDS.cleanupWriteAck,
+      PAYMENT_NODE_IDS.cleanupWriteReadback,
+    ])
+    && summary.cleanupRecoveryNode === "lk_split_cleanup_revision_recovery_write_20260826"
+  );
+  if (!exact) fail("Unified LK1 reviewed candidate contract mismatch");
+  return true;
+}
+
 export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256) {
   if (!Array.isArray(source) || source.length !== LK1_ENFORCEMENT_CONTRACT.nodeCount) {
     fail("Unified LK1 flow node count mismatch");
@@ -122,7 +202,7 @@ export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256) {
   if (sourceSha256 !== LK1_ENFORCEMENT_CONTRACT.sourceSha256) {
     fail("Unified LK1 live source SHA mismatch");
   }
-  if (source.filter((node) => node.type === "http in").length !== 215) {
+  if (source.filter((node) => node.type === "http in").length !== LK1_ENFORCEMENT_CONTRACT.httpRouteCount) {
     fail("Unified LK1 HTTP route count mismatch");
   }
 
@@ -137,12 +217,13 @@ export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256) {
     if (!sourceIds.has(node.id)) flow.push(structuredClone(node));
   }
 
-  for (const [id, sourceFile] of [
-    [UNIFIED_IDS.create, "scripts/nodered_games_nodes/fn_create.js"],
-    [UNIFIED_IDS.cleanupPrepare, "scripts/nodered_games_nodes/fn_split_cleanup_prepare.js"],
-    [UNIFIED_IDS.cleanupRouter, "scripts/nodered_games_nodes/fn_split_cleanup_router.js"],
-  ]) exactNode(flow, id).func = fs.readFileSync(path.join(REPO_ROOT, sourceFile), "utf8");
-  exactNode(flow, UNIFIED_IDS.upsertArgs).func = paymentById.get(UNIFIED_IDS.upsertArgs).func;
+  for (const source of LK1_ENFORCEMENT_CONTRACT.composedSources) {
+    const sourceText = fs.readFileSync(path.join(REPO_ROOT, source.sourceFile), "utf8");
+    if (sha256(sourceText) !== source.candidateSha256) {
+      fail(`Unified composed source drift: ${source.id}`);
+    }
+    exactNode(flow, source.id).func = sourceText;
+  }
   for (const route of LK1_ENFORCEMENT_CONTRACT.targets.filter((item) => item.id !== "e0d7883bc1a9fa8c")) {
     const liveNode = exactNode(before, route.id);
     if (sha256(String(liveNode.func || "")) !== route.preimageSha256) {
@@ -217,14 +298,16 @@ export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256) {
 
   const health = graphHealth(flow);
   if (health.brokenWires || health.brokenLinks) fail("Unified LK1 candidate contains broken references");
-  if (flow.filter((node) => node.type === "http in").length !== 215) {
+  if (flow.filter((node) => node.type === "http in").length !== LK1_ENFORCEMENT_CONTRACT.httpRouteCount) {
     fail("Unified LK1 candidate changed HTTP route inventory");
   }
 
   const registry = JSON.parse(fs.readFileSync(REGISTRY_PATH, "utf8"));
-  replaceCandidateHash(registry, UNIFIED_IDS.createMongo, UNIFIED_IDS.create, sha256(exactNode(flow, UNIFIED_IDS.create).func));
-  replaceCandidateHash(registry, UNIFIED_IDS.cleanupMongo, UNIFIED_IDS.cleanupPrepare, sha256(exactNode(flow, UNIFIED_IDS.cleanupPrepare).func));
-  replaceCandidateHash(registry, UNIFIED_IDS.cleanupMongo, UNIFIED_IDS.cleanupRouter, sha256(exactNode(flow, UNIFIED_IDS.cleanupRouter).func));
+  const composedHash = (nodeId) => LK1_ENFORCEMENT_CONTRACT.composedSources
+    .find((item) => item.id === nodeId)?.candidateSha256 || fail(`Unified composed source contract missing: ${nodeId}`);
+  replaceCandidateHash(registry, UNIFIED_IDS.createMongo, UNIFIED_IDS.create, composedHash(UNIFIED_IDS.create));
+  replaceCandidateHash(registry, UNIFIED_IDS.cleanupMongo, UNIFIED_IDS.cleanupPrepare, composedHash(UNIFIED_IDS.cleanupPrepare));
+  replaceCandidateHash(registry, UNIFIED_IDS.cleanupMongo, UNIFIED_IDS.cleanupRouter, composedHash(UNIFIED_IDS.cleanupRouter));
   const writerAudit = auditLegacyGameRevisionWriters(flow, registry, { stage: "candidate" });
   const changes = flow.flatMap((node) => {
     const prior = before.find((item) => item.id === node.id);
@@ -232,20 +315,39 @@ export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256) {
     if (isDeepStrictEqual(prior, node)) return [];
     return [{ id: node.id, kind: "changed", changedFields: changedFields(prior, node) }];
   });
+  const addedNodeCount = changes.filter((item) => item.kind === "added").length;
+  const changedExistingNodeCount = changes.filter((item) => item.kind === "changed").length;
+  const candidateSha256 = sha256(`${JSON.stringify(flow, null, 2)}\n`);
+  const composition = {
+    subscriptionFunctionCount: LK1_ENFORCEMENT_CONTRACT.targets.length,
+    legacyPrerequisiteChanges: legacy.changes.length,
+    paymentAddedNodeCount: Object.keys(PAYMENT_NODE_IDS).length,
+    splitPricingMutationCount: 0,
+    createAckOrder: [UNIFIED_IDS.createRevisionAck, PAYMENT_NODE_IDS.confirmWriteAck, PAYMENT_NODE_IDS.confirmWriteReadback],
+    cleanupAckOrder: [UNIFIED_IDS.cleanupRevisionAck, PAYMENT_NODE_IDS.cleanupWriteAck, PAYMENT_NODE_IDS.cleanupWriteReadback],
+    cleanupRecoveryNode: "lk_split_cleanup_revision_recovery_write_20260826",
+  };
+  validateUnifiedCandidateSummary({
+    sourceSha256,
+    candidateSha256,
+    candidateNodeCount: flow.length,
+    httpRouteCount: flow.filter((node) => node.type === "http in").length,
+    tabCount: flow.filter((node) => node.type === "tab").length,
+    changedNodeCount: changes.length,
+    changedExistingNodeCount,
+    addedNodeCount,
+    writerCount: writerAudit.writerCount,
+    brokenWires: health.brokenWires,
+    brokenLinks: health.brokenLinks,
+    ...composition,
+  });
   return {
     candidate: flow,
+    candidateSha256,
     changedNodes: changes,
     writerAudit,
     graphHealth: health,
-    composition: {
-      subscriptionFunctionCount: LK1_ENFORCEMENT_CONTRACT.targets.length,
-      legacyPrerequisiteChanges: legacy.changes.length,
-      paymentAddedNodeCount: Object.keys(PAYMENT_NODE_IDS).length,
-      splitPricingMutationCount: 0,
-      createAckOrder: [UNIFIED_IDS.createRevisionAck, PAYMENT_NODE_IDS.confirmWriteAck, PAYMENT_NODE_IDS.confirmWriteReadback],
-      cleanupAckOrder: [UNIFIED_IDS.cleanupRevisionAck, PAYMENT_NODE_IDS.cleanupWriteAck, PAYMENT_NODE_IDS.cleanupWriteReadback],
-      cleanupRecoveryNode: "lk_split_cleanup_revision_recovery_write_20260826",
-    },
+    composition,
   };
 }
 
@@ -321,7 +423,7 @@ export function publishLk1EnforcementCandidate(workspace) {
     ok: true,
     sourceKind: "live-147",
     sourceSha256: verified.sourceSha256,
-    candidateSha256: sha256(candidateText),
+    candidateSha256: result.candidateSha256,
     sourceNodeCount: verified.nodeCount,
     candidateNodeCount: result.candidate.length,
     httpRouteCount: result.candidate.filter((node) => node.type === "http in").length,

@@ -39,7 +39,7 @@ The prerequisite-only and historical subscription-only candidates remain forbidd
 for sequential application. The source-only unified builder now composes all five
 subscription nodes, the legacy prerequisite graph, and the provider-authoritative
 payment ACK/read-back graph from fresh full-flow SHA `14b5aff6…`. Its current
-candidate identity is `abe74c8e…`, with `4762 -> 4812` nodes, `215` routes, and
+candidate identity is `d88ea0af…`, with `4762 -> 4812` nodes, `215` routes, and
 broken wires/links `0/0`. This new identity is deliberately absent from production
 custody and remains `UNBOUND`; release/import/deploy is still stopped.
 

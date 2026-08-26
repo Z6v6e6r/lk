@@ -73,21 +73,32 @@ const collectProviderIds = (payload, keys) => {
   visit(payload, 0);
   return Array.from(ids);
 };
-const extractTransaction = (payload) => {
-  const candidates = [
-    payload,
-    payload?.data,
-    payload?.payload,
-    payload?.result,
-    payload?.transaction,
-    payload?.payment,
-    payload?.paymentInfo,
-  ];
-  return candidates.find((candidate) => (
-    candidate
-    && typeof candidate === "object"
-    && (toStr(candidate.transactionId || candidate.id) || normalizeStatus(candidate.status || candidate.state))
-  )) || {};
+const findExactTransactionRecord = (payload, expectedTransactionId) => {
+  const expectedId = toStr(expectedTransactionId);
+  if (!expectedId) return { record: null, reason: "expected_transaction_missing" };
+  const matches = [];
+  const seen = new Set();
+  const visit = (value, depth) => {
+    if (!value || typeof value !== "object" || seen.has(value) || depth > 8) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, depth + 1));
+      return;
+    }
+    const transactionId = toStr(value.transactionId || value.transaction_id || value.id);
+    const status = normalizeStatus(value.status || value.state || value.paymentStatus || value.transactionStatus);
+    const amount = toNumber(value.amountMinor ?? value.totalAmountMinor ?? value.paidAmountMinor ?? value.toPay);
+    if (transactionId === expectedId && (status || amount !== null)) matches.push(value);
+    Object.values(value).forEach((candidate) => visit(candidate, depth + 1));
+  };
+  visit(payload, 0);
+  if (matches.length !== 1) {
+    return {
+      record: null,
+      reason: matches.length === 0 ? "transaction_record_missing" : "transaction_record_ambiguous",
+    };
+  }
+  return { record: matches[0], reason: null };
 };
 const fail = (ctx, statusCode, code, error, details = null) => {
   const response = Object.assign({}, msg, {
@@ -308,12 +319,18 @@ if (ctx.step !== "transaction_lookup") {
 if (Number(msg.statusCode) < 200 || Number(msg.statusCode) >= 300) {
   return fail(ctx, 503, "GAME_PAYMENT_PROVIDER_READ_FAILED", "Не удалось проверить транзакцию Viva");
 }
-const transaction = extractTransaction(msg.payload);
+const exactTransaction = findExactTransactionRecord(msg.payload, ctx.transactionId);
+if (!exactTransaction.record) {
+  return fail(ctx, 409, "GAME_PAYMENT_EVIDENCE_MISMATCH", "Транзакция Viva не соответствует черновику игры", {
+    reason: exactTransaction.reason,
+  });
+}
+const transaction = exactTransaction.record;
 const transactionId = toStr(transaction.transactionId || transaction.transaction_id || transaction.id);
 const status = normalizeStatus(transaction.status || transaction.state || transaction.paymentStatus || transaction.transactionStatus);
-const bookingIds = collectProviderIds(msg.payload, ["bookingId", "bookingIds", "bookings", "paymentBookingIds", "clientBookingId"]);
-const exerciseIds = collectProviderIds(msg.payload, ["exerciseId", "exerciseIds", "exercise"]);
-const clientIds = collectProviderIds(msg.payload, ["clientId", "clientIds", "client"]);
+const bookingIds = collectProviderIds(transaction, ["bookingId", "bookingIds", "bookings", "paymentBookingIds", "clientBookingId"]);
+const exerciseIds = collectProviderIds(transaction, ["exerciseId", "exerciseIds", "exercise"]);
+const clientIds = collectProviderIds(transaction, ["clientId", "clientIds", "client"]);
 const providerAmountMinor = toNumber(
   transaction.amountMinor
   ?? transaction.totalAmountMinor

@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   buildLk1EnforcementCandidate,
   LK1_ENFORCEMENT_CONTRACT,
+  validateUnifiedCandidateSummary,
 } from "../prepare_lk1_subscription_enforcement_candidate.mjs";
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
@@ -72,6 +73,51 @@ test("unified LK1 contract pins every tracked candidate source", () => {
   assert.equal(LK1_ENFORCEMENT_CONTRACT.targets.length, 5);
   for (const target of LK1_ENFORCEMENT_CONTRACT.targets) {
     assert.equal(sha256(fs.readFileSync(target.sourceFile)), target.candidateSha256, target.id);
+  }
+  assert.equal(LK1_ENFORCEMENT_CONTRACT.composedSources.length, 8);
+  for (const source of LK1_ENFORCEMENT_CONTRACT.composedSources) {
+    assert.equal(sha256(fs.readFileSync(source.sourceFile)), source.candidateSha256, source.id);
+  }
+});
+
+test("reviewed unified composition contract pins digest, inventory, ACK order and recovery", () => {
+  const summary = {
+    sourceSha256: LK1_ENFORCEMENT_CONTRACT.sourceSha256,
+    candidateSha256: LK1_ENFORCEMENT_CONTRACT.candidateSha256,
+    candidateNodeCount: 4812,
+    httpRouteCount: 215,
+    tabCount: 55,
+    changedNodeCount: 104,
+    changedExistingNodeCount: 54,
+    addedNodeCount: 50,
+    writerCount: 7,
+    brokenWires: 0,
+    brokenLinks: 0,
+    splitPricingMutationCount: 0,
+    createAckOrder: [
+      "lk_game_create_revision_ack_20260826",
+      "lk_game_payment_confirm_write_ack_20260826",
+      "lk_game_payment_confirm_write_readback_20260826",
+    ],
+    cleanupAckOrder: [
+      "lk_split_cleanup_revision_ack_20260826",
+      "lk_split_cleanup_write_ack_20260826",
+      "lk_split_cleanup_write_readback_20260826",
+    ],
+    cleanupRecoveryNode: "lk_split_cleanup_revision_recovery_write_20260826",
+  };
+  assert.equal(validateUnifiedCandidateSummary(summary), true);
+  for (const drift of [
+    { candidateSha256: "drift" },
+    { changedNodeCount: 105 },
+    { brokenWires: 1 },
+    { createAckOrder: [...summary.createAckOrder].reverse() },
+    { cleanupRecoveryNode: "wrong" },
+  ]) {
+    assert.throws(
+      () => validateUnifiedCandidateSummary({ ...summary, ...drift }),
+      /reviewed candidate contract mismatch/,
+    );
   }
 });
 

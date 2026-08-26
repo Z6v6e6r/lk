@@ -18,7 +18,7 @@ is pinned to that exact live SHA and composes the five subscription functions,
 legacy revision/CAS prerequisites, provider-authoritative payment confirmation,
 and split-cleanup recovery in one source-level graph. It produced source-only
 candidate SHA-256
-`abe74c8e0452f8e16939da8fa1744d0c4f0690f86ba9815386f97b22d8af71d3`,
+`d88ea0afc5fd00e5f4e532415b57d33ed2691c320c3ba23fd2a54ba804fb139c`,
 with `4762 -> 4812` nodes, `215` unchanged HTTP routes, `104` changed/added
 nodes, and broken wires/links `0/0`. Split-pricing recovery nodes already matched
 their current-main postimages and were not changed. Production custody is

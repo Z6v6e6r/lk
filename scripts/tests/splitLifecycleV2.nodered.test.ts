@@ -527,6 +527,35 @@ test("cleanup PAID evidence requires provider client, exercise and currency", ()
   }
 });
 
+test("cleanup provider evidence cannot be assembled from a sibling record", () => {
+  const payload = {
+    transaction: {
+      ...transaction("UNPAID", "booking-other", "exercise-other"),
+      client: { id: "client-other" },
+    },
+    sibling: {
+      client: { id: "client-1" },
+      exercise: { id: "exercise-1" },
+      products: [{ bookingIds: ["booking-1"] }],
+    },
+  };
+  const out = runNodeRedFunction(cleanupRouter, {
+    statusCode: 200,
+    payload,
+    _splitCleanupCtx: cleanupContext(),
+  }) as Array<Record<string, any> | null>;
+  assert.equal(out[0], null);
+  assert.equal(Boolean(out[4]), false);
+  const summary = out[2]?.payload || out[3]?.payload;
+  assert.equal(summary?.blockLocalMutation, true);
+  assert.ok(summary?.trace?.some((item: Record<string, unknown>) => (
+    item.step === "check_timeout_transaction_manual_review"
+    && ["booking_binding_missing", "client_binding_mismatch", "exercise_binding_mismatch"].includes(
+      String((item.evidence as Record<string, unknown>)?.reason || ""),
+    )
+  )));
+});
+
 test("forced game cleanup carries a CAS snapshot and missing guards stop before Viva", () => {
   const prepared = runNodeRedFunction(cleanupPrepare, {
     payload: [{
