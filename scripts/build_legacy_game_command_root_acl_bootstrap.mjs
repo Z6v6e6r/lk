@@ -80,6 +80,9 @@ function parseArgs(argv) {
 export function buildRootAclBootstrap(argv) {
   const { out, environment } = parseArgs(argv);
   if (fs.existsSync(out)) throw new Error("output directory already exists");
+  const stagingPrefix = `${path.basename(out)}.staging-`;
+  const orphanedStaging = fs.readdirSync(path.dirname(out)).filter((entry) => entry.startsWith(stagingPrefix));
+  if (orphanedStaging.length > 0) throw new Error("review and remove the exact orphaned staging directory before retry");
   const status = run("git", ["status", "--porcelain=v1"]);
   if (environment === "production" && status) throw new Error("production bootstrap build requires a clean checkout");
   const repositoryCommit = run("git", ["rev-parse", "HEAD"]);
@@ -92,8 +95,8 @@ export function buildRootAclBootstrap(argv) {
   if (imageId !== expectedImageId) throw new Error("local build image identity mismatch");
 
   const staging = fs.mkdtempSync(`${out}.staging-`);
-  fs.chmodSync(staging, 0o700);
   try {
+    fs.chmodSync(staging, 0o700);
     const firstName = binaryName;
     const secondName = `${binaryName}.reproducibility-check`;
     const snapshotName = "source.snapshot.c";

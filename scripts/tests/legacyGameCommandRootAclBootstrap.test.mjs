@@ -93,6 +93,24 @@ test("runbook requires external descriptor verification, mount pins, and durable
   assert.match(runbook, /flushes and `fsync`s the evidence file and custody\ndirectory/);
 });
 
+test("handled publish failure removes private staging and does not create final output", () => {
+  const failedOutput = path.join(temporaryRoot, "failed-artifact");
+  const renameSync = fs.renameSync;
+  fs.renameSync = () => {
+    throw new Error("injected publish failure");
+  };
+  try {
+    assert.throws(
+      () => buildRootAclBootstrap(["--out", failedOutput, "--environment", "rehearsal"]),
+      /injected publish failure/,
+    );
+  } finally {
+    fs.renameSync = renameSync;
+  }
+  assert.equal(fs.existsSync(failedOutput), false);
+  assert.deepEqual(fs.readdirSync(temporaryRoot).filter((entry) => entry.startsWith("failed-artifact.staging-")), []);
+});
+
 test("audit, apply, and rollback preserve one opened inode and exact modes", () => {
   const output = runContainer(`${setup}
 mkdir -m 0707 /rehearsal/target
@@ -139,6 +157,11 @@ LK_ROOT_ACL_BOOTSTRAP_REHEARSAL=MUTATE_REHEARSAL_TARGET_V1 \
 printf 'identity=%s\n' "$?"
 LK_ROOT_ACL_BOOTSTRAP_REHEARSAL=MUTATE_REHEARSAL_TARGET_V1 \
   /proc/self/fd/$BOOTSTRAP_FD --mode apply ${mutationArgs} \
+  --expected-cwd-mount-id 1 --expected-cwd-mount-flags 1 \
+  --expected-mode 0707 --target-mode 0755 --evidence-name cwd-mount.json >/dev/null 2>&1
+printf 'cwd_mount=%s\n' "$?"
+LK_ROOT_ACL_BOOTSTRAP_REHEARSAL=MUTATE_REHEARSAL_TARGET_V1 \
+  /proc/self/fd/$BOOTSTRAP_FD --mode apply ${mutationArgs} \
   --expected-target-mount-id 1 --expected-target-mount-flags 1 \
   --expected-mode 0707 --target-mode 0755 --evidence-name mount.json >/dev/null 2>&1
 printf 'mount=%s\n' "$?"
@@ -161,6 +184,7 @@ printf 'mode=%s\n' "$(stat -c %a /rehearsal/real)"
     missing: "65",
     duplicate: "64",
     identity: "65",
+    cwd_mount: "66",
     mount: "65",
     xattr: "67",
     symlink: "65",

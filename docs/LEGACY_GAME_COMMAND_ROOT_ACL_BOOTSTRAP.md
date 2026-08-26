@@ -45,8 +45,11 @@ The builder uses the digest-pinned image
 bytes, rejects ELF interpreter/dynamic segments, and emits only a `0500` binary plus a
 canonical `0600` manifest. Production input is materialized from the exact Git blob,
 not read from the mutable worktree; HEAD and clean status are checked again after both
-compiles. A private sibling staging directory is removed on failure and atomically
-renamed to the requested new output only after verification. The manifest always records
+compiles. A private sibling staging directory is removed on handled failure and atomically
+renamed to the requested new output only after verification. `SIGKILL` or host loss can
+leave a non-final `<output>.staging-*` orphan; a retry refuses while an exact matching
+orphan exists. Preserve and inspect it, prove the final output is absent, and remove only
+that exact staging directory under a separate local cleanup decision. The manifest always records
 `liveMutationAuthorized:false`; its source, binary, image, commit, compiler, flags, and
 environment fields are evidence, not authority.
 
@@ -122,9 +125,11 @@ LK_ROOT_ACL_BOOTSTRAP_APPLY=APPLY_ROOT_MODE_0755_V1 \
   --evidence-name 'root-acl-apply-<approved-UUID>.json'
 ```
 
-The helper reserves the named root-owned, regular, single-link, xattr-free `0600`
-evidence file with `O_EXCL` before `fchmod`. Success requires identical complete JSON in
-that file and stdout, the same device/inode/mount ID/mount flags and filesystem, before
+The helper rechecks the already opened custody-directory descriptor before and after
+reservation, requires the named root-owned, regular, single-link, xattr-free `0600`
+`O_EXCL` evidence file to be on that same device/filesystem/mount ID/mount flags, and
+rechecks custody again after directory fsync. Success requires identical complete JSON in
+that file and stdout, the same target device/inode/mount ID/mount flags and filesystem, before
 mode `0707`, after mode `0755`, empty xattrs, `mutationPerformed:true`, and
 `postcheckComplete:true`. The helper flushes and `fsync`s the evidence file and custody
 directory before stdout success. Then open a new SSH session, verify Node/PM2/Node-RED

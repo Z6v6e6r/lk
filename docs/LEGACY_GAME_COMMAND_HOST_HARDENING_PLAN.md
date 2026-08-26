@@ -51,6 +51,8 @@ name, expected mode `0707`, target mode `0755`, and sentinel
 forbidden. The helper must report the same target descriptor identity and ext4
 filesystem and mount identity/options, empty xattrs, after mode `0755`,
 `mutationPerformed:true`, and `postcheckComplete:true` in fsynced evidence and stdout.
+The evidence file must be proven on the same frozen custody mount, with the custody
+descriptor rechecked immediately around reservation and after its directory fsync.
 
 Open a new SSH session, prove Node and the Node-RED supervisor can still read their
 existing paths, and run the already reviewed public LK Games read-only smoke. Do not

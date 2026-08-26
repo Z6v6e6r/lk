@@ -413,6 +413,25 @@ static snapshot verify_custody(const options *configuration, char self_sha256[65
   return result;
 }
 
+static void require_custody_unchanged(int cwd_descriptor, const snapshot *frozen, const options *configuration) {
+  snapshot observed = inspect_descriptor(cwd_descriptor, 1);
+  if (observed.device != frozen->device || observed.inode != frozen->inode
+    || observed.uid != 0 || observed.gid != 0 || observed.mode != 0700U
+    || observed.fs_magic != frozen->fs_magic || observed.mount_id != frozen->mount_id
+    || observed.mount_flags != frozen->mount_flags) {
+    fail_fixed(EXIT_CUSTODY, "CWD_CUSTODY_DRIFT");
+  }
+  if (configuration->has_expected_cwd == 3
+    && (observed.device != configuration->expected_cwd_device || observed.inode != configuration->expected_cwd_inode)) {
+    fail_fixed(EXIT_CUSTODY, "CWD_IDENTITY_MISMATCH");
+  }
+  if (configuration->has_expected_cwd_mount == 3
+    && (observed.mount_id != configuration->expected_cwd_mount_id
+      || observed.mount_flags != configuration->expected_cwd_mount_flags)) {
+    fail_fixed(EXIT_CUSTODY, "CWD_MOUNT_IDENTITY_MISMATCH");
+  }
+}
+
 static void require_snapshot(const snapshot *observed, const options *configuration, unsigned expected_mode) {
   if (observed->uid != 0 || observed->gid != 0 || observed->mode != expected_mode
     || observed->device != configuration->expected_target_device || observed->inode != configuration->expected_target_inode) {
@@ -439,14 +458,16 @@ static void pause_rehearsal(unsigned milliseconds) {
   }
 }
 
-static FILE *reserve_evidence(const options *configuration, int cwd_descriptor) {
+static FILE *reserve_evidence(const options *configuration, int cwd_descriptor, const snapshot *custody) {
   int descriptor = openat(cwd_descriptor, configuration->evidence_name,
     O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (descriptor < 0) fail_fixed(EXIT_PRECONDITION, "EVIDENCE_RESERVATION_FAILED");
   struct stat status;
   snapshot evidence = inspect_descriptor(descriptor, 1);
   if (fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode)
-    || evidence.uid != 0 || evidence.gid != 0 || evidence.mode != 0600U || evidence.link_count != 1) {
+    || evidence.uid != 0 || evidence.gid != 0 || evidence.mode != 0600U || evidence.link_count != 1
+    || evidence.device != custody->device || evidence.fs_magic != custody->fs_magic
+    || evidence.mount_id != custody->mount_id || evidence.mount_flags != custody->mount_flags) {
     close(descriptor);
     fail_fixed(EXIT_CUSTODY, "EVIDENCE_CUSTODY_REJECTED");
   }
@@ -532,9 +553,11 @@ int main(int argc, char **argv) {
     require_mutation_authority(&configuration);
     require_snapshot(&before, &configuration, configuration.expected_mode);
     pause_rehearsal(configuration.rehearsal_pause_ms);
+    require_custody_unchanged(cwd_descriptor, &custody, &configuration);
+    evidence_stream = reserve_evidence(&configuration, cwd_descriptor, &custody);
+    require_custody_unchanged(cwd_descriptor, &custody, &configuration);
     snapshot immediately_before = inspect_descriptor(target, 1);
     require_snapshot(&immediately_before, &configuration, configuration.expected_mode);
-    evidence_stream = reserve_evidence(&configuration, cwd_descriptor);
     if (fchmod(target, (mode_t)configuration.target_mode) != 0) {
       fclose(evidence_stream);
       close(target);
@@ -562,6 +585,7 @@ int main(int argc, char **argv) {
       || fflush(evidence_stream) != 0 || fsync(evidence_descriptor) != 0;
     if (fclose(evidence_stream) != 0) evidence_failed = 1;
     if (fsync(cwd_descriptor) != 0) evidence_failed = 1;
+    require_custody_unchanged(cwd_descriptor, &custody, &configuration);
     if (evidence_failed) {
       close(cwd_descriptor);
       fail_fixed(EXIT_POSTCHECK, "EVIDENCE_WRITE_FAILED_AFTER_MUTATION");
