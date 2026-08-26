@@ -54,23 +54,23 @@ function invalidRevisionFilter() {
   };
 }
 
-async function duplicateGroups(collection, fields, session) {
+async function duplicateGroups(collection, fields, session, maxTimeMS) {
   const id = Object.fromEntries(fields.map((field) => [field, `$${field}`]));
   return collection.aggregate([
     { $group: { _id: id, count: { $sum: 1 } } },
     { $match: { count: { $gt: 1 } } },
     { $limit: 20 },
-  ], { ...primaryMajority, session }).toArray();
+  ], { ...primaryMajority, session, maxTimeMS }).toArray();
 }
 
 const primaryMajority = { readPreference: "primary", readConcern: { level: "majority" } };
 
-async function countInvalidGameIdentities(games, session) {
+async function countInvalidGameIdentities(games, session, maxTimeMS) {
   let count = 0;
   for await (const game of games.find({}, {
     ...primaryMajority,
     session,
-    projection: { tenantKey: 1, id: 1 },
+    projection: { tenantKey: 1, id: 1 }, maxTimeMS,
   })) {
     const tenantKey = typeof game.tenantKey === "string" ? game.tenantKey.trim() : "";
     const id = typeof game.id === "string" ? game.id.trim() : "";
@@ -79,12 +79,12 @@ async function countInvalidGameIdentities(games, session) {
   return count;
 }
 
-async function countInvalidResultIdentities(results, session) {
+async function countInvalidResultIdentities(results, session, maxTimeMS) {
   let count = 0;
   for await (const result of results.find({}, {
     ...primaryMajority,
     session,
-    projection: { _id: 1, tenantKey: 1, id: 1, gameId: 1, idempotencyKey: 1, revision: 1 },
+    projection: { _id: 1, tenantKey: 1, id: 1, gameId: 1, idempotencyKey: 1, revision: 1 }, maxTimeMS,
   })) {
     const tenantKey = typeof result.tenantKey === "string" ? result.tenantKey.trim() : "";
     const id = typeof result.id === "string" ? result.id.trim() : "";
@@ -101,12 +101,12 @@ async function countInvalidResultIdentities(results, session) {
   return count;
 }
 
-async function countInvalidProviderOutboxIdentities(outbox, results, session) {
+async function countInvalidProviderOutboxIdentities(outbox, results, session, maxTimeMS) {
   let count = 0;
   for await (const row of outbox.find({}, {
     ...primaryMajority,
     session,
-    projection: { _id: 1, tenantKey: 1, id: 1, resultId: 1, resultRevision: 1 },
+    projection: { _id: 1, tenantKey: 1, id: 1, resultId: 1, resultRevision: 1 }, maxTimeMS,
   })) {
     const tenantKey = typeof row.tenantKey === "string" ? row.tenantKey.trim() : "";
     const id = typeof row.id === "string" ? row.id.trim() : "";
@@ -114,7 +114,7 @@ async function countInvalidProviderOutboxIdentities(outbox, results, session) {
     const resultIdentity = tenantKey && resultId && Number.isSafeInteger(row.resultRevision) && row.resultRevision > 0
       ? await results.findOne(
         { tenantKey, id: resultId, revision: row.resultRevision },
-        { ...primaryMajority, session, projection: { _id: 1 } },
+        { ...primaryMajority, session, projection: { _id: 1 }, maxTimeMS },
       )
       : null;
     if (!tenantKey || !id || !resultId || tenantKey !== row.tenantKey || id !== row.id
@@ -125,21 +125,21 @@ async function countInvalidProviderOutboxIdentities(outbox, results, session) {
   return count;
 }
 
-async function countInvalidMappings(mappings, session) {
+async function countInvalidMappings(mappings, session, maxTimeMS) {
   let count = 0;
-  for await (const mapping of mappings.find({}, { ...primaryMajority, session })) {
+  for await (const mapping of mappings.find({}, { ...primaryMajority, session, maxTimeMS })) {
     if (validateLegacyIdentityMapping(mapping).length) count += 1;
   }
   return count;
 }
 
-async function countNormalizedMappingAliases(mappings, field, session) {
+async function countNormalizedMappingAliases(mappings, field, session, maxTimeMS) {
   const seen = new Set();
   const duplicates = new Set();
   for await (const mapping of mappings.find({}, {
     ...primaryMajority,
     session,
-    projection: { tenantKey: 1, [field]: 1 },
+    projection: { tenantKey: 1, [field]: 1 }, maxTimeMS,
   })) {
     const tenantKey = typeof mapping.tenantKey === "string" ? mapping.tenantKey.trim() : "";
     const identity = typeof mapping[field] === "string" ? mapping[field].trim().toLowerCase() : "";
@@ -151,7 +151,7 @@ async function countNormalizedMappingAliases(mappings, field, session) {
   return duplicates.size;
 }
 
-export async function auditLegacyCommandPrerequisites(db, { session } = {}) {
+export async function auditLegacyCommandPrerequisites(db, { session, maxTimeMS = 120_000 } = {}) {
   const games = db.collection(LEGACY_COMMAND_COLLECTIONS.games);
   const mappings = db.collection(LEGACY_COMMAND_COLLECTIONS.mappings);
   const commands = db.collection(LEGACY_COMMAND_COLLECTIONS.commands);
@@ -184,28 +184,28 @@ export async function auditLegacyCommandPrerequisites(db, { session } = {}) {
     duplicateProviderOutboxIdentities,
     duplicateCleanupReconciliationIntents,
   ] = await Promise.all([
-    games.countDocuments({}, { ...primaryMajority, session }),
-    games.countDocuments(invalidRevisionFilter(), { ...primaryMajority, session }),
-    countInvalidGameIdentities(games, session),
-    mappings.countDocuments({}, { ...primaryMajority, session }),
-    countInvalidMappings(mappings, session),
-    duplicateGroups(games, ["tenantKey", "id"], session),
-    duplicateGroups(mappings, ["tenantKey", "canonicalUserId"], session),
-    duplicateGroups(mappings, ["tenantKey", "legacyUserId"], session),
-    countNormalizedMappingAliases(mappings, "canonicalUserId", session),
-    countNormalizedMappingAliases(mappings, "legacyUserId", session),
-    duplicateGroups(commands, ["tenantKey", "idempotencyKey"], session),
-    duplicateGroups(commands, ["tenantKey", "operationId"], session),
-    duplicateGroups(auditIntents, ["tenantKey", "operationId", "intentKey"], session),
-    duplicateGroups(outboxIntents, ["tenantKey", "operationId", "intentKey"], session),
-    results.countDocuments({}, { ...primaryMajority, session }),
-    countInvalidResultIdentities(results, session),
-    duplicateGroups(results, ["tenantKey", "id"], session),
-    duplicateGroups(results, ["tenantKey", "idempotencyKey"], session),
-    resultVivaSyncOutbox.countDocuments({}, { ...primaryMajority, session }),
-    countInvalidProviderOutboxIdentities(resultVivaSyncOutbox, results, session),
-    duplicateGroups(resultVivaSyncOutbox, ["tenantKey", "id"], session),
-    duplicateGroups(cleanupReconciliationIntents, ["tenantKey", "intentId"], session),
+    games.countDocuments({}, { ...primaryMajority, session, maxTimeMS }),
+    games.countDocuments(invalidRevisionFilter(), { ...primaryMajority, session, maxTimeMS }),
+    countInvalidGameIdentities(games, session, maxTimeMS),
+    mappings.countDocuments({}, { ...primaryMajority, session, maxTimeMS }),
+    countInvalidMappings(mappings, session, maxTimeMS),
+    duplicateGroups(games, ["tenantKey", "id"], session, maxTimeMS),
+    duplicateGroups(mappings, ["tenantKey", "canonicalUserId"], session, maxTimeMS),
+    duplicateGroups(mappings, ["tenantKey", "legacyUserId"], session, maxTimeMS),
+    countNormalizedMappingAliases(mappings, "canonicalUserId", session, maxTimeMS),
+    countNormalizedMappingAliases(mappings, "legacyUserId", session, maxTimeMS),
+    duplicateGroups(commands, ["tenantKey", "idempotencyKey"], session, maxTimeMS),
+    duplicateGroups(commands, ["tenantKey", "operationId"], session, maxTimeMS),
+    duplicateGroups(auditIntents, ["tenantKey", "operationId", "intentKey"], session, maxTimeMS),
+    duplicateGroups(outboxIntents, ["tenantKey", "operationId", "intentKey"], session, maxTimeMS),
+    results.countDocuments({}, { ...primaryMajority, session, maxTimeMS }),
+    countInvalidResultIdentities(results, session, maxTimeMS),
+    duplicateGroups(results, ["tenantKey", "id"], session, maxTimeMS),
+    duplicateGroups(results, ["tenantKey", "idempotencyKey"], session, maxTimeMS),
+    resultVivaSyncOutbox.countDocuments({}, { ...primaryMajority, session, maxTimeMS }),
+    countInvalidProviderOutboxIdentities(resultVivaSyncOutbox, results, session, maxTimeMS),
+    duplicateGroups(resultVivaSyncOutbox, ["tenantKey", "id"], session, maxTimeMS),
+    duplicateGroups(cleanupReconciliationIntents, ["tenantKey", "intentId"], session, maxTimeMS),
   ]);
 
   return {
@@ -258,6 +258,7 @@ export function buildLegacyPrerequisiteRollbackPlan() {
       "Drop only prerequisite indexes after confirming no deployed code depends on them.",
       "Preserve command ledger, audit intents, and outbox intents as forensic records.",
       "Preserve result side-effect outbox and cleanup reconciliation intents until every sink is terminal.",
+      "Preserve production migration execution receipts and investigate any APPLYING or FAILED receipt before retry.",
     ],
   };
 }
@@ -299,7 +300,7 @@ export async function assertLocalDestination(db, options) {
   if (!sentinel) throw new Error("Local apply destination sentinel is missing or does not match");
 }
 
-const auditHasBlockingFindings = (audit) => [
+export const auditHasBlockingFindings = (audit) => [
   "invalidGameIdentityCount",
   "invalidMappingCount",
   "duplicateGameIdentityCount",
@@ -329,11 +330,20 @@ export async function applyLegacyCommandPrerequisites(db, options) {
   const revisionResult = await db.collection(LEGACY_COMMAND_COLLECTIONS.games).updateMany(
     invalidRevisionFilter(),
     { $set: { revision: 1 } },
+    { writeConcern: { w: "majority" }, maxTimeMS: 120_000 },
   );
+  if (!revisionResult.acknowledged) throw new Error("Revision backfill was not majority acknowledged");
   for (const [logicalName, specs] of Object.entries(LEGACY_COMMAND_INDEX_SPECS)) {
     const collectionName = LEGACY_COMMAND_COLLECTIONS[logicalName];
     const collection = db.collection(collectionName);
-    for (const spec of specs) await collection.createIndex(spec.key, spec);
+    for (const spec of specs) {
+      const { key, ...indexOptions } = spec;
+      await collection.createIndex(key, {
+        ...indexOptions,
+        writeConcern: { w: "majority" },
+        maxTimeMS: 120_000,
+      });
+    }
   }
   const after = await auditLegacyCommandPrerequisites(db);
   if (after.invalidRevisionCount || auditHasBlockingFindings(after)) {
