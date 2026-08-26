@@ -132,6 +132,7 @@ The reviewed packet has this shape (values are illustrative placeholders):
     "candidateFlowSha256": "ccc71f8f54881f3bfd5424a7fc1acc0008d4c3eceb16f1ec4560c281c448c03a",
     "packageSha256": "<fresh audit value>",
     "writerRegistrySha256": "<fresh audit value>",
+    "installerSha256": "<fresh audit value>",
     "runnerSha256": "<fresh audit value>",
     "migrationCoreSha256": "<fresh audit value>",
     "approvalVerifierSha256": "<fresh audit value>",

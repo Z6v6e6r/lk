@@ -1484,3 +1484,15 @@
   chain or unchanged duplicate full checks.
 - Large overview/architecture/deploy documents are read by trigger, while `WORKLOG` is
   searched by exact task context rather than read end to end.
+
+## 2026-08-26 — Legacy command trusted bootstrap installer hotfix
+
+- Added the installer itself to the immutable release inventory and propagated its
+  SHA-256 through the manifest, release attestation, signed execution source identity,
+  and runtime compatibility evidence.
+- Removed all repository-local static imports from the installer. It now authenticates
+  the canonical bundle with Node built-ins, requires an independently frozen installer
+  digest, and must execute from inside that exact bundle before loading the copied runner.
+- Added self-contained bundle CLI planning, installer/manifest drift rejection, sealed
+  rehearsal installation, and failed-staging cleanup coverage. This source-only stage
+  performed no upload, production installation, Node-RED/Mongo mutation, or deployment.

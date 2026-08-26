@@ -3,41 +3,57 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-  canonicalJson,
-  parseCanonicalJson,
-  PRODUCTION_MIGRATION_ID,
-} from "./lib/legacy_game_command_production_approval.mjs";
-import {
-  EXPECTED_CANDIDATE_FLOW_SHA256,
-  EXPECTED_LIVE_FLOW_SHA256,
-  hashPrivatePackage,
-  hashRuntimePackageClosure,
-} from "./run_legacy_game_command_production_migration.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { TextDecoder } from "node:util";
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PRODUCTION_ROOT = "/opt/padlhub/legacy-game-command";
+const PRODUCTION_MIGRATION_ID = "legacy-game-command-prerequisites-production-v1";
 const INSTALL_CONFIRMATION = "INSTALL_LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_V1";
+const INSTALLER_RELATIVE_PATH = "scripts/install_legacy_game_command_production_release.mjs";
+const INSTALLER_PATH = fileURLToPath(import.meta.url);
 const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 const MAX_BUNDLE_BYTES = 128 * 1024 * 1024;
 const MAX_BUNDLE_FILES = 10_000;
 const SOURCE_KEYS = Object.freeze([
   "liveFlowSha256", "candidateFlowSha256", "packageSha256", "writerRegistrySha256",
-  "runnerSha256", "migrationCoreSha256", "approvalVerifierSha256", "trustAnchorManifestSha256",
+  "installerSha256", "runnerSha256", "migrationCoreSha256", "approvalVerifierSha256", "trustAnchorManifestSha256",
   "rootPackageSha256", "dependencyLockSha256", "nodeExecutableSha256", "mongodbRuntimeClosureSha256",
 ]);
 const sha256 = (body) => crypto.createHash("sha256").update(body).digest("hex");
+const stableValue = (value) => {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+};
+const canonicalJson = (value) => `${JSON.stringify(stableValue(value))}\n`;
+
+function parseCanonicalJson(body, label) {
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    throw new Error(`${label} is not valid UTF-8`);
+  }
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error(`${label} is not valid JSON`);
+  }
+  if (canonicalJson(value) !== text) throw new Error(`${label} is not canonical JSON`);
+  return value;
+}
 
 function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 2) args[argv[index]] = argv[index + 1];
   if (!args["--mode"] || !args["--bundle"] || !args["--install-root"]
     || !args["--executor-uid"] || !args["--expected-commit"]
-    || !args["--expected-manifest-sha256"]) {
-    throw new Error("Usage: --mode plan|install --bundle /absolute/release --install-root /absolute/root --executor-uid UID --expected-commit SHA --expected-manifest-sha256 SHA [--environment production|rehearsal --deployment-id UUID --activated-at RFC3339]");
+    || !args["--expected-manifest-sha256"] || !args["--expected-installer-sha256"]) {
+    throw new Error("Usage: --mode plan|install --bundle /absolute/release --install-root /absolute/root --executor-uid UID --expected-commit SHA --expected-manifest-sha256 SHA --expected-installer-sha256 SHA [--environment production|rehearsal --deployment-id UUID --activated-at RFC3339]");
   }
   return args;
 }
@@ -110,7 +126,26 @@ export function verifyLegacyGameCommandReleaseBundle(bundlePath) {
   const actualFiles = listFiles(bundle, { excludeManifest: true })
     .sort((a, b) => a.path.localeCompare(b.path));
   if (canonicalJson(expectedFiles) !== canonicalJson(actualFiles)) throw new Error("Release bundle inventory mismatch");
+  const installer = actualFiles.find((item) => item.path === INSTALLER_RELATIVE_PATH);
+  if (!installer || installer.sha256 !== manifest.source.installerSha256) {
+    throw new Error("Release installer is absent from or differs from the authenticated source identity");
+  }
   return { bundle, manifest, manifestSha256: sha256(manifestBody) };
+}
+
+function assertTrustedBootstrap(verified, expectedInstallerSha256) {
+  const expectedPath = fs.realpathSync(path.join(verified.bundle, INSTALLER_RELATIVE_PATH));
+  const actualPath = fs.realpathSync(INSTALLER_PATH);
+  const actualSha256 = sha256(fs.readFileSync(actualPath));
+  if (!HASH_PATTERN.test(String(expectedInstallerSha256 || ""))
+    || expectedInstallerSha256 !== verified.manifest.source.installerSha256
+    || expectedInstallerSha256 !== actualSha256) {
+    throw new Error("Release installer does not match the independently expected installer digest");
+  }
+  if (actualPath !== expectedPath) {
+    throw new Error("Release installer must execute from inside the authenticated release bundle");
+  }
+  return actualSha256;
 }
 
 function assertSafeParent(directory, expectedUid) {
@@ -157,12 +192,18 @@ function removePrivateStaging(root) {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
-function recomputeInstalledSource(root) {
+async function loadVerifiedRunner(root) {
+  const runnerPath = path.join(root, "scripts/run_legacy_game_command_production_migration.mjs");
+  return import(`${pathToFileURL(runnerPath).href}?verified=${sha256(fs.readFileSync(runnerPath))}`);
+}
+
+function recomputeInstalledSource(root, runner) {
   return {
-    liveFlowSha256: EXPECTED_LIVE_FLOW_SHA256,
-    candidateFlowSha256: EXPECTED_CANDIDATE_FLOW_SHA256,
-    packageSha256: hashPrivatePackage(path.join(root, "node-red/custom-nodes/legacy-game-command-transaction")),
+    liveFlowSha256: runner.EXPECTED_LIVE_FLOW_SHA256,
+    candidateFlowSha256: runner.EXPECTED_CANDIDATE_FLOW_SHA256,
+    packageSha256: runner.hashPrivatePackage(path.join(root, "node-red/custom-nodes/legacy-game-command-transaction")),
     writerRegistrySha256: sha256(fs.readFileSync(path.join(root, "scripts/legacy_game_revision_writers.json"))),
+    installerSha256: sha256(fs.readFileSync(path.join(root, INSTALLER_RELATIVE_PATH))),
     runnerSha256: sha256(fs.readFileSync(path.join(root, "scripts/run_legacy_game_command_production_migration.mjs"))),
     migrationCoreSha256: sha256(fs.readFileSync(path.join(root, "scripts/migrate_legacy_game_command_prerequisites.mjs"))),
     approvalVerifierSha256: sha256(fs.readFileSync(path.join(root, "scripts/lib/legacy_game_command_production_approval.mjs"))),
@@ -170,7 +211,7 @@ function recomputeInstalledSource(root) {
     rootPackageSha256: sha256(fs.readFileSync(path.join(root, "package.json"))),
     dependencyLockSha256: sha256(fs.readFileSync(path.join(root, "package-lock.json"))),
     nodeExecutableSha256: sha256(fs.readFileSync(process.execPath)),
-    mongodbRuntimeClosureSha256: hashRuntimePackageClosure(path.join(root, "node_modules/mongodb/package.json")),
+    mongodbRuntimeClosureSha256: runner.hashRuntimePackageClosure(path.join(root, "node_modules/mongodb/package.json")),
   };
 }
 
@@ -192,13 +233,14 @@ export function verifySealedRelease(root, custodianUid) {
   visit(root);
 }
 
-export function prepareLegacyGameCommandReleaseInstall({
+export async function prepareLegacyGameCommandReleaseInstall({
   mode,
   bundlePath,
   installRoot,
   executorUid,
   expectedCommit,
   expectedManifestSha256,
+  expectedInstallerSha256,
   environment = "production",
   deploymentId,
   activatedAt,
@@ -206,6 +248,7 @@ export function prepareLegacyGameCommandReleaseInstall({
 } = {}) {
   if (!new Set(["plan", "install"]).has(mode)) throw new Error("Install mode must be plan or install");
   const verified = verifyLegacyGameCommandReleaseBundle(bundlePath);
+  const installerSha256 = assertTrustedBootstrap(verified, expectedInstallerSha256);
   const root = path.resolve(String(installRoot || ""));
   const executor = Number(executorUid);
   if (!COMMIT_PATTERN.test(String(expectedCommit || ""))
@@ -225,6 +268,7 @@ export function prepareLegacyGameCommandReleaseInstall({
     environment,
     repositoryCommit: verified.manifest.repositoryCommit,
     bundleManifestSha256: verified.manifestSha256,
+    installerSha256,
     releaseDir,
     deploymentPerformed: false,
   };
@@ -264,7 +308,8 @@ export function prepareLegacyGameCommandReleaseInstall({
     if (copied.manifestSha256 !== verified.manifestSha256) {
       throw new Error("Release manifest changed while the bundle was copied");
     }
-    const source = recomputeInstalledSource(staging);
+    const runner = await loadVerifiedRunner(staging);
+    const source = recomputeInstalledSource(staging, runner);
     const portableSource = { ...source };
     const portableManifestSource = { ...verified.manifest.source };
     delete portableSource.nodeExecutableSha256;
@@ -296,13 +341,14 @@ export function prepareLegacyGameCommandReleaseInstall({
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const args = parseArgs(process.argv.slice(2));
-    const result = prepareLegacyGameCommandReleaseInstall({
+    const result = await prepareLegacyGameCommandReleaseInstall({
       mode: args["--mode"],
       bundlePath: args["--bundle"],
       installRoot: args["--install-root"],
       executorUid: args["--executor-uid"],
       expectedCommit: args["--expected-commit"],
       expectedManifestSha256: args["--expected-manifest-sha256"],
+      expectedInstallerSha256: args["--expected-installer-sha256"],
       environment: args["--environment"] || "production",
       deploymentId: args["--deployment-id"],
       activatedAt: args["--activated-at"],

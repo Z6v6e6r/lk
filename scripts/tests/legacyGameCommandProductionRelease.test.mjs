@@ -11,11 +11,6 @@ import {
   buildLegacyGameCommandProductionRelease,
   readGitBlob,
 } from "../build_legacy_game_command_production_release.mjs";
-import {
-  prepareLegacyGameCommandReleaseInstall,
-  verifyLegacyGameCommandReleaseBundle,
-  verifySealedRelease,
-} from "../install_legacy_game_command_production_release.mjs";
 import { canonicalJson, parseCanonicalJson } from "../lib/legacy_game_command_production_approval.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -41,28 +36,83 @@ function makeTempRoot(t) {
   return root;
 }
 
-function buildFixture(t) {
+const fileSha256 = (filePath) => crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+
+async function buildFixture(t) {
   const root = makeTempRoot(t);
   const bundle = path.join(root, "bundle");
   const manifest = buildLegacyGameCommandProductionRelease({
     outDir: bundle,
   });
-  const verified = verifyLegacyGameCommandReleaseBundle(bundle);
-  return { root, bundle, manifest, manifestSha256: verified.manifestSha256 };
+  const installerPath = path.join(bundle, "scripts/install_legacy_game_command_production_release.mjs");
+  const installer = await import(`${pathToFileURL(installerPath).href}?fixture=${crypto.randomUUID()}`);
+  const verified = installer.verifyLegacyGameCommandReleaseBundle(bundle);
+  return {
+    root,
+    bundle,
+    manifest,
+    manifestSha256: verified.manifestSha256,
+    installerSha256: fileSha256(installerPath),
+    installer,
+  };
 }
 
-test("release builder packages the exact runner sources and MongoDB runtime closure", (t) => {
-  const { bundle, manifest } = buildFixture(t);
-  const verified = verifyLegacyGameCommandReleaseBundle(bundle);
+test("release builder packages and authenticates the bootstrap installer and runtime closure", async (t) => {
+  const { bundle, manifest, installer, installerSha256 } = await buildFixture(t);
+  const verified = installer.verifyLegacyGameCommandReleaseBundle(bundle);
   assert.equal(verified.manifest.repositoryCommit, commit);
   assert.equal(manifest.source.liveFlowSha256, "42cbd9a4fc3e53aacadb24601c2a430e78f36d9b79a5f5725782667a87735c42");
   assert.equal(manifest.source.candidateFlowSha256, "ccc71f8f54881f3bfd5424a7fc1acc0008d4c3eceb16f1ec4560c281c448c03a");
+  assert.equal(manifest.source.installerSha256, installerSha256);
+  assert.ok(manifest.files.some((item) => item.path === "scripts/install_legacy_game_command_production_release.mjs"
+    && item.sha256 === installerSha256));
   assert.ok(manifest.files.some((item) => item.path === "scripts/run_legacy_game_command_production_migration.mjs"));
   assert.ok(manifest.files.some((item) => item.path === "node_modules/mongodb/package.json"));
+  const installerBody = fs.readFileSync(
+    path.join(bundle, "scripts/install_legacy_game_command_production_release.mjs"),
+    "utf8",
+  );
+  const staticImports = [...installerBody.matchAll(/^import .* from ["']([^"']+)["'];$/gm)]
+    .map((match) => match[1]);
+  assert.ok(staticImports.length > 0);
+  assert.ok(staticImports.every((specifier) => specifier.startsWith("node:")));
   assert.equal(
     fs.readFileSync(path.join(bundle, "scripts/legacy_game_command_production_trust_anchor.json"), "utf8"),
     "{\"algorithm\":\"Ed25519\",\"keyId\":\"UNBOUND\",\"publicKeySpkiSha256\":\"UNBOUND\",\"schemaVersion\":1,\"status\":\"UNBOUND\"}\n",
   );
+});
+
+test("failed verified-copy activation removes its private staging tree", async (t) => {
+  const { root, bundle, installerSha256, installer } = await buildFixture(t);
+  const runnerPath = path.join(bundle, "scripts/run_legacy_game_command_production_migration.mjs");
+  fs.writeFileSync(runnerPath, "throw new Error(\"authenticated rehearsal fault\");\n");
+  const manifestPath = path.join(bundle, "release-manifest.json");
+  const manifest = parseCanonicalJson(fs.readFileSync(manifestPath), "release manifest");
+  const runnerEntry = manifest.files.find((item) => item.path === "scripts/run_legacy_game_command_production_migration.mjs");
+  runnerEntry.size = fs.statSync(runnerPath).size;
+  runnerEntry.sha256 = fileSha256(runnerPath);
+  manifest.source.runnerSha256 = runnerEntry.sha256;
+  fs.writeFileSync(manifestPath, canonicalJson(manifest));
+  const expectedManifestSha256 = fileSha256(manifestPath);
+  const installRoot = path.join(root, "failed-install");
+  const currentUid = typeof process.getuid === "function" ? process.getuid() : 501;
+  const deploymentId = "33333333-3333-4333-8333-333333333333";
+
+  await assert.rejects(installer.prepareLegacyGameCommandReleaseInstall({
+    mode: "install",
+    bundlePath: bundle,
+    installRoot,
+    executorUid: currentUid + 1,
+    expectedCommit: commit,
+    expectedManifestSha256,
+    expectedInstallerSha256: installerSha256,
+    environment: "rehearsal",
+    deploymentId,
+    activatedAt: new Date(Date.now() - 1_000).toISOString(),
+    currentUid,
+  }), /authenticated rehearsal fault/);
+  assert.equal(fs.existsSync(path.join(installRoot, "releases", `.staging-${deploymentId}`)), false);
+  assert.equal(fs.existsSync(path.join(installRoot, "releases", commit)), false);
 });
 
 test("Git-object source reads cannot be redirected by a tracked worktree mutation", (t) => {
@@ -79,42 +129,70 @@ test("Git-object source reads cannot be redirected by a tracked worktree mutatio
   assert.equal(readGitBlob(root, fixtureCommit, "source.txt").toString("utf8"), "committed\n");
 });
 
-test("install plan is read-only and bundle tampering is rejected", (t) => {
-  const { root, bundle, manifestSha256 } = buildFixture(t);
+test("self-contained bundle plan is read-only and rejects identity drift", async (t) => {
+  const { root, bundle, manifestSha256, installerSha256, installer } = await buildFixture(t);
+  const { prepareLegacyGameCommandReleaseInstall, verifyLegacyGameCommandReleaseBundle } = installer;
   const installRoot = path.join(root, "install");
   const currentUid = typeof process.getuid === "function" ? process.getuid() : 501;
-  const plan = prepareLegacyGameCommandReleaseInstall({
+  const plan = await prepareLegacyGameCommandReleaseInstall({
     mode: "plan",
     bundlePath: bundle,
     installRoot,
     executorUid: currentUid + 1,
     expectedCommit: commit,
     expectedManifestSha256: manifestSha256,
+    expectedInstallerSha256: installerSha256,
     environment: "production",
     currentUid,
   });
   assert.equal(plan.deploymentPerformed, false);
   assert.equal(fs.existsSync(installRoot), false);
-  assert.throws(() => prepareLegacyGameCommandReleaseInstall({
+  await assert.rejects(prepareLegacyGameCommandReleaseInstall({
     mode: "plan",
     bundlePath: bundle,
     installRoot,
     executorUid: currentUid + 1,
     expectedCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     expectedManifestSha256: manifestSha256,
+    expectedInstallerSha256: installerSha256,
     environment: "production",
     currentUid,
   }), /independently expected commit/);
-  assert.throws(() => prepareLegacyGameCommandReleaseInstall({
+  await assert.rejects(prepareLegacyGameCommandReleaseInstall({
     mode: "plan",
     bundlePath: bundle,
     installRoot,
     executorUid: currentUid + 1,
     expectedCommit: commit,
     expectedManifestSha256: "b".repeat(64),
+    expectedInstallerSha256: installerSha256,
     environment: "production",
     currentUid,
   }), /independently expected manifest digest/);
+  await assert.rejects(prepareLegacyGameCommandReleaseInstall({
+    mode: "plan",
+    bundlePath: bundle,
+    installRoot,
+    executorUid: currentUid + 1,
+    expectedCommit: commit,
+    expectedManifestSha256: manifestSha256,
+    expectedInstallerSha256: "c".repeat(64),
+    environment: "production",
+    currentUid,
+  }), /independently expected installer digest/);
+
+  const cli = execFileSync(process.execPath, [
+    path.join(bundle, "scripts/install_legacy_game_command_production_release.mjs"),
+    "--mode", "plan",
+    "--bundle", bundle,
+    "--install-root", installRoot,
+    "--executor-uid", String(currentUid + 1),
+    "--expected-commit", commit,
+    "--expected-manifest-sha256", manifestSha256,
+    "--expected-installer-sha256", installerSha256,
+    "--environment", "production",
+  ], { cwd: root, encoding: "utf8" });
+  assert.equal(JSON.parse(cli).deploymentPerformed, false);
 
   fs.appendFileSync(path.join(bundle, "scripts/legacy_game_revision_writers.json"), " ");
   assert.throws(() => verifyLegacyGameCommandReleaseBundle(bundle), /inventory mismatch/);
@@ -128,31 +206,34 @@ test("install plan is read-only and bundle tampering is rejected", (t) => {
   changedItem.sha256 = crypto.createHash("sha256").update(changedBody).digest("hex");
   fs.writeFileSync(manifestPath, canonicalJson(forgedManifest));
   verifyLegacyGameCommandReleaseBundle(bundle);
-  assert.throws(() => prepareLegacyGameCommandReleaseInstall({
+  await assert.rejects(prepareLegacyGameCommandReleaseInstall({
     mode: "plan",
     bundlePath: bundle,
     installRoot,
     executorUid: currentUid + 1,
     expectedCommit: commit,
     expectedManifestSha256: manifestSha256,
+    expectedInstallerSha256: installerSha256,
     environment: "production",
     currentUid,
   }), /independently expected manifest digest/);
 });
 
 test("rehearsal installs one sealed commit-addressed release and creates exact attestation", async (t) => {
-  const { root, bundle, manifestSha256 } = buildFixture(t);
+  const { root, bundle, manifestSha256, installerSha256, installer } = await buildFixture(t);
+  const { prepareLegacyGameCommandReleaseInstall, verifySealedRelease } = installer;
   const installRoot = path.join(root, "install");
   const currentUid = typeof process.getuid === "function" ? process.getuid() : 501;
   const executorUid = currentUid + 1;
   const activatedAt = new Date(Date.now() - 1_000).toISOString();
-  const result = prepareLegacyGameCommandReleaseInstall({
+  const result = await prepareLegacyGameCommandReleaseInstall({
     mode: "install",
     bundlePath: bundle,
     installRoot,
     executorUid,
     expectedCommit: commit,
     expectedManifestSha256: manifestSha256,
+    expectedInstallerSha256: installerSha256,
     environment: "rehearsal",
     deploymentId: "11111111-1111-4111-8111-111111111111",
     activatedAt,
@@ -195,13 +276,14 @@ test("rehearsal installs one sealed commit-addressed release and creates exact a
   assert.throws(() => verifySealedRelease(result.releaseDir, currentUid), /file mode/);
   fs.chmodSync(installedPackage, 0o444);
 
-  assert.throws(() => prepareLegacyGameCommandReleaseInstall({
+  await assert.rejects(prepareLegacyGameCommandReleaseInstall({
     mode: "install",
     bundlePath: bundle,
     installRoot,
     executorUid,
     expectedCommit: commit,
     expectedManifestSha256: manifestSha256,
+    expectedInstallerSha256: installerSha256,
     environment: "rehearsal",
     deploymentId: "22222222-2222-4222-8222-222222222222",
     activatedAt,
@@ -209,16 +291,18 @@ test("rehearsal installs one sealed commit-addressed release and creates exact a
   }), /already exists/);
 });
 
-test("production install fails without the exact root trust boundary", (t) => {
-  const { root, bundle, manifestSha256 } = buildFixture(t);
+test("production install fails without the exact root trust boundary", async (t) => {
+  const { root, bundle, manifestSha256, installerSha256, installer } = await buildFixture(t);
+  const { prepareLegacyGameCommandReleaseInstall } = installer;
   const currentUid = typeof process.getuid === "function" ? process.getuid() : 501;
-  assert.throws(() => prepareLegacyGameCommandReleaseInstall({
+  await assert.rejects(prepareLegacyGameCommandReleaseInstall({
     mode: "install",
     bundlePath: bundle,
     installRoot: path.join(root, "not-production"),
     executorUid: currentUid + 1,
     expectedCommit: commit,
     expectedManifestSha256: manifestSha256,
+    expectedInstallerSha256: installerSha256,
     environment: "production",
     deploymentId: "11111111-1111-4111-8111-111111111111",
     activatedAt: new Date(Date.now() - 1_000).toISOString(),

@@ -7,7 +7,8 @@ access, migration, writer stop/resume, mapping import, or provider calls.
 ## Outcome
 
 `scripts/build_legacy_game_command_production_release.mjs` creates a self-contained
-release from a clean committed checkout. It packages the production runner, migration
+release from a clean committed checkout. It packages the trusted bootstrap installer,
+production runner, migration
 core, writer registry, approval verifier, `UNBOUND` trust-anchor manifest, custom
 Node-RED transaction module, root package/lock, and the complete installed MongoDB
 runtime dependency closure. `release-manifest.json` is canonical JSON and binds every
@@ -16,8 +17,12 @@ and runtime source identities. The MongoDB closure must additionally match the i
 SHA-256 frozen from a separate clean `npm ci --ignore-scripts --omit=dev` install; a
 same-version dependency tree with changed bytes is rejected before packaging.
 
-`scripts/install_legacy_game_command_production_release.mjs` verifies that inventory
-before doing anything. Its default-safe mode is `plan`, which performs no writes. A
+The packaged `scripts/install_legacy_game_command_production_release.mjs` has only
+Node built-in static imports. It must execute from inside that exact bundle and verifies
+the canonical manifest and complete inventory before dynamically importing any bundled
+code. Its own digest is bound both by `manifest.source.installerSha256` and by a separately
+frozen operator value checked before Node starts. Its default-safe mode is `plan`, which
+performs no writes. A
 future production install can create only:
 
 ```text
@@ -38,19 +43,29 @@ Run only after the approved source is committed in a clean worktree:
 npm run release:legacy-game-command:build -- \
   --out /absolute/new/private/padlhub-legacy-command-<commit>
 
-npm run release:legacy-game-command:install -- \
+RELEASE_BUNDLE='/absolute/private/padlhub-legacy-command-<commit>'
+EXPECTED_INSTALLER_SHA256='<independently-frozen-installer-sha256>'
+ACTUAL_INSTALLER_SHA256="$(shasum -a 256 "$RELEASE_BUNDLE/scripts/install_legacy_game_command_production_release.mjs" | awk '{print $1}')"
+test "$ACTUAL_INSTALLER_SHA256" = "$EXPECTED_INSTALLER_SHA256"
+
+node "$RELEASE_BUNDLE/scripts/install_legacy_game_command_production_release.mjs" \
   --mode plan \
-  --bundle /absolute/private/padlhub-legacy-command-<commit> \
+  --bundle "$RELEASE_BUNDLE" \
   --install-root /opt/padlhub/legacy-game-command \
   --executor-uid '<dedicated-non-root-uid>' \
   --expected-commit '<independently-frozen-40-hex-commit>' \
-  --expected-manifest-sha256 '<independently-frozen-release-manifest-sha256>'
+  --expected-manifest-sha256 '<independently-frozen-release-manifest-sha256>' \
+  --expected-installer-sha256 "$EXPECTED_INSTALLER_SHA256"
 ```
 
 The bundle directory must be new, must remain private before custody transfer, and must
 not be built from a dirty checkout. Any missing/extra file, symlink, hardlink, digest
 drift, non-canonical manifest, unsafe path, reused release directory, or equal
 custodian/executor UID is a hard failure.
+
+Do not invoke the installer through the repository `npm` script for custody transfer.
+The commit, manifest digest, and installer digest must come from the independently
+reviewed release record, not be discovered from the candidate bundle at install time.
 
 ## Future production install gate
 
@@ -61,6 +76,8 @@ The exact install command is intentionally unusable without all of the following
 - a dedicated positive non-root executor UID;
 - an independently frozen exact commit matching the bundle manifest;
 - an independently frozen SHA-256 of the canonical `release-manifest.json`;
+- an independently frozen SHA-256 of the installer, checked by the operator before
+  executing that same file from inside the bundle;
 - a new UUID deployment identity;
 - a canonical non-future activation timestamp;
 - the one-shot environment confirmation

@@ -21,6 +21,7 @@ const HASH_PATTERN = /^[a-f0-9]{64}$/;
 export const RELEASE_SOURCE_FILES = Object.freeze([
   "package.json",
   "package-lock.json",
+  "scripts/install_legacy_game_command_production_release.mjs",
   "scripts/run_legacy_game_command_production_migration.mjs",
   "scripts/migrate_legacy_game_command_prerequisites.mjs",
   "scripts/audit_legacy_game_revision_writers.mjs",

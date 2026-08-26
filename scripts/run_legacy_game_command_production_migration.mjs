@@ -34,6 +34,7 @@ import {
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.dirname(SCRIPT_DIR);
 const RUNNER_PATH = fileURLToPath(import.meta.url);
+const INSTALLER_PATH = path.join(SCRIPT_DIR, "install_legacy_game_command_production_release.mjs");
 const MIGRATION_CORE_PATH = path.join(SCRIPT_DIR, "migrate_legacy_game_command_prerequisites.mjs");
 const PACKAGE_DIR = path.join(REPO_ROOT, "node-red/custom-nodes/legacy-game-command-transaction");
 const WRITER_REGISTRY_PATH = path.join(SCRIPT_DIR, "legacy_game_revision_writers.json");
@@ -266,6 +267,7 @@ function productionSourceCustodyPaths() {
     .map((entry) => path.join(PACKAGE_DIR, entry.name));
   return [
     RUNNER_PATH,
+    INSTALLER_PATH,
     MIGRATION_CORE_PATH,
     WRITER_REGISTRY_PATH,
     ROOT_PACKAGE_PATH,
@@ -293,6 +295,7 @@ export function buildProductionStaticSourceIdentity({
     candidateFlowSha256: EXPECTED_CANDIDATE_FLOW_SHA256,
     packageSha256: hashPrivatePackage(sourcePackageDirectory),
     writerRegistrySha256: sha256(fs.readFileSync(path.join(sourceScriptDirectory, "legacy_game_revision_writers.json"))),
+    installerSha256: sha256(fs.readFileSync(path.join(sourceScriptDirectory, "install_legacy_game_command_production_release.mjs"))),
     runnerSha256: sha256(fs.readFileSync(sourceRunnerPath)),
     migrationCoreSha256: sha256(fs.readFileSync(path.join(sourceScriptDirectory, "migrate_legacy_game_command_prerequisites.mjs"))),
     approvalVerifierSha256: sha256(fs.readFileSync(path.join(sourceScriptDirectory, "lib/legacy_game_command_production_approval.mjs"))),
@@ -307,7 +310,7 @@ export function buildProductionStaticSourceIdentity({
 
 const RELEASE_ATTESTATION_SOURCE_KEYS = [
   "liveFlowSha256", "candidateFlowSha256", "packageSha256", "writerRegistrySha256",
-  "runnerSha256", "migrationCoreSha256", "approvalVerifierSha256", "trustAnchorManifestSha256",
+  "installerSha256", "runnerSha256", "migrationCoreSha256", "approvalVerifierSha256", "trustAnchorManifestSha256",
   "rootPackageSha256", "dependencyLockSha256",
   "nodeExecutableSha256", "mongodbRuntimeClosureSha256",
 ];
@@ -504,7 +507,7 @@ function validateProductionExecutionPacketSchema(packet) {
   assertExactObjectKeys(packet.target, ["databaseName", "fingerprint"], "Execution packet target");
   assertExactObjectKeys(packet.source, [
     "repositoryCommit", "liveFlowSha256", "candidateFlowSha256", "packageSha256",
-    "writerRegistrySha256", "runnerSha256", "migrationCoreSha256",
+    "writerRegistrySha256", "installerSha256", "runnerSha256", "migrationCoreSha256",
     "approvalVerifierSha256", "trustAnchorManifestSha256", "rootPackageSha256",
     "dependencyLockSha256", "nodeExecutableSha256", "mongodbRuntimeClosureSha256",
     "releaseAttestationSha256",
@@ -547,6 +550,7 @@ export function validateProductionExecutionPacketStatic(packet, {
     packet.source.candidateFlowSha256,
     packet.source.packageSha256,
     packet.source.writerRegistrySha256,
+    packet.source.installerSha256,
     packet.source.runnerSha256,
     packet.source.migrationCoreSha256,
     packet.source.approvalVerifierSha256,
@@ -654,7 +658,7 @@ export function validateProductionEvidenceDocuments(packet, documents, { environ
   assertExactObjectKeys(runtime, [
     "schemaVersion", "migrationId", "environment", "targetFingerprint", "repositoryCommit",
     "liveFlowSha256", "candidateFlowSha256", "packageSha256", "writerRegistrySha256",
-    "runnerSha256", "migrationCoreSha256", "approvalVerifierSha256", "trustAnchorManifestSha256",
+    "installerSha256", "runnerSha256", "migrationCoreSha256", "approvalVerifierSha256", "trustAnchorManifestSha256",
     "rootPackageSha256", "dependencyLockSha256", "nodeExecutableSha256", "mongodbRuntimeClosureSha256",
     "releaseAttestationSha256", "nodeVersion", "mongodbDriverVersion", "verifiedAt", "status",
   ], "Runtime compatibility report");
@@ -664,6 +668,7 @@ export function validateProductionEvidenceDocuments(packet, documents, { environ
     [runtime.candidateFlowSha256, packet.source.candidateFlowSha256],
     [runtime.packageSha256, packet.source.packageSha256],
     [runtime.writerRegistrySha256, packet.source.writerRegistrySha256],
+    [runtime.installerSha256, packet.source.installerSha256],
     [runtime.runnerSha256, packet.source.runnerSha256],
     [runtime.migrationCoreSha256, packet.source.migrationCoreSha256],
     [runtime.approvalVerifierSha256, packet.source.approvalVerifierSha256],
@@ -771,6 +776,7 @@ export function validateProductionExecutionPacket(packet, context, {
     [packet.source?.candidateFlowSha256, EXPECTED_CANDIDATE_FLOW_SHA256, "candidate flow"],
     [packet.source?.packageSha256, context.source.packageSha256, "custom node package"],
     [packet.source?.writerRegistrySha256, context.source.writerRegistrySha256, "writer registry"],
+    [packet.source?.installerSha256, context.source.installerSha256, "release installer"],
     [packet.source?.runnerSha256, context.source.runnerSha256, "production runner"],
     [packet.source?.migrationCoreSha256, context.source.migrationCoreSha256, "migration core"],
     [packet.source?.approvalVerifierSha256, context.source.approvalVerifierSha256, "approval verifier"],
