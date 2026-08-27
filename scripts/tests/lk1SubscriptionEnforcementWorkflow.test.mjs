@@ -93,6 +93,7 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     "Validate combined legacy game command prerequisites",
     "Validate combined split draft persistence",
     "Validate referral attribution compatibility",
+    "Fetch pinned legacy build image",
     "Validate reviewed-flow and legacy custody boundaries",
     "Typecheck",
     "Lint",
@@ -128,10 +129,17 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     step("Validate reviewed-flow and legacy custody boundaries").run,
     /scripts\/tests\/legacyGameCommandRootAclBootstrap\.test\.mjs/,
   );
+  assert.equal(
+    step("Fetch pinned legacy build image").run,
+    "docker pull node@sha256:0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a",
+  );
 });
 
 test("workflow contains no manual or production mutation path", () => {
-  const runCommands = steps.map((candidate) => candidate.run ?? "").join("\n");
+  const runCommands = steps
+    .filter((candidate) => candidate.name !== "Fetch pinned legacy build image")
+    .map((candidate) => candidate.run ?? "")
+    .join("\n");
   assert.doesNotMatch(workflowText, /workflow_dispatch/);
   assert.doesNotMatch(
     runCommands,

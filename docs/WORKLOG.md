@@ -1560,7 +1560,7 @@
 
 - Added the existing referral attribution, reviewed-flow recovery, legacy command
   release, H2 identity and root ACL bootstrap suites to the automatic pull-request and
-  push-main exact-head gate.
+  push-main exact-head gate, fetching only their source-pinned immutable build image.
 - Extended the workflow contract so these source boundaries cannot be silently skipped.
 - This is a source-only CI correction: product flows, Node-RED production, provider
   state, runtime permissions and deployment paths were not changed or executed.
