@@ -16,12 +16,12 @@ const AUDITOR = path.join(REPO_ROOT, 'scripts/audit_referral_attribution_release
 const BUILDER = path.join(REPO_ROOT, 'scripts/prepare_referral_attribution_release_candidate.mjs');
 const roots = [];
 
-function vulnerableCredentialBody(name) {
-  return `const tokenBody = "grant_type=password&username=REDACTED_${name}&password=REDACTED_PASSWORD";\nmsg.payload = tokenBody;\nreturn msg;`;
+function vulnerableCredentialBody() {
+  return 'const tokenBody = "grant_type=password&username=REDACTED_USERNAME&password=REDACTED_PASSWORD";\nmsg.payload = tokenBody;\nreturn msg;';
 }
 
-function vulnerableObjectCredentialBody(name) {
-  return `msg.payload = { grant_type: "password", username: "REDACTED_${name}", password: "REDACTED_PASSWORD" };\nreturn msg;`;
+function vulnerableObjectCredentialBody() {
+  return 'msg.payload = { grant_type: "password", username: "REDACTED_USERNAME", password: "REDACTED_PASSWORD" };\nreturn msg;';
 }
 
 function createWorkspace({ activeDebug = false, unexpectedEnabledTarget = false, disabledTarget = false } = {}) {
