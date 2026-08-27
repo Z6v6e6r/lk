@@ -101,6 +101,139 @@ test("TFF planner creates an exact-id enrollment for the published community", (
   assert.equal(result.operations[0].joinSourceType, "TIME_FOR_FRIENDS_TOURNAMENT_AUTO_ENROLLMENT");
 });
 
+test("provider-verified roster links a custom tournament through its Viva source id", () => {
+  const exerciseId = "77777777-7777-4777-8777-777777777777";
+  const publication = {
+    id: `post-${COMMUNITY_A}`,
+    communityId: COMMUNITY_A,
+    kind: "TOURNAMENT",
+    archived: false,
+    details: {
+      tournamentId: "custom-local-id",
+      publicTournament: { exerciseId },
+    },
+  };
+  const approvedCommunity = {
+    ...community(COMMUNITY_A),
+    ratingProgram: {
+      ...community(COMMUNITY_A).ratingProgram,
+      validatedPublications: [{
+        publicationId: publication.id,
+        tournamentId: exerciseId,
+        stationId: STATION_ID,
+        status: "VALIDATED",
+      }],
+    },
+  };
+  const result = planTimeForFriendsAutoEnrollment({
+    tournament: {
+      id: "custom-local-id",
+      tournamentId: "custom-local-id",
+      sourceTournamentId: exerciseId,
+      source: "CUSTOM",
+      participants: [],
+    },
+    feedPosts: [publication],
+    communities: [approvedCommunity],
+    providerEnrollment: {
+      exerciseId,
+      directionId: "5278",
+      stationId: STATION_ID,
+      maxParticipants: 8,
+      participants: [{ clientId: PLAYER_ID, name: "Игрок", spot: 4, isCancelled: false }],
+    },
+  });
+  assert.equal(result.context.tournamentId, exerciseId);
+  assert.equal(result.quarantined.length, 0);
+  assert.deepEqual(result.operations.map((row) => row.playerId), [PLAYER_ID]);
+});
+
+test("provider roster cannot bypass server-owned publication approval", () => {
+  const exerciseId = "77777777-7777-4777-8777-777777777777";
+  const publication = {
+    id: `post-${COMMUNITY_A}`,
+    communityId: COMMUNITY_A,
+    kind: "TOURNAMENT",
+    archived: false,
+    details: {
+      tournamentId: "custom-local-id",
+      publicTournament: { exerciseId },
+    },
+  };
+  const result = planTimeForFriendsAutoEnrollment({
+    tournament: { id: "custom-local-id", sourceTournamentId: exerciseId, source: "CUSTOM" },
+    feedPosts: [publication],
+    communities: [{
+      ...community(COMMUNITY_A),
+      ratingProgram: { ...community(COMMUNITY_A).ratingProgram, validatedPublications: [] },
+    }],
+    providerEnrollment: {
+      exerciseId,
+      directionId: "5278",
+      stationId: STATION_ID,
+      maxParticipants: 8,
+      participants: [{ clientId: PLAYER_ID, name: "Игрок", spot: 4, isCancelled: false }],
+    },
+  });
+  assert.equal(result.operations.length, 0);
+  assert.equal(result.quarantined[0].reason, "STATION_ID_NOT_PROVEN");
+});
+
+test("provider metadata cannot override conflicting persisted direction or station", () => {
+  const exerciseId = "77777777-7777-4777-8777-777777777777";
+  const publication = {
+    id: `post-${COMMUNITY_A}`,
+    communityId: COMMUNITY_A,
+    kind: "TOURNAMENT",
+    archived: false,
+    details: { publicTournament: { exerciseId } },
+  };
+  const approvedCommunity = {
+    ...community(COMMUNITY_A),
+    ratingProgram: {
+      ...community(COMMUNITY_A).ratingProgram,
+      validatedPublications: [{
+        publicationId: publication.id,
+        tournamentId: exerciseId,
+        stationId: STATION_ID,
+        status: "VALIDATED",
+      }],
+    },
+  };
+  const providerEnrollment = {
+    exerciseId,
+    directionId: "5278",
+    stationId: STATION_ID,
+    maxParticipants: 8,
+    participants: [{ clientId: PLAYER_ID, name: "Игрок", spot: 4, isCancelled: false }],
+  };
+  const directionConflict = planTimeForFriendsAutoEnrollment({
+    tournament: {
+      source: "CUSTOM",
+      sourceTournamentId: exerciseId,
+      params: { directionId: 5280, stationId: STATION_ID },
+    },
+    feedPosts: [publication],
+    communities: [approvedCommunity],
+    providerEnrollment,
+  });
+  assert.equal(directionConflict.operations.length, 0);
+  assert.equal(directionConflict.quarantined[0].reason, "DIRECTION_ID_CONFLICT");
+
+  const stationConflict = planTimeForFriendsAutoEnrollment({
+    tournament: {
+      source: "CUSTOM",
+      sourceTournamentId: exerciseId,
+      params: { directionId: 5278, stationId: "station-b" },
+    },
+    feedPosts: [publication],
+    communities: [approvedCommunity],
+    providerEnrollment,
+  });
+  assert.equal(stationConflict.operations.length, 0);
+  assert.equal(stationConflict.quarantined[0].reason, "STATION_ID_CONFLICT");
+});
+
 test("feed identity cannot substitute missing server-owned publication approval", () => {
   const forged = { ...post(COMMUNITY_A), member: { id: "organizer-1" } };
   const result = planTimeForFriendsAutoEnrollment({
@@ -292,6 +425,249 @@ test("rating worker dry-run plans TFF enrollment without database writes", async
   assert.deepEqual(result.affectedCommunityIds, [COMMUNITY_A]);
   assert.equal(fixture.writes.communities.length, 0);
   assert.equal(fixture.writes.ledger.length, 0);
+});
+
+test("rating worker discovers a custom tournament by sourceTournamentId and loads provider roster", async () => {
+  const exerciseId = "77777777-7777-4777-8777-777777777777";
+  const publication = {
+    id: `post-${COMMUNITY_A}`,
+    communityId: COMMUNITY_A,
+    kind: "TOURNAMENT",
+    archived: false,
+    updatedAt: "2026-08-11T11:30:00.000Z",
+    details: { publicTournament: { exerciseId } },
+  };
+  const customTournament = {
+    id: "custom-local-id",
+    tournamentId: "custom-local-id",
+    sourceTournamentId: exerciseId,
+    source: "CUSTOM",
+    createdAt: "2026-08-11T11:00:00.000Z",
+    participants: [],
+  };
+  const approvedCommunity = {
+    ...community(COMMUNITY_A),
+    ratingProgram: {
+      ...community(COMMUNITY_A).ratingProgram,
+      validatedPublications: [{
+        publicationId: publication.id,
+        tournamentId: exerciseId,
+        stationId: STATION_ID,
+        status: "VALIDATED",
+      }],
+    },
+  };
+  const queries = [];
+  const blockedExerciseId = "66666666-6666-4666-8666-666666666666";
+  const blockedPublication = {
+    id: `post-${COMMUNITY_B}`,
+    communityId: COMMUNITY_B,
+    kind: "TOURNAMENT",
+    archived: false,
+    updatedAt: "2026-08-11T11:20:00.000Z",
+    details: { publicTournament: { exerciseId: blockedExerciseId } },
+  };
+  const blockedCommunity = {
+    ...community(COMMUNITY_B),
+    ratingProgram: {
+      ...community(COMMUNITY_B).ratingProgram,
+      validatedPublications: [{
+        publicationId: blockedPublication.id,
+        tournamentId: blockedExerciseId,
+        stationId: STATION_ID,
+        status: "VALIDATED",
+      }],
+    },
+  };
+  const rows = {
+    tournaments: [{
+      id: "aaa-custom-local-id",
+      tournamentId: "aaa-custom-local-id",
+      sourceTournamentId: blockedExerciseId,
+      source: "CUSTOM",
+      createdAt: "2026-08-11T10:30:00.000Z",
+      params: { directionId: 839, stationId: STATION_ID, maxParticipants: 8 },
+      participants: [],
+    }, customTournament],
+    lk_community_feed: [blockedPublication, publication],
+    lk_communities: [blockedCommunity, approvedCommunity],
+  };
+  const db = {
+    collection(name) {
+      return {
+        find(query) {
+          queries.push({ name, query });
+          return { toArray: async () => structuredClone(rows[name] || []) };
+        },
+      };
+    },
+  };
+  const loadedTournamentIds = [];
+  const result = await processTimeForFriendsAutoEnrollments(db, {
+    sinceIso: "2026-08-11T10:00:00.000Z",
+    nowIso: "2026-08-11T12:00:00.000Z",
+    dryRun: true,
+    enabled: true,
+    cutoverIso: "2026-08-11T00:00:00.000Z",
+    providerRosterEnabled: true,
+    providerRosterMaxFetches: 1,
+    providerRosterLoader: async ({ tournamentId }) => {
+      loadedTournamentIds.push(tournamentId);
+      return {
+        exerciseId: tournamentId,
+        directionId: "5278",
+        stationId: STATION_ID,
+        maxParticipants: 8,
+        participants: [{ clientId: PLAYER_ID, name: "Игрок", spot: 4, isCancelled: false }],
+      };
+    },
+  });
+  assert.equal(result.planned, 1);
+  assert.deepEqual(result.providerRoster, {
+    enabled: true,
+    attempted: 1,
+    loaded: 1,
+    failed: 0,
+    failuresByReason: {},
+  });
+  assert.deepEqual(loadedTournamentIds, [exerciseId]);
+  const tournamentQuery = queries.find((row) => row.name === "tournaments")?.query;
+  assert.ok(tournamentQuery.$or.some((row) => row.sourceTournamentId));
+});
+
+test("provider roster read failures stay visible on the tournament quarantine", async () => {
+  const exerciseId = "77777777-7777-4777-8777-777777777777";
+  const publication = {
+    id: `post-${COMMUNITY_A}`,
+    communityId: COMMUNITY_A,
+    kind: "TOURNAMENT",
+    archived: false,
+    updatedAt: "2026-08-11T11:30:00.000Z",
+    details: { publicTournament: { exerciseId } },
+  };
+  const approvedCommunity = {
+    ...community(COMMUNITY_A),
+    ratingProgram: {
+      ...community(COMMUNITY_A).ratingProgram,
+      validatedPublications: [{
+        publicationId: publication.id,
+        tournamentId: exerciseId,
+        stationId: STATION_ID,
+        status: "VALIDATED",
+      }],
+    },
+  };
+  const rows = {
+    tournaments: [{
+      id: "custom-local-id",
+      tournamentId: "custom-local-id",
+      sourceTournamentId: exerciseId,
+      source: "CUSTOM",
+      createdAt: "2026-08-11T11:00:00.000Z",
+      status: "completed",
+      params: { directionId: 5278, stationId: STATION_ID, maxParticipants: 8 },
+      participants: [],
+      standings: [{ clientId: PLAYER_ID, rank: 1 }],
+    }],
+    lk_community_feed: [publication],
+    lk_communities: [approvedCommunity],
+  };
+  const db = {
+    collection(name) {
+      return {
+        find() {
+          return { toArray: async () => structuredClone(rows[name] || []) };
+        },
+      };
+    },
+  };
+  const result = await processTimeForFriendsAutoEnrollments(db, {
+    sinceIso: "2026-08-11T10:00:00.000Z",
+    nowIso: "2026-08-11T12:00:00.000Z",
+    dryRun: true,
+    enabled: true,
+    cutoverIso: "2026-08-11T00:00:00.000Z",
+    providerRosterEnabled: true,
+    providerRosterLoader: async () => {
+      const error = new Error("provider unavailable");
+      error.code = "PROVIDER_PARTICIPANTS_READ_FAILED";
+      throw error;
+    },
+  });
+  assert.equal(result.planned, 0);
+  assert.deepEqual(result.providerRoster, {
+    enabled: true,
+    attempted: 1,
+    loaded: 0,
+    failed: 1,
+    failuresByReason: { PROVIDER_PARTICIPANTS_READ_FAILED: 1 },
+  });
+  assert.equal(result.quarantinedByReason.PROVIDER_PARTICIPANTS_READ_FAILED, 1);
+});
+
+test("provider roster fetch cap blocks local standings fallback", async () => {
+  const exerciseId = "77777777-7777-4777-8777-777777777777";
+  const publication = {
+    id: `post-${COMMUNITY_A}`,
+    communityId: COMMUNITY_A,
+    kind: "TOURNAMENT",
+    archived: false,
+    updatedAt: "2026-08-11T11:30:00.000Z",
+    details: { publicTournament: { exerciseId } },
+  };
+  const approvedCommunity = {
+    ...community(COMMUNITY_A),
+    ratingProgram: {
+      ...community(COMMUNITY_A).ratingProgram,
+      validatedPublications: [{
+        publicationId: publication.id,
+        tournamentId: exerciseId,
+        stationId: STATION_ID,
+        status: "VALIDATED",
+      }],
+    },
+  };
+  const rows = {
+    tournaments: [{
+      id: "custom-local-id",
+      tournamentId: "custom-local-id",
+      sourceTournamentId: exerciseId,
+      source: "CUSTOM",
+      createdAt: "2026-08-11T11:00:00.000Z",
+      status: "completed",
+      params: { directionId: 5278, stationId: STATION_ID, maxParticipants: 8 },
+      participants: [],
+      standings: [{ clientId: PLAYER_ID, rank: 1 }],
+    }],
+    lk_community_feed: [publication],
+    lk_communities: [approvedCommunity],
+  };
+  let providerCalls = 0;
+  const db = {
+    collection(name) {
+      return {
+        find() {
+          return { toArray: async () => structuredClone(rows[name] || []) };
+        },
+      };
+    },
+  };
+  const result = await processTimeForFriendsAutoEnrollments(db, {
+    sinceIso: "2026-08-11T10:00:00.000Z",
+    nowIso: "2026-08-11T12:00:00.000Z",
+    dryRun: true,
+    enabled: true,
+    cutoverIso: "2026-08-11T00:00:00.000Z",
+    providerRosterEnabled: true,
+    providerRosterMaxFetches: 0,
+    providerRosterLoader: async () => {
+      providerCalls += 1;
+      return null;
+    },
+  });
+  assert.equal(providerCalls, 0);
+  assert.equal(result.planned, 0);
+  assert.equal(result.quarantinedByReason.PROVIDER_ROSTER_FETCH_CAP_EXCEEDED, 1);
 });
 
 test("rating worker apply writes one guarded membership and one audit row", async () => {

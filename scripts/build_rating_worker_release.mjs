@@ -33,6 +33,7 @@ const files = [
   ["scripts/lib/ratingWorkerChildProcess.mjs", "scripts/lib/ratingWorkerChildProcess.mjs"],
   ["scripts/lib/tournamentCommunityContext.mjs", "scripts/lib/tournamentCommunityContext.mjs"],
   ["scripts/lib/timeForFriendsCommunityBackfill.mjs", "scripts/lib/timeForFriendsCommunityBackfill.mjs"],
+  ["scripts/lib/timeForFriendsRuntimeRoster.mjs", "scripts/lib/timeForFriendsRuntimeRoster.mjs"],
   ["scripts/lib/tournamentFinalization.mjs", "scripts/lib/tournamentFinalization.mjs"],
   ["scripts/run_rating_worker_147.mjs", "scripts/run_rating_worker_147.mjs"],
   ["scripts/sync_training_visits_from_viva.mjs", "scripts/sync_training_visits_from_viva.mjs"],

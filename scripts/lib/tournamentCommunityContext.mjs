@@ -3,8 +3,9 @@ import {
   TIME_FOR_FRIENDS_DIRECTION_ID,
   buildTimeForFriendsAtomicMembershipMutation,
   collectDirectionIds,
-  collectPublicationTournamentIds,
+  collectPublicationTournamentAliases,
   collectStationIds,
+  collectTournamentIds,
 } from "./timeForFriendsCommunityBackfill.mjs";
 import { isTournamentFinalized } from "./tournamentFinalization.mjs";
 
@@ -28,6 +29,7 @@ const normalizePhone = (value) => {
 };
 const isArchived = (record) => record?.archived === true
   || String(record?.status || "").trim().toLowerCase() === "archived";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function nested(record, path) {
   let current = record;
@@ -60,27 +62,41 @@ function normalizePublicationRole(post) {
     : "DISCOVERY_ONLY";
 }
 
-function resolveTournamentId(tournament) {
+function resolveTournamentId(tournament, feedPosts = []) {
+  const tournamentIds = collectTournamentIds(tournament);
+  const publishedIds = unique(asArray(feedPosts).flatMap(collectPublicationTournamentAliases));
+  const linkedIds = tournamentIds.filter((id) => publishedIds.includes(id));
+  const providerIds = unique([
+    toStringOrNull(tournament?.exerciseId),
+    toStringOrNull(tournament?.sourceTournamentId),
+  ]).filter((id) => UUID_RE.test(id) && linkedIds.includes(id));
+  if (providerIds.length === 1) return providerIds[0];
+  if (providerIds.length > 1) return null;
+  if (linkedIds.length === 1) return linkedIds[0];
+  if (linkedIds.length > 1) return null;
   return firstString(tournament, [
-    ["tournamentId"],
     ["exerciseId"],
     ["sourceTournamentId"],
+    ["tournamentId"],
     ["id"],
   ]);
 }
 
 function publicationMatchesTournament(post, tournamentId) {
-  return collectPublicationTournamentIds(post).includes(tournamentId);
+  return collectPublicationTournamentAliases(post).includes(tournamentId);
 }
 
 export function resolveTournamentCommunityContext({ tournament, feedPosts }) {
-  const tournamentId = resolveTournamentId(tournament);
+  const tournamentIds = collectTournamentIds(tournament);
+  const publishedIds = unique(asArray(feedPosts).flatMap(collectPublicationTournamentAliases));
+  const linkedIds = tournamentIds.filter((id) => publishedIds.includes(id));
+  const tournamentId = resolveTournamentId(tournament, feedPosts);
   if (!tournamentId) {
     return {
       tournamentId: null,
       publishedCommunities: [],
       ratingCommunityId: null,
-      ratingCommunityStatus: "TOURNAMENT_ID_MISSING",
+      ratingCommunityStatus: linkedIds.length > 1 ? "TOURNAMENT_RELATION_AMBIGUOUS" : "TOURNAMENT_ID_MISSING",
     };
   }
 
@@ -227,32 +243,85 @@ function resolveCommunityRatingProgram(community) {
   };
 }
 
-function publicationHasServerApproval(ratingProgram, publication, tournamentId, stationId) {
+function resolvePublicationServerApproval(ratingProgram, publication, tournamentId, stationId) {
   const publicationId = toStringOrNull(publication?.id ?? publication?._id);
-  if (!publicationId) return false;
-  return ratingProgram.validatedPublications.some((row) => (
+  if (!publicationId) return null;
+  return ratingProgram.validatedPublications.find((row) => (
     isObject(row)
     && String(row.status || "").trim().toUpperCase() === "VALIDATED"
     && toStringOrNull(row.publicationId) === publicationId
     && toStringOrNull(row.tournamentId) === tournamentId
     && toStringOrNull(row.stationId) === stationId
-  ));
+  )) || null;
 }
 
-export function planTimeForFriendsAutoEnrollment({ tournament, feedPosts, communities }) {
+export function resolveTimeForFriendsProviderRosterRequest({ tournament, feedPosts, communities }) {
+  const context = resolveTournamentCommunityContext({ tournament, feedPosts });
+  const tournamentId = context.tournamentId;
+  if (!tournamentId || !UUID_RE.test(tournamentId) || !context.ratingCommunityId) return null;
+  const source = String(tournament?.source || tournament?.tournamentSource || "").trim().toUpperCase();
+  const hasProviderAlias = Boolean(
+    toStringOrNull(tournament?.exerciseId) || toStringOrNull(tournament?.sourceTournamentId),
+  );
+  if (source !== "CUSTOM" && !hasProviderAlias) return null;
+  if (asArray(tournament?.participants).length > 0) return null;
+  const community = asArray(communities).find((row) => (
+    !isArchived(row) && toStringOrNull(row.id ?? row.communityId) === context.ratingCommunityId
+  ));
+  if (!community) return null;
+  const ratingProgram = resolveCommunityRatingProgram(community);
+  if (ratingProgram.programKey !== "TIME_FOR_FRIENDS" || !ratingProgram.autoEnrollmentEnabled) return null;
+  if (!ratingProgram.stationId) return null;
+  const publication = context.publishedCommunities.find((row) => row.communityId === context.ratingCommunityId);
+  const sourcePublication = asArray(feedPosts).find((row) => (
+    publicationMatchesTournament(row, tournamentId)
+    && toStringOrNull(row.communityId) === context.ratingCommunityId
+    && (!publication?.publicationId || toStringOrNull(row.id ?? row._id) === publication.publicationId)
+  ));
+  const publicationId = toStringOrNull(sourcePublication?.id ?? sourcePublication?._id);
+  if (!publicationId) return null;
+  const linkedPublications = asArray(feedPosts).filter((row) => publicationMatchesTournament(row, tournamentId));
+  const persistedDirectionIds = unique([
+    ...collectDirectionIds(tournament),
+    ...linkedPublications.flatMap(collectDirectionIds),
+  ]);
+  if (persistedDirectionIds.some((directionId) => directionId !== TIME_FOR_FRIENDS_DIRECTION_ID)) return null;
+  const persistedStationIds = unique([
+    ...collectStationIds(tournament),
+    ...linkedPublications.flatMap(collectStationIds),
+  ]);
+  if (persistedStationIds.some((stationId) => stationId !== ratingProgram.stationId)) return null;
+  const approval = ratingProgram.validatedPublications.find((row) => (
+    isObject(row)
+    && String(row.status || "").trim().toUpperCase() === "VALIDATED"
+    && toStringOrNull(row.publicationId) === publicationId
+    && toStringOrNull(row.tournamentId) === tournamentId
+    && toStringOrNull(row.stationId) === ratingProgram.stationId
+  ));
+  return approval ? { tournamentId, communityId: context.ratingCommunityId, publicationId } : null;
+}
+
+export function planTimeForFriendsAutoEnrollment({ tournament, feedPosts, communities, providerEnrollment = null }) {
   const context = resolveTournamentCommunityContext({ tournament, feedPosts });
   const tournamentId = context.tournamentId;
   const skipped = [];
   const quarantined = [];
   if (!tournamentId) {
-    quarantined.push({ reason: "TOURNAMENT_ID_MISSING" });
+    quarantined.push({ reason: context.ratingCommunityStatus === "TOURNAMENT_RELATION_AMBIGUOUS"
+      ? "TOURNAMENT_RELATION_AMBIGUOUS"
+      : "TOURNAMENT_ID_MISSING" });
     return { context, operations: [], skipped, quarantined };
   }
 
   const linkedPosts = asArray(feedPosts).filter((post) => publicationMatchesTournament(post, tournamentId));
+  if (providerEnrollment && toStringOrNull(providerEnrollment.exerciseId) !== tournamentId) {
+    quarantined.push({ tournamentId, reason: "PROVIDER_EXERCISE_ID_CONFLICT" });
+    return { context, operations: [], skipped, quarantined };
+  }
   const directionIds = unique([
     ...collectDirectionIds(tournament),
     ...linkedPosts.flatMap(collectDirectionIds),
+    ...(providerEnrollment ? [toStringOrNull(providerEnrollment.directionId)] : []),
   ]);
   if (directionIds.length !== 1) {
     quarantined.push({ tournamentId, reason: directionIds.length === 0 ? "DIRECTION_ID_NOT_PROVEN" : "DIRECTION_ID_CONFLICT" });
@@ -272,6 +341,7 @@ export function planTimeForFriendsAutoEnrollment({ tournament, feedPosts, commun
   const stationIds = unique([
     ...collectStationIds(tournament),
     ...linkedPosts.flatMap(collectStationIds),
+    ...(providerEnrollment ? [toStringOrNull(providerEnrollment.stationId)] : []),
   ]);
   if (stationIds.length !== 1) {
     quarantined.push({ tournamentId, reason: stationIds.length === 0 ? "STATION_ID_MISSING" : "STATION_ID_CONFLICT" });
@@ -295,21 +365,30 @@ export function planTimeForFriendsAutoEnrollment({ tournament, feedPosts, commun
     quarantined.push({ tournamentId, communityId: context.ratingCommunityId, reason: "COMMUNITY_RATING_PROGRAM_NOT_APPROVED" });
     return { context, operations: [], skipped, quarantined };
   }
-  if (!publication?.stationId || !ratingProgram.stationId) {
+  const serverApproval = sourcePublication
+    ? resolvePublicationServerApproval(ratingProgram, sourcePublication, tournamentId, stationIds[0])
+    : null;
+  const publicationStationId = publication?.stationId || toStringOrNull(serverApproval?.stationId);
+  if (!publicationStationId || !ratingProgram.stationId) {
     quarantined.push({ tournamentId, communityId: context.ratingCommunityId, reason: "STATION_ID_NOT_PROVEN" });
     return { context, operations: [], skipped, quarantined };
   }
-  if (publication.stationId !== stationIds[0] || ratingProgram.stationId !== stationIds[0]) {
+  if (publicationStationId !== stationIds[0] || ratingProgram.stationId !== stationIds[0]) {
     quarantined.push({ tournamentId, communityId: context.ratingCommunityId, reason: "STATION_ID_CONFLICT" });
     return { context, operations: [], skipped, quarantined };
   }
-  if (!sourcePublication || !publicationHasServerApproval(ratingProgram, sourcePublication, tournamentId, stationIds[0])) {
+  if (!sourcePublication || !serverApproval) {
     quarantined.push({ tournamentId, communityId: context.ratingCommunityId, reason: "PUBLICATION_SERVER_APPROVAL_NOT_PROVEN" });
     return { context, operations: [], skipped, quarantined };
   }
 
   const operations = [];
-  const playerResolution = resolvePlayers(tournament);
+  const playerResolution = resolvePlayers(providerEnrollment
+    ? {
+      participants: providerEnrollment.participants,
+      maxParticipants: providerEnrollment.maxParticipants,
+    }
+    : tournament);
   playerResolution.skipped.forEach((row) => skipped.push({ tournamentId, communityId: context.ratingCommunityId, ...row }));
   playerResolution.quarantined.forEach((row) => quarantined.push({ tournamentId, communityId: context.ratingCommunityId, ...row }));
   playerResolution.players.forEach((player) => {

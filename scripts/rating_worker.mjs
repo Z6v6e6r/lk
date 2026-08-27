@@ -33,10 +33,13 @@ import { resolveRatingWorkerMongoSocketTimeoutMs } from "./lib/ratingWorkerChild
 import {
   buildTimeForFriendsAutoEnrollmentMutation,
   planTimeForFriendsAutoEnrollment,
+  resolveTimeForFriendsProviderRosterRequest,
 } from "./lib/tournamentCommunityContext.mjs";
 import {
-  collectPublicationTournamentIds,
+  collectPublicationTournamentAliases,
+  collectTournamentIds,
 } from "./lib/timeForFriendsCommunityBackfill.mjs";
+import { loadTimeForFriendsProviderEnrollment } from "./lib/timeForFriendsRuntimeRoster.mjs";
 
 export const RATING_WORKER_JOB_KEY = "rating-worker-incremental";
 export const RATING_WORKER_FULL_JOB_KEY = "rating-worker-full-safety";
@@ -649,6 +652,9 @@ export async function processTimeForFriendsAutoEnrollments(db, {
   dryRun,
   enabled = false,
   cutoverIso = null,
+  providerRosterEnabled = false,
+  providerRosterMaxFetches = 20,
+  providerRosterLoader = loadTimeForFriendsProviderEnrollment,
 }) {
   const normalizedCutoverIso = toIso(cutoverIso);
   if (!enabled || !normalizedCutoverIso) {
@@ -661,6 +667,7 @@ export async function processTimeForFriendsAutoEnrollments(db, {
       alreadyMembers: 0,
       quarantined: 0,
       skipped: 0,
+      providerRoster: { enabled: false, attempted: 0, loaded: 0, failed: 0, failuresByReason: {} },
       affectedCommunityIds: [],
     };
   }
@@ -673,13 +680,14 @@ export async function processTimeForFriendsAutoEnrollments(db, {
     changedFilter,
     { projection: { relatedTournamentId: 1, tournamentId: 1, details: 1 } },
   ).toArray();
-  const changedTournamentIds = unique(changedFeed.flatMap(collectPublicationTournamentIds));
+  const changedTournamentIds = unique(changedFeed.flatMap(collectPublicationTournamentAliases));
   const tournamentFilter = {
     $or: [
       ...changedFilter.$or,
       ...(changedTournamentIds.length > 0 ? [
         { tournamentId: { $in: changedTournamentIds } },
         { exerciseId: { $in: changedTournamentIds } },
+        { sourceTournamentId: { $in: changedTournamentIds } },
         { id: { $in: changedTournamentIds } },
       ] : []),
     ],
@@ -696,7 +704,7 @@ export async function processTimeForFriendsAutoEnrollments(db, {
     return Boolean(sourceAt && Date.parse(sourceAt) >= Date.parse(normalizedCutoverIso));
   });
   const skippedBeforeCutover = discoveredTournaments.length - tournaments.length;
-  const tournamentIds = unique(tournaments.map(resolveTournamentId));
+  const tournamentIds = unique(tournaments.flatMap(collectTournamentIds));
   if (tournamentIds.length === 0) {
     return {
       scanned: 0,
@@ -706,6 +714,7 @@ export async function processTimeForFriendsAutoEnrollments(db, {
       quarantined: 0,
       skipped: 0,
       skippedBeforeCutover,
+      providerRoster: { enabled: providerRosterEnabled, attempted: 0, loaded: 0, failed: 0, failuresByReason: {} },
       affectedCommunityIds: [],
     };
   }
@@ -718,7 +727,11 @@ export async function processTimeForFriendsAutoEnrollments(db, {
       { tournamentId: { $in: tournamentIds } },
       { "details.relatedTournamentId": { $in: tournamentIds } },
       { "details.publicTournament.exerciseId": { $in: tournamentIds } },
+      { "details.publicTournament.sourceTournamentId": { $in: tournamentIds } },
       { "details.publicTournament.tournamentId": { $in: tournamentIds } },
+      { "details.sourceTournamentSnapshot.exerciseId": { $in: tournamentIds } },
+      { "details.sourceTournamentSnapshot.sourceTournamentId": { $in: tournamentIds } },
+      { "details.sourceTournamentSnapshot.tournamentId": { $in: tournamentIds } },
     ],
   }).toArray();
   const communityIds = unique(feedPosts.map((post) => toStr(post.communityId)));
@@ -730,18 +743,70 @@ export async function processTimeForFriendsAutoEnrollments(db, {
     : [];
   const feedByTournamentId = new Map();
   feedPosts.forEach((post) => {
-    collectPublicationTournamentIds(post).forEach((tournamentId) => {
+    collectPublicationTournamentAliases(post).forEach((tournamentId) => {
       const rows = feedByTournamentId.get(tournamentId) || [];
       rows.push(post);
       feedByTournamentId.set(tournamentId, rows);
     });
   });
 
-  const plans = tournaments.map((tournament) => planTimeForFriendsAutoEnrollment({
-    tournament,
-    feedPosts: feedByTournamentId.get(resolveTournamentId(tournament)) || [],
-    communities,
-  }));
+  const providerRoster = {
+    enabled: providerRosterEnabled,
+    attempted: 0,
+    loaded: 0,
+    failed: 0,
+    failuresByReason: {},
+  };
+  const plans = [];
+  const sortedTournaments = [...tournaments].sort((left, right) => (
+    collectTournamentIds(left).join("|").localeCompare(collectTournamentIds(right).join("|"))
+  ));
+  for (const tournament of sortedTournaments) {
+    const linkedFeedPosts = unique(collectTournamentIds(tournament)
+      .flatMap((tournamentId) => feedByTournamentId.get(tournamentId) || []));
+    const providerRequest = resolveTimeForFriendsProviderRosterRequest({
+      tournament,
+      feedPosts: linkedFeedPosts,
+      communities,
+    });
+    let providerEnrollment = null;
+    let providerFailureReason = null;
+    if (providerRosterEnabled && providerRequest) {
+      if (providerRoster.attempted >= providerRosterMaxFetches) {
+        providerFailureReason = "PROVIDER_ROSTER_FETCH_CAP_EXCEEDED";
+        providerRoster.failed += 1;
+        providerRoster.failuresByReason[providerFailureReason] = (providerRoster.failuresByReason[providerFailureReason] || 0) + 1;
+      } else {
+        providerRoster.attempted += 1;
+        try {
+          providerEnrollment = await providerRosterLoader({ tournamentId: providerRequest.tournamentId });
+          providerRoster.loaded += 1;
+        } catch (error) {
+          const rawReason = String(error?.code || "PROVIDER_ROSTER_READ_FAILED");
+          providerFailureReason = /^[A-Z][A-Z0-9_]{0,63}$/.test(rawReason)
+            ? rawReason
+            : "PROVIDER_ROSTER_READ_FAILED";
+          providerRoster.failed += 1;
+          providerRoster.failuresByReason[providerFailureReason] = (providerRoster.failuresByReason[providerFailureReason] || 0) + 1;
+        }
+      }
+    }
+    const plan = planTimeForFriendsAutoEnrollment({
+      tournament,
+      feedPosts: linkedFeedPosts,
+      communities,
+      providerEnrollment,
+    });
+    if (providerFailureReason && providerRequest) {
+      plan.operations = [];
+      plan.quarantined.push({
+        tournamentId: providerRequest.tournamentId,
+        communityId: providerRequest.communityId,
+        reason: providerFailureReason,
+      });
+    }
+    plans.push(plan);
+  }
   const operations = plans.flatMap((plan) => plan.operations);
   const skipped = plans.flatMap((plan) => plan.skipped);
   const quarantined = plans.flatMap((plan) => plan.quarantined);
@@ -834,6 +899,11 @@ export async function processTimeForFriendsAutoEnrollments(db, {
     quarantined: quarantined.length,
     skipped: skipped.length,
     skippedBeforeCutover,
+    providerRoster: {
+      ...providerRoster,
+      failuresByReason: Object.fromEntries(Object.entries(providerRoster.failuresByReason)
+        .sort(([left], [right]) => left.localeCompare(right))),
+    },
     quarantinedByReason: Object.fromEntries(Object.entries(quarantined.reduce((counts, row) => {
       counts[row.reason] = (counts[row.reason] || 0) + 1;
       return counts;
@@ -1075,6 +1145,11 @@ async function runWorker() {
   const projectionUrl = getArg("--projection-url", process.env.RATING_PROJECTION_URL || "http://127.0.0.1:1880/lk/onboarding/level");
   const tffAutoEnrollmentEnabled = String(process.env.TFF_AUTO_ENROLLMENT_ENABLED || "").trim().toLowerCase() === "true";
   const tffAutoEnrollmentCutoverIso = toIso(process.env.TFF_AUTO_ENROLLMENT_CUTOVER_ISO);
+  const tffProviderRosterEnabled = String(process.env.TFF_AUTO_ENROLLMENT_PROVIDER_ROSTER_ENABLED || "").trim().toLowerCase() === "true";
+  const tffProviderRosterMaxFetches = Math.max(
+    1,
+    Math.min(100, Number(process.env.TFF_AUTO_ENROLLMENT_PROVIDER_ROSTER_MAX_FETCHES) || 20),
+  );
   if (!mongoUri) throw new Error("Provide --mongo-uri or MONGO_URI/MONGODB_URI");
   if (!["incremental", "full", "postcheck"].includes(mode)) throw new Error(`Unknown mode: ${mode}`);
   const client = new MongoClient(mongoUri, {
@@ -1133,6 +1208,8 @@ async function runWorker() {
       dryRun,
       enabled: tffAutoEnrollmentEnabled,
       cutoverIso: tffAutoEnrollmentCutoverIso,
+      providerRosterEnabled: tffProviderRosterEnabled,
+      providerRosterMaxFetches: tffProviderRosterMaxFetches,
     });
     const eventProjection = await projectChangedLedgerPlayers(db, overlapStart, startedAt, dryRun);
     const compatibilityReconciliation = mode === "full"

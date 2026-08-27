@@ -97,11 +97,27 @@ recalculation. It is default-off and starts only when both values are configured
 ```env
 TFF_AUTO_ENROLLMENT_ENABLED=true
 TFF_AUTO_ENROLLMENT_CUTOVER_ISO=2026-08-12T00:00:00.000Z
+# Separate opt-in for CUSTOM snapshots whose persisted roster is stale/empty.
+TFF_AUTO_ENROLLMENT_PROVIDER_ROSTER_ENABLED=true
+TFF_AUTO_ENROLLMENT_PROVIDER_ROSTER_MAX_FETCHES=20
 ```
 
 Incremental and full modes inspect only tournament documents/publication relations
 changed at or after the cutover. Historical rows remain in the separately reviewed
 backfill workflow.
+
+When the provider-roster flag is enabled, the worker may repair only its in-memory
+planning input for a tournament linked by an exact Viva UUID. It reads the exact
+Viva exercise metadata plus the bounded LK participants endpoint, checks the
+returned exercise id, direction, station and capacity, and keeps exact client ids,
+active state and spots. It does not persist the fetched roster. Provider transport,
+JSON, identity or capacity failures are reported under `providerRoster` and never
+authorize a membership write. The per-run read cap is bounded to `1..100`.
+
+For CUSTOM tournaments the publication UUID is resolved by intersecting exact
+tournament aliases (`exerciseId`/`sourceTournamentId`) with exact publication
+aliases. Local Mongo ids, names, level labels and station names are not fallbacks.
+If more than one exact alias remains, the relation is quarantined as ambiguous.
 
 An enrollment write is allowed only when all of the following are proven:
 
@@ -124,6 +140,11 @@ Multiple unmarked publications, untrusted publishers, unapproved community
 metadata, direction/station conflicts, bans, unproven roster state, and unresolved
 legacy identities are quarantined and produce no membership write. The worker does
 not choose a level group from station name or community name.
+
+For a legacy administrative post that omitted a duplicated station snapshot, the
+station may be proven by its exact server-owned `validatedPublications` row. The
+row still has to match publication id, Viva exercise id and station; a public feed
+post or provider roster alone cannot create this approval.
 
 Membership mutation is atomic and idempotent. It conditionally updates
 `lk_communities.members`, removes the same identity from `pendingMembers`, updates

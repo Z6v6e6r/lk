@@ -8,7 +8,7 @@ export const PLAYER_RATING_COLLECTIONS = {
 } as const;
 
 export const PLAYER_RATING_LEDGER_SCHEMA_VERSION = 1;
-export const PLAYER_RATING_WORKER_VERSION = "rating-worker-v1.0.12";
+export const PLAYER_RATING_WORKER_VERSION = "rating-worker-v1.0.13";
 
 export interface PlayerRatingIdentity {
   playerKey: string;

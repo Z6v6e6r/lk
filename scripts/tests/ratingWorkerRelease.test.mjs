@@ -46,6 +46,13 @@ test("rating-worker release packages the Viva User-Agent helper used by attendan
   assert.equal(fs.existsSync(helperPath), true);
   assert.equal(helperEntries[0].sha256, sha256File(helperPath));
 
+  const runtimeRosterRelativePath = "scripts/lib/timeForFriendsRuntimeRoster.mjs";
+  const runtimeRosterPath = path.join(releaseDir, runtimeRosterRelativePath);
+  const runtimeRosterEntries = manifest.files.filter(({ path: filePath }) => filePath === runtimeRosterRelativePath);
+  assert.equal(runtimeRosterEntries.length, 1);
+  assert.equal(fs.existsSync(runtimeRosterPath), true);
+  assert.equal(runtimeRosterEntries[0].sha256, sha256File(runtimeRosterPath));
+
   const mongodbStubDir = path.join(releaseDir, "node_modules/mongodb");
   fs.mkdirSync(mongodbStubDir, { recursive: true });
   fs.writeFileSync(

@@ -122,6 +122,27 @@ export function collectPublicationTournamentIds(record) {
   return [];
 }
 
+export function collectPublicationTournamentAliases(record) {
+  return collectExactValues(record, [
+    ["relatedTournamentId"],
+    ["tournamentId"],
+    ["exerciseId"],
+    ["sourceTournamentId"],
+    ["details", "relatedTournamentId"],
+    ["details", "tournamentId"],
+    ["details", "exerciseId"],
+    ["details", "sourceTournamentId"],
+    ["details", "publicTournament", "exerciseId"],
+    ["details", "publicTournament", "sourceTournamentId"],
+    ["details", "publicTournament", "tournamentId"],
+    ["details", "publicTournament", "id"],
+    ["details", "sourceTournamentSnapshot", "exerciseId"],
+    ["details", "sourceTournamentSnapshot", "sourceTournamentId"],
+    ["details", "sourceTournamentSnapshot", "tournamentId"],
+    ["details", "sourceTournamentSnapshot", "id"],
+  ]);
+}
+
 export function collectDirectionIds(record) {
   return collectExactValues(record, DIRECTION_ID_PATHS);
 }
