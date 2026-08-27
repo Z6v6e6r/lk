@@ -76,6 +76,8 @@ test("builder emits a reproducible, static amd64 artifact and canonical manifest
     "utf8",
   );
   assert.match(builder, /RepoDigests/);
+  assert.match(builder, /"--user", callerIdentity\(\)/);
+  assert.match(builder, /process\.getuid\(\).*process\.getgid\(\)/s);
   assert.throws(
     () => buildRootAclBootstrap(["--out", "/tmp/a", "--out", "/tmp/b", "--environment", "rehearsal"]),
     /duplicate argument/,

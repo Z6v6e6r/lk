@@ -47,6 +47,12 @@ function inspectBuildImage() {
   }
   return imageId;
 }
+function callerIdentity() {
+  if (typeof process.getuid !== "function" || typeof process.getgid !== "function") {
+    throw new Error("legacy audit build requires a POSIX caller identity");
+  }
+  return `${process.getuid()}:${process.getgid()}`;
+}
 function assertStaticAmd64Elf(buffer) {
   if (buffer.length < 64 || buffer.subarray(0, 4).toString("hex") !== "7f454c46"
     || buffer[4] !== 2 || buffer[5] !== 1 || buffer.readUInt16LE(18) !== 62) {
@@ -107,7 +113,8 @@ export function buildH2IdentityAudit(argv) {
     const second = binaryName + ".reproducibility-check";
     const command = "gcc " + BUILD_FLAGS.join(" ") + " -o /out/" + first + " /src/" + sourceName
       + " && gcc " + BUILD_FLAGS.join(" ") + " -o /out/" + second + " /src/" + sourceName + " && gcc --version";
-    const compiler = run("docker", ["run", "--rm", "--network", "none", "--platform", "linux/amd64",
+    const compiler = run("docker", ["run", "--rm", "--user", callerIdentity(),
+      "--network", "none", "--platform", "linux/amd64",
       "--mount", "type=bind,src=" + input + ",dst=/src,readonly",
       "--mount", "type=bind,src=" + staging + ",dst=/out", BUILD_IMAGE, "sh", "-lc", command]);
     if (!fs.readFileSync(sourcePath).equals(sourceBytes)) throw new Error("source snapshot changed during build");

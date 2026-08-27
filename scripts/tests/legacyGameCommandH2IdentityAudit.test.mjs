@@ -74,6 +74,8 @@ test("builder emits a reproducible static artifact with no mutation authority", 
   const builder = fs.readFileSync(path.join(repositoryRoot, "scripts/build_legacy_game_command_h2_identity_audit.mjs"), "utf8");
   assert.match(builder, /dst=\/src,readonly/);
   assert.match(builder, /RepoDigests/);
+  assert.match(builder, /"--user", callerIdentity\(\)/);
+  assert.match(builder, /process\.getuid\(\).*process\.getgid\(\)/s);
   assert.match(builder, /source snapshot changed during build/);
 });
 
