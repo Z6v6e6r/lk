@@ -116,6 +116,7 @@ test("builder emits a reproducible static artifact with no mutation authority", 
   assert.match(source, /AUTOFS_PLACEHOLDER_CHILD_MISSING/);
   assert.match(source, /AUTOFS_PLACEHOLDER_CHILD_AMBIGUOUS/);
   assert.match(source, /AUTOFS_PLACEHOLDER_CHILD_INVALID/);
+  assert.match(source, /AUTOFS_PLACEHOLDER_AMBIGUOUS/);
   const builder = fs.readFileSync(path.join(repositoryRoot, "scripts/build_legacy_game_command_h2_identity_audit.mjs"), "utf8");
   assert.match(builder, /dst=\/src,readonly/);
   assert.match(builder, /source snapshot changed during build/);
@@ -148,6 +149,8 @@ test("production mount classifier binds the exact binfmt child parent and cardin
   const wrongParent = exactBinfmt.replace("45 37", "45 99");
   const wrongChildSource = exactBinfmt.replace("binfmt_misc binfmt_misc rw", "binfmt_misc none rw");
   const secondChild = exactBinfmt.replace("45 37", "46 37");
+  const unboundChild = exactBinfmt.replace("45 37", "46 99");
+  const secondAutofs = exactAutofs.replace("37 26", "38 26");
   assert.deepEqual(runClassifierFixture("wrong-parent.mountinfo", rootMount + exactAutofs + wrongParent), {
     status: 67, stdout: "", stderr: "AUTOFS_PLACEHOLDER_CHILD_MISSING",
   });
@@ -159,6 +162,12 @@ test("production mount classifier binds the exact binfmt child parent and cardin
   });
   assert.deepEqual(runClassifierFixture("mixed-child.mountinfo", rootMount + exactAutofs + exactBinfmt + wrongChildSource.replace("45 37", "46 37")), {
     status: 67, stdout: "", stderr: "AUTOFS_PLACEHOLDER_CHILD_AMBIGUOUS",
+  });
+  assert.deepEqual(runClassifierFixture("unbound-child.mountinfo", rootMount + exactAutofs + exactBinfmt + unboundChild), {
+    status: 67, stdout: "", stderr: "AUTOFS_PLACEHOLDER_CHILD_AMBIGUOUS",
+  });
+  assert.deepEqual(runClassifierFixture("ambiguous-autofs.mountinfo", rootMount + exactAutofs + secondAutofs + exactBinfmt), {
+    status: 67, stdout: "", stderr: "AUTOFS_PLACEHOLDER_AMBIGUOUS",
   });
 });
 
