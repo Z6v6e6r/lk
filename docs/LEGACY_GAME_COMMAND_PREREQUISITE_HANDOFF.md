@@ -28,7 +28,7 @@ separate from the tracked subscription-enforcement candidate fingerprint
 Relative to the hardened current-main candidate, it changes exactly the
 `func` field of node `e0d7883bc1a9fa8c`; node counts, routes, the `47/36`
 changed/added-node budget, and broken-reference counts remain unchanged.
-The production migration runner remains pinned to the historical
+The predecessor production migration runner was pinned to the historical
 `6c8512eeffbf57edc720019487a60a2779b1ec180f1ae373a201519f96a6271e`
 candidate and rejects the combined
 `e730bf8c043e2f33f5a75c6825d56f39a580a10201f77c399d2323f70f9f7e4d`
@@ -40,8 +40,10 @@ for sequential application. The source-only unified builder now composes all fiv
 subscription nodes, the legacy prerequisite graph, and the provider-authoritative
 payment ACK/read-back graph from fresh full-flow SHA `14b5aff6…`. Its current
 candidate identity is `d88ea0af…`, with `4762 -> 4812` nodes, `215` routes, and
-broken wires/links `0/0`. This new identity is deliberately absent from production
-custody and remains `UNBOUND`; release/import/deploy is still stopped.
+broken wires/links `0/0`. The source-only production runner and immutable release
+manifest now pin this exact unified identity and reject both historical identities.
+Production custody remains `UNBOUND`; release installation, import, migration, and
+deploy are still stopped.
 
 The first predecessor transition changed exactly one existing function,
 `Prepare split game payment` (`f3f9a60354d394da`). The later production pricing

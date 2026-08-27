@@ -44,7 +44,7 @@ repair task. A fresh `dry-run` is required after that repair.
 The current runner accepts only:
 
 - live full-flow SHA-256 `14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350`;
-- source-only candidate SHA-256 `6c8512eeffbf57edc720019487a60a2779b1ec180f1ae373a201519f96a6271e`;
+- reviewed unified source-only candidate SHA-256 `d88ea0afc5fd00e5f4e532415b57d33ed2691c320c3ba23fd2a54ba804fb139c`;
 - all seven writers in `scripts/legacy_game_revision_writers.json`;
 - the exact custom-node package, runner, migration-core, writer-registry,
   approval-verifier, source trust-anchor manifest, root package, dependency lock,
@@ -54,10 +54,11 @@ The current runner accepts only:
   every executable source hash from outside the migration executor identity.
 
 The live flow was pulled read-only from
-`root@lk-primary-147:/root/.node-red/flows.json`: `4762` source nodes, `4798`
-candidate nodes, `215` HTTP inputs, `47` changed nodes, `36` added nodes, and no
-added endpoint. Any changed live SHA requires a new source task, candidate, review,
-and execution packet.
+`root@lk-primary-147:/root/.node-red/flows.json`: `4762` source nodes, `4812`
+candidate nodes, `215` HTTP inputs, `54` changed existing nodes, `50` added nodes,
+and no added endpoint. Any changed live SHA requires a new source task, candidate,
+review, and execution packet. Historical prerequisite-only and partial combined
+candidate identities are rejected.
 
 The exact immutable release builder and guarded install contract are documented in
 `LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_INSTALL.md`. A release build or install does
@@ -129,7 +130,7 @@ The reviewed packet has this shape (values are illustrative placeholders):
   "source": {
     "repositoryCommit": "<exact 40-hex deployed commit>",
     "liveFlowSha256": "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350",
-    "candidateFlowSha256": "6c8512eeffbf57edc720019487a60a2779b1ec180f1ae373a201519f96a6271e",
+    "candidateFlowSha256": "d88ea0afc5fd00e5f4e532415b57d33ed2691c320c3ba23fd2a54ba804fb139c",
     "packageSha256": "<fresh audit value>",
     "writerRegistrySha256": "<fresh audit value>",
     "installerSha256": "<fresh audit value>",

@@ -27,7 +27,11 @@ import {
 const require = createRequire(import.meta.url);
 const digest = (character) => character.repeat(64);
 const releaseSha = "a".repeat(40);
-const COMBINED_SOURCE_ONLY_CANDIDATE_SHA256 = "e730bf8c043e2f33f5a75c6825d56f39a580a10201f77c399d2323f70f9f7e4d";
+const UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256 = "d88ea0afc5fd00e5f4e532415b57d33ed2691c320c3ba23fd2a54ba804fb139c";
+const HISTORICAL_SOURCE_ONLY_CANDIDATE_SHA256S = Object.freeze([
+  "6c8512eeffbf57edc720019487a60a2779b1ec180f1ae373a201519f96a6271e",
+  "e730bf8c043e2f33f5a75c6825d56f39a580a10201f77c399d2323f70f9f7e4d",
+]);
 
 const context = {
   target: { databaseName: "games", targetFingerprint: digest("1") },
@@ -128,15 +132,17 @@ test("production execution packet accepts exact short-lived stopped-writer evide
   });
 });
 
-test("combined source-only candidate is not production-authorized", () => {
-  assert.notEqual(EXPECTED_CANDIDATE_FLOW_SHA256, COMBINED_SOURCE_ONLY_CANDIDATE_SHA256);
-  const combinedCandidate = buildPacket({
-    source: {
-      ...buildPacket().source,
-      candidateFlowSha256: COMBINED_SOURCE_ONLY_CANDIDATE_SHA256,
-    },
-  });
-  assert.throws(() => validate(combinedCandidate), /candidate flow digest mismatch/);
+test("production runner pins the reviewed unified candidate and rejects historical identities", () => {
+  assert.equal(EXPECTED_CANDIDATE_FLOW_SHA256, UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256);
+  for (const historicalCandidateSha256 of HISTORICAL_SOURCE_ONLY_CANDIDATE_SHA256S) {
+    const historicalCandidate = buildPacket({
+      source: {
+        ...buildPacket().source,
+        candidateFlowSha256: historicalCandidateSha256,
+      },
+    });
+    assert.throws(() => validate(historicalCandidate), /candidate flow digest mismatch/);
+  }
 });
 
 test("production execution packet rejects drift, weak quiescence, stale backup, and reused authority", () => {

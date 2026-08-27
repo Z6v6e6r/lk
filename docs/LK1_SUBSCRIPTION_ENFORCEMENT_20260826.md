@@ -22,7 +22,9 @@ candidate SHA-256
 with `4762 -> 4812` nodes, `215` unchanged HTTP routes, `104` changed/added
 nodes, and broken wires/links `0/0`. Split-pricing recovery nodes already matched
 their current-main postimages and were not changed. Production custody is
-explicitly `UNBOUND`; this candidate is not authorized for import or deployment.
+explicitly `UNBOUND`; the source-only production runner and immutable release
+manifest pin this exact identity, but it is not authorized for install, import,
+migration, or deployment.
 Any whole-flow, target, tracked-source, route, writer, tab, or node-count drift
 stops candidate generation.
 
