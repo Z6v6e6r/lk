@@ -916,6 +916,27 @@ export function isPadelGameRecordRelevantToIdentity(
   return false;
 }
 
+function rememberServerIdentityFilteredGameIds(
+  payload: unknown,
+  records: PadelGameRecord[],
+  target: Set<string>,
+): void {
+  if (!isRecord(payload) || payload.identityFiltered !== true) return;
+  records.forEach((record) => {
+    if (record.id) target.add(record.id);
+  });
+}
+
+function isIdentityFilteredGameRelevant(
+  game: PadelGameRecord,
+  serverIdentityMatchedIds: Set<string>,
+  phone: string | null,
+  clientId: string | null,
+): boolean {
+  return serverIdentityMatchedIds.has(game.id)
+    || isPadelGameRecordRelevantToIdentity(game, phone, clientId);
+}
+
 function extractPriceAmount(payload: unknown): number | null {
   if (payload == null) return null;
 
@@ -6918,6 +6939,7 @@ export async function apiFetchPadelGamesByPhone(
   let firstSuccessStatus: ApiStatus = null;
   let reportedTotal = 0;
   const recordsById = new Map<string, PadelGameRecord>();
+  const serverIdentityMatchedIds = new Set<string>();
 
   for (const endpoint of endpoints) {
     const response = await request<unknown>(endpoint, {
@@ -6945,6 +6967,7 @@ export async function apiFetchPadelGamesByPhone(
     }
 
     const records = extractPadelGameRecordList(response.data);
+    rememberServerIdentityFilteredGameIds(response.data, records, serverIdentityMatchedIds);
     const endpointTotal = extractPadelGameRecordListTotal(response.data);
     if (endpointTotal !== null) {
       reportedTotal = Math.max(reportedTotal, endpointTotal);
@@ -6968,7 +6991,12 @@ export async function apiFetchPadelGamesByPhone(
       return toTimestamp(left) - toTimestamp(right);
     });
     const relevantRecords = sorted.filter((record) => (
-      isPadelGameRecordRelevantToIdentity(record, normalizedPhone, normalizedClientId)
+      isIdentityFilteredGameRelevant(
+        record,
+        serverIdentityMatchedIds,
+        normalizedPhone,
+        normalizedClientId,
+      )
     ));
     const filteredOutCount = sorted.length - relevantRecords.length;
     const total = Math.max(Math.max(0, reportedTotal - filteredOutCount), relevantRecords.length);

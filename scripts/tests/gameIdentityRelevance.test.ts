@@ -100,6 +100,36 @@ const buildRelevanceChecker = new Function(transpiledRuntime)() as (
   clientId: string | null,
 ) => boolean;
 
+const identityFilteredRuntimeSource = `
+  const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  const isPadelGameRecordRelevantToIdentity = (game, phone, clientId) => Boolean(
+    (phone && game.organizer?.phone === phone)
+    || (clientId && game.organizer?.id === clientId)
+  );
+  const rememberServerIdentityFilteredGameIds = ${toRunnableFunctionExpression("function rememberServerIdentityFilteredGameIds")};
+  const isIdentityFilteredGameRelevant = ${toRunnableFunctionExpression("function isIdentityFilteredGameRelevant")};
+  return { rememberServerIdentityFilteredGameIds, isIdentityFilteredGameRelevant };
+`;
+
+const identityFilteredRuntime = new Function(ts.transpileModule(identityFilteredRuntimeSource, {
+  compilerOptions: {
+    target: ts.ScriptTarget.ES2020,
+    module: ts.ModuleKind.ESNext,
+  },
+}).outputText)() as {
+  rememberServerIdentityFilteredGameIds: (
+    payload: unknown,
+    records: Array<{ id: string }>,
+    target: Set<string>,
+  ) => void;
+  isIdentityFilteredGameRelevant: (
+    game: Record<string, unknown>,
+    target: Set<string>,
+    phone: string | null,
+    clientId: string | null,
+  ) => boolean;
+};
+
 function buildCancelledSplitGameFixture() {
   return {
     id: "pay_537fb4ed-0404-4fff-96f2-dd6e13da4c61",
@@ -176,6 +206,46 @@ test("cancelled split participant is not relevant after leave event", () => {
 
   assert.equal(
     buildRelevanceChecker(game, "79629042211", "3cf04c20-2377-4fa8-aed0-55385f301797"),
+    false,
+  );
+});
+
+test("new phone-free response marker preserves server-filtered games", () => {
+  const game = { id: "game-phone-free", organizer: { id: "another-client" } };
+  const matchedIds = new Set<string>();
+
+  identityFilteredRuntime.rememberServerIdentityFilteredGameIds(
+    { identityFiltered: true },
+    [game],
+    matchedIds,
+  );
+
+  assert.equal(matchedIds.has(game.id), true);
+  assert.equal(
+    identityFilteredRuntime.isIdentityFilteredGameRelevant(
+      game,
+      matchedIds,
+      "79991112233",
+      "viewer-client",
+    ),
+    true,
+  );
+});
+
+test("old unmarked responses keep the existing client-side identity guard", () => {
+  const game = { id: "game-unmarked", organizer: { id: "another-client" } };
+  const matchedIds = new Set<string>();
+
+  identityFilteredRuntime.rememberServerIdentityFilteredGameIds({}, [game], matchedIds);
+
+  assert.equal(matchedIds.size, 0);
+  assert.equal(
+    identityFilteredRuntime.isIdentityFilteredGameRelevant(
+      game,
+      matchedIds,
+      "79991112233",
+      "viewer-client",
+    ),
     false,
   );
 });

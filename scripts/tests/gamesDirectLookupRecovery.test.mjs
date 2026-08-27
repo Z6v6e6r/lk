@@ -16,6 +16,11 @@ import { verifyWorkspace } from '../verify_nodered_source_origin.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const QUERY_PATH = path.join(REPO_ROOT, 'scripts/nodered_games_nodes/fn_get_by_id_query.js');
+const RESPONSE_PATH = path.join(REPO_ROOT, 'scripts/nodered_games_nodes/fn_get_by_id_resp.js');
+const LIST_NORMALIZER_PATH = path.join(
+  REPO_ROOT,
+  'scripts/nodered_games_nodes/fn_list_normalize.js',
+);
 const TEMP_ROOTS = [];
 
 function sha256(value) {
@@ -28,6 +33,14 @@ function sha256Json(value) {
 
 function querySource() {
   return fs.readFileSync(QUERY_PATH, 'utf8');
+}
+
+function responseSource() {
+  return fs.readFileSync(RESPONSE_PATH, 'utf8');
+}
+
+function listNormalizerSource() {
+  return fs.readFileSync(LIST_NORMALIZER_PATH, 'utf8');
 }
 
 function runQuery(params = {}, query = {}) {
@@ -48,7 +61,7 @@ test.after(() => {
 });
 
 function fixture() {
-  const responseFunc = 'return [msg, null];';
+  const responseFunc = responseSource();
   const flow = [
     { ...DIRECT_LOOKUP_CONTRACT.tab, info: '' },
     ...DIRECT_LOOKUP_CONTRACT.routes.map((route) => ({
@@ -95,6 +108,15 @@ function fixture() {
       wires: structuredClone(DIRECT_LOOKUP_CONTRACT.response.wires),
     },
     {
+      id: DIRECT_LOOKUP_CONTRACT.listNormalizer.id,
+      type: 'function',
+      z: DIRECT_LOOKUP_CONTRACT.listNormalizer.z,
+      name: DIRECT_LOOKUP_CONTRACT.listNormalizer.name,
+      func: listNormalizerSource(),
+      outputs: DIRECT_LOOKUP_CONTRACT.listNormalizer.outputs,
+      wires: structuredClone(DIRECT_LOOKUP_CONTRACT.listNormalizer.wires),
+    },
+    {
       id: DIRECT_LOOKUP_CONTRACT.httpResponse.id,
       type: 'http response',
       z: DIRECT_LOOKUP_CONTRACT.tab.id,
@@ -118,10 +140,15 @@ function fixture() {
   for (const route of contract.routes) {
     route.nodeSha256 = sha256Json(flow.find((node) => node.id === route.id));
   }
-  for (const part of ['query', 'mongo', 'response', 'httpResponse', 'diagnostic']) {
+  for (const part of [
+    'query', 'mongo', 'response', 'listNormalizer', 'httpResponse', 'diagnostic',
+  ]) {
     contract[part].nodeSha256 = sha256Json(flow.find((node) => node.id === contract[part].id));
   }
-  contract.response.funcSha256 = sha256(responseFunc);
+  contract.response.preimageSha256 = sha256(responseFunc);
+  contract.response.sourceSha256 = sha256(responseFunc);
+  contract.listNormalizer.preimageSha256 = sha256(listNormalizerSource());
+  contract.listNormalizer.sourceSha256 = sha256(listNormalizerSource());
   return { flow, raw, contract };
 }
 
@@ -161,6 +188,25 @@ test('tracked query is the exact current live/dirty-equal function', () => {
   );
 });
 
+test('tracked response is a pinned phone-redacting candidate', () => {
+  assert.equal(sha256(responseSource()), DIRECT_LOOKUP_CONTRACT.response.sourceSha256);
+  assert.notEqual(
+    DIRECT_LOOKUP_CONTRACT.response.sourceSha256,
+    DIRECT_LOOKUP_CONTRACT.response.preimageSha256,
+  );
+});
+
+test('tracked list normalizer is a pinned phone-redacting candidate', () => {
+  assert.equal(
+    sha256(listNormalizerSource()),
+    DIRECT_LOOKUP_CONTRACT.listNormalizer.sourceSha256,
+  );
+  assert.notEqual(
+    DIRECT_LOOKUP_CONTRACT.listNormalizer.sourceSha256,
+    DIRECT_LOOKUP_CONTRACT.listNormalizer.preimageSha256,
+  );
+});
+
 test('reachable gameId builds the archived-safe direct lookup query', () => {
   const { msg, result } = runQuery({ gameId: 'game-42' });
   assert.equal(isDeepStrictEqual(result, [msg, null]), true);
@@ -195,7 +241,7 @@ test('unrouted paymentRef and bookingIds branches are characterized without API 
   assert.equal(DIRECT_LOOKUP_CONTRACT.routes.every((route) => route.url.includes(':gameId')), true);
 });
 
-test('exact two routes and graph terminate through unchanged response/HTTP/diagnostic nodes', () => {
+test('exact two routes and graph terminate through pinned response/HTTP/diagnostic nodes', () => {
   assert.equal(isDeepStrictEqual(
     DIRECT_LOOKUP_CONTRACT.routes.map((route) => [route.id, route.method, route.url, route.wires]),
     [
@@ -221,6 +267,8 @@ test('zero-change synchronization preserves response and topology', () => {
   const result = synchronizeDirectLookup(
     structuredClone(built.flow),
     querySource(),
+    responseSource(),
+    listNormalizerSource(),
     built.contract.wholeFlowSha256,
     built.contract,
   );
@@ -237,6 +285,8 @@ test('whole-flow, route, graph, node, func, response, and non-func drift fail cl
   const sync = (flow, sha = built.contract.wholeFlowSha256) => synchronizeDirectLookup(
     flow,
     querySource(),
+    responseSource(),
+    listNormalizerSource(),
     sha,
     built.contract,
   );
@@ -249,6 +299,7 @@ test('whole-flow, route, graph, node, func, response, and non-func drift fail cl
     [built.contract.query.id, 'outputs', 1, /query.*outputs/],
     [built.contract.mongo.id, 'collection', 'wrong', /mongo.*collection/],
     [built.contract.response.id, 'wires', [[]], /response.*wires/],
+    [built.contract.listNormalizer.id, 'outputs', 1, /normalizer.*outputs/i],
     [built.contract.diagnostic.id, 'active', true, /diagnostic.*active/],
   ]) {
     const drift = structuredClone(built.flow);
@@ -272,6 +323,8 @@ test('whole-flow, route, graph, node, func, response, and non-func drift fail cl
     () => synchronizeDirectLookup(
       responseBodyDrift,
       querySource(),
+      responseSource(),
+      listNormalizerSource(),
       responseContract.wholeFlowSha256,
       responseContract,
     ),
@@ -282,16 +335,41 @@ test('whole-flow, route, graph, node, func, response, and non-func drift fail cl
     () => synchronizeDirectLookup(
       structuredClone(built.flow),
       `${querySource()}\n`,
+      responseSource(),
+      listNormalizerSource(),
       built.contract.wholeFlowSha256,
       built.contract,
     ),
     /query source contract mismatch/,
+  );
+  assert.throws(
+    () => synchronizeDirectLookup(
+      structuredClone(built.flow),
+      querySource(),
+      `${responseSource()}\n`,
+      listNormalizerSource(),
+      built.contract.wholeFlowSha256,
+      built.contract,
+    ),
+    /response source contract mismatch/,
+  );
+  assert.throws(
+    () => synchronizeDirectLookup(
+      structuredClone(built.flow),
+      querySource(),
+      responseSource(),
+      `${listNormalizerSource()}\n`,
+      built.contract.wholeFlowSha256,
+      built.contract,
+    ),
+    /normalizer source contract mismatch/,
   );
 
   for (const target of [
     built.contract.query,
     built.contract.mongo,
     built.contract.response,
+    built.contract.listNormalizer,
     built.contract.httpResponse,
     built.contract.diagnostic,
   ]) {
@@ -312,11 +390,31 @@ test('explicitly contracted source update can change only query func', () => {
   const result = synchronizeDirectLookup(
     structuredClone(built.flow),
     next,
+    responseSource(),
+    listNormalizerSource(),
     built.contract.wholeFlowSha256,
     built.contract,
   );
   assert.equal(isDeepStrictEqual(result.changedNodes, [{
     id: built.contract.query.id,
+    changedFields: ['func'],
+  }]), true);
+});
+
+test('explicitly contracted source update can change only response func', () => {
+  const built = fixture();
+  const next = `${responseSource()}\n// approved-test-only\n`;
+  built.contract.response.sourceSha256 = sha256(next);
+  const result = synchronizeDirectLookup(
+    structuredClone(built.flow),
+    querySource(),
+    next,
+    listNormalizerSource(),
+    built.contract.wholeFlowSha256,
+    built.contract,
+  );
+  assert.equal(isDeepStrictEqual(result.changedNodes, [{
+    id: built.contract.response.id,
     changedFields: ['func'],
   }]), true);
 });

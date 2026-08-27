@@ -16,7 +16,57 @@ const toTs = (item) => {
 
 const selected = [...rows].sort((a, b) => toTs(b) - toTs(a))[0];
 
+const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
+const phoneFieldPattern = /(?:^|[_-])(?:phone|mobile|telephone|msisdn)(?:s|number|norm|normalized)?(?:$|[_-])|(?:Phone|Mobile|Telephone|Msisdn)(?:s|Number|Norm|Normalized)?$/;
+const phoneIdentityPattern = /^(phone|mobile|telephone|msisdn):/i;
+const exactPhoneValuePattern = /^(?:\+?7|8)(?:[\s().-]*\d){10}$/;
+const embeddedPhoneValuePattern = /(^|[^\d])((?:\+?7|8)(?:[\s().-]*\d){10})(?!\d)/g;
+const phoneQueryValuePattern = /([?&][^=&#]*(?:phone|mobile|telephone|msisdn)[^=&#]*=)[^&#]*/gi;
+const isPlainRecord = (value) => {
+  if (!isObj(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
+const redactPhoneString = (value) => {
+  const trimmed = value.trim();
+  if (phoneIdentityPattern.test(trimmed) || exactPhoneValuePattern.test(trimmed)) {
+    return null;
+  }
+  return value
+    .replace(phoneQueryValuePattern, "$1[redacted]")
+    .replace(embeddedPhoneValuePattern, "$1[redacted]");
+};
+
+const redactPhoneData = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactPhoneData(item));
+  }
+  if (isPlainRecord(value)) {
+    const next = {};
+    Object.entries(value).forEach(([key, item]) => {
+      if (phoneFieldPattern.test(key)) return;
+      const redacted = redactPhoneData(item);
+      if (redacted !== null || item === null) {
+        next[key] = redacted;
+      }
+    });
+    return next;
+  }
+  if (typeof value === "string") {
+    return redactPhoneString(value);
+  }
+  if (
+    typeof value === "number"
+    && Number.isInteger(value)
+    && exactPhoneValuePattern.test(String(value))
+  ) {
+    return null;
+  }
+  return value;
+};
+
 msg.statusCode = 200;
 msg.headers = { "Content-Type": "application/json; charset=utf-8" };
-msg.payload = selected;
+msg.payload = redactPhoneData(selected);
 return [msg, msg];
