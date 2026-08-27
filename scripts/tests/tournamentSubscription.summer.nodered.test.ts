@@ -1984,7 +1984,10 @@ test("Piter status uses a dedicated 400-unit inventory and server-side batches o
   assert.equal(firstPayload.providerProductCostMinor, 5680000);
   assert.equal(firstPayload.discountMinor, 3700000);
   assert.equal(firstPayload.bindingReady, true);
-  assert.equal(firstPayload.canPurchase, true);
+  assert.equal(firstPayload.managedSaleReady, false);
+  assert.equal(firstPayload.managedSaleError,
+    "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE");
+  assert.equal(firstPayload.canPurchase, false);
 
   const secondBatch = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
@@ -1999,7 +2002,7 @@ test("Piter status uses a dedicated 400-unit inventory and server-side batches o
   assert.equal(secondPayload.discountMinor, 3300000);
 });
 
-test("Piter purchase ignores a browser productId and selects the current server tier", () => {
+test("Piter purchase fails before Mongo and Viva without authoritative sale-to-instance binding", () => {
   const prepared = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
     {
@@ -2013,158 +2016,50 @@ test("Piter purchase ignores a browser productId and selects the current server 
     },
     PITER_PRODUCT_GLOBALS,
   ) as unknown[];
-  const preparedCtx = asRecord(asRecord(prepared[0])._summerSubscriptionCtx);
-  assert.equal(preparedCtx.productId, null);
-  assert.equal(preparedCtx.totalLimit, 400);
-
-  const limited = runNodeRedFunction(
-    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
-    { _summerSubscriptionCtx: preparedCtx, payload: buildPiterRows(100) },
-    PITER_PRODUCT_GLOBALS,
-  ) as unknown[];
-  const selectedCtx = asRecord(asRecord(limited[0])._summerSubscriptionCtx);
-  assert.equal(selectedCtx.batchIndex, 2);
-  assert.equal(selectedCtx.batchRemainingBefore, 100);
-  assert.equal(selectedCtx.productId, "8bf334ba-3050-4017-b40a-7eef2db1eb16");
-  assert.equal(selectedCtx.productCostMinor, 5680000);
-  assert.equal(selectedCtx.priceMinor, 2380000);
-  assert.equal(selectedCtx.discountMinor, 3300000);
+  assert.equal(prepared[0], null);
+  const error = asRecord(prepared[1]);
+  assert.equal(error.statusCode, 503);
+  assert.equal(asRecord(asRecord(error.payload).details).code,
+    "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE");
+  assert.equal(asRecord(asRecord(error.payload).details).counterKey, "piter_friendship");
 });
 
-test("Piter purchase counts existing paid sales in Mongo before reporting reservation balances", () => {
-  const prepared = runNodeRedFunction(
-    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
-    {
-      payload: {
-        clientPhone: "79990000000",
-        counterKey: "piter_friendship",
-        paymentRef: "piter-existing-paid-balance",
-      },
-      req: { query: {} },
-    },
-    PITER_PRODUCT_GLOBALS,
-  ) as unknown[];
-  const preparedDbMsg = asRecord(prepared[0]);
-  const expectedCounterQuery = {
-    inventoryId: "piter_friendship_12m_2026_v1",
-    counterKey: "piter_friendship",
-  };
-  assert.deepEqual(preparedDbMsg.query, expectedCounterQuery);
-  assert.deepEqual(preparedDbMsg.payload, expectedCounterQuery);
-
+test("managed annual purchase-limit remains fail closed for a fabricated legacy context", () => {
   const limited = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
     {
-      _summerSubscriptionCtx: asRecord(preparedDbMsg._summerSubscriptionCtx),
+      _summerSubscriptionCtx: {
+        action: "purchase",
+        counterKey: "piter_friendship",
+        inventoryId: "piter_friendship_12m_2026_v1",
+        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+      },
       payload: buildPiterRows(2),
     },
     PITER_PRODUCT_GLOBALS,
   ) as unknown[];
-  const selectedCtx = asRecord(asRecord(limited[0])._summerSubscriptionCtx);
-  assert.equal(selectedCtx.remainingBefore, 398);
-  assert.equal(selectedCtx.batchRemainingBefore, 98);
-  assert.equal(selectedCtx.batchIndex, 1);
-  assert.equal(selectedCtx.priceMinor, 1980000);
-
-  selectedCtx.step = "create_transaction";
-  const persisted = runNodeRedFunction(
-    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
-    {
-      statusCode: 201,
-      payload: {
-        id: "piter-existing-paid-viva-transaction",
-        paymentUrl: "https://pay.example.test/piter-existing-paid",
-        toPay: 1980000,
-      },
-      _summerSubscriptionCtx: selectedCtx,
-    },
-  ) as unknown[];
-  const response = asRecord(asRecord(persisted[2]).payload);
-  assert.equal(response.remainingBefore, 398);
-  assert.equal(response.remainingAfterReservation, 397);
-  assert.equal(response.batchRemainingBefore, 98);
-  assert.equal(response.batchRemainingAfterReservation, 97);
+  assert.equal(limited[0], null);
+  const error = asRecord(limited[1]);
+  assert.equal(error.statusCode, 503);
+  assert.equal(asRecord(asRecord(error.payload).details).code,
+    "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE");
 });
 
-test("Piter transaction uses the active tier discount and persists the advertised amount", () => {
+test("classic summer purchase remains available while managed annual sale is closed", () => {
   const prepared = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
     {
       payload: {
         clientPhone: "79990000000",
-        counterKey: "piter_friendship",
-        productId: "forged-browser-product",
-        paymentRef: "piter-tier-two-transaction",
+        counterKey: "sport",
+        paymentRef: "sport-control-transaction",
       },
       req: { query: {} },
     },
-    PITER_PRODUCT_GLOBALS,
   ) as unknown[];
-  const limited = runNodeRedFunction(
-    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
-    {
-      _summerSubscriptionCtx: asRecord(asRecord(prepared[0])._summerSubscriptionCtx),
-      payload: buildPiterRows(100),
-    },
-    PITER_PRODUCT_GLOBALS,
-  ) as unknown[];
-  const selectedCtx = asRecord(asRecord(limited[0])._summerSubscriptionCtx);
-  selectedCtx.step = "load_products";
-  selectedCtx.token = "token-1";
-
-  const routed = withFixedNow("2026-08-21T09:00:00.000Z", () => runNodeRedFunction(
-    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
-    {
-      statusCode: 200,
-      payload: [{
-        id: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
-        name: "Падел.Дружба.Питер — годовая",
-        cost: 5680000,
-        productType: "SUBSCRIPTION",
-        activationDays: 41,
-        validityDays: 365,
-        visits: 365,
-      }],
-      _summerSubscriptionCtx: selectedCtx,
-    },
-  )) as unknown[];
-  const transactionRequest = asRecord(routed[0]);
-  const transactionCtx = asRecord(transactionRequest._summerSubscriptionCtx);
-  const transactionProduct = asRecord((asRecord(transactionRequest.payload).products as unknown[])[0]);
-  assert.equal(transactionProduct.id, "8bf334ba-3050-4017-b40a-7eef2db1eb16");
-  assert.equal(transactionProduct.customAmount, null);
-  assert.equal(transactionProduct.discount, 3300000);
-  assert.equal(transactionCtx.priceMinor, 2380000);
-  assert.equal(transactionCtx.providerProductCostMinor, 5680000);
-  assert.equal(transactionCtx.providerActivationDays, 41);
-  assert.equal(transactionCtx.providerAutoActivationDate, "2026-10-01");
-  assert.equal(transactionCtx.activationNotBeforeDate, "2026-10-01");
-
-  const persisted = runNodeRedFunction(
-    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
-    {
-      statusCode: 201,
-      payload: {
-        id: "piter-tier-two-viva-transaction",
-        paymentUrl: "https://pay.example.test/piter-tier-two",
-        toPay: 2380000,
-      },
-      _summerSubscriptionCtx: transactionCtx,
-    },
-  ) as unknown[];
-  const dbSet = asRecord(asRecord(asRecord(persisted[1]).payload).$set);
-  const response = asRecord(asRecord(persisted[2]).payload);
-  assert.equal(dbSet.amountMinor, 2380000);
-  assert.equal(dbSet.providerProductCostMinor, 5680000);
-  assert.equal(dbSet.discountMinor, 3300000);
-  assert.equal(dbSet.providerActivationDays, 41);
-  assert.equal(dbSet.providerAutoActivationDate, "2026-10-01");
-  assert.equal(dbSet.activationNotBeforeDate, "2026-10-01");
-  assert.equal(dbSet.providerValidityDays, 365);
-  assert.equal(dbSet.providerVisits, 365);
-  assert.equal(response.priceMinor, 2380000);
-  assert.equal(response.discountMinor, 3300000);
-  assert.equal(response.toPayMinor, 2380000);
+  assert.ok(prepared[0]);
+  assert.equal(asRecord(asRecord(prepared[0])._summerSubscriptionCtx).counterKey, "sport");
+  assert.equal(prepared[1], null);
 });
 
 test("regional annual checkout blocks Viva activation before 1 October", () => {
@@ -2542,10 +2437,13 @@ test("network status uses one server-side batch of 100 at 56 800 RUB", () => {
   assert.equal(payload.providerProductCostMinor, 5680000);
   assert.equal(payload.discountMinor, 0);
   assert.equal(payload.bindingReady, true);
-  assert.equal(payload.canPurchase, true);
+  assert.equal(payload.managedSaleReady, false);
+  assert.equal(payload.managedSaleError,
+    "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE");
+  assert.equal(payload.canPurchase, false);
 });
 
-test("regional purchase ignores browser productId and fails closed without the active Viva product", () => {
+test("regional purchase ignores browser productId and fails before any provider or inventory write", () => {
   const prepared = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
     {
@@ -2559,18 +2457,10 @@ test("regional purchase ignores browser productId and fails closed without the a
     },
     {},
   ) as unknown[];
-  const ctx = asRecord(asRecord(prepared[0])._summerSubscriptionCtx);
-  assert.equal(ctx.productId, null);
-  assert.equal(ctx.totalLimit, 200);
-
-  const limited = runNodeRedFunction(
-    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
-    { _summerSubscriptionCtx: ctx, payload: [] },
-    {},
-  ) as unknown[];
-  const error = asRecord(limited[1]);
-  assert.equal(limited[0], null);
+  const error = asRecord(prepared[1]);
+  assert.equal(prepared[0], null);
   assert.equal(error.statusCode, 503);
-  assert.equal(asRecord(asRecord(error.payload).details).counterKey, "kotelniki_friendship");
-  assert.equal(asRecord(asRecord(error.payload).details).bindingReady, false);
+  const details = asRecord(asRecord(error.payload).details);
+  assert.equal(details.code, "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE");
+  assert.equal(details.counterKey, "kotelniki_friendship");
 });

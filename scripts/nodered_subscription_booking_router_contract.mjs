@@ -51,6 +51,8 @@ export const MANAGED_SUBSCRIPTION_ROUTER_CONTRACTS = Object.freeze([
     funcSha256: Object.freeze([
       "a9477e5e76419cc7317edb96cdbeda94a6745d07cb9aa0c5f1e82b2cebde2611",
       "953c84c1885b77b4f7b7e826430b49a97e14656fa2a53e135aa35a93f72fe53d",
+      "892ad51fcb8f2be2a194661e04f9c775d4345fea153e5dbc3758bd40967101f2",
+      "cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a",
     ]),
     managedActionCandidateSha256: null,
   }),

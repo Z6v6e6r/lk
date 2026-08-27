@@ -163,6 +163,9 @@ function cleanupContext(step = "check_timeout_transaction") {
     step,
     token: "service-token",
     gameId: "game-1",
+    tenantKey: "tenant-test",
+    sourceTenantKey: "tenant-test",
+    sourceRevision: 7,
     expectedRevision: 7,
     expectedUpdatedAt: "2026-08-26T12:00:00.000Z",
     paymentPaid: true,
@@ -201,6 +204,7 @@ function cleanupContext(step = "check_timeout_transaction") {
 function schedulerTimedOutGame(createdAt: unknown = "2026-08-23T07:00:00.000Z") {
   return {
     id: "pay-real-shape",
+    tenantKey: "tenant-test",
     revision: 7,
     updatedAt: "2026-08-26T12:00:00.000Z",
     createdAt,
@@ -290,12 +294,14 @@ test("verified paid organizer timeout promotes the durable draft to PAID", () =>
     ...out[1],
     payload: { acknowledged: true, matchedCount: 1 },
   }) as Array<Record<string, any> | null>;
-  assert.deepEqual(readback[0]?.payload, { id: "game-1" });
+  assert.deepEqual(readback[0]?.payload, { tenantKey: "tenant-test", id: "game-1", revision: 8 });
   const ackCtx = readback[0]?._splitCleanupWriteAck;
   const acknowledged = runNodeRedFunction(cleanupWriteAck, {
     ...readback[0],
     payload: [{
       id: "game-1",
+      tenantKey: "tenant-test",
+      revision: 8,
       updatedAt: ackCtx.expectedUpdatedAt,
       status: ackCtx.expectedStatus,
       payment: { paid: true },
@@ -306,11 +312,13 @@ test("verified paid organizer timeout promotes the durable draft to PAID", () =>
   assert.equal(acknowledged[1]?.payload?.blockLocalMutation, false);
 });
 
-test("cleanup CAS miss never reports local cancellation success", () => {
+test("cleanup payment ACK mismatch enters durable recovery instead of reporting success", () => {
   const out = runNodeRedFunction(cleanupWriteAck, {
     _splitCleanupWriteAck: {
       step: "write_ack",
       gameId: "game-1",
+      tenantKey: "tenant-test",
+      expectedNextRevision: 8,
       expectedUpdatedAt: "2026-08-26T12:01:00.000Z",
       expectedStatus: "PAID",
       expectedPaid: true,
@@ -318,10 +326,8 @@ test("cleanup CAS miss never reports local cancellation success", () => {
     },
     payload: { acknowledged: true, matchedCount: 0 },
   }) as Array<Record<string, any> | null>;
-  assert.equal(out[1]?.statusCode, 409);
-  assert.equal(out[1]?.payload?.cancelledInLk, false);
-  assert.equal(out[1]?.payload?.blockLocalMutation, true);
-  assert.equal(out[1]?.payload?.blockReason, "SPLIT_CLEANUP_CAS_MISS");
+  assert.equal(out[1], null);
+  assert.equal(out[3]?._splitCleanupPaymentReadbackFailure?.code, "SPLIT_CLEANUP_CAS_MISS");
 });
 
 test("participant cleanup preserves an already-paid game through ACK readback", () => {
@@ -341,6 +347,8 @@ test("participant cleanup preserves an already-paid game through ACK readback", 
     ...readback[0],
     payload: [{
       id: "game-1",
+      tenantKey: "tenant-test",
+      revision: 8,
       updatedAt: ctx.expectedUpdatedAt,
       status: ctx.expectedStatus,
       payment: { paid: true },
@@ -519,10 +527,40 @@ test("cleanup PAID evidence requires provider client, exercise and currency", ()
   }
 });
 
+test("cleanup provider evidence cannot be assembled from a sibling record", () => {
+  const payload = {
+    transaction: {
+      ...transaction("UNPAID", "booking-other", "exercise-other"),
+      client: { id: "client-other" },
+    },
+    sibling: {
+      client: { id: "client-1" },
+      exercise: { id: "exercise-1" },
+      products: [{ bookingIds: ["booking-1"] }],
+    },
+  };
+  const out = runNodeRedFunction(cleanupRouter, {
+    statusCode: 200,
+    payload,
+    _splitCleanupCtx: cleanupContext(),
+  }) as Array<Record<string, any> | null>;
+  assert.equal(out[0], null);
+  assert.equal(Boolean(out[4]), false);
+  const summary = out[2]?.payload || out[3]?.payload;
+  assert.equal(summary?.blockLocalMutation, true);
+  assert.ok(summary?.trace?.some((item: Record<string, unknown>) => (
+    item.step === "check_timeout_transaction_manual_review"
+    && ["booking_binding_missing", "client_binding_mismatch", "exercise_binding_mismatch"].includes(
+      String((item.evidence as Record<string, unknown>)?.reason || ""),
+    )
+  )));
+});
+
 test("forced game cleanup carries a CAS snapshot and missing guards stop before Viva", () => {
   const prepared = runNodeRedFunction(cleanupPrepare, {
     payload: [{
       id: "forced-game-1",
+      tenantKey: "tenant-test",
       revision: 9,
       updatedAt: "2026-08-26T12:00:00.000Z",
       status: "PAID",

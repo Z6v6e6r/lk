@@ -49,7 +49,8 @@ const exerciseIds = (record) => new Set([
 const ctx = msg._gameConfirmWriteAck && typeof msg._gameConfirmWriteAck === "object"
   ? msg._gameConfirmWriteAck
   : null;
-if (!ctx?.gameId || !ctx?.paymentRef || !ctx?.transactionId || !ctx?.bookingId || !ctx?.exerciseId) {
+if (!ctx?.gameId || !ctx?.tenantKey || !Number.isSafeInteger(ctx?.expectedNextRevision)
+  || !ctx?.paymentRef || !ctx?.transactionId || !ctx?.bookingId || !ctx?.exerciseId) {
   if (toStr(msg._requestMode)?.toLowerCase() !== "confirm") return [null, null, null];
   return fail(ctx, 500, "GAME_PAYMENT_WRITE_ACK_CONTEXT_MISSING", "Payment write acknowledgement context is missing");
 }
@@ -67,7 +68,7 @@ if (ctx.step === "write_ack") {
   }
   ctx.step = "readback";
   msg._gameConfirmWriteAck = ctx;
-  msg.payload = { id: ctx.gameId };
+  msg.payload = { tenantKey: ctx.tenantKey, id: ctx.gameId, revision: ctx.expectedNextRevision };
   msg.limit = 2;
   msg.sort = { updatedAt: -1, _id: -1 };
   return [msg, null, null];
@@ -84,6 +85,8 @@ const record = records[0];
 const status = toStr(record.status)?.toUpperCase();
 const exact = (
   toStr(record.id) === toStr(ctx.gameId)
+  && toStr(record.tenantKey) === toStr(ctx.tenantKey)
+  && Number(record.revision) === Number(ctx.expectedNextRevision)
   && (status === "PAID" || status === "PAYED")
   && record?.payment?.paid === true
   && paymentRefs(record).has(ctx.paymentRef)

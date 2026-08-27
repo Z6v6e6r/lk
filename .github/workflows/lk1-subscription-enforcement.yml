@@ -1,0 +1,216 @@
+name: LK1 Subscription Enforcement
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lk1-subscription-enforcement-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lk1-exact-head:
+    name: LK1 exact-head enforcement gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI: "true"
+      TZ: "Europe/Moscow"
+
+    steps:
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify checkout identity
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "$checked_out_sha" != "$EXPECTED_HEAD_SHA" ]]; then
+            echo "Exact-head checkout mismatch" >&2
+            exit 1
+          fi
+          echo "expected_head_sha=$EXPECTED_HEAD_SHA"
+          echo "checked_out_sha=$checked_out_sha"
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Record immutable job identity
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git rev-parse HEAD)"
+          checked_out_tree="$(git rev-parse HEAD^{tree})"
+          {
+            echo "## LK1 exact-head identity"
+            echo "- Event: \`${{ github.event_name }}\`"
+            echo "- Base SHA: \`$BASE_SHA\`"
+            echo "- Expected head SHA: \`$EXPECTED_HEAD_SHA\`"
+            echo "- Checked-out SHA: \`$checked_out_sha\`"
+            echo "- Checked-out tree: \`$checked_out_tree\`"
+            echo "- Node: \`$(node --version)\`"
+            echo "- npm: \`$(npm --version)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install locked dependencies
+        run: npm ci --include=optional --no-audit --no-fund
+
+      - name: Confirm dependency install kept tracked files clean
+        run: |
+          set -euo pipefail
+          if [[ -n "$(git status --short --untracked-files=no)" ]]; then
+            echo "npm ci modified tracked files" >&2
+            git status --short --untracked-files=no
+            exit 1
+          fi
+
+      - name: Run critical subscription regression matrix
+        run: >-
+          node --experimental-strip-types --test
+          scripts/tests/subscriptionBookingGateway.nodered.test.ts
+          scripts/tests/managedSubscriptionPolicyEvaluator.nodered.test.ts
+          scripts/tests/subscriptionSharedDailyLimit.test.ts
+          scripts/tests/subscriptionCategoryDailyLimit.test.ts
+          scripts/tests/subscriptionDailyLimit.test.ts
+          scripts/tests/splitRouter.transactionAndSubscription.test.ts
+          scripts/tests/splitRouter.dailyLimit.test.ts
+          scripts/tests/splitLeave.router.test.ts
+          scripts/tests/legacyRosterBridge.nodered.test.ts
+          scripts/tests/gamesPatchCancelGuard.test.ts
+          scripts/tests/gamesPatchRecovery.test.mjs
+          scripts/tests/splitPaymentOccupancy.test.ts
+          scripts/tests/tournamentSubscription.summer.nodered.test.ts
+          scripts/tests/tournamentSubscriptionSalesCandidate.test.mjs
+          scripts/tests/tournamentSignupAvailability.test.ts
+          scripts/tests/tournamentSignupVivaBookingIdentity.test.ts
+          scripts/tests/groupScheduleApi.test.ts
+
+      - name: Run unified candidate and drift-negative tests
+        run: node --test scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs
+
+      - name: Run tracked credential and authenticated-route security tests
+        run: >-
+          node --test
+          scripts/tests/vivaServiceCredentialResolution.security.test.mjs
+          scripts/tests/subscriptionBookingNginx.test.mjs
+
+      - name: Validate deterministic Node-RED modular toolchain fixtures
+        run: node --test scripts/tests/noderedModularToolchain.test.mjs
+
+      - name: Validate combined legacy game command prerequisites
+        run: npm run test:legacy-game-command-prerequisites
+
+      - name: Validate combined split draft persistence
+        run: >-
+          node --experimental-strip-types --test
+          scripts/tests/paymentSyncDraftRecovery.test.ts
+          scripts/tests/serverGameDraftPersistence.test.ts
+          scripts/tests/gamePaymentConfirmation.nodered.test.ts
+          scripts/tests/splitLifecycleV2.nodered.test.ts
+
+      - name: Typecheck
+        run: npx tsc -b --pretty false
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Export inert build environment
+        run: >-
+          node --input-type=module -e '
+          import fs from "node:fs";
+          import { REQUIRED_BUILD_ENV_KEYS } from "./scripts/lib/build-env.mjs";
+          const lines = REQUIRED_BUILD_ENV_KEYS.map((key) => {
+            if (key === "VITE_TENANT_KEY") return `${key}=ci`;
+            const normalized = key.toLowerCase().replace(/^vite_/, "").replace(/_/g, "-");
+            return `${key}=https://ci.invalid/${normalized}`;
+          });
+          fs.appendFileSync(process.env.GITHUB_ENV, `${lines.join("\n")}\n`);
+          '
+
+      - name: Install pinned Rollup Linux optional binary
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund \
+            @rollup/rollup-linux-x64-gnu@4.57.0
+          node -e 'const value = require("./node_modules/@rollup/rollup-linux-x64-gnu/package.json").version; if (value !== "4.57.0") process.exit(1)'
+
+      - name: Build with inert compile-time configuration
+        run: npm run build
+
+      - name: Check pull-request diff whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git diff --check "$BASE_SHA...$HEAD_SHA"
+
+      - name: Scan changed paths for secrets, PII, binaries, and runtime artifacts
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git diff --numstat "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/lk1-numstat.txt"
+          if awk '$1 == "-" || $2 == "-" { print $3; found = 1 } END { exit found ? 0 : 1 }' \
+            "$RUNNER_TEMP/lk1-numstat.txt" > "$RUNNER_TEMP/lk1-binary-paths.txt"; then
+            echo "Unexpected binary files in pull-request diff:" >&2
+            sed -n '1,80p' "$RUNNER_TEMP/lk1-binary-paths.txt" >&2
+            exit 1
+          fi
+          git diff --name-only --diff-filter=AM "$BASE_SHA...$HEAD_SHA" \
+            > "$RUNNER_TEMP/lk1-changed-paths.txt"
+          if grep -E '(^|/)(dist|build|node-red/modular)(/|$)|(^|/)release[^/]*\.json$|\.(env|har|pem|key|p12|pfx|zip|tar|tgz|gz|7z|png|jpe?g|gif|pdf)$' \
+            "$RUNNER_TEMP/lk1-changed-paths.txt" > "$RUNNER_TEMP/lk1-forbidden-paths.txt"; then
+            echo "Unexpected generated, runtime, credential, or binary artifact paths:" >&2
+            sed -n '1,80p' "$RUNNER_TEMP/lk1-forbidden-paths.txt" >&2
+            exit 1
+          fi
+          git diff --unified=0 --no-color "$BASE_SHA...$HEAD_SHA" \
+            | node --input-type=module -e '
+              let input = "";
+              process.stdin.setEncoding("utf8");
+              process.stdin.on("data", (chunk) => { input += chunk; });
+              process.stdin.on("end", () => {
+                const added = input.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++"));
+                const patterns = [
+                  ["private-key", /BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY/],
+                  ["github-token", /\bgh[opsu]_[A-Za-z0-9]{30,}\b/],
+                  ["bearer-token", /Bearer\s+[A-Za-z0-9._-]{20,}/i],
+                  ["jwt", /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/],
+                  ["email", /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/],
+                  ["phone", new RegExp(["(?<![A-Fa-f0-9])(?:\\+7|8)", "[ -]?\\(?\\d{3}\\)?", "[ -]?\\d{3}[ -]?\\d{2}[ -]?\\d{2}(?![A-Fa-f0-9])"].join(""))],
+                ];
+                const findings = [];
+                added.forEach((line, index) => {
+                  for (const [label, pattern] of patterns) {
+                    if (pattern.test(line)) findings.push(`${label} at added-line ${index + 1}`);
+                  }
+                });
+                if (findings.length > 0) {
+                  console.error("Potential secret or PII patterns detected (values redacted):");
+                  findings.slice(0, 80).forEach((finding) => console.error(finding));
+                  process.exitCode = 1;
+                }
+              });
+            '
+
+      - name: Confirm tracked working tree remains clean
+        run: |
+          set -euo pipefail
+          if [[ -n "$(git status --short --untracked-files=no)" ]]; then
+            echo "Mandatory checks modified tracked files" >&2
+            git status --short --untracked-files=no
+            exit 1
+          fi

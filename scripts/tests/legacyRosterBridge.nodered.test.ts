@@ -357,7 +357,7 @@ test("verified payment projection does not overwrite another player's pending pa
   assert.equal(payments[1].phoneNorm, "79000000001");
 });
 
-test("canonical projection is idempotent and generic browser PATCH closes with the same flag", () => {
+test("canonical projection is idempotent and generic browser PATCH is unconditionally closed", () => {
   const { bridge, projection } = projectionContext("WAITLISTED");
   const duplicate = run("scripts/nodered_games_nodes/fn_legacy_roster_projection_build.js", {
     _legacyRosterBridge: bridge,
@@ -372,14 +372,10 @@ test("canonical projection is idempotent and generic browser PATCH closes with t
   assert.equal(duplicate[0], null);
   assert.equal(duplicate[1].payload.replayed, true);
 
-  const blocked = run(
-    "scripts/nodered_games_nodes/fn_patch.js",
-    {
-      req: { params: { gameId: "pay_game" } },
-      payload: { participants: [] },
-    },
-    { PADLHUB_LEGACY_ROSTER_PATCH_GUARD_ENABLED: "true" },
-  ) as any[];
+  const blocked = run("scripts/nodered_games_nodes/fn_patch.js", {
+    req: { params: { gameId: "pay_game" } },
+    payload: { participants: [] },
+  }) as any[];
   assert.equal(blocked[1].statusCode, 403);
   assert.equal(blocked[1].payload.code, "GAME_ROSTER_COMMAND_REQUIRED");
 });

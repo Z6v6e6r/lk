@@ -704,11 +704,11 @@ const dedupeKey = vivaExerciseId ? `viva:${vivaExerciseId}` : `slot:${slotKey}`;
 const fallbackIdBase = paymentRef ? `pay:${paymentRef}` : dedupeKey;
 const fallbackId = fallbackIdBase.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
 const gameId = toStr(body.id || body.gameId || body.recordId) || fallbackId || `g_${Date.now()}`;
-const expectedRevision = body.revision !== null && body.revision !== undefined
-  && Number.isSafeInteger(Number(body.revision))
-  ? Number(body.revision)
+const expectedRevision = body.expectedRevision !== null && body.expectedRevision !== undefined
+  && Number.isSafeInteger(Number(body.expectedRevision))
+  && Number(body.expectedRevision) >= 1
+  ? Number(body.expectedRevision)
   : null;
-const expectedUpdatedAt = toStr(body.updatedAt || body.expectedUpdatedAt);
 
 const invitedPhonesFromPayload = uniq([
   ...asArray(body.invitedPhones).map((v) => normPhone(v)),
@@ -759,7 +759,7 @@ if (
   return [null, errMsg, errMsg, null];
 }
 
-if (mode === "confirm" && expectedRevision === null && !expectedUpdatedAt) {
+if (mode === "confirm" && expectedRevision === null) {
   const errorPayload = {
     error: "Черновик оплаты не содержит версии для безопасного подтверждения",
     code: "GAME_PAYMENT_STALE_GUARD_REQUIRED",
@@ -883,9 +883,19 @@ const resultRosterSnapshot = buildResultRosterSnapshot({
   seedSnapshot: snapshotSeed,
 });
 
+const tenantKey = toStr(body.tenantKey);
+if (!tenantKey) {
+  const errMsg = Object.assign({}, msg, {
+    statusCode: 400,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    payload: { error: "tenantKey is required", code: "LEGACY_GAME_TENANT_REQUIRED" },
+  });
+  return [null, errMsg, errMsg, null];
+}
+
 const record = {
   id: gameId,
-  tenantKey: toStr(body.tenantKey) || null,
+  tenantKey,
   source: toStr(body.source) || "padlhub_lk",
   dedupeKey,
   createdByFlow: true,
@@ -973,18 +983,16 @@ const paymentRefFilter = paymentRef
       ],
     }
   : { dedupeKey };
-const queryFilter = mode === "confirm"
-  ? {
-      $and: [
-        paymentRefFilter,
-        { archived: { $ne: true } },
-        { status: "PAYMENT_PENDING" },
-        expectedRevision !== null
-          ? { revision: expectedRevision }
-          : { updatedAt: expectedUpdatedAt },
-      ],
-    }
-  : paymentRefFilter;
+const queryFilter = {
+  tenantKey,
+  id: gameId,
+  revision: expectedRevision === null ? { $exists: false } : expectedRevision,
+  ...(mode === "confirm" ? {
+    archived: { $ne: true },
+    status: "PAYMENT_PENDING",
+  } : {}),
+  ...paymentRefFilter,
+};
 
 const dbMsg = Object.assign({}, msg, {
   query: queryFilter,
@@ -1005,6 +1013,7 @@ const dbMsg = Object.assign({}, msg, {
         $slice: -AUDIT_MAX_EVENTS,
       },
     },
+    $inc: { revision: 1 },
   },
   _recordForResponse: Object.assign(
     {
@@ -1017,6 +1026,7 @@ const dbMsg = Object.assign({}, msg, {
       },
     },
     record,
+    { revision: expectedRevision === null ? 1 : expectedRevision + 1 },
   ),
   _httpStatus: 200,
   _requestUrl: reqPathRaw,
@@ -1025,6 +1035,9 @@ const dbMsg = Object.assign({}, msg, {
     _gameConfirmWriteAck: {
       step: "write_ack",
       gameId,
+      tenantKey: toStr(body.tenantKey),
+      expectedRevision,
+      expectedNextRevision: expectedRevision === null ? null : expectedRevision + 1,
       paymentRef,
       transactionId: toStr(paymentVerification?.transactionId),
       bookingId: toStr(paymentVerification?.bookingId),

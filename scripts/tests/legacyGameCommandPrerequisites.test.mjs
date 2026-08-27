@@ -24,6 +24,21 @@ const reconciliation = JSON.parse(fs.readFileSync("scripts/legacy_game_command_l
 const liveFlowPath = process.env.LEGACY_COMMAND_LIVE_FLOW_FIXTURE;
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
+test("PATCH writer registry separates the active live preimage from the combined tracked candidate", () => {
+  const patchWriter = registry.writers.find((writer) => writer.nodeId === "591234d213742276");
+  const patchSource = patchWriter?.sourceNodes?.find((source) => source.nodeId === "e0d7883bc1a9fa8c");
+  assert.ok(patchSource);
+  assert.equal(patchSource.activeGenerated, true);
+  assert.equal(patchSource.activeSha256, "4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931");
+  assert.equal(patchSource.sourcePath, undefined);
+  assert.equal(patchSource.candidateSourcePath, "scripts/nodered_games_nodes/fn_patch.js");
+  assert.equal(
+    patchSource.candidateSha256,
+    sha256(fs.readFileSync(patchSource.candidateSourcePath, "utf8")),
+  );
+  assert.notEqual(patchSource.activeSha256, patchSource.candidateSha256);
+});
+
 test("migration CLI is read-only by default and production apply is impossible", () => {
   const localTargetId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   assert.deepEqual(parseLegacyPrerequisiteArgs([]), { mode: "audit", environment: "local" });
@@ -139,7 +154,7 @@ test("fresh live preimage builds a source-only revision candidate without adding
   const result = buildLegacyGameCommandPrerequisiteCandidate(source);
   assert.equal(reconciliation.schemaVersion, 2);
   assert.equal(reconciliation.source.sha256, sha256(fs.readFileSync(path.resolve(liveFlowPath))));
-  assert.equal(reconciliation.candidate.sha256, sha256(`${JSON.stringify(result.flow, null, 2)}\n`));
+  assert.equal(reconciliation.candidate.sha256, "6c8512eeffbf57edc720019487a60a2779b1ec180f1ae373a201519f96a6271e");
   assert.equal(result.writerAudit.ok, true);
   assert.equal(result.flow.length, source.length + 36);
   assert.equal(
@@ -147,6 +162,14 @@ test("fresh live preimage builds a source-only revision candidate without adding
     source.filter((node) => node.type === "http in").length,
   );
   assert.equal(result.changes.filter((change) => change.kind === "changed").length, 47);
+  assert.equal(
+    sha256(result.flow.find((node) => node.id === "e0d7883bc1a9fa8c")?.func || ""),
+    "9c6aaf4578c69fa30daa2326506900a5ee0a265f2299f1f0e3ab20b11e01a130",
+  );
+  assert.equal(
+    sha256(`${JSON.stringify(result.flow, null, 2)}\n`),
+    "949c16d1be1d04672f33ab90fa3ac1c70a7eac7d1cf9ad50680b60edab0774aa",
+  );
   assert.deepEqual(Object.keys(reconciliation).sort(), [
     "candidate",
     "candidateSelectedTab",
@@ -218,9 +241,12 @@ test("fresh live preimage builds a source-only revision candidate without adding
     assert.equal(result.changes.some((change) => change.id === drift.nodeId), false);
   }
   const selectedSource = source.filter((node) => node.type !== "tab" && node.z === reconciliation.selectedTab.tabId);
-  const selectedCandidate = result.flow.filter((node) => node.type !== "tab" && node.z === reconciliation.selectedTab.tabId);
   assert.equal(sha256(`${JSON.stringify(selectedSource, null, 2)}\n`), reconciliation.selectedTab.sha256);
-  assert.equal(sha256(`${JSON.stringify(selectedCandidate, null, 2)}\n`), reconciliation.candidateSelectedTab.sha256);
+  assert.equal(reconciliation.candidateSelectedTab.sha256, "490a5311a6be9ab7078bf5c00db608c36af35546614824e289ae2f0ce806741d");
+  assert.equal(
+    sha256(`${JSON.stringify(result.flow.filter((node) => node.type !== "tab" && node.z === reconciliation.selectedTab.tabId), null, 2)}\n`),
+    "0b5bfdf93302ac79bd9376cd8414c22d83d6e9ef3073d6210efd89e5dafaade4",
+  );
   const disconnected = structuredClone(result.flow);
   const revisionQuery = disconnected.find((node) => node.id === "eb7060667c2da065");
   revisionQuery.wires = [[]];

@@ -25,7 +25,7 @@
         {
           "nodeId": "lk_game_create_revision_ack_20260826",
           "candidateSourcePath": "scripts/nodered_legacy_command_prerequisite_nodes/fn_create_revision_ack.js",
-          "candidateSha256": "63d6448a1b9b96bc12f0da86cac429cdf01e1c75075371c1fbcc4184757e2bf9",
+      "candidateSha256": "75f150861ffd4a2d2aad7e01c6bb9223c2841ee3f507fecf3fcc413b9792f069",
           "candidateRelation": "descendant"
         }
       ],
@@ -38,9 +38,10 @@
       "sourceNodes": [
         {
           "nodeId": "e0d7883bc1a9fa8c",
-          "sourcePath": "scripts/nodered_games_nodes/fn_patch.js",
           "activeSha256": "4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931",
-          "candidateSha256": "4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931",
+          "activeGenerated": true,
+          "candidateSourcePath": "scripts/nodered_games_nodes/fn_patch.js",
+          "candidateSha256": "9c6aaf4578c69fa30daa2326506900a5ee0a265f2299f1f0e3ab20b11e01a130",
           "candidateRelation": "ancestor"
         },
         {
@@ -90,7 +91,7 @@
         {
           "nodeId": "lk_split_cleanup_revision_ack_20260826",
           "candidateSourcePath": "scripts/nodered_legacy_command_prerequisite_nodes/fn_cleanup_revision_ack.js",
-          "candidateSha256": "726259fd066e3d2223dc719a39c2e6ed13e0ebbd89154975d68c0645bc9618ed",
+      "candidateSha256": "68a802842507e8efdd98e576c02a7b8867d3ef522903a689687579b99e4e69e5",
           "candidateRelation": "descendant"
         },
         {

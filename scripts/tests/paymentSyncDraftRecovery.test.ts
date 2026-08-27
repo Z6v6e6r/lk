@@ -11,6 +11,8 @@ import {
 
 const pendingRecord = {
   id: "game-1",
+  tenantKey: "tenant-1",
+  revision: 7,
   inviteUrl: "https://padlhub.ru/game-1",
   status: "PAYMENT_PENDING",
   createdAt: "2026-08-26T08:00:00.000Z",
@@ -82,6 +84,9 @@ test("callback can rebuild the confirmation draft from a persisted server record
   const draft = buildPendingPaidGameDraftFromRecord(pendingRecord, "pay-1");
   assert.ok(draft);
   assert.equal(draft.payload.gameId, pendingRecord.id);
+  assert.equal(draft.payload.tenantKey, "tenant-1");
+  assert.equal(draft.payload.expectedRevision, 7);
+  assert.equal(draft.payload.expectedUpdatedAt, pendingRecord.updatedAt);
   assert.equal(draft.payload.status, "PAYMENT_PENDING");
   assert.equal(draft.payload.booking.exerciseId, "exercise-1");
   assert.deepEqual(draft.bookingIds, ["booking-1"]);
@@ -93,6 +98,14 @@ test("server fallback refuses an incomplete record", () => {
   assert.equal(buildPendingPaidGameDraftFromRecord({
     ...pendingRecord,
     booking: { ...pendingRecord.booking, roomId: null },
+  }, "pay-1"), null);
+  assert.equal(buildPendingPaidGameDraftFromRecord({
+    ...pendingRecord,
+    revision: null,
+  }, "pay-1"), null);
+  assert.equal(buildPendingPaidGameDraftFromRecord({
+    ...pendingRecord,
+    tenantKey: null,
   }, "pay-1"), null);
 });
 
@@ -113,7 +126,7 @@ test("split create persists and reads back before enqueue and redirect", () => {
   assert.match(handler.slice(persistServer, enqueue), /if \(!persistedDraft\.record\)[\s\S]*return;/);
 });
 
-test("payment callback only resolves a terminal server record and otherwise uses it as fallback", () => {
+test("payment callback only confirms from a fresh server revision, never a local stale draft", () => {
   const source = fs.readFileSync("src/utils/paymentSync.ts", "utf8");
   const lookup = source.indexOf("const byPaymentRef = await apiFetchPadelGameByPaymentRef");
   const terminalGuard = source.indexOf("isPersistedGamePaymentTerminal(persistedRecord)", lookup);
@@ -127,6 +140,7 @@ test("payment callback only resolves a terminal server record and otherwise uses
   assert.ok(confirm > recoveredDraft);
   assert.ok(concurrentReadback > confirm);
   assert.ok(registerFailure > concurrentReadback);
+  assert.doesNotMatch(source.slice(lookup, confirm), /getPendingPaidGameDraft\(paymentRef\)/);
   assert.doesNotMatch(source, /stage:\s*"legacy_create"/);
 });
 

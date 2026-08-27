@@ -180,7 +180,7 @@ const prepareUserGet = (ctx, step, path) => prepareHttp(
   { Authorization: ctx.authHeader, Accept: "application/json" },
 );
 
-const prepareManagedRuntimeContext = (ctx) => {
+const prepareManagedRuntimeContext = (ctx, step = "managed_runtime_context") => {
   const apiBase = (readGlobal("subscriptions_runtime_api_base_url") || "").replace(/\/+$/, "");
   const integrationToken = readGlobal("subscriptions_runtime_context_integration_token");
   if (!apiBase || !/^https:\/\//i.test(apiBase) || !integrationToken) {
@@ -190,7 +190,7 @@ const prepareManagedRuntimeContext = (ctx) => {
   }
   return prepareHttp(
     ctx,
-    "managed_runtime_context",
+    step,
     "POST",
     `${apiBase}/internal/subscriptions/runtime-context`,
     { clientSubscriptionId: ctx.clientSubscriptionId },
@@ -385,6 +385,26 @@ const PLAN_PRODUCT_IDS = {
   ra: "b91e14d1-fe6e-4d0b-be39-3e45ad86b759",
 };
 
+const MANAGED_PLAN_DEFAULT_PRODUCT_IDS = {
+  network_friendship: ["db7a5250-7369-4f43-8ac5-9111be24bc74"],
+  piter_friendship: ["8bf334ba-3050-4017-b40a-7eef2db1eb16"],
+};
+
+const managedPlanProductIds = () => {
+  const resolved = {};
+  for (const [planKey, defaults] of Object.entries(MANAGED_PLAN_DEFAULT_PRODUCT_IDS)) {
+    const ids = new Set(defaults.map(normalizeId));
+    const configured = toStr(global.get(`summer_subscription_${planKey}_product_id`));
+    if (configured) ids.add(normalizeId(configured));
+    for (let tier = 1; tier <= 4; tier += 1) {
+      const tierId = toStr(global.get(`summer_subscription_${planKey}_tier_${tier}_product_id`));
+      if (tierId) ids.add(normalizeId(tierId));
+    }
+    resolved[planKey] = ids;
+  }
+  return resolved;
+};
+
 const collectPlanMarkers = (value, seen = new Set()) => {
   if (value === null || value === undefined) return [];
   if (typeof value === "string" || typeof value === "number") return [String(value)];
@@ -401,8 +421,34 @@ const collectPlanMarkers = (value, seen = new Set()) => {
   return markers;
 };
 
+const collectExactProductIds = (value) => {
+  if (!isObj(value)) return [];
+  const ids = [value.productId, value.subscriptionProductId, value.templateId]
+    .map(normalizeId)
+    .filter(Boolean);
+  const addProductShapeIds = (nested) => {
+    if (!isObj(nested)) return;
+    ids.push(...[nested.id, nested.uuid, nested.productId].map(normalizeId).filter(Boolean));
+  };
+  addProductShapeIds(value.product);
+  addProductShapeIds(value.template);
+  if (isObj(value.subscription)) {
+    ids.push(...[value.subscription.productId, value.subscription.subscriptionProductId]
+      .map(normalizeId)
+      .filter(Boolean));
+    addProductShapeIds(value.subscription.product);
+    addProductShapeIds(value.subscription.template);
+  }
+  return ids;
+};
+
 const resolvePlanKey = (value) => {
   const markers = collectPlanMarkers(value);
+  const exactProductIds = collectExactProductIds(value);
+  const managedProductIds = managedPlanProductIds();
+  for (const [planKey, productIds] of Object.entries(managedProductIds)) {
+    if (exactProductIds.some((productId) => productIds.has(productId))) return planKey;
+  }
   for (const [planKey, productId] of Object.entries(PLAN_PRODUCT_IDS)) {
     if (markers.some((marker) => normalizeId(marker) === productId)) return planKey;
   }
@@ -445,6 +491,12 @@ const MANAGED_PLAN_KEYS = new Set([
   "piter_friendship",
 ]);
 
+const hasExactManagedProductId = (value, planKey) => {
+  const productIds = managedPlanProductIds()[planKey];
+  if (!productIds) return true;
+  return collectExactProductIds(value).some((productId) => productIds.has(productId));
+};
+
 const resolveLimitMode = (planKey, serviceDate) => {
   if (!planKey) return "event";
   return serviceDate >= SHARED_LIMIT_FROM ? "shared_day" : "category_day";
@@ -462,6 +514,19 @@ const numericId = (value) => {
   return Number(value);
 };
 const markerName = (value) => (isObj(value) ? toStr(value.name || value.title || value.label) : toStr(value));
+
+const managedExternalEventTypeId = (value) => {
+  const exercise = isObj(value?.exercise) ? value.exercise : value;
+  if (!isObj(exercise)) return null;
+  const type = exercise.type || exercise.exerciseType || exercise.serviceType || value?.exerciseType;
+  const direction = exercise.direction || exercise.exerciseDirection || value?.exerciseDirection;
+  const typeId = numericId(type ?? exercise.typeId ?? value?.exerciseTypeId);
+  const directionId = numericId(direction ?? exercise.directionId ?? value?.exerciseDirectionId);
+  if (!Number.isInteger(directionId) || directionId <= 0 || !Number.isInteger(typeId) || typeId <= 0) {
+    return null;
+  }
+  return `viva:direction:${directionId}:type:${typeId}`;
+};
 
 const resolveCategory = (value) => {
   const exercise = isObj(value?.exercise) ? value.exercise : value;
@@ -921,6 +986,52 @@ const prepareBookingCreate = (ctx) => {
   );
 };
 
+const prepareManagedPolicyEvaluation = (ctx, step) => {
+  ctx.step = step;
+  const evaluatedAt = new Date().toISOString();
+  const policyInstance = ctx.managedActivationRequired
+    ? projectedFirstUseInstance(
+      ctx.managedRuntime.instance,
+      ctx.managedRuntime.policy.lifecycle,
+      evaluatedAt,
+    )
+    : ctx.managedRuntime.instance;
+  if (!policyInstance) {
+    if (step === "managed_policy_recheck_decision") {
+      return prepareFailedUpdate(
+        ctx,
+        409,
+        "Нельзя безопасно рассчитать период первой активации",
+        "SUBSCRIPTION_ACTIVATION_RANGE_INVALID",
+      );
+    }
+    return finishError(ctx, 409, "Нельзя безопасно рассчитать период первой активации", {
+      code: "SUBSCRIPTION_ACTIVATION_RANGE_INVALID",
+    });
+  }
+  msg._subscriptionBooking = ctx;
+  msg._managedSubscriptionPolicyInput = {
+    evaluatedAt,
+    action: ctx.managedAction,
+    policy: ctx.managedRuntime.policy,
+    instance: policyInstance,
+    target: ctx.managedTarget,
+    usage: {
+      activeServiceScope: ctx.managedRuntime.policy.activeServicesLimit?.scope
+        || "SUBSCRIPTION_BENEFIT_ONLY",
+      dailyBucketLocalDate: ctx.serviceDate,
+      activeServices: 0,
+      dailyUsed: 0,
+      weeklyUsed: 0,
+      monthlyUsed: 0,
+      futureBookings: 0,
+      activeServiceStartsAt: [],
+    },
+  };
+  delete msg.error;
+  return emit(OUTPUT_MANAGED_POLICY);
+};
+
 const ctx = isObj(msg._subscriptionBooking) ? msg._subscriptionBooking : null;
 if (!ctx) {
   return finishError({}, 500, "Контекст серверной записи по абонементу потерян", {
@@ -979,6 +1090,12 @@ if (ctx.step === "exercise") {
   ctx.subscriptionName = pickName(ownedSubscription);
   ctx.planKey = resolvePlanKey(ownedSubscription) || resolvePlanKey(ctx.subscriptionName);
   if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
+    if (!hasExactManagedProductId(ownedSubscription, ctx.planKey)) {
+      return finishError(ctx, 409, "Годовая подписка требует точной продуктовой привязки", {
+        code: "MANAGED_SUBSCRIPTION_PRODUCT_MAPPING_REQUIRED",
+        planKey: ctx.planKey,
+      });
+    }
     if (ctx.planKey === "kotelniki_friendship") {
       return finishError(ctx, 409, "Подписка Котельников ещё не подключена к правилам записи", {
         code: "MANAGED_SUBSCRIPTION_PLAN_NOT_ACTIVATED",
@@ -996,10 +1113,7 @@ if (ctx.step === "exercise") {
       resolutionSource: "SERVER",
       stationId: ctx.studioId,
       category: managedTargetCategory(ctx.category),
-      externalEventTypeId: toStr(
-        exercise.type?.id || exercise.exerciseType?.id || exercise.typeId
-        || exercise.direction?.id || exercise.exerciseDirection?.id || exercise.directionId,
-      ),
+      externalEventTypeId: managedExternalEventTypeId(exercise),
       productTypeId: null,
       eventId: actualExerciseId,
       durationMinutes: eventDurationMinutes(exercise),
@@ -1039,10 +1153,7 @@ if (ctx.step === "exercise") {
       resolutionSource: "SERVER",
       stationId: ctx.studioId,
       category: managedTargetCategory(ctx.category),
-      externalEventTypeId: toStr(
-        exercise.type?.id || exercise.exerciseType?.id || exercise.typeId
-        || exercise.direction?.id || exercise.exerciseDirection?.id || exercise.directionId,
-      ),
+      externalEventTypeId: managedExternalEventTypeId(exercise),
       productTypeId: null,
       eventId: actualExerciseId,
       durationMinutes: eventDurationMinutes(exercise),
@@ -1068,8 +1179,14 @@ if (ctx.step === "subscription_name") {
   }
   const payload = unwrapRecord(msg.payload) || msg.payload;
   ctx.subscriptionName = toStr(payload?.sertName || payload?.subscriptionName || payload?.name);
-  ctx.planKey = resolvePlanKey(ctx.subscriptionName);
+  ctx.planKey = resolvePlanKey(payload) || resolvePlanKey(ctx.subscriptionName);
   if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
+    if (!hasExactManagedProductId(payload, ctx.planKey)) {
+      return finishError(ctx, 409, "Годовая подписка требует точной продуктовой привязки", {
+        code: "MANAGED_SUBSCRIPTION_PRODUCT_MAPPING_REQUIRED",
+        planKey: ctx.planKey,
+      });
+    }
     if (ctx.planKey === "kotelniki_friendship") {
       return finishError(ctx, 409, "Подписка Котельников ещё не подключена к правилам записи", {
         code: "MANAGED_SUBSCRIPTION_PLAN_NOT_ACTIVATED",
@@ -1116,9 +1233,58 @@ if (ctx.step === "subscription_name") {
   return prepareUserGet(ctx, "active_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
 }
 
-if (ctx.step === "managed_runtime_context") {
+if (ctx.step === "exercise_recheck") {
   if (!isHttpOk(msg.statusCode)) {
-    return finishError(ctx, 409, "Опубликованные правила подписки сейчас недоступны", {
+    return prepareFailedUpdate(
+      ctx,
+      409,
+      "Не удалось повторно подтвердить доступность подписки перед записью",
+      "SUBSCRIPTION_ELIGIBILITY_RECHECK_UNAVAILABLE",
+    );
+  }
+  const exercise = unwrapRecord(msg.payload);
+  const actualExerciseId = toStr(exercise?.id || exercise?.exerciseId || exercise?.uuid);
+  const ownedSubscription = findOwnedSubscription(exercise, ctx.clientSubscriptionId);
+  const nextPlanKey = resolvePlanKey(ownedSubscription) || resolvePlanKey(ctx.subscriptionName);
+  const nextServiceDate = eventDate(exercise);
+  const nextCategory = resolveCategory(exercise);
+  const nextStudioId = toStr(exercise?.studio?.id || exercise?.studioId);
+  const managedIdentityMatches = !MANAGED_PLAN_KEYS.has(ctx.planKey) || (
+    hasExactManagedProductId(ownedSubscription, ctx.planKey)
+    && managedExternalEventTypeId(exercise) === ctx.managedTarget?.externalEventTypeId
+    && eventDurationMinutes(exercise) === ctx.managedTarget?.durationMinutes
+    && eventStartsAt(exercise) === ctx.managedTarget?.startsAt
+  );
+  if (!exercise
+    || normalizeId(actualExerciseId) !== normalizeId(ctx.exerciseId)
+    || !ownedSubscription
+    || nextPlanKey !== ctx.planKey
+    || nextServiceDate !== ctx.serviceDate
+    || nextCategory !== ctx.category
+    || normalizeId(nextStudioId) !== normalizeId(ctx.studioId)
+    || !managedIdentityMatches) {
+    return prepareFailedUpdate(
+      ctx,
+      409,
+      "Доступность или параметры подписки изменились до записи",
+      "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE",
+    );
+  }
+  if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
+    return prepareManagedRuntimeContext(ctx, "managed_runtime_recheck");
+  }
+  return prepareBookingCreate(ctx);
+}
+
+if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
+  const isRecheck = ctx.step === "managed_runtime_recheck";
+  const rejectRuntime = (statusCode, error, details) => (
+    isRecheck
+      ? prepareFailedUpdate(ctx, statusCode, error, details?.code)
+      : finishError(ctx, statusCode, error, details)
+  );
+  if (!isHttpOk(msg.statusCode)) {
+    return rejectRuntime(409, "Опубликованные правила подписки сейчас недоступны", {
       code: "MANAGED_SUBSCRIPTION_RUNTIME_CONTEXT_UNAVAILABLE",
       upstreamStatus: Number(msg.statusCode) || null,
     });
@@ -1134,7 +1300,7 @@ if (ctx.step === "managed_runtime_context") {
     || policy.policyVersion !== instance.policyVersion
     || !Number.isInteger(runtime.evidence?.instanceRevision)
     || policy.subscriptionTypeId !== instance.subscriptionTypeId) {
-    return finishError(ctx, 502, "ЦУП вернул несогласованный контекст подписки", {
+    return rejectRuntime(502, "ЦУП вернул несогласованный контекст подписки", {
       code: "MANAGED_SUBSCRIPTION_RUNTIME_CONTEXT_INVALID",
     });
   }
@@ -1188,7 +1354,7 @@ if (ctx.step === "managed_runtime_context") {
       rule?.enabled === true && ["GROUP_TRAINING", "TOURNAMENT", "ADD_ON_PRODUCT"].includes(rule.category)
     )));
   if (unsupportedUsage || regionalRulesUnsupported) {
-    return finishError(ctx, 409, "Эта версия правил требует ещё не подключённого счётчика", {
+    return rejectRuntime(409, "Эта версия правил требует ещё не подключённого счётчика", {
       code: "MANAGED_SUBSCRIPTION_POLICY_UNSUPPORTED",
       policyVersion: policy.policyVersion ?? null,
     });
@@ -1197,17 +1363,39 @@ if (ctx.step === "managed_runtime_context") {
     && instance.activeFrom === null
     && instance.activeTo === null;
   if (pendingFirstUse && !managedActivationConfigured()) {
-    return finishError(ctx, 503, "Активация подписки после первой записи ещё не настроена", {
+    return rejectRuntime(503, "Активация подписки после первой записи ещё не настроена", {
       code: "SUBSCRIPTION_ACTIVATION_NOT_CONFIGURED",
     });
   }
-  ctx.managedRuntime = {
+  const nextManagedRuntime = {
     subscriptionInstanceId: runtime.subscriptionInstanceId,
     policyDigest: runtime.policyDigest,
     policy,
     instance,
     evidence: runtime.evidence || null,
   };
+  if (isRecheck) {
+    const previous = ctx.managedRuntime;
+    const identityChanged = !isObj(previous)
+      || previous.subscriptionInstanceId !== nextManagedRuntime.subscriptionInstanceId
+      || previous.policyDigest !== nextManagedRuntime.policyDigest
+      || previous.policy?.policyVersion !== nextManagedRuntime.policy?.policyVersion
+      || previous.instance?.subscriptionTypeId !== nextManagedRuntime.instance?.subscriptionTypeId
+      || previous.evidence?.instanceRevision !== nextManagedRuntime.evidence?.instanceRevision
+      || ctx.managedActivationRequired !== pendingFirstUse;
+    if (identityChanged) {
+      return prepareFailedUpdate(
+        ctx,
+        409,
+        "Контекст подписки изменился до записи; требуется повторная проверка",
+        "MANAGED_SUBSCRIPTION_RUNTIME_CHANGED_BEFORE_WRITE",
+      );
+    }
+    ctx.managedRuntime = nextManagedRuntime;
+    ctx.managedActivationExpectedRevision = runtime.evidence.instanceRevision;
+    return prepareManagedPolicyEvaluation(ctx, "managed_policy_recheck_decision");
+  }
+  ctx.managedRuntime = nextManagedRuntime;
   ctx.managedActivationRequired = pendingFirstUse;
   ctx.managedActivationExpectedRevision = runtime.evidence.instanceRevision;
   return prepareUserGet(ctx, "active_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
@@ -1354,51 +1542,39 @@ if (ctx.step === "history_bookings") {
         code: "MANAGED_SUBSCRIPTION_CONTEXT_MISSING",
       });
     }
-    ctx.step = "managed_policy_decision";
-    const evaluatedAt = new Date().toISOString();
-    const policyInstance = ctx.managedActivationRequired
-      ? projectedFirstUseInstance(
-        ctx.managedRuntime.instance,
-        ctx.managedRuntime.policy.lifecycle,
-        evaluatedAt,
-      )
-      : ctx.managedRuntime.instance;
-    if (!policyInstance) {
-      return finishError(ctx, 409, "Нельзя безопасно рассчитать период первой активации", {
-        code: "SUBSCRIPTION_ACTIVATION_RANGE_INVALID",
-      });
-    }
-    msg._subscriptionBooking = ctx;
-    msg._managedSubscriptionPolicyInput = {
-      evaluatedAt,
-      action: ctx.managedAction,
-      policy: ctx.managedRuntime.policy,
-      instance: policyInstance,
-      target: ctx.managedTarget,
-      usage: {
-        activeServiceScope: ctx.managedRuntime.policy.activeServicesLimit?.scope
-          || "SUBSCRIPTION_BENEFIT_ONLY",
-        dailyBucketLocalDate: ctx.serviceDate,
-        activeServices: 0,
-        dailyUsed: 0,
-        weeklyUsed: 0,
-        monthlyUsed: 0,
-        futureBookings: 0,
-        activeServiceStartsAt: [],
-      },
-    };
-    delete msg.error;
-    return emit(OUTPUT_MANAGED_POLICY);
+    return prepareManagedPolicyEvaluation(ctx, "managed_policy_decision");
   }
   return prepareOperationFind(ctx);
 }
 
-if (ctx.step === "managed_policy_decision") {
+if (["managed_policy_decision", "managed_policy_recheck_decision"].includes(ctx.step)) {
+  const isRecheck = ctx.step === "managed_policy_recheck_decision";
   const decision = msg._managedSubscriptionPolicyDecision;
   if (!isObj(decision) || decision.eligible !== true
     || decision.policyVersion !== ctx.managedRuntime?.policy?.policyVersion) {
+    if (isRecheck) {
+      return prepareFailedUpdate(
+        ctx,
+        409,
+        "Правила подписки не разрешили эту запись",
+        "MANAGED_SUBSCRIPTION_POLICY_BLOCKED",
+      );
+    }
     return finishError(ctx, 409, "Правила подписки не разрешили эту запись", {
       code: "MANAGED_SUBSCRIPTION_POLICY_BLOCKED",
+    });
+  }
+  if (decision.benefit?.kind !== "FREE_ENTITLEMENT") {
+    if (isRecheck) {
+      return prepareFailedUpdate(
+        ctx,
+        409,
+        "Правила подписки не покрывают это действие",
+        "MANAGED_SUBSCRIPTION_BENEFIT_NOT_APPLICABLE",
+      );
+    }
+    return finishError(ctx, 409, "Правила подписки не покрывают это действие", {
+      code: "MANAGED_SUBSCRIPTION_BENEFIT_NOT_APPLICABLE",
     });
   }
   ctx.managedDecision = {
@@ -1411,6 +1587,7 @@ if (ctx.step === "managed_policy_decision") {
   };
   delete msg._managedSubscriptionPolicyInput;
   delete msg._managedSubscriptionPolicyDecision;
+  if (isRecheck) return prepareBookingCreate(ctx);
   return prepareOperationFind(ctx);
 }
 
@@ -1614,7 +1791,11 @@ if (ctx.step === "operation_preaccept") {
   if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
     return finishPending(ctx, "Не удалось подтвердить владельца атомарной операции");
   }
-  return prepareBookingCreate(ctx);
+  return prepareUserGet(
+    ctx,
+    "exercise_recheck",
+    `/end-user/api/v1/${ctx.tenantKey}/exercises/${encodeURIComponent(ctx.exerciseId)}`,
+  );
 }
 
 if (ctx.step === "booking_create") {

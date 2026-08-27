@@ -102,6 +102,9 @@ export function buildPendingPaidGameDraftFromRecord(
   paymentRefRaw: string,
 ): RecoveredPendingPaidGameDraft | null {
   const paymentRef = paymentRefRaw.trim();
+  const tenantKey = toStringSafe(record.tenantKey);
+  const revision = Number(record.revision);
+  const expectedUpdatedAt = toStringSafe(record.updatedAt);
   const organizer = record.organizer;
   const booking = record.booking;
   const studioId = toStringSafe(booking?.studioId);
@@ -113,6 +116,10 @@ export function buildPendingPaidGameDraftFromRecord(
   if (
     !record.id
     || !paymentRef
+    || !tenantKey
+    || !Number.isSafeInteger(revision)
+    || revision < 1
+    || !expectedUpdatedAt
     || !organizer
     || !studioId
     || !roomId
@@ -138,6 +145,9 @@ export function buildPendingPaidGameDraftFromRecord(
     updatedAt: toStringSafe(record.updatedAt) ?? nowIso,
     payload: {
       gameId: record.id,
+      tenantKey,
+      expectedRevision: revision,
+      expectedUpdatedAt,
       paymentRef,
       status: "PAYMENT_PENDING",
       organizer: {

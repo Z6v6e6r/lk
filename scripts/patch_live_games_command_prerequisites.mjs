@@ -228,6 +228,64 @@ function replaceOnce(source, before, after, label) {
 
 export function upgradeLegacyGameWriterFunction(nodeId, source) {
   if (nodeId === IDS.create) {
+    if (source.includes("GAME_PAYMENT_CONFIRM_GUARD_START")) {
+      let next = replaceOnce(
+        source,
+        "const record = {\n  id: gameId,\n  tenantKey: toStr(body.tenantKey) || null,",
+        "const tenantKey = toStr(body.tenantKey);\nif (!tenantKey) {\n  const errMsg = Object.assign({}, msg, {\n    statusCode: 400,\n    headers: { \"Content-Type\": \"application/json; charset=utf-8\" },\n    payload: { error: \"tenantKey is required\", code: \"LEGACY_GAME_TENANT_REQUIRED\" },\n  });\n  return [null, errMsg, errMsg, null];\n}\n\nconst record = {\n  id: gameId,\n  tenantKey,",
+        "combined create tenant precondition",
+      );
+      next = replaceOnce(
+        next,
+        `const queryFilter = mode === "confirm"
+  ? {
+      $and: [
+        paymentRefFilter,
+        { archived: { $ne: true } },
+        { status: "PAYMENT_PENDING" },
+        expectedRevision !== null
+          ? { revision: expectedRevision }
+          : { updatedAt: expectedUpdatedAt },
+      ],
+    }
+  : paymentRefFilter;`,
+        `const queryFilter = {
+  tenantKey,
+  id: gameId,
+  revision: expectedRevision === null ? { $exists: false } : expectedRevision,
+  ...(mode === "confirm" ? {
+    archived: { $ne: true },
+    status: "PAYMENT_PENDING",
+  } : {}),
+  ...paymentRefFilter,
+};`,
+        "combined create identity revision filter",
+      );
+      next = replaceOnce(
+        next,
+        "    $push: {\n      \"audit.events\": {\n        $each: [auditEvent],\n        $slice: -AUDIT_MAX_EVENTS,\n      },\n    },",
+        "    $push: {\n      \"audit.events\": {\n        $each: [auditEvent],\n        $slice: -AUDIT_MAX_EVENTS,\n      },\n    },\n    $inc: { revision: 1 },",
+        "combined create revision increment",
+      );
+      next = replaceOnce(
+        next,
+        "    record,\n  ),",
+        "    record,\n    { revision: expectedRevision === null ? 1 : expectedRevision + 1 },\n  ),",
+        "combined create response revision",
+      );
+      next = replaceOnce(
+        next,
+        `return [
+  dbMsg,
+  mode === "confirm" ? null : responseMsg,
+  debugMsg,
+  mode === "confirm" ? null : autojoinMsg,
+];`,
+        "dbMsg._createRevisionDebug = debugMsg.payload;\nreturn [dbMsg, null, null, null];",
+        "combined create acknowledgement gate",
+      );
+      return next;
+    }
     let next = replaceOnce(
       source,
       "const record = {\n  id: gameId,\n  tenantKey: toStr(body.tenantKey) || null,",
@@ -275,6 +333,51 @@ export function upgradeLegacyGameWriterFunction(nodeId, source) {
     return next;
   }
   if (nodeId === IDS.cleanupRouter) {
+    if (source.includes("_splitCleanupWriteAck")) {
+      let next = replaceOnce(
+        source,
+        `    query: {
+      id: ctx.gameId,
+      archived: { $ne: true },
+      ...(ctx.expectedRevision !== null
+        ? { revision: ctx.expectedRevision }
+        : { updatedAt: ctx.expectedUpdatedAt }),
+      ...(toStr(ctx.statusBefore) ? { status: toStr(ctx.statusBefore) } : {}),
+    },`,
+        `    query: {
+      tenantKey: ctx.sourceTenantKey,
+      id: ctx.gameId,
+      archived: { $ne: true },
+      revision: ctx.sourceRevision,
+      ...(toStr(ctx.statusBefore) ? { status: toStr(ctx.statusBefore) } : {}),
+    },`,
+        "combined cleanup CAS query",
+      );
+      next = replaceOnce(
+        next,
+        "      $push: {\n        \"audit.events\": {\n          $each: [auditEvent],\n          $slice: -AUDIT_MAX_EVENTS,\n        },\n      },\n    },",
+        "      $push: {\n        \"audit.events\": {\n          $each: [auditEvent],\n          $slice: -AUDIT_MAX_EVENTS,\n        },\n      },\n      $inc: { revision: 1 },\n    },",
+        "combined cleanup revision increment",
+      );
+      next = replaceOnce(
+        next,
+        "    mode: toStr(payload?.mode) || \"GAME_CLEANUP\",\n    gameId,\n    tenantKey: toStr(payload?.tenantKey),\n    reason:",
+        "    mode: toStr(payload?.mode) || \"GAME_CLEANUP\",\n    gameId,\n    tenantKey: toStr(payload?.tenantKey),\n    sourceTenantKey: toStr(payload?.tenantKey),\n    sourceRevision: Number.isSafeInteger(payload?.revision) ? payload.revision : null,\n    reason:",
+        "combined cleanup revision context",
+      );
+      next = replaceOnce(
+        next,
+        "  if (initialCtx.mode === \"PARTICIPANT_TIMEOUT\") {",
+        "  if (!initialCtx.sourceTenantKey || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(initialCtx.sourceTenantKey)) {\n    initialCtx.blockLocalMutation = true;\n    initialCtx.blockReason = \"legacy_game_tenant_required\";\n    appendTrace(initialCtx, { step: \"blocked_missing_game_tenant\", gameId });\n    return finalizeTask(initialCtx);\n  }\n  if (!Number.isSafeInteger(initialCtx.sourceRevision) || initialCtx.sourceRevision < 1) {\n    initialCtx.blockLocalMutation = true;\n    initialCtx.blockReason = \"legacy_game_revision_required\";\n    appendTrace(initialCtx, { step: \"blocked_missing_game_revision\", gameId });\n    return finalizeTask(initialCtx);\n  }\n  if (initialCtx.mode === \"PARTICIPANT_TIMEOUT\") {",
+        "combined cleanup missing-revision gate",
+      );
+      return replaceOnce(
+        next,
+        "  return [null, dbMsg, null, null];",
+        "  dbMsg._splitCleanupRevisionDeferred = {\n    tenantKey: ctx.sourceTenantKey,\n    gameId: ctx.gameId,\n    sourceRevision: ctx.sourceRevision,\n    operationKey: ctx.operationKey,\n    summaryMsg,\n  };\n  return [null, dbMsg, null, null];",
+        "combined cleanup acknowledgement gate",
+      );
+    }
     let next = replaceOnce(
       source,
       "      id: ctx.gameId,\n      archived: { $ne: true },\n    },",
@@ -518,6 +621,10 @@ export function buildLegacyGameCommandPrerequisiteCandidate(source) {
   exactNode(flow, IDS.cleanupResponse, "join");
   exactNode(flow, IDS.cleanupDebug, "debug");
   const template = exactNode(flow, IDS.splitLeave, "function");
+
+  // The active flow preimage remains pinned above. The combined candidate must use
+  // the task-owned fail-closed PATCH source before the revision/CAS gates are wired.
+  patchPrepare.func = readFn("fn_patch.js");
 
   const expectedWires = new Map([
     [IDS.patchRoute, [[IDS.patchPrepare]]],

@@ -62,7 +62,7 @@ export const CONTRACT = Object.freeze({
   ],
 });
 
-const IDS = Object.freeze({
+export const PAYMENT_NODE_IDS = Object.freeze({
   lookup: "lk_game_payment_confirm_lookup_20260826",
   find: "lk_game_payment_confirm_find_20260826",
   router: "lk_game_payment_confirm_router_20260826",
@@ -76,6 +76,7 @@ const IDS = Object.freeze({
   cleanupWriteAck: "lk_split_cleanup_write_ack_20260826",
   cleanupWriteReadback: "lk_split_cleanup_write_readback_20260826",
 });
+const IDS = PAYMENT_NODE_IDS;
 const RESPONSE_ID = "ae5ee70de15fe66e";
 const DEBUG_ID = "60a3353902ae9973";
 
@@ -184,11 +185,12 @@ if (internalAction) {
     patched,
     "const gameId = toStr(body.id || body.gameId || body.recordId) || fallbackId || `g_${Date.now()}`;\n",
     `const gameId = toStr(body.id || body.gameId || body.recordId) || fallbackId || \`g_\${Date.now()}\`;
-const expectedRevision = body.revision !== null && body.revision !== undefined
-  && Number.isSafeInteger(Number(body.revision))
-  ? Number(body.revision)
+const expectedRevision = body.expectedRevision !== null && body.expectedRevision !== undefined
+  && Number.isSafeInteger(Number(body.expectedRevision))
+  && Number(body.expectedRevision) >= 1
+  ? Number(body.expectedRevision)
   : null;
-const expectedUpdatedAt = toStr(body.updatedAt || body.expectedUpdatedAt);
+const expectedUpdatedAt = toStr(body.expectedUpdatedAt);
 `,
     "stale guard inputs",
   );
@@ -258,6 +260,9 @@ const queryFilter = mode === "confirm"
     _gameConfirmWriteAck: {
       step: "write_ack",
       gameId,
+      tenantKey: toStr(body.tenantKey),
+      expectedRevision,
+      expectedNextRevision: expectedRevision === null ? null : expectedRevision + 1,
       paymentRef,
       transactionId: toStr(paymentVerification?.transactionId),
       bookingId: toStr(paymentVerification?.bookingId),

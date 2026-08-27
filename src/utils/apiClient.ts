@@ -3143,6 +3143,7 @@ export interface PadelGameRecordPayload {
 
 export interface PadelGameRecord {
   id: string;
+  tenantKey?: string | null;
   revision?: number | null;
   inviteUrl: string | null;
   status: string | null;

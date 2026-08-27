@@ -30,46 +30,53 @@ const response = (ctx, ok, code = null, error = null) => {
   delete out._splitCleanupWriteAck;
   return [null, out, out];
 };
+const recover = (ctx, code, error) => {
+  msg._splitCleanupPaymentReadbackFailure = { code, error };
+  return [null, null, null, msg];
+};
 
 const ctx = msg._splitCleanupWriteAck && typeof msg._splitCleanupWriteAck === "object"
   ? msg._splitCleanupWriteAck
   : null;
-if (!ctx?.gameId) return response(ctx, false, "SPLIT_CLEANUP_ACK_CONTEXT_MISSING", "Cleanup write acknowledgement context is missing");
+if (!ctx?.gameId || !ctx?.tenantKey || !Number.isSafeInteger(ctx?.expectedNextRevision)) {
+  return recover(ctx, "SPLIT_CLEANUP_ACK_CONTEXT_MISSING", "Cleanup write acknowledgement context is missing");
+}
 
 if (ctx.step === "write_ack") {
   const acknowledged = msg.payload?.acknowledged === true;
   const matchedCount = Number(msg.payload?.matchedCount);
   if (!acknowledged || matchedCount !== 1) {
-    return response(
+    return recover(
       ctx,
-      false,
       acknowledged ? "SPLIT_CLEANUP_CAS_MISS" : "SPLIT_CLEANUP_WRITE_ACK_INVALID",
       acknowledged ? "Cleanup state changed before persistence" : "Mongo did not acknowledge cleanup persistence",
     );
   }
   ctx.step = "readback";
   msg._splitCleanupWriteAck = ctx;
-  msg.payload = { id: ctx.gameId };
+  msg.payload = { tenantKey: ctx.tenantKey, id: ctx.gameId, revision: ctx.expectedNextRevision };
   msg.limit = 2;
   msg.sort = { updatedAt: -1, _id: -1 };
   return [msg, null, null];
 }
 
 if (ctx.step !== "readback") {
-  return response(ctx, false, "SPLIT_CLEANUP_ACK_STEP_INVALID", "Unsupported cleanup acknowledgement step");
+  return recover(ctx, "SPLIT_CLEANUP_ACK_STEP_INVALID", "Unsupported cleanup acknowledgement step");
 }
 const records = asArray(msg.payload).filter((item) => item && typeof item === "object");
 if (records.length !== 1) {
-  return response(ctx, false, "SPLIT_CLEANUP_READBACK_FAILED", "Cleanup readback is missing or ambiguous");
+  return recover(ctx, "SPLIT_CLEANUP_READBACK_FAILED", "Cleanup readback is missing or ambiguous");
 }
 const record = records[0];
 const exact = (
   toStr(record.id) === toStr(ctx.gameId)
+  && toStr(record.tenantKey) === toStr(ctx.tenantKey)
+  && Number(record.revision) === Number(ctx.expectedNextRevision)
   && toStr(record.updatedAt) === toStr(ctx.expectedUpdatedAt)
   && (!ctx.expectedStatus || toStr(record.status) === toStr(ctx.expectedStatus))
   && (ctx.expectedPaid === null || record?.payment?.paid === ctx.expectedPaid)
 );
 if (!exact) {
-  return response(ctx, false, "SPLIT_CLEANUP_READBACK_MISMATCH", "Cleanup state was not durably applied");
+  return recover(ctx, "SPLIT_CLEANUP_READBACK_MISMATCH", "Cleanup state was not durably applied");
 }
 return response(ctx, true);

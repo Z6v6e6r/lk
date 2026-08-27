@@ -414,6 +414,8 @@ rows.forEach((game) => {
     tasks.push({
       mode: "PARTICIPANT_TIMEOUT",
       gameId,
+      tenantKey: game?.tenantKey,
+      revision: game?.revision,
       reason: "PAYMENT_TIMEOUT",
       statusBefore: status || null,
       expectedRevision: game?.revision !== null && game?.revision !== undefined
@@ -537,6 +539,8 @@ rows.forEach((game) => {
   tasks.push({
     mode: "GAME_CLEANUP",
     gameId,
+    tenantKey: game?.tenantKey,
+    revision: game?.revision,
     reason,
     shareCount,
     participantsCount,

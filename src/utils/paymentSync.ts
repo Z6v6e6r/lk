@@ -580,10 +580,12 @@ async function processPendingPaymentSyncQueueUnlocked(
         continue;
       }
 
-      const draft = getPendingPaidGameDraft(paymentRef)
-        ?? (persistedRecord
-          ? buildPendingPaidGameDraftFromRecord(persistedRecord, paymentRef)
-          : null);
+      // Confirmation must be bound to the latest persisted identity and revision.
+      // A browser draft can survive a concurrent roster update and is therefore
+      // never authoritative for the payment CAS.
+      const draft = persistedRecord
+        ? buildPendingPaidGameDraftFromRecord(persistedRecord, paymentRef)
+        : null;
       if (!draft) {
         const errorMessage =
           byPaymentRef.error?.message || "Черновик игры после оплаты не найден";

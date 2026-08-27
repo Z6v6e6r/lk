@@ -8,9 +8,9 @@ import {
   synchronizeGamesPatch,
 } from '../patch_live_games_patch.mjs';
 
-const LIVE_FLOW_SHA256 = 'fc9daeecb23a15524f027fde746637e0f4fc8977fffa191073ee03485243ac25';
-const LIVE_PATCH_SHA256 = '323b78bf0acdee06ac86f838151a271fe7132a0f60a72e92a62a8e2a1fb8003e';
-const PATCH_CANDIDATE_SHA256 = '4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931';
+const LIVE_FLOW_SHA256 = '0d25df4289a38978ac925f46689eaa30b6fc38efb5de00061ba86266f613a24e';
+const LIVE_PATCH_SHA256 = '4fb7d6ca9961e854cefb22f0752f9c1f921e1b6cbacfea3ce16e8b8681538931';
+const PATCH_CANDIDATE_SHA256 = '9c6aaf4578c69fa30daa2326506900a5ee0a265f2299f1f0e3ab20b11e01a130';
 
 class FixedDate extends Date {
   constructor(...args) { super(...(args.length ? args : ['2026-07-27T10:00:00.000Z'])); }
@@ -107,28 +107,33 @@ test('guarded synchronization fails closed on target or route drift', () => {
   );
 });
 
-test('ordinary participant patch preserves the four-output Mongo, HTTP, debug, and autojoin contract', () => {
+test('ordinary non-roster patch preserves the four-output Mongo, HTTP, debug, and autojoin contract', () => {
   const outputs = run({
-    participants: [{
-      id: 'p1',
-      name: 'Player',
-      phone: '8 (960) 000-00-01',
-      membershipId: 'membership-join-1',
-    }],
-    metadata: { allRelatedPhones: ['+7 960 000 00 02'] },
+    chatUrl: 'https://example.test/chat/game-42',
+    metadata: { source: 'admin' },
   });
   assert.equal(outputs.length, 4);
   assert.equal(outputs[0].query.id, 'game-42');
-  assert.deepEqual(outputs[0].payload.$set.participantPhones, ['79600000001']);
-  assert.equal(outputs[0].payload.$set.participants[0].membershipId, 'membership-join-1');
-  assert.deepEqual(outputs[0].payload.$set.allRelatedPhones, ['79600000002', '79600000001']);
+  assert.equal(outputs[0].payload.$set.chatUrl, 'https://example.test/chat/game-42');
+  assert.deepEqual(outputs[0].payload.$set.metadata, { source: 'admin' });
   assert.equal(outputs[1].statusCode, 200);
   assert.equal(outputs[1].payload.id, 'game-42');
-  assert.deepEqual(outputs[1].payload.participants, outputs[0].payload.$set.participants);
+  assert.equal(outputs[1].payload.chatUrl, 'https://example.test/chat/game-42');
   assert.equal(outputs[2], outputs[1]);
   const { id, ...responsePatch } = outputs[1].payload;
   assert.equal(id, 'game-42');
   assert.deepEqual(outputs[3]._gameAutojoinPatch.patch, responsePatch);
+});
+
+test('generic PATCH cannot write participants or waitlist', () => {
+  for (const payload of [{ participants: [] }, { waitlist: [] }]) {
+    const outputs = run(payload);
+    assert.equal(outputs[0], null);
+    assert.equal(outputs[1].statusCode, 403);
+    assert.equal(outputs[1].payload.code, 'GAME_ROSTER_COMMAND_REQUIRED');
+    assert.equal(outputs[2], outputs[1]);
+    assert.equal(outputs[3], null);
+  }
 });
 
 test('organizer PATCH writes fields atomically but returns the public organizer patch without dotted Mongo keys', () => {
