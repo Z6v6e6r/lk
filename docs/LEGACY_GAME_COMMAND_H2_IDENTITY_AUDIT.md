@@ -16,8 +16,12 @@ every reviewed local object-bearing mount with its device, inode, mount ID, stat
 filesystem magic, owner and mode. Production accepts system IDs only and requires `/`
 coverage. The helper parses mountinfo itself and requires a one-to-one mapping for every
 source-approved local filesystem mount. Duplicate, omitted, remote, idmapped, unknown,
-or unclassified mounts fail closed; only the source-controlled kernel-pseudo list is
-excluded and its disposition digest is recorded.
+or unclassified mounts fail closed. Exclusions are limited to the source-controlled
+kernel-pseudo list and the exact systemd `autofs` placeholder at
+`/proc/sys/fs/binfmt_misc`. That placeholder is accepted only with mount root `/`, source
+`systemd-1`, and exactly one same-path `binfmt_misc` child whose parent mount ID is the
+placeholder mount ID. Every other `autofs` shape remains unknown and fails closed. The
+mount ID, parent ID, mount root, path, filesystem, source and disposition are digest-bound.
 
 ## Scan and evidence contract
 
