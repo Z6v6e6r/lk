@@ -23,12 +23,14 @@ import {
   validateProductionExecutionPacket,
   validateProductionReleaseAttestation,
 } from "../run_legacy_game_command_production_migration.mjs";
+import { LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST } from "../lk1_subscription_enforcement_activation_manifest.mjs";
 
 const require = createRequire(import.meta.url);
 const digest = (character) => character.repeat(64);
 const releaseSha = "a".repeat(40);
-const UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256 = "d88ea0afc5fd00e5f4e532415b57d33ed2691c320c3ba23fd2a54ba804fb139c";
+const UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256 = "928a7c49a91a77a9abac6e2bcf6bbea5091b25bdfd44e9de8a735454c9a0b429";
 const HISTORICAL_SOURCE_ONLY_CANDIDATE_SHA256S = Object.freeze([
+  "d88ea0afc5fd00e5f4e532415b57d33ed2691c320c3ba23fd2a54ba804fb139c",
   "6c8512eeffbf57edc720019487a60a2779b1ec180f1ae373a201519f96a6271e",
   "e730bf8c043e2f33f5a75c6825d56f39a580a10201f77c399d2323f70f9f7e4d",
 ]);
@@ -143,6 +145,32 @@ test("production runner pins the reviewed unified candidate and rejects historic
     });
     assert.throws(() => validate(historicalCandidate), /candidate flow digest mismatch/);
   }
+});
+
+test("production custody identities are coherent and remain fail-closed while the trust anchor is unbound", () => {
+  const registry = JSON.parse(fs.readFileSync(
+    path.resolve(import.meta.dirname, "../legacy_game_revision_writers.json"),
+    "utf8",
+  ));
+  const trustAnchor = JSON.parse(fs.readFileSync(
+    path.resolve(import.meta.dirname, "../legacy_game_command_production_trust_anchor.json"),
+    "utf8",
+  ));
+
+  assert.equal(EXPECTED_LIVE_FLOW_SHA256, LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST.sourceSha256);
+  assert.equal(EXPECTED_CANDIDATE_FLOW_SHA256, LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST.candidateSha256);
+  assert.equal(registry.provenance.activeFlowSha256, EXPECTED_LIVE_FLOW_SHA256);
+  assert.equal(
+    registry.provenance.selectedTabCandidateSha256,
+    LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST.sourceTab.sha256,
+  );
+  assert.deepEqual(trustAnchor, {
+    algorithm: "Ed25519",
+    keyId: "UNBOUND",
+    publicKeySpkiSha256: "UNBOUND",
+    schemaVersion: 1,
+    status: "UNBOUND",
+  });
 });
 
 test("production execution packet rejects drift, weak quiescence, stale backup, and reused authority", () => {

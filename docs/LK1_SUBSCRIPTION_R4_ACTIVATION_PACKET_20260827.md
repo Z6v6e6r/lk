@@ -54,9 +54,9 @@ or contract inventory drift.
 
 ## Current blockers before any Deploy
 
-1. The production migration runner and immutable release attestation remain pinned to
-   the preceding `14b5aff6… -> d88ea0af…` pair. Updating that production migration
-   trust boundary is a separate R4 task and was not authorized by this packet stage.
+1. The production migration runner and immutable release source identity were refreshed
+   in a later isolated R4 source task to `9e9698ea… -> 928a7c49…`; this closes only the
+   source-identity mismatch and does not authorize release installation or execution.
 2. `scripts/legacy_game_command_production_trust_anchor.json` remains `UNBOUND`.
 3. Runtime provisioning was not found for
    `subscriptions_runtime_api_base_url`,

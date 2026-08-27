@@ -10,6 +10,8 @@ import { canonicalJson, PRODUCTION_MIGRATION_ID } from "./lib/legacy_game_comman
 import {
   assertPinnedMongoRuntimeClosure,
   buildProductionStaticSourceIdentity,
+  EXPECTED_CANDIDATE_FLOW_SHA256,
+  EXPECTED_LIVE_FLOW_SHA256,
   resolveRuntimePackageClosure,
 } from "./run_legacy_game_command_production_migration.mjs";
 
@@ -17,6 +19,15 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.dirname(SCRIPT_DIR);
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
+const EXPECTED_WRITER_NODE_IDS = Object.freeze([
+  "11079a30bf3cc6ad",
+  "42e62f98e51bf04a",
+  "591234d213742276",
+  "5eaf4c087c0cc668",
+  "ec61dea76846384b",
+  "legacy_roster_bridge_update_20260816",
+  "lk_split_leave_game_update_20260801",
+]);
 
 export const RELEASE_SOURCE_FILES = Object.freeze([
   "package.json",
@@ -26,6 +37,8 @@ export const RELEASE_SOURCE_FILES = Object.freeze([
   "scripts/migrate_legacy_game_command_prerequisites.mjs",
   "scripts/audit_legacy_game_revision_writers.mjs",
   "scripts/legacy_game_revision_writers.json",
+  "scripts/lk1_subscription_enforcement_custody_identity.json",
+  "scripts/lk1_subscription_enforcement_activation_manifest.mjs",
   "scripts/legacy_game_command_production_trust_anchor.json",
   "scripts/lib/legacy_game_command_production_approval.mjs",
   "node-red/custom-nodes/legacy-game-command-transaction/package.json",
@@ -35,6 +48,32 @@ export const RELEASE_SOURCE_FILES = Object.freeze([
 ]);
 
 const sha256 = (body) => crypto.createHash("sha256").update(body).digest("hex");
+
+export function assertProductionCustodySourceIdentity({
+  activationManifest,
+  writerRegistry,
+} = {}) {
+  const provenance = writerRegistry?.provenance;
+  const sourceTab = activationManifest?.sourceTab;
+  const writerNodeIds = Array.isArray(writerRegistry?.writers)
+    ? writerRegistry.writers.map((writer) => writer?.nodeId).sort()
+    : [];
+  if (
+    activationManifest?.sourceSha256 !== EXPECTED_LIVE_FLOW_SHA256
+    || activationManifest?.candidateSha256 !== EXPECTED_CANDIDATE_FLOW_SHA256
+    || !sourceTab
+    || sourceTab.id !== provenance?.tabId
+    || sourceTab.label !== provenance?.tabLabel
+    || sourceTab.nodeCount !== provenance?.selectedNodeCount
+    || sourceTab.sha256 !== provenance?.selectedTabCandidateSha256
+    || provenance?.activeFlowSha256 !== EXPECTED_LIVE_FLOW_SHA256
+    || writerNodeIds.join("\n") !== EXPECTED_WRITER_NODE_IDS.join("\n")
+    || writerRegistry.writers.some((writer) => writer?.affectsRosterOrLifecycle !== true)
+  ) {
+    throw new Error("Production custody source identity mismatch");
+  }
+  return true;
+}
 
 function parseArgs(argv) {
   const args = {};
@@ -159,6 +198,15 @@ export function buildLegacyGameCommandProductionRelease({
   fs.mkdirSync(output, { mode: 0o700 });
   try {
     for (const relative of RELEASE_SOURCE_FILES) copyGitBlob(root, commit, relative, path.join(output, relative));
+    const writerRegistry = JSON.parse(fs.readFileSync(
+      path.join(output, "scripts/legacy_game_revision_writers.json"),
+      "utf8",
+    ));
+    const activationManifest = JSON.parse(fs.readFileSync(
+      path.join(output, "scripts/lk1_subscription_enforcement_custody_identity.json"),
+      "utf8",
+    ));
+    assertProductionCustodySourceIdentity({ activationManifest, writerRegistry });
     const require = createRequire(path.join(root, "package.json"));
     const mongodbManifest = require.resolve("mongodb/package.json");
     const runtimePackages = resolveRuntimePackageClosure(mongodbManifest);

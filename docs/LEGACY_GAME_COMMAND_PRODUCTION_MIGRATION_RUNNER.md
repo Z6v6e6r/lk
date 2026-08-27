@@ -43,8 +43,8 @@ repair task. A fresh `dry-run` is required after that repair.
 
 The current runner accepts only:
 
-- live full-flow SHA-256 `14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350`;
-- reviewed unified source-only candidate SHA-256 `d88ea0afc5fd00e5f4e532415b57d33ed2691c320c3ba23fd2a54ba804fb139c`;
+- live full-flow SHA-256 `9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263`;
+- reviewed unified source-only candidate SHA-256 `928a7c49a91a77a9abac6e2bcf6bbea5091b25bdfd44e9de8a735454c9a0b429`;
 - all seven writers in `scripts/legacy_game_revision_writers.json`;
 - the exact custom-node package, runner, migration-core, writer-registry,
   approval-verifier, source trust-anchor manifest, root package, dependency lock,
@@ -56,9 +56,11 @@ The current runner accepts only:
 The live flow was pulled read-only from
 `root@lk-primary-147:/root/.node-red/flows.json`: `4762` source nodes, `4812`
 candidate nodes, `215` HTTP inputs, `54` changed existing nodes, `50` added nodes,
-and no added endpoint. Any changed live SHA requires a new source task, candidate,
-review, and execution packet. Historical prerequisite-only and partial combined
-candidate identities are rejected.
+and no added endpoint. The selected `LK Games` source contains `315` nodes and has
+SHA-256 `5deb5beca55441bf29da036495304d7a707158c2af87fe88838f68befd6ff78e`.
+Any changed live SHA requires a new source task, candidate, review, and execution
+packet. The preceding `14b5aff6… -> d88ea0af…` pair and earlier prerequisite-only
+or partial combined candidates are rejected.
 
 The exact immutable release builder and guarded install contract are documented in
 `LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_INSTALL.md`. A release build or install does
@@ -129,8 +131,8 @@ The reviewed packet has this shape (values are illustrative placeholders):
   },
   "source": {
     "repositoryCommit": "<exact 40-hex deployed commit>",
-    "liveFlowSha256": "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350",
-    "candidateFlowSha256": "d88ea0afc5fd00e5f4e532415b57d33ed2691c320c3ba23fd2a54ba804fb139c",
+    "liveFlowSha256": "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
+    "candidateFlowSha256": "928a7c49a91a77a9abac6e2bcf6bbea5091b25bdfd44e9de8a735454c9a0b429",
     "packageSha256": "<fresh audit value>",
     "writerRegistrySha256": "<fresh audit value>",
     "installerSha256": "<fresh audit value>",

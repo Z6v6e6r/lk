@@ -45,6 +45,13 @@ manifest now pin this exact unified identity and reject both historical identiti
 Production custody remains `UNBOUND`; release installation, import, migration, and
 deploy are still stopped.
 
+The later 2026-08-27 production-custody refresh supersedes only the executable
+source identity, not this historical handoff evidence. The runner and writer registry
+now bind fresh live `9e9698ea…`, selected `LK Games` source `5deb5bec…`, and reviewed
+candidate `928a7c49…`. The trust anchor remains `UNBOUND`; no production install,
+Mongo connection, migration, flow import/restart, or secret provisioning occurred.
+See `LK1_SUBSCRIPTION_PRODUCTION_CUSTODY_PREFLIGHT_20260827.md`.
+
 The first predecessor transition changed exactly one existing function,
 `Prepare split game payment` (`f3f9a60354d394da`). The later production pricing
 recovery transition changed exactly two existing functions, `Prepare split join payment`

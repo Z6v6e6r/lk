@@ -1,3 +1,10 @@
+import fs from "node:fs";
+
+const custodyIdentity = JSON.parse(fs.readFileSync(
+  new URL("./lk1_subscription_enforcement_custody_identity.json", import.meta.url),
+  "utf8",
+));
+
 const FUNC_ONLY_NODE_IDS = Object.freeze([
   "016d6797a530ed0a", "0a24ae59bba45f7f", "1dd46edba0d97ab8",
   "22f949502de37430", "4ba07d3d50014066", "66ced3f3c4046229",
@@ -38,8 +45,9 @@ const MULTI_FIELD_CHANGES = Object.freeze([
 export const LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST = Object.freeze({
   formatVersion: 1,
   deploymentId: "lk1-subscription-enforcement",
-  sourceSha256: "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
-  candidateSha256: "928a7c49a91a77a9abac6e2bcf6bbea5091b25bdfd44e9de8a735454c9a0b429",
+  sourceSha256: custodyIdentity.sourceSha256,
+  candidateSha256: custodyIdentity.candidateSha256,
+  sourceTab: Object.freeze({ ...custodyIdentity.sourceTab }),
   sourceNodeCount: 4762,
   candidateNodeCount: 4812,
   httpInputCount: 215,

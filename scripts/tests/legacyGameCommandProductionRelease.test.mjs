@@ -8,9 +8,11 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 import {
+  assertProductionCustodySourceIdentity,
   buildLegacyGameCommandProductionRelease,
   readGitBlob,
 } from "../build_legacy_game_command_production_release.mjs";
+import { LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST } from "../lk1_subscription_enforcement_activation_manifest.mjs";
 import { canonicalJson, parseCanonicalJson } from "../lib/legacy_game_command_production_approval.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -61,12 +63,14 @@ test("release builder packages and authenticates the bootstrap installer and run
   const { bundle, manifest, installer, installerSha256 } = await buildFixture(t);
   const verified = installer.verifyLegacyGameCommandReleaseBundle(bundle);
   assert.equal(verified.manifest.repositoryCommit, commit);
-  assert.equal(manifest.source.liveFlowSha256, "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350");
-  assert.equal(manifest.source.candidateFlowSha256, "d88ea0afc5fd00e5f4e532415b57d33ed2691c320c3ba23fd2a54ba804fb139c");
+  assert.equal(manifest.source.liveFlowSha256, "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263");
+  assert.equal(manifest.source.candidateFlowSha256, "928a7c49a91a77a9abac6e2bcf6bbea5091b25bdfd44e9de8a735454c9a0b429");
   assert.equal(manifest.source.installerSha256, installerSha256);
   assert.ok(manifest.files.some((item) => item.path === "scripts/install_legacy_game_command_production_release.mjs"
     && item.sha256 === installerSha256));
   assert.ok(manifest.files.some((item) => item.path === "scripts/run_legacy_game_command_production_migration.mjs"));
+  assert.ok(manifest.files.some((item) => item.path === "scripts/lk1_subscription_enforcement_custody_identity.json"));
+  assert.ok(manifest.files.some((item) => item.path === "scripts/lk1_subscription_enforcement_activation_manifest.mjs"));
   assert.ok(manifest.files.some((item) => item.path === "node_modules/mongodb/package.json"));
   const installerBody = fs.readFileSync(
     path.join(bundle, "scripts/install_legacy_game_command_production_release.mjs"),
@@ -85,6 +89,54 @@ test("release builder packages and authenticates the bootstrap installer and run
     fs.readFileSync(path.join(bundle, "scripts/legacy_game_command_production_trust_anchor.json"), "utf8"),
     "{\"algorithm\":\"Ed25519\",\"keyId\":\"UNBOUND\",\"publicKeySpkiSha256\":\"UNBOUND\",\"schemaVersion\":1,\"status\":\"UNBOUND\"}\n",
   );
+});
+
+test("release builder rejects runner, activation-manifest, and writer-registry custody drift", () => {
+  const writerRegistry = JSON.parse(fs.readFileSync(
+    path.join(repositoryRoot, "scripts/legacy_game_revision_writers.json"),
+    "utf8",
+  ));
+  assert.equal(assertProductionCustodySourceIdentity({
+    activationManifest: LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST,
+    writerRegistry,
+  }), true);
+  assert.throws(() => assertProductionCustodySourceIdentity({
+    writerRegistry,
+    activationManifest: {
+      ...LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST,
+      candidateSha256: "f".repeat(64),
+    },
+  }), /source identity mismatch/);
+  assert.throws(() => assertProductionCustodySourceIdentity({
+    activationManifest: LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST,
+    writerRegistry: {
+      ...writerRegistry,
+      provenance: { ...writerRegistry.provenance, activeFlowSha256: "f".repeat(64) },
+    },
+  }), /source identity mismatch/);
+  assert.throws(() => assertProductionCustodySourceIdentity({
+    activationManifest: LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST,
+    writerRegistry: {
+      ...writerRegistry,
+      provenance: { ...writerRegistry.provenance, selectedTabCandidateSha256: "f".repeat(64) },
+    },
+  }), /source identity mismatch/);
+  assert.throws(() => assertProductionCustodySourceIdentity({
+    activationManifest: LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST,
+    writerRegistry: {
+      ...writerRegistry,
+      writers: [...writerRegistry.writers.slice(0, 6), writerRegistry.writers[0]],
+    },
+  }), /source identity mismatch/);
+  assert.throws(() => assertProductionCustodySourceIdentity({
+    activationManifest: LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST,
+    writerRegistry: {
+      ...writerRegistry,
+      writers: writerRegistry.writers.map((writer, index) => (
+        index === 0 ? { ...writer, nodeId: "substituted-writer" } : writer
+      )),
+    },
+  }), /source identity mismatch/);
 });
 
 test("production runbook freezes root custody and both digests before exec", () => {
