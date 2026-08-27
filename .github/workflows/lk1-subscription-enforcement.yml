@@ -3,12 +3,14 @@ name: LK1 Subscription Enforcement
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: lk1-subscription-enforcement-pr-${{ github.event.pull_request.number }}
+  group: lk1-subscription-enforcement-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,24 +24,69 @@ jobs:
 
     steps:
       - name: Checkout exact pull-request head
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
+          clean: true
 
-      - name: Verify checkout identity
+      - name: Checkout exact push SHA
+        if: github.event_name == 'push'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          clean: true
+
+      - name: Resolve pull-request immutable identity
+        if: github.event_name == 'pull_request'
         env:
-          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          test -n "$EVENT_BASE_SHA"
+          test -n "$EVENT_HEAD_SHA"
+          {
+            printf 'BASE_SHA=%s\n' "$EVENT_BASE_SHA"
+            printf 'EXPECTED_HEAD_SHA=%s\n' "$EVENT_HEAD_SHA"
+            printf 'DIFF_RANGE=%s...%s\n' "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA"
+          } >> "$GITHUB_ENV"
+
+      - name: Resolve push immutable identity
+        if: github.event_name == 'push'
+        env:
+          EVENT_BASE_SHA: ${{ github.event.before }}
+          EVENT_HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$EVENT_BASE_SHA"
+          test -n "$EVENT_HEAD_SHA"
+          {
+            printf 'BASE_SHA=%s\n' "$EVENT_BASE_SHA"
+            printf 'EXPECTED_HEAD_SHA=%s\n' "$EVENT_HEAD_SHA"
+            printf 'DIFF_RANGE=%s..%s\n' "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA"
+          } >> "$GITHUB_ENV"
+
+      - name: Verify checkout identity and diff endpoints
+        run: |
+          set -euo pipefail
+          test -n "$BASE_SHA"
+          test -n "$EXPECTED_HEAD_SHA"
+          test -n "$DIFF_RANGE"
+          git cat-file -e "$BASE_SHA^{commit}"
           checked_out_sha="$(git rev-parse HEAD)"
           if [[ "$checked_out_sha" != "$EXPECTED_HEAD_SHA" ]]; then
             echo "Exact-head checkout mismatch" >&2
             exit 1
           fi
+          echo "base_sha=$BASE_SHA"
           echo "expected_head_sha=$EXPECTED_HEAD_SHA"
           echo "checked_out_sha=$checked_out_sha"
+          echo "diff_range=$DIFF_RANGE"
 
       - name: Set up Node.js 22
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -47,9 +94,6 @@ jobs:
           node-version: "22"
 
       - name: Record immutable job identity
-        env:
-          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           checked_out_sha="$(git rev-parse HEAD)"
@@ -76,6 +120,9 @@ jobs:
             git status --short --untracked-files=no
             exit 1
           fi
+
+      - name: Validate LK1 workflow event and identity contract
+        run: node --test scripts/tests/lk1SubscriptionEnforcementWorkflow.test.mjs
 
       - name: Run critical subscription regression matrix
         run: >-
@@ -150,26 +197,20 @@ jobs:
       - name: Build with inert compile-time configuration
         run: npm run build
 
-      - name: Check pull-request diff whitespace
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: git diff --check "$BASE_SHA...$HEAD_SHA"
+      - name: Check exact event diff whitespace
+        run: git diff --check "$DIFF_RANGE"
 
       - name: Scan changed paths for secrets, PII, binaries, and runtime artifacts
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          git diff --numstat "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/lk1-numstat.txt"
+          git diff --numstat "$DIFF_RANGE" > "$RUNNER_TEMP/lk1-numstat.txt"
           if awk '$1 == "-" || $2 == "-" { print $3; found = 1 } END { exit found ? 0 : 1 }' \
             "$RUNNER_TEMP/lk1-numstat.txt" > "$RUNNER_TEMP/lk1-binary-paths.txt"; then
             echo "Unexpected binary files in pull-request diff:" >&2
             sed -n '1,80p' "$RUNNER_TEMP/lk1-binary-paths.txt" >&2
             exit 1
           fi
-          git diff --name-only --diff-filter=AM "$BASE_SHA...$HEAD_SHA" \
+          git diff --name-only --diff-filter=AM "$DIFF_RANGE" \
             > "$RUNNER_TEMP/lk1-changed-paths.txt"
           if grep -E '(^|/)(dist|build|node-red/modular)(/|$)|(^|/)release[^/]*\.json$|\.(env|har|pem|key|p12|pfx|zip|tar|tgz|gz|7z|png|jpe?g|gif|pdf)$' \
             "$RUNNER_TEMP/lk1-changed-paths.txt" > "$RUNNER_TEMP/lk1-forbidden-paths.txt"; then
@@ -177,7 +218,7 @@ jobs:
             sed -n '1,80p' "$RUNNER_TEMP/lk1-forbidden-paths.txt" >&2
             exit 1
           fi
-          git diff --unified=0 --no-color "$BASE_SHA...$HEAD_SHA" \
+          git diff --unified=0 --no-color "$DIFF_RANGE" \
             | node --input-type=module -e '
               let input = "";
               process.stdin.setEncoding("utf8");
