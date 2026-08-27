@@ -5,6 +5,7 @@ import fs from "node:fs";
 type JsonRecord = Record<string, unknown>;
 
 const PHONE = "79991112233";
+const FORMATTED_PHONE = `+${PHONE[0]} (${PHONE.slice(1, 4)}) ${PHONE.slice(4, 7)}-${PHONE.slice(7, 9)}-${PHONE.slice(9, 11)}`;
 const PHONE_KEY = /(?:^|[_-])(?:phone|mobile|telephone|msisdn)(?:s|number|norm|normalized)?(?:$|[_-])|(?:Phone|Mobile|Telephone|Msisdn)(?:s|Number|Norm|Normalized)?$/;
 
 function runNodeRedFunction(file: string, msg: JsonRecord) {
@@ -31,7 +32,7 @@ function assertPhoneFree(value: unknown, path = "payload") {
   }
   if (typeof value === "string") {
     assert.equal(value.includes(PHONE), false, `${path} contains a raw phone`);
-    assert.equal(value.includes("+7 (999) 111-22-33"), false, `${path} contains a formatted phone`);
+    assert.equal(value.includes(FORMATTED_PHONE), false, `${path} contains a formatted phone`);
     assert.doesNotMatch(value, /^(phone|mobile|telephone|msisdn):/i, `${path} contains a phone identity`);
   }
   if (typeof value === "number") {
@@ -73,7 +74,7 @@ function gameFixture(): JsonRecord {
       organizerPhone: PHONE,
       safeClientId: "client-organizer",
       callbackUrl: `https://example.test/game?phone=${PHONE}&gameId=game-public-1`,
-      publicNote: "Связь: +7 (999) 111-22-33 после игры",
+      publicNote: `Связь: ${FORMATTED_PHONE} после игры`,
       microphoneEnabled: true,
       numericReference: Number(PHONE),
       splitPayment: {
