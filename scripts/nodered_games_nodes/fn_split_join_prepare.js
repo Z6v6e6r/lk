@@ -431,6 +431,7 @@ const organizerUsedSubscription = storedOrganizerPaymentMode
   : false;
 const recordPayment = game.payment && typeof game.payment === "object" ? game.payment : {};
 const gameOrganizer = game.organizer && typeof game.organizer === "object" ? game.organizer : {};
+const recovery = metadata.recovery && typeof metadata.recovery === "object" ? metadata.recovery : {};
 const legacyZeroAmountOrganizer = (
   paymentMode === "one_time"
   && splitPayment.enabled === true
@@ -439,6 +440,22 @@ const legacyZeroAmountOrganizer = (
   && recordPayment.paid === true
   && toNumber(recordPayment.amount) === 0
 );
+const recoveredOneTimeAmount = toNumber(recordPayment.amount);
+const recoveredOrganizerAmount = toNumber(organizerPayment?.amount);
+const recoveredOneTimePaidDate = normalizeDate(organizerPayment?.paidAt || recordPayment.paidAt);
+const directRecoveredOneTimeRecord = (
+  paymentMode === "one_time"
+  && splitPayment.enabled === true
+  && !storedPricingPolicy
+  && toStr(recovery.reason) === "missing_lk_record_after_successful_split_create"
+  && toStr(recovery.operation) === "direct_guarded_mongo_upsert"
+);
+const directRecoveredOneTimeOrganizer = (
+  directRecoveredOneTimeRecord
+  && resolvePaymentMode(storedOrganizerPaymentMode) === "one_time"
+  && recordPayment.paid === true
+  && toStr(organizerPayment?.status)?.toUpperCase() === "PAID"
+);
 const legacyOrganizerBookingIds = normalizeIdList(
   splitPayment.organizerBookingId
   || booking.bookingIds,
@@ -446,18 +463,41 @@ const legacyOrganizerBookingIds = normalizeIdList(
 const legacyOrganizerClientId = toStr(gameOrganizer.id || gameOrganizer.clientId);
 const legacyOrganizerPhone = normalizePhone(gameOrganizer.phone || gameOrganizer.phoneNorm);
 if (
-  legacyZeroAmountOrganizer
+  (legacyZeroAmountOrganizer || directRecoveredOneTimeRecord)
   && (
+    (directRecoveredOneTimeRecord && !directRecoveredOneTimeOrganizer)
+    ||
     legacyOrganizerBookingIds.length !== 1
     || (!legacyOrganizerClientId && !legacyOrganizerPhone)
+    || (
+      directRecoveredOneTimeOrganizer
+      && (
+        !legacyOrganizerClientId
+        || recoveredOneTimeAmount === null
+        || recoveredOneTimeAmount <= 0
+        || recoveredOrganizerAmount === null
+        || recoveredOrganizerAmount !== recoveredOneTimeAmount
+        || !recoveredOneTimePaidDate
+      )
+    )
   )
 ) {
   return fail(409, "Не удалось восстановить тариф игры", {
     code: "SPLIT_LEGACY_PRICING_RECOVERY_EVIDENCE_MISSING",
   });
 }
-const legacyPricingRecovery = legacyZeroAmountOrganizer
+const legacyPricingRecovery = directRecoveredOneTimeOrganizer
   ? {
+      mode: "one_time",
+      organizerBookingId: legacyOrganizerBookingIds[0],
+      organizerClientId: legacyOrganizerClientId,
+      organizerPhone: legacyOrganizerPhone,
+      expectedAmountMinor: Math.round(recoveredOneTimeAmount * 100),
+      paidDate: recoveredOneTimePaidDate,
+    }
+  : legacyZeroAmountOrganizer
+  ? {
+      mode: "subscription",
       organizerBookingId: legacyOrganizerBookingIds[0],
       organizerClientId: legacyOrganizerClientId,
       organizerPhone: legacyOrganizerPhone,

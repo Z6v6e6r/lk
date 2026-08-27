@@ -27,8 +27,13 @@ type RouterMessage = {
   payload?: {
     error?: string;
     details?: {
+      code?: string;
       requestedClientSubscriptionId?: string;
       actualClientSubscriptionId?: string;
+      expectedAmountMinor?: number | null;
+      providerAmountMinor?: number | null;
+      expectedTransactionId?: string | null;
+      actualTransactionId?: string | null;
     };
     subscriptionProductId?: string;
     paymentModes?: Array<{ productId?: string }>;
@@ -49,6 +54,11 @@ type RouterMessage = {
     requirements?: unknown[];
     clientId?: string;
   };
+};
+
+type RouterRequestMessage = RouterMessage & {
+  _splitCtx: { step?: string };
+  [key: string]: unknown;
 };
 
 test("exercise create request matches the current documented Viva ExerciseCreateRequest", () => {
@@ -859,7 +869,7 @@ test("transaction step preserves transactionId when Viva returns transactionId f
     payload: {
       transactionId: "tx-1",
       paymentUrl: "https://pay.example/tx-1",
-      toPay: 2500,
+      toPay: 250000,
     },
     _splitCtx: {
       step: "transaction",
@@ -891,6 +901,197 @@ test("transaction step preserves transactionId when Viva returns transactionId f
   assert.equal(responseMsg.statusCode, 201);
   assert.equal(responseMsg.payload?.transactionId, "tx-1");
   assert.equal(responseMsg.payload?.paymentUrl, "https://pay.example/tx-1");
+});
+
+test("transaction step blocks a payment URL when Viva returns a different amount", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      transactionId: "tx-wrong-amount",
+      paymentUrl: "https://pay.example/tx-wrong-amount",
+      toPay: 150000,
+    },
+    _splitCtx: {
+      step: "transaction",
+      action: "join",
+      paymentMode: "one_time",
+      selectedPaymentMode: "one_time",
+      shareAmount: 375,
+      shareAmountMinor: 37500,
+    },
+  }) as unknown[];
+
+  const errorMsg = out[1] as RouterMessage;
+  assert.equal(out[0], null);
+  assert.equal(errorMsg.statusCode, 409);
+  assert.equal(errorMsg.payload?.details?.code, "SPLIT_PROVIDER_AMOUNT_MISMATCH");
+  assert.equal(errorMsg.payload?.details?.expectedAmountMinor, 37500);
+  assert.equal(errorMsg.payload?.details?.providerAmountMinor, 150000);
+  assert.equal(errorMsg.payload?.paymentUrl, undefined);
+});
+
+test("transaction step rejects conflicting provider transaction id aliases", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      transactionId: "tx-expected",
+      id: "tx-other",
+      paymentUrl: "https://pay.example/tx-other",
+      toPay: 37500,
+    },
+    _splitCtx: {
+      step: "transaction",
+      action: "join",
+      paymentMode: "one_time",
+      selectedPaymentMode: "one_time",
+      shareAmount: 375,
+      shareAmountMinor: 37500,
+    },
+  }) as unknown[];
+
+  const errorMsg = out[1] as RouterMessage;
+  assert.equal(out[0], null);
+  assert.equal(errorMsg.statusCode, 409);
+  assert.equal(errorMsg.payload?.details?.code, "SPLIT_PROVIDER_TRANSACTION_ID_INVALID");
+  assert.equal(errorMsg.payload?.paymentUrl, undefined);
+});
+
+test("transaction step rejects conflicting explicit Viva amount fields", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      transactionId: "tx-conflicting-amount",
+      paymentUrl: "https://pay.example/tx-conflicting-amount",
+      toPay: 37500,
+      toPayMinor: 150000,
+    },
+    _splitCtx: {
+      step: "transaction",
+      action: "join",
+      paymentMode: "one_time",
+      selectedPaymentMode: "one_time",
+      shareAmount: 375,
+      shareAmountMinor: 37500,
+    },
+  }) as unknown[];
+
+  const lookup = out[0] as RouterRequestMessage;
+  assert.equal(lookup.method, "GET");
+  assert.match(lookup.url || "", /\/transactions\/tx-conflicting-amount$/);
+  assert.equal(lookup._splitCtx.step, "transaction_lookup");
+});
+
+test("transaction step reads back the transaction when the direct payment URL has no amount", () => {
+  const first = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      transactionId: "tx-readback",
+      paymentUrl: "https://pay.example/tx-readback",
+    },
+    _splitCtx: {
+      step: "transaction",
+      action: "join",
+      paymentMode: "one_time",
+      selectedPaymentMode: "one_time",
+      shareAmount: 375,
+      shareAmountMinor: 37500,
+    },
+  }) as unknown[];
+
+  const lookup = first[0] as RouterRequestMessage;
+  assert.equal(lookup.method, "GET");
+  assert.match(lookup.url || "", /\/transactions\/tx-readback$/);
+  assert.equal(lookup._splitCtx.step, "transaction_lookup");
+
+  const second = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    ...lookup,
+    statusCode: 200,
+    payload: {
+      id: "tx-readback",
+      paymentUrl: "https://pay.example/tx-readback",
+      toPay: 150000,
+    },
+  }) as unknown[];
+
+  const errorMsg = second[1] as RouterMessage;
+  assert.equal(second[0], null);
+  assert.equal(errorMsg.statusCode, 409);
+  assert.equal(errorMsg.payload?.details?.code, "SPLIT_PROVIDER_AMOUNT_MISMATCH");
+  assert.equal(errorMsg.payload?.details?.expectedAmountMinor, 37500);
+  assert.equal(errorMsg.payload?.details?.providerAmountMinor, 150000);
+});
+
+test("transaction read-back returns the original URL only for the same id and exact amount", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: {
+      id: "tx-readback-exact",
+      toPay: 37500,
+    },
+    _splitCtx: {
+      step: "transaction_lookup",
+      action: "join",
+      paymentMode: "one_time",
+      selectedPaymentMode: "one_time",
+      transactionId: "tx-readback-exact",
+      shareAmount: 375,
+      shareAmountMinor: 37500,
+      transaction: {
+        transactionId: "tx-readback-exact",
+        paymentUrl: "https://pay.example/tx-readback-exact",
+      },
+    },
+  }) as unknown[];
+
+  const responseMsg = out[1] as RouterMessage;
+  assert.equal(responseMsg.statusCode, 201);
+  assert.equal(responseMsg.payload?.transactionId, "tx-readback-exact");
+  assert.equal(responseMsg.payload?.paymentUrl, "https://pay.example/tx-readback-exact");
+});
+
+test("transaction read-back rejects a wrong or missing transaction id before using its URL", () => {
+  for (const payload of [
+    {
+      id: "tx-other",
+      paymentUrl: "https://pay.example/tx-other",
+      toPay: 37500,
+    },
+    {
+      paymentUrl: "https://pay.example/missing-id",
+      toPay: 37500,
+    },
+    {
+      transactionId: "tx-expected",
+      id: "tx-other",
+      paymentUrl: "https://pay.example/conflicting-id",
+      toPay: 37500,
+    },
+  ]) {
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+      statusCode: 200,
+      payload,
+      _splitCtx: {
+        step: "transaction_lookup",
+        action: "join",
+        paymentMode: "one_time",
+        selectedPaymentMode: "one_time",
+        transactionId: "tx-expected",
+        shareAmount: 375,
+        shareAmountMinor: 37500,
+        transaction: {
+          transactionId: "tx-expected",
+          toPay: 37500,
+        },
+      },
+    }) as unknown[];
+
+    const errorMsg = out[1] as RouterMessage;
+    assert.equal(out[0], null);
+    assert.equal(errorMsg.statusCode, 409);
+    assert.equal(errorMsg.payload?.details?.code, "SPLIT_PROVIDER_TRANSACTION_MISMATCH");
+    assert.equal(errorMsg.payload?.details?.expectedTransactionId, "tx-expected");
+    assert.equal(errorMsg.payload?.paymentUrl, undefined);
+  }
 });
 
 test("payment confirmation emits evidence only for a paid transaction bound to the booking and phone", () => {

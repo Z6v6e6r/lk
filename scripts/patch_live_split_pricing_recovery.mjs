@@ -10,7 +10,7 @@ import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SOURCE_DIR = path.join(SCRIPT_DIR, "nodered_games_nodes");
 const TAB_ID = "4b91e2a2413688db";
-const EXPECTED_SOURCE_SHA256 = "42cbd9a4fc3e53aacadb24601c2a430e78f36d9b79a5f5725782667a87735c42";
+const EXPECTED_SOURCE_SHA256 = "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350";
 const EXPECTED_NODE_COUNT = 4762;
 const EXPECTED_HTTP_ROUTE_COUNT = 215;
 
@@ -26,8 +26,8 @@ export const SPLIT_PRICING_RECOVERY_TARGETS = Object.freeze([
       Object.freeze(["ef42932e1ba864b8"]),
       Object.freeze(["8f7bd5b482fe9763"]),
     ]),
-    liveSha256: "bb9c70f29c31ed1f7b1acc1a3c6e1724bc6584df7570a61f7797604e05d3369d",
-    candidateSha256: "70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462",
+    liveSha256: "70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462",
+    candidateSha256: "be0faf9a53e9394b0b5236f011c720b09058829edf1360b3978963f1afc4954a",
   }),
   Object.freeze({
     id: "8f7bd5b482fe9763",
@@ -41,8 +41,8 @@ export const SPLIT_PRICING_RECOVERY_TARGETS = Object.freeze([
       Object.freeze(["lk_subscription_booking_http_20260804"]),
       Object.freeze(["legacy_payment_confirm_canonical_prepare_20260816"]),
     ]),
-    liveSha256: "892ad51fcb8f2be2a194661e04f9c775d4345fea153e5dbc3758bd40967101f2",
-    candidateSha256: "cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a",
+    liveSha256: "cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a",
+    candidateSha256: "3fac27dce5ab0f2ae844d2927db406d44253151e62cab4c50a7790f7bc273b33",
   }),
 ]);
 
@@ -163,7 +163,7 @@ export function runSplitPricingRecoveryBuild(argv) {
   writePrivateJson(outputPath, flow);
   writePrivateJson(importPath, importNodes);
   const report = {
-    caseId: "split-pricing-legacy-projection-recovery",
+    caseId: "split-pricing-direct-one-time-recovery",
     sourceSha256: verified.sourceSha256,
     candidateSha256: sha256(fs.readFileSync(outputPath)),
     importSha256: sha256(fs.readFileSync(importPath)),

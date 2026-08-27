@@ -227,13 +227,14 @@ or deploys its output. It fails closed after any live drift. The separately
 approved provider-mutation and cleanup procedure is documented in
 `docs/MANAGED_SUBSCRIPTION_SYNTHETIC_CREATE_CANCEL_HAR.md`.
 
-## Guarded legacy split pricing recovery candidate
+## Guarded split pricing recovery candidate
 
 Games created before durable draft persistence can retain a zero-amount paid
 organizer booking while losing `selectedPaymentMode` and the pricing-policy
-snapshot. The focused recovery candidate replaces only `Prepare split join
-payment` and `Route Viva split payment` after verifying their exact live
-preimages:
+snapshot. A narrowly identified direct recovery can also retain a paid one-time
+organizer at the campaign amount while losing the pricing-policy snapshot. The
+focused recovery candidate replaces only `Prepare split join payment` and
+`Route Viva split payment` after verifying their exact live preimages:
 
 ```bash
 npm run nodered:split-pricing-recovery:patch -- \
@@ -245,5 +246,13 @@ npm run nodered:split-pricing-recovery:patch -- \
 
 Recovery is fail-closed: the exact stored organizer booking must be an active,
 non-cancelled Viva `SUBSCRIPTION` booking for the same exercise before the
-server requests the campaign for the stored date, station, and room. The
-builder does not import, deploy, restart Node-RED, or mutate game/provider data.
+server requests the campaign for the stored date, station, and room. A one-time
+recovery is allowed only for the exact
+`missing_lk_record_after_successful_split_create` +
+`direct_guarded_mongo_upsert` marker, matching paid amounts in the recovered
+game, one exact active `ON_PLACE` organizer booking, and one exact `PAID` Viva
+transaction for the stored organizer, booking, date, and amount. Before any
+one-time payment URL is returned, the explicit provider `toPay` must equal the
+canonical server-side split amount; a missing amount is read back by transaction
+ID and a mismatch fails with `SPLIT_PROVIDER_AMOUNT_MISMATCH`. The builder does
+not import, deploy, restart Node-RED, or mutate game/provider data.

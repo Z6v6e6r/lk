@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SOURCES = {
   create: ['fn_split_create_prepare.js', '19a61024273a478f11bff3ff60c4601603c2af5bd7ec8ec08e4b83394ee7bd41', '6f7d6ec86432f5f3a50d0eb080df8847954841a9fc4637d79cf58fb2742fd689'],
-  join: ['fn_split_join_prepare.js', 'e077708db904b7c319ecb639933637f70028ba35d0daef8f35057e72e61ced60', '70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462'],
-  router: ['fn_split_router.js', 'f0a350a3b39f5ffd3b4745752382dd83ff656380c96ed0496f483e383e139584', 'cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a'],
+  join: ['fn_split_join_prepare.js', '70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462', 'be0faf9a53e9394b0b5236f011c720b09058829edf1360b3978963f1afc4954a'],
+  router: ['fn_split_router.js', 'cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a', '3fac27dce5ab0f2ae844d2927db406d44253151e62cab4c50a7790f7bc273b33'],
 };
 
 class FixedDate extends Date {
@@ -255,6 +255,7 @@ test('join recovers a lost subscription pricing projection only after Viva organ
 
   assert.equal(prepared[0]._splitCtx.step, 'token');
   assert.deepEqual(prepared[0]._splitCtx.legacyPricingRecovery, {
+    mode: 'subscription',
     organizerBookingId: 'booking-organizer-subscription',
     organizerClientId: 'client-organizer',
     organizerPhone: '79600000001',
@@ -283,6 +284,7 @@ test('join recovers a lost subscription pricing projection only after Viva organ
   });
   assert.equal(pricingLookup[0]._splitCtx.step, 'pricing_policy');
   assert.deepEqual(pricingLookup[0]._splitCtx.legacyPricingRecovery, {
+    mode: 'subscription',
     organizerBookingId: 'booking-organizer-subscription',
     organizerClientId: 'client-organizer',
     organizerPhone: '+79600000001',
@@ -305,6 +307,297 @@ test('join recovers a lost subscription pricing projection only after Viva organ
   assert.equal(priced[0]._splitCtx.shareAmount, 375);
   assert.equal(priced[0]._splitCtx.pricingPolicy.id, 'piter-split-250-per-hour-v1');
   assert.equal(priced[0]._splitCtx.step, 'token');
+});
+
+test('join recovers a directly restored one-time game only after exact organizer payment proof', () => {
+  const prepared = run('join', {
+    _splitJoinBody: { clientPhone: '+7 960 000 00 10', paymentMode: 'one_time' },
+    payload: [{
+      payment: {
+        paid: true,
+        amount: 375,
+        paidAt: '2026-08-27T06:21:47.210Z',
+        paymentMethod: 'WIDGET',
+      },
+      organizer: { id: 'client-organizer-piter', phone: '+7 960 000 00 01' },
+      metadata: {
+        recovery: {
+          reason: 'missing_lk_record_after_successful_split_create',
+          operation: 'direct_guarded_mongo_upsert',
+        },
+        splitPayment: {
+          enabled: true,
+          vivaExerciseId: 'exercise-piter-recovered',
+          shareCount: 4,
+          shareAmount: 375,
+          selectedPaymentMode: 'one_time',
+          organizerBookingId: 'booking-organizer-piter',
+          payments: [{
+            role: 'ORGANIZER',
+            status: 'PAID',
+            amount: 375,
+            paidAt: '2026-08-26T07:12:26.000Z',
+            bookingId: 'booking-organizer-piter',
+            clientId: 'client-organizer-piter',
+          }],
+        },
+      },
+      booking: {
+        studioId: '1ea77cbf-bc36-49a1-96d6-f35c216a409b',
+        roomId: 'room-piter-10',
+        bookingIds: ['booking-organizer-piter'],
+        date: '2026-08-30',
+        timeFrom: '11:30',
+        timeTo: '13:00',
+      },
+    }],
+  });
+
+  assert.equal(prepared[0]._splitCtx.step, 'token');
+  assert.deepEqual(prepared[0]._splitCtx.legacyPricingRecovery, {
+    mode: 'one_time',
+    organizerBookingId: 'booking-organizer-piter',
+    organizerClientId: 'client-organizer-piter',
+    organizerPhone: '79600000001',
+    expectedAmountMinor: 37500,
+    paidDate: '2026-08-26',
+  });
+
+  const bookingLookup = run('router', {
+    statusCode: 200,
+    payload: { access_token: 'service-token', expires_in: 300 },
+    _splitCtx: prepared[0]._splitCtx,
+  });
+  assert.equal(bookingLookup[0]._splitCtx.step, 'legacy_pricing_booking');
+  assert.match(bookingLookup[0].url, /\/exercises\/exercise-piter-recovered\/bookings$/);
+
+  const transactionLookup = run('router', {
+    statusCode: 200,
+    payload: [{
+      id: 'booking-organizer-piter',
+      exercise: { id: 'exercise-piter-recovered' },
+      client: { id: 'client-organizer-piter', phone: '+7 960 000 00 01' },
+      paymentType: 'ON_PLACE',
+      isCancelled: false,
+      cancelled: false,
+    }],
+    _splitCtx: bookingLookup[0]._splitCtx,
+  });
+  assert.equal(transactionLookup[0]._splitCtx.step, 'legacy_pricing_transaction');
+  assert.match(transactionLookup[0].url, /\/transactions\?/);
+  assert.match(transactionLookup[0].url, /clientIds=client-organizer-piter/);
+  assert.match(transactionLookup[0].url, /dateFrom=2026-08-26/);
+  assert.match(transactionLookup[0].url, /dateTo=2026-08-26/);
+
+  const pricingLookup = run('router', {
+    statusCode: 200,
+    payload: {
+      content: [{
+        id: 'tx-organizer-piter',
+        createDate: '2026-08-26T07:12:26.000Z',
+        status: 'PAID',
+        toPay: 37500,
+        client: { id: 'client-organizer-piter' },
+        products: [{ paymentBookingIds: ['booking-organizer-piter'] }],
+      }],
+    },
+    _splitCtx: transactionLookup[0]._splitCtx,
+  });
+  assert.equal(pricingLookup[0]._splitCtx.step, 'pricing_policy');
+  assert.equal(pricingLookup[0]._splitCtx.legacyPricingRecovery.verified, true);
+  assert.equal(pricingLookup[0]._splitCtx.legacyPricingRecovery.transactionId, 'tx-organizer-piter');
+  assert.match(pricingLookup[0].url, /split-payment-promo/);
+
+  const priced = run('router', {
+    statusCode: 200,
+    payload: {
+      enabled: true,
+      selectedPromoId: 'piter-split-250-per-hour-v1',
+      pricingMode: 'PER_PARTICIPANT_HOUR',
+      currency: 'RUB',
+      shareAmounts: { twoTeams: 500, fourPlayers: 250 },
+    },
+    _splitCtx: pricingLookup[0]._splitCtx,
+  });
+  assert.equal(priced[0]._splitCtx.shareAmount, 375);
+  assert.equal(priced[0]._splitCtx.pricingPolicy.id, 'piter-split-250-per-hour-v1');
+  assert.equal(priced[0]._splitCtx.step, 'token');
+});
+
+test('directly restored one-time recovery rejects a provider organizer amount mismatch', () => {
+  const outputs = run('router', {
+    statusCode: 200,
+    payload: {
+      content: [{
+        id: 'tx-organizer-wrong-amount',
+        createDate: '2026-08-27T07:12:26.000Z',
+        status: 'PAID',
+        toPay: 150000,
+        client: { id: 'client-organizer-piter' },
+        products: [{ paymentBookingIds: ['booking-organizer-piter'] }],
+      }],
+    },
+    _splitCtx: {
+      step: 'legacy_pricing_transaction',
+      action: 'join',
+      paymentMode: 'one_time',
+      exerciseId: 'exercise-piter-recovered',
+      legacyPricingRecovery: {
+        mode: 'one_time',
+        organizerBookingId: 'booking-organizer-piter',
+        organizerClientId: 'client-organizer-piter',
+        organizerPhone: '79600000001',
+        expectedAmountMinor: 37500,
+        paidDate: '2026-08-27',
+        bookingVerified: true,
+        verified: false,
+      },
+    },
+  });
+
+  assert.equal(outputs[1].statusCode, 409);
+  assert.equal(outputs[1].payload.details.code, 'SPLIT_LEGACY_ORGANIZER_PAYMENT_NOT_CONFIRMED');
+  assert.equal(outputs[0], null);
+});
+
+test('directly restored recovery rejects conflicting amount fields and nested sibling evidence', () => {
+  for (const transaction of [
+    {
+      id: 'tx-conflicting-amount',
+      createDate: '2026-08-27T07:12:26.000Z',
+      status: 'PAID',
+      toPay: 37500,
+      toPayMinor: 150000,
+      client: { id: 'client-organizer-piter' },
+      products: [{ paymentBookingIds: ['booking-organizer-piter'] }],
+    },
+    {
+      id: 'tx-nested-siblings',
+      createDate: '2026-08-27T07:12:26.000Z',
+      status: 'PAID',
+      toPay: 37500,
+      metadata: {
+        unrelatedClient: { client: { id: 'client-organizer-piter' } },
+        unrelatedBooking: { paymentBookingIds: ['booking-organizer-piter'] },
+      },
+    },
+    {
+      createDate: '2026-08-27T07:12:26.000Z',
+      status: 'PAID',
+      toPay: 37500,
+      client: { id: 'client-organizer-piter' },
+      products: [{ paymentBookingIds: ['booking-organizer-piter'] }],
+    },
+    {
+      id: 'tx-conflicting-client-alias',
+      createDate: '2026-08-27T07:12:26.000Z',
+      status: 'PAID',
+      toPay: 37500,
+      client: { id: 'client-organizer-piter', uuid: 'client-other' },
+      products: [{ paymentBookingIds: ['booking-organizer-piter'] }],
+    },
+    {
+      id: 'tx-conflicting-booking-alias',
+      createDate: '2026-08-27T07:12:26.000Z',
+      status: 'PAID',
+      toPay: 37500,
+      client: { id: 'client-organizer-piter' },
+      products: [{
+        paymentBookingIds: [{ id: 'booking-organizer-piter', bookingId: 'booking-other' }],
+      }],
+    },
+    {
+      id: 'tx-conflicting-pricing-detail-alias',
+      createDate: '2026-08-27T07:12:26.000Z',
+      status: 'PAID',
+      toPay: 37500,
+      client: { id: 'client-organizer-piter' },
+      products: [{
+        pricingDetails: [{
+          clientBookingId: 'booking-organizer-piter',
+          bookingId: 'booking-other',
+        }],
+      }],
+    },
+    {
+      transactionId: 'tx-expected',
+      id: 'tx-other',
+      createDate: '2026-08-27T07:12:26.000Z',
+      status: 'PAID',
+      toPay: 37500,
+      client: { id: 'client-organizer-piter' },
+      products: [{ paymentBookingIds: ['booking-organizer-piter'] }],
+    },
+  ]) {
+    const outputs = run('router', {
+      statusCode: 200,
+      payload: { content: [transaction] },
+      _splitCtx: {
+        step: 'legacy_pricing_transaction',
+        action: 'join',
+        paymentMode: 'one_time',
+        exerciseId: 'exercise-piter-recovered',
+        legacyPricingRecovery: {
+          mode: 'one_time',
+          organizerBookingId: 'booking-organizer-piter',
+          organizerClientId: 'client-organizer-piter',
+          organizerPhone: '79600000001',
+          expectedAmountMinor: 37500,
+          paidDate: '2026-08-27',
+          bookingVerified: true,
+          verified: false,
+        },
+      },
+    });
+
+    assert.equal(outputs[0], null);
+    assert.equal(outputs[1].statusCode, 409);
+    assert.equal(outputs[1].payload.details.code, 'SPLIT_LEGACY_ORGANIZER_PAYMENT_NOT_CONFIRMED');
+  }
+});
+
+test('directly restored one-time marker cannot fall back to ordinary pricing with incomplete evidence', () => {
+  const outputs = run('join', {
+    _splitJoinBody: { clientPhone: '+7 960 000 00 10', paymentMode: 'one_time' },
+    payload: [{
+      payment: { paid: true, amount: 375, paidAt: '2026-08-27T06:21:47.210Z' },
+      organizer: { id: 'client-organizer-piter' },
+      metadata: {
+        recovery: {
+          reason: 'missing_lk_record_after_successful_split_create',
+          operation: 'direct_guarded_mongo_upsert',
+        },
+        splitPayment: {
+          enabled: true,
+          vivaExerciseId: 'exercise-piter-recovered',
+          shareCount: 4,
+          shareAmount: 375,
+          selectedPaymentMode: 'one_time',
+          organizerBookingId: 'booking-organizer-piter',
+          payments: [{
+            role: 'ORGANIZER',
+            status: 'PAID',
+            amount: 1500,
+            paidAt: '2026-08-26T07:12:26.000Z',
+            bookingId: 'booking-organizer-piter',
+            clientId: 'client-organizer-piter',
+          }],
+        },
+      },
+      booking: {
+        studioId: '1ea77cbf-bc36-49a1-96d6-f35c216a409b',
+        roomId: 'room-piter-10',
+        bookingIds: ['booking-organizer-piter'],
+        date: '2026-08-30',
+        timeFrom: '11:30',
+        timeTo: '13:00',
+      },
+    }],
+  });
+
+  assert.equal(outputs[0], null);
+  assert.equal(outputs[1].statusCode, 409);
+  assert.equal(outputs[1].payload.details.code, 'SPLIT_LEGACY_PRICING_RECOVERY_EVIDENCE_MISSING');
 });
 
 test('legacy pricing recovery rejects a malformed enabled CUP response before any Viva mutation', () => {

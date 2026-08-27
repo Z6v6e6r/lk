@@ -997,6 +997,105 @@ const pickTransactionToPayMinor = (primaryPayload, fallbackPayload, fallbackMino
   return Math.max(0, Math.round(firstFinite ?? 0));
 };
 
+const pickExplicitTransactionToPayMinor = (primaryPayload, fallbackPayload) => {
+  const values = [
+    toNumber(primaryPayload?.toPay),
+    toNumber(primaryPayload?.toPayMinor),
+    toNumber(fallbackPayload?.toPay),
+    toNumber(fallbackPayload?.toPayMinor),
+  ]
+    .filter((value) => Number.isFinite(value))
+    .map((value) => Math.max(0, Math.round(value)));
+  const uniqueValues = [...new Set(values)];
+  return uniqueValues.length === 1 ? uniqueValues[0] : null;
+};
+
+const providerTransactionAmountMinor = (transaction) => {
+  const values = [
+    toNumber(transaction?.toPay),
+    toNumber(transaction?.toPayMinor),
+    toNumber(transaction?.amountMinor),
+    toNumber(transaction?.totalAmountMinor),
+    toNumber(transaction?.paidAmountMinor),
+  ]
+    .filter((value) => Number.isFinite(value))
+    .map((value) => Math.max(0, Math.round(value)));
+  const uniqueValues = [...new Set(values)];
+  return uniqueValues.length === 1 ? uniqueValues[0] : null;
+};
+
+const providerTransactionCreateDate = (transaction) => {
+  const value = toStr(transaction?.createDate);
+  const match = value?.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : null;
+};
+
+const addProviderIds = (target, value, objectKeys) => {
+  const values = Array.isArray(value) ? value : [value];
+  values.forEach((candidate) => {
+    if (candidate && typeof candidate === "object") {
+      for (const key of objectKeys) {
+        const id = toStr(candidate[key]);
+        if (id) target.add(id);
+      }
+      return;
+    }
+    const id = toStr(candidate);
+    if (id) target.add(id);
+  });
+};
+
+const exactTransactionClientIds = (transaction) => {
+  const ids = new Set();
+  addProviderIds(ids, transaction?.clientId, ["id"]);
+  addProviderIds(ids, transaction?.client, ["id", "uuid", "clientId"]);
+  return [...ids];
+};
+
+const exactTransactionIds = (transaction) => {
+  const ids = new Set();
+  for (const key of ["transactionId", "transactionUuid", "id", "uuid"]) {
+    addProviderIds(ids, transaction?.[key], ["transactionId", "transactionUuid", "id", "uuid"]);
+  }
+  addProviderIds(ids, transaction?.transaction, ["transactionId", "transactionUuid", "id", "uuid"]);
+  return [...ids];
+};
+
+const exactTransactionBookingIds = (transaction) => {
+  const ids = new Set();
+  for (const key of ["bookingId", "bookingIds", "paymentBookingIds"]) {
+    addProviderIds(ids, transaction?.[key], ["id", "uuid", "bookingId", "clientBookingId"]);
+  }
+  const products = Array.isArray(transaction?.products) ? transaction.products : [];
+  products.forEach((product) => {
+    for (const key of ["bookingId", "bookingIds", "paymentBookingIds", "clientBookingId"]) {
+      addProviderIds(ids, product?.[key], ["id", "uuid", "bookingId", "clientBookingId"]);
+    }
+    const pricingDetails = Array.isArray(product?.pricingDetails) ? product.pricingDetails : [];
+    pricingDetails.forEach((detail) => {
+      addProviderIds(ids, detail?.clientBookingId, ["id", "uuid", "bookingId", "clientBookingId"]);
+      addProviderIds(ids, detail?.bookingId, ["id", "uuid", "bookingId", "clientBookingId"]);
+    });
+  });
+  return [...ids];
+};
+
+const splitProviderAmountMismatch = (ctx, primaryPayload, fallbackPayload, responsePayload) => {
+  if (resolvePaymentMode(ctx.selectedPaymentMode || ctx.paymentMode) !== "one_time") return null;
+  const expectedRaw = toNumber(ctx.shareAmountMinor);
+  const expectedAmountMinor = expectedRaw === null
+    ? null
+    : Math.max(0, Math.round(expectedRaw));
+  const providerAmountMinor = pickExplicitTransactionToPayMinor(primaryPayload, fallbackPayload);
+  if (expectedAmountMinor !== null && providerAmountMinor === expectedAmountMinor) return null;
+  return {
+    code: "SPLIT_PROVIDER_AMOUNT_MISMATCH",
+    transactionId: responsePayload?.transactionId || toStr(ctx.transactionId),
+    expectedAmountMinor,
+    providerAmountMinor,
+  };
+};
+
 const pickTransactionDeadlineAt = (ctx, primaryPayload, fallbackPayload) => {
   const candidates = [
     toStr(primaryPayload?.paymentDueDate),
@@ -1175,6 +1274,11 @@ if (!isOk(msg.statusCode)) {
   if (ctx.step === "legacy_pricing_booking") {
     return fail(503, "Не удалось проверить способ оплаты организатора", {
       code: "SPLIT_LEGACY_PRICING_RECOVERY_UNAVAILABLE",
+    });
+  }
+  if (ctx.step === "legacy_pricing_transaction") {
+    return fail(503, "Не удалось проверить оплату организатора", {
+      code: "SPLIT_LEGACY_PRICING_TRANSACTION_UNAVAILABLE",
     });
   }
   if (ctx.step === "verify_room_studio") {
@@ -1395,6 +1499,9 @@ if (ctx.step === "legacy_pricing_booking") {
   const recovery = ctx.legacyPricingRecovery && typeof ctx.legacyPricingRecovery === "object"
     ? ctx.legacyPricingRecovery
     : {};
+  const recoveryMode = toStr(recovery.mode)
+    ? resolvePaymentMode(recovery.mode)
+    : "subscription";
   const organizerBookingId = toStr(recovery.organizerBookingId);
   const bookingCandidates = providerObjects(msg.payload).filter((item) => (
     toStr(item.id || item.uuid || item.bookingId) === organizerBookingId
@@ -1415,25 +1522,109 @@ if (ctx.step === "legacy_pricing_booking") {
     || booking?.paymentMethod
     || "",
   ).trim().toUpperCase();
-  const isActiveSubscriptionBooking = Boolean(
+  const isActiveBooking = Boolean(
     booking
     && organizerBookingId
     && exerciseIds.includes(toStr(ctx.exerciseId))
     && organizerIdentityMatches
-    && paymentType === "SUBSCRIPTION"
-    && clientSubscriptionId
     && booking.isCancelled === false
     && booking.cancelled === false
   );
-  if (!isActiveSubscriptionBooking) {
-    return fail(409, "Абонемент организатора не подтверждён", {
-      code: "SPLIT_LEGACY_ORGANIZER_SUBSCRIPTION_NOT_CONFIRMED",
+  const isActiveSubscriptionBooking = Boolean(
+    isActiveBooking
+    && paymentType === "SUBSCRIPTION"
+    && clientSubscriptionId
+  );
+  const isActiveOneTimeBooking = Boolean(
+    isActiveBooking
+    && paymentType === "ON_PLACE"
+  );
+  if (
+    (recoveryMode === "subscription" && !isActiveSubscriptionBooking)
+    || (recoveryMode === "one_time" && !isActiveOneTimeBooking)
+  ) {
+    return fail(409, recoveryMode === "subscription"
+      ? "Абонемент организатора не подтверждён"
+      : "Оплата организатора не подтверждена", {
+      code: recoveryMode === "subscription"
+        ? "SPLIT_LEGACY_ORGANIZER_SUBSCRIPTION_NOT_CONFIRMED"
+        : "SPLIT_LEGACY_ORGANIZER_ONE_TIME_BOOKING_NOT_CONFIRMED",
     });
   }
   ctx.legacyPricingRecovery = {
+    mode: recoveryMode,
     organizerBookingId,
     organizerClientId: expectedOrganizerClientId,
     organizerPhone: expectedOrganizerPhone,
+    verified: recoveryMode === "subscription",
+  };
+  if (recoveryMode === "one_time") {
+    ctx.legacyPricingRecovery.expectedAmountMinor = Math.floor(
+      toNumber(recovery.expectedAmountMinor) ?? -1,
+    );
+    ctx.legacyPricingRecovery.paidDate = toStr(recovery.paidDate);
+    ctx.legacyPricingRecovery.bookingVerified = true;
+    if (
+      !expectedOrganizerClientId
+      || ctx.legacyPricingRecovery.expectedAmountMinor <= 0
+      || !/^\d{4}-\d{2}-\d{2}$/.test(ctx.legacyPricingRecovery.paidDate || "")
+    ) {
+      return fail(409, "Не удалось подтвердить оплату организатора", {
+        code: "SPLIT_LEGACY_PRICING_TRANSACTION_EVIDENCE_MISSING",
+      });
+    }
+    const query = buildQuery([
+      ["clientIds", expectedOrganizerClientId],
+      ["dateFrom", ctx.legacyPricingRecovery.paidDate],
+      ["dateTo", ctx.legacyPricingRecovery.paidDate],
+      ["page", 0],
+      ["size", 100],
+      ["sort", "createDate,desc"],
+    ]);
+    ctx.step = "legacy_pricing_transaction";
+    return adminRequest(ctx, "GET", `/transactions?${query}`);
+  }
+  return startPricingPolicyRequest(ctx);
+}
+
+if (ctx.step === "legacy_pricing_transaction") {
+  const recovery = ctx.legacyPricingRecovery && typeof ctx.legacyPricingRecovery === "object"
+    ? ctx.legacyPricingRecovery
+    : {};
+  const organizerBookingId = toStr(recovery.organizerBookingId);
+  const organizerClientId = toStr(recovery.organizerClientId);
+  const expectedAmountMinor = Math.floor(toNumber(recovery.expectedAmountMinor) ?? -1);
+  const expectedPaidDate = toStr(recovery.paidDate);
+  const transactions = extractList(msg.payload).filter((item) => item && typeof item === "object");
+  const matches = transactions.filter((transaction) => {
+    const transactionIds = exactTransactionIds(transaction);
+    const bookingIds = exactTransactionBookingIds(transaction);
+    const clientIds = exactTransactionClientIds(transaction);
+    const transactionStatus = toStr(
+      transaction.paymentStatus
+      || transaction.transactionStatus
+      || transaction.status
+      || transaction.state,
+    )?.toUpperCase();
+    return (
+      statusIsConfirmed(transactionStatus)
+      && transactionIds.length === 1
+      && bookingIds.length === 1
+      && bookingIds[0] === organizerBookingId
+      && clientIds.length === 1
+      && clientIds[0] === organizerClientId
+      && providerTransactionCreateDate(transaction) === expectedPaidDate
+      && providerTransactionAmountMinor(transaction) === expectedAmountMinor
+    );
+  });
+  if (matches.length !== 1) {
+    return fail(409, "Оплата организатора не подтверждает восстановленный тариф", {
+      code: "SPLIT_LEGACY_ORGANIZER_PAYMENT_NOT_CONFIRMED",
+    });
+  }
+  ctx.legacyPricingRecovery = {
+    ...recovery,
+    transactionId: exactTransactionIds(matches[0])[0],
     verified: true,
   };
   return startPricingPolicyRequest(ctx);
@@ -1893,10 +2084,18 @@ if (ctx.step === "available_products") {
 
 if (ctx.step === "transaction") {
   ctx.transaction = msg.payload;
-  ctx.transactionId = pickTransactionId(msg.payload) || ctx.transactionId || null;
+  const directTransactionIds = exactTransactionIds(msg.payload);
+  if (directTransactionIds.length !== 1) {
+    return fail(409, "Viva вернула неоднозначный идентификатор транзакции", {
+      code: "SPLIT_PROVIDER_TRANSACTION_ID_INVALID",
+      transactionIds: directTransactionIds,
+    });
+  }
+  ctx.transactionId = directTransactionIds[0];
 
   const directPaymentUrl = extractPaymentUrl(msg.payload);
-  if (!directPaymentUrl && ctx.transactionId) {
+  const directProviderAmountMinor = pickExplicitTransactionToPayMinor(msg.payload, null);
+  if ((!directPaymentUrl || directProviderAmountMinor === null) && ctx.transactionId) {
     ctx.step = "transaction_lookup";
     return adminRequest(
       ctx,
@@ -1906,6 +2105,10 @@ if (ctx.step === "transaction") {
   }
 
   const responsePayload = buildSplitPaymentResponse(ctx, msg.payload, ctx.transaction);
+  const amountMismatch = splitProviderAmountMismatch(ctx, msg.payload, ctx.transaction, responsePayload);
+  if (amountMismatch) {
+    return fail(409, "Viva вернула другую сумму оплаты", amountMismatch);
+  }
   if (!responsePayload.paymentUrl && responsePayload.toPayMinor > 0) {
     return fail(502, "Viva transaction has no paymentUrl", {
       transactionId: responsePayload.transactionId,
@@ -1920,7 +2123,22 @@ if (ctx.step === "transaction") {
 }
 
 if (ctx.step === "transaction_lookup") {
+  const expectedTransactionId = toStr(ctx.transactionId);
+  const actualTransactionIds = exactTransactionIds(msg.payload);
+  const actualTransactionId = actualTransactionIds.length === 1 ? actualTransactionIds[0] : null;
+  if (!expectedTransactionId || actualTransactionId !== expectedTransactionId) {
+    return fail(409, "Viva вернула другую транзакцию", {
+      code: "SPLIT_PROVIDER_TRANSACTION_MISMATCH",
+      expectedTransactionId,
+      actualTransactionId,
+      actualTransactionIds,
+    });
+  }
   const responsePayload = buildSplitPaymentResponse(ctx, msg.payload, ctx.transaction);
+  const amountMismatch = splitProviderAmountMismatch(ctx, msg.payload, null, responsePayload);
+  if (amountMismatch) {
+    return fail(409, "Viva вернула другую сумму оплаты", amountMismatch);
+  }
   if (!responsePayload.paymentUrl && responsePayload.toPayMinor > 0) {
     return fail(502, "Viva transaction has no paymentUrl", {
       transactionId: responsePayload.transactionId,
