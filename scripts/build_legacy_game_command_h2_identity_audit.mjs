@@ -33,6 +33,20 @@ function runBytes(command, args) {
   }
   return Buffer.from(result.stdout);
 }
+function inspectBuildImage() {
+  const imageId = run("docker", ["image", "inspect", BUILD_IMAGE, "--format", "{{.Id}}"]);
+  const repoDigests = JSON.parse(run(
+    "docker",
+    ["image", "inspect", BUILD_IMAGE, "--format", "{{json .RepoDigests}}"],
+  ));
+  const expectedDigest = BUILD_IMAGE.split("@")[1];
+  if (!/^sha256:[a-f0-9]{64}$/.test(imageId)
+    || !Array.isArray(repoDigests)
+    || !repoDigests.some((value) => typeof value === "string" && value.endsWith(`@${expectedDigest}`))) {
+    throw new Error("local build image manifest digest mismatch");
+  }
+  return imageId;
+}
 function assertStaticAmd64Elf(buffer) {
   if (buffer.length < 64 || buffer.subarray(0, 4).toString("hex") !== "7f454c46"
     || buffer[4] !== 2 || buffer[5] !== 1 || buffer.readUInt16LE(18) !== 62) {
@@ -80,8 +94,7 @@ export function buildH2IdentityAudit(argv) {
   const sourceBytes = environment === "production"
     ? runBytes("git", ["show", repositoryCommit + ":" + sourceRelative])
     : fs.readFileSync(path.join(repoRoot, sourceRelative));
-  const imageId = run("docker", ["image", "inspect", BUILD_IMAGE, "--format", "{{.Id}}"]).replace(/^sha256:/, "");
-  if (imageId !== BUILD_IMAGE.split("sha256:")[1]) throw new Error("local build image identity mismatch");
+  const imageId = inspectBuildImage();
   const staging = fs.mkdtempSync(out + ".staging-");
   const input = fs.mkdtempSync(out + ".input-");
   try {
@@ -113,7 +126,7 @@ export function buildH2IdentityAudit(argv) {
       schemaVersion: 1, artifactKind: "legacy-game-command-h2-identity-audit", environment,
       repositoryCommit, dirtySource: Boolean(status),
       source: { path: sourceRelative, gitObject: environment === "production", sha256: sha256(sourceBytes) },
-      build: { image: BUILD_IMAGE, imageId: "sha256:" + imageId, platform: "linux/amd64", network: "none",
+      build: { image: BUILD_IMAGE, imageId, platform: "linux/amd64", network: "none",
         compiler: compiler.split("\n")[0], flags: BUILD_FLAGS, reproducibleDoubleBuild: true },
       artifact: { path: binaryName, size: binary.length, sha256: sha256(binary), mode: "0500",
         elfClass: "ELF64", machine: "x86_64", staticallyLinked: true },

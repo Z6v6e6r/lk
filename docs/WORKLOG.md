@@ -1562,5 +1562,7 @@
   release, H2 identity and root ACL bootstrap suites to the automatic pull-request and
   push-main exact-head gate, fetching only their source-pinned immutable build image.
 - Extended the workflow contract so these source boundaries cannot be silently skipped.
+- Fixed both legacy artifact builders to distinguish the pinned registry manifest digest
+  from Docker's platform-specific local image config ID on fresh Linux runners.
 - This is a source-only CI correction: product flows, Node-RED production, provider
   state, runtime permissions and deployment paths were not changed or executed.
