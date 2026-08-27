@@ -13,11 +13,19 @@ const QUERY_SOURCE_PATH = path.join(
   SCRIPT_DIR,
   'nodered_games_nodes/fn_get_by_id_query.js',
 );
+const RESPONSE_SOURCE_PATH = path.join(
+  SCRIPT_DIR,
+  'nodered_games_nodes/fn_get_by_id_resp.js',
+);
+const LIST_NORMALIZER_SOURCE_PATH = path.join(
+  SCRIPT_DIR,
+  'nodered_games_nodes/fn_list_normalize.js',
+);
 
 export const DIRECT_LOOKUP_CONTRACT = Object.freeze({
-  wholeFlowSha256: '6d66ef25bdb2a03a031e8be6471fd9333ff960ed980e14e7011e95c76e006a90',
-  nodeCount: 4614,
-  httpRouteCount: 203,
+  wholeFlowSha256: '14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350',
+  nodeCount: 4762,
+  httpRouteCount: 215,
   tab: {
     id: '4b91e2a2413688db',
     type: 'tab',
@@ -75,12 +83,24 @@ export const DIRECT_LOOKUP_CONTRACT = Object.freeze({
   response: {
     id: 'd44d0fcf9250927f',
     nodeSha256: 'e7b8ec038569f143589963861c8ddfd92b808e42d3ccccfd8a08ac0d50fa23e4',
-    funcSha256: 'dd2be64ed8e2ff42a951a799ee72b18e13e98486d3b06a24d55a872023979b68',
+    preimageSha256: 'dd2be64ed8e2ff42a951a799ee72b18e13e98486d3b06a24d55a872023979b68',
+    sourceSha256: '043aaf72085637c1e0b30d76afee0edd25946abeedd9b08a8bba07ffa3f5ea61',
     type: 'function',
     z: '4b91e2a2413688db',
     name: 'Build game by id response',
     outputs: 2,
     wires: [['7b893cc97a815f66'], ['c45153b02914e7e4']],
+  },
+  listNormalizer: {
+    id: '0485dea01865b2dd',
+    nodeSha256: '098436c2d89299cfe26e4156ceef84ed15d3c7e3bf54c0fb0cab6cc5b8511546',
+    preimageSha256: '33d5252688c6f25ab61ef9b3ad157b2ae970bc8d8b60e4264d30dac0a5296172',
+    sourceSha256: '72f74f391e7123749f1317e9bf2176b5813d5ea7580ce940cc2357323eca6330',
+    type: 'function',
+    z: '4b91e2a2413688db',
+    name: 'Dedupe + normalize upcoming games',
+    outputs: 2,
+    wires: [['7b8f8065271f5b4c'], ['62b2b0e16ed306e7']],
   },
   httpResponse: {
     id: '7b893cc97a815f66',
@@ -168,6 +188,8 @@ function snapshotInvariants(flow) {
 export function synchronizeDirectLookup(
   flow,
   querySource,
+  responseSource,
+  listNormalizerSource,
   sourceSha256,
   contract = DIRECT_LOOKUP_CONTRACT,
 ) {
@@ -216,8 +238,30 @@ export function synchronizeDirectLookup(
     ['id', 'type', 'z', 'name', 'outputs', 'wires'],
     'Direct lookup response',
   );
-  if (sha256(String(response.func ?? '')) !== contract.response.funcSha256) {
+  if (sha256(String(response.func ?? '')) !== contract.response.preimageSha256) {
     fail('Direct lookup response function preimage mismatch');
+  }
+  if (
+    typeof responseSource !== 'string'
+    || sha256(responseSource) !== contract.response.sourceSha256
+  ) {
+    fail('Direct lookup response source contract mismatch');
+  }
+  const listNormalizer = exactNode(flow, contract.listNormalizer.id, 'Games list normalizer');
+  assertNode(
+    listNormalizer,
+    contract.listNormalizer,
+    ['id', 'type', 'z', 'name', 'outputs', 'wires'],
+    'Games list normalizer',
+  );
+  if (sha256(String(listNormalizer.func ?? '')) !== contract.listNormalizer.preimageSha256) {
+    fail('Games list normalizer function preimage mismatch');
+  }
+  if (
+    typeof listNormalizerSource !== 'string'
+    || sha256(listNormalizerSource) !== contract.listNormalizer.sourceSha256
+  ) {
+    fail('Games list normalizer source contract mismatch');
   }
   assertNode(
     exactNode(flow, contract.httpResponse.id, 'Direct lookup HTTP response'),
@@ -239,6 +283,8 @@ export function synchronizeDirectLookup(
     fail('Direct lookup query source contract mismatch');
   }
   query.func = querySource;
+  response.func = responseSource;
+  listNormalizer.func = listNormalizerSource;
 
   const changedNodes = flow.flatMap((node, index) => {
     const previous = before[index];
@@ -248,16 +294,15 @@ export function synchronizeDirectLookup(
       .sort();
     return [{ id: node.id, changedFields }];
   });
+  const targetIds = new Set([
+    contract.query.id,
+    contract.response.id,
+    contract.listNormalizer.id,
+  ]);
   if (changedNodes.some((change) => (
-    change.id !== contract.query.id || !isDeepStrictEqual(change.changedFields, ['func'])
+    !targetIds.has(change.id) || !isDeepStrictEqual(change.changedFields, ['func'])
   ))) {
-    fail('Candidate changed nodes or fields outside the direct lookup query');
-  }
-  if (!isDeepStrictEqual(
-    exactNode(before, contract.response.id, 'Direct lookup response'),
-    exactNode(flow, contract.response.id, 'Direct lookup response'),
-  )) {
-    fail('Direct lookup response changed');
+    fail('Candidate changed nodes or fields outside approved direct lookup functions');
   }
 
   const afterInvariants = snapshotInvariants(flow);
@@ -348,9 +393,13 @@ export function publishDirectLookupCandidate({
   const sourceBytes = readVerifiedDirectLookupBytes(verified);
   const paths = publicationPaths(output, report, verified.workspace);
   const querySource = fs.readFileSync(QUERY_SOURCE_PATH, 'utf8');
+  const responseSource = fs.readFileSync(RESPONSE_SOURCE_PATH, 'utf8');
+  const listNormalizerSource = fs.readFileSync(LIST_NORMALIZER_SOURCE_PATH, 'utf8');
   const result = synchronizeDirectLookup(
     structuredClone(verified.source),
     querySource,
+    responseSource,
+    listNormalizerSource,
     verified.sourceSha256,
     contract,
   );

@@ -12,9 +12,9 @@ const REPO_ROOT = fs.realpathSync(path.resolve(SCRIPT_DIR, '..'));
 const SOURCE_DIR = path.join(SCRIPT_DIR, 'nodered_games_nodes');
 
 export const GAMES_LIST_CONTRACT = Object.freeze({
-  wholeFlowSha256: '6d66ef25bdb2a03a031e8be6471fd9333ff960ed980e14e7011e95c76e006a90',
-  nodeCount: 4614,
-  httpRouteCount: 203,
+  wholeFlowSha256: '14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350',
+  nodeCount: 4762,
+  httpRouteCount: 215,
   tab: {
     id: '4b91e2a2413688db',
     type: 'tab',
@@ -72,15 +72,15 @@ export const GAMES_LIST_CONTRACT = Object.freeze({
   },
   normalizer: {
     id: '0485dea01865b2dd',
-    nodeSha256: '3dc88709f6de874634b87d8cc3b1088710b1655f285155e39c05d0dcf9bb2ab9',
+    nodeSha256: '098436c2d89299cfe26e4156ceef84ed15d3c7e3bf54c0fb0cab6cc5b8511546',
     type: 'function',
     z: '4b91e2a2413688db',
     name: 'Dedupe + normalize upcoming games',
     outputs: 2,
     wires: [['7b8f8065271f5b4c'], ['62b2b0e16ed306e7']],
     file: 'fn_list_normalize.js',
-    preimageSha256: 'aabbe49ef2b7547df800ae95ac0b59579279e3841c635fc8b66356dc52218886',
-    sourceSha256: '33d5252688c6f25ab61ef9b3ad157b2ae970bc8d8b60e4264d30dac0a5296172',
+    preimageSha256: '33d5252688c6f25ab61ef9b3ad157b2ae970bc8d8b60e4264d30dac0a5296172',
+    sourceSha256: '72f74f391e7123749f1317e9bf2176b5813d5ea7580ce940cc2357323eca6330',
   },
   orphanIds: ['fcb8b28e2ecb4e7c', 'f4cc88af12330122'],
 });

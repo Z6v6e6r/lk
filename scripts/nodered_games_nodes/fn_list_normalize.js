@@ -72,24 +72,72 @@ const stripHeavyPhotoPayload = (photo) => {
   return next;
 };
 
+const phoneFieldPattern = /(?:^|[_-])(?:phone|mobile|telephone|msisdn)(?:s|number|norm|normalized)?(?:$|[_-])|(?:Phone|Mobile|Telephone|Msisdn)(?:s|Number|Norm|Normalized)?$/;
+const phoneIdentityPattern = /^(phone|mobile|telephone|msisdn):/i;
+const exactPhoneValuePattern = /^(?:\+?7|8)(?:[\s().-]*\d){10}$/;
+const embeddedPhoneValuePattern = /(^|[^\d])((?:\+?7|8)(?:[\s().-]*\d){10})(?!\d)/g;
+const phoneQueryValuePattern = /([?&][^=&#]*(?:phone|mobile|telephone|msisdn)[^=&#]*=)[^&#]*/gi;
+const isPlainRecord = (value) => {
+  if (!isObj(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
+const redactPhoneString = (value) => {
+  const trimmed = value.trim();
+  if (phoneIdentityPattern.test(trimmed) || exactPhoneValuePattern.test(trimmed)) {
+    return null;
+  }
+  return value
+    .replace(phoneQueryValuePattern, "$1[redacted]")
+    .replace(embeddedPhoneValuePattern, "$1[redacted]");
+};
+
+const redactPhoneData = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactPhoneData(item));
+  }
+  if (isPlainRecord(value)) {
+    const next = {};
+    Object.entries(value).forEach(([key, item]) => {
+      if (phoneFieldPattern.test(key)) return;
+      const redacted = redactPhoneData(item);
+      if (redacted !== null || item === null) {
+        next[key] = redacted;
+      }
+    });
+    return next;
+  }
+  if (typeof value === "string") {
+    return redactPhoneString(value);
+  }
+  if (
+    typeof value === "number"
+    && Number.isInteger(value)
+    && exactPhoneValuePattern.test(String(value))
+  ) {
+    return null;
+  }
+  return value;
+};
+
 const sanitizeListDoc = (doc) => {
   if (!isObj(doc)) return doc;
   const metadata = isObj(doc.metadata) ? doc.metadata : null;
-  if (!metadata) return doc;
   const matchResult = isObj(metadata.matchResult) ? metadata.matchResult : null;
-  if (!matchResult || !Array.isArray(matchResult.photos)) return doc;
-
-  const sanitizedPhotos = matchResult.photos.map((photo) => stripHeavyPhotoPayload(photo));
-  return {
-    ...doc,
-    metadata: {
-      ...metadata,
-      matchResult: {
-        ...matchResult,
-        photos: sanitizedPhotos,
+  const withoutHeavyPhotos = matchResult && Array.isArray(matchResult.photos)
+    ? {
+      ...doc,
+      metadata: {
+        ...metadata,
+        matchResult: {
+          ...matchResult,
+          photos: matchResult.photos.map((photo) => stripHeavyPhotoPayload(photo)),
+        },
       },
-    },
-  };
+    }
+    : doc;
+  return redactPhoneData(withoutHeavyPhotos);
 };
 
 const getTs = (doc) => {
@@ -426,8 +474,8 @@ const hasMore = safeLimit ? offset + slicedGames.length < total : false;
 msg.statusCode = 200;
 msg.headers = { "Content-Type": "application/json; charset=utf-8" };
 msg.payload = {
-  phone,
   clientId,
+  identityFiltered: Boolean(phone || clientId),
   paymentRef,
   bookingIds: Array.from(bookingIdsFilter.values()),
   public: publicMode,

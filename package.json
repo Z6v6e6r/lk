@@ -96,7 +96,7 @@
     "test:viva-user-agent": "node --test scripts/tests/vivaUserAgent.test.mjs",
     "test:rating-worker-release": "node --test scripts/tests/ratingWorkerRelease.test.mjs scripts/tests/ratingWorkerWatchdog.test.mjs",
     "test:nodered-chat-recovery": "node --test scripts/tests/noderedChatRecovery.test.mjs",
-    "test:games-list-identity-recovery": "node --test scripts/tests/gamesListIdentityRecovery.test.mjs",
+    "test:games-list-identity-recovery": "node --experimental-strip-types --test scripts/tests/gamesListIdentityRecovery.test.mjs scripts/tests/gameListNormalize.test.ts scripts/tests/gameResponsePhoneRedaction.test.ts scripts/tests/gameIdentityRelevance.test.ts",
     "test:games-direct-lookup-recovery": "node --test scripts/tests/gamesDirectLookupRecovery.test.mjs",
     "test:games-create-upsert-recovery": "node --test scripts/tests/gamesCreateUpsertRecovery.test.mjs",
     "test:games-patch-recovery": "node --test scripts/tests/gamesPatchRecovery.test.mjs",
