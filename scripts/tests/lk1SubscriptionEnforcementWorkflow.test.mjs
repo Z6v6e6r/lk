@@ -106,6 +106,10 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     step("Validate LK1 workflow event and identity contract").run,
     "node --test scripts/tests/lk1SubscriptionEnforcementWorkflow.test.mjs",
   );
+  assert.match(
+    step("Run unified candidate and drift-negative tests").run,
+    /scripts\/tests\/lk1SubscriptionActivationPacket\.test\.mjs/,
+  );
 });
 
 test("workflow contains no manual or production mutation path", () => {

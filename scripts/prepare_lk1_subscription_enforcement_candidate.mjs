@@ -21,8 +21,8 @@ const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex"
 const fail = (message) => { throw new Error(message); };
 
 export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
-  sourceSha256: "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350",
-  candidateSha256: "d88ea0afc5fd00e5f4e532415b57d33ed2691c320c3ba23fd2a54ba804fb139c",
+  sourceSha256: "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
+  candidateSha256: "928a7c49a91a77a9abac6e2bcf6bbea5091b25bdfd44e9de8a735454c9a0b429",
   nodeCount: 4762,
   candidateNodeCount: 4812,
   httpRouteCount: 215,

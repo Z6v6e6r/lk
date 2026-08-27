@@ -9,7 +9,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SOURCE_DIR = path.join(SCRIPT_DIR, "nodered_games_nodes");
 
 export const CONTRACT = Object.freeze({
-  flowSha256: "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77bc76b4a9f2a831350",
+  flowSha256: "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
   nodeCount: 4762,
   httpRouteCount: 215,
   tabId: "4b91e2a2413688db",

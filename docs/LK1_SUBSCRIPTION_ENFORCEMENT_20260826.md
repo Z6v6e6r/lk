@@ -1,5 +1,10 @@
 # LK1 subscription enforcement closure — 2026-08-26
 
+> R4 refresh on 2026-08-27: the current live preimage is `9e9698ea…` and the
+> offline unified candidate is `928a7c49…`. The frozen identities below remain
+> historical evidence for PR #4. The current offline packet and remaining activation
+> blockers are documented in `LK1_SUBSCRIPTION_R4_ACTIVATION_PACKET_20260827.md`.
+
 ## Frozen inventory inputs
 
 - Fresh `origin/main`: `db6ef007aab39e6dd880019a6c45f9e11c616cba`.

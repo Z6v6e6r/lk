@@ -60,6 +60,14 @@ Managed subscription policy graph имеет отдельный exact-graph entr
 закреплённые три изменения существующих узлов и два добавляемых policy-узла;
 общий function-only deploy для subscription binding остаётся отдельным gate.
 
+Полный unified LK1 subscription-enforcement graph пока имеет только offline
+packet entrypoint `npm run nodered:lk1-subscription-enforcement:packet`. Он создаёт
+private candidate/contract/plan вне Git и всегда фиксирует
+`liveMutationAuthorized=false`; import/restart/Deploy не выполняются. Текущие
+identity, allowlist, blockers и будущий rollback boundary описаны в
+`docs/LK1_SUBSCRIPTION_R4_ACTIVATION_PACKET_20260827.md`. Partial subscription
+wrappers нельзя применять последовательно вместо unified graph.
+
 Для `POST /lk/subscription-bookings` production nginx должен содержать точный
 proxy-location из `scripts/nginx/lk-subscription-booking-location.conf`.
 Кандидат строится и применяется только через guarded

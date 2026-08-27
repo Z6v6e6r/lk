@@ -146,7 +146,10 @@ jobs:
           scripts/tests/groupScheduleApi.test.ts
 
       - name: Run unified candidate and drift-negative tests
-        run: node --test scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs
+        run: >-
+          node --test
+          scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs
+          scripts/tests/lk1SubscriptionActivationPacket.test.mjs
 
       - name: Run tracked credential and authenticated-route security tests
         run: >-
