@@ -30,7 +30,13 @@ const changedFields = (before, after) => [...new Set([
 
 const nodeSha256 = (node) => sha256(Buffer.from(JSON.stringify(node), "utf8"));
 
-const assertHttpInputsUnchanged = (liveFlow, candidateFlow) => {
+const withoutWires = (node) => {
+  const result = { ...node };
+  delete result.wires;
+  return result;
+};
+
+const assertHttpInputsPreservedExceptWires = (liveFlow, candidateFlow) => {
   const liveRoutes = liveFlow.filter((node) => node.type === "http in");
   const candidateRoutes = candidateFlow.filter((node) => node.type === "http in");
   const liveById = new Map(liveRoutes.map((node) => [node.id, node]));
@@ -39,8 +45,8 @@ const assertHttpInputsUnchanged = (liveFlow, candidateFlow) => {
   const candidateIds = [...candidateById.keys()].sort();
   if (!isDeepStrictEqual(liveIds, candidateIds)) throw new Error("Candidate changed HTTP routes");
   for (const id of liveIds) {
-    if (!isDeepStrictEqual(liveById.get(id), candidateById.get(id))) {
-      throw new Error(`Candidate changed HTTP route: ${id}`);
+    if (!isDeepStrictEqual(withoutWires(liveById.get(id)), withoutWires(candidateById.get(id)))) {
+      throw new Error(`Candidate changed HTTP route identity or configuration: ${id}`);
     }
   }
   return liveRoutes.length;
@@ -167,7 +173,7 @@ export function buildExactGraphContract({
   if (!isDeepStrictEqual(actualAdditionIds, normalizedAdditionIds)) {
     throw new Error(`Exact-graph added-node contract mismatch: ${actualAdditionIds.join(",")}`);
   }
-  const httpInputCount = assertHttpInputsUnchanged(liveFlow, candidateFlow);
+  const httpInputCount = assertHttpInputsPreservedExceptWires(liveFlow, candidateFlow);
 
   return {
     formatVersion: EXACT_GRAPH_CONTRACT_FORMAT_VERSION,

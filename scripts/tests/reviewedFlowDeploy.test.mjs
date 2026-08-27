@@ -110,6 +110,14 @@ test("exact-graph contract pins exact changed fields and added nodes while prese
     contract: tamperedContract,
   }), /contract content mismatch/);
 
+  const tamperedNodeHash = structuredClone(contract);
+  tamperedNodeHash.allowedChanges[0].candidateNodeSha256 = "0".repeat(64);
+  assert.throws(() => validateExactGraphContract({
+    liveBytes,
+    candidateBytes,
+    contract: tamperedNodeHash,
+  }), /contract content mismatch/);
+
   const extraChange = exactGraphCandidateFixture();
   extraChange.find((node) => node.id === "response").name = "changed";
   assert.throws(() => buildExactGraphContract({
@@ -142,6 +150,77 @@ test("exact-graph contract pins exact changed fields and added nodes while prese
     ],
     allowedAdditionIds: ["policy"],
   }), /changed HTTP route/);
+});
+
+test("exact-graph contract permits only an explicitly pinned HTTP input wire change", () => {
+  const liveBytes = bytes(fixture());
+  const candidate = exactGraphCandidateFixture();
+  candidate.find((node) => node.id === "route").wires = [["policy"]];
+  const candidateBytes = bytes(candidate);
+  const allowedChanges = [
+    { id: "fn-a", fields: ["func", "outputs", "wires"] },
+    { id: "route", fields: ["wires"] },
+  ];
+  const contract = buildExactGraphContract({
+    liveBytes,
+    candidateBytes,
+    deploymentId: "managed-subscription-rules",
+    allowedChanges,
+    allowedAdditionIds: ["policy"],
+  });
+  assert.equal(contract.httpInputCount, 1);
+  assert.deepEqual(
+    contract.allowedChanges.find(({ id }) => id === "route").fields,
+    ["wires"],
+  );
+  assert.deepEqual(validateExactGraphContract({ liveBytes, candidateBytes, contract }), contract);
+
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes,
+    deploymentId: "managed-subscription-rules",
+    allowedChanges: allowedChanges.filter(({ id }) => id !== "route"),
+    allowedAdditionIds: ["policy"],
+  }), /changed-node contract mismatch/);
+
+  const routeConfigurationDrift = structuredClone(candidate);
+  routeConfigurationDrift.find((node) => node.id === "route").method = "post";
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(routeConfigurationDrift),
+    deploymentId: "managed-subscription-rules",
+    allowedChanges: [
+      { id: "fn-a", fields: ["func", "outputs", "wires"] },
+      { id: "route", fields: ["method", "wires"] },
+    ],
+    allowedAdditionIds: ["policy"],
+  }), /changed HTTP route identity or configuration/);
+
+  const addedRoute = structuredClone(candidate);
+  addedRoute.push({
+    id: "new-route",
+    type: "http in",
+    z: "tab",
+    method: "get",
+    url: "/lk/new",
+    wires: [["policy"]],
+  });
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(addedRoute),
+    deploymentId: "managed-subscription-rules",
+    allowedChanges,
+    allowedAdditionIds: ["policy", "new-route"],
+  }), /changed HTTP routes/);
+
+  const removedRoute = candidate.filter((node) => node.id !== "route");
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(removedRoute),
+    deploymentId: "managed-subscription-rules",
+    allowedChanges: [{ id: "fn-a", fields: ["func", "outputs", "wires"] }],
+    allowedAdditionIds: ["policy"],
+  }), /removed live node/);
 });
 
 const prepareRuntime = (

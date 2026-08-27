@@ -93,6 +93,13 @@ lease in `/root/.node-red/.padlhub-reviewed-flow-deploy.lease.json`.
 This lease is the minimum production soak window. Do not delete or edit it to
 force an unrelated rollout; wait for expiry or roll back the owning deployment.
 
+Exact-graph contracts may authorize a `wires`-only change on an existing
+`http in` node. The route ID and every other route field (including tab,
+method, URL, name, and configuration) must remain structurally identical,
+while the exact changed-field list and before/after node hashes pin the reviewed
+rewire. Route additions and removals remain forbidden. Function-only contracts
+continue to require the complete HTTP input set to be unchanged.
+
 ## Individual gates
 
 ```bash
