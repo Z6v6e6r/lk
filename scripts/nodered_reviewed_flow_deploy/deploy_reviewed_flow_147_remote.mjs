@@ -8,8 +8,12 @@ import {
   assertProtectedFile,
   assertProtectedFileModes,
   atomicWrite,
+  recoverAtomicExclusivePublication,
   sha256,
+  syncDirectory,
   validateReviewedFlowContract,
+  writeFileExclusiveAtomicDurable,
+  writeFileExclusiveDurable,
 } from "./runtime_contract.mjs";
 
 const LIVE_FLOW_PATH = "/root/.node-red/flows.json";
@@ -19,8 +23,10 @@ const DEPLOYMENT_LOCK_PATH = "/root/.node-red/.padlhub-reviewed-flow-deploy.lock
 const DEPLOYMENT_LEASE_PATH = "/root/.node-red/.padlhub-reviewed-flow-deploy.lease.json";
 const DEPLOYMENT_LOCK_HELD_ENV = "PADLHUB_REVIEWED_FLOW_LOCK_HELD";
 const DEPLOYMENT_LOCK_CONFLICT_EXIT = 75;
-const DEPLOYMENT_LEASE_FORMAT_VERSION = 1;
+const DEPLOYMENT_LEASE_FORMAT_VERSION = 2;
 const DEFAULT_DEPLOYMENT_LEASE_MS = 15 * 60 * 1000;
+const DEPLOYMENT_LEASE_PHASES = new Set(["applying", "soaking", "rollback-restart-required"]);
+const LEGACY_DEPLOYMENT_LEASE_PHASE = "legacy-unknown";
 const STAGE_PATTERN = /^\.padlhub-reviewed-flow-stage-\d{8}T\d{6}[+-]\d{4}-\d+$/;
 
 const safeTimestamp = (value) => {
@@ -49,22 +55,31 @@ const runPm2Command = (args) => {
 };
 
 export const createPm2Adapter = () => ({
-  assertOnline() {
+  inspect() {
     const processes = JSON.parse(runPm2Command(["jlist"]));
     const matches = processes.filter((item) => item?.name === "node-red");
     if (matches.length !== 1) throw new Error("Expected exactly one PM2 node-red process");
     const processInfo = matches[0];
-    if (processInfo?.pm2_env?.status !== "online") throw new Error("PM2 node-red process is not online");
     const result = {
       pid: Number(processInfo.pid),
+      status: String(processInfo?.pm2_env?.status || ""),
       restartCount: Number(processInfo?.pm2_env?.restart_time),
     };
-    if (!Number.isInteger(result.pid) || result.pid <= 0 || !Number.isInteger(result.restartCount) || result.restartCount < 0) {
+    if (!Number.isInteger(result.pid) || result.pid < 0 || !result.status
+      || !Number.isInteger(result.restartCount) || result.restartCount < 0) {
       throw new Error("PM2 node-red process metadata is invalid");
     }
     return result;
   },
+  assertOnline() {
+    const result = this.inspect();
+    if (result.status !== "online" || result.pid <= 0) throw new Error("PM2 node-red process is not online");
+    return result;
+  },
   restart(previousRestartCount) {
+    if (!Number.isInteger(previousRestartCount) || previousRestartCount < 0) {
+      throw new Error("Previous PM2 node-red restart counter is invalid");
+    }
     runPm2Command(["restart", "node-red"]);
     const current = this.assertOnline();
     if (!Number.isInteger(current.restartCount) || current.restartCount <= previousRestartCount) {
@@ -108,13 +123,21 @@ export function createReviewedFlowRuntime({
     if (!fs.existsSync(backupDirectory)) {
       fs.mkdirSync(backupDirectory, { mode: 0o700 });
       fs.chownSync(backupDirectory, uid, gid);
+      fs.chmodSync(backupDirectory, 0o700);
+      syncDirectory(path.dirname(backupDirectory));
     }
     assertProtectedDirectory(backupDirectory, { uid, gid, mode: 0o700 });
+  };
+
+  const unlinkDeploymentLease = () => {
+    fs.unlinkSync(deploymentLeasePath);
+    syncDirectory(path.dirname(deploymentLeasePath));
   };
 
   const readDeploymentLease = ({ includeExpired = false } = {}) => {
     assertRoot();
     if (!fs.existsSync(deploymentLeasePath)) return null;
+    recoverAtomicExclusivePublication(deploymentLeasePath, protectedFileOptions);
     assertProtectedFile(deploymentLeasePath, protectedFileOptions);
     let lease;
     try {
@@ -123,10 +146,14 @@ export function createReviewedFlowRuntime({
       throw new Error("Reviewed-flow deployment lease is invalid");
     }
     if (
-      lease?.formatVersion !== DEPLOYMENT_LEASE_FORMAT_VERSION
+      ![1, DEPLOYMENT_LEASE_FORMAT_VERSION].includes(lease?.formatVersion)
       || safeDeploymentId(lease?.deploymentId) !== lease.deploymentId
       || typeof lease?.token !== "string"
       || !lease.token.trim()
+      || (
+        lease.formatVersion === DEPLOYMENT_LEASE_FORMAT_VERSION
+        && !DEPLOYMENT_LEASE_PHASES.has(lease?.phase)
+      )
       || !Number.isInteger(lease?.acquiredAtMs)
       || !Number.isInteger(lease?.expiresAtMs)
       || lease.expiresAtMs <= lease.acquiredAtMs
@@ -135,8 +162,9 @@ export function createReviewedFlowRuntime({
     ) {
       throw new Error("Reviewed-flow deployment lease contract mismatch");
     }
-    if (!includeExpired && lease.expiresAtMs <= now()) {
-      fs.unlinkSync(deploymentLeasePath);
+    if (lease.formatVersion === 1) lease = { ...lease, phase: LEGACY_DEPLOYMENT_LEASE_PHASE };
+    if (!includeExpired && lease.expiresAtMs <= now() && lease.phase === "soaking") {
+      unlinkDeploymentLease();
       return null;
     }
     return lease;
@@ -151,33 +179,61 @@ export function createReviewedFlowRuntime({
     }
   };
 
-  const acquireDeploymentLease = (contract) => {
+  const acquireDeploymentLease = (contract, phase = "applying") => {
     assertDeploymentLeaseAvailable();
+    if (!DEPLOYMENT_LEASE_PHASES.has(phase)) {
+      throw new Error("Reviewed-flow deployment lease phase is invalid");
+    }
     const acquiredAtMs = now();
     const lease = {
       formatVersion: DEPLOYMENT_LEASE_FORMAT_VERSION,
       deploymentId: contract.deploymentId,
       token: randomUUID(),
+      phase,
       acquiredAtMs,
       expiresAtMs: acquiredAtMs + deploymentLeaseMs,
       sourceSha256: contract.sourceSha256,
       candidateSha256: contract.candidateSha256,
     };
-    const descriptor = fs.openSync(
+    writeFileExclusiveAtomicDurable(
       deploymentLeasePath,
-      fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
-      0o600,
+      Buffer.from(`${JSON.stringify(lease, null, 2)}\n`, "utf8"),
+      protectedFileOptions,
     );
-    try {
-      fs.fchownSync(descriptor, uid, gid);
-      fs.fchmodSync(descriptor, 0o600);
-      fs.writeFileSync(descriptor, `${JSON.stringify(lease, null, 2)}\n`);
-      fs.fsyncSync(descriptor);
-    } finally {
-      fs.closeSync(descriptor);
-    }
     assertProtectedFile(deploymentLeasePath, protectedFileOptions);
     return lease;
+  };
+
+  const refreshDeploymentLease = (expectedLease, contract, phase) => {
+    const current = readDeploymentLease({ includeExpired: true });
+    if (
+      !current
+      || current.token !== expectedLease.token
+      || current.deploymentId !== expectedLease.deploymentId
+    ) throw new Error("Reviewed-flow deployment lease ownership mismatch");
+    if (
+      current.deploymentId !== contract.deploymentId
+      || current.sourceSha256 !== contract.sourceSha256
+      || current.candidateSha256 !== contract.candidateSha256
+    ) throw new Error("Reviewed-flow deployment lease digest mismatch");
+    if (!DEPLOYMENT_LEASE_PHASES.has(phase)) {
+      throw new Error("Reviewed-flow deployment lease phase is invalid");
+    }
+    const acquiredAtMs = now();
+    const refreshed = {
+      ...current,
+      formatVersion: DEPLOYMENT_LEASE_FORMAT_VERSION,
+      phase,
+      acquiredAtMs,
+      expiresAtMs: acquiredAtMs + deploymentLeaseMs,
+    };
+    atomicWrite(
+      deploymentLeasePath,
+      Buffer.from(`${JSON.stringify(refreshed, null, 2)}\n`, "utf8"),
+      { uid, gid },
+    );
+    assertProtectedFile(deploymentLeasePath, protectedFileOptions);
+    return refreshed;
   };
 
   const releaseDeploymentLease = (expectedLease) => {
@@ -186,7 +242,7 @@ export function createReviewedFlowRuntime({
     if (current.token !== expectedLease.token || current.deploymentId !== expectedLease.deploymentId) {
       throw new Error("Reviewed-flow deployment lease ownership mismatch");
     }
-    fs.unlinkSync(deploymentLeasePath);
+    unlinkDeploymentLease();
     return true;
   };
 
@@ -247,17 +303,16 @@ export function createReviewedFlowRuntime({
     const stamp = safeTimestamp(options.stamp);
     const prepared = readPrepared(options.candidatePath, options.contractPath, options.deploymentId);
     const beforeProcess = pm2.assertOnline();
+    assertDeploymentLeaseAvailable();
     ensureBackupDirectory();
     const flowBackup = path.join(backupDirectory, `flows-pre-${prepared.contract.deploymentId}-${stamp}.json`);
     const contractBackup = path.join(backupDirectory, `contract-${prepared.contract.deploymentId}-${stamp}.json`);
-    const deploymentLease = acquireDeploymentLease(prepared.contract);
+    writeFileExclusiveDurable(flowBackup, prepared.liveBytes, protectedFileOptions);
+    writeFileExclusiveDurable(contractBackup, prepared.contractBytes, protectedFileOptions);
+    let deploymentLease = acquireDeploymentLease(prepared.contract);
 
     let published = false;
     try {
-      fs.writeFileSync(flowBackup, prepared.liveBytes, { flag: "wx", mode: 0o600 });
-      fs.chownSync(flowBackup, uid, gid);
-      fs.writeFileSync(contractBackup, prepared.contractBytes, { flag: "wx", mode: 0o600 });
-      fs.chownSync(contractBackup, uid, gid);
       if (sha256(fs.readFileSync(liveFlowPath)) !== prepared.contract.sourceSha256) {
         throw new Error("Live flow changed after backup and before publication");
       }
@@ -268,6 +323,7 @@ export function createReviewedFlowRuntime({
       if (activeSha256 !== prepared.contract.candidateSha256) {
         throw new Error("Active flow digest differs from reviewed candidate");
       }
+      deploymentLease = refreshDeploymentLease(deploymentLease, prepared.contract, "soaking");
       return {
         ok: true,
         action: "apply",
@@ -287,8 +343,14 @@ export function createReviewedFlowRuntime({
       let rollbackComplete = !published;
       try {
         if (published) {
+          deploymentLease = refreshDeploymentLease(
+            deploymentLease,
+            prepared.contract,
+            "rollback-restart-required",
+          );
           atomicWrite(liveFlowPath, prepared.liveBytes, { uid, gid });
-          pm2.restart(beforeProcess.restartCount);
+          const rollbackProcess = pm2.inspect();
+          pm2.restart(rollbackProcess.restartCount);
           if (sha256(fs.readFileSync(liveFlowPath)) !== prepared.contract.sourceSha256) {
             throw new Error("automatic rollback did not restore the reviewed digest");
           }
@@ -308,7 +370,7 @@ export function createReviewedFlowRuntime({
   const rollback = (options) => {
     assertRoot();
     const deploymentId = safeDeploymentId(options.deploymentId);
-    const activeLease = readDeploymentLease();
+    const activeLease = readDeploymentLease({ includeExpired: true });
     if (activeLease && activeLease.deploymentId !== deploymentId) {
       throw new Error(
         `Reviewed-flow deployment lease belongs to ${activeLease.deploymentId} until ${new Date(activeLease.expiresAtMs).toISOString()}`,
@@ -342,14 +404,45 @@ export function createReviewedFlowRuntime({
     }
     const activeBytes = fs.readFileSync(liveFlowPath);
     const backupBytes = fs.readFileSync(flowBackup);
-    if (sha256(activeBytes) !== contract.candidateSha256) {
+    const activeSha256 = sha256(activeBytes);
+    const isCandidateActive = activeSha256 === contract.candidateSha256;
+    const isSourceActive = activeSha256 === contract.sourceSha256;
+    if (!isCandidateActive && !isSourceActive) {
       throw new Error("Active flow no longer matches the reviewed candidate selected for rollback");
     }
+    if (isSourceActive && !activeLease) {
+      throw new Error("Reviewed source is active without a matching deployment lease; rollback resume is refused");
+    }
+    if (isSourceActive && activeLease?.phase === "soaking") {
+      throw new Error("Reviewed source is active under a soaking lease; rollback state is ambiguous");
+    }
     if (sha256(backupBytes) !== contract.sourceSha256) throw new Error("Rollback flow digest mismatch");
-    const beforeProcess = pm2.assertOnline();
-    const rollbackLease = activeLease || acquireDeploymentLease(contract);
-    atomicWrite(liveFlowPath, backupBytes, { uid, gid });
-    const processInfo = pm2.restart(beforeProcess.restartCount);
+    if (isSourceActive && activeLease?.phase === "applying") {
+      const processInfo = pm2.assertOnline();
+      const deploymentLeaseReleased = releaseDeploymentLease(activeLease);
+      return {
+        ok: true,
+        action: "rollback",
+        deploymentId,
+        rolledBackFromSha256: null,
+        restoredFlowSha256: activeSha256,
+        flowBackup,
+        contractBackup,
+        nodeRedOnline: true,
+        nodeRedPid: processInfo.pid,
+        nodeRedRestartCount: processInfo.restartCount,
+        restartCountBefore: processInfo.restartCount,
+        rollbackMode: "no-publication-release",
+        resumedIncompleteRollback: true,
+        deploymentLeaseReleased,
+      };
+    }
+    const rollbackLease = activeLease
+      ? refreshDeploymentLease(activeLease, contract, "rollback-restart-required")
+      : acquireDeploymentLease(contract, "rollback-restart-required");
+    if (isCandidateActive) atomicWrite(liveFlowPath, backupBytes, { uid, gid });
+    const beforeRestart = pm2.inspect();
+    const processInfo = pm2.restart(beforeRestart.restartCount);
     const restoredSha256 = sha256(fs.readFileSync(liveFlowPath));
     if (restoredSha256 !== contract.sourceSha256) throw new Error("Explicit rollback did not restore the reviewed digest");
     const deploymentLeaseReleased = releaseDeploymentLease(rollbackLease);
@@ -364,6 +457,9 @@ export function createReviewedFlowRuntime({
       nodeRedOnline: true,
       nodeRedPid: processInfo.pid,
       nodeRedRestartCount: processInfo.restartCount,
+      restartCountBefore: beforeRestart.restartCount,
+      rollbackMode: isCandidateActive ? "restore-and-restart" : "resume-restart",
+      resumedIncompleteRollback: isSourceActive,
       deploymentLeaseReleased,
     };
   };

@@ -44,7 +44,15 @@ Guarded reviewed-flow deploy дополнительно использует о�
 и оставляет 15-минутный post-apply lease. Пока lease активен, следующий
 reviewed-flow preflight завершается fail-closed, а точный rollback владельца
 lease остаётся разрешён. Это предотвращает второй PM2 restart во время soak
-предыдущего rollout. Lease нельзя удалять вручную ради обхода очереди.
+предыдущего rollout. Если source уже восстановлен, но PM2 restart завершился
+ошибкой, тот же rollback повторно запускает только restart под атомарно
+обновлённым matching lease; без matching lease такой resume запрещён. Если
+`applying` оборвался до publication, exact backup/source и PM2-online read-back
+освобождают lease без рестарта. Оба backup fsync-ятся до atomic no-clobber
+publication lease; legacy v1 lease не auto-expire и проходит только exact
+guarded rollback/migration. Lease и atomic flow publication подтверждаются
+file+directory `fsync`, а lease снимается только после соответствующего
+source/PM2 read-back. Lease нельзя удалять вручную ради обхода очереди.
 
 Managed subscription policy graph имеет отдельный exact-graph entrypoint
 `npm run nodered:managed-subscription-rules:deploy-147` с обязательным

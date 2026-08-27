@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,10 +7,14 @@ import test from "node:test";
 import {
   buildExactGraphContract,
   buildFunctionOnlyContract,
+  atomicWrite,
+  recoverAtomicExclusivePublication,
   sha256,
   validateExactGraphContract,
   validateFunctionOnlyContract,
   validateReviewedFlowContract,
+  writeFileExclusiveAtomicDurable,
+  writeFileExclusiveDurable,
 } from "../nodered_reviewed_flow_deploy/runtime_contract.mjs";
 import { createReviewedFlowRuntime } from "../nodered_reviewed_flow_deploy/deploy_reviewed_flow_147_remote.mjs";
 
@@ -270,19 +275,32 @@ const prepareRuntime = (
     fs.chmodSync(filePath, filePath === liveFlowPath ? liveMode : 0o600);
   }
   let restartCount = 10;
+  let processStatus = "online";
+  let processPid = 1234;
+  const restartPreviousValues = [];
   let failRemaining = restartFailures;
   let nowMs = Date.parse("2026-08-20T09:00:00.000Z");
   let leaseSequence = 0;
   const pm2 = {
-    assertOnline: () => ({ pid: 1234, restartCount }),
+    inspect: () => ({ pid: processPid, status: processStatus, restartCount }),
+    assertOnline() {
+      const result = this.inspect();
+      if (result.status !== "online" || result.pid <= 0) throw new Error("synthetic node-red offline");
+      return result;
+    },
     restart(previous) {
-      assert.equal(previous <= restartCount, true);
+      assert.equal(previous, restartCount);
+      restartPreviousValues.push(previous);
       restartCount += 1;
       if (failRemaining > 0) {
         failRemaining -= 1;
+        processStatus = "errored";
+        processPid = 0;
         throw new Error("synthetic restart failure");
       }
-      return { pid: 1235, restartCount };
+      processStatus = "online";
+      processPid = 1235;
+      return { pid: processPid, status: processStatus, restartCount };
     },
   };
   const runtime = createReviewedFlowRuntime({
@@ -306,14 +324,51 @@ const prepareRuntime = (
     contract,
     liveBytes,
     candidateBytes,
+    backupDirectory,
     deploymentLeasePath,
+    restartPreviousValues,
     advanceTime(milliseconds) {
       nowMs += milliseconds;
     },
     setRestartFailures(count) {
       failRemaining = count;
     },
+    setProcessState({ status, pid = status === "online" ? 1235 : 0 }) {
+      processStatus = status;
+      processPid = pid;
+    },
   };
+};
+
+const seedSourceLeaseRecovery = (prepared, { phase = "applying", formatVersion = 2 } = {}) => {
+  fs.mkdirSync(prepared.backupDirectory, { mode: 0o700 });
+  fs.chmodSync(prepared.backupDirectory, 0o700);
+  const stamp = "20260820T120000+0300";
+  const flowBackup = path.join(
+    prepared.backupDirectory,
+    `flows-pre-${prepared.contract.deploymentId}-${stamp}.json`,
+  );
+  const contractBackup = path.join(
+    prepared.backupDirectory,
+    `contract-${prepared.contract.deploymentId}-${stamp}.json`,
+  );
+  fs.writeFileSync(flowBackup, prepared.liveBytes, { mode: 0o600 });
+  fs.writeFileSync(contractBackup, Buffer.from(`${JSON.stringify(prepared.contract, null, 2)}\n`), { mode: 0o600 });
+  fs.chmodSync(flowBackup, 0o600);
+  fs.chmodSync(contractBackup, 0o600);
+  const lease = {
+    formatVersion,
+    deploymentId: prepared.contract.deploymentId,
+    token: `seed-${formatVersion}-${phase}`,
+    ...(formatVersion === 2 ? { phase } : {}),
+    acquiredAtMs: Date.parse("2026-08-20T09:00:00.000Z"),
+    expiresAtMs: Date.parse("2026-08-20T09:15:00.000Z"),
+    sourceSha256: prepared.contract.sourceSha256,
+    candidateSha256: prepared.contract.candidateSha256,
+  };
+  fs.writeFileSync(prepared.deploymentLeasePath, `${JSON.stringify(lease, null, 2)}\n`, { mode: 0o600 });
+  fs.chmodSync(prepared.deploymentLeasePath, 0o600);
+  return { flowBackup, contractBackup };
 };
 
 test("remote runtime is backup-first and supports exact explicit rollback", (t) => {
@@ -330,6 +385,7 @@ test("remote runtime is backup-first and supports exact explicit rollback", (t) 
   assert.equal(applied.activeFlowSha256, prepared.contract.candidateSha256);
   assert.equal(applied.deploymentLeaseSeconds, 15 * 60);
   assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
+  assert.equal(JSON.parse(fs.readFileSync(prepared.deploymentLeasePath, "utf8")).phase, "soaking");
   assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.candidateBytes);
   assert.deepEqual(fs.readFileSync(applied.flowBackup), prepared.liveBytes);
 
@@ -339,6 +395,8 @@ test("remote runtime is backup-first and supports exact explicit rollback", (t) 
     contractBackup: applied.contractBackup,
   });
   assert.equal(rolledBack.restoredFlowSha256, prepared.contract.sourceSha256);
+  assert.equal(rolledBack.rollbackMode, "restore-and-restart");
+  assert.equal(rolledBack.resumedIncompleteRollback, false);
   assert.equal(rolledBack.deploymentLeaseReleased, true);
   assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
   assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
@@ -354,9 +412,10 @@ test("remote runtime restores reviewed bytes when candidate restart fails", (t) 
   }), /rollback completed/);
   assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
   assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+  assert.deepEqual(prepared.restartPreviousValues, [10, 11]);
 });
 
-test("remote runtime keeps the lease when automatic rollback restart is incomplete", (t) => {
+test("remote runtime resumes an incomplete automatic rollback under the matching lease", (t) => {
   const prepared = prepareRuntime(t, { restartFailures: 2 });
   assert.throws(() => prepared.runtime.apply({
     candidatePath: prepared.candidatePath,
@@ -366,11 +425,103 @@ test("remote runtime keeps the lease when automatic rollback restart is incomple
   }), /rollback is incomplete and deployment lease remains active/);
   assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
   assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
+  assert.equal(
+    JSON.parse(fs.readFileSync(prepared.deploymentLeasePath, "utf8")).phase,
+    "rollback-restart-required",
+  );
+  prepared.advanceTime(15 * 60 * 1000 + 1);
   assert.throws(() => prepared.runtime.preflight({
     candidatePath: prepared.candidatePath,
     contractPath: prepared.contractPath,
     deploymentId: "subscription-binding",
   }), /deployment lease is active/);
+
+  const flowBackup = path.join(
+    prepared.backupDirectory,
+    "flows-pre-subscription-binding-20260820T120000+0300.json",
+  );
+  const contractBackup = path.join(
+    prepared.backupDirectory,
+    "contract-subscription-binding-20260820T120000+0300.json",
+  );
+  prepared.setRestartFailures(0);
+  const rolledBack = prepared.runtime.rollback({
+    deploymentId: "subscription-binding",
+    flowBackup,
+    contractBackup,
+  });
+  assert.equal(rolledBack.rollbackMode, "resume-restart");
+  assert.equal(rolledBack.resumedIncompleteRollback, true);
+  assert.equal(rolledBack.restartCountBefore, 12);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+  assert.deepEqual(prepared.restartPreviousValues, [10, 11, 12]);
+});
+
+test("source plus applying lease releases a pre-publication crash without restarting Node-RED", (t) => {
+  const prepared = prepareRuntime(t);
+  const artifacts = seedSourceLeaseRecovery(prepared, { phase: "applying" });
+  const rolledBack = prepared.runtime.rollback({
+    deploymentId: prepared.contract.deploymentId,
+    ...artifacts,
+  });
+  assert.equal(rolledBack.rollbackMode, "no-publication-release");
+  assert.equal(rolledBack.rolledBackFromSha256, null);
+  assert.equal(rolledBack.deploymentLeaseReleased, true);
+  assert.deepEqual(prepared.restartPreviousValues, []);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+});
+
+test("source plus applying lease remains fail-closed when Node-RED is offline", (t) => {
+  const prepared = prepareRuntime(t);
+  const artifacts = seedSourceLeaseRecovery(prepared, { phase: "applying" });
+  prepared.setProcessState({ status: "errored" });
+  assert.throws(() => prepared.runtime.rollback({
+    deploymentId: prepared.contract.deploymentId,
+    ...artifacts,
+  }), /synthetic node-red offline/);
+  assert.deepEqual(prepared.restartPreviousValues, []);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
+});
+
+test("source under a soaking lease is ambiguous and cannot trigger a restart", (t) => {
+  const prepared = prepareRuntime(t);
+  const artifacts = seedSourceLeaseRecovery(prepared, { phase: "soaking" });
+  assert.throws(() => prepared.runtime.rollback({
+    deploymentId: prepared.contract.deploymentId,
+    ...artifacts,
+  }), /soaking lease; rollback state is ambiguous/);
+  assert.deepEqual(prepared.restartPreviousValues, []);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
+});
+
+test("legacy v1 source lease migrates only through an exact guarded restart rollback", (t) => {
+  const prepared = prepareRuntime(t);
+  const artifacts = seedSourceLeaseRecovery(prepared, { formatVersion: 1 });
+  const rolledBack = prepared.runtime.rollback({
+    deploymentId: prepared.contract.deploymentId,
+    ...artifacts,
+  });
+  assert.equal(rolledBack.rollbackMode, "resume-restart");
+  assert.equal(rolledBack.resumedIncompleteRollback, true);
+  assert.deepEqual(prepared.restartPreviousValues, [10]);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+});
+
+test("legacy v1 candidate lease migrates through exact restore-and-restart rollback", (t) => {
+  const prepared = prepareRuntime(t);
+  const artifacts = seedSourceLeaseRecovery(prepared, { formatVersion: 1 });
+  fs.writeFileSync(prepared.liveFlowPath, prepared.candidateBytes, { mode: 0o600 });
+  fs.chmodSync(prepared.liveFlowPath, 0o600);
+  const rolledBack = prepared.runtime.rollback({
+    deploymentId: prepared.contract.deploymentId,
+    ...artifacts,
+  });
+  assert.equal(rolledBack.rollbackMode, "restore-and-restart");
+  assert.deepEqual(prepared.restartPreviousValues, [10]);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
 });
 
 test("successful apply blocks another reviewed deployment for the soak lease", (t) => {
@@ -383,6 +534,7 @@ test("successful apply blocks another reviewed deployment for the soak lease", (
   prepared.runtime.apply({ ...common, stamp: "20260820T120000+0300" });
   const lease = JSON.parse(fs.readFileSync(prepared.deploymentLeasePath, "utf8"));
   assert.equal(lease.deploymentId, "subscription-binding");
+  assert.equal(lease.phase, "soaking");
   assert.equal(lease.expiresAtMs - lease.acquiredAtMs, 15 * 60 * 1000);
   assert.throws(() => prepared.runtime.preflight(common), /deployment lease is active/);
 
@@ -391,7 +543,7 @@ test("successful apply blocks another reviewed deployment for the soak lease", (
   assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
 });
 
-test("rollback after lease expiry reacquires protection and retains it on restart failure", (t) => {
+test("rollback after lease expiry refreshes protection and remains re-entrant after restart failure", (t) => {
   const prepared = prepareRuntime(t);
   const common = {
     candidatePath: prepared.candidatePath,
@@ -409,6 +561,103 @@ test("rollback after lease expiry reacquires protection and retains it on restar
   assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
   assert.equal(fs.existsSync(prepared.deploymentLeasePath), true);
   assert.throws(() => prepared.runtime.preflight(common), /deployment lease is active/);
+
+  prepared.setRestartFailures(0);
+  const resumed = prepared.runtime.rollback({
+    deploymentId: "subscription-binding",
+    flowBackup: applied.flowBackup,
+    contractBackup: applied.contractBackup,
+  });
+  assert.equal(resumed.rollbackMode, "resume-restart");
+  assert.equal(resumed.resumedIncompleteRollback, true);
+  assert.equal(resumed.restartCountBefore, 12);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+  assert.deepEqual(prepared.restartPreviousValues, [10, 11, 12]);
+});
+
+test("rollback refuses source-on-disk recovery without a matching deployment lease", (t) => {
+  const prepared = prepareRuntime(t);
+  const common = {
+    candidatePath: prepared.candidatePath,
+    contractPath: prepared.contractPath,
+    deploymentId: "subscription-binding",
+  };
+  const applied = prepared.runtime.apply({ ...common, stamp: "20260820T120000+0300" });
+  fs.unlinkSync(prepared.deploymentLeasePath);
+  fs.writeFileSync(prepared.liveFlowPath, prepared.liveBytes, { mode: 0o600 });
+  fs.chmodSync(prepared.liveFlowPath, 0o600);
+  assert.throws(() => prepared.runtime.rollback({
+    deploymentId: "subscription-binding",
+    flowBackup: applied.flowBackup,
+    contractBackup: applied.contractBackup,
+  }), /source is active without a matching deployment lease/);
+  assert.deepEqual(prepared.restartPreviousValues, [10]);
+});
+
+test("durable reviewed-flow writers preserve exact bytes, mode, and exclusive creation", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "reviewed-flow-durable-write-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const uid = process.getuid();
+  const gid = process.getgid();
+  const destination = path.join(root, "artifact.json");
+  const first = Buffer.from("first\n", "utf8");
+  const second = Buffer.from("second\n", "utf8");
+
+  writeFileExclusiveDurable(destination, first, { uid, gid, mode: 0o600 });
+  assert.deepEqual(fs.readFileSync(destination), first);
+  assert.equal(fs.statSync(destination).mode & 0o777, 0o600);
+  assert.throws(
+    () => writeFileExclusiveDurable(destination, second, { uid, gid, mode: 0o600 }),
+    /EEXIST/,
+  );
+
+  atomicWrite(destination, second, { uid, gid });
+  assert.deepEqual(fs.readFileSync(destination), second);
+  assert.equal(fs.statSync(destination).mode & 0o777, 0o600);
+});
+
+test("atomic exclusive lease publication recovers from process crashes without a partial final file", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "reviewed-flow-atomic-crash-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const uid = process.getuid();
+  const gid = process.getgid();
+  const moduleUrl = new URL(
+    "../nodered_reviewed_flow_deploy/runtime_contract.mjs",
+    import.meta.url,
+  ).href;
+  const childProgram = `
+    const [moduleUrl, destination, uid, gid, crashPhase] = process.argv.slice(1);
+    const { writeFileExclusiveAtomicDurable } = await import(moduleUrl);
+    writeFileExclusiveAtomicDurable(destination, Buffer.from("crash-safe\\n", "utf8"), {
+      uid: Number(uid),
+      gid: Number(gid),
+      mode: 0o600,
+      onTransition: (phase) => {
+        if (phase === crashPhase) process.kill(process.pid, "SIGKILL");
+      },
+    });
+  `;
+  const crashAt = (destination, phase) => spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", childProgram, moduleUrl, destination, String(uid), String(gid), phase],
+    { encoding: "utf8" },
+  );
+
+  const beforeLink = path.join(root, "before-link.lease.json");
+  const beforeLinkResult = crashAt(beforeLink, "temporary-synced");
+  assert.equal(beforeLinkResult.signal, "SIGKILL");
+  assert.equal(fs.existsSync(beforeLink), false);
+  writeFileExclusiveAtomicDurable(beforeLink, Buffer.from("retry\n"), { uid, gid });
+  assert.equal(fs.readFileSync(beforeLink, "utf8"), "retry\n");
+
+  const afterLink = path.join(root, "after-link.lease.json");
+  const afterLinkResult = crashAt(afterLink, "destination-linked");
+  assert.equal(afterLinkResult.signal, "SIGKILL");
+  assert.equal(fs.readFileSync(afterLink, "utf8"), "crash-safe\n");
+  assert.equal(fs.statSync(afterLink).nlink, 2);
+  assert.equal(recoverAtomicExclusivePublication(afterLink, { uid, gid }), true);
+  assert.equal(fs.statSync(afterLink).nlink, 1);
+  assert.equal(fs.readFileSync(afterLink, "utf8"), "crash-safe\n");
 });
 
 test("remote preflight fails closed on a malformed protected lease", (t) => {
@@ -491,7 +740,9 @@ test("explicit rollback refuses a flow changed after the reviewed deployment", (
     deploymentId: "subscription-binding",
   };
   const applied = prepared.runtime.apply({ ...common, stamp: "20260820T120000+0300" });
-  fs.writeFileSync(prepared.liveFlowPath, bytes(fixture()), { mode: 0o600 });
+  const changedAfterDeploy = fixture();
+  changedAfterDeploy.find((node) => node.id === "response").name = "unexpected drift";
+  fs.writeFileSync(prepared.liveFlowPath, bytes(changedAfterDeploy), { mode: 0o600 });
   fs.chmodSync(prepared.liveFlowPath, 0o600);
   assert.throws(() => prepared.runtime.rollback({
     deploymentId: "subscription-binding",
@@ -511,6 +762,12 @@ test("reviewed-flow remote CLI serializes every action with one fail-fast flock"
   assert.match(remoteHelper, /spawnSync\(\s*"flock"/);
   assert.match(remoteHelper, /"-E",\s*String\(DEPLOYMENT_LOCK_CONFLICT_EXIT\),\s*"-n"/);
   assert.match(remoteHelper, /PADLHUB_REVIEWED_FLOW_LOCK_HELD/);
+  const flowBackupIndex = remoteHelper.indexOf("writeFileExclusiveDurable(flowBackup");
+  const contractBackupIndex = remoteHelper.indexOf("writeFileExclusiveDurable(contractBackup");
+  const leaseIndex = remoteHelper.indexOf("let deploymentLease = acquireDeploymentLease");
+  assert.equal(flowBackupIndex >= 0, true);
+  assert.equal(contractBackupIndex > flowBackupIndex, true);
+  assert.equal(leaseIndex > contractBackupIndex, true);
 });
 
 test("subscription binding wrapper keeps deployment explicit and rollback guarded", () => {

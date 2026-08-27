@@ -272,17 +272,146 @@ export function assertProtectedFile(filePath, { uid = 0, gid = 0, mode = 0o600 }
   return assertProtectedFileModes(filePath, { uid, gid, modes: [mode] });
 }
 
-export function atomicWrite(destination, bytes, { uid = 0, gid = 0 } = {}) {
-  const temporary = path.join(
-    path.dirname(destination),
-    `.${path.basename(destination)}.${process.pid}.${crypto.randomUUID()}.tmp`,
+export function syncDirectory(directory) {
+  const descriptor = fs.openSync(directory, fs.constants.O_RDONLY);
+  try {
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+export function writeFileExclusiveDurable(
+  filePath,
+  bytes,
+  { uid = 0, gid = 0, mode = 0o600 } = {},
+) {
+  const descriptor = fs.openSync(
+    filePath,
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+    mode,
   );
   try {
-    fs.writeFileSync(temporary, bytes, { flag: "wx", mode: 0o600 });
-    fs.chownSync(temporary, uid, gid);
-    fs.renameSync(temporary, destination);
-    fs.chmodSync(destination, 0o600);
+    fs.fchownSync(descriptor, uid, gid);
+    fs.fchmodSync(descriptor, mode);
+    fs.writeFileSync(descriptor, bytes);
+    fs.fsyncSync(descriptor);
   } finally {
+    fs.closeSync(descriptor);
+  }
+  syncDirectory(path.dirname(filePath));
+}
+
+const atomicExclusiveTemporaryPattern = (filePath) => (
+  new RegExp(`^\\.${path.basename(filePath).replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\.[^.]+\\.[^.]+\\.tmp$`)
+);
+
+export function recoverAtomicExclusivePublication(
+  filePath,
+  { uid = 0, gid = 0, mode = 0o600 } = {},
+) {
+  if (!fs.existsSync(filePath)) return false;
+  const destination = fs.lstatSync(filePath);
+  if (destination.nlink === 1) return false;
+  if (
+    !destination.isFile()
+    || destination.isSymbolicLink()
+    || destination.nlink !== 2
+    || destination.uid !== uid
+    || destination.gid !== gid
+    || (destination.mode & 0o777) !== mode
+  ) throw new Error(`Atomic exclusive publication contract mismatch: ${filePath}`);
+  const directory = path.dirname(filePath);
+  const pattern = atomicExclusiveTemporaryPattern(filePath);
+  const aliases = fs.readdirSync(directory)
+    .filter((name) => pattern.test(name))
+    .map((name) => path.join(directory, name))
+    .filter((candidate) => {
+      const stat = fs.lstatSync(candidate);
+      return stat.dev === destination.dev && stat.ino === destination.ino;
+    });
+  if (aliases.length !== 1) throw new Error(`Atomic exclusive publication alias mismatch: ${filePath}`);
+  const alias = fs.lstatSync(aliases[0]);
+  if (
+    !alias.isFile()
+    || alias.isSymbolicLink()
+    || alias.nlink !== 2
+    || alias.uid !== uid
+    || alias.gid !== gid
+    || (alias.mode & 0o777) !== mode
+  ) throw new Error(`Atomic exclusive publication alias contract mismatch: ${filePath}`);
+  fs.unlinkSync(aliases[0]);
+  syncDirectory(directory);
+  return true;
+}
+
+export function writeFileExclusiveAtomicDurable(
+  filePath,
+  bytes,
+  { uid = 0, gid = 0, mode = 0o600, onTransition = () => {} } = {},
+) {
+  const directory = path.dirname(filePath);
+  const temporary = path.join(
+    directory,
+    `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
+  );
+  let descriptor;
+  let linked = false;
+  try {
+    descriptor = fs.openSync(
+      temporary,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+      mode,
+    );
+    fs.fchownSync(descriptor, uid, gid);
+    fs.fchmodSync(descriptor, mode);
+    fs.writeFileSync(descriptor, bytes);
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    onTransition("temporary-synced");
+    fs.linkSync(temporary, filePath);
+    linked = true;
+    syncDirectory(directory);
+    onTransition("destination-linked");
+    fs.unlinkSync(temporary);
+    syncDirectory(directory);
+    assertProtectedFile(filePath, { uid, gid, mode });
+  } finally {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch { /* already closed */ }
+    }
+    if (!linked) {
+      try { fs.unlinkSync(temporary); } catch { /* absent or retained by a terminated process */ }
+    }
+  }
+}
+
+export function atomicWrite(destination, bytes, { uid = 0, gid = 0 } = {}) {
+  const directory = path.dirname(destination);
+  const temporary = path.join(
+    directory,
+    `.${path.basename(destination)}.${process.pid}.${crypto.randomUUID()}.tmp`,
+  );
+  let descriptor;
+  try {
+    descriptor = fs.openSync(
+      temporary,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+      0o600,
+    );
+    fs.fchownSync(descriptor, uid, gid);
+    fs.fchmodSync(descriptor, 0o600);
+    fs.writeFileSync(descriptor, bytes);
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    fs.renameSync(temporary, destination);
+    syncDirectory(directory);
+  } finally {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch { /* already closed */ }
+    }
     try { fs.unlinkSync(temporary); } catch { /* already renamed or absent */ }
   }
 }

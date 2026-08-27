@@ -84,11 +84,31 @@ lease in `/root/.node-red/.padlhub-reviewed-flow-deploy.lease.json`.
 - another reviewed-flow preflight or apply fails closed while the lease is active;
 - the deployment that owns the lease may still execute its exact guarded rollback;
 - a successful rollback releases its own lease;
-- rollback after lease expiry reacquires protection before changing the live flow;
+- rollback after lease expiry atomically refreshes the matching lease before
+  changing the live flow;
 - a failed apply releases the lease only after automatic rollback is confirmed;
 - any incomplete rollback keeps the lease, preventing another restart over an
   ambiguous runtime state;
+- if rollback has already restored the exact source bytes but the PM2 restart
+  failed, the same guarded rollback may resume the restart under that matching
+  lease; source-on-disk without the matching lease is refused fail-closed;
+- an `applying` lease with both exact backups and unchanged source represents a
+  pre-publication interruption: guarded rollback verifies PM2 online and
+  releases the lease without rewriting the flow or restarting Node-RED;
+- a legacy v1 lease never auto-expires under the v2 helper; exact guarded
+  rollback migrates it to the phase-aware contract before restore/restart;
+- every restart uses a fresh PM2 restart counter read immediately before the
+  restart, and the lease is released only after source-digest and online
+  read-back succeed;
 - an expired lease is removed only while the global OS lock is held.
+
+Flow and contract backups are created and fsynced before the lease is
+published. Lease creation uses a durable temporary inode plus atomic
+no-clobber link publication; an interrupted second-link cleanup is recovered
+under the global lock without accepting partial final bytes. Lease
+creation/refresh and atomic live-flow publication fsync both file content and
+the containing directory before the next state transition. This preserves the
+backup-first and recovery contract across host or process crashes.
 
 This lease is the minimum production soak window. Do not delete or edit it to
 force an unrelated rollout; wait for expiry or roll back the owning deployment.
