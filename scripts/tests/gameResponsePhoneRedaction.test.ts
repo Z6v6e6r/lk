@@ -7,7 +7,11 @@ type JsonRecord = Record<string, unknown>;
 
 const PHONE = "79991112233";
 const FORMATTED_PHONE = `+${PHONE[0]} (${PHONE.slice(1, 4)}) ${PHONE.slice(4, 7)}-${PHONE.slice(7, 9)}-${PHONE.slice(9, 11)}`;
-const PHONE_KEY = /(?:^|[_-])(?:phone|mobile|telephone|msisdn)(?:s|number|norm|normalized)?(?:$|[_-])|(?:Phone|Mobile|Telephone|Msisdn)(?:s|Number|Norm|Normalized)?$/;
+const PHONE_KEY = /(?:^|[^a-z0-9])(?:phones?|mobiles?|telephones?|msisdn)(?:[^a-z0-9]|$)/i;
+
+function isPhoneKey(key: string) {
+  return PHONE_KEY.test(key.replace(/([a-z0-9])([A-Z])/g, "$1_$2"));
+}
 
 function runNodeRedFunction(file: string, msg: JsonRecord) {
   const source = fs.readFileSync(file, "utf8");
@@ -26,7 +30,7 @@ function assertPhoneFree(value: unknown, path = "payload") {
   }
   if (value && typeof value === "object") {
     Object.entries(value).forEach(([key, item]) => {
-      assert.doesNotMatch(key, PHONE_KEY, `${path}.${key} is a phone-bearing field`);
+      assert.equal(isPhoneKey(key), false, `${path}.${key} is a phone-bearing field`);
       assertPhoneFree(item, `${path}.${key}`);
     });
     return;
@@ -71,12 +75,17 @@ function gameFixture(): JsonRecord {
     waitlist: [{ id: "client-waitlist", name: "Участник", mobile: PHONE }],
     participantPhones: [PHONE],
     allRelatedPhones: [PHONE],
+    allowedPhoneNorms: [PHONE],
+    [`phone:${PHONE}`]: "legacy-identity-index",
     metadata: {
+      phoneNorm: null,
       organizerPhone: PHONE,
       safeClientId: "client-organizer",
       callbackUrl: `https://example.test/game?phone=${PHONE}&gameId=game-public-1`,
       publicNote: `Связь: ${FORMATTED_PHONE} после игры`,
       microphoneEnabled: true,
+      smartphoneTheme: "dark",
+      phonebookEntryId: "directory-entry-1",
       numericReference: Number(PHONE),
       splitPayment: {
         payments: [{ clientId: "client-organizer", clientPhoneNorm: PHONE, status: "PAID" }],
@@ -130,6 +139,8 @@ test("games list filters by private identity before emitting a phone-free respon
   assert.equal(asRecord(games[0]?.booking).id, "booking-1");
   assert.equal(asRecord(games[0]?.metadata).safeClientId, "client-organizer");
   assert.equal(asRecord(games[0]?.metadata).microphoneEnabled, true);
+  assert.equal(asRecord(games[0]?.metadata).smartphoneTheme, "dark");
+  assert.equal(asRecord(games[0]?.metadata).phonebookEntryId, "directory-entry-1");
   assert.ok(games[0]?.createdAt instanceof Date);
   assert.equal((games[0]?.createdAt as Date).toISOString(), "2026-08-27T09:00:00.000Z");
   const photos = asRecord(asRecord(games[0]?.metadata).matchResult).photos as JsonRecord[];

@@ -17,7 +17,10 @@ const toTs = (item) => {
 const selected = [...rows].sort((a, b) => toTs(b) - toTs(a))[0];
 
 const isObj = (value) => value && typeof value === "object" && !Array.isArray(value);
-const phoneFieldPattern = /(?:^|[_-])(?:phone|mobile|telephone|msisdn)(?:s|number|norm|normalized)?(?:$|[_-])|(?:Phone|Mobile|Telephone|Msisdn)(?:s|Number|Norm|Normalized)?$/;
+const phoneFieldPattern = /(?:^|[^a-z0-9])(?:phones?|mobiles?|telephones?|msisdn)(?:[^a-z0-9]|$)/i;
+const isPhoneField = (key) => phoneFieldPattern.test(
+  String(key || "").replace(/([a-z0-9])([A-Z])/g, "$1_$2"),
+);
 const phoneIdentityPattern = /^(phone|mobile|telephone|msisdn):/i;
 const exactPhoneValuePattern = /^(?:\+?7|8)(?:[\s().-]*\d){10}$/;
 const embeddedPhoneValuePattern = /(^|[^\d])((?:\+?7|8)(?:[\s().-]*\d){10})(?!\d)/g;
@@ -53,7 +56,7 @@ const redactPhoneData = (value) => {
   if (isPlainRecord(value)) {
     const next = {};
     Object.entries(value).forEach(([key, item]) => {
-      if (phoneFieldPattern.test(key)) return;
+      if (isPhoneField(key)) return;
       const redacted = redactPhoneData(item);
       if (redacted !== null || item === null) {
         next[key] = redacted;
