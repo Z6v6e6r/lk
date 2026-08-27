@@ -89,6 +89,12 @@ scan, a remote or ambiguous persistent mount, any match, or any identity/name dr
 blocks H2 and requires a newly frozen identity and approval. Do not adopt, rename, or
 modify an existing or orphaned identity.
 
+The scan prerequisite is implemented by the source-controlled static helper documented
+in LEGACY_GAME_COMMAND_H2_IDENTITY_AUDIT.md. It also covers reviewed writable runtime
+mounts, process real/effective/saved/filesystem IDs and SysV IPC numeric ownership. A
+standalone receipt is non-authorizing: the complete scan and NSS checks must be repeated
+under the same exclusive H2 lease immediately before identity creation.
+
 Only after that exact scan, the proposed creation sequence is:
 
 ```bash
