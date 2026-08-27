@@ -18,28 +18,35 @@ const temporaryRoot = suppliedTemporaryRoot
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const artifactDirectory = path.join(temporaryRoot, "artifact");
 const classifierDirectory = path.join(temporaryRoot, "classifier");
-const { manifest } = buildH2IdentityAudit(["--out", artifactDirectory, "--environment", "rehearsal"]);
-const binaryPath = path.join(artifactDirectory, manifest.artifact.path);
-fs.mkdirSync(classifierDirectory, { mode: 0o700 });
-const classifierBuild = spawnSync("docker", [
-  "run", "--rm", "--network", "none", "--platform", "linux/amd64",
-  "--mount", "type=bind,src=" + repositoryRoot + ",dst=/repo,readonly",
-  "--mount", "type=bind,src=" + classifierDirectory + ",dst=/out",
-  BUILD_IMAGE, "gcc", "-static", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
-  "-o", "/out/classifier", "/repo/scripts/tests/legacy_game_command_h2_mount_classifier_harness.c",
-], { encoding: "utf8" });
-if (classifierBuild.error || classifierBuild.status !== 0) {
-  throw new Error("classifier harness build failed\nstdout:\n" + classifierBuild.stdout
-    + "\nstderr:\n" + classifierBuild.stderr);
-}
-after(() => {
+const cleanup = () => {
   if (suppliedTemporaryRoot) {
     fs.rmSync(artifactDirectory, { recursive: true, force: true });
     fs.rmSync(classifierDirectory, { recursive: true, force: true });
   } else {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
   }
-});
+};
+after(cleanup);
+let manifest;
+try {
+  ({ manifest } = buildH2IdentityAudit(["--out", artifactDirectory, "--environment", "rehearsal"]));
+  fs.mkdirSync(classifierDirectory, { mode: 0o700 });
+  const classifierBuild = spawnSync("docker", [
+    "run", "--rm", "--network", "none", "--platform", "linux/amd64",
+    "--mount", "type=bind,src=" + repositoryRoot + ",dst=/repo,readonly",
+    "--mount", "type=bind,src=" + classifierDirectory + ",dst=/out",
+    BUILD_IMAGE, "gcc", "-static", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+    "-o", "/out/classifier", "/repo/scripts/tests/legacy_game_command_h2_mount_classifier_harness.c",
+  ], { encoding: "utf8" });
+  if (classifierBuild.error || classifierBuild.status !== 0) {
+    throw new Error("classifier harness build failed\nstdout:\n" + classifierBuild.stdout
+      + "\nstderr:\n" + classifierBuild.stderr);
+  }
+} catch (error) {
+  cleanup();
+  throw error;
+}
+const binaryPath = path.join(artifactDirectory, manifest.artifact.path);
 const sha256 = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
 
 function runContainer(lines) {
@@ -108,6 +115,7 @@ test("builder emits a reproducible static artifact with no mutation authority", 
   assert.match(source, /approved_autofs_placeholder/);
   assert.match(source, /AUTOFS_PLACEHOLDER_CHILD_MISSING/);
   assert.match(source, /AUTOFS_PLACEHOLDER_CHILD_AMBIGUOUS/);
+  assert.match(source, /AUTOFS_PLACEHOLDER_CHILD_INVALID/);
   const builder = fs.readFileSync(path.join(repositoryRoot, "scripts/build_legacy_game_command_h2_identity_audit.mjs"), "utf8");
   assert.match(builder, /dst=\/src,readonly/);
   assert.match(builder, /source snapshot changed during build/);
@@ -144,9 +152,12 @@ test("production mount classifier binds the exact binfmt child parent and cardin
     status: 67, stdout: "", stderr: "AUTOFS_PLACEHOLDER_CHILD_MISSING",
   });
   assert.deepEqual(runClassifierFixture("wrong-child-source.mountinfo", rootMount + exactAutofs + wrongChildSource), {
-    status: 67, stdout: "", stderr: "AUTOFS_PLACEHOLDER_CHILD_MISSING",
+    status: 67, stdout: "", stderr: "AUTOFS_PLACEHOLDER_CHILD_INVALID",
   });
   assert.deepEqual(runClassifierFixture("ambiguous-child.mountinfo", rootMount + exactAutofs + exactBinfmt + secondChild), {
+    status: 67, stdout: "", stderr: "AUTOFS_PLACEHOLDER_CHILD_AMBIGUOUS",
+  });
+  assert.deepEqual(runClassifierFixture("mixed-child.mountinfo", rootMount + exactAutofs + exactBinfmt + wrongChildSource.replace("45 37", "46 37")), {
     status: 67, stdout: "", stderr: "AUTOFS_PLACEHOLDER_CHILD_AMBIGUOUS",
   });
 });
