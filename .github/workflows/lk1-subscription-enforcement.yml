@@ -171,6 +171,21 @@ jobs:
           scripts/tests/gamePaymentConfirmation.nodered.test.ts
           scripts/tests/splitLifecycleV2.nodered.test.ts
 
+      - name: Validate referral attribution compatibility
+        run: >-
+          node --experimental-strip-types --test
+          scripts/tests/referralAttribution.test.ts
+          scripts/tests/referralSubscription.nodered.test.ts
+          scripts/tests/referralAttributionReleaseCandidate.test.mjs
+
+      - name: Validate reviewed-flow and legacy custody boundaries
+        run: >-
+          node --test --test-concurrency=1
+          scripts/tests/reviewedFlowDeploy.test.mjs
+          scripts/tests/legacyGameCommandProductionRelease.test.mjs
+          scripts/tests/legacyGameCommandH2IdentityAudit.test.mjs
+          scripts/tests/legacyGameCommandRootAclBootstrap.test.mjs
+
       - name: Typecheck
         run: npx tsc -b --pretty false
 

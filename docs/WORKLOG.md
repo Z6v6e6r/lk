@@ -1555,3 +1555,12 @@
 - Added self-contained bundle CLI planning, installer/manifest drift rejection, sealed
   rehearsal installation, and failed-staging cleanup coverage. This source-only stage
   performed no upload, production installation, Node-RED/Mongo mutation, or deployment.
+
+## 2026-08-27 — LK1 exact-main closeout CI coverage
+
+- Added the existing referral attribution, reviewed-flow recovery, legacy command
+  release, H2 identity and root ACL bootstrap suites to the automatic pull-request and
+  push-main exact-head gate.
+- Extended the workflow contract so these source boundaries cannot be silently skipped.
+- This is a source-only CI correction: product flows, Node-RED production, provider
+  state, runtime permissions and deployment paths were not changed or executed.

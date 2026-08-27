@@ -92,6 +92,8 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     "Validate deterministic Node-RED modular toolchain fixtures",
     "Validate combined legacy game command prerequisites",
     "Validate combined split draft persistence",
+    "Validate referral attribution compatibility",
+    "Validate reviewed-flow and legacy custody boundaries",
     "Typecheck",
     "Lint",
     "Build with inert compile-time configuration",
@@ -109,6 +111,22 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
   assert.match(
     step("Run unified candidate and drift-negative tests").run,
     /scripts\/tests\/lk1SubscriptionActivationPacket\.test\.mjs/,
+  );
+  assert.match(
+    step("Validate referral attribution compatibility").run,
+    /scripts\/tests\/referralAttributionReleaseCandidate\.test\.mjs/,
+  );
+  assert.match(
+    step("Validate reviewed-flow and legacy custody boundaries").run,
+    /scripts\/tests\/reviewedFlowDeploy\.test\.mjs/,
+  );
+  assert.match(
+    step("Validate reviewed-flow and legacy custody boundaries").run,
+    /scripts\/tests\/legacyGameCommandH2IdentityAudit\.test\.mjs/,
+  );
+  assert.match(
+    step("Validate reviewed-flow and legacy custody boundaries").run,
+    /scripts\/tests\/legacyGameCommandRootAclBootstrap\.test\.mjs/,
   );
 });
 
