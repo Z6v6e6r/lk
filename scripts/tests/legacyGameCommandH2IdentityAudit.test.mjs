@@ -17,9 +17,29 @@ const temporaryRoot = suppliedTemporaryRoot
   : fs.mkdtempSync(path.join(os.tmpdir(), "legacy-h2-identity-audit-test-"));
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const artifactDirectory = path.join(temporaryRoot, "artifact");
+const classifierDirectory = path.join(temporaryRoot, "classifier");
 const { manifest } = buildH2IdentityAudit(["--out", artifactDirectory, "--environment", "rehearsal"]);
 const binaryPath = path.join(artifactDirectory, manifest.artifact.path);
-after(() => fs.rmSync(suppliedTemporaryRoot ? artifactDirectory : temporaryRoot, { recursive: true, force: true }));
+fs.mkdirSync(classifierDirectory, { mode: 0o700 });
+const classifierBuild = spawnSync("docker", [
+  "run", "--rm", "--network", "none", "--platform", "linux/amd64",
+  "--mount", "type=bind,src=" + repositoryRoot + ",dst=/repo,readonly",
+  "--mount", "type=bind,src=" + classifierDirectory + ",dst=/out",
+  BUILD_IMAGE, "gcc", "-static", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+  "-o", "/out/classifier", "/repo/scripts/tests/legacy_game_command_h2_mount_classifier_harness.c",
+], { encoding: "utf8" });
+if (classifierBuild.error || classifierBuild.status !== 0) {
+  throw new Error("classifier harness build failed\nstdout:\n" + classifierBuild.stdout
+    + "\nstderr:\n" + classifierBuild.stderr);
+}
+after(() => {
+  if (suppliedTemporaryRoot) {
+    fs.rmSync(artifactDirectory, { recursive: true, force: true });
+    fs.rmSync(classifierDirectory, { recursive: true, force: true });
+  } else {
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+});
 const sha256 = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
 
 function runContainer(lines) {
@@ -31,6 +51,21 @@ function runContainer(lines) {
   assert.equal(result.status, 0, "container failed\nstdout:\n" + result.stdout + "\nstderr:\n" + result.stderr);
   return result.stdout.trim();
 }
+
+function runClassifierFixture(name, mountinfo) {
+  const fixturePath = path.join(classifierDirectory, name);
+  fs.writeFileSync(fixturePath, mountinfo, { mode: 0o600, flag: "wx" });
+  const result = spawnSync("docker", [
+    "run", "--rm", "--network", "none", "--platform", "linux/amd64",
+    "--mount", "type=bind,src=" + classifierDirectory + ",dst=/fixture,readonly",
+    BUILD_IMAGE, "/fixture/classifier", "/fixture/" + name,
+  ], { encoding: "utf8" });
+  return { status: result.status, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
+}
+
+const rootMount = "30 1 253:1 / / rw,relatime - ext4 /dev/vda1 rw\n";
+const exactAutofs = "37 26 0:32 / /proc/sys/fs/binfmt_misc rw,relatime shared:13 - autofs systemd-1 rw,fd=32\n";
+const exactBinfmt = "45 37 0:35 / /proc/sys/fs/binfmt_misc rw,nosuid,nodev,noexec,relatime shared:29 - binfmt_misc binfmt_misc rw\n";
 
 const setup = [
   "mkdir -m 0700 -p /rehearsal/custody /rehearsal/target",
@@ -69,9 +104,51 @@ test("builder emits a reproducible static artifact with no mutation authority", 
   assert.equal(fs.statSync(binaryPath).mode & 0o777, 0o500);
   const source = fs.readFileSync(path.join(repositoryRoot, "scripts/legacy_game_command_h2_identity_audit.c"), "utf8");
   assert.doesNotMatch(source, /\b(groupadd|useradd|usermod|userdel|groupdel|setfacl)\b/);
+  assert.doesNotMatch(source.match(/pseudo_filesystem[^\n]+/)?.[0] ?? "", /"autofs"/);
+  assert.match(source, /approved_autofs_placeholder/);
+  assert.match(source, /AUTOFS_PLACEHOLDER_CHILD_MISSING/);
+  assert.match(source, /AUTOFS_PLACEHOLDER_CHILD_AMBIGUOUS/);
   const builder = fs.readFileSync(path.join(repositoryRoot, "scripts/build_legacy_game_command_h2_identity_audit.mjs"), "utf8");
   assert.match(builder, /dst=\/src,readonly/);
   assert.match(builder, /source snapshot changed during build/);
+});
+
+test("production mount classifier accepts only the exact systemd binfmt autofs placeholder", () => {
+  assert.deepEqual(runClassifierFixture("exact.mountinfo", rootMount + exactAutofs + exactBinfmt), {
+    status: 0, stdout: "scanned=1 excluded=2", stderr: "",
+  });
+});
+
+test("production mount classifier rejects an exact autofs placeholder without its child", () => {
+  assert.deepEqual(runClassifierFixture("missing-child.mountinfo", rootMount + exactAutofs), {
+    status: 67, stdout: "", stderr: "AUTOFS_PLACEHOLDER_CHILD_MISSING",
+  });
+});
+
+test("production mount classifier rejects autofs outside the exact path and source", () => {
+  const wrongPath = "37 26 0:32 / /srv/data rw,relatime - autofs systemd-1 rw,fd=32\n";
+  const wrongSource = "37 26 0:32 / /proc/sys/fs/binfmt_misc rw,relatime - autofs automount rw,fd=32\n";
+  assert.deepEqual(runClassifierFixture("wrong-path.mountinfo", rootMount + wrongPath), {
+    status: 67, stdout: "", stderr: "UNKNOWN_FILESYSTEM_REJECTED",
+  });
+  assert.deepEqual(runClassifierFixture("wrong-source.mountinfo", rootMount + wrongSource), {
+    status: 67, stdout: "", stderr: "UNKNOWN_FILESYSTEM_REJECTED",
+  });
+});
+
+test("production mount classifier binds the exact binfmt child parent and cardinality", () => {
+  const wrongParent = exactBinfmt.replace("45 37", "45 99");
+  const wrongChildSource = exactBinfmt.replace("binfmt_misc binfmt_misc rw", "binfmt_misc none rw");
+  const secondChild = exactBinfmt.replace("45 37", "46 37");
+  assert.deepEqual(runClassifierFixture("wrong-parent.mountinfo", rootMount + exactAutofs + wrongParent), {
+    status: 67, stdout: "", stderr: "AUTOFS_PLACEHOLDER_CHILD_MISSING",
+  });
+  assert.deepEqual(runClassifierFixture("wrong-child-source.mountinfo", rootMount + exactAutofs + wrongChildSource), {
+    status: 67, stdout: "", stderr: "AUTOFS_PLACEHOLDER_CHILD_MISSING",
+  });
+  assert.deepEqual(runClassifierFixture("ambiguous-child.mountinfo", rootMount + exactAutofs + exactBinfmt + secondChild), {
+    status: 67, stdout: "", stderr: "AUTOFS_PLACEHOLDER_CHILD_AMBIGUOUS",
+  });
 });
 
 test("clean scan writes exact durable GO evidence and marker", () => {
