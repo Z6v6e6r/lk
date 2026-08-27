@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import vm from "node:vm";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -87,6 +88,25 @@ function gameFixture(): JsonRecord {
   };
 }
 
+function crossRealmGameFixture(): JsonRecord {
+  return vm.runInNewContext(`({
+    id: "game-cross-realm",
+    status: "ACTIVE",
+    createdAt: new Date("2026-08-27T09:00:00.000Z"),
+    booking: {
+      id: "booking-cross-realm",
+      startTs: Date.now() + 3_600_000,
+      endTs: Date.now() + 7_200_000,
+    },
+    organizer: { id: "client-cross-realm", phone, phoneNorm: phone },
+    participants: [{ id: "client-cross-realm", phone, status: "CONFIRMED" }],
+    metadata: {
+      safeClientId: "client-cross-realm",
+      nested: { callbackUrl: "https://example.test/game?phone=" + phone },
+    },
+  })`, { phone: PHONE }) as JsonRecord;
+}
+
 test("games list filters by private identity before emitting a phone-free response", () => {
   const game = gameFixture();
   const original = structuredClone(game);
@@ -149,6 +169,38 @@ test("direct game lookup emits the latest matching document without phone data",
   assert.equal(payload.id, "game-public-1");
   assertPhoneFree(payload);
   assert.deepEqual(latest, latestOriginal, "direct lookup must not mutate the stored document");
+});
+
+test("list and direct lookup redact Mongo-like records from another VM realm", () => {
+  const listGame = crossRealmGameFixture();
+  const listOriginal = JSON.stringify(listGame);
+  const listOut = runNodeRedFunction("scripts/nodered_games_nodes/fn_list_normalize.js", {
+    _lkIncludePast: true,
+    _lkOffset: 0,
+    _lkPublicMode: true,
+    payload: [listGame],
+  }) as unknown[];
+  const listPayload = asRecord(asRecord(listOut[0]).payload);
+  const listedGame = asRecord((listPayload.games as JsonRecord[])[0]);
+
+  assert.equal(listedGame.id, "game-cross-realm");
+  assert.equal(Object.prototype.toString.call(listedGame.createdAt), "[object Date]");
+  assert.equal((listedGame.createdAt as Date).toISOString(), "2026-08-27T09:00:00.000Z");
+  assertPhoneFree(listPayload);
+  assert.equal(JSON.stringify(listGame), listOriginal, "cross-realm list sanitization must not mutate the stored document");
+
+  const directGame = crossRealmGameFixture();
+  const directOriginal = JSON.stringify(directGame);
+  const directOut = runNodeRedFunction("scripts/nodered_games_nodes/fn_get_by_id_resp.js", {
+    payload: [directGame],
+  }) as unknown[];
+  const directPayload = asRecord(asRecord(directOut[0]).payload);
+
+  assert.equal(directPayload.id, "game-cross-realm");
+  assert.equal(Object.prototype.toString.call(directPayload.createdAt), "[object Date]");
+  assert.equal((directPayload.createdAt as Date).toISOString(), "2026-08-27T09:00:00.000Z");
+  assertPhoneFree(directPayload);
+  assert.equal(JSON.stringify(directGame), directOriginal, "cross-realm direct sanitization must not mutate the stored document");
 });
 
 test("direct lookup keeps the existing 404 contract", () => {

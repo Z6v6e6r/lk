@@ -25,7 +25,15 @@ const phoneQueryValuePattern = /([?&][^=&#]*(?:phone|mobile|telephone|msisdn)[^=
 const isPlainRecord = (value) => {
   if (!isObj(value)) return false;
   const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+  if (prototype === null) return true;
+  const constructor = Object.prototype.hasOwnProperty.call(prototype, "constructor")
+    ? prototype.constructor
+    : null;
+  // MongoDB results enter a Node-RED Function from a different VM realm, so
+  // their Object.prototype is not reference-equal to the sandbox prototype.
+  // Constructor identity by name still excludes Date, Buffer, BSON/ObjectId,
+  // and other special instances that must keep their serialization behavior.
+  return typeof constructor === "function" && constructor.name === "Object";
 };
 
 const redactPhoneString = (value) => {
