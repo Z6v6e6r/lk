@@ -105,6 +105,7 @@ import {
 import {
   CABINET_URL,
   GAMES_BUNDLE_URL,
+  IS_DEV_RELEASE_CHANNEL,
   PUBLIC_INVITE_ORIGIN,
   PUBLIC_INVITE_PATH,
 } from "../../consts/api_config";
@@ -113,6 +114,7 @@ import { createLocalMembershipId } from "./localMembershipGeneration";
 import { shareOrCopyGameInvitePayload } from "../../utils/gameInviteClipboard";
 import { addGameToCalendar } from "../../utils/calendarEvent";
 import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
+import { A3PayGameCreateDemo } from "./A3PayGameCreateDemo";
 import logoHabBlack from "../../assets/logo hab black.svg";
 import logoHabBlackRaw from "../../assets/logo hab black.svg?raw";
 import logoHabWhite from "../../assets/logo hab white.svg";
@@ -6874,6 +6876,10 @@ export default function GamesPage({
     : paymentAmount != null && paymentAmount > 0
       ? Math.max(0, Math.round(paymentAmount / Math.max(splitShareCount, 1)))
       : resolveSplitShareAmount(splitShareCount, DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG, duration);
+  const a3PayDemoAmount = splitPaymentSelected ? splitShareAmount : paymentAmount;
+  const a3PayDemoAmountLabel = a3PayDemoAmount != null
+    ? `${formatPrice(a3PayDemoAmount)} ₽`
+    : "Сумма уточняется";
   const splitPaymentSummary = `${formatPrice(splitShareAmount)} ₽ × ${splitShareCount}`;
   // Eligible subscriptions must match the actual open-game exercise type we create.
   // Promo config may contain alternative Viva exercise type ids for pricing, but using
@@ -17601,6 +17607,13 @@ export default function GamesPage({
               <span className="game-submit-meta">{paymentStationCourt}</span>
               <span className="game-submit-meta">{paymentTimeRange}</span>
             </button>
+            {IS_DEV_RELEASE_CHANNEL && (
+              <A3PayGameCreateDemo
+                amountLabel={a3PayDemoAmountLabel}
+                stationCourt={paymentStationCourt}
+                timeRange={paymentTimeRange}
+              />
+            )}
             {!splitPaymentSelected && (
               <>
                 <button
