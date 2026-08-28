@@ -1556,6 +1556,22 @@
   rehearsal installation, and failed-staging cleanup coverage. This source-only stage
   performed no upload, production installation, Node-RED/Mongo mutation, or deployment.
 
+## 2026-08-27 — LK1 subscription production-custody preflight
+
+- Reproduced the reviewed unified candidate from fresh read-only live flow
+  `9e9698ea…`, then aligned the production runner, immutable release identity and
+  seven-writer provenance to the exact `9e9698ea… -> 928a7c49…` pair.
+- Added a regression that requires runner, activation manifest, writer registry and
+  deliberately `UNBOUND` Ed25519 trust anchor to remain coherent; the immutable release
+  builder enforces the same contract before manifest creation, and historical candidate
+  identities continue to fail closed.
+- Read-only host presence checks proved that the dedicated executor/runtime paths and
+  all three subscription runtime configuration bindings are absent. No secret value,
+  MongoDB connection, remote write, install, flow import/restart or Deploy occurred.
+- Production migration and Deploy therefore remain `STOP` pending separately governed
+  key custody, runtime provisioning, database evidence, backup/restore, quiescence and
+  signed execution authority.
+
 ## 2026-08-27 — LK1 exact-main closeout CI coverage
 
 - Added the existing referral attribution, reviewed-flow recovery, legacy command
