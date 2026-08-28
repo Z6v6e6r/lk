@@ -341,7 +341,7 @@ const prepareRuntime = (
 };
 
 const seedSourceLeaseRecovery = (prepared, { phase = "applying", formatVersion = 2 } = {}) => {
-  fs.mkdirSync(prepared.backupDirectory, { mode: 0o700 });
+  fs.mkdirSync(prepared.backupDirectory, { mode: 0o700, recursive: true });
   fs.chmodSync(prepared.backupDirectory, 0o700);
   const stamp = "20260820T120000+0300";
   const flowBackup = path.join(
@@ -366,9 +366,28 @@ const seedSourceLeaseRecovery = (prepared, { phase = "applying", formatVersion =
     sourceSha256: prepared.contract.sourceSha256,
     candidateSha256: prepared.contract.candidateSha256,
   };
-  fs.writeFileSync(prepared.deploymentLeasePath, `${JSON.stringify(lease, null, 2)}\n`, { mode: 0o600 });
+  const leaseBytes = Buffer.from(`${JSON.stringify(lease, null, 2)}\n`, "utf8");
+  fs.writeFileSync(prepared.deploymentLeasePath, leaseBytes, { mode: 0o600 });
   fs.chmodSync(prepared.deploymentLeasePath, 0o600);
-  return { flowBackup, contractBackup };
+  return { flowBackup, contractBackup, lease, leaseBytes, leaseSha256: sha256(leaseBytes) };
+};
+
+const prepareLegacyCandidateFinalization = (t, { formatVersion = 1 } = {}) => {
+  const prepared = prepareRuntime(t);
+  const artifacts = seedSourceLeaseRecovery(prepared, { formatVersion });
+  fs.writeFileSync(prepared.liveFlowPath, prepared.candidateBytes, { mode: 0o600 });
+  fs.chmodSync(prepared.liveFlowPath, 0o600);
+  const options = {
+    deploymentId: prepared.contract.deploymentId,
+    stamp: "20260820T121600+0300",
+    flowBackup: artifacts.flowBackup,
+    contractBackup: artifacts.contractBackup,
+    expectedLeaseSha256: artifacts.leaseSha256,
+    expectedActiveSha256: prepared.contract.candidateSha256,
+    expectedFlowBackupSha256: prepared.contract.sourceSha256,
+    expectedContractBackupSha256: sha256(fs.readFileSync(artifacts.contractBackup)),
+  };
+  return { prepared, artifacts, options };
 };
 
 test("remote runtime is backup-first and supports exact explicit rollback", (t) => {
@@ -522,6 +541,113 @@ test("legacy v1 candidate lease migrates through exact restore-and-restart rollb
   assert.deepEqual(prepared.restartPreviousValues, [10]);
   assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), prepared.liveBytes);
   assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+});
+
+test("expired legacy v1 candidate can be finalized without changing flow or restarting Node-RED", (t) => {
+  const { prepared, artifacts, options } = prepareLegacyCandidateFinalization(t);
+  prepared.advanceTime(15 * 60 * 1000 + 1);
+  const beforeFlow = fs.readFileSync(prepared.liveFlowPath);
+  const finalized = prepared.runtime.finalizeLegacyCandidate(options);
+  assert.equal(finalized.action, "finalize-legacy-v1-candidate");
+  assert.equal(finalized.activeCandidateAdopted, true);
+  assert.equal(finalized.flowChanged, false);
+  assert.equal(finalized.nodeRedRestarted, false);
+  assert.equal(finalized.deploymentLeaseReleased, true);
+  assert.equal(finalized.alreadyFinalized, false);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), beforeFlow);
+  assert.deepEqual(prepared.restartPreviousValues, []);
+  assert.equal(fs.statSync(finalized.receiptPath).mode & 0o777, 0o600);
+  const receiptBytes = fs.readFileSync(finalized.receiptPath);
+  const receipt = JSON.parse(receiptBytes.toString("utf8"));
+  assert.equal(receipt.legacyLeaseSha256, artifacts.leaseSha256);
+  assert.equal(receipt.activeFlowSha256, prepared.contract.candidateSha256);
+  assert.equal(receipt.flowBackupSha256, prepared.contract.sourceSha256);
+  assert.equal(receipt.activeCandidateAdopted, true);
+  assert.equal(Object.hasOwn(receipt, "token"), false);
+
+  fs.writeFileSync(prepared.deploymentLeasePath, artifacts.leaseBytes, { mode: 0o600 });
+  fs.chmodSync(prepared.deploymentLeasePath, 0o600);
+  const resumed = prepared.runtime.finalizeLegacyCandidate(options);
+  assert.equal(resumed.alreadyFinalized, true);
+  assert.equal(resumed.deploymentLeaseReleased, true);
+  assert.deepEqual(fs.readFileSync(resumed.receiptPath), receiptBytes);
+  assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
+
+  const idempotent = prepared.runtime.finalizeLegacyCandidate(options);
+  assert.equal(idempotent.alreadyFinalized, true);
+  assert.equal(idempotent.deploymentLeaseReleased, false);
+  assert.deepEqual(fs.readFileSync(prepared.liveFlowPath), beforeFlow);
+  assert.deepEqual(prepared.restartPreviousValues, []);
+});
+
+test("legacy candidate finalization refuses a live lease, v2 lease, or frozen digest mismatch", (t) => {
+  const nonExpired = prepareLegacyCandidateFinalization(t);
+  assert.throws(
+    () => nonExpired.prepared.runtime.finalizeLegacyCandidate(nonExpired.options),
+    /requires an expired deployment lease/,
+  );
+  assert.equal(fs.existsSync(nonExpired.prepared.deploymentLeasePath), true);
+  assert.deepEqual(nonExpired.prepared.restartPreviousValues, []);
+
+  const v2 = prepareLegacyCandidateFinalization(t, { formatVersion: 2 });
+  v2.prepared.advanceTime(15 * 60 * 1000 + 1);
+  assert.throws(
+    () => v2.prepared.runtime.finalizeLegacyCandidate(v2.options),
+    /requires a formatVersion 1 deployment lease/,
+  );
+  assert.equal(fs.existsSync(v2.prepared.deploymentLeasePath), true);
+
+  const digestMismatch = prepareLegacyCandidateFinalization(t);
+  digestMismatch.prepared.advanceTime(15 * 60 * 1000 + 1);
+  assert.throws(
+    () => digestMismatch.prepared.runtime.finalizeLegacyCandidate({
+      ...digestMismatch.options,
+      expectedLeaseSha256: "0".repeat(64),
+    }),
+    /Deployment lease differs from the frozen legacy finalization digest/,
+  );
+  assert.equal(fs.existsSync(digestMismatch.prepared.deploymentLeasePath), true);
+});
+
+test("legacy candidate finalization refuses source-active, artifact drift, and a different lease", (t) => {
+  const sourceActive = prepareLegacyCandidateFinalization(t);
+  sourceActive.prepared.advanceTime(15 * 60 * 1000 + 1);
+  fs.writeFileSync(sourceActive.prepared.liveFlowPath, sourceActive.prepared.liveBytes, { mode: 0o600 });
+  assert.throws(
+    () => sourceActive.prepared.runtime.finalizeLegacyCandidate(sourceActive.options),
+    /Active flow differs from the frozen legacy finalization digest/,
+  );
+  assert.equal(fs.existsSync(sourceActive.prepared.deploymentLeasePath), true);
+
+  const artifactDrift = prepareLegacyCandidateFinalization(t);
+  artifactDrift.prepared.advanceTime(15 * 60 * 1000 + 1);
+  fs.appendFileSync(artifactDrift.artifacts.contractBackup, " ");
+  assert.throws(
+    () => artifactDrift.prepared.runtime.finalizeLegacyCandidate(artifactDrift.options),
+    /Contract backup differs from the frozen legacy finalization digest/,
+  );
+  assert.equal(fs.existsSync(artifactDrift.prepared.deploymentLeasePath), true);
+
+  const differentLease = prepareLegacyCandidateFinalization(t);
+  differentLease.prepared.advanceTime(15 * 60 * 1000 + 1);
+  differentLease.prepared.runtime.finalizeLegacyCandidate(differentLease.options);
+  const conflictingLease = {
+    ...differentLease.artifacts.lease,
+    deploymentId: "other-deployment",
+  };
+  fs.writeFileSync(
+    differentLease.prepared.deploymentLeasePath,
+    `${JSON.stringify(conflictingLease, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  fs.chmodSync(differentLease.prepared.deploymentLeasePath, 0o600);
+  assert.throws(
+    () => differentLease.prepared.runtime.finalizeLegacyCandidate(differentLease.options),
+    /deployment lease belongs to other-deployment/,
+  );
+  assert.equal(fs.existsSync(differentLease.prepared.deploymentLeasePath), true);
+  assert.deepEqual(differentLease.prepared.restartPreviousValues, []);
 });
 
 test("successful apply blocks another reviewed deployment for the soak lease", (t) => {
@@ -762,6 +888,8 @@ test("reviewed-flow remote CLI serializes every action with one fail-fast flock"
   assert.match(remoteHelper, /spawnSync\(\s*"flock"/);
   assert.match(remoteHelper, /"-E",\s*String\(DEPLOYMENT_LOCK_CONFLICT_EXIT\),\s*"-n"/);
   assert.match(remoteHelper, /PADLHUB_REVIEWED_FLOW_LOCK_HELD/);
+  assert.match(remoteHelper, /finalize-legacy-v1-candidate/);
+  assert.match(remoteHelper, /expected-lease-sha256/);
   const flowBackupIndex = remoteHelper.indexOf("writeFileExclusiveDurable(flowBackup");
   const contractBackupIndex = remoteHelper.indexOf("writeFileExclusiveDurable(contractBackup");
   const leaseIndex = remoteHelper.indexOf("let deploymentLease = acquireDeploymentLease");
