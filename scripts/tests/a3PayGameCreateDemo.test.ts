@@ -38,7 +38,7 @@ test("demo action only opens local UI and does not call payment handlers", () =>
 });
 
 test("demo clearly states that it creates no payment, booking, or game", () => {
-  assert.match(demoSource, /демо, платёж не выполняется/);
+  assert.doesNotMatch(demoSource, /A3\.pay · демо, платёж не выполняется/);
   assert.match(demoSource, /Запрос на оплату не отправлен/);
   assert.match(demoSource, /Счёт A3\.pay, бронь Viva и игра не создаются\./);
 });

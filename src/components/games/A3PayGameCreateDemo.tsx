@@ -41,20 +41,12 @@ const A3_PAY_GAME_CREATE_DEMO_STYLES = `
     display: flex;
     min-width: 0;
     flex-direction: column;
-    gap: 3px;
   }
 
   .a3pay-game-create-demo-button-copy strong {
     font-size: 15px;
     font-weight: 800;
     line-height: 1.25;
-  }
-
-  .a3pay-game-create-demo-button-copy span {
-    font-size: 12px;
-    font-weight: 650;
-    line-height: 1.3;
-    opacity: 0.72;
   }
 
   .a3pay-game-create-demo-button-arrow {
@@ -216,7 +208,6 @@ export function A3PayGameCreateDemo({
       >
         <span className="a3pay-game-create-demo-button-copy">
           <strong>Оплатить через Ozon Банк</strong>
-          <span>A3.pay · демо, платёж не выполняется</span>
         </span>
         <span className="a3pay-game-create-demo-button-arrow" aria-hidden="true">→</span>
       </button>
