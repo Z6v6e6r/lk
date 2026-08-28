@@ -600,13 +600,6 @@ export function createReviewedFlowRuntime({
         || !Number.isInteger(receipt?.nodeRedRestartCount)
         || receipt.nodeRedRestartCount < 0
       ) throw new Error("Legacy candidate finalization receipt process metadata is invalid");
-      if (
-        activeLease
-        && (
-          receipt.nodeRedPid !== processInfo.pid
-          || receipt.nodeRedRestartCount !== processInfo.restartCount
-        )
-      ) throw new Error("Legacy candidate finalization receipt process identity changed before lease release");
       alreadyFinalized = true;
     } else {
       writeFileExclusiveDurable(

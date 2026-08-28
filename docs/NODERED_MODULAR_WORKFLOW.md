@@ -104,9 +104,11 @@ lease in `/root/.node-red/.padlhub-reviewed-flow-deploy.lease.json`.
   state, writes a protected receipt first, then releases only that matching
   lease. It never rewrites `flows.json` or restarts Node-RED;
 - finalization is receipt-first and re-entrant: an interrupted retry may release
-  the same lease against the exact receipt, while receipt-only retries are
-  read-only and idempotent. A v2/live/different lease, source-active flow,
-  unknown flow, artifact drift or receipt drift is refused fail-closed;
+  the same lease against the exact receipt after revalidating the current
+  candidate and stable-online PM2 state, including after a process restart;
+  receipt-only retries are read-only and idempotent. A v2/live/different lease,
+  source-active flow, unknown flow, artifact drift or receipt drift is refused
+  fail-closed;
 - every restart uses a fresh PM2 restart counter read immediately before the
   restart, and the lease is released only after source-digest and online
   read-back succeed;

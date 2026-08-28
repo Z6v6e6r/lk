@@ -568,9 +568,11 @@ test("expired legacy v1 candidate can be finalized without changing flow or rest
 
   fs.writeFileSync(prepared.deploymentLeasePath, artifacts.leaseBytes, { mode: 0o600 });
   fs.chmodSync(prepared.deploymentLeasePath, 0o600);
+  prepared.setProcessState({ status: "online", pid: 4321 });
   const resumed = prepared.runtime.finalizeLegacyCandidate(options);
   assert.equal(resumed.alreadyFinalized, true);
   assert.equal(resumed.deploymentLeaseReleased, true);
+  assert.equal(resumed.nodeRedPid, 4321);
   assert.deepEqual(fs.readFileSync(resumed.receiptPath), receiptBytes);
   assert.equal(fs.existsSync(prepared.deploymentLeasePath), false);
 
