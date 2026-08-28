@@ -64,7 +64,7 @@ test("release builder packages and authenticates the bootstrap installer and run
   const verified = installer.verifyLegacyGameCommandReleaseBundle(bundle);
   assert.equal(verified.manifest.repositoryCommit, commit);
   assert.equal(manifest.source.liveFlowSha256, "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263");
-  assert.equal(manifest.source.candidateFlowSha256, "928a7c49a91a77a9abac6e2bcf6bbea5091b25bdfd44e9de8a735454c9a0b429");
+  assert.equal(manifest.source.candidateFlowSha256, "703c065429bcee016e86ac7559c3b834754bab61bcb5c70f4da55b1cc32064ca");
   assert.equal(manifest.source.installerSha256, installerSha256);
   assert.ok(manifest.files.some((item) => item.path === "scripts/install_legacy_game_command_production_release.mjs"
     && item.sha256 === installerSha256));

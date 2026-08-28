@@ -11,7 +11,7 @@ change, secret provisioning or production rollback.
 - main tree: `8dd82b9c87fe2e3cbaa128b977e18bbc95d877fe`;
 - read-only live pull: `2026-08-27T13:51:45.289Z` and a confirming later pull;
 - live flow SHA-256: `9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263`;
-- reviewed candidate SHA-256: `928a7c49a91a77a9abac6e2bcf6bbea5091b25bdfd44e9de8a735454c9a0b429`;
+- reviewed candidate SHA-256: `703c065429bcee016e86ac7559c3b834754bab61bcb5c70f4da55b1cc32064ca` (supersedes the pre-rollout-gate `928a7c49…` candidate);
 - inventory: `4762 -> 4812` nodes, `215` unchanged HTTP inputs,
   `54` exact existing-node changes and `50` exact additions;
 - broken wires/links: `0/0`;

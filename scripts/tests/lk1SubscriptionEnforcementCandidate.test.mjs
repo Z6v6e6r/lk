@@ -184,6 +184,41 @@ test("unified LK1 candidate fails closed on source, preimage, or enabled-tab dri
   assert.throws(() => build(disabledTab), /enabled-tab mismatch/);
 });
 
+test("unified LK1 candidate tolerates disabled duplicates but rejects enabled semantic duplicates", () => {
+  const { flow, contract, sources } = syntheticContract();
+  const disabledDuplicate = structuredClone(flow);
+  disabledDuplicate.push(
+    { id: "games-disabled", type: "tab", label: "LK Games", disabled: true },
+    {
+      id: "a-disabled-copy",
+      type: "function",
+      z: "games-disabled",
+      name: "A",
+      func: "return null;\n",
+      wires: [],
+    },
+  );
+  const expandedContract = { ...contract, nodeCount: disabledDuplicate.length };
+  assert.doesNotThrow(() => buildLk1EnforcementCandidate(
+    structuredClone(disabledDuplicate),
+    expandedContract.sourceSha256,
+    expandedContract,
+    (sourceFile) => sources.get(sourceFile),
+  ));
+
+  const enabledDuplicate = structuredClone(disabledDuplicate);
+  enabledDuplicate.find((node) => node.id === "games-disabled").disabled = false;
+  assert.throws(
+    () => buildLk1EnforcementCandidate(
+      enabledDuplicate,
+      expandedContract.sourceSha256,
+      expandedContract,
+      (sourceFile) => sources.get(sourceFile),
+    ),
+    /enabled semantic identity must exist exactly once/,
+  );
+});
+
 test("unified LK1 contract pins every tracked candidate source", () => {
   assert.equal(
     LK1_ENFORCEMENT_CONTRACT.sourceSha256,
@@ -257,6 +292,31 @@ test("CI-safe structural fixture executes the full unified composition and rejec
       drift.options,
     ),
     /broken references|exact node/,
+  );
+});
+
+test("unified publisher rejects a second enabled semantic target before composition", () => {
+  const fixture = structuralUnifiedFixture();
+  fixture.source.push(
+    { id: "duplicate-games-tab", type: "tab", label: "LK Games", disabled: false },
+    {
+      id: "duplicate-patch-target",
+      type: "function",
+      z: "duplicate-games-tab",
+      name: "Prepare game patch",
+      func: "return msg;\n",
+      outputs: 1,
+      wires: [[]],
+    },
+  );
+  const duplicateContract = { ...fixture.contract, nodeCount: fixture.source.length };
+  assert.throws(
+    () => buildUnifiedLk1EnforcementCandidate(
+      fixture.source,
+      duplicateContract.sourceSha256,
+      { ...fixture.options, contract: duplicateContract },
+    ),
+    /Unified LK1 target e0d7883bc1a9fa8c enabled semantic identity must exist exactly once/,
   );
 });
 

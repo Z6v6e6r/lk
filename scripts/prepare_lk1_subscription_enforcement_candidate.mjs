@@ -22,7 +22,7 @@ const fail = (message) => { throw new Error(message); };
 
 export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
   sourceSha256: "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
-  candidateSha256: "928a7c49a91a77a9abac6e2bcf6bbea5091b25bdfd44e9de8a735454c9a0b429",
+  candidateSha256: "703c065429bcee016e86ac7559c3b834754bab61bcb5c70f4da55b1cc32064ca",
   nodeCount: 4762,
   candidateNodeCount: 4812,
   httpRouteCount: 215,
@@ -88,7 +88,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
       name: "Route atomic subscription booking",
       sourceFile: "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js",
       preimageSha256: "11c4b80c2624ad97fc83f634139d0db7d36aebb8df8a525bdc7baae3e9bae0fd",
-      candidateSha256: "79e5209546b290ad86205032cb7b5db7c332ffd4b1092f261cd59260ccf056d9",
+      candidateSha256: "0a580112d576cc41f0710a858b0423e56c78587142fa2f4993d94138851a8cfa",
     }),
     Object.freeze({
       id: "c165e43eba668c25",
@@ -135,6 +135,21 @@ const exactNode = (flow, id) => {
   const matches = flow.filter((node) => node?.id === id);
   if (matches.length !== 1) fail(`Unified candidate requires exact node ${id}`);
   return matches[0];
+};
+const assertEnabledSemanticTargetUniqueness = (flow, targets, label) => {
+  const tabs = new Map(flow.filter((node) => node?.type === "tab").map((node) => [node.id, node]));
+  for (const target of targets) {
+    const matches = flow.filter((candidate) => {
+      const candidateTab = tabs.get(candidate?.z);
+      return candidate?.type === "function"
+        && candidate.name === target.name
+        && candidateTab?.label === target.tabLabel
+        && candidateTab.disabled !== true;
+    });
+    if (matches.length !== 1 || matches[0].id !== target.id) {
+      fail(`${label} target ${target.id} enabled semantic identity must exist exactly once`);
+    }
+  }
 };
 const changedFields = (before, after) => [...new Set([...Object.keys(before), ...Object.keys(after)])]
   .filter((key) => !isDeepStrictEqual(before[key], after[key]))
@@ -210,6 +225,7 @@ export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256, option
   if (source.filter((node) => node.type === "http in").length !== contract.httpRouteCount) {
     fail("Unified LK1 HTTP route count mismatch");
   }
+  assertEnabledSemanticTargetUniqueness(source, contract.targets, "Unified LK1");
 
   const before = structuredClone(source);
   const payment = buildPayment(structuredClone(source), sourceSha256);
@@ -385,6 +401,7 @@ export function buildLk1EnforcementCandidate(
       || tab?.label !== target.tabLabel || tab.disabled === true) {
       fail(`LK1 target ${target.id} identity or enabled-tab mismatch`);
     }
+    assertEnabledSemanticTargetUniqueness(flow, [target], "LK1");
     const previousSource = String(node.func || "");
     if (sha256(previousSource) !== target.preimageSha256) {
       fail(`LK1 target ${target.id} preimage mismatch`);

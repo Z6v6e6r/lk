@@ -17,44 +17,29 @@ const MANAGED_EVALUATOR_FILE =
   "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_evaluate.js";
 const MANAGED_BLOCKED_FILE =
   "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_blocked.js";
+const PITER_PRODUCT_ID = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
+const HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";
+const LIVE_ROUTER_FLOW_FIXTURE = process.env.LK1_SUBSCRIPTION_LIVE_FLOW_FIXTURE;
 const MANAGED_GLOBALS = {
   vivacrm_access_token: "service-token",
   subscriptions_runtime_api_base_url: "https://cup.example/api",
   subscriptions_runtime_context_integration_token: "integration-token",
+  subscriptions_managed_enforcement_product_ids: [PITER_PRODUCT_ID],
 };
 const MANAGED_ACTIVATION_GLOBALS = {
   ...MANAGED_GLOBALS,
   subscriptions_activation_integration_token: "activation-integration-token-1234567890",
 };
 const PITER_STATION_ID = "1ea77cbf-bc36-49a1-96d6-f35c216a409b";
-const HUB_STATION_IDS = [
-  "0d5504f6-ea6f-44bb-a9e4-947faf0273ab",
-  "0ee057dd-908c-4b33-84b9-1a977480b710",
-  "14d6d441-635f-47d0-aa8c-553496294fb1",
-  "1c323ef3-7e6c-42eb-a6f7-653460540a8a",
-  "1cbb7201-2189-41a4-a3b4-4f543da0def6",
-  "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
-  "233c1405-1eac-40de-8ec6-1cf7e24c9276",
-  "3266d827-2662-4540-9376-daac10f3875e",
-  "3656cbaa-6426-490f-a44f-915404cbdd2b",
-  "3b52e87f-33bb-436b-a1e3-19a3b62b4ed2",
-  "3db3fc06-00e2-445a-97eb-e354796f80a1",
-  "42c6d4df-833d-480a-bdc8-986716569884",
-  "4c564565-3918-40b2-8cb3-b7135c7cc992",
-  "5409fdc8-3db3-4e66-a6a9-8994bd591c8f",
-  "588b6151-f4f5-47d9-9449-80edf8cbc748",
-  "6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1",
-  "6b2d7e60-caff-4b22-89f6-6f19d7d311ab",
-  "76c67f10-70ee-4296-9145-1c040e4674ca",
-  "8380b5db-c12f-495b-a0d7-c7359168a777",
-  "855ec72a-d619-4add-ac92-8c64dafb17c2",
-  "8e31b902-1981-4b62-b803-6187b8f2a8da",
-  "b09d0015-5198-4a94-b88b-2448218e479d",
-  "c72eaaff-2163-47cd-87d0-b93499415acc",
-  "ed0e3bd4-6edb-43a9-8fe4-8fc3e7febec8",
-  "f82775cc-3dd7-4d02-98c8-e43cce470003",
-];
 const DAY_MS = 24 * 60 * 60 * 1000;
+const managedEnforcement = (enabled: boolean, productId: string | null = PITER_PRODUCT_ID) => ({
+  source: "SERVER_GLOBAL_ALLOWLIST",
+  configuredProductIds: enabled ? [PITER_PRODUCT_ID] : [],
+  exactProductId: productId,
+  productIdentity: productId,
+  enabled,
+  planKey: enabled ? "piter_friendship" : null,
+});
 const futureManagedTarget = () => {
   const futureDate = new Date(Date.now() + 36 * 60 * 60 * 1000);
   const serviceDate = new Intl.DateTimeFormat("en-CA", {
@@ -75,12 +60,20 @@ function runFunction(
   globals: Record<string, unknown> = { vivacrm_access_token: "service-token" },
 ) {
   const source = fs.readFileSync(file, "utf8");
+  return runFunctionSource(source, msg, globals);
+}
+
+function runFunctionSource(
+  source: string,
+  msg: Record<string, any>,
+  globals: Record<string, unknown> = { vivacrm_access_token: "service-token" },
+) {
   const globalContext = { get: (key: string) => globals[key] };
   return new Function("msg", "global", source)(msg, globalContext) as any[];
 }
 
 function baseContext(step: string, overrides: Record<string, unknown> = {}) {
-  return {
+  const context: Record<string, any> = {
     caller: "http",
     step,
     tenantKey: "iSkq6G",
@@ -99,6 +92,12 @@ function baseContext(step: string, overrides: Record<string, unknown> = {}) {
     studioId: "studio-1",
     ...overrides,
   };
+  if (!("managedEnforcement" in overrides)) {
+    context.managedEnforcement = context.planKey === "piter_friendship"
+      ? managedEnforcement(true)
+      : managedEnforcement(false, "82caad6f-4d19-4d01-852b-932bdbb0f405");
+  }
+  return context;
 }
 
 function flatBooking(overrides: Record<string, unknown> = {}) {
@@ -135,6 +134,20 @@ function trustedExercise({
       productId,
       name: planName,
     }],
+  };
+}
+
+function managedExercise(productId = PITER_PRODUCT_ID, name = "Падел.Дружба.Питер — 12 месяцев") {
+  return {
+    ...trustedExercise({
+      directionId: 4588,
+      planName: name,
+      productId,
+      studioId: PITER_STATION_ID,
+      typeId: 1613,
+    }),
+    timeFrom: "2026-08-21T18:00:00+03:00",
+    timeTo: "2026-08-21T19:00:00+03:00",
   };
 }
 
@@ -602,7 +615,7 @@ test("Piter split create resolves a server target and requests the actor-owned C
       studio: { id: "studio-1" },
       availableClientSubscriptions: [{
         clientSubscriptionId: "client-subscription-1",
-        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+        productId: PITER_PRODUCT_ID,
         name: "Падел.Дружба.Питер — 12 месяцев",
       }],
     },
@@ -629,7 +642,155 @@ test("Piter split create resolves a server target and requests the actor-owned C
   assert.equal(out[3], null);
 });
 
-test("managed annual identity requires an exact product and canonical direction plus type", () => {
+test("managed allowlist is UUID-normalized, deduplicated and deterministic", () => {
+  const out = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedExercise(PITER_PRODUCT_ID.toUpperCase()),
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, {
+    ...MANAGED_GLOBALS,
+    subscriptions_managed_enforcement_product_ids: JSON.stringify([
+      HUB_PRODUCT_ID.toUpperCase(),
+      PITER_PRODUCT_ID.toUpperCase(),
+      PITER_PRODUCT_ID,
+    ]),
+  });
+
+  assert.equal(out[0]._subscriptionBooking.step, "managed_runtime_context");
+  assert.deepEqual(out[0]._subscriptionBooking.managedEnforcement.configuredProductIds,
+    [PITER_PRODUCT_ID, HUB_PRODUCT_ID].sort());
+  assert.equal(out[0]._subscriptionBooking.managedEnforcement.exactProductId, PITER_PRODUCT_ID);
+});
+
+test("malformed managed allowlist values fail closed before CUP or Viva writes", () => {
+  for (const configured of ["not-json", ["not-a-uuid"], { productId: PITER_PRODUCT_ID }]) {
+    const out = runFunction(ROUTER_FILE, {
+      statusCode: 200,
+      payload: managedExercise(),
+      _subscriptionBooking: baseContext("exercise", {
+        serviceDate: undefined, category: undefined, planKey: undefined,
+        managedAction: "CREATE_GAME",
+      }),
+    }, {
+      ...MANAGED_GLOBALS,
+      subscriptions_managed_enforcement_product_ids: configured,
+    });
+    assert.equal(out[4].statusCode, 503);
+    assert.equal(out[4].payload.details.code,
+      "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID");
+    assert.equal(out[0], null);
+    assert.equal(out[1], null);
+    assert.equal(out[2], null);
+    assert.equal(out[3], null);
+  }
+});
+
+test("conflicting server-owned product identities fail closed before managed routing", () => {
+  const exercise = managedExercise();
+  exercise.availableClientSubscriptions[0].product = { id: HUB_PRODUCT_ID };
+  const out = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: exercise,
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+
+  assert.equal(out[4].statusCode, 409);
+  assert.equal(out[4].payload.details.code, "SUBSCRIPTION_PRODUCT_IDENTITY_AMBIGUOUS");
+  assert.equal(out[0], null);
+});
+
+test("empty allowlist keeps exact PITER on the fresh-live compatibility path", () => {
+  const lookup = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedExercise(PITER_PRODUCT_ID, ""),
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: "piter_friendship",
+      managedAction: "JOIN_GAME",
+      managedEnforcement: managedEnforcement(true),
+    }),
+  }, {
+    vivacrm_access_token: "service-token",
+    subscriptions_managed_enforcement_product_ids: [],
+  });
+
+  assert.equal(lookup[0]._subscriptionBooking.step, "subscription_name");
+  assert.doesNotMatch(lookup[0].url, /runtime-context/);
+  const out = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { sertName: "Лето.Падел.Дружба" },
+    _subscriptionBooking: lookup[0]._subscriptionBooking,
+  }, {
+    vivacrm_access_token: "service-token",
+    subscriptions_managed_enforcement_product_ids: [],
+  });
+  assert.equal(out[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(out[0]._subscriptionBooking.planKey, "friendship");
+  assert.equal(out[0]._subscriptionBooking.managedEnforcement.enabled, false);
+  assert.deepEqual(out[0]._subscriptionBooking.managedEnforcement.configuredProductIds, []);
+  assert.doesNotMatch(out[0].url, /runtime-context/);
+});
+
+test("browser product, name, planKey and gate fields cannot enable a non-PITER product", () => {
+  const ordinaryProductId = "82caad6f-4d19-4d01-852b-932bdbb0f405";
+  const out = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedExercise(ordinaryProductId),
+    productId: PITER_PRODUCT_ID,
+    subscriptionProductId: PITER_PRODUCT_ID,
+    subscriptionName: "Падел.Дружба.Питер — 12 месяцев",
+    planKey: "piter_friendship",
+    managedEnforcement: managedEnforcement(true),
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: "piter_friendship",
+      managedAction: "CREATE_GAME",
+      managedEnforcement: managedEnforcement(true),
+    }),
+  }, MANAGED_GLOBALS);
+
+  assert.equal(out[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(out[0]._subscriptionBooking.planKey, "sport");
+  assert.equal(out[0]._subscriptionBooking.managedEnforcement.exactProductId, ordinaryProductId);
+  assert.equal(out[0]._subscriptionBooking.managedEnforcement.enabled, false);
+  assert.doesNotMatch(out[0].url, /runtime-context/);
+});
+
+test("direct and split CREATE/JOIN use the same exact PITER rollout gate", () => {
+  for (const caller of ["http", "split"]) {
+    for (const managedAction of ["CREATE_GAME", "JOIN_GAME"]) {
+      const enabled = runFunction(ROUTER_FILE, {
+        statusCode: 200,
+        payload: managedExercise(),
+        _subscriptionBooking: baseContext("exercise", {
+          caller,
+          serviceDate: undefined, category: undefined, planKey: undefined,
+          managedAction,
+        }),
+      }, MANAGED_GLOBALS);
+      assert.equal(enabled[0]._subscriptionBooking.step, "managed_runtime_context");
+      assert.equal(enabled[0]._subscriptionBooking.managedAction, managedAction);
+
+      const disabled = runFunction(ROUTER_FILE, {
+        statusCode: 200,
+        payload: managedExercise(),
+        _subscriptionBooking: baseContext("exercise", {
+          caller,
+          serviceDate: undefined, category: undefined, planKey: undefined,
+          managedAction,
+        }),
+      }, { vivacrm_access_token: "service-token" });
+      assert.equal(disabled[0]._subscriptionBooking.step, "active_bookings");
+      assert.doesNotMatch(disabled[0].url, /runtime-context/);
+    }
+  }
+});
+
+test("names cannot enable managed enforcement and an allowlisted exact product still requires canonical target identity", () => {
   const exercise = {
     id: "exercise-target",
     timeFrom: "2026-08-21T18:00:00+03:00",
@@ -650,9 +811,10 @@ test("managed annual identity requires an exact product and canonical direction 
       managedAction: "CREATE_GAME",
     }),
   }, MANAGED_GLOBALS);
-  assert.equal(byNameOnly[4].payload.details.code,
-    "MANAGED_SUBSCRIPTION_PRODUCT_MAPPING_REQUIRED");
-  assert.equal(byNameOnly[0], null);
+  assert.equal(byNameOnly[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(byNameOnly[0]._subscriptionBooking.planKey, "friendship");
+  assert.equal(byNameOnly[0]._subscriptionBooking.managedEnforcement.enabled, false);
+  assert.doesNotMatch(byNameOnly[0].url, /runtime-context/);
 
   const missingDirection = runFunction(ROUTER_FILE, {
     statusCode: 200,
@@ -661,7 +823,7 @@ test("managed annual identity requires an exact product and canonical direction 
       direction: { name: "Открытая игра" },
       availableClientSubscriptions: [{
         ...exercise.availableClientSubscriptions[0],
-        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+        productId: PITER_PRODUCT_ID,
       }],
     },
     _subscriptionBooking: baseContext("exercise", {
@@ -674,7 +836,7 @@ test("managed annual identity requires an exact product and canonical direction 
   assert.equal(missingDirection[0], null);
 });
 
-test("HUB split join uses the same CUP policy path while Kotelniki stays closed", () => {
+test("HUB split join stays on the fresh-live compatibility path while Kotelniki stays closed", () => {
   const exercise = (name: string, productId?: string) => ({
     id: "exercise-target",
     timeFrom: "2026-08-21T18:00:00+03:00",
@@ -688,20 +850,32 @@ test("HUB split join uses the same CUP policy path while Kotelniki stays closed"
       name,
     }],
   });
-  const hub = runFunction(ROUTER_FILE, {
+  const hubLookup = runFunction(ROUTER_FILE, {
     statusCode: 200,
-    payload: exercise(
-      "Падел.Дружба.ХАБ — 12 месяцев",
-      "db7a5250-7369-4f43-8ac5-9111be24bc74",
-    ),
+    payload: exercise("", HUB_PRODUCT_ID),
     _subscriptionBooking: baseContext("exercise", {
       serviceDate: undefined, category: undefined, planKey: undefined,
       managedAction: "JOIN_GAME",
     }),
-  }, MANAGED_GLOBALS);
-  assert.equal(hub[0]._subscriptionBooking.planKey, "network_friendship");
-  assert.equal(hub[0]._subscriptionBooking.managedTarget.durationMinutes, 120);
-  assert.equal(hub[0]._subscriptionBooking.managedAction, "JOIN_GAME");
+  }, {
+    ...MANAGED_GLOBALS,
+    subscriptions_managed_enforcement_product_ids: [PITER_PRODUCT_ID, HUB_PRODUCT_ID],
+  });
+  assert.equal(hubLookup[0]._subscriptionBooking.step, "subscription_name");
+  assert.doesNotMatch(hubLookup[0].url, /runtime-context/);
+  const hub = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { sertName: "Лето.Падел.Дружба" },
+    _subscriptionBooking: hubLookup[0]._subscriptionBooking,
+  }, {
+    ...MANAGED_GLOBALS,
+    subscriptions_managed_enforcement_product_ids: [PITER_PRODUCT_ID, HUB_PRODUCT_ID],
+  });
+  assert.equal(hub[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(hub[0]._subscriptionBooking.planKey, "friendship");
+  assert.equal(hub[0]._subscriptionBooking.managedEnforcement.exactProductId, HUB_PRODUCT_ID);
+  assert.equal(hub[0]._subscriptionBooking.managedEnforcement.enabled, false);
+  assert.doesNotMatch(hub[0].url, /runtime-context/);
 
   const kotelniki = runFunction(ROUTER_FILE, {
     statusCode: 200,
@@ -756,79 +930,89 @@ test("published managed policy is evaluated before Mongo and persists its audit 
   assert.equal(routed[1]._subscriptionBooking.managedDecision.benefit.kind, "FREE_ENTITLEMENT");
 });
 
-test("HUB accepts the exact first-use deadline lifecycle with the pinned station set", () => {
-  const futureTarget = futureManagedTarget();
+test("forged HUB planKey and runtime step cannot bypass the exact PITER gate", () => {
   const runtime = runFunction(ROUTER_FILE, {
     statusCode: 200,
-    payload: managedRuntimeResponse({
-      stationId: HUB_STATION_IDS[0],
-      stationIds: [...HUB_STATION_IDS].reverse(),
-      benefitStationIds: [...HUB_STATION_IDS],
-      subscriptionTypeId: "subscription-type:hub",
-    }),
-    _subscriptionBooking: baseContext("managed_runtime_context", {
-      serviceDate: futureTarget.serviceDate,
-      category: "open_game",
-      planKey: "network_friendship",
-      managedAction: "JOIN_GAME",
-      managedTarget: {
-        resolutionSource: "SERVER", stationId: HUB_STATION_IDS[0], category: "GAME",
-        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
-        durationMinutes: 120, startsAt: futureTarget.startsAt,
-        basePriceMinor: null, currency: "RUB",
-      },
-    }),
-  }, MANAGED_GLOBALS);
-
-  assert.equal(runtime[0]._subscriptionBooking.step, "active_bookings");
-  assert.equal(runtime[0]._subscriptionBooking.managedRuntime.policy.lifecycle.activationMode,
-    "FIRST_USE_OR_FIXED_DATE");
-  const active = runFunction(ROUTER_FILE, {
-    statusCode: 200, payload: { content: [] },
-    _subscriptionBooking: runtime[0]._subscriptionBooking,
-  }, MANAGED_GLOBALS);
-  const history = runFunction(ROUTER_FILE, {
-    statusCode: 200, payload: { content: [] },
-    _subscriptionBooking: active[0]._subscriptionBooking,
-  }, MANAGED_GLOBALS);
-  const evaluated = runFunction(MANAGED_EVALUATOR_FILE, history[6]);
-  assert.ok(evaluated[0]);
-  assert.equal(evaluated[0]._managedSubscriptionPolicyDecision.eligible, true);
-});
-
-test("HUB rejects all-stations, missing and additional station scopes before Viva or Mongo", () => {
-  const evaluate = (overrides: Record<string, unknown>) => runFunction(ROUTER_FILE, {
-    statusCode: 200,
-    payload: managedRuntimeResponse({
-      subscriptionTypeId: "subscription-type:hub",
-      ...overrides,
-    }),
+    payload: managedRuntimeResponse({ subscriptionTypeId: "subscription-type:hub" }),
     _subscriptionBooking: baseContext("managed_runtime_context", {
       serviceDate: "2026-08-21",
       category: "open_game",
       planKey: "network_friendship",
       managedAction: "JOIN_GAME",
-      managedTarget: {
-        resolutionSource: "SERVER", stationId: "studio-1", category: "GAME",
-        externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null, eventId: "exercise-target",
-        durationMinutes: 120, startsAt: "2026-08-21T15:00:00.000Z",
-        basePriceMinor: null, currency: "RUB",
-      },
+      managedEnforcement: managedEnforcement(false, HUB_PRODUCT_ID),
     }),
   }, MANAGED_GLOBALS);
 
-  for (const output of [
-    evaluate({ allStations: true }),
-    evaluate({ stationIds: HUB_STATION_IDS.slice(0, -1) }),
-    evaluate({ stationIds: [...HUB_STATION_IDS, "station:unreviewed"] }),
-  ]) {
-    assert.equal(output[4].statusCode, 409);
-    assert.equal(output[4].payload.details.code, "MANAGED_SUBSCRIPTION_POLICY_UNSUPPORTED");
-    assert.equal(output[0], null);
-    assert.equal(output[1], null);
-    assert.equal(output[2], null);
-    assert.equal(output[3], null);
-  }
+  assert.equal(runtime[4].statusCode, 409);
+  assert.equal(runtime[4].payload.details.code,
+    "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONTEXT_INVALID");
+  assert.equal(runtime[0], null);
+});
+
+test("the managed runtime call graph contains no HUB product identity", () => {
+  const source = fs.readFileSync(ROUTER_FILE, "utf8");
+  assert.match(source, /internal\/subscriptions\/runtime-context/);
+  assert.match(source, new RegExp(PITER_PRODUCT_ID));
+  assert.doesNotMatch(source, new RegExp(HUB_PRODUCT_ID));
+});
+
+test("HUB response and external command prefix match the exact fresh-live preimage", {
+  skip: !LIVE_ROUTER_FLOW_FIXTURE,
+}, () => {
+  const flow = JSON.parse(fs.readFileSync(LIVE_ROUTER_FLOW_FIXTURE, "utf8"));
+  const liveTargets = flow.filter((node: Record<string, any>) => (
+    node.id === "lk_subscription_booking_router_20260804"
+  ));
+  assert.equal(liveTargets.length, 1);
+  const payload = {
+    id: "exercise-target",
+    timeFrom: "2026-08-21T18:00:00+03:00",
+    timeTo: "2026-08-21T19:00:00+03:00",
+    direction: { name: "Групповая тренировка" },
+    type: { id: 605, name: "Групповая тренировка" },
+    studio: { id: "studio-1" },
+    availableClientSubscriptions: [{
+      clientSubscriptionId: "client-subscription-1",
+      productId: HUB_PRODUCT_ID,
+      name: "",
+    }],
+  };
+  const input = {
+    statusCode: 200,
+    payload,
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "JOIN_GAME",
+    }),
+  };
+  const globals = {
+    ...MANAGED_GLOBALS,
+    subscriptions_managed_enforcement_product_ids: [PITER_PRODUCT_ID],
+  };
+  const liveLookup = runFunctionSource(liveTargets[0].func, structuredClone(input), globals);
+  const candidateLookup = runFunction(ROUTER_FILE, structuredClone(input), globals);
+  const externalCommand = (output: any[]) => ({
+    step: output[0]?._subscriptionBooking?.step,
+    method: output[0]?.method,
+    url: output[0]?.url,
+    payload: output[0]?.payload,
+  });
+  assert.deepEqual(externalCommand(candidateLookup), externalCommand(liveLookup));
+  assert.equal(candidateLookup[0]._subscriptionBooking.managedEnforcement.enabled, false);
+  assert.doesNotMatch(candidateLookup[0].url, /runtime-context/);
+
+  const lookupResponse = { statusCode: 200, payload: { sertName: "Лето.Падел.Дружба" } };
+  const liveResponse = runFunctionSource(liveTargets[0].func, {
+    ...lookupResponse,
+    _subscriptionBooking: liveLookup[0]._subscriptionBooking,
+  }, globals);
+  const candidateResponse = runFunction(ROUTER_FILE, {
+    ...lookupResponse,
+    _subscriptionBooking: candidateLookup[0]._subscriptionBooking,
+  }, globals);
+  assert.equal(candidateResponse[4].statusCode, liveResponse[4].statusCode);
+  assert.deepEqual(candidateResponse[4].payload, liveResponse[4].payload);
+  assert.equal(candidateResponse[0], null);
 });
 
 test("pending annual subscription fails before Viva reads when CUP activation is not configured", () => {
@@ -908,6 +1092,7 @@ test("pending annual subscription is projected for policy and activates only aft
   const activationRequest = runFunction(ROUTER_FILE, {
     payload: { matchedCount: 1 },
     _subscriptionBooking: baseContext("operation_confirm", {
+      planKey: "piter_friendship",
       managedActivationRequired: true,
       managedActivationExpectedRevision: 1,
       confirmedBookingId: "booking-first-use",
@@ -965,6 +1150,7 @@ test("temporary CUP activation failure stays retryable without another Viva crea
     statusCode: 503,
     payload: { error: { code: "UPSTREAM_UNAVAILABLE" } },
     _subscriptionBooking: baseContext("managed_first_use_activation", {
+      planKey: "piter_friendship",
       managedActivationRequired: true,
       managedActivationExpectedRevision: 1,
       confirmedBookingId: "booking-first-use",
@@ -984,6 +1170,7 @@ test("temporary CUP activation failure stays retryable without another Viva crea
       activationState: "PENDING",
     }],
     _subscriptionBooking: baseContext("operation_find", {
+      planKey: "piter_friendship",
       managedActivationRequired: true,
       managedActivationExpectedRevision: 1,
       confirmedBookingId: "booking-first-use",
@@ -1503,6 +1690,51 @@ test("ordinary subscription eligibility is re-read after preaccept and fails if 
   assert.equal(missing[3]._subscriptionBooking.step, "operation_fail");
   assert.equal(missing[3].payload[1].$set.failure.rawCode,
     "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE");
+});
+
+test("final pre-write recheck rejects product or rollout drift without a Viva request", () => {
+  const managedContext = baseContext("exercise_recheck", {
+    serviceDate: "2026-08-21",
+    studioId: PITER_STATION_ID,
+    planKey: "piter_friendship",
+    category: "open_game",
+    managedAction: "CREATE_GAME",
+    managedTarget: {
+      resolutionSource: "SERVER",
+      stationId: PITER_STATION_ID,
+      category: "GAME",
+      externalEventTypeId: "viva:direction:4588:type:1613",
+      productTypeId: null,
+      eventId: "exercise-target",
+      durationMinutes: 60,
+      startsAt: "2026-08-21T15:00:00.000Z",
+      basePriceMinor: null,
+      currency: "RUB",
+    },
+  });
+
+  const changedProduct = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedExercise(HUB_PRODUCT_ID, "Падел.Дружба.ХАБ — 12 месяцев"),
+    _subscriptionBooking: structuredClone(managedContext),
+  }, MANAGED_GLOBALS);
+  assert.equal(changedProduct[3]._subscriptionBooking.step, "operation_fail");
+  assert.equal(changedProduct[3].payload[1].$set.failure.rawCode,
+    "SUBSCRIPTION_PRODUCT_IDENTITY_CHANGED_BEFORE_WRITE");
+  assert.equal(changedProduct[0], null);
+
+  const changedRollout = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedExercise(),
+    _subscriptionBooking: structuredClone(managedContext),
+  }, {
+    vivacrm_access_token: "service-token",
+    subscriptions_managed_enforcement_product_ids: [],
+  });
+  assert.equal(changedRollout[3]._subscriptionBooking.step, "operation_fail");
+  assert.equal(changedRollout[3].payload[1].$set.failure.rawCode,
+    "MANAGED_SUBSCRIPTION_ENFORCEMENT_CHANGED_BEFORE_WRITE");
+  assert.equal(changedRollout[0], null);
 });
 
 test("managed booking rechecks CUP identity and policy after preaccept before Viva write", () => {

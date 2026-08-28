@@ -12,7 +12,7 @@ or restart, provider call, payment, booking, Deploy, or rollback.
 - live node count: `4762`;
 - selected `LK Games` tab: `4b91e2a2413688db`, `315` nodes;
 - selected-tab SHA-256: `5deb5beca55441bf29da036495304d7a707158c2af87fe88838f68befd6ff78e`;
-- reviewed unified candidate SHA-256: `928a7c49a91a77a9abac6e2bcf6bbea5091b25bdfd44e9de8a735454c9a0b429`;
+- reviewed unified candidate SHA-256: `703c065429bcee016e86ac7559c3b834754bab61bcb5c70f4da55b1cc32064ca` (supersedes `928a7c49…`);
 - candidate inventory: `4812` nodes, `215` unchanged HTTP inputs, `54` changed
   existing nodes, `50` additions, broken wires/links `0/0`;
 - production trust anchor: `UNBOUND`.

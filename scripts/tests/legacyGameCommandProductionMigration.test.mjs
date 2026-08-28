@@ -28,8 +28,9 @@ import { LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST } from "../lk1_subscri
 const require = createRequire(import.meta.url);
 const digest = (character) => character.repeat(64);
 const releaseSha = "a".repeat(40);
-const UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256 = "928a7c49a91a77a9abac6e2bcf6bbea5091b25bdfd44e9de8a735454c9a0b429";
+const UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256 = "703c065429bcee016e86ac7559c3b834754bab61bcb5c70f4da55b1cc32064ca";
 const HISTORICAL_SOURCE_ONLY_CANDIDATE_SHA256S = Object.freeze([
+  "928a7c49a91a77a9abac6e2bcf6bbea5091b25bdfd44e9de8a735454c9a0b429",
   "d88ea0afc5fd00e5f4e532415b57d33ed2691c320c3ba23fd2a54ba804fb139c",
   "6c8512eeffbf57edc720019487a60a2779b1ec180f1ae373a201519f96a6271e",
   "e730bf8c043e2f33f5a75c6825d56f39a580a10201f77c399d2323f70f9f7e4d",

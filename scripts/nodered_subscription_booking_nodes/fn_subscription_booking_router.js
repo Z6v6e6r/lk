@@ -6,33 +6,9 @@ const PREPARED_LEASE_MS = 2 * 60 * 1000;
 // Viva normally confirms in seconds; keep the dedupe window short, then reconcile safely.
 const PENDING_CONFIRMATION_MS = 15 * 60 * 1000;
 const PITER_STATION_ID = "1ea77cbf-bc36-49a1-96d6-f35c216a409b";
-const HUB_STATION_IDS = Object.freeze([
-  "0d5504f6-ea6f-44bb-a9e4-947faf0273ab",
-  "0ee057dd-908c-4b33-84b9-1a977480b710",
-  "14d6d441-635f-47d0-aa8c-553496294fb1",
-  "1c323ef3-7e6c-42eb-a6f7-653460540a8a",
-  "1cbb7201-2189-41a4-a3b4-4f543da0def6",
-  "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
-  "233c1405-1eac-40de-8ec6-1cf7e24c9276",
-  "3266d827-2662-4540-9376-daac10f3875e",
-  "3656cbaa-6426-490f-a44f-915404cbdd2b",
-  "3b52e87f-33bb-436b-a1e3-19a3b62b4ed2",
-  "3db3fc06-00e2-445a-97eb-e354796f80a1",
-  "42c6d4df-833d-480a-bdc8-986716569884",
-  "4c564565-3918-40b2-8cb3-b7135c7cc992",
-  "5409fdc8-3db3-4e66-a6a9-8994bd591c8f",
-  "588b6151-f4f5-47d9-9449-80edf8cbc748",
-  "6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1",
-  "6b2d7e60-caff-4b22-89f6-6f19d7d311ab",
-  "76c67f10-70ee-4296-9145-1c040e4674ca",
-  "8380b5db-c12f-495b-a0d7-c7359168a777",
-  "855ec72a-d619-4add-ac92-8c64dafb17c2",
-  "8e31b902-1981-4b62-b803-6187b8f2a8da",
-  "b09d0015-5198-4a94-b88b-2448218e479d",
-  "c72eaaff-2163-47cd-87d0-b93499415acc",
-  "ed0e3bd4-6edb-43a9-8fe4-8fc3e7febec8",
-  "f82775cc-3dd7-4d02-98c8-e43cce470003",
-]);
+const PITER_MANAGED_PRODUCT_ID = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
+const MANAGED_ENFORCEMENT_ALLOWLIST_GLOBAL = "subscriptions_managed_enforcement_product_ids";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const REGIONAL_ACTIVATION_MODE = "FIRST_USE_OR_FIXED_DATE";
 const REGIONAL_ACTIVATION_FALLBACK_AT = "2026-09-30T21:00:00.000Z";
 const REGIONAL_ACTIVATION_TIME_ZONE = "Europe/Moscow";
@@ -77,20 +53,45 @@ const normalizeMarker = (value) => String(value || "")
   .replace(/ё/g, "е")
   .replace(/[^a-z0-9а-я]+/gi, "");
 const isHttpOk = (status) => Number(status) >= 200 && Number(status) < 300;
-const normalizedIdSet = (values) => [...new Set(asArray(values).map(normalizeId).filter(Boolean))].sort();
-const exactIdSet = (values, expected) => {
-  const actualIds = normalizedIdSet(values);
-  const expectedIds = normalizedIdSet(expected);
-  return actualIds.length === expectedIds.length
-    && actualIds.every((stationId, index) => stationId === expectedIds[index]);
-};
-
 const readGlobal = (key) => {
   try {
     return toStr(global.get(key));
   } catch (_) {
     return null;
   }
+};
+
+const readManagedEnforcementAllowlist = () => {
+  let configured;
+  try {
+    configured = global.get(MANAGED_ENFORCEMENT_ALLOWLIST_GLOBAL);
+  } catch (_) {
+    configured = undefined;
+  }
+  if (configured === undefined || configured === null || configured === "") {
+    return { ok: true, productIds: [] };
+  }
+  if (typeof configured === "string") {
+    const text = configured.trim();
+    if (!text) return { ok: true, productIds: [] };
+    try {
+      configured = JSON.parse(text);
+    } catch (_) {
+      return { ok: false, code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID" };
+    }
+  }
+  if (!Array.isArray(configured)) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID" };
+  }
+  const normalized = [];
+  for (const value of configured) {
+    const productId = normalizeId(value);
+    if (!productId || !UUID_PATTERN.test(productId)) {
+      return { ok: false, code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID" };
+    }
+    normalized.push(productId);
+  }
+  return { ok: true, productIds: [...new Set(normalized)].sort() };
 };
 
 const responseHeaders = () => ({
@@ -181,6 +182,14 @@ const prepareUserGet = (ctx, step, path) => prepareHttp(
 );
 
 const prepareManagedRuntimeContext = (ctx, step = "managed_runtime_context") => {
+  if (ctx.managedEnforcement?.enabled !== true
+    || ctx.managedEnforcement.exactProductId !== PITER_MANAGED_PRODUCT_ID
+    || ctx.planKey !== "piter_friendship") {
+    const details = { code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONTEXT_INVALID" };
+    return step === "managed_runtime_recheck"
+      ? prepareFailedUpdate(ctx, 409, "Контекст управляемой подписки изменился до записи", details.code)
+      : finishError(ctx, 409, "Контекст управляемой подписки не подтверждён", details);
+  }
   const apiBase = (readGlobal("subscriptions_runtime_api_base_url") || "").replace(/\/+$/, "");
   const integrationToken = readGlobal("subscriptions_runtime_context_integration_token");
   if (!apiBase || !/^https:\/\//i.test(apiBase) || !integrationToken) {
@@ -236,6 +245,12 @@ const projectedFirstUseInstance = (instance, lifecycle, evaluatedAt) => {
 };
 
 const prepareManagedFirstUseActivation = (ctx, providerBookingId) => {
+  if (ctx.managedEnforcement?.enabled !== true
+    || ctx.managedEnforcement.exactProductId !== PITER_MANAGED_PRODUCT_ID) {
+    return finishPending(ctx, "Запись подтверждена Viva; rollout активации требует повторной проверки", {
+      code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONTEXT_INVALID",
+    });
+  }
   const config = managedActivationConfig();
   if (!validManagedActivationConfig(config)) {
     return finishPending(ctx, "Запись подтверждена Viva; активация подписки ожидает настройки ЦУП", {
@@ -385,26 +400,6 @@ const PLAN_PRODUCT_IDS = {
   ra: "b91e14d1-fe6e-4d0b-be39-3e45ad86b759",
 };
 
-const MANAGED_PLAN_DEFAULT_PRODUCT_IDS = {
-  network_friendship: ["db7a5250-7369-4f43-8ac5-9111be24bc74"],
-  piter_friendship: ["8bf334ba-3050-4017-b40a-7eef2db1eb16"],
-};
-
-const managedPlanProductIds = () => {
-  const resolved = {};
-  for (const [planKey, defaults] of Object.entries(MANAGED_PLAN_DEFAULT_PRODUCT_IDS)) {
-    const ids = new Set(defaults.map(normalizeId));
-    const configured = toStr(global.get(`summer_subscription_${planKey}_product_id`));
-    if (configured) ids.add(normalizeId(configured));
-    for (let tier = 1; tier <= 4; tier += 1) {
-      const tierId = toStr(global.get(`summer_subscription_${planKey}_tier_${tier}_product_id`));
-      if (tierId) ids.add(normalizeId(tierId));
-    }
-    resolved[planKey] = ids;
-  }
-  return resolved;
-};
-
 const collectPlanMarkers = (value, seen = new Set()) => {
   if (value === null || value === undefined) return [];
   if (typeof value === "string" || typeof value === "number") return [String(value)];
@@ -442,13 +437,37 @@ const collectExactProductIds = (value) => {
   return ids;
 };
 
+const resolveManagedEnforcementDecision = (value) => {
+  const allowlist = readManagedEnforcementAllowlist();
+  if (!allowlist.ok) return allowlist;
+  const productIdentities = [...new Set(collectExactProductIds(value))].sort();
+  if (productIdentities.length > 1) {
+    return { ok: false, code: "SUBSCRIPTION_PRODUCT_IDENTITY_AMBIGUOUS" };
+  }
+  const productIdentity = productIdentities[0] || null;
+  const exactProductId = productIdentity && UUID_PATTERN.test(productIdentity)
+    ? productIdentity
+    : null;
+  const enabled = exactProductId === PITER_MANAGED_PRODUCT_ID
+    && allowlist.productIds.includes(exactProductId);
+  return {
+    ok: true,
+    configuredProductIds: allowlist.productIds,
+    exactProductId,
+    productIdentity,
+    enabled,
+    planKey: enabled ? "piter_friendship" : null,
+  };
+};
+
+const compatibilityPlanKey = (planKey, managedEnforcement) => {
+  if (managedEnforcement?.enabled === true) return managedEnforcement.planKey;
+  if (["piter_friendship", "network_friendship"].includes(planKey)) return "friendship";
+  return planKey;
+};
+
 const resolvePlanKey = (value) => {
   const markers = collectPlanMarkers(value);
-  const exactProductIds = collectExactProductIds(value);
-  const managedProductIds = managedPlanProductIds();
-  for (const [planKey, productIds] of Object.entries(managedProductIds)) {
-    if (exactProductIds.some((productId) => productIds.has(productId))) return planKey;
-  }
   for (const [planKey, productId] of Object.entries(PLAN_PRODUCT_IDS)) {
     if (markers.some((marker) => normalizeId(marker) === productId)) return planKey;
   }
@@ -487,15 +506,8 @@ const PLAN_CATEGORIES = {
 };
 const MANAGED_PLAN_KEYS = new Set([
   "kotelniki_friendship",
-  "network_friendship",
   "piter_friendship",
 ]);
-
-const hasExactManagedProductId = (value, planKey) => {
-  const productIds = managedPlanProductIds()[planKey];
-  if (!productIds) return true;
-  return collectExactProductIds(value).some((productId) => productIds.has(productId));
-};
 
 const resolveLimitMode = (planKey, serviceDate) => {
   if (!planKey) return "event";
@@ -1088,14 +1100,29 @@ if (ctx.step === "exercise") {
   ctx.category = resolveCategory(exercise);
   ctx.studioId = toStr(exercise.studio?.id || exercise.studioId);
   ctx.subscriptionName = pickName(ownedSubscription);
-  ctx.planKey = resolvePlanKey(ownedSubscription) || resolvePlanKey(ctx.subscriptionName);
+  const managedEnforcement = resolveManagedEnforcementDecision(ownedSubscription);
+  if (!managedEnforcement.ok) {
+    const configInvalid = managedEnforcement.code === "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID";
+    return finishError(
+      ctx,
+      configInvalid ? 503 : 409,
+      configInvalid
+        ? "Конфигурация управляемой подписки временно недоступна"
+        : "Нельзя однозначно определить продукт выбранной подписки",
+      { code: managedEnforcement.code },
+    );
+  }
+  ctx.managedEnforcement = {
+    source: "SERVER_GLOBAL_ALLOWLIST",
+    configuredProductIds: managedEnforcement.configuredProductIds,
+    exactProductId: managedEnforcement.exactProductId,
+    productIdentity: managedEnforcement.productIdentity,
+    enabled: managedEnforcement.enabled,
+    planKey: managedEnforcement.planKey,
+  };
+  const resolvedPlanKey = resolvePlanKey(ownedSubscription) || resolvePlanKey(ctx.subscriptionName);
+  ctx.planKey = compatibilityPlanKey(resolvedPlanKey, managedEnforcement);
   if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
-    if (!hasExactManagedProductId(ownedSubscription, ctx.planKey)) {
-      return finishError(ctx, 409, "Годовая подписка требует точной продуктовой привязки", {
-        code: "MANAGED_SUBSCRIPTION_PRODUCT_MAPPING_REQUIRED",
-        planKey: ctx.planKey,
-      });
-    }
     if (ctx.planKey === "kotelniki_friendship") {
       return finishError(ctx, 409, "Подписка Котельников ещё не подключена к правилам записи", {
         code: "MANAGED_SUBSCRIPTION_PLAN_NOT_ACTIVATED",
@@ -1179,14 +1206,9 @@ if (ctx.step === "subscription_name") {
   }
   const payload = unwrapRecord(msg.payload) || msg.payload;
   ctx.subscriptionName = toStr(payload?.sertName || payload?.subscriptionName || payload?.name);
-  ctx.planKey = resolvePlanKey(payload) || resolvePlanKey(ctx.subscriptionName);
+  const resolvedPlanKey = resolvePlanKey(payload) || resolvePlanKey(ctx.subscriptionName);
+  ctx.planKey = compatibilityPlanKey(resolvedPlanKey, ctx.managedEnforcement);
   if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
-    if (!hasExactManagedProductId(payload, ctx.planKey)) {
-      return finishError(ctx, 409, "Годовая подписка требует точной продуктовой привязки", {
-        code: "MANAGED_SUBSCRIPTION_PRODUCT_MAPPING_REQUIRED",
-        planKey: ctx.planKey,
-      });
-    }
     if (ctx.planKey === "kotelniki_friendship") {
       return finishError(ctx, 409, "Подписка Котельников ещё не подключена к правилам записи", {
         code: "MANAGED_SUBSCRIPTION_PLAN_NOT_ACTIVATED",
@@ -1245,19 +1267,56 @@ if (ctx.step === "exercise_recheck") {
   const exercise = unwrapRecord(msg.payload);
   const actualExerciseId = toStr(exercise?.id || exercise?.exerciseId || exercise?.uuid);
   const ownedSubscription = findOwnedSubscription(exercise, ctx.clientSubscriptionId);
-  const nextPlanKey = resolvePlanKey(ownedSubscription) || resolvePlanKey(ctx.subscriptionName);
+  if (!exercise || !ownedSubscription) {
+    return prepareFailedUpdate(
+      ctx,
+      409,
+      "Доступность или параметры подписки изменились до записи",
+      "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE",
+    );
+  }
+  const nextManagedEnforcement = resolveManagedEnforcementDecision(ownedSubscription);
+  if (!nextManagedEnforcement.ok) {
+    return prepareFailedUpdate(
+      ctx,
+      nextManagedEnforcement.code === "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID" ? 503 : 409,
+      "Нельзя повторно подтвердить rollout управляемой подписки",
+      nextManagedEnforcement.code,
+    );
+  }
+  const previousManagedEnforcement = ctx.managedEnforcement;
+  if (!isObj(previousManagedEnforcement)
+    || previousManagedEnforcement.productIdentity !== nextManagedEnforcement.productIdentity
+    || previousManagedEnforcement.exactProductId !== nextManagedEnforcement.exactProductId) {
+    return prepareFailedUpdate(
+      ctx,
+      409,
+      "Продукт подписки изменился до записи",
+      "SUBSCRIPTION_PRODUCT_IDENTITY_CHANGED_BEFORE_WRITE",
+    );
+  }
+  if (previousManagedEnforcement.enabled !== nextManagedEnforcement.enabled
+    || previousManagedEnforcement.planKey !== nextManagedEnforcement.planKey) {
+    return prepareFailedUpdate(
+      ctx,
+      409,
+      "Rollout управляемой подписки изменился до записи",
+      "MANAGED_SUBSCRIPTION_ENFORCEMENT_CHANGED_BEFORE_WRITE",
+    );
+  }
+  const resolvedPlanKey = resolvePlanKey(ownedSubscription) || resolvePlanKey(ctx.subscriptionName);
+  const nextPlanKey = compatibilityPlanKey(resolvedPlanKey, nextManagedEnforcement);
   const nextServiceDate = eventDate(exercise);
   const nextCategory = resolveCategory(exercise);
   const nextStudioId = toStr(exercise?.studio?.id || exercise?.studioId);
-  const managedIdentityMatches = !MANAGED_PLAN_KEYS.has(ctx.planKey) || (
-    hasExactManagedProductId(ownedSubscription, ctx.planKey)
+  const managedIdentityMatches = previousManagedEnforcement.enabled !== true || (
+    nextManagedEnforcement.exactProductId === PITER_MANAGED_PRODUCT_ID
+    && ctx.planKey === "piter_friendship"
     && managedExternalEventTypeId(exercise) === ctx.managedTarget?.externalEventTypeId
     && eventDurationMinutes(exercise) === ctx.managedTarget?.durationMinutes
     && eventStartsAt(exercise) === ctx.managedTarget?.startsAt
   );
-  if (!exercise
-    || normalizeId(actualExerciseId) !== normalizeId(ctx.exerciseId)
-    || !ownedSubscription
+  if (normalizeId(actualExerciseId) !== normalizeId(ctx.exerciseId)
     || nextPlanKey !== ctx.planKey
     || nextServiceDate !== ctx.serviceDate
     || nextCategory !== ctx.category
@@ -1270,7 +1329,7 @@ if (ctx.step === "exercise_recheck") {
       "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE",
     );
   }
-  if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
+  if (previousManagedEnforcement.enabled === true) {
     return prepareManagedRuntimeContext(ctx, "managed_runtime_recheck");
   }
   return prepareBookingCreate(ctx);
@@ -1283,6 +1342,13 @@ if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
       ? prepareFailedUpdate(ctx, statusCode, error, details?.code)
       : finishError(ctx, statusCode, error, details)
   );
+  if (ctx.managedEnforcement?.enabled !== true
+    || ctx.managedEnforcement.exactProductId !== PITER_MANAGED_PRODUCT_ID
+    || ctx.planKey !== "piter_friendship") {
+    return rejectRuntime(409, "Контекст управляемой подписки не подтверждён", {
+      code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONTEXT_INVALID",
+    });
+  }
   if (!isHttpOk(msg.statusCode)) {
     return rejectRuntime(409, "Опубликованные правила подписки сейчас недоступны", {
       code: "MANAGED_SUBSCRIPTION_RUNTIME_CONTEXT_UNAVAILABLE",
@@ -1317,24 +1383,14 @@ if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
   const enabledStationRules = Array.isArray(policy.stationAccessRules)
     ? policy.stationAccessRules.filter((rule) => rule?.enabled === true)
     : [];
-  const enabledStationIds = enabledStationRules.flatMap((rule) => (
-    rule?.selector?.kind === "STATION_LIST" ? asArray(rule.selector.stationIds) : []
-  ));
   const stationPolicySupported = ctx.planKey === "piter_friendship"
-    ? enabledStationRules.length > 0 && enabledStationRules.every((rule) => (
+    && enabledStationRules.length > 0 && enabledStationRules.every((rule) => (
       rule.selector?.kind === "STATION_LIST"
       && Array.isArray(rule.selector.stationIds)
       && rule.selector.stationIds.length === 1
       && normalizeId(rule.selector.stationIds[0]) === normalizeId(PITER_STATION_ID)
       && rule.surcharge?.kind === "NONE"
-    ))
-    : ctx.planKey === "network_friendship"
-      && enabledStationRules.length > 0 && enabledStationRules.every((rule) => (
-        rule.selector?.kind === "STATION_LIST"
-        && Array.isArray(rule.selector.stationIds)
-        && rule.surcharge?.kind === "NONE"
-      ))
-      && exactIdSet(enabledStationIds, HUB_STATION_IDS);
+    ));
   const regionalLifecycleSupported = policy.lifecycle?.activationMode === REGIONAL_ACTIVATION_MODE
     && Number.isInteger(policy.lifecycle?.activationWindowDays)
     && policy.lifecycle.activationWindowDays === 0
@@ -1509,7 +1565,7 @@ if (ctx.step === "history_bookings") {
       continue;
     }
     const consumesSameLimit = ctx.limitMode === "shared_day"
-      ? (MANAGED_PLAN_KEYS.has(ctx.planKey) || PLAN_CATEGORIES[ctx.planKey].includes(category))
+      ? (ctx.managedEnforcement?.enabled === true || PLAN_CATEGORIES[ctx.planKey].includes(category))
       : category === ctx.category;
     if (consumesSameLimit) {
       dailyConflict = booking;
@@ -1536,7 +1592,7 @@ if (ctx.step === "history_bookings") {
   ctx.sameExerciseBooking = sameExerciseBooking;
   ctx.cancelledSubscriptionBookings = cancelledSubscriptionBookings;
   ctx.operationKey = buildOperationKey(ctx);
-  if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
+  if (ctx.managedEnforcement?.enabled === true) {
     if (!isObj(ctx.managedRuntime) || !isObj(ctx.managedTarget) || !ctx.managedAction) {
       return finishError(ctx, 502, "Контекст проверки региональной подписки потерян", {
         code: "MANAGED_SUBSCRIPTION_CONTEXT_MISSING",
