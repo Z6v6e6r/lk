@@ -28,6 +28,7 @@ const DEFAULT_DEPLOYMENT_LEASE_MS = 15 * 60 * 1000;
 const DEPLOYMENT_LEASE_PHASES = new Set(["applying", "soaking", "rollback-restart-required"]);
 const LEGACY_DEPLOYMENT_LEASE_PHASE = "legacy-unknown";
 const STAGE_PATTERN = /^\.padlhub-reviewed-flow-stage-\d{8}T\d{6}[+-]\d{4}-\d+$/;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
 const safeTimestamp = (value) => {
   const normalized = String(value || "");
@@ -42,6 +43,12 @@ const safeDeploymentId = (value) => {
   if (!/^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/.test(normalized)) {
     throw new Error("Deployment ID is invalid");
   }
+  return normalized;
+};
+
+const safeSha256 = (value, label) => {
+  const normalized = String(value || "");
+  if (!SHA256_PATTERN.test(normalized)) throw new Error(`${label} SHA-256 is invalid`);
   return normalized;
 };
 
@@ -246,6 +253,23 @@ export function createReviewedFlowRuntime({
     return true;
   };
 
+  const resolveBackupArtifacts = (options, actionLabel) => {
+    const deploymentId = safeDeploymentId(options.deploymentId);
+    const flowBackup = path.resolve(String(options.flowBackup || ""));
+    const contractBackup = path.resolve(String(options.contractBackup || ""));
+    const stampPattern = "\\d{8}T\\d{6}[+-]\\d{4}";
+    const flowMatch = (new RegExp(`^flows-pre-${deploymentId}-(${stampPattern})\\.json$`)).exec(path.basename(flowBackup));
+    const contractMatch = (new RegExp(`^contract-${deploymentId}-(${stampPattern})\\.json$`)).exec(path.basename(contractBackup));
+    if (
+      path.dirname(flowBackup) !== backupDirectory
+      || path.dirname(contractBackup) !== backupDirectory
+      || !flowMatch
+      || !contractMatch
+      || flowMatch[1] !== contractMatch[1]
+    ) throw new Error(`${actionLabel} artifacts are outside the reviewed backup contract`);
+    return { deploymentId, flowBackup, contractBackup, artifactStamp: flowMatch[1] };
+  };
+
   const assertStagePath = (candidatePathValue, contractPathValue) => {
     const candidatePath = path.resolve(String(candidatePathValue || ""));
     const contractPath = path.resolve(String(contractPathValue || ""));
@@ -369,25 +393,13 @@ export function createReviewedFlowRuntime({
 
   const rollback = (options) => {
     assertRoot();
-    const deploymentId = safeDeploymentId(options.deploymentId);
+    const { deploymentId, flowBackup, contractBackup } = resolveBackupArtifacts(options, "Rollback");
     const activeLease = readDeploymentLease({ includeExpired: true });
     if (activeLease && activeLease.deploymentId !== deploymentId) {
       throw new Error(
         `Reviewed-flow deployment lease belongs to ${activeLease.deploymentId} until ${new Date(activeLease.expiresAtMs).toISOString()}`,
       );
     }
-    const flowBackup = path.resolve(String(options.flowBackup || ""));
-    const contractBackup = path.resolve(String(options.contractBackup || ""));
-    const stampPattern = "\\d{8}T\\d{6}[+-]\\d{4}";
-    const flowMatch = (new RegExp(`^flows-pre-${deploymentId}-(${stampPattern})\\.json$`)).exec(path.basename(flowBackup));
-    const contractMatch = (new RegExp(`^contract-${deploymentId}-(${stampPattern})\\.json$`)).exec(path.basename(contractBackup));
-    if (
-      path.dirname(flowBackup) !== backupDirectory
-      || path.dirname(contractBackup) !== backupDirectory
-      || !flowMatch
-      || !contractMatch
-      || flowMatch[1] !== contractMatch[1]
-    ) throw new Error("Rollback artifacts are outside the reviewed backup contract");
     assertProtectedFile(liveFlowPath, protectedFileOptions);
     assertProtectedFile(flowBackup, protectedFileOptions);
     assertProtectedFile(contractBackup, protectedFileOptions);
@@ -464,7 +476,174 @@ export function createReviewedFlowRuntime({
     };
   };
 
-  return { preflight, apply, rollback };
+  const finalizeLegacyCandidate = (options) => {
+    assertRoot();
+    const stamp = safeTimestamp(options.stamp);
+    const artifacts = resolveBackupArtifacts(options, "Legacy finalization");
+    const expectedLeaseSha256 = safeSha256(options.expectedLeaseSha256, "Expected lease");
+    const expectedActiveSha256 = safeSha256(options.expectedActiveSha256, "Expected active flow");
+    const expectedFlowBackupSha256 = safeSha256(
+      options.expectedFlowBackupSha256,
+      "Expected flow backup",
+    );
+    const expectedContractBackupSha256 = safeSha256(
+      options.expectedContractBackupSha256,
+      "Expected contract backup",
+    );
+    if (stamp === artifacts.artifactStamp) {
+      throw new Error("Legacy finalization receipt stamp must differ from the deployment artifact stamp");
+    }
+
+    assertProtectedDirectory(backupDirectory, { uid, gid, mode: 0o700 });
+    assertProtectedFileModes(liveFlowPath, { uid, gid, modes: [0o600, 0o644] });
+    assertProtectedFile(artifacts.flowBackup, protectedFileOptions);
+    assertProtectedFile(artifacts.contractBackup, protectedFileOptions);
+    const activeBytes = fs.readFileSync(liveFlowPath);
+    const flowBackupBytes = fs.readFileSync(artifacts.flowBackup);
+    const contractBackupBytes = fs.readFileSync(artifacts.contractBackup);
+    const activeFlowSha256 = sha256(activeBytes);
+    const flowBackupSha256 = sha256(flowBackupBytes);
+    const contractBackupSha256 = sha256(contractBackupBytes);
+    if (activeFlowSha256 !== expectedActiveSha256) {
+      throw new Error("Active flow differs from the frozen legacy finalization digest");
+    }
+    if (flowBackupSha256 !== expectedFlowBackupSha256) {
+      throw new Error("Flow backup differs from the frozen legacy finalization digest");
+    }
+    if (contractBackupSha256 !== expectedContractBackupSha256) {
+      throw new Error("Contract backup differs from the frozen legacy finalization digest");
+    }
+    let contract;
+    try {
+      contract = JSON.parse(contractBackupBytes.toString("utf8"));
+    } catch {
+      throw new Error("Legacy finalization contract backup is invalid");
+    }
+    if (contract.deploymentId !== artifacts.deploymentId) {
+      throw new Error("Legacy finalization deployment ID mismatch");
+    }
+    if (
+      contract.sourceSha256 !== expectedFlowBackupSha256
+      || contract.candidateSha256 !== expectedActiveSha256
+    ) throw new Error("Legacy finalization contract digest mismatch");
+    validateReviewedFlowContract({
+      liveBytes: flowBackupBytes,
+      candidateBytes: activeBytes,
+      contract,
+    });
+
+    const receiptPath = path.join(
+      backupDirectory,
+      `legacy-v1-candidate-finalization-${artifacts.deploymentId}-${stamp}.json`,
+    );
+    const activeLease = readDeploymentLease({ includeExpired: true });
+    if (activeLease) {
+      if (activeLease.deploymentId !== artifacts.deploymentId) {
+        throw new Error(`Reviewed-flow deployment lease belongs to ${activeLease.deploymentId}`);
+      }
+      if (activeLease.formatVersion !== 1 || activeLease.phase !== LEGACY_DEPLOYMENT_LEASE_PHASE) {
+        throw new Error("Legacy candidate finalization requires a formatVersion 1 deployment lease");
+      }
+      if (activeLease.expiresAtMs > now()) {
+        throw new Error("Legacy candidate finalization requires an expired deployment lease");
+      }
+      if (
+        activeLease.sourceSha256 !== contract.sourceSha256
+        || activeLease.candidateSha256 !== contract.candidateSha256
+      ) throw new Error("Reviewed-flow deployment lease digest mismatch");
+      if (sha256(fs.readFileSync(deploymentLeasePath)) !== expectedLeaseSha256) {
+        throw new Error("Deployment lease differs from the frozen legacy finalization digest");
+      }
+    } else if (!fs.existsSync(receiptPath)) {
+      throw new Error("Legacy candidate finalization requires the frozen deployment lease");
+    }
+
+    const processInfo = pm2.assertOnline();
+    const receiptContract = {
+      formatVersion: 1,
+      action: "finalize-legacy-v1-candidate",
+      deploymentId: artifacts.deploymentId,
+      stamp,
+      artifactStamp: artifacts.artifactStamp,
+      legacyLeaseSha256: expectedLeaseSha256,
+      sourceSha256: contract.sourceSha256,
+      candidateSha256: contract.candidateSha256,
+      activeFlowSha256,
+      flowBackupSha256,
+      contractBackupSha256,
+      flowBackup: artifacts.flowBackup,
+      contractBackup: artifacts.contractBackup,
+      nodeRedPid: processInfo.pid,
+      nodeRedRestartCount: processInfo.restartCount,
+      activeCandidateAdopted: true,
+      flowChanged: false,
+      nodeRedRestarted: false,
+    };
+    let alreadyFinalized = false;
+    if (fs.existsSync(receiptPath)) {
+      assertProtectedFile(receiptPath, protectedFileOptions);
+      let receipt;
+      try {
+        receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+      } catch {
+        throw new Error("Legacy candidate finalization receipt is invalid");
+      }
+      for (const [key, value] of Object.entries(receiptContract)) {
+        if (key === "nodeRedPid" || key === "nodeRedRestartCount") continue;
+        if (receipt?.[key] !== value) {
+          throw new Error("Legacy candidate finalization receipt contract mismatch");
+        }
+      }
+      if (
+        !Number.isInteger(receipt?.nodeRedPid)
+        || receipt.nodeRedPid <= 0
+        || !Number.isInteger(receipt?.nodeRedRestartCount)
+        || receipt.nodeRedRestartCount < 0
+      ) throw new Error("Legacy candidate finalization receipt process metadata is invalid");
+      alreadyFinalized = true;
+    } else {
+      writeFileExclusiveDurable(
+        receiptPath,
+        Buffer.from(`${JSON.stringify(receiptContract, null, 2)}\n`, "utf8"),
+        protectedFileOptions,
+      );
+      assertProtectedFile(receiptPath, protectedFileOptions);
+    }
+
+    if (
+      sha256(fs.readFileSync(liveFlowPath)) !== expectedActiveSha256
+      || sha256(fs.readFileSync(artifacts.flowBackup)) !== expectedFlowBackupSha256
+      || sha256(fs.readFileSync(artifacts.contractBackup)) !== expectedContractBackupSha256
+    ) throw new Error("Legacy candidate finalization state changed before lease release");
+    const finalProcessInfo = pm2.assertOnline();
+    if (
+      finalProcessInfo.pid !== processInfo.pid
+      || finalProcessInfo.restartCount !== processInfo.restartCount
+    ) throw new Error("Node-RED process identity changed before legacy lease release");
+    if (
+      activeLease
+      && sha256(fs.readFileSync(deploymentLeasePath)) !== expectedLeaseSha256
+    ) throw new Error("Deployment lease changed before legacy finalization release");
+    const deploymentLeaseReleased = activeLease ? releaseDeploymentLease(activeLease) : false;
+    return {
+      ok: true,
+      action: "finalize-legacy-v1-candidate",
+      deploymentId: artifacts.deploymentId,
+      activeFlowSha256,
+      receiptPath,
+      receiptSha256: sha256(fs.readFileSync(receiptPath)),
+      activeCandidateAdopted: true,
+      flowChanged: false,
+      nodeRedRestarted: false,
+      nodeRedOnline: true,
+      nodeRedPid: processInfo.pid,
+      nodeRedRestartCount: processInfo.restartCount,
+      deploymentLeaseReleased,
+      alreadyFinalized,
+    };
+  };
+
+  return { preflight, apply, rollback, finalizeLegacyCandidate };
 }
 
 const getArg = (name) => {
@@ -490,8 +669,23 @@ export function main() {
           flowBackup: getArg("--flow-backup"),
           contractBackup: getArg("--contract-backup"),
         })
+        : action === "finalize-legacy-v1-candidate"
+          ? runtime.finalizeLegacyCandidate({
+            deploymentId: common.deploymentId,
+            stamp: getArg("--stamp"),
+            flowBackup: getArg("--flow-backup"),
+            contractBackup: getArg("--contract-backup"),
+            expectedLeaseSha256: getArg("--expected-lease-sha256"),
+            expectedActiveSha256: getArg("--expected-active-sha256"),
+            expectedFlowBackupSha256: getArg("--expected-flow-backup-sha256"),
+            expectedContractBackupSha256: getArg("--expected-contract-backup-sha256"),
+          })
         : null;
-  if (!result) throw new Error("Usage: deploy_reviewed_flow_147_remote.mjs <preflight|apply|rollback> [options]");
+  if (!result) {
+    throw new Error(
+      "Usage: deploy_reviewed_flow_147_remote.mjs <preflight|apply|rollback|finalize-legacy-v1-candidate> [options]",
+    );
+  }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 

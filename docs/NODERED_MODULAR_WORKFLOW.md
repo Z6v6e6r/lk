@@ -97,6 +97,18 @@ lease in `/root/.node-red/.padlhub-reviewed-flow-deploy.lease.json`.
   releases the lease without rewriting the flow or restarting Node-RED;
 - a legacy v1 lease never auto-expires under the v2 helper; exact guarded
   rollback migrates it to the phase-aware contract before restore/restart;
+- when an expired legacy v1 lease has the exact reviewed candidate already
+  active, `finalize-legacy-v1-candidate` is the only non-rollback recovery
+  path. It requires frozen lease, active-flow, flow-backup and contract-backup
+  SHA-256 values, revalidates the complete reviewed contract and PM2 online
+  state, writes a protected receipt first, then releases only that matching
+  lease. It never rewrites `flows.json` or restarts Node-RED;
+- finalization is receipt-first and re-entrant: an interrupted retry may release
+  the same lease against the exact receipt after revalidating the current
+  candidate and stable-online PM2 state, including after a process restart;
+  receipt-only retries are read-only and idempotent. A v2/live/different lease,
+  source-active flow, unknown flow, artifact drift or receipt drift is refused
+  fail-closed;
 - every restart uses a fresh PM2 restart counter read immediately before the
   restart, and the lease is released only after source-digest and online
   read-back succeed;
@@ -112,6 +124,9 @@ backup-first and recovery contract across host or process crashes.
 
 This lease is the minimum production soak window. Do not delete or edit it to
 force an unrelated rollout; wait for expiry or roll back the owning deployment.
+Legacy candidate finalization remains a separate R4 live authorization even
+though it does not change flow bytes or restart the process. Its receipt does
+not contain the lease token.
 
 Exact-graph contracts may authorize a `wires`-only change on an existing
 `http in` node. The route ID and every other route field (including tab,
