@@ -61,6 +61,8 @@ test("builder emits a reproducible, static amd64 artifact and canonical manifest
   assert.equal(manifest.artifact.staticallyLinked, true);
   assert.equal(manifest.build.network, "none");
   assert.equal(manifest.build.reproducibleDoubleBuild, true);
+  assert.equal(manifest.build.image, BUILD_IMAGE);
+  assert.match(manifest.build.imageId, /^sha256:[a-f0-9]{64}$/);
   assert.equal(manifest.source.gitObject, false);
   assert.equal(manifest.liveMutationAuthorized, false);
   assert.deepEqual(JSON.parse(manifestText), manifest);
@@ -69,6 +71,13 @@ test("builder emits a reproducible, static amd64 artifact and canonical manifest
     "legacy-game-command-root-acl-bootstrap",
     "manifest.json",
   ]);
+  const builder = fs.readFileSync(
+    path.join(repositoryRoot, "scripts/build_legacy_game_command_root_acl_bootstrap.mjs"),
+    "utf8",
+  );
+  assert.match(builder, /RepoDigests/);
+  assert.match(builder, /"--user", callerIdentity\(\)/);
+  assert.match(builder, /process\.getuid\(\).*process\.getgid\(\)/s);
   assert.throws(
     () => buildRootAclBootstrap(["--out", "/tmp/a", "--out", "/tmp/b", "--environment", "rehearsal"]),
     /duplicate argument/,

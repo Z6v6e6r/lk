@@ -48,3 +48,13 @@ contain no raw or formatted phone numbers. Exercise only read endpoints; do not 
 or mutate game data.
 
 Rollback uses the exact pre-deploy live-flow snapshot after a fresh drift check and separate approval.
+
+If a historical v1 reviewed-flow lease remains after the exact phone-redaction
+candidate is already active and its soak window has expired, do not delete the
+lease and do not use rollback merely as cleanup: that would restore the
+unredacted source flow. The reviewed-flow helper provides a separate
+`finalize-legacy-v1-candidate` action. It is fail-closed on frozen hashes for the
+lease, active flow and both backup artifacts, revalidates the full function-only
+contract and PM2 online state, writes a root-protected receipt, and only then
+releases the matching v1 lease. It performs no flow write or Node-RED restart.
+Running that action still requires exact production authorization.

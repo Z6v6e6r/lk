@@ -105,6 +105,8 @@ test("builder emits a reproducible static artifact with no mutation authority", 
   assert.equal(manifest.artifact.sha256, sha256(binary));
   assert.equal(manifest.artifact.staticallyLinked, true);
   assert.equal(manifest.build.network, "none");
+  assert.equal(manifest.build.image, BUILD_IMAGE);
+  assert.match(manifest.build.imageId, /^sha256:[a-f0-9]{64}$/);
   assert.equal(manifest.identityMutationImplemented, false);
   assert.equal(manifest.liveMutationAuthorized, false);
   assert.deepEqual(JSON.parse(manifestText), manifest);
@@ -119,6 +121,9 @@ test("builder emits a reproducible static artifact with no mutation authority", 
   assert.match(source, /AUTOFS_PLACEHOLDER_AMBIGUOUS/);
   const builder = fs.readFileSync(path.join(repositoryRoot, "scripts/build_legacy_game_command_h2_identity_audit.mjs"), "utf8");
   assert.match(builder, /dst=\/src,readonly/);
+  assert.match(builder, /RepoDigests/);
+  assert.match(builder, /"--user", callerIdentity\(\)/);
+  assert.match(builder, /process\.getuid\(\).*process\.getgid\(\)/s);
   assert.match(builder, /source snapshot changed during build/);
 });
 
