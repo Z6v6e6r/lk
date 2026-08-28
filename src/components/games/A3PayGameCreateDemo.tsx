@@ -1,8 +1,21 @@
 import { useState } from "react";
 import { Modal } from "../UI/Modal";
+import type {
+  A3PayDevVivaBookingResponse,
+  A3PayDevVivaBookingResult,
+} from "./a3PayDevVivaBookingApi";
+import {
+  clearA3PayDevVivaOperationId,
+  getOrCreateA3PayDevVivaOperationId,
+} from "./a3PayDevVivaBookingApi";
 
 interface A3PayGameCreateDemoProps {
   amountLabel: string;
+  canCreateBooking: boolean;
+  onCancelBooking: (operationId: string) => Promise<A3PayDevVivaBookingResult>;
+  onCreateBooking: (operationId: string) => Promise<A3PayDevVivaBookingResult>;
+  onGetBookingStatus: (operationId: string) => Promise<A3PayDevVivaBookingResult>;
+  selectionKey: string;
   stationCourt: string;
   timeRange: string;
 }
@@ -182,6 +195,53 @@ const A3_PAY_GAME_CREATE_DEMO_STYLES = `
     font-weight: 800;
   }
 
+  .a3pay-game-create-demo-actions {
+    display: grid;
+    gap: 10px;
+  }
+
+  .a3pay-game-create-demo-create,
+  .a3pay-game-create-demo-cancel-booking {
+    width: 100%;
+    min-height: 48px;
+    border-radius: 12px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 800;
+  }
+
+  .a3pay-game-create-demo-create {
+    border: 0;
+    background: #53be6c;
+    color: #10200f;
+  }
+
+  .a3pay-game-create-demo-cancel-booking {
+    border: 1px solid #d92d20;
+    background: #fff;
+    color: #b42318;
+  }
+
+  .a3pay-game-create-demo-create:disabled,
+  .a3pay-game-create-demo-cancel-booking:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .a3pay-game-create-demo-result {
+    padding: 12px;
+    border-radius: 12px;
+    background: #f2f4f7;
+    color: #344054;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .a3pay-game-create-demo-result.error {
+    background: #fef3f2;
+    color: #b42318;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .a3pay-game-create-demo-button {
       transition: none;
@@ -191,10 +251,131 @@ const A3_PAY_GAME_CREATE_DEMO_STYLES = `
 
 export function A3PayGameCreateDemo({
   amountLabel,
+  canCreateBooking,
+  onCancelBooking,
+  onCreateBooking,
+  onGetBookingStatus,
+  selectionKey,
   stationCourt,
   timeRange,
 }: A3PayGameCreateDemoProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<A3PayDevVivaBookingResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [operation, setOperation] = useState<NonNullable<ReturnType<typeof getOrCreateA3PayDevVivaOperationId>> | null>(null);
+  const [phase, setPhase] = useState<"idle" | "create" | "booking" | "cancel" | "cancelled">("idle");
+  const bookingRequiresCancellation = phase === "booking" || phase === "cancel";
+
+  const applyStatus = (
+    nextOperation: NonNullable<ReturnType<typeof getOrCreateA3PayDevVivaOperationId>>,
+    next: A3PayDevVivaBookingResult,
+  ) => {
+    if (next.error || !next.data) {
+      setError(next.error || "Не удалось восстановить состояние тестовой операции");
+      return;
+    }
+    if (next.data.operationId !== nextOperation.operationId) {
+      setError("Сервер вернул состояние другой операции; восстановление заблокировано.");
+      return;
+    }
+    setResult(next.data);
+    if (next.data.state === "VIVA_BOOKING_CREATED") setPhase("booking");
+    else if (next.data.state === "CANCEL_PENDING") setPhase("cancel");
+    else if (next.data.state === "CANCELLED") {
+      setPhase("cancelled");
+      clearA3PayDevVivaOperationId(nextOperation.operationId);
+    } else setPhase("create");
+  };
+
+  const replaceSafeUnstartedOperation = (
+    previousOperation: NonNullable<ReturnType<typeof getOrCreateA3PayDevVivaOperationId>>,
+  ) => {
+    clearA3PayDevVivaOperationId(previousOperation.operationId);
+    const replacement = getOrCreateA3PayDevVivaOperationId(selectionKey);
+    setOperation(replacement);
+    setResult(null);
+    setPhase("idle");
+    setError(replacement
+      ? null
+      : "Не удалось сохранить новый operationId. Создание брони заблокировано.");
+  };
+
+  const handleOpen = () => {
+    const nextOperation = getOrCreateA3PayDevVivaOperationId(selectionKey);
+    setOperation(nextOperation);
+    setResult(null);
+    setPhase("idle");
+    setError(nextOperation
+      ? null
+      : "Без устойчивого operationId создание реальной брони заблокировано. Разрешите localStorage и откройте окно снова.");
+    setIsOpen(true);
+    if (nextOperation?.restored) {
+      setLoading(true);
+      void onGetBookingStatus(nextOperation.operationId).then((next) => {
+        setLoading(false);
+        if (next.status === 404) {
+          replaceSafeUnstartedOperation(nextOperation);
+          return;
+        }
+        if (next.data?.state === "PREPARED" && nextOperation.selectionKey !== selectionKey) {
+          replaceSafeUnstartedOperation(nextOperation);
+          return;
+        }
+        applyStatus(nextOperation, next);
+      });
+    }
+  };
+
+  const handleClose = () => {
+    if (bookingRequiresCancellation || loading) return;
+    setIsOpen(false);
+    setOperation(null);
+    setResult(null);
+    setPhase("idle");
+    setError(null);
+  };
+
+  const handleCreateBooking = async () => {
+    if (!operation || !canCreateBooking || loading) return;
+    setPhase("create");
+    setLoading(true);
+    setError(null);
+    const next = await onCreateBooking(operation.operationId);
+    setLoading(false);
+    if (next.error || !next.data) {
+      setError(next.error || "Viva не подтвердила создание брони");
+      return;
+    }
+    if (next.data.operationId !== operation.operationId) {
+      setError("Сервер вернул результат другой операции; состояние брони не принято.");
+      return;
+    }
+    setResult(next.data);
+    if (next.data.state === "VIVA_BOOKING_CREATED") setPhase("booking");
+  };
+
+  const handleCancelBooking = async () => {
+    if (!operation || !bookingRequiresCancellation || loading) return;
+    setPhase("cancel");
+    setLoading(true);
+    setError(null);
+    const next = await onCancelBooking(operation.operationId);
+    setLoading(false);
+    if (next.error || !next.data) {
+      setError(next.error || "Viva не подтвердила отмену брони");
+      return;
+    }
+    if (next.data.operationId !== operation.operationId) {
+      setError("Сервер вернул результат другой операции; отмена не подтверждена.");
+      return;
+    }
+    setResult(next.data);
+    if (next.data.state === "CANCELLED") {
+      setPhase("cancelled");
+      clearA3PayDevVivaOperationId(operation.operationId);
+    }
+  };
 
   return (
     <>
@@ -203,7 +384,7 @@ export function A3PayGameCreateDemo({
         className="a3pay-game-create-demo-button"
         data-demo-marker="lk-dev-a3pay-game-create-demo-v1"
         data-testid="a3pay-game-create-demo-button"
-        onClick={() => setIsOpen(true)}
+        onClick={handleOpen}
         type="button"
       >
         <span className="a3pay-game-create-demo-button-copy">
@@ -214,8 +395,8 @@ export function A3PayGameCreateDemo({
 
       <Modal
         isOpen={isOpen}
-        onClose={() => setIsOpen(false)}
-        title="Демо оплаты через A3.pay"
+        onClose={handleClose}
+        title="Тестовая бронь Viva для A3.pay"
         variant="dialog"
       >
         <div
@@ -244,17 +425,61 @@ export function A3PayGameCreateDemo({
           </div>
 
           <div className="a3pay-game-create-demo-safety" role="status">
-            <strong>Запрос на оплату не отправлен</strong>
-            <span>Счёт A3.pay, бронь Viva и игра не создаются.</span>
+            <strong>Счёт A3.pay и игра пока не создаются</strong>
+            <span>
+              Кнопка ниже создаёт настоящую неоплаченную бронь в Viva только через выключенный
+              по умолчанию серверный шлюз lk_dev. Платёжная ссылка Viva не открывается.
+            </span>
           </div>
 
-          <button
-            className="a3pay-game-create-demo-close"
-            onClick={() => setIsOpen(false)}
-            type="button"
-          >
-            Вернуться к созданию игры
-          </button>
+          {result && (
+            <div className="a3pay-game-create-demo-result" role="status">
+              {result.message || (result.state === "CANCELLED"
+                ? "Бронь отменена и проверена в Viva."
+                : "Бронь создана и проверена в Viva. Счёт A3.pay ещё не создавался.")}
+            </div>
+          )}
+          {error && (
+            <div className="a3pay-game-create-demo-result error" role="alert">{error}</div>
+          )}
+
+          <div className="a3pay-game-create-demo-actions">
+            {!bookingRequiresCancellation && phase !== "cancelled" && (
+              <button
+                className="a3pay-game-create-demo-create"
+                disabled={!operation || !canCreateBooking || loading}
+                onClick={() => { void handleCreateBooking(); }}
+                type="button"
+              >
+                {loading ? "Проверяем Viva…" : "Создать тестовую бронь в Viva"}
+              </button>
+            )}
+            {bookingRequiresCancellation && (
+              <button
+                className="a3pay-game-create-demo-cancel-booking"
+                disabled={loading}
+                onClick={() => { void handleCancelBooking(); }}
+                type="button"
+              >
+                {loading
+                  ? "Проверяем отмену…"
+                  : phase === "cancel"
+                    ? "Проверить отмену в Viva"
+                    : "Отменить тестовую бронь"}
+              </button>
+            )}
+
+            {!bookingRequiresCancellation && (
+              <button
+                className="a3pay-game-create-demo-close"
+                disabled={loading}
+                onClick={handleClose}
+                type="button"
+              >
+                Вернуться к созданию игры
+              </button>
+            )}
+          </div>
         </div>
       </Modal>
     </>

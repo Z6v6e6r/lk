@@ -122,6 +122,7 @@
     "test:deploy-topology": "node --experimental-strip-types --test scripts/tests/deployTopology.test.ts",
     "test:subscription-booking-nginx": "node --test scripts/tests/subscriptionBookingNginx.test.mjs",
     "test:lk-games-cors-nginx": "node --test scripts/tests/lkGamesCorsNginx.test.mjs",
+    "test:a3pay-dev-viva-booking": "node --experimental-strip-types --test scripts/tests/a3PayGameCreateDemo.test.ts scripts/tests/a3PayDevVivaBooking.nodered.test.ts",
     "test:managed-subscription-policy": "node --experimental-strip-types --test scripts/tests/managedSubscriptionPolicyEvaluator.nodered.test.ts",
     "test:lk1-subscription-activation-packet": "node --test scripts/tests/lk1SubscriptionActivationPacket.test.mjs",
     "test:managed-subscription-dev-runtime": "node --experimental-strip-types --test scripts/tests/managedSubscriptionDevRuntime.test.ts",
