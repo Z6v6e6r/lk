@@ -105,6 +105,7 @@ import {
 import {
   CABINET_URL,
   GAMES_BUNDLE_URL,
+  IS_DEV_RELEASE_CHANNEL,
   PUBLIC_INVITE_ORIGIN,
   PUBLIC_INVITE_PATH,
 } from "../../consts/api_config";
@@ -113,6 +114,15 @@ import { createLocalMembershipId } from "./localMembershipGeneration";
 import { shareOrCopyGameInvitePayload } from "../../utils/gameInviteClipboard";
 import { addGameToCalendar } from "../../utils/calendarEvent";
 import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
+import { A3PayGameCreateDemo } from "./A3PayGameCreateDemo";
+import {
+  buildA3PayDevVivaBookingSelectionKey,
+  cancelA3PayDevVivaBooking,
+  createA3PayDevVivaBooking,
+  getA3PayDevVivaBookingStatus,
+  type A3PayDevVivaBookingResult,
+  type A3PayDevVivaBookingSelection,
+} from "./a3PayDevVivaBookingApi";
 import logoHabBlack from "../../assets/logo hab black.svg";
 import logoHabBlackRaw from "../../assets/logo hab black.svg?raw";
 import logoHabWhite from "../../assets/logo hab white.svg";
@@ -6874,6 +6884,46 @@ export default function GamesPage({
     : paymentAmount != null && paymentAmount > 0
       ? Math.max(0, Math.round(paymentAmount / Math.max(splitShareCount, 1)))
       : resolveSplitShareAmount(splitShareCount, DEFAULT_PADEL_SPLIT_PAYMENT_PROMO_CONFIG, duration);
+  const a3PayDemoAmount = splitPaymentSelected ? splitShareAmount : paymentAmount;
+  const a3PayDemoAmountLabel = a3PayDemoAmount != null
+    ? `${formatPrice(a3PayDemoAmount)} ₽`
+    : "Сумма уточняется";
+  const a3PayDevVivaSelection = useMemo<A3PayDevVivaBookingSelection | null>(() => {
+    if (
+      !IS_DEV_RELEASE_CHANNEL
+      || !selectedDate
+      || !time
+      || !studioId
+      || !courtId
+      || !studioMasterServiceId
+      || resolvedSelectedSubServiceIds.length === 0
+    ) {
+      return null;
+    }
+    return {
+      date: formatDateLocalIso(selectedDate),
+      fromTime: time,
+      toTime: addMinutesToTime(time, duration),
+      studioId,
+      roomId: courtId,
+      masterServiceId: studioMasterServiceId,
+      subServiceIds: [...resolvedSelectedSubServiceIds],
+    };
+  }, [
+    courtId,
+    duration,
+    resolvedSelectedSubServiceIds,
+    selectedDate,
+    studioId,
+    studioMasterServiceId,
+    time,
+  ]);
+  const a3PayDevVivaSelectionKey = useMemo(
+    () => a3PayDevVivaSelection
+      ? buildA3PayDevVivaBookingSelectionKey(a3PayDevVivaSelection)
+      : "a3pay-dev-viva-selection-incomplete",
+    [a3PayDevVivaSelection],
+  );
   const splitPaymentSummary = `${formatPrice(splitShareAmount)} ₽ × ${splitShareCount}`;
   // Eligible subscriptions must match the actual open-game exercise type we create.
   // Promo config may contain alternative Viva exercise type ids for pricing, but using
@@ -11373,6 +11423,34 @@ export default function GamesPage({
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
   ]);
+
+  const handleA3PayDevVivaBookingCreate = useCallback(async (
+    operationId: string,
+  ): Promise<A3PayDevVivaBookingResult> => {
+    if (!IS_DEV_RELEASE_CHANNEL || !a3PayDevVivaSelection) {
+      return { data: null, error: "Выберите станцию, корт и время", status: 400 };
+    }
+    if (!validateGamePublicationFields()) {
+      return { data: null, error: "Заполните данные публикации игры", status: 400 };
+    }
+    if (!await revalidateSelectedSlotForPayment()) {
+      return { data: null, error: "Выбранный слот больше недоступен", status: 409 };
+    }
+    return createA3PayDevVivaBooking(operationId, a3PayDevVivaSelection);
+  }, [
+    a3PayDevVivaSelection,
+    revalidateSelectedSlotForPayment,
+    validateGamePublicationFields,
+  ]);
+
+  const handleA3PayDevVivaBookingCancel = useCallback((operationId: string) => (
+    cancelA3PayDevVivaBooking(operationId)
+  ), []);
+
+  const handleA3PayDevVivaBookingStatus = useCallback((operationId: string) => (
+    getA3PayDevVivaBookingStatus(operationId)
+  ), []);
+
   const handleCreateSubmit = useCallback(() => {
     if (splitPaymentSelected) {
       if (splitCheckoutMode === "subscription" && splitHasSubscriptionPaymentOptions) {
@@ -17601,6 +17679,18 @@ export default function GamesPage({
               <span className="game-submit-meta">{paymentStationCourt}</span>
               <span className="game-submit-meta">{paymentTimeRange}</span>
             </button>
+            {IS_DEV_RELEASE_CHANNEL && (
+              <A3PayGameCreateDemo
+                amountLabel={a3PayDemoAmountLabel}
+                canCreateBooking={Boolean(a3PayDevVivaSelection) && canProceedToPayment}
+                onCancelBooking={handleA3PayDevVivaBookingCancel}
+                onCreateBooking={handleA3PayDevVivaBookingCreate}
+                onGetBookingStatus={handleA3PayDevVivaBookingStatus}
+                selectionKey={a3PayDevVivaSelectionKey}
+                stationCourt={paymentStationCourt}
+                timeRange={paymentTimeRange}
+              />
+            )}
             {!splitPaymentSelected && (
               <>
                 <button
