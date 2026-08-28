@@ -44,6 +44,28 @@ function runBytes(command, args) {
   return Buffer.from(result.stdout);
 }
 
+function inspectBuildImage() {
+  const imageId = run("docker", ["image", "inspect", BUILD_IMAGE, "--format", "{{.Id}}"]);
+  const repoDigests = JSON.parse(run(
+    "docker",
+    ["image", "inspect", BUILD_IMAGE, "--format", "{{json .RepoDigests}}"],
+  ));
+  const expectedDigest = BUILD_IMAGE.split("@")[1];
+  if (!/^sha256:[a-f0-9]{64}$/.test(imageId)
+    || !Array.isArray(repoDigests)
+    || !repoDigests.some((value) => typeof value === "string" && value.endsWith(`@${expectedDigest}`))) {
+    throw new Error("local build image manifest digest mismatch");
+  }
+  return imageId;
+}
+
+function callerIdentity() {
+  if (typeof process.getuid !== "function" || typeof process.getgid !== "function") {
+    throw new Error("legacy bootstrap build requires a POSIX caller identity");
+  }
+  return `${process.getuid()}:${process.getgid()}`;
+}
+
 function assertStaticAmd64Elf(buffer) {
   if (buffer.length < 64 || buffer.subarray(0, 4).toString("hex") !== "7f454c46"
     || buffer[4] !== 2 || buffer[5] !== 1 || buffer.readUInt16LE(18) !== 62) {
@@ -90,9 +112,7 @@ export function buildRootAclBootstrap(argv) {
   const sourceBytes = environment === "production"
     ? runBytes("git", ["show", `${repositoryCommit}:${sourceRelative}`])
     : fs.readFileSync(sourcePath);
-  const imageId = run("docker", ["image", "inspect", BUILD_IMAGE, "--format", "{{.Id}}"]).replace(/^sha256:/, "");
-  const expectedImageId = BUILD_IMAGE.split("sha256:")[1];
-  if (imageId !== expectedImageId) throw new Error("local build image identity mismatch");
+  const imageId = inspectBuildImage();
 
   const staging = fs.mkdtempSync(`${out}.staging-`);
   try {
@@ -109,7 +129,8 @@ export function buildRootAclBootstrap(argv) {
       "&&", "gcc", ...BUILD_FLAGS, "-o", `/out/${secondName}`, compilerSource,
       "&&", "gcc", "--version",
     ].join(" ");
-    const dockerArgs = ["run", "--rm", "--network", "none", "--platform", "linux/amd64"];
+    const dockerArgs = ["run", "--rm", "--user", callerIdentity(),
+      "--network", "none", "--platform", "linux/amd64"];
     if (environment === "rehearsal") {
       dockerArgs.push("--mount", `type=bind,src=${repoRoot},dst=/src,readonly`);
     }
@@ -149,7 +170,7 @@ export function buildRootAclBootstrap(argv) {
       },
       build: {
         image: BUILD_IMAGE,
-        imageId: `sha256:${imageId}`,
+        imageId,
         platform: "linux/amd64",
         network: "none",
         compiler: compilerOutput.split("\n")[0],

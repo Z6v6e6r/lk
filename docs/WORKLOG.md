@@ -1571,3 +1571,16 @@
 - Production migration and Deploy therefore remain `STOP` pending separately governed
   key custody, runtime provisioning, database evidence, backup/restore, quiescence and
   signed execution authority.
+
+## 2026-08-27 — LK1 exact-main closeout CI coverage
+
+- Added the existing referral attribution, reviewed-flow recovery, legacy command
+  release, H2 identity and root ACL bootstrap suites to the automatic pull-request and
+  push-main exact-head gate, fetching only their source-pinned immutable build image.
+- Extended the workflow contract so these source boundaries cannot be silently skipped.
+- Fixed both legacy artifact builders to distinguish the pinned registry manifest digest
+  from Docker's platform-specific local image config ID on fresh Linux runners.
+- Run compiler containers as the invoking POSIX UID/GID so Linux bind-mount artifacts
+  remain caller-owned without granting the build container host-root ownership.
+- This is a source-only CI correction: product flows, Node-RED production, provider
+  state, runtime permissions and deployment paths were not changed or executed.
