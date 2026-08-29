@@ -33,6 +33,7 @@ export interface ManagedSubscriptionDevReservation {
   reservationId: string;
   targetId: string;
   title: string;
+  action: ManagedSubscriptionAction;
   status: "ACTIVE" | "RELEASED";
   startsAt: string;
   localDate: string;
@@ -167,6 +168,7 @@ export const compileDraftPolicy = (
 
   const activeLimit = asRecord(draftPolicy.activeServicesLimit);
   const bookingWindow = asRecord(draftPolicy.bookingWindow);
+  const dailyUsagePolicy = asRecord(draftPolicy.dailyUsagePolicy);
   const createGame = asRecord(draftPolicy.createGame);
   const joinGame = asRecord(draftPolicy.joinGame);
   const policy: ManagedSubscriptionRuntimePolicy = {
@@ -198,6 +200,29 @@ export const compileDraftPolicy = (
       days: bookingWindow.enabled === true ? asNullableNumber(bookingWindow.days) : null,
     },
     dailyUsageLimit: asNumber(draftPolicy.dailyUsageLimit, 0),
+    dailyUsagePolicy: {
+      actions: (asStringArray(dailyUsagePolicy.actions).length
+        ? asStringArray(dailyUsagePolicy.actions)
+        : [
+          "CREATE_GAME",
+          "JOIN_GAME",
+          "BOOK_GROUP_TRAINING",
+          "BOOK_TOURNAMENT",
+          "PURCHASE_ADD_ON_PRODUCT",
+        ]).filter((action): action is ManagedSubscriptionAction => [
+        "CREATE_GAME",
+        "JOIN_GAME",
+        "BOOK_GROUP_TRAINING",
+        "BOOK_TOURNAMENT",
+        "PURCHASE_ADD_ON_PRODUCT",
+      ].includes(action)),
+      limitExceeded: dailyUsagePolicy.limitExceeded === "PERCENT_DISCOUNT"
+        ? "PERCENT_DISCOUNT"
+        : "BLOCK",
+      percentage: dailyUsagePolicy.limitExceeded === "PERCENT_DISCOUNT"
+        ? asNullableNumber(dailyUsagePolicy.percentage)
+        : null,
+    },
     usageUnitsByDuration: {
       "60": asNumber(asRecord(draftPolicy.usageUnitsByDuration)["60"], 0),
       "90": asNumber(asRecord(draftPolicy.usageUnitsByDuration)["90"], 0),
@@ -312,7 +337,7 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
   {
     targetId: "create-station-a-60-aug18",
     title: "Создать игру 60 минут",
-    description: "Станция A · 18 августа · базовая цена 4 000 ₽",
+    description: "Первая игровая услуга дня · 1 час бесплатно",
     action: "CREATE_GAME",
     target: {
       resolutionSource: "SERVER",
@@ -323,14 +348,14 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
       eventId: "dev-event-create-a-60-aug18",
       durationMinutes: 60,
       startsAt: "2026-08-18T06:00:00.000Z",
-      basePriceMinor: 400_000,
+      basePriceMinor: 600_000,
       currency: "RUB",
     },
   },
   {
     targetId: "create-station-a-90-aug18",
     title: "Создать игру 90 минут",
-    description: "Станция A · 18 августа · ¼ цены, скидка 20%, доплата станции",
+    description: "Первая игровая услуга дня · доплата только за 30 минут сверх часа со скидкой 30%",
     action: "CREATE_GAME",
     target: {
       resolutionSource: "SERVER",
@@ -341,14 +366,14 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
       eventId: "dev-event-create-a-90-aug18",
       durationMinutes: 90,
       startsAt: "2026-08-18T08:00:00.000Z",
-      basePriceMinor: 400_000,
+      basePriceMinor: 900_000,
       currency: "RUB",
     },
   },
   {
     targetId: "create-home-120-aug18",
     title: "Создать игру 120 минут",
-    description: "Домашняя станция · 18 августа · без подходящей ценовой льготы",
+    description: "Первая игровая услуга дня · доплата только за 60 минут сверх часа со скидкой 30%",
     action: "CREATE_GAME",
     target: {
       resolutionSource: "SERVER",
@@ -359,14 +384,14 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
       eventId: "dev-event-create-home-120-aug18",
       durationMinutes: 120,
       startsAt: "2026-08-18T10:00:00.000Z",
-      basePriceMinor: 400_000,
+      basePriceMinor: 1_200_000,
       currency: "RUB",
     },
   },
   {
     targetId: "join-station-b-60-aug18",
     title: "Присоединиться к игре",
-    description: "Станция B · 60 минут · 18 августа",
+    description: "Первая игровая услуга дня бесплатно; сверх дневного лимита — скидка 30%",
     action: "JOIN_GAME",
     target: {
       resolutionSource: "SERVER",
@@ -377,7 +402,43 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
       eventId: "dev-event-join-b-60-aug18",
       durationMinutes: 60,
       startsAt: "2026-08-18T12:00:00.000Z",
-      basePriceMinor: 400_000,
+      basePriceMinor: 600_000,
+      currency: "RUB",
+    },
+  },
+  {
+    targetId: "join-station-b-90-aug18",
+    title: "Присоединиться к игре 90 минут",
+    description: "До лимита — доплата за 30 минут со скидкой 30%; после лимита — вся цена со скидкой 30%",
+    action: "JOIN_GAME",
+    target: {
+      resolutionSource: "SERVER",
+      stationId: "dev-station-b",
+      category: "GAME",
+      externalEventTypeId: "dev-open-game",
+      productTypeId: null,
+      eventId: "dev-event-join-b-90-aug18",
+      durationMinutes: 90,
+      startsAt: "2026-08-18T13:00:00.000Z",
+      basePriceMinor: 900_000,
+      currency: "RUB",
+    },
+  },
+  {
+    targetId: "join-station-b-120-aug18",
+    title: "Присоединиться к игре 120 минут",
+    description: "До лимита — доплата за 60 минут со скидкой 30%; после лимита — вся цена со скидкой 30%",
+    action: "JOIN_GAME",
+    target: {
+      resolutionSource: "SERVER",
+      stationId: "dev-station-b",
+      category: "GAME",
+      externalEventTypeId: "dev-open-game",
+      productTypeId: null,
+      eventId: "dev-event-join-b-120-aug18",
+      durationMinutes: 120,
+      startsAt: "2026-08-18T15:00:00.000Z",
+      basePriceMinor: 1_200_000,
       currency: "RUB",
     },
   },
@@ -438,7 +499,7 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
   {
     targetId: "group-station-a-60-aug18",
     title: "Записаться на групповую",
-    description: "Нет включённой льготы для групповой тренировки",
+    description: "Скидка 50%; не расходует бесплатную игровую услугу дня",
     action: "BOOK_GROUP_TRAINING",
     target: {
       resolutionSource: "SERVER",
@@ -450,6 +511,24 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
       durationMinutes: 60,
       startsAt: "2026-08-18T17:00:00.000Z",
       basePriceMinor: 300_000,
+      currency: "RUB",
+    },
+  },
+  {
+    targetId: "tournament-station-a-120-aug18",
+    title: "Записаться на турнир",
+    description: "Скидка 50%; не расходует бесплатную игровую услугу дня",
+    action: "BOOK_TOURNAMENT",
+    target: {
+      resolutionSource: "SERVER",
+      stationId: "dev-station-a",
+      category: "TOURNAMENT",
+      externalEventTypeId: "dev-tournament",
+      productTypeId: null,
+      eventId: "dev-event-tournament-a-120-aug18",
+      durationMinutes: 120,
+      startsAt: "2026-08-18T18:00:00.000Z",
+      basePriceMinor: 500_000,
       currency: "RUB",
     },
   },
@@ -517,7 +596,16 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
   const usageFor = (target: ManagedSubscriptionDevTarget, policy: ManagedSubscriptionRuntimePolicy) => {
     const active = activeReservations();
     const bucketDate = localDate(target.target.startsAt);
-    const daily = active.filter((reservation) => reservation.localDate === bucketDate);
+    const dailyActions = policy.dailyUsagePolicy?.actions ?? [
+      "CREATE_GAME",
+      "JOIN_GAME",
+      "BOOK_GROUP_TRAINING",
+      "BOOK_TOURNAMENT",
+      "PURCHASE_ADD_ON_PRODUCT",
+    ];
+    const daily = active.filter((reservation) => (
+      reservation.localDate === bucketDate && dailyActions.includes(reservation.action)
+    ));
     return {
       activeServiceScope: policy.activeServicesLimit.scope,
       dailyBucketLocalDate: bucketDate,
@@ -562,8 +650,8 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
 
   const seedUnlocked = async (count: number) => {
     await requireContext();
-    if (!Number.isInteger(count) || count < 0 || count > 3) {
-      throw new DevRuntimeError(400, "DEV_SEED_INVALID", "Допустимо от 0 до 3 активных услуг");
+    if (!Number.isInteger(count) || count < 0 || count > 4) {
+      throw new DevRuntimeError(400, "DEV_SEED_INVALID", "Допустимо от 0 до 4 активных услуг");
     }
     reservations.clear();
     operations.clear();
@@ -571,6 +659,7 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
       "2026-08-15T06:00:00.000Z",
       "2026-08-16T06:00:00.000Z",
       "2026-08-17T06:00:00.000Z",
+      "2026-08-19T06:00:00.000Z",
     ];
     for (let index = 0; index < count; index += 1) {
       const startsAt = seedDates[index];
@@ -580,6 +669,7 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
         reservationId,
         targetId: `seed-active-${index + 1}`,
         title: `Тестовая активная услуга ${index + 1}`,
+        action: "CREATE_GAME",
         status: "ACTIVE",
         startsAt,
         localDate: localDate(startsAt),
@@ -620,6 +710,9 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
         bookingWindowEnabled: context.policySource.policy.bookingWindow.enabled,
         bookingWindowDays: context.policySource.policy.bookingWindow.days,
         dailyUsageLimit: context.policySource.policy.dailyUsageLimit,
+        dailyUsageActions: clone(context.policySource.policy.dailyUsagePolicy?.actions ?? []),
+        dailyLimitExceeded: context.policySource.policy.dailyUsagePolicy?.limitExceeded ?? "BLOCK",
+        dailyLimitExceededPercentage: context.policySource.policy.dailyUsagePolicy?.percentage ?? null,
       },
       instance: clone(context.instance),
       targets: clone(targets),
@@ -692,6 +785,7 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
           reservationId,
           targetId: target.targetId,
           title: target.title,
+          action: target.action,
           status: "ACTIVE",
           startsAt: target.target.startsAt,
           localDate: localDate(target.target.startsAt),

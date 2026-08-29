@@ -73,6 +73,68 @@ function benefitRule(
   };
 }
 
+function annualPolicy(): ManagedSubscriptionRuntimePolicy {
+  return basePolicy({
+    activeServicesLimit: {
+      enabled: true,
+      max: 4,
+      scope: "SUBSCRIPTION_BENEFIT_ONLY",
+    },
+    dailyUsagePolicy: {
+      actions: ["CREATE_GAME", "JOIN_GAME"],
+      limitExceeded: "PERCENT_DISCOUNT",
+      percentage: 30,
+    },
+    benefitRules: [
+      benefitRule({
+        ruleId: "annual-game-60-free",
+        actions: ["CREATE_GAME", "JOIN_GAME"],
+        durationMinutes: [60],
+        kind: "FREE_ENTITLEMENT",
+        priority: 100,
+      }),
+      benefitRule({
+        ruleId: "annual-game-90-excess-minus-30",
+        actions: ["CREATE_GAME", "JOIN_GAME"],
+        durationMinutes: [90],
+        kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
+        percentage: 30,
+        partialPrice: { numerator: 1, denominator: 3 },
+        priority: 100,
+      }),
+      benefitRule({
+        ruleId: "annual-game-120-excess-minus-30",
+        actions: ["CREATE_GAME", "JOIN_GAME"],
+        durationMinutes: [120],
+        kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
+        percentage: 30,
+        partialPrice: { numerator: 1, denominator: 2 },
+        priority: 100,
+      }),
+      benefitRule({
+        ruleId: "annual-group-minus-50",
+        category: "GROUP_TRAINING",
+        actions: ["BOOK_GROUP_TRAINING"],
+        externalEventTypeIds: ["group-training"],
+        durationMinutes: [60, 90, 120],
+        kind: "PERCENT_DISCOUNT",
+        percentage: 50,
+        priority: 100,
+      }),
+      benefitRule({
+        ruleId: "annual-tournament-minus-50",
+        category: "TOURNAMENT",
+        actions: ["BOOK_TOURNAMENT"],
+        externalEventTypeIds: ["tournament"],
+        durationMinutes: [60, 90, 120],
+        kind: "PERCENT_DISCOUNT",
+        percentage: 50,
+        priority: 100,
+      }),
+    ],
+  });
+}
+
 function baseInput(
   overrides: Partial<ManagedSubscriptionPolicyEvaluationInput> = {},
 ): ManagedSubscriptionPolicyEvaluationInput {
@@ -240,6 +302,79 @@ test("active-service and duration-unit daily limits include current reservations
   assert.equal(result.decision.usageUnits, 2);
   assert.ok(result.decision.blockers.some(
     (item: { code: string }) => item.code === "DAILY_USAGE_LIMIT_REACHED",
+  ));
+});
+
+test("annual policy applies free hour, discounted excess time and discounted use after daily limit", () => {
+  for (const [durationMinutes, basePriceMinor, expectedFinal] of [
+    [60, 600000, 0],
+    [90, 900000, 210000],
+    [120, 1200000, 420000],
+  ] as const) {
+    for (const action of ["CREATE_GAME", "JOIN_GAME"] as const) {
+      const result = evaluate(baseInput({
+        action,
+        policy: annualPolicy(),
+        target: { ...baseInput().target, durationMinutes, basePriceMinor },
+      }));
+      assert.equal(result.decision.eligible, true, `${action} ${durationMinutes} minutes`);
+      assert.equal(result.decision.benefit.finalPriceMinor, expectedFinal);
+    }
+  }
+
+  for (const action of ["CREATE_GAME", "JOIN_GAME"] as const) {
+    const result = evaluate(baseInput({
+      action,
+      policy: annualPolicy(),
+      target: { ...baseInput().target, durationMinutes: 120, basePriceMinor: 1200000 },
+      usage: { ...baseInput().usage, dailyUsed: 1 },
+    }));
+    assert.equal(result.decision.eligible, true, action);
+    assert.equal(result.decision.benefit.kind, "PERCENT_DISCOUNT", action);
+    assert.equal(result.decision.benefit.ruleId, "daily-usage-limit-exceeded", action);
+    assert.equal(result.decision.benefit.finalPriceMinor, 840000, action);
+  }
+});
+
+test("annual tournament and group discounts do not consume the free game-day quota", () => {
+  for (const [action, category, eventTypeId, basePriceMinor, expectedFinal] of [
+    ["BOOK_GROUP_TRAINING", "GROUP_TRAINING", "group-training", 300000, 150000],
+    ["BOOK_TOURNAMENT", "TOURNAMENT", "tournament", 500000, 250000],
+  ] as const) {
+    const result = evaluate(baseInput({
+      action,
+      policy: annualPolicy(),
+      target: {
+        ...baseInput().target,
+        category,
+        externalEventTypeId: eventTypeId,
+        durationMinutes: 120,
+        basePriceMinor,
+      },
+      usage: { ...baseInput().usage, dailyUsed: 1 },
+    }));
+    assert.equal(result.decision.eligible, true, action);
+    assert.equal(result.decision.benefit.finalPriceMinor, expectedFinal, action);
+    assert.ok(!result.decision.blockers.some(
+      (item: { code: string }) => item.code === "DAILY_USAGE_LIMIT_REACHED",
+    ));
+  }
+});
+
+test("annual active-service limit blocks a fifth service and invalid daily discount fails closed", () => {
+  assert.ok(blockerCodes(baseInput({
+    policy: annualPolicy(),
+    usage: { ...baseInput().usage, activeServices: 4 },
+  })).includes("ACTIVE_SERVICES_LIMIT_REACHED"));
+
+  const invalidPolicy = annualPolicy();
+  invalidPolicy.dailyUsagePolicy = {
+    actions: ["CREATE_GAME", "JOIN_GAME"],
+    limitExceeded: "PERCENT_DISCOUNT",
+    percentage: null,
+  };
+  assert.ok(blockerCodes(baseInput({ policy: invalidPolicy })).includes(
+    "DAILY_USAGE_DISCOUNT_INVALID",
   ));
 });
 
@@ -535,16 +670,17 @@ test("90 minute create can charge one quarter of full price with an additional p
         }),
       ],
     }),
-    target: { ...baseInput().target, durationMinutes: 90, basePriceMinor: 400000 },
+    target: { ...baseInput().target, durationMinutes: 90, basePriceMinor: 400003 },
   });
   const result = evaluate(input);
   assert.equal(result.decision.eligible, true);
-  assert.equal(result.decision.benefit.discountMinor, 20000);
+  assert.equal(result.decision.benefit.discountMinor, 320003);
   assert.equal(result.decision.benefit.finalPriceMinor, 80000);
   assert.deepEqual(result.decision.benefit.partialPriceCalculation, {
     numerator: 1,
     denominator: 4,
     chargeBeforeDiscountMinor: 100000,
+    percentageDiscountMinor: 20000,
   });
 
   const sixtyMinutes = {

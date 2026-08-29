@@ -98,6 +98,98 @@ const draftPolicy = () => ({
   },
 });
 
+const annualDraftPolicy = () => ({
+  ...draftPolicy(),
+  activeServicesLimit: {
+    enabled: true,
+    max: 4,
+    scope: "SUBSCRIPTION_BENEFIT_ONLY",
+  },
+  dailyUsagePolicy: {
+    actions: ["CREATE_GAME", "JOIN_GAME"],
+    limitExceeded: "PERCENT_DISCOUNT",
+    percentage: 30,
+  },
+  stationAccessRules: [{
+    ruleId: "annual-all-dev-stations",
+    enabled: true,
+    priority: 100,
+    selector: { kind: "ALL_STATIONS", stationIds: [] },
+    surcharge: { kind: "NONE", amountMinor: 0 },
+  }],
+  benefitRules: [{
+    ruleId: "annual-game-60-free",
+    enabled: true,
+    category: "GAME",
+    actions: ["CREATE_GAME", "JOIN_GAME"],
+    externalEventTypeIds: ["dev-open-game"],
+    productTypeIds: [],
+    durationMinutes: [60],
+    stationIds: ["dev-station-a", "dev-station-b", "dev-station-home"],
+    kind: "FREE_ENTITLEMENT",
+    valueMinor: null,
+    percentage: null,
+    partialPrice: null,
+    priority: 100,
+  }, {
+    ruleId: "annual-game-90-excess-minus-30",
+    enabled: true,
+    category: "GAME",
+    actions: ["CREATE_GAME", "JOIN_GAME"],
+    externalEventTypeIds: ["dev-open-game"],
+    productTypeIds: [],
+    durationMinutes: [90],
+    stationIds: ["dev-station-a", "dev-station-b", "dev-station-home"],
+    kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
+    valueMinor: null,
+    percentage: 30,
+    partialPrice: { numerator: 1, denominator: 3 },
+    priority: 100,
+  }, {
+    ruleId: "annual-game-120-excess-minus-30",
+    enabled: true,
+    category: "GAME",
+    actions: ["CREATE_GAME", "JOIN_GAME"],
+    externalEventTypeIds: ["dev-open-game"],
+    productTypeIds: [],
+    durationMinutes: [120],
+    stationIds: ["dev-station-a", "dev-station-b", "dev-station-home"],
+    kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
+    valueMinor: null,
+    percentage: 30,
+    partialPrice: { numerator: 1, denominator: 2 },
+    priority: 100,
+  }, {
+    ruleId: "annual-group-minus-50",
+    enabled: true,
+    category: "GROUP_TRAINING",
+    actions: ["BOOK_GROUP_TRAINING"],
+    externalEventTypeIds: ["dev-group-training"],
+    productTypeIds: [],
+    durationMinutes: [60, 90, 120],
+    stationIds: ["dev-station-a", "dev-station-b", "dev-station-home"],
+    kind: "PERCENT_DISCOUNT",
+    valueMinor: null,
+    percentage: 50,
+    partialPrice: null,
+    priority: 100,
+  }, {
+    ruleId: "annual-tournament-minus-50",
+    enabled: true,
+    category: "TOURNAMENT",
+    actions: ["BOOK_TOURNAMENT"],
+    externalEventTypeIds: ["dev-tournament"],
+    productTypeIds: [],
+    durationMinutes: [60, 90, 120],
+    stationIds: ["dev-station-a", "dev-station-b", "dev-station-home"],
+    kind: "PERCENT_DISCOUNT",
+    valueMinor: null,
+    percentage: 50,
+    partialPrice: null,
+    priority: 100,
+  }],
+});
+
 const createRuntime = () => {
   const source = compileDraftPolicy(
     {
@@ -106,6 +198,19 @@ const createRuntime = () => {
       title: "DEV Дружба 12 месяцев",
     },
     draftPolicy(),
+    "2026-08-15T10:00:00.000Z",
+  );
+  return createManagedSubscriptionDevRuntime({ policyLoader: async () => source });
+};
+
+const createAnnualRuntime = () => {
+  const source = compileDraftPolicy(
+    {
+      subscriptionTypeId: "subscription_type:dev-friendship",
+      code: "annual-dev-ac6396e",
+      title: "DEV Дружба 12 месяцев",
+    },
+    annualDraftPolicy(),
     "2026-08-15T10:00:00.000Z",
   );
   return createManagedSubscriptionDevRuntime({ policyLoader: async () => source });
@@ -124,6 +229,17 @@ test("DRAFT policy is promoted only to an in-memory published runtime snapshot",
     enabled: true,
     max: 3,
     scope: "SUBSCRIPTION_BENEFIT_ONLY",
+  });
+  assert.deepEqual(source.policy.dailyUsagePolicy, {
+    actions: [
+      "CREATE_GAME",
+      "JOIN_GAME",
+      "BOOK_GROUP_TRAINING",
+      "BOOK_TOURNAMENT",
+      "PURCHASE_ADD_ON_PRODUCT",
+    ],
+    limitExceeded: "BLOCK",
+    percentage: null,
   });
   assert.match(source.digest, /^[a-f0-9]{64}$/);
 });
@@ -161,7 +277,7 @@ test("60-minute create is free except for the configured station surcharge", asy
   const result = await runtime.quote("create-station-a-60-aug18");
   assert.equal(result.decision.eligible, true);
   assert.equal(result.decision.benefit?.kind, "FREE_ENTITLEMENT");
-  assert.equal(result.decision.benefit?.discountMinor, 400_000);
+  assert.equal(result.decision.benefit?.discountMinor, 600_000);
   assert.equal(result.decision.benefit?.surchargeMinor, 15_000);
   assert.equal(result.decision.benefit?.finalPriceMinor, 15_000);
 });
@@ -172,10 +288,11 @@ test("90-minute create calculates one quarter, 20 percent discount and surcharge
   const result = await runtime.quote("create-station-a-90-aug18");
   assert.equal(result.decision.eligible, true);
   assert.equal(result.decision.benefit?.kind, "PARTIAL_PRICE_PERCENT_DISCOUNT");
-  assert.equal(result.decision.benefit?.partialPriceCalculation?.chargeBeforeDiscountMinor, 100_000);
-  assert.equal(result.decision.benefit?.discountMinor, 20_000);
+  assert.equal(result.decision.benefit?.partialPriceCalculation?.chargeBeforeDiscountMinor, 225_000);
+  assert.equal(result.decision.benefit?.partialPriceCalculation?.percentageDiscountMinor, 45_000);
+  assert.equal(result.decision.benefit?.discountMinor, 720_000);
   assert.equal(result.decision.benefit?.surchargeMinor, 15_000);
-  assert.equal(result.decision.benefit?.finalPriceMinor, 95_000);
+  assert.equal(result.decision.benefit?.finalPriceMinor, 195_000);
 });
 
 test("120-minute home create stays eligible without a pricing benefit", async () => {
@@ -184,7 +301,7 @@ test("120-minute home create stays eligible without a pricing benefit", async ()
   const result = await runtime.quote("create-home-120-aug18");
   assert.equal(result.decision.eligible, true);
   assert.equal(result.decision.benefit?.kind, "NONE");
-  assert.equal(result.decision.benefit?.finalPriceMinor, 400_000);
+  assert.equal(result.decision.benefit?.finalPriceMinor, 1_200_000);
 });
 
 test("add-on product applies its exact discount and the station surcharge", async () => {
@@ -207,6 +324,64 @@ test("booking window, station access and missing group benefit fail closed", asy
   assert.ok(station.decision.blockers.some((item) => item.code === "STATION_NOT_ALLOWED"));
   const group = await runtime.quote("group-station-a-60-aug18");
   assert.ok(group.decision.blockers.some((item) => item.code === "EVENT_NOT_INCLUDED"));
+});
+
+test("annual DEV runtime covers free hour, excess-time pricing and post-limit discount", async () => {
+  const runtime = createAnnualRuntime();
+  await runtime.initialize();
+  await runtime.seed(0);
+
+  for (const [targetId, expectedFinal] of [
+    ["create-station-a-60-aug18", 0],
+    ["create-station-a-90-aug18", 210_000],
+    ["create-home-120-aug18", 420_000],
+    ["join-station-b-90-aug18", 210_000],
+    ["join-station-b-120-aug18", 420_000],
+  ] as const) {
+    const result = await runtime.quote(targetId);
+    assert.equal(result.decision.eligible, true, targetId);
+    assert.equal(result.decision.benefit?.finalPriceMinor, expectedFinal, targetId);
+  }
+
+  await runtime.reserve("create-station-a-60-aug18", "reserve:annual-free-game");
+  const excessCreate = await runtime.quote("create-station-a-90-aug18");
+  const excessJoin = await runtime.quote("join-station-b-120-aug18");
+  assert.equal(excessCreate.decision.benefit?.kind, "PERCENT_DISCOUNT");
+  assert.equal(excessCreate.decision.benefit?.finalPriceMinor, 630_000);
+  assert.equal(excessJoin.decision.benefit?.kind, "PERCENT_DISCOUNT");
+  assert.equal(excessJoin.decision.benefit?.finalPriceMinor, 840_000);
+});
+
+test("annual group and tournament receive 50 percent without consuming the game-day quota", async () => {
+  const runtime = createAnnualRuntime();
+  await runtime.initialize();
+  await runtime.seed(0);
+  const group = await runtime.reserve("group-station-a-60-aug18", "reserve:annual-group");
+  const tournament = await runtime.quote("tournament-station-a-120-aug18");
+  const gameAfterGroup = await runtime.quote("create-station-a-60-aug18");
+  assert.equal(group.decision.benefit?.finalPriceMinor, 150_000);
+  assert.equal(tournament.decision.benefit?.finalPriceMinor, 250_000);
+  assert.equal(gameAfterGroup.decision.benefit?.kind, "FREE_ENTITLEMENT");
+  assert.equal(gameAfterGroup.decision.benefit?.finalPriceMinor, 0);
+});
+
+test("annual limit blocks a fifth service and serializes the final slot", async () => {
+  const runtime = createAnnualRuntime();
+  await runtime.initialize();
+  await runtime.seed(4);
+  const blocked = await runtime.quote("create-station-a-60-aug18");
+  assert.ok(blocked.decision.blockers.some(
+    (item) => item.code === "ACTIVE_SERVICES_LIMIT_REACHED",
+  ));
+
+  await runtime.seed(3);
+  const results = await Promise.allSettled([
+    runtime.reserve("create-station-a-60-aug18", "reserve:annual-parallel-one"),
+    runtime.reserve("group-station-a-60-aug18", "reserve:annual-parallel-two"),
+  ]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+  assert.equal((await runtime.snapshot()).limits.activeServices, 4);
 });
 
 test("three active services block the fourth and release restores eligibility", async () => {
