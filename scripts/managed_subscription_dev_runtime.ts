@@ -26,6 +26,8 @@ export interface ManagedSubscriptionDevTarget {
   title: string;
   description: string;
   action: ManagedSubscriptionAction;
+  courtPriceMinor?: number | null;
+  participantCount?: number;
   target: ManagedSubscriptionResolvedTarget;
 }
 
@@ -339,6 +341,8 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
     title: "Создать игру 60 минут",
     description: "Первая игровая услуга дня · 1 час бесплатно",
     action: "CREATE_GAME",
+    courtPriceMinor: 600_000,
+    participantCount: 4,
     target: {
       resolutionSource: "SERVER",
       stationId: "dev-station-a",
@@ -348,7 +352,7 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
       eventId: "dev-event-create-a-60-aug18",
       durationMinutes: 60,
       startsAt: "2026-08-18T06:00:00.000Z",
-      basePriceMinor: 600_000,
+      basePriceMinor: 150_000,
       currency: "RUB",
     },
   },
@@ -357,6 +361,8 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
     title: "Создать игру 90 минут",
     description: "Первая игровая услуга дня · доплата только за 30 минут сверх часа со скидкой 30%",
     action: "CREATE_GAME",
+    courtPriceMinor: 900_000,
+    participantCount: 4,
     target: {
       resolutionSource: "SERVER",
       stationId: "dev-station-a",
@@ -366,7 +372,7 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
       eventId: "dev-event-create-a-90-aug18",
       durationMinutes: 90,
       startsAt: "2026-08-18T08:00:00.000Z",
-      basePriceMinor: 900_000,
+      basePriceMinor: 225_000,
       currency: "RUB",
     },
   },
@@ -375,6 +381,8 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
     title: "Создать игру 120 минут",
     description: "Первая игровая услуга дня · доплата только за 60 минут сверх часа со скидкой 30%",
     action: "CREATE_GAME",
+    courtPriceMinor: 1_200_000,
+    participantCount: 4,
     target: {
       resolutionSource: "SERVER",
       stationId: "dev-station-home",
@@ -384,7 +392,7 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
       eventId: "dev-event-create-home-120-aug18",
       durationMinutes: 120,
       startsAt: "2026-08-18T10:00:00.000Z",
-      basePriceMinor: 1_200_000,
+      basePriceMinor: 300_000,
       currency: "RUB",
     },
   },
@@ -393,6 +401,8 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
     title: "Присоединиться к игре",
     description: "Первая игровая услуга дня бесплатно; сверх дневного лимита — скидка 30%",
     action: "JOIN_GAME",
+    courtPriceMinor: 600_000,
+    participantCount: 4,
     target: {
       resolutionSource: "SERVER",
       stationId: "dev-station-b",
@@ -402,7 +412,7 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
       eventId: "dev-event-join-b-60-aug18",
       durationMinutes: 60,
       startsAt: "2026-08-18T12:00:00.000Z",
-      basePriceMinor: 600_000,
+      basePriceMinor: 150_000,
       currency: "RUB",
     },
   },
@@ -411,6 +421,8 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
     title: "Присоединиться к игре 90 минут",
     description: "До лимита — доплата за 30 минут со скидкой 30%; после лимита — вся цена со скидкой 30%",
     action: "JOIN_GAME",
+    courtPriceMinor: 900_000,
+    participantCount: 4,
     target: {
       resolutionSource: "SERVER",
       stationId: "dev-station-b",
@@ -420,7 +432,7 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
       eventId: "dev-event-join-b-90-aug18",
       durationMinutes: 90,
       startsAt: "2026-08-18T13:00:00.000Z",
-      basePriceMinor: 900_000,
+      basePriceMinor: 225_000,
       currency: "RUB",
     },
   },
@@ -429,6 +441,8 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
     title: "Присоединиться к игре 120 минут",
     description: "До лимита — доплата за 60 минут со скидкой 30%; после лимита — вся цена со скидкой 30%",
     action: "JOIN_GAME",
+    courtPriceMinor: 1_200_000,
+    participantCount: 4,
     target: {
       resolutionSource: "SERVER",
       stationId: "dev-station-b",
@@ -438,7 +452,7 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
       eventId: "dev-event-join-b-120-aug18",
       durationMinutes: 120,
       startsAt: "2026-08-18T15:00:00.000Z",
-      basePriceMinor: 1_200_000,
+      basePriceMinor: 300_000,
       currency: "RUB",
     },
   },

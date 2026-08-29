@@ -9,6 +9,8 @@ interface DevTarget {
   title: string;
   description: string;
   action: string;
+  courtPriceMinor?: number | null;
+  participantCount?: number;
   target: {
     stationId: string;
     category: string;
@@ -125,20 +127,38 @@ const formatDateTime = (value: string) => new Intl.DateTimeFormat("ru-RU", {
   minute: "2-digit",
 }).format(new Date(value));
 
-const benefitLabel = (decision: ManagedSubscriptionPolicyDecision) => {
+const percentageOf = (discountMinor: number, amountMinor: number | null | undefined) => (
+  amountMinor && amountMinor > 0 ? Math.round((discountMinor / amountMinor) * 100) : null
+);
+
+const benefitLabel = (decision: ManagedSubscriptionPolicyDecision, target: DevTarget) => {
   const benefit = decision.benefit;
   if (!benefit) return "Льгота не рассчитана";
   const parts: string[] = [];
-  if (benefit.kind === "FREE_ENTITLEMENT") parts.push("Услуга по подписке бесплатно");
+  const participantShare = target.participantCount && target.participantCount > 1
+    ? `доля игрока 1/${target.participantCount}`
+    : null;
+  if (benefit.kind === "FREE_ENTITLEMENT") parts.push("первые 60 минут бесплатно");
   if (benefit.kind === "PARTIAL_PRICE_PERCENT_DISCOUNT") {
-    const share = benefit.partialPriceCalculation;
-    if (share) parts.push(`Оплата сверх бесплатного часа: ${share.numerator}/${share.denominator} цены`);
-    if (share && share.percentageDiscountMinor > 0) {
-      parts.push(`скидка на доплату ${formatMoney(share.percentageDiscountMinor)}`);
+    const calculation = benefit.partialPriceCalculation;
+    parts.push("первые 60 минут бесплатно");
+    parts.push(`доплата за ${Math.max(0, target.target.durationMinutes - 60)} минут`);
+    if (participantShare) parts.push(participantShare);
+    if (calculation) {
+      const percentage = percentageOf(
+        calculation.percentageDiscountMinor,
+        calculation.chargeBeforeDiscountMinor,
+      );
+      parts.push(`скидка ${percentage ?? 0}% на доплату ${formatMoney(calculation.percentageDiscountMinor)}`);
     }
   }
   if (benefit.kind === "PERCENT_DISCOUNT" || benefit.kind === "FIXED_DISCOUNT") {
-    parts.push(`Скидка ${formatMoney(benefit.discountMinor)}`);
+    if (benefit.ruleId === "daily-usage-limit-exceeded") {
+      parts.push("бесплатный час использован");
+      if (participantShare) parts.push(participantShare);
+    }
+    const percentage = percentageOf(benefit.discountMinor, benefit.basePriceMinor);
+    parts.push(`${percentage === null ? "скидка" : `скидка ${percentage}%`} ${formatMoney(benefit.discountMinor)}`);
   }
   if (benefit.kind === "NONE") parts.push("Без ценовой льготы");
   if (benefit.surchargeMinor > 0) parts.push(`доплата станции ${formatMoney(benefit.surchargeMinor)}`);
@@ -378,13 +398,14 @@ export function ManagedSubscriptionDevPage() {
                 <p>{target.description}</p>
                 <dl>
                   <div><dt>Дата</dt><dd>{formatDateTime(target.target.startsAt)}</dd></div>
-                  <div><dt>Базовая цена</dt><dd>{formatMoney(target.target.basePriceMinor)}</dd></div>
+                  {target.courtPriceMinor !== null && target.courtPriceMinor !== undefined && <div><dt>Стоимость корта</dt><dd>{formatMoney(target.courtPriceMinor)}</dd></div>}
+                  <div><dt>{target.participantCount && target.participantCount > 1 ? `Доля игрока (1/${target.participantCount})` : "Базовая цена"}</dt><dd>{formatMoney(target.target.basePriceMinor)}</dd></div>
                 </dl>
                 {quote && (
                   <div className={`ms-dev-decision ${quote.eligible ? "allowed" : "blocked"}`}>
                     <strong>{quote.eligible ? "Разрешено" : "Заблокировано"}</strong>
                     {quote.eligible
-                      ? <span>{benefitLabel(quote)}</span>
+                      ? <span>{benefitLabel(quote, target)}</span>
                       : <ul>{quote.blockers.map((blocker) => (
                         <li key={blocker.code}>{blocker.message}<code>{blocker.code}</code></li>
                       ))}</ul>}

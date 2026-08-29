@@ -277,7 +277,7 @@ test("60-minute create is free except for the configured station surcharge", asy
   const result = await runtime.quote("create-station-a-60-aug18");
   assert.equal(result.decision.eligible, true);
   assert.equal(result.decision.benefit?.kind, "FREE_ENTITLEMENT");
-  assert.equal(result.decision.benefit?.discountMinor, 600_000);
+  assert.equal(result.decision.benefit?.discountMinor, 150_000);
   assert.equal(result.decision.benefit?.surchargeMinor, 15_000);
   assert.equal(result.decision.benefit?.finalPriceMinor, 15_000);
 });
@@ -288,11 +288,11 @@ test("90-minute create calculates one quarter, 20 percent discount and surcharge
   const result = await runtime.quote("create-station-a-90-aug18");
   assert.equal(result.decision.eligible, true);
   assert.equal(result.decision.benefit?.kind, "PARTIAL_PRICE_PERCENT_DISCOUNT");
-  assert.equal(result.decision.benefit?.partialPriceCalculation?.chargeBeforeDiscountMinor, 225_000);
-  assert.equal(result.decision.benefit?.partialPriceCalculation?.percentageDiscountMinor, 45_000);
-  assert.equal(result.decision.benefit?.discountMinor, 720_000);
+  assert.equal(result.decision.benefit?.partialPriceCalculation?.chargeBeforeDiscountMinor, 56_250);
+  assert.equal(result.decision.benefit?.partialPriceCalculation?.percentageDiscountMinor, 11_250);
+  assert.equal(result.decision.benefit?.discountMinor, 180_000);
   assert.equal(result.decision.benefit?.surchargeMinor, 15_000);
-  assert.equal(result.decision.benefit?.finalPriceMinor, 195_000);
+  assert.equal(result.decision.benefit?.finalPriceMinor, 60_000);
 });
 
 test("120-minute home create stays eligible without a pricing benefit", async () => {
@@ -301,7 +301,7 @@ test("120-minute home create stays eligible without a pricing benefit", async ()
   const result = await runtime.quote("create-home-120-aug18");
   assert.equal(result.decision.eligible, true);
   assert.equal(result.decision.benefit?.kind, "NONE");
-  assert.equal(result.decision.benefit?.finalPriceMinor, 1_200_000);
+  assert.equal(result.decision.benefit?.finalPriceMinor, 300_000);
 });
 
 test("add-on product applies its exact discount and the station surcharge", async () => {
@@ -333,10 +333,10 @@ test("annual DEV runtime covers free hour, excess-time pricing and post-limit di
 
   for (const [targetId, expectedFinal] of [
     ["create-station-a-60-aug18", 0],
-    ["create-station-a-90-aug18", 210_000],
-    ["create-home-120-aug18", 420_000],
-    ["join-station-b-90-aug18", 210_000],
-    ["join-station-b-120-aug18", 420_000],
+    ["create-station-a-90-aug18", 52_500],
+    ["create-home-120-aug18", 105_000],
+    ["join-station-b-90-aug18", 52_500],
+    ["join-station-b-120-aug18", 105_000],
   ] as const) {
     const result = await runtime.quote(targetId);
     assert.equal(result.decision.eligible, true, targetId);
@@ -347,9 +347,9 @@ test("annual DEV runtime covers free hour, excess-time pricing and post-limit di
   const excessCreate = await runtime.quote("create-station-a-90-aug18");
   const excessJoin = await runtime.quote("join-station-b-120-aug18");
   assert.equal(excessCreate.decision.benefit?.kind, "PERCENT_DISCOUNT");
-  assert.equal(excessCreate.decision.benefit?.finalPriceMinor, 630_000);
+  assert.equal(excessCreate.decision.benefit?.finalPriceMinor, 157_500);
   assert.equal(excessJoin.decision.benefit?.kind, "PERCENT_DISCOUNT");
-  assert.equal(excessJoin.decision.benefit?.finalPriceMinor, 840_000);
+  assert.equal(excessJoin.decision.benefit?.finalPriceMinor, 210_000);
 });
 
 test("annual group and tournament receive 50 percent without consuming the game-day quota", async () => {

@@ -10,6 +10,8 @@ interface HostedTarget {
   title: string;
   description: string;
   action: "CREATE_GAME" | "JOIN_GAME" | "BOOK_GROUP_TRAINING" | "BOOK_TOURNAMENT";
+  courtPriceMinor?: number | null;
+  participantCount?: number;
   target: {
     category: string;
     durationMinutes: number;
@@ -80,18 +82,40 @@ const formatDateTime = (value: string) => new Intl.DateTimeFormat("ru-RU", {
   minute: "2-digit",
 }).format(new Date(value));
 
-const benefitLabel = (decision: ManagedSubscriptionPolicyDecision) => {
+const percentageOf = (discountMinor: number, amountMinor: number | null | undefined) => (
+  amountMinor && amountMinor > 0 ? Math.round((discountMinor / amountMinor) * 100) : null
+);
+
+const participantShareLabel = (target: HostedTarget) => (
+  (target.participantCount ?? 1) > 1 ? `доля игрока 1/${target.participantCount}` : null
+);
+
+const benefitLabel = (decision: ManagedSubscriptionPolicyDecision, target: HostedTarget) => {
   const benefit = decision.benefit;
   if (!benefit) return "Льгота не рассчитана";
   const parts: string[] = [];
-  if (benefit.kind === "FREE_ENTITLEMENT") parts.push("1 час бесплатно");
+  const participantShare = participantShareLabel(target);
+  if (benefit.kind === "FREE_ENTITLEMENT") parts.push("первые 60 минут бесплатно");
   if (benefit.kind === "PARTIAL_PRICE_PERCENT_DISCOUNT") {
-    const share = benefit.partialPriceCalculation;
-    if (share) parts.push(`оплачиваемая доля ${share.numerator}/${share.denominator}`);
-    if (share?.percentageDiscountMinor) parts.push(`скидка на доплату ${formatMoney(share.percentageDiscountMinor)}`);
+    const calculation = benefit.partialPriceCalculation;
+    parts.push("первые 60 минут бесплатно");
+    parts.push(`доплата за ${Math.max(0, target.target.durationMinutes - 60)} минут`);
+    if (participantShare) parts.push(participantShare);
+    if (calculation) {
+      const percentage = percentageOf(
+        calculation.percentageDiscountMinor,
+        calculation.chargeBeforeDiscountMinor,
+      );
+      parts.push(`скидка ${percentage ?? 0}% на доплату ${formatMoney(calculation.percentageDiscountMinor)}`);
+    }
   }
   if (benefit.kind === "PERCENT_DISCOUNT" || benefit.kind === "FIXED_DISCOUNT") {
-    parts.push(`скидка ${formatMoney(benefit.discountMinor)}`);
+    if (benefit.ruleId === "daily-usage-limit-exceeded") {
+      parts.push("бесплатный час использован");
+      if (participantShare) parts.push(participantShare);
+    }
+    const percentage = percentageOf(benefit.discountMinor, benefit.basePriceMinor);
+    parts.push(`${percentage === null ? "скидка" : `скидка ${percentage}%`} ${formatMoney(benefit.discountMinor)}`);
   }
   if (benefit.kind === "NONE") parts.push("без льготы");
   parts.push(`итого ${formatMoney(benefit.finalPriceMinor)}`);
@@ -296,11 +320,15 @@ export function HostedSubscriptionUsageTestPage({
               <article className="ms-dev-card" key={target.targetId}>
                 <div className="ms-dev-card-meta"><span>{target.target.category.replaceAll("_", " ")}</span><span>{target.target.durationMinutes} мин</span></div>
                 <h3>{target.title}</h3><p>{target.description}</p>
-                <dl><div><dt>Дата</dt><dd>{formatDateTime(target.target.startsAt)}</dd></div><div><dt>Базовая цена</dt><dd>{formatMoney(target.target.basePriceMinor)}</dd></div></dl>
+                <dl>
+                  <div><dt>Дата</dt><dd>{formatDateTime(target.target.startsAt)}</dd></div>
+                  {target.courtPriceMinor !== null && target.courtPriceMinor !== undefined && <div><dt>Стоимость корта</dt><dd>{formatMoney(target.courtPriceMinor)}</dd></div>}
+                  <div><dt>{(target.participantCount ?? 1) > 1 ? `Доля игрока (1/${target.participantCount})` : "Базовая цена"}</dt><dd>{formatMoney(target.target.basePriceMinor)}</dd></div>
+                </dl>
                 {decision && (
                   <div className={`ms-dev-decision ${decision.eligible ? "allowed" : "blocked"}`}>
                     <strong>{decision.eligible ? "Разрешено" : "Заблокировано"}</strong>
-                    {decision.eligible ? <span>{benefitLabel(decision)}</span> : <ul>{decision.blockers.map((blocker) => <li key={blocker.code}>{blocker.message}<code>{blocker.code}</code></li>)}</ul>}
+                    {decision.eligible ? <span>{benefitLabel(decision, target)}</span> : <ul>{decision.blockers.map((blocker) => <li key={blocker.code}>{blocker.message}<code>{blocker.code}</code></li>)}</ul>}
                   </div>
                 )}
                 <div className="ms-dev-card-actions">
