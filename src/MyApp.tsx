@@ -11,10 +11,16 @@ import FindGamePage from "./components/games/FindGamePage";
 import GamesPage from "./components/games/GamesPage";
 import TournamentsPage from "./components/tournaments/TournamentsPage";
 import { ManagedSubscriptionDevPage } from "./components/subscriptions/ManagedSubscriptionDevPage";
+import { HostedSubscriptionUsageTestPage } from "./components/subscriptions/HostedSubscriptionUsageTestPage";
+import {
+  isHostedSubscriptionUsageTestRoute,
+  readSubscriptionUsageTestCredentials,
+} from "./components/subscriptions/subscriptionUsageTestRoute";
 import {
   CABINET_URL,
   PUBLIC_COMMUNITY_JOIN_PATH,
   GAMES_BUNDLE_URL,
+  IS_DEV_RELEASE_CHANNEL,
   LEVELS_INFO_BUNDLE_URL,
   ONBOARDING_BUNDLE_URL,
   PUBLIC_GAME_CREATE_PATH,
@@ -995,6 +1001,22 @@ function AppContent() {
 }
 
 export default function App() {
+  if (
+    IS_DEV_RELEASE_CHANNEL
+    && typeof window !== "undefined"
+    && isHostedSubscriptionUsageTestRoute(
+      window.location.pathname,
+      window.location.search,
+      true,
+    )
+  ) {
+    return (
+      <HostedSubscriptionUsageTestPage
+        credentials={readSubscriptionUsageTestCredentials(window.location.hash)}
+      />
+    );
+  }
+
   if (
     import.meta.env.DEV
     && typeof window !== "undefined"
