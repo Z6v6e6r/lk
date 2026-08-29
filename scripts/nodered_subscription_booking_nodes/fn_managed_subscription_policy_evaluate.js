@@ -13,6 +13,16 @@ const toFiniteDate = (value) => {
   const date = new Date(String(value || ""));
   return Number.isFinite(date.getTime()) ? date : null;
 };
+const floorRatio = (amount, numerator, denominator) => {
+  const normalizedAmount = toNonNegativeInt(amount);
+  const normalizedNumerator = toNonNegativeInt(numerator);
+  const normalizedDenominator = toNonNegativeInt(denominator);
+  if (normalizedAmount === null || normalizedNumerator === null
+    || !normalizedDenominator) return null;
+  const result = BigInt(normalizedAmount) * BigInt(normalizedNumerator)
+    / BigInt(normalizedDenominator);
+  return result <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(result) : null;
+};
 
 const input = isObj(msg._managedSubscriptionPolicyInput)
   ? msg._managedSubscriptionPolicyInput
@@ -308,14 +318,53 @@ if (usageUnits === null) {
 
 const dailyUsed = toNonNegativeInt(usage.dailyUsed);
 const dailyLimit = toNonNegativeInt(policy.dailyUsageLimit);
-if (dailyUsed === null || dailyLimit === null) {
-  block("DAILY_USAGE_LIMIT_INVALID", "Дневной лимит подписки не настроен");
-} else if (usageUnits !== null && dailyUsed + usageUnits > dailyLimit) {
-  block("DAILY_USAGE_LIMIT_REACHED", "Дневной лимит использования подписки исчерпан", {
-    dailyUsed,
-    dailyLimit,
-    requestedUsageUnits: usageUnits,
-  });
+const hasDailyUsagePolicy = isObj(policy.dailyUsagePolicy);
+const dailyUsageActions = hasDailyUsagePolicy
+  ? policy.dailyUsagePolicy.actions
+  : [
+    "CREATE_GAME",
+    "JOIN_GAME",
+    "BOOK_GROUP_TRAINING",
+    "BOOK_TOURNAMENT",
+    "PURCHASE_ADD_ON_PRODUCT",
+  ];
+const dailyLimitExceededMode = hasDailyUsagePolicy
+  ? policy.dailyUsagePolicy.limitExceeded
+  : "BLOCK";
+const dailyUsagePolicyPercentage = hasDailyUsagePolicy
+  ? toNonNegativeInt(policy.dailyUsagePolicy.percentage)
+  : null;
+let dailyLimitExceeded = false;
+if (!Array.isArray(dailyUsageActions) || dailyUsageActions.length === 0) {
+  block("DAILY_USAGE_POLICY_INVALID", "Область дневного лимита подписки не настроена");
+} else if (!["BLOCK", "PERCENT_DISCOUNT"].includes(dailyLimitExceededMode)) {
+  block("DAILY_USAGE_POLICY_INVALID", "Поведение после дневного лимита не настроено");
+} else if (dailyLimitExceededMode === "PERCENT_DISCOUNT"
+  && (dailyUsagePolicyPercentage === null || dailyUsagePolicyPercentage > 100)) {
+  block("DAILY_USAGE_DISCOUNT_INVALID", "Скидка после дневного лимита не настроена");
+} else if (dailyLimitExceededMode === "BLOCK"
+  && hasDailyUsagePolicy
+  && policy.dailyUsagePolicy.percentage !== null) {
+  block("DAILY_USAGE_DISCOUNT_INVALID", "Скидка несовместима с блокирующим дневным лимитом");
+}
+const dailyActionApplies = Array.isArray(dailyUsageActions)
+  && dailyUsageActions.includes(action);
+if (dailyActionApplies) {
+  if (dailyUsed === null || dailyLimit === null) {
+    block("DAILY_USAGE_LIMIT_INVALID", "Дневной лимит подписки не настроен");
+  } else if (usageUnits !== null && dailyUsed + usageUnits > dailyLimit) {
+    dailyLimitExceeded = true;
+    if (dailyLimitExceededMode === "BLOCK") {
+      block("DAILY_USAGE_LIMIT_REACHED", "Дневной лимит использования подписки исчерпан", {
+        dailyUsed,
+        dailyLimit,
+        requestedUsageUnits: usageUnits,
+      });
+    } else if (dailyLimitExceededMode === "PERCENT_DISCOUNT"
+      && (dailyUsagePolicyPercentage === null || dailyUsagePolicyPercentage > 100)) {
+      block("DAILY_USAGE_DISCOUNT_INVALID", "Скидка после дневного лимита не настроена");
+    }
+  }
 }
 
 const weeklyLimit = policy.usage?.weeklyUsageLimit;
@@ -468,9 +517,19 @@ if (highestRules.length > 1) {
   block("AMBIGUOUS_BENEFIT_RULE", "Для события найдено несколько равноприоритетных льгот");
 }
 
-const selectedRule = highestRules.length === 1 ? highestRules[0] : null;
+let selectedRule = highestRules.length === 1 ? highestRules[0] : null;
 if (selectedRule && !toStr(selectedRule.ruleId)) {
   block("BENEFIT_RULE_ID_INVALID", "Идентификатор правила льготы некорректен");
+}
+if (dailyLimitExceeded
+  && dailyLimitExceededMode === "PERCENT_DISCOUNT"
+  && dailyUsagePolicyPercentage !== null
+  && dailyUsagePolicyPercentage <= 100) {
+  selectedRule = {
+    ruleId: "daily-usage-limit-exceeded",
+    kind: "PERCENT_DISCOUNT",
+    percentage: dailyUsagePolicyPercentage,
+  };
 }
 const basePriceMinor = target.basePriceMinor === null || target.basePriceMinor === undefined
   ? null
@@ -529,7 +588,11 @@ if (!selectedRule) {
     } else if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
       block("BENEFIT_VALUE_INVALID", "Процент скидки некорректен");
     } else {
-      discountMinor = Math.round(basePriceMinor * percentage / 100);
+      discountMinor = floorRatio(basePriceMinor, percentage, 100);
+      if (discountMinor === null) {
+        block("PRICE_CALCULATION_OVERFLOW", "Цена события выходит за допустимый диапазон");
+        discountMinor = 0;
+      }
       finalBeforeSurcharge = Math.max(0, basePriceMinor - discountMinor);
     }
   } else if (selectedRule.kind === "FIXED_DISCOUNT") {
@@ -553,10 +616,22 @@ if (!selectedRule) {
     } else if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
       block("BENEFIT_VALUE_INVALID", "Процент скидки некорректен");
     } else {
-      const chargeBeforeDiscountMinor = Math.round(basePriceMinor * numerator / denominator);
-      discountMinor = Math.round(chargeBeforeDiscountMinor * percentage / 100);
-      finalBeforeSurcharge = Math.max(0, chargeBeforeDiscountMinor - discountMinor);
-      partialPriceCalculation = { numerator, denominator, chargeBeforeDiscountMinor };
+      const chargeBeforeDiscountMinor = floorRatio(basePriceMinor, numerator, denominator);
+      const percentageDiscountMinor = chargeBeforeDiscountMinor === null
+        ? null
+        : floorRatio(chargeBeforeDiscountMinor, percentage, 100);
+      if (chargeBeforeDiscountMinor === null || percentageDiscountMinor === null) {
+        block("PRICE_CALCULATION_OVERFLOW", "Цена события выходит за допустимый диапазон");
+      } else {
+        finalBeforeSurcharge = Math.max(0, chargeBeforeDiscountMinor - percentageDiscountMinor);
+        discountMinor = basePriceMinor - finalBeforeSurcharge;
+        partialPriceCalculation = {
+          numerator,
+          denominator,
+          chargeBeforeDiscountMinor,
+          percentageDiscountMinor,
+        };
+      }
     }
   } else {
     block("BENEFIT_KIND_UNSUPPORTED", "Тип льготы не поддерживается");

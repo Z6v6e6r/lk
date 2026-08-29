@@ -61,6 +61,9 @@ interface DevSnapshot {
     bookingWindowEnabled: boolean;
     bookingWindowDays: number | null;
     dailyUsageLimit: number;
+    dailyUsageActions: string[];
+    dailyLimitExceeded: "BLOCK" | "PERCENT_DISCOUNT";
+    dailyLimitExceededPercentage: number | null;
   };
   targets: DevTarget[];
   reservations: DevReservation[];
@@ -129,8 +132,10 @@ const benefitLabel = (decision: ManagedSubscriptionPolicyDecision) => {
   if (benefit.kind === "FREE_ENTITLEMENT") parts.push("Услуга по подписке бесплатно");
   if (benefit.kind === "PARTIAL_PRICE_PERCENT_DISCOUNT") {
     const share = benefit.partialPriceCalculation;
-    if (share) parts.push(`Доля ${share.numerator}/${share.denominator}`);
-    if (benefit.discountMinor > 0) parts.push(`скидка ${formatMoney(benefit.discountMinor)}`);
+    if (share) parts.push(`Оплата сверх бесплатного часа: ${share.numerator}/${share.denominator} цены`);
+    if (share && share.percentageDiscountMinor > 0) {
+      parts.push(`скидка на доплату ${formatMoney(share.percentageDiscountMinor)}`);
+    }
   }
   if (benefit.kind === "PERCENT_DISCOUNT" || benefit.kind === "FIXED_DISCOUNT") {
     parts.push(`Скидка ${formatMoney(benefit.discountMinor)}`);
@@ -319,6 +324,13 @@ export function ManagedSubscriptionDevPage() {
           <small>{snapshot.limits.activeServicesEnabled ? "Ограничение включено" : "Ограничение выключено"}</small>
         </article>
         <article>
+          <span>Дневной лимит игр</span>
+          <strong>{snapshot.limits.dailyUsageLimit} бесплатно</strong>
+          <small>{snapshot.limits.dailyLimitExceeded === "PERCENT_DISCOUNT"
+            ? `Далее скидка ${snapshot.limits.dailyLimitExceededPercentage}%`
+            : "Далее блокировка"}</small>
+        </article>
+        <article>
           <span>Окно записи</span>
           <strong>{snapshot.limits.bookingWindowEnabled
             ? `${snapshot.limits.bookingWindowDays} дня`
@@ -335,7 +347,7 @@ export function ManagedSubscriptionDevPage() {
         <label>
           Активных услуг
           <select value={seedCount} onChange={(event) => setSeedCount(Number(event.target.value))}>
-            {[0, 1, 2, 3].map((value) => <option key={value} value={value}>{value}</option>)}
+            {[0, 1, 2, 3, 4].map((value) => <option key={value} value={value}>{value}</option>)}
           </select>
         </label>
         <button type="button" onClick={() => void seed()} disabled={busyKey !== null}>

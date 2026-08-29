@@ -50,11 +50,16 @@ The caller places the input in `msg._managedSubscriptionPolicyInput`:
     "joinGame": { "enabled": true, "minDurationMinutes": 60, "maxDurationMinutes": 120 },
     "activeServicesLimit": {
       "enabled": true,
-      "max": 3,
+      "max": 4,
       "scope": "SUBSCRIPTION_BENEFIT_ONLY"
     },
     "bookingWindow": { "enabled": true, "days": 4 },
     "dailyUsageLimit": 1,
+    "dailyUsagePolicy": {
+      "actions": ["CREATE_GAME", "JOIN_GAME"],
+      "limitExceeded": "PERCENT_DISCOUNT",
+      "percentage": 30
+    },
     "usageUnitsByDuration": { "60": 1, "90": 1, "120": 1 },
     "stationAccessRules": [
       {
@@ -163,16 +168,20 @@ the same policy version.
 - blackout local dates;
 - active-service maximum, including current reservations in the supplied count;
 - exact active-service scope and target-local daily bucket match;
-- duration-based units and daily/weekly/monthly usage limits;
+- duration-based units and daily/weekly/monthly usage limits; a missing
+  `dailyUsagePolicy` keeps the historical all-actions `BLOCK` behavior;
+- `dailyUsagePolicy.actions` can restrict the free daily quota to game create
+  and join actions; `PERCENT_DISCOUNT` replaces the normal game benefit with a
+  whole-price discount after the quota is exhausted;
 - maximum future bookings and minimum interval between services;
 - ordered station rows: home station, selected station lists or all stations,
   each with its own fixed surcharge; equal-priority overlaps fail closed;
 - exact action + category + event type + duration + product type + station
   benefit selection;
 - `FREE_ENTITLEMENT`, fixed price, percent and fixed discount in RUB minor units;
-- duration-specific benefits can make a 60-minute create action free while a
-  confirmed 4,000 RUB 90-minute service uses a `1/4` share and 20% discount,
-  charging 800 RUB;
+- duration-specific benefits can make the first 60 minutes free while a 90- or
+  120-minute game charges only the `1/3` or `1/2` excess-time share with a 30%
+  discount;
 - add-on products use the same appendable rule model with exact server-resolved
   product type, event type and stations;
 - ambiguity and missing server base price fail closed;

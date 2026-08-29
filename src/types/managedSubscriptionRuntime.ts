@@ -78,6 +78,11 @@ export interface ManagedSubscriptionRuntimePolicy {
     days: number | null;
   };
   dailyUsageLimit: number;
+  dailyUsagePolicy?: {
+    actions: ManagedSubscriptionAction[];
+    limitExceeded: "BLOCK" | "PERCENT_DISCOUNT";
+    percentage: number | null;
+  };
   usageUnitsByDuration: Record<"60" | "90" | "120", number>;
   stationAccessRules: ManagedSubscriptionStationAccessRule[];
   benefitRules: ManagedSubscriptionBenefitRule[];
@@ -171,6 +176,7 @@ export interface ManagedSubscriptionAppliedBenefit {
     numerator: number;
     denominator: number;
     chargeBeforeDiscountMinor: number;
+    percentageDiscountMinor: number;
   } | null;
   currency: "RUB";
 }
