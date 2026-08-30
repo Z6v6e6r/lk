@@ -134,7 +134,7 @@ test("the shipped games bundle guards details join, split payment, and backgroun
   assert.match(gamesSource, /Проверить присоединение без записи/);
 });
 
-test("ordinary lk_dev navigation sends event checks to an isolated DEV-only harness", () => {
+test("ordinary lk_dev navigation uses the local harness and hosted DEV entrypoints", () => {
   assert.match(cabinetSource, /appendSubscriptionUsageShadowToSameOriginUrl\(parsed, current\)/);
   assert.match(findSource, /appendCurrentSubscriptionUsageShadow\(url\)/);
   assert.match(findSource, /url\.searchParams\.set\("channel", "dev"\)/);
@@ -142,6 +142,8 @@ test("ordinary lk_dev navigation sends event checks to an isolated DEV-only harn
   assert.match(cabinetSource, /new URL\("\/subscription-shadow-dev\.html", current\.origin\)/);
   assert.match(cabinetSource, /parsed\.searchParams\.set\("screen", "group"\)/);
   assert.match(cabinetSource, /parsed\.searchParams\.set\("screen", "tournament"\)/);
+  assert.match(cabinetSource, /if \(shadowMode\) parsed\.searchParams\.set\("channel", "dev"\)/);
+  assert.match(cabinetSource, /parsed\.searchParams\.set\("cabinetUrl", resolvedCabinetUrl\)/);
   assert.match(cabinetSource, /resolveTournamentSignupHref\(action\.href\)/);
   assert.match(shadowHarnessHtml, /src="\/src\/subscription-shadow-dev\.tsx"/);
   assert.match(shadowHarnessSource, /if \(!import\.meta\.env\.DEV\)/);

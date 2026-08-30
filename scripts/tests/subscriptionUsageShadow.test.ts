@@ -72,8 +72,10 @@ test("shadow mode is isolated to ordinary lk_dev and cannot replace the hosted t
   assert.equal(isSubscriptionUsageShadowMode("/game_create", "?subscriptionShadow=1", true), true);
   assert.equal(isSubscriptionUsageShadowMode("/game_join", "?subscriptionShadow=1", true), true);
   assert.equal(isSubscriptionUsageShadowMode("/subscription-shadow-dev.html", "?subscriptionShadow=1", true), true);
-  assert.equal(isSubscriptionUsageShadowMode("/group", "?subscriptionShadow=1", true), false);
-  assert.equal(isSubscriptionUsageShadowMode("/tournament_signup", "?subscriptionShadow=1", true), false);
+  assert.equal(isSubscriptionUsageShadowMode("/group", "?subscriptionShadow=1", true), true);
+  assert.equal(isSubscriptionUsageShadowMode("/tournaments", "?subscriptionShadow=1", true), true);
+  assert.equal(isSubscriptionUsageShadowMode("/tournament_signup", "?subscriptionShadow=1", true), true);
+  assert.equal(isSubscriptionUsageShadowMode("/group", "?subscriptionShadow=1", false), false);
   assert.equal(
     isSubscriptionUsageShadowMode(
       "/lk_dev",

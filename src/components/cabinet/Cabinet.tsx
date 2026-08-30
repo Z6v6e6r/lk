@@ -689,12 +689,17 @@ function resolveGroupTrainingsHref(value: string): string {
 
   try {
     const current = new URL(window.location.href);
-    const useLocalShadowRoute = isLocalHostname(current.hostname)
-      && isSubscriptionUsageShadowMode(current.pathname, current.search, IS_DEV_RELEASE_CHANNEL);
+    const shadowMode = isSubscriptionUsageShadowMode(
+      current.pathname,
+      current.search,
+      IS_DEV_RELEASE_CHANNEL,
+    );
+    const useLocalShadowRoute = isLocalHostname(current.hostname) && shadowMode;
     const parsed = useLocalShadowRoute
       ? new URL("/subscription-shadow-dev.html", current.origin)
       : new URL(raw, current.origin);
     if (useLocalShadowRoute) parsed.searchParams.set("screen", "group");
+    if (shadowMode) parsed.searchParams.set("channel", "dev");
     const resolvedCabinetUrl = resolvePublicGamesCabinetUrl(current);
     if (resolvedCabinetUrl) {
       parsed.searchParams.set("cabinetUrl", resolvedCabinetUrl);
@@ -712,12 +717,21 @@ function resolveTournamentSignupHref(value: string): string {
   if (!raw || typeof window === "undefined") return raw;
   try {
     const current = new URL(window.location.href);
-    const useLocalShadowRoute = isLocalHostname(current.hostname)
-      && isSubscriptionUsageShadowMode(current.pathname, current.search, IS_DEV_RELEASE_CHANNEL);
+    const shadowMode = isSubscriptionUsageShadowMode(
+      current.pathname,
+      current.search,
+      IS_DEV_RELEASE_CHANNEL,
+    );
+    const useLocalShadowRoute = isLocalHostname(current.hostname) && shadowMode;
     const parsed = useLocalShadowRoute
       ? new URL("/subscription-shadow-dev.html", current.origin)
       : new URL(raw, current.origin);
     if (useLocalShadowRoute) parsed.searchParams.set("screen", "tournament");
+    if (shadowMode) parsed.searchParams.set("channel", "dev");
+    const resolvedCabinetUrl = resolvePublicGamesCabinetUrl(current);
+    if (resolvedCabinetUrl) {
+      parsed.searchParams.set("cabinetUrl", resolvedCabinetUrl);
+    }
     return appendCurrentAuthModeToNavigableUrl(
       appendSubscriptionUsageShadowToSameOriginUrl(parsed, current),
     ).toString();

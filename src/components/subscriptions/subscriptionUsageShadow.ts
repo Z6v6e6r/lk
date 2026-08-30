@@ -94,6 +94,10 @@ export function isSubscriptionUsageShadowMode(
     "/find_game",
     "/game_create",
     "/game_join",
+    "/group",
+    "/tournaments",
+    "/tournament_signup",
+    "/tournament-signup",
     "/subscription-shadow-dev.html",
   ]);
   if (!isDevReleaseChannel || !allowedPaths.has(normalizedPath)) return false;

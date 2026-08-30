@@ -25,6 +25,13 @@ function readFile(path: string): string {
   return fs.readFileSync(path, "utf8");
 }
 
+function inlineScript(path: string): string {
+  const source = readFile(path);
+  const match = source.match(/<script>([\s\S]*?)<\/script>/);
+  assert.ok(match, `missing inline script: ${path}`);
+  return match[1];
+}
+
 test("standalone Tilda templates preserve reserve runtime base-url context", () => {
   STANDALONE_TILDA_TEMPLATES.forEach((path) => {
     const source = readFile(path);
@@ -43,6 +50,9 @@ test("dev-aware standalone Tilda templates keep strict split origins per channel
     "docs/tilda-tournament-subscription.html",
     "docs/tilda-tournament-subscription-sirius.html",
     "docs/tilda-tournament-subscription-referral.html",
+    "docs/tilda-group-schedule.html",
+    "docs/tilda-tournaments.html",
+    "docs/tilda-tournament-signup.html",
   ].forEach((path) => {
     const source = readFile(path);
 
@@ -62,11 +72,25 @@ test("public find game template opts into game plus trainer cards", () => {
   assert.match(source, /channel === "dev" \? "\/lk\/release-dev\.json" : "\/lk\/release\.json"/);
 });
 
+test("group and tournament templates load DEV-only bundles from reserve on explicit dev channel", () => {
+  const fixtures = [
+    ["docs/tilda-group-schedule.html", "group-schedule"],
+    ["docs/tilda-tournaments.html", "tournament-signup"],
+    ["docs/tilda-tournament-signup.html", "tournament-signup"],
+  ] as const;
+
+  fixtures.forEach(([path, bundle]) => {
+    const source = readFile(path);
+    assert.match(source, new RegExp(`channel === "dev" \\? "\\/lk\\/${bundle}-dev\\.js"`));
+    assert.match(source, /channel === "dev" \? "\/lk\/release-dev\.json" : "\/lk\/release\.json"/);
+    assert.match(source, /channel === "dev" \? "https:\/\/padlhub\.ru\/lk_dev" : "https:\/\/padlhub\.ru\/lk_new"/);
+    assert.doesNotThrow(() => new Function(inlineScript(path)));
+  });
+});
+
 test("prod-only standalone Tilda templates stay pinned to primary assets", () => {
   [
     "docs/tilda-game-join.html",
-    "docs/tilda-tournaments.html",
-    "docs/tilda-tournament-signup.html",
   ].forEach((path) => {
     const source = readFile(path);
 

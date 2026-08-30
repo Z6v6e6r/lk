@@ -3,10 +3,9 @@
 <script>
   (function () {
     var primaryAssetOrigin = "https://padlhub.su";
-
-    var scriptPath = "/lk/tournament-signup.js";
-    var releasePath = "/lk/release.json";
-    var cabinetUrl = "https://padlhub.ru/lk_new";
+    var fallbackAssetOrigins = [
+      "https://lk-reserve.89-108-64-209.sslip.io"
+    ];
 
     var releaseTimeoutMs = 5000;
     var scriptTimeoutMs = 12000;
@@ -27,7 +26,36 @@
       });
     }
 
-    var assetOrigins = dedupeStrings([normalizeOrigin(primaryAssetOrigin)].filter(Boolean));
+    function isDevCabinetUrl(value) {
+      var raw = String(value || "").trim();
+      if (!raw) return false;
+      try {
+        return new URL(raw, window.location.origin).pathname.indexOf("/lk_dev") !== -1;
+      } catch (_) {
+        return raw.indexOf("/lk_dev") !== -1;
+      }
+    }
+
+    function resolveChannel() {
+      var explicitChannel = String(url.searchParams.get("channel") || "").trim().toLowerCase();
+      if (explicitChannel === "dev" || explicitChannel === "prod") return explicitChannel;
+      if (isDevCabinetUrl(url.searchParams.get("cabinetUrl"))) return "dev";
+      if (isDevCabinetUrl(document.referrer || "")) return "dev";
+      return "prod";
+    }
+
+    function resolveAssetOrigins(channel) {
+      var primaryOrigin = normalizeOrigin(primaryAssetOrigin);
+      var reserveOrigins = fallbackAssetOrigins.map(normalizeOrigin).filter(Boolean);
+      if (channel === "dev" && reserveOrigins.length > 0) return reserveOrigins;
+      return primaryOrigin ? [primaryOrigin] : reserveOrigins;
+    }
+
+    var channel = resolveChannel();
+    var assetOrigins = dedupeStrings(resolveAssetOrigins(channel));
+    var scriptPath = channel === "dev" ? "/lk/tournament-signup-dev.js" : "/lk/tournament-signup.js";
+    var releasePath = channel === "dev" ? "/lk/release-dev.json" : "/lk/release.json";
+    var cabinetUrl = channel === "dev" ? "https://padlhub.ru/lk_dev" : "https://padlhub.ru/lk_new";
 
     function buildLkBaseUrl(origin) {
       var normalized = normalizeOrigin(origin);
