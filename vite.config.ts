@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import cssInjectedByJsPlugin from 'vite-plugin-css-injected-by-js'
 import { visualizer } from 'rollup-plugin-visualizer'
 import { managedSubscriptionDevPlugin } from './scripts/managed_subscription_dev_runtime.ts'
+import { reactRuntimeSingletonGuard } from './scripts/react_runtime_singleton_guard.ts'
 
 const shouldAnalyze = process.env.ANALYZE === '1' || process.env.ANALYZE === 'true'
 
@@ -12,6 +13,9 @@ export default defineConfig(({ command, mode }) => {
     command === 'serve' && process.env.MANAGED_SUBSCRIPTIONS_DEV_RUNTIME === '1'
 
   return {
+    resolve: {
+      dedupe: ['react', 'react-dom'],
+    },
     plugins: [
       react(),
       managedSubscriptionDevPlugin({
@@ -25,6 +29,7 @@ export default defineConfig(({ command, mode }) => {
         shadowJoinFixturesJson: process.env.MANAGED_SUBSCRIPTIONS_SHADOW_JOIN_FIXTURES_JSON,
       }),
       cssInjectedByJsPlugin(), // вшивает CSS прямо в bundle.js
+      reactRuntimeSingletonGuard(),
       ...(shouldAnalyze
         ? [
             visualizer({

@@ -1631,3 +1631,20 @@
 - This remains a local fake-provider proof. The published backend quote endpoint is not
   present, no Viva/CUP provider call was made, and no booking, join, payment, debit,
   branch push, merge, deployment or live mutation occurred.
+
+## 2026-08-30 — LK DEV duplicate React runtime hotfix
+
+- Analysis: the newly published `bundle-dev.js` reproduced `useState`/`useEffect`
+  invalid-hook failures on both the hosted subscription test and the ordinary LK DEV
+  shadow. Artifact comparison found four React client-internals markers in the broken
+  bundle versus three in the last working bundle; backend policy quotes remained green.
+- Implementation: the isolated hotfix branch now deduplicates `react` and `react-dom`
+  in the root Vite bundle and fails its build when a second React runtime is emitted.
+  Production logic, subscription policy, provider integrations and backend state are
+  unchanged.
+- Verification: the DEV build and focused guard tests pass, the guard rejects the
+  broken artifact and accepts the corrected artifact, and a local production-bundle
+  browser test renders the hosted screen with 525 RUB / 90 minutes, 1,050 RUB / 120
+  minutes, 1,575 RUB after the free hour, full-price 2,250 RUB after four active
+  services, and 50% group-training/tournament discounts. No browser-only reserve,
+  booking, join, payment, provider write, hotfix push, integration or deploy occurred.
