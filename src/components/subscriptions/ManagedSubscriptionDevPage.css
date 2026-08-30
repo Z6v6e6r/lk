@@ -89,6 +89,7 @@
 .ms-dev-decision { margin: 0 0 14px; padding: 13px; border-radius: 13px; }
 .ms-dev-decision.allowed { border: 1px solid #5abd67; color: #1d6428; background: #effbef; }
 .ms-dev-decision.blocked { border: 1px solid #e36d79; color: #922532; background: #fff1f3; }
+.ms-dev-decision.full-price { border: 1px solid #e2a544; color: #77480d; background: #fff8e7; }
 .ms-dev-decision strong, .ms-dev-decision span { display: block; }
 .ms-dev-decision span { margin-top: 5px; }
 .ms-dev-decision ul { margin: 8px 0 0; padding-left: 18px; }

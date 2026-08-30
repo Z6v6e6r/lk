@@ -3,6 +3,10 @@ import { PHAB_API_BASE } from "../../consts/api_config";
 import type { ManagedSubscriptionPolicyDecision } from "../../types/managedSubscriptionRuntime";
 import type { SubscriptionUsageTestCredentials } from "./subscriptionUsageTestRoute";
 import { subscriptionUsageTestApiPath } from "./subscriptionUsageTestRoute";
+import {
+  subscriptionUsageTestCounterDelta,
+  type SubscriptionUsageTestBookingOutcome,
+} from "./subscriptionUsageTestBooking";
 import "./ManagedSubscriptionDevPage.css";
 
 interface HostedTarget {
@@ -49,6 +53,7 @@ interface HostedScenario {
 interface HostedQuoteResult {
   target: HostedTarget;
   decision: ManagedSubscriptionPolicyDecision;
+  bookingOutcome: SubscriptionUsageTestBookingOutcome;
 }
 
 interface LocalReservation {
@@ -59,6 +64,7 @@ interface LocalReservation {
   startsAt: string;
   usageUnits: number;
   finalPriceMinor: number | null;
+  subscriptionApplied: boolean;
 }
 
 interface ApiErrorPayload {
@@ -122,13 +128,25 @@ const benefitLabel = (decision: ManagedSubscriptionPolicyDecision, target: Hoste
   return parts.join(" · ");
 };
 
+const fullPriceWithoutSubscriptionLabel = (
+  outcome: SubscriptionUsageTestBookingOutcome,
+  target: HostedTarget,
+) => {
+  const parts = ["лимит льгот подписки исчерпан"];
+  const participantShare = participantShareLabel(target);
+  if (participantShare) parts.push(participantShare);
+  parts.push("без скидки");
+  parts.push(`итого ${formatMoney(outcome.finalPriceMinor)}`);
+  return parts.join(" · ");
+};
+
 export function HostedSubscriptionUsageTestPage({
   credentials,
 }: {
   credentials: SubscriptionUsageTestCredentials | null;
 }) {
   const [scenario, setScenario] = useState<HostedScenario | null>(null);
-  const [quotes, setQuotes] = useState<Record<string, ManagedSubscriptionPolicyDecision>>({});
+  const [quotes, setQuotes] = useState<Record<string, HostedQuoteResult>>({});
   const [reservations, setReservations] = useState<LocalReservation[]>([]);
   const [activeServices, setActiveServices] = useState(0);
   const [dailyGameUsage, setDailyGameUsage] = useState(0);
@@ -184,7 +202,7 @@ export function HostedSubscriptionUsageTestPage({
     setError(null);
     try {
       const result = await quote(targetId);
-      setQuotes((current) => ({ ...current, [targetId]: result.decision }));
+      setQuotes((current) => ({ ...current, [targetId]: result }));
     } catch (quoteError) {
       setError(quoteError instanceof Error ? quoteError.message : "Не удалось рассчитать ограничения");
     } finally {
@@ -197,22 +215,28 @@ export function HostedSubscriptionUsageTestPage({
     setError(null);
     try {
       const result = await quote(target.targetId);
-      setQuotes((current) => ({ ...current, [target.targetId]: result.decision }));
-      if (!result.decision.eligible) throw new Error("Повторная проверка заблокировала DEV-резерв");
+      setQuotes((current) => ({ ...current, [target.targetId]: result }));
+      if (!result.bookingOutcome.allowed) throw new Error("Повторная проверка заблокировала DEV-резерв");
+      const counterDelta = subscriptionUsageTestCounterDelta(
+        result.bookingOutcome,
+        target.action,
+        result.decision.usageUnits,
+      );
       setReservations((current) => [...current, {
         reservationId: `browser-only:${crypto.randomUUID()}`,
         targetId: target.targetId,
         title: target.title,
         action: target.action,
         startsAt: target.target.startsAt,
-        usageUnits: result.decision.usageUnits ?? 1,
-        finalPriceMinor: result.decision.benefit?.finalPriceMinor ?? null,
+        usageUnits: counterDelta.dailyGameUsage,
+        finalPriceMinor: result.bookingOutcome.finalPriceMinor,
+        subscriptionApplied: result.bookingOutcome.subscriptionApplied,
       }]);
-      const nextActiveServices = Math.min(activeLimit, activeServices + 1);
+      const nextActiveServices = Math.min(activeLimit, activeServices + counterDelta.activeServices);
       setActiveServices(nextActiveServices);
       setDraftActiveServices(nextActiveServices);
-      if (target.action === "CREATE_GAME" || target.action === "JOIN_GAME") {
-        const nextDailyGameUsage = Math.min(4, dailyGameUsage + (result.decision.usageUnits ?? 1));
+      if (counterDelta.dailyGameUsage > 0) {
+        const nextDailyGameUsage = Math.min(4, dailyGameUsage + counterDelta.dailyGameUsage);
         setDailyGameUsage(nextDailyGameUsage);
         setDraftDailyGameUsage(nextDailyGameUsage);
       }
@@ -226,10 +250,11 @@ export function HostedSubscriptionUsageTestPage({
 
   const release = (reservation: LocalReservation) => {
     setReservations((current) => current.filter((item) => item.reservationId !== reservation.reservationId));
-    const nextActiveServices = Math.max(0, activeServices - 1);
+    const nextActiveServices = Math.max(0, activeServices - (reservation.subscriptionApplied ? 1 : 0));
     setActiveServices(nextActiveServices);
     setDraftActiveServices(nextActiveServices);
-    if (reservation.action === "CREATE_GAME" || reservation.action === "JOIN_GAME") {
+    if (reservation.subscriptionApplied
+      && (reservation.action === "CREATE_GAME" || reservation.action === "JOIN_GAME")) {
       const nextDailyGameUsage = Math.max(0, dailyGameUsage - reservation.usageUnits);
       setDailyGameUsage(nextDailyGameUsage);
       setDraftDailyGameUsage(nextDailyGameUsage);
@@ -290,7 +315,7 @@ export function HostedSubscriptionUsageTestPage({
       <section className="ms-dev-summary" aria-label="Тестовая подписка">
         <article><span>Тестовый оффер</span><strong>{scenario.offer.title}</strong><small>{scenario.offer.offerId}</small></article>
         <article><span>Версия ЦУП</span><strong>{scenario.policySource.version}</strong><small>{scenario.policySource.sourceStatus} → in-memory {scenario.policySource.runtimeStatus}</small></article>
-        <article><span>Активные услуги</span><strong>{activeServices} / {activeLimit}</strong><small>Четвёртая разрешена, пятая блокируется</small></article>
+        <article><span>Активные услуги</span><strong>{activeServices} / {activeLimit}</strong><small>Далее — полная стоимость без подписки</small></article>
         <article><span>Игровых услуг сегодня</span><strong>{dailyGameUsage} / {scenario.limits.dailyUsageLimit} бесплатно</strong><small>Далее скидка {scenario.limits.dailyLimitExceededPercentage}%</small></article>
         <article><span>Окно записи</span><strong>{scenario.limits.bookingWindowEnabled ? `${scenario.limits.bookingWindowDays} дня` : "Без ограничения"}</strong><small>Станция {scenario.offer.stationId}</small></article>
       </section>
@@ -315,7 +340,13 @@ export function HostedSubscriptionUsageTestPage({
         <div className="ms-dev-section-heading"><div><h2>Согласованные сценарии</h2><p>Цена, станция, дата и тип события формируются backend, а не браузером.</p></div></div>
         <div className="ms-dev-grid">
           {scenario.targets.map((target) => {
-            const decision = quotes[target.targetId];
+            const quoteResult = quotes[target.targetId];
+            const decision = quoteResult?.decision;
+            const bookingOutcome = quoteResult?.bookingOutcome;
+            const fullPriceFallback = bookingOutcome?.pricingMode === "FULL_PRICE_WITHOUT_SUBSCRIPTION";
+            const fullPriceActionLabel = target.action === "JOIN_GAME"
+              ? "Присоединиться без подписки за полную стоимость"
+              : "Создать без подписки за полную стоимость";
             return (
               <article className="ms-dev-card" key={target.targetId}>
                 <div className="ms-dev-card-meta"><span>{target.target.category.replaceAll("_", " ")}</span><span>{target.target.durationMinutes} мин</span></div>
@@ -326,14 +357,18 @@ export function HostedSubscriptionUsageTestPage({
                   <div><dt>{(target.participantCount ?? 1) > 1 ? `Доля игрока (1/${target.participantCount})` : "Базовая цена"}</dt><dd>{formatMoney(target.target.basePriceMinor)}</dd></div>
                 </dl>
                 {decision && (
-                  <div className={`ms-dev-decision ${decision.eligible ? "allowed" : "blocked"}`}>
-                    <strong>{decision.eligible ? "Разрешено" : "Заблокировано"}</strong>
-                    {decision.eligible ? <span>{benefitLabel(decision, target)}</span> : <ul>{decision.blockers.map((blocker) => <li key={blocker.code}>{blocker.message}<code>{blocker.code}</code></li>)}</ul>}
+                  <div className={`ms-dev-decision ${decision.eligible ? "allowed" : fullPriceFallback ? "full-price" : "blocked"}`}>
+                    <strong>{decision.eligible ? "По подписке" : fullPriceFallback ? "Без подписки" : "Заблокировано"}</strong>
+                    {decision.eligible
+                      ? <span>{benefitLabel(decision, target)}</span>
+                      : fullPriceFallback && bookingOutcome
+                        ? <span>{fullPriceWithoutSubscriptionLabel(bookingOutcome, target)}</span>
+                        : <ul>{decision.blockers.map((blocker) => <li key={blocker.code}>{blocker.message}<code>{blocker.code}</code></li>)}</ul>}
                   </div>
                 )}
                 <div className="ms-dev-card-actions">
                   <button className="secondary" type="button" onClick={() => void runQuote(target.targetId)} disabled={busyKey !== null}>{busyKey === `quote:${target.targetId}` ? "Проверяем…" : "Проверить"}</button>
-                  <button type="button" onClick={() => void reserve(target)} disabled={busyKey !== null || decision?.eligible !== true}>{busyKey === `reserve:${target.targetId}` ? "Проверяем…" : "Создать browser-only резерв"}</button>
+                  <button type="button" onClick={() => void reserve(target)} disabled={busyKey !== null || bookingOutcome?.allowed !== true}>{busyKey === `reserve:${target.targetId}` ? "Проверяем…" : fullPriceFallback ? fullPriceActionLabel : "Создать browser-only резерв"}</button>
                 </div>
               </article>
             );
@@ -344,7 +379,7 @@ export function HostedSubscriptionUsageTestPage({
       <section className="ms-dev-reservations">
         <div className="ms-dev-section-heading"><div><h2>Резервы этой вкладки</h2><p>Отмена меняет только локальные тестовые счётчики.</p></div><strong>{reservations.length}</strong></div>
         {reservations.length === 0 ? <div className="ms-dev-empty">Browser-only резервов нет.</div> : <div className="ms-dev-reservation-list">{reservations.map((reservation) => (
-          <article key={reservation.reservationId}><div><span>Не отправлен в Viva</span><strong>{reservation.title}</strong><small>{formatDateTime(reservation.startsAt)} · итого {formatMoney(reservation.finalPriceMinor)}</small></div><button className="danger" type="button" onClick={() => release(reservation)}>Отменить локально</button></article>
+          <article key={reservation.reservationId}><div><span>{reservation.subscriptionApplied ? "По подписке" : "Без подписки"} · не отправлен в Viva</span><strong>{reservation.title}</strong><small>{formatDateTime(reservation.startsAt)} · итого {formatMoney(reservation.finalPriceMinor)}</small></div><button className="danger" type="button" onClick={() => release(reservation)}>Отменить локально</button></article>
         ))}</div>}
       </section>
 
