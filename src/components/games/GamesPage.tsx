@@ -116,6 +116,10 @@ import { addGameToCalendar } from "../../utils/calendarEvent";
 import { resolveSubscriptionUsageDisplay } from "../../utils/subscriptionValidity";
 import { A3PayGameCreateDemo } from "./A3PayGameCreateDemo";
 import {
+  SubscriptionUsageShadowPanel,
+  useSubscriptionUsageShadow,
+} from "../subscriptions/SubscriptionUsageShadowPanel";
+import {
   buildA3PayDevVivaBookingSelectionKey,
   cancelA3PayDevVivaBooking,
   createA3PayDevVivaBooking,
@@ -4850,6 +4854,10 @@ export default function GamesPage({
   presetStudioName = null,
   selfLeavePreview = null,
 }: GamesPageProps) {
+  const subscriptionUsageShadow = useSubscriptionUsageShadow();
+  const subscriptionUsageShadowEnabled = subscriptionUsageShadow.enabled;
+  const previewSubscriptionUsageShadow = subscriptionUsageShadow.preview;
+  const rejectSubscriptionUsageShadowAction = subscriptionUsageShadow.reject;
   const isSelfLeavePreviewMode = Boolean(
     selfLeavePreview
     && typeof window !== "undefined"
@@ -6113,6 +6121,7 @@ export default function GamesPage({
   }, [gameRecordId, communityGames]);
 
   useEffect(() => {
+    if (subscriptionUsageShadowEnabled) return;
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
     const paymentRef = url.searchParams.get(PAYMENT_REF_QUERY_KEY)?.trim() || "";
@@ -6338,7 +6347,7 @@ export default function GamesPage({
     return () => {
       alive = false;
     };
-  }, []);
+  }, [subscriptionUsageShadowEnabled]);
 
   const selectedCourt = availableCourts.find((c) => c.id === courtId);
   const selectedCourtName = selectedCourt?.name ?? null;
@@ -8442,6 +8451,14 @@ export default function GamesPage({
       .filter((item): item is { subscriptionId: string; name: string; balanceLabel: string } => Boolean(item))
   ), [detailsSplitSubscriptions, detailsSplitSubscriptionNamesById]);
   const loadDetailsSplitSubscriptions = useCallback(async () => {
+    if (subscriptionUsageShadowEnabled) {
+      detailsSplitSubscriptionRequestRef.current += 1;
+      setDetailsSplitSubscriptionsLoading(false);
+      setDetailsSplitSubscriptionsError(null);
+      setDetailsSplitSubscriptions([]);
+      setDetailsSplitSubscriptionNamesById({});
+      return;
+    }
     const requestId = detailsSplitSubscriptionRequestRef.current + 1;
     detailsSplitSubscriptionRequestRef.current = requestId;
     setDetailsSplitSubscriptionsLoading(true);
@@ -8537,6 +8554,7 @@ export default function GamesPage({
     detailsDurationMinutes,
     detailsSplitPaymentMetadata,
     profilePhone,
+    subscriptionUsageShadowEnabled,
   ]);
   useEffect(() => {
     if (!canCurrentUserJoinSplitGameInDetails) {
@@ -8607,6 +8625,7 @@ export default function GamesPage({
   }, [step]);
 
   useEffect(() => {
+    if (subscriptionUsageShadowEnabled) return;
     if ((step !== "details" && step !== "chat") || !activeGameRecord?.id) return;
     if (!isDetailsSplitPaymentGame) return;
     if (detailsExpiredSplitPendingCleanupKeys.length === 0) return;
@@ -8654,10 +8673,12 @@ export default function GamesPage({
     activeGameRecord?.updatedAt,
     isDetailsSplitPaymentGame,
     detailsExpiredSplitPendingCleanupKeys,
+    subscriptionUsageShadowEnabled,
     upsertGameRecordInStores,
   ]);
 
   useEffect(() => {
+    if (subscriptionUsageShadowEnabled) return;
     if ((step !== "details" && step !== "chat") || !activeGameRecord?.id) return;
     if (isReadOnlySyntheticGame) return;
     if (!detailsNeedsVivaRosterSync) return;
@@ -8843,10 +8864,12 @@ export default function GamesPage({
     detailsMetadata,
     detailsMaxPlayers,
     detailsOrganizerPlayer,
+    subscriptionUsageShadowEnabled,
     upsertGameRecordInStores,
   ]);
 
   useEffect(() => {
+    if (subscriptionUsageShadowEnabled) return;
     if ((step !== "details" && step !== "chat") || !activeGameRecord?.id) return;
     if (!isDetailsSplitPaymentGame || !detailsSplitPaymentMetadata) return;
 
@@ -8908,6 +8931,7 @@ export default function GamesPage({
     detailsOrganizerPayload.phone,
     detailsParticipants,
     detailsWaitlist,
+    subscriptionUsageShadowEnabled,
     upsertGameRecordInStores,
   ]);
 
@@ -10621,6 +10645,10 @@ export default function GamesPage({
     preferredPaymentMode?: "subscription" | "one_time",
     preferredClientSubscriptionId?: string | null,
   ) => {
+    if (subscriptionUsageShadowEnabled) {
+      await previewSubscriptionUsageShadow("CREATE_GAME", duration);
+      return;
+    }
     if (!studioId || !selectedDate || !courtId || !time || !selectedSlotId) return;
     if (!validateGamePublicationFields()) return;
     if (!splitPaymentAvailable) {
@@ -11068,9 +11096,15 @@ export default function GamesPage({
     resolveCurrentClientProfile,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
+    previewSubscriptionUsageShadow,
+    subscriptionUsageShadowEnabled,
   ]);
 
   const handleMasterServicePay = useCallback(async () => {
+    if (subscriptionUsageShadowEnabled) {
+      await previewSubscriptionUsageShadow("CREATE_GAME", duration);
+      return;
+    }
     if (!studioId || !selectedDate || !courtId || !time || !selectedSlotId) return;
     if (!validateGamePublicationFields()) return;
 
@@ -11422,11 +11456,16 @@ export default function GamesPage({
     resolveCurrentClientProfile,
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
+    previewSubscriptionUsageShadow,
+    subscriptionUsageShadowEnabled,
   ]);
 
   const handleA3PayDevVivaBookingCreate = useCallback(async (
     operationId: string,
   ): Promise<A3PayDevVivaBookingResult> => {
+    if (subscriptionUsageShadowEnabled) {
+      return { data: null, error: "Viva-бронирование отключено в DEV-shadow", status: 409 };
+    }
     if (!IS_DEV_RELEASE_CHANNEL || !a3PayDevVivaSelection) {
       return { data: null, error: "Выберите станцию, корт и время", status: 400 };
     }
@@ -11440,6 +11479,7 @@ export default function GamesPage({
   }, [
     a3PayDevVivaSelection,
     revalidateSelectedSlotForPayment,
+    subscriptionUsageShadowEnabled,
     validateGamePublicationFields,
   ]);
 
@@ -11452,6 +11492,10 @@ export default function GamesPage({
   ), []);
 
   const handleCreateSubmit = useCallback(() => {
+    if (subscriptionUsageShadowEnabled) {
+      void previewSubscriptionUsageShadow("CREATE_GAME", duration);
+      return;
+    }
     if (splitPaymentSelected) {
       if (splitCheckoutMode === "subscription" && splitHasSubscriptionPaymentOptions) {
         if (splitHasSubscriptionPaymentOptions && !selectedSplitSubscriptionId) {
@@ -11472,6 +11516,9 @@ export default function GamesPage({
     selectedSplitSubscriptionId,
     handleSplitGamePay,
     handleMasterServicePay,
+    duration,
+    previewSubscriptionUsageShadow,
+    subscriptionUsageShadowEnabled,
   ]);
 
   useEffect(() => {
@@ -11736,6 +11783,13 @@ export default function GamesPage({
 
   const handleCreateGame = () => {
     if (loadingPay) return;
+    if (subscriptionUsageShadowEnabled) {
+      void previewSubscriptionUsageShadow(
+        "CREATE_GAME",
+        isBookingPresetMode ? bookingPreset.durationMinutes : duration,
+      );
+      return;
+    }
     if (!validateGamePublicationFields()) return;
 
     if (isBookingPresetMode) {
@@ -13454,6 +13508,7 @@ export default function GamesPage({
   ]);
 
   useEffect(() => {
+    if (subscriptionUsageShadowEnabled) return;
     if (!gameRecordId) return;
     if (!isMatchResultPendingReview) return;
     if (detailsMatchResultDisputeTimeLeftMs == null || detailsMatchResultDisputeTimeLeftMs > 0) return;
@@ -13484,6 +13539,7 @@ export default function GamesPage({
     gameRecordId,
     isMatchResultPendingReview,
     setGameDetailsMetaError,
+    subscriptionUsageShadowEnabled,
     updatingGameMeta,
   ]);
 
@@ -13765,6 +13821,12 @@ export default function GamesPage({
   ]);
 
   const handleLeaveCurrentUserFromDetails = useCallback(async () => {
+    if (subscriptionUsageShadowEnabled) {
+      rejectSubscriptionUsageShadowAction(
+        "Выход из игры отключён: DEV-shadow не изменяет реальные записи.",
+      );
+      return;
+    }
     if (!canCurrentUserLeaveGameInDetails || !gameRecordId) return;
 
     const currentPlayerFromRoster =
@@ -13898,12 +13960,18 @@ export default function GamesPage({
     leaveCurrentUserRequest,
     isSelfLeavePreviewMode,
     onBack,
+    rejectSubscriptionUsageShadowAction,
+    subscriptionUsageShadowEnabled,
   ]);
 
   const handleSplitJoinCurrentUserFromDetails = useCallback(async (
     preferredPaymentMode: "subscription" | "one_time",
     preferredClientSubscriptionId?: string | null,
   ) => {
+    if (subscriptionUsageShadowEnabled) {
+      await previewSubscriptionUsageShadow("JOIN_GAME", detailsDurationMinutes);
+      return;
+    }
     if (!canCurrentUserJoinSplitGameInDetails || !gameRecordId || !activeGameRecord) return;
     if (joiningSplitPayment) return;
 
@@ -14553,9 +14621,16 @@ export default function GamesPage({
     profileGrade,
     profileRatingNumeric,
     patchGameRoster,
+    detailsDurationMinutes,
+    previewSubscriptionUsageShadow,
+    subscriptionUsageShadowEnabled,
   ]);
 
   const handleJoinCurrentUserFromDetails = useCallback(async () => {
+    if (subscriptionUsageShadowEnabled) {
+      await previewSubscriptionUsageShadow("JOIN_GAME", detailsDurationMinutes);
+      return;
+    }
     if (!canCurrentUserJoinGameInDetails || !gameRecordId) return;
 
     const normalizedProfileId = (profileId || "").trim() || null;
@@ -14672,6 +14747,9 @@ export default function GamesPage({
     buildDetailsRosterMetadata,
     patchGameRoster,
     upsertGameRecordInStores,
+    detailsDurationMinutes,
+    previewSubscriptionUsageShadow,
+    subscriptionUsageShadowEnabled,
   ]);
 
   const handleOpenCabinetFromDetails = useCallback(() => {
@@ -16826,9 +16904,28 @@ export default function GamesPage({
             </div>
           )}
 
+          {!isCurrentUserConfirmedParticipant
+            && !isCurrentUserOrganizerByDetails
+            && subscriptionUsageShadowEnabled && (
+            <SubscriptionUsageShadowPanel controller={subscriptionUsageShadow} />
+          )}
+
           {!isCurrentUserConfirmedParticipant && !isCurrentUserOrganizerByDetails && (
             <div className="details-action-row details-join-action-row">
-              {isDetailsSplitPaymentGame ? (
+              {subscriptionUsageShadowEnabled ? (
+                <button
+                  className="section-cta"
+                  type="button"
+                  onClick={() => {
+                    void previewSubscriptionUsageShadow("JOIN_GAME", detailsDurationMinutes);
+                  }}
+                  disabled={subscriptionUsageShadow.busy}
+                >
+                  {subscriptionUsageShadow.busy
+                    ? "Проверяем ограничения..."
+                    : "Проверить присоединение без записи"}
+                </button>
+              ) : isDetailsSplitPaymentGame ? (
                 detailsCurrentUserPendingSplitPayment && !detailsCurrentUserPendingSplitPaymentIsExpired ? (
                   <div className="game-join-split-pay-actions">
                     <div className="game-empty">
@@ -17623,6 +17720,7 @@ export default function GamesPage({
 
         {showInlinePaymentSection && (
           <div className="game-payment-stack">
+            <SubscriptionUsageShadowPanel controller={subscriptionUsageShadow} />
             {splitPaymentAvailable && splitPaymentSelected && !usePublicCreateWizard && (
               <div className="game-split-payment-panel">
                 <div className="game-split-payment-summary">
@@ -17643,7 +17741,10 @@ export default function GamesPage({
                           void handleSplitGamePay("subscription", option.subscriptionId);
                         }}
                         type="button"
-                        disabled={!canProceedToPayment || loadingPay || splitSubscriptionsLoading}
+                        disabled={!canProceedToPayment
+                          || loadingPay
+                          || splitSubscriptionsLoading
+                          || subscriptionUsageShadow.busy}
                       >
                         <span>{`Списать с «${option.name}»`}</span>
                         <strong>{option.balanceLabel}</strong>
@@ -17658,8 +17759,12 @@ export default function GamesPage({
                 )
             )}
             <button
-              className={`game-submit game-submit-booking game-submit-inline ${canProceedToPayment ? "active" : ""}`}
+              className={`game-submit game-submit-booking game-submit-inline ${canProceedToPayment && !subscriptionUsageShadow.busy ? "active" : ""}`}
               onClick={() => {
+                if (subscriptionUsageShadowEnabled) {
+                  handleCreateSubmit();
+                  return;
+                }
                 if (usePublicCreateWizard) {
                   handleCreateSubmit();
                   return;
@@ -17671,15 +17776,22 @@ export default function GamesPage({
                 }
               }}
               type="button"
-              disabled={!canProceedToPayment || loadingPay || publicCreateNeedsSplitSubscriptionSelection}
+              disabled={!canProceedToPayment
+                || loadingPay
+                || subscriptionUsageShadow.busy
+                || (!subscriptionUsageShadowEnabled && publicCreateNeedsSplitSubscriptionSelection)}
             >
               <span className="game-submit-main">
-                {usePublicCreateWizard ? publicCreateFinalSubmitTitle : paymentSubmitTitle}
+                {subscriptionUsageShadowEnabled
+                  ? subscriptionUsageShadow.busy
+                    ? "Проверяем ограничения..."
+                    : "Проверить создание без бронирования"
+                  : usePublicCreateWizard ? publicCreateFinalSubmitTitle : paymentSubmitTitle}
               </span>
               <span className="game-submit-meta">{paymentStationCourt}</span>
               <span className="game-submit-meta">{paymentTimeRange}</span>
             </button>
-            {IS_DEV_RELEASE_CHANNEL && (
+            {IS_DEV_RELEASE_CHANNEL && !subscriptionUsageShadowEnabled && (
               <A3PayGameCreateDemo
                 amountLabel={a3PayDemoAmountLabel}
                 canCreateBooking={Boolean(a3PayDevVivaSelection) && canProceedToPayment}
@@ -17691,7 +17803,7 @@ export default function GamesPage({
                 timeRange={paymentTimeRange}
               />
             )}
-            {!splitPaymentSelected && (
+            {!subscriptionUsageShadowEnabled && !splitPaymentSelected && (
               <>
                 <button
                   className={`game-promo-trigger ${promoCodeApplied ? "applied" : ""}`}

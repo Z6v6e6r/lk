@@ -98,6 +98,7 @@ import {
   isExerciseConvertibleToGameFromBooking,
   resolveExerciseCategoryFromValue,
 } from "../../utils/exerciseCategory";
+import { appendSubscriptionUsageShadowToSameOriginUrl } from "../subscriptions/subscriptionUsageShadow";
 
 const SHOW_COLLECT_FRIENDS_BUTTON = false;
 const GROUP_TRAININGS_URL = "https://padlhub.ru/group";
@@ -648,11 +649,15 @@ function normalizePublicGamesUrl(value: string | null | undefined): string | nul
     }
 
     if (!isLocalHostname(parsed.hostname)) {
-      return appendCurrentAuthModeToNavigableUrl(parsed).toString();
+      return appendCurrentAuthModeToNavigableUrl(
+        appendSubscriptionUsageShadowToSameOriginUrl(parsed, current),
+      ).toString();
     }
     const publicOrigin = resolvePublicGamesOrigin(current);
     const normalized = new URL(`${parsed.pathname}${parsed.search}${parsed.hash}`, publicOrigin);
-    return appendCurrentAuthModeToNavigableUrl(normalized).toString();
+    return appendCurrentAuthModeToNavigableUrl(
+      appendSubscriptionUsageShadowToSameOriginUrl(normalized, current),
+    ).toString();
   } catch {
     return raw;
   }

@@ -36,6 +36,7 @@ import { addGameToCalendar } from "../../utils/calendarEvent";
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
 import { Modal } from "../UI/Modal";
 import { SummerSubscriptionGallery } from "../UI/SummerSubscriptionGallery";
+import { appendSubscriptionUsageShadowToSameOriginUrl } from "../subscriptions/subscriptionUsageShadow";
 
 interface FindGamePageProps {
   onBack?: () => void;
@@ -711,6 +712,15 @@ function buildFindGameReturnUrl(fallbackUrl: string): string {
   }
 }
 
+function appendCurrentSubscriptionUsageShadow(url: URL): URL {
+  if (typeof window === "undefined") return url;
+  try {
+    return appendSubscriptionUsageShadowToSameOriginUrl(url, new URL(window.location.href));
+  } catch {
+    return url;
+  }
+}
+
 function normalizePadlHubInviteOrigin(url: URL): URL {
   if (url.hostname !== "padlhub.su") return url;
   const normalized = new URL(url.toString());
@@ -1201,14 +1211,20 @@ export default function FindGamePage({
     if (isDevCabinetUrl(resolvedCabinetUrl)) {
       url.searchParams.set("channel", "dev");
     }
-    return appendCurrentAuthModeToNavigableUrl(url).toString();
+    return appendCurrentAuthModeToNavigableUrl(
+      appendCurrentSubscriptionUsageShadow(url),
+    ).toString();
   }, [cabinetUrl, presetStudioId, presetStudioName]);
 
   const buildJoinUrl = useCallback((game: PadelGameRecord) => {
     const normalizedInvite = normalizeUrl(game.inviteUrl);
     if (normalizedInvite) {
       try {
-        return appendCurrentAuthModeToNavigableUrl(new URL(normalizedInvite)).toString();
+        const url = new URL(normalizedInvite);
+        if (IS_DEV_RELEASE_CHANNEL) url.searchParams.set("channel", "dev");
+        return appendCurrentAuthModeToNavigableUrl(
+          appendCurrentSubscriptionUsageShadow(url),
+        ).toString();
       } catch {
         return appendCurrentAuthModeToNavigableUrl(normalizedInvite).toString();
       }
@@ -1220,7 +1236,12 @@ export default function FindGamePage({
     if (resolvedCabinetUrl) {
       url.searchParams.set("cabinetUrl", resolvedCabinetUrl);
     }
-    return appendCurrentAuthModeToNavigableUrl(url).toString();
+    if (isDevCabinetUrl(resolvedCabinetUrl) || IS_DEV_RELEASE_CHANNEL) {
+      url.searchParams.set("channel", "dev");
+    }
+    return appendCurrentAuthModeToNavigableUrl(
+      appendCurrentSubscriptionUsageShadow(url),
+    ).toString();
   }, [cabinetUrl]);
 
   const buildGroupTrainingUrl = useCallback((training: GroupTrainingSummary) => {
@@ -1250,8 +1271,12 @@ export default function FindGamePage({
       onBack();
       return;
     }
-    window.location.href = appendCurrentAuthModeToNavigableUrl(
+    const target = new URL(
       String(cabinetUrl || DEFAULT_CABINET_URL || "/lk_new"),
+      window.location.origin,
+    );
+    window.location.href = appendCurrentAuthModeToNavigableUrl(
+      appendCurrentSubscriptionUsageShadow(target),
     ).toString();
   }, [cabinetUrl, onBack]);
 

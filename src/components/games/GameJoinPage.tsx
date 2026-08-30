@@ -57,6 +57,10 @@ import {
 } from "../../utils/subscriptionCategoryDailyLimit";
 import { resolveSplitPromoShareAmount } from "./splitPromoPricing";
 import { createLocalMembershipId } from "./localMembershipGeneration";
+import {
+  SubscriptionUsageShadowPanel,
+  useSubscriptionUsageShadow,
+} from "../subscriptions/SubscriptionUsageShadowPanel";
 
 type JoinDecision = "JOINED" | "WAITLIST" | "DECLINED" | "NONE";
 
@@ -768,6 +772,10 @@ function buildCabinetHomeUrl(cabinetUrl: string | null | undefined): string {
 }
 
 export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL }: GameJoinPageProps) {
+  const subscriptionUsageShadow = useSubscriptionUsageShadow();
+  const subscriptionUsageShadowEnabled = subscriptionUsageShadow.enabled;
+  const previewSubscriptionUsageShadow = subscriptionUsageShadow.preview;
+  const rejectSubscriptionUsageShadowAction = subscriptionUsageShadow.reject;
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [game, setGame] = useState<PadelGameRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -864,6 +872,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   }, [game, splitPaymentPromoConfig]);
 
   useEffect(() => {
+    if (subscriptionUsageShadowEnabled) return;
     if (!game || !profile) return;
 
     const exerciseId = resolveGameExerciseId(game);
@@ -945,7 +954,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
     return () => {
       alive = false;
     };
-  }, [game, profile]);
+  }, [game, profile, subscriptionUsageShadowEnabled]);
 
   const myDecision = useMemo(() => resolveMyDecision(game, profile), [game, profile]);
   const statusLabel = useMemo(() => {
@@ -962,6 +971,12 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   }, [game, myDecision]);
 
   const loadSplitSubscriptionOptions = useCallback(async () => {
+    if (subscriptionUsageShadowEnabled) {
+      setSplitSubscriptionsLoading(false);
+      setSplitSubscriptionsError(null);
+      setSplitSubscriptionOptions([]);
+      return;
+    }
     if (!game || !profile || !isSplitPaymentGame(game) || myDecision === "JOINED") {
       setSplitSubscriptionsLoading(false);
       setSplitSubscriptionsError(null);
@@ -1034,7 +1049,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
     } finally {
       setSplitSubscriptionsLoading(false);
     }
-  }, [game, myDecision, profile]);
+  }, [game, myDecision, profile, subscriptionUsageShadowEnabled]);
 
   useEffect(() => {
     void loadSplitSubscriptionOptions();
@@ -1042,6 +1057,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
 
   const confirmSplitJoinPayment = useCallback(
     async (paymentRef: string) => {
+      if (subscriptionUsageShadowEnabled) return;
       if (!game || !profile || !isSplitPaymentGame(game)) return;
 
       const myPhoneNorm = normalizePhone(profile.phone);
@@ -1182,7 +1198,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       setConfirmingSplitPaymentRef(null);
       window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
     },
-    [cabinetUrl, game, profile],
+    [cabinetUrl, game, profile, subscriptionUsageShadowEnabled],
   );
 
   useEffect(() => {
@@ -1207,6 +1223,16 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       explicitSplitPaymentMode?: "subscription" | "one_time",
       explicitClientSubscriptionId?: string | null,
     ) => {
+      if (subscriptionUsageShadowEnabled) {
+        if (target === "decline") {
+          rejectSubscriptionUsageShadowAction(
+            "Выход из игры отключён: DEV-shadow не изменяет реальные записи.",
+          );
+          return;
+        }
+        await previewSubscriptionUsageShadow("JOIN_GAME", game?.booking?.durationMinutes);
+        return;
+      }
       if (!game || !profile) {
         setDecisionError("Не удалось определить профиль или игру");
         return;
@@ -1847,7 +1873,17 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       setSubmitting(null);
       window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
     },
-    [cabinetUrl, comment, game, preferredSplitPaymentMode, profile, splitPaymentPromoConfig],
+    [
+      cabinetUrl,
+      comment,
+      game,
+      preferredSplitPaymentMode,
+      previewSubscriptionUsageShadow,
+      profile,
+      rejectSubscriptionUsageShadowAction,
+      splitPaymentPromoConfig,
+      subscriptionUsageShadowEnabled,
+    ],
   );
 
   if (loading) {
@@ -1893,8 +1929,12 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const splitPaymentGame = isSplitPaymentGame(game);
   const splitShareAmount = resolvedSplitPromoShareAmount ?? getSplitShareAmount(game);
   const splitShareCount = getSplitShareCount(game) ?? (resolveMaxPlayers(game) <= DEFAULT_SINGLES_MAX_PLAYERS ? 2 : 4);
-  const canPrimaryAction = submitting === null && !confirmingSplitPaymentRef;
-  const canDecline = submitting === null && !confirmingSplitPaymentRef;
+  const canPrimaryAction = submitting === null
+    && !confirmingSplitPaymentRef
+    && !subscriptionUsageShadow.busy;
+  const canDecline = submitting === null
+    && !confirmingSplitPaymentRef
+    && !subscriptionUsageShadow.busy;
   const splitJoinOneTimeLabel =
     submitting === "join"
       ? "Готовим оплату..."
@@ -1960,8 +2000,23 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         </div>
       )}
 
+      <SubscriptionUsageShadowPanel controller={subscriptionUsageShadow} />
+
       <div className="game-section game-join-actions">
-        {splitPaymentGame && !alreadyJoined ? (
+        {subscriptionUsageShadowEnabled ? (
+          <button
+            className="section-cta"
+            type="button"
+            disabled={!canPrimaryAction}
+            onClick={() => {
+              void applyDecision("join");
+            }}
+          >
+            {subscriptionUsageShadow.busy
+              ? "Проверяем ограничения..."
+              : "Проверить присоединение без записи"}
+          </button>
+        ) : splitPaymentGame && !alreadyJoined ? (
           <div className="game-join-split-pay-actions">
             {splitSubscriptionsLoading && (
               <div className="game-empty">Проверяем доступные абонементы...</div>
@@ -2042,7 +2097,9 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
             void applyDecision("decline");
           }}
         >
-          {submitting === "decline" ? "Сохраняем..." : "Выйти"}
+          {subscriptionUsageShadowEnabled
+            ? "Выход отключён в DEV-shadow"
+            : submitting === "decline" ? "Сохраняем..." : "Выйти"}
         </button>
       </div>
     </div>

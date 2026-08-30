@@ -1599,3 +1599,19 @@
   remain caller-owned without granting the build container host-root ownership.
 - This is a source-only CI correction: product flows, Node-RED production, provider
   state, runtime permissions and deployment paths were not changed or executed.
+
+## 2026-08-30 — Ordinary LK DEV managed-subscription shadow
+
+- Added a DEV-only, explicit-query shadow for the ordinary LK create and join screens.
+  It quotes annual-subscription limits and discounts without booking, joining, paying,
+  debiting, or calling provider write endpoints.
+- The shadow models one free hour per day, a 1/4 player share, 30% discount for paid
+  game time, and full-price fallback when active-service or future-booking benefits are
+  exhausted. Fragment credentials propagate only to same-origin LK routes.
+- Guarded create, join, payment-recovery, roster-reconciliation, participant-cleanup,
+  and related repair paths while the shadow is active. Production behavior remains
+  unchanged unless the DEV release channel and explicit `subscriptionShadow=1` gate
+  are both present.
+- Verified the source contract with 34 focused tests, TypeScript, lint, DEV builds, and
+  desktop/mobile browser inspection. No branch push, merge, deployment, provider write,
+  booking, payment, or live data mutation was performed.

@@ -6205,6 +6205,124 @@ h6,
   padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
 }
 
+.subscription-usage-shadow {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #6f5df2;
+  border-radius: 16px;
+  color: #2f0d26;
+  background: linear-gradient(145deg, #f6f3ff 0%, #f1fff2 100%);
+  box-shadow: 0 10px 28px rgba(74, 0, 47, 0.08);
+}
+
+.subscription-usage-shadow__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.subscription-usage-shadow__header > div,
+.subscription-usage-shadow__result {
+  display: grid;
+  gap: 5px;
+}
+
+.subscription-usage-shadow__header strong {
+  font-size: 15px;
+}
+
+.subscription-usage-shadow__header span,
+.subscription-usage-shadow__status > span,
+.subscription-usage-shadow__result span,
+.subscription-usage-shadow__result small {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.subscription-usage-shadow__badge {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  border-radius: 999px;
+  color: #205b28;
+  background: #b8ffb3;
+  font-size: 10px !important;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.subscription-usage-shadow__controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.subscription-usage-shadow__controls label {
+  display: grid;
+  gap: 6px;
+  color: #6f5868;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.subscription-usage-shadow__controls select {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid #b6a9c3;
+  border-radius: 10px;
+  color: #2f0d26;
+  background: #fff;
+  font: inherit;
+}
+
+.subscription-usage-shadow__controls select:focus-visible {
+  outline: 3px solid rgba(111, 93, 242, 0.3);
+  outline-offset: 2px;
+}
+
+.subscription-usage-shadow__result {
+  padding: 12px;
+  border-radius: 12px;
+}
+
+.subscription-usage-shadow__result--subscription {
+  border: 1px solid #62b86b;
+  color: #205b28;
+  background: #effbef;
+}
+
+.subscription-usage-shadow__result--full-price {
+  border: 1px solid #d8a245;
+  color: #70450e;
+  background: #fff8e7;
+}
+
+.subscription-usage-shadow__result--blocked {
+  border: 1px solid #de6572;
+  color: #8c2330;
+  background: #fff1f3;
+}
+
+.subscription-usage-shadow__result small {
+  opacity: 0.75;
+}
+
+@media (max-width: 520px) {
+  .subscription-usage-shadow__header {
+    display: grid;
+  }
+
+  .subscription-usage-shadow__badge {
+    justify-self: start;
+  }
+
+  .subscription-usage-shadow__controls {
+    grid-template-columns: 1fr;
+  }
+}
+
 .game-split-payment-panel {
   display: flex;
   flex-direction: column;
