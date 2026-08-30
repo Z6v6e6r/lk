@@ -16,6 +16,7 @@ const EVALUATED_AT = "2026-08-15T10:00:00.000Z";
 const TESTER_REF = "synthetic-3190";
 const TESTER_LABEL = "+7 ••• •••-31-90";
 const DEFAULT_CUP_BASE_URL = "http://127.0.0.1:3010";
+const DEFAULT_TOURNAMENT_READ_BASE_URL = "https://lk-reserve.89-108-64-209.sslip.io/api";
 const DEFAULT_TYPE_CODE = "annual-dev-ac6396e";
 const MAX_BODY_BYTES = 16_384;
 
@@ -90,15 +91,29 @@ interface SubscriptionUsageShadowGameIntent {
   gameId: string;
 }
 
+interface SubscriptionUsageShadowEventIntent {
+  targetKind: "EVENT_AGGREGATE";
+  eventId: string;
+}
+
 type SubscriptionUsageShadowIntent =
   | SubscriptionUsageShadowNewGameIntent
-  | SubscriptionUsageShadowGameIntent;
+  | SubscriptionUsageShadowGameIntent
+  | SubscriptionUsageShadowEventIntent;
 
 interface SubscriptionUsageShadowJoinFixture {
   stationId: string;
   startsAt: string;
   durationMinutes: 60 | 90 | 120;
   courtPriceMinor: number;
+}
+
+interface SubscriptionUsageShadowEventFixture {
+  action: "BOOK_GROUP_TRAINING" | "BOOK_TOURNAMENT";
+  stationId: string;
+  startsAt: string;
+  durationMinutes: 60 | 90 | 120;
+  basePriceMinor: number;
 }
 
 interface OperationReplay {
@@ -321,25 +336,57 @@ export const buildAnnualShadowPolicySource = (stationIds: string[]): PolicySourc
       selector: { kind: "ALL_STATIONS", stationIds: [] },
       surcharge: { kind: "NONE", amountMinor: 0 },
     }],
-    benefitRules: [60, 90, 120].map((durationMinutes) => ({
-      ruleId: `annual-shadow-game-${durationMinutes}`,
-      enabled: true,
-      category: "GAME",
-      actions: ["CREATE_GAME", "JOIN_GAME"],
-      externalEventTypeIds: ["dev-open-game"],
-      productTypeIds: [],
-      durationMinutes: [durationMinutes],
-      stationIds,
-      kind: durationMinutes === 60 ? "FREE_ENTITLEMENT" : "PARTIAL_PRICE_PERCENT_DISCOUNT",
-      valueMinor: null,
-      percentage: durationMinutes === 60 ? null : 30,
-      partialPrice: durationMinutes === 90
-        ? { numerator: 1, denominator: 3 }
-        : durationMinutes === 120
-          ? { numerator: 1, denominator: 2 }
-          : null,
-      priority: 100,
-    })),
+    benefitRules: [
+      ...[60, 90, 120].map((durationMinutes) => ({
+        ruleId: `annual-shadow-game-${durationMinutes}`,
+        enabled: true,
+        category: "GAME",
+        actions: ["CREATE_GAME", "JOIN_GAME"],
+        externalEventTypeIds: ["dev-open-game"],
+        productTypeIds: [],
+        durationMinutes: [durationMinutes],
+        stationIds,
+        kind: durationMinutes === 60 ? "FREE_ENTITLEMENT" : "PARTIAL_PRICE_PERCENT_DISCOUNT",
+        valueMinor: null,
+        percentage: durationMinutes === 60 ? null : 30,
+        partialPrice: durationMinutes === 90
+          ? { numerator: 1, denominator: 3 }
+          : durationMinutes === 120
+            ? { numerator: 1, denominator: 2 }
+            : null,
+        priority: 100,
+      })),
+      {
+        ruleId: "annual-shadow-group-training-50",
+        enabled: true,
+        category: "GROUP_TRAINING",
+        actions: ["BOOK_GROUP_TRAINING"],
+        externalEventTypeIds: ["dev-group-training"],
+        productTypeIds: [],
+        durationMinutes: [60, 90, 120],
+        stationIds,
+        kind: "PERCENT_DISCOUNT",
+        valueMinor: null,
+        percentage: 50,
+        partialPrice: null,
+        priority: 100,
+      },
+      {
+        ruleId: "annual-shadow-tournament-50",
+        enabled: true,
+        category: "TOURNAMENT",
+        actions: ["BOOK_TOURNAMENT"],
+        externalEventTypeIds: ["dev-tournament"],
+        productTypeIds: [],
+        durationMinutes: [60, 90, 120],
+        stationIds,
+        kind: "PERCENT_DISCOUNT",
+        valueMinor: null,
+        percentage: 50,
+        partialPrice: null,
+        priority: 100,
+      },
+    ],
     capabilities: {
       lifecycle: { allowBookingsAfterExpiry: false },
       usage: {
@@ -1037,6 +1084,72 @@ const sendJson = (response: ServerResponse, status: number, payload: unknown) =>
   response.end(JSON.stringify(payload));
 };
 
+export const buildTournamentReadUpstreamUrl = (
+  requestUrl: URL,
+  baseUrlRaw?: string,
+): URL => {
+  const prefix = `${API_PREFIX}/tournament-read`;
+  const relativePath = requestUrl.pathname.slice(prefix.length);
+  if (!/^\/tournaments(?:\/[a-zA-Z0-9-]{1,64})?$/.test(relativePath)) {
+    throw new DevRuntimeError(
+      404,
+      "DEV_TOURNAMENT_READ_PATH_DENIED",
+      "DEV read-прокси разрешает только список и детали турнира",
+    );
+  }
+  const allowedQueryKeys = new Set(["date", "from", "to"]);
+  if ([...requestUrl.searchParams.keys()].some((key) => !allowedQueryKeys.has(key))) {
+    throw new DevRuntimeError(
+      400,
+      "DEV_TOURNAMENT_READ_QUERY_DENIED",
+      "DEV read-прокси отклонил небезопасный параметр турнира",
+    );
+  }
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(baseUrlRaw || DEFAULT_TOURNAMENT_READ_BASE_URL);
+  } catch {
+    throw new DevRuntimeError(503, "DEV_TOURNAMENT_READ_BASE_INVALID", "DEV read-прокси настроен неверно");
+  }
+  if (baseUrl.protocol !== "https:"
+    || baseUrl.origin !== "https://lk-reserve.89-108-64-209.sslip.io"
+    || baseUrl.pathname.replace(/\/+$/, "") !== "/api"
+    || baseUrl.search
+    || baseUrl.hash) {
+    throw new DevRuntimeError(
+      503,
+      "DEV_TOURNAMENT_READ_BASE_DENIED",
+      "DEV read-прокси не относится к изолированному backend",
+    );
+  }
+  const upstreamUrl = new URL(`${baseUrl.origin}/api${relativePath}`);
+  requestUrl.searchParams.forEach((value, key) => upstreamUrl.searchParams.set(key, value));
+  return upstreamUrl;
+};
+
+const proxyTournamentRead = async (
+  requestUrl: URL,
+  response: ServerResponse,
+  baseUrlRaw: string | undefined,
+) => {
+  const upstreamUrl = buildTournamentReadUpstreamUrl(requestUrl, baseUrlRaw);
+  const upstream = await fetch(upstreamUrl, {
+    method: "GET",
+    headers: {
+      "X-PadlHub-Auth-Source": "lk-keycloak",
+      "X-PadlHub-Tenant-Key": "iSkq6G",
+    },
+    signal: AbortSignal.timeout(5_000),
+  });
+  let payload: unknown;
+  try {
+    payload = await upstream.json();
+  } catch {
+    throw new DevRuntimeError(502, "DEV_TOURNAMENT_READ_RESPONSE_INVALID", "DEV backend вернул неверный ответ");
+  }
+  sendJson(response, upstream.status, payload);
+};
+
 const assertLocalOrigin = (request: IncomingMessage) => {
   const origin = String(request.headers.origin || "");
   if (origin && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) {
@@ -1092,6 +1205,47 @@ const parseShadowJoinFixtures = (
   }
 };
 
+const parseShadowEventFixtures = (
+  value: unknown,
+): Map<string, SubscriptionUsageShadowEventFixture> => {
+  if (!value) return new Map();
+  try {
+    const parsed = asRecord(JSON.parse(String(value)));
+    const fixtures = new Map<string, SubscriptionUsageShadowEventFixture>();
+    for (const [eventId, rawFixture] of Object.entries(parsed)) {
+      const fixture = asRecord(rawFixture);
+      const action = String(fixture.action || "").trim();
+      const stationId = String(fixture.stationId || "").trim();
+      const startsAt = String(fixture.startsAt || "").trim();
+      const durationMinutes = Number(fixture.durationMinutes);
+      const basePriceMinor = Number(fixture.basePriceMinor);
+      if (!eventId.trim()
+        || !(["BOOK_GROUP_TRAINING", "BOOK_TOURNAMENT"] as string[]).includes(action)
+        || !stationId
+        || !Number.isFinite(Date.parse(startsAt))
+        || ![60, 90, 120].includes(durationMinutes)
+        || !Number.isInteger(basePriceMinor)
+        || basePriceMinor <= 0) {
+        throw new Error(`invalid fixture ${eventId}`);
+      }
+      fixtures.set(eventId.trim(), {
+        action: action as SubscriptionUsageShadowEventFixture["action"],
+        stationId,
+        startsAt,
+        durationMinutes: durationMinutes as 60 | 90 | 120,
+        basePriceMinor,
+      });
+    }
+    return fixtures;
+  } catch {
+    throw new DevRuntimeError(
+      503,
+      "DEV_SHADOW_EVENT_CATALOG_INVALID",
+      "Серверный fixture-каталог событий настроен некорректно",
+    );
+  }
+};
+
 const shadowCreateFixtureKey = (intent: SubscriptionUsageShadowNewGameIntent): string => [
   intent.stationId.trim(),
   intent.roomId.trim(),
@@ -1125,12 +1279,14 @@ export const resolveShadowIntent = ({
   action,
   intent,
   createFixtures = new Map(),
+  eventFixtures = new Map(),
   stationIds,
   joinFixtures,
 }: {
   action: ManagedSubscriptionAction;
   intent: SubscriptionUsageShadowIntent;
   createFixtures?: Map<string, number>;
+  eventFixtures?: Map<string, SubscriptionUsageShadowEventFixture>;
   stationIds: string[];
   joinFixtures: Map<string, SubscriptionUsageShadowJoinFixture>;
 }): ManagedSubscriptionDevTarget => {
@@ -1190,6 +1346,29 @@ export const resolveShadowIntent = ({
     durationMinutes = fixture.durationMinutes;
     courtPriceMinor = fixture.courtPriceMinor;
     targetId = `server-game:${stableDigest(gameId).slice(0, 24)}`;
+  } else if ((action === "BOOK_GROUP_TRAINING" || action === "BOOK_TOURNAMENT")
+    && intent.targetKind === "EVENT_AGGREGATE") {
+    const eventId = String(intent.eventId || "").trim();
+    const fixture = eventFixtures.get(eventId);
+    if (!eventId || !fixture) {
+      throw new DevRuntimeError(
+        404,
+        "DEV_SHADOW_EVENT_NOT_RESOLVED",
+        "Событие не найдено в серверном DEV-каталоге",
+      );
+    }
+    if (fixture.action !== action) {
+      throw new DevRuntimeError(
+        400,
+        "DEV_SHADOW_EVENT_ACTION_MISMATCH",
+        "Серверный fixture события не соответствует выбранному действию",
+      );
+    }
+    stationId = fixture.stationId;
+    startsAt = fixture.startsAt;
+    durationMinutes = fixture.durationMinutes;
+    courtPriceMinor = fixture.basePriceMinor;
+    targetId = `server-event:${stableDigest({ action, eventId }).slice(0, 24)}`;
   } else {
     throw new DevRuntimeError(
       400,
@@ -1205,26 +1384,40 @@ export const resolveShadowIntent = ({
       "Станция не включена в серверный DEV fixture",
     );
   }
-  const playerPriceMinor = Math.round(courtPriceMinor / 4);
+  const isGameAction = action === "CREATE_GAME" || action === "JOIN_GAME";
+  const basePriceMinor = isGameAction ? Math.round(courtPriceMinor / 4) : courtPriceMinor;
+  const title = action === "CREATE_GAME"
+    ? `Создать игру на ${durationMinutes} минут`
+    : action === "JOIN_GAME"
+      ? `Присоединиться к игре на ${durationMinutes} минут`
+      : action === "BOOK_GROUP_TRAINING"
+        ? "Записаться на групповую тренировку"
+        : "Записаться на турнир";
   return {
     targetId,
-    title: action === "CREATE_GAME"
-      ? `Создать игру на ${durationMinutes} минут`
-      : `Присоединиться к игре на ${durationMinutes} минут`,
+    title,
     description: "Цена и цель разрешены локальным серверным fixture-каталогом",
     action,
     courtPriceMinor,
-    participantCount: 4,
+    participantCount: isGameAction ? 4 : undefined,
     target: {
       resolutionSource: "SERVER",
       stationId,
-      category: "GAME",
-      externalEventTypeId: "dev-open-game",
+      category: action === "BOOK_GROUP_TRAINING"
+        ? "GROUP_TRAINING"
+        : action === "BOOK_TOURNAMENT"
+          ? "TOURNAMENT"
+          : "GAME",
+      externalEventTypeId: action === "BOOK_GROUP_TRAINING"
+        ? "dev-group-training"
+        : action === "BOOK_TOURNAMENT"
+          ? "dev-tournament"
+          : "dev-open-game",
       productTypeId: null,
       eventId: targetId,
       durationMinutes,
       startsAt,
-      basePriceMinor: playerPriceMinor,
+      basePriceMinor,
       currency: "RUB",
     },
   };
@@ -1273,8 +1466,10 @@ export const managedSubscriptionDevPlugin = (options: {
   policyVersion?: number | string;
   annualShadowFixture?: boolean;
   shadowCreateFixturesJson?: string;
+  shadowEventFixturesJson?: string;
   shadowStationIds?: string;
   shadowJoinFixturesJson?: string;
+  tournamentReadBaseUrl?: string;
 }): Plugin => ({
   name: "managed-subscription-dev-runtime",
   apply: "serve",
@@ -1282,6 +1477,7 @@ export const managedSubscriptionDevPlugin = (options: {
     if (!options.enabled) return;
     const shadowStationIds = parseShadowStationIds(options.shadowStationIds);
     const shadowCreateFixtures = parseShadowCreateFixtures(options.shadowCreateFixturesJson);
+    const shadowEventFixtures = parseShadowEventFixtures(options.shadowEventFixturesJson);
     const shadowJoinFixtures = parseShadowJoinFixtures(options.shadowJoinFixturesJson);
     const runtime = createManagedSubscriptionDevRuntime({
       policyLoader: options.annualShadowFixture
@@ -1301,6 +1497,18 @@ export const managedSubscriptionDevPlugin = (options: {
       }
       try {
         assertLocalOrigin(request);
+        if (request.method === "GET"
+          && url.pathname.startsWith(`${API_PREFIX}/tournament-read`)) {
+          if (!options.annualShadowFixture) {
+            throw new DevRuntimeError(
+              503,
+              "DEV_TOURNAMENT_READ_DISABLED",
+              "DEV read-прокси турниров выключен",
+            );
+          }
+          await proxyTournamentRead(url, response, options.tournamentReadBaseUrl);
+          return;
+        }
         if (request.method === "GET" && url.pathname === `${API_PREFIX}/session`) {
           sendJson(response, 200, await runtime.initialize());
           return;
@@ -1319,13 +1527,19 @@ export const managedSubscriptionDevPlugin = (options: {
             );
           }
           const action = String(body.action || "") as ManagedSubscriptionAction;
-          if (!(["CREATE_GAME", "JOIN_GAME"] as string[]).includes(action)) {
+          if (!([
+            "CREATE_GAME",
+            "JOIN_GAME",
+            "BOOK_GROUP_TRAINING",
+            "BOOK_TOURNAMENT",
+          ] as string[]).includes(action)) {
             throw new DevRuntimeError(400, "DEV_SHADOW_ACTION_INVALID", "Действие не поддерживается");
           }
           const target = resolveShadowIntent({
             action,
             intent: asRecord(body.target) as unknown as SubscriptionUsageShadowIntent,
             createFixtures: shadowCreateFixtures,
+            eventFixtures: shadowEventFixtures,
             stationIds: shadowStationIds,
             joinFixtures: shadowJoinFixtures,
           });

@@ -98,7 +98,10 @@ import {
   isExerciseConvertibleToGameFromBooking,
   resolveExerciseCategoryFromValue,
 } from "../../utils/exerciseCategory";
-import { appendSubscriptionUsageShadowToSameOriginUrl } from "../subscriptions/subscriptionUsageShadow";
+import {
+  appendSubscriptionUsageShadowToSameOriginUrl,
+  isSubscriptionUsageShadowMode,
+} from "../subscriptions/subscriptionUsageShadow";
 
 const SHOW_COLLECT_FRIENDS_BUTTON = false;
 const GROUP_TRAININGS_URL = "https://padlhub.ru/group";
@@ -686,12 +689,38 @@ function resolveGroupTrainingsHref(value: string): string {
 
   try {
     const current = new URL(window.location.href);
-    const parsed = new URL(raw, current.origin);
+    const useLocalShadowRoute = isLocalHostname(current.hostname)
+      && isSubscriptionUsageShadowMode(current.pathname, current.search, IS_DEV_RELEASE_CHANNEL);
+    const parsed = useLocalShadowRoute
+      ? new URL("/subscription-shadow-dev.html", current.origin)
+      : new URL(raw, current.origin);
+    if (useLocalShadowRoute) parsed.searchParams.set("screen", "group");
     const resolvedCabinetUrl = resolvePublicGamesCabinetUrl(current);
     if (resolvedCabinetUrl) {
       parsed.searchParams.set("cabinetUrl", resolvedCabinetUrl);
     }
-    return appendCurrentAuthModeToNavigableUrl(parsed).toString();
+    return appendCurrentAuthModeToNavigableUrl(
+      appendSubscriptionUsageShadowToSameOriginUrl(parsed, current),
+    ).toString();
+  } catch {
+    return raw;
+  }
+}
+
+function resolveTournamentSignupHref(value: string): string {
+  const raw = value.trim();
+  if (!raw || typeof window === "undefined") return raw;
+  try {
+    const current = new URL(window.location.href);
+    const useLocalShadowRoute = isLocalHostname(current.hostname)
+      && isSubscriptionUsageShadowMode(current.pathname, current.search, IS_DEV_RELEASE_CHANNEL);
+    const parsed = useLocalShadowRoute
+      ? new URL("/subscription-shadow-dev.html", current.origin)
+      : new URL(raw, current.origin);
+    if (useLocalShadowRoute) parsed.searchParams.set("screen", "tournament");
+    return appendCurrentAuthModeToNavigableUrl(
+      appendSubscriptionUsageShadowToSameOriginUrl(parsed, current),
+    ).toString();
   } catch {
     return raw;
   }
@@ -3972,8 +4001,11 @@ export function Cabinet({
         {QUICK_ACTIONS.map((action) => {
           const openInOverlay = action.label === "Играть";
           const openGroupTrainings = action.label === "Групповые тренировки";
+          const openTournamentSignup = action.label === "Турниры";
           const resolvedHref = openGroupTrainings
             ? resolveGroupTrainingsHref(action.href)
+            : openTournamentSignup
+              ? resolveTournamentSignupHref(action.href)
             : resolveQuickActionHref(action.href);
           if (openInOverlay) {
             return (

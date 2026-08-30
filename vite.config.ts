@@ -25,8 +25,10 @@ export default defineConfig(({ command, mode }) => {
         policyVersion: process.env.MANAGED_SUBSCRIPTIONS_POLICY_VERSION,
         annualShadowFixture: process.env.MANAGED_SUBSCRIPTIONS_POLICY_FIXTURE === 'annual-shadow',
         shadowCreateFixturesJson: process.env.MANAGED_SUBSCRIPTIONS_SHADOW_CREATE_FIXTURES_JSON,
+        shadowEventFixturesJson: process.env.MANAGED_SUBSCRIPTIONS_SHADOW_EVENT_FIXTURES_JSON,
         shadowStationIds: process.env.MANAGED_SUBSCRIPTIONS_SHADOW_STATION_IDS,
         shadowJoinFixturesJson: process.env.MANAGED_SUBSCRIPTIONS_SHADOW_JOIN_FIXTURES_JSON,
+        tournamentReadBaseUrl: process.env.MANAGED_SUBSCRIPTIONS_TOURNAMENT_READ_BASE_URL,
       }),
       cssInjectedByJsPlugin(), // вшивает CSS прямо в bundle.js
       reactRuntimeSingletonGuard(),

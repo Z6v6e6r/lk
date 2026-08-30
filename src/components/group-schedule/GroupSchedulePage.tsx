@@ -12,6 +12,10 @@ import {
 import { CommunityTournamentCard } from "../cabinet/community-feed/CommunityTournamentCard";
 import type { CommunityTournamentCard as CommunityTournamentCardData } from "../cabinet/community-feed/feedTypes";
 import { useAuth } from "../../context/AuthContext";
+import {
+  SubscriptionUsageShadowPanel,
+  useSubscriptionUsageShadow,
+} from "../subscriptions/SubscriptionUsageShadowPanel";
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import {
   apiFetchGroupTrainingDetail,
@@ -403,6 +407,10 @@ export default function GroupSchedulePage({
   returnToFindGame = false,
 }: GroupSchedulePageProps) {
   const { isAuthenticated, isRestoringSession } = useAuth();
+  const subscriptionUsageShadow = useSubscriptionUsageShadow();
+  const subscriptionUsageShadowEnabled = subscriptionUsageShadow.enabled;
+  const subscriptionUsageShadowPreview = subscriptionUsageShadow.preview;
+  const subscriptionUsageShadowReject = subscriptionUsageShadow.reject;
   const baseDate = useMemo(() => getInitialDate(initialDate), [initialDate]);
   const dates = useMemo(() => buildDateRange(baseDate), [baseDate]);
   const [dateIndex, setDateIndex] = useState(0);
@@ -563,7 +571,7 @@ export default function GroupSchedulePage({
   }, [selectedId]);
 
   const loadRegistrationState = useCallback(async (training: GroupTrainingSummary) => {
-    if (!isAuthenticated || isRestoringSession) return;
+    if (!isAuthenticated || isRestoringSession || subscriptionUsageShadowEnabled) return;
     setRegistrationLoading(true);
     setDetailError(null);
     const [registrationResult, checkoutResult] = await Promise.all([
@@ -587,10 +595,16 @@ export default function GroupSchedulePage({
       setCheckout(checkoutResult.data);
     }
     setRegistrationLoading(false);
-  }, [isAuthenticated, isRestoringSession]);
+  }, [isAuthenticated, isRestoringSession, subscriptionUsageShadowEnabled]);
 
   useEffect(() => {
     if (!selectedDetail) {
+      setCheckout(null);
+      setRegistration(null);
+      setActionMessage(null);
+      return;
+    }
+    if (subscriptionUsageShadowEnabled) {
       setCheckout(null);
       setRegistration(null);
       setActionMessage(null);
@@ -602,7 +616,13 @@ export default function GroupSchedulePage({
       return;
     }
     void loadRegistrationState(selectedDetail);
-  }, [isAuthenticated, isRestoringSession, loadRegistrationState, selectedDetail]);
+  }, [
+    isAuthenticated,
+    isRestoringSession,
+    loadRegistrationState,
+    selectedDetail,
+    subscriptionUsageShadowEnabled,
+  ]);
 
   useEffect(() => {
     promoRequestIdRef.current += 1;
@@ -662,6 +682,13 @@ export default function GroupSchedulePage({
   const shouldShowGroupSchedulePromoSection = Boolean(checkout && checkout.oneTimes.some(isGroupSchedulePromoProduct));
   const shouldExitInitialDetail = Boolean(returnToFindGame && initialExerciseId && selectedId === initialExerciseId);
 
+  const previewSubscriptionDiscount = useCallback(async (training: GroupTrainingSummary) => {
+    await subscriptionUsageShadowPreview({
+      action: "BOOK_GROUP_TRAINING",
+      target: { targetKind: "EVENT_AGGREGATE", eventId: training.id },
+    });
+  }, [subscriptionUsageShadowPreview]);
+
   const handleBackClick = useCallback(() => {
     if (!selectedId) {
       onBack();
@@ -678,6 +705,10 @@ export default function GroupSchedulePage({
     training: GroupTrainingSummary,
     activeCheckout: TournamentVivaCheckout,
   ) => {
+    if (subscriptionUsageShadowEnabled) {
+      subscriptionUsageShadowReject("DEV-shadow не вызывает проверку промокода или Viva");
+      return;
+    }
     const code = normalizeGroupSchedulePromoCode(promoInput);
     if (!code) {
       setPromoError("Введите промокод.");
@@ -736,7 +767,7 @@ export default function GroupSchedulePage({
     }
 
     setAppliedPromo({ code, previewsByProductId });
-  }, [promoInput]);
+  }, [promoInput, subscriptionUsageShadowEnabled, subscriptionUsageShadowReject]);
 
   const completeRegistration = useCallback(async (
     training: GroupTrainingSummary,
@@ -744,6 +775,10 @@ export default function GroupSchedulePage({
     product: TournamentVivaProduct,
     promoCode?: string | null,
   ) => {
+    if (subscriptionUsageShadowEnabled) {
+      await previewSubscriptionDiscount(training);
+      return;
+    }
     if (!activeCheckout.profile?.phone) {
       setDetailError("Не удалось получить телефон профиля Viva.");
       return;
@@ -791,10 +826,19 @@ export default function GroupSchedulePage({
     });
     await loadRegistrationState(training);
     await loadList();
-  }, [loadList, loadRegistrationState]);
+  }, [
+    loadList,
+    loadRegistrationState,
+    previewSubscriptionDiscount,
+    subscriptionUsageShadowEnabled,
+  ]);
 
   const openCancelDialog = useCallback(async () => {
     if (!selectedTraining) return;
+    if (subscriptionUsageShadowEnabled) {
+      subscriptionUsageShadowReject("DEV-shadow не изменяет существующие записи");
+      return;
+    }
     setActionLoading(true);
     setDetailError(null);
     const result = await apiResolveTournamentVivaRegistrationBookingId(
@@ -809,13 +853,22 @@ export default function GroupSchedulePage({
     }
     setCancelBookingId(result.data);
     setCancelDialogOpen(true);
-  }, [registration?.bookingId, registration?.placeNumber, selectedTraining]);
+  }, [
+    registration?.bookingId,
+    registration?.placeNumber,
+    selectedTraining,
+    subscriptionUsageShadowEnabled,
+    subscriptionUsageShadowReject,
+  ]);
 
   const cancelRegistration = useCallback(async (
     action: BookingCancellationAction,
   ) => {
     if (!selectedTraining) {
       return { ok: false, message: "Тренировка не выбрана." };
+    }
+    if (subscriptionUsageShadowEnabled) {
+      return { ok: false, message: "DEV-shadow не изменяет существующие записи." };
     }
     setActionLoading(true);
     setDetailError(null);
@@ -838,7 +891,15 @@ export default function GroupSchedulePage({
     await loadRegistrationState(selectedTraining);
     await loadList();
     return { ok: true, message };
-  }, [cancelBookingId, loadList, loadRegistrationState, registration?.bookingId, registration?.placeNumber, selectedTraining]);
+  }, [
+    cancelBookingId,
+    loadList,
+    loadRegistrationState,
+    registration?.bookingId,
+    registration?.placeNumber,
+    selectedTraining,
+    subscriptionUsageShadowEnabled,
+  ]);
 
   return (
     <div className="group-schedule-page tournament-signup-page">
@@ -1136,9 +1197,30 @@ export default function GroupSchedulePage({
                         </span>
                       </strong>
                     </div>
-                    {registrationLoading && <div className="tournament-signup-muted">Проверяем доступные варианты...</div>}
-                    {actionMessage && <div className="group-schedule-success">{actionMessage}</div>}
-                    {registration?.status === "PAYMENT_PENDING" && registration.paymentUrl && (
+                    {subscriptionUsageShadowEnabled && (
+                      <div className="tournament-signup-payment-options">
+                        <SubscriptionUsageShadowPanel controller={subscriptionUsageShadow} />
+                        <button
+                          type="button"
+                          className="section-cta"
+                          onClick={() => void previewSubscriptionDiscount(selectedTraining)}
+                          disabled={subscriptionUsageShadow.busy}
+                        >
+                          {subscriptionUsageShadow.busy
+                            ? "Проверяем скидку 50%…"
+                            : "Проверить скидку 50% без записи и оплаты"}
+                        </button>
+                      </div>
+                    )}
+                    {!subscriptionUsageShadowEnabled && registrationLoading && (
+                      <div className="tournament-signup-muted">Проверяем доступные варианты...</div>
+                    )}
+                    {!subscriptionUsageShadowEnabled && actionMessage && (
+                      <div className="group-schedule-success">{actionMessage}</div>
+                    )}
+                    {!subscriptionUsageShadowEnabled
+                      && registration?.status === "PAYMENT_PENDING"
+                      && registration.paymentUrl && (
                       <div className="tournament-signup-payment-hold">
                         <span>Ожидает оплаты</span>
                         <button
@@ -1153,7 +1235,9 @@ export default function GroupSchedulePage({
                         </button>
                       </div>
                     )}
-                    {isRegistered && registration?.status !== "PAYMENT_PENDING" && (
+                    {!subscriptionUsageShadowEnabled
+                      && isRegistered
+                      && registration?.status !== "PAYMENT_PENDING" && (
                       <div className="group-schedule-registered">
                         <strong>{registration?.status === "WAITLIST" ? "Вы в листе ожидания" : "Вы записаны"}</strong>
                         {canCancel && (
@@ -1169,7 +1253,10 @@ export default function GroupSchedulePage({
                       </div>
                     )}
 
-                    {!registrationLoading && !isRegistered && checkout && (
+                    {!subscriptionUsageShadowEnabled
+                      && !registrationLoading
+                      && !isRegistered
+                      && checkout && (
                       <div className="tournament-signup-payment-options">
                         {checkout.clientSubscriptions.length > 0 && (
                           <div className="tournament-signup-payment-group">

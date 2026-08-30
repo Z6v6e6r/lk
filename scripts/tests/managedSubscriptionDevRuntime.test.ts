@@ -4,6 +4,7 @@ import fs from "node:fs";
 import {
   buildAnnualShadowPolicySource,
   buildShadowBookingOutcome,
+  buildTournamentReadUpstreamUrl,
   compileDraftPolicy,
   createManagedSubscriptionDevRuntime,
   loadPolicyFromCup,
@@ -540,6 +541,129 @@ test("server-resolved create fails closed when the exact slot is absent from the
     stationIds: ["station-terekhovo"],
     joinFixtures: new Map(),
   }), /Цена выбранного слота отсутствует/);
+});
+
+test("server-resolved group training and tournament use exact real-station fixtures with 50 percent discount", async () => {
+  const stationId = "6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1";
+  const groupId = "group-terekhovo-60";
+  const tournamentId = "tournament-terekhovo-120";
+  const eventFixtures = new Map([
+    [groupId, {
+      action: "BOOK_GROUP_TRAINING" as const,
+      stationId,
+      startsAt: "2026-08-31T12:00:00+03:00",
+      durationMinutes: 60 as const,
+      basePriceMinor: 300_000,
+    }],
+    [tournamentId, {
+      action: "BOOK_TOURNAMENT" as const,
+      stationId,
+      startsAt: "2026-08-31T15:00:00+03:00",
+      durationMinutes: 120 as const,
+      basePriceMinor: 500_000,
+    }],
+  ]);
+  const groupTarget = resolveShadowIntent({
+    action: "BOOK_GROUP_TRAINING",
+    intent: {
+      targetKind: "EVENT_AGGREGATE",
+      eventId: groupId,
+      basePriceMinor: 1,
+      stationId: "browser-station",
+    } as never,
+    eventFixtures,
+    stationIds: [stationId],
+    joinFixtures: new Map(),
+  });
+  const tournamentTarget = resolveShadowIntent({
+    action: "BOOK_TOURNAMENT",
+    intent: { targetKind: "EVENT_AGGREGATE", eventId: tournamentId },
+    eventFixtures,
+    stationIds: [stationId],
+    joinFixtures: new Map(),
+  });
+  const runtime = createManagedSubscriptionDevRuntime({
+    policyLoader: async () => buildAnnualShadowPolicySource([stationId]),
+  });
+  const group = await runtime.quoteResolved(groupTarget, { activeServices: 0, dailyGameUsage: 1 });
+  const tournament = await runtime.quoteResolved(
+    tournamentTarget,
+    { activeServices: 0, dailyGameUsage: 1 },
+  );
+
+  assert.equal(groupTarget.target.stationId, stationId);
+  assert.equal(groupTarget.target.basePriceMinor, 300_000);
+  assert.equal(groupTarget.participantCount, undefined);
+  assert.equal(group.decision.benefit?.finalPriceMinor, 150_000);
+  assert.equal(tournamentTarget.target.basePriceMinor, 500_000);
+  assert.equal(tournament.decision.benefit?.finalPriceMinor, 250_000);
+
+  const overActiveLimit = await runtime.quoteResolved(
+    groupTarget,
+    { activeServices: 4, dailyGameUsage: 0 },
+  );
+  assert.deepEqual(buildShadowBookingOutcome(groupTarget, overActiveLimit.decision), {
+    allowed: true,
+    subscriptionApplied: false,
+    pricingMode: "FULL_PRICE_WITHOUT_SUBSCRIPTION",
+    finalPriceMinor: 300_000,
+    reasonCodes: ["ACTIVE_SERVICES_LIMIT_REACHED"],
+  });
+});
+
+test("server-resolved non-game events fail closed for an unknown id or action mismatch", () => {
+  const stationId = "station-terekhovo";
+  const eventFixtures = new Map([[
+    "group-1",
+    {
+      action: "BOOK_GROUP_TRAINING" as const,
+      stationId,
+      startsAt: "2026-08-31T12:00:00+03:00",
+      durationMinutes: 60 as const,
+      basePriceMinor: 300_000,
+    },
+  ]]);
+  assert.throws(() => resolveShadowIntent({
+    action: "BOOK_GROUP_TRAINING",
+    intent: { targetKind: "EVENT_AGGREGATE", eventId: "unknown" },
+    eventFixtures,
+    stationIds: [stationId],
+    joinFixtures: new Map(),
+  }), /Событие не найдено/);
+  assert.throws(() => resolveShadowIntent({
+    action: "BOOK_TOURNAMENT",
+    intent: { targetKind: "EVENT_AGGREGATE", eventId: "group-1" },
+    eventFixtures,
+    stationIds: [stationId],
+    joinFixtures: new Map(),
+  }), /не соответствует выбранному действию/);
+});
+
+test("tournament DEV read proxy allows only list and detail GET targets without refresh controls", () => {
+  const list = buildTournamentReadUpstreamUrl(new URL(
+    "http://127.0.0.1:3041/__dev/managed-subscriptions/tournament-read/tournaments?from=2026-08-30&to=2026-09-13",
+  ));
+  const detail = buildTournamentReadUpstreamUrl(new URL(
+    "http://127.0.0.1:3041/__dev/managed-subscriptions/tournament-read/tournaments/55844feb-0df1-4c7d-8bfe-b5b5c1103cd5",
+  ));
+  assert.equal(
+    list.toString(),
+    "https://lk-reserve.89-108-64-209.sslip.io/api/tournaments?from=2026-08-30&to=2026-09-13",
+  );
+  assert.equal(
+    detail.toString(),
+    "https://lk-reserve.89-108-64-209.sslip.io/api/tournaments/55844feb-0df1-4c7d-8bfe-b5b5c1103cd5",
+  );
+  assert.throws(() => buildTournamentReadUpstreamUrl(new URL(
+    "http://127.0.0.1:3041/__dev/managed-subscriptions/tournament-read/tournaments?refresh=if-stale",
+  )), /небезопасный параметр/);
+  assert.throws(() => buildTournamentReadUpstreamUrl(new URL(
+    "http://127.0.0.1:3041/__dev/managed-subscriptions/tournament-read/tournaments/abc/registration/me",
+  )), /только список и детали/);
+  assert.throws(() => buildTournamentReadUpstreamUrl(
+    new URL("http://127.0.0.1:3041/__dev/managed-subscriptions/tournament-read/tournaments"),
+    "https://padlhub.su/api",
+  ), /не относится к изолированному backend/);
 });
 
 test("DEV page is available only behind import.meta.env.DEV and contains no Viva mutation client", () => {

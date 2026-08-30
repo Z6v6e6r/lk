@@ -71,6 +71,9 @@ test("shadow mode is isolated to ordinary lk_dev and cannot replace the hosted t
   assert.equal(isSubscriptionUsageShadowMode("/finde_game", "?subscriptionShadow=1", true), true);
   assert.equal(isSubscriptionUsageShadowMode("/game_create", "?subscriptionShadow=1", true), true);
   assert.equal(isSubscriptionUsageShadowMode("/game_join", "?subscriptionShadow=1", true), true);
+  assert.equal(isSubscriptionUsageShadowMode("/subscription-shadow-dev.html", "?subscriptionShadow=1", true), true);
+  assert.equal(isSubscriptionUsageShadowMode("/group", "?subscriptionShadow=1", true), false);
+  assert.equal(isSubscriptionUsageShadowMode("/tournament_signup", "?subscriptionShadow=1", true), false);
   assert.equal(
     isSubscriptionUsageShadowMode(
       "/lk_dev",
@@ -244,6 +247,73 @@ test("hosted shadow fails closed without credentials or with a non-isolated API 
     }),
     /не относится к изолированному DEV backend/,
   );
+});
+
+test("group and tournament shadow requests send only an opaque event id", async () => {
+  for (const action of ["BOOK_GROUP_TRAINING", "BOOK_TOURNAMENT"] as const) {
+    let capturedBody = "";
+    const quote = buildQuote();
+    quote.target.action = action;
+    quote.target.participantCount = undefined;
+    quote.target.target.category = action === "BOOK_GROUP_TRAINING" ? "GROUP_TRAINING" : "TOURNAMENT";
+    quote.target.target.basePriceMinor = action === "BOOK_GROUP_TRAINING" ? 300_000 : 500_000;
+    quote.decision.benefit = {
+      kind: "PERCENT_DISCOUNT",
+      ruleId: `${action}-50`,
+      basePriceMinor: quote.target.target.basePriceMinor,
+      discountMinor: quote.target.target.basePriceMinor / 2,
+      surchargeMinor: 0,
+      finalPriceMinor: quote.target.target.basePriceMinor / 2,
+      partialPriceCalculation: null,
+      currency: "RUB",
+    };
+    quote.bookingOutcome.finalPriceMinor = quote.target.target.basePriceMinor / 2;
+
+    await fetchSubscriptionUsageShadowQuote({
+      preview: {
+        action,
+        target: { targetKind: "EVENT_AGGREGATE", eventId: `${action.toLowerCase()}-1` },
+      },
+      activeServices: 0,
+      dailyGameUsage: 1,
+      request: async (_input, init) => {
+        capturedBody = String(init.body);
+        return { ok: true, json: async () => quote };
+      },
+    });
+
+    assert.deepEqual(JSON.parse(capturedBody), {
+      action,
+      target: { targetKind: "EVENT_AGGREGATE", eventId: `${action.toLowerCase()}-1` },
+      activeServices: 0,
+      dailyGameUsage: 1,
+    });
+    assert.doesNotMatch(capturedBody, /price|amount|station|startsAt/i);
+  }
+});
+
+test("50 percent event discount presentation shows the exact server amount", () => {
+  const quote = buildQuote();
+  quote.target.action = "BOOK_GROUP_TRAINING";
+  quote.target.participantCount = undefined;
+  quote.target.target.category = "GROUP_TRAINING";
+  quote.target.target.basePriceMinor = 300_000;
+  quote.decision.benefit = {
+    kind: "PERCENT_DISCOUNT",
+    ruleId: "group-50",
+    basePriceMinor: 300_000,
+    discountMinor: 150_000,
+    surchargeMinor: 0,
+    finalPriceMinor: 150_000,
+    partialPriceCalculation: null,
+    currency: "RUB",
+  };
+  quote.bookingOutcome.finalPriceMinor = 150_000;
+  const presentation = presentSubscriptionUsageShadowQuote(quote);
+  assert.equal(presentation.tone, "subscription");
+  assert.match(presentation.summary, /скидка 50% 1\s*500/);
+  assert.match(presentation.summary, /итого 1\s*500/);
+  assert.doesNotMatch(presentation.summary, /доля игрока/);
 });
 
 test("90 minute subscription presentation uses one-quarter share and discounts only paid time", () => {

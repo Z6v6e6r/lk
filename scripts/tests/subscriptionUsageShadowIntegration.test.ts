@@ -18,6 +18,26 @@ const cabinetSource = readFileSync(
   new URL("../../src/components/cabinet/Cabinet.tsx", import.meta.url),
   "utf8",
 );
+const appSource = readFileSync(
+  new URL("../../src/MyApp.tsx", import.meta.url),
+  "utf8",
+);
+const shadowHarnessSource = readFileSync(
+  new URL("../../src/subscription-shadow-dev.tsx", import.meta.url),
+  "utf8",
+);
+const shadowHarnessHtml = readFileSync(
+  new URL("../../subscription-shadow-dev.html", import.meta.url),
+  "utf8",
+);
+const groupScheduleSource = readFileSync(
+  new URL("../../src/components/group-schedule/GroupSchedulePage.tsx", import.meta.url),
+  "utf8",
+);
+const tournamentSignupSource = readFileSync(
+  new URL("../../src/components/tournament-signup/TournamentSignupPage.tsx", import.meta.url),
+  "utf8",
+);
 
 function sliceBetween(source: string, startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker);
@@ -114,9 +134,55 @@ test("the shipped games bundle guards details join, split payment, and backgroun
   assert.match(gamesSource, /Проверить присоединение без записи/);
 });
 
-test("ordinary lk_dev navigation preserves the shadow gate through find, create, and join", () => {
+test("ordinary lk_dev navigation sends event checks to an isolated DEV-only harness", () => {
   assert.match(cabinetSource, /appendSubscriptionUsageShadowToSameOriginUrl\(parsed, current\)/);
   assert.match(findSource, /appendCurrentSubscriptionUsageShadow\(url\)/);
   assert.match(findSource, /url\.searchParams\.set\("channel", "dev"\)/);
   assert.match(findSource, /appendCurrentSubscriptionUsageShadow\(target\)/);
+  assert.match(cabinetSource, /new URL\("\/subscription-shadow-dev\.html", current\.origin\)/);
+  assert.match(cabinetSource, /parsed\.searchParams\.set\("screen", "group"\)/);
+  assert.match(cabinetSource, /parsed\.searchParams\.set\("screen", "tournament"\)/);
+  assert.match(cabinetSource, /resolveTournamentSignupHref\(action\.href\)/);
+  assert.match(shadowHarnessHtml, /src="\/src\/subscription-shadow-dev\.tsx"/);
+  assert.match(shadowHarnessSource, /if \(!import\.meta\.env\.DEV\)/);
+  assert.match(shadowHarnessSource, /<GroupSchedulePage/);
+  assert.match(shadowHarnessSource, /<TournamentSignupPage/);
+  assert.doesNotMatch(appSource, /subscription-shadow-dev|GroupSchedulePage|TournamentSignupPage/);
+});
+
+test("group training DEV-shadow checks the exact event before every Viva mutation path", () => {
+  const registration = sliceBetween(
+    groupScheduleSource,
+    "const completeRegistration = useCallback",
+    "const openCancelDialog = useCallback",
+  );
+  assertGuardBefore(registration, "apiCreateTournamentVivaTransaction");
+  assert.match(groupScheduleSource, /action: "BOOK_GROUP_TRAINING"/);
+  assert.match(groupScheduleSource, /targetKind: "EVENT_AGGREGATE"/);
+  assert.match(groupScheduleSource, /Проверить скидку 50% без записи и оплаты/);
+  assert.match(groupScheduleSource, /if \(subscriptionUsageShadowEnabled\)[\s\S]*DEV-shadow не изменяет существующие записи/);
+});
+
+test("tournament DEV-shadow replaces checkout actions and stops automatic payment continuation", () => {
+  const registration = sliceBetween(
+    tournamentSignupSource,
+    "const completeVivaRegistration = useCallback",
+    "const loadCheckout = useCallback",
+  );
+  assertGuardBefore(registration, "apiCreateTournamentVivaTransaction");
+  assert.match(tournamentSignupSource, /action: "BOOK_TOURNAMENT"/);
+  assert.match(tournamentSignupSource, /targetKind: "EVENT_AGGREGATE"/);
+  assert.match(tournamentSignupSource, /Проверить скидку 50% без записи и оплаты/);
+  assert.match(
+    tournamentSignupSource,
+    /if \(subscriptionUsageShadowEnabled\) return;[\s\S]*pendingPaymentProduct/,
+  );
+  assert.match(
+    tournamentSignupSource,
+    /loadList\(\{ requestRefresh: !subscriptionUsageShadowEnabled \}\)/,
+  );
+  assert.match(
+    tournamentSignupSource,
+    /if \(subscriptionUsageShadowEnabled\) \{[\s\S]*setLiveRatings\(new Map\(\)\)/,
+  );
 });

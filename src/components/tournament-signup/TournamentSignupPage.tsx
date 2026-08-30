@@ -5,6 +5,10 @@ import { CommunityTournamentCard } from "../cabinet/community-feed/CommunityTour
 import { CalendarDateBadge } from "../UI/CalendarDateBadge";
 import { Modal } from "../UI/Modal";
 import { useAuth } from "../../context/AuthContext";
+import {
+  SubscriptionUsageShadowPanel,
+  useSubscriptionUsageShadow,
+} from "../subscriptions/SubscriptionUsageShadowPanel";
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import {
   DEFAULT_PUBLIC_TOURNAMENT_SIGNUP_PATH,
@@ -1049,6 +1053,10 @@ export default function TournamentSignupPage({
   initialDate,
 }: TournamentSignupPageProps) {
   const { isAuthenticated } = useAuth();
+  const subscriptionUsageShadow = useSubscriptionUsageShadow();
+  const subscriptionUsageShadowEnabled = subscriptionUsageShadow.enabled;
+  const subscriptionUsageShadowPreview = subscriptionUsageShadow.preview;
+  const subscriptionUsageShadowReject = subscriptionUsageShadow.reject;
   const targetTournamentId = String(initialTournamentId || "").trim() || null;
   const targetTournamentSlug = normalizeTournamentSlug(initialTournamentSlug);
   const targetDeepLinkKey = targetTournamentId || targetTournamentSlug || "";
@@ -1115,6 +1123,12 @@ export default function TournamentSignupPage({
     : null;
   const selectedTournament = selectedListTournament ?? detail;
   const selectedExerciseId = detail?.exerciseId ?? selectedListTournament?.exerciseId ?? selectedId;
+  const previewSubscriptionDiscount = useCallback(async (eventId: string) => {
+    await subscriptionUsageShadowPreview({
+      action: "BOOK_TOURNAMENT",
+      target: { targetKind: "EVENT_AGGREGATE", eventId },
+    });
+  }, [subscriptionUsageShadowPreview]);
   const typeFilterOptions = useMemo(
     () => getUniqueFilterValues(items.map(getTournamentTypeFilterValue)),
     [items],
@@ -1265,8 +1279,8 @@ export default function TournamentSignupPage({
   }, [selectedDateStr]);
 
   const refreshTournamentList = useCallback(async () => {
-    await loadList({ requestRefresh: true });
-  }, [loadList]);
+    await loadList({ requestRefresh: !subscriptionUsageShadowEnabled });
+  }, [loadList, subscriptionUsageShadowEnabled]);
 
   const loadDetail = useCallback(async (tournamentId: string) => {
     setLoadingDetail(true);
@@ -1283,7 +1297,7 @@ export default function TournamentSignupPage({
         publicRosterDetailAbortRef.current = null;
       }
     });
-    const [registrationResult, vivaRegistrationResult] = isAuthenticated
+    const [registrationResult, vivaRegistrationResult] = isAuthenticated && !subscriptionUsageShadowEnabled
       ? await Promise.all([
           apiFetchTournamentMyRegistration(tournamentId),
           apiFetchTournamentVivaMyRegistration(exerciseId),
@@ -1303,9 +1317,10 @@ export default function TournamentSignupPage({
     setRegistration(resolvedRegistration);
     setRegistrationResolvedFor(`${tournamentId}:${exerciseId}`);
     setLoadingDetail(false);
-  }, [isAuthenticated, items, loadPublicRoster]);
+  }, [isAuthenticated, items, loadPublicRoster, subscriptionUsageShadowEnabled]);
 
   const ensurePricingPreviewLoaded = useCallback(async (tournament: TournamentSignupSummary | null | undefined) => {
+    if (subscriptionUsageShadowEnabled) return;
     if (!tournament) return;
 
     const exerciseId = String(tournament.exerciseId || "").trim();
@@ -1347,7 +1362,7 @@ export default function TournamentSignupPage({
       [exerciseId]: buildTournamentPromoOnlyOfferFromProducts(products),
     }));
     setPricingPreviewLoadingByExerciseId((current) => ({ ...current, [exerciseId]: false }));
-  }, []);
+  }, [subscriptionUsageShadowEnabled]);
 
   useEffect(() => {
     listMountedRef.current = true;
@@ -1496,6 +1511,10 @@ export default function TournamentSignupPage({
 
   const completeVivaRegistration = useCallback(async (nextCheckout: TournamentVivaCheckout, product: TournamentVivaProduct) => {
     if (!selectedId || !selectedExerciseId || actionLoading) return;
+    if (subscriptionUsageShadowEnabled) {
+      await previewSubscriptionDiscount(selectedExerciseId);
+      return;
+    }
     if (!isAuthenticated || !nextCheckout.profile) {
       setPendingPaymentProduct(product);
       setAuthRequired(true);
@@ -1566,10 +1585,26 @@ export default function TournamentSignupPage({
       setConfirmingSubscriptionProductKey(null);
       setActionLoading(false);
     }
-  }, [actionLoading, detail, isAuthenticated, loadDetail, loadList, loadPublicRoster, selectedExerciseId, selectedId, selectedTournament]);
+  }, [
+    actionLoading,
+    detail,
+    isAuthenticated,
+    loadDetail,
+    loadList,
+    loadPublicRoster,
+    previewSubscriptionDiscount,
+    selectedExerciseId,
+    selectedId,
+    selectedTournament,
+    subscriptionUsageShadowEnabled,
+  ]);
 
   const loadCheckout = useCallback(async (mode: "auth" | "public") => {
     if (!selectedId || !selectedExerciseId || actionLoading) return;
+    if (subscriptionUsageShadowEnabled) {
+      setCheckout(null);
+      return;
+    }
     setActionLoading(true);
     setError(null);
     setCheckout(null);
@@ -1608,10 +1643,21 @@ export default function TournamentSignupPage({
       return;
     }
     setCheckout(result.data);
-  }, [actionLoading, detail, selectedExerciseId, selectedId, selectedTournament]);
+  }, [
+    actionLoading,
+    detail,
+    selectedExerciseId,
+    selectedId,
+    selectedTournament,
+    subscriptionUsageShadowEnabled,
+  ]);
 
   const handleCancel = async () => {
     if (!selectedId || !selectedExerciseId || actionLoading) return;
+    if (subscriptionUsageShadowEnabled) {
+      subscriptionUsageShadowReject("DEV-shadow не изменяет существующие записи");
+      return;
+    }
     if (!isAuthenticated) {
       setAuthRequired(true);
       setError(null);
@@ -1632,6 +1678,10 @@ export default function TournamentSignupPage({
   };
 
   const handlePayPendingRegistration = () => {
+    if (subscriptionUsageShadowEnabled) {
+      subscriptionUsageShadowReject("DEV-shadow не открывает оплату");
+      return;
+    }
     const paymentUrl = registration?.paymentUrl?.trim();
     if (!paymentUrl) {
       setError("Ссылка на оплату пока не найдена. Обновите статус записи.");
@@ -1725,6 +1775,11 @@ export default function TournamentSignupPage({
       setCheckoutPreparedFor(null);
       return;
     }
+    if (subscriptionUsageShadowEnabled) {
+      setCheckout(null);
+      setCheckoutPreparedFor(null);
+      return;
+    }
     const registrationResolutionKey = `${selectedId}:${selectedExerciseId}`;
     if (registrationResolvedFor !== registrationResolutionKey) {
       setCheckout(null);
@@ -1752,9 +1807,11 @@ export default function TournamentSignupPage({
     registrationResolvedFor,
     selectedExerciseId,
     selectedId,
+    subscriptionUsageShadowEnabled,
   ]);
 
   useEffect(() => {
+    if (subscriptionUsageShadowEnabled) return;
     if (!pendingPaymentProduct || !isAuthenticated || !checkout?.profile || actionLoading) return;
     const matchedProduct = findMatchingTournamentPaymentProduct(checkout, pendingPaymentProduct);
     if (!matchedProduct) {
@@ -1770,9 +1827,14 @@ export default function TournamentSignupPage({
     completeVivaRegistration,
     isAuthenticated,
     pendingPaymentProduct,
+    subscriptionUsageShadowEnabled,
   ]);
 
   useEffect(() => {
+    if (subscriptionUsageShadowEnabled) {
+      setLiveRatings(new Map());
+      return;
+    }
     if (!selectedId || detailParticipants.length === 0) {
       setLiveRatings(new Map());
       return;
@@ -1808,7 +1870,7 @@ export default function TournamentSignupPage({
     return () => {
       cancelled = true;
     };
-  }, [detailParticipants, selectedId]);
+  }, [detailParticipants, selectedId, subscriptionUsageShadowEnabled]);
 
   return (
     <div className="tournament-signup-page">
@@ -1969,7 +2031,10 @@ export default function TournamentSignupPage({
           )}
           {!loadingDetail && selectedTournament && (
             <>
-              {cancelDialogBookingId && selectedExerciseId && selectedId && (
+              {!subscriptionUsageShadowEnabled
+                && cancelDialogBookingId
+                && selectedExerciseId
+                && selectedId && (
                 <BookingCancellationDialog
                   bookingId={cancelDialogBookingId}
                   isOpen={Boolean(cancelDialogBookingId)}
@@ -2137,7 +2202,27 @@ export default function TournamentSignupPage({
                   </div>
 
                   <div className="tournament-signup-register-stack">
-                    {canRegister && (
+                    {subscriptionUsageShadowEnabled && isAuthenticated && selectedExerciseId && (
+                      <div className="tournament-signup-auth">
+                        <div className="tournament-signup-auth-head">
+                          <strong>
+                            <span className="tournament-signup-auth-title">Проверка годовой подписки</span>
+                          </strong>
+                        </div>
+                        <SubscriptionUsageShadowPanel controller={subscriptionUsageShadow} />
+                        <button
+                          type="button"
+                          className="section-cta"
+                          onClick={() => void previewSubscriptionDiscount(selectedExerciseId)}
+                          disabled={subscriptionUsageShadow.busy}
+                        >
+                          {subscriptionUsageShadow.busy
+                            ? "Проверяем скидку 50%…"
+                            : "Проверить скидку 50% без записи и оплаты"}
+                        </button>
+                      </div>
+                    )}
+                    {!subscriptionUsageShadowEnabled && canRegister && (
                       <div className="tournament-signup-auth">
                         <div className="tournament-signup-auth-head">
                           <strong>
@@ -2248,7 +2333,7 @@ export default function TournamentSignupPage({
                       </div>
                     )}
 
-                    {(canPayPending || canCancel) && (
+                    {!subscriptionUsageShadowEnabled && (canPayPending || canCancel) && (
                       <div className="tournament-signup-actions">
                         {canPayPending && (
                           <button

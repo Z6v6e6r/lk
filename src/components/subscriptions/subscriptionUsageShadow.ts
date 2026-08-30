@@ -5,7 +5,11 @@ import {
 } from "./subscriptionUsageTestRoute.ts";
 import type { SubscriptionUsageTestBookingOutcome } from "./subscriptionUsageTestBooking.ts";
 
-export type SubscriptionUsageShadowAction = "CREATE_GAME" | "JOIN_GAME";
+export type SubscriptionUsageShadowAction =
+  | "CREATE_GAME"
+  | "JOIN_GAME"
+  | "BOOK_GROUP_TRAINING"
+  | "BOOK_TOURNAMENT";
 
 export interface SubscriptionUsageShadowNewGameIntent {
   targetKind: "NEW_GAME";
@@ -23,9 +27,15 @@ export interface SubscriptionUsageShadowGameIntent {
   gameId: string;
 }
 
+export interface SubscriptionUsageShadowEventIntent {
+  targetKind: "EVENT_AGGREGATE";
+  eventId: string;
+}
+
 export type SubscriptionUsageShadowIntent =
   | SubscriptionUsageShadowNewGameIntent
-  | SubscriptionUsageShadowGameIntent;
+  | SubscriptionUsageShadowGameIntent
+  | SubscriptionUsageShadowEventIntent;
 
 export interface SubscriptionUsageShadowPreviewRequest {
   action: SubscriptionUsageShadowAction;
@@ -78,7 +88,14 @@ export function isSubscriptionUsageShadowMode(
   isDevReleaseChannel: boolean,
 ): boolean {
   const normalizedPath = pathname.replace(/\/+$/, "") || "/";
-  const allowedPaths = new Set(["/lk_dev", "/finde_game", "/find_game", "/game_create", "/game_join"]);
+  const allowedPaths = new Set([
+    "/lk_dev",
+    "/finde_game",
+    "/find_game",
+    "/game_create",
+    "/game_join",
+    "/subscription-shadow-dev.html",
+  ]);
   if (!isDevReleaseChannel || !allowedPaths.has(normalizedPath)) return false;
   const params = new URLSearchParams(search);
   return params.get("subscriptionShadow") === "1" && params.get("subscriptionTest") !== "1";
@@ -130,7 +147,12 @@ function isShadowQuote(value: unknown): value is SubscriptionUsageShadowQuote {
   const outcome = value.bookingOutcome;
   const decision = value.decision;
   return typeof target.targetId === "string"
-    && (target.action === "CREATE_GAME" || target.action === "JOIN_GAME")
+    && [
+      "CREATE_GAME",
+      "JOIN_GAME",
+      "BOOK_GROUP_TRAINING",
+      "BOOK_TOURNAMENT",
+    ].includes(String(target.action))
     && isRecord(resolvedTarget)
     && typeof resolvedTarget.durationMinutes === "number"
     && typeof decision.eligible === "boolean"
@@ -169,6 +191,10 @@ export async function fetchSubscriptionUsageShadowQuote({
   }
   if (preview.action === "JOIN_GAME" && preview.target.targetKind !== "GAME_AGGREGATE") {
     throw new Error("Для присоединения серверу нужен идентификатор игры");
+  }
+  if ((preview.action === "BOOK_GROUP_TRAINING" || preview.action === "BOOK_TOURNAMENT")
+    && preview.target.targetKind !== "EVENT_AGGREGATE") {
+    throw new Error("Для проверки скидки серверу нужен идентификатор события");
   }
   let endpoint = "/__dev/managed-subscriptions/shadow-quote";
   const headers: Record<string, string> = { "Content-Type": "application/json" };
