@@ -42,7 +42,7 @@ export const SPLIT_PRICING_RECOVERY_TARGETS = Object.freeze([
       Object.freeze(["legacy_payment_confirm_canonical_prepare_20260816"]),
     ]),
     liveSha256: "cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a",
-    candidateSha256: "3fac27dce5ab0f2ae844d2927db406d44253151e62cab4c50a7790f7bc273b33",
+    candidateSha256: "5f380562e98dd2f94a0197c498c94df12eb1797be0c3345bb21d8e4f051de7c9",
   }),
 ]);
 

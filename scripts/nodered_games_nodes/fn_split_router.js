@@ -1200,6 +1200,26 @@ const originalBookingFailure = (ctx, code, error, extra) => ({
   ...extra,
 });
 
+const finishManagedSubscriptionFailure = (ctx, compensation) => {
+  const failure = ctx.bookingFailure && typeof ctx.bookingFailure === "object"
+    ? ctx.bookingFailure
+    : {};
+  const failurePayload = failure.payload && typeof failure.payload === "object"
+    ? failure.payload
+    : {};
+  const originalDetails = failurePayload.details && typeof failurePayload.details === "object"
+    ? failurePayload.details
+    : null;
+  return fail(
+    Number(failure.statusCode) || 409,
+    toStr(failurePayload.error) || "Правила подписки не разрешили создание игры",
+    {
+      ...(originalDetails || {}),
+      compensation,
+    },
+  );
+};
+
 const ctx = msg._splitCtx && typeof msg._splitCtx === "object" ? msg._splitCtx : null;
 if (!ctx) {
   return fail(500, "Split payment context is missing");
@@ -1241,6 +1261,13 @@ if (ctx.step === "token") {
 
 if (!isOk(msg.statusCode)) {
   if (ctx.step === "compensate_verify_exercise" && Number(msg.statusCode) === 404) {
+    if (ctx.bookingFailure?.source === "MANAGED_SUBSCRIPTION_GATEWAY") {
+      return finishManagedSubscriptionFailure(ctx, {
+        code: "SPLIT_CREATED_EXERCISE_COMPENSATED",
+        verified: true,
+        exerciseId: toStr(ctx.exerciseId),
+      });
+    }
     return fail(502, "Viva booking failed; empty exercise was removed", originalBookingFailure(
       ctx,
       "SPLIT_BOOKING_FAILED_EXERCISE_COMPENSATED",
@@ -1364,6 +1391,31 @@ if (!isOk(msg.statusCode)) {
   return fail(msg.statusCode || 502, "Viva request failed", msg.payload || null);
 }
 
+if (ctx.step === "subscription_gateway_rejected") {
+  if (ctx.action !== "create" || ctx.ownsExercise !== true || !toStr(ctx.exerciseId)) {
+    return fail(409, "Нельзя безопасно подтвердить владельца созданной услуги", {
+      code: "SPLIT_CREATED_EXERCISE_OWNERSHIP_UNVERIFIED",
+      destructiveRetryBlocked: true,
+    });
+  }
+  ctx.step = "reconcile_booking_after_failure";
+  return adminRequest(
+    ctx,
+    "GET",
+    `/exercises/${encodeURIComponent(ctx.exerciseId)}/bookings`,
+  );
+}
+
+if (ctx.step === "subscription_full_price_fallback") {
+  if (ctx.subscriptionGuardDone !== true
+    || resolvePaymentMode(ctx.selectedPaymentMode || ctx.paymentMode) !== "one_time") {
+    return fail(409, "Нельзя безопасно продолжить без льготы подписки", {
+      code: "SUBSCRIPTION_FULL_PRICE_FALLBACK_CONTEXT_INVALID",
+    });
+  }
+  return buildBookingRequest(ctx);
+}
+
 if (ctx.step === "reconcile_booking_after_failure") {
   const rows = bookingRowsForExercise(msg.payload, ctx.exerciseId);
   const matchingRows = rows.filter((item) => bookingMatchesCreateActor(item, ctx));
@@ -1395,6 +1447,15 @@ if (ctx.step === "compensate_delete_exercise") {
 }
 
 if (ctx.step === "compensate_verify_exercise") {
+  if (ctx.bookingFailure?.source === "MANAGED_SUBSCRIPTION_GATEWAY") {
+    return fail(503, "Отказ подписки подтверждён, но удаление пустой услуги не доказано", {
+      code: "SPLIT_CREATED_EXERCISE_COMPENSATION_UNVERIFIED",
+      originalFailure: ctx.bookingFailure.payload || null,
+      compensationDeleteStatus: ctx.compensationDeleteStatus || null,
+      exerciseId: toStr(ctx.exerciseId),
+      destructiveRetryBlocked: true,
+    });
+  }
   return fail(503, "Booking failed and exercise compensation was not verified", originalBookingFailure(
     ctx,
     "SPLIT_EXERCISE_COMPENSATION_UNVERIFIED",
