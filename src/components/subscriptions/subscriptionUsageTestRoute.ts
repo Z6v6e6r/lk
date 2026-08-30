@@ -24,9 +24,11 @@ export function readSubscriptionUsageTestCredentials(
 
 export function subscriptionUsageTestApiPath(
   offerId: string,
-  operation: "snapshot" | "quote",
+  operation: "snapshot" | "quote" | "resolved-quote",
 ): string {
   const encodedOfferId = encodeURIComponent(offerId);
   const root = `/v1/subscription-test/offers/${encodedOfferId}/usage-scenarios`;
-  return operation === "quote" ? `${root}/quote` : root;
+  if (operation === "quote") return `${root}/quote`;
+  if (operation === "resolved-quote") return `${root}/resolved-quote`;
+  return root;
 }

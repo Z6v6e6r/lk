@@ -28,4 +28,8 @@ test("API path encodes the offer id and never contains the token", () => {
     subscriptionUsageTestApiPath("test_offer:1/unsafe", "quote"),
     "/v1/subscription-test/offers/test_offer%3A1%2Funsafe/usage-scenarios/quote",
   );
+  assert.equal(
+    subscriptionUsageTestApiPath("test_offer:1/unsafe", "resolved-quote"),
+    "/v1/subscription-test/offers/test_offer%3A1%2Funsafe/usage-scenarios/resolved-quote",
+  );
 });

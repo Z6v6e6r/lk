@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   appendSubscriptionUsageShadowToSameOriginUrl,
   fetchSubscriptionUsageShadowQuote,
+  isSubscriptionUsageShadowHostedDevHost,
   isSubscriptionUsageShadowLoopbackHost,
   isSubscriptionUsageShadowMode,
   presentSubscriptionUsageShadowQuote,
@@ -83,6 +84,9 @@ test("shadow mode is isolated to ordinary lk_dev and cannot replace the hosted t
   assert.equal(isSubscriptionUsageShadowLoopbackHost("127.0.0.1"), true);
   assert.equal(isSubscriptionUsageShadowLoopbackHost("localhost"), true);
   assert.equal(isSubscriptionUsageShadowLoopbackHost("padlhub.ru"), false);
+  assert.equal(isSubscriptionUsageShadowHostedDevHost("padlhub.ru"), true);
+  assert.equal(isSubscriptionUsageShadowHostedDevHost("www.padlhub.ru"), true);
+  assert.equal(isSubscriptionUsageShadowHostedDevHost("padlhub.su"), false);
 });
 
 test("shadow credentials stay in the fragment and move only within the same origin", () => {
@@ -156,6 +160,90 @@ test("shadow quote sends identifiers only to the loopback server resolver", asyn
     dailyGameUsage: 0,
   });
   assert.doesNotMatch(String(capturedInit?.body), /price|amount|token/i);
+});
+
+test("hosted shadow sends token only in a header and identifiers only to the isolated DEV backend", async () => {
+  let capturedInput = "";
+  let capturedInit: RequestInit | null = null;
+  const request: SubscriptionUsageShadowFetch = async (input, init) => {
+    capturedInput = input;
+    capturedInit = init;
+    return { ok: true, json: async () => buildQuote() };
+  };
+  const preview = {
+    action: "CREATE_GAME" as const,
+    target: {
+      targetKind: "NEW_GAME" as const,
+      slotId: "slot-1",
+      stationId: "station-1",
+      roomId: "room-1",
+      masterServiceId: "master-1",
+      subServiceIds: ["sub-1"],
+      startsAt: "2026-08-30T10:00:00+03:00",
+      durationMinutes: 90 as const,
+    },
+  };
+
+  await fetchSubscriptionUsageShadowQuote({
+    preview,
+    activeServices: 1,
+    dailyGameUsage: 1,
+    request,
+    runtimeLocation: {
+      hostname: "padlhub.ru",
+      hash: `#offerId=test_offer%3Abrowser&token=${TOKEN}`,
+    },
+    hostedApiBase: "https://lk-reserve.89-108-64-209.sslip.io/api",
+  });
+
+  assert.equal(
+    capturedInput,
+    "https://lk-reserve.89-108-64-209.sslip.io/api/v1/subscription-test/offers/test_offer%3Abrowser/usage-scenarios/resolved-quote",
+  );
+  assert.equal(capturedInput.includes(TOKEN), false);
+  const headers = capturedInit?.headers as Record<string, string>;
+  assert.equal(headers["X-Subscription-Test-Token"], TOKEN);
+  assert.equal(headers["Content-Type"], "application/json");
+  assert.deepEqual(JSON.parse(String(capturedInit?.body)), {
+    ...preview,
+    activeServices: 1,
+    dailyGameUsage: 1,
+  });
+  assert.doesNotMatch(String(capturedInit?.body), /price|amount|token/i);
+  assert.equal(capturedInit?.credentials, "omit");
+  assert.equal(capturedInit?.referrerPolicy, "no-referrer");
+});
+
+test("hosted shadow fails closed without credentials or with a non-isolated API base", async () => {
+  const preview = {
+    action: "JOIN_GAME" as const,
+    target: { targetKind: "GAME_AGGREGATE" as const, gameId: "game-1" },
+  };
+  await assert.rejects(
+    () => fetchSubscriptionUsageShadowQuote({
+      preview,
+      activeServices: 0,
+      dailyGameUsage: 0,
+      runtimeLocation: { hostname: "padlhub.ru", hash: "" },
+      hostedApiBase: "https://lk-reserve.89-108-64-209.sslip.io/api",
+      request: async () => assert.fail("request must not be sent"),
+    }),
+    /не хватает offerId или тестового токена/,
+  );
+  await assert.rejects(
+    () => fetchSubscriptionUsageShadowQuote({
+      preview,
+      activeServices: 0,
+      dailyGameUsage: 0,
+      runtimeLocation: {
+        hostname: "padlhub.ru",
+        hash: `#offerId=test_offer%3Abrowser&token=${TOKEN}`,
+      },
+      hostedApiBase: "https://padlhub.su/api",
+      request: async () => assert.fail("request must not be sent"),
+    }),
+    /не относится к изолированному DEV backend/,
+  );
 });
 
 test("90 minute subscription presentation uses one-quarter share and discounts only paid time", () => {

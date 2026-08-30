@@ -1,6 +1,7 @@
 import type { ManagedSubscriptionPolicyDecision } from "../../types/managedSubscriptionRuntime.ts";
 import {
   readSubscriptionUsageTestCredentials,
+  subscriptionUsageTestApiPath,
 } from "./subscriptionUsageTestRoute.ts";
 import type { SubscriptionUsageTestBookingOutcome } from "./subscriptionUsageTestBooking.ts";
 
@@ -87,6 +88,10 @@ export function isSubscriptionUsageShadowLoopbackHost(hostname: string): boolean
   return ["127.0.0.1", "localhost", "::1"].includes(hostname.trim().toLowerCase());
 }
 
+export function isSubscriptionUsageShadowHostedDevHost(hostname: string): boolean {
+  return ["padlhub.ru", "www.padlhub.ru"].includes(hostname.trim().toLowerCase());
+}
+
 export function appendSubscriptionUsageShadowToSameOriginUrl(target: URL, source: URL): URL {
   const sourceParams = source.searchParams;
   if (sourceParams.get("subscriptionShadow") !== "1"
@@ -143,29 +148,41 @@ export async function fetchSubscriptionUsageShadowQuote({
   activeServices,
   dailyGameUsage,
   request = fetch as SubscriptionUsageShadowFetch,
+  runtimeLocation,
+  hostedApiBase,
 }: {
   preview: SubscriptionUsageShadowPreviewRequest;
   activeServices: number;
   dailyGameUsage: number;
   request?: SubscriptionUsageShadowFetch;
+  runtimeLocation?: { hostname: string; hash: string };
+  hostedApiBase?: string;
 }): Promise<SubscriptionUsageShadowQuote> {
-  if (typeof window !== "undefined"
-    && !isSubscriptionUsageShadowLoopbackHost(window.location.hostname)) {
-    throw new Error("DEV-shadow server-resolved расчёт доступен только локально");
-  }
+  const location = runtimeLocation ?? (typeof window !== "undefined"
+    ? { hostname: window.location.hostname, hash: window.location.hash }
+    : { hostname: "127.0.0.1", hash: "" });
+  const loopback = isSubscriptionUsageShadowLoopbackHost(location.hostname);
+  const hosted = isSubscriptionUsageShadowHostedDevHost(location.hostname);
+  if (!loopback && !hosted) throw new Error("DEV-shadow недоступен на этом домене");
   if (preview.action === "CREATE_GAME" && preview.target.targetKind !== "NEW_GAME") {
     throw new Error("Для создания игры серверу нужны идентификаторы выбранного слота");
   }
   if (preview.action === "JOIN_GAME" && preview.target.targetKind !== "GAME_AGGREGATE") {
     throw new Error("Для присоединения серверу нужен идентификатор игры");
   }
+  let endpoint = "/__dev/managed-subscriptions/shadow-quote";
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (hosted) {
+    const credentials = readSubscriptionUsageTestCredentials(location.hash);
+    if (!credentials) throw new Error("Для hosted DEV-shadow не хватает offerId или тестового токена");
+    endpoint = hostedResolvedQuoteEndpoint(hostedApiBase ?? "", credentials.offerId);
+    headers["X-Subscription-Test-Token"] = credentials.token;
+  }
   const response = await request(
-    "/__dev/managed-subscriptions/shadow-quote",
+    endpoint,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         action: preview.action,
         target: preview.target,
@@ -191,6 +208,23 @@ export async function fetchSubscriptionUsageShadowQuote({
     throw new Error("DEV-shadow вернул расчёт для другой длительности");
   }
   return payload;
+}
+
+function hostedResolvedQuoteEndpoint(apiBase: string, offerId: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(apiBase);
+  } catch {
+    throw new Error("Hosted DEV-shadow API настроен неверно");
+  }
+  if (parsed.protocol !== "https:"
+    || parsed.origin !== "https://lk-reserve.89-108-64-209.sslip.io"
+    || parsed.pathname.replace(/\/+$/, "") !== "/api"
+    || parsed.search
+    || parsed.hash) {
+    throw new Error("Hosted DEV-shadow API не относится к изолированному DEV backend");
+  }
+  return `${parsed.origin}/api${subscriptionUsageTestApiPath(offerId, "resolved-quote")}`;
 }
 
 const formatMoney = (amountMinor: number | null | undefined) => {

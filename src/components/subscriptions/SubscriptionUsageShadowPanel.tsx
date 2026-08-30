@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
-import { IS_DEV_RELEASE_CHANNEL } from "../../consts/api_config";
+import { DEV_PHAB_API_URL, IS_DEV_RELEASE_CHANNEL } from "../../consts/api_config";
 import {
   fetchSubscriptionUsageShadowQuote,
+  isSubscriptionUsageShadowHostedDevHost,
   isSubscriptionUsageShadowLoopbackHost,
   isSubscriptionUsageShadowMode,
   normalizeSubscriptionUsageShadowCounter,
@@ -9,6 +10,7 @@ import {
   type SubscriptionUsageShadowPreviewRequest,
   type SubscriptionUsageShadowPresentation,
 } from "./subscriptionUsageShadow";
+import { readSubscriptionUsageTestCredentials } from "./subscriptionUsageTestRoute";
 
 export interface SubscriptionUsageShadowController {
   enabled: boolean;
@@ -27,8 +29,10 @@ export function useSubscriptionUsageShadow(): SubscriptionUsageShadowController 
   const configuration = useMemo(() => {
     if (typeof window === "undefined") return { enabled: false };
     const isLoopback = isSubscriptionUsageShadowLoopbackHost(window.location.hostname);
+    const isHostedDev = isSubscriptionUsageShadowHostedDevHost(window.location.hostname);
+    const hasHostedCredentials = Boolean(readSubscriptionUsageTestCredentials(window.location.hash));
     return {
-      enabled: isLoopback && isSubscriptionUsageShadowMode(
+      enabled: (isLoopback || (isHostedDev && hasHostedCredentials)) && isSubscriptionUsageShadowMode(
         window.location.pathname,
         window.location.search,
         IS_DEV_RELEASE_CHANNEL,
@@ -70,6 +74,7 @@ export function useSubscriptionUsageShadow(): SubscriptionUsageShadowController 
         preview: request,
         activeServices,
         dailyGameUsage,
+        hostedApiBase: DEV_PHAB_API_URL,
       });
       setPresentation(presentSubscriptionUsageShadowQuote(quote));
     } catch (previewError) {
@@ -110,7 +115,7 @@ export function SubscriptionUsageShadowPanel({
       <div className="subscription-usage-shadow__header">
         <div>
           <strong>DEV-shadow годовой подписки</strong>
-          <span>Цена разрешается локальным серверным fixture; браузер не передаёт сумму.</span>
+          <span>Цена разрешается изолированным DEV backend; браузер не передаёт сумму.</span>
         </div>
         <span className="subscription-usage-shadow__badge">0 внешних записей</span>
       </div>

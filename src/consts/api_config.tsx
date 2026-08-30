@@ -8,6 +8,8 @@ const PROD_SERV2_URL = "https://padlhub.su/seliger";
 const DEV_SERV2_URL = "https://lk-reserve.89-108-64-209.sslip.io/seliger";
 const PROD_CABINET_URL = "https://padlhub.ru/lk_new";
 const DEV_CABINET_URL = "https://padlhub.ru/lk_dev";
+const PROD_PHAB_API_URL = "https://padlhub.su/api";
+export const DEV_PHAB_API_URL = "https://lk-reserve.89-108-64-209.sslip.io/api";
 
 export const IS_DEV_RELEASE_CHANNEL = import.meta.env.MODE === "dev";
 export const ALLOW_LOCAL_PRODUCTION_HISTORY_API =
@@ -100,7 +102,12 @@ export const TOURNAMENT_SIGNUP_BUNDLE_URL = resolveOverlayBundleUrl(
   IS_DEV_RELEASE_CHANNEL,
 );
 export const PHAB_API_BASE =
-  (import.meta.env.VITE_PHAB_API_BASE as string | undefined) ?? "https://padlhub.su/api";
+  resolveReleaseChannelUrl(
+    import.meta.env.VITE_PHAB_API_BASE as string | undefined,
+    PROD_PHAB_API_URL,
+    DEV_PHAB_API_URL,
+    IS_DEV_RELEASE_CHANNEL,
+  );
 export const PUBLIC_INVITE_ORIGIN = (import.meta.env.VITE_PUBLIC_INVITE_ORIGIN as string | undefined) ?? "https://padlhub.ru";
 export const PUBLIC_INVITE_PATH = (import.meta.env.VITE_PUBLIC_INVITE_PATH as string | undefined) ?? "/game_join";
 export const PUBLIC_GAME_CREATE_PATH =
