@@ -1,12 +1,35 @@
 import type { ManagedSubscriptionPolicyDecision } from "../../types/managedSubscriptionRuntime.ts";
 import {
   readSubscriptionUsageTestCredentials,
-  subscriptionUsageTestApiPath,
-  type SubscriptionUsageTestCredentials,
 } from "./subscriptionUsageTestRoute.ts";
 import type { SubscriptionUsageTestBookingOutcome } from "./subscriptionUsageTestBooking.ts";
 
 export type SubscriptionUsageShadowAction = "CREATE_GAME" | "JOIN_GAME";
+
+export interface SubscriptionUsageShadowNewGameIntent {
+  targetKind: "NEW_GAME";
+  slotId: string;
+  stationId: string;
+  roomId: string;
+  masterServiceId: string;
+  subServiceIds: string[];
+  startsAt: string;
+  durationMinutes: 60 | 90 | 120;
+}
+
+export interface SubscriptionUsageShadowGameIntent {
+  targetKind: "GAME_AGGREGATE";
+  gameId: string;
+}
+
+export type SubscriptionUsageShadowIntent =
+  | SubscriptionUsageShadowNewGameIntent
+  | SubscriptionUsageShadowGameIntent;
+
+export interface SubscriptionUsageShadowPreviewRequest {
+  action: SubscriptionUsageShadowAction;
+  target: SubscriptionUsageShadowIntent;
+}
 
 export interface SubscriptionUsageShadowTarget {
   targetId: string;
@@ -60,6 +83,10 @@ export function isSubscriptionUsageShadowMode(
   return params.get("subscriptionShadow") === "1" && params.get("subscriptionTest") !== "1";
 }
 
+export function isSubscriptionUsageShadowLoopbackHost(hostname: string): boolean {
+  return ["127.0.0.1", "localhost", "::1"].includes(hostname.trim().toLowerCase());
+}
+
 export function appendSubscriptionUsageShadowToSameOriginUrl(target: URL, source: URL): URL {
   const sourceParams = source.searchParams;
   if (sourceParams.get("subscriptionShadow") !== "1"
@@ -75,15 +102,6 @@ export function appendSubscriptionUsageShadowToSameOriginUrl(target: URL, source
   fragment.set("token", credentials.token);
   target.hash = fragment.toString();
   return target;
-}
-
-export function subscriptionUsageShadowTargetId(
-  action: SubscriptionUsageShadowAction,
-  durationMinutes: number | null | undefined,
-): string | null {
-  const duration = Number(durationMinutes);
-  if (![60, 90, 120].includes(duration)) return null;
-  return `annual-${action === "CREATE_GAME" ? "create" : "join"}-${duration}`;
 }
 
 export function normalizeSubscriptionUsageShadowCounter(
@@ -121,39 +139,36 @@ function isShadowQuote(value: unknown): value is SubscriptionUsageShadowQuote {
 }
 
 export async function fetchSubscriptionUsageShadowQuote({
-  apiBase,
-  credentials,
-  action,
-  durationMinutes,
+  preview,
   activeServices,
   dailyGameUsage,
   request = fetch as SubscriptionUsageShadowFetch,
 }: {
-  apiBase: string;
-  credentials: SubscriptionUsageTestCredentials | null;
-  action: SubscriptionUsageShadowAction;
-  durationMinutes: number | null | undefined;
+  preview: SubscriptionUsageShadowPreviewRequest;
   activeServices: number;
   dailyGameUsage: number;
   request?: SubscriptionUsageShadowFetch;
 }): Promise<SubscriptionUsageShadowQuote> {
-  if (!credentials) {
-    throw new Error("В ссылке отсутствуют offerId или секретный DEV-токен");
+  if (typeof window !== "undefined"
+    && !isSubscriptionUsageShadowLoopbackHost(window.location.hostname)) {
+    throw new Error("DEV-shadow server-resolved расчёт доступен только локально");
   }
-  const targetId = subscriptionUsageShadowTargetId(action, durationMinutes);
-  if (!targetId) {
-    throw new Error("DEV-shadow поддерживает только игры на 60, 90 или 120 минут");
+  if (preview.action === "CREATE_GAME" && preview.target.targetKind !== "NEW_GAME") {
+    throw new Error("Для создания игры серверу нужны идентификаторы выбранного слота");
+  }
+  if (preview.action === "JOIN_GAME" && preview.target.targetKind !== "GAME_AGGREGATE") {
+    throw new Error("Для присоединения серверу нужен идентификатор игры");
   }
   const response = await request(
-    `${apiBase}${subscriptionUsageTestApiPath(credentials.offerId, "quote")}`,
+    "/__dev/managed-subscriptions/shadow-quote",
     {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Subscription-Test-Token": credentials.token,
       },
       body: JSON.stringify({
-        targetId,
+        action: preview.action,
+        target: preview.target,
         activeServices: normalizeSubscriptionUsageShadowCounter(activeServices, 4),
         dailyGameUsage: normalizeSubscriptionUsageShadowCounter(dailyGameUsage, 4),
       }),
@@ -168,18 +183,24 @@ export async function fetchSubscriptionUsageShadowQuote({
     const details = apiError?.error?.details?.issues?.join("; ");
     throw new Error(details || apiError?.error?.message || "DEV-shadow расчёт недоступен");
   }
-  if (!isShadowQuote(payload) || payload.target.targetId !== targetId) {
+  if (!isShadowQuote(payload) || payload.target.action !== preview.action) {
     throw new Error("DEV-shadow вернул ответ неизвестного формата");
+  }
+  if (preview.target.targetKind === "NEW_GAME"
+    && payload.target.target.durationMinutes !== preview.target.durationMinutes) {
+    throw new Error("DEV-shadow вернул расчёт для другой длительности");
   }
   return payload;
 }
 
 const formatMoney = (amountMinor: number | null | undefined) => {
   if (amountMinor === null || amountMinor === undefined) return "цена не определена";
+  const hasKopecks = Math.abs(amountMinor) % 100 !== 0;
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
     currency: "RUB",
-    maximumFractionDigits: 0,
+    minimumFractionDigits: hasKopecks ? 2 : 0,
+    maximumFractionDigits: hasKopecks ? 2 : 0,
   }).format(amountMinor / 100);
 };
 

@@ -74,6 +74,33 @@ interface PolicySource {
   policy: ManagedSubscriptionRuntimePolicy;
 }
 
+interface SubscriptionUsageShadowNewGameIntent {
+  targetKind: "NEW_GAME";
+  slotId: string;
+  stationId: string;
+  roomId: string;
+  masterServiceId: string;
+  subServiceIds: string[];
+  startsAt: string;
+  durationMinutes: 60 | 90 | 120;
+}
+
+interface SubscriptionUsageShadowGameIntent {
+  targetKind: "GAME_AGGREGATE";
+  gameId: string;
+}
+
+type SubscriptionUsageShadowIntent =
+  | SubscriptionUsageShadowNewGameIntent
+  | SubscriptionUsageShadowGameIntent;
+
+interface SubscriptionUsageShadowJoinFixture {
+  stationId: string;
+  startsAt: string;
+  durationMinutes: 60 | 90 | 120;
+  courtPriceMinor: number;
+}
+
 interface OperationReplay {
   fingerprint: string;
   response: unknown;
@@ -259,6 +286,73 @@ export const compileDraftPolicy = (
     policy,
   };
 };
+
+export const buildAnnualShadowPolicySource = (stationIds: string[]): PolicySource => compileDraftPolicy(
+  {
+    subscriptionTypeId: "subscription_type:annual-shadow-fixture",
+    code: "annual-shadow-fixture",
+    title: "DEV fixture годовой подписки",
+  },
+  {
+    subscriptionTypeId: "subscription_type:annual-shadow-fixture",
+    version: 1,
+    status: "DRAFT_FIXTURE",
+    modelVersion: 1,
+    effectiveAt: "2026-08-15T00:00:00.000Z",
+    createGame: { enabled: true, durationsMinutes: [60, 90, 120] },
+    joinGame: { enabled: true, minDurationMinutes: 60, maxDurationMinutes: 120 },
+    activeServicesLimit: {
+      enabled: true,
+      max: 4,
+      scope: "SUBSCRIPTION_BENEFIT_ONLY",
+    },
+    bookingWindow: { enabled: false, days: null },
+    dailyUsageLimit: 1,
+    dailyUsagePolicy: {
+      actions: ["CREATE_GAME", "JOIN_GAME"],
+      limitExceeded: "PERCENT_DISCOUNT",
+      percentage: 30,
+    },
+    usageUnitsByDuration: { "60": 1, "90": 1, "120": 1 },
+    stationAccessRules: [{
+      ruleId: "annual-shadow-all-stations",
+      enabled: true,
+      priority: 100,
+      selector: { kind: "ALL_STATIONS", stationIds: [] },
+      surcharge: { kind: "NONE", amountMinor: 0 },
+    }],
+    benefitRules: [60, 90, 120].map((durationMinutes) => ({
+      ruleId: `annual-shadow-game-${durationMinutes}`,
+      enabled: true,
+      category: "GAME",
+      actions: ["CREATE_GAME", "JOIN_GAME"],
+      externalEventTypeIds: ["dev-open-game"],
+      productTypeIds: [],
+      durationMinutes: [durationMinutes],
+      stationIds,
+      kind: durationMinutes === 60 ? "FREE_ENTITLEMENT" : "PARTIAL_PRICE_PERCENT_DISCOUNT",
+      valueMinor: null,
+      percentage: durationMinutes === 60 ? null : 30,
+      partialPrice: durationMinutes === 90
+        ? { numerator: 1, denominator: 3 }
+        : durationMinutes === 120
+          ? { numerator: 1, denominator: 2 }
+          : null,
+      priority: 100,
+    })),
+    capabilities: {
+      lifecycle: { allowBookingsAfterExpiry: false },
+      usage: {
+        weeklyUsageLimit: null,
+        monthlyUsageLimit: null,
+        maxFutureBookings: null,
+        minHoursBetweenUses: 0,
+        blackoutDates: [],
+      },
+    },
+  },
+  EVALUATED_AT,
+);
 
 export const loadPolicyFromCup = async (options: {
   baseUrl?: string;
@@ -662,6 +756,31 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
     return { target, decision: evaluatePolicy(input) };
   };
 
+  const decisionForResolvedTarget = async (
+    target: ManagedSubscriptionDevTarget,
+    usage: { activeServices: number; dailyGameUsage: number },
+  ): Promise<ManagedSubscriptionPolicyDecision> => {
+    const context = await requireContext();
+    const bucketDate = localDate(target.target.startsAt);
+    return evaluatePolicy({
+      evaluatedAt: EVALUATED_AT,
+      action: target.action,
+      policy: clone(context.policySource.policy),
+      instance: clone(context.instance),
+      target: clone(target.target),
+      usage: {
+        activeServiceScope: context.policySource.policy.activeServicesLimit.scope,
+        dailyBucketLocalDate: bucketDate,
+        activeServices: usage.activeServices,
+        dailyUsed: usage.dailyGameUsage,
+        weeklyUsed: usage.dailyGameUsage,
+        monthlyUsed: usage.dailyGameUsage,
+        futureBookings: usage.activeServices,
+        activeServiceStartsAt: [],
+      },
+    });
+  };
+
   const seedUnlocked = async (count: number) => {
     await requireContext();
     if (!Number.isInteger(count) || count < 0 || count > 4) {
@@ -757,6 +876,21 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
         },
       });
       return { target: clone(result.target), decision: result.decision, snapshot: await snapshot() };
+    },
+    async quoteResolved(
+      target: ManagedSubscriptionDevTarget,
+      usage: { activeServices: number; dailyGameUsage: number },
+    ) {
+      const decision = await decisionForResolvedTarget(target, usage);
+      appendEvent(decision.eligible ? "ELIGIBILITY_QUOTED" : "ELIGIBILITY_BLOCKED", {
+        targetId: target.targetId,
+        details: {
+          blockerCodes: decision.blockers.map((blocker) => blocker.code),
+          finalPriceMinor: decision.benefit?.finalPriceMinor ?? null,
+          resolutionSource: "SERVER_FIXTURE",
+        },
+      });
+      return { target: clone(target), decision };
     },
     reserve(targetId: unknown, operationId: unknown) {
       return mutate(async () => {
@@ -910,22 +1044,253 @@ const assertLocalOrigin = (request: IncomingMessage) => {
   }
 };
 
+const normalizeShadowCounter = (value: unknown): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.min(4, Math.max(0, Math.floor(parsed)));
+};
+
+const parseShadowStationIds = (value: unknown): string[] => (
+  String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+);
+
+const parseShadowJoinFixtures = (
+  value: unknown,
+): Map<string, SubscriptionUsageShadowJoinFixture> => {
+  if (!value) return new Map();
+  try {
+    const parsed = asRecord(JSON.parse(String(value)));
+    const fixtures = new Map<string, SubscriptionUsageShadowJoinFixture>();
+    for (const [gameId, rawFixture] of Object.entries(parsed)) {
+      const fixture = asRecord(rawFixture);
+      const stationId = String(fixture.stationId || "").trim();
+      const startsAt = String(fixture.startsAt || "").trim();
+      const durationMinutes = Number(fixture.durationMinutes);
+      const courtPriceMinor = Number(fixture.courtPriceMinor);
+      if (!gameId.trim() || !stationId || !Number.isFinite(Date.parse(startsAt))
+        || ![60, 90, 120].includes(durationMinutes)
+        || !Number.isInteger(courtPriceMinor) || courtPriceMinor <= 0) {
+        throw new Error(`invalid fixture ${gameId}`);
+      }
+      fixtures.set(gameId.trim(), {
+        stationId,
+        startsAt,
+        durationMinutes: durationMinutes as 60 | 90 | 120,
+        courtPriceMinor,
+      });
+    }
+    return fixtures;
+  } catch {
+    throw new DevRuntimeError(
+      503,
+      "DEV_SHADOW_JOIN_CATALOG_INVALID",
+      "Серверный fixture-каталог игр настроен некорректно",
+    );
+  }
+};
+
+const shadowCreateFixtureKey = (intent: SubscriptionUsageShadowNewGameIntent): string => [
+  intent.stationId.trim(),
+  intent.roomId.trim(),
+  intent.startsAt,
+  String(intent.durationMinutes),
+].join("|");
+
+const parseShadowCreateFixtures = (value: unknown): Map<string, number> => {
+  if (!value) return new Map();
+  try {
+    const parsed = asRecord(JSON.parse(String(value)));
+    const fixtures = new Map<string, number>();
+    for (const [key, rawPrice] of Object.entries(parsed)) {
+      const courtPriceMinor = Number(rawPrice);
+      if (!key.trim() || !Number.isInteger(courtPriceMinor) || courtPriceMinor <= 0) {
+        throw new Error(`invalid fixture ${key}`);
+      }
+      fixtures.set(key.trim(), courtPriceMinor);
+    }
+    return fixtures;
+  } catch {
+    throw new DevRuntimeError(
+      503,
+      "DEV_SHADOW_CREATE_CATALOG_INVALID",
+      "Серверный fixture-каталог слотов настроен некорректно",
+    );
+  }
+};
+
+export const resolveShadowIntent = ({
+  action,
+  intent,
+  createFixtures = new Map(),
+  stationIds,
+  joinFixtures,
+}: {
+  action: ManagedSubscriptionAction;
+  intent: SubscriptionUsageShadowIntent;
+  createFixtures?: Map<string, number>;
+  stationIds: string[];
+  joinFixtures: Map<string, SubscriptionUsageShadowJoinFixture>;
+}): ManagedSubscriptionDevTarget => {
+  const allowedStationIds = new Set(stationIds);
+  let stationId: string;
+  let startsAt: string;
+  let durationMinutes: 60 | 90 | 120;
+  let courtPriceMinor: number;
+  let targetId: string;
+
+  if (action === "CREATE_GAME" && intent.targetKind === "NEW_GAME") {
+    const identifiers = [
+      intent.slotId,
+      intent.stationId,
+      intent.roomId,
+      intent.masterServiceId,
+    ];
+    if (identifiers.some((value) => !String(value || "").trim())
+      || !Array.isArray(intent.subServiceIds)
+      || intent.subServiceIds.length === 0
+      || intent.subServiceIds.length > 8
+      || intent.subServiceIds.some((value) => !String(value || "").trim())
+      || ![60, 90, 120].includes(Number(intent.durationMinutes))
+      || !Number.isFinite(Date.parse(intent.startsAt))) {
+      throw new DevRuntimeError(
+        400,
+        "DEV_SHADOW_TARGET_INVALID",
+        "Идентификаторы выбранного слота неполны",
+      );
+    }
+    stationId = intent.stationId.trim();
+    startsAt = intent.startsAt;
+    durationMinutes = intent.durationMinutes;
+    const fixturePrice = createFixtures.get(shadowCreateFixtureKey(intent));
+    if (fixturePrice !== undefined) {
+      courtPriceMinor = fixturePrice;
+    } else {
+      throw new DevRuntimeError(
+        404,
+        "DEV_SHADOW_SLOT_PRICE_NOT_RESOLVED",
+        "Цена выбранного слота отсутствует в серверном DEV-каталоге",
+      );
+    }
+    targetId = `server-new:${stableDigest(intent).slice(0, 24)}`;
+  } else if (action === "JOIN_GAME" && intent.targetKind === "GAME_AGGREGATE") {
+    const gameId = String(intent.gameId || "").trim();
+    const fixture = joinFixtures.get(gameId);
+    if (!gameId || !fixture) {
+      throw new DevRuntimeError(
+        404,
+        "DEV_SHADOW_GAME_NOT_RESOLVED",
+        "Игра не найдена в серверном DEV-каталоге",
+      );
+    }
+    stationId = fixture.stationId;
+    startsAt = fixture.startsAt;
+    durationMinutes = fixture.durationMinutes;
+    courtPriceMinor = fixture.courtPriceMinor;
+    targetId = `server-game:${stableDigest(gameId).slice(0, 24)}`;
+  } else {
+    throw new DevRuntimeError(
+      400,
+      "DEV_SHADOW_ACTION_TARGET_MISMATCH",
+      "Тип серверной цели не совпадает с действием",
+    );
+  }
+
+  if (!allowedStationIds.has(stationId)) {
+    throw new DevRuntimeError(
+      403,
+      "DEV_SHADOW_STATION_DENIED",
+      "Станция не включена в серверный DEV fixture",
+    );
+  }
+  const playerPriceMinor = Math.round(courtPriceMinor / 4);
+  return {
+    targetId,
+    title: action === "CREATE_GAME"
+      ? `Создать игру на ${durationMinutes} минут`
+      : `Присоединиться к игре на ${durationMinutes} минут`,
+    description: "Цена и цель разрешены локальным серверным fixture-каталогом",
+    action,
+    courtPriceMinor,
+    participantCount: 4,
+    target: {
+      resolutionSource: "SERVER",
+      stationId,
+      category: "GAME",
+      externalEventTypeId: "dev-open-game",
+      productTypeId: null,
+      eventId: targetId,
+      durationMinutes,
+      startsAt,
+      basePriceMinor: playerPriceMinor,
+      currency: "RUB",
+    },
+  };
+};
+
+export const buildShadowBookingOutcome = (
+  target: ManagedSubscriptionDevTarget,
+  decision: ManagedSubscriptionPolicyDecision,
+) => {
+  const reasonCodes = decision.blockers.map((blocker) => blocker.code);
+  if (decision.eligible) {
+    return {
+      allowed: true,
+      subscriptionApplied: true,
+      pricingMode: "SUBSCRIPTION",
+      finalPriceMinor: decision.benefit?.finalPriceMinor ?? target.target.basePriceMinor,
+      reasonCodes,
+    };
+  }
+  const fullPriceFallbackCodes = new Set([
+    "ACTIVE_SERVICES_LIMIT_REACHED",
+    "FUTURE_BOOKINGS_LIMIT_REACHED",
+  ]);
+  if (reasonCodes.length > 0 && reasonCodes.every((code) => fullPriceFallbackCodes.has(code))) {
+    return {
+      allowed: true,
+      subscriptionApplied: false,
+      pricingMode: "FULL_PRICE_WITHOUT_SUBSCRIPTION",
+      finalPriceMinor: target.target.basePriceMinor,
+      reasonCodes,
+    };
+  }
+  return {
+    allowed: false,
+    subscriptionApplied: false,
+    pricingMode: "BLOCKED",
+    finalPriceMinor: null,
+    reasonCodes,
+  };
+};
+
 export const managedSubscriptionDevPlugin = (options: {
   enabled: boolean;
   cupBaseUrl?: string;
   typeCode?: string;
   policyVersion?: number | string;
+  annualShadowFixture?: boolean;
+  shadowCreateFixturesJson?: string;
+  shadowStationIds?: string;
+  shadowJoinFixturesJson?: string;
 }): Plugin => ({
   name: "managed-subscription-dev-runtime",
   apply: "serve",
   configureServer(server) {
     if (!options.enabled) return;
+    const shadowStationIds = parseShadowStationIds(options.shadowStationIds);
+    const shadowCreateFixtures = parseShadowCreateFixtures(options.shadowCreateFixturesJson);
+    const shadowJoinFixtures = parseShadowJoinFixtures(options.shadowJoinFixturesJson);
     const runtime = createManagedSubscriptionDevRuntime({
-      policyLoader: () => loadPolicyFromCup({
-        baseUrl: options.cupBaseUrl,
-        typeCode: options.typeCode,
-        policyVersion: options.policyVersion,
-      }),
+      policyLoader: options.annualShadowFixture
+        ? async () => buildAnnualShadowPolicySource(shadowStationIds)
+        : () => loadPolicyFromCup({
+          baseUrl: options.cupBaseUrl,
+          typeCode: options.typeCode,
+          policyVersion: options.policyVersion,
+        }),
     });
 
     server.middlewares.use(async (request, response, next) => {
@@ -944,6 +1309,41 @@ export const managedSubscriptionDevPlugin = (options: {
           throw new DevRuntimeError(405, "METHOD_NOT_ALLOWED", "Метод не поддерживается");
         }
         const body = await readJsonBody(request);
+        if (url.pathname === `${API_PREFIX}/shadow-quote`) {
+          if (!options.annualShadowFixture
+            || shadowStationIds.length === 0) {
+            throw new DevRuntimeError(
+              503,
+              "DEV_SHADOW_FIXTURE_DISABLED",
+              "Локальный server-resolved fixture не настроен",
+            );
+          }
+          const action = String(body.action || "") as ManagedSubscriptionAction;
+          if (!(["CREATE_GAME", "JOIN_GAME"] as string[]).includes(action)) {
+            throw new DevRuntimeError(400, "DEV_SHADOW_ACTION_INVALID", "Действие не поддерживается");
+          }
+          const target = resolveShadowIntent({
+            action,
+            intent: asRecord(body.target) as unknown as SubscriptionUsageShadowIntent,
+            createFixtures: shadowCreateFixtures,
+            stationIds: shadowStationIds,
+            joinFixtures: shadowJoinFixtures,
+          });
+          const result = await runtime.quoteResolved(target, {
+            activeServices: normalizeShadowCounter(body.activeServices),
+            dailyGameUsage: normalizeShadowCounter(body.dailyGameUsage),
+          });
+          sendJson(response, 200, {
+            ...result,
+            bookingOutcome: buildShadowBookingOutcome(result.target, result.decision),
+            resolution: {
+              source: "SERVER_FIXTURE",
+              providerCalls: 0,
+              browserPriceAccepted: false,
+            },
+          });
+          return;
+        }
         if (url.pathname === `${API_PREFIX}/quote`) {
           sendJson(response, 200, await runtime.quote(body.targetId));
           return;

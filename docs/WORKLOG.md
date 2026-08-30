@@ -1615,3 +1615,19 @@
 - Verified the source contract with 34 focused tests, TypeScript, lint, DEV builds, and
   desktop/mobile browser inspection. No branch push, merge, deployment, provider write,
   booking, payment, or live data mutation was performed.
+
+## 2026-08-30 — Server-resolved DEV-shadow price correction
+
+- Replaced duration-only browser fixtures with a loopback-only target contract: create
+  sends slot/station/room/service identifiers and join sends only an opaque game id.
+  Browser price and amount fields are neither sent nor accepted.
+- The local server resolves an exact fixture price by station, room, start time and
+  duration, then applies the 1/4 player share and the annual-policy evaluator. Missing
+  catalog entries fail closed instead of falling back to an average tariff.
+- Verified in the ordinary LK UI: the selected 4,500 RUB / 90-minute slot returns
+  exactly 262.50 RUB including kopecks, post-free-hour usage returns 787.50 RUB, the
+  four-active-services path remains available at the full 1,125 RUB player share, and
+  the selected 6,000 RUB / 120-minute slot returns 525 RUB.
+- This remains a local fake-provider proof. The published backend quote endpoint is not
+  present, no Viva/CUP provider call was made, and no booking, join, payment, debit,
+  branch push, merge, deployment or live mutation occurred.

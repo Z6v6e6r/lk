@@ -19,6 +19,10 @@ export default defineConfig(({ command, mode }) => {
         cupBaseUrl: process.env.MANAGED_SUBSCRIPTIONS_CUP_BASE_URL,
         typeCode: process.env.MANAGED_SUBSCRIPTIONS_TYPE_CODE,
         policyVersion: process.env.MANAGED_SUBSCRIPTIONS_POLICY_VERSION,
+        annualShadowFixture: process.env.MANAGED_SUBSCRIPTIONS_POLICY_FIXTURE === 'annual-shadow',
+        shadowCreateFixturesJson: process.env.MANAGED_SUBSCRIPTIONS_SHADOW_CREATE_FIXTURES_JSON,
+        shadowStationIds: process.env.MANAGED_SUBSCRIPTIONS_SHADOW_STATION_IDS,
+        shadowJoinFixturesJson: process.env.MANAGED_SUBSCRIPTIONS_SHADOW_JOIN_FIXTURES_JSON,
       }),
       cssInjectedByJsPlugin(), // вшивает CSS прямо в bundle.js
       ...(shouldAnalyze

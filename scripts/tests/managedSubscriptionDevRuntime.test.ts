@@ -2,9 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+  buildAnnualShadowPolicySource,
+  buildShadowBookingOutcome,
   compileDraftPolicy,
   createManagedSubscriptionDevRuntime,
   loadPolicyFromCup,
+  resolveShadowIntent,
 } from "../managed_subscription_dev_runtime.ts";
 
 const draftPolicy = () => ({
@@ -439,6 +442,104 @@ test("browser cannot inject an arbitrary station, date or price", async () => {
     }),
     /Тестовое событие не найдено/,
   );
+});
+
+test("server-resolved create intent ignores browser price and uses one-quarter of fixture court price", async () => {
+  const stationId = "station-terekhovo";
+  const target = resolveShadowIntent({
+    action: "CREATE_GAME",
+    intent: {
+      targetKind: "NEW_GAME",
+      slotId: "slot-90",
+      stationId,
+      roomId: "room-6",
+      masterServiceId: "master-padel",
+      subServiceIds: ["sub-padel"],
+      startsAt: "2026-08-30T10:30:00+03:00",
+      durationMinutes: 90,
+      basePriceMinor: 1,
+    } as never,
+    createFixtures: new Map([
+      [`${stationId}|room-6|2026-08-30T10:30:00+03:00|90`, 1_200_000],
+    ]),
+    stationIds: [stationId],
+    joinFixtures: new Map(),
+  });
+  assert.equal(target.courtPriceMinor, 1_200_000);
+  assert.equal(target.participantCount, 4);
+  assert.equal(target.target.basePriceMinor, 300_000);
+
+  const runtime = createManagedSubscriptionDevRuntime({
+    policyLoader: async () => buildAnnualShadowPolicySource([stationId]),
+  });
+  const firstUse = await runtime.quoteResolved(target, { activeServices: 0, dailyGameUsage: 0 });
+  assert.equal(firstUse.decision.benefit?.partialPriceCalculation?.chargeBeforeDiscountMinor, 100_000);
+  assert.equal(firstUse.decision.benefit?.finalPriceMinor, 70_000);
+
+  const afterFreeHour = await runtime.quoteResolved(target, { activeServices: 0, dailyGameUsage: 1 });
+  assert.equal(afterFreeHour.decision.benefit?.kind, "PERCENT_DISCOUNT");
+  assert.equal(afterFreeHour.decision.benefit?.finalPriceMinor, 210_000);
+
+  const overActiveLimit = await runtime.quoteResolved(target, { activeServices: 4, dailyGameUsage: 0 });
+  assert.ok(overActiveLimit.decision.blockers.some(
+    (blocker) => blocker.code === "ACTIVE_SERVICES_LIMIT_REACHED",
+  ));
+  assert.deepEqual(buildShadowBookingOutcome(target, overActiveLimit.decision), {
+    allowed: true,
+    subscriptionApplied: false,
+    pricingMode: "FULL_PRICE_WITHOUT_SUBSCRIPTION",
+    finalPriceMinor: 300_000,
+    reasonCodes: ["ACTIVE_SERVICES_LIMIT_REACHED"],
+  });
+});
+
+test("server-resolved 120 minute create charges only the second player-hour with 30 percent discount", async () => {
+  const stationId = "station-terekhovo";
+  const target = resolveShadowIntent({
+    action: "CREATE_GAME",
+    intent: {
+      targetKind: "NEW_GAME",
+      slotId: "slot-120",
+      stationId,
+      roomId: "room-6",
+      masterServiceId: "master-padel",
+      subServiceIds: ["sub-padel"],
+      startsAt: "2026-08-30T12:30:00+03:00",
+      durationMinutes: 120,
+    },
+    createFixtures: new Map([
+      [`${stationId}|room-6|2026-08-30T12:30:00+03:00|120`, 1_600_000],
+    ]),
+    stationIds: [stationId],
+    joinFixtures: new Map(),
+  });
+  const runtime = createManagedSubscriptionDevRuntime({
+    policyLoader: async () => buildAnnualShadowPolicySource([stationId]),
+  });
+  const result = await runtime.quoteResolved(target, { activeServices: 0, dailyGameUsage: 0 });
+  assert.equal(target.courtPriceMinor, 1_600_000);
+  assert.equal(target.target.basePriceMinor, 400_000);
+  assert.equal(result.decision.benefit?.partialPriceCalculation?.chargeBeforeDiscountMinor, 200_000);
+  assert.equal(result.decision.benefit?.finalPriceMinor, 140_000);
+});
+
+test("server-resolved create fails closed when the exact slot is absent from the server catalog", () => {
+  assert.throws(() => resolveShadowIntent({
+    action: "CREATE_GAME",
+    intent: {
+      targetKind: "NEW_GAME",
+      slotId: "unknown-slot",
+      stationId: "station-terekhovo",
+      roomId: "room-6",
+      masterServiceId: "master-padel",
+      subServiceIds: ["sub-padel"],
+      startsAt: "2026-08-30T15:00:00+03:00",
+      durationMinutes: 90,
+    },
+    createFixtures: new Map(),
+    stationIds: ["station-terekhovo"],
+    joinFixtures: new Map(),
+  }), /Цена выбранного слота отсутствует/);
 });
 
 test("DEV page is available only behind import.meta.env.DEV and contains no Viva mutation client", () => {

@@ -1,12 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
-import { IS_DEV_RELEASE_CHANNEL, PHAB_API_BASE } from "../../consts/api_config";
-import { readSubscriptionUsageTestCredentials } from "./subscriptionUsageTestRoute";
+import { IS_DEV_RELEASE_CHANNEL } from "../../consts/api_config";
 import {
   fetchSubscriptionUsageShadowQuote,
+  isSubscriptionUsageShadowLoopbackHost,
   isSubscriptionUsageShadowMode,
   normalizeSubscriptionUsageShadowCounter,
   presentSubscriptionUsageShadowQuote,
-  type SubscriptionUsageShadowAction,
+  type SubscriptionUsageShadowPreviewRequest,
   type SubscriptionUsageShadowPresentation,
 } from "./subscriptionUsageShadow";
 
@@ -19,20 +19,20 @@ export interface SubscriptionUsageShadowController {
   error: string | null;
   setActiveServices(value: number): void;
   setDailyGameUsage(value: number): void;
-  preview(action: SubscriptionUsageShadowAction, durationMinutes: number | null | undefined): Promise<void>;
+  preview(request: SubscriptionUsageShadowPreviewRequest | null): Promise<void>;
   reject(message: string): void;
 }
 
 export function useSubscriptionUsageShadow(): SubscriptionUsageShadowController {
   const configuration = useMemo(() => {
-    if (typeof window === "undefined") return { enabled: false, credentials: null };
+    if (typeof window === "undefined") return { enabled: false };
+    const isLoopback = isSubscriptionUsageShadowLoopbackHost(window.location.hostname);
     return {
-      enabled: isSubscriptionUsageShadowMode(
+      enabled: isLoopback && isSubscriptionUsageShadowMode(
         window.location.pathname,
         window.location.search,
         IS_DEV_RELEASE_CHANNEL,
       ),
-      credentials: readSubscriptionUsageTestCredentials(window.location.hash),
     };
   }, []);
   const [activeServices, setActiveServicesState] = useState(0);
@@ -54,19 +54,20 @@ export function useSubscriptionUsageShadow(): SubscriptionUsageShadowController 
   }, []);
 
   const preview = useCallback(async (
-    action: SubscriptionUsageShadowAction,
-    durationMinutes: number | null | undefined,
+    request: SubscriptionUsageShadowPreviewRequest | null,
   ) => {
     if (!configuration.enabled) return;
+    if (!request) {
+      setPresentation(null);
+      setError("Выберите станцию, корт, дату и время для серверного расчёта");
+      return;
+    }
     setBusy(true);
     setError(null);
     setPresentation(null);
     try {
       const quote = await fetchSubscriptionUsageShadowQuote({
-        apiBase: PHAB_API_BASE,
-        credentials: configuration.credentials,
-        action,
-        durationMinutes,
+        preview: request,
         activeServices,
         dailyGameUsage,
       });
@@ -109,7 +110,7 @@ export function SubscriptionUsageShadowPanel({
       <div className="subscription-usage-shadow__header">
         <div>
           <strong>DEV-shadow годовой подписки</strong>
-          <span>Основная кнопка только рассчитывает условия — без бронирования и оплаты.</span>
+          <span>Цена разрешается локальным серверным fixture; браузер не передаёт сумму.</span>
         </div>
         <span className="subscription-usage-shadow__badge">0 внешних записей</span>
       </div>

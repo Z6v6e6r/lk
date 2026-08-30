@@ -790,6 +790,14 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const [splitPaymentPromoConfig, setSplitPaymentPromoConfig] =
     useState<PadelSplitPaymentPromoConfig | null>(null);
   const splitPricingGameId = game && isSplitPaymentGame(game) ? game.id : null;
+  const subscriptionUsageShadowJoinPreview = useMemo(() => (
+    game?.id
+      ? {
+        action: "JOIN_GAME" as const,
+        target: { targetKind: "GAME_AGGREGATE" as const, gameId: game.id },
+      }
+      : null
+  ), [game?.id]);
   const preferredSplitPaymentMode = useMemo(() => {
     if (typeof window === "undefined") return null;
     try {
@@ -1230,7 +1238,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           );
           return;
         }
-        await previewSubscriptionUsageShadow("JOIN_GAME", game?.booking?.durationMinutes);
+        await previewSubscriptionUsageShadow(subscriptionUsageShadowJoinPreview);
         return;
       }
       if (!game || !profile) {
@@ -1882,6 +1890,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       profile,
       rejectSubscriptionUsageShadowAction,
       splitPaymentPromoConfig,
+      subscriptionUsageShadowJoinPreview,
       subscriptionUsageShadowEnabled,
     ],
   );

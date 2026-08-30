@@ -119,6 +119,7 @@ import {
   SubscriptionUsageShadowPanel,
   useSubscriptionUsageShadow,
 } from "../subscriptions/SubscriptionUsageShadowPanel";
+import type { SubscriptionUsageShadowPreviewRequest } from "../subscriptions/subscriptionUsageShadow";
 import {
   buildA3PayDevVivaBookingSelectionKey,
   cancelA3PayDevVivaBooking,
@@ -6927,6 +6928,23 @@ export default function GamesPage({
     studioMasterServiceId,
     time,
   ]);
+  const subscriptionUsageShadowCreatePreview = useMemo<SubscriptionUsageShadowPreviewRequest | null>(() => {
+    if (!a3PayDevVivaSelection || !selectedSlotId
+      || ![60, 90, 120].includes(duration)) return null;
+    return {
+      action: "CREATE_GAME",
+      target: {
+        targetKind: "NEW_GAME",
+        slotId: selectedSlotId,
+        stationId: a3PayDevVivaSelection.studioId,
+        roomId: a3PayDevVivaSelection.roomId,
+        masterServiceId: a3PayDevVivaSelection.masterServiceId,
+        subServiceIds: [...a3PayDevVivaSelection.subServiceIds],
+        startsAt: `${a3PayDevVivaSelection.date}T${a3PayDevVivaSelection.fromTime}:00+03:00`,
+        durationMinutes: duration as 60 | 90 | 120,
+      },
+    };
+  }, [a3PayDevVivaSelection, duration, selectedSlotId]);
   const a3PayDevVivaSelectionKey = useMemo(
     () => a3PayDevVivaSelection
       ? buildA3PayDevVivaBookingSelectionKey(a3PayDevVivaSelection)
@@ -7453,6 +7471,14 @@ export default function GamesPage({
     },
     [activeGameRecordStore, communityGames, gameRecordId],
   );
+  const subscriptionUsageShadowJoinPreview = useMemo<SubscriptionUsageShadowPreviewRequest | null>(() => (
+    activeGameRecord?.id
+      ? {
+        action: "JOIN_GAME",
+        target: { targetKind: "GAME_AGGREGATE", gameId: activeGameRecord.id },
+      }
+      : null
+  ), [activeGameRecord?.id]);
   const isReadOnlySyntheticGame = useMemo(
     () => isSyntheticCabinetBookingGame(activeGameRecord),
     [activeGameRecord],
@@ -10646,7 +10672,7 @@ export default function GamesPage({
     preferredClientSubscriptionId?: string | null,
   ) => {
     if (subscriptionUsageShadowEnabled) {
-      await previewSubscriptionUsageShadow("CREATE_GAME", duration);
+      await previewSubscriptionUsageShadow(subscriptionUsageShadowCreatePreview);
       return;
     }
     if (!studioId || !selectedDate || !courtId || !time || !selectedSlotId) return;
@@ -11097,12 +11123,13 @@ export default function GamesPage({
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
     previewSubscriptionUsageShadow,
+    subscriptionUsageShadowCreatePreview,
     subscriptionUsageShadowEnabled,
   ]);
 
   const handleMasterServicePay = useCallback(async () => {
     if (subscriptionUsageShadowEnabled) {
-      await previewSubscriptionUsageShadow("CREATE_GAME", duration);
+      await previewSubscriptionUsageShadow(subscriptionUsageShadowCreatePreview);
       return;
     }
     if (!studioId || !selectedDate || !courtId || !time || !selectedSlotId) return;
@@ -11457,6 +11484,7 @@ export default function GamesPage({
     runPaidGameCommunityMembershipAndPublication,
     upsertGameRecordInStores,
     previewSubscriptionUsageShadow,
+    subscriptionUsageShadowCreatePreview,
     subscriptionUsageShadowEnabled,
   ]);
 
@@ -11493,7 +11521,7 @@ export default function GamesPage({
 
   const handleCreateSubmit = useCallback(() => {
     if (subscriptionUsageShadowEnabled) {
-      void previewSubscriptionUsageShadow("CREATE_GAME", duration);
+      void previewSubscriptionUsageShadow(subscriptionUsageShadowCreatePreview);
       return;
     }
     if (splitPaymentSelected) {
@@ -11516,8 +11544,8 @@ export default function GamesPage({
     selectedSplitSubscriptionId,
     handleSplitGamePay,
     handleMasterServicePay,
-    duration,
     previewSubscriptionUsageShadow,
+    subscriptionUsageShadowCreatePreview,
     subscriptionUsageShadowEnabled,
   ]);
 
@@ -11784,10 +11812,7 @@ export default function GamesPage({
   const handleCreateGame = () => {
     if (loadingPay) return;
     if (subscriptionUsageShadowEnabled) {
-      void previewSubscriptionUsageShadow(
-        "CREATE_GAME",
-        isBookingPresetMode ? bookingPreset.durationMinutes : duration,
-      );
+      void previewSubscriptionUsageShadow(subscriptionUsageShadowCreatePreview);
       return;
     }
     if (!validateGamePublicationFields()) return;
@@ -13969,7 +13994,7 @@ export default function GamesPage({
     preferredClientSubscriptionId?: string | null,
   ) => {
     if (subscriptionUsageShadowEnabled) {
-      await previewSubscriptionUsageShadow("JOIN_GAME", detailsDurationMinutes);
+      await previewSubscriptionUsageShadow(subscriptionUsageShadowJoinPreview);
       return;
     }
     if (!canCurrentUserJoinSplitGameInDetails || !gameRecordId || !activeGameRecord) return;
@@ -14623,12 +14648,13 @@ export default function GamesPage({
     patchGameRoster,
     detailsDurationMinutes,
     previewSubscriptionUsageShadow,
+    subscriptionUsageShadowJoinPreview,
     subscriptionUsageShadowEnabled,
   ]);
 
   const handleJoinCurrentUserFromDetails = useCallback(async () => {
     if (subscriptionUsageShadowEnabled) {
-      await previewSubscriptionUsageShadow("JOIN_GAME", detailsDurationMinutes);
+      await previewSubscriptionUsageShadow(subscriptionUsageShadowJoinPreview);
       return;
     }
     if (!canCurrentUserJoinGameInDetails || !gameRecordId) return;
@@ -14747,8 +14773,8 @@ export default function GamesPage({
     buildDetailsRosterMetadata,
     patchGameRoster,
     upsertGameRecordInStores,
-    detailsDurationMinutes,
     previewSubscriptionUsageShadow,
+    subscriptionUsageShadowJoinPreview,
     subscriptionUsageShadowEnabled,
   ]);
 
@@ -16917,7 +16943,7 @@ export default function GamesPage({
                   className="section-cta"
                   type="button"
                   onClick={() => {
-                    void previewSubscriptionUsageShadow("JOIN_GAME", detailsDurationMinutes);
+                    void previewSubscriptionUsageShadow(subscriptionUsageShadowJoinPreview);
                   }}
                   disabled={subscriptionUsageShadow.busy}
                 >

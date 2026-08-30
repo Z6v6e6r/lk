@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import {
   appendSubscriptionUsageShadowToSameOriginUrl,
   fetchSubscriptionUsageShadowQuote,
+  isSubscriptionUsageShadowLoopbackHost,
   isSubscriptionUsageShadowMode,
   presentSubscriptionUsageShadowQuote,
-  subscriptionUsageShadowTargetId,
   type SubscriptionUsageShadowFetch,
   type SubscriptionUsageShadowQuote,
 } from "../../src/components/subscriptions/subscriptionUsageShadow.ts";
@@ -25,7 +25,7 @@ function buildQuote(
         category: "GAME",
         durationMinutes: 90,
         startsAt: "2026-08-30T10:00:00+03:00",
-        basePriceMinor: 225_000,
+        basePriceMinor: 300_000,
       },
     },
     decision: {
@@ -41,15 +41,15 @@ function buildQuote(
       benefit: {
         kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
         ruleId: "game-90",
-        basePriceMinor: 75_000,
-        discountMinor: 22_500,
+        basePriceMinor: 100_000,
+        discountMinor: 30_000,
         surchargeMinor: 0,
-        finalPriceMinor: 52_500,
+        finalPriceMinor: 70_000,
         partialPriceCalculation: {
           numerator: 1,
-          denominator: 4,
-          chargeBeforeDiscountMinor: 75_000,
-          percentageDiscountMinor: 22_500,
+          denominator: 3,
+          chargeBeforeDiscountMinor: 100_000,
+          percentageDiscountMinor: 30_000,
         },
         currency: "RUB",
       },
@@ -58,7 +58,7 @@ function buildQuote(
       allowed: true,
       subscriptionApplied: true,
       pricingMode: "SUBSCRIPTION",
-      finalPriceMinor: 52_500,
+      finalPriceMinor: 70_000,
       reasonCodes: [],
       ...overrides,
     },
@@ -80,6 +80,9 @@ test("shadow mode is isolated to ordinary lk_dev and cannot replace the hosted t
   );
   assert.equal(isSubscriptionUsageShadowMode("/lk_new", "?subscriptionShadow=1", true), false);
   assert.equal(isSubscriptionUsageShadowMode("/lk_dev", "?subscriptionShadow=1", false), false);
+  assert.equal(isSubscriptionUsageShadowLoopbackHost("127.0.0.1"), true);
+  assert.equal(isSubscriptionUsageShadowLoopbackHost("localhost"), true);
+  assert.equal(isSubscriptionUsageShadowLoopbackHost("padlhub.ru"), false);
 });
 
 test("shadow credentials stay in the fragment and move only within the same origin", () => {
@@ -103,15 +106,7 @@ test("shadow credentials stay in the fragment and move only within the same orig
   assert.equal(differentOrigin.toString().includes(TOKEN), false);
 });
 
-test("only supported create and join durations map to fixed server-owned fixtures", () => {
-  assert.equal(subscriptionUsageShadowTargetId("CREATE_GAME", 60), "annual-create-60");
-  assert.equal(subscriptionUsageShadowTargetId("CREATE_GAME", 90), "annual-create-90");
-  assert.equal(subscriptionUsageShadowTargetId("JOIN_GAME", 120), "annual-join-120");
-  assert.equal(subscriptionUsageShadowTargetId("JOIN_GAME", 75), null);
-  assert.equal(subscriptionUsageShadowTargetId("JOIN_GAME", null), null);
-});
-
-test("shadow quote calls only the test endpoint and keeps credentials out of URL and body", async () => {
+test("shadow quote sends identifiers only to the loopback server resolver", async () => {
   let capturedInput = "";
   let capturedInit: RequestInit | null = null;
   const request: SubscriptionUsageShadowFetch = async (input, init) => {
@@ -121,30 +116,46 @@ test("shadow quote calls only the test endpoint and keeps credentials out of URL
   };
 
   const result = await fetchSubscriptionUsageShadowQuote({
-    apiBase: "https://example.test/api",
-    credentials: { offerId: "test_offer:browser", token: TOKEN },
-    action: "CREATE_GAME",
-    durationMinutes: 90,
+    preview: {
+      action: "CREATE_GAME",
+      target: {
+        targetKind: "NEW_GAME",
+        slotId: "slot-1",
+        stationId: "station-1",
+        roomId: "room-1",
+        masterServiceId: "master-1",
+        subServiceIds: ["sub-1"],
+        startsAt: "2026-08-30T10:00:00+03:00",
+        durationMinutes: 90,
+      },
+    },
     activeServices: 9,
     dailyGameUsage: -2,
     request,
   });
 
   assert.equal(result.target.targetId, "annual-create-90");
-  assert.equal(
-    capturedInput,
-    "https://example.test/api/v1/subscription-test/offers/test_offer%3Abrowser/usage-scenarios/quote",
-  );
+  assert.equal(capturedInput, "/__dev/managed-subscriptions/shadow-quote");
   assert.equal(capturedInput.includes(TOKEN), false);
   assert.equal(capturedInit?.credentials, "omit");
   assert.equal(capturedInit?.referrerPolicy, "no-referrer");
   assert.equal(capturedInit?.cache, "no-store");
   assert.deepEqual(JSON.parse(String(capturedInit?.body)), {
-    targetId: "annual-create-90",
+    action: "CREATE_GAME",
+    target: {
+      targetKind: "NEW_GAME",
+      slotId: "slot-1",
+      stationId: "station-1",
+      roomId: "room-1",
+      masterServiceId: "master-1",
+      subServiceIds: ["sub-1"],
+      startsAt: "2026-08-30T10:00:00+03:00",
+      durationMinutes: 90,
+    },
     activeServices: 4,
     dailyGameUsage: 0,
   });
-  assert.equal(String(capturedInit?.body).includes(TOKEN), false);
+  assert.doesNotMatch(String(capturedInit?.body), /price|amount|token/i);
 });
 
 test("90 minute subscription presentation uses one-quarter share and discounts only paid time", () => {
@@ -153,8 +164,23 @@ test("90 minute subscription presentation uses one-quarter share and discounts o
   assert.match(presentation.summary, /первые 60 минут бесплатно/i);
   assert.match(presentation.summary, /доплата за 30 минут/i);
   assert.match(presentation.summary, /доля игрока 1\/4/i);
-  assert.match(presentation.summary, /скидка 30% на доплату 225/);
-  assert.match(presentation.summary, /итого 525/);
+  assert.match(presentation.summary, /скидка 30% на доплату 300/);
+  assert.match(presentation.summary, /итого 700/);
+});
+
+test("shadow presentation preserves kopecks for an exact server-resolved slot price", () => {
+  const quote = buildQuote();
+  if (quote.decision.benefit?.kind !== "PARTIAL_PRICE_PERCENT_DISCOUNT"
+    || !quote.decision.benefit.partialPriceCalculation) {
+    assert.fail("partial price fixture is missing");
+  }
+  quote.decision.benefit.partialPriceCalculation.chargeBeforeDiscountMinor = 37_500;
+  quote.decision.benefit.partialPriceCalculation.percentageDiscountMinor = 11_250;
+  quote.decision.benefit.finalPriceMinor = 26_250;
+  quote.bookingOutcome.finalPriceMinor = 26_250;
+  const presentation = presentSubscriptionUsageShadowQuote(quote);
+  assert.match(presentation.summary, /скидка 30% на доплату 112,50/);
+  assert.match(presentation.summary, /итого 262,50/);
 });
 
 test("active-service limit produces an allowed full-price path without subscription", () => {
@@ -183,10 +209,10 @@ test("active-service limit produces an allowed full-price path without subscript
 test("malformed responses fail closed before they reach the ordinary LK UI", async () => {
   await assert.rejects(
     () => fetchSubscriptionUsageShadowQuote({
-      apiBase: "https://example.test/api",
-      credentials: { offerId: "test_offer:browser", token: TOKEN },
-      action: "JOIN_GAME",
-      durationMinutes: 60,
+      preview: {
+        action: "JOIN_GAME",
+        target: { targetKind: "GAME_AGGREGATE", gameId: "game-1" },
+      },
       activeServices: 0,
       dailyGameUsage: 0,
       request: async () => ({ ok: true, json: async () => ({ allowed: true }) }),
