@@ -44,7 +44,7 @@ repair task. A fresh `dry-run` is required after that repair.
 The current runner accepts only:
 
 - live full-flow SHA-256 `9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263`;
-- reviewed unified source-only candidate SHA-256 `703c065429bcee016e86ac7559c3b834754bab61bcb5c70f4da55b1cc32064ca`;
+- reviewed unified source-only candidate SHA-256 `76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294`;
 - all seven writers in `scripts/legacy_game_revision_writers.json`;
 - the exact custom-node package, runner, migration-core, writer-registry,
   approval-verifier, source trust-anchor manifest, root package, dependency lock,
@@ -132,7 +132,7 @@ The reviewed packet has this shape (values are illustrative placeholders):
   "source": {
     "repositoryCommit": "<exact 40-hex deployed commit>",
     "liveFlowSha256": "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
-    "candidateFlowSha256": "703c065429bcee016e86ac7559c3b834754bab61bcb5c70f4da55b1cc32064ca",
+    "candidateFlowSha256": "76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294",
     "packageSha256": "<fresh audit value>",
     "writerRegistrySha256": "<fresh audit value>",
     "installerSha256": "<fresh audit value>",
