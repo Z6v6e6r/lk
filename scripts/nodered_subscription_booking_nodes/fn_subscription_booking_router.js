@@ -8,6 +8,8 @@ const PENDING_CONFIRMATION_MS = 15 * 60 * 1000;
 const PITER_STATION_ID = "1ea77cbf-bc36-49a1-96d6-f35c216a409b";
 const PITER_MANAGED_PRODUCT_ID = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
 const MANAGED_ENFORCEMENT_ALLOWLIST_GLOBAL = "subscriptions_managed_enforcement_product_ids";
+const MANAGED_ENFORCEMENT_PURCHASE_FROM = "2026-09-01";
+const MANAGED_ENFORCEMENT_PURCHASE_TIME_ZONE = "Europe/Moscow";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const REGIONAL_ACTIVATION_MODE = "FIRST_USE_OR_FIXED_DATE";
 const REGIONAL_ACTIVATION_FALLBACK_AT = "2026-09-30T21:00:00.000Z";
@@ -47,6 +49,44 @@ const normalizePhone = (value) => {
 const normalizeDate = (value) => {
   const matched = String(value || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
   return matched ? `${matched[1]}-${matched[2]}-${matched[3]}` : null;
+};
+const isValidDateKey = (value) => {
+  const matched = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!matched) return false;
+  const year = Number(matched[1]);
+  const month = Number(matched[2]);
+  const day = Number(matched[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+};
+const normalizePurchaseDateMoscow = (value) => {
+  const text = toStr(value);
+  const localDate = normalizeDate(text);
+  if (!text || !localDate || !isValidDateKey(localDate)) return null;
+  if (!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text)) {
+    const localTimestamp = text.match(
+      /^\d{4}-\d{2}-\d{2}(?:[T ](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?)?$/,
+    );
+    if (!localTimestamp) return null;
+    if (localTimestamp[1] === undefined) return localDate;
+    const hour = Number(localTimestamp[1]);
+    const minute = Number(localTimestamp[2]);
+    const second = Number(localTimestamp[3]);
+    return hour <= 23 && minute <= 59 && second <= 59 ? localDate : null;
+  }
+  const instant = new Date(text);
+  if (!Number.isFinite(instant.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: MANAGED_ENFORCEMENT_PURCHASE_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(instant);
+  const part = (type) => parts.find((item) => item.type === type)?.value;
+  const moscowDate = `${part("year")}-${part("month")}-${part("day")}`;
+  return isValidDateKey(moscowDate) ? moscowDate : null;
 };
 const normalizeMarker = (value) => String(value || "")
   .trim()
@@ -553,10 +593,10 @@ const findArrayForKey = (value, targetKey, seen = new Set()) => {
   return [];
 };
 
-const findOwnedSubscription = (exercise, clientSubscriptionId) => {
+const findOwnedSubscriptions = (exercise, clientSubscriptionId) => {
   const target = normalizeId(clientSubscriptionId);
   return findArrayForKey(exercise, "availableClientSubscriptions")
-    .find((item) => {
+    .filter((item) => {
       if (!isObj(item)) return false;
       const explicitIds = [
         item.clientSubscriptionId,
@@ -568,7 +608,7 @@ const findOwnedSubscription = (exercise, clientSubscriptionId) => {
       ].map(normalizeId).filter(Boolean);
       if (explicitIds.length > 0) return explicitIds.includes(target);
       return [item.id, item.uuid].map(normalizeId).filter(Boolean).includes(target);
-    }) || null;
+    });
 };
 
 const pickName = (value) => {
@@ -628,10 +668,21 @@ const collectExactProductIds = (value) => {
   return ids;
 };
 
+const collectSubscriptionPurchaseDateEvidence = (value) => {
+  const records = Array.isArray(value) ? value.filter(isObj) : isObj(value) ? [value] : [];
+  const rawDates = records.map((record) => record.purchaseDate);
+  const normalizedDates = rawDates.map(normalizePurchaseDateMoscow);
+  return {
+    dates: [...new Set(normalizedDates.filter(Boolean))].sort(),
+    invalid: normalizedDates.some((date) => date === null),
+  };
+};
+
 const resolveManagedEnforcementDecision = (value) => {
   const allowlist = readManagedEnforcementAllowlist();
   if (!allowlist.ok) return allowlist;
-  const productIdentities = [...new Set(collectExactProductIds(value))].sort();
+  const records = Array.isArray(value) ? value.filter(isObj) : isObj(value) ? [value] : [];
+  const productIdentities = [...new Set(records.flatMap(collectExactProductIds))].sort();
   if (productIdentities.length > 1) {
     return { ok: false, code: "SUBSCRIPTION_PRODUCT_IDENTITY_AMBIGUOUS" };
   }
@@ -639,13 +690,28 @@ const resolveManagedEnforcementDecision = (value) => {
   const exactProductId = productIdentity && UUID_PATTERN.test(productIdentity)
     ? productIdentity
     : null;
+  const purchaseDateEvidence = collectSubscriptionPurchaseDateEvidence(value);
+  const purchaseDates = purchaseDateEvidence.dates;
+  const purchaseDate = !purchaseDateEvidence.invalid && purchaseDates.length === 1
+    ? purchaseDates[0]
+    : null;
+  const purchaseDateEligible = Boolean(
+    purchaseDate && purchaseDate >= MANAGED_ENFORCEMENT_PURCHASE_FROM,
+  );
   const enabled = exactProductId === PITER_MANAGED_PRODUCT_ID
-    && allowlist.productIds.includes(exactProductId);
+    && allowlist.productIds.includes(exactProductId)
+    && purchaseDateEligible;
   return {
     ok: true,
     configuredProductIds: allowlist.productIds,
     exactProductId,
     productIdentity,
+    purchaseDate,
+    purchaseDateCandidates: purchaseDates,
+    purchaseDateEvidenceValid: !purchaseDateEvidence.invalid,
+    purchaseDateCutoff: MANAGED_ENFORCEMENT_PURCHASE_FROM,
+    purchaseDateTimeZone: MANAGED_ENFORCEMENT_PURCHASE_TIME_ZONE,
+    purchaseDateEligible,
     enabled,
     planKey: enabled ? "piter_friendship" : null,
   };
@@ -1309,8 +1375,8 @@ if (ctx.step === "exercise") {
       code: "SUBSCRIPTION_BOOKING_EXERCISE_MISMATCH",
     });
   }
-  const ownedSubscription = findOwnedSubscription(exercise, ctx.clientSubscriptionId);
-  if (!ownedSubscription) {
+  const ownedSubscriptions = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
+  if (ownedSubscriptions.length === 0) {
     return finishError(ctx, 409, "Выбранный абонемент недоступен этому пользователю для упражнения", {
       code: "SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE",
     });
@@ -1318,8 +1384,8 @@ if (ctx.step === "exercise") {
   ctx.serviceDate = eventDate(exercise);
   ctx.category = resolveCategory(exercise);
   ctx.studioId = toStr(exercise.studio?.id || exercise.studioId);
-  ctx.subscriptionName = pickName(ownedSubscription);
-  const managedEnforcement = resolveManagedEnforcementDecision(ownedSubscription);
+  ctx.subscriptionName = ownedSubscriptions.map(pickName).find(Boolean) || null;
+  const managedEnforcement = resolveManagedEnforcementDecision(ownedSubscriptions);
   if (!managedEnforcement.ok) {
     const configInvalid = managedEnforcement.code === "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID";
     return finishError(
@@ -1332,14 +1398,20 @@ if (ctx.step === "exercise") {
     );
   }
   ctx.managedEnforcement = {
-    source: "SERVER_GLOBAL_ALLOWLIST",
+    source: "SERVER_GLOBAL_ALLOWLIST_AND_VIVA_PURCHASE_DATE",
     configuredProductIds: managedEnforcement.configuredProductIds,
     exactProductId: managedEnforcement.exactProductId,
     productIdentity: managedEnforcement.productIdentity,
+    purchaseDate: managedEnforcement.purchaseDate,
+    purchaseDateCandidates: managedEnforcement.purchaseDateCandidates,
+    purchaseDateEvidenceValid: managedEnforcement.purchaseDateEvidenceValid,
+    purchaseDateCutoff: managedEnforcement.purchaseDateCutoff,
+    purchaseDateTimeZone: managedEnforcement.purchaseDateTimeZone,
+    purchaseDateEligible: managedEnforcement.purchaseDateEligible,
     enabled: managedEnforcement.enabled,
     planKey: managedEnforcement.planKey,
   };
-  const resolvedPlanKey = resolvePlanKey(ownedSubscription) || resolvePlanKey(ctx.subscriptionName);
+  const resolvedPlanKey = resolvePlanKey(ownedSubscriptions) || resolvePlanKey(ctx.subscriptionName);
   ctx.planKey = compatibilityPlanKey(resolvedPlanKey, managedEnforcement);
   if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
     if (ctx.planKey === "kotelniki_friendship") {
@@ -1473,8 +1545,8 @@ if (ctx.step === "exercise_recheck") {
   }
   const exercise = unwrapRecord(msg.payload);
   const actualExerciseId = toStr(exercise?.id || exercise?.exerciseId || exercise?.uuid);
-  const ownedSubscription = findOwnedSubscription(exercise, ctx.clientSubscriptionId);
-  if (!exercise || !ownedSubscription) {
+  const ownedSubscriptions = findOwnedSubscriptions(exercise, ctx.clientSubscriptionId);
+  if (!exercise || ownedSubscriptions.length === 0) {
     return prepareFailedUpdate(
       ctx,
       409,
@@ -1482,7 +1554,7 @@ if (ctx.step === "exercise_recheck") {
       "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE",
     );
   }
-  const nextManagedEnforcement = resolveManagedEnforcementDecision(ownedSubscription);
+  const nextManagedEnforcement = resolveManagedEnforcementDecision(ownedSubscriptions);
   if (!nextManagedEnforcement.ok) {
     return prepareFailedUpdate(
       ctx,
@@ -1502,6 +1574,21 @@ if (ctx.step === "exercise_recheck") {
       "SUBSCRIPTION_PRODUCT_IDENTITY_CHANGED_BEFORE_WRITE",
     );
   }
+  if (previousManagedEnforcement.purchaseDate !== nextManagedEnforcement.purchaseDate
+    || JSON.stringify(previousManagedEnforcement.purchaseDateCandidates || [])
+      !== JSON.stringify(nextManagedEnforcement.purchaseDateCandidates || [])
+    || previousManagedEnforcement.purchaseDateEvidenceValid
+      !== nextManagedEnforcement.purchaseDateEvidenceValid
+    || previousManagedEnforcement.purchaseDateCutoff !== nextManagedEnforcement.purchaseDateCutoff
+    || previousManagedEnforcement.purchaseDateTimeZone !== nextManagedEnforcement.purchaseDateTimeZone
+    || previousManagedEnforcement.purchaseDateEligible !== nextManagedEnforcement.purchaseDateEligible) {
+    return prepareFailedUpdate(
+      ctx,
+      409,
+      "Дата продажи подписки изменилась до записи",
+      "SUBSCRIPTION_PURCHASE_DATE_CHANGED_BEFORE_WRITE",
+    );
+  }
   if (previousManagedEnforcement.enabled !== nextManagedEnforcement.enabled
     || previousManagedEnforcement.planKey !== nextManagedEnforcement.planKey) {
     return prepareFailedUpdate(
@@ -1511,7 +1598,7 @@ if (ctx.step === "exercise_recheck") {
       "MANAGED_SUBSCRIPTION_ENFORCEMENT_CHANGED_BEFORE_WRITE",
     );
   }
-  const resolvedPlanKey = resolvePlanKey(ownedSubscription) || resolvePlanKey(ctx.subscriptionName);
+  const resolvedPlanKey = resolvePlanKey(ownedSubscriptions) || resolvePlanKey(ctx.subscriptionName);
   const nextPlanKey = compatibilityPlanKey(resolvedPlanKey, nextManagedEnforcement);
   const nextServiceDate = eventDate(exercise);
   const nextCategory = resolveCategory(exercise);

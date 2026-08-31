@@ -18,6 +18,7 @@ const MANAGED_BLOCKED_FILE =
   "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_blocked.js";
 const PITER_PRODUCT_ID = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
 const HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";
+const MANAGED_PURCHASE_DATE = "2026-09-01T00:00:00+03:00";
 const LIVE_ROUTER_FLOW_FIXTURE = process.env.LK1_SUBSCRIPTION_LIVE_FLOW_FIXTURE;
 const MANAGED_GLOBALS = {
   vivacrm_access_token: "service-token",
@@ -32,11 +33,21 @@ const MANAGED_ACTIVATION_GLOBALS = {
 };
 const PITER_STATION_ID = "1ea77cbf-bc36-49a1-96d6-f35c216a409b";
 const DAY_MS = 24 * 60 * 60 * 1000;
-const managedEnforcement = (enabled: boolean, productId: string | null = PITER_PRODUCT_ID) => ({
-  source: "SERVER_GLOBAL_ALLOWLIST",
+const managedEnforcement = (
+  enabled: boolean,
+  productId: string | null = PITER_PRODUCT_ID,
+  purchaseDate: string | null = enabled ? MANAGED_PURCHASE_DATE.slice(0, 10) : null,
+) => ({
+  source: "SERVER_GLOBAL_ALLOWLIST_AND_VIVA_PURCHASE_DATE",
   configuredProductIds: enabled ? [PITER_PRODUCT_ID] : [],
   exactProductId: productId,
   productIdentity: productId,
+  purchaseDate,
+  purchaseDateCandidates: purchaseDate ? [purchaseDate] : [],
+  purchaseDateEvidenceValid: Boolean(purchaseDate),
+  purchaseDateCutoff: "2026-09-01",
+  purchaseDateTimeZone: "Europe/Moscow",
+  purchaseDateEligible: Boolean(purchaseDate && purchaseDate >= "2026-09-01"),
   enabled,
   planKey: enabled ? "piter_friendship" : null,
 });
@@ -137,15 +148,24 @@ function trustedExercise({
   };
 }
 
-function managedExercise(productId = PITER_PRODUCT_ID, name = "Падел.Дружба.Питер — 12 месяцев") {
+function managedExercise(
+  productId = PITER_PRODUCT_ID,
+  name = "Падел.Дружба.Питер — 12 месяцев",
+  purchaseDate: string | null = MANAGED_PURCHASE_DATE,
+) {
+  const exercise = trustedExercise({
+    directionId: 4588,
+    planName: name,
+    productId,
+    studioId: PITER_STATION_ID,
+    typeId: 1613,
+  });
   return {
-    ...trustedExercise({
-      directionId: 4588,
-      planName: name,
-      productId,
-      studioId: PITER_STATION_ID,
-      typeId: 1613,
-    }),
+    ...exercise,
+    availableClientSubscriptions: exercise.availableClientSubscriptions.map((subscription) => ({
+      ...subscription,
+      ...(purchaseDate ? { purchaseDate } : {}),
+    })),
     timeFrom: "2026-08-21T18:00:00+03:00",
     timeTo: "2026-08-21T19:00:00+03:00",
   };
@@ -670,6 +690,7 @@ test("Piter split create resolves a server target and requests the actor-owned C
         clientSubscriptionId: "client-subscription-1",
         productId: PITER_PRODUCT_ID,
         name: "Падел.Дружба.Питер — 12 месяцев",
+        purchaseDate: MANAGED_PURCHASE_DATE,
       }],
     },
     _subscriptionBooking: baseContext("exercise", {
@@ -843,6 +864,135 @@ test("direct and split CREATE/JOIN use the same exact PITER rollout gate", () =>
   }
 });
 
+test("managed PITER rules apply only to subscriptions sold from 2026-09-01 Moscow", () => {
+  const cases = [
+    { purchaseDate: "2026-08-31T23:59:59+03:00", enabled: false },
+    { purchaseDate: "2026-08-31T21:00:00.000Z", enabled: true },
+    { purchaseDate: "2026-09-01T00:00:00+03:00", enabled: true },
+    { purchaseDate: "2026-09-01T00:00:00", enabled: true },
+    { purchaseDate: null, enabled: false },
+    { purchaseDate: "not-a-date", enabled: false },
+    { purchaseDate: "2026-09-01garbage", enabled: false },
+    { purchaseDate: "2026-09-01T99:99:99", enabled: false },
+    { purchaseDate: "2026-09-01T24:61:61", enabled: false },
+  ];
+
+  for (const { purchaseDate, enabled } of cases) {
+    const out = runFunction(ROUTER_FILE, {
+      statusCode: 200,
+      payload: managedExercise(PITER_PRODUCT_ID, "Падел.Дружба.Питер — 12 месяцев", purchaseDate),
+      _subscriptionBooking: baseContext("exercise", {
+        serviceDate: undefined, category: undefined, planKey: undefined,
+        managedAction: "CREATE_GAME",
+      }),
+    }, MANAGED_GLOBALS);
+    assert.equal(out[0]._subscriptionBooking.managedEnforcement.enabled, enabled, purchaseDate || "missing");
+    assert.equal(
+      out[0]._subscriptionBooking.step,
+      enabled ? "managed_runtime_context" : "active_bookings",
+      purchaseDate || "missing",
+    );
+    if (!enabled) assert.equal(out[0]._subscriptionBooking.planKey, "friendship");
+  }
+});
+
+test("pre-cutoff PITER stays on Friendship for direct and split CREATE/JOIN", () => {
+  for (const caller of ["http", "split"]) {
+    for (const managedAction of ["CREATE_GAME", "JOIN_GAME"]) {
+      const out = runFunction(ROUTER_FILE, {
+        statusCode: 200,
+        payload: managedExercise(
+          PITER_PRODUCT_ID,
+          "Падел.Дружба.Питер — 12 месяцев",
+          "2026-08-31T23:59:59+03:00",
+        ),
+        _subscriptionBooking: baseContext("exercise", {
+          caller,
+          serviceDate: undefined, category: undefined, planKey: undefined,
+          managedAction,
+        }),
+      }, MANAGED_GLOBALS);
+      assert.equal(out[0]._subscriptionBooking.step, "active_bookings");
+      assert.equal(out[0]._subscriptionBooking.planKey, "friendship");
+      assert.equal(out[0]._subscriptionBooking.managedEnforcement.enabled, false);
+      assert.doesNotMatch(out[0].url, /runtime-context/);
+    }
+  }
+});
+
+test("browser purchase date cannot enable a pre-cutoff or undated PITER subscription", () => {
+  for (const serverPurchaseDate of ["2026-08-31T12:00:00+03:00", null]) {
+    const out = runFunction(ROUTER_FILE, {
+      statusCode: 200,
+      payload: managedExercise(PITER_PRODUCT_ID, "Падел.Дружба.Питер — 12 месяцев", serverPurchaseDate),
+      purchaseDate: MANAGED_PURCHASE_DATE,
+      subscription: { purchaseDate: MANAGED_PURCHASE_DATE },
+      _subscriptionBooking: baseContext("exercise", {
+        serviceDate: undefined, category: undefined, planKey: undefined,
+        managedAction: "CREATE_GAME",
+      }),
+    }, MANAGED_GLOBALS);
+    assert.equal(out[0]._subscriptionBooking.managedEnforcement.enabled, false);
+    assert.equal(out[0]._subscriptionBooking.step, "active_bookings");
+  }
+});
+
+test("conflicting server-owned PITER purchase dates keep the subscription on compatibility", () => {
+  const duplicateRows = managedExercise();
+  duplicateRows.availableClientSubscriptions.push({
+    ...duplicateRows.availableClientSubscriptions[0],
+    purchaseDate: "2026-08-31T23:59:59+03:00",
+  });
+  const duplicateOut = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: duplicateRows,
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(duplicateOut[0]._subscriptionBooking.managedEnforcement.purchaseDate, null);
+  assert.deepEqual(duplicateOut[0]._subscriptionBooking.managedEnforcement.purchaseDateCandidates,
+    ["2026-08-31", "2026-09-01"]);
+  assert.equal(duplicateOut[0]._subscriptionBooking.managedEnforcement.enabled, false);
+  assert.equal(duplicateOut[0]._subscriptionBooking.step, "active_bookings");
+
+  const invalidRows = managedExercise();
+  invalidRows.availableClientSubscriptions.push({
+    ...invalidRows.availableClientSubscriptions[0],
+    purchaseDate: "invalid-duplicate-date",
+  });
+  const invalidOut = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: invalidRows,
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(invalidOut[0]._subscriptionBooking.managedEnforcement.purchaseDate, null);
+  assert.equal(invalidOut[0]._subscriptionBooking.managedEnforcement.purchaseDateEvidenceValid, false);
+  assert.equal(invalidOut[0]._subscriptionBooking.managedEnforcement.enabled, false);
+  assert.equal(invalidOut[0]._subscriptionBooking.step, "active_bookings");
+
+  const missingRows = managedExercise();
+  const { purchaseDate: _purchaseDate, ...withoutPurchaseDate } =
+    missingRows.availableClientSubscriptions[0];
+  missingRows.availableClientSubscriptions.push(withoutPurchaseDate);
+  const missingOut = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: missingRows,
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(missingOut[0]._subscriptionBooking.managedEnforcement.purchaseDate, null);
+  assert.equal(missingOut[0]._subscriptionBooking.managedEnforcement.purchaseDateEvidenceValid, false);
+  assert.equal(missingOut[0]._subscriptionBooking.managedEnforcement.enabled, false);
+  assert.equal(missingOut[0]._subscriptionBooking.step, "active_bookings");
+});
+
 test("names cannot enable managed enforcement and an allowlisted exact product still requires canonical target identity", () => {
   const exercise = {
     id: "exercise-target",
@@ -877,6 +1027,7 @@ test("names cannot enable managed enforcement and an allowlisted exact product s
       availableClientSubscriptions: [{
         ...exercise.availableClientSubscriptions[0],
         productId: PITER_PRODUCT_ID,
+        purchaseDate: MANAGED_PURCHASE_DATE,
       }],
     },
     _subscriptionBooking: baseContext("exercise", {
@@ -1328,6 +1479,7 @@ test("Piter rejects an all-stations policy and routes tournament discounts to CU
         clientSubscriptionId: "client-subscription-1",
         productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
         name: "Падел.Дружба.Питер — 12 месяцев",
+        purchaseDate: MANAGED_PURCHASE_DATE,
       }],
     },
     _subscriptionBooking: baseContext("exercise", {
@@ -1780,6 +1932,20 @@ test("final pre-write recheck rejects product or rollout drift without a Viva re
   assert.equal(changedRollout[3].payload[1].$set.failure.rawCode,
     "MANAGED_SUBSCRIPTION_ENFORCEMENT_CHANGED_BEFORE_WRITE");
   assert.equal(changedRollout[0], null);
+
+  const changedPurchaseDate = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedExercise(
+      PITER_PRODUCT_ID,
+      "Падел.Дружба.Питер — 12 месяцев",
+      "2026-08-31T23:59:59+03:00",
+    ),
+    _subscriptionBooking: structuredClone(managedContext),
+  }, MANAGED_GLOBALS);
+  assert.equal(changedPurchaseDate[3]._subscriptionBooking.step, "operation_fail");
+  assert.equal(changedPurchaseDate[3].payload[1].$set.failure.rawCode,
+    "SUBSCRIPTION_PURCHASE_DATE_CHANGED_BEFORE_WRITE");
+  assert.equal(changedPurchaseDate[0], null);
 });
 
 test("managed booking rechecks CUP identity and policy after preaccept before Viva write", () => {
@@ -1831,6 +1997,16 @@ test("managed booking rechecks CUP identity and policy after preaccept before Vi
       }),
       timeFrom: target.startsAt,
       timeTo: new Date(new Date(target.startsAt).getTime() + 60 * 60 * 1000).toISOString(),
+      availableClientSubscriptions: [{
+        ...trustedExercise({
+          directionId: 4588,
+          planName: "Падел.Дружба.Питер — 12 месяцев",
+          productId: PITER_PRODUCT_ID,
+          studioId: PITER_STATION_ID,
+          typeId: 1613,
+        }).availableClientSubscriptions[0],
+        purchaseDate: MANAGED_PURCHASE_DATE,
+      }],
     },
     _subscriptionBooking: exerciseRecheck[0]._subscriptionBooking,
   }, MANAGED_GLOBALS);
