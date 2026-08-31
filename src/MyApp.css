@@ -3892,8 +3892,8 @@ h6,
   margin: 0 16px 16px;
   padding: 14px;
   display: none;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
   border: 1px solid rgba(117, 87, 223, 0.14);
   border-radius: 16px;
   background: #f8f6fd;
@@ -3905,12 +3905,19 @@ h6,
 }
 
 .find-game-filter-control {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.find-game-filter-control span {
+.find-game-filter-control-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.find-game-filter-control-title > span {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
@@ -3918,48 +3925,52 @@ h6,
   color: #8a8a8f;
 }
 
-.find-game-filter-control select {
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--border);
-  background: var(--white);
-  color: var(--text);
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.2;
+.find-game-filter-control-title > small {
+  min-width: 18px;
+  min-height: 18px;
+  border-radius: 999px;
+  background: #7557df;
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
 }
 
-.find-game-filter-control select:disabled {
-  opacity: 0.65;
-  cursor: not-allowed;
+.find-game-filter-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.find-game-time-of-day {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.find-game-time-chip {
+.find-game-filter-option {
+  min-height: 36px;
   border: 1px solid var(--border);
   background: var(--white);
   color: var(--text-secondary);
   border-radius: 999px;
-  padding: 9px 8px;
-  font-size: 11px;
+  padding: 8px 12px;
+  font-size: 12px;
   font-weight: 700;
   line-height: 1.2;
   cursor: pointer;
-  text-align: center;
 }
 
-.find-game-time-chip.active {
+.find-game-filter-option.active {
   border-color: var(--purple);
   background: var(--purple-light);
   color: var(--purple);
+}
+
+.find-game-filter-option:focus-visible {
+  outline: 2px solid rgba(117, 87, 223, 0.38);
+  outline-offset: 2px;
+}
+
+.find-game-filter-option:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .find-game-filter-reset {
@@ -4625,7 +4636,7 @@ h6,
   }
 
   .find-game-filterbar.is-open {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .find-game-list {

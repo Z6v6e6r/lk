@@ -45,9 +45,9 @@ test("find game plus trainer cards are opt-in and avoid per-card request fan-out
   assert.match(findGamePageSource, /\[priceValueLabel \|\| GAME_PLUS_TRAINER_DEFAULT_PRICE_VALUE_LABEL, \.\.\.GAME_PLUS_TRAINER_INCLUDED_PRICE_LABELS\]\.join\("\/"\)/);
   assert.match(findGamePageSource, /type FindGameKindFilter = "all" \| "game" \| "game-plus-trainer"/);
   assert.match(findGamePageSource, /const FIND_GAME_KIND_OPTIONS: Array<\{ value: FindGameKindFilter; label: string \}>/);
-  assert.match(findGamePageSource, /const \[kindFilter, setKindFilter\] = useState<FindGameKindFilter>\(\(\) => readAtlasChoice\(/);
-  assert.match(findGamePageSource, /if \(kindFilter === "game-plus-trainer"\) return \[];/);
-  assert.match(findGamePageSource, /if \(!shouldIncludeGamePlusTrainer \|\| kindFilter === "game"\) return \[];/);
+  assert.match(findGamePageSource, /const \[kindFilters, setKindFilters\] = useState<string\[]>\(\(\) => readAtlasMultiValues\(/);
+  assert.match(findGamePageSource, /kindFilters\.length > 0 && !kindFilters\.includes\("game"\)/);
+  assert.match(findGamePageSource, /kindFilters\.length > 0 && !kindFilters\.includes\("game-plus-trainer"\)/);
   assert.match(findGamePageSource, /setGamePlusTrainerTrainings\(trainings\);\s*setGamePlusTrainerLoading\(false\);/);
   assert.doesNotMatch(findGamePageSource, /setGamePlusTrainerMetaById/);
   assert.doesNotMatch(findGamePageSource, /trainings\.forEach\(\(training\) =>/);

@@ -602,6 +602,37 @@ function readAtlasChoice<T extends string>(key: string, allowed: readonly T[], f
   return value && allowed.includes(value as T) ? value as T : fallback;
 }
 
+function readAtlasMultiValues<T extends string>(key: string, allowed?: readonly T[]): T[] {
+  const rawValue = readAtlasQueryValue(key);
+  if (!rawValue) return [];
+  return Array.from(new Set(
+    rawValue
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value): value is T => Boolean(
+        value
+        && value !== "all"
+        && value !== FIND_GAME_FILTER_ALL_VALUE
+        && (!allowed || allowed.includes(value as T)),
+      )),
+  ));
+}
+
+function toggleAtlasMultiValue<T extends string>(
+  selectedValues: readonly T[],
+  value: T,
+  allValue: string,
+): T[] {
+  if (value === allValue) return [];
+  return selectedValues.includes(value)
+    ? selectedValues.filter((selectedValue) => selectedValue !== value)
+    : [...selectedValues, value];
+}
+
+function matchesAtlasMultiValue(selectedValues: readonly string[], value: string): boolean {
+  return selectedValues.length === 0 || selectedValues.includes(value);
+}
+
 function getDefaultAtlasDateKey(): string {
   return formatDateLocalIso(new Date());
 }
@@ -677,16 +708,19 @@ function matchesTrainingSearch(training: GroupTrainingSummary, query: string): b
   ], query);
 }
 
-function matchesAvailability(hasPlaces: boolean, filter: FindGameAvailabilityFilter): boolean {
-  if (filter === "available") return hasPlaces;
-  if (filter === "full") return !hasPlaces;
-  return true;
+function matchesAvailability(hasPlaces: boolean, filters: readonly string[]): boolean {
+  if (filters.length === 0) return true;
+  return filters.some((filter) => (
+    filter === "available" ? hasPlaces : filter === "full" ? !hasPlaces : false
+  ));
 }
 
-function matchesGameFormat(game: PadelGameRecord, filter: FindGameFormatFilter): boolean {
-  if (filter === "all") return true;
+function matchesGameFormat(game: PadelGameRecord, filters: readonly string[]): boolean {
+  if (filters.length === 0) return true;
   const singles = resolveMaxPlayers(game) <= 2;
-  return filter === "singles" ? singles : !singles;
+  return filters.some((filter) => (
+    filter === "singles" ? singles : filter === "doubles" ? !singles : false
+  ));
 }
 
 function matchesCategory(
@@ -711,26 +745,24 @@ function buildStationFilterValue(
   return normalizedStudioName ? `name:${normalizedStudioName}` : null;
 }
 
-function matchesSelectedStationFilter(game: PadelGameRecord, stationFilterValue: string): boolean {
-  if (stationFilterValue === FIND_GAME_FILTER_ALL_VALUE) return true;
+function matchesSelectedStationFilter(game: PadelGameRecord, stationFilterValues: readonly string[]): boolean {
+  if (stationFilterValues.length === 0) return true;
   const gameStationValue = buildStationFilterValue(game.booking?.studioId, game.booking?.studioName);
-  return Boolean(gameStationValue && gameStationValue === stationFilterValue);
+  return Boolean(gameStationValue && stationFilterValues.includes(gameStationValue));
 }
 
-function matchesSelectedTrainingStationFilter(training: GroupTrainingSummary, stationFilterValue: string): boolean {
-  if (stationFilterValue === FIND_GAME_FILTER_ALL_VALUE) return true;
+function matchesSelectedTrainingStationFilter(training: GroupTrainingSummary, stationFilterValues: readonly string[]): boolean {
+  if (stationFilterValues.length === 0) return true;
   const trainingStationValue = buildStationFilterValue(training.studioId, training.studioName);
-  return Boolean(trainingStationValue && trainingStationValue === stationFilterValue);
+  return Boolean(trainingStationValue && stationFilterValues.includes(trainingStationValue));
 }
 
-function matchesSelectedLevelFilter(game: PadelGameRecord, levelFilterValue: string): boolean {
-  if (levelFilterValue === FIND_GAME_FILTER_ALL_VALUE) return true;
-  return getRatingTag(game) === levelFilterValue;
+function matchesSelectedLevelFilter(game: PadelGameRecord, levelFilterValues: readonly string[]): boolean {
+  return matchesAtlasMultiValue(levelFilterValues, getRatingTag(game));
 }
 
-function matchesSelectedTrainingLevelFilter(training: GroupTrainingSummary, levelFilterValue: string): boolean {
-  if (levelFilterValue === FIND_GAME_FILTER_ALL_VALUE) return true;
-  return getTrainingLevelTag(training) === levelFilterValue;
+function matchesSelectedTrainingLevelFilter(training: GroupTrainingSummary, levelFilterValues: readonly string[]): boolean {
+  return matchesAtlasMultiValue(levelFilterValues, getTrainingLevelTag(training));
 }
 
 function parseTimeMinutes(value: string | null | undefined): number | null {
@@ -745,18 +777,15 @@ function parseTimeMinutes(value: string | null | undefined): number | null {
   return hours * 60 + minutes;
 }
 
-function matchesTimeOfDayFilter(game: PadelGameRecord, timeOfDayFilter: FindGameTimeOfDayFilter): boolean {
-  if (timeOfDayFilter === "all") return true;
+function matchesTimeOfDayFilter(game: PadelGameRecord, timeOfDayFilters: readonly string[]): boolean {
+  if (timeOfDayFilters.length === 0) return true;
   const startMinutes = parseTimeMinutes(game.booking?.timeFrom || game.booking?.timeTo);
   if (startMinutes === null) return false;
-
-  if (timeOfDayFilter === "morning") {
-    return startMinutes >= 7 * 60 && startMinutes < 11 * 60;
-  }
-  if (timeOfDayFilter === "day") {
-    return startMinutes >= 11 * 60 && startMinutes < 18 * 60;
-  }
-  return startMinutes >= 18 * 60 && startMinutes < 24 * 60;
+  return timeOfDayFilters.some((filter) => {
+    if (filter === "morning") return startMinutes >= 7 * 60 && startMinutes < 11 * 60;
+    if (filter === "day") return startMinutes >= 11 * 60 && startMinutes < 18 * 60;
+    return filter === "evening" && startMinutes >= 18 * 60 && startMinutes < 24 * 60;
+  });
 }
 
 function getTrainingStartMinutes(training: GroupTrainingSummary): number | null {
@@ -767,18 +796,15 @@ function getTrainingStartMinutes(training: GroupTrainingSummary): number | null 
   return parsed.getHours() * 60 + parsed.getMinutes();
 }
 
-function matchesTrainingTimeOfDayFilter(training: GroupTrainingSummary, timeOfDayFilter: FindGameTimeOfDayFilter): boolean {
-  if (timeOfDayFilter === "all") return true;
+function matchesTrainingTimeOfDayFilter(training: GroupTrainingSummary, timeOfDayFilters: readonly string[]): boolean {
+  if (timeOfDayFilters.length === 0) return true;
   const startMinutes = getTrainingStartMinutes(training);
   if (startMinutes === null) return false;
-
-  if (timeOfDayFilter === "morning") {
-    return startMinutes >= 7 * 60 && startMinutes < 11 * 60;
-  }
-  if (timeOfDayFilter === "day") {
-    return startMinutes >= 11 * 60 && startMinutes < 18 * 60;
-  }
-  return startMinutes >= 18 * 60 && startMinutes < 24 * 60;
+  return timeOfDayFilters.some((filter) => {
+    if (filter === "morning") return startMinutes >= 7 * 60 && startMinutes < 11 * 60;
+    if (filter === "day") return startMinutes >= 11 * 60 && startMinutes < 18 * 60;
+    return filter === "evening" && startMinutes >= 18 * 60 && startMinutes < 24 * 60;
+  });
 }
 
 function matchesStationFilter(
@@ -1173,6 +1199,53 @@ function FindGameCard({
   );
 }
 
+interface AtlasMultiFilterProps {
+  label: string;
+  options: readonly FindGameSelectOption[];
+  selectedValues: readonly string[];
+  allValue: string;
+  disabled?: boolean;
+  onChange: (values: string[]) => void;
+}
+
+function AtlasMultiFilter({
+  label,
+  options,
+  selectedValues,
+  allValue,
+  disabled = false,
+  onChange,
+}: AtlasMultiFilterProps) {
+  return (
+    <div className="find-game-filter-control" role="group" aria-label={label}>
+      <div className="find-game-filter-control-title">
+        <span>{label}</span>
+        {selectedValues.length > 0 && <small>{selectedValues.length}</small>}
+      </div>
+      <div className="find-game-filter-options">
+        {options.map((option) => {
+          const isAllOption = option.value === allValue;
+          const isActive = isAllOption
+            ? selectedValues.length === 0
+            : selectedValues.includes(option.value);
+          return (
+            <button
+              key={option.value}
+              type="button"
+              className={`find-game-filter-option${isActive ? " active" : ""}`}
+              aria-pressed={isActive}
+              disabled={disabled}
+              onClick={() => onChange(toggleAtlasMultiValue(selectedValues, option.value, allValue))}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function FindGamePage({
   onBack,
   cabinetUrl = DEFAULT_CABINET_URL,
@@ -1199,44 +1272,35 @@ export default function FindGamePage({
   const [selectedDateKeyState, setSelectedDateKeyState] = useState(() => (
     readAtlasQueryValue(FIND_GAME_QUERY_KEYS.date) || getDefaultAtlasDateKey()
   ));
-  const [stationFilterValue, setStationFilterValue] = useState(
-    buildStationFilterValue(presetStudioId, presetStudioName)
-      ?? readAtlasQueryValue(FIND_GAME_QUERY_KEYS.station)
-      ?? FIND_GAME_FILTER_ALL_VALUE,
+  const [stationFilterValues, setStationFilterValues] = useState<string[]>(() => {
+    const presetValue = buildStationFilterValue(presetStudioId, presetStudioName);
+    return presetValue ? [presetValue] : readAtlasMultiValues(FIND_GAME_QUERY_KEYS.station);
+  });
+  const [levelFilterValues, setLevelFilterValues] = useState<string[]>(
+    () => readAtlasMultiValues(FIND_GAME_QUERY_KEYS.level),
   );
-  const [stationFilterLabel, setStationFilterLabel] = useState(
-    String(presetStudioName || "").trim() || "Выбранная станция",
-  );
-  const [levelFilterValue, setLevelFilterValue] = useState(
-    () => readAtlasQueryValue(FIND_GAME_QUERY_KEYS.level) || FIND_GAME_FILTER_ALL_VALUE,
-  );
-  const [kindFilter, setKindFilter] = useState<FindGameKindFilter>(() => readAtlasChoice(
+  const [kindFilters, setKindFilters] = useState<string[]>(() => readAtlasMultiValues(
     FIND_GAME_QUERY_KEYS.kind,
     FIND_GAME_KIND_OPTIONS.map((option) => option.value),
-    "all",
   ));
-  const [timeOfDayFilter, setTimeOfDayFilter] = useState<FindGameTimeOfDayFilter>(() => readAtlasChoice(
+  const [timeOfDayFilters, setTimeOfDayFilters] = useState<string[]>(() => readAtlasMultiValues(
     FIND_GAME_QUERY_KEYS.time,
     FIND_GAME_TIME_OF_DAY_OPTIONS.map((option) => option.value),
-    "all",
   ));
-  const [statusFilterValue, setStatusFilterValue] = useState(
-    () => readAtlasQueryValue(FIND_GAME_QUERY_KEYS.status) || FIND_GAME_FILTER_ALL_VALUE,
+  const [statusFilterValues, setStatusFilterValues] = useState<string[]>(
+    () => readAtlasMultiValues(FIND_GAME_QUERY_KEYS.status),
   );
-  const [availabilityFilter, setAvailabilityFilter] = useState<FindGameAvailabilityFilter>(() => readAtlasChoice(
+  const [availabilityFilters, setAvailabilityFilters] = useState<string[]>(() => readAtlasMultiValues(
     FIND_GAME_QUERY_KEYS.availability,
     FIND_GAME_AVAILABILITY_OPTIONS.map((option) => option.value),
-    "all",
   ));
-  const [formatFilter, setFormatFilter] = useState<FindGameFormatFilter>(() => readAtlasChoice(
+  const [formatFilters, setFormatFilters] = useState<string[]>(() => readAtlasMultiValues(
     FIND_GAME_QUERY_KEYS.format,
     FIND_GAME_FORMAT_OPTIONS.map((option) => option.value),
-    "all",
   ));
-  const [audienceFilter, setAudienceFilter] = useState<FindGameAudienceFilter>(() => readAtlasChoice(
+  const [audienceFilters, setAudienceFilters] = useState<string[]>(() => readAtlasMultiValues(
     FIND_GAME_QUERY_KEYS.audience,
     FIND_GAME_AUDIENCE_OPTIONS.map((option) => option.value),
-    "all",
   ));
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [isFriendlyTagModalOpen, setFriendlyTagModalOpen] = useState(false);
@@ -1292,15 +1356,11 @@ export default function FindGamePage({
       ? options
       : [{ value: FIND_GAME_FILTER_ALL_VALUE, label: "Все станции" }, ...options];
 
-    if (
-      stationFilterValue !== FIND_GAME_FILTER_ALL_VALUE
-      && !withDefault.some((option) => option.value === stationFilterValue)
-    ) {
-      withDefault.push({
-        value: stationFilterValue,
-        label: stationFilterLabel || "Выбранная станция",
-      });
-    }
+    stationFilterValues.forEach((value) => {
+      if (!withDefault.some((option) => option.value === value)) {
+        withDefault.push({ value, label: "Выбранная станция" });
+      }
+    });
 
     return withDefault;
   }, [
@@ -1310,8 +1370,7 @@ export default function FindGamePage({
     presetStudioId,
     presetStudioName,
     shouldIncludeGamePlusTrainer,
-    stationFilterLabel,
-    stationFilterValue,
+    stationFilterValues,
   ]);
 
   const levelOptions = useMemo(() => {
@@ -1331,14 +1390,13 @@ export default function FindGamePage({
       { value: FIND_GAME_FILTER_ALL_VALUE, label: "Любой уровень" },
       ...options,
     ];
-    if (
-      levelFilterValue !== FIND_GAME_FILTER_ALL_VALUE
-      && !withDefault.some((option) => option.value === levelFilterValue)
-    ) {
-      withDefault.push({ value: levelFilterValue, label: levelFilterValue });
-    }
+    levelFilterValues.forEach((value) => {
+      if (!withDefault.some((option) => option.value === value)) {
+        withDefault.push({ value, label: value });
+      }
+    });
     return withDefault;
-  }, [games, gamePlusTrainerTrainings, levelFilterValue, shouldIncludeGamePlusTrainer]);
+  }, [games, gamePlusTrainerTrainings, levelFilterValues, shouldIncludeGamePlusTrainer]);
 
   const statusOptions = useMemo(() => {
     const values = new Set<string>();
@@ -1352,14 +1410,13 @@ export default function FindGamePage({
         .sort((left, right) => getStatusLabel(left).localeCompare(getStatusLabel(right), "ru"))
         .map((value) => ({ value, label: getStatusLabel(value) })),
     ];
-    if (
-      statusFilterValue !== FIND_GAME_FILTER_ALL_VALUE
-      && !options.some((option) => option.value === statusFilterValue)
-    ) {
-      options.push({ value: statusFilterValue, label: getStatusLabel(statusFilterValue) });
-    }
+    statusFilterValues.forEach((value) => {
+      if (!options.some((option) => option.value === value)) {
+        options.push({ value, label: getStatusLabel(value) });
+      }
+    });
     return options;
-  }, [games, gamePlusTrainerTrainings, shouldIncludeGamePlusTrainer, statusFilterValue]);
+  }, [games, gamePlusTrainerTrainings, shouldIncludeGamePlusTrainer, statusFilterValues]);
 
   const buildCreateUrl = useCallback(() => {
     const url = buildAbsolutePageUrl(DEFAULT_GAME_CREATE_PATH);
@@ -1454,15 +1511,15 @@ export default function FindGamePage({
     setSearchQuery("");
     setSelectedDateKeyState(getDefaultAtlasDateKey());
     if (!isStationLockedByPreset) {
-      setStationFilterValue(FIND_GAME_FILTER_ALL_VALUE);
+      setStationFilterValues([]);
     }
-    setLevelFilterValue(FIND_GAME_FILTER_ALL_VALUE);
-    setKindFilter("all");
-    setTimeOfDayFilter("all");
-    setStatusFilterValue(FIND_GAME_FILTER_ALL_VALUE);
-    setAvailabilityFilter("all");
-    setFormatFilter("all");
-    setAudienceFilter("all");
+    setLevelFilterValues([]);
+    setKindFilters([]);
+    setTimeOfDayFilters([]);
+    setStatusFilterValues([]);
+    setAvailabilityFilters([]);
+    setFormatFilters([]);
+    setAudienceFilters([]);
   }, [isStationLockedByPreset]);
 
   useEffect(() => {
@@ -1473,6 +1530,10 @@ export default function FindGamePage({
         if (!value || value === defaultValue) url.searchParams.delete(key);
         else url.searchParams.set(key, value);
       };
+      const setOrDeleteMulti = (key: string, values: readonly string[]) => {
+        if (values.length === 0) url.searchParams.delete(key);
+        else url.searchParams.set(key, values.join(","));
+      };
       setOrDelete(FIND_GAME_QUERY_KEYS.category, category, "all");
       setOrDelete(FIND_GAME_QUERY_KEYS.search, searchQuery.trim());
       setOrDelete(
@@ -1480,35 +1541,31 @@ export default function FindGamePage({
         category === "upcoming" ? "" : selectedDateKeyState,
         getDefaultAtlasDateKey(),
       );
-      setOrDelete(
-        FIND_GAME_QUERY_KEYS.station,
-        isStationLockedByPreset ? "" : stationFilterValue,
-        FIND_GAME_FILTER_ALL_VALUE,
-      );
-      setOrDelete(FIND_GAME_QUERY_KEYS.level, levelFilterValue, FIND_GAME_FILTER_ALL_VALUE);
-      setOrDelete(FIND_GAME_QUERY_KEYS.kind, kindFilter, "all");
-      setOrDelete(FIND_GAME_QUERY_KEYS.time, timeOfDayFilter, "all");
-      setOrDelete(FIND_GAME_QUERY_KEYS.status, statusFilterValue, FIND_GAME_FILTER_ALL_VALUE);
-      setOrDelete(FIND_GAME_QUERY_KEYS.availability, availabilityFilter, "all");
-      setOrDelete(FIND_GAME_QUERY_KEYS.format, formatFilter, "all");
-      setOrDelete(FIND_GAME_QUERY_KEYS.audience, audienceFilter, "all");
+      setOrDeleteMulti(FIND_GAME_QUERY_KEYS.station, isStationLockedByPreset ? [] : stationFilterValues);
+      setOrDeleteMulti(FIND_GAME_QUERY_KEYS.level, levelFilterValues);
+      setOrDeleteMulti(FIND_GAME_QUERY_KEYS.kind, kindFilters);
+      setOrDeleteMulti(FIND_GAME_QUERY_KEYS.time, timeOfDayFilters);
+      setOrDeleteMulti(FIND_GAME_QUERY_KEYS.status, statusFilterValues);
+      setOrDeleteMulti(FIND_GAME_QUERY_KEYS.availability, availabilityFilters);
+      setOrDeleteMulti(FIND_GAME_QUERY_KEYS.format, formatFilters);
+      setOrDeleteMulti(FIND_GAME_QUERY_KEYS.audience, audienceFilters);
       window.history.replaceState(window.history.state, "", url.toString());
     } catch {
       // URL state is an enhancement; filtering must continue when history is unavailable.
     }
   }, [
-    audienceFilter,
-    availabilityFilter,
+    audienceFilters,
+    availabilityFilters,
     category,
-    formatFilter,
+    formatFilters,
     isStationLockedByPreset,
-    kindFilter,
-    levelFilterValue,
+    kindFilters,
+    levelFilterValues,
     searchQuery,
     selectedDateKeyState,
-    stationFilterValue,
-    statusFilterValue,
-    timeOfDayFilter,
+    stationFilterValues,
+    statusFilterValues,
+    timeOfDayFilters,
   ]);
 
   const loadPage = useCallback(async (nextOffset: number, mode: "replace" | "append") => {
@@ -1615,7 +1672,7 @@ export default function FindGamePage({
   }, [presetStudioId, presetStudioName, selectedDateKey, shouldIncludeGamePlusTrainer]);
 
   const filteredGames = useMemo(() => {
-    if (kindFilter === "game-plus-trainer") return [];
+    if (kindFilters.length > 0 && !kindFilters.includes("game")) return [];
     return games
       .filter((game) => matchesGameSearch(game, searchQuery))
       .filter((game) => matchesCategory(
@@ -1624,33 +1681,30 @@ export default function FindGamePage({
         isViewerGame(game, viewer),
         resolveGameStartTs(game),
       ))
-      .filter((game) => matchesSelectedStationFilter(game, stationFilterValue))
-      .filter((game) => matchesSelectedLevelFilter(game, levelFilterValue))
-      .filter((game) => matchesTimeOfDayFilter(game, timeOfDayFilter))
-      .filter((game) => (
-        statusFilterValue === FIND_GAME_FILTER_ALL_VALUE
-        || getGameStatusValue(game) === statusFilterValue
-      ))
-      .filter((game) => matchesAvailability(gameHasAvailablePlaces(game), availabilityFilter))
-      .filter((game) => matchesGameFormat(game, formatFilter))
-      .filter((game) => audienceFilter === "all" || isViewerGame(game, viewer));
+      .filter((game) => matchesSelectedStationFilter(game, stationFilterValues))
+      .filter((game) => matchesSelectedLevelFilter(game, levelFilterValues))
+      .filter((game) => matchesTimeOfDayFilter(game, timeOfDayFilters))
+      .filter((game) => matchesAtlasMultiValue(statusFilterValues, getGameStatusValue(game)))
+      .filter((game) => matchesAvailability(gameHasAvailablePlaces(game), availabilityFilters))
+      .filter((game) => matchesGameFormat(game, formatFilters))
+      .filter((game) => audienceFilters.length === 0 || isViewerGame(game, viewer));
   }, [
-    audienceFilter,
-    availabilityFilter,
+    audienceFilters,
+    availabilityFilters,
     category,
-    formatFilter,
+    formatFilters,
     games,
-    kindFilter,
-    levelFilterValue,
+    kindFilters,
+    levelFilterValues,
     searchQuery,
-    stationFilterValue,
-    statusFilterValue,
-    timeOfDayFilter,
+    stationFilterValues,
+    statusFilterValues,
+    timeOfDayFilters,
     viewer,
   ]);
 
   const filteredGamePlusTrainerTrainings = useMemo(() => {
-    if (!shouldIncludeGamePlusTrainer || kindFilter === "game") return [];
+    if (!shouldIncludeGamePlusTrainer || (kindFilters.length > 0 && !kindFilters.includes("game-plus-trainer"))) return [];
     return gamePlusTrainerTrainings
       .filter((training) => matchesTrainingSearch(training, searchQuery))
       .filter((training) => matchesCategory(
@@ -1659,29 +1713,26 @@ export default function FindGamePage({
         isViewerTraining(training),
         resolveTrainingStartTs(training),
       ))
-      .filter((training) => matchesSelectedTrainingStationFilter(training, stationFilterValue))
-      .filter((training) => matchesSelectedTrainingLevelFilter(training, levelFilterValue))
-      .filter((training) => matchesTrainingTimeOfDayFilter(training, timeOfDayFilter))
-      .filter((training) => (
-        statusFilterValue === FIND_GAME_FILTER_ALL_VALUE
-        || getTrainingStatusValue(training) === statusFilterValue
-      ))
-      .filter((training) => matchesAvailability(trainingHasAvailablePlaces(training), availabilityFilter))
-      .filter(() => formatFilter === "all")
-      .filter((training) => audienceFilter === "all" || isViewerTraining(training));
+      .filter((training) => matchesSelectedTrainingStationFilter(training, stationFilterValues))
+      .filter((training) => matchesSelectedTrainingLevelFilter(training, levelFilterValues))
+      .filter((training) => matchesTrainingTimeOfDayFilter(training, timeOfDayFilters))
+      .filter((training) => matchesAtlasMultiValue(statusFilterValues, getTrainingStatusValue(training)))
+      .filter((training) => matchesAvailability(trainingHasAvailablePlaces(training), availabilityFilters))
+      .filter(() => formatFilters.length === 0)
+      .filter((training) => audienceFilters.length === 0 || isViewerTraining(training));
   }, [
-    audienceFilter,
-    availabilityFilter,
+    audienceFilters,
+    availabilityFilters,
     category,
-    formatFilter,
+    formatFilters,
     gamePlusTrainerTrainings,
-    kindFilter,
-    levelFilterValue,
+    kindFilters,
+    levelFilterValues,
     searchQuery,
     shouldIncludeGamePlusTrainer,
-    stationFilterValue,
-    statusFilterValue,
-    timeOfDayFilter,
+    stationFilterValues,
+    statusFilterValues,
+    timeOfDayFilters,
   ]);
 
   const filteredItems = useMemo<FindGameListItem[]>(() => [
@@ -1699,19 +1750,19 @@ export default function FindGamePage({
     })),
   ].sort((left, right) => left.sortTs - right.sortTs), [filteredGamePlusTrainerTrainings, filteredGames]);
 
-  const hasStationFilter = !isStationLockedByPreset && stationFilterValue !== FIND_GAME_FILTER_ALL_VALUE;
+  const hasStationFilter = !isStationLockedByPreset && stationFilterValues.length > 0;
   const activeFilterCount = [
     category !== "all",
     Boolean(searchQuery.trim()),
     category !== "upcoming" && selectedDateKeyState !== getDefaultAtlasDateKey(),
     hasStationFilter,
-    levelFilterValue !== FIND_GAME_FILTER_ALL_VALUE,
-    kindFilter !== "all",
-    timeOfDayFilter !== "all",
-    statusFilterValue !== FIND_GAME_FILTER_ALL_VALUE,
-    availabilityFilter !== "all",
-    formatFilter !== "all",
-    audienceFilter !== "all",
+    levelFilterValues.length > 0,
+    kindFilters.length > 0,
+    timeOfDayFilters.length > 0,
+    statusFilterValues.length > 0,
+    availabilityFilters.length > 0,
+    formatFilters.length > 0,
+    audienceFilters.length > 0,
   ].filter(Boolean).length;
   const hasActiveFilters = activeFilterCount > 0;
   const totalWithGamePlusTrainer = total + (shouldIncludeGamePlusTrainer ? gamePlusTrainerTrainings.length : 0);
@@ -1839,104 +1890,65 @@ export default function FindGamePage({
         id="game-atlas-filters"
         className={`find-game-filterbar${filtersExpanded ? " is-open" : ""}`}
       >
-        <label className="find-game-filter-control">
-          <span>Станция</span>
-          <select
-            value={stationFilterValue}
-            onChange={(event) => {
-              setStationFilterValue(event.target.value);
-              const selectedLabel = event.target.selectedOptions[0]?.textContent?.trim();
-              if (selectedLabel) {
-                setStationFilterLabel(selectedLabel);
-              }
-            }}
-            disabled={isStationLockedByPreset || stationOptions.length <= 1}
-          >
-            {stationOptions.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="find-game-filter-control">
-          <span>Уровень</span>
-          <select
-            value={levelFilterValue}
-            onChange={(event) => setLevelFilterValue(event.target.value)}
-            disabled={levelOptions.length <= 1}
-          >
-            {levelOptions.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="find-game-filter-control">
-          <span>Тип</span>
-          <select
-            value={kindFilter}
-            onChange={(event) => setKindFilter(event.target.value as FindGameKindFilter)}
-          >
-            {FIND_GAME_KIND_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="find-game-filter-control">
-          <span>Статус</span>
-          <select
-            value={statusFilterValue}
-            onChange={(event) => setStatusFilterValue(event.target.value)}
-            disabled={statusOptions.length <= 1}
-          >
-            {statusOptions.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="find-game-filter-control">
-          <span>Места</span>
-          <select
-            value={availabilityFilter}
-            onChange={(event) => setAvailabilityFilter(event.target.value as FindGameAvailabilityFilter)}
-          >
-            {FIND_GAME_AVAILABILITY_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="find-game-filter-control">
-          <span>Формат</span>
-          <select
-            value={formatFilter}
-            onChange={(event) => setFormatFilter(event.target.value as FindGameFormatFilter)}
-          >
-            {FIND_GAME_FORMAT_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="find-game-filter-control">
-          <span>Участие</span>
-          <select
-            value={audienceFilter}
-            onChange={(event) => setAudienceFilter(event.target.value as FindGameAudienceFilter)}
-          >
-            {FIND_GAME_AUDIENCE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        </label>
-        <div className="find-game-time-of-day">
-          {FIND_GAME_TIME_OF_DAY_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              className={`find-game-time-chip${timeOfDayFilter === option.value ? " active" : ""}`}
-              onClick={() => setTimeOfDayFilter(option.value)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
+        <AtlasMultiFilter
+          label="Станция"
+          options={stationOptions}
+          selectedValues={stationFilterValues}
+          allValue={FIND_GAME_FILTER_ALL_VALUE}
+          disabled={isStationLockedByPreset || stationOptions.length <= 1}
+          onChange={setStationFilterValues}
+        />
+        <AtlasMultiFilter
+          label="Уровень"
+          options={levelOptions}
+          selectedValues={levelFilterValues}
+          allValue={FIND_GAME_FILTER_ALL_VALUE}
+          disabled={levelOptions.length <= 1}
+          onChange={setLevelFilterValues}
+        />
+        <AtlasMultiFilter
+          label="Тип"
+          options={FIND_GAME_KIND_OPTIONS}
+          selectedValues={kindFilters}
+          allValue="all"
+          onChange={setKindFilters}
+        />
+        <AtlasMultiFilter
+          label="Статус"
+          options={statusOptions}
+          selectedValues={statusFilterValues}
+          allValue={FIND_GAME_FILTER_ALL_VALUE}
+          disabled={statusOptions.length <= 1}
+          onChange={setStatusFilterValues}
+        />
+        <AtlasMultiFilter
+          label="Места"
+          options={FIND_GAME_AVAILABILITY_OPTIONS}
+          selectedValues={availabilityFilters}
+          allValue="all"
+          onChange={setAvailabilityFilters}
+        />
+        <AtlasMultiFilter
+          label="Формат"
+          options={FIND_GAME_FORMAT_OPTIONS}
+          selectedValues={formatFilters}
+          allValue="all"
+          onChange={setFormatFilters}
+        />
+        <AtlasMultiFilter
+          label="Участие"
+          options={FIND_GAME_AUDIENCE_OPTIONS}
+          selectedValues={audienceFilters}
+          allValue="all"
+          onChange={setAudienceFilters}
+        />
+        <AtlasMultiFilter
+          label="Время"
+          options={FIND_GAME_TIME_OF_DAY_OPTIONS}
+          selectedValues={timeOfDayFilters}
+          allValue="all"
+          onChange={setTimeOfDayFilters}
+        />
         <button type="button" className="find-game-filter-reset" onClick={resetFilters}>
           Сбросить все фильтры
         </button>

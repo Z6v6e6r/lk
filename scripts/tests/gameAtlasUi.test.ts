@@ -67,3 +67,24 @@ test("Game Atlas groups advanced filters behind the same toggle on mobile and de
     /@media \(min-width: 768px\)[\s\S]*\.find-game-filter-toggle\s*\{\s*display: none/,
   );
 });
+
+test("Game Atlas supports multiple selected values in every advanced filter group", () => {
+  assert.match(atlasSource, /function readAtlasMultiValues/);
+  assert.match(atlasSource, /function toggleAtlasMultiValue/);
+  assert.match(atlasSource, /values\.join\(","\)/);
+  for (const stateName of [
+    "stationFilterValues",
+    "levelFilterValues",
+    "kindFilters",
+    "statusFilterValues",
+    "availabilityFilters",
+    "formatFilters",
+    "audienceFilters",
+    "timeOfDayFilters",
+  ]) {
+    assert.match(atlasSource, new RegExp(`selectedValues=\\{${stateName}\\}`));
+  }
+  assert.match(atlasSource, /aria-pressed=\{isActive\}/);
+  assert.match(styles, /\.find-game-filter-options\s*\{[\s\S]*flex-wrap: wrap/);
+  assert.match(styles, /\.find-game-filter-option\.active/);
+});
