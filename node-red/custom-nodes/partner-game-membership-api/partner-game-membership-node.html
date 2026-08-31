@@ -1,0 +1,57 @@
+<script type="text/javascript">
+  RED.nodes.registerType("padlhub-partner-game-membership-store", {
+    category: "config",
+    defaults: {
+      name: { value: "Partner game membership store" },
+      enabledEnv: { value: "LK_PARTNER_GAME_API_ENABLED", required: true },
+      mongoUriEnv: { value: "LK_PARTNER_GAME_API_MONGO_URI", required: true },
+      databaseNameEnv: { value: "LK_PARTNER_GAME_API_MONGO_DB", required: true },
+      keyringEnv: { value: "LK_PARTNER_GAME_API_KEYRING_JSON", required: true },
+      auditKeyEnv: { value: "LK_PARTNER_GAME_API_AUDIT_HMAC_KEY", required: true },
+      environmentEnv: { value: "LK_PARTNER_GAME_API_ENVIRONMENT", required: true },
+      providerModeEnv: { value: "LK_PARTNER_GAME_API_PROVIDER_MODE", required: true },
+      technicalVivaClientIdEnv: { value: "LK_PARTNER_GAME_API_VIVA_TECHNICAL_CLIENT_ID", required: true }
+    },
+    label: function () { return this.name || "Partner game membership store"; }
+  });
+</script>
+
+<script type="text/html" data-template-name="padlhub-partner-game-membership-store">
+  <div class="form-row"><label for="node-config-input-name">Name</label><input type="text" id="node-config-input-name"></div>
+  <div class="form-row"><label for="node-config-input-enabledEnv">Enabled env</label><input type="text" id="node-config-input-enabledEnv"></div>
+  <div class="form-row"><label for="node-config-input-mongoUriEnv">Mongo URI env</label><input type="text" id="node-config-input-mongoUriEnv"></div>
+  <div class="form-row"><label for="node-config-input-databaseNameEnv">Database env</label><input type="text" id="node-config-input-databaseNameEnv"></div>
+  <div class="form-row"><label for="node-config-input-keyringEnv">Keyring env</label><input type="text" id="node-config-input-keyringEnv"></div>
+  <div class="form-row"><label for="node-config-input-auditKeyEnv">Audit HMAC env</label><input type="text" id="node-config-input-auditKeyEnv"></div>
+  <div class="form-row"><label for="node-config-input-environmentEnv">Environment env</label><input type="text" id="node-config-input-environmentEnv"></div>
+  <div class="form-row"><label for="node-config-input-providerModeEnv">Provider mode env</label><input type="text" id="node-config-input-providerModeEnv"></div>
+  <div class="form-row"><label for="node-config-input-technicalVivaClientIdEnv">Viva technical client env</label><input type="text" id="node-config-input-technicalVivaClientIdEnv"></div>
+</script>
+
+<script type="text/javascript">
+  RED.nodes.registerType("padlhub-partner-game-membership-http", {
+    category: "PadlHub",
+    color: "#ffd08a",
+    defaults: {
+      name: { value: "Partner game membership API" },
+      store: { value: "", type: "padlhub-partner-game-membership-store", required: true }
+    },
+    inputs: 1,
+    outputs: 1,
+    icon: "font-awesome/fa-shield",
+    label: function () { return this.name || "Partner game membership API"; }
+  });
+</script>
+
+<script type="text/html" data-template-name="padlhub-partner-game-membership-http">
+  <div class="form-row"><label for="node-input-name">Name</label><input type="text" id="node-input-name"></div>
+  <div class="form-row"><label for="node-input-store">Store</label><input type="text" id="node-input-store"></div>
+</script>
+
+<script type="text/html" data-help-name="padlhub-partner-game-membership-store">
+  <p>Fail-closed server-only config. Secrets are read from environment variables and never stored in the flow.</p>
+</script>
+
+<script type="text/html" data-help-name="padlhub-partner-game-membership-http">
+  <p>Authenticates a signed partner request, consumes its nonce, writes durable audit records and applies only owned memberships.</p>
+</script>

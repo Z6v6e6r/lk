@@ -1,5 +1,23 @@
 # 🔴 Node-RED Потоки — Справочник
 
+## Partner game membership API (source-only test v0.1)
+
+- Отдельный M2M namespace: `POST /lk/integrations/v1/open-games/:gameId/members`,
+  `DELETE /lk/integrations/v1/open-games/:gameId/members/:membershipId`,
+  `GET /lk/integrations/v1/operations/:operationId`.
+- Custom node package: `node-red/custom-nodes/partner-game-membership-api/`; request HMAC,
+  one-time nonce, idempotency, scopes/station allowlist, canonical ownership и audit
+  выполняются внутри server-only runtime.
+- Source-only builder: `scripts/patch_partner_game_membership_api_flow.mjs`; требует
+  fresh live-flow SHA, запрещает in-place mutation и создаёт manifest с
+  `deploymentPerformed=false`/`activationPerformed=false`.
+- Real Viva provider в v0.1 отсутствует и fail-closed; synthetic provider разрешён
+  только с loopback Mongo в `local|test|dev`.
+- Полный контракт, threat model, test plan и вопросы внешней команде:
+  `docs/PARTNER_GAME_MEMBERSHIP_API.md`.
+- Route import, Mongo prerequisites, secrets, ingress/mTLS, real Viva adapter, deploy и
+  activation остаются отдельными R3/R4 gates.
+
 ## Legacy game command prerequisites
 
 - Source-only candidate builder: `scripts/patch_live_games_command_prerequisites.mjs`; it is pinned to the exact fresh live-flow SHA and adds no HTTP endpoint.
