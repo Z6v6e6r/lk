@@ -158,7 +158,15 @@ test("public game create flow uses dedicated summary and split checkout selectio
   );
   assert.match(
     gamesPageSource,
-    /if \(preferredPaymentMode === "subscription" && !canUseSplitSubscription\) \{[\s\S]*Выбранный абонемент больше недоступен/,
+    /const resolvedPaymentMode = preferredPaymentMode \?\? \(canUseSplitSubscription \? "subscription" : "one_time"\);/,
+  );
+  assert.match(
+    gamesPageSource,
+    /if \(resolvedPaymentMode === "subscription" && !resolvedClientSubscriptionId\) \{[\s\S]*Не удалось определить выбранный абонемент/,
+  );
+  assert.match(
+    gamesPageSource,
+    /const guarded = preferredPaymentMode === "subscription";[\s\S]*splitSubscriptionSubmitInFlightRef\.current/,
   );
   assert.match(gamesPageSource, /shouldShowPublicSplitSubscriptionBadge \? \(\s*<span className="game-payment-choice-badge">Подписка<\/span>/);
   assert.match(gamesPageSource, /game-payment-choice-price\$\{shouldShowPublicSplitSubscriptionBadge \? " game-payment-choice-price--discounted" : ""\}/);
