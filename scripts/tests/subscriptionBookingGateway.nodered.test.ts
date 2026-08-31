@@ -13,8 +13,7 @@ import {
 const ROUTER_FILE = "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js";
 const PREPARE_FILE = "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js";
 const FINALIZE_FILE = "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_finalize.js";
-const MANAGED_EVALUATOR_FILE =
-  "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_evaluate.js";
+const SPLIT_ROUTER_FILE = "scripts/nodered_games_nodes/fn_split_router.js";
 const MANAGED_BLOCKED_FILE =
   "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_blocked.js";
 const PITER_PRODUCT_ID = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
@@ -22,8 +21,9 @@ const HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";
 const LIVE_ROUTER_FLOW_FIXTURE = process.env.LK1_SUBSCRIPTION_LIVE_FLOW_FIXTURE;
 const MANAGED_GLOBALS = {
   vivacrm_access_token: "service-token",
-  subscriptions_runtime_api_base_url: "https://cup.example/api",
+  subscriptions_runtime_api_base_url: "https://padlhub.su/api",
   subscriptions_runtime_context_integration_token: "integration-token",
+  subscriptions_entitlement_integration_token: "entitlement-integration-token-1234567890",
   subscriptions_managed_enforcement_product_ids: [PITER_PRODUCT_ID],
 };
 const MANAGED_ACTIVATION_GLOBALS = {
@@ -161,7 +161,7 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
     status: "PUBLISHED",
     effectiveAt: "2026-08-01T00:00:00.000Z",
     timeZone: "Europe/Moscow",
-    createGame: { enabled: true, durationsMinutes: [60] },
+    createGame: { enabled: true, durationsMinutes: [60, 90, 120] },
     joinGame: { enabled: true, minDurationMinutes: 60, maxDurationMinutes: 120 },
     activeServicesLimit: { enabled: false, max: null, scope: "SUBSCRIPTION_BENEFIT_ONLY" },
     bookingWindow: { enabled: false, days: null },
@@ -187,7 +187,7 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
         actions: ["CREATE_GAME"],
         externalEventTypeIds: ["viva:direction:4588:type:1613"],
         productTypeIds: [],
-        durationMinutes: [60],
+        durationMinutes: [60, 90, 120],
         stationIds: benefitStationIds,
         kind: "FREE_ENTITLEMENT",
         valueMinor: null,
@@ -248,6 +248,59 @@ function managedRuntimeResponse(overrides: Record<string, any> = {}) {
     },
     evidence: overrides.evidence || { mappingRevision: 1, instanceRevision: 1 },
   };
+}
+
+function entitlementDecision({
+  action = "CREATE_GAME",
+  finalPriceMinor = 0,
+  durationMinutes = 60,
+} = {}) {
+  return {
+    decisionKind: "ENTITLEMENT",
+    policyVersion: 1,
+    policyDigest: "a".repeat(64),
+    action,
+    target: {
+      targetId: "exercise-target",
+      stationId: PITER_STATION_ID,
+      eventTypeId: "viva:direction:4588:type:1613",
+      productTypeId: null,
+      durationMinutes,
+      startsAt: "2026-08-21T15:00:00.000Z",
+    },
+    usageUnits: 1,
+    money: {
+      basePriceMinor: 150000,
+      discountMinor: 150000 - finalPriceMinor,
+      surchargeMinor: 0,
+      finalPriceMinor,
+      currency: "RUB",
+    },
+  };
+}
+
+function entitlementContext(step: string, overrides: Record<string, unknown> = {}) {
+  const runtime = managedRuntimeResponse();
+  return baseContext(step, {
+    planKey: "piter_friendship",
+    category: "open_game",
+    managedAction: "CREATE_GAME",
+    managedTarget: {
+      stationId: PITER_STATION_ID,
+      externalEventTypeId: "viva:direction:4588:type:1613",
+      productTypeId: null,
+      durationMinutes: 60,
+      startsAt: "2026-08-21T15:00:00.000Z",
+    },
+    managedRuntime: {
+      subscriptionInstanceId: runtime.subscriptionInstanceId,
+      policyDigest: runtime.policyDigest,
+      policy: runtime.policy,
+      instance: runtime.instance,
+      evidence: runtime.evidence,
+    },
+    ...overrides,
+  });
 }
 
 test("gateway prepare requires Bearer and operationId and ignores client identity fields", () => {
@@ -633,7 +686,7 @@ test("Piter split create resolves a server target and requests the actor-owned C
   assert.equal(out[0]._subscriptionBooking.managedTarget.stationId, "studio-1");
   assert.equal(out[0]._subscriptionBooking.managedTarget.externalEventTypeId,
     "viva:direction:4588:type:1613");
-  assert.equal(out[0].url, "https://cup.example/api/internal/subscriptions/runtime-context");
+  assert.equal(out[0].url, "https://padlhub.su/api/internal/subscriptions/runtime-context");
   assert.deepEqual(out[0].payload, { clientSubscriptionId: "client-subscription-1" });
   assert.equal(out[0].headers.Authorization, "Bearer user-token");
   assert.equal(out[0].headers["X-Subscriptions-Integration-Token"], "integration-token");
@@ -917,17 +970,9 @@ test("published managed policy is evaluated before Mongo and persists its audit 
     statusCode: 200, payload: { content: [] },
     _subscriptionBooking: active[0]._subscriptionBooking,
   }, MANAGED_GLOBALS);
-  assert.equal(history[6]._subscriptionBooking.step, "managed_policy_decision");
-  assert.equal(history[1], null);
-
-  const evaluated = runFunction(MANAGED_EVALUATOR_FILE, history[6]);
-  assert.ok(evaluated[0], JSON.stringify(evaluated[1]?._managedSubscriptionPolicyDecision));
-  const routed = runFunction(ROUTER_FILE, evaluated[0], MANAGED_GLOBALS);
-  assert.equal(routed[1]._subscriptionBooking.step, "operation_find");
-  assert.equal(routed[1]._subscriptionBooking.managedDecision.policyVersion, 1);
-  assert.equal(routed[1]._subscriptionBooking.managedDecision.subscriptionInstanceId,
-    "subscription-instance-1");
-  assert.equal(routed[1]._subscriptionBooking.managedDecision.benefit.kind, "FREE_ENTITLEMENT");
+  assert.equal(history[1]._subscriptionBooking.step, "operation_find");
+  assert.equal(history[6], null, "legacy in-memory policy never authorizes the provider write");
+  assert.equal(history[1]._subscriptionBooking.managedDecision, undefined);
 });
 
 test("forged HUB planKey and runtime step cannot bypass the exact PITER gate", () => {
@@ -1085,9 +1130,8 @@ test("pending annual subscription is projected for policy and activates only aft
     payload: { content: [] },
     _subscriptionBooking: active[0]._subscriptionBooking,
   }, MANAGED_ACTIVATION_GLOBALS);
-  assert.equal(history[6]._managedSubscriptionPolicyInput.instance.state, "ACTIVE");
-  assert.ok(history[6]._managedSubscriptionPolicyInput.instance.activeFrom);
-  assert.ok(history[6]._managedSubscriptionPolicyInput.instance.activeTo);
+  assert.equal(history[1]._subscriptionBooking.step, "operation_find");
+  assert.equal(history[6], null);
 
   const activationRequest = runFunction(ROUTER_FILE, {
     payload: { matchedCount: 1 },
@@ -1104,7 +1148,7 @@ test("pending annual subscription is projected for policy and activates only aft
   assert.equal(activationRequest[0]._subscriptionBooking.step, "managed_first_use_activation");
   assert.equal(
     activationRequest[0].url,
-    "https://cup.example/api/internal/subscriptions/activate-first-use",
+    "https://padlhub.su/api/internal/subscriptions/activate-first-use",
   );
   assert.deepEqual(activationRequest[0].payload, {
     subscriptionInstanceId: "subscription-instance-1",
@@ -1252,7 +1296,7 @@ test("regional policy requires the exact first-use deadline lifecycle before any
   }
 });
 
-test("Piter rejects an all-stations policy and regional tournament discounts stay closed", () => {
+test("Piter rejects an all-stations policy and routes tournament discounts to CUP", () => {
   const invalidPolicy = managedRuntimeResponse({ allStations: true });
   const runtime = runFunction(ROUTER_FILE, {
     statusCode: 200,
@@ -1290,12 +1334,14 @@ test("Piter rejects an all-stations policy and regional tournament discounts sta
       serviceDate: undefined, category: undefined, planKey: undefined,
     }),
   }, MANAGED_GLOBALS);
-  assert.equal(tournament[4].statusCode, 409);
-  assert.equal(tournament[4].payload.details.code,
-    "MANAGED_SUBSCRIPTION_DISCOUNT_NOT_CONFIGURED");
+  assert.equal(tournament[0]._subscriptionBooking.step, "managed_runtime_context");
+  assert.equal(tournament[0]._subscriptionBooking.managedAction, "BOOK_TOURNAMENT");
+  assert.equal(tournament[0].url,
+    "https://padlhub.su/api/internal/subscriptions/runtime-context");
+  assert.equal(tournament[4], null);
 });
 
-test("90 minute create is blocked while 120 minute join is allowed by the same policy", () => {
+test("90 minute create and 120 minute join both proceed to the atomic CUP operation", () => {
   const futureTarget = futureManagedTarget();
   const evaluateDuration = (action: "CREATE_GAME" | "JOIN_GAME", durationMinutes: number) => {
     const ctx = baseContext("history_bookings", {
@@ -1317,15 +1363,14 @@ test("90 minute create is blocked while 120 minute join is allowed by the same p
     const history = runFunction(ROUTER_FILE, {
       statusCode: 200, payload: { content: [] }, _subscriptionBooking: ctx,
     }, MANAGED_GLOBALS);
-    return runFunction(MANAGED_EVALUATOR_FILE, history[6]);
+    return history;
   };
   const create = evaluateDuration("CREATE_GAME", 90);
-  assert.equal(create[0], null);
-  assert.ok(create[1]._managedSubscriptionPolicyDecision.blockers
-    .some((item: any) => item.code === "DURATION_NOT_ALLOWED"));
+  assert.equal(create[1]._subscriptionBooking.step, "operation_find");
+  assert.equal(create[6], null);
   const join = evaluateDuration("JOIN_GAME", 120);
-  assert.ok(join[0]);
-  assert.equal(join[0]._managedSubscriptionPolicyDecision.eligible, true);
+  assert.equal(join[1]._subscriptionBooking.step, "operation_find");
+  assert.equal(join[6], null);
 });
 
 test("blocked managed policy exposes stable blocker codes without the runtime payload", () => {
@@ -1791,7 +1836,7 @@ test("managed booking rechecks CUP identity and policy after preaccept before Vi
   }, MANAGED_GLOBALS);
   assert.ok(recheck[0], JSON.stringify(recheck[3]?.payload ?? recheck[4]?.payload));
   assert.equal(recheck[0]._subscriptionBooking.step, "managed_runtime_recheck");
-  assert.equal(recheck[0].url, "https://cup.example/api/internal/subscriptions/runtime-context");
+  assert.equal(recheck[0].url, "https://padlhub.su/api/internal/subscriptions/runtime-context");
 
   const changed = runFunction(ROUTER_FILE, {
     statusCode: 200,
@@ -1811,15 +1856,351 @@ test("managed booking rechecks CUP identity and policy after preaccept before Vi
     payload: runtime,
     _subscriptionBooking: structuredClone(recheck[0]._subscriptionBooking),
   }, MANAGED_GLOBALS);
-  assert.equal(unchanged[6]._subscriptionBooking.step, "managed_policy_recheck_decision");
-  const evaluated = runFunction(MANAGED_EVALUATOR_FILE, unchanged[6]);
-  const create = runFunction(ROUTER_FILE, evaluated[0], MANAGED_GLOBALS);
+  assert.equal(unchanged[0]._subscriptionBooking.step, "managed_entitlement_reserve");
+  assert.equal(unchanged[0].url,
+    "https://padlhub.su/api/internal/subscriptions/entitlements/reserve");
+  assert.equal(unchanged[0].headers.Authorization, "Bearer user-token");
+  assert.equal(unchanged[0].headers["X-Subscriptions-Integration-Token"],
+    "entitlement-integration-token-1234567890");
+  assert.deepEqual(unchanged[0].payload, {
+    subscriptionInstanceId: "subscription-instance-1",
+    action: "CREATE_GAME",
+    target: { targetId: "exercise-target" },
+  });
+
+  const reserved = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      schemaVersion: 1,
+      outcome: "RESERVED",
+      replayed: false,
+      operationId: "booking:entitlement-operation-1",
+      subscriptionInstanceId: "subscription-instance-1",
+      aggregateRevision: 2,
+      operationState: "RESERVED",
+      blockers: [],
+      decision: {
+        decisionKind: "ENTITLEMENT",
+        policyVersion: 1,
+        policyDigest: "a".repeat(64),
+        action: "CREATE_GAME",
+        target: {
+          targetId: "exercise-target",
+          stationId: PITER_STATION_ID,
+          eventTypeId: "viva:direction:4588:type:1613",
+          productTypeId: null,
+          durationMinutes: 60,
+          startsAt: target.startsAt,
+        },
+        usageUnits: 1,
+        money: {
+          basePriceMinor: 150000,
+          discountMinor: 150000,
+          surchargeMinor: 0,
+          finalPriceMinor: 0,
+          currency: "RUB",
+        },
+      },
+    },
+    _subscriptionBooking: unchanged[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(reserved[3]._subscriptionBooking.step, "operation_entitlement_bind");
+  assert.equal(reserved[3].payload[1].$set.managedEntitlementOperationId,
+    "booking:entitlement-operation-1");
+  const create = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: reserved[3]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
   assert.equal(create[0]._subscriptionBooking.step, "booking_create");
   assert.equal(create[0].payload.clientSubscriptionId, "client-subscription-1");
   assert.equal(create[0].payload.paymentType, "SUBSCRIPTION");
 });
 
-test("managed lifecycle cancellation at the final recheck fails before Viva write", () => {
+test("entitlement token is never sent when the configured origin is not the trusted CUP origin", () => {
+  const out = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse(),
+    _subscriptionBooking: entitlementContext("managed_runtime_recheck", {
+      managedActivationRequired: false,
+    }),
+  }, {
+    ...MANAGED_GLOBALS,
+    subscriptions_runtime_api_base_url: "https://attacker.example/api",
+    subscriptions_entitlement_integration_token: "do-not-leak-entitlement-token-123456",
+  });
+
+  assert.equal(out[0], null);
+  assert.equal(out[3]._subscriptionBooking.step, "operation_fail");
+  assert.equal(out[3].payload[1].$set.failure.rawCode,
+    "SUBSCRIPTION_ENTITLEMENT_ORIGIN_NOT_TRUSTED");
+  assert.doesNotMatch(JSON.stringify(out), /do-not-leak-entitlement-token/);
+});
+
+test("CUP active-service limit releases the local claim into an explicit full-price fallback", () => {
+  const fallback = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      schemaVersion: 1,
+      outcome: "FULL_PRICE_WITHOUT_SUBSCRIPTION",
+      replayed: false,
+      operationId: null,
+      subscriptionInstanceId: "subscription-instance-1",
+      aggregateRevision: 4,
+      operationState: null,
+      decision: null,
+      blockers: [{ code: "ACTIVE_SERVICES_LIMIT_REACHED" }],
+    },
+    _subscriptionBooking: entitlementContext("managed_entitlement_reserve"),
+  }, MANAGED_GLOBALS);
+  assert.equal(fallback[3]._subscriptionBooking.step, "operation_full_price_fallback");
+  assert.equal(fallback[3].payload[1].$set.state, "RELEASED");
+
+  const done = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: fallback[3]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(done[4].payload.state, "FULL_PRICE_WITHOUT_SUBSCRIPTION");
+  assert.equal(done[4].payload.blockers[0].code, "ACTIVE_SERVICES_LIMIT_REACHED");
+});
+
+test("replayed already-confirmed entitlement never dispatches a second Viva booking", () => {
+  const replay = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      schemaVersion: 1,
+      outcome: "RESERVED",
+      replayed: true,
+      operationId: "booking:already-confirmed",
+      subscriptionInstanceId: "subscription-instance-1",
+      aggregateRevision: 5,
+      operationState: "CONFIRMED",
+      decision: entitlementDecision(),
+      blockers: [],
+    },
+    _subscriptionBooking: entitlementContext("managed_entitlement_reserve"),
+  }, MANAGED_GLOBALS);
+  assert.equal(replay[3]._subscriptionBooking.step, "operation_entitlement_bind");
+
+  const pending = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: replay[3]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(pending[4].statusCode, 202);
+  assert.equal(pending[4].payload.details.code,
+    "SUBSCRIPTION_ENTITLEMENT_CONFIRMED_RECONCILIATION_REQUIRED");
+  assert.equal(pending[0], null);
+});
+
+test("discounted entitlement is released without a Viva write until provider pricing is wired", () => {
+  const reserved = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      schemaVersion: 1,
+      outcome: "RESERVED",
+      replayed: false,
+      operationId: "booking:discounted-entitlement",
+      subscriptionInstanceId: "subscription-instance-1",
+      aggregateRevision: 5,
+      operationState: "RESERVED",
+      decision: entitlementDecision({ finalPriceMinor: 52500, durationMinutes: 90 }),
+      blockers: [],
+    },
+    _subscriptionBooking: entitlementContext("managed_entitlement_reserve", {
+      managedTarget: {
+        stationId: PITER_STATION_ID,
+        externalEventTypeId: "viva:direction:4588:type:1613",
+        productTypeId: null,
+        durationMinutes: 90,
+        startsAt: "2026-08-21T15:00:00.000Z",
+      },
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(reserved[3]._subscriptionBooking.step, "operation_entitlement_bind");
+
+  const release = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: reserved[3]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(release[0]._subscriptionBooking.step, "managed_entitlement_release");
+  assert.equal(release[0].url,
+    "https://padlhub.su/api/internal/subscriptions/entitlements/release");
+  assert.equal(release[0].payload.reason, "PROVIDER_REJECTED");
+  assert.doesNotMatch(release[0].url, /vivacrm/);
+
+  const released = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      schemaVersion: 1,
+      outcome: "RELEASED",
+      replayed: false,
+      operationId: "booking:discounted-entitlement",
+      subscriptionInstanceId: "subscription-instance-1",
+      aggregateRevision: 6,
+      operationState: "FAILED",
+    },
+    _subscriptionBooking: release[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(released[3]._subscriptionBooking.step, "operation_fail");
+  assert.equal(released[3].payload[1].$set.failure.rawCode,
+    "MANAGED_SUBSCRIPTION_PROVIDER_PRICING_NOT_CONFIGURED");
+
+  const failed = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: released[3]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(failed[4].statusCode, 409);
+  assert.equal(failed[4].payload.details.code,
+    "MANAGED_SUBSCRIPTION_PROVIDER_PRICING_NOT_CONFIGURED");
+  assert.equal(failed[0], null);
+});
+
+test("definitive Viva rejection releases the exact reserved entitlement before returning the error", () => {
+  const release = runFunction(ROUTER_FILE, {
+    statusCode: 409,
+    payload: { message: "No available spots", code: "NO_SPOTS" },
+    _subscriptionBooking: entitlementContext("booking_create", {
+      managedEntitlementOperationId: "booking:provider-rejected",
+      managedDecision: entitlementDecision(),
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(release[0]._subscriptionBooking.step, "managed_entitlement_release");
+  assert.equal(release[0].payload.operationId, "booking:provider-rejected");
+
+  const persist = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      schemaVersion: 1,
+      outcome: "RELEASED",
+      replayed: false,
+      operationId: "booking:provider-rejected",
+      subscriptionInstanceId: "subscription-instance-1",
+      aggregateRevision: 7,
+      operationState: "FAILED",
+    },
+    _subscriptionBooking: release[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(persist[3]._subscriptionBooking.step, "operation_fail");
+  const done = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: persist[3]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(done[4].statusCode, 409);
+  assert.equal(done[4].payload.details.code, "NO_SPOTS");
+});
+
+test("Viva readback must be followed by exact CUP entitlement confirmation", () => {
+  const confirm = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: entitlementContext("operation_confirm", {
+      managedEntitlementOperationId: "booking:confirmed-entitlement",
+      confirmedBookingId: "booking-viva-1",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(confirm[0]._subscriptionBooking.step, "managed_entitlement_confirm");
+  assert.equal(confirm[0].payload.providerBookingId, "booking-viva-1");
+  assert.equal(confirm[0].url,
+    "https://padlhub.su/api/internal/subscriptions/entitlements/confirm");
+
+  const bound = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      schemaVersion: 1,
+      outcome: "CONFIRMED",
+      replayed: false,
+      operationId: "booking:confirmed-entitlement",
+      subscriptionInstanceId: "subscription-instance-1",
+      aggregateRevision: 8,
+      operationState: "CONFIRMED",
+    },
+    _subscriptionBooking: confirm[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(bound[3]._subscriptionBooking.step, "operation_entitlement_confirm");
+  const done = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: bound[3]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(done[4].statusCode, 201);
+  assert.equal(done[4].payload.bookingId, "booking-viva-1");
+});
+
+test("verified Viva cancellation releases CUP before changing the local operation", () => {
+  const release = runFunction(ROUTER_FILE, {
+    payload: [{
+      _id: "managed-operation",
+      operationId: "original-operation",
+      state: "CONFIRMED",
+      exerciseId: "exercise-target",
+      clientSubscriptionId: "client-subscription-1",
+      serviceDate: "2026-08-10",
+      bookingId: "booking-viva-1",
+      managedEntitlementOperationId: "booking:cancelled-entitlement",
+      managedSubscriptionInstanceId: "subscription-instance-1",
+    }],
+    _subscriptionBooking: baseContext("operation_find", {
+      action: "release",
+      releaseBookingId: "booking-viva-1",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(release[0]._subscriptionBooking.step, "managed_entitlement_release");
+  assert.equal(release[0].payload.reason, "BOOKING_CANCELLED");
+  assert.equal(release[0].payload.providerBookingId, "booking-viva-1");
+
+  const local = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      schemaVersion: 1,
+      outcome: "RELEASED",
+      replayed: false,
+      operationId: "booking:cancelled-entitlement",
+      subscriptionInstanceId: "subscription-instance-1",
+      aggregateRevision: 9,
+      operationState: "COMPENSATED",
+    },
+    _subscriptionBooking: release[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(local[3]._subscriptionBooking.step, "operation_release");
+  assert.equal(local[3].payload[1].$set.state, "RELEASED");
+});
+
+test("expired ambiguous managed claim releases CUP before the local lease", () => {
+  const operation = {
+    _id: "managed-expired-operation",
+    operationId: "idem-operation-1",
+    state: "PENDING_CONFIRMATION",
+    actorClientId: "client-1",
+    clientSubscriptionId: "client-subscription-1",
+    exerciseId: "exercise-target",
+    managedEntitlementOperationId: "booking:expired-entitlement",
+    managedSubscriptionInstanceId: "subscription-instance-1",
+  };
+  const release = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { content: [] },
+    _subscriptionBooking: baseContext("expired_pending_reconciliation", {
+      expiredPendingOperation: operation,
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(release[0]._subscriptionBooking.step, "managed_entitlement_release");
+  assert.equal(release[0].payload.operationId, "booking:expired-entitlement");
+
+  const local = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      schemaVersion: 1,
+      outcome: "RELEASED",
+      replayed: false,
+      operationId: "booking:expired-entitlement",
+      subscriptionInstanceId: "subscription-instance-1",
+      aggregateRevision: 10,
+      operationState: "FAILED",
+    },
+    _subscriptionBooking: release[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(local[3]._subscriptionBooking.step, "operation_expired_pending_release");
+  assert.equal(local[3].payload[1].$set.state, "RELEASED");
+});
+
+test("managed lifecycle cancellation is rejected by the atomic CUP reserve before Viva write", () => {
   const runtime = managedRuntimeResponse();
   const target = futureManagedTarget();
   const rechecked = runFunction(ROUTER_FILE, {
@@ -1846,12 +2227,15 @@ test("managed lifecycle cancellation at the final recheck fails before Viva writ
       managedActivationRequired: false,
     }),
   }, MANAGED_GLOBALS);
-  assert.equal(rechecked[6]._subscriptionBooking.step, "managed_policy_recheck_decision");
-  const blocked = runFunction(MANAGED_EVALUATOR_FILE, rechecked[6]);
-  const failed = runFunction(ROUTER_FILE, blocked[1], MANAGED_GLOBALS);
+  assert.equal(rechecked[0]._subscriptionBooking.step, "managed_entitlement_reserve");
+  const failed = runFunction(ROUTER_FILE, {
+    statusCode: 409,
+    payload: { code: "SUBSCRIPTION_ENTITLEMENT_BLOCKED" },
+    _subscriptionBooking: rechecked[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
   assert.equal(failed[3]._subscriptionBooking.step, "operation_fail");
   assert.equal(failed[3].payload[1].$set.failure.rawCode,
-    "MANAGED_SUBSCRIPTION_POLICY_BLOCKED");
+    "SUBSCRIPTION_ENTITLEMENT_BLOCKED");
   assert.equal(failed[0], null);
 });
 
@@ -1935,6 +2319,132 @@ test("split caller receives a synthetic trusted booking only after gateway confi
   assert.equal(out[1], null);
 });
 
+test("active-service limit keeps the created exercise and continues at full price", () => {
+  const finalized = runFunction(FINALIZE_FILE, {
+    statusCode: 200,
+    payload: {
+      ok: true,
+      state: "FULL_PRICE_WITHOUT_SUBSCRIPTION",
+      blockers: [{ code: "ACTIVE_SERVICES_LIMIT_REACHED" }],
+    },
+    _subscriptionBooking: baseContext("operation_full_price_fallback", {
+      caller: "split",
+      exerciseId: "exercise-created",
+    }),
+    _splitCtx: {
+      action: "create",
+      step: "create_booking",
+      token: "service-token",
+      exerciseId: "exercise-created",
+      ownsExercise: true,
+      clientPhone: "+79990000001",
+    },
+  });
+
+  assert.equal(finalized[1], null);
+  assert.equal(finalized[0].statusCode, 200);
+  assert.equal(finalized[0]._splitCtx.step, "subscription_full_price_fallback");
+  assert.equal(finalized[0]._splitCtx.paymentMode, "one_time");
+  assert.equal(finalized[0]._splitCtx.subscriptionGuardDone, true);
+  assert.equal(finalized[0]._splitCtx.fullPriceFallback.blockers[0].code,
+    "ACTIVE_SERVICES_LIMIT_REACHED");
+
+  const createAtFullPrice = runFunction(SPLIT_ROUTER_FILE, finalized[0]);
+  assert.equal(createAtFullPrice[0]._splitCtx.step, "create_booking");
+  assert.equal(createAtFullPrice[0].method, "POST");
+  assert.match(createAtFullPrice[0].url, /\/exercises\/exercise-created\/bookings$/);
+  assert.equal(createAtFullPrice[0].payload.paymentType, "ON_PLACE");
+  assert.equal(createAtFullPrice[0].payload.clientSubscriptionId, undefined);
+  assert.doesNotMatch(createAtFullPrice[0].url, /delete/i);
+});
+
+test("split rejection never compensates an exercise not owned by this CREATE", () => {
+  for (const splitCtx of [
+    {
+      action: "create",
+      step: "create_booking",
+      exerciseId: "exercise-conflict",
+      ownsExercise: false,
+      reusedConflictingExercise: true,
+    },
+    {
+      action: "join",
+      step: "create_booking",
+      exerciseId: "exercise-existing",
+      ownsExercise: false,
+    },
+  ]) {
+    const out = runFunction(FINALIZE_FILE, {
+      statusCode: 409,
+      payload: {
+        error: "Правила подписки не разрешили запись",
+        details: { code: "MANAGED_SUBSCRIPTION_POLICY_BLOCKED" },
+      },
+      _subscriptionBooking: baseContext("managed_policy_decision", { caller: "split" }),
+      _splitCtx: splitCtx,
+    });
+    assert.equal(out[0], null);
+    assert.equal(out[1].statusCode, 409);
+    assert.equal(out[1]._splitCtx.step, "create_booking");
+  }
+});
+
+test("split pending confirmation never starts exercise compensation", () => {
+  const out = runFunction(FINALIZE_FILE, {
+    statusCode: 202,
+    payload: {
+      ok: true,
+      state: "PENDING_CONFIRMATION",
+      message: "Запись ожидает подтверждения Viva",
+    },
+    _subscriptionBooking: baseContext("confirmation_bookings", {
+      caller: "split",
+      exerciseId: "exercise-created",
+    }),
+    _splitCtx: {
+      action: "create",
+      step: "create_booking",
+      exerciseId: "exercise-created",
+      ownsExercise: true,
+    },
+  });
+
+  assert.equal(out[0], null);
+  assert.equal(out[1].statusCode, 202);
+  assert.equal(out[1].payload.state, "PENDING_CONFIRMATION");
+  assert.equal(out[1]._splitCtx.step, "create_booking");
+  assert.equal(out[1]._splitCtx.bookingFailure, undefined);
+});
+
+test("managed rejection never deletes an owned exercise with an ambiguous booking readback", () => {
+  const out = runFunction(SPLIT_ROUTER_FILE, {
+    statusCode: 200,
+    payload: [{ id: "booking-other", client: { id: "other-client" } }],
+    _splitCtx: {
+      action: "create",
+      step: "reconcile_booking_after_failure",
+      token: "service-token",
+      exerciseId: "exercise-created",
+      ownsExercise: true,
+      clientId: "client-1",
+      clientPhone: "+79990000001",
+      bookingFailure: {
+        statusCode: 409,
+        source: "MANAGED_SUBSCRIPTION_GATEWAY",
+        payload: {
+          error: "Правила подписки не разрешили запись",
+          details: { code: "MANAGED_SUBSCRIPTION_POLICY_BLOCKED" },
+        },
+      },
+    },
+  });
+
+  assert.equal(out[0], null);
+  assert.equal(out[1].statusCode, 409);
+  assert.equal(out[1].payload.details.code, "SPLIT_BOOKING_RECONCILIATION_AMBIGUOUS");
+  assert.equal(out[1].payload.details.destructiveRetryBlocked, true);
+});
+
 test("guarded patcher requires the exact live preimage and wires split subscriptions into the gateway", () => {
   const source = fs.readFileSync("scripts/patch_nodered_subscription_booking_flow.mjs", "utf8");
   assert.match(source, /EXPECTED_LIVE_ROUTER_SHA256/);
@@ -1973,7 +2483,7 @@ test("guarded patcher accepts the exact current tracked split router", () => {
     ],
   };
 
-  assert.equal(funcSha256, "3fac27dce5ab0f2ae844d2927db406d44253151e62cab4c50a7790f7bc273b33");
+  assert.equal(funcSha256, "5f380562e98dd2f94a0197c498c94df12eb1797be0c3345bb21d8e4f051de7c9");
   assert.equal(resolveManagedSubscriptionRouterContract(router, funcSha256)?.managedActionCandidateSha256, null);
 });
 

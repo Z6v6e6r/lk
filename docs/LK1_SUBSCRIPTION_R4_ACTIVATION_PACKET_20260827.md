@@ -63,6 +63,9 @@ or contract inventory drift.
    `subscriptions_runtime_context_integration_token` or
    `subscriptions_activation_integration_token` through process environment,
    `settings.js` or persistent Node-RED context. Values were not read or logged.
+   A later source-only entitlement lifecycle also requires the distinct
+   `subscriptions_entitlement_integration_token`; it is likewise not provisioned
+   or authorized by this packet.
 4. There is no approved evidence that the exact custom-node package, MongoDB driver,
    database revision/index prerequisites, backup/restore rehearsal and writer
    quiescence gates are ready on the target.

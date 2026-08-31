@@ -54,6 +54,7 @@ export interface ManagedSubscriptionDevLedgerEvent {
     | "POLICY_PINNED"
     | "ELIGIBILITY_QUOTED"
     | "ELIGIBILITY_BLOCKED"
+    | "FULL_PRICE_CONTINUATION_ALLOWED"
     | "RESERVATION_CREATED"
     | "RESERVATION_RELEASED";
   occurredAt: string;
@@ -915,14 +916,24 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
     snapshot,
     async quote(targetId: unknown) {
       const result = await decisionFor(targetId);
-      appendEvent(result.decision.eligible ? "ELIGIBILITY_QUOTED" : "ELIGIBILITY_BLOCKED", {
+      const bookingOutcome = buildShadowBookingOutcome(result.target, result.decision);
+      const eventType = result.decision.eligible
+        ? "ELIGIBILITY_QUOTED"
+        : bookingOutcome.allowed ? "FULL_PRICE_CONTINUATION_ALLOWED" : "ELIGIBILITY_BLOCKED";
+      appendEvent(eventType, {
         targetId: result.target.targetId,
         details: {
           blockerCodes: result.decision.blockers.map((blocker) => blocker.code),
           finalPriceMinor: result.decision.benefit?.finalPriceMinor ?? null,
+          pricingMode: bookingOutcome.pricingMode,
         },
       });
-      return { target: clone(result.target), decision: result.decision, snapshot: await snapshot() };
+      return {
+        target: clone(result.target),
+        decision: result.decision,
+        bookingOutcome,
+        snapshot: await snapshot(),
+      };
     },
     async quoteResolved(
       target: ManagedSubscriptionDevTarget,
@@ -962,7 +973,8 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
         // All reserve/release/seed mutations use one in-process queue. The final
         // evaluation and write therefore share one atomic DEV-only boundary.
         const result = await decisionFor(target.targetId);
-        if (!result.decision.eligible) {
+        const bookingOutcome = buildShadowBookingOutcome(result.target, result.decision);
+        if (!bookingOutcome.allowed) {
           appendEvent("ELIGIBILITY_BLOCKED", {
             operationId: normalizedOperationId,
             targetId: target.targetId,
@@ -975,6 +987,25 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
             { decision: result.decision },
           );
         }
+        if (!bookingOutcome.subscriptionApplied) {
+          appendEvent("FULL_PRICE_CONTINUATION_ALLOWED", {
+            operationId: normalizedOperationId,
+            targetId: target.targetId,
+            details: {
+              blockerCodes: bookingOutcome.reasonCodes,
+              finalPriceMinor: bookingOutcome.finalPriceMinor,
+            },
+          });
+          const response = {
+            reservation: null,
+            decision: result.decision,
+            bookingOutcome,
+            snapshot: await snapshot(),
+            replayed: false,
+          };
+          operations.set(normalizedOperationId, { fingerprint, response: clone(response) });
+          return response;
+        }
         const reservationId = `dev-reservation:${randomUUID()}`;
         const reservation: ManagedSubscriptionDevReservation = {
           reservationId,
@@ -985,7 +1016,7 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
           startsAt: target.target.startsAt,
           localDate: localDate(target.target.startsAt),
           usageUnits: result.decision.usageUnits || 0,
-          finalPriceMinor: result.decision.benefit?.finalPriceMinor ?? null,
+          finalPriceMinor: bookingOutcome.finalPriceMinor,
           createdAt: new Date().toISOString(),
           releasedAt: null,
           source: "USER",
@@ -1000,6 +1031,7 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
         const response = {
           reservation: clone(reservation),
           decision: result.decision,
+          bookingOutcome,
           snapshot: await snapshot(),
           replayed: false,
         };

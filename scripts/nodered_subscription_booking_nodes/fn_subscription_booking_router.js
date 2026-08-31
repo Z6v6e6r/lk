@@ -13,6 +13,7 @@ const REGIONAL_ACTIVATION_MODE = "FIRST_USE_OR_FIXED_DATE";
 const REGIONAL_ACTIVATION_FALLBACK_AT = "2026-09-30T21:00:00.000Z";
 const REGIONAL_ACTIVATION_TIME_ZONE = "Europe/Moscow";
 const REGIONAL_VALIDITY_DAYS = 365;
+const TRUSTED_ENTITLEMENT_API_BASE = "https://padlhub.su/api";
 
 const OUTPUT_HTTP = 0;
 const OUTPUT_MONGO_FIND = 1;
@@ -160,6 +161,22 @@ const finishReleased = (ctx, details = null) => {
   return emit(OUTPUT_FINAL);
 };
 
+const finishFullPriceFallback = (ctx, blockers) => {
+  msg._subscriptionBooking = ctx;
+  msg.statusCode = 200;
+  msg.headers = responseHeaders();
+  msg.payload = {
+    ok: true,
+    state: "FULL_PRICE_WITHOUT_SUBSCRIPTION",
+    operationId: ctx.operationId,
+    exerciseId: ctx.exerciseId,
+    clientSubscriptionId: ctx.clientSubscriptionId,
+    blockers: asArray(blockers),
+  };
+  delete msg.error;
+  return emit(OUTPUT_FINAL);
+};
+
 const prepareHttp = (ctx, step, method, url, payload, headers = {}) => {
   ctx.step = step;
   msg._subscriptionBooking = ctx;
@@ -225,6 +242,180 @@ const validManagedActivationConfig = (config) => (
 const managedActivationConfigured = () => {
   const config = managedActivationConfig();
   return validManagedActivationConfig(config);
+};
+
+const managedEntitlementConfig = () => {
+  const configuredApiBase = (readGlobal("subscriptions_runtime_api_base_url") || "")
+    .replace(/\/+$/, "");
+  return {
+    apiBase: configuredApiBase,
+    trustedOrigin: configuredApiBase === TRUSTED_ENTITLEMENT_API_BASE,
+    integrationToken: readGlobal("subscriptions_entitlement_integration_token"),
+  };
+};
+
+const validManagedEntitlementConfig = (config) => (
+  config.trustedOrigin === true
+  && config.apiBase === TRUSTED_ENTITLEMENT_API_BASE
+  && Buffer.byteLength(config.integrationToken || "", "utf8") >= 32
+);
+
+const managedEntitlementHeaders = (ctx, config) => ({
+  Authorization: ctx.authHeader,
+  "X-Subscriptions-Integration-Token": config.integrationToken,
+  "X-Correlation-Id": ctx.operationId,
+  "Content-Type": "application/json",
+  Accept: "application/json",
+});
+
+const prepareManagedEntitlementReserve = (ctx) => {
+  const config = managedEntitlementConfig();
+  if (!validManagedEntitlementConfig(config)) {
+    return prepareFailedUpdate(
+      ctx,
+      503,
+      "Резерв льготы подписки ещё не настроен",
+      config.trustedOrigin
+        ? "SUBSCRIPTION_ENTITLEMENT_NOT_CONFIGURED"
+        : "SUBSCRIPTION_ENTITLEMENT_ORIGIN_NOT_TRUSTED",
+    );
+  }
+  return prepareHttp(
+    ctx,
+    "managed_entitlement_reserve",
+    "POST",
+    `${TRUSTED_ENTITLEMENT_API_BASE}/internal/subscriptions/entitlements/reserve`,
+    {
+      subscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
+      action: ctx.managedAction,
+      target: { targetId: ctx.exerciseId },
+    },
+    {
+      ...managedEntitlementHeaders(ctx, config),
+      "Idempotency-Key": ctx.operationId,
+    },
+  );
+};
+
+const prepareManagedEntitlementConfirm = (ctx) => {
+  const config = managedEntitlementConfig();
+  if (!validManagedEntitlementConfig(config)) {
+    return finishPending(ctx, "Запись подтверждена Viva; льгота ожидает подтверждения ЦУП", {
+      code: "SUBSCRIPTION_ENTITLEMENT_NOT_CONFIGURED",
+    });
+  }
+  return prepareHttp(
+    ctx,
+    "managed_entitlement_confirm",
+    "POST",
+    `${TRUSTED_ENTITLEMENT_API_BASE}/internal/subscriptions/entitlements/confirm`,
+    {
+      operationId: ctx.managedEntitlementOperationId,
+      providerBookingId: ctx.confirmedBookingId,
+    },
+    managedEntitlementHeaders(ctx, config),
+  );
+};
+
+const prepareManagedEntitlementRelease = (ctx, reason, providerBookingId = null) => {
+  const config = managedEntitlementConfig();
+  if (!validManagedEntitlementConfig(config) || !toStr(ctx.managedEntitlementOperationId)) {
+    return finishPending(ctx, "Резерв льготы требует ручной сверки", {
+      code: "SUBSCRIPTION_ENTITLEMENT_RELEASE_NOT_CONFIGURED",
+    });
+  }
+  const payload = {
+    operationId: ctx.managedEntitlementOperationId,
+    reason,
+  };
+  if (providerBookingId) payload.providerBookingId = providerBookingId;
+  ctx.entitlementReleaseReason = reason;
+  return prepareHttp(
+    ctx,
+    "managed_entitlement_release",
+    "POST",
+    `${TRUSTED_ENTITLEMENT_API_BASE}/internal/subscriptions/entitlements/release`,
+    payload,
+    managedEntitlementHeaders(ctx, config),
+  );
+};
+
+const validEntitlementDecision = (ctx, decision) => {
+  if (!isObj(decision) || decision.decisionKind !== "ENTITLEMENT"
+    || decision.policyVersion !== ctx.managedRuntime?.policy?.policyVersion
+    || decision.policyDigest !== ctx.managedRuntime?.policyDigest
+    || decision.action !== ctx.managedAction
+    || normalizeId(decision.target?.targetId) !== normalizeId(ctx.exerciseId)
+    || normalizeId(decision.target?.stationId) !== normalizeId(ctx.managedTarget?.stationId)
+    || toStr(decision.target?.eventTypeId) !== toStr(ctx.managedTarget?.externalEventTypeId)
+    || toStr(decision.target?.productTypeId) !== toStr(ctx.managedTarget?.productTypeId)
+    || Number(decision.target?.durationMinutes) !== Number(ctx.managedTarget?.durationMinutes)
+    || finiteDate(decision.target?.startsAt)?.getTime() !== finiteDate(ctx.managedTarget?.startsAt)?.getTime()
+    || !Number.isInteger(decision.usageUnits) || decision.usageUnits < 1
+    || !isObj(decision.money) || decision.money.currency !== "RUB") return false;
+  return [
+    decision.money.basePriceMinor,
+    decision.money.discountMinor,
+    decision.money.surchargeMinor,
+    decision.money.finalPriceMinor,
+  ].every((value) => value === null || (Number.isSafeInteger(value) && value >= 0))
+    && Number.isSafeInteger(decision.money.finalPriceMinor);
+};
+
+const prepareManagedEntitlementBind = (ctx) => {
+  const nowIso = new Date().toISOString();
+  return prepareMongoUpdate(ctx, "operation_entitlement_bind", {
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: "PENDING_CONFIRMATION",
+    $or: [
+      { managedEntitlementOperationId: { $exists: false } },
+      { managedEntitlementOperationId: null },
+      { managedEntitlementOperationId: ctx.managedEntitlementOperationId },
+    ],
+  }, {
+    $set: {
+      managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+      managedSubscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
+      managedEntitlementState: "RESERVED",
+      managedDecision: ctx.managedDecision,
+      updatedAt: nowIso,
+    },
+  });
+};
+
+const prepareManagedEntitlementConfirmedUpdate = (ctx) => {
+  const nowIso = new Date().toISOString();
+  return prepareMongoUpdate(ctx, "operation_entitlement_confirm", {
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: "CONFIRMED",
+    managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+  }, {
+    $set: {
+      managedEntitlementState: "CONFIRMED",
+      managedEntitlementConfirmedAt: nowIso,
+      updatedAt: nowIso,
+    },
+  });
+};
+
+const prepareFullPriceFallbackUpdate = (ctx, blockers) => {
+  const nowIso = new Date().toISOString();
+  ctx.fullPriceFallbackBlockers = asArray(blockers);
+  return prepareMongoUpdate(ctx, "operation_full_price_fallback", {
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: "PENDING_CONFIRMATION",
+  }, {
+    $set: {
+      state: "RELEASED",
+      releaseReason: "FULL_PRICE_WITHOUT_SUBSCRIPTION",
+      releasedAt: nowIso,
+      updatedAt: nowIso,
+    },
+    $unset: { pendingUntil: "", leaseUntil: "" },
+  });
 };
 
 const projectedFirstUseInstance = (instance, lifecycle, evaluatedAt) => {
@@ -515,6 +706,15 @@ const resolveLimitMode = (planKey, serviceDate) => {
 };
 
 const buildOperationKey = (ctx) => {
+  if (ctx.managedEnforcement?.enabled === true) {
+    return [
+      "managed",
+      ctx.tenantKey,
+      ctx.clientSubscriptionId,
+      ctx.exerciseId,
+      ctx.managedAction,
+    ].join(":");
+  }
   const dailyKey = `${ctx.tenantKey}:${ctx.clientSubscriptionId}:${ctx.serviceDate}`;
   if (ctx.limitMode === "shared_day") return dailyKey;
   if (ctx.limitMode === "category_day") return `${dailyKey}:${ctx.category}`;
@@ -773,6 +973,12 @@ const prepareOperationRelease = (ctx, operation) => {
   const nowIso = new Date().toISOString();
   ctx.releaseOperationKey = toStr(operation._id);
   ctx.releasePreviousState = toStr(operation.state);
+  ctx.managedEntitlementOperationId = toStr(operation.managedEntitlementOperationId)
+    || ctx.managedEntitlementOperationId
+    || null;
+  ctx.managedSubscriptionInstanceId = toStr(operation.managedSubscriptionInstanceId)
+    || ctx.managedSubscriptionInstanceId
+    || null;
   return prepareMongoUpdate(ctx, "operation_release", {
     _id: operation._id,
     state: operation.state,
@@ -853,6 +1059,10 @@ const prepareOperationReclaim = (ctx, operation, now = new Date()) => prepareMon
     upstreamBookingId: "",
     releaseBookingId: "",
     releasedAt: "",
+    managedEntitlementOperationId: "",
+    managedSubscriptionInstanceId: "",
+    managedEntitlementState: "",
+    managedEntitlementConfirmedAt: "",
   },
 });
 
@@ -969,6 +1179,15 @@ const prepareBookingCreate = (ctx) => {
     serviceToken = null;
   }
   if (!serviceToken) {
+    if (ctx.managedEntitlementOperationId) {
+      ctx.finalFailure = {
+        statusCode: 503,
+        message: "Сервисный токен Viva временно недоступен",
+        rawCode: "VIVA_SERVICE_TOKEN_UNAVAILABLE",
+      };
+      ctx.entitlementReleaseNext = "persist_failure";
+      return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
+    }
     return prepareFailedUpdate(ctx, 503, "Сервисный токен Viva временно недоступен", "VIVA_SERVICE_TOKEN_UNAVAILABLE");
   }
   const payload = {
@@ -1130,12 +1349,6 @@ if (ctx.step === "exercise") {
       });
     }
     ctx.managedAction = managedActionForTarget(ctx);
-    if (["BOOK_GROUP_TRAINING", "BOOK_TOURNAMENT"].includes(ctx.managedAction)) {
-      return finishError(ctx, 409, "Скидка подписки для этого формата ещё не настроена", {
-        code: "MANAGED_SUBSCRIPTION_DISCOUNT_NOT_CONFIGURED",
-        action: ctx.managedAction,
-      });
-    }
     ctx.managedTarget = {
       resolutionSource: "SERVER",
       stationId: ctx.studioId,
@@ -1216,12 +1429,6 @@ if (ctx.step === "subscription_name") {
       });
     }
     ctx.managedAction = managedActionForTarget(ctx);
-    if (["BOOK_GROUP_TRAINING", "BOOK_TOURNAMENT"].includes(ctx.managedAction)) {
-      return finishError(ctx, 409, "Скидка подписки для этого формата ещё не настроена", {
-        code: "MANAGED_SUBSCRIPTION_DISCOUNT_NOT_CONFIGURED",
-        action: ctx.managedAction,
-      });
-    }
     ctx.managedTarget = ctx.serverTarget;
     delete ctx.serverTarget;
     if (!ctx.managedAction || !isObj(ctx.managedTarget)
@@ -1370,11 +1577,7 @@ if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
       code: "MANAGED_SUBSCRIPTION_RUNTIME_CONTEXT_INVALID",
     });
   }
-  const unsupportedUsage = policy.activeServicesLimit?.enabled === true
-    || policy.usage?.weeklyUsageLimit !== null
-    || policy.usage?.monthlyUsageLimit !== null
-    || policy.usage?.maxFutureBookings !== null
-    || Number(policy.usage?.minHoursBetweenUses || 0) !== 0
+  const unsupportedUsage = Number(policy.usage?.minHoursBetweenUses || 0) !== 0
     || Number(policy.dailyUsageLimit) !== 1
     || ["60", "90", "120"].some((key) => Number(policy.usageUnitsByDuration?.[key]) !== 1);
   const createDurations = Array.isArray(policy.createGame?.durationsMinutes)
@@ -1400,15 +1603,13 @@ if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
     && policy.lifecycle.validityDays === REGIONAL_VALIDITY_DAYS
     && policy.lifecycle?.allowBookingsAfterExpiry === false;
   const regionalRulesUnsupported = policy.createGame?.enabled !== true
-    || createDurations.length !== 1 || createDurations[0] !== 60
+    || createDurations.length !== 3
+    || createDurations.some((duration, index) => duration !== [60, 90, 120][index])
     || policy.joinGame?.enabled !== true
     || Number(policy.joinGame?.minDurationMinutes) !== 60
     || Number(policy.joinGame?.maxDurationMinutes) !== 120
     || !stationPolicySupported
-    || !regionalLifecycleSupported
-    || (Array.isArray(policy.benefitRules) && policy.benefitRules.some((rule) => (
-      rule?.enabled === true && ["GROUP_TRAINING", "TOURNAMENT", "ADD_ON_PRODUCT"].includes(rule.category)
-    )));
+    || !regionalLifecycleSupported;
   if (unsupportedUsage || regionalRulesUnsupported) {
     return rejectRuntime(409, "Эта версия правил требует ещё не подключённого счётчика", {
       code: "MANAGED_SUBSCRIPTION_POLICY_UNSUPPORTED",
@@ -1449,7 +1650,7 @@ if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
     }
     ctx.managedRuntime = nextManagedRuntime;
     ctx.managedActivationExpectedRevision = runtime.evidence.instanceRevision;
-    return prepareManagedPolicyEvaluation(ctx, "managed_policy_recheck_decision");
+    return prepareManagedEntitlementReserve(ctx);
   }
   ctx.managedRuntime = nextManagedRuntime;
   ctx.managedActivationRequired = pendingFirstUse;
@@ -1572,14 +1773,14 @@ if (ctx.step === "history_bookings") {
       break;
     }
   }
-  if (dailyConflict) {
+  if (dailyConflict && ctx.managedEnforcement?.enabled !== true) {
     const existingEvent = eventSummary(dailyConflict);
     return finishError(ctx, 409, "По этому абонементу уже есть посещение на выбранную дату", {
       code: DAILY_LIMIT_CODE,
       existingEvent,
     });
   }
-  if (unresolvedBooking) {
+  if (unresolvedBooking && ctx.managedEnforcement?.enabled !== true) {
     return finishError(ctx, 502, "Нельзя безопасно определить принадлежность существующей записи дневному лимиту", {
       code: "SUBSCRIPTION_DAILY_LIMIT_BOOKING_UNRESOLVED",
     });
@@ -1598,7 +1799,7 @@ if (ctx.step === "history_bookings") {
         code: "MANAGED_SUBSCRIPTION_CONTEXT_MISSING",
       });
     }
-    return prepareManagedPolicyEvaluation(ctx, "managed_policy_decision");
+    return prepareOperationFind(ctx);
   }
   return prepareOperationFind(ctx);
 }
@@ -1647,6 +1848,79 @@ if (["managed_policy_decision", "managed_policy_recheck_decision"].includes(ctx.
   return prepareOperationFind(ctx);
 }
 
+if (ctx.step === "managed_entitlement_reserve") {
+  const result = unwrapRecord(msg.payload);
+  if (!isHttpOk(msg.statusCode) || !result || result.schemaVersion !== 1
+    || result.subscriptionInstanceId !== (
+      ctx.managedRuntime?.subscriptionInstanceId || ctx.managedSubscriptionInstanceId
+    )
+    || !Number.isInteger(result.aggregateRevision) || result.aggregateRevision < 1) {
+    return prepareFailedUpdate(
+      ctx,
+      Number(msg.statusCode) >= 400 && Number(msg.statusCode) < 500 ? Number(msg.statusCode) : 502,
+      "ЦУП не подтвердил резерв льготы подписки",
+      toStr(result?.code || result?.error?.code) || "SUBSCRIPTION_ENTITLEMENT_RESERVE_FAILED",
+    );
+  }
+  if (result.outcome === "FULL_PRICE_WITHOUT_SUBSCRIPTION") {
+    const blockers = asArray(result.blockers);
+    if (result.operationId !== null || result.operationState !== null || result.decision !== null
+      || blockers.length !== 1 || blockers[0]?.code !== "ACTIVE_SERVICES_LIMIT_REACHED") {
+      return prepareFailedUpdate(
+        ctx,
+        502,
+        "ЦУП вернул небезопасный переход на полную стоимость",
+        "SUBSCRIPTION_FULL_PRICE_FALLBACK_INVALID",
+      );
+    }
+    return prepareFullPriceFallbackUpdate(ctx, blockers);
+  }
+  if (result.outcome !== "RESERVED" || !toStr(result.operationId)
+    || !["RESERVED", "CONFIRMED"].includes(result.operationState)
+    || typeof result.replayed !== "boolean"
+    || (result.operationState === "CONFIRMED" && result.replayed !== true)
+    || asArray(result.blockers).length > 0
+    || !validEntitlementDecision(ctx, result.decision)) {
+    return prepareFailedUpdate(
+      ctx,
+      502,
+      "ЦУП вернул несогласованный резерв льготы",
+      "SUBSCRIPTION_ENTITLEMENT_RESERVE_INVALID",
+    );
+  }
+  ctx.managedEntitlementOperationId = toStr(result.operationId);
+  ctx.managedDecision = result.decision;
+  ctx.managedEntitlementReplayedConfirmed = result.operationState === "CONFIRMED";
+  return prepareManagedEntitlementBind(ctx);
+}
+
+if (ctx.step === "operation_entitlement_bind") {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Льгота зарезервирована в ЦУП; локальная связь требует сверки", {
+      code: "SUBSCRIPTION_ENTITLEMENT_BIND_PENDING",
+    });
+  }
+  if (ctx.managedDecision?.money?.finalPriceMinor > 0) {
+    ctx.entitlementReleaseNext = "pricing_not_configured";
+    return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
+  }
+  if (ctx.managedEntitlementReplayedConfirmed === true) {
+    return finishPending(ctx, "Льгота уже подтверждена в ЦУП; запись Viva требует точной сверки", {
+      code: "SUBSCRIPTION_ENTITLEMENT_CONFIRMED_RECONCILIATION_REQUIRED",
+    });
+  }
+  return prepareBookingCreate(ctx);
+}
+
+if (ctx.step === "operation_full_price_fallback") {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Переход на полную стоимость ожидает локального подтверждения", {
+      code: "SUBSCRIPTION_FULL_PRICE_FALLBACK_PENDING",
+    });
+  }
+  return finishFullPriceFallback(ctx, ctx.fullPriceFallbackBlockers);
+}
+
 if (ctx.step === "operation_find") {
   const rows = asArray(msg.payload);
   if (ctx.action === "release") {
@@ -1687,6 +1961,13 @@ if (ctx.step === "operation_find") {
         state: toStr(releaseOperation.state),
       });
     }
+    ctx.managedEntitlementOperationId = toStr(releaseOperation.managedEntitlementOperationId);
+    ctx.managedSubscriptionInstanceId = toStr(releaseOperation.managedSubscriptionInstanceId);
+    if (ctx.managedEntitlementOperationId) {
+      ctx.releaseOperation = releaseOperation;
+      ctx.entitlementReleaseNext = "local_operation_release";
+      return prepareManagedEntitlementRelease(ctx, "BOOKING_CANCELLED", ctx.releaseBookingId);
+    }
     return prepareOperationRelease(ctx, releaseOperation);
   }
   const operation = isObj(rows[0]) ? rows[0] : null;
@@ -1702,6 +1983,12 @@ if (ctx.step === "operation_find") {
       }
       ctx.confirmedBookingId = stableBookingId;
       ctx.activationOperationId = toStr(operation.operationId);
+      ctx.managedEntitlementOperationId = toStr(operation.managedEntitlementOperationId);
+      ctx.managedSubscriptionInstanceId = toStr(operation.managedSubscriptionInstanceId);
+      if (ctx.managedEntitlementOperationId
+        && operation.managedEntitlementState !== "CONFIRMED") {
+        return prepareManagedEntitlementConfirm(ctx);
+      }
       return prepareManagedFirstUseActivation(ctx, stableBookingId);
     }
     if (operation && toStr(operation.operationId) === ctx.operationId) {
@@ -1711,6 +1998,8 @@ if (ctx.step === "operation_find") {
         return finishPending(ctx, "Активная запись Viva найдена без устойчивого bookingId и требует сверки");
       }
       ctx.immediateBookingId = stableBookingId;
+      ctx.managedEntitlementOperationId = toStr(operation.managedEntitlementOperationId);
+      ctx.managedSubscriptionInstanceId = toStr(operation.managedSubscriptionInstanceId);
       return prepareConfirmedUpdate(ctx, ctx.sameExerciseBooking);
     }
     return finishError(ctx, 409, "По этому абонементу уже есть запись на выбранное событие", {
@@ -1819,6 +2108,12 @@ if (ctx.step === "expired_pending_reconciliation") {
   if (exactBookings.some((booking) => !isInactiveBooking(booking))) {
     return finishPending(ctx, "Просроченная операция подтверждена активной записью Viva");
   }
+  ctx.managedEntitlementOperationId = toStr(operation.managedEntitlementOperationId);
+  ctx.managedSubscriptionInstanceId = toStr(operation.managedSubscriptionInstanceId);
+  if (ctx.managedEntitlementOperationId) {
+    ctx.entitlementReleaseNext = "expired_pending_release";
+    return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
+  }
   return prepareExpiredPendingRelease(ctx, operation);
 }
 
@@ -1859,6 +2154,15 @@ if (ctx.step === "booking_create") {
   if (!isHttpOk(statusCode)) {
     const rawMessage = toStr(msg.payload?.message || msg.payload?.error || msg.error?.message);
     if (statusCode && statusCode >= 400 && statusCode < 500 && statusCode !== 408) {
+      if (ctx.managedEntitlementOperationId) {
+        ctx.finalFailure = {
+          statusCode,
+          message: rawMessage || "Viva отклонила создание записи",
+          rawCode: toStr(msg.payload?.code),
+        };
+        ctx.entitlementReleaseNext = "persist_failure";
+        return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
+      }
       return prepareFailedUpdate(
         ctx,
         statusCode,
@@ -1918,6 +2222,40 @@ if (ctx.step === "operation_confirm") {
   if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
     return finishPending(ctx, "Запись появилась в Viva; локальное подтверждение ещё выполняется");
   }
+  if (ctx.managedEntitlementOperationId && ctx.managedEntitlementConfirmed !== true) {
+    return prepareManagedEntitlementConfirm(ctx);
+  }
+  if (ctx.managedActivationRequired) {
+    return prepareManagedFirstUseActivation(ctx, ctx.confirmedBookingId);
+  }
+  return finishConfirmed(ctx, ctx.confirmedBookingId, 201);
+}
+
+if (ctx.step === "managed_entitlement_confirm") {
+  const result = unwrapRecord(msg.payload);
+  if (!isHttpOk(msg.statusCode) || !result || result.schemaVersion !== 1
+    || result.outcome !== "CONFIRMED"
+    || result.operationId !== ctx.managedEntitlementOperationId
+    || result.subscriptionInstanceId !== (
+      ctx.managedRuntime?.subscriptionInstanceId || ctx.managedSubscriptionInstanceId
+    )
+    || result.operationState !== "CONFIRMED"
+    || !Number.isInteger(result.aggregateRevision) || result.aggregateRevision < 1) {
+    return finishPending(ctx, "Запись подтверждена Viva; подтверждение льготы в ЦУП ожидает повтора", {
+      code: "SUBSCRIPTION_ENTITLEMENT_CONFIRM_PENDING",
+      upstreamStatus: Number(msg.statusCode) || null,
+    });
+  }
+  ctx.managedEntitlementConfirmed = true;
+  return prepareManagedEntitlementConfirmedUpdate(ctx);
+}
+
+if (ctx.step === "operation_entitlement_confirm") {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Льгота подтверждена в ЦУП; локальная связь ожидает сверки", {
+      code: "SUBSCRIPTION_ENTITLEMENT_CONFIRM_BIND_PENDING",
+    });
+  }
   if (ctx.managedActivationRequired) {
     return prepareManagedFirstUseActivation(ctx, ctx.confirmedBookingId);
   }
@@ -1951,6 +2289,12 @@ if (ctx.step === "operation_activation_confirm") {
 }
 
 if (ctx.step === "operation_fail") {
+  if (ctx.managedEntitlementOperationId
+    && ctx.managedEntitlementReleased !== true
+    && ctx.entitlementReleaseNext !== "finish_failure") {
+    ctx.entitlementReleaseNext = "finish_failure";
+    return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
+  }
   const failure = ctx.finalFailure || {};
   return finishError(
     ctx,
@@ -1958,6 +2302,73 @@ if (ctx.step === "operation_fail") {
     toStr(failure.message) || "Viva отклонила создание записи",
     { code: toStr(failure.rawCode) || "VIVA_SUBSCRIPTION_BOOKING_REJECTED" },
   );
+}
+
+if (ctx.step === "managed_entitlement_release") {
+  const result = unwrapRecord(msg.payload);
+  if (!isHttpOk(msg.statusCode) || !result || result.schemaVersion !== 1
+    || result.outcome !== "RELEASED"
+    || result.operationId !== ctx.managedEntitlementOperationId
+    || result.subscriptionInstanceId !== (
+      ctx.managedRuntime?.subscriptionInstanceId || ctx.managedSubscriptionInstanceId
+    )
+    || !["FAILED", "COMPENSATED"].includes(result.operationState)
+    || !Number.isInteger(result.aggregateRevision) || result.aggregateRevision < 1) {
+    return finishPending(ctx, "Резерв льготы требует ручной сверки после неуспешного освобождения", {
+      code: "SUBSCRIPTION_ENTITLEMENT_RELEASE_PENDING",
+      upstreamStatus: Number(msg.statusCode) || null,
+    });
+  }
+  ctx.managedEntitlementReleased = true;
+  const next = ctx.entitlementReleaseNext;
+  delete ctx.entitlementReleaseNext;
+  if (next === "local_operation_release") {
+    const operation = ctx.releaseOperation;
+    delete ctx.releaseOperation;
+    if (!isObj(operation)) {
+      return finishPending(ctx, "Льгота освобождена; локальная операция требует сверки", {
+        code: "SUBSCRIPTION_BOOKING_RELEASE_OPERATION_MISSING",
+      });
+    }
+    return prepareOperationRelease(ctx, operation);
+  }
+  if (next === "expired_pending_release") {
+    if (!isObj(ctx.expiredPendingOperation)) {
+      return finishPending(ctx, "Льгота освобождена; просроченная операция требует сверки", {
+        code: "SUBSCRIPTION_EXPIRED_OPERATION_MISSING",
+      });
+    }
+    return prepareExpiredPendingRelease(ctx, ctx.expiredPendingOperation);
+  }
+  if (next === "persist_failure") {
+    const failure = ctx.finalFailure || {};
+    return prepareFailedUpdate(
+      ctx,
+      Number(failure.statusCode) || 409,
+      toStr(failure.message) || "Viva отклонила создание записи",
+      toStr(failure.rawCode) || "VIVA_SUBSCRIPTION_BOOKING_REJECTED",
+    );
+  }
+  if (next === "pricing_not_configured") {
+    return prepareFailedUpdate(
+      ctx,
+      409,
+      "Доплата по льготе рассчитана, но её точная передача в Viva ещё не подключена",
+      "MANAGED_SUBSCRIPTION_PROVIDER_PRICING_NOT_CONFIGURED",
+    );
+  }
+  if (next === "finish_failure") {
+    const failure = ctx.finalFailure || {};
+    return finishError(
+      ctx,
+      Number(failure.statusCode) || 409,
+      toStr(failure.message) || "Viva отклонила создание записи",
+      { code: toStr(failure.rawCode) || "VIVA_SUBSCRIPTION_BOOKING_REJECTED" },
+    );
+  }
+  return finishPending(ctx, "Льгота освобождена; продолжение операции требует сверки", {
+    code: "SUBSCRIPTION_ENTITLEMENT_RELEASE_CONTINUATION_MISSING",
+  });
 }
 
 if (ctx.step === "operation_release") {

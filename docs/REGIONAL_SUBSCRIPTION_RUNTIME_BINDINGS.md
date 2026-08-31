@@ -85,20 +85,31 @@ summer_subscription_<counterKey>_inventory_id            # optional override
 
 ## Реализованный fail-closed маршрут правил
 
-- общий дневной лимит: одна операция `CREATE_GAME` или `JOIN_GAME`;
-- создание: только 60 минут;
-- присоединение: 60, 90 или 120 минут;
-- add-on для создания 90/120 минут не задан и остаётся заблокированным;
-- скидки на групповые тренировки и турниры не заданы и остаются
-  заблокированными;
+- локальная операция LK привязана к конкретной услуге; дневные, недельные,
+  месячные, future-booking и active-service лимиты считает только атомарный
+  aggregate ЦУП;
+- создание и присоединение принимают 60, 90 и 120 минут и передают точную
+  server-resolved цель в binding reserve ЦУП;
+- только sole blocker `ACTIVE_SERVICES_LIMIT_REACHED` переводит split-flow на
+  обычную запись `ON_PLACE` за полную стоимость без удаления уже созданной игры;
+- бесплатное решение ЦУП резервируется до Viva write и подтверждается только
+  после точного Viva read-back;
+- решение с доплатой (включая 30%, тренировку и турнир) освобождает резерв и
+  остаётся fail closed с
+  `MANAGED_SUBSCRIPTION_PROVIDER_PRICING_NOT_CONFIGURED`, пока exact pricing
+  contract Viva не подтверждён;
 - `/lk/subscription-bookings` распознаёт Питер и ХАБ, после server-side чтения
   упражнения и exact owned `clientSubscriptionId` запрашивает у ЦУП
   `POST /api/internal/subscriptions/runtime-context`;
 - ЦУП возвращает только закреплённые за этим клиентом immutable
   `PUBLISHED` policy/instance; ЛК проверяет действие, длительность, станцию и
-  точный lifecycle `FIRST_USE_OR_FIXED_DATE` с дедлайном 1 октября, дневной
-  лимит, затем сохраняет `policyVersion`, `policyDigest` и
-  `subscriptionInstanceId` в атомарной операции;
+  точный lifecycle `FIRST_USE_OR_FIXED_DATE` с дедлайном 1 октября, затем LK
+  вызывает `POST /api/internal/subscriptions/entitlements/reserve` с тем же
+  Bearer и отдельным integration token;
+- ЦУП выполняет quote и CAS aggregate в одной majority-journaled транзакции и
+  возвращает binding `operationId`; LK сохраняет его до Viva write, вызывает
+  `confirm` после read-back и `release` после точного отказа или подтверждённой
+  отмены;
 - Котельники отвечают `MANAGED_SUBSCRIPTION_PLAN_NOT_ACTIVATED` и не переходят
   к Viva mutation;
 - ЛК1 и ЛК2 используют тот же split create/join router и один шлюз
@@ -133,10 +144,11 @@ transaction, если точная карточка продукта допус�
 Контракт и dry-run коррекции уже активированного экземпляра описаны в
 `docs/REGIONAL_SUBSCRIPTION_LIFECYCLE_CORRECTION.md`.
 
-Поддерживаемая первая версия policy ограничена безопасным счётчиком: одна
-единица на 60/90/120 минут, `dailyUsageLimit=1`, без weekly/monthly/future и
-active-service ограничений. Если ЦУП опубликует пока неподдерживаемый счётчик,
-ЛК ответит `MANAGED_SUBSCRIPTION_POLICY_UNSUPPORTED` до Viva/Mongo mutation.
+LK проверяет структурную совместимость policy (60/90/120, станцию и lifecycle),
+но не принимает решение по лимитам из старого in-memory evaluator. Binding quote
+и изменения счётчиков принадлежат только ЦУП. Повторный reserve с уже
+`CONFIRMED` operation никогда не вызывает второй Viva write и остаётся на
+read-back reconciliation.
 
 ## Обязательные проверки перед активацией
 
@@ -145,8 +157,10 @@ active-service ограничений. Если ЦУП опубликует по
 3. Отказ чужой станции для Питера и Котельников.
 4. ХАБ принимает только точный reviewed 25-station set и server-resolved exercise;
    `ALL_STATIONS`, неполный или расширенный список блокируются.
-5. Вторая create/join операция в тот же локальный день блокируется.
-6. 90/120 create без add-on, group и tournament без benefit rule блокируются.
+5. Вторая операция дня получает рассчитанную ЦУП доплату; четвёртая активная
+   услуга ещё разрешена, а пятая уходит только в full-price path.
+6. 90/120 create/join, group и tournament подтверждают точный minor-RUB quote;
+   до wiring Viva pricing ни один доплатный reserve не достигает provider write.
 7. Граница партии при конкурентных purchase-reservation не перепродаётся.
 8. Отмена, неоплата, refund и возврат визита подтверждены provider read-back.
 9. Недоступность ЦУП после Viva read-back возвращает retryable `202`, а повтор
@@ -160,9 +174,10 @@ active-service ограничений. Если ЦУП опубликует по
 ## Candidate-only globals LK
 
 ```text
-subscriptions_runtime_api_base_url=https://<cup-host>/api
+subscriptions_runtime_api_base_url=https://padlhub.su/api
 subscriptions_runtime_context_integration_token=<secret reference>
 subscriptions_activation_integration_token=<separate secret reference>
+subscriptions_entitlement_integration_token=<separate mutation secret reference>
 ```
 
 Это Node-RED globals, а не браузерные переменные. Значения не должны попадать в
