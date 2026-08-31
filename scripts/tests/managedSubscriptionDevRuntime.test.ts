@@ -369,22 +369,40 @@ test("annual group and tournament receive 50 percent without consuming the game-
   assert.equal(gameAfterGroup.decision.benefit?.finalPriceMinor, 0);
 });
 
-test("annual limit blocks a fifth service and serializes the final slot", async () => {
+test("annual limit offers the fifth service at full price without consuming subscription capacity", async () => {
   const runtime = createAnnualRuntime();
   await runtime.initialize();
   await runtime.seed(4);
-  const blocked = await runtime.quote("create-station-a-60-aug18");
-  assert.ok(blocked.decision.blockers.some(
+  const quoted = await runtime.quote("create-station-a-60-aug18");
+  assert.ok(quoted.decision.blockers.some(
     (item) => item.code === "ACTIVE_SERVICES_LIMIT_REACHED",
   ));
+  assert.deepEqual(quoted.bookingOutcome, {
+    allowed: true,
+    subscriptionApplied: false,
+    pricingMode: "FULL_PRICE_WITHOUT_SUBSCRIPTION",
+    finalPriceMinor: 150_000,
+    reasonCodes: ["ACTIVE_SERVICES_LIMIT_REACHED"],
+  });
+  const continuation = await runtime.reserve(
+    "create-station-a-60-aug18",
+    "reserve:annual-full-price",
+  );
+  assert.equal(continuation.reservation, null);
+  assert.equal(continuation.bookingOutcome.pricingMode, "FULL_PRICE_WITHOUT_SUBSCRIPTION");
+  assert.equal((await runtime.snapshot()).limits.activeServices, 4);
 
   await runtime.seed(3);
   const results = await Promise.allSettled([
     runtime.reserve("create-station-a-60-aug18", "reserve:annual-parallel-one"),
     runtime.reserve("group-station-a-60-aug18", "reserve:annual-parallel-two"),
   ]);
-  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
-  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 2);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 0);
+  const pricingModes = results.flatMap((result) => (
+    result.status === "fulfilled" ? [result.value.bookingOutcome.pricingMode] : []
+  )).sort();
+  assert.deepEqual(pricingModes, ["FULL_PRICE_WITHOUT_SUBSCRIPTION", "SUBSCRIPTION"]);
   assert.equal((await runtime.snapshot()).limits.activeServices, 4);
 });
 
@@ -418,7 +436,7 @@ test("reserve and release replay safely and conflicting operation IDs are reject
   assert.equal(releaseReplay.replayed, true);
 });
 
-test("parallel requests cannot both consume the final active-service slot", async () => {
+test("parallel request with an additional blocker remains rejected after the final slot is consumed", async () => {
   const runtime = createRuntime();
   await runtime.initialize();
   await runtime.seed(2);

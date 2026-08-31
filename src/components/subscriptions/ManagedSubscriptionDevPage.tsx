@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ManagedSubscriptionPolicyDecision } from "../../types/managedSubscriptionRuntime";
+import type { SubscriptionUsageTestBookingOutcome } from "./subscriptionUsageTestBooking";
 import "./ManagedSubscriptionDevPage.css";
 
 const API_BASE = "/__dev/managed-subscriptions";
@@ -75,7 +76,13 @@ interface DevSnapshot {
 interface QuoteResult {
   target: DevTarget;
   decision: ManagedSubscriptionPolicyDecision;
+  bookingOutcome: SubscriptionUsageTestBookingOutcome;
   snapshot: DevSnapshot;
+}
+
+interface DevQuote {
+  decision: ManagedSubscriptionPolicyDecision;
+  bookingOutcome: SubscriptionUsageTestBookingOutcome;
 }
 
 interface ApiErrorPayload {
@@ -166,18 +173,32 @@ const benefitLabel = (decision: ManagedSubscriptionPolicyDecision, target: DevTa
   return parts.join(" · ");
 };
 
+const fullPriceWithoutSubscriptionLabel = (
+  outcome: SubscriptionUsageTestBookingOutcome,
+  target: DevTarget,
+) => {
+  const parts = ["лимит льгот подписки исчерпан"];
+  if (target.participantCount && target.participantCount > 1) {
+    parts.push(`доля игрока 1/${target.participantCount}`);
+  }
+  parts.push("без скидки");
+  parts.push(`итого ${formatMoney(outcome.finalPriceMinor)}`);
+  return parts.join(" · ");
+};
+
 const ledgerLabel: Record<string, string> = {
   POLICY_PINNED: "Закреплена тестовая версия правил",
   TEST_STATE_SEEDED: "Задано начальное состояние",
   ELIGIBILITY_QUOTED: "Ограничения проверены",
   ELIGIBILITY_BLOCKED: "Действие заблокировано",
+  FULL_PRICE_CONTINUATION_ALLOWED: "Разрешено продолжить без подписки",
   RESERVATION_CREATED: "Создан тестовый резерв",
   RESERVATION_RELEASED: "Тестовый резерв освобождён",
 };
 
 export function ManagedSubscriptionDevPage() {
   const [snapshot, setSnapshot] = useState<DevSnapshot | null>(null);
-  const [quotes, setQuotes] = useState<Record<string, ManagedSubscriptionPolicyDecision>>({});
+  const [quotes, setQuotes] = useState<Record<string, DevQuote>>({});
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -209,15 +230,17 @@ export function ManagedSubscriptionDevPage() {
     setError(null);
     try {
       const result = await apiRequest<QuoteResult>("/quote", { targetId });
-      setQuotes((current) => ({ ...current, [targetId]: result.decision }));
+      setQuotes((current) => ({
+        ...current,
+        [targetId]: {
+          decision: result.decision,
+          bookingOutcome: result.bookingOutcome,
+        },
+      }));
       setSnapshot(result.snapshot);
     } catch (quoteError) {
-      const typedError = quoteError as Error & { decision?: ManagedSubscriptionPolicyDecision };
-      if (typedError.decision) {
-        setQuotes((current) => ({ ...current, [targetId]: typedError.decision as ManagedSubscriptionPolicyDecision }));
-      } else {
-        setError(typedError.message);
-      }
+      const typedError = quoteError as Error;
+      setError(typedError.message);
     } finally {
       setBusyKey(null);
     }
@@ -229,18 +252,22 @@ export function ManagedSubscriptionDevPage() {
     try {
       const result = await apiRequest<{
         decision: ManagedSubscriptionPolicyDecision;
+        bookingOutcome: SubscriptionUsageTestBookingOutcome;
         snapshot: DevSnapshot;
       }>("/reserve", {
         targetId,
         operationId: operationId("reserve"),
       });
-      setQuotes((current) => ({ ...current, [targetId]: result.decision }));
+      setQuotes((current) => ({
+        ...current,
+        [targetId]: {
+          decision: result.decision,
+          bookingOutcome: result.bookingOutcome,
+        },
+      }));
       setSnapshot(result.snapshot);
     } catch (reserveError) {
       const typedError = reserveError as Error & { decision?: ManagedSubscriptionPolicyDecision };
-      if (typedError.decision) {
-        setQuotes((current) => ({ ...current, [targetId]: typedError.decision as ManagedSubscriptionPolicyDecision }));
-      }
       setError(typedError.message);
       await load();
     } finally {
@@ -388,6 +415,9 @@ export function ManagedSubscriptionDevPage() {
         <div className="ms-dev-grid">
           {snapshot.targets.map((target) => {
             const quote = quotes[target.targetId];
+            const decision = quote?.decision;
+            const outcome = quote?.bookingOutcome;
+            const fullPriceWithoutSubscription = outcome?.pricingMode === "FULL_PRICE_WITHOUT_SUBSCRIPTION";
             return (
               <article className="ms-dev-card" key={target.targetId}>
                 <div className="ms-dev-card-meta">
@@ -401,12 +431,16 @@ export function ManagedSubscriptionDevPage() {
                   {target.courtPriceMinor !== null && target.courtPriceMinor !== undefined && <div><dt>Стоимость корта</dt><dd>{formatMoney(target.courtPriceMinor)}</dd></div>}
                   <div><dt>{target.participantCount && target.participantCount > 1 ? `Доля игрока (1/${target.participantCount})` : "Базовая цена"}</dt><dd>{formatMoney(target.target.basePriceMinor)}</dd></div>
                 </dl>
-                {quote && (
-                  <div className={`ms-dev-decision ${quote.eligible ? "allowed" : "blocked"}`}>
-                    <strong>{quote.eligible ? "Разрешено" : "Заблокировано"}</strong>
-                    {quote.eligible
-                      ? <span>{benefitLabel(quote, target)}</span>
-                      : <ul>{quote.blockers.map((blocker) => (
+                {decision && outcome && (
+                  <div className={`ms-dev-decision ${outcome.allowed ? "allowed" : "blocked"}`}>
+                    <strong>{fullPriceWithoutSubscription
+                      ? "Разрешено без подписки"
+                      : outcome.allowed ? "Разрешено" : "Заблокировано"}</strong>
+                    {outcome.allowed
+                      ? <span>{fullPriceWithoutSubscription
+                        ? fullPriceWithoutSubscriptionLabel(outcome, target)
+                        : benefitLabel(decision, target)}</span>
+                      : <ul>{decision.blockers.map((blocker) => (
                         <li key={blocker.code}>{blocker.message}<code>{blocker.code}</code></li>
                       ))}</ul>}
                   </div>
@@ -423,9 +457,11 @@ export function ManagedSubscriptionDevPage() {
                   <button
                     type="button"
                     onClick={() => void reserve(target.targetId)}
-                    disabled={busyKey !== null || quote?.eligible !== true}
+                    disabled={busyKey !== null || outcome?.allowed !== true}
                   >
-                    {busyKey === `reserve:${target.targetId}` ? "Резервируем…" : "Создать DEV-резерв"}
+                    {busyKey === `reserve:${target.targetId}`
+                      ? fullPriceWithoutSubscription ? "Продолжаем…" : "Резервируем…"
+                      : fullPriceWithoutSubscription ? "Продолжить без подписки" : "Создать DEV-резерв"}
                   </button>
                 </div>
               </article>
