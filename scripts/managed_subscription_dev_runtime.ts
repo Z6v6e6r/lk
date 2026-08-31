@@ -55,6 +55,7 @@ export interface ManagedSubscriptionDevLedgerEvent {
     | "ELIGIBILITY_QUOTED"
     | "ELIGIBILITY_BLOCKED"
     | "FULL_PRICE_CONTINUATION_ALLOWED"
+    | "ORDINARY_PAYMENT_ALLOWED"
     | "RESERVATION_CREATED"
     | "RESERVATION_RELEASED";
   occurredAt: string;
@@ -935,6 +936,70 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
         snapshot: await snapshot(),
       };
     },
+    ordinary(targetId: unknown, operationId: unknown) {
+      return mutate(async () => {
+        const normalizedOperationId = String(operationId || "").trim();
+        if (!/^[a-zA-Z0-9:_-]{8,100}$/.test(normalizedOperationId)) {
+          throw new DevRuntimeError(400, "IDEMPOTENCY_KEY_INVALID", "Некорректный operationId");
+        }
+        const target = targetOrThrow(targetId);
+        const fingerprint = stableDigest({ action: "ordinary", targetId: target.targetId });
+        const replay = operations.get(normalizedOperationId);
+        if (replay) {
+          if (replay.fingerprint !== fingerprint) {
+            throw new DevRuntimeError(
+              409,
+              "IDEMPOTENCY_CONFLICT",
+              "operationId уже использован для другого тестового действия",
+            );
+          }
+          return { ...(clone(replay.response) as JsonRecord), replayed: true };
+        }
+        const context = await requireContext();
+        const decision: ManagedSubscriptionPolicyDecision = {
+          eligible: false,
+          policyVersion: context.policySource.policy.policyVersion,
+          blockers: [{
+            code: "NO_ACTIVE_SUBSCRIPTION",
+            message: "Активной подписки нет — доступна обычная оплата",
+            details: null,
+          }],
+          usageUnits: 0,
+          activeServices: activeReservations().length,
+          maxActiveServices: context.policySource.policy.activeServicesLimit.max,
+          dailyUsed: 0,
+          dailyLimit: context.policySource.policy.dailyUsageLimit,
+          benefit: null,
+          evaluatedAt: EVALUATED_AT,
+        };
+        const bookingOutcome = {
+          allowed: true,
+          subscriptionApplied: false,
+          pricingMode: "FULL_PRICE_WITHOUT_SUBSCRIPTION" as const,
+          finalPriceMinor: target.target.basePriceMinor,
+          reasonCodes: ["NO_ACTIVE_SUBSCRIPTION"],
+        };
+        appendEvent("ORDINARY_PAYMENT_ALLOWED", {
+          operationId: normalizedOperationId,
+          targetId: target.targetId,
+          details: {
+            subscriptionApplied: false,
+            finalPriceMinor: bookingOutcome.finalPriceMinor,
+            providerCalls: 0,
+          },
+        });
+        const response = {
+          target: clone(target),
+          decision,
+          bookingOutcome,
+          reservation: null,
+          snapshot: await snapshot(),
+          replayed: false,
+        };
+        operations.set(normalizedOperationId, { fingerprint, response: clone(response) });
+        return response;
+      });
+    },
     async quoteResolved(
       target: ManagedSubscriptionDevTarget,
       usage: { activeServices: number; dailyGameUsage: number },
@@ -1596,6 +1661,10 @@ export const managedSubscriptionDevPlugin = (options: {
         }
         if (url.pathname === `${API_PREFIX}/reserve`) {
           sendJson(response, 200, await runtime.reserve(body.targetId, body.operationId));
+          return;
+        }
+        if (url.pathname === `${API_PREFIX}/ordinary`) {
+          sendJson(response, 200, await runtime.ordinary(body.targetId, body.operationId));
           return;
         }
         if (url.pathname === `${API_PREFIX}/release`) {

@@ -63,6 +63,7 @@ npm run dev -- --host 127.0.0.1 --port 3036
 - `GET /__dev/managed-subscriptions/session` — snapshot правил, лимитов и ledger;
 - `POST /quote` — проверка без резерва, body `{ "targetId": "..." }`;
 - `POST /reserve` — атомарный in-process резерв с `operationId`;
+- `POST /ordinary` — обычный путь без активной подписки, без резерва и provider write;
 - `POST /release` — освобождение тестового резерва с `operationId`;
 - `POST /seed` — установка числа активных услуг;
 - `POST /reset` — повторная загрузка правил и сброс состояния.
