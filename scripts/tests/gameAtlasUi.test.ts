@@ -56,3 +56,14 @@ test("Game Atlas has explicit mobile and desktop layout guards", () => {
   assert.match(styles, /@media \(min-width: 768px\)[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
   assert.match(styles, /\.find-game-container\s*\{[\s\S]*overflow-x: hidden/);
 });
+
+test("Game Atlas groups advanced filters behind the same toggle on mobile and desktop", () => {
+  assert.match(atlasSource, /aria-controls="game-atlas-filters"/);
+  assert.match(atlasSource, /find-game-filter-toggle-icon/);
+  assert.match(styles, /\.find-game-filterbar\s*\{[\s\S]*display: none/);
+  assert.match(styles, /\.find-game-filterbar\.is-open\s*\{\s*display: grid/);
+  assert.doesNotMatch(
+    styles,
+    /@media \(min-width: 768px\)[\s\S]*\.find-game-filter-toggle\s*\{\s*display: none/,
+  );
+});

@@ -1788,7 +1788,8 @@ export default function FindGamePage({
           aria-expanded={filtersExpanded}
           aria-controls="game-atlas-filters"
         >
-          Фильтры{activeFilterCount > 0 ? ` · ${activeFilterCount}` : ""}
+          <span>Фильтры{activeFilterCount > 0 ? ` · ${activeFilterCount}` : ""}</span>
+          <span className="find-game-filter-toggle-icon" aria-hidden="true">⌄</span>
         </button>
         {hasActiveFilters && (
           <button type="button" className="find-game-reset-inline" onClick={resetFilters}>

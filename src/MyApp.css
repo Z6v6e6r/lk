@@ -3847,12 +3847,27 @@ h6,
   border: 1px solid rgba(117, 87, 223, 0.28);
   background: #f3efff;
   color: #6548cf;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
 }
 
 .find-game-filter-toggle.active {
   border-color: #7557df;
   background: #7557df;
   color: #ffffff;
+}
+
+.find-game-filter-toggle-icon {
+  display: block;
+  font-size: 15px;
+  line-height: 1;
+  transition: transform 160ms ease;
+}
+
+.find-game-filter-toggle.active .find-game-filter-toggle-icon {
+  transform: rotate(180deg);
 }
 
 .find-game-reset-inline {
@@ -3874,10 +3889,15 @@ h6,
 }
 
 .find-game-filterbar {
-  padding: 0 16px 16px;
+  margin: 0 16px 16px;
+  padding: 14px;
   display: none;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  border: 1px solid rgba(117, 87, 223, 0.14);
+  border-radius: 16px;
+  background: #f8f6fd;
+  box-sizing: border-box;
 }
 
 .find-game-filterbar.is-open {
@@ -4595,11 +4615,7 @@ h6,
   }
 
   .find-game-searchbar {
-    grid-template-columns: minmax(320px, 1fr) auto;
-  }
-
-  .find-game-filter-toggle {
-    display: none;
+    grid-template-columns: minmax(320px, 1fr) auto auto;
   }
 
   .find-game-reset-inline {
@@ -4608,9 +4624,7 @@ h6,
     padding: 0 8px;
   }
 
-  .find-game-filterbar,
   .find-game-filterbar.is-open {
-    display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
