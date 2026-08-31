@@ -36,6 +36,8 @@ import {
 import { isLkIdleRequestPausedError } from "./lkIdleDataGuard";
 import { isGameExerciseIdMissingGuard } from "./paymentSyncBookingResolution";
 import { shouldBlockLocalProductionTournamentHistoryRequest } from "./tournamentHistoryRequestPolicy";
+import { hasDeterministicSubscriptionDecision } from "./subscriptionDecisionContract.ts";
+import { isRequestTimeoutError, runWithAbortTimeout } from "./requestTimeout.ts";
 
 const DEFAULT_GAMES_MASTER_SERVICE_ID =
   GAMES_MASTER_SERVICE_ID || "2f4155ad-7bc0-4a15-a12c-da7fce15c37a";
@@ -3628,6 +3630,7 @@ export interface PadelAvailableGamesResponse {
   hasMore: boolean;
   limit: number;
   offset: number;
+  consumedCount: number;
 }
 
 export interface UpdateProfileData {
@@ -6490,6 +6493,23 @@ export function extractPadelGameRecordList(payload: unknown): PadelGameRecord[] 
   return Array.from(bucket.values());
 }
 
+function extractPadelGameRecordPageItemCount(payload: unknown): number {
+  if (Array.isArray(payload)) return payload.length;
+  if (!isRecord(payload)) return 0;
+
+  for (const key of ["games", "items", "records", "content", "list"]) {
+    if (Array.isArray(payload[key])) return payload[key].length;
+  }
+  for (const key of ["data", "result", "payload"]) {
+    const nested = payload[key];
+    if (Array.isArray(nested) || isRecord(nested)) {
+      const count = extractPadelGameRecordPageItemCount(nested);
+      if (count > 0) return count;
+    }
+  }
+  return 0;
+}
+
 function extractPadelGameRecordListTotal(payload: unknown): number | null {
   if (!isRecord(payload)) return null;
   return pickNumber(payload, ["total", "totalElements", "count", "gamesCount"]);
@@ -7079,6 +7099,7 @@ export async function apiFetchPadelAvailableGames(options: {
   });
 
   const games = extractPadelGameRecordList(response.data);
+  const consumedCount = extractPadelGameRecordPageItemCount(response.data);
   const total = extractPadelGameRecordListTotal(response.data) ?? games.length + offset;
   const hasMore = extractPadelGameRecordListHasMore(response.data) ?? (offset + games.length < total);
 
@@ -7089,6 +7110,7 @@ export async function apiFetchPadelAvailableGames(options: {
       hasMore,
       limit,
       offset,
+      consumedCount,
     } satisfies PadelAvailableGamesResponse,
     error: response.error,
     status: response.status,
@@ -8702,27 +8724,14 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
   };
 }
 
-function hasDeterministicPadelSplitSubscriptionDecision(
-  result: PadelSplitPaymentResult,
-  requestedPaymentMode: PadelSplitPaymentParams["paymentMode"],
-): boolean {
-  if (requestedPaymentMode !== "subscription") return true;
-  const selectedMode = String(result.selectedPaymentMode || "").trim().toLowerCase();
-  if (selectedMode !== "subscription" && selectedMode !== "one_time") return false;
-  if (!Number.isFinite(result.toPay) || result.toPay < 0) return false;
-  if (result.toPayMinor != null && (!Number.isSafeInteger(result.toPayMinor) || result.toPayMinor < 0)) {
-    return false;
-  }
-  return Boolean(result.bookingId?.trim() || result.paymentUrl?.trim());
-}
-
 function resolvePadelSplitPendingError(payload: unknown, status: ApiStatus): ApiError | null {
   if (!isRecord(payload)) return null;
-  const state = String(payload.state || "").trim().toUpperCase();
+  const data = isRecord(payload.data) ? payload.data : payload;
+  const state = String(data.state || "").trim().toUpperCase();
   if (state !== "PENDING_CONFIRMATION") return null;
   return {
     status,
-    message: pickString(payload, ["message"]) || "Запись ожидает подтверждения Viva. Повторите проверку.",
+    message: pickString(data, ["message"]) || "Запись ожидает подтверждения Viva. Повторите проверку.",
     raw: payload,
   };
 }
@@ -8817,6 +8826,44 @@ function buildPadelSplitRequest(
   };
 }
 
+const PADEL_SPLIT_SUBSCRIPTION_TIMEOUT_MS = 10_000;
+
+async function requestPadelSplitPayment(
+  splitRequest: ReturnType<typeof buildPadelSplitRequest>,
+  baseUrl: string,
+  params: PadelSplitPaymentParams,
+): Promise<ApiResult<unknown>> {
+  const requestOptions: RequestOptions = {
+    method: "POST",
+    baseUrl,
+    ...splitRequest.options,
+    retries: 0,
+    body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
+  };
+
+  if (params.paymentMode !== "subscription") {
+    return request<unknown>(splitRequest.path, requestOptions);
+  }
+
+  try {
+    return await runWithAbortTimeout(
+      PADEL_SPLIT_SUBSCRIPTION_TIMEOUT_MS,
+      (signal) => request<unknown>(splitRequest.path, { ...requestOptions, signal }),
+    );
+  } catch (error) {
+    if (!isRequestTimeoutError(error)) throw error;
+    return {
+      data: null,
+      error: {
+        status: null,
+        message: "Не удалось подтвердить условия подписки: превышено время ожидания",
+        raw: { code: error.code, timeoutMs: error.timeoutMs },
+      },
+      status: null,
+    };
+  }
+}
+
 export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentParams) {
   const baseUrl = getServ2Origin() || "";
   const studioId = params.studioId?.trim() || null;
@@ -8842,13 +8889,7 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
     "create",
     params,
   );
-  const response = await request<unknown>(splitRequest.path, {
-    method: "POST",
-    baseUrl,
-    ...splitRequest.options,
-    retries: 0,
-    body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
-  });
+  const response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
 
   if (response.error) {
     return {
@@ -8879,7 +8920,7 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
       status: response.status,
     };
   }
-  if (!hasDeterministicPadelSplitSubscriptionDecision(parsed, params.paymentMode)) {
+  if (!hasDeterministicSubscriptionDecision(parsed, params.paymentMode)) {
     return {
       data: null as PadelSplitPaymentResult | null,
       error: {
@@ -8925,16 +8966,7 @@ export async function apiCreatePadelSplitParticipantPayment(
     params,
     normalizedGameId,
   );
-  const response = await request<unknown>(
-    splitRequest.path,
-    {
-      method: "POST",
-      baseUrl,
-      ...splitRequest.options,
-      retries: 0,
-      body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
-    },
-  );
+  const response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
 
   if (response.error) {
     return {
@@ -8965,7 +8997,7 @@ export async function apiCreatePadelSplitParticipantPayment(
       status: response.status,
     };
   }
-  if (!hasDeterministicPadelSplitSubscriptionDecision(parsed, params.paymentMode)) {
+  if (!hasDeterministicSubscriptionDecision(parsed, params.paymentMode)) {
     return {
       data: null as PadelSplitPaymentResult | null,
       error: {

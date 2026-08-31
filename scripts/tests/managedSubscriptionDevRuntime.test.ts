@@ -8,8 +8,21 @@ import {
   compileDraftPolicy,
   createManagedSubscriptionDevRuntime,
   loadPolicyFromCup,
+  resolveAnnualShadowStationIds,
   resolveShadowIntent,
 } from "../managed_subscription_dev_runtime.ts";
+
+test("annual shadow fixture has deterministic local stations without host configuration", () => {
+  assert.deepEqual(
+    resolveAnnualShadowStationIds([], true),
+    ["dev-station-home", "dev-station-a", "dev-station-b"],
+  );
+  assert.deepEqual(resolveAnnualShadowStationIds(["custom-station"], true), ["custom-station"]);
+  assert.deepEqual(resolveAnnualShadowStationIds([], false), []);
+
+  const policy = buildAnnualShadowPolicySource(resolveAnnualShadowStationIds([], true));
+  assert.ok(policy.policy.benefitRules.every((rule) => rule.stationIds.length > 0));
+});
 
 const draftPolicy = () => ({
   subscriptionTypeId: "subscription_type:dev-friendship",

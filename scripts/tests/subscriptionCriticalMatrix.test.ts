@@ -8,38 +8,48 @@ import {
   type SubscriptionDecisionKind,
 } from "../../src/utils/subscriptionDecisionUi.ts";
 
-const result = (overrides: Partial<PadelSplitPaymentResult> = {}): PadelSplitPaymentResult => ({
-  paymentRef: "pay:test",
-  paymentUrl: null,
-  toPay: 0,
-  toPayMinor: 0,
-  shareAmount: 0,
-  shareAmountMinor: 0,
-  baseShareAmount: 0,
-  baseShareAmountMinor: 0,
-  discountAmount: 0,
-  discountAmountMinor: 0,
-  deadlineAt: null,
-  exerciseId: "exercise:test",
-  bookingId: "booking:test",
-  productId: "product:test",
-  transactionId: null,
-  spot: 1,
-  directionId: 4588,
-  exerciseTypeId: 1613,
-  totalAmount: 0,
-  oneTimeBaseAmount: 0,
-  assembleDeadlineAt: null,
-  selectedPaymentMode: "subscription",
-  paymentModes: [],
-  subscriptionProductId: "subscription-product:test",
-  subscriptionProductName: "Годовая подписка",
-  oneTimeProductId: "one-time-product:test",
-  oneTimeProductName: "Разовая оплата",
-  pricingPolicy: null,
-  raw: { ok: true, state: "CONFIRMED" },
-  ...overrides,
-});
+const result = (overrides: Partial<PadelSplitPaymentResult> = {}): PadelSplitPaymentResult => {
+  const merged: PadelSplitPaymentResult = {
+    paymentRef: "pay:test",
+    paymentUrl: null,
+    toPay: 0,
+    toPayMinor: 0,
+    shareAmount: 0,
+    shareAmountMinor: 0,
+    baseShareAmount: 0,
+    baseShareAmountMinor: 0,
+    discountAmount: 0,
+    discountAmountMinor: 0,
+    deadlineAt: null,
+    exerciseId: "exercise:test",
+    bookingId: "booking:test",
+    productId: "product:test",
+    transactionId: null,
+    spot: 1,
+    directionId: 4588,
+    exerciseTypeId: 1613,
+    totalAmount: 0,
+    oneTimeBaseAmount: 0,
+    assembleDeadlineAt: null,
+    selectedPaymentMode: "subscription",
+    paymentModes: [],
+    subscriptionProductId: "subscription-product:test",
+    subscriptionProductName: "Годовая подписка",
+    oneTimeProductId: "one-time-product:test",
+    oneTimeProductName: "Разовая оплата",
+    pricingPolicy: null,
+    raw: { ok: true, state: "CONFIRMED", toPayMinor: 0 },
+    ...overrides,
+  };
+  if (!("raw" in overrides)) {
+    merged.raw = {
+      ok: true,
+      state: merged.selectedPaymentMode === "subscription" ? "CONFIRMED" : undefined,
+      toPayMinor: merged.toPayMinor ?? Math.round(merged.toPay * 100),
+    };
+  }
+  return merged;
+};
 
 const error = (
   code: string,
@@ -246,6 +256,18 @@ test("NS-JOIN: ordinary join never claims subscription", () => {
   assert.match(presentation.message, /Присоединение к игре.*500/);
 });
 
+test("NS-MODE-MISMATCH: explicit subscription response to one-time request fails closed", () => {
+  const presentation = resolveSubscriptionDecisionPresentation({
+    action: "JOIN_GAME",
+    requestedPaymentMode: "one_time",
+    result: result({ selectedPaymentMode: "subscription" }),
+  });
+  assert.equal(presentation.kind, "TECHNICAL_ERROR");
+  assert.equal(presentation.subscriptionApplied, false);
+  assert.equal(presentation.continueWithoutSubscription, false);
+  assert.equal(presentation.reasonCode, "CONFIRMED");
+});
+
 for (const action of ["CREATE_GAME", "JOIN_GAME"] as const) {
   test(`AS-${action}: zero-price subscription action is explicitly allowed`, () => {
     const presentation = resolveSubscriptionDecisionPresentation({
@@ -288,6 +310,7 @@ test("LIMIT_ENFORCEMENT: server full-price fallback is never shown as a subscrip
       toPayMinor: 150_000,
       raw: {
         state: "FULL_PRICE_WITHOUT_SUBSCRIPTION",
+        toPayMinor: 150_000,
         blockers: [{ code: "ACTIVE_SERVICES_LIMIT_REACHED" }],
       },
     }),
@@ -325,4 +348,46 @@ test("UNKNOWN_P0=0: an absent or malformed response is a known fail-closed techn
   });
   assert.equal(missingBookingEvidence.kind, "TECHNICAL_ERROR");
   assert.equal(missingBookingEvidence.subscriptionApplied, false);
+});
+
+test("unknown successful-looking result states fail closed", () => {
+  for (const raw of [
+    { state: "UNRECOGNISED_NEW_SERVER_STATE", toPayMinor: 0 },
+    { data: { state: "PENDING_CONFIRMATION", toPayMinor: 0 } },
+  ]) {
+    const presentation = resolveSubscriptionDecisionPresentation({
+      action: "JOIN_GAME",
+      requestedPaymentMode: "subscription",
+      result: result({ raw }),
+    });
+    assert.equal(presentation.kind, "TECHNICAL_ERROR");
+    assert.equal(presentation.subscriptionApplied, false);
+    assert.equal(presentation.continueWithoutSubscription, false);
+  }
+});
+
+test("state-less final split response remains compatible when booking evidence is complete", () => {
+  const presentation = resolveSubscriptionDecisionPresentation({
+    action: "JOIN_GAME",
+    requestedPaymentMode: "subscription",
+    result: result({ raw: { ok: true, toPayMinor: 0 } }),
+  });
+  assert.equal(presentation.kind, "SUBSCRIPTION_ALLOWED");
+  assert.equal(presentation.subscriptionApplied, true);
+});
+
+test("missing or contradictory subscription amount/state evidence fails closed", () => {
+  for (const raw of [
+    { state: "CONFIRMED" },
+    { state: "CONFIRMED", toPayMinor: 0, amountMinor: 100 },
+    { state: "FAILED", toPayMinor: 0, data: { state: "CONFIRMED", toPayMinor: 0 } },
+  ]) {
+    const presentation = resolveSubscriptionDecisionPresentation({
+      action: "CREATE_GAME",
+      requestedPaymentMode: "subscription",
+      result: result({ raw }),
+    });
+    assert.equal(presentation.kind, "TECHNICAL_ERROR");
+    assert.equal(presentation.subscriptionApplied, false);
+  }
 });

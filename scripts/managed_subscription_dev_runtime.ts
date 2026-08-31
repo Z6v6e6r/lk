@@ -1267,6 +1267,21 @@ const parseShadowStationIds = (value: unknown): string[] => (
     .filter(Boolean)
 );
 
+const ANNUAL_SHADOW_DEFAULT_STATION_IDS = [
+  "dev-station-home",
+  "dev-station-a",
+  "dev-station-b",
+] as const;
+
+export const resolveAnnualShadowStationIds = (
+  configuredStationIds: readonly string[],
+  annualShadowFixture: boolean,
+): string[] => (
+  configuredStationIds.length > 0 || !annualShadowFixture
+    ? [...configuredStationIds]
+    : [...ANNUAL_SHADOW_DEFAULT_STATION_IDS]
+);
+
 const parseShadowJoinFixtures = (
   value: unknown,
 ): Map<string, SubscriptionUsageShadowJoinFixture> => {
@@ -1572,7 +1587,10 @@ export const managedSubscriptionDevPlugin = (options: {
   apply: "serve",
   configureServer(server) {
     if (!options.enabled) return;
-    const shadowStationIds = parseShadowStationIds(options.shadowStationIds);
+    const shadowStationIds = resolveAnnualShadowStationIds(
+      parseShadowStationIds(options.shadowStationIds),
+      options.annualShadowFixture === true,
+    );
     const shadowCreateFixtures = parseShadowCreateFixtures(options.shadowCreateFixturesJson);
     const shadowEventFixtures = parseShadowEventFixtures(options.shadowEventFixturesJson);
     const shadowJoinFixtures = parseShadowJoinFixtures(options.shadowJoinFixturesJson);

@@ -70,8 +70,8 @@ test("Game Atlas groups advanced filters behind the same toggle on mobile and de
 
 test("Game Atlas supports multiple selected values in every advanced filter group", () => {
   assert.match(atlasSource, /function readAtlasMultiValues/);
-  assert.match(atlasSource, /function toggleAtlasMultiValue/);
-  assert.match(atlasSource, /values\.join\(","\)/);
+  assert.match(atlasSource, /toggleAtlasMultiValue/);
+  assert.match(atlasSource, /serializeAtlasMultiValues/);
   for (const stateName of [
     "stationFilterValues",
     "levelFilterValues",

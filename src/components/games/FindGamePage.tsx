@@ -32,6 +32,19 @@ import { CalendarDateBadge } from "../UI/CalendarDateBadge";
 import { Modal } from "../UI/Modal";
 import { SummerSubscriptionGallery } from "../UI/SummerSubscriptionGallery";
 import { appendSubscriptionUsageShadowToSameOriginUrl } from "../subscriptions/subscriptionUsageShadow";
+import {
+  createGameAtlasRequestCoordinator,
+  isDisplayableGameAtlasRecord,
+  matchesAtlasAvailability,
+  matchesAtlasCategory,
+  matchesAtlasMultiValue,
+  matchesAtlasSearchText,
+  matchesAtlasTimeOfDay,
+  parseAtlasMultiValues,
+  resolveGameAtlasPagination,
+  serializeAtlasMultiValues,
+  toggleAtlasMultiValue,
+} from "./gameAtlasAcceptanceModel";
 
 interface FindGamePageProps {
   onBack?: () => void;
@@ -603,34 +616,7 @@ function readAtlasChoice<T extends string>(key: string, allowed: readonly T[], f
 }
 
 function readAtlasMultiValues<T extends string>(key: string, allowed?: readonly T[]): T[] {
-  const rawValue = readAtlasQueryValue(key);
-  if (!rawValue) return [];
-  return Array.from(new Set(
-    rawValue
-      .split(",")
-      .map((value) => value.trim())
-      .filter((value): value is T => Boolean(
-        value
-        && value !== "all"
-        && value !== FIND_GAME_FILTER_ALL_VALUE
-        && (!allowed || allowed.includes(value as T)),
-      )),
-  ));
-}
-
-function toggleAtlasMultiValue<T extends string>(
-  selectedValues: readonly T[],
-  value: T,
-  allValue: string,
-): T[] {
-  if (value === allValue) return [];
-  return selectedValues.includes(value)
-    ? selectedValues.filter((selectedValue) => selectedValue !== value)
-    : [...selectedValues, value];
-}
-
-function matchesAtlasMultiValue(selectedValues: readonly string[], value: string): boolean {
-  return selectedValues.length === 0 || selectedValues.includes(value);
+  return parseAtlasMultiValues(readAtlasQueryValue(key), allowed);
 }
 
 function getDefaultAtlasDateKey(): string {
@@ -680,15 +666,8 @@ function isViewerTraining(training: GroupTrainingSummary): boolean {
   return training.inBooking || training.inWaitlist || training.inReserve;
 }
 
-function matchesSearchText(values: Array<string | null | undefined>, query: string): boolean {
-  const normalizedQuery = normalizeComparable(query);
-  if (!normalizedQuery) return true;
-  const haystack = normalizeComparable(values.filter(Boolean).join(" ")) || "";
-  return normalizedQuery.split(" ").every((token) => haystack.includes(token));
-}
-
 function matchesGameSearch(game: PadelGameRecord, query: string): boolean {
-  return matchesSearchText([
+  return matchesAtlasSearchText([
     extractGameCustomTitle(game),
     game.booking?.studioName,
     game.booking?.roomName,
@@ -698,7 +677,7 @@ function matchesGameSearch(game: PadelGameRecord, query: string): boolean {
 }
 
 function matchesTrainingSearch(training: GroupTrainingSummary, query: string): boolean {
-  return matchesSearchText([
+  return matchesAtlasSearchText([
     training.title,
     training.typeName,
     training.studioName,
@@ -708,31 +687,12 @@ function matchesTrainingSearch(training: GroupTrainingSummary, query: string): b
   ], query);
 }
 
-function matchesAvailability(hasPlaces: boolean, filters: readonly string[]): boolean {
-  if (filters.length === 0) return true;
-  return filters.some((filter) => (
-    filter === "available" ? hasPlaces : filter === "full" ? !hasPlaces : false
-  ));
-}
-
 function matchesGameFormat(game: PadelGameRecord, filters: readonly string[]): boolean {
   if (filters.length === 0) return true;
   const singles = resolveMaxPlayers(game) <= 2;
   return filters.some((filter) => (
     filter === "singles" ? singles : filter === "doubles" ? !singles : false
   ));
-}
-
-function matchesCategory(
-  category: FindGameCategory,
-  hasPlaces: boolean,
-  mine: boolean,
-  startTs: number | null,
-): boolean {
-  if (category === "open") return hasPlaces;
-  if (category === "mine") return mine;
-  if (category === "upcoming") return startTs === null || startTs >= Date.now();
-  return true;
 }
 
 function buildStationFilterValue(
@@ -778,14 +738,8 @@ function parseTimeMinutes(value: string | null | undefined): number | null {
 }
 
 function matchesTimeOfDayFilter(game: PadelGameRecord, timeOfDayFilters: readonly string[]): boolean {
-  if (timeOfDayFilters.length === 0) return true;
   const startMinutes = parseTimeMinutes(game.booking?.timeFrom || game.booking?.timeTo);
-  if (startMinutes === null) return false;
-  return timeOfDayFilters.some((filter) => {
-    if (filter === "morning") return startMinutes >= 7 * 60 && startMinutes < 11 * 60;
-    if (filter === "day") return startMinutes >= 11 * 60 && startMinutes < 18 * 60;
-    return filter === "evening" && startMinutes >= 18 * 60 && startMinutes < 24 * 60;
-  });
+  return matchesAtlasTimeOfDay(startMinutes, timeOfDayFilters);
 }
 
 function getTrainingStartMinutes(training: GroupTrainingSummary): number | null {
@@ -797,14 +751,8 @@ function getTrainingStartMinutes(training: GroupTrainingSummary): number | null 
 }
 
 function matchesTrainingTimeOfDayFilter(training: GroupTrainingSummary, timeOfDayFilters: readonly string[]): boolean {
-  if (timeOfDayFilters.length === 0) return true;
   const startMinutes = getTrainingStartMinutes(training);
-  if (startMinutes === null) return false;
-  return timeOfDayFilters.some((filter) => {
-    if (filter === "morning") return startMinutes >= 7 * 60 && startMinutes < 11 * 60;
-    if (filter === "day") return startMinutes >= 11 * 60 && startMinutes < 18 * 60;
-    return filter === "evening" && startMinutes >= 18 * 60 && startMinutes < 24 * 60;
-  });
+  return matchesAtlasTimeOfDay(startMinutes, timeOfDayFilters);
 }
 
 function matchesStationFilter(
@@ -1304,7 +1252,7 @@ export default function FindGamePage({
   ));
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [isFriendlyTagModalOpen, setFriendlyTagModalOpen] = useState(false);
-  const requestInFlightRef = useRef(false);
+  const requestCoordinatorRef = useRef(createGameAtlasRequestCoordinator());
   const isStationLockedByPreset = Boolean(buildStationFilterValue(presetStudioId, presetStudioName));
   const shouldIncludeGamePlusTrainer = includeGamePlusTrainer === true;
 
@@ -1532,7 +1480,7 @@ export default function FindGamePage({
       };
       const setOrDeleteMulti = (key: string, values: readonly string[]) => {
         if (values.length === 0) url.searchParams.delete(key);
-        else url.searchParams.set(key, values.join(","));
+        else url.searchParams.set(key, serializeAtlasMultiValues(values));
       };
       setOrDelete(FIND_GAME_QUERY_KEYS.category, category, "all");
       setOrDelete(FIND_GAME_QUERY_KEYS.search, searchQuery.trim());
@@ -1569,10 +1517,11 @@ export default function FindGamePage({
   ]);
 
   const loadPage = useCallback(async (nextOffset: number, mode: "replace" | "append") => {
-    if (requestInFlightRef.current) return;
-    requestInFlightRef.current = true;
+    const requestToken = requestCoordinatorRef.current.start(mode);
+    if (!requestToken) return;
     if (mode === "replace") {
       setLoading(true);
+      setLoadingMore(false);
     } else {
       setLoadingMore(true);
     }
@@ -1586,29 +1535,40 @@ export default function FindGamePage({
         stationId: presetStudioId,
         stationName: presetStudioName,
       });
+      if (!requestCoordinatorRef.current.isCurrent(requestToken)) return;
       const incoming = (response.data?.games ?? [])
+        .filter(isDisplayableGameAtlasRecord)
         .filter((game) => matchesStationFilter(game, presetStudioId, presetStudioName))
         .filter((game) => matchesDateFilter(game, selectedDateKey))
         .filter((game) => isJoinablePublicGame(game, viewer));
 
       setGames((prev) => (mode === "replace" ? mergeGames([], incoming) : mergeGames(prev, incoming)));
       setTotal(response.data?.total ?? incoming.length);
-      setHasMore(response.data?.hasMore ?? incoming.length >= PAGE_SIZE);
-      setOffset(nextOffset + (response.data?.games.length ?? incoming.length));
+      const pagination = resolveGameAtlasPagination({
+        requestedOffset: nextOffset,
+        consumedCount: response.data?.consumedCount ?? response.data?.games.length ?? 0,
+        serverHasMore: response.data?.hasMore ?? incoming.length >= PAGE_SIZE,
+      });
+      setHasMore(pagination.hasMore);
+      setOffset(pagination.nextOffset);
 
       if (response.error && mode === "replace") {
         setError(response.error.message || "Не удалось загрузить игры");
       }
     } catch {
+      if (!requestCoordinatorRef.current.isCurrent(requestToken)) return;
       if (mode === "replace") {
         setGames([]);
       }
       setError("Не удалось загрузить игры");
       setHasMore(false);
     } finally {
-      requestInFlightRef.current = false;
-      setLoading(false);
-      setLoadingMore(false);
+      const isCurrent = requestCoordinatorRef.current.isCurrent(requestToken);
+      requestCoordinatorRef.current.finish(requestToken);
+      if (isCurrent) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   }, [presetStudioId, presetStudioName, selectedDateKey, viewer]);
 
@@ -1675,7 +1635,7 @@ export default function FindGamePage({
     if (kindFilters.length > 0 && !kindFilters.includes("game")) return [];
     return games
       .filter((game) => matchesGameSearch(game, searchQuery))
-      .filter((game) => matchesCategory(
+      .filter((game) => matchesAtlasCategory(
         category,
         gameHasAvailablePlaces(game),
         isViewerGame(game, viewer),
@@ -1685,7 +1645,7 @@ export default function FindGamePage({
       .filter((game) => matchesSelectedLevelFilter(game, levelFilterValues))
       .filter((game) => matchesTimeOfDayFilter(game, timeOfDayFilters))
       .filter((game) => matchesAtlasMultiValue(statusFilterValues, getGameStatusValue(game)))
-      .filter((game) => matchesAvailability(gameHasAvailablePlaces(game), availabilityFilters))
+      .filter((game) => matchesAtlasAvailability(gameHasAvailablePlaces(game), availabilityFilters))
       .filter((game) => matchesGameFormat(game, formatFilters))
       .filter((game) => audienceFilters.length === 0 || isViewerGame(game, viewer));
   }, [
@@ -1707,7 +1667,7 @@ export default function FindGamePage({
     if (!shouldIncludeGamePlusTrainer || (kindFilters.length > 0 && !kindFilters.includes("game-plus-trainer"))) return [];
     return gamePlusTrainerTrainings
       .filter((training) => matchesTrainingSearch(training, searchQuery))
-      .filter((training) => matchesCategory(
+      .filter((training) => matchesAtlasCategory(
         category,
         trainingHasAvailablePlaces(training),
         isViewerTraining(training),
@@ -1717,7 +1677,7 @@ export default function FindGamePage({
       .filter((training) => matchesSelectedTrainingLevelFilter(training, levelFilterValues))
       .filter((training) => matchesTrainingTimeOfDayFilter(training, timeOfDayFilters))
       .filter((training) => matchesAtlasMultiValue(statusFilterValues, getTrainingStatusValue(training)))
-      .filter((training) => matchesAvailability(trainingHasAvailablePlaces(training), availabilityFilters))
+      .filter((training) => matchesAtlasAvailability(trainingHasAvailablePlaces(training), availabilityFilters))
       .filter(() => formatFilters.length === 0)
       .filter((training) => audienceFilters.length === 0 || isViewerTraining(training));
   }, [

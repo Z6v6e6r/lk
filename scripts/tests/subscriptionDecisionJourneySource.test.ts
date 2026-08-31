@@ -80,9 +80,10 @@ test("create and join subscription retries reuse a stable server operation id", 
 });
 
 test("API rejects successful-looking subscription responses without a deterministic decision", () => {
-  assert.match(apiSource, /function hasDeterministicPadelSplitSubscriptionDecision/);
-  assert.match(apiSource, /selectedMode !== "subscription" && selectedMode !== "one_time"/);
-  assert.match(apiSource, /result\.bookingId\?\.trim\(\) \|\| result\.paymentUrl\?\.trim\(\)/);
+  assert.match(apiSource, /hasDeterministicSubscriptionDecision/);
+  assert.match(apiSource, /requestPadelSplitPayment/);
+  assert.match(apiSource, /PADEL_SPLIT_SUBSCRIPTION_TIMEOUT_MS/);
+  assert.match(apiSource, /code: error\.code/);
   assert.equal(
     apiSource.match(/code: "RESPONSE_CONTRACT_INVALID", response: response\.data/g)?.length,
     2,

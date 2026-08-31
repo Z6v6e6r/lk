@@ -1,4 +1,8 @@
 import type { ApiError, PadelSplitPaymentResult } from "./apiClient";
+import {
+  hasDeterministicSubscriptionDecision,
+  readSubscriptionDecisionResultState,
+} from "./subscriptionDecisionContract.ts";
 
 export type SubscriptionDecisionAction = "CREATE_GAME" | "JOIN_GAME";
 
@@ -313,6 +317,18 @@ export function resolveSubscriptionDecisionPresentation({
       title: "Временная техническая ошибка",
       message: "Сервер не вернул решение по подписке. Повторите попытку.",
       reasonCode: "RESPONSE_CONTRACT_INVALID",
+      retryable: true,
+      subscriptionApplied: false,
+      continueWithoutSubscription: false,
+    };
+  }
+
+  if (!hasDeterministicSubscriptionDecision(result, requestedPaymentMode)) {
+    return {
+      kind: "TECHNICAL_ERROR",
+      title: "Временная техническая ошибка",
+      message: "Сервер вернул неподтверждённое состояние подписки. Обновите данные и повторите попытку.",
+      reasonCode: readSubscriptionDecisionResultState(result.raw) || "RESPONSE_CONTRACT_INVALID",
       retryable: true,
       subscriptionApplied: false,
       continueWithoutSubscription: false,
