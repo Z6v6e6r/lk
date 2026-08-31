@@ -21,7 +21,7 @@ test("find game keeps leave-state split games visible when they are still joinab
   assert.doesNotMatch(findGamePageSource, /hasPublicRosterData\(game\)/);
 });
 
-test("find game plus trainer cards are opt-in and use list counts without roster fan-out", () => {
+test("find game plus trainer cards are opt-in and avoid per-card request fan-out", () => {
   assert.match(findGamePageSource, /includeGamePlusTrainer\?: boolean/);
   assert.match(findGamePageSource, /const shouldIncludeGamePlusTrainer = includeGamePlusTrainer === true;/);
   assert.doesNotMatch(findGamePageSource, /IS_DEV_RELEASE_CHANNEL && includeGamePlusTrainer/);
@@ -35,25 +35,22 @@ test("find game plus trainer cards are opt-in and use list counts without roster
   assert.match(findGamePageSource, /isDevCabinetUrl\(resolvedCabinetUrl\) \|\| IS_DEV_RELEASE_CHANNEL/);
   assert.match(findGamePageSource, /apiFetchGroupTrainingsByDate\(selectedDateKey\)/);
   assert.match(findGamePageSource, /\.filter\(isGamePlusTrainerSummary\)/);
-  assert.match(
-    findGamePageSource,
-    /apiFetchTournamentVivaPublicCheckout\(\s*training\.id,\s*\{ tournament: training\.raw \},\s*\)/,
-  );
+  assert.doesNotMatch(findGamePageSource, /apiFetchTournamentVivaPublicCheckout/);
   assert.doesNotMatch(findGamePageSource, /apiFetchTournamentParticipants/);
   assert.doesNotMatch(findGamePageSource, /normalizeTournamentSignupPublicRoster/);
   assert.match(findGamePageSource, /const participantCount = Math\.min\(training\.clientsCount, maxPlayers\);/);
   assert.match(findGamePageSource, /Array\.from\(\{ length: participantCount \}/);
   assert.match(findGamePageSource, /GAME_PLUS_TRAINER_DEFAULT_PRICE_VALUE_LABEL = "5500"/);
   assert.match(findGamePageSource, /GAME_PLUS_TRAINER_INCLUDED_PRICE_LABELS = \["Энергия5", "академия", "РА"\] as const/);
-  assert.match(findGamePageSource, /\[priceValueLabel, \.\.\.GAME_PLUS_TRAINER_INCLUDED_PRICE_LABELS\]\.join\("\/"\)/);
+  assert.match(findGamePageSource, /\[priceValueLabel \|\| GAME_PLUS_TRAINER_DEFAULT_PRICE_VALUE_LABEL, \.\.\.GAME_PLUS_TRAINER_INCLUDED_PRICE_LABELS\]\.join\("\/"\)/);
   assert.match(findGamePageSource, /type FindGameKindFilter = "all" \| "game" \| "game-plus-trainer"/);
   assert.match(findGamePageSource, /const FIND_GAME_KIND_OPTIONS: Array<\{ value: FindGameKindFilter; label: string \}>/);
-  assert.match(findGamePageSource, /const \[kindFilter, setKindFilter\] = useState<FindGameKindFilter>\("all"\)/);
+  assert.match(findGamePageSource, /const \[kindFilter, setKindFilter\] = useState<FindGameKindFilter>\(\(\) => readAtlasChoice\(/);
   assert.match(findGamePageSource, /if \(kindFilter === "game-plus-trainer"\) return \[];/);
   assert.match(findGamePageSource, /if \(!shouldIncludeGamePlusTrainer \|\| kindFilter === "game"\) return \[];/);
-  assert.match(findGamePageSource, /setGamePlusTrainerTrainings\(trainings\);\s*setGamePlusTrainerLoading\(false\);\s*trainings\.forEach\(\(training\) => \{/);
-  assert.match(findGamePageSource, /setGamePlusTrainerMetaById\(\(current\) => \(\{\s*\.\.\.current,\s*\[id\]: meta,/);
-  assert.doesNotMatch(findGamePageSource, /const entries = await Promise\.all\(trainings\.map\(fetchGamePlusTrainerMeta\)\)/);
+  assert.match(findGamePageSource, /setGamePlusTrainerTrainings\(trainings\);\s*setGamePlusTrainerLoading\(false\);/);
+  assert.doesNotMatch(findGamePageSource, /setGamePlusTrainerMetaById/);
+  assert.doesNotMatch(findGamePageSource, /trainings\.forEach\(\(training\) =>/);
   assert.match(findGamePageSource, /find-game-friendly-tag find-game-friendly-tag-gold/);
   assert.match(findGamePageSource, /className="find-game-friendly-tag"\s+aria-label="Тег игры"/);
   assert.doesNotMatch(findGamePageSource, /Ваш \{viewer\.level\}/);
