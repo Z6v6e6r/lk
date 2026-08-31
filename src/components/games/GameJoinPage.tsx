@@ -745,6 +745,28 @@ function buildCabinetHomeUrl(cabinetUrl: string | null | undefined): string {
   return resolveInviteCabinetUrl(cabinetUrl);
 }
 
+function canReturnToGameAtlas(): boolean {
+  if (typeof window === "undefined" || typeof document === "undefined") return false;
+  try {
+    if (new URL(window.location.href).searchParams.get("atlasReturn") !== "1") return false;
+    if (!document.referrer) return false;
+    const referrer = new URL(document.referrer);
+    const pathname = referrer.pathname.replace(/\/+$/, "");
+    return referrer.origin === window.location.origin
+      && (pathname.endsWith("/finde_game") || pathname.endsWith("/find_game"));
+  } catch {
+    return false;
+  }
+}
+
+function navigateBackFromGameJoin(cabinetUrl: string | null | undefined): void {
+  if (canReturnToGameAtlas()) {
+    window.history.back();
+    return;
+  }
+  window.location.href = buildCabinetHomeUrl(cabinetUrl);
+}
+
 export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL }: GameJoinPageProps) {
   const subscriptionUsageShadow = useSubscriptionUsageShadow();
   const subscriptionUsageShadowEnabled = subscriptionUsageShadow.enabled;
@@ -1835,6 +1857,11 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
     return (
       <div className="app-container game-container">
         <div className="page-header">
+          {canReturnToGameAtlas() && (
+            <button className="page-back" type="button" onClick={() => navigateBackFromGameJoin(cabinetUrl)}>
+              Назад к играм
+            </button>
+          )}
           <div className="page-title">Приглашение в игру</div>
         </div>
         <div className="game-section">
@@ -1844,9 +1871,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           <button
             className="section-cta"
             type="button"
-            onClick={() => {
-              window.location.href = buildCabinetHomeUrl(cabinetUrl);
-            }}
+            onClick={() => navigateBackFromGameJoin(cabinetUrl)}
           >
             Вернуться в личный кабинет
           </button>
@@ -1890,6 +1915,9 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   return (
     <div className="app-container game-container game-join-container">
       <div className="page-header">
+        <button className="page-back" type="button" onClick={() => navigateBackFromGameJoin(cabinetUrl)}>
+          {canReturnToGameAtlas() ? "Назад к играм" : "В личный кабинет"}
+        </button>
         <div className="page-title">Приглашение в игру</div>
       </div>
 
