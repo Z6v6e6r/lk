@@ -8702,6 +8702,20 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
   };
 }
 
+function hasDeterministicPadelSplitSubscriptionDecision(
+  result: PadelSplitPaymentResult,
+  requestedPaymentMode: PadelSplitPaymentParams["paymentMode"],
+): boolean {
+  if (requestedPaymentMode !== "subscription") return true;
+  const selectedMode = String(result.selectedPaymentMode || "").trim().toLowerCase();
+  if (selectedMode !== "subscription" && selectedMode !== "one_time") return false;
+  if (!Number.isFinite(result.toPay) || result.toPay < 0) return false;
+  if (result.toPayMinor != null && (!Number.isSafeInteger(result.toPayMinor) || result.toPayMinor < 0)) {
+    return false;
+  }
+  return Boolean(result.bookingId?.trim() || result.paymentUrl?.trim());
+}
+
 function resolvePadelSplitPendingError(payload: unknown, status: ApiStatus): ApiError | null {
   if (!isRecord(payload)) return null;
   const state = String(payload.state || "").trim().toUpperCase();
@@ -8865,6 +8879,17 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
       status: response.status,
     };
   }
+  if (!hasDeterministicPadelSplitSubscriptionDecision(parsed, params.paymentMode)) {
+    return {
+      data: null as PadelSplitPaymentResult | null,
+      error: {
+        status: response.status,
+        message: "Сервер не подтвердил результат применения подписки",
+        raw: { code: "RESPONSE_CONTRACT_INVALID", response: response.data },
+      },
+      status: response.status,
+    };
+  }
 
   return {
     data: parsed,
@@ -8936,6 +8961,17 @@ export async function apiCreatePadelSplitParticipantPayment(
         status: response.status,
         message: "Не удалось разобрать ответ оплаты участия",
         raw: response.data,
+      },
+      status: response.status,
+    };
+  }
+  if (!hasDeterministicPadelSplitSubscriptionDecision(parsed, params.paymentMode)) {
+    return {
+      data: null as PadelSplitPaymentResult | null,
+      error: {
+        status: response.status,
+        message: "Сервер не подтвердил результат применения подписки",
+        raw: { code: "RESPONSE_CONTRACT_INVALID", response: response.data },
       },
       status: response.status,
     };

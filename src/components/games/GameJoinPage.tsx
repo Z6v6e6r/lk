@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   apiCreatePadelSplitParticipantPayment,
   apiCommandPadelGameRoster,
   apiConfirmPadelGameRosterPayment,
-  apiFetchSubscriptionDailyLimitBookings,
   apiLeavePadelGameAsCurrentUser,
   apiFetchPadelGameRecord,
   apiFetchPadelSplitPaymentPromoConfig,
@@ -40,20 +39,16 @@ import {
 import { appendCurrentAuthModeToNavigableUrl } from "../../utils/authMode";
 import { pushCabinetFlashNotice } from "../../utils/cabinetFlashNotice";
 import {
+  formatSubscriptionDecisionPresentation,
+  resolveSubscriptionDecisionPresentation,
+} from "../../utils/subscriptionDecisionUi";
+import {
   buildSplitComparableIdSet,
-  findExplicitSplitSubscriptionById,
-  filterSplitCategoryCompatibleSubscriptions,
   filterSplitEligibleSubscriptions,
-  isNoSubscriptionsAvailableError,
-  resolveSplitSubscriptionUnavailableMessage,
 } from "./splitSubscriptionAvailability";
 import { shouldSkipRecentSplitGameRosterSync } from "./recentPaidGameStability";
 import {
-  SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME,
-  resolveSubscriptionCategoryDailyLimitConflictFromBookings,
   resolveSubscriptionCategoryDailyLimitErrorMessage,
-  subscriptionPlanAllowsDailyLimitCategory,
-  withSubscriptionCategoryDailyLimitResolvedName,
 } from "../../utils/subscriptionCategoryDailyLimit";
 import { resolveSplitPromoShareAmount } from "./splitPromoPricing";
 import { createLocalMembershipId } from "./localMembershipGeneration";
@@ -144,27 +139,6 @@ function normalizeComparableId(value: unknown): string | null {
     return String(Math.trunc(value));
   }
   return null;
-}
-
-async function resolveSubscriptionDailyLimitCandidate(
-  subscription: Subscription | null,
-  phone: string | null | undefined,
-): Promise<unknown> {
-  if (!subscription) return null;
-
-  const subscriptionId = String(subscription.subscriptionId || "").trim();
-  let resolvedName: string | null = null;
-
-  if (subscriptionId && phone) {
-    try {
-      const response = await apiFetchSubscriptioName(subscriptionId, phone);
-      resolvedName = String(response.data?.sertName || "").trim() || null;
-    } catch {
-      resolvedName = null;
-    }
-  }
-
-  return withSubscriptionCategoryDailyLimitResolvedName(subscription, resolvedName);
 }
 
 function parseBookingIdsFromUnknown(value: unknown): string[] {
@@ -776,6 +750,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
   const subscriptionUsageShadowEnabled = subscriptionUsageShadow.enabled;
   const previewSubscriptionUsageShadow = subscriptionUsageShadow.preview;
   const rejectSubscriptionUsageShadowAction = subscriptionUsageShadow.reject;
+  const decisionSubmissionInFlightRef = useRef(false);
   const [profile, setProfile] = useState<UserProfileType | null>(null);
   const [game, setGame] = useState<PadelGameRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1474,9 +1449,6 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           return;
         }
 
-        let subscriptionCandidates: Subscription[] = [];
-        let compatibleSubscriptionCandidates: Subscription[] = [];
-        let eligibleSubscriptionCandidates: Subscription[] = [];
         let resolvedClientSubscriptionId: string | null = null;
         if (resolvedPaymentMode === "subscription") {
           const requestedClientSubscriptionId = String(explicitClientSubscriptionId || "").trim();
@@ -1485,89 +1457,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
             setDecisionError("Выберите абонемент для списания");
             return;
           }
-          const subscriptionsResult = await apiFetchSubscriptions();
-          if (subscriptionsResult.error) {
-            setSubmitting(null);
-            setDecisionError(subscriptionsResult.error.message || "Не удалось проверить абонемент");
-            return;
-          }
-
-          subscriptionCandidates = Array.isArray(subscriptionsResult.data?.content)
-            ? subscriptionsResult.data.content
-            : [];
-          const requiredVisits = bookingDurationMinutes != null && bookingDurationMinutes >= 90
-            ? 2
-            : 1;
-          const requiredExerciseTypeIds = buildSplitComparableIdSet([SPLIT_OPEN_GAME_EXERCISE_TYPE_ID]);
-          const requiredDirectionIds = buildSplitComparableIdSet([SPLIT_OPEN_GAME_DIRECTION_ID]);
-          compatibleSubscriptionCandidates = filterSplitCategoryCompatibleSubscriptions(
-            subscriptionCandidates,
-            requiredExerciseTypeIds,
-            requiredDirectionIds,
-            bookingStudioId,
-          );
-          eligibleSubscriptionCandidates = filterSplitEligibleSubscriptions(
-            subscriptionCandidates,
-            requiredExerciseTypeIds,
-            requiredDirectionIds,
-            bookingStudioId,
-            requiredVisits,
-            bookingDurationMinutes,
-            bookingDate,
-          );
-          const resolvedSubscriptionCandidate = findExplicitSplitSubscriptionById(
-            eligibleSubscriptionCandidates,
-            requestedClientSubscriptionId,
-          );
-          resolvedClientSubscriptionId = resolvedSubscriptionCandidate
-            ? String(resolvedSubscriptionCandidate.subscriptionId || "").trim() || null
-            : null;
-          if (!resolvedSubscriptionCandidate || !resolvedClientSubscriptionId) {
-            setSubmitting(null);
-            setDecisionError("Выбранный абонемент больше недоступен. Обновите список и попробуйте снова.");
-            return;
-          }
-          const subscriptionDateMessage = resolveSplitSubscriptionUnavailableMessage({
-            subscriptions: compatibleSubscriptionCandidates,
-            gameDate: bookingDate,
-            requiredVisits,
-            requiredDurationMinutes: bookingDurationMinutes,
-          });
-          if (subscriptionDateMessage) {
-            setSubmitting(null);
-            setDecisionError(subscriptionDateMessage);
-            return;
-          }
-          const dailyLimitSubscriptionCandidate = await resolveSubscriptionDailyLimitCandidate(
-            resolvedSubscriptionCandidate,
-            profile.phone,
-          );
-          if (subscriptionPlanAllowsDailyLimitCategory(
-            dailyLimitSubscriptionCandidate,
-            SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME,
-          )) {
-            const dailyLimitBookingsResult = await apiFetchSubscriptionDailyLimitBookings({ size: 1000 });
-            if (dailyLimitBookingsResult.error) {
-              setSubmitting(null);
-              setDecisionError("Не удалось проверить дневной лимит абонемента");
-              return;
-            }
-            const dailyLimitConflict = resolveSubscriptionCategoryDailyLimitConflictFromBookings(
-              dailyLimitBookingsResult.data?.content ?? [],
-              {
-                targetDate: bookingDate,
-                category: SUBSCRIPTION_CATEGORY_LIMIT_OPEN_GAME,
-                currentSubscription: dailyLimitSubscriptionCandidate,
-                currentClientSubscriptionId: resolvedClientSubscriptionId,
-                currentExerciseId: exerciseId,
-              },
-            );
-            if (dailyLimitConflict) {
-              setSubmitting(null);
-              setDecisionError(dailyLimitConflict.message);
-              return;
-            }
-          }
+          resolvedClientSubscriptionId = requestedClientSubscriptionId;
         }
         const paymentResult = await apiCreatePadelSplitParticipantPayment(actualGame.id, {
           date: bookingDate,
@@ -1607,24 +1497,29 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
             : null;
           if (dailyLimitMessage) {
             setDecisionError(dailyLimitMessage);
-          } else if (resolvedPaymentMode === "subscription" && isNoSubscriptionsAvailableError(paymentResult.error)) {
-            setDecisionError(
-              resolveSplitSubscriptionUnavailableMessage({
-                subscriptions: compatibleSubscriptionCandidates.length > 0
-                  ? compatibleSubscriptionCandidates
-                  : subscriptionCandidates,
-                gameDate: bookingDate,
-                requiredVisits: bookingDurationMinutes != null && bookingDurationMinutes >= 90
-                  ? 2
-                  : 1,
-                requiredDurationMinutes: bookingDurationMinutes,
-              }) || paymentResult.error?.message || "Не удалось создать оплату участия",
-            );
+          } else if (resolvedPaymentMode === "subscription") {
+            setDecisionError(formatSubscriptionDecisionPresentation(
+              resolveSubscriptionDecisionPresentation({
+                action: "JOIN_GAME",
+                requestedPaymentMode: "subscription",
+                durationMinutes: bookingDurationMinutes,
+                error: paymentResult.error,
+              }),
+            ));
           } else {
             setDecisionError(paymentResult.error?.message || "Не удалось создать оплату участия");
           }
           return;
         }
+
+        const subscriptionDecisionNotice = resolvedPaymentMode === "subscription"
+          ? formatSubscriptionDecisionPresentation(resolveSubscriptionDecisionPresentation({
+              action: "JOIN_GAME",
+              requestedPaymentMode: "subscription",
+              durationMinutes: bookingDurationMinutes,
+              result: paymentResult.data,
+            }))
+          : null;
 
         if (LEGACY_ROSTER_BRIDGE_ENABLED) {
           const bookingId = paymentResult.data.bookingId?.trim() || "";
@@ -1669,6 +1564,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
               setGame(confirmedRecord.data);
               notifyGameRecordUpdated(confirmedRecord.data, "game_join_split_confirmed_canonical");
             }
+            pushCabinetFlashNotice(subscriptionDecisionNotice);
             setSubmitting(null);
             window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
             return;
@@ -1678,6 +1574,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
             setDecisionError("Не удалось получить ссылку на оплату участия");
             return;
           }
+          pushCabinetFlashNotice(subscriptionDecisionNotice);
           setSubmitting(null);
           window.location.href = paymentResult.data.paymentUrl;
           return;
@@ -1802,12 +1699,14 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
         );
 
         if (isPaidWithoutRedirect) {
+          pushCabinetFlashNotice(subscriptionDecisionNotice);
           setSubmitting(null);
           window.location.href = buildCabinetGameUrl(cabinetUrl, actualGame.id);
           return;
         }
 
         setSubmitting(null);
+        pushCabinetFlashNotice(subscriptionDecisionNotice);
         window.location.href = paymentResult.data.paymentUrl || buildCabinetGameUrl(cabinetUrl, actualGame.id);
         return;
       }
@@ -1894,6 +1793,35 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
       subscriptionUsageShadowEnabled,
     ],
   );
+
+  const submitDecision = useCallback(async (
+    target: "join" | "decline",
+    explicitSplitPaymentMode?: "subscription" | "one_time",
+    explicitClientSubscriptionId?: string | null,
+  ) => {
+    if (decisionSubmissionInFlightRef.current) return;
+    decisionSubmissionInFlightRef.current = true;
+    try {
+      await applyDecision(target, explicitSplitPaymentMode, explicitClientSubscriptionId);
+    } catch (unexpectedError) {
+      const requestedPaymentMode = explicitSplitPaymentMode ?? preferredSplitPaymentMode;
+      if (target === "join" && requestedPaymentMode === "subscription") {
+        setDecisionError(formatSubscriptionDecisionPresentation(
+          resolveSubscriptionDecisionPresentation({
+            action: "JOIN_GAME",
+            requestedPaymentMode: "subscription",
+            durationMinutes: game?.booking?.durationMinutes,
+            error: { status: null, message: "Ошибка сети", raw: unexpectedError },
+          }),
+        ));
+      } else {
+        setDecisionError("Временная техническая ошибка. Повторите попытку.");
+      }
+    } finally {
+      decisionSubmissionInFlightRef.current = false;
+      setSubmitting(null);
+    }
+  }, [applyDecision, game?.booking?.durationMinutes, preferredSplitPaymentMode]);
 
   if (loading) {
     return (
@@ -2018,7 +1946,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
             type="button"
             disabled={!canPrimaryAction}
             onClick={() => {
-              void applyDecision("join");
+              void submitDecision("join");
             }}
           >
             {subscriptionUsageShadow.busy
@@ -2062,7 +1990,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
                     type="button"
                     disabled={!canPrimaryAction}
                     onClick={() => {
-                      void applyDecision("join", "subscription", option.subscriptionId);
+                      void submitDecision("join", "subscription", option.subscriptionId);
                     }}
                   >
                     <span>{`Списать с «${option.name}»`}</span>
@@ -2076,7 +2004,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
               type="button"
               disabled={!canPrimaryAction}
               onClick={() => {
-                void applyDecision("join", "one_time");
+                void submitDecision("join", "one_time");
               }}
             >
               {splitJoinOneTimeLabel}
@@ -2092,7 +2020,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
                 window.location.href = buildCabinetGameUrl(cabinetUrl, game.id);
                 return;
               }
-              void applyDecision("join");
+              void submitDecision("join");
             }}
           >
             {primaryButtonLabel}
@@ -2103,7 +2031,7 @@ export default function GameJoinPage({ gameId, cabinetUrl = DEFAULT_CABINET_URL 
           type="button"
           disabled={!canDecline}
           onClick={() => {
-            void applyDecision("decline");
+            void submitDecision("decline");
           }}
         >
           {subscriptionUsageShadowEnabled

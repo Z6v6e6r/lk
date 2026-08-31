@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ManagedSubscriptionPolicyDecision } from "../../types/managedSubscriptionRuntime";
 import type { SubscriptionUsageTestBookingOutcome } from "./subscriptionUsageTestBooking";
 import "./ManagedSubscriptionDevPage.css";
@@ -95,8 +95,6 @@ interface ApiErrorPayload {
   };
 }
 
-const operationId = (prefix: string) => `${prefix}:${crypto.randomUUID()}`;
-
 const apiRequest = async <T,>(path: string, body?: Record<string, unknown>): Promise<T> => {
   const response = await fetch(`${API_BASE}${path}`, {
     method: body ? "POST" : "GET",
@@ -177,7 +175,9 @@ const fullPriceWithoutSubscriptionLabel = (
   outcome: SubscriptionUsageTestBookingOutcome,
   target: DevTarget,
 ) => {
-  const parts = ["лимит льгот подписки исчерпан"];
+  const parts = [outcome.reasonCodes.includes("NO_ACTIVE_SUBSCRIPTION")
+    ? "активной подписки нет"
+    : "лимит льгот подписки исчерпан"];
   if (target.participantCount && target.participantCount > 1) {
     parts.push(`доля игрока 1/${target.participantCount}`);
   }
@@ -192,6 +192,7 @@ const ledgerLabel: Record<string, string> = {
   ELIGIBILITY_QUOTED: "Ограничения проверены",
   ELIGIBILITY_BLOCKED: "Действие заблокировано",
   FULL_PRICE_CONTINUATION_ALLOWED: "Разрешено продолжить без подписки",
+  ORDINARY_PAYMENT_ALLOWED: "Разрешена обычная оплата без подписки",
   RESERVATION_CREATED: "Создан тестовый резерв",
   RESERVATION_RELEASED: "Тестовый резерв освобождён",
 };
@@ -203,6 +204,15 @@ export function ManagedSubscriptionDevPage() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [seedCount, setSeedCount] = useState(2);
+  const operationIdsRef = useRef(new Map<string, string>());
+
+  const operationIdFor = useCallback((key: string) => {
+    const current = operationIdsRef.current.get(key);
+    if (current) return current;
+    const created = `${key}:${crypto.randomUUID()}`;
+    operationIdsRef.current.set(key, created);
+    return created;
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -256,7 +266,7 @@ export function ManagedSubscriptionDevPage() {
         snapshot: DevSnapshot;
       }>("/reserve", {
         targetId,
-        operationId: operationId("reserve"),
+        operationId: operationIdFor(`reserve:${targetId}`),
       });
       setQuotes((current) => ({
         ...current,
@@ -275,14 +285,42 @@ export function ManagedSubscriptionDevPage() {
     }
   };
 
+  const runOrdinaryPayment = async (targetId: string) => {
+    setBusyKey(`ordinary:${targetId}`);
+    setError(null);
+    try {
+      const result = await apiRequest<QuoteResult & { replayed: boolean }>("/ordinary", {
+        targetId,
+        operationId: operationIdFor(`ordinary:${targetId}`),
+      });
+      setQuotes((current) => ({
+        ...current,
+        [targetId]: {
+          decision: result.decision,
+          bookingOutcome: result.bookingOutcome,
+        },
+      }));
+      setSnapshot(result.snapshot);
+    } catch (ordinaryError) {
+      setError(ordinaryError instanceof Error
+        ? ordinaryError.message
+        : "Обычная оплата временно недоступна");
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
   const release = async (reservationId: string) => {
     setBusyKey(`release:${reservationId}`);
     setError(null);
     try {
       const result = await apiRequest<{ snapshot: DevSnapshot }>("/release", {
         reservationId,
-        operationId: operationId("release"),
+        operationId: operationIdFor(`release:${reservationId}`),
       });
+      for (const key of operationIdsRef.current.keys()) {
+        if (key.startsWith("reserve:")) operationIdsRef.current.delete(key);
+      }
       setQuotes({});
       setSnapshot(result.snapshot);
     } catch (releaseError) {
@@ -297,6 +335,7 @@ export function ManagedSubscriptionDevPage() {
     setError(null);
     try {
       setSnapshot(await apiRequest<DevSnapshot>("/seed", { activeServices: seedCount }));
+      operationIdsRef.current.clear();
       setQuotes({});
     } catch (seedError) {
       setError(seedError instanceof Error ? seedError.message : "Не удалось задать тестовое состояние");
@@ -310,6 +349,7 @@ export function ManagedSubscriptionDevPage() {
     setError(null);
     try {
       setSnapshot(await apiRequest<DevSnapshot>("/reset", {}));
+      operationIdsRef.current.clear();
       setQuotes({});
       setSeedCount(2);
     } catch (resetError) {
@@ -462,6 +502,16 @@ export function ManagedSubscriptionDevPage() {
                     {busyKey === `reserve:${target.targetId}`
                       ? fullPriceWithoutSubscription ? "Продолжаем…" : "Резервируем…"
                       : fullPriceWithoutSubscription ? "Продолжить без подписки" : "Создать DEV-резерв"}
+                  </button>
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => void runOrdinaryPayment(target.targetId)}
+                    disabled={busyKey !== null}
+                  >
+                    {busyKey === `ordinary:${target.targetId}`
+                      ? "Проверяем обычную оплату…"
+                      : "Обычная оплата без подписки"}
                   </button>
                 </div>
               </article>

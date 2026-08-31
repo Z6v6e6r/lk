@@ -436,6 +436,32 @@ test("reserve and release replay safely and conflicting operation IDs are reject
   assert.equal(releaseReplay.replayed, true);
 });
 
+test("ordinary no-subscription path is replay-safe and never consumes entitlement", async () => {
+  const runtime = createAnnualRuntime();
+  await runtime.initialize();
+  await runtime.seed(0);
+  const first = await runtime.ordinary(
+    "create-station-a-60-aug18",
+    "ordinary:no-subscription-create",
+  );
+  const replay = await runtime.ordinary(
+    "create-station-a-60-aug18",
+    "ordinary:no-subscription-create",
+  );
+  assert.equal(first.bookingOutcome.allowed, true);
+  assert.equal(first.bookingOutcome.subscriptionApplied, false);
+  assert.equal(first.bookingOutcome.pricingMode, "FULL_PRICE_WITHOUT_SUBSCRIPTION");
+  assert.deepEqual(first.bookingOutcome.reasonCodes, ["NO_ACTIVE_SUBSCRIPTION"]);
+  assert.equal(first.reservation, null);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.reservation, null);
+  assert.equal((await runtime.snapshot()).limits.activeServices, 0);
+  await assert.rejects(
+    () => runtime.ordinary("join-station-b-90-aug18", "ordinary:no-subscription-create"),
+    /operationId уже использован/,
+  );
+});
+
 test("parallel request with an additional blocker remains rejected after the final slot is consumed", async () => {
   const runtime = createRuntime();
   await runtime.initialize();
