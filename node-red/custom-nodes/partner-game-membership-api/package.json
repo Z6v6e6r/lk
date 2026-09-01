@@ -1,0 +1,15 @@
+{
+  "name": "@padlhub/node-red-partner-game-membership-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Replay-resistant partner API boundary for open-game memberships.",
+  "main": "partner-game-membership-node.cjs",
+  "dependencies": {
+    "mongodb": "^7.2.0"
+  },
+  "node-red": {
+    "nodes": {
+      "partner-game-membership-api": "partner-game-membership-node.cjs"
+    }
+  }
+}

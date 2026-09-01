@@ -1,5 +1,23 @@
 # 🔴 Node-RED Потоки — Справочник
 
+## Partner game membership API (source-only test v0.1)
+
+- Отдельный M2M namespace: `POST /lk/integrations/v1/open-games/:gameId/members`,
+  `DELETE /lk/integrations/v1/open-games/:gameId/members/:membershipId`,
+  `GET /lk/integrations/v1/operations/:operationId`.
+- Custom node package: `node-red/custom-nodes/partner-game-membership-api/`; request HMAC,
+  one-time nonce, idempotency, scopes/station allowlist, canonical ownership и audit
+  выполняются внутри server-only runtime.
+- Source-only builder: `scripts/patch_partner_game_membership_api_flow.mjs`; требует
+  fresh live-flow SHA, запрещает in-place mutation и создаёт manifest с
+  `deploymentPerformed=false`/`activationPerformed=false`.
+- Real Viva provider в v0.1 отсутствует и fail-closed; synthetic provider разрешён
+  только с loopback Mongo в `local|test|dev`.
+- Полный контракт, threat model, test plan и вопросы внешней команде:
+  `docs/PARTNER_GAME_MEMBERSHIP_API.md`.
+- Route import, Mongo prerequisites, secrets, ingress/mTLS, real Viva adapter, deploy и
+  activation остаются отдельными R3/R4 gates.
+
 ## Legacy game command prerequisites
 
 - Source-only candidate builder: `scripts/patch_live_games_command_prerequisites.mjs`; it is pinned to the exact fresh live-flow SHA and adds no HTTP endpoint.
@@ -181,6 +199,7 @@ npm run nodered:modular:build
 - Managed annual status остаётся read-only, а purchase fail closed с `MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE`, пока нет authoritative sale-to-current-instance binding. `prepare_tournament_subscription_sales_candidate.mjs` обновляет одинаковые sales function nodes во всех enabled tabs; обнаруженный live-дубликат `Media2` сейчас disabled и не является активным route.
 - Реферальная атрибуция и шесть credential source-файлов выпускаются только двухфазным `nodered:referral-attribution:audit` → reviewed contract SHA → `nodered:referral-attribution:candidate`. Candidate меняет девять exact live function instances, оставляет `deployAuthorized=false` и блокирует provider rotation, пока inventory показывает другие active password-grant consumers.
 - Контракт evaluator и обязательный порядок будущего подключения описаны в `docs/MANAGED_SUBSCRIPTION_RUNTIME_CONTRACT.md`. Для явно managed Viva product отсутствие опубликованной policy в будущем должно блокировать действие, а не откатываться к hardcoded plan-name логике.
+- PITER managed enforcement дополнительно требует server-owned `purchaseDate` выбранного `availableClientSubscriptions` не раньше `2026-09-01` в `Europe/Moscow`. Более старые, недатированные или неоднозначно датированные экземпляры остаются в Friendship compatibility path; browser date не участвует, а дата и cutoff eligibility повторно проверяются перед Viva write.
 - Focused candidate для явного выбора split-абонемента строится только из закреплённого свежего live-147 snapshot через `scripts/patch_live_split_subscription_selection.mjs`. Он меняет только function bodies `Prepare split game payment`, `Prepare split join payment` и `Route Viva split payment`, сохраняет граф/маршруты и не деплоит candidate.
 - Focused candidate для invalidation stale roster snapshot после split leave строится через `scripts/patch_live_split_leave_projection_consistency.mjs`. Он меняет только `Build split leave game CAS`, сохраняет граф/маршруты и не деплоит candidate.
 - Патчер принимает только отдельный свежий live-147 snapshot с корректным `source.flow.meta.json`, проверяет origin/SHA/свежесть до 30 минут и один из двух точных preimage функции `Route Viva split payment`: исходный до gateway либо уже управляемый gateway. Он пишет новый candidate, но не изменяет source snapshot и не деплоит его.

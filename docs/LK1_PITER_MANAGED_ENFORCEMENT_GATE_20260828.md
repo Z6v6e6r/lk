@@ -17,15 +17,21 @@ configuration, production mutation, Ready, merge, or deployment.
   product. A malformed type, JSON value, or UUID fails closed before CUP or Viva
   writes with `MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID`.
 - PITER product `8bf334ba-3050-4017-b40a-7eef2db1eb16` enters the managed CUP
-  path only when the same exact server-owned product identity is in the global.
+  path only when the same exact server-owned product identity is in the global
+  and the actor-owned Viva subscription has `purchaseDate(Europe/Moscow)` on or
+  after `2026-09-01`.
+- PITER subscriptions sold before `2026-09-01`, with a missing/invalid sale
+  date, or with conflicting server-side sale dates remain on the ordinary
+  Friendship compatibility path. Browser-supplied sale dates are ignored.
 - HUB product `db7a5250-7369-4f43-8ac5-9111be24bc74` never enters the managed
   path in this candidate, even if its UUID appears in the global.
 - Product names, browser fields, `planKey`, and a caller-supplied gate object
   cannot enable managed enforcement.
 - Direct and split CREATE/JOIN use the same router and the same gate.
-- The exact server-owned product identity and the rollout decision are re-read
-  after operation preaccept and before the provider write. Product or rollout
-  drift is persisted as a failed operation and emits no Viva write.
+- The exact server-owned product identity, authoritative sale date, and rollout
+  decision are re-read after operation preaccept and before the provider write.
+  Product, cutoff eligibility, or rollout drift is persisted as a failed
+  operation and emits no Viva write.
 - Exact PITER/HUB products that are not enabled keep the ordinary Friendship
   compatibility path; rollout-off alone does not invent a rejection or runtime
   dependency.
@@ -74,3 +80,12 @@ command and resulting compatibility error response are byte-for-byte equal.
 
 Production effects remain zero until a later separately authorized activation
 stage binds the runtime global and imports the reviewed exact candidate.
+
+## 2026-08-31 purchase-date amendment
+
+The purchase-date cutoff changes the tracked router source identity and therefore
+invalidates the older full-flow candidate digest recorded above. The old candidate
+must not be imported. A later deployment stage requires a new private read-only
+pull from `147`, a fresh exact preimage, rebuilt full-flow digest, validation and a
+separately approved reviewed-flow apply. This source checkpoint does not perform
+that rebind or any live operation.
