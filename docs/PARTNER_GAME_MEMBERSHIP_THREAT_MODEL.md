@@ -72,11 +72,16 @@ settlement. Viva является authority только для существо
 - Nonce создаётся majority insert с уникальным `_id`; duplicate переводится в
   `REQUEST_REPLAY_DETECTED`
   (`node-red/custom-nodes/partner-game-membership-api/partner-game-membership-mongo.mjs:164-183`).
-- Open/station/exercise/capacity gate fail-closed, transaction использует snapshot,
-  majority и primary
-  (`node-red/custom-nodes/partner-game-membership-api/partner-game-membership-mongo.mjs:67-118`).
-- Delete проверяет exact `_id + membershipId + clientId + gameId + ACTIVE` до provider
-  (`node-red/custom-nodes/partner-game-membership-api/partner-game-membership-mongo.mjs:394-433`).
+- Open/station/exercise/capacity gate fail-closed: archived, terminal/unknown lifecycle,
+  ended or schedule-less games and any explicit private/conflicting visibility signal
+  are rejected; canonical `PAID`/`PAYMENT_PENDING` records remain supported. Transaction
+  uses snapshot, majority and primary
+  (`node-red/custom-nodes/partner-game-membership-api/partner-game-membership-mongo.mjs`).
+- Delete проверяет exact `_id + membershipId + clientId + gameId + ACTIVE`, затем текущий
+  station allowlist по сохранённому `membership.stationId` до provider. Failure до
+  `VIVA_PENDING` меняет только operation/audit и не может изменить угаданный membership
+  (`node-red/custom-nodes/partner-game-membership-api/partner-game-membership-core.mjs`,
+  `node-red/custom-nodes/partner-game-membership-api/partner-game-membership-mongo.mjs`).
 - Локальное удаление использует `$pull` только по canonical membership ID, а operation,
   membership, audit и outbox завершаются в одной transaction
   (`node-red/custom-nodes/partner-game-membership-api/partner-game-membership-mongo.mjs:435-505`).
@@ -121,8 +126,9 @@ settlement. Viva является authority только для существо
 
 - Путь: передать guessed participant/Viva booking/user ID.
 - Контроли: DELETE принимает только membershipId; canonical row должна точно совпасть по
-  client/game/state; provider вызывается после этой проверки; projection source не даёт
-  права удаления.
+  client/game/state и текущему station allowlist; provider вызывается после этой
+  проверки; pre-authorization failure не меняет referenced membership; projection source
+  не даёт права удаления.
 - Остаток: Mongo RBAC должен запрещать клиенту прямой доступ к ownership collection.
 - Риск: low в API, high при чрезмерных DB credentials.
 
@@ -213,8 +219,16 @@ settlement. Viva является authority только для существо
 
 ## 5. Review status
 
-Проведён последовательный source-backed self-review по security, payment и reliability.
-Независимый reviewer в этой сессии не использовался; перед добавлением real Viva adapter
-и первой внешней публикацией требуется отдельный security reviewer, а перед активацией —
-payment-safety/reliability review. Текущий v0.1 не активирован и не способен выполнить
-реальную Viva mutation.
+Формальный diff scan `751503a0-1a8a-40e6-9df4-7d7ec3f47d59` нашёл два Medium/P2:
+DELETE не повторял station ACL, а POST использовал неполный open-game predicate. Оба
+attack path закрыты corrective patch и негативными тестами. Отдельный bypass/regression
+pass дополнительно обнаружил, что общий pre-authorization error path мог изменить
+referenced membership; теперь REMOVE меняет membership state только после успешного
+перехода в `VIVA_PENDING`.
+
+После исправления 35/35 focused tests, full lint без errors, production+dev build,
+syntax checks, Draw.io XML validation и diff-check прошли. Реальный Mongo replica,
+shared ingress и Viva sandbox остаются отдельными gates. Перед добавлением real Viva
+adapter и первой внешней публикацией требуется свежий security review, а перед
+активацией — payment-safety/reliability review. Текущий v0.1 не активирован и не способен
+выполнить реальную Viva mutation.

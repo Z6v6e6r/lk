@@ -17,6 +17,7 @@ import {
   MongoPartnerGameMembershipRepository,
   PARTNER_MEMBERSHIP_COLLECTIONS,
   PARTNER_MEMBERSHIP_INDEX_SPECS,
+  assertGameAllowsExternalMember,
   isIsolatedSyntheticRuntime,
   operationTouchesOnlyOwnedMembership,
 } from "../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-mongo.mjs";
@@ -29,6 +30,23 @@ const KEY_ID = "key-2026-09";
 const GAME_ID = "game-open-1";
 const STATION_ID = "station-spb-1";
 const TECHNICAL_CLIENT_ID = "viva-technical-client-1";
+
+const openGame = (overrides = {}) => ({
+  id: GAME_ID,
+  status: "PAID",
+  archived: false,
+  settings: { isPrivate: false },
+  stationId: STATION_ID,
+  exerciseId: "viva-exercise-1",
+  maxPlayers: 4,
+  participants: [],
+  payments: [],
+  booking: {
+    startTs: NOW.getTime() + 60_000,
+    endTs: NOW.getTime() + 3_600_000,
+  },
+  ...overrides,
+});
 
 const addBody = (overrides = {}) => ({
   externalPlayerId: "partner-player-001",
@@ -49,16 +67,7 @@ class MemoryRepository {
     this.operationByIdempotency = new Map();
     this.memberships = new Map();
     this.audit = [];
-    this.games = new Map([[GAME_ID, {
-      id: GAME_ID,
-      status: "OPEN",
-      isPublic: true,
-      stationId: STATION_ID,
-      exerciseId: "viva-exercise-1",
-      maxPlayers: 4,
-      participants: [],
-      payments: [],
-    }]]);
+    this.games = new Map([[GAME_ID, openGame()]]);
   }
 
   async consumeNonce(input) {
@@ -95,9 +104,7 @@ class MemoryRepository {
   async reserveAdd(input) {
     const operation = this.operations.get(input.operationId);
     const game = this.games.get(input.gameId);
-    if (!game) throw new PartnerApiError("GAME_NOT_FOUND", "missing", { httpStatus: 404 });
-    if (!game.isPublic || game.status !== "OPEN") throw new PartnerApiError("GAME_NOT_OPEN", "closed", { httpStatus: 409 });
-    if (!input.allowedStationIds.includes(game.stationId)) throw new PartnerApiError("STATION_ACCESS_DENIED", "denied", { httpStatus: 403 });
+    const gameInfo = assertGameAllowsExternalMember(game, input.allowedStationIds, input.now);
     if (game.participants.length >= game.maxPlayers) throw new PartnerApiError("GAME_FULL", "full", { httpStatus: 409 });
     const duplicate = [...this.memberships.values()].find((membership) => (
       membership.clientId === input.clientId
@@ -120,14 +127,14 @@ class MemoryRepository {
       displayName: input.displayName,
       payment: input.payment,
       generation: 1,
-      exerciseId: game.exerciseId,
-      stationId: game.stationId,
+      exerciseId: gameInfo.exerciseId,
+      stationId: gameInfo.stationId,
       operationId: input.operationId,
       state: "SLOT_RESERVED",
     };
     this.memberships.set(membershipId, membership);
     Object.assign(operation, { state: "SLOT_RESERVED", membershipId, updatedAt: input.now });
-    return { membershipId, exerciseId: game.exerciseId, stationId: game.stationId };
+    return { membershipId, exerciseId: gameInfo.exerciseId, stationId: gameInfo.stationId };
   }
 
   async completeAdd(input) {
@@ -177,6 +184,11 @@ class MemoryRepository {
       || membership.state !== "ACTIVE") {
       throw new PartnerApiError("MEMBERSHIP_NOT_OWNED", "not owned", { httpStatus: 403 });
     }
+    if (!membership.stationId
+      || !Array.isArray(input.allowedStationIds)
+      || !input.allowedStationIds.includes(membership.stationId)) {
+      throw new PartnerApiError("STATION_ACCESS_DENIED", "denied", { httpStatus: 403 });
+    }
     membership.state = "REMOVAL_PENDING";
     membership.removalOperationId = input.operationId;
     const operation = this.operations.get(input.operationId);
@@ -214,10 +226,15 @@ class MemoryRepository {
 
   async failOperation(input) {
     const operation = this.operations.get(input.operationId);
+    const previousState = operation.state;
     Object.assign(operation, { state: "FAILED", publicError: { code: input.code }, updatedAt: input.now });
     const membership = this.memberships.get(operation.membershipId);
-    if (membership?.state === "REMOVAL_PENDING") membership.state = "ACTIVE";
-    else if (membership) membership.state = "FAILED";
+    const removeReachedProviderBoundary = operation.action === "REMOVE_MEMBER"
+      && previousState === "VIVA_PENDING";
+    if (membership && (operation.action !== "REMOVE_MEMBER" || removeReachedProviderBoundary)) {
+      if (membership.state === "REMOVAL_PENDING") membership.state = "ACTIVE";
+      else membership.state = "FAILED";
+    }
     return operation;
   }
 
@@ -302,6 +319,46 @@ test("canonical JSON is stable and rejects ambiguous numeric input", () => {
   assert.equal(canonicalJson({ z: 2, a: { y: true, x: [3, "v"] } }), '{"a":{"x":[3,"v"],"y":true},"z":2}');
   assert.throws(() => canonicalJson({ amount: 0.1 }), { code: "INVALID_JSON_NUMBER" });
   assert.throws(() => canonicalJson({ amount: Number.MAX_SAFE_INTEGER + 1 }), { code: "INVALID_JSON_NUMBER" });
+});
+
+test("canonical paid and pending public games remain joinable until their end time", () => {
+  for (const status of ["PAID", "PAYMENT_PENDING", "OPEN"]) {
+    assert.deepEqual(
+      assertGameAllowsExternalMember(openGame({ status }), [STATION_ID], NOW),
+      { stationId: STATION_ID, exerciseId: "viva-exercise-1", capacity: 4 },
+    );
+  }
+  assert.doesNotThrow(() => assertGameAllowsExternalMember(openGame({
+    booking: { startTs: NOW.getTime() - 60_000, endTs: NOW.getTime() },
+  }), [STATION_ID], NOW));
+});
+
+test("archived, ended, private, visibility-conflicted, and incomplete games fail closed", () => {
+  for (const game of [
+    openGame({ archived: true }),
+    openGame({ booking: { startTs: NOW.getTime() - 120_000, endTs: NOW.getTime() - 60_000 } }),
+    openGame({ settings: { isPrivate: true } }),
+    openGame({ settings: { isPrivate: false }, isPublic: false }),
+    openGame({ settings: { isPrivate: false }, public: false, isPublic: true }),
+    openGame({ settings: { isPrivate: "false" } }),
+    openGame({ status: "PAID", state: "CANCELLED" }),
+    openGame({ status: "" }),
+  ]) {
+    assert.throws(
+      () => assertGameAllowsExternalMember(game, [STATION_ID], NOW),
+      { code: "GAME_NOT_OPEN", httpStatus: 409 },
+    );
+  }
+  for (const game of [
+    openGame({ booking: {} }),
+    openGame({ booking: { startTs: NOW.getTime() + 60_000, endTs: null } }),
+    openGame({ booking: { startTs: NOW.getTime() + 60_000, endTs: "not-a-timestamp" } }),
+  ]) {
+    assert.throws(
+      () => assertGameAllowsExternalMember(game, [STATION_ID], NOW),
+      { code: "GAME_SCHEDULE_UNKNOWN", httpStatus: 409 },
+    );
+  }
 });
 
 test("published cross-team signature vector remains stable", () => {
@@ -489,6 +546,26 @@ test("only the exact membership created by the same client can be removed", asyn
   assert.equal(fixture.repository.games.get(GAME_ID).participants.length, 0);
 });
 
+test("station access is re-evaluated before delete and revocation prevents every Viva call", async () => {
+  const repository = new MemoryRepository();
+  const provider = new CountingProvider();
+  const owner = buildFixture({ repository, provider });
+  const added = await owner.service.handle(signedRequest());
+  const restricted = buildFixture({ repository, provider, stationIds: ["station-revoked"] });
+  const request = signedRequest({
+    method: "DELETE",
+    path: `/lk/integrations/v1/open-games/${GAME_ID}/members/${added.body.membership.membershipId}`,
+    body: {},
+  });
+  await assert.rejects(
+    () => restricted.service.handle(request),
+    { code: "STATION_ACCESS_DENIED", httpStatus: 403 },
+  );
+  assert.equal(provider.removeCalls, 0);
+  assert.equal(repository.memberships.get(added.body.membership.membershipId).state, "ACTIVE");
+  assert.equal(repository.games.get(GAME_ID).participants.length, 1);
+});
+
 test("deleting an LK or Viva participant without a canonical partner ownership row never calls Viva", async () => {
   const fixture = buildFixture();
   fixture.repository.games.get(GAME_ID).participants.push({ id: "lk-user-1", source: "LK" });
@@ -517,6 +594,8 @@ test("another integration client cannot delete the first client's membership", a
   });
   await assert.rejects(() => attacker.service.handle(request), { code: "MEMBERSHIP_NOT_OWNED", httpStatus: 403 });
   assert.equal(provider.removeCalls, 0);
+  assert.equal(repository.memberships.get(added.body.membership.membershipId).state, "ACTIVE");
+  assert.equal(repository.games.get(GAME_ID).participants.length, 1);
 });
 
 test("ambiguous Viva outcome is fenced as UNKNOWN and is not automatically retried", async () => {
@@ -688,6 +767,96 @@ test("Mongo prerequisite verifier rejects partial, collated, hidden, and otherwi
     const repository = new MongoPartnerGameMembershipRepository({ client: {}, db });
     await assert.rejects(() => repository.verifyRequiredIndexes(), { code: "MONGO_PREREQUISITES_MISSING" });
   }
+});
+
+test("Mongo remove guard rejects a revoked station before any membership or operation mutation", async () => {
+  let membershipUpdates = 0;
+  let operationUpdates = 0;
+  const session = { async endSession() {} };
+  const db = {
+    collection(name) {
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.memberships) {
+        return {
+          async findOne() {
+            return {
+              _id: "membership-1",
+              membershipId: "membership-1",
+              clientId: CLIENT_ID,
+              gameId: GAME_ID,
+              stationId: STATION_ID,
+              state: "ACTIVE",
+              bookingId: "booking-1",
+              exerciseId: "exercise-1",
+              technicalVivaClientId: TECHNICAL_CLIENT_ID,
+            };
+          },
+          async updateOne() { membershipUpdates += 1; return { modifiedCount: 1 }; },
+        };
+      }
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.operations) {
+        return {
+          async findOne() { return { _id: "operation-1", state: "RECEIVED" }; },
+          async updateOne() { operationUpdates += 1; return { modifiedCount: 1 }; },
+        };
+      }
+      throw new Error(`Unexpected collection ${name}`);
+    },
+  };
+  const repository = new MongoPartnerGameMembershipRepository({
+    client: { startSession: () => session },
+    db,
+    transactionExecutor: async (_session, callback) => callback(),
+  });
+  await assert.rejects(() => repository.prepareRemove({
+    operationId: "operation-1",
+    clientId: CLIENT_ID,
+    gameId: GAME_ID,
+    membershipId: "membership-1",
+    allowedStationIds: ["different-station"],
+    now: NOW,
+  }), { code: "STATION_ACCESS_DENIED", httpStatus: 403 });
+  assert.equal(membershipUpdates, 0);
+  assert.equal(operationUpdates, 0);
+});
+
+test("failed pre-authorization DELETE cannot change the referenced membership state", async () => {
+  let membershipUpdates = 0;
+  let operationUpdates = 0;
+  let auditWrites = 0;
+  const operation = {
+    _id: "operation-1",
+    operationId: "operation-1",
+    action: "REMOVE_MEMBER",
+    state: "RECEIVED",
+    membershipId: "foreign-membership",
+  };
+  const session = { async endSession() {} };
+  const db = {
+    collection(name) {
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.operations) {
+        return {
+          async findOne() { return { ...operation, state: operationUpdates ? "FAILED" : "RECEIVED" }; },
+          async updateOne() { operationUpdates += 1; return { modifiedCount: 1 }; },
+        };
+      }
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.memberships) {
+        return { async updateOne() { membershipUpdates += 1; return { modifiedCount: 1 }; } };
+      }
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.audit) {
+        return { async insertOne() { auditWrites += 1; return { acknowledged: true }; } };
+      }
+      throw new Error(`Unexpected collection ${name}`);
+    },
+  };
+  const repository = new MongoPartnerGameMembershipRepository({
+    client: { startSession: () => session },
+    db,
+    transactionExecutor: async (_session, callback) => callback(),
+  });
+  await repository.failOperation({ operationId: "operation-1", code: "STATION_ACCESS_DENIED", now: NOW });
+  assert.equal(operationUpdates, 1);
+  assert.equal(auditWrites, 1);
+  assert.equal(membershipUpdates, 0);
 });
 
 test("ownership helper requires an exact client, game, membership, and active state", () => {

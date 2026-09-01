@@ -507,6 +507,7 @@ export class PartnerGameMembershipApiService {
         clientId: auth.clientId,
         gameId: route.gameId,
         membershipId: route.membershipId,
+        allowedStationIds: auth.stationIds,
         now: this.now(),
       });
       try {

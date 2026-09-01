@@ -175,7 +175,12 @@ Server-only keyring задаёт для каждого клиента:
 - глобальный kill switch `LK_PARTNER_GAME_API_ENABLED` должен быть ровно `true`;
 - client и key должны быть включены;
 - для маршрута нужен отдельный scope;
-- station игры должна входить в `stationIds`;
+- station игры должна входить в `stationIds` как при POST, так и при DELETE; DELETE
+  повторно сверяет текущий allowlist с `stationId` canonical membership внутри Mongo
+  transaction до любого provider-вызова;
+- POST принимает только неархивную игру с непротиворечивой public/private видимостью,
+  известным joinable status (`PAID`, `PAYMENT_PENDING` или поддерживаемый legacy open
+  status) и каноническим `booking.endTs`, либо `booking.startTs`, не ранее server time;
 - Mongo prerequisites должны совпасть без ослабленных индексов;
 - v0.1 не содержит real Viva provider, поэтому shared/prod mutation всегда fail-closed;
 - synthetic provider разрешён только для `local|test|dev`, loopback Mongo и имени БД с
@@ -195,9 +200,11 @@ exerciseId + technicalVivaClientId + bookingId + state + operationId
 
 Источник в массиве `game.participants` — только проекция, а не разрешение на удаление.
 Перед Viva DELETE транзакция требует точного совпадения `membershipId`, `clientId`,
-`gameId`, состояния `ACTIVE` и полной Viva binding. При любом несовпадении provider
-не вызывается. После подтверждённого Viva read-back локальный `$pull` использует только
-`membershipId`; телефон, имя и caller-supplied Viva ID не участвуют.
+`gameId`, состояния `ACTIVE`, текущего разрешения на сохранённый `stationId` и полной
+Viva binding. При любом несовпадении provider не вызывается, а pre-authorization failure
+не меняет состояние даже угаданного чужого membership. После подтверждённого Viva
+read-back локальный `$pull` использует только `membershipId`; телефон, имя и
+caller-supplied Viva ID не участвуют.
 
 ## 6. Состояния и неоднозначные результаты
 
@@ -257,8 +264,10 @@ npm run test:partner-game-membership-api
 
 Тесты не обращаются в Viva и production Mongo. Они проверяют happy path, PAID projection,
 replay, tamper, expired timestamp, idempotent retry, idempotency conflict, scopes,
-station allowlist, запрет удаления LK/Viva/другого клиента, `UNKNOWN`, audit redaction,
-closed schema, default-off provider и source-only flow builder.
+station allowlist на POST и DELETE, archived/ended/private/conflicting/missing-lifecycle
+game states, запрет удаления LK/Viva/другого клиента, отсутствие mutation при
+pre-authorization failure, `UNKNOWN`, audit redaction, closed schema, default-off
+provider и source-only flow builder.
 
 ## 10. Подготовка flow-кандидата
 

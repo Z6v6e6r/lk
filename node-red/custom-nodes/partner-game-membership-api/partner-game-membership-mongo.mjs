@@ -34,7 +34,14 @@ export const PARTNER_MEMBERSHIP_INDEX_SPECS = Object.freeze({
   ],
 });
 
-const ACTIVE_GAME_STATUSES = new Set(["OPEN", "PUBLISHED", "ACTIVE", "CREATED", ""]);
+const JOINABLE_GAME_STATUSES = new Set([
+  "OPEN",
+  "PUBLISHED",
+  "ACTIVE",
+  "CREATED",
+  "PAID",
+  "PAYMENT_PENDING",
+]);
 const ACTIVE_MEMBER_STATES = new Set(["SLOT_RESERVED", "VIVA_PENDING", "ACTIVE", "REMOVAL_PENDING", "UNKNOWN"]);
 
 const isDuplicateKey = (error) => Number(error?.code) === 11000;
@@ -85,11 +92,36 @@ const activeParticipants = (game) => asArray(game?.participants).filter((partici
   return status !== "LEFT" && status !== "REMOVED" && status !== "CANCELLED";
 });
 
-const assertGameAllowsExternalMember = (game, allowedStationIds) => {
+export const assertGameAllowsExternalMember = (game, allowedStationIds, now = new Date()) => {
   if (!game) throw new PartnerApiError("GAME_NOT_FOUND", "Game not found", { httpStatus: 404 });
-  const status = toText(game.status || game.state).toUpperCase();
-  const explicitlyOpen = game?.settings?.isPrivate === false || game?.isPublic === true || game?.public === true;
-  if (!explicitlyOpen || !ACTIVE_GAME_STATUSES.has(status)) {
+  const statuses = [game.status, game.state]
+    .map((value) => toText(value).toUpperCase())
+    .filter(Boolean);
+  const visibilitySignals = [];
+  if (typeof game?.settings?.isPrivate === "boolean") visibilitySignals.push(!game.settings.isPrivate);
+  if (typeof game?.isPublic === "boolean") visibilitySignals.push(game.isPublic);
+  if (typeof game?.public === "boolean") visibilitySignals.push(game.public);
+  const invalidVisibility = [game?.settings?.isPrivate, game?.isPublic, game?.public]
+    .some((value) => value !== null && value !== undefined && typeof value !== "boolean");
+  const hasPrivateOrConflictingVisibility = invalidVisibility
+    || visibilitySignals.some((isPublic) => !isPublic);
+  const hasInvalidLifecycle = statuses.length === 0
+    || statuses.some((status) => !JOINABLE_GAME_STATUSES.has(status));
+  if (game.archived === true || hasPrivateOrConflictingVisibility || hasInvalidLifecycle) {
+    throw new PartnerApiError("GAME_NOT_OPEN", "Only an open game can accept integration members", { httpStatus: 409 });
+  }
+  const booking = game?.booking && typeof game.booking === "object" ? game.booking : {};
+  const endTsPresent = Object.prototype.hasOwnProperty.call(booking, "endTs");
+  const startTsPresent = Object.prototype.hasOwnProperty.call(booking, "startTs");
+  const joinableUntilRaw = endTsPresent ? booking.endTs : (startTsPresent ? booking.startTs : null);
+  const joinableUntil = joinableUntilRaw === null || joinableUntilRaw === undefined || joinableUntilRaw === ""
+    ? Number.NaN
+    : Number(joinableUntilRaw);
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  if (!Number.isFinite(joinableUntil) || !Number.isFinite(nowMs)) {
+    throw new PartnerApiError("GAME_SCHEDULE_UNKNOWN", "Game schedule is not available", { httpStatus: 409 });
+  }
+  if (joinableUntil < nowMs) {
     throw new PartnerApiError("GAME_NOT_OPEN", "Only an open game can accept integration members", { httpStatus: 409 });
   }
   const stationId = gameStationId(game);
@@ -234,7 +266,7 @@ export class MongoPartnerGameMembershipRepository {
         const operation = await operations.findOne({ _id: input.operationId, state: "RECEIVED" }, { session });
         if (!operation) throw new PartnerApiError("OPERATION_STATE_CONFLICT", "Operation is not reservable", { httpStatus: 409 });
         const game = await games.findOne(gameIdentifierFilter(input.gameId), { session });
-        const gameInfo = assertGameAllowsExternalMember(game, input.allowedStationIds);
+        const gameInfo = assertGameAllowsExternalMember(game, input.allowedStationIds, input.now);
         const pendingCount = await memberships.countDocuments({
           gameId: input.gameId,
           $or: [
@@ -408,6 +440,11 @@ export class MongoPartnerGameMembershipRepository {
         if (!membership) {
           throw new PartnerApiError("MEMBERSHIP_NOT_OWNED", "Only an active membership created by this integration client can be removed", { httpStatus: 403 });
         }
+        if (!membership.stationId
+          || !Array.isArray(input.allowedStationIds)
+          || !input.allowedStationIds.includes(membership.stationId)) {
+          throw new PartnerApiError("STATION_ACCESS_DENIED", "Integration client cannot mutate this station", { httpStatus: 403 });
+        }
         if (!membership.bookingId || !membership.exerciseId || !membership.technicalVivaClientId) {
           throw new PartnerApiError("MEMBERSHIP_BINDING_INCOMPLETE", "Owned membership has no exact Viva binding", { httpStatus: 409 });
         }
@@ -528,10 +565,11 @@ export class MongoPartnerGameMembershipRepository {
           { $set: { state, publicError: { code: input.code }, updatedAt: input.now } },
           { session },
         );
-        if (operation.membershipId) {
+        const removeReachedProviderBoundary = operation.action === "REMOVE_MEMBER"
+          && operation.state === "VIVA_PENDING";
+        if (operation.membershipId && (operation.action !== "REMOVE_MEMBER" || removeReachedProviderBoundary)) {
           const removalFailedBeforeProviderMutation = releaseReservation
-            && operation.action === "REMOVE_MEMBER"
-            && operation.state === "VIVA_PENDING";
+            && removeReachedProviderBoundary;
           const update = removalFailedBeforeProviderMutation
             ? { $set: { state: "ACTIVE", updatedAt: input.now }, $unset: { removalOperationId: "" } }
             : { $set: { state, updatedAt: input.now } };

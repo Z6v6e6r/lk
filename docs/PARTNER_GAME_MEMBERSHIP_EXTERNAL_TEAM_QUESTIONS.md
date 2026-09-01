@@ -98,10 +98,14 @@ trusted-proxy схема и DDoS/rate-limit значения. HMAC не пред
 - Какая величина является capacity и что делать, если место занято между Viva add и
   local commit?
 - Разрешён ли waitlist через эту интеграцию? В v0.1 — нет.
-- Какой момент закрывает игру для новых участников?
+- Какие exact поля и значения являются каноническими для public/private, archived и
+  lifecycle? Локальный v0.1 принимает `PAID`, `PAYMENT_PENDING` и перечисленные legacy
+  open statuses, но конфликтующие visibility flags отклоняет.
+- Какой момент закрывает игру для новых участников: start, end либо отдельный join
+  cutoff? Какой server clock/timezone является authority?
 
-**Нужно получить:** единый capacity invariant и согласованный compensation/manual
-reconciliation сценарий.
+**Нужно получить:** единый joinability/capacity invariant с примерами реальных payload,
+authority времени и согласованный compensation/manual reconciliation сценарий.
 
 ## P1 — блокирует ограниченный пилот
 

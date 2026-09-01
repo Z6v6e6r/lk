@@ -29,7 +29,12 @@ secret change, migration, deploy, activation или real provider mutation.
 | Payment claim | Один payment reference для двух игроков | `409 PAYMENT_REFERENCE_ALREADY_CLAIMED`, Viva calls остаются 1 |
 | ACL | Нет scope add/remove/read | `403 SCOPE_DENIED` |
 | Tenant | Игра другой station | `403 STATION_ACCESS_DENIED` |
+| Tenant revoke | Station удалена из allowlist после POST, затем DELETE | `403 STATION_ACCESS_DENIED`, Viva calls 0, membership остаётся `ACTIVE` |
+| Open-game state | Игра archived/ended/private либо visibility fields конфликтуют | `409 GAME_NOT_OPEN`, Viva calls 0 |
+| Open-game lifecycle | Нет status или канонического `booking.endTs/startTs` | `409 GAME_NOT_OPEN/GAME_SCHEDULE_UNKNOWN`, Viva calls 0 |
+| Compatibility | Реальная форма `PAID`/`PAYMENT_PENDING`, public, future end | POST остаётся разрешённым |
 | Ownership | DELETE чужого/LK/Viva membership | `403 MEMBERSHIP_NOT_OWNED`, Viva calls 0 |
+| Failed DELETE isolation | Pre-authorization failure с существующим чужим membershipId | Меняется только operation/audit; membership и roster не меняются |
 | Provider ambiguity | Timeout/неверный read-back | `202 UNKNOWN`, автоматического повтора нет |
 | Lost ACK/local commit | Provider мог изменить state либо Mongo commit не подтверждён | `202 UNKNOWN`, reservation сохраняется |
 | Schema | Caller передаёт `paid/source/vivaBookingId/clientId` | `400 UNKNOWN_REQUEST_FIELD` |
