@@ -28,7 +28,12 @@ test("flow patcher adds only the three separate M2M routes and one fail-closed h
     ["get", "/lk/integrations/v1/operations/:operationId"],
   ]);
   assert.ok(routes.every((node) => node.wires[0][0] === PARTNER_API_FLOW_NODE_IDS.handler));
-  assert.equal(result.flow.find((node) => node.id === PARTNER_API_FLOW_NODE_IDS.store).enabledEnv, "LK_PARTNER_GAME_API_ENABLED");
+  const store = result.flow.find((node) => node.id === PARTNER_API_FLOW_NODE_IDS.store);
+  assert.equal(store.enabledEnv, "LK_PARTNER_GAME_API_ENABLED");
+  assert.equal(store.vivaMutationsEnabledEnv, "LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED");
+  assert.equal(store.vivaContractRevisionEnv, "LK_PARTNER_GAME_API_VIVA_CONTRACT_REVISION");
+  assert.equal(store.vivaIdempotencyConfirmedEnv, "LK_PARTNER_GAME_API_VIVA_IDEMPOTENCY_CONFIRMED");
+  assert.equal(store.vivaOnPlaceConfirmedEnv, "LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED");
   assert.equal(source.length, 2, "source preimage must remain unchanged");
 });
 
@@ -62,6 +67,7 @@ test("candidate builder requires an exact live-source digest and never writes in
   fs.writeFileSync(input, bytes);
   const digest = crypto.createHash("sha256").update(bytes).digest("hex");
   const manifest = buildCandidateFile({ input, output, sourceSha256: digest, sourceTabLabel: "LK Games" });
+  assert.equal(manifest.artifact, "partner-game-membership-api-v0.2-candidate");
   assert.equal(manifest.deploymentPerformed, false);
   assert.equal(manifest.activationPerformed, false);
   assert.equal(manifest.source.sha256, digest);

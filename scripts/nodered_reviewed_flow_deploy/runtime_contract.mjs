@@ -36,20 +36,26 @@ const withoutWires = (node) => {
   return result;
 };
 
-const assertHttpInputsPreservedExceptWires = (liveFlow, candidateFlow) => {
+const assertHttpInputsPreservedExceptWires = (liveFlow, candidateFlow, allowedAdditionIds = []) => {
   const liveRoutes = liveFlow.filter((node) => node.type === "http in");
   const candidateRoutes = candidateFlow.filter((node) => node.type === "http in");
   const liveById = new Map(liveRoutes.map((node) => [node.id, node]));
   const candidateById = new Map(candidateRoutes.map((node) => [node.id, node]));
   const liveIds = [...liveById.keys()].sort();
-  const candidateIds = [...candidateById.keys()].sort();
-  if (!isDeepStrictEqual(liveIds, candidateIds)) throw new Error("Candidate changed HTTP routes");
+  const addedRouteIds = [...candidateById.keys()].filter((id) => !liveById.has(id)).sort();
+  const allowedAddedRouteIds = [...allowedAdditionIds]
+    .filter((id) => candidateById.get(id)?.type === "http in")
+    .sort();
+  if (!isDeepStrictEqual(addedRouteIds, allowedAddedRouteIds)) {
+    throw new Error("Candidate added unpinned HTTP routes");
+  }
+  if (liveIds.some((id) => !candidateById.has(id))) throw new Error("Candidate removed HTTP routes");
   for (const id of liveIds) {
     if (!isDeepStrictEqual(withoutWires(liveById.get(id)), withoutWires(candidateById.get(id)))) {
       throw new Error(`Candidate changed HTTP route identity or configuration: ${id}`);
     }
   }
-  return liveRoutes.length;
+  return candidateRoutes.length;
 };
 
 const assertDigest = (value, label) => {
@@ -139,10 +145,9 @@ export function buildExactGraphContract({
     (allowedAdditionIds || []).map((id) => String(id || "").trim()),
   )].sort();
   if (
-    !normalizedChanges.length
+    (!normalizedChanges.length && !normalizedAdditionIds.length)
     || normalizedChanges.some((change) => !change.id || !change.fields.length || change.fields.some((field) => !field))
     || new Set(normalizedChanges.map((change) => change.id)).size !== normalizedChanges.length
-    || !normalizedAdditionIds.length
     || normalizedAdditionIds.some((id) => !id)
     || normalizedAdditionIds.length !== (allowedAdditionIds || []).length
     || normalizedChanges.some((change) => normalizedAdditionIds.includes(change.id))
@@ -173,7 +178,11 @@ export function buildExactGraphContract({
   if (!isDeepStrictEqual(actualAdditionIds, normalizedAdditionIds)) {
     throw new Error(`Exact-graph added-node contract mismatch: ${actualAdditionIds.join(",")}`);
   }
-  const httpInputCount = assertHttpInputsPreservedExceptWires(liveFlow, candidateFlow);
+  const httpInputCount = assertHttpInputsPreservedExceptWires(
+    liveFlow,
+    candidateFlow,
+    normalizedAdditionIds,
+  );
 
   return {
     formatVersion: EXACT_GRAPH_CONTRACT_FORMAT_VERSION,

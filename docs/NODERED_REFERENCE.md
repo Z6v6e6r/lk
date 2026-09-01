@@ -1,6 +1,6 @@
 # 🔴 Node-RED Потоки — Справочник
 
-## Partner game membership API (source-only test v0.1)
+## Partner game membership API (deployable pilot v0.2, default-off)
 
 - Отдельный M2M namespace: `POST /lk/integrations/v1/open-games/:gameId/members`,
   `DELETE /lk/integrations/v1/open-games/:gameId/members/:membershipId`,
@@ -8,15 +8,19 @@
 - Custom node package: `node-red/custom-nodes/partner-game-membership-api/`; request HMAC,
   one-time nonce, idempotency, scopes/station allowlist, canonical ownership и audit
   выполняются внутри server-only runtime.
-- Source-only builder: `scripts/patch_partner_game_membership_api_flow.mjs`; требует
-  fresh live-flow SHA, запрещает in-place mutation и создаёт manifest с
-  `deploymentPerformed=false`/`activationPerformed=false`.
-- Real Viva provider в v0.1 отсутствует и fail-closed; synthetic provider разрешён
-  только с loopback Mongo в `local|test|dev`.
+- Private packet builder: `scripts/prepare_partner_game_membership_v02_packet.mjs`;
+  требует fresh verified live workspace и clean exact commit, pins additions-only flow
+  contract и custom-node package hashes, пишет только новый внешний `0700/0600` packet.
+- Real Viva provider pins Admin API v1 create/read/cancel calls, performs no mutation
+  retry and is fail-closed before operation until mutation/revision/idempotency/ON_PLACE
+  gates and server token are all ready. Synthetic provider remains loopback test-only.
+- Disposable replica rehearsal: `scripts/rehearse_partner_game_membership_mongo.mjs`;
+  accepts only loopback, replica discovery, exact `lk_partner_rehearsal_*` DB and ack.
 - Полный контракт, threat model, test plan и вопросы внешней команде:
   `docs/PARTNER_GAME_MEMBERSHIP_API.md`.
-- Route import, Mongo prerequisites, secrets, ingress/mTLS, real Viva adapter, deploy и
-  activation остаются отдельными R3/R4 gates.
+- Route import, package install/restart, Mongo production prerequisites, secrets,
+  ingress/mTLS, external Viva contract approval, deploy и activation остаются
+  отдельными R3/R4 gates.
 
 ## Legacy game command prerequisites
 

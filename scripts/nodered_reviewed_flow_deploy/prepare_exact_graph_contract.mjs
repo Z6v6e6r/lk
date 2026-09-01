@@ -31,8 +31,8 @@ if ([...values.keys()].some((key) => !allowed.has(key)) || [...allowed].some((ke
       + "--allow-change <id:field,field> [...] --allow-add <id> [...]",
   );
 }
-if (!allowedChanges.length || !allowedAdditionIds.length) {
-  throw new Error("At least one exact changed node and one exact added node are required");
+if (!allowedChanges.length && !allowedAdditionIds.length) {
+  throw new Error("At least one exact changed or added node is required");
 }
 
 const livePath = path.resolve(values.get("--live"));

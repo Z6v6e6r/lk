@@ -190,6 +190,17 @@ Patch-скрипты (scripts/patch_nodered_*.mjs) — сборка/патч flo
 | `support` | Диалоги поддержки, SLA, аналитика |
 | `max` | Webhook MAX-бота, очередь исходящих ответов |
 
+### Partner Game Membership API v0.2
+
+Отдельный server-only namespace `/lk/integrations/v1` не переиспользует browser/LK
+авторизацию. HMAC proof связывает method/path/canonical body/timestamp/nonce/idempotency;
+nonce majority-consumed до business operation. Mongo хранит canonical ownership, поэтому
+DELETE может затронуть только membership того же integration client, а не игрока из LK,
+Viva или админки. Real Viva adapter и новые routes default-off; deployable packet не
+авторизует установку или activation. Полный контракт и схема:
+`docs/PARTNER_GAME_MEMBERSHIP_API.md` и
+`docs/assets/partner-game-membership-security.drawio`.
+
 ### Каноническая модель результата игры
 
 - Источник истины для ввода результата хранится в `lk_games.resultRosterSnapshot`.

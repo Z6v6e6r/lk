@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | Pure unit | Канонизация, HMAC, timestamp, schema, route parsing | Mongo atomicity, Node-RED, Viva |
 | Service + in-memory repository | State machine, ownership, idempotency, synthetic provider | Реальная replica transaction и provider contract |
-| Source-only flow fixture | Отдельные routes, default-off config, exact-source builder | Совместимость с актуальным live flow |
+| Flow/packet fixture | Отдельные routes, default-off config, exact-source/added-node/package hashes | Совместимость с актуальным live flow и host runtime |
 | Mongo replica integration | unique/TTL/index options, write conflict, transaction/outbox | Viva и ingress |
 | Local Node-RED + loopback Mongo | HTTP headers, params, response, restart | Shared/prod topology |
 | Viva sandbox | Реальный add/read/remove технического клиента | Production payment/notification effects |
@@ -15,7 +15,7 @@
 Ни один уровень не подменяет следующий. Локальные green tests не разрешают import,
 secret change, migration, deploy, activation или real provider mutation.
 
-## Автоматизированная матрица v0.1
+## Автоматизированная матрица v0.2
 
 | Категория | Сценарий | Ожидание |
 | --- | --- | --- |
@@ -39,9 +39,16 @@ secret change, migration, deploy, activation или real provider mutation.
 | Lost ACK/local commit | Provider мог изменить state либо Mongo commit не подтверждён | `202 UNKNOWN`, reservation сохраняется |
 | Schema | Caller передаёт `paid/source/vivaBookingId/clientId` | `400 UNKNOWN_REQUEST_FIELD` |
 | Privacy | Audit после request | Нет raw nonce/IP/body/name/payment ref |
-| Runtime gate | Real provider в v0.1 | `503 VIVA_RUNTIME_NOT_CONFIGURED` |
+| Runtime readiness | Любой Viva gate/token отсутствует | `503` до operation/membership/provider call + durable rejected audit |
+| Viva create contract | Готовый adapter получает add | Один POST, pinned base/path/body, auth/idempotency/correlation headers |
+| Viva ambiguity | Network/timeout/5xx/invalid binding | `202 UNKNOWN`, ровно один mutation call, без retry |
+| Viva removal | Cancel probe не подтверждает cancellation-only | PUT не вызывается; definite contract mismatch |
+| Viva read-back | Duplicate booking identity | Ambiguous error, local completion запрещён |
 | Synthetic isolation | Не-loopback или production env/DB | Synthetic provider запрещён |
 | Flow provenance | Неверный live SHA/in-place/collision | Candidate builder падает |
+| Additions-only deploy | Новый pinned HTTP route/package bytes | Contract pins все seven nodes; unlisted node/route отклоняется |
+| Private packet | Fresh external workspace + exact repository identity | `0700/0600`, no authorization/deploy/activation, reproducible hashes |
+| Mongo rehearsal guard | Non-loopback/shared name/direct connection/bad ack | Отказ до Mongo import/connect |
 
 Команда:
 
@@ -58,6 +65,8 @@ npm run test:partner-game-membership-api
    - transaction transient retry без duplicate audit/outbox;
    - commit result unknown и majority read-back;
    - ослабленные `unique/sparse/TTL` indexes отклоняются.
+   - выполнить `mongo:partner-game-membership:rehearse` только для exact
+     `lk_partner_rehearsal_*`; сохранить replica/index/abort/no-sentinel evidence.
 2. Local Node-RED:
    - route params и exact path за reverse proxy;
    - body size/content-type limits;
@@ -70,6 +79,8 @@ npm run test:partner-game-membership-api
    - delete exact booking, already absent, exercise closed;
    - timeout до/после provider commit;
    - подтверждение отсутствия чеков, debt, notifications, subscription debit и rating.
+   - provider-side duplicate request с одинаковым `Idempotency-Key` возвращает тот же
+     booking identity либо документированный безопасный эквивалент без второго booking.
 4. Ingress:
    - mTLS/allowlist positive and negative;
    - rate limit по client/IP;
@@ -82,6 +93,8 @@ npm run test:partner-game-membership-api
 - все P0 вопросы закрыты и подписаны владельцами;
 - fresh `LK Games` snapshot и source SHA зафиксированы;
 - custom node package и candidate hashes воспроизводимы;
+- additions-only reviewed-flow apply и exact rollback/restart отрепетированы на
+  изолированной копии Node-RED; production packet получен только из clean pushed SHA;
 - Mongo replica tests green, backup/rollback/reconciliation rehearsed;
 - Viva sandbox matrix green с exact before/after evidence;
 - mTLS либо утверждённый IP allowlist включён;

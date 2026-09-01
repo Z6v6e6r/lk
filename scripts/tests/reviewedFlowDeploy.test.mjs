@@ -210,13 +210,23 @@ test("exact-graph contract permits only an explicitly pinned HTTP input wire cha
     url: "/lk/new",
     wires: [["policy"]],
   });
-  assert.throws(() => buildExactGraphContract({
+  const addedRouteContract = buildExactGraphContract({
     liveBytes,
     candidateBytes: bytes(addedRoute),
     deploymentId: "managed-subscription-rules",
     allowedChanges,
     allowedAdditionIds: ["policy", "new-route"],
-  }), /changed HTTP routes/);
+  });
+  assert.equal(addedRouteContract.httpInputCount, 2);
+  assert.deepEqual(addedRouteContract.allowedAdditions.map(({ id }) => id), ["new-route", "policy"]);
+
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(addedRoute),
+    deploymentId: "managed-subscription-rules",
+    allowedChanges,
+    allowedAdditionIds: ["policy"],
+  }), /added-node contract mismatch/);
 
   const removedRoute = candidate.filter((node) => node.id !== "route");
   assert.throws(() => buildExactGraphContract({

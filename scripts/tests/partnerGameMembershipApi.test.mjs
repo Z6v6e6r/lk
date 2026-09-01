@@ -672,8 +672,12 @@ test("closed request schema rejects caller-controlled source, paid flag, and Viv
 });
 
 test("real provider is fail-closed in the test release", async () => {
-  const { service } = buildFixture({ provider: new DisabledVivaProvider() });
+  const { service, repository } = buildFixture({ provider: new DisabledVivaProvider() });
   await assert.rejects(() => service.handle(signedRequest()), { code: "VIVA_RUNTIME_NOT_CONFIGURED", httpStatus: 503 });
+  assert.equal(repository.operations.size, 0, "provider readiness must fail before operation creation");
+  assert.equal(repository.memberships.size, 0, "provider readiness must fail before slot reservation");
+  assert.equal(repository.audit.at(-1)?.outcome, "REJECTED");
+  assert.equal(repository.audit.at(-1)?.code, "VIVA_RUNTIME_NOT_CONFIGURED");
 });
 
 test("Node-RED custom node registers and remains disabled before any Mongo connection", async () => {
