@@ -35,6 +35,25 @@ test("rapid Atlas replacements accept only the latest response", () => {
   assert.ok(coordinator.start("append"));
 });
 
+test("a stale append cannot block pagination after a replacement", () => {
+  const coordinator = createGameAtlasRequestCoordinator();
+  const staleAppend = coordinator.start("append");
+  assert.ok(staleAppend);
+
+  const replacement = coordinator.start("replace");
+  assert.ok(replacement);
+  coordinator.finish(replacement);
+
+  const currentAppend = coordinator.start("append");
+  assert.ok(currentAppend);
+  assert.equal(coordinator.isCurrent(currentAppend), true);
+
+  coordinator.finish(staleAppend);
+  assert.equal(coordinator.start("append"), null);
+  coordinator.finish(currentAppend);
+  assert.ok(coordinator.start("append"));
+});
+
 test("malformed records never become clickable Atlas cards", () => {
   const valid = {
     id: "game:valid",

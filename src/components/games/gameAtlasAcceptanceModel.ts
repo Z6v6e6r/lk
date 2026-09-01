@@ -34,13 +34,13 @@ const normalizeText = (value: unknown): string => String(value ?? "").trim();
 export function createGameAtlasRequestCoordinator(): GameAtlasRequestCoordinator {
   let generation = 0;
   let replaceInFlight = false;
-  let appendInFlight = false;
+  let appendGeneration: number | null = null;
 
   return {
     start(mode) {
       if (mode === "append") {
-        if (replaceInFlight || appendInFlight) return null;
-        appendInFlight = true;
+        if (replaceInFlight || appendGeneration === generation) return null;
+        appendGeneration = generation;
         return { generation, mode };
       }
 
@@ -53,7 +53,9 @@ export function createGameAtlasRequestCoordinator(): GameAtlasRequestCoordinator
     },
     finish(token) {
       if (token.mode === "append") {
-        appendInFlight = false;
+        if (appendGeneration === token.generation) {
+          appendGeneration = null;
+        }
         return;
       }
       if (token.generation === generation) {

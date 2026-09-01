@@ -66,10 +66,6 @@ export function hasDeterministicSubscriptionDecision(
   requestedPaymentMode: SubscriptionRequestedPaymentMode,
 ): boolean {
   const selectedMode = String(result.selectedPaymentMode || "").trim().toLowerCase();
-  if (requestedPaymentMode !== "subscription") {
-    return selectedMode !== "subscription";
-  }
-  if (selectedMode !== "subscription" && selectedMode !== "one_time") return false;
   if (!Number.isFinite(result.toPay) || result.toPay < 0) return false;
   if (result.toPayMinor != null && (!Number.isSafeInteger(result.toPayMinor) || result.toPayMinor < 0)) {
     return false;
@@ -79,6 +75,12 @@ export function hasDeterministicSubscriptionDecision(
   if (explicitAmountMinor === null) return false;
   const normalizedAmountMinor = result.toPayMinor ?? Math.round(result.toPay * 100);
   if (explicitAmountMinor !== normalizedAmountMinor) return false;
+
+  if (requestedPaymentMode !== "subscription") {
+    if (selectedMode !== "one_time") return false;
+    return Boolean(result.bookingId?.trim() || result.paymentUrl?.trim());
+  }
+  if (selectedMode !== "subscription" && selectedMode !== "one_time") return false;
 
   const state = readSubscriptionDecisionResultState(result.raw);
   if (state && !KNOWN_SUBSCRIPTION_RESULT_STATES.has(state)) return false;

@@ -88,6 +88,21 @@ test("API rejects successful-looking subscription responses without a determinis
     apiSource.match(/code: "RESPONSE_CONTRACT_INVALID", response: response\.data/g)?.length,
     2,
   );
+  const createRequest = apiSource.slice(
+    apiSource.indexOf("export async function apiCreatePadelSplitGamePayment"),
+    apiSource.indexOf("export async function apiCreatePadelSplitParticipantPayment"),
+  );
+  const joinRequest = apiSource.slice(
+    apiSource.indexOf("export async function apiCreatePadelSplitParticipantPayment"),
+    apiSource.indexOf("export async function apiCancelPadelSplitParticipantBookings"),
+  );
+  for (const requestSource of [createRequest, joinRequest]) {
+    const contractIndex = requestSource.indexOf("hasDeterministicSubscriptionDecision");
+    const settleIndex = requestSource.indexOf("markPadelSplitDecisionSettled");
+    assert.ok(contractIndex >= 0 && settleIndex > contractIndex);
+  }
+  assert.match(apiSource, /response\.error == null[\s\S]*?markAmbiguous/);
+  assert.match(apiSource, /window\.localStorage/);
 });
 
 test("server full-price fallback cannot be converted into a subscription booking by the client", () => {

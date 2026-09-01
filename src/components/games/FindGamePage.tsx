@@ -67,7 +67,9 @@ type FindGameListItem =
   | { kind: "game"; id: string; sortTs: number; game: PadelGameRecord }
   | { kind: "game-plus-trainer"; id: string; sortTs: number; training: GroupTrainingSummary };
 
-const PAGE_SIZE = 50;
+// Search and facets are client-side, so cover the complete supported public API
+// window before declaring a no-result state.
+const PAGE_SIZE = 500;
 const DAYS_BEFORE_TODAY = 0;
 const DAYS_AFTER_TODAY = 14;
 const DEFAULT_CABINET_URL = CABINET_URL;

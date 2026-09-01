@@ -7,6 +7,7 @@ const detailSource = fs.readFileSync("src/components/games/GameJoinPage.tsx", "u
 const styles = fs.readFileSync("src/MyApp.css", "utf8");
 
 test("Game Atlas keeps one real paginated games source", () => {
+  assert.match(atlasSource, /const PAGE_SIZE = 500;/);
   assert.match(atlasSource, /apiFetchPadelAvailableGames\(\{/);
   assert.match(atlasSource, /limit:\s*PAGE_SIZE/);
   assert.match(atlasSource, /offset:\s*nextOffset/);

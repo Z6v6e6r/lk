@@ -268,6 +268,22 @@ test("NS-MODE-MISMATCH: explicit subscription response to one-time request fails
   assert.equal(presentation.reasonCode, "CONFIRMED");
 });
 
+test("NS-CONTRACT: one-time success requires a known mode, exact amount and booking evidence", () => {
+  for (const invalid of [
+    result({ selectedPaymentMode: null, bookingId: "booking-legacy", raw: { ok: true, toPayMinor: 0 } }),
+    result({ selectedPaymentMode: "wire", raw: { ok: true, toPayMinor: 0 } }),
+    result({ selectedPaymentMode: "one_time", bookingId: null, paymentUrl: null }),
+  ]) {
+    const presentation = resolveSubscriptionDecisionPresentation({
+      action: "JOIN_GAME",
+      requestedPaymentMode: "one_time",
+      result: invalid,
+    });
+    assert.equal(presentation.kind, "TECHNICAL_ERROR");
+    assert.equal(presentation.subscriptionApplied, false);
+  }
+});
+
 for (const action of ["CREATE_GAME", "JOIN_GAME"] as const) {
   test(`AS-${action}: zero-price subscription action is explicitly allowed`, () => {
     const presentation = resolveSubscriptionDecisionPresentation({

@@ -38,6 +38,11 @@ import { isGameExerciseIdMissingGuard } from "./paymentSyncBookingResolution";
 import { shouldBlockLocalProductionTournamentHistoryRequest } from "./tournamentHistoryRequestPolicy";
 import { hasDeterministicSubscriptionDecision } from "./subscriptionDecisionContract.ts";
 import { isRequestTimeoutError, runWithAbortTimeout } from "./requestTimeout.ts";
+import { SplitPaymentAmbiguityGuard } from "./splitPaymentAmbiguityGuard.ts";
+import {
+  buildPadelAvailableGamesQuery,
+  type PadelAvailableGamesQueryOptions,
+} from "./gameAtlasAvailableGamesQuery.ts";
 
 const DEFAULT_GAMES_MASTER_SERVICE_ID =
   GAMES_MASTER_SERVICE_ID || "2f4155ad-7bc0-4a15-a12c-da7fce15c37a";
@@ -7044,44 +7049,11 @@ export async function apiFetchPadelGamesByPhone(
   };
 }
 
-export async function apiFetchPadelAvailableGames(options: {
-  limit?: number;
-  offset?: number;
-  date?: string | null;
-  stationId?: string | null;
-  stationName?: string | null;
-} = {}) {
+export async function apiFetchPadelAvailableGames(options: PadelAvailableGamesQueryOptions = {}) {
   const baseUrl = getServ2Origin() || "";
-  const limit = Number.isFinite(options.limit)
-    ? Math.max(1, Math.min(50, Math.floor(options.limit as number)))
-    : 12;
-  const offset = Number.isFinite(options.offset)
-    ? Math.max(0, Math.floor(options.offset as number))
-    : 0;
-  const query = new URLSearchParams({
-    public: "true",
-    available: "true",
-    limit: String(limit),
-    offset: String(offset),
+  const { query, limit, offset } = buildPadelAvailableGamesQuery(options, {
+    isDevReleaseChannel: IS_DEV_RELEASE_CHANNEL,
   });
-  const stationId = options.stationId?.trim() || "";
-  const stationName = options.stationName?.trim() || "";
-  const date = options.date?.trim() || "";
-
-  if (date) {
-    query.set("date", date);
-  }
-  if (stationId) {
-    query.set("stationId", stationId);
-    query.set("studioId", stationId);
-  }
-  if (stationName) {
-    query.set("stationName", stationName);
-    query.set("studioName", stationName);
-  }
-  if (!IS_DEV_RELEASE_CHANNEL) {
-    query.set("_ts", String(Date.now()));
-  }
 
   const endpoint = `/lk/games?${query.toString()}`;
   const response = await request<unknown>(endpoint, {
@@ -8827,12 +8799,113 @@ function buildPadelSplitRequest(
 }
 
 const PADEL_SPLIT_SUBSCRIPTION_TIMEOUT_MS = 10_000;
+const PADEL_SPLIT_AMBIGUOUS_STATES = new Set([
+  "PENDING_CONFIRMATION",
+  "SUBSCRIPTION_ENTITLEMENT_CONFIRMATION_PENDING",
+  "SUBSCRIPTION_ENTITLEMENT_CONFIRM_PENDING",
+  "SUBSCRIPTION_BOOKING_CONFIRMED_RECONCILIATION_REQUIRED",
+  "SUBSCRIPTION_ENTITLEMENT_CONFIRMED_RECONCILIATION_REQUIRED",
+]);
+let browserPadelSplitAmbiguityGuard: SplitPaymentAmbiguityGuard | null = null;
+
+function getBrowserPadelSplitAmbiguityGuard(): SplitPaymentAmbiguityGuard | null {
+  if (typeof window === "undefined") return null;
+  if (!browserPadelSplitAmbiguityGuard) {
+    let storage: Storage | null = null;
+    try {
+      storage = window.localStorage;
+    } catch {
+      storage = null;
+    }
+    browserPadelSplitAmbiguityGuard = new SplitPaymentAmbiguityGuard(storage);
+  }
+  return browserPadelSplitAmbiguityGuard;
+}
+
+function hashPadelSplitAmbiguityKey(value: string): string {
+  const hashPart = (source: string) => {
+    let hash = 2166136261;
+    for (let index = 0; index < source.length; index += 1) {
+      hash ^= source.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
+  };
+  return `${hashPart(value)}${hashPart([...value].reverse().join(""))}`;
+}
+
+function buildPadelSplitAmbiguityScope(
+  splitRequest: ReturnType<typeof buildPadelSplitRequest>,
+  params: PadelSplitPaymentParams,
+): string {
+  return hashPadelSplitAmbiguityKey([
+    splitRequest.path.split("?", 1)[0],
+    params.clientId,
+    params.clientPhone,
+    params.exerciseId,
+    params.date,
+    params.fromTime,
+    params.toTime,
+    params.roomId,
+  ].map((value) => String(value ?? "").trim()).join("|"));
+}
+
+function buildPadelSplitAmbiguityIntent(
+  splitRequest: ReturnType<typeof buildPadelSplitRequest>,
+  params: PadelSplitPaymentParams,
+): string {
+  return hashPadelSplitAmbiguityKey([
+    splitRequest.path,
+    params.paymentMode,
+    params.clientSubscriptionId,
+    params.spot,
+  ].map((value) => String(value ?? "").trim()).join("|"));
+}
+
+function markPadelSplitDecisionSettled(
+  splitRequest: ReturnType<typeof buildPadelSplitRequest>,
+  params: PadelSplitPaymentParams,
+): void {
+  getBrowserPadelSplitAmbiguityGuard()?.markSettled(
+    buildPadelSplitAmbiguityScope(splitRequest, params),
+    buildPadelSplitAmbiguityIntent(splitRequest, params),
+  );
+}
+
+function hasPadelSplitAmbiguousState(value: unknown, seen = new Set<unknown>()): boolean {
+  if (!value || seen.has(value)) return false;
+  if (typeof value === "string") {
+    return PADEL_SPLIT_AMBIGUOUS_STATES.has(value.trim().toUpperCase());
+  }
+  if (typeof value !== "object") return false;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((item) => hasPadelSplitAmbiguousState(item, seen));
+  }
+  return ["code", "state", "reasonCode", "details", "raw", "error", "data"]
+    .some((key) => hasPadelSplitAmbiguousState((value as Record<string, unknown>)[key], seen));
+}
 
 async function requestPadelSplitPayment(
   splitRequest: ReturnType<typeof buildPadelSplitRequest>,
   baseUrl: string,
   params: PadelSplitPaymentParams,
 ): Promise<ApiResult<unknown>> {
+  const ambiguityGuard = getBrowserPadelSplitAmbiguityGuard();
+  const ambiguityScope = buildPadelSplitAmbiguityScope(splitRequest, params);
+  const ambiguityIntent = buildPadelSplitAmbiguityIntent(splitRequest, params);
+  if (ambiguityGuard && !ambiguityGuard.canStart(ambiguityScope, ambiguityIntent)) {
+    return {
+      data: null,
+      error: {
+        status: 409,
+        message: "Предыдущая попытка ещё не подтверждена. Повторите тот же запрос.",
+        raw: { code: "SUBSCRIPTION_AMBIGUOUS_INTENT_LOCKED" },
+      },
+      status: 409,
+    };
+  }
+
   const requestOptions: RequestOptions = {
     method: "POST",
     baseUrl,
@@ -8842,15 +8915,27 @@ async function requestPadelSplitPayment(
   };
 
   if (params.paymentMode !== "subscription") {
-    return request<unknown>(splitRequest.path, requestOptions);
+    const response = await request<unknown>(splitRequest.path, requestOptions);
+    ambiguityGuard?.markSettled(ambiguityScope, ambiguityIntent);
+    return response;
   }
 
   try {
-    return await runWithAbortTimeout(
+    const response = await runWithAbortTimeout(
       PADEL_SPLIT_SUBSCRIPTION_TIMEOUT_MS,
       (signal) => request<unknown>(splitRequest.path, { ...requestOptions, signal }),
     );
+    const ambiguous = hasPadelSplitAmbiguousState(response.data)
+      || hasPadelSplitAmbiguousState(response.error?.raw)
+      || (response.error != null && ((response.status ?? 0) >= 500 || response.status === null));
+    if (ambiguous || response.error == null) {
+      ambiguityGuard?.markAmbiguous(ambiguityScope, ambiguityIntent);
+    } else {
+      ambiguityGuard?.markSettled(ambiguityScope, ambiguityIntent);
+    }
+    return response;
   } catch (error) {
+    ambiguityGuard?.markAmbiguous(ambiguityScope, ambiguityIntent);
     if (!isRequestTimeoutError(error)) throw error;
     return {
       data: null,
@@ -8931,6 +9016,9 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
       status: response.status,
     };
   }
+  if (params.paymentMode === "subscription") {
+    markPadelSplitDecisionSettled(splitRequest, params);
+  }
 
   return {
     data: parsed,
@@ -9007,6 +9095,9 @@ export async function apiCreatePadelSplitParticipantPayment(
       },
       status: response.status,
     };
+  }
+  if (params.paymentMode === "subscription") {
+    markPadelSplitDecisionSettled(splitRequest, params);
   }
 
   return {
