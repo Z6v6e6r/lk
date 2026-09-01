@@ -739,6 +739,66 @@ test("managed allowlist is UUID-normalized, deduplicated and deterministic", () 
   assert.equal(out[0]._subscriptionBooking.managedEnforcement.exactProductId, PITER_PRODUCT_ID);
 });
 
+test("managed enforcement accepts authoritative purchaseAt and rejects conflicting sale-date aliases", () => {
+  const purchaseAtOnly = managedExercise();
+  const subscription = purchaseAtOnly.availableClientSubscriptions[0] as Record<string, unknown>;
+  delete subscription.purchaseDate;
+  subscription.purchaseAt = MANAGED_PURCHASE_DATE;
+
+  const accepted = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: purchaseAtOnly,
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(accepted[0]._subscriptionBooking.managedEnforcement.enabled, true);
+  assert.equal(accepted[0]._subscriptionBooking.managedEnforcement.purchaseDate,
+    MANAGED_PURCHASE_DATE.slice(0, 10));
+
+  subscription.purchaseDate = MANAGED_PURCHASE_DATE;
+  const matchingAliases = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: purchaseAtOnly,
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(matchingAliases[0]._subscriptionBooking.managedEnforcement.enabled, true);
+
+  subscription.purchaseDate = "2026-08-31T23:59:59+03:00";
+  const rejected = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: purchaseAtOnly,
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(rejected[0]._subscriptionBooking.managedEnforcement.enabled, false);
+  assert.equal(rejected[0]._subscriptionBooking.managedEnforcement.purchaseDate, null);
+  assert.deepEqual(rejected[0]._subscriptionBooking.managedEnforcement.purchaseDateCandidates,
+    ["2026-08-31", MANAGED_PURCHASE_DATE.slice(0, 10)]);
+
+  subscription.purchaseAt = "not-a-date";
+  subscription.purchaseDate = MANAGED_PURCHASE_DATE;
+  const malformedAuthoritativeAlias = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: purchaseAtOnly,
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, MANAGED_GLOBALS);
+  assert.equal(malformedAuthoritativeAlias[0]._subscriptionBooking.managedEnforcement.enabled, false);
+  assert.equal(
+    malformedAuthoritativeAlias[0]._subscriptionBooking.managedEnforcement.purchaseDateEvidenceValid,
+    false,
+  );
+});
+
 test("malformed managed allowlist values fail closed before CUP or Viva writes", () => {
   for (const configured of ["not-json", ["not-a-uuid"], { productId: PITER_PRODUCT_ID }]) {
     const out = runFunction(ROUTER_FILE, {
@@ -1946,6 +2006,19 @@ test("final pre-write recheck rejects product or rollout drift without a Viva re
   assert.equal(changedPurchaseDate[3].payload[1].$set.failure.rawCode,
     "SUBSCRIPTION_PURCHASE_DATE_CHANGED_BEFORE_WRITE");
   assert.equal(changedPurchaseDate[0], null);
+
+  const changedPurchaseAlias = managedExercise();
+  changedPurchaseAlias.availableClientSubscriptions[0].purchaseAt =
+    "2026-08-31T23:59:59+03:00";
+  const changedPurchaseAt = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: changedPurchaseAlias,
+    _subscriptionBooking: structuredClone(managedContext),
+  }, MANAGED_GLOBALS);
+  assert.equal(changedPurchaseAt[3]._subscriptionBooking.step, "operation_fail");
+  assert.equal(changedPurchaseAt[3].payload[1].$set.failure.rawCode,
+    "SUBSCRIPTION_PURCHASE_DATE_CHANGED_BEFORE_WRITE");
+  assert.equal(changedPurchaseAt[0], null);
 });
 
 test("managed booking rechecks CUP identity and policy after preaccept before Viva write", () => {
@@ -2659,7 +2732,7 @@ test("guarded patcher accepts the exact current tracked split router", () => {
     ],
   };
 
-  assert.equal(funcSha256, "5f380562e98dd2f94a0197c498c94df12eb1797be0c3345bb21d8e4f051de7c9");
+  assert.equal(funcSha256, "7d2fff71ac5c0838da08413b74732c2e85d2042171dc3428ccc09dcf8dc97736");
   assert.equal(resolveManagedSubscriptionRouterContract(router, funcSha256)?.managedActionCandidateSha256, null);
 });
 

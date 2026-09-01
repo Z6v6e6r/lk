@@ -670,8 +670,13 @@ const collectExactProductIds = (value) => {
 
 const collectSubscriptionPurchaseDateEvidence = (value) => {
   const records = Array.isArray(value) ? value.filter(isObj) : isObj(value) ? [value] : [];
-  const rawDates = records.map((record) => record.purchaseDate);
-  const normalizedDates = rawDates.map(normalizePurchaseDateMoscow);
+  const normalizedDates = records.flatMap((record) => {
+    const aliases = [record.purchaseAt, record.purchaseDate]
+      .filter((date) => date !== null && date !== undefined && String(date).trim());
+    return aliases.length > 0
+      ? aliases.map(normalizePurchaseDateMoscow)
+      : [null];
+  });
   return {
     dates: [...new Set(normalizedDates.filter(Boolean))].sort(),
     invalid: normalizedDates.some((date) => date === null),

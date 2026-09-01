@@ -39,6 +39,9 @@ type RouterMessage = {
     paymentModes?: Array<{ productId?: string }>;
     transactionId?: string;
     paymentUrl?: string;
+    operationId?: string;
+    gameId?: string | null;
+    settlementState?: string;
     paymentType?: string;
     clientSubscriptionId?: string;
     count?: number;
@@ -877,6 +880,8 @@ test("transaction step preserves transactionId when Viva returns transactionId f
       paymentMode: "one_time",
       selectedPaymentMode: "one_time",
       paymentRef: "split-ref-3",
+      operationId: "split-operation-3",
+      gameId: "game-3",
       exerciseId: "exercise-3",
       bookingId: "booking-3",
       shareAmount: 2500,
@@ -901,6 +906,9 @@ test("transaction step preserves transactionId when Viva returns transactionId f
   assert.equal(responseMsg.statusCode, 201);
   assert.equal(responseMsg.payload?.transactionId, "tx-1");
   assert.equal(responseMsg.payload?.paymentUrl, "https://pay.example/tx-1");
+  assert.equal(responseMsg.payload?.operationId, "split-operation-3");
+  assert.equal(responseMsg.payload?.gameId, "game-3");
+  assert.equal(responseMsg.payload?.settlementState, "PAYMENT_REQUIRED");
 });
 
 test("transaction step blocks a payment URL when Viva returns a different amount", () => {

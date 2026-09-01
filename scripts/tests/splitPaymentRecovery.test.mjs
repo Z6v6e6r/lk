@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SOURCES = {
-  create: ['fn_split_create_prepare.js', '19a61024273a478f11bff3ff60c4601603c2af5bd7ec8ec08e4b83394ee7bd41', '6f7d6ec86432f5f3a50d0eb080df8847954841a9fc4637d79cf58fb2742fd689'],
-  join: ['fn_split_join_prepare.js', '70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462', 'be0faf9a53e9394b0b5236f011c720b09058829edf1360b3978963f1afc4954a'],
-  router: ['fn_split_router.js', 'cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a', '5f380562e98dd2f94a0197c498c94df12eb1797be0c3345bb21d8e4f051de7c9'],
+  create: ['fn_split_create_prepare.js', '19a61024273a478f11bff3ff60c4601603c2af5bd7ec8ec08e4b83394ee7bd41', '9457e347545348447aa2f83d0fb1e774b41f712769de5eafb66e82989d7ee4cc'],
+  join: ['fn_split_join_prepare.js', '70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462', '6a998ebe003239229ba1bff0ffae853d73e2b367867ab1a0cc1d79e161737261'],
+  router: ['fn_split_router.js', 'cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a', '7d2fff71ac5c0838da08413b74732c2e85d2042171dc3428ccc09dcf8dc97736'],
 };
 
 class FixedDate extends Date {

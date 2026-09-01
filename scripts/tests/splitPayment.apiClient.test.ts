@@ -260,7 +260,8 @@ test("all split requests authenticate and subscription requests add a stable COR
   const joinFunction = extractFunctionBlock("export async function apiCreatePadelSplitParticipantPayment");
 
   assert.match(requestHelper, /paymentMode !== "subscription"/);
-  assert.match(requestHelper, /return \{ path, options: \{ auth: true as const \} \}/);
+  assert.match(requestHelper, /return \{ path, options: \{ auth: true as const \}, operationId \}/);
+  assert.match(requestHelper, /String\(params\.paymentRef \|\| ""\)\.trim\(\)/);
   assert.match(requestHelper, /operationId=/);
   assert.match(requestHelper, /auth:\s*true as const/);
   assert.doesNotMatch(requestHelper, /Idempotency-Key/);

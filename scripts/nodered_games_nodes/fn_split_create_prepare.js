@@ -306,6 +306,7 @@ msg._splitCtx = {
   action: "create",
   step: "token",
   paymentRef,
+  operationId: toStr(msg.req?.query?.operationId) || paymentRef,
   date,
   fromTime,
   toTime,

@@ -3926,6 +3926,9 @@ export interface PadelSplitPaymentModeOption {
 
 export interface PadelSplitPaymentResult {
   paymentRef: string | null;
+  operationId?: string | null;
+  gameId?: string | null;
+  settlementState?: string | null;
   paymentUrl: string | null;
   toPay: number;
   toPayMinor: number | null;
@@ -8665,6 +8668,9 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
 
   return {
     paymentRef: pickString(data, ["paymentRef", "ref"]) ?? null,
+    operationId: pickString(data, ["operationId"]) ?? null,
+    gameId: pickString(data, ["gameId"]) ?? null,
+    settlementState: pickString(data, ["settlementState"]) ?? null,
     paymentUrl: extractPaymentUrl(data),
     toPay,
     toPayMinor,
@@ -8788,13 +8794,16 @@ function buildPadelSplitRequest(
   params: PadelSplitPaymentParams,
   gameId?: string | null,
 ) {
+  const operationId = params.paymentMode === "subscription"
+    ? buildPadelSplitIdempotencyKey(scope, params, gameId)
+    : String(params.paymentRef || "").trim();
   if (params.paymentMode !== "subscription") {
-    return { path, options: { auth: true as const } };
+    return { path, options: { auth: true as const }, operationId };
   }
-  const operationId = buildPadelSplitIdempotencyKey(scope, params, gameId);
   return {
     path: `${path}?operationId=${encodeURIComponent(operationId)}`,
     options: { auth: true as const },
+    operationId,
   };
 }
 
@@ -8957,8 +8966,9 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
   const fromTime = params.fromTime?.trim() || null;
   const toTime = params.toTime?.trim() || null;
   const clientPhone = params.clientPhone?.trim() || null;
+  const paymentRef = params.paymentRef?.trim() || null;
 
-  if (!studioId || !roomId || !fromDate || !fromTime || !toTime || !clientPhone) {
+  if (!studioId || !roomId || !fromDate || !fromTime || !toTime || !clientPhone || !paymentRef) {
     return {
       data: null as PadelSplitPaymentResult | null,
       error: {
@@ -9005,7 +9015,11 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
       status: response.status,
     };
   }
-  if (!hasDeterministicSubscriptionDecision(parsed, params.paymentMode)) {
+  if (!hasDeterministicSubscriptionDecision(parsed, params.paymentMode, {
+    action: "create",
+    paymentRef,
+    operationId: splitRequest.operationId,
+  })) {
     return {
       data: null as PadelSplitPaymentResult | null,
       error: {
@@ -9036,8 +9050,9 @@ export async function apiCreatePadelSplitParticipantPayment(
   const exerciseId = params.exerciseId?.trim() || null;
   const studioId = params.studioId?.trim() || null;
   const clientPhone = params.clientPhone?.trim() || null;
+  const paymentRef = params.paymentRef?.trim() || null;
 
-  if (!normalizedGameId || !exerciseId || !studioId || !clientPhone) {
+  if (!normalizedGameId || !exerciseId || !studioId || !clientPhone || !paymentRef) {
     return {
       data: null as PadelSplitPaymentResult | null,
       error: {
@@ -9085,7 +9100,13 @@ export async function apiCreatePadelSplitParticipantPayment(
       status: response.status,
     };
   }
-  if (!hasDeterministicSubscriptionDecision(parsed, params.paymentMode)) {
+  if (!hasDeterministicSubscriptionDecision(parsed, params.paymentMode, {
+    action: "join",
+    paymentRef,
+    operationId: splitRequest.operationId,
+    exerciseId,
+    gameId: normalizedGameId,
+  })) {
     return {
       data: null as PadelSplitPaymentResult | null,
       error: {

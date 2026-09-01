@@ -7,10 +7,14 @@ import {
   type SubscriptionDecisionAction,
   type SubscriptionDecisionKind,
 } from "../../src/utils/subscriptionDecisionUi.ts";
+import { hasDeterministicSubscriptionDecision } from "../../src/utils/subscriptionDecisionContract.ts";
 
 const result = (overrides: Partial<PadelSplitPaymentResult> = {}): PadelSplitPaymentResult => {
   const merged: PadelSplitPaymentResult = {
     paymentRef: "pay:test",
+    operationId: "operation:test",
+    gameId: "game:test",
+    settlementState: "CONFIRMED",
     paymentUrl: null,
     toPay: 0,
     toPayMinor: 0,
@@ -24,7 +28,7 @@ const result = (overrides: Partial<PadelSplitPaymentResult> = {}): PadelSplitPay
     exerciseId: "exercise:test",
     bookingId: "booking:test",
     productId: "product:test",
-    transactionId: null,
+    transactionId: "transaction:test",
     spot: 1,
     directionId: 4588,
     exerciseTypeId: 1613,
@@ -42,9 +46,20 @@ const result = (overrides: Partial<PadelSplitPaymentResult> = {}): PadelSplitPay
     ...overrides,
   };
   if (!("raw" in overrides)) {
+    const oneTime = merged.selectedPaymentMode === "one_time";
+    merged.settlementState = oneTime && (merged.toPayMinor ?? 0) > 0
+      ? "PAYMENT_REQUIRED"
+      : "CONFIRMED";
     merged.raw = {
       ok: true,
-      state: merged.selectedPaymentMode === "subscription" ? "CONFIRMED" : undefined,
+      state: oneTime ? undefined : "CONFIRMED",
+      mode: "join",
+      paymentRef: merged.paymentRef,
+      operationId: merged.operationId,
+      gameId: merged.gameId,
+      exerciseId: merged.exerciseId,
+      bookingId: merged.bookingId,
+      settlementState: merged.settlementState,
       toPayMinor: merged.toPayMinor ?? Math.round(merged.toPay * 100),
     };
   }
@@ -249,11 +264,43 @@ test("NS-JOIN: ordinary join never claims subscription", () => {
   const presentation = resolveSubscriptionDecisionPresentation({
     action: "JOIN_GAME",
     requestedPaymentMode: "one_time",
-    result: result({ toPay: 500, toPayMinor: 50_000, selectedPaymentMode: "one_time" }),
+    result: result({
+      toPay: 500,
+      toPayMinor: 50_000,
+      selectedPaymentMode: "one_time",
+      paymentUrl: "https://payments.invalid/join",
+    }),
   });
   assert.equal(presentation.kind, "ORDINARY_PAYMENT_ALLOWED");
   assert.equal(presentation.subscriptionApplied, false);
   assert.match(presentation.message, /Присоединение к игре.*500/);
+});
+
+test("NS-EXACT-EVIDENCE: one-time result is bound to action, target, operation and settlement", () => {
+  const valid = result({
+    selectedPaymentMode: "one_time",
+    toPay: 500,
+    toPayMinor: 50_000,
+    paymentUrl: "https://payments.invalid/exact",
+  });
+  const expected = {
+    action: "join" as const,
+    paymentRef: "pay:test",
+    operationId: "operation:test",
+    exerciseId: "exercise:test",
+    gameId: "game:test",
+  };
+  assert.equal(hasDeterministicSubscriptionDecision(valid, "one_time", expected), true);
+  for (const changed of [
+    { operationId: "operation:other" },
+    { gameId: "game:other" },
+    { exerciseId: "exercise:other" },
+    { settlementState: "SETTLED_OTHER_OPERATION" },
+    { transactionId: null },
+    { paymentUrl: null },
+  ]) {
+    assert.equal(hasDeterministicSubscriptionDecision({ ...valid, ...changed }, "one_time", expected), false);
+  }
 });
 
 test("NS-MODE-MISMATCH: explicit subscription response to one-time request fails closed", () => {
@@ -324,8 +371,17 @@ test("LIMIT_ENFORCEMENT: server full-price fallback is never shown as a subscrip
       selectedPaymentMode: "one_time",
       toPay: 1_500,
       toPayMinor: 150_000,
+      paymentUrl: "https://payments.invalid/fallback",
+      settlementState: "PAYMENT_REQUIRED",
       raw: {
         state: "FULL_PRICE_WITHOUT_SUBSCRIPTION",
+        mode: "create",
+        paymentRef: "pay:test",
+        operationId: "operation:test",
+        gameId: "game:test",
+        exerciseId: "exercise:test",
+        bookingId: "booking:test",
+        settlementState: "PAYMENT_REQUIRED",
         toPayMinor: 150_000,
         blockers: [{ code: "ACTIVE_SERVICES_LIMIT_REACHED" }],
       },
