@@ -33,6 +33,7 @@ import piterSubscriptionTier1Image from "../../assets/piter-subscription-tier-1.
 import piterSubscriptionTier2Image from "../../assets/piter-subscription-tier-2.webp";
 import piterSubscriptionTier3Image from "../../assets/piter-subscription-tier-3.webp";
 import piterSubscriptionTier4Image from "../../assets/piter-subscription-tier-4.webp";
+import piterSubscriptionRulesFrom20260901Image from "../../assets/piter-subscription-rules-from-20260901.webp";
 import kotelnikiSubscriptionTier1Image from "../../assets/kotelniki-subscription-tier-1.webp";
 import kotelnikiSubscriptionTier2Image from "../../assets/kotelniki-subscription-tier-2.webp";
 import kotelnikiSubscriptionTier3Image from "../../assets/kotelniki-subscription-tier-3.webp";
@@ -102,6 +103,9 @@ interface DisplayPlanConfig {
   guardedStorefrontKicker?: string;
   guardedStorefrontArtworkAlt?: string;
   guardedStorefrontArtworks?: readonly string[];
+  guardedStorefrontRulesArtworkAlt?: string;
+  guardedStorefrontRulesArtworkSrc?: string;
+  guardedStorefrontTermsEffectiveLabel?: string;
   features: DisplayFeatureConfig[];
 }
 
@@ -171,7 +175,7 @@ const SIRIUS_FRIENDSHIP_FEATURES = [
   { label: "участие в сторонних турнирах", enabled: false },
 ] as const;
 
-const PITER_FRIENDSHIP_TERMS = [
+const REGIONAL_FRIENDSHIP_TERMS = [
   "Одна игра в день: создание или присоединение.",
   "По подписке можно создать только игру длительностью 60 минут.",
   "Присоединиться по подписке можно к игре длительностью 60, 90 или 120 минут.",
@@ -179,6 +183,16 @@ const PITER_FRIENDSHIP_TERMS = [
   "Групповые тренировки доступны на специальных условиях: скидка применяется при оформлении.",
   "Турниры доступны на специальных условиях: скидка применяется при оформлении.",
 ] as const;
+
+const PITER_FRIENDSHIP_TERMS = [
+  "Один час игры в день бесплатно: создание или присоединение.",
+  "Игры длительностью 90 или 120 минут можно создать или присоединиться к ним со скидкой 30%.",
+  "Скидка 50% действует на игру с тренером, групповые тренировки и формат «Время на друзей».",
+  "По подписке можно сделать до 4 активных записей на 2 недели вперёд.",
+] as const;
+
+const PITER_FRIENDSHIP_TERMS_EFFECTIVE_LABEL =
+  "Новые правила действуют для подписок, проданных с 01.09.2026 по московскому времени.";
 
 const PITER_FRIENDSHIP_ARTWORKS = [
   piterSubscriptionTier1Image,
@@ -555,6 +569,10 @@ function buildGuardedFriendshipPageViewConfig(options: {
   batchSize: number;
   fallbackTotalLimit?: number;
   remainingLabel?: string;
+  rulesArtworkAlt?: string;
+  rulesArtworkSrc?: string;
+  terms?: readonly string[];
+  termsEffectiveLabel?: string;
 }): PageViewConfig {
   return {
     pageClassName: "tournament-subscription-page--single tournament-subscription-page--piter",
@@ -582,10 +600,13 @@ function buildGuardedFriendshipPageViewConfig(options: {
         remainingLabel: options.remainingLabel ?? "Осталось в текущей партии",
         featureStatusAppearance: "toggle",
         requiresConsent: true,
-        terms: [...PITER_FRIENDSHIP_TERMS],
+        terms: [...(options.terms || REGIONAL_FRIENDSHIP_TERMS)],
         guardedStorefrontKicker: options.kicker,
         guardedStorefrontArtworkAlt: options.kicker,
         guardedStorefrontArtworks: options.artworks,
+        guardedStorefrontRulesArtworkAlt: options.rulesArtworkAlt,
+        guardedStorefrontRulesArtworkSrc: options.rulesArtworkSrc,
+        guardedStorefrontTermsEffectiveLabel: options.termsEffectiveLabel,
         features: [],
       },
     ],
@@ -609,6 +630,10 @@ function resolvePageViewConfig(
       artworks: PITER_FRIENDSHIP_ARTWORKS,
       batchSize: PITER_FRIENDSHIP_BATCH_SIZE,
       fallbackTotalLimit: PITER_FRIENDSHIP_FALLBACK_TOTAL,
+      rulesArtworkAlt: `Правила подписки Падел.Дружба.Питер. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
+      rulesArtworkSrc: piterSubscriptionRulesFrom20260901Image,
+      terms: PITER_FRIENDSHIP_TERMS,
+      termsEffectiveLabel: PITER_FRIENDSHIP_TERMS_EFFECTIVE_LABEL,
     });
   }
   if (config?.variant === "kotelniki_friendship") {
@@ -1537,12 +1562,22 @@ export default function TournamentSubscriptionPage({
                           className="piter-subscription-artwork"
                         />
                       </div>
-                      <div className="piter-subscription-face piter-subscription-face--back">
-                        <span className="piter-subscription-kicker">{plan.guardedStorefrontKicker}</span>
-                        <h2>Условия подписки</h2>
-                        <ul>
-                          {(plan.terms || []).map((term) => <li key={term}>{term}</li>)}
-                        </ul>
+                      <div className={`piter-subscription-face piter-subscription-face--back ${plan.guardedStorefrontRulesArtworkSrc ? "piter-subscription-face--rules-artwork" : ""}`}>
+                        {plan.guardedStorefrontRulesArtworkSrc ? (
+                          <img
+                            src={plan.guardedStorefrontRulesArtworkSrc}
+                            alt={plan.guardedStorefrontRulesArtworkAlt || "Правила подписки"}
+                            className="piter-subscription-rules-artwork"
+                          />
+                        ) : (
+                          <>
+                            <span className="piter-subscription-kicker">{plan.guardedStorefrontKicker}</span>
+                            <h2>Условия подписки</h2>
+                            <ul>
+                              {(plan.terms || []).map((term) => <li key={term}>{term}</li>)}
+                            </ul>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1554,6 +1589,11 @@ export default function TournamentSubscriptionPage({
                   >
                     {flippedDisplayId === plan.id ? "Вернуться к подписке" : "Узнать условия подписки"}
                   </button>
+                  {plan.guardedStorefrontTermsEffectiveLabel && (
+                    <p className="piter-subscription-terms-effective">
+                      {plan.guardedStorefrontTermsEffectiveLabel}
+                    </p>
+                  )}
                 </>
               ) : plan.artworkSrc ? (
                 <div className="tournament-subscription-plan-image-wrap">

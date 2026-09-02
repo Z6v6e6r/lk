@@ -4,6 +4,7 @@ import {
   buildTournamentMechanicsFallbackExercises,
   mergeTournamentMechanicsExercises,
 } from "../../src/utils/tournamentMechanicsExercises.ts";
+import { isTournamentExerciseCategory } from "../../src/utils/tournamentCategory.ts";
 import type { Exercise } from "../../src/utils/apiClient.ts";
 import type { TournamentSignupSummary } from "../../src/utils/tournamentSignupApi.ts";
 
@@ -104,6 +105,30 @@ test("preserves direct trainer id returned by the bounded Viva refresh", () => {
   ]);
 
   assert.equal(exercise.trainers[0]?.id, "trainer-direct-42");
+});
+
+test("keeps Piter special tournament visible when the mechanics source supplies a new direction", () => {
+  const [exercise] = buildTournamentMechanicsFallbackExercises([
+    makeSummary({
+      exerciseId: "baa4008d-d714-4576-8dec-90ac6cc783c2",
+      title: "Время на друзей",
+      startsAt: "2026-09-02T19:30:00+03:00",
+      endsAt: "2026-09-02T21:00:00+03:00",
+      date: "2026-09-02",
+      studioName: "Питер",
+      format: "Мексикано",
+      raw: {
+        id: "baa4008d-d714-4576-8dec-90ac6cc783c2",
+        gameId: "5550",
+        exerciseTypeId: "1013",
+        studioId: "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+      },
+    }),
+  ]);
+
+  assert.equal(exercise.direction.id, 5550);
+  assert.equal(exercise.type.id, 1013);
+  assert.equal(isTournamentExerciseCategory(exercise), true);
 });
 
 test("merge keeps fallback-only tournaments for the requested date", () => {

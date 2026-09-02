@@ -80,10 +80,12 @@ function annualPolicy(): ManagedSubscriptionRuntimePolicy {
       max: 4,
       scope: "SUBSCRIPTION_BENEFIT_ONLY",
     },
+    bookingWindow: { enabled: true, days: 14 },
     dailyUsagePolicy: {
       actions: ["CREATE_GAME", "JOIN_GAME"],
       limitExceeded: "PERCENT_DISCOUNT",
       percentage: 30,
+      discountDurationsMinutes: [90, 120],
     },
     benefitRules: [
       benefitRule({
@@ -94,21 +96,21 @@ function annualPolicy(): ManagedSubscriptionRuntimePolicy {
         priority: 100,
       }),
       benefitRule({
-        ruleId: "annual-game-90-excess-minus-30",
+        ruleId: "annual-game-90-minus-30",
         actions: ["CREATE_GAME", "JOIN_GAME"],
         durationMinutes: [90],
-        kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
+        kind: "PERCENT_DISCOUNT",
         percentage: 30,
-        partialPrice: { numerator: 1, denominator: 3 },
+        partialPrice: null,
         priority: 100,
       }),
       benefitRule({
-        ruleId: "annual-game-120-excess-minus-30",
+        ruleId: "annual-game-120-minus-30",
         actions: ["CREATE_GAME", "JOIN_GAME"],
         durationMinutes: [120],
-        kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
+        kind: "PERCENT_DISCOUNT",
         percentage: 30,
-        partialPrice: { numerator: 1, denominator: 2 },
+        partialPrice: null,
         priority: 100,
       }),
       benefitRule({
@@ -116,16 +118,6 @@ function annualPolicy(): ManagedSubscriptionRuntimePolicy {
         category: "GROUP_TRAINING",
         actions: ["BOOK_GROUP_TRAINING"],
         externalEventTypeIds: ["group-training"],
-        durationMinutes: [60, 90, 120],
-        kind: "PERCENT_DISCOUNT",
-        percentage: 50,
-        priority: 100,
-      }),
-      benefitRule({
-        ruleId: "annual-tournament-minus-50",
-        category: "TOURNAMENT",
-        actions: ["BOOK_TOURNAMENT"],
-        externalEventTypeIds: ["tournament"],
         durationMinutes: [60, 90, 120],
         kind: "PERCENT_DISCOUNT",
         percentage: 50,
@@ -305,11 +297,11 @@ test("active-service and duration-unit daily limits include current reservations
   ));
 });
 
-test("annual policy applies free hour, discounted excess time and discounted use after daily limit", () => {
+test("Piter annual policy applies one free hour and full-price 30 percent discounts", () => {
   for (const [durationMinutes, basePriceMinor, expectedFinal] of [
     [60, 600000, 0],
-    [90, 900000, 210000],
-    [120, 1200000, 420000],
+    [90, 900000, 630000],
+    [120, 1200000, 840000],
   ] as const) {
     for (const action of ["CREATE_GAME", "JOIN_GAME"] as const) {
       const result = evaluate(baseInput({
@@ -334,34 +326,55 @@ test("annual policy applies free hour, discounted excess time and discounted use
     assert.equal(result.decision.benefit.ruleId, "daily-usage-limit-exceeded", action);
     assert.equal(result.decision.benefit.finalPriceMinor, 840000, action);
   }
+
+  const secondSixty = evaluate(baseInput({
+    policy: annualPolicy(),
+    target: { ...baseInput().target, durationMinutes: 60, basePriceMinor: 600000 },
+    usage: { ...baseInput().usage, dailyUsed: 1 },
+  }));
+  assert.equal(secondSixty.decision.eligible, false);
+  assert.ok(secondSixty.decision.blockers.some(
+    (item: { code: string }) => item.code === "DAILY_USAGE_LIMIT_REACHED",
+  ));
+  assert.notEqual(secondSixty.decision.benefit.kind, "PERCENT_DISCOUNT");
 });
 
-test("annual tournament and group discounts do not consume the free game-day quota", () => {
-  for (const [action, category, eventTypeId, basePriceMinor, expectedFinal] of [
-    ["BOOK_GROUP_TRAINING", "GROUP_TRAINING", "group-training", 300000, 150000],
-    ["BOOK_TOURNAMENT", "TOURNAMENT", "tournament", 500000, 250000],
-  ] as const) {
-    const result = evaluate(baseInput({
-      action,
-      policy: annualPolicy(),
-      target: {
-        ...baseInput().target,
-        category,
-        externalEventTypeId: eventTypeId,
-        durationMinutes: 120,
-        basePriceMinor,
-      },
-      usage: { ...baseInput().usage, dailyUsed: 1 },
-    }));
-    assert.equal(result.decision.eligible, true, action);
-    assert.equal(result.decision.benefit.finalPriceMinor, expectedFinal, action);
-    assert.ok(!result.decision.blockers.some(
-      (item: { code: string }) => item.code === "DAILY_USAGE_LIMIT_REACHED",
-    ));
-  }
+test("annual mapped group discount is isolated from an unmapped tournament", () => {
+  const group = evaluate(baseInput({
+    action: "BOOK_GROUP_TRAINING",
+    policy: annualPolicy(),
+    target: {
+      ...baseInput().target,
+      category: "GROUP_TRAINING",
+      externalEventTypeId: "group-training",
+      durationMinutes: 120,
+      basePriceMinor: 300000,
+    },
+    usage: { ...baseInput().usage, dailyUsed: 1 },
+  }));
+  assert.equal(group.decision.eligible, true);
+  assert.equal(group.decision.benefit.finalPriceMinor, 150000);
+
+  const tournament = evaluate(baseInput({
+    action: "BOOK_TOURNAMENT",
+    policy: annualPolicy(),
+    target: {
+      ...baseInput().target,
+      category: "TOURNAMENT",
+      externalEventTypeId: "tournament",
+      durationMinutes: 120,
+      basePriceMinor: 500000,
+    },
+    usage: { ...baseInput().usage, dailyUsed: 1 },
+  }));
+  assert.equal(tournament.decision.eligible, false);
+  assert.ok(tournament.decision.blockers.some(
+    (item: { code: string }) => item.code === "EVENT_NOT_INCLUDED",
+  ));
 });
 
 test("annual active-service limit blocks a fifth service and invalid daily discount fails closed", () => {
+  assert.deepEqual(annualPolicy().bookingWindow, { enabled: true, days: 14 });
   assert.ok(blockerCodes(baseInput({
     policy: annualPolicy(),
     usage: { ...baseInput().usage, activeServices: 4 },
@@ -376,6 +389,44 @@ test("annual active-service limit blocks a fifth service and invalid daily disco
   assert.ok(blockerCodes(baseInput({ policy: invalidPolicy })).includes(
     "DAILY_USAGE_DISCOUNT_INVALID",
   ));
+
+  const invalidDurations = annualPolicy();
+  invalidDurations.dailyUsagePolicy = {
+    actions: ["CREATE_GAME", "JOIN_GAME"],
+    limitExceeded: "PERCENT_DISCOUNT",
+    percentage: 30,
+    discountDurationsMinutes: [],
+  };
+  assert.ok(blockerCodes(baseInput({ policy: invalidDurations })).includes(
+    "DAILY_USAGE_DISCOUNT_DURATION_INVALID",
+  ));
+
+  const invalidDurationType = annualPolicy() as ManagedSubscriptionRuntimePolicy & {
+    dailyUsagePolicy: Record<string, unknown>;
+  };
+  invalidDurationType.dailyUsagePolicy.discountDurationsMinutes = "90,120";
+  const invalidDurationTypeResult = evaluate(baseInput({ policy: invalidDurationType }));
+  assert.ok(invalidDurationTypeResult.decision.blockers.some(
+    (item: { code: string }) => item.code === "DAILY_USAGE_DISCOUNT_DURATION_INVALID",
+  ));
+  assert.notEqual(invalidDurationTypeResult.decision.benefit.kind, "PERCENT_DISCOUNT");
+});
+
+test("Piter 14-day window includes today through day 13 and blocks day 14", () => {
+  const inside = baseInput({
+    evaluatedAt: "2026-08-15T10:00:00.000Z",
+    policy: annualPolicy(),
+    target: { ...baseInput().target, startsAt: "2026-08-28T10:00:00.000Z" },
+    usage: { ...baseInput().usage, dailyBucketLocalDate: "2026-08-28" },
+  });
+  assert.equal(evaluate(inside).decision.eligible, true);
+
+  const outside = {
+    ...inside,
+    target: { ...inside.target, startsAt: "2026-08-29T10:00:00.000Z" },
+    usage: { ...inside.usage, dailyBucketLocalDate: "2026-08-29" },
+  };
+  assert.ok(blockerCodes(outside).includes("BOOKING_WINDOW_EXCEEDED"));
 });
 
 test("active-service maximum can be disabled without requiring a limit or scope match", () => {

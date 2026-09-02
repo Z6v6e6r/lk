@@ -43,6 +43,16 @@ test("does not broadly classify every Padel Tournament type", () => {
   );
 });
 
+test("recognizes special tournament type when a new Viva direction is used", () => {
+  assert.equal(
+    isTournamentExerciseCategory({
+      direction: { id: 5550, name: "Турнир Питер особый" },
+      type: { id: "1013", name: "Мексикано" },
+    }),
+    true,
+  );
+});
+
 test("keeps special-name fallback for custom tournament categories", () => {
   assert.equal(
     isTournamentExerciseCategory({
