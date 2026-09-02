@@ -692,6 +692,12 @@ const resolveManagedEnforcementDecision = (value) => {
     : null;
   const purchaseDateEvidence = collectSubscriptionPurchaseDateEvidence(value);
   const purchaseDates = purchaseDateEvidence.dates;
+  const requiresAuthoritativePurchaseDate = exactProductId === PITER_MANAGED_PRODUCT_ID
+    && allowlist.productIds.includes(exactProductId);
+  if (requiresAuthoritativePurchaseDate
+    && (purchaseDateEvidence.invalid || purchaseDates.length !== 1)) {
+    return { ok: false, code: "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED" };
+  }
   const purchaseDate = !purchaseDateEvidence.invalid && purchaseDates.length === 1
     ? purchaseDates[0]
     : null;
@@ -1388,12 +1394,15 @@ if (ctx.step === "exercise") {
   const managedEnforcement = resolveManagedEnforcementDecision(ownedSubscriptions);
   if (!managedEnforcement.ok) {
     const configInvalid = managedEnforcement.code === "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID";
+    const purchaseDateUnresolved = managedEnforcement.code === "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED";
     return finishError(
       ctx,
       configInvalid ? 503 : 409,
       configInvalid
         ? "Конфигурация управляемой подписки временно недоступна"
-        : "Нельзя однозначно определить продукт выбранной подписки",
+        : purchaseDateUnresolved
+          ? "Нельзя однозначно определить дату продажи выбранной подписки"
+          : "Нельзя однозначно определить продукт выбранной подписки",
       { code: managedEnforcement.code },
     );
   }
@@ -1556,10 +1565,13 @@ if (ctx.step === "exercise_recheck") {
   }
   const nextManagedEnforcement = resolveManagedEnforcementDecision(ownedSubscriptions);
   if (!nextManagedEnforcement.ok) {
+    const purchaseDateUnresolved = nextManagedEnforcement.code === "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED";
     return prepareFailedUpdate(
       ctx,
       nextManagedEnforcement.code === "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID" ? 503 : 409,
-      "Нельзя повторно подтвердить rollout управляемой подписки",
+      purchaseDateUnresolved
+        ? "Нельзя повторно подтвердить дату продажи подписки"
+        : "Нельзя повторно подтвердить rollout управляемой подписки",
       nextManagedEnforcement.code,
     );
   }

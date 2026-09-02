@@ -105,6 +105,7 @@ function structuralUnifiedFixture({ omitConfirmReadback = false } = {}) {
   );
   const candidateNodeCount = source.length + 2 + paymentNodes.length + 2;
   const contract = {
+    candidateBindingState: "BOUND",
     sourceSha256: "fixture-source",
     candidateSha256: "6bc008ab4695fadbc7a0a2711cafd2570f881df152f28f430ad038799fb22645",
     nodeCount: source.length,
@@ -234,10 +235,10 @@ test("unified LK1 contract pins every tracked candidate source", () => {
   }
 });
 
-test("reviewed unified composition contract pins digest, inventory, ACK order and recovery", () => {
+test("router amendment leaves the full-flow candidate contract explicitly unbound", () => {
   const summary = {
     sourceSha256: LK1_ENFORCEMENT_CONTRACT.sourceSha256,
-    candidateSha256: LK1_ENFORCEMENT_CONTRACT.candidateSha256,
+    candidateSha256: LK1_ENFORCEMENT_CONTRACT.previousCandidateSha256,
     candidateNodeCount: 4812,
     httpRouteCount: 215,
     tabCount: 55,
@@ -260,7 +261,23 @@ test("reviewed unified composition contract pins digest, inventory, ACK order an
     ],
     cleanupRecoveryNode: "lk_split_cleanup_revision_recovery_write_20260826",
   };
-  assert.equal(validateUnifiedCandidateSummary(summary), true);
+  assert.equal(LK1_ENFORCEMENT_CONTRACT.candidateBindingState,
+    "UNBOUND_AFTER_ROUTER_AMENDMENT");
+  assert.equal(LK1_ENFORCEMENT_CONTRACT.candidateSha256, null);
+  assert.throws(
+    () => validateUnifiedCandidateSummary(summary),
+    /candidate contract is unbound after router amendment/,
+  );
+  for (const candidateBindingState of [undefined, "TYPO"]) {
+    assert.throws(
+      () => validateUnifiedCandidateSummary(summary, {
+        ...LK1_ENFORCEMENT_CONTRACT,
+        candidateBindingState,
+        candidateSha256: summary.candidateSha256,
+      }),
+      /candidate contract is unbound after router amendment/,
+    );
+  }
   for (const drift of [
     { candidateSha256: "drift" },
     { changedNodeCount: 105 },
@@ -268,8 +285,13 @@ test("reviewed unified composition contract pins digest, inventory, ACK order an
     { createAckOrder: [...summary.createAckOrder].reverse() },
     { cleanupRecoveryNode: "wrong" },
   ]) {
+    const boundContract = {
+      ...LK1_ENFORCEMENT_CONTRACT,
+      candidateBindingState: "BOUND",
+      candidateSha256: summary.candidateSha256,
+    };
     assert.throws(
-      () => validateUnifiedCandidateSummary({ ...summary, ...drift }),
+      () => validateUnifiedCandidateSummary({ ...summary, ...drift }, boundContract),
       /reviewed candidate contract mismatch/,
     );
   }

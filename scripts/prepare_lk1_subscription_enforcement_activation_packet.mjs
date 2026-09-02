@@ -31,6 +31,10 @@ export function validateActivationManifest(
   enforcementContract = LK1_ENFORCEMENT_CONTRACT,
 ) {
   if (!manifest || manifest.formatVersion !== 1) throw new Error("Activation manifest version mismatch");
+  if (enforcementContract.candidateBindingState !== "BOUND"
+    || !/^[a-f0-9]{64}$/.test(enforcementContract.candidateSha256 || "")) {
+    throw new Error("Activation enforcement contract is unbound after router amendment");
+  }
   const changes = normalizedChanges(manifest.allowedChanges || []);
   const additions = [...(manifest.allowedAdditionIds || [])].sort();
   if (

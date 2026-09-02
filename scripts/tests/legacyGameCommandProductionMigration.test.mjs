@@ -7,11 +7,13 @@ import test from "node:test";
 
 import {
   assertPinnedMongoRuntimeClosure,
+  assertProductionCandidateBound,
   classifyAmbiguousExecutionReceipt,
   classifyIndexSpecs,
   executionReceiptIdentityMatches,
   EXPECTED_CANDIDATE_FLOW_SHA256,
   EXPECTED_LIVE_FLOW_SHA256,
+  PRODUCTION_CANDIDATE_BINDING_STATE,
   PRODUCTION_MIGRATION_ID,
   PRODUCTION_PACKET_SCHEMA_VERSION,
   PRODUCTION_RUNTIME_IDENTITY,
@@ -21,6 +23,7 @@ import {
   sha256,
   stableStringify,
   validateProductionExecutionPacket,
+  validateProductionExecutionPacketAgainstBoundCandidate,
   validateProductionReleaseAttestation,
 } from "../run_legacy_game_command_production_migration.mjs";
 import { LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST } from "../lk1_subscription_enforcement_activation_manifest.mjs";
@@ -116,7 +119,7 @@ const buildPacket = (overrides = {}) => ({
 const validate = (packet) => {
   const body = Buffer.from(JSON.stringify(packet));
   const packetSha256 = sha256(body);
-  return validateProductionExecutionPacket(packet, context, {
+  return validateProductionExecutionPacketAgainstBoundCandidate(packet, context, {
     packetSha256,
     actualPacketSha256: packetSha256,
     releaseSha,
@@ -136,8 +139,16 @@ test("production execution packet accepts exact short-lived stopped-writer evide
   });
 });
 
-test("production runner pins the reviewed unified candidate and rejects historical identities", () => {
+test("production runner keeps the previous candidate as historical evidence and fails closed while unbound", () => {
+  assert.equal(PRODUCTION_CANDIDATE_BINDING_STATE, "UNBOUND_AFTER_ROUTER_AMENDMENT");
   assert.equal(EXPECTED_CANDIDATE_FLOW_SHA256, UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256);
+  assert.throws(() => assertProductionCandidateBound(), /candidate is unbound/);
+  assert.throws(() => validateProductionExecutionPacket(buildPacket(), context, {
+    packetSha256: digest("f"),
+    actualPacketSha256: digest("f"),
+    releaseSha,
+    evidenceSha256: {},
+  }), /candidate is unbound/);
   for (const historicalCandidateSha256 of HISTORICAL_SOURCE_ONLY_CANDIDATE_SHA256S) {
     const historicalCandidate = buildPacket({
       source: {

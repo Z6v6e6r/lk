@@ -870,11 +870,6 @@ test("managed PITER rules apply only to subscriptions sold from 2026-09-01 Mosco
     { purchaseDate: "2026-08-31T21:00:00.000Z", enabled: true },
     { purchaseDate: "2026-09-01T00:00:00+03:00", enabled: true },
     { purchaseDate: "2026-09-01T00:00:00", enabled: true },
-    { purchaseDate: null, enabled: false },
-    { purchaseDate: "not-a-date", enabled: false },
-    { purchaseDate: "2026-09-01garbage", enabled: false },
-    { purchaseDate: "2026-09-01T99:99:99", enabled: false },
-    { purchaseDate: "2026-09-01T24:61:61", enabled: false },
   ];
 
   for (const { purchaseDate, enabled } of cases) {
@@ -920,8 +915,8 @@ test("pre-cutoff PITER stays on Friendship for direct and split CREATE/JOIN", ()
   }
 });
 
-test("browser purchase date cannot enable a pre-cutoff or undated PITER subscription", () => {
-  for (const serverPurchaseDate of ["2026-08-31T12:00:00+03:00", null]) {
+test("browser purchase date cannot enable a pre-cutoff PITER subscription", () => {
+  for (const serverPurchaseDate of ["2026-08-31T12:00:00+03:00"]) {
     const out = runFunction(ROUTER_FILE, {
       statusCode: 200,
       payload: managedExercise(PITER_PRODUCT_ID, "Падел.Дружба.Питер — 12 месяцев", serverPurchaseDate),
@@ -937,7 +932,39 @@ test("browser purchase date cannot enable a pre-cutoff or undated PITER subscrip
   }
 });
 
-test("conflicting server-owned PITER purchase dates keep the subscription on compatibility", () => {
+test("missing, malformed or conflicting server-owned PITER purchase dates fail closed", () => {
+  for (const purchaseDate of [
+    null,
+    "not-a-date",
+    "2026-09-01garbage",
+    "2026-09-01T99:99:99",
+    "2026-09-01T24:61:61",
+  ]) {
+    for (const caller of ["http", "split"]) {
+      for (const managedAction of ["CREATE_GAME", "JOIN_GAME"]) {
+        const label = `${caller}:${managedAction}:${purchaseDate || "missing"}`;
+        const out = runFunction(ROUTER_FILE, {
+          statusCode: 200,
+          payload: managedExercise(PITER_PRODUCT_ID, "Падел.Дружба.Питер — 12 месяцев", purchaseDate),
+          purchaseDate: MANAGED_PURCHASE_DATE,
+          subscription: { purchaseDate: MANAGED_PURCHASE_DATE },
+          _subscriptionBooking: baseContext("exercise", {
+            caller,
+            serviceDate: undefined, category: undefined, planKey: undefined,
+            managedAction,
+          }),
+        }, MANAGED_GLOBALS);
+        assert.equal(out[4].statusCode, 409, label);
+        assert.equal(out[4].payload.details.code,
+          "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED", label);
+        assert.equal(out[0], null, label);
+        assert.equal(out[1], null, label);
+        assert.equal(out[2], null, label);
+        assert.equal(out[3], null, label);
+      }
+    }
+  }
+
   const duplicateRows = managedExercise();
   duplicateRows.availableClientSubscriptions.push({
     ...duplicateRows.availableClientSubscriptions[0],
@@ -951,11 +978,9 @@ test("conflicting server-owned PITER purchase dates keep the subscription on com
       managedAction: "CREATE_GAME",
     }),
   }, MANAGED_GLOBALS);
-  assert.equal(duplicateOut[0]._subscriptionBooking.managedEnforcement.purchaseDate, null);
-  assert.deepEqual(duplicateOut[0]._subscriptionBooking.managedEnforcement.purchaseDateCandidates,
-    ["2026-08-31", "2026-09-01"]);
-  assert.equal(duplicateOut[0]._subscriptionBooking.managedEnforcement.enabled, false);
-  assert.equal(duplicateOut[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(duplicateOut[4].statusCode, 409);
+  assert.equal(duplicateOut[4].payload.details.code, "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED");
+  assert.equal(duplicateOut[0], null);
 
   const invalidRows = managedExercise();
   invalidRows.availableClientSubscriptions.push({
@@ -970,10 +995,9 @@ test("conflicting server-owned PITER purchase dates keep the subscription on com
       managedAction: "CREATE_GAME",
     }),
   }, MANAGED_GLOBALS);
-  assert.equal(invalidOut[0]._subscriptionBooking.managedEnforcement.purchaseDate, null);
-  assert.equal(invalidOut[0]._subscriptionBooking.managedEnforcement.purchaseDateEvidenceValid, false);
-  assert.equal(invalidOut[0]._subscriptionBooking.managedEnforcement.enabled, false);
-  assert.equal(invalidOut[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(invalidOut[4].statusCode, 409);
+  assert.equal(invalidOut[4].payload.details.code, "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED");
+  assert.equal(invalidOut[0], null);
 
   const missingRows = managedExercise();
   const { purchaseDate: _purchaseDate, ...withoutPurchaseDate } =
@@ -987,10 +1011,39 @@ test("conflicting server-owned PITER purchase dates keep the subscription on com
       managedAction: "CREATE_GAME",
     }),
   }, MANAGED_GLOBALS);
-  assert.equal(missingOut[0]._subscriptionBooking.managedEnforcement.purchaseDate, null);
-  assert.equal(missingOut[0]._subscriptionBooking.managedEnforcement.purchaseDateEvidenceValid, false);
-  assert.equal(missingOut[0]._subscriptionBooking.managedEnforcement.enabled, false);
-  assert.equal(missingOut[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(missingOut[4].statusCode, 409);
+  assert.equal(missingOut[4].payload.details.code, "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED");
+  assert.equal(missingOut[0], null);
+});
+
+test("missing purchase dates do not activate the strict gate outside allowlisted PITER", () => {
+  const rolloutOff = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedExercise(PITER_PRODUCT_ID, "Падел.Дружба.Питер — 12 месяцев", null),
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, {
+    vivacrm_access_token: "service-token",
+    subscriptions_managed_enforcement_product_ids: [],
+  });
+  assert.equal(rolloutOff[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(rolloutOff[4], null);
+
+  const hub = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedExercise(HUB_PRODUCT_ID, "Падел.Дружба.ХАБ — 12 месяцев", null),
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "JOIN_GAME",
+    }),
+  }, {
+    ...MANAGED_GLOBALS,
+    subscriptions_managed_enforcement_product_ids: [PITER_PRODUCT_ID, HUB_PRODUCT_ID],
+  });
+  assert.equal(hub[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(hub[4], null);
 });
 
 test("names cannot enable managed enforcement and an allowlisted exact product still requires canonical target identity", () => {
@@ -1946,6 +1999,45 @@ test("final pre-write recheck rejects product or rollout drift without a Viva re
   assert.equal(changedPurchaseDate[3].payload[1].$set.failure.rawCode,
     "SUBSCRIPTION_PURCHASE_DATE_CHANGED_BEFORE_WRITE");
   assert.equal(changedPurchaseDate[0], null);
+
+  const malformedPurchaseDate = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedExercise(
+      PITER_PRODUCT_ID,
+      "Падел.Дружба.Питер — 12 месяцев",
+      "invalid-purchase-date",
+    ),
+    _subscriptionBooking: structuredClone(managedContext),
+  }, MANAGED_GLOBALS);
+  assert.equal(malformedPurchaseDate[3]._subscriptionBooking.step, "operation_fail");
+  assert.equal(malformedPurchaseDate[3].payload[1].$set.failure.rawCode,
+    "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED");
+  assert.equal(malformedPurchaseDate[0], null);
+
+  const missingPurchaseDate = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedExercise(PITER_PRODUCT_ID, "Падел.Дружба.Питер — 12 месяцев", null),
+    _subscriptionBooking: structuredClone(managedContext),
+  }, MANAGED_GLOBALS);
+  assert.equal(missingPurchaseDate[3]._subscriptionBooking.step, "operation_fail");
+  assert.equal(missingPurchaseDate[3].payload[1].$set.failure.rawCode,
+    "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED");
+  assert.equal(missingPurchaseDate[0], null);
+
+  const conflictingPurchaseDates = managedExercise();
+  conflictingPurchaseDates.availableClientSubscriptions.push({
+    ...conflictingPurchaseDates.availableClientSubscriptions[0],
+    purchaseDate: "2026-08-31T23:59:59+03:00",
+  });
+  const conflictingPurchaseDate = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: conflictingPurchaseDates,
+    _subscriptionBooking: structuredClone(managedContext),
+  }, MANAGED_GLOBALS);
+  assert.equal(conflictingPurchaseDate[3]._subscriptionBooking.step, "operation_fail");
+  assert.equal(conflictingPurchaseDate[3].payload[1].$set.failure.rawCode,
+    "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED");
+  assert.equal(conflictingPurchaseDate[0], null);
 });
 
 test("managed booking rechecks CUP identity and policy after preaccept before Viva write", () => {

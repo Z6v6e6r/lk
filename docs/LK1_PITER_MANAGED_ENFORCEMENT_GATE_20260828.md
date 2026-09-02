@@ -20,9 +20,10 @@ configuration, production mutation, Ready, merge, or deployment.
   path only when the same exact server-owned product identity is in the global
   and the actor-owned Viva subscription has `purchaseDate(Europe/Moscow)` on or
   after `2026-09-01`.
-- PITER subscriptions sold before `2026-09-01`, with a missing/invalid sale
-  date, or with conflicting server-side sale dates remain on the ordinary
-  Friendship compatibility path. Browser-supplied sale dates are ignored.
+- PITER subscriptions sold before `2026-09-01` remain on the ordinary
+  Friendship compatibility path. For an allowlisted exact PITER product, a
+  missing, invalid, or conflicting server-side sale date fails closed with
+  `SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED`; browser-supplied dates are ignored.
 - HUB product `db7a5250-7369-4f43-8ac5-9111be24bc74` never enters the managed
   path in this candidate, even if its UUID appears in the global.
 - Product names, browser fields, `planKey`, and a caller-supplied gate object
@@ -89,3 +90,7 @@ must not be imported. A later deployment stage requires a new private read-only
 pull from `147`, a fresh exact preimage, rebuilt full-flow digest, validation and a
 separately approved reviewed-flow apply. This source checkpoint does not perform
 that rebind or any live operation.
+
+The source contract now marks the full-flow candidate as
+`UNBOUND_AFTER_ROUTER_AMENDMENT` and rejects activation-manifest validation.
+The previous candidate digest remains historical evidence only.

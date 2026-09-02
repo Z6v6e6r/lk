@@ -19,10 +19,16 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = fs.realpathSync(path.resolve(SCRIPT_DIR, ".."));
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const fail = (message) => { throw new Error(message); };
+const candidateBinding = JSON.parse(fs.readFileSync(
+  new URL("./lk1_subscription_enforcement_candidate_binding.json", import.meta.url),
+  "utf8",
+));
 
 export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
   sourceSha256: "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
-  candidateSha256: "76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294",
+  candidateBindingState: candidateBinding.candidateBindingState,
+  candidateSha256: candidateBinding.candidateSha256,
+  previousCandidateSha256: candidateBinding.previousCandidateSha256,
   nodeCount: 4762,
   candidateNodeCount: 4812,
   httpRouteCount: 215,
@@ -88,7 +94,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
       name: "Route atomic subscription booking",
       sourceFile: "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js",
       preimageSha256: "11c4b80c2624ad97fc83f634139d0db7d36aebb8df8a525bdc7baae3e9bae0fd",
-      candidateSha256: "badaf9105ff0e70872495d718eca86ef646298426903784319c3b0c7a1abba99",
+      candidateSha256: "5af6fbc1ffcd9c3ab480e8c69390b581e8e7cc2498f994ba36fd9e7164806216",
     }),
     Object.freeze({
       id: "c165e43eba668c25",
@@ -181,6 +187,10 @@ function replaceCandidateHash(registry, writerId, sourceNodeId, candidateSha256)
 }
 
 export function validateUnifiedCandidateSummary(summary, contract = LK1_ENFORCEMENT_CONTRACT) {
+  if (contract.candidateBindingState !== "BOUND"
+    || !/^[a-f0-9]{64}$/.test(contract.candidateSha256 || "")) {
+    fail("Unified LK1 candidate contract is unbound after router amendment");
+  }
   const exact = (
     summary.sourceSha256 === contract.sourceSha256
     && summary.candidateSha256 === contract.candidateSha256
