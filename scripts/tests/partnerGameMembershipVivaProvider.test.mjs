@@ -103,7 +103,12 @@ test("Viva add rejects missing or mismatched booking identity as ambiguous", asy
   for (const payload of [
     {},
     { id: "booking-1", clientId: "someone-else", exerciseId: "exercise-1" },
+    { id: "booking-1", bookingId: "booking-2" },
     { id: "booking-1", data: { id: "booking-2" } },
+    {
+      data: { id: "booking-1", clientId: "technical-client-1", exerciseId: "exercise-1" },
+      booking: { id: "booking-2", clientId: "technical-client-1", exerciseId: "exercise-1" },
+    },
   ]) {
     const provider = readyProvider(async () => response(201, payload));
     await assert.rejects(() => provider.addTechnicalUser(addInput), { ambiguous: true });
@@ -158,6 +163,89 @@ test("Viva readback binds one booking and rejects duplicate identities", async (
     totalElements: 0,
   }));
   assert.equal((await completeAbsence.readBooking(readInput)).active, false);
+
+  const conflictingContainers = readyProvider(async () => response(200, {
+    content: [],
+    items: [{
+      id: "booking-1",
+      clientId: "technical-client-1",
+      exerciseId: "exercise-1",
+      status: "ACTIVE",
+    }],
+    number: 0,
+    totalPages: 0,
+  }));
+  await assert.rejects(() => conflictingContainers.readBooking(readInput), {
+    code: "VIVA_READBACK_AMBIGUOUS",
+    ambiguous: true,
+  });
+
+  const sharedRows = [{
+    id: "booking-1",
+    clientId: "technical-client-1",
+    exerciseId: "exercise-1",
+    status: "ACTIVE",
+  }];
+  const agreeingContainers = readyProvider(async () => response(200, {
+    content: sharedRows,
+    items: structuredClone(sharedRows),
+  }));
+  assert.equal((await agreeingContainers.readBooking(readInput)).active, true);
+});
+
+test("Viva readback accepts agreeing aliases and rejects contradictory identity or lifecycle evidence", async () => {
+  const readInput = { ...addInput, bookingId: "booking-1" };
+  for (const [row, active] of [
+    [{
+      id: "booking-1",
+      bookingId: "booking-1",
+      uuid: "booking-1",
+      clientId: "technical-client-1",
+      client: { id: "technical-client-1" },
+      customer: { id: "technical-client-1" },
+      exerciseId: "exercise-1",
+      exercise: { id: "exercise-1" },
+      service: { id: "exercise-1" },
+      active: true,
+      cancelled: false,
+      canceled: false,
+      status: "ACTIVE",
+      state: "active",
+    }, true],
+    [{
+      bookingId: "booking-1",
+      client: { id: "technical-client-1" },
+      service: { id: "exercise-1" },
+      state: "CONFIRMED",
+    }, true],
+    [{
+      uuid: "booking-1",
+      customer: { id: "technical-client-1" },
+      exercise: { id: "exercise-1" },
+      active: false,
+      status: "CANCELLED",
+    }, false],
+  ]) {
+    const provider = readyProvider(async () => response(200, [row]));
+    assert.equal((await provider.readBooking(readInput)).active, active);
+  }
+
+  for (const row of [
+    { id: "booking-1", bookingId: "booking-2", clientId: "technical-client-1", exerciseId: "exercise-1", status: "ACTIVE" },
+    { id: "booking-1", clientId: "technical-client-1", client: { id: "other" }, exerciseId: "exercise-1", status: "ACTIVE" },
+    { id: "booking-1", clientId: "technical-client-1", exerciseId: "exercise-1", service: { id: "other" }, status: "ACTIVE" },
+    { id: "booking-1", clientId: "technical-client-1", exerciseId: "exercise-1", active: false, status: "ACTIVE" },
+    { id: "booking-1", clientId: "technical-client-1", exerciseId: "exercise-1", active: true, status: "CANCELLED" },
+    { id: "booking-1", clientId: "technical-client-1", exerciseId: "exercise-1", status: "ACTIVE", state: "CANCELLED" },
+    { id: "booking-1", clientId: "technical-client-1", exerciseId: "exercise-1", cancelled: true, canceled: false },
+    { id: "booking-1", clientId: "technical-client-1", exerciseId: "exercise-1", active: "false", status: "CANCELLED" },
+  ]) {
+    const provider = readyProvider(async () => response(200, [row]));
+    await assert.rejects(() => provider.readBooking(readInput), {
+      code: "VIVA_READBACK_AMBIGUOUS",
+      ambiguous: true,
+    });
+  }
 });
 
 test("Viva removal requires cancellation-only proof before the pinned cancellation command", async () => {

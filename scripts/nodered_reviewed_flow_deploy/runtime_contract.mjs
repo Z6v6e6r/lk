@@ -178,6 +178,19 @@ export function buildExactGraphContract({
   if (!isDeepStrictEqual(actualAdditionIds, normalizedAdditionIds)) {
     throw new Error(`Exact-graph added-node contract mismatch: ${actualAdditionIds.join(",")}`);
   }
+  const additionIdSet = new Set(normalizedAdditionIds);
+  const candidateLiveNodeIds = candidateFlow
+    .filter((node) => !additionIdSet.has(String(node.id || "").trim()))
+    .map((node) => String(node.id || "").trim());
+  const liveNodeIds = liveFlow.map((node) => String(node.id || "").trim());
+  if (!isDeepStrictEqual(candidateLiveNodeIds, liveNodeIds)) {
+    throw new Error("Exact-graph candidate reordered live nodes");
+  }
+  if (candidateFlow.slice(0, liveFlow.length).some((node) => (
+    additionIdSet.has(String(node.id || "").trim())
+  ))) {
+    throw new Error("Exact-graph additions must be one appended suffix");
+  }
   const httpInputCount = assertHttpInputsPreservedExceptWires(
     liveFlow,
     candidateFlow,

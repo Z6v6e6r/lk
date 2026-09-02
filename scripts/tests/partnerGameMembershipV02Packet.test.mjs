@@ -70,6 +70,13 @@ test("v0.2 packet pins additions-only routes, package bytes, rollback identity, 
   );
   const liveBytes = fs.readFileSync(fixture.sourcePath);
   const candidateBytes = fs.readFileSync(path.join(outDir, "candidate.flow.json"));
+  const liveFlow = JSON.parse(liveBytes.toString("utf8"));
+  const candidateFlow = JSON.parse(candidateBytes.toString("utf8"));
+  assert.deepEqual(candidateFlow.slice(0, liveFlow.length), liveFlow);
+  assert.deepEqual(
+    candidateFlow.slice(liveFlow.length).map(({ id }) => id),
+    Object.values(PARTNER_API_FLOW_NODE_IDS),
+  );
   assert.deepEqual(validateExactGraphContract({ liveBytes, candidateBytes, contract: result.contract }), result.contract);
   assert.equal(result.plan.liveMutationAuthorized, false);
   assert.equal(result.plan.deploymentPerformed, false);

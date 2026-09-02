@@ -533,7 +533,7 @@ export class PartnerGameMembershipApiService {
           idempotencyKey: auth.idempotencyKey,
           exerciseId: owned.exerciseId,
           bookingId: owned.bookingId,
-          technicalVivaClientId: this.technicalVivaClientId,
+          technicalVivaClientId: owned.technicalVivaClientId,
         });
       } catch (error) {
         if (error instanceof PartnerProviderError) throw error;
@@ -544,10 +544,13 @@ export class PartnerGameMembershipApiService {
           operationId: operation.operationId,
           exerciseId: owned.exerciseId,
           bookingId: owned.bookingId,
-          technicalVivaClientId: this.technicalVivaClientId,
+          technicalVivaClientId: owned.technicalVivaClientId,
           includeCancelled: true,
         });
-        if (booking?.active) {
+        if (booking?.active
+          || booking?.bookingId !== owned.bookingId
+          || booking?.exerciseId !== owned.exerciseId
+          || booking?.clientId !== owned.technicalVivaClientId) {
           throw new PartnerProviderError("VIVA_REMOVE_READBACK_MISMATCH", "Viva removal read-back is ambiguous", { ambiguous: true });
         }
         const completed = await this.repository.completeRemove({

@@ -43,3 +43,24 @@ test("Mongo rehearsal target requires loopback replica discovery and an exact di
     },
   ]) assert.throws(() => validatePartnerMongoRehearsalTarget(input));
 });
+
+test("Mongo rehearsal parses topology options case-insensitively and rejects duplicates", () => {
+  const base = {
+    databaseName: "lk_partner_rehearsal_ci01",
+    acknowledgedDatabase: "lk_partner_rehearsal_ci01",
+  };
+  assert.equal(validatePartnerMongoRehearsalTarget({
+    ...base,
+    mongoUri: "mongodb://127.0.0.1:27018/?REPLICASET=partner-test&DirectConnection=false",
+  }).replicaSet, "partner-test");
+
+  for (const mongoUri of [
+    "mongodb://127.0.0.1:27018/?replicaSet=partner-test&DIRECTCONNECTION=true",
+    "mongodb://127.0.0.1:27018/?replicaSet=partner-test&DirectConnection=TRUE",
+    "mongodb://127.0.0.1:27018/?replicaSet=partner-test&%44irectConnection=true",
+    "mongodb://127.0.0.1:27018/?replicaSet=partner-test&directConnection=false&DIRECTCONNECTION=true",
+    "mongodb://127.0.0.1:27018/?replicaSet=partner-test&REPLICASET=partner-test",
+  ]) {
+    assert.throws(() => validatePartnerMongoRehearsalTarget({ ...base, mongoUri }));
+  }
+});

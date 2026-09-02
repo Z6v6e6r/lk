@@ -49,8 +49,6 @@ const exactGraphCandidateFixture = () => {
     outputs: 1,
     wires: [["response"]],
   });
-  const routeIndex = flow.findIndex((node) => node.id === "route");
-  flow.push(flow.splice(routeIndex, 1)[0]);
   return flow;
 };
 
@@ -142,6 +140,32 @@ test("exact-graph contract pins exact changed fields and added nodes while prese
     allowedChanges: [{ id: "fn-a", fields: ["func", "outputs", "wires"] }],
     allowedAdditionIds: ["policy"],
   }), /added-node contract mismatch/);
+
+  const reorderedLiveNodes = exactGraphCandidateFixture();
+  const firstIndex = reorderedLiveNodes.findIndex((node) => node.id === "fn-a");
+  const secondIndex = reorderedLiveNodes.findIndex((node) => node.id === "fn-b");
+  [reorderedLiveNodes[firstIndex], reorderedLiveNodes[secondIndex]] = [
+    reorderedLiveNodes[secondIndex],
+    reorderedLiveNodes[firstIndex],
+  ];
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(reorderedLiveNodes),
+    deploymentId: "managed-subscription-rules",
+    allowedChanges: [{ id: "fn-a", fields: ["func", "outputs", "wires"] }],
+    allowedAdditionIds: ["policy"],
+  }), /reordered live nodes/);
+
+  const interleavedAddition = exactGraphCandidateFixture();
+  const addition = interleavedAddition.pop();
+  interleavedAddition.splice(2, 0, addition);
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(interleavedAddition),
+    deploymentId: "managed-subscription-rules",
+    allowedChanges: [{ id: "fn-a", fields: ["func", "outputs", "wires"] }],
+    allowedAdditionIds: ["policy"],
+  }), /appended suffix/);
 
   const routeDrift = exactGraphCandidateFixture();
   routeDrift.find((node) => node.id === "route").url = "/lk/changed";

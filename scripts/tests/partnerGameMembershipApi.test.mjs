@@ -250,10 +250,20 @@ class CountingProvider extends SyntheticVivaProvider {
     this.addCalls = 0;
     this.removeCalls = 0;
     this.readCalls = 0;
+    this.removeInputs = [];
+    this.readInputs = [];
   }
   async addTechnicalUser(input) { this.addCalls += 1; return super.addTechnicalUser(input); }
-  async removeTechnicalUser(input) { this.removeCalls += 1; return super.removeTechnicalUser(input); }
-  async readBooking(input) { this.readCalls += 1; return super.readBooking(input); }
+  async removeTechnicalUser(input) {
+    this.removeCalls += 1;
+    this.removeInputs.push(structuredClone(input));
+    return super.removeTechnicalUser(input);
+  }
+  async readBooking(input) {
+    this.readCalls += 1;
+    this.readInputs.push(structuredClone(input));
+    return super.readBooking(input);
+  }
 }
 
 const buildFixture = (overrides = {}) => {
@@ -262,7 +272,7 @@ const buildFixture = (overrides = {}) => {
   const service = new PartnerGameMembershipApiService({
     repository,
     provider,
-    technicalVivaClientId: TECHNICAL_CLIENT_ID,
+    technicalVivaClientId: overrides.technicalVivaClientId || TECHNICAL_CLIENT_ID,
     auditKey: AUDIT_KEY,
     now: () => new Date(NOW),
     keyResolver: async (clientId, keyId) => ({
@@ -544,6 +554,55 @@ test("only the exact membership created by the same client can be removed", asyn
   assert.equal(removed.body.membership.state, "REMOVED");
   assert.equal(fixture.provider.removeCalls, 1);
   assert.equal(fixture.repository.games.get(GAME_ID).participants.length, 0);
+});
+
+test("delete keeps the persisted Viva client binding after runtime client rotation", async () => {
+  const repository = new MemoryRepository();
+  const provider = new CountingProvider();
+  const original = buildFixture({ repository, provider, technicalVivaClientId: "technical-client-original" });
+  const added = await original.service.handle(signedRequest());
+  const membershipId = added.body.membership.membershipId;
+  const rotated = buildFixture({ repository, provider, technicalVivaClientId: "technical-client-current" });
+  const removed = await rotated.service.handle(signedRequest({
+    method: "DELETE",
+    path: `/lk/integrations/v1/open-games/${GAME_ID}/members/${membershipId}`,
+    body: {},
+  }));
+
+  assert.equal(removed.statusCode, 200);
+  assert.equal(provider.removeInputs.at(-1).technicalVivaClientId, "technical-client-original");
+  assert.equal(provider.readInputs.at(-1).technicalVivaClientId, "technical-client-original");
+  assert.equal(repository.memberships.get(membershipId).state, "REMOVED");
+});
+
+test("delete keeps local membership when inactive Viva readback has a different binding", async () => {
+  class MismatchedRemoveReadbackProvider extends CountingProvider {
+    async readBooking(input) {
+      if (this.removeCalls === 0) return super.readBooking(input);
+      this.readCalls += 1;
+      this.readInputs.push(structuredClone(input));
+      return {
+        bookingId: input.bookingId,
+        exerciseId: input.exerciseId,
+        clientId: "different-technical-client",
+        active: false,
+      };
+    }
+  }
+  const provider = new MismatchedRemoveReadbackProvider();
+  const { service, repository } = buildFixture({ provider });
+  const added = await service.handle(signedRequest());
+  const membershipId = added.body.membership.membershipId;
+  const result = await service.handle(signedRequest({
+    method: "DELETE",
+    path: `/lk/integrations/v1/open-games/${GAME_ID}/members/${membershipId}`,
+    body: {},
+  }));
+
+  assert.equal(result.statusCode, 202);
+  assert.equal(result.body.operation.state, "UNKNOWN");
+  assert.equal(repository.memberships.get(membershipId).state, "UNKNOWN");
+  assert.equal(repository.games.get(GAME_ID).participants.length, 1);
 });
 
 test("station access is re-evaluated before delete and revocation prevents every Viva call", async () => {

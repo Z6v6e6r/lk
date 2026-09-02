@@ -47,11 +47,24 @@ export function validatePartnerMongoRehearsalTarget({ mongoUri, databaseName, ac
     throw new Error("Mongo rehearsal requires an exact disposable database acknowledgement");
   }
   const query = queryOf(uri);
-  if (query.get("directConnection")?.toLowerCase() === "true") {
-    throw new Error("Mongo rehearsal requires replica-set discovery, not directConnection=true");
+  const optionValues = (name) => [...query.entries()]
+    .filter(([key]) => key.trim().toLowerCase() === name.toLowerCase())
+    .map(([, value]) => String(value || "").trim());
+  const directConnectionValues = optionValues("directConnection");
+  if (directConnectionValues.length > 1) {
+    throw new Error("Mongo rehearsal rejects duplicate directConnection URI options");
   }
-  const replicaSet = String(query.get("replicaSet") || "").trim();
-  if (!replicaSet) throw new Error("Mongo rehearsal requires an explicit replicaSet URI option");
+  if (
+    directConnectionValues.length === 1
+    && directConnectionValues[0].toLowerCase() !== "false"
+  ) {
+    throw new Error("Mongo rehearsal requires replica-set discovery, not directConnection");
+  }
+  const replicaSetValues = optionValues("replicaSet");
+  if (replicaSetValues.length !== 1 || !replicaSetValues[0]) {
+    throw new Error("Mongo rehearsal requires exactly one explicit replicaSet URI option");
+  }
+  const [replicaSet] = replicaSetValues;
   return { mongoUri: uri, databaseName: database, hosts, replicaSet };
 }
 

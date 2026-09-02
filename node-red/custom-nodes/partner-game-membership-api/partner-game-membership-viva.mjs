@@ -1,4 +1,5 @@
 import { PartnerProviderError } from "./partner-game-membership-core.mjs";
+import { isDeepStrictEqual } from "node:util";
 
 export const PARTNER_VIVA_ADMIN_API_BASE = "https://api.vivacrm.ru/api/v1";
 export const PARTNER_VIVA_CONTRACT_REVISION = "padlhub-viva-technical-booking-v1";
@@ -27,10 +28,43 @@ const rowsFromPayload = (payload) => {
   if (Array.isArray(payload)) return payload;
   const object = asObject(payload);
   if (!object) return [];
-  for (const key of ["content", "items", "bookings", "data", "results"]) {
-    if (Array.isArray(object[key])) return object[key];
+  const containers = ["content", "items", "bookings", "data", "results"]
+    .filter((key) => Array.isArray(object[key]))
+    .map((key) => ({ key, rows: object[key] }));
+  if (!containers.length) return [];
+  if (containers.slice(1).some(({ rows }) => !isDeepStrictEqual(rows, containers[0].rows))) {
+    throw providerError(
+      "VIVA_READBACK_AMBIGUOUS",
+      "Viva booking collection aliases conflict",
+      { ambiguous: true },
+    );
   }
-  return [];
+  return containers[0].rows;
+};
+
+const providerError = (code, message, options = {}) => {
+  const normalized = {
+    ambiguous: options.ambiguous === true,
+    expose: options.expose === true,
+  };
+  if (!normalized.ambiguous || options.httpStatus !== undefined) {
+    normalized.httpStatus = options.httpStatus || 503;
+  }
+  if (options.terminal !== undefined) normalized.terminal = options.terminal === true;
+  return new PartnerProviderError(code, message, normalized);
+};
+
+const exactAlias = (values, label) => {
+  const normalized = values.map(toText).filter(Boolean);
+  const unique = [...new Set(normalized)];
+  if (unique.length > 1) {
+    throw providerError(
+      "VIVA_READBACK_AMBIGUOUS",
+      `Viva booking ${label} aliases conflict`,
+      { ambiguous: true },
+    );
+  }
+  return unique[0] || "";
 };
 
 const isCompletePage = (payload, rows) => {
@@ -49,48 +83,75 @@ const isCompletePage = (payload, rows) => {
 const bookingIdOf = (value) => {
   const object = asObject(value);
   if (!object) return "";
-  return toText(object.id || object.bookingId || object.uuid);
+  return exactAlias([object.id, object.bookingId, object.uuid], "identity");
 };
 
 const clientIdOf = (value) => {
   const object = asObject(value);
   if (!object) return "";
-  return toText(object.clientId || asObject(object.client)?.id || asObject(object.customer)?.id);
+  return exactAlias([
+    object.clientId,
+    asObject(object.client)?.id,
+    asObject(object.customer)?.id,
+  ], "client identity");
 };
 
 const exerciseIdOf = (value) => {
   const object = asObject(value);
   if (!object) return "";
-  return toText(object.exerciseId || asObject(object.exercise)?.id || asObject(object.service)?.id);
+  return exactAlias([
+    object.exerciseId,
+    asObject(object.exercise)?.id,
+    asObject(object.service)?.id,
+  ], "exercise identity");
 };
 
 const bookingIsActive = (value) => {
   const object = asObject(value);
   if (!object) throw providerError("VIVA_READBACK_AMBIGUOUS", "Viva booking read-back is not an object", { ambiguous: true });
-  if (object.active === false || object.cancelled === true || object.canceled === true) return false;
-  if (object.active === true) return true;
-  const state = toText(object.status || object.state).toUpperCase();
-  if (TERMINAL_BOOKING_STATES.has(state)) return false;
-  if (ACTIVE_BOOKING_STATES.has(state)) return true;
-  throw providerError("VIVA_READBACK_AMBIGUOUS", "Viva booking state is not recognized", { ambiguous: true });
-};
-
-const providerError = (code, message, options = {}) => {
-  const normalized = {
-    ambiguous: options.ambiguous === true,
-    expose: options.expose === true,
-  };
-  if (!normalized.ambiguous || options.httpStatus !== undefined) {
-    normalized.httpStatus = options.httpStatus || 503;
+  const evidence = [];
+  let decisiveEvidence = false;
+  if (object.active !== undefined && object.active !== null) {
+    if (typeof object.active !== "boolean") {
+      throw providerError("VIVA_READBACK_AMBIGUOUS", "Viva booking active flag is not boolean", { ambiguous: true });
+    }
+    evidence.push(object.active);
+    decisiveEvidence = true;
   }
-  if (options.terminal !== undefined) normalized.terminal = options.terminal === true;
-  return new PartnerProviderError(code, message, normalized);
+  for (const field of ["cancelled", "canceled"]) {
+    if (object[field] === undefined || object[field] === null) continue;
+    if (typeof object[field] !== "boolean") {
+      throw providerError("VIVA_READBACK_AMBIGUOUS", "Viva booking cancellation flag is not boolean", { ambiguous: true });
+    }
+    evidence.push(!object[field]);
+    if (object[field] === true) decisiveEvidence = true;
+  }
+  const state = exactAlias(
+    [object.status, object.state].map((entry) => toText(entry).toUpperCase()),
+    "state",
+  );
+  if (state) {
+    if (TERMINAL_BOOKING_STATES.has(state)) evidence.push(false);
+    else if (ACTIVE_BOOKING_STATES.has(state)) evidence.push(true);
+    else {
+      throw providerError("VIVA_READBACK_AMBIGUOUS", "Viva booking state is not recognized", { ambiguous: true });
+    }
+    decisiveEvidence = true;
+  }
+  if (!decisiveEvidence || new Set(evidence).size !== 1) {
+    throw providerError("VIVA_READBACK_AMBIGUOUS", "Viva booking lifecycle evidence conflicts", { ambiguous: true });
+  }
+  return evidence[0];
 };
 
 const extractCreatedBooking = (payload) => {
   const direct = asObject(payload);
-  const nested = asObject(direct?.data) || asObject(direct?.booking) || asObject(direct?.payload);
-  const candidates = [direct, nested].filter(Boolean);
+  const candidates = [
+    direct,
+    asObject(direct?.data),
+    asObject(direct?.booking),
+    asObject(direct?.payload),
+  ].filter(Boolean);
   const matches = candidates.filter((candidate) => bookingIdOf(candidate));
   if (matches.length !== 1) return null;
   return matches[0];

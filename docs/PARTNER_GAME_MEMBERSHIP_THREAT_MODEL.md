@@ -143,6 +143,12 @@ settlement. Viva является authority только для существо
 - Контроли v0.2: adapter не делает retry, прокидывает `Idempotency-Key`, требует exact
   create binding, cancel-only probe и read-back; readiness выполняется до local
   operation/reservation.
+- Corrective control: все непустые identity/state aliases обязаны согласовываться, а
+  lifecycle booleans и textual state дают один непротиворечивый результат. REMOVE
+  использует сохранённый canonical `technicalVivaClientId`, поэтому runtime rotation не
+  может перенаправить старый booking на другого клиента. Sibling response containers и
+  create wrappers также проверяются совместно: first-match выбор не может скрыть второе,
+  противоречивое представление booking.
 - Отсутствует: письменное доказательство Viva idempotency/ON_PLACE/cancel semantics,
   sandbox evidence и reconciliation worker/runbook.
 - Риск: high; именно поэтому все real mutation gates default-off.
@@ -198,7 +204,8 @@ settlement. Viva является authority только для существо
 - Контроли: внешний fresh snapshot, exact SHA, exact tab label, namespace/id collision,
   no in-place, additions-only exact-graph allowlist и full added-node hashes. Новые HTTP
   routes разрешены только как explicitly pinned additions; существующие routes остаются
-  byte-semantically неизменными кроме отдельно разрешённых wires.
+  byte-semantically неизменными кроме отдельно разрешённых wires. Live node order
+  сохраняется exact prefix, а additions допускаются только одним suffix.
 - Текущее состояние: свежий live pull недоступен из-за SSH timeout; production packet
   не строился и import не выполнялся.
 - Риск: high до свежей read-only выгрузки; отсутствует runtime exposure сейчас.
@@ -239,3 +246,10 @@ outcome tests, additions-only deployment contract, private packet и Mongo rehea
 guard. Реальный Mongo replica, package install/restart, fresh live flow, shared ingress
 и Viva sandbox остаются отдельными gates. Текущий v0.2 не активирован: default-off
 конфигурация и незакрытые external gates не позволяют выполнить реальную Viva mutation.
+
+Повторный security pass `71cc47da-b3b9-48da-bc93-4a01c48b0e3d` выявил потерю
+сохранённой Viva client binding при DELETE, противоречивые provider aliases, возможность
+переставить live nodes внутри additions-only candidate и регистрозависимый Mongo URI
+guard. Corrective patch фиксирует canonical binding, строгий ambiguous read-back,
+append-only graph order и case-insensitive unique topology options; каждый путь покрыт
+негативным regression test. Live Viva/Mongo/Node-RED этим исправлением не вызывались.

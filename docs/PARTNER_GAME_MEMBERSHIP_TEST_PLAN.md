@@ -34,6 +34,7 @@ secret change, migration, deploy, activation или real provider mutation.
 | Open-game lifecycle | Нет status или канонического `booking.endTs/startTs` | `409 GAME_NOT_OPEN/GAME_SCHEDULE_UNKNOWN`, Viva calls 0 |
 | Compatibility | Реальная форма `PAID`/`PAYMENT_PENDING`, public, future end | POST остаётся разрешённым |
 | Ownership | DELETE чужого/LK/Viva membership | `403 MEMBERSHIP_NOT_OWNED`, Viva calls 0 |
+| Persisted Viva binding | После POST runtime technical client изменён, затем DELETE | Cancel/read-back получают сохранённый client ID; новый runtime ID не используется |
 | Failed DELETE isolation | Pre-authorization failure с существующим чужим membershipId | Меняется только operation/audit; membership и roster не меняются |
 | Provider ambiguity | Timeout/неверный read-back | `202 UNKNOWN`, автоматического повтора нет |
 | Lost ACK/local commit | Provider мог изменить state либо Mongo commit не подтверждён | `202 UNKNOWN`, reservation сохраняется |
@@ -43,12 +44,12 @@ secret change, migration, deploy, activation или real provider mutation.
 | Viva create contract | Готовый adapter получает add | Один POST, pinned base/path/body, auth/idempotency/correlation headers |
 | Viva ambiguity | Network/timeout/5xx/invalid binding | `202 UNKNOWN`, ровно один mutation call, без retry |
 | Viva removal | Cancel probe не подтверждает cancellation-only | PUT не вызывается; definite contract mismatch |
-| Viva read-back | Duplicate booking identity | Ambiguous error, local completion запрещён |
+| Viva read-back | Duplicate/противоречивые identity, state или collection aliases | `VIVA_READBACK_AMBIGUOUS`, local completion запрещён |
 | Synthetic isolation | Не-loopback или production env/DB | Synthetic provider запрещён |
 | Flow provenance | Неверный live SHA/in-place/collision | Candidate builder падает |
-| Additions-only deploy | Новый pinned HTTP route/package bytes | Contract pins все seven nodes; unlisted node/route отклоняется |
+| Additions-only deploy | Новый pinned HTTP route/package bytes | Contract pins все seven nodes; live prefix/order неизменен; additions только suffix |
 | Private packet | Fresh external workspace + exact repository identity | `0700/0600`, no authorization/deploy/activation, reproducible hashes |
-| Mongo rehearsal guard | Non-loopback/shared name/direct connection/bad ack | Отказ до Mongo import/connect |
+| Mongo rehearsal guard | Non-loopback/shared name/mixed-case direct connection/duplicate topology option/bad ack | Отказ до Mongo import/connect |
 
 Команда:
 

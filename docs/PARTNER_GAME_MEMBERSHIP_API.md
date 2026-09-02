@@ -226,6 +226,12 @@ Bearer берётся только из server-side Node-RED global context
 не доказывает server-side idempotency: до ответа Viva gate обязан оставаться `false`.
 Network error, timeout, `5xx`, слишком большой/невалидный mutation response или binding
 mismatch дают `202 UNKNOWN`; blind retry и автоматическая компенсация запрещены.
+Все одновременно присутствующие alias-поля booking/client/exercise и `status/state`
+обязаны совпадать после нормализации. Противоречие с `active/cancelled/canceled`,
+неизвестное состояние или разнонаправленные alias-поля считаются ambiguous read-back и
+не разрешают локальный commit/remove. То же правило действует для sibling collection
+containers `content/items/bookings/data/results` и create wrappers `data/booking/payload`:
+ни один более поздний container нельзя скрыть выбором первого совпавшего поля.
 
 ## 5. Владение и удаление
 
@@ -243,6 +249,9 @@ Viva binding. При любом несовпадении provider не вызы�
 не меняет состояние даже угаданного чужого membership. После подтверждённого Viva
 read-back локальный `$pull` использует только `membershipId`; телефон, имя и
 caller-supplied Viva ID не участвуют.
+Cancel и последующий read-back всегда используют сохранённый в canonical membership
+`technicalVivaClientId`, а не текущий runtime default. Поэтому смена технического
+пользователя не может перенаправить удаление уже созданного booking на нового клиента.
 
 ## 6. Состояния и неоднозначные результаты
 
@@ -338,6 +347,9 @@ Nested package pins MongoDB `7.2.0`, включает свой lockfile в relea
 `http in`, только когда каждый ID и полный node hash явно pinned. Все существующие
 routes/nodes обязаны остаться неизменными. Сам packet ничего не импортирует, не
 устанавливает и не активирует.
+Их исходный порядок также неизменяем: live nodes образуют точный prefix candidate, а
+семь новых узлов — один append-only suffix. Это исключает скрытую смену приоритета
+перекрывающихся Node-RED HTTP routes.
 
 ### Изолированная Mongo replica rehearsal
 
@@ -356,6 +368,9 @@ Guard отклоняет non-loopback seed/advertised replica member, отсут
 индексы в disposable DB, проверяет exact specs, выполняет transaction sentinel и abort,
 затем доказывает отсутствие sentinel. Это не production migration и не разрешение на
 production Mongo.
+Имена topology options разбираются без учёта регистра; дубли `replicaSet` или
+`directConnection`, а также любое значение `directConnection`, кроме единственного
+`false`, отклоняются до импорта Mongo driver и подключения.
 
 ## 11. Rollback/disable
 
