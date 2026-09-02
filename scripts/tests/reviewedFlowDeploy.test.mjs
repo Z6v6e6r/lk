@@ -49,8 +49,6 @@ const exactGraphCandidateFixture = () => {
     outputs: 1,
     wires: [["response"]],
   });
-  const routeIndex = flow.findIndex((node) => node.id === "route");
-  flow.push(flow.splice(routeIndex, 1)[0]);
   return flow;
 };
 
@@ -143,6 +141,32 @@ test("exact-graph contract pins exact changed fields and added nodes while prese
     allowedAdditionIds: ["policy"],
   }), /added-node contract mismatch/);
 
+  const reorderedLiveNodes = exactGraphCandidateFixture();
+  const firstIndex = reorderedLiveNodes.findIndex((node) => node.id === "fn-a");
+  const secondIndex = reorderedLiveNodes.findIndex((node) => node.id === "fn-b");
+  [reorderedLiveNodes[firstIndex], reorderedLiveNodes[secondIndex]] = [
+    reorderedLiveNodes[secondIndex],
+    reorderedLiveNodes[firstIndex],
+  ];
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(reorderedLiveNodes),
+    deploymentId: "managed-subscription-rules",
+    allowedChanges: [{ id: "fn-a", fields: ["func", "outputs", "wires"] }],
+    allowedAdditionIds: ["policy"],
+  }), /reordered live nodes/);
+
+  const interleavedAddition = exactGraphCandidateFixture();
+  const addition = interleavedAddition.pop();
+  interleavedAddition.splice(2, 0, addition);
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(interleavedAddition),
+    deploymentId: "managed-subscription-rules",
+    allowedChanges: [{ id: "fn-a", fields: ["func", "outputs", "wires"] }],
+    allowedAdditionIds: ["policy"],
+  }), /appended suffix/);
+
   const routeDrift = exactGraphCandidateFixture();
   routeDrift.find((node) => node.id === "route").url = "/lk/changed";
   assert.throws(() => buildExactGraphContract({
@@ -210,13 +234,23 @@ test("exact-graph contract permits only an explicitly pinned HTTP input wire cha
     url: "/lk/new",
     wires: [["policy"]],
   });
-  assert.throws(() => buildExactGraphContract({
+  const addedRouteContract = buildExactGraphContract({
     liveBytes,
     candidateBytes: bytes(addedRoute),
     deploymentId: "managed-subscription-rules",
     allowedChanges,
     allowedAdditionIds: ["policy", "new-route"],
-  }), /changed HTTP routes/);
+  });
+  assert.equal(addedRouteContract.httpInputCount, 2);
+  assert.deepEqual(addedRouteContract.allowedAdditions.map(({ id }) => id), ["new-route", "policy"]);
+
+  assert.throws(() => buildExactGraphContract({
+    liveBytes,
+    candidateBytes: bytes(addedRoute),
+    deploymentId: "managed-subscription-rules",
+    allowedChanges,
+    allowedAdditionIds: ["policy"],
+  }), /added-node contract mismatch/);
 
   const removedRoute = candidate.filter((node) => node.id !== "route");
   assert.throws(() => buildExactGraphContract({

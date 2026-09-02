@@ -1,8 +1,10 @@
 # Тестовый Partner Game Membership API
 
-Статус документа: **source-only v0.1, default-off**. Контур реализован и покрыт
-синтетическими тестами, но маршрут не импортирован в Node-RED, реальные вызовы Viva
-не включены, ключи не создавались, Mongo production не менялась.
+Статус документа: **deployable pilot v0.2, default-off, live gates UNBOUND**. Контур,
+строгий Viva adapter и генератор приватного deployment packet реализованы локально,
+но маршрут не импортирован в Node-RED, реальные вызовы Viva не выполнялись, ключи не
+создавались, Mongo/shared ingress/production не менялись. Наличие deployable artifacts
+не является разрешением на deploy или activation.
 
 ## 1. Назначение и жёсткие границы
 
@@ -52,7 +54,7 @@ Query string и fragment запрещены. Namespace отделён от об�
 Схема закрытая: неизвестное поле даёт `UNKNOWN_REQUEST_FIELD`. Денежная сумма —
 безопасное целое число в минимальных единицах валюты. `paidAt` — канонический UTC ISO
 timestamp с миллисекундами. `externalPlayerId` должен быть стабилен и не переиспользоваться
-для другого человека. `payment.reference` в v0.1 одноразовый в рамках integration client:
+для другого человека. `payment.reference` в v0.2 одноразовый в рамках integration client:
 одна внешняя платёжная ссылка не может пометить оплаченными два membership.
 
 ### Успешный POST response
@@ -182,12 +184,54 @@ Server-only keyring задаёт для каждого клиента:
   известным joinable status (`PAID`, `PAYMENT_PENDING` или поддерживаемый legacy open
   status) и каноническим `booking.endTs`, либо `booking.startTs`, не ранее server time;
 - Mongo prerequisites должны совпасть без ослабленных индексов;
-- v0.1 не содержит real Viva provider, поэтому shared/prod mutation всегда fail-closed;
+- mode `viva` содержит real adapter, но mutation fail-closed, пока независимо не
+  подтверждены все server-only gate из следующего раздела;
 - synthetic provider разрешён только для `local|test|dev`, loopback Mongo и имени БД с
   `local|test|dev`.
 
 Ротация без разрыва: добавить новый `keyId`, перевести клиента, отключить старый key,
 затем удалить его после максимального окна request и согласованного grace period.
+
+### 4.1. Отдельные gate реального Viva adapter
+
+Одного общего `enabled=true` недостаточно. До любой operation/reservation adapter
+проверяет token и все значения ниже; любое несовпадение создаёт durable rejected ingress
+audit и возвращает `503`, не создавая operation, membership или Viva request.
+
+| Переменная | Единственное активирующее значение | Назначение |
+| --- | --- | --- |
+| `LK_PARTNER_GAME_API_PROVIDER_MODE` | `viva` | Выбрать real adapter вместо `disabled`/isolated `synthetic` |
+| `LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED` | `true` | Отдельный mutation kill switch |
+| `LK_PARTNER_GAME_API_VIVA_CONTRACT_REVISION` | `padlhub-viva-technical-booking-v1` | Привязать runtime к reviewed contract |
+| `LK_PARTNER_GAME_API_VIVA_IDEMPOTENCY_CONFIRMED` | `true` | Подтвердить письменный ответ Viva об `Idempotency-Key` |
+| `LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED` | `true` | Подтвердить отсутствие нежелательных payment-side effects |
+
+Bearer берётся только из server-side Node-RED global context
+`vivacrm_access_token` и принимается лишь когда `vivacrm_token_expires_at` остаётся
+больше чем на 30 секунд вперед. Caller не может передать token, Viva client ID, booking ID,
+`paymentType` или API base. Base pinned к `https://api.vivacrm.ru/api/v1`; redirect
+запрещён, timeout ограничен 1–30 секундами, mutation не повторяется автоматически.
+
+Текущий provider contract основан на существующих repository integrations и остаётся
+**provisional до письменного подтверждения Viva**:
+
+| Действие | Pinned request | Обязательный ответ/read-back |
+| --- | --- | --- |
+| Add | `POST /exercises/{exerciseId}/bookings`, server body `clientId`, `paymentType=ON_PLACE`, empty `familyMemberId/customFields` | Один exact `bookingId`; если response содержит binding, он обязан совпасть с exercise/client |
+| Read | `GET /exercises/{exerciseId}/bookings?showCancelled=true&page=0&size=200` | Ровно одна exact-bound запись; отсутствие принимается только при доказанно последней/полной странице, иначе `UNKNOWN` |
+| Remove probe | `GET /clients/{clientId}/bookings/{bookingId}/cancel` | Явное `cancellationOptions.cancellationOnly.available=true` |
+| Remove | `PUT` того же path, body `refundMethod=NONE`, `cancelExercise=false` | Затем read-back обязан показать booking неактивным/отсутствующим |
+
+`Idempotency-Key` и `X-Correlation-ID` пересылаются в Viva. Однако само наличие header
+не доказывает server-side idempotency: до ответа Viva gate обязан оставаться `false`.
+Network error, timeout, `5xx`, слишком большой/невалидный mutation response или binding
+mismatch дают `202 UNKNOWN`; blind retry и автоматическая компенсация запрещены.
+Все одновременно присутствующие alias-поля booking/client/exercise и `status/state`
+обязаны совпадать после нормализации. Противоречие с `active/cancelled/canceled`,
+неизвестное состояние или разнонаправленные alias-поля считаются ambiguous read-back и
+не разрешают локальный commit/remove. То же правило действует для sibling collection
+containers `content/items/bookings/data/results` и create wrappers `data/booking/payload`:
+ни один более поздний container нельзя скрыть выбором первого совпавшего поля.
 
 ## 5. Владение и удаление
 
@@ -205,12 +249,15 @@ Viva binding. При любом несовпадении provider не вызы�
 не меняет состояние даже угаданного чужого membership. После подтверждённого Viva
 read-back локальный `$pull` использует только `membershipId`; телефон, имя и
 caller-supplied Viva ID не участвуют.
+Cancel и последующий read-back всегда используют сохранённый в canonical membership
+`technicalVivaClientId`, а не текущий runtime default. Поэтому смена технического
+пользователя не может перенаправить удаление уже созданного booking на нового клиента.
 
 ## 6. Состояния и неоднозначные результаты
 
 ```text
-ADD:    RECEIVED -> SLOT_RESERVED -> Viva add -> exact read-back -> COMPLETED
-REMOVE: RECEIVED -> VIVA_PENDING  -> Viva remove -> exact read-back -> COMPLETED
+ADD:    provider READY -> RECEIVED -> SLOT_RESERVED -> Viva add -> exact read-back -> COMPLETED
+REMOVE: provider READY -> RECEIVED -> VIVA_PENDING  -> Viva remove -> exact read-back -> COMPLETED
                            \-> UNKNOWN (timeout/ambiguous ACK/read-back mismatch)
                            \-> FAILED  (definite pre-mutation failure)
 ```
@@ -267,25 +314,63 @@ replay, tamper, expired timestamp, idempotent retry, idempotency conflict, scope
 station allowlist на POST и DELETE, archived/ended/private/conflicting/missing-lifecycle
 game states, запрет удаления LK/Viva/другого клиента, отсутствие mutation при
 pre-authorization failure, `UNKNOWN`, audit redaction, closed schema, default-off
-provider и source-only flow builder.
+provider readiness до operation, точные Viva path/body/headers/read-back/cancel gates,
+отсутствие mutation retry, additions-only exact-graph contract, Mongo rehearsal guard и
+приватный v0.2 deployment packet.
 
-## 10. Подготовка flow-кандидата
+## 10. Подготовка deployment packet
 
 Только после свежей read-only выгрузки `LK Games`:
 
 ```bash
 npm run nodered:modular:audit-147 -- /absolute/external/workspace --source-tab-label "LK Games"
-node scripts/patch_partner_game_membership_api_flow.mjs \
-  --input /absolute/external/workspace/source.flow.json \
-  --output /absolute/external/workspace/partner-api.candidate.json \
-  --source-sha256 <exact-fresh-sha256> \
-  --source-tab-label "LK Games"
+npm run nodered:partner-game-membership:v02-packet -- \
+  --workspace /absolute/external/workspace \
+  --out /absolute/new-private-partner-v02-packet
 ```
 
-Builder запрещает in-place запись, проверяет exact source SHA, namespace collision и
-создаёт manifest с `deploymentPerformed=false`, `activationPerformed=false`. Импорт,
-установка custom node, создание индексов, добавление секретов, ingress/mTLS, включение
-flag и реальные Viva mutation — отдельные контролируемые этапы.
+Генератор принимает только свежий приватный workspace с доказанным origin
+`lk-primary-147:/root/.node-red/flows.json`, чистый exact task-branch commit и новый
+output вне repository. Он создаёт файлы с mode `0600` внутри directory `0700`:
+
+- `candidate.flow.json` — свежий flow плюс ровно семь pinned nodes;
+- `reviewed-flow.contract.json` — source/candidate SHA и hash каждого addition;
+- `custom-node/` + `custom-node.release.json` — exact source/package-lock bytes/hashes;
+- `deployment-plan.json` — `liveMutationAuthorized=false`,
+  `deploymentPerformed=false`, `activationPerformed=false` и список незакрытых gates.
+
+Nested package pins MongoDB `7.2.0`, включает свой lockfile в release identity и должен
+устанавливаться через `npm ci --ignore-scripts`; фактическая Node/npm/Linux совместимость
+и offline/immutable dependency closure всё равно репетируются до deploy.
+
+Расширенный reviewed-flow contract разрешает additions-only deploy, включая новые
+`http in`, только когда каждый ID и полный node hash явно pinned. Все существующие
+routes/nodes обязаны остаться неизменными. Сам packet ничего не импортирует, не
+устанавливает и не активирует.
+Их исходный порядок также неизменяем: live nodes образуют точный prefix candidate, а
+семь новых узлов — один append-only suffix. Это исключает скрытую смену приоритета
+перекрывающихся Node-RED HTTP routes.
+
+### Изолированная Mongo replica rehearsal
+
+После отдельного разрешения и только на disposable replica-set:
+
+```bash
+LK_PARTNER_GAME_API_MONGO_URI='mongodb://127.0.0.1:27018/?replicaSet=partner-test' \
+LK_PARTNER_GAME_API_MONGO_DB='lk_partner_rehearsal_<unique>' \
+npm run mongo:partner-game-membership:rehearse -- \
+  --ack-disposable-db 'lk_partner_rehearsal_<unique>'
+```
+
+Guard отклоняет non-loopback seed/advertised replica member, отсутствие exact
+`replicaSet`, `directConnection=true`, любое имя вне `lk_partner_rehearsal_*`,
+неожиданную collection/non-empty DB и несовпадающее acknowledgement. Rehearsal создаёт только
+индексы в disposable DB, проверяет exact specs, выполняет transaction sentinel и abort,
+затем доказывает отсутствие sentinel. Это не production migration и не разрешение на
+production Mongo.
+Имена topology options разбираются без учёта регистра; дубли `replicaSet` или
+`directConnection`, а также любое значение `directConnection`, кроме единственного
+`false`, отклоняются до импорта Mongo driver и подключения.
 
 ## 11. Rollback/disable
 

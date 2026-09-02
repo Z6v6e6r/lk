@@ -24,6 +24,10 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
       environment: String(config.environmentEnv || "LK_PARTNER_GAME_API_ENVIRONMENT").trim(),
       providerMode: String(config.providerModeEnv || "LK_PARTNER_GAME_API_PROVIDER_MODE").trim(),
       technicalVivaClientId: String(config.technicalVivaClientIdEnv || "LK_PARTNER_GAME_API_VIVA_TECHNICAL_CLIENT_ID").trim(),
+      vivaMutationsEnabled: String(config.vivaMutationsEnabledEnv || "LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED").trim(),
+      vivaContractRevision: String(config.vivaContractRevisionEnv || "LK_PARTNER_GAME_API_VIVA_CONTRACT_REVISION").trim(),
+      vivaIdempotencyConfirmed: String(config.vivaIdempotencyConfirmedEnv || "LK_PARTNER_GAME_API_VIVA_IDEMPOTENCY_CONFIRMED").trim(),
+      vivaOnPlaceConfirmed: String(config.vivaOnPlaceConfirmedEnv || "LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED").trim(),
     };
     let runtimePromise = null;
 
@@ -39,7 +43,8 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
           import("mongodb"),
           import("./partner-game-membership-core.mjs"),
           import("./partner-game-membership-mongo.mjs"),
-        ]).then(async ([{ MongoClient }, core, mongo]) => {
+          import("./partner-game-membership-viva.mjs"),
+        ]).then(async ([{ MongoClient }, core, mongo, viva]) => {
           const mongoUri = readEnv(envNames.mongoUri);
           const databaseName = readEnv(envNames.databaseName);
           const environment = readEnv(envNames.environment);
@@ -70,9 +75,31 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
             } else {
               await repository.verifyRequiredIndexes();
             }
-            const provider = providerMode === "synthetic"
-              ? new core.SyntheticVivaProvider()
-              : new core.DisabledVivaProvider();
+            let provider;
+            if (providerMode === "synthetic") {
+              provider = new core.SyntheticVivaProvider();
+            } else if (providerMode === "viva") {
+              provider = new viva.VivaAdminTechnicalUserProvider({
+                mutationsEnabled: readEnv(envNames.vivaMutationsEnabled) === "true",
+                contractRevision: readEnv(envNames.vivaContractRevision),
+                idempotencyConfirmed: readEnv(envNames.vivaIdempotencyConfirmed) === "true",
+                onPlacePaymentConfirmed: readEnv(envNames.vivaOnPlaceConfirmed) === "true",
+                tokenResolver: async () => {
+                  try {
+                    const globalContext = node.context().global;
+                    const expiresAt = Number(globalContext.get("vivacrm_token_expires_at") || 0);
+                    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() + 30_000) return "";
+                    return globalContext.get("vivacrm_access_token");
+                  } catch {
+                    return "";
+                  }
+                },
+              });
+            } else if (!providerMode || providerMode === "disabled") {
+              provider = new core.DisabledVivaProvider();
+            } else {
+              throw new Error("Partner API provider mode is invalid");
+            }
             const keyResolver = async (clientId, keyId) => {
               const clientConfig = Object.hasOwn(keyring, clientId) ? keyring[clientId] : null;
               const encodedSecret = clientConfig?.keys && Object.hasOwn(clientConfig.keys, keyId)

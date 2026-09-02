@@ -398,15 +398,32 @@ export class PartnerGameMembershipApiService {
       await this.auditIngress(request, auth, "REJECTED", "SCOPE_DENIED");
       throw new PartnerApiError("SCOPE_DENIED", "Integration client lacks the required scope", { httpStatus: 403 });
     }
-    await this.auditIngress(request, auth, "ACCEPTED", "SIGNATURE_VERIFIED");
-
-    if (route.action === "READ_OPERATION") return this.readOperation(auth, route);
+    if (route.action === "READ_OPERATION") {
+      await this.auditIngress(request, auth, "ACCEPTED", "SIGNATURE_VERIFIED");
+      return this.readOperation(auth, route);
+    }
     if (!this.technicalVivaClientId) {
+      await this.auditIngress(request, auth, "REJECTED", "VIVA_TECHNICAL_CLIENT_NOT_CONFIGURED");
       throw new PartnerApiError("VIVA_TECHNICAL_CLIENT_NOT_CONFIGURED", "Viva technical client is not configured", {
         httpStatus: 503,
         expose: false,
       });
     }
+    try {
+      if (typeof this.provider?.assertReady !== "function") {
+        throw new PartnerProviderError("VIVA_RUNTIME_NOT_CONFIGURED", "Viva provider readiness contract is missing", {
+          ambiguous: false,
+          httpStatus: 503,
+          expose: false,
+          terminal: false,
+        });
+      }
+      await this.provider.assertReady({ action: route.action });
+    } catch (error) {
+      await this.auditIngress(request, auth, "REJECTED", error?.code || "VIVA_RUNTIME_NOT_CONFIGURED");
+      throw error;
+    }
+    await this.auditIngress(request, auth, "ACCEPTED", "SIGNATURE_VERIFIED");
     if (route.action === "ADD_MEMBER") return this.addMember(request.body, auth, route);
     return this.removeMember(request.body, auth, route);
   }
@@ -516,7 +533,7 @@ export class PartnerGameMembershipApiService {
           idempotencyKey: auth.idempotencyKey,
           exerciseId: owned.exerciseId,
           bookingId: owned.bookingId,
-          technicalVivaClientId: this.technicalVivaClientId,
+          technicalVivaClientId: owned.technicalVivaClientId,
         });
       } catch (error) {
         if (error instanceof PartnerProviderError) throw error;
@@ -527,10 +544,13 @@ export class PartnerGameMembershipApiService {
           operationId: operation.operationId,
           exerciseId: owned.exerciseId,
           bookingId: owned.bookingId,
-          technicalVivaClientId: this.technicalVivaClientId,
+          technicalVivaClientId: owned.technicalVivaClientId,
           includeCancelled: true,
         });
-        if (booking?.active) {
+        if (booking?.active
+          || booking?.bookingId !== owned.bookingId
+          || booking?.exerciseId !== owned.exerciseId
+          || booking?.clientId !== owned.technicalVivaClientId) {
           throw new PartnerProviderError("VIVA_REMOVE_READBACK_MISMATCH", "Viva removal read-back is ambiguous", { ambiguous: true });
         }
         const completed = await this.repository.completeRemove({
@@ -577,7 +597,7 @@ export class PartnerGameMembershipApiService {
 }
 
 export class DisabledVivaProvider {
-  async addTechnicalUser() {
+  async assertReady() {
     throw new PartnerProviderError("VIVA_RUNTIME_NOT_CONFIGURED", "Real Viva mutations are disabled", {
       ambiguous: false,
       httpStatus: 503,
@@ -586,12 +606,18 @@ export class DisabledVivaProvider {
     });
   }
 
+  async addTechnicalUser() {
+    return this.assertReady();
+  }
+
   async removeTechnicalUser() { return this.addTechnicalUser(); }
   async readBooking() { return this.addTechnicalUser(); }
 }
 
 export class SyntheticVivaProvider {
   constructor() { this.bookings = new Map(); }
+
+  async assertReady() { return true; }
 
   async addTechnicalUser(input) {
     const bookingId = `synthetic_${sha256Hex(`${input.operationId}:${input.exerciseId}`).slice(0, 24)}`;

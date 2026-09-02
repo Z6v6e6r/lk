@@ -58,6 +58,10 @@ export function buildPartnerGameMembershipApiCandidate(sourceFlow, options = {})
       environmentEnv: "LK_PARTNER_GAME_API_ENVIRONMENT",
       providerModeEnv: "LK_PARTNER_GAME_API_PROVIDER_MODE",
       technicalVivaClientIdEnv: "LK_PARTNER_GAME_API_VIVA_TECHNICAL_CLIENT_ID",
+      vivaMutationsEnabledEnv: "LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED",
+      vivaContractRevisionEnv: "LK_PARTNER_GAME_API_VIVA_CONTRACT_REVISION",
+      vivaIdempotencyConfirmedEnv: "LK_PARTNER_GAME_API_VIVA_IDEMPOTENCY_CONFIRMED",
+      vivaOnPlaceConfirmedEnv: "LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED",
     },
     httpIn(
       PARTNER_API_FLOW_NODE_IDS.addIn,
@@ -108,8 +112,8 @@ export function buildPartnerGameMembershipApiCandidate(sourceFlow, options = {})
       id: PARTNER_API_FLOW_NODE_IDS.comment,
       type: "comment",
       z,
-      name: "Partner API is fail-closed; real Viva provider is intentionally unavailable in v0.1",
-      info: "Install only from a fresh LK Games live-flow snapshot. Runtime remains disabled unless the server-only enable flag is exactly true. Synthetic provider is accepted only with loopback Mongo and local/test/dev database naming.",
+      name: "Partner API v0.2 is fail-closed and default-off",
+      info: "Install only from a fresh LK Games live-flow snapshot. Real Viva mutations require four independent server-only gates: provider mode, mutation enable, approved contract revision, and confirmed provider idempotency/ON_PLACE semantics. Synthetic mode is accepted only with loopback Mongo and local/test/dev database naming.",
       x: 590,
       y: 120,
       wires: [],
@@ -152,7 +156,7 @@ export function buildCandidateFile(options) {
   fs.writeFileSync(path.resolve(options.output), candidateBytes, { flag: "wx" });
   const manifest = {
     schemaVersion: 1,
-    artifact: "partner-game-membership-api-source-only-candidate",
+    artifact: "partner-game-membership-api-v0.2-candidate",
     deploymentPerformed: false,
     activationPerformed: false,
     source: {

@@ -919,3 +919,14 @@ Server-side обращения к Viva используют стабильный
 guarded-патчером из свежего live-147 workspace; обычная frontend-сборка и её
 деплой этот заголовок не активируют. Полный порядок подготовки, review и
 provider postcheck: `docs/VIVA_USER_AGENT.md`.
+
+## Partner Game Membership API v0.2
+
+Этот endpoint нельзя выкладывать обычным frontend deploy. Сначала нужен свежий private
+Node-RED workspace с `lk-primary-147`, затем
+`npm run nodered:partner-game-membership:v02-packet -- --workspace <workspace> --out <new-external-dir>`.
+Packet всегда содержит `liveMutationAuthorized=false`, `deploymentPerformed=false` и
+`activationPerformed=false`. Его наличие не разрешает install/import/restart, создание
+Mongo indexes, provisioning secrets/ACL, ingress change или Viva mutation. Полный
+порядок, обязательные external ответы и rollback gates описаны в
+`docs/PARTNER_GAME_MEMBERSHIP_API.md`.

@@ -10,7 +10,11 @@
       auditKeyEnv: { value: "LK_PARTNER_GAME_API_AUDIT_HMAC_KEY", required: true },
       environmentEnv: { value: "LK_PARTNER_GAME_API_ENVIRONMENT", required: true },
       providerModeEnv: { value: "LK_PARTNER_GAME_API_PROVIDER_MODE", required: true },
-      technicalVivaClientIdEnv: { value: "LK_PARTNER_GAME_API_VIVA_TECHNICAL_CLIENT_ID", required: true }
+      technicalVivaClientIdEnv: { value: "LK_PARTNER_GAME_API_VIVA_TECHNICAL_CLIENT_ID", required: true },
+      vivaMutationsEnabledEnv: { value: "LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED", required: true },
+      vivaContractRevisionEnv: { value: "LK_PARTNER_GAME_API_VIVA_CONTRACT_REVISION", required: true },
+      vivaIdempotencyConfirmedEnv: { value: "LK_PARTNER_GAME_API_VIVA_IDEMPOTENCY_CONFIRMED", required: true },
+      vivaOnPlaceConfirmedEnv: { value: "LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED", required: true }
     },
     label: function () { return this.name || "Partner game membership store"; }
   });
@@ -26,6 +30,10 @@
   <div class="form-row"><label for="node-config-input-environmentEnv">Environment env</label><input type="text" id="node-config-input-environmentEnv"></div>
   <div class="form-row"><label for="node-config-input-providerModeEnv">Provider mode env</label><input type="text" id="node-config-input-providerModeEnv"></div>
   <div class="form-row"><label for="node-config-input-technicalVivaClientIdEnv">Viva technical client env</label><input type="text" id="node-config-input-technicalVivaClientIdEnv"></div>
+  <div class="form-row"><label for="node-config-input-vivaMutationsEnabledEnv">Viva mutation gate env</label><input type="text" id="node-config-input-vivaMutationsEnabledEnv"></div>
+  <div class="form-row"><label for="node-config-input-vivaContractRevisionEnv">Viva contract revision env</label><input type="text" id="node-config-input-vivaContractRevisionEnv"></div>
+  <div class="form-row"><label for="node-config-input-vivaIdempotencyConfirmedEnv">Viva idempotency gate env</label><input type="text" id="node-config-input-vivaIdempotencyConfirmedEnv"></div>
+  <div class="form-row"><label for="node-config-input-vivaOnPlaceConfirmedEnv">Viva ON_PLACE gate env</label><input type="text" id="node-config-input-vivaOnPlaceConfirmedEnv"></div>
 </script>
 
 <script type="text/javascript">

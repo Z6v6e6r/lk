@@ -1,9 +1,10 @@
-# Threat model: Partner Game Membership API v0.1
+# Threat model: Partner Game Membership API v0.2
 
 Дата: 2026-09-01. Scope: новый M2M namespace, кастомный Node-RED runtime, Mongo
-ownership/idempotency/audit ledgers, синтетический Viva adapter и source-only flow
-builder. Не входят: production ingress, реальный Viva provider, secret provisioning,
-Mongo production migration, deploy и activation.
+ownership/idempotency/audit ledgers, synthetic и strict real Viva adapters,
+additions-only exact-graph contract, приватный deployment packet и disposable Mongo
+rehearsal guard. Не входят: provider-contract approval, production ingress, secret
+provisioning, Mongo production migration, deploy и activation.
 
 ## 1. Системная модель
 
@@ -26,7 +27,7 @@ Mongo production migration, deploy и activation.
 [Partner/KMS]
       | TLS + optional mTLS, HMAC proof
       v
-[Ingress: allowlist/rate-limit]        -- вне v0.1
+[Ingress: allowlist/rate-limit]        -- UNBOUND
       |
       v
 [Node-RED custom API node]
@@ -37,7 +38,7 @@ Mongo production migration, deploy и activation.
       |
       | exact server-side binding only
       v
-[Viva technical user adapter]         -- real adapter отсутствует в v0.1
+[Viva technical user adapter]         -- default-off; external contract UNCONFIRMED
       |
       `-- exact booking read-back -> local transactional projection
 ```
@@ -63,8 +64,10 @@ settlement. Viva является authority только для существо
 - Add и remove требуют exact Viva read-back; неоднозначность переходит в `UNKNOWN`, а не
   вызывает слепой retry
   (`node-red/custom-nodes/partner-game-membership-api/partner-game-membership-core.mjs:442-565`).
-- Real provider в v0.1 явно disabled; synthetic adapter отделён
-  (`node-red/custom-nodes/partner-game-membership-api/partner-game-membership-core.mjs:578-619`).
+- Real provider выполняет readiness до operation: exact revision, отдельный mutation
+  switch, written idempotency/ON_PLACE confirmation и server-side token. Он pins API
+  base/path/body, запрещает redirects/retries и переводит ambiguous outcome в `UNKNOWN`
+  (`node-red/custom-nodes/partner-game-membership-api/partner-game-membership-viva.mjs`).
 - Индексы фиксируют client idempotency, active ownership, nonce TTL и outbox identity;
   runtime отклоняет missing/weakened prerequisites
   (`node-red/custom-nodes/partner-game-membership-api/partner-game-membership-mongo.mjs:14-35`,
@@ -88,10 +91,10 @@ settlement. Viva является authority только для существо
 - Kill switch default-off, secrets только env; synthetic provider разрешён лишь в
   изолированном loopback runtime, иначе выбирается disabled provider
   (`node-red/custom-nodes/partner-game-membership-api/partner-game-membership-node.cjs:18-91`).
-- Flow candidate требует отдельный namespace, exact source SHA и запрещает in-place
-  mutation; manifest явно фиксирует отсутствие deploy/activation
-  (`scripts/patch_partner_game_membership_api_flow.mjs:32-124`,
-  `scripts/patch_partner_game_membership_api_flow.mjs:126-171`).
+- Flow candidate требует отдельный namespace и fresh exact source. Deployment packet
+  pins full hashes семи added nodes, custom-node sources и package lock, остаётся private `0700/0600`
+  и явно фиксирует отсутствие authorization/deploy/activation
+  (`scripts/prepare_partner_game_membership_v02_packet.mjs`).
 
 ## 3. Threat register
 
@@ -104,7 +107,7 @@ settlement. Viva является authority только для существо
   nonce до операции; idempotency отдельно блокирует duplicate business command.
 - Остаток: real-time relay до первого consume не устраняется HMAC. До пилота нужен mTLS
   или минимум IP allowlist, rate limit и trusted-proxy review.
-- Риск после v0.1 controls: medium; до ingress controls: high.
+- Риск после v0.2 application controls: medium; до ingress controls: high.
 
 ### T2. Подмена body/path/method
 
@@ -137,9 +140,18 @@ settlement. Viva является authority только для существо
 - Путь: Viva commit выполнен, HTTP response потерян; автоматический retry создаёт дубль.
 - Контроли: operation ledger, exact provider read-back, `UNKNOWN`, сохранённый idempotent
   response и отсутствие blind retry.
-- Отсутствует: реальный provider contract, reconciliation worker/runbook и доказательство
-  Viva idempotency.
-- Риск: high; именно поэтому real provider в v0.1 disabled.
+- Контроли v0.2: adapter не делает retry, прокидывает `Idempotency-Key`, требует exact
+  create binding, cancel-only probe и read-back; readiness выполняется до local
+  operation/reservation.
+- Corrective control: все непустые identity/state aliases обязаны согласовываться, а
+  lifecycle booleans и textual state дают один непротиворечивый результат. REMOVE
+  использует сохранённый canonical `technicalVivaClientId`, поэтому runtime rotation не
+  может перенаправить старый booking на другого клиента. Sibling response containers и
+  create wrappers также проверяются совместно: first-match выбор не может скрыть второе,
+  противоречивое представление booking.
+- Отсутствует: письменное доказательство Viva idempotency/ON_PLACE/cancel semantics,
+  sandbox evidence и reconciliation worker/runbook.
+- Риск: high; именно поэтому все real mutation gates default-off.
 
 ### T6. Oversubscription при конкурентном LK/Viva/partner add
 
@@ -156,9 +168,9 @@ settlement. Viva является authority только для существо
 - Путь: invalid request, control chars, огромный body, raw secret/nonce/IP в logs.
 - Контроли: строгие token/display validation, no-store response, HMAC fingerprints,
   durable ingress и transactional operation audit, generic internal error.
-- Остаток: ingress body/header size limit отсутствует в v0.1; unauthenticated audit при
+- Остаток: ingress body/header size limit не связан в v0.2; unauthenticated audit при
   Mongo outage может существовать только как fallback node event; retention/RBAC/SIEM не
-  настроены.
+  настроены. Provider readiness rejection всё же требует durable ingress audit.
 - Риск: medium до ingress/RBAC/retention.
 
 ### T8. Ослабленные или отсутствующие Mongo indexes
@@ -190,8 +202,11 @@ settlement. Viva является authority только для существо
 - Путь: candidate строится из устаревшего `LK Games`, затирает live changes или создаёт
   route collision.
 - Контроли: внешний fresh snapshot, exact SHA, exact tab label, namespace/id collision,
-  no in-place, source-only manifest.
-- Текущее состояние: live pull 2026-09-01 завершился `scp: Connection closed`; candidate
+  no in-place, additions-only exact-graph allowlist и full added-node hashes. Новые HTTP
+  routes разрешены только как explicitly pinned additions; существующие routes остаются
+  byte-semantically неизменными кроме отдельно разрешённых wires. Live node order
+  сохраняется exact prefix, а additions допускаются только одним suffix.
+- Текущее состояние: свежий live pull недоступен из-за SSH timeout; production packet
   не строился и import не выполнялся.
 - Риск: high до свежей read-only выгрузки; отсутствует runtime exposure сейчас.
 
@@ -200,10 +215,10 @@ settlement. Viva является authority только для существо
 ### До shared sandbox
 
 1. Закрыть все P0 вопросы из external-team document.
-2. Получить fresh `LK Games`, проверить writers/field shapes и построить source-only
-   candidate по exact SHA.
-3. Добавить real Viva adapter только из подтверждённой OpenAPI; отдельный security,
-   payment-safety и reliability review.
+2. Получить fresh `LK Games`, проверить writers/field shapes и построить private v0.2
+   packet по exact SHA.
+3. Сопоставить provisional Viva adapter с подтверждённой OpenAPI/examples; не включать
+   четыре mutation gates до отдельного security/payment-safety/reliability review.
 4. Прогнать Mongo replica/concurrency/ambiguous-commit tests.
 5. Настроить mTLS предпочтительно; минимум ingress IP allowlist, TLS, rate/body limits.
 6. Создать отдельные sandbox key/technical client/Mongo DB без production данных.
@@ -226,9 +241,15 @@ pass дополнительно обнаружил, что общий pre-author
 referenced membership; теперь REMOVE меняет membership state только после успешного
 перехода в `VIVA_PENDING`.
 
-После исправления 35/35 focused tests, full lint без errors, production+dev build,
-syntax checks, Draw.io XML validation и diff-check прошли. Реальный Mongo replica,
-shared ingress и Viva sandbox остаются отдельными gates. Перед добавлением real Viva
-adapter и первой внешней публикацией требуется свежий security review, а перед
-активацией — payment-safety/reliability review. Текущий v0.1 не активирован и не способен
-выполнить реальную Viva mutation.
+В v0.2 добавлены pre-operation readiness, provisional real adapter, no-retry/ambiguous
+outcome tests, additions-only deployment contract, private packet и Mongo rehearsal
+guard. Реальный Mongo replica, package install/restart, fresh live flow, shared ingress
+и Viva sandbox остаются отдельными gates. Текущий v0.2 не активирован: default-off
+конфигурация и незакрытые external gates не позволяют выполнить реальную Viva mutation.
+
+Повторный security pass `71cc47da-b3b9-48da-bc93-4a01c48b0e3d` выявил потерю
+сохранённой Viva client binding при DELETE, противоречивые provider aliases, возможность
+переставить live nodes внутри additions-only candidate и регистрозависимый Mongo URI
+guard. Corrective patch фиксирует canonical binding, строгий ambiguous read-back,
+append-only graph order и case-insensitive unique topology options; каждый путь покрыт
+негативным regression test. Live Viva/Mongo/Node-RED этим исправлением не вызывались.

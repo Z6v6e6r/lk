@@ -24,14 +24,26 @@ P1 блокирует ограниченный пилот; P2 можно сог�
   exercise? Если нет, требуется пул технических клиентов или иная модель.
 - Возвращается ли уникальный booking ID в подтверждённом response? Как выполнить exact
   read-back по `exerciseId + bookingId + clientId`?
+- Какие поля/states однозначно означают active и cancelled booking? Как доказать, что
+  booking отсутствует: `last`, `totalPages/totalElements`, отдельный GET-by-ID? Может ли
+  нужная запись оказаться за пределами первой страницы `size=200`?
 - Как удалить именно эту запись без refund/возврата/затрагивания других booking?
 - Как Viva отвечает на повтор create/delete, timeout после commit, already cancelled,
   exercise closed и capacity conflict?
+- Поддерживает ли каждый mutation endpoint header `Idempotency-Key`? Какова область
+  уникальности (tenant/client/endpoint), TTL записи, поведение при том же key+body и при
+  том же key с другим body? Сохраняется ли тот же booking ID после lost response?
+- Прокидывается/возвращается ли `X-Correlation-ID`, есть ли provider request ID для
+  разбора неоднозначного timeout/`5xx`?
+- Подтверждает ли команда точные provisional paths/body v0.2: Admin API v1 create,
+  list read-back, cancellation probe и PUT `{refundMethod:"NONE",cancelExercise:false}`?
 - Создаёт ли технический booking задолженность, оплату, чек, уведомление, абонементное
   списание, статистику посещения или рейтинг?
 
 **Нужно получить:** актуальная OpenAPI-схема, sandbox examples и таблица семантики всех
-2xx/4xx/5xx/timeout. Пока этого нет, real provider в коде отсутствует и fail-closed.
+2xx/4xx/5xx/timeout, отдельное письменное подтверждение `Idempotency-Key` и `ON_PLACE`.
+Пока этого нет, реализованный v0.2 adapter остаётся default-off: четыре real-mutation
+gate нельзя включать по предположению или только по успешному единичному запросу.
 
 ### 3. Что означает «оплачено»?
 
@@ -39,7 +51,7 @@ P1 блокирует ограниченный пилот; P2 можно сог�
 - Валюта и amount берутся из партнёра или сверяются с ценой слота в PadlHub/Viva?
 - Может ли сумма быть 0; допустимы скидки, промокоды, частичная оплата?
 - Где источник истины для refund/chargeback? Нужен ли отдельный reversal event?
-- Подтверждает ли команда v0.1 правило: payment reference уникален и неизменяем в рамках
+- Подтверждает ли команда v0.2 правило: payment reference уникален и неизменяем в рамках
   integration client? Если один платёж покрывает нескольких игроков, нужен отдельный
   group-payment контракт, а не переиспользование reference.
 
@@ -51,7 +63,7 @@ refund/chargeback policy и примеры reconciliation. Без этого о�
 
 - `externalPlayerId` уникален в рамках client, tenant или глобально?
 - Может ли ID перейти другому человеку или измениться после merge аккаунтов?
-- Какой displayName допустимо передавать и хранить; нужен ли телефон? В v0.1 телефон
+- Какой displayName допустимо передавать и хранить; нужен ли телефон? В v0.2 телефон
   намеренно запрещён.
 - Нужно ли связывать внешнего игрока с существующим LK/Viva профилем? Если да, кто и по
   какому доказательству выполняет mapping?
@@ -149,7 +161,7 @@ authority времени и согласованный compensation/manual recon
 
 ### 14. Массовые операции
 
-- Нужен ли batch add/remove? Без отдельного дизайна v0.1 остаётся one request — one
+- Нужен ли batch add/remove? Без отдельного дизайна v0.2 остаётся one request — one
   membership, чтобы сохранять понятную idempotency и ownership.
 - Нужен ли atomic group booking или допустим частичный результат?
 
@@ -168,7 +180,8 @@ authority времени и согласованный compensation/manual recon
 ## Минимальный пакет ответов для открытия shared sandbox
 
 1. Подписанный P0 decision log.
-2. Viva OpenAPI + sandbox technical client + exact add/read/delete examples.
+2. Viva OpenAPI + sandbox technical client + exact add/read/delete examples + письменная
+   гарантия provider idempotency и `ON_PLACE` semantics.
 3. Golden HMAC vectors, NTP proof и retry matrix.
 4. mTLS certificate либо утверждённые CIDR/TLS/rate limits.
 5. Payment semantics и запрет нежелательных Viva side effects.
