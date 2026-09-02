@@ -215,6 +215,17 @@ export const compileDraftPolicy = (
   const activeLimit = asRecord(draftPolicy.activeServicesLimit);
   const bookingWindow = asRecord(draftPolicy.bookingWindow);
   const dailyUsagePolicy = asRecord(draftPolicy.dailyUsagePolicy);
+  const hasDiscountDurations = Object.prototype.hasOwnProperty.call(
+    dailyUsagePolicy,
+    "discountDurationsMinutes",
+  );
+  if (hasDiscountDurations && !Array.isArray(dailyUsagePolicy.discountDurationsMinutes)) {
+    throw new DevRuntimeError(
+      503,
+      "CUP_POLICY_INVALID",
+      "DEV ЦУП вернул некорректный фильтр длительностей дневной скидки",
+    );
+  }
   const createGame = asRecord(draftPolicy.createGame);
   const joinGame = asRecord(draftPolicy.joinGame);
   const policy: ManagedSubscriptionRuntimePolicy = {
@@ -268,6 +279,11 @@ export const compileDraftPolicy = (
       percentage: dailyUsagePolicy.limitExceeded === "PERCENT_DISCOUNT"
         ? asNullableNumber(dailyUsagePolicy.percentage)
         : null,
+      ...(hasDiscountDurations ? {
+        discountDurationsMinutes: asStringArray(dailyUsagePolicy.discountDurationsMinutes)
+          .map(Number)
+          .filter((duration): duration is 60 | 90 | 120 => [60, 90, 120].includes(duration)),
+      } : {}),
     },
     usageUnitsByDuration: {
       "60": asNumber(asRecord(draftPolicy.usageUnitsByDuration)["60"], 0),
@@ -323,12 +339,13 @@ export const buildAnnualShadowPolicySource = (stationIds: string[]): PolicySourc
       max: 4,
       scope: "SUBSCRIPTION_BENEFIT_ONLY",
     },
-    bookingWindow: { enabled: false, days: null },
+    bookingWindow: { enabled: true, days: 14 },
     dailyUsageLimit: 1,
     dailyUsagePolicy: {
       actions: ["CREATE_GAME", "JOIN_GAME"],
       limitExceeded: "PERCENT_DISCOUNT",
       percentage: 30,
+      discountDurationsMinutes: [90, 120],
     },
     usageUnitsByDuration: { "60": 1, "90": 1, "120": 1 },
     stationAccessRules: [{
@@ -348,14 +365,10 @@ export const buildAnnualShadowPolicySource = (stationIds: string[]): PolicySourc
         productTypeIds: [],
         durationMinutes: [durationMinutes],
         stationIds,
-        kind: durationMinutes === 60 ? "FREE_ENTITLEMENT" : "PARTIAL_PRICE_PERCENT_DISCOUNT",
+        kind: durationMinutes === 60 ? "FREE_ENTITLEMENT" : "PERCENT_DISCOUNT",
         valueMinor: null,
         percentage: durationMinutes === 60 ? null : 30,
-        partialPrice: durationMinutes === 90
-          ? { numerator: 1, denominator: 3 }
-          : durationMinutes === 120
-            ? { numerator: 1, denominator: 2 }
-            : null,
+        partialPrice: null,
         priority: 100,
       })),
       {
@@ -364,21 +377,6 @@ export const buildAnnualShadowPolicySource = (stationIds: string[]): PolicySourc
         category: "GROUP_TRAINING",
         actions: ["BOOK_GROUP_TRAINING"],
         externalEventTypeIds: ["dev-group-training"],
-        productTypeIds: [],
-        durationMinutes: [60, 90, 120],
-        stationIds,
-        kind: "PERCENT_DISCOUNT",
-        valueMinor: null,
-        percentage: 50,
-        partialPrice: null,
-        priority: 100,
-      },
-      {
-        ruleId: "annual-shadow-tournament-50",
-        enabled: true,
-        category: "TOURNAMENT",
-        actions: ["BOOK_TOURNAMENT"],
-        externalEventTypeIds: ["dev-tournament"],
         productTypeIds: [],
         durationMinutes: [60, 90, 120],
         stationIds,
@@ -502,7 +500,7 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
   {
     targetId: "create-station-a-90-aug18",
     title: "Создать игру 90 минут",
-    description: "Первая игровая услуга дня · доплата только за 30 минут сверх часа со скидкой 30%",
+    description: "Игра 90 минут · скидка 30% от полной цены",
     action: "CREATE_GAME",
     courtPriceMinor: 900_000,
     participantCount: 4,
@@ -522,7 +520,7 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
   {
     targetId: "create-home-120-aug18",
     title: "Создать игру 120 минут",
-    description: "Первая игровая услуга дня · доплата только за 60 минут сверх часа со скидкой 30%",
+    description: "Игра 120 минут · скидка 30% от полной цены",
     action: "CREATE_GAME",
     courtPriceMinor: 1_200_000,
     participantCount: 4,
@@ -562,7 +560,7 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
   {
     targetId: "join-station-b-90-aug18",
     title: "Присоединиться к игре 90 минут",
-    description: "До лимита — доплата за 30 минут со скидкой 30%; после лимита — вся цена со скидкой 30%",
+    description: "Игра 90 минут · скидка 30% от полной цены",
     action: "JOIN_GAME",
     courtPriceMinor: 900_000,
     participantCount: 4,
@@ -582,7 +580,7 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
   {
     targetId: "join-station-b-120-aug18",
     title: "Присоединиться к игре 120 минут",
-    description: "До лимита — доплата за 60 минут со скидкой 30%; после лимита — вся цена со скидкой 30%",
+    description: "Игра 120 минут · скидка 30% от полной цены",
     action: "JOIN_GAME",
     courtPriceMinor: 1_200_000,
     participantCount: 4,
@@ -674,7 +672,7 @@ export const buildDevTargets = (): ManagedSubscriptionDevTarget[] => [
   {
     targetId: "tournament-station-a-120-aug18",
     title: "Записаться на турнир",
-    description: "Скидка 50%; не расходует бесплатную игровую услугу дня",
+    description: "Без точного provider mapping формат остаётся недоступным",
     action: "BOOK_TOURNAMENT",
     target: {
       resolutionSource: "SERVER",

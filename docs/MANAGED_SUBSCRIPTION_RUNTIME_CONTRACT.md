@@ -179,9 +179,14 @@ the same policy version.
 - exact action + category + event type + duration + product type + station
   benefit selection;
 - `FREE_ENTITLEMENT`, fixed price, percent and fixed discount in RUB minor units;
-- duration-specific benefits can make the first 60 minutes free while a 90- or
-  120-minute game charges only the `1/3` or `1/2` excess-time share with a 30%
-  discount;
+- the evaluator still supports duration-specific partial-price benefits, but
+  the PITER policy effective for sales from `2026-09-01` does not use them:
+  60 minutes are free once per local day, while 90/120 minutes receive a 30%
+  discount from the full server-resolved participant price;
+- `dailyUsagePolicy.discountDurationsMinutes=[90,120]` narrows the post-limit
+  30% override: a second 60-minute subscription action fails closed instead of
+  inheriting that discount; the optional field preserves the behavior of older
+  published policies that do not contain it;
 - add-on products use the same appendable rule model with exact server-resolved
   product type, event type and stations;
 - ambiguity and missing server base price fail closed;

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import test from "node:test";
 
@@ -6,6 +7,14 @@ const page = fs.readFileSync("src/components/tournament-subscription/TournamentS
 const entry = fs.readFileSync("src/tournament-subscription.tsx", "utf8");
 const css = fs.readFileSync("src/MyApp.css", "utf8");
 const loader = fs.readFileSync("docs/tilda-piter-subscription.html", "utf8");
+const router = fs.readFileSync(
+  "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js",
+  "utf8",
+);
+
+function sha256(path: string) {
+  return crypto.createHash("sha256").update(fs.readFileSync(path)).digest("hex");
+}
 
 test("Piter page is a dedicated storefront with its own counter and four 100-unit artworks", () => {
   assert.match(page, /variant === "piter_friendship"/);
@@ -18,24 +27,36 @@ test("Piter page is a dedicated storefront with its own counter and four 100-uni
     assert.match(page, new RegExp(`piter-subscription-tier-${tier}\\.webp`));
     assert.ok(fs.statSync(`src/assets/piter-subscription-tier-${tier}.webp`).size > 0);
   }
+  assert.equal(
+    sha256("src/assets/piter-subscription-tier-1.webp"),
+    "21868451f8dd722a99db1a555065e00bae401e2592c19a2e38e21fadcd2d590d",
+  );
   assert.match(entry, /storefront: options\.data\?\.variant === "piter_friendship"/);
   assert.match(loader, /variant:\s*"piter_friendship"/);
 });
 
 test("Piter page exposes the requested terms through an accessible flip control", () => {
   for (const phrase of [
-    "Одна игра в день: создание или присоединение.",
-    "По подписке можно создать только игру длительностью 60 минут.",
-    "Присоединиться по подписке можно к игре длительностью 60, 90 или 120 минут.",
-    "дополнительные 30 или 60 минут оплачиваются отдельно со скидкой",
-    "Групповые тренировки доступны на специальных условиях",
-    "Турниры доступны на специальных условиях",
+    "Один час игры в день бесплатно: создание или присоединение.",
+    "Игры длительностью 90 или 120 минут можно создать или присоединиться к ним со скидкой 30%.",
+    "Скидка 50% действует на игру с тренером, групповые тренировки и формат «Время на друзей».",
+    "По подписке можно сделать до 4 активных записей на 2 недели вперёд.",
   ]) {
     assert.ok(page.includes(phrase), `missing term: ${phrase}`);
   }
+  const rulesArtwork = "src/assets/piter-subscription-rules-from-20260901.webp";
+  assert.ok(fs.statSync(rulesArtwork).size > 0 && fs.statSync(rulesArtwork).size < 200_000);
+  assert.equal(
+    sha256(rulesArtwork),
+    "3e5ad8e71c42c8e46ea6cc9bfb6f0539dd09181f940c022a8956b35172ff9c12",
+  );
+  assert.match(page, /piter-subscription-rules-from-20260901\.webp/);
+  assert.match(page, /проданных с 01\.09\.2026 по московскому времени/);
+  assert.match(router, /MANAGED_ENFORCEMENT_PURCHASE_FROM = "2026-09-01"/);
   assert.match(page, /Узнать условия подписки/);
   assert.match(page, /aria-pressed=/);
   assert.match(css, /\.piter-subscription-flip--flipped[\s\S]*?rotateY\(180deg\)/);
+  assert.match(css, /\.piter-subscription-face--rules-artwork/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
 });
 

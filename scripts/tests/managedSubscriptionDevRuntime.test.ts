@@ -109,10 +109,12 @@ const annualDraftPolicy = () => ({
     max: 4,
     scope: "SUBSCRIPTION_BENEFIT_ONLY",
   },
+  bookingWindow: { enabled: true, days: 14 },
   dailyUsagePolicy: {
     actions: ["CREATE_GAME", "JOIN_GAME"],
     limitExceeded: "PERCENT_DISCOUNT",
     percentage: 30,
+    discountDurationsMinutes: [90, 120],
   },
   stationAccessRules: [{
     ruleId: "annual-all-dev-stations",
@@ -136,7 +138,7 @@ const annualDraftPolicy = () => ({
     partialPrice: null,
     priority: 100,
   }, {
-    ruleId: "annual-game-90-excess-minus-30",
+    ruleId: "annual-game-90-minus-30",
     enabled: true,
     category: "GAME",
     actions: ["CREATE_GAME", "JOIN_GAME"],
@@ -144,13 +146,13 @@ const annualDraftPolicy = () => ({
     productTypeIds: [],
     durationMinutes: [90],
     stationIds: ["dev-station-a", "dev-station-b", "dev-station-home"],
-    kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
+    kind: "PERCENT_DISCOUNT",
     valueMinor: null,
     percentage: 30,
-    partialPrice: { numerator: 1, denominator: 3 },
+    partialPrice: null,
     priority: 100,
   }, {
-    ruleId: "annual-game-120-excess-minus-30",
+    ruleId: "annual-game-120-minus-30",
     enabled: true,
     category: "GAME",
     actions: ["CREATE_GAME", "JOIN_GAME"],
@@ -158,10 +160,10 @@ const annualDraftPolicy = () => ({
     productTypeIds: [],
     durationMinutes: [120],
     stationIds: ["dev-station-a", "dev-station-b", "dev-station-home"],
-    kind: "PARTIAL_PRICE_PERCENT_DISCOUNT",
+    kind: "PERCENT_DISCOUNT",
     valueMinor: null,
     percentage: 30,
-    partialPrice: { numerator: 1, denominator: 2 },
+    partialPrice: null,
     priority: 100,
   }, {
     ruleId: "annual-group-minus-50",
@@ -169,20 +171,6 @@ const annualDraftPolicy = () => ({
     category: "GROUP_TRAINING",
     actions: ["BOOK_GROUP_TRAINING"],
     externalEventTypeIds: ["dev-group-training"],
-    productTypeIds: [],
-    durationMinutes: [60, 90, 120],
-    stationIds: ["dev-station-a", "dev-station-b", "dev-station-home"],
-    kind: "PERCENT_DISCOUNT",
-    valueMinor: null,
-    percentage: 50,
-    partialPrice: null,
-    priority: 100,
-  }, {
-    ruleId: "annual-tournament-minus-50",
-    enabled: true,
-    category: "TOURNAMENT",
-    actions: ["BOOK_TOURNAMENT"],
-    externalEventTypeIds: ["dev-tournament"],
     productTypeIds: [],
     durationMinutes: [60, 90, 120],
     stationIds: ["dev-station-a", "dev-station-b", "dev-station-home"],
@@ -220,6 +208,22 @@ const createAnnualRuntime = () => {
   return createManagedSubscriptionDevRuntime({ policyLoader: async () => source });
 };
 
+test("Piter annual shadow policy fixes the 14-day booking window and four active services", () => {
+  const source = buildAnnualShadowPolicySource(["station-piter"]);
+  assert.deepEqual(source.policy.bookingWindow, { enabled: true, days: 14 });
+  assert.deepEqual(source.policy.activeServicesLimit, {
+    enabled: true,
+    max: 4,
+    scope: "SUBSCRIPTION_BENEFIT_ONLY",
+  });
+  assert.deepEqual(source.policy.dailyUsagePolicy, {
+    actions: ["CREATE_GAME", "JOIN_GAME"],
+    limitExceeded: "PERCENT_DISCOUNT",
+    percentage: 30,
+    discountDurationsMinutes: [90, 120],
+  });
+});
+
 test("DRAFT policy is promoted only to an in-memory published runtime snapshot", () => {
   const source = compileDraftPolicy(
     { subscriptionTypeId: "subscription_type:dev-friendship", code: "annual-dev-ac6396e" },
@@ -246,6 +250,15 @@ test("DRAFT policy is promoted only to an in-memory published runtime snapshot",
     percentage: null,
   });
   assert.match(source.digest, /^[a-f0-9]{64}$/);
+});
+
+test("DEV compiler rejects a malformed post-limit discount duration filter", () => {
+  const malformed = annualDraftPolicy() as Record<string, unknown>;
+  (malformed.dailyUsagePolicy as Record<string, unknown>).discountDurationsMinutes = "90,120";
+  assert.throws(() => compileDraftPolicy(
+    { subscriptionTypeId: "subscription_type:dev-friendship", code: "annual-dev-ac6396e" },
+    malformed,
+  ), /некорректный фильтр длительностей/);
 });
 
 test("CUP loader pins an explicitly requested DRAFT version instead of the latest draft", async () => {
@@ -330,17 +343,17 @@ test("booking window, station access and missing group benefit fail closed", asy
   assert.ok(group.decision.blockers.some((item) => item.code === "EVENT_NOT_INCLUDED"));
 });
 
-test("annual DEV runtime covers free hour, excess-time pricing and post-limit discount", async () => {
+test("Piter annual DEV runtime covers one free hour and full-price 30 percent discounts", async () => {
   const runtime = createAnnualRuntime();
   await runtime.initialize();
   await runtime.seed(0);
 
   for (const [targetId, expectedFinal] of [
     ["create-station-a-60-aug18", 0],
-    ["create-station-a-90-aug18", 52_500],
-    ["create-home-120-aug18", 105_000],
-    ["join-station-b-90-aug18", 52_500],
-    ["join-station-b-120-aug18", 105_000],
+    ["create-station-a-90-aug18", 157_500],
+    ["create-home-120-aug18", 210_000],
+    ["join-station-b-90-aug18", 157_500],
+    ["join-station-b-120-aug18", 210_000],
   ] as const) {
     const result = await runtime.quote(targetId);
     assert.equal(result.decision.eligible, true, targetId);
@@ -348,15 +361,20 @@ test("annual DEV runtime covers free hour, excess-time pricing and post-limit di
   }
 
   await runtime.reserve("create-station-a-60-aug18", "reserve:annual-free-game");
+  const secondSixty = await runtime.quote("create-station-a-60-aug18");
   const excessCreate = await runtime.quote("create-station-a-90-aug18");
   const excessJoin = await runtime.quote("join-station-b-120-aug18");
+  assert.ok(secondSixty.decision.blockers.some(
+    (blocker) => blocker.code === "DAILY_USAGE_LIMIT_REACHED",
+  ));
+  assert.notEqual(secondSixty.decision.benefit?.kind, "PERCENT_DISCOUNT");
   assert.equal(excessCreate.decision.benefit?.kind, "PERCENT_DISCOUNT");
   assert.equal(excessCreate.decision.benefit?.finalPriceMinor, 157_500);
   assert.equal(excessJoin.decision.benefit?.kind, "PERCENT_DISCOUNT");
   assert.equal(excessJoin.decision.benefit?.finalPriceMinor, 210_000);
 });
 
-test("annual group and tournament receive 50 percent without consuming the game-day quota", async () => {
+test("annual mapped group receives 50 percent while an unmapped tournament fails closed", async () => {
   const runtime = createAnnualRuntime();
   await runtime.initialize();
   await runtime.seed(0);
@@ -364,7 +382,9 @@ test("annual group and tournament receive 50 percent without consuming the game-
   const tournament = await runtime.quote("tournament-station-a-120-aug18");
   const gameAfterGroup = await runtime.quote("create-station-a-60-aug18");
   assert.equal(group.decision.benefit?.finalPriceMinor, 150_000);
-  assert.equal(tournament.decision.benefit?.finalPriceMinor, 250_000);
+  assert.ok(tournament.decision.blockers.some(
+    (blocker) => blocker.code === "EVENT_NOT_INCLUDED",
+  ));
   assert.equal(gameAfterGroup.decision.benefit?.kind, "FREE_ENTITLEMENT");
   assert.equal(gameAfterGroup.decision.benefit?.finalPriceMinor, 0);
 });
@@ -489,7 +509,7 @@ test("browser cannot inject an arbitrary station, date or price", async () => {
   );
 });
 
-test("server-resolved create intent ignores browser price and uses one-quarter of fixture court price", async () => {
+test("server-resolved 90 minute create uses provider price and applies a full-price 30 percent discount", async () => {
   const stationId = "station-terekhovo";
   const target = resolveShadowIntent({
     action: "CREATE_GAME",
@@ -500,12 +520,12 @@ test("server-resolved create intent ignores browser price and uses one-quarter o
       roomId: "room-6",
       masterServiceId: "master-padel",
       subServiceIds: ["sub-padel"],
-      startsAt: "2026-08-30T10:30:00+03:00",
+      startsAt: "2026-08-28T10:30:00+03:00",
       durationMinutes: 90,
       basePriceMinor: 1,
     } as never,
     createFixtures: new Map([
-      [`${stationId}|room-6|2026-08-30T10:30:00+03:00|90`, 1_200_000],
+      [`${stationId}|room-6|2026-08-28T10:30:00+03:00|90`, 1_200_000],
     ]),
     stationIds: [stationId],
     joinFixtures: new Map(),
@@ -518,8 +538,9 @@ test("server-resolved create intent ignores browser price and uses one-quarter o
     policyLoader: async () => buildAnnualShadowPolicySource([stationId]),
   });
   const firstUse = await runtime.quoteResolved(target, { activeServices: 0, dailyGameUsage: 0 });
-  assert.equal(firstUse.decision.benefit?.partialPriceCalculation?.chargeBeforeDiscountMinor, 100_000);
-  assert.equal(firstUse.decision.benefit?.finalPriceMinor, 70_000);
+  assert.equal(firstUse.decision.benefit?.kind, "PERCENT_DISCOUNT");
+  assert.equal(firstUse.decision.benefit?.partialPriceCalculation, null);
+  assert.equal(firstUse.decision.benefit?.finalPriceMinor, 210_000);
 
   const afterFreeHour = await runtime.quoteResolved(target, { activeServices: 0, dailyGameUsage: 1 });
   assert.equal(afterFreeHour.decision.benefit?.kind, "PERCENT_DISCOUNT");
@@ -538,7 +559,7 @@ test("server-resolved create intent ignores browser price and uses one-quarter o
   });
 });
 
-test("server-resolved 120 minute create charges only the second player-hour with 30 percent discount", async () => {
+test("server-resolved 120 minute create applies a full-price 30 percent discount", async () => {
   const stationId = "station-terekhovo";
   const target = resolveShadowIntent({
     action: "CREATE_GAME",
@@ -549,11 +570,11 @@ test("server-resolved 120 minute create charges only the second player-hour with
       roomId: "room-6",
       masterServiceId: "master-padel",
       subServiceIds: ["sub-padel"],
-      startsAt: "2026-08-30T12:30:00+03:00",
+      startsAt: "2026-08-28T12:30:00+03:00",
       durationMinutes: 120,
     },
     createFixtures: new Map([
-      [`${stationId}|room-6|2026-08-30T12:30:00+03:00|120`, 1_600_000],
+      [`${stationId}|room-6|2026-08-28T12:30:00+03:00|120`, 1_600_000],
     ]),
     stationIds: [stationId],
     joinFixtures: new Map(),
@@ -564,8 +585,9 @@ test("server-resolved 120 minute create charges only the second player-hour with
   const result = await runtime.quoteResolved(target, { activeServices: 0, dailyGameUsage: 0 });
   assert.equal(target.courtPriceMinor, 1_600_000);
   assert.equal(target.target.basePriceMinor, 400_000);
-  assert.equal(result.decision.benefit?.partialPriceCalculation?.chargeBeforeDiscountMinor, 200_000);
-  assert.equal(result.decision.benefit?.finalPriceMinor, 140_000);
+  assert.equal(result.decision.benefit?.kind, "PERCENT_DISCOUNT");
+  assert.equal(result.decision.benefit?.partialPriceCalculation, null);
+  assert.equal(result.decision.benefit?.finalPriceMinor, 280_000);
 });
 
 test("server-resolved create fails closed when the exact slot is absent from the server catalog", () => {
@@ -587,7 +609,7 @@ test("server-resolved create fails closed when the exact slot is absent from the
   }), /Цена выбранного слота отсутствует/);
 });
 
-test("server-resolved group training and tournament use exact real-station fixtures with 50 percent discount", async () => {
+test("server-resolved group training uses its exact fixture while an unmapped tournament fails closed", async () => {
   const stationId = "6a7a9edc-6869-40ad-a5a1-8a1cdfb746a1";
   const groupId = "group-terekhovo-60";
   const tournamentId = "tournament-terekhovo-120";
@@ -595,14 +617,14 @@ test("server-resolved group training and tournament use exact real-station fixtu
     [groupId, {
       action: "BOOK_GROUP_TRAINING" as const,
       stationId,
-      startsAt: "2026-08-31T12:00:00+03:00",
+      startsAt: "2026-08-28T12:00:00+03:00",
       durationMinutes: 60 as const,
       basePriceMinor: 300_000,
     }],
     [tournamentId, {
       action: "BOOK_TOURNAMENT" as const,
       stationId,
-      startsAt: "2026-08-31T15:00:00+03:00",
+      startsAt: "2026-08-28T15:00:00+03:00",
       durationMinutes: 120 as const,
       basePriceMinor: 500_000,
     }],
@@ -640,7 +662,9 @@ test("server-resolved group training and tournament use exact real-station fixtu
   assert.equal(groupTarget.participantCount, undefined);
   assert.equal(group.decision.benefit?.finalPriceMinor, 150_000);
   assert.equal(tournamentTarget.target.basePriceMinor, 500_000);
-  assert.equal(tournament.decision.benefit?.finalPriceMinor, 250_000);
+  assert.ok(tournament.decision.blockers.some(
+    (blocker) => blocker.code === "EVENT_NOT_INCLUDED",
+  ));
 
   const overActiveLimit = await runtime.quoteResolved(
     groupTarget,
