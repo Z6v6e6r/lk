@@ -6,7 +6,17 @@ if [[ $# -ne 1 ]]; then
   exit 64
 fi
 
-workspace="$1"
+workspace_input="$1"
+workspace_parent="$(cd "$(dirname "$workspace_input")" 2>/dev/null && pwd -P)" || {
+  echo "DEV snapshot workspace parent must already exist" >&2
+  exit 65
+}
+workspace_name="$(basename "$workspace_input")"
+if [[ -z "$workspace_name" || "$workspace_name" == "." || "$workspace_name" == ".." ]]; then
+  echo "DEV snapshot workspace name is invalid" >&2
+  exit 65
+fi
+workspace="$workspace_parent/$workspace_name"
 case "$workspace" in
   /private/tmp/*|/tmp/*) ;;
   *) echo "DEV snapshot workspace must be under /private/tmp or /tmp" >&2; exit 65 ;;
@@ -32,7 +42,7 @@ captured_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 jq -n \
   --arg environment DEV \
-  --arg sourceKind live-dev-reserve \
+  --arg sourceKind shared-host-audit-only \
   --arg sourceHost lk-reserve-89 \
   --arg sourceHostname "$source_hostname" \
   --arg sourceUser root \
@@ -43,7 +53,7 @@ jq -n \
   --argjson nodeCount "$node_count" \
   --argjson httpRouteCount "$http_route_count" \
   --argjson tabCount "$tab_count" \
-  '{formatVersion:1, environment:$environment, sourceKind:$sourceKind,
+  '{formatVersion:1, environment:$environment, sourceKind:$sourceKind, candidateEligible:false,
     sourceHost:$sourceHost, sourceHostname:$sourceHostname, sourceUser:$sourceUser,
     sourcePort:$sourcePort, remoteFlowPath:$remoteFlowPath,
     sourceSha256:$sourceSha256, nodeCount:$nodeCount,

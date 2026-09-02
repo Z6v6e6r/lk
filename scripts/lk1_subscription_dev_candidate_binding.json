@@ -4,7 +4,7 @@
   "bindingState": "BLOCKED_DEV_FLOW_TARGET_ABSENT",
   "environmentIdentityVerified": false,
   "source": {
-    "sourceKind": "live-dev-reserve",
+    "sourceKind": "shared-host-audit-only",
     "sourceHost": "lk-reserve-89",
     "sourceHostname": "89-108-64-209.cloudvps.regruhosting.ru",
     "sourceUser": "root",

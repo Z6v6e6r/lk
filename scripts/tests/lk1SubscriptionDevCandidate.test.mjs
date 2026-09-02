@@ -24,7 +24,10 @@ const DEV_API_BASE = "https://subscriptions-dev.example.test/api";
 const DEV_INSTALL_TARGET = Object.freeze({
   sourceHost: "lk-reserve-89",
   sourceHostname: "89-108-64-209.cloudvps.regruhosting.ru",
-  remoteFlowPath: "/root/.node-red/flows.json",
+  serviceName: "lk1-subscription-dev-nodered.service",
+  unixUser: "lk1-subscription-dev",
+  userDir: "/srv/lk1-subscription-dev/node-red",
+  remoteFlowPath: "/srv/lk1-subscription-dev/node-red/flows.json",
 });
 const trustedBindings = () => ({
   DEV: DEV_API_BASE,
@@ -48,12 +51,12 @@ function fixture() {
     installAllowed: true,
     environmentIdentityVerified: true,
     source: {
-      sourceKind: "live-dev-reserve",
+      sourceKind: "dedicated-dev-target",
       sourceHost: "lk-reserve-89",
       sourceHostname: "89-108-64-209.cloudvps.regruhosting.ru",
       sourceUser: "root",
       sourcePort: 22,
-      remoteFlowPath: "/root/.node-red/flows.json",
+      remoteFlowPath: DEV_INSTALL_TARGET.remoteFlowPath,
       sourceSha256: sha256(sourceText),
       nodeCount: flow.length,
       httpRouteCount: 1,
@@ -148,7 +151,22 @@ test("DEV builder rejects tracked function bodies that retain production/shared 
   ), /retains a production\/shared endpoint/);
 });
 
-test("DEV publisher binds the inspector metadata shape and writes candidate plus manifest", () => {
+test("shared-root audit capture cannot become a DEV candidate source", () => {
+  const { sourceText, binding } = fixture();
+  binding.source.sourceKind = "shared-host-audit-only";
+  binding.source.remoteFlowPath = "/root/.node-red/flows.json";
+  assert.throws(() => buildDevCandidate(sourceText, binding, () => "", trustedBindings()),
+    /DEV source identity mismatch/);
+  const divergentBindings = trustedBindings();
+  divergentBindings.DEV_INSTALL_TARGET = {
+    ...DEV_INSTALL_TARGET,
+    remoteFlowPath: "/root/.node-red/flows.json",
+  };
+  assert.throws(() => validateDevBinding(fixture().binding, divergentBindings),
+    /diverges from the provisioning contract/);
+});
+
+test("DEV publisher remains blocked until provisioning separately authorizes candidate build", () => {
   const { sourceText, binding } = fixture();
   const workspace = fs.mkdtempSync("/private/tmp/lk1-dev-publish-test-");
   fs.mkdirSync(path.join(workspace, "input"));
@@ -167,13 +185,11 @@ test("DEV publisher binds the inspector metadata shape and writes candidate plus
     "scripts/nodered_games_nodes/fn_split_router.js":
       "const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = \"PROD\";\nconst MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = {\n  PROD: \"https://padlhub.su/api\",\n  DEV: null,\n};\n",
   };
-  const result = publishDevCandidate(workspace, binding, {
+  assert.throws(() => publishDevCandidate(workspace, binding, {
     readSource: (file) => trackedSources[file],
     trustedBindings: trustedBindings(),
-  });
-  assert.equal(fs.existsSync(result.candidatePath), true);
-  assert.equal(fs.existsSync(result.manifestPath), true);
-  assert.equal(JSON.parse(fs.readFileSync(result.manifestPath, "utf8")).environment, "DEV");
+  }), /blocks DEV candidate publication/);
+  assert.equal(fs.existsSync(path.join(workspace, "build")), false);
 });
 
 test("checked-in DEV binding stays blocked on missing flow, CUP, HTTP, and Mongo custody", () => {
@@ -198,7 +214,7 @@ test("read-only snapshot inspector computes graph, target, duplicate, and Mongo 
   fs.writeFileSync(sourcePath, `${JSON.stringify(flow)}\n`);
   fs.writeFileSync(metaPath, JSON.stringify({
     environment: "DEV",
-    sourceKind: "live-dev-reserve",
+    sourceKind: "shared-host-audit-only",
     sourceHost: "lk-reserve-89",
   }));
   execFileSync(process.execPath, [
@@ -221,34 +237,38 @@ test("DEV and PROD manifests cannot cross installation environments", () => {
     candidateSha256: "a".repeat(64),
     targetHost: "lk-reserve-89",
     targetHostname: "89-108-64-209.cloudvps.regruhosting.ru",
-    targetFlowPath: "/root/.node-red/flows.json",
+    targetServiceName: DEV_INSTALL_TARGET.serviceName,
+    targetUnixUser: DEV_INSTALL_TARGET.unixUser,
+    targetUserDir: DEV_INSTALL_TARGET.userDir,
+    targetFlowPath: DEV_INSTALL_TARGET.remoteFlowPath,
   };
   const devTarget = {
     environment: "DEV",
     sourceHost: "lk-reserve-89",
     sourceHostname: "89-108-64-209.cloudvps.regruhosting.ru",
-    remoteFlowPath: "/root/.node-red/flows.json",
+    serviceName: DEV_INSTALL_TARGET.serviceName,
+    unixUser: DEV_INSTALL_TARGET.unixUser,
+    userDir: DEV_INSTALL_TARGET.userDir,
+    remoteFlowPath: DEV_INSTALL_TARGET.remoteFlowPath,
   };
   assert.equal(validateDevInstallManifest(devManifest, devTarget, trustedBindings()), true);
-  assert.throws(() => verifyDevInstallManifest(devManifest, Buffer.from("candidate")), /binding is blocked/);
+  assert.throws(() => verifyDevInstallManifest(devManifest, Buffer.from("candidate")),
+    /blocks DEV install/);
   const { binding } = fixture();
   const candidateBytes = Buffer.from("candidate");
   const candidateSha256 = sha256(candidateBytes);
   binding.candidateSha256 = candidateSha256;
   binding.installTarget = {
-    sourceHost: devTarget.sourceHost,
-    sourceHostname: devTarget.sourceHostname,
-    remoteFlowPath: devTarget.remoteFlowPath,
+    ...DEV_INSTALL_TARGET,
   };
   const boundManifest = {
     ...devManifest,
     sourceSha256: binding.source.sourceSha256,
     candidateSha256,
   };
-  assert.equal(verifyDevInstallManifest(boundManifest, candidateBytes, binding, trustedBindings()), true);
   assert.throws(() => verifyDevInstallManifest(
-    boundManifest, Buffer.from("substituted"), binding, trustedBindings(),
-  ), /does not match/);
+    boundManifest, candidateBytes, binding, trustedBindings(),
+  ), /blocks DEV install/);
   assert.throws(() => validateDevInstallManifest(
     devManifest, { ...devTarget, environment: "PROD" }, trustedBindings(),
   ),
@@ -261,7 +281,10 @@ test("DEV and PROD manifests cannot cross installation environments", () => {
     environment: "DEV",
     sourceHost: "lk-primary-147",
     sourceHostname: "production.example.test",
-    remoteFlowPath: "/root/.node-red/flows.json",
+    serviceName: DEV_INSTALL_TARGET.serviceName,
+    unixUser: DEV_INSTALL_TARGET.unixUser,
+    userDir: DEV_INSTALL_TARGET.userDir,
+    remoteFlowPath: DEV_INSTALL_TARGET.remoteFlowPath,
   };
   assert.throws(() => validateDevInstallTarget(disguisedProductionTarget, trustedBindings()),
     /exact trusted DEV binding/);
