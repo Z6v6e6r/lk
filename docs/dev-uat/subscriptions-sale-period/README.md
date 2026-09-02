@@ -295,6 +295,10 @@ delta `providerWriteCounter`, `paymentWriteCounter`,
 UAT reconciliation получили `PASS`. Missing, unsigned, unbound или decreasing
 counter также не может дать no-write PASS.
 
+До ручного UAT каждый из четырёх mutation counters обязан быть absolute zero.
+Неизменившийся положительный baseline (например, `7→7`) блокирует before-snapshot
+и повторно отклоняется final proof; одной нулевой delta недостаточно.
+
 ### Подписка A — V1
 
 - Открыть профиль и сверить exact A оператором.

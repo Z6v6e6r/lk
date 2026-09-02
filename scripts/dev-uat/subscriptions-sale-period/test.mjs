@@ -9,6 +9,7 @@ import {
   boundaryFixtures,
   classifyDevUrl,
   evaluatePreflight,
+  evaluateEndToEndMutationEvidence,
   executeMode,
   hasCompleteNoWriteProof,
   hasCompleteSetupNoWriteProof,
@@ -753,6 +754,51 @@ test("DEV-looking unapproved origin is rejected before credentials or network", 
   assert.equal(calls, 0);
 });
 
+test("observe-before blocks every unchanged positive mutation-counter baseline", async () => {
+  const cases = {
+    providerWriteCounter: 7,
+    paymentWriteCounter: 9,
+    entitlementMutationCounter: 5,
+    rollbackWriteCounter: 3,
+  };
+  for (const [counter, value] of Object.entries(cases)) {
+    const beforeEvidence = {
+      subjects: {
+        A: normalizeFixtureObservation("A", { metrics: { [counter]: value } }),
+        B: normalizeFixtureObservation("B"),
+      },
+    };
+    const afterEvidence = structuredClone(beforeEvidence);
+    const mutationEvidence = evaluateEndToEndMutationEvidence(
+      beforeEvidence,
+      afterEvidence,
+      "20260902T120000000Z",
+    );
+    assert.equal(mutationEvidence.noMutationDeltas, true, counter);
+    assert.equal(mutationEvidence.absoluteZeroBefore, false, counter);
+    assert.equal(mutationEvidence.noWritesProven, false, counter);
+
+    const configured = inputs();
+    const observations = {
+      [configured.DEV_TEST_SUBSCRIPTION_A_ID]: observation("A", { metrics: { [counter]: value } }),
+      [configured.DEV_TEST_SUBSCRIPTION_B_ID]: observation("B"),
+    };
+    const result = await executeMode({
+      mode: "observe-before",
+      inputs: configured,
+      client: new ReadOnlyHttpClient({ fetchImpl: fixtureFetch({ observations }).fetchImpl, timeoutMs: 100 }),
+      now: new Date(),
+    });
+    assert.equal(result.report.status, "BLOCKED", counter);
+    assert.equal(result.report.noWrites, false, counter);
+    assert.equal(
+      result.report.checks.find((row) => row.name === "CORRELATION_COUNTERS_ZERO_BEFORE_A").status,
+      "FAIL",
+      counter,
+    );
+  }
+});
+
 test("positive provider delta can reconcile but cannot yield global no-write PASS", async () => {
   const configured = inputs();
   const idA = configured.DEV_TEST_SUBSCRIPTION_A_ID;
@@ -798,6 +844,7 @@ test("positive provider delta can reconcile but cannot yield global no-write PAS
   assert.equal(hasCompleteSetupNoWriteProof(after.report), true);
   assert.equal(hasCompleteNoWriteProof(after.report), false);
   assert.equal(after.report.endToEndMutationEvidence.authenticated, true);
+  assert.equal(after.report.endToEndMutationEvidence.absoluteZeroBefore, true);
   assert.equal(after.report.endToEndMutationEvidence.subjects.A.deltas.providerWriteCounter, 1);
   assert.equal(after.report.endToEndMutationEvidence.subjects.B.deltas.entitlementMutationCounter, 1);
   assert.equal(after.report.endToEndMutationEvidence.subjects.A.deltas.paymentWriteCounter, 0);

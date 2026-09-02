@@ -532,7 +532,9 @@ export function hasCompleteNoWriteProof(report) {
     && hasCompleteSetupNoWriteProof(report)
     && report?.endToEndMutationEvidence?.complete === true
     && report?.endToEndMutationEvidence?.authenticated === true
-    && report?.endToEndMutationEvidence?.noMutationDeltas === true;
+    && report?.endToEndMutationEvidence?.absoluteZeroBefore === true
+    && report?.endToEndMutationEvidence?.noMutationDeltas === true
+    && report?.endToEndMutationEvidence?.noWritesProven === true;
 }
 
 export function hasCompleteSetupNoWriteProof(report) {
@@ -794,10 +796,11 @@ export function normalizeObservation(
   };
 }
 
-function endToEndMutationEvidence(before, after, runId) {
+export function evaluateEndToEndMutationEvidence(before, after, runId) {
   const subjects = {};
   let complete = true;
   let authenticated = true;
+  let absoluteZeroBefore = true;
   let noMutationDeltas = true;
   for (const subject of ["A", "B"]) {
     const beforeRow = before?.subjects?.[subject];
@@ -816,17 +819,22 @@ function endToEndMutationEvidence(before, after, runId) {
         && Number.isSafeInteger(afterValue) && afterValue >= beforeValue;
       deltas[metric] = valid ? afterValue - beforeValue : null;
       countersComplete &&= valid;
+      absoluteZeroBefore &&= valid && beforeValue === 0;
       noMutationDeltas &&= valid && deltas[metric] === 0;
     }
     complete &&= bound && countersComplete;
     authenticated &&= subjectAuthenticated;
     subjects[subject] = { scopeBound: bound, authenticated: subjectAuthenticated, deltas };
   }
+  const absoluteZeroBeforeProven = complete && authenticated && absoluteZeroBefore;
+  const noMutationDeltasProven = complete && authenticated && noMutationDeltas;
   return {
     runId,
     complete,
     authenticated,
-    noMutationDeltas: complete && authenticated && noMutationDeltas,
+    absoluteZeroBefore: absoluteZeroBeforeProven,
+    noMutationDeltas: noMutationDeltasProven,
+    noWritesProven: absoluteZeroBeforeProven && noMutationDeltasProven,
     subjects,
   };
 }
@@ -1159,7 +1167,7 @@ export async function executeMode({ mode, inputs, client = new ReadOnlyHttpClien
       ...["A", "B"].flatMap((subject) => {
         const row = subjects[subject];
         const scopedCountersEmpty = [
-          "operations", "ledgerEntries", "outboxEntries", "providerWriteCounter",
+          "operations", "ledgerEntries", "outboxEntries", ...END_TO_END_MUTATION_METRICS,
           "orphanReserves", "fallbackCounter", "productionCupCalls", "unrelatedUserChanges",
         ].every((metric) => row.metrics[metric] === 0);
         return [
@@ -1225,7 +1233,7 @@ export async function executeMode({ mode, inputs, client = new ReadOnlyHttpClien
     },
   };
   const reconciliation = reconcileObservations(before, after, inputs.DEV_UAT_EXPECTED_DELTA);
-  const mutationEvidence = endToEndMutationEvidence(before, after, inputs.DEV_UAT_RUN_ID);
+  const mutationEvidence = evaluateEndToEndMutationEvidence(before, after, inputs.DEV_UAT_RUN_ID);
   const checks = [
     ...currentPreflight.checks,
     ...continuityChecks,
@@ -1241,7 +1249,7 @@ export async function executeMode({ mode, inputs, client = new ReadOnlyHttpClien
       runId: inputs.DEV_UAT_RUN_ID,
       status: ok ? "PASS" : "FAIL",
       setupNoWrites: currentPreflight.setupNoWrites,
-      noWrites: currentPreflight.setupNoWrites && mutationEvidence.noMutationDeltas,
+      noWrites: currentPreflight.setupNoWrites && mutationEvidence.noWritesProven,
       writeSafety: currentPreflight.writeSafety,
       endToEndMutationEvidence: mutationEvidence,
       generatedAt: now.toISOString(),
