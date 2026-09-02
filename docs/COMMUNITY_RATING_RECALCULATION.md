@@ -105,6 +105,53 @@ Important sync behavior:
 
 ## Commands
 
+### Frozen tournament membership plan
+
+For a reviewed historical tournament-membership plan, use the guarded executor.
+The full plan must be a private (`0600`) absolute-path file, contain no quarantine
+rows, match its canonical SHA-256, and be no older than 15 minutes. Dry-run is the
+default and verifies the current community membership preimage without Mongo writes:
+
+```bash
+npm run community:memberships:apply-plan -- \
+  --plan /absolute/private/plan-full.json \
+  --flow-file /root/.node-red/flows.json
+```
+
+Apply requires a separately approved live-data gate, the exact fresh plan SHA, a
+narrow backup directory, and a private report path. All membership and audit writes
+run in one Mongo transaction and must pass provenance read-back:
+
+```bash
+npm run community:memberships:apply-plan -- \
+  --plan /absolute/private/plan-full.json \
+  --flow-file /root/.node-red/flows.json \
+  --apply \
+  --confirm-plan-sha <fresh-plan-sha256> \
+  --backup-dir /absolute/private/backups/<operation> \
+  --report /absolute/private/reports/<operation>-apply.json
+```
+
+Recovery is a separate live-data operation. It requires both the plan SHA and the
+backup file SHA. Restore replaces the exact target community preimages only while
+their `updatedAt` values still equal the apply timestamp; any intervening community
+change fails closed instead of being overwritten:
+
+```bash
+npm run community:memberships:apply-plan -- \
+  --plan /absolute/private/plan-full.json \
+  --flow-file /root/.node-red/flows.json \
+  --restore \
+  --confirm-plan-sha <plan-sha256> \
+  --backup /absolute/private/backups/<operation>/membership-<sha>.ejson \
+  --confirm-backup-sha <backup-sha256> \
+  --report /absolute/private/reports/<operation>-restore.json
+```
+
+Membership apply and rating recalculation are separate gates. After a successful
+membership postcheck, run a scoped rating dry-run for each affected community and
+review it before authorizing rating writes.
+
 Dry-run one community:
 
 ```bash
