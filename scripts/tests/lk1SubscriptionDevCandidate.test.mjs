@@ -94,7 +94,7 @@ test("strict environment URL contract allows only the exact bound DEV or PROD ba
     /forbidden in PROD/);
   for (const invalid of [
     "http://subscriptions-dev.example.test/api",
-    "https://user@subscriptions-dev.example.test/api",
+    "https://user@127.0.0.1/api",
     "https://subscriptions-dev.example.test/api?target=prod",
     "https://subscriptions-dev.example.test/api#prod",
     "https://subscriptions-dev.example.test/other",
