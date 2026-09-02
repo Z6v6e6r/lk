@@ -10,6 +10,35 @@ msg.headers = {
   "Access-Control-Allow-Origin": "*",
 };
 
+if (ctx?.caller === "split_create_preflight"
+  && ["PREFLIGHT_ATTEMPT_BOUND", "NOT_MANAGED", "FULL_PRICE_WITHOUT_SUBSCRIPTION"].includes(payload.state)) {
+  const splitCtx = msg._splitCtx && typeof msg._splitCtx === "object" ? msg._splitCtx : {};
+  splitCtx.managedCreatePreflightDone = true;
+  if (payload.state === "PREFLIGHT_ATTEMPT_BOUND") {
+    splitCtx.managedCreateReservation = { ...ctx };
+    splitCtx.managedCreateAttemptBound = true;
+  } else {
+    delete splitCtx.managedCreateReservation;
+    delete splitCtx.managedCreateAttemptBound;
+  }
+  if (payload.state === "FULL_PRICE_WITHOUT_SUBSCRIPTION") {
+    splitCtx.subscriptionGuardDone = true;
+    splitCtx.paymentMode = "one_time";
+    splitCtx.selectedPaymentMode = "one_time";
+    splitCtx.bookingPaymentType = "ON_PLACE";
+    splitCtx.fullPriceFallback = {
+      source: "ACTIVE_SERVICES_LIMIT_REACHED",
+      blockers: Array.isArray(payload.blockers) ? payload.blockers : [],
+    };
+  }
+  splitCtx.step = "managed_create_preflight_complete";
+  msg._splitCtx = splitCtx;
+  msg.statusCode = 200;
+  msg.payload = { ok: true, state: payload.state };
+  delete msg._subscriptionBooking;
+  return [msg, null];
+}
+
 if (ctx?.caller === "split" && payload.state === "FULL_PRICE_WITHOUT_SUBSCRIPTION") {
   const splitCtx = msg._splitCtx && typeof msg._splitCtx === "object" ? msg._splitCtx : {};
   splitCtx.subscriptionGuardDone = true;

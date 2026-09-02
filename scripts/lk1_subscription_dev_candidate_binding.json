@@ -22,12 +22,24 @@
     "tabLabel": "LK Games",
     "routerNodeId": "lk_subscription_booking_router_20260804",
     "routerNodeName": "Route atomic subscription booking",
+    "prepareNodeId": "lk_subscription_booking_prepare_20260804",
+    "prepareNodeName": "Prepare subscription booking",
     "splitRouterNodeId": "8f7bd5b482fe9763",
     "splitRouterNodeName": "Route Viva split payment",
+    "splitCreatePrepareNodeId": "f3f9a60354d394da",
+    "splitCreatePrepareNodeName": "Prepare split game payment",
+    "splitJoinPrepareNodeId": "e92e68bf3f08a70c",
+    "splitJoinPrepareNodeName": "Prepare split join payment",
+    "finalizeNodeId": "lk_subscription_booking_finalize_20260804",
+    "finalizeNodeName": "Finalize subscription booking response",
     "present": false,
     "enabledDuplicateCount": 0,
     "routerPreimageSha256": null,
-    "splitRouterPreimageSha256": null
+    "preparePreimageSha256": null,
+    "splitRouterPreimageSha256": null,
+    "splitCreatePreparePreimageSha256": null,
+    "splitJoinPreparePreimageSha256": null,
+    "finalizePreimageSha256": null
   },
   "runtime": {
     "apiBase": null,
@@ -36,6 +48,10 @@
   },
   "dependencies": {
     "httpRequestBindingVerified": false,
+    "httpRequestPreimageSha256": null,
+    "splitCreateHttpRequestPreimageSha256": null,
+    "mongoCredentialStoreVerifiedEmpty": false,
+    "mongoCredentialStorePreimageSha256": null,
     "mongoBindingVerifiedDevOnly": false,
     "crossEnvironmentMongoConfigCount": 2,
     "mongoConfigPreimages": [
@@ -52,6 +68,7 @@
   "endpointAudit": {
     "verifiedDevOnly": false,
     "crossEnvironmentEndpointCount": 5,
+    "endpointInventorySha256": null,
     "blockedFamilies": [
       "VivaCRM Admin production/shared origin",
       "VivaCRM end-user production/shared origin",

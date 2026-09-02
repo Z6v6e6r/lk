@@ -4,8 +4,9 @@
 
 The managed subscription router now selects runtime-context, entitlement
 reserve/confirm/release, and first-use activation from one server-owned
-environment binding. The URL contract is HTTPS-only, rejects userinfo, query,
-fragment and path drift, and requires the exact environment allowlist. Browser
+environment binding. PROD is exact-origin HTTPS; DEV is exact loopback HTTP.
+Both reject userinfo, query, fragment and path drift and require the exact
+environment allowlist. Browser
 fields cannot select an upstream URL. Managed HTTP commands disable redirects
 and carry a bounded timeout.
 
@@ -17,9 +18,14 @@ rewrites that immutable expectation to `DEV`, removes the managed production
 CUP binding, and rejects any opposite environment global. The managed gateway
 also repeats the environment, origin, and canary checks immediately before a
 Viva booking POST.
-The split CREATE path repeats the environment/canary preflight before the Viva
-exercise POST so a DEV canary cannot leave an empty game behind when the runtime
-binding is invalid.
+The split CREATE path now completes the authoritative Viva purchase-date read,
+CUP runtime/policy validation, atomic entitlement reservation, and durable local
+`PRECREATE_ATTEMPTING` binding before the Viva exercise POST. Missing/conflicting purchase
+evidence, CUP timeout, policy mismatch, and entitlement rejection therefore
+cannot leave an empty Viva game. A definitive exercise-create rejection releases
+the exact entitlement before the request returns. Ambiguous provider outcomes
+remain fail closed in `PRECREATE_ATTEMPTING`; retry cannot emit another CREATE,
+and an exact 409 conflict is adopted only through the normal exercise readback.
 
 ## Frozen DEV source evidence
 
@@ -49,24 +55,34 @@ does not expose the complete runtime-context + entitlement
 reserve/confirm/release + activation contract through a dedicated HTTPS
 origin. Consequently the DEV runtime trust anchor remains `null`.
 
-## Remaining P1 release blockers
+## P1 source remediation
 
-- Split CREATE still creates the Viva exercise before authoritative managed
-  purchase-date, CUP runtime/policy, and entitlement evaluation. The flow must
-  be reordered so missing/conflicting purchase evidence, CUP timeout, or policy
-  pin mismatch cannot follow an exercise write.
-- The separate `Prepare subscription booking` function is reachable before the
-  managed router and still contains production/shared Viva endpoints. A future
-  BOUND builder must include its exact preimage/postimage and the complete
-  reachable-path endpoint audit, not only router and split-router sources.
-- Mongo custody must inventory `mongodb4-client` configuration and prove exact
-  router output -> `mongodb4` node -> clientNode wiring plus effective DEV-only
-  URI/database attestation. Counting legacy `mongodb` configuration nodes is
-  not sufficient for a BOUND candidate.
+- Managed split CREATE uses distinct `PRECREATE_RESERVING` ->
+  `PRECREATE_RESERVED` -> `PRECREATE_ATTEMPTING` transitions. Only the exact
+  persisted CUP reservation and provider-attempt CAS can
+  promote to `PENDING_CONFIRMATION` for the actual Viva exercise. Regression
+  tests assert zero Viva/Mongo writes for purchase-date, CUP runtime, and policy
+  failures, and assert that the exercise POST appears only after the reservation.
+- The candidate builder freezes and replaces the exact reachable `Prepare
+  subscription booking`, `Prepare split game payment`, managed router, split
+  join prepare, split router, and finalizer preimages.
+  Their combined postimage endpoint audit allows only the dedicated loopback
+  Viva/SERV2/Keycloak/CUP fixture origins. Dynamic CUP/token overrides are
+  removed in the DEV postimage, credential-bearing redirects are disabled, and
+  both reachable HTTP request nodes plus their return wiring are independently
+  hash-attested.
+- Snapshot and build validation now inventory `mongodb4-client` and the exact
+  router output -> `mongodb4` (`find`, `insertOne`, `updateOne`) -> router graph.
+  All three nodes must use one hash-attested client in exact URI mode resolving
+  to `127.0.0.1:27030/lk1_subscription_dev_fixture`, with empty advanced
+  options, no serialized credentials/TLS options, and a separate SHA-attested
+  empty Node-RED credential store. Fields-mode clients are rejected. Legacy
+  `mongodb` counts remain only additional drift evidence.
 
-These blockers keep `LK1_DEV_ENV_ISOLATION=FAIL`, the DEV candidate builder
-blocked, and merge-owner handoff stopped. They do not weaken the current
-fail-closed checked-in binding because `installAllowed=false`, the DEV trust
+The three documented P1 source blockers are closed. Environment acceptance and
+candidate publication remain blocked by the independent provisioning contract:
+`BLOCKED_TARGET_NOT_PROVISIONED`, `DEV_PROVISIONING_READY=no`, and
+`installAllowed=false`. No source result is host/runtime evidence, the DEV trust
 anchor is null, and the audited DEV flow targets are absent.
 
 ## Release custody
@@ -77,12 +93,19 @@ anchor is null, and the audited DEV flow targets are absent.
   accepts only `dedicated-dev-target` at the separately pinned service user-dir.
 - `inspect_lk1_subscription_dev_snapshot.mjs` mechanically records source SHA,
   counts, graph health, target identities/preimages, semantic duplicate count,
-  and sanitized Mongo config preimage hashes.
+  both exact HTTP request wirings, `mongodb4-client` effective identity and
+  credential-store evidence, each managed `mongodb4` operation edge, and a
+  derived whole-flow network configuration inventory; function bodies are
+  audited after builder composition. The candidate permits exactly the two pinned
+  dynamic HTTP nodes and six pinned producer/output edges; extra request nodes
+  or senders are rejected before publication.
 - `prepare_lk1_subscription_dev_candidate.mjs` requires a fresh (30 minute),
   exact DEV source, a separately pinned DEV API trust anchor, exact function
   preimages, zero graph damage, proven HTTP binding, and independently proven
-  DEV-only Mongo custody. It also rejects any postimage retaining a known
-  production/shared endpoint. On success it writes a distinct DEV candidate
+  DEV-only Mongo custody. It independently reproduces the snapshot endpoint
+  inventory, patches and audits every reachable function that
+  can select an upstream URL, including the prepare node, and rejects any
+  whole-flow postimage retaining an unapproved or malformed endpoint. On success it writes a distinct DEV candidate
   and manifest exclusively into a new external workspace; existing artifacts
   are never overwritten.
 - `verify_lk1_subscription_dev_install.mjs` validates a manifest against the

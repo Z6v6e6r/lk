@@ -19,7 +19,7 @@ const MANAGED_BLOCKED_FILE =
 const PITER_PRODUCT_ID = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
 const HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";
 const MANAGED_PURCHASE_DATE = "2026-09-01T00:00:00+03:00";
-const DEV_API_BASE = "https://subscriptions-dev.example.test/api";
+const DEV_API_BASE = "http://127.0.0.1:3037/api";
 const LIVE_ROUTER_FLOW_FIXTURE = process.env.LK1_SUBSCRIPTION_LIVE_FLOW_FIXTURE;
 const MANAGED_GLOBALS = {
   vivacrm_access_token: "service-token",
@@ -357,6 +357,9 @@ test("gateway prepare requires Bearer and operationId and ignores client identit
   assert.equal(success[0]._subscriptionBooking.actorClientId, undefined);
   assert.equal(success[0]._subscriptionBooking.actorPhone, undefined);
   assert.match(success[0].url, /\/profile$/);
+  assert.equal(success[0].followRedirects, false);
+  assert.equal(success[0].maxRedirects, 0);
+  assert.equal(success[0].requestTimeout, 10000);
 
   const missingAuth = runFunction(PREPARE_FILE, {
     payload: { exerciseId: "exercise-target", clientSubscriptionId: "client-subscription-1" },
@@ -733,6 +736,201 @@ test("Piter split create resolves a server target and requests the actor-owned C
   assert.equal(out[1], null);
   assert.equal(out[2], null);
   assert.equal(out[3], null);
+});
+
+test("managed split CREATE reserves against authoritative Viva and CUP evidence before exercise creation", () => {
+  const provisionalId = "split-create:idem-create-preflight-1";
+  const prospectiveTarget = {
+    resolutionSource: "SERVER",
+    stationId: PITER_STATION_ID,
+    category: "open_game",
+    externalEventTypeId: "viva:direction:4588:type:1613",
+    productTypeId: null,
+    eventId: provisionalId,
+    durationMinutes: 60,
+    startsAt: "2026-09-03T15:00:00+03:00",
+    basePriceMinor: null,
+    currency: "RUB",
+  };
+  const initial = baseContext("profile", {
+    caller: "split_create_preflight",
+    operationId: "idem-create-preflight-1",
+    exerciseId: provisionalId,
+    serviceDate: undefined,
+    category: undefined,
+    planKey: undefined,
+    managedAction: "CREATE_GAME",
+    prospectiveTarget,
+  });
+  const profile = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { id: "client-1", phone: "10000000001" },
+    _subscriptionBooking: initial,
+  }, MANAGED_GLOBALS);
+  assert.equal(profile[0]._subscriptionBooking.step, "prospective_subscriptions");
+  assert.match(profile[0].url, /\/subscriptions\?includeFinished=true&size=1000$/);
+  assert.equal(profile[1], null);
+  assert.equal(profile[2], null);
+  assert.equal(profile[3], null);
+
+  const subscriptions = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      content: [{
+        clientSubscriptionId: "client-subscription-1",
+        productId: PITER_PRODUCT_ID,
+        name: "Падел.Дружба.Питер — 12 месяцев",
+        purchaseDate: MANAGED_PURCHASE_DATE,
+      }],
+      totalElements: 1,
+      last: true,
+    },
+    _subscriptionBooking: profile[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(subscriptions[0]._subscriptionBooking.step, "managed_runtime_context");
+  assert.equal(subscriptions[0].url, "https://padlhub.su/api/internal/subscriptions/runtime-context");
+  assert.equal(subscriptions[1], null);
+  assert.equal(subscriptions[2], null);
+  assert.equal(subscriptions[3], null);
+
+  const runtime = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse(),
+    _subscriptionBooking: subscriptions[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(runtime[0]._subscriptionBooking.step, "active_bookings");
+  const active = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { content: [], totalElements: 0, last: true },
+    _subscriptionBooking: runtime[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(active[0]._subscriptionBooking.step, "history_bookings");
+  const history = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { content: [], totalElements: 0, last: true },
+    _subscriptionBooking: active[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(history[1]._subscriptionBooking.step, "operation_find");
+  const find = runFunction(ROUTER_FILE, {
+    payload: [],
+    _subscriptionBooking: history[1]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(find[2]._subscriptionBooking.step, "operation_insert");
+  assert.equal(find[2].payload.state, "PREPARED");
+  const inserted = runFunction(ROUTER_FILE, {
+    payload: { insertedId: find[2].payload._id },
+    _subscriptionBooking: find[2]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(inserted[3]._subscriptionBooking.step, "operation_preaccept");
+  assert.equal(inserted[3].payload[1].$set.state, "PRECREATE_RESERVING");
+  const preaccepted = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: inserted[3]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(preaccepted[0]._subscriptionBooking.step, "managed_runtime_recheck");
+  const rechecked = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse(),
+    _subscriptionBooking: preaccepted[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(rechecked[0]._subscriptionBooking.step, "managed_entitlement_reserve");
+  assert.equal(rechecked[0].payload.target.targetId, provisionalId);
+
+  const decision = entitlementDecision();
+  decision.target = { ...decision.target, targetId: provisionalId, startsAt: "2026-09-03T12:00:00.000Z" };
+  const reserved = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      schemaVersion: 1,
+      outcome: "RESERVED",
+      replayed: false,
+      operationId: "booking:preflight-entitlement-1",
+      subscriptionInstanceId: "subscription-instance-1",
+      aggregateRevision: 2,
+      operationState: "RESERVED",
+      blockers: [],
+      decision,
+    },
+    _subscriptionBooking: rechecked[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(reserved[3]._subscriptionBooking.step, "operation_entitlement_bind");
+  assert.equal(reserved[3].payload[0].state, "PRECREATE_RESERVING");
+  assert.equal(reserved[3].payload[1].$set.state, "PRECREATE_RESERVED");
+  const done = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: reserved[3]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(done[3]._subscriptionBooking.step, "operation_precreated_attempt");
+  assert.equal(done[3].payload[0].state, "PRECREATE_RESERVED");
+  assert.equal(done[3].payload[1].$set.state, "PRECREATE_ATTEMPTING");
+  const attemptBound = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: done[3]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(attemptBound[4].payload.state, "PREFLIGHT_ATTEMPT_BOUND");
+  assert.equal(attemptBound[0], null, "preflight never emits a Viva exercise write");
+});
+
+test("managed split CREATE preflight failures make zero Viva and Mongo writes", () => {
+  const prospectiveTarget = {
+    resolutionSource: "SERVER",
+    stationId: PITER_STATION_ID,
+    category: "open_game",
+    externalEventTypeId: "viva:direction:4588:type:1613",
+    productTypeId: null,
+    eventId: "split-create:idem-negative-preflight",
+    durationMinutes: 60,
+    startsAt: "2026-09-03T15:00:00+03:00",
+    basePriceMinor: null,
+    currency: "RUB",
+  };
+  const context = baseContext("prospective_subscriptions", {
+    caller: "split_create_preflight",
+    operationId: "idem-negative-preflight",
+    exerciseId: prospectiveTarget.eventId,
+    serviceDate: undefined,
+    category: undefined,
+    planKey: undefined,
+    managedAction: "CREATE_GAME",
+    prospectiveTarget,
+  });
+  const missingPurchase = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { content: [{
+      clientSubscriptionId: "client-subscription-1",
+      productId: PITER_PRODUCT_ID,
+      name: "Падел.Дружба.Питер — 12 месяцев",
+    }], totalElements: 1, last: true },
+    _subscriptionBooking: structuredClone(context),
+  }, MANAGED_GLOBALS);
+  assert.equal(missingPurchase[4].payload.details.code, "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED");
+  assert.deepEqual(missingPurchase.slice(0, 4), [null, null, null, null]);
+
+  const runtimeRequest = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { content: [{
+      clientSubscriptionId: "client-subscription-1",
+      productId: PITER_PRODUCT_ID,
+      name: "Падел.Дружба.Питер — 12 месяцев",
+      purchaseDate: MANAGED_PURCHASE_DATE,
+    }], totalElements: 1, last: true },
+    _subscriptionBooking: structuredClone(context),
+  }, MANAGED_GLOBALS);
+  const cupTimeout = runFunction(ROUTER_FILE, {
+    statusCode: 504,
+    payload: { error: "timeout" },
+    _subscriptionBooking: runtimeRequest[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(cupTimeout[4].payload.details.code, "MANAGED_SUBSCRIPTION_RUNTIME_CONTEXT_UNAVAILABLE");
+  assert.deepEqual(cupTimeout.slice(0, 4), [null, null, null, null]);
+
+  const policyMismatch = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse({ policy: { dailyUsageLimit: 2 } }),
+    _subscriptionBooking: runtimeRequest[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(policyMismatch[4].payload.details.code, "MANAGED_SUBSCRIPTION_POLICY_UNSUPPORTED");
+  assert.deepEqual(policyMismatch.slice(0, 4), [null, null, null, null]);
 });
 
 test("DEV exact two-instance canary gate enables A and B but excludes a third instance", () => {
@@ -2810,6 +3008,256 @@ test("split caller receives a synthetic trusted booking only after gateway confi
   assert.equal(out[1], null);
 });
 
+test("split CREATE emits the exercise write only after finalizing the exact precreated reservation", () => {
+  const provisionalId = "split-create:idem-create-finalize-1";
+  const reservation = entitlementContext("operation_entitlement_bind", {
+    caller: "split_create_preflight",
+    operationId: "idem-create-finalize-1",
+    operationKey: `managed:iskq6g:client-subscription-1:${provisionalId}:CREATE_GAME`,
+    exerciseId: provisionalId,
+    serviceDate: "2026-09-03",
+    category: "open_game",
+    studioId: PITER_STATION_ID,
+    authHeader: "Bearer user-token",
+    managedEntitlementOperationId: "booking:preflight-entitlement-finalize-1",
+    managedSubscriptionInstanceId: "subscription-instance-1",
+    managedActivationRequired: false,
+    managedActivationExpectedRevision: 1,
+    managedDecision: {
+      ...entitlementDecision(),
+      target: {
+        ...entitlementDecision().target,
+        targetId: provisionalId,
+        startsAt: "2026-09-03T12:00:00.000Z",
+      },
+    },
+    managedTarget: {
+      resolutionSource: "SERVER",
+      stationId: PITER_STATION_ID,
+      category: "open_game",
+      externalEventTypeId: "viva:direction:4588:type:1613",
+      productTypeId: null,
+      eventId: provisionalId,
+      durationMinutes: 60,
+      startsAt: "2026-09-03T12:00:00.000Z",
+      basePriceMinor: null,
+      currency: "RUB",
+    },
+  });
+  const splitCtx = {
+    action: "create",
+    token: "service-token",
+    paymentMode: "subscription",
+    selectedPaymentMode: "subscription",
+    clientSubscriptionId: "client-subscription-1",
+    date: "2026-09-03",
+    fromTime: "15:00",
+    toTime: "16:00",
+    roomId: "room-1",
+    studioId: PITER_STATION_ID,
+    verifiedRoomId: "room-1",
+    verifiedStudioId: PITER_STATION_ID,
+    vivaDirectionId: 4588,
+    vivaExerciseTypeId: 1613,
+    maxClientsCount: 4,
+  };
+  const req = {
+    headers: {
+      authorization: "Bearer user-token",
+      "idempotency-key": "idem-create-finalize-1",
+    },
+  };
+  const finalized = runFunction(FINALIZE_FILE, {
+    req,
+    statusCode: 200,
+    payload: { state: "PREFLIGHT_ATTEMPT_BOUND" },
+    _subscriptionBooking: reservation,
+    _splitCtx: splitCtx,
+  });
+  assert.equal(finalized[0]._splitCtx.step, "managed_create_preflight_complete");
+  const createExercise = runFunction(SPLIT_ROUTER_FILE, finalized[0], MANAGED_GLOBALS);
+  assert.equal(createExercise[0].method, "POST");
+  assert.equal(createExercise[0].url, "https://api.vivacrm.ru/api/v1/exercises");
+
+  const created = runFunction(SPLIT_ROUTER_FILE, {
+    req,
+    statusCode: 201,
+    payload: { id: "exercise-created", studio: { id: PITER_STATION_ID } },
+    _splitCtx: createExercise[0]._splitCtx,
+  }, MANAGED_GLOBALS);
+  assert.equal(created[0], null);
+  assert.equal(created[3]._subscriptionBooking.step, "exercise_recheck");
+  assert.equal(created[3]._subscriptionBooking.precreatedEntitlementReserved, true);
+  assert.equal(created[3].url,
+    "https://api.vivacrm.ru/end-user/api/v1/iSkq6G/exercises/exercise-created");
+
+  const recheck = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      ...managedExercise(),
+      id: "exercise-created",
+      timeFrom: "2026-09-03T15:00:00+03:00",
+      timeTo: "2026-09-03T16:00:00+03:00",
+    },
+    _subscriptionBooking: created[3]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(recheck[0]._subscriptionBooking.step, "managed_runtime_recheck");
+  const promote = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse(),
+    _subscriptionBooking: recheck[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.ok(promote[3], JSON.stringify(promote));
+  assert.equal(promote[3]._subscriptionBooking.step, "operation_precreated_promote");
+  assert.equal(promote[3].payload[0].state, "PRECREATE_ATTEMPTING");
+  assert.equal(promote[3].payload[1].$set.exerciseId, "exercise-created");
+  const booking = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: promote[3]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(booking[0]._subscriptionBooking.step, "booking_create");
+  assert.equal(booking[0].url,
+    "https://api.vivacrm.ru/api/v1/exercises/exercise-created/bookings");
+});
+
+test("definitive Viva exercise rejection releases a precreated entitlement before returning", () => {
+  const reservation = entitlementContext("operation_entitlement_bind", {
+    caller: "split_create_preflight",
+    operationId: "idem-create-abort-1",
+    operationKey: "managed:precreate-abort-1",
+    exerciseId: "split-create:idem-create-abort-1",
+    managedEntitlementOperationId: "booking:preflight-entitlement-abort-1",
+    managedSubscriptionInstanceId: "subscription-instance-1",
+  });
+  const rejected = runFunction(SPLIT_ROUTER_FILE, {
+    statusCode: 422,
+    payload: { code: "VIVA_VALIDATION_FAILED" },
+    _splitCtx: {
+      step: "create_exercise",
+      action: "create",
+      managedCreateReservation: reservation,
+    },
+  }, MANAGED_GLOBALS);
+  assert.equal(rejected[0], null);
+  assert.equal(rejected[3]._subscriptionBooking.step, "managed_precreate_abort");
+  const release = runFunction(ROUTER_FILE, rejected[3], MANAGED_GLOBALS);
+  assert.equal(release[0]._subscriptionBooking.step, "managed_entitlement_release");
+  assert.equal(release[0].payload.operationId, "booking:preflight-entitlement-abort-1");
+  const released = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: {
+      schemaVersion: 1,
+      outcome: "RELEASED",
+      operationId: "booking:preflight-entitlement-abort-1",
+      subscriptionInstanceId: "subscription-instance-1",
+      operationState: "COMPENSATED",
+      aggregateRevision: 3,
+    },
+    _subscriptionBooking: release[0]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(released[3]._subscriptionBooking.step, "operation_precreate_abort");
+  assert.equal(released[3].payload[1].$set.state, "RELEASED");
+  const done = runFunction(ROUTER_FILE, {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: released[3]._subscriptionBooking,
+  }, MANAGED_GLOBALS);
+  assert.equal(done[4].statusCode, 422);
+  assert.equal(done[4].payload.details.code, "VIVA_VALIDATION_FAILED");
+});
+
+test("ambiguous Viva exercise outcome stays durable and retry cannot emit another create", () => {
+  const reservation = entitlementContext("operation_precreated_attempt", {
+    caller: "split_create_preflight",
+    operationId: "idem-create-ambiguous-1",
+    operationKey: "managed:precreate-ambiguous-1",
+    exerciseId: "split-create:idem-create-ambiguous-1",
+    managedEntitlementOperationId: "booking:preflight-entitlement-ambiguous-1",
+    managedSubscriptionInstanceId: "subscription-instance-1",
+  });
+  const ambiguous = runFunction(SPLIT_ROUTER_FILE, {
+    statusCode: 502,
+    payload: { code: "UPSTREAM_TIMEOUT" },
+    _splitCtx: {
+      step: "create_exercise",
+      action: "create",
+      managedCreateReservation: reservation,
+      managedCreateAttemptBound: true,
+    },
+  }, MANAGED_GLOBALS);
+  assert.equal(ambiguous[1].statusCode, 502);
+  assert.equal(ambiguous[0], null);
+  assert.equal(ambiguous[2], ambiguous[1]);
+  assert.equal(ambiguous[3], undefined);
+
+  const retry = runFunction(ROUTER_FILE, {
+    payload: [{
+      _id: reservation.operationKey,
+      operationId: reservation.operationId,
+      state: "PRECREATE_ATTEMPTING",
+      managedEnvironment: "PROD",
+      exerciseId: reservation.exerciseId,
+      clientSubscriptionId: reservation.clientSubscriptionId,
+      planKey: reservation.planKey,
+      managedDecision: { policyDigest: reservation.managedRuntime.policyDigest },
+      managedEntitlementOperationId: reservation.managedEntitlementOperationId,
+      managedSubscriptionInstanceId: reservation.managedRuntime.subscriptionInstanceId,
+    }],
+    _subscriptionBooking: { ...reservation, step: "operation_find" },
+  }, MANAGED_GLOBALS);
+  assert.equal(retry[4].statusCode, 202);
+  assert.equal(retry[4].payload.details.code,
+    "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED");
+  assert.deepEqual(retry.slice(0, 4), [null, null, null, null]);
+});
+
+test("exact Viva conflict is adopted for readback without releasing the entitlement", () => {
+  const reservation = entitlementContext("operation_precreated_attempt", {
+    caller: "split_create_preflight",
+    operationId: "idem-create-conflict-1",
+    operationKey: "managed:precreate-conflict-1",
+    exerciseId: "split-create:idem-create-conflict-1",
+    managedEntitlementOperationId: "booking:preflight-entitlement-conflict-1",
+    managedSubscriptionInstanceId: "subscription-instance-1",
+  });
+  const conflict = runFunction(SPLIT_ROUTER_FILE, {
+    req: {
+      headers: {
+        authorization: "Bearer user-token",
+        "idempotency-key": reservation.operationId,
+      },
+    },
+    statusCode: 409,
+    payload: {
+      conflicts: [{
+        conflictingExerciseId: "exercise-conflict-readback",
+        roomId: "room-1",
+        timeFrom: "2026-09-03T15:00:00+03:00",
+        timeTo: "2026-09-03T16:00:00+03:00",
+      }],
+    },
+    _splitCtx: {
+      step: "create_exercise",
+      action: "create",
+      date: "2026-09-03",
+      fromTime: "15:00",
+      toTime: "16:00",
+      roomId: "room-1",
+      token: "service-token",
+      paymentMode: "subscription",
+      selectedPaymentMode: "subscription",
+      clientSubscriptionId: reservation.clientSubscriptionId,
+      managedCreateReservation: reservation,
+      managedCreateAttemptBound: true,
+    },
+  }, MANAGED_GLOBALS);
+  assert.equal(conflict[0], null);
+  assert.equal(conflict[3]._subscriptionBooking.step, "exercise_recheck");
+  assert.equal(conflict[3]._subscriptionBooking.exerciseId, "exercise-conflict-readback");
+  assert.equal(conflict[3]._splitCtx.ownsExercise, false);
+  assert.equal(conflict[3]._splitCtx.reusedConflictingExercise, true);
+  assert.doesNotMatch(conflict[3]._subscriptionBooking.step, /release/);
+});
+
 test("active-service limit keeps the created exercise and continues at full price", () => {
   const finalized = runFunction(FINALIZE_FILE, {
     statusCode: 200,
@@ -2974,7 +3422,7 @@ test("guarded patcher accepts the exact current tracked split router", () => {
     ],
   };
 
-  assert.equal(funcSha256, "e6932307e37d4358ae5cedb940c74dabeb99a533eba01fd98dfc04d1bb6491d8");
+  assert.equal(funcSha256, "8b1829d1fb85b9644c29e48282d168ddf60f5552deaad04271107d1c357caad9");
   assert.equal(resolveManagedSubscriptionRouterContract(router, funcSha256)?.managedActionCandidateSha256, null);
 });
 

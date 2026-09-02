@@ -3,6 +3,12 @@
   "PROD": "https://padlhub.su/api",
   "DEV": null,
   "devBindingState": "UNBOUND_COMPLETE_HTTPS_CONTRACT_NOT_EXPOSED",
+  "DEV_ENDPOINTS": {
+    "cupApiBase": "http://127.0.0.1:3037/api",
+    "vivaApiBase": "http://127.0.0.1:3038",
+    "serv2Base": "http://127.0.0.1:3038/serv2",
+    "tokenUrl": "http://127.0.0.1:3039/realms/dev/protocol/openid-connect/token"
+  },
   "DEV_INSTALL_TARGET": {
     "sourceHost": "lk-reserve-89",
     "sourceHostname": "89-108-64-209.cloudvps.regruhosting.ru",
