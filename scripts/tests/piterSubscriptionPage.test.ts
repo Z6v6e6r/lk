@@ -29,7 +29,7 @@ test("Piter page is a dedicated storefront with its own counter and four 100-uni
   }
   assert.equal(
     sha256("src/assets/piter-subscription-tier-1.webp"),
-    "21868451f8dd722a99db1a555065e00bae401e2592c19a2e38e21fadcd2d590d",
+    "57550ea171f847a528cb82c6b4b8a5fe4723acc56ffd1dc0eda75740cca1cf4f",
   );
   assert.match(entry, /storefront: options\.data\?\.variant === "piter_friendship"/);
   assert.match(loader, /variant:\s*"piter_friendship"/);
@@ -55,7 +55,10 @@ test("Piter page exposes the requested terms through an accessible flip control"
   assert.match(router, /MANAGED_ENFORCEMENT_PURCHASE_FROM = "2026-09-01"/);
   assert.match(page, /Узнать условия подписки/);
   assert.match(page, /aria-pressed=/);
+  assert.match(page, /className=\{`piter-subscription-flip piter-subscription-flip-trigger/);
+  assert.match(page, /onClick=\{\(\) => setFlippedDisplayId/);
   assert.match(css, /\.piter-subscription-flip--flipped[\s\S]*?rotateY\(180deg\)/);
+  assert.match(css, /\.piter-subscription-flip-trigger:focus-visible/);
   assert.match(css, /\.piter-subscription-face--rules-artwork/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
 });

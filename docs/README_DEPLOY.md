@@ -665,11 +665,20 @@ https://padlhub.ru/tournament_subscription
 - `planKey`, `campaignKey`, `priceLabel`, `totalLimit` — привязать single-artwork страницу к нужному purchase/status flow и подписи цены/лимита.
   Для `friendship`, `sport` и `energy5` `planKey` можно не указывать. Для `ra` и `academy` `planKey` тоже больше не нужен: эти карточки покупаются как обычные Viva SUBSCRIPTION products по прямому `productId`, а не через summer campaign flow.
 
-По умолчанию standalone summer subscription page теперь рендерит 5 карточек: `friendship`, `sport`, `academy`, `ra`, `energy5`.
+По умолчанию standalone summer subscription page рендерит две группы карточек:
+- `Подписки на 30 дней`: `academy`, `ra`, `friendship`, `energy5`;
+- `Годовые подписки`: `piter_friendship`, `kotelniki_friendship`, `network_friendship`.
+
+Карточки с правилами переворачиваются по нажатию на саму карточку или кнопку
+`Узнать условия подписки`; клавиатурный фокус и `prefers-reduced-motion` поддерживаются.
+Годовые карточки используют существующие server-owned counters и fail-closed purchase
+bindings: добавление карточек на страницу не меняет лимиты, остатки, Viva-привязки или
+managed-policy активацию. `sport` по-прежнему не входит в основную витрину.
 `academy` и `ra` используют отдельный CTA-flow покупки обычной Viva-подписки по прямым product id:
 - `academy` -> `9eb8a7a4-c195-492a-95e4-3fb82899ac10`
 - `ra` -> `b91e14d1-fe6e-4d0b-be39-3e45ad86b759`
-Для `academy` и `ra` витрина показывает статический лимит `50 из 50`.
+У `academy` блок лимита скрыт. `ra` не подменяет server-owned остаток статическим
+значением: витрина показывает live status/daily-drop state, когда backend его возвращает.
 Для `energy5` витрина использует отдельный CTA-flow покупки обычной Viva-подписки по прямому product id:
 - `energy5` -> `dfa72adf-233b-4285-8d69-e5eab4234fbe`
 У `energy5` блок лимита на карточке и single-artwork странице не показывается вообще: под изображением остается только кнопка покупки.
