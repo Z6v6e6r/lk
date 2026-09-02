@@ -19,11 +19,13 @@ const MANAGED_BLOCKED_FILE =
 const PITER_PRODUCT_ID = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
 const HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";
 const MANAGED_PURCHASE_DATE = "2026-09-01T00:00:00+03:00";
+const DEV_API_BASE = "https://subscriptions-dev.example.test/api";
 const LIVE_ROUTER_FLOW_FIXTURE = process.env.LK1_SUBSCRIPTION_LIVE_FLOW_FIXTURE;
 const MANAGED_GLOBALS = {
   vivacrm_access_token: "service-token",
+  subscriptions_runtime_environment: "PROD",
   subscriptions_runtime_api_base_url: "https://padlhub.su/api",
-  subscriptions_runtime_context_integration_token: "integration-token",
+  subscriptions_runtime_context_integration_token: "runtime-context-integration-token-123456",
   subscriptions_entitlement_integration_token: "entitlement-integration-token-1234567890",
   subscriptions_managed_enforcement_product_ids: [PITER_PRODUCT_ID],
 };
@@ -48,6 +50,7 @@ const managedEnforcement = (
   purchaseDateCutoff: "2026-09-01",
   purchaseDateTimeZone: "Europe/Moscow",
   purchaseDateEligible: Boolean(purchaseDate && purchaseDate >= "2026-09-01"),
+  environment: enabled ? "PROD" : null,
   enabled,
   planKey: enabled ? "piter_friendship" : null,
 });
@@ -81,6 +84,18 @@ function runFunctionSource(
 ) {
   const globalContext = { get: (key: string) => globals[key] };
   return new Function("msg", "global", source)(msg, globalContext) as any[];
+}
+
+function devBoundRouterSource() {
+  const source = fs.readFileSync(ROUTER_FILE, "utf8");
+  assert.equal(source.match(/ {2}DEV: null,/g)?.length, 1);
+  assert.equal(source.match(/ {2}PROD: "https:\/\/padlhub\.su\/api",/g)?.length, 1);
+  assert.equal(source.match(/MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "PROD"/g)?.length, 1);
+  return source
+    .replace('const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "PROD";',
+      'const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "DEV";')
+    .replace('  PROD: "https://padlhub.su/api",', "  PROD: null,")
+    .replace("  DEV: null,", `  DEV: ${JSON.stringify(DEV_API_BASE)},`);
 }
 
 function baseContext(step: string, overrides: Record<string, unknown> = {}) {
@@ -710,10 +725,196 @@ test("Piter split create resolves a server target and requests the actor-owned C
   assert.equal(out[0].url, "https://padlhub.su/api/internal/subscriptions/runtime-context");
   assert.deepEqual(out[0].payload, { clientSubscriptionId: "client-subscription-1" });
   assert.equal(out[0].headers.Authorization, "Bearer user-token");
-  assert.equal(out[0].headers["X-Subscriptions-Integration-Token"], "integration-token");
+  assert.equal(out[0].headers["X-Subscriptions-Integration-Token"],
+    "runtime-context-integration-token-123456");
+  assert.equal(out[0].followRedirects, false);
+  assert.equal(out[0].maxRedirects, 0);
+  assert.equal(out[0].requestTimeout, 10000);
   assert.equal(out[1], null);
   assert.equal(out[2], null);
   assert.equal(out[3], null);
+});
+
+test("DEV exact two-instance canary gate enables A and B but excludes a third instance", () => {
+  const canaryA = "11111111-1111-4111-8111-111111111111";
+  const canaryB = "22222222-2222-4222-8222-222222222222";
+  const third = "33333333-3333-4333-8333-333333333333";
+  const source = devBoundRouterSource();
+  const globals = {
+    ...MANAGED_GLOBALS,
+    subscriptions_runtime_environment: "DEV",
+    subscriptions_runtime_api_base_url: DEV_API_BASE,
+    subscriptions_managed_enforcement_canary_client_subscription_ids: [
+      canaryA.toUpperCase(),
+      canaryB,
+    ],
+  };
+  for (const clientSubscriptionId of [canaryA, canaryB, third]) {
+    const exercise = managedExercise();
+    exercise.availableClientSubscriptions[0].clientSubscriptionId = clientSubscriptionId;
+    const out = runFunctionSource(source, {
+      statusCode: 200,
+      payload: exercise,
+      runtimeApiBaseUrl: "https://attacker.example/api",
+      _subscriptionBooking: baseContext("exercise", {
+        clientSubscriptionId,
+        serviceDate: undefined,
+        category: undefined,
+        planKey: undefined,
+        managedAction: "CREATE_GAME",
+      }),
+    }, globals);
+    assert.equal(out[0]._subscriptionBooking.managedEnforcement.enabled,
+      clientSubscriptionId !== third);
+    assert.equal(out[0]._subscriptionBooking.step,
+      clientSubscriptionId === third ? "active_bookings" : "managed_runtime_context");
+    if (clientSubscriptionId !== third) assert.equal(out[0].url,
+      `${DEV_API_BASE}/internal/subscriptions/runtime-context`);
+  }
+});
+
+test("DEV missing canary disables managed path and malformed canary fails closed", () => {
+  const canaryA = "11111111-1111-4111-8111-111111111111";
+  const source = devBoundRouterSource();
+  const exercise = managedExercise();
+  exercise.availableClientSubscriptions[0].clientSubscriptionId = canaryA;
+  const input = () => ({
+    statusCode: 200,
+    payload: structuredClone(exercise),
+    _subscriptionBooking: baseContext("exercise", {
+      clientSubscriptionId: canaryA,
+      serviceDate: undefined,
+      category: undefined,
+      planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  });
+  const baseGlobals = {
+    ...MANAGED_GLOBALS,
+    subscriptions_runtime_environment: "DEV",
+    subscriptions_runtime_api_base_url: DEV_API_BASE,
+  };
+  const missing = runFunctionSource(source, input(), baseGlobals);
+  assert.equal(missing[0]._subscriptionBooking.step, "active_bookings");
+  assert.equal(missing[0]._subscriptionBooking.managedEnforcement.enabled, false);
+
+  const malformed = runFunctionSource(source, input(), {
+    ...baseGlobals,
+    subscriptions_managed_enforcement_canary_client_subscription_ids: ["not-a-uuid"],
+  });
+  assert.equal(malformed[4].statusCode, 503);
+  assert.equal(malformed[4].payload.details.code,
+    "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID");
+  assert.equal(malformed[0], null);
+});
+
+test("CUP runtime base is environment-bound and browser URL fields cannot alter it", () => {
+  const prodWithDevBase = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedExercise(),
+    runtimeApiBaseUrl: DEV_API_BASE,
+    _subscriptionBooking: baseContext("exercise", {
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, {
+    ...MANAGED_GLOBALS,
+    subscriptions_runtime_api_base_url: DEV_API_BASE,
+  });
+  assert.equal(prodWithDevBase[4].statusCode, 503);
+  assert.equal(prodWithDevBase[4].payload.details.code,
+    "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT");
+  assert.equal(prodWithDevBase[0], null);
+
+  const canary = "11111111-1111-4111-8111-111111111111";
+  const exercise = managedExercise();
+  exercise.availableClientSubscriptions[0].clientSubscriptionId = canary;
+  const devWithProdBase = runFunctionSource(devBoundRouterSource(), {
+    statusCode: 200,
+    payload: exercise,
+    runtimeApiBaseUrl: DEV_API_BASE,
+    _subscriptionBooking: baseContext("exercise", {
+      clientSubscriptionId: canary,
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, {
+    ...MANAGED_GLOBALS,
+    subscriptions_runtime_environment: "DEV",
+    subscriptions_runtime_api_base_url: "https://padlhub.su/api",
+    subscriptions_managed_enforcement_canary_client_subscription_ids: [
+      canary,
+      "22222222-2222-4222-8222-222222222222",
+    ],
+  });
+  assert.equal(devWithProdBase[4].statusCode, 503);
+  assert.equal(devWithProdBase[4].payload.details.code,
+    "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT");
+  assert.equal(devWithProdBase[0], null);
+
+  const devWithProdEnvironment = runFunctionSource(devBoundRouterSource(), {
+    statusCode: 200,
+    payload: exercise,
+    _subscriptionBooking: baseContext("exercise", {
+      clientSubscriptionId: canary,
+      serviceDate: undefined, category: undefined, planKey: undefined,
+      managedAction: "CREATE_GAME",
+    }),
+  }, {
+    ...MANAGED_GLOBALS,
+    subscriptions_runtime_environment: "PROD",
+    subscriptions_runtime_api_base_url: "https://padlhub.su/api",
+    subscriptions_managed_enforcement_canary_client_subscription_ids: [
+      canary,
+      "22222222-2222-4222-8222-222222222222",
+    ],
+  });
+  assert.equal(devWithProdEnvironment[4].statusCode, 409);
+  assert.equal(devWithProdEnvironment[4].payload.details.code,
+    "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT");
+  assert.equal(devWithProdEnvironment[0], null);
+});
+
+test("runtime-context accepts strict V1 and V2 environment envelope only", () => {
+  const futureTarget = futureManagedTarget();
+  const context = baseContext("managed_runtime_context", {
+    serviceDate: futureTarget.serviceDate,
+    category: "open_game",
+    planKey: "piter_friendship",
+    managedAction: "CREATE_GAME",
+    managedEnforcement: managedEnforcement(true),
+    managedTarget: {
+      resolutionSource: "SERVER", stationId: PITER_STATION_ID, category: "GAME",
+      externalEventTypeId: "viva:direction:4588:type:1613", productTypeId: null,
+      eventId: "exercise-target", durationMinutes: 60, startsAt: futureTarget.startsAt,
+      basePriceMinor: null, currency: "RUB",
+    },
+  });
+  const v1 = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: managedRuntimeResponse(),
+    _subscriptionBooking: structuredClone(context),
+  }, MANAGED_GLOBALS);
+  assert.equal(v1[0]._subscriptionBooking.step, "active_bookings");
+  const v2 = runFunction(ROUTER_FILE, {
+    statusCode: 200,
+    payload: { schemaVersion: 2, environment: "PROD", runtimeContext: managedRuntimeResponse() },
+    _subscriptionBooking: structuredClone(context),
+  }, MANAGED_GLOBALS);
+  assert.equal(v2[0]._subscriptionBooking.step, "active_bookings");
+  for (const payload of [
+    { schemaVersion: 2, environment: "DEV", runtimeContext: managedRuntimeResponse() },
+    { schemaVersion: 2, environment: "PROD", runtimeContext: managedRuntimeResponse(), extra: true },
+    { schemaVersion: 3, environment: "PROD", runtimeContext: managedRuntimeResponse() },
+  ]) {
+    const rejected = runFunction(ROUTER_FILE, {
+      statusCode: 200,
+      payload,
+      _subscriptionBooking: structuredClone(context),
+    }, MANAGED_GLOBALS);
+    assert.equal(rejected[4].statusCode, 502);
+    assert.equal(rejected[0], null);
+  }
 });
 
 test("managed allowlist is UUID-normalized, deduplicated and deterministic", () => {
@@ -2182,6 +2383,28 @@ test("managed booking rechecks CUP identity and policy after preaccept before Vi
   assert.equal(create[0]._subscriptionBooking.step, "booking_create");
   assert.equal(create[0].payload.clientSubscriptionId, "client-subscription-1");
   assert.equal(create[0].payload.paymentType, "SUBSCRIPTION");
+
+  const devContext = structuredClone(reserved[3]._subscriptionBooking);
+  devContext.step = "operation_entitlement_bind";
+  devContext.managedEnforcement.environment = "DEV";
+  devContext.managedEnvironment = "DEV";
+  const driftedEnvironment = runFunctionSource(devBoundRouterSource(), {
+    payload: { matchedCount: 1 },
+    _subscriptionBooking: devContext,
+  }, {
+    ...MANAGED_GLOBALS,
+    subscriptions_runtime_environment: "PROD",
+    subscriptions_runtime_api_base_url: "https://padlhub.su/api",
+    subscriptions_managed_enforcement_canary_client_subscription_ids: [
+      "client-subscription-1",
+      "22222222-2222-4222-8222-222222222222",
+    ],
+  });
+  assert.equal(driftedEnvironment[0], null);
+  assert.equal(driftedEnvironment[4].statusCode, 202);
+  assert.equal(driftedEnvironment[4].payload.details?.code,
+    "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT", JSON.stringify(driftedEnvironment));
+  assert.doesNotMatch(String(driftedEnvironment[4].url || ""), /vivacrm/);
 });
 
 test("entitlement token is never sent when the configured origin is not the trusted CUP origin", () => {
@@ -2200,7 +2423,7 @@ test("entitlement token is never sent when the configured origin is not the trus
   assert.equal(out[0], null);
   assert.equal(out[3]._subscriptionBooking.step, "operation_fail");
   assert.equal(out[3].payload[1].$set.failure.rawCode,
-    "SUBSCRIPTION_ENTITLEMENT_ORIGIN_NOT_TRUSTED");
+    "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT");
   assert.doesNotMatch(JSON.stringify(out), /do-not-leak-entitlement-token/);
 });
 
@@ -2751,7 +2974,7 @@ test("guarded patcher accepts the exact current tracked split router", () => {
     ],
   };
 
-  assert.equal(funcSha256, "5f380562e98dd2f94a0197c498c94df12eb1797be0c3345bb21d8e4f051de7c9");
+  assert.equal(funcSha256, "e6932307e37d4358ae5cedb940c74dabeb99a533eba01fd98dfc04d1bb6491d8");
   assert.equal(resolveManagedSubscriptionRouterContract(router, funcSha256)?.managedActionCandidateSha256, null);
 });
 

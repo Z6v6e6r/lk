@@ -2,9 +2,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
+function runNodeRedFunction(
+  file: string,
+  msg: Record<string, unknown>,
+  globals: Record<string, unknown> = {},
+) {
   const source = fs.readFileSync(file, "utf8");
-  const values = new Map<string, unknown>();
+  return runNodeRedFunctionSource(source, msg, globals);
+}
+
+function runNodeRedFunctionSource(
+  source: string,
+  msg: Record<string, unknown>,
+  globals: Record<string, unknown> = {},
+) {
+  const values = new Map<string, unknown>(Object.entries(globals));
   const env = {
     get(name: string) {
       if (name === "VIVA_SERVICE_USERNAME") return "service@example.test";
@@ -17,6 +29,17 @@ function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
     set(name: string, value: unknown) { values.set(name, value); },
   };
   return new Function("msg", "env", "global", source)(msg, env, globalContext);
+}
+
+function devEnvironmentSplitRouterSource(apiBase: string | null = null) {
+  const source = fs.readFileSync("scripts/nodered_games_nodes/fn_split_router.js", "utf8");
+  const environmentBound = source
+    .replace('const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "PROD";',
+      'const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "DEV";')
+    .replace('  PROD: "https://padlhub.su/api",', "  PROD: null,");
+  return apiBase === null
+    ? environmentBound
+    : environmentBound.replace("  DEV: null,", `  DEV: ${JSON.stringify(apiBase)},`);
 }
 
 type RouterMessage = {
@@ -141,6 +164,164 @@ test("exercise create request matches the current documented Viva ExerciseCreate
   assert.equal(Object.hasOwn(requestMsg.payload || {}, "direction"), false);
   assert.equal(Object.hasOwn(requestMsg.payload || {}, "type"), false);
   assert.equal(Object.hasOwn(requestMsg.payload || {}, "clientId"), false);
+});
+
+test("DEV managed canary preflight fails before creating a Viva exercise while DEV origin is unbound", () => {
+  const canaryA = "11111111-1111-4111-8111-111111111111";
+  const canaryB = "22222222-2222-4222-8222-222222222222";
+  const out = runNodeRedFunctionSource(devEnvironmentSplitRouterSource(), {
+    statusCode: 200,
+    payload: { "sub-service-1": { price: 8000 } },
+    _splitCtx: {
+      step: "ordinary_exact_price",
+      action: "create",
+      paymentMode: "subscription",
+      clientSubscriptionId: canaryA,
+      date: "2026-09-03",
+      fromTime: "11:30",
+      toTime: "13:00",
+      roomId: "room-1",
+      maxClientsCount: 4,
+      exactCourtPriceVerified: true,
+      subServiceIds: ["sub-service-1"],
+    },
+  }, {
+    subscriptions_runtime_environment: "DEV",
+    subscriptions_runtime_api_base_url: "https://padlhub.su/api",
+    subscriptions_managed_enforcement_product_ids: ["8bf334ba-3050-4017-b40a-7eef2db1eb16"],
+    subscriptions_managed_enforcement_canary_client_subscription_ids: [canaryA.toUpperCase(), canaryB],
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0], null);
+  assert.equal(out[1]?.statusCode, 503);
+  assert.equal(out[1]?.payload?.details?.code, "MANAGED_SUBSCRIPTION_DEV_RUNTIME_ORIGIN_UNBOUND");
+  assert.notEqual(out[1]?.url, "https://api.vivacrm.ru/api/v1/exercises");
+});
+
+test("malformed DEV canary config fails before creating a Viva exercise", () => {
+  const out = runNodeRedFunctionSource(devEnvironmentSplitRouterSource(), {
+    statusCode: 200,
+    payload: { "sub-service-1": { price: 8000 } },
+    _splitCtx: {
+      step: "ordinary_exact_price",
+      action: "create",
+      paymentMode: "subscription",
+      clientSubscriptionId: "legacy-subscription-id",
+      date: "2026-09-03",
+      fromTime: "11:30",
+      toTime: "13:00",
+      roomId: "room-1",
+      maxClientsCount: 4,
+      exactCourtPriceVerified: true,
+      subServiceIds: ["sub-service-1"],
+    },
+  }, {
+    subscriptions_runtime_environment: "DEV",
+    subscriptions_managed_enforcement_product_ids: ["8bf334ba-3050-4017-b40a-7eef2db1eb16"],
+    subscriptions_managed_enforcement_canary_client_subscription_ids: ["not-a-uuid"],
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0], null);
+  assert.equal(out[1]?.statusCode, 503);
+  assert.equal(out[1]?.payload?.details?.code, "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID");
+  assert.notEqual(out[1]?.url, "https://api.vivacrm.ru/api/v1/exercises");
+});
+
+test("missing DEV canary config keeps a non-canary subscription create on the legacy path", () => {
+  const out = runNodeRedFunctionSource(devEnvironmentSplitRouterSource(), {
+    statusCode: 200,
+    payload: { "sub-service-1": { price: 8000 } },
+    _splitCtx: {
+      step: "ordinary_exact_price",
+      action: "create",
+      paymentMode: "subscription",
+      clientSubscriptionId: "legacy-subscription-id",
+      date: "2026-09-03",
+      fromTime: "11:30",
+      toTime: "13:00",
+      roomId: "room-1",
+      maxClientsCount: 4,
+      exactCourtPriceVerified: true,
+      subServiceIds: ["sub-service-1"],
+    },
+  }, {
+    subscriptions_runtime_environment: "DEV",
+    subscriptions_managed_enforcement_product_ids: ["8bf334ba-3050-4017-b40a-7eef2db1eb16"],
+  }) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0]?.method, "POST");
+  assert.equal(out[0]?.url, "https://api.vivacrm.ru/api/v1/exercises");
+});
+
+test("DEV split candidate rejects a PROD environment before creating a Viva exercise", () => {
+  const canaryA = "11111111-1111-4111-8111-111111111111";
+  const out = runNodeRedFunctionSource(
+    devEnvironmentSplitRouterSource("https://subscriptions-dev.example.test/api"),
+    {
+      statusCode: 200,
+      payload: { "sub-service-1": { price: 8000 } },
+      _splitCtx: {
+        step: "ordinary_exact_price",
+        action: "create",
+        paymentMode: "subscription",
+        clientSubscriptionId: canaryA,
+        date: "2026-09-03",
+        fromTime: "11:30",
+        toTime: "13:00",
+        roomId: "room-1",
+        maxClientsCount: 4,
+        exactCourtPriceVerified: true,
+        subServiceIds: ["sub-service-1"],
+      },
+    },
+    {
+      subscriptions_runtime_environment: "PROD",
+      subscriptions_runtime_api_base_url: "https://padlhub.su/api",
+      subscriptions_managed_enforcement_product_ids: ["8bf334ba-3050-4017-b40a-7eef2db1eb16"],
+      subscriptions_managed_enforcement_canary_client_subscription_ids: [
+        canaryA,
+        "22222222-2222-4222-8222-222222222222",
+      ],
+    },
+  ) as Array<Record<string, any> | null>;
+
+  assert.equal(out[0], null);
+  assert.equal(out[1]?.statusCode, 503);
+  assert.equal(out[1]?.payload?.details?.code, "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT");
+});
+
+test("PROD subscription create ignores malformed or matching DEV canary configuration", () => {
+  const canaryA = "11111111-1111-4111-8111-111111111111";
+  for (const canaryConfig of [["not-a-uuid"], [
+    canaryA,
+    "22222222-2222-4222-8222-222222222222",
+  ]]) {
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+      statusCode: 200,
+      payload: { "sub-service-1": { price: 8000 } },
+      _splitCtx: {
+        step: "ordinary_exact_price",
+        action: "create",
+        paymentMode: "subscription",
+        clientSubscriptionId: canaryA,
+        date: "2026-09-03",
+        fromTime: "11:30",
+        toTime: "13:00",
+        roomId: "room-1",
+        maxClientsCount: 4,
+        exactCourtPriceVerified: true,
+        subServiceIds: ["sub-service-1"],
+      },
+    }, {
+      subscriptions_runtime_environment: "PROD",
+      subscriptions_runtime_api_base_url: "https://padlhub.su/api",
+      subscriptions_managed_enforcement_product_ids: ["8bf334ba-3050-4017-b40a-7eef2db1eb16"],
+      subscriptions_managed_enforcement_canary_client_subscription_ids: canaryConfig,
+    }) as Array<Record<string, any> | null>;
+
+    assert.equal(out[0]?.method, "POST");
+    assert.equal(out[0]?.url, "https://api.vivacrm.ru/api/v1/exercises");
+  }
 });
 
 test("fresh-token one-time join verifies room-studio binding before booking", () => {

@@ -67,8 +67,11 @@ export const EXPECTED_CANDIDATE_FLOW_SHA256 = "76bc0d4169c2e2ef205582b1ee6f95be0
 export const PREVIOUS_CANDIDATE_FLOW_SHA256 = "76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294";
 export function validateProductionCandidateBinding(binding) {
   assertExactObjectKeys(binding, [
-    "candidateBindingState", "candidateSha256", "previousCandidateSha256",
+    "environment", "candidateBindingState", "candidateSha256", "previousCandidateSha256",
   ], "Production candidate binding");
+  if (binding.environment !== "PROD") {
+    throw new Error("Production candidate binding rejects a non-PROD environment");
+  }
   if (binding.previousCandidateSha256 !== PREVIOUS_CANDIDATE_FLOW_SHA256) {
     throw new Error("Production candidate binding changed the pinned previous candidate digest");
   }

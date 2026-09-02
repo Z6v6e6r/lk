@@ -147,21 +147,30 @@ test("production runner keeps the previous candidate as historical evidence and 
   assert.equal(EXPECTED_CANDIDATE_FLOW_SHA256, UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256);
   assert.throws(() => assertProductionCandidateBound(), /candidate is unbound/);
   assert.throws(() => validateProductionCandidateBinding({
+    environment: "PROD",
     candidateBindingState: "BOUND",
     candidateSha256: UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256,
     previousCandidateSha256: UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256,
   }), /must use a new reviewed candidate digest/);
   assert.throws(() => validateProductionCandidateBinding({
+    environment: "PROD",
     candidateBindingState: "BOUND",
     candidateSha256: digest("f"),
     previousCandidateSha256: UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256,
     unexpected: true,
   }), /approved schema/);
   assert.throws(() => validateProductionCandidateBinding({
+    environment: "PROD",
     candidateBindingState: "BOUND",
     candidateSha256: UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256,
     previousCandidateSha256: digest("e"),
   }), /changed the pinned previous candidate digest/);
+  assert.throws(() => validateProductionCandidateBinding({
+    environment: "DEV",
+    candidateBindingState: "BOUND",
+    candidateSha256: digest("f"),
+    previousCandidateSha256: UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256,
+  }), /rejects a non-PROD environment/);
   assert.equal(PREVIOUS_CANDIDATE_FLOW_SHA256, UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256);
   assert.throws(() => validateProductionExecutionPacket(buildPacket(), context, {
     packetSha256: digest("f"),

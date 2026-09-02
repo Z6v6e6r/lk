@@ -15,6 +15,18 @@ const KEY_TOKEN = "vivacrm_access_token";
 const KEY_EXPIRES_AT = "vivacrm_token_expires_at";
 const KEY_REFRESH_OWNER = "vivacrm_token_refresh_owner";
 const KEY_REFRESH_LOCK_UNTIL = "vivacrm_token_refresh_lock_until";
+const MANAGED_RUNTIME_ENVIRONMENT_GLOBAL = "subscriptions_runtime_environment";
+const MANAGED_DEV_CANARY_GLOBAL = "subscriptions_managed_enforcement_canary_client_subscription_ids";
+const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "PROD";
+const MANAGED_PRODUCT_ALLOWLIST_GLOBAL = "subscriptions_managed_enforcement_product_ids";
+const PITER_MANAGED_PRODUCT_ID = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = Object.freeze({
+  PROD: "https://padlhub.su/api",
+  // The DEV binding remains deliberately absent until the complete managed
+  // subscription contract is exposed on a dedicated non-production origin.
+  DEV: null,
+});
 
 const isOk = (status) => Number(status) >= 200 && Number(status) < 300;
 
@@ -303,6 +315,118 @@ const fail = (status, error, details) => {
   };
   msg.payload = { error, details: details || null };
   return [null, msg, msg];
+};
+
+const readManagedDevCanaries = () => {
+  let configured;
+  try {
+    configured = global.get(MANAGED_DEV_CANARY_GLOBAL);
+  } catch (_) {
+    configured = undefined;
+  }
+  if (configured === undefined || configured === null || configured === "") {
+    return { ok: true, clientSubscriptionIds: [] };
+  }
+  if (typeof configured === "string") {
+    const text = configured.trim();
+    if (!text) return { ok: true, clientSubscriptionIds: [] };
+    try {
+      configured = JSON.parse(text);
+    } catch (_) {
+      return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID" };
+    }
+  }
+  if (!Array.isArray(configured) || ![0, 2].includes(configured.length)) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID" };
+  }
+  const normalized = configured.map((value) => toStr(value)?.toLowerCase());
+  if (normalized.some((value) => !value || !UUID_PATTERN.test(value))
+    || new Set(normalized).size !== normalized.length) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID" };
+  }
+  return { ok: true, clientSubscriptionIds: normalized };
+};
+
+const readManagedProductAllowlist = () => {
+  let configured;
+  try {
+    configured = global.get(MANAGED_PRODUCT_ALLOWLIST_GLOBAL);
+  } catch (_) {
+    configured = undefined;
+  }
+  if (configured === undefined || configured === null || configured === "") {
+    return { ok: true, productIds: [] };
+  }
+  if (typeof configured === "string") {
+    const text = configured.trim();
+    if (!text) return { ok: true, productIds: [] };
+    try {
+      configured = JSON.parse(text);
+    } catch (_) {
+      return { ok: false, code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID" };
+    }
+  }
+  if (!Array.isArray(configured)) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID" };
+  }
+  const normalized = configured.map((value) => toStr(value)?.toLowerCase());
+  if (normalized.some((value) => !value || !UUID_PATTERN.test(value))) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID" };
+  }
+  return { ok: true, productIds: Array.from(new Set(normalized)).sort() };
+};
+
+const validateManagedRuntimeApiBase = (environment) => {
+  const expectedApiBase = MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT[environment];
+  if (!expectedApiBase) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_RUNTIME_ORIGIN_UNBOUND" };
+  }
+  const configuredApiBase = toStr(readGlobal("subscriptions_runtime_api_base_url"));
+  let parsed;
+  try {
+    parsed = new URL(configuredApiBase);
+  } catch (_) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_RUNTIME_URL_INVALID" };
+  }
+  if (parsed.protocol !== "https:"
+    || parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash
+    || parsed.pathname !== "/api"
+    || parsed.href !== expectedApiBase) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT" };
+  }
+  return { ok: true };
+};
+
+const managedCreatePreflight = (ctx) => {
+  if (resolvePaymentMode(ctx.selectedPaymentMode || ctx.paymentMode) !== "subscription") {
+    return { ok: true, managedCanary: false };
+  }
+  const productAllowlist = readManagedProductAllowlist();
+  if (!productAllowlist.ok) return productAllowlist;
+  if (!productAllowlist.productIds.includes(PITER_MANAGED_PRODUCT_ID)) {
+    return { ok: true, managedCanary: false };
+  }
+  const environment = toStr(readGlobal(MANAGED_RUNTIME_ENVIRONMENT_GLOBAL))?.toUpperCase();
+  if (!["DEV", "PROD"].includes(environment)) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_ENVIRONMENT_INVALID" };
+  }
+  if (environment !== MANAGED_RUNTIME_EXPECTED_ENVIRONMENT) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT" };
+  }
+  if (environment === "PROD") {
+    return validateManagedRuntimeApiBase(environment);
+  }
+  const canaries = readManagedDevCanaries();
+  if (!canaries.ok) return canaries;
+  const clientSubscriptionId = toStr(ctx.clientSubscriptionId)?.toLowerCase();
+  if (!clientSubscriptionId || !canaries.clientSubscriptionIds.includes(clientSubscriptionId)) {
+    return { ok: true, managedCanary: false };
+  }
+  const runtimeApiBase = validateManagedRuntimeApiBase(environment);
+  return runtimeApiBase.ok ? { ok: true, managedCanary: true } : runtimeApiBase;
 };
 
 const adminRequest = (ctx, method, path, payload) => {
@@ -820,6 +944,12 @@ const buildBookingRequest = (ctx) => {
 
 const continueSplitAfterVerifiedPrice = (ctx) => {
   if (ctx.action === "create") {
+    const preflight = managedCreatePreflight(ctx);
+    if (!preflight.ok) {
+      return fail(503, "DEV-контур управляемой подписки не подтверждён", {
+        code: preflight.code,
+      });
+    }
     ctx.step = "create_exercise";
     return adminRequest(ctx, "POST", "/exercises", {
       directionId: toNumber(ctx.vivaDirectionId) ?? SPLIT_DIRECTION_ID,
