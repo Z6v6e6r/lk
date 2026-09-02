@@ -211,6 +211,9 @@ Request содержит `clientSubscriptionId` и exact scope
     "outboxEntries": 0,
     "testerGames": 0,
     "providerWriteCounter": 0,
+    "paymentWriteCounter": 0,
+    "entitlementMutationCounter": 0,
+    "rollbackWriteCounter": 0,
     "orphanReserves": 0,
     "fallbackCounter": 0,
     "productionCupCalls": 0,
@@ -279,9 +282,18 @@ Runner проверяет:
 7. Запустить `observe-after` с тем же `runId`.
 
 Final after-report тоже подписан HMAC и привязан к integrity HMAC before,
-exact subject bindings и frozen release bindings. Поле `noWrites=true` допустимо
-только когда присутствуют все шесть `writeSafety` dimensions: локальная блокировка
-mutation methods, create/join, provider booking, payment, entitlement и rollback.
+exact subject bindings и frozen release bindings. `setupNoWrites=true` означает
+только доказанный read-only контракт setup/default runner: все шесть `writeSafety`
+dimensions включают локальную блокировку mutation methods, create/join, provider
+booking, payment, entitlement и rollback.
+
+Глобальное `noWrites=true` появляется только в final after-report, когда signed
+before/after evidence для exact A/B и exact `runId` дополнительно доказывает нулевые
+delta `providerWriteCounter`, `paymentWriteCounter`,
+`entitlementMutationCounter` и `rollbackWriteCounter`. Любая положительная delta
+делает глобальное `noWrites=false`, даже если ожидаемая ручная операция и общий
+UAT reconciliation получили `PASS`. Missing, unsigned, unbound или decreasing
+counter также не может дать no-write PASS.
 
 ### Подписка A — V1
 
@@ -314,7 +326,7 @@ mutation methods, create/join, provider booking, payment, entitlement и rollbac
 ## Expected delta и отчёты
 
 Для A/B обязательны `policyVersion`, `instanceRevisionDelta`, итоговый
-`instanceState`, все восемь mutable metrics и `logicalResults`. Пример —
+`instanceState`, все одиннадцать mutable metrics и `logicalResults`. Пример —
 `config.example.json`; оператор корректирует его под фактический сценарий.
 
 Runner создаёт private каталог `0700` и JSON/Markdown `0600`:

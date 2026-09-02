@@ -11,6 +11,7 @@ import {
   evaluatePreflight,
   executeMode,
   hasCompleteNoWriteProof,
+  hasCompleteSetupNoWriteProof,
   loadInputs,
   normalizeObservation,
   parseCli,
@@ -162,6 +163,9 @@ function observation(label = "A", overrides = {}) {
       outboxEntries: 0,
       testerGames: 0,
       providerWriteCounter: 0,
+      paymentWriteCounter: 0,
+      entitlementMutationCounter: 0,
+      rollbackWriteCounter: 0,
       orphanReserves: 0,
       fallbackCounter: 0,
       productionCupCalls: 0,
@@ -216,6 +220,9 @@ function expectedDelta(label) {
       outboxEntries: 1,
       testerGames: 1,
       providerWriteCounter: 1,
+      paymentWriteCounter: 0,
+      entitlementMutationCounter: 1,
+      rollbackWriteCounter: 0,
     },
     logicalResults: [{
       step: `${label}_CREATE`,
@@ -374,8 +381,10 @@ test("complete preflight proves two pinned rules and DEV safety gates", () => {
     runtimeControl: runtime("CONTROL"),
   });
   assert.equal(report.status, "READY", JSON.stringify(report.checks.filter((row) => row.status === "FAIL")));
-  assert.equal(report.noWrites, true);
-  assert.equal(hasCompleteNoWriteProof(report), true);
+  assert.equal(report.setupNoWrites, true);
+  assert.equal(report.noWrites, false);
+  assert.equal(hasCompleteSetupNoWriteProof(report), true);
+  assert.equal(hasCompleteNoWriteProof(report), false);
 });
 
 test("preflight binds both served releases to every frozen expected SHA", () => {
@@ -435,6 +444,7 @@ test("unknown payment or rollback safety is FAIL and cannot claim default no-wri
     runtimeControl: runtime("CONTROL"),
   });
   assert.equal(report.status, "BLOCKED");
+  assert.equal(report.setupNoWrites, false);
   assert.equal(report.noWrites, false);
   assert.equal(report.writeSafety.paymentWritesAbsent, false);
   assert.equal(report.writeSafety.rollbackWritesAbsent, false);
@@ -560,6 +570,22 @@ test("partial or unsafe observability fails closed", () => {
     () => normalizeObservation(tampered, tampered.clientSubscriptionId, tampered.subscriptionInstanceId, tampered.correlationScope, INTEGRATION_SECRET),
     (error) => error.code === "OBSERVATION_INTEGRITY_INVALID",
   );
+  const tamperedPayment = {
+    ...valid,
+    metrics: { ...valid.metrics, paymentWriteCounter: valid.metrics.paymentWriteCounter + 1 },
+  };
+  assert.throws(
+    () => normalizeObservation(tamperedPayment, tamperedPayment.clientSubscriptionId, tamperedPayment.subscriptionInstanceId, tamperedPayment.correlationScope, INTEGRATION_SECRET),
+    (error) => error.code === "OBSERVATION_INTEGRITY_INVALID",
+  );
+  const tamperedRollback = {
+    ...valid,
+    metrics: { ...valid.metrics, rollbackWriteCounter: valid.metrics.rollbackWriteCounter + 1 },
+  };
+  assert.throws(
+    () => normalizeObservation(tamperedRollback, tamperedRollback.clientSubscriptionId, tamperedRollback.subscriptionInstanceId, tamperedRollback.correlationScope, INTEGRATION_SECRET),
+    (error) => error.code === "OBSERVATION_INTEGRITY_INVALID",
+  );
 });
 
 test("before/after reconciliation requires exact logical and aggregate deltas", () => {
@@ -577,6 +603,9 @@ test("before/after reconciliation requires exact logical and aggregate deltas", 
       outboxEntries: 1,
       testerGames: 1,
       providerWriteCounter: 1,
+      paymentWriteCounter: 0,
+      entitlementMutationCounter: 1,
+      rollbackWriteCounter: 0,
     },
     logicalResults: [logicalResult(label)],
   });
@@ -747,6 +776,9 @@ test("observe-before/after integration reconciles run-scoped evidence", async ()
       outboxEntries: 1,
       testerGames: 1,
       providerWriteCounter: 1,
+      paymentWriteCounter: 0,
+      entitlementMutationCounter: 1,
+      rollbackWriteCounter: 0,
     },
     logicalResults: [logicalResult(label)],
   })]));
@@ -761,7 +793,15 @@ test("observe-before/after integration reconciles run-scoped evidence", async ()
   assert.match(after.report.integrityHmac, /^[a-f0-9]{64}$/);
   assert.match(after.report.context.subjectBindings.A.clientSubscriptionHmac, /^[a-f0-9]{64}$/);
   assert.equal(after.report.context.beforeIntegrityHmac, before.report.integrityHmac);
-  assert.equal(hasCompleteNoWriteProof(after.report), true);
+  assert.equal(after.report.setupNoWrites, true);
+  assert.equal(after.report.noWrites, false);
+  assert.equal(hasCompleteSetupNoWriteProof(after.report), true);
+  assert.equal(hasCompleteNoWriteProof(after.report), false);
+  assert.equal(after.report.endToEndMutationEvidence.authenticated, true);
+  assert.equal(after.report.endToEndMutationEvidence.subjects.A.deltas.providerWriteCounter, 1);
+  assert.equal(after.report.endToEndMutationEvidence.subjects.B.deltas.entitlementMutationCounter, 1);
+  assert.equal(after.report.endToEndMutationEvidence.subjects.A.deltas.paymentWriteCounter, 0);
+  assert.equal(after.report.endToEndMutationEvidence.subjects.B.deltas.rollbackWriteCounter, 0);
   assert.doesNotMatch(fs.readFileSync(after.jsonPath, "utf8"), /providerPayload|user-a-secret-token|client-subscription-a-123456/);
 });
 

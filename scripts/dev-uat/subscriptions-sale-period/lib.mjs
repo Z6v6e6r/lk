@@ -35,6 +35,15 @@ const EXPECTED_DELTA_METRICS = Object.freeze([
   "outboxEntries",
   "testerGames",
   "providerWriteCounter",
+  "paymentWriteCounter",
+  "entitlementMutationCounter",
+  "rollbackWriteCounter",
+]);
+const END_TO_END_MUTATION_METRICS = Object.freeze([
+  "providerWriteCounter",
+  "paymentWriteCounter",
+  "entitlementMutationCounter",
+  "rollbackWriteCounter",
 ]);
 const ALL_OBSERVATION_METRICS = Object.freeze([
   ...EXPECTED_DELTA_METRICS,
@@ -519,7 +528,15 @@ function writeSafetyFromSystem(system, now, maxAgeMs) {
 }
 
 export function hasCompleteNoWriteProof(report) {
-  return report?.noWrites === true && WRITE_SAFETY_DIMENSIONS.every((key) => report?.writeSafety?.[key] === true);
+  return report?.noWrites === true
+    && hasCompleteSetupNoWriteProof(report)
+    && report?.endToEndMutationEvidence?.complete === true
+    && report?.endToEndMutationEvidence?.authenticated === true
+    && report?.endToEndMutationEvidence?.noMutationDeltas === true;
+}
+
+export function hasCompleteSetupNoWriteProof(report) {
+  return report?.setupNoWrites === true && WRITE_SAFETY_DIMENSIONS.every((key) => report?.writeSafety?.[key] === true);
 }
 
 function validateSystemEvidence(system, inputs, now, maxAgeMs) {
@@ -660,12 +677,13 @@ export function evaluatePreflight({ inputs, lkRelease, cupRelease, systemEvidenc
 
   const ok = checks.every((item) => item.status !== "FAIL");
   const writeSafety = writeSafetyFromSystem(systemEvidence, now, inputs.maxEvidenceAgeMs);
-  const noWrites = WRITE_SAFETY_DIMENSIONS.every((key) => writeSafety[key] === true);
+  const setupNoWrites = WRITE_SAFETY_DIMENSIONS.every((key) => writeSafety[key] === true);
   return {
     schemaVersion: 1,
     mode: "preflight",
     status: ok ? "READY" : "BLOCKED",
-    noWrites,
+    setupNoWrites,
+    noWrites: false,
     writeSafety,
     checks,
     origins: { lk: lkUrl.origin, cup: cupUrl.origin },
@@ -771,7 +789,45 @@ export function normalizeObservation(
     instanceState,
     metrics: Object.fromEntries(ALL_OBSERVATION_METRICS.map((key) => [key, payload.metrics[key]])),
     correlationScope: expectedCorrelationScope,
+    evidenceAuthenticated: true,
     logicalResults,
+  };
+}
+
+function endToEndMutationEvidence(before, after, runId) {
+  const subjects = {};
+  let complete = true;
+  let authenticated = true;
+  let noMutationDeltas = true;
+  for (const subject of ["A", "B"]) {
+    const beforeRow = before?.subjects?.[subject];
+    const afterRow = after?.subjects?.[subject];
+    const expectedScope = `subscription-sale-period:${runId}:${subject}`;
+    const bound = Boolean(beforeRow && afterRow)
+      && beforeRow.correlationScope === expectedScope && afterRow.correlationScope === expectedScope;
+    const subjectAuthenticated = bound
+      && beforeRow.evidenceAuthenticated === true && afterRow.evidenceAuthenticated === true;
+    const deltas = {};
+    let countersComplete = true;
+    for (const metric of END_TO_END_MUTATION_METRICS) {
+      const beforeValue = beforeRow?.metrics?.[metric];
+      const afterValue = afterRow?.metrics?.[metric];
+      const valid = Number.isSafeInteger(beforeValue) && beforeValue >= 0
+        && Number.isSafeInteger(afterValue) && afterValue >= beforeValue;
+      deltas[metric] = valid ? afterValue - beforeValue : null;
+      countersComplete &&= valid;
+      noMutationDeltas &&= valid && deltas[metric] === 0;
+    }
+    complete &&= bound && countersComplete;
+    authenticated &&= subjectAuthenticated;
+    subjects[subject] = { scopeBound: bound, authenticated: subjectAuthenticated, deltas };
+  }
+  return {
+    runId,
+    complete,
+    authenticated,
+    noMutationDeltas: complete && authenticated && noMutationDeltas,
+    subjects,
   };
 }
 
@@ -909,8 +965,9 @@ function verifyEvidenceIntegrity(report, key) {
 
 function markdown(report) {
   const rows = (report.checks || []).map((item) => `| ${item.name} | ${item.status} | ${item.code} |`).join("\n");
-  const noWriteStatus = hasCompleteNoWriteProof(report) ? "PASS" : "FAIL";
-  return `# Subscription sale-period DEV UAT\n\n- Mode: \`${report.mode}\`\n- Status: \`${report.status}\`\n- Complete no-write proof: \`${noWriteStatus}\`\n- Generated: \`${report.generatedAt}\`\n\n| Check | Status | Code |\n|---|---|---|\n${rows || "| REPORT | PASS | NO_CHECKS |"}\n\nThe report is redacted. Runtime identifiers are represented only by HMAC bindings.\n`;
+  const setupNoWriteStatus = hasCompleteSetupNoWriteProof(report) ? "PASS" : "FAIL";
+  const endToEndNoWriteStatus = hasCompleteNoWriteProof(report) ? "PASS" : "FAIL";
+  return `# Subscription sale-period DEV UAT\n\n- Mode: \`${report.mode}\`\n- Status: \`${report.status}\`\n- Setup/default no-write proof: \`${setupNoWriteStatus}\`\n- End-to-end no-write proof: \`${endToEndNoWriteStatus}\`\n- Generated: \`${report.generatedAt}\`\n\n| Check | Status | Code |\n|---|---|---|\n${rows || "| REPORT | PASS | NO_CHECKS |"}\n\nThe report is redacted. Runtime identifiers are represented only by HMAC bindings.\n`;
 }
 
 function ensureArtifactDirectory(root, runId) {
@@ -1028,7 +1085,8 @@ function assertBeforeBinding(inputs, before, now, targets) {
   const bindings = subjectBindings(inputs);
   if (before?.schemaVersion !== 1 || before?.mode !== "observe-before" || before?.status !== "READY"
     || before?.runId !== inputs.DEV_UAT_RUN_ID
-    || !hasCompleteNoWriteProof(before) || !generatedAt || age < -5_000 || age > inputs.beforeMaxAgeMs) {
+    || !hasCompleteSetupNoWriteProof(before) || before?.noWrites !== false
+    || !generatedAt || age < -5_000 || age > inputs.beforeMaxAgeMs) {
     throw new UatError("BEFORE_SNAPSHOT_STALE_OR_INVALID", "The before snapshot is invalid or stale");
   }
   if (before.context?.origins?.lk !== targets.lk.origin || before.context?.origins?.cup !== targets.cup.origin
@@ -1117,7 +1175,8 @@ export async function executeMode({ mode, inputs, client = new ReadOnlyHttpClien
         mode,
         runId,
         status: checks.every((item) => item.status !== "FAIL") ? "READY" : "BLOCKED",
-        noWrites: preflight.noWrites,
+        setupNoWrites: preflight.setupNoWrites,
+        noWrites: false,
         writeSafety: preflight.writeSafety,
         generatedAt: now.toISOString(),
         checks,
@@ -1149,7 +1208,8 @@ export async function executeMode({ mode, inputs, client = new ReadOnlyHttpClien
         mode,
         runId: inputs.DEV_UAT_RUN_ID,
         status: "FAIL",
-        noWrites: currentPreflight.noWrites,
+        setupNoWrites: currentPreflight.setupNoWrites,
+        noWrites: false,
         writeSafety: currentPreflight.writeSafety,
         generatedAt: now.toISOString(),
         checks: [...currentPreflight.checks, ...continuityChecks],
@@ -1165,6 +1225,7 @@ export async function executeMode({ mode, inputs, client = new ReadOnlyHttpClien
     },
   };
   const reconciliation = reconcileObservations(before, after, inputs.DEV_UAT_EXPECTED_DELTA);
+  const mutationEvidence = endToEndMutationEvidence(before, after, inputs.DEV_UAT_RUN_ID);
   const checks = [
     ...currentPreflight.checks,
     ...continuityChecks,
@@ -1179,8 +1240,10 @@ export async function executeMode({ mode, inputs, client = new ReadOnlyHttpClien
       mode,
       runId: inputs.DEV_UAT_RUN_ID,
       status: ok ? "PASS" : "FAIL",
-      noWrites: currentPreflight.noWrites,
+      setupNoWrites: currentPreflight.setupNoWrites,
+      noWrites: currentPreflight.setupNoWrites && mutationEvidence.noMutationDeltas,
       writeSafety: currentPreflight.writeSafety,
+      endToEndMutationEvidence: mutationEvidence,
       generatedAt: now.toISOString(),
       checks,
       context: {

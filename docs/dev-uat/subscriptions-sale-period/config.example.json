@@ -52,7 +52,10 @@
         "ledgerEntries": 1,
         "outboxEntries": 1,
         "testerGames": 1,
-        "providerWriteCounter": 1
+        "providerWriteCounter": 1,
+        "paymentWriteCounter": 0,
+        "entitlementMutationCounter": 1,
+        "rollbackWriteCounter": 0
       },
       "logicalResults": [
         {
@@ -77,7 +80,10 @@
         "ledgerEntries": 1,
         "outboxEntries": 1,
         "testerGames": 1,
-        "providerWriteCounter": 1
+        "providerWriteCounter": 1,
+        "paymentWriteCounter": 0,
+        "entitlementMutationCounter": 1,
+        "rollbackWriteCounter": 0
       },
       "logicalResults": [
         {
