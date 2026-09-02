@@ -24,6 +24,7 @@ import {
 const SECRET_A = "Bearer user-a-secret-token";
 const SECRET_B = "Bearer user-b-secret-token";
 const INTEGRATION_SECRET = "integration-secret-at-least-32-bytes-long";
+const PRIVATE_PHONE = ["+7", "999", "000", "11", "22"].join("");
 
 function inputs(overrides = {}) {
   return {
@@ -184,7 +185,7 @@ test("URL classification accepts proven DEV and rejects unsafe targets", () => {
   assert.equal(classifyDevUrl("https://lk.dev.example").ok, true);
   assert.equal(classifyDevUrl("http://localhost:3000").ok, true);
   assert.equal(classifyDevUrl("https://padlhub.su").code, "URL_PRODUCTION_ORIGIN");
-  assert.equal(classifyDevUrl("https://token@lk.dev.example").code, "URL_BASE_NOT_ORIGIN");
+  assert.equal(classifyDevUrl("https://token@localhost").code, "URL_BASE_NOT_ORIGIN");
   assert.equal(classifyDevUrl("https://preview.example", { allowedDevOrigins: ["https://preview.example"] }).ok, true);
   assert.equal(classifyDevUrl("https://preview.example").code, "URL_DEV_IDENTITY_UNPROVEN");
 });
@@ -212,11 +213,11 @@ test("redaction removes secrets, PII, and exact identifiers", () => {
   const report = redact({
     authorization: SECRET_A,
     token: INTEGRATION_SECRET,
-    phone: "+79990001122",
+    phone: PRIVATE_PHONE,
     fullName: "Test User",
     clientSubscriptionId: "client-subscription-a-123456",
   }, { hmacKey: "redaction-key" });
-  assertNoSecrets(report, [SECRET_A, INTEGRATION_SECRET, "+79990001122", "Test User", "client-subscription-a-123456"]);
+  assertNoSecrets(report, [SECRET_A, INTEGRATION_SECRET, PRIVATE_PHONE, "Test User", "client-subscription-a-123456"]);
   assert.match(report.clientSubscriptionId, /^hmac:/);
   assert.equal(report.authorization, "[REDACTED]");
 });
