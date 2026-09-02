@@ -753,7 +753,7 @@ test("DEV-looking unapproved origin is rejected before credentials or network", 
   assert.equal(calls, 0);
 });
 
-test("observe-before/after integration reconciles run-scoped evidence", async () => {
+test("positive provider delta can reconcile but cannot yield global no-write PASS", async () => {
   const configured = inputs();
   const idA = configured.DEV_TEST_SUBSCRIPTION_A_ID;
   const idB = configured.DEV_TEST_SUBSCRIPTION_B_ID;
