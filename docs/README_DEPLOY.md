@@ -667,7 +667,18 @@ https://padlhub.ru/tournament_subscription
 
 По умолчанию standalone summer subscription page рендерит две группы карточек:
 - `Подписки на 30 дней`: `academy`, `ra`, `friendship`, `energy5`;
-- `Годовые подписки`: `piter_friendship`, `kotelniki_friendship`, `network_friendship`.
+- `Годовые подписки`: только `network_friendship` (ХАБ). Отдельные страницы Питера и
+  Котельников сохранены, но их карточки не входят в `ab_leto`.
+
+У ХАБ на `ab_leto` нет чекбокса согласия и подписи о статусе авторизации; вход,
+проверка телефона, server-owned остатка и purchase binding остаются обязательными.
+Согласовательный макет ХАБ показывает `Доступно — 10 из 10`. Это synthetic
+status предпросмотра, а не активированная серверная дневная квота; frontend по-прежнему
+читает фактические числа из API, и изменение runtime inventory требует отдельного этапа.
+Воспроизводимый локальный fixture: `scripts/fixtures/ab-leto-preview.html`. После сборки
+`vite build --config vite.config.tournament-subscription.ts --mode dev` скопировать его
+в `dist/preview.html` и обслуживать только на loopback; fixture блокирует внешний fetch
+и не входит в release entrypoints.
 
 Карточки с правилами переворачиваются по нажатию на саму карточку или кнопку
 `Узнать условия подписки`; клавиатурный фокус и `prefers-reduced-motion` поддерживаются.

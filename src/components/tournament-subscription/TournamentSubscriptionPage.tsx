@@ -103,6 +103,7 @@ interface DisplayPlanConfig {
   featureItemClassName?: string;
   featureLabelClassName?: string;
   requiresConsent?: boolean;
+  hideAuthState?: boolean;
   terms?: string[];
   guardedStorefrontKicker?: string;
   guardedStorefrontArtworkAlt?: string;
@@ -390,42 +391,23 @@ function buildDefaultPageViewConfig(): PageViewConfig {
         featureStatusAppearance: "badge",
         features: buildDefaultFeatures("sport"),
       },
-      buildGuardedFriendshipPlanConfig({
-        counterKey: "piter_friendship",
-        kicker: "Падел.Дружба.Питер",
-        accent: "ПИТЕР",
-        artworks: PITER_FRIENDSHIP_ARTWORKS,
-        batchSize: PITER_FRIENDSHIP_BATCH_SIZE,
-        fallbackTotalLimit: PITER_FRIENDSHIP_FALLBACK_TOTAL,
-        rulesArtworkAlt: `Правила годовой подписки Падел.Дружба.Питер. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
-        rulesArtworkSrc: subscriptionRulesRedImage,
-        terms: PITER_FRIENDSHIP_TERMS,
-        termsEffectiveLabel: PITER_FRIENDSHIP_TERMS_EFFECTIVE_LABEL,
-        sectionLabel: "Годовые подписки",
-      }),
-      buildGuardedFriendshipPlanConfig({
-        counterKey: "kotelniki_friendship",
-        kicker: "Падел.Дружба.Котельники",
-        accent: "КОТЕЛЬНИКИ",
-        artworks: KOTELNIKI_FRIENDSHIP_ARTWORKS,
-        batchSize: KOTELNIKI_FRIENDSHIP_BATCH_SIZE,
-        rulesArtworkAlt: `Правила годовой подписки Падел.Дружба.Котельники. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
-        rulesArtworkSrc: subscriptionRulesRedImage,
-        terms: PITER_FRIENDSHIP_TERMS,
-        termsEffectiveLabel: PITER_FRIENDSHIP_TERMS_EFFECTIVE_LABEL,
-      }),
-      buildGuardedFriendshipPlanConfig({
-        counterKey: "network_friendship",
-        kicker: "Падел.Дружба.Хаб",
-        accent: "ВСЯ СЕТЬ",
-        artworks: NETWORK_FRIENDSHIP_ARTWORKS,
-        batchSize: NETWORK_FRIENDSHIP_BATCH_SIZE,
-        remainingLabel: "До повышения цены осталось",
-        rulesArtworkAlt: `Правила годовой подписки Падел.Дружба.Хаб. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
-        rulesArtworkSrc: subscriptionRulesRedImage,
-        terms: PITER_FRIENDSHIP_TERMS,
-        termsEffectiveLabel: PITER_FRIENDSHIP_TERMS_EFFECTIVE_LABEL,
-      }),
+      {
+        ...buildGuardedFriendshipPlanConfig({
+          counterKey: "network_friendship",
+          kicker: "Падел.Дружба.Хаб",
+          accent: "ВСЯ СЕТЬ",
+          artworks: NETWORK_FRIENDSHIP_ARTWORKS,
+          batchSize: NETWORK_FRIENDSHIP_BATCH_SIZE,
+          remainingLabel: "Доступно",
+          rulesArtworkAlt: `Правила годовой подписки Падел.Дружба.Хаб. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
+          rulesArtworkSrc: subscriptionRulesRedImage,
+          terms: PITER_FRIENDSHIP_TERMS,
+          termsEffectiveLabel: PITER_FRIENDSHIP_TERMS_EFFECTIVE_LABEL,
+          sectionLabel: "Годовые подписки",
+        }),
+        requiresConsent: false,
+        hideAuthState: true,
+      },
     ],
   };
 }
@@ -1750,7 +1732,7 @@ export default function TournamentSubscriptionPage({
                   </div>
                 )}
 
-                {isGuardedStorefront && (
+                {isGuardedStorefront && plan.requiresConsent && (
                   <label className="piter-subscription-consent">
                     <input
                       type="checkbox"
@@ -1767,7 +1749,7 @@ export default function TournamentSubscriptionPage({
                   </label>
                 )}
 
-                {isGuardedStorefront && (
+                {isGuardedStorefront && !plan.hideAuthState && (
                   <div className="piter-subscription-auth-state">
                     {isAuthenticated ? "Вы авторизованы" : "После подтверждения условий потребуется вход"}
                   </div>

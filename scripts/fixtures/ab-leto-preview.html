@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ab_leto — согласование</title>
+    <style>
+      html, body, #root { min-height: 100%; margin: 0; }
+      body { background: #050505; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const statuses = [
+        { counterKey: "academy", totalLimit: 150, remainingCount: 150, unlimited: false, bindingReady: true, canPurchase: true, dailyDropActive: true, dailyLimit: 10 },
+        { counterKey: "ra", totalLimit: 150, remainingCount: 150, unlimited: false, bindingReady: true, canPurchase: true, dailyDropActive: true, dailyLimit: 10 },
+        { counterKey: "friendship", totalLimit: 150, remainingCount: 150, unlimited: false, bindingReady: true, canPurchase: true, dailyDropActive: true, dailyLimit: 10 },
+        { counterKey: "energy5", totalLimit: 50, remainingCount: 50, unlimited: false, bindingReady: true, canPurchase: true },
+        { counterKey: "piter_friendship", totalLimit: 400, remainingCount: 400, batchSize: 100, batchRemainingCount: 100, batchIndex: 1, unlimited: false, bindingReady: true, canPurchase: true },
+        { counterKey: "kotelniki_friendship", totalLimit: 200, remainingCount: 200, batchSize: 50, batchRemainingCount: 50, batchIndex: 1, unlimited: false, bindingReady: false, bindingError: "Предпросмотр: покупка закрыта" },
+        { counterKey: "network_friendship", totalLimit: 10, remainingCount: 10, batchSize: 10, batchRemainingCount: 10, batchIndex: 1, dailyDropActive: true, dailyLimit: 10, unlimited: false, bindingReady: true, canPurchase: true }
+      ];
+
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url.includes("/lk/tournaments/summer-subscription/status")) {
+          const requestedKey = new URL(url, window.location.href).searchParams.get("counterKey");
+          const body = requestedKey ? statuses.filter((status) => status.counterKey === requestedKey) : statuses;
+          return new Response(JSON.stringify({ statuses: body }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.startsWith(window.location.origin)) return nativeFetch(input, init);
+        return new Response(JSON.stringify({ message: "Предпросмотр: внешний запрос заблокирован" }), { status: 401, headers: { "Content-Type": "application/json" } });
+      };
+      navigator.sendBeacon = () => false;
+    </script>
+    <script src="/tournament-subscription-dev.js?preview=hub-only-20260903-v2"></script>
+    <script>
+      window.LKWidgetTournamentSubscription.mount({
+        targetId: "root",
+        onClose: () => {},
+        data: { cabinetUrl: "#" }
+      });
+    </script>
+  </body>
+</html>

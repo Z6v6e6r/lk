@@ -5,6 +5,8 @@ import test from "node:test";
 
 const page = fs.readFileSync("src/components/tournament-subscription/TournamentSubscriptionPage.tsx", "utf8");
 const css = fs.readFileSync("src/MyApp.css", "utf8");
+const defaultPage = page.slice(page.indexOf("function buildDefaultPageViewConfig()"), page.indexOf("function buildPromoOfferPageViewConfig("));
+const preview = fs.readFileSync("scripts/fixtures/ab-leto-preview.html", "utf8");
 
 const EXPECTED_STOREFRONT_ASSETS = new Map([
   ["summer-subscription-academy.webp", "1b7bdb5cf0c1f03847efac7ddf7cb9b7142187293a0d5a82190c61a79841847a"],
@@ -24,21 +26,45 @@ const EXPECTED_STOREFRONT_ASSETS = new Map([
   ["network-subscription.webp", "83a8f2ccf39908a6cbe7b5692598fdd1624a9d0a03784cb8a6815fd69b276ef6"],
 ]);
 
-test("ab_leto storefront groups four short plans and three annual plans in the desktop grid", () => {
+test("ab_leto storefront groups four short plans and only the HUB annual plan", () => {
   assert.match(css, /\.tournament-subscription-plans\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
   assert.match(css, /\.tournament-subscription-section-title\s*\{[\s\S]*?grid-column:\s*1\s*\/\s*-1/);
   assert.match(page, /sectionLabel: "Подписки на 30 дней"/);
   assert.match(page, /sectionLabel: "Годовые подписки"/);
   assert.match(page, /id: "energy5",[\s\S]*?cardClassName: "tournament-subscription-plan--image"/);
   assert.doesNotMatch(page, /id: "energy5",[\s\S]*?tournament-subscription-plan--showcase-featured/);
-  for (const counterKey of ["piter_friendship", "kotelniki_friendship", "network_friendship"]) {
-    assert.match(page, new RegExp(`counterKey: "${counterKey}"`));
+  assert.match(defaultPage, /counterKey: "network_friendship"/);
+  for (const counterKey of ["piter_friendship", "kotelniki_friendship"]) {
+    assert.doesNotMatch(defaultPage, new RegExp(`counterKey: "${counterKey}"`));
+    assert.match(page, new RegExp(`variant === "${counterKey}"`));
   }
   assert.match(page, /subscriptionRulesGreenImage/);
   assert.match(page, /subscriptionRulesGoldImage/);
   assert.match(page, /subscriptionRulesRedImage/);
   assert.match(page, /aria-label=\{isArtworkFlipped \? `Вернуться к карточке/);
   assert.match(page, /aria-hidden=\{!isArtworkFlipped\}/);
+});
+
+test("only ab_leto HUB omits consent and auth captions while purchase guards remain", () => {
+  assert.match(defaultPage, /requiresConsent: false/);
+  assert.match(defaultPage, /hideAuthState: true/);
+  assert.match(defaultPage, /counterKey: "network_friendship",[\s\S]*?remainingLabel: "Доступно"/);
+  assert.match(page, /isGuardedStorefront && plan\.requiresConsent &&/);
+  assert.match(page, /isGuardedStorefront && !plan\.hideAuthState &&/);
+  assert.match(page, /requiresConsent: true/);
+  assert.match(page, /if \(!isAuthenticated\) \{[\s\S]*?setAuthRequestedDisplayId\(plan\.id\)/);
+  assert.match(page, /if \(!profile\?\.phone\)/);
+  assert.match(page, /if \(!trackedStatus\.bindingReady\)/);
+  assert.match(page, /if \(!trackedStatus\.canPurchase/);
+  assert.match(page, /`\$\{status\.batchRemainingCount\} из \$\{status\.batchSize\}`/);
+});
+
+test("HUB ten-per-day approval state lives only in the local preview fixture", () => {
+  assert.match(preview, /counterKey: "network_friendship", totalLimit: 10, remainingCount: 10, batchSize: 10, batchRemainingCount: 10/);
+  assert.match(preview, /dailyDropActive: true, dailyLimit: 10/);
+  assert.doesNotMatch(defaultPage, /remainingValueText: "10 из 10"/);
+  assert.match(preview, /Предпросмотр: внешний запрос заблокирован/);
+  assert.match(preview, /navigator\.sendBeacon = \(\) => false/);
 });
 
 test("ab_leto storefront keeps the approved source artwork bytes", () => {
