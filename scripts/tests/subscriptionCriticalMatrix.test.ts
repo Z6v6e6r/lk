@@ -345,22 +345,27 @@ for (const action of ["CREATE_GAME", "JOIN_GAME"] as const) {
   });
 }
 
-for (const [id, duration, amountMinor, extra] of [
-  ["DUR-30", 90, 52_500, 30],
-  ["DUR-60", 120, 105_000, 60],
+for (const [id, duration, amountMinor, amountPattern] of [
+  ["DUR-30-LEGACY", 90, 52_500, /525/],
+  ["DUR-60-LEGACY", 120, 105_000, /1\s*050/],
+  ["DUR-30-PITER", 90, 157_500, /1\s*575/],
+  ["DUR-60-PITER", 120, 210_000, /2\s*100/],
 ] as const) {
-  test(`${id}: extra duration has an exact additional-payment answer`, () => {
-    const presentation = resolveSubscriptionDecisionPresentation({
-      action: "CREATE_GAME",
-      requestedPaymentMode: "subscription",
-      durationMinutes: duration,
-      result: result({ toPay: amountMinor / 100, toPayMinor: amountMinor }),
+  for (const action of ["CREATE_GAME", "JOIN_GAME"] as const) {
+    test(`${id}-${action}: paid subscription shows server amount without inferring free minutes`, () => {
+      const presentation = resolveSubscriptionDecisionPresentation({
+        action,
+        requestedPaymentMode: "subscription",
+        durationMinutes: duration,
+        result: result({ toPay: amountMinor / 100, toPayMinor: amountMinor }),
+      });
+      assert.equal(presentation.kind, "ADDITIONAL_PAYMENT_REQUIRED");
+      assert.equal(presentation.subscriptionApplied, true);
+      assert.match(presentation.message, /доплата —/i);
+      assert.match(presentation.message, amountPattern);
+      assert.doesNotMatch(presentation.message, /60 минут по подписке|доплата за \d+ минут|бесплатн/i);
     });
-    assert.equal(presentation.kind, "ADDITIONAL_PAYMENT_REQUIRED");
-    assert.equal(presentation.subscriptionApplied, true);
-    assert.match(presentation.message, new RegExp(`доплата за ${extra} минут`, "i"));
-    assert.match(presentation.message, new RegExp(amountMinor === 52_500 ? "525" : "1\\s*050"));
-  });
+  }
 }
 
 test("LIMIT_ENFORCEMENT: server full-price fallback is never shown as a subscription discount", () => {
