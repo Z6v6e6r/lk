@@ -10,6 +10,7 @@ import {
   classifyDevUrl,
   evaluatePreflight,
   executeMode,
+  hasCompleteNoWriteProof,
   loadInputs,
   normalizeObservation,
   parseCli,
@@ -17,6 +18,7 @@ import {
   reconcileObservations,
   redact,
   selectPublication,
+  signObservationEvidence,
   UatError,
   writeEvidence,
 } from "./lib.mjs";
@@ -25,6 +27,12 @@ const SECRET_A = "Bearer user-a-secret-token";
 const SECRET_B = "Bearer user-b-secret-token";
 const INTEGRATION_SECRET = "integration-secret-at-least-32-bytes-long";
 const PRIVATE_PHONE = ["+7", "999", "000", "11", "22"].join("");
+const LK_SHA = "1".repeat(40);
+const CUP_SHA = "2".repeat(40);
+
+function releaseEvidence(sha) {
+  return { sourceSha: sha, candidateSha: sha, readbackSha: sha, servedSha: sha };
+}
 
 function inputs(overrides = {}) {
   return {
@@ -32,6 +40,8 @@ function inputs(overrides = {}) {
     DEV_CUP_BASE_URL: "https://cup.dev.padlhub.example",
     DEV_TEST_SUBSCRIPTION_A_ID: "client-subscription-a-123456",
     DEV_TEST_SUBSCRIPTION_B_ID: "client-subscription-b-654321",
+    DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID: "instance-a-123456",
+    DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID: "instance-b-123456",
     DEV_TEST_AUTH_A: SECRET_A,
     DEV_TEST_AUTH_B: SECRET_B,
     DEV_CUP_INTEGRATION_TOKEN: INTEGRATION_SECRET,
@@ -39,7 +49,12 @@ function inputs(overrides = {}) {
     EXPECTED_PRODUCT_ID: "product-piter",
     EXPECTED_RULE_A_VERSION: "V1",
     EXPECTED_RULE_B_VERSION: "V2",
-    allowedDevOrigins: [],
+    DEV_CONTROL_SUBSCRIPTION_ID: "control-subscription-000001",
+    DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID: "instance-control-000001",
+    DEV_CONTROL_AUTH: "Bearer control-placeholder",
+    expectedLkRelease: releaseEvidence(LK_SHA),
+    expectedCupRelease: releaseEvidence(CUP_SHA),
+    allowedDevOrigins: ["https://lk.dev.padlhub.example", "https://cup.dev.padlhub.example"],
     productionOrigins: ["https://padlhub.su", "https://cup.padlhub.su"],
     timeoutMs: 100,
     maxEvidenceAgeMs: 300_000,
@@ -58,20 +73,26 @@ function inputs(overrides = {}) {
 
 function runtime(label, overrides = {}) {
   const isA = label === "A";
+  const isControl = label === "CONTROL";
   const digest = (isA ? "a" : "b").repeat(64);
   const version = isA ? 1 : 2;
-  const clientSubscriptionId = isA ? "client-subscription-a-123456" : "client-subscription-b-654321";
+  const clientSubscriptionId = isA
+    ? "client-subscription-a-123456"
+    : isControl ? "control-subscription-000001" : "client-subscription-b-654321";
+  const subscriptionInstanceId = isA
+    ? "instance-a-123456"
+    : isControl ? "instance-control-000001" : "instance-b-123456";
   const base = {
     schemaVersion: 1,
     clientSubscriptionId,
-    subscriptionInstanceId: `instance-${label.toLowerCase()}-123456`,
+    subscriptionInstanceId,
     productId: "product-piter",
     tenantId: "tenant-dev",
     authoritativePurchasedAt: isA ? "2026-09-09T23:59:59.999Z" : "2026-09-10T00:00:00.000Z",
     policyDigest: digest,
     policy: { subscriptionTypeId: "subscription-type-piter", policyVersion: version },
     instance: {
-      subscriptionInstanceId: `instance-${label.toLowerCase()}-123456`,
+      subscriptionInstanceId,
       subscriptionTypeId: "subscription-type-piter",
       productId: "product-piter",
       policyVersion: version,
@@ -103,7 +124,20 @@ function systemEvidence(overrides = {}) {
     productionState: { unchanged: true, runtimeFlagsEnabled: false },
     indexes: { required: ["instance-pin", "entitlement-scope"], present: ["instance-pin", "entitlement-scope"], missing: [] },
     projectionCheckpoint: { current: true, observedAt },
-    canaryEvidence: { current: true, observedAt },
+    canaryEvidence: {
+      current: true,
+      observedAt,
+      subscriptionInstanceIds: ["instance-a-123456", "instance-b-123456"],
+    },
+    noWriteEvidence: {
+      current: true,
+      observedAt,
+      createJoinWritesAbsent: true,
+      providerBookingWritesAbsent: true,
+      paymentWritesAbsent: true,
+      entitlementMutationsAbsent: true,
+      rollbackWritesAbsent: true,
+    },
     managedRange: { startsAt: "2026-09-01T00:00:00.000Z", endsAt: "2026-09-30T23:59:59.999Z" },
   };
   return { ...base, ...overrides };
@@ -113,6 +147,8 @@ function observation(label = "A", overrides = {}) {
   const isA = label === "A";
   const base = {
     clientSubscriptionId: isA ? "client-subscription-a-123456" : "client-subscription-b-654321",
+    subscriptionInstanceId: isA ? "instance-a-123456" : "instance-b-123456",
+    correlationScope: `subscription-sale-period:20260902T120000000Z:${label}`,
     selectedPolicyVersion: isA ? 1 : 2,
     selectedPolicyDigest: (isA ? "a" : "b").repeat(64),
     instanceRevision: isA ? 10 : 20,
@@ -134,6 +170,17 @@ function observation(label = "A", overrides = {}) {
     logicalResults: [],
   };
   return { ...base, ...overrides, metrics: { ...base.metrics, ...(overrides.metrics || {}) } };
+}
+
+function normalizeFixtureObservation(label, overrides = {}) {
+  const payload = observation(label, overrides);
+  return normalizeObservation(
+    signObservationEvidence(payload, INTEGRATION_SECRET),
+    payload.clientSubscriptionId,
+    payload.subscriptionInstanceId,
+    payload.correlationScope,
+    INTEGRATION_SECRET,
+  );
 }
 
 function logicalResult(label, overrides = {}) {
@@ -181,13 +228,13 @@ function expectedDelta(label) {
   };
 }
 
-test("URL classification accepts proven DEV and rejects unsafe targets", () => {
-  assert.equal(classifyDevUrl("https://lk.dev.example").ok, true);
-  assert.equal(classifyDevUrl("http://localhost:3000").ok, true);
+test("URL classification requires an exact approved origin and rejects lookalikes", () => {
+  assert.equal(classifyDevUrl("https://lk.dev.example").code, "URL_DEV_IDENTITY_UNPROVEN");
+  assert.equal(classifyDevUrl("http://localhost:3000").code, "URL_DEV_IDENTITY_UNPROVEN");
   assert.equal(classifyDevUrl("https://padlhub.su").code, "URL_PRODUCTION_ORIGIN");
   assert.equal(classifyDevUrl("https://token@localhost").code, "URL_BASE_NOT_ORIGIN");
   assert.equal(classifyDevUrl("https://preview.example", { allowedDevOrigins: ["https://preview.example"] }).ok, true);
-  assert.equal(classifyDevUrl("https://preview.example").code, "URL_DEV_IDENTITY_UNPROVEN");
+  assert.equal(classifyDevUrl("https://preview.example.attacker.invalid", { allowedDevOrigins: ["https://preview.example"] }).code, "URL_DEV_IDENTITY_UNPROVEN");
 });
 
 test("custom production origins extend the immutable built-in denylist", () => {
@@ -196,6 +243,8 @@ test("custom production origins extend the immutable built-in denylist", () => {
     DEV_CUP_BASE_URL: "https://cup.dev.example",
     DEV_TEST_SUBSCRIPTION_A_ID: "subscription-a",
     DEV_TEST_SUBSCRIPTION_B_ID: "subscription-b",
+    DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID: "instance-a",
+    DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID: "instance-b",
     DEV_TEST_AUTH_A: SECRET_A,
     DEV_TEST_AUTH_B: SECRET_B,
     DEV_CUP_INTEGRATION_TOKEN: INTEGRATION_SECRET,
@@ -203,10 +252,45 @@ test("custom production origins extend the immutable built-in denylist", () => {
     EXPECTED_PRODUCT_ID: "product",
     EXPECTED_RULE_A_VERSION: "V1",
     EXPECTED_RULE_B_VERSION: "V2",
+    DEV_CONTROL_SUBSCRIPTION_ID: "subscription-control",
+    DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID: "instance-control",
+    DEV_CONTROL_AUTH: "Bearer control-placeholder",
+    DEV_UAT_ALLOWED_DEV_ORIGINS_JSON: '["https://lk.dev.example","https://cup.dev.example"]',
+    DEV_UAT_EXPECTED_LK_RELEASE_JSON: JSON.stringify(releaseEvidence(LK_SHA)),
+    DEV_UAT_EXPECTED_CUP_RELEASE_JSON: JSON.stringify(releaseEvidence(CUP_SHA)),
     DEV_UAT_PRODUCTION_ORIGINS_JSON: '["https://other.example"]',
   });
   assert.equal(loaded.productionOrigins.includes("https://cup.padlhub.su"), true);
   assert.equal(loaded.productionOrigins.includes("https://other.example"), true);
+});
+
+test("input loading rejects missing exact allowlist and malformed frozen release binding", () => {
+  const baseEnv = {
+    DEV_LK_BASE_URL: "https://lk.dev.example",
+    DEV_CUP_BASE_URL: "https://cup.dev.example",
+    DEV_TEST_SUBSCRIPTION_A_ID: "subscription-a",
+    DEV_TEST_SUBSCRIPTION_B_ID: "subscription-b",
+    DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID: "instance-a",
+    DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID: "instance-b",
+    DEV_TEST_AUTH_A: SECRET_A,
+    DEV_TEST_AUTH_B: SECRET_B,
+    DEV_CUP_INTEGRATION_TOKEN: INTEGRATION_SECRET,
+    EXPECTED_SUBSCRIPTION_TYPE_ID: "type",
+    EXPECTED_PRODUCT_ID: "product",
+    EXPECTED_RULE_A_VERSION: "V1",
+    EXPECTED_RULE_B_VERSION: "V2",
+    DEV_CONTROL_SUBSCRIPTION_ID: "subscription-control",
+    DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID: "instance-control",
+    DEV_CONTROL_AUTH: "Bearer control-placeholder",
+    DEV_UAT_EXPECTED_LK_RELEASE_JSON: JSON.stringify(releaseEvidence(LK_SHA)),
+    DEV_UAT_EXPECTED_CUP_RELEASE_JSON: JSON.stringify(releaseEvidence(CUP_SHA)),
+  };
+  assert.throws(() => loadInputs(baseEnv), (error) => error.code === "DEV_ORIGIN_ALLOWLIST_REQUIRED");
+  assert.throws(() => loadInputs({
+    ...baseEnv,
+    DEV_UAT_ALLOWED_DEV_ORIGINS_JSON: '["https://lk.dev.example","https://cup.dev.example"]',
+    DEV_UAT_EXPECTED_LK_RELEASE_JSON: JSON.stringify({ ...releaseEvidence(LK_SHA), servedSha: "not-a-sha" }),
+  }), (error) => error.code === "EXPECTED_RELEASE_BINDING_REQUIRED");
 });
 
 test("redaction removes secrets, PII, and exact identifiers", () => {
@@ -282,24 +366,89 @@ test("browser date is ignored", () => {
 test("complete preflight proves two pinned rules and DEV safety gates", () => {
   const report = evaluatePreflight({
     inputs: inputs(),
-    lkRelease: { releaseId: "lk-dev-sha" },
-    cupRelease: { gitSha: "cup-dev-sha" },
+    lkRelease: releaseEvidence(LK_SHA),
+    cupRelease: releaseEvidence(CUP_SHA),
     systemEvidence: systemEvidence(),
     runtimeA: runtime("A"),
     runtimeB: runtime("B"),
+    runtimeControl: runtime("CONTROL"),
   });
   assert.equal(report.status, "READY", JSON.stringify(report.checks.filter((row) => row.status === "FAIL")));
   assert.equal(report.noWrites, true);
+  assert.equal(hasCompleteNoWriteProof(report), true);
+});
+
+test("preflight binds both served releases to every frozen expected SHA", () => {
+  const mismatched = releaseEvidence(LK_SHA);
+  mismatched.servedSha = "3".repeat(40);
+  const report = evaluatePreflight({
+    inputs: inputs(),
+    lkRelease: mismatched,
+    cupRelease: releaseEvidence(CUP_SHA),
+    systemEvidence: systemEvidence(),
+    runtimeA: runtime("A"),
+    runtimeB: runtime("B"),
+    runtimeControl: runtime("CONTROL"),
+  });
+  assert.equal(report.status, "BLOCKED");
+  assert.equal(report.checks.find((row) => row.name === "LK_RELEASE_BINDING").status, "FAIL");
+});
+
+test("preflight requires exact A=V1/B=V2, exact-two canary instances, and mandatory control", () => {
+  const wrongAssignment = evaluatePreflight({
+    inputs: inputs({ EXPECTED_RULE_A_VERSION: "V2", EXPECTED_RULE_B_VERSION: "V1" }),
+    lkRelease: releaseEvidence(LK_SHA),
+    cupRelease: releaseEvidence(CUP_SHA),
+    systemEvidence: systemEvidence(),
+    runtimeA: runtime("A", { evidence: { canaryAllowed: false } }),
+    runtimeB: runtime("B", { evidence: { canaryAllowed: false } }),
+    runtimeControl: runtime("CONTROL", { evidence: { canaryAllowed: true } }),
+  });
+  assert.equal(wrongAssignment.checks.find((row) => row.name === "EXPECTED_RULE_ASSIGNMENT").status, "FAIL");
+
+  const extraCanary = systemEvidence();
+  extraCanary.canaryEvidence.subscriptionInstanceIds.push("instance-extra");
+  const noControl = evaluatePreflight({
+    inputs: inputs(),
+    lkRelease: releaseEvidence(LK_SHA),
+    cupRelease: releaseEvidence(CUP_SHA),
+    systemEvidence: extraCanary,
+    runtimeA: runtime("A"),
+    runtimeB: runtime("B"),
+  });
+  assert.equal(noControl.status, "BLOCKED");
+  assert.equal(noControl.checks.find((row) => row.name === "CANARY_EXACT_TWO_INSTANCE_ALLOWLIST").status, "FAIL");
+  assert.equal(noControl.checks.find((row) => row.name === "CONTROL_SUBSCRIPTION_EXCLUDED").status, "FAIL");
+});
+
+test("unknown payment or rollback safety is FAIL and cannot claim default no-writes", () => {
+  const evidence = systemEvidence();
+  delete evidence.noWriteEvidence.paymentWritesAbsent;
+  delete evidence.noWriteEvidence.rollbackWritesAbsent;
+  const report = evaluatePreflight({
+    inputs: inputs(),
+    lkRelease: releaseEvidence(LK_SHA),
+    cupRelease: releaseEvidence(CUP_SHA),
+    systemEvidence: evidence,
+    runtimeA: runtime("A"),
+    runtimeB: runtime("B"),
+    runtimeControl: runtime("CONTROL"),
+  });
+  assert.equal(report.status, "BLOCKED");
+  assert.equal(report.noWrites, false);
+  assert.equal(report.writeSafety.paymentWritesAbsent, false);
+  assert.equal(report.writeSafety.rollbackWritesAbsent, false);
+  assert.equal(hasCompleteNoWriteProof(report), false);
 });
 
 test("preflight blocks wrong ID, missing tenant, contradictions, and unsafe control", () => {
   const evidence = systemEvidence();
   delete evidence.tenantId;
-  const control = runtime("A", { clientSubscriptionId: "wrong-control", evidence: { canaryAllowed: false } });
+  const control = runtime("CONTROL", { clientSubscriptionId: "wrong-control" });
   const report = evaluatePreflight({
-    inputs: inputs({ DEV_CONTROL_SUBSCRIPTION_ID: "control-subscription-000001", DEV_CONTROL_AUTH: "Bearer control" }),
-    lkRelease: { releaseId: "lk-dev-sha" },
-    cupRelease: { gitSha: "cup-dev-sha" },
+    inputs: inputs({ DEV_CONTROL_AUTH: "Bearer control" }),
+    lkRelease: releaseEvidence(LK_SHA),
+    cupRelease: releaseEvidence(CUP_SHA),
     systemEvidence: evidence,
     runtimeA: runtime("A", { clientSubscriptionId: "wrong-id", canaryAllowed: false, instance: { revision: 99 } }),
     runtimeB: runtime("B"),
@@ -321,11 +470,12 @@ test("preflight rejects fallback purchase date and wrong publication type", () =
   missingInstance.evidence.publicationHistory = boundaryFixtures().publications.map((row) => ({ ...row, subscriptionTypeId: "other" }));
   const report = evaluatePreflight({
     inputs: inputs(),
-    lkRelease: { releaseId: "lk-dev-sha" },
-    cupRelease: { gitSha: "cup-dev-sha" },
+    lkRelease: releaseEvidence(LK_SHA),
+    cupRelease: releaseEvidence(CUP_SHA),
     systemEvidence: systemEvidence(),
     runtimeA: fallback,
     runtimeB: missingInstance,
+    runtimeControl: runtime("CONTROL"),
   });
   assert.equal(report.status, "BLOCKED");
   assert.equal(report.checks.find((row) => row.name === "RUNTIME_CONTEXT_A").status, "FAIL");
@@ -340,28 +490,30 @@ test("preflight rejects two client subscriptions aliased to one instance", () =>
   });
   const report = evaluatePreflight({
     inputs: inputs(),
-    lkRelease: { releaseId: "lk-dev-sha" },
-    cupRelease: { gitSha: "cup-dev-sha" },
+    lkRelease: releaseEvidence(LK_SHA),
+    cupRelease: releaseEvidence(CUP_SHA),
     systemEvidence: systemEvidence(),
     runtimeA: runtime("A"),
     runtimeB: aliasedB,
+    runtimeControl: runtime("CONTROL"),
   });
   assert.equal(report.status, "BLOCKED");
   assert.equal(report.checks.find((row) => row.name === "SUBSCRIPTION_INSTANCES_DISTINCT").status, "FAIL");
 });
 
-test("optional control must be a third distinct client and instance", () => {
+test("mandatory control must be a third distinct client and instance", () => {
   const report = evaluatePreflight({
     inputs: inputs({
       DEV_CONTROL_SUBSCRIPTION_ID: "client-subscription-a-123456",
+      DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID: "instance-a-123456",
       DEV_CONTROL_AUTH: "Bearer control-placeholder",
     }),
-    lkRelease: { releaseId: "lk-dev-sha" },
-    cupRelease: { gitSha: "cup-dev-sha" },
+    lkRelease: releaseEvidence(LK_SHA),
+    cupRelease: releaseEvidence(CUP_SHA),
     systemEvidence: systemEvidence(),
     runtimeA: runtime("A"),
     runtimeB: runtime("B"),
-    runtimeControl: runtime("A", { evidence: { canaryAllowed: false } }),
+    runtimeControl: runtime("A"),
   });
   assert.equal(report.status, "BLOCKED");
   assert.equal(report.checks.find((row) => row.name === "CONTROL_SUBSCRIPTION_EXCLUDED").status, "FAIL");
@@ -386,19 +538,33 @@ test("timeout fails closed without exposing secrets", async () => {
 
 test("partial or unsafe observability fails closed", () => {
   assert.throws(
-    () => normalizeObservation({ clientSubscriptionId: "subscription-1", metrics: { operations: 1 } }, "subscription-1"),
+    () => normalizeObservation({
+      clientSubscriptionId: "subscription-1",
+      subscriptionInstanceId: "instance-1",
+      correlationScope: "scope-1",
+      metrics: { operations: 1 },
+    }, "subscription-1", "instance-1", "scope-1", INTEGRATION_SECRET),
     (error) => error.code === "OBSERVATION_SCHEMA_INVALID",
   );
-  assert.throws(() => normalizeObservation(observation("A"), "another-subscription"), (error) => error.code === "OBSERVATION_IDENTITY_MISMATCH");
+  const valid = signObservationEvidence(observation("A"), INTEGRATION_SECRET);
+  assert.throws(() => normalizeObservation(valid, "another-subscription", "instance-a-123456", valid.correlationScope, INTEGRATION_SECRET), (error) => error.code === "OBSERVATION_IDENTITY_MISMATCH");
   assert.throws(
-    () => normalizeObservation(observation("A", { logicalResults: [logicalResult("A", { step: "private user name" })] }), "client-subscription-a-123456"),
+    () => {
+      const unsafe = signObservationEvidence(observation("A", { logicalResults: [logicalResult("A", { step: "private user name" })] }), INTEGRATION_SECRET);
+      return normalizeObservation(unsafe, unsafe.clientSubscriptionId, unsafe.subscriptionInstanceId, unsafe.correlationScope, INTEGRATION_SECRET);
+    },
     (error) => error.code === "OBSERVATION_LOGICAL_RESULT_INVALID",
+  );
+  const tampered = { ...valid, instanceRevision: valid.instanceRevision + 1 };
+  assert.throws(
+    () => normalizeObservation(tampered, tampered.clientSubscriptionId, tampered.subscriptionInstanceId, tampered.correlationScope, INTEGRATION_SECRET),
+    (error) => error.code === "OBSERVATION_INTEGRITY_INVALID",
   );
 });
 
 test("before/after reconciliation requires exact logical and aggregate deltas", () => {
-  const beforeA = normalizeObservation(observation("A"), "client-subscription-a-123456");
-  const beforeB = normalizeObservation(observation("B"), "client-subscription-b-654321");
+  const beforeA = normalizeFixtureObservation("A");
+  const beforeB = normalizeFixtureObservation("B");
   const makeAfter = (before, label) => ({
     ...before,
     metrics: {
@@ -485,16 +651,18 @@ function fixtureFetch({ observations = {}, system = systemEvidence() } = {}) {
     const target = new URL(url);
     calls.push({ path: target.pathname, method: init.method, headers: init.headers, body: init.body });
     let payload;
-    if (target.pathname === "/lk/release-dev.json") payload = { releaseId: "lk-dev-sha" };
-    else if (target.pathname === "/api/system/release") payload = { gitSha: "cup-dev-sha" };
+    if (target.pathname === "/lk/release-dev.json") payload = releaseEvidence(LK_SHA);
+    else if (target.pathname === "/api/system/release") payload = releaseEvidence(CUP_SHA);
     else if (target.pathname === "/api/internal/subscriptions/dev-uat/system-evidence") payload = system;
     else if (target.pathname === "/api/internal/subscriptions/runtime-context") {
       const body = JSON.parse(init.body);
-      payload = body.clientSubscriptionId.endsWith("123456") ? runtime("A") : runtime("B");
+      if (body.clientSubscriptionId === "client-subscription-a-123456") payload = runtime("A");
+      else if (body.clientSubscriptionId === "client-subscription-b-654321") payload = runtime("B");
+      else if (body.clientSubscriptionId === "control-subscription-000001") payload = runtime("CONTROL");
     } else if (target.pathname === "/api/internal/subscriptions/dev-uat/observability") {
       const body = JSON.parse(init.body);
       payload = observations[body.clientSubscriptionId]
-        ? { ...observations[body.clientSubscriptionId], correlationScope: body.correlationScope }
+        ? signObservationEvidence({ ...observations[body.clientSubscriptionId], correlationScope: body.correlationScope }, INTEGRATION_SECRET)
         : undefined;
     }
     return { ok: Boolean(payload), status: payload ? 200 : 404, json: async () => payload };
@@ -511,7 +679,7 @@ test("preflight integration uses only allowlisted reads", async () => {
     now: new Date(),
   });
   assert.equal(result.report.status, "READY");
-  assert.equal(fixture.calls.length, 5);
+  assert.equal(fixture.calls.length, 6);
   assert.equal(fixture.calls.filter((call) => call.method === "POST").every((call) => call.path.endsWith("runtime-context")), true);
 });
 
@@ -543,6 +711,17 @@ test("all modes reject production targets before network or secret transmission"
     }), (error) => error.code === "URL_PRODUCTION_ORIGIN");
     assert.equal(calls, 0);
   }
+});
+
+test("DEV-looking unapproved origin is rejected before credentials or network", async () => {
+  let calls = 0;
+  const configured = inputs({ DEV_CUP_BASE_URL: "https://cup.dev.padlhub.example.attacker.invalid" });
+  await assert.rejects(executeMode({
+    mode: "preflight",
+    inputs: configured,
+    client: new ReadOnlyHttpClient({ fetchImpl: async () => { calls += 1; throw new Error("must not call"); } }),
+  }), (error) => error.code === "URL_DEV_IDENTITY_UNPROVEN");
+  assert.equal(calls, 0);
 });
 
 test("observe-before/after integration reconciles run-scoped evidence", async () => {
@@ -579,6 +758,10 @@ test("observe-before/after integration reconciles run-scoped evidence", async ()
     now: new Date(beforeAt.getTime() + 5 * 60_000),
   });
   assert.equal(after.report.status, "PASS", JSON.stringify(after.report.checks.filter((row) => row.status === "FAIL")));
+  assert.match(after.report.integrityHmac, /^[a-f0-9]{64}$/);
+  assert.match(after.report.context.subjectBindings.A.clientSubscriptionHmac, /^[a-f0-9]{64}$/);
+  assert.equal(after.report.context.beforeIntegrityHmac, before.report.integrityHmac);
+  assert.equal(hasCompleteNoWriteProof(after.report), true);
   assert.doesNotMatch(fs.readFileSync(after.jsonPath, "utf8"), /providerPayload|user-a-secret-token|client-subscription-a-123456/);
 });
 
@@ -594,11 +777,21 @@ test("tampered before snapshot and invalid run ID stop before network", async ()
     client: new ReadOnlyHttpClient({ fetchImpl: fixtureFetch({ observations }).fetchImpl, timeoutMs: 100 }),
     now: new Date(),
   });
+  let calls = 0;
+  const never = new ReadOnlyHttpClient({ fetchImpl: async () => { calls += 1; throw new Error("must not call"); } });
+  await assert.rejects(executeMode({
+    mode: "observe-after",
+    inputs: {
+      ...configured,
+      DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID: "different-exact-instance",
+      DEV_UAT_RUN_ID: before.runId,
+      DEV_UAT_EXPECTED_DELTA: { A: expectedDelta("A"), B: expectedDelta("B") },
+    },
+    client: never,
+  }), (error) => error.code === "BEFORE_SNAPSHOT_CONTEXT_MISMATCH");
   const stored = JSON.parse(fs.readFileSync(before.jsonPath, "utf8"));
   stored.status = "BLOCKED";
   fs.writeFileSync(before.jsonPath, `${JSON.stringify(stored)}\n`, { mode: 0o600 });
-  let calls = 0;
-  const never = new ReadOnlyHttpClient({ fetchImpl: async () => { calls += 1; throw new Error("must not call"); } });
   await assert.rejects(executeMode({
     mode: "observe-after",
     inputs: { ...configured, DEV_UAT_RUN_ID: before.runId, DEV_UAT_EXPECTED_DELTA: { A: expectedDelta("A"), B: expectedDelta("B") } },

@@ -47,6 +47,15 @@ const SECRET_KEY = /(authorization|token|secret|cookie|password|phone|full.?name
 const ID_KEY = /(clientSubscriptionId|subscriptionInstanceId|providerBookingId|clientId|userId)$/i;
 const SAFE_TOKEN = /^[A-Z][A-Z0-9_]{0,39}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
+const RELEASE_SHA = /^[a-f0-9]{40}$/i;
+const WRITE_SAFETY_DIMENSIONS = Object.freeze([
+  "runnerMutationMethodsBlocked",
+  "createJoinWritesAbsent",
+  "providerBookingWritesAbsent",
+  "paymentWritesAbsent",
+  "entitlementMutationsAbsent",
+  "rollbackWritesAbsent",
+]);
 
 export class UatError extends Error {
   constructor(code, message, details = undefined) {
@@ -126,11 +135,21 @@ export function loadInputs(env = process.env) {
   if (!Array.isArray(configuredProductionOrigins) || !Array.isArray(allowedDevOrigins)) {
     throw new UatError("INPUT_ORIGINS_INVALID", "DEV origin allowlist and production denylist must be JSON arrays");
   }
+  const expectedLkRelease = parseJson(
+    pick(env, config, "DEV_UAT_EXPECTED_LK_RELEASE_JSON"),
+    "DEV_UAT_EXPECTED_LK_RELEASE_JSON",
+  ) || config.expectedLkRelease;
+  const expectedCupRelease = parseJson(
+    pick(env, config, "DEV_UAT_EXPECTED_CUP_RELEASE_JSON"),
+    "DEV_UAT_EXPECTED_CUP_RELEASE_JSON",
+  ) || config.expectedCupRelease;
   const inputs = {
     DEV_LK_BASE_URL: pick(env, config, "DEV_LK_BASE_URL"),
     DEV_CUP_BASE_URL: pick(env, config, "DEV_CUP_BASE_URL"),
     DEV_TEST_SUBSCRIPTION_A_ID: pick(env, config, "DEV_TEST_SUBSCRIPTION_A_ID"),
     DEV_TEST_SUBSCRIPTION_B_ID: pick(env, config, "DEV_TEST_SUBSCRIPTION_B_ID"),
+    DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID: pick(env, config, "DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID"),
+    DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID: pick(env, config, "DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID"),
     DEV_TEST_AUTH_A: pick(env, config, "DEV_TEST_AUTH_A"),
     DEV_TEST_AUTH_B: pick(env, config, "DEV_TEST_AUTH_B"),
     DEV_CUP_INTEGRATION_TOKEN: pick(env, config, "DEV_CUP_INTEGRATION_TOKEN"),
@@ -139,6 +158,7 @@ export function loadInputs(env = process.env) {
     EXPECTED_RULE_A_VERSION: pick(env, config, "EXPECTED_RULE_A_VERSION"),
     EXPECTED_RULE_B_VERSION: pick(env, config, "EXPECTED_RULE_B_VERSION"),
     DEV_CONTROL_SUBSCRIPTION_ID: pick(env, config, "DEV_CONTROL_SUBSCRIPTION_ID"),
+    DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID: pick(env, config, "DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID"),
     DEV_CONTROL_AUTH: pick(env, config, "DEV_CONTROL_AUTH"),
     DEV_UAT_RUN_ID: pick(env, config, "DEV_UAT_RUN_ID"),
     DEV_UAT_EXPECTED_DELTA: parseJson(
@@ -146,6 +166,8 @@ export function loadInputs(env = process.env) {
       "DEV_UAT_EXPECTED_DELTA_JSON",
     ) || config.expectedDelta,
     DEV_UAT_REDACTION_HMAC_KEY: pick(env, config, "DEV_UAT_REDACTION_HMAC_KEY"),
+    expectedLkRelease,
+    expectedCupRelease,
     allowedDevOrigins,
     productionOrigins: [...new Set([...DEFAULT_PRODUCTION_ORIGINS, ...configuredProductionOrigins])],
     timeoutMs: Number(pick(env, config, "DEV_UAT_TIMEOUT_MS", 8_000)),
@@ -156,9 +178,20 @@ export function loadInputs(env = process.env) {
   };
   for (const key of [
     "DEV_LK_BASE_URL", "DEV_CUP_BASE_URL", "DEV_TEST_SUBSCRIPTION_A_ID", "DEV_TEST_SUBSCRIPTION_B_ID",
+    "DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID", "DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID",
     "DEV_TEST_AUTH_A", "DEV_TEST_AUTH_B", "DEV_CUP_INTEGRATION_TOKEN", "EXPECTED_SUBSCRIPTION_TYPE_ID",
-    "EXPECTED_PRODUCT_ID", "EXPECTED_RULE_A_VERSION", "EXPECTED_RULE_B_VERSION",
+    "EXPECTED_PRODUCT_ID", "EXPECTED_RULE_A_VERSION", "EXPECTED_RULE_B_VERSION", "DEV_CONTROL_SUBSCRIPTION_ID",
+    "DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID", "DEV_CONTROL_AUTH",
   ]) requireInput(inputs, key);
+  if (allowedDevOrigins.length === 0) {
+    throw new UatError("DEV_ORIGIN_ALLOWLIST_REQUIRED", "An exact DEV origin allowlist is required");
+  }
+  if (!releaseBinding(expectedLkRelease) || !releaseBinding(expectedCupRelease)) {
+    throw new UatError("EXPECTED_RELEASE_BINDING_REQUIRED", "Frozen LK and CUP release bindings are required");
+  }
+  if (!versionMatches(inputs.EXPECTED_RULE_A_VERSION, 1) || !versionMatches(inputs.EXPECTED_RULE_B_VERSION, 2)) {
+    throw new UatError("EXPECTED_RULE_ASSIGNMENT_INVALID", "The only accepted assignment is A=V1 and B=V2");
+  }
   if (!Number.isSafeInteger(inputs.timeoutMs) || inputs.timeoutMs < 100 || inputs.timeoutMs > 60_000) {
     throw new UatError("INPUT_TIMEOUT_INVALID", "DEV_UAT_TIMEOUT_MS must be an integer between 100 and 60000");
   }
@@ -167,9 +200,6 @@ export function loadInputs(env = process.env) {
   }
   if (!Number.isSafeInteger(inputs.beforeMaxAgeMs) || inputs.beforeMaxAgeMs < 60_000 || inputs.beforeMaxAgeMs > 86_400_000) {
     throw new UatError("INPUT_BEFORE_AGE_INVALID", "DEV_UAT_BEFORE_MAX_AGE_MS must be an integer between 60000 and 86400000");
-  }
-  if (Boolean(text(inputs.DEV_CONTROL_SUBSCRIPTION_ID)) !== Boolean(text(inputs.DEV_CONTROL_AUTH))) {
-    throw new UatError("CONTROL_INPUT_INCOMPLETE", "DEV_CONTROL_SUBSCRIPTION_ID and DEV_CONTROL_AUTH must be provided together");
   }
   return inputs;
 }
@@ -206,9 +236,7 @@ export function classifyDevUrl(rawUrl, { allowedDevOrigins = [], productionOrigi
   if (url.protocol !== "https:" && !["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
     return { ok: false, code: "URL_HTTPS_REQUIRED", origin };
   }
-  const hostnameLooksDev = /(^|[.-])(dev|development|staging|stage|test|local)([.-]|$)/i.test(url.hostname)
-    || ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
-  if (!hostnameLooksDev && !allowed.has(origin)) return { ok: false, code: "URL_DEV_IDENTITY_UNPROVEN", origin };
+  if (!allowed.has(origin)) return { ok: false, code: "URL_DEV_IDENTITY_UNPROVEN", origin };
   return { ok: true, code: "DEV_ORIGIN_CONFIRMED", origin };
 }
 
@@ -421,9 +449,6 @@ function normalizeRuntime(runtime) {
   const instanceRevision = resolveEvidence([evidence.instanceRevision, instance.revision], (value) => (
     value === undefined || value === null || value === "" ? "" : value
   ));
-  const canaryAllowed = resolveEvidence([evidence.canaryAllowed, source.canaryAllowed], (value) => (
-    typeof value === "boolean" ? value : ""
-  ));
   const history = resolvePublicationHistory(source, evidence);
   return {
     schemaVersion: source.schemaVersion,
@@ -440,11 +465,10 @@ function normalizeRuntime(runtime) {
     instancePolicyDigest: text(instance.policyDigest),
     instanceRevision: instanceRevision.value,
     instanceState: text(instance.state),
-    canaryAllowed: canaryAllowed.value,
     publications: history.value,
     evidenceConsistent: [
       clientSubscription, subscriptionInstance, product, subscriptionType, tenant, purchase,
-      policyVersion, policyDigest, instanceRevision, canaryAllowed, history,
+      policyVersion, policyDigest, instanceRevision, history,
     ].every((item) => item.consistent),
   };
 }
@@ -453,14 +477,27 @@ function check(name, ok, code, details = undefined, status = undefined) {
   return { name, status: status || (ok ? "PASS" : "FAIL"), code, ...(details ? { details } : {}) };
 }
 
-function releaseIdentity(payload) {
-  const identity = text(payload.releaseId || payload.release || payload.version || payload.gitSha || payload.sha);
-  return /^[A-Za-z0-9._:-]{1,160}$/.test(identity) ? identity : "";
+function releaseBinding(payload) {
+  if (!isObject(payload)) return null;
+  const binding = {
+    sourceSha: text(payload.sourceSha),
+    candidateSha: text(payload.candidateSha),
+    readbackSha: text(payload.readbackSha),
+    servedSha: text(payload.servedSha),
+  };
+  return Object.values(binding).every((value) => RELEASE_SHA.test(value)) ? binding : null;
 }
 
-function inspectRelease(payload, label) {
-  const identity = releaseIdentity(payload);
-  return check(`${label}_RELEASE_IDENTITY`, Boolean(identity), identity ? "RELEASE_IDENTITY_AVAILABLE" : "RELEASE_IDENTITY_MISSING", identity ? { identity } : undefined);
+function inspectRelease(payload, label, expected) {
+  const actual = releaseBinding(payload);
+  const frozen = releaseBinding(expected);
+  const matches = Boolean(actual && frozen) && Object.keys(frozen).every((key) => actual[key] === frozen[key]);
+  return check(
+    `${label}_RELEASE_BINDING`,
+    matches,
+    matches ? "RELEASE_BOUND_TO_FROZEN_IDENTITY" : "RELEASE_BINDING_MISMATCH",
+    actual && frozen ? { actual, expected: frozen } : undefined,
+  );
 }
 
 function currentEvidence(value, now, maxAgeMs) {
@@ -469,7 +506,23 @@ function currentEvidence(value, now, maxAgeMs) {
   return value?.current === true && age >= -5_000 && age <= maxAgeMs;
 }
 
-function validateSystemEvidence(system, now, maxAgeMs) {
+function writeSafetyFromSystem(system, now, maxAgeMs) {
+  const evidence = system?.noWriteEvidence;
+  return {
+    runnerMutationMethodsBlocked: true,
+    createJoinWritesAbsent: currentEvidence(evidence, now, maxAgeMs) && evidence?.createJoinWritesAbsent === true,
+    providerBookingWritesAbsent: currentEvidence(evidence, now, maxAgeMs) && evidence?.providerBookingWritesAbsent === true,
+    paymentWritesAbsent: currentEvidence(evidence, now, maxAgeMs) && evidence?.paymentWritesAbsent === true,
+    entitlementMutationsAbsent: currentEvidence(evidence, now, maxAgeMs) && evidence?.entitlementMutationsAbsent === true,
+    rollbackWritesAbsent: currentEvidence(evidence, now, maxAgeMs) && evidence?.rollbackWritesAbsent === true,
+  };
+}
+
+export function hasCompleteNoWriteProof(report) {
+  return report?.noWrites === true && WRITE_SAFETY_DIMENSIONS.every((key) => report?.writeSafety?.[key] === true);
+}
+
+function validateSystemEvidence(system, inputs, now, maxAgeMs) {
   const checks = [];
   checks.push(check("CUP_ENVIRONMENT", text(system.environment).toUpperCase() === "DEV", "CUP_ENVIRONMENT_NOT_DEV"));
   checks.push(check("SYSTEM_TENANT_PRESENT", Boolean(text(system.tenantId)), "SYSTEM_TENANT_MISSING"));
@@ -493,6 +546,21 @@ function validateSystemEvidence(system, now, maxAgeMs) {
   ));
   checks.push(check("PROJECTION_CHECKPOINT_CURRENT", currentEvidence(system.projectionCheckpoint, now, maxAgeMs), "PROJECTION_CHECKPOINT_STALE"));
   checks.push(check("CANARY_EVIDENCE_CURRENT", currentEvidence(system.canaryEvidence, now, maxAgeMs), "CANARY_EVIDENCE_STALE"));
+  const expectedInstances = [inputs.DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID, inputs.DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID];
+  const actualInstances = Array.isArray(system.canaryEvidence?.subscriptionInstanceIds)
+    ? system.canaryEvidence.subscriptionInstanceIds.map(text)
+    : [];
+  checks.push(check(
+    "CANARY_EXACT_TWO_INSTANCE_ALLOWLIST",
+    actualInstances.length === 2 && new Set(actualInstances).size === 2
+      && expectedInstances.every((value) => actualInstances.includes(value)),
+    "CANARY_INSTANCE_ALLOWLIST_MISMATCH",
+  ));
+  const writeSafety = writeSafetyFromSystem(system, now, maxAgeMs);
+  checks.push(check("NO_WRITE_EVIDENCE_CURRENT", currentEvidence(system.noWriteEvidence, now, maxAgeMs), "NO_WRITE_EVIDENCE_STALE"));
+  for (const dimension of WRITE_SAFETY_DIMENSIONS.slice(1)) {
+    checks.push(check(`NO_WRITE_${dimension.replace(/([A-Z])/g, "_$1").toUpperCase()}`, writeSafety[dimension], "NO_WRITE_DIMENSION_UNPROVEN"));
+  }
   return checks;
 }
 
@@ -503,22 +571,20 @@ export function evaluatePreflight({ inputs, lkRelease, cupRelease, systemEvidenc
   checks.push(check("LK_URL_DEV", lkUrl.ok, lkUrl.code, { origin: lkUrl.origin }));
   checks.push(check("CUP_URL_DEV", cupUrl.ok, cupUrl.code, { origin: cupUrl.origin }));
   checks.push(check("DEV_ORIGINS_DISTINCT", lkUrl.origin !== cupUrl.origin, "DEV_ORIGINS_MUST_DIFFER"));
-  checks.push(inspectRelease(lkRelease, "LK"), inspectRelease(cupRelease, "CUP"));
-  checks.push(...validateSystemEvidence(systemEvidence, now, inputs.maxEvidenceAgeMs));
+  checks.push(inspectRelease(lkRelease, "LK", inputs.expectedLkRelease), inspectRelease(cupRelease, "CUP", inputs.expectedCupRelease));
+  checks.push(...validateSystemEvidence(systemEvidence, inputs, now, inputs.maxEvidenceAgeMs));
 
   const a = normalizeRuntime(runtimeA);
   const b = normalizeRuntime(runtimeB);
   checks.push(check("SUBSCRIPTION_A_IDENTITY", a.clientSubscriptionId === inputs.DEV_TEST_SUBSCRIPTION_A_ID, "SUBSCRIPTION_A_IDENTITY_MISMATCH"));
   checks.push(check("SUBSCRIPTION_B_IDENTITY", b.clientSubscriptionId === inputs.DEV_TEST_SUBSCRIPTION_B_ID, "SUBSCRIPTION_B_IDENTITY_MISMATCH"));
   checks.push(check("SUBSCRIPTIONS_DISTINCT", Boolean(a.clientSubscriptionId && b.clientSubscriptionId && a.clientSubscriptionId !== b.clientSubscriptionId), "SUBSCRIPTIONS_NOT_DISTINCT"));
-  checks.push(check(
-    "SUBSCRIPTION_INSTANCES_DISTINCT",
-    Boolean(a.subscriptionInstanceId && b.subscriptionInstanceId && a.subscriptionInstanceId !== b.subscriptionInstanceId),
-    "SUBSCRIPTION_INSTANCES_NOT_DISTINCT",
-  ));
+  checks.push(check("SUBSCRIPTION_A_INSTANCE_IDENTITY", a.subscriptionInstanceId === inputs.DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID, "SUBSCRIPTION_A_INSTANCE_IDENTITY_MISMATCH"));
+  checks.push(check("SUBSCRIPTION_B_INSTANCE_IDENTITY", b.subscriptionInstanceId === inputs.DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID, "SUBSCRIPTION_B_INSTANCE_IDENTITY_MISMATCH"));
+  checks.push(check("SUBSCRIPTION_INSTANCES_DISTINCT", Boolean(a.subscriptionInstanceId && b.subscriptionInstanceId && a.subscriptionInstanceId !== b.subscriptionInstanceId), "SUBSCRIPTION_INSTANCES_NOT_DISTINCT"));
   checks.push(check("PRODUCT_ID_MATCH", a.productId === inputs.EXPECTED_PRODUCT_ID && b.productId === inputs.EXPECTED_PRODUCT_ID, "PRODUCT_ID_MISMATCH"));
   checks.push(check("SUBSCRIPTION_TYPE_MATCH", a.subscriptionTypeId === inputs.EXPECTED_SUBSCRIPTION_TYPE_ID && b.subscriptionTypeId === inputs.EXPECTED_SUBSCRIPTION_TYPE_ID, "SUBSCRIPTION_TYPE_MISMATCH"));
-  checks.push(check("EXPECTED_RULES_DISTINCT", !versionMatches(inputs.EXPECTED_RULE_A_VERSION, inputs.EXPECTED_RULE_B_VERSION), "EXPECTED_RULES_NOT_DISTINCT"));
+  checks.push(check("EXPECTED_RULE_ASSIGNMENT", versionMatches(inputs.EXPECTED_RULE_A_VERSION, 1) && versionMatches(inputs.EXPECTED_RULE_B_VERSION, 2), "EXPECTED_RULE_ASSIGNMENT_INVALID"));
   for (const [label, runtime] of [["A", a], ["B", b]]) {
     checks.push(check(
       `RUNTIME_CONTEXT_${label}`,
@@ -558,7 +624,6 @@ export function evaluatePreflight({ inputs, lkRelease, cupRelease, systemEvidenc
   });
   checks.push(check("PUBLICATION_A", selectedA.ok, selectedA.code));
   checks.push(check("PUBLICATION_B", selectedB.ok, selectedB.code));
-  checks.push(check("CANARY_ALLOWLIST_A_B", a.canaryAllowed === true && b.canaryAllowed === true, "CANARY_SUBSCRIPTION_NOT_ALLOWED"));
 
   const rangeStart = finiteDate(systemEvidence.managedRange?.startsAt);
   const rangeEnd = finiteDate(systemEvidence.managedRange?.endsAt);
@@ -582,26 +647,29 @@ export function evaluatePreflight({ inputs, lkRelease, cupRelease, systemEvidenc
         && control.clientSubscriptionId === inputs.DEV_CONTROL_SUBSCRIPTION_ID
         && control.clientSubscriptionId !== a.clientSubscriptionId
         && control.clientSubscriptionId !== b.clientSubscriptionId
-        && Boolean(control.subscriptionInstanceId)
+        && control.subscriptionInstanceId === inputs.DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID
         && control.subscriptionInstanceId !== a.subscriptionInstanceId
         && control.subscriptionInstanceId !== b.subscriptionInstanceId
         && control.subscriptionTypeId === inputs.EXPECTED_SUBSCRIPTION_TYPE_ID
-        && control.tenantId === systemEvidence.tenantId && control.canaryAllowed === false,
+        && control.tenantId === systemEvidence.tenantId,
       "CONTROL_SUBSCRIPTION_NOT_EXACTLY_EXCLUDED",
     ));
   } else {
-    checks.push(check("CONTROL_SUBSCRIPTION_EXCLUDED", true, "CONTROL_CHECK_NOT_CONFIGURED", undefined, "SKIP"));
+    checks.push(check("CONTROL_SUBSCRIPTION_EXCLUDED", false, "CONTROL_EVIDENCE_REQUIRED"));
   }
 
   const ok = checks.every((item) => item.status !== "FAIL");
+  const writeSafety = writeSafetyFromSystem(systemEvidence, now, inputs.maxEvidenceAgeMs);
+  const noWrites = WRITE_SAFETY_DIMENSIONS.every((key) => writeSafety[key] === true);
   return {
     schemaVersion: 1,
     mode: "preflight",
     status: ok ? "READY" : "BLOCKED",
-    noWrites: true,
+    noWrites,
+    writeSafety,
     checks,
     origins: { lk: lkUrl.origin, cup: cupUrl.origin },
-    releaseIdentities: { lk: releaseIdentity(lkRelease), cup: releaseIdentity(cupRelease) },
+    releaseBindings: { lk: releaseBinding(lkRelease), cup: releaseBinding(cupRelease) },
     subjects: {
       A: { ...a, clientSubscriptionId: undefined, publications: undefined, selectedPolicy: selectedA.selected },
       B: { ...b, clientSubscriptionId: undefined, publications: undefined, selectedPolicy: selectedB.selected },
@@ -609,11 +677,51 @@ export function evaluatePreflight({ inputs, lkRelease, cupRelease, systemEvidenc
   };
 }
 
-export function normalizeObservation(payload, expectedClientSubscriptionId, expectedCorrelationScope = "") {
+function observationSigningPayload(payload) {
+  return {
+    clientSubscriptionId: text(payload?.clientSubscriptionId),
+    subscriptionInstanceId: text(payload?.subscriptionInstanceId),
+    correlationScope: text(payload?.correlationScope),
+    selectedPolicyVersion: payload?.selectedPolicyVersion,
+    selectedPolicyDigest: text(payload?.selectedPolicyDigest),
+    instanceRevision: payload?.instanceRevision,
+    instanceState: text(payload?.instanceState),
+    metrics: Object.fromEntries(ALL_OBSERVATION_METRICS.map((key) => [key, payload?.metrics?.[key]])),
+    logicalResults: Array.isArray(payload?.logicalResults) ? payload.logicalResults.map((row) => ({
+      step: row?.step,
+      action: row?.action,
+      result: row?.result,
+      policyVersion: row?.policyVersion,
+      policyDigest: row?.policyDigest,
+      logicalOperationCount: row?.logicalOperationCount,
+      providerCalls: row?.providerCalls,
+      ledgerEntries: row?.ledgerEntries,
+      outboxEntries: row?.outboxEntries,
+      orphanReserve: row?.orphanReserve,
+      fallback: row?.fallback,
+      productionCupCalls: row?.productionCupCalls,
+    })) : payload?.logicalResults,
+  };
+}
+
+export function signObservationEvidence(payload, key) {
+  return { ...payload, evidenceHmac: evidenceHmac(observationSigningPayload(payload), key) };
+}
+
+export function normalizeObservation(
+  payload,
+  expectedClientSubscriptionId,
+  expectedSubscriptionInstanceId,
+  expectedCorrelationScope,
+  evidenceKey,
+) {
   if (text(payload.clientSubscriptionId) !== expectedClientSubscriptionId) {
     throw new UatError("OBSERVATION_IDENTITY_MISMATCH", "Observability response is for another client subscription");
   }
-  if (expectedCorrelationScope && text(payload.correlationScope) !== expectedCorrelationScope) {
+  if (text(payload.subscriptionInstanceId) !== expectedSubscriptionInstanceId) {
+    throw new UatError("OBSERVATION_INSTANCE_IDENTITY_MISMATCH", "Observability response is for another subscription instance");
+  }
+  if (!expectedCorrelationScope || text(payload.correlationScope) !== expectedCorrelationScope) {
     throw new UatError("OBSERVATION_SCOPE_MISMATCH", "Observability response is for another UAT correlation scope");
   }
   if (!isObject(payload.metrics) || ALL_OBSERVATION_METRICS.some((key) => (
@@ -650,13 +758,19 @@ export function normalizeObservation(payload, expectedClientSubscriptionId, expe
     }
     return normalized;
   });
+  if (!text(evidenceKey) || !timingSafeHexEqual(
+    text(payload.evidenceHmac),
+    evidenceHmac(observationSigningPayload(payload), evidenceKey),
+  )) {
+    throw new UatError("OBSERVATION_INTEGRITY_INVALID", "Observability evidence is not authenticated for the exact subject and scope");
+  }
   return {
     selectedPolicyVersion: payload.selectedPolicyVersion,
     selectedPolicyDigest,
     instanceRevision: payload.instanceRevision,
     instanceState,
     metrics: Object.fromEntries(ALL_OBSERVATION_METRICS.map((key) => [key, payload.metrics[key]])),
-    correlationScope: expectedCorrelationScope || text(payload.correlationScope),
+    correlationScope: expectedCorrelationScope,
     logicalResults,
   };
 }
@@ -775,6 +889,13 @@ function evidenceHmac(value, key) {
   return crypto.createHmac("sha256", key).update(JSON.stringify(value)).digest("hex");
 }
 
+function timingSafeHexEqual(leftValue, rightValue) {
+  if (!/^[a-f0-9]{64}$/i.test(text(leftValue)) || !/^[a-f0-9]{64}$/i.test(text(rightValue))) return false;
+  const left = Buffer.from(leftValue, "hex");
+  const right = Buffer.from(rightValue, "hex");
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
 function addEvidenceIntegrity(report, key) {
   return { ...report, integrityHmac: evidenceHmac(report, key) };
 }
@@ -783,14 +904,13 @@ function verifyEvidenceIntegrity(report, key) {
   if (!isObject(report) || !text(report.integrityHmac)) return false;
   const { integrityHmac, ...unsigned } = report;
   const expected = evidenceHmac(unsigned, key);
-  const left = Buffer.from(integrityHmac, "utf8");
-  const right = Buffer.from(expected, "utf8");
-  return left.length === right.length && crypto.timingSafeEqual(left, right);
+  return timingSafeHexEqual(integrityHmac, expected);
 }
 
 function markdown(report) {
   const rows = (report.checks || []).map((item) => `| ${item.name} | ${item.status} | ${item.code} |`).join("\n");
-  return `# Subscription sale-period DEV UAT\n\n- Mode: \`${report.mode}\`\n- Status: \`${report.status}\`\n- Generated: \`${report.generatedAt}\`\n- Default mode performs writes: \`NO\`\n\n| Check | Status | Code |\n|---|---|---|\n${rows || "| REPORT | PASS | NO_CHECKS |"}\n\nThe report is redacted. Runtime identifiers are represented only by a suffix or HMAC.\n`;
+  const noWriteStatus = hasCompleteNoWriteProof(report) ? "PASS" : "FAIL";
+  return `# Subscription sale-period DEV UAT\n\n- Mode: \`${report.mode}\`\n- Status: \`${report.status}\`\n- Complete no-write proof: \`${noWriteStatus}\`\n- Generated: \`${report.generatedAt}\`\n\n| Check | Status | Code |\n|---|---|---|\n${rows || "| REPORT | PASS | NO_CHECKS |"}\n\nThe report is redacted. Runtime identifiers are represented only by HMAC bindings.\n`;
 }
 
 function ensureArtifactDirectory(root, runId) {
@@ -821,6 +941,8 @@ export function writeEvidence({ inputs, report, runId = safeTimestamp(), basenam
     inputs.DEV_TEST_AUTH_A, inputs.DEV_TEST_AUTH_B, inputs.DEV_CUP_INTEGRATION_TOKEN,
     inputs.DEV_UAT_REDACTION_HMAC_KEY, inputs.DEV_TEST_SUBSCRIPTION_A_ID,
     inputs.DEV_TEST_SUBSCRIPTION_B_ID, inputs.DEV_CONTROL_SUBSCRIPTION_ID,
+    inputs.DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID, inputs.DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID,
+    inputs.DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID,
   ]);
   const jsonPath = path.join(directory, `${basename}.json`);
   const markdownPath = path.join(directory, `${basename}.md`);
@@ -863,22 +985,29 @@ async function collectPreflight(inputs, client, now) {
   const lkRelease = await client.json({ baseUrl: inputs.DEV_LK_BASE_URL, endpointPath: inputs.endpoints.lkRelease });
   const cupRelease = await client.json({ baseUrl: inputs.DEV_CUP_BASE_URL, endpointPath: inputs.endpoints.cupRelease });
   const systemEvidence = await client.json({ baseUrl: inputs.DEV_CUP_BASE_URL, endpointPath: inputs.endpoints.systemEvidence });
-  const metadataChecks = [inspectRelease(lkRelease, "LK"), inspectRelease(cupRelease, "CUP"), ...validateSystemEvidence(systemEvidence, now, inputs.maxEvidenceAgeMs)];
+  const metadataChecks = [
+    inspectRelease(lkRelease, "LK", inputs.expectedLkRelease),
+    inspectRelease(cupRelease, "CUP", inputs.expectedCupRelease),
+    ...validateSystemEvidence(systemEvidence, inputs, now, inputs.maxEvidenceAgeMs),
+  ];
   if (metadataChecks.some((item) => item.status === "FAIL")) {
     throw new UatError("SYSTEM_PREFLIGHT_BLOCKED", "Unauthenticated DEV metadata preflight failed before user-scoped reads");
   }
   const runtimeA = await fetchRuntime(inputs, client, "A", inputs.DEV_TEST_SUBSCRIPTION_A_ID, inputs.DEV_TEST_AUTH_A);
   const runtimeB = await fetchRuntime(inputs, client, "B", inputs.DEV_TEST_SUBSCRIPTION_B_ID, inputs.DEV_TEST_AUTH_B);
-  const runtimeControl = inputs.DEV_CONTROL_SUBSCRIPTION_ID && inputs.DEV_CONTROL_AUTH
-    ? await fetchRuntime(inputs, client, "CONTROL", inputs.DEV_CONTROL_SUBSCRIPTION_ID, inputs.DEV_CONTROL_AUTH)
-    : null;
+  const runtimeControl = await fetchRuntime(inputs, client, "CONTROL", inputs.DEV_CONTROL_SUBSCRIPTION_ID, inputs.DEV_CONTROL_AUTH);
   return evaluatePreflight({ inputs, lkRelease, cupRelease, systemEvidence, runtimeA, runtimeB, runtimeControl, now });
 }
 
-function subjectRefs(inputs) {
+function subjectBindings(inputs) {
+  const bind = (role, clientSubscriptionId, subscriptionInstanceId) => ({
+    clientSubscriptionHmac: evidenceHmac({ role, kind: "client-subscription", value: clientSubscriptionId }, inputs.DEV_CUP_INTEGRATION_TOKEN),
+    subscriptionInstanceHmac: evidenceHmac({ role, kind: "subscription-instance", value: subscriptionInstanceId }, inputs.DEV_CUP_INTEGRATION_TOKEN),
+  });
   return {
-    A: redactRef(inputs.DEV_TEST_SUBSCRIPTION_A_ID, inputs.DEV_CUP_INTEGRATION_TOKEN),
-    B: redactRef(inputs.DEV_TEST_SUBSCRIPTION_B_ID, inputs.DEV_CUP_INTEGRATION_TOKEN),
+    A: bind("A", inputs.DEV_TEST_SUBSCRIPTION_A_ID, inputs.DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID),
+    B: bind("B", inputs.DEV_TEST_SUBSCRIPTION_B_ID, inputs.DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID),
+    CONTROL: bind("CONTROL", inputs.DEV_CONTROL_SUBSCRIPTION_ID, inputs.DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID),
   };
 }
 
@@ -896,14 +1025,14 @@ function observationBindingChecks(subjects, preflight) {
 function assertBeforeBinding(inputs, before, now, targets) {
   const generatedAt = finiteDate(before?.generatedAt);
   const age = generatedAt ? now.getTime() - generatedAt.getTime() : Number.POSITIVE_INFINITY;
-  const refs = subjectRefs(inputs);
+  const bindings = subjectBindings(inputs);
   if (before?.schemaVersion !== 1 || before?.mode !== "observe-before" || before?.status !== "READY"
     || before?.runId !== inputs.DEV_UAT_RUN_ID
-    || before?.noWrites !== true || !generatedAt || age < -5_000 || age > inputs.beforeMaxAgeMs) {
+    || !hasCompleteNoWriteProof(before) || !generatedAt || age < -5_000 || age > inputs.beforeMaxAgeMs) {
     throw new UatError("BEFORE_SNAPSHOT_STALE_OR_INVALID", "The before snapshot is invalid or stale");
   }
   if (before.context?.origins?.lk !== targets.lk.origin || before.context?.origins?.cup !== targets.cup.origin
-    || before.context?.subjectRefs?.A !== refs.A || before.context?.subjectRefs?.B !== refs.B
+    || JSON.stringify(before.context?.subjectBindings) !== JSON.stringify(bindings)
     || before.subjects?.A?.correlationScope !== `subscription-sale-period:${inputs.DEV_UAT_RUN_ID}:A`
     || before.subjects?.B?.correlationScope !== `subscription-sale-period:${inputs.DEV_UAT_RUN_ID}:B`) {
     throw new UatError("BEFORE_SNAPSHOT_CONTEXT_MISMATCH", "The before snapshot belongs to another target or subscription pair");
@@ -912,8 +1041,8 @@ function assertBeforeBinding(inputs, before, now, targets) {
 
 function beforeContinuityChecks(before, current) {
   const checks = [
-    check("LK_RELEASE_UNCHANGED", before.context?.releaseIdentities?.lk === current.releaseIdentities?.lk, "LK_RELEASE_CHANGED_SINCE_BEFORE"),
-    check("CUP_RELEASE_UNCHANGED", before.context?.releaseIdentities?.cup === current.releaseIdentities?.cup, "CUP_RELEASE_CHANGED_SINCE_BEFORE"),
+    check("LK_RELEASE_UNCHANGED", JSON.stringify(before.context?.releaseBindings?.lk) === JSON.stringify(current.releaseBindings?.lk), "LK_RELEASE_CHANGED_SINCE_BEFORE"),
+    check("CUP_RELEASE_UNCHANGED", JSON.stringify(before.context?.releaseBindings?.cup) === JSON.stringify(current.releaseBindings?.cup), "CUP_RELEASE_CHANGED_SINCE_BEFORE"),
   ];
   for (const subject of ["A", "B"]) {
     const oldPolicy = before.context?.selectedPolicies?.[subject];
@@ -939,7 +1068,8 @@ async function fetchObservation(inputs, client, subject, id, auth, runId) {
     body: { clientSubscriptionId: id, correlationScope },
     cacheKey: `observation:${runId}:${subject}:${id}`,
   });
-  return normalizeObservation(payload, id, correlationScope);
+  const instanceId = subject === "A" ? inputs.DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID : inputs.DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID;
+  return normalizeObservation(payload, id, instanceId, correlationScope, inputs.DEV_CUP_INTEGRATION_TOKEN);
 }
 
 export async function executeMode({ mode, inputs, client = new ReadOnlyHttpClient({ timeoutMs: inputs.timeoutMs }), now = new Date() }) {
@@ -947,7 +1077,7 @@ export async function executeMode({ mode, inputs, client = new ReadOnlyHttpClien
   const targets = assertDevTargets(inputs);
   if (mode === "preflight") {
     const report = await collectPreflight(inputs, client, now);
-    return writeEvidence({ inputs, report: { ...report, generatedAt: now.toISOString() }, runId: safeTimestamp(now) });
+    return writeEvidence({ inputs, report: { ...report, generatedAt: now.toISOString() }, runId: safeTimestamp(now), integrityKey: inputs.DEV_CUP_INTEGRATION_TOKEN });
   }
   if (mode === "observe-before") {
     const runId = safeTimestamp(now);
@@ -987,14 +1117,15 @@ export async function executeMode({ mode, inputs, client = new ReadOnlyHttpClien
         mode,
         runId,
         status: checks.every((item) => item.status !== "FAIL") ? "READY" : "BLOCKED",
-        noWrites: true,
+        noWrites: preflight.noWrites,
+        writeSafety: preflight.writeSafety,
         generatedAt: now.toISOString(),
         checks,
         context: {
           origins: preflight.origins,
-          releaseIdentities: preflight.releaseIdentities,
+          releaseBindings: preflight.releaseBindings,
           selectedPolicies: { A: preflight.subjects.A.selectedPolicy, B: preflight.subjects.B.selectedPolicy },
-          subjectRefs: subjectRefs(inputs),
+          subjectBindings: subjectBindings(inputs),
         },
         subjects,
       },
@@ -1018,11 +1149,13 @@ export async function executeMode({ mode, inputs, client = new ReadOnlyHttpClien
         mode,
         runId: inputs.DEV_UAT_RUN_ID,
         status: "FAIL",
-        noWrites: true,
+        noWrites: currentPreflight.noWrites,
+        writeSafety: currentPreflight.writeSafety,
         generatedAt: now.toISOString(),
         checks: [...currentPreflight.checks, ...continuityChecks],
       },
       runId: inputs.DEV_UAT_RUN_ID,
+      integrityKey: inputs.DEV_CUP_INTEGRATION_TOKEN,
     });
   }
   const after = {
@@ -1041,8 +1174,25 @@ export async function executeMode({ mode, inputs, client = new ReadOnlyHttpClien
   const ok = currentPreflight.status === "READY" && checks.every((item) => item.status !== "FAIL");
   return writeEvidence({
     inputs,
-    report: { schemaVersion: 1, mode, runId: inputs.DEV_UAT_RUN_ID, status: ok ? "PASS" : "FAIL", noWrites: true, generatedAt: now.toISOString(), checks, subjects: after.subjects },
+    report: {
+      schemaVersion: 1,
+      mode,
+      runId: inputs.DEV_UAT_RUN_ID,
+      status: ok ? "PASS" : "FAIL",
+      noWrites: currentPreflight.noWrites,
+      writeSafety: currentPreflight.writeSafety,
+      generatedAt: now.toISOString(),
+      checks,
+      context: {
+        origins: currentPreflight.origins,
+        releaseBindings: currentPreflight.releaseBindings,
+        subjectBindings: subjectBindings(inputs),
+        beforeIntegrityHmac: before.integrityHmac,
+      },
+      subjects: after.subjects,
+    },
     runId: inputs.DEV_UAT_RUN_ID,
+    integrityKey: inputs.DEV_CUP_INTEGRATION_TOKEN,
   });
 }
 

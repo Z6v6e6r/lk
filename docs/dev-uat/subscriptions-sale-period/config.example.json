@@ -3,6 +3,8 @@
   "DEV_CUP_BASE_URL": "https://cup.dev.example.invalid",
   "DEV_TEST_SUBSCRIPTION_A_ID": "replace-in-private-copy",
   "DEV_TEST_SUBSCRIPTION_B_ID": "replace-in-private-copy",
+  "DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID": "replace-with-exact-instance-a",
+  "DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID": "replace-with-exact-instance-b",
   "DEV_TEST_AUTH_A": "read-from-secret-store",
   "DEV_TEST_AUTH_B": "read-from-secret-store",
   "DEV_CUP_INTEGRATION_TOKEN": "read-from-secret-store",
@@ -10,7 +12,25 @@
   "EXPECTED_PRODUCT_ID": "replace-with-product-id",
   "EXPECTED_RULE_A_VERSION": "V1",
   "EXPECTED_RULE_B_VERSION": "V2",
-  "allowedDevOrigins": [],
+  "DEV_CONTROL_SUBSCRIPTION_ID": "replace-with-control-client-id",
+  "DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID": "replace-with-control-instance-id",
+  "DEV_CONTROL_AUTH": "read-from-secret-store",
+  "expectedLkRelease": {
+    "sourceSha": "1111111111111111111111111111111111111111",
+    "candidateSha": "1111111111111111111111111111111111111111",
+    "readbackSha": "1111111111111111111111111111111111111111",
+    "servedSha": "1111111111111111111111111111111111111111"
+  },
+  "expectedCupRelease": {
+    "sourceSha": "2222222222222222222222222222222222222222",
+    "candidateSha": "2222222222222222222222222222222222222222",
+    "readbackSha": "2222222222222222222222222222222222222222",
+    "servedSha": "2222222222222222222222222222222222222222"
+  },
+  "allowedDevOrigins": [
+    "https://lk.dev.example.invalid",
+    "https://cup.dev.example.invalid"
+  ],
   "productionOrigins": [],
   "endpoints": {
     "lkRelease": "/lk/release-dev.json",

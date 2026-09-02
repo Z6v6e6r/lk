@@ -33,17 +33,21 @@ export DEV_UAT_CONFIG_FILE=/private/tmp/subscription-sale-period-dev-uat.json
 Обязательны:
 
 - `DEV_LK_BASE_URL`, `DEV_CUP_BASE_URL`;
-- `DEV_TEST_SUBSCRIPTION_A_ID`, `DEV_TEST_SUBSCRIPTION_B_ID`;
+- `DEV_TEST_SUBSCRIPTION_A_ID`, `DEV_TEST_SUBSCRIPTION_B_ID` и их exact
+  `DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID`, `DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID`;
 - `DEV_TEST_AUTH_A`, `DEV_TEST_AUTH_B`, `DEV_CUP_INTEGRATION_TOKEN`;
 - `EXPECTED_SUBSCRIPTION_TYPE_ID`, `EXPECTED_PRODUCT_ID`;
-- `EXPECTED_RULE_A_VERSION`, `EXPECTED_RULE_B_VERSION`.
+- `EXPECTED_RULE_A_VERSION=V1`, `EXPECTED_RULE_B_VERSION=V2`;
+- обязательный контроль: `DEV_CONTROL_SUBSCRIPTION_ID`,
+  `DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID`, `DEV_CONTROL_AUTH`;
+- exact `DEV_UAT_ALLOWED_DEV_ORIGINS_JSON` с обоими origin;
+- frozen `DEV_UAT_EXPECTED_LK_RELEASE_JSON` и
+  `DEV_UAT_EXPECTED_CUP_RELEASE_JSON`, каждый с exact `sourceSha`,
+  `candidateSha`, `readbackSha`, `servedSha`.
 
 Опциональны:
 
-- `DEV_CONTROL_SUBSCRIPTION_ID` + `DEV_CONTROL_AUTH` — третий exact контрольный
-  экземпляр, distinct от A/B по client и instance ID;
 - `DEV_UAT_REDACTION_HMAC_KEY` — HMAC-ссылки вместо redacted suffix;
-- `DEV_UAT_ALLOWED_DEV_ORIGINS_JSON` — exact allowlist нестандартных DEV origins;
 - `DEV_UAT_PRODUCTION_ORIGINS_JSON` — дополнение, но не замена built-in denylist;
 - `DEV_UAT_TIMEOUT_MS` — 100–60000, default 8000;
 - `DEV_UAT_MAX_EVIDENCE_AGE_MS` — 1000–3600000, default 5 минут;
@@ -51,8 +55,9 @@ export DEV_UAT_CONFIG_FILE=/private/tmp/subscription-sale-period-dev-uat.json
 - `DEV_UAT_EXPECTED_DELTA_JSON`, `DEV_UAT_ARTIFACT_ROOT`, `DEV_UAT_RUN_ID`.
 
 Base URL обязан быть чистым origin без credentials/path/query/fragment.
-Production origins блокируются до сети. Нестандартный DEV hostname должен быть
-точно внесён в allowlist.
+Production origins блокируются до сети. Любой DEV origin, включая localhost и
+hostname с `dev`/`test`, обязан быть точно внесён в allowlist. Имя хоста само по
+себе никогда не считается доказательством DEV и не разрешает передачу credentials.
 
 ## Read-only endpoint contract
 
@@ -69,11 +74,23 @@ GET-пути переопределяются только в приватном
 | run-scoped observability | POST | `/api/internal/subscriptions/dev-uat/observability` |
 
 Сначала без auth читаются три metadata endpoint. Только подтверждённые DEV
-environment, release identities, DEV-only flags, unchanged production state,
+environment, frozen release bindings, DEV-only flags, unchanged production state,
 indexes и fresh evidence разрешают отправить user-scoped credentials.
 
-Release response содержит безопасный `releaseId`, `release`, `version`, `gitSha`
-или `sha`.
+Каждый release response обязан содержать четыре 40-hex SHA и точно совпасть с
+заранее frozen expected tuple из приватной конфигурации:
+
+```json
+{
+  "sourceSha": "1111111111111111111111111111111111111111",
+  "candidateSha": "1111111111111111111111111111111111111111",
+  "readbackSha": "1111111111111111111111111111111111111111",
+  "servedSha": "1111111111111111111111111111111111111111"
+}
+```
+
+Runner сравнивает каждое поле с frozen значением; взаимного равенства полей без
+внешней frozen привязки недостаточно.
 
 ### Runtime context
 
@@ -101,7 +118,6 @@ integration token. Минимальный ответ:
   },
   "evidence": {
     "instanceRevision": 7,
-    "canaryAllowed": true,
     "publicationHistory": [
       {
         "version": 1,
@@ -143,7 +159,20 @@ DEV producer отдаёт агрегат без user data:
     "missing": []
   },
   "projectionCheckpoint": { "current": true, "observedAt": "2026-09-02T12:00:00.000Z" },
-  "canaryEvidence": { "current": true, "observedAt": "2026-09-02T12:00:00.000Z" },
+  "canaryEvidence": {
+    "current": true,
+    "observedAt": "2026-09-02T12:00:00.000Z",
+    "subscriptionInstanceIds": ["private-instance-a", "private-instance-b"]
+  },
+  "noWriteEvidence": {
+    "current": true,
+    "observedAt": "2026-09-02T12:00:00.000Z",
+    "createJoinWritesAbsent": true,
+    "providerBookingWritesAbsent": true,
+    "paymentWritesAbsent": true,
+    "entitlementMutationsAbsent": true,
+    "rollbackWritesAbsent": true
+  },
   "managedRange": {
     "startsAt": "2026-09-01T00:00:00.000Z",
     "endsAt": "2026-09-30T23:59:59.999Z"
@@ -152,7 +181,9 @@ DEV producer отдаёт агрегат без user data:
 ```
 
 Runner не читает production user data. Если DEV producer не доказывает
-неизменность production, preflight блокируется.
+неизменность production, exact-two instance allowlist или любую no-write
+dimension, включая payment и rollback, preflight блокируется. Отсутствующее или
+unknown значение — `FAIL`, не `PASS`. Caller-provided `canaryAllowed` игнорируется.
 
 ### Observability
 
@@ -165,6 +196,7 @@ Request содержит `clientSubscriptionId` и exact scope
 ```json
 {
   "clientSubscriptionId": "private-exact-id",
+  "subscriptionInstanceId": "private-instance-id",
   "correlationScope": "subscription-sale-period:20260902T120000000Z:A",
   "selectedPolicyVersion": 1,
   "selectedPolicyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -184,9 +216,15 @@ Request содержит `clientSubscriptionId` и exact scope
     "productionCupCalls": 0,
     "unrelatedUserChanges": 0
   },
-  "logicalResults": []
+  "logicalResults": [],
+  "evidenceHmac": "64-hex-hmac-over-the-exact-normalized-response"
 }
 ```
+
+`evidenceHmac` вычисляется DEV producer как HMAC-SHA256 с integration token по
+exact `clientSubscriptionId`, `subscriptionInstanceId`, correlation scope,
+policy pin, instance state/revision, всем metrics и logical rows. Несовпадение
+любого поля, scope или instance ID блокирует evidence.
 
 После ручного шага `logicalResults` содержит по одной строке на ожидаемую
 logical operation:
@@ -216,12 +254,13 @@ payload, ФИО, телефон и списки пользователей не 
 
 Runner проверяет:
 
-1. distinct LK/CUP DEV origins и served release identities;
+1. distinct exact-allowlisted LK/CUP DEV origins и frozen release bindings;
 2. один exact product/type, разные exact subscription и instance IDs, authoritative dates;
 3. обе даты в managed range и `purchasedAt(A) < effectiveAt(V2) <= purchasedAt(B)`;
 4. unique `effectiveAt`, monotonic versions, immutable/active selected publication;
 5. A→V1, B→V2 и exact version/digest instance pins;
-6. A/B canary allowlist; exact контрольный ID/tenant/type исключён;
+6. exact-two A/B instance canary allowlist; обязательный exact контрольный
+   client/instance ID, tenant и type исключён;
 7. DEV-only flags, unchanged production, required indexes, fresh checkpoints;
 8. exact tenant equality между A, B и system evidence.
 
@@ -231,12 +270,18 @@ Runner проверяет:
 
 1. Запустить `preflight`; продолжать только с `READY`.
 2. Запустить `observe-before`; сохранить `runId`. Snapshot подписан HMAC,
-   привязан к origins, subjects, releases и policy pins и действует ограниченно.
+   привязан full HMAC к exact client/instance IDs A/B/control, origins, frozen
+   releases и policy pins и действует ограниченно.
 3. Указать exact `expectedDelta` для выбранных шагов.
 4. Убедиться визуально, что открыты только DEV origins.
 5. Выполнить согласованные ручные действия. Runner их не запускает.
 6. После unknown/timeout результата не повторять действие: сначала scoped readback.
 7. Запустить `observe-after` с тем же `runId`.
+
+Final after-report тоже подписан HMAC и привязан к integrity HMAC before,
+exact subject bindings и frozen release bindings. Поле `noWrites=true` допустимо
+только когда присутствуют все шесть `writeSafety` dimensions: локальная блокировка
+mutation methods, create/join, provider booking, payment, entitlement и rollback.
 
 ### Подписка A — V1
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { executeMode, loadInputs, parseCli, UatError, writeEvidence } from "./lib.mjs";
+import { executeMode, hasCompleteNoWriteProof, loadInputs, parseCli, UatError, writeEvidence } from "./lib.mjs";
 
 async function main() {
   let mode;
@@ -12,7 +12,7 @@ async function main() {
     process.stdout.write([
       `mode=${mode}`,
       `status=${result.report.status}`,
-      "defaultModeNoWrites=PASS",
+      `defaultModeNoWrites=${hasCompleteNoWriteProof(result.report) ? "PASS" : "FAIL"}`,
       `runId=${result.runId}`,
       `json=${result.jsonPath}`,
       `markdown=${result.markdownPath}`,
@@ -32,9 +32,18 @@ async function main() {
             schemaVersion: 1,
             mode,
             status: mode === "observe-after" ? "FAIL" : "BLOCKED",
-            noWrites: true,
+            noWrites: false,
+            writeSafety: {
+              runnerMutationMethodsBlocked: true,
+              createJoinWritesAbsent: false,
+              providerBookingWritesAbsent: false,
+              paymentWritesAbsent: false,
+              entitlementMutationsAbsent: false,
+              rollbackWritesAbsent: false,
+            },
             checks: [{ name: "RUNNER", status: "FAIL", code: safe.code }],
           },
+          integrityKey: inputs.DEV_CUP_INTEGRATION_TOKEN,
         });
         process.stderr.write(`${JSON.stringify(safe)}\n`);
         process.stderr.write(`report=${result.jsonPath}\n`);
