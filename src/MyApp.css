@@ -20754,6 +20754,18 @@ h6,
     #3a424d;
 }
 
+.piter-subscription-face--rules-artwork {
+  padding: 0;
+  background: #1a2431;
+}
+
+.piter-subscription-rules-artwork {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .piter-subscription-kicker {
   margin-bottom: 8px;
   color: #ff5962;
@@ -20805,6 +20817,14 @@ h6,
 
 .piter-subscription-terms-button:active {
   transform: translateY(1px);
+}
+
+.piter-subscription-terms-effective {
+  margin: -4px 8px 0;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: center;
 }
 
 .tournament-subscription-plan--piter .tournament-subscription-purchase-block {

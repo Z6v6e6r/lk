@@ -56,9 +56,10 @@ test("network is a dedicated one-tier 100-unit guarded storefront", () => {
   assert.match(deployDocs, /56 800 ₽ вместо зачёркнутой 98 800 ₽/);
 });
 
-test("regional pages share Piter terms, consent, auth and fail-closed tiered checkout", () => {
+test("regional pages keep isolated terms while sharing consent, auth and fail-closed checkout", () => {
   assert.match(page, /purchaseMode: "tiered_counter"/);
-  assert.match(page, /terms: \[\.\.\.PITER_FRIENDSHIP_TERMS\]/);
+  assert.match(page, /terms: \[\.\.\.\(options\.terms \|\| REGIONAL_FRIENDSHIP_TERMS\)\]/);
+  assert.match(page, /terms: PITER_FRIENDSHIP_TERMS/);
   assert.match(page, /requiresConsent: true/);
   assert.match(page, /const isGuardedStorefront = plan\.purchaseMode === "tiered_counter"/);
   assert.match(page, /const isBindingUnavailable = isGuardedStorefront && \(!status \|\| !status\.bindingReady\)/);

@@ -82,6 +82,7 @@ export interface ManagedSubscriptionRuntimePolicy {
     actions: ManagedSubscriptionAction[];
     limitExceeded: "BLOCK" | "PERCENT_DISCOUNT";
     percentage: number | null;
+    discountDurationsMinutes?: Array<60 | 90 | 120>;
   };
   usageUnitsByDuration: Record<"60" | "90" | "120", number>;
   stationAccessRules: ManagedSubscriptionStationAccessRule[];
