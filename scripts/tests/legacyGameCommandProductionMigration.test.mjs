@@ -23,7 +23,7 @@ import {
   sha256,
   stableStringify,
   validateProductionExecutionPacket,
-  validateProductionExecutionPacketAgainstBoundCandidate,
+  validateRehearsalExecutionPacket,
   validateProductionCandidateBinding,
   validateProductionReleaseAttestation,
 } from "../run_legacy_game_command_production_migration.mjs";
@@ -118,9 +118,10 @@ const buildPacket = (overrides = {}) => ({
 });
 
 const validate = (packet) => {
-  const body = Buffer.from(JSON.stringify(packet));
+  const rehearsalPacket = { ...packet, environment: "rehearsal" };
+  const body = Buffer.from(JSON.stringify(rehearsalPacket));
   const packetSha256 = sha256(body);
-  return validateProductionExecutionPacketAgainstBoundCandidate(packet, context, {
+  return validateRehearsalExecutionPacket(rehearsalPacket, context, {
     packetSha256,
     actualPacketSha256: packetSha256,
     releaseSha,

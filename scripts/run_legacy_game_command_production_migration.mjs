@@ -794,7 +794,7 @@ export function validateProductionRuntimeIdentity(packet, actualRuntime = PRODUC
   return true;
 }
 
-export function validateProductionExecutionPacketAgainstBoundCandidate(packet, context, {
+function validateExecutionPacketAgainstExpectedSource(packet, context, {
   packetSha256,
   actualPacketSha256,
   releaseSha,
@@ -844,9 +844,19 @@ export function validateProductionExecutionPacketAgainstBoundCandidate(packet, c
   return temporal;
 }
 
+export function validateRehearsalExecutionPacket(packet, context, options = {}) {
+  return validateExecutionPacketAgainstExpectedSource(packet, context, {
+    ...options,
+    environment: "rehearsal",
+  });
+}
+
 export function validateProductionExecutionPacket(packet, context, options = {}) {
   assertProductionCandidateBound();
-  return validateProductionExecutionPacketAgainstBoundCandidate(packet, context, options);
+  return validateExecutionPacketAgainstExpectedSource(packet, context, {
+    ...options,
+    environment: "production",
+  });
 }
 
 function optionsEvidence(options) {
