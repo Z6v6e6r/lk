@@ -224,11 +224,52 @@ jobs:
       - name: Scan changed paths for secrets, PII, binaries, and runtime artifacts
         run: |
           set -euo pipefail
-          git diff --numstat "$DIFF_RANGE" > "$RUNNER_TEMP/lk1-numstat.txt"
-          if awk '$1 == "-" || $2 == "-" { print $3; found = 1 } END { exit found ? 0 : 1 }' \
-            "$RUNNER_TEMP/lk1-numstat.txt" > "$RUNNER_TEMP/lk1-binary-paths.txt"; then
-            echo "Unexpected binary files in pull-request diff:" >&2
-            sed -n '1,80p' "$RUNNER_TEMP/lk1-binary-paths.txt" >&2
+          git diff --numstat --no-renames -z "$DIFF_RANGE" \
+            | node --input-type=module -e '
+              let input = Buffer.alloc(0);
+              process.stdin.on("data", (chunk) => { input = Buffer.concat([input, chunk]); });
+              process.stdin.on("end", () => {
+                for (const record of input.toString("utf8").split("\0")) {
+                  if (!record) continue;
+                  const firstTab = record.indexOf("\t");
+                  const secondTab = record.indexOf("\t", firstTab + 1);
+                  if (firstTab < 0 || secondTab < 0) process.exit(1);
+                  const added = record.slice(0, firstTab);
+                  const deleted = record.slice(firstTab + 1, secondTab);
+                  if (added === "-" || deleted === "-") {
+                    process.stdout.write(`${record.slice(secondTab + 1)}\0`);
+                  }
+                }
+              });
+            ' > "$RUNNER_TEMP/lk1-binary-paths.txt"
+          : > "$RUNNER_TEMP/lk1-unexpected-binary-paths.txt"
+          while IFS= read -r -d '' binary_path; do
+            expected_hash=""
+            case "$binary_path" in
+              src/assets/piter-subscription-rules-from-20260901.webp)
+                expected_hash="3e5ad8e71c42c8e46ea6cc9bfb6f0539dd09181f940c022a8956b35172ff9c12"
+                ;;
+              src/assets/piter-subscription-tier-1.webp)
+                expected_hash="21868451f8dd722a99db1a555065e00bae401e2592c19a2e38e21fadcd2d590d"
+                ;;
+              *)
+                printf '%s\n' "$binary_path" >> "$RUNNER_TEMP/lk1-unexpected-binary-paths.txt"
+                continue
+                ;;
+            esac
+            if [[ ! -f "$binary_path" ]]; then
+              echo "Allowlisted binary is absent from the exact checkout: $binary_path" >&2
+              exit 1
+            fi
+            actual_hash="$(sha256sum -- "$binary_path" | awk '{ print $1 }')"
+            if [[ "$actual_hash" != "$expected_hash" ]]; then
+              echo "Allowlisted binary hash mismatch: $binary_path" >&2
+              exit 1
+            fi
+          done < "$RUNNER_TEMP/lk1-binary-paths.txt"
+          if [[ -s "$RUNNER_TEMP/lk1-unexpected-binary-paths.txt" ]]; then
+            echo "Unexpected binary files in event diff:" >&2
+            sed -n '1,80p' "$RUNNER_TEMP/lk1-unexpected-binary-paths.txt" >&2
             exit 1
           fi
           git diff --name-only --diff-filter=AM "$DIFF_RANGE" \

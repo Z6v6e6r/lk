@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { load } from "js-yaml";
 
@@ -12,6 +16,44 @@ const workflow = load(workflowText);
 const job = workflow.jobs?.["lk1-exact-head"];
 const steps = job?.steps ?? [];
 const step = (name) => steps.find((candidate) => candidate.name === name);
+const binaryScan = () => step("Scan changed paths for secrets, PII, binaries, and runtime artifacts").run;
+
+async function createBinaryDiffRepo(t, entries) {
+  const repoDirectory = await mkdtemp(join(tmpdir(), "lk1-binary-diff-"));
+  t.after(() => rm(repoDirectory, { recursive: true, force: true }));
+  execFileSync("git", ["init", "--quiet"], { cwd: repoDirectory });
+  execFileSync(
+    "git",
+    ["-c", "user.name=ci", "-c", "user.email=ci", "commit", "--allow-empty", "--quiet", "-m", "base"],
+    { cwd: repoDirectory },
+  );
+  const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoDirectory, encoding: "utf8" }).trim();
+
+  for (const [targetPath, sourceUrl] of entries) {
+    const absoluteTarget = join(repoDirectory, targetPath);
+    await mkdir(dirname(absoluteTarget), { recursive: true });
+    await copyFile(sourceUrl, absoluteTarget);
+  }
+  execFileSync("git", ["add", "."], { cwd: repoDirectory });
+  execFileSync(
+    "git",
+    ["-c", "user.name=ci", "-c", "user.email=ci", "commit", "--quiet", "-m", "binary fixture"],
+    { cwd: repoDirectory },
+  );
+  const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoDirectory, encoding: "utf8" }).trim();
+  return { repoDirectory, diffRange: `${baseSha}..${headSha}` };
+}
+
+async function runBinaryScan(t, entries) {
+  const { repoDirectory, diffRange } = await createBinaryDiffRepo(t, entries);
+  const runnerTemp = await mkdtemp(join(tmpdir(), "lk1-binary-scan-"));
+  t.after(() => rm(runnerTemp, { recursive: true, force: true }));
+  return spawnSync("bash", ["-c", binaryScan()], {
+    cwd: repoDirectory,
+    encoding: "utf8",
+    env: { ...process.env, DIFF_RANGE: diffRange, RUNNER_TEMP: runnerTemp },
+  });
+}
 
 test("workflow triggers exactly for pull requests and pushes to main", () => {
   assert.deepEqual(Object.keys(workflow.on).sort(), ["pull_request", "push"]);
@@ -79,8 +121,70 @@ test("identity and exact diff endpoints fail closed when missing", () => {
   assert.equal(step("Check exact event diff whitespace").run, 'git diff --check "$DIFF_RANGE"');
   assert.match(
     step("Scan changed paths for secrets, PII, binaries, and runtime artifacts").run,
-    /git diff --numstat "\$DIFF_RANGE"/,
+    /git diff --numstat --no-renames -z "\$DIFF_RANGE"/,
   );
+});
+
+test("binary asset exceptions are exact and content-addressed", async () => {
+  const scan = binaryScan();
+  assert.match(scan, /git diff --numstat --no-renames -z "\$DIFF_RANGE"/);
+  assert.match(scan, /read -r -d '' binary_path/);
+  const allowlistEntries = [...scan.matchAll(
+    /^\s+(src\/assets\/[^)]+\.webp\))\n\s+expected_hash="([0-9a-f]{64})"/gm,
+  )].map((match) => [match[1].slice(0, -1), match[2]]);
+  const expectedEntries = [
+    [
+      "src/assets/piter-subscription-rules-from-20260901.webp",
+      "3e5ad8e71c42c8e46ea6cc9bfb6f0539dd09181f940c022a8956b35172ff9c12",
+    ],
+    [
+      "src/assets/piter-subscription-tier-1.webp",
+      "21868451f8dd722a99db1a555065e00bae401e2592c19a2e38e21fadcd2d590d",
+    ],
+  ];
+
+  assert.deepEqual(allowlistEntries, expectedEntries);
+  assert.match(scan, /sha256sum -- "\$binary_path"/);
+  assert.match(scan, /"\$actual_hash" != "\$expected_hash"/);
+  assert.match(scan, /Unexpected binary files in event diff/);
+
+  for (const [assetPath, expectedHash] of expectedEntries) {
+    const assetUrl = new URL(`../../${assetPath}`, import.meta.url);
+    const actualHash = createHash("sha256").update(await readFile(assetUrl)).digest("hex");
+    assert.equal(actualHash, expectedHash, `${assetPath} must match its CI allowlist hash`);
+  }
+});
+
+test("binary scan accepts only the pinned assets and rejects path or content drift", async (t) => {
+  const rulesAsset = new URL("../../src/assets/piter-subscription-rules-from-20260901.webp", import.meta.url);
+  const tierAsset = new URL("../../src/assets/piter-subscription-tier-1.webp", import.meta.url);
+
+  const allowed = await runBinaryScan(t, [
+    ["src/assets/piter-subscription-rules-from-20260901.webp", rulesAsset],
+    ["src/assets/piter-subscription-tier-1.webp", tierAsset],
+  ]);
+  assert.equal(allowed.status, 0, allowed.stderr);
+
+  const unexpected = await runBinaryScan(t, [["src/assets/unexpected.webp", rulesAsset]]);
+  assert.equal(unexpected.status, 1);
+  assert.match(unexpected.stderr, /Unexpected binary files in event diff/);
+  assert.match(unexpected.stderr, /src\/assets\/unexpected\.webp/);
+
+  for (const separator of [" ", "\t", "\n"]) {
+    const disguisedPath = `src/assets/piter-subscription-tier-1.webp${separator}unexpected.webp`;
+    const disguised = await runBinaryScan(t, [
+      ["src/assets/piter-subscription-tier-1.webp", tierAsset],
+      [disguisedPath, tierAsset],
+    ]);
+    assert.equal(disguised.status, 1, `must reject ${JSON.stringify(disguisedPath)}`);
+    assert.match(disguised.stderr, /Unexpected binary files in event diff/);
+  }
+
+  const wrongContent = await runBinaryScan(t, [
+    ["src/assets/piter-subscription-rules-from-20260901.webp", tierAsset],
+  ]);
+  assert.equal(wrongContent.status, 1);
+  assert.match(wrongContent.stderr, /Allowlisted binary hash mismatch/);
 });
 
 test("full enforcement matrix and workflow contract cannot be silently skipped", () => {
