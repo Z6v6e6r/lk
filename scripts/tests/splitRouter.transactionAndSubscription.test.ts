@@ -97,6 +97,8 @@ test("exercise create request matches the current documented Viva ExerciseCreate
       toTime: "13:00",
       studioId: "studio-1",
       roomId: "room-1",
+      verifiedStudioId: "studio-1",
+      verifiedRoomId: "room-1",
       masterServiceId: "master-service-1",
       subServiceIds: ["sub-service-1"],
       userAuthHeader: "Bearer user-token",
@@ -106,7 +108,7 @@ test("exercise create request matches the current documented Viva ExerciseCreate
       vivaDirectionId: 4588,
       vivaExerciseTypeId: 1613,
     },
-  }) as Array<Record<string, any> | null>;
+  }) as Array<(RouterMessage & { _splitCtx?: { step?: string } }) | null>;
 
   const roomLookup = tokenOut[0];
   assert.equal(roomLookup?.method, "GET");
@@ -181,6 +183,9 @@ test("DEV managed canary preflight fails before creating a Viva exercise while D
       fromTime: "11:30",
       toTime: "13:00",
       roomId: "room-1",
+      studioId: "studio-1",
+      verifiedStudioId: "studio-1",
+      verifiedRoomId: "room-1",
       maxClientsCount: 4,
       exactCourtPriceVerified: true,
       subServiceIds: ["sub-service-1"],
@@ -190,7 +195,11 @@ test("DEV managed canary preflight fails before creating a Viva exercise while D
     subscriptions_runtime_api_base_url: "https://padlhub.su/api",
     subscriptions_managed_enforcement_product_ids: ["8bf334ba-3050-4017-b40a-7eef2db1eb16"],
     subscriptions_managed_enforcement_canary_client_subscription_ids: [canaryA.toUpperCase(), canaryB],
-  }) as Array<Record<string, any> | null>;
+  }) as Array<{
+    statusCode?: number;
+    url?: string;
+    payload?: { details?: { code?: string } };
+  } | null>;
 
   assert.equal(out[0], null);
   assert.equal(out[1]?.statusCode, 503);
@@ -211,6 +220,9 @@ test("malformed DEV canary config fails before creating a Viva exercise", () => 
       fromTime: "11:30",
       toTime: "13:00",
       roomId: "room-1",
+      studioId: "studio-1",
+      verifiedStudioId: "studio-1",
+      verifiedRoomId: "room-1",
       maxClientsCount: 4,
       exactCourtPriceVerified: true,
       subServiceIds: ["sub-service-1"],
@@ -240,6 +252,9 @@ test("missing DEV canary config keeps a non-canary subscription create on the le
       fromTime: "11:30",
       toTime: "13:00",
       roomId: "room-1",
+      studioId: "studio-1",
+      verifiedStudioId: "studio-1",
+      verifiedRoomId: "room-1",
       maxClientsCount: 4,
       exactCourtPriceVerified: true,
       subServiceIds: ["sub-service-1"],
@@ -269,6 +284,9 @@ test("DEV split candidate rejects a PROD environment before creating a Viva exer
         fromTime: "11:30",
         toTime: "13:00",
         roomId: "room-1",
+        studioId: "studio-1",
+        verifiedStudioId: "studio-1",
+        verifiedRoomId: "room-1",
         maxClientsCount: 4,
         exactCourtPriceVerified: true,
         subServiceIds: ["sub-service-1"],
@@ -299,6 +317,12 @@ test("PROD subscription create ignores malformed or matching DEV canary configur
     const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
       statusCode: 200,
       payload: { "sub-service-1": { price: 8000 } },
+      req: {
+        headers: {
+          authorization: "Bearer user-token",
+          "idempotency-key": "idem-prod-preflight-1",
+        },
+      },
       _splitCtx: {
         step: "ordinary_exact_price",
         action: "create",
@@ -308,6 +332,11 @@ test("PROD subscription create ignores malformed or matching DEV canary configur
         fromTime: "11:30",
         toTime: "13:00",
         roomId: "room-1",
+        studioId: "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+        verifiedStudioId: "1ea77cbf-bc36-49a1-96d6-f35c216a409b",
+        verifiedRoomId: "room-1",
+        vivaDirectionId: 4588,
+        vivaExerciseTypeId: 1613,
         maxClientsCount: 4,
         exactCourtPriceVerified: true,
         subServiceIds: ["sub-service-1"],
@@ -319,8 +348,10 @@ test("PROD subscription create ignores malformed or matching DEV canary configur
       subscriptions_managed_enforcement_canary_client_subscription_ids: canaryConfig,
     }) as Array<Record<string, any> | null>;
 
-    assert.equal(out[0]?.method, "POST");
-    assert.equal(out[0]?.url, "https://api.vivacrm.ru/api/v1/exercises");
+    assert.equal(out[0], null, "managed CREATE must not write Viva before authoritative preflight");
+    assert.equal(out[3]?.method, "GET");
+    assert.equal(out[3]?.url, "https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile");
+    assert.equal(out[3]?._subscriptionBooking?.caller, "split_create_preflight");
   }
 });
 
@@ -345,6 +376,57 @@ test("fresh-token one-time join verifies room-studio binding before booking", ()
   assert.match(roomLookup?.url || "", /\/studios\/studio-1\/rooms\/room-1$/);
   assert.equal(roomLookup?.requestTimeout, 20000);
   assert.equal(roomLookup?._splitCtx?.step, "verify_room_studio");
+});
+
+test("fresh-token subscription create verifies room-studio binding before preflight or Viva write", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: { access_token: "service-token", expires_in: 300 },
+    _splitCtx: {
+      step: "token",
+      action: "create",
+      paymentMode: "subscription",
+      studioId: "studio-1",
+      roomId: "room-1",
+      clientSubscriptionId: "subscription-1",
+      tokenSource: "refresh",
+    },
+  }) as Array<(RouterMessage & { _splitCtx?: { step?: string } }) | null>;
+
+  const roomLookup = out[0];
+  assert.equal(roomLookup?.method, "GET");
+  assert.match(roomLookup?.url || "", /\/studios\/studio-1\/rooms\/room-1$/);
+  assert.equal(roomLookup?.followRedirects, false);
+  assert.equal(roomLookup?.maxRedirects, 0);
+  assert.equal(roomLookup?._splitCtx?.step, "verify_room_studio");
+  assert.equal(out[3] ?? null, null);
+});
+
+test("create cannot bypass room-studio verification with browser target fields", () => {
+  const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_split_router.js", {
+    statusCode: 200,
+    payload: { "sub-service-1": { price: 8000 } },
+    _splitCtx: {
+      step: "ordinary_exact_price",
+      action: "create",
+      paymentMode: "subscription",
+      clientSubscriptionId: "subscription-1",
+      studioId: "studio-browser",
+      roomId: "room-browser",
+      date: "2026-09-03",
+      fromTime: "11:30",
+      toTime: "13:00",
+      exactCourtPriceVerified: true,
+      subServiceIds: ["sub-service-1"],
+    },
+  }) as Array<{
+    statusCode?: number;
+    payload?: { details?: { code?: string } };
+  } | null>;
+
+  assert.equal(out[0], null);
+  assert.equal(out[1]?.statusCode, 409);
+  assert.equal(out[1]?.payload?.details?.code, "SPLIT_CREATE_LOCATION_NOT_VERIFIED");
 });
 
 test("join proves the stored hourly rate against the organizer payment before booking", () => {

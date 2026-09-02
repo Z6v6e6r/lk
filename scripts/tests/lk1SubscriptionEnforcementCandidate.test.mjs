@@ -222,13 +222,24 @@ test("unified LK1 candidate tolerates disabled duplicates but rejects enabled se
   );
 });
 
-test("unified LK1 contract pins every tracked candidate source", () => {
+test("unified LK1 contract keeps the amended router fail-closed until PROD is rebound", () => {
   assert.equal(
     LK1_ENFORCEMENT_CONTRACT.sourceSha256,
     "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
   );
   assert.equal(LK1_ENFORCEMENT_CONTRACT.targets.length, 5);
-  for (const target of LK1_ENFORCEMENT_CONTRACT.targets) {
+  const amendedRouter = LK1_ENFORCEMENT_CONTRACT.targets.find(
+    ({ id }) => id === "lk_subscription_booking_router_20260804",
+  );
+  assert.ok(amendedRouter);
+  assert.notEqual(
+    sha256(fs.readFileSync(amendedRouter.sourceFile)),
+    amendedRouter.candidateSha256,
+    "the unreviewed PROD router pin must not silently advance with the DEV amendment",
+  );
+  for (const target of LK1_ENFORCEMENT_CONTRACT.targets.filter(
+    ({ id }) => id !== amendedRouter.id,
+  )) {
     assert.equal(sha256(fs.readFileSync(target.sourceFile)), target.candidateSha256, target.id);
   }
   assert.equal(LK1_ENFORCEMENT_CONTRACT.composedSources.length, 8);

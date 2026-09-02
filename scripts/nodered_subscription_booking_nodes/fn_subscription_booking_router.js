@@ -151,7 +151,10 @@ const readManagedRuntimeApiConfig = () => {
       code: "MANAGED_SUBSCRIPTION_RUNTIME_URL_INVALID",
     };
   }
-  const strictUrl = parsed.protocol === "https:"
+  const transportAllowed = identity.environment === "PROD"
+    ? parsed.protocol === "https:"
+    : parsed.protocol === "http:" && parsed.hostname === "127.0.0.1";
+  const strictUrl = transportAllowed
     && !parsed.username
     && !parsed.password
     && !parsed.search
@@ -326,6 +329,21 @@ const finishFullPriceFallback = (ctx, blockers) => {
   return emit(OUTPUT_FINAL);
 };
 
+const finishManagedCreatePreflight = (ctx, state = "PREFLIGHT_ATTEMPT_BOUND") => {
+  msg._subscriptionBooking = ctx;
+  msg.statusCode = 200;
+  msg.headers = responseHeaders();
+  msg.payload = {
+    ok: true,
+    state,
+    operationId: ctx.operationId,
+    exerciseId: ctx.exerciseId,
+    clientSubscriptionId: ctx.clientSubscriptionId,
+  };
+  delete msg.error;
+  return emit(OUTPUT_FINAL);
+};
+
 const prepareHttp = (ctx, step, method, url, payload, headers = {}) => {
   ctx.step = step;
   msg._subscriptionBooking = ctx;
@@ -333,6 +351,8 @@ const prepareHttp = (ctx, step, method, url, payload, headers = {}) => {
   msg.url = url;
   msg.headers = headers;
   msg.payload = payload;
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
   delete msg.error;
   delete msg.statusCode;
   return emit(OUTPUT_HTTP);
@@ -521,10 +541,11 @@ const validEntitlementDecision = (ctx, decision) => {
 
 const prepareManagedEntitlementBind = (ctx) => {
   const nowIso = new Date().toISOString();
+  const isCreatePreflight = ctx.caller === "split_create_preflight";
   return prepareMongoUpdate(ctx, "operation_entitlement_bind", {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
-    state: "PENDING_CONFIRMATION",
+    state: isCreatePreflight ? "PRECREATE_RESERVING" : "PENDING_CONFIRMATION",
     $or: [
       { managedEntitlementOperationId: { $exists: false } },
       { managedEntitlementOperationId: null },
@@ -532,6 +553,10 @@ const prepareManagedEntitlementBind = (ctx) => {
     ],
   }, {
     $set: {
+      ...(isCreatePreflight ? {
+        state: "PRECREATE_RESERVED",
+        precreateReservedAt: nowIso,
+      } : {}),
       managedEntitlementOperationId: ctx.managedEntitlementOperationId,
       managedSubscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
       managedEntitlementState: "RESERVED",
@@ -563,7 +588,7 @@ const prepareFullPriceFallbackUpdate = (ctx, blockers) => {
   return prepareMongoUpdate(ctx, "operation_full_price_fallback", {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
-    state: "PENDING_CONFIRMATION",
+    state: ctx.caller === "split_create_preflight" ? "PRECREATE_RESERVING" : "PENDING_CONFIRMATION",
   }, {
     $set: {
       state: "RELEASED",
@@ -1219,19 +1244,82 @@ const prepareMongoUpdate = (ctx, step, query, update) => {
 
 const preparePreaccept = (ctx) => {
   const now = new Date();
+  const isCreatePreflight = ctx.caller === "split_create_preflight";
   return prepareMongoUpdate(ctx, "operation_preaccept", {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
     state: "PREPARED",
   }, {
     $set: {
+      state: isCreatePreflight ? "PRECREATE_RESERVING" : "PENDING_CONFIRMATION",
+      ...(isCreatePreflight ? {
+        precreateLeaseUntil: new Date(now.getTime() + PENDING_CONFIRMATION_MS).toISOString(),
+      } : {
+        upstreamAttemptedAt: now.toISOString(),
+        pendingUntil: new Date(now.getTime() + PENDING_CONFIRMATION_MS).toISOString(),
+      }),
+      updatedAt: now.toISOString(),
+    },
+    $inc: { attempts: 1 },
+    $unset: { leaseUntil: "" },
+  });
+};
+
+const preparePrecreatedReservationPromotion = (ctx) => {
+  const now = new Date();
+  return prepareMongoUpdate(ctx, "operation_precreated_promote", {
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: "PRECREATE_ATTEMPTING",
+    managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+    managedSubscriptionInstanceId: ctx.managedRuntime?.subscriptionInstanceId,
+  }, {
+    $set: {
       state: "PENDING_CONFIRMATION",
+      exerciseId: ctx.exerciseId,
+      managedDecision: ctx.managedDecision,
       upstreamAttemptedAt: now.toISOString(),
       pendingUntil: new Date(now.getTime() + PENDING_CONFIRMATION_MS).toISOString(),
       updatedAt: now.toISOString(),
     },
     $inc: { attempts: 1 },
-    $unset: { leaseUntil: "" },
+    $unset: { precreateLeaseUntil: "", leaseUntil: "" },
+  });
+};
+
+const preparePrecreatedAttempt = (ctx) => {
+  const nowIso = new Date().toISOString();
+  return prepareMongoUpdate(ctx, "operation_precreated_attempt", {
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: "PRECREATE_RESERVED",
+    managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+    managedSubscriptionInstanceId: ctx.managedRuntime?.subscriptionInstanceId,
+  }, {
+    $set: {
+      state: "PRECREATE_ATTEMPTING",
+      precreateAttemptBoundAt: nowIso,
+      updatedAt: nowIso,
+    },
+    $unset: { precreateLeaseUntil: "", leaseUntil: "" },
+  });
+};
+
+const preparePrecreateAbortUpdate = (ctx) => {
+  const nowIso = new Date().toISOString();
+  return prepareMongoUpdate(ctx, "operation_precreate_abort", {
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: "PRECREATE_ATTEMPTING",
+    managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+  }, {
+    $set: {
+      state: "RELEASED",
+      releaseReason: "VIVA_EXERCISE_CREATE_REJECTED",
+      releasedAt: nowIso,
+      updatedAt: nowIso,
+    },
+    $unset: { precreateLeaseUntil: "", leaseUntil: "" },
   });
 };
 
@@ -1349,6 +1437,13 @@ const prepareActivationConfirmedUpdate = (ctx, activation) => {
 const prepareFailedUpdate = (ctx, statusCode, message, rawCode) => {
   const nowIso = new Date().toISOString();
   ctx.finalFailure = { statusCode, message, rawCode: rawCode || null };
+  if (ctx.precreatedEntitlementReserved === true
+    && ctx.managedEntitlementOperationId
+    && ctx.managedEntitlementReleased !== true
+    && ctx.step !== "managed_entitlement_release") {
+    ctx.entitlementReleaseNext = "persist_failure";
+    return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
+  }
   return prepareMongoUpdate(ctx, "operation_fail", {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
@@ -1493,6 +1588,16 @@ if (!ctx) {
   });
 }
 
+if (ctx.step === "managed_precreate_abort" && ctx.caller === "split_create_abort") {
+  if (!toStr(ctx.managedEntitlementOperationId)) {
+    return finishError(ctx, 409, "Предварительный резерв потерян до освобождения", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RESERVATION_MISSING",
+    });
+  }
+  ctx.entitlementReleaseNext = "precreate_abort";
+  return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
+}
+
 if (ctx.step === "profile") {
   if (!isHttpOk(msg.statusCode)) {
     const profileStatus = Number(msg.statusCode);
@@ -1512,11 +1617,53 @@ if (ctx.step === "profile") {
   if (ctx.action === "release") {
     return prepareUserGet(ctx, "active_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
   }
+  if (ctx.caller === "split_create_preflight") {
+    return prepareUserGet(
+      ctx,
+      "prospective_subscriptions",
+      `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`,
+    );
+  }
   return prepareUserGet(
     ctx,
     "exercise",
     `/end-user/api/v1/${ctx.tenantKey}/exercises/${encodeURIComponent(ctx.exerciseId)}`,
   );
+}
+
+if (ctx.step === "prospective_subscriptions") {
+  if (!isHttpOk(msg.statusCode) || !hasBookingListShape(msg.payload)
+    || !hasCompleteBookingList(msg.payload)) {
+    return finishError(ctx, 502, "Не удалось получить полный список подписок Viva", {
+      code: "SUBSCRIPTION_PREFLIGHT_LIST_UNAVAILABLE",
+    });
+  }
+  const selected = extractItems(msg.payload).filter((item) => (
+    findOwnedSubscriptions({ availableClientSubscriptions: [item] }, ctx.clientSubscriptionId).length === 1
+  ));
+  const target = isObj(ctx.prospectiveTarget) ? ctx.prospectiveTarget : null;
+  const typeMatch = toStr(target?.externalEventTypeId)?.match(/^viva:direction:(\d+):type:(\d+)$/);
+  const startsAt = finiteDate(target?.startsAt);
+  const durationMinutes = Number(target?.durationMinutes);
+  if (selected.length !== 1 || !target || target.resolutionSource !== "SERVER"
+    || normalizeId(target.eventId) !== normalizeId(ctx.exerciseId)
+    || !normalizeId(target.stationId) || target.category !== "open_game"
+    || !typeMatch || !startsAt || !Number.isInteger(durationMinutes) || durationMinutes < 1) {
+    return finishError(ctx, 409, "Нельзя однозначно подтвердить подписку и цель создаваемой игры", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_TARGET_UNRESOLVED",
+    });
+  }
+  msg.statusCode = 200;
+  msg.payload = {
+    id: ctx.exerciseId,
+    timeFrom: startsAt.toISOString(),
+    timeTo: new Date(startsAt.getTime() + durationMinutes * 60 * 1000).toISOString(),
+    directionId: Number(typeMatch[1]),
+    typeId: Number(typeMatch[2]),
+    studioId: target.stationId,
+    availableClientSubscriptions: selected,
+  };
+  ctx.step = "exercise";
 }
 
 if (ctx.step === "exercise") {
@@ -1581,6 +1728,9 @@ if (ctx.step === "exercise") {
   };
   const resolvedPlanKey = resolvePlanKey(ownedSubscriptions) || resolvePlanKey(ctx.subscriptionName);
   ctx.planKey = compatibilityPlanKey(resolvedPlanKey, managedEnforcement);
+  if (ctx.caller === "split_create_preflight" && managedEnforcement.enabled !== true) {
+    return finishManagedCreatePreflight(ctx, "NOT_MANAGED");
+  }
   if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
     if (ctx.planKey === "kotelniki_friendship") {
       return finishError(ctx, 409, "Подписка Котельников ещё не подключена к правилам записи", {
@@ -1926,6 +2076,9 @@ if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
     }
     ctx.managedRuntime = nextManagedRuntime;
     ctx.managedActivationExpectedRevision = runtime.evidence.instanceRevision;
+    if (ctx.precreatedEntitlementReserved === true) {
+      return preparePrecreatedReservationPromotion(ctx);
+    }
     return prepareManagedEntitlementReserve(ctx);
   }
   ctx.managedRuntime = nextManagedRuntime;
@@ -2185,6 +2338,9 @@ if (ctx.step === "operation_entitlement_bind") {
       code: "SUBSCRIPTION_ENTITLEMENT_CONFIRMED_RECONCILIATION_REQUIRED",
     });
   }
+  if (ctx.caller === "split_create_preflight") {
+    return preparePrecreatedAttempt(ctx);
+  }
   return prepareBookingCreate(ctx);
 }
 
@@ -2256,6 +2412,32 @@ if (ctx.step === "operation_find") {
   if (operation && ctx.managedEnforcement?.enabled === true && !operationEnvironmentMatches) {
     return finishError(ctx, 409, "Окружение операции подписки не совпало", {
       code: "MANAGED_SUBSCRIPTION_OPERATION_ENVIRONMENT_MISMATCH",
+    });
+  }
+  if (ctx.caller === "split_create_preflight" && operation
+    && toStr(operation.operationId) === ctx.operationId
+    && operation.state === "PRECREATE_RESERVED") {
+    const exactReservation = normalizeId(operation.exerciseId) === normalizeId(ctx.exerciseId)
+      && normalizeId(operation.clientSubscriptionId) === normalizeId(ctx.clientSubscriptionId)
+      && operation.planKey === ctx.planKey
+      && operation.managedDecision?.policyDigest === ctx.managedRuntime?.policyDigest
+      && toStr(operation.managedEntitlementOperationId)
+      && toStr(operation.managedSubscriptionInstanceId) === ctx.managedRuntime?.subscriptionInstanceId;
+    if (!exactReservation) {
+      return finishPending(ctx, "Предварительный резерв не совпал с текущим контекстом", {
+        code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RESERVATION_MISMATCH",
+      });
+    }
+    ctx.managedDecision = operation.managedDecision;
+    ctx.managedEntitlementOperationId = toStr(operation.managedEntitlementOperationId);
+    ctx.managedSubscriptionInstanceId = toStr(operation.managedSubscriptionInstanceId);
+    return preparePrecreatedAttempt(ctx);
+  }
+  if (ctx.caller === "split_create_preflight" && operation
+    && toStr(operation.operationId) === ctx.operationId
+    && operation.state === "PRECREATE_ATTEMPTING") {
+    return finishPending(ctx, "Создание игры уже передано Viva и требует точной сверки", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED",
     });
   }
   if (ctx.sameExerciseBooking) {
@@ -2346,6 +2528,13 @@ if (ctx.step === "operation_find") {
       }
       return prepareExpiredPendingReconciliation(ctx, operation);
     }
+    if (operation.state === "PRECREATE_RESERVING") {
+      const precreateLeaseUntil = Date.parse(String(operation.precreateLeaseUntil || ""));
+      if (!Number.isFinite(precreateLeaseUntil) || precreateLeaseUntil > now.getTime()) {
+        return finishPending(ctx, "Предварительный резерв подписки ещё выполняется");
+      }
+      return prepareManagedEntitlementReserve(ctx);
+    }
     if (operation.state === "PREPARED") return preparePreaccept(ctx);
   }
 
@@ -2353,6 +2542,7 @@ if (ctx.step === "operation_find") {
   const pendingUntil = Date.parse(String(operation.pendingUntil || ""));
   if (
     (operation.state === "PENDING_CONFIRMATION" && (!Number.isFinite(pendingUntil) || pendingUntil > now.getTime()))
+    || ["PRECREATE_RESERVING", "PRECREATE_RESERVED", "PRECREATE_ATTEMPTING"].includes(operation.state)
     || (operation.state === "PREPARED" && Number.isFinite(leaseUntil) && leaseUntil > now.getTime())
   ) {
     return finishPending(ctx, "Другая операция уже резервирует дневное посещение");
@@ -2431,10 +2621,46 @@ if (ctx.step === "operation_preaccept") {
   if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
     return finishPending(ctx, "Не удалось подтвердить владельца атомарной операции");
   }
+  if (ctx.caller === "split_create_preflight") {
+    return prepareManagedRuntimeContext(ctx, "managed_runtime_recheck");
+  }
   return prepareUserGet(
     ctx,
     "exercise_recheck",
     `/end-user/api/v1/${ctx.tenantKey}/exercises/${encodeURIComponent(ctx.exerciseId)}`,
+  );
+}
+
+if (ctx.step === "operation_precreated_promote") {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Предварительный резерв изменился до записи Viva", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_PROMOTION_PENDING",
+    });
+  }
+  return prepareBookingCreate(ctx);
+}
+
+if (ctx.step === "operation_precreated_attempt") {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Не удалось зафиксировать попытку создания игры до Viva", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_ATTEMPT_BIND_PENDING",
+    });
+  }
+  return finishManagedCreatePreflight(ctx);
+}
+
+if (ctx.step === "operation_precreate_abort") {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Льгота освобождена, но локальный резерв требует сверки", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_ABORT_BIND_PENDING",
+    });
+  }
+  const failure = ctx.finalFailure || {};
+  return finishError(
+    ctx,
+    Number(failure.statusCode) || 409,
+    toStr(failure.message) || "Viva отклонила создание игры",
+    { code: toStr(failure.rawCode) || "VIVA_EXERCISE_CREATE_REJECTED" },
   );
 }
 
@@ -2637,6 +2863,9 @@ if (ctx.step === "managed_entitlement_release") {
       toStr(failure.message) || "Viva отклонила создание записи",
       toStr(failure.rawCode) || "VIVA_SUBSCRIPTION_BOOKING_REJECTED",
     );
+  }
+  if (next === "precreate_abort") {
+    return preparePrecreateAbortUpdate(ctx);
   }
   if (next === "pricing_not_configured") {
     return prepareFailedUpdate(
