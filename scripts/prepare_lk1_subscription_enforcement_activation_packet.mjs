@@ -9,6 +9,7 @@ import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 import {
   buildUnifiedLk1EnforcementCandidate,
   LK1_ENFORCEMENT_CONTRACT,
+  PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256,
 } from "./prepare_lk1_subscription_enforcement_candidate.mjs";
 import { LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST } from "./lk1_subscription_enforcement_activation_manifest.mjs";
 import {
@@ -33,8 +34,8 @@ export function validateActivationManifest(
   if (!manifest || manifest.formatVersion !== 1) throw new Error("Activation manifest version mismatch");
   if (enforcementContract.candidateBindingState !== "BOUND"
     || !/^[a-f0-9]{64}$/.test(enforcementContract.candidateSha256 || "")
-    || !/^[a-f0-9]{64}$/.test(enforcementContract.previousCandidateSha256 || "")
-    || enforcementContract.candidateSha256 === enforcementContract.previousCandidateSha256) {
+    || enforcementContract.previousCandidateSha256 !== PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256
+    || enforcementContract.candidateSha256 === PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256) {
     throw new Error("Activation enforcement contract is unbound after router amendment");
   }
   const changes = normalizedChanges(manifest.allowedChanges || []);

@@ -6,6 +6,7 @@ import {
   buildLk1EnforcementCandidate,
   buildUnifiedLk1EnforcementCandidate,
   LK1_ENFORCEMENT_CONTRACT,
+  PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256,
   validateUnifiedCandidateSummary,
 } from "../prepare_lk1_subscription_enforcement_candidate.mjs";
 import { PAYMENT_NODE_IDS } from "../patch_live_game_payment_confirmation.mjs";
@@ -108,7 +109,7 @@ function structuralUnifiedFixture({ omitConfirmReadback = false } = {}) {
     candidateBindingState: "BOUND",
     sourceSha256: "fixture-source",
     candidateSha256: "6bc008ab4695fadbc7a0a2711cafd2570f881df152f28f430ad038799fb22645",
-    previousCandidateSha256: "f".repeat(64),
+    previousCandidateSha256: PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256,
     nodeCount: source.length,
     candidateNodeCount,
     httpRouteCount: 1,
@@ -284,6 +285,15 @@ test("router amendment leaves the full-flow candidate contract explicitly unboun
       ...LK1_ENFORCEMENT_CONTRACT,
       candidateBindingState: "BOUND",
       candidateSha256: summary.candidateSha256,
+    }),
+    /candidate contract is unbound after router amendment/,
+  );
+  assert.throws(
+    () => validateUnifiedCandidateSummary({ ...summary, candidateSha256: "a".repeat(64) }, {
+      ...LK1_ENFORCEMENT_CONTRACT,
+      candidateBindingState: "BOUND",
+      candidateSha256: "a".repeat(64),
+      previousCandidateSha256: "e".repeat(64),
     }),
     /candidate contract is unbound after router amendment/,
   );

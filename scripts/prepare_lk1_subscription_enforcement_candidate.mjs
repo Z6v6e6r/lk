@@ -19,6 +19,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = fs.realpathSync(path.resolve(SCRIPT_DIR, ".."));
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const fail = (message) => { throw new Error(message); };
+export const PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256 = "76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294";
 const candidateBinding = JSON.parse(fs.readFileSync(
   new URL("./lk1_subscription_enforcement_candidate_binding.json", import.meta.url),
   "utf8",
@@ -189,8 +190,8 @@ function replaceCandidateHash(registry, writerId, sourceNodeId, candidateSha256)
 export function validateUnifiedCandidateSummary(summary, contract = LK1_ENFORCEMENT_CONTRACT) {
   if (contract.candidateBindingState !== "BOUND"
     || !/^[a-f0-9]{64}$/.test(contract.candidateSha256 || "")
-    || !/^[a-f0-9]{64}$/.test(contract.previousCandidateSha256 || "")
-    || contract.candidateSha256 === contract.previousCandidateSha256) {
+    || contract.previousCandidateSha256 !== PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256
+    || contract.candidateSha256 === PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256) {
     fail("Unified LK1 candidate contract is unbound after router amendment");
   }
   const exact = (

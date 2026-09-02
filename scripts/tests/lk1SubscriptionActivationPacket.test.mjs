@@ -49,6 +49,13 @@ test("LK1 activation manifest is invalidated after the router amendment", () => 
     () => validateActivationManifest(manifest, previouslyBoundEnforcementContract),
     /contract is unbound after router amendment/,
   );
+  assert.throws(
+    () => validateActivationManifest(reviewableManifest, {
+      ...reviewableEnforcementContract,
+      previousCandidateSha256: "e".repeat(64),
+    }),
+    /contract is unbound after router amendment/,
+  );
   const { changes, additions } = validateActivationManifest(
     reviewableManifest,
     reviewableEnforcementContract,

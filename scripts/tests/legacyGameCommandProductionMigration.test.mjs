@@ -13,6 +13,7 @@ import {
   executionReceiptIdentityMatches,
   EXPECTED_CANDIDATE_FLOW_SHA256,
   EXPECTED_LIVE_FLOW_SHA256,
+  PREVIOUS_CANDIDATE_FLOW_SHA256,
   PRODUCTION_CANDIDATE_BINDING_STATE,
   PRODUCTION_MIGRATION_ID,
   PRODUCTION_PACKET_SCHEMA_VERSION,
@@ -156,6 +157,12 @@ test("production runner keeps the previous candidate as historical evidence and 
     previousCandidateSha256: UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256,
     unexpected: true,
   }), /approved schema/);
+  assert.throws(() => validateProductionCandidateBinding({
+    candidateBindingState: "BOUND",
+    candidateSha256: UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256,
+    previousCandidateSha256: digest("e"),
+  }), /changed the pinned previous candidate digest/);
+  assert.equal(PREVIOUS_CANDIDATE_FLOW_SHA256, UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256);
   assert.throws(() => validateProductionExecutionPacket(buildPacket(), context, {
     packetSha256: digest("f"),
     actualPacketSha256: digest("f"),
