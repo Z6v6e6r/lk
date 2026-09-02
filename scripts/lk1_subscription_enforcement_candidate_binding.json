@@ -1,4 +1,5 @@
 {
+  "environment": "PROD",
   "candidateBindingState": "UNBOUND_AFTER_ROUTER_AMENDMENT",
   "candidateSha256": null,
   "previousCandidateSha256": "76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294"

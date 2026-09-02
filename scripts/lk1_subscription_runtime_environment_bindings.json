@@ -1,0 +1,6 @@
+{
+  "formatVersion": 1,
+  "PROD": "https://padlhub.su/api",
+  "DEV": null,
+  "devBindingState": "UNBOUND_COMPLETE_HTTPS_CONTRACT_NOT_EXPOSED"
+}

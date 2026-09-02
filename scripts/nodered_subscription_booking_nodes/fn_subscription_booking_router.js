@@ -10,12 +10,20 @@ const PITER_MANAGED_PRODUCT_ID = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
 const MANAGED_ENFORCEMENT_ALLOWLIST_GLOBAL = "subscriptions_managed_enforcement_product_ids";
 const MANAGED_ENFORCEMENT_PURCHASE_FROM = "2026-09-01";
 const MANAGED_ENFORCEMENT_PURCHASE_TIME_ZONE = "Europe/Moscow";
+const MANAGED_RUNTIME_ENVIRONMENT_GLOBAL = "subscriptions_runtime_environment";
+const MANAGED_DEV_CANARY_GLOBAL = "subscriptions_managed_enforcement_canary_client_subscription_ids";
+const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "PROD";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const REGIONAL_ACTIVATION_MODE = "FIRST_USE_OR_FIXED_DATE";
 const REGIONAL_ACTIVATION_FALLBACK_AT = "2026-09-30T21:00:00.000Z";
 const REGIONAL_ACTIVATION_TIME_ZONE = "Europe/Moscow";
 const REGIONAL_VALIDITY_DAYS = 365;
-const TRUSTED_ENTITLEMENT_API_BASE = "https://padlhub.su/api";
+const MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = Object.freeze({
+  PROD: "https://padlhub.su/api",
+  // Intentionally unbound until a dedicated DEV CUP origin exposes the complete
+  // runtime-context/entitlement/activation contract without proxying production.
+  DEV: null,
+});
 
 const OUTPUT_HTTP = 0;
 const OUTPUT_MONGO_FIND = 1;
@@ -100,6 +108,107 @@ const readGlobal = (key) => {
   } catch (_) {
     return null;
   }
+};
+
+const readManagedRuntimeEnvironment = () => {
+  const configured = readGlobal(MANAGED_RUNTIME_ENVIRONMENT_GLOBAL);
+  const environment = configured === null ? null : configured.toUpperCase();
+  if (!["DEV", "PROD"].includes(environment)) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_ENVIRONMENT_INVALID" };
+  }
+  if (environment !== MANAGED_RUNTIME_EXPECTED_ENVIRONMENT) {
+    return { ok: false, environment, code: "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT" };
+  }
+  return { ok: true, environment };
+};
+
+const readManagedRuntimeApiConfig = () => {
+  const identity = readManagedRuntimeEnvironment();
+  if (!identity.ok) return identity;
+  const expectedApiBase = MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT[identity.environment];
+  if (!expectedApiBase) {
+    return {
+      ok: false,
+      environment: identity.environment,
+      code: "MANAGED_SUBSCRIPTION_DEV_RUNTIME_ORIGIN_UNBOUND",
+    };
+  }
+  const configuredApiBase = readGlobal("subscriptions_runtime_api_base_url");
+  if (!configuredApiBase) {
+    return {
+      ok: false,
+      environment: identity.environment,
+      code: "MANAGED_SUBSCRIPTION_RUNTIME_NOT_CONFIGURED",
+    };
+  }
+  let parsed;
+  try {
+    parsed = new URL(configuredApiBase);
+  } catch (_) {
+    return {
+      ok: false,
+      environment: identity.environment,
+      code: "MANAGED_SUBSCRIPTION_RUNTIME_URL_INVALID",
+    };
+  }
+  const strictUrl = parsed.protocol === "https:"
+    && !parsed.username
+    && !parsed.password
+    && !parsed.search
+    && !parsed.hash
+    && parsed.pathname === "/api"
+    && parsed.href === expectedApiBase;
+  if (!strictUrl) {
+    return {
+      ok: false,
+      environment: identity.environment,
+      code: "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT",
+    };
+  }
+  return { ok: true, environment: identity.environment, apiBase: expectedApiBase };
+};
+
+const readManagedDevCanaries = () => {
+  let configured;
+  try {
+    configured = global.get(MANAGED_DEV_CANARY_GLOBAL);
+  } catch (_) {
+    configured = undefined;
+  }
+  if (configured === undefined || configured === null || configured === "") {
+    return { ok: true, clientSubscriptionIds: [] };
+  }
+  if (typeof configured === "string") {
+    const text = configured.trim();
+    if (!text) return { ok: true, clientSubscriptionIds: [] };
+    try {
+      configured = JSON.parse(text);
+    } catch (_) {
+      return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID" };
+    }
+  }
+  if (!Array.isArray(configured) || ![0, 2].includes(configured.length)) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID" };
+  }
+  const normalized = configured.map(normalizeId);
+  if (normalized.some((value) => !value || !UUID_PATTERN.test(value))
+    || new Set(normalized).size !== normalized.length) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID" };
+  }
+  return { ok: true, clientSubscriptionIds: normalized };
+};
+
+const managedEnvironmentAllowsSubscription = (clientSubscriptionId) => {
+  const identity = readManagedRuntimeEnvironment();
+  if (!identity.ok) return identity;
+  if (identity.environment === "PROD") return { ok: true, environment: "PROD", allowed: true };
+  const canaries = readManagedDevCanaries();
+  if (!canaries.ok) return canaries;
+  return {
+    ok: true,
+    environment: "DEV",
+    allowed: canaries.clientSubscriptionIds.includes(normalizeId(clientSubscriptionId)),
+  };
 };
 
 const readManagedEnforcementAllowlist = () => {
@@ -229,6 +338,14 @@ const prepareHttp = (ctx, step, method, url, payload, headers = {}) => {
   return emit(OUTPUT_HTTP);
 };
 
+const prepareManagedHttp = (ctx, step, method, url, payload, headers = {}) => {
+  const output = prepareHttp(ctx, step, method, url, payload, headers);
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
+  msg.requestTimeout = 10000;
+  return output;
+};
+
 const prepareUserGet = (ctx, step, path) => prepareHttp(
   ctx,
   step,
@@ -247,18 +364,18 @@ const prepareManagedRuntimeContext = (ctx, step = "managed_runtime_context") => 
       ? prepareFailedUpdate(ctx, 409, "Контекст управляемой подписки изменился до записи", details.code)
       : finishError(ctx, 409, "Контекст управляемой подписки не подтверждён", details);
   }
-  const apiBase = (readGlobal("subscriptions_runtime_api_base_url") || "").replace(/\/+$/, "");
+  const runtimeConfig = readManagedRuntimeApiConfig();
   const integrationToken = readGlobal("subscriptions_runtime_context_integration_token");
-  if (!apiBase || !/^https:\/\//i.test(apiBase) || !integrationToken) {
+  if (!runtimeConfig.ok || Buffer.byteLength(integrationToken || "", "utf8") < 32) {
     return finishError(ctx, 503, "Контур правил подписки временно недоступен", {
-      code: "MANAGED_SUBSCRIPTION_RUNTIME_NOT_CONFIGURED",
+      code: runtimeConfig.code || "MANAGED_SUBSCRIPTION_RUNTIME_NOT_CONFIGURED",
     });
   }
-  return prepareHttp(
+  return prepareManagedHttp(
     ctx,
     step,
     "POST",
-    `${apiBase}/internal/subscriptions/runtime-context`,
+    `${runtimeConfig.apiBase}/internal/subscriptions/runtime-context`,
     { clientSubscriptionId: ctx.clientSubscriptionId },
     {
       Authorization: ctx.authHeader,
@@ -269,13 +386,17 @@ const prepareManagedRuntimeContext = (ctx, step = "managed_runtime_context") => 
   );
 };
 
-const managedActivationConfig = () => ({
-  apiBase: (readGlobal("subscriptions_runtime_api_base_url") || "").replace(/\/+$/, ""),
-  integrationToken: readGlobal("subscriptions_activation_integration_token"),
-});
+const managedActivationConfig = () => {
+  const runtimeConfig = readManagedRuntimeApiConfig();
+  return {
+    ...runtimeConfig,
+    integrationToken: readGlobal("subscriptions_activation_integration_token"),
+  };
+};
 
-const validManagedActivationConfig = (config) => (
-  /^https:\/\//i.test(config.apiBase)
+const validManagedActivationConfig = (config, ctx = null) => (
+  config.ok === true
+  && (!ctx || config.environment === (ctx.managedEnforcement?.environment || ctx.managedEnvironment))
   && Buffer.byteLength(config.integrationToken || "", "utf8") >= 32
 );
 
@@ -285,18 +406,16 @@ const managedActivationConfigured = () => {
 };
 
 const managedEntitlementConfig = () => {
-  const configuredApiBase = (readGlobal("subscriptions_runtime_api_base_url") || "")
-    .replace(/\/+$/, "");
+  const runtimeConfig = readManagedRuntimeApiConfig();
   return {
-    apiBase: configuredApiBase,
-    trustedOrigin: configuredApiBase === TRUSTED_ENTITLEMENT_API_BASE,
+    ...runtimeConfig,
     integrationToken: readGlobal("subscriptions_entitlement_integration_token"),
   };
 };
 
-const validManagedEntitlementConfig = (config) => (
-  config.trustedOrigin === true
-  && config.apiBase === TRUSTED_ENTITLEMENT_API_BASE
+const validManagedEntitlementConfig = (config, ctx = null) => (
+  config.ok === true
+  && (!ctx || config.environment === (ctx.managedEnforcement?.environment || ctx.managedEnvironment))
   && Buffer.byteLength(config.integrationToken || "", "utf8") >= 32
 );
 
@@ -310,21 +429,19 @@ const managedEntitlementHeaders = (ctx, config) => ({
 
 const prepareManagedEntitlementReserve = (ctx) => {
   const config = managedEntitlementConfig();
-  if (!validManagedEntitlementConfig(config)) {
+  if (!validManagedEntitlementConfig(config, ctx)) {
     return prepareFailedUpdate(
       ctx,
       503,
       "Резерв льготы подписки ещё не настроен",
-      config.trustedOrigin
-        ? "SUBSCRIPTION_ENTITLEMENT_NOT_CONFIGURED"
-        : "SUBSCRIPTION_ENTITLEMENT_ORIGIN_NOT_TRUSTED",
+      config.code || "SUBSCRIPTION_ENTITLEMENT_NOT_CONFIGURED",
     );
   }
-  return prepareHttp(
+  return prepareManagedHttp(
     ctx,
     "managed_entitlement_reserve",
     "POST",
-    `${TRUSTED_ENTITLEMENT_API_BASE}/internal/subscriptions/entitlements/reserve`,
+    `${config.apiBase}/internal/subscriptions/entitlements/reserve`,
     {
       subscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
       action: ctx.managedAction,
@@ -339,16 +456,16 @@ const prepareManagedEntitlementReserve = (ctx) => {
 
 const prepareManagedEntitlementConfirm = (ctx) => {
   const config = managedEntitlementConfig();
-  if (!validManagedEntitlementConfig(config)) {
+  if (!validManagedEntitlementConfig(config, ctx)) {
     return finishPending(ctx, "Запись подтверждена Viva; льгота ожидает подтверждения ЦУП", {
       code: "SUBSCRIPTION_ENTITLEMENT_NOT_CONFIGURED",
     });
   }
-  return prepareHttp(
+  return prepareManagedHttp(
     ctx,
     "managed_entitlement_confirm",
     "POST",
-    `${TRUSTED_ENTITLEMENT_API_BASE}/internal/subscriptions/entitlements/confirm`,
+    `${config.apiBase}/internal/subscriptions/entitlements/confirm`,
     {
       operationId: ctx.managedEntitlementOperationId,
       providerBookingId: ctx.confirmedBookingId,
@@ -359,7 +476,7 @@ const prepareManagedEntitlementConfirm = (ctx) => {
 
 const prepareManagedEntitlementRelease = (ctx, reason, providerBookingId = null) => {
   const config = managedEntitlementConfig();
-  if (!validManagedEntitlementConfig(config) || !toStr(ctx.managedEntitlementOperationId)) {
+  if (!validManagedEntitlementConfig(config, ctx) || !toStr(ctx.managedEntitlementOperationId)) {
     return finishPending(ctx, "Резерв льготы требует ручной сверки", {
       code: "SUBSCRIPTION_ENTITLEMENT_RELEASE_NOT_CONFIGURED",
     });
@@ -370,11 +487,11 @@ const prepareManagedEntitlementRelease = (ctx, reason, providerBookingId = null)
   };
   if (providerBookingId) payload.providerBookingId = providerBookingId;
   ctx.entitlementReleaseReason = reason;
-  return prepareHttp(
+  return prepareManagedHttp(
     ctx,
     "managed_entitlement_release",
     "POST",
-    `${TRUSTED_ENTITLEMENT_API_BASE}/internal/subscriptions/entitlements/release`,
+    `${config.apiBase}/internal/subscriptions/entitlements/release`,
     payload,
     managedEntitlementHeaders(ctx, config),
   );
@@ -483,31 +600,30 @@ const prepareManagedFirstUseActivation = (ctx, providerBookingId) => {
     });
   }
   const config = managedActivationConfig();
-  if (!validManagedActivationConfig(config)) {
+  if (!validManagedActivationConfig(config, ctx)) {
     return finishPending(ctx, "Запись подтверждена Viva; активация подписки ожидает настройки ЦУП", {
       code: "SUBSCRIPTION_ACTIVATION_NOT_CONFIGURED",
     });
   }
-  ctx.step = "managed_first_use_activation";
-  msg._subscriptionBooking = ctx;
-  msg.method = "POST";
-  msg.url = `${config.apiBase}/internal/subscriptions/activate-first-use`;
-  msg.headers = {
-    Authorization: ctx.authHeader,
-    "X-Subscriptions-Integration-Token": config.integrationToken,
-    "X-Correlation-Id": ctx.operationId,
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  };
-  msg.payload = {
-    subscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
-    clientSubscriptionId: ctx.clientSubscriptionId,
-    providerBookingId,
-    expectedInstanceRevision: ctx.managedActivationExpectedRevision,
-  };
-  delete msg.error;
-  delete msg.statusCode;
-  return emit(OUTPUT_HTTP);
+  return prepareManagedHttp(
+    ctx,
+    "managed_first_use_activation",
+    "POST",
+    `${config.apiBase}/internal/subscriptions/activate-first-use`,
+    {
+      subscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
+      clientSubscriptionId: ctx.clientSubscriptionId,
+      providerBookingId,
+      expectedInstanceRevision: ctx.managedActivationExpectedRevision,
+    },
+    {
+      Authorization: ctx.authHeader,
+      "X-Subscriptions-Integration-Token": config.integrationToken,
+      "X-Correlation-Id": ctx.operationId,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+  );
 };
 
 const prepareAdminGet = (ctx, step, path) => {
@@ -539,6 +655,18 @@ const unwrapRecord = (value) => {
     if (isObj(value[key])) return unwrapRecord(value[key]) || value[key];
   }
   return value;
+};
+
+const unwrapManagedRuntimeResponse = (value, expectedEnvironment) => {
+  if (!isObj(value)) return null;
+  if (value.schemaVersion === 1) return value;
+  if (value.schemaVersion !== 2
+    || value.environment !== expectedEnvironment
+    || !isObj(value.runtimeContext)
+    || value.runtimeContext.schemaVersion !== 1) return null;
+  const allowedKeys = ["environment", "runtimeContext", "schemaVersion"];
+  if (Object.keys(value).some((key) => !allowedKeys.includes(key))) return null;
+  return value.runtimeContext;
 };
 
 const extractItems = (value, seen = new Set()) => {
@@ -678,7 +806,7 @@ const collectSubscriptionPurchaseDateEvidence = (value) => {
   };
 };
 
-const resolveManagedEnforcementDecision = (value) => {
+const resolveManagedEnforcementDecision = (value, clientSubscriptionId) => {
   const allowlist = readManagedEnforcementAllowlist();
   if (!allowlist.ok) return allowlist;
   const records = Array.isArray(value) ? value.filter(isObj) : isObj(value) ? [value] : [];
@@ -704,9 +832,14 @@ const resolveManagedEnforcementDecision = (value) => {
   const purchaseDateEligible = Boolean(
     purchaseDate && purchaseDate >= MANAGED_ENFORCEMENT_PURCHASE_FROM,
   );
-  const enabled = exactProductId === PITER_MANAGED_PRODUCT_ID
+  const managedProductEligible = exactProductId === PITER_MANAGED_PRODUCT_ID
     && allowlist.productIds.includes(exactProductId)
     && purchaseDateEligible;
+  const environmentDecision = managedProductEligible
+    ? managedEnvironmentAllowsSubscription(clientSubscriptionId)
+    : { ok: true, environment: null, allowed: false };
+  if (!environmentDecision.ok) return environmentDecision;
+  const enabled = managedProductEligible && environmentDecision.allowed === true;
   return {
     ok: true,
     configuredProductIds: allowlist.productIds,
@@ -718,6 +851,7 @@ const resolveManagedEnforcementDecision = (value) => {
     purchaseDateCutoff: MANAGED_ENFORCEMENT_PURCHASE_FROM,
     purchaseDateTimeZone: MANAGED_ENFORCEMENT_PURCHASE_TIME_ZONE,
     purchaseDateEligible,
+    environment: enabled ? environmentDecision.environment : null,
     enabled,
     planKey: enabled ? "piter_friendship" : null,
   };
@@ -780,7 +914,7 @@ const resolveLimitMode = (planKey, serviceDate) => {
 const buildOperationKey = (ctx) => {
   if (ctx.managedEnforcement?.enabled === true) {
     return [
-      "managed",
+      ctx.managedEnforcement.environment === "DEV" ? "managed-dev" : "managed",
       ctx.tenantKey,
       ctx.clientSubscriptionId,
       ctx.exerciseId,
@@ -1113,6 +1247,7 @@ const prepareOperationReclaim = (ctx, operation, now = new Date()) => prepareMon
     category: ctx.category,
     planKey: ctx.planKey || null,
     limitMode: ctx.limitMode,
+    managedEnvironment: ctx.managedEnforcement?.environment || null,
     managedDecision: ctx.managedDecision || null,
     activationState: ctx.managedActivationRequired ? "PENDING" : "NOT_REQUIRED",
     state: "PREPARED",
@@ -1244,6 +1379,22 @@ const serviceTokenAvailable = () => {
 };
 
 const prepareBookingCreate = (ctx) => {
+  if (ctx.managedEnforcement?.enabled === true) {
+    const runtimeConfig = readManagedRuntimeApiConfig();
+    const environmentGate = managedEnvironmentAllowsSubscription(ctx.clientSubscriptionId);
+    const expectedEnvironment = ctx.managedEnforcement.environment || ctx.managedEnvironment;
+    if (!runtimeConfig.ok
+      || !environmentGate.ok
+      || environmentGate.allowed !== true
+      || runtimeConfig.environment !== expectedEnvironment
+      || environmentGate.environment !== expectedEnvironment) {
+      return finishPending(ctx, "Конфигурация DEV/PROD изменилась после резерва; запись Viva не отправлена", {
+        code: runtimeConfig.code
+          || environmentGate.code
+          || "MANAGED_SUBSCRIPTION_ENVIRONMENT_CHANGED_BEFORE_WRITE",
+      });
+    }
+  }
   let serviceToken = null;
   try {
     serviceToken = toStr(global.get("vivacrm_access_token"));
@@ -1391,9 +1542,16 @@ if (ctx.step === "exercise") {
   ctx.category = resolveCategory(exercise);
   ctx.studioId = toStr(exercise.studio?.id || exercise.studioId);
   ctx.subscriptionName = ownedSubscriptions.map(pickName).find(Boolean) || null;
-  const managedEnforcement = resolveManagedEnforcementDecision(ownedSubscriptions);
+  const managedEnforcement = resolveManagedEnforcementDecision(
+    ownedSubscriptions,
+    ctx.clientSubscriptionId,
+  );
   if (!managedEnforcement.ok) {
-    const configInvalid = managedEnforcement.code === "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID";
+    const configInvalid = [
+      "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID",
+      "MANAGED_SUBSCRIPTION_ENVIRONMENT_INVALID",
+      "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID",
+    ].includes(managedEnforcement.code);
     const purchaseDateUnresolved = managedEnforcement.code === "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED";
     return finishError(
       ctx,
@@ -1417,6 +1575,7 @@ if (ctx.step === "exercise") {
     purchaseDateCutoff: managedEnforcement.purchaseDateCutoff,
     purchaseDateTimeZone: managedEnforcement.purchaseDateTimeZone,
     purchaseDateEligible: managedEnforcement.purchaseDateEligible,
+    environment: managedEnforcement.environment,
     enabled: managedEnforcement.enabled,
     planKey: managedEnforcement.planKey,
   };
@@ -1563,12 +1722,19 @@ if (ctx.step === "exercise_recheck") {
       "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE",
     );
   }
-  const nextManagedEnforcement = resolveManagedEnforcementDecision(ownedSubscriptions);
+  const nextManagedEnforcement = resolveManagedEnforcementDecision(
+    ownedSubscriptions,
+    ctx.clientSubscriptionId,
+  );
   if (!nextManagedEnforcement.ok) {
     const purchaseDateUnresolved = nextManagedEnforcement.code === "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED";
     return prepareFailedUpdate(
       ctx,
-      nextManagedEnforcement.code === "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID" ? 503 : 409,
+      [
+        "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID",
+        "MANAGED_SUBSCRIPTION_ENVIRONMENT_INVALID",
+        "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID",
+      ].includes(nextManagedEnforcement.code) ? 503 : 409,
       purchaseDateUnresolved
         ? "Нельзя повторно подтвердить дату продажи подписки"
         : "Нельзя повторно подтвердить rollout управляемой подписки",
@@ -1602,7 +1768,8 @@ if (ctx.step === "exercise_recheck") {
     );
   }
   if (previousManagedEnforcement.enabled !== nextManagedEnforcement.enabled
-    || previousManagedEnforcement.planKey !== nextManagedEnforcement.planKey) {
+    || previousManagedEnforcement.planKey !== nextManagedEnforcement.planKey
+    || previousManagedEnforcement.environment !== nextManagedEnforcement.environment) {
     return prepareFailedUpdate(
       ctx,
       409,
@@ -1655,13 +1822,23 @@ if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
       code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONTEXT_INVALID",
     });
   }
+  const currentRuntimeConfig = readManagedRuntimeApiConfig();
+  if (!currentRuntimeConfig.ok
+    || currentRuntimeConfig.environment !== ctx.managedEnforcement.environment) {
+    return rejectRuntime(503, "Окружение правил подписки изменилось", {
+      code: currentRuntimeConfig.code || "MANAGED_SUBSCRIPTION_ENVIRONMENT_CHANGED",
+    });
+  }
   if (!isHttpOk(msg.statusCode)) {
     return rejectRuntime(409, "Опубликованные правила подписки сейчас недоступны", {
       code: "MANAGED_SUBSCRIPTION_RUNTIME_CONTEXT_UNAVAILABLE",
       upstreamStatus: Number(msg.statusCode) || null,
     });
   }
-  const runtime = unwrapRecord(msg.payload);
+  const runtime = unwrapManagedRuntimeResponse(
+    msg.payload,
+    ctx.managedEnforcement.environment,
+  );
   const policy = runtime?.policy;
   const instance = runtime?.instance;
   if (!runtime || runtime.schemaVersion !== 1
@@ -2042,6 +2219,7 @@ if (ctx.step === "operation_find") {
         code: "SUBSCRIPTION_BOOKING_RELEASE_SUBSCRIPTION_MISMATCH",
       });
     }
+    ctx.managedEnvironment = toStr(releaseOperation.managedEnvironment) || "PROD";
     if (asArray(releaseOperation.releasedBookingIds).some((id) => normalizeId(id) === normalizeId(ctx.releaseBookingId))) {
       return finishReleased(ctx, { operationFound: true, alreadyReleased: true });
     }
@@ -2070,6 +2248,16 @@ if (ctx.step === "operation_find") {
     return prepareOperationRelease(ctx, releaseOperation);
   }
   const operation = isObj(rows[0]) ? rows[0] : null;
+  const operationEnvironment = toStr(operation?.managedEnvironment);
+  const expectedOperationEnvironment = ctx.managedEnforcement?.environment;
+  const operationEnvironmentMatches = expectedOperationEnvironment === "DEV"
+    ? operationEnvironment === "DEV"
+    : [null, "PROD"].includes(operationEnvironment);
+  if (operation && ctx.managedEnforcement?.enabled === true && !operationEnvironmentMatches) {
+    return finishError(ctx, 409, "Окружение операции подписки не совпало", {
+      code: "MANAGED_SUBSCRIPTION_OPERATION_ENVIRONMENT_MISMATCH",
+    });
+  }
   if (ctx.sameExerciseBooking) {
     if (operation
       && ctx.managedActivationRequired
@@ -2126,6 +2314,7 @@ if (ctx.step === "operation_find") {
       category: ctx.category,
       planKey: ctx.planKey || null,
       limitMode: ctx.limitMode,
+      managedEnvironment: ctx.managedEnforcement?.environment || null,
       managedDecision: ctx.managedDecision || null,
       activationState: ctx.managedActivationRequired ? "PENDING" : "NOT_REQUIRED",
       state: "PREPARED",
@@ -2210,6 +2399,7 @@ if (ctx.step === "expired_pending_reconciliation") {
   ctx.managedEntitlementOperationId = toStr(operation.managedEntitlementOperationId);
   ctx.managedSubscriptionInstanceId = toStr(operation.managedSubscriptionInstanceId);
   if (ctx.managedEntitlementOperationId) {
+    ctx.managedEnvironment = toStr(operation.managedEnvironment) || "PROD";
     ctx.entitlementReleaseNext = "expired_pending_release";
     return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
   }

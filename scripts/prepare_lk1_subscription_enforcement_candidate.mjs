@@ -25,6 +25,12 @@ const candidateBinding = JSON.parse(fs.readFileSync(
   "utf8",
 ));
 
+export function assertProductionManifestEnvironment(manifest) {
+  if (manifest?.environment !== "PROD") fail("Production builder rejects a DEV manifest");
+  return true;
+}
+assertProductionManifestEnvironment(candidateBinding);
+
 export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
   sourceSha256: "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
   candidateBindingState: candidateBinding.candidateBindingState,
@@ -95,7 +101,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
       name: "Route atomic subscription booking",
       sourceFile: "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js",
       preimageSha256: "11c4b80c2624ad97fc83f634139d0db7d36aebb8df8a525bdc7baae3e9bae0fd",
-      candidateSha256: "5af6fbc1ffcd9c3ab480e8c69390b581e8e7cc2498f994ba36fd9e7164806216",
+      candidateSha256: "f8fb42f1ed26ad62b2d507e61b7b4af5ad1df574d4266c1881eea8ea9b70f537",
     }),
     Object.freeze({
       id: "c165e43eba668c25",
@@ -456,6 +462,7 @@ export function publishLk1EnforcementCandidate(workspace) {
   const report = {
     formatVersion: 2,
     ok: true,
+    environment: "PROD",
     sourceKind: "live-147",
     sourceSha256: verified.sourceSha256,
     candidateSha256: result.candidateSha256,
