@@ -4,6 +4,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  checkedProvisioningContract,
+  validateDevProvisioningContract,
+} from "./validate_lk1_subscription_dev_provisioning_contract.mjs";
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const fail = (message) => { throw new Error(message); };
@@ -47,10 +51,20 @@ export function validateEnvironmentApiBase(environment, configuredApiBase, expec
 export function validateDevInstallTarget(target,
   trustedBindings = LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS) {
   const trustedTarget = trustedBindings?.DEV_INSTALL_TARGET;
+  const expectedKeys = [
+    "sourceHost", "sourceHostname", "serviceName", "unixUser", "userDir", "remoteFlowPath",
+  ].sort();
+  const { environment: targetEnvironment, ...targetIdentity } = target || {};
   if (!trustedTarget
-    || target?.sourceHost !== trustedTarget.sourceHost
-    || target?.sourceHostname !== trustedTarget.sourceHostname
-    || target?.remoteFlowPath !== trustedTarget.remoteFlowPath) {
+    || (targetEnvironment !== undefined && targetEnvironment !== "DEV")
+    || JSON.stringify(Object.keys(targetIdentity).sort()) !== JSON.stringify(expectedKeys)
+    || JSON.stringify(Object.keys(trustedTarget).sort()) !== JSON.stringify(expectedKeys)
+    || targetIdentity.sourceHost !== trustedTarget.sourceHost
+    || targetIdentity.sourceHostname !== trustedTarget.sourceHostname
+    || targetIdentity.serviceName !== trustedTarget.serviceName
+    || targetIdentity.unixUser !== trustedTarget.unixUser
+    || targetIdentity.userDir !== trustedTarget.userDir
+    || targetIdentity.remoteFlowPath !== trustedTarget.remoteFlowPath) {
     fail("DEV install target is not the exact trusted DEV binding");
   }
   return true;
@@ -127,18 +141,29 @@ const assertDevPostimageHasNoProductionEndpoints = (sources) => {
 };
 
 export function validateDevBinding(binding,
-  trustedBindings = LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS) {
+  trustedBindings = LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS,
+  provisioningContract = checkedProvisioningContract) {
+  validateDevProvisioningContract(provisioningContract);
   if (binding?.environment !== "DEV") fail("DEV builder rejects a production source or binding");
   if (binding.bindingState !== "BOUND" || binding.installAllowed !== true) {
     fail(`DEV candidate binding is blocked (${binding?.bindingState || "missing"})`);
   }
   if (binding.environmentIdentityVerified !== true) fail("DEV environment identity is not verified");
-  if (binding.source?.sourceKind !== "live-dev-reserve"
+  const plannedTarget = provisioningContract.plannedTarget;
+  if (trustedBindings?.DEV_INSTALL_TARGET?.sourceHost !== plannedTarget.sourceHost
+    || trustedBindings?.DEV_INSTALL_TARGET?.sourceHostname !== plannedTarget.sourceHostname
+    || trustedBindings?.DEV_INSTALL_TARGET?.serviceName !== plannedTarget.serviceName
+    || trustedBindings?.DEV_INSTALL_TARGET?.unixUser !== plannedTarget.unixUser
+    || trustedBindings?.DEV_INSTALL_TARGET?.userDir !== plannedTarget.userDir
+    || trustedBindings?.DEV_INSTALL_TARGET?.remoteFlowPath !== plannedTarget.flowPath) {
+    fail("Trusted DEV install target diverges from the provisioning contract");
+  }
+  if (binding.source?.sourceKind !== "dedicated-dev-target"
     || binding.source.sourceHost !== "lk-reserve-89"
     || binding.source.sourceHostname !== "89-108-64-209.cloudvps.regruhosting.ru"
     || binding.source.sourceUser !== "root"
     || String(binding.source.sourcePort) !== "22"
-    || binding.source.remoteFlowPath !== "/root/.node-red/flows.json") {
+    || binding.source.remoteFlowPath !== plannedTarget.flowPath) {
     fail("DEV source identity mismatch");
   }
   if (!binding.target?.present || binding.target.enabledDuplicateCount !== 1) {
@@ -166,8 +191,9 @@ export function validateDevBinding(binding,
 }
 
 export function buildDevCandidate(sourceText, binding, readSource = fs.readFileSync,
-  trustedBindings = LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS) {
-  validateDevBinding(binding, trustedBindings);
+  trustedBindings = LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS,
+  provisioningContract = checkedProvisioningContract) {
+  validateDevBinding(binding, trustedBindings, provisioningContract);
   if (sha256(sourceText) !== binding.source.sourceSha256) fail("DEV source SHA mismatch");
   const flow = JSON.parse(sourceText);
   if (!Array.isArray(flow)
@@ -203,6 +229,9 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
       candidateSha256,
       targetHost: binding.installTarget.sourceHost,
       targetHostname: binding.installTarget.sourceHostname,
+      targetServiceName: binding.installTarget.serviceName,
+      targetUnixUser: binding.installTarget.unixUser,
+      targetUserDir: binding.installTarget.userDir,
       targetFlowPath: binding.installTarget.remoteFlowPath,
       productionBindingState: "UNBOUND_AFTER_ROUTER_AMENDMENT",
     },
@@ -210,6 +239,11 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
 }
 
 export function publishDevCandidate(workspace, binding, options = {}) {
+  const provisioningContract = options.provisioningContract ?? checkedProvisioningContract;
+  validateDevProvisioningContract(provisioningContract);
+  if (provisioningContract.candidateBuildAllowed !== true) {
+    fail("Provisioning contract blocks DEV candidate publication");
+  }
   const resolvedWorkspace = path.resolve(workspace);
   if (!resolvedWorkspace.startsWith("/private/tmp/") && !resolvedWorkspace.startsWith("/tmp/")) {
     fail("DEV candidate workspace must be under /private/tmp or /tmp");
@@ -233,6 +267,7 @@ export function publishDevCandidate(workspace, binding, options = {}) {
     binding,
     options.readSource ?? fs.readFileSync,
     options.trustedBindings ?? LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS,
+    provisioningContract,
   );
   const buildDirectory = path.join(resolvedWorkspace, "build");
   if (fs.existsSync(buildDirectory)) fail("Refusing to overwrite an existing DEV candidate build");
@@ -254,6 +289,9 @@ export function validateDevInstallManifest(manifest, target,
   validateDevInstallTarget(target, trustedBindings);
   if (manifest.targetHost !== target.sourceHost
     || manifest.targetHostname !== target.sourceHostname
+    || manifest.targetServiceName !== target.serviceName
+    || manifest.targetUnixUser !== target.unixUser
+    || manifest.targetUserDir !== target.userDir
     || manifest.targetFlowPath !== target.remoteFlowPath
     || !/^[a-f0-9]{64}$/.test(manifest.candidateSha256 || "")) {
     fail("DEV install target does not match the frozen manifest");

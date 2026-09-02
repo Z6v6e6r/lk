@@ -8,6 +8,10 @@ import {
   validateDevBinding,
   validateDevInstallManifest,
 } from "./prepare_lk1_subscription_dev_candidate.mjs";
+import {
+  checkedProvisioningContract,
+  validateDevProvisioningContract,
+} from "./validate_lk1_subscription_dev_provisioning_contract.mjs";
 
 const checkedBinding = JSON.parse(fs.readFileSync(
   new URL("./lk1_subscription_dev_candidate_binding.json", import.meta.url),
@@ -19,8 +23,13 @@ export function verifyDevInstallManifest(
   candidateBytes,
   binding = checkedBinding,
   trustedBindings = LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS,
+  provisioningContract = checkedProvisioningContract,
 ) {
-  validateDevBinding(binding, trustedBindings);
+  validateDevProvisioningContract(provisioningContract);
+  if (provisioningContract.installAllowed !== true) {
+    throw new Error("Provisioning contract blocks DEV install");
+  }
+  validateDevBinding(binding, trustedBindings, provisioningContract);
   const candidateSha256 = crypto.createHash("sha256").update(candidateBytes).digest("hex");
   if (manifest?.sourceSha256 !== binding.source.sourceSha256
     || manifest?.candidateSha256 !== binding.candidateSha256
@@ -31,6 +40,9 @@ export function verifyDevInstallManifest(
     environment: binding.environment,
     sourceHost: binding.installTarget.sourceHost,
     sourceHostname: binding.installTarget.sourceHostname,
+    serviceName: binding.installTarget.serviceName,
+    unixUser: binding.installTarget.unixUser,
+    userDir: binding.installTarget.userDir,
     remoteFlowPath: binding.installTarget.remoteFlowPath,
   }, trustedBindings);
 }

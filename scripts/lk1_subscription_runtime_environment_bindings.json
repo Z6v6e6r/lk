@@ -6,6 +6,9 @@
   "DEV_INSTALL_TARGET": {
     "sourceHost": "lk-reserve-89",
     "sourceHostname": "89-108-64-209.cloudvps.regruhosting.ru",
-    "remoteFlowPath": "/root/.node-red/flows.json"
+    "serviceName": "lk1-subscription-dev-nodered.service",
+    "unixUser": "lk1-subscription-dev",
+    "userDir": "/srv/lk1-subscription-dev/node-red",
+    "remoteFlowPath": "/srv/lk1-subscription-dev/node-red/flows.json"
   }
 }
