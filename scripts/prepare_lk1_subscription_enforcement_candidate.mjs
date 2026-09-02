@@ -188,7 +188,9 @@ function replaceCandidateHash(registry, writerId, sourceNodeId, candidateSha256)
 
 export function validateUnifiedCandidateSummary(summary, contract = LK1_ENFORCEMENT_CONTRACT) {
   if (contract.candidateBindingState !== "BOUND"
-    || !/^[a-f0-9]{64}$/.test(contract.candidateSha256 || "")) {
+    || !/^[a-f0-9]{64}$/.test(contract.candidateSha256 || "")
+    || !/^[a-f0-9]{64}$/.test(contract.previousCandidateSha256 || "")
+    || contract.candidateSha256 === contract.previousCandidateSha256) {
     fail("Unified LK1 candidate contract is unbound after router amendment");
   }
   const exact = (

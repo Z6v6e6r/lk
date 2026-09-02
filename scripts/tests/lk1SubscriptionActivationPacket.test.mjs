@@ -20,6 +20,13 @@ const previouslyBoundEnforcementContract = {
   candidateBindingState: "BOUND",
   candidateSha256: manifest.candidateSha256,
 };
+const reviewableCandidateSha256 = "a".repeat(64);
+const reviewableManifest = { ...manifest, candidateSha256: reviewableCandidateSha256 };
+const reviewableEnforcementContract = {
+  ...LK1_ENFORCEMENT_CONTRACT,
+  candidateBindingState: "BOUND",
+  candidateSha256: reviewableCandidateSha256,
+};
 
 test("LK1 activation manifest is invalidated after the router amendment", () => {
   assert.equal(manifest.sourceSha256, LK1_ENFORCEMENT_CONTRACT.sourceSha256);
@@ -38,9 +45,13 @@ test("LK1 activation manifest is invalidated after the router amendment", () => 
       /contract is unbound after router amendment/,
     );
   }
+  assert.throws(
+    () => validateActivationManifest(manifest, previouslyBoundEnforcementContract),
+    /contract is unbound after router amendment/,
+  );
   const { changes, additions } = validateActivationManifest(
-    manifest,
-    previouslyBoundEnforcementContract,
+    reviewableManifest,
+    reviewableEnforcementContract,
   );
   assert.equal(changes.length, 54);
   assert.equal(additions.length, 50);
@@ -59,8 +70,8 @@ test("activation manifest rejects identity, count and overlap drift", () => {
   ]) {
     assert.throws(
       () => validateActivationManifest(
-        { ...manifest, ...drift },
-        previouslyBoundEnforcementContract,
+        { ...reviewableManifest, ...drift },
+        reviewableEnforcementContract,
       ),
       /identity or change budget mismatch/,
     );

@@ -64,12 +64,36 @@ export const PRODUCTION_PACKET_SCHEMA_VERSION = 1;
 export const PRODUCTION_APPLY_CONFIRMATION = "APPLY_LEGACY_GAME_COMMAND_PREREQUISITES_PRODUCTION_V1";
 export const EXPECTED_LIVE_FLOW_SHA256 = "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263";
 export const EXPECTED_CANDIDATE_FLOW_SHA256 = "76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294";
-const PRODUCTION_CANDIDATE_BINDING = Object.freeze(JSON.parse(fs.readFileSync(CANDIDATE_BINDING_PATH, "utf8")));
+export function validateProductionCandidateBinding(binding) {
+  assertExactObjectKeys(binding, [
+    "candidateBindingState", "candidateSha256", "previousCandidateSha256",
+  ], "Production candidate binding");
+  if (!HASH_PATTERN.test(String(binding.previousCandidateSha256 || ""))) {
+    throw new Error("Production candidate binding has an invalid previous candidate digest");
+  }
+  if (binding.candidateBindingState === "UNBOUND_AFTER_ROUTER_AMENDMENT") {
+    if (binding.candidateSha256 !== null) {
+      throw new Error("Unbound production candidate must not claim a candidate digest");
+    }
+  } else if (binding.candidateBindingState === "BOUND") {
+    if (!HASH_PATTERN.test(String(binding.candidateSha256 || ""))
+      || binding.candidateSha256 === binding.previousCandidateSha256) {
+      throw new Error("Bound production candidate must use a new reviewed candidate digest");
+    }
+  } else {
+    throw new Error("Production candidate binding state is not approved");
+  }
+  return binding;
+}
+
+const PRODUCTION_CANDIDATE_BINDING = Object.freeze(validateProductionCandidateBinding(
+  JSON.parse(fs.readFileSync(CANDIDATE_BINDING_PATH, "utf8")),
+));
 export const PRODUCTION_CANDIDATE_BINDING_STATE = PRODUCTION_CANDIDATE_BINDING.candidateBindingState;
 export function assertProductionCandidateBound() {
   if (PRODUCTION_CANDIDATE_BINDING_STATE !== "BOUND"
     || PRODUCTION_CANDIDATE_BINDING.candidateSha256 !== EXPECTED_CANDIDATE_FLOW_SHA256
-    || !HASH_PATTERN.test(String(PRODUCTION_CANDIDATE_BINDING.candidateSha256 || ""))) {
+    || PRODUCTION_CANDIDATE_BINDING.candidateSha256 === PRODUCTION_CANDIDATE_BINDING.previousCandidateSha256) {
     throw new Error("Production candidate is unbound after the subscription router amendment");
   }
   return true;

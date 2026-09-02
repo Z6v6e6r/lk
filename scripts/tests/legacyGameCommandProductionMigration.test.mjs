@@ -24,6 +24,7 @@ import {
   stableStringify,
   validateProductionExecutionPacket,
   validateProductionExecutionPacketAgainstBoundCandidate,
+  validateProductionCandidateBinding,
   validateProductionReleaseAttestation,
 } from "../run_legacy_game_command_production_migration.mjs";
 import { LK1_SUBSCRIPTION_ENFORCEMENT_ACTIVATION_MANIFEST } from "../lk1_subscription_enforcement_activation_manifest.mjs";
@@ -143,6 +144,17 @@ test("production runner keeps the previous candidate as historical evidence and 
   assert.equal(PRODUCTION_CANDIDATE_BINDING_STATE, "UNBOUND_AFTER_ROUTER_AMENDMENT");
   assert.equal(EXPECTED_CANDIDATE_FLOW_SHA256, UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256);
   assert.throws(() => assertProductionCandidateBound(), /candidate is unbound/);
+  assert.throws(() => validateProductionCandidateBinding({
+    candidateBindingState: "BOUND",
+    candidateSha256: UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256,
+    previousCandidateSha256: UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256,
+  }), /must use a new reviewed candidate digest/);
+  assert.throws(() => validateProductionCandidateBinding({
+    candidateBindingState: "BOUND",
+    candidateSha256: digest("f"),
+    previousCandidateSha256: UNIFIED_SOURCE_ONLY_CANDIDATE_SHA256,
+    unexpected: true,
+  }), /approved schema/);
   assert.throws(() => validateProductionExecutionPacket(buildPacket(), context, {
     packetSha256: digest("f"),
     actualPacketSha256: digest("f"),

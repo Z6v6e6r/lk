@@ -108,6 +108,7 @@ function structuralUnifiedFixture({ omitConfirmReadback = false } = {}) {
     candidateBindingState: "BOUND",
     sourceSha256: "fixture-source",
     candidateSha256: "6bc008ab4695fadbc7a0a2711cafd2570f881df152f28f430ad038799fb22645",
+    previousCandidateSha256: "f".repeat(64),
     nodeCount: source.length,
     candidateNodeCount,
     httpRouteCount: 1,
@@ -278,6 +279,21 @@ test("router amendment leaves the full-flow candidate contract explicitly unboun
       /candidate contract is unbound after router amendment/,
     );
   }
+  assert.throws(
+    () => validateUnifiedCandidateSummary(summary, {
+      ...LK1_ENFORCEMENT_CONTRACT,
+      candidateBindingState: "BOUND",
+      candidateSha256: summary.candidateSha256,
+    }),
+    /candidate contract is unbound after router amendment/,
+  );
+  const boundCandidateSha256 = "a".repeat(64);
+  const boundSummary = { ...summary, candidateSha256: boundCandidateSha256 };
+  const boundContract = {
+    ...LK1_ENFORCEMENT_CONTRACT,
+    candidateBindingState: "BOUND",
+    candidateSha256: boundCandidateSha256,
+  };
   for (const drift of [
     { candidateSha256: "drift" },
     { changedNodeCount: 105 },
@@ -285,13 +301,8 @@ test("router amendment leaves the full-flow candidate contract explicitly unboun
     { createAckOrder: [...summary.createAckOrder].reverse() },
     { cleanupRecoveryNode: "wrong" },
   ]) {
-    const boundContract = {
-      ...LK1_ENFORCEMENT_CONTRACT,
-      candidateBindingState: "BOUND",
-      candidateSha256: summary.candidateSha256,
-    };
     assert.throws(
-      () => validateUnifiedCandidateSummary({ ...summary, ...drift }, boundContract),
+      () => validateUnifiedCandidateSummary({ ...boundSummary, ...drift }, boundContract),
       /reviewed candidate contract mismatch/,
     );
   }
