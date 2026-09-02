@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -16,7 +16,8 @@ const workflow = load(workflowText);
 const job = workflow.jobs?.["lk1-exact-head"];
 const steps = job?.steps ?? [];
 const step = (name) => steps.find((candidate) => candidate.name === name);
-const binaryScan = () => step("Scan changed paths for secrets, PII, binaries, and runtime artifacts").run;
+const binaryScanStep = () => step("Scan changed paths for secrets, PII, binaries, and runtime artifacts");
+const binaryScan = () => binaryScanStep().run;
 
 async function createBinaryDiffRepo(t, entries) {
   const repoDirectory = await mkdtemp(join(tmpdir(), "lk1-binary-diff-"));
@@ -41,18 +42,27 @@ async function createBinaryDiffRepo(t, entries) {
     { cwd: repoDirectory },
   );
   const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoDirectory, encoding: "utf8" }).trim();
-  return { repoDirectory, diffRange: `${baseSha}..${headSha}` };
+  return { repoDirectory, diffRange: `${baseSha}..${headSha}`, headSha };
 }
 
-async function runBinaryScan(t, entries) {
-  const { repoDirectory, diffRange } = await createBinaryDiffRepo(t, entries);
+async function runBinaryScanInRepo(t, { repoDirectory, diffRange, headSha }) {
   const runnerTemp = await mkdtemp(join(tmpdir(), "lk1-binary-scan-"));
   t.after(() => rm(runnerTemp, { recursive: true, force: true }));
   return spawnSync("bash", ["-c", binaryScan()], {
     cwd: repoDirectory,
     encoding: "utf8",
-    env: { ...process.env, DIFF_RANGE: diffRange, RUNNER_TEMP: runnerTemp },
+    env: {
+      ...process.env,
+      GIT_NO_REPLACE_OBJECTS: binaryScanStep().env.GIT_NO_REPLACE_OBJECTS,
+      IMMUTABLE_DIFF_RANGE: diffRange,
+      IMMUTABLE_HEAD_SHA: headSha,
+      RUNNER_TEMP: runnerTemp,
+    },
   });
+}
+
+async function runBinaryScan(t, entries) {
+  return runBinaryScanInRepo(t, await createBinaryDiffRepo(t, entries));
 }
 
 test("workflow triggers exactly for pull requests and pushes to main", () => {
@@ -80,6 +90,9 @@ test("pull-request checkout and identity use the exact PR head", () => {
   assert.equal(identity.env.EVENT_BASE_SHA, "${{ github.event.pull_request.base.sha }}");
   assert.equal(identity.env.EVENT_HEAD_SHA, "${{ github.event.pull_request.head.sha }}");
   assert.match(identity.run, /DIFF_RANGE=%s\.\.\.%s/);
+  assert.match(identity.run, /head_sha=%s/);
+  assert.match(identity.run, /diff_range=%s\.\.\.%s/);
+  assert.match(identity.run, /GITHUB_OUTPUT/);
 });
 
 test("push checkout and identity use only the exact push event fields", () => {
@@ -95,6 +108,9 @@ test("push checkout and identity use only the exact push event fields", () => {
   assert.equal(identity.env.EVENT_BASE_SHA, "${{ github.event.before }}");
   assert.equal(identity.env.EVENT_HEAD_SHA, "${{ github.sha }}");
   assert.match(identity.run, /DIFF_RANGE=%s\.\.%s/);
+  assert.match(identity.run, /head_sha=%s/);
+  assert.match(identity.run, /diff_range=%s\.\.%s/);
+  assert.match(identity.run, /GITHUB_OUTPUT/);
   assert.doesNotMatch(JSON.stringify({ checkout, identity }), /pull_request/);
 });
 
@@ -110,6 +126,22 @@ test("unconditional steps never reference pull-request-only event fields", () =>
   }
 });
 
+test("custody checks run before any repository-controlled command can poison the job", () => {
+  const whitespaceIndex = steps.indexOf(step("Check exact event diff whitespace"));
+  const custodyIndex = steps.indexOf(binaryScanStep());
+  const installIndex = steps.indexOf(step("Install locked dependencies"));
+
+  assert.ok(whitespaceIndex >= 0 && custodyIndex >= 0 && installIndex >= 0);
+  assert.ok(whitespaceIndex < custodyIndex, "whitespace validation must precede the custody scan");
+  assert.ok(custodyIndex < installIndex, "custody scan must precede npm ci and repository scripts");
+
+  const commandsBeforeCustody = steps
+    .slice(0, custodyIndex)
+    .map((candidate) => candidate.run ?? "")
+    .join("\n");
+  assert.doesNotMatch(commandsBeforeCustody, /npm ci|npm run|npx |node --test|scripts\//);
+});
+
 test("identity and exact diff endpoints fail closed when missing", () => {
   const verify = step("Verify checkout identity and diff endpoints");
   assert.match(verify.run, /test -n "\$BASE_SHA"/);
@@ -118,17 +150,30 @@ test("identity and exact diff endpoints fail closed when missing", () => {
   assert.match(verify.run, /git cat-file -e "\$BASE_SHA\^\{commit\}"/);
   assert.match(verify.run, /checked_out_sha.*EXPECTED_HEAD_SHA/s);
 
-  assert.equal(step("Check exact event diff whitespace").run, 'git diff --check "$DIFF_RANGE"');
+  const whitespace = step("Check exact event diff whitespace");
+  assert.equal(
+    whitespace.run,
+    'git diff --check --no-ext-diff --no-textconv "$IMMUTABLE_DIFF_RANGE"',
+  );
+  assert.equal(whitespace.env.GIT_NO_REPLACE_OBJECTS, "1");
+  assert.match(whitespace.env.IMMUTABLE_DIFF_RANGE, /steps\.pr_identity\.outputs\.diff_range/);
   assert.match(
-    step("Scan changed paths for secrets, PII, binaries, and runtime artifacts").run,
-    /git diff --numstat --no-renames -z "\$DIFF_RANGE"/,
+    binaryScan(),
+    /git diff --name-only --no-renames --diff-filter=AM -z --no-ext-diff --no-textconv/,
   );
 });
 
 test("binary asset exceptions are exact and content-addressed", async () => {
   const scan = binaryScan();
-  assert.match(scan, /git diff --numstat --no-renames -z "\$DIFF_RANGE"/);
-  assert.match(scan, /read -r -d '' binary_path/);
+  assert.match(binaryScanStep().env.IMMUTABLE_HEAD_SHA, /steps\.pr_identity\.outputs\.head_sha/);
+  assert.match(binaryScanStep().env.IMMUTABLE_DIFF_RANGE, /steps\.pr_identity\.outputs\.diff_range/);
+  assert.equal(binaryScanStep().env.GIT_NO_REPLACE_OBJECTS, "1");
+  assert.match(scan, /test -n "\$IMMUTABLE_HEAD_SHA"/);
+  assert.match(scan, /scan_checkout_sha.*IMMUTABLE_HEAD_SHA/s);
+  assert.match(scan, /git status --short --untracked-files=no/);
+  assert.match(scan, /git diff --name-only --no-renames --diff-filter=AM -z --no-ext-diff --no-textconv/);
+  assert.match(scan, /git diff --unified=0 --no-color --no-ext-diff --no-textconv/);
+  assert.match(scan, /read -r -d '' changed_path/);
   const allowlistEntries = [...scan.matchAll(
     /^\s+(src\/assets\/[^)]+\.webp\))\n\s+expected_hash="([0-9a-f]{64})"/gm,
   )].map((match) => [match[1].slice(0, -1), match[2]]);
@@ -144,9 +189,15 @@ test("binary asset exceptions are exact and content-addressed", async () => {
   ];
 
   assert.deepEqual(allowlistEntries, expectedEntries);
-  assert.match(scan, /sha256sum -- "\$binary_path"/);
+  assert.match(scan, /git check-attr --stdin -z diff/);
+  assert.match(scan, /value !== "unspecified"/);
+  assert.match(scan, /Git diff attribute override is forbidden/);
+  assert.match(scan, /git cat-file blob "\$IMMUTABLE_HEAD_SHA:\$changed_path" \| sha256sum/);
+  assert.match(scan, /git cat-file blob "\$IMMUTABLE_HEAD_SHA:\$changed_path"/);
+  assert.match(scan, /chunk\.subarray\(0, remaining\)\.includes\(0\)/);
   assert.match(scan, /"\$actual_hash" != "\$expected_hash"/);
   assert.match(scan, /Unexpected binary files in event diff/);
+  assert.match(scan, /\(\^\|\/\)\\\.gitattributes\$/);
 
   for (const [assetPath, expectedHash] of expectedEntries) {
     const assetUrl = new URL(`../../${assetPath}`, import.meta.url);
@@ -172,12 +223,13 @@ test("binary scan accepts only the pinned assets and rejects path or content dri
 
   for (const separator of [" ", "\t", "\n"]) {
     const disguisedPath = `src/assets/piter-subscription-tier-1.webp${separator}unexpected.webp`;
-    const disguised = await runBinaryScan(t, [
-      ["src/assets/piter-subscription-tier-1.webp", tierAsset],
-      [disguisedPath, tierAsset],
-    ]);
+    const disguised = await runBinaryScan(t, [[disguisedPath, tierAsset]]);
     assert.equal(disguised.status, 1, `must reject ${JSON.stringify(disguisedPath)}`);
-    assert.match(disguised.stderr, /Unexpected binary files in event diff/);
+    if (separator === " ") {
+      assert.match(disguised.stderr, /Unexpected binary files in event diff/);
+    } else {
+      assert.match(disguised.stderr, /Control characters in changed path are forbidden/);
+    }
   }
 
   const wrongContent = await runBinaryScan(t, [
@@ -185,6 +237,66 @@ test("binary scan accepts only the pinned assets and rejects path or content dri
   ]);
   assert.equal(wrongContent.status, 1);
   assert.match(wrongContent.stderr, /Allowlisted binary hash mismatch/);
+
+  const overrideDirectory = await mkdtemp(join(tmpdir(), "lk1-attribute-override-"));
+  t.after(() => rm(overrideDirectory, { recursive: true, force: true }));
+  const attributesPath = join(overrideDirectory, ".gitattributes");
+  const payloadPath = join(overrideDirectory, "payload.bin");
+  await writeFile(attributesPath, "*.bin diff\n", "utf8");
+  await writeFile(payloadPath, Buffer.from([0x00, 0x01, 0x02, 0x03]));
+  const attributeOverride = await runBinaryScan(t, [
+    [".gitattributes", attributesPath],
+    ["payload.bin", payloadPath],
+  ]);
+  assert.equal(attributeOverride.status, 1);
+  assert.match(attributeOverride.stderr, /Git diff attribute override is forbidden/);
+  assert.match(attributeOverride.stderr, /payload\.bin/);
+});
+
+test("custody scan rejects checkout HEAD drift after the immutable event identity is frozen", async (t) => {
+  const rulesAsset = new URL("../../src/assets/piter-subscription-rules-from-20260901.webp", import.meta.url);
+  const tierAsset = new URL("../../src/assets/piter-subscription-tier-1.webp", import.meta.url);
+  const eventIdentity = await createBinaryDiffRepo(t, [
+    ["src/assets/piter-subscription-rules-from-20260901.webp", rulesAsset],
+    ["src/assets/piter-subscription-tier-1.webp", tierAsset],
+  ]);
+  await writeFile(join(eventIdentity.repoDirectory, "drift.txt"), "sanitized local head\n", "utf8");
+  execFileSync("git", ["add", "drift.txt"], { cwd: eventIdentity.repoDirectory });
+  execFileSync(
+    "git",
+    ["-c", "user.name=ci", "-c", "user.email=ci", "commit", "--quiet", "-m", "drift head"],
+    { cwd: eventIdentity.repoDirectory },
+  );
+
+  const drifted = await runBinaryScanInRepo(t, eventIdentity);
+  assert.equal(drifted.status, 1);
+  assert.match(drifted.stderr, /Exact-head checkout drifted before custody scan/);
+});
+
+test("custody scan ignores local git replacement objects", async (t) => {
+  const payloadDirectory = await mkdtemp(join(tmpdir(), "lk1-replace-object-"));
+  t.after(() => rm(payloadDirectory, { recursive: true, force: true }));
+  const payloadPath = join(payloadDirectory, "payload.bin");
+  await writeFile(payloadPath, Buffer.from([0x00, 0x01, 0x02, 0x03]));
+  const eventIdentity = await createBinaryDiffRepo(t, [["payload.bin", payloadPath]]);
+
+  await writeFile(join(eventIdentity.repoDirectory, "payload.bin"), "sanitized replacement\n", "utf8");
+  execFileSync("git", ["add", "payload.bin"], { cwd: eventIdentity.repoDirectory });
+  execFileSync(
+    "git",
+    ["-c", "user.name=ci", "-c", "user.email=ci", "commit", "--quiet", "-m", "replacement"],
+    { cwd: eventIdentity.repoDirectory },
+  );
+  const replacementSha = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: eventIdentity.repoDirectory,
+    encoding: "utf8",
+  }).trim();
+  execFileSync("git", ["replace", eventIdentity.headSha, replacementSha], { cwd: eventIdentity.repoDirectory });
+  execFileSync("git", ["reset", "--hard", "--quiet", eventIdentity.headSha], { cwd: eventIdentity.repoDirectory });
+
+  const replaced = await runBinaryScanInRepo(t, eventIdentity);
+  assert.equal(replaced.status, 1);
+  assert.match(replaced.stderr, /Tracked files changed before custody scan|Unexpected binary files in event diff/);
 });
 
 test("full enforcement matrix and workflow contract cannot be silently skipped", () => {

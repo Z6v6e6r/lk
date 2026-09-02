@@ -42,6 +42,7 @@ jobs:
           clean: true
 
       - name: Resolve pull-request immutable identity
+        id: pr_identity
         if: github.event_name == 'pull_request'
         env:
           EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -55,8 +56,13 @@ jobs:
             printf 'EXPECTED_HEAD_SHA=%s\n' "$EVENT_HEAD_SHA"
             printf 'DIFF_RANGE=%s...%s\n' "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA"
           } >> "$GITHUB_ENV"
+          {
+            printf 'head_sha=%s\n' "$EVENT_HEAD_SHA"
+            printf 'diff_range=%s...%s\n' "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Resolve push immutable identity
+        id: push_identity
         if: github.event_name == 'push'
         env:
           EVENT_BASE_SHA: ${{ github.event.before }}
@@ -70,6 +76,10 @@ jobs:
             printf 'EXPECTED_HEAD_SHA=%s\n' "$EVENT_HEAD_SHA"
             printf 'DIFF_RANGE=%s..%s\n' "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA"
           } >> "$GITHUB_ENV"
+          {
+            printf 'head_sha=%s\n' "$EVENT_HEAD_SHA"
+            printf 'diff_range=%s..%s\n' "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify checkout identity and diff endpoints
         run: |
@@ -108,6 +118,143 @@ jobs:
             echo "- Node: \`$(node --version)\`"
             echo "- npm: \`$(npm --version)\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check exact event diff whitespace
+        env:
+          GIT_NO_REPLACE_OBJECTS: "1"
+          IMMUTABLE_DIFF_RANGE: ${{ steps.pr_identity.outputs.diff_range || steps.push_identity.outputs.diff_range }}
+        run: git diff --check --no-ext-diff --no-textconv "$IMMUTABLE_DIFF_RANGE"
+
+      - name: Scan changed paths for secrets, PII, binaries, and runtime artifacts
+        env:
+          GIT_NO_REPLACE_OBJECTS: "1"
+          IMMUTABLE_HEAD_SHA: ${{ steps.pr_identity.outputs.head_sha || steps.push_identity.outputs.head_sha }}
+          IMMUTABLE_DIFF_RANGE: ${{ steps.pr_identity.outputs.diff_range || steps.push_identity.outputs.diff_range }}
+        run: |
+          set -euo pipefail
+          test -n "$IMMUTABLE_HEAD_SHA"
+          test -n "$IMMUTABLE_DIFF_RANGE"
+          scan_checkout_sha="$(git rev-parse HEAD)"
+          if [[ "$scan_checkout_sha" != "$IMMUTABLE_HEAD_SHA" ]]; then
+            echo "Exact-head checkout drifted before custody scan" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --short --untracked-files=no)" ]]; then
+            echo "Tracked files changed before custody scan" >&2
+            git status --short --untracked-files=no >&2
+            exit 1
+          fi
+          git diff --name-only --no-renames --diff-filter=AM -z --no-ext-diff --no-textconv \
+            "$IMMUTABLE_DIFF_RANGE" \
+            > "$RUNNER_TEMP/lk1-changed-paths.z"
+          if ! git check-attr --stdin -z diff < "$RUNNER_TEMP/lk1-changed-paths.z" \
+            | node --input-type=module -e '
+              let input = Buffer.alloc(0);
+              process.stdin.on("data", (chunk) => { input = Buffer.concat([input, chunk]); });
+              process.stdin.on("end", () => {
+                const fields = input.toString("utf8").split("\0");
+                for (let index = 0; index + 2 < fields.length; index += 3) {
+                  const [path, attribute, value] = fields.slice(index, index + 3);
+                  if (attribute !== "diff" || value !== "unspecified") {
+                    process.stderr.write(`Git diff attribute override is forbidden: ${path}\n`);
+                    process.exitCode = 1;
+                  }
+                }
+              });
+            '; then
+            exit 1
+          fi
+          node --input-type=module -e '
+            let input = Buffer.alloc(0);
+            process.stdin.on("data", (chunk) => { input = Buffer.concat([input, chunk]); });
+            process.stdin.on("end", () => {
+              for (const path of input.toString("utf8").split("\0")) {
+                if (!path) continue;
+                if (/[\u0000-\u001f\u007f]/u.test(path)) {
+                  process.stderr.write(`Control characters in changed path are forbidden: ${JSON.stringify(path)}\n`);
+                  process.exitCode = 1;
+                  continue;
+                }
+                process.stdout.write(`${path}\n`);
+              }
+            });
+          ' < "$RUNNER_TEMP/lk1-changed-paths.z" > "$RUNNER_TEMP/lk1-changed-paths.txt"
+          : > "$RUNNER_TEMP/lk1-unexpected-binary-paths.txt"
+          while IFS= read -r -d '' changed_path; do
+            expected_hash=""
+            case "$changed_path" in
+              src/assets/piter-subscription-rules-from-20260901.webp)
+                expected_hash="3e5ad8e71c42c8e46ea6cc9bfb6f0539dd09181f940c022a8956b35172ff9c12"
+                ;;
+              src/assets/piter-subscription-tier-1.webp)
+                expected_hash="21868451f8dd722a99db1a555065e00bae401e2592c19a2e38e21fadcd2d590d"
+                ;;
+            esac
+            if [[ -n "$expected_hash" ]]; then
+              if ! git cat-file -e "$IMMUTABLE_HEAD_SHA:$changed_path"; then
+                echo "Allowlisted binary is absent from the exact Git tree: $changed_path" >&2
+                exit 1
+              fi
+              actual_hash="$(git cat-file blob "$IMMUTABLE_HEAD_SHA:$changed_path" | sha256sum | awk '{ print $1 }')"
+              if [[ "$actual_hash" != "$expected_hash" ]]; then
+                echo "Allowlisted binary hash mismatch: $changed_path" >&2
+                exit 1
+              fi
+              continue
+            fi
+            if ! git cat-file blob "$IMMUTABLE_HEAD_SHA:$changed_path" \
+              | node --input-type=module -e '
+                let inspected = 0;
+                let binary = false;
+                process.stdin.on("data", (chunk) => {
+                  const remaining = Math.max(0, 8000 - inspected);
+                  if (remaining > 0 && chunk.subarray(0, remaining).includes(0)) binary = true;
+                  inspected += Math.min(remaining, chunk.length);
+                });
+                process.stdin.on("end", () => { process.exitCode = binary ? 1 : 0; });
+              '; then
+              printf '%s\n' "$changed_path" >> "$RUNNER_TEMP/lk1-unexpected-binary-paths.txt"
+            fi
+          done < "$RUNNER_TEMP/lk1-changed-paths.z"
+          if [[ -s "$RUNNER_TEMP/lk1-unexpected-binary-paths.txt" ]]; then
+            echo "Unexpected binary files in event diff:" >&2
+            sed -n '1,80p' "$RUNNER_TEMP/lk1-unexpected-binary-paths.txt" >&2
+            exit 1
+          fi
+          if grep -E '(^|/)\.gitattributes$|(^|/)(dist|build|node-red/modular)(/|$)|(^|/)release[^/]*\.json$|\.(env|har|pem|key|p12|pfx|zip|tar|tgz|gz|7z|png|jpe?g|gif|pdf)$' \
+            "$RUNNER_TEMP/lk1-changed-paths.txt" > "$RUNNER_TEMP/lk1-forbidden-paths.txt"; then
+            echo "Unexpected generated, runtime, credential, or binary artifact paths:" >&2
+            sed -n '1,80p' "$RUNNER_TEMP/lk1-forbidden-paths.txt" >&2
+            exit 1
+          fi
+          git diff --unified=0 --no-color --no-ext-diff --no-textconv "$IMMUTABLE_DIFF_RANGE" \
+            | node --input-type=module -e '
+              let input = "";
+              process.stdin.setEncoding("utf8");
+              process.stdin.on("data", (chunk) => { input += chunk; });
+              process.stdin.on("end", () => {
+                const added = input.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++"));
+                const patterns = [
+                  ["private-key", /BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY/],
+                  ["github-token", /\bgh[opsu]_[A-Za-z0-9]{30,}\b/],
+                  ["bearer-token", /Bearer\s+[A-Za-z0-9._-]{20,}/i],
+                  ["jwt", /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/],
+                  ["email", /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/],
+                  ["phone", new RegExp(["(?<![A-Fa-f0-9])(?:\\+7|8)", "[ -]?\\(?\\d{3}\\)?", "[ -]?\\d{3}[ -]?\\d{2}[ -]?\\d{2}(?![A-Fa-f0-9])"].join(""))],
+                ];
+                const findings = [];
+                added.forEach((line, index) => {
+                  for (const [label, pattern] of patterns) {
+                    if (pattern.test(line)) findings.push(`${label} at added-line ${index + 1}`);
+                  }
+                });
+                if (findings.length > 0) {
+                  console.error("Potential secret or PII patterns detected (values redacted):");
+                  findings.slice(0, 80).forEach((finding) => console.error(finding));
+                  process.exitCode = 1;
+                }
+              });
+            '
 
       - name: Install locked dependencies
         run: npm ci --include=optional --no-audit --no-fund
@@ -217,97 +364,6 @@ jobs:
 
       - name: Build with inert compile-time configuration
         run: npm run build
-
-      - name: Check exact event diff whitespace
-        run: git diff --check "$DIFF_RANGE"
-
-      - name: Scan changed paths for secrets, PII, binaries, and runtime artifacts
-        run: |
-          set -euo pipefail
-          git diff --numstat --no-renames -z "$DIFF_RANGE" \
-            | node --input-type=module -e '
-              let input = Buffer.alloc(0);
-              process.stdin.on("data", (chunk) => { input = Buffer.concat([input, chunk]); });
-              process.stdin.on("end", () => {
-                for (const record of input.toString("utf8").split("\0")) {
-                  if (!record) continue;
-                  const firstTab = record.indexOf("\t");
-                  const secondTab = record.indexOf("\t", firstTab + 1);
-                  if (firstTab < 0 || secondTab < 0) process.exit(1);
-                  const added = record.slice(0, firstTab);
-                  const deleted = record.slice(firstTab + 1, secondTab);
-                  if (added === "-" || deleted === "-") {
-                    process.stdout.write(`${record.slice(secondTab + 1)}\0`);
-                  }
-                }
-              });
-            ' > "$RUNNER_TEMP/lk1-binary-paths.txt"
-          : > "$RUNNER_TEMP/lk1-unexpected-binary-paths.txt"
-          while IFS= read -r -d '' binary_path; do
-            expected_hash=""
-            case "$binary_path" in
-              src/assets/piter-subscription-rules-from-20260901.webp)
-                expected_hash="3e5ad8e71c42c8e46ea6cc9bfb6f0539dd09181f940c022a8956b35172ff9c12"
-                ;;
-              src/assets/piter-subscription-tier-1.webp)
-                expected_hash="21868451f8dd722a99db1a555065e00bae401e2592c19a2e38e21fadcd2d590d"
-                ;;
-              *)
-                printf '%s\n' "$binary_path" >> "$RUNNER_TEMP/lk1-unexpected-binary-paths.txt"
-                continue
-                ;;
-            esac
-            if [[ ! -f "$binary_path" ]]; then
-              echo "Allowlisted binary is absent from the exact checkout: $binary_path" >&2
-              exit 1
-            fi
-            actual_hash="$(sha256sum -- "$binary_path" | awk '{ print $1 }')"
-            if [[ "$actual_hash" != "$expected_hash" ]]; then
-              echo "Allowlisted binary hash mismatch: $binary_path" >&2
-              exit 1
-            fi
-          done < "$RUNNER_TEMP/lk1-binary-paths.txt"
-          if [[ -s "$RUNNER_TEMP/lk1-unexpected-binary-paths.txt" ]]; then
-            echo "Unexpected binary files in event diff:" >&2
-            sed -n '1,80p' "$RUNNER_TEMP/lk1-unexpected-binary-paths.txt" >&2
-            exit 1
-          fi
-          git diff --name-only --diff-filter=AM "$DIFF_RANGE" \
-            > "$RUNNER_TEMP/lk1-changed-paths.txt"
-          if grep -E '(^|/)(dist|build|node-red/modular)(/|$)|(^|/)release[^/]*\.json$|\.(env|har|pem|key|p12|pfx|zip|tar|tgz|gz|7z|png|jpe?g|gif|pdf)$' \
-            "$RUNNER_TEMP/lk1-changed-paths.txt" > "$RUNNER_TEMP/lk1-forbidden-paths.txt"; then
-            echo "Unexpected generated, runtime, credential, or binary artifact paths:" >&2
-            sed -n '1,80p' "$RUNNER_TEMP/lk1-forbidden-paths.txt" >&2
-            exit 1
-          fi
-          git diff --unified=0 --no-color "$DIFF_RANGE" \
-            | node --input-type=module -e '
-              let input = "";
-              process.stdin.setEncoding("utf8");
-              process.stdin.on("data", (chunk) => { input += chunk; });
-              process.stdin.on("end", () => {
-                const added = input.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++"));
-                const patterns = [
-                  ["private-key", /BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY/],
-                  ["github-token", /\bgh[opsu]_[A-Za-z0-9]{30,}\b/],
-                  ["bearer-token", /Bearer\s+[A-Za-z0-9._-]{20,}/i],
-                  ["jwt", /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/],
-                  ["email", /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/],
-                  ["phone", new RegExp(["(?<![A-Fa-f0-9])(?:\\+7|8)", "[ -]?\\(?\\d{3}\\)?", "[ -]?\\d{3}[ -]?\\d{2}[ -]?\\d{2}(?![A-Fa-f0-9])"].join(""))],
-                ];
-                const findings = [];
-                added.forEach((line, index) => {
-                  for (const [label, pattern] of patterns) {
-                    if (pattern.test(line)) findings.push(`${label} at added-line ${index + 1}`);
-                  }
-                });
-                if (findings.length > 0) {
-                  console.error("Potential secret or PII patterns detected (values redacted):");
-                  findings.slice(0, 80).forEach((finding) => console.error(finding));
-                  process.exitCode = 1;
-                }
-              });
-            '
 
       - name: Confirm tracked working tree remains clean
         run: |
