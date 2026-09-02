@@ -2,5 +2,10 @@
   "formatVersion": 1,
   "PROD": "https://padlhub.su/api",
   "DEV": null,
-  "devBindingState": "UNBOUND_COMPLETE_HTTPS_CONTRACT_NOT_EXPOSED"
+  "devBindingState": "UNBOUND_COMPLETE_HTTPS_CONTRACT_NOT_EXPOSED",
+  "DEV_INSTALL_TARGET": {
+    "sourceHost": "lk-reserve-89",
+    "sourceHostname": "89-108-64-209.cloudvps.regruhosting.ru",
+    "remoteFlowPath": "/root/.node-red/flows.json"
+  }
 }

@@ -44,6 +44,18 @@ export function validateEnvironmentApiBase(environment, configuredApiBase, expec
   return true;
 }
 
+export function validateDevInstallTarget(target,
+  trustedBindings = LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS) {
+  const trustedTarget = trustedBindings?.DEV_INSTALL_TARGET;
+  if (!trustedTarget
+    || target?.sourceHost !== trustedTarget.sourceHost
+    || target?.sourceHostname !== trustedTarget.sourceHostname
+    || target?.remoteFlowPath !== trustedTarget.remoteFlowPath) {
+    fail("DEV install target is not the exact trusted DEV binding");
+  }
+  return true;
+}
+
 const graphHealth = (flow) => {
   const ids = new Set(flow.map((node) => node?.id));
   let brokenWires = 0;
@@ -146,6 +158,7 @@ export function validateDevBinding(binding,
   }
   if (!trustedBindings?.DEV) fail("Trusted DEV runtime API binding is unbound");
   validateEnvironmentApiBase("DEV", binding.runtime.apiBase, trustedBindings.DEV);
+  validateDevInstallTarget(binding.installTarget, trustedBindings);
   const capturedAt = Date.parse(String(binding.source.capturedAt || ""));
   if (!Number.isFinite(capturedAt) || Date.now() < capturedAt
     || Date.now() - capturedAt > 30 * 60 * 1000) fail("DEV source snapshot is stale");
@@ -233,10 +246,12 @@ export function publishDevCandidate(workspace, binding, options = {}) {
   return { ...result, candidatePath, manifestPath };
 }
 
-export function validateDevInstallManifest(manifest, target) {
+export function validateDevInstallManifest(manifest, target,
+  trustedBindings = LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS) {
   if (manifest?.environment !== "DEV" || target?.environment !== "DEV") {
     fail("DEV manifest cannot be installed in PROD");
   }
+  validateDevInstallTarget(target, trustedBindings);
   if (manifest.targetHost !== target.sourceHost
     || manifest.targetHostname !== target.sourceHostname
     || manifest.targetFlowPath !== target.remoteFlowPath

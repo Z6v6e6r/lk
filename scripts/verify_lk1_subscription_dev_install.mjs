@@ -32,7 +32,7 @@ export function verifyDevInstallManifest(
     sourceHost: binding.installTarget.sourceHost,
     sourceHostname: binding.installTarget.sourceHostname,
     remoteFlowPath: binding.installTarget.remoteFlowPath,
-  });
+  }, trustedBindings);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

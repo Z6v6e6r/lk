@@ -10,6 +10,7 @@ import {
   buildDevCandidate,
   publishDevCandidate,
   validateDevBinding,
+  validateDevInstallTarget,
   validateDevInstallManifest,
   validateEnvironmentApiBase,
 } from "../prepare_lk1_subscription_dev_candidate.mjs";
@@ -20,6 +21,16 @@ import {
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const DEV_API_BASE = "https://subscriptions-dev.example.test/api";
+const DEV_INSTALL_TARGET = Object.freeze({
+  sourceHost: "lk-reserve-89",
+  sourceHostname: "89-108-64-209.cloudvps.regruhosting.ru",
+  remoteFlowPath: "/root/.node-red/flows.json",
+});
+const trustedBindings = () => ({
+  DEV: DEV_API_BASE,
+  PROD: "https://padlhub.su/api",
+  DEV_INSTALL_TARGET,
+});
 
 function fixture() {
   const routerPreimage = "const MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = {\n  DEV: null,\n};\n";
@@ -69,11 +80,7 @@ function fixture() {
       crossEnvironmentMongoConfigCount: 0,
     },
     endpointAudit: { verifiedDevOnly: true, crossEnvironmentEndpointCount: 0 },
-    installTarget: {
-      sourceHost: "lk-reserve-89",
-      sourceHostname: "89-108-64-209.cloudvps.regruhosting.ru",
-      remoteFlowPath: "/root/.node-red/flows.json",
-    },
+    installTarget: { ...DEV_INSTALL_TARGET },
   };
   return { flow, sourceText, binding };
 }
@@ -108,7 +115,7 @@ test("DEV builder patches only frozen function bodies and emits a separate diges
     sourceText,
     binding,
     (file) => trackedSources[file],
-    { DEV: DEV_API_BASE, PROD: "https://padlhub.su/api" },
+    trustedBindings(),
   );
   assert.equal(result.manifest.environment, "DEV");
   assert.notEqual(result.manifest.candidateSha256, binding.source.sourceSha256);
@@ -137,7 +144,7 @@ test("DEV builder rejects tracked function bodies that retain production/shared 
     sourceText,
     binding,
     (file) => sources[file],
-    { DEV: DEV_API_BASE, PROD: "https://padlhub.su/api" },
+    trustedBindings(),
   ), /retains a production\/shared endpoint/);
 });
 
@@ -162,7 +169,7 @@ test("DEV publisher binds the inspector metadata shape and writes candidate plus
   };
   const result = publishDevCandidate(workspace, binding, {
     readSource: (file) => trackedSources[file],
-    trustedBindings: { DEV: DEV_API_BASE, PROD: "https://padlhub.su/api" },
+    trustedBindings: trustedBindings(),
   });
   assert.equal(fs.existsSync(result.candidatePath), true);
   assert.equal(fs.existsSync(result.manifestPath), true);
@@ -222,7 +229,7 @@ test("DEV and PROD manifests cannot cross installation environments", () => {
     sourceHostname: "89-108-64-209.cloudvps.regruhosting.ru",
     remoteFlowPath: "/root/.node-red/flows.json",
   };
-  assert.equal(validateDevInstallManifest(devManifest, devTarget), true);
+  assert.equal(validateDevInstallManifest(devManifest, devTarget, trustedBindings()), true);
   assert.throws(() => verifyDevInstallManifest(devManifest, Buffer.from("candidate")), /binding is blocked/);
   const { binding } = fixture();
   const candidateBytes = Buffer.from("candidate");
@@ -238,18 +245,35 @@ test("DEV and PROD manifests cannot cross installation environments", () => {
     sourceSha256: binding.source.sourceSha256,
     candidateSha256,
   };
-  assert.equal(verifyDevInstallManifest(boundManifest, candidateBytes, binding, {
-    DEV: DEV_API_BASE,
-    PROD: "https://padlhub.su/api",
-  }), true);
-  assert.throws(() => verifyDevInstallManifest(boundManifest, Buffer.from("substituted"), binding, {
-    DEV: DEV_API_BASE,
-    PROD: "https://padlhub.su/api",
-  }), /does not match/);
-  assert.throws(() => validateDevInstallManifest(devManifest, { ...devTarget, environment: "PROD" }),
+  assert.equal(verifyDevInstallManifest(boundManifest, candidateBytes, binding, trustedBindings()), true);
+  assert.throws(() => verifyDevInstallManifest(
+    boundManifest, Buffer.from("substituted"), binding, trustedBindings(),
+  ), /does not match/);
+  assert.throws(() => validateDevInstallManifest(
+    devManifest, { ...devTarget, environment: "PROD" }, trustedBindings(),
+  ),
     /cannot be installed in PROD/);
-  assert.throws(() => validateDevInstallManifest({ ...devManifest, environment: "PROD" }, devTarget),
+  assert.throws(() => validateDevInstallManifest(
+    { ...devManifest, environment: "PROD" }, devTarget, trustedBindings(),
+  ),
     /cannot be installed in PROD/);
+  const disguisedProductionTarget = {
+    environment: "DEV",
+    sourceHost: "lk-primary-147",
+    sourceHostname: "production.example.test",
+    remoteFlowPath: "/root/.node-red/flows.json",
+  };
+  assert.throws(() => validateDevInstallTarget(disguisedProductionTarget, trustedBindings()),
+    /exact trusted DEV binding/);
+  assert.throws(() => validateDevInstallManifest(
+    { ...devManifest, targetHost: disguisedProductionTarget.sourceHost },
+    disguisedProductionTarget,
+    trustedBindings(),
+  ), /exact trusted DEV binding/);
+  const { binding: disguisedBinding } = fixture();
+  disguisedBinding.installTarget = { ...disguisedProductionTarget };
+  assert.throws(() => validateDevBinding(disguisedBinding, trustedBindings()),
+    /exact trusted DEV binding/);
   assert.throws(() => assertProductionManifestEnvironment(devManifest),
     /rejects a DEV manifest/);
   assert.throws(() => assertProductionBuilderManifestEnvironment(devManifest),
