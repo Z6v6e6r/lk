@@ -8,6 +8,7 @@ const apiClient = fs.readFileSync("src/utils/apiClient.ts", "utf8");
 const css = fs.readFileSync("src/MyApp.css", "utf8");
 const defaultPage = page.slice(page.indexOf("function buildDefaultPageViewConfig()"), page.indexOf("function buildPromoOfferPageViewConfig("));
 const preview = fs.readFileSync("scripts/fixtures/ab-leto-preview.html", "utf8");
+const catalog = fs.readFileSync("src/utils/tournamentSubscriptionCatalog.ts", "utf8");
 
 const EXPECTED_STOREFRONT_ASSETS = new Map([
   ["summer-subscription-academy.webp", "1b7bdb5cf0c1f03847efac7ddf7cb9b7142187293a0d5a82190c61a79841847a"],
@@ -60,6 +61,12 @@ test("HUB approval preview shows 10/10 while production UI stays server-driven",
   assert.doesNotMatch(defaultPage, /remainingValueText: "10 из 10"/);
   assert.match(apiClient, /dailyCapEnabled: toBoolean\(data\.dailyCapEnabled\) \?\? false/);
   assert.match(page, /status\?\.dailyCapEnabled[\s\S]*?`\$\{remainingCount\} из \$\{displayTotalLimit\}`[\s\S]*?: status\?\.batchSize/);
+  assert.match(page, /!status && usesTrackedCounter[\s\S]*?"Статус недоступен"/);
+  assert.match(page, /failedExplicitCounterKeys\.length > 0/);
+  assert.match(catalog, /TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_OVERRIDE_KEYS = \["network_friendship"\]/);
+  assert.match(preview, /: statuses\.filter\(\(status\) => status\.counterKey !== "network_friendship"\)/);
+  assert.match(preview, /__AB_LETO_PREVIEW_STATUS_REQUESTS__\.push/);
+  assert.match(preview, /dataset\.abLetoStatusRequests = JSON\.stringify/);
   assert.match(preview, /Предпросмотр: внешний запрос заблокирован/);
   assert.match(preview, /navigator\.sendBeacon = \(\) => false/);
 });
