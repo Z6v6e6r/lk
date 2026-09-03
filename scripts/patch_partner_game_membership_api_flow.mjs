@@ -56,6 +56,7 @@ export function buildPartnerGameMembershipApiCandidate(sourceFlow, options = {})
       keyringEnv: "LK_PARTNER_GAME_API_KEYRING_JSON",
       auditKeyEnv: "LK_PARTNER_GAME_API_AUDIT_HMAC_KEY",
       environmentEnv: "LK_PARTNER_GAME_API_ENVIRONMENT",
+      audienceEnv: "LK_PARTNER_GAME_API_AUDIENCE",
       providerModeEnv: "LK_PARTNER_GAME_API_PROVIDER_MODE",
       technicalVivaClientIdEnv: "LK_PARTNER_GAME_API_VIVA_TECHNICAL_CLIENT_ID",
       vivaMutationsEnabledEnv: "LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED",

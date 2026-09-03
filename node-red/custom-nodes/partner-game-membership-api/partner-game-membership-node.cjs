@@ -22,6 +22,7 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
       keyring: String(config.keyringEnv || "LK_PARTNER_GAME_API_KEYRING_JSON").trim(),
       auditKey: String(config.auditKeyEnv || "LK_PARTNER_GAME_API_AUDIT_HMAC_KEY").trim(),
       environment: String(config.environmentEnv || "LK_PARTNER_GAME_API_ENVIRONMENT").trim(),
+      audience: String(config.audienceEnv || "LK_PARTNER_GAME_API_AUDIENCE").trim(),
       providerMode: String(config.providerModeEnv || "LK_PARTNER_GAME_API_PROVIDER_MODE").trim(),
       technicalVivaClientId: String(config.technicalVivaClientIdEnv || "LK_PARTNER_GAME_API_VIVA_TECHNICAL_CLIENT_ID").trim(),
       vivaMutationsEnabled: String(config.vivaMutationsEnabledEnv || "LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED").trim(),
@@ -48,11 +49,12 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
           const mongoUri = readEnv(envNames.mongoUri);
           const databaseName = readEnv(envNames.databaseName);
           const environment = readEnv(envNames.environment);
+          const expectedAudience = readEnv(envNames.audience);
           const providerMode = readEnv(envNames.providerMode).toLowerCase();
           const technicalVivaClientId = readEnv(envNames.technicalVivaClientId);
           const keyring = parseKeyring(readEnv(envNames.keyring));
           const auditKey = Buffer.from(readEnv(envNames.auditKey), "base64url");
-          if (!mongoUri || !databaseName || !technicalVivaClientId) throw new Error("Partner API server-only runtime configuration is incomplete");
+          if (!mongoUri || !databaseName || !expectedAudience || !technicalVivaClientId) throw new Error("Partner API server-only runtime configuration is incomplete");
           if (auditKey.length < 32) throw new Error("Partner API audit HMAC key must contain at least 32 bytes");
 
           const client = new MongoClient(mongoUri, {
@@ -119,6 +121,7 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
               repository,
               provider,
               keyResolver,
+              expectedAudience,
               technicalVivaClientId,
               auditKey,
             });
