@@ -12,7 +12,7 @@ export const REFERRAL_ATTRIBUTION_TARGETS = Object.freeze([
     tabLabel: 'LK Tournaments',
     name: 'Prepare tournament subscription purchase',
     sourceFile: 'fn_tournament_subscription_purchase_prepare.js',
-    candidateSha256: '2f15053bdf2c8abd770b7bc65cd59d6fdcfc2c08f26c2ee78a95bc309dfe5ca3',
+    candidateSha256: 'cdaa2b512d6e0f1bc1fd79eb264d1d05816e63d391e6bbf9390eaf29694e0851',
     purposes: ['attribution']
   },
   {
@@ -21,7 +21,7 @@ export const REFERRAL_ATTRIBUTION_TARGETS = Object.freeze([
     tabLabel: 'LK Tournaments',
     name: 'Check tournament subscription limit',
     sourceFile: 'fn_tournament_subscription_purchase_limit.js',
-    candidateSha256: '75d070b427ca9097cd258a84daca7b2c3998f545415b69ef4968ccdce2aaeef8',
+    candidateSha256: 'd7adcfb697bf06428f7e0c3de2dafb111e88d59c480640574d6d2760e4b9b549',
     purposes: ['credential']
   },
   {
@@ -30,7 +30,7 @@ export const REFERRAL_ATTRIBUTION_TARGETS = Object.freeze([
     tabLabel: 'LK Tournaments',
     name: 'Route tournament subscription payment',
     sourceFile: 'fn_tournament_subscription_purchase_router.js',
-    candidateSha256: '27b54a9e4204bd39951cae8e2194a60af5c3f3fc58edd85ceea76f56ff17deb2',
+    candidateSha256: '9c4f062ab1105480f97a0ca5cc869c68cf8bd1310a846e7eab63600c37b61d9c',
     purposes: ['attribution']
   },
   {
@@ -39,7 +39,7 @@ export const REFERRAL_ATTRIBUTION_TARGETS = Object.freeze([
     tabLabel: 'LK Tournaments',
     name: 'Resolve tournament subscription confirm',
     sourceFile: 'fn_tournament_subscription_confirm_resolve.js',
-    candidateSha256: '2f7989fed70f8b808afadd49e1d7c352f54c228b642728ba5a9fd41aa57e9de1',
+    candidateSha256: '72d8a32ad585ea236e2d8da12e7e0b51d8b3edec5eabb1c49749cc492f212182',
     purposes: ['credential']
   },
   {
