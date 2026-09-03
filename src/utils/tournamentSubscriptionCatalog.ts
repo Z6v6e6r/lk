@@ -34,7 +34,7 @@ export const TOURNAMENT_SUBSCRIPTION_PROMO_OFFERS = {
 
 export type TournamentSubscriptionPromoOfferKey = keyof typeof TOURNAMENT_SUBSCRIPTION_PROMO_OFFERS;
 
-export const TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_OVERRIDE_KEYS = [] as const;
+export const TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_OVERRIDE_KEYS = ["network_friendship"] as const;
 
 export const TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_TOTAL_LIMITS = {} as const;
 
