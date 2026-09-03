@@ -785,6 +785,9 @@ test("checked-in DEV binding is source-only and never claims runtime or install 
   assert.equal(binding.runtime.completeManagedContractExposed, false);
   assert.equal(binding.dependencies.mongoBindingVerifiedDevOnly, true);
   assert.equal(binding.endpointAudit.verifiedDevOnly, true);
+  assert.equal(fs.existsSync(path.resolve(
+    import.meta.dirname, "../lk1_subscription_dev_host_evidence.json",
+  )), false, "source-only gate must not carry stale host evidence");
   assert.equal(validateDevBinding(binding), true);
 });
 
