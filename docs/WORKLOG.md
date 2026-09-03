@@ -1733,3 +1733,19 @@
 - Closed the independent security P2 in the DEV postimage by replacing both
   browser-supplied split-payment success/failure/base redirect fields with null before
   provider transaction assembly; shared production source defaults remain unchanged.
+
+## 2026-09-03 — LK1/Piter frozen-source reconciliation
+
+- Recorded the exact current hashes of the amended subscription router and three Piter
+  atomic-sale source functions as explicitly unbound source amendments.
+- Kept the previous unified production candidate function hashes unchanged because the
+  Piter atomic topology is not composed into that candidate; the production binding
+  remains `UNBOUND_AFTER_ROUTER_AMENDMENT` with `candidateSha256=null`.
+- Placed the legacy tournament sales candidate builder in an unconditional quarantine,
+  independent of the unified production binding, so a future unified `BOUND` state cannot
+  unlock its partial graph. Removing the quarantine requires a separate exact candidate
+  binding and review; CI asserts valid-snapshot retirement, invalid provenance rejection,
+  and exact amendment pins before any candidate artifact can be created.
+- The reconciliation makes further source drift fail closed without presenting the
+  partial Piter function set as a deployable unified candidate. No Node-RED import,
+  provider/Mongo write, activation, push or deployment was performed.

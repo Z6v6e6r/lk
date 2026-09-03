@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { LK1_ENFORCEMENT_CONTRACT } from "../prepare_lk1_subscription_enforcement_candidate.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const BUILDER = path.join(REPO_ROOT, "scripts/prepare_tournament_subscription_sales_candidate.mjs");
@@ -72,4 +73,25 @@ test("legacy sales builder still rejects invalid source provenance before its re
   assert.doesNotMatch(result.stderr, RETIRED_ERROR);
   assert.equal(fs.existsSync(path.join(workspace, "build")), false);
   assert.equal(fs.existsSync(path.join(workspace, "build-piter-atomic")), false);
+});
+
+test("legacy sales retirement records exact Piter amendments without advancing frozen candidate pins", () => {
+  const amendments = new Map(LK1_ENFORCEMENT_CONTRACT.unboundSourceAmendments.map(
+    (amendment) => [amendment.id, amendment],
+  ));
+  const frozenCandidateSha256ById = new Map([
+    ["c165e43eba668c25", "f7e9d81975e63a090ad47abe54c07ed9db265fccf114ab7758f3b102ed0007e0"],
+    ["91dded2dc8cfebe4", "2f15053bdf2c8abd770b7bc65cd59d6fdcfc2c08f26c2ee78a95bc309dfe5ca3"],
+    ["f8679e53edadc39b", "75d070b427ca9097cd258a84daca7b2c3998f545415b69ef4968ccdce2aaeef8"],
+  ]);
+  for (const [id, frozenCandidateSha256] of frozenCandidateSha256ById) {
+    const target = LK1_ENFORCEMENT_CONTRACT.targets.find((item) => item.id === id);
+    const amendment = amendments.get(id);
+    assert.ok(target);
+    assert.ok(amendment);
+    assert.equal(target.candidateSha256, frozenCandidateSha256);
+    assert.equal(amendment.reason, "PITER_ATOMIC_SALES_NOT_COMPOSED");
+    assert.equal(sha256(fs.readFileSync(target.sourceFile)), amendment.sourceSha256);
+    assert.notEqual(amendment.sourceSha256, frozenCandidateSha256);
+  }
 });
