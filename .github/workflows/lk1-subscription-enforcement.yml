@@ -297,6 +297,8 @@ jobs:
           node --test
           scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs
           scripts/tests/lk1SubscriptionActivationPacket.test.mjs
+          scripts/tests/lk1SubscriptionDevCandidate.test.mjs
+          scripts/tests/subscriptionBookingLegacyPatcher.test.mjs
 
       - name: Run tracked credential and authenticated-route security tests
         run: >-

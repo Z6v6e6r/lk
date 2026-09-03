@@ -4,8 +4,12 @@ Status: source-only R4 prerequisite. This document and its runner do not authori
 production database connection, package installation, writer quiescence, migration,
 Node-RED import/restart, mapping import, deploy, or provider call.
 
-Production `apply` is additionally fail-closed in source because the source-controlled
-trust-anchor manifest remains `UNBOUND`. The runner now implements domain-separated
+Production release build, install, execution-packet validation, and `apply` are
+fail-closed because `scripts/lk1_subscription_enforcement_candidate_binding.json`
+is `UNBOUND_AFTER_ROUTER_AMENDMENT`. The previous full-flow digest is historical
+rehearsal evidence only; it cannot authorize a production release or Mongo access.
+Production `apply` is additionally fail-closed because the source-controlled
+trust-anchor manifest remains `UNBOUND`. The runner implements domain-separated
 detached Ed25519 verification, canonical JSON, exact evidence schemas, and public-key
 fingerprint binding before Mongo, but no production public-key fingerprint has been
 selected. The independent custody and exact binding procedure is documented in
@@ -39,12 +43,12 @@ It deliberately cannot:
 Any blocking audit finding must be resolved by a separate reviewed evidence-backed
 repair task. A fresh `dry-run` is required after that repair.
 
-## Frozen source identity
+## Historical source identity and current binding gate
 
-The current runner accepts only:
+The legacy structural fixtures retain:
 
 - live full-flow SHA-256 `9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263`;
-- reviewed unified source-only candidate SHA-256 `76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294`;
+- previous unified source-only candidate SHA-256 `76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294`;
 - all seven writers in `scripts/legacy_game_revision_writers.json`;
 - the exact custom-node package, runner, migration-core, writer-registry,
   approval-verifier, source trust-anchor manifest, root package, dependency lock,
@@ -58,13 +62,19 @@ The live flow was pulled read-only from
 candidate nodes, `215` HTTP inputs, `54` changed existing nodes, `50` added nodes,
 and no added endpoint. The selected `LK Games` source contains `315` nodes and has
 SHA-256 `5deb5beca55441bf29da036495304d7a707158c2af87fe88838f68befd6ff78e`.
-Any changed live SHA requires a new source task, candidate, review, and execution
-packet. The preceding `14b5aff6… -> d88ea0af…` pair and earlier prerequisite-only
-or partial combined candidates are rejected.
+Any changed live or composed-source SHA requires a new source task, candidate, review,
+and execution packet. The current binding is deliberately not `BOUND`, so even an
+otherwise valid packet for `76bc0d41…` is rejected before Mongo. A later authorized
+source task must update the shared binding file and every exact digest only after a
+fresh full-flow build and review. The preceding `14b5aff6… -> d88ea0af…` pair and
+earlier prerequisite-only or partial combined candidates remain historical only.
 
 The exact immutable release builder and guarded install contract are documented in
-`LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_INSTALL.md`. A release build or install does
-not import the flow, bind the approval key, connect to MongoDB, or authorize migration.
+`LEGACY_GAME_COMMAND_PRODUCTION_RELEASE_INSTALL.md`. While the candidate is unbound,
+the production builder rejects. A separately named historical fixture builder remains
+for isolated rehearsal tests, labels its manifest with the unbound state, and the
+production installer rejects that manifest. Neither path imports a flow, binds the
+approval key, connects to MongoDB, or authorizes migration.
 
 ## Read-only modes
 

@@ -19,10 +19,23 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = fs.realpathSync(path.resolve(SCRIPT_DIR, ".."));
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const fail = (message) => { throw new Error(message); };
+export const PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256 = "76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294";
+const candidateBinding = JSON.parse(fs.readFileSync(
+  new URL("./lk1_subscription_enforcement_candidate_binding.json", import.meta.url),
+  "utf8",
+));
+
+export function assertProductionManifestEnvironment(manifest) {
+  if (manifest?.environment !== "PROD") fail("Production builder rejects a DEV manifest");
+  return true;
+}
+assertProductionManifestEnvironment(candidateBinding);
 
 export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
   sourceSha256: "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
-  candidateSha256: "76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294",
+  candidateBindingState: candidateBinding.candidateBindingState,
+  candidateSha256: candidateBinding.candidateSha256,
+  previousCandidateSha256: candidateBinding.previousCandidateSha256,
   nodeCount: 4762,
   candidateNodeCount: 4812,
   httpRouteCount: 215,
@@ -88,7 +101,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
       name: "Route atomic subscription booking",
       sourceFile: "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js",
       preimageSha256: "11c4b80c2624ad97fc83f634139d0db7d36aebb8df8a525bdc7baae3e9bae0fd",
-      candidateSha256: "a00df114d1c5823e2623640c452b5c17ed476382d26b6c35d9cb96fbe392c9ef",
+      candidateSha256: "f8fb42f1ed26ad62b2d507e61b7b4af5ad1df574d4266c1881eea8ea9b70f537",
     }),
     Object.freeze({
       id: "c165e43eba668c25",
@@ -181,6 +194,12 @@ function replaceCandidateHash(registry, writerId, sourceNodeId, candidateSha256)
 }
 
 export function validateUnifiedCandidateSummary(summary, contract = LK1_ENFORCEMENT_CONTRACT) {
+  if (contract.candidateBindingState !== "BOUND"
+    || !/^[a-f0-9]{64}$/.test(contract.candidateSha256 || "")
+    || contract.previousCandidateSha256 !== PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256
+    || contract.candidateSha256 === PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256) {
+    fail("Unified LK1 candidate contract is unbound after router amendment");
+  }
   const exact = (
     summary.sourceSha256 === contract.sourceSha256
     && summary.candidateSha256 === contract.candidateSha256
@@ -443,6 +462,7 @@ export function publishLk1EnforcementCandidate(workspace) {
   const report = {
     formatVersion: 2,
     ok: true,
+    environment: "PROD",
     sourceKind: "live-147",
     sourceSha256: verified.sourceSha256,
     candidateSha256: result.candidateSha256,

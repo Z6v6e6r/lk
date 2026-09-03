@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SOURCES = {
-  create: ['fn_split_create_prepare.js', '19a61024273a478f11bff3ff60c4601603c2af5bd7ec8ec08e4b83394ee7bd41', '9457e347545348447aa2f83d0fb1e774b41f712769de5eafb66e82989d7ee4cc'],
-  join: ['fn_split_join_prepare.js', '70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462', '6a998ebe003239229ba1bff0ffae853d73e2b367867ab1a0cc1d79e161737261'],
-  router: ['fn_split_router.js', 'cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a', '7d2fff71ac5c0838da08413b74732c2e85d2042171dc3428ccc09dcf8dc97736'],
+  create: ['fn_split_create_prepare.js', '19a61024273a478f11bff3ff60c4601603c2af5bd7ec8ec08e4b83394ee7bd41', 'b85af365a2aa954484ca19f05eebb0d2115393589111c6dc1e14832e76dbfe68'],
+  join: ['fn_split_join_prepare.js', '70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462', '2192e71a9a5c2e453d774ac8588d4ed1ff3bc34ba77f674d04797bbff443db31'],
+  router: ['fn_split_router.js', 'cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a', '6a14d80655daa998e1d26c68d20bbcdcfa7ef401d023689440f4accea6e8a9ec'],
 };
 
 class FixedDate extends Date {
@@ -59,6 +59,8 @@ test('create prepares an open-game four-share payment with bounded deadline', ()
   assert.equal(outputs[0]._splitCtx.step, 'pricing_policy');
   assert.equal(outputs[0].method, 'GET');
   assert.match(outputs[0].url, /stationId=/);
+  assert.equal(outputs[0].followRedirects, false);
+  assert.equal(outputs[0].maxRedirects, 0);
   assert.equal(outputs[0].requestTimeout, 5000);
 });
 
@@ -81,6 +83,9 @@ test('subscription create also resolves the exact server-side campaign before Vi
   assert.equal(outputs[0].method, 'GET');
   assert.match(outputs[0].url, /forDate=2026-08-24/);
   assert.match(outputs[0].url, /stationId=studio-piter/);
+  assert.equal(outputs[0].followRedirects, false);
+  assert.equal(outputs[0].maxRedirects, 0);
+  assert.equal(outputs[0].requestTimeout, 5000);
 });
 
 test('join preserves the participant deadline and detects singles from stored split state', () => {
@@ -100,6 +105,8 @@ test('join preserves the participant deadline and detects singles from stored sp
   assert.equal(outputs[0]._splitCtx.step, 'token');
   assert.equal(outputs[0]._splitCtx.pricingPolicy, null);
   assert.match(outputs[0].url, /protocol\/openid-connect\/token$/);
+  assert.equal(outputs[0].followRedirects, false);
+  assert.equal(outputs[0].maxRedirects, 0);
   assert.equal(outputs[0].requestTimeout, 10000);
 });
 
@@ -154,6 +161,8 @@ test('join keeps the stored pricing snapshot and never rereads the current CUP c
   });
   assert.doesNotMatch(outputs[0].url, /split-payment-promo/);
   assert.match(outputs[0].url, /protocol\/openid-connect\/token$/);
+  assert.equal(outputs[0].followRedirects, false);
+  assert.equal(outputs[0].maxRedirects, 0);
   assert.equal(outputs[0].requestTimeout, 10000);
 });
 

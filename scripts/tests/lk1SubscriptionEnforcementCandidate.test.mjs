@@ -6,6 +6,7 @@ import {
   buildLk1EnforcementCandidate,
   buildUnifiedLk1EnforcementCandidate,
   LK1_ENFORCEMENT_CONTRACT,
+  PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256,
   validateUnifiedCandidateSummary,
 } from "../prepare_lk1_subscription_enforcement_candidate.mjs";
 import { PAYMENT_NODE_IDS } from "../patch_live_game_payment_confirmation.mjs";
@@ -105,8 +106,10 @@ function structuralUnifiedFixture({ omitConfirmReadback = false } = {}) {
   );
   const candidateNodeCount = source.length + 2 + paymentNodes.length + 2;
   const contract = {
+    candidateBindingState: "BOUND",
     sourceSha256: "fixture-source",
     candidateSha256: "6bc008ab4695fadbc7a0a2711cafd2570f881df152f28f430ad038799fb22645",
+    previousCandidateSha256: PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256,
     nodeCount: source.length,
     candidateNodeCount,
     httpRouteCount: 1,
@@ -219,13 +222,24 @@ test("unified LK1 candidate tolerates disabled duplicates but rejects enabled se
   );
 });
 
-test("unified LK1 contract pins every tracked candidate source", () => {
+test("unified LK1 contract keeps the amended router fail-closed until PROD is rebound", () => {
   assert.equal(
     LK1_ENFORCEMENT_CONTRACT.sourceSha256,
     "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
   );
   assert.equal(LK1_ENFORCEMENT_CONTRACT.targets.length, 5);
-  for (const target of LK1_ENFORCEMENT_CONTRACT.targets) {
+  const amendedRouter = LK1_ENFORCEMENT_CONTRACT.targets.find(
+    ({ id }) => id === "lk_subscription_booking_router_20260804",
+  );
+  assert.ok(amendedRouter);
+  assert.notEqual(
+    sha256(fs.readFileSync(amendedRouter.sourceFile)),
+    amendedRouter.candidateSha256,
+    "the unreviewed PROD router pin must not silently advance with the DEV amendment",
+  );
+  for (const target of LK1_ENFORCEMENT_CONTRACT.targets.filter(
+    ({ id }) => id !== amendedRouter.id,
+  )) {
     assert.equal(sha256(fs.readFileSync(target.sourceFile)), target.candidateSha256, target.id);
   }
   assert.equal(LK1_ENFORCEMENT_CONTRACT.composedSources.length, 8);
@@ -234,10 +248,10 @@ test("unified LK1 contract pins every tracked candidate source", () => {
   }
 });
 
-test("reviewed unified composition contract pins digest, inventory, ACK order and recovery", () => {
+test("router amendment leaves the full-flow candidate contract explicitly unbound", () => {
   const summary = {
     sourceSha256: LK1_ENFORCEMENT_CONTRACT.sourceSha256,
-    candidateSha256: LK1_ENFORCEMENT_CONTRACT.candidateSha256,
+    candidateSha256: LK1_ENFORCEMENT_CONTRACT.previousCandidateSha256,
     candidateNodeCount: 4812,
     httpRouteCount: 215,
     tabCount: 55,
@@ -260,7 +274,47 @@ test("reviewed unified composition contract pins digest, inventory, ACK order an
     ],
     cleanupRecoveryNode: "lk_split_cleanup_revision_recovery_write_20260826",
   };
-  assert.equal(validateUnifiedCandidateSummary(summary), true);
+  assert.equal(LK1_ENFORCEMENT_CONTRACT.candidateBindingState,
+    "UNBOUND_AFTER_ROUTER_AMENDMENT");
+  assert.equal(LK1_ENFORCEMENT_CONTRACT.candidateSha256, null);
+  assert.throws(
+    () => validateUnifiedCandidateSummary(summary),
+    /candidate contract is unbound after router amendment/,
+  );
+  for (const candidateBindingState of [undefined, "TYPO"]) {
+    assert.throws(
+      () => validateUnifiedCandidateSummary(summary, {
+        ...LK1_ENFORCEMENT_CONTRACT,
+        candidateBindingState,
+        candidateSha256: summary.candidateSha256,
+      }),
+      /candidate contract is unbound after router amendment/,
+    );
+  }
+  assert.throws(
+    () => validateUnifiedCandidateSummary(summary, {
+      ...LK1_ENFORCEMENT_CONTRACT,
+      candidateBindingState: "BOUND",
+      candidateSha256: summary.candidateSha256,
+    }),
+    /candidate contract is unbound after router amendment/,
+  );
+  assert.throws(
+    () => validateUnifiedCandidateSummary({ ...summary, candidateSha256: "a".repeat(64) }, {
+      ...LK1_ENFORCEMENT_CONTRACT,
+      candidateBindingState: "BOUND",
+      candidateSha256: "a".repeat(64),
+      previousCandidateSha256: "e".repeat(64),
+    }),
+    /candidate contract is unbound after router amendment/,
+  );
+  const boundCandidateSha256 = "a".repeat(64);
+  const boundSummary = { ...summary, candidateSha256: boundCandidateSha256 };
+  const boundContract = {
+    ...LK1_ENFORCEMENT_CONTRACT,
+    candidateBindingState: "BOUND",
+    candidateSha256: boundCandidateSha256,
+  };
   for (const drift of [
     { candidateSha256: "drift" },
     { changedNodeCount: 105 },
@@ -269,7 +323,7 @@ test("reviewed unified composition contract pins digest, inventory, ACK order an
     { cleanupRecoveryNode: "wrong" },
   ]) {
     assert.throws(
-      () => validateUnifiedCandidateSummary({ ...summary, ...drift }),
+      () => validateUnifiedCandidateSummary({ ...boundSummary, ...drift }, boundContract),
       /reviewed candidate contract mismatch/,
     );
   }
