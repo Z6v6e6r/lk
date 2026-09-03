@@ -277,10 +277,24 @@ const unmanagedDuplicate = flow.some((node) => (
 ));
 if (unmanagedDuplicate) throw new Error("An unmanaged subscription booking route already exists");
 
-const next = flow.filter((node) => !managedIds.has(node.id));
-const nextRouter = next.find((node) => node.id === ROUTER_ID);
 const managedNodes = buildManagedNodes(tabId, mongoClientId);
-const candidate = [...next, ...managedNodes];
+const managedNodesById = new Map(managedNodes.map((node) => [node.id, node]));
+for (const id of managedIds) {
+  if (flow.filter((node) => node?.id === id).length > 1) {
+    throw new Error(`Managed subscription node ${id} is duplicated`);
+  }
+}
+const presentManagedIds = new Set();
+const candidate = flow.map((node) => {
+  const replacement = managedNodesById.get(node?.id);
+  if (!replacement) return node;
+  presentManagedIds.add(node.id);
+  return replacement;
+});
+for (const node of managedNodes) {
+  if (!presentManagedIds.has(node.id)) candidate.push(node);
+}
+const nextRouter = candidate.find((node) => node.id === ROUTER_ID);
 validateCandidate(candidate, tabId, mongoClientId);
 const published = publishOutputSet(candidate, [nextRouter, ...managedNodes]);
 

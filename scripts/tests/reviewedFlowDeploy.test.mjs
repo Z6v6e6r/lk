@@ -1024,6 +1024,12 @@ test("managed subscription patcher output satisfies the wrapper exact-graph cont
     assert.equal(first.status, 0, first.stderr);
 
     const live = JSON.parse(fs.readFileSync(candidateOnePath, "utf8"));
+    const interleavedNodeIndex = live.findIndex((node) => node.id === "802af8a1810db60f");
+    const [interleavedNode] = live.splice(interleavedNodeIndex, 1);
+    const managedPrepareIndex = live.findIndex((node) => (
+      node.id === "lk_subscription_booking_prepare_20260804"
+    ));
+    live.splice(managedPrepareIndex + 1, 0, interleavedNode);
     live.find((node) => node.id === "lk_subscription_booking_prepare_20260804").func = "return msg;";
     const http = live.find((node) => node.id === "lk_subscription_booking_http_20260804");
     http.requestTimeout = "1000";
@@ -1036,6 +1042,9 @@ test("managed subscription patcher output satisfies the wrapper exact-graph cont
 
     const second = runPatcher(candidateTwoPath, "import-two.json");
     assert.equal(second.status, 0, second.stderr);
+    const candidateTwo = JSON.parse(fs.readFileSync(candidateTwoPath, "utf8"));
+    assert.deepEqual(candidateTwo.map(({ id }) => id), live.map(({ id }) => id),
+      "patcher must preserve the exact order of every existing live node");
     const contract = spawnSync(process.execPath, [
       "scripts/nodered_reviewed_flow_deploy/prepare_exact_graph_contract.mjs",
       "--live", sourcePath,

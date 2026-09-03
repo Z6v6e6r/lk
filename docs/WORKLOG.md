@@ -1687,4 +1687,5 @@
   function is bound to its frozen whole-node preimage. The production deploy wrapper
   now matches the current pre-pinned topology: six exact existing-node changes, no
   fictional policy-node additions and no unchanged split-router mutation; an executable
-  patcher-to-exact-graph regression guards that contract.
+  patcher-to-exact-graph regression uses an interleaved policy-present source and proves
+  every existing live node remains in place while only genuinely absent nodes append.
