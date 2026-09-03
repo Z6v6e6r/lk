@@ -1551,11 +1551,13 @@ export default function TournamentSubscriptionPage({
             && status?.unlimited !== false
           );
           const remainingValueText = isGuardedStorefront
-            ? status?.batchSize
-              ? `${status.batchRemainingCount} из ${status.batchSize}`
-              : usesTrackedCounter && loadingStatus
-                ? "Проверяем..."
-                : `${fallbackBatchSize} из ${fallbackBatchSize}`
+            ? status?.dailyCapEnabled
+              ? `${remainingCount} из ${displayTotalLimit}`
+              : status?.batchSize
+                ? `${status.batchRemainingCount} из ${status.batchSize}`
+                : usesTrackedCounter && loadingStatus
+                  ? "Проверяем..."
+                  : `${fallbackBatchSize} из ${fallbackBatchSize}`
             : plan.remainingValueText
             || (
               status
