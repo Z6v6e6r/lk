@@ -1142,8 +1142,11 @@ const continueSplitAfterVerifiedPrice = (ctx) => {
         });
       }
       ctx.exerciseId = recoveredExerciseId;
-      ctx.ownsExercise = true;
-      ctx.recoveredCreatedExercise = true;
+      // Exact readback proves the reusable exercise identity, but cannot prove that
+      // this request created it. Never grant destructive compensation custody.
+      ctx.ownsExercise = false;
+      ctx.reusedConflictingExercise = true;
+      ctx.recoveredCreateOutcome = true;
       delete ctx.managedCreateRecoveredExerciseId;
       return buildBookingRequest(ctx);
     }

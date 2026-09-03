@@ -3481,7 +3481,23 @@ test("lost post-CREATE promotion is recovered by exact readback and CAS without 
   assert.equal(resumed[3].method, "GET");
   assert.equal(resumed[3]._subscriptionBooking.step, "exercise_recheck");
   assert.equal(resumed[3]._subscriptionBooking.exerciseId, "exercise-recovered");
+  assert.equal(resumed[3]._splitCtx.ownsExercise, false);
+  assert.equal(resumed[3]._splitCtx.reusedConflictingExercise, true);
   assert.doesNotMatch(resumed[3].url, /\/api\/v1\/exercises$/);
+
+  const bookingFailure = runFunction(SPLIT_ROUTER_FILE, {
+    statusCode: 502,
+    payload: { code: "BOOKING_TIMEOUT" },
+    _splitCtx: {
+      ...resumed[3]._splitCtx,
+      step: "create_booking",
+      action: "create",
+      exerciseId: "exercise-recovered",
+    },
+  }, MANAGED_GLOBALS);
+  assert.equal(bookingFailure[1].statusCode, 502);
+  assert.ok(bookingFailure.every((output) => output == null || output.method !== "DELETE"),
+    "a recovered exact-slot exercise never receives destructive compensation custody");
 });
 
 test("exact Viva conflict is adopted for readback without releasing the entitlement", () => {
@@ -3677,7 +3693,7 @@ test("guarded patcher accepts the exact current tracked split router", () => {
     ],
   };
 
-  assert.equal(funcSha256, "f9636b7a765faef32a68434bb452bd944d96ccf95bc6646110916bcc359ef2e5");
+  assert.equal(funcSha256, "a480563d9b0ea98fa0917e5535f22c5528481d33052e3971517b110ae573cae4");
   assert.equal(resolveManagedSubscriptionRouterContract(router, funcSha256)?.managedActionCandidateSha256, null);
 });
 

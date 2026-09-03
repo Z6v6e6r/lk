@@ -13,7 +13,7 @@ const importPath = process.argv[4]
   ? path.resolve(process.argv[4])
   : path.resolve(ROOT, "node-red/modular/imports/lk_subscription_booking.nodes.import.json");
 const functionsDir = path.resolve(ROOT, "scripts/nodered_subscription_booking_nodes");
-const REQUIRED_PRECREATE_ROUTER_SHA256 = "f9636b7a765faef32a68434bb452bd944d96ccf95bc6646110916bcc359ef2e5";
+const REQUIRED_PRECREATE_ROUTER_SHA256 = "a480563d9b0ea98fa0917e5535f22c5528481d33052e3971517b110ae573cae4";
 const ROUTER_ID = "8f7bd5b482fe9763";
 const COLLECTION = "lk_subscription_daily_booking_ops";
 

@@ -60,6 +60,7 @@ export const MANAGED_SUBSCRIPTION_ROUTER_CONTRACTS = Object.freeze([
       "e6932307e37d4358ae5cedb940c74dabeb99a533eba01fd98dfc04d1bb6491d8",
       "8b1829d1fb85b9644c29e48282d168ddf60f5552deaad04271107d1c357caad9",
       "f9636b7a765faef32a68434bb452bd944d96ccf95bc6646110916bcc359ef2e5",
+      "a480563d9b0ea98fa0917e5535f22c5528481d33052e3971517b110ae573cae4",
     ]),
     managedActionCandidateSha256: null,
   }),

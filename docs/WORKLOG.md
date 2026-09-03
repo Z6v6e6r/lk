@@ -1682,6 +1682,8 @@
   multiple and incomplete matches remain pending without release, DELETE or provider
   mutation.
 - Tightened DEV candidate custody to the exact POST/OPTIONS routes, response edges,
-  reachable function inventory and approved sinks. Both candidate preparation and
-  install verification bind every reachable source function to its frozen whole-node
-  preimage; the deploy wrapper allowlist now includes the exact five patched nodes.
+  global function/catch/debug inventory and approved sinks. Function lifecycle hooks
+  must be empty, the catch scope and target are exact, and every executable source
+  function is bound to its frozen whole-node preimage; the deploy wrapper allowlist now
+  includes the exact four nodes that differ after the pre-pinned split router is
+  validated rather than falsely counting that unchanged router as a deploy mutation.

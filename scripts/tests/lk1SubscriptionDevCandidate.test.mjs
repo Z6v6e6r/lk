@@ -113,6 +113,9 @@ function fixture() {
     { id: "lk_subscription_booking_find_20260804", type: "mongodb4", z: "tab-dev", operation: "find", mode: "collection", output: "toArray", maxTimeMS: "5000", handleDocId: false, collection: "lk_subscription_daily_booking_ops", clientNode: mongoClient.id, wires: [["router-dev"]] },
     { id: "lk_subscription_booking_insert_20260804", type: "mongodb4", z: "tab-dev", operation: "insertOne", mode: "collection", output: "toArray", maxTimeMS: "5000", handleDocId: false, collection: "lk_subscription_daily_booking_ops", clientNode: mongoClient.id, wires: [["router-dev"]] },
     { id: "lk_subscription_booking_update_20260804", type: "mongodb4", z: "tab-dev", operation: "updateOne", mode: "collection", output: "toArray", maxTimeMS: "5000", handleDocId: false, collection: "lk_subscription_daily_booking_ops", clientNode: mongoClient.id, wires: [["router-dev"]] },
+    { id: "lk_subscription_booking_catch_20260804", type: "catch", z: "tab-dev", scope: ["lk_subscription_booking_find_20260804", "lk_subscription_booking_insert_20260804", "lk_subscription_booking_update_20260804"], uncaught: false, wires: [["lk_subscription_booking_mongo_error_20260804"]] },
+    { id: "lk_subscription_booking_mongo_error_20260804", type: "function", z: "tab-dev", name: "Fail closed on subscription booking persistence", func: "return msg;", wires: [["finalize-dev"]] },
+    { id: "lk_subscription_booking_debug_20260804", type: "debug", z: "tab-dev", active: false, console: false, tostatus: false, complete: "payload", targetType: "msg", wires: [] },
   ];
   const sourceText = `${JSON.stringify(flow, null, 2)}\n`;
   const binding = {
@@ -168,13 +171,11 @@ function fixture() {
     dependencies: {
       wholeFlowIsolationVerified: true,
       executionFunctionPreimages: [
-        "finalize-dev",
+        "finalize-dev", "lk_subscription_booking_mongo_error_20260804",
         "lk_subscription_booking_options_20260804",
         "lk_subscription_managed_policy_20260820",
         "lk_subscription_managed_policy_blocked_20260820",
-        "prepare-dev",
-        "router-dev",
-        "split-dev",
+        "prepare-dev", "router-dev", "split-create-dev", "split-dev", "split-join-dev",
       ].sort().map((id) => ({
         id,
         nodeSha256: sha256(JSON.stringify(flow.find((node) => node.id === id))),
@@ -268,6 +269,18 @@ test("DEV builder patches only frozen function bodies and emits a separate diges
     "finalize-dev", "prepare-dev", "router-dev", "split-create-dev", "split-dev", "split-join-dev",
   ]);
   assert.equal(result.manifest.changedNodes.length, 6);
+  assert.deepEqual(binding.dependencies.executionFunctionPreimages.map(({ id }) => id), [
+    "finalize-dev",
+    "lk_subscription_booking_mongo_error_20260804",
+    "lk_subscription_booking_options_20260804",
+    "lk_subscription_managed_policy_20260820",
+    "lk_subscription_managed_policy_blocked_20260820",
+    "prepare-dev",
+    "router-dev",
+    "split-create-dev",
+    "split-dev",
+    "split-join-dev",
+  ]);
   assert.ok(result.manifest.changedNodes.every((node) => (
     JSON.stringify(node.changedFields) === JSON.stringify(["func"])
     && /^[a-f0-9]{64}$/.test(node.sourceNodeSha256)
@@ -517,17 +530,16 @@ test("DEV builder rejects dynamic HTTP nodes and unapproved senders to an attest
     value.binding.source.sourceSha256 = sha256(value.sourceText);
     value.binding.source.nodeCount = value.flow.length;
     value.binding.endpointAudit.endpointInventorySha256 = endpointInventorySha256(value.flow);
+    value.binding.dependencies.executionFunctionPreimages = deriveDevWholeFlowIsolation(
+      value.flow, value.binding.target,
+    ).reachableFunctionIds.map((id) => ({
+      id,
+      nodeSha256: sha256(JSON.stringify(value.flow.find((node) => node.id === id))),
+    }));
   };
 
   const dynamicNode = fixture();
   dynamicNode.flow.push({
-    id: "browser-url-producer",
-    type: "function",
-    z: "tab-dev",
-    name: "Browser URL producer",
-    func: "msg.url = msg.req.query.url; return msg;",
-    wires: [["dynamic-http"]],
-  }, {
     id: "dynamic-http",
     type: "http request",
     z: "tab-dev",
@@ -540,14 +552,9 @@ test("DEV builder rejects dynamic HTTP nodes and unapproved senders to an attest
   ), /HTTP request wiring/);
 
   const extraSender = fixture();
-  extraSender.flow.push({
-    id: "browser-url-sender",
-    type: "function",
-    z: "tab-dev",
-    name: "Browser URL sender",
-    func: "msg.url = msg.req.query.url; return msg;",
-    wires: [["lk_subscription_booking_http_20260804"]],
-  });
+  extraSender.flow.find((node) => (
+    node.id === "lk_subscription_managed_policy_blocked_20260820"
+  )).wires = [["finalize-dev", "lk_subscription_booking_http_20260804"]];
   rebuild(extraSender);
   assert.throws(() => buildDevCandidate(
     extraSender.sourceText, extraSender.binding, fs.readFileSync, trustedBindings(),
@@ -692,6 +699,10 @@ test("snapshot inspector independently rejects unsafe HTTP, Mongo, and graph sem
     unsafeExec: (flow) => { flow.push({ id: "exec", type: "exec", command: "true", wires: [] }); },
     functionLibrary: (flow) => { flow.find((node) => node.id === "prepare-dev").libs = [{ var: "net", module: "net" }]; },
     activeDebug: (flow) => { flow.push({ id: "debug", type: "debug", active: true, console: true, tostatus: false, complete: "true", targetType: "full", wires: [] }); },
+    disconnectedOnStart: (flow) => { flow.push({ id: "on-start", type: "function", z: "tab-dev", name: "On start escape", func: "return msg;", initialize: "global.set('escape', true);", wires: [] }); },
+    rogueCatch: (flow) => { flow.push({ id: "rogue-catch", type: "catch", z: "tab-dev", scope: ["lk_subscription_booking_update_20260804"], uncaught: false, wires: [["router-dev"]] }); },
+    unscopedCatch: (flow) => { flow.find((node) => node.id === "lk_subscription_booking_catch_20260804").scope = null; },
+    alteredCatchWire: (flow) => { flow.find((node) => node.id === "lk_subscription_booking_catch_20260804").wires = [["router-dev"]]; },
   };
   for (const [label, mutate] of Object.entries(probes)) {
     const { flow } = fixture();
@@ -716,7 +727,7 @@ test("snapshot inspector independently rejects unsafe HTTP, Mongo, and graph sem
       assert.equal(audit.dependencies.mongoBindingVerifiedDevOnly,
         !["numericTimeout", "expressionMode", "rawOutput", "extraMongoClient", "extraMongoProducer"].includes(label));
       assert.equal(audit.dependencies.wholeFlowIsolationVerified,
-        !["duplicateId", "unsafeExec", "functionLibrary", "activeDebug"].includes(label), label);
+        !["duplicateId", "unsafeExec", "functionLibrary", "activeDebug", "extraMongoProducer", "disconnectedOnStart", "rogueCatch", "unscopedCatch", "alteredCatchWire"].includes(label), label);
       assert.equal(audit.environmentIdentityVerified, false,
         "synthetic evidence must never become verified runtime evidence");
     } finally {

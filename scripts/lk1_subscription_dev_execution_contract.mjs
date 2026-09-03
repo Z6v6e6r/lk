@@ -33,6 +33,16 @@ const AUXILIARY_FUNCTION_NODE_IDS = new Set([
   "lk_subscription_booking_mongo_error_20260804",
   "lk_subscription_booking_options_20260804",
 ]);
+const CATCH_NODE_SPEC = Object.freeze({
+  id: "lk_subscription_booking_catch_20260804",
+  scope: [
+    "lk_subscription_booking_find_20260804",
+    "lk_subscription_booking_insert_20260804",
+    "lk_subscription_booking_update_20260804",
+  ],
+  target: "lk_subscription_booking_mongo_error_20260804",
+});
+const DEBUG_NODE_ID = "lk_subscription_booking_debug_20260804";
 const HTTP_ROUTE_SPECS = Object.freeze([
   {
     id: "lk_subscription_booking_post_20260804",
@@ -72,6 +82,33 @@ export const deriveDevWholeFlowIsolation = (flow, target = null) => {
   if (targetFunctionValues.some((id) => typeof id !== "string" || !id)
     || new Set(targetFunctionValues).size !== TARGET_FUNCTION_FIELDS.length) {
     violations.push("execution-contract:target-function-inventory");
+  }
+  const functionNodes = flow.filter((node) => node?.type === "function");
+  const functionIds = functionNodes.map((node) => node.id).sort();
+  const expectedFunctionIds = [...targetFunctionIds].sort();
+  if (JSON.stringify(functionIds) !== JSON.stringify(expectedFunctionIds)) {
+    violations.push("execution-contract:function-inventory");
+  }
+  for (const node of functionNodes) {
+    if (String(node.initialize || "").trim()
+      || String(node.finalize || "").trim()
+      || (node.libs !== undefined && (!Array.isArray(node.libs) || node.libs.length > 0))) {
+      violations.push(`${node.id}:execution-contract:function-lifecycle`);
+    }
+  }
+  const catchNodes = flow.filter((node) => node?.type === "catch");
+  const catchNode = byId.get(CATCH_NODE_SPEC.id);
+  const routerTabId = byId.get(target.routerNodeId)?.z;
+  if (catchNodes.length !== 1 || catchNode?.z !== routerTabId
+    || JSON.stringify(catchNode?.scope) !== JSON.stringify(CATCH_NODE_SPEC.scope)
+    || catchNode?.uncaught !== false
+    || JSON.stringify(catchNode?.wires) !== JSON.stringify([[CATCH_NODE_SPEC.target]])) {
+    violations.push("execution-contract:catch-inventory");
+  }
+  const debugNodes = flow.filter((node) => node?.type === "debug");
+  if (debugNodes.length !== 1 || debugNodes[0]?.id !== DEBUG_NODE_ID
+    || debugNodes[0]?.z !== routerTabId) {
+    violations.push("execution-contract:debug-inventory");
   }
   const routes = flow.filter((node) => node?.type === "http in");
   const responses = flow.filter((node) => node?.type === "http response");
@@ -140,6 +177,9 @@ export const deriveDevWholeFlowIsolation = (flow, target = null) => {
       }
     }
   }
+  // Function lifecycle hooks execute independently of HTTP wires. Bind every allowed
+  // function, including catch-event handlers and currently disconnected split inputs.
+  for (const node of functionNodes) reachableFunctionIds.add(node.id);
   return {
     verified: violations.length === 0,
     violations,

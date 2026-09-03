@@ -9,7 +9,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const SOURCES = {
   create: ['fn_split_create_prepare.js', '19a61024273a478f11bff3ff60c4601603c2af5bd7ec8ec08e4b83394ee7bd41', '89e5ef745a785c43f4d1a746060b162b3654af81a075525d3f7c42bc70570a03'],
   join: ['fn_split_join_prepare.js', '70ec2bdfad08c71a1a1ef2d851c07918906573a3802ce9f41765837494c6f462', 'c05c7af19d3014ca48546871ea742ee347760bdd537cab5e6a67b428ee3d1b3e'],
-  router: ['fn_split_router.js', 'cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a', 'f9636b7a765faef32a68434bb452bd944d96ccf95bc6646110916bcc359ef2e5'],
+  router: ['fn_split_router.js', 'cf913ca9201506bd1e84da974b6a3b604f76ac885de4202753c891f9460ecd3a', 'a480563d9b0ea98fa0917e5535f22c5528481d33052e3971517b110ae573cae4'],
 };
 
 class FixedDate extends Date {
