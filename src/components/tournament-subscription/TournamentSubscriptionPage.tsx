@@ -404,6 +404,7 @@ function buildDefaultPageViewConfig(): PageViewConfig {
           terms: PITER_FRIENDSHIP_TERMS,
           sectionLabel: "Годовые подписки",
         }),
+        buttonLabel: "Оформить подписку",
         requiresConsent: false,
         hideAuthState: true,
       },

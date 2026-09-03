@@ -44,7 +44,7 @@ test("only ab_leto HUB omits consent and auth captions while purchase guards rem
   assert.match(defaultPage, /requiresConsent: false/);
   assert.match(defaultPage, /hideAuthState: true/);
   assert.doesNotMatch(defaultPage, /termsEffectiveLabel:/);
-  assert.match(defaultPage, /counterKey: "network_friendship",[\s\S]*?remainingLabel: "Доступно"/);
+  assert.match(defaultPage, /counterKey: "network_friendship",[\s\S]*?remainingLabel: "Доступно",[\s\S]*?buttonLabel: "Оформить подписку"/);
   assert.match(page, /isGuardedStorefront && plan\.requiresConsent &&/);
   assert.match(page, /isGuardedStorefront && !plan\.hideAuthState &&/);
   assert.match(page, /requiresConsent: true/);
