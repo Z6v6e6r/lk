@@ -6,11 +6,17 @@ const AB_LETO_DAILY_DROP_LIMIT = 5;
 const AB_LETO_DAILY_DROP_START_HOUR = 10;
 const AB_LETO_DAILY_DROP_TIME_ZONE = "Europe/Moscow";
 const AB_LETO_DAILY_DROP_COUNTER_KEYS = new Set(["friendship", "ra"]);
-const AB_LETO_STAGED_RELEASE_START_DATE = "2026-08-01";
-const AB_LETO_STAGED_INVENTORY_ID = "ab_leto_2026_100_then_7_v1";
-const AB_LETO_STAGED_LAUNCH_LIMIT = 100;
+const AB_LETO_LEGACY_STAGED_RELEASE_START_DATE = "2026-08-01";
+const AB_LETO_LEGACY_STAGED_INVENTORY_ID = "ab_leto_2026_100_then_7_v1";
+const AB_LETO_LEGACY_STAGED_LAUNCH_LIMIT = 100;
+const AB_LETO_STAGED_RELEASE_START_DATE = "2026-09-03";
+const AB_LETO_STAGED_INVENTORY_ID = "ab_leto_2026_150_v2";
+const AB_LETO_STAGED_LAUNCH_LIMIT = 150;
 const AB_LETO_STAGED_DAILY_DROP_LIMIT = 7;
 const AB_LETO_STAGED_RA_DAILY_DROP_LIMIT = 10;
+const AB_LETO_STAGED_RELEASE_ACTIVATION_KEY = "summer_subscription_ab_leto_20260903_release_enabled";
+const NETWORK_FRIENDSHIP_DAILY_LIMIT = 10;
+const DEFAULT_RESERVATION_MINUTES = 30;
 const DEFAULT_PLAN_KEY = "sport";
 const AB_LETO_TOTAL_LIMIT_DEFAULTS = {
   academy: 125,
@@ -97,6 +103,8 @@ const REGIONAL_FRIENDSHIP_CONFIGS = {
     providerProductId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
     providerProductName: "Падел.Дружба.ХАБ — годовая",
     providerProductCostMinor: 5680000,
+    dailyCapEnabled: true,
+    dailyLimit: NETWORK_FRIENDSHIP_DAILY_LIMIT,
   },
   piter_friendship: {
     inventoryId: "piter_friendship_12m_2026_v1",
@@ -158,8 +166,30 @@ const resolveMoscowDate = (now = new Date(Date.now())) => {
   return `${fields.year}-${fields.month}-${fields.day}`;
 };
 
-const isAbLetoStagedReleaseActive = (now = new Date(Date.now())) => (
-  resolveMoscowDate(now) >= AB_LETO_STAGED_RELEASE_START_DATE
+const resolveAbLetoStagedRelease = (now = new Date(Date.now())) => {
+  const moscowDate = resolveMoscowDate(now);
+  if (
+    global.get(AB_LETO_STAGED_RELEASE_ACTIVATION_KEY) === true
+    && moscowDate >= AB_LETO_STAGED_RELEASE_START_DATE
+  ) {
+    return {
+      inventoryId: AB_LETO_STAGED_INVENTORY_ID,
+      launchLimit: AB_LETO_STAGED_LAUNCH_LIMIT,
+      releaseStartDate: AB_LETO_STAGED_RELEASE_START_DATE,
+    };
+  }
+  if (moscowDate >= AB_LETO_LEGACY_STAGED_RELEASE_START_DATE) {
+    return {
+      inventoryId: AB_LETO_LEGACY_STAGED_INVENTORY_ID,
+      launchLimit: AB_LETO_LEGACY_STAGED_LAUNCH_LIMIT,
+      releaseStartDate: AB_LETO_LEGACY_STAGED_RELEASE_START_DATE,
+    };
+  }
+  return null;
+};
+
+const isAbLeto20260903ReleaseActive = () => (
+  resolveAbLetoStagedRelease()?.inventoryId === AB_LETO_STAGED_INVENTORY_ID
 );
 
 const readAbLetoInventoryId = (counterKey = null) => {
@@ -169,26 +199,28 @@ const readAbLetoInventoryId = (counterKey = null) => {
   if (!AB_LETO_DAILY_DROP_COUNTER_KEYS.has(normalizedCounterKey)) {
     return baseInventoryId;
   }
-  if (isAbLetoStagedReleaseActive()) {
-    return `${AB_LETO_STAGED_INVENTORY_ID}_${normalizedCounterKey}`;
+  const stagedRelease = resolveAbLetoStagedRelease();
+  if (stagedRelease) {
+    return `${stagedRelease.inventoryId}_${normalizedCounterKey}`;
   }
   return `${baseInventoryId}_${normalizedCounterKey}_${resolveDailyDropDate()}`;
 };
 
 const withAbLetoStagedRelease = (counter) => {
   const counterKey = String(counter?.counterKey || "").trim().toLowerCase();
-  if (!AB_LETO_DAILY_DROP_COUNTER_KEYS.has(counterKey) || !isAbLetoStagedReleaseActive()) {
+  const stagedRelease = resolveAbLetoStagedRelease();
+  if (!AB_LETO_DAILY_DROP_COUNTER_KEYS.has(counterKey) || !stagedRelease) {
     return counter;
   }
   return Object.assign({}, counter, {
     stagedRelease: true,
-    releaseStartDate: AB_LETO_STAGED_RELEASE_START_DATE,
-    launchLimit: AB_LETO_STAGED_LAUNCH_LIMIT,
+    releaseStartDate: stagedRelease.releaseStartDate,
+    launchLimit: stagedRelease.launchLimit,
     dailyLimit: counterKey === "ra"
       ? AB_LETO_STAGED_RA_DAILY_DROP_LIMIT
       : AB_LETO_STAGED_DAILY_DROP_LIMIT,
     dailyDropDate: resolveDailyDropDate(),
-    totalLimit: AB_LETO_STAGED_LAUNCH_LIMIT,
+    totalLimit: stagedRelease.launchLimit,
   });
 };
 
@@ -364,6 +396,7 @@ const readRegionalFriendshipConfig = (counterKey) => {
       providerProductCostMinor,
     };
   });
+  const dailyCapEnabled = regional.dailyCapEnabled === true && isAbLeto20260903ReleaseActive();
   return {
     counterKey,
     inventoryId: readGlobalFirst([`summer_subscription_${counterKey}_inventory_id`])
@@ -377,6 +410,9 @@ const readRegionalFriendshipConfig = (counterKey) => {
     manualPaidCount: 0,
     totalLimit: regional.batchSize * tiers.length,
     batchSize: regional.batchSize,
+    dailyCapEnabled,
+    dailyLimit: dailyCapEnabled ? regional.dailyLimit : 0,
+    dailyDropDate: dailyCapEnabled ? resolveMoscowDate() : null,
     tiers,
   };
 };
@@ -444,10 +480,16 @@ counters.forEach((counter) => {
   }
 });
 
+const configuredReservationMinutes = Number(global.get("summer_subscription_reservation_minutes"));
+const reservationMinutes = Number.isFinite(configuredReservationMinutes) && configuredReservationMinutes > 0
+  ? Math.floor(configuredReservationMinutes)
+  : DEFAULT_RESERVATION_MINUTES;
+
 msg._summerSubscriptionCtx = {
   action: "refresh_counters",
   counters,
   refreshedAt: new Date().toISOString(),
+  reservationMinutes: Math.max(5, Math.min(360, reservationMinutes)),
 };
 
 const queryFilter = clauses.length <= 1 ? (clauses[0] || {}) : { $or: clauses };

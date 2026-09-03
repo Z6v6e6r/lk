@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthForm } from "../auth/AuthForm";
 import { useAuth } from "../../context/AuthContext";
 import {
@@ -39,6 +39,9 @@ import kotelnikiSubscriptionTier2Image from "../../assets/kotelniki-subscription
 import kotelnikiSubscriptionTier3Image from "../../assets/kotelniki-subscription-tier-3.webp";
 import kotelnikiSubscriptionTier4Image from "../../assets/kotelniki-subscription-tier-4.webp";
 import networkSubscriptionImage from "../../assets/network-subscription.webp";
+import subscriptionRulesGoldImage from "../../assets/subscription-rules-gold.webp";
+import subscriptionRulesGreenImage from "../../assets/subscription-rules-green.webp";
+import subscriptionRulesRedImage from "../../assets/subscription-rules-red.webp";
 
 export type SubscriptionPlanId = "friendship" | "sport";
 export type SubscriptionCounterKey = "academy" | "energy5" | "friendship" | "kotelniki_friendship" | "network_friendship" | "piter_friendship" | "ra" | "sirius_friendship" | "sport";
@@ -73,6 +76,7 @@ type DisplayPlanPurchaseMode = "catalog_subscription" | "summer_campaign" | "tie
 
 interface DisplayPlanConfig {
   id: string;
+  sectionLabel?: string;
   counterKey?: SubscriptionCounterKey | null;
   planId?: SubscriptionPlanId | null;
   cardClassName?: string;
@@ -99,6 +103,7 @@ interface DisplayPlanConfig {
   featureItemClassName?: string;
   featureLabelClassName?: string;
   requiresConsent?: boolean;
+  hideAuthState?: boolean;
   terms?: string[];
   guardedStorefrontKicker?: string;
   guardedStorefrontArtworkAlt?: string;
@@ -301,11 +306,14 @@ function buildDefaultPageViewConfig(): PageViewConfig {
     plans: [
       {
         id: "academy",
+        sectionLabel: "Подписки на 30 дней",
         counterKey: "academy",
         planId: null,
         cardClassName: "tournament-subscription-plan--image",
         artworkAlt: "Абонемент Лето.Падел.Академия за 23 800 ₽",
         artworkSrc: summerSubscriptionAcademyImage,
+        guardedStorefrontRulesArtworkAlt: `Новые правила подписки Академия. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
+        guardedStorefrontRulesArtworkSrc: subscriptionRulesGoldImage,
         directSubscriptionProductId: resolveTournamentSubscriptionDirectProductId("academy"),
         headClassName: "tournament-subscription-plan-head--sport",
         purchaseMode: "catalog_subscription",
@@ -327,6 +335,8 @@ function buildDefaultPageViewConfig(): PageViewConfig {
         cardClassName: "tournament-subscription-plan--image",
         artworkAlt: "Абонемент Лето.Падел.РА за 23 800 ₽",
         artworkSrc: summerSubscriptionRaImage,
+        guardedStorefrontRulesArtworkAlt: `Новые правила подписки РА. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
+        guardedStorefrontRulesArtworkSrc: subscriptionRulesGoldImage,
         directSubscriptionProductId: resolveTournamentSubscriptionDirectProductId("ra"),
         headClassName: "tournament-subscription-plan-head--sport",
         purchaseMode: "catalog_subscription",
@@ -347,6 +357,8 @@ function buildDefaultPageViewConfig(): PageViewConfig {
         cardClassName: "tournament-subscription-plan--image",
         artworkAlt: "Абонемент Лето.Падел.Дружба за 9 800 ₽",
         artworkSrc: summerSubscriptionFriendshipImage,
+        guardedStorefrontRulesArtworkAlt: `Новые правила подписки Дружба. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
+        guardedStorefrontRulesArtworkSrc: subscriptionRulesGreenImage,
         headClassName: "tournament-subscription-plan-head--friendship",
         purchaseMode: "summer_campaign",
         accent: "ДРУЖБА",
@@ -378,6 +390,22 @@ function buildDefaultPageViewConfig(): PageViewConfig {
         hideRemainingBlock: true,
         featureStatusAppearance: "badge",
         features: buildDefaultFeatures("sport"),
+      },
+      {
+        ...buildGuardedFriendshipPlanConfig({
+          counterKey: "network_friendship",
+          kicker: "Падел.Дружба.Хаб",
+          accent: "ВСЯ СЕТЬ",
+          artworks: NETWORK_FRIENDSHIP_ARTWORKS,
+          batchSize: NETWORK_FRIENDSHIP_BATCH_SIZE,
+          remainingLabel: "Доступно",
+          rulesArtworkAlt: `Правила годовой подписки Падел.Дружба.Хаб. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
+          rulesArtworkSrc: subscriptionRulesRedImage,
+          terms: PITER_FRIENDSHIP_TERMS,
+          sectionLabel: "Годовые подписки",
+        }),
+        requiresConsent: false,
+        hideAuthState: true,
       },
     ],
   };
@@ -561,7 +589,7 @@ function buildSiriusFriendshipPageViewConfig(
   };
 }
 
-function buildGuardedFriendshipPageViewConfig(options: {
+interface GuardedFriendshipPlanOptions {
   counterKey: "kotelniki_friendship" | "network_friendship" | "piter_friendship";
   kicker: string;
   accent: string;
@@ -573,7 +601,38 @@ function buildGuardedFriendshipPageViewConfig(options: {
   rulesArtworkSrc?: string;
   terms?: readonly string[];
   termsEffectiveLabel?: string;
-}): PageViewConfig {
+  sectionLabel?: string;
+}
+
+function buildGuardedFriendshipPlanConfig(options: GuardedFriendshipPlanOptions): DisplayPlanConfig {
+  return {
+    id: options.counterKey,
+    sectionLabel: options.sectionLabel,
+    counterKey: options.counterKey,
+    planId: null,
+    cardClassName: "tournament-subscription-plan--single tournament-subscription-plan--piter",
+    purchaseMode: "tiered_counter",
+    headClassName: "tournament-subscription-plan-head--friendship",
+    accent: options.accent,
+    titleLines: ["ПАДЕЛ.", "ДРУЖБА."],
+    priceLabel: "19 800 ₽",
+    fallbackTotalLimit: options.fallbackTotalLimit ?? options.batchSize * options.artworks.length,
+    fallbackBatchSize: options.batchSize,
+    remainingLabel: options.remainingLabel ?? "Осталось в текущей партии",
+    featureStatusAppearance: "toggle",
+    requiresConsent: true,
+    terms: [...(options.terms || REGIONAL_FRIENDSHIP_TERMS)],
+    guardedStorefrontKicker: options.kicker,
+    guardedStorefrontArtworkAlt: options.kicker,
+    guardedStorefrontArtworks: options.artworks,
+    guardedStorefrontRulesArtworkAlt: options.rulesArtworkAlt,
+    guardedStorefrontRulesArtworkSrc: options.rulesArtworkSrc,
+    guardedStorefrontTermsEffectiveLabel: options.termsEffectiveLabel,
+    features: [],
+  };
+}
+
+function buildGuardedFriendshipPageViewConfig(options: GuardedFriendshipPlanOptions): PageViewConfig {
   return {
     pageClassName: "tournament-subscription-page--single tournament-subscription-page--piter",
     headerClassName: "tournament-subscription-header--single tournament-subscription-header--piter",
@@ -584,32 +643,7 @@ function buildGuardedFriendshipPageViewConfig(options: {
       planId: null,
       campaignKey: null,
     },
-    plans: [
-      {
-        id: options.counterKey,
-        counterKey: options.counterKey,
-        planId: null,
-        cardClassName: "tournament-subscription-plan--single tournament-subscription-plan--piter",
-        purchaseMode: "tiered_counter",
-        headClassName: "tournament-subscription-plan-head--friendship",
-        accent: options.accent,
-        titleLines: ["ПАДЕЛ.", "ДРУЖБА."],
-        priceLabel: "19 800 ₽",
-        fallbackTotalLimit: options.fallbackTotalLimit ?? options.batchSize * options.artworks.length,
-        fallbackBatchSize: options.batchSize,
-        remainingLabel: options.remainingLabel ?? "Осталось в текущей партии",
-        featureStatusAppearance: "toggle",
-        requiresConsent: true,
-        terms: [...(options.terms || REGIONAL_FRIENDSHIP_TERMS)],
-        guardedStorefrontKicker: options.kicker,
-        guardedStorefrontArtworkAlt: options.kicker,
-        guardedStorefrontArtworks: options.artworks,
-        guardedStorefrontRulesArtworkAlt: options.rulesArtworkAlt,
-        guardedStorefrontRulesArtworkSrc: options.rulesArtworkSrc,
-        guardedStorefrontTermsEffectiveLabel: options.termsEffectiveLabel,
-        features: [],
-      },
-    ],
+    plans: [buildGuardedFriendshipPlanConfig(options)],
   };
 }
 
@@ -1496,6 +1530,9 @@ export default function TournamentSubscriptionPage({
           const boundPlanId = plan.planId ?? null;
           const status = plan.counterKey ? statusByCounterKey[plan.counterKey] : null;
           const isGuardedStorefront = plan.purchaseMode === "tiered_counter";
+          const rulesArtworkSrc = plan.guardedStorefrontRulesArtworkSrc || null;
+          const hasRulesArtwork = Boolean(rulesArtworkSrc);
+          const isArtworkFlipped = flippedDisplayId === plan.id;
           const usesSummerCampaignPurchase = plan.purchaseMode !== "catalog_subscription";
           const usesTrackedCounter = Boolean(plan.counterKey);
           const isBuying = buyingDisplayId === plan.id;
@@ -1548,24 +1585,35 @@ export default function TournamentSubscriptionPage({
           );
 
           return (
-            <article key={plan.id} className={`tournament-subscription-plan ${plan.cardClassName || ""}`}>
+            <Fragment key={plan.id}>
+              {plan.sectionLabel && (
+                <h2 className="tournament-subscription-section-title">{plan.sectionLabel}</h2>
+              )}
+              <article className={`tournament-subscription-plan ${plan.cardClassName || ""}`}>
               {isGuardedStorefront ? (
                 <>
-                  <div
-                    className={`piter-subscription-flip ${flippedDisplayId === plan.id ? "piter-subscription-flip--flipped" : ""}`}
+                  <button
+                    type="button"
+                    className={`piter-subscription-flip piter-subscription-flip-trigger ${isArtworkFlipped ? "piter-subscription-flip--flipped" : ""}`}
+                    aria-label={isArtworkFlipped ? `Вернуться к карточке ${plan.accent}` : `Показать правила подписки ${plan.accent}`}
+                    aria-pressed={isArtworkFlipped}
+                    onClick={() => setFlippedDisplayId((current) => current === plan.id ? null : plan.id)}
                   >
                     <div className="piter-subscription-flip-inner">
-                      <div className="piter-subscription-face piter-subscription-face--front">
+                      <div className="piter-subscription-face piter-subscription-face--front" aria-hidden={isArtworkFlipped}>
                         <img
                           src={resolveGuardedStorefrontArtwork(plan, status)}
                           alt={`${plan.guardedStorefrontArtworkAlt}, ценовая партия ${status?.batchIndex || 1}`}
                           className="piter-subscription-artwork"
                         />
                       </div>
-                      <div className={`piter-subscription-face piter-subscription-face--back ${plan.guardedStorefrontRulesArtworkSrc ? "piter-subscription-face--rules-artwork" : ""}`}>
-                        {plan.guardedStorefrontRulesArtworkSrc ? (
+                      <div
+                        className={`piter-subscription-face piter-subscription-face--back ${rulesArtworkSrc ? "piter-subscription-face--rules-artwork" : ""}`}
+                        aria-hidden={!isArtworkFlipped}
+                      >
+                        {rulesArtworkSrc ? (
                           <img
-                            src={plan.guardedStorefrontRulesArtworkSrc}
+                            src={rulesArtworkSrc}
                             alt={plan.guardedStorefrontRulesArtworkAlt || "Правила подписки"}
                             className="piter-subscription-rules-artwork"
                           />
@@ -1580,14 +1628,14 @@ export default function TournamentSubscriptionPage({
                         )}
                       </div>
                     </div>
-                  </div>
+                  </button>
                   <button
                     type="button"
                     className="piter-subscription-terms-button"
-                    aria-pressed={flippedDisplayId === plan.id}
+                    aria-pressed={isArtworkFlipped}
                     onClick={() => setFlippedDisplayId((current) => current === plan.id ? null : plan.id)}
                   >
-                    {flippedDisplayId === plan.id ? "Вернуться к подписке" : "Узнать условия подписки"}
+                    {isArtworkFlipped ? "Вернуться к подписке" : "Узнать условия подписки"}
                   </button>
                   {plan.guardedStorefrontTermsEffectiveLabel && (
                     <p className="piter-subscription-terms-effective">
@@ -1596,13 +1644,53 @@ export default function TournamentSubscriptionPage({
                   )}
                 </>
               ) : plan.artworkSrc ? (
-                <div className="tournament-subscription-plan-image-wrap">
-                  <img
-                    src={plan.artworkSrc}
-                    alt={plan.artworkAlt || `Абонемент ${plan.accent}`}
-                    className="tournament-subscription-plan-image"
-                  />
-                </div>
+                hasRulesArtwork ? (
+                  <>
+                    <button
+                      type="button"
+                      className={`piter-subscription-flip piter-subscription-flip-trigger ${isArtworkFlipped ? "piter-subscription-flip--flipped" : ""}`}
+                      aria-label={isArtworkFlipped ? `Вернуться к карточке ${plan.accent}` : `Показать правила подписки ${plan.accent}`}
+                      aria-pressed={isArtworkFlipped}
+                      onClick={() => setFlippedDisplayId((current) => current === plan.id ? null : plan.id)}
+                    >
+                      <div className="piter-subscription-flip-inner">
+                        <div className="piter-subscription-face piter-subscription-face--front" aria-hidden={isArtworkFlipped}>
+                          <img
+                            src={plan.artworkSrc}
+                            alt={plan.artworkAlt || `Абонемент ${plan.accent}`}
+                            className="piter-subscription-artwork"
+                          />
+                        </div>
+                        <div
+                          className="piter-subscription-face piter-subscription-face--back piter-subscription-face--rules-artwork"
+                          aria-hidden={!isArtworkFlipped}
+                        >
+                          <img
+                            src={rulesArtworkSrc || ""}
+                            alt={plan.guardedStorefrontRulesArtworkAlt || `Правила подписки ${plan.accent}`}
+                            className="piter-subscription-rules-artwork"
+                          />
+                        </div>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="piter-subscription-terms-button"
+                      aria-pressed={isArtworkFlipped}
+                      onClick={() => setFlippedDisplayId((current) => current === plan.id ? null : plan.id)}
+                    >
+                      {isArtworkFlipped ? "Вернуться к подписке" : "Узнать условия подписки"}
+                    </button>
+                  </>
+                ) : (
+                  <div className="tournament-subscription-plan-image-wrap">
+                    <img
+                      src={plan.artworkSrc}
+                      alt={plan.artworkAlt || `Абонемент ${plan.accent}`}
+                      className="tournament-subscription-plan-image"
+                    />
+                  </div>
+                )
               ) : (
                 <>
                   <div className={`tournament-subscription-plan-head ${plan.headClassName}`}>
@@ -1643,7 +1731,7 @@ export default function TournamentSubscriptionPage({
                   </div>
                 )}
 
-                {isGuardedStorefront && (
+                {isGuardedStorefront && plan.requiresConsent && (
                   <label className="piter-subscription-consent">
                     <input
                       type="checkbox"
@@ -1660,7 +1748,7 @@ export default function TournamentSubscriptionPage({
                   </label>
                 )}
 
-                {isGuardedStorefront && (
+                {isGuardedStorefront && !plan.hideAuthState && (
                   <div className="piter-subscription-auth-state">
                     {isAuthenticated ? "Вы авторизованы" : "После подтверждения условий потребуется вход"}
                   </div>
@@ -1716,7 +1804,8 @@ export default function TournamentSubscriptionPage({
 
                 {buyErrorByDisplayId[plan.id] && <div className="tournament-subscription-error">{buyErrorByDisplayId[plan.id]}</div>}
               </div>
-            </article>
+              </article>
+            </Fragment>
           );
         })}
       </section>

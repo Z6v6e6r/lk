@@ -189,6 +189,30 @@ jobs:
               src/assets/piter-subscription-tier-1.webp)
                 expected_hash="21868451f8dd722a99db1a555065e00bae401e2592c19a2e38e21fadcd2d590d"
                 ;;
+              src/assets/network-subscription.webp)
+                expected_hash="83a8f2ccf39908a6cbe7b5692598fdd1624a9d0a03784cb8a6815fd69b276ef6"
+                ;;
+              src/assets/subscription-rules-gold.webp)
+                expected_hash="cfa623d31076199d30b2b62149744d9845fb975f3686b681641a461eac8f2358"
+                ;;
+              src/assets/subscription-rules-green.webp)
+                expected_hash="ab879147110a73dab69a196de9370fff912d009941e59a8a52ce4e89e78e617c"
+                ;;
+              src/assets/subscription-rules-red.webp)
+                expected_hash="f3a9a3077865eac4cc3fb6a7be1c4f64a174795f9fefa1dfa8341ada5f2e313c"
+                ;;
+              src/assets/summer-subscription-academy.webp)
+                expected_hash="1b7bdb5cf0c1f03847efac7ddf7cb9b7142187293a0d5a82190c61a79841847a"
+                ;;
+              src/assets/summer-subscription-energy5.webp)
+                expected_hash="773ab011fb41d7d27ca389adfd741cefb9d8a34ac8afbf60beb307d7b514d9ba"
+                ;;
+              src/assets/summer-subscription-friendship.webp)
+                expected_hash="1ec1f7fc81cd867b9ce7127ff3b03e7ee33250224bceea7bebde89dc5703ec29"
+                ;;
+              src/assets/summer-subscription-ra.webp)
+                expected_hash="5f89f2f44ea1cd1d2fd1e36b8fb39a2cb6dbd9d525380b0f4d588a2139142329"
+                ;;
             esac
             if [[ -n "$expected_hash" ]]; then
               if ! git cat-file -e "$IMMUTABLE_HEAD_SHA:$changed_path"; then
