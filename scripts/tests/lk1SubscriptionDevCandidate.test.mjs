@@ -78,10 +78,14 @@ function fixture() {
   };
   const httpRequest = {
     id: "lk_subscription_booking_http_20260804", type: "http request", z: "tab-dev",
+    method: "use", ret: "obj", paytoqs: "ignore", requestTimeout: "20000",
+    senderr: true, persist: false, authType: "", insecureHTTPParser: false,
     url: "", wires: [["router-dev"]],
   };
   const splitCreateHttpRequest = {
     id: "ee7ba8cdd68bdf74", type: "http request", z: "tab-dev",
+    method: "use", ret: "obj", paytoqs: "ignore", requestTimeout: "20000",
+    senderr: true, persist: false, authType: "", insecureHTTPParser: false,
     url: "", wires: [["split-dev"]],
   };
   const flow = [
@@ -96,9 +100,9 @@ function fixture() {
     httpRequest,
     splitCreateHttpRequest,
     mongoClient,
-    { id: "lk_subscription_booking_find_20260804", type: "mongodb4", z: "tab-dev", operation: "find", collection: "lk_games", clientNode: mongoClient.id, wires: [["router-dev"]] },
-    { id: "lk_subscription_booking_insert_20260804", type: "mongodb4", z: "tab-dev", operation: "insertOne", collection: "lk_games", clientNode: mongoClient.id, wires: [["router-dev"]] },
-    { id: "lk_subscription_booking_update_20260804", type: "mongodb4", z: "tab-dev", operation: "updateOne", collection: "lk_games", clientNode: mongoClient.id, wires: [["router-dev"]] },
+    { id: "lk_subscription_booking_find_20260804", type: "mongodb4", z: "tab-dev", operation: "find", mode: "collection", output: "toArray", maxTimeMS: "5000", handleDocId: false, collection: "lk_subscription_daily_booking_ops", clientNode: mongoClient.id, wires: [["router-dev"]] },
+    { id: "lk_subscription_booking_insert_20260804", type: "mongodb4", z: "tab-dev", operation: "insertOne", mode: "collection", output: "toArray", maxTimeMS: "5000", handleDocId: false, collection: "lk_subscription_daily_booking_ops", clientNode: mongoClient.id, wires: [["router-dev"]] },
+    { id: "lk_subscription_booking_update_20260804", type: "mongodb4", z: "tab-dev", operation: "updateOne", mode: "collection", output: "toArray", maxTimeMS: "5000", handleDocId: false, collection: "lk_subscription_daily_booking_ops", clientNode: mongoClient.id, wires: [["router-dev"]] },
   ];
   const sourceText = `${JSON.stringify(flow, null, 2)}\n`;
   const binding = {
@@ -146,6 +150,7 @@ function fixture() {
     },
     runtime: { apiBase: DEV_API_BASE, completeManagedContractExposed: true },
     dependencies: {
+      wholeFlowIsolationVerified: true,
       httpRequestBindingVerified: true,
       httpRequestPreimageSha256: sha256(JSON.stringify(httpRequest)),
       splitCreateHttpRequestPreimageSha256: sha256(JSON.stringify(splitCreateHttpRequest)),
@@ -228,6 +233,18 @@ test("DEV builder patches only frozen function bodies and emits a separate diges
     trustedBindings(),
   );
   assert.equal(result.manifest.environment, "DEV");
+  assert.equal(result.manifest.rollbackSourceSha256, binding.source.sourceSha256);
+  assert.equal(result.manifest.installAuthorization.authorized, false);
+  assert.equal(result.manifest.installAuthorization.candidateSha256, result.manifest.candidateSha256);
+  assert.deepEqual(result.manifest.changedNodeIds, [
+    "finalize-dev", "prepare-dev", "router-dev", "split-create-dev", "split-dev", "split-join-dev",
+  ]);
+  assert.equal(result.manifest.changedNodes.length, 6);
+  assert.ok(result.manifest.changedNodes.every((node) => (
+    JSON.stringify(node.changedFields) === JSON.stringify(["func"])
+    && /^[a-f0-9]{64}$/.test(node.sourceNodeSha256)
+    && /^[a-f0-9]{64}$/.test(node.candidateNodeSha256)
+  )));
   assert.notEqual(result.manifest.candidateSha256, binding.source.sourceSha256);
   assert.equal(result.manifest.productionBindingState, "UNBOUND_AFTER_ROUTER_AMENDMENT");
   assert.deepEqual(
@@ -339,6 +356,66 @@ test("DEV builder independently rejects HTTP, mongodb4 wiring, and effective dat
   assert.throws(() => buildDevCandidate(
     credentialStoreUnknown.sourceText, credentialStoreUnknown.binding, fs.readFileSync, trustedBindings(),
   ), /not fixture-only/);
+
+  for (const [field, unsafeValue] of [
+    ["method", "DELETE"], ["ret", "txt"], ["paytoqs", "query"],
+    ["requestTimeout", ""], ["persist", true], ["insecureHTTPParser", true],
+  ]) {
+    const httpSemanticsDrift = fixture();
+    const httpNode = httpSemanticsDrift.flow.find((node) => node.id === "lk_subscription_booking_http_20260804");
+    httpNode[field] = unsafeValue;
+    httpSemanticsDrift.binding.dependencies.httpRequestPreimageSha256 = sha256(JSON.stringify(httpNode));
+    rebuild(httpSemanticsDrift);
+    assert.throws(() => buildDevCandidate(
+      httpSemanticsDrift.sourceText, httpSemanticsDrift.binding, fs.readFileSync, trustedBindings(),
+    ), /HTTP request wiring/);
+  }
+
+  const duplicateId = fixture();
+  duplicateId.flow.push(structuredClone(duplicateId.flow[1]));
+  rebuild(duplicateId);
+  assert.throws(() => buildDevCandidate(
+    duplicateId.sourceText, duplicateId.binding, fs.readFileSync, trustedBindings(),
+  ), /duplicate node IDs/);
+
+  const extraMongoClient = fixture();
+  extraMongoClient.flow.push({
+    id: "unclaimed-production-mongo", type: "mongodb4-client", uri: "mongodb://production.invalid/prod",
+  });
+  rebuild(extraMongoClient);
+  assert.throws(() => buildDevCandidate(
+    extraMongoClient.sourceText, extraMongoClient.binding, fs.readFileSync, trustedBindings(),
+  ), /Mongo client inventory/);
+
+  const numericTimeout = fixture();
+  numericTimeout.flow.find((node) => node.operation === "updateOne").maxTimeMS = 5000;
+  rebuild(numericTimeout);
+  assert.throws(() => buildDevCandidate(
+    numericTimeout.sourceText, numericTimeout.binding, fs.readFileSync, trustedBindings(),
+  ), /Mongo wiring mismatch/);
+
+  for (const unsafeNode of [
+    { id: "exec-out", type: "exec", command: "true", wires: [] },
+    { id: "mqtt-out", type: "mqtt out", broker: "prod-broker", wires: [] },
+    { id: "tcp-out", type: "tcp out", host: "production.internal", wires: [] },
+    { id: "other-db", type: "postgres", host: "production.internal", wires: [] },
+    { id: "ws-out", type: "websocket out", server: "production.internal", wires: [] },
+  ]) {
+    const unsafeCapability = fixture();
+    unsafeCapability.flow.push(unsafeNode);
+    rebuild(unsafeCapability);
+    assert.throws(() => buildDevCandidate(
+      unsafeCapability.sourceText, unsafeCapability.binding, fs.readFileSync, trustedBindings(),
+    ), /non-isolated node capability/);
+  }
+
+  const externalFunctionLib = fixture();
+  externalFunctionLib.flow.find((node) => node.id === "prepare-dev").libs = [{ var: "net", module: "net" }];
+  externalFunctionLib.binding.target.preparePreimageSha256 = sha256("prepare prod source");
+  rebuild(externalFunctionLib);
+  assert.throws(() => buildDevCandidate(
+    externalFunctionLib.sourceText, externalFunctionLib.binding, fs.readFileSync, trustedBindings(),
+  ), /non-isolated node capability/);
 });
 
 test("DEV builder rejects tracked function bodies that retain production/shared endpoints", () => {
@@ -510,9 +587,64 @@ test("read-only snapshot inspector computes graph, target, duplicate, and Mongo 
   assert.equal(audit.environmentIdentityVerified, false);
 });
 
+test("snapshot inspector independently rejects unsafe HTTP, Mongo, and graph semantics", () => {
+  const idMap = {
+    "router-dev": "lk_subscription_booking_router_20260804",
+    "prepare-dev": "lk_subscription_booking_prepare_20260804",
+    "split-dev": "8f7bd5b482fe9763",
+    "split-create-dev": "f3f9a60354d394da",
+    "split-join-dev": "e92e68bf3f08a70c",
+    "finalize-dev": "lk_subscription_booking_finalize_20260804",
+  };
+  const probes = {
+    healthy: () => {},
+    deleteMethod: (flow) => { flow.find((node) => node.id === "lk_subscription_booking_http_20260804").method = "DELETE"; },
+    numericTimeout: (flow) => { flow.find((node) => node.operation === "updateOne").maxTimeMS = 5000; },
+    expressionMode: (flow) => { flow.find((node) => node.operation === "updateOne").mode = "expression"; },
+    rawOutput: (flow) => { flow.find((node) => node.operation === "find").output = "raw"; },
+    extraMongoClient: (flow) => { flow.push({ id: "extra-client", type: "mongodb4-client", uri: "mongodb://production.invalid/prod" }); },
+    extraMongoProducer: (flow) => { flow.push({ id: "producer", type: "function", z: "tab-dev", name: "Producer", func: "return msg;", wires: [["lk_subscription_booking_update_20260804"]] }); },
+    duplicateId: (flow) => { flow.push(structuredClone(flow[1])); },
+    unsafeExec: (flow) => { flow.push({ id: "exec", type: "exec", command: "true", wires: [] }); },
+    functionLibrary: (flow) => { flow.find((node) => node.id === "prepare-dev").libs = [{ var: "net", module: "net" }]; },
+    activeDebug: (flow) => { flow.push({ id: "debug", type: "debug", active: true, console: true, tostatus: false, complete: "true", targetType: "full", wires: [] }); },
+  };
+  for (const [label, mutate] of Object.entries(probes)) {
+    const { flow } = fixture();
+    mutate(flow);
+    const serialized = JSON.stringify(flow, (key, value) => (
+      typeof value === "string" && idMap[value] ? idMap[value] : value
+    ));
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "lk1-dev-inspector-contract-"));
+    const sourcePath = path.join(workspace, "source.flow.json");
+    const metaPath = path.join(workspace, "source.flow.meta.json");
+    const credentialStorePath = path.join(workspace, "source.flow.credentials.json");
+    try {
+      fs.writeFileSync(sourcePath, serialized);
+      fs.writeFileSync(credentialStorePath, "{}");
+      fs.writeFileSync(metaPath, JSON.stringify({ environment: "DEV", syntheticTestOnly: true }));
+      execFileSync(process.execPath, [
+        "scripts/inspect_lk1_subscription_dev_snapshot.mjs", sourcePath, metaPath, credentialStorePath,
+      ]);
+      const audit = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+      assert.equal(audit.dependencies.httpRequestBindingVerified,
+        !["deleteMethod", "duplicateId"].includes(label), label);
+      assert.equal(audit.dependencies.mongoBindingVerifiedDevOnly,
+        !["numericTimeout", "expressionMode", "rawOutput", "extraMongoClient", "extraMongoProducer"].includes(label));
+      assert.equal(audit.dependencies.wholeFlowIsolationVerified,
+        !["unsafeExec", "functionLibrary", "activeDebug"].includes(label), label);
+      assert.equal(audit.environmentIdentityVerified, false,
+        "synthetic evidence must never become verified runtime evidence");
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  }
+});
+
 test("DEV and PROD manifests cannot cross installation environments", () => {
   const devManifest = {
     environment: "DEV",
+    sourceSha256: "b".repeat(64),
     candidateSha256: "a".repeat(64),
     targetHost: "lk-reserve-89",
     targetHostname: "89-108-64-209.cloudvps.regruhosting.ru",
@@ -520,6 +652,19 @@ test("DEV and PROD manifests cannot cross installation environments", () => {
     targetUnixUser: DEV_INSTALL_TARGET.unixUser,
     targetUserDir: DEV_INSTALL_TARGET.userDir,
     targetFlowPath: DEV_INSTALL_TARGET.remoteFlowPath,
+    rollbackSourceSha256: "b".repeat(64),
+    changedNodeIds: ["a", "b", "c", "d", "e", "f"],
+    changedNodes: ["a", "b", "c", "d", "e", "f"].map((id) => ({
+      id, changedFields: ["func"], sourceNodeSha256: "c".repeat(64), candidateNodeSha256: "d".repeat(64),
+    })),
+    candidateNodeInventorySha256: "e".repeat(64),
+    installAuthorization: {
+      authorized: true,
+      candidateSha256: "a".repeat(64),
+      targetHost: "lk-reserve-89",
+      targetServiceName: DEV_INSTALL_TARGET.serviceName,
+      targetFlowPath: DEV_INSTALL_TARGET.remoteFlowPath,
+    },
   };
   const devTarget = {
     environment: "DEV",

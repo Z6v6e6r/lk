@@ -31,9 +31,35 @@ export function verifyDevInstallManifest(
   }
   validateDevBinding(binding, trustedBindings, provisioningContract);
   const candidateSha256 = crypto.createHash("sha256").update(candidateBytes).digest("hex");
+  const candidate = JSON.parse(candidateBytes.toString("utf8"));
+  const candidateNodes = new Map(candidate.map((node) => [node.id, node]));
+  const targetPairs = [
+    [binding.target.routerNodeId, binding.target.routerPreimageSha256],
+    [binding.target.prepareNodeId, binding.target.preparePreimageSha256],
+    [binding.target.splitRouterNodeId, binding.target.splitRouterPreimageSha256],
+    [binding.target.splitCreatePrepareNodeId, binding.target.splitCreatePreparePreimageSha256],
+    [binding.target.splitJoinPrepareNodeId, binding.target.splitJoinPreparePreimageSha256],
+    [binding.target.finalizeNodeId, binding.target.finalizePreimageSha256],
+  ];
+  const expectedChangedNodeIds = targetPairs.filter(([id, preimage]) => {
+    const node = candidateNodes.get(id);
+    return node && crypto.createHash("sha256").update(String(node.func || "")).digest("hex") !== preimage;
+  }).map(([id]) => id).sort();
+  const candidateNodeInventorySha256 = crypto.createHash("sha256").update(JSON.stringify(candidate
+    .map((node) => ({ id: node.id, sha256: crypto.createHash("sha256").update(JSON.stringify(node)).digest("hex") }))
+    .sort((left, right) => left.id.localeCompare(right.id)))).digest("hex");
+  const changedNodesVerified = manifest?.changedNodes?.every((entry) => {
+    const node = candidateNodes.get(entry.id);
+    return node && entry.candidateNodeSha256
+      === crypto.createHash("sha256").update(JSON.stringify(node)).digest("hex");
+  });
   if (manifest?.sourceSha256 !== binding.source.sourceSha256
+    || manifest?.rollbackSourceSha256 !== binding.source.sourceSha256
     || manifest?.candidateSha256 !== binding.candidateSha256
-    || candidateSha256 !== binding.candidateSha256) {
+    || candidateSha256 !== binding.candidateSha256
+    || candidateNodeInventorySha256 !== manifest?.candidateNodeInventorySha256
+    || JSON.stringify(manifest?.changedNodeIds) !== JSON.stringify(expectedChangedNodeIds)
+    || changedNodesVerified !== true) {
     throw new Error("DEV install manifest does not match the frozen candidate binding");
   }
   return validateDevInstallManifest(manifest, {

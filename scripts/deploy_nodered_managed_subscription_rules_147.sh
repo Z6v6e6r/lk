@@ -31,6 +31,7 @@ source_flow="$workspace/input/source.flow.json"
 candidate_dir="$stage_root/candidate"
 candidate_flow="$candidate_dir/flows.candidate.json"
 candidate_import="$candidate_dir/lk_subscription_booking.nodes.import.json"
+candidate_ready="$candidate_flow.ready.json"
 contract_file="$candidate_dir/contract.json"
 preflight_result="$stage_root/preflight.json"
 apply_result="$stage_root/apply.json"
@@ -55,7 +56,7 @@ cleanup() {
     ssh "$host" "rm -f '$remote_candidate' '$remote_contract' '$remote_helper' '$remote_runtime'; rmdir '$remote_stage' 2>/dev/null || true" >/dev/null 2>&1 || true
   fi
   rm -f "$preflight_result" "$apply_result" 2>/dev/null || true
-  rm -f "$candidate_flow" "$candidate_import" "$contract_file" 2>/dev/null || true
+  rm -f "$candidate_flow" "$candidate_import" "$candidate_ready" "$contract_file" 2>/dev/null || true
   rm -f "$workspace/input/source.flow.json" "$workspace/input/source.flow.meta.json" 2>/dev/null || true
   rmdir "$candidate_dir" "$workspace/input" "$workspace" "$stage_root" 2>/dev/null || true
 }
@@ -68,6 +69,14 @@ node scripts/patch_nodered_subscription_booking_flow.mjs \
   "$source_flow" \
   "$candidate_flow" \
   "$candidate_import" >/dev/null
+node -e '
+  const fs=require("fs"),crypto=require("crypto");
+  const hash=(file)=>crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  const ready=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+  if (ready.formatVersion !== 1 || ready.sourceSha256 !== hash(process.argv[4])
+    || ready.candidateSha256 !== hash(process.argv[2])
+    || ready.importSha256 !== hash(process.argv[3])) process.exit(1);
+' "$candidate_ready" "$candidate_flow" "$candidate_import" "$source_flow"
 
 node scripts/nodered_reviewed_flow_deploy/prepare_exact_graph_contract.mjs \
   --live "$source_flow" \

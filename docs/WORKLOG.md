@@ -1655,3 +1655,24 @@
   minutes, 1,575 RUB after the free hour, full-price 2,250 RUB after four active
   services, and 50% group-training/tournament discounts. No browser-only reserve,
   booking, join, payment, provider write, hotfix push, integration or deploy occurred.
+
+## 2026-09-03 — LK1 subscription post-CREATE and DEV-candidate fail-closed recovery
+
+- Added a single post-CREATE reconciliation barrier: once a precreated entitlement
+  exists, exercise/runtime recheck failures and persistence exceptions retain both the
+  entitlement and created exercise, persist reconciliation intent when possible, and
+  return pending without automatic compensation.
+- Replaced permissive recursive Mongo acknowledgement parsing with exact flat
+  insert/update result contracts; diagnostic nesting, coercion, upsert and unexpected
+  fields no longer establish a successful write.
+- DEV candidate builder and independent snapshot inspector now require unique flow IDs,
+  the exact three-operation `lk_subscription_daily_booking_ops` graph, one isolated
+  mongodb4 client, safe message-driven HTTP request semantics, and a closed inventory of
+  local-only node capabilities without external function libraries. Deprecated original
+  and pre-PRECREATE split-router sources are executable negative fixtures and cannot
+  publish candidate/import outputs; a readiness attestation is published last and stale
+  output sets are removed before validation. DEV manifests bind rollback source, the
+  exact changed-node inventory and a separately authorized installation target.
+- This remains source-only remediation. The checked-in DEV binding is still blocked;
+  no candidate publication, flow import, service restart, provider/Mongo write, branch
+  push, merge, deployment or activation was performed.

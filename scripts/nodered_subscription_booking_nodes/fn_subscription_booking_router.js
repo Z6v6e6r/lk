@@ -495,6 +495,11 @@ const prepareManagedEntitlementConfirm = (ctx) => {
 };
 
 const prepareManagedEntitlementRelease = (ctx, reason, providerBookingId = null) => {
+  // A created/adopted exercise is an external side effect. Failure is not proof
+  // that it is safe to release its reservation, even before booking creation.
+  if (ctx.precreatedEntitlementReserved === true) {
+    return preparePrecreatedReconciliation(ctx);
+  }
   const config = managedEntitlementConfig();
   if (!validManagedEntitlementConfig(config, ctx) || !toStr(ctx.managedEntitlementOperationId)) {
     return finishPending(ctx, "Резерв льготы требует ручной сверки", {
@@ -1170,27 +1175,20 @@ const operationHasConfirmedCancellation = (operation, cancelledBookings) => {
   });
 };
 
-const findNumber = (value, keys, seen = new Set()) => {
-  if (!value || typeof value !== "object" || seen.has(value)) return null;
-  seen.add(value);
-  for (const key of keys) {
-    const numeric = Number(value[key]);
-    if (Number.isFinite(numeric)) return numeric;
-  }
-  for (const nested of Array.isArray(value) ? value : Object.values(value)) {
-    const found = findNumber(nested, keys, seen);
-    if (found !== null) return found;
-  }
-  return null;
+// mongodb4 collection operations return the driver's flat result, not a
+// recursive envelope. No coercion, upsert, partial ACK, or diagnostic counts.
+const mongoMatched = (value) => {
+  const keys = ["acknowledged", "matchedCount", "modifiedCount", "upsertedCount", "upsertedId"];
+  if (!isObj(value) || Object.keys(value).length !== keys.length
+    || !keys.every((key) => Object.hasOwn(value, key))
+    || value.acknowledged !== true || ![0, 1].includes(value.matchedCount)
+    || ![0, 1].includes(value.modifiedCount) || value.modifiedCount > value.matchedCount
+    || value.upsertedCount !== 0 || value.upsertedId !== null) return null;
+  return value.matchedCount;
 };
-
-const mongoMatched = (value) => findNumber(value, ["matchedCount", "modifiedCount", "upsertedCount"]);
-const mongoInserted = (value) => {
-  if (findNumber(value, ["insertedCount"]) > 0) return true;
-  if (isObj(value) && (value.insertedId || value.acknowledged === true)) return true;
-  if (Array.isArray(value)) return value.some(mongoInserted);
-  return false;
-};
+const mongoInserted = (value, expectedId) => isObj(value)
+  && Object.keys(value).length === 2 && value.acknowledged === true
+  && typeof value.insertedId === "string" && value.insertedId === expectedId;
 
 const prepareOperationFind = (ctx, query = { _id: ctx.operationKey }) => {
   ctx.step = "operation_find";
@@ -1277,6 +1275,7 @@ const preparePrecreatedReservationPromotion = (ctx) => {
     $set: {
       state: "PENDING_CONFIRMATION",
       exerciseId: ctx.exerciseId,
+      precreatedEntitlementReserved: true,
       managedDecision: ctx.managedDecision,
       upstreamAttemptedAt: now.toISOString(),
       pendingUntil: new Date(now.getTime() + PENDING_CONFIRMATION_MS).toISOString(),
@@ -1284,6 +1283,25 @@ const preparePrecreatedReservationPromotion = (ctx) => {
     },
     $inc: { attempts: 1 },
     $unset: { precreateLeaseUntil: "", leaseUntil: "" },
+  });
+};
+
+const preparePrecreatedReconciliation = (ctx) => {
+  const nowIso = new Date().toISOString();
+  return prepareMongoUpdate(ctx, "operation_precreated_reconciliation", {
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: { $in: ["PRECREATE_ATTEMPTING", "PENDING_CONFIRMATION"] },
+    managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+    managedSubscriptionInstanceId: ctx.managedRuntime?.subscriptionInstanceId,
+  }, {
+    $set: {
+      state: "PRECREATE_RECONCILIATION_REQUIRED",
+      exerciseId: ctx.exerciseId,
+      precreateReconciliationRequiredAt: nowIso,
+      precreateReconciliationCode: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED",
+      updatedAt: nowIso,
+    },
   });
 };
 
@@ -1435,15 +1453,11 @@ const prepareActivationConfirmedUpdate = (ctx, activation) => {
 };
 
 const prepareFailedUpdate = (ctx, statusCode, message, rawCode) => {
+  if (ctx.precreatedEntitlementReserved === true) {
+    return preparePrecreatedReconciliation(ctx);
+  }
   const nowIso = new Date().toISOString();
   ctx.finalFailure = { statusCode, message, rawCode: rawCode || null };
-  if (ctx.precreatedEntitlementReserved === true
-    && ctx.managedEntitlementOperationId
-    && ctx.managedEntitlementReleased !== true
-    && ctx.step !== "managed_entitlement_release") {
-    ctx.entitlementReleaseNext = "persist_failure";
-    return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
-  }
   return prepareMongoUpdate(ctx, "operation_fail", {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
@@ -2354,6 +2368,12 @@ if (ctx.step === "operation_full_price_fallback") {
 }
 
 if (ctx.step === "operation_find") {
+  if (msg.error || !Array.isArray(msg.payload) || msg.payload.some((row) => !isObj(row))
+    || (ctx.action !== "release" && msg.payload.length > 1)) {
+    return finishPending(ctx, "Формат ответа Mongo требует сверки", {
+      code: "SUBSCRIPTION_BOOKING_OPERATION_READ_INVALID",
+    });
+  }
   const rows = asArray(msg.payload);
   if (ctx.action === "release") {
     if (rows.length === 0) {
@@ -2509,6 +2529,15 @@ if (ctx.step === "operation_find") {
     return emit(OUTPUT_MONGO_INSERT);
   }
 
+  if (operation.precreatedEntitlementReserved === true
+    || operation.state === "PRECREATE_RECONCILIATION_REQUIRED"
+    || toStr(operation.precreateReconciliationCode)
+      === "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED") {
+    return finishPending(ctx, "Созданная игра и резерв подписки требуют ручной сверки", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED",
+    });
+  }
+
   if (toStr(operation.operationId) === ctx.operationId) {
     if (operation.state === "CONFIRMED") {
       if (confirmedOperationWasCancelled) return prepareOperationReclaim(ctx, operation, now);
@@ -2604,7 +2633,7 @@ if (ctx.step === "operation_expired_pending_release") {
 }
 
 if (ctx.step === "operation_insert") {
-  if (msg.error || !mongoInserted(msg.payload)) {
+  if (msg.error || !mongoInserted(msg.payload, ctx.operationKey)) {
     return finishPending(ctx, "Другая операция одновременно заняла дневное посещение");
   }
   return preparePreaccept(ctx);
@@ -2638,6 +2667,13 @@ if (ctx.step === "operation_precreated_promote") {
     });
   }
   return prepareBookingCreate(ctx);
+}
+
+if (ctx.step === "operation_precreated_reconciliation") {
+  return finishPending(ctx, "Созданная игра требует сверки; резерв подписки сохранён", {
+    code: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED",
+    localBindingConfirmed: !msg.error && mongoMatched(msg.payload) === 1,
+  });
 }
 
 if (ctx.step === "operation_precreated_attempt") {

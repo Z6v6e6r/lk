@@ -10,6 +10,19 @@ msg.headers = {
   "Access-Control-Allow-Origin": "*",
 };
 
+const responseStatus = Number(msg.statusCode) || 0;
+if (["split", "split_create_preflight"].includes(ctx?.caller)
+  && ctx.precreatedEntitlementReserved === true && responseStatus >= 400) {
+  msg.statusCode = 202;
+  msg.payload = {
+    ok: true,
+    state: "PENDING_CONFIRMATION",
+    operationId: ctx.operationId || null,
+    details: { code: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED" },
+  };
+  return [null, msg];
+}
+
 if (ctx?.caller === "split_create_preflight"
   && ["PREFLIGHT_ATTEMPT_BOUND", "NOT_MANAGED", "FULL_PRICE_WITHOUT_SUBSCRIPTION"].includes(payload.state)) {
   const splitCtx = msg._splitCtx && typeof msg._splitCtx === "object" ? msg._splitCtx : {};
@@ -92,7 +105,6 @@ if (ctx?.caller === "split" && payload.state === "CONFIRMED" && payload.bookingI
 
 if (ctx?.caller === "split") {
   const splitCtx = msg._splitCtx && typeof msg._splitCtx === "object" ? msg._splitCtx : {};
-  const responseStatus = Number(msg.statusCode) || 0;
   const ambiguousOrAcceptedSteps = new Set([
     "booking_create",
     "operation_accept",

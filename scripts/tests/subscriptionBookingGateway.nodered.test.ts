@@ -21,6 +21,9 @@ const HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";
 const MANAGED_PURCHASE_DATE = "2026-09-01T00:00:00+03:00";
 const DEV_API_BASE = "http://127.0.0.1:3037/api";
 const LIVE_ROUTER_FLOW_FIXTURE = process.env.LK1_SUBSCRIPTION_LIVE_FLOW_FIXTURE;
+const mongoUpdateResult = (matchedCount = 1) => ({
+  acknowledged: true, matchedCount, modifiedCount: matchedCount, upsertedCount: 0, upsertedId: null,
+});
 const MANAGED_GLOBALS = {
   vivacrm_access_token: "service-token",
   subscriptions_runtime_environment: "PROD",
@@ -517,7 +520,7 @@ test("exact cancelled booking releases a pending claim once and duplicate releas
   assert.equal(release[3].payload[1].$addToSet.releasedBookingIds, "booking-cancelled");
 
   const done = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: release[3]._subscriptionBooking,
   });
   assert.equal(done[4].statusCode, 200);
@@ -818,13 +821,13 @@ test("managed split CREATE reserves against authoritative Viva and CUP evidence 
   assert.equal(find[2]._subscriptionBooking.step, "operation_insert");
   assert.equal(find[2].payload.state, "PREPARED");
   const inserted = runFunction(ROUTER_FILE, {
-    payload: { insertedId: find[2].payload._id },
+    payload: { acknowledged: true, insertedId: find[2].payload._id },
     _subscriptionBooking: find[2]._subscriptionBooking,
   }, MANAGED_GLOBALS);
   assert.equal(inserted[3]._subscriptionBooking.step, "operation_preaccept");
   assert.equal(inserted[3].payload[1].$set.state, "PRECREATE_RESERVING");
   const preaccepted = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: inserted[3]._subscriptionBooking,
   }, MANAGED_GLOBALS);
   assert.equal(preaccepted[0]._subscriptionBooking.step, "managed_runtime_recheck");
@@ -857,14 +860,14 @@ test("managed split CREATE reserves against authoritative Viva and CUP evidence 
   assert.equal(reserved[3].payload[0].state, "PRECREATE_RESERVING");
   assert.equal(reserved[3].payload[1].$set.state, "PRECREATE_RESERVED");
   const done = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: reserved[3]._subscriptionBooking,
   }, MANAGED_GLOBALS);
   assert.equal(done[3]._subscriptionBooking.step, "operation_precreated_attempt");
   assert.equal(done[3].payload[0].state, "PRECREATE_RESERVED");
   assert.equal(done[3].payload[1].$set.state, "PRECREATE_ATTEMPTING");
   const attemptBound = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: done[3]._subscriptionBooking,
   }, MANAGED_GLOBALS);
   assert.equal(attemptBound[4].payload.state, "PREFLIGHT_ATTEMPT_BOUND");
@@ -1737,7 +1740,7 @@ test("pending annual subscription is projected for policy and activates only aft
   assert.equal(history[6], null);
 
   const activationRequest = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: baseContext("operation_confirm", {
       planKey: "piter_friendship",
       managedActivationRequired: true,
@@ -1785,7 +1788,7 @@ test("pending annual subscription is projected for policy and activates only aft
   assert.equal(activationConfirmed[3].payload[1].$set.activationRevision, 2);
 
   const done = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: activationConfirmed[3]._subscriptionBooking,
   }, MANAGED_ACTIVATION_GLOBALS);
   assert.equal(done[4].statusCode, 201);
@@ -2223,7 +2226,7 @@ test("expired pending claim is released only after an exact Viva readback finds 
   assert.equal(release[3].payload[1].$unset.pendingUntil, "");
 
   const refetch = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: release[3]._subscriptionBooking,
   });
   assert.equal(refetch[1]._subscriptionBooking.step, "operation_find");
@@ -2283,14 +2286,14 @@ test("new operation is inserted, persisted as pending, then posts exact subscrip
   assert.equal(insert[2].payload.state, "PREPARED");
 
   const preaccept = runFunction(ROUTER_FILE, {
-    payload: { acknowledged: true, insertedId: "operation" },
+    payload: { acknowledged: true, insertedId: baseContext("operation_insert").operationKey },
     _subscriptionBooking: insert[2]._subscriptionBooking,
   });
   assert.equal(preaccept[3]._subscriptionBooking.step, "operation_preaccept");
   assert.equal(preaccept[3].payload[1].$set.state, "PENDING_CONFIRMATION");
 
   const recheck = runFunction(ROUTER_FILE, {
-    payload: { acknowledged: true, matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: preaccept[3]._subscriptionBooking,
   });
   assert.equal(recheck[0]._subscriptionBooking.step, "exercise_recheck");
@@ -2309,7 +2312,7 @@ test("new operation is inserted, persisted as pending, then posts exact subscrip
   assert.equal("count" in create[0].payload, false, "direct tournament/group booking remains one visit");
 
   const splitRecheck = runFunction(ROUTER_FILE, {
-    payload: { acknowledged: true, matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: baseContext("operation_preaccept", {
       caller: "split",
       subscriptionVisitCount: 2,
@@ -2472,7 +2475,7 @@ test("managed booking rechecks CUP identity and policy after preaccept before Vi
   });
 
   const exerciseRecheck = runFunction(ROUTER_FILE, {
-    payload: { acknowledged: true, matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: managedContext,
   }, MANAGED_GLOBALS);
   assert.equal(exerciseRecheck[0]._subscriptionBooking.step, "exercise_recheck");
@@ -2575,7 +2578,7 @@ test("managed booking rechecks CUP identity and policy after preaccept before Vi
   assert.equal(reserved[3].payload[1].$set.managedEntitlementOperationId,
     "booking:entitlement-operation-1");
   const create = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: reserved[3]._subscriptionBooking,
   }, MANAGED_GLOBALS);
   assert.equal(create[0]._subscriptionBooking.step, "booking_create");
@@ -2587,7 +2590,7 @@ test("managed booking rechecks CUP identity and policy after preaccept before Vi
   devContext.managedEnforcement.environment = "DEV";
   devContext.managedEnvironment = "DEV";
   const driftedEnvironment = runFunctionSource(devBoundRouterSource(), {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: devContext,
   }, {
     ...MANAGED_GLOBALS,
@@ -2645,7 +2648,7 @@ test("CUP active-service limit releases the local claim into an explicit full-pr
   assert.equal(fallback[3].payload[1].$set.state, "RELEASED");
 
   const done = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: fallback[3]._subscriptionBooking,
   }, MANAGED_GLOBALS);
   assert.equal(done[4].payload.state, "FULL_PRICE_WITHOUT_SUBSCRIPTION");
@@ -2671,7 +2674,7 @@ test("replayed already-confirmed entitlement never dispatches a second Viva book
   assert.equal(replay[3]._subscriptionBooking.step, "operation_entitlement_bind");
 
   const pending = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: replay[3]._subscriptionBooking,
   }, MANAGED_GLOBALS);
   assert.equal(pending[4].statusCode, 202);
@@ -2707,7 +2710,7 @@ test("discounted entitlement is released without a Viva write until provider pri
   assert.equal(reserved[3]._subscriptionBooking.step, "operation_entitlement_bind");
 
   const release = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: reserved[3]._subscriptionBooking,
   }, MANAGED_GLOBALS);
   assert.equal(release[0]._subscriptionBooking.step, "managed_entitlement_release");
@@ -2734,7 +2737,7 @@ test("discounted entitlement is released without a Viva write until provider pri
     "MANAGED_SUBSCRIPTION_PROVIDER_PRICING_NOT_CONFIGURED");
 
   const failed = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: released[3]._subscriptionBooking,
   }, MANAGED_GLOBALS);
   assert.equal(failed[4].statusCode, 409);
@@ -2770,7 +2773,7 @@ test("definitive Viva rejection releases the exact reserved entitlement before r
   }, MANAGED_GLOBALS);
   assert.equal(persist[3]._subscriptionBooking.step, "operation_fail");
   const done = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: persist[3]._subscriptionBooking,
   }, MANAGED_GLOBALS);
   assert.equal(done[4].statusCode, 409);
@@ -2779,7 +2782,7 @@ test("definitive Viva rejection releases the exact reserved entitlement before r
 
 test("Viva readback must be followed by exact CUP entitlement confirmation", () => {
   const confirm = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: entitlementContext("operation_confirm", {
       managedEntitlementOperationId: "booking:confirmed-entitlement",
       confirmedBookingId: "booking-viva-1",
@@ -2805,7 +2808,7 @@ test("Viva readback must be followed by exact CUP entitlement confirmation", () 
   }, MANAGED_GLOBALS);
   assert.equal(bound[3]._subscriptionBooking.step, "operation_entitlement_confirm");
   const done = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: bound[3]._subscriptionBooking,
   }, MANAGED_GLOBALS);
   assert.equal(done[4].statusCode, 201);
@@ -2950,7 +2953,7 @@ test("ambiguous upstream result remains pending while definitive rejection is pe
 
 test("ambiguous upstream claim expires into Viva reconciliation after fifteen minutes", () => {
   const preaccept = runFunction(ROUTER_FILE, {
-    payload: { acknowledged: true, insertedId: "operation" },
+    payload: { acknowledged: true, insertedId: baseContext("operation_insert").operationKey },
     _subscriptionBooking: baseContext("operation_insert"),
   });
   const pendingUntil = Date.parse(preaccept[3].payload[1].$set.pendingUntil);
@@ -2968,7 +2971,7 @@ test("accepted booking is confirmed only after exact-subscription readback", () 
   assert.equal(accept[3]._subscriptionBooking.step, "operation_accept");
 
   const readbackRequest = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: accept[3]._subscriptionBooking,
   });
   assert.equal(readbackRequest[0]._subscriptionBooking.step, "confirmation_bookings");
@@ -2987,7 +2990,7 @@ test("accepted booking is confirmed only after exact-subscription readback", () 
   assert.equal(confirm[3].payload[1].$set.bookingId, "booking-created");
 
   const done = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: confirm[3]._subscriptionBooking,
   });
   assert.equal(done[4].statusCode, 201);
@@ -3111,8 +3114,9 @@ test("split CREATE emits the exercise write only after finalizing the exact prec
   assert.equal(promote[3]._subscriptionBooking.step, "operation_precreated_promote");
   assert.equal(promote[3].payload[0].state, "PRECREATE_ATTEMPTING");
   assert.equal(promote[3].payload[1].$set.exerciseId, "exercise-created");
+  assert.equal(promote[3].payload[1].$set.precreatedEntitlementReserved, true);
   const booking = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: promote[3]._subscriptionBooking,
   }, MANAGED_GLOBALS);
   assert.equal(booking[0]._subscriptionBooking.step, "booking_create");
@@ -3158,11 +3162,161 @@ test("definitive Viva exercise rejection releases a precreated entitlement befor
   assert.equal(released[3]._subscriptionBooking.step, "operation_precreate_abort");
   assert.equal(released[3].payload[1].$set.state, "RELEASED");
   const done = runFunction(ROUTER_FILE, {
-    payload: { matchedCount: 1 },
+    payload: mongoUpdateResult(),
     _subscriptionBooking: released[3]._subscriptionBooking,
   }, MANAGED_GLOBALS);
   assert.equal(done[4].statusCode, 422);
   assert.equal(done[4].payload.details.code, "VIVA_VALIDATION_FAILED");
+});
+
+test("every post-CREATE failure preserves the entitlement and enters durable reconciliation", () => {
+  const afterCreate = entitlementContext("exercise_recheck", {
+    caller: "split_create_preflight",
+    operationId: "idem-post-create-failure",
+    operationKey: "managed:post-create-failure",
+    exerciseId: "exercise-created",
+    serviceDate: "2026-09-03",
+    category: "open_game",
+    studioId: PITER_STATION_ID,
+    precreatedEntitlementReserved: true,
+    managedEntitlementOperationId: "booking:post-create-failure",
+  });
+  const exerciseFailures = [
+    { statusCode: 504, payload: { code: "TIMEOUT" } },
+    { statusCode: 200, payload: {} },
+    { statusCode: 200, payload: { ...managedExercise(), id: "other-exercise" } },
+    { statusCode: 200, payload: managedExercise(PITER_PRODUCT_ID, "Падел.Дружба.Питер — 12 месяцев", null) },
+  ];
+  for (const failure of exerciseFailures) {
+    const out = runFunction(ROUTER_FILE, { ...failure, _subscriptionBooking: structuredClone(afterCreate) }, MANAGED_GLOBALS);
+    assert.deepEqual(out.slice(0, 3), [null, null, null]);
+    assert.equal(out[3]._subscriptionBooking.step, "operation_precreated_reconciliation");
+    assert.equal(out[3].payload[0].operationId, afterCreate.operationId);
+    assert.deepEqual(out[3].payload[0].state.$in, ["PRECREATE_ATTEMPTING", "PENDING_CONFIRMATION"]);
+    assert.equal(out[3].payload[1].$set.exerciseId, "exercise-created");
+  }
+
+  const runtimeFailures = [
+    { statusCode: 503, payload: { code: "UNAVAILABLE" } },
+    { statusCode: 200, payload: {} },
+    { statusCode: 200, payload: managedRuntimeResponse({ stationId: "wrong-station" }) },
+    { statusCode: 403, payload: { code: "FORBIDDEN" } },
+  ];
+  for (const failure of runtimeFailures) {
+    const out = runFunction(ROUTER_FILE, {
+      ...failure,
+      _subscriptionBooking: { ...structuredClone(afterCreate), step: "managed_runtime_recheck" },
+    }, MANAGED_GLOBALS);
+    assert.deepEqual(out.slice(0, 3), [null, null, null]);
+    assert.equal(out[3]._subscriptionBooking.step, "operation_precreated_reconciliation");
+  }
+});
+
+test("precreated reconciliation accepts only an exact flat Mongo update acknowledgement", () => {
+  const ctx = entitlementContext("operation_precreated_reconciliation", {
+    caller: "split_create_preflight",
+    operationId: "idem-reconciliation-ack",
+    operationKey: "managed:reconciliation-ack",
+    exerciseId: "exercise-created",
+    precreatedEntitlementReserved: true,
+  });
+  const invalid = [
+    { matchedCount: 1 },
+    { acknowledged: true, matchedCount: 1 },
+    { acknowledged: true, matchedCount: 1, modifiedCount: 1, upsertedCount: 1, upsertedId: "forged" },
+    { acknowledged: true, matchedCount: 1, modifiedCount: 1, upsertedCount: 0, upsertedId: null, diagnostic: { matchedCount: 1 } },
+    { acknowledged: true, matchedCount: "1", modifiedCount: 1, upsertedCount: 0, upsertedId: null },
+  ];
+  for (const payload of invalid) {
+    const out = runFunction(ROUTER_FILE, { payload, _subscriptionBooking: structuredClone(ctx) }, MANAGED_GLOBALS);
+    assert.deepEqual(out.slice(0, 4), [null, null, null, null]);
+    assert.equal(out[4].statusCode, 202);
+    assert.equal(out[4].payload.details.localBindingConfirmed, false);
+  }
+  const accepted = runFunction(ROUTER_FILE, { payload: mongoUpdateResult(), _subscriptionBooking: ctx }, MANAGED_GLOBALS);
+  assert.equal(accepted[4].statusCode, 202);
+  assert.equal(accepted[4].payload.details.localBindingConfirmed, true);
+});
+
+test("insert and find Mongo contracts reject partial, forged, and nested acknowledgements", () => {
+  const insertCtx = baseContext("operation_insert");
+  for (const payload of [
+    { acknowledged: true },
+    { acknowledged: true, insertedId: "wrong-operation" },
+    { acknowledged: true, insertedId: insertCtx.operationKey, insertedCount: 1 },
+    [{ acknowledged: true, insertedId: insertCtx.operationKey }],
+    { result: { acknowledged: true, insertedId: insertCtx.operationKey } },
+  ]) {
+    const out = runFunction(ROUTER_FILE, {
+      payload,
+      _subscriptionBooking: structuredClone(insertCtx),
+    }, MANAGED_GLOBALS);
+    assert.deepEqual(out.slice(0, 4), [null, null, null, null]);
+    assert.equal(out[4].statusCode, 202);
+  }
+
+  const findCtx = baseContext("operation_find");
+  for (const payload of [
+    null,
+    {},
+    { matchedCount: 1 },
+    [null],
+    [{ _id: "one" }, { _id: "two" }],
+  ]) {
+    const out = runFunction(ROUTER_FILE, {
+      payload,
+      _subscriptionBooking: structuredClone(findCtx),
+    }, MANAGED_GLOBALS);
+    assert.deepEqual(out.slice(0, 4), [null, null, null, null]);
+    assert.equal(out[4].statusCode, 202);
+    assert.equal(out[4].payload.details.code, "SUBSCRIPTION_BOOKING_OPERATION_READ_INVALID");
+  }
+});
+
+test("expired retries cannot release a promoted or reconciliation-required precreated operation", () => {
+  for (const [state, marked] of [
+    ["PENDING_CONFIRMATION", true],
+    ["PRECREATE_RECONCILIATION_REQUIRED", false],
+  ]) {
+    for (const operationId of ["idem-retry-same", "idem-retry-competing"]) {
+      const ctx = entitlementContext("operation_find", {
+        caller: "split_create_preflight",
+        operationId: "idem-retry-same",
+        operationKey: "managed:expired-precreated",
+        exerciseId: "exercise-created",
+      });
+      const out = runFunction(ROUTER_FILE, {
+        payload: [{
+          _id: ctx.operationKey,
+          operationId,
+          state,
+          pendingUntil: "2000-01-01T00:00:00.000Z",
+          exerciseId: ctx.exerciseId,
+          precreatedEntitlementReserved: marked,
+        }],
+        _subscriptionBooking: ctx,
+      }, MANAGED_GLOBALS);
+      assert.deepEqual(out.slice(0, 4), [null, null, null, null]);
+      assert.equal(out[4].statusCode, 202);
+      assert.equal(out[4].payload.details.code,
+        "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED");
+    }
+  }
+});
+
+test("finalizer never emits split compensation after a precreated entitlement", () => {
+  const out = runFunction(FINALIZE_FILE, {
+    statusCode: 503,
+    payload: { code: "PERSISTENCE_FAILED" },
+    _subscriptionBooking: entitlementContext("operation_precreated_promote", {
+      caller: "split_create_preflight",
+      precreatedEntitlementReserved: true,
+    }),
+    _splitCtx: { step: "managed_create_preflight_complete", ownsExercise: true },
+  });
+  assert.equal(out[0], null);
+  assert.equal(out[1].statusCode, 202);
+  assert.equal(out[1].payload.details.code, "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED");
 });
 
 test("ambiguous Viva exercise outcome stays durable and retry cannot emit another create", () => {
@@ -3384,25 +3538,6 @@ test("managed rejection never deletes an owned exercise with an ambiguous bookin
   assert.equal(out[1].payload.details.destructiveRetryBlocked, true);
 });
 
-test("guarded patcher requires the exact live preimage and wires split subscriptions into the gateway", () => {
-  const source = fs.readFileSync("scripts/patch_nodered_subscription_booking_flow.mjs", "utf8");
-  assert.match(source, /EXPECTED_LIVE_ROUTER_SHA256/);
-  assert.match(source, /resolveManagedSubscriptionRouterContract/);
-  assert.match(source, /matchesManagedSubscriptionRouterTopology/);
-  assert.match(source, /originalRouter/);
-  assert.match(source, /managedRouter/);
-  assert.match(source, /sourceKind === "live-147"/);
-  assert.match(source, /Date\.now\(\) - pulledAt <= 30 \* 60 \* 1000/);
-  assert.match(source, /url: "\/lk\/subscription-bookings"/);
-  assert.match(source, /name: "Subscription booking Viva request"[\s\S]*requestTimeout: "20000"/);
-  assert.match(source, /managedAction: ctx\.action === "create"/);
-  assert.match(source, /readFunction\("fn_managed_subscription_policy_evaluate\.js"\)/);
-  assert.match(source, /\[IDS\.debug\], \[IDS\.managedPolicy\]/);
-  assert.match(source, /nextRouter\.outputs = 4/);
-  assert.match(source, /nextRouter\.wires = \[\.\.\.nextRouter\.wires, \[IDS\.http\]\]/);
-  assert.match(source, /patchManagedRouterSource/);
-  assert.match(source, /managedAction: ctx\.action === "create"/);
-});
 
 test("guarded patcher accepts the exact current tracked split router", () => {
   const funcSha256 = crypto.createHash("sha256")

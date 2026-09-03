@@ -206,6 +206,9 @@ test("split cleanup uses the shared cache and blocks mutation when auth is uncon
   const payload = {
     mode: "GAME_CLEANUP",
     gameId: "game-1",
+    tenantKey: "iSkq6G",
+    revision: 1,
+    expectedRevision: 1,
     bookingIds: ["booking-1"],
     bookingTargets: [{ bookingId: "booking-1", clientId: "client-1" }],
     reason: "PAYMENT_TIMEOUT",

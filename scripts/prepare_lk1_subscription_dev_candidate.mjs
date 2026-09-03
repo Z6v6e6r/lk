@@ -5,6 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  deriveDevWholeFlowIsolation,
+  hasUniqueFlowIds,
+  hasSafeDevHttpSemantics,
+} from "./lk1_subscription_dev_execution_contract.mjs";
+import {
   checkedProvisioningContract,
   validateDevProvisioningContract,
 } from "./validate_lk1_subscription_dev_provisioning_contract.mjs";
@@ -343,6 +348,10 @@ const effectiveMongoIdentity = (node) => {
 };
 
 const assertDevMongoCustody = (flow, router, dependencies, provisioningContract) => {
+  if (flow.filter((node) => node?.type === "mongodb4-client").length !== 1
+    || flow.some((node) => node?.type === "mongodb")) {
+    fail("DEV managed Mongo client inventory must be exactly one fixture client");
+  }
   const claimedClient = dependencies?.managedMongoClient;
   const clients = flow.filter((node) => node?.type === "mongodb4-client"
     && node.id === claimedClient?.id);
@@ -363,19 +372,29 @@ const assertDevMongoCustody = (flow, router, dependencies, provisioningContract)
   const claims = Array.isArray(dependencies?.managedMongoNodes)
     ? dependencies.managedMongoNodes : [];
   if (claims.length !== MANAGED_MONGO_SPECS.length) fail("DEV managed Mongo node inventory is incomplete");
+  const expectedEdges = MANAGED_MONGO_SPECS.map((spec) => `${router.id}:${spec.routerOutputIndex}:${spec.id}`).sort();
+  const actualEdges = flow.flatMap((node) => (node.wires || []).flatMap((targets, index) => (
+    targets.filter((id) => MANAGED_MONGO_SPECS.some((spec) => spec.id === id))
+      .map((id) => `${node.id}:${index}:${id}`)
+  ))).sort();
+  if (flow.filter((node) => node.type === "mongodb4").length !== MANAGED_MONGO_SPECS.length
+    || JSON.stringify(expectedEdges) !== JSON.stringify(actualEdges)) {
+    fail("DEV managed Mongo wiring mismatch (operation inventory or inbound edges)");
+  }
   for (const spec of MANAGED_MONGO_SPECS) {
     const claim = claims.find((item) => item.id === spec.id);
     const nodes = flow.filter((node) => node?.id === spec.id && node?.type === "mongodb4");
     const node = nodes.length === 1 ? nodes[0] : null;
     if (!claim || !node || claim.operation !== spec.operation
       || claim.routerOutputIndex !== spec.routerOutputIndex
-      || node.operation !== spec.operation || node.collection !== "lk_games"
+      || node.operation !== spec.operation || node.collection !== "lk_subscription_daily_booking_ops"
+      || node.mode !== "collection" || node.output !== "toArray"
+      || node.maxTimeMS !== "5000" || node.handleDocId !== false
       || node.clientNode !== clients[0].id
-      || !Array.isArray(router.wires?.[spec.routerOutputIndex])
-      || !router.wires[spec.routerOutputIndex].includes(spec.id)
-      || !(node.wires || []).flat().includes(router.id)
+      || JSON.stringify(router.wires?.[spec.routerOutputIndex]) !== JSON.stringify([spec.id])
+      || JSON.stringify(node.wires) !== JSON.stringify([[router.id]])
       || claim.wiredFromRouter !== true || claim.returnsToRouter !== true
-      || claim.clientNode !== clients[0].id || claim.collection !== "lk_games"
+      || claim.clientNode !== clients[0].id || claim.collection !== "lk_subscription_daily_booking_ops"
       || claim.preimageSha256 !== sha256(JSON.stringify(node))) {
       fail(`DEV managed Mongo wiring mismatch (${spec.id})`);
     }
@@ -408,7 +427,7 @@ const assertDevHttpCustody = (
   if (JSON.stringify(allHttpRequests.map((node) => node.id).sort())
       !== JSON.stringify([HTTP_REQUEST_NODE_ID, SPLIT_CREATE_HTTP_REQUEST_NODE_ID].sort())
     || JSON.stringify(inboundEdges) !== JSON.stringify(expectedInboundEdges)
-    || !http || http.type !== "http request" || String(http.url || "") !== ""
+    || !hasSafeDevHttpSemantics(http)
     || JSON.stringify(http.wires) !== JSON.stringify([[router.id]])
     || JSON.stringify(router.wires?.[0]) !== JSON.stringify([HTTP_REQUEST_NODE_ID])
     || JSON.stringify(prepare.wires?.[0]) !== JSON.stringify([HTTP_REQUEST_NODE_ID])
@@ -416,8 +435,7 @@ const assertDevHttpCustody = (
     || JSON.stringify(splitRouter.wires?.[3]) !== JSON.stringify([HTTP_REQUEST_NODE_ID])
     || dependencies?.httpRequestBindingVerified !== true
     || dependencies?.httpRequestPreimageSha256 !== sha256(JSON.stringify(http))
-    || !splitCreateHttp || splitCreateHttp.type !== "http request"
-    || String(splitCreateHttp.url || "") !== ""
+    || !hasSafeDevHttpSemantics(splitCreateHttp)
     || JSON.stringify(splitCreatePrepare.wires?.[0]) !== JSON.stringify([splitCreateHttp.id])
     || JSON.stringify(splitCreatePrepare.wires?.[3]) !== JSON.stringify([splitRouter.id])
     || JSON.stringify(splitJoinPrepare.wires?.[0]) !== JSON.stringify([splitCreateHttp.id])
@@ -489,6 +507,8 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
   validateDevBinding(binding, trustedBindings, provisioningContract);
   if (sha256(sourceText) !== binding.source.sourceSha256) fail("DEV source SHA mismatch");
   const flow = JSON.parse(sourceText);
+  if (!hasUniqueFlowIds(flow)) fail("DEV source has missing or duplicate node IDs");
+  const sourceNodesById = new Map(flow.map((node) => [node.id, structuredClone(node)]));
   if (!Array.isArray(flow)
     || flow.length !== binding.source.nodeCount
     || flow.filter((node) => node?.type === "http in").length !== binding.source.httpRouteCount
@@ -500,6 +520,11 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
     || health.brokenLinks !== binding.source.brokenLinks
     || health.brokenWires !== 0
     || health.brokenLinks !== 0) fail("DEV source graph is unhealthy");
+  const sourceIsolation = deriveDevWholeFlowIsolation(flow);
+  if (!sourceIsolation.verified
+    || binding.dependencies?.wholeFlowIsolationVerified !== true) {
+    fail(`DEV source contains a non-isolated node capability (${sourceIsolation.violations.join(",")})`);
+  }
   const endpoints = trustedBindings.DEV_ENDPOINTS;
   const allowedOrigins = new Set([
     new URL(binding.runtime.apiBase).origin,
@@ -556,6 +581,9 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
   splitCreatePrepare.func = splitCreateSource;
   splitJoinPrepare.func = splitJoinSource;
   finalize.func = finalizeSource;
+  if (!deriveDevWholeFlowIsolation(flow).verified) {
+    fail("DEV candidate contains a non-isolated node capability");
+  }
   const candidateEndpointAudit = deriveEndpointAudit(flow, allowedOrigins);
   if (!candidateEndpointAudit.verifiedDevOnly
     || candidateEndpointAudit.crossEnvironmentEndpointCount !== 0) {
@@ -563,6 +591,29 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
   }
   const candidateText = `${JSON.stringify(flow, null, 2)}\n`;
   const candidateSha256 = sha256(candidateText);
+  const allowedChangedIds = new Set([
+    router.id, prepare.id, splitRouter.id, splitCreatePrepare.id, splitJoinPrepare.id, finalize.id,
+  ]);
+  const changedNodes = flow.flatMap((node) => {
+    const before = sourceNodesById.get(node.id);
+    if (JSON.stringify(before) === JSON.stringify(node)) return [];
+    const changedFields = [...new Set([
+      ...Object.keys(before || {}), ...Object.keys(node || {}),
+    ])].filter((key) => JSON.stringify(before?.[key]) !== JSON.stringify(node?.[key])).sort();
+    if (!allowedChangedIds.has(node.id) || JSON.stringify(changedFields) !== JSON.stringify(["func"])) {
+      fail(`DEV candidate contains an unexpected changed node or field (${node.id}:${changedFields.join(",")})`);
+    }
+    return [{
+      id: node.id,
+      changedFields,
+      sourceNodeSha256: sha256(JSON.stringify(before)),
+      candidateNodeSha256: sha256(JSON.stringify(node)),
+    }];
+  }).sort((left, right) => left.id.localeCompare(right.id));
+  if (changedNodes.length === 0) fail("DEV candidate contains no reviewed function change");
+  const candidateNodeInventorySha256 = sha256(JSON.stringify(flow
+    .map((node) => ({ id: node.id, sha256: sha256(JSON.stringify(node)) }))
+    .sort((left, right) => left.id.localeCompare(right.id))));
   return {
     candidate: flow,
     candidateText,
@@ -571,6 +622,7 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
       environment: "DEV",
       sourceSha256: binding.source.sourceSha256,
       candidateSha256,
+      rollbackSourceSha256: binding.source.sourceSha256,
       targetHost: binding.installTarget.sourceHost,
       targetHostname: binding.installTarget.sourceHostname,
       targetServiceName: binding.installTarget.serviceName,
@@ -584,6 +636,16 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
         splitCreatePrepare: sha256(splitCreateSource),
         splitJoinPrepare: sha256(splitJoinSource),
         finalize: sha256(finalizeSource),
+      },
+      changedNodeIds: changedNodes.map((node) => node.id),
+      changedNodes,
+      candidateNodeInventorySha256,
+      installAuthorization: {
+        authorized: false,
+        candidateSha256,
+        targetHost: binding.installTarget.sourceHost,
+        targetServiceName: binding.installTarget.serviceName,
+        targetFlowPath: binding.installTarget.remoteFlowPath,
       },
       endpointOrigins: [...allowedOrigins].sort(),
       mongoClientPreimageSha256: binding.dependencies.managedMongoClient.preimageSha256,
@@ -663,7 +725,23 @@ export function validateDevInstallManifest(manifest, target,
     || manifest.targetUnixUser !== target.unixUser
     || manifest.targetUserDir !== target.userDir
     || manifest.targetFlowPath !== target.remoteFlowPath
-    || !/^[a-f0-9]{64}$/.test(manifest.candidateSha256 || "")) {
+    || !/^[a-f0-9]{64}$/.test(manifest.candidateSha256 || "")
+    || manifest.rollbackSourceSha256 !== manifest.sourceSha256
+    || !Array.isArray(manifest.changedNodeIds) || manifest.changedNodeIds.length < 1
+    || new Set(manifest.changedNodeIds).size !== manifest.changedNodeIds.length
+    || !Array.isArray(manifest.changedNodes)
+    || JSON.stringify(manifest.changedNodeIds) !== JSON.stringify(manifest.changedNodes.map((node) => node.id))
+    || manifest.changedNodes.some((node) => (
+      JSON.stringify(node.changedFields) !== JSON.stringify(["func"])
+      || !/^[a-f0-9]{64}$/.test(node.sourceNodeSha256 || "")
+      || !/^[a-f0-9]{64}$/.test(node.candidateNodeSha256 || "")
+    ))
+    || !/^[a-f0-9]{64}$/.test(manifest.candidateNodeInventorySha256 || "")
+    || manifest.installAuthorization?.authorized !== true
+    || manifest.installAuthorization?.candidateSha256 !== manifest.candidateSha256
+    || manifest.installAuthorization?.targetHost !== target.sourceHost
+    || manifest.installAuthorization?.targetServiceName !== target.serviceName
+    || manifest.installAuthorization?.targetFlowPath !== target.remoteFlowPath) {
     fail("DEV install target does not match the frozen manifest");
   }
   return true;

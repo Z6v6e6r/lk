@@ -13,7 +13,7 @@ const importPath = process.argv[4]
   ? path.resolve(process.argv[4])
   : path.resolve(ROOT, "node-red/modular/imports/lk_subscription_booking.nodes.import.json");
 const functionsDir = path.resolve(ROOT, "scripts/nodered_subscription_booking_nodes");
-const EXPECTED_LIVE_ROUTER_SHA256 = "d9d6d1f17c12f38b567cf226468caa6780ed3d6e707f55f4af26c066be86b1a4";
+const REQUIRED_PRECREATE_ROUTER_SHA256 = "8b1829d1fb85b9644c29e48282d168ddf60f5552deaad04271107d1c357caad9";
 const ROUTER_ID = "8f7bd5b482fe9763";
 const COLLECTION = "lk_subscription_daily_booking_ops";
 
@@ -51,6 +51,44 @@ const writeJson = (filePath, value) => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 };
+const readyPath = `${candidatePath}.ready.json`;
+if (new Set([sourcePath, candidatePath, importPath, readyPath]).size !== 4) {
+  throw new Error("Source, candidate, import, and readiness paths must be distinct");
+}
+// A failed invocation must not leave a previous output looking current.
+for (const outputPath of [candidatePath, importPath, readyPath]) {
+  fs.rmSync(outputPath, { force: true });
+}
+
+const publishOutputSet = (candidate, nodesImport) => {
+  fs.mkdirSync(path.dirname(candidatePath), { recursive: true });
+  fs.mkdirSync(path.dirname(importPath), { recursive: true });
+  const stagingDirectory = fs.mkdtempSync(path.join(path.dirname(candidatePath), ".lk1-subscription-stage-"));
+  const stagedCandidate = path.join(stagingDirectory, "candidate.json");
+  const stagedImport = path.join(stagingDirectory, "import.json");
+  const stagedReady = path.join(stagingDirectory, "ready.json");
+  try {
+    writeJson(stagedCandidate, candidate);
+    writeJson(stagedImport, nodesImport);
+    const candidateSha256 = sha256(fs.readFileSync(stagedCandidate));
+    const importSha256 = sha256(fs.readFileSync(stagedImport));
+    writeJson(stagedReady, {
+      formatVersion: 1,
+      sourceSha256: sourceHash,
+      candidateSha256,
+      importSha256,
+    });
+    fs.renameSync(stagedCandidate, candidatePath);
+    fs.renameSync(stagedImport, importPath);
+    fs.renameSync(stagedReady, readyPath);
+    return { candidateSha256, importSha256 };
+  } catch (error) {
+    for (const outputPath of [candidatePath, importPath, readyPath]) fs.rmSync(outputPath, { force: true });
+    throw error;
+  } finally {
+    fs.rmSync(stagingDirectory, { recursive: true, force: true });
+  }
+};
 
 function verifyLiveSource() {
   const metaPath = path.join(path.dirname(sourcePath), "source.flow.meta.json");
@@ -70,117 +108,6 @@ function verifyLiveSource() {
     throw new Error("Refusing to patch a stale or unverified live-147 Node-RED source");
   }
   return { flow: JSON.parse(sourceBuffer.toString("utf8")), sourceHash };
-}
-
-function replaceOnce(source, before, after, label) {
-  const first = source.indexOf(before);
-  if (first < 0 || source.indexOf(before, first + before.length) >= 0) {
-    throw new Error(`Split router preimage mismatch: ${label}`);
-  }
-  return `${source.slice(0, first)}${after}${source.slice(first + before.length)}`;
-}
-
-function patchSplitRouterSource(source) {
-  if (sha256(source) !== EXPECTED_LIVE_ROUTER_SHA256) {
-    throw new Error("Live split router SHA changed; refresh and review the preimage before patching");
-  }
-  const adminBlock = `const adminRequest = (ctx, method, path, payload) => {
-  msg._splitCtx = ctx;
-  msg.method = method;
-  msg.url = \`${"${ADMIN_API}${path}"}\`;
-  msg.headers = {
-    Authorization: \`Bearer ${"${ctx.token}"}\`,
-    "Content-Type": "application/json",
-  };
-  msg.payload = payload;
-  return [msg, null, msg];
-};`;
-  const gatewayBlock = `${adminBlock}
-
-const startSubscriptionBookingGateway = (ctx) => {
-  const requestHeaders = msg.req && msg.req.headers && typeof msg.req.headers === "object"
-    ? msg.req.headers
-    : {};
-  const authHeader = toStr(requestHeaders.authorization || requestHeaders.Authorization);
-  const operationId = toStr(
-    requestHeaders["idempotency-key"]
-    || requestHeaders["Idempotency-Key"]
-    || msg.req?.query?.operationId,
-  );
-  if (!authHeader || !/^Bearer\\s+\\S+/i.test(authHeader)) {
-    return fail(401, "Требуется авторизация Viva", {
-      code: "SUBSCRIPTION_BOOKING_AUTH_REQUIRED",
-    });
-  }
-  if (!operationId || !/^[A-Za-z0-9._:-]{8,200}$/.test(operationId)) {
-    return fail(400, "Требуется корректный operationId", {
-      code: "SUBSCRIPTION_BOOKING_OPERATION_ID_REQUIRED",
-    });
-  }
-
-  msg._splitCtx = ctx;
-  msg._subscriptionBooking = {
-    caller: "split",
-    step: "profile",
-    tenantKey: "iSkq6G",
-    operationId,
-    authHeader,
-    exerciseId: ctx.exerciseId,
-    clientSubscriptionId: ctx.clientSubscriptionId,
-    managedAction: ctx.action === "create"
-      ? "CREATE_GAME"
-      : ctx.action === "join"
-        ? "JOIN_GAME"
-        : null,
-    spot: ctx.spot || null,
-    subscriptionVisitCount: resolveSubscriptionVisitCount(ctx),
-    startedAt: new Date().toISOString(),
-  };
-  msg.method = "GET";
-  msg.url = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile";
-  msg.headers = {
-    Authorization: authHeader,
-    Accept: "application/json",
-  };
-  msg.payload = undefined;
-  return [null, null, null, msg];
-};`;
-  let next = replaceOnce(source, adminBlock, gatewayBlock, "admin request helper");
-  const bookingTail = `  ctx.bookingPaymentType = bookingPaymentType;
-  ctx.subscriptionVisitCount = subscriptionVisitCount;
-  ctx.selectedPaymentMode = resolvePaymentMode(ctx.paymentMode);
-  ctx.step = "create_booking";`;
-  const guardedBookingTail = `  ctx.bookingPaymentType = bookingPaymentType;
-  ctx.subscriptionVisitCount = subscriptionVisitCount;
-  ctx.selectedPaymentMode = resolvePaymentMode(ctx.paymentMode);
-  if (
-    bookingPaymentType === "SUBSCRIPTION"
-    && clientSubscriptionId
-    && ctx.subscriptionGuardDone !== true
-  ) {
-    return startSubscriptionBookingGateway(ctx);
-  }
-  ctx.step = "create_booking";`;
-  next = replaceOnce(next, bookingTail, guardedBookingTail, "subscription booking dispatch");
-  return next;
-}
-
-function patchManagedRouterSource(source, contract) {
-  if (!contract?.managedActionCandidateSha256) return source;
-  const before = `    clientSubscriptionId: ctx.clientSubscriptionId,
-    spot: ctx.spot || null,`;
-  const after = `    clientSubscriptionId: ctx.clientSubscriptionId,
-    managedAction: ctx.action === "create"
-      ? "CREATE_GAME"
-      : ctx.action === "join"
-        ? "JOIN_GAME"
-        : null,
-    spot: ctx.spot || null,`;
-  const next = replaceOnce(source, before, after, "managed subscription action");
-  if (sha256(next) !== contract.managedActionCandidateSha256) {
-    throw new Error("Managed split router candidate SHA changed");
-  }
-  return next;
 }
 
 function functionNode(tabId, id, name, func, outputs, x, y, wires) {
@@ -328,13 +255,12 @@ if (tabs.length !== 1) throw new Error(`Expected one enabled LK Games tab, found
 const tabId = tabs[0].id;
 const routerNode = flow.find((node) => node.id === ROUTER_ID && node.z === tabId && node.type === "function");
 const routerSha = routerNode?.func ? sha256(routerNode.func) : null;
-const originalRouter = routerNode?.name === "Route Viva split payment"
-  && routerNode.outputs === 3
-  && routerSha === EXPECTED_LIVE_ROUTER_SHA256;
-const managedRouterContract = resolveManagedSubscriptionRouterContract(routerNode, routerSha);
-const managedRouter = Boolean(managedRouterContract);
-if (!originalRouter && !managedRouter) {
-  throw new Error("Live split router node preimage changed");
+if (routerNode?.outputs === 3) {
+  throw new Error("Original split router generator path is deprecated");
+}
+if (routerSha !== REQUIRED_PRECREATE_ROUTER_SHA256
+  || !resolveManagedSubscriptionRouterContract(routerNode, routerSha)) {
+  throw new Error("Pre-PRECREATE or unknown split router is deprecated; exact reviewed router required");
 }
 const mongoClientIds = Array.from(new Set(flow
   .filter((node) => node.type === "mongodb4" && node.z === tabId && node.collection === "lk_games")
@@ -353,20 +279,14 @@ if (unmanagedDuplicate) throw new Error("An unmanaged subscription booking route
 
 const next = flow.filter((node) => !managedIds.has(node.id));
 const nextRouter = next.find((node) => node.id === ROUTER_ID);
-if (originalRouter) {
-  nextRouter.func = patchSplitRouterSource(nextRouter.func);
-  nextRouter.outputs = 4;
-  nextRouter.wires = [...nextRouter.wires, [IDS.http]];
-} else if (managedRouterContract?.managedActionCandidateSha256) {
-  nextRouter.func = patchManagedRouterSource(nextRouter.func, managedRouterContract);
-}
 const managedNodes = buildManagedNodes(tabId, mongoClientId);
 const candidate = [...next, ...managedNodes];
 validateCandidate(candidate, tabId, mongoClientId);
-writeJson(candidatePath, candidate);
-writeJson(importPath, [nextRouter, ...managedNodes]);
+const published = publishOutputSet(candidate, [nextRouter, ...managedNodes]);
 
 console.log(`sourceSha256=${sourceHash}`);
-console.log(`candidateSha256=${sha256(fs.readFileSync(candidatePath))}`);
+console.log(`candidateSha256=${published.candidateSha256}`);
+console.log(`importSha256=${published.importSha256}`);
+console.log(`readyPath=${readyPath}`);
 console.log(`managedNodeCount=${managedNodes.length + 1}`);
 console.log(`mongoCollection=${COLLECTION}`);

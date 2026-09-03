@@ -2,6 +2,11 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
+import {
+  deriveDevWholeFlowIsolation,
+  hasUniqueFlowIds,
+  hasSafeDevHttpSemantics,
+} from "./lk1_subscription_dev_execution_contract.mjs";
 
 const [sourcePath, metaPath, credentialStorePath] = process.argv.slice(2);
 if (!sourcePath || !metaPath) {
@@ -154,10 +159,15 @@ const managedMongoNodes = managedMongoSpecs.map((spec) => {
     present: Boolean(node),
     clientNode: node?.clientNode || null,
     collection: node?.collection || null,
-    returnsToRouter: Boolean(node && (node.wires || []).flat().includes(targetSpec.routerNodeId)),
+    actualOperation: node?.operation ?? null,
+    mode: node?.mode ?? null,
+    output: node?.output ?? null,
+    maxTimeMS: node?.maxTimeMS ?? null,
+    handleDocId: node?.handleDocId ?? null,
+    returnsToRouter: Boolean(node
+      && JSON.stringify(node.wires) === JSON.stringify([[targetSpec.routerNodeId]])),
     wiredFromRouter: Boolean(router.length === 1
-      && Array.isArray(router[0].wires?.[spec.routerOutputIndex])
-      && router[0].wires[spec.routerOutputIndex].includes(spec.id)),
+      && JSON.stringify(router[0].wires?.[spec.routerOutputIndex]) === JSON.stringify([spec.id])),
     preimageSha256: node ? sha256(JSON.stringify(node)) : null,
   };
 });
@@ -188,21 +198,19 @@ const actualHttpInboundEdges = flow.flatMap((node) => (
       .map((target) => `${node.id}:${outputIndex}:${target}`)
   ))
 )).sort();
-const httpRequestBindingVerified = targetPresent
+const httpRequestBindingVerified = hasUniqueFlowIds(flow) && targetPresent
   && JSON.stringify(allHttpRequests.map((node) => node.id).sort())
     === JSON.stringify(["ee7ba8cdd68bdf74", "lk_subscription_booking_http_20260804"])
   && JSON.stringify(actualHttpInboundEdges) === JSON.stringify(expectedHttpInboundEdges)
   && httpRequests.length === 1
-  && httpRequests[0].type === "http request"
-  && String(httpRequests[0].url || "") === ""
+  && hasSafeDevHttpSemantics(httpRequests[0])
   && JSON.stringify(httpRequests[0].wires) === JSON.stringify([[targetSpec.routerNodeId]])
   && JSON.stringify(router[0].wires?.[0]) === JSON.stringify([httpRequests[0].id])
   && JSON.stringify(prepare[0].wires?.[0]) === JSON.stringify([httpRequests[0].id])
   && JSON.stringify(splitRouter[0].wires?.[0]) === JSON.stringify([splitCreateHttpRequests[0].id])
   && JSON.stringify(splitRouter[0].wires?.[3]) === JSON.stringify([httpRequests[0].id])
   && splitCreateHttpRequests.length === 1
-  && splitCreateHttpRequests[0].type === "http request"
-  && String(splitCreateHttpRequests[0].url || "") === ""
+  && hasSafeDevHttpSemantics(splitCreateHttpRequests[0])
   && JSON.stringify(splitCreatePrepare[0].wires?.[0])
     === JSON.stringify([splitCreateHttpRequests[0].id])
   && JSON.stringify(splitCreatePrepare[0].wires?.[3])
@@ -230,9 +238,22 @@ if (credentialStorePath) {
     mongoCredentialStorePreimageSha256 = null;
   }
 }
+const expectedMongoEdges = managedMongoSpecs.map((spec) => (
+  `${targetSpec.routerNodeId}:${spec.routerOutputIndex}:${spec.id}`
+)).sort();
+const actualMongoEdges = flow.flatMap((node) => (node.wires || []).flatMap((targets, index) => (
+  targets.filter((id) => managedMongoSpecs.some((spec) => spec.id === id))
+    .map((id) => `${node.id}:${index}:${id}`)
+))).sort();
 const mongoBindingVerifiedDevOnly = targetPresent
+  && mongo4Clients.length === 1 && legacyMongoConfigs.length === 0
+  && mongo4Nodes.length === managedMongoSpecs.length
+  && JSON.stringify(actualMongoEdges) === JSON.stringify(expectedMongoEdges)
   && managedMongoNodes.every((node) => node.present
-    && node.collection === "lk_games"
+    && node.collection === "lk_subscription_daily_booking_ops"
+    && node.actualOperation === node.operation
+    && node.mode === "collection" && node.output === "toArray"
+    && node.maxTimeMS === "5000" && node.handleDocId === false
     && node.clientNode === referencedClientIds[0]
     && node.wiredFromRouter
     && node.returnsToRouter)
@@ -269,6 +290,8 @@ const audit = {
     finalizePreimageSha256: finalize.length === 1 ? sha256(String(finalize[0].func || "")) : null,
   },
   dependencies: {
+    wholeFlowIsolationVerified: deriveDevWholeFlowIsolation(flow).verified,
+    wholeFlowIsolationViolations: deriveDevWholeFlowIsolation(flow).violations,
     httpRequestBindingVerified,
     httpRequestPreimageSha256: httpRequests.length === 1
       ? sha256(JSON.stringify(httpRequests[0])) : null,
