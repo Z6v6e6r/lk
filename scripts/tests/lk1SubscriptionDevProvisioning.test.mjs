@@ -8,15 +8,21 @@ import {
 
 const clone = () => structuredClone(checkedProvisioningContract);
 
-test("checked DEV provisioning contract is valid and fully blocked", () => {
+test("checked DEV provisioning contract authorizes only stopped bootstrap", () => {
   assert.equal(validateDevProvisioningContract(clone()), true);
   assert.equal(checkedProvisioningContract.executionAuthorized, false);
+  assert.equal(checkedProvisioningContract.bootstrapInstallAllowed, true);
   assert.equal(checkedProvisioningContract.candidateBuildAllowed, false);
   assert.equal(checkedProvisioningContract.installAllowed, false);
   assert.equal(checkedProvisioningContract.serviceStartAllowed, false);
   assert.equal(checkedProvisioningContract.ingressAllowed, false);
   assert.equal(checkedProvisioningContract.activationAllowed, false);
   assert.deepEqual(Object.values(checkedProvisioningContract.releaseIdentity), [null, null, null, null]);
+  assert.equal(checkedProvisioningContract.bootstrapAuthorization.scope,
+    "CREATE_IDENTITY_AND_INSTALL_STOPPED_DEPENDENCIES");
+  assert.ok(Object.entries(checkedProvisioningContract.bootstrapAuthorization)
+    .filter(([key]) => key.endsWith("Allowed"))
+    .every(([, value]) => value === false));
 });
 
 test("planned target cannot reuse shared Node-RED identity", () => {
@@ -80,20 +86,26 @@ test("ingress, flags, release SHA and execution remain unbound until separately 
   assert.throws(() => validateDevProvisioningContract(malformedFlags), /default-off/);
   const executable = clone();
   executable.executionAuthorized = true;
-  assert.throws(() => validateDevProvisioningContract(executable), /fully blocked/);
+  assert.throws(() => validateDevProvisioningContract(executable), /only the stopped bootstrap/);
   const buildable = clone();
   buildable.candidateBuildAllowed = true;
-  assert.throws(() => validateDevProvisioningContract(buildable), /fully blocked/);
+  assert.throws(() => validateDevProvisioningContract(buildable), /only the stopped bootstrap/);
   const rollback = clone();
   rollback.rollback.serviceStopOrder = [];
   assert.throws(() => validateDevProvisioningContract(rollback), /not fail-safe/);
   const ingressAuthorized = clone();
   ingressAuthorized.ingressAllowed = true;
   ingressAuthorized.ingressAuthorization.approved = true;
-  assert.throws(() => validateDevProvisioningContract(ingressAuthorized), /fully blocked/);
+  assert.throws(() => validateDevProvisioningContract(ingressAuthorized), /only the stopped bootstrap/);
   const ingressTuple = clone();
   ingressTuple.ingressAuthorization.origin = "https://subscriptions-dev.example.test";
   assert.throws(() => validateDevProvisioningContract(ingressTuple), /separately unauthorized/);
+  const overBroadBootstrap = clone();
+  overBroadBootstrap.bootstrapAuthorization.serviceStartAllowed = true;
+  assert.throws(() => validateDevProvisioningContract(overBroadBootstrap), /over-broad/);
+  const missingBootstrapAuthority = clone();
+  missingBootstrapAuthority.bootstrapInstallAllowed = false;
+  assert.throws(() => validateDevProvisioningContract(missingBootstrapAuthority), /only the stopped bootstrap/);
 });
 
 test("shared-flow evidence has an exact timestamp and non-negative count schema", () => {

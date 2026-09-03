@@ -1,0 +1,100 @@
+{
+  "DEV_LK_BASE_URL": "https://lk.dev.example.invalid",
+  "DEV_CUP_BASE_URL": "https://cup.dev.example.invalid",
+  "DEV_TEST_SUBSCRIPTION_A_ID": "replace-in-private-copy",
+  "DEV_TEST_SUBSCRIPTION_B_ID": "replace-in-private-copy",
+  "DEV_TEST_SUBSCRIPTION_A_INSTANCE_ID": "replace-with-exact-instance-a",
+  "DEV_TEST_SUBSCRIPTION_B_INSTANCE_ID": "replace-with-exact-instance-b",
+  "DEV_TEST_AUTH_A": "read-from-secret-store",
+  "DEV_TEST_AUTH_B": "read-from-secret-store",
+  "DEV_CUP_INTEGRATION_TOKEN": "read-from-secret-store",
+  "EXPECTED_SUBSCRIPTION_TYPE_ID": "replace-with-type-id",
+  "EXPECTED_PRODUCT_ID": "replace-with-product-id",
+  "EXPECTED_RULE_A_VERSION": "V1",
+  "EXPECTED_RULE_B_VERSION": "V2",
+  "DEV_CONTROL_SUBSCRIPTION_ID": "replace-with-control-client-id",
+  "DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID": "replace-with-control-instance-id",
+  "DEV_CONTROL_AUTH": "read-from-secret-store",
+  "expectedLkRelease": {
+    "sourceSha": "1111111111111111111111111111111111111111",
+    "candidateSha": "1111111111111111111111111111111111111111",
+    "readbackSha": "1111111111111111111111111111111111111111",
+    "servedSha": "1111111111111111111111111111111111111111"
+  },
+  "expectedCupRelease": {
+    "sourceSha": "2222222222222222222222222222222222222222",
+    "candidateSha": "2222222222222222222222222222222222222222",
+    "readbackSha": "2222222222222222222222222222222222222222",
+    "servedSha": "2222222222222222222222222222222222222222"
+  },
+  "allowedDevOrigins": [
+    "https://lk.dev.example.invalid",
+    "https://cup.dev.example.invalid"
+  ],
+  "productionOrigins": [],
+  "endpoints": {
+    "lkRelease": "/lk/release-dev.json",
+    "cupRelease": "/api/system/release",
+    "runtimeContext": "/api/internal/subscriptions/runtime-context",
+    "systemEvidence": "/api/internal/subscriptions/dev-uat/system-evidence",
+    "observability": "/api/internal/subscriptions/dev-uat/observability"
+  },
+  "expectedDelta": {
+    "A": {
+      "policyVersion": "V1",
+      "instanceRevisionDelta": 1,
+      "instanceState": "ACTIVE",
+      "metrics": {
+        "entitlementAggregateRevision": 1,
+        "dailyUsage": 1,
+        "activeUsage": 1,
+        "operations": 1,
+        "ledgerEntries": 1,
+        "outboxEntries": 1,
+        "testerGames": 1,
+        "providerWriteCounter": 1,
+        "paymentWriteCounter": 0,
+        "entitlementMutationCounter": 1,
+        "rollbackWriteCounter": 0
+      },
+      "logicalResults": [
+        {
+          "step": "A_CREATE",
+          "action": "CREATE_GAME",
+          "result": "CONFIRMED",
+          "providerCalls": 1,
+          "ledgerEntries": 1,
+          "outboxEntries": 1
+        }
+      ]
+    },
+    "B": {
+      "policyVersion": "V2",
+      "instanceRevisionDelta": 1,
+      "instanceState": "ACTIVE",
+      "metrics": {
+        "entitlementAggregateRevision": 1,
+        "dailyUsage": 1,
+        "activeUsage": 1,
+        "operations": 1,
+        "ledgerEntries": 1,
+        "outboxEntries": 1,
+        "testerGames": 1,
+        "providerWriteCounter": 1,
+        "paymentWriteCounter": 0,
+        "entitlementMutationCounter": 1,
+        "rollbackWriteCounter": 0
+      },
+      "logicalResults": [
+        {
+          "step": "B_CREATE",
+          "action": "CREATE_GAME",
+          "result": "CONFIRMED",
+          "providerCalls": 1,
+          "ledgerEntries": 1,
+          "outboxEntries": 1
+        }
+      ]
+    }
+  }
+}

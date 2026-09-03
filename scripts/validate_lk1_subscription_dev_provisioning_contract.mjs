@@ -17,23 +17,40 @@ export const checkedProvisioningContract = Object.freeze(JSON.parse(fs.readFileS
 
 export function validateDevProvisioningContract(contract) {
   exactKeys(contract, [
-    "formatVersion", "environment", "contractState", "executionAuthorized", "candidateBuildAllowed",
+    "formatVersion", "environment", "contractState", "executionAuthorized", "bootstrapInstallAllowed", "candidateBuildAllowed",
     "installAllowed", "serviceStartAllowed", "ingressAllowed", "activationAllowed",
-    "productionBindingState", "evidence",
+    "bootstrapAuthorization", "productionBindingState", "evidence",
     "forbiddenExistingResources", "plannedTarget", "fixtureDependencies",
     "networkPolicy", "runtimeFlags", "releaseIdentity", "ingressAuthorization", "rollback",
   ], "DEV provisioning contract");
   if (contract.formatVersion !== 1 || contract.environment !== "DEV") {
     fail("DEV provisioning environment identity mismatch");
   }
-  if (contract.contractState !== "BLOCKED_TARGET_NOT_PROVISIONED"
+  if (contract.contractState !== "STOPPED_BOOTSTRAP_AUTHORIZED"
     || contract.executionAuthorized !== false
+    || contract.bootstrapInstallAllowed !== true
     || contract.candidateBuildAllowed !== false
     || contract.installAllowed !== false
     || contract.serviceStartAllowed !== false
     || contract.ingressAllowed !== false
     || contract.activationAllowed !== false) {
-    fail("Unprovisioned DEV target must remain fully blocked");
+    fail("DEV target may authorize only the stopped bootstrap stage");
+  }
+  const bootstrapAuthorization = contract.bootstrapAuthorization;
+  exactKeys(bootstrapAuthorization, [
+    "authorizationId", "approvedAt", "scope", "targetHost", "serviceStartAllowed",
+    "enableUnitsAllowed", "ingressAllowed", "activationAllowed", "canaryIdsAllowed", "secretsAllowed",
+  ], "DEV stopped-bootstrap authorization");
+  const approvedAt = Date.parse(String(bootstrapAuthorization.approvedAt || ""));
+  if (bootstrapAuthorization.authorizationId !== "codex-thread-01a06288-94a5-7242-b899-c99031e82816-stopped-bootstrap-20260902"
+    || bootstrapAuthorization.approvedAt !== "2026-09-02T20:09:11Z"
+    || !Number.isFinite(approvedAt)
+    || bootstrapAuthorization.scope !== "CREATE_IDENTITY_AND_INSTALL_STOPPED_DEPENDENCIES"
+    || bootstrapAuthorization.targetHost !== "lk-reserve-89"
+    || Object.entries(bootstrapAuthorization).some(([key, value]) => (
+      !["authorizationId", "approvedAt", "scope", "targetHost"].includes(key) && value !== false
+    ))) {
+    fail("DEV stopped-bootstrap authorization is missing, ambiguous, or over-broad");
   }
   if (contract.productionBindingState !== "UNBOUND_AFTER_ROUTER_AMENDMENT") {
     fail("Production binding must remain unbound");
@@ -204,5 +221,5 @@ export function validateDevProvisioningContract(contract) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   validateDevProvisioningContract(checkedProvisioningContract);
-  process.stdout.write("LK1_DEV_PROVISIONING_CONTRACT=BLOCKED_VALID\n");
+  process.stdout.write("LK1_DEV_PROVISIONING_CONTRACT=STOPPED_BOOTSTRAP_AUTHORIZED\n");
 }

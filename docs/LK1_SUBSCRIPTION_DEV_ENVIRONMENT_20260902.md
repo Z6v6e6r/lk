@@ -81,8 +81,10 @@ origin. Consequently the DEV runtime trust anchor remains `null`.
 
 The three documented P1 source blockers are closed. Environment acceptance and
 candidate publication remain blocked by the independent provisioning contract:
-`BLOCKED_TARGET_NOT_PROVISIONED`, `DEV_PROVISIONING_READY=no`, and
-`installAllowed=false`. No source result is host/runtime evidence, the DEV trust
+`STOPPED_BOOTSTRAP_AUTHORIZED`, `DEV_PROVISIONING_READY=no`, and
+`candidateBuildAllowed=false` / `installAllowed=false`. The narrowly authorized
+stopped bootstrap below does not authorize a candidate or service start.
+No source result is host/runtime evidence, the DEV trust
 anchor is null, and the audited DEV flow targets are absent.
 
 ## Release custody
@@ -115,10 +117,11 @@ anchor is null, and the audited DEV flow targets are absent.
   rejects a DEV manifest. Its candidate binding remains
   `UNBOUND_AFTER_ROUTER_AMENDMENT`; no DEV digest is copied into it.
 
-No Node-RED import, service restart, runtime-global mutation, Viva write, Mongo
-write, deployment, or activation was performed.
+The source-remediation stage performed no Node-RED import, service restart,
+runtime-global mutation, Viva write, Mongo write, deployment, or activation.
+The subsequent, separately authorized stopped host installation is recorded below.
 
-## Dedicated target provisioning contract (source-only)
+## Dedicated target provisioning contract and stopped bootstrap
 
 A second read-only capture at `2026-09-02T17:12:36Z` returned the same shared
 flow SHA and again found no LK Games target. Host topology inspection also found
@@ -128,9 +131,10 @@ only the shared root-owned Node-RED process at `0.0.0.0:1880`, shared user-dir
 `/api/` route that proxies to production. None is an acceptable base for this
 DEV target.
 
-`lk1_subscription_dev_provisioning_contract.json` therefore remains
-`BLOCKED_TARGET_NOT_PROVISIONED` and defines a future physically distinct
-target:
+`lk1_subscription_dev_provisioning_contract.json` records the narrowly scoped
+`STOPPED_BOOTSTRAP_AUTHORIZED` authorization. It defines the physically distinct
+target below; only its identity, locked unit files and pinned program dependencies
+have been installed, not an executable DEV application flow:
 
 - Unix user/group `lk1-subscription-dev`;
 - systemd unit `lk1-subscription-dev-nodered.service`;
@@ -147,7 +151,37 @@ target:
   product/canary flags empty, and source,
   candidate, manifest, and host-readback SHA values null.
 
-### Future execution plan (requires separate authorization)
+### Historical stopped-install evidence
+
+The authorized bootstrap completed on `lk-reserve-89` at
+`2026-09-02T20:23:18Z`, followed by an independent read-only postcheck:
+
+- installed source commit: `f9c08c0133811876c63bd78dee0a1482690582ca`;
+- bootstrap manifest SHA-256:
+  `b00ad01a36e41f254fefbaab94358239349a607820a443ffa35e401173ab92bc`;
+- authorization contract SHA-256:
+  `223f3756056d153684cebd3bd0f69392ec947eacf45f69c2d107f9a8ee0231ff`;
+- dedicated user/group and root-owned program/evidence directories created;
+- all five units `loaded`, `disabled`, `inactive/dead`;
+- no listeners on `1882`, `27030`, `3037`, `3038`, or `3039`;
+- service-start marker and `node-red/flows.json` absent;
+- no service start, ingress, activation, canary IDs, secrets, or provider/data
+  mutations in this bootstrap operation.
+
+The exact Node, Mongo and Node-RED archive hashes matched on host readback.
+The root-owned receipt is
+`/srv/lk1-subscription-dev/bootstrap-evidence/bootstrap-install.json`.
+These are historical stopped-install observations, not current runtime health or
+functional UAT evidence. The authorization contract is retained byte-for-byte
+because the installed manifest pins it. It is not permission to repeat a host
+operation or advance to the next stage.
+
+The later ordinary merge of parent `c4425940efc803268c42a2597e1a8cd6eac2a3a8`
+produced integration checkpoint `e71a115ef6ea5b64b23b3e8040182e1423a0da11`.
+It changed no installed bootstrap payload bytes. That integration checkpoint
+must not replace `f9c08c0` in the historical installed-source evidence.
+
+### Staged execution plan (remaining steps require separate authorization)
 
 1. Re-freeze `origin/main`, PR head/tree, CI, host identity, listeners, units,
    ingress directives, and the shared flow SHA. Stop if any named resource or
@@ -188,8 +222,32 @@ target:
     fixtures, preserves evidence/logs, and performs no data deletion without a
     separately approved destructive step.
 
-The current task performs none of these execution steps; it only records and
-validates the blocked identity contract. The executable publisher and install
-verifier both reject this tracked contract; enabling either stage requires an
-explicit future stage-schema change, frozen authorization evidence, and new
+Only the stopped identity/dependency bootstrap in step 2 has completed. No step
+that installs a DEV application candidate, starts fixtures/services, opens ingress,
+or activates canaries has completed. The DEV candidate publisher and install
+verifier both reject the current tracked bindings; enabling either stage requires
+an explicit future stage-schema change, frozen authorization evidence, and new
 independent review.
+
+### Integration validation limitations
+
+Local runner, bootstrap, provisioning, DEV candidate, critical matrix and DEV
+runtime suites pass after the parent merge. The exact-head CI workflow does not
+invoke the runner or DEV candidate/provisioning/bootstrap suites, so those remain
+local evidence rather than CI evidence.
+
+The future evidence producer must also map release identities explicitly: the
+runner expects four 40-hex release fields, whereas DEV candidate manifests use
+64-hex source/candidate artifact digests. Neither those digests nor the bootstrap
+manifest may substitute for the runner's release proof. No such runtime adapter
+or active fixture service is provided by the stopped bootstrap.
+
+An additional 219-test regression run has 217 PASS, one SKIP (the live-router
+fixture is absent), and one pre-existing failure in
+`vivaServiceTokenCache.nodered.test.ts`: the cleanup fixture lacks a tenant and
+is rejected with `legacy_game_tenant_required` before its cached-token assertion.
+The same fixture result was reproduced on `1dcc868`, `c442594`, and the merge
+HEAD; the cleanup source blob is identical
+(`fb7171907ff0691bb5c3500a3d6848b7495362c6`). This is recorded as a separate
+baseline failure, not a passing test or a merge regression. No cleanup runtime
+or tenant guard was changed to bypass it.

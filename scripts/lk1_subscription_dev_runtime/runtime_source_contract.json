@@ -1,0 +1,45 @@
+{
+  "formatVersion": 1,
+  "stage": "LOCAL_RUNTIME_SOURCE",
+  "environment": "DEV",
+  "purpose": "READ_ONLY_UAT_EVIDENCE",
+  "sourceCommit": null,
+  "target": {
+    "fixtureRuntimePath": "/srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs",
+    "nodeRedFlowPath": "/srv/lk1-subscription-dev/node-red/flows.json",
+    "nodeRedReleaseReceiptPath": "/srv/lk1-subscription-dev/node-red/release-identity.json",
+    "fixtureConfigEnvironmentVariable": "LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE",
+    "serviceStartAuthorizationMarker": "/srv/lk1-subscription-dev/authorization/service-start.approved"
+  },
+  "listeners": {
+    "nodeRed": "127.0.0.1:1882",
+    "cup": "127.0.0.1:3037",
+    "provider": "127.0.0.1:3038",
+    "identity": "127.0.0.1:3039"
+  },
+  "implementedContract": {
+    "lkReleaseReceipt": "FAIL_CLOSED_UNTIL_HOST_READBACK",
+    "cupRelease": "READ_ONLY",
+    "systemEvidence": "READ_ONLY_FIXTURE_NON_AUTHORIZING",
+    "runtimeContext": "READ_ONLY_SYNTHETIC",
+    "observability": "READ_ONLY_SCHEMA_FIXTURE_NON_AUTHORIZING",
+    "provider": "HEALTH_ONLY_LOCKED",
+    "identity": "HEALTH_ONLY_LOCKED",
+    "managedEntitlement": "NOT_IMPLEMENTED",
+    "activation": "NOT_IMPLEMENTED",
+    "createJoin": "NOT_IMPLEMENTED"
+  },
+  "authority": {
+    "bundleBuildAllowed": true,
+    "hostInstallAllowed": false,
+    "serviceStartAllowed": false,
+    "enableUnitsAllowed": false,
+    "ingressAllowed": false,
+    "activationAllowed": false,
+    "canaryIdsAllowed": false,
+    "secretsAllowed": false,
+    "providerWritesAllowed": false,
+    "paymentWritesAllowed": false,
+    "entitlementMutationsAllowed": false
+  }
+}
