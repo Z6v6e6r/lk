@@ -88,7 +88,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
       name: "Route atomic subscription booking",
       sourceFile: "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js",
       preimageSha256: "11c4b80c2624ad97fc83f634139d0db7d36aebb8df8a525bdc7baae3e9bae0fd",
-      candidateSha256: "badaf9105ff0e70872495d718eca86ef646298426903784319c3b0c7a1abba99",
+      candidateSha256: "a00df114d1c5823e2623640c452b5c17ed476382d26b6c35d9cb96fbe392c9ef",
     }),
     Object.freeze({
       id: "c165e43eba668c25",
