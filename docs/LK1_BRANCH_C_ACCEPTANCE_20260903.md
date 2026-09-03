@@ -3,8 +3,9 @@
 ## Frozen source
 
 - preserved checkpoint: `767b3f42fcfffb759691c071d3039ea0f440dba4`;
-- frozen `origin/main`: `780210d9e324c3dea1d74d7886a62667c3fa4559`;
-- ordinary merge, no rebase: `63d7ae06cf28a89b9187172e8b925e44dc87d0a4`;
+- frozen `origin/main`: `55077d259bb7e3d8885df01fed78aba17e42eb55`;
+- ordinary merges, no rebase: `63d7ae06cf28a89b9187172e8b925e44dc87d0a4`
+  and `4504edd27f1792f3f17f90e4fd209c9f5955ab43`;
 - no push, merge to `main`, deployment, activation, or provider/data write was
   performed.
 
@@ -27,6 +28,8 @@ Fresh local checks passed: Night E acceptance, split create/recovery,
 Partner Game Membership (`47/47`), tournament category (`8/8`), Node-RED
 modular toolchain (`7/7`), ESLint (`0` errors, `375` warnings), and complete
 production plus development builds with loopback-only build configuration.
+The final main delta changed only the LK1 enforcement workflow and its tests;
+the exact-head binary-custody workflow contract passed `13/13` after merge.
 
 ## Public read-only result
 
