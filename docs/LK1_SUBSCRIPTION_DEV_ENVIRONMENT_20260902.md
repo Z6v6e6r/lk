@@ -222,12 +222,40 @@ must not replace `f9c08c0` in the historical installed-source evidence.
     fixtures, preserves evidence/logs, and performs no data deletion without a
     separately approved destructive step.
 
-Only the stopped identity/dependency bootstrap in step 2 has completed. No step
-that installs a DEV application candidate, starts fixtures/services, opens ingress,
-or activates canaries has completed. The DEV candidate publisher and install
-verifier both reject the current tracked bindings; enabling either stage requires
-an explicit future stage-schema change, frozen authorization evidence, and new
-independent review.
+The stopped identity/dependency bootstrap in step 2 and the local-only source and
+candidate preparation in steps 4-5 have completed. The source-only authorization
+is separate from the historical bootstrap contract: it permits only deterministic
+generation and publication below `/private/tmp`, while candidate install, Node-RED
+import, service start, unit enablement, ingress, activation, canary IDs, secrets,
+and external writes remain unauthorized.
+
+Fresh read-only host evidence captured at `2026-09-03T12:30:09Z` is frozen in
+`lk1_subscription_dev_host_evidence.json`. It confirms the exact dedicated UID/GID,
+five loaded/disabled/inactive/dead units, deny-all plus loopback-only systemd network
+policy, no socket/timer/path activation units, no listeners on the five DEV ports,
+and an absent `/srv/lk1-subscription-dev/node-red/flows.json`. Its scope is explicitly
+`BUILD_ONLY_NOT_INSTALL_EVIDENCE`; it is not a host preimage or install authorization.
+
+The offline generator produces a 23-node isolated source with two HTTP routes, one
+credential-free loopback Mongo client, and the exact reviewed function-node
+preimages. The publisher binds all reachable HTTP endpoints to `127.0.0.1`, records
+`sourceProvenance=OFFLINE_GENERATED`, `hostPreimageState=ABSENT`, a null rollback
+source, and writes readiness last through a private staging directory. The frozen
+source/candidate/manifest SHA-256 tuple is:
+
+- source: `e40db778a18885b3dee6b6f414fe9c4c1b566092df4ed331c5055f9489c1aaec`;
+- candidate: `580b917cc2440e74984b23258be2e63d3d4b29e5105685742cf0e25a9c3547a7`;
+- manifest: `f488666dc9a2769f7d1529f12b22a25780a33d40b07fcbc0c74e699cfbdfd53b`.
+
+The DEV postimage also strips browser-supplied success/failure/base redirect URLs
+from both split-payment preparation paths before any provider transaction can be
+assembled. Production source defaults are not changed by this DEV-only binding.
+
+This is structural source-only evidence. The stopped fixture runtime still declares
+`managedEntitlement`, `activation`, and `createJoin` as `NOT_IMPLEMENTED`, and the
+candidate binding truthfully keeps `completeManagedContractExposed=false`. No DEV
+application candidate has been installed or exercised; steps 6-9 remain separate
+future gates with fresh readback and independent review.
 
 ### Integration validation limitations
 

@@ -76,6 +76,7 @@
     "nodered:managed-subscription-rules:rollback-147": "bash scripts/rollback_nodered_managed_subscription_rules_147.sh",
     "nodered:lk1-subscription-enforcement:packet": "node scripts/prepare_lk1_subscription_enforcement_activation_packet.mjs",
     "nodered:lk1-subscription-dev:snapshot": "bash scripts/pull_nodered_dev_source_readonly.sh",
+    "nodered:lk1-subscription-dev:generate-source": "node scripts/generate_lk1_subscription_dev_offline_source.mjs",
     "nodered:lk1-subscription-dev:candidate": "node scripts/prepare_lk1_subscription_dev_candidate.mjs",
     "nodered:lk1-subscription-dev:verify-install": "node scripts/verify_lk1_subscription_dev_install.mjs",
     "nodered:subscription-booking:patch": "node scripts/patch_nodered_subscription_booking_flow.mjs",
