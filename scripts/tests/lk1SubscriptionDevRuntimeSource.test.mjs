@@ -9,8 +9,10 @@ import {
   FixtureRuntimeError,
   handleFixtureRequest,
   loadFixtureConfig,
+  readAuthorizationCredential,
   validateFixtureCli,
   validateFixtureConfig,
+  validateStartAuthorization,
 } from "../lk1_subscription_dev_runtime/fixture_runtime.mjs";
 import {
   validateMinimalDevFlow,
@@ -40,10 +42,13 @@ function fixtureConfig() {
     subscriptionTypeId: "fixture-type-sale-period",
     integrationToken: `fixture-integration-${"x".repeat(32)}`,
     cupRelease: {
-      sourceSha: "1".repeat(40),
-      candidateSha: "2".repeat(40),
-      readbackSha: "3".repeat(40),
-      servedSha: "4".repeat(40),
+      schemaVersion: 2,
+      environment: "DEV",
+      sourceCommit: "1".repeat(40),
+      artifactSha256: "2".repeat(64),
+      manifestSha256: "3".repeat(64),
+      hostReadbackSha256: "4".repeat(64),
+      servedSha256: "5".repeat(64),
     },
     managedRange: {
       startsAt: "2026-09-01T00:00:00.000Z",
@@ -100,6 +105,33 @@ function fixtureConfig() {
         canaryAllowed: false,
       },
     },
+  };
+}
+
+function installedIdentityEnv(role = "cup") {
+  const units = {
+    cup: "lk1-subscription-dev-cup.service",
+    provider: "lk1-subscription-dev-provider-fixture.service",
+    identity: "lk1-subscription-dev-identity-fixture.service",
+    nodered: "lk1-subscription-dev-nodered.service",
+  };
+  return {
+    CREDENTIALS_DIRECTORY: `/run/credentials/${units[role]}`,
+    LK1_SUBSCRIPTION_DEV_INSTALLED_SOURCE_COMMIT: "1".repeat(40),
+    LK1_SUBSCRIPTION_DEV_RUNTIME_MANIFEST_SHA256: "2".repeat(64),
+  };
+}
+
+function startAuthorization() {
+  return {
+    schemaVersion: 1,
+    environment: "DEV",
+    sourceCommit: "1".repeat(40),
+    runtimeManifestSha256: "2".repeat(64),
+    roles: ["cup", "provider", "identity", "nodered"],
+    issuedAt: "2026-09-10T11:30:00.000Z",
+    expiresAt: "2026-09-10T12:30:00.000Z",
+    authorizationId: "3".repeat(64),
   };
 }
 
@@ -173,26 +205,170 @@ test("fixture config rejects non-fixture, ambiguous, out-of-range, and expanded 
   }
 });
 
-test("CLI self-check is inert and service mode requires a separate marker and private config path", () => {
+test("CLI self-check is inert and service mode requires validated systemd credential transport", () => {
   const selfCheck = validateFixtureCli(["--self-check"]);
   assert.equal(selfCheck.mode, "SELF_CHECK");
   assert.deepEqual(selfCheck.ports, { cup: 3037, provider: 3038, identity: 3039 });
+  assert.deepEqual(selfCheck.authorizationRoles, ["cup", "provider", "identity", "nodered"]);
+  assert.equal(selfCheck.authorizationTransport, "SYSTEMD_LOAD_CREDENTIAL");
   assert.throws(
-    () => validateFixtureCli(["--role", "cup"], {}, () => false),
-    (error) => error.code === "SERVICE_START_AUTHORIZATION_ABSENT",
+    () => validateFixtureCli(["--role", "cup"], {}, () => {
+      throw new FixtureRuntimeError("SERVICE_START_AUTHORIZATION_INVALID", "blocked", 78);
+    }),
+    (error) => error.code === "SERVICE_START_AUTHORIZATION_INVALID",
   );
   assert.throws(
-    () => validateFixtureCli(["--role", "cup"], {}, () => true),
+    () => validateFixtureCli(["--role", "cup"], {}, () => ({ exact: true })),
     (error) => error.code === "FIXTURE_CONFIG_PATH_MISSING",
   );
-  assert.deepEqual(
-    validateFixtureCli(
-      ["--role", "cup"],
-      { LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE: "/srv/lk1-subscription-dev/private/fixture.json" },
-      () => true,
-    ),
-    { mode: "SERVE", role: "cup", configPath: "/srv/lk1-subscription-dev/private/fixture.json" },
+  const authorization = { sourceCommit: "1".repeat(40) };
+  const result = validateFixtureCli(
+    ["--role", "cup"],
+    { LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE: "/srv/lk1-subscription-dev/private/fixture.json" },
+    () => authorization,
   );
+  assert.deepEqual(result, {
+    mode: "SERVE",
+    role: "cup",
+    configPath: "/srv/lk1-subscription-dev/private/fixture.json",
+    authorization,
+  });
+  const nodeRedAuthorization = validateFixtureCli(
+    ["--validate-start-authorization", "--role", "nodered"],
+    {},
+    (role) => ({ role }),
+  );
+  assert.deepEqual(nodeRedAuthorization, {
+    mode: "AUTHORIZATION_CHECK",
+    role: "nodered",
+    authorization: { role: "nodered" },
+  });
+  assert.throws(
+    () => validateFixtureCli(["--role", "nodered"], {}, () => ({ exact: true })),
+    (error) => error.code === "FIXTURE_CLI_INVALID",
+  );
+});
+
+test("start authorization binds role, installed commit, manifest, and a one-hour validity window", () => {
+  const env = installedIdentityEnv();
+  const authorization = startAuthorization();
+  assert.deepEqual(
+    validateStartAuthorization("cup", env, NOW, () => JSON.stringify(authorization)),
+    {
+      sourceCommit: authorization.sourceCommit,
+      runtimeManifestSha256: authorization.runtimeManifestSha256,
+      expiresAt: authorization.expiresAt,
+    },
+  );
+  for (const mutate of [
+    (value) => { value.environment = "PROD"; },
+    (value) => { value.sourceCommit = "4".repeat(40); },
+    (value) => { value.runtimeManifestSha256 = "5".repeat(64); },
+    (value) => { value.roles = ["cup"]; },
+    (value) => { value.issuedAt = "2026-09-10T12:00:00.001Z"; },
+    (value) => { value.expiresAt = "2026-09-10T12:00:00.000Z"; },
+    (value) => { value.issuedAt = "2026-09-10T11:00:00.000Z"; value.expiresAt = "2026-09-10T12:00:00.001Z"; },
+    (value) => { value.authorizationId = "short"; },
+    (value) => { value.extra = true; },
+  ]) {
+    const changed = startAuthorization();
+    mutate(changed);
+    assert.throws(
+      () => validateStartAuthorization("cup", env, NOW, () => JSON.stringify(changed)),
+      (error) => error.code === "SERVICE_START_AUTHORIZATION_INVALID"
+        || error.code === "FIXTURE_CONFIG_SCHEMA_INVALID",
+    );
+  }
+  assert.throws(
+    () => validateStartAuthorization("cup", {}, NOW, () => JSON.stringify(authorization)),
+    (error) => error.code === "SERVICE_START_IDENTITY_UNBOUND",
+  );
+  assert.throws(
+    () => validateStartAuthorization("cup", env, NOW, () => "not-json"),
+    (error) => error.code === "SERVICE_START_CREDENTIAL_INVALID",
+  );
+  assert.throws(
+    () => validateStartAuthorization(
+      "cup",
+      { ...env, CREDENTIALS_DIRECTORY: "/private/tmp/fabricated-credential" },
+      NOW,
+      () => JSON.stringify(authorization),
+    ),
+    (error) => error.code === "SERVICE_START_IDENTITY_UNBOUND",
+  );
+});
+
+test("credential reader requires the exact root-owned read-only systemd mount", () => {
+  const directory = "/run/credentials/lk1-subscription-dev-cup.service";
+  const credential = `${directory}/service-start.approved`;
+  const directoryStat = {
+    uid: 997,
+    mode: 0o500,
+    isDirectory: () => true,
+    isFile: () => false,
+    isSymbolicLink: () => false,
+  };
+  const rootStat = { ...directoryStat, uid: 0, mode: 0o755 };
+  const fileStat = {
+    uid: 997,
+    mode: 0o400,
+    isDirectory: () => false,
+    isFile: () => true,
+    isSymbolicLink: () => false,
+  };
+  const fakeFs = {
+    lstatSync: (target) => {
+      if (target === "/run/credentials") return rootStat;
+      if (target === directory) return directoryStat;
+      if (target === credential) return fileStat;
+      throw new Error(`unexpected lstat ${target}`);
+    },
+    realpathSync: (target) => target,
+    readFileSync: (target) => target === "/proc/self/mountinfo"
+      ? `42 31 0:50 / ${directory} ro,nosuid,nodev - ramfs ramfs ro\n`
+      : `${JSON.stringify(startAuthorization())}\n`,
+  };
+  assert.equal(JSON.parse(readAuthorizationCredential(directory, fakeFs)).environment, "DEV");
+
+  for (const mutate of [
+    (value) => { value.lstatSync = (target) => target === "/run/credentials"
+      ? { ...rootStat, uid: 501 }
+      : fakeFs.lstatSync(target); },
+    (value) => { value.readFileSync = (target) => target === "/proc/self/mountinfo"
+      ? `42 31 0:50 / ${directory} rw,nosuid,nodev - tmpfs tmpfs rw\n`
+      : fakeFs.readFileSync(target); },
+    (value) => { value.realpathSync = (target) => target === directory
+      ? "/private/tmp/forged-credentials"
+      : target; },
+    (value) => { value.lstatSync = (target) => target === credential
+      ? { ...fileStat, isSymbolicLink: () => true }
+      : fakeFs.lstatSync(target); },
+    (value) => { value.lstatSync = (target) => target === credential
+      ? { ...fileStat, mode: 0o640 }
+      : fakeFs.lstatSync(target); },
+  ]) {
+    const changed = { ...fakeFs };
+    mutate(changed);
+    assert.throws(
+      () => readAuthorizationCredential(directory, changed),
+      (error) => error.code === "SERVICE_START_CREDENTIAL_CUSTODY_INVALID",
+    );
+  }
+});
+
+test("credential reader rejects user-owned temporary authorization material", () => {
+  const parent = fs.mkdtempSync(path.join(TMP_ROOT, "lk1-start-credential-test-"));
+  const credential = path.join(parent, "service-start.approved");
+  try {
+    fs.writeFileSync(credential, `${JSON.stringify(startAuthorization())}\n`, { mode: 0o600 });
+    assert.throws(
+      () => readAuthorizationCredential(parent),
+      (error) => error.code === "SERVICE_START_CREDENTIAL_CUSTODY_INVALID"
+        || error.code === "ENOENT",
+    );
+  } finally {
+    fs.rmSync(parent, { recursive: true });
+  }
 });
 
 test("CUP fixture is schema-compatible but cannot authorize standard UAT preflight", () => {
@@ -331,8 +507,9 @@ test("minimal Node-RED flow is one fail-closed read-only release route", () => {
     (value) => {
       value.find((node) => node.id.endsWith("release-validate")).func = [
         "msg.statusCode = 200;",
-        `msg.payload = { sourceSha: '${"1".repeat(40)}', candidateSha: '${"1".repeat(40)}',`,
-        `  readbackSha: '${"1".repeat(40)}', servedSha: '${"1".repeat(40)}' };`,
+        `msg.payload = { schemaVersion: 2, environment: 'DEV', sourceCommit: '${"1".repeat(40)}',`,
+        `  candidateSha256: '${"1".repeat(64)}', manifestSha256: '${"1".repeat(64)}',`,
+        `  hostReadbackSha256: '${"1".repeat(64)}', servedSha256: '${"1".repeat(64)}' };`,
         "return msg;",
       ].join("\n");
     },
@@ -345,6 +522,31 @@ test("minimal Node-RED flow is one fail-closed read-only release route", () => {
     const changed = clone(flow);
     mutate(changed);
     assert.throws(() => validateMinimalDevFlow(changed));
+  }
+});
+
+test("minimal release route rejects nested target, rollback, and authority drift", () => {
+  const flow = readJson(FLOW_PATH);
+  const validate = new Function(
+    "msg",
+    flow.find((node) => node.id.endsWith("release-validate")).func,
+  );
+  const sourceOnly = readJson(path.join(
+    ROOT, "scripts/lk1_subscription_dev_release_receipt_v2_contract.json",
+  ));
+  const served = {
+    ...sourceOnly,
+    state: "SERVED",
+    hostReadbackSha256: sourceOnly.candidateSha256,
+    servedSha256: sourceOnly.candidateSha256,
+  };
+  assert.equal(validate({ payload: JSON.stringify(served) }).statusCode, 200);
+  for (const changed of [
+    { ...served, authority: {} },
+    { ...served, target: { ...served.target, hostAlias: "production" } },
+    { ...served, rollback: { mode: "RETURN_TO_ABSENT", deleteData: false } },
+  ]) {
+    assert.equal(validate({ payload: JSON.stringify(changed) }).statusCode, 503);
   }
 });
 

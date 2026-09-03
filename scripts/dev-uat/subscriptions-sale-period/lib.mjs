@@ -56,7 +56,8 @@ const SECRET_KEY = /(authorization|token|secret|cookie|password|phone|full.?name
 const ID_KEY = /(clientSubscriptionId|subscriptionInstanceId|providerBookingId|clientId|userId)$/i;
 const SAFE_TOKEN = /^[A-Z][A-Z0-9_]{0,39}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
-const RELEASE_SHA = /^[a-f0-9]{40}$/i;
+const RELEASE_COMMIT = /^[a-f0-9]{40}$/i;
+const RELEASE_SHA256 = /^[a-f0-9]{64}$/i;
 const WRITE_SAFETY_DIMENSIONS = Object.freeze([
   "runnerMutationMethodsBlocked",
   "createJoinWritesAbsent",
@@ -195,7 +196,7 @@ export function loadInputs(env = process.env) {
   if (allowedDevOrigins.length === 0) {
     throw new UatError("DEV_ORIGIN_ALLOWLIST_REQUIRED", "An exact DEV origin allowlist is required");
   }
-  if (!releaseBinding(expectedLkRelease) || !releaseBinding(expectedCupRelease)) {
+  if (!releaseBinding(expectedLkRelease, "LK") || !releaseBinding(expectedCupRelease, "CUP")) {
     throw new UatError("EXPECTED_RELEASE_BINDING_REQUIRED", "Frozen LK and CUP release bindings are required");
   }
   if (!versionMatches(inputs.EXPECTED_RULE_A_VERSION, 1) || !versionMatches(inputs.EXPECTED_RULE_B_VERSION, 2)) {
@@ -489,20 +490,31 @@ function check(name, ok, code, details = undefined, status = undefined) {
   return { name, status: status || (ok ? "PASS" : "FAIL"), code, ...(details ? { details } : {}) };
 }
 
-function releaseBinding(payload) {
-  if (!isObject(payload)) return null;
-  const binding = {
-    sourceSha: text(payload.sourceSha),
-    candidateSha: text(payload.candidateSha),
-    readbackSha: text(payload.readbackSha),
-    servedSha: text(payload.servedSha),
+function releaseBinding(payload, requiredIdentityType = null) {
+  if (!isObject(payload) || payload.schemaVersion !== 2 || text(payload.environment) !== "DEV"
+    || !RELEASE_COMMIT.test(text(payload.sourceCommit))) return null;
+  const digestKeys = Object.keys(payload).filter((key) => key.endsWith("Sha256")).sort();
+  const lkDigestKeys = [
+    "candidateSha256", "hostReadbackSha256", "manifestSha256",
+    "servedSha256", "sourceFlowSha256",
+  ].sort();
+  const cupDigestKeys = [
+    "artifactSha256", "hostReadbackSha256", "manifestSha256", "servedSha256",
+  ].sort();
+  const identityType = JSON.stringify(digestKeys) === JSON.stringify(lkDigestKeys)
+    ? "LK" : JSON.stringify(digestKeys) === JSON.stringify(cupDigestKeys) ? "CUP" : null;
+  if (!identityType || (requiredIdentityType && identityType !== requiredIdentityType)) return null;
+  const digests = Object.fromEntries(digestKeys.map((key) => [key, text(payload[key])]));
+  if (!Object.values(digests).every((value) => RELEASE_SHA256.test(value))) return null;
+  return {
+    schemaVersion: 2, environment: "DEV", identityType,
+    sourceCommit: text(payload.sourceCommit), ...digests,
   };
-  return Object.values(binding).every((value) => RELEASE_SHA.test(value)) ? binding : null;
 }
 
 function inspectRelease(payload, label, expected) {
-  const actual = releaseBinding(payload);
-  const frozen = releaseBinding(expected);
+  const actual = releaseBinding(payload, label);
+  const frozen = releaseBinding(expected, label);
   const matches = Boolean(actual && frozen) && Object.keys(frozen).every((key) => actual[key] === frozen[key]);
   return check(
     `${label}_RELEASE_BINDING`,
@@ -692,7 +704,7 @@ export function evaluatePreflight({ inputs, lkRelease, cupRelease, systemEvidenc
     writeSafety,
     checks,
     origins: { lk: lkUrl.origin, cup: cupUrl.origin },
-    releaseBindings: { lk: releaseBinding(lkRelease), cup: releaseBinding(cupRelease) },
+    releaseBindings: { lk: releaseBinding(lkRelease, "LK"), cup: releaseBinding(cupRelease, "CUP") },
     subjects: {
       A: { ...a, clientSubscriptionId: undefined, publications: undefined, selectedPolicy: selectedA.selected },
       B: { ...b, clientSubscriptionId: undefined, publications: undefined, selectedPolicy: selectedB.selected },

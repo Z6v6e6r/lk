@@ -7,14 +7,25 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROLE_PORTS = Object.freeze({ cup: 3037, provider: 3038, identity: 3039 });
+const AUTHORIZATION_ROLES = Object.freeze([...Object.keys(ROLE_PORTS), "nodered"]);
 const LOOPBACK = "127.0.0.1";
 const AUTHORIZATION_MARKER = "/srv/lk1-subscription-dev/authorization/service-start.approved";
+const AUTHORIZATION_CREDENTIAL = "service-start.approved";
 const CONFIG_ENV = "LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE";
+const INSTALLED_SOURCE_ENV = "LK1_SUBSCRIPTION_DEV_INSTALLED_SOURCE_COMMIT";
+const INSTALLED_MANIFEST_ENV = "LK1_SUBSCRIPTION_DEV_RUNTIME_MANIFEST_SHA256";
+const ROLE_CREDENTIAL_DIRECTORIES = Object.freeze({
+  cup: "/run/credentials/lk1-subscription-dev-cup.service",
+  provider: "/run/credentials/lk1-subscription-dev-provider-fixture.service",
+  identity: "/run/credentials/lk1-subscription-dev-identity-fixture.service",
+  nodered: "/run/credentials/lk1-subscription-dev-nodered.service",
+});
 const SAFE_ID = /^fixture-[a-z0-9][a-z0-9-]{2,95}$/;
 const SAFE_FIXTURE_SECRET = /^fixture-[a-z0-9][a-z0-9-]{23,127}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const RELEASE_SHA = /^[a-f0-9]{40}$/;
 const RUN_SCOPE = /^subscription-sale-period:\d{8}T\d{9}Z:(A|B)$/;
+const AUTHORIZATION_LIFETIME_MS = 3_600_000;
 const METRIC_KEYS = Object.freeze([
   "entitlementAggregateRevision", "dailyUsage", "activeUsage", "operations",
   "ledgerEntries", "outboxEntries", "testerGames", "providerWriteCounter",
@@ -43,9 +54,15 @@ const exactKeys = (value, expected, label) => {
 const cleanText = (value) => typeof value === "string" ? value.trim() : "";
 const jsonClone = (value) => JSON.parse(JSON.stringify(value));
 const exactRelease = (value, label) => {
-  exactKeys(value, ["sourceSha", "candidateSha", "readbackSha", "servedSha"], label);
-  if (!Object.values(value).every((item) => RELEASE_SHA.test(cleanText(item)))) {
-    fail("FIXTURE_RELEASE_INVALID", `${label} is not an exact four-SHA release identity`);
+  exactKeys(value, [
+    "schemaVersion", "environment", "sourceCommit", "artifactSha256", "manifestSha256",
+    "hostReadbackSha256", "servedSha256",
+  ], label);
+  if (value.schemaVersion !== 2 || value.environment !== "DEV"
+    || !RELEASE_SHA.test(cleanText(value.sourceCommit))
+    || ![value.artifactSha256, value.manifestSha256, value.hostReadbackSha256, value.servedSha256]
+      .every((item) => SHA256.test(cleanText(item)))) {
+    fail("FIXTURE_RELEASE_INVALID", `${label} is not an exact v2 release identity`);
   }
 };
 const exactInstant = (value) => {
@@ -361,19 +378,127 @@ export function createFixtureServer(role, config) {
   });
 }
 
-export function validateFixtureCli(argv, env = process.env, exists = fs.existsSync) {
+const unescapeMountPath = (value) => value
+  .replace(/\\040/g, " ")
+  .replace(/\\011/g, "\t")
+  .replace(/\\012/g, "\n")
+  .replace(/\\134/g, "\\");
+
+export function readAuthorizationCredential(credentialsDirectory, fsApi = fs) {
+  if (!path.isAbsolute(credentialsDirectory)) {
+    fail("SERVICE_START_CREDENTIAL_DIRECTORY_INVALID", "Credential directory is not absolute", 78);
+  }
+  const credentialRoot = "/run/credentials";
+  const credentialPath = path.join(credentialsDirectory, AUTHORIZATION_CREDENTIAL);
+  const rootStat = fsApi.lstatSync(credentialRoot);
+  const directoryStat = fsApi.lstatSync(credentialsDirectory);
+  const lexicalStat = fsApi.lstatSync(credentialPath);
+  const resolvedRoot = fsApi.realpathSync(credentialRoot);
+  const resolvedDirectory = fsApi.realpathSync(credentialsDirectory);
+  const resolved = fsApi.realpathSync(credentialPath);
+  const stat = fsApi.lstatSync(resolved);
+  const mountInfo = fsApi.readFileSync("/proc/self/mountinfo", "utf8");
+  const hasReadOnlyCredentialMount = mountInfo.split("\n").some((line) => {
+    const separator = line.indexOf(" - ");
+    if (separator < 0) return false;
+    const before = line.slice(0, separator).split(" ");
+    const after = line.slice(separator + 3).split(" ");
+    if (before.length < 6 || after.length < 3
+      || unescapeMountPath(before[4]) !== credentialsDirectory) return false;
+    return before[5].split(",").includes("ro") || after[2].split(",").includes("ro");
+  });
+  if (resolvedRoot !== credentialRoot || !rootStat.isDirectory() || rootStat.isSymbolicLink()
+    || rootStat.uid !== 0 || (rootStat.mode & 0o022) !== 0
+    || resolvedDirectory !== credentialsDirectory || !directoryStat.isDirectory()
+    || directoryStat.isSymbolicLink() || !hasReadOnlyCredentialMount
+    || lexicalStat.isSymbolicLink() || resolved !== credentialPath || !stat.isFile()
+    || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
+    fail(
+      "SERVICE_START_CREDENTIAL_CUSTODY_INVALID",
+      "Start credential is not in an exact systemd-owned read-only credential mount",
+      78,
+    );
+  }
+  return fsApi.readFileSync(resolved, "utf8");
+}
+
+export function validateStartAuthorization(
+  role,
+  env = process.env,
+  now = new Date(),
+  readCredential = readAuthorizationCredential,
+) {
+  if (!AUTHORIZATION_ROLES.includes(role)) fail("FIXTURE_ROLE_INVALID", "Unknown authorization role", 64);
+  const credentialsDirectory = cleanText(env.CREDENTIALS_DIRECTORY);
+  const installedSourceCommit = cleanText(env[INSTALLED_SOURCE_ENV]);
+  const installedManifestSha256 = cleanText(env[INSTALLED_MANIFEST_ENV]);
+  if (credentialsDirectory !== ROLE_CREDENTIAL_DIRECTORIES[role]
+    || !RELEASE_SHA.test(installedSourceCommit)
+    || !SHA256.test(installedManifestSha256)) {
+    fail("SERVICE_START_IDENTITY_UNBOUND", "Installed runtime identity is not exact", 78);
+  }
+  let authorization;
+  try {
+    authorization = JSON.parse(readCredential(credentialsDirectory));
+  } catch (error) {
+    if (error instanceof FixtureRuntimeError) throw error;
+    fail("SERVICE_START_CREDENTIAL_INVALID", "Start credential is unavailable or invalid", 78);
+  }
+  exactKeys(authorization, [
+    "schemaVersion", "environment", "sourceCommit", "runtimeManifestSha256",
+    "roles", "issuedAt", "expiresAt", "authorizationId",
+  ], "service-start credential");
+  const issuedAt = Date.parse(authorization.issuedAt);
+  const expiresAt = Date.parse(authorization.expiresAt);
+  const nowMs = now.getTime();
+  if (authorization.schemaVersion !== 1 || authorization.environment !== "DEV"
+    || authorization.sourceCommit !== installedSourceCommit
+    || authorization.runtimeManifestSha256 !== installedManifestSha256
+    || JSON.stringify(authorization.roles) !== JSON.stringify(AUTHORIZATION_ROLES)
+    || !authorization.roles.includes(role)
+    || !exactInstant(authorization.issuedAt) || !exactInstant(authorization.expiresAt)
+    || !SHA256.test(cleanText(authorization.authorizationId))
+    || !Number.isFinite(nowMs) || issuedAt > nowMs || expiresAt <= nowMs
+    || expiresAt <= issuedAt || expiresAt - issuedAt > AUTHORIZATION_LIFETIME_MS) {
+    fail("SERVICE_START_AUTHORIZATION_INVALID", "Start credential is not exact, current, and bounded", 78);
+  }
+  return {
+    sourceCommit: installedSourceCommit,
+    runtimeManifestSha256: installedManifestSha256,
+    expiresAt: authorization.expiresAt,
+  };
+}
+
+export function validateFixtureCli(
+  argv,
+  env = process.env,
+  authorize = (role) => validateStartAuthorization(role, env),
+) {
   if (argv.length === 1 && argv[0] === "--self-check") {
-    return { mode: "SELF_CHECK", host: LOOPBACK, roles: Object.keys(ROLE_PORTS), ports: ROLE_PORTS };
+    return {
+      mode: "SELF_CHECK",
+      host: LOOPBACK,
+      roles: Object.keys(ROLE_PORTS),
+      authorizationRoles: AUTHORIZATION_ROLES,
+      ports: ROLE_PORTS,
+      authorizationTransport: "SYSTEMD_LOAD_CREDENTIAL",
+    };
+  }
+  if (argv.length === 3 && argv[0] === "--validate-start-authorization"
+    && argv[1] === "--role" && AUTHORIZATION_ROLES.includes(argv[2])) {
+    return { mode: "AUTHORIZATION_CHECK", role: argv[2], authorization: authorize(argv[2]) };
   }
   if (argv.length !== 2 || argv[0] !== "--role" || !ROLE_PORTS[argv[1]]) {
-    fail("FIXTURE_CLI_INVALID", "Usage: fixture_runtime.mjs --self-check | --role cup|provider|identity", 64);
+    fail(
+      "FIXTURE_CLI_INVALID",
+      "Usage: fixture_runtime.mjs --self-check | --role cup|provider|identity | --validate-start-authorization --role cup|provider|identity|nodered",
+      64,
+    );
   }
-  if (!exists(AUTHORIZATION_MARKER)) {
-    fail("SERVICE_START_AUTHORIZATION_ABSENT", "Service-start authorization is absent", 78);
-  }
+  const authorization = authorize(argv[1]);
   const configPath = cleanText(env[CONFIG_ENV]);
   if (!configPath) fail("FIXTURE_CONFIG_PATH_MISSING", "Private fixture config is not configured", 78);
-  return { mode: "SERVE", role: argv[1], configPath };
+  return { mode: "SERVE", role: argv[1], configPath, authorization };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -381,6 +506,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const command = validateFixtureCli(process.argv.slice(2));
     if (command.mode === "SELF_CHECK") {
       process.stdout.write(`${JSON.stringify(command)}\n`);
+    } else if (command.mode === "AUTHORIZATION_CHECK") {
+      process.stdout.write("LK1_DEV_START_AUTHORIZATION=VALID\n");
     } else {
       const config = loadFixtureConfig(command.configPath);
       const server = createFixtureServer(command.role, config);
@@ -399,6 +526,14 @@ export const fixtureRuntimeContract = Object.freeze({
   host: LOOPBACK,
   ports: ROLE_PORTS,
   authorizationMarker: AUTHORIZATION_MARKER,
+  authorizationCredential: AUTHORIZATION_CREDENTIAL,
+  authorizationTransport: "SYSTEMD_LOAD_CREDENTIAL",
+  authorizationRoles: AUTHORIZATION_ROLES,
+  credentialDirectories: ROLE_CREDENTIAL_DIRECTORIES,
+  installedIdentityEnvironment: {
+    sourceCommit: INSTALLED_SOURCE_ENV,
+    runtimeManifestSha256: INSTALLED_MANIFEST_ENV,
+  },
   configEnvironmentVariable: CONFIG_ENV,
   mode: "READ_ONLY_EVIDENCE",
 });

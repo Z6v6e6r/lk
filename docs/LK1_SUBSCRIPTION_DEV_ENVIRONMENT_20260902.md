@@ -74,18 +74,18 @@ origin. Consequently the DEV runtime trust anchor remains `null`.
 - Snapshot and build validation now inventory `mongodb4-client` and the exact
   router output -> `mongodb4` (`find`, `insertOne`, `updateOne`) -> router graph.
   All three nodes must use one hash-attested client in exact URI mode resolving
-  to `127.0.0.1:27030/lk1_subscription_dev_fixture`, with empty advanced
+  to `127.0.0.1:27030/dev-lk1-subscription-canary`, with empty advanced
   options, no serialized credentials/TLS options, and a separate SHA-attested
   empty Node-RED credential store. Fields-mode clients are rejected. Legacy
   `mongodb` counts remain only additional drift evidence.
 
-The three documented P1 source blockers are closed. Environment acceptance and
-candidate publication remain blocked by the independent provisioning contract:
-`STOPPED_BOOTSTRAP_AUTHORIZED`, `DEV_PROVISIONING_READY=no`, and
-`candidateBuildAllowed=false` / `installAllowed=false`. The narrowly authorized
-stopped bootstrap below does not authorize a candidate or service start.
-No source result is host/runtime evidence, the DEV trust
-anchor is null, and the audited DEV flow targets are absent.
+The three documented P1 source blockers are closed. The historical provisioning
+contract remains byte-for-byte `STOPPED_BOOTSTRAP_AUTHORIZED` and authorizes no
+candidate, install, or service start. A separate v2 source-only contract permits
+only deterministic local generation and candidate publication under a temporary
+workspace; `installAllowed=false` remains unchanged. No source result is
+host/runtime evidence, the DEV trust anchor is null, and the audited shared-host
+targets are absent.
 
 ## Release custody
 
@@ -101,8 +101,10 @@ anchor is null, and the audited DEV flow targets are absent.
   audited after builder composition. The candidate permits exactly the two pinned
   dynamic HTTP nodes and six pinned producer/output edges; extra request nodes
   or senders are rejected before publication.
-- `prepare_lk1_subscription_dev_candidate.mjs` requires a fresh (30 minute),
-  exact DEV source, a separately pinned DEV API trust anchor, exact function
+- `generate_lk1_subscription_dev_offline_source.mjs` requires a clean exact
+  `origin/main` commit and reconstructs every function body from that commit.
+  `prepare_lk1_subscription_dev_candidate.mjs` requires this exact offline source,
+  the source-only authorization contract, exact function
   preimages, zero graph damage, proven HTTP binding, and independently proven
   DEV-only Mongo custody. It independently reproduces the snapshot endpoint
   inventory, patches and audits every reachable function that
@@ -222,19 +224,18 @@ must not replace `f9c08c0` in the historical installed-source evidence.
     fixtures, preserves evidence/logs, and performs no data deletion without a
     separately approved destructive step.
 
-The stopped identity/dependency bootstrap in step 2 and the local-only source and
-candidate preparation in steps 4-5 have completed. The source-only authorization
+The historical stopped identity/dependency bootstrap in step 2 is retained as prior
+evidence. In this branch, local-only source and candidate preparation for steps 4-5
+is reproducible and tested. The source-only authorization
 is separate from the historical bootstrap contract: it permits only deterministic
 generation and publication below `/private/tmp`, while candidate install, Node-RED
 import, service start, unit enablement, ingress, activation, canary IDs, secrets,
 and external writes remain unauthorized.
 
-Fresh read-only host evidence captured at `2026-09-03T12:30:09Z` is frozen in
-`lk1_subscription_dev_host_evidence.json`. It confirms the exact dedicated UID/GID,
-five loaded/disabled/inactive/dead units, deny-all plus loopback-only systemd network
-policy, no socket/timer/path activation units, no listeners on the five DEV ports,
-and an absent `/srv/lk1-subscription-dev/node-red/flows.json`. Its scope is explicitly
-`BUILD_ONLY_NOT_INSTALL_EVIDENCE`; it is not a host preimage or install authorization.
+This branch intentionally contains no fresh host-evidence artifact. The source-only
+contract fixes `hostPreimage.state=ABSENT` as the future install target contract, not
+as a current host observation. A fresh read-only host preflight remains mandatory
+before any separately authorized install stage.
 
 The offline generator produces a 23-node isolated source with two HTTP routes, one
 credential-free loopback Mongo client, and the exact reviewed function-node
@@ -243,9 +244,9 @@ preimages. The publisher binds all reachable HTTP endpoints to `127.0.0.1`, reco
 source, and writes readiness last through a private staging directory. The frozen
 source/candidate/manifest SHA-256 tuple is:
 
-- source: `e40db778a18885b3dee6b6f414fe9c4c1b566092df4ed331c5055f9489c1aaec`;
-- candidate: `580b917cc2440e74984b23258be2e63d3d4b29e5105685742cf0e25a9c3547a7`;
-- manifest: `f488666dc9a2769f7d1529f12b22a25780a33d40b07fcbc0c74e699cfbdfd53b`.
+- source: `bada371662cc4d4a27fca5a1a9335c657dac298bba754f48f9787ac67bfe4722`;
+- candidate: `ab73803e90852ebc99cd9b019cf181c9bd402e4737ccde8256cc6da448039fb9`;
+- manifest: `25c29e292f2256ad7d89e1c5053c4304c1c11277a8b7b4692d33cee57461a103`.
 
 The DEV postimage also strips browser-supplied success/failure/base redirect URLs
 from both split-payment preparation paths before any provider transaction can be
@@ -264,11 +265,11 @@ runtime suites pass after the parent merge. The exact-head CI workflow does not
 invoke the runner or DEV candidate/provisioning/bootstrap suites, so those remain
 local evidence rather than CI evidence.
 
-The future evidence producer must also map release identities explicitly: the
-runner expects four 40-hex release fields, whereas DEV candidate manifests use
-64-hex source/candidate artifact digests. Neither those digests nor the bootstrap
-manifest may substitute for the runner's release proof. No such runtime adapter
-or active fixture service is provided by the stopped bootstrap.
+The v2 receipt contract separates the exact 40-hex Git `sourceCommit` from 64-hex
+source/candidate/manifest/readback/served SHA-256 fields. Source-only receipts keep
+host readback and served digests null. Neither artifact digests nor the bootstrap
+manifest may substitute for Git identity or runtime proof; no active fixture service
+is provided by the stopped bootstrap.
 
 An additional 219-test regression run has 217 PASS, one SKIP (the live-router
 fixture is absent), and one pre-existing failure in

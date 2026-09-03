@@ -1,0 +1,25 @@
+[Unit]
+Description=LK1 subscription isolated DEV identity fixture (install candidate locked)
+ConditionPathExists=/srv/lk1-subscription-dev/authorization/service-start.approved
+ConditionPathExists=/srv/lk1-subscription-dev/private/fixture.json
+RefuseManualStart=yes
+
+[Service]
+Type=simple
+User=lk1-subscription-dev
+Group=lk1-subscription-dev
+WorkingDirectory=/srv/lk1-subscription-dev
+LoadCredential=service-start.approved:/srv/lk1-subscription-dev/authorization/service-start.approved
+EnvironmentFile=/srv/lk1-subscription-dev/runtime/install-identity.env
+Environment=LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE=/srv/lk1-subscription-dev/private/fixture.json
+ExecStart=/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs --role identity
+Restart=no
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/srv/lk1-subscription-dev/evidence
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost

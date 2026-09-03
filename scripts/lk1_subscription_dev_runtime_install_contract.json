@@ -1,0 +1,124 @@
+{
+  "formatVersion": 1,
+  "stage": "LOCAL_INSTALL_CANDIDATE",
+  "environment": "DEV",
+  "sourceCommit": null,
+  "target": {
+    "unixUser": "lk1-subscription-dev",
+    "unixGroup": "lk1-subscription-dev",
+    "rootPath": "/srv/lk1-subscription-dev",
+    "fixtureRuntimePath": "/srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs",
+    "fixtureConfigPath": "/srv/lk1-subscription-dev/private/fixture.json",
+    "nodeRedFlowPath": "/srv/lk1-subscription-dev/node-red/flows.json",
+    "nodeRedSettingsPath": "/srv/lk1-subscription-dev/node-red/settings.js",
+    "nodeRedReleaseReceiptPath": "/srv/lk1-subscription-dev/node-red/release-identity.json",
+    "installedIdentityEnvironmentFile": "/srv/lk1-subscription-dev/runtime/install-identity.env"
+  },
+  "authorizationCustody": {
+    "sourceMarker": "/srv/lk1-subscription-dev/authorization/service-start.approved",
+    "sourceDirectoryOwner": "root:root",
+    "sourceDirectoryMode": "0700",
+    "transport": "SYSTEMD_LOAD_CREDENTIAL",
+    "credentialName": "service-start.approved",
+    "runtimePath": "$CREDENTIALS_DIRECTORY/service-start.approved",
+    "runtimeDirectories": {
+      "cup": "/run/credentials/lk1-subscription-dev-cup.service",
+      "provider": "/run/credentials/lk1-subscription-dev-provider-fixture.service",
+      "identity": "/run/credentials/lk1-subscription-dev-identity-fixture.service",
+      "nodered": "/run/credentials/lk1-subscription-dev-nodered.service"
+    },
+    "credentialSchemaVersion": 1,
+    "maximumLifetimeSeconds": 3600,
+    "systemdMinimumVersion": 247,
+    "hostSupportVerified": false
+  },
+  "credentialBinding": {
+    "environment": "DEV",
+    "roles": [
+      "cup",
+      "provider",
+      "identity",
+      "nodered"
+    ],
+    "installedSourceEnvironmentVariable": "LK1_SUBSCRIPTION_DEV_INSTALLED_SOURCE_COMMIT",
+    "installedManifestEnvironmentVariable": "LK1_SUBSCRIPTION_DEV_RUNTIME_MANIFEST_SHA256",
+    "requiresExactSourceCommit": true,
+    "requiresExactRuntimeManifestSha256": true,
+    "requiresPrivateRegularCredential": true,
+    "requiresUnexpiredCredential": true
+  },
+  "units": [
+    "lk1-subscription-dev-cup.service",
+    "lk1-subscription-dev-provider-fixture.service",
+    "lk1-subscription-dev-identity-fixture.service",
+    "lk1-subscription-dev-nodered.service"
+  ],
+  "prerequisites": {
+    "historicalBootstrapReceiptRequired": true,
+    "dedicatedIdentityRequired": true,
+    "unitsDisabledRequired": true,
+    "unitsInactiveRequired": true,
+    "listenersAbsentRequired": true,
+    "authorizationMarkerAbsentRequired": true,
+    "fixtureConfigAbsentRequired": true,
+    "releaseReceiptAbsentRequired": true,
+    "freshHostReadbackRequired": true
+  },
+  "candidateContents": {
+    "nodeRedFlow": "GENERATED_EXACT_SOURCE_CANDIDATE",
+    "sourceCandidateManifest": "INCLUDED_SOURCE_ONLY",
+    "releaseReceiptV2Template": "INCLUDED_SOURCE_ONLY",
+    "installExecutor": "NOT_INCLUDED",
+    "installedIdentityEnvironmentFile": "NOT_INCLUDED",
+    "fixtureConfig": "NOT_INCLUDED",
+    "releaseReceipt": "NOT_INCLUDED",
+    "serviceStartCredential": "NOT_INCLUDED",
+    "ingress": "NOT_INCLUDED",
+    "activation": "NOT_INCLUDED"
+  },
+  "runtimeCapabilityDisclosure": {
+    "nodeRedExposure": "DORMANT_WRITE_CAPABLE_SOURCE_GRAPH",
+    "httpRoutes": [
+      "POST /lk/subscription-bookings",
+      "OPTIONS /lk/subscription-bookings"
+    ],
+    "outboundHttpNodes": 2,
+    "mongoOperations": [
+      "find",
+      "insertOne",
+      "updateOne"
+    ],
+    "providerFixture": "HEALTH_ONLY_FAIL_CLOSED",
+    "positiveUat": "NOT_AUTHORIZED",
+    "requiresSeparateStartReview": true,
+    "requiresSeparateMutationReview": true
+  },
+  "intendedStoppedPostconditions": {
+    "servicesEnabled": false,
+    "servicesActive": false,
+    "listenersOpen": false,
+    "authorizationMarkerCreated": false,
+    "fixtureConfigCreated": false,
+    "releaseReceiptCreated": false,
+    "ingressChanged": false,
+    "activationChanged": false,
+    "canaryIdsInstalled": false,
+    "secretsInstalled": false,
+    "externalWrites": false
+  },
+  "authority": {
+    "bundleBuildAllowed": true,
+    "hostReadAllowed": false,
+    "hostInstallAllowed": false,
+    "daemonReloadAllowed": false,
+    "serviceStartAllowed": false,
+    "enableUnitsAllowed": false,
+    "ingressAllowed": false,
+    "activationAllowed": false,
+    "canaryIdsAllowed": false,
+    "secretsAllowed": false,
+    "providerWritesAllowed": false,
+    "paymentWritesAllowed": false,
+    "entitlementMutationsAllowed": false
+  }
+}

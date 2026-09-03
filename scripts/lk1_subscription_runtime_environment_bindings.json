@@ -3,12 +3,19 @@
   "PROD": "https://padlhub.su/api",
   "DEV": null,
   "devBindingState": "UNBOUND_RUNTIME_STOPPED",
-  "DEV_CANDIDATE_API_BASE": "http://127.0.0.1:3037/api",
+  "DEV_CANDIDATE_API_BASE": "http://127.0.0.1:3036/api",
   "DEV_ENDPOINTS": {
-    "cupApiBase": "http://127.0.0.1:3037/api",
+    "cupApiBase": "http://127.0.0.1:3036/api",
     "vivaApiBase": "http://127.0.0.1:3038",
     "serv2Base": "http://127.0.0.1:3038/serv2",
     "tokenUrl": "http://127.0.0.1:3039/realms/dev/protocol/openid-connect/token"
+  },
+  "DEV_MONGO": {
+    "host": "127.0.0.1",
+    "port": 27030,
+    "database": "dev-lk1-subscription-canary",
+    "replicaSet": "rs0",
+    "credentialFree": true
   },
   "DEV_INSTALL_TARGET": {
     "sourceHost": "lk-reserve-89",
