@@ -96,7 +96,7 @@ test("rejects banned, existing, and unresolved phone-only identities", () => {
   plan.planSha256 = hashFrozenPlan(plan);
   assert.throws(() => validateCurrentMembershipPreconditions(plan, [existing]), /already belongs/);
 
-  const phoneOnly = { ...community, members: [{ phone: "+7 999 111-22-33" }], memberCount: 1 };
+  const phoneOnly = { ...community, members: [{ phone: "+1 202 555 0100" }], memberCount: 1 };
   const noPhonePlan = { ...plan, operations: [{ ...operation, phoneNorm: null }] };
   noPhonePlan.sourceFingerprint.community = hashCommunityPreimage([phoneOnly]);
   noPhonePlan.planSha256 = hashFrozenPlan(noPhonePlan);
