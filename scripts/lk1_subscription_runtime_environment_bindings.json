@@ -2,7 +2,8 @@
   "formatVersion": 1,
   "PROD": "https://padlhub.su/api",
   "DEV": null,
-  "devBindingState": "UNBOUND_COMPLETE_HTTPS_CONTRACT_NOT_EXPOSED",
+  "devBindingState": "UNBOUND_RUNTIME_STOPPED",
+  "DEV_CANDIDATE_API_BASE": "http://127.0.0.1:3037/api",
   "DEV_ENDPOINTS": {
     "cupApiBase": "http://127.0.0.1:3037/api",
     "vivaApiBase": "http://127.0.0.1:3038",

@@ -1,16 +1,40 @@
 # Подписка «Падел.Дружба.Питер»
 
-## Граница этого этапа
+## Текущий режим
 
 Страница использует отдельный storefront-вариант `piter_friendship`, отдельный
-счётчик и отдельный inventory. Код этапа не создаёт продукты Viva, не публикует
-managed policy, не включает продажи и не меняет production Node-RED.
+счётчик и отдельный inventory. Кандидат от 2026-09-03 готовит временный
+compatibility-контур годовой продажи, а managed policy и новые ограничения
+использования остаются выключенными до отдельного этапа готовности.
 
-До привязки всех серверных идентификаторов витрина работает fail closed:
-показывает актуальную партию и цену, но не создаёт оплату. Старый
-`/lk/subscription-bookings` также отклоняет такую подписку с кодом
-`MANAGED_SUBSCRIPTION_POLICY_REQUIRED`, чтобы не применить к ней правила
-обычной «Дружбы».
+Сервер выбирает точный Viva product ID, цену и партию из атомарного inventory
+ledger, проверяет сумму ответа провайдера и годовой lifecycle. ХАБ и Котельники
+остаются закрытыми managed sale guard. Само изменение production Node-RED и
+активация ledger выполняются только отдельными разрешёнными этапами.
+
+## Атомарность покупки
+
+- единый sentinel `inventory:piter_friendship_12m_2026_v1` хранит `revision`,
+  `paidCount`, `reservedCount`, `takenCount`, terminal baseline
+  `legacyPaymentRefs` и записи новых резервов;
+- место резервируется optimistic CAS до любого финансового POST в Viva;
+- партия и цена пересчитываются из подтверждённого ledger-снимка;
+- повтор одного `paymentRef` возвращает сохранённый результат и не запускает
+  второй POST; несовпадающий intent завершается `409`;
+- переход в `DISPATCHING` фиксируется durable CAS непосредственно перед POST;
+- HTTP `201` возвращается только после подтверждения ledger и sale record;
+- неоднозначный ответ Viva фиксируется как `PROVIDER_UNKNOWN`: место остаётся
+  занятым, автоматического повторного POST или TTL-освобождения нет;
+- отсутствующий или `ready != true` sentinel оставляет витрину fail closed.
+
+Перед отдельной активацией sentinel создаётся из свежего read-only снимка.
+Активация разрешена только при отсутствии legacy-записей Питера в
+`PAYMENT_PENDING`, неоднозначном или истёкшем без терминального ответа
+провайдера состоянии. В baseline входят только терминальные `PAID` и каждый их
+уникальный `paymentRef`; повтор такого идентификатора после cutover блокируется
+до Viva POST. Затем проверяются counts, уникальность ссылок и digest. Любая незавершённая legacy-транзакция сначала должна
+быть сверена с Viva до явного терминального статуса. Этот data write и
+переключение `ready:false -> true` не входят в deploy кандидата.
 
 ## Витрина и счётчик
 
@@ -19,32 +43,33 @@ managed policy, не включает продажи и не меняет produc
 - общий объём: 400 подписок;
 - одна партия: 100 подписок;
 - партии и цены: 1 — 19 800 ₽, 2 — 23 800 ₽, 3 — 36 800 ₽, 4 — 56 800 ₽;
-- оплаченные и активные `PAYMENT_PENDING` записи одного inventory определяют
-  текущую партию на сервере;
+- `paidCount + reservedCount` атомарного sentinel определяет текущую партию на
+  сервере; до активации baseline содержит только подтверждённые `PAID`;
 - браузер передаёт только `counterKey`: `productId`, цена и номер партии из
   браузера не принимаются как источник истины.
 
-Обязательные Node-RED globals перед открытием продаж:
+Проверенный server-side product binding:
 
 ```text
+summer_subscription_piter_friendship_product_id
+```
+
+Опциональные tier-specific overrides:
+
+```text
+summer_subscription_piter_friendship_inventory_id
 summer_subscription_piter_friendship_tier_1_product_id
 summer_subscription_piter_friendship_tier_2_product_id
 summer_subscription_piter_friendship_tier_3_product_id
 summer_subscription_piter_friendship_tier_4_product_id
-```
-
-Опциональные globals:
-
-```text
-summer_subscription_piter_friendship_inventory_id
 summer_subscription_piter_friendship_tier_1_product_name
 summer_subscription_piter_friendship_tier_2_product_name
 summer_subscription_piter_friendship_tier_3_product_name
 summer_subscription_piter_friendship_tier_4_product_name
 ```
 
-Нельзя подставлять существующий product ID по сходству названия. Каждая цена
-должна быть подтверждена реальным Viva product и тестовой транзакцией.
+Нельзя подставлять product ID по сходству названия. Серверная скидка каждой
+партии считается от подтверждённой базовой стоимости привязанного Viva-продукта.
 
 ## Политика использования
 
@@ -80,6 +105,10 @@ runtime enablement и любой provider write относятся к отдел
 Текущая DEV-кандидатура поэтому не трактует произвольный турнир как «Время на
 друзей»: для игры с тренером и «Времени на друзей» ещё нужны точные Viva
 `directionId/typeId` и CUP mapping.
+
+Возврат legacy-продажи не меняет этот раздел: новая managed policy не
+публикуется, managed usage router не включается, а купленная подписка до
+отдельной активации managed-контура обслуживается по compatibility path.
 
 ## Приёмочные сценарии до включения
 

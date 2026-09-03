@@ -23,11 +23,22 @@
       ];
 
       const nativeFetch = window.fetch.bind(window);
+      window.__AB_LETO_PREVIEW_STATUS_REQUESTS__ = [];
+      document.documentElement.dataset.abLetoStatusRequests = "[]";
       window.fetch = async (input, init) => {
         const url = typeof input === "string" ? input : input.url;
         if (url.includes("/lk/tournaments/summer-subscription/status")) {
           const requestedKey = new URL(url, window.location.href).searchParams.get("counterKey");
-          const body = requestedKey ? statuses.filter((status) => status.counterKey === requestedKey) : statuses;
+          window.__AB_LETO_PREVIEW_STATUS_REQUESTS__.push({
+            method: init?.method || "GET",
+            counterKey: requestedKey,
+          });
+          document.documentElement.dataset.abLetoStatusRequests = JSON.stringify(
+            window.__AB_LETO_PREVIEW_STATUS_REQUESTS__,
+          );
+          const body = requestedKey
+            ? statuses.filter((status) => status.counterKey === requestedKey)
+            : statuses.filter((status) => status.counterKey !== "network_friendship");
           return new Response(JSON.stringify({ statuses: body }), { status: 200, headers: { "Content-Type": "application/json" } });
         }
         if (url.startsWith(window.location.origin)) return nativeFetch(input, init);

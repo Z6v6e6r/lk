@@ -2,6 +2,12 @@ export const PAYMENT_SYNC_MAX_ATTEMPTS = 20;
 
 export type PaymentSyncQueueStatus = "pending" | "exhausted";
 
+export type PaymentSyncLookupMode =
+  | "paymentRef"
+  | "bookingIds"
+  | "combined"
+  | "sequential";
+
 export interface PaymentSyncRetryState {
   attempts: number;
   nextAttemptTs: number;
@@ -18,6 +24,13 @@ const RETRY_MAX_MS = 10 * 60_000;
 function normalizeAttempts(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.floor(value));
+}
+
+export function resolvePaymentSyncLookupMode(params: {
+  forcedCallback: boolean;
+}): PaymentSyncLookupMode {
+  if (params.forcedCallback) return "sequential";
+  return "paymentRef";
 }
 
 export function computePaymentSyncRetryDelayMs(attemptsRaw: number): number {

@@ -3,13 +3,15 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
+import { publishOfflineDevSource } from "../generate_lk1_subscription_dev_offline_source.mjs";
 import {
   assertProductionManifestEnvironment,
   buildDevCandidate,
   publishDevCandidate,
   validateDevBinding,
+  validateDevHostEvidence,
   validateDevInstallTarget,
   validateDevInstallManifest,
   validateEnvironmentApiBase,
@@ -24,6 +26,24 @@ import {
 } from "../prepare_lk1_subscription_enforcement_candidate.mjs";
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
+const ROOT = path.resolve(import.meta.dirname, "../..");
+const TMP_ROOT = fs.existsSync("/private/tmp") ? "/private/tmp" : "/tmp";
+const HOST_EVIDENCE_PATH = path.join(ROOT, "scripts/lk1_subscription_dev_host_evidence.json");
+const nodeInventorySha256 = (flow) => sha256(JSON.stringify(flow
+  .map((node) => ({ id: node.id, sha256: sha256(JSON.stringify(node)) }))
+  .sort((left, right) => left.id.localeCompare(right.id))));
+const SOURCE_INPUTS = [
+  "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js",
+  "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js",
+  "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_finalize.js",
+  "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_evaluate.js",
+  "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_blocked.js",
+  "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_mongo_error.js",
+  "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_options.js",
+  "scripts/nodered_games_nodes/fn_split_router.js",
+  "scripts/nodered_games_nodes/fn_split_create_prepare.js",
+  "scripts/nodered_games_nodes/fn_split_join_prepare.js",
+];
 const endpointInventorySha256 = (flow) => {
   const inventory = [];
   const visit = (value, pathPrefix = "$") => {
@@ -57,7 +77,9 @@ const DEV_INSTALL_TARGET = Object.freeze({
   remoteFlowPath: "/srv/lk1-subscription-dev/node-red/flows.json",
 });
 const trustedBindings = () => ({
-  DEV: DEV_API_BASE,
+  DEV: null,
+  devBindingState: "UNBOUND_RUNTIME_STOPPED",
+  DEV_CANDIDATE_API_BASE: DEV_API_BASE,
   PROD: "https://padlhub.su/api",
   DEV_INSTALL_TARGET,
   DEV_ENDPOINTS: {
@@ -120,23 +142,21 @@ function fixture() {
   const sourceText = `${JSON.stringify(flow, null, 2)}\n`;
   const binding = {
     environment: "DEV",
-    bindingState: "BOUND",
-    installAllowed: true,
-    environmentIdentityVerified: true,
+    bindingState: "BOUND_SOURCE_ONLY",
+    installAllowed: false,
+    environmentIdentityVerified: false,
     source: {
-      sourceKind: "dedicated-dev-target",
-      sourceHost: "lk-reserve-89",
-      sourceHostname: "89-108-64-209.cloudvps.regruhosting.ru",
-      sourceUser: "root",
-      sourcePort: 22,
-      remoteFlowPath: DEV_INSTALL_TARGET.remoteFlowPath,
+      sourceKind: "offline-dedicated-dev-bootstrap",
+      generatorPath: "scripts/generate_lk1_subscription_dev_offline_source.mjs",
+      generatorSha256: "a".repeat(64),
+      sourceInputsSha256: Object.fromEntries(SOURCE_INPUTS.map((file) => [file, "a".repeat(64)])),
       sourceSha256: sha256(sourceText),
+      sourceNodeInventorySha256: nodeInventorySha256(flow),
       nodeCount: flow.length,
       httpRouteCount: 2,
       tabCount: 1,
       brokenWires: 0,
       brokenLinks: 0,
-      capturedAt: new Date().toISOString(),
     },
     target: {
       present: true,
@@ -167,7 +187,11 @@ function fixture() {
       finalizePreimageSha256: sha256(finalizePreimage),
       finalizeNodePreimageSha256: sha256(JSON.stringify(flow.find((node) => node.id === "finalize-dev"))),
     },
-    runtime: { apiBase: DEV_API_BASE, completeManagedContractExposed: true },
+    runtime: {
+      apiBase: DEV_API_BASE,
+      completeManagedContractExposed: false,
+      reason: "Source-only binding; DEV services are stopped and no runtime contract was exercised",
+    },
     dependencies: {
       wholeFlowIsolationVerified: true,
       executionFunctionPreimages: [
@@ -215,6 +239,8 @@ function fixture() {
       endpointInventorySha256: endpointInventorySha256(flow),
     },
     installTarget: { ...DEV_INSTALL_TARGET },
+    candidateSha256: null,
+    productionBindingState: "UNBOUND_AFTER_ROUTER_AMENDMENT",
   };
   return { flow, sourceText, binding };
 }
@@ -229,9 +255,9 @@ const fixtureTrackedSources = () => ({
   "scripts/nodered_games_nodes/fn_split_router.js":
     "const ADMIN_API = \"https://api.vivacrm.ru/api/v1\";\nconst END_USER_API = \"https://api.vivacrm.ru/end-user/api/v1/iSkq6G\";\nconst CUP_API_DEFAULT = \"https://padlhub.su/api\";\nconst TOKEN_URL_DEFAULT = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\nconst MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = \"PROD\";\nconst MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = {\n  PROD: \"https://padlhub.su/api\",\n  DEV: null,\n};\n  const apiBase = (readEnv(\"CUP_API_BASE_URL\") || CUP_API_DEFAULT).replace(/\\/+$/, \"\");\n  msg.url = readEnv(\"VIVA_SERVICE_TOKEN_URL\") || TOKEN_URL_DEFAULT;\n",
   "scripts/nodered_games_nodes/fn_split_create_prepare.js":
-    "const TOKEN_URL_DEFAULT = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\nconst CUP_API_DEFAULT = \"https://padlhub.su/api\";\n  const apiBase = (readEnv(\"CUP_API_BASE_URL\") || CUP_API_DEFAULT).replace(/\\/+$/, \"\");\nmsg.url = readEnv(\"VIVA_SERVICE_TOKEN_URL\") || TOKEN_URL_DEFAULT;\n",
+    "const TOKEN_URL_DEFAULT = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\nconst CUP_API_DEFAULT = \"https://padlhub.su/api\";\n  const apiBase = (readEnv(\"CUP_API_BASE_URL\") || CUP_API_DEFAULT).replace(/\\/+$/, \"\");\nmsg.url = readEnv(\"VIVA_SERVICE_TOKEN_URL\") || TOKEN_URL_DEFAULT;\n  successUrl: toStr(body.successUrl) || toStr(body.baseRedirectUrl),\n  failUrl: toStr(body.failUrl) || toStr(body.baseRedirectUrl),\n",
   "scripts/nodered_games_nodes/fn_split_join_prepare.js":
-    "const TOKEN_URL_DEFAULT = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\nconst CUP_API_DEFAULT = \"https://padlhub.su/api\";\n  const apiBase = (readEnv(\"CUP_API_BASE_URL\") || CUP_API_DEFAULT).replace(/\\/+$/, \"\");\n  msg.url = readEnv(\"VIVA_SERVICE_TOKEN_URL\") || TOKEN_URL_DEFAULT;\n",
+    "const TOKEN_URL_DEFAULT = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\nconst CUP_API_DEFAULT = \"https://padlhub.su/api\";\n  const apiBase = (readEnv(\"CUP_API_BASE_URL\") || CUP_API_DEFAULT).replace(/\\/+$/, \"\");\n  msg.url = readEnv(\"VIVA_SERVICE_TOKEN_URL\") || TOKEN_URL_DEFAULT;\n  successUrl: toStr(body.successUrl) || toStr(body.baseRedirectUrl),\n  failUrl: toStr(body.failUrl) || toStr(body.baseRedirectUrl),\n",
 });
 
 test("strict environment URL contract allows only the exact bound DEV or PROD base", () => {
@@ -252,6 +278,23 @@ test("strict environment URL contract allows only the exact bound DEV or PROD ba
   }
 });
 
+test("fresh host evidence is build-only and rejects unit, listener, flow, path, or authority drift", () => {
+  const evidence = () => JSON.parse(fs.readFileSync(HOST_EVIDENCE_PATH, "utf8"));
+  assert.equal(validateDevHostEvidence(evidence()), true);
+  for (const mutate of [
+    (value) => { value.units[0].activeState = "active"; },
+    (value) => { value.units[1].fragmentSha256 = "invalid"; },
+    (value) => { value.networkPolicy.openListeners = ["127.0.0.1:1882"]; },
+    (value) => { value.targetFlow.state = "PRESENT"; },
+    (value) => { value.paths[0].path = "/root/.node-red"; },
+    (value) => { value.authority.hostInstall = true; },
+  ]) {
+    const value = evidence();
+    mutate(value);
+    assert.throws(() => validateDevHostEvidence(value));
+  }
+});
+
 test("DEV builder patches only frozen function bodies and emits a separate digest", () => {
   const { flow, sourceText, binding } = fixture();
   const trackedSources = fixtureTrackedSources();
@@ -262,7 +305,9 @@ test("DEV builder patches only frozen function bodies and emits a separate diges
     trustedBindings(),
   );
   assert.equal(result.manifest.environment, "DEV");
-  assert.equal(result.manifest.rollbackSourceSha256, binding.source.sourceSha256);
+  assert.equal(result.manifest.sourceProvenance, "OFFLINE_GENERATED");
+  assert.equal(result.manifest.hostPreimageState, "ABSENT");
+  assert.equal(result.manifest.rollbackSourceSha256, null);
   assert.equal(result.manifest.installAuthorization.authorized, false);
   assert.equal(result.manifest.installAuthorization.candidateSha256, result.manifest.candidateSha256);
   assert.deepEqual(result.manifest.changedNodeIds, [
@@ -309,6 +354,12 @@ test("actual reachable sources bind only to the approved DEV fixture origins", (
   assert.doesNotMatch(combined, /https:\/\/padlhub\.su\/(?:api|seliger)/);
   assert.doesNotMatch(combined, /readEnv\("VIVA_SERVICE_TOKEN_URL"\)/);
   assert.doesNotMatch(combined, /readEnv\("CUP_API_BASE_URL"\)/);
+  assert.doesNotMatch(combined, /(?:successUrl|failUrl):\s*toStr\(body\./);
+  for (const id of [binding.target.splitCreatePrepareNodeId, binding.target.splitJoinPrepareNodeId]) {
+    const source = String(result.candidate.find((node) => node.id === id)?.func || "");
+    assert.match(source, /successUrl: null/);
+    assert.match(source, /failUrl: null/);
+  }
   assert.match(combined, /http:\/\/127\.0\.0\.1:3037\/api/);
   assert.match(combined, /http:\/\/127\.0\.0\.1:3038/);
   assert.match(combined, /http:\/\/127\.0\.0\.1:3039/);
@@ -327,6 +378,7 @@ test("DEV builder independently rejects HTTP, mongodb4 wiring, and effective dat
   const rebuild = (value) => {
     value.sourceText = `${JSON.stringify(value.flow, null, 2)}\n`;
     value.binding.source.sourceSha256 = sha256(value.sourceText);
+    value.binding.source.sourceNodeInventorySha256 = nodeInventorySha256(value.flow);
     value.binding.source.nodeCount = value.flow.length;
     for (const [field, id] of [
       ["routerNodePreimageSha256", "router-dev"],
@@ -482,7 +534,7 @@ test("DEV builder independently rejects HTTP, mongodb4 wiring, and effective dat
   rebuild(externalFunctionLib);
   assert.throws(() => buildDevCandidate(
     externalFunctionLib.sourceText, externalFunctionLib.binding, fs.readFileSync, trustedBindings(),
-  ), /non-isolated node capability/);
+  ), /offline source provenance mismatch|non-isolated node capability/);
 });
 
 test("DEV builder rejects tracked function bodies that retain production/shared endpoints", () => {
@@ -509,6 +561,7 @@ test("DEV builder derives whole-flow endpoint custody and rejects an added produ
   });
   value.sourceText = `${JSON.stringify(value.flow, null, 2)}\n`;
   value.binding.source.sourceSha256 = sha256(value.sourceText);
+  value.binding.source.sourceNodeInventorySha256 = nodeInventorySha256(value.flow);
   value.binding.source.nodeCount = value.flow.length;
   assert.throws(() => buildDevCandidate(
     value.sourceText, value.binding, fs.readFileSync, trustedBindings(),
@@ -528,6 +581,7 @@ test("DEV builder rejects dynamic HTTP nodes and unapproved senders to an attest
   const rebuild = (value) => {
     value.sourceText = `${JSON.stringify(value.flow, null, 2)}\n`;
     value.binding.source.sourceSha256 = sha256(value.sourceText);
+    value.binding.source.sourceNodeInventorySha256 = nodeInventorySha256(value.flow);
     value.binding.source.nodeCount = value.flow.length;
     value.binding.endpointAudit.endpointInventorySha256 = endpointInventorySha256(value.flow);
     value.binding.dependencies.executionFunctionPreimages = deriveDevWholeFlowIsolation(
@@ -588,15 +642,14 @@ test("DEV builder rejects dynamic HTTP nodes and unapproved senders to an attest
     tokenDisclosureRoute.binding,
     fs.readFileSync,
     trustedBindings(),
-  ), /non-isolated node capability/);
+  ), /offline source provenance mismatch|non-isolated node capability/);
 });
 
 test("shared-root audit capture cannot become a DEV candidate source", () => {
   const { sourceText, binding } = fixture();
   binding.source.sourceKind = "shared-host-audit-only";
-  binding.source.remoteFlowPath = "/root/.node-red/flows.json";
   assert.throws(() => buildDevCandidate(sourceText, binding, () => "", trustedBindings()),
-    /DEV source identity mismatch/);
+    /offline source provenance mismatch/);
   const divergentBindings = trustedBindings();
   divergentBindings.DEV_INSTALL_TARGET = {
     ...DEV_INSTALL_TARGET,
@@ -606,39 +659,124 @@ test("shared-root audit capture cannot become a DEV candidate source", () => {
     /diverges from the provisioning contract/);
 });
 
-test("DEV publisher remains blocked until provisioning separately authorizes candidate build", () => {
-  const { sourceText, binding } = fixture();
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "lk1-dev-publish-test-"));
-  fs.mkdirSync(path.join(workspace, "input"));
-  fs.writeFileSync(path.join(workspace, "input/source.flow.json"), sourceText);
-  fs.writeFileSync(path.join(workspace, "input/source.flow.meta.json"), JSON.stringify({
-    formatVersion: 1,
-    environment: binding.environment,
-    ...binding.source,
-    target: binding.target,
-    dependencies: binding.dependencies,
-    environmentIdentityVerified: binding.environmentIdentityVerified,
-  }));
-  const trackedSources = fixtureTrackedSources();
-  assert.throws(() => publishDevCandidate(workspace, binding, {
-    readSource: (file) => trackedSources[file],
-    trustedBindings: trustedBindings(),
-  }), /blocks DEV candidate publication/);
-  assert.equal(fs.existsSync(path.join(workspace, "build")), false);
+test("offline generator and publisher emit an install-blocked readiness packet", () => {
+  const parents = [
+    fs.mkdtempSync(path.join(TMP_ROOT, "lk1-dev-publish-a-")),
+    fs.mkdtempSync(path.join(TMP_ROOT, "lk1-dev-publish-b-")),
+  ];
+  try {
+    const results = parents.map((parent) => {
+      const workspace = path.join(parent, "workspace");
+      publishOfflineDevSource(workspace);
+      const binding = JSON.parse(fs.readFileSync(path.join(
+        workspace, "input/source.flow.meta.json",
+      ), "utf8"));
+      return publishDevCandidate(workspace, binding);
+    });
+    const ready = JSON.parse(fs.readFileSync(results[0].readyPath, "utf8"));
+    assert.equal(ready.sourceProvenance, "OFFLINE_GENERATED");
+    assert.equal(ready.hostPreimageState, "ABSENT");
+    assert.equal(ready.hostReadbackSha256, null);
+    assert.equal(ready.installAuthorized, false);
+    assert.equal(ready.candidateSha256, results[0].manifest.candidateSha256);
+    assert.equal(ready.manifestSha256, results[0].manifestSha256);
+    const foreignWorkspace = path.join(parents[0], "foreign-workspace");
+    publishOfflineDevSource(foreignWorkspace);
+    assert.doesNotThrow(() => execFileSync(process.execPath, [
+      path.resolve("scripts/prepare_lk1_subscription_dev_candidate.mjs"),
+      "--workspace", foreignWorkspace,
+      "--binding", path.resolve("scripts/lk1_subscription_dev_candidate_binding.json"),
+    ], { cwd: TMP_ROOT, encoding: "utf8" }));
+    for (const file of [
+      "lk1-subscription-dev.candidate.json",
+      "lk1-subscription-dev.manifest.json",
+      "lk1-subscription-dev.ready.json",
+    ]) {
+      assert.deepEqual(
+        fs.readFileSync(path.join(parents[0], "workspace/build", file)),
+        fs.readFileSync(path.join(parents[1], "workspace/build", file)),
+      );
+    }
+    const installAttempt = spawnSync(process.execPath, [
+      "scripts/verify_lk1_subscription_dev_install.mjs",
+      "--manifest", results[0].manifestPath,
+      "--candidate", results[0].candidatePath,
+    ], { cwd: path.resolve("."), encoding: "utf8" });
+    assert.notEqual(installAttempt.status, 0);
+    assert.match(installAttempt.stderr, /blocks DEV install/);
+  } finally {
+    parents.forEach((parent) => fs.rmSync(parent, { recursive: true, force: true }));
+  }
 });
 
-test("checked-in DEV binding stays blocked on missing flow, CUP, HTTP, and Mongo custody", () => {
+test("publisher rejects an arbitrary self-consistent binding and symlinked input", () => {
+  const parent = fs.mkdtempSync(path.join(TMP_ROOT, "lk1-dev-untrusted-"));
+  try {
+    const workspace = path.join(parent, "workspace");
+    publishOfflineDevSource(workspace);
+    const metaPath = path.join(workspace, "input/source.flow.meta.json");
+    const binding = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    const tamperedAuthorization = JSON.parse(fs.readFileSync(
+      "scripts/lk1_subscription_dev_source_authorization.json", "utf8",
+    ));
+    tamperedAuthorization.filesSha256["scripts/lk1_subscription_dev_execution_contract.mjs"] =
+      "f".repeat(64);
+    assert.throws(() => publishDevCandidate(workspace, binding, {
+      sourceAuthorization: tamperedAuthorization,
+    }), /does not accept authority overrides/);
+    assert.equal(fs.existsSync(path.join(workspace, "build")), false);
+    const untrusted = structuredClone(binding);
+    const sourcePath = path.join(workspace, "input/source.flow.json");
+    const source = JSON.parse(fs.readFileSync(sourcePath, "utf8"));
+    const optionsNode = source.find((node) => node.id === "lk_subscription_booking_options_20260804");
+    optionsNode.func = "msg.payload = global.get('vivacrm_access_token'); return msg;";
+    const untrustedSourceText = `${JSON.stringify(source, null, 2)}\n`;
+    fs.writeFileSync(sourcePath, untrustedSourceText);
+    untrusted.source.sourceSha256 = sha256(untrustedSourceText);
+    untrusted.source.sourceNodeInventorySha256 = nodeInventorySha256(source);
+    untrusted.dependencies.executionFunctionPreimages.find((entry) => (
+      entry.id === optionsNode.id
+    )).nodeSha256 = sha256(JSON.stringify(optionsNode));
+    fs.writeFileSync(metaPath, `${JSON.stringify(untrusted, null, 2)}\n`);
+    assert.throws(() => publishDevCandidate(workspace, untrusted), /frozen binding/);
+
+    fs.writeFileSync(metaPath, `${JSON.stringify(binding, null, 2)}\n`);
+    publishOfflineDevSource(path.join(parent, "clean-workspace"));
+    const cleanSourcePath = path.join(parent, "clean-workspace/input/source.flow.json");
+    const realSourcePath = path.join(workspace, "input/source.flow.real.json");
+    fs.copyFileSync(cleanSourcePath, realSourcePath);
+    fs.rmSync(sourcePath);
+    fs.symlinkSync(realSourcePath, sourcePath);
+    assert.throws(() => publishDevCandidate(workspace, binding), /canonical regular file/);
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("offline generator rejects a temp symlink parent that resolves outside its custody", () => {
+  const holder = fs.mkdtempSync(path.join(TMP_ROOT, "lk1-dev-symlink-parent-"));
+  try {
+    const redirect = path.join(holder, "redirect");
+    fs.symlinkSync(fs.realpathSync(ROOT), redirect);
+    assert.throws(() => publishOfflineDevSource(path.join(redirect, "workspace")),
+      /workspace must be under/);
+  } finally {
+    fs.rmSync(holder, { recursive: true, force: true });
+  }
+});
+
+test("checked-in DEV binding is source-only and never claims runtime or install proof", () => {
   const binding = JSON.parse(fs.readFileSync("scripts/lk1_subscription_dev_candidate_binding.json", "utf8"));
   assert.equal(binding.environment, "DEV");
   assert.equal(binding.productionBindingState, "UNBOUND_AFTER_ROUTER_AMENDMENT");
   assert.equal(binding.installAllowed, false);
-  assert.equal(binding.target.present, false);
-  assert.equal(binding.runtime.apiBase, null);
-  assert.equal(binding.dependencies.mongoBindingVerifiedDevOnly, false);
-  assert.equal(binding.endpointAudit.verifiedDevOnly, false);
-  assert.equal(binding.endpointAudit.crossEnvironmentEndpointCount, 5);
-  assert.equal(binding.endpointAudit.endpointInventorySha256, null);
-  assert.throws(() => validateDevBinding(binding), /blocked/);
+  assert.equal(binding.bindingState, "BOUND_SOURCE_ONLY");
+  assert.equal(binding.environmentIdentityVerified, false);
+  assert.equal(binding.target.present, true);
+  assert.equal(binding.runtime.completeManagedContractExposed, false);
+  assert.equal(binding.dependencies.mongoBindingVerifiedDevOnly, true);
+  assert.equal(binding.endpointAudit.verifiedDevOnly, true);
+  assert.equal(validateDevBinding(binding), true);
 });
 
 test("read-only snapshot inspector computes graph, target, duplicate, and Mongo evidence", () => {

@@ -9,6 +9,7 @@ import {
   advancePaymentSyncFailure,
   isPaymentSyncExhausted,
   removePaymentSyncQueueItem,
+  resolvePaymentSyncLookupMode,
   shouldClaimPaymentSyncItem,
   type PaymentSyncQueueStatus,
 } from "./paymentSyncPolicy";
@@ -20,6 +21,7 @@ import { recoverGameExerciseId } from "./gameExerciseIdRecovery";
 import {
   buildPendingPaidGameDraftFromRecord,
   isConfirmedPaymentReadbackBound,
+  isPaymentSyncRecordBoundToPaymentRef,
   isPersistedGamePaymentFailedTerminal,
   isPersistedGamePaymentTerminal,
   resolvePaymentSyncExpectedGameId,
@@ -530,18 +532,42 @@ async function processPendingPaymentSyncQueueUnlocked(
       processed += 1;
       const bookingIds = unique([...item.bookingIds, ...forceBookingIds]);
       const attempt = (item.attempts ?? 0) + 1;
+      const lookupMode = resolvePaymentSyncLookupMode({
+        forcedCallback: forcePaymentRef === paymentRef,
+      });
 
       trackPaymentConfirmEvent("requested", {
         stage: "lookup",
         paymentRef,
         bookingIdsCount: bookingIds.length,
         attempt,
+        lookupMode,
         source,
         url: "/lk/games",
       });
 
-      const byPaymentRef = await apiFetchPadelGameByPaymentRef(paymentRef, bookingIds);
-      const persistedRecord = byPaymentRef.data?.id ? byPaymentRef.data : null;
+      const byPaymentRef = await apiFetchPadelGameByPaymentRef(paymentRef, bookingIds, {
+        mode: lookupMode,
+      });
+      const lookupRecord = byPaymentRef.data?.id ? byPaymentRef.data : null;
+      const persistedRecord = lookupRecord
+        && isPaymentSyncRecordBoundToPaymentRef(lookupRecord, paymentRef)
+        ? lookupRecord
+        : null;
+      if (lookupRecord && !persistedRecord) {
+        const errorMessage = "Найденная игра не связана с текущим платежом";
+        trackPaymentConfirmEvent("failed", {
+          stage: "lookup_identity_mismatch",
+          paymentRef,
+          gameId: lookupRecord.id,
+          status: byPaymentRef.status ?? null,
+          source,
+          message: errorMessage,
+        });
+        registerPendingPaymentSyncFailure(paymentRef, errorMessage);
+        failed.push({ paymentRef, error: errorMessage });
+        continue;
+      }
       if (persistedRecord && isPersistedGamePaymentTerminal(persistedRecord)) {
         trackPaymentConfirmEvent("success", {
           stage: "lookup",
@@ -658,7 +684,11 @@ async function processPendingPaymentSyncQueueUnlocked(
         retries: 0,
       });
       if (confirmResult.data?.id) {
-        const confirmedReadback = await apiFetchPadelGameByPaymentRef(paymentRef, confirmBookingIds);
+        const confirmedReadback = await apiFetchPadelGameByPaymentRef(
+          paymentRef,
+          confirmBookingIds,
+          { mode: "combined" },
+        );
         const confirmedRecord = confirmedReadback.data?.id ? confirmedReadback.data : null;
         if (
           !confirmedRecord
@@ -697,7 +727,11 @@ async function processPendingPaymentSyncQueueUnlocked(
 
       // A concurrent callback can win the CAS after this tab loaded the same
       // pending draft. Recover only through a fresh, exact terminal readback.
-      const concurrentReadback = await apiFetchPadelGameByPaymentRef(paymentRef, confirmBookingIds);
+      const concurrentReadback = await apiFetchPadelGameByPaymentRef(
+        paymentRef,
+        confirmBookingIds,
+        { mode: "combined" },
+      );
       const concurrentRecord = concurrentReadback.data?.id ? concurrentReadback.data : null;
       const expectedGameId = resolvePaymentSyncExpectedGameId(
         confirmPayload.gameId,

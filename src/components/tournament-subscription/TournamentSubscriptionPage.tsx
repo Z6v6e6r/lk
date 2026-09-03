@@ -11,13 +11,13 @@ import {
   type UserProfileType,
 } from "../../utils/apiClient";
 import {
-  TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_OVERRIDE_KEYS,
   isTournamentSubscriptionStorefrontPlanRetired,
   resolveTournamentSubscriptionCounterDisplayText,
   resolveTournamentSubscriptionCounterDisplayTotalLimit,
   resolveTournamentSubscriptionDirectProductId,
   resolveTournamentSubscriptionPromoOffer,
 } from "../../utils/tournamentSubscriptionCatalog";
+import { loadTournamentSubscriptionStatuses } from "../../utils/tournamentSubscriptionStatusLoader";
 import {
   formatTournamentSubscriptionDropCountdown,
   resolveNextTournamentSubscriptionDailyDropAt,
@@ -404,6 +404,7 @@ function buildDefaultPageViewConfig(): PageViewConfig {
           terms: PITER_FRIENDSHIP_TERMS,
           sectionLabel: "Годовые подписки",
         }),
+        buttonLabel: "Оформить подписку",
         requiresConsent: false,
         hideAuthState: true,
       },
@@ -958,39 +959,27 @@ export default function TournamentSubscriptionPage({
       return;
     }
 
-    const aggregateResult = await apiFetchTournamentSubscriptionStatus();
-    const explicitCounterKeys = Array.from(new Set(
-      pageViewConfig.plans
-        .map((plan) => plan.counterKey)
-        .filter((counterKey): counterKey is SubscriptionCounterKey =>
-          Boolean(counterKey)
-          && TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_OVERRIDE_KEYS.includes(
-            counterKey as typeof TOURNAMENT_SUBSCRIPTION_COUNTER_DISPLAY_OVERRIDE_KEYS[number],
-          )),
-    ));
-
-    const explicitResults = await Promise.all(
-      explicitCounterKeys.map(async (counterKey) => {
-        const plan = pageViewConfig.plans.find((candidate) => candidate.counterKey === counterKey) ?? null;
-        const result = await apiFetchTournamentSubscriptionStatus({
-          counterKey,
-          planType: plan?.planId ?? null,
-        });
-        return result.error || !result.data ? [] : result.data;
-      }),
+    const {
+      aggregateResult,
+      failedExplicitCounterKeys,
+      statuses: mergedStatuses,
+    } = await loadTournamentSubscriptionStatuses(
+      pageViewConfig.plans,
+      apiFetchTournamentSubscriptionStatus,
     );
 
     if (requestId !== statusRequestIdRef.current) return;
-
-    const mergedStatuses = [
-      ...explicitResults.flat(),
-      ...(aggregateResult.data || []),
-    ];
 
     if (mergedStatuses.length === 0) {
       setStatusError(aggregateResult.error?.message || "Не удалось получить остаток абонементов");
       setLoadingStatus(false);
       return;
+    }
+
+    if (aggregateResult.error) {
+      setStatusError(aggregateResult.error.message || "Не удалось получить часть остатков абонементов");
+    } else if (failedExplicitCounterKeys.length > 0) {
+      setStatusError("Не удалось получить актуальный дневной остаток годовой подписки");
     }
 
     setStatusByCounterKey(mapStatusesByCounter(mergedStatuses));
@@ -1551,12 +1540,12 @@ export default function TournamentSubscriptionPage({
             && status?.unlimited !== false
           );
           const remainingValueText = isGuardedStorefront
-            ? status?.dailyCapEnabled
-              ? `${remainingCount} из ${displayTotalLimit}`
-              : status?.batchSize
-                ? `${status.batchRemainingCount} из ${status.batchSize}`
-                : usesTrackedCounter && loadingStatus
-                  ? "Проверяем..."
+            ? !status && usesTrackedCounter
+              ? loadingStatus ? "Проверяем..." : "Статус недоступен"
+              : status?.dailyCapEnabled
+                ? `${remainingCount} из ${displayTotalLimit}`
+                : status?.batchSize
+                  ? `${status.batchRemainingCount} из ${status.batchSize}`
                   : `${fallbackBatchSize} из ${fallbackBatchSize}`
             : plan.remainingValueText
             || (

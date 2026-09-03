@@ -8221,14 +8221,19 @@ export async function apiFetchPadelGamesByBookingReferences(
   };
 }
 
+export interface PadelGamePaymentLookupOptions {
+  mode?: "paymentRef" | "bookingIds" | "combined" | "sequential";
+}
+
 export async function apiFetchPadelGameByPaymentRef(
   paymentRefRaw: string,
   bookingIdsRaw: string[] = [],
+  options?: PadelGamePaymentLookupOptions,
 ) {
   const paymentRef = paymentRefRaw.trim();
-  const bookingIds = bookingIdsRaw
+  const bookingIds = Array.from(new Set(bookingIdsRaw
     .map((item) => item.trim())
-    .filter(Boolean);
+    .filter(Boolean)));
 
   if (!paymentRef && bookingIds.length === 0) {
     return {
@@ -8239,14 +8244,36 @@ export async function apiFetchPadelGameByPaymentRef(
   }
 
   const baseUrl = getServ2Origin() || "";
+  const requestedMode = options?.mode ?? "sequential";
+  const lookupMode = requestedMode === "bookingIds" && bookingIds.length === 0
+    ? "paymentRef"
+    : requestedMode;
   const lookupQueries: URLSearchParams[] = [];
-  if (paymentRef) {
+  if (lookupMode === "combined") {
+    const combinedQuery = new URLSearchParams();
+    if (paymentRef) combinedQuery.set("paymentRef", paymentRef);
+    if (bookingIds.length > 0) combinedQuery.set("bookingIds", bookingIds.join(","));
+    combinedQuery.set("includePast", "true");
+    lookupQueries.push(combinedQuery);
+  } else if (lookupMode === "paymentRef") {
+    if (paymentRef) {
+      const paymentQuery = new URLSearchParams();
+      paymentQuery.set("paymentRef", paymentRef);
+      paymentQuery.set("includePast", "true");
+      lookupQueries.push(paymentQuery);
+    }
+  } else if (lookupMode === "bookingIds") {
+    const bookingQuery = new URLSearchParams();
+    bookingQuery.set("bookingIds", bookingIds.join(","));
+    bookingQuery.set("includePast", "true");
+    lookupQueries.push(bookingQuery);
+  } else if (paymentRef) {
     const paymentQuery = new URLSearchParams();
     paymentQuery.set("paymentRef", paymentRef);
     paymentQuery.set("includePast", "true");
     lookupQueries.push(paymentQuery);
   }
-  if (bookingIds.length > 0) {
+  if (lookupMode === "sequential" && bookingIds.length > 0) {
     const bookingQuery = new URLSearchParams();
     bookingQuery.set("bookingIds", bookingIds.join(","));
     bookingQuery.set("includePast", "true");

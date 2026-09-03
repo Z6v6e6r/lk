@@ -122,6 +122,12 @@ const REGIONAL_FRIENDSHIP_CONFIGS = {
   },
 };
 const REGIONAL_FRIENDSHIP_COUNTER_KEYS = new Set(Object.keys(REGIONAL_FRIENDSHIP_CONFIGS));
+// Temporary commercial exception: Piter keeps the proven legacy sale lifecycle
+// while managed usage rules remain disabled. HUB/Kotelniki stay fail closed.
+const MANAGED_SALE_BLOCKED_COUNTER_KEYS = new Set([
+  "kotelniki_friendship",
+  "network_friendship",
+]);
 
 const toStr = (value) => {
   if (value === null || value === undefined) return null;
@@ -614,7 +620,7 @@ if (requestedCounterKey) {
   activeCounter = mappedByCampaign;
 }
 
-if (REGIONAL_FRIENDSHIP_COUNTER_KEYS.has(activeCounter.counterKey)) {
+if (MANAGED_SALE_BLOCKED_COUNTER_KEYS.has(activeCounter.counterKey)) {
   return fail(503, "Продажа годовой подписки ожидает authoritative-привязку оплаты к экземпляру", {
     code: "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE",
     counterKey: activeCounter.counterKey,

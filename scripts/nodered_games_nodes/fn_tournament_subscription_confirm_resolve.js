@@ -398,12 +398,53 @@ ctx.clientId = toStr(record.clientId) || null;
 ctx.productId = toStr(record.productId) || toStr(recordCounter?.productId) || null;
 ctx.productName = toStr(record.productName) || toStr(recordCounter?.productName) || null;
 ctx.toPayMinor = Number.isFinite(Number(record.toPayMinor)) ? Number(record.toPayMinor) : null;
+ctx.expectedAmountMinor = Number.isInteger(record.amountMinor) ? record.amountMinor : null;
+ctx.requestFingerprint = toStr(record.requestFingerprint);
+ctx.saleRecord = {
+  counterKey: ctx.counterKey,
+  inventoryId: ctx.inventoryId,
+  paymentRef: ctx.paymentRef,
+  requestFingerprint: ctx.requestFingerprint,
+  clientPhone: ctx.clientPhone,
+  clientId: ctx.clientId,
+  batchIndex: Number.isInteger(record.batchIndex) ? record.batchIndex : null,
+  batchSize: Number.isInteger(record.batchSize) ? record.batchSize : null,
+  productId: ctx.productId,
+  productName: ctx.productName,
+  amountMinor: ctx.expectedAmountMinor,
+  providerProductCostMinor: Number.isInteger(record.providerProductCostMinor)
+    ? record.providerProductCostMinor
+    : null,
+  discountMinor: Number.isInteger(record.discountMinor) ? record.discountMinor : null,
+  unlimited: record.unlimited === true,
+  releasePhase: toStr(record.releasePhase),
+  releaseStartDate: toStr(record.releaseStartDate),
+  launchLimit: Number.isInteger(record.launchLimit) ? record.launchLimit : 0,
+  dailyLimit: Number.isInteger(record.dailyLimit) ? record.dailyLimit : 0,
+  dailyDropDate: toStr(record.dailyDropDate),
+  saleType: ctx.saleType,
+  planKey: ctx.planKey,
+  campaignKey: ctx.campaignKey,
+  trainerQrCode: toStr(record.trainerQrCode),
+  referralToken: toStr(record.referralToken),
+  referralVisitId: toStr(record.referralVisitId),
+  productType: toStr(record.productType) || "SUBSCRIPTION",
+  providerActivationDays: Number.isInteger(record.providerActivationDays) ? record.providerActivationDays : null,
+  providerAutoActivationDate: toStr(record.providerAutoActivationDate),
+  activationNotBeforeDate: toStr(record.activationNotBeforeDate),
+  providerValidityDays: Number.isInteger(record.providerValidityDays) ? record.providerValidityDays : null,
+  providerVisits: Number.isInteger(record.providerVisits) ? record.providerVisits : null,
+  successUrl: toStr(record.successUrl),
+  failUrl: toStr(record.failUrl),
+  createdAt: toStr(record.createdAt) || new Date().toISOString(),
+};
 ctx.unlimited = record.unlimited === true || recordCounter?.unlimited === true;
 ctx.reservationMinutes = resolveReservationMinutes();
 ctx.httpRequestTimeoutMs = resolveHttpTimeoutMs();
 
 const currentStatus = String(record.status || "").trim().toUpperCase();
-if (currentStatus === "PAID" && ctx.reconcile !== true) {
+if (currentStatus === "PAID" && ctx.reconcile !== true
+  && !(ctx.counterKey === "piter_friendship" && ctx.requestFingerprint)) {
   const response = Object.assign({}, msg, {
     statusCode: 200,
     headers: { "Content-Type": "application/json; charset=utf-8" },

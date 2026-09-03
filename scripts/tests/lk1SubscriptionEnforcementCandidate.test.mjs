@@ -222,25 +222,27 @@ test("unified LK1 candidate tolerates disabled duplicates but rejects enabled se
   );
 });
 
-test("unified LK1 contract keeps the amended router fail-closed until PROD is rebound", () => {
+test("unified LK1 contract stays fail-closed while amended router and atomic Piter sources are unbound", () => {
   assert.equal(
     LK1_ENFORCEMENT_CONTRACT.sourceSha256,
     "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
   );
   assert.equal(LK1_ENFORCEMENT_CONTRACT.targets.length, 5);
-  const amendedRouter = LK1_ENFORCEMENT_CONTRACT.targets.find(
-    ({ id }) => id === "lk_subscription_booking_router_20260804",
-  );
-  assert.ok(amendedRouter);
-  assert.notEqual(
-    sha256(fs.readFileSync(amendedRouter.sourceFile)),
-    amendedRouter.candidateSha256,
-    "the unreviewed PROD router pin must not silently advance with the DEV amendment",
-  );
-  for (const target of LK1_ENFORCEMENT_CONTRACT.targets.filter(
-    ({ id }) => id !== amendedRouter.id,
-  )) {
-    assert.equal(sha256(fs.readFileSync(target.sourceFile)), target.candidateSha256, target.id);
+  const expectedUnboundSha256ById = new Map([
+    ["lk_subscription_booking_router_20260804", "02cd217c8791dbd0a70928539d05ef5cd44c6b57a8ad763cd6e95893d2f418c1"],
+    ["c165e43eba668c25", "e81699c4c490b9883cacf104c751990c0b2922ce86d1f607889fb66991fedb53"],
+    ["91dded2dc8cfebe4", "cdaa2b512d6e0f1bc1fd79eb264d1d05816e63d391e6bbf9390eaf29694e0851"],
+    ["f8679e53edadc39b", "d7adcfb697bf06428f7e0c3de2dafb111e88d59c480640574d6d2760e4b9b549"],
+  ]);
+  for (const target of LK1_ENFORCEMENT_CONTRACT.targets) {
+    const actualSha256 = sha256(fs.readFileSync(target.sourceFile));
+    const expectedUnboundSha256 = expectedUnboundSha256ById.get(target.id);
+    if (expectedUnboundSha256) {
+      assert.equal(actualSha256, expectedUnboundSha256, target.id);
+      assert.notEqual(actualSha256, target.candidateSha256, `${target.id} must stay unbound`);
+    } else {
+      assert.equal(actualSha256, target.candidateSha256, target.id);
+    }
   }
   assert.equal(LK1_ENFORCEMENT_CONTRACT.composedSources.length, 8);
   for (const source of LK1_ENFORCEMENT_CONTRACT.composedSources) {

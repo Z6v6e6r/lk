@@ -16,6 +16,10 @@ import {
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const fail = (message) => { throw new Error(message); };
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const readRepositorySource = (file, encoding) => fs.readFileSync(
+  path.join(REPO_ROOT, file), encoding,
+);
 const PROD_API_BASE = "https://padlhub.su/api";
 const ROUTER_SOURCE = "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js";
 const PREPARE_SOURCE = "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js";
@@ -23,6 +27,23 @@ const FINALIZE_SOURCE = "scripts/nodered_subscription_booking_nodes/fn_subscript
 const SPLIT_ROUTER_SOURCE = "scripts/nodered_games_nodes/fn_split_router.js";
 const SPLIT_CREATE_PREPARE_SOURCE = "scripts/nodered_games_nodes/fn_split_create_prepare.js";
 const SPLIT_JOIN_PREPARE_SOURCE = "scripts/nodered_games_nodes/fn_split_join_prepare.js";
+const OFFLINE_GENERATOR = "scripts/generate_lk1_subscription_dev_offline_source.mjs";
+const HOST_EVIDENCE_PATH = "scripts/lk1_subscription_dev_host_evidence.json";
+const isTemporaryChild = (candidate) => (
+  candidate.startsWith("/private/tmp/") || candidate.startsWith("/tmp/")
+);
+const OFFLINE_SOURCE_INPUTS = Object.freeze([
+  ROUTER_SOURCE,
+  PREPARE_SOURCE,
+  FINALIZE_SOURCE,
+  "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_evaluate.js",
+  "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_blocked.js",
+  "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_mongo_error.js",
+  "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_options.js",
+  SPLIT_ROUTER_SOURCE,
+  SPLIT_CREATE_PREPARE_SOURCE,
+  SPLIT_JOIN_PREPARE_SOURCE,
+].sort());
 const HTTP_REQUEST_NODE_ID = "lk_subscription_booking_http_20260804";
 const SPLIT_CREATE_HTTP_REQUEST_NODE_ID = "ee7ba8cdd68bdf74";
 const MANAGED_MONGO_SPECS = Object.freeze([
@@ -34,6 +55,187 @@ export const LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS = Object.freeze(JSON.
   new URL("./lk1_subscription_runtime_environment_bindings.json", import.meta.url),
   "utf8",
 )));
+export const CHECKED_DEV_CANDIDATE_BINDING = Object.freeze(JSON.parse(fs.readFileSync(
+  new URL("./lk1_subscription_dev_candidate_binding.json", import.meta.url),
+  "utf8",
+)));
+export const CHECKED_DEV_SOURCE_AUTHORIZATION = Object.freeze(JSON.parse(fs.readFileSync(
+  new URL("./lk1_subscription_dev_source_authorization.json", import.meta.url),
+  "utf8",
+)));
+
+const exactKeys = (value, expected, label) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify([...expected].sort())) {
+    fail(`${label} schema mismatch`);
+  }
+};
+
+export function validateDevHostEvidence(evidence) {
+  exactKeys(evidence, [
+    "formatVersion", "environment", "scope", "capturedAt", "sourceHost", "sourceHostname",
+    "unixIdentity", "targetFlow", "units", "networkPolicy", "paths", "installedArtifacts", "authority",
+  ], "DEV host evidence");
+  const capturedAt = Date.parse(String(evidence.capturedAt || ""));
+  if (evidence.formatVersion !== 1 || evidence.environment !== "DEV"
+    || evidence.scope !== "BUILD_ONLY_NOT_INSTALL_EVIDENCE"
+    || !Number.isFinite(capturedAt)
+    || new Date(capturedAt).toISOString().replace(".000Z", "Z") !== evidence.capturedAt
+    || evidence.sourceHost !== "lk-reserve-89"
+    || evidence.sourceHostname !== "89-108-64-209.cloudvps.regruhosting.ru") {
+    fail("DEV host evidence identity mismatch");
+  }
+  exactKeys(evidence.unixIdentity, ["user", "group", "uid", "gid"], "DEV unix identity");
+  if (JSON.stringify(evidence.unixIdentity) !== JSON.stringify({
+    user: "lk1-subscription-dev", group: "lk1-subscription-dev", uid: 997, gid: 997,
+  })) fail("DEV unix identity mismatch");
+  exactKeys(evidence.targetFlow, ["path", "state", "sha256"], "DEV target flow evidence");
+  if (evidence.targetFlow.path !== "/srv/lk1-subscription-dev/node-red/flows.json"
+    || evidence.targetFlow.state !== "ABSENT" || evidence.targetFlow.sha256 !== null) {
+    fail("DEV target flow must remain absent before candidate install");
+  }
+  const expectedUnits = {
+    "lk1-subscription-dev-nodered.service": {
+      fragmentSha256: "75fafcae24c5aefdca545786967bed12d509d12d2555a37d94e23571732f764a",
+      workingDirectory: "/srv/lk1-subscription-dev/node-red",
+      execStart: "/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/runtime/node-red/red.js --userDir /srv/lk1-subscription-dev/node-red --settings /srv/lk1-subscription-dev/node-red/settings.js --port 1882",
+    },
+    "lk1-subscription-dev-mongo.service": {
+      fragmentSha256: "370f07b518f14d87ba78d2cdc3e3cd15714349cf664d2bf53ac95ec2125a9980",
+      workingDirectory: "/srv/lk1-subscription-dev/mongo",
+      execStart: "/srv/lk1-subscription-dev/runtime/mongodb/bin/mongod --bind_ip 127.0.0.1 --port 27030 --dbpath /srv/lk1-subscription-dev/mongo --nounixsocket",
+    },
+    "lk1-subscription-dev-cup.service": {
+      fragmentSha256: "745333370a304d2d1e70add583930d73f704002c634e9eba4343dda7dca45b90",
+      workingDirectory: "/srv/lk1-subscription-dev",
+      execStart: "/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/locked_fixture_runtime.mjs --role cup",
+    },
+    "lk1-subscription-dev-provider-fixture.service": {
+      fragmentSha256: "dbf8a46a002b7f478b011b2afeb2a09837d8f44ecd5873a5225a6da6a895bca5",
+      workingDirectory: "/srv/lk1-subscription-dev",
+      execStart: "/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/locked_fixture_runtime.mjs --role provider",
+    },
+    "lk1-subscription-dev-identity-fixture.service": {
+      fragmentSha256: "673fa03feb87aa886d408684ca947609263929ef178d395d93480fe096488179",
+      workingDirectory: "/srv/lk1-subscription-dev",
+      execStart: "/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/locked_fixture_runtime.mjs --role identity",
+    },
+  };
+  if (!Array.isArray(evidence.units)
+    || JSON.stringify(evidence.units.map(({ serviceName }) => serviceName))
+      !== JSON.stringify(Object.keys(expectedUnits))) fail("DEV unit inventory mismatch");
+  for (const unit of evidence.units) {
+    exactKeys(unit, [
+      "serviceName", "fragmentPath", "fragmentSha256", "loadState", "unitFileState",
+      "activeState", "subState", "user", "group", "workingDirectory", "execStart",
+    ], `DEV unit ${unit.serviceName}`);
+    const expected = expectedUnits[unit.serviceName];
+    if (unit.fragmentPath !== `/etc/systemd/system/${unit.serviceName}`
+      || unit.fragmentSha256 !== expected.fragmentSha256
+      || unit.loadState !== "loaded" || unit.unitFileState !== "disabled"
+      || unit.activeState !== "inactive" || unit.subState !== "dead"
+      || unit.user !== "lk1-subscription-dev" || unit.group !== "lk1-subscription-dev"
+      || unit.workingDirectory !== expected.workingDirectory || unit.execStart !== expected.execStart) {
+      fail(`DEV unit is not exact, disabled, and stopped (${unit.serviceName})`);
+    }
+  }
+  exactKeys(evidence.networkPolicy,
+    ["ipAddressDeny", "ipAddressAllow", "activationUnits", "openListeners"], "DEV network evidence");
+  if (JSON.stringify(evidence.networkPolicy) !== JSON.stringify({
+    ipAddressDeny: ["0.0.0.0/0", "::/0"],
+    ipAddressAllow: ["127.0.0.0/8", "::1/128"],
+    activationUnits: [],
+    openListeners: [],
+  })) fail("DEV host network isolation evidence mismatch");
+  const expectedPaths = [
+    { path: "/srv/lk1-subscription-dev", mode: "0750", owner: "root", group: "lk1-subscription-dev" },
+    { path: "/srv/lk1-subscription-dev/node-red", mode: "0750", owner: "root", group: "lk1-subscription-dev" },
+    { path: "/srv/lk1-subscription-dev/mongo", mode: "0700", owner: "lk1-subscription-dev", group: "lk1-subscription-dev" },
+    { path: "/srv/lk1-subscription-dev/evidence", mode: "0700", owner: "lk1-subscription-dev", group: "lk1-subscription-dev" },
+    { path: "/srv/lk1-subscription-dev/fixtures", mode: "0750", owner: "root", group: "lk1-subscription-dev" },
+    { path: "/srv/lk1-subscription-dev/runtime", mode: "0750", owner: "root", group: "lk1-subscription-dev" },
+  ];
+  if (JSON.stringify(evidence.paths) !== JSON.stringify(expectedPaths)) {
+    fail("DEV host path custody evidence mismatch");
+  }
+  exactKeys(evidence.installedArtifacts,
+    ["settingsSha256", "lockedFixtureRuntimeSha256"], "DEV installed artifact evidence");
+  if (JSON.stringify(evidence.installedArtifacts) !== JSON.stringify({
+    settingsSha256: "6b6cc7253b120f2a8b2397c0d3a5f82db9a72fb6d62948bd9f6e6bdb5ab3deb6",
+    lockedFixtureRuntimeSha256: "eaaef5b53d9f0c365a124ddb4dc7b4f1d0efd7c72522e62c5dc9250515010506",
+  })) {
+    fail("DEV installed artifact digest mismatch");
+  }
+  exactKeys(evidence.authority, [
+    "hostInstall", "nodeRedImport", "serviceStart", "enableUnits", "ingress",
+    "activation", "canaryIds", "secrets", "externalWrites",
+  ], "DEV host evidence authority");
+  if (Object.values(evidence.authority).some((value) => value !== false)) {
+    fail("DEV host evidence cannot authorize a live action");
+  }
+  return true;
+}
+
+export function validateDevSourceAuthorization(authorization, binding, candidateIdentity = null) {
+  const expectedFiles = [
+    "scripts/generate_lk1_subscription_dev_offline_source.mjs",
+    "scripts/inspect_lk1_subscription_dev_snapshot.mjs",
+    "scripts/lk1_subscription_dev_execution_contract.mjs",
+    "scripts/prepare_lk1_subscription_dev_candidate.mjs",
+    "scripts/lk1_subscription_dev_candidate_binding.json",
+    HOST_EVIDENCE_PATH,
+    "scripts/lk1_subscription_dev_provisioning_contract.json",
+    "scripts/validate_lk1_subscription_dev_provisioning_contract.mjs",
+    "scripts/lk1_subscription_runtime_environment_bindings.json",
+  ].sort();
+  const expectedKeys = [
+    "formatVersion", "environment", "authorizationState", "scope", "hostEvidence", "filesSha256",
+    "sourceInputsSha256", "sourceSha256", "sourceNodeInventorySha256",
+    "executionFunctionNodePreimagesSha256", "candidateSha256", "manifestSha256",
+  ].sort();
+  const executionPreimages = Object.fromEntries(
+    (binding.dependencies?.executionFunctionPreimages || []).map(({ id, nodeSha256 }) => [id, nodeSha256]),
+  );
+  if (JSON.stringify(Object.keys(authorization || {}).sort()) !== JSON.stringify(expectedKeys)
+    || authorization.formatVersion !== 1
+    || authorization.environment !== "DEV"
+    || authorization.authorizationState !== "AUTHORIZED_SOURCE_ONLY"
+    || authorization.scope !== "BUILD_OFFLINE_CANDIDATE_ONLY"
+    || JSON.stringify(Object.keys(authorization.filesSha256 || {}).sort()) !== JSON.stringify(expectedFiles)
+    || Object.entries(authorization.filesSha256 || {}).some(([file, expected]) => (
+      !/^[a-f0-9]{64}$/.test(expected || "")
+      || sha256(fs.readFileSync(path.join(REPO_ROOT, file))) !== expected
+    ))
+    || JSON.stringify(authorization.sourceInputsSha256) !== JSON.stringify(binding.source.sourceInputsSha256)
+    || authorization.sourceSha256 !== binding.source.sourceSha256
+    || authorization.sourceNodeInventorySha256 !== binding.source.sourceNodeInventorySha256
+    || JSON.stringify(authorization.executionFunctionNodePreimagesSha256)
+      !== JSON.stringify(executionPreimages)
+    || !/^[a-f0-9]{64}$/.test(authorization.candidateSha256 || "")
+    || !/^[a-f0-9]{64}$/.test(authorization.manifestSha256 || "")) {
+    fail("DEV source-only authorization contract mismatch");
+  }
+  exactKeys(authorization.hostEvidence, ["path", "sha256", "scope", "capturedAt"],
+    "DEV host evidence binding");
+  if (authorization.hostEvidence.path !== HOST_EVIDENCE_PATH) {
+    fail("DEV host evidence binding mismatch");
+  }
+  const hostEvidencePath = path.join(REPO_ROOT, authorization.hostEvidence.path || "");
+  const hostEvidenceBytes = fs.readFileSync(hostEvidencePath);
+  const hostEvidence = JSON.parse(hostEvidenceBytes);
+  if (authorization.hostEvidence.sha256 !== sha256(hostEvidenceBytes)
+    || authorization.filesSha256[HOST_EVIDENCE_PATH] !== authorization.hostEvidence.sha256
+    || authorization.hostEvidence.scope !== hostEvidence.scope
+    || authorization.hostEvidence.capturedAt !== hostEvidence.capturedAt) {
+    fail("DEV host evidence binding mismatch");
+  }
+  validateDevHostEvidence(hostEvidence);
+  if (candidateIdentity && (
+    candidateIdentity.candidateSha256 !== authorization.candidateSha256
+    || candidateIdentity.manifestSha256 !== authorization.manifestSha256
+  )) fail("DEV source-only candidate identity diverges from authorization");
+  return true;
+}
 
 export function validateEnvironmentApiBase(environment, configuredApiBase, expectedApiBase) {
   if (!["DEV", "PROD"].includes(environment)) fail("Managed runtime environment must be DEV or PROD");
@@ -234,10 +436,18 @@ const bindDevEndpoints = (source, kind, endpoints) => {
       '  const apiBase = (readEnv("CUP_API_BASE_URL") || CUP_API_DEFAULT).replace(/\\/+$/, "");',
       '  const apiBase = CUP_API_DEFAULT.replace(/\\/+$/, "");',
       "Split-prepare CUP override");
-    return replaceExactMarker(next,
+    next = replaceExactMarker(next,
       'msg.url = readEnv("VIVA_SERVICE_TOKEN_URL") || TOKEN_URL_DEFAULT;',
       "msg.url = TOKEN_URL_DEFAULT;",
       "Split-prepare token override");
+    next = replaceExactMarker(next,
+      '  successUrl: toStr(body.successUrl) || toStr(body.baseRedirectUrl),',
+      "  successUrl: null,",
+      "Split-prepare browser success URL");
+    return replaceExactMarker(next,
+      '  failUrl: toStr(body.failUrl) || toStr(body.baseRedirectUrl),',
+      "  failUrl: null,",
+      "Split-prepare browser failure URL");
   }
   fail("Unknown DEV source binding kind");
 };
@@ -454,10 +664,22 @@ export function validateDevBinding(binding,
   provisioningContract = checkedProvisioningContract) {
   validateDevProvisioningContract(provisioningContract);
   if (binding?.environment !== "DEV") fail("DEV builder rejects a production source or binding");
-  if (binding.bindingState !== "BOUND" || binding.installAllowed !== true) {
+  if (provisioningContract.contractState !== "STOPPED_BOOTSTRAP_AUTHORIZED"
+    || provisioningContract.bootstrapInstallAllowed !== true
+    || provisioningContract.candidateBuildAllowed !== false
+    || provisioningContract.executionAuthorized !== false
+    || provisioningContract.installAllowed !== false
+    || provisioningContract.serviceStartAllowed !== false
+    || provisioningContract.ingressAllowed !== false
+    || provisioningContract.activationAllowed !== false) {
+    fail("Provisioning contract is not the exact stopped, non-runtime prerequisite");
+  }
+  if (binding.bindingState !== "BOUND_SOURCE_ONLY" || binding.installAllowed !== false) {
     fail(`DEV candidate binding is blocked (${binding?.bindingState || "missing"})`);
   }
-  if (binding.environmentIdentityVerified !== true) fail("DEV environment identity is not verified");
+  if (binding.environmentIdentityVerified !== false) {
+    fail("Source-only DEV binding must not claim verified runtime identity");
+  }
   const plannedTarget = provisioningContract.plannedTarget;
   if (trustedBindings?.DEV_INSTALL_TARGET?.sourceHost !== plannedTarget.sourceHost
     || trustedBindings?.DEV_INSTALL_TARGET?.sourceHostname !== plannedTarget.sourceHostname
@@ -467,13 +689,27 @@ export function validateDevBinding(binding,
     || trustedBindings?.DEV_INSTALL_TARGET?.remoteFlowPath !== plannedTarget.flowPath) {
     fail("Trusted DEV install target diverges from the provisioning contract");
   }
-  if (binding.source?.sourceKind !== "dedicated-dev-target"
-    || binding.source.sourceHost !== "lk-reserve-89"
-    || binding.source.sourceHostname !== "89-108-64-209.cloudvps.regruhosting.ru"
-    || binding.source.sourceUser !== "root"
-    || String(binding.source.sourcePort) !== "22"
-    || binding.source.remoteFlowPath !== plannedTarget.flowPath) {
-    fail("DEV source identity mismatch");
+  const source = binding.source;
+  const sourceKeys = [
+    "sourceKind", "generatorPath", "generatorSha256", "sourceInputsSha256",
+    "sourceSha256", "sourceNodeInventorySha256", "nodeCount", "httpRouteCount", "tabCount",
+    "brokenWires", "brokenLinks",
+  ].sort();
+  if (JSON.stringify(Object.keys(source || {}).sort()) !== JSON.stringify(sourceKeys)
+    || source.sourceKind !== "offline-dedicated-dev-bootstrap"
+    || source.generatorPath !== OFFLINE_GENERATOR
+    || !/^[a-f0-9]{64}$/.test(source.generatorSha256 || "")
+    || JSON.stringify(Object.keys(source.sourceInputsSha256 || {}).sort())
+      !== JSON.stringify(OFFLINE_SOURCE_INPUTS)
+    || Object.values(source.sourceInputsSha256 || {})
+      .some((value) => !/^[a-f0-9]{64}$/.test(value || ""))
+    || !/^[a-f0-9]{64}$/.test(source.sourceSha256 || "")
+    || !/^[a-f0-9]{64}$/.test(source.sourceNodeInventorySha256 || "")
+    || ![source.nodeCount, source.httpRouteCount, source.tabCount,
+      source.brokenWires, source.brokenLinks].every(Number.isInteger)
+    || source.nodeCount < 1 || source.httpRouteCount !== 2 || source.tabCount !== 1
+    || source.brokenWires !== 0 || source.brokenLinks !== 0) {
+    fail("DEV offline source provenance mismatch");
   }
   if (!binding.target?.present || binding.target.enabledDuplicateCount !== 1) {
     fail("DEV target flow is absent or ambiguous");
@@ -488,23 +724,30 @@ export function validateDevBinding(binding,
     || !/^[a-f0-9]{64}$/.test(String(binding.endpointAudit.endpointInventorySha256 || ""))) {
     fail("DEV network endpoint configuration audit is absent or not isolated");
   }
-  if (!binding.runtime?.completeManagedContractExposed) {
-    fail("DEV CUP origin does not expose the complete managed contract");
+  if (binding.runtime?.completeManagedContractExposed !== false
+    || binding.runtime.reason !== "Source-only binding; DEV services are stopped and no runtime contract was exercised") {
+    fail("Source-only DEV binding must not claim an exercised runtime contract");
   }
-  if (!trustedBindings?.DEV) fail("Trusted DEV runtime API binding is unbound");
-  if (trustedBindings.DEV !== trustedBindings.DEV_ENDPOINTS?.cupApiBase) {
-    fail("DEV runtime and CUP fixture bindings diverge");
+  if (trustedBindings?.DEV !== null
+    || trustedBindings?.devBindingState !== "UNBOUND_RUNTIME_STOPPED") {
+    fail("Trusted DEV runtime binding must remain unbound while services are stopped");
   }
-  validateEnvironmentApiBase("DEV", binding.runtime.apiBase, trustedBindings.DEV);
+  if (trustedBindings.DEV_CANDIDATE_API_BASE !== trustedBindings.DEV_ENDPOINTS?.cupApiBase) {
+    fail("DEV candidate and CUP fixture bindings diverge");
+  }
+  validateEnvironmentApiBase(
+    "DEV", binding.runtime.apiBase, trustedBindings.DEV_CANDIDATE_API_BASE,
+  );
   validateDevEndpointBindings(trustedBindings.DEV_ENDPOINTS, provisioningContract);
   validateDevInstallTarget(binding.installTarget, trustedBindings);
-  const capturedAt = Date.parse(String(binding.source.capturedAt || ""));
-  if (!Number.isFinite(capturedAt) || Date.now() < capturedAt
-    || Date.now() - capturedAt > 30 * 60 * 1000) fail("DEV source snapshot is stale");
+  if (binding.candidateSha256 !== null
+    || binding.productionBindingState !== "UNBOUND_AFTER_ROUTER_AMENDMENT") {
+    fail("Source-only DEV binding must remain unpublished and production-unbound");
+  }
   return true;
 }
 
-export function buildDevCandidate(sourceText, binding, readSource = fs.readFileSync,
+export function buildDevCandidate(sourceText, binding, readSource = readRepositorySource,
   trustedBindings = LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS,
   provisioningContract = checkedProvisioningContract) {
   validateDevBinding(binding, trustedBindings, provisioningContract);
@@ -512,6 +755,12 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
   const flow = JSON.parse(sourceText);
   if (!hasUniqueFlowIds(flow)) fail("DEV source has missing or duplicate node IDs");
   const sourceNodesById = new Map(flow.map((node) => [node.id, structuredClone(node)]));
+  const sourceNodeInventorySha256 = sha256(JSON.stringify(flow
+    .map((node) => ({ id: node.id, sha256: sha256(JSON.stringify(node)) }))
+    .sort((left, right) => left.id.localeCompare(right.id))));
+  if (sourceNodeInventorySha256 !== binding.source.sourceNodeInventorySha256) {
+    fail("DEV source node inventory SHA mismatch");
+  }
   if (!Array.isArray(flow)
     || flow.length !== binding.source.nodeCount
     || flow.filter((node) => node?.type === "http in").length !== binding.source.httpRouteCount
@@ -630,8 +879,11 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
       formatVersion: 1,
       environment: "DEV",
       sourceSha256: binding.source.sourceSha256,
+      sourceNodeInventorySha256: binding.source.sourceNodeInventorySha256,
       candidateSha256,
-      rollbackSourceSha256: binding.source.sourceSha256,
+      sourceProvenance: "OFFLINE_GENERATED",
+      hostPreimageState: "ABSENT",
+      rollbackSourceSha256: null,
       targetHost: binding.installTarget.sourceHost,
       targetHostname: binding.installTarget.sourceHostname,
       targetServiceName: binding.installTarget.serviceName,
@@ -664,18 +916,27 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
 }
 
 export function publishDevCandidate(workspace, binding, options = {}) {
-  const provisioningContract = options.provisioningContract ?? checkedProvisioningContract;
-  validateDevProvisioningContract(provisioningContract);
-  if (provisioningContract.candidateBuildAllowed !== true) {
-    fail("Provisioning contract blocks DEV candidate publication");
+  if (Object.keys(options).length !== 0) {
+    fail("DEV candidate publisher does not accept authority overrides");
   }
-  const resolvedWorkspace = path.resolve(workspace);
-  if (!resolvedWorkspace.startsWith("/private/tmp/") && !resolvedWorkspace.startsWith("/tmp/")) {
+  const provisioningContract = checkedProvisioningContract;
+  const checkedBinding = CHECKED_DEV_CANDIDATE_BINDING;
+  const sourceAuthorization = CHECKED_DEV_SOURCE_AUTHORIZATION;
+  validateDevProvisioningContract(provisioningContract);
+  const resolvedWorkspace = fs.realpathSync(path.resolve(workspace));
+  if (!isTemporaryChild(resolvedWorkspace)) {
     fail("DEV candidate workspace must be under /private/tmp or /tmp");
   }
   const sourcePath = path.join(resolvedWorkspace, "input/source.flow.json");
   const metaPath = path.join(resolvedWorkspace, "input/source.flow.meta.json");
   const credentialStorePath = path.join(resolvedWorkspace, "input/source.flow.credentials.json");
+  for (const inputPath of [sourcePath, metaPath, credentialStorePath]) {
+    const stat = fs.lstatSync(inputPath);
+    if (!stat.isFile() || stat.isSymbolicLink()
+      || fs.realpathSync(inputPath) !== inputPath) {
+      fail("DEV candidate input must be a canonical regular file");
+    }
+  }
   const snapshot = JSON.parse(fs.readFileSync(metaPath, "utf8"));
   let credentialStoreBytes;
   let credentialStore;
@@ -692,34 +953,71 @@ export function publishDevCandidate(workspace, binding, options = {}) {
     || binding.dependencies?.mongoCredentialStorePreimageSha256 !== sha256(credentialStoreBytes)) {
     fail("DEV credential store is not an exact empty frozen preimage");
   }
-  const exactSnapshot = [
-    "environment", "sourceKind", "sourceHost", "sourceHostname", "sourceUser",
-    "sourcePort", "remoteFlowPath", "sourceSha256", "nodeCount", "httpRouteCount",
-    "tabCount", "capturedAt", "brokenWires", "brokenLinks",
-  ].every((key) => (
-    (key === "environment" ? binding.environment : binding.source[key]) === snapshot[key]
-  ))
-    && JSON.stringify(binding.target) === JSON.stringify(snapshot.target)
-    && JSON.stringify(binding.dependencies) === JSON.stringify(snapshot.dependencies)
-    && binding.environmentIdentityVerified === snapshot.environmentIdentityVerified;
-  if (!exactSnapshot) fail("DEV snapshot metadata does not match the frozen binding");
+  if (JSON.stringify(binding) !== JSON.stringify(checkedBinding)
+    || JSON.stringify(binding) !== JSON.stringify(snapshot)) {
+    fail("DEV snapshot metadata does not match the frozen binding");
+  }
+  validateDevSourceAuthorization(sourceAuthorization, binding);
+  const generatorPath = path.join(REPO_ROOT, binding.source.generatorPath);
+  if (sha256(fs.readFileSync(generatorPath)) !== binding.source.generatorSha256) {
+    fail("DEV offline generator digest mismatch");
+  }
+  for (const [file, expectedSha256] of Object.entries(binding.source.sourceInputsSha256)) {
+    if (sha256(fs.readFileSync(path.join(REPO_ROOT, file))) !== expectedSha256) {
+      fail(`DEV offline source input digest mismatch (${file})`);
+    }
+  }
   const result = buildDevCandidate(
     fs.readFileSync(sourcePath, "utf8"),
     binding,
-    options.readSource ?? fs.readFileSync,
-    options.trustedBindings ?? LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS,
+    readRepositorySource,
+    LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS,
     provisioningContract,
   );
   const buildDirectory = path.join(resolvedWorkspace, "build");
   if (fs.existsSync(buildDirectory)) fail("Refusing to overwrite an existing DEV candidate build");
-  fs.mkdirSync(buildDirectory, { mode: 0o700 });
+  const publishedManifest = {
+    ...result.manifest,
+    hostEvidence: { ...sourceAuthorization.hostEvidence },
+  };
+  const manifestText = `${JSON.stringify(publishedManifest, null, 2)}\n`;
+  const manifestSha256 = sha256(manifestText);
+  validateDevSourceAuthorization(sourceAuthorization, binding, {
+    candidateSha256: result.manifest.candidateSha256,
+    manifestSha256,
+  });
+  const stagingDirectory = fs.mkdtempSync(path.join(resolvedWorkspace, ".build-stage-"));
+  try {
+    fs.chmodSync(stagingDirectory, 0o700);
+    const stagedCandidatePath = path.join(stagingDirectory, "lk1-subscription-dev.candidate.json");
+    const stagedManifestPath = path.join(stagingDirectory, "lk1-subscription-dev.manifest.json");
+    const stagedReadyPath = path.join(stagingDirectory, "lk1-subscription-dev.ready.json");
+    fs.writeFileSync(stagedCandidatePath, result.candidateText, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    fs.writeFileSync(stagedManifestPath, manifestText, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    fs.writeFileSync(stagedReadyPath, `${JSON.stringify({
+      formatVersion: 1,
+      environment: "DEV",
+      sourceProvenance: "OFFLINE_GENERATED",
+      sourceSha256: binding.source.sourceSha256,
+      sourceNodeInventorySha256: binding.source.sourceNodeInventorySha256,
+      candidateSha256: result.manifest.candidateSha256,
+      candidateNodeInventorySha256: result.manifest.candidateNodeInventorySha256,
+      manifestSha256,
+      hostEvidenceSha256: sourceAuthorization.hostEvidence.sha256,
+      hostEvidenceCapturedAt: sourceAuthorization.hostEvidence.capturedAt,
+      hostPreimageState: "ABSENT",
+      hostReadbackSha256: null,
+      installAuthorized: false,
+    }, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    fs.renameSync(stagingDirectory, buildDirectory);
+  } catch (error) {
+    fs.rmSync(stagingDirectory, { recursive: true, force: true });
+    throw error;
+  }
   const candidatePath = path.join(buildDirectory, "lk1-subscription-dev.candidate.json");
   const manifestPath = path.join(buildDirectory, "lk1-subscription-dev.manifest.json");
-  fs.writeFileSync(candidatePath, result.candidateText, { encoding: "utf8", mode: 0o600, flag: "wx" });
-  fs.writeFileSync(manifestPath, `${JSON.stringify(result.manifest, null, 2)}\n`, {
-    encoding: "utf8", mode: 0o600, flag: "wx",
-  });
-  return { ...result, candidatePath, manifestPath };
+  const readyPath = path.join(buildDirectory, "lk1-subscription-dev.ready.json");
+  return { ...result, manifest: publishedManifest, candidatePath, manifestPath, readyPath, manifestSha256 };
 }
 
 export function validateDevInstallManifest(manifest, target,
@@ -775,4 +1073,6 @@ if (process.argv[1] === scriptPath) {
   process.stdout.write(`candidateSha256=${result.manifest.candidateSha256}\n`);
   process.stdout.write(`candidatePath=${result.candidatePath}\n`);
   process.stdout.write(`manifestPath=${result.manifestPath}\n`);
+  process.stdout.write(`manifestSha256=${result.manifestSha256}\n`);
+  process.stdout.write(`readyPath=${result.readyPath}\n`);
 }
