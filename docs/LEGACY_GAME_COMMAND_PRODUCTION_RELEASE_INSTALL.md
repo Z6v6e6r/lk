@@ -7,8 +7,13 @@ access, migration, writer stop/resume, mapping import, or provider calls.
 ## Outcome
 
 `scripts/build_legacy_game_command_production_release.mjs` creates a self-contained
-release from a clean committed checkout. It packages the trusted bootstrap installer,
-production runner, migration
+production release only when the shared candidate binding is exact `BOUND`. After the
+subscription-router amendment it is intentionally
+`UNBOUND_AFTER_ROUTER_AMENDMENT`, so the production builder fails before creating its
+output. A separately named historical fixture builder is limited to isolated rehearsal
+tests; its manifest records the unbound state and production installation rejects it.
+When bound after a fresh full-flow build and review, the builder packages the trusted
+bootstrap installer, production runner, migration
 core, writer registry, approval verifier, `UNBOUND` trust-anchor manifest, custom
 Node-RED transaction module, root package/lock, and the complete installed MongoDB
 runtime dependency closure. `release-manifest.json` is canonical JSON and binds every
@@ -177,8 +182,10 @@ closure hashes remain fixed by the verified bundle. The installer writes canonic
 `release-attestation.json` inside the sealed exact-commit directory only after the
 bundle copy is complete, then atomically renames the private staging directory.
 
-Even after installation, migration `apply` remains impossible while the checked-in
-trust anchor is `UNBOUND`. Flow candidate deployment, trust-anchor binding, database
+Production build, install, execution-packet validation, and migration `apply` remain
+impossible while the candidate binding is unbound. Even after a future candidate bind,
+`apply` remains impossible while the checked-in trust anchor is `UNBOUND`. Flow candidate
+deployment, trust-anchor binding, database
 audit/backup/quiescence/apply, mapping import, and gateway activation remain separate
 R4 transitions with their own approval and postchecks.
 

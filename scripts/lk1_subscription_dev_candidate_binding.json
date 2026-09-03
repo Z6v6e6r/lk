@@ -1,0 +1,83 @@
+{
+  "formatVersion": 1,
+  "environment": "DEV",
+  "bindingState": "BLOCKED_DEV_FLOW_TARGET_ABSENT",
+  "environmentIdentityVerified": false,
+  "source": {
+    "sourceKind": "shared-host-audit-only",
+    "sourceHost": "lk-reserve-89",
+    "sourceHostname": "89-108-64-209.cloudvps.regruhosting.ru",
+    "sourceUser": "root",
+    "sourcePort": 22,
+    "remoteFlowPath": "/root/.node-red/flows.json",
+    "sourceSha256": "52c1b510b40f96de7bf1f9991a17454f79b560eaf002cc0c60147065b31c33e3",
+    "nodeCount": 922,
+    "httpRouteCount": 2,
+    "tabCount": 11,
+    "brokenWires": 0,
+    "brokenLinks": 0,
+    "capturedAt": "2026-09-02T16:42:49Z"
+  },
+  "target": {
+    "tabLabel": "LK Games",
+    "routerNodeId": "lk_subscription_booking_router_20260804",
+    "routerNodeName": "Route atomic subscription booking",
+    "prepareNodeId": "lk_subscription_booking_prepare_20260804",
+    "prepareNodeName": "Prepare subscription booking",
+    "splitRouterNodeId": "8f7bd5b482fe9763",
+    "splitRouterNodeName": "Route Viva split payment",
+    "splitCreatePrepareNodeId": "f3f9a60354d394da",
+    "splitCreatePrepareNodeName": "Prepare split game payment",
+    "splitJoinPrepareNodeId": "e92e68bf3f08a70c",
+    "splitJoinPrepareNodeName": "Prepare split join payment",
+    "finalizeNodeId": "lk_subscription_booking_finalize_20260804",
+    "finalizeNodeName": "Finalize subscription booking response",
+    "present": false,
+    "enabledDuplicateCount": 0,
+    "routerPreimageSha256": null,
+    "preparePreimageSha256": null,
+    "splitRouterPreimageSha256": null,
+    "splitCreatePreparePreimageSha256": null,
+    "splitJoinPreparePreimageSha256": null,
+    "finalizePreimageSha256": null
+  },
+  "runtime": {
+    "apiBase": null,
+    "completeManagedContractExposed": false,
+    "reason": "Dedicated DEV HTTPS origin does not expose runtime-context plus entitlement reserve/confirm/release plus activation"
+  },
+  "dependencies": {
+    "httpRequestBindingVerified": false,
+    "httpRequestPreimageSha256": null,
+    "splitCreateHttpRequestPreimageSha256": null,
+    "mongoCredentialStoreVerifiedEmpty": false,
+    "mongoCredentialStorePreimageSha256": null,
+    "mongoBindingVerifiedDevOnly": false,
+    "crossEnvironmentMongoConfigCount": 2,
+    "mongoConfigPreimages": [
+      {
+        "id": "e4ab8968807d77bf",
+        "sha256": "9f35d04fb89fc237092e72d72251ae10ce3f925d3c9ecf394be8502aec31fce0"
+      },
+      {
+        "id": "2f61bc682fefb667",
+        "sha256": "fbe46b3569803aadf3c7b086fc917b2e7dc6a985d74f1c05c2fa44b888dc11c9"
+      }
+    ]
+  },
+  "endpointAudit": {
+    "verifiedDevOnly": false,
+    "crossEnvironmentEndpointCount": 5,
+    "endpointInventorySha256": null,
+    "blockedFamilies": [
+      "VivaCRM Admin production/shared origin",
+      "VivaCRM end-user production/shared origin",
+      "Keycloak prod realm",
+      "SERV2 production origin",
+      "legacy CUP pricing production default"
+    ]
+  },
+  "candidateSha256": null,
+  "installAllowed": false,
+  "productionBindingState": "UNBOUND_AFTER_ROUTER_AMENDMENT"
+}

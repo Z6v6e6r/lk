@@ -15,10 +15,51 @@ import {
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
-test("LK1 activation manifest pins the fresh live and unified candidate identities", () => {
-  const { changes, additions } = validateActivationManifest();
+const previouslyBoundEnforcementContract = {
+  ...LK1_ENFORCEMENT_CONTRACT,
+  candidateBindingState: "BOUND",
+  candidateSha256: manifest.candidateSha256,
+};
+const reviewableCandidateSha256 = "a".repeat(64);
+const reviewableManifest = { ...manifest, candidateSha256: reviewableCandidateSha256 };
+const reviewableEnforcementContract = {
+  ...LK1_ENFORCEMENT_CONTRACT,
+  candidateBindingState: "BOUND",
+  candidateSha256: reviewableCandidateSha256,
+};
+
+test("LK1 activation manifest is invalidated after the router amendment", () => {
   assert.equal(manifest.sourceSha256, LK1_ENFORCEMENT_CONTRACT.sourceSha256);
-  assert.equal(manifest.candidateSha256, LK1_ENFORCEMENT_CONTRACT.candidateSha256);
+  assert.equal(manifest.candidateSha256, LK1_ENFORCEMENT_CONTRACT.previousCandidateSha256);
+  assert.equal(LK1_ENFORCEMENT_CONTRACT.candidateSha256, null);
+  assert.throws(
+    () => validateActivationManifest(),
+    /contract is unbound after router amendment/,
+  );
+  for (const candidateBindingState of [undefined, "TYPO"]) {
+    assert.throws(
+      () => validateActivationManifest(manifest, {
+        ...previouslyBoundEnforcementContract,
+        candidateBindingState,
+      }),
+      /contract is unbound after router amendment/,
+    );
+  }
+  assert.throws(
+    () => validateActivationManifest(manifest, previouslyBoundEnforcementContract),
+    /contract is unbound after router amendment/,
+  );
+  assert.throws(
+    () => validateActivationManifest(reviewableManifest, {
+      ...reviewableEnforcementContract,
+      previousCandidateSha256: "e".repeat(64),
+    }),
+    /contract is unbound after router amendment/,
+  );
+  const { changes, additions } = validateActivationManifest(
+    reviewableManifest,
+    reviewableEnforcementContract,
+  );
   assert.equal(changes.length, 54);
   assert.equal(additions.length, 50);
   assert.deepEqual(
@@ -35,7 +76,10 @@ test("activation manifest rejects identity, count and overlap drift", () => {
     { allowedAdditionIds: [...manifest.allowedAdditionIds, manifest.allowedChanges[0].id] },
   ]) {
     assert.throws(
-      () => validateActivationManifest({ ...manifest, ...drift }),
+      () => validateActivationManifest(
+        { ...reviewableManifest, ...drift },
+        reviewableEnforcementContract,
+      ),
       /identity or change budget mismatch/,
     );
   }
@@ -70,6 +114,7 @@ test("exact activation contract rejects unreviewed node and route changes", () =
   };
   const fixtureEnforcement = {
     ...LK1_ENFORCEMENT_CONTRACT,
+    candidateBindingState: "BOUND",
     sourceSha256: fixture.sourceSha256,
     candidateSha256: fixture.candidateSha256,
     nodeCount: 2,
@@ -102,21 +147,18 @@ test("exact activation contract rejects unreviewed node and route changes", () =
   );
 });
 
-test("packet builder is offline-only and records an explicit live mutation stop", async () => {
+test("packet builder is offline-only and stops while the candidate contract is unbound", async () => {
   const source = await import("../prepare_lk1_subscription_enforcement_activation_packet.mjs?source-check");
   assert.equal(typeof source.prepareActivationPacket, "function");
   assert.equal(manifest.deploymentId, "lk1-subscription-enforcement");
   assert.doesNotMatch(source.prepareActivationPacket.toString(), /ssh|scp|apply --candidate|pm2|curl/);
-  const plan = buildActivationPlan({
-    repository: { commit: "a".repeat(40), branch: "codex/lk1-subscription-r4" },
-    livePulledAt: "2026-08-27T14:02:00.000Z",
-  });
-  assert.equal(plan.productionCustodyState, "UNBOUND");
-  assert.equal(plan.liveMutationAuthorized, false);
-  assert.equal(plan.deploymentPerformed, false);
-  assert.equal(plan.rollback.requiresExactFlowAndContractBackups, true);
-  assert.equal(plan.rollback.rehearsedAgainstIsolatedCopy, false);
-  assert.equal(plan.rollback.productionRollbackPerformed, false);
+  assert.throws(
+    () => buildActivationPlan({
+      repository: { commit: "a".repeat(40), branch: "codex/lk1-subscription-r4" },
+      livePulledAt: "2026-08-27T14:02:00.000Z",
+    }),
+    /contract is unbound after router amendment/,
+  );
 });
 
 test("packet output rejects existing paths and symlinked parent chains", () => {

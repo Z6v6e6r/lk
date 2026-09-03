@@ -55,7 +55,10 @@ test("Piter page exposes the requested terms through an accessible flip control"
   assert.match(router, /MANAGED_ENFORCEMENT_PURCHASE_FROM = "2026-09-01"/);
   assert.match(page, /Узнать условия подписки/);
   assert.match(page, /aria-pressed=/);
+  assert.match(page, /className=\{`piter-subscription-flip piter-subscription-flip-trigger/);
+  assert.match(page, /onClick=\{\(\) => setFlippedDisplayId/);
   assert.match(css, /\.piter-subscription-flip--flipped[\s\S]*?rotateY\(180deg\)/);
+  assert.match(css, /\.piter-subscription-flip-trigger:focus-visible/);
   assert.match(css, /\.piter-subscription-face--rules-artwork/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
 });

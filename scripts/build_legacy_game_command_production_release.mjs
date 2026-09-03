@@ -9,10 +9,12 @@ import { fileURLToPath } from "node:url";
 import { canonicalJson, PRODUCTION_MIGRATION_ID } from "./lib/legacy_game_command_production_approval.mjs";
 import {
   assertPinnedMongoRuntimeClosure,
+  assertProductionCandidateBound,
   buildProductionStaticSourceIdentity,
   EXPECTED_CANDIDATE_FLOW_SHA256,
   EXPECTED_LIVE_FLOW_SHA256,
   resolveRuntimePackageClosure,
+  PRODUCTION_CANDIDATE_BINDING_STATE,
 } from "./run_legacy_game_command_production_migration.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -38,6 +40,7 @@ export const RELEASE_SOURCE_FILES = Object.freeze([
   "scripts/audit_legacy_game_revision_writers.mjs",
   "scripts/legacy_game_revision_writers.json",
   "scripts/lk1_subscription_enforcement_custody_identity.json",
+  "scripts/lk1_subscription_enforcement_candidate_binding.json",
   "scripts/lk1_subscription_enforcement_activation_manifest.mjs",
   "scripts/legacy_game_command_production_trust_anchor.json",
   "scripts/lib/legacy_game_command_production_approval.mjs",
@@ -185,7 +188,7 @@ function inventory(root) {
   return files;
 }
 
-export function buildLegacyGameCommandProductionRelease({
+function buildLegacyGameCommandRelease({
   outDir,
 } = {}) {
   const root = fs.realpathSync(REPO_ROOT);
@@ -222,6 +225,7 @@ export function buildLegacyGameCommandProductionRelease({
     const manifest = {
       schemaVersion: 1,
       migrationId: PRODUCTION_MIGRATION_ID,
+      candidateBindingState: PRODUCTION_CANDIDATE_BINDING_STATE,
       repositoryCommit: commit,
       source,
       files: inventory(output),
@@ -232,6 +236,15 @@ export function buildLegacyGameCommandProductionRelease({
     fs.rmSync(output, { recursive: true, force: true });
     throw error;
   }
+}
+
+export function buildLegacyGameCommandProductionRelease(options = {}) {
+  assertProductionCandidateBound();
+  return buildLegacyGameCommandRelease(options);
+}
+
+export function buildLegacyGameCommandHistoricalReleaseFixture(options = {}) {
+  return buildLegacyGameCommandRelease(options);
 }
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {

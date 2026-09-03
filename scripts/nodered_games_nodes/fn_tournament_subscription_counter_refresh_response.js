@@ -8,12 +8,21 @@ const REGIONAL_FRIENDSHIP_CONFIGS = {
   network_friendship: { batchSize: 100, bindingLabel: "ХАБ" },
   piter_friendship: { batchSize: 100, bindingLabel: "Питер" },
 };
+const MANAGED_FRIENDSHIP_COUNTER_KEYS = new Set(Object.keys(REGIONAL_FRIENDSHIP_CONFIGS));
 
 const toTs = (value) => {
   const text = toStr(value);
   if (!text) return null;
   const ts = Date.parse(text);
   return Number.isFinite(ts) ? ts : null;
+};
+
+const resolvePendingDeadlineTs = (doc, reservationMinutes) => {
+  const explicitDeadlineTs = [toTs(doc?.expiresAt), toTs(doc?.paymentExpiresAt)]
+    .filter((timestamp) => timestamp != null);
+  if (explicitDeadlineTs.length > 0) return Math.max(...explicitDeadlineTs);
+  const createdAtTs = toTs(doc?.createdAt);
+  return createdAtTs == null ? null : createdAtTs + reservationMinutes * 60 * 1000;
 };
 
 const resolveNextDailyDropAt = (completedAtTs) => {
@@ -45,6 +54,18 @@ const resolveDailyDropDate = (timestamp) => {
   const localDay = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
   const dropDay = Number(parts.hour) >= 10 ? localDay : localDay - 24 * 60 * 60 * 1000;
   return new Date(dropDay).toISOString().slice(0, 10);
+};
+
+const resolveMoscowDate = (timestamp) => {
+  if (!Number.isFinite(timestamp)) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(timestamp));
+  const fields = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${fields.year}-${fields.month}-${fields.day}`;
 };
 
 const normalizeCounterKey = (value) => {
@@ -134,12 +155,18 @@ const rows = Array.isArray(msg.payload) ? msg.payload : [];
 const counters = Array.isArray(ctx.counters) ? ctx.counters.filter((counter) => counter && typeof counter === "object") : [];
 const refreshedAt = toStr(ctx.refreshedAt) || new Date().toISOString();
 const nowTs = Date.now();
+const reservationMinutes = Math.max(
+  5,
+  Math.min(360, Number(ctx.reservationMinutes) || 30),
+);
 
 const states = counters.map((counter) => {
+  const counterKey = toStr(counter.counterKey);
+  const managedSaleReady = !MANAGED_FRIENDSHIP_COUNTER_KEYS.has(counterKey);
   const totalLimit = Math.max(0, Math.floor(Number(counter.totalLimit) || 0));
   const manualPaidCount = Math.max(0, Math.floor(Number(counter.manualPaidCount) || 0));
   return {
-    counterKey: toStr(counter.counterKey),
+    counterKey,
     inventoryId: toStr(counter.inventoryId),
     unlimited: counter.unlimited === true,
     saleType: toStr(counter.saleType),
@@ -148,6 +175,7 @@ const states = counters.map((counter) => {
     productId: toStr(counter.productId),
     productName: toStr(counter.productName),
     stagedRelease: counter.stagedRelease === true,
+    dailyCapEnabled: counter.dailyCapEnabled === true,
     releaseStartDate: toStr(counter.releaseStartDate),
     releasePhase: null,
     dailyDropActive: false,
@@ -164,7 +192,12 @@ const states = counters.map((counter) => {
     reservedCount: 0,
     takenCount: manualPaidCount,
     remainingCount: Math.max(0, totalLimit - manualPaidCount),
-    canPurchase: counter.unlimited === true || totalLimit - manualPaidCount > 0,
+    canPurchase: managedSaleReady
+      && (counter.unlimited === true || totalLimit - manualPaidCount > 0),
+    managedSaleReady,
+    managedSaleError: managedSaleReady
+      ? null
+      : "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE",
     bindingReady: true,
     bindingError: null,
     batchSize: Math.max(0, Math.floor(Number(counter.batchSize) || 0)),
@@ -183,6 +216,10 @@ const states = counters.map((counter) => {
     _dailyReservedCount: 0,
     _launchPaidTimestamps: [],
     _stagedRows: [],
+    inventoryTotalLimit: totalLimit,
+    inventoryPaidCount: manualPaidCount,
+    inventoryReservedCount: 0,
+    inventoryRemainingCount: Math.max(0, totalLimit - manualPaidCount),
   };
 });
 
@@ -192,7 +229,7 @@ rows.forEach((doc) => {
 
   const status = normalizeStatus(doc.status);
   const releasePhase = toStr(doc.releasePhase) === "daily" ? "daily" : "launch";
-  const expiresAtTs = toTs(doc.expiresAt);
+  const pendingDeadlineTs = resolvePendingDeadlineTs(doc, reservationMinutes);
   const eventTs = status === "PAID"
     ? (toTs(doc.paidAt) ?? toTs(doc.updatedAt) ?? toTs(doc.createdAt))
     : (toTs(doc.createdAt) ?? toTs(doc.updatedAt));
@@ -231,11 +268,18 @@ rows.forEach((doc) => {
       return;
     }
     state.paidCount += 1;
+    if (
+      state.dailyCapEnabled
+      && eventTs != null
+      && resolveMoscowDate(eventTs) === state.dailyDropDate
+    ) {
+      state._dailyPaidCount += 1;
+    }
     return;
   }
 
   const isPending = status === "PAYMENT_PENDING";
-  const isActivePending = isPending && (expiresAtTs == null || expiresAtTs > nowTs);
+  const isActivePending = isPending && pendingDeadlineTs != null && pendingDeadlineTs > nowTs;
   if (isActivePending) {
     if (state.stagedRelease) {
       state._stagedRows.push({
@@ -247,6 +291,13 @@ rows.forEach((doc) => {
       return;
     }
     state.reservedCount += 1;
+    if (
+      state.dailyCapEnabled
+      && eventTs != null
+      && resolveMoscowDate(eventTs) === state.dailyDropDate
+    ) {
+      state._dailyReservedCount += 1;
+    }
   }
 });
 
@@ -285,19 +336,39 @@ const updateMessages = states.map((state) => {
     state.paidCount = state.dailyDropActive ? state._dailyPaidCount : state.launchPaidCount;
     state.reservedCount = state.dailyDropActive ? state._dailyReservedCount : state.launchReservedCount;
   }
+  const inventoryTakenCount = state.paidCount + state.reservedCount;
+  state.inventoryTotalLimit = state.totalLimit;
+  state.inventoryPaidCount = state.paidCount;
+  state.inventoryReservedCount = state.reservedCount;
+  state.inventoryRemainingCount = state.unlimited
+    ? 0
+    : Math.max(state.inventoryTotalLimit - inventoryTakenCount, 0);
+  if (state.dailyCapEnabled) {
+    state.releasePhase = "daily";
+    state.dailyDropActive = true;
+    state.totalLimit = state.dailyLimit;
+    state.paidCount = state._dailyPaidCount;
+    state.reservedCount = state._dailyReservedCount;
+  }
   state.takenCount = state.paidCount + state.reservedCount;
-  state.remainingCount = state.unlimited ? 0 : Math.max(state.totalLimit - state.takenCount, 0);
+  state.remainingCount = state.unlimited
+    ? 0
+    : state.dailyCapEnabled
+      ? Math.min(Math.max(state.totalLimit - state.takenCount, 0), state.inventoryRemainingCount)
+      : Math.max(state.totalLimit - state.takenCount, 0);
   const regional = REGIONAL_FRIENDSHIP_CONFIGS[state.counterKey];
   if (regional) {
     const tiers = Array.isArray(state._tiers) ? state._tiers : [];
     const batchSize = Math.max(1, state.batchSize || regional.batchSize);
-    const batchIndex = Math.max(1, Math.min(tiers.length || 1, Math.floor(state.takenCount / batchSize) + 1));
+    const batchIndex = Math.max(1, Math.min(tiers.length || 1, Math.floor(inventoryTakenCount / batchSize) + 1));
     const activeTier = tiers[batchIndex - 1] || null;
-    const takenInBatch = Math.max(0, state.takenCount - (batchIndex - 1) * batchSize);
-    state.batchSize = batchSize;
+    const takenInBatch = Math.max(0, inventoryTakenCount - (batchIndex - 1) * batchSize);
+    state.batchSize = state.dailyCapEnabled ? state.dailyLimit : batchSize;
     state.batchIndex = batchIndex;
     state.batchCount = tiers.length;
-    state.batchRemainingCount = state.remainingCount <= 0 ? 0 : Math.max(0, batchSize - takenInBatch);
+    state.batchRemainingCount = state.dailyCapEnabled
+      ? state.remainingCount
+      : state.remainingCount <= 0 ? 0 : Math.max(0, batchSize - takenInBatch);
     state.productId = toStr(activeTier?.productId);
     state.productName = toStr(activeTier?.productName);
     state.priceMinor = Number.isFinite(Number(activeTier?.priceMinor))
@@ -321,7 +392,9 @@ const updateMessages = states.map((state) => {
       ? null
       : `Текущая ценовая партия ${regional.bindingLabel} ещё не подключена к оплате`;
   }
-  state.canPurchase = (state.unlimited || state.remainingCount > 0) && state.bindingReady;
+  state.canPurchase = (state.unlimited || state.remainingCount > 0)
+    && state.bindingReady
+    && state.managedSaleReady;
   state.sourceUpdatedAt = state._lastUpdatedAtTs == null
     ? null
     : new Date(state._lastUpdatedAtTs).toISOString();

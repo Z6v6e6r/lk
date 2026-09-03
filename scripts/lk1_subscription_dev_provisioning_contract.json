@@ -1,0 +1,137 @@
+{
+  "formatVersion": 1,
+  "environment": "DEV",
+  "contractState": "STOPPED_BOOTSTRAP_AUTHORIZED",
+  "executionAuthorized": false,
+  "bootstrapInstallAllowed": true,
+  "candidateBuildAllowed": false,
+  "installAllowed": false,
+  "serviceStartAllowed": false,
+  "ingressAllowed": false,
+  "activationAllowed": false,
+  "bootstrapAuthorization": {
+    "authorizationId": "codex-thread-01a06288-94a5-7242-b899-c99031e82816-stopped-bootstrap-20260902",
+    "approvedAt": "2026-09-02T20:09:11Z",
+    "scope": "CREATE_IDENTITY_AND_INSTALL_STOPPED_DEPENDENCIES",
+    "targetHost": "lk-reserve-89",
+    "serviceStartAllowed": false,
+    "enableUnitsAllowed": false,
+    "ingressAllowed": false,
+    "activationAllowed": false,
+    "canaryIdsAllowed": false,
+    "secretsAllowed": false
+  },
+  "productionBindingState": "UNBOUND_AFTER_ROUTER_AMENDMENT",
+  "evidence": {
+    "capturedAt": "2026-09-02T17:12:36Z",
+    "sourceHost": "lk-reserve-89",
+    "sourceHostname": "89-108-64-209.cloudvps.regruhosting.ru",
+    "sharedFlowSha256": "52c1b510b40f96de7bf1f9991a17454f79b560eaf002cc0c60147065b31c33e3",
+    "sharedFlowTargetPresent": false,
+    "sharedFlowNodeCount": 922,
+    "sharedFlowHttpRouteCount": 2,
+    "sharedFlowTabCount": 11,
+    "sharedFlowBrokenWires": 0,
+    "sharedFlowBrokenLinks": 0
+  },
+  "forbiddenExistingResources": {
+    "flowPath": "/root/.node-red/flows.json",
+    "nodeRedListener": "0.0.0.0:1880",
+    "nodeRedProcessUser": "root",
+    "productionApiProxy": "https://padlhub.su/api",
+    "subscriptionShadowListener": "127.0.0.1:3036",
+    "subscriptionShadowMongoListener": "127.0.0.1:27029"
+  },
+  "plannedTarget": {
+    "sourceHost": "lk-reserve-89",
+    "sourceHostname": "89-108-64-209.cloudvps.regruhosting.ru",
+    "serviceName": "lk1-subscription-dev-nodered.service",
+    "unixUser": "lk1-subscription-dev",
+    "unixGroup": "lk1-subscription-dev",
+    "userDir": "/srv/lk1-subscription-dev/node-red",
+    "flowPath": "/srv/lk1-subscription-dev/node-red/flows.json",
+    "settingsPath": "/srv/lk1-subscription-dev/node-red/settings.js",
+    "listener": {
+      "host": "127.0.0.1",
+      "port": 1882,
+      "protocol": "http",
+      "shared": false
+    },
+    "ingress": {
+      "state": "UNBOUND",
+      "origin": null,
+      "configPath": null,
+      "sharedListenerAllowed": false
+    }
+  },
+  "fixtureDependencies": {
+    "mongo": {
+      "serviceName": "lk1-subscription-dev-mongo.service",
+      "host": "127.0.0.1",
+      "port": 27030,
+      "database": "lk1_subscription_dev_fixture",
+      "dbPath": "/srv/lk1-subscription-dev/mongo",
+      "shared": false
+    },
+    "cup": {
+      "serviceName": "lk1-subscription-dev-cup.service",
+      "listener": "127.0.0.1:3037",
+      "apiBase": null,
+      "completeManagedContractRequired": true,
+      "shared": false
+    },
+    "provider": {
+      "serviceName": "lk1-subscription-dev-provider-fixture.service",
+      "listener": "127.0.0.1:3038",
+      "writesSyntheticOnly": true,
+      "shared": false
+    },
+    "identity": {
+      "serviceName": "lk1-subscription-dev-identity-fixture.service",
+      "listener": "127.0.0.1:3039",
+      "identitiesSyntheticOnly": true,
+      "shared": false
+    }
+  },
+  "networkPolicy": {
+    "mode": "LOOPBACK_ONLY",
+    "allowedHosts": [
+      "127.0.0.1",
+      "::1"
+    ],
+    "nonLoopbackEgressAllowed": false,
+    "productionDnsAllowed": false
+  },
+  "runtimeFlags": {
+    "expectedEnvironment": "DEV",
+    "managedProductIds": [],
+    "canaryClientSubscriptionIds": [],
+    "defaultOff": true
+  },
+  "releaseIdentity": {
+    "sourceSha256": null,
+    "candidateSha256": null,
+    "manifestSha256": null,
+    "hostReadbackSha256": null
+  },
+  "ingressAuthorization": {
+    "approved": false,
+    "origin": null,
+    "certificateSpkiSha256": null,
+    "listener": null,
+    "configPath": null
+  },
+  "rollback": {
+    "requiresSeparateAuthorization": true,
+    "serviceStopOrder": [
+      "lk1-subscription-dev-nodered.service",
+      "lk1-subscription-dev-cup.service",
+      "lk1-subscription-dev-provider-fixture.service",
+      "lk1-subscription-dev-identity-fixture.service",
+      "lk1-subscription-dev-mongo.service"
+    ],
+    "removeIngressBeforeListener": true,
+    "preserveEvidenceAndLogs": true,
+    "deleteData": false
+  }
+}

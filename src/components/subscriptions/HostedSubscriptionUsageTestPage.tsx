@@ -44,6 +44,7 @@ interface HostedScenario {
     bookingWindowDays: number | null;
     dailyUsageLimit: number;
     dailyUsageActions: string[];
+    dailyUsageDurationsMinutes?: Array<60 | 90 | 120> | null;
     dailyLimitExceeded: "BLOCK" | "PERCENT_DISCOUNT";
     dailyLimitExceededPercentage: number | null;
   };
@@ -217,10 +218,15 @@ export function HostedSubscriptionUsageTestPage({
       const result = await quote(target.targetId);
       setQuotes((current) => ({ ...current, [target.targetId]: result }));
       if (!result.bookingOutcome.allowed) throw new Error("Повторная проверка заблокировала DEV-резерв");
+      const dailyUsageDurations = scenario?.limits.dailyUsageDurationsMinutes ?? null;
       const counterDelta = subscriptionUsageTestCounterDelta(
         result.bookingOutcome,
         target.action,
         result.decision.usageUnits,
+        dailyUsageDurations === null
+          || dailyUsageDurations.includes(
+            target.target.durationMinutes as 60 | 90 | 120,
+          ),
       );
       setReservations((current) => [...current, {
         reservationId: `browser-only:${crypto.randomUUID()}`,

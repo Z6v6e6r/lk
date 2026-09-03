@@ -173,6 +173,10 @@ the same policy version.
 - `dailyUsagePolicy.actions` can restrict the free daily quota to game create
   and join actions; `PERCENT_DISCOUNT` replaces the normal game benefit with a
   whole-price discount after the quota is exhausted;
+- optional `dailyUsagePolicy.usageDurationsMinutes` restricts which durations
+  consume that daily quota; absence preserves historical all-duration metering,
+  while the PITER annual policy uses `[60]` so paid 90/120-minute discounts do
+  not consume the separate free-hour allowance;
 - maximum future bookings and minimum interval between services;
 - ordered station rows: home station, selected station lists or all stations,
   each with its own fixed surcharge; equal-priority overlaps fail closed;

@@ -19,10 +19,23 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = fs.realpathSync(path.resolve(SCRIPT_DIR, ".."));
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const fail = (message) => { throw new Error(message); };
+export const PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256 = "76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294";
+const candidateBinding = JSON.parse(fs.readFileSync(
+  new URL("./lk1_subscription_enforcement_candidate_binding.json", import.meta.url),
+  "utf8",
+));
+
+export function assertProductionManifestEnvironment(manifest) {
+  if (manifest?.environment !== "PROD") fail("Production builder rejects a DEV manifest");
+  return true;
+}
+assertProductionManifestEnvironment(candidateBinding);
 
 export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
   sourceSha256: "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
-  candidateSha256: "76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294",
+  candidateBindingState: candidateBinding.candidateBindingState,
+  candidateSha256: candidateBinding.candidateSha256,
+  previousCandidateSha256: candidateBinding.previousCandidateSha256,
   nodeCount: 4762,
   candidateNodeCount: 4812,
   httpRouteCount: 215,
@@ -88,7 +101,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
       name: "Route atomic subscription booking",
       sourceFile: "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js",
       preimageSha256: "11c4b80c2624ad97fc83f634139d0db7d36aebb8df8a525bdc7baae3e9bae0fd",
-      candidateSha256: "badaf9105ff0e70872495d718eca86ef646298426903784319c3b0c7a1abba99",
+      candidateSha256: "f8fb42f1ed26ad62b2d507e61b7b4af5ad1df574d4266c1881eea8ea9b70f537",
     }),
     Object.freeze({
       id: "c165e43eba668c25",
@@ -96,7 +109,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
       name: "Build tournament subscription status",
       sourceFile: "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
       preimageSha256: "2111a260dd0401fee02addb7ea8bdf18ffddd36560d4c09eb1c55ef5ca225fae",
-      candidateSha256: "33f3927a159af5a615d39d7fb859a26f8aa39beeee1f1df9147c0991ae978b06",
+      candidateSha256: "f7e9d81975e63a090ad47abe54c07ed9db265fccf114ab7758f3b102ed0007e0",
     }),
     Object.freeze({
       id: "91dded2dc8cfebe4",
@@ -104,7 +117,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
       name: "Prepare tournament subscription purchase",
       sourceFile: "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
       preimageSha256: "f92e441ecac89048f525369c0eddfee7cbfa44610f5df1fdf9ff3df55d36be74",
-      candidateSha256: "6059fd74de59cc488098a9e8d97158497ef9890a8850fb5adac89bd34bec2b44",
+      candidateSha256: "2f15053bdf2c8abd770b7bc65cd59d6fdcfc2c08f26c2ee78a95bc309dfe5ca3",
     }),
     Object.freeze({
       id: "f8679e53edadc39b",
@@ -112,7 +125,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
       name: "Check tournament subscription limit",
       sourceFile: "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
       preimageSha256: "870c6ba85ff0a26f34edd5bea9bd48623f49333ecec2355fa17dd90824068fb2",
-      candidateSha256: "8a6d10a04b4e12a751db6e75ad4d4e1c90df15318ed71df405cacb5d737c77c2",
+      candidateSha256: "75d070b427ca9097cd258a84daca7b2c3998f545415b69ef4968ccdce2aaeef8",
     }),
   ]),
 });
@@ -181,6 +194,12 @@ function replaceCandidateHash(registry, writerId, sourceNodeId, candidateSha256)
 }
 
 export function validateUnifiedCandidateSummary(summary, contract = LK1_ENFORCEMENT_CONTRACT) {
+  if (contract.candidateBindingState !== "BOUND"
+    || !/^[a-f0-9]{64}$/.test(contract.candidateSha256 || "")
+    || contract.previousCandidateSha256 !== PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256
+    || contract.candidateSha256 === PREVIOUS_LK1_ENFORCEMENT_CANDIDATE_SHA256) {
+    fail("Unified LK1 candidate contract is unbound after router amendment");
+  }
   const exact = (
     summary.sourceSha256 === contract.sourceSha256
     && summary.candidateSha256 === contract.candidateSha256
@@ -443,6 +462,7 @@ export function publishLk1EnforcementCandidate(workspace) {
   const report = {
     formatVersion: 2,
     ok: true,
+    environment: "PROD",
     sourceKind: "live-147",
     sourceSha256: verified.sourceSha256,
     candidateSha256: result.candidateSha256,

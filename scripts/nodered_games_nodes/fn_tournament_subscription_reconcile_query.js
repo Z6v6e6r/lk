@@ -1,6 +1,7 @@
 const DEFAULT_RESERVATION_MINUTES = 30;
 const DEFAULT_INVENTORY_ID = "ab_leto_2026_50_v1";
-const STAGED_RELEASE_INVENTORY_ID = "ab_leto_2026_100_then_7_v1";
+const LEGACY_STAGED_RELEASE_INVENTORY_ID = "ab_leto_2026_100_then_7_v1";
+const STAGED_RELEASE_INVENTORY_ID = "ab_leto_2026_150_v2";
 const REGIONAL_FRIENDSHIP_INVENTORIES = {
   kotelniki_friendship: "kotelniki_friendship_12m_2026_v1",
   network_friendship: "network_friendship_12m_2026_v1",
@@ -41,6 +42,7 @@ const regionalInventoryIds = Array.from(new Set(
 ));
 const inventoryIdPattern = `^(?:${[
   `${escapeRegex(inventoryId)}(?:_(?:friendship|ra)_.*)?`,
+  `${escapeRegex(LEGACY_STAGED_RELEASE_INVENTORY_ID)}_(?:friendship|ra)`,
   `${escapeRegex(STAGED_RELEASE_INVENTORY_ID)}_(?:friendship|ra)`,
   ...regionalInventoryIds.map(escapeRegex),
 ].join("|")})$`;

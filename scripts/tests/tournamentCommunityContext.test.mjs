@@ -278,7 +278,7 @@ test("atomic auto-enrollment keeps exact id guards and records auto source", () 
   const mutation = buildTimeForFriendsAutoEnrollmentMutation(result.operations[0], "2026-08-11T12:00:00.000Z");
   assert.equal(mutation.filter.id, COMMUNITY_A);
   assert.deepEqual(mutation.filter.archived, { $ne: true });
-  const member = mutation.update[0].$set.members.$concatArrays[1][0];
+  const member = mutation.update[0].$set.members.$concatArrays[1].$literal[0];
   assert.equal(member.id, PLAYER_ID);
   assert.equal(member.joinSource.type, "TIME_FOR_FRIENDS_TOURNAMENT_AUTO_ENROLLMENT");
 });

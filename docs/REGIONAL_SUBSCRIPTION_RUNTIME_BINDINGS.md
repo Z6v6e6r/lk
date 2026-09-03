@@ -58,7 +58,15 @@ producer, provider preview и отдельного publication gate.
 | --- | --- | --- | --- |
 | `piter_friendship` | `piter_friendship_12m_2026_v1` | 4 × 100 | `1980000`, `2380000`, `3680000`, `5680000` |
 | `kotelniki_friendship` | `kotelniki_friendship_12m_2026_v1` | 4 × 50 | `1980000`, `2380000`, `3680000`, `5680000` |
-| `network_friendship` | `network_friendship_12m_2026_v1` | 1 × 100 | `5680000` |
+| `network_friendship` | `network_friendship_12m_2026_v1` | общий остаток 1 × 100; дневное окно 10 | `5680000` |
+
+Для `network_friendship` сохраняется существующий общий inventory и уже проданные
+экземпляры. Публичный status показывает не больше 10 доступных продаж за календарный
+день `Europe/Moscow`, дополнительно ограничивая окно фактическим общим остатком.
+Поля `inventory*` сохраняют наблюдаемость общего лимита, продаж и остатка. Дневное
+окно активируется только exact boolean global flag
+`summer_subscription_ab_leto_20260903_release_enabled=true`; отсутствие или строковое
+значение флага сохраняет предыдущий runtime.
 
 Production-витрины Питера и ХАБ используют по одному подтверждённому годовому
 Viva product ID; цена партии задаётся серверной скидкой от его базовой цены.

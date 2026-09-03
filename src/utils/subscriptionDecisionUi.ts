@@ -1,4 +1,8 @@
 import type { ApiError, PadelSplitPaymentResult } from "./apiClient";
+import {
+  hasDeterministicSubscriptionDecision,
+  readSubscriptionDecisionResultState,
+} from "./subscriptionDecisionContract.ts";
 
 export type SubscriptionDecisionAction = "CREATE_GAME" | "JOIN_GAME";
 
@@ -139,6 +143,7 @@ const ACTION_UNAVAILABLE_CODES = new Set([
 ]);
 
 const PENDING_CODES = new Set([
+  "SUBSCRIPTION_AMBIGUOUS_INTENT_LOCKED",
   "PENDING_CONFIRMATION",
   "SUBSCRIPTION_ENTITLEMENT_CONFIRMATION_PENDING",
   "SPLIT_BOOKING_RECONCILIATION_REQUIRED",
@@ -209,7 +214,6 @@ function isNoSubscriptionsAvailable(error: ApiError | null | undefined): boolean
 export function resolveSubscriptionDecisionPresentation({
   action,
   requestedPaymentMode,
-  durationMinutes,
   result = null,
   error = null,
 }: {
@@ -319,6 +323,18 @@ export function resolveSubscriptionDecisionPresentation({
     };
   }
 
+  if (!hasDeterministicSubscriptionDecision(result, requestedPaymentMode)) {
+    return {
+      kind: "TECHNICAL_ERROR",
+      title: "Временная техническая ошибка",
+      message: "Сервер вернул неподтверждённое состояние подписки. Обновите данные и повторите попытку.",
+      reasonCode: readSubscriptionDecisionResultState(result.raw) || "RESPONSE_CONTRACT_INVALID",
+      retryable: true,
+      subscriptionApplied: false,
+      continueWithoutSubscription: false,
+    };
+  }
+
   if (requestedPaymentMode === "one_time") {
     const amount = formatMoney(result.toPayMinor);
     return {
@@ -374,15 +390,10 @@ export function resolveSubscriptionDecisionPresentation({
 
   const amount = formatMoney(result.toPayMinor);
   if ((result.toPayMinor ?? Math.round(result.toPay * 100)) > 0) {
-    const extraMinutes = Number.isFinite(durationMinutes)
-      ? Math.max(0, Math.round(Number(durationMinutes)) - 60)
-      : 0;
     return {
       kind: "ADDITIONAL_PAYMENT_REQUIRED",
       title: "Подписка применена, нужна доплата",
-      message: extraMinutes > 0
-        ? `60 минут по подписке, доплата за ${extraMinutes} минут${amount ? ` — ${amount}` : ""}.`
-        : `Подписка применена${amount ? `, доплата — ${amount}` : ", требуется доплата"}.`,
+      message: `Подписка применена${amount ? `, доплата — ${amount}` : ", требуется доплата"}.`,
       reasonCode: "SUBSCRIPTION_ADDITIONAL_PAYMENT",
       retryable: false,
       subscriptionApplied: true,

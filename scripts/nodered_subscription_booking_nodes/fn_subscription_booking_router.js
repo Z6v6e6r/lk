@@ -10,12 +10,20 @@ const PITER_MANAGED_PRODUCT_ID = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
 const MANAGED_ENFORCEMENT_ALLOWLIST_GLOBAL = "subscriptions_managed_enforcement_product_ids";
 const MANAGED_ENFORCEMENT_PURCHASE_FROM = "2026-09-01";
 const MANAGED_ENFORCEMENT_PURCHASE_TIME_ZONE = "Europe/Moscow";
+const MANAGED_RUNTIME_ENVIRONMENT_GLOBAL = "subscriptions_runtime_environment";
+const MANAGED_DEV_CANARY_GLOBAL = "subscriptions_managed_enforcement_canary_client_subscription_ids";
+const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "PROD";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const REGIONAL_ACTIVATION_MODE = "FIRST_USE_OR_FIXED_DATE";
 const REGIONAL_ACTIVATION_FALLBACK_AT = "2026-09-30T21:00:00.000Z";
 const REGIONAL_ACTIVATION_TIME_ZONE = "Europe/Moscow";
 const REGIONAL_VALIDITY_DAYS = 365;
-const TRUSTED_ENTITLEMENT_API_BASE = "https://padlhub.su/api";
+const MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = Object.freeze({
+  PROD: "https://padlhub.su/api",
+  // Intentionally unbound until a dedicated DEV CUP origin exposes the complete
+  // runtime-context/entitlement/activation contract without proxying production.
+  DEV: null,
+});
 
 const OUTPUT_HTTP = 0;
 const OUTPUT_MONGO_FIND = 1;
@@ -100,6 +108,110 @@ const readGlobal = (key) => {
   } catch (_) {
     return null;
   }
+};
+
+const readManagedRuntimeEnvironment = () => {
+  const configured = readGlobal(MANAGED_RUNTIME_ENVIRONMENT_GLOBAL);
+  const environment = configured === null ? null : configured.toUpperCase();
+  if (!["DEV", "PROD"].includes(environment)) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_ENVIRONMENT_INVALID" };
+  }
+  if (environment !== MANAGED_RUNTIME_EXPECTED_ENVIRONMENT) {
+    return { ok: false, environment, code: "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT" };
+  }
+  return { ok: true, environment };
+};
+
+const readManagedRuntimeApiConfig = () => {
+  const identity = readManagedRuntimeEnvironment();
+  if (!identity.ok) return identity;
+  const expectedApiBase = MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT[identity.environment];
+  if (!expectedApiBase) {
+    return {
+      ok: false,
+      environment: identity.environment,
+      code: "MANAGED_SUBSCRIPTION_DEV_RUNTIME_ORIGIN_UNBOUND",
+    };
+  }
+  const configuredApiBase = readGlobal("subscriptions_runtime_api_base_url");
+  if (!configuredApiBase) {
+    return {
+      ok: false,
+      environment: identity.environment,
+      code: "MANAGED_SUBSCRIPTION_RUNTIME_NOT_CONFIGURED",
+    };
+  }
+  let parsed;
+  try {
+    parsed = new URL(configuredApiBase);
+  } catch (_) {
+    return {
+      ok: false,
+      environment: identity.environment,
+      code: "MANAGED_SUBSCRIPTION_RUNTIME_URL_INVALID",
+    };
+  }
+  const transportAllowed = identity.environment === "PROD"
+    ? parsed.protocol === "https:"
+    : parsed.protocol === "http:" && parsed.hostname === "127.0.0.1";
+  const strictUrl = transportAllowed
+    && !parsed.username
+    && !parsed.password
+    && !parsed.search
+    && !parsed.hash
+    && parsed.pathname === "/api"
+    && parsed.href === expectedApiBase;
+  if (!strictUrl) {
+    return {
+      ok: false,
+      environment: identity.environment,
+      code: "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT",
+    };
+  }
+  return { ok: true, environment: identity.environment, apiBase: expectedApiBase };
+};
+
+const readManagedDevCanaries = () => {
+  let configured;
+  try {
+    configured = global.get(MANAGED_DEV_CANARY_GLOBAL);
+  } catch (_) {
+    configured = undefined;
+  }
+  if (configured === undefined || configured === null || configured === "") {
+    return { ok: true, clientSubscriptionIds: [] };
+  }
+  if (typeof configured === "string") {
+    const text = configured.trim();
+    if (!text) return { ok: true, clientSubscriptionIds: [] };
+    try {
+      configured = JSON.parse(text);
+    } catch (_) {
+      return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID" };
+    }
+  }
+  if (!Array.isArray(configured) || ![0, 2].includes(configured.length)) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID" };
+  }
+  const normalized = configured.map(normalizeId);
+  if (normalized.some((value) => !value || !UUID_PATTERN.test(value))
+    || new Set(normalized).size !== normalized.length) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID" };
+  }
+  return { ok: true, clientSubscriptionIds: normalized };
+};
+
+const managedEnvironmentAllowsSubscription = (clientSubscriptionId) => {
+  const identity = readManagedRuntimeEnvironment();
+  if (!identity.ok) return identity;
+  if (identity.environment === "PROD") return { ok: true, environment: "PROD", allowed: true };
+  const canaries = readManagedDevCanaries();
+  if (!canaries.ok) return canaries;
+  return {
+    ok: true,
+    environment: "DEV",
+    allowed: canaries.clientSubscriptionIds.includes(normalizeId(clientSubscriptionId)),
+  };
 };
 
 const readManagedEnforcementAllowlist = () => {
@@ -217,6 +329,21 @@ const finishFullPriceFallback = (ctx, blockers) => {
   return emit(OUTPUT_FINAL);
 };
 
+const finishManagedCreatePreflight = (ctx, state = "PREFLIGHT_ATTEMPT_BOUND") => {
+  msg._subscriptionBooking = ctx;
+  msg.statusCode = 200;
+  msg.headers = responseHeaders();
+  msg.payload = {
+    ok: true,
+    state,
+    operationId: ctx.operationId,
+    exerciseId: ctx.exerciseId,
+    clientSubscriptionId: ctx.clientSubscriptionId,
+  };
+  delete msg.error;
+  return emit(OUTPUT_FINAL);
+};
+
 const prepareHttp = (ctx, step, method, url, payload, headers = {}) => {
   ctx.step = step;
   msg._subscriptionBooking = ctx;
@@ -224,9 +351,19 @@ const prepareHttp = (ctx, step, method, url, payload, headers = {}) => {
   msg.url = url;
   msg.headers = headers;
   msg.payload = payload;
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
   delete msg.error;
   delete msg.statusCode;
   return emit(OUTPUT_HTTP);
+};
+
+const prepareManagedHttp = (ctx, step, method, url, payload, headers = {}) => {
+  const output = prepareHttp(ctx, step, method, url, payload, headers);
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
+  msg.requestTimeout = 10000;
+  return output;
 };
 
 const prepareUserGet = (ctx, step, path) => prepareHttp(
@@ -247,18 +384,18 @@ const prepareManagedRuntimeContext = (ctx, step = "managed_runtime_context") => 
       ? prepareFailedUpdate(ctx, 409, "Контекст управляемой подписки изменился до записи", details.code)
       : finishError(ctx, 409, "Контекст управляемой подписки не подтверждён", details);
   }
-  const apiBase = (readGlobal("subscriptions_runtime_api_base_url") || "").replace(/\/+$/, "");
+  const runtimeConfig = readManagedRuntimeApiConfig();
   const integrationToken = readGlobal("subscriptions_runtime_context_integration_token");
-  if (!apiBase || !/^https:\/\//i.test(apiBase) || !integrationToken) {
+  if (!runtimeConfig.ok || Buffer.byteLength(integrationToken || "", "utf8") < 32) {
     return finishError(ctx, 503, "Контур правил подписки временно недоступен", {
-      code: "MANAGED_SUBSCRIPTION_RUNTIME_NOT_CONFIGURED",
+      code: runtimeConfig.code || "MANAGED_SUBSCRIPTION_RUNTIME_NOT_CONFIGURED",
     });
   }
-  return prepareHttp(
+  return prepareManagedHttp(
     ctx,
     step,
     "POST",
-    `${apiBase}/internal/subscriptions/runtime-context`,
+    `${runtimeConfig.apiBase}/internal/subscriptions/runtime-context`,
     { clientSubscriptionId: ctx.clientSubscriptionId },
     {
       Authorization: ctx.authHeader,
@@ -269,13 +406,17 @@ const prepareManagedRuntimeContext = (ctx, step = "managed_runtime_context") => 
   );
 };
 
-const managedActivationConfig = () => ({
-  apiBase: (readGlobal("subscriptions_runtime_api_base_url") || "").replace(/\/+$/, ""),
-  integrationToken: readGlobal("subscriptions_activation_integration_token"),
-});
+const managedActivationConfig = () => {
+  const runtimeConfig = readManagedRuntimeApiConfig();
+  return {
+    ...runtimeConfig,
+    integrationToken: readGlobal("subscriptions_activation_integration_token"),
+  };
+};
 
-const validManagedActivationConfig = (config) => (
-  /^https:\/\//i.test(config.apiBase)
+const validManagedActivationConfig = (config, ctx = null) => (
+  config.ok === true
+  && (!ctx || config.environment === (ctx.managedEnforcement?.environment || ctx.managedEnvironment))
   && Buffer.byteLength(config.integrationToken || "", "utf8") >= 32
 );
 
@@ -285,18 +426,16 @@ const managedActivationConfigured = () => {
 };
 
 const managedEntitlementConfig = () => {
-  const configuredApiBase = (readGlobal("subscriptions_runtime_api_base_url") || "")
-    .replace(/\/+$/, "");
+  const runtimeConfig = readManagedRuntimeApiConfig();
   return {
-    apiBase: configuredApiBase,
-    trustedOrigin: configuredApiBase === TRUSTED_ENTITLEMENT_API_BASE,
+    ...runtimeConfig,
     integrationToken: readGlobal("subscriptions_entitlement_integration_token"),
   };
 };
 
-const validManagedEntitlementConfig = (config) => (
-  config.trustedOrigin === true
-  && config.apiBase === TRUSTED_ENTITLEMENT_API_BASE
+const validManagedEntitlementConfig = (config, ctx = null) => (
+  config.ok === true
+  && (!ctx || config.environment === (ctx.managedEnforcement?.environment || ctx.managedEnvironment))
   && Buffer.byteLength(config.integrationToken || "", "utf8") >= 32
 );
 
@@ -310,21 +449,19 @@ const managedEntitlementHeaders = (ctx, config) => ({
 
 const prepareManagedEntitlementReserve = (ctx) => {
   const config = managedEntitlementConfig();
-  if (!validManagedEntitlementConfig(config)) {
+  if (!validManagedEntitlementConfig(config, ctx)) {
     return prepareFailedUpdate(
       ctx,
       503,
       "Резерв льготы подписки ещё не настроен",
-      config.trustedOrigin
-        ? "SUBSCRIPTION_ENTITLEMENT_NOT_CONFIGURED"
-        : "SUBSCRIPTION_ENTITLEMENT_ORIGIN_NOT_TRUSTED",
+      config.code || "SUBSCRIPTION_ENTITLEMENT_NOT_CONFIGURED",
     );
   }
-  return prepareHttp(
+  return prepareManagedHttp(
     ctx,
     "managed_entitlement_reserve",
     "POST",
-    `${TRUSTED_ENTITLEMENT_API_BASE}/internal/subscriptions/entitlements/reserve`,
+    `${config.apiBase}/internal/subscriptions/entitlements/reserve`,
     {
       subscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
       action: ctx.managedAction,
@@ -339,16 +476,16 @@ const prepareManagedEntitlementReserve = (ctx) => {
 
 const prepareManagedEntitlementConfirm = (ctx) => {
   const config = managedEntitlementConfig();
-  if (!validManagedEntitlementConfig(config)) {
+  if (!validManagedEntitlementConfig(config, ctx)) {
     return finishPending(ctx, "Запись подтверждена Viva; льгота ожидает подтверждения ЦУП", {
       code: "SUBSCRIPTION_ENTITLEMENT_NOT_CONFIGURED",
     });
   }
-  return prepareHttp(
+  return prepareManagedHttp(
     ctx,
     "managed_entitlement_confirm",
     "POST",
-    `${TRUSTED_ENTITLEMENT_API_BASE}/internal/subscriptions/entitlements/confirm`,
+    `${config.apiBase}/internal/subscriptions/entitlements/confirm`,
     {
       operationId: ctx.managedEntitlementOperationId,
       providerBookingId: ctx.confirmedBookingId,
@@ -358,8 +495,13 @@ const prepareManagedEntitlementConfirm = (ctx) => {
 };
 
 const prepareManagedEntitlementRelease = (ctx, reason, providerBookingId = null) => {
+  // A created/adopted exercise is an external side effect. Failure is not proof
+  // that it is safe to release its reservation, even before booking creation.
+  if (ctx.precreatedEntitlementReserved === true) {
+    return preparePrecreatedReconciliation(ctx);
+  }
   const config = managedEntitlementConfig();
-  if (!validManagedEntitlementConfig(config) || !toStr(ctx.managedEntitlementOperationId)) {
+  if (!validManagedEntitlementConfig(config, ctx) || !toStr(ctx.managedEntitlementOperationId)) {
     return finishPending(ctx, "Резерв льготы требует ручной сверки", {
       code: "SUBSCRIPTION_ENTITLEMENT_RELEASE_NOT_CONFIGURED",
     });
@@ -370,11 +512,11 @@ const prepareManagedEntitlementRelease = (ctx, reason, providerBookingId = null)
   };
   if (providerBookingId) payload.providerBookingId = providerBookingId;
   ctx.entitlementReleaseReason = reason;
-  return prepareHttp(
+  return prepareManagedHttp(
     ctx,
     "managed_entitlement_release",
     "POST",
-    `${TRUSTED_ENTITLEMENT_API_BASE}/internal/subscriptions/entitlements/release`,
+    `${config.apiBase}/internal/subscriptions/entitlements/release`,
     payload,
     managedEntitlementHeaders(ctx, config),
   );
@@ -404,10 +546,11 @@ const validEntitlementDecision = (ctx, decision) => {
 
 const prepareManagedEntitlementBind = (ctx) => {
   const nowIso = new Date().toISOString();
+  const isCreatePreflight = ctx.caller === "split_create_preflight";
   return prepareMongoUpdate(ctx, "operation_entitlement_bind", {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
-    state: "PENDING_CONFIRMATION",
+    state: isCreatePreflight ? "PRECREATE_RESERVING" : "PENDING_CONFIRMATION",
     $or: [
       { managedEntitlementOperationId: { $exists: false } },
       { managedEntitlementOperationId: null },
@@ -415,6 +558,10 @@ const prepareManagedEntitlementBind = (ctx) => {
     ],
   }, {
     $set: {
+      ...(isCreatePreflight ? {
+        state: "PRECREATE_RESERVED",
+        precreateReservedAt: nowIso,
+      } : {}),
       managedEntitlementOperationId: ctx.managedEntitlementOperationId,
       managedSubscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
       managedEntitlementState: "RESERVED",
@@ -446,7 +593,7 @@ const prepareFullPriceFallbackUpdate = (ctx, blockers) => {
   return prepareMongoUpdate(ctx, "operation_full_price_fallback", {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
-    state: "PENDING_CONFIRMATION",
+    state: ctx.caller === "split_create_preflight" ? "PRECREATE_RESERVING" : "PENDING_CONFIRMATION",
   }, {
     $set: {
       state: "RELEASED",
@@ -483,31 +630,30 @@ const prepareManagedFirstUseActivation = (ctx, providerBookingId) => {
     });
   }
   const config = managedActivationConfig();
-  if (!validManagedActivationConfig(config)) {
+  if (!validManagedActivationConfig(config, ctx)) {
     return finishPending(ctx, "Запись подтверждена Viva; активация подписки ожидает настройки ЦУП", {
       code: "SUBSCRIPTION_ACTIVATION_NOT_CONFIGURED",
     });
   }
-  ctx.step = "managed_first_use_activation";
-  msg._subscriptionBooking = ctx;
-  msg.method = "POST";
-  msg.url = `${config.apiBase}/internal/subscriptions/activate-first-use`;
-  msg.headers = {
-    Authorization: ctx.authHeader,
-    "X-Subscriptions-Integration-Token": config.integrationToken,
-    "X-Correlation-Id": ctx.operationId,
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  };
-  msg.payload = {
-    subscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
-    clientSubscriptionId: ctx.clientSubscriptionId,
-    providerBookingId,
-    expectedInstanceRevision: ctx.managedActivationExpectedRevision,
-  };
-  delete msg.error;
-  delete msg.statusCode;
-  return emit(OUTPUT_HTTP);
+  return prepareManagedHttp(
+    ctx,
+    "managed_first_use_activation",
+    "POST",
+    `${config.apiBase}/internal/subscriptions/activate-first-use`,
+    {
+      subscriptionInstanceId: ctx.managedRuntime.subscriptionInstanceId,
+      clientSubscriptionId: ctx.clientSubscriptionId,
+      providerBookingId,
+      expectedInstanceRevision: ctx.managedActivationExpectedRevision,
+    },
+    {
+      Authorization: ctx.authHeader,
+      "X-Subscriptions-Integration-Token": config.integrationToken,
+      "X-Correlation-Id": ctx.operationId,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+  );
 };
 
 const prepareAdminGet = (ctx, step, path) => {
@@ -539,6 +685,18 @@ const unwrapRecord = (value) => {
     if (isObj(value[key])) return unwrapRecord(value[key]) || value[key];
   }
   return value;
+};
+
+const unwrapManagedRuntimeResponse = (value, expectedEnvironment) => {
+  if (!isObj(value)) return null;
+  if (value.schemaVersion === 1) return value;
+  if (value.schemaVersion !== 2
+    || value.environment !== expectedEnvironment
+    || !isObj(value.runtimeContext)
+    || value.runtimeContext.schemaVersion !== 1) return null;
+  const allowedKeys = ["environment", "runtimeContext", "schemaVersion"];
+  if (Object.keys(value).some((key) => !allowedKeys.includes(key))) return null;
+  return value.runtimeContext;
 };
 
 const extractItems = (value, seen = new Set()) => {
@@ -670,15 +828,20 @@ const collectExactProductIds = (value) => {
 
 const collectSubscriptionPurchaseDateEvidence = (value) => {
   const records = Array.isArray(value) ? value.filter(isObj) : isObj(value) ? [value] : [];
-  const rawDates = records.map((record) => record.purchaseDate);
-  const normalizedDates = rawDates.map(normalizePurchaseDateMoscow);
+  const normalizedDates = records.flatMap((record) => {
+    const aliases = [record.purchaseAt, record.purchaseDate]
+      .filter((date) => date !== null && date !== undefined && String(date).trim());
+    return aliases.length > 0
+      ? aliases.map(normalizePurchaseDateMoscow)
+      : [null];
+  });
   return {
     dates: [...new Set(normalizedDates.filter(Boolean))].sort(),
     invalid: normalizedDates.some((date) => date === null),
   };
 };
 
-const resolveManagedEnforcementDecision = (value) => {
+const resolveManagedEnforcementDecision = (value, clientSubscriptionId) => {
   const allowlist = readManagedEnforcementAllowlist();
   if (!allowlist.ok) return allowlist;
   const records = Array.isArray(value) ? value.filter(isObj) : isObj(value) ? [value] : [];
@@ -692,15 +855,26 @@ const resolveManagedEnforcementDecision = (value) => {
     : null;
   const purchaseDateEvidence = collectSubscriptionPurchaseDateEvidence(value);
   const purchaseDates = purchaseDateEvidence.dates;
+  const requiresAuthoritativePurchaseDate = exactProductId === PITER_MANAGED_PRODUCT_ID
+    && allowlist.productIds.includes(exactProductId);
+  if (requiresAuthoritativePurchaseDate
+    && (purchaseDateEvidence.invalid || purchaseDates.length !== 1)) {
+    return { ok: false, code: "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED" };
+  }
   const purchaseDate = !purchaseDateEvidence.invalid && purchaseDates.length === 1
     ? purchaseDates[0]
     : null;
   const purchaseDateEligible = Boolean(
     purchaseDate && purchaseDate >= MANAGED_ENFORCEMENT_PURCHASE_FROM,
   );
-  const enabled = exactProductId === PITER_MANAGED_PRODUCT_ID
+  const managedProductEligible = exactProductId === PITER_MANAGED_PRODUCT_ID
     && allowlist.productIds.includes(exactProductId)
     && purchaseDateEligible;
+  const environmentDecision = managedProductEligible
+    ? managedEnvironmentAllowsSubscription(clientSubscriptionId)
+    : { ok: true, environment: null, allowed: false };
+  if (!environmentDecision.ok) return environmentDecision;
+  const enabled = managedProductEligible && environmentDecision.allowed === true;
   return {
     ok: true,
     configuredProductIds: allowlist.productIds,
@@ -712,6 +886,7 @@ const resolveManagedEnforcementDecision = (value) => {
     purchaseDateCutoff: MANAGED_ENFORCEMENT_PURCHASE_FROM,
     purchaseDateTimeZone: MANAGED_ENFORCEMENT_PURCHASE_TIME_ZONE,
     purchaseDateEligible,
+    environment: enabled ? environmentDecision.environment : null,
     enabled,
     planKey: enabled ? "piter_friendship" : null,
   };
@@ -774,7 +949,7 @@ const resolveLimitMode = (planKey, serviceDate) => {
 const buildOperationKey = (ctx) => {
   if (ctx.managedEnforcement?.enabled === true) {
     return [
-      "managed",
+      ctx.managedEnforcement.environment === "DEV" ? "managed-dev" : "managed",
       ctx.tenantKey,
       ctx.clientSubscriptionId,
       ctx.exerciseId,
@@ -876,6 +1051,57 @@ const eventDurationMinutes = (exercise) => {
     ? endMinutes - startMinutes
     : endMinutes + 1440 - startMinutes;
   return minutes > 0 && minutes <= 1440 ? minutes : null;
+};
+
+const exerciseStationId = (exercise) => toStr(
+  exercise?.studio?.id || exercise?.studioId || exercise?.station?.id || exercise?.stationId,
+);
+const exerciseRoomId = (exercise) => toStr(
+  exercise?.room?.id || exercise?.roomId || exercise?.court?.id || exercise?.courtId,
+);
+
+const precreateRecoveryTarget = (ctx) => {
+  const startsAt = finiteDate(ctx.managedTarget?.startsAt);
+  const durationMinutes = Number(ctx.managedTarget?.durationMinutes);
+  const target = {
+    placeholderExerciseId: toStr(ctx.exerciseId),
+    actorClientId: toStr(ctx.actorClientId),
+    clientSubscriptionId: toStr(ctx.clientSubscriptionId),
+    subscriptionInstanceId: toStr(ctx.managedRuntime?.subscriptionInstanceId),
+    policyDigest: toStr(ctx.managedRuntime?.policyDigest),
+    stationId: toStr(ctx.managedTarget?.stationId),
+    roomId: toStr(ctx.managedTarget?.roomId),
+    category: toStr(ctx.category),
+    externalEventTypeId: toStr(ctx.managedTarget?.externalEventTypeId),
+    startsAt: startsAt?.toISOString() || null,
+    durationMinutes,
+    serviceDate: normalizeDate(ctx.serviceDate),
+  };
+  if (ctx.caller !== "split_create_preflight" || ctx.managedAction !== "CREATE_GAME"
+    || !target.placeholderExerciseId?.startsWith("split-create:")
+    || !target.actorClientId || !target.clientSubscriptionId
+    || !target.subscriptionInstanceId || !target.policyDigest
+    || !target.stationId || !target.roomId || target.category !== "open_game"
+    || !target.externalEventTypeId || !target.startsAt || !target.serviceDate
+    || !Number.isInteger(durationMinutes) || durationMinutes < 1) return null;
+  return target;
+};
+
+const exactPrecreateRecoveryTarget = (actual, expected) => isObj(actual) && isObj(expected)
+  && Object.keys(expected).every((key) => actual[key] === expected[key])
+  && Object.keys(actual).length === Object.keys(expected).length;
+
+const exerciseMatchesPrecreateRecovery = (exercise, target) => {
+  const exerciseId = toStr(exercise?.id || exercise?.exerciseId || exercise?.uuid);
+  return Boolean(exerciseId && !exerciseId.startsWith("split-create:")
+    && normalizeId(exerciseStationId(exercise)) === normalizeId(target.stationId)
+    && normalizeId(exerciseRoomId(exercise)) === normalizeId(target.roomId)
+    && resolveCategory(exercise) === target.category
+    && managedExternalEventTypeId(exercise) === target.externalEventTypeId
+    && eventStartsAt(exercise) === target.startsAt
+    && eventDurationMinutes(exercise) === target.durationMinutes
+    && eventDate(exercise) === target.serviceDate
+    && findOwnedSubscriptions(exercise, target.clientSubscriptionId).length === 1);
 };
 
 const managedActionForTarget = (ctx) => {
@@ -1005,27 +1231,20 @@ const operationHasConfirmedCancellation = (operation, cancelledBookings) => {
   });
 };
 
-const findNumber = (value, keys, seen = new Set()) => {
-  if (!value || typeof value !== "object" || seen.has(value)) return null;
-  seen.add(value);
-  for (const key of keys) {
-    const numeric = Number(value[key]);
-    if (Number.isFinite(numeric)) return numeric;
-  }
-  for (const nested of Array.isArray(value) ? value : Object.values(value)) {
-    const found = findNumber(nested, keys, seen);
-    if (found !== null) return found;
-  }
-  return null;
+// mongodb4 collection operations return the driver's flat result, not a
+// recursive envelope. No coercion, upsert, partial ACK, or diagnostic counts.
+const mongoMatched = (value) => {
+  const keys = ["acknowledged", "matchedCount", "modifiedCount", "upsertedCount", "upsertedId"];
+  if (!isObj(value) || Object.keys(value).length !== keys.length
+    || !keys.every((key) => Object.hasOwn(value, key))
+    || value.acknowledged !== true || ![0, 1].includes(value.matchedCount)
+    || ![0, 1].includes(value.modifiedCount) || value.modifiedCount > value.matchedCount
+    || value.upsertedCount !== 0 || value.upsertedId !== null) return null;
+  return value.matchedCount;
 };
-
-const mongoMatched = (value) => findNumber(value, ["matchedCount", "modifiedCount", "upsertedCount"]);
-const mongoInserted = (value) => {
-  if (findNumber(value, ["insertedCount"]) > 0) return true;
-  if (isObj(value) && (value.insertedId || value.acknowledged === true)) return true;
-  if (Array.isArray(value)) return value.some(mongoInserted);
-  return false;
-};
+const mongoInserted = (value, expectedId) => isObj(value)
+  && Object.keys(value).length === 2 && value.acknowledged === true
+  && typeof value.insertedId === "string" && value.insertedId === expectedId;
 
 const prepareOperationFind = (ctx, query = { _id: ctx.operationKey }) => {
   ctx.step = "operation_find";
@@ -1079,19 +1298,133 @@ const prepareMongoUpdate = (ctx, step, query, update) => {
 
 const preparePreaccept = (ctx) => {
   const now = new Date();
+  const isCreatePreflight = ctx.caller === "split_create_preflight";
   return prepareMongoUpdate(ctx, "operation_preaccept", {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
     state: "PREPARED",
   }, {
     $set: {
+      state: isCreatePreflight ? "PRECREATE_RESERVING" : "PENDING_CONFIRMATION",
+      ...(isCreatePreflight ? {
+        precreateLeaseUntil: new Date(now.getTime() + PENDING_CONFIRMATION_MS).toISOString(),
+      } : {
+        upstreamAttemptedAt: now.toISOString(),
+        pendingUntil: new Date(now.getTime() + PENDING_CONFIRMATION_MS).toISOString(),
+      }),
+      updatedAt: now.toISOString(),
+    },
+    $inc: { attempts: 1 },
+    $unset: { leaseUntil: "" },
+  });
+};
+
+const preparePrecreatedReservationPromotion = (ctx) => {
+  const now = new Date();
+  return prepareMongoUpdate(ctx, "operation_precreated_promote", {
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: "PRECREATE_ATTEMPTING",
+    managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+    managedSubscriptionInstanceId: ctx.managedRuntime?.subscriptionInstanceId,
+  }, {
+    $set: {
       state: "PENDING_CONFIRMATION",
+      exerciseId: ctx.exerciseId,
+      precreatedEntitlementReserved: true,
+      managedDecision: ctx.managedDecision,
       upstreamAttemptedAt: now.toISOString(),
       pendingUntil: new Date(now.getTime() + PENDING_CONFIRMATION_MS).toISOString(),
       updatedAt: now.toISOString(),
     },
     $inc: { attempts: 1 },
-    $unset: { leaseUntil: "" },
+    $unset: { precreateLeaseUntil: "", leaseUntil: "" },
+  });
+};
+
+const preparePrecreatedReconciliation = (ctx) => {
+  const nowIso = new Date().toISOString();
+  return prepareMongoUpdate(ctx, "operation_precreated_reconciliation", {
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: { $in: ["PRECREATE_ATTEMPTING", "PENDING_CONFIRMATION"] },
+    managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+    managedSubscriptionInstanceId: ctx.managedRuntime?.subscriptionInstanceId,
+  }, {
+    $set: {
+      state: "PRECREATE_RECONCILIATION_REQUIRED",
+      exerciseId: ctx.exerciseId,
+      precreateReconciliationRequiredAt: nowIso,
+      precreateReconciliationCode: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED",
+      updatedAt: nowIso,
+    },
+  });
+};
+
+const preparePrecreatedAttempt = (ctx) => {
+  const nowIso = new Date().toISOString();
+  const recoveryTarget = precreateRecoveryTarget(ctx);
+  if (!recoveryTarget) {
+    return finishPending(ctx, "Нельзя зафиксировать точную цель восстановления до создания игры", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RECOVERY_TARGET_UNRESOLVED",
+    });
+  }
+  ctx.precreateRecoveryTarget = recoveryTarget;
+  return prepareMongoUpdate(ctx, "operation_precreated_attempt", {
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: "PRECREATE_RESERVED",
+    managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+    managedSubscriptionInstanceId: ctx.managedRuntime?.subscriptionInstanceId,
+  }, {
+    $set: {
+      state: "PRECREATE_ATTEMPTING",
+      precreateAttemptBoundAt: nowIso,
+      precreateRecoveryTarget: recoveryTarget,
+      updatedAt: nowIso,
+    },
+    $unset: { precreateLeaseUntil: "", leaseUntil: "" },
+  });
+};
+
+const preparePrecreatedRecoveryBind = (ctx, operation, recoveredExerciseId) => {
+  const nowIso = new Date().toISOString();
+  ctx.exerciseId = recoveredExerciseId;
+  ctx.precreatedEntitlementReserved = true;
+  return prepareMongoUpdate(ctx, "operation_precreated_recover", {
+    _id: operation._id,
+    operationId: ctx.operationId,
+    state: "PRECREATE_ATTEMPTING",
+    exerciseId: operation.exerciseId,
+    actorClientId: ctx.actorClientId,
+    clientSubscriptionId: ctx.clientSubscriptionId,
+    managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+    managedSubscriptionInstanceId: ctx.managedRuntime?.subscriptionInstanceId,
+    precreateRecoveryTarget: ctx.precreateRecoveryTarget,
+  }, {
+    $set: {
+      exerciseId: recoveredExerciseId,
+      precreateRecoveredAt: nowIso,
+      updatedAt: nowIso,
+    },
+  });
+};
+
+const preparePrecreateAbortUpdate = (ctx) => {
+  const nowIso = new Date().toISOString();
+  return prepareMongoUpdate(ctx, "operation_precreate_abort", {
+    _id: ctx.operationKey,
+    operationId: ctx.operationId,
+    state: "PRECREATE_ATTEMPTING",
+    managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+  }, {
+    $set: {
+      state: "RELEASED",
+      releaseReason: "VIVA_EXERCISE_CREATE_REJECTED",
+      releasedAt: nowIso,
+      updatedAt: nowIso,
+    },
+    $unset: { precreateLeaseUntil: "", leaseUntil: "" },
   });
 };
 
@@ -1107,6 +1440,7 @@ const prepareOperationReclaim = (ctx, operation, now = new Date()) => prepareMon
     category: ctx.category,
     planKey: ctx.planKey || null,
     limitMode: ctx.limitMode,
+    managedEnvironment: ctx.managedEnforcement?.environment || null,
     managedDecision: ctx.managedDecision || null,
     activationState: ctx.managedActivationRequired ? "PENDING" : "NOT_REQUIRED",
     state: "PREPARED",
@@ -1206,6 +1540,9 @@ const prepareActivationConfirmedUpdate = (ctx, activation) => {
 };
 
 const prepareFailedUpdate = (ctx, statusCode, message, rawCode) => {
+  if (ctx.precreatedEntitlementReserved === true) {
+    return preparePrecreatedReconciliation(ctx);
+  }
   const nowIso = new Date().toISOString();
   ctx.finalFailure = { statusCode, message, rawCode: rawCode || null };
   return prepareMongoUpdate(ctx, "operation_fail", {
@@ -1238,6 +1575,22 @@ const serviceTokenAvailable = () => {
 };
 
 const prepareBookingCreate = (ctx) => {
+  if (ctx.managedEnforcement?.enabled === true) {
+    const runtimeConfig = readManagedRuntimeApiConfig();
+    const environmentGate = managedEnvironmentAllowsSubscription(ctx.clientSubscriptionId);
+    const expectedEnvironment = ctx.managedEnforcement.environment || ctx.managedEnvironment;
+    if (!runtimeConfig.ok
+      || !environmentGate.ok
+      || environmentGate.allowed !== true
+      || runtimeConfig.environment !== expectedEnvironment
+      || environmentGate.environment !== expectedEnvironment) {
+      return finishPending(ctx, "Конфигурация DEV/PROD изменилась после резерва; запись Viva не отправлена", {
+        code: runtimeConfig.code
+          || environmentGate.code
+          || "MANAGED_SUBSCRIPTION_ENVIRONMENT_CHANGED_BEFORE_WRITE",
+      });
+    }
+  }
   let serviceToken = null;
   try {
     serviceToken = toStr(global.get("vivacrm_access_token"));
@@ -1336,6 +1689,16 @@ if (!ctx) {
   });
 }
 
+if (ctx.step === "managed_precreate_abort" && ctx.caller === "split_create_abort") {
+  if (!toStr(ctx.managedEntitlementOperationId)) {
+    return finishError(ctx, 409, "Предварительный резерв потерян до освобождения", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RESERVATION_MISSING",
+    });
+  }
+  ctx.entitlementReleaseNext = "precreate_abort";
+  return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
+}
+
 if (ctx.step === "profile") {
   if (!isHttpOk(msg.statusCode)) {
     const profileStatus = Number(msg.statusCode);
@@ -1355,11 +1718,56 @@ if (ctx.step === "profile") {
   if (ctx.action === "release") {
     return prepareUserGet(ctx, "active_bookings", `/end-user/api/v2/${ctx.tenantKey}/bookings?size=1000`);
   }
+  if (ctx.caller === "split_create_preflight") {
+    return prepareUserGet(
+      ctx,
+      "prospective_subscriptions",
+      `/end-user/api/v1/${ctx.tenantKey}/subscriptions?includeFinished=true&size=1000`,
+    );
+  }
   return prepareUserGet(
     ctx,
     "exercise",
     `/end-user/api/v1/${ctx.tenantKey}/exercises/${encodeURIComponent(ctx.exerciseId)}`,
   );
+}
+
+if (ctx.step === "prospective_subscriptions") {
+  if (!isHttpOk(msg.statusCode) || !hasBookingListShape(msg.payload)
+    || !hasCompleteBookingList(msg.payload)) {
+    return finishError(ctx, 502, "Не удалось получить полный список подписок Viva", {
+      code: "SUBSCRIPTION_PREFLIGHT_LIST_UNAVAILABLE",
+    });
+  }
+  const selected = extractItems(msg.payload).filter((item) => (
+    findOwnedSubscriptions({ availableClientSubscriptions: [item] }, ctx.clientSubscriptionId).length === 1
+  ));
+  const target = isObj(ctx.prospectiveTarget) ? ctx.prospectiveTarget : null;
+  const typeMatch = toStr(target?.externalEventTypeId)?.match(/^viva:direction:(\d+):type:(\d+)$/);
+  const startsAt = finiteDate(target?.startsAt);
+  const durationMinutes = Number(target?.durationMinutes);
+  if (selected.length !== 1 || !target || target.resolutionSource !== "SERVER"
+    || normalizeId(target.eventId) !== normalizeId(ctx.exerciseId)
+    || !normalizeId(target.stationId) || !normalizeId(target.roomId) || target.category !== "open_game"
+    || !typeMatch || !startsAt || !Number.isInteger(durationMinutes) || durationMinutes < 1) {
+    return finishError(ctx, 409, "Нельзя однозначно подтвердить подписку и цель создаваемой игры", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_TARGET_UNRESOLVED",
+    });
+  }
+  msg.statusCode = 200;
+  msg.payload = {
+    id: ctx.exerciseId,
+    timeFrom: startsAt.toISOString(),
+    timeTo: new Date(startsAt.getTime() + durationMinutes * 60 * 1000).toISOString(),
+    directionId: Number(typeMatch[1]),
+    typeId: Number(typeMatch[2]),
+    studioId: target.stationId,
+    roomId: target.roomId,
+    studio: { id: target.stationId },
+    room: { id: target.roomId },
+    availableClientSubscriptions: selected,
+  };
+  ctx.step = "exercise";
 }
 
 if (ctx.step === "exercise") {
@@ -1385,15 +1793,25 @@ if (ctx.step === "exercise") {
   ctx.category = resolveCategory(exercise);
   ctx.studioId = toStr(exercise.studio?.id || exercise.studioId);
   ctx.subscriptionName = ownedSubscriptions.map(pickName).find(Boolean) || null;
-  const managedEnforcement = resolveManagedEnforcementDecision(ownedSubscriptions);
+  const managedEnforcement = resolveManagedEnforcementDecision(
+    ownedSubscriptions,
+    ctx.clientSubscriptionId,
+  );
   if (!managedEnforcement.ok) {
-    const configInvalid = managedEnforcement.code === "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID";
+    const configInvalid = [
+      "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID",
+      "MANAGED_SUBSCRIPTION_ENVIRONMENT_INVALID",
+      "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID",
+    ].includes(managedEnforcement.code);
+    const purchaseDateUnresolved = managedEnforcement.code === "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED";
     return finishError(
       ctx,
       configInvalid ? 503 : 409,
       configInvalid
         ? "Конфигурация управляемой подписки временно недоступна"
-        : "Нельзя однозначно определить продукт выбранной подписки",
+        : purchaseDateUnresolved
+          ? "Нельзя однозначно определить дату продажи выбранной подписки"
+          : "Нельзя однозначно определить продукт выбранной подписки",
       { code: managedEnforcement.code },
     );
   }
@@ -1408,11 +1826,15 @@ if (ctx.step === "exercise") {
     purchaseDateCutoff: managedEnforcement.purchaseDateCutoff,
     purchaseDateTimeZone: managedEnforcement.purchaseDateTimeZone,
     purchaseDateEligible: managedEnforcement.purchaseDateEligible,
+    environment: managedEnforcement.environment,
     enabled: managedEnforcement.enabled,
     planKey: managedEnforcement.planKey,
   };
   const resolvedPlanKey = resolvePlanKey(ownedSubscriptions) || resolvePlanKey(ctx.subscriptionName);
   ctx.planKey = compatibilityPlanKey(resolvedPlanKey, managedEnforcement);
+  if (ctx.caller === "split_create_preflight" && managedEnforcement.enabled !== true) {
+    return finishManagedCreatePreflight(ctx, "NOT_MANAGED");
+  }
   if (MANAGED_PLAN_KEYS.has(ctx.planKey)) {
     if (ctx.planKey === "kotelniki_friendship") {
       return finishError(ctx, 409, "Подписка Котельников ещё не подключена к правилам записи", {
@@ -1424,6 +1846,7 @@ if (ctx.step === "exercise") {
     ctx.managedTarget = {
       resolutionSource: "SERVER",
       stationId: ctx.studioId,
+      roomId: exerciseRoomId(exercise),
       category: managedTargetCategory(ctx.category),
       externalEventTypeId: managedExternalEventTypeId(exercise),
       productTypeId: null,
@@ -1464,6 +1887,7 @@ if (ctx.step === "exercise") {
     ctx.serverTarget = {
       resolutionSource: "SERVER",
       stationId: ctx.studioId,
+      roomId: exerciseRoomId(exercise),
       category: managedTargetCategory(ctx.category),
       externalEventTypeId: managedExternalEventTypeId(exercise),
       productTypeId: null,
@@ -1554,12 +1978,22 @@ if (ctx.step === "exercise_recheck") {
       "SUBSCRIPTION_ELIGIBILITY_CHANGED_BEFORE_WRITE",
     );
   }
-  const nextManagedEnforcement = resolveManagedEnforcementDecision(ownedSubscriptions);
+  const nextManagedEnforcement = resolveManagedEnforcementDecision(
+    ownedSubscriptions,
+    ctx.clientSubscriptionId,
+  );
   if (!nextManagedEnforcement.ok) {
+    const purchaseDateUnresolved = nextManagedEnforcement.code === "SUBSCRIPTION_PURCHASE_DATE_UNRESOLVED";
     return prepareFailedUpdate(
       ctx,
-      nextManagedEnforcement.code === "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID" ? 503 : 409,
-      "Нельзя повторно подтвердить rollout управляемой подписки",
+      [
+        "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID",
+        "MANAGED_SUBSCRIPTION_ENVIRONMENT_INVALID",
+        "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID",
+      ].includes(nextManagedEnforcement.code) ? 503 : 409,
+      purchaseDateUnresolved
+        ? "Нельзя повторно подтвердить дату продажи подписки"
+        : "Нельзя повторно подтвердить rollout управляемой подписки",
       nextManagedEnforcement.code,
     );
   }
@@ -1590,7 +2024,8 @@ if (ctx.step === "exercise_recheck") {
     );
   }
   if (previousManagedEnforcement.enabled !== nextManagedEnforcement.enabled
-    || previousManagedEnforcement.planKey !== nextManagedEnforcement.planKey) {
+    || previousManagedEnforcement.planKey !== nextManagedEnforcement.planKey
+    || previousManagedEnforcement.environment !== nextManagedEnforcement.environment) {
     return prepareFailedUpdate(
       ctx,
       409,
@@ -1643,13 +2078,23 @@ if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
       code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONTEXT_INVALID",
     });
   }
+  const currentRuntimeConfig = readManagedRuntimeApiConfig();
+  if (!currentRuntimeConfig.ok
+    || currentRuntimeConfig.environment !== ctx.managedEnforcement.environment) {
+    return rejectRuntime(503, "Окружение правил подписки изменилось", {
+      code: currentRuntimeConfig.code || "MANAGED_SUBSCRIPTION_ENVIRONMENT_CHANGED",
+    });
+  }
   if (!isHttpOk(msg.statusCode)) {
     return rejectRuntime(409, "Опубликованные правила подписки сейчас недоступны", {
       code: "MANAGED_SUBSCRIPTION_RUNTIME_CONTEXT_UNAVAILABLE",
       upstreamStatus: Number(msg.statusCode) || null,
     });
   }
-  const runtime = unwrapRecord(msg.payload);
+  const runtime = unwrapManagedRuntimeResponse(
+    msg.payload,
+    ctx.managedEnforcement.environment,
+  );
   const policy = runtime?.policy;
   const instance = runtime?.instance;
   if (!runtime || runtime.schemaVersion !== 1
@@ -1737,6 +2182,9 @@ if (["managed_runtime_context", "managed_runtime_recheck"].includes(ctx.step)) {
     }
     ctx.managedRuntime = nextManagedRuntime;
     ctx.managedActivationExpectedRevision = runtime.evidence.instanceRevision;
+    if (ctx.precreatedEntitlementReserved === true) {
+      return preparePrecreatedReservationPromotion(ctx);
+    }
     return prepareManagedEntitlementReserve(ctx);
   }
   ctx.managedRuntime = nextManagedRuntime;
@@ -1996,6 +2444,9 @@ if (ctx.step === "operation_entitlement_bind") {
       code: "SUBSCRIPTION_ENTITLEMENT_CONFIRMED_RECONCILIATION_REQUIRED",
     });
   }
+  if (ctx.caller === "split_create_preflight") {
+    return preparePrecreatedAttempt(ctx);
+  }
   return prepareBookingCreate(ctx);
 }
 
@@ -2009,6 +2460,12 @@ if (ctx.step === "operation_full_price_fallback") {
 }
 
 if (ctx.step === "operation_find") {
+  if (msg.error || !Array.isArray(msg.payload) || msg.payload.some((row) => !isObj(row))
+    || (ctx.action !== "release" && msg.payload.length > 1)) {
+    return finishPending(ctx, "Формат ответа Mongo требует сверки", {
+      code: "SUBSCRIPTION_BOOKING_OPERATION_READ_INVALID",
+    });
+  }
   const rows = asArray(msg.payload);
   if (ctx.action === "release") {
     if (rows.length === 0) {
@@ -2030,6 +2487,7 @@ if (ctx.step === "operation_find") {
         code: "SUBSCRIPTION_BOOKING_RELEASE_SUBSCRIPTION_MISMATCH",
       });
     }
+    ctx.managedEnvironment = toStr(releaseOperation.managedEnvironment) || "PROD";
     if (asArray(releaseOperation.releasedBookingIds).some((id) => normalizeId(id) === normalizeId(ctx.releaseBookingId))) {
       return finishReleased(ctx, { operationFound: true, alreadyReleased: true });
     }
@@ -2058,6 +2516,63 @@ if (ctx.step === "operation_find") {
     return prepareOperationRelease(ctx, releaseOperation);
   }
   const operation = isObj(rows[0]) ? rows[0] : null;
+  const operationEnvironment = toStr(operation?.managedEnvironment);
+  const expectedOperationEnvironment = ctx.managedEnforcement?.environment;
+  const operationEnvironmentMatches = expectedOperationEnvironment === "DEV"
+    ? operationEnvironment === "DEV"
+    : [null, "PROD"].includes(operationEnvironment);
+  if (operation && ctx.managedEnforcement?.enabled === true && !operationEnvironmentMatches) {
+    return finishError(ctx, 409, "Окружение операции подписки не совпало", {
+      code: "MANAGED_SUBSCRIPTION_OPERATION_ENVIRONMENT_MISMATCH",
+    });
+  }
+  if (ctx.caller === "split_create_preflight" && operation
+    && toStr(operation.operationId) === ctx.operationId
+    && operation.state === "PRECREATE_RESERVED") {
+    const exactReservation = normalizeId(operation.exerciseId) === normalizeId(ctx.exerciseId)
+      && normalizeId(operation.clientSubscriptionId) === normalizeId(ctx.clientSubscriptionId)
+      && operation.planKey === ctx.planKey
+      && operation.managedDecision?.policyDigest === ctx.managedRuntime?.policyDigest
+      && toStr(operation.managedEntitlementOperationId)
+      && toStr(operation.managedSubscriptionInstanceId) === ctx.managedRuntime?.subscriptionInstanceId;
+    if (!exactReservation) {
+      return finishPending(ctx, "Предварительный резерв не совпал с текущим контекстом", {
+        code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RESERVATION_MISMATCH",
+      });
+    }
+    ctx.managedDecision = operation.managedDecision;
+    ctx.managedEntitlementOperationId = toStr(operation.managedEntitlementOperationId);
+    ctx.managedSubscriptionInstanceId = toStr(operation.managedSubscriptionInstanceId);
+    return preparePrecreatedAttempt(ctx);
+  }
+  if (ctx.caller === "split_create_preflight" && operation
+    && toStr(operation.operationId) === ctx.operationId
+    && operation.state === "PRECREATE_ATTEMPTING") {
+    const expectedRecoveryTarget = precreateRecoveryTarget(ctx);
+    const exactReservation = expectedRecoveryTarget
+      && exactPrecreateRecoveryTarget(operation.precreateRecoveryTarget, expectedRecoveryTarget)
+      && normalizeId(operation.actorClientId) === normalizeId(ctx.actorClientId)
+      && normalizeId(operation.clientSubscriptionId) === normalizeId(ctx.clientSubscriptionId)
+      && operation.planKey === ctx.planKey
+      && operation.managedDecision?.policyDigest === ctx.managedRuntime?.policyDigest
+      && toStr(operation.managedEntitlementOperationId)
+      && toStr(operation.managedSubscriptionInstanceId) === ctx.managedRuntime?.subscriptionInstanceId;
+    if (!exactReservation) {
+      return finishPending(ctx, "Попытка создания игры не совпала с точной целью восстановления", {
+        code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RECOVERY_TARGET_MISMATCH",
+      });
+    }
+    ctx.precreateRecoveryTarget = expectedRecoveryTarget;
+    ctx.precreatedAttemptOperation = operation;
+    ctx.managedDecision = operation.managedDecision;
+    ctx.managedEntitlementOperationId = toStr(operation.managedEntitlementOperationId);
+    ctx.managedSubscriptionInstanceId = toStr(operation.managedSubscriptionInstanceId);
+    return prepareUserGet(
+      ctx,
+      "precreated_attempt_lookup",
+      `/end-user/api/v1/${ctx.tenantKey}/exercises?date=${encodeURIComponent(expectedRecoveryTarget.serviceDate)}&includePast=true&past=true&size=1000`,
+    );
+  }
   if (ctx.sameExerciseBooking) {
     if (operation
       && ctx.managedActivationRequired
@@ -2114,6 +2629,7 @@ if (ctx.step === "operation_find") {
       category: ctx.category,
       planKey: ctx.planKey || null,
       limitMode: ctx.limitMode,
+      managedEnvironment: ctx.managedEnforcement?.environment || null,
       managedDecision: ctx.managedDecision || null,
       activationState: ctx.managedActivationRequired ? "PENDING" : "NOT_REQUIRED",
       state: "PREPARED",
@@ -2124,6 +2640,15 @@ if (ctx.step === "operation_find") {
     };
     delete msg.error;
     return emit(OUTPUT_MONGO_INSERT);
+  }
+
+  if (operation.precreatedEntitlementReserved === true
+    || operation.state === "PRECREATE_RECONCILIATION_REQUIRED"
+    || toStr(operation.precreateReconciliationCode)
+      === "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED") {
+    return finishPending(ctx, "Созданная игра и резерв подписки требуют ручной сверки", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED",
+    });
   }
 
   if (toStr(operation.operationId) === ctx.operationId) {
@@ -2145,6 +2670,13 @@ if (ctx.step === "operation_find") {
       }
       return prepareExpiredPendingReconciliation(ctx, operation);
     }
+    if (operation.state === "PRECREATE_RESERVING") {
+      const precreateLeaseUntil = Date.parse(String(operation.precreateLeaseUntil || ""));
+      if (!Number.isFinite(precreateLeaseUntil) || precreateLeaseUntil > now.getTime()) {
+        return finishPending(ctx, "Предварительный резерв подписки ещё выполняется");
+      }
+      return prepareManagedEntitlementReserve(ctx);
+    }
     if (operation.state === "PREPARED") return preparePreaccept(ctx);
   }
 
@@ -2152,6 +2684,7 @@ if (ctx.step === "operation_find") {
   const pendingUntil = Date.parse(String(operation.pendingUntil || ""));
   if (
     (operation.state === "PENDING_CONFIRMATION" && (!Number.isFinite(pendingUntil) || pendingUntil > now.getTime()))
+    || ["PRECREATE_RESERVING", "PRECREATE_RESERVED", "PRECREATE_ATTEMPTING"].includes(operation.state)
     || (operation.state === "PREPARED" && Number.isFinite(leaseUntil) && leaseUntil > now.getTime())
   ) {
     return finishPending(ctx, "Другая операция уже резервирует дневное посещение");
@@ -2198,6 +2731,7 @@ if (ctx.step === "expired_pending_reconciliation") {
   ctx.managedEntitlementOperationId = toStr(operation.managedEntitlementOperationId);
   ctx.managedSubscriptionInstanceId = toStr(operation.managedSubscriptionInstanceId);
   if (ctx.managedEntitlementOperationId) {
+    ctx.managedEnvironment = toStr(operation.managedEnvironment) || "PROD";
     ctx.entitlementReleaseNext = "expired_pending_release";
     return prepareManagedEntitlementRelease(ctx, "PROVIDER_REJECTED");
   }
@@ -2212,10 +2746,49 @@ if (ctx.step === "operation_expired_pending_release") {
 }
 
 if (ctx.step === "operation_insert") {
-  if (msg.error || !mongoInserted(msg.payload)) {
+  if (msg.error || !mongoInserted(msg.payload, ctx.operationKey)) {
     return finishPending(ctx, "Другая операция одновременно заняла дневное посещение");
   }
   return preparePreaccept(ctx);
+}
+
+if (ctx.step === "precreated_attempt_lookup") {
+  const operation = ctx.precreatedAttemptOperation;
+  const recoveryTarget = ctx.precreateRecoveryTarget;
+  if (!operation || !recoveryTarget || !isHttpOk(msg.statusCode)
+    || !hasBookingListShape(msg.payload) || !hasCompleteBookingList(msg.payload)) {
+    return finishPending(ctx, "Список Viva для восстановления создания игры недоступен или неполон", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED",
+    });
+  }
+  const matches = extractItems(msg.payload).filter((exercise) => (
+    isObj(exercise) && exerciseMatchesPrecreateRecovery(exercise, recoveryTarget)
+  ));
+  if (matches.length !== 1) {
+    return finishPending(ctx, "Созданную игру нельзя однозначно восстановить по точной цели", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED",
+      recoveryMatchCount: matches.length,
+    });
+  }
+  const recoveredExerciseId = toStr(matches[0].id || matches[0].exerciseId || matches[0].uuid);
+  const storedExerciseId = normalizeId(operation.exerciseId);
+  if (!recoveredExerciseId || (storedExerciseId !== normalizeId(recoveryTarget.placeholderExerciseId)
+    && storedExerciseId !== normalizeId(recoveredExerciseId))) {
+    return finishPending(ctx, "Сохранённая операция расходится с найденной игрой Viva", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RECOVERY_TARGET_MISMATCH",
+    });
+  }
+  delete ctx.precreatedAttemptOperation;
+  return preparePrecreatedRecoveryBind(ctx, operation, recoveredExerciseId);
+}
+
+if (ctx.step === "operation_precreated_recover") {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Найденная игра Viva ожидает атомарной локальной привязки", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RECOVERY_BIND_PENDING",
+    });
+  }
+  return finishManagedCreatePreflight(ctx, "PREFLIGHT_CREATE_RECOVERED");
 }
 
 if (ctx.step === "operation_reclaim") {
@@ -2229,10 +2802,53 @@ if (ctx.step === "operation_preaccept") {
   if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
     return finishPending(ctx, "Не удалось подтвердить владельца атомарной операции");
   }
+  if (ctx.caller === "split_create_preflight") {
+    return prepareManagedRuntimeContext(ctx, "managed_runtime_recheck");
+  }
   return prepareUserGet(
     ctx,
     "exercise_recheck",
     `/end-user/api/v1/${ctx.tenantKey}/exercises/${encodeURIComponent(ctx.exerciseId)}`,
+  );
+}
+
+if (ctx.step === "operation_precreated_promote") {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Предварительный резерв изменился до записи Viva", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_PROMOTION_PENDING",
+    });
+  }
+  return prepareBookingCreate(ctx);
+}
+
+if (ctx.step === "operation_precreated_reconciliation") {
+  return finishPending(ctx, "Созданная игра требует сверки; резерв подписки сохранён", {
+    code: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED",
+    localBindingConfirmed: !msg.error && mongoMatched(msg.payload) === 1,
+  });
+}
+
+if (ctx.step === "operation_precreated_attempt") {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Не удалось зафиксировать попытку создания игры до Viva", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_ATTEMPT_BIND_PENDING",
+    });
+  }
+  return finishManagedCreatePreflight(ctx);
+}
+
+if (ctx.step === "operation_precreate_abort") {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Льгота освобождена, но локальный резерв требует сверки", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_ABORT_BIND_PENDING",
+    });
+  }
+  const failure = ctx.finalFailure || {};
+  return finishError(
+    ctx,
+    Number(failure.statusCode) || 409,
+    toStr(failure.message) || "Viva отклонила создание игры",
+    { code: toStr(failure.rawCode) || "VIVA_EXERCISE_CREATE_REJECTED" },
   );
 }
 
@@ -2435,6 +3051,9 @@ if (ctx.step === "managed_entitlement_release") {
       toStr(failure.message) || "Viva отклонила создание записи",
       toStr(failure.rawCode) || "VIVA_SUBSCRIPTION_BOOKING_REJECTED",
     );
+  }
+  if (next === "precreate_abort") {
+    return preparePrecreateAbortUpdate(ctx);
   }
   if (next === "pricing_not_configured") {
     return prepareFailedUpdate(

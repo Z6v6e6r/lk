@@ -60,6 +60,14 @@ const toTs = (value) => {
   return Number.isFinite(ts) ? ts : null;
 };
 
+const resolvePendingDeadlineTs = (row, reservationMinutes) => {
+  const explicitDeadlineTs = [toTs(row?.expiresAt), toTs(row?.paymentExpiresAt)]
+    .filter((timestamp) => timestamp != null);
+  if (explicitDeadlineTs.length > 0) return Math.max(...explicitDeadlineTs);
+  const createdAtTs = toTs(row?.createdAt);
+  return createdAtTs == null ? null : createdAtTs + reservationMinutes * 60 * 1000;
+};
+
 const toInt = (value, fallback) => {
   if (value === null || value === undefined) return fallback;
   const text = String(value).trim();
@@ -218,6 +226,7 @@ if (managedSaleBindingLabel) {
 
 const rows = Array.isArray(msg.payload) ? msg.payload : [];
 const now = Date.now();
+const reservationMinutes = Math.max(5, Math.min(360, toInt(ctx.reservationMinutes, 30)));
 let paidCount = toStr(ctx?.inventoryId) ? 0 : readManualPaidCount(ctx?.counterKey);
 let reservedCount = 0;
 let launchPaidCount = 0;
@@ -252,8 +261,8 @@ for (const row of rows) {
   }
   if (status !== "PAYMENT_PENDING") continue;
 
-  const expiresAtTs = toTs(row.expiresAt);
-  const activePending = expiresAtTs == null || expiresAtTs > now;
+  const pendingDeadlineTs = resolvePendingDeadlineTs(row, reservationMinutes);
+  const activePending = pendingDeadlineTs != null && pendingDeadlineTs > now;
   if (activePending) {
     if (stagedRelease) {
       stagedRows.push({ status, releasePhase, dailyDropDate: toStr(row.dailyDropDate), eventTs });

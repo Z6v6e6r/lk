@@ -64,6 +64,8 @@ const startPricingPolicyRequest = (ctx) => {
   msg.headers = { Accept: "application/json", "Cache-Control": "no-store" };
   msg.payload = undefined;
   msg.requestTimeout = 5000;
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
   return [msg, null, null, null];
 };
 
@@ -306,6 +308,7 @@ msg._splitCtx = {
   action: "create",
   step: "token",
   paymentRef,
+  operationId: toStr(msg.req?.query?.operationId) || paymentRef,
   date,
   fromTime,
   toTime,
@@ -381,5 +384,7 @@ msg.url = readEnv("VIVA_SERVICE_TOKEN_URL") || TOKEN_URL_DEFAULT;
 msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
 msg.payload = tokenRequestBody;
 msg.requestTimeout = TOKEN_REQUEST_TIMEOUT_MS;
+msg.followRedirects = false;
+msg.maxRedirects = 0;
 
 return [msg, null, null, null];

@@ -106,7 +106,7 @@ export function verifyLegacyGameCommandReleaseBundle(bundlePath) {
   }
   const manifestBody = fs.readFileSync(manifestPath);
   const manifest = parseCanonicalJson(manifestBody, "Legacy command release manifest");
-  exactKeys(manifest, ["schemaVersion", "migrationId", "repositoryCommit", "source", "files"], "Release manifest");
+  exactKeys(manifest, ["schemaVersion", "migrationId", "candidateBindingState", "repositoryCommit", "source", "files"], "Release manifest");
   if (manifest.schemaVersion !== 1 || manifest.migrationId !== PRODUCTION_MIGRATION_ID
     || !COMMIT_PATTERN.test(String(manifest.repositoryCommit || "")) || !Array.isArray(manifest.files)) {
     throw new Error("Release manifest identity mismatch");
@@ -275,6 +275,11 @@ export async function prepareLegacyGameCommandReleaseInstall({
   if (mode === "plan") return result;
 
   if (environment === "production") {
+    if (verified.manifest.candidateBindingState !== "BOUND") {
+      throw new Error("Production release candidate is not bound");
+    }
+    const bundleRunner = await loadVerifiedRunner(verified.bundle);
+    bundleRunner.assertProductionCandidateBound();
     if (currentUid !== 0 || root !== PRODUCTION_ROOT
       || process.env.LK_LEGACY_COMMAND_RELEASE_INSTALL !== INSTALL_CONFIRMATION) {
       throw new Error("Production install requires root, exact install root, and explicit confirmation");
@@ -309,6 +314,10 @@ export async function prepareLegacyGameCommandReleaseInstall({
       throw new Error("Release manifest changed while the bundle was copied");
     }
     const runner = await loadVerifiedRunner(staging);
+    if (runner.PRODUCTION_CANDIDATE_BINDING_STATE !== verified.manifest.candidateBindingState) {
+      throw new Error("Release candidate binding state changed while the bundle was copied");
+    }
+    if (environment === "production") runner.assertProductionCandidateBound();
     const source = recomputeInstalledSource(staging, runner);
     const portableSource = { ...source };
     const portableManifestSource = { ...verified.manifest.source };

@@ -8,8 +8,21 @@ import {
   compileDraftPolicy,
   createManagedSubscriptionDevRuntime,
   loadPolicyFromCup,
+  resolveAnnualShadowStationIds,
   resolveShadowIntent,
 } from "../managed_subscription_dev_runtime.ts";
+
+test("annual shadow fixture has deterministic local stations without host configuration", () => {
+  assert.deepEqual(
+    resolveAnnualShadowStationIds([], true),
+    ["dev-station-home", "dev-station-a", "dev-station-b"],
+  );
+  assert.deepEqual(resolveAnnualShadowStationIds(["custom-station"], true), ["custom-station"]);
+  assert.deepEqual(resolveAnnualShadowStationIds([], false), []);
+
+  const policy = buildAnnualShadowPolicySource(resolveAnnualShadowStationIds([], true));
+  assert.ok(policy.policy.benefitRules.every((rule) => rule.stationIds.length > 0));
+});
 
 const draftPolicy = () => ({
   subscriptionTypeId: "subscription_type:dev-friendship",
@@ -114,6 +127,7 @@ const annualDraftPolicy = () => ({
     actions: ["CREATE_GAME", "JOIN_GAME"],
     limitExceeded: "PERCENT_DISCOUNT",
     percentage: 30,
+    usageDurationsMinutes: [60],
     discountDurationsMinutes: [90, 120],
   },
   stationAccessRules: [{
@@ -220,6 +234,7 @@ test("Piter annual shadow policy fixes the 14-day booking window and four active
     actions: ["CREATE_GAME", "JOIN_GAME"],
     limitExceeded: "PERCENT_DISCOUNT",
     percentage: 30,
+    usageDurationsMinutes: [60],
     discountDurationsMinutes: [90, 120],
   });
 });
@@ -259,6 +274,22 @@ test("DEV compiler rejects a malformed post-limit discount duration filter", () 
     { subscriptionTypeId: "subscription_type:dev-friendship", code: "annual-dev-ac6396e" },
     malformed,
   ), /некорректный фильтр длительностей/);
+
+  const malformedUsage = annualDraftPolicy() as Record<string, unknown>;
+  (malformedUsage.dailyUsagePolicy as Record<string, unknown>).usageDurationsMinutes = "60";
+  assert.throws(() => compileDraftPolicy(
+    { subscriptionTypeId: "subscription_type:dev-friendship", code: "annual-dev-ac6396e" },
+    malformedUsage,
+  ), /некорректный фильтр длительностей/);
+
+  for (const invalidUsageDurations of [[75], [60, 75], [60, 60]]) {
+    const invalidUsage = annualDraftPolicy() as Record<string, unknown>;
+    (invalidUsage.dailyUsagePolicy as Record<string, unknown>).usageDurationsMinutes = invalidUsageDurations;
+    assert.throws(() => compileDraftPolicy(
+      { subscriptionTypeId: "subscription_type:dev-friendship", code: "annual-dev-ac6396e" },
+      invalidUsage,
+    ), /некорректный фильтр длительностей/);
+  }
 });
 
 test("CUP loader pins an explicitly requested DRAFT version instead of the latest draft", async () => {
@@ -310,6 +341,20 @@ test("90-minute create calculates one quarter, 20 percent discount and surcharge
   assert.equal(result.decision.benefit?.discountMinor, 180_000);
   assert.equal(result.decision.benefit?.surchargeMinor, 15_000);
   assert.equal(result.decision.benefit?.finalPriceMinor, 60_000);
+});
+
+test("legacy policy without a duration filter still meters a discounted reservation", async () => {
+  const runtime = createRuntime();
+  await runtime.initialize();
+  await runtime.seed(0);
+
+  const first = await runtime.reserve("create-station-a-90-aug18", "reserve:legacy-discount");
+  const repeated = await runtime.quote("create-station-a-90-aug18");
+
+  assert.equal(first.reservation?.dailyUsageUnits, 1);
+  assert.ok(repeated.decision.blockers.some(
+    (blocker) => blocker.code === "DAILY_USAGE_LIMIT_REACHED",
+  ));
 });
 
 test("120-minute home create stays eligible without a pricing benefit", async () => {
@@ -372,6 +417,68 @@ test("Piter annual DEV runtime covers one free hour and full-price 30 percent di
   assert.equal(excessCreate.decision.benefit?.finalPriceMinor, 157_500);
   assert.equal(excessJoin.decision.benefit?.kind, "PERCENT_DISCOUNT");
   assert.equal(excessJoin.decision.benefit?.finalPriceMinor, 210_000);
+});
+
+test("Piter annual paid 90/120 minute discounts do not consume the free 60 minute allowance", async () => {
+  for (const [paidTargetId, paidFinalPriceMinor] of [
+    ["create-station-a-90-aug18", 157_500],
+    ["join-station-b-120-aug18", 210_000],
+  ] as const) {
+    const runtime = createAnnualRuntime();
+    await runtime.initialize();
+    await runtime.seed(0);
+
+    const paid = await runtime.reserve(paidTargetId, `reserve:paid-before-free:${paidFinalPriceMinor}`);
+    const free = await runtime.reserve("join-station-b-60-aug18", `reserve:free-after-paid:${paidFinalPriceMinor}`);
+
+    assert.equal(paid.decision.benefit?.finalPriceMinor, paidFinalPriceMinor);
+    assert.equal(paid.reservation?.dailyUsageUnits, 0);
+    assert.equal(free.decision.benefit?.kind, "FREE_ENTITLEMENT");
+    assert.equal(free.decision.benefit?.finalPriceMinor, 0);
+    assert.equal(free.reservation?.dailyUsageUnits, 1);
+  }
+});
+
+test("Piter annual free 60 minute allowance remains exhausted across a paid discount", async () => {
+  const runtime = createAnnualRuntime();
+  await runtime.initialize();
+  await runtime.seed(0);
+
+  const free = await runtime.reserve("create-station-a-60-aug18", "reserve:free-before-paid");
+  const paid = await runtime.reserve("create-station-a-90-aug18", "reserve:paid-after-free");
+  await runtime.release(paid.reservation?.reservationId, "release:paid-after-free");
+  const repeatedFree = await runtime.quote("join-station-b-60-aug18");
+
+  assert.equal(free.reservation?.dailyUsageUnits, 1);
+  assert.equal(paid.decision.benefit?.finalPriceMinor, 157_500);
+  assert.equal(paid.reservation?.dailyUsageUnits, 0);
+  assert.ok(repeatedFree.decision.blockers.some(
+    (blocker) => blocker.code === "DAILY_USAGE_LIMIT_REACHED",
+  ));
+});
+
+test("parallel paid discount and free hour consume only one daily allowance unit", async () => {
+  const runtime = createAnnualRuntime();
+  await runtime.initialize();
+  await runtime.seed(0);
+
+  const [paid, free] = await Promise.all([
+    runtime.reserve("create-station-a-90-aug18", "reserve:parallel-paid"),
+    runtime.reserve("join-station-b-60-aug18", "reserve:parallel-free"),
+  ]);
+  const paidReplay = await runtime.reserve(
+    "create-station-a-90-aug18",
+    "reserve:parallel-paid",
+  );
+  const repeatedFree = await runtime.quote("create-station-a-60-aug18");
+
+  assert.equal(paid.reservation?.dailyUsageUnits, 0);
+  assert.equal(free.reservation?.dailyUsageUnits, 1);
+  assert.equal(paidReplay.replayed, true);
+  assert.equal(paidReplay.reservation?.reservationId, paid.reservation?.reservationId);
+  assert.ok(repeatedFree.decision.blockers.some(
+    (blocker) => blocker.code === "DAILY_USAGE_LIMIT_REACHED",
+  ));
 });
 
 test("annual mapped group receives 50 percent while an unmapped tournament fails closed", async () => {

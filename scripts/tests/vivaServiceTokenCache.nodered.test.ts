@@ -135,6 +135,9 @@ test("split join refresh path uses env and missing env fails without a Viva requ
   );
   assert.equal(refreshOutput[0]?.method, "POST");
   assert.equal(refreshOutput[0]?._splitCtx?.tokenSource, "refresh");
+  assert.equal(refreshOutput[0]?.followRedirects, false);
+  assert.equal(refreshOutput[0]?.maxRedirects, 0);
+  assert.equal(refreshOutput[0]?.requestTimeout, 10000);
   assert.equal(refreshOutput[2], null);
   assert.equal(refreshOutput[3], null);
 
@@ -203,6 +206,9 @@ test("split cleanup uses the shared cache and blocks mutation when auth is uncon
   const payload = {
     mode: "GAME_CLEANUP",
     gameId: "game-1",
+    tenantKey: "iSkq6G",
+    revision: 1,
+    expectedRevision: 1,
     bookingIds: ["booking-1"],
     bookingTargets: [{ bookingId: "booking-1", clientId: "client-1" }],
     reason: "PAYMENT_TIMEOUT",

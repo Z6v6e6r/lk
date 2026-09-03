@@ -13,15 +13,19 @@ test("split create and join entrypoints share the subscription lifecycle filter"
     gamesSource,
     /preferredPaymentMode === "subscription" && !canUseSplitSubscription\s*\?\s*"one_time"/,
   );
-  assert.match(gamesSource, /Выбранный абонемент больше недоступен\. Обновите список и попробуйте снова\./);
-  assert.match(standaloneJoinSource, /eligibleSubscriptionCandidates\s*=\s*filterSplitEligibleSubscriptions\s*\(/);
+  assert.match(gamesSource, /Не удалось определить доступный абонемент\. Обновите список и попробуйте снова\./);
+  assert.match(standaloneJoinSource, /const eligible\s*=\s*filterSplitEligibleSubscriptions\s*\(/);
 });
 
 test("all split join entrypoints require an explicit client subscription selection", () => {
   for (const source of [gamesSource, standaloneJoinSource]) {
-    assert.match(source, /findExplicitSplitSubscriptionById\s*\(/);
+    assert.match(
+      source,
+      /const requestedClientSubscriptionId = String\([^)]*ClientSubscriptionId \|\| ""\)\.trim\(\);/,
+    );
     assert.match(source, /Выберите абонемент для списания/);
     assert.match(source, /option\.subscriptionId/);
+    assert.match(source, /clientSubscriptionId: resolvedClientSubscriptionId/);
     assert.doesNotMatch(source, /eligibleSubscriptionCandidates\[0\]/);
   }
 

@@ -19851,6 +19851,21 @@ h6,
   max-width: 620px;
 }
 
+.tournament-subscription-section-title {
+  grid-column: 1 / -1;
+  margin: 12px 0 -2px;
+  color: #f4f6f8;
+  font-family: "RF Dewi UltraBold", "Source Code Pro", sans-serif;
+  font-size: clamp(24px, 3.4vw, 36px);
+  font-style: italic;
+  letter-spacing: 0.02em;
+  text-align: left;
+}
+
+.tournament-subscription-section-title:first-child {
+  margin-top: 0;
+}
+
 .tournament-subscription-global-message {
   grid-column: 1 / -1;
   margin: 0;
@@ -20707,6 +20722,25 @@ h6,
   width: 100%;
   aspect-ratio: 4 / 5;
   perspective: 1600px;
+}
+
+.piter-subscription-flip-trigger {
+  appearance: none;
+  display: block;
+  box-sizing: border-box;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.piter-subscription-flip-trigger:focus-visible {
+  outline: 3px solid #b5ff5b;
+  outline-offset: 4px;
+  border-radius: 20px;
 }
 
 .piter-subscription-flip-inner {

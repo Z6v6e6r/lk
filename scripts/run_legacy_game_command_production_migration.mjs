@@ -42,6 +42,7 @@ const ROOT_PACKAGE_PATH = path.join(REPO_ROOT, "package.json");
 const DEPENDENCY_LOCK_PATH = path.join(REPO_ROOT, "package-lock.json");
 const APPROVAL_VERIFIER_PATH = path.join(SCRIPT_DIR, "lib/legacy_game_command_production_approval.mjs");
 const TRUST_ANCHOR_MANIFEST_PATH = path.join(SCRIPT_DIR, "legacy_game_command_production_trust_anchor.json");
+const CANDIDATE_BINDING_PATH = path.join(SCRIPT_DIR, "lk1_subscription_enforcement_candidate_binding.json");
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -63,6 +64,44 @@ export const PRODUCTION_PACKET_SCHEMA_VERSION = 1;
 export const PRODUCTION_APPLY_CONFIRMATION = "APPLY_LEGACY_GAME_COMMAND_PREREQUISITES_PRODUCTION_V1";
 export const EXPECTED_LIVE_FLOW_SHA256 = "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263";
 export const EXPECTED_CANDIDATE_FLOW_SHA256 = "76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294";
+export const PREVIOUS_CANDIDATE_FLOW_SHA256 = "76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294";
+export function validateProductionCandidateBinding(binding) {
+  assertExactObjectKeys(binding, [
+    "environment", "candidateBindingState", "candidateSha256", "previousCandidateSha256",
+  ], "Production candidate binding");
+  if (binding.environment !== "PROD") {
+    throw new Error("Production candidate binding rejects a non-PROD environment");
+  }
+  if (binding.previousCandidateSha256 !== PREVIOUS_CANDIDATE_FLOW_SHA256) {
+    throw new Error("Production candidate binding changed the pinned previous candidate digest");
+  }
+  if (binding.candidateBindingState === "UNBOUND_AFTER_ROUTER_AMENDMENT") {
+    if (binding.candidateSha256 !== null) {
+      throw new Error("Unbound production candidate must not claim a candidate digest");
+    }
+  } else if (binding.candidateBindingState === "BOUND") {
+    if (!HASH_PATTERN.test(String(binding.candidateSha256 || ""))
+      || binding.candidateSha256 === PREVIOUS_CANDIDATE_FLOW_SHA256) {
+      throw new Error("Bound production candidate must use a new reviewed candidate digest");
+    }
+  } else {
+    throw new Error("Production candidate binding state is not approved");
+  }
+  return binding;
+}
+
+const PRODUCTION_CANDIDATE_BINDING = Object.freeze(validateProductionCandidateBinding(
+  JSON.parse(fs.readFileSync(CANDIDATE_BINDING_PATH, "utf8")),
+));
+export const PRODUCTION_CANDIDATE_BINDING_STATE = PRODUCTION_CANDIDATE_BINDING.candidateBindingState;
+export function assertProductionCandidateBound() {
+  if (PRODUCTION_CANDIDATE_BINDING_STATE !== "BOUND"
+    || PRODUCTION_CANDIDATE_BINDING.candidateSha256 !== EXPECTED_CANDIDATE_FLOW_SHA256
+    || PRODUCTION_CANDIDATE_BINDING.candidateSha256 === PREVIOUS_CANDIDATE_FLOW_SHA256) {
+    throw new Error("Production candidate is unbound after the subscription router amendment");
+  }
+  return true;
+}
 // Frozen from a new `npm ci --ignore-scripts --omit=dev` install of package-lock.json.
 export const EXPECTED_MONGODB_RUNTIME_CLOSURE_SHA256 = "0ca817b6104013a415c8766fa43ec5d5baaf8859ddffeba182d5a69dc609fcc7";
 export const MIN_QUIESCENCE_OBSERVATION_MS = 120_000;
@@ -276,6 +315,7 @@ function productionSourceCustodyPaths() {
     ...mongodbRuntimeFiles(),
     APPROVAL_VERIFIER_PATH,
     TRUST_ANCHOR_MANIFEST_PATH,
+    CANDIDATE_BINDING_PATH,
     ...packageFiles,
   ];
 }
@@ -758,7 +798,7 @@ export function validateProductionRuntimeIdentity(packet, actualRuntime = PRODUC
   return true;
 }
 
-export function validateProductionExecutionPacket(packet, context, {
+function validateExecutionPacketAgainstExpectedSource(packet, context, {
   packetSha256,
   actualPacketSha256,
   releaseSha,
@@ -806,6 +846,21 @@ export function validateProductionExecutionPacket(packet, context, {
   const temporal = validateProductionExecutionPacketTemporal(packet, { now });
   validateProductionEvidenceDigests(packet, evidenceSha256);
   return temporal;
+}
+
+export function validateRehearsalExecutionPacket(packet, context, options = {}) {
+  return validateExecutionPacketAgainstExpectedSource(packet, context, {
+    ...options,
+    environment: "rehearsal",
+  });
+}
+
+export function validateProductionExecutionPacket(packet, context, options = {}) {
+  assertProductionCandidateBound();
+  return validateExecutionPacketAgainstExpectedSource(packet, context, {
+    ...options,
+    environment: "production",
+  });
 }
 
 function optionsEvidence(options) {
@@ -1099,6 +1154,7 @@ async function main(argv) {
   let applyInputs = null;
   let releaseInputs = null;
   if (args.mode === "apply") {
+    assertProductionCandidateBound();
     if (!args["execution-packet"] || !args["expected-packet-sha256"]) {
       throw new Error("Apply requires --execution-packet and --expected-packet-sha256");
     }

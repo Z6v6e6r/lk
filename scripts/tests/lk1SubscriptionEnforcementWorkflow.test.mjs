@@ -186,6 +186,38 @@ test("binary asset exceptions are exact and content-addressed", async () => {
       "src/assets/piter-subscription-tier-1.webp",
       "21868451f8dd722a99db1a555065e00bae401e2592c19a2e38e21fadcd2d590d",
     ],
+    [
+      "src/assets/network-subscription.webp",
+      "83a8f2ccf39908a6cbe7b5692598fdd1624a9d0a03784cb8a6815fd69b276ef6",
+    ],
+    [
+      "src/assets/subscription-rules-gold.webp",
+      "cfa623d31076199d30b2b62149744d9845fb975f3686b681641a461eac8f2358",
+    ],
+    [
+      "src/assets/subscription-rules-green.webp",
+      "ab879147110a73dab69a196de9370fff912d009941e59a8a52ce4e89e78e617c",
+    ],
+    [
+      "src/assets/subscription-rules-red.webp",
+      "f3a9a3077865eac4cc3fb6a7be1c4f64a174795f9fefa1dfa8341ada5f2e313c",
+    ],
+    [
+      "src/assets/summer-subscription-academy.webp",
+      "1b7bdb5cf0c1f03847efac7ddf7cb9b7142187293a0d5a82190c61a79841847a",
+    ],
+    [
+      "src/assets/summer-subscription-energy5.webp",
+      "773ab011fb41d7d27ca389adfd741cefb9d8a34ac8afbf60beb307d7b514d9ba",
+    ],
+    [
+      "src/assets/summer-subscription-friendship.webp",
+      "1ec1f7fc81cd867b9ce7127ff3b03e7ee33250224bceea7bebde89dc5703ec29",
+    ],
+    [
+      "src/assets/summer-subscription-ra.webp",
+      "5f89f2f44ea1cd1d2fd1e36b8fb39a2cb6dbd9d525380b0f4d588a2139142329",
+    ],
   ];
 
   assert.deepEqual(allowlistEntries, expectedEntries);
@@ -209,11 +241,14 @@ test("binary asset exceptions are exact and content-addressed", async () => {
 test("binary scan accepts only the pinned assets and rejects path or content drift", async (t) => {
   const rulesAsset = new URL("../../src/assets/piter-subscription-rules-from-20260901.webp", import.meta.url);
   const tierAsset = new URL("../../src/assets/piter-subscription-tier-1.webp", import.meta.url);
+  const allowedAssetPaths = [...binaryScan().matchAll(
+    /^\s+(src\/assets\/[^)]+\.webp\))\n\s+expected_hash="([0-9a-f]{64})"/gm,
+  )].map((match) => match[1].slice(0, -1));
 
-  const allowed = await runBinaryScan(t, [
-    ["src/assets/piter-subscription-rules-from-20260901.webp", rulesAsset],
-    ["src/assets/piter-subscription-tier-1.webp", tierAsset],
-  ]);
+  const allowed = await runBinaryScan(
+    t,
+    allowedAssetPaths.map((assetPath) => [assetPath, new URL(`../../${assetPath}`, import.meta.url)]),
+  );
   assert.equal(allowed.status, 0, allowed.stderr);
 
   const unexpected = await runBinaryScan(t, [["src/assets/unexpected.webp", rulesAsset]]);
@@ -304,6 +339,7 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     "Validate LK1 workflow event and identity contract",
     "Run critical subscription regression matrix",
     "Run unified candidate and drift-negative tests",
+    "Validate LK1 DEV provisioning, bootstrap, runtime source, and read-only UAT",
     "Run tracked credential and authenticated-route security tests",
     "Validate deterministic Node-RED modular toolchain fixtures",
     "Validate combined legacy game command prerequisites",
@@ -329,6 +365,23 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     step("Run unified candidate and drift-negative tests").run,
     /scripts\/tests\/lk1SubscriptionActivationPacket\.test\.mjs/,
   );
+  assert.match(
+    step("Run unified candidate and drift-negative tests").run,
+    /scripts\/tests\/lk1SubscriptionDevCandidate\.test\.mjs/,
+  );
+  assert.match(
+    step("Run unified candidate and drift-negative tests").run,
+    /scripts\/tests\/subscriptionBookingLegacyPatcher\.test\.mjs/,
+  );
+  const devBoundaryStep = step("Validate LK1 DEV provisioning, bootstrap, runtime source, and read-only UAT");
+  for (const suite of [
+    "scripts/tests/lk1SubscriptionDevProvisioning.test.mjs",
+    "scripts/tests/lk1SubscriptionDevBootstrap.test.mjs",
+    "scripts/tests/lk1SubscriptionDevRuntimeSource.test.mjs",
+    "scripts/dev-uat/subscriptions-sale-period/test.mjs",
+  ]) {
+    assert.match(devBoundaryStep.run, new RegExp(suite.replaceAll("/", "\\/").replaceAll(".", "\\.")));
+  }
   assert.match(
     step("Validate referral attribution compatibility").run,
     /scripts\/tests\/referralAttributionReleaseCandidate\.test\.mjs/,
