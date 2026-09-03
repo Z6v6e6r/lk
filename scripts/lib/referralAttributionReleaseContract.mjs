@@ -12,7 +12,7 @@ export const REFERRAL_ATTRIBUTION_TARGETS = Object.freeze([
     tabLabel: 'LK Tournaments',
     name: 'Prepare tournament subscription purchase',
     sourceFile: 'fn_tournament_subscription_purchase_prepare.js',
-    candidateSha256: '6059fd74de59cc488098a9e8d97158497ef9890a8850fb5adac89bd34bec2b44',
+    candidateSha256: '2f15053bdf2c8abd770b7bc65cd59d6fdcfc2c08f26c2ee78a95bc309dfe5ca3',
     purposes: ['attribution']
   },
   {
@@ -21,7 +21,7 @@ export const REFERRAL_ATTRIBUTION_TARGETS = Object.freeze([
     tabLabel: 'LK Tournaments',
     name: 'Check tournament subscription limit',
     sourceFile: 'fn_tournament_subscription_purchase_limit.js',
-    candidateSha256: '8a6d10a04b4e12a751db6e75ad4d4e1c90df15318ed71df405cacb5d737c77c2',
+    candidateSha256: '75d070b427ca9097cd258a84daca7b2c3998f545415b69ef4968ccdce2aaeef8',
     purposes: ['credential']
   },
   {
