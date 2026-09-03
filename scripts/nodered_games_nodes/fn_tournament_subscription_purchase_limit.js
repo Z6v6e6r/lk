@@ -5,6 +5,10 @@ const REGIONAL_FRIENDSHIP_BINDING_LABELS = {
   network_friendship: "ХАБ",
   piter_friendship: "Питер",
 };
+const MANAGED_SALE_BLOCKED_COUNTER_KEYS = new Set([
+  "kotelniki_friendship",
+  "network_friendship",
+]);
 const MANUAL_PAID_COUNT_DEFAULTS = {
   academy: 4,
   ra: 37,
@@ -216,8 +220,9 @@ if (!ctx || ctx.action !== "purchase") {
   return failMsg(500, "Summer subscription purchase context is missing");
 }
 
-const managedSaleBindingLabel = REGIONAL_FRIENDSHIP_BINDING_LABELS[normalizeCounterKey(ctx.counterKey)];
-if (managedSaleBindingLabel) {
+const managedSaleCounterKey = normalizeCounterKey(ctx.counterKey);
+const managedSaleBindingLabel = REGIONAL_FRIENDSHIP_BINDING_LABELS[managedSaleCounterKey];
+if (MANAGED_SALE_BLOCKED_COUNTER_KEYS.has(managedSaleCounterKey)) {
   return failMsg(503, "Продажа годовой подписки ожидает authoritative-привязку оплаты к экземпляру", {
     code: "MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE",
     counterKey: normalizeCounterKey(ctx.counterKey),
@@ -390,20 +395,22 @@ ctx.launchReservedCount = launchReservedCount;
 ctx.launchCompletedAt = launchCompletedAt;
 ctx.dailyDropStartsAt = dailyDropStartsAt;
 ctx.remainingBefore = remainingCount;
-ctx.step = "token_purchase";
 ctx.httpRequestTimeoutMs = resolveHttpTimeoutMs();
 msg._summerSubscriptionCtx = ctx;
 
-msg.method = "POST";
-msg.url = TOKEN_URL;
-msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
-msg.httpRequestTimeout = ctx.httpRequestTimeoutMs;
-msg.payload = buildVivaServiceTokenRequestBody();
-if (!msg.payload) {
+const vivaTokenRequestBody = buildVivaServiceTokenRequestBody();
+if (!vivaTokenRequestBody) {
   return failMsg(503, "Сервисная авторизация Viva не настроена", {
     code: "VIVA_SERVICE_AUTH_NOT_CONFIGURED",
   });
 }
+
+ctx.step = "token_purchase";
+msg.method = "POST";
+msg.url = TOKEN_URL;
+msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
+msg.httpRequestTimeout = ctx.httpRequestTimeoutMs;
+msg.payload = vivaTokenRequestBody;
 
 const debugMsg = Object.assign({}, msg, {
   payload: {

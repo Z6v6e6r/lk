@@ -406,6 +406,15 @@ const isFailedTransaction = (payload) => {
   );
 };
 
+// Piter capacity can only become paid on an explicit provider terminal status.
+// A zero outstanding balance is not proof that a transaction was paid.
+const isExplicitlyPaidPiterTransaction = (payload) => [
+  "PAID", "SUCCESS", "SUCCEEDED", "COMPLETE", "COMPLETED", "APPROVED",
+].includes(normalizeTransactionStatus(payload?.status || payload?.state || payload?.paymentStatus));
+const isExplicitlyFailedPiterTransaction = (payload) => [
+  "FAILED", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED",
+].includes(normalizeTransactionStatus(payload?.status || payload?.state || payload?.paymentStatus));
+
 const ctx = msg._summerSubscriptionCtx && typeof msg._summerSubscriptionCtx === "object"
   ? msg._summerSubscriptionCtx
   : null;
@@ -533,12 +542,36 @@ if (ctx.step === "load_products") {
 
   ctx.step = "create_transaction";
   ctx.transactionPayload = transactionPayload;
-
-  return adminRequest(ctx, "POST", "/transactions", transactionPayload);
+  const request = adminRequest(ctx, "POST", "/transactions", transactionPayload);
+  if (ctx.counterKey === "piter_friendship") {
+    ctx.step = "piter_reserve_start";
+    ctx.providerMethod = request[0].method;
+    ctx.providerUrl = request[0].url;
+    ctx.providerHeaders = request[0].headers;
+    ctx.providerPayload = request[0].payload;
+    return [null, null, null, null, request[0]];
+  }
+  return request;
 }
 
 if (ctx.step === "create_transaction") {
   if (!isOk(msg.statusCode)) {
+    if (ctx.counterKey === "piter_friendship") {
+      ctx.step = "piter_provider_result";
+      ctx.providerResult = {
+        ok: false,
+        transactionId: null,
+        paymentUrl: null,
+        response: {
+          ok: false,
+          status: "PROVIDER_UNKNOWN",
+          paymentRef: ctx.paymentRef,
+          message: "Результат запроса Viva неоднозначен; автоматический повтор запрещён.",
+        },
+      };
+      msg._summerSubscriptionCtx = ctx;
+      return [null, null, null, null, msg];
+    }
     const errorMessage = String(
       msg.payload?.message
       || msg.payload?.error
@@ -571,10 +604,31 @@ if (ctx.step === "create_transaction") {
   const transactionId = pickId(msg.payload);
   const paymentUrl = extractPaymentUrl(msg.payload);
   const toPayMinor = Math.max(0, Math.round(toNum(msg.payload?.toPay) ?? 0));
+  if (ctx.counterKey === "piter_friendship" && !transactionId) {
+    ctx.step = "piter_provider_result";
+    ctx.providerResult = {
+      ok: false,
+      response: { ok: false, status: "PROVIDER_UNKNOWN", paymentRef: ctx.paymentRef,
+        message: "Viva не вернула подтверждённый идентификатор транзакции." },
+    };
+    return [null, null, null, null, msg];
+  }
   if (
     ctx.saleType === "tiered_direct_product"
     && toPayMinor !== Math.max(0, Math.round(Number(ctx.priceMinor) || 0))
   ) {
+    if (ctx.counterKey === "piter_friendship") {
+      ctx.step = "piter_provider_result";
+      ctx.providerResult = {
+        ok: false,
+        transactionId,
+        paymentUrl,
+        response: { ok: false, status: "PROVIDER_UNKNOWN", paymentRef: ctx.paymentRef,
+          message: "Viva вернула сумму, не совпадающую с атомарно зафиксированной ценой." },
+      };
+      msg._summerSubscriptionCtx = ctx;
+      return [null, null, null, null, msg];
+    }
     return fail(502, "Viva вернула неверную сумму к оплате", {
       counterKey: toStr(ctx.counterKey),
       batchIndex: Math.max(0, Math.floor(Number(ctx.batchIndex) || 0)),
@@ -585,6 +639,18 @@ if (ctx.step === "create_transaction") {
     });
   }
   if (!paymentUrl && toPayMinor > 0) {
+    if (ctx.counterKey === "piter_friendship") {
+      ctx.step = "piter_provider_result";
+      ctx.providerResult = {
+        ok: false,
+        transactionId,
+        paymentUrl: null,
+        response: { ok: false, status: "PROVIDER_UNKNOWN", paymentRef: ctx.paymentRef,
+          message: "Viva создала транзакцию без подтверждённой ссылки оплаты." },
+      };
+      msg._summerSubscriptionCtx = ctx;
+      return [null, null, null, null, msg];
+    }
     return fail(502, "Viva transaction has no paymentUrl", {
       transactionId,
       response: msg.payload || null,
@@ -695,6 +761,20 @@ if (ctx.step === "create_transaction") {
     },
   });
 
+  if (ctx.counterKey === "piter_friendship") {
+    ctx.step = "piter_provider_result";
+    ctx.providerResult = {
+      ok: true,
+      transactionId,
+      paymentUrl,
+      expiresAt,
+      toPayMinor,
+      response: responseMsg.payload,
+    };
+    msg._summerSubscriptionCtx = ctx;
+    return [null, null, null, null, msg];
+  }
+
   return [null, dbMsg, responseMsg, debugMsg];
 }
 
@@ -732,9 +812,26 @@ if (ctx.step === "confirm_lookup") {
   }
 
   const nowIso = new Date().toISOString();
-  const paid = isPaidTransaction(msg.payload);
-  const failed = !paid && isFailedTransaction(msg.payload);
+  const isPiter = ctx.counterKey === "piter_friendship";
+  const paid = isPiter ? isExplicitlyPaidPiterTransaction(msg.payload) : isPaidTransaction(msg.payload);
+  const failed = !paid && (isPiter
+    ? isExplicitlyFailedPiterTransaction(msg.payload)
+    : isFailedTransaction(msg.payload));
   const nextStatus = paid ? "PAID" : failed ? "FAILED" : "PAYMENT_PENDING";
+  if (isPiter) {
+    const providerToPay = toNum(msg.payload?.toPay);
+    const expectedAmount = ctx.expectedAmountMinor;
+    const validAmount = Number.isInteger(expectedAmount) && expectedAmount > 0
+      && Number.isInteger(providerToPay) && providerToPay >= 0
+      && (paid ? providerToPay === 0
+        : failed ? (providerToPay === 0 || providerToPay === expectedAmount)
+          : providerToPay === expectedAmount);
+    if (!toStr(ctx.transactionId) || pickId(msg.payload) !== ctx.transactionId || !validAmount) {
+      return fail(503, "Подтверждение Viva требует сверки; состояние покупки не изменено", {
+        code: "PITER_CONFIRM_PROVIDER_MISMATCH", paymentRef: ctx.paymentRef,
+      });
+    }
+  }
   const expiresAt = pickPaymentDeadline(ctx, msg.payload);
   const dbQuery = buildRecordQuery(ctx);
 
@@ -784,6 +881,23 @@ if (ctx.step === "confirm_lookup") {
       status: nextStatus,
     },
   });
+
+  if (ctx.counterKey === "piter_friendship") {
+    ctx.step = "piter_confirm_result";
+    ctx.confirmResult = {
+      nextStatus,
+      transactionId: pickId(msg.payload),
+      paid,
+      failed,
+      expiresAt,
+      paymentUrl: extractPaymentUrl(msg.payload),
+      toPayMinor: Math.max(0, Math.round((toNum(msg.payload?.toPay) ?? Number(ctx.toPayMinor)) || 0)),
+      response: responseMsg?.payload || null,
+      reconcile: ctx.reconcile === true,
+    };
+    msg._summerSubscriptionCtx = ctx;
+    return [null, null, null, null, msg];
+  }
 
   return [null, dbMsg, responseMsg, debugMsg];
 }
