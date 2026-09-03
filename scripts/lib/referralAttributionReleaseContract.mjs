@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { assertPiterAtomicTopology } from './piterAtomicTopologyContract.mjs';
 
 export const REFERRAL_ATTRIBUTION_AUDIT_SCHEMA = 'lk-referral-attribution-preimage-audit-v1';
 export const REFERRAL_ATTRIBUTION_APPROVAL_GATE = 'REFERRAL_ATTRIBUTION_PREIMAGES_REVIEWED';
@@ -152,6 +153,7 @@ function activeExecutionContainers(flow, tabs) {
 }
 
 export function inspectReferralAttributionSource(flow, functionDirectory) {
+  assertPiterAtomicTopology(flow);
   const tabs = new Map(flow.filter((node) => node?.type === 'tab').map((node) => [node.id, node]));
   const subflows = new Map(flow.filter((node) => node?.type === 'subflow').map((node) => [node.id, node]));
   const activeContainerIds = activeExecutionContainers(flow, tabs);

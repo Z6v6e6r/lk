@@ -6,6 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import {
+  assertPiterAtomicTopology,
+  PITER_ATOMIC_TOPOLOGY_IDS,
+} from "../lib/piterAtomicTopologyContract.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const BUILDER = path.join(REPO_ROOT, "scripts/prepare_tournament_subscription_sales_candidate.mjs");
@@ -31,7 +35,27 @@ const roots = [];
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
-function createWorkspace({ approvedNodeDrift = false, duplicateLegacy = false, staleRouter = false, unknownDuplicate = false } = {}) {
+function atomicTopologyNodes() {
+  const ids = PITER_ATOMIC_TOPOLOGY_IDS;
+  return [
+    { id: ids.atomicRouter, type: "function", z: ids.tab, name: "Route atomic Piter subscription sale", func: "return msg;", outputs: 5, wires: [[ids.ledgerFind], [ids.ledgerUpdate], [ids.saleUpdate], [ids.response], [ids.viva]] },
+    { id: ids.ledgerFind, type: "mongodb4", z: ids.tab, name: "Find Piter atomic inventory ledger", collection: "lk_tournament_subscription_sales", operation: "find", wires: [[ids.atomicRouter]] },
+    { id: ids.ledgerUpdate, type: "mongodb4", z: ids.tab, name: "CAS Piter atomic inventory ledger", collection: "lk_tournament_subscription_sales", operation: "updateOne", wires: [[ids.atomicRouter]] },
+    { id: ids.saleUpdate, type: "mongodb4", z: ids.tab, name: "Persist Piter atomic sale", collection: "lk_tournament_subscription_sales", operation: "updateOne", wires: [[ids.atomicRouter]] },
+    { id: ids.mongoCatch, type: "catch", z: ids.tab, name: "Catch Piter atomic Mongo errors", scope: [ids.ledgerFind, ids.ledgerUpdate, ids.saleUpdate], uncaught: false, wires: [[ids.mongoError]] },
+    { id: ids.mongoError, type: "function", z: ids.tab, name: "Redact Piter atomic Mongo error", func: "return msg;", outputs: 2, wires: [[ids.response], [ids.debug]] },
+  ];
+}
+
+function validAtomicTopologyFlow() {
+  const ids = PITER_ATOMIC_TOPOLOGY_IDS;
+  return [
+    { id: ids.purchaseRouter, type: "function", z: ids.tab, name: "Route tournament subscription payment", outputs: 5, wires: [[], [], [], [], [ids.atomicRouter]] },
+    ...atomicTopologyNodes(),
+  ];
+}
+
+function createWorkspace({ approvedNodeDrift = false, duplicateLegacy = false, missingAtomicTopology = false, staleRouter = false, unknownDuplicate = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "subscription-sales-candidate-")));
   roots.push(root);
   const workspace = path.join(root, "workspace");
@@ -58,10 +82,13 @@ function createWorkspace({ approvedNodeDrift = false, duplicateLegacy = false, s
         z: "f9575c8726e29196",
         name,
         func,
-        outputs: 4,
-        wires: [[], [], [], []],
+        outputs: name === "Route tournament subscription payment" && !missingAtomicTopology ? 5 : 4,
+        wires: name === "Route tournament subscription payment" && !missingAtomicTopology
+          ? [[], [], [], [], [PITER_ATOMIC_TOPOLOGY_IDS.atomicRouter]]
+          : [[], [], [], []],
       };
     }),
+    ...(missingAtomicTopology ? [] : atomicTopologyNodes()),
     { id: "8ccb70ac6befff79", type: "tab", label: "Media2", disabled: !duplicateLegacy },
     ...LEGACY_TARGETS.map(([id, name, fileName]) => ({
         id,
@@ -146,33 +173,36 @@ test("builder fails closed on source drift inside an approved identity", () => {
   assert.equal(fs.existsSync(path.join(workspace, "build")), false);
 });
 
-test("builder accepts only the approved enabled legacy sales identities", () => {
+test("builder rejects an enabled legacy sales tab without its own exact Piter topology", () => {
   const { workspace } = createWorkspace({ duplicateLegacy: true, staleRouter: true });
   const result = runBuilder(workspace);
-  assert.equal(result.status, 0, result.stderr);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Enabled legacy sales tab requires a separate exact-graph Piter topology contract/);
+  assert.equal(fs.existsSync(path.join(workspace, "build")), false);
+});
 
-  const build = path.join(workspace, "build");
-  const candidate = JSON.parse(fs.readFileSync(
-    path.join(build, "tournament-subscription-sales.candidate.json"),
-    "utf8",
-  ));
-  const report = JSON.parse(fs.readFileSync(
-    path.join(build, "tournament-subscription-sales.report.json"),
-    "utf8",
-  ));
-  assert.equal(report.targetNodeCount, 13);
-  assert.equal(report.changedNodeCount, 1);
-  assert.deepEqual(report.changedNodes.map(({ id, tabId }) => ({ id, tabId })), [{
-    id: "566ae4b886c37ae5",
-    tabId: "f9575c8726e29196",
-  }]);
-  const legacyFunctions = candidate.filter((node) => node.z === "8ccb70ac6befff79" && node.type === "function");
-  assert.equal(legacyFunctions.length, 5);
-  assert.ok(legacyFunctions.every((node) => node.func !== "return msg;"));
-  assert.match(
-    legacyFunctions.find((node) => node.name === "Prepare tournament subscription purchase").func,
-    /MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE/,
-  );
+test("builder rejects the atomic Piter functions when output five and ledger topology are absent", () => {
+  const { workspace } = createWorkspace({ missingAtomicTopology: true, staleRouter: true });
+  const result = runBuilder(workspace);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Piter atomic topology precondition failed/);
+  assert.equal(fs.existsSync(path.join(workspace, "build")), false);
+});
+
+test("atomic topology contract rejects output, wire, ledger, catch, and error-route drift", () => {
+  assert.doesNotThrow(() => assertPiterAtomicTopology(validAtomicTopologyFlow()));
+  for (const mutate of [
+    (flow) => { flow[0].outputs = 4; },
+    (flow) => { flow[0].wires[4] = ["wrong"]; },
+    (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.atomicRouter).wires[0] = []; },
+    (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.ledgerFind).collection = "wrong"; },
+    (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.mongoCatch).scope = []; },
+    (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.mongoError).wires = [[], []]; },
+  ]) {
+    const flow = validAtomicTopologyFlow();
+    mutate(flow);
+    assert.throws(() => assertPiterAtomicTopology(flow), /Piter atomic topology precondition failed/);
+  }
 });
 
 test("builder fails closed on an unknown enabled same-name target", () => {

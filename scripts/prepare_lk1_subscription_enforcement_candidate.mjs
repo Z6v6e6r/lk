@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
+import { assertPiterAtomicTopology } from "./lib/piterAtomicTopologyContract.mjs";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 import { auditLegacyGameRevisionWriters } from "./audit_legacy_game_revision_writers.mjs";
 import {
@@ -32,6 +33,7 @@ export function assertProductionManifestEnvironment(manifest) {
 assertProductionManifestEnvironment(candidateBinding);
 
 export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
+  requiresPiterAtomicTopology: true,
   sourceSha256: "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
   candidateBindingState: candidateBinding.candidateBindingState,
   candidateSha256: candidateBinding.candidateSha256,
@@ -241,6 +243,7 @@ export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256, option
   if (sourceSha256 !== contract.sourceSha256) {
     fail("Unified LK1 live source SHA mismatch");
   }
+  if (contract.requiresPiterAtomicTopology === true) assertPiterAtomicTopology(source);
   if (source.filter((node) => node.type === "http in").length !== contract.httpRouteCount) {
     fail("Unified LK1 HTTP route count mismatch");
   }
@@ -406,6 +409,7 @@ export function buildLk1EnforcementCandidate(
 ) {
   if (!Array.isArray(flow) || flow.length !== contract.nodeCount) fail("LK1 flow node count mismatch");
   if (sourceSha256 !== contract.sourceSha256) fail("LK1 live source SHA mismatch");
+  if (contract.requiresPiterAtomicTopology === true) assertPiterAtomicTopology(flow);
   const before = structuredClone(flow);
   const beforeTopology = topology(before);
   const tabs = new Map(flow.filter((node) => node?.type === "tab").map((node) => [node.id, node]));

@@ -223,6 +223,7 @@ test("unified LK1 candidate tolerates disabled duplicates but rejects enabled se
 });
 
 test("unified LK1 contract keeps the amended router fail-closed until PROD is rebound", () => {
+  assert.equal(LK1_ENFORCEMENT_CONTRACT.requiresPiterAtomicTopology, true);
   assert.equal(
     LK1_ENFORCEMENT_CONTRACT.sourceSha256,
     "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",

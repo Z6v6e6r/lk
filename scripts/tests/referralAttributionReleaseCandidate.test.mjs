@@ -10,6 +10,7 @@ import {
   REFERRAL_ATTRIBUTION_TARGETS,
   sha256
 } from '../lib/referralAttributionReleaseContract.mjs';
+import { PITER_ATOMIC_TOPOLOGY_IDS } from '../lib/piterAtomicTopologyContract.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const AUDITOR = path.join(REPO_ROOT, 'scripts/audit_referral_attribution_release_preimages.mjs');
@@ -24,7 +25,19 @@ function vulnerableObjectCredentialBody() {
   return 'msg.payload = { grant_type: "password", username: "REDACTED_USERNAME", password: "REDACTED_PASSWORD" };\nreturn msg;';
 }
 
-function createWorkspace({ activeDebug = false, unexpectedEnabledTarget = false, disabledTarget = false } = {}) {
+function atomicTopologyNodes() {
+  const ids = PITER_ATOMIC_TOPOLOGY_IDS;
+  return [
+    { id: ids.atomicRouter, type: 'function', z: ids.tab, name: 'Route atomic Piter subscription sale', func: 'return msg;', outputs: 5, wires: [[ids.ledgerFind], [ids.ledgerUpdate], [ids.saleUpdate], [ids.response], [ids.viva]] },
+    { id: ids.ledgerFind, type: 'mongodb4', z: ids.tab, name: 'Find Piter atomic inventory ledger', collection: 'lk_tournament_subscription_sales', operation: 'find', wires: [[ids.atomicRouter]] },
+    { id: ids.ledgerUpdate, type: 'mongodb4', z: ids.tab, name: 'CAS Piter atomic inventory ledger', collection: 'lk_tournament_subscription_sales', operation: 'updateOne', wires: [[ids.atomicRouter]] },
+    { id: ids.saleUpdate, type: 'mongodb4', z: ids.tab, name: 'Persist Piter atomic sale', collection: 'lk_tournament_subscription_sales', operation: 'updateOne', wires: [[ids.atomicRouter]] },
+    { id: ids.mongoCatch, type: 'catch', z: ids.tab, name: 'Catch Piter atomic Mongo errors', scope: [ids.ledgerFind, ids.ledgerUpdate, ids.saleUpdate], uncaught: false, wires: [[ids.mongoError]] },
+    { id: ids.mongoError, type: 'function', z: ids.tab, name: 'Redact Piter atomic Mongo error', func: 'return msg;', outputs: 2, wires: [[ids.response], [ids.debug]] },
+  ];
+}
+
+function createWorkspace({ activeDebug = false, unexpectedEnabledTarget = false, disabledTarget = false, missingAtomicTopology = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'referral-attribution-candidate-')));
   roots.push(root);
   const workspace = path.join(root, 'workspace');
@@ -47,9 +60,12 @@ function createWorkspace({ activeDebug = false, unexpectedEnabledTarget = false,
         ? vulnerableCredentialBody(target.id)
         : 'msg.legacyAttribution = true;\nreturn msg;',
       d: disabledTarget && target.id === '8fe574816fd8bfd7',
-      outputs: 3,
-      wires: [[], [], []]
+      outputs: target.id === PITER_ATOMIC_TOPOLOGY_IDS.purchaseRouter && !missingAtomicTopology ? 5 : 3,
+      wires: target.id === PITER_ATOMIC_TOPOLOGY_IDS.purchaseRouter && !missingAtomicTopology
+        ? [[], [], [], [], [PITER_ATOMIC_TOPOLOGY_IDS.atomicRouter]]
+        : [[], [], []]
     })),
+    ...(missingAtomicTopology ? [] : atomicTopologyNodes()),
     ...REFERRAL_ATTRIBUTION_DEBUG_GUARDS.map((guard, index) => ({
       id: guard.id,
       type: 'debug',
@@ -238,6 +254,14 @@ test('builder refuses an unbound audit contract', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /approval contract identity mismatch/);
   assert.equal(fs.existsSync(path.join(workspace, 'referral-attribution-candidate')), false);
+});
+
+test('audit refuses topology-dependent Piter sources without the exact atomic graph', () => {
+  const { workspace } = createWorkspace({ missingAtomicTopology: true });
+  const result = runAudit(workspace);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Piter atomic topology precondition failed/);
+  assert.equal(fs.existsSync(path.join(workspace, 'referral-attribution-review')), false);
 });
 
 test('audit fails closed on active debug, disabled target and unexpected enabled target identity', () => {
