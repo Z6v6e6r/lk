@@ -5,7 +5,7 @@
   "environmentIdentityVerified": false,
   "source": {
     "sourceKind": "offline-dedicated-dev-bootstrap",
-    "sourceCommit": "8cd99729afc47cdbd9c74e59f624cffc87d59c9a",
+    "sourceCommit": "28bc541bb1f4b0c421d91a66afb3cfce932d5356",
     "generatorPath": "scripts/generate_lk1_subscription_dev_offline_source.mjs",
     "generatorSha256": "0d16c9e0fc09e850ecf93c74e64be71e55181567dd8f7a9179016a506eaffa7d",
     "sourceInputsSha256": {
