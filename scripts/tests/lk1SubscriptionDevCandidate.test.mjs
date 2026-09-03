@@ -608,7 +608,7 @@ test("shared-root audit capture cannot become a DEV candidate source", () => {
 
 test("DEV publisher remains blocked until provisioning separately authorizes candidate build", () => {
   const { sourceText, binding } = fixture();
-  const workspace = fs.mkdtempSync("/private/tmp/lk1-dev-publish-test-");
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "lk1-dev-publish-test-"));
   fs.mkdirSync(path.join(workspace, "input"));
   fs.writeFileSync(path.join(workspace, "input/source.flow.json"), sourceText);
   fs.writeFileSync(path.join(workspace, "input/source.flow.meta.json"), JSON.stringify({
