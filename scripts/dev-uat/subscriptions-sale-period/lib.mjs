@@ -213,18 +213,20 @@ export function loadInputs(env = process.env) {
   return inputs;
 }
 
-function originSet(values) {
-  const result = new Set();
+function originRegistry(values) {
+  const origins = new Set();
+  const hostnames = new Set();
   for (const value of values) {
     try {
       const parsed = new URL(value);
       if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) return null;
-      result.add(parsed.origin.toLowerCase());
+      origins.add(parsed.origin.toLowerCase());
+      hostnames.add(parsed.hostname.toLowerCase().replace(/\.+$/, ""));
     } catch {
       return null;
     }
   }
-  return result;
+  return { origins, hostnames };
 }
 
 export function classifyDevUrl(rawUrl, { allowedDevOrigins = [], productionOrigins = DEFAULT_PRODUCTION_ORIGINS } = {}) {
@@ -237,15 +239,16 @@ export function classifyDevUrl(rawUrl, { allowedDevOrigins = [], productionOrigi
   if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
     return { ok: false, code: "URL_BASE_NOT_ORIGIN" };
   }
-  const production = originSet(productionOrigins);
-  const allowed = originSet(allowedDevOrigins);
+  const production = originRegistry(productionOrigins);
+  const allowed = originRegistry(allowedDevOrigins);
   if (!production || !allowed) return { ok: false, code: "URL_ORIGIN_LIST_INVALID" };
   const origin = url.origin.toLowerCase();
-  if (production.has(origin)) return { ok: false, code: "URL_PRODUCTION_ORIGIN", origin };
+  const hostname = url.hostname.toLowerCase().replace(/\.+$/, "");
+  if (production.hostnames.has(hostname)) return { ok: false, code: "URL_PRODUCTION_ORIGIN", origin };
   if (url.protocol !== "https:" && !["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
     return { ok: false, code: "URL_HTTPS_REQUIRED", origin };
   }
-  if (!allowed.has(origin)) return { ok: false, code: "URL_DEV_IDENTITY_UNPROVEN", origin };
+  if (!allowed.origins.has(origin)) return { ok: false, code: "URL_DEV_IDENTITY_UNPROVEN", origin };
   return { ok: true, code: "DEV_ORIGIN_CONFIRMED", origin };
 }
 

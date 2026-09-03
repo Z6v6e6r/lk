@@ -324,6 +324,14 @@ jobs:
           scripts/tests/lk1SubscriptionDevCandidate.test.mjs
           scripts/tests/subscriptionBookingLegacyPatcher.test.mjs
 
+      - name: Validate LK1 DEV provisioning, bootstrap, runtime source, and read-only UAT
+        run: >-
+          node --test
+          scripts/tests/lk1SubscriptionDevProvisioning.test.mjs
+          scripts/tests/lk1SubscriptionDevBootstrap.test.mjs
+          scripts/tests/lk1SubscriptionDevRuntimeSource.test.mjs
+          scripts/dev-uat/subscriptions-sale-period/test.mjs
+
       - name: Run tracked credential and authenticated-route security tests
         run: >-
           node --test

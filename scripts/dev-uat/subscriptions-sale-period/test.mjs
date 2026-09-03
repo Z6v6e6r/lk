@@ -245,6 +245,18 @@ test("URL classification requires an exact approved origin and rejects lookalike
   assert.equal(classifyDevUrl("https://preview.example.attacker.invalid", { allowedDevOrigins: ["https://preview.example"] }).code, "URL_DEV_IDENTITY_UNPROVEN");
 });
 
+test("production hosts stay blocked across ports and trailing-dot aliases", () => {
+  const productionAliases = [
+    "https://padlhub.su:444",
+    "https://padlhub.su.",
+    "https://cup.padlhub.su:444",
+    "https://cup.padlhub.su.",
+  ];
+  for (const alias of productionAliases) {
+    assert.equal(classifyDevUrl(alias, { allowedDevOrigins: [alias] }).code, "URL_PRODUCTION_ORIGIN");
+  }
+});
+
 test("custom production origins extend the immutable built-in denylist", () => {
   const loaded = loadInputs({
     DEV_LK_BASE_URL: "https://lk.dev.example",
@@ -726,20 +738,23 @@ test("failed DEV metadata stops before authenticated user reads", async () => {
   assert.equal(fixture.calls.every((call) => !call.headers.Authorization && !call.headers["X-Subscriptions-Integration-Token"]), true);
 });
 
-test("all modes reject production targets before network or secret transmission", async () => {
+test("all modes reject production hostname aliases before network or secret transmission", async () => {
   for (const mode of ["preflight", "observe-before", "observe-after"]) {
-    let calls = 0;
-    const configured = inputs({
-      DEV_CUP_BASE_URL: "https://cup.padlhub.su",
-      DEV_UAT_RUN_ID: "20260902T120000000Z",
-      DEV_UAT_EXPECTED_DELTA: { A: {}, B: {} },
-    });
-    await assert.rejects(executeMode({
-      mode,
-      inputs: configured,
-      client: new ReadOnlyHttpClient({ fetchImpl: async () => { calls += 1; throw new Error("must not call"); } }),
-    }), (error) => error.code === "URL_PRODUCTION_ORIGIN");
-    assert.equal(calls, 0);
+    for (const target of ["https://cup.padlhub.su", "https://cup.padlhub.su:444", "https://cup.padlhub.su."]) {
+      let calls = 0;
+      const configured = inputs({
+        DEV_CUP_BASE_URL: target,
+        DEV_UAT_RUN_ID: "20260902T120000000Z",
+        DEV_UAT_EXPECTED_DELTA: { A: {}, B: {} },
+        allowedDevOrigins: ["https://lk.dev.padlhub.example", target],
+      });
+      await assert.rejects(executeMode({
+        mode,
+        inputs: configured,
+        client: new ReadOnlyHttpClient({ fetchImpl: async () => { calls += 1; throw new Error("must not call"); } }),
+      }), (error) => error.code === "URL_PRODUCTION_ORIGIN");
+      assert.equal(calls, 0);
+    }
   }
 });
 
