@@ -674,8 +674,22 @@ test("atomic mutation guards exact membership and ban identities and normalizes 
     $add: [{ $size: { $cond: [{ $isArray: "$members" }, "$members", []] } }, 1],
   });
   assert.equal(
-    mutation.update[0].$set.members.$concatArrays[1][0].joinSource.tournamentIds[0],
+    mutation.update[0].$set.members.$concatArrays[1].$literal[0].joinSource.tournamentIds[0],
     "tournament-1",
+  );
+
+  const expressionShaped = buildTimeForFriendsAtomicMembershipMutation(
+    {
+      ...operation,
+      playerName: "$$ROOT",
+      tournamentIds: ["$members", { $getField: "privateField" }],
+    },
+    "2026-08-11T12:00:00.000Z",
+  );
+  assert.equal(expressionShaped.update[0].$set.members.$concatArrays[1].$literal[0].name, "$$ROOT");
+  assert.deepEqual(
+    expressionShaped.update[0].$set.members.$concatArrays[1].$literal[0].joinSource.tournamentIds,
+    ["$members", { $getField: "privateField" }],
   );
 
   const withPhone = buildTimeForFriendsAtomicMembershipMutation(

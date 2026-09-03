@@ -840,7 +840,7 @@ export function buildTimeForFriendsAtomicMembershipMutation(operation, nowIso) {
     },
     update: [{
       $set: {
-        members: { $concatArrays: [currentMembers, [member]] },
+        members: { $concatArrays: [currentMembers, { $literal: [member] }] },
         memberCount: { $add: [{ $size: currentMembers }, 1] },
         pendingMembers: {
           $filter: {
