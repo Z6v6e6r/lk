@@ -27,6 +27,7 @@ import {
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const ROOT = path.resolve(import.meta.dirname, "../..");
+const CONTRACT_TEMP_ROOT = process.platform === "darwin" ? "/private/tmp" : os.tmpdir();
 const HOST_EVIDENCE_PATH = path.join(ROOT, "scripts/lk1_subscription_dev_host_evidence.json");
 const nodeInventorySha256 = (flow) => sha256(JSON.stringify(flow
   .map((node) => ({ id: node.id, sha256: sha256(JSON.stringify(node)) }))
@@ -660,8 +661,8 @@ test("shared-root audit capture cannot become a DEV candidate source", () => {
 
 test("offline generator and publisher emit an install-blocked readiness packet", () => {
   const parents = [
-    fs.mkdtempSync("/private/tmp/lk1-dev-publish-a-"),
-    fs.mkdtempSync("/private/tmp/lk1-dev-publish-b-"),
+    fs.mkdtempSync(path.join(CONTRACT_TEMP_ROOT, "lk1-dev-publish-a-")),
+    fs.mkdtempSync(path.join(CONTRACT_TEMP_ROOT, "lk1-dev-publish-b-")),
   ];
   try {
     const results = parents.map((parent) => {
@@ -685,7 +686,7 @@ test("offline generator and publisher emit an install-blocked readiness packet",
       path.resolve("scripts/prepare_lk1_subscription_dev_candidate.mjs"),
       "--workspace", foreignWorkspace,
       "--binding", path.resolve("scripts/lk1_subscription_dev_candidate_binding.json"),
-    ], { cwd: "/private/tmp", encoding: "utf8" }));
+    ], { cwd: CONTRACT_TEMP_ROOT, encoding: "utf8" }));
     for (const file of [
       "lk1-subscription-dev.candidate.json",
       "lk1-subscription-dev.manifest.json",
@@ -709,7 +710,7 @@ test("offline generator and publisher emit an install-blocked readiness packet",
 });
 
 test("publisher rejects an arbitrary self-consistent binding and symlinked input", () => {
-  const parent = fs.mkdtempSync("/private/tmp/lk1-dev-untrusted-");
+  const parent = fs.mkdtempSync(path.join(CONTRACT_TEMP_ROOT, "lk1-dev-untrusted-"));
   try {
     const workspace = path.join(parent, "workspace");
     publishOfflineDevSource(workspace);
@@ -753,10 +754,10 @@ test("publisher rejects an arbitrary self-consistent binding and symlinked input
 });
 
 test("offline generator rejects a temp symlink parent that resolves outside its custody", () => {
-  const holder = fs.mkdtempSync("/private/tmp/lk1-dev-symlink-parent-");
+  const holder = fs.mkdtempSync(path.join(CONTRACT_TEMP_ROOT, "lk1-dev-symlink-parent-"));
   try {
     const redirect = path.join(holder, "redirect");
-    fs.symlinkSync(fs.realpathSync(os.tmpdir()), redirect);
+    fs.symlinkSync(path.parse(CONTRACT_TEMP_ROOT).root, redirect);
     assert.throws(() => publishOfflineDevSource(path.join(redirect, "workspace")),
       /workspace must be under/);
   } finally {

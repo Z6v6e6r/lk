@@ -6,6 +6,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 import { buildExactGraphContract, validateExactGraphContract } from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
+import {
+  assertPiterAtomicTopology,
+  PITER_ATOMIC_ERROR_SOURCE,
+  PITER_ATOMIC_TOPOLOGY_IDS,
+} from "./lib/piterAtomicTopologyContract.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FN_DIR = path.join(ROOT, "scripts/nodered_games_nodes");
@@ -58,7 +63,7 @@ changed.find((item) => item.id === IDS.purchaseRouter).fields.push("outputs", "w
 
 const clientNode = "4e820638cc39c730";
 const atomicFunc = fs.readFileSync(path.join(FN_DIR, "fn_tournament_subscription_piter_atomic_router.js"), "utf8");
-const errorFunc = `msg.statusCode = 503;\nmsg.headers = {"Content-Type":"application/json; charset=utf-8"};\nmsg.payload = {error:"Хранилище временно недоступно",details:{code:"PITER_ATOMIC_MONGO_ERROR"}};\nreturn [msg,msg];\n`;
+const errorFunc = PITER_ATOMIC_ERROR_SOURCE;
 const additions = [
   { id: IDS.atomicRouter, type: "function", z: TAB, name: "Route atomic Piter subscription sale", func: atomicFunc, outputs: 5, timeout: "", noerr: 0, initialize: "", finalize: "", libs: [], x: 2750, y: 2240, wires: [[IDS.ledgerFind], [IDS.ledgerUpdate], [IDS.saleUpdate], [IDS.response], [IDS.viva]] },
   { id: IDS.ledgerFind, type: "mongodb4", z: TAB, clientNode, mode: "collection", collection: "lk_tournament_subscription_sales", operation: "find", output: "toArray", maxTimeMS: "5000", handleDocId: false, name: "Find Piter atomic inventory ledger", x: 3140, y: 2180, wires: [[IDS.atomicRouter]] },
@@ -68,6 +73,10 @@ const additions = [
   { id: IDS.mongoError, type: "function", z: TAB, name: "Redact Piter atomic Mongo error", func: errorFunc, outputs: 2, timeout: "", noerr: 0, initialize: "", finalize: "", libs: [], x: 3150, y: 2320, wires: [[IDS.response], [IDS.debug]] },
 ];
 candidate.push(...additions);
+if (Object.entries(PITER_ATOMIC_TOPOLOGY_IDS).some(([key, id]) => !["tab", "mongoClient"].includes(key) && IDS[key] !== id)) {
+  fail("Piter atomic topology identifiers drifted from the shared contract");
+}
+assertPiterAtomicTopology(candidate);
 const candidateBytes = Buffer.from(`${JSON.stringify(candidate, null, 2)}\n`, "utf8");
 const contract = buildExactGraphContract({
   liveBytes,
