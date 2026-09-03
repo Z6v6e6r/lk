@@ -265,6 +265,9 @@ const mongoBindingVerifiedDevOnly = targetPresent
 const audit = {
   ...meta,
   sourceSha256: sha256(raw),
+  sourceNodeInventorySha256: sha256(JSON.stringify(flow
+    .map((node) => ({ id: node.id, sha256: sha256(JSON.stringify(node)) }))
+    .sort((left, right) => left.id.localeCompare(right.id)))),
   nodeCount: flow.length,
   httpRouteCount: flow.filter((node) => node?.type === "http in").length,
   tabCount: flow.filter((node) => node?.type === "tab").length,

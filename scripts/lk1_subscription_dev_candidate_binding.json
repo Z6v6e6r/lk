@@ -1,22 +1,31 @@
 {
   "formatVersion": 1,
   "environment": "DEV",
-  "bindingState": "BLOCKED_DEV_FLOW_TARGET_ABSENT",
+  "bindingState": "BOUND_SOURCE_ONLY",
   "environmentIdentityVerified": false,
   "source": {
-    "sourceKind": "shared-host-audit-only",
-    "sourceHost": "lk-reserve-89",
-    "sourceHostname": "89-108-64-209.cloudvps.regruhosting.ru",
-    "sourceUser": "root",
-    "sourcePort": 22,
-    "remoteFlowPath": "/root/.node-red/flows.json",
-    "sourceSha256": "52c1b510b40f96de7bf1f9991a17454f79b560eaf002cc0c60147065b31c33e3",
-    "nodeCount": 922,
+    "sourceKind": "offline-dedicated-dev-bootstrap",
+    "generatorPath": "scripts/generate_lk1_subscription_dev_offline_source.mjs",
+    "generatorSha256": "735e33675f596e45b2088016484f7ec0874155dbc933148cafec99b52393345f",
+    "sourceInputsSha256": {
+      "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js": "02cd217c8791dbd0a70928539d05ef5cd44c6b57a8ad763cd6e95893d2f418c1",
+      "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js": "1da7771e86ace8635488484059984b1ac93c2628c6edcb4b07b6a9fadb1bdc11",
+      "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_finalize.js": "d9efac68af3287c9296d103581ba40e662e557768c784477ce2004cb979ca89c",
+      "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_evaluate.js": "a1fcb4f942fb265203ee7c7232fecf6b4eb9459ede5b174cc05bb2d28f1a8576",
+      "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_blocked.js": "0fcd9e7adcf983b061201297329136702d10fce4c65647aeb67cec0c71a16a7f",
+      "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_mongo_error.js": "1c786def280a91c684dae8a71d56ac903ad1912f059145aa85d1dab0944f3a56",
+      "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_options.js": "fec610c6edf685732d0fdf24f007327829fbf7f87d64598d81b6b9e613d2d2df",
+      "scripts/nodered_games_nodes/fn_split_router.js": "6a14d80655daa998e1d26c68d20bbcdcfa7ef401d023689440f4accea6e8a9ec",
+      "scripts/nodered_games_nodes/fn_split_create_prepare.js": "b85af365a2aa954484ca19f05eebb0d2115393589111c6dc1e14832e76dbfe68",
+      "scripts/nodered_games_nodes/fn_split_join_prepare.js": "2192e71a9a5c2e453d774ac8588d4ed1ff3bc34ba77f674d04797bbff443db31"
+    },
+    "sourceSha256": "e40db778a18885b3dee6b6f414fe9c4c1b566092df4ed331c5055f9489c1aaec",
+    "sourceNodeInventorySha256": "7c8bc19610747b449ec902334524a4099ac9dabc2cb011b229392413f4469d92",
+    "nodeCount": 23,
     "httpRouteCount": 2,
-    "tabCount": 11,
+    "tabCount": 1,
     "brokenWires": 0,
-    "brokenLinks": 0,
-    "capturedAt": "2026-09-02T16:42:49Z"
+    "brokenLinks": 0
   },
   "target": {
     "tabLabel": "LK Games",
@@ -32,50 +41,175 @@
     "splitJoinPrepareNodeName": "Prepare split join payment",
     "finalizeNodeId": "lk_subscription_booking_finalize_20260804",
     "finalizeNodeName": "Finalize subscription booking response",
-    "present": false,
-    "enabledDuplicateCount": 0,
-    "routerPreimageSha256": null,
-    "preparePreimageSha256": null,
-    "splitRouterPreimageSha256": null,
-    "splitCreatePreparePreimageSha256": null,
-    "splitJoinPreparePreimageSha256": null,
-    "finalizePreimageSha256": null
+    "present": true,
+    "enabledDuplicateCount": 1,
+    "routerPreimageSha256": "02cd217c8791dbd0a70928539d05ef5cd44c6b57a8ad763cd6e95893d2f418c1",
+    "routerNodePreimageSha256": "77c71077c5c5cc30217cbe858aae420a52ace9422274a6f41bf319cf7b9255eb",
+    "preparePreimageSha256": "1da7771e86ace8635488484059984b1ac93c2628c6edcb4b07b6a9fadb1bdc11",
+    "prepareNodePreimageSha256": "b49bed9c1d4cd80c3380f66886fb1c8c50dae9867b45910432cd95e1035346ed",
+    "splitRouterPreimageSha256": "6a14d80655daa998e1d26c68d20bbcdcfa7ef401d023689440f4accea6e8a9ec",
+    "splitRouterNodePreimageSha256": "16690a1cbd8f2605596b0a503f43134c02ff7fd6d72ae9a9d489a023221657ed",
+    "splitCreatePreparePreimageSha256": "b85af365a2aa954484ca19f05eebb0d2115393589111c6dc1e14832e76dbfe68",
+    "splitCreatePrepareNodePreimageSha256": "696abda2fd31d0e76335719c27a019f668576d9cc8d7641175ac4cba2a6c4d21",
+    "splitJoinPreparePreimageSha256": "2192e71a9a5c2e453d774ac8588d4ed1ff3bc34ba77f674d04797bbff443db31",
+    "splitJoinPrepareNodePreimageSha256": "46068a1403c4cabb1980b853da28a1f97fa84bef2bedac11718cff914a15a54f",
+    "finalizePreimageSha256": "d9efac68af3287c9296d103581ba40e662e557768c784477ce2004cb979ca89c",
+    "finalizeNodePreimageSha256": "4be11eed3df7a9a720853f0abcb63a0f3a95baa349155980c5564c5338a700d7"
   },
   "runtime": {
-    "apiBase": null,
+    "apiBase": "http://127.0.0.1:3037/api",
     "completeManagedContractExposed": false,
-    "reason": "Dedicated DEV HTTPS origin does not expose runtime-context plus entitlement reserve/confirm/release plus activation"
+    "reason": "Source-only binding; DEV services are stopped and no runtime contract was exercised"
   },
   "dependencies": {
-    "httpRequestBindingVerified": false,
-    "httpRequestPreimageSha256": null,
-    "splitCreateHttpRequestPreimageSha256": null,
-    "mongoCredentialStoreVerifiedEmpty": false,
-    "mongoCredentialStorePreimageSha256": null,
-    "mongoBindingVerifiedDevOnly": false,
-    "crossEnvironmentMongoConfigCount": 2,
-    "mongoConfigPreimages": [
+    "wholeFlowIsolationVerified": true,
+    "wholeFlowIsolationViolations": [],
+    "executionFunctionPreimages": [
       {
-        "id": "e4ab8968807d77bf",
-        "sha256": "9f35d04fb89fc237092e72d72251ae10ce3f925d3c9ecf394be8502aec31fce0"
+        "id": "8f7bd5b482fe9763",
+        "nodeSha256": "16690a1cbd8f2605596b0a503f43134c02ff7fd6d72ae9a9d489a023221657ed"
       },
       {
-        "id": "2f61bc682fefb667",
-        "sha256": "fbe46b3569803aadf3c7b086fc917b2e7dc6a985d74f1c05c2fa44b888dc11c9"
+        "id": "e92e68bf3f08a70c",
+        "nodeSha256": "46068a1403c4cabb1980b853da28a1f97fa84bef2bedac11718cff914a15a54f"
+      },
+      {
+        "id": "f3f9a60354d394da",
+        "nodeSha256": "696abda2fd31d0e76335719c27a019f668576d9cc8d7641175ac4cba2a6c4d21"
+      },
+      {
+        "id": "lk_subscription_booking_finalize_20260804",
+        "nodeSha256": "4be11eed3df7a9a720853f0abcb63a0f3a95baa349155980c5564c5338a700d7"
+      },
+      {
+        "id": "lk_subscription_booking_mongo_error_20260804",
+        "nodeSha256": "94a0b73542bcc6498a7a207ce7b936fcb1a760619401e79f6ec987bfa872e830"
+      },
+      {
+        "id": "lk_subscription_booking_options_20260804",
+        "nodeSha256": "b9d71752f91128631717e3ee2dd017511923be9d9f16a4389c62894864bd5803"
+      },
+      {
+        "id": "lk_subscription_booking_prepare_20260804",
+        "nodeSha256": "b49bed9c1d4cd80c3380f66886fb1c8c50dae9867b45910432cd95e1035346ed"
+      },
+      {
+        "id": "lk_subscription_booking_router_20260804",
+        "nodeSha256": "77c71077c5c5cc30217cbe858aae420a52ace9422274a6f41bf319cf7b9255eb"
+      },
+      {
+        "id": "lk_subscription_managed_policy_20260820",
+        "nodeSha256": "9f4970224b433fa6b66d9c13f560b8cbd5770a47a55d992b27c2e19283de371e"
+      },
+      {
+        "id": "lk_subscription_managed_policy_blocked_20260820",
+        "nodeSha256": "fb6ab7f0fac134712c2cf1e230f9bfb8a90d311ace4765abc4675c23c4e80888"
+      }
+    ],
+    "httpRequestBindingVerified": true,
+    "httpRequestPreimageSha256": "8a70a7efeffa98bafb2244b5950fcba0401b77222f600c6e8577f7fd9a60a101",
+    "splitCreateHttpRequestPreimageSha256": "e8580112403d117c0bf9efd6af04780b10f5b9bddd49880f355762e0f1a4f6c1",
+    "httpRequestNodeIds": [
+      "ee7ba8cdd68bdf74",
+      "lk_subscription_booking_http_20260804"
+    ],
+    "httpRequestInboundEdges": [
+      "8f7bd5b482fe9763:0:ee7ba8cdd68bdf74",
+      "8f7bd5b482fe9763:3:lk_subscription_booking_http_20260804",
+      "e92e68bf3f08a70c:0:ee7ba8cdd68bdf74",
+      "f3f9a60354d394da:0:ee7ba8cdd68bdf74",
+      "lk_subscription_booking_prepare_20260804:0:lk_subscription_booking_http_20260804",
+      "lk_subscription_booking_router_20260804:0:lk_subscription_booking_http_20260804"
+    ],
+    "mongoCredentialStoreVerifiedEmpty": true,
+    "mongoCredentialStorePreimageSha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "mongoBindingVerifiedDevOnly": true,
+    "crossEnvironmentMongoConfigCount": 0,
+    "legacyMongoConfigPreimages": [],
+    "mongodb4ClientPreimages": [
+      {
+        "id": "lk1_subscription_dev_mongo_client_20260903",
+        "sha256": "f0d3c87ffd8fd8e0bdc879eb74779390dee7e7d1c8f6f69dedbb82c2ea775258"
+      }
+    ],
+    "managedMongoClient": {
+      "id": "lk1_subscription_dev_mongo_client_20260903",
+      "preimageSha256": "f0d3c87ffd8fd8e0bdc879eb74779390dee7e7d1c8f6f69dedbb82c2ea775258",
+      "effectiveIdentity": {
+        "mode": "uri",
+        "protocol": "mongodb",
+        "host": "127.0.0.1",
+        "port": 27030,
+        "database": "lk1_subscription_dev_fixture",
+        "credentialsPresent": false,
+        "optionsPresent": false,
+        "uriTabActive": "tab-uri-advanced"
+      },
+      "fixtureOnly": true
+    },
+    "managedMongoNodes": [
+      {
+        "id": "lk_subscription_booking_find_20260804",
+        "operation": "find",
+        "routerOutputIndex": 1,
+        "present": true,
+        "clientNode": "lk1_subscription_dev_mongo_client_20260903",
+        "collection": "lk_subscription_daily_booking_ops",
+        "actualOperation": "find",
+        "mode": "collection",
+        "output": "toArray",
+        "maxTimeMS": "5000",
+        "handleDocId": false,
+        "returnsToRouter": true,
+        "wiredFromRouter": true,
+        "preimageSha256": "8b225da2d77fc983cc24baa3e32320957fc0d64cecc985c52217ea118b845ee6"
+      },
+      {
+        "id": "lk_subscription_booking_insert_20260804",
+        "operation": "insertOne",
+        "routerOutputIndex": 2,
+        "present": true,
+        "clientNode": "lk1_subscription_dev_mongo_client_20260903",
+        "collection": "lk_subscription_daily_booking_ops",
+        "actualOperation": "insertOne",
+        "mode": "collection",
+        "output": "toArray",
+        "maxTimeMS": "5000",
+        "handleDocId": false,
+        "returnsToRouter": true,
+        "wiredFromRouter": true,
+        "preimageSha256": "557d4e9f83bc5bbdf3014b674ed5838093375fc6148bd7d1844d7201df33489c"
+      },
+      {
+        "id": "lk_subscription_booking_update_20260804",
+        "operation": "updateOne",
+        "routerOutputIndex": 3,
+        "present": true,
+        "clientNode": "lk1_subscription_dev_mongo_client_20260903",
+        "collection": "lk_subscription_daily_booking_ops",
+        "actualOperation": "updateOne",
+        "mode": "collection",
+        "output": "toArray",
+        "maxTimeMS": "5000",
+        "handleDocId": false,
+        "returnsToRouter": true,
+        "wiredFromRouter": true,
+        "preimageSha256": "d8a95c79b142da6be6c3b096908a982b416f0622f177a797f580b09a5dc36f43"
       }
     ]
   },
   "endpointAudit": {
-    "verifiedDevOnly": false,
-    "crossEnvironmentEndpointCount": 5,
-    "endpointInventorySha256": null,
-    "blockedFamilies": [
-      "VivaCRM Admin production/shared origin",
-      "VivaCRM end-user production/shared origin",
-      "Keycloak prod realm",
-      "SERV2 production origin",
-      "legacy CUP pricing production default"
-    ]
+    "verifiedDevOnly": true,
+    "crossEnvironmentEndpointCount": 0,
+    "endpointInventorySha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "installTarget": {
+    "sourceHost": "lk-reserve-89",
+    "sourceHostname": "89-108-64-209.cloudvps.regruhosting.ru",
+    "serviceName": "lk1-subscription-dev-nodered.service",
+    "unixUser": "lk1-subscription-dev",
+    "userDir": "/srv/lk1-subscription-dev/node-red",
+    "remoteFlowPath": "/srv/lk1-subscription-dev/node-red/flows.json"
   },
   "candidateSha256": null,
   "installAllowed": false,

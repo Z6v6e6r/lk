@@ -1,0 +1,51 @@
+{
+  "formatVersion": 1,
+  "environment": "DEV",
+  "authorizationState": "AUTHORIZED_SOURCE_ONLY",
+  "scope": "BUILD_OFFLINE_CANDIDATE_ONLY",
+  "hostEvidence": {
+    "path": "scripts/lk1_subscription_dev_host_evidence.json",
+    "sha256": "b6080915213e5a3a76af57450097aab34a6081407f15737dfb54fe0e34bd0578",
+    "scope": "BUILD_ONLY_NOT_INSTALL_EVIDENCE",
+    "capturedAt": "2026-09-03T12:30:09Z"
+  },
+  "filesSha256": {
+    "scripts/generate_lk1_subscription_dev_offline_source.mjs": "735e33675f596e45b2088016484f7ec0874155dbc933148cafec99b52393345f",
+    "scripts/inspect_lk1_subscription_dev_snapshot.mjs": "5d540e6c24c50a6b0e7775d854f25c3faa5c315d6aa8a75fbe6b88b28211fbbf",
+    "scripts/lk1_subscription_dev_execution_contract.mjs": "f02c30c55f75630e0e11b8ee2fa52d52a1e90c7d2609d04dfce132f002492712",
+    "scripts/prepare_lk1_subscription_dev_candidate.mjs": "08b07c70fcee4c5f5a76b83d650c1043afa069b472f722db980ab34f6a3cc493",
+    "scripts/lk1_subscription_dev_candidate_binding.json": "792afcdb5e2911350cf29e838247b98f8b102e70e3bda016e07ca49b75bd6dca",
+    "scripts/lk1_subscription_dev_host_evidence.json": "b6080915213e5a3a76af57450097aab34a6081407f15737dfb54fe0e34bd0578",
+    "scripts/lk1_subscription_dev_provisioning_contract.json": "223f3756056d153684cebd3bd0f69392ec947eacf45f69c2d107f9a8ee0231ff",
+    "scripts/validate_lk1_subscription_dev_provisioning_contract.mjs": "d8680a0171fe1666f4aa11c93cd8a704e021f785e9234133f0ec41fd481d90ef",
+    "scripts/lk1_subscription_runtime_environment_bindings.json": "59f6c3fef034949dad775017f39576c4283744c29baf62af980a9c5f3cffb13b"
+  },
+  "sourceInputsSha256": {
+    "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js": "02cd217c8791dbd0a70928539d05ef5cd44c6b57a8ad763cd6e95893d2f418c1",
+    "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js": "1da7771e86ace8635488484059984b1ac93c2628c6edcb4b07b6a9fadb1bdc11",
+    "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_finalize.js": "d9efac68af3287c9296d103581ba40e662e557768c784477ce2004cb979ca89c",
+    "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_evaluate.js": "a1fcb4f942fb265203ee7c7232fecf6b4eb9459ede5b174cc05bb2d28f1a8576",
+    "scripts/nodered_subscription_booking_nodes/fn_managed_subscription_policy_blocked.js": "0fcd9e7adcf983b061201297329136702d10fce4c65647aeb67cec0c71a16a7f",
+    "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_mongo_error.js": "1c786def280a91c684dae8a71d56ac903ad1912f059145aa85d1dab0944f3a56",
+    "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_options.js": "fec610c6edf685732d0fdf24f007327829fbf7f87d64598d81b6b9e613d2d2df",
+    "scripts/nodered_games_nodes/fn_split_router.js": "6a14d80655daa998e1d26c68d20bbcdcfa7ef401d023689440f4accea6e8a9ec",
+    "scripts/nodered_games_nodes/fn_split_create_prepare.js": "b85af365a2aa954484ca19f05eebb0d2115393589111c6dc1e14832e76dbfe68",
+    "scripts/nodered_games_nodes/fn_split_join_prepare.js": "2192e71a9a5c2e453d774ac8588d4ed1ff3bc34ba77f674d04797bbff443db31"
+  },
+  "sourceSha256": "e40db778a18885b3dee6b6f414fe9c4c1b566092df4ed331c5055f9489c1aaec",
+  "sourceNodeInventorySha256": "7c8bc19610747b449ec902334524a4099ac9dabc2cb011b229392413f4469d92",
+  "executionFunctionNodePreimagesSha256": {
+    "8f7bd5b482fe9763": "16690a1cbd8f2605596b0a503f43134c02ff7fd6d72ae9a9d489a023221657ed",
+    "e92e68bf3f08a70c": "46068a1403c4cabb1980b853da28a1f97fa84bef2bedac11718cff914a15a54f",
+    "f3f9a60354d394da": "696abda2fd31d0e76335719c27a019f668576d9cc8d7641175ac4cba2a6c4d21",
+    "lk_subscription_booking_finalize_20260804": "4be11eed3df7a9a720853f0abcb63a0f3a95baa349155980c5564c5338a700d7",
+    "lk_subscription_booking_mongo_error_20260804": "94a0b73542bcc6498a7a207ce7b936fcb1a760619401e79f6ec987bfa872e830",
+    "lk_subscription_booking_options_20260804": "b9d71752f91128631717e3ee2dd017511923be9d9f16a4389c62894864bd5803",
+    "lk_subscription_booking_prepare_20260804": "b49bed9c1d4cd80c3380f66886fb1c8c50dae9867b45910432cd95e1035346ed",
+    "lk_subscription_booking_router_20260804": "77c71077c5c5cc30217cbe858aae420a52ace9422274a6f41bf319cf7b9255eb",
+    "lk_subscription_managed_policy_20260820": "9f4970224b433fa6b66d9c13f560b8cbd5770a47a55d992b27c2e19283de371e",
+    "lk_subscription_managed_policy_blocked_20260820": "fb6ab7f0fac134712c2cf1e230f9bfb8a90d311ace4765abc4675c23c4e80888"
+  },
+  "candidateSha256": "580b917cc2440e74984b23258be2e63d3d4b29e5105685742cf0e25a9c3547a7",
+  "manifestSha256": "f488666dc9a2769f7d1529f12b22a25780a33d40b07fcbc0c74e699cfbdfd53b"
+}
