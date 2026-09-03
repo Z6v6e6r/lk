@@ -56,7 +56,8 @@ const SECRET_KEY = /(authorization|token|secret|cookie|password|phone|full.?name
 const ID_KEY = /(clientSubscriptionId|subscriptionInstanceId|providerBookingId|clientId|userId)$/i;
 const SAFE_TOKEN = /^[A-Z][A-Z0-9_]{0,39}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
-const RELEASE_SHA = /^[a-f0-9]{40}$/i;
+const RELEASE_COMMIT = /^[a-f0-9]{40}$/i;
+const RELEASE_SHA256 = /^[a-f0-9]{64}$/i;
 const WRITE_SAFETY_DIMENSIONS = Object.freeze([
   "runnerMutationMethodsBlocked",
   "createJoinWritesAbsent",
@@ -490,14 +491,15 @@ function check(name, ok, code, details = undefined, status = undefined) {
 }
 
 function releaseBinding(payload) {
-  if (!isObject(payload)) return null;
-  const binding = {
-    sourceSha: text(payload.sourceSha),
-    candidateSha: text(payload.candidateSha),
-    readbackSha: text(payload.readbackSha),
-    servedSha: text(payload.servedSha),
-  };
-  return Object.values(binding).every((value) => RELEASE_SHA.test(value)) ? binding : null;
+  if (!isObject(payload) || payload.schemaVersion !== 2 || text(payload.environment) !== "DEV"
+    || !RELEASE_COMMIT.test(text(payload.sourceCommit))) return null;
+  const digestKeys = Object.keys(payload).filter((key) => key.endsWith("Sha256")).sort();
+  if (digestKeys.length < 3
+    || !digestKeys.includes("hostReadbackSha256")
+    || !digestKeys.includes("servedSha256")) return null;
+  const digests = Object.fromEntries(digestKeys.map((key) => [key, text(payload[key])]));
+  if (!Object.values(digests).every((value) => RELEASE_SHA256.test(value))) return null;
+  return { schemaVersion: 2, environment: "DEV", sourceCommit: text(payload.sourceCommit), ...digests };
 }
 
 function inspectRelease(payload, label, expected) {

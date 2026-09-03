@@ -5,8 +5,9 @@
   "environmentIdentityVerified": false,
   "source": {
     "sourceKind": "offline-dedicated-dev-bootstrap",
+    "sourceCommit": "a20d5f6d7155b3382b97edb48c111fa23322f4a4",
     "generatorPath": "scripts/generate_lk1_subscription_dev_offline_source.mjs",
-    "generatorSha256": "735e33675f596e45b2088016484f7ec0874155dbc933148cafec99b52393345f",
+    "generatorSha256": "0d16c9e0fc09e850ecf93c74e64be71e55181567dd8f7a9179016a506eaffa7d",
     "sourceInputsSha256": {
       "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js": "02cd217c8791dbd0a70928539d05ef5cd44c6b57a8ad763cd6e95893d2f418c1",
       "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js": "1da7771e86ace8635488484059984b1ac93c2628c6edcb4b07b6a9fadb1bdc11",
@@ -19,8 +20,8 @@
       "scripts/nodered_games_nodes/fn_split_create_prepare.js": "b85af365a2aa954484ca19f05eebb0d2115393589111c6dc1e14832e76dbfe68",
       "scripts/nodered_games_nodes/fn_split_join_prepare.js": "2192e71a9a5c2e453d774ac8588d4ed1ff3bc34ba77f674d04797bbff443db31"
     },
-    "sourceSha256": "e40db778a18885b3dee6b6f414fe9c4c1b566092df4ed331c5055f9489c1aaec",
-    "sourceNodeInventorySha256": "7c8bc19610747b449ec902334524a4099ac9dabc2cb011b229392413f4469d92",
+    "sourceSha256": "bada371662cc4d4a27fca5a1a9335c657dac298bba754f48f9787ac67bfe4722",
+    "sourceNodeInventorySha256": "d5d8275a2ddb04b502c953cdeefea7004ceb88f700310cdc68b0e23b29478761",
     "nodeCount": 23,
     "httpRouteCount": 2,
     "tabCount": 1,
@@ -57,7 +58,7 @@
     "finalizeNodePreimageSha256": "4be11eed3df7a9a720853f0abcb63a0f3a95baa349155980c5564c5338a700d7"
   },
   "runtime": {
-    "apiBase": "http://127.0.0.1:3037/api",
+    "apiBase": "http://127.0.0.1:3036/api",
     "completeManagedContractExposed": false,
     "reason": "Source-only binding; DEV services are stopped and no runtime contract was exercised"
   },
@@ -129,18 +130,18 @@
     "mongodb4ClientPreimages": [
       {
         "id": "lk1_subscription_dev_mongo_client_20260903",
-        "sha256": "f0d3c87ffd8fd8e0bdc879eb74779390dee7e7d1c8f6f69dedbb82c2ea775258"
+        "sha256": "c1a0d4e2bd9c703272d3c8709f15f2976ee3e0b1b160f6f5cd45b1632ac2a144"
       }
     ],
     "managedMongoClient": {
       "id": "lk1_subscription_dev_mongo_client_20260903",
-      "preimageSha256": "f0d3c87ffd8fd8e0bdc879eb74779390dee7e7d1c8f6f69dedbb82c2ea775258",
+      "preimageSha256": "c1a0d4e2bd9c703272d3c8709f15f2976ee3e0b1b160f6f5cd45b1632ac2a144",
       "effectiveIdentity": {
         "mode": "uri",
         "protocol": "mongodb",
         "host": "127.0.0.1",
         "port": 27030,
-        "database": "lk1_subscription_dev_fixture",
+        "database": "dev-lk1-subscription-canary",
         "credentialsPresent": false,
         "optionsPresent": false,
         "uriTabActive": "tab-uri-advanced"

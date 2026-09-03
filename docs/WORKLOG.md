@@ -1718,13 +1718,12 @@
 - Reconciled the candidate work with current `origin/main` after stopped-bootstrap
   and read-only runtime-source integration, preserving the historical bootstrap
   contract byte-for-byte.
-- Captured fresh read-only host evidence for `lk-reserve-89`: the dedicated identity
-  and five exact units remain loaded, disabled and inactive/dead; all five DEV ports
-  are closed, no activation units exist, and the target flow is absent.
+- Deliberately did not capture or store fresh host evidence: host identity, units,
+  listeners and target-flow state remain a future read-only preflight gate.
 - Added a deterministic 23-node offline source generator and strict candidate
   publisher with independent source-input/function preimages, exact loopback endpoint
   and Mongo custody, temp-only atomic readiness, and a build-only evidence binding.
-- Frozen source `e40db778…`, candidate `580b917…`, and manifest `f488666…` while
+- Frozen source `bada371…`, candidate `ab73803e…`, and manifest `4daac22f…` while
   retaining `hostPreimageState=ABSENT`, null rollback source, install authorization
   `false`, and production binding `UNBOUND_AFTER_ROUTER_AMENDMENT`.
 - No host install, Node-RED import, service start/enable, ingress, activation, canary

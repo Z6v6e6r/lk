@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,7 +29,6 @@ const SPLIT_ROUTER_SOURCE = "scripts/nodered_games_nodes/fn_split_router.js";
 const SPLIT_CREATE_PREPARE_SOURCE = "scripts/nodered_games_nodes/fn_split_create_prepare.js";
 const SPLIT_JOIN_PREPARE_SOURCE = "scripts/nodered_games_nodes/fn_split_join_prepare.js";
 const OFFLINE_GENERATOR = "scripts/generate_lk1_subscription_dev_offline_source.mjs";
-const HOST_EVIDENCE_PATH = "scripts/lk1_subscription_dev_host_evidence.json";
 const isTemporaryChild = (candidate) => (
   candidate.startsWith("/private/tmp/") || candidate.startsWith("/tmp/")
 );
@@ -64,118 +64,6 @@ export const CHECKED_DEV_SOURCE_AUTHORIZATION = Object.freeze(JSON.parse(fs.read
   "utf8",
 )));
 
-const exactKeys = (value, expected, label) => {
-  if (!value || typeof value !== "object" || Array.isArray(value)
-    || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify([...expected].sort())) {
-    fail(`${label} schema mismatch`);
-  }
-};
-
-export function validateDevHostEvidence(evidence) {
-  exactKeys(evidence, [
-    "formatVersion", "environment", "scope", "capturedAt", "sourceHost", "sourceHostname",
-    "unixIdentity", "targetFlow", "units", "networkPolicy", "paths", "installedArtifacts", "authority",
-  ], "DEV host evidence");
-  const capturedAt = Date.parse(String(evidence.capturedAt || ""));
-  if (evidence.formatVersion !== 1 || evidence.environment !== "DEV"
-    || evidence.scope !== "BUILD_ONLY_NOT_INSTALL_EVIDENCE"
-    || !Number.isFinite(capturedAt)
-    || new Date(capturedAt).toISOString().replace(".000Z", "Z") !== evidence.capturedAt
-    || evidence.sourceHost !== "lk-reserve-89"
-    || evidence.sourceHostname !== "89-108-64-209.cloudvps.regruhosting.ru") {
-    fail("DEV host evidence identity mismatch");
-  }
-  exactKeys(evidence.unixIdentity, ["user", "group", "uid", "gid"], "DEV unix identity");
-  if (JSON.stringify(evidence.unixIdentity) !== JSON.stringify({
-    user: "lk1-subscription-dev", group: "lk1-subscription-dev", uid: 997, gid: 997,
-  })) fail("DEV unix identity mismatch");
-  exactKeys(evidence.targetFlow, ["path", "state", "sha256"], "DEV target flow evidence");
-  if (evidence.targetFlow.path !== "/srv/lk1-subscription-dev/node-red/flows.json"
-    || evidence.targetFlow.state !== "ABSENT" || evidence.targetFlow.sha256 !== null) {
-    fail("DEV target flow must remain absent before candidate install");
-  }
-  const expectedUnits = {
-    "lk1-subscription-dev-nodered.service": {
-      fragmentSha256: "75fafcae24c5aefdca545786967bed12d509d12d2555a37d94e23571732f764a",
-      workingDirectory: "/srv/lk1-subscription-dev/node-red",
-      execStart: "/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/runtime/node-red/red.js --userDir /srv/lk1-subscription-dev/node-red --settings /srv/lk1-subscription-dev/node-red/settings.js --port 1882",
-    },
-    "lk1-subscription-dev-mongo.service": {
-      fragmentSha256: "370f07b518f14d87ba78d2cdc3e3cd15714349cf664d2bf53ac95ec2125a9980",
-      workingDirectory: "/srv/lk1-subscription-dev/mongo",
-      execStart: "/srv/lk1-subscription-dev/runtime/mongodb/bin/mongod --bind_ip 127.0.0.1 --port 27030 --dbpath /srv/lk1-subscription-dev/mongo --nounixsocket",
-    },
-    "lk1-subscription-dev-cup.service": {
-      fragmentSha256: "745333370a304d2d1e70add583930d73f704002c634e9eba4343dda7dca45b90",
-      workingDirectory: "/srv/lk1-subscription-dev",
-      execStart: "/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/locked_fixture_runtime.mjs --role cup",
-    },
-    "lk1-subscription-dev-provider-fixture.service": {
-      fragmentSha256: "dbf8a46a002b7f478b011b2afeb2a09837d8f44ecd5873a5225a6da6a895bca5",
-      workingDirectory: "/srv/lk1-subscription-dev",
-      execStart: "/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/locked_fixture_runtime.mjs --role provider",
-    },
-    "lk1-subscription-dev-identity-fixture.service": {
-      fragmentSha256: "673fa03feb87aa886d408684ca947609263929ef178d395d93480fe096488179",
-      workingDirectory: "/srv/lk1-subscription-dev",
-      execStart: "/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/locked_fixture_runtime.mjs --role identity",
-    },
-  };
-  if (!Array.isArray(evidence.units)
-    || JSON.stringify(evidence.units.map(({ serviceName }) => serviceName))
-      !== JSON.stringify(Object.keys(expectedUnits))) fail("DEV unit inventory mismatch");
-  for (const unit of evidence.units) {
-    exactKeys(unit, [
-      "serviceName", "fragmentPath", "fragmentSha256", "loadState", "unitFileState",
-      "activeState", "subState", "user", "group", "workingDirectory", "execStart",
-    ], `DEV unit ${unit.serviceName}`);
-    const expected = expectedUnits[unit.serviceName];
-    if (unit.fragmentPath !== `/etc/systemd/system/${unit.serviceName}`
-      || unit.fragmentSha256 !== expected.fragmentSha256
-      || unit.loadState !== "loaded" || unit.unitFileState !== "disabled"
-      || unit.activeState !== "inactive" || unit.subState !== "dead"
-      || unit.user !== "lk1-subscription-dev" || unit.group !== "lk1-subscription-dev"
-      || unit.workingDirectory !== expected.workingDirectory || unit.execStart !== expected.execStart) {
-      fail(`DEV unit is not exact, disabled, and stopped (${unit.serviceName})`);
-    }
-  }
-  exactKeys(evidence.networkPolicy,
-    ["ipAddressDeny", "ipAddressAllow", "activationUnits", "openListeners"], "DEV network evidence");
-  if (JSON.stringify(evidence.networkPolicy) !== JSON.stringify({
-    ipAddressDeny: ["0.0.0.0/0", "::/0"],
-    ipAddressAllow: ["127.0.0.0/8", "::1/128"],
-    activationUnits: [],
-    openListeners: [],
-  })) fail("DEV host network isolation evidence mismatch");
-  const expectedPaths = [
-    { path: "/srv/lk1-subscription-dev", mode: "0750", owner: "root", group: "lk1-subscription-dev" },
-    { path: "/srv/lk1-subscription-dev/node-red", mode: "0750", owner: "root", group: "lk1-subscription-dev" },
-    { path: "/srv/lk1-subscription-dev/mongo", mode: "0700", owner: "lk1-subscription-dev", group: "lk1-subscription-dev" },
-    { path: "/srv/lk1-subscription-dev/evidence", mode: "0700", owner: "lk1-subscription-dev", group: "lk1-subscription-dev" },
-    { path: "/srv/lk1-subscription-dev/fixtures", mode: "0750", owner: "root", group: "lk1-subscription-dev" },
-    { path: "/srv/lk1-subscription-dev/runtime", mode: "0750", owner: "root", group: "lk1-subscription-dev" },
-  ];
-  if (JSON.stringify(evidence.paths) !== JSON.stringify(expectedPaths)) {
-    fail("DEV host path custody evidence mismatch");
-  }
-  exactKeys(evidence.installedArtifacts,
-    ["settingsSha256", "lockedFixtureRuntimeSha256"], "DEV installed artifact evidence");
-  if (JSON.stringify(evidence.installedArtifacts) !== JSON.stringify({
-    settingsSha256: "6b6cc7253b120f2a8b2397c0d3a5f82db9a72fb6d62948bd9f6e6bdb5ab3deb6",
-    lockedFixtureRuntimeSha256: "eaaef5b53d9f0c365a124ddb4dc7b4f1d0efd7c72522e62c5dc9250515010506",
-  })) {
-    fail("DEV installed artifact digest mismatch");
-  }
-  exactKeys(evidence.authority, [
-    "hostInstall", "nodeRedImport", "serviceStart", "enableUnits", "ingress",
-    "activation", "canaryIds", "secrets", "externalWrites",
-  ], "DEV host evidence authority");
-  if (Object.values(evidence.authority).some((value) => value !== false)) {
-    fail("DEV host evidence cannot authorize a live action");
-  }
-  return true;
-}
-
 export function validateDevSourceAuthorization(authorization, binding, candidateIdentity = null) {
   const expectedFiles = [
     "scripts/generate_lk1_subscription_dev_offline_source.mjs",
@@ -183,14 +71,13 @@ export function validateDevSourceAuthorization(authorization, binding, candidate
     "scripts/lk1_subscription_dev_execution_contract.mjs",
     "scripts/prepare_lk1_subscription_dev_candidate.mjs",
     "scripts/lk1_subscription_dev_candidate_binding.json",
-    HOST_EVIDENCE_PATH,
     "scripts/lk1_subscription_dev_provisioning_contract.json",
     "scripts/validate_lk1_subscription_dev_provisioning_contract.mjs",
     "scripts/lk1_subscription_runtime_environment_bindings.json",
   ].sort();
   const expectedKeys = [
-    "formatVersion", "environment", "authorizationState", "scope", "hostEvidence", "filesSha256",
-    "sourceInputsSha256", "sourceSha256", "sourceNodeInventorySha256",
+    "formatVersion", "environment", "authorizationState", "scope", "filesSha256",
+    "sourceCommit", "sourceInputsSha256", "sourceSha256", "sourceNodeInventorySha256",
     "executionFunctionNodePreimagesSha256", "candidateSha256", "manifestSha256",
   ].sort();
   const executionPreimages = Object.fromEntries(
@@ -201,6 +88,7 @@ export function validateDevSourceAuthorization(authorization, binding, candidate
     || authorization.environment !== "DEV"
     || authorization.authorizationState !== "AUTHORIZED_SOURCE_ONLY"
     || authorization.scope !== "BUILD_OFFLINE_CANDIDATE_ONLY"
+    || authorization.sourceCommit !== binding.source.sourceCommit
     || JSON.stringify(Object.keys(authorization.filesSha256 || {}).sort()) !== JSON.stringify(expectedFiles)
     || Object.entries(authorization.filesSha256 || {}).some(([file, expected]) => (
       !/^[a-f0-9]{64}$/.test(expected || "")
@@ -215,21 +103,18 @@ export function validateDevSourceAuthorization(authorization, binding, candidate
     || !/^[a-f0-9]{64}$/.test(authorization.manifestSha256 || "")) {
     fail("DEV source-only authorization contract mismatch");
   }
-  exactKeys(authorization.hostEvidence, ["path", "sha256", "scope", "capturedAt"],
-    "DEV host evidence binding");
-  if (authorization.hostEvidence.path !== HOST_EVIDENCE_PATH) {
-    fail("DEV host evidence binding mismatch");
+  for (const [file, expected] of Object.entries(authorization.sourceInputsSha256)) {
+    let committed;
+    try {
+      committed = execFileSync("git", ["show", `${authorization.sourceCommit}:${file}`], {
+        cwd: REPO_ROOT,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch {
+      fail(`DEV exact-main source input is unavailable (${file})`);
+    }
+    if (sha256(committed) !== expected) fail(`DEV exact-main source input digest mismatch (${file})`);
   }
-  const hostEvidencePath = path.join(REPO_ROOT, authorization.hostEvidence.path || "");
-  const hostEvidenceBytes = fs.readFileSync(hostEvidencePath);
-  const hostEvidence = JSON.parse(hostEvidenceBytes);
-  if (authorization.hostEvidence.sha256 !== sha256(hostEvidenceBytes)
-    || authorization.filesSha256[HOST_EVIDENCE_PATH] !== authorization.hostEvidence.sha256
-    || authorization.hostEvidence.scope !== hostEvidence.scope
-    || authorization.hostEvidence.capturedAt !== hostEvidence.capturedAt) {
-    fail("DEV host evidence binding mismatch");
-  }
-  validateDevHostEvidence(hostEvidence);
   if (candidateIdentity && (
     candidateIdentity.candidateSha256 !== authorization.candidateSha256
     || candidateIdentity.manifestSha256 !== authorization.manifestSha256
@@ -291,16 +176,16 @@ export function validateDevInstallTarget(target,
   return true;
 }
 
-export function validateDevEndpointBindings(endpoints, provisioningContract = checkedProvisioningContract) {
+export function validateDevEndpointBindings(endpoints, trustedBindings = LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS) {
   const expectedKeys = ["cupApiBase", "vivaApiBase", "serv2Base", "tokenUrl"].sort();
   if (JSON.stringify(Object.keys(endpoints || {}).sort()) !== JSON.stringify(expectedKeys)) {
     fail("DEV endpoint bindings do not match the approved schema");
   }
   const expected = {
-    cupApiBase: `http://${provisioningContract.fixtureDependencies.cup.listener}/api`,
-    vivaApiBase: `http://${provisioningContract.fixtureDependencies.provider.listener}`,
-    serv2Base: `http://${provisioningContract.fixtureDependencies.provider.listener}/serv2`,
-    tokenUrl: `http://${provisioningContract.fixtureDependencies.identity.listener}/realms/dev/protocol/openid-connect/token`,
+    cupApiBase: "http://127.0.0.1:3036/api",
+    vivaApiBase: "http://127.0.0.1:3038",
+    serv2Base: "http://127.0.0.1:3038/serv2",
+    tokenUrl: "http://127.0.0.1:3039/realms/dev/protocol/openid-connect/token",
   };
   for (const [key, value] of Object.entries(expected)) {
     if (endpoints[key] !== value) fail(`DEV ${key} is not the exact fixture binding`);
@@ -309,6 +194,9 @@ export function validateDevEndpointBindings(endpoints, provisioningContract = ch
       || parsed.username || parsed.password || parsed.search || parsed.hash) {
       fail(`DEV ${key} is not an isolated loopback URL`);
     }
+  }
+  if (JSON.stringify(endpoints) !== JSON.stringify(trustedBindings.DEV_ENDPOINTS)) {
+    fail("DEV endpoint bindings diverge from the trusted source-only contract");
   }
   return true;
 }
@@ -560,7 +448,7 @@ const effectiveMongoIdentity = (node) => {
   fail("DEV mongodb4-client must use an exact credential-free URI");
 };
 
-const assertDevMongoCustody = (flow, router, dependencies, provisioningContract) => {
+const assertDevMongoCustody = (flow, router, dependencies, trustedBindings) => {
   if (flow.filter((node) => node?.type === "mongodb4-client").length !== 1
     || flow.some((node) => node?.type === "mongodb")) {
     fail("DEV managed Mongo client inventory must be exactly one fixture client");
@@ -570,7 +458,7 @@ const assertDevMongoCustody = (flow, router, dependencies, provisioningContract)
     && node.id === claimedClient?.id);
   if (clients.length !== 1) fail("DEV managed mongodb4-client identity is absent or ambiguous");
   const identity = effectiveMongoIdentity(clients[0]);
-  const expected = provisioningContract.fixtureDependencies.mongo;
+  const expected = trustedBindings.DEV_MONGO;
   if (identity.protocol !== "mongodb" || identity.host !== expected.host
     || identity.port !== expected.port || identity.database !== expected.database
     || identity.credentialsPresent || identity.optionsPresent
@@ -691,12 +579,13 @@ export function validateDevBinding(binding,
   }
   const source = binding.source;
   const sourceKeys = [
-    "sourceKind", "generatorPath", "generatorSha256", "sourceInputsSha256",
+    "sourceKind", "sourceCommit", "generatorPath", "generatorSha256", "sourceInputsSha256",
     "sourceSha256", "sourceNodeInventorySha256", "nodeCount", "httpRouteCount", "tabCount",
     "brokenWires", "brokenLinks",
   ].sort();
   if (JSON.stringify(Object.keys(source || {}).sort()) !== JSON.stringify(sourceKeys)
     || source.sourceKind !== "offline-dedicated-dev-bootstrap"
+    || !/^[a-f0-9]{40}$/.test(source.sourceCommit || "")
     || source.generatorPath !== OFFLINE_GENERATOR
     || !/^[a-f0-9]{64}$/.test(source.generatorSha256 || "")
     || JSON.stringify(Object.keys(source.sourceInputsSha256 || {}).sort())
@@ -738,7 +627,7 @@ export function validateDevBinding(binding,
   validateEnvironmentApiBase(
     "DEV", binding.runtime.apiBase, trustedBindings.DEV_CANDIDATE_API_BASE,
   );
-  validateDevEndpointBindings(trustedBindings.DEV_ENDPOINTS, provisioningContract);
+  validateDevEndpointBindings(trustedBindings.DEV_ENDPOINTS, trustedBindings);
   validateDevInstallTarget(binding.installTarget, trustedBindings);
   if (binding.candidateSha256 !== null
     || binding.productionBindingState !== "UNBOUND_AFTER_ROUTER_AMENDMENT") {
@@ -812,7 +701,7 @@ export function buildDevCandidate(sourceText, binding, readSource = readReposito
   assertDevHttpCustody(
     flow, router, prepare, splitRouter, splitCreatePrepare, splitJoinPrepare, binding.dependencies,
   );
-  assertDevMongoCustody(flow, router, binding.dependencies, provisioningContract);
+  assertDevMongoCustody(flow, router, binding.dependencies, trustedBindings);
   const routerSource = bindDevEndpoints(bindManagedRuntimeSource(
     String(readSource(ROUTER_SOURCE, "utf8")), binding.runtime.apiBase,
   ), "router", endpoints);
@@ -878,12 +767,22 @@ export function buildDevCandidate(sourceText, binding, readSource = readReposito
     manifest: {
       formatVersion: 1,
       environment: "DEV",
+      sourceCommit: binding.source.sourceCommit,
       sourceSha256: binding.source.sourceSha256,
       sourceNodeInventorySha256: binding.source.sourceNodeInventorySha256,
       candidateSha256,
       sourceProvenance: "OFFLINE_GENERATED",
-      hostPreimageState: "ABSENT",
-      rollbackSourceSha256: null,
+      hostPreimage: {
+        state: "ABSENT",
+        sha256: null,
+      },
+      rollback: {
+        mode: "RETURN_TO_ABSENT",
+        restoreSha256: null,
+        preserveEvidence: true,
+        deleteData: false,
+        requiresSeparateAuthorization: true,
+      },
       targetHost: binding.installTarget.sourceHost,
       targetHostname: binding.installTarget.sourceHostname,
       targetServiceName: binding.installTarget.serviceName,
@@ -976,10 +875,7 @@ export function publishDevCandidate(workspace, binding, options = {}) {
   );
   const buildDirectory = path.join(resolvedWorkspace, "build");
   if (fs.existsSync(buildDirectory)) fail("Refusing to overwrite an existing DEV candidate build");
-  const publishedManifest = {
-    ...result.manifest,
-    hostEvidence: { ...sourceAuthorization.hostEvidence },
-  };
+  const publishedManifest = { ...result.manifest };
   const manifestText = `${JSON.stringify(publishedManifest, null, 2)}\n`;
   const manifestSha256 = sha256(manifestText);
   validateDevSourceAuthorization(sourceAuthorization, binding, {
@@ -998,13 +894,12 @@ export function publishDevCandidate(workspace, binding, options = {}) {
       formatVersion: 1,
       environment: "DEV",
       sourceProvenance: "OFFLINE_GENERATED",
+      sourceCommit: binding.source.sourceCommit,
       sourceSha256: binding.source.sourceSha256,
       sourceNodeInventorySha256: binding.source.sourceNodeInventorySha256,
       candidateSha256: result.manifest.candidateSha256,
       candidateNodeInventorySha256: result.manifest.candidateNodeInventorySha256,
       manifestSha256,
-      hostEvidenceSha256: sourceAuthorization.hostEvidence.sha256,
-      hostEvidenceCapturedAt: sourceAuthorization.hostEvidence.capturedAt,
       hostPreimageState: "ABSENT",
       hostReadbackSha256: null,
       installAuthorized: false,
@@ -1033,7 +928,13 @@ export function validateDevInstallManifest(manifest, target,
     || manifest.targetUserDir !== target.userDir
     || manifest.targetFlowPath !== target.remoteFlowPath
     || !/^[a-f0-9]{64}$/.test(manifest.candidateSha256 || "")
-    || manifest.rollbackSourceSha256 !== manifest.sourceSha256
+    || manifest.hostPreimage?.state !== "ABSENT"
+    || manifest.hostPreimage?.sha256 !== null
+    || manifest.rollback?.mode !== "RETURN_TO_ABSENT"
+    || manifest.rollback?.restoreSha256 !== null
+    || manifest.rollback?.preserveEvidence !== true
+    || manifest.rollback?.deleteData !== false
+    || manifest.rollback?.requiresSeparateAuthorization !== true
     || !Array.isArray(manifest.changedNodeIds) || manifest.changedNodeIds.length < 1
     || new Set(manifest.changedNodeIds).size !== manifest.changedNodeIds.length
     || !Array.isArray(manifest.changedNodes)

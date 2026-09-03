@@ -42,8 +42,9 @@ export DEV_UAT_CONFIG_FILE=/private/tmp/subscription-sale-period-dev-uat.json
   `DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID`, `DEV_CONTROL_AUTH`;
 - exact `DEV_UAT_ALLOWED_DEV_ORIGINS_JSON` с обоими origin;
 - frozen `DEV_UAT_EXPECTED_LK_RELEASE_JSON` и
-  `DEV_UAT_EXPECTED_CUP_RELEASE_JSON`, каждый с exact `sourceSha`,
-  `candidateSha`, `readbackSha`, `servedSha`.
+  `DEV_UAT_EXPECTED_CUP_RELEASE_JSON`, каждый со схемой v2: exact 40-hex
+  `sourceCommit` и отдельные 64-hex `*Sha256`, включая
+  `hostReadbackSha256` и `servedSha256`.
 
 Опциональны:
 
@@ -82,10 +83,13 @@ indexes и fresh evidence разрешают отправить user-scoped cred
 
 ```json
 {
-  "sourceSha": "1111111111111111111111111111111111111111",
-  "candidateSha": "1111111111111111111111111111111111111111",
-  "readbackSha": "1111111111111111111111111111111111111111",
-  "servedSha": "1111111111111111111111111111111111111111"
+  "schemaVersion": 2,
+  "environment": "DEV",
+  "sourceCommit": "1111111111111111111111111111111111111111",
+  "candidateSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "manifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "hostReadbackSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "servedSha256": "1111111111111111111111111111111111111111111111111111111111111111"
 }
 ```
 

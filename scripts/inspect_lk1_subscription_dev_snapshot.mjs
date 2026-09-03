@@ -15,15 +15,16 @@ if (!sourcePath || !metaPath) {
 const raw = fs.readFileSync(sourcePath);
 const flow = JSON.parse(raw.toString("utf8"));
 const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
-const provisioning = JSON.parse(fs.readFileSync(
-  new URL("./lk1_subscription_dev_provisioning_contract.json", import.meta.url),
+const runtimeBindings = JSON.parse(fs.readFileSync(
+  new URL("./lk1_subscription_runtime_environment_bindings.json", import.meta.url),
   "utf8",
 ));
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const allowedEndpointOrigins = new Set([
-  `http://${provisioning.fixtureDependencies.cup.listener}`,
-  `http://${provisioning.fixtureDependencies.provider.listener}`,
-  `http://${provisioning.fixtureDependencies.identity.listener}`,
+  new URL(runtimeBindings.DEV_ENDPOINTS.cupApiBase).origin,
+  new URL(runtimeBindings.DEV_ENDPOINTS.vivaApiBase).origin,
+  new URL(runtimeBindings.DEV_ENDPOINTS.serv2Base).origin,
+  new URL(runtimeBindings.DEV_ENDPOINTS.tokenUrl).origin,
 ]);
 const endpointInventory = [];
 const collectEndpointLiterals = (value, pathPrefix = "$") => {
@@ -101,7 +102,7 @@ const allHttpRequests = flow.filter((node) => node?.type === "http request");
 const legacyMongoConfigs = flow.filter((node) => node?.type === "mongodb");
 const mongo4Clients = flow.filter((node) => node?.type === "mongodb4-client");
 const mongo4Nodes = flow.filter((node) => node?.type === "mongodb4");
-const expectedMongo = provisioning.fixtureDependencies.mongo;
+const expectedMongo = runtimeBindings.DEV_MONGO;
 const effectiveMongoIdentity = (node) => {
   const uri = String(node?.uri || "").trim();
   if (uri && uri !== "__MONGODB_URI_REQUIRED__") {

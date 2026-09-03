@@ -57,7 +57,11 @@ start/enable units, ingress, выдача canary IDs, activation и ручной
 source-пакете не реализован.
 
 Historical stopped bootstrap оставил каталог `authorization` под
-`root:root 0700`. Поэтому runtime process не сможет сам прочитать будущий marker:
-до start-stage нужен отдельный проверенный механизм marker custody (и новая
-авторизация на соответствующее host-изменение). Текущий source намеренно остаётся
-fail-closed при этой несовместимости.
+`root:root 0700`. Локальный install candidate проектирует передачу marker через
+systemd `LoadCredential`, а runtime проверяет credential вместо прямого чтения
+закрытого source path. Принимается только точный `/run/credentials/<unit>`;
+runtime дополнительно проверяет root custody общего каталога и read-only mount
+каталога unit. Node-RED использует тот же validator через `ExecCondition`.
+Этот механизм не установлен и его поддержка на target host не проверена;
+current source остаётся fail-closed без будущего отдельно авторизованного
+install/start-stage.

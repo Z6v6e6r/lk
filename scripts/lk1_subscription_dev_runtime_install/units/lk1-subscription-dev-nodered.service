@@ -1,0 +1,27 @@
+[Unit]
+Description=LK1 subscription isolated DEV release evidence flow (install candidate locked)
+ConditionPathExists=/srv/lk1-subscription-dev/authorization/service-start.approved
+ConditionPathExists=/srv/lk1-subscription-dev/node-red/flows.json
+ConditionPathExists=/srv/lk1-subscription-dev/node-red/release-identity.json
+RefuseManualStart=yes
+
+[Service]
+Type=simple
+User=lk1-subscription-dev
+Group=lk1-subscription-dev
+WorkingDirectory=/srv/lk1-subscription-dev/node-red
+LoadCredential=service-start.approved:/srv/lk1-subscription-dev/authorization/service-start.approved
+EnvironmentFile=/srv/lk1-subscription-dev/runtime/install-identity.env
+ExecCondition=/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs --validate-start-authorization --role nodered
+ExecStart=/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/runtime/node-red/red.js --userDir /srv/lk1-subscription-dev/node-red --settings /srv/lk1-subscription-dev/node-red/settings.js --port 1882
+Restart=no
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/srv/lk1-subscription-dev/node-red/flows.json /srv/lk1-subscription-dev/node-red/release-identity.json /srv/lk1-subscription-dev/node-red/settings.js
+ReadWritePaths=/srv/lk1-subscription-dev/node-red /srv/lk1-subscription-dev/evidence
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 2,
+  "environment": "DEV",
+  "state": "SOURCE_ONLY",
+  "sourceCommit": "a20d5f6d7155b3382b97edb48c111fa23322f4a4",
+  "sourceFlowSha256": "bada371662cc4d4a27fca5a1a9335c657dac298bba754f48f9787ac67bfe4722",
+  "candidateSha256": "ab73803e90852ebc99cd9b019cf181c9bd402e4737ccde8256cc6da448039fb9",
+  "manifestSha256": "4daac22f0955fe924240fbeb33836be6166febdcb2528e18de92b5a57af13388",
+  "hostReadbackSha256": null,
+  "servedSha256": null,
+  "hostPreimage": {
+    "state": "ABSENT",
+    "sha256": null
+  },
+  "rollback": {
+    "mode": "RETURN_TO_ABSENT",
+    "restoreSha256": null,
+    "preserveEvidence": true,
+    "deleteData": false,
+    "requiresSeparateAuthorization": true
+  },
+  "target": {
+    "hostAlias": "lk-reserve-89",
+    "serviceName": "lk1-subscription-dev-nodered.service",
+    "flowPath": "/srv/lk1-subscription-dev/node-red/flows.json"
+  },
+  "authority": {
+    "hostInstall": false,
+    "serviceStart": false,
+    "ingress": false,
+    "activation": false
+  }
+}

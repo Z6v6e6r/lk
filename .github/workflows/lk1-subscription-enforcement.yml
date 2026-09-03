@@ -330,6 +330,8 @@ jobs:
           scripts/tests/lk1SubscriptionDevProvisioning.test.mjs
           scripts/tests/lk1SubscriptionDevBootstrap.test.mjs
           scripts/tests/lk1SubscriptionDevRuntimeSource.test.mjs
+          scripts/tests/lk1SubscriptionDevReleaseReceipt.test.mjs
+          scripts/tests/lk1SubscriptionDevRuntimeInstallCandidate.test.mjs
           scripts/dev-uat/subscriptions-sale-period/test.mjs
 
       - name: Run tracked credential and authenticated-route security tests
