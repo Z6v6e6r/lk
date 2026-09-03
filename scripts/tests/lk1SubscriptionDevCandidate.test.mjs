@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
@@ -28,7 +27,8 @@ import {
 } from "../prepare_lk1_subscription_enforcement_candidate.mjs";
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
-const TEMP_ROOT = fs.existsSync("/private/tmp") ? "/private/tmp" : os.tmpdir();
+const ROOT = path.resolve(import.meta.dirname, "../..");
+const TEMP_ROOT = fs.existsSync("/private/tmp") ? "/private/tmp" : "/tmp";
 const nodeInventorySha256 = (flow) => sha256(JSON.stringify(flow
   .map((node) => ({ id: node.id, sha256: sha256(JSON.stringify(node)) }))
   .sort((left, right) => left.id.localeCompare(right.id))));
@@ -767,7 +767,7 @@ test("offline generator rejects a temp symlink parent that resolves outside its 
   const holder = fs.mkdtempSync(path.join(TEMP_ROOT, "lk1-dev-symlink-parent-"));
   try {
     const redirect = path.join(holder, "redirect");
-    fs.symlinkSync(fs.realpathSync(os.tmpdir()), redirect);
+    fs.symlinkSync(fs.realpathSync(ROOT), redirect);
     assert.throws(() => publishOfflineDevSource(path.join(redirect, "workspace")),
       /workspace must be under/);
   } finally {
