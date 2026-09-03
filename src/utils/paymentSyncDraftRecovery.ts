@@ -97,6 +97,32 @@ export function isPersistedGamePaymentFailedTerminal(record: PadelGameRecord): b
   return ["CANCELLED", "CANCELED", "FAILED", "EXPIRED", "REJECTED"].includes(status);
 }
 
+export function isPaymentSyncRecordBoundToPaymentRef(
+  record: PadelGameRecord,
+  paymentRefRaw: string,
+): boolean {
+  const paymentRef = paymentRefRaw.trim();
+  if (!paymentRef) return false;
+  const metadata = record.metadata && typeof record.metadata === "object"
+    ? record.metadata as Record<string, unknown>
+    : {};
+  const splitPayment = metadata.splitPayment && typeof metadata.splitPayment === "object"
+    ? metadata.splitPayment as Record<string, unknown>
+    : {};
+  const payments = Array.isArray(splitPayment.payments)
+    ? splitPayment.payments as Array<Record<string, unknown>>
+    : [];
+  const payment = record.payment && typeof record.payment === "object"
+    ? record.payment as Record<string, unknown>
+    : {};
+  return parseStringList([
+    metadata.paymentRef,
+    splitPayment.paymentRef,
+    payment.paymentRef,
+    ...payments.map((item) => item?.paymentRef),
+  ]).includes(paymentRef);
+}
+
 export function buildPendingPaidGameDraftFromRecord(
   record: PadelGameRecord,
   paymentRefRaw: string,

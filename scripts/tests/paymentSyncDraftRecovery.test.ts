@@ -4,6 +4,7 @@ import fs from "node:fs";
 import {
   buildPendingPaidGameDraftFromRecord,
   isConfirmedPaymentReadbackBound,
+  isPaymentSyncRecordBoundToPaymentRef,
   isPersistedGamePaymentFailedTerminal,
   isPersistedGamePaymentTerminal,
   resolvePaymentSyncExpectedGameId,
@@ -180,6 +181,19 @@ test("terminal readback is bound to the exact game, paymentRef and booking set",
     gameId: "game-1",
     bookingIds: ["booking-1", "booking-2"],
   }), false);
+});
+
+test("lookup records must carry the exact queued paymentRef", () => {
+  assert.equal(isPaymentSyncRecordBoundToPaymentRef(pendingRecord, "pay-1"), true);
+  assert.equal(isPaymentSyncRecordBoundToPaymentRef(pendingRecord, "pay-other"), false);
+  assert.equal(isPaymentSyncRecordBoundToPaymentRef({
+    ...pendingRecord,
+    metadata: {
+      splitPayment: {
+        payments: [{ paymentRef: "pay-split" }],
+      },
+    },
+  }, "pay-split"), true);
 });
 
 test("concurrent callback recovery resolves the canonical payload gameId", () => {
