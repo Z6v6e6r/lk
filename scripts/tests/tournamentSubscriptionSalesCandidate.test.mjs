@@ -7,14 +7,18 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  assertNoEnabledLegacyPiterSalesTab,
   assertPiterAtomicTopology,
   PITER_ATOMIC_ERROR_SOURCE,
   PITER_ATOMIC_TOPOLOGY_IDS,
+  rejectTopologyDependentPiterSource,
 } from "../lib/piterAtomicTopologyContract.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const BUILDER = path.join(REPO_ROOT, "scripts/prepare_tournament_subscription_sales_candidate.mjs");
 const ATOMIC_BUILDER = path.join(REPO_ROOT, "scripts/prepare_piter_atomic_sales_candidate.mjs");
+const LEGACY_GENERATOR = path.join(REPO_ROOT, "scripts/patch_nodered_games_flow.mjs");
+const MODULAR_SYNC = path.join(REPO_ROOT, "scripts/patch_nodered_games_modular_flow.mjs");
 const FUNCTION_DIR = path.join(REPO_ROOT, "scripts/nodered_games_nodes");
 const TARGETS = [
   ["519b6a6ca208e281", "Prepare tournament subscription counter refresh", "fn_tournament_subscription_counter_refresh_prepare.js"],
@@ -236,8 +240,50 @@ test("builder rejects an enabled legacy sales tab without its own exact Piter to
   const { workspace } = createWorkspace({ duplicateLegacy: true, staleRouter: true });
   const result = runBuilder(workspace);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /Enabled legacy sales tab requires a separate exact-graph Piter topology contract/);
+  assert.match(result.stderr, /enabled legacy Media2 requires a separate exact atomic topology contract/);
   assert.equal(fs.existsSync(path.join(workspace, "build")), false);
+});
+
+test("legacy and modular sync paths reject topology-dependent Piter function-only composition", () => {
+  const currentRouter = fs.readFileSync(
+    path.join(FUNCTION_DIR, "fn_tournament_subscription_purchase_router.js"),
+    "utf8",
+  );
+  const previousRouter = execFileSync("git", [
+    "show",
+    "e320c39^:scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+  ], { cwd: REPO_ROOT, encoding: "utf8" });
+  assert.throws(
+    () => rejectTopologyDependentPiterSource(currentRouter, "fixture"),
+    /cannot compose the topology-dependent Piter purchase router/,
+  );
+  assert.doesNotThrow(() => rejectTopologyDependentPiterSource(previousRouter, "fixture"));
+
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "legacy-piter-generator-")));
+  roots.push(root);
+  const result = spawnSync(process.execPath, [
+    LEGACY_GENERATOR,
+    path.join(root, "unused-source.json"),
+    path.join(root, "must-not-exist.json"),
+  ], { cwd: REPO_ROOT, encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /cannot compose the topology-dependent Piter purchase router/);
+  assert.equal(fs.existsSync(path.join(root, "must-not-exist.json")), false);
+
+  const modularSource = fs.readFileSync(MODULAR_SYNC, "utf8");
+  const topologyGate = modularSource.indexOf("assertPiterAtomicTopology(flow);");
+  const legacyGate = modularSource.indexOf("assertNoEnabledLegacyPiterSalesTab(flow);");
+  const routerReplacement = modularSource.indexOf('replaceAllFunctions(\n  "Route tournament subscription payment"');
+  assert.ok(topologyGate > 0 && topologyGate < routerReplacement);
+  assert.ok(legacyGate > topologyGate && legacyGate < routerReplacement);
+
+  const enabledLegacy = [
+    { id: "8ccb70ac6befff79", type: "tab", label: "Media2", disabled: false },
+  ];
+  assert.throws(
+    () => assertNoEnabledLegacyPiterSalesTab(enabledLegacy),
+    /enabled legacy Media2 requires a separate exact atomic topology contract/,
+  );
 });
 
 test("builder rejects the atomic Piter functions when output five and ledger topology are absent", () => {

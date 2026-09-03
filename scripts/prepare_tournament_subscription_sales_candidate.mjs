@@ -4,7 +4,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertPiterAtomicTopology } from "./lib/piterAtomicTopologyContract.mjs";
+import {
+  assertNoEnabledLegacyPiterSalesTab,
+  assertPiterAtomicTopology,
+} from "./lib/piterAtomicTopologyContract.mjs";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -74,9 +77,7 @@ if (tabs.length !== 1 || tabs[0].disabled === true) {
 const enabledTabIds = new Set(candidate
   .filter((node) => node?.type === "tab" && node?.disabled !== true)
   .map((node) => node.id));
-if (enabledTabIds.has("8ccb70ac6befff79")) {
-  fail("Enabled legacy sales tab requires a separate exact-graph Piter topology contract");
-}
+assertNoEnabledLegacyPiterSalesTab(candidate);
 const targetIds = new Set(TARGETS.map(([id]) => id));
 const targetNames = new Set(TARGETS.map(([, , , name]) => name));
 const unexpectedTargets = candidate.filter((node) => (

@@ -17,6 +17,7 @@ export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
 });
 
 export const PITER_ATOMIC_ROUTER_SHA256 = "3e31ece89289bdb01fee41f9d3367a1be71abefd0390b37cee42eac0931675d8";
+export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "9c4f062ab1105480f97a0ca5cc869c68cf8bd1310a846e7eab63600c37b61d9c";
 export const PITER_ATOMIC_ERROR_SOURCE = `msg.statusCode = 503;
 msg.headers = {"Content-Type":"application/json; charset=utf-8"};
 msg.payload = {error:"Хранилище временно недоступно",details:{code:"PITER_ATOMIC_MONGO_ERROR"}};
@@ -52,6 +53,24 @@ const assertExactFunctionNode = (flow, expected, expectedSourceSha256) => {
   if (!isDeepStrictEqual(actualWithoutFunc, expected)) fail(`${expected.id} node fields mismatch`);
   if (sha256(func) !== expectedSourceSha256) fail(`${expected.id}.func mismatch`);
 };
+
+export function assertNoEnabledLegacyPiterSalesTab(flow) {
+  const legacyTab = exactNode(flow, "8ccb70ac6befff79");
+  if (legacyTab.type !== "tab" || legacyTab.label !== "Media2") {
+    fail("legacy Media2 tab identity mismatch");
+  }
+  if (legacyTab.disabled !== true) {
+    fail("enabled legacy Media2 requires a separate exact atomic topology contract");
+  }
+  return true;
+}
+
+export function rejectTopologyDependentPiterSource(source, context) {
+  if (sha256(source) === PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256) {
+    fail(`${context} cannot compose the topology-dependent Piter purchase router`);
+  }
+  return true;
+}
 
 export function assertPiterAtomicTopology(flow) {
   if (!Array.isArray(flow)) fail("flow must be an array");

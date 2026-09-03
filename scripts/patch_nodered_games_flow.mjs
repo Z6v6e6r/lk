@@ -1,6 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { rejectTopologyDependentPiterSource } from './lib/piterAtomicTopologyContract.mjs';
 import { transformFlowToMongo4 } from './nodered_mongodb4_transform.mjs';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const cliSrcPath = process.argv[2] ? path.resolve(process.argv[2]) : null;
 const cliOutPath = process.argv[3] ? path.resolve(process.argv[3]) : null;
@@ -17,7 +21,7 @@ const srcCandidates = cliSrcPath
       '/Users/zver/Desktop/project-fixed 6/node-red/поток-lk.mongodb4.json',
     ];
 const outPath = cliOutPath || '/Users/zver/Desktop/project-fixed 6/ЛК03_03_26.with_games.json';
-const fnDir = '/Users/zver/Desktop/project-fixed 6/scripts/nodered_games_nodes';
+const fnDir = path.join(root, 'scripts/nodered_games_nodes');
 
 const readFn = (name) => fs.readFileSync(path.join(fnDir, name), 'utf8');
 
@@ -57,6 +61,7 @@ const fnTournamentSubscriptionStatusResponse = readFn('fn_tournament_subscriptio
 const fnTournamentSubscriptionPurchasePrepare = readFn('fn_tournament_subscription_purchase_prepare.js');
 const fnTournamentSubscriptionPurchaseLimit = readFn('fn_tournament_subscription_purchase_limit.js');
 const fnTournamentSubscriptionPurchaseRouter = readFn('fn_tournament_subscription_purchase_router.js');
+rejectTopologyDependentPiterSource(fnTournamentSubscriptionPurchaseRouter, 'Legacy full-flow generator');
 const fnTournamentSubscriptionConfirmPrepare = readFn('fn_tournament_subscription_confirm_prepare.js');
 const fnTournamentSubscriptionConfirmResolve = readFn('fn_tournament_subscription_confirm_resolve.js');
 const fnTournamentPrepare = readFn('fn_tournament_prepare.js');
