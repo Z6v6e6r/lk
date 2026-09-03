@@ -1723,7 +1723,7 @@
 - Added a deterministic 23-node offline source generator and strict candidate
   publisher with independent source-input/function preimages, exact loopback endpoint
   and Mongo custody, temp-only atomic readiness, and a build-only evidence binding.
-- Frozen source `bada371…`, candidate `ab73803e…`, and manifest `4daac22f…` while
+- Frozen source `bada371…`, candidate `ab73803e…`, and manifest `89d12c63…` while
   retaining `hostPreimageState=ABSENT`, null rollback source, install authorization
   `false`, and production binding `UNBOUND_AFTER_ROUTER_AMENDMENT`.
 - No host install, Node-RED import, service start/enable, ingress, activation, canary

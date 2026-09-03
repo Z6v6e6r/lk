@@ -3,13 +3,13 @@
   "environment": "DEV",
   "authorizationState": "AUTHORIZED_SOURCE_ONLY",
   "scope": "BUILD_OFFLINE_CANDIDATE_ONLY",
-  "sourceCommit": "a20d5f6d7155b3382b97edb48c111fa23322f4a4",
+  "sourceCommit": "8cd99729afc47cdbd9c74e59f624cffc87d59c9a",
   "filesSha256": {
     "scripts/generate_lk1_subscription_dev_offline_source.mjs": "0d16c9e0fc09e850ecf93c74e64be71e55181567dd8f7a9179016a506eaffa7d",
     "scripts/inspect_lk1_subscription_dev_snapshot.mjs": "f86a48e3f9e2a220894bdcb686a16ff2d117da02a99f2ea8c979cb3f8bdc00df",
     "scripts/lk1_subscription_dev_execution_contract.mjs": "f02c30c55f75630e0e11b8ee2fa52d52a1e90c7d2609d04dfce132f002492712",
     "scripts/prepare_lk1_subscription_dev_candidate.mjs": "8a5c98d37fd68b5ba5efc5a7a33f719a0b8e30bcbaa7c795f5f1cf34e08de98f",
-    "scripts/lk1_subscription_dev_candidate_binding.json": "45adef4859d6816806807788283c7f3f6c00ccf10701cd95351dae29afa27806",
+    "scripts/lk1_subscription_dev_candidate_binding.json": "c3b00e1562b9b1427271bb1ede5ace59895764ff0f4e43d3b6623167d6eeb825",
     "scripts/lk1_subscription_dev_provisioning_contract.json": "223f3756056d153684cebd3bd0f69392ec947eacf45f69c2d107f9a8ee0231ff",
     "scripts/validate_lk1_subscription_dev_provisioning_contract.mjs": "d8680a0171fe1666f4aa11c93cd8a704e021f785e9234133f0ec41fd481d90ef",
     "scripts/lk1_subscription_runtime_environment_bindings.json": "0840f882c5374990a41620eb64e7ca483a3ceda5cc68ae50859f81ff6c65ca91"
@@ -41,5 +41,5 @@
     "lk_subscription_managed_policy_blocked_20260820": "fb6ab7f0fac134712c2cf1e230f9bfb8a90d311ace4765abc4675c23c4e80888"
   },
   "candidateSha256": "ab73803e90852ebc99cd9b019cf181c9bd402e4737ccde8256cc6da448039fb9",
-  "manifestSha256": "4daac22f0955fe924240fbeb33836be6166febdcb2528e18de92b5a57af13388"
+  "manifestSha256": "89d12c63211e340bafc4fc6878640fbb780d116f4410e4994813959c47fad373"
 }

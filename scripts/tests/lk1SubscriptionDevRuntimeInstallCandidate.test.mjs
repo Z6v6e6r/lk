@@ -18,7 +18,7 @@ const ROOT = path.resolve(import.meta.dirname, "../..");
 const CONTRACT_PATH = path.join(ROOT, "scripts/lk1_subscription_dev_runtime_install_contract.json");
 const UNIT_ROOT = path.join(ROOT, "scripts/lk1_subscription_dev_runtime_install/units");
 const TMP_ROOT = fs.existsSync("/private/tmp") ? "/private/tmp" : os.tmpdir();
-const SOURCE_COMMIT = "a20d5f6d7155b3382b97edb48c111fa23322f4a4";
+const SOURCE_COMMIT = "8cd99729afc47cdbd9c74e59f624cffc87d59c9a";
 const TOOLING_COMMIT = "6".repeat(40);
 const NOW = new Date("2026-09-10T12:00:00.000Z");
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
