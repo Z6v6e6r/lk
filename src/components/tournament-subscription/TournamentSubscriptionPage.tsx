@@ -402,7 +402,6 @@ function buildDefaultPageViewConfig(): PageViewConfig {
           rulesArtworkAlt: `Правила годовой подписки Падел.Дружба.Хаб. ${PITER_FRIENDSHIP_TERMS.join(" ")}`,
           rulesArtworkSrc: subscriptionRulesRedImage,
           terms: PITER_FRIENDSHIP_TERMS,
-          termsEffectiveLabel: PITER_FRIENDSHIP_TERMS_EFFECTIVE_LABEL,
           sectionLabel: "Годовые подписки",
         }),
         requiresConsent: false,
