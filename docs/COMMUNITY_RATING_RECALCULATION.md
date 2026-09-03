@@ -119,8 +119,10 @@ npm run community:memberships:apply-plan -- \
 ```
 
 Apply requires a separately approved live-data gate, the exact fresh plan SHA, a
-narrow backup directory, and a private report path. All membership and audit writes
-run in one Mongo transaction and must pass provenance read-back:
+narrow backup directory, and a private report path. Backup v2 records both the
+plan-bound membership fingerprint and the full BSON community preimage. Every Mongo
+transaction attempt rechecks that full preimage before any membership or audit write,
+and the committed full postimage is pinned in the execution ledger:
 
 ```bash
 npm run community:memberships:apply-plan -- \
@@ -134,8 +136,9 @@ npm run community:memberships:apply-plan -- \
 
 Recovery is a separate live-data operation. It requires both the plan SHA and the
 backup file SHA. Restore replaces the exact target community preimages only while
-their `updatedAt` values still equal the apply timestamp; any intervening community
-change fails closed instead of being overwritten:
+the current full BSON documents still match the postimage pinned by apply; this is
+checked before and inside the restore transaction. Any intervening community change
+fails closed instead of being overwritten:
 
 ```bash
 npm run community:memberships:apply-plan -- \

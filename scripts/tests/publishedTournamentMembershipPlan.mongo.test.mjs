@@ -108,6 +108,29 @@ maybeTest("physically applies and CAS-restores a frozen membership plan in a rep
     assert.equal(await db.collection("lk_tournament_community_backfill_executions").countDocuments({ planSha256: plan.planSha256 }), 1);
 
     const applyReport = JSON.parse(fs.readFileSync(applyReportPath, "utf8"));
+    await db.collection("lk_communities").updateOne(
+      { id: "community-1" },
+      { $set: { description: "concurrent writer after apply" } },
+    );
+    await assert.rejects(
+      runExecutor([
+        "--plan", planPath,
+        "--db", databaseName,
+        "--restore",
+        "--confirm-plan-sha", plan.planSha256,
+        "--backup", applyReport.backupPath,
+        "--confirm-backup-sha", applyReport.backupSha256,
+        "--report", restoreReportPath,
+      ]),
+      /Restore current postimage full community preimage drifted/,
+    );
+    const rejectedRestore = await db.collection("lk_communities").findOne({ id: "community-1" });
+    assert.equal(rejectedRestore.description, "concurrent writer after apply");
+    assert.equal(rejectedRestore.memberCount, 2);
+    await db.collection("lk_communities").updateOne(
+      { id: "community-1" },
+      { $unset: { description: "" } },
+    );
     await runExecutor([
       "--plan", planPath,
       "--db", databaseName,

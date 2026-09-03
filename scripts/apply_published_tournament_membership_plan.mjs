@@ -79,6 +79,23 @@ export function hashCommunityPreimage(communities) {
   })));
 }
 
+export function hashFullCommunityPreimage(communities) {
+  const sortedCommunities = [...asArray(communities)]
+    .sort((left, right) => String(left?.id || "").localeCompare(String(right?.id || "")));
+  return sha256(BSON.EJSON.serialize(sortedCommunities, { relaxed: false }));
+}
+
+export function assertFullCommunityPreimage(communities, expectedSha256, label) {
+  if (!/^[0-9a-f]{64}$/.test(String(expectedSha256 || ""))) {
+    throw new Error(`${label} full community preimage fingerprint is missing`);
+  }
+  const actualSha256 = hashFullCommunityPreimage(communities);
+  if (actualSha256 !== expectedSha256) {
+    throw new Error(`${label} full community preimage drifted`);
+  }
+  return actualSha256;
+}
+
 export function validateFrozenPlan(plan, nowMs = Date.now(), maxAgeMinutes = DEFAULT_MAX_PLAN_AGE_MINUTES) {
   if (!isObject(plan)) throw new Error("Plan must be an object");
   if (plan.version !== "published-tournament-community-membership-plan-v4") {
@@ -157,7 +174,7 @@ export function validateCurrentMembershipPreconditions(plan, communities) {
 }
 
 export function validateRestoreBackup(plan, backup) {
-  if (backup?.version !== "published-tournament-community-membership-backup-v1"
+  if (backup?.version !== "published-tournament-community-membership-backup-v2"
     || backup?.planSha256 !== plan.planSha256
     || !Array.isArray(backup?.communities)) {
     throw new Error("Backup does not match the frozen plan");
@@ -181,14 +198,19 @@ export function validateRestoreBackup(plan, backup) {
     throw new Error("Backup community set does not match the frozen plan");
   }
   const actualPreimageSha = hashCommunityPreimage(backup.communities);
+  const actualFullPreimageSha = hashFullCommunityPreimage(backup.communities);
   if (backup.communityPreimageSha256 !== actualPreimageSha
     || actualPreimageSha !== plan.sourceFingerprint.community) {
     throw new Error("Backup community preimage does not match the frozen plan");
+  }
+  if (backup.communityFullPreimageSha256 !== actualFullPreimageSha) {
+    throw new Error("Backup full community preimage does not match its content");
   }
   return {
     appliedAt: backup.appliedAt,
     communityCount: backup.communities.length,
     communityPreimageSha256: actualPreimageSha,
+    communityFullPreimageSha256: actualFullPreimageSha,
     provenanceVersion: backup.provenanceVersion,
   };
 }
@@ -321,12 +343,13 @@ async function executeApply({ client, db, plan, backupDir, reportPath }) {
   if (existingLedger.length !== 0) throw new Error("An enrollment ledger row already exists for this plan");
 
   const backupPayload = {
-    version: "published-tournament-community-membership-backup-v1",
+    version: "published-tournament-community-membership-backup-v2",
     generatedAt: applyAt,
     appliedAt: applyAt,
     planSha256: plan.planSha256,
     provenanceVersion,
     communityPreimageSha256: hashCommunityPreimage(communities),
+    communityFullPreimageSha256: hashFullCommunityPreimage(communities),
     communities,
   };
   const canonicalBackupDir = assertNarrowDirectory(backupDir, "Backup directory");
@@ -340,6 +363,12 @@ async function executeApply({ client, db, plan, backupDir, reportPath }) {
     const session = client.startSession();
     try {
       await session.withTransaction(async () => {
+        const transactionPreimage = await readTargetCommunities(db, plan, session);
+        assertFullCommunityPreimage(
+          transactionPreimage,
+          backupPayload.communityFullPreimageSha256,
+          "Apply transaction",
+        );
         const ledger = db.collection("lk_tournament_community_enrollments");
         for (const operation of plan.operations) {
           await ledger.insertOne({
@@ -364,6 +393,7 @@ async function executeApply({ client, db, plan, backupDir, reportPath }) {
         }
         const withinTransaction = await readTargetCommunities(db, plan, session);
         assertAppliedReadback(plan, withinTransaction, provenanceVersion);
+        const communityFullPostimageSha256 = hashFullCommunityPreimage(withinTransaction);
         await db.collection("lk_tournament_community_backfill_executions").insertOne({
           _id: executionId,
           version: plan.version,
@@ -373,6 +403,8 @@ async function executeApply({ client, db, plan, backupDir, reportPath }) {
           communityIds: plan.communities.map((row) => row.communityId),
           backupPath,
           backupSha256,
+          communityFullPreimageSha256: backupPayload.communityFullPreimageSha256,
+          communityFullPostimageSha256,
           appliedAt: applyAt,
           createdAt: applyAt,
           updatedAt: applyAt,
@@ -411,6 +443,21 @@ async function executeRestore({ client, db, plan, backupPath, confirmBackupSha, 
   const current = await readTargetCommunities(db, plan);
   const currentById = new Map(current.map((row) => [row.id, row]));
   assertRestorePreconditions(plan, current, backup);
+  const executionId = `published-tournament-membership:${plan.planSha256}`;
+  const execution = await db.collection("lk_tournament_community_backfill_executions").findOne({
+    _id: executionId,
+    planSha256: plan.planSha256,
+    status: "APPLIED",
+  });
+  if (!execution
+    || execution.communityFullPreimageSha256 !== backup.communityFullPreimageSha256) {
+    throw new Error("Restore execution record does not match the backup preimage");
+  }
+  assertFullCommunityPreimage(
+    current,
+    execution.communityFullPostimageSha256,
+    "Restore current postimage",
+  );
   for (const preimage of backup.communities) {
     const currentCommunity = currentById.get(preimage.id);
     if (!currentCommunity || String(currentCommunity.updatedAt) !== String(backup.appliedAt)) {
@@ -420,6 +467,22 @@ async function executeRestore({ client, db, plan, backupPath, confirmBackupSha, 
   const session = client.startSession();
   try {
     await session.withTransaction(async () => {
+      const transactionExecution = await db.collection("lk_tournament_community_backfill_executions").findOne({
+        _id: executionId,
+        planSha256: plan.planSha256,
+        status: "APPLIED",
+      }, { session });
+      if (!transactionExecution
+        || transactionExecution.communityFullPreimageSha256 !== backup.communityFullPreimageSha256
+        || transactionExecution.communityFullPostimageSha256 !== execution.communityFullPostimageSha256) {
+        throw new Error("Restore execution record drifted inside transaction");
+      }
+      const transactionPostimage = await readTargetCommunities(db, plan, session);
+      assertFullCommunityPreimage(
+        transactionPostimage,
+        transactionExecution.communityFullPostimageSha256,
+        "Restore transaction postimage",
+      );
       for (const preimage of backup.communities) {
         const restore = buildCommunityRestoreReplacement(preimage, backup.appliedAt);
         const result = await db.collection("lk_communities").replaceOne(restore.filter, restore.replacement, { session });
@@ -427,16 +490,14 @@ async function executeRestore({ client, db, plan, backupPath, confirmBackupSha, 
       }
       await db.collection("lk_tournament_community_enrollments").deleteMany({ planSha256: plan.planSha256 }, { session });
       await db.collection("lk_tournament_community_backfill_executions").deleteOne({
-        _id: `published-tournament-membership:${plan.planSha256}`,
+        _id: executionId,
       }, { session });
     }, { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" } });
   } finally {
     await session.endSession();
   }
   const restored = await readTargetCommunities(db, plan);
-  if (hashCommunityPreimage(restored) !== backup.communityPreimageSha256) {
-    throw new Error("Restore postcheck fingerprint mismatch");
-  }
+  assertFullCommunityPreimage(restored, backup.communityFullPreimageSha256, "Restore postcheck");
   const remainingLedger = await db.collection("lk_tournament_community_enrollments")
     .countDocuments({ planSha256: plan.planSha256 }, { limit: 1 });
   const remainingExecution = await db.collection("lk_tournament_community_backfill_executions")

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import test from "node:test";
 import {
+  assertFullCommunityPreimage,
   hashCommunityPreimage,
+  hashFullCommunityPreimage,
   hashFrozenPlan,
   validateCurrentMembershipPreconditions,
   validateFrozenPlan,
@@ -105,7 +107,7 @@ test("builds provenance-bound add and CAS-bound restore operations", () => {
   const { community, operation } = fixture();
   const provenance = "published-tournament-community-membership-plan-v4:plan-sha";
   const mutation = buildTimeForAtomicMembershipMutation(operation, "2026-09-02T19:00:00.000Z", provenance);
-  const member = mutation.update[0].$set.members.$concatArrays[1][0];
+  const member = mutation.update[0].$set.members.$concatArrays[1].$literal[0];
   assert.equal(member.joinSource.type, PUBLISHED_TOURNAMENT_JOIN_SOURCE);
   assert.equal(member.joinSource.version, provenance);
   assert.deepEqual(member.joinSource.tournamentIds, operation.tournamentIds);
@@ -115,16 +117,63 @@ test("builds provenance-bound add and CAS-bound restore operations", () => {
   assert.equal(restore.replacement, community);
 });
 
+test("literalizes the complete imported member payload", () => {
+  const { operation } = fixture();
+  const adversarialOperation = {
+    ...operation,
+    playerName: "$$ROOT",
+    tournamentIds: ["$members", { $getField: "privateField" }],
+  };
+  const mutation = buildTimeForAtomicMembershipMutation(
+    adversarialOperation,
+    "2026-09-02T19:00:00.000Z",
+    "published-tournament-community-membership-plan-v4:plan-sha",
+  );
+
+  assert.deepEqual(mutation.update[0].$set.members.$concatArrays[1], {
+    $literal: [{
+      id: operation.playerId,
+      name: "$$ROOT",
+      role: "MEMBER",
+      status: "ACTIVE",
+      joinedAt: "2026-09-02T19:00:00.000Z",
+      joinSource: {
+        type: PUBLISHED_TOURNAMENT_JOIN_SOURCE,
+        version: "published-tournament-community-membership-plan-v4:plan-sha",
+        tournamentIds: ["$members", { $getField: "privateField" }],
+      },
+    }],
+  });
+});
+
+test("full BSON preimage guard detects non-membership drift on every transaction attempt", () => {
+  const { community } = fixture();
+  const expectedSha = hashFullCommunityPreimage([community]);
+  assert.equal(assertFullCommunityPreimage([community], expectedSha, "Attempt 1"), expectedSha);
+
+  const retryPostimage = {
+    ...community,
+    description: "concurrent writer",
+    pendingMembers: [{ id: "pending-player", role: "REQUESTED" }],
+  };
+  assert.equal(hashCommunityPreimage([retryPostimage]), hashCommunityPreimage([community]));
+  assert.throws(
+    () => assertFullCommunityPreimage([retryPostimage], expectedSha, "Attempt 2"),
+    /Attempt 2 full community preimage drifted/,
+  );
+});
+
 test("accepts only a complete backup bound to the frozen preimage", () => {
   const { plan, community } = fixture();
   const appliedAt = "2026-09-02T19:00:00.000Z";
   const backup = {
-    version: "published-tournament-community-membership-backup-v1",
+    version: "published-tournament-community-membership-backup-v2",
     generatedAt: appliedAt,
     appliedAt,
     planSha256: plan.planSha256,
     provenanceVersion: `${plan.version}:${plan.planSha256}`,
     communityPreimageSha256: plan.sourceFingerprint.community,
+    communityFullPreimageSha256: hashFullCommunityPreimage([community]),
     communities: [community],
   };
   assert.equal(validateRestoreBackup(plan, backup).communityCount, 1);
@@ -143,5 +192,9 @@ test("accepts only a complete backup bound to the frozen preimage", () => {
   assert.throws(
     () => validateRestoreBackup(plan, { ...backup, provenanceVersion: "other" }),
     /provenance/,
+  );
+  assert.throws(
+    () => validateRestoreBackup(plan, { ...backup, communityFullPreimageSha256: "0".repeat(64) }),
+    /full community preimage/,
   );
 });
