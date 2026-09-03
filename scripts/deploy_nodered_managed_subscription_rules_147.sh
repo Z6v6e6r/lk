@@ -84,8 +84,8 @@ node scripts/nodered_reviewed_flow_deploy/prepare_exact_graph_contract.mjs \
   --output "$contract_file" \
   --deployment-id "$deployment_id" \
   --allow-change lk_subscription_booking_prepare_20260804:func \
-  --allow-change lk_subscription_booking_http_20260804:headers,requestTimeout \
-  --allow-change lk_subscription_booking_router_20260804:func,outputs,wires \
+  --allow-change lk_subscription_booking_http_20260804:requestTimeout \
+  --allow-change lk_subscription_booking_router_20260804:func \
   --allow-change lk_subscription_managed_policy_20260820:func \
   --allow-change lk_subscription_booking_finalize_20260804:func \
   --allow-change lk_subscription_booking_mongo_error_20260804:func >/dev/null

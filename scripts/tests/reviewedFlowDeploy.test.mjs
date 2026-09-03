@@ -958,6 +958,10 @@ test("managed subscription rules wrapper pins exact graph budget and guarded rol
   assert.match(wrapper, /prepare_exact_graph_contract\.mjs/);
   assert.doesNotMatch(wrapper, /--allow-change 8f7bd5b482fe9763:func/);
   assert.match(wrapper, /--allow-change lk_subscription_booking_prepare_20260804:func/);
+  assert.match(wrapper, /--allow-change lk_subscription_booking_http_20260804:requestTimeout/);
+  assert.doesNotMatch(wrapper, /lk_subscription_booking_http_20260804:headers/);
+  assert.match(wrapper, /--allow-change lk_subscription_booking_router_20260804:func(?:\s|\\)/);
+  assert.doesNotMatch(wrapper, /lk_subscription_booking_router_20260804:func,outputs,wires/);
   assert.match(wrapper, /--allow-change lk_subscription_managed_policy_20260820:func/);
   assert.match(wrapper, /--allow-change lk_subscription_booking_finalize_20260804:func/);
   assert.match(wrapper, /--allow-change lk_subscription_booking_mongo_error_20260804:func/);
@@ -1022,12 +1026,9 @@ test("managed subscription patcher output satisfies the wrapper exact-graph cont
     const live = JSON.parse(fs.readFileSync(candidateOnePath, "utf8"));
     live.find((node) => node.id === "lk_subscription_booking_prepare_20260804").func = "return msg;";
     const http = live.find((node) => node.id === "lk_subscription_booking_http_20260804");
-    http.headers = { "x-source-contract": "legacy" };
     http.requestTimeout = "1000";
     const router = live.find((node) => node.id === "lk_subscription_booking_router_20260804");
     router.func = "return msg;";
-    router.outputs = 6;
-    router.wires = router.wires.slice(0, 6);
     live.find((node) => node.id === "lk_subscription_managed_policy_20260820").func = "return msg;";
     live.find((node) => node.id === "lk_subscription_booking_finalize_20260804").func = "return msg;";
     live.find((node) => node.id === "lk_subscription_booking_mongo_error_20260804").func = "return msg;";
@@ -1042,8 +1043,8 @@ test("managed subscription patcher output satisfies the wrapper exact-graph cont
       "--output", contractPath,
       "--deployment-id", "managed-subscription-rules",
       "--allow-change", "lk_subscription_booking_prepare_20260804:func",
-      "--allow-change", "lk_subscription_booking_http_20260804:headers,requestTimeout",
-      "--allow-change", "lk_subscription_booking_router_20260804:func,outputs,wires",
+      "--allow-change", "lk_subscription_booking_http_20260804:requestTimeout",
+      "--allow-change", "lk_subscription_booking_router_20260804:func",
       "--allow-change", "lk_subscription_managed_policy_20260820:func",
       "--allow-change", "lk_subscription_booking_finalize_20260804:func",
       "--allow-change", "lk_subscription_booking_mongo_error_20260804:func",
