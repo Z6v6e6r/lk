@@ -249,11 +249,12 @@ containers `content/items/bookings/data/results` и create wrappers `data/bookin
 
 ## 5. Владение и удаление
 
-Авторитетная запись `lk_partner_game_memberships` содержит:
+Авторитетная запись `lk_partner_game_memberships` содержит ключевые binding/fence поля:
 
 ```text
-membershipId + clientId + gameId + externalPlayerId + generation
-exerciseId + technicalVivaClientId + bookingId + state + operationId
+membershipId + clientId + tenantKey + gameId + gameDocumentId
+externalPlayerId + generation + authorizedCapacity + stationId + exerciseId
+technicalVivaClientId + bookingId + payment.reference + state + operationId
 ```
 
 Источник в массиве `game.participants` — только проекция, а не разрешение на удаление.
@@ -314,7 +315,8 @@ SIEM согласуются до пилота.
 - всплеск `INVALID_SIGNATURE`, `REQUEST_REPLAY_DETECTED`, `SCOPE_DENIED`;
 - любой `UNKNOWN` старше reconciliation SLO;
 - `AUDIT_UNAVAILABLE`, `MONGO_PREREQUISITES_MISSING`;
-- рост `GAME_FULL_AFTER_PROVIDER`/локальных CAS конфликтов;
+- рост `GAME_FULL`/`GAME_CAPACITY_*`, любое `LOCAL_CAPACITY_LOST_AFTER_VIVA`
+  или локальные CAS-конфликты;
 - попытка synthetic mode вне изолированного окружения.
 
 ## 9. Изолированная проверка
