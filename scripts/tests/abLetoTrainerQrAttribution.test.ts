@@ -35,8 +35,11 @@ test("staged release constants are aligned for status and purchase flows", () =>
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
   ]) {
     const source = fs.readFileSync(file, "utf8");
-    assert.match(source, /AB_LETO_STAGED_RELEASE_START_DATE = "2026-08-01"/);
-    assert.match(source, /AB_LETO_STAGED_LAUNCH_LIMIT = 100/);
+    assert.match(source, /AB_LETO_STAGED_RELEASE_START_DATE = "2026-09-03"/);
+    assert.match(source, /AB_LETO_STAGED_INVENTORY_ID = "ab_leto_2026_150_v2"/);
+    assert.match(source, /AB_LETO_STAGED_LAUNCH_LIMIT = 150/);
+    assert.match(source, /summer_subscription_ab_leto_20260903_release_enabled/);
+    assert.match(source, /global\.get\(AB_LETO_STAGED_RELEASE_ACTIVATION_KEY\) === true/);
     assert.match(source, /AB_LETO_STAGED_DAILY_DROP_LIMIT = 7/);
     assert.match(source, /AB_LETO_STAGED_RA_DAILY_DROP_LIMIT = 10/);
     assert.match(source, /counterKey === "ra"/);

@@ -53,7 +53,7 @@ test("only ab_leto HUB omits consent and auth captions while purchase guards rem
   assert.match(page, /`\$\{status\.batchRemainingCount\} из \$\{status\.batchSize\}`/);
 });
 
-test("HUB ten-per-day approval state lives only in the local preview fixture", () => {
+test("HUB approval preview shows 10/10 while production UI stays server-driven", () => {
   assert.match(preview, /counterKey: "network_friendship", totalLimit: 10, remainingCount: 10, batchSize: 10, batchRemainingCount: 10/);
   assert.match(preview, /dailyDropActive: true, dailyLimit: 10/);
   assert.doesNotMatch(defaultPage, /remainingValueText: "10 из 10"/);

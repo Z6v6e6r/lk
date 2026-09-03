@@ -201,6 +201,14 @@ npm run nodered:modular:build
 - `fn_managed_subscription_policy_evaluate.js` — двухвыходный evaluator опубликованной managed-policy, подключённый к source-driven `/lk/subscription-bookings` candidate. Он принимает только server-resolved target, exact policy/instance version и authoritative usage snapshot; output 1 означает eligibility, output 2 — fail-closed blocker. После атомарного preaccept gateway повторно читает exact Viva exercise/ownership, затем для managed-планов повторно читает CUP runtime context и запускает evaluator непосредственно перед Viva booking POST.
 - Generic `PATCH /lk/games/:gameId` и `/lk/games/records/:gameId` безусловно отклоняют browser-owned `participants`/`waitlist` с `GAME_ROSTER_COMMAND_REQUIRED`; roster изменяется только через canonical command/split boundaries.
 - Managed annual status остаётся read-only, а purchase fail closed с `MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE`, пока нет authoritative sale-to-current-instance binding. `prepare_tournament_subscription_sales_candidate.mjs` обновляет одинаковые sales function nodes во всех enabled tabs; обнаруженный live-дубликат `Media2` сейчас disabled и не является активным route.
+- С 2026-09-03 `friendship` и `ra` используют новые независимые inventory
+  `ab_leto_2026_150_v2_<counterKey>` с launch pool 150; старые продажи не входят в
+  новые остатки. `network_friendship` сохраняет inventory `network_friendship_12m_2026_v1`
+  и общий остаток, но status ограничивает видимое окно 10 продажами за календарный
+  день `Europe/Moscow`; managed annual purchase остаётся fail closed. Новая схема
+  включается только при exact boolean global flag
+  `summer_subscription_ab_leto_20260903_release_enabled=true`; без него runtime
+  сохраняет предыдущие inventory и лимиты.
 - Реферальная атрибуция и шесть credential source-файлов выпускаются только двухфазным `nodered:referral-attribution:audit` → reviewed contract SHA → `nodered:referral-attribution:candidate`. Candidate меняет девять exact live function instances, оставляет `deployAuthorized=false` и блокирует provider rotation, пока inventory показывает другие active password-grant consumers.
 - Контракт evaluator и обязательный порядок будущего подключения описаны в `docs/MANAGED_SUBSCRIPTION_RUNTIME_CONTRACT.md`. Для явно managed Viva product отсутствие опубликованной policy в будущем должно блокировать действие, а не откатываться к hardcoded plan-name логике.
 - PITER managed enforcement дополнительно требует server-owned `purchaseDate` выбранного `availableClientSubscriptions` не раньше `2026-09-01` в `Europe/Moscow`. Более старые, недатированные или неоднозначно датированные экземпляры остаются в Friendship compatibility path; browser date не участвует, а дата и cutoff eligibility повторно проверяются перед Viva write.

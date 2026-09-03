@@ -25,14 +25,14 @@ const TARGETS = [
   ["af0b35cce2883ebd", "8ccb70ac6befff79", "Media2", "Route tournament subscription payment", "fn_tournament_subscription_purchase_router.js"],
 ];
 const CANDIDATE_SHA256_BY_SOURCE_FILE = Object.freeze({
-  "fn_tournament_subscription_counter_refresh_prepare.js": "224b72932a7964bde0957f995c0bfcf3bbe33e7376b8f6570f2268a3831b9487",
-  "fn_tournament_subscription_counter_refresh_response.js": "fad9d71df5e4917411eec5bd3208c2859b854bc7b4b1a43e4c76ae3384298985",
-  "fn_tournament_subscription_status_prepare.js": "c7f35faf288eb937bf618e342a45ab1ef8626785291c151d3c5c60f91bea6569",
-  "fn_tournament_subscription_status_response.js": "33f3927a159af5a615d39d7fb859a26f8aa39beeee1f1df9147c0991ae978b06",
-  "fn_tournament_subscription_purchase_prepare.js": "6059fd74de59cc488098a9e8d97158497ef9890a8850fb5adac89bd34bec2b44",
-  "fn_tournament_subscription_purchase_limit.js": "8a6d10a04b4e12a751db6e75ad4d4e1c90df15318ed71df405cacb5d737c77c2",
+  "fn_tournament_subscription_counter_refresh_prepare.js": "82cc3b69c2030f852c564e2e0028fcd88e9e1c5496e51be74a29ece6aa89c0b0",
+  "fn_tournament_subscription_counter_refresh_response.js": "5fed0cdad40cb0cc41daf766e23f1fb938b9ccbc65de11d0d90484de9dcef262",
+  "fn_tournament_subscription_status_prepare.js": "46d5bf043e960a044e622ae9929bf865f2a5c8e7ad10f6729f7edf7649aff3e7",
+  "fn_tournament_subscription_status_response.js": "f7e9d81975e63a090ad47abe54c07ed9db265fccf114ab7758f3b102ed0007e0",
+  "fn_tournament_subscription_purchase_prepare.js": "2f15053bdf2c8abd770b7bc65cd59d6fdcfc2c08f26c2ee78a95bc309dfe5ca3",
+  "fn_tournament_subscription_purchase_limit.js": "75d070b427ca9097cd258a84daca7b2c3998f545415b69ef4968ccdce2aaeef8",
   "fn_tournament_subscription_purchase_router.js": "27b54a9e4204bd39951cae8e2194a60af5c3f3fc58edd85ceea76f56ff17deb2",
-  "fn_tournament_subscription_reconcile_query.js": "5845eb107a18f4e51b69192ee83af3f37642605ccb8a7a48423f83f3803f509d",
+  "fn_tournament_subscription_reconcile_query.js": "35d8a910979922a632e4334606e018b6116f24b0de87b105dc5dd50b87210856",
 });
 const FROZEN_PREIMAGE_SHA256_BY_ID = Object.freeze({
   "519b6a6ca208e281": "224b72932a7964bde0957f995c0bfcf3bbe33e7376b8f6570f2268a3831b9487",
@@ -141,6 +141,11 @@ const markerSource = TARGETS
   ))
   .join("\n");
 for (const marker of [
+  "ab_leto_2026_150_v2",
+  "NETWORK_FRIENDSHIP_DAILY_LIMIT = 10",
+  "dailyCapEnabled: true",
+  "summer_subscription_ab_leto_20260903_release_enabled",
+  "resolvePendingDeadlineTs",
   "8bf334ba-3050-4017-b40a-7eef2db1eb16",
   "db7a5250-7369-4f43-8ac5-9111be24bc74",
   'launchEnabled: false',

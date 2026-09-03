@@ -676,9 +676,12 @@ https://padlhub.ru/tournament_subscription
 региональные страницы продолжают показывать её по своим контрактам.
 Новые WebP-карточки закреплены точными SHA-256 в `lk1-subscription-enforcement`;
 PNG-дубликаты в кандидат не входят.
-Согласовательный макет ХАБ показывает `Доступно — 10 из 10`. Это synthetic
-status предпросмотра, а не активированная серверная дневная квота; frontend по-прежнему
-читает фактические числа из API, и изменение runtime inventory требует отдельного этапа.
+Согласовательный макет ХАБ показывает `Доступно — 10 из 10`. Server candidate считает
+это окно по календарному дню `Europe/Moscow`, но не сбрасывает общий inventory:
+пять прежних продаж остаются учтены, общий остаток перед активацией равен 95.
+Frontend по-прежнему читает фактические числа из API. После публикации candidate
+остаётся инертным до отдельной server-owned активации exact boolean global flag
+`summer_subscription_ab_leto_20260903_release_enabled=true`.
 Воспроизводимый локальный fixture: `scripts/fixtures/ab-leto-preview.html`. После сборки
 `vite build --config vite.config.tournament-subscription.ts --mode dev` скопировать его
 в `dist/preview.html` и обслуживать только на loopback; fixture блокирует внешний fetch
@@ -686,9 +689,24 @@ status предпросмотра, а не активированная серв
 
 Карточки с правилами переворачиваются по нажатию на саму карточку или кнопку
 `Узнать условия подписки`; клавиатурный фокус и `prefers-reduced-motion` поддерживаются.
-Годовые карточки используют существующие server-owned counters и fail-closed purchase
-bindings: добавление карточек на страницу не меняет лимиты, остатки, Viva-привязки или
-managed-policy активацию. `sport` по-прежнему не входит в основную витрину.
+Годовые карточки используют server-owned counters и fail-closed purchase bindings.
+HAB получает дневное окно 10 поверх существующего общего inventory 100; authoritative
+sale-to-instance binding всё ещё не доказан, поэтому purchase остаётся fail closed.
+`sport` по-прежнему не входит в основную витрину.
+
+Активация 150/HAB-10 и deploy — разные gates. До активации readback должен подтверждать
+старые inventory. После первого PAID/PAYMENT_PENDING в `ab_leto_2026_150_v2_*`
+откат на flow, который не знает новый inventory, запрещён: допускается только
+forward-fix, а reconciliation обязан продолжать читать оба staged inventory.
+
+Обязательный порядок публикации этой витрины:
+
+1. Опубликовать default-off Node-RED candidate и подтвердить read-only status:
+   `managedSaleReady=false`, `canPurchase=false`, прежний staged inventory активен.
+2. Только после этого опубликовать frontend; обратный порядок запрещён, потому что
+   старый live status ХАБ мог вернуть `canPurchase=true`.
+3. Отдельным live gate выставить exact boolean activation flag и подтвердить
+   RA/Дружба `150/150`, HAB `10/10`, а также неизменный общий HAB inventory.
 `academy` и `ra` используют отдельный CTA-flow покупки обычной Viva-подписки по прямым product id:
 - `academy` -> `9eb8a7a4-c195-492a-95e4-3fb82899ac10`
 - `ra` -> `b91e14d1-fe6e-4d0b-be39-3e45ad86b759`
@@ -780,8 +798,9 @@ fallback-лимит 200. Цены на изображениях партий: 19
 Котельников. Покупка при этом остаётся fail-closed.
 
 Страница всей сети монтирует вариант и отдельный counter key
-`network_friendship`: одна партия из 100 подписок, fallback-лимит 100. На
-карточке показана новая цена 56 800 ₽ вместо зачёркнутой 98 800 ₽.
+`network_friendship`: существующий общий inventory из 100 подписок и дневное окно
+10 продаж по календарному дню Москвы. На карточке показана новая цена 56 800 ₽
+вместо зачёркнутой 98 800 ₽.
 
 Sales binding ХАБ также подтверждён 2026-08-20; Котельники остаются fail closed
 до отдельной привязки Viva product. Ни один из этих sales binding сам не создаёт

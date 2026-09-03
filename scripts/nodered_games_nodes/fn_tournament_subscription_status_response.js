@@ -6,11 +6,17 @@ const AB_LETO_DAILY_DROP_LIMIT = 5;
 const AB_LETO_DAILY_DROP_START_HOUR = 10;
 const AB_LETO_DAILY_DROP_TIME_ZONE = "Europe/Moscow";
 const AB_LETO_DAILY_DROP_COUNTER_KEYS = new Set(["friendship", "ra"]);
-const AB_LETO_STAGED_RELEASE_START_DATE = "2026-08-01";
-const AB_LETO_STAGED_INVENTORY_ID = "ab_leto_2026_100_then_7_v1";
-const AB_LETO_STAGED_LAUNCH_LIMIT = 100;
+const AB_LETO_LEGACY_STAGED_RELEASE_START_DATE = "2026-08-01";
+const AB_LETO_LEGACY_STAGED_INVENTORY_ID = "ab_leto_2026_100_then_7_v1";
+const AB_LETO_LEGACY_STAGED_LAUNCH_LIMIT = 100;
+const AB_LETO_STAGED_RELEASE_START_DATE = "2026-09-03";
+const AB_LETO_STAGED_INVENTORY_ID = "ab_leto_2026_150_v2";
+const AB_LETO_STAGED_LAUNCH_LIMIT = 150;
 const AB_LETO_STAGED_DAILY_DROP_LIMIT = 7;
 const AB_LETO_STAGED_RA_DAILY_DROP_LIMIT = 10;
+const AB_LETO_STAGED_RELEASE_ACTIVATION_KEY = "summer_subscription_ab_leto_20260903_release_enabled";
+const NETWORK_FRIENDSHIP_DAILY_LIMIT = 10;
+const DEFAULT_RESERVATION_MINUTES = 30;
 const MANAGED_FRIENDSHIP_COUNTER_KEYS = new Set([
   "kotelniki_friendship",
   "network_friendship",
@@ -105,6 +111,8 @@ const REGIONAL_FRIENDSHIP_CONFIGS = {
     providerProductId: "db7a5250-7369-4f43-8ac5-9111be24bc74",
     providerProductName: "Падел.Дружба.ХАБ — годовая",
     providerProductCostMinor: 5680000,
+    dailyCapEnabled: true,
+    dailyLimit: NETWORK_FRIENDSHIP_DAILY_LIMIT,
   },
   piter_friendship: {
     inventoryId: "piter_friendship_12m_2026_v1",
@@ -130,6 +138,14 @@ const toTs = (value) => {
   if (!text) return null;
   const ts = Date.parse(text);
   return Number.isFinite(ts) ? ts : null;
+};
+
+const resolvePendingDeadlineTs = (doc, reservationMinutes) => {
+  const explicitDeadlineTs = [toTs(doc?.expiresAt), toTs(doc?.paymentExpiresAt)]
+    .filter((timestamp) => timestamp != null);
+  if (explicitDeadlineTs.length > 0) return Math.max(...explicitDeadlineTs);
+  const createdAtTs = toTs(doc?.createdAt);
+  return createdAtTs == null ? null : createdAtTs + reservationMinutes * 60 * 1000;
 };
 
 const toInt = (value, fallback) => {
@@ -271,8 +287,30 @@ const resolveMoscowDate = (now = new Date(Date.now())) => {
   return `${fields.year}-${fields.month}-${fields.day}`;
 };
 
-const isAbLetoStagedReleaseActive = (now = new Date(Date.now())) => (
-  resolveMoscowDate(now) >= AB_LETO_STAGED_RELEASE_START_DATE
+const resolveAbLetoStagedRelease = (now = new Date(Date.now())) => {
+  const moscowDate = resolveMoscowDate(now);
+  if (
+    global.get(AB_LETO_STAGED_RELEASE_ACTIVATION_KEY) === true
+    && moscowDate >= AB_LETO_STAGED_RELEASE_START_DATE
+  ) {
+    return {
+      inventoryId: AB_LETO_STAGED_INVENTORY_ID,
+      launchLimit: AB_LETO_STAGED_LAUNCH_LIMIT,
+      releaseStartDate: AB_LETO_STAGED_RELEASE_START_DATE,
+    };
+  }
+  if (moscowDate >= AB_LETO_LEGACY_STAGED_RELEASE_START_DATE) {
+    return {
+      inventoryId: AB_LETO_LEGACY_STAGED_INVENTORY_ID,
+      launchLimit: AB_LETO_LEGACY_STAGED_LAUNCH_LIMIT,
+      releaseStartDate: AB_LETO_LEGACY_STAGED_RELEASE_START_DATE,
+    };
+  }
+  return null;
+};
+
+const isAbLeto20260903ReleaseActive = () => (
+  resolveAbLetoStagedRelease()?.inventoryId === AB_LETO_STAGED_INVENTORY_ID
 );
 
 const readAbLetoInventoryId = (counterKey = null) => {
@@ -282,26 +320,28 @@ const readAbLetoInventoryId = (counterKey = null) => {
   if (!AB_LETO_DAILY_DROP_COUNTER_KEYS.has(normalizedCounterKey)) {
     return baseInventoryId;
   }
-  if (isAbLetoStagedReleaseActive()) {
-    return `${AB_LETO_STAGED_INVENTORY_ID}_${normalizedCounterKey}`;
+  const stagedRelease = resolveAbLetoStagedRelease();
+  if (stagedRelease) {
+    return `${stagedRelease.inventoryId}_${normalizedCounterKey}`;
   }
   return `${baseInventoryId}_${normalizedCounterKey}_${resolveDailyDropDate()}`;
 };
 
 const withAbLetoStagedRelease = (counter) => {
   const counterKey = String(counter?.counterKey || "").trim().toLowerCase();
-  if (!AB_LETO_DAILY_DROP_COUNTER_KEYS.has(counterKey) || !isAbLetoStagedReleaseActive()) {
+  const stagedRelease = resolveAbLetoStagedRelease();
+  if (!AB_LETO_DAILY_DROP_COUNTER_KEYS.has(counterKey) || !stagedRelease) {
     return counter;
   }
   return Object.assign({}, counter, {
     stagedRelease: true,
-    releaseStartDate: AB_LETO_STAGED_RELEASE_START_DATE,
-    launchLimit: AB_LETO_STAGED_LAUNCH_LIMIT,
+    releaseStartDate: stagedRelease.releaseStartDate,
+    launchLimit: stagedRelease.launchLimit,
     dailyLimit: counterKey === "ra"
       ? AB_LETO_STAGED_RA_DAILY_DROP_LIMIT
       : AB_LETO_STAGED_DAILY_DROP_LIMIT,
     dailyDropDate: resolveDailyDropDate(),
-    totalLimit: AB_LETO_STAGED_LAUNCH_LIMIT,
+    totalLimit: stagedRelease.launchLimit,
   });
 };
 
@@ -425,6 +465,7 @@ const readRegionalFriendshipConfig = (counterKey) => {
       providerProductCostMinor,
     };
   });
+  const dailyCapEnabled = regional.dailyCapEnabled === true && isAbLeto20260903ReleaseActive();
   return {
     counterKey,
     inventoryId: readGlobalFirst([`summer_subscription_${counterKey}_inventory_id`])
@@ -438,6 +479,9 @@ const readRegionalFriendshipConfig = (counterKey) => {
     manualPaidCount: 0,
     totalLimit: regional.batchSize * tiers.length,
     batchSize: regional.batchSize,
+    dailyCapEnabled,
+    dailyLimit: dailyCapEnabled ? regional.dailyLimit : 0,
+    dailyDropDate: dailyCapEnabled ? resolveMoscowDate() : null,
     tiers,
   };
 };
@@ -514,6 +558,7 @@ const createCounterState = (counter) => {
     productId: toStr(counter?.productId),
     productName: toStr(counter?.productName),
     stagedRelease: counter?.stagedRelease === true,
+    dailyCapEnabled: counter?.dailyCapEnabled === true,
     releaseStartDate: toStr(counter?.releaseStartDate),
     releasePhase: null,
     dailyDropActive: false,
@@ -553,6 +598,10 @@ const createCounterState = (counter) => {
     _dailyReservedCount: 0,
     _launchPaidTimestamps: [],
     _stagedRows: [],
+    inventoryTotalLimit: totalLimit,
+    inventoryPaidCount: manualPaidCount,
+    inventoryReservedCount: 0,
+    inventoryRemainingCount: Math.max(totalLimit - manualPaidCount, 0),
   };
 };
 
@@ -639,6 +688,10 @@ const selectedCounterKey = normalizeCounterKey(ctx.selectedCounterKey)
   || countersOrder[0]
   || "sport";
 const now = Date.now();
+const reservationMinutes = Math.max(
+  5,
+  Math.min(360, toInt(ctx.reservationMinutes, DEFAULT_RESERVATION_MINUTES)),
+);
 const docs = rows.filter((item) => item && typeof item === "object");
 
 for (const doc of docs) {
@@ -651,7 +704,7 @@ for (const doc of docs) {
   const state = statesByCounterKey[matchedCounterKey];
   const status = normalizeStatus(doc.status);
   const releasePhase = toStr(doc.releasePhase) === "daily" ? "daily" : "launch";
-  const expiresAtTs = toTs(doc.expiresAt);
+  const pendingDeadlineTs = resolvePendingDeadlineTs(doc, reservationMinutes);
   const eventTs = status === "PAID"
     ? (toTs(doc.paidAt) ?? toTs(doc.updatedAt) ?? toTs(doc.createdAt))
     : (toTs(doc.createdAt) ?? toTs(doc.updatedAt));
@@ -690,11 +743,18 @@ for (const doc of docs) {
       continue;
     }
     state.paidCount += 1;
+    if (
+      state.dailyCapEnabled
+      && eventTs != null
+      && resolveMoscowDate(new Date(eventTs)) === state.dailyDropDate
+    ) {
+      state._dailyPaidCount += 1;
+    }
     continue;
   }
 
   const isPending = status === "PAYMENT_PENDING";
-  const isActivePending = isPending && (expiresAtTs == null || expiresAtTs > now);
+  const isActivePending = isPending && pendingDeadlineTs != null && pendingDeadlineTs > now;
   if (isActivePending) {
     if (state.stagedRelease) {
       state._stagedRows.push({
@@ -706,6 +766,13 @@ for (const doc of docs) {
       continue;
     }
     state.reservedCount += 1;
+    if (
+      state.dailyCapEnabled
+      && eventTs != null
+      && resolveMoscowDate(new Date(eventTs)) === state.dailyDropDate
+    ) {
+      state._dailyReservedCount += 1;
+    }
   }
 }
 
@@ -747,19 +814,39 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
       state.paidCount = state.dailyDropActive ? state._dailyPaidCount : state.launchPaidCount;
       state.reservedCount = state.dailyDropActive ? state._dailyReservedCount : state.launchReservedCount;
     }
+    const inventoryTakenCount = state.paidCount + state.reservedCount;
+    state.inventoryTotalLimit = state.totalLimit;
+    state.inventoryPaidCount = state.paidCount;
+    state.inventoryReservedCount = state.reservedCount;
+    state.inventoryRemainingCount = state.unlimited
+      ? 0
+      : Math.max(state.inventoryTotalLimit - inventoryTakenCount, 0);
+    if (state.dailyCapEnabled) {
+      state.releasePhase = "daily";
+      state.dailyDropActive = true;
+      state.totalLimit = state.dailyLimit;
+      state.paidCount = state._dailyPaidCount;
+      state.reservedCount = state._dailyReservedCount;
+    }
     state.takenCount = state.paidCount + state.reservedCount;
-    state.remainingCount = state.unlimited ? 0 : Math.max(state.totalLimit - state.takenCount, 0);
+    state.remainingCount = state.unlimited
+      ? 0
+      : state.dailyCapEnabled
+        ? Math.min(Math.max(state.totalLimit - state.takenCount, 0), state.inventoryRemainingCount)
+        : Math.max(state.totalLimit - state.takenCount, 0);
     const regional = REGIONAL_FRIENDSHIP_CONFIGS[state.counterKey];
     if (regional) {
       const tiers = Array.isArray(state._tiers) ? state._tiers : [];
       const batchSize = Math.max(1, state.batchSize || regional.batchSize);
-      const batchIndex = Math.max(1, Math.min(tiers.length || 1, Math.floor(state.takenCount / batchSize) + 1));
+      const batchIndex = Math.max(1, Math.min(tiers.length || 1, Math.floor(inventoryTakenCount / batchSize) + 1));
       const activeTier = tiers[batchIndex - 1] || null;
-      const takenInBatch = Math.max(0, state.takenCount - (batchIndex - 1) * batchSize);
-      state.batchSize = batchSize;
+      const takenInBatch = Math.max(0, inventoryTakenCount - (batchIndex - 1) * batchSize);
+      state.batchSize = state.dailyCapEnabled ? state.dailyLimit : batchSize;
       state.batchIndex = batchIndex;
       state.batchCount = tiers.length;
-      state.batchRemainingCount = state.remainingCount <= 0 ? 0 : Math.max(0, batchSize - takenInBatch);
+      state.batchRemainingCount = state.dailyCapEnabled
+        ? state.remainingCount
+        : state.remainingCount <= 0 ? 0 : Math.max(0, batchSize - takenInBatch);
       state.productId = toStr(activeTier?.productId);
       state.productName = toStr(activeTier?.productName);
       state.priceMinor = Number.isFinite(Number(activeTier?.priceMinor))
@@ -854,6 +941,11 @@ msg.payload = {
   bindingError: toStr(selectedCounter.bindingError),
   managedSaleReady: toBool(selectedCounter.managedSaleReady) ?? true,
   managedSaleError: toStr(selectedCounter.managedSaleError),
+  dailyCapEnabled: selectedCounter.dailyCapEnabled === true,
+  inventoryTotalLimit: toInt(selectedCounter.inventoryTotalLimit, 0),
+  inventoryPaidCount: toInt(selectedCounter.inventoryPaidCount, 0),
+  inventoryReservedCount: toInt(selectedCounter.inventoryReservedCount, 0),
+  inventoryRemainingCount: toInt(selectedCounter.inventoryRemainingCount, 0),
   batchSize: toInt(selectedCounter.batchSize, 0),
   batchIndex: toInt(selectedCounter.batchIndex, 0),
   batchCount: toInt(selectedCounter.batchCount, 0),
