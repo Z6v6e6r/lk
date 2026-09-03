@@ -184,35 +184,7 @@ test("binary asset exceptions are exact and content-addressed", async () => {
     ],
     [
       "src/assets/piter-subscription-tier-1.webp",
-      "57550ea171f847a528cb82c6b4b8a5fe4723acc56ffd1dc0eda75740cca1cf4f",
-    ],
-    [
-      "src/assets/piter-subscription-tier-2.webp",
-      "5463d78487db30a0b24a69eb01007e2e37ccdd297b3d4e43e6625f934069afbe",
-    ],
-    [
-      "src/assets/piter-subscription-tier-3.webp",
-      "74eae501698f857780ca7050c0872304615fcfc8df1efb6e6116e0b8d607a5c6",
-    ],
-    [
-      "src/assets/piter-subscription-tier-4.webp",
-      "1e1b5711a7b890d68349182a8386d78681011de6193380b2cb80edc5464f3eb2",
-    ],
-    [
-      "src/assets/kotelniki-subscription-tier-1.webp",
-      "ce2c38442b8101d41fb0b87d3f2c2db38e738d21bd352a93226cac1b73f0f989",
-    ],
-    [
-      "src/assets/kotelniki-subscription-tier-2.webp",
-      "f47100c440c3cb1e9e6e3a514400a22f2b51a2f16b525243e6e2893daef14261",
-    ],
-    [
-      "src/assets/kotelniki-subscription-tier-3.webp",
-      "e5cc7d9924b70aaf15e38a39e3df1f01c408e0b9d84b2627a62a2f9c2f98a463",
-    ],
-    [
-      "src/assets/kotelniki-subscription-tier-4.webp",
-      "e678bfeb98937ec58769dca3ff659eaff9ce14ac0ba125280ec013b7bc02c20f",
+      "21868451f8dd722a99db1a555065e00bae401e2592c19a2e38e21fadcd2d590d",
     ],
     [
       "src/assets/network-subscription.webp",
