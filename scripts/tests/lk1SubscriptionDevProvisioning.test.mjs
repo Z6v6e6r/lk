@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   checkedProvisioningContract,
@@ -7,6 +10,7 @@ import {
 } from "../validate_lk1_subscription_dev_provisioning_contract.mjs";
 
 const clone = () => structuredClone(checkedProvisioningContract);
+const TEMP_ROOT = fs.existsSync("/private/tmp") ? "/private/tmp" : os.tmpdir();
 
 test("checked DEV provisioning contract authorizes only stopped bootstrap", () => {
   assert.equal(validateDevProvisioningContract(clone()), true);
@@ -128,7 +132,7 @@ test("shared-flow evidence has an exact timestamp and non-negative count schema"
 test("read-only pull rejects a lexical temp path that canonicalizes outside temp", () => {
   const result = spawnSync("bash", [
     "scripts/pull_nodered_dev_source_readonly.sh",
-    "/private/tmp/../lk1-dev-provisioning-path-escape",
+    path.join(TEMP_ROOT, "..", "lk1-dev-provisioning-path-escape"),
   ], { encoding: "utf8" });
   assert.equal(result.status, 65);
   assert.match(result.stderr, /must be under \/private\/tmp or \/tmp/);
