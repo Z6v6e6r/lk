@@ -1,0 +1,110 @@
+[
+  {
+    "id": "lk1-subscription-dev-evidence-tab",
+    "type": "tab",
+    "label": "LK1 Subscription DEV Evidence",
+    "disabled": false,
+    "info": "Read-only release evidence only."
+  },
+  {
+    "id": "lk1-subscription-dev-release-in",
+    "type": "http in",
+    "z": "lk1-subscription-dev-evidence-tab",
+    "name": "GET exact DEV release receipt",
+    "url": "/lk/release-dev.json",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "wires": [
+      [
+        "lk1-subscription-dev-release-file"
+      ]
+    ]
+  },
+  {
+    "id": "lk1-subscription-dev-release-file",
+    "type": "file in",
+    "z": "lk1-subscription-dev-evidence-tab",
+    "name": "Read root-owned release receipt",
+    "filename": "/srv/lk1-subscription-dev/node-red/release-identity.json",
+    "filenameType": "str",
+    "format": "utf8",
+    "chunk": false,
+    "sendError": true,
+    "encoding": "none",
+    "allProps": false,
+    "x": 440,
+    "y": 100,
+    "wires": [
+      [
+        "lk1-subscription-dev-release-validate"
+      ]
+    ]
+  },
+  {
+    "id": "lk1-subscription-dev-release-validate",
+    "type": "function",
+    "z": "lk1-subscription-dev-evidence-tab",
+    "name": "Validate exact served release identity",
+    "func": "const SHA = /^[a-f0-9]{40}$/;\nlet value;\ntry { value = JSON.parse(String(msg.payload || '')); } catch { value = null; }\nconst keys = ['sourceSha', 'candidateSha', 'readbackSha', 'servedSha'];\nconst exact = value && typeof value === 'object' && !Array.isArray(value)\n  && JSON.stringify(Object.keys(value).sort()) === JSON.stringify(keys.slice().sort())\n  && keys.every((key) => SHA.test(String(value[key] || '')));\nmsg.headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };\nmsg.statusCode = exact ? 200 : 503;\nmsg.payload = exact ? value : { code: 'DEV_RELEASE_RECEIPT_UNBOUND' };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 720,
+    "y": 100,
+    "wires": [
+      [
+        "lk1-subscription-dev-release-out"
+      ]
+    ]
+  },
+  {
+    "id": "lk1-subscription-dev-release-out",
+    "type": "http response",
+    "z": "lk1-subscription-dev-evidence-tab",
+    "name": "Return release evidence",
+    "statusCode": "",
+    "headers": {},
+    "x": 1000,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "lk1-subscription-dev-release-error",
+    "type": "catch",
+    "z": "lk1-subscription-dev-evidence-tab",
+    "name": "Fail closed when receipt is absent",
+    "scope": [
+      "lk1-subscription-dev-release-file"
+    ],
+    "uncaught": false,
+    "wires": [
+      [
+        "lk1-subscription-dev-release-error-response"
+      ]
+    ]
+  },
+  {
+    "id": "lk1-subscription-dev-release-error-response",
+    "type": "function",
+    "z": "lk1-subscription-dev-evidence-tab",
+    "name": "Return unbound release",
+    "func": "msg.headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };\nmsg.statusCode = 503;\nmsg.payload = { code: 'DEV_RELEASE_RECEIPT_UNBOUND' };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 720,
+    "y": 180,
+    "wires": [
+      [
+        "lk1-subscription-dev-release-out"
+      ]
+    ]
+  }
+]
