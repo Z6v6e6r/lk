@@ -245,13 +245,15 @@ test("URL classification requires an exact approved origin and rejects lookalike
   assert.equal(classifyDevUrl("https://preview.example.attacker.invalid", { allowedDevOrigins: ["https://preview.example"] }).code, "URL_DEV_IDENTITY_UNPROVEN");
 });
 
-test("production host identities remain denied across ports and trailing-dot variants", () => {
-  for (const origin of [
+test("production hosts stay blocked across ports and trailing-dot aliases", () => {
+  const productionAliases = [
     "https://padlhub.su:444",
     "https://padlhub.su.",
     "https://cup.padlhub.su:444",
-  ]) {
-    assert.equal(classifyDevUrl(origin, { allowedDevOrigins: [origin] }).code, "URL_PRODUCTION_ORIGIN");
+    "https://cup.padlhub.su.",
+  ];
+  for (const alias of productionAliases) {
+    assert.equal(classifyDevUrl(alias, { allowedDevOrigins: [alias] }).code, "URL_PRODUCTION_ORIGIN");
   }
 });
 
@@ -736,19 +738,15 @@ test("failed DEV metadata stops before authenticated user reads", async () => {
   assert.equal(fixture.calls.every((call) => !call.headers.Authorization && !call.headers["X-Subscriptions-Integration-Token"]), true);
 });
 
-test("all modes reject production target variants before network or secret transmission", async () => {
-  for (const productionOrigin of [
-    "https://cup.padlhub.su",
-    "https://cup.padlhub.su:444",
-    "https://cup.padlhub.su.",
-  ]) {
-    for (const mode of ["preflight", "observe-before", "observe-after"]) {
+test("all modes reject production hostname aliases before network or secret transmission", async () => {
+  for (const mode of ["preflight", "observe-before", "observe-after"]) {
+    for (const target of ["https://cup.padlhub.su", "https://cup.padlhub.su:444", "https://cup.padlhub.su."]) {
       let calls = 0;
       const configured = inputs({
-        DEV_CUP_BASE_URL: productionOrigin,
-        DEV_UAT_ALLOWED_DEV_ORIGINS_JSON: JSON.stringify(["https://lk.dev.example", productionOrigin]),
+        DEV_CUP_BASE_URL: target,
         DEV_UAT_RUN_ID: "20260902T120000000Z",
         DEV_UAT_EXPECTED_DELTA: { A: {}, B: {} },
+        allowedDevOrigins: ["https://lk.dev.padlhub.example", target],
       });
       await assert.rejects(executeMode({
         mode,

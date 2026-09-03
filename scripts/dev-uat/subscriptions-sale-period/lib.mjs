@@ -217,7 +217,7 @@ function normalizeHostname(value) {
   return String(value || "").toLowerCase().replace(/\.+$/, "");
 }
 
-function originSet(values) {
+function originRegistry(values) {
   const origins = new Set();
   const hostnames = new Set();
   for (const value of values) {
@@ -245,8 +245,8 @@ export function classifyDevUrl(rawUrl, { allowedDevOrigins = [], productionOrigi
   if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
     return { ok: false, code: "URL_BASE_NOT_ORIGIN" };
   }
-  const production = originSet(productionOrigins);
-  const allowed = originSet(allowedDevOrigins);
+  const production = originRegistry(productionOrigins);
+  const allowed = originRegistry(allowedDevOrigins);
   if (!production || !allowed) return { ok: false, code: "URL_ORIGIN_LIST_INVALID" };
   const origin = url.origin.toLowerCase();
   const hostname = normalizeHostname(url.hostname);

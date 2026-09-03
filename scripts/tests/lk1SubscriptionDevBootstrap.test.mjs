@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { buildBootstrapBundle } from "../build_lk1_subscription_dev_bootstrap.mjs";
@@ -12,13 +13,14 @@ import {
 } from "../lk1_subscription_dev_bootstrap/locked_fixture_runtime.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
+const TMP_ROOT = fs.existsSync("/private/tmp") ? "/private/tmp" : os.tmpdir();
 const CONTRACT_PATH = path.join(ROOT, "scripts/lk1_subscription_dev_bootstrap_contract.json");
 const INSTALLER_PATH = path.join(ROOT, "scripts/install_lk1_subscription_dev_bootstrap.sh");
 const COMMIT = "a".repeat(40);
 const contract = () => JSON.parse(fs.readFileSync(CONTRACT_PATH, "utf8"));
 
 function build() {
-  const root = fs.mkdtempSync("/private/tmp/lk1-dev-bootstrap-test-");
+  const root = fs.mkdtempSync(path.join(TMP_ROOT, "lk1-dev-bootstrap-test-"));
   const output = path.join(root, "bundle");
   return {
     root,
@@ -124,7 +126,7 @@ test("builder rejects non-temp output, existing output, and ambiguous source ide
     outputDirectory: path.join(ROOT, "bundle"), sourceCommit: COMMIT, repositoryIdentity: exactIdentity,
   }),
     /new directory under/);
-  const root = fs.mkdtempSync("/private/tmp/lk1-dev-bootstrap-existing-");
+  const root = fs.mkdtempSync(path.join(TMP_ROOT, "lk1-dev-bootstrap-existing-"));
   try {
     assert.throws(() => buildBootstrapBundle({
       outputDirectory: root, sourceCommit: COMMIT, repositoryIdentity: exactIdentity,

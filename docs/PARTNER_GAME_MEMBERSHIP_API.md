@@ -164,6 +164,9 @@ Server-only keyring задаёт для каждого клиента:
     "enabled": true,
     "scopes": ["members:add", "members:remove", "operations:read"],
     "stationIds": ["<allowed-station-id>"],
+    "games": {
+      "<canonical-open-game-id>": { "tenantKey": null, "capacity": 4 }
+    },
     "keys": {
       "key-2026-09": "<base64url-secret-from-secret-store>"
     }
@@ -180,10 +183,21 @@ Server-only keyring задаёт для каждого клиента:
 - station игры должна входить в `stationIds` как при POST, так и при DELETE; DELETE
   повторно сверяет текущий allowlist с `stationId` canonical membership внутри Mongo
   transaction до любого provider-вызова;
+- POST принимает только canonical identity `(tenantKey, game.id)`, явно заданную в
+  server-only `games` allowlist данного клиента. `tenantKey: null` задаётся явно и
+  отличается от отсутствующего поля. Mongo `_id` и legacy `gameId` не являются
+  допустимыми alias публичного маршрута;
 - POST принимает только неархивную игру с непротиворечивой public/private видимостью,
   известным joinable status (`PAID`, `PAYMENT_PENDING` или поддерживаемый legacy open
-  status) и каноническим `booking.endTs`, либо `booking.startTs`, не ранее server time;
-- Mongo prerequisites должны совпасть без ослабленных индексов;
+  status), каноническим `booking.endTs` либо `booking.startTs` не ранее server time и
+  подтверждённой capacity. Единственный authority для лимита — числовая padel-capacity
+  `2` или `4` из server-only `games` policy. Поля game record (`maxPlayers`,
+  `invite.maxPlayers`, split/metadata capacity и `singles|doubles`) не повышают этот
+  лимит: если они присутствуют, они только сверяются с policy и обязаны совпасть.
+  Отсутствующая/невалидная policy, дробный, строковый, завышенный или противоречивый
+  record signal остаётся fail-closed;
+- Mongo prerequisites должны совпасть без ослабленных индексов, включая существующий
+  unique index `uniq_tenant_game_id` ровно по `{ tenantKey: 1, id: 1 }`;
 - mode `viva` содержит real adapter, но mutation fail-closed, пока независимо не
   подтверждены все server-only gate из следующего раздела;
 - synthetic provider разрешён только для `local|test|dev`, loopback Mongo и имени БД с
@@ -235,11 +249,12 @@ containers `content/items/bookings/data/results` и create wrappers `data/bookin
 
 ## 5. Владение и удаление
 
-Авторитетная запись `lk_partner_game_memberships` содержит:
+Авторитетная запись `lk_partner_game_memberships` содержит ключевые binding/fence поля:
 
 ```text
-membershipId + clientId + gameId + externalPlayerId + generation
-exerciseId + technicalVivaClientId + bookingId + state + operationId
+membershipId + clientId + tenantKey + gameId + gameDocumentId
+externalPlayerId + generation + authorizedCapacity + stationId + exerciseId
+technicalVivaClientId + bookingId + payment.reference + state + operationId
 ```
 
 Источник в массиве `game.participants` — только проекция, а не разрешение на удаление.
@@ -300,7 +315,8 @@ SIEM согласуются до пилота.
 - всплеск `INVALID_SIGNATURE`, `REQUEST_REPLAY_DETECTED`, `SCOPE_DENIED`;
 - любой `UNKNOWN` старше reconciliation SLO;
 - `AUDIT_UNAVAILABLE`, `MONGO_PREREQUISITES_MISSING`;
-- рост `GAME_FULL_AFTER_PROVIDER`/локальных CAS конфликтов;
+- рост `GAME_FULL`/`GAME_CAPACITY_*`, любое `LOCAL_CAPACITY_LOST_AFTER_VIVA`
+  или локальные CAS-конфликты;
 - попытка synthetic mode вне изолированного окружения.
 
 ## 9. Изолированная проверка

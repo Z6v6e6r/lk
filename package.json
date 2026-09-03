@@ -140,6 +140,7 @@
     "test:lk1-subscription-dev-provisioning": "node --test scripts/tests/lk1SubscriptionDevProvisioning.test.mjs",
     "test:lk1-subscription-dev-bootstrap": "node --test scripts/tests/lk1SubscriptionDevBootstrap.test.mjs",
     "test:lk1-subscription-dev-runtime-source": "node --test scripts/tests/lk1SubscriptionDevRuntimeSource.test.mjs",
+    "test:lk1-subscription-dev-uat": "node --test scripts/dev-uat/subscriptions-sale-period/test.mjs",
     "test:managed-subscription-dev-runtime": "node --experimental-strip-types --test scripts/tests/managedSubscriptionDevRuntime.test.ts scripts/tests/subscriptionUsageTestRoute.test.ts scripts/tests/subscriptionUsageTestBooking.test.ts scripts/tests/subscriptionUsageShadow.test.ts scripts/tests/subscriptionUsageShadowIntegration.test.ts",
     "test:padel-day": "node --experimental-strip-types --test scripts/tests/padelDaySchedule.test.ts scripts/tests/padelDay.nodered.test.ts scripts/tests/padelDay.deploy.test.ts",
     "test:referral-subscription": "node --experimental-strip-types --test scripts/tests/referralSubscription.nodered.test.ts",

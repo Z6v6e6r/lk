@@ -339,6 +339,7 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     "Validate LK1 workflow event and identity contract",
     "Run critical subscription regression matrix",
     "Run unified candidate and drift-negative tests",
+    "Validate LK1 DEV provisioning, bootstrap, runtime source, and read-only UAT",
     "Run tracked credential and authenticated-route security tests",
     "Validate deterministic Node-RED modular toolchain fixtures",
     "Validate combined legacy game command prerequisites",
@@ -372,6 +373,15 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     step("Run unified candidate and drift-negative tests").run,
     /scripts\/tests\/subscriptionBookingLegacyPatcher\.test\.mjs/,
   );
+  const devBoundaryStep = step("Validate LK1 DEV provisioning, bootstrap, runtime source, and read-only UAT");
+  for (const suite of [
+    "scripts/tests/lk1SubscriptionDevProvisioning.test.mjs",
+    "scripts/tests/lk1SubscriptionDevBootstrap.test.mjs",
+    "scripts/tests/lk1SubscriptionDevRuntimeSource.test.mjs",
+    "scripts/dev-uat/subscriptions-sale-period/test.mjs",
+  ]) {
+    assert.match(devBoundaryStep.run, new RegExp(suite.replaceAll("/", "\\/").replaceAll(".", "\\.")));
+  }
   assert.match(
     step("Validate referral attribution compatibility").run,
     /scripts\/tests\/referralAttributionReleaseCandidate\.test\.mjs/,

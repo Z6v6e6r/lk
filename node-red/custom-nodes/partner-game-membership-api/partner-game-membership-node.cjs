@@ -110,6 +110,9 @@ module.exports = function registerPartnerGameMembershipApi(RED) {
                 secret: typeof encodedSecret === "string" ? Buffer.from(encodedSecret, "base64url") : Buffer.alloc(0),
                 scopes: Array.isArray(clientConfig?.scopes) ? clientConfig.scopes : [],
                 stationIds: Array.isArray(clientConfig?.stationIds) ? clientConfig.stationIds : [],
+                games: clientConfig?.games && typeof clientConfig.games === "object" && !Array.isArray(clientConfig.games)
+                  ? clientConfig.games
+                  : {},
               };
             };
             const service = new core.PartnerGameMembershipApiService({

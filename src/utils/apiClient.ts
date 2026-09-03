@@ -3682,6 +3682,7 @@ export interface TournamentSubscriptionStatus {
   batchCount: number;
   batchRemainingCount: number;
   releasePhase: string | null;
+  dailyCapEnabled: boolean;
   dailyDropActive: boolean;
   releaseStartDate: string | null;
   launchLimit: number;
@@ -10345,6 +10346,7 @@ function normalizeTournamentSubscriptionStatusEntry(
     batchCount: Math.max(0, Math.floor(pickNumeric(data, ["batchCount"]) ?? 0)),
     batchRemainingCount: Math.max(0, Math.floor(pickNumeric(data, ["batchRemainingCount"]) ?? 0)),
     releasePhase: pickString(data, ["releasePhase"]),
+    dailyCapEnabled: toBoolean(data.dailyCapEnabled) ?? false,
     dailyDropActive: toBoolean(data.dailyDropActive) ?? false,
     releaseStartDate: pickString(data, ["releaseStartDate"]),
     launchLimit: Math.max(0, Math.floor(pickNumeric(data, ["launchLimit"]) ?? 0)),
