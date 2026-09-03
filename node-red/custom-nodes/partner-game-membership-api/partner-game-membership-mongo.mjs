@@ -22,7 +22,7 @@ export const PARTNER_MEMBERSHIP_INDEX_SPECS = Object.freeze({
   memberships: [
     { key: { activeKey: 1 }, name: "uniq_partner_active_membership", unique: true, sparse: true },
     { key: { clientId: 1, "payment.reference": 1 }, name: "uniq_partner_payment_reference", unique: true },
-    { key: { clientId: 1, gameId: 1, externalPlayerId: 1, generation: -1 }, name: "partner_owner_history" },
+    { key: { clientId: 1, tenantKey: 1, gameId: 1, externalPlayerId: 1, generation: -1 }, name: "partner_owner_history" },
   ],
   audit: [
     { key: { at: -1, clientId: 1 }, name: "partner_audit_time_client" },
@@ -31,6 +31,9 @@ export const PARTNER_MEMBERSHIP_INDEX_SPECS = Object.freeze({
   outbox: [
     { key: { operationId: 1, eventType: 1 }, name: "uniq_partner_outbox_event", unique: true },
     { key: { state: 1, createdAt: 1 }, name: "partner_outbox_delivery" },
+  ],
+  games: [
+    { key: { tenantKey: 1, id: 1 }, name: "uniq_tenant_game_id", unique: true },
   ],
 });
 
@@ -48,13 +51,44 @@ const isDuplicateKey = (error) => Number(error?.code) === 11000;
 const toText = (value) => (value === null || value === undefined ? "" : String(value).trim());
 const asArray = (value) => (Array.isArray(value) ? value : []);
 
-const membershipActiveKey = (clientId, gameId, externalPlayerId) => (
-  sha256Hex(`${clientId}\n${gameId}\n${externalPlayerId}`)
+const membershipActiveKey = (clientId, tenantKey, gameId, externalPlayerId) => (
+  sha256Hex(JSON.stringify([clientId, tenantKey, gameId, externalPlayerId]))
 );
 
-const gameIdentifierFilter = (gameId) => ({
-  $or: [{ _id: gameId }, { id: gameId }, { gameId }],
-});
+const canonicalTenantKey = (tenantKey) => {
+  const validTenantKey = tenantKey === null
+    || (typeof tenantKey === "string"
+      && tenantKey.length > 0
+      && tenantKey.length <= 128
+      && tenantKey === tenantKey.trim()
+      && [...tenantKey].every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127));
+  if (!validTenantKey) {
+    throw new PartnerApiError("GAME_TENANT_POLICY_INVALID", "Authorized game tenant is invalid", {
+      httpStatus: 503,
+      expose: false,
+    });
+  }
+  return tenantKey;
+};
+
+const gameIdentifierFilter = (gameId, tenantKey, gameDocumentId) => {
+  const canonicalTenant = canonicalTenantKey(tenantKey);
+  return {
+    ...(gameDocumentId === undefined ? {} : { _id: gameDocumentId }),
+    id: gameId,
+    tenantKey: canonicalTenant === null ? { $type: 10 } : canonicalTenant,
+  };
+};
+
+const exactGameIdentity = (game, gameId, tenantKey) => Boolean(
+  game
+  && typeof game.id === "string"
+  && game.id === gameId
+  && Object.hasOwn(game, "tenantKey")
+  && game.tenantKey === tenantKey
+  && game._id !== null
+  && game._id !== undefined,
+);
 
 const gameStationId = (game) => toText(
   game?.stationId
@@ -71,20 +105,59 @@ const gameExerciseId = (game) => toText(
   || game?.metadata?.exerciseId,
 );
 
-const gameCapacity = (game) => {
-  const candidates = [
-    game?.maxPlayers,
-    game?.capacity,
-    game?.splitPayment?.totalSpots,
-    game?.splitPayment?.maxPlayers,
-    game?.metadata?.capacity,
-    game?.metadata?.maxPlayers,
+const gameCapacity = (game, authorizedCapacity) => {
+  if (typeof authorizedCapacity !== "number"
+    || !Number.isSafeInteger(authorizedCapacity)
+    || ![2, 4].includes(authorizedCapacity)) {
+    throw new PartnerApiError("GAME_CAPACITY_POLICY_INVALID", "Authorized game capacity is invalid", {
+      httpStatus: 503,
+      expose: false,
+    });
+  }
+  const rawSignals = [
+    ["authorization.capacity", authorizedCapacity],
+    ["maxPlayers", game?.maxPlayers],
+    ["capacity", game?.capacity],
+    ["invite.maxPlayers", game?.invite?.maxPlayers],
+    ["splitPayment.totalSpots", game?.splitPayment?.totalSpots],
+    ["splitPayment.maxPlayers", game?.splitPayment?.maxPlayers],
+    ["metadata.capacity", game?.metadata?.capacity],
+    ["metadata.maxPlayers", game?.metadata?.maxPlayers],
   ];
-  const capacity = candidates.map(Number).find((value) => Number.isSafeInteger(value) && value > 0 && value <= 64);
-  if (!capacity) {
+  const signals = rawSignals
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .map(([source, value]) => {
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || ![2, 4].includes(value)) {
+        throw new PartnerApiError("GAME_CAPACITY_INVALID", `Game capacity is invalid at ${source}`, { httpStatus: 409 });
+      }
+      return { source, capacity: value };
+    });
+  const formatSignals = [
+    ["metadata.gameFormat", game?.metadata?.gameFormat],
+    ["metadata.format", game?.metadata?.format],
+  ];
+  for (const [source, value] of formatSignals) {
+    if (value === null || value === undefined || value === "") continue;
+    if (typeof value !== "string") {
+      throw new PartnerApiError("GAME_CAPACITY_INVALID", `Game format is invalid at ${source}`, { httpStatus: 409 });
+    }
+    const format = value.trim().toLowerCase();
+    const capacity = format === "singles" || /^(1\s*(?:x|х|на)\s*1)$/.test(format)
+      ? 2
+      : (format === "doubles" || /^(2\s*(?:x|х|на)\s*2)$/.test(format) ? 4 : null);
+    if (!capacity) {
+      throw new PartnerApiError("GAME_CAPACITY_INVALID", `Game format is unsupported at ${source}`, { httpStatus: 409 });
+    }
+    signals.push({ source, capacity });
+  }
+  if (signals.length === 0) {
     throw new PartnerApiError("GAME_CAPACITY_UNKNOWN", "Game capacity is not available", { httpStatus: 409 });
   }
-  return capacity;
+  const capacities = new Set(signals.map(({ capacity }) => capacity));
+  if (capacities.size !== 1) {
+    throw new PartnerApiError("GAME_CAPACITY_CONFLICT", "Game capacity sources conflict", { httpStatus: 409 });
+  }
+  return signals[0].capacity;
 };
 
 const activeParticipants = (game) => asArray(game?.participants).filter((participant) => {
@@ -92,7 +165,7 @@ const activeParticipants = (game) => asArray(game?.participants).filter((partici
   return status !== "LEFT" && status !== "REMOVED" && status !== "CANCELLED";
 });
 
-export const assertGameAllowsExternalMember = (game, allowedStationIds, now = new Date()) => {
+export const assertGameAllowsExternalMember = (game, allowedStationIds, now = new Date(), authorizedCapacity) => {
   if (!game) throw new PartnerApiError("GAME_NOT_FOUND", "Game not found", { httpStatus: 404 });
   const statuses = [game.status, game.state]
     .map((value) => toText(value).toUpperCase())
@@ -132,7 +205,7 @@ export const assertGameAllowsExternalMember = (game, allowedStationIds, now = ne
   if (!exerciseId) {
     throw new PartnerApiError("VIVA_EXERCISE_UNKNOWN", "Game has no canonical Viva exercise binding", { httpStatus: 409 });
   }
-  return { stationId, exerciseId, capacity: gameCapacity(game) };
+  return { stationId, exerciseId, capacity: gameCapacity(game, authorizedCapacity) };
 };
 
 const transactionOptions = {
@@ -234,6 +307,7 @@ export class MongoPartnerGameMembershipRepository {
       requestHash: input.requestHash,
       action: input.action,
       gameId: input.gameId,
+      tenantKey: input.tenantKey,
       membershipId: input.membershipId,
       state: "RECEIVED",
       createdAt: input.createdAt,
@@ -265,10 +339,20 @@ export class MongoPartnerGameMembershipRepository {
         const games = this.db.collection(PARTNER_MEMBERSHIP_COLLECTIONS.games);
         const operation = await operations.findOne({ _id: input.operationId, state: "RECEIVED" }, { session });
         if (!operation) throw new PartnerApiError("OPERATION_STATE_CONFLICT", "Operation is not reservable", { httpStatus: 409 });
-        const game = await games.findOne(gameIdentifierFilter(input.gameId), { session });
-        const gameInfo = assertGameAllowsExternalMember(game, input.allowedStationIds, input.now);
+        const game = await games.findOne(gameIdentifierFilter(input.gameId, input.authorizedTenantKey), { session });
+        if (game && !exactGameIdentity(game, input.gameId, input.authorizedTenantKey)) {
+          throw new PartnerApiError("GAME_IDENTITY_CONFLICT", "Game identity is not canonical", { httpStatus: 409 });
+        }
+        const gameInfo = assertGameAllowsExternalMember(
+          game,
+          input.allowedStationIds,
+          input.now,
+          input.authorizedCapacity,
+        );
         const pendingCount = await memberships.countDocuments({
+          tenantKey: input.authorizedTenantKey,
           gameId: input.gameId,
+          gameDocumentId: game._id,
           $or: [
             { state: { $in: ["SLOT_RESERVED", "VIVA_PENDING"] } },
             { state: "UNKNOWN", removalOperationId: { $exists: false } },
@@ -279,7 +363,9 @@ export class MongoPartnerGameMembershipRepository {
         }
         const latest = await memberships.find({
           clientId: input.clientId,
+          tenantKey: input.authorizedTenantKey,
           gameId: input.gameId,
+          gameDocumentId: game._id,
           externalPlayerId: input.externalPlayerId,
         }, { session }).sort({ generation: -1 }).limit(1).next();
         const membershipId = crypto.randomUUID();
@@ -287,13 +373,21 @@ export class MongoPartnerGameMembershipRepository {
           _id: membershipId,
           membershipId,
           schemaVersion: 1,
-          activeKey: membershipActiveKey(input.clientId, input.gameId, input.externalPlayerId),
+          activeKey: membershipActiveKey(
+            input.clientId,
+            input.authorizedTenantKey,
+            input.gameId,
+            input.externalPlayerId,
+          ),
           clientId: input.clientId,
+          tenantKey: input.authorizedTenantKey,
           gameId: input.gameId,
+          gameDocumentId: game._id,
           externalPlayerId: input.externalPlayerId,
           displayName: input.displayName,
           payment: input.payment,
           generation: Number(latest?.generation || 0) + 1,
+          authorizedCapacity: gameInfo.capacity,
           exerciseId: gameInfo.exerciseId,
           stationId: gameInfo.stationId,
           operationId: input.operationId,
@@ -343,9 +437,19 @@ export class MongoPartnerGameMembershipRepository {
           state: "SLOT_RESERVED",
         }, { session });
         if (!membership) throw new PartnerProviderError("LOCAL_ADD_STATE_UNKNOWN", "Reserved membership state is unavailable after Viva confirmation", { ambiguous: true });
-        const game = await games.findOne(gameIdentifierFilter(membership.gameId), { session });
-        if (!game) throw new PartnerProviderError("LOCAL_GAME_MISSING_AFTER_VIVA", "Game disappeared after Viva confirmation", { ambiguous: true });
-        const capacity = gameCapacity(game);
+        if (membership.gameDocumentId === undefined || membership.gameDocumentId === null) {
+          throw new PartnerProviderError("LOCAL_GAME_BINDING_UNKNOWN", "Reserved game document binding is unavailable", { ambiguous: true });
+        }
+        const game = await games.findOne(
+          gameIdentifierFilter(membership.gameId, membership.tenantKey, membership.gameDocumentId),
+          { session },
+        );
+        if (!exactGameIdentity(game, membership.gameId, membership.tenantKey)
+          || gameExerciseId(game) !== membership.exerciseId
+          || gameStationId(game) !== membership.stationId) {
+          throw new PartnerProviderError("LOCAL_GAME_MISSING_AFTER_VIVA", "Game binding changed after Viva confirmation", { ambiguous: true });
+        }
+        const capacity = gameCapacity(game, membership.authorizedCapacity);
         if (activeParticipants(game).length >= capacity) {
           throw new PartnerProviderError("LOCAL_CAPACITY_LOST_AFTER_VIVA", "Local capacity was lost after Viva confirmation", { ambiguous: true });
         }
@@ -412,6 +516,7 @@ export class MongoPartnerGameMembershipRepository {
         }
         await this.insertStageAudit(session, await operations.findOne({ _id: input.operationId }, { session }), "COMPLETED", input.now, { membershipId: membership.membershipId });
         await this.insertOutbox(session, input.operationId, "PARTNER_MEMBER_ADDED", input.now, {
+          tenantKey: membership.tenantKey,
           gameId: membership.gameId,
           membershipId: membership.membershipId,
         });
@@ -445,9 +550,11 @@ export class MongoPartnerGameMembershipRepository {
           || !input.allowedStationIds.includes(membership.stationId)) {
           throw new PartnerApiError("STATION_ACCESS_DENIED", "Integration client cannot mutate this station", { httpStatus: 403 });
         }
-        if (!membership.bookingId || !membership.exerciseId || !membership.technicalVivaClientId) {
+        if (!membership.bookingId || !membership.exerciseId || !membership.technicalVivaClientId
+          || membership.gameDocumentId === undefined || membership.gameDocumentId === null) {
           throw new PartnerApiError("MEMBERSHIP_BINDING_INCOMPLETE", "Owned membership has no exact Viva binding", { httpStatus: 409 });
         }
+        canonicalTenantKey(membership.tenantKey);
         const memberWrite = await memberships.updateOne(
           { _id: membership._id, state: "ACTIVE" },
           { $set: { state: "REMOVAL_PENDING", removalOperationId: input.operationId, updatedAt: input.now } },
@@ -456,7 +563,14 @@ export class MongoPartnerGameMembershipRepository {
         if (memberWrite.modifiedCount !== 1) throw new PartnerApiError("MEMBERSHIP_STATE_CONFLICT", "Membership changed concurrently", { httpStatus: 409 });
         const operationWrite = await operations.updateOne(
           { _id: input.operationId, state: "RECEIVED" },
-          { $set: { state: "VIVA_PENDING", membershipId: membership.membershipId, updatedAt: input.now } },
+          {
+            $set: {
+              state: "VIVA_PENDING",
+              membershipId: membership.membershipId,
+              tenantKey: membership.tenantKey,
+              updatedAt: input.now,
+            },
+          },
           { session },
         );
         if (operationWrite.modifiedCount !== 1) throw new PartnerApiError("OPERATION_STATE_CONFLICT", "Removal operation lost its state fence", { httpStatus: 409 });
@@ -483,8 +597,16 @@ export class MongoPartnerGameMembershipRepository {
           state: "REMOVAL_PENDING",
         }, { session });
         if (!membership) throw new PartnerProviderError("LOCAL_REMOVE_STATE_UNKNOWN", "Owned removal state is unavailable after Viva confirmation", { ambiguous: true });
-        const game = await games.findOne(gameIdentifierFilter(membership.gameId), { session });
-        if (!game) throw new PartnerProviderError("LOCAL_GAME_MISSING_AFTER_REMOVE", "Game disappeared after Viva removal", { ambiguous: true });
+        if (membership.gameDocumentId === undefined || membership.gameDocumentId === null) {
+          throw new PartnerProviderError("LOCAL_GAME_BINDING_UNKNOWN", "Owned game document binding is unavailable", { ambiguous: true });
+        }
+        const game = await games.findOne(
+          gameIdentifierFilter(membership.gameId, membership.tenantKey, membership.gameDocumentId),
+          { session },
+        );
+        if (!exactGameIdentity(game, membership.gameId, membership.tenantKey)) {
+          throw new PartnerProviderError("LOCAL_GAME_MISSING_AFTER_REMOVE", "Game binding changed after Viva removal", { ambiguous: true });
+        }
         const gameWrite = await games.updateOne(
           { _id: game._id },
           {
@@ -531,6 +653,7 @@ export class MongoPartnerGameMembershipRepository {
         }
         await this.insertStageAudit(session, await operations.findOne({ _id: input.operationId }, { session }), "COMPLETED", input.now, { membershipId: membership.membershipId });
         await this.insertOutbox(session, input.operationId, "PARTNER_MEMBER_REMOVED", input.now, {
+          tenantKey: membership.tenantKey,
           gameId: membership.gameId,
           membershipId: membership.membershipId,
         });
@@ -639,6 +762,7 @@ export function operationTouchesOnlyOwnedMembership(operation, membership) {
     operation
     && membership
     && operation.clientId === membership.clientId
+    && operation.tenantKey === membership.tenantKey
     && operation.gameId === membership.gameId
     && operation.membershipId === membership.membershipId
     && ACTIVE_MEMBER_STATES.has(membership.state),

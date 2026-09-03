@@ -32,7 +32,9 @@ const STATION_ID = "station-spb-1";
 const TECHNICAL_CLIENT_ID = "viva-technical-client-1";
 
 const openGame = (overrides = {}) => ({
+  _id: "memory-game-document-1",
   id: GAME_ID,
+  tenantKey: null,
   status: "PAID",
   archived: false,
   settings: { isPrivate: false },
@@ -91,6 +93,7 @@ class MemoryRepository {
       requestHash: input.requestHash,
       action: input.action,
       gameId: input.gameId,
+      tenantKey: input.tenantKey,
       membershipId: input.membershipId,
       state: "RECEIVED",
       createdAt: input.createdAt,
@@ -104,10 +107,19 @@ class MemoryRepository {
   async reserveAdd(input) {
     const operation = this.operations.get(input.operationId);
     const game = this.games.get(input.gameId);
-    const gameInfo = assertGameAllowsExternalMember(game, input.allowedStationIds, input.now);
-    if (game.participants.length >= game.maxPlayers) throw new PartnerApiError("GAME_FULL", "full", { httpStatus: 409 });
+    if (!game || game.tenantKey !== input.authorizedTenantKey) {
+      throw new PartnerApiError("GAME_NOT_FOUND", "not found", { httpStatus: 404 });
+    }
+    const gameInfo = assertGameAllowsExternalMember(
+      game,
+      input.allowedStationIds,
+      input.now,
+      input.authorizedCapacity,
+    );
+    if (game.participants.length >= gameInfo.capacity) throw new PartnerApiError("GAME_FULL", "full", { httpStatus: 409 });
     const duplicate = [...this.memberships.values()].find((membership) => (
       membership.clientId === input.clientId
+      && membership.tenantKey === input.authorizedTenantKey
       && membership.gameId === input.gameId
       && membership.externalPlayerId === input.externalPlayerId
       && ["SLOT_RESERVED", "ACTIVE", "REMOVAL_PENDING", "UNKNOWN"].includes(membership.state)
@@ -122,11 +134,14 @@ class MemoryRepository {
     const membership = {
       membershipId,
       clientId: input.clientId,
+      tenantKey: input.authorizedTenantKey,
       gameId: input.gameId,
+      gameDocumentId: game._id,
       externalPlayerId: input.externalPlayerId,
       displayName: input.displayName,
       payment: input.payment,
       generation: 1,
+      authorizedCapacity: gameInfo.capacity,
       exerciseId: gameInfo.exerciseId,
       stationId: gameInfo.stationId,
       operationId: input.operationId,
@@ -141,6 +156,18 @@ class MemoryRepository {
     const operation = this.operations.get(input.operationId);
     const membership = this.memberships.get(input.membershipId);
     const game = this.games.get(membership.gameId);
+    if (!game || game.tenantKey !== membership.tenantKey) {
+      throw new PartnerProviderError("LOCAL_GAME_MISSING_AFTER_VIVA", "game missing", { ambiguous: true });
+    }
+    const gameInfo = assertGameAllowsExternalMember(
+      game,
+      [membership.stationId],
+      input.now,
+      membership.authorizedCapacity,
+    );
+    if (game.participants.length >= gameInfo.capacity) {
+      throw new PartnerProviderError("LOCAL_CAPACITY_LOST_AFTER_VIVA", "capacity lost", { ambiguous: true });
+    }
     const playerId = `partner:${membership.membershipId}`;
     game.participants.push({
       id: playerId,
@@ -280,6 +307,7 @@ const buildFixture = (overrides = {}) => {
       secret: SECRET,
       scopes: overrides.scopes || ["members:add", "members:remove", "operations:read"],
       stationIds: overrides.stationIds || [STATION_ID],
+      games: overrides.games === undefined ? { [GAME_ID]: { tenantKey: null, capacity: 4 } } : overrides.games,
     }),
   });
   return { repository, provider, service };
@@ -334,13 +362,21 @@ test("canonical JSON is stable and rejects ambiguous numeric input", () => {
 test("canonical paid and pending public games remain joinable until their end time", () => {
   for (const status of ["PAID", "PAYMENT_PENDING", "OPEN"]) {
     assert.deepEqual(
-      assertGameAllowsExternalMember(openGame({ status }), [STATION_ID], NOW),
+      assertGameAllowsExternalMember(openGame({ status }), [STATION_ID], NOW, 4),
       { stationId: STATION_ID, exerciseId: "viva-exercise-1", capacity: 4 },
     );
   }
   assert.doesNotThrow(() => assertGameAllowsExternalMember(openGame({
     booking: { startTs: NOW.getTime() - 60_000, endTs: NOW.getTime() },
-  }), [STATION_ID], NOW));
+  }), [STATION_ID], NOW, 4));
+  assert.deepEqual(
+    assertGameAllowsExternalMember(openGame({
+      maxPlayers: undefined,
+      invite: { maxPlayers: 4, waitlistEnabled: true },
+      metadata: { gameFormat: "doubles" },
+    }), [STATION_ID], NOW, 4),
+    { stationId: STATION_ID, exerciseId: "viva-exercise-1", capacity: 4 },
+  );
 });
 
 test("archived, ended, private, visibility-conflicted, and incomplete games fail closed", () => {
@@ -355,7 +391,7 @@ test("archived, ended, private, visibility-conflicted, and incomplete games fail
     openGame({ status: "" }),
   ]) {
     assert.throws(
-      () => assertGameAllowsExternalMember(game, [STATION_ID], NOW),
+      () => assertGameAllowsExternalMember(game, [STATION_ID], NOW, 4),
       { code: "GAME_NOT_OPEN", httpStatus: 409 },
     );
   }
@@ -365,10 +401,42 @@ test("archived, ended, private, visibility-conflicted, and incomplete games fail
     openGame({ booking: { startTs: NOW.getTime() + 60_000, endTs: "not-a-timestamp" } }),
   ]) {
     assert.throws(
-      () => assertGameAllowsExternalMember(game, [STATION_ID], NOW),
+      () => assertGameAllowsExternalMember(game, [STATION_ID], NOW, 4),
       { code: "GAME_SCHEDULE_UNKNOWN", httpStatus: 409 },
     );
   }
+  assert.deepEqual(
+    assertGameAllowsExternalMember(openGame({ maxPlayers: undefined }), [STATION_ID], NOW, 4),
+    { stationId: STATION_ID, exerciseId: "viva-exercise-1", capacity: 4 },
+  );
+  assert.throws(
+    () => assertGameAllowsExternalMember(openGame(), [STATION_ID], NOW),
+    { code: "GAME_CAPACITY_POLICY_INVALID", httpStatus: 503 },
+  );
+  for (const maxPlayers of [0, 1, 3, 64, 2.5, "4"]) {
+    assert.throws(
+      () => assertGameAllowsExternalMember(openGame({ maxPlayers }), [STATION_ID], NOW, 4),
+      { code: "GAME_CAPACITY_INVALID", httpStatus: 409 },
+    );
+  }
+  for (const game of [
+    openGame({ invite: { maxPlayers: 2 } }),
+    openGame({ metadata: { gameFormat: "singles" } }),
+    openGame({ maxPlayers: undefined, invite: { maxPlayers: 4 }, metadata: { gameFormat: "singles" } }),
+  ]) {
+    assert.throws(
+      () => assertGameAllowsExternalMember(game, [STATION_ID], NOW, 4),
+      { code: "GAME_CAPACITY_CONFLICT", httpStatus: 409 },
+    );
+  }
+  assert.throws(
+    () => assertGameAllowsExternalMember(openGame({
+      maxPlayers: undefined,
+      invite: { maxPlayers: 4 },
+      metadata: { gameFormat: "training" },
+    }), [STATION_ID], NOW, 4),
+    { code: "GAME_CAPACITY_INVALID", httpStatus: 409 },
+  );
 });
 
 test("published cross-team signature vector remains stable", () => {
@@ -530,7 +598,7 @@ test("one external payment reference cannot mark two memberships paid", async ()
   assert.equal(provider.addCalls, 1);
 });
 
-test("scope and station allowlists fail closed", async () => {
+test("scope, station, and server-owned game allowlists fail closed", async () => {
   const scoped = buildFixture({ scopes: ["operations:read"] });
   await assert.rejects(() => scoped.service.handle(signedRequest()), { code: "SCOPE_DENIED", httpStatus: 403 });
   assert.equal(scoped.provider.addCalls, 0);
@@ -538,6 +606,30 @@ test("scope and station allowlists fail closed", async () => {
   const station = buildFixture({ stationIds: ["different-station"] });
   await assert.rejects(() => station.service.handle(signedRequest()), { code: "STATION_ACCESS_DENIED", httpStatus: 403 });
   assert.equal(station.provider.addCalls, 0);
+
+  const game = buildFixture({ games: {} });
+  await assert.rejects(() => game.service.handle(signedRequest()), { code: "GAME_ACCESS_DENIED", httpStatus: 403 });
+  assert.equal(game.provider.addCalls, 0);
+  assert.equal(game.repository.operations.size, 0);
+  assert.equal(game.repository.audit.at(-1).code, "GAME_ACCESS_DENIED");
+
+  const invalidCapacity = buildFixture({ games: { [GAME_ID]: { tenantKey: null, capacity: "4" } } });
+  await assert.rejects(
+    () => invalidCapacity.service.handle(signedRequest()),
+    { code: "GAME_CAPACITY_POLICY_INVALID", httpStatus: 503 },
+  );
+  assert.equal(invalidCapacity.provider.addCalls, 0);
+  assert.equal(invalidCapacity.repository.operations.size, 0);
+  assert.equal(invalidCapacity.repository.audit.at(-1).code, "GAME_CAPACITY_POLICY_INVALID");
+
+  const invalidTenant = buildFixture({ games: { [GAME_ID]: { capacity: 4 } } });
+  await assert.rejects(
+    () => invalidTenant.service.handle(signedRequest()),
+    { code: "GAME_TENANT_POLICY_INVALID", httpStatus: 503 },
+  );
+  assert.equal(invalidTenant.provider.addCalls, 0);
+  assert.equal(invalidTenant.repository.operations.size, 0);
+  assert.equal(invalidTenant.repository.audit.at(-1).code, "GAME_TENANT_POLICY_INVALID");
 });
 
 test("only the exact membership created by the same client can be removed", async () => {
@@ -799,6 +891,11 @@ test("Mongo prerequisites include unique idempotency, active ownership, nonce TT
   assert.equal(PARTNER_MEMBERSHIP_INDEX_SPECS.memberships[1].unique, true);
   assert.equal(PARTNER_MEMBERSHIP_INDEX_SPECS.nonces[0].expireAfterSeconds, 0);
   assert.equal(PARTNER_MEMBERSHIP_INDEX_SPECS.outbox[0].unique, true);
+  assert.deepEqual(PARTNER_MEMBERSHIP_INDEX_SPECS.games[0], {
+    key: { tenantKey: 1, id: 1 },
+    name: "uniq_tenant_game_id",
+    unique: true,
+  });
 });
 
 test("Mongo prerequisite verifier rejects partial, collated, hidden, and otherwise weakened indexes", async () => {
@@ -832,6 +929,238 @@ test("Mongo prerequisite verifier rejects partial, collated, hidden, and otherwi
   }
 });
 
+test("Mongo reservation binds canonical public game id to the exact tenant and authorized capacity", async () => {
+  const gameQueries = [];
+  const pendingQueries = [];
+  const insertedMemberships = [];
+  const session = { async endSession() {} };
+  const operation = {
+    _id: "operation-1",
+    operationId: "operation-1",
+    clientId: CLIENT_ID,
+    keyId: KEY_ID,
+    correlationId: crypto.randomUUID(),
+    idempotencyKey: crypto.randomUUID(),
+    action: "ADD_MEMBER",
+    state: "RECEIVED",
+  };
+  const db = {
+    collection(name) {
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.operations) {
+        return {
+          async findOne() { return operation; },
+          async updateOne() { return { modifiedCount: 1 }; },
+        };
+      }
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.memberships) {
+        return {
+          async findOne(filter) {
+            return insertedMemberships.find((membership) => membership._id === filter._id) || null;
+          },
+          async updateOne() { return { modifiedCount: 1 }; },
+          async countDocuments(filter) { pendingQueries.push(filter); return 0; },
+          find() {
+            const cursor = {
+              sort() { return cursor; },
+              limit() { return cursor; },
+              async next() { return null; },
+            };
+            return cursor;
+          },
+          async insertOne(document) { insertedMemberships.push(document); return { acknowledged: true }; },
+        };
+      }
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.games) {
+        return {
+          async findOne(filter) {
+            gameQueries.push(filter);
+            if (filter.id === "malformed-array-id") {
+              return {
+                ...openGame(),
+                _id: "mongo-malformed-array",
+                id: ["malformed-array-id", GAME_ID],
+                tenantKey: [null, "tenant-two"],
+              };
+            }
+            if (filter.id === "missing-tenant-id") {
+              const game = { ...openGame(), _id: "mongo-missing-tenant", id: "missing-tenant-id" };
+              delete game.tenantKey;
+              return game;
+            }
+            if (filter.id !== GAME_ID) return null;
+            if (filter.tenantKey?.$type === 10) return { ...openGame(), _id: "mongo-object-id" };
+            if (filter.tenantKey === "tenant-two") {
+              return {
+                ...openGame({ tenantKey: "tenant-two", exerciseId: "viva-exercise-2" }),
+                _id: "mongo-object-id-two",
+              };
+            }
+            return null;
+          },
+          async updateOne() { return { modifiedCount: 1 }; },
+        };
+      }
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.audit
+        || name === PARTNER_MEMBERSHIP_COLLECTIONS.outbox) {
+        return { async insertOne() { return { acknowledged: true }; } };
+      }
+      throw new Error(`Unexpected collection ${name}`);
+    },
+  };
+  const repository = new MongoPartnerGameMembershipRepository({
+    client: { startSession: () => session },
+    db,
+    transactionExecutor: async (_session, callback) => callback(),
+  });
+  const input = {
+    operationId: operation.operationId,
+    clientId: CLIENT_ID,
+    gameId: GAME_ID,
+    externalPlayerId: "partner-player-1",
+    displayName: "Partner player",
+    payment: { reference: "payment-1" },
+    allowedStationIds: [STATION_ID],
+    authorizedCapacity: 4,
+    authorizedTenantKey: null,
+    now: NOW,
+  };
+
+  const first = await repository.reserveAdd(input);
+  assert.deepEqual(gameQueries, [{ id: GAME_ID, tenantKey: { $type: 10 } }]);
+  assert.equal(first.exerciseId, "viva-exercise-1");
+  assert.equal(insertedMemberships.length, 1);
+  assert.equal(insertedMemberships[0].gameId, GAME_ID);
+  assert.equal(insertedMemberships[0].tenantKey, null);
+  assert.equal(insertedMemberships[0].gameDocumentId, "mongo-object-id");
+  assert.equal(insertedMemberships[0].authorizedCapacity, 4);
+  assert.equal(pendingQueries[0].tenantKey, null);
+  assert.equal(pendingQueries[0].gameDocumentId, "mongo-object-id");
+
+  const completed = await repository.completeAdd({
+    operationId: operation.operationId,
+    membershipId: first.membershipId,
+    bookingId: "booking-after-reserve",
+    technicalVivaClientId: TECHNICAL_CLIENT_ID,
+    now: NOW,
+  });
+  assert.equal(completed.response.membership.state, "ACTIVE");
+  assert.deepEqual(gameQueries.at(-1), {
+    _id: "mongo-object-id",
+    id: GAME_ID,
+    tenantKey: { $type: 10 },
+  });
+
+  const second = await repository.reserveAdd({
+    ...input,
+    operationId: "operation-tenant-two",
+    externalPlayerId: "partner-player-2",
+    payment: { reference: "payment-2" },
+    authorizedTenantKey: "tenant-two",
+  });
+  assert.deepEqual(gameQueries.at(-1), { id: GAME_ID, tenantKey: "tenant-two" });
+  assert.equal(second.exerciseId, "viva-exercise-2");
+  assert.equal(insertedMemberships[1].tenantKey, "tenant-two");
+  assert.equal(pendingQueries[1].tenantKey, "tenant-two");
+
+  await assert.rejects(
+    () => repository.reserveAdd({ ...input, operationId: "operation-alias", gameId: "mongo-object-id" }),
+    { code: "GAME_NOT_FOUND", httpStatus: 404 },
+  );
+  assert.deepEqual(gameQueries.at(-1), { id: "mongo-object-id", tenantKey: { $type: 10 } });
+  assert.equal(insertedMemberships.length, 2);
+
+  for (const malformedGameId of ["malformed-array-id", "missing-tenant-id"]) {
+    await assert.rejects(
+      () => repository.reserveAdd({
+        ...input,
+        operationId: `operation-${malformedGameId}`,
+        gameId: malformedGameId,
+      }),
+      { code: "GAME_IDENTITY_CONFLICT", httpStatus: 409 },
+    );
+  }
+  assert.equal(insertedMemberships.length, 2);
+});
+
+test("Mongo add completion reuses the tenant and capacity persisted by reservation", async () => {
+  const gameQueries = [];
+  const gameWrites = [];
+  const session = { async endSession() {} };
+  const membership = {
+    _id: "membership-tenant-two",
+    membershipId: "membership-tenant-two",
+    operationId: "operation-complete-add",
+    clientId: CLIENT_ID,
+    tenantKey: "tenant-two",
+    gameId: GAME_ID,
+    gameDocumentId: "mongo-object-id-two",
+    externalPlayerId: "partner-player-2",
+    displayName: "Partner player",
+    payment: {
+      reference: "payment-2",
+      paidAt: NOW.toISOString(),
+      amountMinor: 100,
+      currency: "RUB",
+    },
+    generation: 1,
+    authorizedCapacity: 4,
+    stationId: STATION_ID,
+    exerciseId: "viva-exercise-2",
+    state: "SLOT_RESERVED",
+  };
+  const db = {
+    collection(name) {
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.memberships) {
+        return {
+          async findOne() { return membership; },
+          async updateOne() { return { modifiedCount: 1 }; },
+        };
+      }
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.operations) {
+        return {
+          async findOne() {
+            return { operationId: membership.operationId, clientId: CLIENT_ID, action: "ADD_MEMBER" };
+          },
+          async updateOne() { return { modifiedCount: 1 }; },
+        };
+      }
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.games) {
+        return {
+          async findOne(filter) {
+            gameQueries.push(filter);
+            return {
+              ...openGame({ tenantKey: "tenant-two", exerciseId: membership.exerciseId }),
+              _id: "mongo-object-id-two",
+            };
+          },
+          async updateOne(filter) { gameWrites.push(filter); return { modifiedCount: 1 }; },
+        };
+      }
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.audit
+        || name === PARTNER_MEMBERSHIP_COLLECTIONS.outbox) {
+        return { async insertOne() { return { acknowledged: true }; } };
+      }
+      throw new Error(`Unexpected collection ${name}`);
+    },
+  };
+  const repository = new MongoPartnerGameMembershipRepository({
+    client: { startSession: () => session },
+    db,
+    transactionExecutor: async (_session, callback) => callback(),
+  });
+
+  const completed = await repository.completeAdd({
+    operationId: membership.operationId,
+    membershipId: membership.membershipId,
+    bookingId: "booking-2",
+    technicalVivaClientId: TECHNICAL_CLIENT_ID,
+    now: NOW,
+  });
+  assert.deepEqual(gameQueries, [{ _id: "mongo-object-id-two", id: GAME_ID, tenantKey: "tenant-two" }]);
+  assert.equal(gameWrites[0]._id, "mongo-object-id-two");
+  assert.equal(completed.response.membership.state, "ACTIVE");
+});
+
 test("Mongo remove guard rejects a revoked station before any membership or operation mutation", async () => {
   let membershipUpdates = 0;
   let operationUpdates = 0;
@@ -845,6 +1174,7 @@ test("Mongo remove guard rejects a revoked station before any membership or oper
               _id: "membership-1",
               membershipId: "membership-1",
               clientId: CLIENT_ID,
+              tenantKey: null,
               gameId: GAME_ID,
               stationId: STATION_ID,
               state: "ACTIVE",
@@ -880,6 +1210,67 @@ test("Mongo remove guard rejects a revoked station before any membership or oper
   }), { code: "STATION_ACCESS_DENIED", httpStatus: 403 });
   assert.equal(membershipUpdates, 0);
   assert.equal(operationUpdates, 0);
+});
+
+test("Mongo remove completion uses the tenant persisted on the owned membership", async () => {
+  const gameQueries = [];
+  const session = { async endSession() {} };
+  const membership = {
+    _id: "membership-remove",
+    membershipId: "membership-remove",
+    removalOperationId: "operation-complete-remove",
+    clientId: CLIENT_ID,
+    tenantKey: null,
+    gameId: GAME_ID,
+    gameDocumentId: "mongo-object-id",
+    externalPlayerId: "partner-player-remove",
+    state: "REMOVAL_PENDING",
+  };
+  const db = {
+    collection(name) {
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.memberships) {
+        return {
+          async findOne() { return membership; },
+          async updateOne() { return { modifiedCount: 1 }; },
+        };
+      }
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.operations) {
+        return {
+          async findOne() {
+            return { operationId: membership.removalOperationId, clientId: CLIENT_ID, action: "REMOVE_MEMBER" };
+          },
+          async updateOne() { return { modifiedCount: 1 }; },
+        };
+      }
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.games) {
+        return {
+          async findOne(filter) {
+            gameQueries.push(filter);
+            return { ...openGame(), _id: "mongo-object-id" };
+          },
+          async updateOne() { return { modifiedCount: 1 }; },
+        };
+      }
+      if (name === PARTNER_MEMBERSHIP_COLLECTIONS.audit
+        || name === PARTNER_MEMBERSHIP_COLLECTIONS.outbox) {
+        return { async insertOne() { return { acknowledged: true }; } };
+      }
+      throw new Error(`Unexpected collection ${name}`);
+    },
+  };
+  const repository = new MongoPartnerGameMembershipRepository({
+    client: { startSession: () => session },
+    db,
+    transactionExecutor: async (_session, callback) => callback(),
+  });
+
+  const completed = await repository.completeRemove({
+    operationId: membership.removalOperationId,
+    membershipId: membership.membershipId,
+    now: NOW,
+  });
+  assert.deepEqual(gameQueries, [{ _id: "mongo-object-id", id: GAME_ID, tenantKey: { $type: 10 } }]);
+  assert.equal(completed.response.membership.state, "REMOVED");
 });
 
 test("failed pre-authorization DELETE cannot change the referenced membership state", async () => {
@@ -923,9 +1314,10 @@ test("failed pre-authorization DELETE cannot change the referenced membership st
 });
 
 test("ownership helper requires an exact client, game, membership, and active state", () => {
-  const operation = { clientId: "c1", gameId: "g1", membershipId: "m1" };
-  const membership = { clientId: "c1", gameId: "g1", membershipId: "m1", state: "ACTIVE" };
+  const operation = { clientId: "c1", tenantKey: "t1", gameId: "g1", membershipId: "m1" };
+  const membership = { clientId: "c1", tenantKey: "t1", gameId: "g1", membershipId: "m1", state: "ACTIVE" };
   assert.equal(operationTouchesOnlyOwnedMembership(operation, membership), true);
   assert.equal(operationTouchesOnlyOwnedMembership(operation, { ...membership, clientId: "c2" }), false);
+  assert.equal(operationTouchesOnlyOwnedMembership(operation, { ...membership, tenantKey: "t2" }), false);
   assert.equal(operationTouchesOnlyOwnedMembership(operation, { ...membership, state: "REMOVED" }), false);
 });

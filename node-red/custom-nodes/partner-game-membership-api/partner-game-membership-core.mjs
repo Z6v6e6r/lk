@@ -300,8 +300,41 @@ export async function verifyPartnerRequestProof(request, options) {
     ].join("\n")),
     scopes: Array.isArray(credential.scopes) ? [...credential.scopes] : [],
     stationIds: Array.isArray(credential.stationIds) ? [...credential.stationIds] : [],
+    games: credential.games && typeof credential.games === "object" && !Array.isArray(credential.games)
+      ? credential.games
+      : {},
   };
 }
+
+const authorizedGamePolicy = (auth, gameId) => {
+  if (!auth.games || !Object.hasOwn(auth.games, gameId)) {
+    throw new PartnerApiError("GAME_ACCESS_DENIED", "Integration client cannot mutate this game", { httpStatus: 403 });
+  }
+  const policy = auth.games[gameId];
+  const capacity = policy && typeof policy === "object" && !Array.isArray(policy)
+    ? policy.capacity
+    : null;
+  if (typeof capacity !== "number" || !Number.isSafeInteger(capacity) || ![2, 4].includes(capacity)) {
+    throw new PartnerApiError("GAME_CAPACITY_POLICY_INVALID", "Authorized game capacity is invalid", {
+      httpStatus: 503,
+      expose: false,
+    });
+  }
+  const tenantKey = policy.tenantKey;
+  const validTenantKey = tenantKey === null
+    || (typeof tenantKey === "string"
+      && tenantKey.length > 0
+      && tenantKey.length <= 128
+      && tenantKey === tenantKey.trim()
+      && [...tenantKey].every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127));
+  if (!validTenantKey) {
+    throw new PartnerApiError("GAME_TENANT_POLICY_INVALID", "Authorized game tenant is invalid", {
+      httpStatus: 503,
+      expose: false,
+    });
+  }
+  return { capacity, tenantKey };
+};
 
 const safeIdHash = (auditKey, value) => (
   value ? hmacBase64Url(auditKey, String(value)) : null
@@ -398,6 +431,20 @@ export class PartnerGameMembershipApiService {
       await this.auditIngress(request, auth, "REJECTED", "SCOPE_DENIED");
       throw new PartnerApiError("SCOPE_DENIED", "Integration client lacks the required scope", { httpStatus: 403 });
     }
+    let routeAuthorization = route;
+    if (route.action === "ADD_MEMBER") {
+      try {
+        const gamePolicy = authorizedGamePolicy(auth, route.gameId);
+        routeAuthorization = {
+          ...route,
+          authorizedCapacity: gamePolicy.capacity,
+          authorizedTenantKey: gamePolicy.tenantKey,
+        };
+      } catch (error) {
+        await this.auditIngress(request, auth, "REJECTED", error?.code || "GAME_ACCESS_DENIED");
+        throw error;
+      }
+    }
     if (route.action === "READ_OPERATION") {
       await this.auditIngress(request, auth, "ACCEPTED", "SIGNATURE_VERIFIED");
       return this.readOperation(auth, route);
@@ -424,7 +471,7 @@ export class PartnerGameMembershipApiService {
       throw error;
     }
     await this.auditIngress(request, auth, "ACCEPTED", "SIGNATURE_VERIFIED");
-    if (route.action === "ADD_MEMBER") return this.addMember(request.body, auth, route);
+    if (route.action === "ADD_MEMBER") return this.addMember(request.body, auth, routeAuthorization);
     return this.removeMember(request.body, auth, route);
   }
 
@@ -438,6 +485,7 @@ export class PartnerGameMembershipApiService {
       requestHash: auth.requestHash,
       action: route.action,
       gameId: route.gameId || null,
+      tenantKey: route.authorizedTenantKey ?? null,
       membershipId: route.membershipId || null,
       requestBody: body,
       createdAt: this.now(),
@@ -466,6 +514,8 @@ export class PartnerGameMembershipApiService {
         displayName: body.displayName,
         payment: body.payment,
         allowedStationIds: auth.stationIds,
+        authorizedCapacity: route.authorizedCapacity,
+        authorizedTenantKey: route.authorizedTenantKey,
         now: this.now(),
       });
       let providerResult;
