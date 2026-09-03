@@ -21,6 +21,10 @@ export async function persistServerGameDraftBeforeRedirect(
 ): Promise<ServerGameDraftPersistenceResult> {
   return persistServerGameDraftWithReadback(paymentRefRaw, payload, bookingIdsRaw, {
     createDraft: apiCreatePadelGameDraft,
-    lookupDraft: apiFetchPadelGameByPaymentRef,
+    lookupDraft: (paymentRef, bookingIds) => apiFetchPadelGameByPaymentRef(
+      paymentRef,
+      bookingIds,
+      { mode: "combined" },
+    ),
   });
 }

@@ -7,6 +7,7 @@ import {
   computePaymentSyncRetryDelayMs,
   isPaymentSyncExhausted,
   removePaymentSyncQueueItem,
+  resolvePaymentSyncLookupMode,
   shouldClaimPaymentSyncItem,
   type PaymentSyncRetryState,
 } from "../../src/utils/paymentSyncPolicy.ts";
@@ -42,7 +43,7 @@ function extractFunctionBlock(source: string, marker: string): string {
   assert.fail(`Cannot extract function body for: ${marker}`);
 }
 
-test("payment lookup uses canonical list queries with paymentRef first and past games included", () => {
+test("payment lookup supports one-query exact modes and the callback fallback", () => {
   const source = fs.readFileSync("src/utils/apiClient.ts", "utf8");
   const block = extractFunctionBlock(
     source,
@@ -50,14 +51,13 @@ test("payment lookup uses canonical list queries with paymentRef first and past 
   );
 
   assert.match(block, /request<unknown>\(`\/lk\/games\?\$\{query\.toString\(\)\}`/);
-  assert.match(block, /paymentQuery\.set\("paymentRef", paymentRef\)/);
-  assert.match(block, /bookingQuery\.set\("bookingIds", bookingIds\.join\(","\)\)/);
-  assert.equal(block.match(/set\("includePast", "true"\)/g)?.length, 2);
-  assert.ok(
-    block.indexOf("lookupQueries.push(paymentQuery)")
-      < block.indexOf("lookupQueries.push(bookingQuery)"),
-    "paymentRef lookup must run before the bookingIds fallback",
-  );
+  assert.match(block, /options\?\.mode \?\? "sequential"/);
+  assert.match(block, /lookupMode === "combined"/);
+  assert.match(block, /combinedQuery\.set\("paymentRef", paymentRef\)/);
+  assert.match(block, /combinedQuery\.set\("bookingIds", bookingIds\.join\(","\)\)/);
+  assert.match(block, /lookupMode === "paymentRef"/);
+  assert.match(block, /lookupMode === "bookingIds"/);
+  assert.match(block, /lookupMode === "sequential" && bookingIds\.length > 0/);
   assert.doesNotMatch(block, /\/lk\/games\/by-payment-ref/);
   assert.doesNotMatch(block, /\/lk\/games\/by-phone/);
   assert.equal(block.match(/request<unknown>\(/g)?.length, 1);
@@ -68,10 +68,35 @@ test("lookup transport errors stay in retry flow instead of creating a duplicate
   const source = fs.readFileSync("src/utils/paymentSync.ts", "utf8");
   const lookupStart = source.indexOf("const byPaymentRef = await apiFetchPadelGameByPaymentRef");
   const lookupErrorGuard = source.indexOf("const lookupErrorStatus = Number(", lookupStart);
-  const draftLookup = source.indexOf("const draft = getPendingPaidGameDraft(paymentRef)", lookupStart);
+  const draftLookup = source.indexOf("const draft = persistedRecord", lookupStart);
 
   assert.ok(lookupErrorGuard >= 0, "missing lookup transport error guard");
   assert.ok(lookupErrorGuard < draftLookup, "transport errors must stop before confirm/create");
+});
+
+test("background retries stay paymentRef-bound while forced callbacks keep immediate fallback", () => {
+  assert.equal(resolvePaymentSyncLookupMode({
+    forcedCallback: false,
+  }), "paymentRef");
+  assert.equal(resolvePaymentSyncLookupMode({
+    forcedCallback: true,
+  }), "sequential");
+
+  for (let attempt = 1; attempt <= PAYMENT_SYNC_MAX_ATTEMPTS; attempt += 1) {
+    assert.equal(
+      resolvePaymentSyncLookupMode({ forcedCallback: false }),
+      "paymentRef",
+      `retry ${attempt} must not bypass a paymentRef collision via bookingIds`,
+    );
+  }
+
+  const syncSource = fs.readFileSync("src/utils/paymentSync.ts", "utf8");
+  assert.match(syncSource, /forcedCallback: forcePaymentRef === paymentRef/);
+  assert.match(syncSource, /isPaymentSyncRecordBoundToPaymentRef\(lookupRecord, paymentRef\)/);
+  assert.equal(syncSource.match(/\{ mode: "combined" \}/g)?.length, 2);
+
+  const persistenceSource = fs.readFileSync("src/utils/serverGameDraftPersistence.ts", "utf8");
+  assert.match(persistenceSource, /lookupDraft:[\s\S]*\{ mode: "combined" \}/);
 });
 
 test("payment retry backoff starts at 10 seconds and caps at 10 minutes", () => {
