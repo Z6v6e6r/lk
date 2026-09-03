@@ -12,6 +12,7 @@ export function subscriptionUsageTestCounterDelta(
   outcome: SubscriptionUsageTestBookingOutcome,
   action: ManagedSubscriptionAction,
   usageUnits: number | null,
+  consumesDailyGameUsage: boolean,
 ): { activeServices: number; dailyGameUsage: number } {
   if (!outcome.allowed || !outcome.subscriptionApplied) {
     return { activeServices: 0, dailyGameUsage: 0 };
@@ -21,7 +22,8 @@ export function subscriptionUsageTestCounterDelta(
     : 1;
   return {
     activeServices: 1,
-    dailyGameUsage: action === "CREATE_GAME" || action === "JOIN_GAME"
+    dailyGameUsage: (action === "CREATE_GAME" || action === "JOIN_GAME")
+      && consumesDailyGameUsage
       ? normalizedUsageUnits
       : 0,
   };

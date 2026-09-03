@@ -336,6 +336,19 @@ const dailyUsagePolicyPercentage = hasDailyUsagePolicy
   : null;
 const hasDailyUsageDiscountDurations = hasDailyUsagePolicy
   && Object.prototype.hasOwnProperty.call(policy.dailyUsagePolicy, "discountDurationsMinutes");
+const hasDailyUsageDurations = hasDailyUsagePolicy
+  && Object.prototype.hasOwnProperty.call(policy.dailyUsagePolicy, "usageDurationsMinutes");
+const dailyUsageDurations = hasDailyUsageDurations
+  && Array.isArray(policy.dailyUsagePolicy.usageDurationsMinutes)
+  ? policy.dailyUsagePolicy.usageDurationsMinutes
+    .map((value) => toNonNegativeInt(value))
+    .filter((value) => [60, 90, 120].includes(value))
+  : null;
+const dailyUsageDurationsValid = !hasDailyUsageDurations
+  || (Array.isArray(policy.dailyUsagePolicy.usageDurationsMinutes)
+    && dailyUsageDurations.length > 0
+    && dailyUsageDurations.length === policy.dailyUsagePolicy.usageDurationsMinutes.length
+    && new Set(dailyUsageDurations).size === dailyUsageDurations.length);
 const dailyUsageDiscountDurations = hasDailyUsageDiscountDurations
   && Array.isArray(policy.dailyUsagePolicy.discountDurationsMinutes)
   ? policy.dailyUsagePolicy.discountDurationsMinutes
@@ -361,22 +374,27 @@ if (!Array.isArray(dailyUsageActions) || dailyUsageActions.length === 0) {
 } else if (dailyLimitExceededMode === "PERCENT_DISCOUNT"
   && !dailyUsageDiscountDurationsValid) {
   block("DAILY_USAGE_DISCOUNT_DURATION_INVALID", "Длительности скидки после дневного лимита не настроены");
+} else if (!dailyUsageDurationsValid) {
+  block("DAILY_USAGE_DURATION_INVALID", "Длительности дневного лимита подписки не настроены");
 } else if (dailyLimitExceededMode === "BLOCK"
   && hasDailyUsageDiscountDurations) {
   block("DAILY_USAGE_DISCOUNT_DURATION_INVALID", "Длительности скидки несовместимы с блокирующим дневным лимитом");
 }
 const dailyActionApplies = Array.isArray(dailyUsageActions)
   && dailyUsageActions.includes(action);
+const dailyDurationApplies = !hasDailyUsageDurations
+  || dailyUsageDurations?.includes(durationMinutes) === true;
+const requestedDailyUsageUnits = dailyDurationApplies ? usageUnits : 0;
 if (dailyActionApplies) {
   if (dailyUsed === null || dailyLimit === null) {
     block("DAILY_USAGE_LIMIT_INVALID", "Дневной лимит подписки не настроен");
-  } else if (usageUnits !== null && dailyUsed + usageUnits > dailyLimit) {
+  } else if (requestedDailyUsageUnits !== null && dailyUsed + requestedDailyUsageUnits > dailyLimit) {
     dailyLimitExceeded = true;
     if (dailyLimitExceededMode === "BLOCK") {
       block("DAILY_USAGE_LIMIT_REACHED", "Дневной лимит использования подписки исчерпан", {
         dailyUsed,
         dailyLimit,
-        requestedUsageUnits: usageUnits,
+        requestedUsageUnits: requestedDailyUsageUnits,
       });
     } else if (dailyLimitExceededMode === "PERCENT_DISCOUNT"
       && (dailyUsagePolicyPercentage === null || dailyUsagePolicyPercentage > 100)) {
@@ -387,7 +405,7 @@ if (dailyActionApplies) {
       block("DAILY_USAGE_LIMIT_REACHED", "Дневной лимит бесплатной игры исчерпан", {
         dailyUsed,
         dailyLimit,
-        requestedUsageUnits: usageUnits,
+        requestedUsageUnits: requestedDailyUsageUnits,
         requestedDurationMinutes: durationMinutes,
       });
     }

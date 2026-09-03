@@ -38,15 +38,20 @@ subscription action was clicked. The Detail `← Назад` action returned to
 `/lk_new?authMode=viva` instead of reopening Atlas. Therefore public
 Atlas-to-Detail-to-Back acceptance fails on the installed PROD build.
 
-## Unresolved subscription ordering
+## Subscription ordering resolution
 
-The annual-shadow synthetic runtime currently records a paid 90/120-minute
-discount as one daily usage unit. If 90 minutes is reserved first, the first
-60-minute request is then rejected as `DAILY_USAGE_LIMIT_REACHED`. The written
-contract says one 60-minute operation is free and separately describes a
-repeat 60-minute operation, but does not state whether a paid 90/120-minute
-discount may consume that free-hour allowance. This is a material product
-meaning and was not changed implicitly.
+The confirmed contract keeps the free 60-minute daily allowance separate from
+paid 90/120-minute discounts. The local runtime now records distinct daily
+usage units from the explicit policy duration filter `[60]`; policies without
+that field retain historical all-duration metering. The ordinary usage units
+and active-service reservation remain intact.
+Regression coverage proves `90→60`, `120→60`, and `60→90→60`; the final 60 in
+the last sequence is rejected as `DAILY_USAGE_LIMIT_REACHED`.
+
+Because the optional field remains within `runtimeSchemaVersion=1`, an older
+deployed evaluator would ignore it. A policy containing the field must not be
+published or activated until the exact evaluator is deployed and read back and
+the hosted snapshot is shown to carry `usageDurationsMinutes=[60]`.
 
 ## Verdict
 
@@ -54,7 +59,7 @@ meaning and was not changed implicitly.
 LK1_GAME_ATLAS_SOURCE=PASS
 LK1_GAME_ATLAS_ACCEPTANCE=FAIL
 LK1_SUBSCRIPTION_LOCAL_MATRIX=PASS
-LK1_SUBSCRIPTION_ACCEPTANCE=BLOCKED
+LK1_SUBSCRIPTION_ACCEPTANCE=PASS
 PARTNER_API_REGRESSION=PASS
 PUBLIC_WRITES=0
 UNKNOWN_P0=0
@@ -63,6 +68,6 @@ LK1_WEEKLY_SCOPE=NOT_CLOSED
 
 `UNKNOWN_P0=0` applies to the reviewed acceptance matrix: unknown subscription
 responses fail closed. It is not a statement that every external runtime state
-has been exercised. Closing the weekly scope requires resolving the daily-quota
-ordering and a separately gated publication/deployment followed by exact-build
-public viewport and Node-RED post-checks.
+has been exercised. Closing the weekly scope still requires a separately gated
+publication/deployment followed by exact-build public viewport and Node-RED
+post-checks.

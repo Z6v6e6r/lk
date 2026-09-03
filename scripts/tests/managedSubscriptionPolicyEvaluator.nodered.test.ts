@@ -85,6 +85,7 @@ function annualPolicy(): ManagedSubscriptionRuntimePolicy {
       actions: ["CREATE_GAME", "JOIN_GAME"],
       limitExceeded: "PERCENT_DISCOUNT",
       percentage: 30,
+      usageDurationsMinutes: [60],
       discountDurationsMinutes: [90, 120],
     },
     benefitRules: [
@@ -323,7 +324,7 @@ test("Piter annual policy applies one free hour and full-price 30 percent discou
     }));
     assert.equal(result.decision.eligible, true, action);
     assert.equal(result.decision.benefit.kind, "PERCENT_DISCOUNT", action);
-    assert.equal(result.decision.benefit.ruleId, "daily-usage-limit-exceeded", action);
+    assert.equal(result.decision.benefit.ruleId, "annual-game-120-minus-30", action);
     assert.equal(result.decision.benefit.finalPriceMinor, 840000, action);
   }
 
@@ -410,6 +411,24 @@ test("annual active-service limit blocks a fifth service and invalid daily disco
     (item: { code: string }) => item.code === "DAILY_USAGE_DISCOUNT_DURATION_INVALID",
   ));
   assert.notEqual(invalidDurationTypeResult.decision.benefit.kind, "PERCENT_DISCOUNT");
+
+  const invalidUsageDurationType = annualPolicy() as ManagedSubscriptionRuntimePolicy & {
+    dailyUsagePolicy: Record<string, unknown>;
+  };
+  invalidUsageDurationType.dailyUsagePolicy.usageDurationsMinutes = "60";
+  assert.ok(blockerCodes(baseInput({ policy: invalidUsageDurationType })).includes(
+    "DAILY_USAGE_DURATION_INVALID",
+  ));
+
+  for (const usageDurationsMinutes of [[75], [60, 75], [60, 60]]) {
+    const invalidUsageDurations = annualPolicy() as ManagedSubscriptionRuntimePolicy & {
+      dailyUsagePolicy: Record<string, unknown>;
+    };
+    invalidUsageDurations.dailyUsagePolicy.usageDurationsMinutes = usageDurationsMinutes;
+    assert.ok(blockerCodes(baseInput({ policy: invalidUsageDurations })).includes(
+      "DAILY_USAGE_DURATION_INVALID",
+    ));
+  }
 });
 
 test("Piter 14-day window includes today through day 13 and blocks day 14", () => {
