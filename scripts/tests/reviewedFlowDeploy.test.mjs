@@ -957,8 +957,10 @@ test("managed subscription rules wrapper pins exact graph budget and guarded rol
   assert.match(wrapper, /patch_nodered_subscription_booking_flow\.mjs/);
   assert.match(wrapper, /prepare_exact_graph_contract\.mjs/);
   assert.match(wrapper, /--allow-change 8f7bd5b482fe9763:func/);
+  assert.match(wrapper, /--allow-change lk_subscription_booking_finalize_20260804:func/);
+  assert.match(wrapper, /--allow-change lk_subscription_booking_mongo_error_20260804:func/);
   assert.match(wrapper, /--allow-add lk_subscription_managed_policy_20260820/);
-  assert.match(wrapper, /value\.changedNodeCount !== 3/);
+  assert.match(wrapper, /value\.changedNodeCount !== 5/);
   assert.match(wrapper, /value\.addedNodeCount !== 2/);
   assert.match(wrapper, /subscriptionOptionsStatus/);
   assert.match(rollback, /NODE_RED_MANAGED_SUBSCRIPTION_RULES_ROLLBACK=CONFIRM_147/);

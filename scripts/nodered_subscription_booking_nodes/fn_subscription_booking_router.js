@@ -1048,6 +1048,57 @@ const eventDurationMinutes = (exercise) => {
   return minutes > 0 && minutes <= 1440 ? minutes : null;
 };
 
+const exerciseStationId = (exercise) => toStr(
+  exercise?.studio?.id || exercise?.studioId || exercise?.station?.id || exercise?.stationId,
+);
+const exerciseRoomId = (exercise) => toStr(
+  exercise?.room?.id || exercise?.roomId || exercise?.court?.id || exercise?.courtId,
+);
+
+const precreateRecoveryTarget = (ctx) => {
+  const startsAt = finiteDate(ctx.managedTarget?.startsAt);
+  const durationMinutes = Number(ctx.managedTarget?.durationMinutes);
+  const target = {
+    placeholderExerciseId: toStr(ctx.exerciseId),
+    actorClientId: toStr(ctx.actorClientId),
+    clientSubscriptionId: toStr(ctx.clientSubscriptionId),
+    subscriptionInstanceId: toStr(ctx.managedRuntime?.subscriptionInstanceId),
+    policyDigest: toStr(ctx.managedRuntime?.policyDigest),
+    stationId: toStr(ctx.managedTarget?.stationId),
+    roomId: toStr(ctx.managedTarget?.roomId),
+    category: toStr(ctx.category),
+    externalEventTypeId: toStr(ctx.managedTarget?.externalEventTypeId),
+    startsAt: startsAt?.toISOString() || null,
+    durationMinutes,
+    serviceDate: normalizeDate(ctx.serviceDate),
+  };
+  if (ctx.caller !== "split_create_preflight" || ctx.managedAction !== "CREATE_GAME"
+    || !target.placeholderExerciseId?.startsWith("split-create:")
+    || !target.actorClientId || !target.clientSubscriptionId
+    || !target.subscriptionInstanceId || !target.policyDigest
+    || !target.stationId || !target.roomId || target.category !== "open_game"
+    || !target.externalEventTypeId || !target.startsAt || !target.serviceDate
+    || !Number.isInteger(durationMinutes) || durationMinutes < 1) return null;
+  return target;
+};
+
+const exactPrecreateRecoveryTarget = (actual, expected) => isObj(actual) && isObj(expected)
+  && Object.keys(expected).every((key) => actual[key] === expected[key])
+  && Object.keys(actual).length === Object.keys(expected).length;
+
+const exerciseMatchesPrecreateRecovery = (exercise, target) => {
+  const exerciseId = toStr(exercise?.id || exercise?.exerciseId || exercise?.uuid);
+  return Boolean(exerciseId && !exerciseId.startsWith("split-create:")
+    && normalizeId(exerciseStationId(exercise)) === normalizeId(target.stationId)
+    && normalizeId(exerciseRoomId(exercise)) === normalizeId(target.roomId)
+    && resolveCategory(exercise) === target.category
+    && managedExternalEventTypeId(exercise) === target.externalEventTypeId
+    && eventStartsAt(exercise) === target.startsAt
+    && eventDurationMinutes(exercise) === target.durationMinutes
+    && eventDate(exercise) === target.serviceDate
+    && findOwnedSubscriptions(exercise, target.clientSubscriptionId).length === 1);
+};
+
 const managedActionForTarget = (ctx) => {
   if (["CREATE_GAME", "JOIN_GAME"].includes(ctx.managedAction)) return ctx.managedAction;
   if (ctx.category === "group_training") return "BOOK_GROUP_TRAINING";
@@ -1307,6 +1358,13 @@ const preparePrecreatedReconciliation = (ctx) => {
 
 const preparePrecreatedAttempt = (ctx) => {
   const nowIso = new Date().toISOString();
+  const recoveryTarget = precreateRecoveryTarget(ctx);
+  if (!recoveryTarget) {
+    return finishPending(ctx, "Нельзя зафиксировать точную цель восстановления до создания игры", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RECOVERY_TARGET_UNRESOLVED",
+    });
+  }
+  ctx.precreateRecoveryTarget = recoveryTarget;
   return prepareMongoUpdate(ctx, "operation_precreated_attempt", {
     _id: ctx.operationKey,
     operationId: ctx.operationId,
@@ -1317,9 +1375,33 @@ const preparePrecreatedAttempt = (ctx) => {
     $set: {
       state: "PRECREATE_ATTEMPTING",
       precreateAttemptBoundAt: nowIso,
+      precreateRecoveryTarget: recoveryTarget,
       updatedAt: nowIso,
     },
     $unset: { precreateLeaseUntil: "", leaseUntil: "" },
+  });
+};
+
+const preparePrecreatedRecoveryBind = (ctx, operation, recoveredExerciseId) => {
+  const nowIso = new Date().toISOString();
+  ctx.exerciseId = recoveredExerciseId;
+  ctx.precreatedEntitlementReserved = true;
+  return prepareMongoUpdate(ctx, "operation_precreated_recover", {
+    _id: operation._id,
+    operationId: ctx.operationId,
+    state: "PRECREATE_ATTEMPTING",
+    exerciseId: operation.exerciseId,
+    actorClientId: ctx.actorClientId,
+    clientSubscriptionId: ctx.clientSubscriptionId,
+    managedEntitlementOperationId: ctx.managedEntitlementOperationId,
+    managedSubscriptionInstanceId: ctx.managedRuntime?.subscriptionInstanceId,
+    precreateRecoveryTarget: ctx.precreateRecoveryTarget,
+  }, {
+    $set: {
+      exerciseId: recoveredExerciseId,
+      precreateRecoveredAt: nowIso,
+      updatedAt: nowIso,
+    },
   });
 };
 
@@ -1661,7 +1743,7 @@ if (ctx.step === "prospective_subscriptions") {
   const durationMinutes = Number(target?.durationMinutes);
   if (selected.length !== 1 || !target || target.resolutionSource !== "SERVER"
     || normalizeId(target.eventId) !== normalizeId(ctx.exerciseId)
-    || !normalizeId(target.stationId) || target.category !== "open_game"
+    || !normalizeId(target.stationId) || !normalizeId(target.roomId) || target.category !== "open_game"
     || !typeMatch || !startsAt || !Number.isInteger(durationMinutes) || durationMinutes < 1) {
     return finishError(ctx, 409, "Нельзя однозначно подтвердить подписку и цель создаваемой игры", {
       code: "MANAGED_SUBSCRIPTION_PREFLIGHT_TARGET_UNRESOLVED",
@@ -1675,6 +1757,9 @@ if (ctx.step === "prospective_subscriptions") {
     directionId: Number(typeMatch[1]),
     typeId: Number(typeMatch[2]),
     studioId: target.stationId,
+    roomId: target.roomId,
+    studio: { id: target.stationId },
+    room: { id: target.roomId },
     availableClientSubscriptions: selected,
   };
   ctx.step = "exercise";
@@ -1756,6 +1841,7 @@ if (ctx.step === "exercise") {
     ctx.managedTarget = {
       resolutionSource: "SERVER",
       stationId: ctx.studioId,
+      roomId: exerciseRoomId(exercise),
       category: managedTargetCategory(ctx.category),
       externalEventTypeId: managedExternalEventTypeId(exercise),
       productTypeId: null,
@@ -1796,6 +1882,7 @@ if (ctx.step === "exercise") {
     ctx.serverTarget = {
       resolutionSource: "SERVER",
       stationId: ctx.studioId,
+      roomId: exerciseRoomId(exercise),
       category: managedTargetCategory(ctx.category),
       externalEventTypeId: managedExternalEventTypeId(exercise),
       productTypeId: null,
@@ -2456,9 +2543,30 @@ if (ctx.step === "operation_find") {
   if (ctx.caller === "split_create_preflight" && operation
     && toStr(operation.operationId) === ctx.operationId
     && operation.state === "PRECREATE_ATTEMPTING") {
-    return finishPending(ctx, "Создание игры уже передано Viva и требует точной сверки", {
-      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED",
-    });
+    const expectedRecoveryTarget = precreateRecoveryTarget(ctx);
+    const exactReservation = expectedRecoveryTarget
+      && exactPrecreateRecoveryTarget(operation.precreateRecoveryTarget, expectedRecoveryTarget)
+      && normalizeId(operation.actorClientId) === normalizeId(ctx.actorClientId)
+      && normalizeId(operation.clientSubscriptionId) === normalizeId(ctx.clientSubscriptionId)
+      && operation.planKey === ctx.planKey
+      && operation.managedDecision?.policyDigest === ctx.managedRuntime?.policyDigest
+      && toStr(operation.managedEntitlementOperationId)
+      && toStr(operation.managedSubscriptionInstanceId) === ctx.managedRuntime?.subscriptionInstanceId;
+    if (!exactReservation) {
+      return finishPending(ctx, "Попытка создания игры не совпала с точной целью восстановления", {
+        code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RECOVERY_TARGET_MISMATCH",
+      });
+    }
+    ctx.precreateRecoveryTarget = expectedRecoveryTarget;
+    ctx.precreatedAttemptOperation = operation;
+    ctx.managedDecision = operation.managedDecision;
+    ctx.managedEntitlementOperationId = toStr(operation.managedEntitlementOperationId);
+    ctx.managedSubscriptionInstanceId = toStr(operation.managedSubscriptionInstanceId);
+    return prepareUserGet(
+      ctx,
+      "precreated_attempt_lookup",
+      `/end-user/api/v1/${ctx.tenantKey}/exercises?date=${encodeURIComponent(expectedRecoveryTarget.serviceDate)}&includePast=true&past=true&size=1000`,
+    );
   }
   if (ctx.sameExerciseBooking) {
     if (operation
@@ -2637,6 +2745,45 @@ if (ctx.step === "operation_insert") {
     return finishPending(ctx, "Другая операция одновременно заняла дневное посещение");
   }
   return preparePreaccept(ctx);
+}
+
+if (ctx.step === "precreated_attempt_lookup") {
+  const operation = ctx.precreatedAttemptOperation;
+  const recoveryTarget = ctx.precreateRecoveryTarget;
+  if (!operation || !recoveryTarget || !isHttpOk(msg.statusCode)
+    || !hasBookingListShape(msg.payload) || !hasCompleteBookingList(msg.payload)) {
+    return finishPending(ctx, "Список Viva для восстановления создания игры недоступен или неполон", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED",
+    });
+  }
+  const matches = extractItems(msg.payload).filter((exercise) => (
+    isObj(exercise) && exerciseMatchesPrecreateRecovery(exercise, recoveryTarget)
+  ));
+  if (matches.length !== 1) {
+    return finishPending(ctx, "Созданную игру нельзя однозначно восстановить по точной цели", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED",
+      recoveryMatchCount: matches.length,
+    });
+  }
+  const recoveredExerciseId = toStr(matches[0].id || matches[0].exerciseId || matches[0].uuid);
+  const storedExerciseId = normalizeId(operation.exerciseId);
+  if (!recoveredExerciseId || (storedExerciseId !== normalizeId(recoveryTarget.placeholderExerciseId)
+    && storedExerciseId !== normalizeId(recoveredExerciseId))) {
+    return finishPending(ctx, "Сохранённая операция расходится с найденной игрой Viva", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RECOVERY_TARGET_MISMATCH",
+    });
+  }
+  delete ctx.precreatedAttemptOperation;
+  return preparePrecreatedRecoveryBind(ctx, operation, recoveredExerciseId);
+}
+
+if (ctx.step === "operation_precreated_recover") {
+  if (msg.error || Number(mongoMatched(msg.payload) || 0) < 1) {
+    return finishPending(ctx, "Найденная игра Viva ожидает атомарной локальной привязки", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RECOVERY_BIND_PENDING",
+    });
+  }
+  return finishManagedCreatePreflight(ctx, "PREFLIGHT_CREATE_RECOVERED");
 }
 
 if (ctx.step === "operation_reclaim") {

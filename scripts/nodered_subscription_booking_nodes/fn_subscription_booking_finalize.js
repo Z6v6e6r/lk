@@ -24,12 +24,15 @@ if (["split", "split_create_preflight"].includes(ctx?.caller)
 }
 
 if (ctx?.caller === "split_create_preflight"
-  && ["PREFLIGHT_ATTEMPT_BOUND", "NOT_MANAGED", "FULL_PRICE_WITHOUT_SUBSCRIPTION"].includes(payload.state)) {
+  && ["PREFLIGHT_ATTEMPT_BOUND", "PREFLIGHT_CREATE_RECOVERED", "NOT_MANAGED", "FULL_PRICE_WITHOUT_SUBSCRIPTION"].includes(payload.state)) {
   const splitCtx = msg._splitCtx && typeof msg._splitCtx === "object" ? msg._splitCtx : {};
   splitCtx.managedCreatePreflightDone = true;
-  if (payload.state === "PREFLIGHT_ATTEMPT_BOUND") {
+  if (["PREFLIGHT_ATTEMPT_BOUND", "PREFLIGHT_CREATE_RECOVERED"].includes(payload.state)) {
     splitCtx.managedCreateReservation = { ...ctx };
     splitCtx.managedCreateAttemptBound = true;
+    if (payload.state === "PREFLIGHT_CREATE_RECOVERED") {
+      splitCtx.managedCreateRecoveredExerciseId = ctx.exerciseId;
+    }
   } else {
     delete splitCtx.managedCreateReservation;
     delete splitCtx.managedCreateAttemptBound;

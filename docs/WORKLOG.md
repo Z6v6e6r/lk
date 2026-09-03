@@ -1676,3 +1676,12 @@
 - This remains source-only remediation. The checked-in DEV binding is still blocked;
   no candidate publication, flow import, service restart, provider/Mongo write, branch
   push, merge, deployment or activation was performed.
+- Closed the follow-up lost-promotion gap: before CREATE the operation now stores the
+  exact recovery tuple, and a same-operation retry may bind only one actor-scoped exact
+  provider match by Mongo CAS before resuming booking without another CREATE. Zero,
+  multiple and incomplete matches remain pending without release, DELETE or provider
+  mutation.
+- Tightened DEV candidate custody to the exact POST/OPTIONS routes, response edges,
+  reachable function inventory and approved sinks. Both candidate preparation and
+  install verification bind every reachable source function to its frozen whole-node
+  preimage; the deploy wrapper allowlist now includes the exact five patched nodes.

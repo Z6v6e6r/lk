@@ -14,7 +14,11 @@ import {
   validateDevInstallManifest,
   validateEnvironmentApiBase,
 } from "../prepare_lk1_subscription_dev_candidate.mjs";
-import { verifyDevInstallManifest } from "../verify_lk1_subscription_dev_install.mjs";
+import { deriveDevWholeFlowIsolation } from "../lk1_subscription_dev_execution_contract.mjs";
+import {
+  verifyChangedNodeEvidence,
+  verifyDevInstallManifest,
+} from "../verify_lk1_subscription_dev_install.mjs";
 import {
   assertProductionManifestEnvironment as assertProductionBuilderManifestEnvironment,
 } from "../prepare_lk1_subscription_enforcement_candidate.mjs";
@@ -90,13 +94,19 @@ function fixture() {
   };
   const flow = [
     { id: "tab-dev", type: "tab", label: "LK Games", disabled: false },
-    { id: "route-dev", type: "http in", z: "tab-dev", url: "/lk/subscription-bookings", wires: [["prepare-dev"]] },
+    { id: "lk_subscription_booking_post_20260804", type: "http in", z: "tab-dev", method: "post", url: "/lk/subscription-bookings", wires: [["prepare-dev"]] },
     { id: "prepare-dev", type: "function", z: "tab-dev", name: "Prepare subscription booking", func: preparePreimage, wires: [[httpRequest.id], ["finalize-dev"]] },
-    { id: "router-dev", type: "function", z: "tab-dev", name: "Route atomic subscription booking", func: routerPreimage, wires: [[httpRequest.id], ["lk_subscription_booking_find_20260804"], ["lk_subscription_booking_insert_20260804"], ["lk_subscription_booking_update_20260804"], ["finalize-dev"]] },
+    { id: "router-dev", type: "function", z: "tab-dev", name: "Route atomic subscription booking", func: routerPreimage, wires: [[httpRequest.id], ["lk_subscription_booking_find_20260804"], ["lk_subscription_booking_insert_20260804"], ["lk_subscription_booking_update_20260804"], ["finalize-dev"], [], ["lk_subscription_managed_policy_20260820"]] },
+    { id: "lk_subscription_managed_policy_20260820", type: "function", z: "tab-dev", name: "Evaluate managed subscription policy", func: "return [msg, null];", wires: [["router-dev"], ["lk_subscription_managed_policy_blocked_20260820"]] },
+    { id: "lk_subscription_managed_policy_blocked_20260820", type: "function", z: "tab-dev", name: "Block managed subscription decision", func: "return msg;", wires: [["finalize-dev"]] },
     { id: "split-dev", type: "function", z: "tab-dev", name: "Route Viva split payment", func: splitPreimage, wires: [[splitCreateHttpRequest.id], [], [], [httpRequest.id]] },
     { id: "split-create-dev", type: "function", z: "tab-dev", name: "Prepare split game payment", func: splitCreatePreimage, wires: [[splitCreateHttpRequest.id], [], [], ["split-dev"]] },
     { id: "split-join-dev", type: "function", z: "tab-dev", name: "Prepare split join payment", func: splitJoinPreimage, wires: [[splitCreateHttpRequest.id], [], [], ["split-dev"]] },
-    { id: "finalize-dev", type: "function", z: "tab-dev", name: "Finalize subscription booking response", func: finalizePreimage, wires: [] },
+    { id: "finalize-dev", type: "function", z: "tab-dev", name: "Finalize subscription booking response", func: finalizePreimage, wires: [["split-dev"], ["lk_subscription_booking_response_20260804"]] },
+    { id: "lk_subscription_booking_response_20260804", type: "http response", z: "tab-dev", wires: [] },
+    { id: "lk_subscription_booking_options_in_20260804", type: "http in", z: "tab-dev", method: "options", url: "/lk/subscription-bookings", wires: [["lk_subscription_booking_options_20260804"]] },
+    { id: "lk_subscription_booking_options_20260804", type: "function", z: "tab-dev", name: "Subscription booking CORS", func: "return msg;", wires: [["lk_subscription_booking_options_response_20260804"]] },
+    { id: "lk_subscription_booking_options_response_20260804", type: "http response", z: "tab-dev", wires: [] },
     httpRequest,
     splitCreateHttpRequest,
     mongoClient,
@@ -119,7 +129,7 @@ function fixture() {
       remoteFlowPath: DEV_INSTALL_TARGET.remoteFlowPath,
       sourceSha256: sha256(sourceText),
       nodeCount: flow.length,
-      httpRouteCount: 1,
+      httpRouteCount: 2,
       tabCount: 1,
       brokenWires: 0,
       brokenLinks: 0,
@@ -132,25 +142,43 @@ function fixture() {
       routerNodeId: "router-dev",
       routerNodeName: "Route atomic subscription booking",
       routerPreimageSha256: sha256(routerPreimage),
+      routerNodePreimageSha256: sha256(JSON.stringify(flow.find((node) => node.id === "router-dev"))),
       prepareNodeId: "prepare-dev",
       prepareNodeName: "Prepare subscription booking",
       preparePreimageSha256: sha256(preparePreimage),
+      prepareNodePreimageSha256: sha256(JSON.stringify(flow.find((node) => node.id === "prepare-dev"))),
       splitRouterNodeId: "split-dev",
       splitRouterNodeName: "Route Viva split payment",
       splitRouterPreimageSha256: sha256(splitPreimage),
+      splitRouterNodePreimageSha256: sha256(JSON.stringify(flow.find((node) => node.id === "split-dev"))),
       splitCreatePrepareNodeId: "split-create-dev",
       splitCreatePrepareNodeName: "Prepare split game payment",
       splitCreatePreparePreimageSha256: sha256(splitCreatePreimage),
+      splitCreatePrepareNodePreimageSha256: sha256(JSON.stringify(flow.find((node) => node.id === "split-create-dev"))),
       splitJoinPrepareNodeId: "split-join-dev",
       splitJoinPrepareNodeName: "Prepare split join payment",
       splitJoinPreparePreimageSha256: sha256(splitJoinPreimage),
+      splitJoinPrepareNodePreimageSha256: sha256(JSON.stringify(flow.find((node) => node.id === "split-join-dev"))),
       finalizeNodeId: "finalize-dev",
       finalizeNodeName: "Finalize subscription booking response",
       finalizePreimageSha256: sha256(finalizePreimage),
+      finalizeNodePreimageSha256: sha256(JSON.stringify(flow.find((node) => node.id === "finalize-dev"))),
     },
     runtime: { apiBase: DEV_API_BASE, completeManagedContractExposed: true },
     dependencies: {
       wholeFlowIsolationVerified: true,
+      executionFunctionPreimages: [
+        "finalize-dev",
+        "lk_subscription_booking_options_20260804",
+        "lk_subscription_managed_policy_20260820",
+        "lk_subscription_managed_policy_blocked_20260820",
+        "prepare-dev",
+        "router-dev",
+        "split-dev",
+      ].sort().map((id) => ({
+        id,
+        nodeSha256: sha256(JSON.stringify(flow.find((node) => node.id === id))),
+      })),
       httpRequestBindingVerified: true,
       httpRequestPreimageSha256: sha256(JSON.stringify(httpRequest)),
       splitCreateHttpRequestPreimageSha256: sha256(JSON.stringify(splitCreateHttpRequest)),
@@ -273,11 +301,37 @@ test("actual reachable sources bind only to the approved DEV fixture origins", (
   assert.match(combined, /http:\/\/127\.0\.0\.1:3039/);
 });
 
+test("install evidence binds every changed source node to the frozen preimage", () => {
+  const { sourceText, binding } = fixture();
+  const result = buildDevCandidate(sourceText, binding, fs.readFileSync, trustedBindings());
+  assert.equal(verifyChangedNodeEvidence(result.manifest, result.candidate, binding), true);
+  const tampered = structuredClone(result.manifest);
+  tampered.changedNodes[0].sourceNodeSha256 = "f".repeat(64);
+  assert.equal(verifyChangedNodeEvidence(tampered, result.candidate, binding), false);
+});
+
 test("DEV builder independently rejects HTTP, mongodb4 wiring, and effective database drift", () => {
   const rebuild = (value) => {
     value.sourceText = `${JSON.stringify(value.flow, null, 2)}\n`;
     value.binding.source.sourceSha256 = sha256(value.sourceText);
     value.binding.source.nodeCount = value.flow.length;
+    for (const [field, id] of [
+      ["routerNodePreimageSha256", "router-dev"],
+      ["prepareNodePreimageSha256", "prepare-dev"],
+      ["splitRouterNodePreimageSha256", "split-dev"],
+      ["splitCreatePrepareNodePreimageSha256", "split-create-dev"],
+      ["splitJoinPrepareNodePreimageSha256", "split-join-dev"],
+      ["finalizeNodePreimageSha256", "finalize-dev"],
+    ]) {
+      value.binding.target[field] = sha256(JSON.stringify(
+        value.flow.find((node) => node.id === id),
+      ));
+    }
+    const isolation = deriveDevWholeFlowIsolation(value.flow, value.binding.target);
+    value.binding.dependencies.executionFunctionPreimages = isolation.reachableFunctionIds.map((id) => ({
+      id,
+      nodeSha256: sha256(JSON.stringify(value.flow.find((node) => node.id === id))),
+    }));
     return value;
   };
 
@@ -498,6 +552,36 @@ test("DEV builder rejects dynamic HTTP nodes and unapproved senders to an attest
   assert.throws(() => buildDevCandidate(
     extraSender.sourceText, extraSender.binding, fs.readFileSync, trustedBindings(),
   ), /HTTP request wiring/);
+
+  const tokenDisclosureRoute = fixture();
+  tokenDisclosureRoute.flow.push({
+    id: "debug-token-route",
+    type: "http in",
+    z: "tab-dev",
+    method: "get",
+    url: "/debug-token",
+    wires: [["debug-token-function"]],
+  }, {
+    id: "debug-token-function",
+    type: "function",
+    z: "tab-dev",
+    name: "Return service token",
+    func: "msg.payload = global.get('vivacrm_access_token'); return msg;",
+    wires: [["debug-token-response"]],
+  }, {
+    id: "debug-token-response",
+    type: "http response",
+    z: "tab-dev",
+    wires: [],
+  });
+  rebuild(tokenDisclosureRoute);
+  tokenDisclosureRoute.binding.source.httpRouteCount = 3;
+  assert.throws(() => buildDevCandidate(
+    tokenDisclosureRoute.sourceText,
+    tokenDisclosureRoute.binding,
+    fs.readFileSync,
+    trustedBindings(),
+  ), /non-isolated node capability/);
 });
 
 test("shared-root audit capture cannot become a DEV candidate source", () => {
@@ -632,7 +716,7 @@ test("snapshot inspector independently rejects unsafe HTTP, Mongo, and graph sem
       assert.equal(audit.dependencies.mongoBindingVerifiedDevOnly,
         !["numericTimeout", "expressionMode", "rawOutput", "extraMongoClient", "extraMongoProducer"].includes(label));
       assert.equal(audit.dependencies.wholeFlowIsolationVerified,
-        !["unsafeExec", "functionLibrary", "activeDebug"].includes(label), label);
+        !["duplicateId", "unsafeExec", "functionLibrary", "activeDebug"].includes(label), label);
       assert.equal(audit.environmentIdentityVerified, false,
         "synthetic evidence must never become verified runtime evidence");
     } finally {

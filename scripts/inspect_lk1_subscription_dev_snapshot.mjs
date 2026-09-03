@@ -221,6 +221,7 @@ const httpRequestBindingVerified = hasUniqueFlowIds(flow) && targetPresent
     === JSON.stringify([targetSpec.splitRouterNodeId])
   && JSON.stringify(splitCreateHttpRequests[0].wires)
     === JSON.stringify([[targetSpec.splitRouterNodeId]]);
+const wholeFlowIsolation = deriveDevWholeFlowIsolation(flow, targetSpec);
 let mongoCredentialStoreVerifiedEmpty = false;
 let mongoCredentialStorePreimageSha256 = null;
 if (credentialStorePath) {
@@ -281,17 +282,29 @@ const audit = {
       semanticCount(targetSpec.finalizeNodeName),
     ),
     routerPreimageSha256: router.length === 1 ? sha256(String(router[0].func || "")) : null,
+    routerNodePreimageSha256: router.length === 1 ? sha256(JSON.stringify(router[0])) : null,
     preparePreimageSha256: prepare.length === 1 ? sha256(String(prepare[0].func || "")) : null,
+    prepareNodePreimageSha256: prepare.length === 1 ? sha256(JSON.stringify(prepare[0])) : null,
     splitRouterPreimageSha256: splitRouter.length === 1 ? sha256(String(splitRouter[0].func || "")) : null,
+    splitRouterNodePreimageSha256: splitRouter.length === 1 ? sha256(JSON.stringify(splitRouter[0])) : null,
     splitCreatePreparePreimageSha256: splitCreatePrepare.length === 1
       ? sha256(String(splitCreatePrepare[0].func || "")) : null,
+    splitCreatePrepareNodePreimageSha256: splitCreatePrepare.length === 1
+      ? sha256(JSON.stringify(splitCreatePrepare[0])) : null,
     splitJoinPreparePreimageSha256: splitJoinPrepare.length === 1
       ? sha256(String(splitJoinPrepare[0].func || "")) : null,
+    splitJoinPrepareNodePreimageSha256: splitJoinPrepare.length === 1
+      ? sha256(JSON.stringify(splitJoinPrepare[0])) : null,
     finalizePreimageSha256: finalize.length === 1 ? sha256(String(finalize[0].func || "")) : null,
+    finalizeNodePreimageSha256: finalize.length === 1 ? sha256(JSON.stringify(finalize[0])) : null,
   },
   dependencies: {
-    wholeFlowIsolationVerified: deriveDevWholeFlowIsolation(flow).verified,
-    wholeFlowIsolationViolations: deriveDevWholeFlowIsolation(flow).violations,
+    wholeFlowIsolationVerified: wholeFlowIsolation.verified,
+    wholeFlowIsolationViolations: wholeFlowIsolation.violations,
+    executionFunctionPreimages: (wholeFlowIsolation.reachableFunctionIds || []).map((id) => ({
+      id,
+      nodeSha256: sha256(JSON.stringify(flow.find((node) => node?.id === id))),
+    })),
     httpRequestBindingVerified,
     httpRequestPreimageSha256: httpRequests.length === 1
       ? sha256(JSON.stringify(httpRequests[0])) : null,

@@ -86,6 +86,8 @@ node scripts/nodered_reviewed_flow_deploy/prepare_exact_graph_contract.mjs \
   --allow-change 8f7bd5b482fe9763:func \
   --allow-change lk_subscription_booking_http_20260804:headers,requestTimeout \
   --allow-change lk_subscription_booking_router_20260804:func,outputs,wires \
+  --allow-change lk_subscription_booking_finalize_20260804:func \
+  --allow-change lk_subscription_booking_mongo_error_20260804:func \
   --allow-add lk_subscription_managed_policy_20260820 \
   --allow-add lk_subscription_managed_policy_blocked_20260820 >/dev/null
 
@@ -114,7 +116,7 @@ node -e '
     || value.candidateSha256 !== process.argv[3]
     || String(value.nodeCount) !== process.argv[4]
     || String(value.candidateNodeCount) !== process.argv[5]
-    || value.changedNodeCount !== 3
+    || value.changedNodeCount !== 5
     || value.addedNodeCount !== 2
   ) process.exit(1);
 ' "$preflight_result" "$source_sha" "$candidate_sha" "$source_node_count" "$candidate_node_count"

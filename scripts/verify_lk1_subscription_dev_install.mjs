@@ -18,6 +18,25 @@ const checkedBinding = JSON.parse(fs.readFileSync(
   "utf8",
 ));
 
+export function verifyChangedNodeEvidence(manifest, candidate, binding) {
+  const candidateNodes = new Map(candidate.map((node) => [node.id, node]));
+  const sourcePreimagesByNodeId = new Map([
+    [binding.target.routerNodeId, binding.target.routerNodePreimageSha256],
+    [binding.target.prepareNodeId, binding.target.prepareNodePreimageSha256],
+    [binding.target.splitRouterNodeId, binding.target.splitRouterNodePreimageSha256],
+    [binding.target.splitCreatePrepareNodeId, binding.target.splitCreatePrepareNodePreimageSha256],
+    [binding.target.splitJoinPrepareNodeId, binding.target.splitJoinPrepareNodePreimageSha256],
+    [binding.target.finalizeNodeId, binding.target.finalizeNodePreimageSha256],
+  ]);
+  return Array.isArray(manifest?.changedNodes) && manifest.changedNodes.every((entry) => {
+    const node = candidateNodes.get(entry.id);
+    return node
+      && entry.sourceNodeSha256 === sourcePreimagesByNodeId.get(entry.id)
+      && entry.candidateNodeSha256
+        === crypto.createHash("sha256").update(JSON.stringify(node)).digest("hex");
+  });
+}
+
 export function verifyDevInstallManifest(
   manifest,
   candidateBytes,
@@ -48,11 +67,7 @@ export function verifyDevInstallManifest(
   const candidateNodeInventorySha256 = crypto.createHash("sha256").update(JSON.stringify(candidate
     .map((node) => ({ id: node.id, sha256: crypto.createHash("sha256").update(JSON.stringify(node)).digest("hex") }))
     .sort((left, right) => left.id.localeCompare(right.id)))).digest("hex");
-  const changedNodesVerified = manifest?.changedNodes?.every((entry) => {
-    const node = candidateNodes.get(entry.id);
-    return node && entry.candidateNodeSha256
-      === crypto.createHash("sha256").update(JSON.stringify(node)).digest("hex");
-  });
+  const changedNodesVerified = verifyChangedNodeEvidence(manifest, candidate, binding);
   if (manifest?.sourceSha256 !== binding.source.sourceSha256
     || manifest?.rollbackSourceSha256 !== binding.source.sourceSha256
     || manifest?.candidateSha256 !== binding.candidateSha256

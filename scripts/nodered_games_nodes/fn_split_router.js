@@ -765,6 +765,7 @@ const startManagedCreateAuthoritativePreflight = (ctx) => {
     prospectiveTarget: {
       resolutionSource: "SERVER",
       stationId,
+      roomId,
       category: "open_game",
       externalEventTypeId,
       productTypeId: null,
@@ -1128,6 +1129,23 @@ const continueSplitAfterVerifiedPrice = (ctx) => {
       return fail(409, "Попытка создания игры не зафиксирована до Viva", {
         code: "MANAGED_SUBSCRIPTION_PREFLIGHT_ATTEMPT_NOT_BOUND",
       });
+    }
+    if (ctx.managedCreateRecoveredExerciseId) {
+      const recoveredExerciseId = toStr(ctx.managedCreateRecoveredExerciseId);
+      const reservation = ctx.managedCreateReservation;
+      if (!recoveredExerciseId || !reservation
+        || reservation.operationId !== toStr(msg.req?.headers?.["idempotency-key"]
+          || msg.req?.headers?.["Idempotency-Key"] || msg.req?.query?.operationId)
+        || normalizeComparableId(reservation.exerciseId) !== normalizeComparableId(recoveredExerciseId)) {
+        return fail(409, "Восстановленная игра не совпала с предварительным резервом", {
+          code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RECOVERY_MISMATCH",
+        });
+      }
+      ctx.exerciseId = recoveredExerciseId;
+      ctx.ownsExercise = true;
+      ctx.recoveredCreatedExercise = true;
+      delete ctx.managedCreateRecoveredExerciseId;
+      return buildBookingRequest(ctx);
     }
     ctx.step = "create_exercise";
     return adminRequest(ctx, "POST", "/exercises", {

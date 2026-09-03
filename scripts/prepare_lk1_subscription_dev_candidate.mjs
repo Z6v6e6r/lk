@@ -126,7 +126,7 @@ const graphHealth = (flow) => {
   return { brokenWires, brokenLinks };
 };
 
-const exactTarget = (flow, tabs, target, idField, nameField, preimageField) => {
+const exactTarget = (flow, tabs, target, idField, nameField, preimageField, nodePreimageField) => {
   const matches = flow.filter((node) => node?.id === target[idField]);
   if (matches.length !== 1) fail(`DEV target ${target[idField]} must exist exactly once`);
   const node = matches[0];
@@ -144,6 +144,9 @@ const exactTarget = (flow, tabs, target, idField, nameField, preimageField) => {
   if (duplicates.length !== 1) fail(`DEV target ${target[idField]} enabled semantic duplicate`);
   if (sha256(String(node.func || "")) !== target[preimageField]) {
     fail(`DEV target ${target[idField]} preimage mismatch`);
+  }
+  if (sha256(JSON.stringify(node)) !== target[nodePreimageField]) {
+    fail(`DEV target ${target[idField]} whole-node preimage mismatch`);
   }
   return node;
 };
@@ -520,9 +523,15 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
     || health.brokenLinks !== binding.source.brokenLinks
     || health.brokenWires !== 0
     || health.brokenLinks !== 0) fail("DEV source graph is unhealthy");
-  const sourceIsolation = deriveDevWholeFlowIsolation(flow);
+  const sourceIsolation = deriveDevWholeFlowIsolation(flow, binding.target);
+  const executionFunctionPreimages = sourceIsolation.reachableFunctionIds?.map((id) => ({
+    id,
+    nodeSha256: sha256(JSON.stringify(sourceNodesById.get(id))),
+  })) || [];
   if (!sourceIsolation.verified
-    || binding.dependencies?.wholeFlowIsolationVerified !== true) {
+    || binding.dependencies?.wholeFlowIsolationVerified !== true
+    || JSON.stringify(binding.dependencies?.executionFunctionPreimages)
+      !== JSON.stringify(executionFunctionPreimages)) {
     fail(`DEV source contains a non-isolated node capability (${sourceIsolation.violations.join(",")})`);
   }
   const endpoints = trustedBindings.DEV_ENDPOINTS;
@@ -540,17 +549,17 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
   }
   const tabs = new Map(flow.filter((node) => node?.type === "tab").map((node) => [node.id, node]));
   const router = exactTarget(flow, tabs, binding.target,
-    "routerNodeId", "routerNodeName", "routerPreimageSha256");
+    "routerNodeId", "routerNodeName", "routerPreimageSha256", "routerNodePreimageSha256");
   const prepare = exactTarget(flow, tabs, binding.target,
-    "prepareNodeId", "prepareNodeName", "preparePreimageSha256");
+    "prepareNodeId", "prepareNodeName", "preparePreimageSha256", "prepareNodePreimageSha256");
   const splitRouter = exactTarget(flow, tabs, binding.target,
-    "splitRouterNodeId", "splitRouterNodeName", "splitRouterPreimageSha256");
+    "splitRouterNodeId", "splitRouterNodeName", "splitRouterPreimageSha256", "splitRouterNodePreimageSha256");
   const splitCreatePrepare = exactTarget(flow, tabs, binding.target,
-    "splitCreatePrepareNodeId", "splitCreatePrepareNodeName", "splitCreatePreparePreimageSha256");
+    "splitCreatePrepareNodeId", "splitCreatePrepareNodeName", "splitCreatePreparePreimageSha256", "splitCreatePrepareNodePreimageSha256");
   const splitJoinPrepare = exactTarget(flow, tabs, binding.target,
-    "splitJoinPrepareNodeId", "splitJoinPrepareNodeName", "splitJoinPreparePreimageSha256");
+    "splitJoinPrepareNodeId", "splitJoinPrepareNodeName", "splitJoinPreparePreimageSha256", "splitJoinPrepareNodePreimageSha256");
   const finalize = exactTarget(flow, tabs, binding.target,
-    "finalizeNodeId", "finalizeNodeName", "finalizePreimageSha256");
+    "finalizeNodeId", "finalizeNodeName", "finalizePreimageSha256", "finalizeNodePreimageSha256");
   assertDevHttpCustody(
     flow, router, prepare, splitRouter, splitCreatePrepare, splitJoinPrepare, binding.dependencies,
   );
@@ -581,7 +590,7 @@ export function buildDevCandidate(sourceText, binding, readSource = fs.readFileS
   splitCreatePrepare.func = splitCreateSource;
   splitJoinPrepare.func = splitJoinSource;
   finalize.func = finalizeSource;
-  if (!deriveDevWholeFlowIsolation(flow).verified) {
+  if (!deriveDevWholeFlowIsolation(flow, binding.target).verified) {
     fail("DEV candidate contains a non-isolated node capability");
   }
   const candidateEndpointAudit = deriveEndpointAudit(flow, allowedOrigins);
