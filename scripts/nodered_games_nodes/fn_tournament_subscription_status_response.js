@@ -17,7 +17,9 @@ const AB_LETO_STAGED_RA_DAILY_DROP_LIMIT = 10;
 const AB_LETO_STAGED_RELEASE_ACTIVATION_KEY = "summer_subscription_ab_leto_20260903_release_enabled";
 const NETWORK_FRIENDSHIP_DAILY_LIMIT = 10;
 const DEFAULT_RESERVATION_MINUTES = 30;
-const MANAGED_FRIENDSHIP_COUNTER_KEYS = new Set([
+// Piter sales temporarily use the proven legacy lifecycle. This does not enable
+// managed usage policy; only the annual checkout readiness flag is reopened.
+const MANAGED_SALE_BLOCKED_COUNTER_KEYS = new Set([
   "kotelniki_friendship",
   "network_friendship",
   "piter_friendship",
@@ -540,7 +542,7 @@ const buildCounterConfigMap = () => {
 
 const createCounterState = (counter) => {
   const counterKey = toStr(counter?.counterKey);
-  const managedSaleReady = !MANAGED_FRIENDSHIP_COUNTER_KEYS.has(counterKey);
+  const managedSaleReady = !MANAGED_SALE_BLOCKED_COUNTER_KEYS.has(counterKey);
   const totalLimit = Math.max(0, Math.floor(Number(counter?.totalLimit) || 0));
   const productCostMinor = Number(counter?.productCostMinor);
   const priceMinor = Number.isFinite(productCostMinor) ? Math.max(0, Math.round(productCostMinor)) : null;
@@ -693,6 +695,62 @@ const reservationMinutes = Math.max(
   Math.min(360, toInt(ctx.reservationMinutes, DEFAULT_RESERVATION_MINUTES)),
 );
 const docs = rows.filter((item) => item && typeof item === "object");
+const piterLedger = docs.find((item) => (
+  item?._id === "inventory:piter_friendship_12m_2026_v1"
+  && item?.counterKey === "piter_friendship"
+  && item?.inventoryId === "piter_friendship_12m_2026_v1"
+));
+const piterState = statesByCounterKey.piter_friendship;
+const piterLegacyRefs = Array.isArray(piterLedger?.legacyPaymentRefs)
+  ? piterLedger.legacyPaymentRefs.map(toStr)
+  : [];
+const piterReservations = Array.isArray(piterLedger?.reservations) ? piterLedger.reservations : [];
+const piterReservationRefs = piterReservations.map((item) => toStr(item?.paymentRef));
+const piterTransactionIds = piterReservations.map((item) => toStr(item?.transactionId)).filter(Boolean);
+const piterActiveIntentFingerprints = piterReservations
+  .filter((item) => ["CLAIMED", "DISPATCHING", "PAYMENT_PENDING", "PROVIDER_UNKNOWN"].includes(item?.state))
+  .map((item) => toStr(item?.intentFingerprint));
+const piterLedgerRowsValid = Array.isArray(piterLedger?.legacyPaymentRefs)
+  && Array.isArray(piterLedger?.reservations)
+  && piterLegacyRefs.every(Boolean)
+  && piterReservationRefs.every(Boolean)
+  && piterReservations.every((item) => [
+    "CLAIMED", "DISPATCHING", "PAYMENT_PENDING", "PROVIDER_UNKNOWN", "PAID", "FAILED",
+  ].includes(item?.state))
+  && new Set(piterLegacyRefs).size === piterLegacyRefs.length
+  && new Set(piterReservationRefs).size === piterReservationRefs.length
+  && new Set(piterTransactionIds).size === piterTransactionIds.length
+  && piterActiveIntentFingerprints.every(Boolean)
+  && new Set(piterActiveIntentFingerprints).size === piterActiveIntentFingerprints.length
+  && !piterReservationRefs.some((item) => piterLegacyRefs.includes(item))
+  && piterLedger?.paidCount === piterLegacyRefs.length
+    + piterReservations.filter((item) => item?.state === "PAID").length
+  && piterLedger?.reservedCount === piterReservations.filter((item) => (
+    ["CLAIMED", "DISPATCHING", "PAYMENT_PENDING", "PROVIDER_UNKNOWN"].includes(item?.state)
+  )).length;
+if (piterState && piterLedger?.ready === true
+  && piterLedger.schemaVersion === 1
+  && Number.isInteger(piterLedger.revision)
+  && piterLedger.revision >= 0
+  && Number.isInteger(piterLedger.paidCount)
+  && piterLedger.paidCount >= 0
+  && Number.isInteger(piterLedger.reservedCount)
+  && piterLedger.reservedCount >= 0
+  && Number.isInteger(piterLedger.takenCount)
+  && piterLedger.takenCount >= 0
+  && piterLedger.takenCount === piterLedger.paidCount + piterLedger.reservedCount
+  && piterLedger.takenCount <= piterState.totalLimit
+  && /^[a-f0-9]{64}$/.test(toStr(piterLedger.baselineDigest) || "")
+  && Number.isFinite(Date.parse(toStr(piterLedger.baselineCapturedAt) || ""))
+  && piterLedgerRowsValid) {
+  piterState.paidCount = piterLedger.paidCount;
+  piterState.reservedCount = piterLedger.reservedCount;
+  piterState.takenCount = piterLedger.takenCount;
+  piterState.remainingCount = Math.max(piterState.totalLimit - piterLedger.takenCount, 0);
+  piterState.managedSaleReady = true;
+  piterState.managedSaleError = null;
+  piterState._lastUpdatedAtTs = toTs(piterLedger.updatedAt) ?? toTs(piterLedger.baselineCapturedAt);
+}
 
 for (const doc of docs) {
   const matchedCounterKey = countersOrder.find((counterKey) => {
@@ -702,6 +760,7 @@ for (const doc of docs) {
   if (!matchedCounterKey) continue;
 
   const state = statesByCounterKey[matchedCounterKey];
+  if (matchedCounterKey === "piter_friendship" && piterLedger) continue;
   const status = normalizeStatus(doc.status);
   const releasePhase = toStr(doc.releasePhase) === "daily" ? "daily" : "launch";
   const pendingDeadlineTs = resolvePendingDeadlineTs(doc, reservationMinutes);
