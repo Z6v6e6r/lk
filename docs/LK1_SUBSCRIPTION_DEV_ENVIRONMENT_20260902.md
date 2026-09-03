@@ -246,7 +246,7 @@ source/candidate/manifest SHA-256 tuple is:
 
 - source: `bada371662cc4d4a27fca5a1a9335c657dac298bba754f48f9787ac67bfe4722`;
 - candidate: `ab73803e90852ebc99cd9b019cf181c9bd402e4737ccde8256cc6da448039fb9`;
-- manifest: `25c29e292f2256ad7d89e1c5053c4304c1c11277a8b7b4692d33cee57461a103`.
+- manifest: `f47b1b13aae9e5dd3f4dabf5797afcc61d55d88cc57bcdbec3c139a511c71865`.
 
 The DEV postimage also strips browser-supplied success/failure/base redirect URLs
 from both split-payment preparation paths before any provider transaction can be
