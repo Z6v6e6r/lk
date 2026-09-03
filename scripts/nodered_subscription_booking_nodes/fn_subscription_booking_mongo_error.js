@@ -1,7 +1,10 @@
 const ctx = msg._subscriptionBooking && typeof msg._subscriptionBooking === "object"
   ? msg._subscriptionBooking
   : {};
-const afterUpstream = [
+const afterUpstream = ctx.precreatedEntitlementReserved === true || [
+  "operation_precreated_attempt",
+  "operation_precreated_promote",
+  "operation_precreated_reconciliation",
   "operation_accept",
   "operation_confirm",
 ].includes(String(ctx.step || ""));
@@ -17,7 +20,11 @@ msg.payload = afterUpstream
       ok: true,
       state: "PENDING_CONFIRMATION",
       operationId: ctx.operationId || null,
-      message: "Viva приняла запрос; подтверждение записи ещё выполняется",
+      message: "Исход операции требует сверки; автоматический повтор заблокирован",
+      details: {
+        code: "SUBSCRIPTION_BOOKING_PERSISTENCE_RECONCILIATION_REQUIRED",
+        localBindingConfirmed: false,
+      },
     }
   : {
       error: "Не удалось атомарно зарезервировать дневной лимит",

@@ -956,12 +956,123 @@ test("managed subscription rules wrapper pins exact graph budget and guarded rol
   assert.match(wrapper, /pull_nodered_source_from_147\.sh/);
   assert.match(wrapper, /patch_nodered_subscription_booking_flow\.mjs/);
   assert.match(wrapper, /prepare_exact_graph_contract\.mjs/);
-  assert.match(wrapper, /--allow-change 8f7bd5b482fe9763:func/);
-  assert.match(wrapper, /--allow-add lk_subscription_managed_policy_20260820/);
-  assert.match(wrapper, /value\.changedNodeCount !== 3/);
-  assert.match(wrapper, /value\.addedNodeCount !== 2/);
+  assert.doesNotMatch(wrapper, /--allow-change 8f7bd5b482fe9763:func/);
+  assert.match(wrapper, /--allow-change lk_subscription_booking_prepare_20260804:func/);
+  assert.match(wrapper, /--allow-change lk_subscription_booking_http_20260804:requestTimeout/);
+  assert.doesNotMatch(wrapper, /lk_subscription_booking_http_20260804:headers/);
+  assert.match(wrapper, /--allow-change lk_subscription_booking_router_20260804:func(?:\s|\\)/);
+  assert.doesNotMatch(wrapper, /lk_subscription_booking_router_20260804:func,outputs,wires/);
+  assert.match(wrapper, /--allow-change lk_subscription_managed_policy_20260820:func/);
+  assert.match(wrapper, /--allow-change lk_subscription_booking_finalize_20260804:func/);
+  assert.match(wrapper, /--allow-change lk_subscription_booking_mongo_error_20260804:func/);
+  assert.doesNotMatch(wrapper, /--allow-add lk_subscription_managed_policy_20260820/);
+  assert.match(wrapper, /value\.changedNodeCount !== 6/);
+  assert.match(wrapper, /value\.addedNodeCount !== 0/);
   assert.match(wrapper, /subscriptionOptionsStatus/);
   assert.match(rollback, /NODE_RED_MANAGED_SUBSCRIPTION_RULES_ROLLBACK=CONFIRM_147/);
   assert.match(rollback, /rollback --deployment-id/);
   assert.doesNotMatch(wrapper + rollback, /rm\s+-rf|--update-env/);
+});
+
+test("managed subscription patcher output satisfies the wrapper exact-graph contract", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-subscription-wrapper-contract-"));
+  const sourcePath = path.join(root, "source.flow.json");
+  const candidateOnePath = path.join(root, "candidate-one.json");
+  const candidateTwoPath = path.join(root, "candidate-two.json");
+  const contractPath = path.join(root, "contract.json");
+  const splitRouterSource = fs.readFileSync(
+    "scripts/nodered_games_nodes/fn_split_router.js", "utf8",
+  )
+    .replace("  ctx.operationId = operationId;\n", "")
+    .replace("  const settlementState = toPayMinor > 0 ? \"PAYMENT_REQUIRED\" : \"CONFIRMED\";\n", "")
+    .replace("    gameId: toStr(ctx.gameId) || null,\n", "")
+    .replace("    operationId: toStr(ctx.operationId) || toStr(ctx.paymentRef),\n", "")
+    .replace("    settlementState,\n", "");
+  assert.equal(
+    sha256(splitRouterSource),
+    "a480563d9b0ea98fa0917e5535f22c5528481d33052e3971517b110ae573cae4",
+    "fixture must remain the exact reviewed live preimage",
+  );
+  const splitWires = [
+    ["ee7ba8cdd68bdf74"],
+    ["802af8a1810db60f"],
+    ["ef42932e1ba864b8"],
+    ["lk_subscription_booking_http_20260804"],
+    ["legacy_payment_confirm_canonical_prepare_20260816"],
+  ];
+  const writeSource = (flow) => {
+    const sourceBytes = bytes(flow);
+    fs.writeFileSync(sourcePath, sourceBytes, { mode: 0o600 });
+    fs.writeFileSync(path.join(root, "source.flow.meta.json"), JSON.stringify({
+      sourceKind: "live-147",
+      sourceHost: "lk-primary-147",
+      sourceUser: "root",
+      sourcePort: 22,
+      remoteFlowPath: "/root/.node-red/flows.json",
+      pulledAt: new Date().toISOString(),
+      sourceSha256: sha256(sourceBytes),
+    }), { mode: 0o600 });
+  };
+  const runPatcher = (candidatePath, importName) => spawnSync(process.execPath, [
+    "scripts/patch_nodered_subscription_booking_flow.mjs",
+    sourcePath,
+    candidatePath,
+    path.join(root, importName),
+  ], { encoding: "utf8" });
+  try {
+    writeSource([
+      { id: "tab", type: "tab", label: "LK Games", disabled: false },
+      { id: "8f7bd5b482fe9763", type: "function", z: "tab", name: "Route Viva split payment", outputs: 5, func: splitRouterSource, wires: splitWires },
+      { id: "ee7ba8cdd68bdf74", type: "http request", z: "tab", wires: [["8f7bd5b482fe9763"]] },
+      { id: "802af8a1810db60f", type: "function", z: "tab", func: "return null;", wires: [] },
+      { id: "ef42932e1ba864b8", type: "function", z: "tab", func: "return null;", wires: [] },
+      { id: "legacy_payment_confirm_canonical_prepare_20260816", type: "function", z: "tab", func: "return null;", wires: [] },
+      { id: "game-mongo", type: "mongodb4", z: "tab", collection: "lk_games", clientNode: "mongo-client", wires: [] },
+      { id: "mongo-client", type: "mongodb4-client", uri: "mongodb://127.0.0.1:27030/lk1_dev" },
+    ]);
+    const first = runPatcher(candidateOnePath, "import-one.json");
+    assert.equal(first.status, 0, first.stderr);
+
+    const live = JSON.parse(fs.readFileSync(candidateOnePath, "utf8"));
+    const interleavedNodeIndex = live.findIndex((node) => node.id === "802af8a1810db60f");
+    const [interleavedNode] = live.splice(interleavedNodeIndex, 1);
+    const managedPrepareIndex = live.findIndex((node) => (
+      node.id === "lk_subscription_booking_prepare_20260804"
+    ));
+    live.splice(managedPrepareIndex + 1, 0, interleavedNode);
+    live.find((node) => node.id === "lk_subscription_booking_prepare_20260804").func = "return msg;";
+    const http = live.find((node) => node.id === "lk_subscription_booking_http_20260804");
+    http.requestTimeout = "1000";
+    const router = live.find((node) => node.id === "lk_subscription_booking_router_20260804");
+    router.func = "return msg;";
+    live.find((node) => node.id === "lk_subscription_managed_policy_20260820").func = "return msg;";
+    live.find((node) => node.id === "lk_subscription_booking_finalize_20260804").func = "return msg;";
+    live.find((node) => node.id === "lk_subscription_booking_mongo_error_20260804").func = "return msg;";
+    writeSource(live);
+
+    const second = runPatcher(candidateTwoPath, "import-two.json");
+    assert.equal(second.status, 0, second.stderr);
+    const candidateTwo = JSON.parse(fs.readFileSync(candidateTwoPath, "utf8"));
+    assert.deepEqual(candidateTwo.map(({ id }) => id), live.map(({ id }) => id),
+      "patcher must preserve the exact order of every existing live node");
+    const contract = spawnSync(process.execPath, [
+      "scripts/nodered_reviewed_flow_deploy/prepare_exact_graph_contract.mjs",
+      "--live", sourcePath,
+      "--candidate", candidateTwoPath,
+      "--output", contractPath,
+      "--deployment-id", "managed-subscription-rules",
+      "--allow-change", "lk_subscription_booking_prepare_20260804:func",
+      "--allow-change", "lk_subscription_booking_http_20260804:requestTimeout",
+      "--allow-change", "lk_subscription_booking_router_20260804:func",
+      "--allow-change", "lk_subscription_managed_policy_20260820:func",
+      "--allow-change", "lk_subscription_booking_finalize_20260804:func",
+      "--allow-change", "lk_subscription_booking_mongo_error_20260804:func",
+    ], { encoding: "utf8" });
+    assert.equal(contract.status, 0, contract.stderr);
+    const contractJson = JSON.parse(fs.readFileSync(contractPath, "utf8"));
+    assert.equal(contractJson.allowedChanges.length, 6);
+    assert.equal(contractJson.allowedAdditions.length, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

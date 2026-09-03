@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   assertProductionCustodySourceIdentity,
+  buildLegacyGameCommandHistoricalReleaseFixture,
   buildLegacyGameCommandProductionRelease,
   readGitBlob,
 } from "../build_legacy_game_command_production_release.mjs";
@@ -43,7 +44,7 @@ const fileSha256 = (filePath) => crypto.createHash("sha256").update(fs.readFileS
 async function buildFixture(t) {
   const root = makeTempRoot(t);
   const bundle = path.join(root, "bundle");
-  const manifest = buildLegacyGameCommandProductionRelease({
+  const manifest = buildLegacyGameCommandHistoricalReleaseFixture({
     outDir: bundle,
   });
   const installerPath = path.join(bundle, "scripts/install_legacy_game_command_production_release.mjs");
@@ -59,12 +60,16 @@ async function buildFixture(t) {
   };
 }
 
-test("release builder packages and authenticates the bootstrap installer and runtime closure", async (t) => {
+test("production release builder fails closed and historical fixture is explicitly unbound", async (t) => {
+  assert.throws(() => buildLegacyGameCommandProductionRelease({
+    outDir: path.join(makeTempRoot(t), "blocked-production-bundle"),
+  }), /candidate is unbound/);
   const { bundle, manifest, installer, installerSha256 } = await buildFixture(t);
   const verified = installer.verifyLegacyGameCommandReleaseBundle(bundle);
   assert.equal(verified.manifest.repositoryCommit, commit);
   assert.equal(manifest.source.liveFlowSha256, "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263");
   assert.equal(manifest.source.candidateFlowSha256, "76bc0d4169c2e2ef205582b1ee6f95be0f521fa58601934bbe74f978abc9d294");
+  assert.equal(manifest.candidateBindingState, "UNBOUND_AFTER_ROUTER_AMENDMENT");
   assert.equal(manifest.source.installerSha256, installerSha256);
   assert.ok(manifest.files.some((item) => item.path === "scripts/install_legacy_game_command_production_release.mjs"
     && item.sha256 === installerSha256));
@@ -410,7 +415,7 @@ test("rehearsal installs one sealed commit-addressed release and creates exact a
   }), /already exists/);
 });
 
-test("production install fails without the exact root trust boundary", async (t) => {
+test("production install rejects the historical release before the root trust boundary", async (t) => {
   const { root, bundle, manifestSha256, installerSha256, installer } = await buildFixture(t);
   const { prepareLegacyGameCommandReleaseInstall } = installer;
   const currentUid = typeof process.getuid === "function" ? process.getuid() : 501;
@@ -426,5 +431,5 @@ test("production install fails without the exact root trust boundary", async (t)
     deploymentId: "11111111-1111-4111-8111-111111111111",
     activatedAt: new Date(Date.now() - 1_000).toISOString(),
     currentUid,
-  }), /exact install root/);
+  }), /candidate is not bound/);
 });

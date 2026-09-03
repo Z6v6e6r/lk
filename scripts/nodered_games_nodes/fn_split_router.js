@@ -15,6 +15,18 @@ const KEY_TOKEN = "vivacrm_access_token";
 const KEY_EXPIRES_AT = "vivacrm_token_expires_at";
 const KEY_REFRESH_OWNER = "vivacrm_token_refresh_owner";
 const KEY_REFRESH_LOCK_UNTIL = "vivacrm_token_refresh_lock_until";
+const MANAGED_RUNTIME_ENVIRONMENT_GLOBAL = "subscriptions_runtime_environment";
+const MANAGED_DEV_CANARY_GLOBAL = "subscriptions_managed_enforcement_canary_client_subscription_ids";
+const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "PROD";
+const MANAGED_PRODUCT_ALLOWLIST_GLOBAL = "subscriptions_managed_enforcement_product_ids";
+const PITER_MANAGED_PRODUCT_ID = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = Object.freeze({
+  PROD: "https://padlhub.su/api",
+  // The DEV binding remains deliberately absent until the complete managed
+  // subscription contract is exposed on a dedicated non-production origin.
+  DEV: null,
+});
 
 const isOk = (status) => Number(status) >= 200 && Number(status) < 300;
 
@@ -305,6 +317,126 @@ const fail = (status, error, details) => {
   return [null, msg, msg];
 };
 
+const readManagedDevCanaries = () => {
+  let configured;
+  try {
+    configured = global.get(MANAGED_DEV_CANARY_GLOBAL);
+  } catch (_) {
+    configured = undefined;
+  }
+  if (configured === undefined || configured === null || configured === "") {
+    return { ok: true, clientSubscriptionIds: [] };
+  }
+  if (typeof configured === "string") {
+    const text = configured.trim();
+    if (!text) return { ok: true, clientSubscriptionIds: [] };
+    try {
+      configured = JSON.parse(text);
+    } catch (_) {
+      return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID" };
+    }
+  }
+  if (!Array.isArray(configured) || ![0, 2].includes(configured.length)) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID" };
+  }
+  const normalized = configured.map((value) => toStr(value)?.toLowerCase());
+  if (normalized.some((value) => !value || !UUID_PATTERN.test(value))
+    || new Set(normalized).size !== normalized.length) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_CANARY_CONFIG_INVALID" };
+  }
+  return { ok: true, clientSubscriptionIds: normalized };
+};
+
+const readManagedProductAllowlist = () => {
+  let configured;
+  try {
+    configured = global.get(MANAGED_PRODUCT_ALLOWLIST_GLOBAL);
+  } catch (_) {
+    configured = undefined;
+  }
+  if (configured === undefined || configured === null || configured === "") {
+    return { ok: true, productIds: [] };
+  }
+  if (typeof configured === "string") {
+    const text = configured.trim();
+    if (!text) return { ok: true, productIds: [] };
+    try {
+      configured = JSON.parse(text);
+    } catch (_) {
+      return { ok: false, code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID" };
+    }
+  }
+  if (!Array.isArray(configured)) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID" };
+  }
+  const normalized = configured.map((value) => toStr(value)?.toLowerCase());
+  if (normalized.some((value) => !value || !UUID_PATTERN.test(value))) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_ENFORCEMENT_CONFIG_INVALID" };
+  }
+  return { ok: true, productIds: Array.from(new Set(normalized)).sort() };
+};
+
+const validateManagedRuntimeApiBase = (environment) => {
+  const expectedApiBase = MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT[environment];
+  if (!expectedApiBase) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_DEV_RUNTIME_ORIGIN_UNBOUND" };
+  }
+  const configuredApiBase = toStr(readGlobal("subscriptions_runtime_api_base_url"));
+  let parsed;
+  try {
+    parsed = new URL(configuredApiBase);
+  } catch (_) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_RUNTIME_URL_INVALID" };
+  }
+  const transportAllowed = environment === "PROD"
+    ? parsed.protocol === "https:"
+    : parsed.protocol === "http:" && parsed.hostname === "127.0.0.1";
+  if (!transportAllowed
+    || parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash
+    || parsed.pathname !== "/api"
+    || parsed.href !== expectedApiBase) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT" };
+  }
+  return { ok: true };
+};
+
+const managedCreatePreflight = (ctx) => {
+  if (resolvePaymentMode(ctx.selectedPaymentMode || ctx.paymentMode) !== "subscription") {
+    return { ok: true, requiresAuthoritativePreflight: false };
+  }
+  const productAllowlist = readManagedProductAllowlist();
+  if (!productAllowlist.ok) return productAllowlist;
+  if (!productAllowlist.productIds.includes(PITER_MANAGED_PRODUCT_ID)) {
+    return { ok: true, requiresAuthoritativePreflight: false };
+  }
+  const environment = toStr(readGlobal(MANAGED_RUNTIME_ENVIRONMENT_GLOBAL))?.toUpperCase();
+  if (!["DEV", "PROD"].includes(environment)) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_ENVIRONMENT_INVALID" };
+  }
+  if (environment !== MANAGED_RUNTIME_EXPECTED_ENVIRONMENT) {
+    return { ok: false, code: "MANAGED_SUBSCRIPTION_RUNTIME_CROSS_ENVIRONMENT" };
+  }
+  if (environment === "PROD") {
+    const runtimeApiBase = validateManagedRuntimeApiBase(environment);
+    return runtimeApiBase.ok
+      ? { ok: true, requiresAuthoritativePreflight: true }
+      : runtimeApiBase;
+  }
+  const canaries = readManagedDevCanaries();
+  if (!canaries.ok) return canaries;
+  const clientSubscriptionId = toStr(ctx.clientSubscriptionId)?.toLowerCase();
+  if (!clientSubscriptionId || !canaries.clientSubscriptionIds.includes(clientSubscriptionId)) {
+    return { ok: true, requiresAuthoritativePreflight: false };
+  }
+  const runtimeApiBase = validateManagedRuntimeApiBase(environment);
+  return runtimeApiBase.ok
+    ? { ok: true, requiresAuthoritativePreflight: true }
+    : runtimeApiBase;
+};
+
 const adminRequest = (ctx, method, path, payload) => {
   msg._splitCtx = ctx;
   msg.method = method;
@@ -315,6 +447,8 @@ const adminRequest = (ctx, method, path, payload) => {
   };
   msg.payload = payload;
   msg.requestTimeout = ADMIN_REQUEST_TIMEOUT_MS;
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
   return [msg, null, null];
 };
 
@@ -329,6 +463,8 @@ const endUserRequest = (ctx, path) => {
   };
   msg.payload = undefined;
   msg.requestTimeout = ADMIN_REQUEST_TIMEOUT_MS;
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
   return [msg, null, null];
 };
 
@@ -352,6 +488,8 @@ const startPricingPolicyRequest = (ctx) => {
   msg.headers = { Accept: "application/json", "Cache-Control": "no-store" };
   msg.payload = undefined;
   msg.requestTimeout = 5000;
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
   return [msg, null, null];
 };
 
@@ -547,10 +685,157 @@ const startSubscriptionBookingGateway = (ctx) => {
     startedAt: new Date().toISOString(),
   };
   msg.method = "GET";
-  msg.url = "https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile";
+  msg.url = `${END_USER_API}/profile`;
   msg.headers = {
     Authorization: authHeader,
     Accept: "application/json",
+  };
+  msg.payload = undefined;
+  msg.requestTimeout = ADMIN_REQUEST_TIMEOUT_MS;
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
+  return [null, null, null, msg];
+};
+
+const splitCreateDurationMinutes = (ctx) => {
+  const explicit = Math.floor(toNumber(ctx.durationMinutes) ?? 0);
+  if (explicit > 0) return explicit;
+  const parseMinutes = (value) => {
+    const matched = String(value || "").match(/^(\d{2}):(\d{2})(?::\d{2})?$/);
+    if (!matched) return null;
+    const hours = Number(matched[1]);
+    const minutes = Number(matched[2]);
+    return hours <= 23 && minutes <= 59 ? hours * 60 + minutes : null;
+  };
+  const from = parseMinutes(ctx.fromTime);
+  const to = parseMinutes(ctx.toTime);
+  return from !== null && to !== null && to > from ? to - from : null;
+};
+
+const startManagedCreateAuthoritativePreflight = (ctx) => {
+  const requestHeaders = msg.req && msg.req.headers && typeof msg.req.headers === "object"
+    ? msg.req.headers
+    : {};
+  const authHeader = toStr(requestHeaders.authorization || requestHeaders.Authorization);
+  const operationId = toStr(
+    requestHeaders["idempotency-key"]
+    || requestHeaders["Idempotency-Key"]
+    || msg.req?.query?.operationId,
+  );
+  const durationMinutes = splitCreateDurationMinutes(ctx);
+  const normalizedFromTime = /^\d{2}:\d{2}:\d{2}$/.test(toStr(ctx.fromTime) || "")
+    ? toStr(ctx.fromTime)
+    : /^\d{2}:\d{2}$/.test(toStr(ctx.fromTime) || "")
+      ? `${toStr(ctx.fromTime)}:00`
+      : null;
+  const startsAt = ctx.date && normalizedFromTime
+    ? `${ctx.date}T${normalizedFromTime}+03:00`
+    : null;
+  const targetId = operationId ? `split-create:${operationId}` : null;
+  const stationId = toStr(ctx.verifiedStudioId);
+  const roomId = toStr(ctx.verifiedRoomId);
+  const externalEventTypeId = `viva:direction:${toNumber(ctx.vivaDirectionId) ?? SPLIT_DIRECTION_ID}:type:${toNumber(ctx.vivaExerciseTypeId) ?? SPLIT_EXERCISE_TYPE_ID}`;
+  if (!authHeader || !/^Bearer\s+\S+/i.test(authHeader)) {
+    return fail(401, "Требуется авторизация Viva", {
+      code: "SUBSCRIPTION_BOOKING_AUTH_REQUIRED",
+    });
+  }
+  if (!operationId || !/^[A-Za-z0-9._:-]{8,200}$/.test(operationId)) {
+    return fail(400, "Требуется корректный operationId", {
+      code: "SUBSCRIPTION_BOOKING_OPERATION_ID_REQUIRED",
+    });
+  }
+  if (!toStr(ctx.clientSubscriptionId) || !stationId || !roomId
+    || stationId !== toStr(ctx.studioId) || roomId !== toStr(ctx.roomId) || !startsAt
+    || !Number.isInteger(durationMinutes) || durationMinutes < 1) {
+    return fail(409, "Нельзя безопасно определить цель предварительной проверки", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_TARGET_UNRESOLVED",
+    });
+  }
+  msg._splitCtx = ctx;
+  msg._subscriptionBooking = {
+    caller: "split_create_preflight",
+    action: "book",
+    step: "profile",
+    tenantKey: "iSkq6G",
+    operationId,
+    authHeader,
+    exerciseId: targetId,
+    clientSubscriptionId: ctx.clientSubscriptionId,
+    managedAction: "CREATE_GAME",
+    prospectiveTarget: {
+      resolutionSource: "SERVER",
+      stationId,
+      roomId,
+      category: "open_game",
+      externalEventTypeId,
+      productTypeId: null,
+      eventId: targetId,
+      durationMinutes,
+      startsAt,
+      basePriceMinor: null,
+      currency: "RUB",
+    },
+    subscriptionVisitCount: resolveSubscriptionVisitCount({ ...ctx, durationMinutes }),
+    startedAt: new Date().toISOString(),
+  };
+  msg.method = "GET";
+  msg.url = `${END_USER_API}/profile`;
+  msg.headers = { Authorization: authHeader, Accept: "application/json" };
+  msg.payload = undefined;
+  msg.requestTimeout = ADMIN_REQUEST_TIMEOUT_MS;
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
+  return [null, null, null, msg];
+};
+
+const resumeManagedCreateReservation = (ctx) => {
+  const reservation = ctx.managedCreateReservation;
+  const exerciseId = toStr(ctx.exerciseId);
+  const operationId = toStr(msg.req?.headers?.["idempotency-key"]
+    || msg.req?.headers?.["Idempotency-Key"] || msg.req?.query?.operationId);
+  if (!reservation || reservation.operationId !== operationId
+    || reservation.clientSubscriptionId !== toStr(ctx.clientSubscriptionId)
+    || !toStr(reservation.managedEntitlementOperationId)
+    || !exerciseId
+    || (ctx.ownsExercise !== true && ctx.reusedConflictingExercise !== true)) {
+    return fail(409, "Предварительный резерв подписки не совпал с созданной игрой", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RESERVATION_MISMATCH",
+    });
+  }
+  msg._splitCtx = ctx;
+  msg._subscriptionBooking = {
+    ...reservation,
+    caller: "split",
+    step: "exercise_recheck",
+    exerciseId,
+    precreatedEntitlementReserved: true,
+  };
+  msg.method = "GET";
+  msg.url = `${END_USER_API}/exercises/${encodeURIComponent(exerciseId)}`;
+  msg.headers = { Authorization: reservation.authHeader, Accept: "application/json" };
+  msg.payload = undefined;
+  msg.requestTimeout = ADMIN_REQUEST_TIMEOUT_MS;
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
+  return [null, null, null, msg];
+};
+
+const abortManagedCreateReservation = (ctx, statusCode, error, details = null) => {
+  const reservation = ctx.managedCreateReservation;
+  if (!reservation || !toStr(reservation.managedEntitlementOperationId)) {
+    return fail(statusCode, error, details);
+  }
+  msg._splitCtx = ctx;
+  msg._subscriptionBooking = {
+    ...reservation,
+    caller: "split_create_abort",
+    step: "managed_precreate_abort",
+    finalFailure: {
+      statusCode,
+      message: error,
+      rawCode: toStr(details?.code) || "VIVA_EXERCISE_CREATE_REJECTED",
+    },
   };
   msg.payload = undefined;
   return [null, null, null, msg];
@@ -808,6 +1093,9 @@ const buildBookingRequest = (ctx) => {
     && clientSubscriptionId
     && ctx.subscriptionGuardDone !== true
   ) {
+    if (ctx.action === "create" && ctx.managedCreateReservation) {
+      return resumeManagedCreateReservation(ctx);
+    }
     return startSubscriptionBookingGateway(ctx);
   }
   ctx.step = "create_booking";
@@ -821,6 +1109,48 @@ const buildBookingRequest = (ctx) => {
 
 const continueSplitAfterVerifiedPrice = (ctx) => {
   if (ctx.action === "create") {
+    if (!toStr(ctx.verifiedStudioId) || !toStr(ctx.verifiedRoomId)
+      || toStr(ctx.verifiedStudioId) !== toStr(ctx.studioId)
+      || toStr(ctx.verifiedRoomId) !== toStr(ctx.roomId)) {
+      return fail(409, "Связь stationId и roomId не подтверждена сервером", {
+        code: "SPLIT_CREATE_LOCATION_NOT_VERIFIED",
+      });
+    }
+    const preflight = managedCreatePreflight(ctx);
+    if (!preflight.ok) {
+      return fail(503, "DEV-контур управляемой подписки не подтверждён", {
+        code: preflight.code,
+      });
+    }
+    if (preflight.requiresAuthoritativePreflight
+      && ctx.managedCreatePreflightDone !== true) {
+      return startManagedCreateAuthoritativePreflight(ctx);
+    }
+    if (ctx.managedCreateReservation && ctx.managedCreateAttemptBound !== true) {
+      return fail(409, "Попытка создания игры не зафиксирована до Viva", {
+        code: "MANAGED_SUBSCRIPTION_PREFLIGHT_ATTEMPT_NOT_BOUND",
+      });
+    }
+    if (ctx.managedCreateRecoveredExerciseId) {
+      const recoveredExerciseId = toStr(ctx.managedCreateRecoveredExerciseId);
+      const reservation = ctx.managedCreateReservation;
+      if (!recoveredExerciseId || !reservation
+        || reservation.operationId !== toStr(msg.req?.headers?.["idempotency-key"]
+          || msg.req?.headers?.["Idempotency-Key"] || msg.req?.query?.operationId)
+        || normalizeComparableId(reservation.exerciseId) !== normalizeComparableId(recoveredExerciseId)) {
+        return fail(409, "Восстановленная игра не совпала с предварительным резервом", {
+          code: "MANAGED_SUBSCRIPTION_PREFLIGHT_RECOVERY_MISMATCH",
+        });
+      }
+      ctx.exerciseId = recoveredExerciseId;
+      // Exact readback proves the reusable exercise identity, but cannot prove that
+      // this request created it. Never grant destructive compensation custody.
+      ctx.ownsExercise = false;
+      ctx.reusedConflictingExercise = true;
+      ctx.recoveredCreateOutcome = true;
+      delete ctx.managedCreateRecoveredExerciseId;
+      return buildBookingRequest(ctx);
+    }
     ctx.step = "create_exercise";
     return adminRequest(ctx, "POST", "/exercises", {
       directionId: toNumber(ctx.vivaDirectionId) ?? SPLIT_DIRECTION_ID,
@@ -828,7 +1158,7 @@ const continueSplitAfterVerifiedPrice = (ctx) => {
       timeFrom: `${ctx.date}T${ctx.fromTime}+03:00`,
       timeTo: `${ctx.date}T${ctx.toTime}+03:00`,
       maxClientsCount: ctx.maxClientsCount,
-      roomId: ctx.roomId,
+      roomId: ctx.verifiedRoomId,
       trainers: [],
       requirements: [],
     });
@@ -936,7 +1266,7 @@ const continueSplitAfterToken = (ctx) => {
       `/transactions/${encodeURIComponent(ctx.pricingPolicyProof.transactionId)}`,
     );
   }
-  if (resolvePaymentMode(ctx.paymentMode) === "one_time") {
+  if (ctx.action === "create" || resolvePaymentMode(ctx.paymentMode) === "one_time") {
     return startRoomStudioVerification(ctx);
   }
   return continueSplitAfterTrustedLocation(ctx);
@@ -985,6 +1315,8 @@ const startVivaAuthorization = (ctx) => {
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
     .join("&");
   msg.requestTimeout = TOKEN_REQUEST_TIMEOUT_MS;
+  msg.followRedirects = false;
+  msg.maxRedirects = 0;
   return [msg, null, null];
 };
 
@@ -1369,12 +1701,33 @@ if (!isOk(msg.statusCode)) {
   if (ctx.step === "create_exercise" && Number(msg.statusCode) === 409) {
     const conflictExerciseId = extractConflictExerciseId(msg.payload, ctx);
     if (conflictExerciseId) {
+      if (ctx.managedCreateReservation) {
+        ctx.exercise = msg.payload;
+        ctx.exerciseId = conflictExerciseId;
+        ctx.reusedConflictingExercise = true;
+        ctx.ownsExercise = false;
+        return buildBookingRequest(ctx);
+      }
       ctx.exercise = msg.payload;
       ctx.exerciseId = conflictExerciseId;
       ctx.reusedConflictingExercise = true;
       ctx.ownsExercise = false;
       return buildBookingRequest(ctx);
     }
+    if (ctx.managedCreateReservation) {
+      return fail(409, "Исход создания игры в Viva требует точной сверки", {
+        code: "MANAGED_SUBSCRIPTION_PREFLIGHT_CREATE_RECONCILIATION_REQUIRED",
+      });
+    }
+  }
+  if (ctx.step === "create_exercise" && ctx.managedCreateReservation
+    && [400, 401, 403, 404, 405, 410, 415, 422].includes(Number(msg.statusCode))) {
+    return abortManagedCreateReservation(
+      ctx,
+      Number(msg.statusCode),
+      "Viva отклонила создание игры; предварительный резерв освобождён",
+      { code: toStr(msg.payload?.code) || "VIVA_EXERCISE_CREATE_REJECTED" },
+    );
   }
   if (
     ctx.step === "create_booking"
@@ -1409,6 +1762,15 @@ if (ctx.step === "subscription_gateway_rejected") {
     "GET",
     `/exercises/${encodeURIComponent(ctx.exerciseId)}/bookings`,
   );
+}
+
+if (ctx.step === "managed_create_preflight_complete") {
+  if (ctx.action !== "create" || ctx.managedCreatePreflightDone !== true) {
+    return fail(409, "Предварительная проверка создания игры потеряла контекст", {
+      code: "MANAGED_SUBSCRIPTION_PREFLIGHT_CONTEXT_INVALID",
+    });
+  }
+  return continueSplitAfterVerifiedPrice(ctx);
 }
 
 if (ctx.step === "subscription_full_price_fallback") {

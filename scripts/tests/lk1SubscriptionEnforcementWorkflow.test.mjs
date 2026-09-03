@@ -365,6 +365,14 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     /scripts\/tests\/lk1SubscriptionActivationPacket\.test\.mjs/,
   );
   assert.match(
+    step("Run unified candidate and drift-negative tests").run,
+    /scripts\/tests\/lk1SubscriptionDevCandidate\.test\.mjs/,
+  );
+  assert.match(
+    step("Run unified candidate and drift-negative tests").run,
+    /scripts\/tests\/subscriptionBookingLegacyPatcher\.test\.mjs/,
+  );
+  assert.match(
     step("Validate referral attribution compatibility").run,
     /scripts\/tests\/referralAttributionReleaseCandidate\.test\.mjs/,
   );
