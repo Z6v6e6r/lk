@@ -1712,3 +1712,24 @@
   fictional policy-node additions and no unchanged split-router mutation; an executable
   patcher-to-exact-graph regression uses an interleaved policy-present source and proves
   every existing live node remains in place while only genuinely absent nodes append.
+
+## 2026-09-03 — LK1 isolated DEV source-only candidate
+
+- Reconciled the candidate work with current `origin/main` after stopped-bootstrap
+  and read-only runtime-source integration, preserving the historical bootstrap
+  contract byte-for-byte.
+- Captured fresh read-only host evidence for `lk-reserve-89`: the dedicated identity
+  and five exact units remain loaded, disabled and inactive/dead; all five DEV ports
+  are closed, no activation units exist, and the target flow is absent.
+- Added a deterministic 23-node offline source generator and strict candidate
+  publisher with independent source-input/function preimages, exact loopback endpoint
+  and Mongo custody, temp-only atomic readiness, and a build-only evidence binding.
+- Frozen source `e40db778…`, candidate `580b917…`, and manifest `f488666…` while
+  retaining `hostPreimageState=ABSENT`, null rollback source, install authorization
+  `false`, and production binding `UNBOUND_AFTER_ROUTER_AMENDMENT`.
+- No host install, Node-RED import, service start/enable, ingress, activation, canary
+  IDs, secrets, provider/Mongo write, merge, push, or deployment occurred. The
+  stopped fixture runtime still does not implement managed entitlement/create-join.
+- Closed the independent security P2 in the DEV postimage by replacing both
+  browser-supplied split-payment success/failure/base redirect fields with null before
+  provider transaction assembly; shared production source defaults remain unchanged.
