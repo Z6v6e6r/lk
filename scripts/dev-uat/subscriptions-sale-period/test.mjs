@@ -457,6 +457,24 @@ test("preflight rejects truncated or cross-kind release digest schemas", () => {
   assert.equal(weakExpectedReport.checks.find((row) => row.name === "LK_RELEASE_BINDING").status, "FAIL");
 });
 
+test("preflight rejects LK and CUP schemas swapped in both expected and actual evidence", () => {
+  const report = evaluatePreflight({
+    inputs: inputs({
+      expectedLkRelease: releaseEvidence(CUP_SHA),
+      expectedCupRelease: releaseEvidence(LK_SHA),
+    }),
+    lkRelease: releaseEvidence(CUP_SHA),
+    cupRelease: releaseEvidence(LK_SHA),
+    systemEvidence: systemEvidence(),
+    runtimeA: runtime("A"),
+    runtimeB: runtime("B"),
+    runtimeControl: runtime("CONTROL"),
+  });
+  assert.equal(report.status, "BLOCKED");
+  assert.equal(report.checks.find((row) => row.name === "LK_RELEASE_BINDING").status, "FAIL");
+  assert.equal(report.checks.find((row) => row.name === "CUP_RELEASE_BINDING").status, "FAIL");
+});
+
 test("preflight requires exact A=V1/B=V2, exact-two canary instances, and mandatory control", () => {
   const wrongAssignment = evaluatePreflight({
     inputs: inputs({ EXPECTED_RULE_A_VERSION: "V2", EXPECTED_RULE_B_VERSION: "V1" }),
