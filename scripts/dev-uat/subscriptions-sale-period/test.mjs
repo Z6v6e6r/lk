@@ -33,15 +33,17 @@ const LK_SHA = "1".repeat(40);
 const CUP_SHA = "2".repeat(40);
 
 function releaseEvidence(sourceCommit, digest = sourceCommit[0].repeat(64)) {
-  return {
+  const common = {
     schemaVersion: 2,
     environment: "DEV",
     sourceCommit,
-    artifactSha256: digest,
     manifestSha256: digest,
     hostReadbackSha256: digest,
     servedSha256: digest,
   };
+  return sourceCommit === LK_SHA
+    ? { ...common, sourceFlowSha256: digest, candidateSha256: digest }
+    : { ...common, artifactSha256: digest };
 }
 
 function inputs(overrides = {}) {
@@ -422,6 +424,37 @@ test("preflight binds both served releases to every frozen expected SHA", () => 
   });
   assert.equal(report.status, "BLOCKED");
   assert.equal(report.checks.find((row) => row.name === "LK_RELEASE_BINDING").status, "FAIL");
+});
+
+test("preflight rejects truncated or cross-kind release digest schemas", () => {
+  const truncatedLk = releaseEvidence(LK_SHA);
+  delete truncatedLk.sourceFlowSha256;
+  const crossKindCup = releaseEvidence(CUP_SHA);
+  crossKindCup.candidateSha256 = crossKindCup.artifactSha256;
+  delete crossKindCup.artifactSha256;
+  for (const [lkRelease, cupRelease] of [
+    [truncatedLk, releaseEvidence(CUP_SHA)],
+    [releaseEvidence(LK_SHA), crossKindCup],
+  ]) {
+    const report = evaluatePreflight({
+      inputs: inputs(), lkRelease, cupRelease, systemEvidence: systemEvidence(),
+      runtimeA: runtime("A"), runtimeB: runtime("B"), runtimeControl: runtime("CONTROL"),
+    });
+    assert.equal(report.status, "BLOCKED");
+  }
+  const weakExpected = releaseEvidence(LK_SHA);
+  delete weakExpected.candidateSha256;
+  const weakExpectedReport = evaluatePreflight({
+    inputs: inputs({ expectedLkRelease: weakExpected }),
+    lkRelease: releaseEvidence(LK_SHA),
+    cupRelease: releaseEvidence(CUP_SHA),
+    systemEvidence: systemEvidence(),
+    runtimeA: runtime("A"),
+    runtimeB: runtime("B"),
+    runtimeControl: runtime("CONTROL"),
+  });
+  assert.equal(weakExpectedReport.status, "BLOCKED");
+  assert.equal(weakExpectedReport.checks.find((row) => row.name === "LK_RELEASE_BINDING").status, "FAIL");
 });
 
 test("preflight requires exact A=V1/B=V2, exact-two canary instances, and mandatory control", () => {

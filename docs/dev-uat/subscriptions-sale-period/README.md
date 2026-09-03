@@ -78,14 +78,17 @@ GET-пути переопределяются только в приватном
 environment, frozen release bindings, DEV-only flags, unchanged production state,
 indexes и fresh evidence разрешают отправить user-scoped credentials.
 
-Каждый release response обязан содержать четыре 40-hex SHA и точно совпасть с
-заранее frozen expected tuple из приватной конфигурации:
+LK release response обязан содержать exact 40-hex Git commit и пять exact
+64-hex artifact digests; CUP использует отдельную exact схему с `artifactSha256`
+вместо `sourceFlowSha256`/`candidateSha256`. Оба tuple должны точно совпасть с
+заранее frozen expected значениями из приватной конфигурации:
 
 ```json
 {
   "schemaVersion": 2,
   "environment": "DEV",
   "sourceCommit": "1111111111111111111111111111111111111111",
+  "sourceFlowSha256": "1111111111111111111111111111111111111111111111111111111111111111",
   "candidateSha256": "1111111111111111111111111111111111111111111111111111111111111111",
   "manifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
   "hostReadbackSha256": "1111111111111111111111111111111111111111111111111111111111111111",

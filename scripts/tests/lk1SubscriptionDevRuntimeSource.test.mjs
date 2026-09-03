@@ -525,6 +525,31 @@ test("minimal Node-RED flow is one fail-closed read-only release route", () => {
   }
 });
 
+test("minimal release route rejects nested target, rollback, and authority drift", () => {
+  const flow = readJson(FLOW_PATH);
+  const validate = new Function(
+    "msg",
+    flow.find((node) => node.id.endsWith("release-validate")).func,
+  );
+  const sourceOnly = readJson(path.join(
+    ROOT, "scripts/lk1_subscription_dev_release_receipt_v2_contract.json",
+  ));
+  const served = {
+    ...sourceOnly,
+    state: "SERVED",
+    hostReadbackSha256: sourceOnly.candidateSha256,
+    servedSha256: sourceOnly.candidateSha256,
+  };
+  assert.equal(validate({ payload: JSON.stringify(served) }).statusCode, 200);
+  for (const changed of [
+    { ...served, authority: {} },
+    { ...served, target: { ...served.target, hostAlias: "production" } },
+    { ...served, rollback: { mode: "RETURN_TO_ABSENT", deleteData: false } },
+  ]) {
+    assert.equal(validate({ payload: JSON.stringify(changed) }).statusCode, 503);
+  }
+});
+
 test("runtime source contract grants local bundle build only", () => {
   const contract = readJson(CONTRACT_PATH);
   assert.equal(validateRuntimeSourceContract(contract), true);

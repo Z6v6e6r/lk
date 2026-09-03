@@ -494,12 +494,22 @@ function releaseBinding(payload) {
   if (!isObject(payload) || payload.schemaVersion !== 2 || text(payload.environment) !== "DEV"
     || !RELEASE_COMMIT.test(text(payload.sourceCommit))) return null;
   const digestKeys = Object.keys(payload).filter((key) => key.endsWith("Sha256")).sort();
-  if (digestKeys.length < 3
-    || !digestKeys.includes("hostReadbackSha256")
-    || !digestKeys.includes("servedSha256")) return null;
+  const lkDigestKeys = [
+    "candidateSha256", "hostReadbackSha256", "manifestSha256",
+    "servedSha256", "sourceFlowSha256",
+  ].sort();
+  const cupDigestKeys = [
+    "artifactSha256", "hostReadbackSha256", "manifestSha256", "servedSha256",
+  ].sort();
+  const identityType = JSON.stringify(digestKeys) === JSON.stringify(lkDigestKeys)
+    ? "LK" : JSON.stringify(digestKeys) === JSON.stringify(cupDigestKeys) ? "CUP" : null;
+  if (!identityType) return null;
   const digests = Object.fromEntries(digestKeys.map((key) => [key, text(payload[key])]));
   if (!Object.values(digests).every((value) => RELEASE_SHA256.test(value))) return null;
-  return { schemaVersion: 2, environment: "DEV", sourceCommit: text(payload.sourceCommit), ...digests };
+  return {
+    schemaVersion: 2, environment: "DEV", identityType,
+    sourceCommit: text(payload.sourceCommit), ...digests,
+  };
 }
 
 function inspectRelease(payload, label, expected) {

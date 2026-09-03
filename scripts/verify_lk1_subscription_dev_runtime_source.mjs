@@ -8,7 +8,7 @@ import { validateFixtureConfig, validateFixtureCli } from "./lk1_subscription_de
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
-const MINIMAL_DEV_FLOW_SHA256 = "70ef367ab0f1c724183fa4fb9989161b18e205fbe282ae2f7a67f014fab8e177";
+const MINIMAL_DEV_FLOW_SHA256 = "fd9cff20a5b5adbf47fafce068e9e9cc357f676c08f2f5c41cd5420ed211ab95";
 const EXPECTED_FILES = Object.freeze([
   "payload/lk1_subscription_dev_runtime/fixture_runtime.mjs",
   "payload/lk1_subscription_dev_runtime/minimal.flow.json",
