@@ -28,10 +28,10 @@ const CANDIDATE_SHA256_BY_SOURCE_FILE = Object.freeze({
   "fn_tournament_subscription_counter_refresh_prepare.js": "82cc3b69c2030f852c564e2e0028fcd88e9e1c5496e51be74a29ece6aa89c0b0",
   "fn_tournament_subscription_counter_refresh_response.js": "5fed0cdad40cb0cc41daf766e23f1fb938b9ccbc65de11d0d90484de9dcef262",
   "fn_tournament_subscription_status_prepare.js": "46d5bf043e960a044e622ae9929bf865f2a5c8e7ad10f6729f7edf7649aff3e7",
-  "fn_tournament_subscription_status_response.js": "f7e9d81975e63a090ad47abe54c07ed9db265fccf114ab7758f3b102ed0007e0",
-  "fn_tournament_subscription_purchase_prepare.js": "2f15053bdf2c8abd770b7bc65cd59d6fdcfc2c08f26c2ee78a95bc309dfe5ca3",
-  "fn_tournament_subscription_purchase_limit.js": "75d070b427ca9097cd258a84daca7b2c3998f545415b69ef4968ccdce2aaeef8",
-  "fn_tournament_subscription_purchase_router.js": "27b54a9e4204bd39951cae8e2194a60af5c3f3fc58edd85ceea76f56ff17deb2",
+  "fn_tournament_subscription_status_response.js": "e81699c4c490b9883cacf104c751990c0b2922ce86d1f607889fb66991fedb53",
+  "fn_tournament_subscription_purchase_prepare.js": "cdaa2b512d6e0f1bc1fd79eb264d1d05816e63d391e6bbf9390eaf29694e0851",
+  "fn_tournament_subscription_purchase_limit.js": "d7adcfb697bf06428f7e0c3de2dafb111e88d59c480640574d6d2760e4b9b549",
+  "fn_tournament_subscription_purchase_router.js": "9c4f062ab1105480f97a0ca5cc869c68cf8bd1310a846e7eab63600c37b61d9c",
   "fn_tournament_subscription_reconcile_query.js": "35d8a910979922a632e4334606e018b6116f24b0de87b105dc5dd50b87210856",
 });
 const FROZEN_PREIMAGE_SHA256_BY_ID = Object.freeze({
