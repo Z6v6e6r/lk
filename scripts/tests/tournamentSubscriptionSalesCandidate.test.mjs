@@ -8,11 +8,13 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   assertPiterAtomicTopology,
+  PITER_ATOMIC_ERROR_SOURCE,
   PITER_ATOMIC_TOPOLOGY_IDS,
 } from "../lib/piterAtomicTopologyContract.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const BUILDER = path.join(REPO_ROOT, "scripts/prepare_tournament_subscription_sales_candidate.mjs");
+const ATOMIC_BUILDER = path.join(REPO_ROOT, "scripts/prepare_piter_atomic_sales_candidate.mjs");
 const FUNCTION_DIR = path.join(REPO_ROOT, "scripts/nodered_games_nodes");
 const TARGETS = [
   ["519b6a6ca208e281", "Prepare tournament subscription counter refresh", "fn_tournament_subscription_counter_refresh_prepare.js"],
@@ -37,13 +39,21 @@ const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex"
 
 function atomicTopologyNodes() {
   const ids = PITER_ATOMIC_TOPOLOGY_IDS;
+  const atomicRouterSource = fs.readFileSync(
+    path.join(FUNCTION_DIR, "fn_tournament_subscription_piter_atomic_router.js"),
+    "utf8",
+  );
   return [
-    { id: ids.atomicRouter, type: "function", z: ids.tab, name: "Route atomic Piter subscription sale", func: "return msg;", outputs: 5, wires: [[ids.ledgerFind], [ids.ledgerUpdate], [ids.saleUpdate], [ids.response], [ids.viva]] },
-    { id: ids.ledgerFind, type: "mongodb4", z: ids.tab, name: "Find Piter atomic inventory ledger", collection: "lk_tournament_subscription_sales", operation: "find", wires: [[ids.atomicRouter]] },
-    { id: ids.ledgerUpdate, type: "mongodb4", z: ids.tab, name: "CAS Piter atomic inventory ledger", collection: "lk_tournament_subscription_sales", operation: "updateOne", wires: [[ids.atomicRouter]] },
-    { id: ids.saleUpdate, type: "mongodb4", z: ids.tab, name: "Persist Piter atomic sale", collection: "lk_tournament_subscription_sales", operation: "updateOne", wires: [[ids.atomicRouter]] },
-    { id: ids.mongoCatch, type: "catch", z: ids.tab, name: "Catch Piter atomic Mongo errors", scope: [ids.ledgerFind, ids.ledgerUpdate, ids.saleUpdate], uncaught: false, wires: [[ids.mongoError]] },
-    { id: ids.mongoError, type: "function", z: ids.tab, name: "Redact Piter atomic Mongo error", func: "return msg;", outputs: 2, wires: [[ids.response], [ids.debug]] },
+    { id: ids.atomicRouter, type: "function", z: ids.tab, name: "Route atomic Piter subscription sale", func: atomicRouterSource, outputs: 5, timeout: "", noerr: 0, initialize: "", finalize: "", libs: [], x: 2750, y: 2240, wires: [[ids.ledgerFind], [ids.ledgerUpdate], [ids.saleUpdate], [ids.response], [ids.viva]] },
+    { id: ids.ledgerFind, type: "mongodb4", z: ids.tab, clientNode: ids.mongoClient, mode: "collection", collection: "lk_tournament_subscription_sales", operation: "find", output: "toArray", maxTimeMS: "5000", handleDocId: false, name: "Find Piter atomic inventory ledger", x: 3140, y: 2180, wires: [[ids.atomicRouter]] },
+    { id: ids.ledgerUpdate, type: "mongodb4", z: ids.tab, clientNode: ids.mongoClient, mode: "collection", collection: "lk_tournament_subscription_sales", operation: "updateOne", output: "toArray", maxTimeMS: "5000", handleDocId: false, name: "CAS Piter atomic inventory ledger", x: 3140, y: 2220, wires: [[ids.atomicRouter]] },
+    { id: ids.saleUpdate, type: "mongodb4", z: ids.tab, clientNode: ids.mongoClient, mode: "collection", collection: "lk_tournament_subscription_sales", operation: "updateOne", output: "toArray", maxTimeMS: "5000", handleDocId: false, name: "Persist Piter atomic sale", x: 3140, y: 2260, wires: [[ids.atomicRouter]] },
+    { id: ids.mongoCatch, type: "catch", z: ids.tab, name: "Catch Piter atomic Mongo errors", scope: [ids.ledgerFind, ids.ledgerUpdate, ids.saleUpdate], uncaught: false, x: 2780, y: 2320, wires: [[ids.mongoError]] },
+    { id: ids.mongoError, type: "function", z: ids.tab, name: "Redact Piter atomic Mongo error", func: PITER_ATOMIC_ERROR_SOURCE, outputs: 2, timeout: "", noerr: 0, initialize: "", finalize: "", libs: [], x: 3150, y: 2320, wires: [[ids.response], [ids.debug]] },
+    { id: ids.mongoClient, type: "mongodb4-client", name: "Mongo" },
+    { id: ids.viva, type: "http request", z: ids.tab, name: "Viva" },
+    { id: ids.response, type: "http response", z: ids.tab, name: "Response" },
+    { id: ids.debug, type: "debug", z: ids.tab, name: "tournament subscription payment debug", active: false },
   ];
 }
 
@@ -133,6 +143,55 @@ function runBuilder(workspace) {
   });
 }
 
+function createAtomicBuilderWorkspace() {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "piter-atomic-candidate-")));
+  roots.push(root);
+  const workspace = path.join(root, "workspace");
+  const input = path.join(workspace, "input");
+  fs.mkdirSync(input, { recursive: true, mode: 0o700 });
+  const ids = PITER_ATOMIC_TOPOLOGY_IDS;
+  const targets = [
+    ["c165e43eba668c25", "Build tournament subscription status", "fn_tournament_subscription_status_response.js", 2, "e320c39^"],
+    ["91dded2dc8cfebe4", "Prepare tournament subscription purchase", "fn_tournament_subscription_purchase_prepare.js", 3, "e320c39^"],
+    ["f8679e53edadc39b", "Check tournament subscription limit", "fn_tournament_subscription_purchase_limit.js", 3, "e320c39^"],
+    ["ca022fd14027a5b0", "Resolve tournament subscription confirm", "fn_tournament_subscription_confirm_resolve.js", 3, "d54144ea715516c00da9adcd229ec42ff8553881"],
+    [ids.purchaseRouter, "Route tournament subscription payment", "fn_tournament_subscription_purchase_router.js", 4, "e320c39^"],
+  ];
+  const flow = [
+    { id: ids.tab, type: "tab", label: "LK Tournaments", disabled: false },
+    ...targets.map(([id, name, fileName, outputs, revision]) => ({
+      id,
+      type: "function",
+      z: ids.tab,
+      name,
+      func: execFileSync("git", ["show", `${revision}:${path.posix.join("scripts/nodered_games_nodes", fileName)}`], { cwd: REPO_ROOT, encoding: "utf8" }),
+      outputs,
+      wires: Array.from({ length: outputs }, () => []),
+    })),
+    { id: ids.mongoClient, type: "mongodb4-client", name: "Mongo" },
+    { id: ids.viva, type: "http request", z: ids.tab, name: "Viva" },
+    { id: ids.response, type: "http response", z: ids.tab, name: "Response" },
+    { id: ids.debug, type: "debug", z: ids.tab, name: "tournament subscription payment debug", active: false },
+  ];
+  const sourcePath = path.join(input, "source.flow.json");
+  const metaPath = path.join(input, "source.flow.meta.json");
+  const sourceText = `${JSON.stringify(flow, null, 2)}\n`;
+  fs.writeFileSync(sourcePath, sourceText, { mode: 0o600 });
+  fs.writeFileSync(metaPath, `${JSON.stringify({
+    formatVersion: 1,
+    sourceKind: "live-147",
+    sourceHost: "lk-primary-147",
+    sourceUser: "root",
+    sourcePort: "22",
+    remoteFlowPath: "/root/.node-red/flows.json",
+    localSourcePath: sourcePath,
+    pulledAt: new Date().toISOString(),
+    sourceSha256: sha256(sourceText),
+    nodeCount: flow.length,
+  }, null, 2)}\n`, { mode: 0o600 });
+  return workspace;
+}
+
 test.after(() => {
   for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
 });
@@ -195,9 +254,16 @@ test("atomic topology contract rejects output, wire, ledger, catch, and error-ro
     (flow) => { flow[0].outputs = 4; },
     (flow) => { flow[0].wires[4] = ["wrong"]; },
     (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.atomicRouter).wires[0] = []; },
+    (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.atomicRouter).func = "return null;"; },
     (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.ledgerFind).collection = "wrong"; },
+    (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.ledgerFind).clientNode = "wrong-db"; },
     (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.mongoCatch).scope = []; },
     (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.mongoError).wires = [[], []]; },
+    (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.mongoError).func = "return null;"; },
+    (flow) => { flow.splice(flow.findIndex(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.viva), 1); },
+    (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.response).type = "debug"; },
+    (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.debug).active = true; },
+    (flow) => { flow.find(({ id }) => id === PITER_ATOMIC_TOPOLOGY_IDS.mongoClient).type = "http request"; },
   ]) {
     const flow = validAtomicTopologyFlow();
     mutate(flow);
@@ -219,4 +285,25 @@ test("builder fails closed when every target already matches", () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /All tournament subscription sales functions already match/);
   assert.equal(fs.existsSync(path.join(workspace, "build")), false);
+});
+
+test("exact atomic builder emits a candidate that satisfies the shared topology contract", () => {
+  const workspace = createAtomicBuilderWorkspace();
+  const result = spawnSync(process.execPath, [ATOMIC_BUILDER, "--workspace", workspace], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const candidate = JSON.parse(fs.readFileSync(
+    path.join(workspace, "build-piter-atomic/candidate.flow.json"),
+    "utf8",
+  ));
+  assert.doesNotThrow(() => assertPiterAtomicTopology(candidate));
+  const report = JSON.parse(fs.readFileSync(
+    path.join(workspace, "build-piter-atomic/report.json"),
+    "utf8",
+  ));
+  assert.equal(report.ledgerActivationRequired, true);
+  assert.equal(report.deploymentPerformed, false);
+  assert.equal(report.activationPerformed, false);
 });

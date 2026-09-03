@@ -10,9 +10,13 @@ import {
   REFERRAL_ATTRIBUTION_TARGETS,
   sha256
 } from '../lib/referralAttributionReleaseContract.mjs';
-import { PITER_ATOMIC_TOPOLOGY_IDS } from '../lib/piterAtomicTopologyContract.mjs';
+import {
+  PITER_ATOMIC_ERROR_SOURCE,
+  PITER_ATOMIC_TOPOLOGY_IDS
+} from '../lib/piterAtomicTopologyContract.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const FUNCTION_DIR = path.join(REPO_ROOT, 'scripts/nodered_games_nodes');
 const AUDITOR = path.join(REPO_ROOT, 'scripts/audit_referral_attribution_release_preimages.mjs');
 const BUILDER = path.join(REPO_ROOT, 'scripts/prepare_referral_attribution_release_candidate.mjs');
 const roots = [];
@@ -27,13 +31,20 @@ function vulnerableObjectCredentialBody() {
 
 function atomicTopologyNodes() {
   const ids = PITER_ATOMIC_TOPOLOGY_IDS;
+  const atomicRouterSource = fs.readFileSync(
+    path.join(FUNCTION_DIR, 'fn_tournament_subscription_piter_atomic_router.js'),
+    'utf8'
+  );
   return [
-    { id: ids.atomicRouter, type: 'function', z: ids.tab, name: 'Route atomic Piter subscription sale', func: 'return msg;', outputs: 5, wires: [[ids.ledgerFind], [ids.ledgerUpdate], [ids.saleUpdate], [ids.response], [ids.viva]] },
-    { id: ids.ledgerFind, type: 'mongodb4', z: ids.tab, name: 'Find Piter atomic inventory ledger', collection: 'lk_tournament_subscription_sales', operation: 'find', wires: [[ids.atomicRouter]] },
-    { id: ids.ledgerUpdate, type: 'mongodb4', z: ids.tab, name: 'CAS Piter atomic inventory ledger', collection: 'lk_tournament_subscription_sales', operation: 'updateOne', wires: [[ids.atomicRouter]] },
-    { id: ids.saleUpdate, type: 'mongodb4', z: ids.tab, name: 'Persist Piter atomic sale', collection: 'lk_tournament_subscription_sales', operation: 'updateOne', wires: [[ids.atomicRouter]] },
-    { id: ids.mongoCatch, type: 'catch', z: ids.tab, name: 'Catch Piter atomic Mongo errors', scope: [ids.ledgerFind, ids.ledgerUpdate, ids.saleUpdate], uncaught: false, wires: [[ids.mongoError]] },
-    { id: ids.mongoError, type: 'function', z: ids.tab, name: 'Redact Piter atomic Mongo error', func: 'return msg;', outputs: 2, wires: [[ids.response], [ids.debug]] },
+    { id: ids.atomicRouter, type: 'function', z: ids.tab, name: 'Route atomic Piter subscription sale', func: atomicRouterSource, outputs: 5, timeout: '', noerr: 0, initialize: '', finalize: '', libs: [], x: 2750, y: 2240, wires: [[ids.ledgerFind], [ids.ledgerUpdate], [ids.saleUpdate], [ids.response], [ids.viva]] },
+    { id: ids.ledgerFind, type: 'mongodb4', z: ids.tab, clientNode: ids.mongoClient, mode: 'collection', collection: 'lk_tournament_subscription_sales', operation: 'find', output: 'toArray', maxTimeMS: '5000', handleDocId: false, name: 'Find Piter atomic inventory ledger', x: 3140, y: 2180, wires: [[ids.atomicRouter]] },
+    { id: ids.ledgerUpdate, type: 'mongodb4', z: ids.tab, clientNode: ids.mongoClient, mode: 'collection', collection: 'lk_tournament_subscription_sales', operation: 'updateOne', output: 'toArray', maxTimeMS: '5000', handleDocId: false, name: 'CAS Piter atomic inventory ledger', x: 3140, y: 2220, wires: [[ids.atomicRouter]] },
+    { id: ids.saleUpdate, type: 'mongodb4', z: ids.tab, clientNode: ids.mongoClient, mode: 'collection', collection: 'lk_tournament_subscription_sales', operation: 'updateOne', output: 'toArray', maxTimeMS: '5000', handleDocId: false, name: 'Persist Piter atomic sale', x: 3140, y: 2260, wires: [[ids.atomicRouter]] },
+    { id: ids.mongoCatch, type: 'catch', z: ids.tab, name: 'Catch Piter atomic Mongo errors', scope: [ids.ledgerFind, ids.ledgerUpdate, ids.saleUpdate], uncaught: false, x: 2780, y: 2320, wires: [[ids.mongoError]] },
+    { id: ids.mongoError, type: 'function', z: ids.tab, name: 'Redact Piter atomic Mongo error', func: PITER_ATOMIC_ERROR_SOURCE, outputs: 2, timeout: '', noerr: 0, initialize: '', finalize: '', libs: [], x: 3150, y: 2320, wires: [[ids.response], [ids.debug]] },
+    { id: ids.mongoClient, type: 'mongodb4-client', name: 'Mongo' },
+    { id: ids.viva, type: 'http request', z: ids.tab, name: 'Viva' },
+    { id: ids.response, type: 'http response', z: ids.tab, name: 'Response' },
   ];
 }
 
@@ -268,7 +279,7 @@ test('audit fails closed on active debug, disabled target and unexpected enabled
   const active = createWorkspace({ activeDebug: true });
   const activeResult = runAudit(active.workspace);
   assert.notEqual(activeResult.status, 0);
-  assert.match(activeResult.stderr, /debug guard mismatch/);
+  assert.match(activeResult.stderr, /03cc3ac17f7e154a\.active mismatch|debug guard mismatch/);
 
   const disabled = createWorkspace({ disabledTarget: true });
   const disabledResult = runAudit(disabled.workspace);
