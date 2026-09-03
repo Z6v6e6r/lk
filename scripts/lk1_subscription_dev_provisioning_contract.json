@@ -1,13 +1,26 @@
 {
   "formatVersion": 1,
   "environment": "DEV",
-  "contractState": "BLOCKED_TARGET_NOT_PROVISIONED",
+  "contractState": "STOPPED_BOOTSTRAP_AUTHORIZED",
   "executionAuthorized": false,
+  "bootstrapInstallAllowed": true,
   "candidateBuildAllowed": false,
   "installAllowed": false,
   "serviceStartAllowed": false,
   "ingressAllowed": false,
   "activationAllowed": false,
+  "bootstrapAuthorization": {
+    "authorizationId": "codex-thread-01a06288-94a5-7242-b899-c99031e82816-stopped-bootstrap-20260902",
+    "approvedAt": "2026-09-02T20:09:11Z",
+    "scope": "CREATE_IDENTITY_AND_INSTALL_STOPPED_DEPENDENCIES",
+    "targetHost": "lk-reserve-89",
+    "serviceStartAllowed": false,
+    "enableUnitsAllowed": false,
+    "ingressAllowed": false,
+    "activationAllowed": false,
+    "canaryIdsAllowed": false,
+    "secretsAllowed": false
+  },
   "productionBindingState": "UNBOUND_AFTER_ROUTER_AMENDMENT",
   "evidence": {
     "capturedAt": "2026-09-02T17:12:36Z",

@@ -1,0 +1,70 @@
+{
+  "formatVersion": 1,
+  "stage": "STOPPED_BOOTSTRAP",
+  "environment": "DEV",
+  "authoritativeProvisioning": {
+    "sourcePath": "scripts/lk1_subscription_dev_provisioning_contract.json",
+    "sha256": "223f3756056d153684cebd3bd0f69392ec947eacf45f69c2d107f9a8ee0231ff",
+    "contractState": "STOPPED_BOOTSTRAP_AUTHORIZED",
+    "authorizationId": "codex-thread-01a06288-94a5-7242-b899-c99031e82816-stopped-bootstrap-20260902"
+  },
+  "target": {
+    "sourceHost": "lk-reserve-89",
+    "sourceHostname": "89-108-64-209.cloudvps.regruhosting.ru",
+    "unixUser": "lk1-subscription-dev",
+    "unixGroup": "lk1-subscription-dev",
+    "rootPath": "/srv/lk1-subscription-dev",
+    "serviceStartAuthorizationMarker": "/srv/lk1-subscription-dev/authorization/service-start.approved"
+  },
+  "dependencies": {
+    "node": {
+      "sourcePath": "/usr/bin/node",
+      "destinationPath": "/srv/lk1-subscription-dev/runtime/node/bin/node",
+      "version": "v18.20.8",
+      "sha256": "8f4e416b508c3c149ad62d13c37b83a61f24c40058ed3bb07fe298d9d228cd3a"
+    },
+    "nodeRed": {
+      "sourcePath": "/tmp/lk1-node-red-4.0.9-bootstrap.tgz",
+      "destinationPath": "/srv/lk1-subscription-dev/runtime/node-red",
+      "version": "4.0.9",
+      "archiveSize": 19532194,
+      "archiveSha256": "3e36bf948f2e97b4988bdb55566957bce8992439759f4cd9785ed4523142490c",
+      "packageJsonSha256": "d425a214f90741d4e9ef4b5dab3854d00d653520f6f9f32591ef39573546c302"
+    },
+    "mongo": {
+      "sourcePath": "/opt/phab-subscriptions-dev/runtime/mongodb/bin/mongod",
+      "destinationPath": "/srv/lk1-subscription-dev/runtime/mongodb/bin/mongod",
+      "version": "7.0.24",
+      "size": 184369384,
+      "sha256": "14df921651e73e17384ec9436657a7774c6ca6ebc7a614e0536e4183ed99b825"
+    }
+  },
+  "listeners": [
+    "127.0.0.1:1882",
+    "127.0.0.1:27030",
+    "127.0.0.1:3037",
+    "127.0.0.1:3038",
+    "127.0.0.1:3039"
+  ],
+  "units": [
+    "lk1-subscription-dev-mongo.service",
+    "lk1-subscription-dev-cup.service",
+    "lk1-subscription-dev-provider-fixture.service",
+    "lk1-subscription-dev-identity-fixture.service",
+    "lk1-subscription-dev-nodered.service"
+  ],
+  "prohibitedPaths": [
+    "/root/.node-red",
+    "/opt/phab-subscriptions-dev/mongo",
+    "/etc/nginx"
+  ],
+  "postconditions": {
+    "servicesEnabled": false,
+    "servicesActive": false,
+    "listenersOpen": false,
+    "ingressChanged": false,
+    "activationChanged": false,
+    "canaryIdsInstalled": false,
+    "secretsInstalled": false
+  }
+}
