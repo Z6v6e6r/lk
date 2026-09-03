@@ -294,23 +294,18 @@ not import, deploy, restart Node-RED, or mutate game/provider data.
 
 ## Referral attribution and protected Viva credential candidate
 
-Referral attribution and the bounded subscription credential remediation use a
-two-phase, function-only workflow. The first phase records hashes and safe observations
-from a fresh verified live workspace without copying function bodies into its report:
+The former referral attribution and bounded subscription credential remediation
+used a two-phase, function-only workflow. After the Piter sales graph became atomic,
+both legacy commands remain present only as fail-closed guards:
 
 ```bash
 npm run nodered:referral-attribution:audit -- \
   --workspace /absolute/external/live-workspace
 ```
 
-The command pins nine exact enabled function identities across `LK Tournaments` and
-`LK Referral Subscriptions`, verifies that related debug nodes are disabled, inventories
-every active literal password-grant consumer and whether its credentials are embedded or
-protected by env/global references, and writes a private `0600` audit with
-`approvalState=UNBOUND`. It does not authorize a candidate automatically.
-
-After independent review, only `approvalState`, each `reviewDecision`, and
-`providerRotationDecision` may be bound. The exact reviewed file SHA is then required:
+The audit verifies source provenance first, then stops with
+`UNBOUND_AFTER_PITER_ATOMIC_SALES` without writing review artifacts. The candidate
+command is likewise blocked and writes no output:
 
 ```bash
 npm run nodered:referral-attribution:candidate -- \
@@ -320,13 +315,7 @@ npm run nodered:referral-attribution:candidate -- \
   --output-dir /absolute/external/live-workspace/referral-attribution-candidate
 ```
 
-The builder replaces only the approved `func` fields, preserves node IDs, routes, wires,
-tabs and all unrelated functions, and emits a private candidate/report. The report always
-has `deployAuthorized=false`. If active password-grant consumers remain outside
-the nine-node cohort, the contract must say `ROTATION_REMAINS_BLOCKED`; this candidate
-must not be treated as permission to rotate or revoke the provider credential.
-
-This workflow deliberately has no import/deploy wrapper. Fresh source drift, changed
-target identity, active debug, contract hash drift, unreviewed target, or changed global
-credential inventory fails closed. Provisioning protected runtime configuration,
-reviewed-flow deploy, provider rotation and revocation remain separate R4 gates.
+Do not bind a reviewed SHA or reuse a historical function-only artifact. A future
+release must first rebuild and independently review an exact-graph contract that includes
+the atomic Piter topology. Provisioning protected runtime configuration, reviewed-flow
+deploy, provider rotation and revocation remain separate R4 gates.
