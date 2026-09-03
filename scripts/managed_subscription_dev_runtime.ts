@@ -41,6 +41,7 @@ export interface ManagedSubscriptionDevReservation {
   startsAt: string;
   localDate: string;
   usageUnits: number;
+  dailyUsageUnits: number;
   finalPriceMinor: number | null;
   createdAt: string;
   releasedAt: string | null;
@@ -226,6 +227,25 @@ export const compileDraftPolicy = (
       "DEV ЦУП вернул некорректный фильтр длительностей дневной скидки",
     );
   }
+  const hasUsageDurations = Object.prototype.hasOwnProperty.call(
+    dailyUsagePolicy,
+    "usageDurationsMinutes",
+  );
+  const usageDurationsMinutes = asStringArray(dailyUsagePolicy.usageDurationsMinutes)
+    .map(Number)
+    .filter((duration): duration is 60 | 90 | 120 => [60, 90, 120].includes(duration));
+  if (hasUsageDurations && (
+    !Array.isArray(dailyUsagePolicy.usageDurationsMinutes)
+    || usageDurationsMinutes.length === 0
+    || usageDurationsMinutes.length !== dailyUsagePolicy.usageDurationsMinutes.length
+    || new Set(usageDurationsMinutes).size !== usageDurationsMinutes.length
+  )) {
+    throw new DevRuntimeError(
+      503,
+      "CUP_POLICY_INVALID",
+      "DEV ЦУП вернул некорректный фильтр длительностей дневного лимита",
+    );
+  }
   const createGame = asRecord(draftPolicy.createGame);
   const joinGame = asRecord(draftPolicy.joinGame);
   const policy: ManagedSubscriptionRuntimePolicy = {
@@ -279,6 +299,9 @@ export const compileDraftPolicy = (
       percentage: dailyUsagePolicy.limitExceeded === "PERCENT_DISCOUNT"
         ? asNullableNumber(dailyUsagePolicy.percentage)
         : null,
+      ...(hasUsageDurations ? {
+        usageDurationsMinutes,
+      } : {}),
       ...(hasDiscountDurations ? {
         discountDurationsMinutes: asStringArray(dailyUsagePolicy.discountDurationsMinutes)
           .map(Number)
@@ -345,6 +368,7 @@ export const buildAnnualShadowPolicySource = (stationIds: string[]): PolicySourc
       actions: ["CREATE_GAME", "JOIN_GAME"],
       limitExceeded: "PERCENT_DISCOUNT",
       percentage: 30,
+      usageDurationsMinutes: [60],
       discountDurationsMinutes: [90, 120],
     },
     usageUnitsByDuration: { "60": 1, "90": 1, "120": 1 },
@@ -765,7 +789,7 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
       activeServiceScope: policy.activeServicesLimit.scope,
       dailyBucketLocalDate: bucketDate,
       activeServices: policy.activeServicesLimit.enabled ? active.length : null,
-      dailyUsed: daily.reduce((sum, reservation) => sum + reservation.usageUnits, 0),
+      dailyUsed: daily.reduce((sum, reservation) => sum + reservation.dailyUsageUnits, 0),
       weeklyUsed: active.reduce((sum, reservation) => sum + reservation.usageUnits, 0),
       monthlyUsed: active.reduce((sum, reservation) => sum + reservation.usageUnits, 0),
       futureBookings: active.length,
@@ -854,6 +878,7 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
         startsAt,
         localDate: localDate(startsAt),
         usageUnits: 1,
+        dailyUsageUnits: 1,
         finalPriceMinor: 0,
         createdAt: EVALUATED_AT,
         releasedAt: null,
@@ -891,6 +916,9 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
         bookingWindowDays: context.policySource.policy.bookingWindow.days,
         dailyUsageLimit: context.policySource.policy.dailyUsageLimit,
         dailyUsageActions: clone(context.policySource.policy.dailyUsagePolicy?.actions ?? []),
+        dailyUsageDurationsMinutes: clone(
+          context.policySource.policy.dailyUsagePolicy?.usageDurationsMinutes ?? null,
+        ),
         dailyLimitExceeded: context.policySource.policy.dailyUsagePolicy?.limitExceeded ?? "BLOCK",
         dailyLimitExceededPercentage: context.policySource.policy.dailyUsagePolicy?.percentage ?? null,
       },
@@ -1079,6 +1107,12 @@ export const createManagedSubscriptionDevRuntime = (options: DevRuntimeOptions) 
           startsAt: target.target.startsAt,
           localDate: localDate(target.target.startsAt),
           usageUnits: result.decision.usageUnits || 0,
+          dailyUsageUnits: !policySource?.policy.dailyUsagePolicy?.usageDurationsMinutes
+            || policySource.policy.dailyUsagePolicy.usageDurationsMinutes.includes(
+              target.target.durationMinutes as 60 | 90 | 120,
+            )
+            ? result.decision.usageUnits || 0
+            : 0,
           finalPriceMinor: bookingOutcome.finalPriceMinor,
           createdAt: new Date().toISOString(),
           releasedAt: null,
@@ -1263,6 +1297,21 @@ const parseShadowStationIds = (value: unknown): string[] => (
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean)
+);
+
+const ANNUAL_SHADOW_DEFAULT_STATION_IDS = [
+  "dev-station-home",
+  "dev-station-a",
+  "dev-station-b",
+] as const;
+
+export const resolveAnnualShadowStationIds = (
+  configuredStationIds: readonly string[],
+  annualShadowFixture: boolean,
+): string[] => (
+  configuredStationIds.length > 0 || !annualShadowFixture
+    ? [...configuredStationIds]
+    : [...ANNUAL_SHADOW_DEFAULT_STATION_IDS]
 );
 
 const parseShadowJoinFixtures = (
@@ -1570,7 +1619,10 @@ export const managedSubscriptionDevPlugin = (options: {
   apply: "serve",
   configureServer(server) {
     if (!options.enabled) return;
-    const shadowStationIds = parseShadowStationIds(options.shadowStationIds);
+    const shadowStationIds = resolveAnnualShadowStationIds(
+      parseShadowStationIds(options.shadowStationIds),
+      options.annualShadowFixture === true,
+    );
     const shadowCreateFixtures = parseShadowCreateFixtures(options.shadowCreateFixturesJson);
     const shadowEventFixtures = parseShadowEventFixtures(options.shadowEventFixturesJson);
     const shadowJoinFixtures = parseShadowJoinFixtures(options.shadowJoinFixturesJson);

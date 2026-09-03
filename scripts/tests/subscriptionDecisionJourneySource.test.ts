@@ -80,13 +80,29 @@ test("create and join subscription retries reuse a stable server operation id", 
 });
 
 test("API rejects successful-looking subscription responses without a deterministic decision", () => {
-  assert.match(apiSource, /function hasDeterministicPadelSplitSubscriptionDecision/);
-  assert.match(apiSource, /selectedMode !== "subscription" && selectedMode !== "one_time"/);
-  assert.match(apiSource, /result\.bookingId\?\.trim\(\) \|\| result\.paymentUrl\?\.trim\(\)/);
+  assert.match(apiSource, /hasDeterministicSubscriptionDecision/);
+  assert.match(apiSource, /requestPadelSplitPayment/);
+  assert.match(apiSource, /PADEL_SPLIT_SUBSCRIPTION_TIMEOUT_MS/);
+  assert.match(apiSource, /code: error\.code/);
   assert.equal(
     apiSource.match(/code: "RESPONSE_CONTRACT_INVALID", response: response\.data/g)?.length,
     2,
   );
+  const createRequest = apiSource.slice(
+    apiSource.indexOf("export async function apiCreatePadelSplitGamePayment"),
+    apiSource.indexOf("export async function apiCreatePadelSplitParticipantPayment"),
+  );
+  const joinRequest = apiSource.slice(
+    apiSource.indexOf("export async function apiCreatePadelSplitParticipantPayment"),
+    apiSource.indexOf("export async function apiCancelPadelSplitParticipantBookings"),
+  );
+  for (const requestSource of [createRequest, joinRequest]) {
+    const contractIndex = requestSource.indexOf("hasDeterministicSubscriptionDecision");
+    const settleIndex = requestSource.indexOf("markPadelSplitDecisionSettled");
+    assert.ok(contractIndex >= 0 && settleIndex > contractIndex);
+  }
+  assert.match(apiSource, /response\.error == null[\s\S]*?markAmbiguous/);
+  assert.match(apiSource, /window\.localStorage/);
 });
 
 test("server full-price fallback cannot be converted into a subscription booking by the client", () => {

@@ -526,6 +526,7 @@ const startSubscriptionBookingGateway = (ctx) => {
       code: "SUBSCRIPTION_BOOKING_OPERATION_ID_REQUIRED",
     });
   }
+  ctx.operationId = operationId;
 
   msg._splitCtx = ctx;
   msg._subscriptionBooking = {
@@ -1120,11 +1121,15 @@ const buildSplitPaymentResponse = (ctx, primaryPayload, fallbackPayload) => {
   const paymentUrl = extractPaymentUrl(primaryPayload) || extractPaymentUrl(fallbackPayload);
   const toPayMinor = pickTransactionToPayMinor(primaryPayload, fallbackPayload, ctx.shareAmountMinor);
   const deadlineAt = pickTransactionDeadlineAt(ctx, primaryPayload, fallbackPayload);
+  const settlementState = toPayMinor > 0 ? "PAYMENT_REQUIRED" : "CONFIRMED";
 
   return {
     ok: true,
     mode: ctx.action,
+    gameId: toStr(ctx.gameId) || null,
     paymentRef: ctx.paymentRef,
+    operationId: toStr(ctx.operationId) || toStr(ctx.paymentRef),
+    settlementState,
     exerciseId: ctx.exerciseId,
     bookingId: ctx.bookingId,
     productId: ctx.productId,

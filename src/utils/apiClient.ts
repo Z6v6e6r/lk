@@ -36,6 +36,13 @@ import {
 import { isLkIdleRequestPausedError } from "./lkIdleDataGuard";
 import { isGameExerciseIdMissingGuard } from "./paymentSyncBookingResolution";
 import { shouldBlockLocalProductionTournamentHistoryRequest } from "./tournamentHistoryRequestPolicy";
+import { hasDeterministicSubscriptionDecision } from "./subscriptionDecisionContract.ts";
+import { isRequestTimeoutError, runWithAbortTimeout } from "./requestTimeout.ts";
+import { SplitPaymentAmbiguityGuard } from "./splitPaymentAmbiguityGuard.ts";
+import {
+  buildPadelAvailableGamesQuery,
+  type PadelAvailableGamesQueryOptions,
+} from "./gameAtlasAvailableGamesQuery.ts";
 
 const DEFAULT_GAMES_MASTER_SERVICE_ID =
   GAMES_MASTER_SERVICE_ID || "2f4155ad-7bc0-4a15-a12c-da7fce15c37a";
@@ -3628,6 +3635,7 @@ export interface PadelAvailableGamesResponse {
   hasMore: boolean;
   limit: number;
   offset: number;
+  consumedCount: number;
 }
 
 export interface UpdateProfileData {
@@ -3918,6 +3926,9 @@ export interface PadelSplitPaymentModeOption {
 
 export interface PadelSplitPaymentResult {
   paymentRef: string | null;
+  operationId?: string | null;
+  gameId?: string | null;
+  settlementState?: string | null;
   paymentUrl: string | null;
   toPay: number;
   toPayMinor: number | null;
@@ -6490,6 +6501,23 @@ export function extractPadelGameRecordList(payload: unknown): PadelGameRecord[] 
   return Array.from(bucket.values());
 }
 
+function extractPadelGameRecordPageItemCount(payload: unknown): number {
+  if (Array.isArray(payload)) return payload.length;
+  if (!isRecord(payload)) return 0;
+
+  for (const key of ["games", "items", "records", "content", "list"]) {
+    if (Array.isArray(payload[key])) return payload[key].length;
+  }
+  for (const key of ["data", "result", "payload"]) {
+    const nested = payload[key];
+    if (Array.isArray(nested) || isRecord(nested)) {
+      const count = extractPadelGameRecordPageItemCount(nested);
+      if (count > 0) return count;
+    }
+  }
+  return 0;
+}
+
 function extractPadelGameRecordListTotal(payload: unknown): number | null {
   if (!isRecord(payload)) return null;
   return pickNumber(payload, ["total", "totalElements", "count", "gamesCount"]);
@@ -7024,44 +7052,11 @@ export async function apiFetchPadelGamesByPhone(
   };
 }
 
-export async function apiFetchPadelAvailableGames(options: {
-  limit?: number;
-  offset?: number;
-  date?: string | null;
-  stationId?: string | null;
-  stationName?: string | null;
-} = {}) {
+export async function apiFetchPadelAvailableGames(options: PadelAvailableGamesQueryOptions = {}) {
   const baseUrl = getServ2Origin() || "";
-  const limit = Number.isFinite(options.limit)
-    ? Math.max(1, Math.min(50, Math.floor(options.limit as number)))
-    : 12;
-  const offset = Number.isFinite(options.offset)
-    ? Math.max(0, Math.floor(options.offset as number))
-    : 0;
-  const query = new URLSearchParams({
-    public: "true",
-    available: "true",
-    limit: String(limit),
-    offset: String(offset),
+  const { query, limit, offset } = buildPadelAvailableGamesQuery(options, {
+    isDevReleaseChannel: IS_DEV_RELEASE_CHANNEL,
   });
-  const stationId = options.stationId?.trim() || "";
-  const stationName = options.stationName?.trim() || "";
-  const date = options.date?.trim() || "";
-
-  if (date) {
-    query.set("date", date);
-  }
-  if (stationId) {
-    query.set("stationId", stationId);
-    query.set("studioId", stationId);
-  }
-  if (stationName) {
-    query.set("stationName", stationName);
-    query.set("studioName", stationName);
-  }
-  if (!IS_DEV_RELEASE_CHANNEL) {
-    query.set("_ts", String(Date.now()));
-  }
 
   const endpoint = `/lk/games?${query.toString()}`;
   const response = await request<unknown>(endpoint, {
@@ -7079,6 +7074,7 @@ export async function apiFetchPadelAvailableGames(options: {
   });
 
   const games = extractPadelGameRecordList(response.data);
+  const consumedCount = extractPadelGameRecordPageItemCount(response.data);
   const total = extractPadelGameRecordListTotal(response.data) ?? games.length + offset;
   const hasMore = extractPadelGameRecordListHasMore(response.data) ?? (offset + games.length < total);
 
@@ -7089,6 +7085,7 @@ export async function apiFetchPadelAvailableGames(options: {
       hasMore,
       limit,
       offset,
+      consumedCount,
     } satisfies PadelAvailableGamesResponse,
     error: response.error,
     status: response.status,
@@ -8671,6 +8668,9 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
 
   return {
     paymentRef: pickString(data, ["paymentRef", "ref"]) ?? null,
+    operationId: pickString(data, ["operationId"]) ?? null,
+    gameId: pickString(data, ["gameId"]) ?? null,
+    settlementState: pickString(data, ["settlementState"]) ?? null,
     paymentUrl: extractPaymentUrl(data),
     toPay,
     toPayMinor,
@@ -8702,27 +8702,14 @@ function normalizePadelSplitPaymentResult(payload: unknown): PadelSplitPaymentRe
   };
 }
 
-function hasDeterministicPadelSplitSubscriptionDecision(
-  result: PadelSplitPaymentResult,
-  requestedPaymentMode: PadelSplitPaymentParams["paymentMode"],
-): boolean {
-  if (requestedPaymentMode !== "subscription") return true;
-  const selectedMode = String(result.selectedPaymentMode || "").trim().toLowerCase();
-  if (selectedMode !== "subscription" && selectedMode !== "one_time") return false;
-  if (!Number.isFinite(result.toPay) || result.toPay < 0) return false;
-  if (result.toPayMinor != null && (!Number.isSafeInteger(result.toPayMinor) || result.toPayMinor < 0)) {
-    return false;
-  }
-  return Boolean(result.bookingId?.trim() || result.paymentUrl?.trim());
-}
-
 function resolvePadelSplitPendingError(payload: unknown, status: ApiStatus): ApiError | null {
   if (!isRecord(payload)) return null;
-  const state = String(payload.state || "").trim().toUpperCase();
+  const data = isRecord(payload.data) ? payload.data : payload;
+  const state = String(data.state || "").trim().toUpperCase();
   if (state !== "PENDING_CONFIRMATION") return null;
   return {
     status,
-    message: pickString(payload, ["message"]) || "Запись ожидает подтверждения Viva. Повторите проверку.",
+    message: pickString(data, ["message"]) || "Запись ожидает подтверждения Viva. Повторите проверку.",
     raw: payload,
   };
 }
@@ -8807,14 +8794,168 @@ function buildPadelSplitRequest(
   params: PadelSplitPaymentParams,
   gameId?: string | null,
 ) {
+  const operationId = params.paymentMode === "subscription"
+    ? buildPadelSplitIdempotencyKey(scope, params, gameId)
+    : String(params.paymentRef || "").trim();
   if (params.paymentMode !== "subscription") {
-    return { path, options: { auth: true as const } };
+    return { path, options: { auth: true as const }, operationId };
   }
-  const operationId = buildPadelSplitIdempotencyKey(scope, params, gameId);
   return {
     path: `${path}?operationId=${encodeURIComponent(operationId)}`,
     options: { auth: true as const },
+    operationId,
   };
+}
+
+const PADEL_SPLIT_SUBSCRIPTION_TIMEOUT_MS = 10_000;
+const PADEL_SPLIT_AMBIGUOUS_STATES = new Set([
+  "PENDING_CONFIRMATION",
+  "SUBSCRIPTION_ENTITLEMENT_CONFIRMATION_PENDING",
+  "SUBSCRIPTION_ENTITLEMENT_CONFIRM_PENDING",
+  "SUBSCRIPTION_BOOKING_CONFIRMED_RECONCILIATION_REQUIRED",
+  "SUBSCRIPTION_ENTITLEMENT_CONFIRMED_RECONCILIATION_REQUIRED",
+]);
+let browserPadelSplitAmbiguityGuard: SplitPaymentAmbiguityGuard | null = null;
+
+function getBrowserPadelSplitAmbiguityGuard(): SplitPaymentAmbiguityGuard | null {
+  if (typeof window === "undefined") return null;
+  if (!browserPadelSplitAmbiguityGuard) {
+    let storage: Storage | null = null;
+    try {
+      storage = window.localStorage;
+    } catch {
+      storage = null;
+    }
+    browserPadelSplitAmbiguityGuard = new SplitPaymentAmbiguityGuard(storage);
+  }
+  return browserPadelSplitAmbiguityGuard;
+}
+
+function hashPadelSplitAmbiguityKey(value: string): string {
+  const hashPart = (source: string) => {
+    let hash = 2166136261;
+    for (let index = 0; index < source.length; index += 1) {
+      hash ^= source.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
+  };
+  return `${hashPart(value)}${hashPart([...value].reverse().join(""))}`;
+}
+
+function buildPadelSplitAmbiguityScope(
+  splitRequest: ReturnType<typeof buildPadelSplitRequest>,
+  params: PadelSplitPaymentParams,
+): string {
+  return hashPadelSplitAmbiguityKey([
+    splitRequest.path.split("?", 1)[0],
+    params.clientId,
+    params.clientPhone,
+    params.exerciseId,
+    params.date,
+    params.fromTime,
+    params.toTime,
+    params.roomId,
+  ].map((value) => String(value ?? "").trim()).join("|"));
+}
+
+function buildPadelSplitAmbiguityIntent(
+  splitRequest: ReturnType<typeof buildPadelSplitRequest>,
+  params: PadelSplitPaymentParams,
+): string {
+  return hashPadelSplitAmbiguityKey([
+    splitRequest.path,
+    params.paymentMode,
+    params.clientSubscriptionId,
+    params.spot,
+  ].map((value) => String(value ?? "").trim()).join("|"));
+}
+
+function markPadelSplitDecisionSettled(
+  splitRequest: ReturnType<typeof buildPadelSplitRequest>,
+  params: PadelSplitPaymentParams,
+): void {
+  getBrowserPadelSplitAmbiguityGuard()?.markSettled(
+    buildPadelSplitAmbiguityScope(splitRequest, params),
+    buildPadelSplitAmbiguityIntent(splitRequest, params),
+  );
+}
+
+function hasPadelSplitAmbiguousState(value: unknown, seen = new Set<unknown>()): boolean {
+  if (!value || seen.has(value)) return false;
+  if (typeof value === "string") {
+    return PADEL_SPLIT_AMBIGUOUS_STATES.has(value.trim().toUpperCase());
+  }
+  if (typeof value !== "object") return false;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((item) => hasPadelSplitAmbiguousState(item, seen));
+  }
+  return ["code", "state", "reasonCode", "details", "raw", "error", "data"]
+    .some((key) => hasPadelSplitAmbiguousState((value as Record<string, unknown>)[key], seen));
+}
+
+async function requestPadelSplitPayment(
+  splitRequest: ReturnType<typeof buildPadelSplitRequest>,
+  baseUrl: string,
+  params: PadelSplitPaymentParams,
+): Promise<ApiResult<unknown>> {
+  const ambiguityGuard = getBrowserPadelSplitAmbiguityGuard();
+  const ambiguityScope = buildPadelSplitAmbiguityScope(splitRequest, params);
+  const ambiguityIntent = buildPadelSplitAmbiguityIntent(splitRequest, params);
+  if (ambiguityGuard && !ambiguityGuard.canStart(ambiguityScope, ambiguityIntent)) {
+    return {
+      data: null,
+      error: {
+        status: 409,
+        message: "Предыдущая попытка ещё не подтверждена. Повторите тот же запрос.",
+        raw: { code: "SUBSCRIPTION_AMBIGUOUS_INTENT_LOCKED" },
+      },
+      status: 409,
+    };
+  }
+
+  const requestOptions: RequestOptions = {
+    method: "POST",
+    baseUrl,
+    ...splitRequest.options,
+    retries: 0,
+    body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
+  };
+
+  if (params.paymentMode !== "subscription") {
+    const response = await request<unknown>(splitRequest.path, requestOptions);
+    ambiguityGuard?.markSettled(ambiguityScope, ambiguityIntent);
+    return response;
+  }
+
+  try {
+    const response = await runWithAbortTimeout(
+      PADEL_SPLIT_SUBSCRIPTION_TIMEOUT_MS,
+      (signal) => request<unknown>(splitRequest.path, { ...requestOptions, signal }),
+    );
+    const ambiguous = hasPadelSplitAmbiguousState(response.data)
+      || hasPadelSplitAmbiguousState(response.error?.raw)
+      || (response.error != null && ((response.status ?? 0) >= 500 || response.status === null));
+    if (ambiguous || response.error == null) {
+      ambiguityGuard?.markAmbiguous(ambiguityScope, ambiguityIntent);
+    } else {
+      ambiguityGuard?.markSettled(ambiguityScope, ambiguityIntent);
+    }
+    return response;
+  } catch (error) {
+    ambiguityGuard?.markAmbiguous(ambiguityScope, ambiguityIntent);
+    if (!isRequestTimeoutError(error)) throw error;
+    return {
+      data: null,
+      error: {
+        status: null,
+        message: "Не удалось подтвердить условия подписки: превышено время ожидания",
+        raw: { code: error.code, timeoutMs: error.timeoutMs },
+      },
+      status: null,
+    };
+  }
 }
 
 export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentParams) {
@@ -8825,8 +8966,9 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
   const fromTime = params.fromTime?.trim() || null;
   const toTime = params.toTime?.trim() || null;
   const clientPhone = params.clientPhone?.trim() || null;
+  const paymentRef = params.paymentRef?.trim() || null;
 
-  if (!studioId || !roomId || !fromDate || !fromTime || !toTime || !clientPhone) {
+  if (!studioId || !roomId || !fromDate || !fromTime || !toTime || !clientPhone || !paymentRef) {
     return {
       data: null as PadelSplitPaymentResult | null,
       error: {
@@ -8842,13 +8984,7 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
     "create",
     params,
   );
-  const response = await request<unknown>(splitRequest.path, {
-    method: "POST",
-    baseUrl,
-    ...splitRequest.options,
-    retries: 0,
-    body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
-  });
+  const response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
 
   if (response.error) {
     return {
@@ -8879,7 +9015,11 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
       status: response.status,
     };
   }
-  if (!hasDeterministicPadelSplitSubscriptionDecision(parsed, params.paymentMode)) {
+  if (!hasDeterministicSubscriptionDecision(parsed, params.paymentMode, {
+    action: "create",
+    paymentRef,
+    operationId: splitRequest.operationId,
+  })) {
     return {
       data: null as PadelSplitPaymentResult | null,
       error: {
@@ -8889,6 +9029,9 @@ export async function apiCreatePadelSplitGamePayment(params: PadelSplitPaymentPa
       },
       status: response.status,
     };
+  }
+  if (params.paymentMode === "subscription") {
+    markPadelSplitDecisionSettled(splitRequest, params);
   }
 
   return {
@@ -8907,8 +9050,9 @@ export async function apiCreatePadelSplitParticipantPayment(
   const exerciseId = params.exerciseId?.trim() || null;
   const studioId = params.studioId?.trim() || null;
   const clientPhone = params.clientPhone?.trim() || null;
+  const paymentRef = params.paymentRef?.trim() || null;
 
-  if (!normalizedGameId || !exerciseId || !studioId || !clientPhone) {
+  if (!normalizedGameId || !exerciseId || !studioId || !clientPhone || !paymentRef) {
     return {
       data: null as PadelSplitPaymentResult | null,
       error: {
@@ -8925,16 +9069,7 @@ export async function apiCreatePadelSplitParticipantPayment(
     params,
     normalizedGameId,
   );
-  const response = await request<unknown>(
-    splitRequest.path,
-    {
-      method: "POST",
-      baseUrl,
-      ...splitRequest.options,
-      retries: 0,
-      body: JSON.stringify(buildPadelSplitPaymentPayload(params)),
-    },
-  );
+  const response = await requestPadelSplitPayment(splitRequest, baseUrl, params);
 
   if (response.error) {
     return {
@@ -8965,7 +9100,13 @@ export async function apiCreatePadelSplitParticipantPayment(
       status: response.status,
     };
   }
-  if (!hasDeterministicPadelSplitSubscriptionDecision(parsed, params.paymentMode)) {
+  if (!hasDeterministicSubscriptionDecision(parsed, params.paymentMode, {
+    action: "join",
+    paymentRef,
+    operationId: splitRequest.operationId,
+    exerciseId,
+    gameId: normalizedGameId,
+  })) {
     return {
       data: null as PadelSplitPaymentResult | null,
       error: {
@@ -8975,6 +9116,9 @@ export async function apiCreatePadelSplitParticipantPayment(
       },
       status: response.status,
     };
+  }
+  if (params.paymentMode === "subscription") {
+    markPadelSplitDecisionSettled(splitRequest, params);
   }
 
   return {

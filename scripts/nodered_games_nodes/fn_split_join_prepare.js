@@ -612,7 +612,9 @@ if (paymentMode === "one_time" && (!roomId || !date)) {
 msg._splitCtx = {
   action: "join",
   step: "token",
+  gameId: toStr(msg._splitJoinGameId),
   paymentRef,
+  operationId: toStr(msg.req?.query?.operationId) || paymentRef,
   date,
   fromTime: toStr(booking.timeFrom),
   toTime: toStr(booking.timeTo),
