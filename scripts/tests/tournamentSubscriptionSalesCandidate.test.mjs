@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { LK1_ENFORCEMENT_CONTRACT } from "../prepare_lk1_subscription_enforcement_candidate.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const BUILDER = path.join(REPO_ROOT, "scripts/prepare_tournament_subscription_sales_candidate.mjs");
@@ -110,83 +111,47 @@ test.after(() => {
   for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
 });
 
-test("builder accepts a partially synchronized flow and changes only the stale router", () => {
-  const { workspace, flow } = createWorkspace({ staleRouter: true });
-  const result = runBuilder(workspace);
-  assert.equal(result.status, 0, result.stderr);
-
-  const build = path.join(workspace, "build");
-  const candidate = JSON.parse(fs.readFileSync(
-    path.join(build, "tournament-subscription-sales.candidate.json"),
-    "utf8",
-  ));
-  const report = JSON.parse(fs.readFileSync(
-    path.join(build, "tournament-subscription-sales.report.json"),
-    "utf8",
-  ));
-  assert.equal(report.targetNodeCount, 8);
-  assert.equal(report.changedNodeCount, 1);
-  assert.deepEqual(report.changedNodes.map(({ name }) => name), ["Route tournament subscription payment"]);
-
-  const changed = candidate.flatMap((node, index) => (
-    JSON.stringify(node) === JSON.stringify(flow[index]) ? [] : [{ id: node.id, fields: Object.keys(node).filter(
-      (field) => JSON.stringify(node[field]) !== JSON.stringify(flow[index]?.[field]),
-    ) }]
-  ));
-  assert.deepEqual(changed, [{ id: "566ae4b886c37ae5", fields: ["func"] }]);
-  assert.match(candidate.find(({ id }) => id === "566ae4b886c37ae5").func, /REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE/);
-  assert.equal(candidate.find(({ id }) => id === "unrelated").func, "return msg;");
+test("legacy sales builder stays independently quarantined for every input", () => {
+  assert.equal(LK1_ENFORCEMENT_CONTRACT.candidateBindingState, "UNBOUND_AFTER_ROUTER_AMENDMENT");
+  assert.equal(LK1_ENFORCEMENT_CONTRACT.candidateSha256, null);
+  const builderSource = fs.readFileSync(BUILDER, "utf8");
+  assert.match(builderSource, /QUARANTINED_PITER_ATOMIC_TOPOLOGY_NOT_COMPOSED/);
+  assert.doesNotMatch(builderSource, /lk1_subscription_enforcement_candidate_binding\.json/);
+  for (const options of [
+    {},
+    { staleRouter: true },
+    { approvedNodeDrift: true },
+    { duplicateLegacy: true, staleRouter: true },
+    { staleRouter: true, unknownDuplicate: true },
+  ]) {
+    const { workspace } = createWorkspace(options);
+    const result = runBuilder(workspace);
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /Tournament subscription sales candidate builder is QUARANTINED_PITER_ATOMIC_TOPOLOGY_NOT_COMPOSED/,
+    );
+    assert.equal(fs.existsSync(path.join(workspace, "build")), false);
+  }
 });
 
-test("builder fails closed on source drift inside an approved identity", () => {
-  const { workspace } = createWorkspace({ approvedNodeDrift: true });
-  const result = runBuilder(workspace);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /Tournament subscription target preimage mismatch: ab1e202650000002/);
-  assert.equal(fs.existsSync(path.join(workspace, "build")), false);
-});
-
-test("builder accepts only the approved enabled legacy sales identities", () => {
-  const { workspace } = createWorkspace({ duplicateLegacy: true, staleRouter: true });
-  const result = runBuilder(workspace);
-  assert.equal(result.status, 0, result.stderr);
-
-  const build = path.join(workspace, "build");
-  const candidate = JSON.parse(fs.readFileSync(
-    path.join(build, "tournament-subscription-sales.candidate.json"),
-    "utf8",
+test("legacy sales quarantine records exact Piter amendments without advancing frozen candidate pins", () => {
+  const amendments = new Map(LK1_ENFORCEMENT_CONTRACT.unboundSourceAmendments.map(
+    (amendment) => [amendment.id, amendment],
   ));
-  const report = JSON.parse(fs.readFileSync(
-    path.join(build, "tournament-subscription-sales.report.json"),
-    "utf8",
-  ));
-  assert.equal(report.targetNodeCount, 13);
-  assert.equal(report.changedNodeCount, 1);
-  assert.deepEqual(report.changedNodes.map(({ id, tabId }) => ({ id, tabId })), [{
-    id: "566ae4b886c37ae5",
-    tabId: "f9575c8726e29196",
-  }]);
-  const legacyFunctions = candidate.filter((node) => node.z === "8ccb70ac6befff79" && node.type === "function");
-  assert.equal(legacyFunctions.length, 5);
-  assert.ok(legacyFunctions.every((node) => node.func !== "return msg;"));
-  assert.match(
-    legacyFunctions.find((node) => node.name === "Prepare tournament subscription purchase").func,
-    /MANAGED_SUBSCRIPTION_SALE_READINESS_UNAVAILABLE/,
-  );
-});
-
-test("builder fails closed on an unknown enabled same-name target", () => {
-  const { workspace } = createWorkspace({ staleRouter: true, unknownDuplicate: true });
-  const result = runBuilder(workspace);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /Unexpected enabled tournament subscription target ids: unknown-target/);
-  assert.equal(fs.existsSync(path.join(workspace, "build")), false);
-});
-
-test("builder fails closed when every target already matches", () => {
-  const { workspace } = createWorkspace();
-  const result = runBuilder(workspace);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /All tournament subscription sales functions already match/);
-  assert.equal(fs.existsSync(path.join(workspace, "build")), false);
+  const frozenCandidateSha256ById = new Map([
+    ["c165e43eba668c25", "f7e9d81975e63a090ad47abe54c07ed9db265fccf114ab7758f3b102ed0007e0"],
+    ["91dded2dc8cfebe4", "2f15053bdf2c8abd770b7bc65cd59d6fdcfc2c08f26c2ee78a95bc309dfe5ca3"],
+    ["f8679e53edadc39b", "75d070b427ca9097cd258a84daca7b2c3998f545415b69ef4968ccdce2aaeef8"],
+  ]);
+  for (const [id, frozenCandidateSha256] of frozenCandidateSha256ById) {
+    const target = LK1_ENFORCEMENT_CONTRACT.targets.find((item) => item.id === id);
+    const amendment = amendments.get(id);
+    assert.ok(target);
+    assert.ok(amendment);
+    assert.equal(target.candidateSha256, frozenCandidateSha256);
+    assert.equal(amendment.reason, "PITER_ATOMIC_SALES_NOT_COMPOSED");
+    assert.equal(sha256(fs.readFileSync(target.sourceFile)), amendment.sourceSha256);
+    assert.notEqual(amendment.sourceSha256, frozenCandidateSha256);
+  }
 });

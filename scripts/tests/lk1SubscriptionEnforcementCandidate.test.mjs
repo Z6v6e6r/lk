@@ -222,25 +222,43 @@ test("unified LK1 candidate tolerates disabled duplicates but rejects enabled se
   );
 });
 
-test("unified LK1 contract keeps the amended router fail-closed until PROD is rebound", () => {
+test("unified LK1 contract pins unbound router and Piter amendments until PROD is fully recomposed", () => {
   assert.equal(
     LK1_ENFORCEMENT_CONTRACT.sourceSha256,
     "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
   );
   assert.equal(LK1_ENFORCEMENT_CONTRACT.targets.length, 5);
-  const amendedRouter = LK1_ENFORCEMENT_CONTRACT.targets.find(
-    ({ id }) => id === "lk_subscription_booking_router_20260804",
+  const amendments = new Map(LK1_ENFORCEMENT_CONTRACT.unboundSourceAmendments.map(
+    (amendment) => [amendment.id, amendment],
+  ));
+  assert.deepEqual(
+    [...amendments.keys()].sort(),
+    [
+      "91dded2dc8cfebe4",
+      "c165e43eba668c25",
+      "f8679e53edadc39b",
+      "lk_subscription_booking_router_20260804",
+    ],
   );
-  assert.ok(amendedRouter);
-  assert.notEqual(
-    sha256(fs.readFileSync(amendedRouter.sourceFile)),
-    amendedRouter.candidateSha256,
-    "the unreviewed PROD router pin must not silently advance with the DEV amendment",
-  );
-  for (const target of LK1_ENFORCEMENT_CONTRACT.targets.filter(
-    ({ id }) => id !== amendedRouter.id,
-  )) {
-    assert.equal(sha256(fs.readFileSync(target.sourceFile)), target.candidateSha256, target.id);
+  for (const target of LK1_ENFORCEMENT_CONTRACT.targets) {
+    const actualSourceSha256 = sha256(fs.readFileSync(target.sourceFile));
+    const amendment = amendments.get(target.id);
+    if (!amendment) {
+      assert.equal(actualSourceSha256, target.candidateSha256, target.id);
+      continue;
+    }
+    assert.match(amendment.sourceSha256, /^[a-f0-9]{64}$/);
+    assert.equal(actualSourceSha256, amendment.sourceSha256, target.id);
+    assert.notEqual(
+      amendment.sourceSha256,
+      target.candidateSha256,
+      `${target.id} must stay distinct from the frozen candidate until full recomposition`,
+    );
+  }
+  assert.equal(amendments.get("lk_subscription_booking_router_20260804").reason,
+    "DEV_ROUTER_AMENDMENT_NOT_REBOUND");
+  for (const id of ["91dded2dc8cfebe4", "c165e43eba668c25", "f8679e53edadc39b"]) {
+    assert.equal(amendments.get(id).reason, "PITER_ATOMIC_SALES_NOT_COMPOSED");
   }
   assert.equal(LK1_ENFORCEMENT_CONTRACT.composedSources.length, 8);
   for (const source of LK1_ENFORCEMENT_CONTRACT.composedSources) {

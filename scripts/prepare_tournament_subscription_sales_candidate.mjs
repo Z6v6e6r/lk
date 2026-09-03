@@ -8,6 +8,7 @@ import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FUNCTION_DIR = path.join(ROOT, "scripts/nodered_games_nodes");
+const LEGACY_SALES_BUILDER_STATE = "QUARANTINED_PITER_ATOMIC_TOPOLOGY_NOT_COMPOSED";
 const TARGET_TAB_LABEL = "LK Tournaments";
 const TARGETS = [
   ["519b6a6ca208e281", "f9575c8726e29196", "LK Tournaments", "Prepare tournament subscription counter refresh", "fn_tournament_subscription_counter_refresh_prepare.js"],
@@ -55,6 +56,8 @@ const fail = (message) => {
 };
 
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
+
+fail(`Tournament subscription sales candidate builder is ${LEGACY_SALES_BUILDER_STATE}`);
 
 const parseWorkspace = (argv) => {
   if (argv.length !== 2 || argv[0] !== "--workspace") {
