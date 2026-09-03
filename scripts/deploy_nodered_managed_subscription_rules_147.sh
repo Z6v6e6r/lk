@@ -83,12 +83,12 @@ node scripts/nodered_reviewed_flow_deploy/prepare_exact_graph_contract.mjs \
   --candidate "$candidate_flow" \
   --output "$contract_file" \
   --deployment-id "$deployment_id" \
+  --allow-change lk_subscription_booking_prepare_20260804:func \
   --allow-change lk_subscription_booking_http_20260804:headers,requestTimeout \
   --allow-change lk_subscription_booking_router_20260804:func,outputs,wires \
+  --allow-change lk_subscription_managed_policy_20260820:func \
   --allow-change lk_subscription_booking_finalize_20260804:func \
-  --allow-change lk_subscription_booking_mongo_error_20260804:func \
-  --allow-add lk_subscription_managed_policy_20260820 \
-  --allow-add lk_subscription_managed_policy_blocked_20260820 >/dev/null
+  --allow-change lk_subscription_booking_mongo_error_20260804:func >/dev/null
 
 source_sha="$(node -e 'const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(value.sourceSha256)' "$contract_file")"
 candidate_sha="$(node -e 'const value=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(value.candidateSha256)' "$contract_file")"
@@ -115,8 +115,8 @@ node -e '
     || value.candidateSha256 !== process.argv[3]
     || String(value.nodeCount) !== process.argv[4]
     || String(value.candidateNodeCount) !== process.argv[5]
-    || value.changedNodeCount !== 4
-    || value.addedNodeCount !== 2
+    || value.changedNodeCount !== 6
+    || value.addedNodeCount !== 0
   ) process.exit(1);
 ' "$preflight_result" "$source_sha" "$candidate_sha" "$source_node_count" "$candidate_node_count"
 

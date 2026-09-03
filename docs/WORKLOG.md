@@ -1684,6 +1684,7 @@
 - Tightened DEV candidate custody to the exact POST/OPTIONS routes, response edges,
   global function/catch/debug inventory and approved sinks. Function lifecycle hooks
   must be empty, the catch scope and target are exact, and every executable source
-  function is bound to its frozen whole-node preimage; the deploy wrapper allowlist now
-  includes the exact four nodes that differ after the pre-pinned split router is
-  validated rather than falsely counting that unchanged router as a deploy mutation.
+  function is bound to its frozen whole-node preimage. The production deploy wrapper
+  now matches the current pre-pinned topology: six exact existing-node changes, no
+  fictional policy-node additions and no unchanged split-router mutation; an executable
+  patcher-to-exact-graph regression guards that contract.
