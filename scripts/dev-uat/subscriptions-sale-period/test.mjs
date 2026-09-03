@@ -245,6 +245,16 @@ test("URL classification requires an exact approved origin and rejects lookalike
   assert.equal(classifyDevUrl("https://preview.example.attacker.invalid", { allowedDevOrigins: ["https://preview.example"] }).code, "URL_DEV_IDENTITY_UNPROVEN");
 });
 
+test("production host identities remain denied across ports and trailing-dot variants", () => {
+  for (const origin of [
+    "https://padlhub.su:444",
+    "https://padlhub.su.",
+    "https://cup.padlhub.su:444",
+  ]) {
+    assert.equal(classifyDevUrl(origin, { allowedDevOrigins: [origin] }).code, "URL_PRODUCTION_ORIGIN");
+  }
+});
+
 test("custom production origins extend the immutable built-in denylist", () => {
   const loaded = loadInputs({
     DEV_LK_BASE_URL: "https://lk.dev.example",
@@ -726,20 +736,27 @@ test("failed DEV metadata stops before authenticated user reads", async () => {
   assert.equal(fixture.calls.every((call) => !call.headers.Authorization && !call.headers["X-Subscriptions-Integration-Token"]), true);
 });
 
-test("all modes reject production targets before network or secret transmission", async () => {
-  for (const mode of ["preflight", "observe-before", "observe-after"]) {
-    let calls = 0;
-    const configured = inputs({
-      DEV_CUP_BASE_URL: "https://cup.padlhub.su",
-      DEV_UAT_RUN_ID: "20260902T120000000Z",
-      DEV_UAT_EXPECTED_DELTA: { A: {}, B: {} },
-    });
-    await assert.rejects(executeMode({
-      mode,
-      inputs: configured,
-      client: new ReadOnlyHttpClient({ fetchImpl: async () => { calls += 1; throw new Error("must not call"); } }),
-    }), (error) => error.code === "URL_PRODUCTION_ORIGIN");
-    assert.equal(calls, 0);
+test("all modes reject production target variants before network or secret transmission", async () => {
+  for (const productionOrigin of [
+    "https://cup.padlhub.su",
+    "https://cup.padlhub.su:444",
+    "https://cup.padlhub.su.",
+  ]) {
+    for (const mode of ["preflight", "observe-before", "observe-after"]) {
+      let calls = 0;
+      const configured = inputs({
+        DEV_CUP_BASE_URL: productionOrigin,
+        DEV_UAT_ALLOWED_DEV_ORIGINS_JSON: JSON.stringify(["https://lk.dev.example", productionOrigin]),
+        DEV_UAT_RUN_ID: "20260902T120000000Z",
+        DEV_UAT_EXPECTED_DELTA: { A: {}, B: {} },
+      });
+      await assert.rejects(executeMode({
+        mode,
+        inputs: configured,
+        client: new ReadOnlyHttpClient({ fetchImpl: async () => { calls += 1; throw new Error("must not call"); } }),
+      }), (error) => error.code === "URL_PRODUCTION_ORIGIN");
+      assert.equal(calls, 0);
+    }
   }
 });
 

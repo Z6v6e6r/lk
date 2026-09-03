@@ -213,18 +213,26 @@ export function loadInputs(env = process.env) {
   return inputs;
 }
 
+function normalizeHostname(value) {
+  return String(value || "").toLowerCase().replace(/\.+$/, "");
+}
+
 function originSet(values) {
-  const result = new Set();
+  const origins = new Set();
+  const hostnames = new Set();
   for (const value of values) {
     try {
       const parsed = new URL(value);
       if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) return null;
-      result.add(parsed.origin.toLowerCase());
+      const hostname = normalizeHostname(parsed.hostname);
+      if (!hostname) return null;
+      origins.add(parsed.origin.toLowerCase());
+      hostnames.add(hostname);
     } catch {
       return null;
     }
   }
-  return result;
+  return { origins, hostnames };
 }
 
 export function classifyDevUrl(rawUrl, { allowedDevOrigins = [], productionOrigins = DEFAULT_PRODUCTION_ORIGINS } = {}) {
@@ -241,11 +249,14 @@ export function classifyDevUrl(rawUrl, { allowedDevOrigins = [], productionOrigi
   const allowed = originSet(allowedDevOrigins);
   if (!production || !allowed) return { ok: false, code: "URL_ORIGIN_LIST_INVALID" };
   const origin = url.origin.toLowerCase();
-  if (production.has(origin)) return { ok: false, code: "URL_PRODUCTION_ORIGIN", origin };
+  const hostname = normalizeHostname(url.hostname);
+  if (production.origins.has(origin) || production.hostnames.has(hostname)) {
+    return { ok: false, code: "URL_PRODUCTION_ORIGIN", origin };
+  }
   if (url.protocol !== "https:" && !["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
     return { ok: false, code: "URL_HTTPS_REQUIRED", origin };
   }
-  if (!allowed.has(origin)) return { ok: false, code: "URL_DEV_IDENTITY_UNPROVEN", origin };
+  if (!allowed.origins.has(origin)) return { ok: false, code: "URL_DEV_IDENTITY_UNPROVEN", origin };
   return { ok: true, code: "DEV_ORIGIN_CONFIRMED", origin };
 }
 
