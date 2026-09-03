@@ -4,6 +4,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const page = fs.readFileSync("src/components/tournament-subscription/TournamentSubscriptionPage.tsx", "utf8");
+const apiClient = fs.readFileSync("src/utils/apiClient.ts", "utf8");
 const css = fs.readFileSync("src/MyApp.css", "utf8");
 const defaultPage = page.slice(page.indexOf("function buildDefaultPageViewConfig()"), page.indexOf("function buildPromoOfferPageViewConfig("));
 const preview = fs.readFileSync("scripts/fixtures/ab-leto-preview.html", "utf8");
@@ -54,9 +55,11 @@ test("only ab_leto HUB omits consent and auth captions while purchase guards rem
 });
 
 test("HUB approval preview shows 10/10 while production UI stays server-driven", () => {
-  assert.match(preview, /counterKey: "network_friendship", totalLimit: 10, remainingCount: 10, batchSize: 10, batchRemainingCount: 10/);
-  assert.match(preview, /dailyDropActive: true, dailyLimit: 10/);
+  assert.match(preview, /counterKey: "network_friendship", totalLimit: 10, remainingCount: 10, batchSize: 100, batchRemainingCount: 95/);
+  assert.match(preview, /dailyCapEnabled: true, dailyDropActive: true, dailyLimit: 10/);
   assert.doesNotMatch(defaultPage, /remainingValueText: "10 из 10"/);
+  assert.match(apiClient, /dailyCapEnabled: toBoolean\(data\.dailyCapEnabled\) \?\? false/);
+  assert.match(page, /status\?\.dailyCapEnabled[\s\S]*?`\$\{remainingCount\} из \$\{displayTotalLimit\}`[\s\S]*?: status\?\.batchSize/);
   assert.match(preview, /Предпросмотр: внешний запрос заблокирован/);
   assert.match(preview, /navigator\.sendBeacon = \(\) => false/);
 });
