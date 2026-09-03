@@ -4,6 +4,7 @@ import path from 'node:path';
 
 export const REFERRAL_ATTRIBUTION_AUDIT_SCHEMA = 'lk-referral-attribution-preimage-audit-v1';
 export const REFERRAL_ATTRIBUTION_APPROVAL_GATE = 'REFERRAL_ATTRIBUTION_PREIMAGES_REVIEWED';
+export const REFERRAL_ATTRIBUTION_BINDING_STATE = 'UNBOUND_AFTER_PITER_ATOMIC_SALES';
 
 export const REFERRAL_ATTRIBUTION_TARGETS = Object.freeze([
   {
@@ -152,6 +153,9 @@ function activeExecutionContainers(flow, tabs) {
 }
 
 export function inspectReferralAttributionSource(flow, functionDirectory) {
+  if (REFERRAL_ATTRIBUTION_BINDING_STATE !== 'BOUND') {
+    throw new Error('Referral attribution release candidate is unbound after Piter atomic sales; rebuild and review an exact-graph candidate before reuse');
+  }
   const tabs = new Map(flow.filter((node) => node?.type === 'tab').map((node) => [node.id, node]));
   const subflows = new Map(flow.filter((node) => node?.type === 'subflow').map((node) => [node.id, node]));
   const activeContainerIds = activeExecutionContainers(flow, tabs);
