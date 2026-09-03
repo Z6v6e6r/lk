@@ -16,6 +16,7 @@ const EXPECTED_STOREFRONT_ASSETS = new Map([
   ["subscription-rules-gold.webp", "cfa623d31076199d30b2b62149744d9845fb975f3686b681641a461eac8f2358"],
   ["subscription-rules-green.webp", "ab879147110a73dab69a196de9370fff912d009941e59a8a52ce4e89e78e617c"],
   ["subscription-rules-red.webp", "f3a9a3077865eac4cc3fb6a7be1c4f64a174795f9fefa1dfa8341ada5f2e313c"],
+  ["piter-subscription-tier-1.webp", "57550ea171f847a528cb82c6b4b8a5fe4723acc56ffd1dc0eda75740cca1cf4f"],
   ["piter-subscription-tier-2.webp", "5463d78487db30a0b24a69eb01007e2e37ccdd297b3d4e43e6625f934069afbe"],
   ["piter-subscription-tier-3.webp", "74eae501698f857780ca7050c0872304615fcfc8df1efb6e6116e0b8d607a5c6"],
   ["piter-subscription-tier-4.webp", "1e1b5711a7b890d68349182a8386d78681011de6193380b2cb80edc5464f3eb2"],

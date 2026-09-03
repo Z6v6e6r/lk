@@ -184,7 +184,67 @@ test("binary asset exceptions are exact and content-addressed", async () => {
     ],
     [
       "src/assets/piter-subscription-tier-1.webp",
-      "21868451f8dd722a99db1a555065e00bae401e2592c19a2e38e21fadcd2d590d",
+      "57550ea171f847a528cb82c6b4b8a5fe4723acc56ffd1dc0eda75740cca1cf4f",
+    ],
+    [
+      "src/assets/piter-subscription-tier-2.webp",
+      "5463d78487db30a0b24a69eb01007e2e37ccdd297b3d4e43e6625f934069afbe",
+    ],
+    [
+      "src/assets/piter-subscription-tier-3.webp",
+      "74eae501698f857780ca7050c0872304615fcfc8df1efb6e6116e0b8d607a5c6",
+    ],
+    [
+      "src/assets/piter-subscription-tier-4.webp",
+      "1e1b5711a7b890d68349182a8386d78681011de6193380b2cb80edc5464f3eb2",
+    ],
+    [
+      "src/assets/kotelniki-subscription-tier-1.webp",
+      "ce2c38442b8101d41fb0b87d3f2c2db38e738d21bd352a93226cac1b73f0f989",
+    ],
+    [
+      "src/assets/kotelniki-subscription-tier-2.webp",
+      "f47100c440c3cb1e9e6e3a514400a22f2b51a2f16b525243e6e2893daef14261",
+    ],
+    [
+      "src/assets/kotelniki-subscription-tier-3.webp",
+      "e5cc7d9924b70aaf15e38a39e3df1f01c408e0b9d84b2627a62a2f9c2f98a463",
+    ],
+    [
+      "src/assets/kotelniki-subscription-tier-4.webp",
+      "e678bfeb98937ec58769dca3ff659eaff9ce14ac0ba125280ec013b7bc02c20f",
+    ],
+    [
+      "src/assets/network-subscription.webp",
+      "83a8f2ccf39908a6cbe7b5692598fdd1624a9d0a03784cb8a6815fd69b276ef6",
+    ],
+    [
+      "src/assets/subscription-rules-gold.webp",
+      "cfa623d31076199d30b2b62149744d9845fb975f3686b681641a461eac8f2358",
+    ],
+    [
+      "src/assets/subscription-rules-green.webp",
+      "ab879147110a73dab69a196de9370fff912d009941e59a8a52ce4e89e78e617c",
+    ],
+    [
+      "src/assets/subscription-rules-red.webp",
+      "f3a9a3077865eac4cc3fb6a7be1c4f64a174795f9fefa1dfa8341ada5f2e313c",
+    ],
+    [
+      "src/assets/summer-subscription-academy.webp",
+      "1b7bdb5cf0c1f03847efac7ddf7cb9b7142187293a0d5a82190c61a79841847a",
+    ],
+    [
+      "src/assets/summer-subscription-energy5.webp",
+      "773ab011fb41d7d27ca389adfd741cefb9d8a34ac8afbf60beb307d7b514d9ba",
+    ],
+    [
+      "src/assets/summer-subscription-friendship.webp",
+      "1ec1f7fc81cd867b9ce7127ff3b03e7ee33250224bceea7bebde89dc5703ec29",
+    ],
+    [
+      "src/assets/summer-subscription-ra.webp",
+      "5f89f2f44ea1cd1d2fd1e36b8fb39a2cb6dbd9d525380b0f4d588a2139142329",
     ],
   ];
 
@@ -209,11 +269,14 @@ test("binary asset exceptions are exact and content-addressed", async () => {
 test("binary scan accepts only the pinned assets and rejects path or content drift", async (t) => {
   const rulesAsset = new URL("../../src/assets/piter-subscription-rules-from-20260901.webp", import.meta.url);
   const tierAsset = new URL("../../src/assets/piter-subscription-tier-1.webp", import.meta.url);
+  const allowedAssetPaths = [...binaryScan().matchAll(
+    /^\s+(src\/assets\/[^)]+\.webp\))\n\s+expected_hash="([0-9a-f]{64})"/gm,
+  )].map((match) => match[1].slice(0, -1));
 
-  const allowed = await runBinaryScan(t, [
-    ["src/assets/piter-subscription-rules-from-20260901.webp", rulesAsset],
-    ["src/assets/piter-subscription-tier-1.webp", tierAsset],
-  ]);
+  const allowed = await runBinaryScan(
+    t,
+    allowedAssetPaths.map((assetPath) => [assetPath, new URL(`../../${assetPath}`, import.meta.url)]),
+  );
   assert.equal(allowed.status, 0, allowed.stderr);
 
   const unexpected = await runBinaryScan(t, [["src/assets/unexpected.webp", rulesAsset]]);
