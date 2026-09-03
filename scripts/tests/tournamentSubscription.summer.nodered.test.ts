@@ -3003,17 +3003,18 @@ test("HUB transaction accepts an exact compatible annual lifecycle", () => {
   assert.equal(transactionCtx.providerVisits, 365);
 });
 
-test("regional sales candidate pins the lifecycle guard marker", () => {
+test("regional atomic sales candidate pins the lifecycle guard source and graph builder", () => {
   const router = fs.readFileSync(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
     "utf8",
   );
   const candidateBuilder = fs.readFileSync(
-    "scripts/prepare_tournament_subscription_sales_candidate.mjs",
+    "scripts/prepare_piter_atomic_sales_candidate.mjs",
     "utf8",
   );
   assert.match(router, /REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE/);
-  assert.match(candidateBuilder, /REGIONAL_SUBSCRIPTION_PROVIDER_LIFECYCLE_INCOMPATIBLE/);
+  assert.match(candidateBuilder, /fn_tournament_subscription_purchase_router\.js/);
+  assert.match(candidateBuilder, /piter_atomic_router_20260903/);
 });
 
 test("Piter transaction fails closed when Viva returns a different amount", () => {

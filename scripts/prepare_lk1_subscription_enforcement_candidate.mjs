@@ -109,7 +109,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
       name: "Build tournament subscription status",
       sourceFile: "scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
       preimageSha256: "2111a260dd0401fee02addb7ea8bdf18ffddd36560d4c09eb1c55ef5ca225fae",
-      candidateSha256: "e81699c4c490b9883cacf104c751990c0b2922ce86d1f607889fb66991fedb53",
+      candidateSha256: "f7e9d81975e63a090ad47abe54c07ed9db265fccf114ab7758f3b102ed0007e0",
     }),
     Object.freeze({
       id: "91dded2dc8cfebe4",
@@ -117,7 +117,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
       name: "Prepare tournament subscription purchase",
       sourceFile: "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_prepare.js",
       preimageSha256: "f92e441ecac89048f525369c0eddfee7cbfa44610f5df1fdf9ff3df55d36be74",
-      candidateSha256: "cdaa2b512d6e0f1bc1fd79eb264d1d05816e63d391e6bbf9390eaf29694e0851",
+      candidateSha256: "2f15053bdf2c8abd770b7bc65cd59d6fdcfc2c08f26c2ee78a95bc309dfe5ca3",
     }),
     Object.freeze({
       id: "f8679e53edadc39b",
@@ -125,7 +125,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
       name: "Check tournament subscription limit",
       sourceFile: "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_limit.js",
       preimageSha256: "870c6ba85ff0a26f34edd5bea9bd48623f49333ecec2355fa17dd90824068fb2",
-      candidateSha256: "d7adcfb697bf06428f7e0c3de2dafb111e88d59c480640574d6d2760e4b9b549",
+      candidateSha256: "75d070b427ca9097cd258a84daca7b2c3998f545415b69ef4968ccdce2aaeef8",
     }),
   ]),
 });
