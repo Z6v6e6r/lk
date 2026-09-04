@@ -120,7 +120,7 @@ export async function prepareVivaGameProjectionRestoreRehearsal(options, depende
     writePrivate(receiptPath, Buffer.from(canonicalJson(receipt)));
     return { receipt, receiptPath, receiptSha256: sha256(fs.readFileSync(receiptPath)) };
   } finally {
-    if (databaseCreated) await client.db(options.isolatedDatabase).dropDatabase().catch(() => {});
+    if (databaseCreated) await client.db(options.isolatedDatabase).dropDatabase();
     if (!dependencies.mongoClient) await client.close().catch(() => {});
   }
 }
