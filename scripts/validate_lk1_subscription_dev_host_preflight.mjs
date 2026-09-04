@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const SHA256 = /^[a-f0-9]{64}$/;
+const EXPECTED_MACHINE_ID_SHA256 = "9f29889b29a55b2c7e1eeb65616d2049b16972589de1bc623a61d38d92dd7ad8";
 const EXPECTED_UNITS = Object.freeze([
   "lk1-subscription-dev-mongo.service",
   "lk1-subscription-dev-cup.service",
@@ -35,7 +36,8 @@ export function validateHostPreflightEvidence(evidence, now = new Date()) {
   exactKeys(evidence.target, ["hostAlias", "hostname", "machineIdSha256"], "host target");
   if (evidence.target.hostAlias !== "lk-reserve-89"
     || evidence.target.hostname !== "89-108-64-209.cloudvps.regruhosting.ru"
-    || !SHA256.test(evidence.target.machineIdSha256)) {
+    || !SHA256.test(evidence.target.machineIdSha256)
+    || evidence.target.machineIdSha256 !== EXPECTED_MACHINE_ID_SHA256) {
     fail("host target identity mismatch");
   }
   exactKeys(evidence.hostCapabilities, [

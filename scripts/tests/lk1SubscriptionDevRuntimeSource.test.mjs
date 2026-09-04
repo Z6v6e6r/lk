@@ -352,7 +352,7 @@ test("credential reader requires the exact root-owned group-read-only authorizat
     realpathSync: (target) => target,
     readFileSync: () => `${JSON.stringify(startAuthorization())}\n`,
   };
-  assert.equal(JSON.parse(readAuthorizationCredential(credential, fakeFs)).environment, "DEV");
+  assert.equal(JSON.parse(readAuthorizationCredential(credential, fakeFs, 997)).environment, "DEV");
 
   for (const mutate of [
     (value) => { value.lstatSync = (target) => target === "/srv"
@@ -377,7 +377,7 @@ test("credential reader requires the exact root-owned group-read-only authorizat
     const changed = { ...fakeFs };
     mutate(changed);
     assert.throws(
-      () => readAuthorizationCredential(credential, changed),
+      () => readAuthorizationCredential(credential, changed, 997),
       (error) => error.code === "SERVICE_START_CREDENTIAL_CUSTODY_INVALID",
     );
   }

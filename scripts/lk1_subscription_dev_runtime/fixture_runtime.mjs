@@ -622,7 +622,11 @@ export function createFixtureServer(role, config) {
   });
 }
 
-export function readAuthorizationCredential(authorizationFile, fsApi = fs) {
+export function readAuthorizationCredential(
+  authorizationFile,
+  fsApi = fs,
+  runtimeGid = typeof process.getgid === "function" ? process.getgid() : null,
+) {
   if (authorizationFile !== AUTHORIZATION_MARKER) {
     fail("SERVICE_START_CREDENTIAL_PATH_INVALID", "Authorization path is not exact", 78);
   }
@@ -649,8 +653,10 @@ export function readAuthorizationCredential(authorizationFile, fsApi = fs) {
   }
   const lexicalStat = fsApi.lstatSync(authorizationFile);
   const resolved = fsApi.realpathSync(authorizationFile);
-  if (resolved !== authorizationFile || !lexicalStat.isFile() || lexicalStat.isSymbolicLink()
+  if (!Number.isInteger(runtimeGid) || runtimeGid <= 0
+    || resolved !== authorizationFile || !lexicalStat.isFile() || lexicalStat.isSymbolicLink()
     || lexicalStat.uid !== 0 || lexicalStat.gid !== authorizationGroup
+    || lexicalStat.gid !== runtimeGid
     || (lexicalStat.mode & 0o777) !== 0o440) {
     fail(
       "SERVICE_START_CREDENTIAL_CUSTODY_INVALID",
