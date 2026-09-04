@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | Pure unit | Канонизация, HMAC, timestamp, schema, route parsing | Mongo atomicity, Node-RED, Viva |
 | Service + in-memory repository | State machine, ownership, idempotency, synthetic provider | Реальная replica transaction и provider contract |
-| Flow/packet fixture | Отдельные routes, default-off config, exact source/candidate/added-node/package hashes | Что source ещё совпадает с production в момент deploy |
+| Flow/packet fixture | Отдельный sidecar, routes, default-off config, exact source/candidate/added-node/package hashes | Что ingress/service binding совпадает с production в момент deploy |
 | Mongo replica integration | unique/TTL/index options, write conflict, transaction/outbox | Viva и ingress |
 | Local Node-RED + loopback Mongo | HTTP headers, params, response, restart | Shared/prod topology |
 | Viva sandbox | Реальный add/read/remove технического клиента | Production payment/notification effects |
@@ -50,8 +50,8 @@ secret change, migration, deploy, activation или real provider mutation.
 | Additions-only deploy | Новый pinned HTTP route/package bytes | Contract pins все seven nodes; live prefix/order неизменен; additions только suffix |
 | Private packet | Fresh external workspace + exact repository identity | read-once validated runtime bytes, source/candidate contract, semantic cross-links, sibling temp + fsync + final manifest + atomic rename; injected failure не оставляет partial packet |
 | Production controls | Route/upstream/CORS/admin/limits/custody/runtime/activation mutation | Любое widening или binding в source template отклоняется |
-| Runtime compatibility | Node `22.23.2` + Node-RED `4.1.14` + exact custom package | exact custom-node load/default-off/removal: `503/404`; не доказывает следующий fresh flow candidate; production calls `0` |
-| Runtime audit | Exact Node-RED `4.1.14` production closure | `0 critical / 15 high / 9 moderate / 1 low`; gate остаётся `AUDIT_BLOCKED` |
+| Runtime compatibility | Node `22.23.2` + minimal Node-RED `5.0.6` sidecar + exact custom package | exact custom-node load/default-off/removal: `503/404`; не доказывает deploy-stage service binding; production calls `0` |
+| Runtime audit | Exact minimal sidecar closure | `0 critical / 0 high / 7 moderate / 0 low`; `SECURITY_AUDIT_PASS`; bounded shared-palette observation `5/12/23/0` используется только как stop-input, не immutable deploy evidence |
 | Private binding declaration | controls/runtime/functional/ingress/custody/packet semantics/identity mutation | packet/host custody проверяется фактически; ingress/readback/audit decision остаются `DECLARED_EVIDENCE_UNVERIFIED`, authorization всегда false |
 | Mongo rehearsal guard | Non-loopback/shared name/mixed-case direct connection/duplicate topology option/bad ack | Отказ до Mongo import/connect |
 
@@ -102,17 +102,18 @@ npm run test:partner-game-membership-api
 ## Exit criteria ограниченного пилота
 
 - все P0 вопросы закрыты и подписаны владельцами;
-- fresh `LK Games` snapshot и source SHA зафиксированы;
+- fresh `LK Games` snapshot и SHA зафиксированы только для collision/readback; packet
+  содержит отдельный deterministic sidecar source;
 - custom node package и candidate hashes воспроизводимы;
-- additions-only reviewed-flow apply и exact rollback/restart отрепетированы на
-  изолированной копии Node-RED; production packet получен только из clean pushed SHA;
+- exact sidecar candidate и stop/route-removal rollback отрепетированы изолированно;
+  shared production flow на `1880` не меняется; packet получен только из clean pushed SHA;
 - exact runtime audit не содержит unresolved partner-reachable critical/high advisory;
 - production-controls SHA совпадает в packet/plan, private ingress/custody overlays
   заполнены владельцами и проверены на target host против root-owned realpath,
   hostname, machine identity и exact packet bytes/semantics;
 - отдельный live verifier прочитал ingress config/readback/certificate/CA и подписанный
   audit reachability artifact, повторил negative probes и снял декларативный
-  `UNVERIFIED` status без ослабления `AUDIT_BLOCKED`;
+  `UNVERIFIED` status без ослабления `SECURITY_AUDIT_PASS` sidecar boundary;
 - Mongo replica tests green, backup/rollback/reconciliation rehearsed;
 - Viva sandbox matrix green с exact before/after evidence;
 - mTLS включён; test/production client ID, HMAC key, certificate и audience различны;

@@ -1,0 +1,40 @@
+{
+  "formatVersion": 1,
+  "capturedAt": "2026-09-04T13:05:14.000Z",
+  "environment": "LOCAL_DISPOSABLE_CONTAINER",
+  "networkMode": "none",
+  "runtime": {
+    "platform": "linux",
+    "architecture": "x64",
+    "nodeImageSha256": "83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
+    "nodeVersion": "22.23.2",
+    "nodeRedVersion": "5.0.6"
+  },
+  "artifacts": {
+    "settingsSha256": "37e675a39f12d2a23352578cd7f1068e0b5ae1d3d92649e5078f0050a6448e3d",
+    "serviceUnitSha256": "66791a6c9674e409ba8eae76efc02cbcf3eb303dd48d9ad879233c3bfd77398b",
+    "candidateFlowSha256": "5a5aefe3dd19a8e6687222c80b229a40f924174359c181be7caaa6997134e965"
+  },
+  "readback": {
+    "exactProductionPathLayout": true,
+    "emptyUserDirAtStart": true,
+    "customNodeRouteLoaded": true,
+    "bindAddress": "127.0.0.1",
+    "port": 18894,
+    "adminUiDisabled": true,
+    "paletteEditorDisabled": true,
+    "partnerDefaultOffHttpStatus": 503,
+    "adminRootHttpStatus": 404,
+    "cacheControl": "no-store",
+    "corsResponseHeader": null,
+    "gracefulStopMarkers": [
+      "Stopping flows",
+      "Stopped flows"
+    ]
+  },
+  "cleanup": {
+    "containerPresent": false,
+    "hostListenerPresent": false
+  },
+  "productionTouched": false
+}

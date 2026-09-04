@@ -85,14 +85,14 @@ export function validatePartnerRuntimeEvidence({
   exactKeys(manifest.audit.affectedPackages, ["critical", "high", "moderate", "low", "total"], "Partner runtime audit counts");
   if (manifest.formatVersion !== 1
     || manifest.deploymentId !== "partner-game-membership-api-v02"
-    || manifest.state !== "AUDIT_BLOCKED"
-    || manifest.sourceBaseCommit !== "111ea07a35fdfd975287b1e3ed468e97c86bddf4"
+    || manifest.state !== "SECURITY_AUDIT_PASS"
+    || manifest.sourceBaseCommit !== "c92e432a9d0319cfebcd2c37b7967aef118f2f41"
     || manifest.runtime.platform !== "linux"
-    || manifest.runtime.architecture !== "arm64"
-    || manifest.runtime.nodeImageSha256 !== "0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a"
+    || manifest.runtime.architecture !== "x64"
+    || manifest.runtime.nodeImageSha256 !== "83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5"
     || manifest.runtime.nodeVersion !== "22.23.2"
     || manifest.runtime.npmVersion !== "10.9.8"
-    || manifest.runtime.nodeRedVersion !== "4.1.14"
+    || manifest.runtime.nodeRedVersion !== "5.0.6"
     || manifest.productionTouched !== false) {
     fail("Partner runtime identity or fail-closed state changed");
   }
@@ -110,14 +110,14 @@ export function validatePartnerRuntimeEvidence({
     private: true,
     dependencies: {
       "@padlhub/node-red-partner-game-membership-api": "file:./partner-package",
-      "node-red": "4.1.14",
+      "node-red": "5.0.6",
     },
   })
     || packageLock.lockfileVersion !== 3
-    || packageLock.packages?.[""]?.dependencies?.["node-red"] !== "4.1.14"
+    || packageLock.packages?.[""]?.dependencies?.["node-red"] !== "5.0.6"
     || packageLock.packages?.[""]?.dependencies?.["@padlhub/node-red-partner-game-membership-api"] !== "file:./partner-package"
     || packageLock.packages?.["partner-package"]?.dependencies?.mongodb !== "7.2.0"
-    || packageLock.packages?.["node_modules/node-red"]?.version !== "4.1.14"
+    || packageLock.packages?.["node_modules/node-red"]?.version !== "5.0.6"
     || packageLock.packages?.["node_modules/mongodb"]?.version !== "7.2.0") {
     fail("Partner runtime package-lock does not pin the exact Node-RED and custom-node closure");
   }
@@ -150,17 +150,17 @@ export function validatePartnerRuntimeEvidence({
     || auditReport.runtime?.nodeRedVersion !== manifest.runtime.nodeRedVersion
     || !isDeepStrictEqual(counts, manifest.audit.affectedPackages)
     || auditReport.vulnerabilities.length !== counts.total
-    || auditReport.decision !== "BLOCKED_PENDING_PATCH_OR_REACHABILITY_APPROVAL"
+    || auditReport.decision !== "PASS_NO_CRITICAL_OR_HIGH_AFFECTED_PACKAGES"
     || manifest.audit.decision !== auditReport.decision
     || counts.critical !== 0
-    || counts.high !== 15
-    || counts.moderate !== 9
-    || counts.low !== 1
-    || counts.total !== 25) {
+    || counts.high !== 0
+    || counts.moderate !== 7
+    || counts.low !== 0
+    || counts.total !== 7) {
     fail("Partner audit evidence was altered or overclaims remediation");
   }
   if (manifest.installation.command !== "npm ci --ignore-scripts --no-fund --no-audit"
-    || manifest.installation.installedPackageCount !== 290
+    || manifest.installation.installedPackageCount !== 291
     || manifest.installation.exitCode !== 0) {
     fail("Partner runtime installation evidence changed");
   }
@@ -189,23 +189,23 @@ export function validatePartnerRuntimeEvidence({
   ], "Partner functional rehearsal cleanup");
   if (functionalRehearsal.formatVersion !== 1
     || functionalRehearsal.deploymentId !== manifest.deploymentId
-    || functionalRehearsal.capturedAt !== "2026-09-03T20:34:23.000Z"
+    || functionalRehearsal.capturedAt !== "2026-09-04T12:27:45.000Z"
     || functionalRehearsal.clockSource !== "node-red-container-log"
     || functionalRehearsal.evidenceScope !== "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY"
     || functionalRehearsal.sourceBaseCommit !== manifest.sourceBaseCommit
     || functionalRehearsal.customNodeReleaseSha256 !== customReleaseSha256
     || !isDeepStrictEqual(functionalRehearsal.runtime, manifest.runtime)
     || !isDeepStrictEqual(functionalRehearsal.installation, {
-      command: "npm ci --ignore-scripts", installedPackageCount: 290, exitCode: 0,
+      command: "npm ci --ignore-scripts --no-fund --no-audit", installedPackageCount: 291, exitCode: 0,
     })
     || !isDeepStrictEqual(functionalRehearsal.candidate, {
-      sourceFlowSha256: "deaad35cdd5e63ad2e8934728112cb367cfdb92a969e1b668b7d704b575c14e4",
-      candidateFlowSha256: "e9aa1f2c25e0fbad8b69014dab4ba20319a468de2197dc983877ebf05a75256f",
+      sourceFlowSha256: "ea9b6a5e1b783327a5e4785e8ef6656ee2c3ea3c8523bf46c63599ae0580a2b2",
+      candidateFlowSha256: "65b540a925f731fa9ce7967cd46ec8fe25e8b11c5a1aa3291ff7e6c801088dd2",
       audienceEnvironmentVariable: "LK_PARTNER_GAME_API_AUDIENCE",
       signatureVersion: "v2",
     })
     || !isDeepStrictEqual(functionalRehearsal.defaultOff, {
-      httpStatus: 503, cacheControl: "no-store", corsResponseHeader: "*",
+      httpStatus: 503, cacheControl: "no-store", corsResponseHeader: null,
       errorCode: "PARTNER_API_DISABLED", mongoCalls: 0, vivaCalls: 0,
     })
     || !isDeepStrictEqual(functionalRehearsal.shutdown.logMarkers, ["Stopping flows", "Stopped flows"])
@@ -214,9 +214,9 @@ export function validatePartnerRuntimeEvidence({
       httpStatus: 404, packageLinkPresent: false, palettePartnerMatches: 0,
     })
     || !isDeepStrictEqual(functionalRehearsal.cleanup, {
-      containerPresent: false, listenerPort: 18894, listenerPresent: false, temporaryDirectoriesRemoved: true,
+      containerPresent: false, listenerPort: null, listenerPresent: false, temporaryDirectoriesRemoved: true,
     })
-    || functionalRehearsal.decision !== "FUNCTIONAL_COMPATIBILITY_PASS_SECURITY_AUDIT_BLOCKED"
+    || functionalRehearsal.decision !== "FUNCTIONAL_COMPATIBILITY_PASS_SECURITY_AUDIT_PASS"
     || functionalRehearsal.productionTouched !== false) {
     fail("Partner functional rehearsal evidence is incomplete or overclaims production readiness");
   }
@@ -245,7 +245,7 @@ export function validateCheckedPartnerRuntimeEvidence({ runtimeRoot = RUNTIME_RO
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     const result = validateCheckedPartnerRuntimeEvidence();
-    process.stdout.write(`PARTNER_RUNTIME=AUDIT_BLOCKED manifestSha256=${result.manifestSha256}\n`);
+    process.stdout.write(`PARTNER_RUNTIME=SECURITY_AUDIT_PASS manifestSha256=${result.manifestSha256}\n`);
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;

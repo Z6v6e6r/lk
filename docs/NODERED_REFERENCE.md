@@ -9,8 +9,10 @@
   one-time nonce, idempotency, scopes/station allowlist, canonical ownership и audit
   выполняются внутри server-only runtime.
 - Private packet builder: `scripts/prepare_partner_game_membership_v02_packet.mjs`;
-  требует fresh verified live workspace и clean exact commit, pins additions-only flow
-  contract и custom-node package hashes, пишет только новый внешний `0700/0600` packet.
+  требует fresh verified live workspace и clean exact commit, проверяет live namespace
+  collision, но формирует отдельный minimal sidecar flow и custom-node package hashes;
+  пишет только новый внешний `0700/0600` packet. Shared Node-RED `127.0.0.1:1880` и
+  его flow/palette не изменяются; approved ingress target sidecar — `127.0.0.1:18894`.
 - Real Viva provider pins Admin API v1 create/read/cancel calls, performs no mutation
   retry and is fail-closed before operation until mutation/revision/idempotency/ON_PLACE
   gates and server token are all ready. Synthetic provider remains loopback test-only.

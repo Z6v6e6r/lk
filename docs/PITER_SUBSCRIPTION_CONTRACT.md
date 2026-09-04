@@ -33,7 +33,10 @@ global binding `summer_subscription_piter_friendship_product_id`. Snapshot до�
 - ожидаемой `revision` и exact Mongo CAS;
 - action-specific допуска `SEED_147`, `ACTIVATE_147` или `DEACTIVATE_147`;
 - запуска на `lk-primary-147` под владельцем canonical runtime и общего с
-  reviewed-flow deploy непрерывного `flock`;
+  reviewed-flow deploy непрерывного `flock`; значение environment-переменной не
+  является доказательством lock: apply-процесс запускается через `flock -F`, наследует
+  descriptor и перед каждой Mongo mutation подтверждает свой PID, inode/device lock
+  file и exclusive `FLOCK WRITE` запись в Linux `/proc/locks`;
 - canonical root-owned `/root/.node-red/flows.json`, Mongo URI только в
   `LK_PITER_ATOMIC_MONGO_URI`, фиксированных database `games` и collection из
   packet, а также exact SHA-256 readback host machine identity и replica-set

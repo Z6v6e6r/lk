@@ -13,7 +13,7 @@ import { validatePartnerProductionBinding } from "../validate_partner_game_membe
 const controlsBytes = fs.readFileSync(new URL("../partner_game_membership_production_controls.json", import.meta.url));
 const controls = JSON.parse(controlsBytes.toString("utf8"));
 const digest = (value) => crypto.createHash("sha256").update(value).digest("hex");
-const capturedAt = "2026-09-03T20:40:00.000Z";
+const capturedAt = "2026-09-04T12:40:00.000Z";
 const now = Date.parse(capturedAt);
 const hostIdentityBytes = Buffer.from("fixture-machine-identity\n", "utf8");
 const actualHostname = "fixture-host";
@@ -51,7 +51,7 @@ function packetFixture() {
   preparePartnerV02Packet({
     workspace,
     outDir: packetRoot,
-    repository: { commit: "1".repeat(40), branch: "codex/partner-binding-fixture" },
+    repository: { commit: "1".repeat(40), tree: "2".repeat(40), branch: "codex/partner-binding-fixture" },
   });
   const manifestBytes = fs.readFileSync(path.join(packetRoot, "packet.manifest.json"));
   return { root: packetRoot, manifestBytes, manifestSha256: digest(manifestBytes) };
@@ -85,7 +85,7 @@ function validBinding(packet) {
     controlsSha256: digest(controlsBytes),
     capturedAt,
     runtime: {
-      verificationState: "AUDIT_BLOCKED_DECISION_UNVERIFIED",
+      verificationState: "SECURITY_AUDIT_PASS_RUNTIME_DECLARED_UNVERIFIED",
       runtimeManifestSha256: controls.runtime.immutableClosure.runtimeManifestSha256,
       packageJsonSha256: controls.runtime.immutableClosure.packageJsonSha256,
       packageLockSha256: controls.runtime.immutableClosure.packageLockSha256,
@@ -95,15 +95,15 @@ function validBinding(packet) {
       functionalRehearsalCapturedAt: controls.runtime.immutableClosure.functionalRehearsalCapturedAt,
       auditCapturedAt: controls.runtime.immutableClosure.auditCapturedAt,
       platform: "linux",
-      architecture: "arm64",
+      architecture: "x64",
       nodeVersion: "22.23.2",
-      nodeRedVersion: "4.1.14",
+      nodeRedVersion: "5.0.6",
       criticalAffectedPackages: 0,
-      highAffectedPackages: 15,
-      moderateAffectedPackages: 9,
-      lowAffectedPackages: 1,
+      highAffectedPackages: 0,
+      moderateAffectedPackages: 7,
+      lowAffectedPackages: 0,
       partnerReachableHighPackages: [],
-      decisionRecord: "SEC-2026-09-03-01",
+      decisionRecord: "SEC-2026-09-04-01",
       owner: "role:security-reviewer",
     },
     ingress: {
@@ -113,8 +113,8 @@ function validBinding(packet) {
       configPath: "/etc/caddy/partner-api.caddy",
       configSha256: "5".repeat(64),
       owner: "role:ingress-owner",
-      approvedAt: "2026-09-03T19:00:00.000Z",
-      rehearsedAt: "2026-09-03T20:20:00.000Z",
+      approvedAt: "2026-09-04T11:00:00.000Z",
+      rehearsedAt: "2026-09-04T12:35:00.000Z",
       readbackSha256: "6".repeat(64),
       minimumTlsVersion: "TLSv1.2",
       clientIdentity: "MTLS",
@@ -147,7 +147,7 @@ function validBinding(packet) {
       targetDirectory: packet.root,
       directoryMode: "0700",
       fileMode: "0600",
-      retentionUntil: "2026-09-10T20:40:00.000Z",
+      retentionUntil: "2026-09-11T12:40:00.000Z",
       custodyOwner: "role:release-owner",
       deletionOwner: "role:release-owner",
       incidentOwner: "role:security-owner",
@@ -186,7 +186,9 @@ const validate = (binding, packet) => validatePartnerProductionBinding({
   hostIdentityBytes,
   actualHostname,
   actualPlatform: "linux",
-  actualArchitecture: "arm64",
+  actualArchitecture: "x64",
+  expectedApprovedCommit: "1".repeat(40),
+  expectedApprovedTree: "2".repeat(40),
 });
 
 test("private production binding lints declarations while verifying exact packet and host custody", () => {
@@ -202,7 +204,7 @@ test("private production binding rejects any deploy-review readiness claim", () 
 
   const runtimeOverclaim = validBinding(packet);
   runtimeOverclaim.runtime.verificationState = "VERIFIED";
-  assert.throws(() => validate(runtimeOverclaim, packet), /must remain blocked/);
+  assert.throws(() => validate(runtimeOverclaim, packet), /must remain unverified/);
 
   const ingressOverclaim = validBinding(packet);
   ingressOverclaim.ingress.verificationState = "VERIFIED";
@@ -216,7 +218,7 @@ test("private production binding rejects controls drift and stale audit evidence
   assert.throws(() => validate(wrongControls, packet), /exact production-controls bytes/);
 
   const stale = validBinding(packet);
-  stale.runtime.auditCapturedAt = "2026-09-02T18:00:00.000Z";
+  stale.runtime.auditCapturedAt = "2026-09-03T10:00:00.000Z";
   assert.throws(() => validate(stale, packet), /audit is stale/);
 
   const closureDrift = validBinding(packet);
@@ -224,11 +226,11 @@ test("private production binding rejects controls drift and stale audit evidence
   assert.throws(() => validate(closureDrift, packet), /runtime audit policy/);
 
   const architectureDrift = validBinding(packet);
-  architectureDrift.runtime.architecture = "x64";
+  architectureDrift.runtime.architecture = "arm64";
   assert.throws(() => validate(architectureDrift, packet), /runtime audit policy/);
 
   const futureRehearsal = validBinding(packet);
-  futureRehearsal.capturedAt = "2026-09-03T20:30:00.000Z";
+  futureRehearsal.runtime.functionalRehearsalCapturedAt = "2026-09-04T12:45:00.000Z";
   assert.throws(() => validate(futureRehearsal, packet), /functional rehearsal is newer/);
 });
 
@@ -300,12 +302,67 @@ test("private production binding rejects packet path or host identity substituti
   assert.throws(() => validate(wrongHost, packet), /current target host identity/);
 });
 
+test("private production binding requires an out-of-band exact approved commit and tree", () => {
+  const packet = packetFixture();
+  const binding = validBinding(packet);
+  assert.throws(() => validatePartnerProductionBinding({
+    controls,
+    controlsBytes,
+    binding,
+    packetRoot: packet.root,
+    packetManifestBytes: packet.manifestBytes,
+    now,
+    expectedPacketOwnerUid: typeof process.getuid === "function" ? process.getuid() : 0,
+    hostIdentityBytes,
+    actualHostname,
+    actualPlatform: "linux",
+    actualArchitecture: "x64",
+    expectedApprovedCommit: "3".repeat(40),
+    expectedApprovedTree: "2".repeat(40),
+  }), /identity or fail-closed state/);
+  assert.throws(() => validatePartnerProductionBinding({
+    controls,
+    controlsBytes,
+    binding,
+    packetRoot: packet.root,
+    packetManifestBytes: packet.manifestBytes,
+    now,
+    expectedPacketOwnerUid: typeof process.getuid === "function" ? process.getuid() : 0,
+    hostIdentityBytes,
+    actualHostname,
+    actualPlatform: "linux",
+    actualArchitecture: "x64",
+  }), /out-of-band approved commit and tree/);
+});
+
 test("private production binding rejects a self-consistent but semantically altered packet", () => {
   const packet = packetFixture();
   resealPacketFile(packet, "deployment-plan.json", (plan) => {
     plan.deploymentPerformed = true;
   });
   assert.throws(() => validate(validBinding(packet), packet), /deployment plan differs/);
+});
+
+test("private production binding rejects a resealed sidecar service or settings mutation", () => {
+  for (const relativePath of [
+    "sidecar/settings.cjs",
+    "sidecar/partner-game-membership-sidecar.service",
+    "sidecar/sidecar-rehearsal.json",
+  ]) {
+    const packet = packetFixture();
+    const filePath = path.join(packet.root, relativePath);
+    fs.appendFileSync(filePath, "\n# drift\n");
+    const manifest = JSON.parse(packet.manifestBytes.toString("utf8"));
+    const entry = manifest.files.find((file) => file.relativePath === relativePath);
+    const bytes = fs.readFileSync(filePath);
+    entry.sha256 = digest(bytes);
+    entry.size = bytes.length;
+    manifest.aggregateSha256 = digest(Buffer.from(JSON.stringify(manifest.files), "utf8"));
+    packet.manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    packet.manifestSha256 = digest(packet.manifestBytes);
+    fs.writeFileSync(path.join(packet.root, "packet.manifest.json"), packet.manifestBytes, { mode: 0o600 });
+    assert.throws(() => validate(validBinding(packet), packet), /sidecar bytes differ from the immutable production-controls closure/);
+  }
 });
 
 test("private production binding rejects a self-consistent candidate outside the exact patcher allowlist", () => {
@@ -332,5 +389,5 @@ test("private production binding rejects a self-consistent candidate outside the
     plan.addedNodeCount = contract.allowedAdditions.length;
     plan.rollback.candidateSha256 = contract.candidateSha256;
   });
-  assert.throws(() => validate(validBinding(packet), packet), /exact additions-only Partner patcher output/);
+  assert.throws(() => validate(validBinding(packet), packet), /sidecar bytes differ from the immutable production-controls closure/);
 });

@@ -19,7 +19,7 @@ import {
 const LIVE_FLOW_PATH = "/root/.node-red/flows.json";
 const DEPLOYMENT_LOCK_PATH = "/root/.node-red/.padlhub-reviewed-flow-deploy.lock";
 const DEPLOYMENT_LEASE_PATH = "/root/.node-red/.padlhub-reviewed-flow-deploy.lease.json";
-const DEPLOYMENT_LOCK_HELD_ENV = "PADLHUB_REVIEWED_FLOW_LOCK_HELD";
+const DEPLOYMENT_LOCK_WRAPPED_ENV = "PADLHUB_REVIEWED_FLOW_LOCK_WRAPPED";
 const TARGET_HOST = "lk-primary-147";
 const MAX_MONGO_TIME_MS = 5_000;
 
@@ -203,9 +203,64 @@ const assertProtectedCanonicalFlow = (options, fsImpl, liveFlowPath, expectedUid
   }
 };
 
+const linuxDeviceNumbers = (device) => {
+  const value = BigInt(device);
+  return {
+    major: ((value >> 8n) & 0xfffn) | ((value >> 32n) & ~0xfffn),
+    minor: (value & 0xffn) | ((value >> 12n) & ~0xffn),
+  };
+};
+
+export const processOwnsExclusiveFlock = ({ procLocks, pid, lockStat, openFileStats }) => {
+  const { major, minor } = linuxDeviceNumbers(lockStat.dev);
+  const inode = BigInt(lockStat.ino);
+  const ownsDescriptor = openFileStats.some((stat) => (
+    BigInt(stat.dev) === BigInt(lockStat.dev) && BigInt(stat.ino) === inode
+  ));
+  if (!ownsDescriptor) return false;
+  return String(procLocks).split("\n").some((line) => {
+    const match = line.match(/^\d+:\s+(?:->\s+)?FLOCK\s+ADVISORY\s+WRITE\s+(\d+)\s+([0-9a-f]+):([0-9a-f]+):(\d+)\s/iu);
+    return Boolean(match)
+      && Number(match[1]) === pid
+      && BigInt(`0x${match[2]}`) === major
+      && BigInt(`0x${match[3]}`) === minor
+      && BigInt(match[4]) === inode;
+  });
+};
+
+export const verifyDeploymentLock = ({
+  fsImpl = fs,
+  lockPath = DEPLOYMENT_LOCK_PATH,
+  expectedUid = 0,
+  pid = process.pid,
+  platform = process.platform,
+} = {}) => {
+  if (platform !== "linux") return false;
+  const lockStat = fsImpl.lstatSync(lockPath, { bigint: true });
+  if (!lockStat.isFile() || lockStat.isSymbolicLink()
+    || lockStat.uid !== BigInt(expectedUid) || (lockStat.mode & 0o077n) !== 0n) return false;
+  const openFileStats = [];
+  for (const entry of fsImpl.readdirSync("/proc/self/fd")) {
+    if (!/^\d+$/u.test(entry)) continue;
+    try {
+      openFileStats.push(fsImpl.statSync(`/proc/self/fd/${entry}`, { bigint: true }));
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  return processOwnsExclusiveFlock({
+    procLocks: fsImpl.readFileSync("/proc/locks", "utf8"),
+    pid,
+    lockStat,
+    openFileStats,
+  });
+};
+
 const assertApplyAuthorization = (options, packet, env, runtime) => {
   if (runtime.getUid() !== runtime.expectedUid) throw new Error("live ledger apply requires the canonical runtime owner");
-  if (env[DEPLOYMENT_LOCK_HELD_ENV] !== "1") throw new Error("reviewed-flow deployment lock is not held");
+  if (runtime.verifyDeploymentLock() !== true) {
+    throw new Error("reviewed-flow deployment lock is not held by this process");
+  }
   if (env.LK_PITER_ATOMIC_TARGET !== TARGET_HOST) throw new Error(`LK_PITER_ATOMIC_TARGET must equal ${TARGET_HOST}`);
   if (env.LK_PITER_ATOMIC_LEDGER_ACTION !== APPLY_GATES[options.action]) {
     throw new Error(`LK_PITER_ATOMIC_LEDGER_ACTION must equal ${APPLY_GATES[options.action]}`);
@@ -328,6 +383,10 @@ export async function runLedgerOperation(options, dependencies = {}) {
     liveFlowPath: dependencies.liveFlowPath || LIVE_FLOW_PATH,
     expectedUid: dependencies.expectedUid ?? 0,
     getUid: dependencies.getUid || (() => process.getuid?.()),
+    verifyDeploymentLock: dependencies.verifyDeploymentLock || (() => verifyDeploymentLock({
+      fsImpl,
+      expectedUid: dependencies.expectedUid ?? 0,
+    })),
   };
   const startedAt = freshNow(nowFn);
   const packet = readJson(options.packetFile, "activation packet", fsImpl);
@@ -468,10 +527,10 @@ async function main() {
   try {
     const options = parseArgs(process.argv.slice(2));
     if (options.help) { process.stdout.write(usage); return; }
-    if (options.apply && process.env[DEPLOYMENT_LOCK_HELD_ENV] !== "1") {
+    if (options.apply && process.env[DEPLOYMENT_LOCK_WRAPPED_ENV] !== "1") {
       const result = spawnSync("flock", [
-        "-n", "-E", "75", DEPLOYMENT_LOCK_PATH,
-        "env", `${DEPLOYMENT_LOCK_HELD_ENV}=1`, process.execPath, fileURLToPath(import.meta.url),
+        "-n", "-E", "75", "-F", DEPLOYMENT_LOCK_PATH,
+        "env", `${DEPLOYMENT_LOCK_WRAPPED_ENV}=1`, process.execPath, fileURLToPath(import.meta.url),
         ...process.argv.slice(2),
       ], { stdio: "inherit", env: process.env });
       if (result.error) throw result.error;

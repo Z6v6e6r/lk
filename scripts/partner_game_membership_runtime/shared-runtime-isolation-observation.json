@@ -1,0 +1,68 @@
+{
+  "formatVersion": 1,
+  "capturedAt": "2026-09-04T12:39:47.594Z",
+  "evidenceScope": "LOCAL_REHEARSAL_WITH_EXACT_READ_ONLY_PRODUCTION_PALETTE_VERSIONS",
+  "productionReadback": {
+    "hostAlias": "lk-primary-147",
+    "nodeVersion": "22.23.2",
+    "nodeRedVersion": "4.0.9",
+    "flowSha256": "90abcbaecf405bddf800099a4b20cf98f720d4dac675e7337b5023fd3e57e99b",
+    "flowNodeCount": 4762
+  },
+  "rehearsal": {
+    "nodeRedVersion": "5.0.6",
+    "packageJsonSha256": "241cdc4e86e745a883817d591524de9d53973f6c0e7255b962a72e6f58666c92",
+    "packageLockSha256": "b61096e05d08ad7198addcc6306673a5632da8417570173e8ee0748f4e8a29ba",
+    "auditReportSha256": "bf764f65c91cbafa6c1be6bd00724b8f96ed187d0a6e408ab548f09f3011d108",
+    "directPaletteDependencyCount": 16,
+    "directPaletteDependencies": {
+      "@pafum/node-red-node-mongodb": "0.2.5",
+      "crypto-wz": "1.0.2",
+      "node-red-contrib-cryptography": "0.0.4",
+      "node-red-contrib-email": "0.3.1",
+      "node-red-contrib-google-sheets": "1.1.2",
+      "node-red-contrib-http-multipart": "0.3.2",
+      "node-red-contrib-image-tools": "2.1.1",
+      "node-red-contrib-maxbot": "0.6.1",
+      "node-red-contrib-mongodb4": "3.4.0",
+      "node-red-contrib-send-multipart-formdata": "1.1.0",
+      "node-red-contrib-startup-trigger": "0.1.0",
+      "node-red-contrib-telegrambot": "17.4.12",
+      "node-red-dashboard": "3.6.6",
+      "node-red-node-email": "5.2.4",
+      "node-red-node-mysql": "3.0.0",
+      "node-red-node-ui-table": "0.4.5"
+    },
+    "affectedPackages": {
+      "critical": 5,
+      "high": 12,
+      "moderate": 23,
+      "low": 0,
+      "total": 40
+    },
+    "criticalPackages": [
+      "crypto-js",
+      "crypto-wz",
+      "form-data",
+      "jsonata",
+      "request"
+    ],
+    "highPackages": [
+      "@types/node-red__util",
+      "busboy",
+      "deepmerge-ts",
+      "dicer",
+      "html-to-text",
+      "linkify-it",
+      "mailparser",
+      "multer",
+      "node-red-contrib-email",
+      "node-red-node-email",
+      "nodemailer",
+      "smtp-server"
+    ]
+  },
+  "decision": "DEDICATED_MINIMAL_SIDECAR_REQUIRED_SHARED_RUNTIME_FORBIDDEN",
+  "sharedNodeRedFlowMutationAllowed": false,
+  "productionTouched": false
+}
