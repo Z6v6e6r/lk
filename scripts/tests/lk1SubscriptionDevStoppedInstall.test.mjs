@@ -201,12 +201,18 @@ test("trusted out-of-bundle launcher verifies custody and hashes before locked e
       argv,
       environment: "rehearsal",
       expectedUid: process.getuid(),
-      runLocked: (runtime, installerPath, forwardedArgs) => {
-        invocation = { runtime, installerPath, forwardedArgs };
+      runLocked: (runtime, installerPath, forwardedArgs, policy) => {
+        invocation = { runtime, installerPath, forwardedArgs, policy };
       },
     }), true);
     assert.equal(invocation.forwardedArgs, argv);
     assert.equal(path.dirname(invocation.installerPath), path.join(prepared.outputDirectory, "payload"));
+    assert.deepEqual(invocation.policy.childEnv, {
+      PATH: "/usr/bin:/bin",
+      LANG: "C",
+      LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_HELD: "HELD_BY_TRUSTED_STOPPED_INSTALL_LAUNCHER",
+      LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_FD: "3",
+    });
     fs.chmodSync(invocation.installerPath, 0o750);
     fs.appendFileSync(invocation.installerPath, "\n");
     fs.chmodSync(invocation.installerPath, 0o550);

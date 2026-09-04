@@ -19,6 +19,7 @@ const INSTALL_CONFIRMATION = "CONFIRM_EXACT_STOPPED_INSTALL";
 const ROLLBACK_CONFIRMATION = "CONFIRM_EXACT_STOPPED_ROLLBACK";
 const RECOVERY_CONFIRMATION = "CONFIRM_EXACT_STOPPED_RECOVERY";
 const LOCK_CONFIRMATION = "HELD_BY_TRUSTED_STOPPED_INSTALL_LAUNCHER";
+const LOCK_PATH = "/run/lock/lk1-subscription-dev-stopped-install.lock";
 const ATTEMPT_ID = /^[a-f0-9]{32}$/;
 const UNITS = Object.freeze([
   "lk1-subscription-dev-mongo.service",
@@ -164,6 +165,23 @@ const resolveIdentity = (name, database) => {
   return value;
 };
 
+const assertKernelLockHeld = (fd, uid) => {
+  if (fd !== 3 || fs.readlinkSync(`/proc/self/fd/${fd}`) !== LOCK_PATH) {
+    fail("stopped install kernel lock identity mismatch");
+  }
+  const stat = fs.fstatSync(fd);
+  if (!stat.isFile() || stat.uid !== uid || stat.nlink !== 1
+    || (stat.mode & 0o777) !== 0o600) fail("stopped install kernel lock custody mismatch");
+  try {
+    execFileSync("/usr/bin/flock", ["--exclusive", "--nonblock", String(fd)], {
+      stdio: ["ignore", "ignore", "pipe", fd],
+      env: { PATH: "/usr/bin:/bin", LANG: "C" },
+    });
+  } catch {
+    fail("stopped install kernel lock is not held");
+  }
+};
+
 const defaultProbe = ({ manifest, phase }) => {
   for (const unit of UNITS) {
     let active;
@@ -202,7 +220,7 @@ export function validateStoppedInstallContract(contract) {
     || contract.stoppedInstall?.exactBundlePathPrefix !== "/tmp/lk1-subscription-dev-stopped-install-"
     || contract.stoppedInstall?.evidenceRoot !== "/srv/lk1-subscription-dev/bootstrap-evidence/stopped-install"
     || contract.stoppedInstall?.evidenceLayout !== "MANIFEST_SHA256/ATTEMPT_ID"
-    || contract.stoppedInstall?.executionLock !== "KERNEL_FLOCK_TRUSTED_LAUNCHER"
+    || contract.stoppedInstall?.executionLock !== "KERNEL_FLOCK_INHERITED_FD_TRUSTED_LAUNCHER"
     || contract.rollback?.mode !== "RESTORE_EXACT_PREIMAGE_OR_ABSENT"
     || contract.rollback.automaticOnInstallFailure !== true
     || contract.rollback.manualExecutionRequiresSeparateAuthorization !== true
@@ -434,6 +452,7 @@ export function installStoppedCandidate({
   hostname = os.hostname(),
   confirmation = process.env.LK1_SUBSCRIPTION_DEV_STOPPED_INSTALL,
   lockHeld = process.env.LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_HELD,
+  lockFd = Number.parseInt(process.env.LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_FD || "", 10),
   attemptId = crypto.randomBytes(16).toString("hex"),
   probe = defaultProbe,
 } = {}) {
@@ -449,6 +468,7 @@ export function installStoppedCandidate({
       || confirmation !== INSTALL_CONFIRMATION || lockHeld !== LOCK_CONFIRMATION) {
       fail("stopped install production authority mismatch");
     }
+    assertKernelLockHeld(lockFd, currentUid);
   } else if (environment !== "rehearsal") fail("stopped install environment mismatch");
   const bundleRoot = fs.realpathSync(bundleDirectory);
   const verified = validateBundleAndEvidence(
@@ -612,6 +632,7 @@ function runStoppedRollback({
     ? process.env.LK1_SUBSCRIPTION_DEV_STOPPED_RECOVERY
     : process.env.LK1_SUBSCRIPTION_DEV_STOPPED_ROLLBACK,
   lockHeld = process.env.LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_HELD,
+  lockFd = Number.parseInt(process.env.LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_FD || "", 10),
   probe = defaultProbe,
 } = {}) {
   const requiredConfirmation = recovery ? RECOVERY_CONFIRMATION : ROLLBACK_CONFIRMATION;
@@ -620,6 +641,7 @@ function runStoppedRollback({
       || confirmation !== requiredConfirmation || lockHeld !== LOCK_CONFIRMATION) {
       fail("stopped rollback production authority mismatch");
     }
+    assertKernelLockHeld(lockFd, currentUid);
   } else if (environment !== "rehearsal") fail("stopped rollback environment mismatch");
   const verified = verifyRuntimeInstallCandidateBundle(bundleDirectory, expectedManifestSha256);
   validateStoppedInstallContract(verified.contract);

@@ -10,6 +10,11 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const ATTEMPT_ID = /^[a-f0-9]{32}$/;
 const LOCK_PATH = "/run/lock/lk1-subscription-dev-stopped-install.lock";
 const LOCK_CONFIRMATION = "HELD_BY_TRUSTED_STOPPED_INSTALL_LAUNCHER";
+const CONFIRMATIONS = Object.freeze({
+  install: ["LK1_SUBSCRIPTION_DEV_STOPPED_INSTALL", "CONFIRM_EXACT_STOPPED_INSTALL"],
+  rollback: ["LK1_SUBSCRIPTION_DEV_STOPPED_ROLLBACK", "CONFIRM_EXACT_STOPPED_ROLLBACK"],
+  recover: ["LK1_SUBSCRIPTION_DEV_STOPPED_RECOVERY", "CONFIRM_EXACT_STOPPED_RECOVERY"],
+});
 const fail = (message) => { throw new Error(message); };
 const sha256 = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
 
@@ -128,14 +133,7 @@ export function launchStoppedCandidate({
   argv,
   environment = "production",
   expectedUid = 0,
-  runLocked = (runtime, installerPath, forwardedArgs) => execFileSync(
-    "/usr/bin/flock",
-    ["--exclusive", "--nonblock", LOCK_PATH, runtime, installerPath, ...forwardedArgs],
-    {
-      stdio: "inherit",
-      env: { ...process.env, LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_HELD: LOCK_CONFIRMATION },
-    },
-  ),
+  runLocked = defaultRunLocked,
 } = {}) {
   const args = parseArgs(argv);
   if (!new Set(["install", "rollback", "recover"]).has(args["--mode"])) {
@@ -143,6 +141,13 @@ export function launchStoppedCandidate({
   }
   if (args["--mode"] === "install" && !ATTEMPT_ID.test(args["--attempt-id"] || "")) {
     fail("trusted launcher attempt ID mismatch");
+  }
+  if (environment === "production" && [
+    "NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES",
+  ].some((key) => process.env[key] !== undefined)) fail("trusted launcher environment is not clean");
+  const [confirmationKey, confirmationValue] = CONFIRMATIONS[args["--mode"]] || [];
+  if (environment === "production" && process.env[confirmationKey] !== confirmationValue) {
+    fail("trusted launcher operation authority mismatch");
   }
   const verified = verifyBundleBeforeExecution({
     bundleDirectory: args["--bundle"],
@@ -157,8 +162,46 @@ export function launchStoppedCandidate({
       && runtime !== "/srv/lk1-subscription-dev/runtime/node/bin/node")
     || !runtimeStat.isFile() || runtimeStat.isSymbolicLink() || runtimeStat.uid !== expectedRuntimeUid
     || (runtimeStat.mode & 0o022) !== 0) fail("trusted launcher Node runtime custody mismatch");
-  runLocked(runtime, verified.installerPath, argv);
+  const childEnv = {
+    PATH: "/usr/bin:/bin",
+    LANG: "C",
+    LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_HELD: LOCK_CONFIRMATION,
+    LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_FD: "3",
+  };
+  if (process.env[confirmationKey] !== undefined) {
+    childEnv[confirmationKey] = process.env[confirmationKey];
+  }
+  runLocked(runtime, verified.installerPath, argv, {
+    childEnv, expectedUid, environment,
+  });
   return true;
+}
+
+function defaultRunLocked(runtime, installerPath, forwardedArgs, {
+  childEnv, expectedUid, environment,
+}) {
+  const lockFd = fs.openSync(
+    LOCK_PATH,
+    fs.constants.O_CREAT | fs.constants.O_RDWR | fs.constants.O_CLOEXEC | fs.constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    fs.fchmodSync(lockFd, 0o600);
+    if (environment === "production") fs.fchownSync(lockFd, expectedUid, 0);
+    const lockStat = fs.fstatSync(lockFd);
+    if (!lockStat.isFile() || lockStat.uid !== expectedUid || lockStat.nlink !== 1
+      || (lockStat.mode & 0o777) !== 0o600) fail("trusted launcher lock custody mismatch");
+    execFileSync("/usr/bin/flock", ["--exclusive", "--nonblock", "3"], {
+      stdio: ["ignore", "ignore", "inherit", lockFd],
+      env: { PATH: "/usr/bin:/bin", LANG: "C" },
+    });
+    execFileSync(runtime, [installerPath, ...forwardedArgs], {
+      stdio: ["inherit", "inherit", "inherit", lockFd],
+      env: childEnv,
+    });
+  } finally {
+    fs.closeSync(lockFd);
+  }
 }
 
 function parseArgs(argv = []) {

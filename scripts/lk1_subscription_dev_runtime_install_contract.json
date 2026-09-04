@@ -68,7 +68,7 @@
     "exactBundlePathPrefix": "/tmp/lk1-subscription-dev-stopped-install-",
     "evidenceRoot": "/srv/lk1-subscription-dev/bootstrap-evidence/stopped-install",
     "evidenceLayout": "MANIFEST_SHA256/ATTEMPT_ID",
-    "executionLock": "KERNEL_FLOCK_TRUSTED_LAUNCHER",
+    "executionLock": "KERNEL_FLOCK_INHERITED_FD_TRUSTED_LAUNCHER",
     "requiredExistingFiles": [
       {
         "path": "/srv/lk1-subscription-dev/node-red/settings.js",

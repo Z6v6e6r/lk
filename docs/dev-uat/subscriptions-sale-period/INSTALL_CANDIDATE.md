@@ -151,7 +151,8 @@ launcher получает mode `0500`, evidence `0600`, bundle dirs `0700`, а p
 Только после отдельной install-authority запускается:
 
 ```bash
-LK1_SUBSCRIPTION_DEV_STOPPED_INSTALL=CONFIRM_EXACT_STOPPED_INSTALL \
+/usr/bin/env -i PATH=/usr/bin:/bin LANG=C \
+  LK1_SUBSCRIPTION_DEV_STOPPED_INSTALL=CONFIRM_EXACT_STOPPED_INSTALL \
   /srv/lk1-subscription-dev/runtime/node/bin/node "$lk1_launcher_remote" \
   --mode install --bundle "$lk1_bundle_remote" \
   --manifest-sha256 "$lk1_manifest_sha" \
@@ -163,12 +164,14 @@ LK1_SUBSCRIPTION_DEV_STOPPED_INSTALL=CONFIRM_EXACT_STOPPED_INSTALL \
 Rollback и incomplete recovery являются другими gates и требуют соответственно:
 
 ```bash
-LK1_SUBSCRIPTION_DEV_STOPPED_ROLLBACK=CONFIRM_EXACT_STOPPED_ROLLBACK \
+/usr/bin/env -i PATH=/usr/bin:/bin LANG=C \
+  LK1_SUBSCRIPTION_DEV_STOPPED_ROLLBACK=CONFIRM_EXACT_STOPPED_ROLLBACK \
   /srv/lk1-subscription-dev/runtime/node/bin/node "$lk1_launcher_remote" \
   --mode rollback --bundle "$lk1_bundle_remote" \
   --manifest-sha256 "$lk1_manifest_sha" --evidence-directory "<exact attempt directory>"
 
-LK1_SUBSCRIPTION_DEV_STOPPED_RECOVERY=CONFIRM_EXACT_STOPPED_RECOVERY \
+/usr/bin/env -i PATH=/usr/bin:/bin LANG=C \
+  LK1_SUBSCRIPTION_DEV_STOPPED_RECOVERY=CONFIRM_EXACT_STOPPED_RECOVERY \
   /srv/lk1-subscription-dev/runtime/node/bin/node "$lk1_launcher_remote" \
   --mode recover --bundle "$lk1_bundle_remote" \
   --manifest-sha256 "$lk1_manifest_sha" --evidence-directory "<exact attempt directory>"
