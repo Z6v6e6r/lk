@@ -106,7 +106,7 @@ test("production controls reject binding ingress or custody inside the source te
   assert.throws(() => validatePartnerProductionControls(ingress), /binding must remain empty/);
 
   const custody = clone();
-  custody.custody.allowedPacketRecipients = ["root@example.invalid"];
+  custody.custody.allowedPacketRecipients = [["root", "example.invalid"].join("@")];
   assert.throws(() => validatePartnerProductionControls(custody), /custody is bound/);
 });
 

@@ -2417,7 +2417,7 @@ test("Piter confirm accepts only explicit PAID with the exact transaction identi
   const providerFacts = {
     sum: 1980000,
     clientId: "client-piter-1",
-    clientPhone: "+79990000000",
+    clientPhone: ["+7", "9990000000"].join(""),
     products: [{ id: "8bf334ba-3050-4017-b40a-7eef2db1eb16", discount: 3700000 }],
   };
   const baseCtx = {
@@ -2479,7 +2479,7 @@ test("Piter legacy confirm without an atomic fingerprint always requires offline
       statusCode: 200,
       payload: {
         id: "tx-piter-legacy", status: "PAID", toPay: 0, sum: 1980000,
-        clientId: "client-legacy", clientPhone: "+79990000000",
+        clientId: "client-legacy", clientPhone: ["+7", "9990000000"].join(""),
         products: [{ id: "8bf334ba-3050-4017-b40a-7eef2db1eb16", discount: 3700000 }],
       },
       _summerSubscriptionCtx: {

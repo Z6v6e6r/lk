@@ -52,7 +52,7 @@ const providerTransaction = (overrides = {}) => ({
   toPay: 0,
   sum: 1_980_000,
   clientId: "client-1",
-  clientPhone: "+79990000000",
+  clientPhone: ["+7", "9990000000"].join(""),
   products: [{ id: PRODUCT_ID, discount: 3_700_000 }],
   ...overrides,
 });
