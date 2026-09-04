@@ -8,6 +8,7 @@ import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 import { buildExactGraphContract, validateExactGraphContract } from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
 import {
   assertPiterAtomicTopology,
+  PITER_ATOMIC_BINDING_INITIALIZER_SOURCE,
   PITER_ATOMIC_ERROR_SOURCE,
   PITER_ATOMIC_TOPOLOGY_IDS,
 } from "./lib/piterAtomicTopologyContract.mjs";
@@ -65,7 +66,7 @@ const clientNode = "4e820638cc39c730";
 const atomicFunc = fs.readFileSync(path.join(FN_DIR, "fn_tournament_subscription_piter_atomic_router.js"), "utf8");
 const errorFunc = PITER_ATOMIC_ERROR_SOURCE;
 const additions = [
-  { id: IDS.atomicRouter, type: "function", z: TAB, name: "Route atomic Piter subscription sale", func: atomicFunc, outputs: 5, timeout: "", noerr: 0, initialize: "", finalize: "", libs: [], x: 2750, y: 2240, wires: [[IDS.ledgerFind], [IDS.ledgerUpdate], [IDS.saleUpdate], [IDS.response], [IDS.viva]] },
+  { id: IDS.atomicRouter, type: "function", z: TAB, name: "Route atomic Piter subscription sale", func: atomicFunc, outputs: 5, timeout: "", noerr: 0, initialize: PITER_ATOMIC_BINDING_INITIALIZER_SOURCE, finalize: "", libs: [], x: 2750, y: 2240, wires: [[IDS.ledgerFind], [IDS.ledgerUpdate], [IDS.saleUpdate], [IDS.response], [IDS.viva]] },
   { id: IDS.ledgerFind, type: "mongodb4", z: TAB, clientNode, mode: "collection", collection: "lk_tournament_subscription_sales", operation: "find", output: "toArray", maxTimeMS: "5000", handleDocId: false, name: "Find Piter atomic inventory ledger", x: 3140, y: 2180, wires: [[IDS.atomicRouter]] },
   { id: IDS.ledgerUpdate, type: "mongodb4", z: TAB, clientNode, mode: "collection", collection: "lk_tournament_subscription_sales", operation: "updateOne", output: "toArray", maxTimeMS: "5000", handleDocId: false, name: "CAS Piter atomic inventory ledger", x: 3140, y: 2220, wires: [[IDS.atomicRouter]] },
   { id: IDS.saleUpdate, type: "mongodb4", z: TAB, clientNode, mode: "collection", collection: "lk_tournament_subscription_sales", operation: "updateOne", output: "toArray", maxTimeMS: "5000", handleDocId: false, name: "Persist Piter atomic sale", x: 3140, y: 2260, wires: [[IDS.atomicRouter]] },

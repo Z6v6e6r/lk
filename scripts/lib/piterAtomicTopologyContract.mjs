@@ -18,6 +18,15 @@ export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
 
 export const PITER_ATOMIC_ROUTER_SHA256 = "fe097554fb070cbf7e076ee907c90f4448317424650d7804eb2151b2d9372a6c";
 export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "482c7f2230a1a6d2b781ddd9f67ecea19ee80a594385e7455a5acd759d989271";
+export const PITER_ATOMIC_BINDING_INITIALIZER_SOURCE = `const key = "summer_subscription_piter_friendship_product_id";
+const expectedProductId = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
+const currentProductId = String(global.get(key) ?? "").trim();
+if (currentProductId && currentProductId !== expectedProductId) {
+  throw new Error("Piter subscription product binding mismatch");
+}
+global.set(key, expectedProductId);
+`;
+export const PITER_ATOMIC_BINDING_INITIALIZER_SHA256 = "a75f370ed3fb43b61ff93cf17a97499ad46a4929e50de6f697589ef88d88d5c9";
 export const PITER_ATOMIC_ERROR_SOURCE = `msg.statusCode = 503;
 msg.headers = {"Content-Type":"application/json; charset=utf-8"};
 msg.payload = {error:"Хранилище временно недоступно",details:{code:"PITER_ATOMIC_MONGO_ERROR"}};
@@ -31,6 +40,9 @@ const fail = (message) => {
 const sha256 = (value) => crypto.createHash("sha256").update(String(value ?? "")).digest("hex");
 if (sha256(PITER_ATOMIC_ERROR_SOURCE) !== PITER_ATOMIC_ERROR_SHA256) {
   fail("checked-in Mongo error source hash mismatch");
+}
+if (sha256(PITER_ATOMIC_BINDING_INITIALIZER_SOURCE) !== PITER_ATOMIC_BINDING_INITIALIZER_SHA256) {
+  fail("checked-in product binding initializer hash mismatch");
 }
 
 const exactNode = (flow, id) => {
@@ -94,7 +106,7 @@ export function assertPiterAtomicTopology(flow) {
     outputs: 5,
     timeout: "",
     noerr: 0,
-    initialize: "",
+    initialize: PITER_ATOMIC_BINDING_INITIALIZER_SOURCE,
     finalize: "",
     libs: [],
     x: 2750,

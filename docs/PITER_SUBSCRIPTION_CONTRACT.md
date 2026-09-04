@@ -26,6 +26,12 @@ global binding `summer_subscription_piter_friendship_product_id`. Snapshot до�
 пишется только в новый каталог `0700` файлами `0600`; stdout и report содержат
 только хеши.
 
+Atomic router инициализирует этот binding точным проверенным Viva product ID при
+каждом старте Node-RED. Уже заданное отличающееся значение не перезаписывается:
+инициализация завершается ошибкой, а продажа остаётся fail closed. Благодаря
+этому обязательный readback после рестарта подтверждает фактическую runtime-
+привязку, а не только fallback в исходном коде.
+
 `scripts/manage_piter_atomic_ledger.mjs` работает в dry-run без флага
 `--apply`. Будущая live-запись дополнительно требует:
 
