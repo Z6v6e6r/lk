@@ -242,6 +242,47 @@ const upsertNode = (node) => {
   }
 };
 
+const activeSubscriptionStatus = findActiveTournamentNode(
+  "function",
+  "Build tournament subscription status",
+);
+const activeSubscriptionStatusResponseId = activeSubscriptionStatus.wires?.[0]?.[0];
+const activeSubscriptionStatusResponse = flow.find((item) => (
+  item?.id === activeSubscriptionStatusResponseId && item?.type === "http response"
+));
+if (!activeSubscriptionStatusResponse) {
+  throw new Error("Tournament subscription status response node not found");
+}
+const activeSubscriptionStatusDebug = findActiveTournamentNode(
+  "debug",
+  "tournament subscription status debug",
+);
+const managedSaleReadinessRequestId = "e5a1b2c3d4f54108";
+activeSubscriptionStatus.outputs = 3;
+activeSubscriptionStatus.wires = [
+  [activeSubscriptionStatusResponse.id],
+  [activeSubscriptionStatusDebug.id],
+  [managedSaleReadinessRequestId],
+];
+upsertNode({
+  id: managedSaleReadinessRequestId,
+  type: "http request",
+  z: activeTournamentTab.id,
+  name: "CUP tournament subscription sale readiness",
+  method: "use",
+  ret: "obj",
+  paytoqs: "ignore",
+  url: "",
+  requestTimeout: "10000",
+  senderr: true,
+  persist: false,
+  authType: "",
+  insecureHTTPParser: false,
+  x: Number(activeSubscriptionStatus.x || 1080),
+  y: Number(activeSubscriptionStatus.y || 2200) - 40,
+  wires: [[activeSubscriptionStatus.id]],
+});
+
 const historyStorageCatchId = "tournament_history_storage_catch_20260816";
 const historyStorageErrorId = "tournament_history_storage_error_20260816";
 const historyStorageResponseId = "tournament_history_storage_response_20260816";

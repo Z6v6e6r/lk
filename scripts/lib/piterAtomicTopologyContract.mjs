@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
   tab: "f9575c8726e29196",
   purchaseRouter: "566ae4b886c37ae5",
+  confirmResolve: "ca022fd14027a5b0",
   viva: "fdc3f25f39199546",
   response: "10fe94a32b8adc35",
   debug: "03cc3ac17f7e154a",
@@ -16,8 +17,8 @@ export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
   mongoClient: "4e820638cc39c730",
 });
 
-export const PITER_ATOMIC_ROUTER_SHA256 = "3e31ece89289bdb01fee41f9d3367a1be71abefd0390b37cee42eac0931675d8";
-export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "9c4f062ab1105480f97a0ca5cc869c68cf8bd1310a846e7eab63600c37b61d9c";
+export const PITER_ATOMIC_ROUTER_SHA256 = "6ca0e09636e469288849003d58a29e58aab64d388c92c51036b47f62aaf2d897";
+export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "a50578eed5e729da4e998d474081289b308651d2747a33dbfba0d1a80eaf7e33";
 export const PITER_ATOMIC_ERROR_SOURCE = `msg.statusCode = 503;
 msg.headers = {"Content-Type":"application/json; charset=utf-8"};
 msg.payload = {error:"Хранилище временно недоступно",details:{code:"PITER_ATOMIC_MONGO_ERROR"}};
@@ -85,6 +86,17 @@ export function assertPiterAtomicTopology(flow) {
     || purchaseRouter.wires.length !== 5
     || !isDeepStrictEqual(purchaseRouter.wires[4], [ids.atomicRouter])) {
     fail(`${ids.purchaseRouter}.wires[4] mismatch`);
+  }
+  const confirmResolve = assertNode(flow, ids.confirmResolve, {
+    type: "function",
+    z: ids.tab,
+    name: "Resolve tournament subscription confirm",
+    outputs: 4,
+  });
+  if (!Array.isArray(confirmResolve.wires)
+    || confirmResolve.wires.length !== 4
+    || !isDeepStrictEqual(confirmResolve.wires[3], [ids.atomicRouter])) {
+    fail(`${ids.confirmResolve}.wires[3] mismatch`);
   }
   assertExactFunctionNode(flow, {
     id: ids.atomicRouter,

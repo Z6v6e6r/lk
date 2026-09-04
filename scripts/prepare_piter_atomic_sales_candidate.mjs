@@ -23,8 +23,11 @@ const IDS = Object.freeze({
   confirmResolve: "ca022fd14027a5b0",
   viva: "fdc3f25f39199546",
   purchaseRouter: "566ae4b886c37ae5",
+  reconcileQuery: "ab1e202650000002",
+  reconcileRecord: "ab1e202650000006",
   response: "10fe94a32b8adc35",
   debug: "03cc3ac17f7e154a",
+  managedSaleReadinessRequest: "e5a1b2c3d4f54108",
   atomicRouter: "piter_atomic_router_20260903",
   ledgerFind: "piter_ledger_find_20260903",
   ledgerUpdate: "piter_ledger_update_20260903",
@@ -38,6 +41,8 @@ const TARGETS = [
   [IDS.limit, "Check tournament subscription limit", "fn_tournament_subscription_purchase_limit.js", "75d070b427ca9097cd258a84daca7b2c3998f545415b69ef4968ccdce2aaeef8"],
   [IDS.confirmResolve, "Resolve tournament subscription confirm", "fn_tournament_subscription_confirm_resolve.js", "7a868bc5d6fd0547904ae774e033ed3103d15d7398bda9d5a9146464bbbfcdab"],
   [IDS.purchaseRouter, "Route tournament subscription payment", "fn_tournament_subscription_purchase_router.js", "27b54a9e4204bd39951cae8e2194a60af5c3f3fc58edd85ceea76f56ff17deb2"],
+  [IDS.reconcileQuery, "Prepare tournament subscription reconciliation", "fn_tournament_subscription_reconcile_query.js", "35d8a910979922a632e4334606e018b6116f24b0de87b105dc5dd50b87210856"],
+  [IDS.reconcileRecord, "Prepare pending subscription confirmation", "fn_tournament_subscription_reconcile_record.js", "b324c635948497af1c98751e7e458f08253af56182a6f3dc9943fd2a8cc8472b"],
 ];
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const fail = (message) => { throw new Error(message); };
@@ -61,10 +66,26 @@ purchaseRouter.outputs = 5;
 purchaseRouter.wires = [...purchaseRouter.wires, [IDS.atomicRouter]];
 changed.find((item) => item.id === IDS.purchaseRouter).fields.push("outputs", "wires");
 
+const confirmResolve = byId.get(IDS.confirmResolve);
+if (confirmResolve.outputs !== 3 || confirmResolve.wires.length !== 3) fail("Confirm resolve topology preimage mismatch");
+confirmResolve.outputs = 4;
+confirmResolve.wires = [...confirmResolve.wires, [IDS.atomicRouter]];
+changed.find((item) => item.id === IDS.confirmResolve).fields.push("outputs", "wires");
+
+const statusNode = byId.get(IDS.status);
+if (statusNode.outputs !== 2 || statusNode.wires.length !== 2
+  || !Array.isArray(statusNode.wires[0]) || !Array.isArray(statusNode.wires[1])) {
+  fail("Subscription status topology preimage mismatch");
+}
+statusNode.outputs = 3;
+statusNode.wires = [...statusNode.wires, [IDS.managedSaleReadinessRequest]];
+changed.find((item) => item.id === IDS.status).fields.push("outputs", "wires");
+
 const clientNode = "4e820638cc39c730";
 const atomicFunc = fs.readFileSync(path.join(FN_DIR, "fn_tournament_subscription_piter_atomic_router.js"), "utf8");
 const errorFunc = PITER_ATOMIC_ERROR_SOURCE;
 const additions = [
+  { id: IDS.managedSaleReadinessRequest, type: "http request", z: TAB, name: "CUP tournament subscription sale readiness", method: "use", ret: "obj", paytoqs: "ignore", url: "", requestTimeout: "10000", senderr: true, persist: false, authType: "", insecureHTTPParser: false, x: 2750, y: 2160, wires: [[IDS.status]] },
   { id: IDS.atomicRouter, type: "function", z: TAB, name: "Route atomic Piter subscription sale", func: atomicFunc, outputs: 5, timeout: "", noerr: 0, initialize: "", finalize: "", libs: [], x: 2750, y: 2240, wires: [[IDS.ledgerFind], [IDS.ledgerUpdate], [IDS.saleUpdate], [IDS.response], [IDS.viva]] },
   { id: IDS.ledgerFind, type: "mongodb4", z: TAB, clientNode, mode: "collection", collection: "lk_tournament_subscription_sales", operation: "find", output: "toArray", maxTimeMS: "5000", handleDocId: false, name: "Find Piter atomic inventory ledger", x: 3140, y: 2180, wires: [[IDS.atomicRouter]] },
   { id: IDS.ledgerUpdate, type: "mongodb4", z: TAB, clientNode, mode: "collection", collection: "lk_tournament_subscription_sales", operation: "updateOne", output: "toArray", maxTimeMS: "5000", handleDocId: false, name: "CAS Piter atomic inventory ledger", x: 3140, y: 2220, wires: [[IDS.atomicRouter]] },

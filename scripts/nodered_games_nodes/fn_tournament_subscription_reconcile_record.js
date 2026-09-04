@@ -8,7 +8,15 @@ const record = msg.payload && typeof msg.payload === "object" && !Array.isArray(
   ? msg.payload
   : null;
 
-if (!record || !toStr(record.paymentRef) || !toStr(record.transactionId)) {
+const status = String(record?.status || "").trim().toUpperCase();
+const recoverableMissingTransaction = (
+  !toStr(record?.transactionId)
+  && ["DISPATCHING", "PROVIDER_UNKNOWN", "DISPATCH_REPAIRING"].includes(status)
+  && ["piter_friendship", "network_friendship"].includes(toStr(record?.counterKey))
+);
+
+if (!record || !toStr(record.paymentRef)
+  || (!toStr(record.transactionId) && !recoverableMissingTransaction)) {
   return null;
 }
 

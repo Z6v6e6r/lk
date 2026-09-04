@@ -395,11 +395,16 @@ ctx.planKey = normalizePlanKey(ctx.planKey) || normalizePlanKey(record.planKey) 
 ctx.transactionId = toStr(record.transactionId) || null;
 ctx.clientPhone = toStr(record.clientPhone) || null;
 ctx.clientId = toStr(record.clientId) || null;
+ctx.studioId = toStr(record.studioId) || null;
 ctx.productId = toStr(record.productId) || toStr(recordCounter?.productId) || null;
 ctx.productName = toStr(record.productName) || toStr(recordCounter?.productName) || null;
 ctx.toPayMinor = Number.isFinite(Number(record.toPayMinor)) ? Number(record.toPayMinor) : null;
 ctx.expectedAmountMinor = Number.isInteger(record.amountMinor) ? record.amountMinor : null;
 ctx.requestFingerprint = toStr(record.requestFingerprint);
+ctx.providerAttemptedAt = toStr(record.providerAttemptedAt);
+ctx.dispatchGeneration = Number.isInteger(record.dispatchGeneration) && record.dispatchGeneration >= 0
+  ? record.dispatchGeneration
+  : 0;
 ctx.saleRecord = {
   counterKey: ctx.counterKey,
   inventoryId: ctx.inventoryId,
@@ -407,6 +412,7 @@ ctx.saleRecord = {
   requestFingerprint: ctx.requestFingerprint,
   clientPhone: ctx.clientPhone,
   clientId: ctx.clientId,
+  studioId: ctx.studioId,
   batchIndex: Number.isInteger(record.batchIndex) ? record.batchIndex : null,
   batchSize: Number.isInteger(record.batchSize) ? record.batchSize : null,
   productId: ctx.productId,
@@ -434,15 +440,61 @@ ctx.saleRecord = {
   activationNotBeforeDate: toStr(record.activationNotBeforeDate),
   providerValidityDays: Number.isInteger(record.providerValidityDays) ? record.providerValidityDays : null,
   providerVisits: Number.isInteger(record.providerVisits) ? record.providerVisits : null,
+  managedSaleBinding: record.managedSaleBinding && typeof record.managedSaleBinding === "object"
+    ? { ...record.managedSaleBinding }
+    : null,
+  managedSaleReadinessCheckedAt: toStr(record.managedSaleReadinessCheckedAt),
+  managedSaleProviderScope: record.managedSaleProviderScope && typeof record.managedSaleProviderScope === "object"
+    ? { ...record.managedSaleProviderScope }
+    : null,
+  managedBindingState: toStr(record.managedBindingState),
+  managedProviderObservedAt: toStr(record.managedProviderObservedAt),
+  managedProviderInstance: record.managedProviderInstance && typeof record.managedProviderInstance === "object"
+    ? { ...record.managedProviderInstance }
+    : null,
+  clientSubscriptionId: toStr(record.clientSubscriptionId),
+  providerTransactionStatus: toStr(record.providerTransactionStatus),
+  dispatchGeneration: ctx.dispatchGeneration,
+  providerAttemptedAt: ctx.providerAttemptedAt,
+  paidAt: toStr(record.paidAt),
   successUrl: toStr(record.successUrl),
   failUrl: toStr(record.failUrl),
   createdAt: toStr(record.createdAt) || new Date().toISOString(),
 };
+ctx.managedSaleBinding = ctx.saleRecord.managedSaleBinding;
+ctx.managedSaleReadinessCheckedAt = ctx.saleRecord.managedSaleReadinessCheckedAt;
+ctx.managedSaleProviderScope = ctx.saleRecord.managedSaleProviderScope;
+ctx.managedBindingState = ctx.saleRecord.managedBindingState;
+ctx.managedProviderObservedAt = ctx.saleRecord.managedProviderObservedAt;
+ctx.managedProviderInstance = ctx.saleRecord.managedProviderInstance;
+ctx.clientSubscriptionId = ctx.saleRecord.clientSubscriptionId;
+ctx.providerTransactionStatus = ctx.saleRecord.providerTransactionStatus;
 ctx.unlimited = record.unlimited === true || recordCounter?.unlimited === true;
 ctx.reservationMinutes = resolveReservationMinutes();
 ctx.httpRequestTimeoutMs = resolveHttpTimeoutMs();
 
 const currentStatus = String(record.status || "").trim().toUpperCase();
+if (currentStatus === "DISPATCH_REPAIRING") {
+  const repairProviderAttemptedAt = toStr(record.repairProviderAttemptedAt);
+  const repairableFence = (
+    (ctx.counterKey === "piter_friendship" || ctx.counterKey === "network_friendship")
+    && toStr(ctx.requestFingerprint)
+    && ctx.dispatchGeneration > 0
+    && !toStr(ctx.providerAttemptedAt)
+    && toTs(repairProviderAttemptedAt) !== null
+  );
+  if (!repairableFence) {
+    return failMsg(503, "Repair fence попытки Viva требует ручной сверки", {
+      code: "PITER_DISPATCH_REPAIR_FENCE_INVALID",
+    });
+  }
+  ctx.providerAttemptedAt = repairProviderAttemptedAt;
+  ctx.dispatchRepairOnly = true;
+  ctx.step = "piter_dispatch_repair_sale_find";
+  msg._summerSubscriptionCtx = ctx;
+  msg.payload = [record];
+  return [null, null, null, msg];
+}
 if (currentStatus === "PAID" && ctx.reconcile !== true
   && !(ctx.counterKey === "piter_friendship" && ctx.requestFingerprint)) {
   const response = Object.assign({}, msg, {
@@ -466,6 +518,32 @@ if (currentStatus === "PAID" && ctx.reconcile !== true
 }
 
 if (!ctx.transactionId) {
+  const recoverableAtomicProviderAttempt = (
+    (ctx.counterKey === "piter_friendship" || ctx.counterKey === "network_friendship")
+    && (currentStatus === "DISPATCHING" || currentStatus === "PROVIDER_UNKNOWN")
+    && toStr(ctx.requestFingerprint)
+    && toStr(ctx.clientId)
+    && toStr(ctx.productId)
+    && toStr(ctx.studioId)
+    && Number.isInteger(ctx.expectedAmountMinor)
+    && ctx.expectedAmountMinor > 0
+    && toTs(ctx.providerAttemptedAt) !== null
+  );
+  if (recoverableAtomicProviderAttempt) {
+    ctx.step = "token_confirm";
+    msg._summerSubscriptionCtx = ctx;
+    msg.method = "POST";
+    msg.url = TOKEN_URL;
+    msg.headers = { "Content-Type": "application/x-www-form-urlencoded" };
+    msg.httpRequestTimeout = ctx.httpRequestTimeoutMs;
+    msg.payload = buildVivaServiceTokenRequestBody();
+    if (!msg.payload) {
+      return failMsg(503, "Сервисная авторизация Viva не настроена", {
+        code: "VIVA_SERVICE_AUTH_NOT_CONFIGURED",
+      });
+    }
+    return [msg, null, null];
+  }
   const response = Object.assign({}, msg, {
     statusCode: 200,
     headers: { "Content-Type": "application/json; charset=utf-8" },

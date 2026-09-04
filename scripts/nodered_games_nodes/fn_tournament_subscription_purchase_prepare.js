@@ -126,7 +126,6 @@ const REGIONAL_FRIENDSHIP_COUNTER_KEYS = new Set(Object.keys(REGIONAL_FRIENDSHIP
 // while managed usage rules remain disabled. HUB/Kotelniki stay fail closed.
 const MANAGED_SALE_BLOCKED_COUNTER_KEYS = new Set([
   "kotelniki_friendship",
-  "network_friendship",
 ]);
 
 const toStr = (value) => {
@@ -714,6 +713,7 @@ msg._summerSubscriptionCtx = {
   tiers: Array.isArray(activeCounter.tiers) ? activeCounter.tiers : [],
   totalLimit,
   stagedRelease: activeCounter.stagedRelease === true,
+  dailyCapEnabled: activeCounter.dailyCapEnabled === true,
   releaseStartDate: toStr(activeCounter.releaseStartDate),
   launchLimit: Math.max(0, Math.floor(Number(activeCounter.launchLimit) || 0)),
   dailyLimit: Math.max(0, Math.floor(Number(activeCounter.dailyLimit) || 0)),
