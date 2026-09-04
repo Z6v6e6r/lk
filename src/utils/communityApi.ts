@@ -23,6 +23,7 @@ import {
   type CommunityRatingTabInput,
 } from "../services/community-rating/contract.ts";
 import { resolveLkApiBaseUrlCandidates } from "./lkApiBaseUrls";
+import { ExpiringSingleFlight } from "./expiringSingleFlight";
 
 export type { CommunityRatingPeriod, CommunityRatingTab, CommunityRatingTabInput };
 
@@ -1251,29 +1252,41 @@ function shouldRetryCommunityMutation(result: ApiResult<unknown>) {
   return result.status === 404 || result.status === 405 || result.status >= 500;
 }
 
+const COMMUNITIES_MEMORY_CACHE_TTL_MS = 15_000;
+const communityListReads = new ExpiringSingleFlight<ApiResult<CommunityListResponse>>({
+  ttlMs: COMMUNITIES_MEMORY_CACHE_TTL_MS,
+  maxEntries: 64,
+  shouldCache: (result) => result.error === null && result.data !== null,
+});
+
 async function requestCommunityMutation<T>(
   path: string,
   options: RequestOptions,
 ): Promise<ApiResult<T>> {
   const baseUrls = buildCommunityMutationBaseUrls();
+  let finalResult: ApiResult<T>;
   if (baseUrls.length === 0) {
-    return request<T>(path, options);
-  }
+    finalResult = await request<T>(path, options);
+  } else {
+    let lastResult: ApiResult<T> | null = null;
+    for (let index = 0; index < baseUrls.length; index += 1) {
+      const result = await request<T>(path, {
+        ...options,
+        baseUrl: baseUrls[index],
+      });
+      lastResult = result;
 
-  let lastResult: ApiResult<T> | null = null;
-  for (let index = 0; index < baseUrls.length; index += 1) {
-    const result = await request<T>(path, {
-      ...options,
-      baseUrl: baseUrls[index],
-    });
-    lastResult = result;
-
-    if (!shouldRetryCommunityMutation(result) || index === baseUrls.length - 1) {
-      return result;
+      if (!shouldRetryCommunityMutation(result) || index === baseUrls.length - 1) {
+        break;
+      }
     }
+    finalResult = lastResult ?? await request<T>(path, options);
   }
 
-  return lastResult ?? request<T>(path, options);
+  if (finalResult.error === null) {
+    communityListReads.clear();
+  }
+  return finalResult;
 }
 
 function buildMemberPayload(member: CommunityActorPayload) {
@@ -1364,26 +1377,27 @@ export async function apiFetchCommunities(params: {
     appendForceFreshCacheBuster(query);
   }
 
-  const response = await request<unknown>(`/lk/communities?${query.toString()}`, {
-    method: "GET",
-    ...(params.forceFresh
-      ? buildForceFreshCommunityGetOptions()
-      : buildCommunityReadGetOptions(DEV_COMMUNITIES_CACHE_TTL_MS)),
-  });
+  const cacheKey = [buildBaseUrl(), phone ?? "", clientId ?? "", "summary"].join("\u0000");
+  return communityListReads.run(cacheKey, async () => {
+    const response = await request<unknown>(`/lk/communities?${query.toString()}`, {
+      method: "GET",
+      ...buildForceFreshCommunityGetOptions(),
+    });
 
-  if (response.error) {
+    if (response.error) {
+      return {
+        data: { communities: [], connections: [] } satisfies CommunityListResponse,
+        error: response.error,
+        status: response.status,
+      };
+    }
+
     return {
-      data: { communities: [], connections: [] } satisfies CommunityListResponse,
-      error: response.error,
+      data: extractCommunityListResponse(response.data),
+      error: null,
       status: response.status,
     };
-  }
-
-  return {
-    data: extractCommunityListResponse(response.data),
-    error: null,
-    status: response.status,
-  };
+  }, { forceFresh: params.forceFresh });
 }
 
 export async function apiFetchCommunity(

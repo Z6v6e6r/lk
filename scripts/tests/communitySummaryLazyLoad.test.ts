@@ -5,6 +5,10 @@ import test from "node:test";
 const apiSource = fs.readFileSync("src/utils/communityApi.ts", "utf8");
 const communitiesSource = fs.readFileSync("src/components/cabinet/CommunitiesSection.tsx", "utf8");
 const nodeRedPatchSource = fs.readFileSync("scripts/patch_nodered_communities_flow.mjs", "utf8");
+const nodeRedListPrepareSource = fs.readFileSync(
+  "scripts/nodered_community_list_nodes/fn_list_prepare_tail.js",
+  "utf8",
+);
 
 function sourceSlice(source: string, start: string, end: string) {
   const startIndex = source.indexOf(start);
@@ -31,24 +35,23 @@ test("community list always requests the summary projection", () => {
   assert.doesNotMatch(listSource, /maybeAppendCacheBuster/);
 });
 
-test("Node-RED summary mode projects at most the current viewer instead of full rosters", () => {
-  const listPrepareSource = sourceSlice(
-    nodeRedPatchSource,
-    "const fnListPrepare =",
-    "const fnListResponse =",
-  );
+test("Node-RED summary mode narrows rows and projects at most the current viewer", () => {
   const listResponseSource = sourceSlice(
     nodeRedPatchSource,
     "const fnListResponse =",
     "const fnGetPrepare =",
   );
 
-  assert.match(listPrepareSource, /msg\.payload = listQuery/);
-  assert.match(listPrepareSource, /msg\.projection = summaryProjection/);
-  assert.doesNotMatch(listPrepareSource, /msg\.payload = \[listQuery/);
-  assert.match(listPrepareSource, /summaryProjection\.members = \{ \$elemMatch: viewerMatch \}/);
-  assert.match(listPrepareSource, /summaryProjection\.pendingMembers = \{ \$elemMatch: viewerMatch \}/);
+  assert.match(nodeRedListPrepareSource, /visibility: \{ \$not: \/\^\\s\*CLOSED\\s\*\$\/i \}/);
+  assert.match(nodeRedListPrepareSource, /accessFilters\.push\(\{ members: \{ \$elemMatch: viewerMatch \} \}\)/);
+  assert.match(nodeRedListPrepareSource, /accessFilters\.push\(\{ pendingMembers: \{ \$elemMatch: viewerMatch \} \}\)/);
+  assert.match(nodeRedListPrepareSource, /msg\.projection = summaryProjection/);
+  assert.match(nodeRedListPrepareSource, /summaryProjection\.members = \{ \$elemMatch: viewerMatch \}/);
+  assert.match(nodeRedListPrepareSource, /summaryProjection\.pendingMembers = \{ \$elemMatch: viewerMatch \}/);
+  assert.doesNotMatch(nodeRedListPrepareSource, /^\s*logo:\s*1,/m);
+  assert.doesNotMatch(nodeRedListPrepareSource, /^\s*logoLegacyDataUrl:\s*1,/m);
   assert.match(listResponseSource, /connections: isSummaryMode \? \[\] : buildConnections\(scopedRows\)/);
+  assert.match(listResponseSource, /rows\.filter\(\(item\) => canListCommunityForViewer/);
 });
 
 test("ordinary community reads reuse stable URLs", () => {
@@ -92,9 +95,36 @@ test("ordinary community reads reuse stable URLs", () => {
   });
   [listSource, detailSource, feedSource].forEach((readSource) => {
     assert.match(readSource, /params\.forceFresh[\s\S]*appendForceFreshCacheBuster/);
+  });
+  [detailSource, feedSource].forEach((readSource) => {
     assert.match(readSource, /buildCommunityReadGetOptions/);
   });
+  assert.match(listSource, /communityListReads\.run/);
+  assert.match(listSource, /buildForceFreshCommunityGetOptions/);
+  assert.match(listSource, /forceFresh: params\.forceFresh/);
   assert.doesNotMatch(readOptionsSource, /cache:/);
+});
+
+test("summary rows retain the legacy logo endpoint fallback without embedding the data URL", () => {
+  const logoCandidatesSource = sourceSlice(
+    apiSource,
+    "export function buildCommunityLogoCandidates",
+    "function decodeInviteSegment",
+  );
+
+  assert.match(logoCandidatesSource, /community-logo-legacy\/\$\{encodeURIComponent\(community\.id\)\}\/thumb/);
+  assert.match(logoCandidatesSource, /community-logo-legacy\/\$\{encodeURIComponent\(community\.id\)\}`/);
+});
+
+test("successful community mutations invalidate the browser-memory list cache", () => {
+  const mutationSource = sourceSlice(
+    apiSource,
+    "async function requestCommunityMutation",
+    "function buildMemberPayload",
+  );
+
+  assert.match(mutationSource, /if \(finalResult\.error === null\)/);
+  assert.match(mutationSource, /communityListReads\.clear\(\)/);
 });
 
 test("full community and feed load only after opening a detail and are reused afterwards", () => {
