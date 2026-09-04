@@ -6,8 +6,8 @@
   "releaseBinding": {
     "sourceCommit": "eca4e1a17d7b2d84489fc9e8129a2eee29c8f3a0",
     "sourceFlowSha256": "e40db778a18885b3dee6b6f414fe9c4c1b566092df4ed331c5055f9489c1aaec",
-    "candidateSha256": "580b917cc2440e74984b23258be2e63d3d4b29e5105685742cf0e25a9c3547a7",
-    "manifestSha256": "d56575ce6871a06adee6c493c0a140e94332ffcf39c25e8012af6c0c43ea92f8"
+    "candidateSha256": "bb12016c4ac4bcb8e3e366c83c553c595ef51afc7ae542211aa9d9806c4a9b5c",
+    "manifestSha256": "e46437a628ec91a4b47c6fc1703061ea05510218ce8b2ae82d9e554da74490e6"
   },
   "target": {
     "hostAlias": "lk-reserve-89",

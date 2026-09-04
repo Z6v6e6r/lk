@@ -364,7 +364,7 @@ test("DEV builder patches only frozen function bodies and emits a separate diges
     flow.map(({ id, z, wires }) => ({ id, z, wires })),
   );
   assert.match(result.candidate.find((node) => node.id === "router-dev").func,
-    /DEV: "http:\/\/127\.0\.0\.1:3037\/api"/);
+    /DEV: "https:\/\/127\.0\.0\.1:3037\/api"/);
   assert.match(result.candidate.find((node) => node.id === "router-dev").func,
     /MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "DEV"/);
   assert.doesNotMatch(result.candidate.find((node) => node.id === "router-dev").func,
@@ -386,9 +386,9 @@ test("actual reachable sources bind only to the approved DEV fixture origins", (
     assert.match(source, /successUrl: null/);
     assert.match(source, /failUrl: null/);
   }
-  assert.match(combined, /http:\/\/127\.0\.0\.1:3037\/api/);
-  assert.match(combined, /http:\/\/127\.0\.0\.1:3038/);
-  assert.match(combined, /http:\/\/127\.0\.0\.1:3039/);
+  assert.match(combined, /https:\/\/127\.0\.0\.1:3037\/api/);
+  assert.match(combined, /https:\/\/127\.0\.0\.1:3038/);
+  assert.match(combined, /https:\/\/127\.0\.0\.1:3039/);
 });
 
 test("install evidence binds every changed source node to the frozen preimage", () => {

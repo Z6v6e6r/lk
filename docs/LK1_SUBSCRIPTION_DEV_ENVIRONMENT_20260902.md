@@ -250,8 +250,8 @@ source, and writes readiness last through a private staging directory. The froze
 source/candidate/manifest SHA-256 tuple is:
 
 - source: `e40db778a18885b3dee6b6f414fe9c4c1b566092df4ed331c5055f9489c1aaec`;
-- candidate: `580b917cc2440e74984b23258be2e63d3d4b29e5105685742cf0e25a9c3547a7`;
-- manifest: `d56575ce6871a06adee6c493c0a140e94332ffcf39c25e8012af6c0c43ea92f8`.
+- candidate: `bb12016c4ac4bcb8e3e366c83c553c595ef51afc7ae542211aa9d9806c4a9b5c`;
+- manifest: `e46437a628ec91a4b47c6fc1703061ea05510218ce8b2ae82d9e554da74490e6`.
 
 The DEV postimage also strips browser-supplied success/failure/base redirect URLs
 from both split-payment preparation paths before any provider transaction can be
