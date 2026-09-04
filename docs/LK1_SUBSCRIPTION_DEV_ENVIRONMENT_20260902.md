@@ -232,9 +232,11 @@ generation and publication below `/private/tmp`, while candidate install, Node-R
 import, service start, unit enablement, ingress, activation, canary IDs, secrets,
 and external writes remain unauthorized.
 
-This branch contains a time-stamped read-only host-evidence artifact with
-`PASS_AT_CAPTURE`; static validation is reproducible, while execution-time freshness
-is intentionally checked only by the explicit `--require-fresh` preinstall gate.
+This branch retains a time-stamped schema-v1 host-evidence artifact only as a
+historical archive. It cannot satisfy current freshness. A separately authorized
+schema-v2 BatchMode SSH capture must bind the clean repository HEAD/tree, release
+tuple, capture tooling, systemd fragments/drop-ins, TLS inputs, ingress isolation,
+and the trusted shared-flow digest immediately before any install review.
 The source-only contract also fixes `hostPreimage.state=ABSENT` as the future install
 target contract. A new read-only capture remains mandatory immediately before any
 separately authorized install stage.

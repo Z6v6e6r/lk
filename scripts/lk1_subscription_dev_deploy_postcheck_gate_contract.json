@@ -59,7 +59,7 @@
     "crossEnvironmentWriteBudget": 0
   },
   "predeploy": {
-    "state": "PASS_AT_CAPTURE",
+    "state": "HISTORICAL_PASS_REQUIRES_REFRESH",
     "freshEvidenceRequired": true,
     "capturedAt": "2026-09-04T12:18:15Z",
     "maximumAgeSeconds": 3600,

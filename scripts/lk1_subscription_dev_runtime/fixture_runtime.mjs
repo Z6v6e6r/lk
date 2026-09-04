@@ -338,7 +338,12 @@ export function createFixtureState(config) {
     entitlements: new Map(),
     instances: new Map(Object.values(config.subjects).map((subject) => [
       subject.subscriptionInstanceId,
-      { revision: subject.instanceRevision, state: subject.instanceState },
+      {
+        revision: subject.instanceRevision,
+        state: subject.instanceState,
+        activationProviderBookingId: null,
+        activationExpectedRevision: null,
+      },
     ])),
   };
 }
@@ -411,6 +416,8 @@ function reserveEntitlement(config, request, state) {
     state: "RESERVED",
     aggregateRevision: 1,
     decision: managedDecision(subject, action),
+    providerBookingId: null,
+    releaseReason: null,
   };
   state.entitlements.set(operationId, entry);
   return {
@@ -443,14 +450,19 @@ function entitlementTransition(config, request, state, transition) {
     fail("FIXTURE_ENTITLEMENT_REQUEST_INVALID", "Entitlement operation identity is invalid", 409);
   }
   if (transition === "CONFIRMED") {
-    if (!SAFE_ID.test(cleanText(request.body.providerBookingId))) {
+    const providerBookingId = cleanText(request.body.providerBookingId);
+    if (!SAFE_ID.test(providerBookingId)) {
       fail("FIXTURE_PROVIDER_BOOKING_INVALID", "Synthetic provider booking is invalid", 409);
     }
     if (entry.state === "FAILED" || entry.state === "COMPENSATED") {
       fail("FIXTURE_ENTITLEMENT_STATE_CONFLICT", "Released entitlement cannot be confirmed", 409);
     }
+    if (entry.state === "CONFIRMED" && entry.providerBookingId !== providerBookingId) {
+      fail("FIXTURE_IDEMPOTENCY_CONFLICT", "Confirmation replay changed provider booking", 409);
+    }
     if (entry.state !== "CONFIRMED") {
       entry.state = "CONFIRMED";
+      entry.providerBookingId = providerBookingId;
       entry.aggregateRevision += 1;
     }
     return {
@@ -462,19 +474,28 @@ function entitlementTransition(config, request, state, transition) {
       aggregateRevision: entry.aggregateRevision,
     };
   }
+  const releaseReason = cleanText(request.body.reason);
+  const providerBookingId = request.body.providerBookingId === undefined
+    ? null
+    : cleanText(request.body.providerBookingId);
   if (!["PROVIDER_REJECTED", "PROVIDER_CANCELLED", "BOOKING_CANCELLED", "REQUEST_FAILED", "EXPIRED"]
-    .includes(cleanText(request.body.reason))) {
+    .includes(releaseReason)) {
     fail("FIXTURE_RELEASE_REASON_INVALID", "Release reason is not allowlisted", 409);
   }
-  if (request.body.providerBookingId !== undefined
-    && !SAFE_ID.test(cleanText(request.body.providerBookingId))) {
+  if (providerBookingId !== null && !SAFE_ID.test(providerBookingId)) {
     fail("FIXTURE_PROVIDER_BOOKING_INVALID", "Synthetic provider booking is invalid", 409);
   }
   if (entry.state === "CONFIRMED") {
     fail("FIXTURE_ENTITLEMENT_STATE_CONFLICT", "Confirmed entitlement cannot be released", 409);
   }
+  if (entry.state === "FAILED"
+    && (entry.releaseReason !== releaseReason || entry.providerBookingId !== providerBookingId)) {
+    fail("FIXTURE_IDEMPOTENCY_CONFLICT", "Release replay changed transition identity", 409);
+  }
   if (entry.state !== "FAILED") {
     entry.state = "FAILED";
+    entry.releaseReason = releaseReason;
+    entry.providerBookingId = providerBookingId;
     entry.aggregateRevision += 1;
   }
   return {
@@ -498,16 +519,23 @@ function activateFirstUse(config, request, state) {
   );
   const [, subject] = found;
   const instance = state.instances.get(subject.subscriptionInstanceId);
+  const providerBookingId = cleanText(request.body.providerBookingId);
   if (request.body.clientSubscriptionId !== subject.clientSubscriptionId
-    || !SAFE_ID.test(cleanText(request.body.providerBookingId))
+    || !SAFE_ID.test(providerBookingId)
     || !Number.isSafeInteger(request.body.expectedInstanceRevision)) {
     fail("FIXTURE_ACTIVATION_REQUEST_INVALID", "Activation request identity is invalid", 409);
   }
   const alreadyActive = instance.state === "ACTIVE";
+  if (alreadyActive && (instance.activationProviderBookingId !== providerBookingId
+    || instance.activationExpectedRevision !== request.body.expectedInstanceRevision)) {
+    fail("FIXTURE_IDEMPOTENCY_CONFLICT", "Activation replay changed transition identity", 409);
+  }
   if (!alreadyActive && request.body.expectedInstanceRevision !== instance.revision) {
     fail("FIXTURE_ACTIVATION_REVISION_CONFLICT", "Activation revision is stale", 409);
   }
   if (!alreadyActive) {
+    instance.activationProviderBookingId = providerBookingId;
+    instance.activationExpectedRevision = request.body.expectedInstanceRevision;
     instance.state = "ACTIVE";
     instance.revision += 1;
   }

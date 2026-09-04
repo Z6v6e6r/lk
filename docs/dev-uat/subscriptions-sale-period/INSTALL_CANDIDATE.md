@@ -87,6 +87,9 @@ symlink/special/unexpected files, canonical contract/unit/flow digests и
 ## Следующий отдельный gate
 
 До любого host install требуется отдельная авторизация, fresh read-only host
-readback и новый reviewed executor/rollback plan. Даже установка payload не должна
+readback и новый reviewed executor/rollback plan. Checked-in schema-v1 evidence
+является только историческим архивом; install gate требует отдельный schema-v2
+direct-SSH capture, связанный с clean exact HEAD/tree и HTTPS/TLS candidate tuple.
+Даже установка payload не должна
 создавать marker/config/receipt, выполнять `daemon-reload`, запускать или включать
 units либо менять ingress/activation.

@@ -29,16 +29,15 @@ Source binding исправлен на dedicated CUP `https://127.0.0.1:3037` и
 
 ## Что требуется до будущей установки
 
-Read-only preflight от 2026-09-04 зафиксировал
+Read-only preflight от 2026-09-04 является неизменяемым историческим архивом и зафиксировал
 systemd 245, disabled/inactive units, отсутствие reserved listeners и inputs,
-неизменность shared flow. Tracked JSON статически проверяется воспроизводимо, а
-его execution-time свежесть ограничена одним часом. Непосредственно
-перед отдельно авторизованной установкой fresh preflight должен заново зафиксировать
-repository identity, candidate manifest, host identity, поддержку systemd
-совместимый authorization transport, disabled/inactive units, отсутствие listeners и authorization
-inputs, неизменность shared ресурсов, отсутствие production routes/origins и
-review rollback-to-absent. Любое несовпадение останавливает переход; исторический
-bootstrap receipt не заменяет свежую проверку.
+неизменность shared flow и отсутствие TLS credentials. Его timestamp не может
+авторизовать будущую установку. Непосредственно перед отдельно авторизованной
+установкой fresh v2 capture через pinned BatchMode SSH должен заново связать
+repository HEAD/tree, candidate tuple, validator/capture hashes, host identity,
+systemd fragment hashes, отсутствие drop-ins, reserved listeners, TLS/authorization
+inputs, ingress routes и drift shared flow. Результат записывается только в private
+temporary artifact `0700/0600`; любое несовпадение останавливает переход.
 
 Статический source gate не заявляет runtime network enforcement. systemd 245
 подтверждает только совместимость file-based authorization transport;
@@ -69,16 +68,15 @@ start/activation длится 600-900 секунд. До фактическог�
 
 ```bash
 npm run nodered:lk1-subscription-dev:deploy-postcheck-gate
-npm run nodered:lk1-subscription-dev:host-preflight
 npm run test:lk1-subscription-dev-deploy-postcheck-gate
 npm run test:lk1-subscription-dev-host-preflight
 ```
 
-Команды только читают tracked JSON/JS файлы и валидируют их между собой. Они не
-содержат SSH, network, installer или service-control операций. Успешная локальная
-валидация означает, что блокеры и будущие проверки сформулированы согласованно;
-она не означает готовность к deploy.
+Test-команды читают tracked JSON/JS и не обращаются к host. Сам host-preflight CLI
+намеренно принимает только `--capture-via-ssh`; его запуск является отдельным
+read-only host gate и здесь не выполнялся. Успешная локальная валидация не означает
+готовность к deploy.
 
-Непосредственно перед отдельно авторизованным install обязательны execution-time
-команды `node scripts/validate_lk1_subscription_dev_host_preflight.mjs --require-fresh`
-и `node scripts/validate_lk1_subscription_dev_deploy_postcheck_gate.mjs --require-fresh-host-evidence`.
+Непосредственно перед отдельно авторизованным install обязателен новый
+`node scripts/validate_lk1_subscription_dev_host_preflight.mjs --capture-via-ssh`;
+полученный v2 artifact должен быть проверен deploy gate с тем же exact HEAD/tree.

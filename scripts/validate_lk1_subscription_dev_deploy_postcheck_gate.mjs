@@ -17,6 +17,7 @@ import { validateRuntimeInstallContract } from "./verify_lk1_subscription_dev_ru
 import { validateReleaseReceiptV2 } from "./validate_lk1_subscription_dev_release_receipt_v2.mjs";
 import {
   checkedHostPreflightEvidence,
+  validateFreshHostPreflightEvidence,
   validateHostPreflightEvidence,
 } from "./validate_lk1_subscription_dev_host_preflight.mjs";
 
@@ -121,9 +122,9 @@ export function validateDeployPostcheckGate(gate, {
   runtimeEnvironmentBindings = LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS,
   candidateBinding = CHECKED_DEV_CANDIDATE_BINDING,
   sourceAuthorization = CHECKED_DEV_SOURCE_AUTHORIZATION,
-  hostPreflightEvidence = checkedHostPreflightEvidence,
-  now = null,
-  requireFreshHostEvidence = false,
+  archivedHostPreflightEvidence = checkedHostPreflightEvidence,
+  freshHostPreflightEvidence,
+  now,
 } = {}) {
   validateDevProvisioningContract(provisioningContract);
   validateRuntimeInstallContract(runtimeInstallContract);
@@ -133,10 +134,15 @@ export function validateDeployPostcheckGate(gate, {
     candidateSha256: releaseReceipt.candidateSha256,
     manifestSha256: releaseReceipt.manifestSha256,
   });
-  validateHostPreflightEvidence(hostPreflightEvidence, {
-    now,
-    requireFresh: requireFreshHostEvidence,
-  });
+  validateHostPreflightEvidence(archivedHostPreflightEvidence);
+  // The immutable archive documents the source-only gate. A separately
+  // captured v2 object is mandatory for a current installation authorization;
+  // its timestamp must never be compared to the archive timestamp.
+  if (freshHostPreflightEvidence !== undefined) {
+    validateFreshHostPreflightEvidence(freshHostPreflightEvidence, now);
+  } else {
+    if (now !== undefined) fail("fresh host evidence object is required with an explicit clock");
+  }
 
   exactKeys(gate, [
     "schemaVersion", "environment", "state", "productionBindingState", "releaseBinding",
@@ -269,11 +275,12 @@ export function validateDeployPostcheckGate(gate, {
     "state", "freshEvidenceRequired", "capturedAt", "maximumAgeSeconds",
     "mustRefreshImmediatelyBeforeInstall", "checks",
   ], "DEV predeploy gate");
-  if (gate.predeploy.state !== "PASS_AT_CAPTURE" || gate.predeploy.freshEvidenceRequired !== true
-    || gate.predeploy.capturedAt !== hostPreflightEvidence.capturedAt
-    || gate.predeploy.maximumAgeSeconds !== hostPreflightEvidence.maximumAgeSeconds
+  if (gate.predeploy.state !== "HISTORICAL_PASS_REQUIRES_REFRESH"
+    || gate.predeploy.freshEvidenceRequired !== true
+    || gate.predeploy.capturedAt !== archivedHostPreflightEvidence.capturedAt
+    || gate.predeploy.maximumAgeSeconds !== archivedHostPreflightEvidence.maximumAgeSeconds
     || gate.predeploy.mustRefreshImmediatelyBeforeInstall !== true) {
-    fail("DEV predeploy evidence is absent, stale, or not marked for execution-time refresh");
+    fail("DEV predeploy archive is absent or not marked for execution-time refresh");
   }
   exactArray(gate.predeploy.checks, PREDEPLOY_CHECKS, "DEV predeploy checks");
 
@@ -364,16 +371,9 @@ export function validateDeployPostcheckGate(gate, {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const requireFreshHostEvidence = process.argv.length === 3
-    && process.argv[2] === "--require-fresh-host-evidence";
-  if (process.argv.length !== (requireFreshHostEvidence ? 3 : 2)) {
-    fail("Usage: validate_lk1_subscription_dev_deploy_postcheck_gate.mjs [--require-fresh-host-evidence]");
-  }
-  validateDeployPostcheckGate(checkedDeployPostcheckGate, {
-    now: requireFreshHostEvidence ? new Date() : null,
-    requireFreshHostEvidence,
-  });
-  process.stdout.write("LK1_DEV_DEPLOY_POSTCHECK_GATE=PREPARED_SOURCE_ONLY_READY_FOR_STOPPED_INSTALL_REVIEW\nDEV_DEPLOYED=NOT_CLAIMED\nDEV_ACTIVE=NOT_CLAIMED\n");
+  if (process.argv.length !== 2) fail("Usage: validate_lk1_subscription_dev_deploy_postcheck_gate.mjs");
+  validateDeployPostcheckGate(checkedDeployPostcheckGate);
+  process.stdout.write("LK1_DEV_DEPLOY_POSTCHECK_GATE=PREPARED_SOURCE_ONLY_READY_FOR_STOPPED_INSTALL_REVIEW\nHOST_PREFLIGHT_CURRENT=NOT_CLAIMED\nDEV_DEPLOYED=NOT_CLAIMED\nDEV_ACTIVE=NOT_CLAIMED\n");
 }
 
 export { POSTCHECK_PHASES, PREDEPLOY_CHECKS, ZERO_COUNTERS };

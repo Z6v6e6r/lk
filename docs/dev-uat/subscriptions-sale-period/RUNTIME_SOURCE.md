@@ -64,6 +64,10 @@ start/enable units, ingress, выдача canary IDs, activation и ручной
 реализованы и локально проверены; provider/identity create/join остаются
 health-only и host runtime не запускался.
 
+Повторные confirm/release/first-use activation принимаются только с тем же exact
+provider booking, release reason и expected revision. Изменение transition identity
+при replay завершается `FIXTURE_IDEMPOTENCY_CONFLICT` без нового revision.
+
 `IPAddressDeny=any`/`IPAddressAllow=localhost` остаются defense-in-depth в unit
 candidates, но их фактическое kernel/eBPF enforcement не доказано read-only
 preflight. Поэтому `serviceStartBlocked=true` до отдельно авторизованного

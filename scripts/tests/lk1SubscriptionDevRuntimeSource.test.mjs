@@ -525,6 +525,15 @@ test("CUP managed reserve, replay, confirm, release, and activation are syntheti
     state,
   ).body;
   assert.equal(confirmed.operationState, "CONFIRMED");
+  assert.equal(request(
+    config,
+    "cup",
+    "POST",
+    "/api/internal/subscriptions/entitlements/confirm",
+    "A",
+    { operationId: operationA, providerBookingId: "fixture-provider-booking-a" },
+    state,
+  ).body.aggregateRevision, confirmed.aggregateRevision);
   assert.equal(reserve("A", operationA).operationState, "CONFIRMED");
 
   const operationB = "fixture-operation-entitlement-b";
@@ -539,6 +548,15 @@ test("CUP managed reserve, replay, confirm, release, and activation are syntheti
     state,
   ).body;
   assert.equal(released.operationState, "FAILED");
+  assert.equal(request(
+    config,
+    "cup",
+    "POST",
+    "/api/internal/subscriptions/entitlements/release",
+    "B",
+    { operationId: operationB, reason: "PROVIDER_REJECTED" },
+    state,
+  ).body.aggregateRevision, released.aggregateRevision);
 
   const activated = request(
     config,
@@ -556,6 +574,20 @@ test("CUP managed reserve, replay, confirm, release, and activation are syntheti
   ).body;
   assert.equal(activated.outcome, "ACTIVATED");
   assert.equal(activated.state, "ACTIVE");
+  assert.equal(request(
+    config,
+    "cup",
+    "POST",
+    "/api/internal/subscriptions/activate-first-use",
+    "B",
+    {
+      subscriptionInstanceId: config.subjects.B.subscriptionInstanceId,
+      clientSubscriptionId: config.subjects.B.clientSubscriptionId,
+      providerBookingId: "fixture-provider-booking-b",
+      expectedInstanceRevision: config.subjects.B.instanceRevision,
+    },
+    state,
+  ).body.outcome, "ALREADY_ACTIVE");
 });
 
 test("managed CUP contract denies control, idempotency conflicts, bad revisions, and unknown operations", () => {
@@ -604,6 +636,66 @@ test("managed CUP contract denies control, idempotency conflicts, bad revisions,
       expectedInstanceRevision: config.subjects.B.instanceRevision - 1,
     }, state,
   ), (error) => error.code === "FIXTURE_ACTIVATION_REVISION_CONFLICT");
+});
+
+test("managed CUP contract rejects divergent transition replays", () => {
+  const config = fixtureConfig();
+  const state = createFixtureState(config);
+  const reserve = (role, operationId) => request(
+    config, "cup", "POST", "/api/internal/subscriptions/entitlements/reserve", role,
+    {
+      subscriptionInstanceId: config.subjects[role].subscriptionInstanceId,
+      action: "CREATE_GAME",
+      target: { targetId: config.subjects[role].managedTarget.targetId },
+    },
+    state,
+    { "idempotency-key": operationId, "x-correlation-id": operationId },
+  );
+
+  const confirmedOperation = "fixture-operation-confirm-replay";
+  reserve("A", confirmedOperation);
+  request(
+    config, "cup", "POST", "/api/internal/subscriptions/entitlements/confirm", "A",
+    { operationId: confirmedOperation, providerBookingId: "fixture-provider-booking-a" }, state,
+  );
+  assert.throws(() => request(
+    config, "cup", "POST", "/api/internal/subscriptions/entitlements/confirm", "A",
+    { operationId: confirmedOperation, providerBookingId: "fixture-provider-booking-other" }, state,
+  ), (error) => error.code === "FIXTURE_IDEMPOTENCY_CONFLICT");
+
+  const releasedOperation = "fixture-operation-release-replay";
+  reserve("B", releasedOperation);
+  request(
+    config, "cup", "POST", "/api/internal/subscriptions/entitlements/release", "B",
+    { operationId: releasedOperation, providerBookingId: "fixture-provider-booking-b", reason: "PROVIDER_REJECTED" }, state,
+  );
+  assert.throws(() => request(
+    config, "cup", "POST", "/api/internal/subscriptions/entitlements/release", "B",
+    { operationId: releasedOperation, providerBookingId: "fixture-provider-booking-other", reason: "PROVIDER_REJECTED" }, state,
+  ), (error) => error.code === "FIXTURE_IDEMPOTENCY_CONFLICT");
+  assert.throws(() => request(
+    config, "cup", "POST", "/api/internal/subscriptions/entitlements/release", "B",
+    { operationId: releasedOperation, providerBookingId: "fixture-provider-booking-b", reason: "EXPIRED" }, state,
+  ), (error) => error.code === "FIXTURE_IDEMPOTENCY_CONFLICT");
+
+  const activationBody = {
+    subscriptionInstanceId: config.subjects.B.subscriptionInstanceId,
+    clientSubscriptionId: config.subjects.B.clientSubscriptionId,
+    providerBookingId: "fixture-provider-booking-b",
+    expectedInstanceRevision: config.subjects.B.instanceRevision,
+  };
+  request(
+    config, "cup", "POST", "/api/internal/subscriptions/activate-first-use", "B",
+    activationBody, state,
+  );
+  assert.throws(() => request(
+    config, "cup", "POST", "/api/internal/subscriptions/activate-first-use", "B",
+    { ...activationBody, providerBookingId: "fixture-provider-booking-other" }, state,
+  ), (error) => error.code === "FIXTURE_IDEMPOTENCY_CONFLICT");
+  assert.throws(() => request(
+    config, "cup", "POST", "/api/internal/subscriptions/activate-first-use", "B",
+    { ...activationBody, expectedInstanceRevision: config.subjects.B.instanceRevision + 1 }, state,
+  ), (error) => error.code === "FIXTURE_IDEMPOTENCY_CONFLICT");
 });
 
 test("CUP managed contract is physically reachable on a fixture-owned loopback listener", async (t) => {
