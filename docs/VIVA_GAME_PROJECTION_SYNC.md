@@ -173,6 +173,77 @@ Reopening ingress on the old flow with migrated rows is forbidden because it can
 write a null tenant without resetting revision. Start the worker in `SHADOW`;
 `ENFORCE` still requires separate approval.
 
+### Cutover packet and migration executor
+
+The cutover is represented by one private packet assembled only from a fresh
+live workspace, its exact candidate, one or more non-overlapping migration
+plans, and a private controls receipt:
+
+```bash
+npm run nodered:viva-game-projection-sync:cutover-packet -- \
+  --workspace /absolute/private/fresh-live-workspace \
+  --candidate-directory /absolute/private/viva-projection-candidate \
+  --migration-index /absolute/private/migration-plan-index.json \
+  --controls /absolute/private/cutover-controls.json \
+  --output-directory /absolute/private/new-cutover-packet \
+  --tenant-key iSkq6G
+```
+
+The migration index has format version 1, the exact tenant, and `plans` entries
+containing an absolute private `plan.json` path plus its SHA-256. The controls
+receipt has format version 1 and the same tenant. It records exact-head CI;
+durable PM2 tenant provisioning and post-restart readback; a held writer fence;
+the current `games.lk_games` backup manifest; an isolated restore rehearsal;
+the exact Mongo replica-set identity; disposition
+of every skipped row; and the prepared postcheck contract. A claimed `PASS`
+with a missing hash, mismatched count, incomplete writer inventory, overlapping
+plan range, unresolved skip, or mismatched flow/tenant/commit is rejected.
+The backup manifest and restore-rehearsal receipt are themselves private inputs;
+the builder reads, hashes, validates, and copies them into the packet evidence
+directory. The packet manifest binds the exact commit, source, deterministically
+rebuilt candidate, controls, reviewed-flow contract, plans, and evidence files.
+
+The packet enumerates every `mongodb4` writer to `lk_games` in both the source
+and candidate graphs. A valid fence receipt must bind that exact union, show
+write ingress blocked, internal schedulers stopped, Node-RED stopped, and all
+writers quiescent. Production execution must use
+`scripts/run_viva_game_projection_fenced_migration.sh`; it holds the canonical
+host `flock` for the whole process. The executor checks the inherited descriptor,
+live PM2 stopped state, PM2 tenant value, Mongo target identity, and active Mongo
+writers before backup, inside the transaction, between each CAS and readback,
+and after commit. The receipt expires and must leave at least two minutes on its
+lease. A generated packet always has
+`liveMutationAuthorized: false`; `READY_FOR_SEPARATE_LIVE_APPROVAL` means the
+evidence is internally complete for review, not that apply, import, restart, or
+activation is authorized.
+
+The executor accepts canonical EJSON ObjectIds and verifies the separately
+pinned packet-manifest, cutover-plan, migration-plan, flow, tenant, host, and
+fence hashes. `verify` and `reconcile` are read-only. `apply` creates a private
+full-BSON backup outside every Git worktree, fsyncs its file and directory,
+reads it back and validates it before the first mutation, then repeats
+the preimage check inside a majority transaction, uses only exact CAS
+`updateOne(..., { upsert: false })`, requires one matched and modified row per
+operation, and records postimage hashes. Each attempt uses an append-only,
+fsynced state journal and writes `TRANSACTION_OUTCOME_UNKNOWN` before the
+transaction begins. If the client loses the commit result, `reconcile` compares
+every current document to the exact preimage and deterministic postimage; it
+returns only `ABORTED_NO_MUTATION`, `APPLIED_RECOVERED`, or
+`BLOCKED_MIXED_OR_DRIFT`. `restore`
+requires the exact apply receipt and backup, rejects any post-apply drift, and
+restores every full preimage with CAS in a separate transaction. Apply and
+restore each need a separately approved live-data transition and their exact
+environment confirmation phrase; preparing or verifying the packet does not
+set either phrase.
+
+After migration and candidate installation, the postcheck receipt must remain
+bound to the held fence and prove the exact candidate and runtime tenant,
+all apply-report and apply-receipt hashes, zero active reachable legacy rows,
+hashed query evidence, zero duplicate provider
+identities, at least one provider-confirmed tenant-bound row, and a `SHADOW`
+worker with zero writes. Failure of any item forbids reopening ingress. Restoring
+the old flow is allowed only after the exact data backup has been restored.
+
 ## Candidate preparation
 
 At release time, start from a fresh private workspace pulled from
