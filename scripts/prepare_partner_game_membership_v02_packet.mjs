@@ -14,10 +14,16 @@ import {
   syncDirectory,
   validateExactGraphContract,
 } from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
+import { validatePartnerProductionControls } from "./validate_partner_game_membership_production_controls.mjs";
+import {
+  validateCheckedPartnerRuntimeEvidence,
+  validatePartnerRuntimeEvidence,
+} from "./validate_partner_game_membership_runtime.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = fs.realpathSync(path.resolve(SCRIPT_DIR, ".."));
 const NODE_PACKAGE_ROOT = path.join(REPO_ROOT, "node-red/custom-nodes/partner-game-membership-api");
+const PRODUCTION_CONTROLS_PATH = path.join(REPO_ROOT, "scripts/partner_game_membership_production_controls.json");
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/;
 const DEPLOYMENT_ID = "partner-game-membership-api-v02";
 const RELEASE_FILES = Object.freeze([
@@ -28,6 +34,14 @@ const RELEASE_FILES = Object.freeze([
   "partner-game-membership-viva.mjs",
   "partner-game-membership-node.cjs",
   "partner-game-membership-node.html",
+]);
+const RUNTIME_ARTIFACT_FILES = Object.freeze([
+  "package.json",
+  "package-lock.json",
+  "dependency-tree.json",
+  "audit-report.json",
+  "functional-rehearsal.json",
+  "runtime-manifest.json",
 ]);
 
 const isWithin = (parent, candidate) => {
@@ -60,8 +74,13 @@ export function assertExternalNewPacketDirectory(outArg) {
   const parent = path.dirname(output);
   const stat = fs.lstatSync(parent);
   const canonicalParent = fs.realpathSync(parent);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || canonicalParent !== parent) {
-    throw new Error("Pilot packet parent must be a real canonical directory");
+  const expectedUid = typeof process.getuid === "function" ? process.getuid() : stat.uid;
+  if (!stat.isDirectory()
+    || stat.isSymbolicLink()
+    || canonicalParent !== parent
+    || stat.uid !== expectedUid
+    || (stat.mode & 0o777) !== 0o700) {
+    throw new Error("Pilot packet parent must be a private user-owned canonical directory with mode 0700");
   }
   const canonicalOutput = path.join(canonicalParent, path.basename(output));
   if (isWithin(REPO_ROOT, canonicalOutput)) throw new Error("Pilot packet must be outside the repository");
@@ -85,6 +104,44 @@ const writePrivateJson = (filePath, value) => writePrivateBytes(
   Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8"),
 );
 
+function listPacketFiles(root, relativeDirectory = "") {
+  const directory = path.join(root, relativeDirectory);
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .flatMap((entry) => {
+      const relativePath = path.posix.join(relativeDirectory, entry.name);
+      const absolutePath = path.join(root, relativePath);
+      if (entry.isSymbolicLink()) throw new Error(`Pilot packet cannot contain symlinks: ${relativePath}`);
+      if (entry.isDirectory()) return listPacketFiles(root, relativePath);
+      const stat = fs.lstatSync(absolutePath);
+      if (!entry.isFile() || !stat.isFile() || stat.nlink !== 1) {
+        throw new Error(`Pilot packet contains a non-regular file: ${relativePath}`);
+      }
+      return [{
+        relativePath,
+        sha256: sha256(fs.readFileSync(absolutePath)),
+        size: stat.size,
+        mode: (stat.mode & 0o777).toString(8).padStart(4, "0"),
+      }];
+    });
+}
+
+function buildPacketManifest({ output, repository, plan }) {
+  const files = listPacketFiles(output);
+  return {
+    formatVersion: 1,
+    deploymentId: DEPLOYMENT_ID,
+    state: "COMPLETE_PRIVATE_PACKET",
+    repository,
+    productionControlsSha256: plan.productionControlsSha256,
+    customNodeReleaseSha256: plan.customNodeReleaseSha256,
+    files,
+    aggregateSha256: sha256(Buffer.from(JSON.stringify(files), "utf8")),
+    deployAuthorized: false,
+    activationAuthorized: false,
+  };
+}
+
 export function rehearseExactByteRollback({ liveBytes, candidateBytes, contract }) {
   validateExactGraphContract({ liveBytes, candidateBytes, contract });
   let simulatedActive = Buffer.from(candidateBytes);
@@ -98,8 +155,42 @@ export function rehearseExactByteRollback({ liveBytes, candidateBytes, contract 
   return true;
 }
 
-export function buildPartnerV02DeploymentPlan({ repository, verified, contract, release, rollbackRehearsed }) {
+export function buildPartnerV02DeploymentPlan({
+  repository,
+  verified,
+  contract,
+  release,
+  rollbackRehearsed,
+  productionControls,
+  productionControlsBytes,
+  productionControlsSha256,
+  runtimeEvidence,
+}) {
   validateRepositoryIdentity(repository);
+  validatePartnerProductionControls(productionControls);
+  if (!Buffer.isBuffer(productionControlsBytes)
+    || sha256(productionControlsBytes) !== productionControlsSha256
+    || !isDeepStrictEqual(JSON.parse(productionControlsBytes.toString("utf8")), productionControls)) {
+    throw new Error("Pilot packet requires an exact production-controls identity");
+  }
+  if (productionControls.runtime.latestIsolatedRehearsal.customNodeReleaseSha256 !== release.releaseSha256) {
+    throw new Error("Pilot packet custom-node release lacks matching runtime rehearsal evidence");
+  }
+  if (productionControls.runtime.latestIsolatedRehearsal.evidenceScope
+    !== "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY"
+    || runtimeEvidence.functionalRehearsal.evidenceScope
+      !== productionControls.runtime.latestIsolatedRehearsal.evidenceScope) {
+    throw new Error("Pilot packet runtime rehearsal scope is missing or overclaimed");
+  }
+  if (runtimeEvidence.manifestSha256 !== productionControls.runtime.immutableClosure.runtimeManifestSha256
+    || runtimeEvidence.manifest.closure.customNodeReleaseSha256 !== release.releaseSha256
+    || runtimeEvidence.manifest.closure.packageLockSha256 !== productionControls.runtime.immutableClosure.packageLockSha256
+    || runtimeEvidence.manifest.closure.dependencyTreeSha256 !== productionControls.runtime.immutableClosure.dependencyTreeSha256
+    || runtimeEvidence.manifest.closure.auditReportSha256 !== productionControls.runtime.immutableClosure.auditReportSha256
+    || runtimeEvidence.manifest.closure.functionalRehearsalSha256 !== productionControls.runtime.immutableClosure.functionalRehearsalSha256
+    || runtimeEvidence.functionalRehearsal.capturedAt !== productionControls.runtime.immutableClosure.functionalRehearsalCapturedAt) {
+    throw new Error("Pilot packet runtime evidence differs from the production-controls closure");
+  }
   if (!verified?.meta?.pulledAt || !Number.isFinite(Date.parse(verified.meta.pulledAt))) {
     throw new Error("Pilot packet requires valid live-flow pull metadata");
   }
@@ -117,9 +208,15 @@ export function buildPartnerV02DeploymentPlan({ repository, verified, contract, 
     changedNodeCount: contract.allowedChanges.length,
     addedNodeCount: contract.allowedAdditions.length,
     customNodeReleaseSha256: release.releaseSha256,
-    productionCustodyState: "UNBOUND",
+    runtimeManifestSha256: runtimeEvidence.manifestSha256,
+    functionalRehearsalScope: runtimeEvidence.functionalRehearsal.evidenceScope,
+    productionControlsSha256,
+    productionControlsState: productionControls.contractState,
+    runtimeSecurityState: productionControls.runtime.state,
+    productionCustodyState: productionControls.custody.state,
     vivaContractState: "AWAITING_EXTERNAL_CONFIRMATION",
-    ingressState: "UNBOUND",
+    ingressState: productionControls.ingress.state,
+    activationState: productionControls.activation.state,
     liveMutationAuthorized: false,
     deploymentPerformed: false,
     activationPerformed: false,
@@ -127,11 +224,15 @@ export function buildPartnerV02DeploymentPlan({ repository, verified, contract, 
       "fresh live flow still matches sourceSha256 and the exact LK Games origin",
       "checkpoint is integrated into clean pushed main with green exact-head CI",
       "custom-node package installation and Node-RED load/unload are rehearsed on an isolated compatible runtime",
+      "the isolated functional rehearsal proves custom-node load, default-off behavior, and removal only; the fresh exact flow candidate requires its own deploy-stage read-back",
+      "exact Node-RED runtime audit satisfies production-controls policy or has a bounded owner-approved reachability decision",
       "private flow backup, exact rollback artifacts, global deployment lock, and lease paths are verified",
       "Mongo replica-set transactions and every exact required index are rehearsed on a disposable database",
       "Viva confirms Idempotency-Key semantics, create/read/cancel payloads, ON_PLACE behavior, and technical-client multiplicity",
-      "dedicated ingress is bound with TLS, M2M allowlist or mTLS, rate limits, body limits, and proxy-chain validation",
+      "dedicated ingress is bound with TLS, mandatory mTLS, optional exact CIDR, rate limits, body limits, and socket-peer proxy-chain validation",
+      "Partner ingress exposes only the three exact routes, strips upstream CORS, rejects duplicate proof headers, and exposes no editor/admin surface",
       "server-only signing keys, audit HMAC key, Mongo URI, technical client ID, and Viva token custody are provisioned without disclosure",
+      "secret-bearing packet custody has named recipients, encrypted transport, root-only destination, retention, deletion, and incident owners",
       "security, reliability, compatibility, and recovery evidence contains no UNKNOWN or failed gate",
     ],
     requiredBeforeActivation: [
@@ -190,7 +291,12 @@ function buildCustomNodeRelease() {
   };
 }
 
-export function preparePartnerV02Packet({ workspace, outDir, repository: suppliedRepository } = {}) {
+export function preparePartnerV02Packet({
+  workspace,
+  outDir,
+  repository: suppliedRepository,
+  testHooks,
+} = {}) {
   const repository = validateRepositoryIdentity(suppliedRepository || repositoryIdentity());
   const verified = verifyWorkspace(workspace, { quiet: true });
   const output = assertExternalNewPacketDirectory(outDir);
@@ -210,6 +316,11 @@ export function preparePartnerV02Packet({ workspace, outDir, repository: supplie
   });
   validateExactGraphContract({ liveBytes, candidateBytes, contract });
   const release = buildCustomNodeRelease();
+  const runtimeEvidence = validateCheckedPartnerRuntimeEvidence();
+  const productionControlsBytes = fs.readFileSync(PRODUCTION_CONTROLS_PATH);
+  const productionControls = JSON.parse(productionControlsBytes.toString("utf8"));
+  validatePartnerProductionControls(productionControls);
+  const productionControlsSha256 = sha256(productionControlsBytes);
   const rollbackRehearsed = rehearseExactByteRollback({ liveBytes, candidateBytes, contract });
   const plan = buildPartnerV02DeploymentPlan({
     repository,
@@ -217,30 +328,80 @@ export function preparePartnerV02Packet({ workspace, outDir, repository: supplie
     contract,
     release: release.manifest,
     rollbackRehearsed,
+    productionControls,
+    productionControlsBytes,
+    productionControlsSha256,
+    runtimeEvidence,
   });
 
-  fs.mkdirSync(output, { mode: 0o700 });
+  const parent = path.dirname(output);
+  const temporaryPrefix = path.join(parent, `.${path.basename(output)}.tmp-`);
+  const temporaryOutput = fs.mkdtempSync(temporaryPrefix);
+  let published = false;
   try {
-    fs.chmodSync(output, 0o700);
-    const packageOutput = path.join(output, "custom-node");
+    fs.chmodSync(temporaryOutput, 0o700);
+    const packageOutput = path.join(temporaryOutput, "custom-node");
+    const runtimeOutput = path.join(temporaryOutput, "runtime");
+    const runtimePackageOutput = path.join(runtimeOutput, "partner-package");
     fs.mkdirSync(packageOutput, { mode: 0o700 });
+    fs.mkdirSync(runtimePackageOutput, { recursive: true, mode: 0o700 });
     fs.chmodSync(packageOutput, 0o700);
-    syncDirectory(path.dirname(output));
-    writePrivateBytes(path.join(output, "candidate.flow.json"), candidateBytes);
-    writePrivateJson(path.join(output, "reviewed-flow.contract.json"), contract);
-    writePrivateJson(path.join(output, "custom-node.release.json"), release.manifest);
-    writePrivateJson(path.join(output, "deployment-plan.json"), plan);
-    for (const file of release.files) writePrivateBytes(path.join(packageOutput, file.relativePath), file.bytes);
+    fs.chmodSync(runtimeOutput, 0o700);
+    fs.chmodSync(runtimePackageOutput, 0o700);
+    writePrivateBytes(path.join(temporaryOutput, "source.flow.json"), liveBytes);
+    writePrivateBytes(path.join(temporaryOutput, "candidate.flow.json"), candidateBytes);
+    writePrivateJson(path.join(temporaryOutput, "reviewed-flow.contract.json"), contract);
+    writePrivateJson(path.join(temporaryOutput, "custom-node.release.json"), release.manifest);
+    writePrivateBytes(path.join(temporaryOutput, "production-controls.contract.json"), productionControlsBytes);
+    writePrivateJson(path.join(temporaryOutput, "deployment-plan.json"), plan);
+    for (const file of release.files) {
+      writePrivateBytes(path.join(packageOutput, file.relativePath), file.bytes);
+      writePrivateBytes(path.join(runtimePackageOutput, file.relativePath), file.bytes);
+    }
+    for (const relativePath of RUNTIME_ARTIFACT_FILES) {
+      const bytes = runtimeEvidence.artifactBytes[relativePath];
+      if (!Buffer.isBuffer(bytes)) throw new Error(`Pilot packet lacks validated runtime bytes: ${relativePath}`);
+      writePrivateBytes(path.join(runtimeOutput, relativePath), bytes);
+    }
+    const copiedRuntimeEvidence = validatePartnerRuntimeEvidence({
+      manifestBytes: fs.readFileSync(path.join(runtimeOutput, "runtime-manifest.json")),
+      packageJsonBytes: fs.readFileSync(path.join(runtimeOutput, "package.json")),
+      packageLockBytes: fs.readFileSync(path.join(runtimeOutput, "package-lock.json")),
+      dependencyTreeBytes: fs.readFileSync(path.join(runtimeOutput, "dependency-tree.json")),
+      auditReportBytes: fs.readFileSync(path.join(runtimeOutput, "audit-report.json")),
+      functionalRehearsalBytes: fs.readFileSync(path.join(runtimeOutput, "functional-rehearsal.json")),
+      customReleaseSha256: release.manifest.releaseSha256,
+    });
+    if (copiedRuntimeEvidence.manifestSha256 !== runtimeEvidence.manifestSha256) {
+      throw new Error("Pilot packet runtime snapshot changed after validation");
+    }
     syncDirectory(packageOutput);
-    syncDirectory(output);
+    syncDirectory(runtimePackageOutput);
+    syncDirectory(runtimeOutput);
+    const packetManifest = buildPacketManifest({ output: temporaryOutput, repository, plan });
+    writePrivateJson(path.join(temporaryOutput, "packet.manifest.json"), packetManifest);
+    syncDirectory(temporaryOutput);
     if (!suppliedRepository && !isDeepStrictEqual(repositoryIdentity(), repository)) {
       throw new Error("Pilot packet repository identity changed during generation");
     }
+    if (testHooks?.beforeAtomicPublish) testHooks.beforeAtomicPublish({ temporaryOutput, output });
+    fs.renameSync(temporaryOutput, output);
+    published = true;
+    syncDirectory(parent);
+    return {
+      output,
+      plan,
+      contract,
+      release: release.manifest,
+      productionControls,
+      runtimeEvidence,
+      packetManifest,
+    };
   } catch (error) {
-    fs.rmSync(output, { recursive: true, force: true });
+    fs.rmSync(published ? output : temporaryOutput, { recursive: true, force: true });
+    try { syncDirectory(parent); } catch { /* preserve the original generation failure */ }
     throw error;
   }
-  return { output, plan, contract, release: release.manifest };
 }
 
 function parseArgs(argv) {

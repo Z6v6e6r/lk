@@ -1,0 +1,9 @@
+{
+  "name": "padlhub-partner-game-membership-runtime",
+  "version": "0.2.0",
+  "private": true,
+  "dependencies": {
+    "@padlhub/node-red-partner-game-membership-api": "file:./partner-package",
+    "node-red": "4.1.14"
+  }
+}

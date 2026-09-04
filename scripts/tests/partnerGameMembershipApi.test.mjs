@@ -26,6 +26,7 @@ const NOW = new Date("2026-09-01T09:00:00.000Z");
 const SECRET = Buffer.from("partner-secret-for-tests-32-bytes-minimum", "utf8");
 const AUDIT_KEY = Buffer.from("audit-secret-for-tests-at-least-32-bytes", "utf8");
 const CLIENT_ID = "viva-test-partner";
+const AUDIENCE = "padlhub-partner-game-test";
 const KEY_ID = "key-2026-09";
 const GAME_ID = "game-open-1";
 const STATION_ID = "station-spb-1";
@@ -299,6 +300,7 @@ const buildFixture = (overrides = {}) => {
   const service = new PartnerGameMembershipApiService({
     repository,
     provider,
+    expectedAudience: AUDIENCE,
     technicalVivaClientId: overrides.technicalVivaClientId || TECHNICAL_CLIENT_ID,
     auditKey: AUDIT_KEY,
     now: () => new Date(NOW),
@@ -318,6 +320,7 @@ const signedRequest = ({
   path = `/lk/integrations/v1/open-games/${GAME_ID}/members`,
   body = addBody(),
   clientId = CLIENT_ID,
+  audience = AUDIENCE,
   keyId = KEY_ID,
   timestamp = String(Math.floor(NOW.getTime() / 1000)),
   nonce = crypto.randomBytes(24).toString("base64url"),
@@ -329,6 +332,7 @@ const signedRequest = ({
     method,
     path,
     body,
+    audience,
     clientId,
     keyId,
     timestamp,
@@ -343,6 +347,7 @@ const signedRequest = ({
     remoteAddress: "203.0.113.7",
     headers: {
       "x-padlhub-client-id": clientId,
+      "x-padlhub-audience": audience,
       "x-padlhub-key-id": keyId,
       "x-padlhub-timestamp": timestamp,
       "x-padlhub-nonce": nonce,
@@ -454,6 +459,7 @@ test("published cross-team signature vector remains stable", () => {
       },
     },
     clientId: "partner-test",
+    audience: "padlhub-partner-game-test",
     keyId: "key-2026-09",
     timestamp: "1788253200",
     nonce: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0",
@@ -462,7 +468,14 @@ test("published cross-team signature vector remains stable", () => {
   };
   const testOnlyKey = Buffer.from("public-test-vector-key-32-bytes!!");
   assert.match(buildPartnerSignatureInput(input), /38e85283a47d9c00aab3a4dbda49757cbd3f031c32f524376420e245d9ca6d66/);
-  assert.equal(signPartnerRequest(input, testOnlyKey), "v1=4KBpuvfSZVlFUjufjfL3fNYcxENPjQ1bBIE0WnFrE6A");
+  assert.equal(signPartnerRequest(input, testOnlyKey), "v2=JclK7-2hTze2KrNOPMuK0UdEO5DO2T5v6geJxxjRCAo");
+});
+
+test("a signed request cannot cross an audience boundary", async () => {
+  const { service, provider } = buildFixture();
+  const request = signedRequest({ audience: "padlhub-partner-game-production" });
+  await assert.rejects(() => service.handle(request), { code: "INVALID_AUDIENCE", httpStatus: 401 });
+  assert.equal(provider.addCalls, 0);
 });
 
 test("successful add creates a partner-owned membership and an external paid projection", async () => {
@@ -504,14 +517,19 @@ test("tampering with method, path, or body invalidates the signature before a pr
 });
 
 test("duplicate security headers and encoded path confusion are rejected", async () => {
-  const duplicateFixture = buildFixture();
-  const duplicateRequest = signedRequest();
-  duplicateRequest.headers["X-PadlHub-Nonce"] = duplicateRequest.headers["x-padlhub-nonce"];
-  await assert.rejects(
-    () => duplicateFixture.service.handle(duplicateRequest),
-    { code: "AMBIGUOUS_AUTH_HEADER", httpStatus: 400 },
-  );
-  assert.equal(duplicateFixture.provider.addCalls, 0);
+  for (const [duplicateHeader, canonicalHeader] of [
+    ["X-PadlHub-Nonce", "x-padlhub-nonce"],
+    ["X-PadlHub-Audience", "x-padlhub-audience"],
+  ]) {
+    const duplicateFixture = buildFixture();
+    const duplicateRequest = signedRequest();
+    duplicateRequest.headers[duplicateHeader] = duplicateRequest.headers[canonicalHeader];
+    await assert.rejects(
+      () => duplicateFixture.service.handle(duplicateRequest),
+      { code: "AMBIGUOUS_AUTH_HEADER", httpStatus: 400 },
+    );
+    assert.equal(duplicateFixture.provider.addCalls, 0);
+  }
 
   const pathFixture = buildFixture();
   const encodedPath = "/lk/integrations/v1/open-games/game%2Fother/members";

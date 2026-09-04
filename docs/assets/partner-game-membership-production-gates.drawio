@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-09-03T23:35:00.000+03:00" agent="Codex" version="31.1.5">
+  <diagram id="partner-production-gates" name="Production gates">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="Partner Game Membership API v0.2 — production gates" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=30;fontStyle=1;fontColor=#172033;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="1050" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="status" value="СЕЙЧАС: UNBOUND • AUDIT_BLOCKED • ACTIVATION BLOCKED" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontColor=#7A2521;fontSize=14;fontStyle=1;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1110" y="35" width="450" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle" value="Каждая колонка — отдельный trust boundary. Зелёный предыдущий этап не разрешает следующий; любой drift, UNKNOWN или missing owner возвращает BLOCKED." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=16;fontColor=#45516A;" vertex="1" parent="1">
+          <mxGeometry x="40" y="90" width="1520" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="evidence-zone" value="1  IMMUTABLE EVIDENCE" style="swimlane;html=1;rounded=1;startSize=42;horizontal=1;fillColor=#EAF3FF;strokeColor=#6D9EEB;fontColor=#244B76;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="160" width="330" height="590" as="geometry"/>
+        </mxCell>
+        <mxCell id="binding-zone" value="2  SECURITY BINDINGS" style="swimlane;html=1;rounded=1;startSize=42;horizontal=1;fillColor=#F2ECFF;strokeColor=#8E70C1;fontColor=#4B3673;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="430" y="160" width="330" height="590" as="geometry"/>
+        </mxCell>
+        <mxCell id="deploy-zone" value="3  DEPLOY, API OFF" style="swimlane;html=1;rounded=1;startSize=42;horizontal=1;fillColor=#FFF7E3;strokeColor=#D6A23A;fontColor=#78591A;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="820" y="160" width="330" height="590" as="geometry"/>
+        </mxCell>
+        <mxCell id="activate-zone" value="4  CANARY ACTIVATION" style="swimlane;html=1;rounded=1;startSize=42;horizontal=1;fillColor=#EAF8F0;strokeColor=#5BAA76;fontColor=#235E39;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1210" y="160" width="350" height="590" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="source" value="Exact pushed SHA&#xa;+ green exact-head CI&#xa;+ clean isolated worktree at exact commit" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6D9EEB;fontSize=15;fontStyle=1;fontColor=#223047;" vertex="1" parent="evidence-zone">
+          <mxGeometry x="40" y="70" width="250" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="flow" value="Fresh production readback&#xa;flow + custom release SHA&#xa;runtime lock + npm ls + audit SHA" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6D9EEB;fontSize=14;fontColor=#223047;" vertex="1" parent="evidence-zone">
+          <mxGeometry x="40" y="195" width="250" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="audit" value="Exact runtime audit ≤ 24h&#xa;critical affected = 0&#xa;partner-reachable high = 0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontSize=14;fontStyle=1;fontColor=#7A2521;" vertex="1" parent="evidence-zone">
+          <mxGeometry x="40" y="320" width="250" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="runtime-note" value="4.1.14: совместим, но audit BLOCKED&#xa;0 critical / 15 high / 9 moderate / 1 low" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#FFF4CF;strokeColor=#D6A23A;fontSize=13;fontColor=#624B1B;" vertex="1" parent="evidence-zone">
+          <mxGeometry x="40" y="455" width="250" height="82" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="ingress" value="Ingress binding — UNBOUND&#xa;exact Host/SNI + 3 routes only&#xa;mandatory mTLS + signed audience" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8E70C1;fontSize=14;fontStyle=1;fontColor=#35264F;" vertex="1" parent="binding-zone">
+          <mxGeometry x="40" y="70" width="250" height="88" as="geometry"/>
+        </mxCell>
+        <mxCell id="ingress-policy" value="No shared/direct Node-RED path&#xa;strip inbound Forwarded • no CORS/retry&#xa;duplicate headers + JSON keys reject" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9DDFF;strokeColor=#8E70C1;fontSize=14;fontColor=#35264F;" vertex="1" parent="binding-zone">
+          <mxGeometry x="40" y="195" width="250" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="custody" value="Packet custody — UNBOUND&#xa;SECRET_BEARING • partner transfer OFF&#xa;0700 / 0600 • named owners" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8E70C1;fontSize=14;fontStyle=1;fontColor=#35264F;" vertex="1" parent="binding-zone">
+          <mxGeometry x="40" y="325" width="250" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="provider" value="Viva + Mongo contracts&#xa;idempotency • ON_PLACE • exact read-back&#xa;replica/index/rollback/reconciliation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8E70C1;fontSize=13;fontColor=#35264F;" vertex="1" parent="binding-zone">
+          <mxGeometry x="40" y="455" width="250" height="82" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="deploy-auth" value="ОТДЕЛЬНОЕ разрешение на deploy&#xa;не включает ingress и activation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF1C9;strokeColor=#D6A23A;fontSize=14;fontStyle=1;fontColor=#624B1B;" vertex="1" parent="deploy-zone">
+          <mxGeometry x="40" y="70" width="250" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="install" value="Guarded install/import/restart&#xa;exact backup + global lock&#xa;LK_PARTNER_GAME_API_ENABLED=false" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D6A23A;fontSize=14;fontColor=#624B1B;" vertex="1" parent="deploy-zone">
+          <mxGeometry x="40" y="195" width="250" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="readback" value="Post-deploy readback&#xa;hashes + routes + package + logs&#xa;public request всё ещё 503" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF1C9;strokeColor=#D6A23A;fontSize=14;fontStyle=1;fontColor=#624B1B;" vertex="1" parent="deploy-zone">
+          <mxGeometry x="40" y="325" width="250" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="rollback" value="Rollback готов&#xa;остановить ingress → restore bytes&#xa;restart → route 404 • ledgers сохранить" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D6A23A;fontSize=14;fontColor=#624B1B;" vertex="1" parent="deploy-zone">
+          <mxGeometry x="40" y="455" width="250" height="82" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="activation-auth" value="ОТДЕЛЬНОЕ разрешение на activation&#xa;после Viva/Mongo/observability evidence" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DDF3E5;strokeColor=#5BAA76;fontSize=14;fontStyle=1;fontColor=#234E34;" vertex="1" parent="activate-zone">
+          <mxGeometry x="45" y="70" width="260" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="canary" value="Один expiring client&#xa;одна station + одна test game&#xa;минимальные add/remove/read scopes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#5BAA76;fontSize=14;fontColor=#234E34;" vertex="1" parent="activate-zone">
+          <mxGeometry x="45" y="195" width="260" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="monitor" value="Live canary evidence&#xa;replay/ACL/audit/UNKNOWN alerts&#xa;Viva exact before/after read-back" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DDF3E5;strokeColor=#5BAA76;fontSize=14;fontStyle=1;fontColor=#234E34;" vertex="1" parent="activate-zone">
+          <mxGeometry x="45" y="325" width="260" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="expand" value="Расширение доступа только новым review&#xa;никакого implicit rollout" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#5BAA76;fontSize=14;fontColor=#234E34;" vertex="1" parent="activate-zone">
+          <mxGeometry x="45" y="455" width="260" height="82" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="edge-source-flow" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#405A88;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="evidence-zone" source="source" target="flow"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="edge-flow-audit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#405A88;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="evidence-zone" source="flow" target="audit"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="edge-ingress-policy" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7153A4;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="binding-zone" source="ingress" target="ingress-policy"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="edge-custody-provider" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7153A4;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="binding-zone" source="custody" target="provider"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="edge-deploy-install" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#B17A12;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="deploy-zone" source="deploy-auth" target="install"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="edge-install-readback" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#B17A12;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="deploy-zone" source="install" target="readback"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="edge-activate-canary" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#3F8A59;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="activate-zone" source="activation-auth" target="canary"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="edge-canary-monitor" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#3F8A59;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="activate-zone" source="canary" target="monitor"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="gate1" value="PASS всех evidence gates" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#405A88;strokeWidth=3;fontSize=13;fontStyle=1;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="evidence-zone" target="binding-zone"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="gate2" value="BOUND + reviewed" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7153A4;strokeWidth=3;fontSize=13;fontStyle=1;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="binding-zone" target="deploy-zone"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="gate3" value="DEPLOYED, still OFF" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#B17A12;strokeWidth=3;fontSize=13;fontStyle=1;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="deploy-zone" target="activate-zone"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="blocked" value="FAIL CLOSED: STOP • ничего не публиковать и не включать • сохранить audit/operation ledgers • устранить drift или получить недостающее решение владельца" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#172033;strokeColor=#172033;fontColor=#FFFFFF;fontSize=16;fontStyle=1;align=center;" vertex="1" parent="1">
+          <mxGeometry x="180" y="810" width="1240" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="blocked-caption" value="Перехваченный request не повторяется: audience-bound HMAC v2 + timestamp + atomic nonce; real-time relay сдерживается mandatory mTLS, socket-peer limits и one-client canary." style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=15;fontColor=#45516A;" vertex="1" parent="1">
+          <mxGeometry x="140" y="900" width="1320" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-audit-block" value="текущий blocker" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#B85450;strokeWidth=2;dashed=1;fontSize=13;fontStyle=1;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.15;entryY=0;" edge="1" parent="1" source="audit" target="blocked"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="edge-binding-block" value="UNBOUND" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#B85450;strokeWidth=2;dashed=1;fontSize=13;fontStyle=1;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.4;entryY=0;" edge="1" parent="1" source="custody" target="blocked"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="edge-deploy-block" value="нет deploy authority" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#B85450;strokeWidth=2;dashed=1;fontSize=13;fontStyle=1;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.65;entryY=0;" edge="1" parent="1" source="deploy-auth" target="blocked"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="edge-activate-block" value="нет activation authority" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#B85450;strokeWidth=2;dashed=1;fontSize=13;fontStyle=1;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.85;entryY=0;" edge="1" parent="1" source="activation-auth" target="blocked"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

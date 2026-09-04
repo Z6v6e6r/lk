@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | Pure unit | Канонизация, HMAC, timestamp, schema, route parsing | Mongo atomicity, Node-RED, Viva |
 | Service + in-memory repository | State machine, ownership, idempotency, synthetic provider | Реальная replica transaction и provider contract |
-| Flow/packet fixture | Отдельные routes, default-off config, exact-source/added-node/package hashes | Совместимость с актуальным live flow и host runtime |
+| Flow/packet fixture | Отдельные routes, default-off config, exact source/candidate/added-node/package hashes | Что source ещё совпадает с production в момент deploy |
 | Mongo replica integration | unique/TTL/index options, write conflict, transaction/outbox | Viva и ingress |
 | Local Node-RED + loopback Mongo | HTTP headers, params, response, restart | Shared/prod topology |
 | Viva sandbox | Реальный add/read/remove технического клиента | Production payment/notification effects |
@@ -48,7 +48,11 @@ secret change, migration, deploy, activation или real provider mutation.
 | Synthetic isolation | Не-loopback или production env/DB | Synthetic provider запрещён |
 | Flow provenance | Неверный live SHA/in-place/collision | Candidate builder падает |
 | Additions-only deploy | Новый pinned HTTP route/package bytes | Contract pins все seven nodes; live prefix/order неизменен; additions только suffix |
-| Private packet | Fresh external workspace + exact repository identity | `0700/0600`, no authorization/deploy/activation, reproducible hashes |
+| Private packet | Fresh external workspace + exact repository identity | read-once validated runtime bytes, source/candidate contract, semantic cross-links, sibling temp + fsync + final manifest + atomic rename; injected failure не оставляет partial packet |
+| Production controls | Route/upstream/CORS/admin/limits/custody/runtime/activation mutation | Любое widening или binding в source template отклоняется |
+| Runtime compatibility | Node `22.23.2` + Node-RED `4.1.14` + exact custom package | exact custom-node load/default-off/removal: `503/404`; не доказывает следующий fresh flow candidate; production calls `0` |
+| Runtime audit | Exact Node-RED `4.1.14` production closure | `0 critical / 15 high / 9 moderate / 1 low`; gate остаётся `AUDIT_BLOCKED` |
+| Private binding declaration | controls/runtime/functional/ingress/custody/packet semantics/identity mutation | packet/host custody проверяется фактически; ingress/readback/audit decision остаются `DECLARED_EVIDENCE_UNVERIFIED`, authorization всегда false |
 | Mongo rehearsal guard | Non-loopback/shared name/mixed-case direct connection/duplicate topology option/bad ack | Отказ до Mongo import/connect |
 
 Команда:
@@ -83,11 +87,17 @@ npm run test:partner-game-membership-api
    - provider-side duplicate request с одинаковым `Idempotency-Key` возвращает тот же
      booking identity либо документированный безопасный эквивалент без второго booking.
 4. Ingress:
-   - mTLS/allowlist positive and negative;
+   - обязательный mTLS + дополнительный allowlist positive and negative;
+   - wrong audience/Host/SNI, shared hostname и direct Node-RED дают отказ;
+   - входные `Forwarded`/`X-Forwarded-*` стираются; source строится из socket peer;
    - rate limit по client/IP;
    - header/body size, malformed encoding, duplicate headers;
    - trusted proxy и source IP hashing;
    - TLS policy scan.
+   - только три exact method/path, без Node-RED editor/admin и OPTIONS;
+   - upstream CORS скрыт; browser CORS preflight не открывает M2M API;
+   - proxy retry равен нулю, raw path и canonical JSON semantics доходят до HMAC без
+     rewrite; duplicate JSON keys отклоняются ingress до Node-RED parser.
 
 ## Exit criteria ограниченного пилота
 
@@ -96,9 +106,17 @@ npm run test:partner-game-membership-api
 - custom node package и candidate hashes воспроизводимы;
 - additions-only reviewed-flow apply и exact rollback/restart отрепетированы на
   изолированной копии Node-RED; production packet получен только из clean pushed SHA;
+- exact runtime audit не содержит unresolved partner-reachable critical/high advisory;
+- production-controls SHA совпадает в packet/plan, private ingress/custody overlays
+  заполнены владельцами и проверены на target host против root-owned realpath,
+  hostname, machine identity и exact packet bytes/semantics;
+- отдельный live verifier прочитал ingress config/readback/certificate/CA и подписанный
+  audit reachability artifact, повторил negative probes и снял декларативный
+  `UNVERIFIED` status без ослабления `AUDIT_BLOCKED`;
 - Mongo replica tests green, backup/rollback/reconciliation rehearsed;
 - Viva sandbox matrix green с exact before/after evidence;
-- mTLS либо утверждённый IP allowlist включён;
+- mTLS включён; test/production client ID, HMAC key, certificate и audience различны;
+- exclusive exact-host ingress закрывает shared-host и direct Node-RED обход;
 - dashboards/alerts видят replay, auth failures, provider errors и `UNKNOWN` age;
 - kill switch, client revoke и key rotation отрепетированы;
 - ни одного production user/payment/booking в тестовых доказательствах.
