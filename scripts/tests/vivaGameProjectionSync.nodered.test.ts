@@ -546,7 +546,7 @@ test("fan-out errors keep the owned lease until the aggregate finalizer records 
 });
 
 const liveCreateSource = fs.readFileSync(
-  path.join(process.cwd(), "scripts/tests/fixtures/viva_game_projection_sync/live_create_08c2.js"),
+  path.join(process.cwd(), "scripts/tests/fixtures/viva_game_projection_sync/live_create_08c2.txt"),
   "utf8",
 );
 

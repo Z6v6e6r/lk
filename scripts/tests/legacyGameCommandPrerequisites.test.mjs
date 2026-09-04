@@ -32,7 +32,7 @@ const liveFlowPath = process.env.LEGACY_COMMAND_LIVE_FLOW_FIXTURE;
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
 test("create prerequisite upgrade derives tenant from server configuration", () => {
-  const liveCreate = fs.readFileSync("scripts/tests/fixtures/viva_game_projection_sync/live_create_08c2.js", "utf8");
+  const liveCreate = fs.readFileSync("scripts/tests/fixtures/viva_game_projection_sync/live_create_08c2.txt", "utf8");
   const upgraded = upgradeLegacyGameWriterFunction("e656cff36a8cd210", liveCreate);
   const projectionBase = patchVivaGameProjectionCreateContract(liveCreate);
   assert.equal(projectionBase, patchVivaGameCreateTenantRevisionBase(liveCreate));
