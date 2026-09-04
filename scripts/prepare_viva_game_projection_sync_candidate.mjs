@@ -57,6 +57,15 @@ const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex"
 const sha256Json = (value) => sha256(Buffer.from(JSON.stringify(value), "utf8"));
 const fail = (message) => { throw new Error(message); };
 const readSource = (key) => fs.readFileSync(path.join(FN_DIR, VIVA_GAME_PROJECTION_SYNC_SOURCES[key]), "utf8");
+const PRIVATE_KEY_MARKER = ["BEGIN", "PRIVATE", "KEY"].join(" ");
+const MONGODB_CREDENTIAL_URI = /mongodb(?:\+srv)?:\/\/[^\s]+:[^\s]+@/i;
+
+export const containsForbiddenInlineCredential = (source) => {
+  const value = String(source || "");
+  return /default_inline/i.test(value)
+    || value.toUpperCase().includes(PRIVATE_KEY_MARKER)
+    || MONGODB_CREDENTIAL_URI.test(value);
+};
 
 const exactNode = (flow, id, description) => {
   const matches = flow.filter((node) => node?.id === id);
@@ -276,7 +285,7 @@ export function buildVivaGameProjectionSyncCandidate(source, sourceSha256) {
     before.filter((node) => node.type === "http in"),
   )) fail("HTTP routes changed");
   for (const node of nodes.filter((item) => item.type === "function")) {
-    if (/default_inline|BEGIN PRIVATE KEY|mongodb(?:\+srv)?:\/\/[^\s]+:[^\s]+@/i.test(node.func)) {
+    if (containsForbiddenInlineCredential(node.func)) {
       fail(`Candidate function contains forbidden inline credential material: ${node.name}`);
     }
   }
