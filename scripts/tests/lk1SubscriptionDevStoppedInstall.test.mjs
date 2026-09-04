@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { buildRuntimeInstallCandidateBundle } from "../build_lk1_subscription_dev_runtime_install_candidate.mjs";
@@ -11,6 +12,7 @@ import {
   captureCurrentHostPreflightEvidence,
   checkedHostPreflightEvidence,
 } from "../validate_lk1_subscription_dev_host_preflight.mjs";
+import { createDirectoryDurable } from "../install_lk1_subscription_dev_stopped_candidate.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const TMP_ROOT = fs.existsSync("/private/tmp") ? "/private/tmp" : os.tmpdir();
@@ -128,6 +130,90 @@ async function loadInstaller(bundleDirectory) {
   const file = path.join(bundleDirectory, "payload/install_lk1_subscription_dev_stopped_candidate.mjs");
   return import(`${pathToFileURL(file).href}?test=${crypto.randomUUID()}`);
 }
+
+test("durable directory creation fsyncs the new directory before its containing parent", () => {
+  const events = [];
+  let nextFd = 10;
+  const opened = new Map();
+  const fsApi = {
+    mkdirSync: (target, options) => events.push(["mkdir", target, options]),
+    chownSync: (target, uid, gid) => events.push(["chown", target, uid, gid]),
+    chmodSync: (target, mode) => events.push(["chmod", target, mode]),
+    openSync: (target) => {
+      const fd = nextFd;
+      nextFd += 1;
+      opened.set(fd, target);
+      events.push(["open", target]);
+      return fd;
+    },
+    fsyncSync: (fd) => events.push(["fsync", opened.get(fd)]),
+    closeSync: (fd) => events.push(["close", opened.get(fd)]),
+  };
+  createDirectoryDurable("/evidence/manifest/attempt", {
+    mode: 0o700, uid: 0, gid: 0, fsApi,
+  });
+  assert.deepEqual(events.map(([operation, target]) => [operation, target]), [
+    ["mkdir", "/evidence/manifest/attempt"],
+    ["chown", "/evidence/manifest/attempt"],
+    ["chmod", "/evidence/manifest/attempt"],
+    ["open", "/evidence/manifest/attempt"],
+    ["fsync", "/evidence/manifest/attempt"],
+    ["close", "/evidence/manifest/attempt"],
+    ["open", "/evidence/manifest"],
+    ["fsync", "/evidence/manifest"],
+    ["close", "/evidence/manifest"],
+  ]);
+});
+
+test("Linux inherited fd3 lock excludes a contender and rejects an unlocked fd", {
+  skip: process.platform !== "linux" || !fs.existsSync("/usr/bin/flock"),
+}, () => {
+  const directory = fs.mkdtempSync(path.join(TMP_ROOT, "lk1-stopped-lock-test-"));
+  fs.chmodSync(directory, 0o700);
+  const lockPath = path.join(directory, "install.lock");
+  const installerUrl = pathToFileURL(path.join(
+    ROOT, "scripts/install_lk1_subscription_dev_stopped_candidate.mjs",
+  )).href;
+  const assertScript = `
+    import { assertKernelLockHeld } from ${JSON.stringify(installerUrl)};
+    assertKernelLockHeld(3, process.getuid(), ${JSON.stringify(lockPath)});
+  `;
+  const runAssertion = (fd) => spawnSync(process.execPath, [
+    "--input-type=module", "--eval", assertScript,
+  ], {
+    stdio: ["ignore", "pipe", "pipe", fd],
+    env: { PATH: "/usr/bin:/bin", LANG: "C" },
+  });
+  let lockFd;
+  try {
+    lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_RDWR, 0o600);
+    fs.chmodSync(lockPath, 0o600);
+    const acquire = spawnSync("/usr/bin/flock", ["--exclusive", "--nonblock", "3"], {
+      stdio: ["ignore", "pipe", "pipe", lockFd],
+      env: { PATH: "/usr/bin:/bin", LANG: "C" },
+    });
+    assert.equal(acquire.status, 0, acquire.stderr.toString());
+    const held = runAssertion(lockFd);
+    assert.equal(held.status, 0, held.stderr.toString());
+    const contender = spawnSync("/usr/bin/flock", [
+      "--exclusive", "--nonblock", lockPath, "/usr/bin/true",
+    ]);
+    assert.equal(contender.status, 1);
+    fs.closeSync(lockFd);
+    lockFd = undefined;
+    const unlockedFd = fs.openSync(lockPath, fs.constants.O_RDWR);
+    try {
+      const unlocked = runAssertion(unlockedFd);
+      assert.notEqual(unlocked.status, 0);
+      assert.match(unlocked.stderr.toString(), /kernel lock is not held/);
+    } finally {
+      fs.closeSync(unlockedFd);
+    }
+  } finally {
+    if (lockFd !== undefined) fs.closeSync(lockFd);
+    fs.rmSync(directory, { recursive: true });
+  }
+});
 
 test("stopped installer atomically installs six exact files and a separate rollback restores every preimage", async () => {
   const prepared = prepare();

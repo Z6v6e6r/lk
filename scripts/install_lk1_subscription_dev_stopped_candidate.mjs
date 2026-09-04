@@ -116,6 +116,23 @@ const fsyncDirectory = (directory) => {
   try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
 };
 
+export function createDirectoryDurable(directory, {
+  mode, uid, gid, fsApi = fs,
+} = {}) {
+  const parent = path.dirname(directory);
+  fsApi.mkdirSync(directory, { recursive: false, mode });
+  fsApi.chownSync(directory, uid, gid);
+  fsApi.chmodSync(directory, mode);
+  const openFlags = fs.constants.O_RDONLY | fs.constants.O_CLOEXEC
+    | (fs.constants.O_DIRECTORY || 0);
+  const sync = (target) => {
+    const fd = fsApi.openSync(target, openFlags);
+    try { fsApi.fsyncSync(fd); } finally { fsApi.closeSync(fd); }
+  };
+  sync(directory);
+  sync(parent);
+}
+
 const writeExclusiveDurable = (target, bytes, { mode, uid, gid }) => {
   let fd;
   let created = false;
@@ -165,21 +182,25 @@ const resolveIdentity = (name, database) => {
   return value;
 };
 
-const assertKernelLockHeld = (fd, uid) => {
-  if (fd !== 3 || fs.readlinkSync(`/proc/self/fd/${fd}`) !== LOCK_PATH) {
+export const assertKernelLockHeld = (fd, uid, expectedLockPath = LOCK_PATH) => {
+  if (fd !== 3 || fs.readlinkSync(`/proc/self/fd/${fd}`) !== expectedLockPath) {
     fail("stopped install kernel lock identity mismatch");
   }
   const stat = fs.fstatSync(fd);
   if (!stat.isFile() || stat.uid !== uid || stat.nlink !== 1
     || (stat.mode & 0o777) !== 0o600) fail("stopped install kernel lock custody mismatch");
   try {
-    execFileSync("/usr/bin/flock", ["--exclusive", "--nonblock", String(fd)], {
-      stdio: ["ignore", "ignore", "pipe", fd],
+    execFileSync("/usr/bin/flock", [
+      "--exclusive", "--nonblock", expectedLockPath, "/usr/bin/true",
+    ], {
+      stdio: ["ignore", "ignore", "pipe"],
       env: { PATH: "/usr/bin:/bin", LANG: "C" },
     });
-  } catch {
-    fail("stopped install kernel lock is not held");
+  } catch (error) {
+    if (error?.status === 1) return;
+    fail("stopped install kernel lock contender check failed");
   }
+  fail("stopped install kernel lock is not held");
 };
 
 const defaultProbe = ({ manifest, phase }) => {
@@ -340,8 +361,7 @@ function preparePreimages({ rootPrefix, bundleRoot, contract, evidenceDirectory,
     };
   });
   const backupDirectory = path.join(evidenceDirectory, "preimage");
-  fs.mkdirSync(backupDirectory, { mode: 0o700 });
-  fs.chownSync(backupDirectory, uid, gid);
+  createDirectoryDurable(backupDirectory, { mode: 0o700, uid, gid });
   return validated.map(({ item, sourceSha256, preimageBytes, preimageMetadata }, index) => {
     if (preimageBytes !== null) {
       const backupPath = path.join(backupDirectory, `${index}.bin`);
@@ -492,23 +512,26 @@ export function installStoppedCandidate({
     const evidenceRoot = targetPath(rootPrefix, verified.contract.stoppedInstall.evidenceRoot);
     assertProtectedParents(evidenceRoot, rootPrefix || "/", currentUid);
     if (!pathEntryExists(evidenceRoot)) {
-      fs.mkdirSync(evidenceRoot, { recursive: false, mode: 0o700 });
-      fs.chownSync(evidenceRoot, currentUid, currentGid);
+      createDirectoryDurable(evidenceRoot, {
+        mode: 0o700, uid: currentUid, gid: currentGid,
+      });
     }
     assertDirectory(evidenceRoot, "stopped install evidence root", {
       uid: currentUid, mode: 0o700,
     });
     const manifestEvidenceDirectory = path.join(evidenceRoot, expectedManifestSha256);
     if (!pathEntryExists(manifestEvidenceDirectory)) {
-      fs.mkdirSync(manifestEvidenceDirectory, { mode: 0o700 });
-      fs.chownSync(manifestEvidenceDirectory, currentUid, currentGid);
+      createDirectoryDurable(manifestEvidenceDirectory, {
+        mode: 0o700, uid: currentUid, gid: currentGid,
+      });
     }
     assertDirectory(manifestEvidenceDirectory, "stopped install manifest evidence directory", {
       uid: currentUid, mode: 0o700,
     });
     evidenceDirectory = path.join(manifestEvidenceDirectory, attemptId);
-    fs.mkdirSync(evidenceDirectory, { mode: 0o700 });
-    fs.chownSync(evidenceDirectory, currentUid, currentGid);
+    createDirectoryDurable(evidenceDirectory, {
+      mode: 0o700, uid: currentUid, gid: currentGid,
+    });
     assertDirectory(evidenceDirectory, "stopped install evidence directory", {
       uid: currentUid, mode: 0o700,
     });
@@ -525,8 +548,9 @@ export function installStoppedCandidate({
       records,
     }), { mode: 0o600, uid: currentUid, gid: currentGid });
     const progressDirectory = path.join(evidenceDirectory, "progress");
-    fs.mkdirSync(progressDirectory, { mode: 0o700 });
-    fs.chownSync(progressDirectory, currentUid, currentGid);
+    createDirectoryDurable(progressDirectory, {
+      mode: 0o700, uid: currentUid, gid: currentGid,
+    });
     for (const [index, record] of records.entries()) {
       const source = path.join(bundleRoot, record.sourcePath);
       const destination = targetPath(rootPrefix, record.targetPath);

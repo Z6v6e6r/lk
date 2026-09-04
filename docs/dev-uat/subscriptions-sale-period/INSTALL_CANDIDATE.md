@@ -148,6 +148,72 @@ launcher получает mode `0500`, evidence `0600`, bundle dirs `0700`, а p
 сохраняет manifest modes. До запуска системным `/usr/bin/sha256sum` независимо
 сверяются manifest, launcher и evidence SHA.
 
+После отдельного разрешения на read-only capture и staging оператор выполняет
+следующую точную последовательность из clean checkpoint. `lk1_known_hosts`
+создаётся самим schema-v2 validator как private single-entry файл и удаляется им
+после capture; для transfer создаётся новый эквивалентный private файл из той же
+проверенной строки. Никакая из команд ниже не запускает сервисы:
+
+```bash
+npm run nodered:lk1-subscription-dev:host-preflight -- --capture-via-ssh
+lk1_evidence_local="<EVIDENCE_PATH printed by the PASS_CURRENT capture>"
+lk1_preflight_sha="$(/usr/bin/shasum -a 256 "$lk1_evidence_local" | /usr/bin/awk '{print $1}')"
+
+lk1_known_hosts_dir="$(mktemp -d /private/tmp/lk1-dev-known-host.XXXXXX)"
+/bin/chmod 700 "$lk1_known_hosts_dir"
+lk1_known_hosts="$lk1_known_hosts_dir/known_hosts"
+/usr/bin/ssh-keygen -F 89.108.64.209 -f "$HOME/.ssh/known_hosts" \
+  | /usr/bin/awk '$2 == "ssh-ed25519" { print }' >"$lk1_known_hosts"
+/bin/chmod 600 "$lk1_known_hosts"
+test "$(/usr/bin/wc -l <"$lk1_known_hosts" | /usr/bin/tr -d ' ')" = 1
+/usr/bin/ssh-keygen -lf "$lk1_known_hosts" \
+  | /usr/bin/grep -F 'SHA256:LP1OQP7TkwpzFQzJZMrKLiaFVwJYd71VeliwfMs6krk'
+
+lk1_ssh_options=(
+  -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes
+  -o HostKeyAlgorithms=ssh-ed25519 -o UpdateHostKeys=no
+  -o HostKeyAlias=89.108.64.209 -o UserKnownHostsFile="$lk1_known_hosts"
+)
+lk1_stage="/tmp/lk1-stopped-stage-${lk1_manifest_sha}"
+lk1_bundle_archive="$(mktemp /private/tmp/lk1-stopped-bundle.XXXXXX.tar)"
+COPYFILE_DISABLE=1 /usr/bin/tar -C "$candidate_dir" -cf "$lk1_bundle_archive" .
+/usr/bin/ssh "${lk1_ssh_options[@]}" lk-reserve-89 -- /bin/sh -ceu '
+  stage=$1; bundle=$2; launcher=$3; evidence=$4
+  for target in "$stage" "$bundle" "$launcher" "$evidence"; do
+    test ! -e "$target" && test ! -L "$target"
+  done
+  /usr/bin/install -d -o root -g root -m 0700 "$stage"
+  /usr/bin/install -d -o root -g root -m 0700 "$stage/bundle.incoming"
+' sh "$lk1_stage" "$lk1_bundle_remote" "$lk1_launcher_remote" "$lk1_evidence_remote"
+/usr/bin/scp "${lk1_ssh_options[@]}" "$lk1_bundle_archive" \
+  "lk-reserve-89:$lk1_stage/bundle.tar"
+/usr/bin/scp "${lk1_ssh_options[@]}" \
+  scripts/launch_lk1_subscription_dev_stopped_candidate.mjs \
+  "$lk1_evidence_local" "lk-reserve-89:$lk1_stage/"
+/usr/bin/ssh "${lk1_ssh_options[@]}" lk-reserve-89 -- /bin/sh -ceu '
+  stage=$1; bundle=$2; launcher=$3; evidence=$4
+  manifest_sha=$5; launcher_sha=$6; evidence_sha=$7
+  /usr/bin/tar -C "$stage/bundle.incoming" -xf "$stage/bundle.tar"
+  /bin/chown -R root:root "$stage"
+  /usr/bin/find "$stage/bundle.incoming" -type d -exec /bin/chmod 0700 {} +
+  /bin/chmod 0500 "$stage/launch_lk1_subscription_dev_stopped_candidate.mjs"
+  /bin/chmod 0600 "$stage/evidence.json"
+  test "$(/usr/bin/sha256sum "$stage/bundle.incoming/manifest.json" | /usr/bin/cut -d" " -f1)" = "$manifest_sha"
+  test "$(/usr/bin/sha256sum "$stage/launch_lk1_subscription_dev_stopped_candidate.mjs" | /usr/bin/cut -d" " -f1)" = "$launcher_sha"
+  test "$(/usr/bin/sha256sum "$stage/evidence.json" | /usr/bin/cut -d" " -f1)" = "$evidence_sha"
+  /bin/mv "$stage/bundle.incoming" "$bundle"
+  /bin/mv "$stage/launch_lk1_subscription_dev_stopped_candidate.mjs" "$launcher"
+  /bin/mv "$stage/evidence.json" "$evidence"
+' sh "$lk1_stage" "$lk1_bundle_remote" "$lk1_launcher_remote" \
+  "$lk1_evidence_remote" "$lk1_manifest_sha" "$lk1_launcher_sha" "$lk1_preflight_sha"
+```
+
+Пути назначения до staging обязаны отсутствовать; если любой из них уже существует,
+оператор останавливает gate и не заменяет его. Перед install повторяются три
+system `sha256sum` сравнения уже на final paths. Удаление staging paths и private
+known-hosts — отдельная cleanup-операция после сохранения evidence и не входит в
+install authority.
+
 Только после отдельной install-authority запускается:
 
 ```bash
