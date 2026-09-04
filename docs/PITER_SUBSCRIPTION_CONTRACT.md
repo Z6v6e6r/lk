@@ -12,6 +12,55 @@ ledger, проверяет сумму ответа провайдера и го�
 остаются закрытыми managed sale guard. Само изменение production Node-RED и
 активация ledger выполняются только отдельными разрешёнными этапами.
 
+## Guarded-подготовка и переключение
+
+`scripts/prepare_piter_atomic_activation_packet.mjs` офлайн сверяет четыре полных
+read-only snapshot: scoped Mongo ledger, все Viva-транзакции точного product ID
+и единственную карточку этого Viva-продукта, а также readback точного Node-RED
+global binding `summer_subscription_piter_friendship_product_id`. Snapshot должен иметь явный
+источник, полный pagination receipt и возраст не более пяти минут; допустимое
+расхождение времени между источниками — не более минуты. Активация блокируется
+при любом nonterminal legacy-платеже, возврате, несовпадении provider/Mongo,
+повторе идентификатора, иной стоимости продукта, lifecycle drift или неполной
+выгрузке. Полный packet содержит чувствительные payment/transaction IDs и
+пишется только в новый каталог `0700` файлами `0600`; stdout и report содержат
+только хеши.
+
+`scripts/manage_piter_atomic_ledger.mjs` работает в dry-run без флага
+`--apply`. Будущая live-запись дополнительно требует:
+
+- точного `contractDigest` приватного packet;
+- ожидаемой `revision` и exact Mongo CAS;
+- action-specific допуска `SEED_147`, `ACTIVATE_147` или `DEACTIVATE_147`;
+- запуска на `lk-primary-147` под владельцем canonical runtime и общего с
+  reviewed-flow deploy непрерывного `flock`;
+- canonical root-owned `/root/.node-red/flows.json`, Mongo URI только в
+  `LK_PITER_ATOMIC_MONGO_URI`, фиксированных database `games` и collection из
+  packet, а также exact SHA-256 readback host machine identity и replica-set
+  identity;
+- свежей повторной проверки срока packet непосредственно перед mutation и
+  bounded Mongo query/write;
+- durable canonical Extended JSON preimage snapshot с manifest SHA-256,
+  `fsync` и readback перед записью (это forensic snapshot, restore rehearsal
+  остаётся отдельным обязательным доказательством);
+- для seed/activate — byte SHA активного flow, равного reviewed candidate SHA,
+  и полного неистёкшего reviewed-flow lease в фазе `soaking`; lease обязан
+  совпасть по source/candidate/deployment и быть получен до самого раннего из
+  четырёх evidence snapshot, то есть reconciliation выполняется уже на
+  установленном fail-closed candidate.
+
+Seed создаёт sentinel только с `ready:false`. Activate разрешён только из
+точного пустого seed-состояния. Deactivate меняет только `ready:true -> false`
+по CAS и сохраняет резервы, платежи и счётчики. После deactivate новые покупки
+закрыты, но уже отправленные provider result/confirm могут завершить durable
+фиксацию. `rollback-check` сообщает только неавторизующую offline-предпосылку.
+Реальный flow rollback требует отдельного live majority read, exact revision,
+`ready:false`, отсутствия atomic reservations/`piter-sale:*` и выполнения
+reviewed rollback под тем же непрерывным lock. Сам ledger operator flow не
+откатывает. Deactivate без candidate flow явно возвращает
+`runtimeStopProven:false` и не может считаться доказательством остановки всего
+legacy runtime.
+
 ## Атомарность покупки
 
 - единый sentinel `inventory:piter_friendship_12m_2026_v1` хранит `revision`,
@@ -35,6 +84,12 @@ ledger, проверяет сумму ответа провайдера и го�
 до Viva POST. Затем проверяются counts, уникальность ссылок и digest. Любая незавершённая legacy-транзакция сначала должна
 быть сверена с Viva до явного терминального статуса. Этот data write и
 переключение `ready:false -> true` не входят в deploy кандидата.
+
+После установки fail-closed candidate любой confirm legacy-записи без
+`requestFingerprint`, включая scheduled reconcile, не выполняет Mongo update.
+Он требует отдельной offline-сверки и нового свежего packet. Это исключает
+гонку между поздним legacy `FAILED -> PAID` и seed baseline; поэтому все четыре
+snapshot снимаются только после получения совпадающего `soaking` lease.
 
 ## Витрина и счётчик
 
@@ -133,12 +188,11 @@ runtime enablement и любой provider write относятся к отдел
 | Неизвестная категория или отсутствующий benefit rule | отказ fail closed |
 | Отмена/неоплата/возврат | счётчик меняется только по подтверждённому статусу |
 
-Перед активацией также нужны санитизированный Golden HAR и read-back тесты для
-реального расчёта скидок, debit/return визитов, отмены, неоплаты и возврата.
-Кроме того, переход между партиями должен получить атомарную Mongo-резервацию:
-текущий legacy purchase flow сначала читает счётчик и только после ответа Viva
-пишет `PAYMENT_PENDING`, поэтому конкурентные запросы на границе 100 мест нельзя
-считать безопасными для открытия продаж.
+Перед активацией managed policy также нужны санитизированный Golden HAR и
+read-back тесты для реального расчёта скидок, debit/return визитов, отмены,
+неоплаты и возврата. Переход между ценовыми партиями разрешено открывать только
+через описанный выше атомарный ledger: compatibility legacy lifecycle не
+является доказательством конкурентной безопасности на границе 100 мест.
 
 Проверенный station ID Питера и общий DRAFT-протокол для Питера, Котельников и
 сети находятся в `docs/REGIONAL_SUBSCRIPTION_RUNTIME_BINDINGS.md`.

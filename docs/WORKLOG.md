@@ -1757,3 +1757,25 @@
 - The reconciliation makes further source drift fail closed without presenting the
   partial Piter function set as a deployable unified candidate. No Node-RED import,
   provider/Mongo write, activation, push or deployment was performed.
+
+## 2026-09-04 — Piter atomic activation and data-aware stop tooling
+
+- Added an offline five-minute activation packet that reconciles complete scoped
+  Mongo, Viva transaction, exact-product and Node-RED global-binding evidence, blocks all nonterminal,
+  refunded, duplicate, lifecycle, amount and pagination drift, and writes raw payment
+  identities only to a private `0700`/`0600` packet while redacting operator output.
+- Added a dry-run-by-default ledger operator for preflight, seed, activate,
+  deactivate and a non-authorizing offline rollback precheck. Future writes require
+  the shared reviewed-flow lock, canonical root-owned flow, matching live deployment
+  lease, exact packet/revision/action/host gates, Mongo replica-set identity, fresh
+  commit-time evidence, bounded majority+journaled CAS, durable canonical EJSON
+  forensic preimage plus exact post-write recovery. Seed remains inactive; an
+  ambiguous ACK is accepted only when readback proves the exact postcondition, and
+  retrying an already achieved exact state is an explicit no-op.
+- Split sale readiness from durable ledger validity: deactivation blocks fresh
+  reservations while provider-result and confirm paths can finish an already
+  dispatched attempt. After candidate installation, legacy Piter rows without an
+  atomic fingerprint are never mutated by request or scheduled reconcile and must
+  pass the offline packet reconciliation, preventing a seed/legacy-confirm race.
+- This is isolated source-only work. No flow candidate was installed, no Mongo or
+  Viva write occurred, and sales or managed usage policy were not activated.
