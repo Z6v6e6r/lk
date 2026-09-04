@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -20,18 +22,16 @@ const exactKeys = (value, expected, label) => {
   }
 };
 
-export function validateHostPreflightEvidence(evidence, now = new Date()) {
+export function validateHostPreflightEvidence(evidence) {
   exactKeys(evidence, [
     "schemaVersion", "environment", "state", "capturedAt", "maximumAgeSeconds", "target",
     "hostCapabilities", "dedicatedUnits", "listeners", "inputs", "sharedResources", "authority",
   ], "host preflight evidence");
   const capturedAt = Date.parse(evidence.capturedAt);
-  const nowMs = now.getTime();
   if (evidence.schemaVersion !== 1 || evidence.environment !== "DEV"
     || evidence.state !== "PASS_AT_CAPTURE" || !Number.isFinite(capturedAt)
-    || !Number.isFinite(nowMs) || evidence.maximumAgeSeconds !== 3600
-    || capturedAt > nowMs || nowMs - capturedAt > evidence.maximumAgeSeconds * 1000) {
-    fail("host preflight evidence is stale or has invalid identity");
+    || evidence.maximumAgeSeconds !== 3600) {
+    fail("host preflight evidence has invalid identity");
   }
   exactKeys(evidence.target, ["hostAlias", "hostname", "machineIdSha256"], "host target");
   if (evidence.target.hostAlias !== "lk-reserve-89"
@@ -85,13 +85,54 @@ export function validateHostPreflightEvidence(evidence, now = new Date()) {
   return true;
 }
 
+export function validateFreshHostPreflightEvidence(evidence, now) {
+  validateHostPreflightEvidence(evidence);
+  const capturedAt = Date.parse(evidence.capturedAt);
+  const nowMs = now instanceof Date ? now.getTime() : Number.NaN;
+  if (!Number.isFinite(nowMs) || capturedAt > nowMs
+    || nowMs - capturedAt > evidence.maximumAgeSeconds * 1000) {
+    fail("host preflight evidence is stale or has invalid freshness clock");
+  }
+  return true;
+}
+
 export const checkedHostPreflightEvidence = Object.freeze(JSON.parse(fs.readFileSync(
   new URL("./lk1_subscription_dev_host_preflight_evidence.json", import.meta.url),
   "utf8",
 )));
 
+const isWithin = (root, candidate) => (
+  candidate === root || candidate.startsWith(`${root}${path.sep}`)
+);
+
+export function readFreshHostPreflightEvidence(evidencePath) {
+  if (typeof evidencePath !== "string" || !path.isAbsolute(evidencePath)) {
+    fail("host preflight evidence path must be absolute");
+  }
+  const descriptor = fs.openSync(evidencePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile()) {
+      fail("host preflight evidence must be a regular non-symlink file");
+    }
+    const realEvidencePath = fs.realpathSync(evidencePath);
+    const allowedRoots = [...new Set(["/private/tmp", "/tmp", os.tmpdir()])]
+      .filter((root) => fs.existsSync(root))
+      .map((root) => fs.realpathSync(root));
+    if (!allowedRoots.some((root) => isWithin(root, realEvidencePath))) {
+      fail("host preflight evidence must be stored under a temporary directory");
+    }
+    return JSON.parse(fs.readFileSync(descriptor, "utf8"));
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (process.argv.length !== 2) fail("Usage: validate_lk1_subscription_dev_host_preflight.mjs");
-  validateHostPreflightEvidence(checkedHostPreflightEvidence);
-  process.stdout.write("LK1_DEV_HOST_PREFLIGHT=PASS_AT_CAPTURE\n");
+  if (process.argv.length !== 4 || process.argv[2] !== "--evidence") {
+    fail("Usage: validate_lk1_subscription_dev_host_preflight.mjs --evidence /private/tmp/<fresh-evidence>.json");
+  }
+  const freshEvidence = readFreshHostPreflightEvidence(process.argv[3]);
+  validateFreshHostPreflightEvidence(freshEvidence, new Date());
+  process.stdout.write("LK1_DEV_HOST_PREFLIGHT=PASS_CURRENT\n");
 }

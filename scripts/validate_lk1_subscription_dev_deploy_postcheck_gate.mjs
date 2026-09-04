@@ -17,6 +17,7 @@ import { validateRuntimeInstallContract } from "./verify_lk1_subscription_dev_ru
 import { validateReleaseReceiptV2 } from "./validate_lk1_subscription_dev_release_receipt_v2.mjs";
 import {
   checkedHostPreflightEvidence,
+  validateFreshHostPreflightEvidence,
   validateHostPreflightEvidence,
 } from "./validate_lk1_subscription_dev_host_preflight.mjs";
 
@@ -120,7 +121,8 @@ export function validateDeployPostcheckGate(gate, {
   candidateBinding = CHECKED_DEV_CANDIDATE_BINDING,
   sourceAuthorization = CHECKED_DEV_SOURCE_AUTHORIZATION,
   hostPreflightEvidence = checkedHostPreflightEvidence,
-  now = new Date(),
+  requireFreshHostEvidence = false,
+  now,
 } = {}) {
   validateDevProvisioningContract(provisioningContract);
   validateRuntimeInstallContract(runtimeInstallContract);
@@ -130,7 +132,17 @@ export function validateDeployPostcheckGate(gate, {
     candidateSha256: releaseReceipt.candidateSha256,
     manifestSha256: releaseReceipt.manifestSha256,
   });
-  validateHostPreflightEvidence(hostPreflightEvidence, now);
+  // The checked-in evidence is an immutable historical capture, not a live
+  // installation authorization. Fresh pre-install callers must opt in with a
+  // newly captured evidence object and an explicit clock.
+  if (requireFreshHostEvidence === true) {
+    validateFreshHostPreflightEvidence(hostPreflightEvidence, now);
+  } else {
+    if (requireFreshHostEvidence !== false || now !== undefined) {
+      fail("fresh host evidence validation requires an explicit mode and clock");
+    }
+    validateHostPreflightEvidence(hostPreflightEvidence);
+  }
 
   exactKeys(gate, [
     "schemaVersion", "environment", "state", "productionBindingState", "releaseBinding",
@@ -254,11 +266,12 @@ export function validateDeployPostcheckGate(gate, {
     "state", "freshEvidenceRequired", "capturedAt", "maximumAgeSeconds",
     "mustRefreshImmediatelyBeforeInstall", "checks",
   ], "DEV predeploy gate");
-  if (gate.predeploy.state !== "PASS_AT_CAPTURE" || gate.predeploy.freshEvidenceRequired !== true
+  if (gate.predeploy.state !== "HISTORICAL_PASS_REQUIRES_REFRESH"
+    || gate.predeploy.freshEvidenceRequired !== true
     || gate.predeploy.capturedAt !== hostPreflightEvidence.capturedAt
     || gate.predeploy.maximumAgeSeconds !== hostPreflightEvidence.maximumAgeSeconds
     || gate.predeploy.mustRefreshImmediatelyBeforeInstall !== true) {
-    fail("DEV predeploy evidence is absent, stale, or not marked for execution-time refresh");
+    fail("DEV predeploy archive is absent or not marked for execution-time refresh");
   }
   exactArray(gate.predeploy.checks, PREDEPLOY_CHECKS, "DEV predeploy checks");
 
@@ -351,7 +364,7 @@ export function validateDeployPostcheckGate(gate, {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (process.argv.length !== 2) fail("Usage: validate_lk1_subscription_dev_deploy_postcheck_gate.mjs");
   validateDeployPostcheckGate(checkedDeployPostcheckGate);
-  process.stdout.write("LK1_DEV_DEPLOY_POSTCHECK_GATE=PREPARED_SOURCE_ONLY_READY_FOR_STOPPED_INSTALL_REVIEW\nDEV_DEPLOYED=NOT_CLAIMED\nDEV_ACTIVE=NOT_CLAIMED\n");
+  process.stdout.write("LK1_DEV_DEPLOY_POSTCHECK_GATE=PREPARED_SOURCE_ONLY_READY_FOR_STOPPED_INSTALL_REVIEW\nHOST_PREFLIGHT_CURRENT=NOT_CLAIMED\nDEV_DEPLOYED=NOT_CLAIMED\nDEV_ACTIVE=NOT_CLAIMED\n");
 }
 
 export { POSTCHECK_PHASES, PREDEPLOY_CHECKS, ZERO_COUNTERS };

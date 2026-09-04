@@ -16,11 +16,11 @@ const readJson = (relativePath) => JSON.parse(fs.readFileSync(
 ));
 
 test("source-only deploy/post-check gate binds the isolated DEV target without live claims", () => {
-  assert.equal(validateDeployPostcheckGate(checkedDeployPostcheckGate, { now: NOW }), true);
+  assert.equal(validateDeployPostcheckGate(checkedDeployPostcheckGate), true);
   assert.equal(checkedDeployPostcheckGate.state, "PREPARED_SOURCE_ONLY_READY_FOR_STOPPED_INSTALL_REVIEW");
   assert.equal(checkedDeployPostcheckGate.productionBindingState, "UNBOUND_AFTER_ROUTER_AMENDMENT");
   assert.equal(checkedDeployPostcheckGate.productionIsolation.crossEnvironmentWriteBudget, 0);
-  assert.equal(checkedDeployPostcheckGate.predeploy.state, "PASS_AT_CAPTURE");
+  assert.equal(checkedDeployPostcheckGate.predeploy.state, "HISTORICAL_PASS_REQUIRES_REFRESH");
   assert.equal(checkedDeployPostcheckGate.postcheck.state, "NOT_RUN");
   assert.equal(checkedDeployPostcheckGate.runtimeBinding.cupMatchesDedicatedListener, true);
   assert.equal(checkedDeployPostcheckGate.runtimeBinding.mongoMatchesProvisionedDatabase, true);
@@ -28,6 +28,21 @@ test("source-only deploy/post-check gate binds the isolated DEV target without l
   assert.equal(checkedDeployPostcheckGate.blockers.length, 0);
   assert.equal(Object.values(checkedDeployPostcheckGate.authority).every((value) => value === false), true);
   assert.equal(Object.values(checkedDeployPostcheckGate.claims).every((value) => value === false), true);
+});
+
+test("source-only gate archive is deterministic while fresh validation is explicit and bounded", () => {
+  assert.equal(validateDeployPostcheckGate(checkedDeployPostcheckGate), true);
+  assert.throws(() => validateDeployPostcheckGate(checkedDeployPostcheckGate, {
+    now: NOW,
+  }), /explicit mode and clock/);
+  assert.equal(validateDeployPostcheckGate(checkedDeployPostcheckGate, {
+    requireFreshHostEvidence: true,
+    now: new Date("2026-09-04T10:35:19Z"),
+  }), true);
+  assert.throws(() => validateDeployPostcheckGate(checkedDeployPostcheckGate, {
+    requireFreshHostEvidence: true,
+    now: new Date("2026-09-04T10:35:19.001Z"),
+  }), /stale/);
 });
 
 test("gate rejects release, target, production-isolation, evidence, canary, and authority drift", () => {
@@ -48,7 +63,9 @@ test("gate rejects release, target, production-isolation, evidence, canary, and 
     (value) => { value.productionIsolation.productionOriginPolicy = "ALLOW"; },
     (value) => { value.productionIsolation.nonLoopbackEgressAllowed = true; },
     (value) => { value.productionIsolation.crossEnvironmentWriteBudget = 1; },
-    (value) => { value.predeploy.state = "NOT_RUN"; },
+    (value) => { value.predeploy.state = "PASS_AT_CAPTURE"; },
+    (value) => { value.predeploy.freshEvidenceRequired = false; },
+    (value) => { value.predeploy.mustRefreshImmediatelyBeforeInstall = false; },
     (value) => { value.predeploy.checks.pop(); },
     (value) => { value.postcheck.state = "PASS"; },
     (value) => { value.postcheck.observationWindowSeconds.minimum = 599; },
@@ -67,7 +84,7 @@ test("gate rejects release, target, production-isolation, evidence, canary, and 
   ]) {
     const changed = clone(checkedDeployPostcheckGate);
     mutate(changed);
-    assert.throws(() => validateDeployPostcheckGate(changed, { now: NOW }));
+    assert.throws(() => validateDeployPostcheckGate(changed));
   }
 });
 
@@ -98,7 +115,7 @@ test("gate rejects drift in the linked release receipt", () => {
     authority: { hostInstall: false, serviceStart: false, ingress: false, activation: false },
   };
   assert.throws(
-    () => validateDeployPostcheckGate(checkedDeployPostcheckGate, { releaseReceipt: badReceipt, now: NOW }),
+    () => validateDeployPostcheckGate(checkedDeployPostcheckGate, { releaseReceipt: badReceipt }),
     /candidate identity diverges|release binding drift/,
   );
 });
@@ -109,7 +126,7 @@ test("gate rejects coordinated gate and receipt digest drift against source auth
   const changedReceipt = readJson("../lk1_subscription_dev_release_receipt_v2_contract.json");
   changedReceipt.candidateSha256 = changedGate.releaseBinding.candidateSha256;
   assert.throws(
-    () => validateDeployPostcheckGate(changedGate, { releaseReceipt: changedReceipt, now: NOW }),
+    () => validateDeployPostcheckGate(changedGate, { releaseReceipt: changedReceipt }),
     /candidate identity diverges|authorization contract mismatch|authorized candidate source identity/,
   );
 });
@@ -119,7 +136,6 @@ test("gate detects linked candidate CUP and Mongo identity drift", () => {
   runtimeEnvironmentBindings.DEV_ENDPOINTS.cupApiBase = "http://127.0.0.1:3036/api";
   assert.throws(() => validateDeployPostcheckGate(checkedDeployPostcheckGate, {
     runtimeEnvironmentBindings,
-    now: NOW,
   }), /bindings diverge|runtime identity/);
 
   const candidateBinding = readJson("../lk1_subscription_dev_candidate_binding.json");
@@ -127,7 +143,6 @@ test("gate detects linked candidate CUP and Mongo identity drift", () => {
     = "dev-lk1-subscription-canary";
   assert.throws(() => validateDeployPostcheckGate(checkedDeployPostcheckGate, {
     candidateBinding,
-    now: NOW,
   }), /Mongo|runtime identity/);
 });
 
@@ -139,6 +154,7 @@ test("CLI is local validation only and never claims deployed or active state", (
   const output = execFileSync(process.execPath, [script], { encoding: "utf8" });
   assert.equal(output, [
     "LK1_DEV_DEPLOY_POSTCHECK_GATE=PREPARED_SOURCE_ONLY_READY_FOR_STOPPED_INSTALL_REVIEW",
+    "HOST_PREFLIGHT_CURRENT=NOT_CLAIMED",
     "DEV_DEPLOYED=NOT_CLAIMED",
     "DEV_ACTIVE=NOT_CLAIMED",
     "",

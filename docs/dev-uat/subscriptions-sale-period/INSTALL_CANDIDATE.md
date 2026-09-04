@@ -28,9 +28,10 @@ Runtime принимает credential только при одновременн
 - 64-hex `authorizationId` (идентификатор короткоживущего многостартового окна,
   не anti-replay nonce).
 
-Fresh read-only preflight подтвердил systemd 245 и совместимость этого
-file-custody transport. Историческое подтверждение не заменяет повторный
-preflight непосредственно перед будущей установкой.
+Historical read-only preflight подтвердил systemd 245 и совместимость этого
+file-custody transport на момент capture. Checked-in snapshot не является
+текущим gate и не заменяет новый внешний evidence-файл с повторным preflight
+непосредственно перед будущей установкой.
 
 ## Почему candidate нельзя запустить
 

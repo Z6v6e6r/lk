@@ -1,20 +1,23 @@
 # Локальный source-пакет DEV fixture runtime
 
-Этот пакет делает локально проверяемой только schema/read-only evidence-часть UAT двух
-подписок. Он не является установленным DEV runtime и не доказывает доступность
-host, ingress, Node-RED, CUP, provider, identity или managed-entitlement flow.
+Этот пакет делает локально проверяемыми schema/read-only evidence и synthetic
+in-memory CUP lifecycle для UAT двух подписок. Он не является установленным DEV
+runtime и не доказывает доступность host, ingress, Node-RED, CUP, provider,
+identity или managed-entitlement flow.
 
 ## Реализованная граница
 
-- CUP fixture на `127.0.0.1:3037` реализует только `healthz`, release identity,
-  system evidence, runtime context и run-scoped observability.
+- CUP fixture на `127.0.0.1:3037` реализует `healthz`, release identity,
+  system evidence, runtime context, run-scoped observability, synthetic
+  in-memory reserve/replay/confirm/release и first-use activation.
 - Provider и identity fixtures на `127.0.0.1:3038/3039` реализуют только
   `healthz`; остальные пути отвечают fail-closed `503`.
 - Минимальный Node-RED flow реализует только `GET /lk/release-dev.json` и читает
   root-owned receipt `/srv/lk1-subscription-dev/node-red/release-identity.json`.
   Отсутствующий или некорректный receipt даёт `503`.
-- Все mutation, create/join, provider booking, payment, entitlement и activation
-  capabilities отсутствуют.
+- Provider/identity create/join, provider booking и payment capabilities
+  отсутствуют. Synthetic entitlement/activation не обращаются к Mongo,
+  provider или production и не являются разрешением runtime activation.
 - System evidence помечено `FIXTURE_NON_AUTHORIZING` и намеренно не подтверждает
   runtime flags, indexes, projection, canary или no-write counters. Поэтому
   стандартный runner обязан вернуть `BLOCKED`, а не `READY`. Нулевой fixture

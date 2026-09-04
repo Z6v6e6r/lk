@@ -29,10 +29,11 @@ Source binding исправлен на dedicated CUP `127.0.0.1:3037` и Mongo d
 
 ## Что требуется до будущей установки
 
-Read-only preflight от 2026-09-04 зафиксировал
-systemd 245, disabled/inactive units, отсутствие reserved listeners и inputs,
-неизменность shared flow. Его валидность ограничена одним часом. Непосредственно
-перед отдельно авторизованной установкой fresh preflight должен заново зафиксировать
+Historical read-only preflight от 2026-09-04 зафиксировал systemd 245,
+disabled/inactive units, отсутствие reserved listeners и inputs, неизменность
+shared flow. Checked-in snapshot не является текущим gate; его исходная
+валидность была ограничена одним часом. Непосредственно перед отдельно
+авторизованной установкой fresh preflight должен заново зафиксировать
 repository identity, candidate manifest, host identity, поддержку systemd
 совместимый authorization transport, disabled/inactive units, отсутствие listeners и authorization
 inputs, неизменность shared ресурсов, отсутствие production routes/origins и
@@ -63,12 +64,26 @@ start/activation длится 600-900 секунд. До фактическог�
 
 ```bash
 npm run nodered:lk1-subscription-dev:deploy-postcheck-gate
-npm run nodered:lk1-subscription-dev:host-preflight
 npm run test:lk1-subscription-dev-deploy-postcheck-gate
 npm run test:lk1-subscription-dev-host-preflight
 ```
 
-Команды только читают tracked JSON/JS файлы и валидируют их между собой. Они не
-содержат SSH, network, installer или service-control операций. Успешная локальная
-валидация означает, что блокеры и будущие проверки сформулированы согласованно;
-она не означает готовность к deploy.
+Эти source-команды читают tracked JSON/JS файлы и валидируют их между собой.
+Исторический host snapshot проверяется на согласованность в момент capture, но
+команда явно выводит `HOST_PREFLIGHT_CURRENT=NOT_CLAIMED`. Она не содержит SSH,
+network, installer или service-control операций. Успешная локальная валидация
+означает, что блокеры и будущие проверки сформулированы согласованно; она не
+означает готовность к deploy.
+
+Непосредственно перед отдельно авторизованной stopped-install операцией fresh
+read-only evidence сохраняется вне Git в новый regular non-symlink файл под
+`/private/tmp` и проверяется отдельной командой:
+
+```bash
+npm run nodered:lk1-subscription-dev:host-preflight -- \
+  --evidence /private/tmp/lk1-subscription-dev-host-preflight.<capture>.json
+```
+
+Команда требует текущий snapshot не старше одного часа и выводит
+`LK1_DEV_HOST_PREFLIGHT=PASS_CURRENT`. Checked-in snapshot не является текущей
+авторизацией и не должен обновляться только ради evergreen source CI.
