@@ -18,6 +18,13 @@ P1 блокирует ограниченный пилот; P2 можно сог�
 
 ### 2. Точный Viva контракт технического пользователя
 
+- Как отдельный Partner sidecar получает Viva access token без общего Node-RED global
+  context: OAuth client credentials, service account или иной серверный grant?
+- Какие exact token endpoint, audience/scope, TTL, refresh/reissue и revocation
+  semantics? Разрешён ли отдельный least-privilege credential только для
+  add/read/cancel технического booking?
+- Как отличить token expiry/revocation от provider outage и доказать, что новый token
+  не расширяет tenant/station scope? Кто владелец ротации и экстренного отзыва?
 - Какой Admin API endpoint создаёт booking технического клиента в уже существующем
   exercise? Метод, path, body, auth scope и допустимые status codes.
 - Можно ли одному техническому Viva client иметь несколько активных booking в одном
@@ -40,8 +47,9 @@ P1 блокирует ограниченный пилот; P2 можно сог�
 - Создаёт ли технический booking задолженность, оплату, чек, уведомление, абонементное
   списание, статистику посещения или рейтинг?
 
-**Нужно получить:** актуальная OpenAPI-схема, sandbox examples и таблица семантики всех
-2xx/4xx/5xx/timeout, отдельное письменное подтверждение `Idempotency-Key` и `ON_PLACE`.
+**Нужно получить:** актуальная OpenAPI-схема, sandbox examples, отдельный
+least-privilege token/grant contract и таблица семантики всех 2xx/4xx/5xx/timeout,
+отдельное письменное подтверждение `Idempotency-Key` и `ON_PLACE`.
 Пока этого нет, реализованный v0.2 adapter остаётся default-off: четыре real-mutation
 gate нельзя включать по предположению или только по успешному единичному запросу.
 
@@ -186,7 +194,8 @@ authority времени и согласованный compensation/manual recon
 
 1. Подписанный P0 decision log.
 2. Viva OpenAPI + sandbox technical client + exact add/read/delete examples + письменная
-   гарантия provider idempotency и `ON_PLACE` semantics.
+   гарантия provider idempotency и `ON_PLACE` semantics + отдельный least-privilege
+   sidecar token grant с TTL/refresh/revocation runbook.
 3. Golden HMAC vectors, NTP proof и retry matrix.
 4. Отдельный test mTLS certificate + exact test audience; production certificate,
    client ID и HMAC key выпускаются отдельно и не переиспользуют test material.

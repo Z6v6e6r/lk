@@ -31,11 +31,30 @@ const mutateJson = (bytes, mutate) => {
 
 test("checked runtime pins exact Node-RED, custom node, npm ci, npm ls, and audit evidence", () => {
   const result = validateCheckedPartnerRuntimeEvidence();
-  assert.equal(result.manifest.state, "AUDIT_BLOCKED");
-  assert.equal(result.manifest.runtime.nodeRedVersion, "4.1.14");
-  assert.equal(result.manifest.audit.affectedPackages.high, 15);
+  assert.equal(result.manifest.state, "SECURITY_AUDIT_PASS");
+  assert.equal(result.manifest.runtime.nodeRedVersion, "5.0.6");
+  assert.equal(result.manifest.runtime.architecture, "x64");
+  assert.equal(result.manifest.audit.affectedPackages.high, 0);
   assert.equal(result.functionalRehearsal.defaultOff.httpStatus, 503);
   assert.equal(result.functionalRehearsal.packageRollback.httpStatus, 404);
+});
+
+test("shared production palette risk observation forces the dedicated sidecar boundary", () => {
+  const observation = JSON.parse(read("shared-runtime-isolation-observation.json").toString("utf8"));
+  assert.equal(observation.evidenceScope, "LOCAL_REHEARSAL_WITH_EXACT_READ_ONLY_PRODUCTION_PALETTE_VERSIONS");
+  assert.equal(observation.productionReadback.nodeRedVersion, "4.0.9");
+  assert.equal(observation.productionReadback.flowNodeCount, 4762);
+  assert.equal(Object.keys(observation.rehearsal.directPaletteDependencies).length, 16);
+  assert.equal(observation.rehearsal.directPaletteDependencies["crypto-wz"], "1.0.2");
+  assert.deepEqual(observation.rehearsal.affectedPackages, {
+    critical: 5, high: 12, moderate: 23, low: 0, total: 40,
+  });
+  assert.deepEqual(observation.rehearsal.criticalPackages, [
+    "crypto-js", "crypto-wz", "form-data", "jsonata", "request",
+  ]);
+  assert.equal(observation.decision, "DEDICATED_MINIMAL_SIDECAR_REQUIRED_SHARED_RUNTIME_FORBIDDEN");
+  assert.equal(observation.sharedNodeRedFlowMutationAllowed, false);
+  assert.equal(observation.productionTouched, false);
 });
 
 test("runtime evidence rejects functional rehearsal drift or production overclaim", () => {
@@ -64,7 +83,7 @@ test("runtime evidence returns an immutable-by-copy byte snapshot for packet ass
 test("runtime evidence rejects lockfile or custom-node drift", () => {
   const lockDrift = evidence();
   lockDrift.packageLockBytes = mutateJson(lockDrift.packageLockBytes, (value) => {
-    value.packages["node_modules/node-red"].version = "4.1.15";
+    value.packages["node_modules/node-red"].version = "5.0.5";
   });
   assert.throws(() => validatePartnerRuntimeEvidence(lockDrift), /closure hash mismatch/);
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import {
   PITER_ATOMIC_ACTIVATION,
@@ -16,7 +17,12 @@ import {
   deriveLiveLegacyBaseline,
 } from "../lib/piterAtomicLedgerOperations.mjs";
 import { parseArgs as parsePacketArgs, preparePacket } from "../prepare_piter_atomic_activation_packet.mjs";
-import { parseArgs as parseLedgerArgs, runLedgerOperation } from "../manage_piter_atomic_ledger.mjs";
+import {
+  parseArgs as parseLedgerArgs,
+  processOwnsExclusiveFlock,
+  runLedgerOperation,
+  verifyDeploymentLock,
+} from "../manage_piter_atomic_ledger.mjs";
 
 const NOW = new Date("2026-09-04T10:00:00.000Z");
 const PRODUCT_ID = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
@@ -158,6 +164,7 @@ const createSeedApplyHarness = ({ alreadyApplied = false, ambiguousWrite = false
       liveFlowPath: activeFlowFile,
       expectedUid: process.getuid(),
       getUid: () => process.getuid(),
+      verifyDeploymentLock: () => true,
       ejsonStringify: (value) => JSON.stringify(value, null, 2),
       readDeploymentLease: () => ({
         formatVersion: 2,
@@ -445,6 +452,7 @@ test("guarded seed writes only after exact authorization, majority ACK, backup, 
     liveFlowPath: activeFlowFile,
     expectedUid: process.getuid(),
     getUid: () => process.getuid(),
+    verifyDeploymentLock: () => true,
     ejsonStringify: (value) => JSON.stringify(value, null, 2),
     readDeploymentLease: () => ({
       formatVersion: 2,
@@ -539,6 +547,7 @@ test("deactivate recovery accepts a valid in-flight confirmation after the stop 
     liveFlowPath: activeFlowFile,
     expectedUid: process.getuid(),
     getUid: () => process.getuid(),
+    verifyDeploymentLock: () => true,
     readHostIdentitySha256: () => HOST_IDENTITY_SHA,
     ejsonStringify: (value) => JSON.stringify(value, null, 2),
     env: {
@@ -596,6 +605,7 @@ test("activate recovery accepts a valid first reservation after the activation C
     liveFlowPath: activeFlowFile,
     expectedUid: process.getuid(),
     getUid: () => process.getuid(),
+    verifyDeploymentLock: () => true,
     readHostIdentitySha256: () => HOST_IDENTITY_SHA,
     ejsonStringify: (value) => JSON.stringify(value, null, 2),
     readDeploymentLease: () => ({
@@ -631,9 +641,53 @@ test("guarded seed retry is an explicit no-op when the exact state already exist
   assert.equal(fs.existsSync(harness.options.backupDir), false);
 });
 
-test("live mutation rejects a missing shared lock and an expired packet at the final gate", async () => {
+test("exclusive flock proof requires both the owned Linux lock record and inherited descriptor", () => {
+  const lockStat = { dev: 0x801n, ino: 430317n };
+  const owned = `1: FLOCK  ADVISORY  WRITE ${process.pid} 08:01:430317 0 EOF\n`;
+  assert.equal(processOwnsExclusiveFlock({
+    procLocks: owned, pid: process.pid, lockStat, openFileStats: [lockStat],
+  }), true);
+  assert.equal(processOwnsExclusiveFlock({
+    procLocks: owned, pid: process.pid, lockStat, openFileStats: [],
+  }), false);
+  assert.equal(processOwnsExclusiveFlock({
+    procLocks: owned.replace(String(process.pid), String(process.pid + 1)),
+    pid: process.pid,
+    lockStat,
+    openFileStats: [lockStat],
+  }), false);
+});
+
+test("Linux flock -F transfers the real exclusive lock descriptor to the mutation process", (t) => {
+  if (process.platform !== "linux" || typeof process.getuid !== "function") {
+    t.skip("requires Linux /proc lock evidence");
+    return;
+  }
+  const available = spawnSync("flock", ["--version"], { encoding: "utf8" });
+  assert.equal(available.status, 0, "Linux CI/runtime must provide util-linux flock");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "piter-real-flock-"));
+  const lockPath = path.join(root, "reviewed-flow.lock");
+  fs.writeFileSync(lockPath, "", { mode: 0o600 });
+  fs.chmodSync(lockPath, 0o600);
+  const moduleUrl = new URL("../manage_piter_atomic_ledger.mjs", import.meta.url).href;
+  const probe = [
+    `import { verifyDeploymentLock } from ${JSON.stringify(moduleUrl)};`,
+    `process.exit(verifyDeploymentLock({ lockPath: ${JSON.stringify(lockPath)}, expectedUid: process.getuid() }) ? 0 : 41);`,
+  ].join("\n");
+  const locked = spawnSync("flock", [
+    "-n", "-E", "75", "-F", lockPath,
+    process.execPath, "--input-type=module", "-e", probe,
+  ], { encoding: "utf8" });
+  assert.equal(locked.status, 0, locked.stderr || locked.stdout);
+  assert.equal(verifyDeploymentLock({ lockPath, expectedUid: process.getuid() }), false);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("live mutation rejects a spoofed lock env and an expired packet at the final gate", async () => {
   const unlocked = createSeedApplyHarness();
-  delete unlocked.dependencies.env.PADLHUB_REVIEWED_FLOW_LOCK_HELD;
+  unlocked.dependencies.env.PADLHUB_REVIEWED_FLOW_LOCK_HELD = "1";
+  unlocked.dependencies.env.PADLHUB_REVIEWED_FLOW_LOCK_WRAPPED = "1";
+  unlocked.dependencies.verifyDeploymentLock = () => false;
   await assert.rejects(() => runLedgerOperation(unlocked.options, unlocked.dependencies), /lock is not held/);
 
   const wrongHost = createSeedApplyHarness();

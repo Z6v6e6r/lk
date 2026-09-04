@@ -343,6 +343,15 @@ jobs:
           scripts/tests/vivaServiceCredentialResolution.security.test.mjs
           scripts/tests/subscriptionBookingNginx.test.mjs
 
+      - name: Run Partner membership R4 gates
+        run: |
+          npm run test:partner-game-membership-api
+          npm run validate:partner-game-membership-runtime
+          npm run validate:partner-game-membership-production-controls
+
+      - name: Run Piter atomic activation lock and ledger gates
+        run: npm run test:piter-atomic-activation
+
       - name: Validate deterministic Node-RED modular toolchain fixtures
         run: node --test scripts/tests/noderedModularToolchain.test.mjs
 

@@ -1,7 +1,7 @@
 # Тестовый Partner Game Membership API
 
-Статус документа: **deployable source pilot v0.2, default-off; runtime AUDIT_BLOCKED,
-live gates UNBOUND**. Контур, строгий Viva adapter и генератор приватного deployment packet реализованы локально,
+Статус документа: **deployable source pilot v0.2, default-off; isolated sidecar runtime
+SECURITY_AUDIT_PASS, live ingress/custody gates UNBOUND**. Контур, строгий Viva adapter и генератор приватного deployment packet реализованы локально,
 но маршрут не импортирован в Node-RED, реальные вызовы Viva не выполнялись, ключи не
 создавались, Mongo/shared ingress/production не менялись. Наличие deployable artifacts
 не является разрешением на deploy или activation.
@@ -367,19 +367,23 @@ output вне repository. Parent должен уже существовать, �
 не подходит. Дочерний `--out` до запуска существовать не должен. Генератор создаёт
 файлы с mode `0600` внутри directory `0700`:
 
-- `source.flow.json` — exact fresh source preimage для contract/rollback verification;
-- `candidate.flow.json` — свежий flow плюс ровно семь pinned nodes;
+- `source.flow.json` — детерминированный одно-tab preimage отдельного sidecar для
+  contract/rollback verification; полный live production flow в packet не копируется;
+- `candidate.flow.json` — sidecar preimage плюс ровно семь pinned nodes;
 - `reviewed-flow.contract.json` — source/candidate SHA и hash каждого addition;
 - `custom-node/` + `custom-node.release.json` — exact source/package-lock bytes/hashes;
-- `runtime/` — exact Node-RED `4.1.14` root lock, `npm ls`, полный audit evidence,
+- `runtime/` — exact minimal Node-RED `5.0.6` root lock, `npm ls`, полный audit evidence,
   ограниченный load/default-off/removal `functional-rehearsal.json`, runtime manifest и
   installable `partner-package/`; rehearsal не доказывает новый exact flow candidate,
   а production install допускает только
   `npm ci --ignore-scripts --no-fund --no-audit`;
-- `production-controls.contract.json` — exact policy bytes/hash; runtime остаётся
-  `AUDIT_BLOCKED`, ingress/custody `UNBOUND`, activation `BLOCKED`;
+- `production-controls.contract.json` — exact policy bytes/hash; sidecar runtime
+  `SECURITY_AUDIT_PASS`, ingress/custody `UNBOUND`, activation `BLOCKED`;
 - `deployment-plan.json` — `liveMutationAuthorized=false`,
   `deploymentPerformed=false`, `activationPerformed=false` и список незакрытых gates;
+- `sidecar/` — exact CommonJS settings, hardened default-off systemd unit и
+  no-network rehearsal evidence; admin API/editor выключены, `18894` loopback-only,
+  egress кроме localhost запрещён до отдельной activation-конфигурации;
 - `packet.manifest.json` — записанный последним aggregate hash/mode manifest со
   статусом `COMPLETE_PRIVATE_PACKET`, но без deploy/activation authorization.
 
@@ -392,18 +396,24 @@ Nested package pins MongoDB `7.2.0`, включает свой lockfile в relea
 устанавливаться через `npm ci --ignore-scripts`; фактическая Node/npm/Linux совместимость
 и offline/immutable dependency closure всё равно репетируются до deploy.
 
-Node-RED `4.1.14` прошёл isolated load/default-off/flow rollback/package rollback, но
-свежий audit exact closure не стал чистым (`0 critical / 15 high / 9 moderate / 1 low`).
-Эта версия — доказанный compatibility floor, а не security approval. Детали, exact
-ingress limits и custody boundary: [Production controls](./PARTNER_GAME_MEMBERSHIP_PRODUCTION_CONTROLS.md).
+Minimal Node-RED `5.0.6` sidecar прошёл isolated load/default-off/flow rollback/package
+rollback; свежий audit exact closure: `0 critical / 0 high / 7 moderate / 0 low`.
+Локальное bounded-наблюдение полной production palette показало
+`5 critical / 12 high / 23 moderate`; raw lock/audit этой палитры не входят в
+immutable deploy evidence. Поэтому общий Node-RED `4.0.9` на `127.0.0.1:1880`
+считается небезопасным для Partner package и его flow не участвует в deploy:
+ingress направляется только на отдельный `127.0.0.1:18894`. Детали, exact ingress
+limits и custody boundary: [Production controls](./PARTNER_GAME_MEMBERSHIP_PRODUCTION_CONTROLS.md).
 
-Расширенный reviewed-flow contract разрешает additions-only deploy, включая новые
-`http in`, только когда каждый ID и полный node hash явно pinned. Все существующие
-routes/nodes обязаны остаться неизменными. Сам packet ничего не импортирует, не
-устанавливает и не активирует.
-Их исходный порядок также неизменяем: live nodes образуют точный prefix candidate, а
-семь новых узлов — один append-only suffix. Это исключает скрытую смену приоритета
-перекрывающихся Node-RED HTTP routes.
+Reviewed-flow contract относится только к sidecar: каждый ID и полный node hash pinned,
+одно-tab preimage образует exact prefix, семь узлов — append-only suffix. Fresh live
+production snapshot проверяется отдельно только на namespace/node-id collision. Сам
+packet ничего не импортирует, не устанавливает и не активирует; изменение общего
+production flow запрещено deployment plan.
+
+`packet.manifest.json` привязан к exact commit и exact Git tree. Production binding
+принимает оба значения только как отдельные out-of-band approved inputs и отклоняет
+packet, если хотя бы одно из них не совпадает.
 
 ### Изолированная Mongo replica rehearsal
 

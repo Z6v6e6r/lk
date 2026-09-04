@@ -8,10 +8,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
-import { buildPartnerV02DeploymentPlan } from "./prepare_partner_game_membership_v02_packet.mjs";
+import {
+  buildPartnerV02DeploymentPlan,
+  validatePartnerSidecarArtifacts,
+} from "./prepare_partner_game_membership_v02_packet.mjs";
 import { validateExactGraphContract } from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
 import {
   buildPartnerGameMembershipApiCandidate,
+  buildPartnerGameMembershipApiSidecarCandidate,
   PARTNER_API_FLOW_NODE_IDS,
 } from "./patch_partner_game_membership_api_flow.mjs";
 import { validatePartnerProductionControls } from "./validate_partner_game_membership_production_controls.mjs";
@@ -23,6 +27,8 @@ const HOST_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[
 const AUDIENCE_PATTERN = /^[a-z0-9][a-z0-9._:-]{2,127}$/;
 const TRANSFER_CHANNELS = new Set(["SSH_HOST_KEY_PINNED", "SOPS_AGE", "HARDWARE_BACKED_SECRET_CHANNEL"]);
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/;
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const SIDECAR_TEMPLATE_ROOT = path.join(SCRIPT_DIR, "partner_game_membership_sidecar");
 const CUSTOM_NODE_FILES = Object.freeze([
   "package.json",
   "package-lock.json",
@@ -59,6 +65,9 @@ export const PARTNER_PACKET_FILE_PATHS = Object.freeze([
   "runtime/partner-package/partner-game-membership-node.cjs",
   "runtime/partner-package/partner-game-membership-node.html",
   "runtime/partner-package/partner-game-membership-viva.mjs",
+  "sidecar/partner-game-membership-sidecar.service",
+  "sidecar/sidecar-rehearsal.json",
+  "sidecar/settings.cjs",
 ]);
 
 const fail = (message) => { throw new Error(message); };
@@ -126,7 +135,15 @@ function listPacketFiles(root, relativeDirectory = "", { expectedOwnerUid, direc
     });
 }
 
-function validateExactPacket({ packetRoot, packetManifestBytes, binding, controls, expectedPacketOwnerUid }) {
+function validateExactPacket({
+  packetRoot,
+  packetManifestBytes,
+  binding,
+  controls,
+  expectedPacketOwnerUid,
+  expectedApprovedCommit,
+  expectedApprovedTree,
+}) {
   if (!path.isAbsolute(String(packetRoot || ""))) fail("Packet root must be an absolute path");
   const normalizedRoot = path.resolve(packetRoot);
   const rootStat = fs.lstatSync(normalizedRoot);
@@ -155,12 +172,15 @@ function validateExactPacket({ packetRoot, packetManifestBytes, binding, control
     "formatVersion", "deploymentId", "state", "repository", "productionControlsSha256",
     "customNodeReleaseSha256", "files", "aggregateSha256", "deployAuthorized", "activationAuthorized",
   ], "Packet manifest");
-  exactKeys(manifest.repository, ["commit", "branch"], "Packet repository identity");
+  exactKeys(manifest.repository, ["commit", "tree", "branch"], "Packet repository identity");
   if (manifest.formatVersion !== 1
     || manifest.deploymentId !== controls.deploymentId
     || manifest.state !== "COMPLETE_PRIVATE_PACKET"
     || !COMMIT_PATTERN.test(String(manifest.repository.commit || ""))
+    || !COMMIT_PATTERN.test(String(manifest.repository.tree || ""))
     || !TOKEN_PATTERN.test(String(manifest.repository.branch || ""))
+    || manifest.repository.commit !== expectedApprovedCommit
+    || manifest.repository.tree !== expectedApprovedTree
     || manifest.productionControlsSha256 !== binding.controlsSha256
     || manifest.customNodeReleaseSha256 !== controls.runtime.latestIsolatedRehearsal.customNodeReleaseSha256
     || manifest.deployAuthorized !== false
@@ -250,7 +270,20 @@ function validateExactPacket({ packetRoot, packetManifestBytes, binding, control
 
   const sourceBytes = read("source.flow.json");
   const candidateBytes = read("candidate.flow.json");
+  validatePartnerSidecarArtifacts({
+    artifacts: {
+      "settings.cjs": read("sidecar/settings.cjs"),
+      "partner-game-membership-sidecar.service": read("sidecar/partner-game-membership-sidecar.service"),
+      "sidecar-rehearsal.json": read("sidecar/sidecar-rehearsal.json"),
+    },
+    candidateBytes,
+    sidecarControls: controls.runtime.sidecar,
+  });
   const sourceFlow = JSON.parse(sourceBytes.toString("utf8"));
+  const expectedSidecar = buildPartnerGameMembershipApiSidecarCandidate();
+  if (!isDeepStrictEqual(sourceFlow, expectedSidecar.sourceFlow)) {
+    fail("Packet source is not the exact dedicated Partner sidecar preimage");
+  }
   const expectedCandidate = buildPartnerGameMembershipApiCandidate(sourceFlow);
   const expectedCandidateBytes = Buffer.from(`${JSON.stringify(expectedCandidate.flow, null, 2)}\n`, "utf8");
   if (!candidateBytes.equals(expectedCandidateBytes)
@@ -263,10 +296,24 @@ function validateExactPacket({ packetRoot, packetManifestBytes, binding, control
     || !isDeepStrictEqual(contract.allowedAdditions.map(({ id }) => id).sort(), Object.values(PARTNER_API_FLOW_NODE_IDS).sort())) {
     fail("Packet flow contract permits changes outside the exact Partner node allowlist");
   }
+  for (const relativePath of [
+    "settings.cjs",
+    "partner-game-membership-sidecar.service",
+    "sidecar-rehearsal.json",
+  ]) {
+    const expected = fs.readFileSync(path.join(SIDECAR_TEMPLATE_ROOT, relativePath));
+    if (!read(`sidecar/${relativePath}`).equals(expected)) {
+      fail(`Packet sidecar template differs from the reviewed source: ${relativePath}`);
+    }
+  }
   const plan = JSON.parse(read("deployment-plan.json").toString("utf8"));
   const rebuiltPlan = buildPartnerV02DeploymentPlan({
     repository: manifest.repository,
-    verified: { meta: { pulledAt: plan.livePulledAt } },
+    verified: { meta: {
+      pulledAt: plan.livePulledAt,
+      sourceSha256: plan.liveReadbackSha256,
+      nodeCount: plan.liveReadbackNodeCount,
+    } },
     contract,
     release,
     rollbackRehearsed: true,
@@ -290,8 +337,14 @@ export function validatePartnerProductionBinding({
   actualHostname = os.hostname(),
   actualPlatform = process.platform,
   actualArchitecture = process.arch,
+  expectedApprovedCommit,
+  expectedApprovedTree,
 }) {
   validatePartnerProductionControls(controls);
+  if (!COMMIT_PATTERN.test(String(expectedApprovedCommit || ""))
+    || !COMMIT_PATTERN.test(String(expectedApprovedTree || ""))) {
+    fail("Production binding requires out-of-band approved commit and tree identities");
+  }
   if (!Buffer.isBuffer(controlsBytes)
     || sha256(controlsBytes) !== binding?.controlsSha256
     || !isDeepStrictEqual(JSON.parse(controlsBytes.toString("utf8")), controls)) {
@@ -320,8 +373,8 @@ export function validatePartnerProductionBinding({
     "highAffectedPackages", "moderateAffectedPackages", "lowAffectedPackages",
     "partnerReachableHighPackages", "decisionRecord", "owner",
   ], "Runtime binding");
-  if (binding.runtime.verificationState !== "AUDIT_BLOCKED_DECISION_UNVERIFIED") {
-    fail("Runtime binding must remain blocked until decision evidence is independently verified");
+  if (binding.runtime.verificationState !== "SECURITY_AUDIT_PASS_RUNTIME_DECLARED_UNVERIFIED") {
+    fail("Runtime binding must remain unverified until the exact target runtime is independently checked");
   }
   for (const field of [
     "runtimeManifestSha256", "packageJsonSha256", "packageLockSha256", "dependencyTreeSha256",
@@ -349,7 +402,7 @@ export function validatePartnerProductionBinding({
     || binding.runtime.functionalRehearsalCapturedAt !== closure.functionalRehearsalCapturedAt
     || binding.runtime.auditCapturedAt !== closure.auditCapturedAt
     || binding.runtime.platform !== "linux"
-    || binding.runtime.architecture !== "arm64"
+    || binding.runtime.architecture !== "x64"
     || binding.runtime.platform !== actualPlatform
     || binding.runtime.architecture !== actualArchitecture
     || binding.runtime.nodeVersion !== controls.runtime.requiredNodeVersion
@@ -457,7 +510,13 @@ export function validatePartnerProductionBinding({
     requireToken(binding.custody[field], `Packet ${field}`);
   }
   validateExactPacket({
-    packetRoot, packetManifestBytes, binding, controls, expectedPacketOwnerUid,
+    packetRoot,
+    packetManifestBytes,
+    binding,
+    controls,
+    expectedPacketOwnerUid,
+    expectedApprovedCommit,
+    expectedApprovedTree,
   });
 
   exactKeys(binding.identitySeparation, [
@@ -506,8 +565,9 @@ export function validatePartnerProductionBinding({
 function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 2) args[argv[index]] = argv[index + 1];
-  if (!args["--binding"] || !args["--packet-root"]) {
-    throw new Error("Usage: --binding /absolute/private-binding.json --packet-root /absolute/private-packet");
+  if (!args["--binding"] || !args["--packet-root"]
+    || !args["--expected-approved-commit"] || !args["--expected-approved-tree"]) {
+    throw new Error("Usage: --binding /absolute/private-binding.json --packet-root /absolute/private-packet --expected-approved-commit 40hex --expected-approved-tree 40hex");
   }
   if (!path.isAbsolute(args["--binding"]) || !path.isAbsolute(args["--packet-root"])) {
     throw new Error("Private binding and packet root paths must be absolute");
@@ -524,8 +584,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const binding = JSON.parse(fs.readFileSync(args["--binding"], "utf8"));
     const packetRoot = path.resolve(args["--packet-root"]);
     const packetManifestBytes = fs.readFileSync(path.join(packetRoot, "packet.manifest.json"));
-    validatePartnerProductionBinding({ controls, controlsBytes, binding, packetRoot, packetManifestBytes });
-    process.stdout.write("PARTNER_PRODUCTION_BINDING=DECLARED_EVIDENCE_UNVERIFIED_AUDIT_BLOCKED_NOT_AUTHORIZED\n");
+    validatePartnerProductionBinding({
+      controls,
+      controlsBytes,
+      binding,
+      packetRoot,
+      packetManifestBytes,
+      expectedApprovedCommit: args["--expected-approved-commit"],
+      expectedApprovedTree: args["--expected-approved-tree"],
+    });
+    process.stdout.write("PARTNER_PRODUCTION_BINDING=DECLARED_EVIDENCE_UNVERIFIED_NOT_AUTHORIZED\n");
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;

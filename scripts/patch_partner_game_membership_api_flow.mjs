@@ -13,6 +13,12 @@ export const PARTNER_API_FLOW_NODE_IDS = Object.freeze({
   comment: "a6f1000000000007",
 });
 
+export const PARTNER_API_SIDECAR_TAB = Object.freeze({
+  id: "partner-rehearsal-tab",
+  type: "tab",
+  label: "LK Games",
+});
+
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
 const httpIn = (id, z, name, url, method, y) => ({
@@ -114,7 +120,7 @@ export function buildPartnerGameMembershipApiCandidate(sourceFlow, options = {})
       type: "comment",
       z,
       name: "Partner API v0.2 is fail-closed and default-off",
-      info: "Install only from a fresh LK Games live-flow snapshot. Real Viva mutations require four independent server-only gates: provider mode, mutation enable, approved contract revision, and confirmed provider idempotency/ON_PLACE semantics. Synthetic mode is accepted only with loopback Mongo and local/test/dev database naming.",
+      info: "Deploy only in the dedicated Partner sidecar. A fresh shared LK Games snapshot is collision evidence only and must not be imported. Real Viva mutations require four independent server-only gates: provider mode, mutation enable, approved contract revision, and confirmed provider idempotency/ON_PLACE semantics. Synthetic mode is accepted only with loopback Mongo and local/test/dev database naming.",
       x: 590,
       y: 120,
       wires: [],
@@ -125,6 +131,14 @@ export function buildPartnerGameMembershipApiCandidate(sourceFlow, options = {})
     addedNodeIds: added.map((node) => node.id),
     sourceTabId: z,
     sourceTabLabel: tabLabel,
+  };
+}
+
+export function buildPartnerGameMembershipApiSidecarCandidate() {
+  const sourceFlow = [{ ...PARTNER_API_SIDECAR_TAB }];
+  return {
+    sourceFlow,
+    ...buildPartnerGameMembershipApiCandidate(sourceFlow),
   };
 }
 
@@ -152,17 +166,25 @@ export function buildCandidateFile(options) {
     throw new Error(`Fresh source SHA-256 mismatch: expected ${options.sourceSha256}, received ${actualSourceSha256}`);
   }
   const sourceFlow = JSON.parse(sourceBytes.toString("utf8"));
-  const result = buildPartnerGameMembershipApiCandidate(sourceFlow, options);
+  const collisionCheck = buildPartnerGameMembershipApiCandidate(sourceFlow, options);
+  const result = buildPartnerGameMembershipApiSidecarCandidate();
   const candidateBytes = Buffer.from(`${JSON.stringify(result.flow, null, 2)}\n`);
   fs.writeFileSync(path.resolve(options.output), candidateBytes, { flag: "wx" });
   const manifest = {
     schemaVersion: 1,
     artifact: "partner-game-membership-api-v0.2-candidate",
+    topology: "DEDICATED_LOOPBACK_SIDECAR",
+    sharedFlowMutationAllowed: false,
     deploymentPerformed: false,
     activationPerformed: false,
-    source: {
+    liveReadback: {
       path: path.resolve(options.input),
       sha256: actualSourceSha256,
+      tabId: collisionCheck.sourceTabId,
+      tabLabel: collisionCheck.sourceTabLabel,
+    },
+    sidecarSource: {
+      sha256: sha256(Buffer.from(`${JSON.stringify(result.sourceFlow, null, 2)}\n`)),
       tabId: result.sourceTabId,
       tabLabel: result.sourceTabLabel,
     },

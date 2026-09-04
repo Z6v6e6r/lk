@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { PARTNER_API_FLOW_NODE_IDS } from "../patch_partner_game_membership_api_flow.mjs";
+import {
+  buildPartnerGameMembershipApiSidecarCandidate,
+  PARTNER_API_FLOW_NODE_IDS,
+} from "../patch_partner_game_membership_api_flow.mjs";
 import {
   buildPartnerV02DeploymentPlan,
   preparePartnerV02Packet,
@@ -57,7 +60,7 @@ test("v0.2 packet pins additions-only routes, package bytes, rollback identity, 
   const result = preparePartnerV02Packet({
     workspace: fixture.workspace,
     outDir,
-    repository: { commit: "a".repeat(40), branch: "codex/partner-game-membership-api-v0.2-test" },
+    repository: { commit: "a".repeat(40), tree: "b".repeat(40), branch: "codex/partner-game-membership-api-v0.2-test" },
   });
   assert.equal(fs.statSync(outDir).mode & 0o777, 0o700);
   for (const name of [
@@ -68,12 +71,38 @@ test("v0.2 packet pins additions-only routes, package bytes, rollback identity, 
     "deployment-plan.json",
     "packet.manifest.json",
   ]) assert.equal(fs.statSync(path.join(outDir, name)).mode & 0o777, 0o600);
+  const settings = fs.readFileSync(path.join(outDir, "sidecar/settings.cjs"), "utf8");
+  const service = fs.readFileSync(path.join(outDir, "sidecar/partner-game-membership-sidecar.service"), "utf8");
+  const sidecarRehearsal = JSON.parse(fs.readFileSync(path.join(outDir, "sidecar/sidecar-rehearsal.json"), "utf8"));
+  assert.match(settings, /uiHost: "127\.0\.0\.1"/);
+  assert.match(settings, /uiPort: 18894/);
+  assert.match(settings, /httpAdminRoot: false/);
+  assert.match(settings, /autoInstall: false/);
+  assert.match(service, /Environment=LK_PARTNER_GAME_API_ENABLED=false/);
+  assert.match(service, /Environment=LK_PARTNER_GAME_API_PROVIDER_MODE=disabled/);
+  assert.match(service, /IPAddressDeny=any/);
+  assert.match(service, /IPAddressAllow=localhost/);
+  assert.doesNotMatch(service, /EnvironmentFile=/);
+  assert.doesNotMatch(`${settings}\n${service}`, /Bearer |mongodb(?:\+srv)?:\/\//i);
+  assert.equal(sidecarRehearsal.networkMode, "none");
+  assert.equal(sidecarRehearsal.readback.exactProductionPathLayout, true);
+  assert.equal(sidecarRehearsal.readback.emptyUserDirAtStart, true);
+  assert.equal(sidecarRehearsal.readback.customNodeRouteLoaded, true);
+  assert.equal(sidecarRehearsal.readback.port, 18894);
+  assert.equal(sidecarRehearsal.readback.partnerDefaultOffHttpStatus, 503);
+  assert.equal(sidecarRehearsal.readback.adminRootHttpStatus, 404);
+  assert.equal(sidecarRehearsal.artifacts.settingsSha256, digestFile(path.join(outDir, "sidecar/settings.cjs")));
+  assert.equal(sidecarRehearsal.artifacts.serviceUnitSha256, digestFile(path.join(outDir, "sidecar/partner-game-membership-sidecar.service")));
+  assert.equal(sidecarRehearsal.artifacts.candidateFlowSha256, digestFile(path.join(outDir, "candidate.flow.json")));
+  assert.equal(sidecarRehearsal.productionTouched, false);
   assert.equal(result.contract.allowedChanges.length, 0);
   assert.deepEqual(
     result.contract.allowedAdditions.map(({ id }) => id),
     Object.values(PARTNER_API_FLOW_NODE_IDS).sort(),
   );
-  const liveBytes = fs.readFileSync(fixture.sourcePath);
+  const sharedLiveBytes = fs.readFileSync(fixture.sourcePath);
+  const sidecar = buildPartnerGameMembershipApiSidecarCandidate();
+  const liveBytes = Buffer.from(`${JSON.stringify(sidecar.sourceFlow, null, 2)}\n`, "utf8");
   assert.equal(fs.readFileSync(path.join(outDir, "source.flow.json")).equals(liveBytes), true);
   const candidateBytes = fs.readFileSync(path.join(outDir, "candidate.flow.json"));
   const liveFlow = JSON.parse(liveBytes.toString("utf8"));
@@ -85,11 +114,17 @@ test("v0.2 packet pins additions-only routes, package bytes, rollback identity, 
   );
   assert.deepEqual(validateExactGraphContract({ liveBytes, candidateBytes, contract: result.contract }), result.contract);
   assert.equal(result.plan.liveMutationAuthorized, false);
+  assert.equal(result.plan.topology, "DEDICATED_LOOPBACK_SIDECAR");
+  assert.equal(result.plan.sidecarPort, 18894);
+  assert.deepEqual(result.plan.sidecarClosure, result.productionControls.runtime.sidecar);
+  assert.equal(result.plan.sharedNodeRedFlowMutationAllowed, false);
+  assert.equal(result.plan.liveReadbackSha256, sha256(sharedLiveBytes));
+  assert.equal(result.plan.liveReadbackNodeCount, 2);
   assert.equal(result.plan.deploymentPerformed, false);
   assert.equal(result.plan.activationPerformed, false);
   assert.equal(result.plan.vivaContractState, "AWAITING_EXTERNAL_CONFIRMATION");
   assert.equal(result.plan.productionControlsState, "UNBOUND");
-  assert.equal(result.plan.runtimeSecurityState, "AUDIT_BLOCKED");
+  assert.equal(result.plan.runtimeSecurityState, "SECURITY_AUDIT_PASS");
   assert.equal(result.plan.runtimeManifestSha256, result.runtimeEvidence.manifestSha256);
   assert.equal(result.plan.functionalRehearsalScope, "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY");
   assert.equal(result.plan.productionCustodyState, "UNBOUND");
@@ -119,10 +154,14 @@ test("v0.2 packet pins additions-only routes, package bytes, rollback identity, 
   );
   assert.ok(result.plan.requiredBeforeDeploy.some((gate) => gate.includes("Idempotency-Key")));
   assert.ok(result.plan.requiredBeforeDeploy.some((gate) => gate.includes("runtime audit")));
+  assert.ok(result.plan.requiredBeforeDeploy.some((gate) => gate.includes("1880") && gate.includes("untouched")));
+  assert.ok(result.plan.requiredBeforeDeploy.some((gate) => gate.includes("Viva access-token")));
   assert.ok(result.plan.requiredBeforeDeploy.some((gate) => gate.includes("strips upstream CORS")));
   assert.ok(result.plan.requiredBeforeDeploy.some((gate) => gate.includes("packet custody")));
   assert.equal(result.plan.rollback.sourceSha256, sha256(liveBytes));
   assert.equal(result.plan.rollback.exactByteRollbackRehearsed, true);
+  assert.equal(result.plan.rollback.sharedNodeRedFlowMutationRequired, false);
+  assert.equal(result.plan.rollback.sidecarStopAndRouteRemovalRequired, true);
   assert.equal(result.plan.rollback.nodeRedRestartRehearsed, false);
   for (const file of result.release.files) {
     const packaged = path.join(outDir, "custom-node", file.relativePath);
@@ -144,7 +183,7 @@ test("v0.2 packet pins additions-only routes, package bytes, rollback identity, 
   assert.throws(() => preparePartnerV02Packet({
     workspace: fixture.workspace,
     outDir,
-    repository: { commit: "a".repeat(40), branch: "same" },
+    repository: { commit: "a".repeat(40), tree: "b".repeat(40), branch: "same" },
   }), /must not already exist/);
 });
 
@@ -154,7 +193,7 @@ test("v0.2 packet is never published partially when generation fails before atom
   assert.throws(() => preparePartnerV02Packet({
     workspace: fixture.workspace,
     outDir,
-    repository: { commit: "a".repeat(40), branch: "codex/partner-atomic-packet-test" },
+    repository: { commit: "a".repeat(40), tree: "b".repeat(40), branch: "codex/partner-atomic-packet-test" },
     testHooks: {
       beforeAtomicPublish() {
         throw new Error("injected pre-publish failure");
@@ -172,8 +211,12 @@ test("v0.2 deployment plan rejects production-controls byte/hash or runtime-rele
   const productionControlsBytes = fs.readFileSync(new URL("../partner_game_membership_production_controls.json", import.meta.url));
   const productionControls = JSON.parse(productionControlsBytes.toString("utf8"));
   const base = {
-    repository: { commit: "a".repeat(40), branch: "codex/partner-controls-test" },
-    verified: { meta: { pulledAt: "2026-09-03T14:00:00.000Z" } },
+    repository: { commit: "a".repeat(40), tree: "b".repeat(40), branch: "codex/partner-controls-test" },
+    verified: { meta: {
+      pulledAt: "2026-09-03T14:00:00.000Z",
+      sourceSha256: "1".repeat(64),
+      nodeCount: 4762,
+    } },
     contract: {
       sourceSha256: "b".repeat(64),
       candidateSha256: "c".repeat(64),

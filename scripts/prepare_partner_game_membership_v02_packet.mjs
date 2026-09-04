@@ -6,7 +6,11 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
-import { buildPartnerGameMembershipApiCandidate, PARTNER_API_FLOW_NODE_IDS } from "./patch_partner_game_membership_api_flow.mjs";
+import {
+  buildPartnerGameMembershipApiCandidate,
+  buildPartnerGameMembershipApiSidecarCandidate,
+  PARTNER_API_FLOW_NODE_IDS,
+} from "./patch_partner_game_membership_api_flow.mjs";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 import {
   buildExactGraphContract,
@@ -23,6 +27,7 @@ import {
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = fs.realpathSync(path.resolve(SCRIPT_DIR, ".."));
 const NODE_PACKAGE_ROOT = path.join(REPO_ROOT, "node-red/custom-nodes/partner-game-membership-api");
+const SIDECAR_TEMPLATE_ROOT = path.join(REPO_ROOT, "scripts/partner_game_membership_sidecar");
 const PRODUCTION_CONTROLS_PATH = path.join(REPO_ROOT, "scripts/partner_game_membership_production_controls.json");
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/;
 const DEPLOYMENT_ID = "partner-game-membership-api-v02";
@@ -43,6 +48,11 @@ const RUNTIME_ARTIFACT_FILES = Object.freeze([
   "functional-rehearsal.json",
   "runtime-manifest.json",
 ]);
+const SIDECAR_TEMPLATE_FILES = Object.freeze([
+  "settings.cjs",
+  "partner-game-membership-sidecar.service",
+  "sidecar-rehearsal.json",
+]);
 
 const isWithin = (parent, candidate) => {
   const relative = path.relative(parent, candidate);
@@ -51,10 +61,16 @@ const isWithin = (parent, candidate) => {
 
 function repositoryIdentity() {
   const revision = spawnSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" });
+  const tree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: REPO_ROOT, encoding: "utf8" });
   const branch = spawnSync("git", ["branch", "--show-current"], { cwd: REPO_ROOT, encoding: "utf8" });
   const status = spawnSync("git", ["status", "--porcelain"], { cwd: REPO_ROOT, encoding: "utf8" });
-  const repository = { commit: revision.stdout.trim(), branch: branch.stdout.trim() };
-  if (revision.status !== 0 || branch.status !== 0 || !COMMIT_PATTERN.test(repository.commit) || !repository.branch) {
+  const repository = {
+    commit: revision.stdout.trim(),
+    tree: tree.stdout.trim(),
+    branch: branch.stdout.trim(),
+  };
+  if (revision.status !== 0 || tree.status !== 0 || branch.status !== 0
+    || !COMMIT_PATTERN.test(repository.commit) || !COMMIT_PATTERN.test(repository.tree) || !repository.branch) {
     throw new Error("Pilot packet requires an exact task-branch commit");
   }
   if (status.status !== 0 || status.stdout.trim()) throw new Error("Pilot packet requires a clean worktree");
@@ -62,10 +78,13 @@ function repositoryIdentity() {
 }
 
 function validateRepositoryIdentity(repository) {
-  if (!repository || !COMMIT_PATTERN.test(String(repository.commit || "")) || !String(repository.branch || "").trim()) {
+  if (!repository
+    || !COMMIT_PATTERN.test(String(repository.commit || ""))
+    || !COMMIT_PATTERN.test(String(repository.tree || ""))
+    || !String(repository.branch || "").trim()) {
     throw new Error("Pilot packet requires an exact repository identity");
   }
-  return { commit: repository.commit, branch: repository.branch.trim() };
+  return { commit: repository.commit, tree: repository.tree, branch: repository.branch.trim() };
 }
 
 export function assertExternalNewPacketDirectory(outArg) {
@@ -155,6 +174,63 @@ export function rehearseExactByteRollback({ liveBytes, candidateBytes, contract 
   return true;
 }
 
+export function validatePartnerSidecarArtifacts({ artifacts, candidateBytes, sidecarControls }) {
+  if (!artifacts || !Buffer.isBuffer(candidateBytes) || !sidecarControls) {
+    throw new Error("Pilot packet requires exact sidecar artifact bytes and controls");
+  }
+  const settingsBytes = artifacts["settings.cjs"];
+  const serviceUnitBytes = artifacts["partner-game-membership-sidecar.service"];
+  const rehearsalBytes = artifacts["sidecar-rehearsal.json"];
+  if (![settingsBytes, serviceUnitBytes, rehearsalBytes].every(Buffer.isBuffer)
+    || sha256(settingsBytes) !== sidecarControls.settingsSha256
+    || sha256(serviceUnitBytes) !== sidecarControls.serviceUnitSha256
+    || sha256(rehearsalBytes) !== sidecarControls.rehearsalSha256
+    || sha256(candidateBytes) !== sidecarControls.candidateFlowSha256) {
+    throw new Error("Pilot packet sidecar bytes differ from the immutable production-controls closure");
+  }
+  const rehearsal = JSON.parse(rehearsalBytes.toString("utf8"));
+  const expected = {
+    formatVersion: 1,
+    capturedAt: "2026-09-04T13:05:14.000Z",
+    environment: "LOCAL_DISPOSABLE_CONTAINER",
+    networkMode: "none",
+    runtime: {
+      platform: "linux",
+      architecture: "x64",
+      nodeImageSha256: "83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
+      nodeVersion: "22.23.2",
+      nodeRedVersion: "5.0.6",
+    },
+    artifacts: {
+      settingsSha256: sidecarControls.settingsSha256,
+      serviceUnitSha256: sidecarControls.serviceUnitSha256,
+      candidateFlowSha256: sidecarControls.candidateFlowSha256,
+    },
+    readback: {
+      exactProductionPathLayout: true,
+      emptyUserDirAtStart: true,
+      customNodeRouteLoaded: true,
+      bindAddress: sidecarControls.bindAddress,
+      port: sidecarControls.port,
+      adminUiDisabled: true,
+      paletteEditorDisabled: true,
+      partnerDefaultOffHttpStatus: 503,
+      adminRootHttpStatus: 404,
+      cacheControl: "no-store",
+      corsResponseHeader: null,
+      gracefulStopMarkers: ["Stopping flows", "Stopped flows"],
+    },
+    cleanup: { containerPresent: false, hostListenerPresent: false },
+    productionTouched: false,
+  };
+  if (sidecarControls.topology !== "DEDICATED_LOOPBACK_SIDECAR"
+    || sidecarControls.sharedFlowMutationAllowed !== false
+    || !isDeepStrictEqual(rehearsal, expected)) {
+    throw new Error("Pilot packet sidecar rehearsal is incomplete or differs from the approved fail-closed evidence");
+  }
+  return rehearsal;
+}
+
 export function buildPartnerV02DeploymentPlan({
   repository,
   verified,
@@ -194,12 +270,23 @@ export function buildPartnerV02DeploymentPlan({
   if (!verified?.meta?.pulledAt || !Number.isFinite(Date.parse(verified.meta.pulledAt))) {
     throw new Error("Pilot packet requires valid live-flow pull metadata");
   }
+  if (!/^[a-f0-9]{64}$/.test(String(verified.meta.sourceSha256 || ""))
+    || !Number.isInteger(verified.meta.nodeCount)
+    || verified.meta.nodeCount < 1) {
+    throw new Error("Pilot packet requires exact shared Node-RED read-back identity");
+  }
   return {
     formatVersion: 1,
     pilotVersion: "0.2.0",
     deploymentId: DEPLOYMENT_ID,
     repository,
+    topology: "DEDICATED_LOOPBACK_SIDECAR",
+    sidecarPort: 18894,
+    sidecarClosure: { ...productionControls.runtime.sidecar },
+    sharedNodeRedFlowMutationAllowed: false,
     livePulledAt: verified.meta.pulledAt,
+    liveReadbackSha256: verified.meta.sourceSha256,
+    liveReadbackNodeCount: verified.meta.nodeCount,
     sourceSha256: contract.sourceSha256,
     candidateSha256: contract.candidateSha256,
     sourceNodeCount: contract.sourceNodeCount,
@@ -221,17 +308,20 @@ export function buildPartnerV02DeploymentPlan({
     deploymentPerformed: false,
     activationPerformed: false,
     requiredBeforeDeploy: [
-      "fresh live flow still matches sourceSha256 and the exact LK Games origin",
+      "fresh shared Node-RED live flow read-back still matches liveReadbackSha256 and contains no Partner route or node-id collision",
       "checkpoint is integrated into clean pushed main with green exact-head CI",
-      "custom-node package installation and Node-RED load/unload are rehearsed on an isolated compatible runtime",
-      "the isolated functional rehearsal proves custom-node load, default-off behavior, and removal only; the fresh exact flow candidate requires its own deploy-stage read-back",
-      "exact Node-RED runtime audit satisfies production-controls policy or has a bounded owner-approved reachability decision",
-      "private flow backup, exact rollback artifacts, global deployment lock, and lease paths are verified",
+      "dedicated Partner sidecar is installed from the exact Node-RED runtime closure and binds only to 127.0.0.1:18894",
+      "shared production Node-RED on 127.0.0.1:1880 and its live flow remain byte-for-byte untouched",
+      "the isolated functional rehearsal proves dedicated-sidecar custom-node load, default-off behavior, and removal; the exact sidecar candidate requires deploy-stage read-back",
+      "the dedicated sidecar runtime audit satisfies production-controls policy without inheriting the shared production palette closure",
+      "private sidecar flow backup, exact rollback artifacts, service stop/restart procedure, and lease paths are verified",
+      "dedicated unprivileged service account, root-owned /opt release path, writable /var/lib state path, and exact systemd unit are separately authorized and provisioned",
       "Mongo replica-set transactions and every exact required index are rehearsed on a disposable database",
       "Viva confirms Idempotency-Key semantics, create/read/cancel payloads, ON_PLACE behavior, and technical-client multiplicity",
       "dedicated ingress is bound with TLS, mandatory mTLS, optional exact CIDR, rate limits, body limits, and socket-peer proxy-chain validation",
       "Partner ingress exposes only the three exact routes, strips upstream CORS, rejects duplicate proof headers, and exposes no editor/admin surface",
       "server-only signing keys, audit HMAC key, Mongo URI, technical client ID, and Viva token custody are provisioned without disclosure",
+      "dedicated sidecar Viva access-token acquisition, refresh, revocation, and least-privilege service identity are confirmed without shared Node-RED global context",
       "secret-bearing packet custody has named recipients, encrypted transport, root-only destination, retention, deletion, and incident owners",
       "security, reliability, compatibility, and recovery evidence contains no UNKNOWN or failed gate",
     ],
@@ -247,6 +337,8 @@ export function buildPartnerV02DeploymentPlan({
       sourceSha256: contract.sourceSha256,
       candidateSha256: contract.candidateSha256,
       exactByteRollbackRehearsed: rollbackRehearsed === true,
+      sharedNodeRedFlowMutationRequired: false,
+      sidecarStopAndRouteRemovalRequired: true,
       nodeRedRestartRehearsed: false,
       productionRollbackPerformed: false,
     },
@@ -300,8 +392,9 @@ export function preparePartnerV02Packet({
   const repository = validateRepositoryIdentity(suppliedRepository || repositoryIdentity());
   const verified = verifyWorkspace(workspace, { quiet: true });
   const output = assertExternalNewPacketDirectory(outDir);
-  const result = buildPartnerGameMembershipApiCandidate(verified.source);
-  const liveBytes = fs.readFileSync(verified.sourcePath);
+  buildPartnerGameMembershipApiCandidate(verified.source);
+  const result = buildPartnerGameMembershipApiSidecarCandidate();
+  const liveBytes = Buffer.from(`${JSON.stringify(result.sourceFlow, null, 2)}\n`, "utf8");
   const candidateBytes = Buffer.from(`${JSON.stringify(result.flow, null, 2)}\n`, "utf8");
   const expectedAdditions = Object.values(PARTNER_API_FLOW_NODE_IDS).sort();
   if (!isDeepStrictEqual([...result.addedNodeIds].sort(), expectedAdditions)) {
@@ -321,6 +414,15 @@ export function preparePartnerV02Packet({
   const productionControls = JSON.parse(productionControlsBytes.toString("utf8"));
   validatePartnerProductionControls(productionControls);
   const productionControlsSha256 = sha256(productionControlsBytes);
+  const sidecarArtifacts = Object.fromEntries(SIDECAR_TEMPLATE_FILES.map((relativePath) => [
+    relativePath,
+    fs.readFileSync(path.join(SIDECAR_TEMPLATE_ROOT, relativePath)),
+  ]));
+  validatePartnerSidecarArtifacts({
+    artifacts: sidecarArtifacts,
+    candidateBytes,
+    sidecarControls: productionControls.runtime.sidecar,
+  });
   const rollbackRehearsed = rehearseExactByteRollback({ liveBytes, candidateBytes, contract });
   const plan = buildPartnerV02DeploymentPlan({
     repository,
@@ -343,11 +445,14 @@ export function preparePartnerV02Packet({
     const packageOutput = path.join(temporaryOutput, "custom-node");
     const runtimeOutput = path.join(temporaryOutput, "runtime");
     const runtimePackageOutput = path.join(runtimeOutput, "partner-package");
+    const sidecarOutput = path.join(temporaryOutput, "sidecar");
     fs.mkdirSync(packageOutput, { mode: 0o700 });
     fs.mkdirSync(runtimePackageOutput, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(sidecarOutput, { mode: 0o700 });
     fs.chmodSync(packageOutput, 0o700);
     fs.chmodSync(runtimeOutput, 0o700);
     fs.chmodSync(runtimePackageOutput, 0o700);
+    fs.chmodSync(sidecarOutput, 0o700);
     writePrivateBytes(path.join(temporaryOutput, "source.flow.json"), liveBytes);
     writePrivateBytes(path.join(temporaryOutput, "candidate.flow.json"), candidateBytes);
     writePrivateJson(path.join(temporaryOutput, "reviewed-flow.contract.json"), contract);
@@ -362,6 +467,9 @@ export function preparePartnerV02Packet({
       const bytes = runtimeEvidence.artifactBytes[relativePath];
       if (!Buffer.isBuffer(bytes)) throw new Error(`Pilot packet lacks validated runtime bytes: ${relativePath}`);
       writePrivateBytes(path.join(runtimeOutput, relativePath), bytes);
+    }
+    for (const relativePath of SIDECAR_TEMPLATE_FILES) {
+      writePrivateBytes(path.join(sidecarOutput, relativePath), sidecarArtifacts[relativePath]);
     }
     const copiedRuntimeEvidence = validatePartnerRuntimeEvidence({
       manifestBytes: fs.readFileSync(path.join(runtimeOutput, "runtime-manifest.json")),
@@ -378,6 +486,7 @@ export function preparePartnerV02Packet({
     syncDirectory(packageOutput);
     syncDirectory(runtimePackageOutput);
     syncDirectory(runtimeOutput);
+    syncDirectory(sidecarOutput);
     const packetManifest = buildPacketManifest({ output: temporaryOutput, repository, plan });
     writePrivateJson(path.join(temporaryOutput, "packet.manifest.json"), packetManifest);
     syncDirectory(temporaryOutput);
@@ -419,6 +528,10 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import
     const result = preparePartnerV02Packet({ workspace: args["--workspace"], outDir: args["--out"] });
     process.stdout.write(`${JSON.stringify({
       packetDirectory: result.output,
+      topology: result.plan.topology,
+      sidecarPort: result.plan.sidecarPort,
+      liveReadbackSha256: result.plan.liveReadbackSha256,
+      liveReadbackNodeCount: result.plan.liveReadbackNodeCount,
       sourceSha256: result.plan.sourceSha256,
       candidateSha256: result.plan.candidateSha256,
       customNodeReleaseSha256: result.plan.customNodeReleaseSha256,

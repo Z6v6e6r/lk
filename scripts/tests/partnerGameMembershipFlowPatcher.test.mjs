@@ -9,6 +9,7 @@ import {
   PARTNER_API_FLOW_NODE_IDS,
   buildCandidateFile,
   buildPartnerGameMembershipApiCandidate,
+  buildPartnerGameMembershipApiSidecarCandidate,
   parseArgs,
 } from "../patch_partner_game_membership_api_flow.mjs";
 
@@ -36,6 +37,15 @@ test("flow patcher adds only the three separate M2M routes and one fail-closed h
   assert.equal(store.vivaIdempotencyConfirmedEnv, "LK_PARTNER_GAME_API_VIVA_IDEMPOTENCY_CONFIRMED");
   assert.equal(store.vivaOnPlaceConfirmedEnv, "LK_PARTNER_GAME_API_VIVA_ON_PLACE_CONFIRMED");
   assert.equal(source.length, 2, "source preimage must remain unchanged");
+});
+
+test("sidecar builder creates the exact isolated one-tab preimage and eight-node candidate", () => {
+  const result = buildPartnerGameMembershipApiSidecarCandidate();
+  assert.deepEqual(result.sourceFlow, [{ id: "partner-rehearsal-tab", type: "tab", label: "LK Games" }]);
+  assert.equal(result.flow.length, 8);
+  assert.deepEqual(result.flow[0], result.sourceFlow[0]);
+  assert.deepEqual(result.addedNodeIds, Object.values(PARTNER_API_FLOW_NODE_IDS));
+  assert.ok(result.flow.slice(1).every((node) => node.z === undefined || node.z === "partner-rehearsal-tab"));
 });
 
 test("flow patcher rejects namespace collisions, missing tabs, and stale source hashes", () => {
@@ -69,9 +79,15 @@ test("candidate builder requires an exact live-source digest and never writes in
   const digest = crypto.createHash("sha256").update(bytes).digest("hex");
   const manifest = buildCandidateFile({ input, output, sourceSha256: digest, sourceTabLabel: "LK Games" });
   assert.equal(manifest.artifact, "partner-game-membership-api-v0.2-candidate");
+  assert.equal(manifest.topology, "DEDICATED_LOOPBACK_SIDECAR");
+  assert.equal(manifest.sharedFlowMutationAllowed, false);
   assert.equal(manifest.deploymentPerformed, false);
   assert.equal(manifest.activationPerformed, false);
-  assert.equal(manifest.source.sha256, digest);
+  assert.equal(manifest.liveReadback.sha256, digest);
+  const candidate = JSON.parse(fs.readFileSync(output, "utf8"));
+  assert.equal(candidate.length, 8);
+  assert.equal(candidate.some((node) => node.id === "existing-route"), false);
+  assert.equal(candidate[0].id, "partner-rehearsal-tab");
   assert.equal(fs.existsSync(`${output}.manifest.json`), true);
   assert.throws(
     () => parseArgs(["--input", input, "--output", input, "--source-sha256", digest]),

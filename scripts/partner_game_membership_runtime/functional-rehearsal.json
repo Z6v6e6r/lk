@@ -1,34 +1,34 @@
 {
   "formatVersion": 1,
   "deploymentId": "partner-game-membership-api-v02",
-  "capturedAt": "2026-09-03T20:34:23.000Z",
+  "capturedAt": "2026-09-04T12:27:45.000Z",
   "clockSource": "node-red-container-log",
   "evidenceScope": "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY",
-  "sourceBaseCommit": "111ea07a35fdfd975287b1e3ed468e97c86bddf4",
+  "sourceBaseCommit": "c92e432a9d0319cfebcd2c37b7967aef118f2f41",
   "customNodeReleaseSha256": "9f3fab0bb20eef372ea0aa40db26e43a7fa45600efec29f7c7a1707d43cb9398",
   "runtime": {
     "platform": "linux",
-    "architecture": "arm64",
-    "nodeImageSha256": "0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a",
+    "architecture": "x64",
+    "nodeImageSha256": "83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
     "nodeVersion": "22.23.2",
     "npmVersion": "10.9.8",
-    "nodeRedVersion": "4.1.14"
+    "nodeRedVersion": "5.0.6"
   },
   "installation": {
-    "command": "npm ci --ignore-scripts",
-    "installedPackageCount": 290,
+    "command": "npm ci --ignore-scripts --no-fund --no-audit",
+    "installedPackageCount": 291,
     "exitCode": 0
   },
   "candidate": {
-    "sourceFlowSha256": "deaad35cdd5e63ad2e8934728112cb367cfdb92a969e1b668b7d704b575c14e4",
-    "candidateFlowSha256": "e9aa1f2c25e0fbad8b69014dab4ba20319a468de2197dc983877ebf05a75256f",
+    "sourceFlowSha256": "ea9b6a5e1b783327a5e4785e8ef6656ee2c3ea3c8523bf46c63599ae0580a2b2",
+    "candidateFlowSha256": "65b540a925f731fa9ce7967cd46ec8fe25e8b11c5a1aa3291ff7e6c801088dd2",
     "audienceEnvironmentVariable": "LK_PARTNER_GAME_API_AUDIENCE",
     "signatureVersion": "v2"
   },
   "defaultOff": {
     "httpStatus": 503,
     "cacheControl": "no-store",
-    "corsResponseHeader": "*",
+    "corsResponseHeader": null,
     "errorCode": "PARTNER_API_DISABLED",
     "mongoCalls": 0,
     "vivaCalls": 0
@@ -50,10 +50,10 @@
   },
   "cleanup": {
     "containerPresent": false,
-    "listenerPort": 18894,
+    "listenerPort": null,
     "listenerPresent": false,
     "temporaryDirectoriesRemoved": true
   },
-  "decision": "FUNCTIONAL_COMPATIBILITY_PASS_SECURITY_AUDIT_BLOCKED",
+  "decision": "FUNCTIONAL_COMPATIBILITY_PASS_SECURITY_AUDIT_PASS",
   "productionTouched": false
 }

@@ -35,12 +35,12 @@ export function validatePartnerProductionControls(contract) {
   const runtime = contract.runtime;
   exactKeys(runtime, [
     "state", "requiredNodeVersion", "minimumRehearsedNodeRedVersion", "exactNodeRedVersionRequired",
-    "compatibilityRehearsalRequired", "securityAuditRequired", "immutableClosure", "auditPolicy",
+    "compatibilityRehearsalRequired", "securityAuditRequired", "immutableClosure", "sidecar", "auditPolicy",
     "latestIsolatedRehearsal", "binding",
   ], "Partner runtime controls");
-  if (runtime.state !== "AUDIT_BLOCKED"
+  if (runtime.state !== "SECURITY_AUDIT_PASS"
     || runtime.requiredNodeVersion !== "22.23.2"
-    || runtime.minimumRehearsedNodeRedVersion !== "4.1.14"
+    || runtime.minimumRehearsedNodeRedVersion !== "5.0.6"
     || runtime.exactNodeRedVersionRequired !== true
     || runtime.compatibilityRehearsalRequired !== true
     || runtime.securityAuditRequired !== true) {
@@ -54,21 +54,35 @@ export function validatePartnerProductionControls(contract) {
     "productionInstallCommand",
   ], "Partner immutable runtime closure");
   if (!isDeepStrictEqual(runtime.immutableClosure, {
-    runtimeManifestSha256: "10cf68dc9edfbdf2d671e93f4f9ab7d84827f6c0083c873df4444f735daca7ff",
-    packageJsonSha256: "36d418c9d0de433273f9555de8b251385f33a226aefbe825560e5bebd163d9f1",
-    packageLockSha256: "945d68a8574574d1a1676941e82333e1977061ade4a31a8c800e8fe9b1b03377",
-    dependencyTreeSha256: "edbc9c3c4c1bf6afc0fbe0962eba9b29b6dbca64377d0e4c5312c2b4cbda904b",
-    auditReportSha256: "6c26da095ae8558e32e31db6b1579ca765ce3be3f3b4f779fdc393633bcc60f8",
-    functionalRehearsalSha256: "314499b2aa30618e26481dd8f533c32e13abd720d730473dfccfcd8ba880d0d2",
-    functionalRehearsalCapturedAt: "2026-09-03T20:34:23.000Z",
-    auditCapturedAt: "2026-09-03T20:11:28.918Z",
-    dependencyTreeCapturedAt: "2026-09-03T20:12:36.295Z",
-    npmCiInstalledPackageCount: 290,
-    npmLsPackageOccurrenceCount: 926,
+    runtimeManifestSha256: "cf61a3b62786914cefbff18b46478c3582081ce3aacd17938601e16cfd7585d9",
+    packageJsonSha256: "929ee0bf50f453284c4e619e4cbd698c204a41119d15a84e701e04d58b27c7d4",
+    packageLockSha256: "c3ac8470995c68660ff4d55744b276f6d172b802a20fdcb9e7263a16fb3690e5",
+    dependencyTreeSha256: "1bd9dbdc7115710836ec31c2e3d3d6a51446c5cc84b65924d12ac3501e41449e",
+    auditReportSha256: "94da0446b0c7aa5e9f99848f55350188f36edeb94fc16ba8610e5e84e2baf96c",
+    functionalRehearsalSha256: "74fa75ffd6e5a7ea84c8c13c5f34875cc92c292d3c658234e8bac7c4676255fc",
+    functionalRehearsalCapturedAt: "2026-09-04T12:27:45.000Z",
+    auditCapturedAt: "2026-09-04T12:30:33.751Z",
+    dependencyTreeCapturedAt: "2026-09-04T12:30:15.506Z",
+    npmCiInstalledPackageCount: 291,
+    npmLsPackageOccurrenceCount: 838,
     npmLsInvalidPackageCount: 0,
     npmLsExtraneousPackageCount: 0,
     productionInstallCommand: "npm ci --ignore-scripts --no-fund --no-audit",
   })) fail("Partner immutable runtime closure identity changed");
+  exactKeys(runtime.sidecar, [
+    "topology", "bindAddress", "port", "settingsSha256", "serviceUnitSha256",
+    "rehearsalSha256", "candidateFlowSha256", "sharedFlowMutationAllowed",
+  ], "Partner sidecar closure");
+  if (!isDeepStrictEqual(runtime.sidecar, {
+    topology: "DEDICATED_LOOPBACK_SIDECAR",
+    bindAddress: "127.0.0.1",
+    port: 18894,
+    settingsSha256: "37e675a39f12d2a23352578cd7f1068e0b5ae1d3d92649e5078f0050a6448e3d",
+    serviceUnitSha256: "66791a6c9674e409ba8eae76efc02cbcf3eb303dd48d9ad879233c3bfd77398b",
+    rehearsalSha256: "fff8633b2ab514ca7dfd1a9c47dccd25496ab64f439dae543ab7ffa6ef0a129d",
+    candidateFlowSha256: "5a5aefe3dd19a8e6687222c80b229a40f924174359c181be7caaa6997134e965",
+    sharedFlowMutationAllowed: false,
+  })) fail("Partner sidecar immutable closure identity changed");
   exactKeys(runtime.auditPolicy, [
     "maxAgeHours", "criticalAffectedPackages", "highReachablePackages",
     "partnerRequestSurfaceDecisionRequired", "editorAdminExposureAllowed", "unresolvedAuditAllowed",
@@ -96,8 +110,8 @@ export function validatePartnerProductionControls(contract) {
   if (rehearsal.evidenceScope !== "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY"
     || rehearsal.functionalRehearsalSha256 !== runtime.immutableClosure.functionalRehearsalSha256
     || rehearsal.capturedAt !== runtime.immutableClosure.functionalRehearsalCapturedAt
-    || rehearsal.sourceCommit !== "111ea07a35fdfd975287b1e3ed468e97c86bddf4"
-    || rehearsal.nodeImageSha256 !== "0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a"
+    || rehearsal.sourceCommit !== "c92e432a9d0319cfebcd2c37b7967aef118f2f41"
+    || rehearsal.nodeImageSha256 !== "83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5"
     || rehearsal.nodeVersion !== runtime.requiredNodeVersion
     || rehearsal.nodeRedVersion !== runtime.minimumRehearsedNodeRedVersion
     || rehearsal.customNodeReleaseSha256 !== "9f3fab0bb20eef372ea0aa40db26e43a7fa45600efec29f7c7a1707d43cb9398"
@@ -106,12 +120,12 @@ export function validatePartnerProductionControls(contract) {
     || rehearsal.packageRollbackHttpStatus !== 404
     || rehearsal.flowPartnerMatchesAfterRollback !== 0
     || rehearsal.palettePartnerMatchesAfterRollback !== 0
-    || rehearsal.corsResponseHeaderObserved !== "*"
+    || rehearsal.corsResponseHeaderObserved !== null
     || ![counts.critical, counts.high, counts.moderate, counts.low, counts.total]
       .every((value) => Number.isInteger(value) && value >= 0)
     || counts.total !== counts.critical + counts.high + counts.moderate + counts.low
-    || !isDeepStrictEqual(counts, { critical: 0, high: 15, moderate: 9, low: 1, total: 25 })
-    || rehearsal.auditDecision !== "BLOCKED_PENDING_PATCH_OR_REACHABILITY_APPROVAL"
+    || !isDeepStrictEqual(counts, { critical: 0, high: 0, moderate: 7, low: 0, total: 7 })
+    || rehearsal.auditDecision !== "PASS_NO_CRITICAL_OR_HIGH_AFFECTED_PACKAGES"
     || rehearsal.productionTouched !== false) {
     fail("Partner isolated runtime rehearsal evidence is incomplete or overclaims remediation");
   }
@@ -147,7 +161,7 @@ export function validatePartnerProductionControls(contract) {
     { method: "GET", path: "/lk/integrations/v1/operations/:operationId" },
   ];
   if (ingress.routing.exactHost !== null
-    || ingress.routing.upstream !== "http://127.0.0.1:1880"
+    || ingress.routing.upstream !== "http://127.0.0.1:18894"
     || ingress.routing.exclusiveIngressRequired !== true
     || ingress.routing.alternateHostnameAccessAllowed !== false
     || ingress.routing.directNodeRedAccessAllowed !== false
@@ -272,7 +286,7 @@ export function validatePartnerProductionControls(contract) {
     "vivaMutationsEnabled", "canaryClientId", "canaryGameIds", "requiredExternalEvidence",
   ], "Partner activation controls");
   const expectedExternalEvidence = [
-    "written Viva idempotency, ON_PLACE, create, read-back, and cancel contract",
+    "written Viva sidecar token grant, refresh, revocation, idempotency, ON_PLACE, create, read-back, and cancel contract",
     "bound ingress identity, TLS, route, limit, and trusted-proxy read-back",
     "bound packet and server-only secret custody with named owners and distinct test/production client IDs, audiences, HMAC keys, and certificates",
     "fresh runtime audit with no unresolved partner-reachable critical or high advisory",
@@ -302,5 +316,5 @@ export function validatePartnerProductionControls(contract) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   validatePartnerProductionControls(checkedPartnerProductionControls);
-  process.stdout.write("PARTNER_PRODUCTION_CONTROLS=UNBOUND_AUDIT_BLOCKED\n");
+  process.stdout.write("PARTNER_PRODUCTION_CONTROLS=UNBOUND_AUDIT_PASS\n");
 }

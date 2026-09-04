@@ -199,24 +199,25 @@ settlement. Viva является authority только для существо
 
 ### T11. Source-flow drift и небезопасный import
 
-- Путь: candidate строится из устаревшего `LK Games`, затирает live changes или создаёт
-  route collision.
-- Контроли: внешний fresh snapshot, exact SHA, exact tab label, namespace/id collision,
-  no in-place, additions-only exact-graph allowlist и full added-node hashes. Новые HTTP
-  routes разрешены только как explicitly pinned additions; существующие routes остаются
-  byte-semantically неизменными кроме отдельно разрешённых wires. Live node order
-  сохраняется exact prefix, а additions допускаются только одним suffix.
-- Текущее состояние: свежий live pull недоступен из-за SSH timeout; production packet
-  не строился и import не выполнялся.
-- Риск: high до свежей read-only выгрузки; отсутствует runtime exposure сейчас.
+- Путь: Partner nodes ошибочно добавляются в shared `LK Games`, наследуют уязвимый
+  palette либо затирают live changes; отдельный sidecar конфликтует с уже появившимся
+  namespace/ID.
+- Контроли: внешний fresh snapshot с exact origin/SHA используется только для
+  namespace/id collision check. Candidate всегда строится из детерминированного
+  sidecar preimage `1→8`, contract pins full hashes и append-only order, а deployment
+  plan запрещает shared-flow mutation. Packet не содержит полный live flow.
+- Текущее состояние: read-only pull `90abcbae…`/4762 nodes получен; sidecar packet ещё
+  не опубликован, shared flow/import/restart не выполнялись. Перед deploy нужен новый
+  fresh readback.
+- Риск: high при обходе sidecar boundary; отсутствует runtime exposure сейчас.
 
 ## 4. Обязательные gates
 
 ### До shared sandbox
 
 1. Закрыть все P0 вопросы из external-team document.
-2. Получить fresh `LK Games`, проверить writers/field shapes и построить private v0.2
-   packet по exact SHA.
+2. Получить fresh `LK Games`, проверить namespace/ID collision и построить private v0.2
+   sidecar packet с отдельными liveReadback SHA/count.
 3. Сопоставить provisional Viva adapter с подтверждённой OpenAPI/examples; не включать
    четыре mutation gates до отдельного security/payment-safety/reliability review.
 4. Прогнать Mongo replica/concurrency/ambiguous-commit tests.
@@ -227,25 +228,29 @@ settlement. Viva является authority только для существо
 
 ### До production
 
-1. Отдельное разрешение на schema migration, secret provisioning, route import, deploy и
+1. Отдельное разрешение на schema migration, secret provisioning, sidecar install/start,
+   ingress binding и
    activation.
 2. Reconciliation worker/runbook + rehearsed UNKNOWN cases.
 3. Audit RBAC/retention/SIEM alerts и key rotation/revocation rehearsal.
 4. Downstream compatibility для payment, roster sync, reporting, rating/notifications.
 5. Limited pilot с одной station/client, expiring access и проверенным kill switch.
 
-### Runtime/ingress remediation rehearsal 2026-09-03
+### Runtime/ingress remediation rehearsal 2026-09-04
 
-Exact custom package функционально совместим с Node-RED `4.1.14`: default-off route
+Exact custom package функционально совместим с minimal Node-RED `5.0.6` sidecar: default-off route
 вернул `503`, graceful stop завершил flows, flow и package rollback дали `404`, после
 cache quarantine Partner palette matches равны нулю. Нормализованный evidence привязан
 к exact custom-node release; его scope — только load/default-off/removal compatibility,
-а не доказательство следующего fresh flow candidate. Production не затрагивался.
+а не доказательство deploy-stage service/ingress binding. Production не затрагивался.
 
-При этом exact `npm audit --omit=dev` closure содержит `0 critical / 15 high / 9
-moderate / 1 low` affected package records; среди request-path зависимостей остались
-`express`, `body-parser` и `qs`. Runtime поэтому имеет состояние `AUDIT_BLOCKED`, а не
-remediated. На loopback также наблюдался общий `Access-Control-Allow-Origin: *`.
+Exact `npm audit --omit=dev` minimal closure содержит `0 critical / 0 high / 7
+moderate / 0 low`. Bounded local observation full production palette показало
+`5 critical / 12 high / 23 moderate`, но raw full-palette lock/audit не включены в
+immutable deploy evidence; это архитектурный stop-input, а не production proof.
+Поэтому установка в shared Node-RED запрещена, и его flow,
+palette и порт `1880` остаются неизменными. Отдельный sidecar принимает loopback только
+на `18894`; внешний ingress скрывает любой upstream CORS.
 Machine-readable production controls требуют отдельный exact-host/SNI ingress, запрет
 editor/admin/OPTIONS/query, скрытие CORS, duplicate-header rejection, нулевой proxy
 retry, duplicate-JSON rejection до parser, обязательный mTLS, socket-peer identity,
@@ -253,8 +258,10 @@ retry, duplicate-JSON rejection до parser, обязательный mTLS, sock
 Все binding-поля остаются
 `UNBOUND`; любое заполнение в source template или activation flag отклоняется tests.
 Private overlay validator не повышает статус: packet/host custody он проверяет по exact
-bytes и local identity, но ingress/readback/audit decision остаются
-`DECLARED_EVIDENCE_UNVERIFIED` до отдельного live verifier.
+bytes и local identity, но ingress/readback остаются
+`DECLARED_EVIDENCE_UNVERIFIED` до отдельного live verifier. Активация дополнительно
+блокируется, пока для dedicated sidecar не подтверждены получение, refresh, revocation
+и least-privilege scope Viva access token без shared Node-RED global context.
 
 ## 5. Review status
 
@@ -267,7 +274,7 @@ referenced membership; теперь REMOVE меняет membership state тол�
 
 В v0.2 добавлены pre-operation readiness, provisional real adapter, no-retry/ambiguous
 outcome tests, additions-only deployment contract, private packet и Mongo rehearsal
-guard. Реальный Mongo replica, package install/restart, fresh live flow, shared ingress
+guard. Реальный Mongo replica, production sidecar install/start, deploy-stage fresh live readback, external ingress
 и Viva sandbox остаются отдельными gates. Текущий v0.2 не активирован: default-off
 конфигурация и незакрытые external gates не позволяют выполнить реальную Viva mutation.
 

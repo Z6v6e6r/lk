@@ -100,6 +100,20 @@ test("production controls reject immutable runtime closure drift", () => {
   }
 });
 
+test("production controls pin every dedicated sidecar artifact and prohibit shared-flow mutation", () => {
+  for (const [field, value] of [
+    ["settingsSha256", "a".repeat(64)],
+    ["serviceUnitSha256", "b".repeat(64)],
+    ["rehearsalSha256", "c".repeat(64)],
+    ["candidateFlowSha256", "d".repeat(64)],
+    ["sharedFlowMutationAllowed", true],
+  ]) {
+    const contract = clone();
+    contract.runtime.sidecar[field] = value;
+    assert.throws(() => validatePartnerProductionControls(contract), /sidecar immutable closure identity changed/);
+  }
+});
+
 test("production controls reject binding ingress or custody inside the source template", () => {
   const ingress = clone();
   ingress.ingress.binding.configPath = "/etc/nginx/conf.d/partner.conf";

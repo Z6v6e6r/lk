@@ -1,15 +1,16 @@
 # Production controls: Partner Game Membership API v0.2
 
-Статус: **UNBOUND / AUDIT_BLOCKED / activation BLOCKED**. Документ и
+Статус: **runtime SECURITY_AUDIT_PASS / ingress UNBOUND / custody UNBOUND / activation BLOCKED**. Документ и
 `scripts/partner_game_membership_production_controls.json` задают минимальный
 fail-closed контракт, но не содержат production hostname, CIDR, сертификат, путь
 размещения, получателей packet, секреты или разрешение на изменение production.
 
 ## Что доказано изолированно
 
-3 сентября 2026 года пакет custom-node с release identity
+4 сентября 2026 года пакет custom-node с release identity
 `9f3fab0bb20eef372ea0aa40db26e43a7fa45600efec29f7c7a1707d43cb9398`
-проверен на Linux arm64, Node `22.23.2`, npm `10.9.8` и Node-RED `4.1.14`:
+проверен в отдельном minimal sidecar closure на Linux x64, Node `22.23.2`, npm
+`10.9.8` и Node-RED `5.0.6`:
 
 | Проверка | Результат |
 | --- | --- |
@@ -18,28 +19,40 @@ fail-closed контракт, но не содержат production hostname, CI
 | Graceful stop | `Stopping flows` → `Stopped flows` |
 | Rehearsed flow rollback | `404`, Partner nodes/routes в rehearsed flow: `0` |
 | Package + palette-cache quarantine | `404`, Partner palette matches: `0` |
-| Cleanup | test containers: `0`, listener `127.0.0.1:18894`: `0`, package hashes неизменны |
+| Cleanup | test containers: `0`, внешний listener: `0` (`--network none`), package hashes неизменны |
 | Production side effects | `0` |
 
-Node-RED `4.1.14` функционально совместим, но **не закрывает security gate**. Свежий
-`npm audit --omit=dev` exact closure вернул `25` affected package records:
-`0 critical / 15 high / 9 moderate / 1 low`. Кроме registry/npm tooling, в отчёте
-остались request-path зависимости `express@4.22.2`, `body-parser@1.20.6` и
-`qs@6.15.3`. Прямой loopback response также унаследовал общий
-`Access-Control-Allow-Origin: *`. Поэтому версия 4.1.14 не объявляется безопасной сама
-по себе: production остаётся `AUDIT_BLOCKED`, а внешний ingress обязан скрыть CORS и
-не публиковать Node-RED editor/admin.
+Точные `settings.cjs`, default-off hardened systemd unit и no-network readback
+(`18894`, Partner `503`, admin root `404`, CORS отсутствует, graceful stop) входят в
+packet как каталог `sidecar/`. Unit жёстко задаёт `ENABLED=false`, provider disabled,
+запрещает весь egress кроме localhost и не читает production EnvironmentFile. Добавить
+Mongo/Viva network/credential drop-in можно только отдельным activation-изменением.
+
+Свежий `npm audit --omit=dev` exact minimal closure вернул
+`0 critical / 0 high / 7 moderate / 0 low`; invalid и extraneous package отсутствуют.
+Это закрывает runtime security gate именно для отдельного sidecar. Полная копия
+действующего production palette дала `5 critical / 12 high / 23 moderate`, поэтому
+Partner API **запрещено** устанавливать в общий Node-RED на `127.0.0.1:1880` или
+считать его audit унаследованным. Действующий Node-RED `4.0.9`, его palette и
+4762-node `flows.json` должны остаться неизменными. Candidate предназначен только для
+отдельного loopback sidecar `127.0.0.1:18894`, а внешний ingress обязан скрыть CORS и
+не публиковать editor/admin. Counts, локальные hashes и список critical/high packages
+сохранены в
+`scripts/partner_game_membership_runtime/shared-runtime-isolation-observation.json`
+только как bounded observation и вход для архитектурного решения. Raw full-palette
+lock/audit в immutable runtime closure не входят, поэтому этот файл не является
+deploy evidence и перед production-переходом требует независимого refresh/read-back;
+production при наблюдении не менялся.
 
 Нормализованные exact `package-lock`, `npm ls`, полный audit report, runtime manifest и
 `functional-rehearsal.json` хранятся в `scripts/partner_game_membership_runtime/`,
 проверяются по SHA и включаются в private packet. Functional evidence привязан к exact
 custom-node release, но его scope ограничен load/default-off/removal compatibility. Он
-не доказывает поведение нового flow, собранного из следующего fresh live snapshot;
-этот candidate требует отдельного deploy-stage read-back. Перед каждым
-production-кандидатом audit повторяется на exact
-lock/runtime не старше 24 часов. Нужен либо patched exact runtime, либо письменный
-bounded reachability decision с доказательством, что через три Partner routes не
-достижим ни один critical/high advisory. Неопределённость означает отказ.
+не доказывает deploy-stage service installation/read-back. Перед каждым
+production-кандидатом audit повторяется на exact sidecar lock/runtime не старше 24
+часов. Fresh read-only snapshot общего flow используется только для проверки
+отсутствия route/node-id collision и фиксируется отдельно; он не становится sidecar
+`source.flow.json` и не копируется в packet.
 
 ## Машиночитаемый контракт
 
@@ -50,8 +63,13 @@ npm run validate:partner-game-membership-production-controls
 npm run validate:partner-game-membership-runtime
 npm run validate:partner-game-membership-production-binding -- \
   --binding /absolute/private-production-binding.json \
-  --packet-root /absolute/private-parent/partner-v02-packet
+  --packet-root /absolute/private-parent/partner-v02-packet \
+  --expected-approved-commit <40hex-approved-commit> \
+  --expected-approved-tree <40hex-approved-tree>
 ```
+
+Approved commit и tree передаются отдельным out-of-band решением и должны точно
+совпасть с identity внутри packet manifest; сам packet не может назначить их себе.
 
 Validator использует закрытые схемы и отклоняет неизвестные поля, route widening,
 non-loopback upstream, CORS/editor exposure, proxy retry, ослабление лимитов,
@@ -60,21 +78,20 @@ non-loopback upstream, CORS/editor exposure, proxy retry, ослабление �
 
 Генератор приватного packet копирует exact bytes в
 `production-controls.contract.json`, фиксирует SHA-256 в `deployment-plan.json` и
-сохраняет состояния `UNBOUND/AUDIT_BLOCKED/BLOCKED`. Этот файл — policy template, а не
+сохраняет состояния `SECURITY_AUDIT_PASS/UNBOUND/UNBOUND/BLOCKED`. Этот файл — policy template, а не
 production binding. Фактические hostname/CIDR/certificate/path/owners оформляются
 отдельным приватным evidence overlay без секретных значений. Второй validator требует
 exact controls/runtime/audit/functional hashes, mTLS, socket-peer identity,
 отрицательный readback, фактические packet bytes/modes/semantics и разные
 test/production fingerprints. Packet/host custody проверяется фактически, но ingress
-hashes/readback booleans и audit reachability decision остаются декларациями с
-состояниями `DECLARED_EVIDENCE_UNVERIFIED` и
-`AUDIT_BLOCKED_DECISION_UNVERIFIED`. Поэтому validator не является deploy gate.
+hashes/readback booleans остаются декларациями с состоянием
+`DECLARED_EVIDENCE_UNVERIFIED`. Поэтому validator не является deploy gate.
 Production CLI запускают на bound Linux host от `root`:
 realpath packet обязан точно совпасть с `custody.targetDirectory`, owner UID равен `0`,
 `targetHostname` совпадает с текущим hostname, а `targetHostIdentitySha256` — с SHA-256
 локального `/etc/machine-id`; runtime platform/architecture совпадают с проверенными
-`linux/arm64` и текущими `process.platform/process.arch`. Успешный schema-lint возвращает
-только `DECLARED_EVIDENCE_UNVERIFIED_AUDIT_BLOCKED_NOT_AUTHORIZED` и не даёт
+`linux/x64` и текущими `process.platform/process.arch`. Успешный schema-lint возвращает
+только `DECLARED_EVIDENCE_UNVERIFIED_NOT_AUTHORIZED` и не даёт
 deploy/activation authorization. До deploy нужен отдельный live verifier, который
 читает exact ingress config/readback/certificate/CA и подписанный audit reachability
 artifact, а также сам повторяет отрицательные сетевые probes.
@@ -93,7 +110,7 @@ artifact, а также сам повторяет отрицательные с�
 
 - отдельный exact Host/SNI; альтернативный/shared hostname не маршрутизирует Partner
   paths, прямое подключение к Node-RED извне невозможно; upstream только
-  `http://127.0.0.1:1880`;
+  `http://127.0.0.1:18894`; общий production Node-RED `127.0.0.1:1880` не меняется;
 - TLS 1.2+ и mTLS обязательны; approved source CIDR только усиливает mTLS;
 - exact подписанный audience совпадает с server-only environment audience;
 - inbound `Forwarded`/`X-Forwarded-*` удаляются, trusted chain строится заново из
@@ -118,9 +135,10 @@ artifact, а также сам повторяет отрицательные с�
 
 ## Packet и secret custody
 
-`source.flow.json` и `candidate.flow.json` содержат полный production flow, поэтому весь
-packet классифицируется как `SECRET_BEARING`, даже если семь Partner nodes и custom
-package не содержат секретов.
+`source.flow.json` содержит только детерминированный sidecar tab, а
+`candidate.flow.json` — этот tab и семь Partner nodes. Полный production flow в packet
+не попадает. Packet всё равно консервативно классифицируется как `SECRET_BEARING` для
+единого строгого custody процесса; секретные значения в нём запрещены.
 
 До любого transfer должны быть связаны и независимо подтверждены:
 
@@ -165,13 +183,13 @@ certificate выпускаются отдельно и не повторяют t
 ```text
 exact pushed SHA + green exact-head CI
         ↓
-fresh production flow/readback + exact runtime audit
+fresh shared-flow collision readback + exact sidecar runtime audit
         ↓
 private ingress binding rehearsal + private custody binding
         ↓
 separate deploy authorization
         ↓
-install/import/restart while global API remains OFF
+install/start dedicated sidecar while global API remains OFF; shared 1880 untouched
         ↓
 readback: hashes, routes, editor isolation, 503 default-off, logs
         ↓

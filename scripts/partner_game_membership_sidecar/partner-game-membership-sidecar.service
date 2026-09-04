@@ -1,0 +1,41 @@
+[Unit]
+Description=PadlHub Partner Game Membership API sidecar (default off)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=partner-game-api
+Group=partner-game-api
+WorkingDirectory=/var/lib/padlhub/partner-game-membership
+Environment=NODE_ENV=production
+Environment=LK_PARTNER_GAME_API_ENABLED=false
+Environment=LK_PARTNER_GAME_API_PROVIDER_MODE=disabled
+Environment=LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED=false
+ExecStart=/opt/padlhub/partner-game-membership/current/runtime/node_modules/.bin/node-red --userDir /var/lib/padlhub/partner-game-membership --settings /opt/padlhub/partner-game-membership/current/sidecar/settings.cjs /opt/padlhub/partner-game-membership/current/candidate.flow.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+KillSignal=SIGINT
+UMask=0077
+LimitNOFILE=4096
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+ReadWritePaths=/var/lib/padlhub/partner-game-membership
+
+[Install]
+WantedBy=multi-user.target

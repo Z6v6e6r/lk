@@ -341,6 +341,8 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     "Run unified candidate and drift-negative tests",
     "Validate LK1 DEV provisioning, bootstrap, runtime source, and read-only UAT",
     "Run tracked credential and authenticated-route security tests",
+    "Run Partner membership R4 gates",
+    "Run Piter atomic activation lock and ledger gates",
     "Validate deterministic Node-RED modular toolchain fixtures",
     "Validate combined legacy game command prerequisites",
     "Validate combined split draft persistence",
@@ -387,6 +389,16 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
   assert.match(
     step("Validate referral attribution compatibility").run,
     /scripts\/tests\/referralAttributionReleaseCandidate\.test\.mjs/,
+  );
+  const partnerStep = step("Run Partner membership R4 gates");
+  for (const command of [
+    "npm run test:partner-game-membership-api",
+    "npm run validate:partner-game-membership-runtime",
+    "npm run validate:partner-game-membership-production-controls",
+  ]) assert.match(partnerStep.run, new RegExp(command.replaceAll(" ", "\\s+")));
+  assert.equal(
+    step("Run Piter atomic activation lock and ledger gates").run,
+    "npm run test:piter-atomic-activation",
   );
   assert.match(
     step("Validate reviewed-flow and legacy custody boundaries").run,
