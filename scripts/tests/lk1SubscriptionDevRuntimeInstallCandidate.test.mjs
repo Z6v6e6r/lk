@@ -20,6 +20,7 @@ const UNIT_ROOT = path.join(ROOT, "scripts/lk1_subscription_dev_runtime_install/
 const TMP_ROOT = fs.existsSync("/private/tmp") ? "/private/tmp" : os.tmpdir();
 const SOURCE_COMMIT = "eca4e1a17d7b2d84489fc9e8129a2eee29c8f3a0";
 const TOOLING_COMMIT = "6".repeat(40);
+const TOOLING_TREE = "7".repeat(40);
 const NOW = new Date("2026-09-10T12:00:00.000Z");
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -36,6 +37,7 @@ function build() {
       now: NOW,
       repositoryIdentity: () => ({
         head: TOOLING_COMMIT,
+        tree: TOOLING_TREE,
         originMain: TOOLING_COMMIT,
         headOriginMergeBase: TOOLING_COMMIT,
         sourceOriginMergeBase: SOURCE_COMMIT,
@@ -46,25 +48,33 @@ function build() {
   };
 }
 
-test("install contract resolves marker custody through a root-owned group-read-only file without execution authority", () => {
+test("install contract resolves marker custody and grants only stopped-install execution authority", () => {
   const contract = readJson(CONTRACT_PATH);
   assert.equal(validateRuntimeInstallContract(contract), true);
   assert.equal(contract.authorizationCustody.sourceDirectoryOwner, "root:lk1-subscription-dev");
   assert.equal(contract.authorizationCustody.sourceDirectoryMode, "0750");
   assert.equal(contract.authorizationCustody.transport, "ROOT_OWNED_GROUP_READ_ONLY_FILE");
   assert.equal(contract.authorizationCustody.authorizationTransportHostSupportVerified, true);
-    assert.equal(contract.candidateContents.installExecutor, "NOT_INCLUDED");
+  assert.equal(contract.candidateContents.installExecutor, "INCLUDED_STOPPED_ONLY");
+  assert.equal(contract.candidateContents.rollbackExecutor, "INCLUDED_SEPARATELY_AUTHORIZED");
     assert.equal(contract.candidateContents.nodeRedFlow, "GENERATED_EXACT_SOURCE_CANDIDATE");
   assert.equal(contract.candidateContents.installedIdentityEnvironmentFile, "NOT_INCLUDED");
   assert.equal(contract.runtimeCapabilityDisclosure.nodeRedExposure, "DORMANT_WRITE_CAPABLE_SOURCE_GRAPH");
   assert.deepEqual(contract.runtimeCapabilityDisclosure.mongoOperations, ["find", "insertOne", "updateOne"]);
   assert.equal(contract.runtimeCapabilityDisclosure.positiveUat, "NOT_AUTHORIZED");
   assert.equal(contract.authority.bundleBuildAllowed, true);
+  assert.equal(contract.authority.hostReadAllowed, true);
+  assert.equal(contract.authority.hostInstallAllowed, true);
   assert.equal(
-    Object.entries(contract.authority).every(([key, value]) => key === "bundleBuildAllowed" || value === false),
+    Object.entries(contract.authority).every(([key, value]) => (
+      ["bundleBuildAllowed", "hostReadAllowed", "hostInstallAllowed"].includes(key) || value === false
+    )),
     true,
   );
-  assert.equal(Object.values(contract.intendedStoppedPostconditions).every((value) => value === false), true);
+  assert.equal(contract.intendedStoppedPostconditions.payloadInstalled, true);
+  assert.equal(contract.intendedStoppedPostconditions.preimagePreserved, true);
+  assert.equal(contract.intendedStoppedPostconditions.installEvidenceCreated, true);
+  assert.equal(contract.intendedStoppedPostconditions.servicesActive, false);
 });
 
 test("install contract rejects marker, support, postcondition, contents, and authority drift", () => {
@@ -77,11 +87,11 @@ test("install contract rejects marker, support, postcondition, contents, and aut
     (value) => { value.authorizationCustody.authorizationTransportHostSupportVerified = false; },
     (value) => { value.credentialBinding.requiresUnexpiredCredential = false; },
     (value) => { value.prerequisites.freshHostReadbackRequired = false; },
-    (value) => { value.candidateContents.installExecutor = "INCLUDED"; },
+    (value) => { value.candidateContents.installExecutor = "NOT_INCLUDED"; },
     (value) => { value.runtimeCapabilityDisclosure.positiveUat = "AUTHORIZED"; },
     (value) => { value.runtimeCapabilityDisclosure.mongoOperations = ["find"]; },
     (value) => { value.intendedStoppedPostconditions.servicesActive = true; },
-    (value) => { value.authority.hostInstallAllowed = true; },
+    (value) => { value.authority.daemonReloadAllowed = true; },
   ]) {
     const changed = clone(baseline);
     mutate(changed);
@@ -136,7 +146,7 @@ test("unit validator rejects credential bypass, role drift, start hooks, enablem
   }
 });
 
-test("builder emits a self-contained immutable candidate with no installer, config, receipt, or credential", () => {
+test("builder emits a self-contained immutable stopped-install candidate without config, receipt, or credential", () => {
   const result = build();
   try {
     const verified = verifyRuntimeInstallCandidateBundle(result.outputDirectory, result.manifestSha256);
@@ -144,11 +154,14 @@ test("builder emits a self-contained immutable candidate with no installer, conf
     assert.equal(verified.manifest.toolingCommit, TOOLING_COMMIT);
     assert.equal(verified.receiptTemplate.state, "SOURCE_ONLY");
     assert.equal(verified.sourceCandidateManifest.hostPreimage.state, "ABSENT");
-    assert.equal(verified.manifest.stage, "LOCAL_INSTALL_CANDIDATE");
-    assert.equal(Object.values(verified.manifest.authority).every((value) => value === false), true);
+    assert.equal(verified.manifest.stage, "STOPPED_INSTALL_CANDIDATE");
+    assert.equal(verified.manifest.toolingTreeSha, TOOLING_TREE);
+    assert.equal(verified.manifest.authority.hostRead, true);
+    assert.equal(verified.manifest.authority.hostInstall, true);
+    assert.equal(verified.manifest.authority.daemonReload, false);
     assert.equal(fs.statSync(result.outputDirectory).mode & 0o777, 0o700);
     assert.equal(fs.statSync(path.join(result.outputDirectory, "manifest.json")).mode & 0o777, 0o600);
-    assert.equal(EXPECTED_FILES.some((file) => /install(?:er|\.sh|\.mjs$)/i.test(file)), false);
+    assert.equal(EXPECTED_FILES.includes("payload/install_lk1_subscription_dev_stopped_candidate.mjs"), true);
     assert.equal(EXPECTED_FILES.some((file) => /fixture\.json|release-identity|service-start\.approved/.test(file)), false);
     const bundledVerifier = path.join(
       result.outputDirectory,
@@ -200,6 +213,7 @@ test("bundle verifier rejects manifest mode, payload, unit, symlink, and unexpec
 test("builder rejects dirty or divergent ancestry, blobs, and non-new output", () => {
   const exact = () => ({
     head: TOOLING_COMMIT,
+    tree: TOOLING_TREE,
     originMain: TOOLING_COMMIT,
     headOriginMergeBase: TOOLING_COMMIT,
     sourceOriginMergeBase: SOURCE_COMMIT,
@@ -230,6 +244,7 @@ test("builder rejects dirty or divergent ancestry, blobs, and non-new output", (
       sourceCommit: SOURCE_COMMIT,
       repositoryIdentity: () => ({
         head: TOOLING_COMMIT,
+        tree: TOOLING_TREE,
         originMain: "7".repeat(40),
         headOriginMergeBase: TOOLING_COMMIT,
         sourceOriginMergeBase: SOURCE_COMMIT,
@@ -242,6 +257,7 @@ test("builder rejects dirty or divergent ancestry, blobs, and non-new output", (
       sourceCommit: SOURCE_COMMIT,
       repositoryIdentity: () => ({
         head: TOOLING_COMMIT,
+        tree: TOOLING_TREE,
         originMain: TOOLING_COMMIT,
         headOriginMergeBase: TOOLING_COMMIT,
         sourceOriginMergeBase: "7".repeat(40),

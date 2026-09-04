@@ -80,3 +80,7 @@ read-only host gate и здесь не выполнялся. Успешная л
 Непосредственно перед отдельно авторизованным install обязателен новый
 `node scripts/validate_lk1_subscription_dev_host_preflight.mjs --capture-via-ssh`;
 полученный v2 artifact должен быть проверен deploy gate с тем же exact HEAD/tree.
+Capture принудительно использует pinned ED25519 host key и отличает защитный
+`IPAddressDeny=0.0.0.0/0` от запрещённого wildcard bind в ExecStart/environment.
+Только отдельно собранный stopped-install candidate может затем выполнить
+manifest-bound atomic install; source-only gate сам по-прежнему ничего не меняет.

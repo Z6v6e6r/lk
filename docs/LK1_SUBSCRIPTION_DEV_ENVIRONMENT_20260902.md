@@ -123,6 +123,13 @@ The source-remediation stage performed no Node-RED import, service restart,
 runtime-global mutation, Viva write, Mongo write, deployment, or activation.
 The subsequent, separately authorized stopped host installation is recorded below.
 
+The next stopped-install packet is a separate version-2 contract. It carries an
+exact-hash executor for six payload targets, binds a fresh schema-v2 preflight to
+the clean tooling HEAD/tree and a pinned ED25519 host key, and preserves exact
+bootstrap preimages. Its authority ends at host file installation: daemon reload,
+service start/enable, ingress, credentials, secrets, and external writes remain
+forbidden. Local rehearsal is not host installation evidence.
+
 ## Dedicated target provisioning contract and stopped bootstrap
 
 A second read-only capture at `2026-09-02T17:12:36Z` returned the same shared
