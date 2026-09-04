@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 1,
+  "environment": "DEV",
+  "state": "PREPARED_SOURCE_ONLY_BLOCKED",
+  "productionBindingState": "UNBOUND_AFTER_ROUTER_AMENDMENT",
+  "releaseBinding": {
+    "sourceCommit": "eca4e1a17d7b2d84489fc9e8129a2eee29c8f3a0",
+    "sourceFlowSha256": "bada371662cc4d4a27fca5a1a9335c657dac298bba754f48f9787ac67bfe4722",
+    "candidateSha256": "ab73803e90852ebc99cd9b019cf181c9bd402e4737ccde8256cc6da448039fb9",
+    "manifestSha256": "f47b1b13aae9e5dd3f4dabf5797afcc61d55d88cc57bcdbec3c139a511c71865"
+  },
+  "target": {
+    "hostAlias": "lk-reserve-89",
+    "serviceName": "lk1-subscription-dev-nodered.service",
+    "unixUser": "lk1-subscription-dev",
+    "flowPath": "/srv/lk1-subscription-dev/node-red/flows.json",
+    "listener": "127.0.0.1:1882",
+    "fixtureListeners": [
+      "127.0.0.1:27030",
+      "127.0.0.1:3037",
+      "127.0.0.1:3038",
+      "127.0.0.1:3039"
+    ],
+    "ingressState": "UNBOUND"
+  },
+  "runtimeBinding": {
+    "state": "BLOCKED_TARGET_MISMATCH",
+    "candidateCupApiBase": "http://127.0.0.1:3036/api",
+    "dedicatedCupListener": "127.0.0.1:3037",
+    "cupMatchesDedicatedListener": false,
+    "candidateMongo": {
+      "host": "127.0.0.1",
+      "port": 27030,
+      "database": "dev-lk1-subscription-canary",
+      "replicaSet": "rs0",
+      "credentialFree": true
+    },
+    "provisionedMongo": {
+      "host": "127.0.0.1",
+      "port": 27030,
+      "database": "lk1_subscription_dev_fixture"
+    },
+    "mongoMatchesProvisionedDatabase": false,
+    "completeManagedContractExposed": false
+  },
+  "productionIsolation": {
+    "blockedHostAlias": "lk-primary-147",
+    "productionOriginPolicy": "DENY_ALL",
+    "sharedFlowPath": "/root/.node-red/flows.json",
+    "sharedNodeRedListener": "0.0.0.0:1880",
+    "nonLoopbackEgressAllowed": false,
+    "productionDnsAllowed": false,
+    "crossEnvironmentWriteBudget": 0
+  },
+  "predeploy": {
+    "state": "NOT_RUN",
+    "freshEvidenceRequired": true,
+    "checks": [
+      "FROZEN_REPOSITORY_IDENTITY",
+      "IMMUTABLE_CANDIDATE_VERIFIED",
+      "CURRENT_HOST_IDENTITY",
+      "SYSTEMD_LOAD_CREDENTIAL_SUPPORTED",
+      "DEDICATED_UNITS_DISABLED_INACTIVE",
+      "RESERVED_LISTENERS_ABSENT",
+      "AUTHORIZATION_INPUTS_ABSENT",
+      "SHARED_RESOURCES_UNCHANGED",
+      "PRODUCTION_ROUTES_ORIGINS_ABSENT",
+      "ROLLBACK_TO_ABSENT_REVIEWED"
+    ]
+  },
+  "postcheck": {
+    "state": "NOT_RUN",
+    "observationWindowSeconds": {
+      "minimum": 600,
+      "maximum": 900
+    },
+    "phases": [
+      {
+        "id": "INSTALLED_STOPPED",
+        "state": "NOT_RUN",
+        "requiresSeparateAuthorization": true,
+        "checks": [
+          "HOST_READBACK_DIGEST_MATCH",
+          "UNITS_DISABLED_INACTIVE",
+          "LISTENERS_ABSENT",
+          "SHARED_RESOURCES_UNCHANGED"
+        ]
+      },
+      {
+        "id": "STARTED_DEFAULT_OFF",
+        "state": "NOT_RUN",
+        "requiresSeparateAuthorization": true,
+        "checks": [
+          "EXACT_SERVICE_IDENTITIES",
+          "LOOPBACK_LISTENER_OWNERSHIP",
+          "ROUTE_AND_GRAPH_HEALTH",
+          "PRODUCTION_CONNECTIONS_ZERO",
+          "IDLE_WRITES_ZERO"
+        ]
+      },
+      {
+        "id": "CANARY_ACTIVE",
+        "state": "NOT_RUN",
+        "requiresSeparateAuthorization": true,
+        "checks": [
+          "EXACT_TWO_SERVER_OWNED_CANARIES",
+          "THIRD_SUBSCRIPTION_BYPASSES_MANAGED_PATH",
+          "CONTROL_SUBSCRIPTION_REQUIRED",
+          "NO_PRODUCTION_CONNECTIONS",
+          "EXPECTED_FIXTURE_DELTAS_ONLY"
+        ]
+      },
+      {
+        "id": "ROLLBACK_TO_ABSENT",
+        "state": "NOT_RUN",
+        "requiresSeparateAuthorization": true,
+        "checks": [
+          "INGRESS_REMOVED_BEFORE_LISTENER",
+          "EXACT_SERVICE_STOP_ORDER",
+          "UNITS_DISABLED_INACTIVE",
+          "LISTENERS_ABSENT",
+          "SHARED_RESOURCES_UNCHANGED",
+          "EVIDENCE_LOGS_PRESERVED",
+          "DATA_DELETION_ZERO",
+          "ABSENT_PREIMAGE_RESTORED"
+        ]
+      }
+    ],
+    "requiredZeroCounters": [
+      "productionDnsResolutions",
+      "productionTcpConnections",
+      "productionTlsConnections",
+      "productionHttpRequests",
+      "productionMongoWrites",
+      "productionVivaWrites",
+      "productionCupWrites",
+      "productionPaymentWrites"
+    ]
+  },
+  "canaryActivation": {
+    "state": "NOT_CONFIGURED",
+    "identifierType": "CLIENT_SUBSCRIPTION_ID_OR_STABLE_HMAC",
+    "exactCount": 2,
+    "valuesIncluded": false,
+    "defaultOff": true,
+    "controlSubscriptionRequired": true
+  },
+  "rollback": {
+    "state": "NOT_RUN",
+    "mode": "RETURN_TO_ABSENT",
+    "failurePolicy": "ANY_REQUIRED_CHECK_FAILURE_STOPS",
+    "triggers": [
+      "HOST_READBACK_MISMATCH",
+      "UNEXPECTED_LISTENER_OR_OWNER",
+      "PRODUCTION_CONNECTION_OR_WRITE",
+      "NONZERO_UNEXPECTED_COUNTER",
+      "SOAK_HEALTH_FAILURE"
+    ],
+    "serviceStopOrder": [
+      "lk1-subscription-dev-nodered.service",
+      "lk1-subscription-dev-cup.service",
+      "lk1-subscription-dev-provider-fixture.service",
+      "lk1-subscription-dev-identity-fixture.service",
+      "lk1-subscription-dev-mongo.service"
+    ],
+    "removeIngressBeforeListener": true,
+    "preserveEvidenceAndLogs": true,
+    "deleteData": false,
+    "requiresSeparateAuthorization": true
+  },
+  "blockers": [
+    "CANDIDATE_CUP_REUSES_FORBIDDEN_SHARED_3036",
+    "CANDIDATE_MONGO_DATABASE_DIFFERS_FROM_PROVISIONED_FIXTURE",
+    "COMPLETE_MANAGED_RUNTIME_NOT_EXPOSED",
+    "FRESH_HOST_PREFLIGHT_NOT_RUN"
+  ],
+  "authority": {
+    "hostRead": false,
+    "hostInstall": false,
+    "daemonReload": false,
+    "serviceStart": false,
+    "enableUnits": false,
+    "ingress": false,
+    "activation": false,
+    "canaryConfig": false,
+    "secrets": false,
+    "externalWrites": false,
+    "productionOperations": false
+  },
+  "claims": {
+    "deploymentPerformed": false,
+    "postcheckPerformed": false,
+    "devDeployed": false,
+    "devActive": false,
+    "deployable": false
+  }
+}
