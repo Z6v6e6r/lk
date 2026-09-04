@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 const HASH_RE = /^[a-f0-9]{64}$/;
 const COMMIT_RE = /^[a-f0-9]{40}$/;
 const TENANT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const fail = (message) => { throw new Error(message); };
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -38,16 +39,13 @@ const isPass = (value) => value === "PASS";
 
 export function inventoryLkGamesWriters(flow) {
   if (!Array.isArray(flow)) fail("Node-RED flow must be an array");
-  const lkGamesTabs = new Set(flow.filter((node) => node?.type === "tab" && node.label === "LK Games").map((node) => node.id));
   const nonWritingOperations = new Set(["find", "findOne", "count", "countDocuments", "distinct"]);
   const mongoNodes = flow.filter((node) => node?.type === "mongodb4");
   for (const node of mongoNodes) {
     const collection = String(node.collection || "").trim();
     const operation = String(node.operation || "").trim();
     const dynamicCollection = !collection || /(?:\{\{|\bmsg\.|\bflow\.|\bglobal\.)/i.test(collection);
-    if (dynamicCollection && lkGamesTabs.has(node.z)) {
-      fail("LK Games contains an unclassifiable dynamic Mongo collection");
-    }
+    if (dynamicCollection) fail("Node-RED contains an unclassifiable dynamic Mongo collection");
     if (collection === "lk_games" && !operation) fail("lk_games Mongo operation is unclassifiable");
   }
   const writers = mongoNodes.filter((node) => (
@@ -192,12 +190,14 @@ export function validateCutoverControls(controls, {
     assertHash(controls.backup.backupSha256, "Backup digest");
     assertHash(controls.backup.manifestSha256, "Backup manifest digest");
     assertHash(controls.backup.fullCollectionStateSha256, "Backup collection-state digest");
+    assertHash(controls.backup.mongoTargetIdentitySha256, "Backup Mongo target identity digest");
     if (controls.backup.sourceFlowSha256 !== sourceFlowSha256 || controls.backup.database !== "games"
       || controls.backup.collection !== "lk_games" || !Number.isSafeInteger(controls.backup.documentCount)
       || controls.backup.documentCount < 1
       || !String(controls.backup.artifactPath || "").startsWith("/")
       || !String(controls.backup.manifestPath || "").startsWith("/")
       || controls.backup.fenceTokenSha256 !== controls.writerFence.fenceTokenSha256
+      || controls.backup.mongoTargetIdentitySha256 !== controls.mongoTarget?.targetIdentitySha256
       || !isFreshTimestamp(controls.backup.startedAt, 24 * 60 * 60_000)
       || !isFreshTimestamp(controls.backup.completedAt, 24 * 60 * 60_000)
       || Date.parse(controls.backup.startedAt) < Date.parse(controls.writerFence.observedAt)
@@ -214,11 +214,16 @@ export function validateCutoverControls(controls, {
     assertHash(controls.restoreRehearsal.manifestSha256, "Restore rehearsal manifest digest");
     assertHash(controls.restoreRehearsal.fullCollectionStateSha256, "Restore rehearsal collection-state digest");
     assertHash(controls.restoreRehearsal.receiptSha256, "Restore rehearsal receipt digest");
+    assertHash(controls.restoreRehearsal.restoredArtifactSha256, "Restore rehearsal artifact digest");
+    assertHash(controls.restoreRehearsal.mongoTargetIdentitySha256, "Restore rehearsal target identity digest");
+    assertHash(controls.restoreRehearsal.isolatedTargetIdentitySha256, "Restore rehearsal isolated-target digest");
     if (!isPass(controls.backup?.state)
       || controls.restoreRehearsal.backupSha256 !== controls.backup.backupSha256
       || controls.restoreRehearsal.manifestSha256 !== controls.backup.manifestSha256
       || controls.restoreRehearsal.fullCollectionStateSha256 !== controls.backup.fullCollectionStateSha256
       || !String(controls.restoreRehearsal.receiptPath || "").startsWith("/")
+      || !String(controls.restoreRehearsal.restoredArtifactPath || "").startsWith("/")
+      || controls.restoreRehearsal.mongoTargetIdentitySha256 !== controls.mongoTarget?.targetIdentitySha256
       || controls.restoreRehearsal.isolatedTarget !== true
       || controls.restoreRehearsal.restoredDocumentCount !== controls.backup.documentCount
       || controls.restoreRehearsal.postRestoreHashMatch !== true
@@ -247,7 +252,7 @@ export function validateCutoverControls(controls, {
 
   assertState(controls.mongoTarget?.state, ["PASS", "MISSING", "FAIL"], "Mongo target evidence");
   if (isPass(controls.mongoTarget.state)) {
-    for (const key of ["connectionFingerprint", "targetIdentitySha256"]) {
+    for (const key of ["connectionFingerprint", "migrationConnectionFingerprint", "targetIdentitySha256"]) {
       assertHash(controls.mongoTarget[key], `Mongo target ${key}`);
     }
     if (controls.mongoTarget.database !== "games" || controls.mongoTarget.collection !== "lk_games"
@@ -360,6 +365,7 @@ export function buildVivaGameProjectionCutoverPlan({
     },
     mongoTarget: isPass(controls.mongoTarget?.state) ? {
       connectionFingerprint: controls.mongoTarget.connectionFingerprint,
+      migrationConnectionFingerprint: controls.mongoTarget.migrationConnectionFingerprint,
       targetIdentitySha256: controls.mongoTarget.targetIdentitySha256,
       replicaSetName: controls.mongoTarget.replicaSetName,
       database: controls.mongoTarget.database,
@@ -370,6 +376,8 @@ export function buildVivaGameProjectionCutoverPlan({
       runtimeTenantReadBackAt: controls.runtimeTenant?.readBackAt || null,
       backupManifestSha256: controls.backup?.manifestSha256 || null,
       backupSha256: controls.backup?.backupSha256 || null,
+      fullCollectionStateSha256: controls.backup?.fullCollectionStateSha256 || null,
+      restoreArtifactSha256: controls.restoreRehearsal?.restoredArtifactSha256 || null,
       externalWriterProofSha256: controls.writerFence?.externalWriterProofSha256 || null,
     },
     phases: [
@@ -425,6 +433,10 @@ export function validateVivaGameProjectionCutoverPostcheck(receipt, plan, nowMs 
     || receipt.candidateFlowReadback !== true
     || receipt.ingressReopened !== false
     || !HASH_RE.test(String(receipt.fenceReceiptSha256 || ""))
+    || !HASH_RE.test(String(receipt.mongoWriteBarrierReceiptSha256 || ""))
+    || !HASH_RE.test(String(receipt.executionIndexSha256 || ""))
+    || !HASH_RE.test(String(receipt.fenceGuardianReceiptSha256 || ""))
+    || !UUID_RE.test(String(receipt.coordinatorAttemptId || ""))
     || !Number.isFinite(Date.parse(receipt.observedAt))
     || nowMs - Date.parse(receipt.observedAt) > 5 * 60_000
     || Date.parse(receipt.observedAt) > nowMs + 60_000
@@ -436,6 +448,13 @@ export function validateVivaGameProjectionCutoverPostcheck(receipt, plan, nowMs 
     fail("Cutover postcheck does not authorize reopening ingress");
   }
   const expectedPlans = new Set(plan.migration.planSha256s);
+  for (const [bytes, expected, label] of [
+    [evidence.mongoWriteBarrierReceiptBytes, receipt.mongoWriteBarrierReceiptSha256, "Mongo write-barrier receipt"],
+    [evidence.executionIndexBytes, receipt.executionIndexSha256, "Cutover execution index"],
+    [evidence.fenceGuardianReceiptBytes, receipt.fenceGuardianReceiptSha256, "Fence guardian receipt"],
+  ]) {
+    if (!Buffer.isBuffer(bytes) || sha256(bytes) !== expected) fail(`Cutover postcheck lacks the exact ${label} artifact`);
+  }
   for (const item of receipt.applyReports) {
     if (!expectedPlans.delete(item?.planSha256)) fail("Cutover postcheck apply-report binding mismatch");
     assertHash(item.reportSha256, "Cutover apply report digest");

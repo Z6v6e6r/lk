@@ -16,6 +16,10 @@ if [[ -z "${PADLHUB_CUTOVER_FENCE_TOKEN:-}" ]]; then
   echo "PADLHUB_CUTOVER_FENCE_TOKEN is required" >&2
   exit 1
 fi
+if [[ -z "${PADLHUB_CUTOVER_GUARDIAN_RECEIPT:-}" || -z "${PADLHUB_CUTOVER_GUARDIAN_RELEASE_REQUEST:-}" ]]; then
+  echo "PADLHUB_CUTOVER_GUARDIAN_RECEIPT and PADLHUB_CUTOVER_GUARDIAN_RELEASE_REQUEST are required" >&2
+  exit 1
+fi
 
 umask 077
 exec 9>"${lock_path}"
@@ -26,4 +30,23 @@ fi
 
 export PADLHUB_CUTOVER_FENCE_FD=9
 export PADLHUB_CUTOVER_FENCE_LOCK_PATH="${lock_path}"
+guardian_log="${PADLHUB_CUTOVER_GUARDIAN_RECEIPT}.log"
+nohup node "${script_dir}/run_viva_game_projection_fence_guardian.mjs" \
+  --receipt "${PADLHUB_CUTOVER_GUARDIAN_RECEIPT}" \
+  --release-request "${PADLHUB_CUTOVER_GUARDIAN_RELEASE_REQUEST}" \
+  9>&9 </dev/null >>"${guardian_log}" 2>&1 &
+guardian_pid=$!
+for _ in {1..50}; do
+  [[ -f "${PADLHUB_CUTOVER_GUARDIAN_RECEIPT}" ]] && break
+  kill -0 "${guardian_pid}" 2>/dev/null || {
+    echo "Persistent fence guardian failed to start" >&2
+    exit 1
+  }
+  sleep 0.1
+done
+if [[ ! -f "${PADLHUB_CUTOVER_GUARDIAN_RECEIPT}" ]]; then
+  echo "Persistent fence guardian receipt was not created" >&2
+  exit 1
+fi
+export PADLHUB_CUTOVER_GUARDIAN_PID="${guardian_pid}"
 exec node "${script_dir}/run_viva_game_projection_cutover_coordinator.mjs" "$@"

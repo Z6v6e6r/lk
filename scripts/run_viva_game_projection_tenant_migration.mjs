@@ -20,6 +20,7 @@ import {
   validateMigrationBackup,
 } from "./lib/vivaGameProjectionTenantMigrationExecution.mjs";
 import { buildMongoTargetIdentity, canonicalJson } from "./lib/vivaGameProjectionCutoverContract.mjs";
+import { assertMongoWriteBarrier } from "./lib/vivaGameProjectionMongoWriteBarrier.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = fs.realpathSync(path.resolve(path.dirname(SCRIPT_PATH), ".."));
@@ -32,6 +33,7 @@ const WRITE_COMMANDS = new Set(["insert", "update", "delete", "findAndModify", "
 const MAX_PLAN_BYTES = 64 * 1024 * 1024;
 const MAX_BACKUP_BYTES = 512 * 1024 * 1024;
 const MAX_PACKET_BYTES = 16 * 1024 * 1024;
+const MAX_CONNECTION_BYTES = 1024 * 1024;
 
 const fail = (message) => { throw new Error(message); };
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -57,7 +59,7 @@ function parseArgs(argv) {
     "--plan", "--cutover-plan", "--packet-manifest", "--expected-plan-sha256",
     "--expected-cutover-plan-sha256", "--expected-packet-manifest-sha256",
     "--expected-source-flow-sha256", "--expected-runtime-flow-sha256", "--flow-path",
-    "--fence-receipt", "--report",
+    "--fence-receipt", "--mongo-write-barrier-receipt", "--migration-connection-file", "--report",
   ]) {
     if (!values.get(key)) fail(`Missing ${key}`);
   }
@@ -213,6 +215,17 @@ export function readFlowConnection(flowPath, expectedRuntimeFlowSha256) {
   return { uri: configs[0].uri.trim(), dbName: "games", connectionFingerprint: sha256(configs[0].uri.trim()) };
 }
 
+export function readPrivateMongoConnection(filePath, expectedFingerprint) {
+  const { value } = readPrivateJson(filePath, "Migration Mongo connection", MAX_CONNECTION_BYTES);
+  if (!isObject(value) || value.formatVersion !== 1
+    || value.kind !== "viva-game-projection-migration-mongo-connection"
+    || typeof value.uri !== "string" || !value.uri.trim()
+    || sha256(value.uri.trim()) !== expectedFingerprint) {
+    fail("Migration Mongo connection file does not match the pinned principal");
+  }
+  return { uri: value.uri.trim(), dbName: "games", connectionFingerprint: expectedFingerprint };
+}
+
 function assertManifestEntry(manifest, packetRoot, absolutePath, expectedSha256, expectedRelativePath) {
   const resolved = path.resolve(absolutePath);
   if (!isWithin(packetRoot, resolved)) fail("Cutover input is outside the pinned packet");
@@ -315,11 +328,15 @@ export function assertInheritedFenceLease(receipt) {
   }
 }
 
-function assertSystemFenceLease(receipt, cutoverPlan) {
+export function assertExclusiveFenceLease(receipt) {
   assertInheritedFenceLease(receipt);
-  const lockPath = receipt.lockPath;
-  const lockProbe = spawnSync("flock", ["-n", lockPath, "-c", "true"], { stdio: "ignore" });
+  const lockProbe = spawnSync("flock", ["-n", receipt.lockPath, "-c", "true"], { stdio: "ignore" });
   if (lockProbe.error || lockProbe.status === 0) fail("Writer-fence flock is not held exclusively");
+  return true;
+}
+
+function assertSystemFenceLease(receipt, cutoverPlan) {
+  assertExclusiveFenceLease(receipt);
   const pm2 = spawnSync("pm2", ["jlist"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   let processes;
   try { processes = JSON.parse(pm2.stdout); } catch { fail("Unable to read live PM2 state under the writer fence"); }
@@ -376,8 +393,11 @@ async function run({ mode, values }, dependencies = {}) {
     && ![expectedSourceFlowSha256, cutoverPlan.candidateSha256].includes(expectedRuntimeFlowSha256)) {
     fail("Restore and reconcile-restore runtime flow must be the frozen source or exact candidate");
   }
-  const connection = readFlowConnection(values.get("--flow-path"), expectedRuntimeFlowSha256);
-  if (connection.connectionFingerprint !== cutoverPlan.mongoTarget?.connectionFingerprint) fail("Mongo connection binding differs from the cutover plan");
+  const applicationConnection = readFlowConnection(values.get("--flow-path"), expectedRuntimeFlowSha256);
+  if (applicationConnection.connectionFingerprint !== cutoverPlan.mongoTarget?.connectionFingerprint) fail("Mongo connection binding differs from the cutover plan");
+  const connection = readPrivateMongoConnection(
+    values.get("--migration-connection-file"), cutoverPlan.mongoTarget?.migrationConnectionFingerprint,
+  );
   const fencePath = values.get("--fence-receipt");
   const fenceExpected = {
     sourceFlowSha256: expectedSourceFlowSha256,
@@ -411,6 +431,8 @@ async function run({ mode, values }, dependencies = {}) {
     maxPoolSize: 1,
     serverSelectionTimeoutMS: 20_000,
     connectTimeoutMS: 20_000,
+    socketTimeoutMS: 20_000,
+    timeoutMS: 20_000,
     monitorCommands: true,
   });
   let writeCommandCount = 0;
@@ -423,7 +445,7 @@ async function run({ mode, values }, dependencies = {}) {
     await client.connect();
     const hello = await client.db("admin").command({ hello: 1 });
     const mongoTarget = buildMongoTargetIdentity({
-      connectionFingerprint: connection.connectionFingerprint,
+      connectionFingerprint: applicationConnection.connectionFingerprint,
       replicaSetName: hello.setName,
       database: "games",
       collection: "lk_games",
@@ -432,8 +454,20 @@ async function run({ mode, values }, dependencies = {}) {
       || mongoTarget.replicaSetName !== cutoverPlan.mongoTarget?.replicaSetName) fail("Connected Mongo replica set differs from the pinned cutover target");
     const db = client.db(connection.dbName);
     const collection = db.collection("lk_games");
+    const barrierRead = readPrivateJson(values.get("--mongo-write-barrier-receipt"), "Mongo write-barrier receipt", MAX_PACKET_BYTES);
+    const barrierReceiptSha256 = sha256(barrierRead.bytes);
+    const assertBarrier = async () => {
+      const current = readPrivateJson(values.get("--mongo-write-barrier-receipt"), "Mongo write-barrier receipt", MAX_PACKET_BYTES);
+      if (sha256(current.bytes) !== barrierReceiptSha256) fail("Mongo write-barrier receipt changed during execution");
+      await assertMongoWriteBarrier(db, current.value, {
+        fenceTokenSha256: cutoverPlan.writerFence.fenceTokenSha256,
+        cutoverPlanSha256: values.get("--expected-cutover-plan-sha256"),
+        mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
+      });
+    };
     const assertFenceAndWriters = async () => {
       readFence(true);
+      await assertBarrier();
       await assertNoConcurrentMongoWrites(client);
     };
     let watchdogError = null;
@@ -533,7 +567,9 @@ async function run({ mode, values }, dependencies = {}) {
             if (BSON.EJSON.stringify(currentBackup.records, null, 0, { relaxed: false })
               !== BSON.EJSON.stringify(backup.records, null, 0, { relaxed: false })) fail("Migration preimage drifted after durable backup capture");
             applyReceipt = await applyTenantMigrationPlan({
-              updateOne: (filter, update, options) => transactionCollection.updateOne(filter, update, { ...options, session }),
+              updateOne: (filter, update, options) => transactionCollection.updateOne(filter, update, {
+                ...options, session, bypassDocumentValidation: true, maxTimeMS: 15_000,
+              }),
               findOne: (filter) => transactionCollection.findOne(filter, { session }),
             }, plan, expectedPlanSha256, plan.operations[0].update.$set.updatedAt, assertTransactionLease);
           }, { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" }, maxCommitTimeMS: 15_000 });
@@ -578,7 +614,9 @@ async function run({ mode, values }, dependencies = {}) {
           await assertTransactionLease();
           const transactionCollection = db.collection("lk_games");
           restoreReceipt = await restoreTenantMigrationBackup({
-            replaceOne: (filter, replacement, options) => transactionCollection.replaceOne(filter, replacement, { ...options, session }),
+              replaceOne: (filter, replacement, options) => transactionCollection.replaceOne(filter, replacement, {
+                ...options, session, bypassDocumentValidation: true, maxTimeMS: 15_000,
+              }),
             findOne: (filter) => transactionCollection.findOne(filter, { session }),
           }, plan, expectedPlanSha256, backup, applyReceipt, assertTransactionLease);
         }, { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" }, maxCommitTimeMS: 15_000 });

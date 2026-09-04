@@ -8,6 +8,10 @@ import { fileURLToPath } from "node:url";
 import { BSON, ObjectId } from "mongodb";
 
 import {
+  assertMongoWriteBarrier,
+  installMongoWriteBarrier,
+} from "../lib/vivaGameProjectionMongoWriteBarrier.mjs";
+import {
   buildMongoTargetIdentity,
   buildVivaGameProjectionCutoverPlan,
   canonicalJson,
@@ -44,6 +48,7 @@ const nowIso = "2026-09-04T12:00:00.000Z";
 const fenceToken = "fixture-fence-token-with-sufficient-entropy";
 const fenceTokenSha256 = cutoverSha256(fenceToken);
 const mongoConnectionFingerprint = "9".repeat(64);
+const migrationConnectionFingerprint = "0".repeat(64);
 const mongoTarget = buildMongoTargetIdentity({
   connectionFingerprint: mongoConnectionFingerprint,
   replicaSetName: "rs-fixture",
@@ -220,6 +225,7 @@ const controls = (overrides = {}) => ({
     backupSha256: "1".repeat(64),
     manifestSha256: "2".repeat(64),
     fullCollectionStateSha256: "3".repeat(64),
+    mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
     artifactPath: "/private/full-backup.ejson",
     manifestPath: "/private/full-backup.manifest.json",
     fenceTokenSha256,
@@ -235,7 +241,11 @@ const controls = (overrides = {}) => ({
     backupSha256: "1".repeat(64),
     manifestSha256: "2".repeat(64),
     receiptSha256: "4".repeat(64),
+    restoredArtifactSha256: "5".repeat(64),
+    restoredArtifactPath: "/private/full-backup.restored.ejson",
     fullCollectionStateSha256: "3".repeat(64),
+    mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
+    isolatedTargetIdentitySha256: "6".repeat(64),
     receiptPath: "/private/restore-rehearsal.json",
     isolatedTarget: true,
     restoredDocumentCount: 1,
@@ -255,6 +265,7 @@ const controls = (overrides = {}) => ({
   mongoTarget: {
     state: "PASS",
     connectionFingerprint: mongoConnectionFingerprint,
+    migrationConnectionFingerprint,
     targetIdentitySha256: mongoTarget.targetIdentitySha256,
     replicaSetName: mongoTarget.replicaSetName,
     topology: "REPLICA_SET",
@@ -299,6 +310,60 @@ test("migration executor decodes canonical EJSON ObjectId and rejects upsert or 
   oversized.eligibleCount = oversized.operations.length;
   oversized.scannedCount = oversized.operations.length;
   assert.throws(() => validateExecutableTenantMigrationPlan(oversized), /counts are invalid/);
+});
+
+test("Mongo write barrier proves application denial and migration-only bypass", async () => {
+  let state = { validator: {}, validationLevel: "strict", validationAction: "error" };
+  const session = () => ({
+    startTransaction() {},
+    async abortTransaction() {},
+    async endSession() {},
+  });
+  const migrationDb = {
+    async command(command) {
+      if (command.hello) return { setName: "rs-fixture" };
+      if (command.collMod === "lk_games") {
+        state = { validator: command.validator, validationLevel: command.validationLevel, validationAction: command.validationAction };
+        return { ok: 1 };
+      }
+      throw new Error("unexpected command");
+    },
+    listCollections: () => ({ toArray: async () => [{ name: "lk_games", options: state }] }),
+    collection: () => ({
+      findOne: async () => ({ _id: new ObjectId("111111111111111111111111") }),
+      updateOne: async () => ({ acknowledged: true, matchedCount: 1 }),
+    }),
+  };
+  const applicationDb = {
+    collection: () => ({
+      updateOne: async () => { const error = new Error("Document failed validation"); error.code = 121; throw error; },
+    }),
+  };
+  const migrationClient = {
+    db: (name) => (name === "admin" ? { command: async () => ({ setName: "rs-fixture" }) } : migrationDb),
+    startSession: session,
+  };
+  const applicationClient = {
+    db: (name) => (name === "admin" ? { command: async () => ({ setName: "rs-fixture" }) } : applicationDb),
+    startSession: session,
+  };
+  const receipt = await installMongoWriteBarrier({
+    migrationClient,
+    applicationClient,
+    applicationConnectionFingerprint: mongoConnectionFingerprint,
+    migrationConnectionFingerprint,
+    replicaSetName: "rs-fixture",
+    fenceTokenSha256,
+    cutoverPlanSha256: "6".repeat(64),
+    installedAt: nowIso,
+  });
+  assert.equal(receipt.applicationWriteProbeRejected, true);
+  assert.equal(receipt.migrationBypassProbeAborted, true);
+  await assertMongoWriteBarrier(migrationDb, receipt, {
+    fenceTokenSha256,
+    cutoverPlanSha256: "6".repeat(64),
+    mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
+  });
 });
 
 test("migration apply and restore require exact CAS readback and preserve the full BSON preimage", async () => {
@@ -419,9 +484,15 @@ test("cutover plan binds all source and candidate Mongo writers and keeps live a
     providerTenantBoundSha256: Buffer.from(canonicalJson({ kind: "viva-game-projection-provider-tenant-bound-query", exactPostimageCount: 1 })),
     workerModeSha256: Buffer.from(canonicalJson({ kind: "viva-game-projection-worker-mode-query", mode: "SHADOW", writeCount: 0 })),
   };
+  const fixtureBarrierBytes = Buffer.from(canonicalJson({ fixture: "barrier" }));
+  const fixtureExecutionBytes = Buffer.from(canonicalJson({ fixture: "execution" }));
+  const fixtureGuardianBytes = Buffer.from(canonicalJson({ fixture: "guardian" }));
   const postcheckEvidence = {
     applyReportBytesByPlan: { [planSha256]: fixtureApplyReport },
     queryEvidenceBytes: fixtureQueries,
+    mongoWriteBarrierReceiptBytes: fixtureBarrierBytes,
+    executionIndexBytes: fixtureExecutionBytes,
+    fenceGuardianReceiptBytes: fixtureGuardianBytes,
   };
   const postcheck = {
     formatVersion: 1,
@@ -441,6 +512,10 @@ test("cutover plan binds all source and candidate Mongo writers and keeps live a
     candidateFlowReadback: true,
     fenceTokenSha256,
     fenceReceiptSha256: "9".repeat(64),
+    mongoWriteBarrierReceiptSha256: cutoverSha256(fixtureBarrierBytes),
+    executionIndexSha256: cutoverSha256(fixtureExecutionBytes),
+    coordinatorAttemptId: "11111111-1111-4111-8111-111111111111",
+    fenceGuardianReceiptSha256: cutoverSha256(fixtureGuardianBytes),
     fenceExpiresAt: "2026-09-04T12:10:00.000Z",
     mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
     observedAt: nowIso,
@@ -458,7 +533,9 @@ test("cutover plan binds all source and candidate Mongo writers and keeps live a
     /does not authorize reopening ingress/,
   );
   assert.throws(
-    () => validateVivaGameProjectionCutoverPostcheck(postcheck, result, Date.parse(nowIso)),
+    () => validateVivaGameProjectionCutoverPostcheck(postcheck, result, Date.parse(nowIso), {
+      ...postcheckEvidence, applyReportBytesByPlan: {},
+    }),
     /lacks the exact apply-report artifact/,
   );
 });
@@ -597,15 +674,22 @@ test("cutover tools contain no remote-control or inline credential path", () => 
   const coordinatorSource = fs.readFileSync(path.join(root, "run_viva_game_projection_cutover_coordinator.mjs"), "utf8");
   const coordinatorShell = fs.readFileSync(path.join(root, "run_viva_game_projection_cutover.sh"), "utf8");
   const postcheckSource = fs.readFileSync(path.join(root, "prepare_viva_game_projection_cutover_postcheck.mjs"), "utf8");
+  const guardianSource = fs.readFileSync(path.join(root, "run_viva_game_projection_fence_guardian.mjs"), "utf8");
   assert.doesNotMatch(packetSource, /\bssh\b|\bscp\b|\bcurl\b|pm2\s+(?:restart|stop|start)/);
   assert.doesNotMatch(executorSource, /process\.env\.MONGO_URI|mongodb(?:\+srv)?:\/\//);
   assert.doesNotMatch(coordinatorSource, /\bssh\b|\bscp\b|\bcurl\b/);
   assert.match(executorSource, /APPLY_VIVA_GAME_PROJECTION_TENANT_MIGRATION_V1/);
   assert.match(executorSource, /RESTORE_VIVA_GAME_PROJECTION_TENANT_MIGRATION_V1/);
   assert.match(coordinatorShell, /exec 9>"\$\{lock_path\}"[\s\S]+flock -n 9[\s\S]+exec node/);
+  assert.match(coordinatorShell, /nohup node[\s\S]+run_viva_game_projection_fence_guardian\.mjs[\s\S]+9>&9/);
+  assert.match(guardianSource, /HOLDING_UNTIL_EXPLICIT_RELEASE/);
+  assert.match(guardianSource, /RELEASE_VIVA_GAME_PROJECTION_CUTOVER_FENCE_V1/);
+  assert.ok(coordinatorSource.indexOf("installMongoWriteBarrier") < coordinatorSource.indexOf("await runMigration"));
+  assert.ok(coordinatorSource.indexOf("hashLiveFullCollection") < coordinatorSource.indexOf("await runMigration"));
   assert.ok(coordinatorSource.indexOf("await runMigration") < coordinatorSource.indexOf("atomicWrite(liveFlowPath"));
   assert.ok(coordinatorSource.indexOf("atomicWrite(liveFlowPath") < coordinatorSource.indexOf("await prepareVivaGameProjectionCutoverPostcheck"));
   assert.match(postcheckSource, /countDocuments\(activeLegacyQuery\)/);
+  assert.match(postcheckSource, /assertExclusiveFenceLease[\s\S]+finalNowMs[\s\S]+assertMongoWriteBarrier/);
   assert.match(postcheckSource, /writeFileExclusiveAtomicDurable/);
 });
 
@@ -722,9 +806,16 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       allWritersUseCanonicalLock: true,
       unfencedWriterCount: 0,
       writerProcessCount: 1,
+      writerProcesses: [{ pid: 4242, commandSha256: "a".repeat(64), canonicalLockObserved: true }],
       observedAt: nowIso,
     }, null, 2)}\n`);
     write0600(externalWriterProofPath, externalWriterProofBytes);
+    const dynamicMongoTarget = buildMongoTargetIdentity({
+      connectionFingerprint: cutoverSha256("mongodb://127.0.0.1:27017"),
+      replicaSetName: "rs-fixture",
+      database: "games",
+      collection: "lk_games",
+    });
     const fullBackupArtifactPath = path.join(privateRoot, "full-backup.ejson");
     const backupDocument = legacyGame();
     const fullBackupBytes = Buffer.from(`${BSON.EJSON.stringify([backupDocument], null, 2, { relaxed: false })}\n`);
@@ -741,6 +832,7 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       artifactPath: fullBackupArtifactPath,
       backupSha256: fullBackupSha256,
       fullCollectionStateSha256,
+      mongoTargetIdentitySha256: dynamicMongoTarget.targetIdentitySha256,
       fenceTokenSha256,
       database: "games",
       collection: "lk_games",
@@ -751,12 +843,19 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
     write0600(backupManifestPath, backupManifestBytes);
     const backupManifestSha256 = cutoverSha256(backupManifestBytes);
     const restoreReceiptPath = path.join(privateRoot, "restore-rehearsal.json");
+    const restoredArtifactPath = path.join(privateRoot, "full-backup.restored.ejson");
+    write0600(restoredArtifactPath, fullBackupBytes);
+    const restoredArtifactSha256 = cutoverSha256(fullBackupBytes);
     const restoreReceiptBytes = Buffer.from(`${JSON.stringify({
       formatVersion: 1,
       kind: "viva-game-projection-full-backup-restore-rehearsal",
       backupSha256: fullBackupSha256,
       manifestSha256: backupManifestSha256,
       fullCollectionStateSha256,
+      mongoTargetIdentitySha256: dynamicMongoTarget.targetIdentitySha256,
+      isolatedTargetIdentitySha256: "6".repeat(64),
+      restoredArtifactPath,
+      restoredArtifactSha256,
       restoredDocumentCount: 1,
       isolatedTarget: true,
       postRestoreHashMatch: true,
@@ -774,23 +873,23 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
     dynamicControls.backup.artifactPath = fullBackupArtifactPath;
     dynamicControls.backup.backupSha256 = fullBackupSha256;
     dynamicControls.backup.fullCollectionStateSha256 = fullCollectionStateSha256;
+    dynamicControls.backup.mongoTargetIdentitySha256 = dynamicMongoTarget.targetIdentitySha256;
     dynamicControls.backup.manifestPath = backupManifestPath;
     dynamicControls.backup.manifestSha256 = backupManifestSha256;
     dynamicControls.restoreRehearsal.manifestSha256 = backupManifestSha256;
     dynamicControls.restoreRehearsal.backupSha256 = fullBackupSha256;
     dynamicControls.restoreRehearsal.fullCollectionStateSha256 = fullCollectionStateSha256;
+    dynamicControls.restoreRehearsal.mongoTargetIdentitySha256 = dynamicMongoTarget.targetIdentitySha256;
+    dynamicControls.restoreRehearsal.isolatedTargetIdentitySha256 = "6".repeat(64);
+    dynamicControls.restoreRehearsal.restoredArtifactPath = restoredArtifactPath;
+    dynamicControls.restoreRehearsal.restoredArtifactSha256 = restoredArtifactSha256;
     dynamicControls.restoreRehearsal.receiptPath = restoreReceiptPath;
     dynamicControls.restoreRehearsal.receiptSha256 = cutoverSha256(restoreReceiptBytes);
     dynamicControls.coverage.planSha256s = [migrationPlanSha256];
-    const dynamicMongoTarget = buildMongoTargetIdentity({
-      connectionFingerprint: cutoverSha256("mongodb://127.0.0.1:27017"),
-      replicaSetName: "rs-fixture",
-      database: "games",
-      collection: "lk_games",
-    });
     dynamicControls.mongoTarget = {
       ...dynamicControls.mongoTarget,
       connectionFingerprint: dynamicMongoTarget.connectionFingerprint,
+      migrationConnectionFingerprint,
       targetIdentitySha256: dynamicMongoTarget.targetIdentitySha256,
       replicaSetName: dynamicMongoTarget.replicaSetName,
     };
@@ -872,6 +971,29 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       expiresAt: "2026-09-04T12:10:00.000Z",
     }, null, 2)}\n`);
     write0600(fenceReceiptPath, fenceReceiptBytes);
+    const barrierReceiptPath = path.join(privateRoot, "mongo-write-barrier.json");
+    const barrierReceiptBytes = Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-mongo-write-barrier-receipt",
+      state: "HELD",
+      fixture: true,
+    }));
+    write0600(barrierReceiptPath, barrierReceiptBytes);
+    const executionIndexPath = path.join(privateRoot, "execution-index.json");
+    const executionIndexBytes = Buffer.from(canonicalJson({ formatVersion: 1, kind: "fixture-execution-index" }));
+    write0600(executionIndexPath, executionIndexBytes);
+    const guardianReceiptPath = path.join(privateRoot, "guardian-receipt.json");
+    const guardianReceiptBytes = Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-fence-guardian-receipt",
+      state: "HOLDING_UNTIL_EXPLICIT_RELEASE",
+      pid: 4242,
+      lockPath: "/run/lock/padlhub-viva-game-projection-cutover.lock",
+      fenceTokenSha256,
+      startedAt: nowIso,
+      automaticRelease: false,
+    }));
+    write0600(guardianReceiptPath, guardianReceiptBytes);
     const postcheckCollection = {
       findOne: (filter) => migratedCollection.findOne(filter),
       countDocuments: async (query) => (Object.hasOwn(query, "audit.events") ? 0 : 0),
@@ -887,11 +1009,20 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       runtimeFlow: path.join(outputDirectory, "candidate.flow.json"),
       fenceReceipt: fenceReceiptPath,
       expectedFenceReceiptSha256: cutoverSha256(fenceReceiptBytes),
+      mongoWriteBarrierReceipt: barrierReceiptPath,
+      expectedMongoWriteBarrierReceiptSha256: cutoverSha256(barrierReceiptBytes),
+      migrationConnectionFile: path.join(privateRoot, "unused-migration-connection.json"),
+      executionIndex: executionIndexPath,
+      expectedExecutionIndexSha256: cutoverSha256(executionIndexBytes),
+      coordinatorAttemptId: "11111111-1111-4111-8111-111111111111",
+      fenceGuardianReceiptSha256: cutoverSha256(guardianReceiptBytes),
+      fenceGuardianReceipt: guardianReceiptPath,
       outputDirectory: path.join(privateRoot, "postcheck"),
     }, {
       nowMs: Date.parse(nowIso),
       allowFixtureHostname: true,
       assertFenceLease: () => true,
+      assertMongoWriteBarrier: async () => true,
       assertNoConcurrentWrites: async () => true,
       readPm2: async () => [{
         name: "node-red",

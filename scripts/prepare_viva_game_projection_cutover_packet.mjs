@@ -146,6 +146,9 @@ function loadControlEvidence(controls) {
   const evidence = [];
   if (controls.writerFence?.state === "HELD") {
     const proof = readPrivateJson(controls.writerFence.externalWriterProofPath, "External writer proof", 16 * 1024 * 1024);
+    const proofObservedAt = Date.parse(proof.value?.observedAt);
+    const fenceObservedAt = Date.parse(controls.writerFence.observedAt);
+    const fenceExpiresAt = Date.parse(controls.writerFence.expiresAt);
     if (sha256(proof.bytes) !== controls.writerFence.externalWriterProofSha256
       || proof.value?.formatVersion !== 1
       || proof.value?.kind !== "viva-game-projection-external-writer-proof"
@@ -158,7 +161,12 @@ function loadControlEvidence(controls) {
       || proof.value?.unfencedWriterCount !== 0
       || !Number.isSafeInteger(proof.value?.writerProcessCount)
       || proof.value.writerProcessCount < 1
-      || !Number.isFinite(Date.parse(proof.value?.observedAt))) {
+      || !Array.isArray(proof.value?.writerProcesses)
+      || proof.value.writerProcesses.length !== proof.value.writerProcessCount
+      || proof.value.writerProcesses.some((item) => !Number.isSafeInteger(item?.pid) || item.pid < 1
+        || !HASH_RE.test(String(item?.commandSha256 || "")) || item?.canonicalLockObserved !== true)
+      || !Number.isFinite(proofObservedAt) || proofObservedAt < fenceObservedAt
+      || proofObservedAt >= fenceExpiresAt || Math.abs(proofObservedAt - fenceObservedAt) > 60_000) {
       fail("External writer proof does not bind every writer to the canonical fence");
     }
     evidence.push({ name: "external-writer-proof.json", bytes: proof.bytes });
@@ -187,6 +195,7 @@ function loadControlEvidence(controls) {
       || backup.value?.kind !== "viva-game-projection-full-lk-games-backup-manifest"
       || backup.value?.backupSha256 !== controls.backup.backupSha256
       || backup.value?.fullCollectionStateSha256 !== controls.backup.fullCollectionStateSha256
+      || backup.value?.mongoTargetIdentitySha256 !== controls.backup.mongoTargetIdentitySha256
       || backup.value?.artifactPath !== controls.backup.artifactPath
       || artifactSha256 !== controls.backup.backupSha256
       || fullCollectionStateSha256 !== controls.backup.fullCollectionStateSha256
@@ -204,12 +213,33 @@ function loadControlEvidence(controls) {
   }
   if (controls.restoreRehearsal?.state === "PASS") {
     const restore = readPrivateJson(controls.restoreRehearsal.receiptPath, "Restore rehearsal receipt", 16 * 1024 * 1024);
+    const restoredArtifact = readPrivateFile(
+      controls.restoreRehearsal.restoredArtifactPath, "Restore rehearsal artifact", 1024 * 1024 * 1024,
+    );
+    let restoredDocuments;
+    try { restoredDocuments = BSON.EJSON.parse(restoredArtifact.toString("utf8"), { relaxed: false }); } catch {
+      fail("Restore rehearsal artifact must be canonical EJSON");
+    }
+    if (!Array.isArray(restoredDocuments) || restoredDocuments.some((document) => !(document?._id instanceof ObjectId))) {
+      fail("Restore rehearsal artifact must contain BSON documents with ObjectId identity");
+    }
+    const restoredRows = restoredDocuments.map((document) => ({
+      mongoId: document._id.toHexString(), documentSha256: hashCanonicalEjson(document),
+    })).sort((left, right) => left.mongoId.localeCompare(right.mongoId));
+    const restoredStateSha256 = sha256(canonicalJson(restoredRows));
     if (sha256(restore.bytes) !== controls.restoreRehearsal.receiptSha256
       || restore.value?.formatVersion !== 1
       || restore.value?.kind !== "viva-game-projection-full-backup-restore-rehearsal"
       || restore.value?.backupSha256 !== controls.restoreRehearsal.backupSha256
       || restore.value?.manifestSha256 !== controls.restoreRehearsal.manifestSha256
       || restore.value?.fullCollectionStateSha256 !== controls.restoreRehearsal.fullCollectionStateSha256
+      || restore.value?.mongoTargetIdentitySha256 !== controls.restoreRehearsal.mongoTargetIdentitySha256
+      || restore.value?.isolatedTargetIdentitySha256 !== controls.restoreRehearsal.isolatedTargetIdentitySha256
+      || restore.value?.restoredArtifactSha256 !== controls.restoreRehearsal.restoredArtifactSha256
+      || restore.value?.restoredArtifactPath !== controls.restoreRehearsal.restoredArtifactPath
+      || sha256(restoredArtifact) !== controls.restoreRehearsal.restoredArtifactSha256
+      || restoredStateSha256 !== controls.restoreRehearsal.fullCollectionStateSha256
+      || restoredDocuments.length !== controls.restoreRehearsal.restoredDocumentCount
       || restore.value?.restoredDocumentCount !== controls.restoreRehearsal.restoredDocumentCount
       || restore.value?.isolatedTarget !== true
       || restore.value?.postRestoreHashMatch !== true
@@ -217,6 +247,7 @@ function loadControlEvidence(controls) {
       fail("Restore rehearsal receipt does not bind the declared restore control");
     }
     evidence.push({ name: "full-backup.restore-rehearsal.json", bytes: restore.bytes });
+    evidence.push({ name: "full-backup.restored.ejson", bytes: restoredArtifact });
   }
   return evidence;
 }

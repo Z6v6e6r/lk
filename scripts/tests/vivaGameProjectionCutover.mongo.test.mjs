@@ -7,8 +7,11 @@ import test from "node:test";
 import { BSON, MongoClient, ObjectId } from "mongodb";
 
 import { buildMongoTargetIdentity, canonicalJson } from "../lib/vivaGameProjectionCutoverContract.mjs";
+import { buildMongoWriteBarrierValidator } from "../lib/vivaGameProjectionMongoWriteBarrier.mjs";
 import { buildLegacyTenantMigrationPlan } from "../lib/vivaGameProjectionTenantMigration.mjs";
+import { hashCanonicalEjson } from "../lib/vivaGameProjectionTenantMigrationExecution.mjs";
 import { main as runMigration } from "../run_viva_game_projection_tenant_migration.mjs";
+import { prepareVivaGameProjectionRestoreRehearsal } from "../prepare_viva_game_projection_restore_rehearsal.mjs";
 
 const mongoUri = String(process.env.VIVA_GAME_PROJECTION_TEST_MONGO_URI || "").trim();
 const maybeTest = mongoUri ? test : test.skip;
@@ -27,6 +30,7 @@ maybeTest("real replica set applies and restores an exact tenant migration under
   const client = new MongoClient(mongoUri);
   const originalApply = process.env.VIVA_GAME_PROJECTION_MIGRATION_APPLY;
   const originalRestore = process.env.VIVA_GAME_PROJECTION_MIGRATION_RESTORE;
+  const originalRehearsal = process.env.VIVA_GAME_PROJECTION_RESTORE_REHEARSAL;
   try {
     await client.connect();
     const db = client.db("games");
@@ -128,6 +132,42 @@ maybeTest("real replica set applies and restores an exact tenant migration under
       database: "games",
       collection: "lk_games",
     });
+    mongoTarget.migrationConnectionFingerprint = sha256(mongoUri);
+    const rehearsalBackupPath = path.join(root, "rehearsal-full-backup.ejson");
+    const rehearsalBackupBytes = Buffer.from(`${BSON.EJSON.stringify([preimage], null, 2, { relaxed: false })}\n`);
+    write0600(rehearsalBackupPath, rehearsalBackupBytes);
+    const rehearsalStateSha256 = sha256(canonicalJson([{
+      mongoId: preimage._id.toHexString(),
+      documentSha256: hashCanonicalEjson(preimage),
+    }]));
+    const rehearsalManifestPath = path.join(root, "rehearsal-full-backup.manifest.json");
+    const rehearsalManifestBytes = Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-full-lk-games-backup-manifest",
+      backupSha256: sha256(rehearsalBackupBytes),
+      fullCollectionStateSha256: rehearsalStateSha256,
+      mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
+      database: "games",
+      collection: "lk_games",
+      documentCount: 1,
+    }));
+    write0600(rehearsalManifestPath, rehearsalManifestBytes);
+    const rehearsalConnectionPath = path.join(root, "rehearsal-mongo.json");
+    write0600(rehearsalConnectionPath, canonicalJson({
+      formatVersion: 1, kind: "viva-game-projection-restore-rehearsal-mongo-connection", uri: mongoUri,
+    }));
+    process.env.VIVA_GAME_PROJECTION_RESTORE_REHEARSAL = "REHEARSE_VIVA_GAME_PROJECTION_FULL_RESTORE_V1";
+    const rehearsal = await prepareVivaGameProjectionRestoreRehearsal({
+      backup: rehearsalBackupPath,
+      backupManifest: rehearsalManifestPath,
+      expectedBackupSha256: sha256(rehearsalBackupBytes),
+      expectedManifestSha256: sha256(rehearsalManifestBytes),
+      mongoConnectionFile: rehearsalConnectionPath,
+      isolatedDatabase: "viva_projection_restore_rehearsal_fixture01",
+      outputDirectory: path.join(root, "restore-rehearsal-output"),
+    });
+    assert.equal(rehearsal.receipt.postRestoreHashMatch, true);
+    assert.equal(rehearsal.receipt.restoredDocumentCount, 1);
     const fixtureWriters = [{ nodeId: "writer-fixture", name: "", operation: "updateOne", clientNode: "4e820638cc39c730" }];
     const writerInventorySha256 = sha256(canonicalJson({ sourceWriters: fixtureWriters, candidateWriters: fixtureWriters }));
     const fenceToken = "fixture-fence-token-with-sufficient-entropy";
@@ -208,6 +248,36 @@ maybeTest("real replica set applies and restores an exact tenant migration under
       observedAt: nowIso,
       expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
     }, null, 2)}\n`);
+    const migrationConnectionPath = path.join(root, "migration-mongo.json");
+    write0600(migrationConnectionPath, `${JSON.stringify({
+      formatVersion: 1,
+      kind: "viva-game-projection-migration-mongo-connection",
+      uri: mongoUri,
+    }, null, 2)}\n`);
+    const barrierValidator = buildMongoWriteBarrierValidator(sha256(fenceToken));
+    await db.command({ collMod: "lk_games", validator: barrierValidator, validationLevel: "strict", validationAction: "error" });
+    const barrierPath = path.join(root, "mongo-write-barrier.json");
+    write0600(barrierPath, canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-mongo-write-barrier-receipt",
+      state: "HELD",
+      database: "games",
+      collection: "lk_games",
+      fenceTokenSha256: sha256(fenceToken),
+      cutoverPlanSha256: cutoverSha256,
+      mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
+      applicationConnectionFingerprint: sha256(mongoUri),
+      migrationConnectionFingerprint: sha256(mongoUri),
+      replicaSetName: hello.setName,
+      barrierValidatorSha256: sha256(BSON.EJSON.stringify(barrierValidator, null, 0, { relaxed: false })),
+      previousValidationOptionsEjson: BSON.EJSON.stringify({}, null, 0, { relaxed: false }),
+      previousValidationOptionsSha256: sha256(BSON.EJSON.stringify({}, null, 0, { relaxed: false })),
+      applicationWriteProbeRejected: true,
+      migrationBypassProbeAborted: true,
+      installedAt: nowIso,
+      releaseAuthorized: false,
+      releasedAt: null,
+    }));
     const common = [
       "--plan", planPath,
       "--cutover-plan", cutoverPath,
@@ -219,6 +289,8 @@ maybeTest("real replica set applies and restores an exact tenant migration under
       "--expected-runtime-flow-sha256", sourceFlowSha256,
       "--flow-path", flowPath,
       "--fence-receipt", fencePath,
+      "--mongo-write-barrier-receipt", barrierPath,
+      "--migration-connection-file", migrationConnectionPath,
     ];
 
     const verifyReport = path.join(root, "verify-report.json");
@@ -287,6 +359,8 @@ maybeTest("real replica set applies and restores an exact tenant migration under
     else process.env.VIVA_GAME_PROJECTION_MIGRATION_APPLY = originalApply;
     if (originalRestore === undefined) delete process.env.VIVA_GAME_PROJECTION_MIGRATION_RESTORE;
     else process.env.VIVA_GAME_PROJECTION_MIGRATION_RESTORE = originalRestore;
+    if (originalRehearsal === undefined) delete process.env.VIVA_GAME_PROJECTION_RESTORE_REHEARSAL;
+    else process.env.VIVA_GAME_PROJECTION_RESTORE_REHEARSAL = originalRehearsal;
     await client.db("games").dropDatabase().catch(() => {});
     await client.close().catch(() => {});
     fs.rmSync(root, { recursive: true, force: true });
