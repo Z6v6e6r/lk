@@ -157,6 +157,8 @@
     "test:lk1-subscription-dev-uat": "node --test scripts/dev-uat/subscriptions-sale-period/test.mjs",
     "test:lk1-subscription-dev-release-receipt": "node --test scripts/tests/lk1SubscriptionDevReleaseReceipt.test.mjs",
     "test:lk1-subscription-dev-runtime-install-candidate": "node --test scripts/tests/lk1SubscriptionDevRuntimeInstallCandidate.test.mjs",
+    "test:lk1-subscription-quote-only-candidate": "node --test scripts/tests/lk1SubscriptionQuoteOnlyCandidate.test.mjs",
+    "lk1-subscription:quote-only:candidate": "node scripts/build_lk1_subscription_quote_only_candidate.mjs",
     "test:lk1-subscription-dev-deploy-postcheck-gate": "node --test scripts/tests/lk1SubscriptionDevDeployPostcheckGate.test.mjs",
     "test:lk1-subscription-dev-host-preflight": "node --test scripts/tests/lk1SubscriptionDevHostPreflight.test.mjs",
     "test:managed-subscription-dev-runtime": "node --experimental-strip-types --test scripts/tests/managedSubscriptionDevRuntime.test.ts scripts/tests/subscriptionUsageTestRoute.test.ts scripts/tests/subscriptionUsageTestBooking.test.ts scripts/tests/subscriptionUsageShadow.test.ts scripts/tests/subscriptionUsageShadowIntegration.test.ts",

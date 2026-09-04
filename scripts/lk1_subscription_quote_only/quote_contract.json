@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "environment": "DEV",
+  "purpose": "PROVIDER_INDEPENDENT_QUOTE_ONLY",
+  "listen": { "host": "127.0.0.1", "port": 3040 },
+  "route": {
+    "method": "GET",
+    "path": "/api/internal/subscriptions/dev-uat/quote-comparison",
+    "queryAllowed": false,
+    "bodyAllowed": false,
+    "browserAcceptedFields": []
+  },
+  "capabilities": {
+    "outboundHttp": 0,
+    "mongoOperations": [],
+    "provider": "NOT_INCLUDED",
+    "create": "NOT_INCLUDED",
+    "join": "NOT_INCLUDED",
+    "reserve": "NOT_INCLUDED",
+    "release": "NOT_INCLUDED",
+    "payment": "NOT_INCLUDED",
+    "entitlementMutation": "NOT_INCLUDED",
+    "standardManualUat": "BLOCKED"
+  },
+  "startAuthorization": {
+    "transport": "SYSTEMD_STANDARD_INPUT_FILE",
+    "systemdMinimumVersion": 245,
+    "hostSupportVerified": false,
+    "markerPath": "/srv/lk1-subscription-dev/authorization/quote-start.approved",
+    "markerDirectoryOwner": "root:root",
+    "markerDirectoryMode": "0700",
+    "markerOwner": "root:root",
+    "markerMode": "0600",
+    "fd": 0,
+    "fdPath": "/proc/self/fd/0",
+    "maximumBytes": 16384,
+    "maximumLifetimeSeconds": 3600,
+    "role": "quote",
+    "identityFields": [
+      "lkSourceCommit",
+      "phAdminSourceCommit",
+      "toolingCommit",
+      "candidateManifestSha256",
+      "unitSha256",
+      "runtimeSha256",
+      "fixtureSha256",
+      "evaluatorSha256",
+      "resolverSha256",
+      "resolverRuntimeSha256",
+      "nodeBinarySha256",
+      "nodeVersion"
+    ]
+  },
+  "authority": {
+    "hostInstall": false,
+    "daemonReload": false,
+    "serviceStart": false,
+    "enableUnit": false,
+    "ingress": false,
+    "activation": false,
+    "canaryIds": false,
+    "secrets": false,
+    "providerWrites": false,
+    "bookingWrites": false,
+    "paymentWrites": false,
+    "entitlementMutations": false,
+    "externalWrites": false
+  }
+}

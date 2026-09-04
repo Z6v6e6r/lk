@@ -1,0 +1,25 @@
+[Unit]
+Description=LK1 provider-independent DEV quote comparison (source candidate locked)
+ConditionPathExists=/srv/lk1-subscription-dev/authorization/quote-start.approved
+ConditionPathExists=/srv/lk1-subscription-dev/quote/quote_fixture.json
+RefuseManualStart=yes
+
+[Service]
+Type=simple
+User=lk1-subscription-dev
+Group=lk1-subscription-dev
+WorkingDirectory=/srv/lk1-subscription-dev/quote
+StandardInput=file:/srv/lk1-subscription-dev/authorization/quote-start.approved
+EnvironmentFile=/srv/lk1-subscription-dev/runtime/quote-install-identity.env
+ExecStart=/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/quote/quote_runtime.mjs --serve
+Restart=no
+RuntimeMaxSec=3600
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/srv/lk1-subscription-dev/quote
+RestrictAddressFamilies=AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost

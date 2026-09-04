@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "environment": "DEV",
+  "purpose": "PROVIDER_INDEPENDENT_QUOTE_ONLY",
+  "evaluatedAt": "2026-09-10T10:00:00.000Z",
+  "subscriptionTypeId": "fixture-type-sale-period",
+  "publicationHistory": [
+    {
+      "publicationId": "fixture-publication-v1",
+      "subscriptionTypeId": "fixture-type-sale-period",
+      "policyVersion": 1,
+      "effectiveAt": "2026-09-01T00:00:00.000Z",
+      "publishedAt": "2026-09-01T00:00:00.000Z",
+      "state": "SUPERSEDED",
+      "supersededAt": "2026-09-10T00:00:00.000Z",
+      "supersededBy": "fixture-publication-v2",
+      "policyDigest": "f92a043abe68645085bc0b698ff8d541fce4711c815b7d153914c115711c07a3"
+    },
+    {
+      "publicationId": "fixture-publication-v2",
+      "subscriptionTypeId": "fixture-type-sale-period",
+      "policyVersion": 2,
+      "effectiveAt": "2026-09-10T00:00:00.000Z",
+      "publishedAt": "2026-09-10T00:00:00.000Z",
+      "state": "PUBLISHED",
+      "supersededAt": null,
+      "supersededBy": null,
+      "policyDigest": "fb40c2d8cd77b434557074e227b32b8e9003f143f4032e80554a57899d618776"
+    }
+  ],
+  "subjects": {
+    "A": {
+      "authoritativePurchasedAt": "2026-09-09T23:59:59.999Z",
+      "expectedPolicyVersion": 1,
+      "instanceState": "ACTIVE"
+    },
+    "B": {
+      "authoritativePurchasedAt": "2026-09-10T00:00:00.000Z",
+      "expectedPolicyVersion": 2,
+      "instanceState": "ACTIVE"
+    }
+  },
+  "target": {
+    "resolutionSource": "SERVER",
+    "stationId": "fixture-station-quote",
+    "category": "GAME",
+    "externalEventTypeId": "fixture-open-game",
+    "productTypeId": null,
+    "eventId": "fixture-event-quote",
+    "durationMinutes": 60,
+    "startsAt": "2026-09-10T12:00:00.000Z",
+    "basePriceMinor": 10000,
+    "currency": "RUB"
+  },
+  "usage": {
+    "activeServiceScope": "SUBSCRIPTION_BENEFIT_ONLY",
+    "dailyBucketLocalDate": "2026-09-10",
+    "activeServices": 0,
+    "dailyUsed": 0,
+    "weeklyUsed": 0,
+    "monthlyUsed": 0,
+    "futureBookings": 0,
+    "activeServiceStartsAt": []
+  },
+  "policies": {
+    "V1": {
+      "runtimeSchemaVersion": 1,
+      "subscriptionTypeId": "fixture-type-sale-period",
+      "policyVersion": 1,
+      "status": "PUBLISHED",
+      "effectiveAt": "2026-09-01T00:00:00.000Z",
+      "timeZone": "Europe/Moscow",
+      "createGame": { "enabled": true, "durationsMinutes": [60] },
+      "joinGame": { "enabled": true, "minDurationMinutes": 60, "maxDurationMinutes": 60 },
+      "activeServicesLimit": { "enabled": false, "max": null, "scope": "SUBSCRIPTION_BENEFIT_ONLY" },
+      "bookingWindow": { "enabled": false, "days": null },
+      "dailyUsageLimit": 1,
+      "dailyUsagePolicy": {
+        "actions": ["CREATE_GAME", "JOIN_GAME"],
+        "limitExceeded": "BLOCK",
+        "percentage": null,
+        "usageDurationsMinutes": [60]
+      },
+      "usageUnitsByDuration": { "60": 1, "90": 1, "120": 1 },
+      "stationAccessRules": [{
+        "ruleId": "fixture-v1-station",
+        "enabled": true,
+        "priority": 100,
+        "selector": { "kind": "STATION_LIST", "stationIds": ["fixture-station-quote"] },
+        "surcharge": { "kind": "NONE", "amountMinor": 0 }
+      }],
+      "benefitRules": [{
+        "ruleId": "fixture-v1-free-60",
+        "enabled": true,
+        "category": "GAME",
+        "actions": ["CREATE_GAME"],
+        "externalEventTypeIds": ["fixture-open-game"],
+        "productTypeIds": [],
+        "durationMinutes": [60],
+        "stationIds": ["fixture-station-quote"],
+        "kind": "FREE_ENTITLEMENT",
+        "valueMinor": null,
+        "percentage": null,
+        "partialPrice": null,
+        "priority": 100
+      }],
+      "lifecycle": { "allowBookingsAfterExpiry": false },
+      "usage": {
+        "weeklyUsageLimit": null,
+        "monthlyUsageLimit": null,
+        "maxFutureBookings": null,
+        "minHoursBetweenUses": 0,
+        "blackoutDates": []
+      }
+    },
+    "V2": {
+      "runtimeSchemaVersion": 1,
+      "subscriptionTypeId": "fixture-type-sale-period",
+      "policyVersion": 2,
+      "status": "PUBLISHED",
+      "effectiveAt": "2026-09-10T00:00:00.000Z",
+      "timeZone": "Europe/Moscow",
+      "createGame": { "enabled": true, "durationsMinutes": [60] },
+      "joinGame": { "enabled": true, "minDurationMinutes": 60, "maxDurationMinutes": 60 },
+      "activeServicesLimit": { "enabled": false, "max": null, "scope": "SUBSCRIPTION_BENEFIT_ONLY" },
+      "bookingWindow": { "enabled": false, "days": null },
+      "dailyUsageLimit": 1,
+      "dailyUsagePolicy": {
+        "actions": ["CREATE_GAME", "JOIN_GAME"],
+        "limitExceeded": "BLOCK",
+        "percentage": null,
+        "usageDurationsMinutes": [60]
+      },
+      "usageUnitsByDuration": { "60": 1, "90": 1, "120": 1 },
+      "stationAccessRules": [{
+        "ruleId": "fixture-v2-station",
+        "enabled": true,
+        "priority": 100,
+        "selector": { "kind": "STATION_LIST", "stationIds": ["fixture-station-quote"] },
+        "surcharge": { "kind": "NONE", "amountMinor": 0 }
+      }],
+      "benefitRules": [{
+        "ruleId": "fixture-v2-half-price-60",
+        "enabled": true,
+        "category": "GAME",
+        "actions": ["CREATE_GAME"],
+        "externalEventTypeIds": ["fixture-open-game"],
+        "productTypeIds": [],
+        "durationMinutes": [60],
+        "stationIds": ["fixture-station-quote"],
+        "kind": "PERCENT_DISCOUNT",
+        "valueMinor": null,
+        "percentage": 50,
+        "partialPrice": null,
+        "priority": 100
+      }],
+      "lifecycle": { "allowBookingsAfterExpiry": false },
+      "usage": {
+        "weeklyUsageLimit": null,
+        "monthlyUsageLimit": null,
+        "maxFutureBookings": null,
+        "minHoursBetweenUses": 0,
+        "blackoutDates": []
+      }
+    }
+  }
+}
