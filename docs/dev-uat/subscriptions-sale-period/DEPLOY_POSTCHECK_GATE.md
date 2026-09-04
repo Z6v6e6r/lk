@@ -68,22 +68,28 @@ npm run test:lk1-subscription-dev-deploy-postcheck-gate
 npm run test:lk1-subscription-dev-host-preflight
 ```
 
-Эти source-команды читают tracked JSON/JS файлы и валидируют их между собой.
+Первые две source-команды читают tracked JSON/JS файлы и валидируют их между собой.
 Исторический host snapshot проверяется на согласованность в момент capture, но
-команда явно выводит `HOST_PREFLIGHT_CURRENT=NOT_CLAIMED`. Она не содержит SSH,
-network, installer или service-control операций. Успешная локальная валидация
+deploy/post-check gate явно выводит `HOST_PREFLIGHT_CURRENT=NOT_CLAIMED`. Успешная локальная валидация
 означает, что блокеры и будущие проверки сформулированы согласованно; она не
 означает готовность к deploy.
 
 Непосредственно перед отдельно авторизованной stopped-install операцией fresh
-read-only evidence сохраняется вне Git в новый regular non-symlink файл под
-`/private/tmp` и проверяется отдельной командой:
+read-only evidence должен быть получен отдельной командой. Она сама выполняет
+`BatchMode` SSH только к закреплённому alias `lk-reserve-89`, не принимает
+caller-authored JSON, проверяет clean repository HEAD/tree, frozen release tuple,
+hash текущего validator и remote read-only script, а observed shared-flow hash
+сравнивает с trusted baseline provisioning contract. Host-команды только читают
+identity, unit/listener/input state и hashes; install, `daemon-reload`, start,
+ingress, activation и любые host writes отсутствуют. Команда требует отдельной
+авторизации host-read, сохраняет результат в созданный ею private `0700`
+temporary directory и файл `0600` с одним hardlink:
 
 ```bash
 npm run nodered:lk1-subscription-dev:host-preflight -- \
-  --evidence /private/tmp/lk1-subscription-dev-host-preflight.<capture>.json
+  --capture-via-ssh
 ```
 
 Команда требует текущий snapshot не старше одного часа и выводит
-`LK1_DEV_HOST_PREFLIGHT=PASS_CURRENT`. Checked-in snapshot не является текущей
+`LK1_DEV_HOST_PREFLIGHT=PASS_CURRENT` и точный `EVIDENCE_PATH`. Checked-in snapshot не является текущей
 авторизацией и не должен обновляться только ради evergreen source CI.

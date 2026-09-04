@@ -266,9 +266,10 @@ future gates with fresh readback and independent review.
 ### Integration validation limitations
 
 Local runner, bootstrap, provisioning, DEV candidate, critical matrix and DEV
-runtime suites pass after the parent merge. The exact-head CI workflow does not
-invoke the runner or DEV candidate/provisioning/bootstrap suites, so those remain
-local evidence rather than CI evidence.
+runtime suites pass after the parent merge. Exact-head CI now invokes the tracked
+DEV candidate, provisioning/bootstrap, deploy-gate and host-preflight source
+contract suites; it still does not perform SSH, install, service control, ingress,
+activation or any other live runtime operation.
 
 The v2 receipt contract separates the exact 40-hex Git `sourceCommit` from 64-hex
 source/candidate/manifest/readback/served SHA-256 fields. Source-only receipts keep

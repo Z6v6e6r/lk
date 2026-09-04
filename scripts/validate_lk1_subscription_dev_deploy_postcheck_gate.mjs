@@ -120,8 +120,8 @@ export function validateDeployPostcheckGate(gate, {
   runtimeEnvironmentBindings = LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS,
   candidateBinding = CHECKED_DEV_CANDIDATE_BINDING,
   sourceAuthorization = CHECKED_DEV_SOURCE_AUTHORIZATION,
-  hostPreflightEvidence = checkedHostPreflightEvidence,
-  requireFreshHostEvidence = false,
+  archivedHostPreflightEvidence = checkedHostPreflightEvidence,
+  freshHostPreflightEvidence,
   now,
 } = {}) {
   validateDevProvisioningContract(provisioningContract);
@@ -132,16 +132,14 @@ export function validateDeployPostcheckGate(gate, {
     candidateSha256: releaseReceipt.candidateSha256,
     manifestSha256: releaseReceipt.manifestSha256,
   });
-  // The checked-in evidence is an immutable historical capture, not a live
-  // installation authorization. Fresh pre-install callers must opt in with a
-  // newly captured evidence object and an explicit clock.
-  if (requireFreshHostEvidence === true) {
-    validateFreshHostPreflightEvidence(hostPreflightEvidence, now);
+  validateHostPreflightEvidence(archivedHostPreflightEvidence);
+  // The immutable archive documents the source-only gate. A separately
+  // captured v2 object is mandatory for a current installation authorization;
+  // its timestamp must never be compared to the archive timestamp.
+  if (freshHostPreflightEvidence !== undefined) {
+    validateFreshHostPreflightEvidence(freshHostPreflightEvidence, now);
   } else {
-    if (requireFreshHostEvidence !== false || now !== undefined) {
-      fail("fresh host evidence validation requires an explicit mode and clock");
-    }
-    validateHostPreflightEvidence(hostPreflightEvidence);
+    if (now !== undefined) fail("fresh host evidence object is required with an explicit clock");
   }
 
   exactKeys(gate, [
@@ -268,8 +266,8 @@ export function validateDeployPostcheckGate(gate, {
   ], "DEV predeploy gate");
   if (gate.predeploy.state !== "HISTORICAL_PASS_REQUIRES_REFRESH"
     || gate.predeploy.freshEvidenceRequired !== true
-    || gate.predeploy.capturedAt !== hostPreflightEvidence.capturedAt
-    || gate.predeploy.maximumAgeSeconds !== hostPreflightEvidence.maximumAgeSeconds
+    || gate.predeploy.capturedAt !== archivedHostPreflightEvidence.capturedAt
+    || gate.predeploy.maximumAgeSeconds !== archivedHostPreflightEvidence.maximumAgeSeconds
     || gate.predeploy.mustRefreshImmediatelyBeforeInstall !== true) {
     fail("DEV predeploy archive is absent or not marked for execution-time refresh");
   }

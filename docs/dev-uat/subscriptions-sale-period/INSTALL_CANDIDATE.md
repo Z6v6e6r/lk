@@ -30,8 +30,9 @@ Runtime принимает credential только при одновременн
 
 Historical read-only preflight подтвердил systemd 245 и совместимость этого
 file-custody transport на момент capture. Checked-in snapshot не является
-текущим gate и не заменяет новый внешний evidence-файл с повторным preflight
-непосредственно перед будущей установкой.
+текущим gate и не заменяет новый direct-SSH snapshot, который pinned validator
+сам получает и сохраняет в private temporary artifact непосредственно перед
+будущей установкой после отдельной host-read авторизации.
 
 ## Почему candidate нельзя запустить
 

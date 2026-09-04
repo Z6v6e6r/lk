@@ -7,6 +7,10 @@ import {
   checkedDeployPostcheckGate,
   validateDeployPostcheckGate,
 } from "../validate_lk1_subscription_dev_deploy_postcheck_gate.mjs";
+import {
+  captureCurrentHostPreflightEvidence,
+  checkedHostPreflightEvidence,
+} from "../validate_lk1_subscription_dev_host_preflight.mjs";
 
 const clone = (value) => structuredClone(value);
 const NOW = new Date("2026-09-04T09:40:00Z");
@@ -14,6 +18,27 @@ const readJson = (relativePath) => JSON.parse(fs.readFileSync(
   new URL(relativePath, import.meta.url),
   "utf8",
 ));
+const currentRepositoryIdentity = () => ({
+  headSha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+  treeSha: execFileSync("git", ["rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim(),
+  clean: true,
+});
+const hostTranscript = [
+  `HOSTNAME\t${checkedHostPreflightEvidence.target.hostname}`,
+  `MACHINE_ID_SHA256\t${checkedHostPreflightEvidence.target.machineIdSha256}`,
+  `SYSTEMD_VERSION\t${checkedHostPreflightEvidence.hostCapabilities.systemdVersion}`,
+  ...Object.entries(checkedHostPreflightEvidence.dedicatedUnits).map(([unit, state]) => (
+    `UNIT\t${unit}\t${state.loadState}\t${state.activeState}\t${state.unitFileState}`
+  )),
+  "LISTENER\t1880\tPRESENT", "LISTENER\t3036\tPRESENT", "LISTENER\t1882\tABSENT",
+  "LISTENER\t27030\tABSENT", "LISTENER\t3037\tABSENT", "LISTENER\t3038\tABSENT",
+  "LISTENER\t3039\tABSENT", "INPUT\ttargetFlowAbsent\ttrue",
+  "INPUT\tfixtureConfigAbsent\ttrue", "INPUT\treleaseReceiptAbsent\ttrue",
+  "INPUT\tserviceStartAuthorizationAbsent\ttrue", "INPUT\tinstallIdentityEnvironmentAbsent\ttrue",
+  "PRODUCTION_MARKERS_ABSENT\ttrue",
+  `SHARED_FLOW_SHA256\t${checkedHostPreflightEvidence.sharedResources.flowSha256}`,
+  "END",
+].join("\n");
 
 test("source-only deploy/post-check gate binds the isolated DEV target without live claims", () => {
   assert.equal(validateDeployPostcheckGate(checkedDeployPostcheckGate), true);
@@ -30,19 +55,31 @@ test("source-only deploy/post-check gate binds the isolated DEV target without l
   assert.equal(Object.values(checkedDeployPostcheckGate.claims).every((value) => value === false), true);
 });
 
-test("source-only gate archive is deterministic while fresh validation is explicit and bounded", () => {
+test("source-only gate archive is deterministic and cannot claim current evidence", () => {
   assert.equal(validateDeployPostcheckGate(checkedDeployPostcheckGate), true);
   assert.throws(() => validateDeployPostcheckGate(checkedDeployPostcheckGate, {
     now: NOW,
-  }), /explicit mode and clock/);
+  }), /fresh host evidence object is required/);
+});
+
+test("fresh preflight has a new timestamp while immutable archive metadata stays bound", () => {
+  const repositoryIdentity = currentRepositoryIdentity();
+  const freshHostPreflightEvidence = captureCurrentHostPreflightEvidence({
+    runSsh: () => hostTranscript,
+    now: NOW,
+    readRepositoryIdentity: () => repositoryIdentity,
+  });
+  assert.notEqual(freshHostPreflightEvidence.capturedAt, checkedDeployPostcheckGate.predeploy.capturedAt);
   assert.equal(validateDeployPostcheckGate(checkedDeployPostcheckGate, {
-    requireFreshHostEvidence: true,
-    now: new Date("2026-09-04T10:35:19Z"),
+    freshHostPreflightEvidence,
+    now: NOW,
   }), true);
+  const changed = clone(freshHostPreflightEvidence);
+  changed.releaseBinding.manifestSha256 = "a".repeat(64);
   assert.throws(() => validateDeployPostcheckGate(checkedDeployPostcheckGate, {
-    requireFreshHostEvidence: true,
-    now: new Date("2026-09-04T10:35:19.001Z"),
-  }), /stale/);
+    freshHostPreflightEvidence: changed,
+    now: NOW,
+  }), /release binding/);
 });
 
 test("gate rejects release, target, production-isolation, evidence, canary, and authority drift", () => {
