@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 const SHA256 = /^[a-f0-9]{64}$/;
 const GIT_SHA = /^[a-f0-9]{40}$/;
 const RFC3339_SECONDS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
+const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const EXPECTED_MACHINE_ID_SHA256 = "9f29889b29a55b2c7e1eeb65616d2049b16972589de1bc623a61d38d92dd7ad8";
 const EXPECTED_UNITS = Object.freeze([
   "lk1-subscription-dev-mongo.service",
@@ -30,6 +31,32 @@ const CHECKED_RELEASE_RECEIPT = Object.freeze(readJson(
   "./lk1_subscription_dev_release_receipt_v2_contract.json",
 ));
 const TRUSTED_SHARED_FLOW_SHA256 = CHECKED_PROVISIONING_CONTRACT.evidence.sharedFlowSha256;
+const UNIT_SOURCE_PATHS = Object.freeze({
+  "lk1-subscription-dev-mongo.service": [
+    "./lk1_subscription_dev_bootstrap/units/lk1-subscription-dev-mongo.service",
+  ],
+  "lk1-subscription-dev-cup.service": [
+    "./lk1_subscription_dev_bootstrap/units/lk1-subscription-dev-cup.service",
+    "./lk1_subscription_dev_runtime_install/units/lk1-subscription-dev-cup.service",
+  ],
+  "lk1-subscription-dev-provider-fixture.service": [
+    "./lk1_subscription_dev_bootstrap/units/lk1-subscription-dev-provider-fixture.service",
+    "./lk1_subscription_dev_runtime_install/units/lk1-subscription-dev-provider-fixture.service",
+  ],
+  "lk1-subscription-dev-identity-fixture.service": [
+    "./lk1_subscription_dev_bootstrap/units/lk1-subscription-dev-identity-fixture.service",
+    "./lk1_subscription_dev_runtime_install/units/lk1-subscription-dev-identity-fixture.service",
+  ],
+  "lk1-subscription-dev-nodered.service": [
+    "./lk1_subscription_dev_bootstrap/units/lk1-subscription-dev-nodered.service",
+    "./lk1_subscription_dev_runtime_install/units/lk1-subscription-dev-nodered.service",
+  ],
+});
+const TRUSTED_UNIT_FRAGMENT_SHA256 = Object.freeze(Object.fromEntries(
+  Object.entries(UNIT_SOURCE_PATHS).map(([unit, sources]) => [unit, Object.freeze(
+    [...new Set(sources.map((source) => sha256(fs.readFileSync(new URL(source, import.meta.url)))))],
+  )]),
+));
 const exactKeys = (value, expected, label) => {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify([...expected].sort())) {
@@ -126,13 +153,35 @@ export function validateFreshHostPreflightEvidence(evidence, now, {
   delete archiveShape.repositoryIdentity;
   delete archiveShape.releaseBinding;
   delete archiveShape.capture;
+  delete archiveShape.runtimeIsolation;
   validateHostPreflightEvidence(archiveShape);
   if (evidence.schemaVersion !== 2) fail("fresh host preflight evidence schema mismatch");
   exactKeys(evidence, [
     "schemaVersion", "environment", "state", "capturedAt", "maximumAgeSeconds", "target",
     "hostCapabilities", "dedicatedUnits", "listeners", "inputs", "sharedResources", "authority",
-    "repositoryIdentity", "releaseBinding", "capture",
+    "repositoryIdentity", "releaseBinding", "capture", "runtimeIsolation",
   ], "fresh host preflight evidence");
+  exactKeys(evidence.runtimeIsolation, ["systemdUnits", "ingress"], "fresh runtime isolation");
+  if (JSON.stringify(Object.keys(evidence.runtimeIsolation.systemdUnits)) !== JSON.stringify(EXPECTED_UNITS)) {
+    fail("fresh systemd isolation inventory mismatch");
+  }
+  for (const [unit, isolation] of Object.entries(evidence.runtimeIsolation.systemdUnits)) {
+    exactKeys(isolation, [
+      "fragmentSha256", "fragmentReadable", "dropInsAbsent", "effectiveProductionMarkersAbsent",
+    ], `fresh unit isolation ${unit}`);
+    if (!TRUSTED_UNIT_FRAGMENT_SHA256[unit]?.includes(isolation.fragmentSha256)
+      || isolation.fragmentReadable !== true || isolation.dropInsAbsent !== true
+      || isolation.effectiveProductionMarkersAbsent !== true) {
+      fail(`fresh unit isolation mismatch (${unit})`);
+    }
+  }
+  exactKeys(evidence.runtimeIsolation.ingress, [
+    "configurationReadable", "targetRouteAbsent",
+  ], "fresh ingress isolation");
+  if (evidence.runtimeIsolation.ingress.configurationReadable !== true
+    || evidence.runtimeIsolation.ingress.targetRouteAbsent !== true) {
+    fail("fresh ingress isolation mismatch");
+  }
   exactKeys(evidence.repositoryIdentity, ["headSha", "treeSha", "clean"], "repository identity");
   if (!expectedRepositoryIdentity) fail("fresh repository identity is required");
   exactObject(evidence.repositoryIdentity, expectedRepositoryIdentity, "fresh repository identity");
@@ -210,16 +259,56 @@ for unit in \\
   lk1-subscription-dev-identity-fixture.service \\
   lk1-subscription-dev-nodered.service; do
   fragment="$(systemctl show "$unit" -p FragmentPath --value)"
-  if test -r "$fragment" && grep -Eq 'lk-primary-147|padlhub\\.(su|ru)|vivacrm|127\\.0\\.0\\.1:(3036|27029)|/root/\\.node-red' "$fragment"; then
+  fragment_readable=false
+  fragment_sha256=INVALID
+  if test -n "$fragment" && test -f "$fragment" && test -r "$fragment"; then
+    fragment_readable=true
+    fragment_sha256="$(sha256sum "$fragment" | awk '{print $1}')"
+  fi
+  drop_ins="$(systemctl show "$unit" -p DropInPaths --value)"
+  if test -z "$drop_ins"; then drop_ins_absent=true; else drop_ins_absent=false; fi
+  effective="$(systemctl show "$unit" -p ExecStart -p Environment -p EnvironmentFiles -p User -p Group -p IPAddressAllow -p IPAddressDeny -p RestrictAddressFamilies)"
+  if printf '%s\\n' "$effective" | grep -Eiq 'lk-primary-147|padlhub[.](su|ru)|vivacrm|mongodb[+]srv|127[.]0[.]0[.]1:(3036|27029)|0[.]0[.]0[.]0'; then
+    effective_markers_absent=false
+  else
+    effective_markers_absent=true
+  fi
+  if test "$fragment_readable" != true || test "$drop_ins_absent" != true || test "$effective_markers_absent" != true; then
     production_markers_absent=false
   fi
+  printf 'UNIT_ISOLATION\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$unit" "$fragment_sha256" \
+    "$fragment_readable" "$drop_ins_absent" "$effective_markers_absent"
 done
+ingress_configuration_readable=true
+ingress_target_absent=true
+for root in /etc/nginx /etc/caddy /etc/haproxy; do
+  if test -d "$root"; then
+    if find "$root" -type f ! -readable -print -quit | grep -q .; then
+      ingress_configuration_readable=false
+    fi
+    if grep -RIsEq '127[.]0[.]0[.]1:1882|lk1-subscription-dev-nodered[.]service|/srv/lk1-subscription-dev/node-red' "$root"; then
+      ingress_target_absent=false
+    fi
+  fi
+done
+if command -v nginx >/dev/null 2>&1; then
+  if nginx_effective="$(nginx -T 2>&1)"; then
+    if printf '%s\\n' "$nginx_effective" | grep -Eiq '127[.]0[.]0[.]1:1882|lk1-subscription-dev-nodered[.]service|/srv/lk1-subscription-dev/node-red'; then
+      ingress_target_absent=false
+    fi
+  else
+    ingress_configuration_readable=false
+  fi
+fi
+if test "$ingress_configuration_readable" != true || test "$ingress_target_absent" != true; then
+  production_markers_absent=false
+fi
+printf 'INGRESS_ISOLATION\\t%s\\t%s\\n' "$ingress_configuration_readable" "$ingress_target_absent"
 printf 'PRODUCTION_MARKERS_ABSENT\\t%s\\n' "$production_markers_absent"
 printf 'SHARED_FLOW_SHA256\\t%s\\n' "$(sha256sum /root/.node-red/flows.json | awk '{print $1}')"
 printf 'END\\n'
 `;
 
-const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const VALIDATOR_PATH = fileURLToPath(import.meta.url);
 const currentCaptureIdentity = () => ({
   validatorPath: "scripts/validate_lk1_subscription_dev_host_preflight.mjs",
@@ -228,20 +317,36 @@ const currentCaptureIdentity = () => ({
 });
 
 const readCurrentRepositoryIdentity = () => {
-  const git = (...args) => execFileSync("git", args, {
+  const gitOptions = {
     cwd: path.dirname(VALIDATOR_PATH), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  };
+  const git = (...args) => execFileSync("git", args, gitOptions).trim();
+  let trackedBytesMatchHead = true;
+  try {
+    execFileSync("git", ["diff", "--quiet", "HEAD", "--"], gitOptions);
+  } catch {
+    trackedBytesMatchHead = false;
+  }
+  const hasHiddenIndexFlags = git("ls-files", "-v").split("\n")
+    .some((line) => /^[a-zS] /.test(line));
   return {
     headSha: git("rev-parse", "HEAD"),
     treeSha: git("rev-parse", "HEAD^{tree}"),
-    clean: git("status", "--porcelain", "--untracked-files=all") === "",
+    clean: git("status", "--porcelain", "--untracked-files=all") === ""
+      && trackedBytesMatchHead && !hasHiddenIndexFlags,
   };
 };
 
 const defaultRunSsh = (script) => execFileSync(
   "/usr/bin/ssh",
   ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", HOST_ALIAS, "bash", "-s"],
-  { input: script, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
+  {
+    input: script,
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+    timeout: 30000,
+    maxBuffer: 1024 * 1024,
+  },
 );
 
 export function captureCurrentHostPreflightEvidence({
@@ -262,6 +367,8 @@ export function captureCurrentHostPreflightEvidence({
   const units = {};
   const listeners = new Map();
   const inputs = {};
+  const unitIsolation = {};
+  let ingressIsolation;
   let ended = false;
   for (const [lineIndex, line] of lines.entries()) {
     const fields = line.split("\t");
@@ -277,6 +384,20 @@ export function captureCurrentHostPreflightEvidence({
     } else if (kind === "INPUT" && fields.length === 3) {
       if (Object.hasOwn(inputs, fields[1])) fail("duplicate host preflight input evidence");
       inputs[fields[1]] = fields[2] === "true";
+    } else if (kind === "UNIT_ISOLATION" && fields.length === 6
+      && EXPECTED_UNITS.includes(fields[1])) {
+      if (unitIsolation[fields[1]]) fail("duplicate host preflight unit isolation evidence");
+      unitIsolation[fields[1]] = {
+        fragmentSha256: fields[2],
+        fragmentReadable: fields[3] === "true",
+        dropInsAbsent: fields[4] === "true",
+        effectiveProductionMarkersAbsent: fields[5] === "true",
+      };
+    } else if (kind === "INGRESS_ISOLATION" && fields.length === 3 && !ingressIsolation) {
+      ingressIsolation = {
+        configurationReadable: fields[1] === "true",
+        targetRouteAbsent: fields[2] === "true",
+      };
     } else if (kind === "END" && fields.length === 1 && lineIndex === lines.length - 1) {
       ended = true;
     } else if (["HOSTNAME", "MACHINE_ID_SHA256", "SYSTEMD_VERSION",
@@ -288,7 +409,8 @@ export function captureCurrentHostPreflightEvidence({
     }
   }
   if (!ended || scalar.size !== 5 || Object.keys(units).length !== EXPECTED_UNITS.length
-    || listeners.size !== 7 || Object.keys(inputs).length !== 5) {
+    || listeners.size !== 7 || Object.keys(inputs).length !== 5
+    || Object.keys(unitIsolation).length !== EXPECTED_UNITS.length || !ingressIsolation) {
     fail("host preflight SSH transcript is incomplete");
   }
   const flowSha256 = scalar.get("SHARED_FLOW_SHA256");
@@ -344,6 +466,10 @@ export function captureCurrentHostPreflightEvidence({
     capture: {
       transport: "SSH_BATCH_ROOT_READ_ONLY",
       ...captureIdentity,
+    },
+    runtimeIsolation: {
+      systemdUnits: Object.fromEntries(EXPECTED_UNITS.map((unit) => [unit, unitIsolation[unit]])),
+      ingress: ingressIsolation,
     },
   };
   validateFreshHostPreflightEvidence(evidence, now, {

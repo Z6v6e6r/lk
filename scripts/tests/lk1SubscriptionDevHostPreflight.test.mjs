@@ -16,6 +16,13 @@ const NOW = new Date("2026-09-04T09:40:00Z");
 const REPOSITORY_IDENTITY = Object.freeze({
   headSha: "1".repeat(40), treeSha: "2".repeat(40), clean: true,
 });
+const UNIT_FRAGMENT_SHA256 = Object.freeze({
+  "lk1-subscription-dev-mongo.service": "370f07b518f14d87ba78d2cdc3e3cd15714349cf664d2bf53ac95ec2125a9980",
+  "lk1-subscription-dev-cup.service": "745333370a304d2d1e70add583930d73f704002c634e9eba4343dda7dca45b90",
+  "lk1-subscription-dev-provider-fixture.service": "dbf8a46a002b7f478b011b2afeb2a09837d8f44ecd5873a5225a6da6a895bca5",
+  "lk1-subscription-dev-identity-fixture.service": "673fa03feb87aa886d408684ca947609263929ef178d395d93480fe096488179",
+  "lk1-subscription-dev-nodered.service": "75fafcae24c5aefdca545786967bed12d509d12d2555a37d94e23571732f764a",
+});
 const clone = (value) => structuredClone(value);
 const transcriptFrom = (evidence = checkedHostPreflightEvidence) => [
   `HOSTNAME\t${evidence.target.hostname}`,
@@ -23,6 +30,9 @@ const transcriptFrom = (evidence = checkedHostPreflightEvidence) => [
   `SYSTEMD_VERSION\t${evidence.hostCapabilities.systemdVersion}`,
   ...Object.entries(evidence.dedicatedUnits).map(([unit, state]) => (
     `UNIT\t${unit}\t${state.loadState}\t${state.activeState}\t${state.unitFileState}`
+  )),
+  ...Object.keys(evidence.dedicatedUnits).map((unit) => (
+    `UNIT_ISOLATION\t${unit}\t${UNIT_FRAGMENT_SHA256[unit]}\ttrue\ttrue\ttrue`
   )),
   `LISTENER\t1880\t${evidence.listeners.sharedNodeRed1880Present ? "PRESENT" : "ABSENT"}`,
   `LISTENER\t3036\t${evidence.listeners.forbiddenSharedCup3036Present ? "PRESENT" : "ABSENT"}`,
@@ -34,13 +44,17 @@ const transcriptFrom = (evidence = checkedHostPreflightEvidence) => [
   ...Object.entries(evidence.inputs)
     .filter(([key]) => key !== "productionMarkersAbsent")
     .map(([key, value]) => `INPUT\t${key}\t${value}`),
+  "INGRESS_ISOLATION\ttrue\ttrue",
   `PRODUCTION_MARKERS_ABSENT\t${evidence.inputs.productionMarkersAbsent}`,
   `SHARED_FLOW_SHA256\t${evidence.sharedResources.flowSha256}`,
   "END",
 ].join("\n");
 
 const capture = (overrides = {}) => captureCurrentHostPreflightEvidence({
-  runSsh: () => transcriptFrom(),
+  runSsh: (script) => {
+    execFileSync("/bin/bash", ["-n"], { input: script, stdio: ["pipe", "pipe", "pipe"] });
+    return transcriptFrom();
+  },
   now: NOW,
   readRepositoryIdentity: () => REPOSITORY_IDENTITY,
   ...overrides,
@@ -81,6 +95,7 @@ test("direct SSH capture binds freshness, repository, release, tooling, and trus
   }), true);
   assert.equal(evidence.schemaVersion, 2);
   assert.equal(evidence.capture.transport, "SSH_BATCH_ROOT_READ_ONLY");
+  assert.equal(evidence.runtimeIsolation.ingress.targetRouteAbsent, true);
   assert.equal(evidence.sharedResources.expectedFlowSha256, checkedHostPreflightEvidence.sharedResources.flowSha256);
 
   assert.equal(validateFreshHostPreflightEvidence(evidence, new Date("2026-09-04T10:40:00Z"), {
@@ -99,6 +114,8 @@ test("direct SSH capture binds freshness, repository, release, tooling, and trus
     (value) => { value.repositoryIdentity.headSha = "3".repeat(40); },
     (value) => { value.releaseBinding.candidateSha256 = "a".repeat(64); },
     (value) => { value.capture.validatorSha256 = "b".repeat(64); },
+    (value) => { value.runtimeIsolation.systemdUnits["lk1-subscription-dev-cup.service"].dropInsAbsent = false; },
+    (value) => { value.runtimeIsolation.ingress.targetRouteAbsent = false; },
     (value) => {
       value.sharedResources.flowSha256 = "c".repeat(64);
       value.sharedResources.expectedFlowSha256 = "c".repeat(64);

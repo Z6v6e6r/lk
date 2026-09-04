@@ -23,6 +23,13 @@ const currentRepositoryIdentity = () => ({
   treeSha: execFileSync("git", ["rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim(),
   clean: true,
 });
+const unitFragmentSha256 = {
+  "lk1-subscription-dev-mongo.service": "370f07b518f14d87ba78d2cdc3e3cd15714349cf664d2bf53ac95ec2125a9980",
+  "lk1-subscription-dev-cup.service": "745333370a304d2d1e70add583930d73f704002c634e9eba4343dda7dca45b90",
+  "lk1-subscription-dev-provider-fixture.service": "dbf8a46a002b7f478b011b2afeb2a09837d8f44ecd5873a5225a6da6a895bca5",
+  "lk1-subscription-dev-identity-fixture.service": "673fa03feb87aa886d408684ca947609263929ef178d395d93480fe096488179",
+  "lk1-subscription-dev-nodered.service": "75fafcae24c5aefdca545786967bed12d509d12d2555a37d94e23571732f764a",
+};
 const hostTranscript = [
   `HOSTNAME\t${checkedHostPreflightEvidence.target.hostname}`,
   `MACHINE_ID_SHA256\t${checkedHostPreflightEvidence.target.machineIdSha256}`,
@@ -30,11 +37,15 @@ const hostTranscript = [
   ...Object.entries(checkedHostPreflightEvidence.dedicatedUnits).map(([unit, state]) => (
     `UNIT\t${unit}\t${state.loadState}\t${state.activeState}\t${state.unitFileState}`
   )),
+  ...Object.keys(checkedHostPreflightEvidence.dedicatedUnits).map((unit) => (
+    `UNIT_ISOLATION\t${unit}\t${unitFragmentSha256[unit]}\ttrue\ttrue\ttrue`
+  )),
   "LISTENER\t1880\tPRESENT", "LISTENER\t3036\tPRESENT", "LISTENER\t1882\tABSENT",
   "LISTENER\t27030\tABSENT", "LISTENER\t3037\tABSENT", "LISTENER\t3038\tABSENT",
   "LISTENER\t3039\tABSENT", "INPUT\ttargetFlowAbsent\ttrue",
   "INPUT\tfixtureConfigAbsent\ttrue", "INPUT\treleaseReceiptAbsent\ttrue",
   "INPUT\tserviceStartAuthorizationAbsent\ttrue", "INPUT\tinstallIdentityEnvironmentAbsent\ttrue",
+  "INGRESS_ISOLATION\ttrue\ttrue",
   "PRODUCTION_MARKERS_ABSENT\ttrue",
   `SHARED_FLOW_SHA256\t${checkedHostPreflightEvidence.sharedResources.flowSha256}`,
   "END",

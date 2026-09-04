@@ -79,8 +79,12 @@ read-only evidence должен быть получен отдельной ко�
 `BatchMode` SSH только к закреплённому alias `lk-reserve-89`, не принимает
 caller-authored JSON, проверяет clean repository HEAD/tree, frozen release tuple,
 hash текущего validator и remote read-only script, а observed shared-flow hash
-сравнивает с trusted baseline provisioning contract. Host-команды только читают
-identity, unit/listener/input state и hashes; install, `daemon-reload`, start,
+сравнивает с trusted baseline provisioning contract. Для каждого dedicated unit
+требуются exact hash одного из tracked bootstrap/runtime fragments, читаемый
+fragment, zero drop-ins и отсутствие production markers в effective systemd
+properties. Также fail-closed проверяется отсутствие target route в readable
+nginx/Caddy/HAProxy configuration и effective `nginx -T`. Host-команды только читают
+identity, unit/listener/input/config state и hashes; install, `daemon-reload`, start,
 ingress, activation и любые host writes отсутствуют. Команда требует отдельной
 авторизации host-read, сохраняет результат в созданный ею private `0700`
 temporary directory и файл `0600` с одним hardlink:
