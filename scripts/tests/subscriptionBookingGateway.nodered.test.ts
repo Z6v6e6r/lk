@@ -91,14 +91,17 @@ function runFunctionSource(
 
 function devBoundRouterSource() {
   const source = fs.readFileSync(ROUTER_FILE, "utf8");
+  const transportMarker = '  const transportAllowed = identity.environment === "PROD"\n    ? parsed.protocol === "https:"\n    : parsed.protocol === "http:" && parsed.hostname === "127.0.0.1";';
   assert.equal(source.match(/ {2}DEV: null,/g)?.length, 1);
   assert.equal(source.match(/ {2}PROD: "https:\/\/padlhub\.su\/api",/g)?.length, 1);
   assert.equal(source.match(/MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "PROD"/g)?.length, 1);
+  assert.equal(source.split(transportMarker).length - 1, 1);
   return source
     .replace('const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "PROD";',
       'const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "DEV";')
     .replace('  PROD: "https://padlhub.su/api",', "  PROD: null,")
-    .replace("  DEV: null,", `  DEV: ${JSON.stringify(DEV_API_BASE)},`);
+    .replace("  DEV: null,", `  DEV: ${JSON.stringify(DEV_API_BASE)},`)
+    .replace(transportMarker, '  const transportAllowed = parsed.protocol === "https:";');
 }
 
 function baseContext(step: string, overrides: Record<string, unknown> = {}) {
