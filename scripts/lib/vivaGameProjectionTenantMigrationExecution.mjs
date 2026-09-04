@@ -7,6 +7,7 @@ const HASH_RE = /^[a-f0-9]{64}$/;
 const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const WRITE_OPERATORS = new Set(["$set", "$push"]);
+export const MAX_TRANSACTION_OPERATIONS = 100;
 
 const fail = (message) => { throw new Error(message); };
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -200,7 +201,7 @@ export function validateExecutableTenantMigrationPlan(plan, {
   if (!Number.isSafeInteger(plan.scannedCount) || plan.scannedCount < 0
     || !Number.isSafeInteger(plan.eligibleCount) || plan.eligibleCount < 0
     || !Array.isArray(plan.operations) || plan.operations.length !== plan.eligibleCount
-    || plan.operations.length > 1000) {
+    || plan.operations.length > MAX_TRANSACTION_OPERATIONS) {
     fail("Migration plan counts are invalid");
   }
   if (plan.scannedCount !== plan.eligibleCount + sumSkipped(plan.skipped)) {
@@ -354,7 +355,7 @@ export async function applyTenantMigrationPlan(collection, plan, planSha256, app
   if (!Number.isFinite(Date.parse(appliedAt))) fail("Migration apply timestamp is invalid");
   const applied = [];
   for (const [index, operation] of plan.operations.entries()) {
-    await assertFence();
+    await assertFence(index, "BEFORE_WRITE");
     const decoded = decodeTenantMigrationOperation(operation);
     const result = await collection.updateOne(decoded.filter, decoded.update, decoded.options);
     if (result?.acknowledged !== true || result.matchedCount !== 1 || result.modifiedCount !== 1
@@ -370,7 +371,7 @@ export async function applyTenantMigrationPlan(collection, plan, planSha256, app
       "metadata.tenantRevisionMigration.eventId": identity.eventId,
     });
     if (!postimage) fail(`Migration CAS readback ${index} failed`);
-    await assertFence();
+    await assertFence(index, "AFTER_READBACK");
     applied.push({
       mongoIdHash: sha256(identity.mongoId),
       fingerprint: identity.fingerprint,
@@ -433,6 +434,60 @@ export async function reconcileTenantMigrationOutcome(collection, plan, planSha2
   return { outcome: "BLOCKED_MIXED_OR_DRIFT", preimageCount, postimageCount, driftCount, applyReceipt: null };
 }
 
+function buildRestoreReceipt(plan, planSha256, applyReceipt, restoredCount, restoredAt, recovered) {
+  return {
+    formatVersion: 1,
+    kind: "viva-game-projection-tenant-migration-restore-receipt",
+    planSha256,
+    sourceFlowSha256: plan.source.sourceFlowSha256,
+    tenantKey: plan.scope.tenantKey,
+    operationId: plan.scope.operationId,
+    applyReceiptAppliedAt: applyReceipt.appliedAt,
+    restoredCount,
+    restoredAt,
+    recoveredFromUnknownOutcome: recovered,
+  };
+}
+
+export async function reconcileTenantRestoreOutcome(collection, plan, planSha256, backup, applyReceipt, recoveredAt) {
+  validateMigrationBackup(backup, plan, planSha256);
+  validateApplyReceipt(applyReceipt, plan, planSha256);
+  if (!Number.isFinite(Date.parse(recoveredAt))) fail("Restore reconciliation timestamp is invalid");
+  const backupById = new Map(backup.records.map((record) => [record.mongoId, record]));
+  const receiptByFingerprint = new Map(applyReceipt.operations.map((row) => [row.fingerprint, row]));
+  let preimageCount = 0;
+  let postimageCount = 0;
+  let driftCount = 0;
+  for (const operation of plan.operations) {
+    const mongoId = mongoIdFromPlan(operation.filter._id);
+    const current = await collection.findOne({ _id: new ObjectId(mongoId) });
+    const backupRecord = backupById.get(mongoId);
+    const applyRow = receiptByFingerprint.get(operation.fingerprint);
+    if (!current || !backupRecord || !applyRow) {
+      driftCount += 1;
+      continue;
+    }
+    const currentSha256 = hashCanonicalEjson(current);
+    if (currentSha256 === backupRecord.preimageSha256) preimageCount += 1;
+    else if (currentSha256 === applyRow.postimageSha256) postimageCount += 1;
+    else driftCount += 1;
+  }
+  const operationCount = plan.operations.length;
+  if (preimageCount === operationCount) {
+    return {
+      outcome: "RESTORED_RECOVERED",
+      preimageCount,
+      postimageCount,
+      driftCount,
+      restoreReceipt: buildRestoreReceipt(plan, planSha256, applyReceipt, operationCount, recoveredAt, true),
+    };
+  }
+  if (postimageCount === operationCount) {
+    return { outcome: "RESTORE_ABORTED_POSTIMAGE", preimageCount, postimageCount, driftCount, restoreReceipt: null };
+  }
+  return { outcome: "BLOCKED_MIXED_OR_DRIFT", preimageCount, postimageCount, driftCount, restoreReceipt: null };
+}
+
 export function validateApplyReceipt(receipt, plan, planSha256) {
   if (!isObject(receipt) || receipt.formatVersion !== 1
     || receipt.kind !== "viva-game-projection-tenant-migration-apply-receipt"
@@ -472,8 +527,8 @@ export async function restoreTenantMigrationBackup(
   const receiptByFingerprint = new Map(applyReceipt.operations.map((row) => [row.fingerprint, row]));
   const backupById = new Map(backup.records.map((row) => [row.mongoId, row]));
   let restoredCount = 0;
-  for (const operation of plan.operations) {
-    await assertFence();
+  for (const [index, operation] of plan.operations.entries()) {
+    await assertFence(index, "BEFORE_RESTORE");
     const mongoId = mongoIdFromPlan(operation.filter._id);
     const current = await collection.findOne({ _id: new ObjectId(mongoId) });
     const receipt = receiptByFingerprint.get(operation.fingerprint);
@@ -496,18 +551,8 @@ export async function restoreTenantMigrationBackup(
     if (!restored || hashCanonicalEjson(restored) !== preimage.preimageSha256) {
       fail("Migration restore readback failed");
     }
-    await assertFence();
+    await assertFence(index, "AFTER_RESTORE_READBACK");
     restoredCount += 1;
   }
-  return {
-    formatVersion: 1,
-    kind: "viva-game-projection-tenant-migration-restore-receipt",
-    planSha256,
-    sourceFlowSha256: plan.source.sourceFlowSha256,
-    tenantKey: plan.scope.tenantKey,
-    operationId: plan.scope.operationId,
-    applyReceiptAppliedAt: applyReceipt.appliedAt,
-    restoredCount,
-    restoredAt: new Date().toISOString(),
-  };
+  return buildRestoreReceipt(plan, planSha256, applyReceipt, restoredCount, new Date().toISOString(), false);
 }

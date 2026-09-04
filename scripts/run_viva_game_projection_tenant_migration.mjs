@@ -12,6 +12,7 @@ import {
   applyTenantMigrationPlan,
   captureTenantMigrationPreimages,
   reconcileTenantMigrationOutcome,
+  reconcileTenantRestoreOutcome,
   restoreTenantMigrationBackup,
   sha256,
   validateApplyReceipt,
@@ -49,8 +50,8 @@ function parseArgs(argv) {
     values.set(key, value);
   }
   const mode = values.get("--mode");
-  if (!new Set(["verify", "apply", "restore", "reconcile"]).has(mode)) {
-    fail("--mode must be verify, apply, restore, or reconcile");
+  if (!new Set(["verify", "apply", "restore", "reconcile", "reconcile-restore"]).has(mode)) {
+    fail("--mode must be verify, apply, restore, reconcile, or reconcile-restore");
   }
   for (const key of [
     "--plan", "--cutover-plan", "--packet-manifest", "--expected-plan-sha256",
@@ -61,9 +62,9 @@ function parseArgs(argv) {
     if (!values.get(key)) fail(`Missing ${key}`);
   }
   if (mode === "apply" && !values.get("--backup-dir")) fail("Apply requires --backup-dir");
-  if (mode === "restore" && (!values.get("--backup") || !values.get("--apply-receipt")
+  if (new Set(["restore", "reconcile-restore"]).has(mode) && (!values.get("--backup") || !values.get("--apply-receipt")
     || !values.get("--expected-backup-sha256") || !values.get("--expected-apply-report-sha256"))) {
-    fail("Restore requires --backup, --apply-receipt and their expected SHA-256 digests");
+    fail("Restore and reconcile-restore require --backup, --apply-receipt and their expected SHA-256 digests");
   }
   if (mode === "reconcile" && (!values.get("--backup") || !values.get("--expected-backup-sha256"))) {
     fail("Reconcile requires --backup and --expected-backup-sha256");
@@ -71,7 +72,7 @@ function parseArgs(argv) {
   return { mode, values };
 }
 
-function readPrivateBytes(filePath, label, maximumSize) {
+export function readPrivateBytes(filePath, label, maximumSize) {
   if (!path.isAbsolute(String(filePath || ""))) fail(`${label} path must be absolute`);
   const requested = path.resolve(filePath);
   if (fs.realpathSync(requested) !== requested) fail(`${label} path must be canonical`);
@@ -89,7 +90,7 @@ function readPrivateBytes(filePath, label, maximumSize) {
   }
 }
 
-function readPrivateJson(filePath, label, maximumSize) {
+export function readPrivateJson(filePath, label, maximumSize) {
   const bytes = readPrivateBytes(filePath, label, maximumSize);
   let value;
   try { value = JSON.parse(bytes.toString("utf8")); } catch { fail(`${label} must contain valid JSON`); }
@@ -200,7 +201,7 @@ function writePrivateEjson(filePath, value, validator) {
   return { path: filePath, sha256: digest };
 }
 
-function readFlowConnection(flowPath, expectedRuntimeFlowSha256) {
+export function readFlowConnection(flowPath, expectedRuntimeFlowSha256) {
   const bytes = readPrivateBytes(flowPath, "Node-RED flow", 256 * 1024 * 1024);
   if (sha256(bytes) !== expectedRuntimeFlowSha256) fail("Node-RED flow digest differs from the expected runtime flow");
   let flow;
@@ -244,6 +245,9 @@ function validatePacketBinding({ values, planBytes, plan, cutoverPlanBytes, cuto
   assertManifestEntry(manifest, packetRoot, path.join(packetRoot, "candidate.flow.json"), cutoverPlan.candidateSha256, "candidate.flow.json");
   assertManifestEntry(manifest, packetRoot, path.join(packetRoot, "cutover-controls.json"), cutoverPlan.controlsSha256, "cutover-controls.json");
   assertManifestEntry(manifest, packetRoot, path.join(packetRoot, "reviewed-flow.contract.json"), cutoverPlan.reviewedFlowContractSha256, "reviewed-flow.contract.json");
+  assertManifestEntry(manifest, packetRoot, path.join(packetRoot, "evidence/external-writer-proof.json"), cutoverPlan.evidence.externalWriterProofSha256, "evidence/external-writer-proof.json");
+  assertManifestEntry(manifest, packetRoot, path.join(packetRoot, "evidence/full-backup.manifest.json"), cutoverPlan.evidence.backupManifestSha256, "evidence/full-backup.manifest.json");
+  assertManifestEntry(manifest, packetRoot, path.join(packetRoot, "evidence/full-backup.ejson"), cutoverPlan.evidence.backupSha256, "evidence/full-backup.ejson");
   if (plan.scope.tenantKey && cutoverPlan.tenantKeySha256 !== sha256(plan.scope.tenantKey)) fail("Cutover packet tenant binding mismatch");
 }
 
@@ -251,9 +255,10 @@ export function validateHeldWriterFence(receipt, {
   sourceFlowSha256,
   candidateSha256,
   tenantKey,
-  operationId,
+  expectedOperationIds,
   expectedWriterNodeIds,
   writerInventorySha256,
+  externalWriterProofSha256,
   fenceTokenSha256,
   lockPath,
   nowMs = Date.now(),
@@ -261,9 +266,11 @@ export function validateHeldWriterFence(receipt, {
   if (!isObject(receipt) || receipt.formatVersion !== 1 || receipt.kind !== "viva-game-projection-writer-fence-receipt"
     || receipt.state !== "HELD" || receipt.sourceFlowSha256 !== sourceFlowSha256
     || (candidateSha256 && receipt.candidateSha256 !== candidateSha256)
-    || receipt.tenantKey !== tenantKey || receipt.operationId !== operationId
+    || receipt.tenantKey !== tenantKey
+    || JSON.stringify([...(receipt.operationIds || [])].sort()) !== JSON.stringify([...(expectedOperationIds || [])].sort())
     || sha256(String(receipt.fenceToken || "")) !== fenceTokenSha256
     || receipt.writerInventorySha256 !== writerInventorySha256
+    || receipt.externalWriterProofSha256 !== externalWriterProofSha256
     || receipt.lockPath !== lockPath || receipt.lockPath !== PRODUCTION_LOCK_PATH
     || receipt.host !== "lk-primary-147" || !String(receipt.hostname || "").trim()
     || receipt.processName !== "node-red" || !Number.isSafeInteger(receipt.pm2ProcessId)
@@ -294,7 +301,7 @@ function assertProductionHost(values, cutoverPlan, receipt) {
     || cutoverPlan.production?.hostAlias !== "lk-primary-147") fail("Production host identity mismatch");
 }
 
-function assertSystemFenceLease(receipt, cutoverPlan) {
+export function assertInheritedFenceLease(receipt) {
   const fd = Number(process.env.PADLHUB_CUTOVER_FENCE_FD);
   const token = String(process.env.PADLHUB_CUTOVER_FENCE_TOKEN || "");
   const lockPath = String(process.env.PADLHUB_CUTOVER_FENCE_LOCK_PATH || "");
@@ -306,6 +313,11 @@ function assertSystemFenceLease(receipt, cutoverPlan) {
   if (!descriptorStat.isFile() || descriptorStat.dev !== lockStat.dev || descriptorStat.ino !== lockStat.ino) {
     fail("Inherited writer-fence descriptor does not bind the lock path");
   }
+}
+
+function assertSystemFenceLease(receipt, cutoverPlan) {
+  assertInheritedFenceLease(receipt);
+  const lockPath = receipt.lockPath;
   const lockProbe = spawnSync("flock", ["-n", lockPath, "-c", "true"], { stdio: "ignore" });
   if (lockProbe.error || lockProbe.status === 0) fail("Writer-fence flock is not held exclusively");
   const pm2 = spawnSync("pm2", ["jlist"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
@@ -320,7 +332,7 @@ function assertSystemFenceLease(receipt, cutoverPlan) {
   }
 }
 
-async function assertNoConcurrentMongoWrites(client) {
+export async function assertNoConcurrentMongoWrites(client) {
   const rows = await client.db("admin").aggregate([{ $currentOp: { allUsers: true, localOps: true } }]).toArray();
   const conflicting = rows.filter((row) => {
     const command = isObject(row.command) ? row.command : {};
@@ -360,8 +372,9 @@ async function run({ mode, values }, dependencies = {}) {
   validatePacketBinding({ values, planBytes, plan, cutoverPlanBytes: cutoverRead.bytes, cutoverPlan, manifestBytes: manifestRead.bytes, manifest: manifestRead.value });
   if ((mode === "verify" || mode === "apply" || mode === "reconcile")
     && expectedRuntimeFlowSha256 !== expectedSourceFlowSha256) fail("Verify/apply/reconcile require the frozen source flow to remain active on disk");
-  if (mode === "restore" && ![expectedSourceFlowSha256, cutoverPlan.candidateSha256].includes(expectedRuntimeFlowSha256)) {
-    fail("Restore runtime flow must be the frozen source or exact candidate");
+  if (new Set(["restore", "reconcile-restore"]).has(mode)
+    && ![expectedSourceFlowSha256, cutoverPlan.candidateSha256].includes(expectedRuntimeFlowSha256)) {
+    fail("Restore and reconcile-restore runtime flow must be the frozen source or exact candidate");
   }
   const connection = readFlowConnection(values.get("--flow-path"), expectedRuntimeFlowSha256);
   if (connection.connectionFingerprint !== cutoverPlan.mongoTarget?.connectionFingerprint) fail("Mongo connection binding differs from the cutover plan");
@@ -370,23 +383,25 @@ async function run({ mode, values }, dependencies = {}) {
     sourceFlowSha256: expectedSourceFlowSha256,
     candidateSha256: cutoverPlan.candidateSha256,
     tenantKey: plan.scope.tenantKey,
-    operationId: plan.scope.operationId,
+    expectedOperationIds: cutoverPlan.writerFence.exactMigrationOperationIds,
     expectedWriterNodeIds: cutoverPlan.writerFence.exactWriterNodeIds,
     writerInventorySha256: cutoverPlan.writerFence.writerInventorySha256,
+    externalWriterProofSha256: cutoverPlan.writerFence.externalWriterProofSha256,
     fenceTokenSha256: cutoverPlan.writerFence.fenceTokenSha256,
     lockPath: cutoverPlan.writerFence.lockPath,
   };
-  const readFence = () => {
+  const readFence = (expensive) => {
     const receipt = readPrivateJson(fencePath, "Writer fence receipt", 1024 * 1024).value;
     validateHeldWriterFence(receipt, { ...fenceExpected, nowMs: dependencies.nowMs ?? Date.now() });
-    if (dependencies.assertSystemFenceLease) dependencies.assertSystemFenceLease(receipt, cutoverPlan);
-    else {
+    if (expensive && dependencies.assertSystemFenceLease) dependencies.assertSystemFenceLease(receipt, cutoverPlan);
+    else if (expensive) {
       assertProductionHost(values, cutoverPlan, receipt);
       assertSystemFenceLease(receipt, cutoverPlan);
-    }
+    } else if (dependencies.assertCheapFenceLease) dependencies.assertCheapFenceLease(receipt);
+    else assertInheritedFenceLease(receipt);
     return receipt;
   };
-  readFence();
+  readFence(true);
   if (mode === "apply" && process.env.VIVA_GAME_PROJECTION_MIGRATION_APPLY !== APPLY_CONFIRMATION) fail("Apply confirmation is absent");
   if (mode === "restore" && process.env.VIVA_GAME_PROJECTION_MIGRATION_RESTORE !== RESTORE_CONFIRMATION) fail("Restore confirmation is absent");
 
@@ -418,8 +433,24 @@ async function run({ mode, values }, dependencies = {}) {
     const db = client.db(connection.dbName);
     const collection = db.collection("lk_games");
     const assertFenceAndWriters = async () => {
-      readFence();
+      readFence(true);
       await assertNoConcurrentMongoWrites(client);
+    };
+    let watchdogError = null;
+    let watchdog = null;
+    const startFenceWatchdog = () => {
+      watchdog = setInterval(() => {
+        try { readFence(true); } catch (error) { watchdogError = error; }
+      }, 1000);
+      watchdog.unref();
+    };
+    const stopFenceWatchdog = () => {
+      if (watchdog) clearInterval(watchdog);
+      watchdog = null;
+    };
+    const assertTransactionLease = async () => {
+      if (watchdogError) throw watchdogError;
+      readFence(false);
     };
     await assertFenceAndWriters();
     journal.append("TARGET_AND_FENCE_VERIFIED", { mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256 });
@@ -439,19 +470,37 @@ async function run({ mode, values }, dependencies = {}) {
       return result;
     }
 
-    if (mode === "reconcile") {
+    if (mode === "reconcile" || mode === "reconcile-restore") {
       const backupRead = readPrivateEjson(values.get("--backup"), "Migration backup", MAX_BACKUP_BYTES);
       backupSha256 = sha256(backupRead.bytes);
       if (backupSha256 !== values.get("--expected-backup-sha256")) fail("Reconcile backup digest mismatch");
-      const reconciliation = await reconcileTenantMigrationOutcome(collection, plan, expectedPlanSha256, backupRead.value);
+      let reconciliation;
+      if (mode === "reconcile-restore") {
+        const applyReportRead = readPrivateJson(values.get("--apply-receipt"), "Apply report", MAX_PACKET_BYTES);
+        const applyReportSha256 = sha256(applyReportRead.bytes);
+        if (applyReportSha256 !== values.get("--expected-apply-report-sha256")
+          || applyReportRead.value?.backupSha256 !== backupSha256) fail("Restore reconciliation apply-report binding mismatch");
+        validateApplyReceipt(applyReportRead.value?.applyReceipt, plan, expectedPlanSha256);
+        reconciliation = await reconcileTenantRestoreOutcome(
+          collection,
+          plan,
+          expectedPlanSha256,
+          backupRead.value,
+          applyReportRead.value.applyReceipt,
+          new Date().toISOString(),
+        );
+      } else {
+        reconciliation = await reconcileTenantMigrationOutcome(collection, plan, expectedPlanSha256, backupRead.value);
+      }
       await assertFenceAndWriters();
-      if (writeCommandCount !== 0) fail("Reconcile mode attempted a Mongo write command");
+      if (writeCommandCount !== 0) fail("Reconciliation mode attempted a Mongo write command");
       const result = {
-        formatVersion: 1, mode: "RECONCILE", outcome: reconciliation.outcome, mutationAttempted: false,
+        formatVersion: 1, mode: mode.toUpperCase(), outcome: reconciliation.outcome, mutationAttempted: false,
         planSha256: expectedPlanSha256, sourceFlowSha256: expectedSourceFlowSha256,
         operationId: plan.scope.operationId, backupPath: values.get("--backup"), backupSha256,
         mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256, writeCommandCount,
         applyReceipt: reconciliation.applyReceipt,
+        restoreReceipt: reconciliation.restoreReceipt,
         counts: { preimage: reconciliation.preimageCount, postimage: reconciliation.postimageCount, drift: reconciliation.driftCount },
       };
       journal.finalize(result);
@@ -472,20 +521,26 @@ async function run({ mode, values }, dependencies = {}) {
         journal.append(phase, { backupPath, backupSha256, mutationAttempted: true });
         mutationAttempted = true;
         let applyReceipt;
-        await session.withTransaction(async () => {
-          await assertFenceAndWriters();
-          const transactionCollection = db.collection("lk_games");
-          const currentBackup = await captureTenantMigrationPreimages(
-            { findOne: (filter) => transactionCollection.findOne(filter, { session }) }, plan, expectedPlanSha256, capturedAt,
-          );
-          validateMigrationBackup(currentBackup, plan, expectedPlanSha256);
-          if (BSON.EJSON.stringify(currentBackup.records, null, 0, { relaxed: false })
-            !== BSON.EJSON.stringify(backup.records, null, 0, { relaxed: false })) fail("Migration preimage drifted after durable backup capture");
-          applyReceipt = await applyTenantMigrationPlan({
-            updateOne: (filter, update, options) => transactionCollection.updateOne(filter, update, { ...options, session }),
-            findOne: (filter) => transactionCollection.findOne(filter, { session }),
-          }, plan, expectedPlanSha256, plan.operations[0].update.$set.updatedAt, assertFenceAndWriters);
-        }, { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" } });
+        startFenceWatchdog();
+        try {
+          await session.withTransaction(async () => {
+            await assertTransactionLease();
+            const transactionCollection = db.collection("lk_games");
+            const currentBackup = await captureTenantMigrationPreimages(
+              { findOne: (filter) => transactionCollection.findOne(filter, { session }) }, plan, expectedPlanSha256, capturedAt,
+            );
+            validateMigrationBackup(currentBackup, plan, expectedPlanSha256);
+            if (BSON.EJSON.stringify(currentBackup.records, null, 0, { relaxed: false })
+              !== BSON.EJSON.stringify(backup.records, null, 0, { relaxed: false })) fail("Migration preimage drifted after durable backup capture");
+            applyReceipt = await applyTenantMigrationPlan({
+              updateOne: (filter, update, options) => transactionCollection.updateOne(filter, update, { ...options, session }),
+              findOne: (filter) => transactionCollection.findOne(filter, { session }),
+            }, plan, expectedPlanSha256, plan.operations[0].update.$set.updatedAt, assertTransactionLease);
+          }, { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" }, maxCommitTimeMS: 15_000 });
+          if (watchdogError) throw watchdogError;
+        } finally {
+          stopFenceWatchdog();
+        }
         await assertFenceAndWriters();
         phase = "TRANSACTION_COMMITTED";
         journal.append(phase, { backupPath, backupSha256, applyReceiptSha256: sha256(canonicalJson(applyReceipt)) });
@@ -517,14 +572,20 @@ async function run({ mode, values }, dependencies = {}) {
       journal.append(phase, { backupPath, backupSha256, mutationAttempted: true });
       mutationAttempted = true;
       let restoreReceipt;
-      await session.withTransaction(async () => {
-        await assertFenceAndWriters();
-        const transactionCollection = db.collection("lk_games");
-        restoreReceipt = await restoreTenantMigrationBackup({
-          replaceOne: (filter, replacement, options) => transactionCollection.replaceOne(filter, replacement, { ...options, session }),
-          findOne: (filter) => transactionCollection.findOne(filter, { session }),
-        }, plan, expectedPlanSha256, backup, applyReceipt, assertFenceAndWriters);
-      }, { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" } });
+      startFenceWatchdog();
+      try {
+        await session.withTransaction(async () => {
+          await assertTransactionLease();
+          const transactionCollection = db.collection("lk_games");
+          restoreReceipt = await restoreTenantMigrationBackup({
+            replaceOne: (filter, replacement, options) => transactionCollection.replaceOne(filter, replacement, { ...options, session }),
+            findOne: (filter) => transactionCollection.findOne(filter, { session }),
+          }, plan, expectedPlanSha256, backup, applyReceipt, assertTransactionLease);
+        }, { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" }, maxCommitTimeMS: 15_000 });
+        if (watchdogError) throw watchdogError;
+      } finally {
+        stopFenceWatchdog();
+      }
       await assertFenceAndWriters();
       phase = "RESTORE_TRANSACTION_COMMITTED";
       journal.append(phase, { restoredCount: restoreReceipt.restoredCount });
@@ -567,7 +628,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === SCRIPT_PATH) {
   if (process.argv.slice(2).includes("--help")) {
-    process.stdout.write(`Usage:\n  scripts/run_viva_game_projection_fenced_migration.sh --mode verify|apply|restore|reconcile --plan /private/packet/migration-plans/NN-plan.json --cutover-plan /private/packet/cutover-plan.json --packet-manifest /private/packet/packet.manifest.json --expected-plan-sha256 <sha256> --expected-cutover-plan-sha256 <sha256> --expected-packet-manifest-sha256 <sha256> --expected-source-flow-sha256 <sha256> --expected-runtime-flow-sha256 <sha256> --flow-path /root/.node-red/flows.json --fence-receipt /private/fence.json --report /private/new-report.json [--backup-dir /private/backups] [--backup /private/backup.ejson --expected-backup-sha256 <sha256>] [--apply-receipt /private/apply-report.json --expected-apply-report-sha256 <sha256>]\n\nverify and reconcile are read-only. apply and restore are live MongoDB mutations and require separate authorization plus their exact environment confirmation phrase. All modes require the host-side flock wrapper and a stopped Node-RED process.\n`);
+    process.stdout.write(`Usage:\n  scripts/run_viva_game_projection_fenced_migration.sh --mode verify|apply|restore|reconcile|reconcile-restore --plan /private/packet/migration-plans/NN-plan.json --cutover-plan /private/packet/cutover-plan.json --packet-manifest /private/packet/packet.manifest.json --expected-plan-sha256 <sha256> --expected-cutover-plan-sha256 <sha256> --expected-packet-manifest-sha256 <sha256> --expected-source-flow-sha256 <sha256> --expected-runtime-flow-sha256 <sha256> --flow-path /root/.node-red/flows.json --fence-receipt /private/fence.json --report /private/new-report.json [--backup-dir /private/backups] [--backup /private/backup.ejson --expected-backup-sha256 <sha256>] [--apply-receipt /private/apply-report.json --expected-apply-report-sha256 <sha256>]\n\nverify, reconcile, and reconcile-restore are read-only. apply and restore are live MongoDB mutations and require separate authorization plus their exact environment confirmation phrase. All modes require the host-side flock wrapper and a stopped Node-RED process.\n`);
   } else {
     main().catch((error) => {
       process.stderr.write(`${safeError(error)}\n`);

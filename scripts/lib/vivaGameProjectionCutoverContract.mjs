@@ -38,11 +38,21 @@ const isPass = (value) => value === "PASS";
 
 export function inventoryLkGamesWriters(flow) {
   if (!Array.isArray(flow)) fail("Node-RED flow must be an array");
-  const nonWritingOperations = new Set(["find", "findOne", "aggregate", "count", "countDocuments", "distinct"]);
-  const writers = flow.filter((node) => (
-    node?.type === "mongodb4"
-    && node.collection === "lk_games"
-    && !nonWritingOperations.has(String(node.operation || ""))
+  const lkGamesTabs = new Set(flow.filter((node) => node?.type === "tab" && node.label === "LK Games").map((node) => node.id));
+  const nonWritingOperations = new Set(["find", "findOne", "count", "countDocuments", "distinct"]);
+  const mongoNodes = flow.filter((node) => node?.type === "mongodb4");
+  for (const node of mongoNodes) {
+    const collection = String(node.collection || "").trim();
+    const operation = String(node.operation || "").trim();
+    const dynamicCollection = !collection || /(?:\{\{|\bmsg\.|\bflow\.|\bglobal\.)/i.test(collection);
+    if (dynamicCollection && lkGamesTabs.has(node.z)) {
+      fail("LK Games contains an unclassifiable dynamic Mongo collection");
+    }
+    if (collection === "lk_games" && !operation) fail("lk_games Mongo operation is unclassifiable");
+  }
+  const writers = mongoNodes.filter((node) => (
+    String(node.collection || "").trim() === "lk_games"
+    && !nonWritingOperations.has(String(node.operation || "").trim())
   )).map((node) => ({
     nodeId: String(node.id || ""),
     name: String(node.name || ""),
@@ -90,7 +100,7 @@ function validatePlans(plans, sourceFlowSha256, tenantKey, generatedAt) {
     totalSkipped += Object.values(plan.skipped || {}).reduce((sum, value) => sum + Number(value || 0), 0);
     totalScanned += plan.scannedCount;
   }
-  return { planSha256s: [...hashes], totalEligible, totalSkipped, totalScanned };
+  return { planSha256s: [...hashes], operationIds: [...operationIds], totalEligible, totalSkipped, totalScanned };
 }
 
 export function validateCutoverControls(controls, {
@@ -109,6 +119,10 @@ export function validateCutoverControls(controls, {
   if (controls.tenantKey !== tenantKey) fail("Cutover controls tenant mismatch");
   const nowMs = Date.parse(generatedAt);
   if (!Number.isFinite(nowMs)) fail("Cutover controls validation time is invalid");
+  const isFreshTimestamp = (value, maximumAgeMs) => {
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) && timestamp <= nowMs + 60_000 && nowMs - timestamp <= maximumAgeMs;
+  };
   const blockers = [];
 
   assertState(controls.ci?.state, ["PASS", "MISSING", "FAIL"], "CI evidence");
@@ -134,8 +148,8 @@ export function validateCutoverControls(controls, {
       || !String(controls.runtimeTenant.hostname || "").trim()
       || controls.runtimeTenant.processName !== "node-red"
       || !Number.isSafeInteger(controls.runtimeTenant.pm2ProcessId)
-      || !Number.isFinite(Date.parse(controls.runtimeTenant.restartAt))
-      || !Number.isFinite(Date.parse(controls.runtimeTenant.readBackAt))
+      || !isFreshTimestamp(controls.runtimeTenant.restartAt, 30 * 60_000)
+      || !isFreshTimestamp(controls.runtimeTenant.readBackAt, 30 * 60_000)
       || Date.parse(controls.runtimeTenant.restartAt) > Date.parse(controls.runtimeTenant.readBackAt)
       || nowMs - Date.parse(controls.runtimeTenant.readBackAt) > 30 * 60_000) {
       fail("Runtime tenant PASS evidence is internally inconsistent");
@@ -160,6 +174,7 @@ export function validateCutoverControls(controls, {
       || controls.writerFence.lockPath !== "/run/lock/padlhub-viva-game-projection-cutover.lock"
       || !HASH_RE.test(String(controls.writerFence.fenceTokenSha256 || ""))
       || !HASH_RE.test(String(controls.writerFence.externalWriterProofSha256 || ""))
+      || !String(controls.writerFence.externalWriterProofPath || "").startsWith("/")
       || controls.writerFence.writerInventorySha256 !== writerInventorySha256
       || JSON.stringify(observedIds) !== JSON.stringify(expectedIds)) {
       fail("Writer fence HELD evidence does not cover the exact writer inventory");
@@ -180,9 +195,11 @@ export function validateCutoverControls(controls, {
     if (controls.backup.sourceFlowSha256 !== sourceFlowSha256 || controls.backup.database !== "games"
       || controls.backup.collection !== "lk_games" || !Number.isSafeInteger(controls.backup.documentCount)
       || controls.backup.documentCount < 1
+      || !String(controls.backup.artifactPath || "").startsWith("/")
+      || !String(controls.backup.manifestPath || "").startsWith("/")
       || controls.backup.fenceTokenSha256 !== controls.writerFence.fenceTokenSha256
-      || !Number.isFinite(Date.parse(controls.backup.startedAt))
-      || !Number.isFinite(Date.parse(controls.backup.completedAt))
+      || !isFreshTimestamp(controls.backup.startedAt, 24 * 60 * 60_000)
+      || !isFreshTimestamp(controls.backup.completedAt, 24 * 60 * 60_000)
       || Date.parse(controls.backup.startedAt) < Date.parse(controls.writerFence.observedAt)
       || Date.parse(controls.backup.completedAt) < Date.parse(controls.backup.startedAt)
       || Date.parse(controls.backup.completedAt) >= Date.parse(controls.writerFence.expiresAt)
@@ -201,11 +218,11 @@ export function validateCutoverControls(controls, {
       || controls.restoreRehearsal.backupSha256 !== controls.backup.backupSha256
       || controls.restoreRehearsal.manifestSha256 !== controls.backup.manifestSha256
       || controls.restoreRehearsal.fullCollectionStateSha256 !== controls.backup.fullCollectionStateSha256
+      || !String(controls.restoreRehearsal.receiptPath || "").startsWith("/")
       || controls.restoreRehearsal.isolatedTarget !== true
       || controls.restoreRehearsal.restoredDocumentCount !== controls.backup.documentCount
       || controls.restoreRehearsal.postRestoreHashMatch !== true
-      || !Number.isFinite(Date.parse(controls.restoreRehearsal.rehearsedAt))
-      || nowMs - Date.parse(controls.restoreRehearsal.rehearsedAt) > 24 * 60 * 60_000) {
+      || !isFreshTimestamp(controls.restoreRehearsal.rehearsedAt, 24 * 60 * 60_000)) {
       fail("Restore rehearsal PASS evidence is internally inconsistent");
     }
   } else blockers.push("BACKUP_RESTORE_REHEARSAL_NOT_PROVEN");
@@ -223,8 +240,7 @@ export function validateCutoverControls(controls, {
       || !Number.isSafeInteger(controls.coverage.activeReachableLegacyBeforeApply)
       || controls.coverage.activeReachableLegacyBeforeApply < 1
       || controls.coverage.activeReachableLegacyBeforeApply !== totalScanned
-      || !Number.isFinite(Date.parse(controls.coverage.observedAt))
-      || nowMs - Date.parse(controls.coverage.observedAt) > 30 * 60_000) {
+      || !isFreshTimestamp(controls.coverage.observedAt, 30 * 60_000)) {
       fail("Migration coverage PASS evidence is internally inconsistent");
     }
   } else blockers.push("COMPLETE_LEGACY_SCOPE_AND_SKIP_DISPOSITION_NOT_PROVEN");
@@ -237,8 +253,7 @@ export function validateCutoverControls(controls, {
     if (controls.mongoTarget.database !== "games" || controls.mongoTarget.collection !== "lk_games"
       || !String(controls.mongoTarget.replicaSetName || "").trim()
       || controls.mongoTarget.topology !== "REPLICA_SET"
-      || !Number.isFinite(Date.parse(controls.mongoTarget.verifiedAt))
-      || nowMs - Date.parse(controls.mongoTarget.verifiedAt) > 30 * 60_000) {
+      || !isFreshTimestamp(controls.mongoTarget.verifiedAt, 30 * 60_000)) {
       fail("Mongo target PASS evidence is internally inconsistent");
     }
   } else blockers.push("EXACT_MONGO_TARGET_NOT_PROVEN");
@@ -321,6 +336,7 @@ export function buildVivaGameProjectionCutoverPlan({
     } : null,
     migration: {
       planSha256s: planSummary.planSha256s,
+      operationIds: planSummary.operationIds,
       totalEligible: planSummary.totalEligible,
       totalSkipped: planSummary.totalSkipped,
       executor: "scripts/run_viva_game_projection_tenant_migration.mjs",
@@ -333,9 +349,11 @@ export function buildVivaGameProjectionCutoverPlan({
       sourceWriterCount: sourceWriters.length,
       candidateWriterCount: candidateWriters.length,
       exactWriterNodeIds: writerNodeIds,
+      exactMigrationOperationIds: planSummary.operationIds,
       sourceWriters,
       candidateWriters,
       writerInventorySha256,
+      externalWriterProofSha256: controls.writerFence?.externalWriterProofSha256,
       fenceTokenSha256: controls.writerFence?.fenceTokenSha256,
       lockPath: controls.writerFence?.lockPath,
       mustRemainHeldThroughDataAndFlowPostchecks: true,
@@ -352,6 +370,7 @@ export function buildVivaGameProjectionCutoverPlan({
       runtimeTenantReadBackAt: controls.runtimeTenant?.readBackAt || null,
       backupManifestSha256: controls.backup?.manifestSha256 || null,
       backupSha256: controls.backup?.backupSha256 || null,
+      externalWriterProofSha256: controls.writerFence?.externalWriterProofSha256 || null,
     },
     phases: [
       "provision and read back PADLHUB_PLATFORM_TENANT_KEY with PM2 --update-env under separate approval",
@@ -382,7 +401,7 @@ export function buildVivaGameProjectionCutoverPlan({
   };
 }
 
-export function validateVivaGameProjectionCutoverPostcheck(receipt, plan, nowMs = Date.now()) {
+export function validateVivaGameProjectionCutoverPostcheck(receipt, plan, nowMs = Date.now(), evidence = {}) {
   if (!isObject(plan) || plan.kind !== "viva-game-projection-tenant-cutover-plan") {
     fail("Cutover plan contract mismatch");
   }
@@ -404,6 +423,8 @@ export function validateVivaGameProjectionCutoverPostcheck(receipt, plan, nowMs 
     || receipt.workerWriteCount !== plan.postchecks.shadowWritesExpected
     || receipt.runtimeTenantReadback !== true
     || receipt.candidateFlowReadback !== true
+    || receipt.ingressReopened !== false
+    || !HASH_RE.test(String(receipt.fenceReceiptSha256 || ""))
     || !Number.isFinite(Date.parse(receipt.observedAt))
     || nowMs - Date.parse(receipt.observedAt) > 5 * 60_000
     || Date.parse(receipt.observedAt) > nowMs + 60_000
@@ -419,9 +440,33 @@ export function validateVivaGameProjectionCutoverPostcheck(receipt, plan, nowMs 
     if (!expectedPlans.delete(item?.planSha256)) fail("Cutover postcheck apply-report binding mismatch");
     assertHash(item.reportSha256, "Cutover apply report digest");
     assertHash(item.applyReceiptSha256, "Cutover apply receipt digest");
+    const reportBytes = evidence.applyReportBytesByPlan?.[item.planSha256];
+    if (!Buffer.isBuffer(reportBytes) || sha256(reportBytes) !== item.reportSha256) {
+      fail("Cutover postcheck lacks the exact apply-report artifact");
+    }
+    let report;
+    try { report = JSON.parse(reportBytes.toString("utf8")); } catch { fail("Cutover apply-report artifact is invalid"); }
+    if (report?.mode !== "APPLY" || report.outcome !== "SUCCEEDED" || report.planSha256 !== item.planSha256
+      || sha256(canonicalJson(report.applyReceipt)) !== item.applyReceiptSha256) {
+      fail("Cutover apply-report artifact does not prove a successful apply");
+    }
   }
-  for (const key of ["activeReachableLegacySha256", "duplicateIdentitySha256", "providerTenantBoundSha256", "workerModeSha256"]) {
+  const queryContracts = {
+    activeReachableLegacySha256: ["viva-game-projection-active-legacy-query", "count", receipt.activeReachableLegacyCount],
+    duplicateIdentitySha256: ["viva-game-projection-duplicate-identity-query", "count", receipt.duplicateIdentityCount],
+    providerTenantBoundSha256: ["viva-game-projection-provider-tenant-bound-query", "exactPostimageCount", receipt.providerConfirmedTenantBoundCount],
+    workerModeSha256: ["viva-game-projection-worker-mode-query", "writeCount", receipt.workerWriteCount],
+  };
+  for (const [key, [kind, countKey, expectedCount]] of Object.entries(queryContracts)) {
     assertHash(receipt.queryEvidence[key], `Cutover postcheck ${key}`);
+    const bytes = evidence.queryEvidenceBytes?.[key];
+    if (!Buffer.isBuffer(bytes) || sha256(bytes) !== receipt.queryEvidence[key]) {
+      fail(`Cutover postcheck lacks exact ${key} evidence`);
+    }
+    let query;
+    try { query = JSON.parse(bytes.toString("utf8")); } catch { fail(`Cutover postcheck ${key} evidence is invalid`); }
+    if (query?.kind !== kind || query[countKey] !== expectedCount) fail(`Cutover postcheck ${key} evidence mismatch`);
+    if (key === "workerModeSha256" && query.mode !== receipt.workerMode) fail("Cutover worker-mode evidence mismatch");
   }
   return true;
 }

@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { BSON, ObjectId } from "mongodb";
 
 import {
   buildVivaGameProjectionCutoverPlan,
@@ -12,7 +13,10 @@ import {
   inventoryLkGamesWriters,
   sha256,
 } from "./lib/vivaGameProjectionCutoverContract.mjs";
-import { validateExecutableTenantMigrationPlan } from "./lib/vivaGameProjectionTenantMigrationExecution.mjs";
+import {
+  hashCanonicalEjson,
+  validateExecutableTenantMigrationPlan,
+} from "./lib/vivaGameProjectionTenantMigrationExecution.mjs";
 import {
   buildExactGraphContract,
   syncDirectory,
@@ -140,22 +144,63 @@ function loadMigrationPlans(indexPath, expectedSourceFlowSha256, tenantKey) {
 
 function loadControlEvidence(controls) {
   const evidence = [];
+  if (controls.writerFence?.state === "HELD") {
+    const proof = readPrivateJson(controls.writerFence.externalWriterProofPath, "External writer proof", 16 * 1024 * 1024);
+    if (sha256(proof.bytes) !== controls.writerFence.externalWriterProofSha256
+      || proof.value?.formatVersion !== 1
+      || proof.value?.kind !== "viva-game-projection-external-writer-proof"
+      || proof.value?.writerInventorySha256 !== controls.writerFence.writerInventorySha256
+      || proof.value?.fenceTokenSha256 !== controls.writerFence.fenceTokenSha256
+      || proof.value?.host !== controls.writerFence.host
+      || proof.value?.hostname !== controls.writerFence.hostname
+      || proof.value?.canonicalLockPath !== controls.writerFence.lockPath
+      || proof.value?.allWritersUseCanonicalLock !== true
+      || proof.value?.unfencedWriterCount !== 0
+      || !Number.isSafeInteger(proof.value?.writerProcessCount)
+      || proof.value.writerProcessCount < 1
+      || !Number.isFinite(Date.parse(proof.value?.observedAt))) {
+      fail("External writer proof does not bind every writer to the canonical fence");
+    }
+    evidence.push({ name: "external-writer-proof.json", bytes: proof.bytes });
+  }
   if (controls.backup?.state === "PASS") {
     const backup = readPrivateJson(controls.backup.manifestPath, "Full backup manifest", 16 * 1024 * 1024);
+    const artifact = readPrivateFile(controls.backup.artifactPath, "Full backup artifact", 1024 * 1024 * 1024);
+    let documents;
+    try { documents = BSON.EJSON.parse(artifact.toString("utf8"), { relaxed: false }); } catch {
+      fail("Full backup artifact must be canonical EJSON");
+    }
+    if (!Array.isArray(documents) || documents.some((document) => !(document?._id instanceof ObjectId))) {
+      fail("Full backup artifact must be an array of BSON documents with ObjectId identity");
+    }
+    const stateRows = documents.map((document) => ({
+      mongoId: document._id.toHexString(),
+      documentSha256: hashCanonicalEjson(document),
+    })).sort((left, right) => left.mongoId.localeCompare(right.mongoId));
+    if (new Set(stateRows.map(({ mongoId }) => mongoId)).size !== stateRows.length) {
+      fail("Full backup artifact contains duplicate document identities");
+    }
+    const artifactSha256 = sha256(artifact);
+    const fullCollectionStateSha256 = sha256(canonicalJson(stateRows));
     if (sha256(backup.bytes) !== controls.backup.manifestSha256
       || backup.value?.formatVersion !== 1
       || backup.value?.kind !== "viva-game-projection-full-lk-games-backup-manifest"
       || backup.value?.backupSha256 !== controls.backup.backupSha256
       || backup.value?.fullCollectionStateSha256 !== controls.backup.fullCollectionStateSha256
+      || backup.value?.artifactPath !== controls.backup.artifactPath
+      || artifactSha256 !== controls.backup.backupSha256
+      || fullCollectionStateSha256 !== controls.backup.fullCollectionStateSha256
       || backup.value?.fenceTokenSha256 !== controls.backup.fenceTokenSha256
       || backup.value?.database !== controls.backup.database
       || backup.value?.collection !== controls.backup.collection
       || backup.value?.documentCount !== controls.backup.documentCount
+      || documents.length !== controls.backup.documentCount
       || backup.value?.startedAt !== controls.backup.startedAt
       || backup.value?.completedAt !== controls.backup.completedAt) {
       fail("Full backup manifest does not bind the declared backup control");
     }
     evidence.push({ name: "full-backup.manifest.json", bytes: backup.bytes });
+    evidence.push({ name: "full-backup.ejson", bytes: artifact });
   }
   if (controls.restoreRehearsal?.state === "PASS") {
     const restore = readPrivateJson(controls.restoreRehearsal.receiptPath, "Restore rehearsal receipt", 16 * 1024 * 1024);

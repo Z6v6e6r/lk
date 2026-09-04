@@ -68,6 +68,8 @@
     "nodered:viva-game-projection-sync:candidate": "node scripts/prepare_viva_game_projection_sync_candidate.mjs",
     "nodered:viva-game-projection-sync:migration-plan": "node scripts/prepare_viva_game_projection_tenant_migration.mjs",
     "nodered:viva-game-projection-sync:cutover-packet": "node scripts/prepare_viva_game_projection_cutover_packet.mjs",
+    "nodered:viva-game-projection-sync:cutover-postcheck": "node scripts/prepare_viva_game_projection_cutover_postcheck.mjs",
+    "nodered:viva-game-projection-sync:cutover-run": "bash scripts/run_viva_game_projection_cutover.sh",
     "mongo:viva-game-projection-sync:migration": "bash scripts/run_viva_game_projection_fenced_migration.sh",
     "nodered:split-pricing-recovery:patch": "node scripts/patch_live_split_pricing_recovery.mjs",
     "nodered:game-payment-confirmation:patch": "node scripts/patch_live_game_payment_confirmation.mjs",

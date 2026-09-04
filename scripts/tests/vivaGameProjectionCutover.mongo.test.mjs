@@ -113,6 +113,15 @@ maybeTest("real replica set applies and restores an exact tenant migration under
     const reviewedContractPath = path.join(packetRoot, "reviewed-flow.contract.json");
     const reviewedContractBytes = Buffer.from("{\"fixture\":true}\n");
     write0600(reviewedContractPath, reviewedContractBytes);
+    const evidenceDirectory = path.join(packetRoot, "evidence");
+    fs.mkdirSync(evidenceDirectory, { mode: 0o700 });
+    fs.chmodSync(evidenceDirectory, 0o700);
+    const externalWriterProofBytes = Buffer.from("{\"fixture\":\"external-writer-proof\"}\n");
+    const fullBackupManifestBytes = Buffer.from("{\"fixture\":\"full-backup-manifest\"}\n");
+    const fullBackupBytes = Buffer.from("{\"fixture\":\"full-backup\"}\n");
+    write0600(path.join(evidenceDirectory, "external-writer-proof.json"), externalWriterProofBytes);
+    write0600(path.join(evidenceDirectory, "full-backup.manifest.json"), fullBackupManifestBytes);
+    write0600(path.join(evidenceDirectory, "full-backup.ejson"), fullBackupBytes);
     const mongoTarget = buildMongoTargetIdentity({
       connectionFingerprint: sha256(mongoUri),
       replicaSetName: hello.setName,
@@ -136,11 +145,18 @@ maybeTest("real replica set applies and restores an exact tenant migration under
       migration: { planSha256s: [planSha256] },
       writerFence: {
         exactWriterNodeIds: ["writer-fixture"],
+        exactMigrationOperationIds: [operationId],
         fenceTokenSha256: sha256(fenceToken),
         writerInventorySha256,
+        externalWriterProofSha256: sha256(externalWriterProofBytes),
         lockPath: "/run/lock/padlhub-viva-game-projection-cutover.lock",
       },
       mongoTarget,
+      evidence: {
+        externalWriterProofSha256: sha256(externalWriterProofBytes),
+        backupManifestSha256: sha256(fullBackupManifestBytes),
+        backupSha256: sha256(fullBackupBytes),
+      },
       liveMutationAuthorized: false,
     }, null, 2)}\n`);
     write0600(cutoverPath, cutoverBytes);
@@ -157,6 +173,9 @@ maybeTest("real replica set applies and restores an exact tenant migration under
         { path: "candidate.flow.json", sha256: candidateSha256 },
         { path: "cutover-controls.json", sha256: sha256(controlsBytes) },
         { path: "cutover-plan.json", sha256: cutoverSha256 },
+        { path: "evidence/external-writer-proof.json", sha256: sha256(externalWriterProofBytes) },
+        { path: "evidence/full-backup.ejson", sha256: sha256(fullBackupBytes) },
+        { path: "evidence/full-backup.manifest.json", sha256: sha256(fullBackupManifestBytes) },
         { path: "migration-plans/01-plan.json", sha256: planSha256 },
         { path: "reviewed-flow.contract.json", sha256: sha256(reviewedContractBytes) },
         { path: "source.flow.json", sha256: sourceFlowSha256 },
@@ -174,11 +193,12 @@ maybeTest("real replica set applies and restores an exact tenant migration under
       pm2ProcessId: 0,
       fenceToken,
       writerInventorySha256,
+      externalWriterProofSha256: sha256(externalWriterProofBytes),
       lockPath: "/run/lock/padlhub-viva-game-projection-cutover.lock",
       sourceFlowSha256,
       candidateSha256,
       tenantKey,
-      operationId,
+      operationIds: [operationId],
       nodeRedProcessState: "STOPPED",
       ingressWriteRoutesBlocked: true,
       internalSchedulersStopped: true,
@@ -202,7 +222,7 @@ maybeTest("real replica set applies and restores an exact tenant migration under
     ];
 
     const verifyReport = path.join(root, "verify-report.json");
-    const dependencies = { assertSystemFenceLease: () => true };
+    const dependencies = { assertSystemFenceLease: () => true, assertCheapFenceLease: () => true };
     const verified = await runMigration(["--mode", "verify", ...common, "--report", verifyReport], dependencies);
     assert.equal(verified.writeCommandCount, 0);
     assert.equal(verified.liveMutationPerformed, false);
@@ -229,8 +249,18 @@ maybeTest("real replica set applies and restores an exact tenant migration under
     ], dependencies);
     assert.equal(reconciled.outcome, "APPLIED_RECOVERED");
 
-    process.env.VIVA_GAME_PROJECTION_MIGRATION_RESTORE = "RESTORE_VIVA_GAME_PROJECTION_TENANT_MIGRATION_V1";
     const applyReportBytes = fs.readFileSync(applyReportPath);
+    const preRestoreReconcile = await runMigration([
+      "--mode", "reconcile-restore", ...common,
+      "--backup", applied.backupPath,
+      "--expected-backup-sha256", applied.backupSha256,
+      "--apply-receipt", applyReportPath,
+      "--expected-apply-report-sha256", sha256(applyReportBytes),
+      "--report", path.join(root, "reconcile-restore-before.json"),
+    ], dependencies);
+    assert.equal(preRestoreReconcile.outcome, "RESTORE_ABORTED_POSTIMAGE");
+
+    process.env.VIVA_GAME_PROJECTION_MIGRATION_RESTORE = "RESTORE_VIVA_GAME_PROJECTION_TENANT_MIGRATION_V1";
     const restoreReportPath = path.join(root, "restore-report.json");
     const restored = await runMigration([
       "--mode", "restore", ...common,
@@ -243,6 +273,15 @@ maybeTest("real replica set applies and restores an exact tenant migration under
     assert.equal(restored.outcome, "SUCCEEDED");
     const finalDocument = await collection.findOne({ _id: preimage._id });
     assert.deepEqual(BSON.EJSON.serialize(finalDocument, { relaxed: false }), BSON.EJSON.serialize(preimage, { relaxed: false }));
+    const postRestoreReconcile = await runMigration([
+      "--mode", "reconcile-restore", ...common,
+      "--backup", applied.backupPath,
+      "--expected-backup-sha256", applied.backupSha256,
+      "--apply-receipt", applyReportPath,
+      "--expected-apply-report-sha256", sha256(applyReportBytes),
+      "--report", path.join(root, "reconcile-restore-after.json"),
+    ], dependencies);
+    assert.equal(postRestoreReconcile.outcome, "RESTORED_RECOVERED");
   } finally {
     if (originalApply === undefined) delete process.env.VIVA_GAME_PROJECTION_MIGRATION_APPLY;
     else process.env.VIVA_GAME_PROJECTION_MIGRATION_APPLY = originalApply;

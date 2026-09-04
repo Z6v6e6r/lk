@@ -204,15 +204,24 @@ directory. The packet manifest binds the exact commit, source, deterministically
 rebuilt candidate, controls, reviewed-flow contract, plans, and evidence files.
 
 The packet enumerates every `mongodb4` writer to `lk_games` in both the source
-and candidate graphs. A valid fence receipt must bind that exact union, show
+and candidate graphs. `aggregate` is conservatively classified as a writer,
+and a dynamic collection or blank operation on the LK Games tab is rejected as
+unclassifiable. A valid fence receipt must bind the exact writer union and the
+complete set of migration operation IDs, show
 write ingress blocked, internal schedulers stopped, Node-RED stopped, and all
 writers quiescent. Production execution must use
-`scripts/run_viva_game_projection_fenced_migration.sh`; it holds the canonical
-host `flock` for the whole process. The executor checks the inherited descriptor,
-live PM2 stopped state, PM2 tenant value, Mongo target identity, and active Mongo
-writers before backup, inside the transaction, between each CAS and readback,
-and after commit. The receipt expires and must leave at least two minutes on its
-lease. A generated packet always has
+`scripts/run_viva_game_projection_cutover.sh`. Its one inherited descriptor
+holds the canonical host `flock` continuously across every migration plan,
+candidate publication, `pm2 restart --update-env`, live read-only postchecks,
+and READY-marker publication. The lower-level
+`scripts/run_viva_game_projection_fenced_migration.sh` is retained for one
+verify, reconciliation, apply, or restore action only. The executor performs a
+full live PM2/tenant/flock/current-op check before and after each transaction,
+uses a one-second watchdog during the transaction, and performs a cheap
+descriptor/token/inode lease check around each CAS and readback. Each plan is
+limited to 100 operations so those checks and the 15-second commit deadline fit
+inside a bounded transaction. The receipt expires and must leave at least two
+minutes on its lease. A generated packet always has
 `liveMutationAuthorized: false`; `READY_FOR_SEPARATE_LIVE_APPROVAL` means the
 evidence is internally complete for review, not that apply, import, restart, or
 activation is authorized.
@@ -229,20 +238,38 @@ fsynced state journal and writes `TRANSACTION_OUTCOME_UNKNOWN` before the
 transaction begins. If the client loses the commit result, `reconcile` compares
 every current document to the exact preimage and deterministic postimage; it
 returns only `ABORTED_NO_MUTATION`, `APPLIED_RECOVERED`, or
-`BLOCKED_MIXED_OR_DRIFT`. `restore`
+`BLOCKED_MIXED_OR_DRIFT`. `reconcile-restore` separately distinguishes an
+uncommitted restore, a fully recovered restore, and mixed/drifted state. `restore`
 requires the exact apply receipt and backup, rejects any post-apply drift, and
 restores every full preimage with CAS in a separate transaction. Apply and
 restore each need a separately approved live-data transition and their exact
 environment confirmation phrase; preparing or verifying the packet does not
 set either phrase.
 
-After migration and candidate installation, the postcheck receipt must remain
-bound to the held fence and prove the exact candidate and runtime tenant,
-all apply-report and apply-receipt hashes, zero active reachable legacy rows,
-hashed query evidence, zero duplicate provider
-identities, at least one provider-confirmed tenant-bound row, and a `SHADOW`
-worker with zero writes. Failure of any item forbids reopening ingress. Restoring
-the old flow is allowed only after the exact data backup has been restored.
+After migration and candidate installation, the coordinator calls
+`prepare_viva_game_projection_cutover_postcheck.mjs` while it still owns the
+same lock. The postcheck rereads every actual apply report and migration plan,
+validates every apply receipt, compares every migrated row with its exact
+postimage, queries Mongo for remaining active legacy rows and duplicate provider
+identities, checks for projection-worker audit writes since PM2 restart, and
+reads back the exact candidate, runtime tenant, replica-set identity, and
+`SHADOW` mode. It hashes the actual evidence bytes and atomically writes the
+postcheck receipt, manifest, and `READY_TO_REOPEN_INGRESS.json`. The standalone
+receipt validator refuses synthetic hash strings without those exact bytes.
+The coordinator reports `POSTCHECK_PASS_INGRESS_STILL_BLOCKED`; it never opens
+ingress. A failed postcheck emits no READY marker and stops Node-RED if the
+candidate was already published. Restoring the old flow is allowed only after
+the exact data backup has been restored.
+
+The coordinator consumes one private `viva-game-projection-cutover-execution-index`
+whose SHA-256 is separately pinned. The index binds the packet, fence receipt,
+tenant, exact plan/report/backup paths, flow-backup directory, apply-index output,
+postcheck output, and canonical live flow path. Live execution requires both
+the migration confirmation and `VIVA_GAME_PROJECTION_CUTOVER_EXECUTE=`
+`EXECUTE_VIVA_GAME_PROJECTION_CUTOVER_V1`; neither is present in a prepared
+packet. Run `npm run nodered:viva-game-projection-sync:cutover-run -- --help`
+for the bounded CLI. Producing a READY marker still does not authorize the
+separate ingress-opening transition.
 
 ## Candidate preparation
 
