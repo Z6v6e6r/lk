@@ -30,6 +30,7 @@ test("flow patcher adds only the three separate M2M routes and one fail-closed h
   assert.ok(routes.every((node) => node.wires[0][0] === PARTNER_API_FLOW_NODE_IDS.handler));
   const store = result.flow.find((node) => node.id === PARTNER_API_FLOW_NODE_IDS.store);
   assert.equal(store.enabledEnv, "LK_PARTNER_GAME_API_ENABLED");
+  assert.equal(store.audienceEnv, "LK_PARTNER_GAME_API_AUDIENCE");
   assert.equal(store.vivaMutationsEnabledEnv, "LK_PARTNER_GAME_API_VIVA_MUTATIONS_ENABLED");
   assert.equal(store.vivaContractRevisionEnv, "LK_PARTNER_GAME_API_VIVA_CONTRACT_REVISION");
   assert.equal(store.vivaIdempotencyConfirmedEnv, "LK_PARTNER_GAME_API_VIVA_IDEMPOTENCY_CONFIRMED");

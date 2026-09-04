@@ -25,9 +25,9 @@ provisioning, Mongo production migration, deploy и activation.
 
 ```text
 [Partner/KMS]
-      | TLS + optional mTLS, HMAC proof
+      | TLS + mandatory mTLS, audience-bound HMAC proof
       v
-[Ingress: allowlist/rate-limit]        -- UNBOUND
+[Ingress: mandatory mTLS/Host/SNI/socket-peer/rate-limit] -- UNBOUND
       |
       v
 [Node-RED custom API node]
@@ -105,14 +105,14 @@ settlement. Viva является authority только для существо
 - Влияние: duplicate player, двойная техническая запись или повторное удаление.
 - Контроли: HMAC покрывает весь request identity; окно 90 секунд; majority-backed unique
   nonce до операции; idempotency отдельно блокирует duplicate business command.
-- Остаток: real-time relay до первого consume не устраняется HMAC. До пилота нужен mTLS
-  или минимум IP allowlist, rate limit и trusted-proxy review.
+- Остаток: real-time relay до первого consume не устраняется HMAC. До пилота обязателен
+  mTLS; IP allowlist только дополняет socket-peer validation, rate limit и trusted-proxy review.
 - Риск после v0.2 application controls: medium; до ingress controls: high.
 
 ### T2. Подмена body/path/method
 
 - Путь: заменить game, membership, amount, payment reference или POST на DELETE.
-- Контроли: exact path/method/body hash входят в HMAC; query запрещён; JSON canonical;
+- Контроли: exact audience/path/method/body hash входят в HMAC; query запрещён; JSON canonical;
   closed schema запрещает caller-controlled `source/paid/Viva IDs`.
 - Остаток: обе стороны должны реализовать один canonical JSON; нужны golden vectors.
 - Риск: low после contract tests.
@@ -122,7 +122,7 @@ settlement. Viva является authority только для существо
 - Путь: атакующий подписывает новые валидные команды — anti-replay не помогает.
 - Контроли: отдельные client/key, scopes, station allowlist, kill switch, key rotation,
   audit/alerts.
-- Отсутствует: KMS attestation, expiry, mTLS second factor, automated revocation.
+- Отсутствует: KMS attestation, automated revocation и production certificate binding.
 - Риск: high до утверждённой key custody и mTLS.
 
 ### T4. Удаление игрока LK/Viva/админки или другого партнёра
@@ -220,8 +220,10 @@ settlement. Viva является authority только для существо
 3. Сопоставить provisional Viva adapter с подтверждённой OpenAPI/examples; не включать
    четыре mutation gates до отдельного security/payment-safety/reliability review.
 4. Прогнать Mongo replica/concurrency/ambiguous-commit tests.
-5. Настроить mTLS предпочтительно; минимум ingress IP allowlist, TLS, rate/body limits.
-6. Создать отдельные sandbox key/technical client/Mongo DB без production данных.
+5. Настроить обязательный mTLS, exclusive Host/SNI ingress, socket-peer allowlist,
+   TLS, rate/body limits и отрицательный readback обходных путей.
+6. Создать отдельные sandbox client ID/HMAC key/certificate/audience/technical client/
+   Mongo DB без production данных и без переиспользования production material.
 
 ### До production
 
@@ -231,6 +233,28 @@ settlement. Viva является authority только для существо
 3. Audit RBAC/retention/SIEM alerts и key rotation/revocation rehearsal.
 4. Downstream compatibility для payment, roster sync, reporting, rating/notifications.
 5. Limited pilot с одной station/client, expiring access и проверенным kill switch.
+
+### Runtime/ingress remediation rehearsal 2026-09-03
+
+Exact custom package функционально совместим с Node-RED `4.1.14`: default-off route
+вернул `503`, graceful stop завершил flows, flow и package rollback дали `404`, после
+cache quarantine Partner palette matches равны нулю. Нормализованный evidence привязан
+к exact custom-node release; его scope — только load/default-off/removal compatibility,
+а не доказательство следующего fresh flow candidate. Production не затрагивался.
+
+При этом exact `npm audit --omit=dev` closure содержит `0 critical / 15 high / 9
+moderate / 1 low` affected package records; среди request-path зависимостей остались
+`express`, `body-parser` и `qs`. Runtime поэтому имеет состояние `AUDIT_BLOCKED`, а не
+remediated. На loopback также наблюдался общий `Access-Control-Allow-Origin: *`.
+Machine-readable production controls требуют отдельный exact-host/SNI ingress, запрет
+editor/admin/OPTIONS/query, скрытие CORS, duplicate-header rejection, нулевой proxy
+retry, duplicate-JSON rejection до parser, обязательный mTLS, socket-peer identity,
+очистку inbound forwarding headers, консервативные limits и приватную packet custody.
+Все binding-поля остаются
+`UNBOUND`; любое заполнение в source template или activation flag отклоняется tests.
+Private overlay validator не повышает статус: packet/host custody он проверяет по exact
+bytes и local identity, но ingress/readback/audit decision остаются
+`DECLARED_EVIDENCE_UNVERIFIED` до отдельного live verifier.
 
 ## 5. Review status
 

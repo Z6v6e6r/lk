@@ -971,9 +971,36 @@ provider postcheck: `docs/VIVA_USER_AGENT.md`.
 
 Этот endpoint нельзя выкладывать обычным frontend deploy. Сначала нужен свежий private
 Node-RED workspace с `lk-primary-147`, затем
-`npm run nodered:partner-game-membership:v02-packet -- --workspace <workspace> --out <new-external-dir>`.
+создать canonical user-owned parent с mode `0700` и выполнить
+`npm run nodered:partner-game-membership:v02-packet -- --workspace <workspace> --out <private-parent/new-child>`.
+`<new-child>` не должен существовать; world-writable `/private/tmp` не подходит как
+непосредственный parent.
 Packet всегда содержит `liveMutationAuthorized=false`, `deploymentPerformed=false` и
 `activationPerformed=false`. Его наличие не разрешает install/import/restart, создание
 Mongo indexes, provisioning secrets/ACL, ingress change или Viva mutation. Полный
 порядок, обязательные external ответы и rollback gates описаны в
 `docs/PARTNER_GAME_MEMBERSHIP_API.md`.
+
+Перед генерацией и перед любым production-side переходом отдельно выполнить
+`npm run validate:partner-game-membership-production-controls` и
+`npm run validate:partner-game-membership-runtime`. Packet обязан содержать
+`production-controls.contract.json` с тем же SHA-256, что `deployment-plan.json`, exact
+runtime lock/`npm ls`/audit/functional manifest, `source.flow.json` и финальный
+`packet.manifest.json`. Functional rehearsal доказывает только exact custom-node
+load/default-off/removal compatibility, но не новый fresh flow candidate. Packet собирается
+в sibling temp-directory и становится видимым только atomic rename после fsync.
+Текущее состояние — `runtime=AUDIT_BLOCKED`, `ingress=UNBOUND`, `custody=UNBOUND`,
+`activation=BLOCKED`: isolated Node-RED `4.1.14` совместим, но его свежий dependency
+audit не чистый. Exact ingress/custody contract, limits и rehearsal evidence описаны в
+`docs/PARTNER_GAME_MEMBERSHIP_PRODUCTION_CONTROLS.md`. Private binding проверяется
+`npm run validate:partner-game-membership-production-binding -- --binding <absolute-json> --packet-root <absolute-bound-packet>`:
+обязательны exclusive Host/SNI, mTLS, audience, socket-peer identity, отрицательный
+readback, exact packet path/owner/hash/modes/semantics, custody owners и разные
+test/production fingerprints; production certificate fingerprint обязан совпадать с
+декларируемым в overlay ingress mTLS certificate fingerprint. Production CLI выполняется на target Linux host
+от UID `0` и связывает `targetHostname` и SHA-256 `/etc/machine-id`. Даже PASS validator не
+пройдёт при target platform/architecture, отличных от rehearsed `linux/arm64`, и не
+разрешает менять ingress, секреты, packet custody или production runtime. Его успешный
+результат — только `DECLARED_EVIDENCE_UNVERIFIED_AUDIT_BLOCKED_NOT_AUTHORIZED`:
+ingress config/readback/certificate/CA, negative probes и подписанный audit reachability
+artifact должен проверить отдельный live verifier до deploy.

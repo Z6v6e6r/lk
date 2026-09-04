@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-export const PARTNER_API_VERSION = "PADLHUB-PARTNER-GAME-V1";
+export const PARTNER_API_VERSION = "PADLHUB-PARTNER-GAME-V2";
 export const PARTNER_API_BASE_PATH = "/lk/integrations/v1";
 export const PARTNER_API_DEFAULT_MAX_SKEW_SECONDS = 90;
 export const PARTNER_API_NONCE_TTL_SECONDS = 86_400;
@@ -8,7 +8,7 @@ export const PARTNER_API_NONCE_TTL_SECONDS = 86_400;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/;
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{22,128}$/;
-const SIGNATURE_PATTERN = /^v1=([A-Za-z0-9_-]{43})$/;
+const SIGNATURE_PATTERN = /^v2=([A-Za-z0-9_-]{43})$/;
 const EXTERNAL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 
@@ -106,6 +106,7 @@ const normalizePath = (rawPath) => {
 export function buildPartnerSignatureInput(input) {
   const method = String(input.method || "").trim().toUpperCase();
   const path = normalizePath(input.path);
+  const audience = assertToken(String(input.audience || "").trim(), "audience");
   const clientId = assertToken(String(input.clientId || "").trim(), "client id");
   const keyId = assertToken(String(input.keyId || "").trim(), "key id");
   const timestamp = String(input.timestamp || "").trim();
@@ -115,6 +116,7 @@ export function buildPartnerSignatureInput(input) {
   const bodyHash = input.bodyHash || sha256Hex(canonicalJson(input.body ?? {}));
   return [
     PARTNER_API_VERSION,
+    audience,
     clientId,
     keyId,
     timestamp,
@@ -128,10 +130,11 @@ export function buildPartnerSignatureInput(input) {
 }
 
 export function signPartnerRequest(input, secret) {
-  return `v1=${hmacBase64Url(secret, buildPartnerSignatureInput(input))}`;
+  return `v2=${hmacBase64Url(secret, buildPartnerSignatureInput(input))}`;
 }
 
 const requestIdentityFromHeaders = (request, strict = false) => ({
+  audience: canonicalHeaderValue(request.headers, "x-padlhub-audience", strict),
   clientId: canonicalHeaderValue(request.headers, "x-padlhub-client-id", strict),
   keyId: canonicalHeaderValue(request.headers, "x-padlhub-key-id", strict),
   timestamp: canonicalHeaderValue(request.headers, "x-padlhub-timestamp", strict),
@@ -228,6 +231,7 @@ export async function verifyPartnerRequestProof(request, options) {
   const method = String(request.method || "").trim().toUpperCase();
   const path = normalizePath(request.path);
   const body = request.body ?? {};
+  assertToken(identity.audience, "audience");
   assertToken(identity.clientId, "client id");
   assertToken(identity.keyId, "key id");
   if (!/^\d{10}$/.test(identity.timestamp)) {
@@ -241,6 +245,9 @@ export async function verifyPartnerRequestProof(request, options) {
   }
   if (!UUID_PATTERN.test(identity.correlationId)) {
     throw new PartnerApiError("INVALID_CORRELATION_ID", "X-Correlation-ID must be a lowercase UUID", { httpStatus: 400 });
+  }
+  if (identity.audience !== options.expectedAudience) {
+    throw new PartnerApiError("INVALID_AUDIENCE", "Request audience is invalid", { httpStatus: 401 });
   }
   const signatureMatch = identity.signature.match(SIGNATURE_PATTERN);
   if (!signatureMatch) {
@@ -293,6 +300,7 @@ export async function verifyPartnerRequestProof(request, options) {
     proofHash: sha256Hex(signatureInput),
     requestHash: sha256Hex([
       PARTNER_API_VERSION,
+      identity.audience,
       identity.clientId,
       method,
       path,
@@ -361,12 +369,14 @@ export class PartnerGameMembershipApiService {
     this.repository = options.repository;
     this.provider = options.provider;
     this.keyResolver = options.keyResolver;
+    this.expectedAudience = String(options.expectedAudience || "").trim();
     this.technicalVivaClientId = String(options.technicalVivaClientId || "").trim();
     this.auditKey = Buffer.isBuffer(options.auditKey)
       ? options.auditKey
       : Buffer.from(String(options.auditKey || ""), "base64url");
     this.now = options.now || (() => new Date());
     this.maxSkewSeconds = options.maxSkewSeconds || PARTNER_API_DEFAULT_MAX_SKEW_SECONDS;
+    if (!TOKEN_PATTERN.test(this.expectedAudience)) throw new Error("Partner API audience is missing or invalid");
     if (this.auditKey.length < 32) throw new Error("Partner API audit HMAC key must contain at least 32 bytes");
   }
 
@@ -408,6 +418,7 @@ export class PartnerGameMembershipApiService {
       auth = await verifyPartnerRequestProof(request, {
         keyResolver: this.keyResolver,
         nonceStore: this.repository,
+        expectedAudience: this.expectedAudience,
         nowMs: this.now().getTime(),
         maxSkewSeconds: this.maxSkewSeconds,
       });

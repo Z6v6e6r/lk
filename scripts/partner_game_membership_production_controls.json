@@ -1,0 +1,219 @@
+{
+  "formatVersion": 1,
+  "deploymentId": "partner-game-membership-api-v02",
+  "environment": "PRODUCTION",
+  "contractState": "UNBOUND",
+  "executionAuthorized": false,
+  "productionMutationAllowed": false,
+  "runtime": {
+    "state": "AUDIT_BLOCKED",
+    "requiredNodeVersion": "22.23.2",
+    "minimumRehearsedNodeRedVersion": "4.1.14",
+    "exactNodeRedVersionRequired": true,
+    "compatibilityRehearsalRequired": true,
+    "securityAuditRequired": true,
+    "immutableClosure": {
+      "runtimeManifestSha256": "10cf68dc9edfbdf2d671e93f4f9ab7d84827f6c0083c873df4444f735daca7ff",
+      "packageJsonSha256": "36d418c9d0de433273f9555de8b251385f33a226aefbe825560e5bebd163d9f1",
+      "packageLockSha256": "945d68a8574574d1a1676941e82333e1977061ade4a31a8c800e8fe9b1b03377",
+      "dependencyTreeSha256": "edbc9c3c4c1bf6afc0fbe0962eba9b29b6dbca64377d0e4c5312c2b4cbda904b",
+      "auditReportSha256": "6c26da095ae8558e32e31db6b1579ca765ce3be3f3b4f779fdc393633bcc60f8",
+      "functionalRehearsalSha256": "314499b2aa30618e26481dd8f533c32e13abd720d730473dfccfcd8ba880d0d2",
+      "functionalRehearsalCapturedAt": "2026-09-03T20:34:23.000Z",
+      "auditCapturedAt": "2026-09-03T20:11:28.918Z",
+      "dependencyTreeCapturedAt": "2026-09-03T20:12:36.295Z",
+      "npmCiInstalledPackageCount": 290,
+      "npmLsPackageOccurrenceCount": 926,
+      "npmLsInvalidPackageCount": 0,
+      "npmLsExtraneousPackageCount": 0,
+      "productionInstallCommand": "npm ci --ignore-scripts --no-fund --no-audit"
+    },
+    "auditPolicy": {
+      "maxAgeHours": 24,
+      "criticalAffectedPackages": 0,
+      "highReachablePackages": 0,
+      "partnerRequestSurfaceDecisionRequired": true,
+      "editorAdminExposureAllowed": false,
+      "unresolvedAuditAllowed": false
+    },
+    "latestIsolatedRehearsal": {
+      "evidenceScope": "CUSTOM_NODE_LOAD_DEFAULT_OFF_AND_REMOVAL_COMPATIBILITY_ONLY",
+      "functionalRehearsalSha256": "314499b2aa30618e26481dd8f533c32e13abd720d730473dfccfcd8ba880d0d2",
+      "capturedAt": "2026-09-03T20:34:23.000Z",
+      "sourceCommit": "111ea07a35fdfd975287b1e3ed468e97c86bddf4",
+      "nodeImageSha256": "0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a",
+      "nodeVersion": "22.23.2",
+      "nodeRedVersion": "4.1.14",
+      "customNodeReleaseSha256": "9f3fab0bb20eef372ea0aa40db26e43a7fa45600efec29f7c7a1707d43cb9398",
+      "defaultOffHttpStatus": 503,
+      "flowRollbackHttpStatus": 404,
+      "packageRollbackHttpStatus": 404,
+      "flowPartnerMatchesAfterRollback": 0,
+      "palettePartnerMatchesAfterRollback": 0,
+      "corsResponseHeaderObserved": "*",
+      "auditAffectedPackages": {
+        "critical": 0,
+        "high": 15,
+        "moderate": 9,
+        "low": 1,
+        "total": 25
+      },
+      "auditDecision": "BLOCKED_PENDING_PATCH_OR_REACHABILITY_APPROVAL",
+      "productionTouched": false
+    },
+    "binding": {
+      "exactNodeRedVersion": null,
+      "auditCapturedAt": null,
+      "auditReportSha256": null,
+      "criticalAffectedPackages": null,
+      "highAffectedPackages": null,
+      "moderateAffectedPackages": null,
+      "lowAffectedPackages": null,
+      "reachablePackages": [],
+      "decisionRecord": null
+    }
+  },
+  "ingress": {
+    "state": "UNBOUND",
+    "routing": {
+      "exactHost": null,
+      "upstream": "http://127.0.0.1:1880",
+      "exclusiveIngressRequired": true,
+      "alternateHostnameAccessAllowed": false,
+      "directNodeRedAccessAllowed": false,
+      "hostHeaderMustMatchExactHost": true,
+      "sniMustMatchExactHost": true,
+      "routes": [
+        {
+          "method": "POST",
+          "path": "/lk/integrations/v1/open-games/:gameId/members"
+        },
+        {
+          "method": "DELETE",
+          "path": "/lk/integrations/v1/open-games/:gameId/members/:membershipId"
+        },
+        {
+          "method": "GET",
+          "path": "/lk/integrations/v1/operations/:operationId"
+        }
+      ],
+      "queryAllowed": false,
+      "otherMethodsAllowed": false,
+      "editorAdminSurfaceAllowed": false,
+      "corsAllowed": false,
+      "optionsAllowed": false,
+      "proxyRetries": 0,
+      "requiredNegativeReadback": [
+        "WRONG_HOST_REJECTED",
+        "WRONG_SNI_REJECTED",
+        "SHARED_HOST_ROUTES_404",
+        "DIRECT_NODE_RED_CONNECTION_REFUSED"
+      ]
+    },
+    "transport": {
+      "minimumTlsVersion": "TLSv1.2",
+      "requiredClientIdentity": "MTLS",
+      "cidrOnlyFallbackAllowed": false,
+      "boundClientIdentity": null,
+      "allowedSourceCidrs": [],
+      "certificateSpkiSha256": null,
+      "trustedProxyCidrs": [],
+      "trustedProxyHopCount": null,
+      "socketPeerAllowlistRequired": true,
+      "stripInboundForwardedHeaders": true,
+      "overwriteForwardedHeadersFromSocketPeer": true
+    },
+    "requestPolicy": {
+      "allowedContentTypes": [
+        "application/json"
+      ],
+      "maxBodyBytes": 16384,
+      "maxRequestLineBytes": 2048,
+      "maxHeaderBytes": 16384,
+      "maxConcurrentPerClient": 4,
+      "maxConcurrentPerSource": 8,
+      "requestsPerSecondPerClient": 2,
+      "burstPerClient": 10,
+      "requestsPerSecondPerSource": 5,
+      "burstPerSource": 20,
+      "upstreamTimeoutSeconds": 15,
+      "duplicateCriticalHeadersRejected": true,
+      "duplicateJsonKeysRejected": true,
+      "criticalHeaders": [
+        "content-type",
+        "x-padlhub-client-id",
+        "x-padlhub-audience",
+        "x-padlhub-key-id",
+        "x-padlhub-timestamp",
+        "x-padlhub-nonce",
+        "idempotency-key",
+        "x-correlation-id",
+        "x-padlhub-signature"
+      ],
+      "preserveRawPath": true,
+      "preserveCanonicalJsonSemantics": true
+    },
+    "responsePolicy": {
+      "cacheControl": "no-store",
+      "hideUpstreamHeaders": [
+        "Access-Control-Allow-Origin"
+      ],
+      "accessLogsRedacted": true,
+      "requestBodyLogged": false,
+      "securityHeadersLogged": false
+    },
+    "binding": {
+      "configPath": null,
+      "configSha256": null,
+      "owner": null,
+      "approvedAt": null,
+      "rehearsedAt": null,
+      "readbackSha256": null
+    }
+  },
+  "custody": {
+    "state": "UNBOUND",
+    "packetClassification": "SECRET_BEARING",
+    "partnerPacketTransferAllowed": false,
+    "allowedPacketRecipients": [],
+    "transferChannel": null,
+    "targetHostAlias": null,
+    "targetDirectory": null,
+    "directoryMode": "0700",
+    "fileMode": "0600",
+    "symlinksAllowed": false,
+    "retentionUntil": null,
+    "custodyOwner": null,
+    "deletionOwner": null,
+    "incidentOwner": null,
+    "credentialChangesAuthorized": false,
+    "credentialValidationAllowed": false,
+    "testProductionClientIdReuseAllowed": false,
+    "testProductionHmacKeyReuseAllowed": false,
+    "testProductionCertificateReuseAllowed": false,
+    "testProductionAudienceReuseAllowed": false,
+    "disclosedCredentialHandling": "DO_NOT_DISPLAY_COPY_EXPORT_VALIDATE_OR_CHANGE",
+    "secretValuesInRepositoryAllowed": false
+  },
+  "activation": {
+    "state": "BLOCKED",
+    "deployAuthorized": false,
+    "ingressMutationAuthorized": false,
+    "secretProvisioningAuthorized": false,
+    "flowImportAuthorized": false,
+    "nodeRedRestartAuthorized": false,
+    "globalApiEnabled": false,
+    "providerMode": "disabled",
+    "vivaMutationsEnabled": false,
+    "canaryClientId": null,
+    "canaryGameIds": [],
+    "requiredExternalEvidence": [
+      "written Viva idempotency, ON_PLACE, create, read-back, and cancel contract",
+      "bound ingress identity, TLS, route, limit, and trusted-proxy read-back",
+      "bound packet and server-only secret custody with named owners and distinct test/production client IDs, audiences, HMAC keys, and certificates",
+      "fresh runtime audit with no unresolved partner-reachable critical or high advisory",
+      "production Mongo replica, exact indexes, backup, rollback, and reconciliation ownership",
+      "separate authorization for deploy and separate authorization for activation"
+    ]
+  }
+}

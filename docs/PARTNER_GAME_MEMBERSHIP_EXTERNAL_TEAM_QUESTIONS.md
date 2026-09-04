@@ -74,6 +74,8 @@ refund/chargeback policy и примеры reconciliation. Без этого о�
 
 - Где хранится HMAC secret: KMS/secret manager/HSM, кто имеет read/use права?
 - Может ли клиент выполнить HMAC без вывода секрета в логи?
+- Может ли клиент конфигурировать и подписывать отдельный exact audience для test и
+  production и fail-closed отклонять неизвестную среду?
 - Синхронизированы ли часы через NTP и каков максимальный drift?
 - Может ли клиент генерировать 192+ bit random nonce и новый correlation ID на попытку?
 - Подтверждает ли клиент exact canonical JSON и golden test vectors?
@@ -84,14 +86,17 @@ signature vectors. Передача секрета в request или ticket за
 
 ### 6. Сетевая защита
 
-- Есть ли стабильные egress IP/CIDR клиента?
-- Поддерживает ли клиент mTLS и ротацию client certificate?
+- Есть ли стабильные egress IP/CIDR клиента как дополнительное ограничение?
+- Поддерживает ли клиент обязательный mTLS, отдельные test/production certificates и
+  их ротацию без повторного использования ключевого материала?
 - Где завершается TLS, какие proxy переписывают path/headers и какой path фактически
   подписывает клиент?
 - Кто устанавливает rate limit и максимальный body size?
 
-**Нужно получить:** mTLS предпочтительно; иначе exact IP allowlist, TLS policy,
-trusted-proxy схема и DDoS/rate-limit значения. HMAC не предотвращает real-time relay.
+**Нужно получить:** обязательный mTLS, разные test/production client ID, HMAC key и
+certificate, exact audience/Host/SNI, дополнительный IP allowlist, TLS policy,
+socket-peer/trusted-proxy схема и DDoS/rate-limit значения. CIDR без mTLS не допускается:
+HMAC не предотвращает real-time relay, а `X-Forwarded-For` не является identity.
 
 ### 7. Retry и неоднозначный результат
 
@@ -183,7 +188,8 @@ authority времени и согласованный compensation/manual recon
 2. Viva OpenAPI + sandbox technical client + exact add/read/delete examples + письменная
    гарантия provider idempotency и `ON_PLACE` semantics.
 3. Golden HMAC vectors, NTP proof и retry matrix.
-4. mTLS certificate либо утверждённые CIDR/TLS/rate limits.
+4. Отдельный test mTLS certificate + exact test audience; production certificate,
+   client ID и HMAC key выпускаются отдельно и не переиспользуют test material.
 5. Payment semantics и запрет нежелательных Viva side effects.
 6. Test data plan без реальных пользователей и денег.
 7. Owners для incident, key revocation и `UNKNOWN` reconciliation.
