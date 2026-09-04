@@ -535,7 +535,10 @@ export function handleFixtureRequest(
     body,
   };
   if (request.method === "GET" && request.pathname === "/healthz") {
-    return { statusCode: 200, body: { environment: "DEV", role, mode: "FIXTURE_READ_ONLY" } };
+    const mode = role === "cup"
+      ? "SYNTHETIC_IN_MEMORY_MANAGED_CONTRACT"
+      : "HEALTH_ONLY_FAIL_CLOSED";
+    return { statusCode: 200, body: { environment: "DEV", role, mode } };
   }
   if (role !== "cup") {
     fail("FIXTURE_ROUTE_NOT_IMPLEMENTED", "Provider and identity fixture routes remain locked", 503);

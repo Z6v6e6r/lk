@@ -229,6 +229,18 @@ test("fixture config rejects non-fixture, ambiguous, out-of-range, and expanded 
   }
 });
 
+test("health modes disclose CUP synthetic mutations and locked provider boundaries", () => {
+  const config = fixtureConfig();
+  assert.deepEqual(request(config, "cup", "GET", "/healthz").body, {
+    environment: "DEV", role: "cup", mode: "SYNTHETIC_IN_MEMORY_MANAGED_CONTRACT",
+  });
+  for (const role of ["provider", "identity"]) {
+    assert.deepEqual(request(config, role, "GET", "/healthz").body, {
+      environment: "DEV", role, mode: "HEALTH_ONLY_FAIL_CLOSED",
+    });
+  }
+});
+
 test("CLI self-check is inert and service mode requires validated root-owned authorization transport", () => {
   const selfCheck = validateFixtureCli(["--self-check"]);
   assert.equal(selfCheck.mode, "SELF_CHECK");

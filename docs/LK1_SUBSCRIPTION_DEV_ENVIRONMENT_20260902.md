@@ -4,7 +4,7 @@
 
 The managed subscription router now selects runtime-context, entitlement
 reserve/confirm/release, and first-use activation from one server-owned
-environment binding. PROD is exact-origin HTTPS; DEV is exact loopback HTTP.
+environment binding. PROD is exact-origin HTTPS; DEV is exact loopback HTTPS.
 Both reject userinfo, query, fragment and path drift and require the exact
 environment allowlist. Browser
 fields cannot select an upstream URL. Managed HTTP commands disable redirects
@@ -74,7 +74,7 @@ origin. Consequently the DEV runtime trust anchor remains `null`.
 - Snapshot and build validation now inventory `mongodb4-client` and the exact
   router output -> `mongodb4` (`find`, `insertOne`, `updateOne`) -> router graph.
   All three nodes must use one hash-attested client in exact URI mode resolving
-  to `127.0.0.1:27030/dev-lk1-subscription-canary`, with empty advanced
+  to `127.0.0.1:27030/lk1_subscription_dev_fixture`, with empty advanced
   options, no serialized credentials/TLS options, and a separate SHA-attested
   empty Node-RED credential store. Fields-mode clients are rejected. Legacy
   `mongodb` counts remain only additional drift evidence.

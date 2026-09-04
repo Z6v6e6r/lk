@@ -61,7 +61,7 @@
   "predeploy": {
     "state": "PASS_AT_CAPTURE",
     "freshEvidenceRequired": true,
-    "capturedAt": "2026-09-04T10:37:01Z",
+    "capturedAt": "2026-09-04T12:18:15Z",
     "maximumAgeSeconds": 3600,
     "mustRefreshImmediatelyBeforeInstall": true,
     "checks": [
@@ -72,6 +72,7 @@
       "DEDICATED_UNITS_DISABLED_INACTIVE",
       "RESERVED_LISTENERS_ABSENT",
       "AUTHORIZATION_INPUTS_ABSENT",
+      "TLS_CREDENTIALS_ABSENT",
       "SHARED_RESOURCES_UNCHANGED",
       "PRODUCTION_ROUTES_ORIGINS_ABSENT",
       "ROLLBACK_TO_ABSENT_REVIEWED"

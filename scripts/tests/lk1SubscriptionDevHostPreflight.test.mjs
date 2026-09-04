@@ -5,7 +5,7 @@ import {
   validateHostPreflightEvidence,
 } from "../validate_lk1_subscription_dev_host_preflight.mjs";
 
-const NOW = new Date("2026-09-04T10:40:00Z");
+const NOW = new Date("2026-09-04T12:20:00Z");
 const clone = (value) => structuredClone(value);
 
 test("fresh host preflight proves stopped isolated resources without write authority", () => {
@@ -15,6 +15,8 @@ test("fresh host preflight proves stopped isolated resources without write autho
   }), true);
   assert.equal(checkedHostPreflightEvidence.hostCapabilities.systemdVersion, 245);
   assert.equal(checkedHostPreflightEvidence.listeners.reserved3037Absent, true);
+  assert.equal(checkedHostPreflightEvidence.inputs.tlsKeyAbsent, true);
+  assert.equal(checkedHostPreflightEvidence.inputs.tlsCertificateAbsent, true);
   assert.equal(checkedHostPreflightEvidence.sharedResources.unchanged, true);
   assert.equal(checkedHostPreflightEvidence.authority.externalWrites, false);
 });
@@ -29,6 +31,8 @@ test("host preflight rejects stale, wrong-host, active, listening, mutated, or a
     (value) => { value.dedicatedUnits["lk1-subscription-dev-cup.service"].activeState = "active"; },
     (value) => { value.listeners.reserved3037Absent = false; },
     (value) => { value.inputs.serviceStartAuthorizationAbsent = false; },
+    (value) => { value.inputs.tlsKeyAbsent = false; },
+    (value) => { value.inputs.tlsCertificateAbsent = false; },
     (value) => { value.sharedResources.flowSha256 = "a".repeat(64); },
     (value) => { value.authority.hostInstall = true; },
   ]) {
@@ -41,7 +45,7 @@ test("host preflight rejects stale, wrong-host, active, listening, mutated, or a
   }
   assert.throws(() => validateHostPreflightEvidence(
     checkedHostPreflightEvidence,
-    { now: new Date("2026-09-04T11:37:02Z"), requireFresh: true },
+    { now: new Date("2026-09-04T13:18:16Z"), requireFresh: true },
   ), /stale/);
   assert.equal(validateHostPreflightEvidence(checkedHostPreflightEvidence), true);
 });

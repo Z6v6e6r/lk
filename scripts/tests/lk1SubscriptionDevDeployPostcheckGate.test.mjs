@@ -9,7 +9,7 @@ import {
 } from "../validate_lk1_subscription_dev_deploy_postcheck_gate.mjs";
 
 const clone = (value) => structuredClone(value);
-const NOW = new Date("2026-09-04T10:40:00Z");
+const NOW = new Date("2026-09-04T12:20:00Z");
 const FRESH = Object.freeze({ now: NOW, requireFreshHostEvidence: true });
 const readJson = (relativePath) => JSON.parse(fs.readFileSync(
   new URL(relativePath, import.meta.url),

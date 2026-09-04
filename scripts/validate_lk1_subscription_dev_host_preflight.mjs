@@ -80,7 +80,8 @@ export function validateHostPreflightEvidence(evidence, {
   ))) fail("listener isolation evidence mismatch");
   exactKeys(evidence.inputs, [
     "targetFlowAbsent", "fixtureConfigAbsent", "releaseReceiptAbsent",
-    "serviceStartAuthorizationAbsent", "installIdentityEnvironmentAbsent", "productionMarkersAbsent",
+    "serviceStartAuthorizationAbsent", "installIdentityEnvironmentAbsent", "tlsKeyAbsent",
+    "tlsCertificateAbsent", "productionMarkersAbsent",
   ], "authorization inputs");
   if (Object.values(evidence.inputs).some((value) => value !== true)) {
     fail("host authorization inputs are not absent");
