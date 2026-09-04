@@ -8,7 +8,7 @@
     "scripts/generate_lk1_subscription_dev_offline_source.mjs": "81704deb5a3e1c9f6e0c0658e91034d2da6340eef6eb44b2b5ffbb2b382212fc",
     "scripts/inspect_lk1_subscription_dev_snapshot.mjs": "f86a48e3f9e2a220894bdcb686a16ff2d117da02a99f2ea8c979cb3f8bdc00df",
     "scripts/lk1_subscription_dev_execution_contract.mjs": "f02c30c55f75630e0e11b8ee2fa52d52a1e90c7d2609d04dfce132f002492712",
-    "scripts/prepare_lk1_subscription_dev_candidate.mjs": "5687846fb4dbf567e0871bfb39efdf22a01ff9999ac64bdfb9570cf676d94c0b",
+    "scripts/prepare_lk1_subscription_dev_candidate.mjs": "d664d93120479085faf4fd3d4d4173d6652633dd5e9fc88bbf0077b1fe4f2d8a",
     "scripts/lk1_subscription_dev_candidate_binding.json": "0e7f8f897546dc0b8e9950489e4ef37148ef6dd7271d2bde5cdfc596a90ab250",
     "scripts/lk1_subscription_dev_provisioning_contract.json": "223f3756056d153684cebd3bd0f69392ec947eacf45f69c2d107f9a8ee0231ff",
     "scripts/validate_lk1_subscription_dev_provisioning_contract.mjs": "d8680a0171fe1666f4aa11c93cd8a704e021f785e9234133f0ec41fd481d90ef",
@@ -40,6 +40,6 @@
     "lk_subscription_managed_policy_20260820": "9f4970224b433fa6b66d9c13f560b8cbd5770a47a55d992b27c2e19283de371e",
     "lk_subscription_managed_policy_blocked_20260820": "fb6ab7f0fac134712c2cf1e230f9bfb8a90d311ace4765abc4675c23c4e80888"
   },
-  "candidateSha256": "bb12016c4ac4bcb8e3e366c83c553c595ef51afc7ae542211aa9d9806c4a9b5c",
-  "manifestSha256": "e46437a628ec91a4b47c6fc1703061ea05510218ce8b2ae82d9e554da74490e6"
+  "candidateSha256": "9629b98fd89677b91817269db189215bdd67ab170daaa9777e24e477240b7ddd",
+  "manifestSha256": "4735217daed262a9085acc000e367de020d3a018cc1ce1529c0cf5e1a82b4a93"
 }

@@ -4,8 +4,8 @@
   "state": "SOURCE_ONLY",
   "sourceCommit": "eca4e1a17d7b2d84489fc9e8129a2eee29c8f3a0",
   "sourceFlowSha256": "e40db778a18885b3dee6b6f414fe9c4c1b566092df4ed331c5055f9489c1aaec",
-  "candidateSha256": "bb12016c4ac4bcb8e3e366c83c553c595ef51afc7ae542211aa9d9806c4a9b5c",
-  "manifestSha256": "e46437a628ec91a4b47c6fc1703061ea05510218ce8b2ae82d9e554da74490e6",
+  "candidateSha256": "9629b98fd89677b91817269db189215bdd67ab170daaa9777e24e477240b7ddd",
+  "manifestSha256": "4735217daed262a9085acc000e367de020d3a018cc1ce1529c0cf5e1a82b4a93",
   "hostReadbackSha256": null,
   "servedSha256": null,
   "hostPreimage": {
