@@ -52,7 +52,7 @@ test("install contract resolves marker custody through a root-owned group-read-o
   assert.equal(contract.authorizationCustody.sourceDirectoryOwner, "root:lk1-subscription-dev");
   assert.equal(contract.authorizationCustody.sourceDirectoryMode, "0750");
   assert.equal(contract.authorizationCustody.transport, "ROOT_OWNED_GROUP_READ_ONLY_FILE");
-  assert.equal(contract.authorizationCustody.hostSupportVerified, true);
+  assert.equal(contract.authorizationCustody.authorizationTransportHostSupportVerified, true);
     assert.equal(contract.candidateContents.installExecutor, "NOT_INCLUDED");
     assert.equal(contract.candidateContents.nodeRedFlow, "GENERATED_EXACT_SOURCE_CANDIDATE");
   assert.equal(contract.candidateContents.installedIdentityEnvironmentFile, "NOT_INCLUDED");
@@ -74,7 +74,7 @@ test("install contract rejects marker, support, postcondition, contents, and aut
     (value) => { value.target.unixUser = "root"; },
     (value) => { value.authorizationCustody.sourceDirectoryMode = "0770"; },
     (value) => { value.authorizationCustody.transport = "DIRECT_FILE_READ"; },
-    (value) => { value.authorizationCustody.hostSupportVerified = false; },
+    (value) => { value.authorizationCustody.authorizationTransportHostSupportVerified = false; },
     (value) => { value.credentialBinding.requiresUnexpiredCredential = false; },
     (value) => { value.prerequisites.freshHostReadbackRequired = false; },
     (value) => { value.candidateContents.installExecutor = "INCLUDED"; },
@@ -99,6 +99,7 @@ test("unit candidates use exact root-owned authorization path and remain unstart
   }
   const nodeRed = fs.readFileSync(path.join(UNIT_ROOT, "lk1-subscription-dev-nodered.service"), "utf8");
   assert.match(nodeRed, /ReadOnlyPaths=.*flows\.json.*release-identity\.json.*settings\.js/);
+  assert.match(nodeRed, /NODE_EXTRA_CA_CERTS=\/srv\/lk1-subscription-dev\/tls\/server\.crt/);
   assert.match(
     nodeRed,
     /ExecCondition=.*fixture_runtime\.mjs --validate-start-authorization --role nodered/,

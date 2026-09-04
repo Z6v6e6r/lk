@@ -19,10 +19,10 @@ const REPOSITORY_IDENTITY = Object.freeze({
 });
 const UNIT_FRAGMENT_SHA256 = Object.freeze({
   "lk1-subscription-dev-mongo.service": "370f07b518f14d87ba78d2cdc3e3cd15714349cf664d2bf53ac95ec2125a9980",
-  "lk1-subscription-dev-cup.service": "745333370a304d2d1e70add583930d73f704002c634e9eba4343dda7dca45b90",
-  "lk1-subscription-dev-provider-fixture.service": "dbf8a46a002b7f478b011b2afeb2a09837d8f44ecd5873a5225a6da6a895bca5",
-  "lk1-subscription-dev-identity-fixture.service": "673fa03feb87aa886d408684ca947609263929ef178d395d93480fe096488179",
-  "lk1-subscription-dev-nodered.service": "75fafcae24c5aefdca545786967bed12d509d12d2555a37d94e23571732f764a",
+  "lk1-subscription-dev-cup.service": "21423847b61c56bb7c8d2561e4a740d2e21aad399abbb1b2725a2936d3631ba5",
+  "lk1-subscription-dev-provider-fixture.service": "29a050c070d8fd66318caff69008817a4813a606c345feeba36a0d68f2f9e27a",
+  "lk1-subscription-dev-identity-fixture.service": "aa3b2b3da47f5dd21b139f0bba98a1da9a9c9a4114ac5f357ce9970a131f1ffd",
+  "lk1-subscription-dev-nodered.service": "dfb45a305fd27d32eacfbf5a3f437e257dcd05f385256289804ba496bdea6e99",
 });
 const clone = (value) => structuredClone(value);
 const transcriptFrom = (evidence = checkedHostPreflightEvidence) => [
@@ -61,7 +61,7 @@ const capture = (overrides = {}) => captureCurrentHostPreflightEvidence({
   ...overrides,
 });
 
-test("ingress target scan rejects every reserved-port route representation", () => {
+test("ingress target scan rejects every reserved DEV route representation", () => {
   const pattern = new RegExp(INGRESS_TARGET_REFERENCE_PATTERN, "i");
   for (const value of [
     "proxy_pass http://127.0.0.1:1882;",
@@ -69,6 +69,10 @@ test("ingress target scan rejects every reserved-port route representation", () 
     "server [::1]:1882;",
     "upstream dev_backend { server localhost:1882; }",
     "set $dev_port 1882; proxy_pass http://dev_backend:$dev_port;",
+    "proxy_pass https://127.0.0.1:3037;",
+    "server localhost:27030;",
+    "set $provider_port 3038;",
+    "server [::1]:3039;",
     "lk1-subscription-dev-nodered.service",
     "/srv/lk1-subscription-dev/node-red",
   ]) assert.equal(pattern.test(value), true, value);
@@ -88,10 +92,13 @@ test("host preflight rejects wrong host, active resources, drift, or write autho
   for (const mutate of [
     (value) => { value.environment = "PROD"; },
     (value) => { value.target.hostAlias = "lk-primary-147"; },
-    (value) => { value.hostCapabilities.compatible = false; },
+    (value) => { value.hostCapabilities.authorizationTransportCompatible = false; },
+    (value) => { value.hostCapabilities.networkIsolationRuntimeVerified = true; },
+    (value) => { value.hostCapabilities.serviceStartBlocked = false; },
     (value) => { value.dedicatedUnits["lk1-subscription-dev-cup.service"].activeState = "active"; },
     (value) => { value.listeners.reserved3037Absent = false; },
     (value) => { value.inputs.serviceStartAuthorizationAbsent = false; },
+    (value) => { value.inputs.tlsKeyAbsent = false; },
     (value) => {
       value.sharedResources.flowSha256 = "a".repeat(64);
       value.sharedResources.expectedFlowSha256 = "a".repeat(64);

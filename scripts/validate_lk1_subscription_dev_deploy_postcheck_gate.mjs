@@ -54,6 +54,7 @@ const PREDEPLOY_CHECKS = Object.freeze([
   "DEDICATED_UNITS_DISABLED_INACTIVE",
   "RESERVED_LISTENERS_ABSENT",
   "AUTHORIZATION_INPUTS_ABSENT",
+  "TLS_CREDENTIALS_ABSENT",
   "SHARED_RESOURCES_UNCHANGED",
   "PRODUCTION_ROUTES_ORIGINS_ABSENT",
   "ROLLBACK_TO_ABSENT_REVIEWED",
@@ -73,6 +74,7 @@ const POSTCHECK_PHASES = Object.freeze([
     checks: [
       "EXACT_SERVICE_IDENTITIES",
       "LOOPBACK_LISTENER_OWNERSHIP",
+      "NON_LOOPBACK_EGRESS_DENIAL_EFFECTIVE",
       "ROUTE_AND_GRAPH_HEALTH",
       "PRODUCTION_CONNECTIONS_ZERO",
       "IDLE_WRITES_ZERO",
@@ -197,8 +199,9 @@ export function validateDeployPostcheckGate(gate, {
   exactKeys(gate.runtimeBinding, [
     "state", "candidateCupApiBase", "dedicatedCupListener", "cupMatchesDedicatedListener",
     "candidateMongo", "provisionedMongo", "mongoMatchesProvisionedDatabase",
-    "completeManagedContractSourceImplemented", "localPhysicalVerified", "hostRuntimeExposed",
-    "completeManagedContractExposed",
+    "completeCupManagedContractSourceImplemented", "localPhysicalVerified", "hostRuntimeExposed",
+    "completeManagedContractExposed", "networkIsolationRuntimeVerified", "serviceStartBlocked",
+    "serviceStartBlocker",
   ], "DEV runtime binding");
   exactKeys(gate.runtimeBinding.candidateMongo, [
     "host", "port", "database", "replicaSet", "credentialFree",
@@ -215,10 +218,14 @@ export function validateDeployPostcheckGate(gate, {
   if (runtimeEnvironmentBindings.DEV_CANDIDATE_API_BASE
       !== runtimeEnvironmentBindings.DEV_ENDPOINTS?.cupApiBase
     || candidateBinding.runtime?.apiBase !== runtimeEnvironmentBindings.DEV_CANDIDATE_API_BASE
-    || candidateBinding.runtime?.completeManagedContractSourceImplemented !== true
+    || candidateBinding.runtime?.completeCupManagedContractSourceImplemented !== true
     || candidateBinding.runtime?.localPhysicalVerified !== true
     || candidateBinding.runtime?.hostRuntimeExposed !== false
     || candidateBinding.runtime?.completeManagedContractExposed !== false
+    || candidateBinding.runtime?.networkIsolationRuntimeVerified !== false
+    || candidateBinding.runtime?.serviceStartBlocked !== true
+    || candidateBinding.runtime?.serviceStartBlocker
+      !== "NON_LOOPBACK_EGRESS_ENFORCEMENT_NOT_VERIFIED"
     || candidateCupListener === provisioningContract.forbiddenExistingResources.subscriptionShadowListener
     || candidateCupListener !== dedicatedCupListener
     || gate.runtimeBinding.state !== "SOURCE_READY_HOST_RUNTIME_NOT_RUN"
@@ -238,10 +245,14 @@ export function validateDeployPostcheckGate(gate, {
     })
     || candidateMongo.database !== provisionedMongo.database
     || gate.runtimeBinding.mongoMatchesProvisionedDatabase !== true
-    || gate.runtimeBinding.completeManagedContractSourceImplemented !== true
+    || gate.runtimeBinding.completeCupManagedContractSourceImplemented !== true
     || gate.runtimeBinding.localPhysicalVerified !== true
     || gate.runtimeBinding.hostRuntimeExposed !== false
-    || gate.runtimeBinding.completeManagedContractExposed !== false) {
+    || gate.runtimeBinding.completeManagedContractExposed !== false
+    || gate.runtimeBinding.networkIsolationRuntimeVerified !== false
+    || gate.runtimeBinding.serviceStartBlocked !== true
+    || gate.runtimeBinding.serviceStartBlocker
+      !== "NON_LOOPBACK_EGRESS_ENFORCEMENT_NOT_VERIFIED") {
     fail("DEV candidate runtime identity is not source-ready on the dedicated fixture target");
   }
 

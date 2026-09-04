@@ -7,7 +7,7 @@
     "sourceKind": "offline-dedicated-dev-bootstrap",
     "sourceCommit": "eca4e1a17d7b2d84489fc9e8129a2eee29c8f3a0",
     "generatorPath": "scripts/generate_lk1_subscription_dev_offline_source.mjs",
-    "generatorSha256": "2648588387de652ee71a9cdb5e451a83fb605b814ddbcb6d66d9134cf901407b",
+    "generatorSha256": "81704deb5a3e1c9f6e0c0658e91034d2da6340eef6eb44b2b5ffbb2b382212fc",
     "sourceInputsSha256": {
       "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js": "02cd217c8791dbd0a70928539d05ef5cd44c6b57a8ad763cd6e95893d2f418c1",
       "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js": "1da7771e86ace8635488484059984b1ac93c2628c6edcb4b07b6a9fadb1bdc11",
@@ -58,11 +58,14 @@
     "finalizeNodePreimageSha256": "4be11eed3df7a9a720853f0abcb63a0f3a95baa349155980c5564c5338a700d7"
   },
   "runtime": {
-    "apiBase": "http://127.0.0.1:3037/api",
-    "completeManagedContractSourceImplemented": true,
+    "apiBase": "https://127.0.0.1:3037/api",
+    "completeCupManagedContractSourceImplemented": true,
     "localPhysicalVerified": true,
     "hostRuntimeExposed": false,
     "completeManagedContractExposed": false,
+    "networkIsolationRuntimeVerified": false,
+    "serviceStartBlocked": true,
+    "serviceStartBlocker": "NON_LOOPBACK_EGRESS_ENFORCEMENT_NOT_VERIFIED",
     "reason": "Source implemented and locally loopback-verified; DEV services remain stopped and host runtime was not exercised"
   },
   "dependencies": {

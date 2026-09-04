@@ -2,6 +2,8 @@
 Description=LK1 subscription isolated DEV CUP fixture (install candidate locked)
 ConditionPathExists=/srv/lk1-subscription-dev/authorization/service-start.approved
 ConditionPathExists=/srv/lk1-subscription-dev/private/fixture.json
+ConditionPathExists=/srv/lk1-subscription-dev/tls/server.key
+ConditionPathExists=/srv/lk1-subscription-dev/tls/server.crt
 RefuseManualStart=yes
 
 [Service]
@@ -12,6 +14,8 @@ WorkingDirectory=/srv/lk1-subscription-dev
 EnvironmentFile=/srv/lk1-subscription-dev/runtime/install-identity.env
 Environment=LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE=/srv/lk1-subscription-dev/private/fixture.json
 Environment=LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE=/srv/lk1-subscription-dev/authorization/service-start.approved
+Environment=LK1_SUBSCRIPTION_DEV_TLS_KEY_FILE=/srv/lk1-subscription-dev/tls/server.key
+Environment=LK1_SUBSCRIPTION_DEV_TLS_CERT_FILE=/srv/lk1-subscription-dev/tls/server.crt
 ExecStart=/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs --role cup
 Restart=no
 UMask=0077

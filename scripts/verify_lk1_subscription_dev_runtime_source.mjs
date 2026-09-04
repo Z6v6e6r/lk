@@ -35,7 +35,9 @@ export function validateRuntimeSourceContract(contract) {
     || contract.sourceCommit !== null) fail("runtime source identity mismatch");
   exactKeys(contract.target, [
     "fixtureRuntimePath", "nodeRedFlowPath", "nodeRedReleaseReceiptPath",
-    "fixtureConfigEnvironmentVariable", "serviceStartAuthorizationMarker",
+    "fixtureConfigEnvironmentVariable", "tlsKeyEnvironmentVariable",
+    "tlsCertificateEnvironmentVariable", "tlsKeyPath", "tlsCertificatePath", "transport",
+    "serviceStartAuthorizationMarker",
     "serviceStartAuthorizationTransport", "serviceStartAuthorizationFileEnvironmentVariable",
     "installedIdentityEnvironmentFile",
   ], "runtime target");
@@ -43,6 +45,11 @@ export function validateRuntimeSourceContract(contract) {
     || contract.target.nodeRedFlowPath !== "/srv/lk1-subscription-dev/node-red/flows.json"
     || contract.target.nodeRedReleaseReceiptPath !== "/srv/lk1-subscription-dev/node-red/release-identity.json"
     || contract.target.fixtureConfigEnvironmentVariable !== "LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE"
+    || contract.target.tlsKeyEnvironmentVariable !== "LK1_SUBSCRIPTION_DEV_TLS_KEY_FILE"
+    || contract.target.tlsCertificateEnvironmentVariable !== "LK1_SUBSCRIPTION_DEV_TLS_CERT_FILE"
+    || contract.target.tlsKeyPath !== "/srv/lk1-subscription-dev/tls/server.key"
+    || contract.target.tlsCertificatePath !== "/srv/lk1-subscription-dev/tls/server.crt"
+    || contract.target.transport !== "HTTPS_ONLY"
     || contract.target.serviceStartAuthorizationMarker
       !== "/srv/lk1-subscription-dev/authorization/service-start.approved"
     || contract.target.serviceStartAuthorizationTransport !== "ROOT_OWNED_GROUP_READ_ONLY_FILE"

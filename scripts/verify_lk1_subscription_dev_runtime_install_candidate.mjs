@@ -12,13 +12,13 @@ import { validateReleaseReceiptV2 } from "./validate_lk1_subscription_dev_releas
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
-const CONTRACT_CANONICAL_SHA256 = "34723ccaae620b8ddfcf0547ea771ee20ff6b6c376bda532ae7e5dbfc30ef8a1";
+const CONTRACT_CANONICAL_SHA256 = "dd5475a7e412a465015d8e38c4909b25de8d4f4126bbcbead1c930abe7446dea";
 const NODE_RED_SETTINGS_SHA256 = "6b6cc7253b120f2a8b2397c0d3a5f82db9a72fb6d62948bd9f6e6bdb5ab3deb6";
 const UNIT_SHA256 = Object.freeze({
-  "lk1-subscription-dev-cup.service": "e141e6892ec0ecf6f6f02bf9f4daba28e7aef07e2f4b2eb816699a5c5aef4ccb",
-  "lk1-subscription-dev-identity-fixture.service": "8303eec3ae9ae854dee4c2ad54390bb625d1801880c4c3670621d7434b77f991",
-  "lk1-subscription-dev-nodered.service": "c78a6efda42224f8ca3524b18510f36102b9b98f1e92c5f8db3c575f7a61bee7",
-  "lk1-subscription-dev-provider-fixture.service": "af16a186eb7050cfd38cfea9a1897f7d498e296fa8cd0c1e74fb49b78bbf6dbd",
+  "lk1-subscription-dev-cup.service": "21423847b61c56bb7c8d2561e4a740d2e21aad399abbb1b2725a2936d3631ba5",
+  "lk1-subscription-dev-identity-fixture.service": "aa3b2b3da47f5dd21b139f0bba98a1da9a9c9a4114ac5f357ce9970a131f1ffd",
+  "lk1-subscription-dev-nodered.service": "dfb45a305fd27d32eacfbf5a3f437e257dcd05f385256289804ba496bdea6e99",
+  "lk1-subscription-dev-provider-fixture.service": "29a050c070d8fd66318caff69008817a4813a606c345feeba36a0d68f2f9e27a",
 });
 const EXPECTED_FILES = Object.freeze([
   "payload/lk1_subscription_dev_runtime/fixture_runtime.mjs",
@@ -60,6 +60,8 @@ export function validateRuntimeInstallContract(contract) {
   if (contract.target.unixUser !== "lk1-subscription-dev"
     || contract.target.unixGroup !== "lk1-subscription-dev"
     || contract.target.rootPath !== "/srv/lk1-subscription-dev"
+    || contract.target.tlsKeyPath !== "/srv/lk1-subscription-dev/tls/server.key"
+    || contract.target.tlsCertificatePath !== "/srv/lk1-subscription-dev/tls/server.crt"
     || contract.authorizationCustody.sourceMarker
       !== "/srv/lk1-subscription-dev/authorization/service-start.approved"
     || contract.authorizationCustody.sourceDirectoryOwner !== "root:lk1-subscription-dev"
@@ -74,7 +76,7 @@ export function validateRuntimeInstallContract(contract) {
       !== "LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE"
     || contract.authorizationCustody.maximumLifetimeSeconds !== 3600
     || contract.authorizationCustody.systemdMinimumVersion !== 245
-    || contract.authorizationCustody.hostSupportVerified !== true) {
+    || contract.authorizationCustody.authorizationTransportHostSupportVerified !== true) {
     fail("runtime install marker custody is not exact or host-compatible");
   }
   if (contract.credentialBinding.installedSourceEnvironmentVariable
@@ -111,6 +113,9 @@ export function validateRuntimeInstallContract(contract) {
       mongoOperations: ["find", "insertOne", "updateOne"],
       providerFixture: "HEALTH_ONLY_FAIL_CLOSED",
       cupManagedContract: "SYNTHETIC_IN_MEMORY_SOURCE_IMPLEMENTED_LOCAL_PHYSICAL_VERIFIED",
+      networkIsolationRuntimeVerified: false,
+      serviceStartBlocked: true,
+      serviceStartBlocker: "NON_LOOPBACK_EGRESS_ENFORCEMENT_NOT_VERIFIED",
       positiveUat: "NOT_AUTHORIZED",
       requiresSeparateStartReview: true,
       requiresSeparateMutationReview: true,
@@ -159,7 +164,11 @@ export function validateInstallCandidateUnit(name, source) {
   };
   if (fixtureRoles[name]) {
     if (!source.includes("ConditionPathExists=/srv/lk1-subscription-dev/private/fixture.json")
+      || !source.includes("ConditionPathExists=/srv/lk1-subscription-dev/tls/server.key")
+      || !source.includes("ConditionPathExists=/srv/lk1-subscription-dev/tls/server.crt")
       || !source.includes("Environment=LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE=/srv/lk1-subscription-dev/private/fixture.json")
+      || !source.includes("Environment=LK1_SUBSCRIPTION_DEV_TLS_KEY_FILE=/srv/lk1-subscription-dev/tls/server.key")
+      || !source.includes("Environment=LK1_SUBSCRIPTION_DEV_TLS_CERT_FILE=/srv/lk1-subscription-dev/tls/server.crt")
       || !source.includes(`ExecStart=/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs --role ${fixtureRoles[name]}`)) {
       fail(`${name} fixture execution identity mismatch`);
     }
@@ -167,6 +176,8 @@ export function validateInstallCandidateUnit(name, source) {
     for (const required of [
       "ConditionPathExists=/srv/lk1-subscription-dev/node-red/flows.json",
       "ConditionPathExists=/srv/lk1-subscription-dev/node-red/release-identity.json",
+      "ConditionPathExists=/srv/lk1-subscription-dev/tls/server.crt",
+      "Environment=NODE_EXTRA_CA_CERTS=/srv/lk1-subscription-dev/tls/server.crt",
       "ExecCondition=/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs --validate-start-authorization --role nodered",
       "ReadOnlyPaths=/srv/lk1-subscription-dev/node-red/flows.json /srv/lk1-subscription-dev/node-red/release-identity.json /srv/lk1-subscription-dev/node-red/settings.js",
       "--settings /srv/lk1-subscription-dev/node-red/settings.js --port 1882",

@@ -3,6 +3,7 @@ Description=LK1 subscription isolated DEV release evidence flow (install candida
 ConditionPathExists=/srv/lk1-subscription-dev/authorization/service-start.approved
 ConditionPathExists=/srv/lk1-subscription-dev/node-red/flows.json
 ConditionPathExists=/srv/lk1-subscription-dev/node-red/release-identity.json
+ConditionPathExists=/srv/lk1-subscription-dev/tls/server.crt
 RefuseManualStart=yes
 
 [Service]
@@ -12,6 +13,7 @@ Group=lk1-subscription-dev
 WorkingDirectory=/srv/lk1-subscription-dev/node-red
 EnvironmentFile=/srv/lk1-subscription-dev/runtime/install-identity.env
 Environment=LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE=/srv/lk1-subscription-dev/authorization/service-start.approved
+Environment=NODE_EXTRA_CA_CERTS=/srv/lk1-subscription-dev/tls/server.crt
 ExecCondition=/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs --validate-start-authorization --role nodered
 ExecStart=/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/runtime/node-red/red.js --userDir /srv/lk1-subscription-dev/node-red --settings /srv/lk1-subscription-dev/node-red/settings.js --port 1882
 Restart=no

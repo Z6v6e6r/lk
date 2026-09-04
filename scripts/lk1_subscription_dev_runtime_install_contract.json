@@ -9,6 +9,8 @@
     "rootPath": "/srv/lk1-subscription-dev",
     "fixtureRuntimePath": "/srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs",
     "fixtureConfigPath": "/srv/lk1-subscription-dev/private/fixture.json",
+    "tlsKeyPath": "/srv/lk1-subscription-dev/tls/server.key",
+    "tlsCertificatePath": "/srv/lk1-subscription-dev/tls/server.crt",
     "nodeRedFlowPath": "/srv/lk1-subscription-dev/node-red/flows.json",
     "nodeRedSettingsPath": "/srv/lk1-subscription-dev/node-red/settings.js",
     "nodeRedReleaseReceiptPath": "/srv/lk1-subscription-dev/node-red/release-identity.json",
@@ -27,7 +29,7 @@
     "credentialSchemaVersion": 1,
     "maximumLifetimeSeconds": 3600,
     "systemdMinimumVersion": 245,
-    "hostSupportVerified": true
+    "authorizationTransportHostSupportVerified": true
   },
   "credentialBinding": {
     "environment": "DEV",
@@ -58,6 +60,7 @@
     "listenersAbsentRequired": true,
     "authorizationMarkerAbsentRequired": true,
     "fixtureConfigAbsentRequired": true,
+    "tlsCredentialsAbsentRequired": true,
     "releaseReceiptAbsentRequired": true,
     "freshHostReadbackRequired": true
   },
@@ -68,6 +71,7 @@
     "installExecutor": "NOT_INCLUDED",
     "installedIdentityEnvironmentFile": "NOT_INCLUDED",
     "fixtureConfig": "NOT_INCLUDED",
+    "tlsCredentials": "NOT_INCLUDED",
     "releaseReceipt": "NOT_INCLUDED",
     "serviceStartCredential": "NOT_INCLUDED",
     "ingress": "NOT_INCLUDED",
@@ -87,6 +91,9 @@
     ],
     "providerFixture": "HEALTH_ONLY_FAIL_CLOSED",
     "cupManagedContract": "SYNTHETIC_IN_MEMORY_SOURCE_IMPLEMENTED_LOCAL_PHYSICAL_VERIFIED",
+    "networkIsolationRuntimeVerified": false,
+    "serviceStartBlocked": true,
+    "serviceStartBlocker": "NON_LOOPBACK_EGRESS_ENFORCEMENT_NOT_VERIFIED",
     "positiveUat": "NOT_AUTHORIZED",
     "requiresSeparateStartReview": true,
     "requiresSeparateMutationReview": true

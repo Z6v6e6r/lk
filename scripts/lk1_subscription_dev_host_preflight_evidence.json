@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "environment": "DEV",
   "state": "PASS_AT_CAPTURE",
-  "capturedAt": "2026-09-04T09:35:19Z",
+  "capturedAt": "2026-09-04T12:18:15Z",
   "maximumAgeSeconds": 3600,
   "target": {
     "hostAlias": "lk-reserve-89",
@@ -13,7 +13,9 @@
     "systemdVersion": 245,
     "minimumRequiredSystemdVersion": 245,
     "authorizationTransport": "ROOT_OWNED_GROUP_READ_ONLY_FILE",
-    "compatible": true
+    "authorizationTransportCompatible": true,
+    "networkIsolationRuntimeVerified": false,
+    "serviceStartBlocked": true
   },
   "dedicatedUnits": {
     "lk1-subscription-dev-mongo.service": { "loadState": "loaded", "activeState": "inactive", "unitFileState": "disabled" },
@@ -37,6 +39,8 @@
     "releaseReceiptAbsent": true,
     "serviceStartAuthorizationAbsent": true,
     "installIdentityEnvironmentAbsent": true,
+    "tlsKeyAbsent": true,
+    "tlsCertificateAbsent": true,
     "productionMarkersAbsent": true
   },
   "sharedResources": {

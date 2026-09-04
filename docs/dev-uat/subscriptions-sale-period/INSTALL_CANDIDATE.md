@@ -28,19 +28,22 @@ Runtime принимает credential только при одновременн
 - 64-hex `authorizationId` (идентификатор короткоживущего многостартового окна,
   не anti-replay nonce).
 
-Historical read-only preflight подтвердил systemd 245 и совместимость этого
-file-custody transport на момент capture. Checked-in snapshot не является
-текущим gate и не заменяет новый direct-SSH snapshot, который pinned validator
-сам получает и сохраняет в private temporary artifact непосредственно перед
-будущей установкой после отдельной host-read авторизации.
+Fresh read-only preflight подтвердил systemd 245 и совместимость этого
+file-custody transport. Он не подтверждает фактическое kernel/eBPF enforcement
+`IPAddressDeny`; service start остаётся заблокирован до отдельной отрицательной
+non-loopback пробы. Историческое подтверждение не заменяет повторный
+preflight непосредственно перед будущей установкой.
 
 ## Почему candidate нельзя запустить
 
 - Все unit candidates содержат `RefuseManualStart=yes`.
 - В них отсутствует `[Install]`/`WantedBy`.
-- Fixture config, release receipt и service-start credential не входят в пакет.
+- Fixture config, TLS key/certificate, release receipt и service-start credential
+  не входят в пакет.
 - Install executor и `install-identity.env` отсутствуют.
 - Loopback-only/editor-disabled Node-RED settings входят как exact hashed payload.
+- Node-RED доверяет только exact private CA path через `NODE_EXTRA_CA_CERTS`; CA
+  material отсутствует в bundle и требует отдельной custody/start проверки.
 - Manifest и contract оставляют все host/live authority в `false`.
 - CUP managed entitlement/activation реализованы только как synthetic in-memory
   source и физически проверены на fixture-owned loopback; host runtime не запускался.
@@ -84,6 +87,9 @@ symlink/special/unexpected files, canonical contract/unit/flow digests и
 ## Следующий отдельный gate
 
 До любого host install требуется отдельная авторизация, fresh read-only host
-readback и новый reviewed executor/rollback plan. Даже установка payload не должна
+readback и новый reviewed executor/rollback plan. Checked-in schema-v1 evidence
+является только историческим архивом; install gate требует отдельный schema-v2
+direct-SSH capture, связанный с clean exact HEAD/tree и HTTPS/TLS candidate tuple.
+Даже установка payload не должна
 создавать marker/config/receipt, выполнять `daemon-reload`, запускать или включать
 units либо менять ingress/activation.

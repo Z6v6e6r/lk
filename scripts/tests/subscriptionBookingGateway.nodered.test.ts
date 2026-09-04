@@ -19,7 +19,7 @@ const MANAGED_BLOCKED_FILE =
 const PITER_PRODUCT_ID = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
 const HUB_PRODUCT_ID = "db7a5250-7369-4f43-8ac5-9111be24bc74";
 const MANAGED_PURCHASE_DATE = "2026-09-01T00:00:00+03:00";
-const DEV_API_BASE = "http://127.0.0.1:3037/api";
+const DEV_API_BASE = "https://127.0.0.1:3037/api";
 const LIVE_ROUTER_FLOW_FIXTURE = process.env.LK1_SUBSCRIPTION_LIVE_FLOW_FIXTURE;
 const mongoUpdateResult = (matchedCount = 1) => ({
   acknowledged: true, matchedCount, modifiedCount: matchedCount, upsertedCount: 0, upsertedId: null,
@@ -91,14 +91,17 @@ function runFunctionSource(
 
 function devBoundRouterSource() {
   const source = fs.readFileSync(ROUTER_FILE, "utf8");
+  const transportMarker = '  const transportAllowed = identity.environment === "PROD"\n    ? parsed.protocol === "https:"\n    : parsed.protocol === "http:" && parsed.hostname === "127.0.0.1";';
   assert.equal(source.match(/ {2}DEV: null,/g)?.length, 1);
   assert.equal(source.match(/ {2}PROD: "https:\/\/padlhub\.su\/api",/g)?.length, 1);
   assert.equal(source.match(/MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "PROD"/g)?.length, 1);
+  assert.equal(source.split(transportMarker).length - 1, 1);
   return source
     .replace('const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "PROD";',
       'const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "DEV";')
     .replace('  PROD: "https://padlhub.su/api",', "  PROD: null,")
-    .replace("  DEV: null,", `  DEV: ${JSON.stringify(DEV_API_BASE)},`);
+    .replace("  DEV: null,", `  DEV: ${JSON.stringify(DEV_API_BASE)},`)
+    .replace(transportMarker, '  const transportAllowed = parsed.protocol === "https:";');
 }
 
 function baseContext(step: string, overrides: Record<string, unknown> = {}) {

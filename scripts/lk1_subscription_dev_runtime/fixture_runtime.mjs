@@ -2,7 +2,7 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
-import http from "node:http";
+import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,6 +14,10 @@ const AUTHORIZATION_FILE_ENV = "LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE";
 const CONFIG_ENV = "LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE";
 const INSTALLED_SOURCE_ENV = "LK1_SUBSCRIPTION_DEV_INSTALLED_SOURCE_COMMIT";
 const INSTALLED_MANIFEST_ENV = "LK1_SUBSCRIPTION_DEV_RUNTIME_MANIFEST_SHA256";
+const TLS_KEY_ENV = "LK1_SUBSCRIPTION_DEV_TLS_KEY_FILE";
+const TLS_CERT_ENV = "LK1_SUBSCRIPTION_DEV_TLS_CERT_FILE";
+const TLS_KEY_FILE = "/srv/lk1-subscription-dev/tls/server.key";
+const TLS_CERT_FILE = "/srv/lk1-subscription-dev/tls/server.crt";
 const SAFE_ID = /^fixture-[a-z0-9][a-z0-9-]{2,95}$/;
 const SAFE_FIXTURE_SECRET = /^fixture-[a-z0-9][a-z0-9-]{23,127}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -559,7 +563,10 @@ export function handleFixtureRequest(
     body,
   };
   if (request.method === "GET" && request.pathname === "/healthz") {
-    return { statusCode: 200, body: { environment: "DEV", role, mode: "FIXTURE_READ_ONLY" } };
+    const mode = role === "cup"
+      ? "SYNTHETIC_IN_MEMORY_MANAGED_CONTRACT"
+      : "HEALTH_ONLY_FAIL_CLOSED";
+    return { statusCode: 200, body: { environment: "DEV", role, mode } };
   }
   if (role !== "cup") {
     fail("FIXTURE_ROUTE_NOT_IMPLEMENTED", "Provider and identity fixture routes remain locked", 503);
@@ -624,13 +631,18 @@ async function readJsonBody(request) {
   }
 }
 
-export function createFixtureServer(role, config) {
+export function createFixtureServer(role, config, tlsCredentials) {
   validateFixtureConfig(config);
   if (!ROLE_PORTS[role]) fail("FIXTURE_ROLE_INVALID", "Unknown fixture role", 64);
+  if (!isObject(tlsCredentials)
+    || !Buffer.isBuffer(tlsCredentials.key) || tlsCredentials.key.length === 0
+    || !Buffer.isBuffer(tlsCredentials.cert) || tlsCredentials.cert.length === 0) {
+    fail("FIXTURE_TLS_CREDENTIALS_INVALID", "HTTPS fixture credentials are required", 78);
+  }
   const state = createFixtureState(config);
-  return http.createServer(async (request, response) => {
+  return https.createServer(tlsCredentials, async (request, response) => {
     try {
-      const url = new URL(request.url || "/", `http://${LOOPBACK}:${ROLE_PORTS[role]}`);
+      const url = new URL(request.url || "/", `https://${LOOPBACK}:${ROLE_PORTS[role]}`);
       if (url.hostname !== LOOPBACK || url.search || url.hash) {
         fail("FIXTURE_REQUEST_TARGET_INVALID", "Fixture request target is not exact", 400);
       }
@@ -648,6 +660,46 @@ export function createFixtureServer(role, config) {
       writeJson(response, statusCode, { code });
     }
   });
+}
+
+function readTlsCredential(filePath, expectedPath, fsApi, runtimeGid) {
+  if (filePath !== expectedPath || !Number.isInteger(runtimeGid) || runtimeGid <= 0) {
+    fail("FIXTURE_TLS_CREDENTIAL_PATH_INVALID", "TLS credential path is not exact", 78);
+  }
+  for (const [target, mode] of [
+    ["/srv", 0o755],
+    ["/srv/lk1-subscription-dev", null],
+    ["/srv/lk1-subscription-dev/tls", 0o750],
+  ]) {
+    const stat = fsApi.lstatSync(target);
+    if (fsApi.realpathSync(target) !== target || !stat.isDirectory() || stat.isSymbolicLink()
+      || stat.uid !== 0 || (stat.mode & 0o022) !== 0
+      || (mode !== null && (stat.mode & 0o777) !== mode)
+      || (target.endsWith("/tls") && stat.gid !== runtimeGid)) {
+      fail("FIXTURE_TLS_CREDENTIAL_CUSTODY_INVALID", "TLS directory custody is invalid", 78);
+    }
+  }
+  const stat = fsApi.lstatSync(filePath);
+  if (fsApi.realpathSync(filePath) !== filePath || !stat.isFile() || stat.isSymbolicLink()
+    || stat.uid !== 0 || stat.gid !== runtimeGid || (stat.mode & 0o777) !== 0o440) {
+    fail("FIXTURE_TLS_CREDENTIAL_CUSTODY_INVALID", "TLS file custody is invalid", 78);
+  }
+  const bytes = fsApi.readFileSync(filePath);
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) {
+    fail("FIXTURE_TLS_CREDENTIAL_INVALID", "TLS credential is empty", 78);
+  }
+  return bytes;
+}
+
+export function loadFixtureTlsCredentials(
+  env = process.env,
+  fsApi = fs,
+  runtimeGid = typeof process.getgid === "function" ? process.getgid() : null,
+) {
+  return {
+    key: readTlsCredential(cleanText(env[TLS_KEY_ENV]), TLS_KEY_FILE, fsApi, runtimeGid),
+    cert: readTlsCredential(cleanText(env[TLS_CERT_ENV]), TLS_CERT_FILE, fsApi, runtimeGid),
+  };
 }
 
 export function readAuthorizationCredential(
@@ -783,7 +835,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       process.stdout.write("LK1_DEV_START_AUTHORIZATION=VALID\n");
     } else {
       const config = loadFixtureConfig(command.configPath);
-      const server = createFixtureServer(command.role, config);
+      const server = createFixtureServer(command.role, config, loadFixtureTlsCredentials());
       server.listen(ROLE_PORTS[command.role], LOOPBACK, () => {
         process.stdout.write(`LK1_DEV_FIXTURE_ROLE=${command.role}\n`);
       });
@@ -807,5 +859,12 @@ export const fixtureRuntimeContract = Object.freeze({
     runtimeManifestSha256: INSTALLED_MANIFEST_ENV,
   },
   configEnvironmentVariable: CONFIG_ENV,
+  tls: {
+    keyEnvironmentVariable: TLS_KEY_ENV,
+    certificateEnvironmentVariable: TLS_CERT_ENV,
+    keyFile: TLS_KEY_FILE,
+    certificateFile: TLS_CERT_FILE,
+    transport: "HTTPS_ONLY",
+  },
   mode: "SYNTHETIC_MANAGED_CONTRACT_SOURCE_ONLY",
 });

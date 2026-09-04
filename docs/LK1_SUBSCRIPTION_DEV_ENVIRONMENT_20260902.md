@@ -4,7 +4,7 @@
 
 The managed subscription router now selects runtime-context, entitlement
 reserve/confirm/release, and first-use activation from one server-owned
-environment binding. PROD is exact-origin HTTPS; DEV is exact loopback HTTP.
+environment binding. PROD is exact-origin HTTPS; DEV is exact loopback HTTPS.
 Both reject userinfo, query, fragment and path drift and require the exact
 environment allowlist. Browser
 fields cannot select an upstream URL. Managed HTTP commands disable redirects
@@ -74,7 +74,7 @@ origin. Consequently the DEV runtime trust anchor remains `null`.
 - Snapshot and build validation now inventory `mongodb4-client` and the exact
   router output -> `mongodb4` (`find`, `insertOne`, `updateOne`) -> router graph.
   All three nodes must use one hash-attested client in exact URI mode resolving
-  to `127.0.0.1:27030/dev-lk1-subscription-canary`, with empty advanced
+  to `127.0.0.1:27030/lk1_subscription_dev_fixture`, with empty advanced
   options, no serialized credentials/TLS options, and a separate SHA-attested
   empty Node-RED credential store. Fields-mode clients are rejected. Legacy
   `mongodb` counts remain only additional drift evidence.
@@ -232,10 +232,14 @@ generation and publication below `/private/tmp`, while candidate install, Node-R
 import, service start, unit enablement, ingress, activation, canary IDs, secrets,
 and external writes remain unauthorized.
 
-This branch intentionally contains no fresh host-evidence artifact. The source-only
-contract fixes `hostPreimage.state=ABSENT` as the future install target contract, not
-as a current host observation. A fresh read-only host preflight remains mandatory
-before any separately authorized install stage.
+This branch retains a time-stamped schema-v1 host-evidence artifact only as a
+historical archive. It cannot satisfy current freshness. A separately authorized
+schema-v2 BatchMode SSH capture must bind the clean repository HEAD/tree, release
+tuple, capture tooling, systemd fragments/drop-ins, TLS inputs, ingress isolation,
+and the trusted shared-flow digest immediately before any install review.
+The source-only contract also fixes `hostPreimage.state=ABSENT` as the future install
+target contract. A new read-only capture remains mandatory immediately before any
+separately authorized install stage.
 
 The offline generator produces a 23-node isolated source with two HTTP routes, one
 credential-free loopback Mongo client, and the exact reviewed function-node
@@ -248,8 +252,8 @@ source, and writes readiness last through a private staging directory. The froze
 source/candidate/manifest SHA-256 tuple is:
 
 - source: `e40db778a18885b3dee6b6f414fe9c4c1b566092df4ed331c5055f9489c1aaec`;
-- candidate: `580b917cc2440e74984b23258be2e63d3d4b29e5105685742cf0e25a9c3547a7`;
-- manifest: `d56575ce6871a06adee6c493c0a140e94332ffcf39c25e8012af6c0c43ea92f8`.
+- candidate: `9629b98fd89677b91817269db189215bdd67ab170daaa9777e24e477240b7ddd`;
+- manifest: `4735217daed262a9085acc000e367de020d3a018cc1ce1529c0cf5e1a82b4a93`.
 
 The DEV postimage also strips browser-supplied success/failure/base redirect URLs
 from both split-payment preparation paths before any provider transaction can be
@@ -266,10 +270,9 @@ future gates with fresh readback and independent review.
 ### Integration validation limitations
 
 Local runner, bootstrap, provisioning, DEV candidate, critical matrix and DEV
-runtime suites pass after the parent merge. Exact-head CI now invokes the tracked
-DEV candidate, provisioning/bootstrap, deploy-gate and host-preflight source
-contract suites; it still does not perform SSH, install, service control, ingress,
-activation or any other live runtime operation.
+runtime suites pass after the parent merge. The exact-head CI workflow does not
+invoke the runner or DEV candidate/provisioning/bootstrap suites, so those remain
+local evidence rather than CI evidence.
 
 The v2 receipt contract separates the exact 40-hex Git `sourceCommit` from 64-hex
 source/candidate/manifest/readback/served SHA-256 fields. Source-only receipts keep

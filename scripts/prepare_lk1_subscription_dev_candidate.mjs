@@ -133,10 +133,7 @@ export function validateEnvironmentApiBase(environment, configuredApiBase, expec
   } catch {
     fail("Managed runtime API base is invalid");
   }
-  const transportAllowed = environment === "PROD"
-    ? parsed.protocol === "https:"
-    : parsed.protocol === "http:" && parsed.hostname === "127.0.0.1";
-  if (!transportAllowed
+  if (parsed.protocol !== "https:"
     || parsed.username
     || parsed.password
     || parsed.search
@@ -182,15 +179,15 @@ export function validateDevEndpointBindings(endpoints, trustedBindings = LK1_SUB
     fail("DEV endpoint bindings do not match the approved schema");
   }
   const expected = {
-    cupApiBase: "http://127.0.0.1:3037/api",
-    vivaApiBase: "http://127.0.0.1:3038",
-    serv2Base: "http://127.0.0.1:3038/serv2",
-    tokenUrl: "http://127.0.0.1:3039/realms/dev/protocol/openid-connect/token",
+    cupApiBase: "https://127.0.0.1:3037/api",
+    vivaApiBase: "https://127.0.0.1:3038",
+    serv2Base: "https://127.0.0.1:3038/serv2",
+    tokenUrl: "https://127.0.0.1:3039/realms/dev/protocol/openid-connect/token",
   };
   for (const [key, value] of Object.entries(expected)) {
     if (endpoints[key] !== value) fail(`DEV ${key} is not the exact fixture binding`);
     const parsed = new URL(endpoints[key]);
-    if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1"
+    if (parsed.protocol !== "https:" || parsed.hostname !== "127.0.0.1"
       || parsed.username || parsed.password || parsed.search || parsed.hash) {
       fail(`DEV ${key} is not an isolated loopback URL`);
     }
@@ -252,15 +249,24 @@ const bindManagedRuntimeSource = (source, apiBase) => {
   const devMarker = "  DEV: null,";
   const prodMarker = `  PROD: ${JSON.stringify(PROD_API_BASE)},`;
   const environmentMarker = 'const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "PROD";';
+  const transportMarkers = [
+    '  const transportAllowed = identity.environment === "PROD"\n    ? parsed.protocol === "https:"\n    : parsed.protocol === "http:" && parsed.hostname === "127.0.0.1";',
+    '  const transportAllowed = environment === "PROD"\n    ? parsed.protocol === "https:"\n    : parsed.protocol === "http:" && parsed.hostname === "127.0.0.1";',
+  ];
   for (const marker of [devMarker, prodMarker, environmentMarker]) {
     if (!source.includes(marker) || source.indexOf(marker) !== source.lastIndexOf(marker)) {
       fail("DEV runtime environment binding marker mismatch");
     }
   }
+  const matchedTransportMarkers = transportMarkers.filter((marker) => source.includes(marker));
+  if (matchedTransportMarkers.length !== 1) {
+    fail("DEV runtime HTTPS transport marker mismatch");
+  }
   const devBound = source
     .replace(prodMarker, "  PROD: null,")
     .replace(devMarker, `  DEV: ${JSON.stringify(apiBase)},`)
-    .replace(environmentMarker, 'const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "DEV";');
+    .replace(environmentMarker, 'const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "DEV";')
+    .replace(matchedTransportMarkers[0], '  const transportAllowed = parsed.protocol === "https:";');
   if (devBound.includes(prodMarker) || devBound.includes(environmentMarker)) {
     fail("DEV runtime API binding marker mismatch");
   }
@@ -613,10 +619,13 @@ export function validateDevBinding(binding,
     || !/^[a-f0-9]{64}$/.test(String(binding.endpointAudit.endpointInventorySha256 || ""))) {
     fail("DEV network endpoint configuration audit is absent or not isolated");
   }
-  if (binding.runtime?.completeManagedContractSourceImplemented !== true
+  if (binding.runtime?.completeCupManagedContractSourceImplemented !== true
     || binding.runtime.localPhysicalVerified !== true
     || binding.runtime.hostRuntimeExposed !== false
     || binding.runtime.completeManagedContractExposed !== false
+    || binding.runtime.networkIsolationRuntimeVerified !== false
+    || binding.runtime.serviceStartBlocked !== true
+    || binding.runtime.serviceStartBlocker !== "NON_LOOPBACK_EGRESS_ENFORCEMENT_NOT_VERIFIED"
     || binding.runtime.reason
       !== "Source implemented and locally loopback-verified; DEV services remain stopped and host runtime was not exercised") {
     fail("Source-only DEV binding must distinguish local physical proof from host runtime exposure");

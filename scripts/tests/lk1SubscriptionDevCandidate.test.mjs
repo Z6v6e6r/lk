@@ -70,7 +70,7 @@ const endpointInventorySha256 = (flow) => {
   visit(flow);
   return sha256(JSON.stringify(inventory));
 };
-const DEV_API_BASE = "http://127.0.0.1:3037/api";
+const DEV_API_BASE = "https://127.0.0.1:3037/api";
 const DEV_INSTALL_TARGET = Object.freeze({
   sourceHost: "lk-reserve-89",
   sourceHostname: "89-108-64-209.cloudvps.regruhosting.ru",
@@ -86,10 +86,10 @@ const trustedBindings = () => ({
   PROD: "https://padlhub.su/api",
   DEV_INSTALL_TARGET,
   DEV_ENDPOINTS: {
-    cupApiBase: "http://127.0.0.1:3037/api",
-    vivaApiBase: "http://127.0.0.1:3038",
-    serv2Base: "http://127.0.0.1:3038/serv2",
-    tokenUrl: "http://127.0.0.1:3039/realms/dev/protocol/openid-connect/token",
+    cupApiBase: "https://127.0.0.1:3037/api",
+    vivaApiBase: "https://127.0.0.1:3038",
+    serv2Base: "https://127.0.0.1:3038/serv2",
+    tokenUrl: "https://127.0.0.1:3039/realms/dev/protocol/openid-connect/token",
   },
   DEV_MONGO: {
     host: "127.0.0.1", port: 27030, database: "lk1_subscription_dev_fixture",
@@ -197,10 +197,13 @@ function fixture() {
     },
     runtime: {
       apiBase: DEV_API_BASE,
-      completeManagedContractSourceImplemented: true,
+      completeCupManagedContractSourceImplemented: true,
       localPhysicalVerified: true,
       hostRuntimeExposed: false,
       completeManagedContractExposed: false,
+      networkIsolationRuntimeVerified: false,
+      serviceStartBlocked: true,
+      serviceStartBlocker: "NON_LOOPBACK_EGRESS_ENFORCEMENT_NOT_VERIFIED",
       reason: "Source implemented and locally loopback-verified; DEV services remain stopped and host runtime was not exercised",
     },
     dependencies: {
@@ -258,13 +261,13 @@ function fixture() {
 
 const fixtureTrackedSources = () => ({
   "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js":
-    "const VIVA_API_BASE = \"https://api.vivacrm.ru\";\nconst SERV2_URL = \"https://padlhub.su/seliger\";\nconst MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = \"PROD\";\nconst MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = {\n  PROD: \"https://padlhub.su/api\",\n  DEV: null,\n};\n",
+    "const VIVA_API_BASE = \"https://api.vivacrm.ru\";\nconst SERV2_URL = \"https://padlhub.su/seliger\";\nconst MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = \"PROD\";\nconst MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = {\n  PROD: \"https://padlhub.su/api\",\n  DEV: null,\n};\n  const transportAllowed = identity.environment === \"PROD\"\n    ? parsed.protocol === \"https:\"\n    : parsed.protocol === \"http:\" && parsed.hostname === \"127.0.0.1\";\n",
   "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js":
     "const VIVA_API_BASE = \"https://api.vivacrm.ru\";\n",
   "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_finalize.js":
     "const FINALIZE = true;\n",
   "scripts/nodered_games_nodes/fn_split_router.js":
-    "const ADMIN_API = \"https://api.vivacrm.ru/api/v1\";\nconst END_USER_API = \"https://api.vivacrm.ru/end-user/api/v1/iSkq6G\";\nconst CUP_API_DEFAULT = \"https://padlhub.su/api\";\nconst TOKEN_URL_DEFAULT = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\nconst MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = \"PROD\";\nconst MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = {\n  PROD: \"https://padlhub.su/api\",\n  DEV: null,\n};\n  const apiBase = (readEnv(\"CUP_API_BASE_URL\") || CUP_API_DEFAULT).replace(/\\/+$/, \"\");\n  msg.url = readEnv(\"VIVA_SERVICE_TOKEN_URL\") || TOKEN_URL_DEFAULT;\n",
+    "const ADMIN_API = \"https://api.vivacrm.ru/api/v1\";\nconst END_USER_API = \"https://api.vivacrm.ru/end-user/api/v1/iSkq6G\";\nconst CUP_API_DEFAULT = \"https://padlhub.su/api\";\nconst TOKEN_URL_DEFAULT = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\nconst MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = \"PROD\";\nconst MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = {\n  PROD: \"https://padlhub.su/api\",\n  DEV: null,\n};\n  const transportAllowed = environment === \"PROD\"\n    ? parsed.protocol === \"https:\"\n    : parsed.protocol === \"http:\" && parsed.hostname === \"127.0.0.1\";\n  const apiBase = (readEnv(\"CUP_API_BASE_URL\") || CUP_API_DEFAULT).replace(/\\/+$/, \"\");\n  msg.url = readEnv(\"VIVA_SERVICE_TOKEN_URL\") || TOKEN_URL_DEFAULT;\n",
   "scripts/nodered_games_nodes/fn_split_create_prepare.js":
     "const TOKEN_URL_DEFAULT = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\nconst CUP_API_DEFAULT = \"https://padlhub.su/api\";\n  const apiBase = (readEnv(\"CUP_API_BASE_URL\") || CUP_API_DEFAULT).replace(/\\/+$/, \"\");\nmsg.url = readEnv(\"VIVA_SERVICE_TOKEN_URL\") || TOKEN_URL_DEFAULT;\n  successUrl: toStr(body.successUrl) || toStr(body.baseRedirectUrl),\n  failUrl: toStr(body.failUrl) || toStr(body.baseRedirectUrl),\n",
   "scripts/nodered_games_nodes/fn_split_join_prepare.js":
@@ -361,7 +364,7 @@ test("DEV builder patches only frozen function bodies and emits a separate diges
     flow.map(({ id, z, wires }) => ({ id, z, wires })),
   );
   assert.match(result.candidate.find((node) => node.id === "router-dev").func,
-    /DEV: "http:\/\/127\.0\.0\.1:3037\/api"/);
+    /DEV: "https:\/\/127\.0\.0\.1:3037\/api"/);
   assert.match(result.candidate.find((node) => node.id === "router-dev").func,
     /MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "DEV"/);
   assert.doesNotMatch(result.candidate.find((node) => node.id === "router-dev").func,
@@ -383,9 +386,11 @@ test("actual reachable sources bind only to the approved DEV fixture origins", (
     assert.match(source, /successUrl: null/);
     assert.match(source, /failUrl: null/);
   }
-  assert.match(combined, /http:\/\/127\.0\.0\.1:3037\/api/);
-  assert.match(combined, /http:\/\/127\.0\.0\.1:3038/);
-  assert.match(combined, /http:\/\/127\.0\.0\.1:3039/);
+  assert.match(combined, /https:\/\/127\.0\.0\.1:3037\/api/);
+  assert.match(combined, /https:\/\/127\.0\.0\.1:3038/);
+  assert.match(combined, /https:\/\/127\.0\.0\.1:3039/);
+  assert.match(combined, /const transportAllowed = parsed\.protocol === "https:"/);
+  assert.doesNotMatch(combined, /parsed\.protocol === "http:"/);
 });
 
 test("install evidence binds every changed source node to the frozen preimage", () => {
@@ -797,7 +802,7 @@ test("checked-in DEV binding is source-only and never claims runtime or install 
   assert.equal(binding.environmentIdentityVerified, false);
   assert.equal(binding.target.present, true);
   assert.equal(binding.runtime.completeManagedContractExposed, false);
-  assert.equal(binding.runtime.completeManagedContractSourceImplemented, true);
+  assert.equal(binding.runtime.completeCupManagedContractSourceImplemented, true);
   assert.equal(binding.runtime.localPhysicalVerified, true);
   assert.equal(binding.runtime.hostRuntimeExposed, false);
   assert.equal(binding.dependencies.mongoBindingVerifiedDevOnly, true);

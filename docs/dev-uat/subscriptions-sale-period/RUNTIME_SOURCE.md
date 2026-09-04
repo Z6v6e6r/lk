@@ -1,23 +1,23 @@
 # Локальный source-пакет DEV fixture runtime
 
 Этот пакет делает локально проверяемыми schema/read-only evidence и synthetic
-in-memory CUP lifecycle для UAT двух подписок. Он не является установленным DEV
-runtime и не доказывает доступность host, ingress, Node-RED, CUP, provider,
-identity или managed-entitlement flow.
+in-memory CUP managed contract для двух подписок. Он не является установленным
+DEV runtime и не доказывает доступность
+host, ingress, Node-RED, CUP, provider, identity или managed-entitlement flow.
 
 ## Реализованная граница
 
-- CUP fixture на `127.0.0.1:3037` реализует `healthz`, release identity,
-  system evidence, runtime context, run-scoped observability, synthetic
-  in-memory reserve/replay/confirm/release и first-use activation.
+- CUP fixture на `https://127.0.0.1:3037` реализует `healthz`, release identity,
+  system evidence, runtime context, run-scoped observability и synthetic in-memory
+  reserve/confirm/release/activate-first-use для exact canary A/B.
 - Provider и identity fixtures на `127.0.0.1:3038/3039` реализуют только
   `healthz`; остальные пути отвечают fail-closed `503`.
 - Минимальный Node-RED flow реализует только `GET /lk/release-dev.json` и читает
   root-owned receipt `/srv/lk1-subscription-dev/node-red/release-identity.json`.
   Отсутствующий или некорректный receipt даёт `503`.
-- Provider/identity create/join, provider booking и payment capabilities
-  отсутствуют. Synthetic entitlement/activation не обращаются к Mongo,
-  provider или production и не являются разрешением runtime activation.
+- Provider booking, payment и create/join отсутствуют. CUP entitlement/activation
+  меняют только process-local synthetic state, не являются host/UAT evidence и не
+  получают доступ к внешним или production системам.
 - System evidence помечено `FIXTURE_NON_AUTHORIZING` и намеренно не подтверждает
   runtime flags, indexes, projection, canary или no-write counters. Поэтому
   стандартный runner обязан вернуть `BLOCKED`, а не `READY`. Нулевой fixture
@@ -25,10 +25,14 @@ identity или managed-entitlement flow.
 
 Fixture runtime не стартует без отдельного marker
 `/srv/lk1-subscription-dev/authorization/service-start.approved` и приватного
-config через `LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE`. Config не входит в
+config через `LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE`. HTTPS key/certificate
+передаются только через exact root-owned group-readable paths в
+`/srv/lk1-subscription-dev/tls`; TLS material не входит в bundle. Config не входит в
 bundle, обязан быть обычным non-symlink файлом `0600`, содержать только
 `fixture-*` identities/credentials и exact A=V1/B=V2/control evidence. Bearer,
 JWT и иные production-like credentials schema не принимает.
+Node-RED unit привязывает этот exact certificate path как private CA через
+`NODE_EXTRA_CA_CERTS`; отключение TLS verification запрещено.
 
 ## Локальная проверка
 
@@ -59,6 +63,15 @@ start/enable units, ingress, выдача canary IDs, activation и ручной
 новой точной авторизации. Synthetic in-memory managed entitlement и activation
 реализованы и локально проверены; provider/identity create/join остаются
 health-only и host runtime не запускался.
+
+Повторные confirm/release/first-use activation принимаются только с тем же exact
+provider booking, release reason и expected revision. Изменение transition identity
+при replay завершается `FIXTURE_IDEMPOTENCY_CONFLICT` без нового revision.
+
+`IPAddressDeny=any`/`IPAddressAllow=localhost` остаются defense-in-depth в unit
+candidates, но их фактическое kernel/eBPF enforcement не доказано read-only
+preflight. Поэтому `serviceStartBlocked=true` до отдельно авторизованного
+`STARTED_DEFAULT_OFF` gate с отрицательной non-loopback пробой.
 
 Historical stopped bootstrap оставил каталог `authorization` под
 `root:root 0700`. Будущий отдельно авторизованный stopped-install должен сменить

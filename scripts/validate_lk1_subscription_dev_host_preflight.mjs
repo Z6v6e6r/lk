@@ -11,7 +11,7 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const GIT_SHA = /^[a-f0-9]{40}$/;
 const RFC3339_SECONDS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
-export const INGRESS_TARGET_REFERENCE_PATTERN = "(^|[^0-9])1882([^0-9]|$)|lk1-subscription-dev-nodered[.]service|/srv/lk1-subscription-dev/node-red";
+export const INGRESS_TARGET_REFERENCE_PATTERN = "(^|[^0-9])(1882|27030|3037|3038|3039)([^0-9]|$)|lk1-subscription-dev-(mongo|cup|provider-fixture|identity-fixture|nodered)[.]service|/srv/lk1-subscription-dev(?:/|$)";
 const EXPECTED_MACHINE_ID_SHA256 = "9f29889b29a55b2c7e1eeb65616d2049b16972589de1bc623a61d38d92dd7ad8";
 const EXPECTED_UNITS = Object.freeze([
   "lk1-subscription-dev-mongo.service",
@@ -85,12 +85,15 @@ export function validateHostPreflightEvidence(evidence) {
     fail("host target identity mismatch");
   }
   exactKeys(evidence.hostCapabilities, [
-    "systemdVersion", "minimumRequiredSystemdVersion", "authorizationTransport", "compatible",
+    "systemdVersion", "minimumRequiredSystemdVersion", "authorizationTransport",
+    "authorizationTransportCompatible", "networkIsolationRuntimeVerified", "serviceStartBlocked",
   ], "host capabilities");
   if (evidence.hostCapabilities.systemdVersion !== 245
     || evidence.hostCapabilities.minimumRequiredSystemdVersion !== 245
     || evidence.hostCapabilities.authorizationTransport !== "ROOT_OWNED_GROUP_READ_ONLY_FILE"
-    || evidence.hostCapabilities.compatible !== true) {
+    || evidence.hostCapabilities.authorizationTransportCompatible !== true
+    || evidence.hostCapabilities.networkIsolationRuntimeVerified !== false
+    || evidence.hostCapabilities.serviceStartBlocked !== true) {
     fail("host capabilities do not support the candidate authorization transport");
   }
   if (JSON.stringify(Object.keys(evidence.dedicatedUnits)) !== JSON.stringify(EXPECTED_UNITS)) {
@@ -110,7 +113,8 @@ export function validateHostPreflightEvidence(evidence) {
   ))) fail("listener isolation evidence mismatch");
   exactKeys(evidence.inputs, [
     "targetFlowAbsent", "fixtureConfigAbsent", "releaseReceiptAbsent",
-    "serviceStartAuthorizationAbsent", "installIdentityEnvironmentAbsent", "productionMarkersAbsent",
+    "serviceStartAuthorizationAbsent", "installIdentityEnvironmentAbsent", "tlsKeyAbsent",
+    "tlsCertificateAbsent", "productionMarkersAbsent",
   ], "authorization inputs");
   if (Object.values(evidence.inputs).some((value) => value !== true)) {
     fail("host authorization inputs are not absent");
@@ -246,7 +250,9 @@ for row in \\
   'fixtureConfigAbsent:/srv/lk1-subscription-dev/private/fixture.json' \\
   'releaseReceiptAbsent:/srv/lk1-subscription-dev/node-red/release-identity.json' \\
   'serviceStartAuthorizationAbsent:/srv/lk1-subscription-dev/authorization/service-start.approved' \\
-  'installIdentityEnvironmentAbsent:/srv/lk1-subscription-dev/runtime/install-identity.env'; do
+  'installIdentityEnvironmentAbsent:/srv/lk1-subscription-dev/runtime/install-identity.env' \\
+  'tlsKeyAbsent:/srv/lk1-subscription-dev/tls/server.key' \\
+  'tlsCertificateAbsent:/srv/lk1-subscription-dev/tls/server.crt'; do
   key="\${row%%:*}"
   target="\${row#*:}"
   if test -e "$target"; then state=false; else state=true; fi
@@ -410,7 +416,7 @@ export function captureCurrentHostPreflightEvidence({
     }
   }
   if (!ended || scalar.size !== 5 || Object.keys(units).length !== EXPECTED_UNITS.length
-    || listeners.size !== 7 || Object.keys(inputs).length !== 5
+    || listeners.size !== 7 || Object.keys(inputs).length !== 7
     || Object.keys(unitIsolation).length !== EXPECTED_UNITS.length || !ingressIsolation) {
     fail("host preflight SSH transcript is incomplete");
   }
@@ -430,7 +436,9 @@ export function captureCurrentHostPreflightEvidence({
       systemdVersion: Number.parseInt(scalar.get("SYSTEMD_VERSION"), 10),
       minimumRequiredSystemdVersion: 245,
       authorizationTransport: "ROOT_OWNED_GROUP_READ_ONLY_FILE",
-      compatible: Number.parseInt(scalar.get("SYSTEMD_VERSION"), 10) === 245,
+      authorizationTransportCompatible: Number.parseInt(scalar.get("SYSTEMD_VERSION"), 10) === 245,
+      networkIsolationRuntimeVerified: false,
+      serviceStartBlocked: true,
     },
     dedicatedUnits: Object.fromEntries(EXPECTED_UNITS.map((unit) => [unit, units[unit]])),
     listeners: {
@@ -448,6 +456,8 @@ export function captureCurrentHostPreflightEvidence({
       releaseReceiptAbsent: inputs.releaseReceiptAbsent === true,
       serviceStartAuthorizationAbsent: inputs.serviceStartAuthorizationAbsent === true,
       installIdentityEnvironmentAbsent: inputs.installIdentityEnvironmentAbsent === true,
+      tlsKeyAbsent: inputs.tlsKeyAbsent === true,
+      tlsCertificateAbsent: inputs.tlsCertificateAbsent === true,
       productionMarkersAbsent: scalar.get("PRODUCTION_MARKERS_ABSENT") === "true",
     },
     sharedResources: {
