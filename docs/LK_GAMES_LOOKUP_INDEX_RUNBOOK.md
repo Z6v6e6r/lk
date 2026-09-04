@@ -32,11 +32,11 @@ Node-RED flows, API responses, or payment state.
 - Active `GET /lk/games` query function SHA-256:
   `2535de7d1219cc56fe4eb752c5b4df14f9f4dc1f8f2443a0b29422fb3af990ee`.
 - Payment lookup: `COLLSCAN`, `17,382` documents examined, `0` keys examined,
-  `41 ms` in the sampled execution.
+  `34 ms` in the final sampled execution.
 - Booking lookup: `COLLSCAN`, `17,382` documents examined, `0` keys examined,
-  `73 ms` in the sampled execution.
+  `72 ms` in the final sampled execution.
 - Combined payment plus booking lookup: `COLLSCAN`, `17,382` documents examined,
-  `0` keys examined, `118 ms` in the sampled execution.
+  `0` keys examined, `92 ms` in the final sampled execution.
 - Read-only plan digest snapshot: `6565639adbffbd2f7d23bacc68fa7aa17735ed889c4fb512bec70bd120a34963`.
   It is evidence only and is not authorization for apply. Any target, flow,
   server, or catalog drift invalidates it.
