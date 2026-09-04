@@ -17,7 +17,7 @@ const NODE_RED_SETTINGS_SHA256 = "6b6cc7253b120f2a8b2397c0d3a5f82db9a72fb6d62948
 const UNIT_SHA256 = Object.freeze({
   "lk1-subscription-dev-cup.service": "21423847b61c56bb7c8d2561e4a740d2e21aad399abbb1b2725a2936d3631ba5",
   "lk1-subscription-dev-identity-fixture.service": "aa3b2b3da47f5dd21b139f0bba98a1da9a9c9a4114ac5f357ce9970a131f1ffd",
-  "lk1-subscription-dev-nodered.service": "c78a6efda42224f8ca3524b18510f36102b9b98f1e92c5f8db3c575f7a61bee7",
+  "lk1-subscription-dev-nodered.service": "dfb45a305fd27d32eacfbf5a3f437e257dcd05f385256289804ba496bdea6e99",
   "lk1-subscription-dev-provider-fixture.service": "29a050c070d8fd66318caff69008817a4813a606c345feeba36a0d68f2f9e27a",
 });
 const EXPECTED_FILES = Object.freeze([
@@ -176,6 +176,8 @@ export function validateInstallCandidateUnit(name, source) {
     for (const required of [
       "ConditionPathExists=/srv/lk1-subscription-dev/node-red/flows.json",
       "ConditionPathExists=/srv/lk1-subscription-dev/node-red/release-identity.json",
+      "ConditionPathExists=/srv/lk1-subscription-dev/tls/server.crt",
+      "Environment=NODE_EXTRA_CA_CERTS=/srv/lk1-subscription-dev/tls/server.crt",
       "ExecCondition=/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs --validate-start-authorization --role nodered",
       "ReadOnlyPaths=/srv/lk1-subscription-dev/node-red/flows.json /srv/lk1-subscription-dev/node-red/release-identity.json /srv/lk1-subscription-dev/node-red/settings.js",
       "--settings /srv/lk1-subscription-dev/node-red/settings.js --port 1882",

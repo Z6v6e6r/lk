@@ -42,6 +42,8 @@ preflight непосредственно перед будущей устано�
   не входят в пакет.
 - Install executor и `install-identity.env` отсутствуют.
 - Loopback-only/editor-disabled Node-RED settings входят как exact hashed payload.
+- Node-RED доверяет только exact private CA path через `NODE_EXTRA_CA_CERTS`; CA
+  material отсутствует в bundle и требует отдельной custody/start проверки.
 - Manifest и contract оставляют все host/live authority в `false`.
 - CUP managed entitlement/activation реализованы только как synthetic in-memory
   source и физически проверены на fixture-owned loopback; host runtime не запускался.

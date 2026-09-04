@@ -99,6 +99,7 @@ test("unit candidates use exact root-owned authorization path and remain unstart
   }
   const nodeRed = fs.readFileSync(path.join(UNIT_ROOT, "lk1-subscription-dev-nodered.service"), "utf8");
   assert.match(nodeRed, /ReadOnlyPaths=.*flows\.json.*release-identity\.json.*settings\.js/);
+  assert.match(nodeRed, /NODE_EXTRA_CA_CERTS=\/srv\/lk1-subscription-dev\/tls\/server\.crt/);
   assert.match(
     nodeRed,
     /ExecCondition=.*fixture_runtime\.mjs --validate-start-authorization --role nodered/,

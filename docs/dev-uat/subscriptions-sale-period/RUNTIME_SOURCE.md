@@ -31,6 +31,8 @@ config через `LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE`. HTTPS key/certific
 bundle, обязан быть обычным non-symlink файлом `0600`, содержать только
 `fixture-*` identities/credentials и exact A=V1/B=V2/control evidence. Bearer,
 JWT и иные production-like credentials schema не принимает.
+Node-RED unit привязывает этот exact certificate path как private CA через
+`NODE_EXTRA_CA_CERTS`; отключение TLS verification запрещено.
 
 ## Локальная проверка
 
