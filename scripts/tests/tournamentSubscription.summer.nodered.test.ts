@@ -2414,20 +2414,36 @@ test("Piter CLAIMED replay fails closed when the live provider product no longer
 });
 
 test("Piter confirm accepts only explicit PAID with the exact transaction identity and zero balance", () => {
+  const providerFacts = {
+    sum: 1980000,
+    clientId: "client-piter-1",
+    clientPhone: ["+7", "9990000000"].join(""),
+    products: [{ id: "8bf334ba-3050-4017-b40a-7eef2db1eb16", discount: 3700000 }],
+  };
   const baseCtx = {
     action: "confirm", step: "confirm_lookup", counterKey: "piter_friendship",
     inventoryId: "piter_friendship_12m_2026_v1", paymentRef: "piter-confirm-1",
     transactionId: "tx-piter-1", expectedAmountMinor: 1980000,
     requestFingerprint: "fingerprint-1", toPayMinor: 1980000,
+    clientId: "client-piter-1", clientPhone: "79990000000",
+    productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+    saleRecord: { providerProductCostMinor: 5680000, discountMinor: 3700000 },
   };
   for (const payload of [
     { id: "tx-piter-1", status: "UNPAID", toPay: 0 },
     { id: "different-id", status: "PAID", toPay: 0 },
     { id: "tx-piter-1", status: "PAID", toPay: 1980000 },
+    { id: "tx-piter-1", status: "PAID", toPay: 0, sum: 2380000 },
+    { id: "tx-piter-1", status: "PAID", toPay: 0, clientId: "other-client" },
+    { id: "tx-piter-1", status: "PAID", toPay: 0, products: [{ id: "other-product", discount: 3700000 }] },
+    { id: "tx-piter-1", status: "PAID", toPay: 0, products: [
+      { id: "8bf334ba-3050-4017-b40a-7eef2db1eb16", discount: 3700000 },
+      { id: "unexpected-product", discount: 0 },
+    ] },
   ]) {
     const out = runNodeRedFunction(
       "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
-      { statusCode: 200, payload, _summerSubscriptionCtx: { ...baseCtx } },
+      { statusCode: 200, payload: { ...providerFacts, ...payload }, _summerSubscriptionCtx: { ...baseCtx } },
     ) as unknown[];
     assert.equal(out[4], undefined);
     assert.equal(asRecord(asRecord(asRecord(out[2]).payload).details).code, "PITER_CONFIRM_PROVIDER_MISMATCH");
@@ -2436,7 +2452,7 @@ test("Piter confirm accepts only explicit PAID with the exact transaction identi
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
     {
       statusCode: 200,
-      payload: { id: "tx-piter-1", status: "PAID", toPay: 0 },
+      payload: { ...providerFacts, id: "tx-piter-1", status: "PAID", toPay: 0 },
       _summerSubscriptionCtx: { ...baseCtx },
     },
   ) as unknown[];
@@ -2448,12 +2464,150 @@ test("Piter confirm accepts only explicit PAID with the exact transaction identi
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
     {
       statusCode: 200,
-      payload: { id: "tx-piter-1", status: "CANCELLATION_PENDING", toPay: 1980000 },
+      payload: { ...providerFacts, id: "tx-piter-1", status: "CANCELLATION_PENDING", toPay: 1980000 },
       _summerSubscriptionCtx: { ...baseCtx },
     },
   ) as unknown[];
   assert.equal(asRecord(asRecord(asRecord(cancellationPending[4])._summerSubscriptionCtx).confirmResult).nextStatus,
     "PAYMENT_PENDING");
+});
+
+test("Piter legacy confirm without an atomic fingerprint always requires offline reconciliation", () => {
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: {
+        id: "tx-piter-legacy", status: "PAID", toPay: 0, sum: 1980000,
+        clientId: "client-legacy", clientPhone: ["+7", "9990000000"].join(""),
+        products: [{ id: "8bf334ba-3050-4017-b40a-7eef2db1eb16", discount: 3700000 }],
+      },
+      _summerSubscriptionCtx: {
+        action: "confirm", step: "confirm_lookup", counterKey: "piter_friendship",
+        inventoryId: "piter_friendship_12m_2026_v1", paymentRef: "piter-legacy-confirm",
+        transactionId: "tx-piter-legacy", expectedAmountMinor: 1980000, toPayMinor: 1980000,
+        clientId: "client-legacy", clientPhone: "79990000000",
+        productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+        saleRecord: { providerProductCostMinor: 5680000, discountMinor: 3700000 },
+      },
+    },
+  ) as unknown[];
+  assert.ok(out[4]);
+  const blocked = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    { _summerSubscriptionCtx: asRecord(out[4])._summerSubscriptionCtx, payload: null },
+  ) as unknown[];
+  assert.equal(blocked[0], null);
+  assert.equal(blocked[2], null);
+  assert.equal(asRecord(asRecord(asRecord(blocked[3]).payload).details).code,
+    "PITER_LEGACY_CONFIRM_REQUIRES_RECONCILIATION");
+
+  const scheduled = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: {
+        ...asRecord(out[4])._summerSubscriptionCtx,
+        confirmResult: {
+          ...asRecord(asRecord(out[4])._summerSubscriptionCtx).confirmResult,
+          reconcile: true,
+        },
+      },
+      payload: null,
+    },
+  ) as unknown[];
+  assert.deepEqual(scheduled, [null, null, null, null, null]);
+});
+
+test("Piter deactivation blocks new reservations but keeps provider result durable", () => {
+  const blocked = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: {
+        step: "piter_ledger_find", counterKey: "piter_friendship",
+        inventoryId: "piter_friendship_12m_2026_v1", paymentRef: "after-stop",
+        clientPhone: "79990000000", clientId: null, totalLimit: 400,
+      },
+      payload: [{ ...buildPiterRows(42)[0], ready: false }],
+    },
+  ) as unknown[];
+  assert.equal(blocked[4], null);
+  assert.equal(asRecord(asRecord(asRecord(blocked[3]).payload).details).code, "PITER_ATOMIC_LEDGER_NOT_READY");
+
+  const durable = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: {
+        step: "piter_provider_result", counterKey: "piter_friendship",
+        inventoryId: "piter_friendship_12m_2026_v1", paymentRef: "in-flight",
+        requestFingerprint: "fingerprint", providerResult: {
+          ok: true, transactionId: "tx-in-flight", paymentUrl: "https://pay.example.test/in-flight",
+          toPayMinor: 1980000, response: { ok: true },
+        },
+      },
+      payload: null,
+    },
+  ) as unknown[];
+  const filter = asRecord((asRecord(durable[1]).payload as unknown[])[0]);
+  assert.equal(Object.hasOwn(filter, "ready"), false);
+
+  const paymentRef = "inactive-replay";
+  const clientPhone = "79990000000";
+  const requestFingerprint = [
+    "piter_friendship_12m_2026_v1", "piter_friendship", paymentRef, clientPhone, "",
+  ].join("\n");
+  const replay = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: {
+        step: "piter_ledger_find", counterKey: "piter_friendship",
+        inventoryId: "piter_friendship_12m_2026_v1", paymentRef,
+        clientPhone, clientId: null, totalLimit: 400,
+      },
+      payload: [{
+        ...buildPiterRows(42)[0], ready: false, reservedCount: 1, takenCount: 43,
+        reservations: [{
+          paymentRef, requestFingerprint,
+          intentFingerprint: ["piter_friendship_12m_2026_v1", "piter_friendship", clientPhone, ""].join("\n"),
+          state: "PAYMENT_PENDING", transactionId: "tx-inactive-replay",
+          paymentUrl: "https://pay.example.test/inactive-replay", clientPhone,
+          priceMinor: 1980000, providerProductCostMinor: 5680000, discountMinor: 3700000,
+          productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+        }],
+      }],
+    },
+  ) as unknown[];
+  assert.ok(replay[2]);
+  assert.equal(replay[4], null);
+});
+
+test("Piter confirm finalizes an in-flight payment while the ledger is deactivated", () => {
+  const ledger = {
+    ...buildPiterRows(42)[0],
+    ready: false,
+    reservedCount: 1,
+    takenCount: 43,
+    reservations: [{
+      paymentRef: "in-flight-confirm", requestFingerprint: "fingerprint-confirm-disabled",
+      intentFingerprint: "intent-confirm-disabled", transactionId: "tx-confirm-disabled",
+      state: "PAYMENT_PENDING", priceMinor: 1980000,
+    }],
+  };
+  const out = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    {
+      _summerSubscriptionCtx: {
+        step: "piter_confirm_validate", counterKey: "piter_friendship",
+        inventoryId: "piter_friendship_12m_2026_v1", paymentRef: "in-flight-confirm",
+        requestFingerprint: "fingerprint-confirm-disabled", transactionId: "tx-confirm-disabled",
+        expectedAmountMinor: 1980000, totalLimit: 400,
+        confirmResult: { nextStatus: "PAID", paid: true, transactionId: "tx-confirm-disabled", toPayMinor: 0 },
+      },
+      payload: [ledger],
+    },
+  ) as unknown[];
+  const filter = asRecord((asRecord(out[1]).payload as unknown[])[0]);
+  assert.equal(filter.ready, false);
+  assert.equal(asRecord(asRecord((asRecord(out[1]).payload as unknown[])[1]).$inc).paidCount, 1);
 });
 
 test("Piter status rejects a ready ledger whose count invariant is inconsistent", () => {

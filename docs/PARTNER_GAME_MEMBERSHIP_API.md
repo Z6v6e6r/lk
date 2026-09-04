@@ -1,7 +1,7 @@
 # Тестовый Partner Game Membership API
 
-Статус документа: **deployable pilot v0.2, default-off, live gates UNBOUND**. Контур,
-строгий Viva adapter и генератор приватного deployment packet реализованы локально,
+Статус документа: **deployable source pilot v0.2, default-off; runtime AUDIT_BLOCKED,
+live gates UNBOUND**. Контур, строгий Viva adapter и генератор приватного deployment packet реализованы локально,
 но маршрут не импортирован в Node-RED, реальные вызовы Viva не выполнялись, ключи не
 создавались, Mongo/shared ingress/production не менялись. Наличие deployable artifacts
 не является разрешением на deploy или activation.
@@ -88,17 +88,19 @@ TLS обязателен, но сам TLS не является прикладн
 | Header | Требование |
 | --- | --- |
 | `X-PadlHub-Client-Id` | Выданный M2M client ID |
+| `X-PadlHub-Audience` | Exact environment/endpoint audience; обязан совпасть с server-only `LK_PARTNER_GAME_API_AUDIENCE` |
 | `X-PadlHub-Key-Id` | Версия ключа для ротации |
 | `X-PadlHub-Timestamp` | Unix seconds, окно по умолчанию ±90 секунд |
 | `X-PadlHub-Nonce` | Новый криптографически случайный base64url, 22–128 символов |
-| `X-PadlHub-Signature` | `v1=<base64url HMAC-SHA256>` |
+| `X-PadlHub-Signature` | `v2=<base64url HMAC-SHA256>` |
 | `Idempotency-Key` | Новый lowercase UUID для новой бизнес-команды |
 | `X-Correlation-ID` | Новый lowercase UUID для трассировки попытки |
 
 Каноническая строка:
 
 ```text
-PADLHUB-PARTNER-GAME-V1
+PADLHUB-PARTNER-GAME-V2
+<audience>
 <client-id>
 <key-id>
 <unix-seconds>
@@ -114,6 +116,11 @@ PADLHUB-PARTNER-GAME-V1
 передаётся партнёру вне API и никогда не включается в request/flow/repository.
 Сравнение подписи выполняется constant-time.
 
+Audience является частью HMAC и проверяется до nonce/provider-доступа: request,
+перехваченный в test/staging или на другом hostname, не принимается production даже
+при случайном переиспользовании client ID/key. `X-PadlHub-Audience` относится к
+critical headers: дублирование отклоняется.
+
 После проверки подписи сервер атомарно вставляет nonce в `lk_partner_api_nonces`.
 Повтор того же перехваченного запроса получает `409 REQUEST_REPLAY_DETECTED` и не
 доходит до game/Viva. Timestamp ограничивает срок полезности утечки. Изменение метода,
@@ -121,8 +128,10 @@ PADLHUB-PARTNER-GAME-V1
 
 Это защищает от **повторения** перехваченного запроса. Защита от real-time relay, когда
 злоумышленник успевает переслать оригинал раньше легитимного клиента, требует сетевого
-слоя: mTLS предпочтителен; минимум — TLS 1.2+, ingress IP allowlist, корректная работа
-за trusted proxy и rate limit. Эти настройки являются gate ограниченного пилота.
+слоя. Для pilot v0.2 **mTLS обязателен**; CIDR применяется только как дополнительное
+ограничение, не как самостоятельная идентичность. Dedicated ingress принимает только
+exact Host/SNI и три route, Node-RED недоступен напрямую или через общий hostname,
+стирает входные `Forwarded`/`X-Forwarded-*` и формирует их только из socket peer.
 
 ### Публичный golden vector
 
@@ -131,6 +140,7 @@ PADLHUB-PARTNER-GAME-V1
 
 ```text
 clientId: partner-test
+audience: padlhub-partner-game-test
 keyId: key-2026-09
 timestamp: 1788253200
 nonce: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0
@@ -139,7 +149,7 @@ path: /lk/integrations/v1/open-games/game-001/members
 bodySha256: 38e85283a47d9c00aab3a4dbda49757cbd3f031c32f524376420e245d9ca6d66
 idempotency: 11111111-1111-4111-8111-111111111111
 correlation: 22222222-2222-4222-8222-222222222222
-signature: v1=4KBpuvfSZVlFUjufjfL3fNYcxENPjQ1bBIE0WnFrE6A
+signature: v2=JclK7-2hTze2KrNOPMuK0UdEO5DO2T5v6geJxxjRCAo
 ```
 
 Body vector: `externalPlayerId=player-001`, `displayName=Test Player`, payment
@@ -178,6 +188,8 @@ Server-only keyring задаёт для каждого клиента:
 не в Git и не в Node-RED flow. Ограничения применяются вместе:
 
 - глобальный kill switch `LK_PARTNER_GAME_API_ENABLED` должен быть ровно `true`;
+- server-only `LK_PARTNER_GAME_API_AUDIENCE` должен быть задан и exact совпадать с
+  подписанным `X-PadlHub-Audience`;
 - client и key должны быть включены;
 - для маршрута нужен отдельный scope;
 - station игры должна входить в `stationIds` как при POST, так и при DELETE; DELETE
@@ -203,8 +215,10 @@ Server-only keyring задаёт для каждого клиента:
 - synthetic provider разрешён только для `local|test|dev`, loopback Mongo и имени БД с
   `local|test|dev`.
 
-Ротация без разрыва: добавить новый `keyId`, перевести клиента, отключить старый key,
-затем удалить его после максимального окна request и согласованного grace period.
+Test и production получают разные client ID, HMAC key и mTLS certificate. Их повторное
+использование между средами запрещено. Ротация без разрыва: добавить новый `keyId`,
+перевести клиента, отключить старый key, затем удалить его после максимального окна
+request и согласованного grace period.
 
 ### 4.1. Отдельные gate реального Viva adapter
 
@@ -331,8 +345,8 @@ station allowlist на POST и DELETE, archived/ended/private/conflicting/missin
 game states, запрет удаления LK/Viva/другого клиента, отсутствие mutation при
 pre-authorization failure, `UNKNOWN`, audit redaction, closed schema, default-off
 provider readiness до operation, точные Viva path/body/headers/read-back/cancel gates,
-отсутствие mutation retry, additions-only exact-graph contract, Mongo rehearsal guard и
-приватный v0.2 deployment packet.
+отсутствие mutation retry, additions-only exact-graph contract, Mongo rehearsal guard,
+fail-closed production-controls contract и приватный v0.2 deployment packet.
 
 ## 10. Подготовка deployment packet
 
@@ -340,24 +354,48 @@ provider readiness до operation, точные Viva path/body/headers/read-back
 
 ```bash
 npm run nodered:modular:audit-147 -- /absolute/external/workspace --source-tab-label "LK Games"
+install -d -m 0700 /absolute/private-parent
 npm run nodered:partner-game-membership:v02-packet -- \
   --workspace /absolute/external/workspace \
-  --out /absolute/new-private-partner-v02-packet
+  --out /absolute/private-parent/new-partner-v02-packet
 ```
 
 Генератор принимает только свежий приватный workspace с доказанным origin
 `lk-primary-147:/root/.node-red/flows.json`, чистый exact task-branch commit и новый
-output вне repository. Он создаёт файлы с mode `0600` внутри directory `0700`:
+output вне repository. Parent должен уже существовать, быть canonical, принадлежать
+текущему пользователю и иметь exact mode `0700`; world-writable `/private/tmp` parent
+не подходит. Дочерний `--out` до запуска существовать не должен. Генератор создаёт
+файлы с mode `0600` внутри directory `0700`:
 
+- `source.flow.json` — exact fresh source preimage для contract/rollback verification;
 - `candidate.flow.json` — свежий flow плюс ровно семь pinned nodes;
 - `reviewed-flow.contract.json` — source/candidate SHA и hash каждого addition;
 - `custom-node/` + `custom-node.release.json` — exact source/package-lock bytes/hashes;
+- `runtime/` — exact Node-RED `4.1.14` root lock, `npm ls`, полный audit evidence,
+  ограниченный load/default-off/removal `functional-rehearsal.json`, runtime manifest и
+  installable `partner-package/`; rehearsal не доказывает новый exact flow candidate,
+  а production install допускает только
+  `npm ci --ignore-scripts --no-fund --no-audit`;
+- `production-controls.contract.json` — exact policy bytes/hash; runtime остаётся
+  `AUDIT_BLOCKED`, ingress/custody `UNBOUND`, activation `BLOCKED`;
 - `deployment-plan.json` — `liveMutationAuthorized=false`,
-  `deploymentPerformed=false`, `activationPerformed=false` и список незакрытых gates.
+  `deploymentPerformed=false`, `activationPerformed=false` и список незакрытых gates;
+- `packet.manifest.json` — записанный последним aggregate hash/mode manifest со
+  статусом `COMPLETE_PRIVATE_PACKET`, но без deploy/activation authorization.
+
+Генератор собирает packet в private sibling temp-directory, fsync-ит payload и manifest,
+а затем публикует каталог одним atomic rename. При любой ошибке до rename final path
+отсутствует; regression test инъецирует этот сбой и проверяет отсутствие final и temp
+packet.
 
 Nested package pins MongoDB `7.2.0`, включает свой lockfile в release identity и должен
 устанавливаться через `npm ci --ignore-scripts`; фактическая Node/npm/Linux совместимость
 и offline/immutable dependency closure всё равно репетируются до deploy.
+
+Node-RED `4.1.14` прошёл isolated load/default-off/flow rollback/package rollback, но
+свежий audit exact closure не стал чистым (`0 critical / 15 high / 9 moderate / 1 low`).
+Эта версия — доказанный compatibility floor, а не security approval. Детали, exact
+ingress limits и custody boundary: [Production controls](./PARTNER_GAME_MEMBERSHIP_PRODUCTION_CONTROLS.md).
 
 Расширенный reviewed-flow contract разрешает additions-only deploy, включая новые
 `http in`, только когда каждый ID и полный node hash явно pinned. Все существующие
@@ -401,4 +439,6 @@ production Mongo.
 - [Threat model](./PARTNER_GAME_MEMBERSHIP_THREAT_MODEL.md)
 - [Вопросы внешней команде](./PARTNER_GAME_MEMBERSHIP_EXTERNAL_TEAM_QUESTIONS.md)
 - [План и матрица тестирования](./PARTNER_GAME_MEMBERSHIP_TEST_PLAN.md)
+- [Production ingress/runtime/custody controls](./PARTNER_GAME_MEMBERSHIP_PRODUCTION_CONTROLS.md)
 - [Редактируемая инфографика безопасности](./assets/partner-game-membership-security.drawio)
+- [Редактируемая инфографика production gates](./assets/partner-game-membership-production-gates.drawio)

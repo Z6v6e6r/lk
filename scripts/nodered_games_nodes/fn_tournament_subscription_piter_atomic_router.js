@@ -76,8 +76,8 @@ const intentFingerprint = (ctx) => [
   toStr(ctx.inventoryId), toStr(ctx.counterKey), toStr(ctx.clientPhone), toStr(ctx.clientId),
 ].join("\n");
 const ACTIVE_RESERVATION_STATES = ["CLAIMED", "DISPATCHING", "PAYMENT_PENDING", "PROVIDER_UNKNOWN"];
-const ledgerIsValid = (ledger, totalLimit) => {
-  if (!(ledger && ledger.ready === true
+const ledgerIsStructurallyValid = (ledger, totalLimit) => {
+  if (!(ledger && typeof ledger.ready === "boolean"
     && ledger.schemaVersion === 1
     && Number.isInteger(ledger.revision) && ledger.revision >= 0
     && Number.isInteger(ledger.paidCount) && ledger.paidCount >= 0
@@ -110,6 +110,9 @@ const ledgerIsValid = (ledger, totalLimit) => {
     && new Set(activeIntentFingerprints).size === activeIntentFingerprints.length
     && new Set(transactionIds).size === transactionIds.length;
 };
+const ledgerIsPurchaseReady = (ledger, totalLimit) => (
+  ledger?.ready === true && ledgerIsStructurallyValid(ledger, totalLimit)
+);
 const saleInsert = (ctx, nowIso) => ({
       counterKey: ctx.counterKey,
       inventoryId: ctx.inventoryId,
@@ -209,7 +212,7 @@ if (ctx.step === "piter_reserve_start") return ledgerFind(ctx);
 
 if (ctx.step === "piter_ledger_find") {
   const ledger = rows(msg.payload).find((row) => row?._id === LEDGER_ID);
-  if (!ledgerIsValid(ledger, ctx.totalLimit)) {
+  if (!ledgerIsStructurallyValid(ledger, ctx.totalLimit)) {
     return fail(503, "Продажа Питера ещё не активирована", "PITER_ATOMIC_LEDGER_NOT_READY");
   }
   let requestFingerprint = fingerprint(ctx);
@@ -262,6 +265,9 @@ if (ctx.step === "piter_ledger_find") {
       return projectSale(ctx, ctx.providerResult, "piter_replay_sale_ack");
     }
     if (existing.state === "CLAIMED") {
+      if (ledger.ready !== true) {
+        return fail(503, "Продажа Питера остановлена", "PITER_ATOMIC_LEDGER_NOT_READY");
+      }
       const providerLine = Array.isArray(ctx.providerPayload?.products) ? ctx.providerPayload.products[0] : null;
       const frozenProductId = toStr(existing.productId);
       const frozenProviderCostMinor = Math.max(0, Math.round(Number(existing.providerProductCostMinor)));
@@ -292,6 +298,9 @@ if (ctx.step === "piter_ledger_find") {
       paymentRef: existing.paymentRef,
       status: existing.state, message: "Попытка оплаты уже обрабатывается; повторный запрос в Viva не выполняется.",
     });
+  }
+  if (!ledgerIsPurchaseReady(ledger, ctx.totalLimit)) {
+    return fail(503, "Продажа Питера остановлена", "PITER_ATOMIC_LEDGER_NOT_READY");
   }
   if (ledger.takenCount >= ctx.totalLimit) {
     return fail(409, "Лимит абонементов исчерпан", "PITER_INVENTORY_EXHAUSTED", {
@@ -392,7 +401,7 @@ if (ctx.step === "piter_provider_result") {
   const nowIso = new Date().toISOString();
   ctx.step = "piter_provider_ledger_ack";
   const resultFilter = {
-    _id: LEDGER_ID, ready: true,
+    _id: LEDGER_ID,
     $and: [{ reservations: { $elemMatch: {
       paymentRef: ctx.paymentRef, requestFingerprint: ctx.requestFingerprint, state: "DISPATCHING",
     } } }],
@@ -458,7 +467,8 @@ if (ctx.step === "piter_replay_sale_readback") {
 if (ctx.step === "piter_confirm_result") {
   const result = ctx.confirmResult || {};
   if (!toStr(ctx.requestFingerprint)) {
-    return fail(503, "Запись покупки не содержит atomic fingerprint", "PITER_CONFIRM_FINGERPRINT_MISSING");
+    if (result.reconcile === true) return [null, null, null, null, null];
+    return fail(503, "Legacy-платёж Питера требует отдельной сверки", "PITER_LEGACY_CONFIRM_REQUIRES_RECONCILIATION");
   }
   const expectedAmount = ctx.expectedAmountMinor;
   const validStatus = ["PAID", "FAILED", "PAYMENT_PENDING"].includes(result.nextStatus);
@@ -478,7 +488,7 @@ if (ctx.step === "piter_confirm_validate") {
   const expectedAmount = ctx.expectedAmountMinor;
   const ledger = rows(msg.payload).find((row) => row?._id === LEDGER_ID);
   const existing = ledger?.reservations?.find((item) => item?.paymentRef === ctx.paymentRef);
-  if (!ledgerIsValid(ledger, ctx.totalLimit || 400)
+  if (!ledgerIsStructurallyValid(ledger, ctx.totalLimit || 400)
     || !existing
     || existing.requestFingerprint !== ctx.requestFingerprint
     || existing.transactionId !== ctx.transactionId
@@ -499,7 +509,7 @@ if (ctx.step === "piter_confirm_validate") {
   }
   return ledgerUpdate(ctx, {
     _id: LEDGER_ID,
-    ready: true,
+    ready: ledger.ready,
     schemaVersion: 1,
     revision: ledger.revision,
     paidCount: ledger.paidCount,
@@ -562,7 +572,7 @@ if (ctx.step === "piter_confirm_ledger_ack") {
 if (ctx.step === "piter_confirm_replay_find") {
   const ledger = rows(msg.payload).find((row) => row?._id === LEDGER_ID);
   const existing = ledger?.reservations?.find((item) => item?.paymentRef === ctx.paymentRef);
-  if (!ledgerIsValid(ledger, ctx.totalLimit || 400)
+  if (!ledgerIsStructurallyValid(ledger, ctx.totalLimit || 400)
     || !existing
     || existing.requestFingerprint !== ctx.requestFingerprint
     || existing.transactionId !== ctx.transactionId

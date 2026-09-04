@@ -25,6 +25,10 @@
 | 2026-09-03 | ~23:00 | LK1 Piter sales / CI blocker analysis | На fresh `origin/main=28bc541b…` воспроизведены stale current-candidate SHA pins после atomic Piter sales change и Linux-only сбой из-за hardcoded `/private/tmp`; frozen live preimages и deployment contracts отдельно сверены как неизменяемые | Отделить CI metadata drift от live/runtime контракта и не ослабить fail-closed custody | Изменения production Node-RED функций, deploy, provider/payment и data writes отсутствуют |
 | 2026-09-03 | ~23:00 | LK1 Piter sales / CI contract correction | Обновлены только SHA текущих tracked candidates в sales, unified enforcement и referral contracts; test temp paths переведены на `os.tmpdir()`, а symlink-negative fixture остаётся вне временной custody | Восстановить exact-source CI на macOS/Linux, сохранив frozen preimages и unbound production gates | Scope ограничен CI/test metadata; live flow, activation, routing и payment behavior не менялись |
 | 2026-09-03 | ~23:00 | LK1 Piter sales / isolated verification | Прогнаны exact sales/unified/referral matrices, critical subscription regressions, DEV/runtime/security/toolchain, workflow, legacy и payment recovery, TypeScript, lint и inert full build | Подтвердить hashes фактических source bytes и отсутствие ослабления negative/fail-closed проверок | Все выполненные source gates PASS; lint `0 errors` с существующими warnings; reviewed-flow custody suite требует clean checkpoint и Docker и будет повторён после commit; push/deploy/live writes `0` |
+| 2026-09-03 | ~23:40 | Partner API v0.2 / R4 reviewer remediation | HMAC protocol поднят до v2 с signed audience; mTLS/exclusive Host+SNI/loopback socket-peer policy закреплены fail-closed; добавлены immutable Node-RED 4.1.14 lock/npm-ls/audit/functional evidence, read-once atomic packet с source preimage и target-host binding validator | Закрыть replay между средами, shared/direct ingress bypass, spoofed forwarding, runtime TOCTOU, фиктивный certificate/packet/host binding и partial secret-bearing packet | Isolated exact custom release `9f3fab0b…`: default-off `503`, rehearsed flow/package rollback `404`, palette/flow matches `0`; functional scope ограничен load/default-off/removal, exact audit остаётся `0/15/9/1`; ingress/audit declarations честно `UNVERIFIED`, runtime `AUDIT_BLOCKED`, production/Viva/Mongo/credentials `0` |
+| 2026-09-03 | ~17:49 | Partner API v0.2 / production-controls verification | На exact Node 22.23.2 / Node-RED 4.1.14 проверены default-off HTTP, graceful stop, exact flow rollback и package+palette-cache quarantine; custom package повторно сверён по release SHA | Доказать runtime compatibility и recovery отдельно от production deployment | PASS compatibility: `503`, затем `404/0 flow matches`, `404/0 palette matches`; test containers/listener `0`, production/Viva/Mongo/credential changes `0` |
+| 2026-09-03 | ~17:42 | Partner API v0.2 / dependency and ingress finding | Fresh `npm audit --omit=dev` для exact 4.1.14 closure и loopback headers выявили оставшиеся advisories и общий CORS header | Не объявлять upgrade достаточной security remediation без reachability и ingress controls | `0 critical / 15 high / 9 moderate / 1 low`; `express/body-parser/qs` требуют решения, `Access-Control-Allow-Origin: *` должен скрываться; runtime остаётся `AUDIT_BLOCKED` |
+| 2026-09-03 | ~17:30 | Partner API v0.2 / isolated remediation analysis | От fresh `origin/main=111ea07…` создан отдельный clean worktree; сопоставлены packet, external-team P0, ingress/custody gaps и Node-RED 4.1.14 target | Подготовить fail-closed production policy без изменения dirty checkout или live-систем | Scope ограничен source/tests/docs и disposable loopback; production upload/install/import/restart/ingress/secret/data/provider mutations отсутствуют |
 | 2026-09-03 | ~07:00 | LK1 Branch C / Draft PR CI correction | В Draft PR #11 exact-head CI обнаружил stale SHA-pin unified candidate для ранее изменённого subscription booking router; pin обновлён только до фактического reviewed source SHA `a00df114…` | Восстановить source-custody contract без ослабления drift-negative проверки | Локальный exact CI step `13/13` PASS; следующая проверка должна выполняться на новом immutable PR head; deploy/live writes `0` |
 | 2026-09-03 | ~03:15 | LK1 Branch C / final current-main drift | Финальный fetch обнаружил `origin/main=55077d25…`; CI-only delta влит ordinary merge `4504edd2…` без rebase после quota checkpoint, source/lockfile не изменились | Не публиковать Draft PR на устаревшей main identity | Exact-head binary custody workflow contract `13/13` PASS; ранее выполненные source/runtime gates остаются применимы; deploy/live writes `0` |
 | 2026-09-03 | ~02:45 | LK1 Branch C / quota ordering fix | После подтверждения product contract добавлен policy-driven `dailyUsagePolicy.usageDurationsMinutes=[60]`: платные скидочные 90/120 минут не расходуют free-hour bucket; отсутствие поля сохраняет legacy all-duration metering; compiler/evaluator отклоняют пустые, неизвестные, смешанные и дублированные значения | Гарантировать один отдельный бесплатный 60-минутный create/join независимо от предшествующей скидочной игры без обхода старых дневных лимитов | Regression `90→60`, `120→60`, `60→90→release90→60`, parallel/replay и legacy discounted repeat PASS; повторные 60 минут блокируются, active-service reservation сохранён; public/provider writes `0` |
@@ -1764,3 +1768,25 @@
 - The reconciliation makes further source drift fail closed without presenting the
   partial Piter function set as a deployable unified candidate. No Node-RED import,
   provider/Mongo write, activation, push or deployment was performed.
+
+## 2026-09-04 — Piter atomic activation and data-aware stop tooling
+
+- Added an offline five-minute activation packet that reconciles complete scoped
+  Mongo, Viva transaction, exact-product and Node-RED global-binding evidence, blocks all nonterminal,
+  refunded, duplicate, lifecycle, amount and pagination drift, and writes raw payment
+  identities only to a private `0700`/`0600` packet while redacting operator output.
+- Added a dry-run-by-default ledger operator for preflight, seed, activate,
+  deactivate and a non-authorizing offline rollback precheck. Future writes require
+  the shared reviewed-flow lock, canonical root-owned flow, matching live deployment
+  lease, exact packet/revision/action/host gates, Mongo replica-set identity, fresh
+  commit-time evidence, bounded majority+journaled CAS, durable canonical EJSON
+  forensic preimage plus exact post-write recovery. Seed remains inactive; an
+  ambiguous ACK is accepted only when readback proves the exact postcondition, and
+  retrying an already achieved exact state is an explicit no-op.
+- Split sale readiness from durable ledger validity: deactivation blocks fresh
+  reservations while provider-result and confirm paths can finish an already
+  dispatched attempt. After candidate installation, legacy Piter rows without an
+  atomic fingerprint are never mutated by request or scheduled reconcile and must
+  pass the offline packet reconciliation, preventing a seed/legacy-confirm race.
+- This is isolated source-only work. No flow candidate was installed, no Mongo or
+  Viva write occurred, and sales or managed usage policy were not activated.
