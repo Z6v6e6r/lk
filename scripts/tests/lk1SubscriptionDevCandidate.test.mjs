@@ -261,13 +261,13 @@ function fixture() {
 
 const fixtureTrackedSources = () => ({
   "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_router.js":
-    "const VIVA_API_BASE = \"https://api.vivacrm.ru\";\nconst SERV2_URL = \"https://padlhub.su/seliger\";\nconst MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = \"PROD\";\nconst MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = {\n  PROD: \"https://padlhub.su/api\",\n  DEV: null,\n};\n",
+    "const VIVA_API_BASE = \"https://api.vivacrm.ru\";\nconst SERV2_URL = \"https://padlhub.su/seliger\";\nconst MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = \"PROD\";\nconst MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = {\n  PROD: \"https://padlhub.su/api\",\n  DEV: null,\n};\n  const transportAllowed = identity.environment === \"PROD\"\n    ? parsed.protocol === \"https:\"\n    : parsed.protocol === \"http:\" && parsed.hostname === \"127.0.0.1\";\n",
   "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_prepare.js":
     "const VIVA_API_BASE = \"https://api.vivacrm.ru\";\n",
   "scripts/nodered_subscription_booking_nodes/fn_subscription_booking_finalize.js":
     "const FINALIZE = true;\n",
   "scripts/nodered_games_nodes/fn_split_router.js":
-    "const ADMIN_API = \"https://api.vivacrm.ru/api/v1\";\nconst END_USER_API = \"https://api.vivacrm.ru/end-user/api/v1/iSkq6G\";\nconst CUP_API_DEFAULT = \"https://padlhub.su/api\";\nconst TOKEN_URL_DEFAULT = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\nconst MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = \"PROD\";\nconst MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = {\n  PROD: \"https://padlhub.su/api\",\n  DEV: null,\n};\n  const apiBase = (readEnv(\"CUP_API_BASE_URL\") || CUP_API_DEFAULT).replace(/\\/+$/, \"\");\n  msg.url = readEnv(\"VIVA_SERVICE_TOKEN_URL\") || TOKEN_URL_DEFAULT;\n",
+    "const ADMIN_API = \"https://api.vivacrm.ru/api/v1\";\nconst END_USER_API = \"https://api.vivacrm.ru/end-user/api/v1/iSkq6G\";\nconst CUP_API_DEFAULT = \"https://padlhub.su/api\";\nconst TOKEN_URL_DEFAULT = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\nconst MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = \"PROD\";\nconst MANAGED_RUNTIME_API_BASE_BY_ENVIRONMENT = {\n  PROD: \"https://padlhub.su/api\",\n  DEV: null,\n};\n  const transportAllowed = environment === \"PROD\"\n    ? parsed.protocol === \"https:\"\n    : parsed.protocol === \"http:\" && parsed.hostname === \"127.0.0.1\";\n  const apiBase = (readEnv(\"CUP_API_BASE_URL\") || CUP_API_DEFAULT).replace(/\\/+$/, \"\");\n  msg.url = readEnv(\"VIVA_SERVICE_TOKEN_URL\") || TOKEN_URL_DEFAULT;\n",
   "scripts/nodered_games_nodes/fn_split_create_prepare.js":
     "const TOKEN_URL_DEFAULT = \"https://kc.vivacrm.ru/realms/prod/protocol/openid-connect/token\";\nconst CUP_API_DEFAULT = \"https://padlhub.su/api\";\n  const apiBase = (readEnv(\"CUP_API_BASE_URL\") || CUP_API_DEFAULT).replace(/\\/+$/, \"\");\nmsg.url = readEnv(\"VIVA_SERVICE_TOKEN_URL\") || TOKEN_URL_DEFAULT;\n  successUrl: toStr(body.successUrl) || toStr(body.baseRedirectUrl),\n  failUrl: toStr(body.failUrl) || toStr(body.baseRedirectUrl),\n",
   "scripts/nodered_games_nodes/fn_split_join_prepare.js":
