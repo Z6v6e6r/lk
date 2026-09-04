@@ -1738,6 +1738,9 @@
 - No host install, Node-RED import, service start/enable, ingress, activation, canary
   IDs, secrets, provider/Mongo write, merge, push, or deployment occurred. The
   stopped fixture runtime still does not implement managed entitlement/create-join.
+- Separated the immutable DEV source-base from the advancing tooling/main identity:
+  current `origin/main` must remain inside clean tooling `HEAD`, while the exact frozen
+  source-base remains its ancestor and every source/tooling blob stays hash-bound.
 - Closed the independent security P2 in the DEV postimage by replacing both
   browser-supplied split-payment success/failure/base redirect fields with null before
   provider transaction assembly; shared production source defaults remain unchanged.

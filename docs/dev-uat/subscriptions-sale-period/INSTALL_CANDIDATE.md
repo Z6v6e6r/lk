@@ -61,15 +61,17 @@ npm run test:lk1-subscription-dev-runtime-install-candidate
 временную директорию:
 
 ```bash
-source_sha="$(git rev-parse origin/main)"
+source_sha="$(node -p \"require('./scripts/lk1_subscription_dev_candidate_binding.json').source.sourceCommit\")"
 candidate_dir="$(mktemp -d /private/tmp/lk1-runtime-install.XXXXXX)/bundle"
 node scripts/build_lk1_subscription_dev_runtime_install_candidate.mjs \
   --output "$candidate_dir" \
   --source-commit "$source_sha"
 ```
 
-Builder берёт function-source только из frozen `origin/main`, а runtime tooling —
-из clean checkpoint `HEAD`; manifest хранит эти commits раздельно. Он сравнивает
+Builder берёт function-source только из frozen source-base, а runtime tooling —
+из clean checkpoint `HEAD`; текущий `origin/main` должен быть предком `HEAD`, а
+frozen source-base — предком текущего `origin/main`. Manifest хранит source и
+tooling commits раздельно. Builder сравнивает
 каждый упаковываемый byte с соответствующим committed blob. Bundled
 verifier проверяет manifest `0600`, exact inventory, file modes/hashes, отсутствие
 symlink/special/unexpected files, canonical contract/unit/flow digests и

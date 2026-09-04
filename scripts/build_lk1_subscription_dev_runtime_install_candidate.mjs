@@ -64,7 +64,12 @@ export function buildRuntimeInstallCandidateBundle({
   repositoryIdentity = () => ({
     head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim(),
     originMain: execFileSync("git", ["rev-parse", "origin/main"], { cwd: ROOT, encoding: "utf8" }).trim(),
-    mergeBase: execFileSync("git", ["merge-base", "HEAD", "origin/main"], { cwd: ROOT, encoding: "utf8" }).trim(),
+    headOriginMergeBase: execFileSync(
+      "git", ["merge-base", "HEAD", "origin/main"], { cwd: ROOT, encoding: "utf8" },
+    ).trim(),
+    sourceOriginMergeBase: execFileSync(
+      "git", ["merge-base", sourceCommit, "origin/main"], { cwd: ROOT, encoding: "utf8" },
+    ).trim(),
     clean: execFileSync("git", ["status", "--porcelain"], { cwd: ROOT, encoding: "utf8" }).trim() === "",
   }),
   commitFile = (commit, repositoryPath) => execFileSync(
@@ -76,9 +81,10 @@ export function buildRuntimeInstallCandidateBundle({
   if (!/^[a-f0-9]{40}$/.test(sourceCommit || "")) fail("sourceCommit must be an exact 40-hex commit");
   const identity = repositoryIdentity();
   if (!/^[a-f0-9]{40}$/.test(identity.head || "") || identity.clean !== true
-    || (identity.originMain !== undefined && identity.originMain !== sourceCommit)
-    || (identity.mergeBase !== undefined && identity.mergeBase !== sourceCommit)) {
-    fail("runtime install candidate builder requires clean tooling HEAD on exact origin/main ancestry");
+    || !/^[a-f0-9]{40}$/.test(identity.originMain || "")
+    || identity.headOriginMergeBase !== identity.originMain
+    || identity.sourceOriginMergeBase !== sourceCommit) {
+    fail("runtime install candidate builder requires clean tooling HEAD containing current origin/main and its frozen source base");
   }
   const root = path.resolve(outputDirectory);
   if ((!root.startsWith("/private/tmp/") && !root.startsWith("/tmp/")) || fs.existsSync(root)) {

@@ -12,6 +12,7 @@ import {
 import {
   assertProductionManifestEnvironment,
   buildDevCandidate,
+  CHECKED_DEV_CANDIDATE_BINDING,
   publishDevCandidate,
   validateDevBinding,
   validateDevInstallTarget,
@@ -30,6 +31,7 @@ import {
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const TEMP_ROOT = fs.existsSync("/private/tmp") ? "/private/tmp" : "/tmp";
+const FROZEN_SOURCE_COMMIT = CHECKED_DEV_CANDIDATE_BINDING.source.sourceCommit;
 const nodeInventorySha256 = (flow) => sha256(JSON.stringify(flow
   .map((node) => ({ id: node.id, sha256: sha256(JSON.stringify(node)) }))
   .sort((left, right) => left.id.localeCompare(right.id))));
@@ -284,19 +286,26 @@ test("strict environment URL contract allows only the exact bound DEV or PROD ba
   }
 });
 
-test("offline source CLI authority requires exact origin/main ancestry and a clean worktree", () => {
+test("offline source CLI authority requires frozen source ancestry under current origin/main and a clean worktree", () => {
   const sourceCommit = "a".repeat(40);
+  const originMain = "b".repeat(40);
   const exact = (args) => {
     if (args[0] === "status") return "";
-    return sourceCommit;
+    if (args[0] === "rev-parse") return originMain;
+    return args[1] === "HEAD" ? originMain : sourceCommit;
   };
   assert.equal(assertExactMainSourceCommit(sourceCommit, exact), true);
   assert.throws(() => assertExactMainSourceCommit("not-a-commit", exact), /40-hex/);
   assert.throws(() => assertExactMainSourceCommit(sourceCommit, (args) => (
-    args[0] === "rev-parse" ? "b".repeat(40) : sourceCommit
-  )), /exact origin\/main ancestry/);
+    args[0] === "status" ? "" : args[0] === "rev-parse" ? originMain : "c".repeat(40)
+  )), /tooling HEAD does not contain/);
   assert.throws(() => assertExactMainSourceCommit(sourceCommit, (args) => (
-    args[0] === "status" ? " M source.js" : sourceCommit
+    args[0] === "status" ? "" : args[0] === "rev-parse" || args[1] === "HEAD"
+      ? originMain : "c".repeat(40)
+  )), /frozen source base is not an ancestor/);
+  assert.throws(() => assertExactMainSourceCommit(sourceCommit, (args) => (
+    args[0] === "status" ? " M source.js" : args[0] === "rev-parse" || args[1] === "HEAD"
+      ? originMain : sourceCommit
   )), /clean worktree/);
 });
 
@@ -678,7 +687,7 @@ test("offline generator and publisher emit an install-blocked readiness packet",
   try {
     const results = parents.map((parent) => {
       const workspace = path.join(parent, "workspace");
-      publishOfflineDevSource(workspace);
+      publishOfflineDevSource(workspace, FROZEN_SOURCE_COMMIT);
       const binding = JSON.parse(fs.readFileSync(path.join(
         workspace, "input/source.flow.meta.json",
       ), "utf8"));
@@ -692,7 +701,7 @@ test("offline generator and publisher emit an install-blocked readiness packet",
     assert.equal(ready.candidateSha256, results[0].manifest.candidateSha256);
     assert.equal(ready.manifestSha256, results[0].manifestSha256);
     const foreignWorkspace = path.join(parents[0], "foreign-workspace");
-    publishOfflineDevSource(foreignWorkspace);
+    publishOfflineDevSource(foreignWorkspace, FROZEN_SOURCE_COMMIT);
     assert.doesNotThrow(() => execFileSync(process.execPath, [
       path.resolve("scripts/prepare_lk1_subscription_dev_candidate.mjs"),
       "--workspace", foreignWorkspace,
@@ -724,7 +733,7 @@ test("publisher rejects an arbitrary self-consistent binding and symlinked input
   const parent = fs.mkdtempSync(path.join(TEMP_ROOT, "lk1-dev-untrusted-"));
   try {
     const workspace = path.join(parent, "workspace");
-    publishOfflineDevSource(workspace);
+    publishOfflineDevSource(workspace, FROZEN_SOURCE_COMMIT);
     const metaPath = path.join(workspace, "input/source.flow.meta.json");
     const binding = JSON.parse(fs.readFileSync(metaPath, "utf8"));
     const tamperedAuthorization = JSON.parse(fs.readFileSync(
@@ -752,7 +761,7 @@ test("publisher rejects an arbitrary self-consistent binding and symlinked input
     assert.throws(() => publishDevCandidate(workspace, untrusted), /frozen binding/);
 
     fs.writeFileSync(metaPath, `${JSON.stringify(binding, null, 2)}\n`);
-    publishOfflineDevSource(path.join(parent, "clean-workspace"));
+    publishOfflineDevSource(path.join(parent, "clean-workspace"), FROZEN_SOURCE_COMMIT);
     const cleanSourcePath = path.join(parent, "clean-workspace/input/source.flow.json");
     const realSourcePath = path.join(workspace, "input/source.flow.real.json");
     fs.copyFileSync(cleanSourcePath, realSourcePath);
@@ -769,7 +778,7 @@ test("offline generator rejects a temp symlink parent that resolves outside its 
   try {
     const redirect = path.join(holder, "redirect");
     fs.symlinkSync(fs.realpathSync(ROOT), redirect);
-    assert.throws(() => publishOfflineDevSource(path.join(redirect, "workspace")),
+    assert.throws(() => publishOfflineDevSource(path.join(redirect, "workspace"), FROZEN_SOURCE_COMMIT),
       /workspace must be under/);
   } finally {
     fs.rmSync(holder, { recursive: true, force: true });

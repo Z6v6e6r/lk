@@ -118,9 +118,13 @@ export function buildOfflineDevSourceFlow(
 
 export function assertExactMainSourceCommit(sourceCommit, runGit = git) {
   if (!GIT_SHA.test(sourceCommit)) fail("DEV source commit must be an exact 40-hex Git commit");
-  if (runGit(["rev-parse", "origin/main"]) !== sourceCommit
-    || runGit(["merge-base", "HEAD", "origin/main"]) !== sourceCommit) {
-    fail("DEV source commit is not the frozen exact origin/main ancestry");
+  const originMain = runGit(["rev-parse", "origin/main"]);
+  if (!GIT_SHA.test(originMain)
+    || runGit(["merge-base", "HEAD", "origin/main"]) !== originMain) {
+    fail("DEV tooling HEAD does not contain the current exact origin/main ancestry");
+  }
+  if (runGit(["merge-base", sourceCommit, "origin/main"]) !== sourceCommit) {
+    fail("DEV frozen source base is not an ancestor of current origin/main");
   }
   if (runGit(["status", "--porcelain", "--untracked-files=normal"])) {
     fail("DEV offline source build requires a clean worktree");
@@ -146,7 +150,7 @@ const parseArgs = (argv) => {
 
 export function publishOfflineDevSource(
   workspace,
-  sourceCommit = git(["rev-parse", "origin/main"]),
+  sourceCommit,
   sourceReader = readCommittedSource,
 ) {
   if (!GIT_SHA.test(sourceCommit)) fail("DEV source commit must be an exact 40-hex Git commit");

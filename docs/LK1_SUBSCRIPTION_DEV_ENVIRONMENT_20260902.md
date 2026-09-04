@@ -239,7 +239,10 @@ before any separately authorized install stage.
 
 The offline generator produces a 23-node isolated source with two HTTP routes, one
 credential-free loopback Mongo client, and the exact reviewed function-node
-preimages. The publisher binds all reachable HTTP endpoints to `127.0.0.1`, records
+preimages. Its frozen source-base commit may remain an ancestor of the current
+`origin/main`; the tooling `HEAD` must contain current `origin/main`, and exact
+source/tooling blobs remain independently verified. The publisher binds all reachable
+HTTP endpoints to `127.0.0.1`, records
 `sourceProvenance=OFFLINE_GENERATED`, `hostPreimageState=ABSENT`, a null rollback
 source, and writes readiness last through a private staging directory. The frozen
 source/candidate/manifest SHA-256 tuple is:

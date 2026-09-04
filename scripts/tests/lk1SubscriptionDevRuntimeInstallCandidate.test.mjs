@@ -35,7 +35,11 @@ function build() {
       sourceCommit: SOURCE_COMMIT,
       now: NOW,
       repositoryIdentity: () => ({
-        head: TOOLING_COMMIT, originMain: SOURCE_COMMIT, mergeBase: SOURCE_COMMIT, clean: true,
+        head: TOOLING_COMMIT,
+        originMain: TOOLING_COMMIT,
+        headOriginMergeBase: TOOLING_COMMIT,
+        sourceOriginMergeBase: SOURCE_COMMIT,
+        clean: true,
       }),
       commitFile: committed,
     }),
@@ -194,7 +198,11 @@ test("bundle verifier rejects manifest mode, payload, unit, symlink, and unexpec
 
 test("builder rejects dirty or divergent ancestry, blobs, and non-new output", () => {
   const exact = () => ({
-    head: TOOLING_COMMIT, originMain: SOURCE_COMMIT, mergeBase: SOURCE_COMMIT, clean: true,
+    head: TOOLING_COMMIT,
+    originMain: TOOLING_COMMIT,
+    headOriginMergeBase: TOOLING_COMMIT,
+    sourceOriginMergeBase: SOURCE_COMMIT,
+    clean: true,
   });
   assert.throws(() => buildRuntimeInstallCandidateBundle({
     outputDirectory: path.join(ROOT, "candidate"),
@@ -220,10 +228,26 @@ test("builder rejects dirty or divergent ancestry, blobs, and non-new output", (
       outputDirectory: path.join(parent, "wrong-ancestry"),
       sourceCommit: SOURCE_COMMIT,
       repositoryIdentity: () => ({
-        head: TOOLING_COMMIT, originMain: "7".repeat(40), mergeBase: SOURCE_COMMIT, clean: true,
+        head: TOOLING_COMMIT,
+        originMain: "7".repeat(40),
+        headOriginMergeBase: TOOLING_COMMIT,
+        sourceOriginMergeBase: SOURCE_COMMIT,
+        clean: true,
       }),
       commitFile: committed,
-    }), /exact origin\/main ancestry/);
+    }), /containing current origin\/main/);
+    assert.throws(() => buildRuntimeInstallCandidateBundle({
+      outputDirectory: path.join(parent, "wrong-source-ancestry"),
+      sourceCommit: SOURCE_COMMIT,
+      repositoryIdentity: () => ({
+        head: TOOLING_COMMIT,
+        originMain: TOOLING_COMMIT,
+        headOriginMergeBase: TOOLING_COMMIT,
+        sourceOriginMergeBase: "7".repeat(40),
+        clean: true,
+      }),
+      commitFile: committed,
+    }), /frozen source base/);
     assert.throws(() => buildRuntimeInstallCandidateBundle({
       outputDirectory: path.join(parent, "divergent"),
       sourceCommit: SOURCE_COMMIT,
