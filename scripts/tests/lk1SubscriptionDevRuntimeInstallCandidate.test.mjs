@@ -8,6 +8,7 @@ import { buildRuntimeInstallCandidateBundle } from "../build_lk1_subscription_de
 import {
   EXPECTED_FILES,
   UNIT_SHA256,
+  assertRuntimeInstallCandidateLocation,
   validateInstallCandidateUnit,
   validateNodeRedSettings,
   validateRuntimeInstallContract,
@@ -25,6 +26,63 @@ const NOW = new Date("2026-09-10T12:00:00.000Z");
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const committed = (_commit, repositoryPath) => fs.readFileSync(path.join(ROOT, repositoryPath));
+
+test("candidate location policy accepts only local temp or exact manifest-bound production root", () => {
+  const manifestSha256 = "a".repeat(64);
+  assert.equal(assertRuntimeInstallCandidateLocation(
+    "/private/tmp/local/bundle", manifestSha256, "local",
+  ), true);
+  assert.equal(assertRuntimeInstallCandidateLocation(
+    `/srv/lk1-subscription-dev/.stopped-install-${manifestSha256}/bundle`,
+    manifestSha256,
+    "production",
+  ), true);
+  assert.throws(() => assertRuntimeInstallCandidateLocation(
+    `/srv/lk1-subscription-dev/.stopped-install-${"b".repeat(64)}/bundle`,
+    manifestSha256,
+    "production",
+  ), /production path mismatch/);
+  assert.throws(() => assertRuntimeInstallCandidateLocation(
+    "/srv/lk1-subscription-dev/arbitrary/bundle", manifestSha256, "production",
+  ), /production path mismatch/);
+});
+
+test("production verifier accepts the exact manifest-bound root and rejects an arbitrary srv path", {
+  skip: process.platform !== "linux" || process.getuid() !== 0
+    || fs.existsSync("/srv/lk1-subscription-dev"),
+}, () => {
+  const result = build();
+  const serviceRoot = "/srv/lk1-subscription-dev";
+  const candidateParent = path.join(serviceRoot, `.stopped-install-${result.manifestSha256}`);
+  const productionBundle = path.join(candidateParent, "bundle");
+  try {
+    fs.mkdirSync(serviceRoot, { recursive: true, mode: 0o755 });
+    fs.chmodSync(serviceRoot, 0o755);
+    fs.mkdirSync(candidateParent, { mode: 0o700 });
+    fs.cpSync(result.outputDirectory, productionBundle, { recursive: true });
+    const privatizeDirectories = (directory) => {
+      fs.chmodSync(directory, 0o700);
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        if (entry.isDirectory()) privatizeDirectories(path.join(directory, entry.name));
+      }
+    };
+    privatizeDirectories(productionBundle);
+    assert.equal(verifyRuntimeInstallCandidateBundle(
+      productionBundle,
+      result.manifestSha256,
+      { location: "production" },
+    ).manifestSha256, result.manifestSha256);
+    assert.throws(() => verifyRuntimeInstallCandidateBundle(
+      productionBundle,
+      "b".repeat(64),
+      { location: "production" },
+    ), /production path mismatch/);
+  } finally {
+    fs.rmSync(candidateParent, { recursive: true, force: true });
+    fs.rmdirSync(serviceRoot);
+    fs.rmSync(result.parent, { recursive: true });
+  }
+});
 
 function build() {
   const parent = fs.mkdtempSync(path.join(TMP_ROOT, "lk1-runtime-install-candidate-test-"));

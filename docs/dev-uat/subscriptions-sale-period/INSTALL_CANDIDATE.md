@@ -178,6 +178,13 @@ lk1_ssh_options=(
 )
 /usr/bin/ssh "${lk1_ssh_options[@]}" lk-reserve-89 -- /bin/sh -ceu '
   parent=$1
+  for ancestor in / /srv /srv/lk1-subscription-dev; do
+    test -d "$ancestor" && test ! -L "$ancestor"
+    metadata=$(/usr/bin/stat -c %u:%a "$ancestor")
+    owner=${metadata%%:*}; mode=${metadata#*:}
+    test "$owner" = 0
+    test $((0$mode & 022)) -eq 0
+  done
   test ! -e "$parent" && test ! -L "$parent"
   /bin/mkdir -m 0700 "$parent"
   /bin/chown root:root "$parent"
@@ -193,6 +200,13 @@ lk1_ssh_options=(
 /usr/bin/ssh "${lk1_ssh_options[@]}" lk-reserve-89 -- /bin/sh -ceu '
   parent=$1; bundle=$2; launcher=$3; evidence=$4
   manifest_sha=$5; launcher_sha=$6; evidence_sha=$7
+  for ancestor in / /srv /srv/lk1-subscription-dev; do
+    test -d "$ancestor" && test ! -L "$ancestor"
+    metadata=$(/usr/bin/stat -c %u:%a "$ancestor")
+    owner=${metadata%%:*}; mode=${metadata#*:}
+    test "$owner" = 0
+    test $((0$mode & 022)) -eq 0
+  done
   test "$(/usr/bin/stat -c %U:%G:%a "$parent")" = root:root:700
   /bin/chown -R root:root "$bundle"
   /usr/bin/find "$bundle" -type d -exec /bin/chmod 0700 {} +

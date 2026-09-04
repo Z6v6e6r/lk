@@ -252,6 +252,13 @@ test("operator runbook atomically reserves one root-private candidate parent", (
   ), "utf8");
   assert.match(runbook, /lk1_candidate_parent="\/srv\/lk1-subscription-dev\/\.stopped-install-/);
   assert.match(runbook, /\/bin\/mkdir -m 0700 "\$parent"/);
+  assert.match(runbook, /for ancestor in \/ \/srv \/srv\/lk1-subscription-dev/);
+  assert.match(runbook, /test ! -L "\$ancestor"/);
+  assert.match(runbook, /test \$\(\(0\$mode & 022\)\) -eq 0/);
+  const firstAncestorCheck = runbook.indexOf("for ancestor in / /srv /srv/lk1-subscription-dev");
+  const firstRemoteWrite = runbook.indexOf('/bin/mkdir -m 0700 "$parent"');
+  assert.ok(firstAncestorCheck >= 0 && firstAncestorCheck < firstRemoteWrite);
+  assert.equal(runbook.match(/for ancestor in \/ \/srv \/srv\/lk1-subscription-dev/g)?.length, 2);
   assert.match(runbook, /\/usr\/bin\/scp "\$\{lk1_ssh_options\[@\]\}" -pr/);
   assert.match(runbook, /test "\$\(\/usr\/bin\/stat -c %U:%G:%a "\$parent"\)" = root:root:700/);
   assert.doesNotMatch(runbook, /\/bin\/mv .*\$lk1_(?:bundle|launcher|evidence)_remote/);

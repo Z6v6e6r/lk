@@ -245,11 +245,24 @@ function inspectBundleInventory(root) {
   return files.sort();
 }
 
-export function verifyRuntimeInstallCandidateBundle(bundleDirectory, expectedManifestSha256) {
+export function assertRuntimeInstallCandidateLocation(root, expectedManifestSha256, location = "local") {
+  if (location === "local") {
+    if (!root.startsWith("/private/tmp/") && !root.startsWith("/tmp/")) {
+      fail("runtime install candidate must stay in a temporary workspace");
+    }
+  } else if (location === "production") {
+    if (root !== `/srv/lk1-subscription-dev/.stopped-install-${expectedManifestSha256}/bundle`) {
+      fail("runtime install candidate production path mismatch");
+    }
+  } else fail("runtime install candidate location mode mismatch");
+  return true;
+}
+
+export function verifyRuntimeInstallCandidateBundle(bundleDirectory, expectedManifestSha256, {
+  location = "local",
+} = {}) {
   const root = fs.realpathSync(bundleDirectory);
-  if (!root.startsWith("/private/tmp/") && !root.startsWith("/tmp/")) {
-    fail("runtime install candidate must stay in a temporary workspace");
-  }
+  assertRuntimeInstallCandidateLocation(root, expectedManifestSha256, location);
   const rootStat = fs.lstatSync(root);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || (rootStat.mode & 0o777) !== 0o700) {
     fail("runtime install candidate root custody mismatch");

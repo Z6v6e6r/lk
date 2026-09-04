@@ -310,8 +310,10 @@ export function validateStoppedInstallContract(contract) {
   return true;
 }
 
-function validateBundleAndEvidence(bundleDirectory, expectedManifestSha256, evidence, now) {
-  const verified = verifyRuntimeInstallCandidateBundle(bundleDirectory, expectedManifestSha256);
+function validateBundleAndEvidence(bundleDirectory, expectedManifestSha256, evidence, now, environment) {
+  const verified = verifyRuntimeInstallCandidateBundle(bundleDirectory, expectedManifestSha256, {
+    location: environment === "production" ? "production" : "local",
+  });
   const { manifest, contract } = verified;
   validateStoppedInstallContract(contract);
   const localCaptureIdentity = currentCaptureIdentity();
@@ -516,7 +518,7 @@ export function installStoppedCandidate({
   } else if (environment !== "rehearsal") fail("stopped install environment mismatch");
   const bundleRoot = fs.realpathSync(bundleDirectory);
   const verified = validateBundleAndEvidence(
-    bundleRoot, expectedManifestSha256, preflightEvidence, now,
+    bundleRoot, expectedManifestSha256, preflightEvidence, now, environment,
   );
   assertBundleCustody(bundleRoot, verified.manifest, currentUid);
   assertBundleExecutionIdentity(bundleRoot, verified.manifest);
@@ -693,7 +695,9 @@ function runStoppedRollback({
     }
     assertKernelLockHeld(lockFd, currentUid);
   } else if (environment !== "rehearsal") fail("stopped rollback environment mismatch");
-  const verified = verifyRuntimeInstallCandidateBundle(bundleDirectory, expectedManifestSha256);
+  const verified = verifyRuntimeInstallCandidateBundle(bundleDirectory, expectedManifestSha256, {
+    location: environment === "production" ? "production" : "local",
+  });
   validateStoppedInstallContract(verified.contract);
   const bundleRoot = fs.realpathSync(bundleDirectory);
   assertBundleCustody(bundleRoot, verified.manifest, currentUid);
