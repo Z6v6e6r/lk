@@ -116,7 +116,7 @@ test("gate rejects coordinated gate and receipt digest drift against source auth
 
 test("gate detects linked candidate CUP and Mongo identity drift", () => {
   const runtimeEnvironmentBindings = readJson("../lk1_subscription_runtime_environment_bindings.json");
-  runtimeEnvironmentBindings.DEV_ENDPOINTS.cupApiBase = "http://127.0.0.1:3037/api";
+  runtimeEnvironmentBindings.DEV_ENDPOINTS.cupApiBase = "http://127.0.0.1:3036/api";
   assert.throws(() => validateDeployPostcheckGate(checkedDeployPostcheckGate, {
     runtimeEnvironmentBindings,
     now: NOW,
@@ -124,7 +124,7 @@ test("gate detects linked candidate CUP and Mongo identity drift", () => {
 
   const candidateBinding = readJson("../lk1_subscription_dev_candidate_binding.json");
   candidateBinding.dependencies.managedMongoClient.effectiveIdentity.database
-    = "lk1_subscription_dev_fixture";
+    = "dev-lk1-subscription-canary";
   assert.throws(() => validateDeployPostcheckGate(checkedDeployPostcheckGate, {
     candidateBinding,
     now: NOW,

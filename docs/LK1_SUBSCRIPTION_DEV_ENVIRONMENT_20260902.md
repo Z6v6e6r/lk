@@ -247,9 +247,9 @@ HTTP endpoints to `127.0.0.1`, records
 source, and writes readiness last through a private staging directory. The frozen
 source/candidate/manifest SHA-256 tuple is:
 
-- source: `bada371662cc4d4a27fca5a1a9335c657dac298bba754f48f9787ac67bfe4722`;
-- candidate: `ab73803e90852ebc99cd9b019cf181c9bd402e4737ccde8256cc6da448039fb9`;
-- manifest: `f47b1b13aae9e5dd3f4dabf5797afcc61d55d88cc57bcdbec3c139a511c71865`.
+- source: `e40db778a18885b3dee6b6f414fe9c4c1b566092df4ed331c5055f9489c1aaec`;
+- candidate: `580b917cc2440e74984b23258be2e63d3d4b29e5105685742cf0e25a9c3547a7`;
+- manifest: `d56575ce6871a06adee6c493c0a140e94332ffcf39c25e8012af6c0c43ea92f8`.
 
 The DEV postimage also strips browser-supplied success/failure/base redirect URLs
 from both split-payment preparation paths before any provider transaction can be
