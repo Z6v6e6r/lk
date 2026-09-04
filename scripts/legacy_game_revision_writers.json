@@ -17,7 +17,7 @@
           "nodeId": "e656cff36a8cd210",
           "sourcePath": "scripts/nodered_games_nodes/fn_create.js",
           "activeSha256": "08c2b5ac7d2f5ee111efab6edb0c19c3eb663fd16e5bfa5798a1f717cc82312f",
-          "candidateSha256": "5675a75ea29121aae5e4860b305be78d855658c83eb1069587e5102e4db6de64",
+          "candidateSha256": "2f4b72e351996321701d85275f50ae2f790a02aaef4fc430c84d810225dbd235",
           "activeGenerated": true,
           "candidateGenerated": true,
           "candidateRelation": "ancestor"
@@ -29,7 +29,7 @@
           "candidateRelation": "descendant"
         }
       ],
-      "revisionContract": "new identity increments missing revision to 1; existing identity requires positive expectedRevision CAS and increments exactly once"
+      "revisionContract": "server-configured tenant only; new identity increments missing revision to 1; existing identity requires positive expectedRevision CAS and increments exactly once"
     },
     {
       "nodeId": "591234d213742276",

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import vm from "node:vm";
 import {
+  PITER_ATOMIC_BINDING_INITIALIZER_SOURCE,
   PITER_ATOMIC_ERROR_SOURCE,
   PITER_ATOMIC_TOPOLOGY_IDS,
   assertNoEnabledLegacyPiterSalesTab,
@@ -21,7 +23,7 @@ function validFlow() {
   );
   return [
     { id: ids.purchaseRouter, type: "function", z: ids.tab, name: "Route tournament subscription payment", outputs: 5, wires: [[], [], [], [], [ids.atomicRouter]] },
-    { id: ids.atomicRouter, type: "function", z: ids.tab, name: "Route atomic Piter subscription sale", func: atomicRouterSource, outputs: 5, timeout: "", noerr: 0, initialize: "", finalize: "", libs: [], x: 2750, y: 2240, wires: [[ids.ledgerFind], [ids.ledgerUpdate], [ids.saleUpdate], [ids.response], [ids.viva]] },
+    { id: ids.atomicRouter, type: "function", z: ids.tab, name: "Route atomic Piter subscription sale", func: atomicRouterSource, outputs: 5, timeout: "", noerr: 0, initialize: PITER_ATOMIC_BINDING_INITIALIZER_SOURCE, finalize: "", libs: [], x: 2750, y: 2240, wires: [[ids.ledgerFind], [ids.ledgerUpdate], [ids.saleUpdate], [ids.response], [ids.viva]] },
     { id: ids.ledgerFind, type: "mongodb4", z: ids.tab, clientNode: ids.mongoClient, mode: "collection", name: "Find Piter atomic inventory ledger", collection: "lk_tournament_subscription_sales", operation: "find", output: "toArray", maxTimeMS: "5000", handleDocId: false, x: 3140, y: 2180, wires: [[ids.atomicRouter]] },
     { id: ids.ledgerUpdate, type: "mongodb4", z: ids.tab, clientNode: ids.mongoClient, mode: "collection", name: "CAS Piter atomic inventory ledger", collection: "lk_tournament_subscription_sales", operation: "updateOne", output: "toArray", maxTimeMS: "5000", handleDocId: false, x: 3140, y: 2220, wires: [[ids.atomicRouter]] },
     { id: ids.saleUpdate, type: "mongodb4", z: ids.tab, clientNode: ids.mongoClient, mode: "collection", name: "Persist Piter atomic sale", collection: "lk_tournament_subscription_sales", operation: "updateOne", output: "toArray", maxTimeMS: "5000", handleDocId: false, x: 3140, y: 2260, wires: [[ids.atomicRouter]] },
@@ -38,12 +40,39 @@ test("exact Piter atomic topology accepts the reviewed graph", () => {
   assert.equal(assertPiterAtomicTopology(validFlow()), true);
 });
 
+test("Piter atomic initializer sets only the exact missing or matching product binding", () => {
+  const key = "summer_subscription_piter_friendship_product_id";
+  const productId = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
+  for (const initial of [undefined, null, "", productId]) {
+    const values = new Map(initial === undefined ? [] : [[key, initial]]);
+    vm.runInNewContext(PITER_ATOMIC_BINDING_INITIALIZER_SOURCE, {
+      global: {
+        get: (name) => values.get(name),
+        set: (name, value) => values.set(name, value),
+      },
+    });
+    assert.equal(values.get(key), productId);
+  }
+
+  for (const conflictingValue of ["different-product", false, 0]) {
+    const values = new Map([[key, conflictingValue]]);
+    assert.throws(() => vm.runInNewContext(PITER_ATOMIC_BINDING_INITIALIZER_SOURCE, {
+      global: {
+        get: (name) => values.get(name),
+        set: (name, value) => values.set(name, value),
+      },
+    }), /product binding mismatch/);
+    assert.equal(values.get(key), conflictingValue);
+  }
+});
+
 test("exact Piter atomic topology rejects graph, Mongo, function, and debug drift", () => {
   const ids = PITER_ATOMIC_TOPOLOGY_IDS;
   for (const mutate of [
     (flow) => { flow[0].outputs = 4; },
     (flow) => { flow[0].wires[4] = ["wrong"]; },
     (flow) => { flow.find(({ id }) => id === ids.atomicRouter).func = "return null;"; },
+    (flow) => { flow.find(({ id }) => id === ids.atomicRouter).initialize = "global.set('wrong', true);"; },
     (flow) => { flow.find(({ id }) => id === ids.ledgerFind).collection = "wrong"; },
     (flow) => { flow.find(({ id }) => id === ids.ledgerUpdate).clientNode = "wrong"; },
     (flow) => { flow.find(({ id }) => id === ids.mongoCatch).scope = []; },

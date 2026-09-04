@@ -6,6 +6,11 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
+import {
+  BASE_GAME_CREATE_FUNC_SHA256,
+  LIVE_GAME_CREATE_FUNC_SHA256,
+  patchVivaGameCreateTenantRevisionBase,
+} from "./lib/vivaGameCreateTenantRevisionContract.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = fs.realpathSync(path.resolve(SCRIPT_DIR, ".."));
@@ -20,6 +25,15 @@ const MONGO_ANCHOR = Object.freeze({
   collection: "lk_games",
   operation: "find",
   output: "toArray",
+});
+const GAME_CREATE_CONTRACT = Object.freeze({
+  id: "e656cff36a8cd210",
+  type: "function",
+  z: TAB.id,
+  name: "Prepare game upsert",
+  outputs: 4,
+  liveFuncSha256: LIVE_GAME_CREATE_FUNC_SHA256,
+  baseFuncSha256: BASE_GAME_CREATE_FUNC_SHA256,
 });
 
 export const VIVA_GAME_PROJECTION_SYNC_IDS = Object.freeze({
@@ -57,6 +71,9 @@ const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex"
 const sha256Json = (value) => sha256(Buffer.from(JSON.stringify(value), "utf8"));
 const fail = (message) => { throw new Error(message); };
 const readSource = (key) => fs.readFileSync(path.join(FN_DIR, VIVA_GAME_PROJECTION_SYNC_SOURCES[key]), "utf8");
+export function patchVivaGameProjectionCreateContract(source) {
+  return patchVivaGameCreateTenantRevisionBase(source);
+}
 const PRIVATE_KEY_MARKER = ["BEGIN", "PRIVATE", "KEY"].join(" ");
 const MONGODB_CREDENTIAL_URI = /mongodb(?:\+srv)?:\/\/[^\s]+:[^\s]+@/i;
 
@@ -137,6 +154,14 @@ export function buildVivaGameProjectionSyncCandidate(source, sourceSha256) {
   if (!clientNode) fail("LK Games Mongo anchor has no clientNode");
   const mongoClient = exactNode(source, clientNode, "LK Games Mongo client");
   if (mongoClient.type !== "mongodb4-client") fail("LK Games Mongo client type mismatch");
+  const gameCreate = exactNode(source, GAME_CREATE_CONTRACT.id, "Game create function");
+  assertFields(gameCreate, {
+    id: GAME_CREATE_CONTRACT.id,
+    type: GAME_CREATE_CONTRACT.type,
+    z: GAME_CREATE_CONTRACT.z,
+    name: GAME_CREATE_CONTRACT.name,
+    outputs: GAME_CREATE_CONTRACT.outputs,
+  }, "Game create function");
   for (const id of Object.values(VIVA_GAME_PROJECTION_SYNC_IDS)) {
     if (source.some((node) => node.id === id)) fail(`Candidate node ID already exists: ${id}`);
   }
@@ -267,6 +292,10 @@ export function buildVivaGameProjectionSyncCandidate(source, sourceSha256) {
   ];
 
   const candidate = structuredClone(source);
+  const candidateGameCreate = exactNode(candidate, GAME_CREATE_CONTRACT.id, "Candidate game create function");
+  const gameCreateBeforeSha256 = sha256(String(candidateGameCreate.func || ""));
+  candidateGameCreate.func = patchVivaGameProjectionCreateContract(String(candidateGameCreate.func || ""));
+  const gameCreateAfterSha256 = sha256(candidateGameCreate.func);
   candidate.push(...nodes);
   const candidateById = new Map(candidate.map((node) => [node.id, node]));
   if (candidateById.size !== candidate.length) fail("Candidate contains duplicate node IDs");
@@ -279,12 +308,23 @@ export function buildVivaGameProjectionSyncCandidate(source, sourceSha256) {
     }
   }
   const afterExisting = snapshotExisting(candidate.slice(0, before.length));
-  if (!isDeepStrictEqual(afterExisting, existing)) fail("Existing Node-RED nodes changed");
+  if (afterExisting.nodeCount !== existing.nodeCount) fail("Existing Node-RED node count changed");
+  const beforeById = new Map(before.map((node) => [node.id, node]));
+  for (const node of candidate.slice(0, before.length)) {
+    const prior = beforeById.get(node.id);
+    if (!prior) fail(`Unexpected existing node ${node.id}`);
+    if (node.id === GAME_CREATE_CONTRACT.id) {
+      const expected = { ...prior, func: candidateGameCreate.func };
+      if (!isDeepStrictEqual(node, expected)) fail("Game create node changed outside func");
+    } else if (!isDeepStrictEqual(node, prior)) {
+      fail(`Undeclared existing node change: ${node.id}`);
+    }
+  }
   if (!isDeepStrictEqual(
     candidate.filter((node) => node.type === "http in"),
     before.filter((node) => node.type === "http in"),
   )) fail("HTTP routes changed");
-  for (const node of nodes.filter((item) => item.type === "function")) {
+  for (const node of [candidateGameCreate, ...nodes.filter((item) => item.type === "function")]) {
     if (containsForbiddenInlineCredential(node.func)) {
       fail(`Candidate function contains forbidden inline credential material: ${node.name}`);
     }
@@ -298,6 +338,14 @@ export function buildVivaGameProjectionSyncCandidate(source, sourceSha256) {
       sourceNodeCount: before.length,
       candidateNodeCount: candidate.length,
       httpRouteCount: before.filter((node) => node.type === "http in").length,
+      changedNodes: gameCreateBeforeSha256 === gameCreateAfterSha256 ? [] : [{
+        id: GAME_CREATE_CONTRACT.id,
+        type: GAME_CREATE_CONTRACT.type,
+        name: GAME_CREATE_CONTRACT.name,
+        changedFields: ["func"],
+        beforeFuncSha256: gameCreateBeforeSha256,
+        afterFuncSha256: gameCreateAfterSha256,
+      }],
       addedNodes: nodes.map((node) => ({ id: node.id, type: node.type, name: node.name })),
       sourceFunctions: Object.entries(VIVA_GAME_PROJECTION_SYNC_SOURCES).map(([key, file]) => ({
         key,
@@ -305,7 +353,9 @@ export function buildVivaGameProjectionSyncCandidate(source, sourceSha256) {
         sha256: sha256(readSource(key)),
       })),
       invariants: {
-        existingNodesUnchanged: true,
+        onlyDeclaredExistingNodeChanged: true,
+        gameCreateTenantIsServerOwned: true,
+        gameCreateRevisionIsNumeric: true,
         httpRoutesUnchanged: true,
         mongoClientReused: clientNode,
         defaultMode: "OFF",

@@ -7,9 +7,11 @@ import test from "node:test";
 import {
   buildVivaGameProjectionSyncCandidate,
   containsForbiddenInlineCredential,
+  patchVivaGameProjectionCreateContract,
   publishVivaGameProjectionSyncCandidate,
   VIVA_GAME_PROJECTION_SYNC_IDS,
 } from "../prepare_viva_game_projection_sync_candidate.mjs";
+import { BASE_GAME_CREATE_FUNC_SHA256 } from "../lib/vivaGameCreateTenantRevisionContract.mjs";
 
 const SOURCE_DIR = path.join(process.cwd(), "scripts/nodered_games_nodes");
 const LEASE_KEY = "lk_viva_game_projection_sync_lease_until";
@@ -543,6 +545,11 @@ test("fan-out errors keep the owned lease until the aggregate finalizer records 
   assert.equal(finalized.state.get(LEASE_KEY), null);
 });
 
+const liveCreateSource = fs.readFileSync(
+  path.join(process.cwd(), "scripts/tests/fixtures/viva_game_projection_sync/live_create_08c2.txt"),
+  "utf8",
+);
+
 function syntheticFlow() {
   return [
     { id: "4b91e2a2413688db", type: "tab", label: "LK Games", disabled: false },
@@ -562,17 +569,97 @@ function syntheticFlow() {
       wires: [["terminal"]],
     },
     { id: "route", type: "http in", z: "4b91e2a2413688db", method: "get", url: "/existing", wires: [["terminal"]] },
+    {
+      id: "e656cff36a8cd210",
+      type: "function",
+      z: "4b91e2a2413688db",
+      name: "Prepare game upsert",
+      func: liveCreateSource,
+      outputs: 4,
+      wires: [["terminal"], ["terminal"], ["terminal"], ["terminal"]],
+    },
     { id: "terminal", type: "debug", z: "4b91e2a2413688db", wires: [] },
   ];
 }
+
+function runPatchedCreate(payload: Record<string, unknown>, platformTenantKey?: string) {
+  const patched = patchVivaGameProjectionCreateContract(liveCreateSource);
+  return new Function("msg", "env", patched)(
+    { req: { path: "/lk/games", query: {} }, payload },
+    { get: (key: string) => key === "PADLHUB_PLATFORM_TENANT_KEY" ? platformTenantKey : undefined },
+  ) as unknown[];
+}
+
+function runCurrentCreate(payload: Record<string, unknown>, platformTenantKey?: string) {
+  const source = fs.readFileSync(path.join(process.cwd(), "scripts/nodered_games_nodes/fn_create.js"), "utf8");
+  return new Function("msg", "env", source)(
+    { req: { path: "/lk/games", query: {} }, payload },
+    { get: (key: string) => key === "PADLHUB_PLATFORM_TENANT_KEY" ? platformTenantKey : undefined },
+  ) as unknown[];
+}
+
+const minimalCreatePayload = (tenantKey: unknown = null) => ({
+  tenantKey,
+  organizer: { id: "organizer-1", name: "Organizer", phone: "79850000000" },
+  booking: {
+    studioId: "studio-1",
+    studioName: "Studio",
+    roomId: "room-1",
+    roomName: "Court",
+    date: "2026-09-05",
+    timeFrom: "12:00",
+    timeTo: "14:00",
+    vivaExerciseId: "11111111-1111-4111-8111-111111111111",
+  },
+  payment: { paid: true },
+  participants: [],
+});
+
+test("game create patch uses only the server tenant and starts a numeric revision", () => {
+  const patched = patchVivaGameProjectionCreateContract(liveCreateSource);
+  assert.equal(crypto.createHash("sha256").update(patched).digest("hex"), BASE_GAME_CREATE_FUNC_SHA256);
+  assert.equal(patchVivaGameProjectionCreateContract(patched), patched);
+  const output = runPatchedCreate(minimalCreatePayload(), "iSkq6G");
+  const write = output[0] as Record<string, any>;
+  assert.equal(write.payload.$set.tenantKey, "iSkq6G");
+  assert.equal(write.query.tenantKey, "iSkq6G");
+  assert.deepEqual(write.payload.$inc, { revision: 1 });
+  assert.equal(write.payload.$set.payment.paid, true);
+});
+
+test("game create patch fails closed on missing or conflicting tenant configuration", () => {
+  const missing = runPatchedCreate(minimalCreatePayload(), undefined);
+  assert.equal((missing[1] as any).statusCode, 503);
+  assert.equal((missing[1] as any).payload.code, "GAME_TENANT_CONFIG_INVALID");
+  const mismatch = runPatchedCreate(minimalCreatePayload("other-tenant"), "iSkq6G");
+  assert.equal((mismatch[1] as any).statusCode, 403);
+  assert.equal((mismatch[1] as any).payload.code, "GAME_TENANT_MISMATCH");
+  assert.equal(mismatch[0], null);
+});
+
+test("tracked game create source follows the same server-owned tenant contract", () => {
+  const accepted = runCurrentCreate(minimalCreatePayload(), "iSkq6G");
+  assert.equal((accepted[0] as any).payload.$set.tenantKey, "iSkq6G");
+  assert.deepEqual((accepted[0] as any).payload.$inc, { revision: 1 });
+  assert.equal((accepted[0] as any)._recordForResponse.revision, 1);
+  const rejected = runCurrentCreate(minimalCreatePayload("other-tenant"), "iSkq6G");
+  assert.equal((rejected[1] as any).payload.code, "GAME_TENANT_MISMATCH");
+});
 
 test("candidate adds an isolated graph and preserves existing nodes and routes", () => {
   const flow = syntheticFlow();
   const before = structuredClone(flow);
   const sourceSha = crypto.createHash("sha256").update(JSON.stringify(flow)).digest("hex");
   const built = buildVivaGameProjectionSyncCandidate(flow, sourceSha);
-  assert.deepEqual(built.candidate.slice(0, before.length), before);
+  const changedExisting = built.candidate.slice(0, before.length)
+    .filter((node, index) => JSON.stringify(node) !== JSON.stringify(before[index]));
+  assert.deepEqual(changedExisting.map((node) => node.id), ["e656cff36a8cd210"]);
+  const beforeCreate = before.find((node) => node.id === "e656cff36a8cd210");
+  const afterCreate = built.candidate.find((node) => node.id === "e656cff36a8cd210");
+  assert.deepEqual({ ...afterCreate, func: beforeCreate?.func }, beforeCreate);
   assert.equal(built.candidate.filter((node) => node.type === "http in").length, 1);
+  assert.equal(built.report.changedNodes.length, 1);
+  assert.deepEqual(built.report.changedNodes[0].changedFields, ["func"]);
   assert.equal(built.report.addedNodes.length, Object.keys(VIVA_GAME_PROJECTION_SYNC_IDS).length);
   assert.equal(built.report.invariants.defaultMode, "OFF");
   const update = built.candidate.find((node) => node.id === VIVA_GAME_PROJECTION_SYNC_IDS.update);
@@ -656,6 +743,11 @@ test("candidate rejects disabled tab, Mongo anchor drift and node ID collision",
   const drift = syntheticFlow();
   drift[2].collection = "other";
   assert.throws(() => buildVivaGameProjectionSyncCandidate(drift, sourceSha), /Mongo anchor contract mismatch/);
+
+  const createDrift = syntheticFlow();
+  const create = createDrift.find((node) => node.id === "e656cff36a8cd210");
+  if (create) create.func = `${String(create.func)}\n// drift`;
+  assert.throws(() => buildVivaGameProjectionSyncCandidate(createDrift, sourceSha), /Game create function preimage mismatch/);
 
   const collision = syntheticFlow();
   collision.push({ id: VIVA_GAME_PROJECTION_SYNC_IDS.inject, type: "debug" });
