@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   buildVivaGameProjectionSyncCandidate,
+  containsForbiddenInlineCredential,
   publishVivaGameProjectionSyncCandidate,
   VIVA_GAME_PROJECTION_SYNC_IDS,
 } from "../prepare_viva_game_projection_sync_candidate.mjs";
@@ -585,6 +586,15 @@ test("candidate adds an isolated graph and preserves existing nodes and routes",
   const error = built.candidate.find((node) => node.id === VIVA_GAME_PROJECTION_SYNC_IDS.error);
   assert.deepEqual(ack?.wires?.[0], [VIVA_GAME_PROJECTION_SYNC_IDS.finalize]);
   assert.deepEqual(error?.wires?.[0], [VIVA_GAME_PROJECTION_SYNC_IDS.finalize]);
+});
+
+test("candidate credential guard rejects private keys and credentialed Mongo URIs", () => {
+  const privateKeyMarker = ["BEGIN", "PRIVATE", "KEY"].join(" ");
+  const credentialedMongoUri = ["mongodb://user:password", "mongo.example/lk"].join("@");
+  assert.equal(containsForbiddenInlineCredential(`${privateKeyMarker}\nopaque`), true);
+  assert.equal(containsForbiddenInlineCredential(credentialedMongoUri), true);
+  assert.equal(containsForbiddenInlineCredential("const mode = 'default_inline';"), true);
+  assert.equal(containsForbiddenInlineCredential("const mode = env.get('MODE');"), false);
 });
 
 test("publisher accepts only a verified fresh live workspace and writes private artifacts", () => {
