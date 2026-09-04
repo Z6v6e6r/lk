@@ -11,6 +11,7 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const GIT_SHA = /^[a-f0-9]{40}$/;
 const RFC3339_SECONDS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+export const INGRESS_TARGET_REFERENCE_PATTERN = "(^|[^0-9])1882([^0-9]|$)|lk1-subscription-dev-nodered[.]service|/srv/lk1-subscription-dev/node-red";
 const EXPECTED_MACHINE_ID_SHA256 = "9f29889b29a55b2c7e1eeb65616d2049b16972589de1bc623a61d38d92dd7ad8";
 const EXPECTED_UNITS = Object.freeze([
   "lk1-subscription-dev-mongo.service",
@@ -286,14 +287,14 @@ for root in /etc/nginx /etc/caddy /etc/haproxy; do
     if find "$root" -type f ! -readable -print -quit | grep -q .; then
       ingress_configuration_readable=false
     fi
-    if grep -RIsEq '127[.]0[.]0[.]1:1882|lk1-subscription-dev-nodered[.]service|/srv/lk1-subscription-dev/node-red' "$root"; then
+    if grep -RIsEq '${INGRESS_TARGET_REFERENCE_PATTERN}' "$root"; then
       ingress_target_absent=false
     fi
   fi
 done
 if command -v nginx >/dev/null 2>&1; then
   if nginx_effective="$(nginx -T 2>&1)"; then
-    if printf '%s\\n' "$nginx_effective" | grep -Eiq '127[.]0[.]0[.]1:1882|lk1-subscription-dev-nodered[.]service|/srv/lk1-subscription-dev/node-red'; then
+    if printf '%s\\n' "$nginx_effective" | grep -Eiq '${INGRESS_TARGET_REFERENCE_PATTERN}'; then
       ingress_target_absent=false
     fi
   else

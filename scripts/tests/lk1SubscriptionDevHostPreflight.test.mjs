@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   captureCurrentHostPreflightEvidence,
   checkedHostPreflightEvidence,
+  INGRESS_TARGET_REFERENCE_PATTERN,
   validateFreshHostPreflightEvidence,
   validateHostPreflightEvidence,
   writeFreshHostPreflightEvidence,
@@ -58,6 +59,21 @@ const capture = (overrides = {}) => captureCurrentHostPreflightEvidence({
   now: NOW,
   readRepositoryIdentity: () => REPOSITORY_IDENTITY,
   ...overrides,
+});
+
+test("ingress target scan rejects every reserved-port route representation", () => {
+  const pattern = new RegExp(INGRESS_TARGET_REFERENCE_PATTERN, "i");
+  for (const value of [
+    "proxy_pass http://127.0.0.1:1882;",
+    "proxy_pass http://localhost:1882;",
+    "server [::1]:1882;",
+    "upstream dev_backend { server localhost:1882; }",
+    "set $dev_port 1882; proxy_pass http://dev_backend:$dev_port;",
+    "lk1-subscription-dev-nodered.service",
+    "/srv/lk1-subscription-dev/node-red",
+  ]) assert.equal(pattern.test(value), true, value);
+  assert.equal(pattern.test("proxy_pass http://127.0.0.1:1880;"), false);
+  assert.equal(pattern.test("set $unrelated 11882;"), false);
 });
 
 test("historical host preflight proves its archived stopped isolated state", () => {
