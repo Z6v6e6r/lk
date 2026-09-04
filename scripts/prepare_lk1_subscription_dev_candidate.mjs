@@ -249,15 +249,24 @@ const bindManagedRuntimeSource = (source, apiBase) => {
   const devMarker = "  DEV: null,";
   const prodMarker = `  PROD: ${JSON.stringify(PROD_API_BASE)},`;
   const environmentMarker = 'const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "PROD";';
+  const transportMarkers = [
+    '  const transportAllowed = identity.environment === "PROD"\n    ? parsed.protocol === "https:"\n    : parsed.protocol === "http:" && parsed.hostname === "127.0.0.1";',
+    '  const transportAllowed = environment === "PROD"\n    ? parsed.protocol === "https:"\n    : parsed.protocol === "http:" && parsed.hostname === "127.0.0.1";',
+  ];
   for (const marker of [devMarker, prodMarker, environmentMarker]) {
     if (!source.includes(marker) || source.indexOf(marker) !== source.lastIndexOf(marker)) {
       fail("DEV runtime environment binding marker mismatch");
     }
   }
+  const matchedTransportMarkers = transportMarkers.filter((marker) => source.includes(marker));
+  if (matchedTransportMarkers.length !== 1) {
+    fail("DEV runtime HTTPS transport marker mismatch");
+  }
   const devBound = source
     .replace(prodMarker, "  PROD: null,")
     .replace(devMarker, `  DEV: ${JSON.stringify(apiBase)},`)
-    .replace(environmentMarker, 'const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "DEV";');
+    .replace(environmentMarker, 'const MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "DEV";')
+    .replace(matchedTransportMarkers[0], '  const transportAllowed = parsed.protocol === "https:";');
   if (devBound.includes(prodMarker) || devBound.includes(environmentMarker)) {
     fail("DEV runtime API binding marker mismatch");
   }

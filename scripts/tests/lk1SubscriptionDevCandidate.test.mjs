@@ -389,6 +389,8 @@ test("actual reachable sources bind only to the approved DEV fixture origins", (
   assert.match(combined, /https:\/\/127\.0\.0\.1:3037\/api/);
   assert.match(combined, /https:\/\/127\.0\.0\.1:3038/);
   assert.match(combined, /https:\/\/127\.0\.0\.1:3039/);
+  assert.match(combined, /const transportAllowed = parsed\.protocol === "https:"/);
+  assert.doesNotMatch(combined, /parsed\.protocol === "http:"/);
 });
 
 test("install evidence binds every changed source node to the frozen preimage", () => {
