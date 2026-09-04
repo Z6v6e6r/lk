@@ -6,7 +6,7 @@ start/enable, ingress, activation, передачу canary IDs/secrets или в
 записи. Его текущий валидный результат — только
 `PREPARED_SOURCE_ONLY_READY_FOR_STOPPED_INSTALL_REVIEW`.
 
-Source binding исправлен на dedicated CUP `127.0.0.1:3037` и Mongo database
+Source binding исправлен на dedicated CUP `https://127.0.0.1:3037` и Mongo database
 `lk1_subscription_dev_fixture`. Synthetic managed entitlement/activation contract
 реализован и физически проверен на локальном fixture-owned loopback. Это не
 является host runtime evidence: `hostRuntimeExposed=false`, deploy/start всё ещё
@@ -31,13 +31,19 @@ Source binding исправлен на dedicated CUP `127.0.0.1:3037` и Mongo d
 
 Read-only preflight от 2026-09-04 зафиксировал
 systemd 245, disabled/inactive units, отсутствие reserved listeners и inputs,
-неизменность shared flow. Его валидность ограничена одним часом. Непосредственно
+неизменность shared flow. Tracked JSON статически проверяется воспроизводимо, а
+его execution-time свежесть ограничена одним часом. Непосредственно
 перед отдельно авторизованной установкой fresh preflight должен заново зафиксировать
 repository identity, candidate manifest, host identity, поддержку systemd
 совместимый authorization transport, disabled/inactive units, отсутствие listeners и authorization
 inputs, неизменность shared ресурсов, отсутствие production routes/origins и
 review rollback-to-absent. Любое несовпадение останавливает переход; исторический
 bootstrap receipt не заменяет свежую проверку.
+
+Статический source gate не заявляет runtime network enforcement. systemd 245
+подтверждает только совместимость file-based authorization transport;
+`networkIsolationRuntimeVerified=false` и `serviceStartBlocked=true` сохраняются
+до отдельно авторизованной отрицательной non-loopback пробы.
 
 ## Раздельные post-check фазы
 
@@ -72,3 +78,7 @@ npm run test:lk1-subscription-dev-host-preflight
 содержат SSH, network, installer или service-control операций. Успешная локальная
 валидация означает, что блокеры и будущие проверки сформулированы согласованно;
 она не означает готовность к deploy.
+
+Непосредственно перед отдельно авторизованным install обязательны execution-time
+команды `node scripts/validate_lk1_subscription_dev_host_preflight.mjs --require-fresh`
+и `node scripts/validate_lk1_subscription_dev_deploy_postcheck_gate.mjs --require-fresh-host-evidence`.

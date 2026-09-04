@@ -5,11 +5,14 @@ import {
   validateHostPreflightEvidence,
 } from "../validate_lk1_subscription_dev_host_preflight.mjs";
 
-const NOW = new Date("2026-09-04T09:40:00Z");
+const NOW = new Date("2026-09-04T10:40:00Z");
 const clone = (value) => structuredClone(value);
 
 test("fresh host preflight proves stopped isolated resources without write authority", () => {
-  assert.equal(validateHostPreflightEvidence(checkedHostPreflightEvidence, NOW), true);
+  assert.equal(validateHostPreflightEvidence(checkedHostPreflightEvidence, {
+    now: NOW,
+    requireFresh: true,
+  }), true);
   assert.equal(checkedHostPreflightEvidence.hostCapabilities.systemdVersion, 245);
   assert.equal(checkedHostPreflightEvidence.listeners.reserved3037Absent, true);
   assert.equal(checkedHostPreflightEvidence.sharedResources.unchanged, true);
@@ -20,7 +23,9 @@ test("host preflight rejects stale, wrong-host, active, listening, mutated, or a
   for (const mutate of [
     (value) => { value.environment = "PROD"; },
     (value) => { value.target.hostAlias = "lk-primary-147"; },
-    (value) => { value.hostCapabilities.compatible = false; },
+    (value) => { value.hostCapabilities.authorizationTransportCompatible = false; },
+    (value) => { value.hostCapabilities.networkIsolationRuntimeVerified = true; },
+    (value) => { value.hostCapabilities.serviceStartBlocked = false; },
     (value) => { value.dedicatedUnits["lk1-subscription-dev-cup.service"].activeState = "active"; },
     (value) => { value.listeners.reserved3037Absent = false; },
     (value) => { value.inputs.serviceStartAuthorizationAbsent = false; },
@@ -29,10 +34,14 @@ test("host preflight rejects stale, wrong-host, active, listening, mutated, or a
   ]) {
     const changed = clone(checkedHostPreflightEvidence);
     mutate(changed);
-    assert.throws(() => validateHostPreflightEvidence(changed, NOW));
+    assert.throws(() => validateHostPreflightEvidence(changed, {
+      now: NOW,
+      requireFresh: true,
+    }));
   }
   assert.throws(() => validateHostPreflightEvidence(
     checkedHostPreflightEvidence,
-    new Date("2026-09-04T10:35:20Z"),
+    { now: new Date("2026-09-04T11:37:02Z"), requireFresh: true },
   ), /stale/);
+  assert.equal(validateHostPreflightEvidence(checkedHostPreflightEvidence), true);
 });

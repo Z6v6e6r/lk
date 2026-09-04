@@ -72,6 +72,7 @@ const POSTCHECK_PHASES = Object.freeze([
     checks: [
       "EXACT_SERVICE_IDENTITIES",
       "LOOPBACK_LISTENER_OWNERSHIP",
+      "NON_LOOPBACK_EGRESS_DENIAL_EFFECTIVE",
       "ROUTE_AND_GRAPH_HEALTH",
       "PRODUCTION_CONNECTIONS_ZERO",
       "IDLE_WRITES_ZERO",
@@ -120,7 +121,8 @@ export function validateDeployPostcheckGate(gate, {
   candidateBinding = CHECKED_DEV_CANDIDATE_BINDING,
   sourceAuthorization = CHECKED_DEV_SOURCE_AUTHORIZATION,
   hostPreflightEvidence = checkedHostPreflightEvidence,
-  now = new Date(),
+  now = null,
+  requireFreshHostEvidence = false,
 } = {}) {
   validateDevProvisioningContract(provisioningContract);
   validateRuntimeInstallContract(runtimeInstallContract);
@@ -130,7 +132,10 @@ export function validateDeployPostcheckGate(gate, {
     candidateSha256: releaseReceipt.candidateSha256,
     manifestSha256: releaseReceipt.manifestSha256,
   });
-  validateHostPreflightEvidence(hostPreflightEvidence, now);
+  validateHostPreflightEvidence(hostPreflightEvidence, {
+    now,
+    requireFresh: requireFreshHostEvidence,
+  });
 
   exactKeys(gate, [
     "schemaVersion", "environment", "state", "productionBindingState", "releaseBinding",
@@ -187,8 +192,9 @@ export function validateDeployPostcheckGate(gate, {
   exactKeys(gate.runtimeBinding, [
     "state", "candidateCupApiBase", "dedicatedCupListener", "cupMatchesDedicatedListener",
     "candidateMongo", "provisionedMongo", "mongoMatchesProvisionedDatabase",
-    "completeManagedContractSourceImplemented", "localPhysicalVerified", "hostRuntimeExposed",
-    "completeManagedContractExposed",
+    "completeCupManagedContractSourceImplemented", "localPhysicalVerified", "hostRuntimeExposed",
+    "completeManagedContractExposed", "networkIsolationRuntimeVerified", "serviceStartBlocked",
+    "serviceStartBlocker",
   ], "DEV runtime binding");
   exactKeys(gate.runtimeBinding.candidateMongo, [
     "host", "port", "database", "replicaSet", "credentialFree",
@@ -205,10 +211,14 @@ export function validateDeployPostcheckGate(gate, {
   if (runtimeEnvironmentBindings.DEV_CANDIDATE_API_BASE
       !== runtimeEnvironmentBindings.DEV_ENDPOINTS?.cupApiBase
     || candidateBinding.runtime?.apiBase !== runtimeEnvironmentBindings.DEV_CANDIDATE_API_BASE
-    || candidateBinding.runtime?.completeManagedContractSourceImplemented !== true
+    || candidateBinding.runtime?.completeCupManagedContractSourceImplemented !== true
     || candidateBinding.runtime?.localPhysicalVerified !== true
     || candidateBinding.runtime?.hostRuntimeExposed !== false
     || candidateBinding.runtime?.completeManagedContractExposed !== false
+    || candidateBinding.runtime?.networkIsolationRuntimeVerified !== false
+    || candidateBinding.runtime?.serviceStartBlocked !== true
+    || candidateBinding.runtime?.serviceStartBlocker
+      !== "NON_LOOPBACK_EGRESS_ENFORCEMENT_NOT_VERIFIED"
     || candidateCupListener === provisioningContract.forbiddenExistingResources.subscriptionShadowListener
     || candidateCupListener !== dedicatedCupListener
     || gate.runtimeBinding.state !== "SOURCE_READY_HOST_RUNTIME_NOT_RUN"
@@ -228,10 +238,14 @@ export function validateDeployPostcheckGate(gate, {
     })
     || candidateMongo.database !== provisionedMongo.database
     || gate.runtimeBinding.mongoMatchesProvisionedDatabase !== true
-    || gate.runtimeBinding.completeManagedContractSourceImplemented !== true
+    || gate.runtimeBinding.completeCupManagedContractSourceImplemented !== true
     || gate.runtimeBinding.localPhysicalVerified !== true
     || gate.runtimeBinding.hostRuntimeExposed !== false
-    || gate.runtimeBinding.completeManagedContractExposed !== false) {
+    || gate.runtimeBinding.completeManagedContractExposed !== false
+    || gate.runtimeBinding.networkIsolationRuntimeVerified !== false
+    || gate.runtimeBinding.serviceStartBlocked !== true
+    || gate.runtimeBinding.serviceStartBlocker
+      !== "NON_LOOPBACK_EGRESS_ENFORCEMENT_NOT_VERIFIED") {
     fail("DEV candidate runtime identity is not source-ready on the dedicated fixture target");
   }
 
@@ -349,8 +363,15 @@ export function validateDeployPostcheckGate(gate, {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (process.argv.length !== 2) fail("Usage: validate_lk1_subscription_dev_deploy_postcheck_gate.mjs");
-  validateDeployPostcheckGate(checkedDeployPostcheckGate);
+  const requireFreshHostEvidence = process.argv.length === 3
+    && process.argv[2] === "--require-fresh-host-evidence";
+  if (process.argv.length !== (requireFreshHostEvidence ? 3 : 2)) {
+    fail("Usage: validate_lk1_subscription_dev_deploy_postcheck_gate.mjs [--require-fresh-host-evidence]");
+  }
+  validateDeployPostcheckGate(checkedDeployPostcheckGate, {
+    now: requireFreshHostEvidence ? new Date() : null,
+    requireFreshHostEvidence,
+  });
   process.stdout.write("LK1_DEV_DEPLOY_POSTCHECK_GATE=PREPARED_SOURCE_ONLY_READY_FOR_STOPPED_INSTALL_REVIEW\nDEV_DEPLOYED=NOT_CLAIMED\nDEV_ACTIVE=NOT_CLAIMED\n");
 }
 

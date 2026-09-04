@@ -20,18 +20,29 @@ const exactKeys = (value, expected, label) => {
   }
 };
 
-export function validateHostPreflightEvidence(evidence, now = new Date()) {
+export function validateHostPreflightEvidence(evidence, {
+  now = null,
+  requireFresh = false,
+} = {}) {
   exactKeys(evidence, [
     "schemaVersion", "environment", "state", "capturedAt", "maximumAgeSeconds", "target",
     "hostCapabilities", "dedicatedUnits", "listeners", "inputs", "sharedResources", "authority",
   ], "host preflight evidence");
   const capturedAt = Date.parse(evidence.capturedAt);
-  const nowMs = now.getTime();
+  const canonicalCapturedAt = Number.isFinite(capturedAt)
+    ? new Date(capturedAt).toISOString().replace(".000Z", "Z")
+    : null;
   if (evidence.schemaVersion !== 1 || evidence.environment !== "DEV"
     || evidence.state !== "PASS_AT_CAPTURE" || !Number.isFinite(capturedAt)
-    || !Number.isFinite(nowMs) || evidence.maximumAgeSeconds !== 3600
-    || capturedAt > nowMs || nowMs - capturedAt > evidence.maximumAgeSeconds * 1000) {
-    fail("host preflight evidence is stale or has invalid identity");
+    || canonicalCapturedAt !== evidence.capturedAt || evidence.maximumAgeSeconds !== 3600) {
+    fail("host preflight evidence has invalid identity");
+  }
+  if (requireFresh) {
+    const nowMs = now instanceof Date ? now.getTime() : Number.NaN;
+    if (!Number.isFinite(nowMs) || capturedAt > nowMs
+      || nowMs - capturedAt > evidence.maximumAgeSeconds * 1000) {
+      fail("host preflight evidence is stale");
+    }
   }
   exactKeys(evidence.target, ["hostAlias", "hostname", "machineIdSha256"], "host target");
   if (evidence.target.hostAlias !== "lk-reserve-89"
@@ -41,12 +52,15 @@ export function validateHostPreflightEvidence(evidence, now = new Date()) {
     fail("host target identity mismatch");
   }
   exactKeys(evidence.hostCapabilities, [
-    "systemdVersion", "minimumRequiredSystemdVersion", "authorizationTransport", "compatible",
+    "systemdVersion", "minimumRequiredSystemdVersion", "authorizationTransport",
+    "authorizationTransportCompatible", "networkIsolationRuntimeVerified", "serviceStartBlocked",
   ], "host capabilities");
   if (evidence.hostCapabilities.systemdVersion !== 245
     || evidence.hostCapabilities.minimumRequiredSystemdVersion !== 245
     || evidence.hostCapabilities.authorizationTransport !== "ROOT_OWNED_GROUP_READ_ONLY_FILE"
-    || evidence.hostCapabilities.compatible !== true) {
+    || evidence.hostCapabilities.authorizationTransportCompatible !== true
+    || evidence.hostCapabilities.networkIsolationRuntimeVerified !== false
+    || evidence.hostCapabilities.serviceStartBlocked !== true) {
     fail("host capabilities do not support the candidate authorization transport");
   }
   if (JSON.stringify(Object.keys(evidence.dedicatedUnits)) !== JSON.stringify(EXPECTED_UNITS)) {
@@ -91,7 +105,13 @@ export const checkedHostPreflightEvidence = Object.freeze(JSON.parse(fs.readFile
 )));
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (process.argv.length !== 2) fail("Usage: validate_lk1_subscription_dev_host_preflight.mjs");
-  validateHostPreflightEvidence(checkedHostPreflightEvidence);
-  process.stdout.write("LK1_DEV_HOST_PREFLIGHT=PASS_AT_CAPTURE\n");
+  const requireFresh = process.argv.length === 3 && process.argv[2] === "--require-fresh";
+  if (process.argv.length !== (requireFresh ? 3 : 2)) {
+    fail("Usage: validate_lk1_subscription_dev_host_preflight.mjs [--require-fresh]");
+  }
+  validateHostPreflightEvidence(checkedHostPreflightEvidence, {
+    now: requireFresh ? new Date() : null,
+    requireFresh,
+  });
+  process.stdout.write(`LK1_DEV_HOST_PREFLIGHT=${requireFresh ? "FRESH" : "PASS_AT_CAPTURE_STATIC_VALIDATED"}\n`);
 }

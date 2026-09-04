@@ -70,7 +70,7 @@ const endpointInventorySha256 = (flow) => {
   visit(flow);
   return sha256(JSON.stringify(inventory));
 };
-const DEV_API_BASE = "http://127.0.0.1:3037/api";
+const DEV_API_BASE = "https://127.0.0.1:3037/api";
 const DEV_INSTALL_TARGET = Object.freeze({
   sourceHost: "lk-reserve-89",
   sourceHostname: "89-108-64-209.cloudvps.regruhosting.ru",
@@ -86,10 +86,10 @@ const trustedBindings = () => ({
   PROD: "https://padlhub.su/api",
   DEV_INSTALL_TARGET,
   DEV_ENDPOINTS: {
-    cupApiBase: "http://127.0.0.1:3037/api",
-    vivaApiBase: "http://127.0.0.1:3038",
-    serv2Base: "http://127.0.0.1:3038/serv2",
-    tokenUrl: "http://127.0.0.1:3039/realms/dev/protocol/openid-connect/token",
+    cupApiBase: "https://127.0.0.1:3037/api",
+    vivaApiBase: "https://127.0.0.1:3038",
+    serv2Base: "https://127.0.0.1:3038/serv2",
+    tokenUrl: "https://127.0.0.1:3039/realms/dev/protocol/openid-connect/token",
   },
   DEV_MONGO: {
     host: "127.0.0.1", port: 27030, database: "lk1_subscription_dev_fixture",
@@ -197,10 +197,13 @@ function fixture() {
     },
     runtime: {
       apiBase: DEV_API_BASE,
-      completeManagedContractSourceImplemented: true,
+      completeCupManagedContractSourceImplemented: true,
       localPhysicalVerified: true,
       hostRuntimeExposed: false,
       completeManagedContractExposed: false,
+      networkIsolationRuntimeVerified: false,
+      serviceStartBlocked: true,
+      serviceStartBlocker: "NON_LOOPBACK_EGRESS_ENFORCEMENT_NOT_VERIFIED",
       reason: "Source implemented and locally loopback-verified; DEV services remain stopped and host runtime was not exercised",
     },
     dependencies: {
@@ -797,7 +800,7 @@ test("checked-in DEV binding is source-only and never claims runtime or install 
   assert.equal(binding.environmentIdentityVerified, false);
   assert.equal(binding.target.present, true);
   assert.equal(binding.runtime.completeManagedContractExposed, false);
-  assert.equal(binding.runtime.completeManagedContractSourceImplemented, true);
+  assert.equal(binding.runtime.completeCupManagedContractSourceImplemented, true);
   assert.equal(binding.runtime.localPhysicalVerified, true);
   assert.equal(binding.runtime.hostRuntimeExposed, false);
   assert.equal(binding.dependencies.mongoBindingVerifiedDevOnly, true);

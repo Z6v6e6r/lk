@@ -9,14 +9,15 @@ import {
 } from "../validate_lk1_subscription_dev_deploy_postcheck_gate.mjs";
 
 const clone = (value) => structuredClone(value);
-const NOW = new Date("2026-09-04T09:40:00Z");
+const NOW = new Date("2026-09-04T10:40:00Z");
+const FRESH = Object.freeze({ now: NOW, requireFreshHostEvidence: true });
 const readJson = (relativePath) => JSON.parse(fs.readFileSync(
   new URL(relativePath, import.meta.url),
   "utf8",
 ));
 
 test("source-only deploy/post-check gate binds the isolated DEV target without live claims", () => {
-  assert.equal(validateDeployPostcheckGate(checkedDeployPostcheckGate, { now: NOW }), true);
+  assert.equal(validateDeployPostcheckGate(checkedDeployPostcheckGate, FRESH), true);
   assert.equal(checkedDeployPostcheckGate.state, "PREPARED_SOURCE_ONLY_READY_FOR_STOPPED_INSTALL_REVIEW");
   assert.equal(checkedDeployPostcheckGate.productionBindingState, "UNBOUND_AFTER_ROUTER_AMENDMENT");
   assert.equal(checkedDeployPostcheckGate.productionIsolation.crossEnvironmentWriteBudget, 0);
@@ -41,7 +42,9 @@ test("gate rejects release, target, production-isolation, evidence, canary, and 
     (value) => { value.runtimeBinding.cupMatchesDedicatedListener = false; },
     (value) => { value.runtimeBinding.candidateMongo.database = "dev-lk1-subscription-canary"; },
     (value) => { value.runtimeBinding.mongoMatchesProvisionedDatabase = false; },
-    (value) => { value.runtimeBinding.completeManagedContractSourceImplemented = false; },
+    (value) => { value.runtimeBinding.completeCupManagedContractSourceImplemented = false; },
+    (value) => { value.runtimeBinding.networkIsolationRuntimeVerified = true; },
+    (value) => { value.runtimeBinding.serviceStartBlocked = false; },
     (value) => { value.runtimeBinding.localPhysicalVerified = false; },
     (value) => { value.runtimeBinding.hostRuntimeExposed = true; },
     (value) => { value.runtimeBinding.completeManagedContractExposed = true; },
@@ -67,7 +70,7 @@ test("gate rejects release, target, production-isolation, evidence, canary, and 
   ]) {
     const changed = clone(checkedDeployPostcheckGate);
     mutate(changed);
-    assert.throws(() => validateDeployPostcheckGate(changed, { now: NOW }));
+    assert.throws(() => validateDeployPostcheckGate(changed, FRESH));
   }
 });
 
@@ -98,7 +101,10 @@ test("gate rejects drift in the linked release receipt", () => {
     authority: { hostInstall: false, serviceStart: false, ingress: false, activation: false },
   };
   assert.throws(
-    () => validateDeployPostcheckGate(checkedDeployPostcheckGate, { releaseReceipt: badReceipt, now: NOW }),
+    () => validateDeployPostcheckGate(checkedDeployPostcheckGate, {
+      releaseReceipt: badReceipt,
+      ...FRESH,
+    }),
     /candidate identity diverges|release binding drift/,
   );
 });
@@ -109,17 +115,20 @@ test("gate rejects coordinated gate and receipt digest drift against source auth
   const changedReceipt = readJson("../lk1_subscription_dev_release_receipt_v2_contract.json");
   changedReceipt.candidateSha256 = changedGate.releaseBinding.candidateSha256;
   assert.throws(
-    () => validateDeployPostcheckGate(changedGate, { releaseReceipt: changedReceipt, now: NOW }),
+    () => validateDeployPostcheckGate(changedGate, {
+      releaseReceipt: changedReceipt,
+      ...FRESH,
+    }),
     /candidate identity diverges|authorization contract mismatch|authorized candidate source identity/,
   );
 });
 
 test("gate detects linked candidate CUP and Mongo identity drift", () => {
   const runtimeEnvironmentBindings = readJson("../lk1_subscription_runtime_environment_bindings.json");
-  runtimeEnvironmentBindings.DEV_ENDPOINTS.cupApiBase = "http://127.0.0.1:3036/api";
+  runtimeEnvironmentBindings.DEV_ENDPOINTS.cupApiBase = "https://127.0.0.1:3036/api";
   assert.throws(() => validateDeployPostcheckGate(checkedDeployPostcheckGate, {
     runtimeEnvironmentBindings,
-    now: NOW,
+    ...FRESH,
   }), /bindings diverge|runtime identity/);
 
   const candidateBinding = readJson("../lk1_subscription_dev_candidate_binding.json");
@@ -127,7 +136,7 @@ test("gate detects linked candidate CUP and Mongo identity drift", () => {
     = "dev-lk1-subscription-canary";
   assert.throws(() => validateDeployPostcheckGate(checkedDeployPostcheckGate, {
     candidateBinding,
-    now: NOW,
+    ...FRESH,
   }), /Mongo|runtime identity/);
 });
 

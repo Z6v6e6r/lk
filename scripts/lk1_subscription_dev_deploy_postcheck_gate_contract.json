@@ -25,7 +25,7 @@
   },
   "runtimeBinding": {
     "state": "SOURCE_READY_HOST_RUNTIME_NOT_RUN",
-    "candidateCupApiBase": "http://127.0.0.1:3037/api",
+    "candidateCupApiBase": "https://127.0.0.1:3037/api",
     "dedicatedCupListener": "127.0.0.1:3037",
     "cupMatchesDedicatedListener": true,
     "candidateMongo": {
@@ -41,10 +41,13 @@
       "database": "lk1_subscription_dev_fixture"
     },
     "mongoMatchesProvisionedDatabase": true,
-    "completeManagedContractSourceImplemented": true,
+    "completeCupManagedContractSourceImplemented": true,
     "localPhysicalVerified": true,
     "hostRuntimeExposed": false,
-    "completeManagedContractExposed": false
+    "completeManagedContractExposed": false,
+    "networkIsolationRuntimeVerified": false,
+    "serviceStartBlocked": true,
+    "serviceStartBlocker": "NON_LOOPBACK_EGRESS_ENFORCEMENT_NOT_VERIFIED"
   },
   "productionIsolation": {
     "blockedHostAlias": "lk-primary-147",
@@ -58,7 +61,7 @@
   "predeploy": {
     "state": "PASS_AT_CAPTURE",
     "freshEvidenceRequired": true,
-    "capturedAt": "2026-09-04T09:35:19Z",
+    "capturedAt": "2026-09-04T10:37:01Z",
     "maximumAgeSeconds": 3600,
     "mustRefreshImmediatelyBeforeInstall": true,
     "checks": [
@@ -97,9 +100,10 @@
         "state": "NOT_RUN",
         "requiresSeparateAuthorization": true,
         "checks": [
-          "EXACT_SERVICE_IDENTITIES",
-          "LOOPBACK_LISTENER_OWNERSHIP",
-          "ROUTE_AND_GRAPH_HEALTH",
+        "EXACT_SERVICE_IDENTITIES",
+        "LOOPBACK_LISTENER_OWNERSHIP",
+        "NON_LOOPBACK_EGRESS_DENIAL_EFFECTIVE",
+        "ROUTE_AND_GRAPH_HEALTH",
           "PRODUCTION_CONNECTIONS_ZERO",
           "IDLE_WRITES_ZERO"
         ]

@@ -232,10 +232,12 @@ generation and publication below `/private/tmp`, while candidate install, Node-R
 import, service start, unit enablement, ingress, activation, canary IDs, secrets,
 and external writes remain unauthorized.
 
-This branch intentionally contains no fresh host-evidence artifact. The source-only
-contract fixes `hostPreimage.state=ABSENT` as the future install target contract, not
-as a current host observation. A fresh read-only host preflight remains mandatory
-before any separately authorized install stage.
+This branch contains a time-stamped read-only host-evidence artifact with
+`PASS_AT_CAPTURE`; static validation is reproducible, while execution-time freshness
+is intentionally checked only by the explicit `--require-fresh` preinstall gate.
+The source-only contract also fixes `hostPreimage.state=ABSENT` as the future install
+target contract. A new read-only capture remains mandatory immediately before any
+separately authorized install stage.
 
 The offline generator produces a 23-node isolated source with two HTTP routes, one
 credential-free loopback Mongo client, and the exact reviewed function-node

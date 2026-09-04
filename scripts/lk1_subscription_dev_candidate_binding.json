@@ -58,11 +58,14 @@
     "finalizeNodePreimageSha256": "4be11eed3df7a9a720853f0abcb63a0f3a95baa349155980c5564c5338a700d7"
   },
   "runtime": {
-    "apiBase": "http://127.0.0.1:3037/api",
-    "completeManagedContractSourceImplemented": true,
+    "apiBase": "https://127.0.0.1:3037/api",
+    "completeCupManagedContractSourceImplemented": true,
     "localPhysicalVerified": true,
     "hostRuntimeExposed": false,
     "completeManagedContractExposed": false,
+    "networkIsolationRuntimeVerified": false,
+    "serviceStartBlocked": true,
+    "serviceStartBlocker": "NON_LOOPBACK_EGRESS_ENFORCEMENT_NOT_VERIFIED",
     "reason": "Source implemented and locally loopback-verified; DEV services remain stopped and host runtime was not exercised"
   },
   "dependencies": {

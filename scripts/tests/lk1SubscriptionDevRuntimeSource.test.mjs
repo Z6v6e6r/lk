@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -11,6 +12,7 @@ import {
   createFixtureServer,
   handleFixtureRequest,
   loadFixtureConfig,
+  loadFixtureTlsCredentials,
   readAuthorizationCredential,
   validateFixtureCli,
   validateFixtureConfig,
@@ -418,8 +420,8 @@ test("CUP fixture is schema-compatible but cannot authorize standard UAT preflig
   ).body;
   const inputs = {
     DEV_LK_BASE_URL: "http://127.0.0.1:1882",
-    DEV_CUP_BASE_URL: "http://127.0.0.1:3037",
-    allowedDevOrigins: ["http://127.0.0.1:1882", "http://127.0.0.1:3037"],
+    DEV_CUP_BASE_URL: "https://127.0.0.1:3037",
+    allowedDevOrigins: ["http://127.0.0.1:1882", "https://127.0.0.1:3037"],
     productionOrigins: ["https://padlhub.ru"],
     expectedLkRelease: release,
     expectedCupRelease: release,
@@ -594,14 +596,29 @@ test("managed CUP contract denies control, idempotency conflicts, bad revisions,
 
 test("CUP managed contract is physically reachable on a fixture-owned loopback listener", async (t) => {
   const config = fixtureConfig();
-  const server = createFixtureServer("cup", config);
+  const tlsRoot = fs.mkdtempSync(path.join(TMP_ROOT, "lk1-fixture-tls-test-"));
+  const keyFile = path.join(tlsRoot, "server.key");
+  const certFile = path.join(tlsRoot, "server.crt");
+  execFileSync("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+    "-keyout", keyFile, "-out", certFile, "-days", "1",
+    "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1",
+  ], { stdio: "ignore" });
+  const tlsCredentials = {
+    key: fs.readFileSync(keyFile),
+    cert: fs.readFileSync(certFile),
+  };
+  const server = createFixtureServer("cup", config, tlsCredentials);
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
-  t.after(() => new Promise((resolve, reject) => server.close((error) => (
-    error ? reject(error) : resolve()
-  ))));
+  t.after(async () => {
+    await new Promise((resolve, reject) => server.close((error) => (
+      error ? reject(error) : resolve()
+    )));
+    fs.rmSync(tlsRoot, { recursive: true });
+  });
   const address = server.address();
   const operationId = "fixture-network-entitlement-a";
   const headers = {
@@ -611,19 +628,65 @@ test("CUP managed contract is physically reachable on a fixture-owned loopback l
     "idempotency-key": operationId,
     "content-type": "application/json",
   };
-  const response = await fetch(`http://127.0.0.1:${address.port}/api/internal/subscriptions/entitlements/reserve`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
+  const requestBody = JSON.stringify({
       subscriptionInstanceId: config.subjects.A.subscriptionInstanceId,
       action: "CREATE_GAME",
       target: { targetId: config.subjects.A.managedTarget.targetId },
-    }),
+  });
+  const response = await new Promise((resolve, reject) => {
+    const networkRequest = https.request({
+      hostname: "127.0.0.1",
+      port: address.port,
+      path: "/api/internal/subscriptions/entitlements/reserve",
+      method: "POST",
+      headers: { ...headers, "content-length": Buffer.byteLength(requestBody) },
+      ca: tlsCredentials.cert,
+      rejectUnauthorized: true,
+    }, (networkResponse) => {
+      const chunks = [];
+      networkResponse.on("data", (chunk) => chunks.push(chunk));
+      networkResponse.on("end", () => resolve({
+        status: networkResponse.statusCode,
+        json: () => JSON.parse(Buffer.concat(chunks).toString("utf8")),
+      }));
+    });
+    networkRequest.once("error", reject);
+    networkRequest.end(requestBody);
   });
   assert.equal(response.status, 200);
-  const payload = await response.json();
+  const payload = response.json();
   assert.equal(payload.outcome, "RESERVED");
   assert.equal(payload.subscriptionInstanceId, config.subjects.A.subscriptionInstanceId);
+});
+
+test("TLS credential loader requires exact root-owned group-readable files", () => {
+  const fakeStat = (kind, mode) => ({
+    uid: 0,
+    gid: kind === "directory" && mode === 0o755 ? 0 : 997,
+    mode,
+    isDirectory: () => kind === "directory",
+    isFile: () => kind === "file",
+    isSymbolicLink: () => false,
+  });
+  const fakeFs = {
+    lstatSync: (target) => target === "/srv"
+      ? fakeStat("directory", 0o755)
+      : target.endsWith(".key") || target.endsWith(".crt")
+        ? fakeStat("file", 0o440)
+        : fakeStat("directory", target.endsWith("/tls") ? 0o750 : 0o755),
+    realpathSync: (target) => target,
+    readFileSync: (target) => Buffer.from(target.endsWith(".key") ? "test-key" : "test-cert"),
+  };
+  const credentials = loadFixtureTlsCredentials({
+    LK1_SUBSCRIPTION_DEV_TLS_KEY_FILE: "/srv/lk1-subscription-dev/tls/server.key",
+    LK1_SUBSCRIPTION_DEV_TLS_CERT_FILE: "/srv/lk1-subscription-dev/tls/server.crt",
+  }, fakeFs, 997);
+  assert.equal(credentials.key.toString(), "test-key");
+  assert.equal(credentials.cert.toString(), "test-cert");
+  assert.throws(() => loadFixtureTlsCredentials({
+    LK1_SUBSCRIPTION_DEV_TLS_KEY_FILE: "/private/tmp/server.key",
+    LK1_SUBSCRIPTION_DEV_TLS_CERT_FILE: "/srv/lk1-subscription-dev/tls/server.crt",
+  }, fakeFs, 997), (error) => error.code === "FIXTURE_TLS_CREDENTIAL_PATH_INVALID");
 });
 
 test("wrong credentials, control observability, extra fields, mutation methods, and non-CUP routes fail closed", () => {

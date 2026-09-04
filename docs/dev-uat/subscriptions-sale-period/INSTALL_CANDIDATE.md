@@ -29,14 +29,17 @@ Runtime принимает credential только при одновременн
   не anti-replay nonce).
 
 Fresh read-only preflight подтвердил systemd 245 и совместимость этого
-file-custody transport. Историческое подтверждение не заменяет повторный
+file-custody transport. Он не подтверждает фактическое kernel/eBPF enforcement
+`IPAddressDeny`; service start остаётся заблокирован до отдельной отрицательной
+non-loopback пробы. Историческое подтверждение не заменяет повторный
 preflight непосредственно перед будущей установкой.
 
 ## Почему candidate нельзя запустить
 
 - Все unit candidates содержат `RefuseManualStart=yes`.
 - В них отсутствует `[Install]`/`WantedBy`.
-- Fixture config, release receipt и service-start credential не входят в пакет.
+- Fixture config, TLS key/certificate, release receipt и service-start credential
+  не входят в пакет.
 - Install executor и `install-identity.env` отсутствуют.
 - Loopback-only/editor-disabled Node-RED settings входят как exact hashed payload.
 - Manifest и contract оставляют все host/live authority в `false`.
