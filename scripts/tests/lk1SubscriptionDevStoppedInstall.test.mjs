@@ -165,6 +165,37 @@ test("durable directory creation fsyncs the new directory before its containing 
   ]);
 });
 
+test("failed parent fsync removes the empty directory so retry repeats the full barrier", () => {
+  const parent = fs.mkdtempSync(path.join(TMP_ROOT, "lk1-durable-directory-test-"));
+  fs.chmodSync(parent, 0o700);
+  const directory = path.join(parent, "attempt");
+  let fsyncCalls = 0;
+  const failingFs = new Proxy(fs, {
+    get(target, property) {
+      if (property === "fsyncSync") {
+        return (fd) => {
+          fsyncCalls += 1;
+          if (fsyncCalls === 2) throw new Error("synthetic parent fsync failure");
+          return target.fsyncSync(fd);
+        };
+      }
+      return target[property];
+    },
+  });
+  try {
+    assert.throws(() => createDirectoryDurable(directory, {
+      mode: 0o700, uid: process.getuid(), gid: process.getgid(), fsApi: failingFs,
+    }), /synthetic parent fsync failure/);
+    assert.equal(fs.existsSync(directory), false);
+    createDirectoryDurable(directory, {
+      mode: 0o700, uid: process.getuid(), gid: process.getgid(),
+    });
+    assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+  } finally {
+    fs.rmSync(parent, { recursive: true });
+  }
+});
+
 test("Linux inherited fd3 lock excludes a contender and rejects an unlocked fd", {
   skip: process.platform !== "linux" || !fs.existsSync("/usr/bin/flock"),
 }, () => {
@@ -213,6 +244,17 @@ test("Linux inherited fd3 lock excludes a contender and rejects an unlocked fd",
     if (lockFd !== undefined) fs.closeSync(lockFd);
     fs.rmSync(directory, { recursive: true });
   }
+});
+
+test("operator runbook atomically reserves one root-private candidate parent", () => {
+  const runbook = fs.readFileSync(path.join(
+    ROOT, "docs/dev-uat/subscriptions-sale-period/INSTALL_CANDIDATE.md",
+  ), "utf8");
+  assert.match(runbook, /lk1_candidate_parent="\/srv\/lk1-subscription-dev\/\.stopped-install-/);
+  assert.match(runbook, /\/bin\/mkdir -m 0700 "\$parent"/);
+  assert.match(runbook, /\/usr\/bin\/scp "\$\{lk1_ssh_options\[@\]\}" -pr/);
+  assert.match(runbook, /test "\$\(\/usr\/bin\/stat -c %U:%G:%a "\$parent"\)" = root:root:700/);
+  assert.doesNotMatch(runbook, /\/bin\/mv .*\$lk1_(?:bundle|launcher|evidence)_remote/);
 });
 
 test("stopped installer atomically installs six exact files and a separate rollback restores every preimage", async () => {

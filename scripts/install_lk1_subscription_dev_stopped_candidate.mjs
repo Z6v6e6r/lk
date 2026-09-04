@@ -116,13 +116,7 @@ const fsyncDirectory = (directory) => {
   try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
 };
 
-export function createDirectoryDurable(directory, {
-  mode, uid, gid, fsApi = fs,
-} = {}) {
-  const parent = path.dirname(directory);
-  fsApi.mkdirSync(directory, { recursive: false, mode });
-  fsApi.chownSync(directory, uid, gid);
-  fsApi.chmodSync(directory, mode);
+export function syncDirectoryAndParent(directory, { fsApi = fs } = {}) {
   const openFlags = fs.constants.O_RDONLY | fs.constants.O_CLOEXEC
     | (fs.constants.O_DIRECTORY || 0);
   const sync = (target) => {
@@ -130,7 +124,37 @@ export function createDirectoryDurable(directory, {
     try { fsApi.fsyncSync(fd); } finally { fsApi.closeSync(fd); }
   };
   sync(directory);
-  sync(parent);
+  sync(path.dirname(directory));
+}
+
+export function createDirectoryDurable(directory, {
+  mode, uid, gid, fsApi = fs,
+} = {}) {
+  const parent = path.dirname(directory);
+  let created = false;
+  try {
+    fsApi.mkdirSync(directory, { recursive: false, mode });
+    created = true;
+    fsApi.chownSync(directory, uid, gid);
+    fsApi.chmodSync(directory, mode);
+    syncDirectoryAndParent(directory, { fsApi });
+  } catch (error) {
+    if (created) {
+      try {
+        fsApi.rmdirSync(directory);
+        const parentFd = fsApi.openSync(
+          parent,
+          fs.constants.O_RDONLY | fs.constants.O_CLOEXEC | (fs.constants.O_DIRECTORY || 0),
+        );
+        try { fsApi.fsyncSync(parentFd); } finally { fsApi.closeSync(parentFd); }
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError], "durable directory creation and cleanup failed",
+        );
+      }
+    }
+    throw error;
+  }
 }
 
 const writeExclusiveDurable = (target, bytes, { mode, uid, gid }) => {
@@ -238,7 +262,7 @@ const defaultProbe = ({ manifest, phase }) => {
 export function validateStoppedInstallContract(contract) {
   if (contract?.formatVersion !== 2 || contract.stage !== "STOPPED_INSTALL_CANDIDATE"
     || contract.environment !== "DEV" || contract.sourceCommit !== null
-    || contract.stoppedInstall?.exactBundlePathPrefix !== "/tmp/lk1-subscription-dev-stopped-install-"
+    || contract.stoppedInstall?.exactCandidateParentPrefix !== "/srv/lk1-subscription-dev/.stopped-install-"
     || contract.stoppedInstall?.evidenceRoot !== "/srv/lk1-subscription-dev/bootstrap-evidence/stopped-install"
     || contract.stoppedInstall?.evidenceLayout !== "MANIFEST_SHA256/ATTEMPT_ID"
     || contract.stoppedInstall?.executionLock !== "KERNEL_FLOCK_INHERITED_FD_TRUSTED_LAUNCHER"
@@ -496,7 +520,7 @@ export function installStoppedCandidate({
   );
   assertBundleCustody(bundleRoot, verified.manifest, currentUid);
   assertBundleExecutionIdentity(bundleRoot, verified.manifest);
-  const expectedBundlePath = `${verified.contract.stoppedInstall.exactBundlePathPrefix}${expectedManifestSha256}`;
+  const expectedBundlePath = `${verified.contract.stoppedInstall.exactCandidateParentPrefix}${expectedManifestSha256}/bundle`;
   if (environment === "production" && bundleRoot !== expectedBundlePath) fail("stopped install bundle path mismatch");
   let evidenceDirectory;
   let records = [];
@@ -519,6 +543,7 @@ export function installStoppedCandidate({
     assertDirectory(evidenceRoot, "stopped install evidence root", {
       uid: currentUid, mode: 0o700,
     });
+    syncDirectoryAndParent(evidenceRoot);
     const manifestEvidenceDirectory = path.join(evidenceRoot, expectedManifestSha256);
     if (!pathEntryExists(manifestEvidenceDirectory)) {
       createDirectoryDurable(manifestEvidenceDirectory, {
@@ -528,6 +553,7 @@ export function installStoppedCandidate({
     assertDirectory(manifestEvidenceDirectory, "stopped install manifest evidence directory", {
       uid: currentUid, mode: 0o700,
     });
+    syncDirectoryAndParent(manifestEvidenceDirectory);
     evidenceDirectory = path.join(manifestEvidenceDirectory, attemptId);
     createDirectoryDurable(evidenceDirectory, {
       mode: 0o700, uid: currentUid, gid: currentGid,

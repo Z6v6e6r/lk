@@ -97,7 +97,8 @@ readback. Checked-in schema-v1 evidence является только истор
 install gate требует отдельный schema-v2 direct-SSH capture через exact pinned
 ED25519 host key, связанный с clean exact HEAD/tree, release tuple и capture hashes.
 Executor принимает только fresh evidence с TTL 3600 секунд, exact manifest SHA и
-bundle в `/tmp/lk1-subscription-dev-stopped-install-<manifest-sha256>`.
+bundle в root-private
+`/srv/lk1-subscription-dev/.stopped-install-<manifest-sha256>/bundle`.
 Перед исполнением весь bundle tree должен принадлежать root, иметь private
 directories `0700`, exact manifest-declared file modes и single-link regular files.
 Launcher не входит в bundle: его exact SHA находится в manifest, а перед запуском
@@ -133,9 +134,10 @@ lk1_manifest_sha="<64-hex manifestSha256 from builder>"
 lk1_launcher_sha="<manifest.trustedLauncher.sha256>"
 lk1_preflight_sha="<sha256 of fresh schema-v2 evidence.json>"
 lk1_attempt_id="<new random 32-hex>"
-lk1_bundle_remote="/tmp/lk1-subscription-dev-stopped-install-${lk1_manifest_sha}"
-lk1_launcher_remote="/tmp/lk1-subscription-dev-stopped-launcher-${lk1_launcher_sha}.mjs"
-lk1_evidence_remote="/tmp/lk1-subscription-dev-host-preflight-${lk1_preflight_sha}.json"
+lk1_candidate_parent="/srv/lk1-subscription-dev/.stopped-install-${lk1_manifest_sha}"
+lk1_bundle_remote="${lk1_candidate_parent}/bundle"
+lk1_launcher_remote="${lk1_candidate_parent}/launcher.mjs"
+lk1_evidence_remote="${lk1_candidate_parent}/evidence.json"
 ```
 
 До transfer оператор создаёт local `known_hosts` file с ровно одной ED25519
@@ -174,45 +176,43 @@ lk1_ssh_options=(
   -o HostKeyAlgorithms=ssh-ed25519 -o UpdateHostKeys=no
   -o HostKeyAlias=89.108.64.209 -o UserKnownHostsFile="$lk1_known_hosts"
 )
-lk1_stage="/tmp/lk1-stopped-stage-${lk1_manifest_sha}"
-lk1_bundle_archive="$(mktemp /private/tmp/lk1-stopped-bundle.XXXXXX.tar)"
-COPYFILE_DISABLE=1 /usr/bin/tar -C "$candidate_dir" -cf "$lk1_bundle_archive" .
 /usr/bin/ssh "${lk1_ssh_options[@]}" lk-reserve-89 -- /bin/sh -ceu '
-  stage=$1; bundle=$2; launcher=$3; evidence=$4
-  for target in "$stage" "$bundle" "$launcher" "$evidence"; do
-    test ! -e "$target" && test ! -L "$target"
-  done
-  /usr/bin/install -d -o root -g root -m 0700 "$stage"
-  /usr/bin/install -d -o root -g root -m 0700 "$stage/bundle.incoming"
-' sh "$lk1_stage" "$lk1_bundle_remote" "$lk1_launcher_remote" "$lk1_evidence_remote"
-/usr/bin/scp "${lk1_ssh_options[@]}" "$lk1_bundle_archive" \
-  "lk-reserve-89:$lk1_stage/bundle.tar"
-/usr/bin/scp "${lk1_ssh_options[@]}" \
+  parent=$1
+  test ! -e "$parent" && test ! -L "$parent"
+  /bin/mkdir -m 0700 "$parent"
+  /bin/chown root:root "$parent"
+  test "$(/usr/bin/stat -c %U:%G:%a "$parent")" = root:root:700
+' sh "$lk1_candidate_parent"
+/usr/bin/scp "${lk1_ssh_options[@]}" -pr "$candidate_dir" \
+  "lk-reserve-89:$lk1_bundle_remote"
+/usr/bin/scp "${lk1_ssh_options[@]}" -p \
   scripts/launch_lk1_subscription_dev_stopped_candidate.mjs \
-  "$lk1_evidence_local" "lk-reserve-89:$lk1_stage/"
+  "lk-reserve-89:$lk1_launcher_remote"
+/usr/bin/scp "${lk1_ssh_options[@]}" -p "$lk1_evidence_local" \
+  "lk-reserve-89:$lk1_evidence_remote"
 /usr/bin/ssh "${lk1_ssh_options[@]}" lk-reserve-89 -- /bin/sh -ceu '
-  stage=$1; bundle=$2; launcher=$3; evidence=$4
+  parent=$1; bundle=$2; launcher=$3; evidence=$4
   manifest_sha=$5; launcher_sha=$6; evidence_sha=$7
-  /usr/bin/tar -C "$stage/bundle.incoming" -xf "$stage/bundle.tar"
-  /bin/chown -R root:root "$stage"
-  /usr/bin/find "$stage/bundle.incoming" -type d -exec /bin/chmod 0700 {} +
-  /bin/chmod 0500 "$stage/launch_lk1_subscription_dev_stopped_candidate.mjs"
-  /bin/chmod 0600 "$stage/evidence.json"
-  test "$(/usr/bin/sha256sum "$stage/bundle.incoming/manifest.json" | /usr/bin/cut -d" " -f1)" = "$manifest_sha"
-  test "$(/usr/bin/sha256sum "$stage/launch_lk1_subscription_dev_stopped_candidate.mjs" | /usr/bin/cut -d" " -f1)" = "$launcher_sha"
-  test "$(/usr/bin/sha256sum "$stage/evidence.json" | /usr/bin/cut -d" " -f1)" = "$evidence_sha"
-  /bin/mv "$stage/bundle.incoming" "$bundle"
-  /bin/mv "$stage/launch_lk1_subscription_dev_stopped_candidate.mjs" "$launcher"
-  /bin/mv "$stage/evidence.json" "$evidence"
-' sh "$lk1_stage" "$lk1_bundle_remote" "$lk1_launcher_remote" \
+  test "$(/usr/bin/stat -c %U:%G:%a "$parent")" = root:root:700
+  /bin/chown -R root:root "$bundle"
+  /usr/bin/find "$bundle" -type d -exec /bin/chmod 0700 {} +
+  /bin/chown root:root "$launcher" "$evidence"
+  /bin/chmod 0500 "$launcher"
+  /bin/chmod 0600 "$evidence"
+  test "$(/usr/bin/sha256sum "$bundle/manifest.json" | /usr/bin/cut -d" " -f1)" = "$manifest_sha"
+  test "$(/usr/bin/sha256sum "$launcher" | /usr/bin/cut -d" " -f1)" = "$launcher_sha"
+  test "$(/usr/bin/sha256sum "$evidence" | /usr/bin/cut -d" " -f1)" = "$evidence_sha"
+' sh "$lk1_candidate_parent" "$lk1_bundle_remote" "$lk1_launcher_remote" \
   "$lk1_evidence_remote" "$lk1_manifest_sha" "$lk1_launcher_sha" "$lk1_preflight_sha"
 ```
 
-Пути назначения до staging обязаны отсутствовать; если любой из них уже существует,
-оператор останавливает gate и не заменяет его. Перед install повторяются три
-system `sha256sum` сравнения уже на final paths. Удаление staging paths и private
-known-hosts — отдельная cleanup-операция после сохранения evidence и не входит в
-install authority.
+Первый remote `mkdir` атомарно резервирует весь manifest-bound root-private parent
+и падает, если он уже существует; поэтому последующие `scp` не имеют общих final
+paths с конкурентной попыткой. Любой partial transfer оставляет parent занятым и
+останавливает gate: повторное использование или удаление запрещены без отдельного
+cleanup-решения. Перед install повторяются три system `sha256sum` сравнения на
+final paths. Удаление private known-hosts и любого failed-staging parent не входит
+в install authority.
 
 Только после отдельной install-authority запускается:
 

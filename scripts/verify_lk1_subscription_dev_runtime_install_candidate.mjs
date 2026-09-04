@@ -12,7 +12,7 @@ import { validateReleaseReceiptV2 } from "./validate_lk1_subscription_dev_releas
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
-const CONTRACT_CANONICAL_SHA256 = "afe29964f49dd5215f92a00889c1c726d8cb132b46cdbc8f1eed31f768b57969";
+const CONTRACT_CANONICAL_SHA256 = "fcc07e903853da99d914df2e9002469bb552a239abde42e1fc7c7342f3548298";
 const NODE_RED_SETTINGS_SHA256 = "6b6cc7253b120f2a8b2397c0d3a5f82db9a72fb6d62948bd9f6e6bdb5ab3deb6";
 const UNIT_SHA256 = Object.freeze({
   "lk1-subscription-dev-cup.service": "21423847b61c56bb7c8d2561e4a740d2e21aad399abbb1b2725a2936d3631ba5",

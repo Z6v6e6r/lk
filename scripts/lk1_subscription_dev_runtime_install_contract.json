@@ -65,7 +65,7 @@
     "freshHostReadbackRequired": true
   },
   "stoppedInstall": {
-    "exactBundlePathPrefix": "/tmp/lk1-subscription-dev-stopped-install-",
+    "exactCandidateParentPrefix": "/srv/lk1-subscription-dev/.stopped-install-",
     "evidenceRoot": "/srv/lk1-subscription-dev/bootstrap-evidence/stopped-install",
     "evidenceLayout": "MANIFEST_SHA256/ATTEMPT_ID",
     "executionLock": "KERNEL_FLOCK_INHERITED_FD_TRUSTED_LAUNCHER",

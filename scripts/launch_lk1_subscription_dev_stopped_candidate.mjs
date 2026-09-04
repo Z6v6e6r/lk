@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const SHA256 = /^[a-f0-9]{64}$/;
 const ATTEMPT_ID = /^[a-f0-9]{32}$/;
 const LOCK_PATH = "/run/lock/lk1-subscription-dev-stopped-install.lock";
+const CANDIDATE_PARENT_PREFIX = "/srv/lk1-subscription-dev/.stopped-install-";
 const LOCK_CONFIRMATION = "HELD_BY_TRUSTED_STOPPED_INSTALL_LAUNCHER";
 const CONFIRMATIONS = Object.freeze({
   install: ["LK1_SUBSCRIPTION_DEV_STOPPED_INSTALL", "CONFIRM_EXACT_STOPPED_INSTALL"],
@@ -37,6 +38,17 @@ const assertRegular = (file, uid, mode) => {
     || (stat.mode & 0o777) !== mode) fail(`trusted launcher file custody mismatch (${file})`);
 };
 
+const assertProtectedParents = (target, uid) => {
+  let current = path.dirname(target);
+  while (true) {
+    const stat = fs.lstatSync(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid
+      || (stat.mode & 0o022) !== 0) fail(`trusted launcher parent custody mismatch (${current})`);
+    if (current === "/") return;
+    current = path.dirname(current);
+  }
+};
+
 export function verifyBundleBeforeExecution({
   bundleDirectory,
   expectedManifestSha256,
@@ -45,9 +57,14 @@ export function verifyBundleBeforeExecution({
 } = {}) {
   if (!SHA256.test(expectedManifestSha256 || "")) fail("trusted launcher manifest SHA is invalid");
   const root = fs.realpathSync(bundleDirectory);
+  const candidateParent = `${CANDIDATE_PARENT_PREFIX}${expectedManifestSha256}`;
   if (environment === "production"
-    && root !== `/tmp/lk1-subscription-dev-stopped-install-${expectedManifestSha256}`) {
+    && root !== `${candidateParent}/bundle`) {
     fail("trusted launcher bundle path mismatch");
+  }
+  if (environment === "production") {
+    assertDirectory(candidateParent, expectedUid);
+    assertProtectedParents(candidateParent, expectedUid);
   }
   assertDirectory(root, expectedUid);
   const manifestPath = path.join(root, "manifest.json");
@@ -80,7 +97,7 @@ export function verifyBundleBeforeExecution({
   }
   if (environment === "production") {
     const launcherPath = fileURLToPath(import.meta.url);
-    if (launcherPath !== `/tmp/lk1-subscription-dev-stopped-launcher-${manifest.trustedLauncher.sha256}.mjs`) {
+    if (launcherPath !== `${candidateParent}/launcher.mjs`) {
       fail("trusted launcher execution path mismatch");
     }
     assertRegular(launcherPath, expectedUid, 0o500);
@@ -155,6 +172,11 @@ export function launchStoppedCandidate({
     expectedUid,
     environment,
   });
+  if (environment === "production" && args["--mode"] === "install"
+    && args["--preflight-evidence"]
+      !== `${CANDIDATE_PARENT_PREFIX}${args["--manifest-sha256"]}/evidence.json`) {
+    fail("trusted launcher preflight evidence path mismatch");
+  }
   const runtime = fs.realpathSync(process.execPath);
   const runtimeStat = fs.lstatSync(runtime);
   const expectedRuntimeUid = environment === "production" ? expectedUid : runtimeStat.uid;
