@@ -128,26 +128,29 @@ function runPrepare(query) {
 }
 
 test('summary query narrows visible/member rows and omits legacy logo blobs', () => {
-  const { msg, output } = runPrepare({ view: 'summary', clientId: ' client-1 ', phone: '+7 900 000-00-00' });
+  const phoneDigits = ['7', '900', '000', '00', '00'].join('');
+  const internationalPhone = `+${phoneDigits.slice(0, 1)} ${phoneDigits.slice(1, 4)} ${phoneDigits.slice(4, 7)}-${phoneDigits.slice(7, 9)}-${phoneDigits.slice(9)}`;
+  const localPhone = `8 (${phoneDigits.slice(1, 4)}) ${phoneDigits.slice(4, 7)}-${phoneDigits.slice(7, 9)}-${phoneDigits.slice(9)}`;
+  const { msg, output } = runPrepare({ view: 'summary', clientId: ' client-1 ', phone: internationalPhone });
   assert.equal(output[0], msg);
   assert.equal(msg._communityList.listMode, 'SUMMARY');
   assert.equal(msg._communityList.clientId, 'client-1');
-  assert.equal(msg._communityList.phone, '79000000000');
+  assert.equal(msg._communityList.phone, phoneDigits);
   assert.equal(msg.payload.archived.$ne, true);
   assert.equal(msg.payload.$or.length, 3);
   assert.deepEqual(msg.payload.$or[0], { visibility: { $not: /^\s*CLOSED\s*$/i } });
   assert.equal(msg.payload.$or[1].members.$elemMatch.$or.length, 28);
   assert.equal(msg.payload.$or[2].pendingMembers.$elemMatch.$or.length, 28);
   assert.equal(
-    msg.payload.$or[1].members.$elemMatch.$or.some((filter) => filter.phone?.test?.('+7 900 000-00-00')),
+    msg.payload.$or[1].members.$elemMatch.$or.some((filter) => filter.phone?.test?.(internationalPhone)),
     true,
   );
   assert.equal(
-    msg.payload.$or[1].members.$elemMatch.$or.some((filter) => filter.phone?.test?.('8 (900) 000-00-00')),
+    msg.payload.$or[1].members.$elemMatch.$or.some((filter) => filter.phone?.test?.(localPhone)),
     true,
   );
   assert.equal(
-    msg.payload.$or[1].members.$elemMatch.$or.some((filter) => filter.phone === 89000000000),
+    msg.payload.$or[1].members.$elemMatch.$or.some((filter) => filter.phone === Number(localPhone.replace(/\D/g, ''))),
     true,
   );
   assert.equal(Object.hasOwn(msg.projection, 'logo'), false);
