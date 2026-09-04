@@ -34,6 +34,7 @@ const hostTranscript = [
   `HOSTNAME\t${checkedHostPreflightEvidence.target.hostname}`,
   `MACHINE_ID_SHA256\t${checkedHostPreflightEvidence.target.machineIdSha256}`,
   `SYSTEMD_VERSION\t${checkedHostPreflightEvidence.hostCapabilities.systemdVersion}`,
+  "EXECUTION_PREREQ\ttrue\ttrue",
   ...Object.entries(checkedHostPreflightEvidence.dedicatedUnits).map(([unit, state]) => (
     `UNIT\t${unit}\t${state.loadState}\t${state.activeState}\t${state.unitFileState}`
   )),
