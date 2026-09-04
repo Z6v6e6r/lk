@@ -4,7 +4,8 @@ import fs from "node:fs";
 
 function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
   const source = fs.readFileSync(file, "utf8");
-  return new Function("msg", source)(msg);
+  const env = { get: (key: string) => key === "PADLHUB_PLATFORM_TENANT_KEY" ? "tenant-test" : undefined };
+  return new Function("msg", "env", source)(msg, env);
 }
 
 type NodeRedFunctionResponse = {

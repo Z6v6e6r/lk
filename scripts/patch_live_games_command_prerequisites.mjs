@@ -7,6 +7,11 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { auditLegacyGameRevisionWriters } from "./audit_legacy_game_revision_writers.mjs";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
+import {
+  BASE_GAME_CREATE_FUNC_SHA256,
+  patchVivaGameCreateTenantRevisionBase,
+  SERVER_OWNED_GAME_TENANT_PRECONDITION,
+} from "./lib/vivaGameCreateTenantRevisionContract.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FN_DIR = path.join(SCRIPT_DIR, "nodered_games_nodes");
@@ -17,6 +22,7 @@ const EXPECTED_SOURCE_SHA256 = "14b5aff65e0b49fd4f37d6d1d9465af8af3ccdf2e6cfa77b
 const EXPECTED_NODE_COUNT = 4762;
 const EXPECTED_ROUTE_COUNT = 215;
 const TAB_ID = "4b91e2a2413688db";
+export const PREREQUISITE_GAME_CREATE_FUNC_SHA256 = "2f4b72e351996321701d85275f50ae2f790a02aaef4fc430c84d810225dbd235";
 
 const IDS = Object.freeze({
   patchRoute: "7ad34f13c4b25d60",
@@ -226,13 +232,43 @@ function replaceOnce(source, before, after, label) {
   return `${source.slice(0, first)}${after}${source.slice(first + before.length)}`;
 }
 
+export function patchLegacyGameCreatePrerequisiteCasAck(source) {
+  if (sha256(source) !== BASE_GAME_CREATE_FUNC_SHA256) fail("Game create base preimage mismatch");
+  let next = replaceOnce(
+    source,
+    `${SERVER_OWNED_GAME_TENANT_PRECONDITION}\n\nconst record = {`,
+    `${SERVER_OWNED_GAME_TENANT_PRECONDITION}\nconst expectedRevisionText = String(body.expectedRevision ?? "").trim();\nconst expectedRevision = /^\\d+$/.test(expectedRevisionText) ? Number(expectedRevisionText) : null;\nif (expectedRevisionText && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1)) {\n  const errMsg = Object.assign({}, msg, {\n    statusCode: 400,\n    headers: { "Content-Type": "application/json; charset=utf-8" },\n    payload: { error: "expectedRevision has invalid format", code: "LEGACY_GAME_REVISION_INVALID" },\n  });\n  return [null, errMsg, errMsg, null];\n}\n\nconst record = {`,
+    "create revision precondition",
+  );
+  next = replaceOnce(
+    next,
+    "const queryFilter = {\n  tenantKey,\n  ...(paymentRef ? {\n    $or: [\n      { \"metadata.paymentRef\": paymentRef },\n      { \"payment.paymentRef\": paymentRef },\n    ],\n  } : { dedupeKey }),\n};",
+    "const queryFilter = {\n  tenantKey,\n  id: gameId,\n  revision: expectedRevision === null ? { $exists: false } : expectedRevision,\n  ...(paymentRef ? {\n    $or: [\n      { \"metadata.paymentRef\": paymentRef },\n      { \"payment.paymentRef\": paymentRef },\n    ],\n  } : { dedupeKey }),\n};",
+    "create identity revision filter",
+  );
+  next = replaceOnce(
+    next,
+    "    record,\n  ),",
+    "    record,\n    { revision: expectedRevision === null ? 1 : expectedRevision + 1 },\n  ),",
+    "create response revision",
+  );
+  const patched = replaceOnce(
+    next,
+    "return [dbMsg, responseMsg, debugMsg, autojoinMsg];",
+    "dbMsg._createRevisionDebug = debugMsg.payload;\nreturn [dbMsg, null, null, null];",
+    "create acknowledgement gate",
+  );
+  if (sha256(patched) !== PREREQUISITE_GAME_CREATE_FUNC_SHA256) fail("Game create prerequisite postimage mismatch");
+  return patched;
+}
+
 export function upgradeLegacyGameWriterFunction(nodeId, source) {
   if (nodeId === IDS.create) {
     if (source.includes("GAME_PAYMENT_CONFIRM_GUARD_START")) {
       let next = replaceOnce(
         source,
         "const record = {\n  id: gameId,\n  tenantKey: toStr(body.tenantKey) || null,",
-        "const tenantKey = toStr(body.tenantKey);\nif (!tenantKey) {\n  const errMsg = Object.assign({}, msg, {\n    statusCode: 400,\n    headers: { \"Content-Type\": \"application/json; charset=utf-8\" },\n    payload: { error: \"tenantKey is required\", code: \"LEGACY_GAME_TENANT_REQUIRED\" },\n  });\n  return [null, errMsg, errMsg, null];\n}\n\nconst record = {\n  id: gameId,\n  tenantKey,",
+        `${SERVER_OWNED_GAME_TENANT_PRECONDITION}\n\nconst record = {\n  id: gameId,\n  tenantKey,`,
         "combined create tenant precondition",
       );
       next = replaceOnce(
@@ -286,36 +322,7 @@ export function upgradeLegacyGameWriterFunction(nodeId, source) {
       );
       return next;
     }
-    let next = replaceOnce(
-      source,
-      "const record = {\n  id: gameId,\n  tenantKey: toStr(body.tenantKey) || null,",
-      "const tenantKey = toStr(body.tenantKey);\nif (!tenantKey) {\n  const errMsg = Object.assign({}, msg, {\n    statusCode: 400,\n    headers: { \"Content-Type\": \"application/json; charset=utf-8\" },\n    payload: { error: \"tenantKey is required\", code: \"LEGACY_GAME_TENANT_REQUIRED\" },\n  });\n  return [null, errMsg, errMsg, null];\n}\nconst expectedRevisionText = String(body.expectedRevision ?? \"\").trim();\nconst expectedRevision = /^\\d+$/.test(expectedRevisionText) ? Number(expectedRevisionText) : null;\nif (expectedRevisionText && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1)) {\n  const errMsg = Object.assign({}, msg, {\n    statusCode: 400,\n    headers: { \"Content-Type\": \"application/json; charset=utf-8\" },\n    payload: { error: \"expectedRevision has invalid format\", code: \"LEGACY_GAME_REVISION_INVALID\" },\n  });\n  return [null, errMsg, errMsg, null];\n}\n\nconst record = {\n  id: gameId,\n  tenantKey,",
-      "create tenant and revision precondition",
-    );
-    next = replaceOnce(
-      next,
-      "const queryFilter = paymentRef\n  ? {\n      $or: [\n        { \"metadata.paymentRef\": paymentRef },\n        { \"payment.paymentRef\": paymentRef },\n      ],\n    }\n  : { dedupeKey };",
-      "const queryFilter = {\n  tenantKey,\n  id: gameId,\n  revision: expectedRevision === null ? { $exists: false } : expectedRevision,\n  ...(paymentRef ? {\n    $or: [\n      { \"metadata.paymentRef\": paymentRef },\n      { \"payment.paymentRef\": paymentRef },\n    ],\n  } : { dedupeKey }),\n};",
-      "create identity revision filter",
-    );
-    next = replaceOnce(
-      next,
-      "    $push: {\n      \"audit.events\": {\n        $each: [auditEvent],\n        $slice: -AUDIT_MAX_EVENTS,\n      },\n    },",
-      "    $push: {\n      \"audit.events\": {\n        $each: [auditEvent],\n        $slice: -AUDIT_MAX_EVENTS,\n      },\n    },\n    $inc: { revision: 1 },",
-      "create revision increment",
-    );
-    next = replaceOnce(
-      next,
-      "    record,\n  ),",
-      "    record,\n    { revision: expectedRevision === null ? 1 : expectedRevision + 1 },\n  ),",
-      "create response revision",
-    );
-    return replaceOnce(
-      next,
-      "return [dbMsg, responseMsg, debugMsg, autojoinMsg];",
-      "dbMsg._createRevisionDebug = debugMsg.payload;\nreturn [dbMsg, null, null, null];",
-      "create acknowledgement gate",
-    );
+    return patchLegacyGameCreatePrerequisiteCasAck(patchVivaGameCreateTenantRevisionBase(source));
   }
   if (nodeId === IDS.cleanupPrepare) {
     let next = replaceOnce(

@@ -11,6 +11,7 @@ function runNodeRedFunction(file: string, msg: Record<string, unknown>) {
   };
   const env = {
     get(key: string) {
+      if (key === "PADLHUB_PLATFORM_TENANT_KEY") return "tenant-test";
       if (key === "VIVA_SERVICE_USERNAME") return "service@example.test";
       if (key === "VIVA_SERVICE_PASSWORD") return "test-password";
       return undefined;

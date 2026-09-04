@@ -8,10 +8,14 @@ game has been created, the current LK Games flow has no background process that
 updates `booking.roomId` and `booking.roomName`. The cabinet therefore continues
 to show the old court even though the provider exercise is already correct.
 
-The reconciliation graph in
+The release candidate built by
 `scripts/prepare_viva_game_projection_sync_candidate.mjs` adds a bounded,
-default-off worker to the existing `LK Games` tab. It does not add an HTTP route
-and it reuses the tab's existing MongoDB client.
+default-off worker to the existing `LK Games` tab and upgrades the exact
+`Prepare game upsert` function. The create contract reads the tenant only from
+`PADLHUB_PLATFORM_TENANT_KEY`, rejects a conflicting client tenant, binds the
+upsert query to that tenant, and increments a numeric `revision` on every
+successful write. It does not add an HTTP route and it reuses the tab's existing
+MongoDB client.
 
 ## Runtime behavior
 
@@ -62,8 +66,112 @@ failure.
 `VIVA_SERVICE_USERNAME`, `VIVA_SERVICE_PASSWORD`, and optional VivaCRM token
 endpoint/client settings used by the other service-token consumers.
 
-Changing the mode, importing the candidate, restarting Node-RED, or modifying
-production environment variables is a separate live-operation stage.
+The create contract is active as soon as the candidate is imported. If
+`PADLHUB_PLATFORM_TENANT_KEY` is missing or invalid, create/draft/confirm fails
+closed with `GAME_TENANT_CONFIG_INVALID`; a non-empty conflicting client value
+fails with `GAME_TENANT_MISMATCH`. The environment must therefore be verified
+before import even while the worker mode remains `OFF`.
+
+Changing the mode, importing the candidate, restarting Node-RED, modifying
+production environment variables, or applying a data migration is a separate
+live-operation stage.
+
+## Legacy tenant and revision migration
+
+Production discovery on 2026-09-04 found legacy `lk_games` rows with
+`tenantKey: null` and no numeric `revision`. The worker must not query or update
+those rows as though they already belonged to the configured tenant.
+
+`scripts/prepare_viva_game_projection_tenant_migration.mjs` creates a private,
+offline, dry-run-only plan from three private projected inputs:
+
+- Mongo game rows strictly limited to `_id`, status, tenant/revision state,
+  provider identity, slot identity, and timestamps;
+- Viva exercises fetched through the exact configured tenant and grouped by
+  date;
+- a reviewed read-only capture receipt for the tenant-bearing endpoint.
+
+The planner rejects unrecognized top-level or nested fields, including
+participant, phone, payment, roster, result, and room data, instead of accepting
+a broad production export. It accepts at most 1,000 games across at most 14
+days. A row is eligible only when it is active, both tenant and revision are
+legacy-null/missing, every present Viva exercise identity agrees, and exactly
+one active provider exercise matches exercise ID, studio, date, start time, and
+end time. The planned Mongo filter repeats the legacy tenant/revision state and
+the complete captured identity/concurrency state. The update is limited to the
+configured tenant, `revision: 1`, timestamps, a bounded audit event, and an
+operation marker; it carries literal `options: { upsert: false }`. Payment,
+roster, booking, result, and provider state are excluded.
+
+Example using already-created private projections:
+
+```bash
+npm run nodered:viva-game-projection-sync:migration-plan -- \
+  --games-file /absolute/private/games.json \
+  --provider-file /absolute/private/provider.json \
+  --provider-capture-receipt-file /absolute/private/provider-receipt.json \
+  --output-directory /absolute/private/migration-plan \
+  --tenant-key iSkq6G \
+  --expected-flow-sha256 <verified-live-flow-sha256> \
+  --expected-provider-receipt-sha256 <reviewed-receipt-sha256> \
+  --date-from 2026-09-04 \
+  --date-to 2026-09-11 \
+  --operation-id viva-projection-migration-20260904
+```
+
+`PADLHUB_PLATFORM_TENANT_KEY` must be set independently from the verified
+runtime configuration and must equal `--tenant-key`. The expected flow hash
+must come from the frozen live-flow readback and must equal the Mongo
+projection's hash. All three inputs must be current-user-owned, single-link
+regular `0600` files and are opened once; planning and hashes use the same
+bytes. The output parent must be private and current-user-owned. The output
+directory is created without replacement as `0700` and contains `0600`
+`plan.json`, `summary.json`, and a final `READY` marker. Consumers must reject a
+directory without `READY` or whose marker does not equal `summary.planSha256`.
+The summary binds the plan, both projections, and the capture receipt by SHA-256
+and always reports `writesPerformed: 0`. The planner has no apply mode. Mongo
+`_id` values in the private plan use canonical Extended JSON
+`{ "$oid": "..." }`; a future executor must parse them explicitly and must not
+pass an unchecked JSON object to the driver.
+
+The Mongo projection metadata must declare format version 1, source kind
+`live-147-mongo-projection`, host `lk-primary-147`, exact source-flow SHA-256,
+database `games`, collection `lk_games`, and capture time. The Viva projection
+must declare format version 1, source kind `viva-end-user-tenant-projection`,
+exact tenant, and capture time. Its separate read-once receipt must cover every
+requested date exactly once, bind each rows array by SHA-256, report a complete
+HTTP 200 array response, and use the exact tenant-bearing path
+`/end-user/api/v1/{tenant}/exercises?date={date}`. Projected provider rows must
+carry the capture tool's reviewed normalized `active: true`; contradictory IDs,
+studios, cancellation flags, and lifecycle states are rejected. The reviewed
+receipt SHA is supplied independently. Both projections expire after 30 minutes
+and may be at most five minutes ahead of the planner clock. These labels and
+hashes are validation inputs rather than a remote signature; runtime-tenant,
+reviewed receipt, and frozen flow-hash comparisons are all mandatory before the
+dry-run plan is reviewable.
+
+Before a later live migration, freeze the exact flow and database identities,
+prove a current backup and restore path, create the private projections without
+exporting credentials or PII, review every skip reason, and prepare a separate
+CAS executor plus rollback rehearsal. Apply requires its own live-data approval.
+The cutover must hold a hard maintenance/write fence across create, draft,
+confirm, PATCH, cleanup, split, roster, result, and every other `lk_games`
+writer from snapshot capture through apply, candidate import/restart, and final
+postchecks. Repeat non-overlapping bounded plans and reviewed CAS batches until
+the inventory reports zero active legacy rows across the complete identity/date
+scope reachable by create, draft, and confirm; a single selected window is not
+a sufficient release gate. Every row skipped by provider or identity validation
+must remain fenced and be explicitly quarantined or resolved before ingress can
+reopen. Postchecks must also prove zero duplicate game identities across legacy
+and tenant-bound rows, zero remaining active reachable legacy rows, and non-zero
+provider-confirmed tenant-bound rows. If complete reachability cannot be proved,
+keep the writers fenced.
+
+Recovery must keep that fence closed and either finish the new create contract
+or restore the exact data backup before restoring the old `08c2...` flow.
+Reopening ingress on the old flow with migrated rows is forbidden because it can
+write a null tenant without resetting revision. Start the worker in `SHADOW`;
+`ENFORCE` still requires separate approval.
 
 ## Candidate preparation
 
@@ -78,12 +186,14 @@ npm run nodered:viva-game-projection-sync:candidate -- \
 ```
 
 The builder requires a verified `live-147` source younger than 30 minutes,
-checks the exact `LK Games` tab and MongoDB anchor, preserves every existing node
-and HTTP route byte-for-byte at the JSON-object level, refuses node-ID
+checks the exact `LK Games` tab, MongoDB anchor, and live create-function
+preimage, changes only the create node's `func` field, preserves every other
+existing node and every HTTP route at the JSON-object level, refuses node-ID
 collisions, and writes private `0600` candidate/report files outside the repo.
 
 Before any import, compare the report and full candidate with that same frozen
-source, validate the target graph, and prepare a backup and rollback path. Begin
-runtime acceptance in `SHADOW`; `ENFORCE` requires separate approval after the
-shadow report is reviewed. Source tests and an offline candidate do not prove a
+source, validate the target graph, verify the server tenant, complete the legacy
+cutover gate above, and prepare a backup and rollback path. Begin runtime
+acceptance in `SHADOW`; `ENFORCE` requires separate approval after the shadow
+report is reviewed. Source tests and an offline candidate do not prove a
 production import, provider read, MongoDB write, or cabinet rendering.

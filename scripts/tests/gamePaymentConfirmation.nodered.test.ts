@@ -14,6 +14,7 @@ function runFunction(
   };
   const env = {
     get(name: string) {
+      if (name === "PADLHUB_PLATFORM_TENANT_KEY") return "tenant-1";
       if (name === "VIVA_SERVICE_USERNAME") return "service@example.test";
       if (name === "VIVA_SERVICE_PASSWORD") return "test-password";
       return undefined;

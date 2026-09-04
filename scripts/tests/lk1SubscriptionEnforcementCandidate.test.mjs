@@ -237,6 +237,7 @@ test("unified LK1 contract pins unbound router and Piter amendments until PROD i
     [
       "91dded2dc8cfebe4",
       "c165e43eba668c25",
+      "e656cff36a8cd210",
       "f8679e53edadc39b",
       "lk_subscription_booking_router_20260804",
     ],
@@ -258,6 +259,8 @@ test("unified LK1 contract pins unbound router and Piter amendments until PROD i
   }
   assert.equal(amendments.get("lk_subscription_booking_router_20260804").reason,
     "DEV_ROUTER_AMENDMENT_NOT_REBOUND");
+  assert.equal(amendments.get("e656cff36a8cd210").reason,
+    "GAME_TENANT_CONTRACT_NOT_COMPOSED");
   for (const id of ["91dded2dc8cfebe4", "c165e43eba668c25", "f8679e53edadc39b"]) {
     assert.equal(amendments.get(id).reason, "PITER_ATOMIC_SALES_NOT_COMPOSED");
   }

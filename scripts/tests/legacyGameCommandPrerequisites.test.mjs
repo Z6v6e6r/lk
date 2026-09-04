@@ -11,7 +11,14 @@ import {
   parseLegacyPrerequisiteArgs,
   verifyIndexes,
 } from "../migrate_legacy_game_command_prerequisites.mjs";
-import { buildLegacyGameCommandPrerequisiteCandidate } from "../patch_live_games_command_prerequisites.mjs";
+import {
+  buildLegacyGameCommandPrerequisiteCandidate,
+  patchLegacyGameCreatePrerequisiteCasAck,
+  PREREQUISITE_GAME_CREATE_FUNC_SHA256,
+  upgradeLegacyGameWriterFunction,
+} from "../patch_live_games_command_prerequisites.mjs";
+import { patchVivaGameProjectionCreateContract } from "../prepare_viva_game_projection_sync_candidate.mjs";
+import { BASE_GAME_CREATE_FUNC_SHA256, patchVivaGameCreateTenantRevisionBase } from "../lib/vivaGameCreateTenantRevisionContract.mjs";
 import {
   buildLegacyResultId,
   LEGACY_COMMAND_COLLECTIONS,
@@ -23,6 +30,23 @@ const registry = JSON.parse(fs.readFileSync("scripts/legacy_game_revision_writer
 const reconciliation = JSON.parse(fs.readFileSync("scripts/legacy_game_command_live_reconciliation.json", "utf8"));
 const liveFlowPath = process.env.LEGACY_COMMAND_LIVE_FLOW_FIXTURE;
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
+
+test("create prerequisite upgrade derives tenant from server configuration", () => {
+  const liveCreate = fs.readFileSync("scripts/tests/fixtures/viva_game_projection_sync/live_create_08c2.js", "utf8");
+  const upgraded = upgradeLegacyGameWriterFunction("e656cff36a8cd210", liveCreate);
+  const projectionBase = patchVivaGameProjectionCreateContract(liveCreate);
+  assert.equal(projectionBase, patchVivaGameCreateTenantRevisionBase(liveCreate));
+  assert.equal(sha256(projectionBase), BASE_GAME_CREATE_FUNC_SHA256);
+  assert.equal(patchVivaGameCreateTenantRevisionBase(projectionBase), projectionBase);
+  assert.equal(upgraded, patchLegacyGameCreatePrerequisiteCasAck(projectionBase));
+  assert.equal(sha256(upgraded), PREREQUISITE_GAME_CREATE_FUNC_SHA256);
+  assert.match(upgraded, /env\.get\("PADLHUB_PLATFORM_TENANT_KEY"\)/);
+  assert.match(upgraded, /GAME_TENANT_CONFIG_INVALID/);
+  assert.match(upgraded, /GAME_TENANT_MISMATCH/);
+  assert.doesNotMatch(upgraded, /LEGACY_GAME_TENANT_REQUIRED/);
+  assert.equal((upgraded.match(/\$inc: \{ revision: 1 \}/g) || []).length, 1);
+  assert.throws(() => patchLegacyGameCreatePrerequisiteCasAck(`${projectionBase}\n// drift`), /base preimage mismatch/);
+});
 
 test("PATCH writer registry separates the active live preimage from the combined tracked candidate", () => {
   const patchWriter = registry.writers.find((writer) => writer.nodeId === "591234d213742276");
