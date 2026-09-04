@@ -24,8 +24,12 @@ const lockPath = String(process.env.PADLHUB_CUTOVER_FENCE_LOCK_PATH || "");
 const token = String(process.env.PADLHUB_CUTOVER_FENCE_TOKEN || "");
 const receiptPath = path.resolve(args.get("--receipt") || "");
 const releasePath = path.resolve(args.get("--release-request") || "");
+const receiptParent = path.dirname(receiptPath);
+const parentStat = fs.lstatSync(receiptParent);
 if (!Number.isSafeInteger(fd) || fd < 3 || lockPath !== "/run/lock/padlhub-viva-game-projection-cutover.lock"
   || token.length < 32 || !path.isAbsolute(receiptPath) || !path.isAbsolute(releasePath)
+  || path.dirname(releasePath) !== receiptParent || !parentStat.isDirectory() || parentStat.isSymbolicLink()
+  || fs.realpathSync(receiptParent) !== receiptParent || parentStat.uid !== process.getuid() || (parentStat.mode & 0o077) !== 0
   || fs.existsSync(receiptPath) || receiptPath === releasePath) fail("Fence guardian inputs are invalid");
 const stat = fs.fstatSync(fd);
 const lockStat = fs.statSync(lockPath);
@@ -49,6 +53,8 @@ try {
   fs.writeFileSync(descriptor, canonicalJson(receipt));
   fs.fsyncSync(descriptor);
 } finally { fs.closeSync(descriptor); }
+const parentDescriptor = fs.openSync(receiptParent, fs.constants.O_RDONLY);
+try { fs.fsyncSync(parentDescriptor); } finally { fs.closeSync(parentDescriptor); }
 
 process.on("SIGHUP", () => {});
 process.on("SIGINT", () => {});
@@ -62,9 +68,12 @@ while (true) {
       || releaseStat.uid !== process.getuid() || (releaseStat.mode & 0o077) !== 0) fail("Fence release request is not private");
     let release;
     try { release = JSON.parse(fs.readFileSync(releasePath, "utf8")); } catch { fail("Fence release request is invalid"); }
+    const authorizedAt = Date.parse(release?.authorizedAt);
+    const nowMs = Date.now();
     if (release?.formatVersion !== 1 || release?.kind !== "viva-game-projection-fence-release-request"
       || release?.state !== "RELEASE_AUTHORIZED" || release?.confirmation !== RELEASE_CONFIRMATION
-      || release?.fenceTokenSha256 !== tokenSha256 || !Number.isFinite(Date.parse(release?.authorizedAt))) {
+      || release?.fenceTokenSha256 !== tokenSha256 || !Number.isFinite(authorizedAt)
+      || authorizedAt > nowMs + 60_000 || nowMs - authorizedAt > 5 * 60_000) {
       fail("Fence release request does not authorize this exact guardian");
     }
     process.exit(0);

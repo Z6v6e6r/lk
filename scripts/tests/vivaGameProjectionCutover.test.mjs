@@ -10,6 +10,7 @@ import { BSON, ObjectId } from "mongodb";
 import {
   assertMongoWriteBarrier,
   installMongoWriteBarrier,
+  restorePreviousMongoValidationOptions,
 } from "../lib/vivaGameProjectionMongoWriteBarrier.mjs";
 import {
   buildMongoTargetIdentity,
@@ -314,6 +315,7 @@ test("migration executor decodes canonical EJSON ObjectId and rejects upsert or 
 
 test("Mongo write barrier proves application denial and migration-only bypass", async () => {
   let state = { validator: {}, validationLevel: "strict", validationAction: "error" };
+  let preparation = null;
   const session = () => ({
     startTransaction() {},
     async abortTransaction() {},
@@ -356,7 +358,9 @@ test("Mongo write barrier proves application denial and migration-only bypass", 
     fenceTokenSha256,
     cutoverPlanSha256: "6".repeat(64),
     installedAt: nowIso,
+    beforeInstall: async (value) => { preparation = value; },
   });
+  assert.equal(preparation.state, "PREPARED_BEFORE_COLLMOD");
   assert.equal(receipt.applicationWriteProbeRejected, true);
   assert.equal(receipt.migrationBypassProbeAborted, true);
   await assertMongoWriteBarrier(migrationDb, receipt, {
@@ -364,6 +368,12 @@ test("Mongo write barrier proves application denial and migration-only bypass", 
     cutoverPlanSha256: "6".repeat(64),
     mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
   });
+  await restorePreviousMongoValidationOptions(migrationDb, receipt, {
+    fenceTokenSha256,
+    cutoverPlanSha256: "6".repeat(64),
+    mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
+  });
+  assert.deepEqual(state, { validator: {}, validationLevel: "strict", validationAction: "error" });
 });
 
 test("migration apply and restore require exact CAS readback and preserve the full BSON preimage", async () => {

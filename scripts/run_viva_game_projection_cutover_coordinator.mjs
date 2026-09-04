@@ -190,6 +190,7 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
     || postcheckOutputDirectory !== execution.postcheckOutputDirectory
     || barrierReceiptPath !== execution.mongoWriteBarrierReceiptOutputPath
     || fs.existsSync(coordinatorReportPath) || fs.existsSync(applyIndexPath) || fs.existsSync(barrierReceiptPath)
+    || fs.existsSync(`${barrierReceiptPath}.prepared`)
     || fs.readdirSync(postcheckOutputDirectory).length !== 0) {
     fail("Cutover output paths must be new, canonical, and private");
   }
@@ -220,6 +221,7 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
   let candidatePublished = false;
   let applyIndexArtifact = null;
   let barrierArtifact = null;
+  let barrierPreparationArtifact = null;
   let barrierInstallAttempted = false;
   let appliedItems = [];
   let inFlightPlanSha256 = null;
@@ -251,6 +253,10 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
           replicaSetName: plan.mongoTarget.replicaSetName,
           fenceTokenSha256: plan.writerFence.fenceTokenSha256,
           cutoverPlanSha256: execution.cutoverPlanSha256,
+          beforeInstall: async (preparation) => {
+            barrierPreparationArtifact = writePrivate(`${barrierReceiptPath}.prepared`, preparation);
+            coordinatorJournal.append("MONGO_WRITE_BARRIER_PREPARED", { receiptSha256: barrierPreparationArtifact.sha256 });
+          },
         });
       barrierArtifact = writePrivate(barrierReceiptPath, barrierReceipt);
       coordinatorJournal.append("MONGO_WRITE_BARRIER_HELD", { receiptSha256: barrierArtifact.sha256 });
@@ -420,6 +426,7 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
         inFlightPlanOutcome: error?.migrationResult?.outcome || "UNKNOWN_OR_NOT_STARTED",
         mongoWriteBarrierState: barrierArtifact ? "HELD" : (barrierInstallAttempted ? "INSTALL_OUTCOME_UNKNOWN_KEEP_INGRESS_BLOCKED" : "NOT_INSTALLED"),
         mongoWriteBarrierReceiptSha256: barrierArtifact?.sha256 || null,
+        mongoWriteBarrierPreparationSha256: barrierPreparationArtifact?.sha256 || null,
         fenceGuardianReceiptSha256: guardianReceiptSha256,
         coordinatorAttemptId,
         runtimeStopped,

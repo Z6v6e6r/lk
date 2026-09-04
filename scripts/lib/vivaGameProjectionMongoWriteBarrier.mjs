@@ -60,6 +60,7 @@ export async function installMongoWriteBarrier({
   fenceTokenSha256,
   cutoverPlanSha256,
   installedAt = new Date().toISOString(),
+  beforeInstall = async () => {},
 }) {
   const migrationHello = await migrationClient.db("admin").command({ hello: 1 });
   const applicationHello = await applicationClient.db("admin").command({ hello: 1 });
@@ -76,9 +77,28 @@ export async function installMongoWriteBarrier({
   const applicationDb = applicationClient.db("games");
   const previous = await readMongoWriteBarrierState(db);
   const validator = buildMongoWriteBarrierValidator(fenceTokenSha256);
+  const barrierValidatorSha256 = canonicalEjsonSha256(validator);
+  const previousValidationOptionsEjson = BSON.EJSON.stringify(previous, null, 0, { relaxed: false });
+  const previousValidationOptionsSha256 = canonicalEjsonSha256(previous);
+  await beforeInstall({
+    formatVersion: 1,
+    kind: "viva-game-projection-mongo-write-barrier-preparation",
+    state: "PREPARED_BEFORE_COLLMOD",
+    database: "games",
+    collection: "lk_games",
+    fenceTokenSha256,
+    cutoverPlanSha256,
+    mongoTargetIdentitySha256: target.targetIdentitySha256,
+    applicationConnectionFingerprint,
+    migrationConnectionFingerprint,
+    replicaSetName,
+    barrierValidatorSha256,
+    previousValidationOptionsEjson,
+    previousValidationOptionsSha256,
+    preparedAt: installedAt,
+  });
   await db.command({ collMod: "lk_games", validator, validationLevel: "strict", validationAction: "error" });
   const installed = await readMongoWriteBarrierState(db);
-  const barrierValidatorSha256 = canonicalEjsonSha256(validator);
   if (canonicalEjsonSha256(installed.validator) !== barrierValidatorSha256
     || installed.validationLevel !== "strict" || installed.validationAction !== "error") {
     fail("Mongo write barrier did not install exactly");
@@ -135,8 +155,8 @@ export async function installMongoWriteBarrier({
     migrationConnectionFingerprint,
     replicaSetName,
     barrierValidatorSha256,
-    previousValidationOptionsEjson: BSON.EJSON.stringify(previous, null, 0, { relaxed: false }),
-    previousValidationOptionsSha256: canonicalEjsonSha256(previous),
+    previousValidationOptionsEjson,
+    previousValidationOptionsSha256,
     applicationWriteProbeRejected,
     migrationBypassProbeAborted,
     installedAt,
@@ -169,4 +189,29 @@ export function hashFullCollectionDocuments(documents) {
   }).sort((left, right) => left.mongoId.localeCompare(right.mongoId));
   if (new Set(rows.map(({ mongoId }) => mongoId)).size !== rows.length) fail("Full backup contains duplicate Mongo identities");
   return { documentCount: rows.length, fullCollectionStateSha256: sha256(canonicalJson(rows)) };
+}
+
+export async function restorePreviousMongoValidationOptions(db, receipt, expected) {
+  await assertMongoWriteBarrier(db, receipt, expected);
+  let previous;
+  try { previous = BSON.EJSON.parse(receipt.previousValidationOptionsEjson, { relaxed: false }); } catch {
+    fail("Mongo write-barrier receipt has invalid previous validation options");
+  }
+  if (canonicalEjsonSha256(previous) !== receipt.previousValidationOptionsSha256
+    || !isObject(previous.validator)
+    || !["off", "strict", "moderate"].includes(previous.validationLevel)
+    || !["error", "warn"].includes(previous.validationAction)) {
+    fail("Mongo write-barrier previous validation options are invalid");
+  }
+  await db.command({
+    collMod: "lk_games",
+    validator: previous.validator,
+    validationLevel: previous.validationLevel,
+    validationAction: previous.validationAction,
+  });
+  const restored = await readMongoWriteBarrierState(db);
+  if (canonicalEjsonSha256(restored) !== receipt.previousValidationOptionsSha256) {
+    fail("Mongo previous validation options were not restored exactly");
+  }
+  return restored;
 }
