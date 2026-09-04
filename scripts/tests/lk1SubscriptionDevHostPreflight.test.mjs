@@ -5,7 +5,7 @@ import {
   validateHostPreflightEvidence,
 } from "../validate_lk1_subscription_dev_host_preflight.mjs";
 
-const NOW = new Date("2026-09-04T09:30:00Z");
+const NOW = new Date("2026-09-04T09:40:00Z");
 const clone = (value) => structuredClone(value);
 
 test("fresh host preflight proves stopped isolated resources without write authority", () => {
@@ -33,6 +33,6 @@ test("host preflight rejects stale, wrong-host, active, listening, mutated, or a
   }
   assert.throws(() => validateHostPreflightEvidence(
     checkedHostPreflightEvidence,
-    new Date("2026-09-04T10:23:21Z"),
+    new Date("2026-09-04T10:35:20Z"),
   ), /stale/);
 });
