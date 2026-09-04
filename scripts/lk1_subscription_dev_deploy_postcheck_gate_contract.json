@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "environment": "DEV",
-  "state": "PREPARED_SOURCE_ONLY_BLOCKED",
+  "state": "PREPARED_SOURCE_ONLY_READY_FOR_STOPPED_INSTALL_REVIEW",
   "productionBindingState": "UNBOUND_AFTER_ROUTER_AMENDMENT",
   "releaseBinding": {
     "sourceCommit": "eca4e1a17d7b2d84489fc9e8129a2eee29c8f3a0",
@@ -24,14 +24,14 @@
     "ingressState": "UNBOUND"
   },
   "runtimeBinding": {
-    "state": "BLOCKED_TARGET_MISMATCH",
-    "candidateCupApiBase": "http://127.0.0.1:3036/api",
+    "state": "SOURCE_READY_HOST_RUNTIME_NOT_RUN",
+    "candidateCupApiBase": "http://127.0.0.1:3037/api",
     "dedicatedCupListener": "127.0.0.1:3037",
-    "cupMatchesDedicatedListener": false,
+    "cupMatchesDedicatedListener": true,
     "candidateMongo": {
       "host": "127.0.0.1",
       "port": 27030,
-      "database": "dev-lk1-subscription-canary",
+      "database": "lk1_subscription_dev_fixture",
       "replicaSet": "rs0",
       "credentialFree": true
     },
@@ -40,7 +40,10 @@
       "port": 27030,
       "database": "lk1_subscription_dev_fixture"
     },
-    "mongoMatchesProvisionedDatabase": false,
+    "mongoMatchesProvisionedDatabase": true,
+    "completeManagedContractSourceImplemented": true,
+    "localPhysicalVerified": true,
+    "hostRuntimeExposed": false,
     "completeManagedContractExposed": false
   },
   "productionIsolation": {
@@ -53,13 +56,16 @@
     "crossEnvironmentWriteBudget": 0
   },
   "predeploy": {
-    "state": "NOT_RUN",
+    "state": "PASS_AT_CAPTURE",
     "freshEvidenceRequired": true,
+    "capturedAt": "2026-09-04T09:23:20Z",
+    "maximumAgeSeconds": 3600,
+    "mustRefreshImmediatelyBeforeInstall": true,
     "checks": [
       "FROZEN_REPOSITORY_IDENTITY",
       "IMMUTABLE_CANDIDATE_VERIFIED",
       "CURRENT_HOST_IDENTITY",
-      "SYSTEMD_LOAD_CREDENTIAL_SUPPORTED",
+      "AUTHORIZATION_TRANSPORT_SUPPORTED",
       "DEDICATED_UNITS_DISABLED_INACTIVE",
       "RESERVED_LISTENERS_ABSENT",
       "AUTHORIZATION_INPUTS_ABSENT",
@@ -168,12 +174,7 @@
     "deleteData": false,
     "requiresSeparateAuthorization": true
   },
-  "blockers": [
-    "CANDIDATE_CUP_REUSES_FORBIDDEN_SHARED_3036",
-    "CANDIDATE_MONGO_DATABASE_DIFFERS_FROM_PROVISIONED_FIXTURE",
-    "COMPLETE_MANAGED_RUNTIME_NOT_EXPOSED",
-    "FRESH_HOST_PREFLIGHT_NOT_RUN"
-  ],
+  "blockers": [],
   "authority": {
     "hostRead": false,
     "hostInstall": false,

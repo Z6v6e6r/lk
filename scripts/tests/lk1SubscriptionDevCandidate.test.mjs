@@ -70,7 +70,7 @@ const endpointInventorySha256 = (flow) => {
   visit(flow);
   return sha256(JSON.stringify(inventory));
 };
-const DEV_API_BASE = "http://127.0.0.1:3036/api";
+const DEV_API_BASE = "http://127.0.0.1:3037/api";
 const DEV_INSTALL_TARGET = Object.freeze({
   sourceHost: "lk-reserve-89",
   sourceHostname: "89-108-64-209.cloudvps.regruhosting.ru",
@@ -86,13 +86,13 @@ const trustedBindings = () => ({
   PROD: "https://padlhub.su/api",
   DEV_INSTALL_TARGET,
   DEV_ENDPOINTS: {
-    cupApiBase: "http://127.0.0.1:3036/api",
+    cupApiBase: "http://127.0.0.1:3037/api",
     vivaApiBase: "http://127.0.0.1:3038",
     serv2Base: "http://127.0.0.1:3038/serv2",
     tokenUrl: "http://127.0.0.1:3039/realms/dev/protocol/openid-connect/token",
   },
   DEV_MONGO: {
-    host: "127.0.0.1", port: 27030, database: "dev-lk1-subscription-canary",
+    host: "127.0.0.1", port: 27030, database: "lk1_subscription_dev_fixture",
     replicaSet: "rs0", credentialFree: true,
   },
 });
@@ -106,7 +106,7 @@ function fixture() {
   const finalizePreimage = "finalize source";
   const mongoClient = {
     id: "mongo-client-dev", type: "mongodb4-client",
-    uri: "mongodb://127.0.0.1:27030/dev-lk1-subscription-canary",
+    uri: "mongodb://127.0.0.1:27030/lk1_subscription_dev_fixture",
     advanced: "{}", uriTabActive: "tab-uri-advanced",
   };
   const httpRequest = {
@@ -197,8 +197,11 @@ function fixture() {
     },
     runtime: {
       apiBase: DEV_API_BASE,
+      completeManagedContractSourceImplemented: true,
+      localPhysicalVerified: true,
+      hostRuntimeExposed: false,
       completeManagedContractExposed: false,
-      reason: "Source-only binding; DEV services are stopped and no runtime contract was exercised",
+      reason: "Source implemented and locally loopback-verified; DEV services remain stopped and host runtime was not exercised",
     },
     dependencies: {
       wholeFlowIsolationVerified: true,
@@ -224,7 +227,7 @@ function fixture() {
         preimageSha256: sha256(JSON.stringify(mongoClient)),
         effectiveIdentity: {
           mode: "uri", protocol: "mongodb", host: "127.0.0.1", port: 27030,
-          database: "dev-lk1-subscription-canary", credentialsPresent: false, optionsPresent: false,
+          database: "lk1_subscription_dev_fixture", credentialsPresent: false, optionsPresent: false,
           uriTabActive: "tab-uri-advanced",
         },
         fixtureOnly: true,
@@ -358,7 +361,7 @@ test("DEV builder patches only frozen function bodies and emits a separate diges
     flow.map(({ id, z, wires }) => ({ id, z, wires })),
   );
   assert.match(result.candidate.find((node) => node.id === "router-dev").func,
-    /DEV: "http:\/\/127\.0\.0\.1:3036\/api"/);
+    /DEV: "http:\/\/127\.0\.0\.1:3037\/api"/);
   assert.match(result.candidate.find((node) => node.id === "router-dev").func,
     /MANAGED_RUNTIME_EXPECTED_ENVIRONMENT = "DEV"/);
   assert.doesNotMatch(result.candidate.find((node) => node.id === "router-dev").func,
@@ -380,7 +383,7 @@ test("actual reachable sources bind only to the approved DEV fixture origins", (
     assert.match(source, /successUrl: null/);
     assert.match(source, /failUrl: null/);
   }
-  assert.match(combined, /http:\/\/127\.0\.0\.1:3036\/api/);
+  assert.match(combined, /http:\/\/127\.0\.0\.1:3037\/api/);
   assert.match(combined, /http:\/\/127\.0\.0\.1:3038/);
   assert.match(combined, /http:\/\/127\.0\.0\.1:3039/);
 });
@@ -794,6 +797,9 @@ test("checked-in DEV binding is source-only and never claims runtime or install 
   assert.equal(binding.environmentIdentityVerified, false);
   assert.equal(binding.target.present, true);
   assert.equal(binding.runtime.completeManagedContractExposed, false);
+  assert.equal(binding.runtime.completeManagedContractSourceImplemented, true);
+  assert.equal(binding.runtime.localPhysicalVerified, true);
+  assert.equal(binding.runtime.hostRuntimeExposed, false);
   assert.equal(binding.dependencies.mongoBindingVerifiedDevOnly, true);
   assert.equal(binding.endpointAudit.verifiedDevOnly, true);
   assert.equal(fs.existsSync(path.resolve(

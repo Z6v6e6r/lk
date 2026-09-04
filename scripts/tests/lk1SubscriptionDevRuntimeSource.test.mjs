@@ -7,6 +7,8 @@ import { execFileSync } from "node:child_process";
 import { buildRuntimeSourceBundle } from "../build_lk1_subscription_dev_runtime_source.mjs";
 import {
   FixtureRuntimeError,
+  createFixtureState,
+  createFixtureServer,
   handleFixtureRequest,
   loadFixtureConfig,
   readAuthorizationCredential,
@@ -34,6 +36,21 @@ const clone = (value) => JSON.parse(JSON.stringify(value));
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 
 function fixtureConfig() {
+  const managedTarget = (role, startsAt) => ({
+    targetId: `fixture-target-${role.toLowerCase()}`,
+    stationId: "fixture-station-piter",
+    eventTypeId: "fixture-event-open-game",
+    productTypeId: "fixture-product-type-padel",
+    durationMinutes: 90,
+    startsAt,
+  });
+  const money = {
+    currency: "RUB",
+    basePriceMinor: 400000,
+    discountMinor: 400000,
+    surchargeMinor: 0,
+    finalPriceMinor: 0,
+  };
   return {
     schemaVersion: 1,
     environment: "DEV",
@@ -81,6 +98,9 @@ function fixtureConfig() {
         instanceRevision: 7,
         instanceState: "ACTIVE",
         canaryAllowed: true,
+        managedTarget: managedTarget("A", "2026-09-12T10:00:00.000Z"),
+        usageUnits: 1,
+        money,
       },
       B: {
         clientSubscriptionId: "fixture-client-subscription-b",
@@ -92,6 +112,9 @@ function fixtureConfig() {
         instanceRevision: 8,
         instanceState: "PENDING_ACTIVATION",
         canaryAllowed: true,
+        managedTarget: managedTarget("B", "2026-09-12T12:00:00.000Z"),
+        usageUnits: 1,
+        money,
       },
       CONTROL: {
         clientSubscriptionId: "fixture-client-subscription-control",
@@ -103,20 +126,18 @@ function fixtureConfig() {
         instanceRevision: 9,
         instanceState: "ACTIVE",
         canaryAllowed: false,
+        managedTarget: managedTarget("CONTROL", "2026-09-12T14:00:00.000Z"),
+        usageUnits: 1,
+        money,
       },
     },
   };
 }
 
-function installedIdentityEnv(role = "cup") {
-  const units = {
-    cup: "lk1-subscription-dev-cup.service",
-    provider: "lk1-subscription-dev-provider-fixture.service",
-    identity: "lk1-subscription-dev-identity-fixture.service",
-    nodered: "lk1-subscription-dev-nodered.service",
-  };
+function installedIdentityEnv() {
   return {
-    CREDENTIALS_DIRECTORY: `/run/credentials/${units[role]}`,
+    LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE:
+      "/srv/lk1-subscription-dev/authorization/service-start.approved",
     LK1_SUBSCRIPTION_DEV_INSTALLED_SOURCE_COMMIT: "1".repeat(40),
     LK1_SUBSCRIPTION_DEV_RUNTIME_MANIFEST_SHA256: "2".repeat(64),
   };
@@ -135,7 +156,7 @@ function startAuthorization() {
   };
 }
 
-function request(config, role, method, pathname, subjectRole, body = undefined) {
+function request(config, role, method, pathname, subjectRole, body = undefined, state = null, extraHeaders = {}) {
   const subject = subjectRole ? config.subjects[subjectRole] : null;
   return handleFixtureRequest({
     role,
@@ -145,9 +166,10 @@ function request(config, role, method, pathname, subjectRole, body = undefined) 
     headers: subject ? {
       authorization: subject.auth,
       "x-subscriptions-integration-token": config.integrationToken,
+      ...extraHeaders,
     } : {},
     body,
-  }, config);
+  }, config, state);
 }
 
 function build() {
@@ -205,12 +227,12 @@ test("fixture config rejects non-fixture, ambiguous, out-of-range, and expanded 
   }
 });
 
-test("CLI self-check is inert and service mode requires validated systemd credential transport", () => {
+test("CLI self-check is inert and service mode requires validated root-owned authorization transport", () => {
   const selfCheck = validateFixtureCli(["--self-check"]);
   assert.equal(selfCheck.mode, "SELF_CHECK");
   assert.deepEqual(selfCheck.ports, { cup: 3037, provider: 3038, identity: 3039 });
   assert.deepEqual(selfCheck.authorizationRoles, ["cup", "provider", "identity", "nodered"]);
-  assert.equal(selfCheck.authorizationTransport, "SYSTEMD_LOAD_CREDENTIAL");
+  assert.equal(selfCheck.authorizationTransport, "ROOT_OWNED_GROUP_READ_ONLY_FILE");
   assert.throws(
     () => validateFixtureCli(["--role", "cup"], {}, () => {
       throw new FixtureRuntimeError("SERVICE_START_AUTHORIZATION_INVALID", "blocked", 78);
@@ -290,7 +312,7 @@ test("start authorization binds role, installed commit, manifest, and a one-hour
   assert.throws(
     () => validateStartAuthorization(
       "cup",
-      { ...env, CREDENTIALS_DIRECTORY: "/private/tmp/fabricated-credential" },
+      { ...env, LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE: "/private/tmp/fabricated-credential" },
       NOW,
       () => JSON.stringify(authorization),
     ),
@@ -298,45 +320,44 @@ test("start authorization binds role, installed commit, manifest, and a one-hour
   );
 });
 
-test("credential reader requires the exact root-owned read-only systemd mount", () => {
-  const directory = "/run/credentials/lk1-subscription-dev-cup.service";
+test("credential reader requires the exact root-owned group-read-only authorization file", () => {
+  const directory = "/srv/lk1-subscription-dev/authorization";
   const credential = `${directory}/service-start.approved`;
   const directoryStat = {
-    uid: 997,
-    mode: 0o500,
+    uid: 0,
+    gid: 997,
+    mode: 0o750,
     isDirectory: () => true,
     isFile: () => false,
     isSymbolicLink: () => false,
   };
-  const rootStat = { ...directoryStat, uid: 0, mode: 0o755 };
+  const srvStat = { ...directoryStat, gid: 0, mode: 0o755 };
+  const appRootStat = { ...directoryStat, gid: 0, mode: 0o755 };
   const fileStat = {
-    uid: 997,
-    mode: 0o400,
+    uid: 0,
+    gid: 997,
+    mode: 0o440,
     isDirectory: () => false,
     isFile: () => true,
     isSymbolicLink: () => false,
   };
   const fakeFs = {
     lstatSync: (target) => {
-      if (target === "/run/credentials") return rootStat;
+      if (target === "/srv") return srvStat;
+      if (target === "/srv/lk1-subscription-dev") return appRootStat;
       if (target === directory) return directoryStat;
       if (target === credential) return fileStat;
       throw new Error(`unexpected lstat ${target}`);
     },
     realpathSync: (target) => target,
-    readFileSync: (target) => target === "/proc/self/mountinfo"
-      ? `42 31 0:50 / ${directory} ro,nosuid,nodev - ramfs ramfs ro\n`
-      : `${JSON.stringify(startAuthorization())}\n`,
+    readFileSync: () => `${JSON.stringify(startAuthorization())}\n`,
   };
-  assert.equal(JSON.parse(readAuthorizationCredential(directory, fakeFs)).environment, "DEV");
+  assert.equal(JSON.parse(readAuthorizationCredential(credential, fakeFs)).environment, "DEV");
 
   for (const mutate of [
-    (value) => { value.lstatSync = (target) => target === "/run/credentials"
-      ? { ...rootStat, uid: 501 }
+    (value) => { value.lstatSync = (target) => target === "/srv"
+      ? { ...srvStat, uid: 501 }
       : fakeFs.lstatSync(target); },
-    (value) => { value.readFileSync = (target) => target === "/proc/self/mountinfo"
-      ? `42 31 0:50 / ${directory} rw,nosuid,nodev - tmpfs tmpfs rw\n`
-      : fakeFs.readFileSync(target); },
     (value) => { value.realpathSync = (target) => target === directory
       ? "/private/tmp/forged-credentials"
       : target; },
@@ -346,11 +367,17 @@ test("credential reader requires the exact root-owned read-only systemd mount", 
     (value) => { value.lstatSync = (target) => target === credential
       ? { ...fileStat, mode: 0o640 }
       : fakeFs.lstatSync(target); },
+    (value) => { value.lstatSync = (target) => target === credential
+      ? { ...fileStat, uid: 501 }
+      : fakeFs.lstatSync(target); },
+    (value) => { value.lstatSync = (target) => target === directory
+      ? { ...directoryStat, mode: 0o770 }
+      : fakeFs.lstatSync(target); },
   ]) {
     const changed = { ...fakeFs };
     mutate(changed);
     assert.throws(
-      () => readAuthorizationCredential(directory, changed),
+      () => readAuthorizationCredential(credential, changed),
       (error) => error.code === "SERVICE_START_CREDENTIAL_CUSTODY_INVALID",
     );
   }
@@ -363,7 +390,8 @@ test("credential reader rejects user-owned temporary authorization material", ()
     fs.writeFileSync(credential, `${JSON.stringify(startAuthorization())}\n`, { mode: 0o600 });
     assert.throws(
       () => readAuthorizationCredential(parent),
-      (error) => error.code === "SERVICE_START_CREDENTIAL_CUSTODY_INVALID"
+      (error) => error.code === "SERVICE_START_CREDENTIAL_PATH_INVALID"
+        || error.code === "SERVICE_START_CREDENTIAL_CUSTODY_INVALID"
         || error.code === "ENOENT",
     );
   } finally {
@@ -447,6 +475,155 @@ test("observability is exact-subject, exact-scope, authenticated, and all-zero",
     assert.deepEqual(new Set(Object.values(normalized.metrics)), new Set([0]));
     assert.deepEqual(normalized.logicalResults, []);
   }
+});
+
+test("CUP managed reserve, replay, confirm, release, and activation are synthetic and exact", () => {
+  const config = fixtureConfig();
+  const state = createFixtureState(config);
+  const reserve = (role, operationId) => request(
+    config,
+    "cup",
+    "POST",
+    "/api/internal/subscriptions/entitlements/reserve",
+    role,
+    {
+      subscriptionInstanceId: config.subjects[role].subscriptionInstanceId,
+      action: "CREATE_GAME",
+      target: { targetId: config.subjects[role].managedTarget.targetId },
+    },
+    state,
+    { "idempotency-key": operationId, "x-correlation-id": operationId },
+  ).body;
+  const operationA = "fixture-operation-entitlement-a";
+  const first = reserve("A", operationA);
+  const replay = reserve("A", operationA);
+  assert.equal(first.outcome, "RESERVED");
+  assert.equal(first.replayed, false);
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.decision.target, config.subjects.A.managedTarget);
+  const confirmed = request(
+    config,
+    "cup",
+    "POST",
+    "/api/internal/subscriptions/entitlements/confirm",
+    "A",
+    { operationId: operationA, providerBookingId: "fixture-provider-booking-a" },
+    state,
+  ).body;
+  assert.equal(confirmed.operationState, "CONFIRMED");
+  assert.equal(reserve("A", operationA).operationState, "CONFIRMED");
+
+  const operationB = "fixture-operation-entitlement-b";
+  reserve("B", operationB);
+  const released = request(
+    config,
+    "cup",
+    "POST",
+    "/api/internal/subscriptions/entitlements/release",
+    "B",
+    { operationId: operationB, reason: "PROVIDER_REJECTED" },
+    state,
+  ).body;
+  assert.equal(released.operationState, "FAILED");
+
+  const activated = request(
+    config,
+    "cup",
+    "POST",
+    "/api/internal/subscriptions/activate-first-use",
+    "B",
+    {
+      subscriptionInstanceId: config.subjects.B.subscriptionInstanceId,
+      clientSubscriptionId: config.subjects.B.clientSubscriptionId,
+      providerBookingId: "fixture-provider-booking-b",
+      expectedInstanceRevision: config.subjects.B.instanceRevision,
+    },
+    state,
+  ).body;
+  assert.equal(activated.outcome, "ACTIVATED");
+  assert.equal(activated.state, "ACTIVE");
+});
+
+test("managed CUP contract denies control, idempotency conflicts, bad revisions, and unknown operations", () => {
+  const config = fixtureConfig();
+  const state = createFixtureState(config);
+  const operationId = "fixture-operation-entitlement-a";
+  const reserveBody = {
+    subscriptionInstanceId: config.subjects.A.subscriptionInstanceId,
+    action: "CREATE_GAME",
+    target: { targetId: config.subjects.A.managedTarget.targetId },
+  };
+  request(
+    config, "cup", "POST", "/api/internal/subscriptions/entitlements/reserve", "A",
+    reserveBody, state, { "idempotency-key": operationId, "x-correlation-id": operationId },
+  );
+  assert.throws(() => request(
+    config, "cup", "POST", "/api/internal/subscriptions/entitlements/reserve", "B",
+    {
+      ...reserveBody,
+      subscriptionInstanceId: config.subjects.B.subscriptionInstanceId,
+      target: { targetId: config.subjects.B.managedTarget.targetId },
+    },
+    state,
+    { "idempotency-key": operationId, "x-correlation-id": operationId },
+  ), (error) => error.code === "FIXTURE_IDEMPOTENCY_CONFLICT");
+  assert.throws(() => request(
+    config, "cup", "POST", "/api/internal/subscriptions/entitlements/reserve", "CONTROL",
+    {
+      subscriptionInstanceId: config.subjects.CONTROL.subscriptionInstanceId,
+      action: "CREATE_GAME",
+      target: { targetId: config.subjects.CONTROL.managedTarget.targetId },
+    },
+    state,
+    { "idempotency-key": "fixture-operation-control", "x-correlation-id": "fixture-operation-control" },
+  ), (error) => error.code === "FIXTURE_SUBJECT_NOT_FOUND");
+  assert.throws(() => request(
+    config, "cup", "POST", "/api/internal/subscriptions/entitlements/confirm", "A",
+    { operationId: "fixture-operation-unknown", providerBookingId: "fixture-provider-booking-a" }, state,
+  ), (error) => error.code === "FIXTURE_SUBJECT_NOT_FOUND");
+  assert.throws(() => request(
+    config, "cup", "POST", "/api/internal/subscriptions/activate-first-use", "B",
+    {
+      subscriptionInstanceId: config.subjects.B.subscriptionInstanceId,
+      clientSubscriptionId: config.subjects.B.clientSubscriptionId,
+      providerBookingId: "fixture-provider-booking-b",
+      expectedInstanceRevision: config.subjects.B.instanceRevision - 1,
+    }, state,
+  ), (error) => error.code === "FIXTURE_ACTIVATION_REVISION_CONFLICT");
+});
+
+test("CUP managed contract is physically reachable on a fixture-owned loopback listener", async (t) => {
+  const config = fixtureConfig();
+  const server = createFixtureServer("cup", config);
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => new Promise((resolve, reject) => server.close((error) => (
+    error ? reject(error) : resolve()
+  ))));
+  const address = server.address();
+  const operationId = "fixture-network-entitlement-a";
+  const headers = {
+    authorization: config.subjects.A.auth,
+    "x-subscriptions-integration-token": config.integrationToken,
+    "x-correlation-id": operationId,
+    "idempotency-key": operationId,
+    "content-type": "application/json",
+  };
+  const response = await fetch(`http://127.0.0.1:${address.port}/api/internal/subscriptions/entitlements/reserve`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      subscriptionInstanceId: config.subjects.A.subscriptionInstanceId,
+      action: "CREATE_GAME",
+      target: { targetId: config.subjects.A.managedTarget.targetId },
+    }),
+  });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.outcome, "RESERVED");
+  assert.equal(payload.subscriptionInstanceId, config.subjects.A.subscriptionInstanceId);
 });
 
 test("wrong credentials, control observability, extra fields, mutation methods, and non-CUP routes fail closed", () => {
@@ -553,7 +730,10 @@ test("minimal release route rejects nested target, rollback, and authority drift
 test("runtime source contract grants local bundle build only", () => {
   const contract = readJson(CONTRACT_PATH);
   assert.equal(validateRuntimeSourceContract(contract), true);
-  assert.equal(contract.implementedContract.managedEntitlement, "NOT_IMPLEMENTED");
+  assert.equal(
+    contract.implementedContract.managedEntitlement,
+    "SYNTHETIC_IN_MEMORY_SOURCE_IMPLEMENTED",
+  );
   assert.equal(contract.implementedContract.provider, "HEALTH_ONLY_LOCKED");
   assert.deepEqual(
     Object.entries(contract.authority).filter(([key, value]) => value && key !== "bundleBuildAllowed"),

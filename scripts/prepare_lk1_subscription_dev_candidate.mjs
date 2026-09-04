@@ -182,7 +182,7 @@ export function validateDevEndpointBindings(endpoints, trustedBindings = LK1_SUB
     fail("DEV endpoint bindings do not match the approved schema");
   }
   const expected = {
-    cupApiBase: "http://127.0.0.1:3036/api",
+    cupApiBase: "http://127.0.0.1:3037/api",
     vivaApiBase: "http://127.0.0.1:3038",
     serv2Base: "http://127.0.0.1:3038/serv2",
     tokenUrl: "http://127.0.0.1:3039/realms/dev/protocol/openid-connect/token",
@@ -613,9 +613,13 @@ export function validateDevBinding(binding,
     || !/^[a-f0-9]{64}$/.test(String(binding.endpointAudit.endpointInventorySha256 || ""))) {
     fail("DEV network endpoint configuration audit is absent or not isolated");
   }
-  if (binding.runtime?.completeManagedContractExposed !== false
-    || binding.runtime.reason !== "Source-only binding; DEV services are stopped and no runtime contract was exercised") {
-    fail("Source-only DEV binding must not claim an exercised runtime contract");
+  if (binding.runtime?.completeManagedContractSourceImplemented !== true
+    || binding.runtime.localPhysicalVerified !== true
+    || binding.runtime.hostRuntimeExposed !== false
+    || binding.runtime.completeManagedContractExposed !== false
+    || binding.runtime.reason
+      !== "Source implemented and locally loopback-verified; DEV services remain stopped and host runtime was not exercised") {
+    fail("Source-only DEV binding must distinguish local physical proof from host runtime exposure");
   }
   if (trustedBindings?.DEV !== null
     || trustedBindings?.devBindingState !== "UNBOUND_RUNTIME_STOPPED") {

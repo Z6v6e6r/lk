@@ -31,13 +31,13 @@ export function validateRuntimeSourceContract(contract) {
     "listeners", "implementedContract", "authority",
   ], "runtime source contract");
   if (contract.formatVersion !== 1 || contract.stage !== "LOCAL_RUNTIME_SOURCE"
-    || contract.environment !== "DEV" || contract.purpose !== "READ_ONLY_UAT_EVIDENCE"
+    || contract.environment !== "DEV" || contract.purpose !== "SYNTHETIC_MANAGED_CONTRACT_SOURCE_ONLY"
     || contract.sourceCommit !== null) fail("runtime source identity mismatch");
   exactKeys(contract.target, [
     "fixtureRuntimePath", "nodeRedFlowPath", "nodeRedReleaseReceiptPath",
     "fixtureConfigEnvironmentVariable", "serviceStartAuthorizationMarker",
-    "serviceStartAuthorizationTransport", "serviceStartCredentialName",
-    "serviceStartCredentialDirectories", "installedIdentityEnvironmentFile",
+    "serviceStartAuthorizationTransport", "serviceStartAuthorizationFileEnvironmentVariable",
+    "installedIdentityEnvironmentFile",
   ], "runtime target");
   if (contract.target.fixtureRuntimePath !== "/srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs"
     || contract.target.nodeRedFlowPath !== "/srv/lk1-subscription-dev/node-red/flows.json"
@@ -45,14 +45,9 @@ export function validateRuntimeSourceContract(contract) {
     || contract.target.fixtureConfigEnvironmentVariable !== "LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE"
     || contract.target.serviceStartAuthorizationMarker
       !== "/srv/lk1-subscription-dev/authorization/service-start.approved"
-    || contract.target.serviceStartAuthorizationTransport !== "SYSTEMD_LOAD_CREDENTIAL"
-    || contract.target.serviceStartCredentialName !== "service-start.approved"
-    || JSON.stringify(contract.target.serviceStartCredentialDirectories) !== JSON.stringify({
-      cup: "/run/credentials/lk1-subscription-dev-cup.service",
-      provider: "/run/credentials/lk1-subscription-dev-provider-fixture.service",
-      identity: "/run/credentials/lk1-subscription-dev-identity-fixture.service",
-      nodered: "/run/credentials/lk1-subscription-dev-nodered.service",
-    })
+    || contract.target.serviceStartAuthorizationTransport !== "ROOT_OWNED_GROUP_READ_ONLY_FILE"
+    || contract.target.serviceStartAuthorizationFileEnvironmentVariable
+      !== "LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE"
     || contract.target.installedIdentityEnvironmentFile
       !== "/srv/lk1-subscription-dev/runtime/install-identity.env") {
     fail("runtime target is not the dedicated stopped identity");
@@ -75,8 +70,10 @@ export function validateRuntimeSourceContract(contract) {
     || contract.implementedContract.observability !== "READ_ONLY_SCHEMA_FIXTURE_NON_AUTHORIZING"
     || contract.implementedContract.provider !== "HEALTH_ONLY_LOCKED"
     || contract.implementedContract.identity !== "HEALTH_ONLY_LOCKED"
-    || ["managedEntitlement", "activation", "createJoin"]
-      .some((key) => contract.implementedContract[key] !== "NOT_IMPLEMENTED")) {
+    || contract.implementedContract.managedEntitlement
+      !== "SYNTHETIC_IN_MEMORY_SOURCE_IMPLEMENTED"
+    || contract.implementedContract.activation !== "SYNTHETIC_IN_MEMORY_SOURCE_IMPLEMENTED"
+    || contract.implementedContract.createJoin !== "NOT_IMPLEMENTED") {
     fail("runtime capability statement is inaccurate");
   }
   exactKeys(contract.authority, [

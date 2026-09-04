@@ -16,21 +16,18 @@
   },
   "authorizationCustody": {
     "sourceMarker": "/srv/lk1-subscription-dev/authorization/service-start.approved",
-    "sourceDirectoryOwner": "root:root",
-    "sourceDirectoryMode": "0700",
-    "transport": "SYSTEMD_LOAD_CREDENTIAL",
+    "sourceDirectoryOwner": "root:lk1-subscription-dev",
+    "sourceDirectoryMode": "0750",
+    "sourceFileOwner": "root:lk1-subscription-dev",
+    "sourceFileMode": "0440",
+    "transport": "ROOT_OWNED_GROUP_READ_ONLY_FILE",
     "credentialName": "service-start.approved",
-    "runtimePath": "$CREDENTIALS_DIRECTORY/service-start.approved",
-    "runtimeDirectories": {
-      "cup": "/run/credentials/lk1-subscription-dev-cup.service",
-      "provider": "/run/credentials/lk1-subscription-dev-provider-fixture.service",
-      "identity": "/run/credentials/lk1-subscription-dev-identity-fixture.service",
-      "nodered": "/run/credentials/lk1-subscription-dev-nodered.service"
-    },
+    "runtimePath": "/srv/lk1-subscription-dev/authorization/service-start.approved",
+    "runtimePathEnvironmentVariable": "LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE",
     "credentialSchemaVersion": 1,
     "maximumLifetimeSeconds": 3600,
-    "systemdMinimumVersion": 247,
-    "hostSupportVerified": false
+    "systemdMinimumVersion": 245,
+    "hostSupportVerified": true
   },
   "credentialBinding": {
     "environment": "DEV",
@@ -44,7 +41,7 @@
     "installedManifestEnvironmentVariable": "LK1_SUBSCRIPTION_DEV_RUNTIME_MANIFEST_SHA256",
     "requiresExactSourceCommit": true,
     "requiresExactRuntimeManifestSha256": true,
-    "requiresPrivateRegularCredential": true,
+    "requiresRootOwnedGroupReadOnlyFile": true,
     "requiresUnexpiredCredential": true
   },
   "units": [
@@ -89,6 +86,7 @@
       "updateOne"
     ],
     "providerFixture": "HEALTH_ONLY_FAIL_CLOSED",
+    "cupManagedContract": "SYNTHETIC_IN_MEMORY_SOURCE_IMPLEMENTED_LOCAL_PHYSICAL_VERIFIED",
     "positiveUat": "NOT_AUTHORIZED",
     "requiresSeparateStartReview": true,
     "requiresSeparateMutationReview": true

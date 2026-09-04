@@ -53,15 +53,13 @@ external writes. В bundle нет installer.
 
 Любые host install, создание приватного fixture config, запись release receipt,
 start/enable units, ingress, выдача canary IDs, activation и ручной UAT требуют
-новой точной авторизации. Полный managed-entitlement или create/join flow в этом
-source-пакете не реализован.
+новой точной авторизации. Synthetic in-memory managed entitlement и activation
+реализованы и локально проверены; provider/identity create/join остаются
+health-only и host runtime не запускался.
 
 Historical stopped bootstrap оставил каталог `authorization` под
-`root:root 0700`. Локальный install candidate проектирует передачу marker через
-systemd `LoadCredential`, а runtime проверяет credential вместо прямого чтения
-закрытого source path. Принимается только точный `/run/credentials/<unit>`;
-runtime дополнительно проверяет root custody общего каталога и read-only mount
-каталога unit. Node-RED использует тот же validator через `ExecCondition`.
-Этот механизм не установлен и его поддержка на target host не проверена;
-current source остаётся fail-closed без будущего отдельно авторизованного
-install/start-stage.
+`root:root 0700`. Будущий отдельно авторизованный stopped-install должен сменить
+его custody на `root:lk1-subscription-dev 0750`, а marker создавать как
+`root:lk1-subscription-dev 0440`. Runtime принимает только exact source path и
+проверяет всю цепочку каталогов; Node-RED использует тот же validator через
+`ExecCondition`. Source остаётся fail-closed без будущего install/start-stage.

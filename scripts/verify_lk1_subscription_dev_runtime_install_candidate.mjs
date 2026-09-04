@@ -12,13 +12,13 @@ import { validateReleaseReceiptV2 } from "./validate_lk1_subscription_dev_releas
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
-const CONTRACT_CANONICAL_SHA256 = "c4eccbe9bcf8d21030656a52a2a6dbcf24d4a49c4f5bd9c94f195da948375fc7";
+const CONTRACT_CANONICAL_SHA256 = "34723ccaae620b8ddfcf0547ea771ee20ff6b6c376bda532ae7e5dbfc30ef8a1";
 const NODE_RED_SETTINGS_SHA256 = "6b6cc7253b120f2a8b2397c0d3a5f82db9a72fb6d62948bd9f6e6bdb5ab3deb6";
 const UNIT_SHA256 = Object.freeze({
-  "lk1-subscription-dev-cup.service": "754908f5c20da6213c3ea5f4a59f02bcf4f4d42ce48bf05e559ee4dd13d436f4",
-  "lk1-subscription-dev-identity-fixture.service": "ef884ba523bebeae3608765183ac163b1f7424d77ad9e622801555c928f312c1",
-  "lk1-subscription-dev-nodered.service": "d0ea5576c3a71fdb5343ff991c2eaf40f56cae517b75b528da8fe2b62d99a49a",
-  "lk1-subscription-dev-provider-fixture.service": "c591415fb4e79677d95c9800566b69015bf2da98f8f854986b0062cd3b262218",
+  "lk1-subscription-dev-cup.service": "e141e6892ec0ecf6f6f02bf9f4daba28e7aef07e2f4b2eb816699a5c5aef4ccb",
+  "lk1-subscription-dev-identity-fixture.service": "8303eec3ae9ae854dee4c2ad54390bb625d1801880c4c3670621d7434b77f991",
+  "lk1-subscription-dev-nodered.service": "c78a6efda42224f8ca3524b18510f36102b9b98f1e92c5f8db3c575f7a61bee7",
+  "lk1-subscription-dev-provider-fixture.service": "af16a186eb7050cfd38cfea9a1897f7d498e296fa8cd0c1e74fb49b78bbf6dbd",
 });
 const EXPECTED_FILES = Object.freeze([
   "payload/lk1_subscription_dev_runtime/fixture_runtime.mjs",
@@ -62,21 +62,20 @@ export function validateRuntimeInstallContract(contract) {
     || contract.target.rootPath !== "/srv/lk1-subscription-dev"
     || contract.authorizationCustody.sourceMarker
       !== "/srv/lk1-subscription-dev/authorization/service-start.approved"
-    || contract.authorizationCustody.sourceDirectoryOwner !== "root:root"
-    || contract.authorizationCustody.sourceDirectoryMode !== "0700"
-    || contract.authorizationCustody.transport !== "SYSTEMD_LOAD_CREDENTIAL"
+    || contract.authorizationCustody.sourceDirectoryOwner !== "root:lk1-subscription-dev"
+    || contract.authorizationCustody.sourceDirectoryMode !== "0750"
+    || contract.authorizationCustody.sourceFileOwner !== "root:lk1-subscription-dev"
+    || contract.authorizationCustody.sourceFileMode !== "0440"
+    || contract.authorizationCustody.transport !== "ROOT_OWNED_GROUP_READ_ONLY_FILE"
     || contract.authorizationCustody.credentialName !== "service-start.approved"
-    || contract.authorizationCustody.runtimePath !== "$CREDENTIALS_DIRECTORY/service-start.approved"
-    || JSON.stringify(contract.authorizationCustody.runtimeDirectories) !== JSON.stringify({
-      cup: "/run/credentials/lk1-subscription-dev-cup.service",
-      provider: "/run/credentials/lk1-subscription-dev-provider-fixture.service",
-      identity: "/run/credentials/lk1-subscription-dev-identity-fixture.service",
-      nodered: "/run/credentials/lk1-subscription-dev-nodered.service",
-    })
+    || contract.authorizationCustody.runtimePath
+      !== "/srv/lk1-subscription-dev/authorization/service-start.approved"
+    || contract.authorizationCustody.runtimePathEnvironmentVariable
+      !== "LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE"
     || contract.authorizationCustody.maximumLifetimeSeconds !== 3600
-    || contract.authorizationCustody.systemdMinimumVersion !== 247
-    || contract.authorizationCustody.hostSupportVerified !== false) {
-    fail("runtime install marker custody is not exact and unverified");
+    || contract.authorizationCustody.systemdMinimumVersion !== 245
+    || contract.authorizationCustody.hostSupportVerified !== true) {
+    fail("runtime install marker custody is not exact or host-compatible");
   }
   if (contract.credentialBinding.installedSourceEnvironmentVariable
       !== "LK1_SUBSCRIPTION_DEV_INSTALLED_SOURCE_COMMIT"
@@ -111,6 +110,7 @@ export function validateRuntimeInstallContract(contract) {
       outboundHttpNodes: 2,
       mongoOperations: ["find", "insertOne", "updateOne"],
       providerFixture: "HEALTH_ONLY_FAIL_CLOSED",
+      cupManagedContract: "SYNTHETIC_IN_MEMORY_SOURCE_IMPLEMENTED_LOCAL_PHYSICAL_VERIFIED",
       positiveUat: "NOT_AUTHORIZED",
       requiresSeparateStartReview: true,
       requiresSeparateMutationReview: true,
@@ -134,7 +134,7 @@ export function validateInstallCandidateUnit(name, source) {
     "Group=lk1-subscription-dev",
     "ConditionPathExists=/srv/lk1-subscription-dev/authorization/service-start.approved",
     "RefuseManualStart=yes",
-    "LoadCredential=service-start.approved:/srv/lk1-subscription-dev/authorization/service-start.approved",
+    "Environment=LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE=/srv/lk1-subscription-dev/authorization/service-start.approved",
     "EnvironmentFile=/srv/lk1-subscription-dev/runtime/install-identity.env",
     "Restart=no",
     "NoNewPrivileges=yes",
@@ -147,7 +147,7 @@ export function validateInstallCandidateUnit(name, source) {
   }
   for (const forbidden of [
     "[Install]", "WantedBy=", "ExecStartPre=", "ExecStartPost=", "ExecReload=",
-    "systemctl", "https://", "padlhub", "vivacrm", "/root/.node-red",
+    "systemctl", "LoadCredential=", "https://", "padlhub", "vivacrm", "/root/.node-red",
     "0.0.0.0", "Environment=NODE_ENV=production",
   ]) {
     if (source.includes(forbidden)) fail(`${name} contains forbidden content (${forbidden})`);

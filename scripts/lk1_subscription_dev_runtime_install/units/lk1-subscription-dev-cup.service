@@ -9,9 +9,9 @@ Type=simple
 User=lk1-subscription-dev
 Group=lk1-subscription-dev
 WorkingDirectory=/srv/lk1-subscription-dev
-LoadCredential=service-start.approved:/srv/lk1-subscription-dev/authorization/service-start.approved
 EnvironmentFile=/srv/lk1-subscription-dev/runtime/install-identity.env
 Environment=LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE=/srv/lk1-subscription-dev/private/fixture.json
+Environment=LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE=/srv/lk1-subscription-dev/authorization/service-start.approved
 ExecStart=/srv/lk1-subscription-dev/runtime/node/bin/node /srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs --role cup
 Restart=no
 UMask=0077

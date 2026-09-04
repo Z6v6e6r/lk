@@ -46,13 +46,13 @@ function build() {
   };
 }
 
-test("install contract resolves marker custody through systemd credentials without execution authority", () => {
+test("install contract resolves marker custody through a root-owned group-read-only file without execution authority", () => {
   const contract = readJson(CONTRACT_PATH);
   assert.equal(validateRuntimeInstallContract(contract), true);
-  assert.equal(contract.authorizationCustody.sourceDirectoryOwner, "root:root");
-  assert.equal(contract.authorizationCustody.sourceDirectoryMode, "0700");
-  assert.equal(contract.authorizationCustody.transport, "SYSTEMD_LOAD_CREDENTIAL");
-  assert.equal(contract.authorizationCustody.hostSupportVerified, false);
+  assert.equal(contract.authorizationCustody.sourceDirectoryOwner, "root:lk1-subscription-dev");
+  assert.equal(contract.authorizationCustody.sourceDirectoryMode, "0750");
+  assert.equal(contract.authorizationCustody.transport, "ROOT_OWNED_GROUP_READ_ONLY_FILE");
+  assert.equal(contract.authorizationCustody.hostSupportVerified, true);
     assert.equal(contract.candidateContents.installExecutor, "NOT_INCLUDED");
     assert.equal(contract.candidateContents.nodeRedFlow, "GENERATED_EXACT_SOURCE_CANDIDATE");
   assert.equal(contract.candidateContents.installedIdentityEnvironmentFile, "NOT_INCLUDED");
@@ -72,9 +72,9 @@ test("install contract rejects marker, support, postcondition, contents, and aut
   for (const mutate of [
     (value) => { value.environment = "PROD"; },
     (value) => { value.target.unixUser = "root"; },
-    (value) => { value.authorizationCustody.sourceDirectoryMode = "0750"; },
+    (value) => { value.authorizationCustody.sourceDirectoryMode = "0770"; },
     (value) => { value.authorizationCustody.transport = "DIRECT_FILE_READ"; },
-    (value) => { value.authorizationCustody.hostSupportVerified = true; },
+    (value) => { value.authorizationCustody.hostSupportVerified = false; },
     (value) => { value.credentialBinding.requiresUnexpiredCredential = false; },
     (value) => { value.prerequisites.freshHostReadbackRequired = false; },
     (value) => { value.candidateContents.installExecutor = "INCLUDED"; },
@@ -89,11 +89,11 @@ test("install contract rejects marker, support, postcondition, contents, and aut
   }
 });
 
-test("unit candidates use exact root-to-service credential transport and remain unstartable", () => {
+test("unit candidates use exact root-owned authorization path and remain unstartable", () => {
   for (const name of Object.keys(UNIT_SHA256)) {
     const source = fs.readFileSync(path.join(UNIT_ROOT, name), "utf8");
     assert.equal(validateInstallCandidateUnit(name, source), true);
-    assert.match(source, /LoadCredential=service-start\.approved:/);
+    assert.match(source, /LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE=\/srv\/lk1-subscription-dev\/authorization\/service-start\.approved/);
     assert.match(source, /RefuseManualStart=yes/);
     assert.doesNotMatch(source, /\[Install\]|WantedBy=|systemctl|ExecStartPre=|ExecStartPost=/);
   }
@@ -124,7 +124,7 @@ test("unit validator rejects credential bypass, role drift, start hooks, enablem
   const nodeName = "lk1-subscription-dev-nodered.service";
   const nodeRed = fs.readFileSync(path.join(UNIT_ROOT, nodeName), "utf8");
   for (const [name, source] of [
-    [cupName, cup.replace("LoadCredential=", "# LoadCredential=")],
+    [cupName, cup.replace("Environment=LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE=", "# Environment=LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE=")],
     [cupName, cup.replace("--role cup", "--role provider")],
     [cupName, `${cup}\n[Install]\nWantedBy=multi-user.target\n`],
     [cupName, cup.replace("Restart=no", "Restart=no\nExecStartPost=/bin/true")],

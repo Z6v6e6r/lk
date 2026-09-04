@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "environment": "DEV",
+  "state": "PASS_AT_CAPTURE",
+  "capturedAt": "2026-09-04T09:23:20Z",
+  "maximumAgeSeconds": 3600,
+  "target": {
+    "hostAlias": "lk-reserve-89",
+    "hostname": "89-108-64-209.cloudvps.regruhosting.ru",
+    "machineIdSha256": "9f29889b29a55b2c7e1eeb65616d2049b16972589de1bc623a61d38d92dd7ad8"
+  },
+  "hostCapabilities": {
+    "systemdVersion": 245,
+    "minimumRequiredSystemdVersion": 245,
+    "authorizationTransport": "ROOT_OWNED_GROUP_READ_ONLY_FILE",
+    "compatible": true
+  },
+  "dedicatedUnits": {
+    "lk1-subscription-dev-mongo.service": { "loadState": "loaded", "activeState": "inactive", "unitFileState": "disabled" },
+    "lk1-subscription-dev-cup.service": { "loadState": "loaded", "activeState": "inactive", "unitFileState": "disabled" },
+    "lk1-subscription-dev-provider-fixture.service": { "loadState": "loaded", "activeState": "inactive", "unitFileState": "disabled" },
+    "lk1-subscription-dev-identity-fixture.service": { "loadState": "loaded", "activeState": "inactive", "unitFileState": "disabled" },
+    "lk1-subscription-dev-nodered.service": { "loadState": "loaded", "activeState": "inactive", "unitFileState": "disabled" }
+  },
+  "listeners": {
+    "sharedNodeRed1880Present": true,
+    "forbiddenSharedCup3036Present": true,
+    "reserved1882Absent": true,
+    "reserved27030Absent": true,
+    "reserved3037Absent": true,
+    "reserved3038Absent": true,
+    "reserved3039Absent": true
+  },
+  "inputs": {
+    "targetFlowAbsent": true,
+    "fixtureConfigAbsent": true,
+    "releaseReceiptAbsent": true,
+    "serviceStartAuthorizationAbsent": true,
+    "installIdentityEnvironmentAbsent": true,
+    "productionMarkersAbsent": true
+  },
+  "sharedResources": {
+    "flowSha256": "52c1b510b40f96de7bf1f9991a17454f79b560eaf002cc0c60147065b31c33e3",
+    "expectedFlowSha256": "52c1b510b40f96de7bf1f9991a17454f79b560eaf002cc0c60147065b31c33e3",
+    "unchanged": true
+  },
+  "authority": {
+    "hostRead": true,
+    "hostInstall": false,
+    "daemonReload": false,
+    "serviceStart": false,
+    "externalWrites": false
+  }
+}

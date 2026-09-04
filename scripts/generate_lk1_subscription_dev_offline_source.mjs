@@ -110,7 +110,7 @@ export function buildOfflineDevSourceFlow(
     httpRequestNode(IDS.splitHttp, "Split payment fixture request", IDS.splitRouter),
     {
       id: MONGO_CLIENT_ID, type: "mongodb4-client", name: "LK1 subscription DEV fixture",
-      uri: "mongodb://127.0.0.1:27030/dev-lk1-subscription-canary",
+      uri: "mongodb://127.0.0.1:27030/lk1_subscription_dev_fixture",
       advanced: "{}", uriTabActive: "tab-uri-advanced",
     },
   ];
@@ -206,9 +206,12 @@ export function publishOfflineDevSource(
     },
     target: audit.target,
     runtime: {
-      apiBase: "http://127.0.0.1:3036/api",
+      apiBase: "http://127.0.0.1:3037/api",
+      completeManagedContractSourceImplemented: true,
+      localPhysicalVerified: true,
+      hostRuntimeExposed: false,
       completeManagedContractExposed: false,
-      reason: "Source-only binding; DEV services are stopped and no runtime contract was exercised",
+      reason: "Source implemented and locally loopback-verified; DEV services remain stopped and host runtime was not exercised",
     },
     dependencies: audit.dependencies,
     endpointAudit: audit.endpointAudit,

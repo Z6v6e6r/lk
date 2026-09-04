@@ -4,14 +4,13 @@
 авторизуемых переходов. Он не выполняет host read, install, `daemon-reload`,
 start/enable, ingress, activation, передачу canary IDs/secrets или внешние
 записи. Его текущий валидный результат — только
-`PREPARED_SOURCE_ONLY_BLOCKED`.
+`PREPARED_SOURCE_ONLY_READY_FOR_STOPPED_INSTALL_REVIEW`.
 
-Гейт выявляет два несовместимых runtime target binding: frozen candidate всё ещё
-указывает CUP на запрещённый shared listener `127.0.0.1:3036`, а dedicated CUP
-зарезервирован на `127.0.0.1:3037`; candidate Mongo использует базу
-`dev-lk1-subscription-canary`, тогда как provisioning фиксирует
-`lk1_subscription_dev_fixture`. Кроме того, complete managed runtime contract не
-экспонирован. До согласования и пересборки frozen candidate deploy запрещён.
+Source binding исправлен на dedicated CUP `127.0.0.1:3037` и Mongo database
+`lk1_subscription_dev_fixture`. Synthetic managed entitlement/activation contract
+реализован и физически проверен на локальном fixture-owned loopback. Это не
+является host runtime evidence: `hostRuntimeExposed=false`, deploy/start всё ещё
+запрещены без следующих раздельных gate.
 
 ## Зафиксированная граница
 
@@ -30,9 +29,12 @@ start/enable, ingress, activation, передачу canary IDs/secrets или в
 
 ## Что требуется до будущей установки
 
-Отдельно авторизованный fresh read-only preflight должен заново зафиксировать
+Read-only preflight от 2026-09-04 зафиксировал
+systemd 245, disabled/inactive units, отсутствие reserved listeners и inputs,
+неизменность shared flow. Его валидность ограничена одним часом. Непосредственно
+перед отдельно авторизованной установкой fresh preflight должен заново зафиксировать
 repository identity, candidate manifest, host identity, поддержку systemd
-`LoadCredential`, disabled/inactive units, отсутствие listeners и authorization
+совместимый authorization transport, disabled/inactive units, отсутствие listeners и authorization
 inputs, неизменность shared ресурсов, отсутствие production routes/origins и
 review rollback-to-absent. Любое несовпадение останавливает переход; исторический
 bootstrap receipt не заменяет свежую проверку.
@@ -61,7 +63,9 @@ start/activation длится 600-900 секунд. До фактическог�
 
 ```bash
 npm run nodered:lk1-subscription-dev:deploy-postcheck-gate
+npm run nodered:lk1-subscription-dev:host-preflight
 npm run test:lk1-subscription-dev-deploy-postcheck-gate
+npm run test:lk1-subscription-dev-host-preflight
 ```
 
 Команды только читают tracked JSON/JS файлы и валидируют их между собой. Они не

@@ -255,9 +255,11 @@ The DEV postimage also strips browser-supplied success/failure/base redirect URL
 from both split-payment preparation paths before any provider transaction can be
 assembled. Production source defaults are not changed by this DEV-only binding.
 
-This is structural source-only evidence. The stopped fixture runtime still declares
-`managedEntitlement`, `activation`, and `createJoin` as `NOT_IMPLEMENTED`, and the
-candidate binding truthfully keeps `completeManagedContractExposed=false`. No DEV
+This remains source-only evidence. The stopped fixture runtime now implements
+synthetic in-memory `managedEntitlement` and `activation`, physically verified on
+a fixture-owned local loopback listener. `createJoin` and provider/identity remain
+locked, and the candidate truthfully separates `localPhysicalVerified=true` from
+`hostRuntimeExposed=false` and `completeManagedContractExposed=false`. No DEV
 application candidate has been installed or exercised; steps 6-9 remain separate
 future gates with fresh readback and independent review.
 

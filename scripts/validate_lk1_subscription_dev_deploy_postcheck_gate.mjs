@@ -15,6 +15,10 @@ import {
 } from "./prepare_lk1_subscription_dev_candidate.mjs";
 import { validateRuntimeInstallContract } from "./verify_lk1_subscription_dev_runtime_install_candidate.mjs";
 import { validateReleaseReceiptV2 } from "./validate_lk1_subscription_dev_release_receipt_v2.mjs";
+import {
+  checkedHostPreflightEvidence,
+  validateHostPreflightEvidence,
+} from "./validate_lk1_subscription_dev_host_preflight.mjs";
 
 const readJson = (relativePath) => JSON.parse(fs.readFileSync(
   new URL(relativePath, import.meta.url),
@@ -45,7 +49,7 @@ const PREDEPLOY_CHECKS = Object.freeze([
   "FROZEN_REPOSITORY_IDENTITY",
   "IMMUTABLE_CANDIDATE_VERIFIED",
   "CURRENT_HOST_IDENTITY",
-  "SYSTEMD_LOAD_CREDENTIAL_SUPPORTED",
+  "AUTHORIZATION_TRANSPORT_SUPPORTED",
   "DEDICATED_UNITS_DISABLED_INACTIVE",
   "RESERVED_LISTENERS_ABSENT",
   "AUTHORIZATION_INPUTS_ABSENT",
@@ -115,6 +119,8 @@ export function validateDeployPostcheckGate(gate, {
   runtimeEnvironmentBindings = LK1_SUBSCRIPTION_RUNTIME_ENVIRONMENT_BINDINGS,
   candidateBinding = CHECKED_DEV_CANDIDATE_BINDING,
   sourceAuthorization = CHECKED_DEV_SOURCE_AUTHORIZATION,
+  hostPreflightEvidence = checkedHostPreflightEvidence,
+  now = new Date(),
 } = {}) {
   validateDevProvisioningContract(provisioningContract);
   validateRuntimeInstallContract(runtimeInstallContract);
@@ -124,6 +130,7 @@ export function validateDeployPostcheckGate(gate, {
     candidateSha256: releaseReceipt.candidateSha256,
     manifestSha256: releaseReceipt.manifestSha256,
   });
+  validateHostPreflightEvidence(hostPreflightEvidence, now);
 
   exactKeys(gate, [
     "schemaVersion", "environment", "state", "productionBindingState", "releaseBinding",
@@ -131,7 +138,7 @@ export function validateDeployPostcheckGate(gate, {
     "canaryActivation", "rollback", "blockers", "authority", "claims",
   ], "DEV deploy/post-check gate");
   if (gate.schemaVersion !== 1 || gate.environment !== "DEV"
-    || gate.state !== "PREPARED_SOURCE_ONLY_BLOCKED"
+    || gate.state !== "PREPARED_SOURCE_ONLY_READY_FOR_STOPPED_INSTALL_REVIEW"
     || gate.productionBindingState !== "UNBOUND_AFTER_ROUTER_AMENDMENT") {
     fail("DEV deploy/post-check gate identity mismatch");
   }
@@ -180,6 +187,7 @@ export function validateDeployPostcheckGate(gate, {
   exactKeys(gate.runtimeBinding, [
     "state", "candidateCupApiBase", "dedicatedCupListener", "cupMatchesDedicatedListener",
     "candidateMongo", "provisionedMongo", "mongoMatchesProvisionedDatabase",
+    "completeManagedContractSourceImplemented", "localPhysicalVerified", "hostRuntimeExposed",
     "completeManagedContractExposed",
   ], "DEV runtime binding");
   exactKeys(gate.runtimeBinding.candidateMongo, [
@@ -197,13 +205,16 @@ export function validateDeployPostcheckGate(gate, {
   if (runtimeEnvironmentBindings.DEV_CANDIDATE_API_BASE
       !== runtimeEnvironmentBindings.DEV_ENDPOINTS?.cupApiBase
     || candidateBinding.runtime?.apiBase !== runtimeEnvironmentBindings.DEV_CANDIDATE_API_BASE
+    || candidateBinding.runtime?.completeManagedContractSourceImplemented !== true
+    || candidateBinding.runtime?.localPhysicalVerified !== true
+    || candidateBinding.runtime?.hostRuntimeExposed !== false
     || candidateBinding.runtime?.completeManagedContractExposed !== false
-    || candidateCupListener !== provisioningContract.forbiddenExistingResources.subscriptionShadowListener
-    || candidateCupListener === dedicatedCupListener
-    || gate.runtimeBinding.state !== "BLOCKED_TARGET_MISMATCH"
+    || candidateCupListener === provisioningContract.forbiddenExistingResources.subscriptionShadowListener
+    || candidateCupListener !== dedicatedCupListener
+    || gate.runtimeBinding.state !== "SOURCE_READY_HOST_RUNTIME_NOT_RUN"
     || gate.runtimeBinding.candidateCupApiBase !== candidateBinding.runtime.apiBase
     || gate.runtimeBinding.dedicatedCupListener !== dedicatedCupListener
-    || gate.runtimeBinding.cupMatchesDedicatedListener !== false
+    || gate.runtimeBinding.cupMatchesDedicatedListener !== true
     || JSON.stringify(gate.runtimeBinding.candidateMongo) !== JSON.stringify(candidateMongo)
     || candidateMongoEvidence?.host !== candidateMongo.host
     || candidateMongoEvidence?.port !== candidateMongo.port
@@ -215,10 +226,13 @@ export function validateDeployPostcheckGate(gate, {
       port: provisionedMongo.port,
       database: provisionedMongo.database,
     })
-    || candidateMongo.database === provisionedMongo.database
-    || gate.runtimeBinding.mongoMatchesProvisionedDatabase !== false
+    || candidateMongo.database !== provisionedMongo.database
+    || gate.runtimeBinding.mongoMatchesProvisionedDatabase !== true
+    || gate.runtimeBinding.completeManagedContractSourceImplemented !== true
+    || gate.runtimeBinding.localPhysicalVerified !== true
+    || gate.runtimeBinding.hostRuntimeExposed !== false
     || gate.runtimeBinding.completeManagedContractExposed !== false) {
-    fail("DEV candidate runtime identity does not expose the dedicated fixture target");
+    fail("DEV candidate runtime identity is not source-ready on the dedicated fixture target");
   }
 
   exactKeys(gate.productionIsolation, [
@@ -236,9 +250,15 @@ export function validateDeployPostcheckGate(gate, {
     fail("DEV production isolation is not fail-closed");
   }
 
-  exactKeys(gate.predeploy, ["state", "freshEvidenceRequired", "checks"], "DEV predeploy gate");
-  if (gate.predeploy.state !== "NOT_RUN" || gate.predeploy.freshEvidenceRequired !== true) {
-    fail("DEV predeploy evidence must remain fresh and not run in a source-only gate");
+  exactKeys(gate.predeploy, [
+    "state", "freshEvidenceRequired", "capturedAt", "maximumAgeSeconds",
+    "mustRefreshImmediatelyBeforeInstall", "checks",
+  ], "DEV predeploy gate");
+  if (gate.predeploy.state !== "PASS_AT_CAPTURE" || gate.predeploy.freshEvidenceRequired !== true
+    || gate.predeploy.capturedAt !== hostPreflightEvidence.capturedAt
+    || gate.predeploy.maximumAgeSeconds !== hostPreflightEvidence.maximumAgeSeconds
+    || gate.predeploy.mustRefreshImmediatelyBeforeInstall !== true) {
+    fail("DEV predeploy evidence is absent, stale, or not marked for execution-time refresh");
   }
   exactArray(gate.predeploy.checks, PREDEPLOY_CHECKS, "DEV predeploy checks");
 
@@ -310,12 +330,7 @@ export function validateDeployPostcheckGate(gate, {
     fail("DEV rollback custody or authority mismatch");
   }
 
-  exactArray(gate.blockers, [
-    "CANDIDATE_CUP_REUSES_FORBIDDEN_SHARED_3036",
-    "CANDIDATE_MONGO_DATABASE_DIFFERS_FROM_PROVISIONED_FIXTURE",
-    "COMPLETE_MANAGED_RUNTIME_NOT_EXPOSED",
-    "FRESH_HOST_PREFLIGHT_NOT_RUN",
-  ], "DEV deploy blockers");
+  exactArray(gate.blockers, [], "DEV deploy blockers");
 
   exactKeys(gate.authority, [
     "hostRead", "hostInstall", "daemonReload", "serviceStart", "enableUnits", "ingress",
@@ -336,7 +351,7 @@ export function validateDeployPostcheckGate(gate, {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (process.argv.length !== 2) fail("Usage: validate_lk1_subscription_dev_deploy_postcheck_gate.mjs");
   validateDeployPostcheckGate(checkedDeployPostcheckGate);
-  process.stdout.write("LK1_DEV_DEPLOY_POSTCHECK_GATE=PREPARED_SOURCE_ONLY_BLOCKED\nDEV_DEPLOYED=NOT_CLAIMED\nDEV_ACTIVE=NOT_CLAIMED\n");
+  process.stdout.write("LK1_DEV_DEPLOY_POSTCHECK_GATE=PREPARED_SOURCE_ONLY_READY_FOR_STOPPED_INSTALL_REVIEW\nDEV_DEPLOYED=NOT_CLAIMED\nDEV_ACTIVE=NOT_CLAIMED\n");
 }
 
 export { POSTCHECK_PHASES, PREDEPLOY_CHECKS, ZERO_COUNTERS };

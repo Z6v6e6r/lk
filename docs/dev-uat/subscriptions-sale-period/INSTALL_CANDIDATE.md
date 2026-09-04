@@ -7,14 +7,15 @@ secrets или внешние записи.
 
 ## Marker custody
 
-Source marker остаётся в закрытом `root:root 0700` каталоге. Unit candidates
-используют `LoadCredential`, поэтому marker читает systemd manager, а процесс
-получает приватную read-only копию как
-`$CREDENTIALS_DIRECTORY/service-start.approved`. Runtime принимает только точный
-`/run/credentials/<unit>` для своей роли, проверяет root-owned `/run/credentials`,
-read-only mount каталога unit и private regular credential. Произвольный файл из
-`/tmp` не является разрешением запуска. Node-RED проходит ту же проверку через
-`ExecCondition` до старта процесса.
+Target host использует systemd 245, поэтому unit candidates не зависят от
+`LoadCredential` (появился в systemd 247). Короткоживущий marker должен быть
+точным regular file `root:lk1-subscription-dev 0440` в каталоге
+`root:lk1-subscription-dev 0750`; runtime принимает только фиксированный путь
+`/srv/lk1-subscription-dev/authorization/service-start.approved`, проверяет
+root custody всей цепочки каталогов, отсутствие symlink/group-write/world-write
+и exact file owner/group/mode. Произвольный файл из `/tmp` не является
+разрешением запуска. Node-RED проходит ту же проверку через `ExecCondition` до
+старта процесса.
 
 Runtime принимает credential только при одновременном выполнении условий:
 
@@ -22,15 +23,14 @@ Runtime принимает credential только при одновременн
 - exact совпадение `sourceCommit` и `runtimeManifestSha256` с root-owned
   `install-identity.env`, который systemd читает через `EnvironmentFile`;
 - exact роли `cup`, `provider`, `identity`, `nodered`;
-- private regular non-symlink credential;
+- root-owned dedicated-group-read-only regular non-symlink marker;
 - `issuedAt <= now < expiresAt`, срок не более одного часа;
 - 64-hex `authorizationId` (идентификатор короткоживущего многостартового окна,
   не anti-replay nonce).
 
-Это устраняет необходимость чтения закрытого source marker service user-ом, но
-не доказывает поддержку `LoadCredential` конкретным host. Контракт оставляет
-`hostSupportVerified=false`; fresh read-only host preflight является отдельным
-будущим gate.
+Fresh read-only preflight подтвердил systemd 245 и совместимость этого
+file-custody transport. Историческое подтверждение не заменяет повторный
+preflight непосредственно перед будущей установкой.
 
 ## Почему candidate нельзя запустить
 
@@ -40,6 +40,8 @@ Runtime принимает credential только при одновременн
 - Install executor и `install-identity.env` отсутствуют.
 - Loopback-only/editor-disabled Node-RED settings входят как exact hashed payload.
 - Manifest и contract оставляют все host/live authority в `false`.
+- CUP managed entitlement/activation реализованы только как synthetic in-memory
+  source и физически проверены на fixture-owned loopback; host runtime не запускался.
 - Provider/identity остаются health-only, а system evidence —
   `FIXTURE_NON_AUTHORIZING`; обычный UAT остаётся `BLOCKED`.
 

@@ -10,21 +10,19 @@ const ROLE_PORTS = Object.freeze({ cup: 3037, provider: 3038, identity: 3039 });
 const AUTHORIZATION_ROLES = Object.freeze([...Object.keys(ROLE_PORTS), "nodered"]);
 const LOOPBACK = "127.0.0.1";
 const AUTHORIZATION_MARKER = "/srv/lk1-subscription-dev/authorization/service-start.approved";
-const AUTHORIZATION_CREDENTIAL = "service-start.approved";
+const AUTHORIZATION_FILE_ENV = "LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE";
 const CONFIG_ENV = "LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE";
 const INSTALLED_SOURCE_ENV = "LK1_SUBSCRIPTION_DEV_INSTALLED_SOURCE_COMMIT";
 const INSTALLED_MANIFEST_ENV = "LK1_SUBSCRIPTION_DEV_RUNTIME_MANIFEST_SHA256";
-const ROLE_CREDENTIAL_DIRECTORIES = Object.freeze({
-  cup: "/run/credentials/lk1-subscription-dev-cup.service",
-  provider: "/run/credentials/lk1-subscription-dev-provider-fixture.service",
-  identity: "/run/credentials/lk1-subscription-dev-identity-fixture.service",
-  nodered: "/run/credentials/lk1-subscription-dev-nodered.service",
-});
 const SAFE_ID = /^fixture-[a-z0-9][a-z0-9-]{2,95}$/;
 const SAFE_FIXTURE_SECRET = /^fixture-[a-z0-9][a-z0-9-]{23,127}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const RELEASE_SHA = /^[a-f0-9]{40}$/;
 const RUN_SCOPE = /^subscription-sale-period:\d{8}T\d{9}Z:(A|B)$/;
+const SAFE_OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
+const MANAGED_ACTIONS = Object.freeze([
+  "CREATE_GAME", "JOIN_GAME", "BOOK_GROUP_TRAINING", "BOOK_TOURNAMENT",
+]);
 const AUTHORIZATION_LIFETIME_MS = 3_600_000;
 const METRIC_KEYS = Object.freeze([
   "entitlementAggregateRevision", "dailyUsage", "activeUsage", "operations",
@@ -103,6 +101,7 @@ function validateSubject(subject, role, config) {
   exactKeys(subject, [
     "clientSubscriptionId", "subscriptionInstanceId", "auth", "authoritativePurchasedAt",
     "policyVersion", "policyDigest", "instanceRevision", "instanceState", "canaryAllowed",
+    "managedTarget", "usageUnits", "money",
   ], `subject ${role}`);
   if (!SAFE_ID.test(subject.clientSubscriptionId) || !SAFE_ID.test(subject.subscriptionInstanceId)
     || !SAFE_FIXTURE_SECRET.test(cleanText(subject.auth)) || !exactInstant(subject.authoritativePurchasedAt)
@@ -111,6 +110,26 @@ function validateSubject(subject, role, config) {
     || !["ACTIVE", "PENDING_ACTIVATION"].includes(subject.instanceState)
     || typeof subject.canaryAllowed !== "boolean") {
     fail("FIXTURE_SUBJECT_INVALID", `Subject ${role} is incomplete or not fixture-scoped`);
+  }
+  exactKeys(subject.managedTarget, [
+    "targetId", "stationId", "eventTypeId", "productTypeId", "durationMinutes", "startsAt",
+  ], `subject ${role} managed target`);
+  exactKeys(subject.money, [
+    "currency", "basePriceMinor", "discountMinor", "surchargeMinor", "finalPriceMinor",
+  ], `subject ${role} money`);
+  if (!SAFE_ID.test(subject.managedTarget.targetId)
+    || !SAFE_ID.test(subject.managedTarget.stationId)
+    || !SAFE_ID.test(subject.managedTarget.eventTypeId)
+    || !SAFE_ID.test(subject.managedTarget.productTypeId)
+    || ![60, 90, 120].includes(subject.managedTarget.durationMinutes)
+    || !exactInstant(subject.managedTarget.startsAt)
+    || !Number.isSafeInteger(subject.usageUnits) || subject.usageUnits < 1
+    || subject.money.currency !== "RUB"
+    || ![subject.money.basePriceMinor, subject.money.discountMinor,
+      subject.money.surchargeMinor, subject.money.finalPriceMinor]
+      .every((value) => Number.isSafeInteger(value) && value >= 0)
+    || subject.money.finalPriceMinor !== 0) {
+    fail("FIXTURE_SUBJECT_INVALID", `Subject ${role} managed decision is incomplete`);
   }
   const publication = config.publications.find((row) => row.version === subject.policyVersion);
   if (!publication || publication.policyDigest !== subject.policyDigest) {
@@ -176,15 +195,23 @@ function findSubject(config, clientSubscriptionId) {
     .find(([, subject]) => subject.clientSubscriptionId === clientSubscriptionId);
 }
 
-function requireReadAuthorization(config, request, allowedBodyKeys, allowControl = true) {
-  if (!isObject(request.body)
-    || JSON.stringify(Object.keys(request.body).sort()) !== JSON.stringify([...allowedBodyKeys].sort())) {
-    fail("FIXTURE_REQUEST_INVALID", "Read request body is not exact", 400);
-  }
+function findSubjectByInstance(config, subscriptionInstanceId) {
+  return Object.entries(config.subjects)
+    .find(([, subject]) => subject.subscriptionInstanceId === subscriptionInstanceId);
+}
+
+function normalizedHeaders(headers) {
+  return Object.fromEntries(Object.entries(headers)
+    .map(([key, value]) => [key.toLowerCase(), cleanText(value)]));
+}
+
+function requireIntegrationAuthorization(config, request) {
   if (!sameSecret(request.headers["x-subscriptions-integration-token"], config.integrationToken)) {
     fail("FIXTURE_INTEGRATION_AUTH_INVALID", "Integration authentication failed", 401);
   }
-  const found = findSubject(config, cleanText(request.body.clientSubscriptionId));
+}
+
+function requireSubjectAuthorization(config, request, found, allowControl = false) {
   if (!found || (!allowControl && found[0] === "CONTROL")) {
     fail("FIXTURE_SUBJECT_NOT_FOUND", "Fixture subject is unavailable", 404);
   }
@@ -192,6 +219,16 @@ function requireReadAuthorization(config, request, allowedBodyKeys, allowControl
     fail("FIXTURE_SUBJECT_AUTH_INVALID", "Subject authentication failed", 401);
   }
   return found;
+}
+
+function requireReadAuthorization(config, request, allowedBodyKeys, allowControl = true) {
+  if (!isObject(request.body)
+    || JSON.stringify(Object.keys(request.body).sort()) !== JSON.stringify([...allowedBodyKeys].sort())) {
+    fail("FIXTURE_REQUEST_INVALID", "Read request body is not exact", 400);
+  }
+  requireIntegrationAuthorization(config, request);
+  const found = findSubject(config, cleanText(request.body.clientSubscriptionId));
+  return requireSubjectAuthorization(config, request, found, allowControl);
 }
 
 function runtimeContext(config, subject) {
@@ -291,12 +328,206 @@ function observability(config, role, subject, scope) {
   return { ...payload, evidenceHmac: evidenceHmac(observationSigningPayload(payload), config.integrationToken) };
 }
 
-export function handleFixtureRequest({ role, method, pathname, headers = {}, body, now = new Date() }, config) {
+export function createFixtureState(config) {
+  validateFixtureConfig(config);
+  return {
+    entitlements: new Map(),
+    instances: new Map(Object.values(config.subjects).map((subject) => [
+      subject.subscriptionInstanceId,
+      { revision: subject.instanceRevision, state: subject.instanceState },
+    ])),
+  };
+}
+
+function requireManagedRequest(config, request, state, expectedBodyKeys) {
+  if (!state || !(state.entitlements instanceof Map) || !(state.instances instanceof Map)) {
+    fail("FIXTURE_MANAGED_STATE_INVALID", "Managed fixture state is unavailable", 503);
+  }
+  if (!isObject(request.body)
+    || JSON.stringify(Object.keys(request.body).sort()) !== JSON.stringify([...expectedBodyKeys].sort())) {
+    fail("FIXTURE_REQUEST_INVALID", "Managed request body is not exact", 400);
+  }
+  requireIntegrationAuthorization(config, request);
+}
+
+function managedDecision(subject, action) {
+  return {
+    decisionKind: "ENTITLEMENT",
+    policyVersion: subject.policyVersion,
+    policyDigest: subject.policyDigest,
+    action,
+    target: jsonClone(subject.managedTarget),
+    usageUnits: subject.usageUnits,
+    money: jsonClone(subject.money),
+  };
+}
+
+function reserveEntitlement(config, request, state) {
+  requireManagedRequest(config, request, state, ["subscriptionInstanceId", "action", "target"]);
+  exactKeys(request.body.target, ["targetId"], "entitlement target");
+  const found = requireSubjectAuthorization(
+    config,
+    request,
+    findSubjectByInstance(config, cleanText(request.body.subscriptionInstanceId)),
+  );
+  const [, subject] = found;
+  const operationId = cleanText(request.headers["idempotency-key"]);
+  const correlationId = cleanText(request.headers["x-correlation-id"]);
+  const action = cleanText(request.body.action);
+  if (!SAFE_OPERATION_ID.test(operationId) || correlationId !== operationId
+    || !MANAGED_ACTIONS.includes(action)
+    || cleanText(request.body.target.targetId) !== subject.managedTarget.targetId) {
+    fail("FIXTURE_ENTITLEMENT_REQUEST_INVALID", "Entitlement reserve identity is invalid", 409);
+  }
+  const existing = state.entitlements.get(operationId);
+  if (existing) {
+    if (existing.subscriptionInstanceId !== subject.subscriptionInstanceId
+      || existing.action !== action || existing.targetId !== subject.managedTarget.targetId) {
+      fail("FIXTURE_IDEMPOTENCY_CONFLICT", "Idempotency key is bound to another request", 409);
+    }
+    if (!["RESERVED", "CONFIRMED"].includes(existing.state)) {
+      fail("FIXTURE_ENTITLEMENT_STATE_CONFLICT", "Released entitlement cannot be replayed", 409);
+    }
+    return {
+      schemaVersion: 1,
+      outcome: "RESERVED",
+      operationId,
+      subscriptionInstanceId: subject.subscriptionInstanceId,
+      operationState: existing.state,
+      aggregateRevision: existing.aggregateRevision,
+      replayed: true,
+      blockers: [],
+      decision: jsonClone(existing.decision),
+    };
+  }
+  const entry = {
+    subscriptionInstanceId: subject.subscriptionInstanceId,
+    action,
+    targetId: subject.managedTarget.targetId,
+    state: "RESERVED",
+    aggregateRevision: 1,
+    decision: managedDecision(subject, action),
+  };
+  state.entitlements.set(operationId, entry);
+  return {
+    schemaVersion: 1,
+    outcome: "RESERVED",
+    operationId,
+    subscriptionInstanceId: subject.subscriptionInstanceId,
+    operationState: "RESERVED",
+    aggregateRevision: 1,
+    replayed: false,
+    blockers: [],
+    decision: jsonClone(entry.decision),
+  };
+}
+
+function entitlementTransition(config, request, state, transition) {
+  const bodyKeys = Object.keys(request.body || {}).sort();
+  const allowedKeySets = transition === "CONFIRMED"
+    ? [["operationId", "providerBookingId"]]
+    : [["operationId", "reason"], ["operationId", "providerBookingId", "reason"]];
+  if (!allowedKeySets.some((keys) => JSON.stringify([...keys].sort()) === JSON.stringify(bodyKeys))) {
+    fail("FIXTURE_REQUEST_INVALID", "Managed request body is not exact", 400);
+  }
+  requireManagedRequest(config, request, state, bodyKeys);
+  const operationId = cleanText(request.body.operationId);
+  const entry = state.entitlements.get(operationId);
+  const found = entry && findSubjectByInstance(config, entry.subscriptionInstanceId);
+  requireSubjectAuthorization(config, request, found);
+  if (!SAFE_OPERATION_ID.test(operationId)) {
+    fail("FIXTURE_ENTITLEMENT_REQUEST_INVALID", "Entitlement operation identity is invalid", 409);
+  }
+  if (transition === "CONFIRMED") {
+    if (!SAFE_ID.test(cleanText(request.body.providerBookingId))) {
+      fail("FIXTURE_PROVIDER_BOOKING_INVALID", "Synthetic provider booking is invalid", 409);
+    }
+    if (entry.state === "FAILED" || entry.state === "COMPENSATED") {
+      fail("FIXTURE_ENTITLEMENT_STATE_CONFLICT", "Released entitlement cannot be confirmed", 409);
+    }
+    if (entry.state !== "CONFIRMED") {
+      entry.state = "CONFIRMED";
+      entry.aggregateRevision += 1;
+    }
+    return {
+      schemaVersion: 1,
+      outcome: "CONFIRMED",
+      operationId,
+      subscriptionInstanceId: entry.subscriptionInstanceId,
+      operationState: "CONFIRMED",
+      aggregateRevision: entry.aggregateRevision,
+    };
+  }
+  if (!["PROVIDER_REJECTED", "PROVIDER_CANCELLED", "BOOKING_CANCELLED", "REQUEST_FAILED", "EXPIRED"]
+    .includes(cleanText(request.body.reason))) {
+    fail("FIXTURE_RELEASE_REASON_INVALID", "Release reason is not allowlisted", 409);
+  }
+  if (request.body.providerBookingId !== undefined
+    && !SAFE_ID.test(cleanText(request.body.providerBookingId))) {
+    fail("FIXTURE_PROVIDER_BOOKING_INVALID", "Synthetic provider booking is invalid", 409);
+  }
+  if (entry.state === "CONFIRMED") {
+    fail("FIXTURE_ENTITLEMENT_STATE_CONFLICT", "Confirmed entitlement cannot be released", 409);
+  }
+  if (entry.state !== "FAILED") {
+    entry.state = "FAILED";
+    entry.aggregateRevision += 1;
+  }
+  return {
+    schemaVersion: 1,
+    outcome: "RELEASED",
+    operationId,
+    subscriptionInstanceId: entry.subscriptionInstanceId,
+    operationState: "FAILED",
+    aggregateRevision: entry.aggregateRevision,
+  };
+}
+
+function activateFirstUse(config, request, state) {
+  requireManagedRequest(config, request, state, [
+    "subscriptionInstanceId", "clientSubscriptionId", "providerBookingId", "expectedInstanceRevision",
+  ]);
+  const found = requireSubjectAuthorization(
+    config,
+    request,
+    findSubjectByInstance(config, cleanText(request.body.subscriptionInstanceId)),
+  );
+  const [, subject] = found;
+  const instance = state.instances.get(subject.subscriptionInstanceId);
+  if (request.body.clientSubscriptionId !== subject.clientSubscriptionId
+    || !SAFE_ID.test(cleanText(request.body.providerBookingId))
+    || !Number.isSafeInteger(request.body.expectedInstanceRevision)) {
+    fail("FIXTURE_ACTIVATION_REQUEST_INVALID", "Activation request identity is invalid", 409);
+  }
+  const alreadyActive = instance.state === "ACTIVE";
+  if (!alreadyActive && request.body.expectedInstanceRevision !== instance.revision) {
+    fail("FIXTURE_ACTIVATION_REVISION_CONFLICT", "Activation revision is stale", 409);
+  }
+  if (!alreadyActive) {
+    instance.state = "ACTIVE";
+    instance.revision += 1;
+  }
+  return {
+    schemaVersion: 1,
+    outcome: alreadyActive ? "ALREADY_ACTIVE" : "ACTIVATED",
+    subscriptionInstanceId: subject.subscriptionInstanceId,
+    state: "ACTIVE",
+    revision: instance.revision,
+    activeFrom: config.managedRange.startsAt,
+    activeTo: config.managedRange.endsAt,
+  };
+}
+
+export function handleFixtureRequest(
+  { role, method, pathname, headers = {}, body, now = new Date() },
+  config,
+  state = null,
+) {
   if (!ROLE_PORTS[role]) fail("FIXTURE_ROLE_INVALID", "Unknown fixture role", 400);
   const request = {
     method: cleanText(method).toUpperCase(),
     pathname: cleanText(pathname),
-    headers: Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), cleanText(value)])),
+    headers: normalizedHeaders(headers),
     body,
   };
   if (request.method === "GET" && request.pathname === "/healthz") {
@@ -314,6 +545,18 @@ export function handleFixtureRequest({ role, method, pathname, headers = {}, bod
   if (request.method === "POST" && request.pathname === "/api/internal/subscriptions/runtime-context") {
     const [, subject] = requireReadAuthorization(config, request, ["clientSubscriptionId"]);
     return { statusCode: 200, body: runtimeContext(config, subject) };
+  }
+  if (request.method === "POST" && request.pathname === "/api/internal/subscriptions/entitlements/reserve") {
+    return { statusCode: 200, body: reserveEntitlement(config, request, state) };
+  }
+  if (request.method === "POST" && request.pathname === "/api/internal/subscriptions/entitlements/confirm") {
+    return { statusCode: 200, body: entitlementTransition(config, request, state, "CONFIRMED") };
+  }
+  if (request.method === "POST" && request.pathname === "/api/internal/subscriptions/entitlements/release") {
+    return { statusCode: 200, body: entitlementTransition(config, request, state, "FAILED") };
+  }
+  if (request.method === "POST" && request.pathname === "/api/internal/subscriptions/activate-first-use") {
+    return { statusCode: 200, body: activateFirstUse(config, request, state) };
   }
   if (request.method === "POST" && request.pathname === "/api/internal/subscriptions/dev-uat/observability") {
     const [subjectRole, subject] = requireReadAuthorization(
@@ -356,6 +599,7 @@ async function readJsonBody(request) {
 export function createFixtureServer(role, config) {
   validateFixtureConfig(config);
   if (!ROLE_PORTS[role]) fail("FIXTURE_ROLE_INVALID", "Unknown fixture role", 64);
+  const state = createFixtureState(config);
   return http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url || "/", `http://${LOOPBACK}:${ROLE_PORTS[role]}`);
@@ -368,7 +612,7 @@ export function createFixtureServer(role, config) {
         pathname: url.pathname,
         headers: request.headers,
         body: await readJsonBody(request),
-      }, config);
+      }, config, state);
       writeJson(response, result.statusCode, result.body);
     } catch (error) {
       const statusCode = error instanceof FixtureRuntimeError ? error.statusCode : 500;
@@ -378,44 +622,39 @@ export function createFixtureServer(role, config) {
   });
 }
 
-const unescapeMountPath = (value) => value
-  .replace(/\\040/g, " ")
-  .replace(/\\011/g, "\t")
-  .replace(/\\012/g, "\n")
-  .replace(/\\134/g, "\\");
-
-export function readAuthorizationCredential(credentialsDirectory, fsApi = fs) {
-  if (!path.isAbsolute(credentialsDirectory)) {
-    fail("SERVICE_START_CREDENTIAL_DIRECTORY_INVALID", "Credential directory is not absolute", 78);
+export function readAuthorizationCredential(authorizationFile, fsApi = fs) {
+  if (authorizationFile !== AUTHORIZATION_MARKER) {
+    fail("SERVICE_START_CREDENTIAL_PATH_INVALID", "Authorization path is not exact", 78);
   }
-  const credentialRoot = "/run/credentials";
-  const credentialPath = path.join(credentialsDirectory, AUTHORIZATION_CREDENTIAL);
-  const rootStat = fsApi.lstatSync(credentialRoot);
-  const directoryStat = fsApi.lstatSync(credentialsDirectory);
-  const lexicalStat = fsApi.lstatSync(credentialPath);
-  const resolvedRoot = fsApi.realpathSync(credentialRoot);
-  const resolvedDirectory = fsApi.realpathSync(credentialsDirectory);
-  const resolved = fsApi.realpathSync(credentialPath);
-  const stat = fsApi.lstatSync(resolved);
-  const mountInfo = fsApi.readFileSync("/proc/self/mountinfo", "utf8");
-  const hasReadOnlyCredentialMount = mountInfo.split("\n").some((line) => {
-    const separator = line.indexOf(" - ");
-    if (separator < 0) return false;
-    const before = line.slice(0, separator).split(" ");
-    const after = line.slice(separator + 3).split(" ");
-    if (before.length < 6 || after.length < 3
-      || unescapeMountPath(before[4]) !== credentialsDirectory) return false;
-    return before[5].split(",").includes("ro") || after[2].split(",").includes("ro");
-  });
-  if (resolvedRoot !== credentialRoot || !rootStat.isDirectory() || rootStat.isSymbolicLink()
-    || rootStat.uid !== 0 || (rootStat.mode & 0o022) !== 0
-    || resolvedDirectory !== credentialsDirectory || !directoryStat.isDirectory()
-    || directoryStat.isSymbolicLink() || !hasReadOnlyCredentialMount
-    || lexicalStat.isSymbolicLink() || resolved !== credentialPath || !stat.isFile()
-    || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
+  const custody = [
+    ["/srv", 0o755, null],
+    ["/srv/lk1-subscription-dev", null, null],
+    ["/srv/lk1-subscription-dev/authorization", 0o750, "DEDICATED_GROUP"],
+  ];
+  let authorizationGroup = null;
+  for (const [target, exactMode, groupPolicy] of custody) {
+    const lexicalStat = fsApi.lstatSync(target);
+    const resolved = fsApi.realpathSync(target);
+    if (resolved !== target || !lexicalStat.isDirectory() || lexicalStat.isSymbolicLink()
+      || lexicalStat.uid !== 0 || (lexicalStat.mode & 0o022) !== 0
+      || (exactMode !== null && (lexicalStat.mode & 0o777) !== exactMode)) {
+      fail("SERVICE_START_CREDENTIAL_CUSTODY_INVALID", "Authorization directory custody is invalid", 78);
+    }
+    if (groupPolicy === "DEDICATED_GROUP") {
+      if (!Number.isInteger(lexicalStat.gid) || lexicalStat.gid <= 0) {
+        fail("SERVICE_START_CREDENTIAL_CUSTODY_INVALID", "Authorization group is not dedicated", 78);
+      }
+      authorizationGroup = lexicalStat.gid;
+    }
+  }
+  const lexicalStat = fsApi.lstatSync(authorizationFile);
+  const resolved = fsApi.realpathSync(authorizationFile);
+  if (resolved !== authorizationFile || !lexicalStat.isFile() || lexicalStat.isSymbolicLink()
+    || lexicalStat.uid !== 0 || lexicalStat.gid !== authorizationGroup
+    || (lexicalStat.mode & 0o777) !== 0o440) {
     fail(
       "SERVICE_START_CREDENTIAL_CUSTODY_INVALID",
-      "Start credential is not in an exact systemd-owned read-only credential mount",
+      "Start authorization is not an exact root-owned group-read-only regular file",
       78,
     );
   }
@@ -429,17 +668,17 @@ export function validateStartAuthorization(
   readCredential = readAuthorizationCredential,
 ) {
   if (!AUTHORIZATION_ROLES.includes(role)) fail("FIXTURE_ROLE_INVALID", "Unknown authorization role", 64);
-  const credentialsDirectory = cleanText(env.CREDENTIALS_DIRECTORY);
+  const authorizationFile = cleanText(env[AUTHORIZATION_FILE_ENV]);
   const installedSourceCommit = cleanText(env[INSTALLED_SOURCE_ENV]);
   const installedManifestSha256 = cleanText(env[INSTALLED_MANIFEST_ENV]);
-  if (credentialsDirectory !== ROLE_CREDENTIAL_DIRECTORIES[role]
+  if (authorizationFile !== AUTHORIZATION_MARKER
     || !RELEASE_SHA.test(installedSourceCommit)
     || !SHA256.test(installedManifestSha256)) {
     fail("SERVICE_START_IDENTITY_UNBOUND", "Installed runtime identity is not exact", 78);
   }
   let authorization;
   try {
-    authorization = JSON.parse(readCredential(credentialsDirectory));
+    authorization = JSON.parse(readCredential(authorizationFile));
   } catch (error) {
     if (error instanceof FixtureRuntimeError) throw error;
     fail("SERVICE_START_CREDENTIAL_INVALID", "Start credential is unavailable or invalid", 78);
@@ -481,7 +720,7 @@ export function validateFixtureCli(
       roles: Object.keys(ROLE_PORTS),
       authorizationRoles: AUTHORIZATION_ROLES,
       ports: ROLE_PORTS,
-      authorizationTransport: "SYSTEMD_LOAD_CREDENTIAL",
+      authorizationTransport: "ROOT_OWNED_GROUP_READ_ONLY_FILE",
     };
   }
   if (argv.length === 3 && argv[0] === "--validate-start-authorization"
@@ -526,14 +765,13 @@ export const fixtureRuntimeContract = Object.freeze({
   host: LOOPBACK,
   ports: ROLE_PORTS,
   authorizationMarker: AUTHORIZATION_MARKER,
-  authorizationCredential: AUTHORIZATION_CREDENTIAL,
-  authorizationTransport: "SYSTEMD_LOAD_CREDENTIAL",
+  authorizationFileEnvironmentVariable: AUTHORIZATION_FILE_ENV,
+  authorizationTransport: "ROOT_OWNED_GROUP_READ_ONLY_FILE",
   authorizationRoles: AUTHORIZATION_ROLES,
-  credentialDirectories: ROLE_CREDENTIAL_DIRECTORIES,
   installedIdentityEnvironment: {
     sourceCommit: INSTALLED_SOURCE_ENV,
     runtimeManifestSha256: INSTALLED_MANIFEST_ENV,
   },
   configEnvironmentVariable: CONFIG_ENV,
-  mode: "READ_ONLY_EVIDENCE",
+  mode: "SYNTHETIC_MANAGED_CONTRACT_SOURCE_ONLY",
 });

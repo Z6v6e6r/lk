@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "stage": "LOCAL_RUNTIME_SOURCE",
   "environment": "DEV",
-  "purpose": "READ_ONLY_UAT_EVIDENCE",
+  "purpose": "SYNTHETIC_MANAGED_CONTRACT_SOURCE_ONLY",
   "sourceCommit": null,
   "target": {
     "fixtureRuntimePath": "/srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs",
@@ -10,14 +10,8 @@
     "nodeRedReleaseReceiptPath": "/srv/lk1-subscription-dev/node-red/release-identity.json",
     "fixtureConfigEnvironmentVariable": "LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE",
     "serviceStartAuthorizationMarker": "/srv/lk1-subscription-dev/authorization/service-start.approved",
-    "serviceStartAuthorizationTransport": "SYSTEMD_LOAD_CREDENTIAL",
-    "serviceStartCredentialName": "service-start.approved",
-    "serviceStartCredentialDirectories": {
-      "cup": "/run/credentials/lk1-subscription-dev-cup.service",
-      "provider": "/run/credentials/lk1-subscription-dev-provider-fixture.service",
-      "identity": "/run/credentials/lk1-subscription-dev-identity-fixture.service",
-      "nodered": "/run/credentials/lk1-subscription-dev-nodered.service"
-    },
+    "serviceStartAuthorizationTransport": "ROOT_OWNED_GROUP_READ_ONLY_FILE",
+    "serviceStartAuthorizationFileEnvironmentVariable": "LK1_SUBSCRIPTION_DEV_START_AUTHORIZATION_FILE",
     "installedIdentityEnvironmentFile": "/srv/lk1-subscription-dev/runtime/install-identity.env"
   },
   "listeners": {
@@ -34,8 +28,8 @@
     "observability": "READ_ONLY_SCHEMA_FIXTURE_NON_AUTHORIZING",
     "provider": "HEALTH_ONLY_LOCKED",
     "identity": "HEALTH_ONLY_LOCKED",
-    "managedEntitlement": "NOT_IMPLEMENTED",
-    "activation": "NOT_IMPLEMENTED",
+    "managedEntitlement": "SYNTHETIC_IN_MEMORY_SOURCE_IMPLEMENTED",
+    "activation": "SYNTHETIC_IN_MEMORY_SOURCE_IMPLEMENTED",
     "createJoin": "NOT_IMPLEMENTED"
   },
   "authority": {
