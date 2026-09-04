@@ -125,6 +125,61 @@ const extractList = (value) => {
   return [];
 };
 
+const normalizePhone = (value) => {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 10) return `7${digits}`;
+  if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
+  return digits.length === 11 ? digits : null;
+};
+
+const piterProductLineMatches = (line, productId) => Boolean(line && typeof line === "object" && [
+  line.id,
+  line.uuid,
+  line.productId,
+  line.subscriptionId,
+  line.product?.id,
+  line.product?.uuid,
+].some((value) => toStr(value) === productId));
+
+const piterProviderFactsMatch = (ctx, transaction) => {
+  const expectedProductId = toStr(ctx.productId);
+  const expectedAmountMinor = Number.isInteger(ctx.expectedAmountMinor) ? ctx.expectedAmountMinor : null;
+  const expectedDiscountMinor = Number.isInteger(ctx.saleRecord?.discountMinor)
+    ? ctx.saleRecord.discountMinor
+    : Number.isInteger(ctx.discountMinor) ? ctx.discountMinor : null;
+  const expectedProviderCostMinor = Number.isInteger(ctx.saleRecord?.providerProductCostMinor)
+    ? ctx.saleRecord.providerProductCostMinor
+    : Number.isInteger(ctx.providerProductCostMinor) ? ctx.providerProductCostMinor : null;
+  const allProductLines = extractList(transaction?.products);
+  const productLines = allProductLines.filter((line) => piterProductLineMatches(line, expectedProductId));
+  const storedClientId = toStr(ctx.clientId);
+  const storedPhone = normalizePhone(ctx.clientPhone);
+  const providerClientId = toStr(transaction?.clientId)
+    || toStr(transaction?.client?.id)
+    || toStr(transaction?.client?.uuid)
+    || toStr(transaction?.client?.clientId);
+  const providerPhone = normalizePhone(
+    transaction?.clientPhone
+    || transaction?.client?.phone
+    || transaction?.client?.mobile
+    || transaction?.client?.phoneNumber,
+  );
+  const clientMatches = Boolean(storedClientId || storedPhone)
+    && (!storedClientId || storedClientId === providerClientId)
+    && (!storedPhone || storedPhone === providerPhone);
+  return Boolean(
+    expectedProductId
+    && Number.isInteger(expectedAmountMinor) && expectedAmountMinor > 0
+    && Number.isInteger(expectedDiscountMinor) && expectedDiscountMinor >= 0
+    && Number.isInteger(expectedProviderCostMinor)
+    && expectedAmountMinor + expectedDiscountMinor === expectedProviderCostMinor
+    && toNum(transaction?.sum) === expectedAmountMinor
+    && allProductLines.length === 1 && productLines.length === 1
+    && toNum(productLines[0]?.discount) === expectedDiscountMinor
+    && clientMatches
+  );
+};
+
 const normalizeProductType = (value) => {
   const raw = String(value || "").trim().toUpperCase();
   if (
@@ -826,7 +881,8 @@ if (ctx.step === "confirm_lookup") {
       && (paid ? providerToPay === 0
         : failed ? (providerToPay === 0 || providerToPay === expectedAmount)
           : providerToPay === expectedAmount);
-    if (!toStr(ctx.transactionId) || pickId(msg.payload) !== ctx.transactionId || !validAmount) {
+    if (!toStr(ctx.transactionId) || pickId(msg.payload) !== ctx.transactionId
+      || !validAmount || !piterProviderFactsMatch(ctx, msg.payload)) {
       return fail(503, "Подтверждение Viva требует сверки; состояние покупки не изменено", {
         code: "PITER_CONFIRM_PROVIDER_MISMATCH", paymentRef: ctx.paymentRef,
       });

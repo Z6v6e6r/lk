@@ -16,8 +16,8 @@ export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
   mongoClient: "4e820638cc39c730",
 });
 
-export const PITER_ATOMIC_ROUTER_SHA256 = "3e31ece89289bdb01fee41f9d3367a1be71abefd0390b37cee42eac0931675d8";
-export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "9c4f062ab1105480f97a0ca5cc869c68cf8bd1310a846e7eab63600c37b61d9c";
+export const PITER_ATOMIC_ROUTER_SHA256 = "fe097554fb070cbf7e076ee907c90f4448317424650d7804eb2151b2d9372a6c";
+export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "482c7f2230a1a6d2b781ddd9f67ecea19ee80a594385e7455a5acd759d989271";
 export const PITER_ATOMIC_ERROR_SOURCE = `msg.statusCode = 503;
 msg.headers = {"Content-Type":"application/json; charset=utf-8"};
 msg.payload = {error:"Хранилище временно недоступно",details:{code:"PITER_ATOMIC_MONGO_ERROR"}};
