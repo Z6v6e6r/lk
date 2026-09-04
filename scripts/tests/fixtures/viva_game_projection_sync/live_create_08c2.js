@@ -267,8 +267,8 @@ const buildResultRosterSnapshot = ({
     const normalized = normalizeSnapshotMemberInput(value, options.fallbackSource, options.fallbackStatus);
     if (!normalized) return null;
     const identityKeys = uniq([
-      normalized.clientId ? `id:${normalized.clientId}` : null,
       normalized.phoneNorm ? `phone:${normalized.phoneNorm}` : null,
+      normalized.clientId ? `id:${normalized.clientId}` : null,
       normalized.nameKey ? `name:${normalized.nameKey}` : null,
     ]);
     let memberKey = toStr(normalized.explicitMemberKey);
@@ -276,10 +276,10 @@ const buildResultRosterSnapshot = ({
       memberKey = identityKeys.map((key) => memberKeyMap.get(key)).find(Boolean) || null;
     }
     if (!memberKey) {
-      if (normalized.clientId) {
-        memberKey = `id:${sanitizeMemberKeyPart(normalized.clientId) || normalized.clientId}`;
-      } else if (normalized.phoneNorm) {
+      if (normalized.phoneNorm) {
         memberKey = `phone:${normalized.phoneNorm}`;
+      } else if (normalized.clientId) {
+        memberKey = `id:${sanitizeMemberKeyPart(normalized.clientId) || normalized.clientId}`;
       } else if (normalized.nameKey) {
         memberKey = `name:${sanitizeMemberKeyPart(normalized.nameKey) || "player"}`;
       } else {
@@ -419,8 +419,7 @@ const buildResultRosterSnapshot = ({
       : (typeof bookingSeed?.waitlistEnabled === "boolean" ? bookingSeed.waitlistEnabled : true),
   };
   return {
-    version: 3,
-    schemaVersion: 3,
+    version: 1,
     canonical: true,
     source: toStr(source) || "games_create",
     capturedAt,
@@ -436,7 +435,6 @@ const buildResultRosterSnapshot = ({
     bookingContext,
     booking: bookingContext,
     allowedPhoneNorms: uniq(allPlayers.map((member) => member?.phoneNorm).filter(Boolean)),
-    allowedClientIds: uniq(allPlayers.map((member) => member?.clientId).filter(Boolean)),
   };
 };
 const dedupeByKey = (items) => {
@@ -460,12 +458,12 @@ const body = isObj(msg.payload) ? msg.payload : {};
 const query = isObj(msg.req?.query) ? msg.req.query : {};
 const nowIso = new Date().toISOString();
 
-const internalAction = toStr(msg._action);
+const explicitAction = toStr(body.action || body._action || msg._action || msg.action);
 let mode = "create";
 if (reqPath.includes("/payment/confirm")) mode = "confirm";
 if (reqPath.includes("/draft")) mode = "draft";
-if (internalAction) {
-  const normalized = internalAction.toLowerCase();
+if (explicitAction) {
+  const normalized = explicitAction.toLowerCase();
   if (["create", "draft", "confirm"].includes(normalized)) {
     mode = normalized;
   }
@@ -667,35 +665,13 @@ const endIso = toIso(date, timeTo, booking.timeToIso || body.timeToIso);
 const startTs = startIso ? Date.parse(startIso) : null;
 const endTs = endIso ? Date.parse(endIso) : null;
 
-// Internal seam for a future pre-upsert Viva lookup node. Do not accept this
-// value from the public request payload: only an upstream Node-RED node may
-// populate msg._gameConfirmExerciseLookup after resolving bookingIds in Viva.
-const confirmExerciseLookup = isObj(msg._gameConfirmExerciseLookup)
-  ? msg._gameConfirmExerciseLookup
-  : {};
-const confirmLookupBookingIds = uniq(parseBookingIds(confirmExerciseLookup.bookingIds));
-const confirmLookupMatchesBookings = (
-  bookingIds.length > 0
-  && confirmLookupBookingIds.length === bookingIds.length
-  && bookingIds.every((bookingId) => confirmLookupBookingIds.includes(bookingId))
-);
-const confirmLookupIsActive = (
-  (!hasOwn(confirmExerciseLookup, "active") || confirmExerciseLookup.active === true)
-  && (!hasOwn(confirmExerciseLookup, "notCancelled") || confirmExerciseLookup.notCancelled === true)
-  && (!hasOwn(confirmExerciseLookup, "cancelled") || confirmExerciseLookup.cancelled === false)
-  && (!hasOwn(confirmExerciseLookup, "isCancelled") || confirmExerciseLookup.isCancelled === false)
-);
-const confirmedLookupExerciseId = confirmLookupMatchesBookings && confirmLookupIsActive
-  ? toStr(confirmExerciseLookup.vivaExerciseId || confirmExerciseLookup.exerciseId)
-  : null;
 const vivaExerciseId = toStr(
   booking.vivaExerciseId
     || booking.exerciseId
     || metadataInput.vivaExerciseId
     || metadataInput.exerciseId
     || splitPaymentInput.vivaExerciseId
-    || splitPaymentInput.exerciseId
-    || confirmedLookupExerciseId,
+    || splitPaymentInput.exerciseId,
 );
 
 const slotKey = [studioId, roomId, date, timeFrom, timeTo, subServiceIds.join(",")].join("|");
@@ -704,11 +680,6 @@ const dedupeKey = vivaExerciseId ? `viva:${vivaExerciseId}` : `slot:${slotKey}`;
 const fallbackIdBase = paymentRef ? `pay:${paymentRef}` : dedupeKey;
 const fallbackId = fallbackIdBase.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
 const gameId = toStr(body.id || body.gameId || body.recordId) || fallbackId || `g_${Date.now()}`;
-const expectedRevision = body.expectedRevision !== null && body.expectedRevision !== undefined
-  && Number.isSafeInteger(Number(body.expectedRevision))
-  && Number(body.expectedRevision) >= 1
-  ? Number(body.expectedRevision)
-  : null;
 
 const invitedPhonesFromPayload = uniq([
   ...asArray(body.invitedPhones).map((v) => normPhone(v)),
@@ -727,118 +698,19 @@ const allRelatedPhones = uniq([
 const incomingPaid = typeof payment.paid === "boolean" ? payment.paid : null;
 const resolvedPaid =
   mode === "draft"
-    ? false
+    ? (incomingPaid === null ? false : incomingPaid)
     : mode === "confirm"
       ? true
       : (incomingPaid === null ? true : incomingPaid);
 
-// GAME_PAYMENT_CONFIRM_GUARD_START
-const paymentVerification = isObj(msg._gamePaymentVerified) ? msg._gamePaymentVerified : null;
-if (
-  mode === "confirm"
-  && (
-    paymentVerification?.verified !== true
-    || toStr(paymentVerification.paymentRef) !== paymentRef
-    || toStr(paymentVerification.source) !== "viva_transaction_readback"
-    || !toStr(paymentVerification.transactionId)
-    || !toStr(paymentVerification.bookingId)
-    || !toStr(paymentVerification.exerciseId)
-  )
-) {
-  const errorPayload = {
-    error: "Оплата должна быть подтверждена сервером по данным Viva",
-    code: "GAME_PAYMENT_EVIDENCE_REQUIRED",
-    paymentRef: paymentRef || null,
-    retryable: true,
-  };
-  const errMsg = Object.assign({}, msg, {
-    statusCode: 409,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    payload: errorPayload,
-  });
-  return [null, errMsg, errMsg, null];
-}
-
-if (mode === "confirm" && expectedRevision === null) {
-  const errorPayload = {
-    error: "Черновик оплаты не содержит версии для безопасного подтверждения",
-    code: "GAME_PAYMENT_STALE_GUARD_REQUIRED",
-    paymentRef: paymentRef || null,
-    retryable: true,
-  };
-  const errMsg = Object.assign({}, msg, {
-    statusCode: 409,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    payload: errorPayload,
-  });
-  return [null, errMsg, errMsg, null];
-}
-
-if (
-  mode === "create"
-  && resolvedPaid === true
-  && paymentVerification?.verified !== true
-  && (
-    toStr(settings.payMode)?.toLowerCase() === "split"
-    || splitPaymentInput.enabled === true
-    || requestSource === "games_split_widget"
-    || Boolean(paymentRef)
-  )
-) {
-  const errorPayload = {
-    error: "Платная split-игра требует серверного подтверждения транзакции",
-    code: "GAME_PAYMENT_EVIDENCE_REQUIRED",
-    paymentRef: paymentRef || null,
-    retryable: true,
-  };
-  const errMsg = Object.assign({}, msg, {
-    statusCode: 409,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    payload: errorPayload,
-  });
-  return [null, errMsg, errMsg, null];
-}
-// GAME_PAYMENT_CONFIRM_GUARD_END
-
 const incomingStatus = toStr(body.status);
 const resolvedStatus =
-  mode === "draft"
+  incomingStatus
+  || (mode === "draft"
     ? "PAYMENT_PENDING"
-    : incomingStatus
-      || (resolvedPaid ? "PAID" : "PAYMENT_PENDING");
-
-const isPaidWidgetCreate = (
-  mode === "create"
-  && resolvedPaid === true
-  && ["games_widget", "games_widget_zero_pay"].includes(requestSource)
-);
-const requiresConfirmedExerciseId = mode === "confirm" || isPaidWidgetCreate;
-
-if (requiresConfirmedExerciseId && resolvedPaid === true && bookingIds.length > 0 && !vivaExerciseId) {
-  const errorPayload = {
-    error: "Не удалось связать оплаченную бронь с занятием Viva. Повторите синхронизацию.",
-    code: "GAME_EXERCISE_ID_MISSING",
-    paymentRef: paymentRef || null,
-    bookingIds,
-    retryable: true,
-    lookupRequired: true,
-  };
-  const errMsg = Object.assign({}, msg, {
-    statusCode: 409,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    payload: errorPayload,
-  });
-  const debugMsg = Object.assign({}, errMsg, {
-    payload: {
-      action: "paid_confirm_blocked_missing_exercise_id",
-      code: errorPayload.code,
-      paymentRef: errorPayload.paymentRef,
-      bookingIds,
-      lookupRequired: true,
-    },
-  });
-  return [null, errMsg, debugMsg, null];
-}
+    : resolvedPaid
+      ? "PAID"
+      : "PAYMENT_PENDING");
 
 const metadataForRecord = Object.assign({}, metadataInput);
 if (hasOwn(metadataForRecord, "resultRosterSnapshot")) delete metadataForRecord.resultRosterSnapshot;
@@ -883,30 +755,9 @@ const resultRosterSnapshot = buildResultRosterSnapshot({
   seedSnapshot: snapshotSeed,
 });
 
-const tenantKey = (() => {
-  try { return toStr(env.get("PADLHUB_PLATFORM_TENANT_KEY")); } catch (_error) { return null; }
-})();
-if (!tenantKey || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(tenantKey)) {
-  const errMsg = Object.assign({}, msg, {
-    statusCode: 503,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    payload: { error: "Game tenant configuration is unavailable", code: "GAME_TENANT_CONFIG_INVALID" },
-  });
-  return [null, errMsg, errMsg, null];
-}
-const requestedTenantKey = toStr(body.tenantKey);
-if (requestedTenantKey && requestedTenantKey !== tenantKey) {
-  const errMsg = Object.assign({}, msg, {
-    statusCode: 403,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    payload: { error: "Game tenant does not match the configured platform tenant", code: "GAME_TENANT_MISMATCH" },
-  });
-  return [null, errMsg, errMsg, null];
-}
-
 const record = {
   id: gameId,
-  tenantKey,
+  tenantKey: toStr(body.tenantKey) || null,
   source: toStr(body.source) || "padlhub_lk",
   dedupeKey,
   createdByFlow: true,
@@ -986,7 +837,7 @@ const auditEvent = buildAuditEvent(nowIso, auditEventType, {
   archived: Boolean(body.archived),
 });
 
-const paymentRefFilter = paymentRef
+const queryFilter = paymentRef
   ? {
       $or: [
         { "metadata.paymentRef": paymentRef },
@@ -994,16 +845,6 @@ const paymentRefFilter = paymentRef
       ],
     }
   : { dedupeKey };
-const queryFilter = {
-  tenantKey,
-  id: gameId,
-  revision: expectedRevision === null ? { $exists: false } : expectedRevision,
-  ...(mode === "confirm" ? {
-    archived: { $ne: true },
-    status: "PAYMENT_PENDING",
-  } : {}),
-  ...paymentRefFilter,
-};
 
 const dbMsg = Object.assign({}, msg, {
   query: queryFilter,
@@ -1024,7 +865,6 @@ const dbMsg = Object.assign({}, msg, {
         $slice: -AUDIT_MAX_EVENTS,
       },
     },
-    $inc: { revision: 1 },
   },
   _recordForResponse: Object.assign(
     {
@@ -1037,24 +877,10 @@ const dbMsg = Object.assign({}, msg, {
       },
     },
     record,
-    { revision: expectedRevision === null ? 1 : expectedRevision + 1 },
   ),
   _httpStatus: 200,
   _requestUrl: reqPathRaw,
   _requestMode: mode,
-  ...(mode === "confirm" ? {
-    _gameConfirmWriteAck: {
-      step: "write_ack",
-      gameId,
-      tenantKey,
-      expectedRevision,
-      expectedNextRevision: expectedRevision === null ? null : expectedRevision + 1,
-      paymentRef,
-      transactionId: toStr(paymentVerification?.transactionId),
-      bookingId: toStr(paymentVerification?.bookingId),
-      exerciseId: toStr(paymentVerification?.exerciseId),
-    },
-  } : {}),
 });
 
 const responseMsg = Object.assign({}, msg, {
@@ -1079,9 +905,4 @@ const autojoinMsg = Object.assign({}, msg, {
   payload: dbMsg._recordForResponse || Object.assign({ createdAt: nowIso }, record),
 });
 
-return [
-  dbMsg,
-  mode === "confirm" ? null : responseMsg,
-  debugMsg,
-  mode === "confirm" ? null : autojoinMsg,
-];
+return [dbMsg, responseMsg, debugMsg, autojoinMsg];

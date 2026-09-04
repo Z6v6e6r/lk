@@ -34,6 +34,11 @@ assertProductionManifestEnvironment(candidateBinding);
 
 export const UNBOUND_LK1_SOURCE_AMENDMENTS = Object.freeze([
   Object.freeze({
+    id: "e656cff36a8cd210",
+    sourceSha256: "b9b38b86805094c287ab473a0f51a697d899a69c8b13ce690538f978f4af15b7",
+    reason: "GAME_TENANT_CONTRACT_NOT_COMPOSED",
+  }),
+  Object.freeze({
     id: "lk_subscription_booking_router_20260804",
     sourceSha256: "02cd217c8791dbd0a70928539d05ef5cd44c6b57a8ad763cd6e95893d2f418c1",
     reason: "DEV_ROUTER_AMENDMENT_NOT_REBOUND",
@@ -74,7 +79,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
     Object.freeze({
       id: "e656cff36a8cd210",
       sourceFile: "scripts/nodered_games_nodes/fn_create.js",
-      candidateSha256: "cb2a3219b289d29c9b00bb90aff2582bfea229040690f51890ba55569cfa65a1",
+      candidateSha256: "b9b38b86805094c287ab473a0f51a697d899a69c8b13ce690538f978f4af15b7",
     }),
     Object.freeze({
       id: "9508f8e0ae8d282a",

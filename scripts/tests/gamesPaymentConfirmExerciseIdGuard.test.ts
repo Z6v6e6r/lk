@@ -4,7 +4,8 @@ import fs from "node:fs";
 
 function runCreate(msg: Record<string, unknown>) {
   const source = fs.readFileSync("scripts/nodered_games_nodes/fn_create.js", "utf8");
-  return new Function("msg", source)(msg) as unknown[];
+  const env = { get: (key: string) => key === "PADLHUB_PLATFORM_TENANT_KEY" ? "tenant-test" : undefined };
+  return new Function("msg", "env", source)(msg, env) as unknown[];
 }
 
 const verifiedPayment = {
