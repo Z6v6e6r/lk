@@ -8,7 +8,7 @@ import { validateFixtureConfig, validateFixtureCli } from "./lk1_subscription_de
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
-const MINIMAL_DEV_FLOW_SHA256 = "bc88753f2a5a4e67a33931c6ad3add082c8e54279b8fafb436f27d47d3068a40";
+const MINIMAL_DEV_FLOW_SHA256 = "fd9cff20a5b5adbf47fafce068e9e9cc357f676c08f2f5c41cd5420ed211ab95";
 const EXPECTED_FILES = Object.freeze([
   "payload/lk1_subscription_dev_runtime/fixture_runtime.mjs",
   "payload/lk1_subscription_dev_runtime/minimal.flow.json",
@@ -36,13 +36,25 @@ export function validateRuntimeSourceContract(contract) {
   exactKeys(contract.target, [
     "fixtureRuntimePath", "nodeRedFlowPath", "nodeRedReleaseReceiptPath",
     "fixtureConfigEnvironmentVariable", "serviceStartAuthorizationMarker",
+    "serviceStartAuthorizationTransport", "serviceStartCredentialName",
+    "serviceStartCredentialDirectories", "installedIdentityEnvironmentFile",
   ], "runtime target");
   if (contract.target.fixtureRuntimePath !== "/srv/lk1-subscription-dev/fixtures/fixture_runtime.mjs"
     || contract.target.nodeRedFlowPath !== "/srv/lk1-subscription-dev/node-red/flows.json"
     || contract.target.nodeRedReleaseReceiptPath !== "/srv/lk1-subscription-dev/node-red/release-identity.json"
     || contract.target.fixtureConfigEnvironmentVariable !== "LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE"
     || contract.target.serviceStartAuthorizationMarker
-      !== "/srv/lk1-subscription-dev/authorization/service-start.approved") {
+      !== "/srv/lk1-subscription-dev/authorization/service-start.approved"
+    || contract.target.serviceStartAuthorizationTransport !== "SYSTEMD_LOAD_CREDENTIAL"
+    || contract.target.serviceStartCredentialName !== "service-start.approved"
+    || JSON.stringify(contract.target.serviceStartCredentialDirectories) !== JSON.stringify({
+      cup: "/run/credentials/lk1-subscription-dev-cup.service",
+      provider: "/run/credentials/lk1-subscription-dev-provider-fixture.service",
+      identity: "/run/credentials/lk1-subscription-dev-identity-fixture.service",
+      nodered: "/run/credentials/lk1-subscription-dev-nodered.service",
+    })
+    || contract.target.installedIdentityEnvironmentFile
+      !== "/srv/lk1-subscription-dev/runtime/install-identity.env") {
     fail("runtime target is not the dedicated stopped identity");
   }
   exactKeys(contract.listeners, ["nodeRed", "cup", "provider", "identity"], "runtime listeners");

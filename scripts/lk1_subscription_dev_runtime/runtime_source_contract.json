@@ -9,7 +9,16 @@
     "nodeRedFlowPath": "/srv/lk1-subscription-dev/node-red/flows.json",
     "nodeRedReleaseReceiptPath": "/srv/lk1-subscription-dev/node-red/release-identity.json",
     "fixtureConfigEnvironmentVariable": "LK1_SUBSCRIPTION_DEV_FIXTURE_CONFIG_FILE",
-    "serviceStartAuthorizationMarker": "/srv/lk1-subscription-dev/authorization/service-start.approved"
+    "serviceStartAuthorizationMarker": "/srv/lk1-subscription-dev/authorization/service-start.approved",
+    "serviceStartAuthorizationTransport": "SYSTEMD_LOAD_CREDENTIAL",
+    "serviceStartCredentialName": "service-start.approved",
+    "serviceStartCredentialDirectories": {
+      "cup": "/run/credentials/lk1-subscription-dev-cup.service",
+      "provider": "/run/credentials/lk1-subscription-dev-provider-fixture.service",
+      "identity": "/run/credentials/lk1-subscription-dev-identity-fixture.service",
+      "nodered": "/run/credentials/lk1-subscription-dev-nodered.service"
+    },
+    "installedIdentityEnvironmentFile": "/srv/lk1-subscription-dev/runtime/install-identity.env"
   },
   "listeners": {
     "nodeRed": "127.0.0.1:1882",

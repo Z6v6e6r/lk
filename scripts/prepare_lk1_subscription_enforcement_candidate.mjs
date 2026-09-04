@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
+import { assertPiterAtomicTopology } from "./lib/piterAtomicTopologyContract.mjs";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 import { auditLegacyGameRevisionWriters } from "./audit_legacy_game_revision_writers.mjs";
 import {
@@ -31,7 +32,31 @@ export function assertProductionManifestEnvironment(manifest) {
 }
 assertProductionManifestEnvironment(candidateBinding);
 
+export const UNBOUND_LK1_SOURCE_AMENDMENTS = Object.freeze([
+  Object.freeze({
+    id: "lk_subscription_booking_router_20260804",
+    sourceSha256: "02cd217c8791dbd0a70928539d05ef5cd44c6b57a8ad763cd6e95893d2f418c1",
+    reason: "DEV_ROUTER_AMENDMENT_NOT_REBOUND",
+  }),
+  Object.freeze({
+    id: "c165e43eba668c25",
+    sourceSha256: "e81699c4c490b9883cacf104c751990c0b2922ce86d1f607889fb66991fedb53",
+    reason: "PITER_ATOMIC_SALES_NOT_COMPOSED",
+  }),
+  Object.freeze({
+    id: "91dded2dc8cfebe4",
+    sourceSha256: "cdaa2b512d6e0f1bc1fd79eb264d1d05816e63d391e6bbf9390eaf29694e0851",
+    reason: "PITER_ATOMIC_SALES_NOT_COMPOSED",
+  }),
+  Object.freeze({
+    id: "f8679e53edadc39b",
+    sourceSha256: "d7adcfb697bf06428f7e0c3de2dafb111e88d59c480640574d6d2760e4b9b549",
+    reason: "PITER_ATOMIC_SALES_NOT_COMPOSED",
+  }),
+]);
+
 export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
+  requiresPiterAtomicTopology: true,
   sourceSha256: "9e9698ea3e7cfa0bd2b42a95a7eed20a82436cb06f40ecd80c13896a1960b263",
   candidateBindingState: candidateBinding.candidateBindingState,
   candidateSha256: candidateBinding.candidateSha256,
@@ -44,6 +69,7 @@ export const LK1_ENFORCEMENT_CONTRACT = Object.freeze({
   changedExistingNodeCount: 54,
   addedNodeCount: 50,
   writerCount: 7,
+  unboundSourceAmendments: UNBOUND_LK1_SOURCE_AMENDMENTS,
   composedSources: Object.freeze([
     Object.freeze({
       id: "e656cff36a8cd210",
@@ -241,6 +267,7 @@ export function buildUnifiedLk1EnforcementCandidate(source, sourceSha256, option
   if (sourceSha256 !== contract.sourceSha256) {
     fail("Unified LK1 live source SHA mismatch");
   }
+  if (contract.requiresPiterAtomicTopology === true) assertPiterAtomicTopology(source);
   if (source.filter((node) => node.type === "http in").length !== contract.httpRouteCount) {
     fail("Unified LK1 HTTP route count mismatch");
   }
@@ -406,6 +433,7 @@ export function buildLk1EnforcementCandidate(
 ) {
   if (!Array.isArray(flow) || flow.length !== contract.nodeCount) fail("LK1 flow node count mismatch");
   if (sourceSha256 !== contract.sourceSha256) fail("LK1 live source SHA mismatch");
+  if (contract.requiresPiterAtomicTopology === true) assertPiterAtomicTopology(flow);
   const before = structuredClone(flow);
   const beforeTopology = topology(before);
   const tabs = new Map(flow.filter((node) => node?.type === "tab").map((node) => [node.id, node]));

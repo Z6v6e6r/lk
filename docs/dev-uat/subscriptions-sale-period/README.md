@@ -42,8 +42,9 @@ export DEV_UAT_CONFIG_FILE=/private/tmp/subscription-sale-period-dev-uat.json
   `DEV_CONTROL_SUBSCRIPTION_INSTANCE_ID`, `DEV_CONTROL_AUTH`;
 - exact `DEV_UAT_ALLOWED_DEV_ORIGINS_JSON` с обоими origin;
 - frozen `DEV_UAT_EXPECTED_LK_RELEASE_JSON` и
-  `DEV_UAT_EXPECTED_CUP_RELEASE_JSON`, каждый с exact `sourceSha`,
-  `candidateSha`, `readbackSha`, `servedSha`.
+  `DEV_UAT_EXPECTED_CUP_RELEASE_JSON`, каждый со схемой v2: exact 40-hex
+  `sourceCommit` и отдельные 64-hex `*Sha256`, включая
+  `hostReadbackSha256` и `servedSha256`.
 
 Опциональны:
 
@@ -77,15 +78,21 @@ GET-пути переопределяются только в приватном
 environment, frozen release bindings, DEV-only flags, unchanged production state,
 indexes и fresh evidence разрешают отправить user-scoped credentials.
 
-Каждый release response обязан содержать четыре 40-hex SHA и точно совпасть с
-заранее frozen expected tuple из приватной конфигурации:
+LK release response обязан содержать exact 40-hex Git commit и пять exact
+64-hex artifact digests; CUP использует отдельную exact схему с `artifactSha256`
+вместо `sourceFlowSha256`/`candidateSha256`. Оба tuple должны точно совпасть с
+заранее frozen expected значениями из приватной конфигурации:
 
 ```json
 {
-  "sourceSha": "1111111111111111111111111111111111111111",
-  "candidateSha": "1111111111111111111111111111111111111111",
-  "readbackSha": "1111111111111111111111111111111111111111",
-  "servedSha": "1111111111111111111111111111111111111111"
+  "schemaVersion": 2,
+  "environment": "DEV",
+  "sourceCommit": "1111111111111111111111111111111111111111",
+  "sourceFlowSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "candidateSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "manifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "hostReadbackSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "servedSha256": "1111111111111111111111111111111111111111111111111111111111111111"
 }
 ```
 

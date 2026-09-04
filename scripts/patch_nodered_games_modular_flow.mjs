@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  assertNoEnabledLegacyPiterSalesTab,
+  assertPiterAtomicTopology,
+} from "./lib/piterAtomicTopologyContract.mjs";
 import { patchTournamentResultsPersistence } from "./nodered_tournament_persistence_patch.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -11,6 +15,8 @@ const flow = JSON.parse(fs.readFileSync(SOURCE_FLOW_PATH, "utf8"));
 if (!Array.isArray(flow)) {
   throw new Error("source.flow.json must contain a JSON array");
 }
+assertPiterAtomicTopology(flow);
+assertNoEnabledLegacyPiterSalesTab(flow);
 
 const readFn = (name) => fs.readFileSync(path.join(FN_DIR, name), "utf8");
 

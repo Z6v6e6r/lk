@@ -378,6 +378,8 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     "scripts/tests/lk1SubscriptionDevProvisioning.test.mjs",
     "scripts/tests/lk1SubscriptionDevBootstrap.test.mjs",
     "scripts/tests/lk1SubscriptionDevRuntimeSource.test.mjs",
+    "scripts/tests/lk1SubscriptionDevReleaseReceipt.test.mjs",
+    "scripts/tests/lk1SubscriptionDevRuntimeInstallCandidate.test.mjs",
     "scripts/dev-uat/subscriptions-sale-period/test.mjs",
   ]) {
     assert.match(devBoundaryStep.run, new RegExp(suite.replaceAll("/", "\\/").replaceAll(".", "\\.")));

@@ -320,6 +320,7 @@ jobs:
         run: >-
           node --test
           scripts/tests/lk1SubscriptionEnforcementCandidate.test.mjs
+          scripts/tests/piterAtomicTopologyContract.test.mjs
           scripts/tests/lk1SubscriptionActivationPacket.test.mjs
           scripts/tests/lk1SubscriptionDevCandidate.test.mjs
           scripts/tests/subscriptionBookingLegacyPatcher.test.mjs
@@ -330,6 +331,8 @@ jobs:
           scripts/tests/lk1SubscriptionDevProvisioning.test.mjs
           scripts/tests/lk1SubscriptionDevBootstrap.test.mjs
           scripts/tests/lk1SubscriptionDevRuntimeSource.test.mjs
+          scripts/tests/lk1SubscriptionDevReleaseReceipt.test.mjs
+          scripts/tests/lk1SubscriptionDevRuntimeInstallCandidate.test.mjs
           scripts/dev-uat/subscriptions-sale-period/test.mjs
 
       - name: Run tracked credential and authenticated-route security tests
