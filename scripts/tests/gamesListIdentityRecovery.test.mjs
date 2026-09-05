@@ -18,7 +18,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const SOURCE_DIR = path.join(REPO_ROOT, 'scripts/nodered_games_nodes');
 const TEMP_ROOTS = [];
 const NORMALIZER_CANDIDATE_SHA256 =
-  'c7e19ef7dcb24143a20af70bb8a1787f66a7f85fdb1a53efc41e110758b2e162';
+  '355db4a4ea94e4fab1ff5918842eeb891e4bca0f4b9e0e6a3f8a080b6b8692c7';
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');

@@ -222,3 +222,75 @@ test("direct lookup keeps the existing 404 contract", () => {
   assert.equal(response.statusCode, 404);
   assert.deepEqual(response.payload, { error: "Game not found" });
 });
+
+const UUID = "d212d860-4924-4450-b520-bdb5612c46cd";
+const GAME_ID = `pay_${UUID}`;
+
+for (const mode of ["public list", "identity list", "direct lookup"] as const) {
+  function readGame(game: JsonRecord) {
+    const direct = mode === "direct lookup";
+    const out = runNodeRedFunction(
+      `scripts/nodered_games_nodes/${direct ? "fn_get_by_id_resp" : "fn_list_normalize"}.js`,
+      {
+        _lkPhone: mode === "identity list" ? PHONE : null,
+        _lkClientId: mode === "identity list" ? "client-organizer" : null,
+        _lkIncludePast: true,
+        _lkOffset: 0,
+        _lkPublicMode: mode === "public list",
+        payload: [game],
+      },
+    ) as unknown[];
+    const payload = asRecord(asRecord(out[0]).payload);
+    return direct ? payload : asRecord((payload.games as JsonRecord[])[0]);
+  }
+
+  test(`${mode}: preserves UUIDs and the list-to-invitation-to-lookup game ID`, () => {
+    const game = gameFixture();
+    game.id = GAME_ID;
+    const metadata = asRecord(game.metadata);
+    metadata.exerciseId = UUID;
+    metadata.references = [UUID, GAME_ID, UUID.toUpperCase()];
+    metadata.inviteUrl = `https://example.test/game_join?joinGame=${GAME_ID}&phone=${PHONE}`;
+    metadata.publicNote = `Игра ${GAME_ID}; связь ${FORMATTED_PHONE}; запись ${UUID}`;
+    const original = structuredClone(game);
+
+    const result = readGame(game);
+    assert.equal(result.id, GAME_ID);
+    const safeMetadata = asRecord(result.metadata);
+    assert.equal(safeMetadata.exerciseId, UUID);
+    assert.deepEqual(safeMetadata.references, metadata.references);
+    assert.equal(safeMetadata.inviteUrl, `https://example.test/game_join?joinGame=${GAME_ID}&phone=[redacted]`);
+    assert.equal(safeMetadata.publicNote, `Игра ${GAME_ID}; связь [redacted]; запись ${UUID}`);
+    const invite = new URL("https://example.test/game_join");
+    invite.searchParams.set("joinGame", String(result.id));
+    const queryOut = runNodeRedFunction("scripts/nodered_games_nodes/fn_get_by_id_query.js", {
+      req: { params: { gameId: invite.searchParams.get("joinGame") }, query: {} },
+    }) as unknown[];
+    assert.deepEqual(asRecord(queryOut[0]).payload, { id: GAME_ID, archived: { $ne: true } });
+    assertPhoneFree(result);
+    assert.deepEqual(game, original);
+  });
+
+  test(`${mode}: UUID protection does not exempt phone fields, identities or adjacent phones`, () => {
+    const game = gameFixture();
+    const metadata = asRecord(game.metadata);
+    metadata.phone = UUID;
+    metadata.phoneIdentity = `phone:${UUID}`;
+    metadata.identity = `phone:${UUID}`;
+    metadata.callbackUrl = `https://example.test/?phone=${UUID}&ref=${UUID}`;
+    metadata.nearIds = `${PHONE}/${UUID}/${FORMATTED_PHONE}/${GAME_ID}/${PHONE}`;
+    metadata.id = PHONE;
+    metadata.bookingId = FORMATTED_PHONE;
+    metadata.almostUuid = "d212d860-4924-4450-b520-bdb5612c46cg";
+
+    const result = readGame(game);
+    const safeMetadata = asRecord(result.metadata);
+    assert.equal("identity" in safeMetadata, false);
+    assert.equal("id" in safeMetadata, false);
+    assert.equal("bookingId" in safeMetadata, false);
+    assert.equal(safeMetadata.callbackUrl, `https://example.test/?phone=[redacted]&ref=${UUID}`);
+    assert.equal(safeMetadata.nearIds, `[redacted]/${UUID}/[redacted]/${GAME_ID}/[redacted]`);
+    assert.equal(safeMetadata.almostUuid, "d212d[redacted]-b520-bdb5612c46cg");
+    assertPhoneFree(result);
+  });
+}
