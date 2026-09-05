@@ -128,6 +128,31 @@ Subscription readback связывается только через явные 
 snapshot: `toPay` равен локально уплаченной сумме, а `sum` — полной стоимости
 provider product до скидки. Любое иное сочетание блокирует reconciliation.
 
+Для `PAID` применяется та же форма Viva: `sum` — цена до скидки,
+`discount` — скидка, `toPay = sum - discount` — итоговая сумма, а не остаток
+долга. Reconciliation и activation используют одну проверку: точный product,
+одна строка с `count:1`, `cost:5680000`, совпадающая скидка строки и операции,
+целочисленные неотрицательные суммы, client identity, валидный `paymentDate`
+не позже provider snapshot и отсутствие refund evidence. Для платной продажи
+`toPay` дополнительно совпадает с локальным `amountMinor`; нулевой `toPay`
+при неполной скидке и старый synthetic-формат `sum=amountMinor,toPay=0`
+отклоняются.
+
+Provider-only `PAID` с полной скидкой `5680000` и `toPay:0` классифицируется
+как `FREE_ISSUE` только при выполнении всех этих проверок и явном provider
+client ID. Такие выдачи отражаются отдельно в reconciliation report
+(`providerOnlyFreeIssues`) и activation report (`providerOnlyFreeIssueCount`),
+связаны с полным provider snapshot digest, не создают локальные записи и не
+занимают места в baseline платных продаж. Любая совпадающая локальная запись
+блокирует packet: её нельзя молча исключить или преобразовать в бесплатную.
+Положительная provider-only оплата по-прежнему блокирует подготовку.
+
+Локальная проверка сохранённого snapshot от 2026-09-05 выявила отдельное
+расхождение `refundedAt` между transaction и subscription (около трёх часов).
+Сравнение refund facts остаётся строгим; это не разрешение нормализовать даты
+произвольным смещением или выполнять reconciliation. Истёкшие snapshots
+пригодны только для diagnostic replay, но не для live apply.
+
 Provider-only `REFUND` не создаёт локальную продажу и явно исключается из
 baseline только после той же exact subscription-проверки. Неистёкший `UNPAID`,
 частичный/неполный refund evidence, несовпавший client/product/amount, missing

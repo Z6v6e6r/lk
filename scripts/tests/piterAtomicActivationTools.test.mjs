@@ -9,6 +9,7 @@ import {
   buildPiterAtomicActivationPacket,
   buildPiterAtomicSentinel,
   redactPiterAtomicActivationPacket,
+  validatePiterAtomicActivationPacket,
   sha256,
   stableJson,
 } from "../lib/piterAtomicActivationContract.mjs";
@@ -55,11 +56,13 @@ const paidRow = (overrides = {}) => ({
 const providerTransaction = (overrides = {}) => ({
   id: "tx-1",
   status: "PAID",
-  toPay: 0,
-  sum: 1_980_000,
+  toPay: 1_980_000,
+  sum: 5_680_000,
+  discount: 3_700_000,
+  paymentDate: "2026-09-01T08:01:00.000Z",
   clientId: "client-1",
   clientPhone: ["+7", "9990000000"].join(""),
-  products: [{ id: PRODUCT_ID, discount: 3_700_000 }],
+  products: [{ id: PRODUCT_ID, discount: 3_700_000, cost: 5_680_000, count: 1 }],
   ...overrides,
 });
 
@@ -223,6 +226,43 @@ test("activation packet fails closed on incomplete, stale, unresolved, refund, o
   ];
   for (const build of cases) {
     assert.throws(() => buildPiterAtomicActivationPacket(build()), /activation contract failed/);
+  }
+});
+
+test("activation accepts Viva gross/discount/net and separately counts free issues", () => {
+  const free = providerTransaction({ id: "free-issue", toPay: 0, discount: 5_680_000,
+    products: [{ id: PRODUCT_ID, discount: 5_680_000, cost: 5_680_000, count: 1 }] });
+  const built = buildPiterAtomicActivationPacket(evidence([paidRow()], [providerTransaction(), free]));
+  assert.equal(built.baseline.paidCount, 1);
+  assert.equal(built.evidence.providerOnlyFreeIssueCount, 1);
+  assert.equal(redactPiterAtomicActivationPacket(built).providerOnlyFreeIssueCount, 1);
+  const seed = buildPiterAtomicLedgerPlan({ action: "seed", packet: built, documents: [paidRow()],
+    activeFlowSha256: FLOW_SHA, expectedRevision: 0, now: NOW });
+  assert.equal(seed.mutation.document.paidCount, 1);
+  assert.deepEqual(seed.mutation.document.legacyPaymentRefs, ["pay-ref-1"]);
+  assert.throws(() => buildPiterAtomicActivationPacket(evidence([paidRow()], [{ ...free, id: "tx-1" }])), /free provider issue.*conflicts/);
+  assert.throws(() => buildPiterAtomicActivationPacket(evidence([], [providerTransaction()])), /missing from the ledger/);
+  assert.throws(() => buildPiterAtomicActivationPacket(evidence([], [free, free])), /duplicate provider/);
+});
+
+test("activation rejects malformed paid and free financial evidence", () => {
+  for (const overrides of [
+    { toPay: 0, sum: 1_980_000 }, { toPay: 0 }, { toPay: -1 }, { toPay: "1980000" },
+    { discount: 0 }, { paymentDate: null }, { paymentDate: "2026-09-05T00:00:00Z" },
+    { refundSum: -1 }, { products: [{ id: PRODUCT_ID, discount: 3_700_000, cost: 5_680_000, count: 2 }] },
+    { client: { id: "different-client" } }, { client: { phone: "79990000001" } },
+    { products: [{ id: PRODUCT_ID, productId: "conflicting-product", discount: 3_700_000, cost: 5_680_000, count: 1 }] },
+  ]) assert.throws(() => buildPiterAtomicActivationPacket(evidence([paidRow()], [providerTransaction(overrides)])), /financial facts mismatch/);
+});
+
+test("activation preserves phone-only V1 packets and validates new free-issue count", () => {
+  const built = buildPiterAtomicActivationPacket(evidence([paidRow({ clientId: null })], [providerTransaction({ clientId: null })]));
+  delete built.evidence.providerOnlyFreeIssueCount;
+  const resign = value => { delete value.contractDigest; value.contractDigest = sha256(stableJson(value)); return value; };
+  assert.doesNotThrow(() => validatePiterAtomicActivationPacket(resign(built), { now: NOW }));
+  for (const count of [null, "1", -1, 0.5]) {
+    const bad = structuredClone(built); bad.evidence.providerOnlyFreeIssueCount = count;
+    assert.throws(() => validatePiterAtomicActivationPacket(resign(bad), { now: NOW }), /free issue count is invalid/);
   }
 });
 

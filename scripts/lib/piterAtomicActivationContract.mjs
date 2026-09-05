@@ -194,6 +194,45 @@ const assertNoRefund = (transaction) => {
   }
 };
 
+// Viva retains the discounted amount in toPay after PAID; it is not an unpaid
+// balance. Keep this exact provider shape shared by reconciliation and activation.
+export function classifyPiterPaidProviderTransaction(transaction, productId, capturedAtMs) {
+  const transactionId = pickTransactionId(transaction);
+  const lines = Array.isArray(transaction?.products) ? transaction.products : [];
+  const line = lines[0];
+  const amount = toInteger(transaction?.toPay);
+  const discount = toInteger(transaction?.discount);
+  const paymentAt = Date.parse(toStr(transaction?.paymentDate) || "");
+  const productIds = [line?.id, line?.uuid, line?.productId, line?.subscriptionId, line?.product?.id, line?.product?.uuid]
+    .map(toStr).filter(Boolean);
+  const aliasesAgree = (values, normalize = toStr) => {
+    const present = values.filter(value => toStr(value) !== null).map(normalize);
+    return present.length === 0 || (present[0] !== null && present.every(value => value === present[0]));
+  };
+  if (!transactionId || !PAID_STATUSES.has(normalizeStatus(transaction?.status || transaction?.state || transaction?.paymentStatus))
+    || lines.length !== 1 || !productLineMatches(line, productId)
+    || productIds.length === 0 || productIds.some(id => id !== productId)
+    || (toStr(transaction?.productId) && toStr(transaction.productId) !== productId)
+    || !aliasesAgree([transaction?.clientId, transaction?.client?.id, transaction?.client?.uuid, transaction?.client?.clientId])
+    || !aliasesAgree([transaction?.clientPhone, transaction?.client?.phone, transaction?.client?.mobile, transaction?.client?.phoneNumber], normalizePhone)
+    || toInteger(transaction?.sum) !== PITER_ATOMIC_ACTIVATION.providerCostMinor
+    || toInteger(line?.cost) !== PITER_ATOMIC_ACTIVATION.providerCostMinor
+    || toInteger(line?.count) !== 1
+    || !Number.isInteger(amount) || amount < 0
+    || !Number.isInteger(discount) || discount < 0
+    || amount + discount !== PITER_ATOMIC_ACTIVATION.providerCostMinor
+    || toInteger(line?.discount) !== discount
+    || (!providerClientId(transaction) && !providerClientPhone(transaction))
+    || (amount === 0 && !providerClientId(transaction))
+    || !Number.isFinite(paymentAt) || !Number.isFinite(capturedAtMs) || paymentAt > capturedAtMs
+    || (transaction?.refundSum != null && toInteger(transaction.refundSum) !== 0)
+    || line?.refunded === true) {
+    fail(`paid provider financial facts mismatch for ${hashId(transactionId)}`);
+  }
+  assertNoRefund(transaction);
+  return amount === 0 ? "FREE_ISSUE" : "PAID";
+}
+
 const toMoscowDate = (timestamp) => new Intl.DateTimeFormat("en-CA", {
   timeZone: "Europe/Moscow",
   year: "numeric",
@@ -413,13 +452,10 @@ export function derivePiterLegacyBaseline({
       || (toStr(transaction?.productId) && toStr(transaction.productId) !== productId)) {
       fail(`provider transaction ${hashId(transactionId)} product mismatch`);
     }
-    const statusClass = transactionStatusClass(transaction, providerCapturedAtMs);
+    let statusClass = transactionStatusClass(transaction, providerCapturedAtMs);
     if (statusClass === "UNRESOLVED") fail(`provider transaction ${hashId(transactionId)} is nonterminal`);
     if (statusClass === "PAID") {
-      assertNoRefund(transaction);
-      if (toInteger(transaction?.toPay) !== 0) {
-        fail(`paid provider transaction ${hashId(transactionId)} has a nonzero balance`);
-      }
+      statusClass = classifyPiterPaidProviderTransaction(transaction, productId, providerCapturedAtMs);
     }
     providerById.set(transactionId, { transaction, statusClass });
   }
@@ -443,6 +479,7 @@ export function derivePiterLegacyBaseline({
     paymentRefs.add(paymentRef);
     const provider = providerById.get(transactionId);
     if (!provider) fail(`ledger transaction ${hashId(transactionId)} is missing provider evidence`);
+    if (provider.statusClass === "FREE_ISSUE") fail(`free provider issue ${hashId(transactionId)} conflicts with the ledger`);
     const localStatus = normalizeStatus(row.status);
     const localStatusClass = PAID_STATUSES.has(localStatus)
       ? "PAID"
@@ -499,7 +536,9 @@ export function derivePiterLegacyBaseline({
       if ((!clientId && !clientPhone)
         || (clientId && providerId !== clientId)
         || (clientPhone && providerPhone !== clientPhone)
-        || toInteger(provider.transaction?.sum) !== amountMinor
+        || toInteger(provider.transaction?.toPay) !== amountMinor
+        || toInteger(provider.transaction?.sum) !== providerProductCostMinor
+        || toInteger(provider.transaction?.discount) !== discountMinor
         || productLines.length !== 1
         || toInteger(productLines[0]?.discount) !== discountMinor) {
         fail(`paid provider facts mismatch for ${hashId(transactionId)}`);
@@ -638,6 +677,10 @@ export function buildPiterAtomicActivationPacket({
       bindingCapturedAt: bindings.capturedAt,
       ledgerSnapshotDigest: sha256(stableJson(ledger.rows)),
       providerSnapshotDigest: sha256(stableJson(provider.rows)),
+      providerOnlyFreeIssueCount: provider.rows.filter((transaction) => (
+        transactionStatusClass(transaction, Date.parse(provider.capturedAt)) === "PAID"
+        && classifyPiterPaidProviderTransaction(transaction, expectedProductId, Date.parse(provider.capturedAt)) === "FREE_ISSUE"
+      )).length,
       productSnapshotDigest: sha256(stableJson(products.rows)),
       bindingSnapshotDigest: sha256(stableJson(bindings.rows)),
     },
@@ -695,6 +738,10 @@ export function validatePiterAtomicActivationPacket(packet, { now = new Date(), 
   for (const key of ["ledgerSnapshotDigest", "providerSnapshotDigest", "productSnapshotDigest", "bindingSnapshotDigest"]) {
     if (!SHA256_PATTERN.test(String(packet.evidence[key] || ""))) fail(`packet evidence ${key} is invalid`);
   }
+  if (packet.evidence.providerOnlyFreeIssueCount !== undefined
+    && (!Number.isSafeInteger(packet.evidence.providerOnlyFreeIssueCount) || packet.evidence.providerOnlyFreeIssueCount < 0)) {
+    fail("packet provider-only free issue count is invalid");
+  }
   const normalizedProduct = normalizeProduct(packet.product, packet.product?.id, packet.evidence.productCapturedAt);
   if (stableJson(normalizedProduct) !== stableJson(packet.product)) fail("packet product contract mismatch");
   if (stableJson(packet.binding) !== stableJson({
@@ -728,13 +775,16 @@ export function validatePiterAtomicActivationPacket(packet, { now = new Date(), 
     providerTransactions: entries.map((entry) => ({
       id: entry.transactionId,
       status: "PAID",
-      toPay: 0,
-      sum: entry.amountMinor,
+      toPay: entry.amountMinor,
+      sum: entry.providerProductCostMinor,
+      discount: entry.discountMinor,
+      paymentDate: packet.evidence.providerCapturedAt,
       clientId: entry.clientId,
       clientPhone: entry.clientPhone,
-      products: [{ id: entry.productId, discount: entry.discountMinor }],
+      products: [{ id: entry.productId, discount: entry.discountMinor, cost: entry.providerProductCostMinor, count: 1 }],
     })),
     productId: packet.product?.id,
+    providerCapturedAt: packet.evidence.providerCapturedAt,
   });
   const recomputedPaid = { ...recomputed };
   const packetPaid = { ...packet.baseline };
@@ -783,6 +833,7 @@ export function redactPiterAtomicActivationPacket(packet) {
     productCostMinor: packet.product.costMinor,
     paidCount: packet.baseline.paidCount,
     baselineDigest: packet.baseline.digest,
+    providerOnlyFreeIssueCount: packet.evidence.providerOnlyFreeIssueCount ?? 0,
     legacyPaymentRefHashes: packet.baseline.legacyPaymentRefs.map(hashId),
     contractDigest: packet.contractDigest,
     mutationPerformed: false,
