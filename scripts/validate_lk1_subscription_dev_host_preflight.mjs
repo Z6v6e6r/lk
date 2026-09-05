@@ -11,6 +11,7 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const GIT_SHA = /^[a-f0-9]{40}$/;
 const RFC3339_SECONDS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+const EXPECTED_HOST_KEY_FINGERPRINT = "SHA256:LP1OQP7TkwpzFQzJZMrKLiaFVwJYd71VeliwfMs6krk";
 export const INGRESS_TARGET_REFERENCE_PATTERN = "(^|[^0-9])(1882|27030|3037|3038|3039)([^0-9]|$)|lk1-subscription-dev-(mongo|cup|provider-fixture|identity-fixture|nodered)[.]service|/srv/lk1-subscription-dev(?:/|$)";
 const EXPECTED_MACHINE_ID_SHA256 = "9f29889b29a55b2c7e1eeb65616d2049b16972589de1bc623a61d38d92dd7ad8";
 const EXPECTED_UNITS = Object.freeze([
@@ -159,13 +160,23 @@ export function validateFreshHostPreflightEvidence(evidence, now, {
   delete archiveShape.releaseBinding;
   delete archiveShape.capture;
   delete archiveShape.runtimeIsolation;
+  delete archiveShape.runtimeExecution;
   validateHostPreflightEvidence(archiveShape);
   if (evidence.schemaVersion !== 2) fail("fresh host preflight evidence schema mismatch");
   exactKeys(evidence, [
     "schemaVersion", "environment", "state", "capturedAt", "maximumAgeSeconds", "target",
     "hostCapabilities", "dedicatedUnits", "listeners", "inputs", "sharedResources", "authority",
-    "repositoryIdentity", "releaseBinding", "capture", "runtimeIsolation",
+    "repositoryIdentity", "releaseBinding", "capture", "runtimeIsolation", "runtimeExecution",
   ], "fresh host preflight evidence");
+  exactKeys(evidence.runtimeExecution, [
+    "flockPath", "flockUsable", "nodePath", "nodeUsable",
+  ], "fresh runtime execution");
+  if (evidence.runtimeExecution.flockPath !== "/usr/bin/flock"
+    || evidence.runtimeExecution.flockUsable !== true
+    || evidence.runtimeExecution.nodePath !== "/srv/lk1-subscription-dev/runtime/node/bin/node"
+    || evidence.runtimeExecution.nodeUsable !== true) {
+    fail("fresh runtime execution prerequisites mismatch");
+  }
   exactKeys(evidence.runtimeIsolation, ["systemdUnits", "ingress"], "fresh runtime isolation");
   if (JSON.stringify(Object.keys(evidence.runtimeIsolation.systemdUnits)) !== JSON.stringify(EXPECTED_UNITS)) {
     fail("fresh systemd isolation inventory mismatch");
@@ -173,10 +184,12 @@ export function validateFreshHostPreflightEvidence(evidence, now, {
   for (const [unit, isolation] of Object.entries(evidence.runtimeIsolation.systemdUnits)) {
     exactKeys(isolation, [
       "fragmentSha256", "fragmentReadable", "dropInsAbsent", "effectiveProductionMarkersAbsent",
+      "networkPolicyExact",
     ], `fresh unit isolation ${unit}`);
     if (!TRUSTED_UNIT_FRAGMENT_SHA256[unit]?.includes(isolation.fragmentSha256)
       || isolation.fragmentReadable !== true || isolation.dropInsAbsent !== true
-      || isolation.effectiveProductionMarkersAbsent !== true) {
+      || isolation.effectiveProductionMarkersAbsent !== true
+      || isolation.networkPolicyExact !== true) {
       fail(`fresh unit isolation mismatch (${unit})`);
     }
   }
@@ -200,9 +213,10 @@ export function validateFreshHostPreflightEvidence(evidence, now, {
   ], "fresh release binding");
   exactObject(evidence.releaseBinding, expectedReleaseBinding, "fresh release binding");
   exactKeys(evidence.capture, [
-    "transport", "validatorPath", "validatorSha256", "remoteScriptSha256",
+    "transport", "hostKeyFingerprint", "validatorPath", "validatorSha256", "remoteScriptSha256",
   ], "fresh capture identity");
-  if (evidence.capture.transport !== "SSH_BATCH_ROOT_READ_ONLY"
+  if (evidence.capture.transport !== "SSH_BATCH_ROOT_READ_ONLY_PINNED_ED25519"
+    || evidence.capture.hostKeyFingerprint !== EXPECTED_HOST_KEY_FINGERPRINT
     || evidence.capture.validatorPath !== "scripts/validate_lk1_subscription_dev_host_preflight.mjs"
     || evidence.capture.validatorSha256 !== expectedValidatorSha256
     || evidence.capture.remoteScriptSha256 !== expectedRemoteScriptSha256
@@ -230,6 +244,15 @@ test "$(id -u)" = 0
 printf 'HOSTNAME\\t%s\\n' "$(hostname)"
 printf 'MACHINE_ID_SHA256\\t%s\\n' "$(sha256sum /etc/machine-id | awk '{print $1}')"
 printf 'SYSTEMD_VERSION\\t%s\\n' "$(systemctl --version | awk 'NR == 1 {print $2}')"
+if test -x /usr/bin/flock && test ! -L /usr/bin/flock; then flock_usable=true; else flock_usable=false; fi
+runtime_node=/srv/lk1-subscription-dev/runtime/node/bin/node
+node_usable=false
+if test -x "$runtime_node" && test ! -L "$runtime_node"; then
+  node_uid="$(stat -c '%u' "$runtime_node")"
+  node_mode="$(stat -c '%a' "$runtime_node")"
+  if test "$node_uid" = 0 && (( (8#$node_mode & 022) == 0 )); then node_usable=true; fi
+fi
+printf 'EXECUTION_PREREQ\\t%s\\t%s\\n' "$flock_usable" "$node_usable"
 for unit in \\
   lk1-subscription-dev-mongo.service \\
   lk1-subscription-dev-cup.service \\
@@ -255,7 +278,7 @@ for row in \\
   'tlsCertificateAbsent:/srv/lk1-subscription-dev/tls/server.crt'; do
   key="\${row%%:*}"
   target="\${row#*:}"
-  if test -e "$target"; then state=false; else state=true; fi
+  if test -e "$target" || test -L "$target"; then state=false; else state=true; fi
   printf 'INPUT\\t%s\\t%s\\n' "$key" "$state"
 done
 production_markers_absent=true
@@ -274,17 +297,24 @@ for unit in \\
   fi
   drop_ins="$(systemctl show "$unit" -p DropInPaths --value)"
   if test -z "$drop_ins"; then drop_ins_absent=true; else drop_ins_absent=false; fi
-  effective="$(systemctl show "$unit" -p ExecStart -p Environment -p EnvironmentFiles -p User -p Group -p IPAddressAllow -p IPAddressDeny -p RestrictAddressFamilies)"
+  effective="$(systemctl show "$unit" -p ExecStart -p Environment -p EnvironmentFiles -p User -p Group -p RestrictAddressFamilies)"
   if printf '%s\\n' "$effective" | grep -Eiq 'lk-primary-147|padlhub[.](su|ru)|vivacrm|mongodb[+]srv|127[.]0[.]0[.]1:(3036|27029)|0[.]0[.]0[.]0'; then
     effective_markers_absent=false
   else
     effective_markers_absent=true
   fi
-  if test "$fragment_readable" != true || test "$drop_ins_absent" != true || test "$effective_markers_absent" != true; then
+  ip_allow="$(systemctl show "$unit" -p IPAddressAllow --value)"
+  ip_deny="$(systemctl show "$unit" -p IPAddressDeny --value)"
+  if test "$ip_allow" = '127.0.0.0/8 ::1/128' && test "$ip_deny" = '0.0.0.0/0 ::/0'; then
+    network_policy_exact=true
+  else
+    network_policy_exact=false
+  fi
+  if test "$fragment_readable" != true || test "$drop_ins_absent" != true || test "$effective_markers_absent" != true || test "$network_policy_exact" != true; then
     production_markers_absent=false
   fi
-  printf 'UNIT_ISOLATION\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$unit" "$fragment_sha256" \
-    "$fragment_readable" "$drop_ins_absent" "$effective_markers_absent"
+  printf 'UNIT_ISOLATION\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$unit" "$fragment_sha256" \
+    "$fragment_readable" "$drop_ins_absent" "$effective_markers_absent" "$network_policy_exact"
 done
 ingress_configuration_readable=true
 ingress_target_absent=true
@@ -317,7 +347,8 @@ printf 'END\\n'
 `;
 
 const VALIDATOR_PATH = fileURLToPath(import.meta.url);
-const currentCaptureIdentity = () => ({
+export const currentCaptureIdentity = () => ({
+  hostKeyFingerprint: EXPECTED_HOST_KEY_FINGERPRINT,
   validatorPath: "scripts/validate_lk1_subscription_dev_host_preflight.mjs",
   validatorSha256: sha256(fs.readFileSync(VALIDATOR_PATH)),
   remoteScriptSha256: sha256(REMOTE_PREFLIGHT_SCRIPT),
@@ -344,9 +375,63 @@ const readCurrentRepositoryIdentity = () => {
   };
 };
 
-const defaultRunSsh = (script) => execFileSync(
+const defaultKnownHostsPath = () => path.join(os.homedir(), ".ssh", "known_hosts");
+
+export function selectPinnedEd25519KnownHostLine(knownHostsLookup, {
+  fingerprintLine = (line) => execFileSync(
+    "/usr/bin/ssh-keygen", ["-lf", "-"],
+    { input: `${line}\n`, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
+  ).trim(),
+} = {}) {
+  const ed25519Lines = [...new Set(String(knownHostsLookup).split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#") && line.split(/\s+/)[1] === "ssh-ed25519"))];
+  if (ed25519Lines.length !== 1) fail("target must have exactly one trusted ED25519 host key");
+  const fingerprint = fingerprintLine(ed25519Lines[0]);
+  if (!fingerprint.includes(` ${EXPECTED_HOST_KEY_FINGERPRINT} `)
+    || !fingerprint.endsWith(" (ED25519)")) fail("pinned host key fingerprint mismatch");
+  return ed25519Lines[0];
+}
+
+const defaultAssertPinnedHostKey = () => {
+  const knownHostsPath = defaultKnownHostsPath();
+  const parentStat = fs.lstatSync(path.dirname(knownHostsPath));
+  const stat = fs.lstatSync(knownHostsPath);
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink()
+    || parentStat.uid !== process.getuid() || (parentStat.mode & 0o022) !== 0
+    || !stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid()
+    || stat.nlink !== 1 || (stat.mode & 0o022) !== 0) fail("known_hosts custody mismatch");
+  const known = execFileSync(
+    "/usr/bin/ssh-keygen",
+    ["-F", "89.108.64.209", "-f", knownHostsPath],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const pinnedLine = selectPinnedEd25519KnownHostLine(known);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "lk1-dev-pinned-known-host-"));
+  fs.chmodSync(directory, 0o700);
+  const pinnedPath = path.join(directory, "known_hosts");
+  fs.writeFileSync(pinnedPath, `${pinnedLine}\n`, { mode: 0o600, flag: "wx" });
+  return {
+    knownHostsPath: pinnedPath,
+    cleanup: () => {
+      if (fs.existsSync(pinnedPath)) fs.unlinkSync(pinnedPath);
+      if (fs.existsSync(directory)) fs.rmdirSync(directory);
+    },
+  };
+};
+
+const defaultRunSsh = (script, knownHostsPath) => execFileSync(
   "/usr/bin/ssh",
-  ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", HOST_ALIAS, "bash", "-s"],
+  [
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=10",
+    "-o", "StrictHostKeyChecking=yes",
+    "-o", "HostKeyAlgorithms=ssh-ed25519",
+    "-o", "UpdateHostKeys=no",
+    "-o", "HostKeyAlias=89.108.64.209",
+    "-o", `UserKnownHostsFile=${knownHostsPath}`,
+    HOST_ALIAS, "bash", "-s",
+  ],
   {
     input: script,
     encoding: "utf8",
@@ -358,6 +443,7 @@ const defaultRunSsh = (script) => execFileSync(
 
 export function captureCurrentHostPreflightEvidence({
   runSsh = defaultRunSsh,
+  assertPinnedHostKey = defaultAssertPinnedHostKey,
   now = new Date(),
   readRepositoryIdentity = readCurrentRepositoryIdentity,
 } = {}) {
@@ -367,7 +453,14 @@ export function captureCurrentHostPreflightEvidence({
   const repositoryIdentityBefore = readRepositoryIdentity();
   if (repositoryIdentityBefore.clean !== true) fail("host preflight capture requires a clean repository");
   const captureIdentity = currentCaptureIdentity();
-  const lines = String(runSsh(REMOTE_PREFLIGHT_SCRIPT)).trim().split("\n");
+  const pinnedHostKey = assertPinnedHostKey() || {};
+  let transcript;
+  try {
+    transcript = runSsh(REMOTE_PREFLIGHT_SCRIPT, pinnedHostKey.knownHostsPath);
+  } finally {
+    if (typeof pinnedHostKey.cleanup === "function") pinnedHostKey.cleanup();
+  }
+  const lines = String(transcript).trim().split("\n");
   const repositoryIdentityAfter = readRepositoryIdentity();
   exactObject(repositoryIdentityAfter, repositoryIdentityBefore, "repository identity during capture");
   const scalar = new Map();
@@ -376,6 +469,7 @@ export function captureCurrentHostPreflightEvidence({
   const inputs = {};
   const unitIsolation = {};
   let ingressIsolation;
+  let runtimeExecution;
   let ended = false;
   for (const [lineIndex, line] of lines.entries()) {
     const fields = line.split("\t");
@@ -391,7 +485,7 @@ export function captureCurrentHostPreflightEvidence({
     } else if (kind === "INPUT" && fields.length === 3) {
       if (Object.hasOwn(inputs, fields[1])) fail("duplicate host preflight input evidence");
       inputs[fields[1]] = fields[2] === "true";
-    } else if (kind === "UNIT_ISOLATION" && fields.length === 6
+    } else if (kind === "UNIT_ISOLATION" && fields.length === 7
       && EXPECTED_UNITS.includes(fields[1])) {
       if (unitIsolation[fields[1]]) fail("duplicate host preflight unit isolation evidence");
       unitIsolation[fields[1]] = {
@@ -399,11 +493,19 @@ export function captureCurrentHostPreflightEvidence({
         fragmentReadable: fields[3] === "true",
         dropInsAbsent: fields[4] === "true",
         effectiveProductionMarkersAbsent: fields[5] === "true",
+        networkPolicyExact: fields[6] === "true",
       };
     } else if (kind === "INGRESS_ISOLATION" && fields.length === 3 && !ingressIsolation) {
       ingressIsolation = {
         configurationReadable: fields[1] === "true",
         targetRouteAbsent: fields[2] === "true",
+      };
+    } else if (kind === "EXECUTION_PREREQ" && fields.length === 3 && !runtimeExecution) {
+      runtimeExecution = {
+        flockPath: "/usr/bin/flock",
+        flockUsable: fields[1] === "true",
+        nodePath: "/srv/lk1-subscription-dev/runtime/node/bin/node",
+        nodeUsable: fields[2] === "true",
       };
     } else if (kind === "END" && fields.length === 1 && lineIndex === lines.length - 1) {
       ended = true;
@@ -417,7 +519,8 @@ export function captureCurrentHostPreflightEvidence({
   }
   if (!ended || scalar.size !== 5 || Object.keys(units).length !== EXPECTED_UNITS.length
     || listeners.size !== 7 || Object.keys(inputs).length !== 7
-    || Object.keys(unitIsolation).length !== EXPECTED_UNITS.length || !ingressIsolation) {
+    || Object.keys(unitIsolation).length !== EXPECTED_UNITS.length
+    || !ingressIsolation || !runtimeExecution) {
     fail("host preflight SSH transcript is incomplete");
   }
   const flowSha256 = scalar.get("SHARED_FLOW_SHA256");
@@ -475,13 +578,14 @@ export function captureCurrentHostPreflightEvidence({
     repositoryIdentity: repositoryIdentityAfter,
     releaseBinding: checkedReleaseBinding,
     capture: {
-      transport: "SSH_BATCH_ROOT_READ_ONLY",
+      transport: "SSH_BATCH_ROOT_READ_ONLY_PINNED_ED25519",
       ...captureIdentity,
     },
     runtimeIsolation: {
       systemdUnits: Object.fromEntries(EXPECTED_UNITS.map((unit) => [unit, unitIsolation[unit]])),
       ingress: ingressIsolation,
     },
+    runtimeExecution,
   };
   validateFreshHostPreflightEvidence(evidence, now, {
     expectedRepositoryIdentity: repositoryIdentityAfter,

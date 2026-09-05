@@ -821,9 +821,28 @@ const isFailedTransaction = (payload) => {
 const isExplicitlyPaidPiterTransaction = (payload) => [
   "PAID", "SUCCESS", "SUCCEEDED", "COMPLETE", "COMPLETED", "APPROVED",
 ].includes(normalizeTransactionStatus(payload?.status || payload?.state || payload?.paymentStatus));
-const isExplicitlyFailedPiterTransaction = (payload) => [
-  "FAILED", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED",
-].includes(normalizeTransactionStatus(payload?.status || payload?.state || payload?.paymentStatus));
+const isExplicitlyFailedPiterTransaction = (payload) => {
+  const status = normalizeTransactionStatus(payload?.status || payload?.state || payload?.paymentStatus);
+  if (["FAILED", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(status)) return true;
+  if (["REFUND", "REFUNDED"].includes(status)) {
+    const refundSum = toNum(payload?.refundSum);
+    return refundSum != null && Math.round(refundSum) > 0
+      && Boolean(toStr(payload?.refundedAt))
+      && Number.isFinite(Date.parse(toStr(payload?.refundedAt)));
+  }
+  if (status !== "UNPAID") return false;
+  const paymentDueDate = toStr(payload?.paymentDueDate);
+  const paymentDueTs = paymentDueDate ? Date.parse(paymentDueDate) : Number.NaN;
+  const refundSum = toNum(payload?.refundSum);
+  const toPay = toNum(payload?.toPay);
+  return Number.isFinite(paymentDueTs)
+    && paymentDueTs <= Date.now()
+    && toPay != null
+    && Math.round(toPay) > 0
+    && !toStr(payload?.paymentDate)
+    && !toStr(payload?.refundedAt)
+    && !(refundSum != null && Math.round(refundSum) > 0);
+};
 
 const ctx = msg._summerSubscriptionCtx && typeof msg._summerSubscriptionCtx === "object"
   ? msg._summerSubscriptionCtx
@@ -1328,9 +1347,15 @@ if (ctx.step === "confirm_lookup") {
   const isPiter = ctx.counterKey === "piter_friendship";
   const isManagedAnnual = isPiter || ctx.counterKey === "network_friendship";
   const paid = isManagedAnnual ? isExplicitlyPaidPiterTransaction(msg.payload) : isPaidTransaction(msg.payload);
-  const failed = !paid && (isManagedAnnual
+  // Piter's offline legacy reconciliation rules must not change HUB inventory
+  // semantics: expired UNPAID/refund evidence is not an automatic HUB release.
+  const failed = !paid && (isPiter
     ? isExplicitlyFailedPiterTransaction(msg.payload)
-    : isFailedTransaction(msg.payload));
+    : ctx.counterKey === "network_friendship"
+      ? ["FAILED", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(
+        normalizeTransactionStatus(msg.payload?.status || msg.payload?.state || msg.payload?.paymentStatus),
+      )
+      : isFailedTransaction(msg.payload));
   const nextStatus = paid ? "PAID" : failed ? "FAILED" : "PAYMENT_PENDING";
   if (isManagedAnnual) {
     const providerToPay = toNum(msg.payload?.toPay);
