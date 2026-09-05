@@ -46,6 +46,11 @@ An interrupted mutation remains blocked until the user-directed owner investigat
 confirms no active process and authorizes recovery. Never delete a marker on age
 alone, silently steal it or invent another owner's identity.
 
+This coordinates process failures; it does not guarantee storage durability across
+power loss or an OS crash. Directory changes are not explicitly flushed to disk.
+After either event, treat local ownership as untrusted and perform a fresh owner,
+in-flight-operation and remote-ref investigation before resuming any boundary.
+
 ## Server-side enforcement remains separate
 
 This guard coordinates cooperating processes in one clone. The owner ID and lease
