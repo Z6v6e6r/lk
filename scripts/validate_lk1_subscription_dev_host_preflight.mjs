@@ -236,6 +236,222 @@ export const checkedHostPreflightEvidence = Object.freeze(JSON.parse(fs.readFile
 )));
 
 const HOST_ALIAS = "lk-reserve-89";
+const DEFAULT_INGRESS_ROOT_ROWS = Object.freeze([
+  Object.freeze(["nginx", "/etc/nginx"]),
+  Object.freeze(["caddy", "/etc/caddy"]),
+  Object.freeze(["haproxy", "/etc/haproxy"]),
+]);
+
+export function buildIngressClosureScript({
+  rootRows = DEFAULT_INGRESS_ROOT_ROWS,
+  maxFiles = 512,
+  maxEntries = 1024,
+  maxDepth = 16,
+  maxFileBytes = 1024 * 1024,
+  maxDirectivesPerFile = 128,
+} = {}) {
+  if (!Array.isArray(rootRows) || rootRows.length < 1
+    || rootRows.some((row) => !Array.isArray(row) || row.length !== 2
+      || !/^[a-z]+$/.test(row[0]) || !/^\/[A-Za-z0-9_.+/-]+$/.test(row[1]))
+    || ![maxFiles, maxEntries, maxDepth, maxFileBytes, maxDirectivesPerFile]
+      .every(Number.isSafeInteger)
+    || maxFiles < 1 || maxFiles > 512 || maxEntries < maxFiles || maxEntries > 2048
+    || maxDepth < 1 || maxDepth > 32 || maxFileBytes < 1 || maxFileBytes > 1024 * 1024
+    || maxDirectivesPerFile < 1 || maxDirectivesPerFile > 256) {
+    fail("invalid ingress closure bounds");
+  }
+  const renderedRows = rootRows.map(([kind, root]) => `  '${kind}:${root}'`).join(" \\\n");
+  return `ingress_configuration_readable=true
+ingress_target_absent=true
+ingress_closure_complete=true
+ingress_file_count=0
+ingress_closure_sha256=INVALID
+ingress_discovered_entries=0
+declare -A ingress_seen=()
+declare -A ingress_enqueued=()
+declare -a ingress_queue_kind=()
+declare -a ingress_queue_path=()
+declare -a ingress_digest_rows=()
+enqueue_ingress_file() {
+  local kind="$1"
+  local candidate="$2"
+  local resolved
+  resolved="$(readlink -f -- "$candidate" 2>/dev/null || true)"
+  if test -z "$resolved" || ! [[ "$resolved" =~ ^[/A-Za-z0-9_.+*-]+$ ]] \
+    || test ! -f "$resolved" || test ! -r "$resolved"; then
+    ingress_configuration_readable=false
+    ingress_closure_complete=false
+    return
+  fi
+  local enqueue_key="$kind:$resolved"
+  if test "\${ingress_enqueued[$enqueue_key]+present}" = present; then
+    return
+  fi
+  if test "\${#ingress_queue_path[@]}" -ge ${maxFiles}; then
+    ingress_closure_complete=false
+    return
+  fi
+  ingress_enqueued[$enqueue_key]=true
+  ingress_queue_kind+=("$kind")
+  ingress_queue_path+=("$resolved")
+}
+for row in \
+${renderedRows}; do
+  kind="\${row%%:*}"
+  root="\${row#*:}"
+  if test -d "$root"; then
+    ingress_find_complete=false
+    while IFS= read -r -d '' candidate; do
+      if test "$candidate" = __LK1_INGRESS_FIND_COMPLETE__; then
+        ingress_find_complete=true
+        break
+      fi
+      ingress_discovered_entries=$((ingress_discovered_entries + 1))
+      if test "$ingress_discovered_entries" -gt ${maxEntries}; then
+        ingress_closure_complete=false
+        break
+      fi
+      if test -f "$candidate" || test -L "$candidate"; then
+        enqueue_ingress_file "$kind" "$candidate"
+      fi
+    done < <(find "$root" -xdev -mindepth 1 -maxdepth ${maxDepth} -print0 \
+      && printf '%s\\0' __LK1_INGRESS_FIND_COMPLETE__)
+    if test "$ingress_find_complete" != true; then
+      ingress_closure_complete=false
+    fi
+    if test "$ingress_closure_complete" = true \
+      && find "$root" -xdev -mindepth ${maxDepth + 1} -print -quit | grep -q .; then
+      ingress_closure_complete=false
+    fi
+  fi
+done
+ingress_queue_index=0
+while test "$ingress_queue_index" -lt "\${#ingress_queue_path[@]}"; do
+  kind="\${ingress_queue_kind[$ingress_queue_index]}"
+  config_file="\${ingress_queue_path[$ingress_queue_index]}"
+  ingress_queue_index=$((ingress_queue_index + 1))
+  seen_key="$kind:$config_file"
+  if test "\${ingress_seen[$seen_key]+present}" = present; then
+    continue
+  fi
+  ingress_seen[$seen_key]=true
+  ingress_file_count=$((ingress_file_count + 1))
+  config_size="$(stat -c %s -- "$config_file" 2>/dev/null || true)"
+  if ! [[ "$config_size" =~ ^[0-9]+$ ]] || test "$config_size" -gt ${maxFileBytes} \
+    || LC_ALL=C od -An -v -t u1 "$config_file" | grep -Eq '(^|[[:space:]])0([[:space:]]|$)'; then
+    ingress_configuration_readable=false
+    ingress_closure_complete=false
+    continue
+  fi
+  config_sha256="$(sha256sum "$config_file" | awk '{print $1}')"
+  ingress_digest_rows+=("$kind\\t$config_file\\t$config_sha256")
+  if grep -IsEq '${INGRESS_TARGET_REFERENCE_PATTERN}' "$config_file"; then
+    ingress_target_absent=false
+  fi
+  if ! sanitized_config="$(awk '
+    {
+      output = ""
+      quote = ""
+      quote_escaped = 0
+      outside_escaped = 0
+      for (position = 1; position <= length($0); position += 1) {
+        character = substr($0, position, 1)
+        if (quote != "") {
+          if (quote_escaped == 1) { quote_escaped = 0; continue }
+          if (character == "\\\\") { quote_escaped = 1; continue }
+          if (character == quote) { quote = "" }
+          continue
+        }
+        if (outside_escaped == 1) {
+          output = output character
+          outside_escaped = 0
+          continue
+        }
+        if (character == "\\\\") {
+          output = output character
+          outside_escaped = 1
+          continue
+        }
+        if (character == sprintf("%c", 34) || character == sprintf("%c", 39)) {
+          quote = character
+          output = output " "
+          continue
+        }
+        if (character == "#") { break }
+        output = output character
+      }
+      if (quote != "") { exit 42 }
+      print output
+    }
+  ' "$config_file")"; then
+    ingress_closure_complete=false
+    continue
+  fi
+  keyword_count="$(printf '%s\\n' "$sanitized_config" | grep -IowE 'include|import' | wc -l || true)"
+  mapfile -t ingress_directives < <(
+    printf '%s\\n' "$sanitized_config" | tr '{};' '\\n\\n\\n' \
+      | grep -IsE '^[[:space:]]*(include|import)[[:space:]]+' || true
+  )
+  if test "$keyword_count" -ne "\${#ingress_directives[@]}" \
+    || test "\${#ingress_directives[@]}" -gt ${maxDirectivesPerFile}; then
+    ingress_closure_complete=false
+    continue
+  fi
+  for directive in "\${ingress_directives[@]}"; do
+    if ! [[ "$directive" =~ ^[[:space:]]*(include|import)[[:space:]]+([/A-Za-z0-9_.+*-]+)[[:space:]]*(#.*)?$ ]]; then
+      ingress_closure_complete=false
+      continue
+    fi
+    include_token="\${BASH_REMATCH[2]}"
+    if [[ "$include_token" = /* ]]; then
+      include_pattern="$include_token"
+    elif test "$kind" = nginx; then
+      include_pattern="/etc/nginx/$include_token"
+    else
+      include_pattern="$(dirname "$config_file")/$include_token"
+    fi
+    if [[ "$include_pattern" != *'*'* ]]; then
+      enqueue_ingress_file "$kind" "$include_pattern"
+      continue
+    fi
+    include_directory="\${include_pattern%/*}"
+    include_glob="\${include_pattern##*/}"
+    if [[ "$include_directory" = *'*'* ]] || test -z "$include_glob"; then
+      ingress_closure_complete=false
+      continue
+    fi
+    ingress_glob_complete=false
+    while IFS= read -r -d '' include_match; do
+      if test "$include_match" = __LK1_INGRESS_GLOB_COMPLETE__; then
+        ingress_glob_complete=true
+        break
+      fi
+      ingress_discovered_entries=$((ingress_discovered_entries + 1))
+      if test "$ingress_discovered_entries" -gt ${maxEntries}; then
+        ingress_closure_complete=false
+        break
+      fi
+      include_name="\${include_match##*/}"
+      if [[ "$include_name" = $include_glob ]]; then
+        enqueue_ingress_file "$kind" "$include_match"
+      fi
+    done < <(find "$include_directory" -xdev -mindepth 1 -maxdepth 1 -print0 \
+      && printf '%s\\0' __LK1_INGRESS_GLOB_COMPLETE__)
+    if test "$ingress_glob_complete" != true; then
+      ingress_closure_complete=false
+    fi
+  done
+done
+if test "$ingress_closure_complete" = true && test "$ingress_file_count" -gt 0; then
+  ingress_closure_sha256="$(printf '%s\\n' "\${ingress_digest_rows[@]}" | LC_ALL=C sort | sha256sum | awk '{print $1}')"
+else
+  ingress_closure_complete=false
+fi
+printf 'INGRESS_ISOLATION\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$ingress_configuration_readable" \
+  "$ingress_target_absent" "$ingress_closure_complete" "$ingress_file_count" "$ingress_closure_sha256"`;
+}
+
+const INGRESS_CLOSURE_SCRIPT = buildIngressClosureScript();
 export const REMOTE_PREFLIGHT_SCRIPT = `set -euo pipefail
 test "$(id -u)" = 0
 printf 'HOSTNAME\\t%s\\n' "$(hostname)"
@@ -303,97 +519,11 @@ for unit in \\
   printf 'UNIT_ISOLATION\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$unit" "$fragment_sha256" \
     "$fragment_readable" "$drop_ins_absent" "$effective_markers_absent"
 done
-ingress_configuration_readable=true
-ingress_target_absent=true
-ingress_closure_complete=true
-ingress_file_count=0
-ingress_closure_sha256=INVALID
-declare -A ingress_seen=()
-declare -a ingress_queue_kind=()
-declare -a ingress_queue_path=()
-declare -a ingress_digest_rows=()
-enqueue_ingress_file() {
-  local kind="$1"
-  local candidate="$2"
-  local resolved
-  resolved="$(readlink -f -- "$candidate" 2>/dev/null || true)"
-  if test -z "$resolved" || ! [[ "$resolved" =~ ^[/A-Za-z0-9_.+*-]+$ ]] \
-    || test ! -f "$resolved" || test ! -r "$resolved"; then
-    ingress_configuration_readable=false
-    ingress_closure_complete=false
-    return
-  fi
-  ingress_queue_kind+=("$kind")
-  ingress_queue_path+=("$resolved")
-}
-for row in nginx:/etc/nginx caddy:/etc/caddy haproxy:/etc/haproxy; do
-  kind="\${row%%:*}"
-  root="\${row#*:}"
-  if test -d "$root"; then
-    while IFS= read -r -d '' candidate; do
-      enqueue_ingress_file "$kind" "$candidate"
-    done < <(find "$root" \\( -type f -o -type l \\) -print0)
-  fi
-done
-ingress_queue_index=0
-while test "$ingress_queue_index" -lt "\${#ingress_queue_path[@]}"; do
-  kind="\${ingress_queue_kind[$ingress_queue_index]}"
-  config_file="\${ingress_queue_path[$ingress_queue_index]}"
-  ingress_queue_index=$((ingress_queue_index + 1))
-  seen_key="$kind:$config_file"
-  if test "\${ingress_seen[$seen_key]+present}" = present; then
-    continue
-  fi
-  ingress_seen[$seen_key]=true
-  ingress_file_count=$((ingress_file_count + 1))
-  if test "$ingress_file_count" -gt 512; then
-    ingress_closure_complete=false
-    break
-  fi
-  config_sha256="$(sha256sum "$config_file" | awk '{print $1}')"
-  ingress_digest_rows+=("$kind\\t$config_file\\t$config_sha256")
-  if grep -IsEq '${INGRESS_TARGET_REFERENCE_PATTERN}' "$config_file"; then
-    ingress_target_absent=false
-  fi
-  while IFS= read -r directive; do
-    include_token="$(printf '%s\\n' "$directive" | sed -E 's/^[[:space:]]*(include|import)[[:space:]]+([^;#[:space:]]+).*/\\2/')"
-    if ! [[ "$include_token" =~ ^[/A-Za-z0-9_.+*-]+$ ]]; then
-      ingress_closure_complete=false
-      continue
-    fi
-    if [[ "$include_token" = /* ]]; then
-      include_pattern="$include_token"
-    elif test "$kind" = nginx; then
-      include_pattern="/etc/nginx/$include_token"
-    else
-      include_pattern="$(dirname "$config_file")/$include_token"
-    fi
-    include_matches=()
-    while IFS= read -r include_match; do
-      test -n "$include_match" && include_matches+=("$include_match")
-    done < <(compgen -G "$include_pattern" || true)
-    if test "\${#include_matches[@]}" -eq 0; then
-      if [[ "$include_token" != *'*'* ]]; then
-        ingress_closure_complete=false
-      fi
-      continue
-    fi
-    for include_match in "\${include_matches[@]}"; do
-      enqueue_ingress_file "$kind" "$include_match"
-    done
-  done < <(grep -IsE '^[[:space:]]*(include|import)[[:space:]]+' "$config_file" || true)
-done
-if test "$ingress_closure_complete" = true && test "$ingress_file_count" -gt 0; then
-  ingress_closure_sha256="$(printf '%s\\n' "\${ingress_digest_rows[@]}" | LC_ALL=C sort | sha256sum | awk '{print $1}')"
-else
-  ingress_closure_complete=false
-fi
+${INGRESS_CLOSURE_SCRIPT}
 if test "$ingress_configuration_readable" != true || test "$ingress_target_absent" != true \
   || test "$ingress_closure_complete" != true; then
   production_markers_absent=false
 fi
-printf 'INGRESS_ISOLATION\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$ingress_configuration_readable" \
-  "$ingress_target_absent" "$ingress_closure_complete" "$ingress_file_count" "$ingress_closure_sha256"
 printf 'PRODUCTION_MARKERS_ABSENT\\t%s\\n' "$production_markers_absent"
 printf 'SHARED_FLOW_SHA256\\t%s\\n' "$(sha256sum /root/.node-red/flows.json | awk '{print $1}')"
 printf 'END\\n'
