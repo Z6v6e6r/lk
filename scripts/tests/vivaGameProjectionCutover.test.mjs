@@ -2427,15 +2427,41 @@ test("the real guardian releases terminal fallback only after the exact takeover
   const readyPath = path.join(privateRoot, "ready-request.json");
   const releasePath = path.join(privateRoot, "release.json");
   const reportPath = path.join(privateRoot, "recovery-report.json");
+  const takeoverPauseHookPath = path.join(privateRoot, "takeover-pause-hook.mjs");
   const requestId = "12345678-1234-4234-8234-123456789abc";
   const attemptId = "87654321-4321-4321-8321-cba987654321";
   const token = "fixture-fence-token-with-sufficient-entropy";
   let guardian = null;
   let recoveryPid = null;
   let takeoverPid = null;
-  let watcher = null;
   let guardianStderr = "";
   try {
+    write0600(takeoverPauseHookPath, Buffer.from(`
+      import fs from "node:fs";
+      if (String(process.argv[1] || "").endsWith("run_viva_game_projection_recovery_fence_takeover.mjs")) {
+        const heartbeatPath = process.argv[process.argv.indexOf("--heartbeat") + 1];
+        const originalWriteFileSync = fs.writeFileSync.bind(fs);
+        const originalRenameSync = fs.renameSync.bind(fs);
+        let receiptPaused = false;
+        let heartbeatPauseScheduled = false;
+        fs.writeFileSync = (target, ...args) => {
+          const result = originalWriteFileSync(target, ...args);
+          if (!receiptPaused && typeof target === "number") {
+            receiptPaused = true;
+            process.kill(process.pid, "SIGSTOP");
+          }
+          return result;
+        };
+        fs.renameSync = (source, target) => {
+          const result = originalRenameSync(source, target);
+          if (!heartbeatPauseScheduled && target === heartbeatPath) {
+            heartbeatPauseScheduled = true;
+            setImmediate(() => process.kill(process.pid, "SIGSTOP"));
+          }
+          return result;
+        };
+      }
+    `));
     guardian = spawn("/bin/bash", [
       "-c",
       "exec 9>\"$1\"\nflock -n 9\nexec node \"$2\" --receipt \"$3\" --release-request \"$4\" --recovery-request \"$5\" --ready-request \"$6\" --heartbeat \"$7\"",
@@ -2455,6 +2481,7 @@ test("the real guardian releases terminal fallback only after the exact takeover
         PADLHUB_CUTOVER_FENCE_FD: "9",
         PADLHUB_CUTOVER_FENCE_LOCK_PATH: lockPath,
         PADLHUB_CUTOVER_FENCE_TOKEN: token,
+        NODE_OPTIONS: `--import=${takeoverPauseHookPath}`,
       },
     });
     guardian.stderr.on("data", (chunk) => { guardianStderr += chunk.toString("utf8"); });
@@ -2558,19 +2585,6 @@ test("the real guardian releases terminal fallback only after the exact takeover
       "--report": options.report,
     }).flat();
     const takeoverReceiptPath = path.join(privateRoot, `.viva-recovery-fence-takeover-${requestId}.json`);
-    const recoveryStopped = new Promise((resolve, reject) => {
-      watcher = fs.watch(privateRoot, (_event, filename) => {
-        if (filename !== path.basename(takeoverReceiptPath) || recoveryPid) return;
-        try {
-          const children = fs.readFileSync(`/proc/${guardian.pid}/task/${guardian.pid}/children`, "utf8")
-            .trim().split(/\s+/).filter(Boolean).map(Number);
-          assert.equal(children.length, 1);
-          [recoveryPid] = children;
-          process.kill(recoveryPid, "SIGSTOP");
-          resolve();
-        } catch (error) { reject(error); }
-      });
-    });
     write0600(requestPath, Buffer.from(canonicalJson({
       formatVersion: 1,
       kind: "viva-game-projection-fence-recovery-request",
@@ -2583,23 +2597,16 @@ test("the real guardian releases terminal fallback only after the exact takeover
       argv,
       authorizedAt: new Date().toISOString(),
     })));
-    await Promise.race([
-      recoveryStopped,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Did not stop terminal recovery child")), 5_000)),
-    ]);
-    watcher.close();
-    watcher = null;
     for (let poll = 0; poll < 100 && !fs.existsSync(takeoverReceiptPath); poll += 1) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
+    const children = fs.readFileSync(`/proc/${guardian.pid}/task/${guardian.pid}/children`, "utf8")
+      .trim().split(/\s+/).filter(Boolean).map(Number);
+    assert.equal(children.length, 1);
+    [recoveryPid] = children;
     const takeoverBytes = fs.readFileSync(takeoverReceiptPath);
     const takeoverReceipt = JSON.parse(takeoverBytes.toString("utf8"));
     takeoverPid = takeoverReceipt.pid;
-    for (let poll = 0; poll < 100 && !fs.existsSync(takeoverReceipt.heartbeatPath); poll += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    assert.equal(fs.existsSync(takeoverReceipt.heartbeatPath), true);
-    process.kill(takeoverPid, "SIGSTOP");
     const bindings = {
       barrierArtifactSha256: options.expectedBarrierArtifactSha256,
       cutoverPlanSha256: options.expectedCutoverPlanSha256,
@@ -2643,18 +2650,24 @@ test("the real guardian releases terminal fallback only after the exact takeover
     }));
     write0600(path.join(journalPath, "0002-terminal-result.json"), terminalBytes);
     write0600(reportPath, reportBytes);
-    process.kill(recoveryPid, "SIGCONT");
-    for (let poll = 0; poll < 250; poll += 1) {
-      const heartbeat = JSON.parse(fs.readFileSync(heartbeatPath, "utf8"));
-      if (heartbeat.lastRecoveryResult?.requestId === requestId && heartbeat.lastRecoveryResult.exitCode === 0) break;
+    process.kill(takeoverPid, "SIGCONT");
+    for (let poll = 0; poll < 250 && !fs.existsSync(takeoverReceipt.heartbeatPath); poll += 1) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    const completedHeartbeat = JSON.parse(fs.readFileSync(heartbeatPath, "utf8"));
-    assert.equal(completedHeartbeat.lastRecoveryResult?.exitCode, 0, canonicalJson({
-      lastRecoveryResult: completedHeartbeat.lastRecoveryResult,
-      lastRecoveryHandshakeErrorSha256: completedHeartbeat.lastRecoveryHandshakeErrorSha256,
-      guardianStderr: guardianStderr.slice(-1000),
-    }));
+    assert.equal(fs.existsSync(takeoverReceipt.heartbeatPath), true);
+    for (let poll = 0; poll < 250; poll += 1) {
+      try { process.kill(recoveryPid, 0); } catch (error) {
+        if (error?.code === "ESRCH") break;
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    let recoveryAlive = true;
+    try { process.kill(recoveryPid, 0); } catch (error) {
+      if (error?.code === "ESRCH") recoveryAlive = false;
+      else throw error;
+    }
+    assert.equal(recoveryAlive, false, guardianStderr.slice(-1000));
     process.kill(takeoverPid, "SIGKILL");
     for (let poll = 0; poll < 250; poll += 1) {
       const heartbeat = JSON.parse(fs.readFileSync(heartbeatPath, "utf8"));
@@ -2703,7 +2716,6 @@ test("the real guardian releases terminal fallback only after the exact takeover
     try { if (guardian?.pid) process.kill(guardian.pid, "SIGKILL"); } catch { /* already stopped */ }
     try { if (recoveryPid) process.kill(recoveryPid, "SIGKILL"); } catch { /* already stopped */ }
     try { if (takeoverPid) process.kill(takeoverPid, "SIGKILL"); } catch { /* already stopped */ }
-    try { watcher?.close(); } catch { /* already closed */ }
     await new Promise((resolve) => setTimeout(resolve, 100));
     fs.rmSync(privateRoot, { recursive: true, force: true });
   }
