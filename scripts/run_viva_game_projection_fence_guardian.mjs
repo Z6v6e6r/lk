@@ -59,6 +59,9 @@ const releasePath = path.resolve(args.get("--release-request") || "");
 const recoveryRequestPath = path.resolve(args.get("--recovery-request") || "");
 const readyRequestPath = path.resolve(args.get("--ready-request") || "");
 const heartbeatPath = path.resolve(args.get("--heartbeat") || "");
+const testHandoffValidatedSignalPath = String(
+  process.env.PADLHUB_TEST_GUARDIAN_AFTER_TAKEOVER_VALIDATION_SIGNAL || "",
+);
 const recoveryExecutorPath = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "recover_viva_game_projection_mongo_write_barrier.mjs"));
 const readyFinalizerPath = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "finalize_viva_game_projection_cutover_ready.mjs"));
 const receiptParent = path.dirname(receiptPath);
@@ -69,11 +72,22 @@ if (!Number.isSafeInteger(fd) || fd < 3 || lockPath !== "/run/lock/padlhub-viva-
   || path.dirname(releasePath) !== receiptParent || path.dirname(recoveryRequestPath) !== receiptParent
   || path.dirname(readyRequestPath) !== receiptParent
   || path.dirname(heartbeatPath) !== receiptParent
+  || testHandoffValidatedSignalPath && (process.env.NODE_ENV !== "test"
+    || !path.isAbsolute(testHandoffValidatedSignalPath)
+    || path.dirname(testHandoffValidatedSignalPath) !== receiptParent
+    || fs.existsSync(testHandoffValidatedSignalPath))
   || !parentStat.isDirectory() || parentStat.isSymbolicLink()
   || fs.realpathSync(receiptParent) !== receiptParent || parentStat.uid !== process.getuid() || (parentStat.mode & 0o077) !== 0
   || fs.existsSync(receiptPath) || fs.existsSync(heartbeatPath) || fs.existsSync(recoveryRequestPath)
   || fs.existsSync(readyRequestPath)
-  || new Set([receiptPath, releasePath, recoveryRequestPath, readyRequestPath, heartbeatPath]).size !== 5) fail("Fence guardian inputs are invalid");
+  || new Set([
+    receiptPath,
+    releasePath,
+    recoveryRequestPath,
+    readyRequestPath,
+    heartbeatPath,
+    ...(testHandoffValidatedSignalPath ? [testHandoffValidatedSignalPath] : []),
+  ]).size !== (testHandoffValidatedSignalPath ? 6 : 5)) fail("Fence guardian inputs are invalid");
 const stat = fs.fstatSync(fd);
 const lockStat = fs.statSync(lockPath);
 if (!stat.isFile() || stat.dev !== lockStat.dev || stat.ino !== lockStat.ino) fail("Fence guardian did not inherit the canonical lock descriptor");
@@ -129,6 +143,7 @@ let lastReadyResult = null;
 let recoveryReleaseDelegated = false;
 let delegatedRecovery = null;
 let recoveryTerminalGuardianFallback = null;
+let testHandoffValidationPauseConsumed = false;
 const writeHeartbeat = () => {
   atomicPrivateWrite(heartbeatPath, {
     formatVersion: 1,
@@ -464,7 +479,23 @@ const assertSuccessfulRecoveryTakeoverHandoff = () => {
     || !Number.isFinite(heartbeatAt) || heartbeatAt > Date.now() + 1_000 || Date.now() - heartbeatAt > 5_000) {
     fail("Recovery takeover heartbeat cannot receive guardian custody");
   }
-  return { takeoverReceiptSha256: sha256(evidence.takeoverRead.bytes), takeoverHeartbeatSha256: sha256(heartbeatRead.bytes) };
+  return {
+    ...evidence,
+    takeoverReceiptSha256: sha256(evidence.takeoverRead.bytes),
+    takeoverHeartbeatSha256: sha256(heartbeatRead.bytes),
+  };
+};
+
+const pauseAfterTakeoverValidationForTest = () => {
+  if (!testHandoffValidatedSignalPath || testHandoffValidationPauseConsumed) return;
+  testHandoffValidationPauseConsumed = true;
+  atomicPrivateWrite(testHandoffValidatedSignalPath, {
+    state: "TAKEOVER_HANDOFF_VALIDATED",
+    guardianPid: process.pid,
+    recoveryRequestId: delegatedRecovery.requestId,
+    observedAt: new Date().toISOString(),
+  });
+  process.kill(process.pid, "SIGSTOP");
 };
 
 const assertRecoveryTakeoverPositivelyDead = (takeover) => {
@@ -528,7 +559,7 @@ while (true) {
   if (recoveryReleaseDelegated && lastRecoveryResult?.exitCode === 0 && !recoveryChild) {
     try {
       assertSuccessfulRecoveryTakeoverHandoff();
-      process.exit(0);
+      pauseAfterTakeoverValidationForTest();
     } catch (error) {
       lastRecoveryResult = {
         ...lastRecoveryResult,
@@ -598,11 +629,6 @@ while (true) {
   }
   if (fs.existsSync(releasePath)) {
     if (recoveryReleaseDelegated) {
-      if (!recoveryTerminalGuardianFallback) {
-        writeHeartbeat();
-        await sleep(1000);
-        continue;
-      }
       let release = null;
       let validPrivateFile = false;
       try {
@@ -612,7 +638,13 @@ while (true) {
         if (validPrivateFile) release = JSON.parse(fs.readFileSync(releasePath, "utf8"));
       } catch { /* malformed requests remain unauthorized */ }
       let evidence = null;
-      try { evidence = assertTerminalGuardianFallbackCustody(); } catch { /* retain the lock fail-closed */ }
+      try {
+        evidence = recoveryTerminalGuardianFallback
+          ? assertTerminalGuardianFallbackCustody()
+          : assertSuccessfulRecoveryTakeoverHandoff();
+      } catch {
+        try { evidence = establishTerminalGuardianFallbackCustody(); } catch { /* retain the lock fail-closed */ }
+      }
       const authorized = evidence && !recoveryChild && !readyChild
         && isAuthorizedRecoveryFenceTakeoverRelease({
           release,
