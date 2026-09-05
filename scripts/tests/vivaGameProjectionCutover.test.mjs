@@ -2434,6 +2434,7 @@ test("the real guardian releases terminal fallback only after the exact takeover
   let recoveryPid = null;
   let takeoverPid = null;
   let watcher = null;
+  let guardianStderr = "";
   try {
     guardian = spawn("/bin/bash", [
       "-c",
@@ -2447,7 +2448,7 @@ test("the real guardian releases terminal fallback only after the exact takeover
       readyPath,
       heartbeatPath,
     ], {
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
       env: {
         ...process.env,
         VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER: "RECOVER_VIVA_GAME_PROJECTION_MONGO_WRITE_BARRIER_V1",
@@ -2456,6 +2457,7 @@ test("the real guardian releases terminal fallback only after the exact takeover
         PADLHUB_CUTOVER_FENCE_TOKEN: token,
       },
     });
+    guardian.stderr.on("data", (chunk) => { guardianStderr += chunk.toString("utf8"); });
     for (let poll = 0; poll < 100 && (!fs.existsSync(receiptPath) || !fs.existsSync(heartbeatPath)); poll += 1) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
@@ -2648,7 +2650,10 @@ test("the real guardian releases terminal fallback only after the exact takeover
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     const completedHeartbeat = JSON.parse(fs.readFileSync(heartbeatPath, "utf8"));
-    assert.equal(completedHeartbeat.lastRecoveryResult?.exitCode, 0);
+    assert.equal(completedHeartbeat.lastRecoveryResult?.exitCode, 0, canonicalJson({
+      lastRecoveryResult: completedHeartbeat.lastRecoveryResult,
+      guardianStderr: guardianStderr.slice(-1000),
+    }));
     process.kill(takeoverPid, "SIGKILL");
     for (let poll = 0; poll < 250; poll += 1) {
       const heartbeat = JSON.parse(fs.readFileSync(heartbeatPath, "utf8"));
