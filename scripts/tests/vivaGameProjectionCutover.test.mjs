@@ -2431,11 +2431,13 @@ test("the real guardian releases terminal fallback only after the exact takeover
   const requestId = "12345678-1234-4234-8234-123456789abc";
   const attemptId = "87654321-4321-4321-8321-cba987654321";
   const token = "fixture-fence-token-with-sufficient-entropy";
+  const previousConfirmation = process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
   let guardian = null;
   let recoveryPid = null;
   let takeoverPid = null;
   let guardianStderr = "";
   try {
+    process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = "RECOVER_VIVA_GAME_PROJECTION_MONGO_WRITE_BARRIER_V1";
     write0600(takeoverPauseHookPath, Buffer.from(`
       import fs from "node:fs";
       if (String(process.argv[1] || "").endsWith("run_viva_game_projection_recovery_fence_takeover.mjs")) {
@@ -2733,6 +2735,8 @@ test("the real guardian releases terminal fallback only after the exact takeover
     guardian = null;
     assert.equal(spawnSync("flock", ["-n", lockPath, "-c", "true"], { stdio: "ignore" }).status, 0);
   } finally {
+    if (previousConfirmation === undefined) delete process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
+    else process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = previousConfirmation;
     try { if (guardian?.pid) process.kill(guardian.pid, "SIGKILL"); } catch { /* already stopped */ }
     try { if (recoveryPid) process.kill(recoveryPid, "SIGKILL"); } catch { /* already stopped */ }
     try { if (takeoverPid) process.kill(takeoverPid, "SIGKILL"); } catch { /* already stopped */ }
