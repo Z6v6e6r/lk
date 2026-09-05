@@ -7,7 +7,10 @@ import test from "node:test";
 import {
   captureCurrentHostPreflightEvidence,
   checkedHostPreflightEvidence,
+  EFFECTIVE_UNIT_NETWORK_SANDBOX,
+  EFFECTIVE_UNIT_PRODUCTION_MARKER_PATTERN,
   INGRESS_TARGET_REFERENCE_PATTERN,
+  REMOTE_PREFLIGHT_SCRIPT,
   validateFreshHostPreflightEvidence,
   validateHostPreflightEvidence,
   writeFreshHostPreflightEvidence,
@@ -78,6 +81,38 @@ test("ingress target scan rejects every reserved DEV route representation", () =
   ]) assert.equal(pattern.test(value), true, value);
   assert.equal(pattern.test("proxy_pass http://127.0.0.1:1880;"), false);
   assert.equal(pattern.test("set $unrelated 11882;"), false);
+});
+
+test("effective unit scan accepts only loopback allow plus deny-all network sandbox", () => {
+  const markerPattern = new RegExp(EFFECTIVE_UNIT_PRODUCTION_MARKER_PATTERN, "i");
+  assert.equal(markerPattern.test("IPAddressDeny=0.0.0.0/0 ::/0"), false);
+  assert.deepEqual(EFFECTIVE_UNIT_NETWORK_SANDBOX, {
+    ipAddressAllow: "127.0.0.0/8 ::1/128",
+    ipAddressDeny: "0.0.0.0/0 ::/0",
+    restrictAddressFamilies: "AF_INET AF_INET6 AF_UNIX",
+  });
+  for (const value of [
+    "Environment=CUP_BASE_URL=https://padlhub.su",
+    "Environment=PROVIDER_BASE_URL=https://api.vivacrm.ru",
+    "Environment=MONGO_URL=mongodb+srv://example.invalid",
+    "Environment=SHARED_CUP=https://127.0.0.1:3036",
+    "ExecStart=/usr/bin/ssh lk-primary-147",
+  ]) assert.equal(markerPattern.test(value), true, value);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes(
+    'effective="$(systemctl show "$unit" -p ExecStart -p Environment -p EnvironmentFiles -p User -p Group)"',
+  ), true);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes(
+    'effective="$(systemctl show "$unit" -p ExecStart -p Environment -p EnvironmentFiles -p User -p Group -p IPAddressAllow',
+  ), false);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes(
+    `test "$ip_address_allow" != '${EFFECTIVE_UNIT_NETWORK_SANDBOX.ipAddressAllow}'`,
+  ), true);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes(
+    `test "$ip_address_deny" != '${EFFECTIVE_UNIT_NETWORK_SANDBOX.ipAddressDeny}'`,
+  ), true);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes(
+    `test "$restrict_address_families" != '${EFFECTIVE_UNIT_NETWORK_SANDBOX.restrictAddressFamilies}'`,
+  ), true);
 });
 
 test("historical host preflight proves its archived stopped isolated state", () => {

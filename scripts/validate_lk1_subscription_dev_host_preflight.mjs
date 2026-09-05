@@ -12,6 +12,12 @@ const GIT_SHA = /^[a-f0-9]{40}$/;
 const RFC3339_SECONDS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 export const INGRESS_TARGET_REFERENCE_PATTERN = "(^|[^0-9])(1882|27030|3037|3038|3039)([^0-9]|$)|lk1-subscription-dev-(mongo|cup|provider-fixture|identity-fixture|nodered)[.]service|/srv/lk1-subscription-dev(?:/|$)";
+export const EFFECTIVE_UNIT_PRODUCTION_MARKER_PATTERN = "lk-primary-147|padlhub[.](su|ru)|vivacrm|mongodb[+]srv|127[.]0[.]0[.]1:(3036|27029)";
+export const EFFECTIVE_UNIT_NETWORK_SANDBOX = Object.freeze({
+  ipAddressAllow: "127.0.0.0/8 ::1/128",
+  ipAddressDeny: "0.0.0.0/0 ::/0",
+  restrictAddressFamilies: "AF_INET AF_INET6 AF_UNIX",
+});
 const EXPECTED_MACHINE_ID_SHA256 = "9f29889b29a55b2c7e1eeb65616d2049b16972589de1bc623a61d38d92dd7ad8";
 const EXPECTED_UNITS = Object.freeze([
   "lk1-subscription-dev-mongo.service",
@@ -225,7 +231,7 @@ export const checkedHostPreflightEvidence = Object.freeze(JSON.parse(fs.readFile
 )));
 
 const HOST_ALIAS = "lk-reserve-89";
-const REMOTE_PREFLIGHT_SCRIPT = `set -euo pipefail
+export const REMOTE_PREFLIGHT_SCRIPT = `set -euo pipefail
 test "$(id -u)" = 0
 printf 'HOSTNAME\\t%s\\n' "$(hostname)"
 printf 'MACHINE_ID_SHA256\\t%s\\n' "$(sha256sum /etc/machine-id | awk '{print $1}')"
@@ -274,8 +280,14 @@ for unit in \\
   fi
   drop_ins="$(systemctl show "$unit" -p DropInPaths --value)"
   if test -z "$drop_ins"; then drop_ins_absent=true; else drop_ins_absent=false; fi
-  effective="$(systemctl show "$unit" -p ExecStart -p Environment -p EnvironmentFiles -p User -p Group -p IPAddressAllow -p IPAddressDeny -p RestrictAddressFamilies)"
-  if printf '%s\\n' "$effective" | grep -Eiq 'lk-primary-147|padlhub[.](su|ru)|vivacrm|mongodb[+]srv|127[.]0[.]0[.]1:(3036|27029)|0[.]0[.]0[.]0'; then
+  effective="$(systemctl show "$unit" -p ExecStart -p Environment -p EnvironmentFiles -p User -p Group)"
+  ip_address_allow="$(systemctl show "$unit" -p IPAddressAllow --value)"
+  ip_address_deny="$(systemctl show "$unit" -p IPAddressDeny --value)"
+  restrict_address_families="$(systemctl show "$unit" -p RestrictAddressFamilies --value)"
+  if printf '%s\\n' "$effective" | grep -Eiq '${EFFECTIVE_UNIT_PRODUCTION_MARKER_PATTERN}' \\
+    || test "$ip_address_allow" != '${EFFECTIVE_UNIT_NETWORK_SANDBOX.ipAddressAllow}' \\
+    || test "$ip_address_deny" != '${EFFECTIVE_UNIT_NETWORK_SANDBOX.ipAddressDeny}' \\
+    || test "$restrict_address_families" != '${EFFECTIVE_UNIT_NETWORK_SANDBOX.restrictAddressFamilies}'; then
     effective_markers_absent=false
   else
     effective_markers_absent=true
