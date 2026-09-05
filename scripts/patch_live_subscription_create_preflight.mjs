@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { verifyWorkspace } from './verify_nodered_source_origin.mjs';
 
-export const SOURCE_SHA = '46cf684fce5017e5ff4c5add22e918cfde92d404b651b416b6fdebd30275504a';
+export const SOURCE_SHA = '7775475aea2436ca5d6ec26cdc6acc4c682556f05b71af2fb79f6e0c0edbcb71';
 export const AVAILABILITY_SHA = '9d99a77d9319c869ded3f8f05943a0bf00b4795a64fcb9aa6e7a275f02825df5';
 export const COMPILER_VERSION = '5.9.3';
 export const IDS = Object.freeze({ split: '8f7bd5b482fe9763', gateway: 'lk_subscription_booking_router_20260804', finalize: 'lk_subscription_booking_finalize_20260804' });

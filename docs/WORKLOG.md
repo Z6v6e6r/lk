@@ -1836,3 +1836,9 @@
 - Known subscription availability/policy/daily-limit failures are checked before Viva exercise creation using existing availability rules. Real-exercise verification remains mandatory; preflight performs no booking, activation or Mongo writes.
 - Late failures carry exact reconciliation identity; no new automatic deletion and no historical repair. The GET-empty/DELETE race requires a provider atomic contract before destructive compensation can be introduced.
 - Preparation, limits and executable local acceptance commands: `docs/SUBSCRIPTION_CREATE_PREFLIGHT_2026-09-05.md`. Production unchanged; provider/browser booking proof NOT_RUN.
+
+### Follow-up: full managed policy replay and reviewed live refresh
+
+- Replaced the injected managed-policy success fixture with the exact live policy/blocked functions after runtime-context and active/history responses. Added successful 60-minute CREATE/revalidation and negative duration, station, freeze, runtime identity and missing first-use configuration coverage: 36 PASS, 0 FAIL, 0 SKIP; scoped ESLint PASS.
+- Fresh read-only source changed to `7775475aea2436ca5d6ec26cdc6acc4c682556f05b71af2fb79f6e0c0edbcb71`. Independent review identified only two unrelated read-response phone/UUID redaction functions; all three preflight target nodes and topology are unchanged. Updated the exact SHA pin after review, preserving both fresh functions.
+- Regenerated private candidate SHA `e38f844343ef290aa49f2583861dfc4488031b97d303ccbe36b3a5e12c292ec3`; exactly three function-body changes against the refreshed baseline. Runtime patch bodies retain their prior hashes. No push, merge, deploy or live data mutation; physical provider proof remains NOT_RUN.

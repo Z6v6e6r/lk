@@ -11,7 +11,7 @@ This is a narrow patch for the reviewed live baseline, not a replacement with th
 DEV subscription implementation already on main. Normal frontend builds do not apply it.
 
 - Base commit: `4237fbafe42df9f577356b15487693cc7215d32e`.
-- Live source SHA256: `46cf684fce5017e5ff4c5add22e918cfde92d404b651b416b6fdebd30275504a`.
+- Reviewed live source SHA256: `7775475aea2436ca5d6ec26cdc6acc4c682556f05b71af2fb79f6e0c0edbcb71`.
 - Exactly three existing function bodies change; topology and all other nodes stay intact:
   `8f7bd5b482fe9763`, `lk_subscription_booking_router_20260804`,
   `lk_subscription_booking_finalize_20260804`.
@@ -72,8 +72,12 @@ Tests cover pre-create reads, daily rejection, malformed/incomplete lists, targe
 binding, expired/frozen/refunded/unavailable subscriptions, NEW first-use, Piter/HUB
 compatibility, resolver POST, blocked activation/Mongo writes, real-exercise revalidation,
 late failures, JOIN compatibility, source drift and artifact custody. Managed-policy
-success includes an injected accepted decision; full live policy/provider behavior is
-NOT_RUN. Local function replay uses fixture responses and is not a physical integration test.
+tests run the exact runtime-response, active/history, policy evaluator and finalizer
+functions. They cover successful 60-minute CREATE followed by real-exercise revalidation,
+and rejection of 120-minute CREATE, another station, a frozen runtime instance, mismatched
+runtime subscription identity and first use without activation configuration. Every
+gateway transition asserts its single permitted output. Local function replay uses
+synthetic provider responses; physical integration and actual provider behavior are NOT_RUN.
 
 ## Release and recovery boundaries
 
@@ -92,8 +96,8 @@ without them provider and rendered end-to-end proof remain NOT_RUN.
 
 ## Checkpoint evidence
 
-- Fixture-required acceptance: 31 PASS, 0 FAIL, 0 SKIP.
-- Subscription/split/leave/roster/patch/modular regression set: 312 PASS, 0 FAIL,
+- Fixture-required acceptance on refreshed reviewed source: 36 PASS, 0 FAIL, 0 SKIP.
+- Prior checkpoint `e4256bb1` subscription/split/leave/roster/patch/modular regression set: 312 PASS, 0 FAIL,
   1 pre-existing optional fixture case SKIP.
 - `npm run lint`: 0 errors, 387 existing warnings. Final added tooling scoped lint PASS.
 - `npm run build`: production + dev bundles and TypeScript PASS with inert `ci.invalid`
@@ -101,9 +105,24 @@ without them provider and rendered end-to-end proof remain NOT_RUN.
 - Modular extraction/validation of original live LK Games tab: 315 nodes, 38 HTTP inputs,
   0 broken wires/links. Patched full-flow builder independently verifies unchanged
   topology: 4,768 nodes, 215 routes, exactly 3 changed `func` fields.
-- Final candidate SHA256: `2144b5838f6c701751f5cc221e998aa1880a320c8153812529bb6b93a23c6c8d`.
+- Current candidate SHA256: `e38f844343ef290aa49f2583861dfc4488031b97d303ccbe36b3a5e12c292ec3`.
 - Independent payment/reliability and release/custody reviews: no remaining blocking
   findings. No actual provider write, deployment or historical record repair.
+
+### Reviewed baseline refresh
+
+The next read-only pull detected a different live SHA from the original `46cf684f…`.
+Independent release review compared both full flows: same 4,768 nodes/order/topology,
+only `func` on `0485dea01865b2dd` and `d44d0fcf9250927f` changed. These read-response
+functions preserve UUID spans while masking phone data; all three preflight target
+nodes are unchanged. The current candidate preserves those two fresh functions exactly.
+The builder still requires one exact reviewed source SHA; no allowlist bypass was added.
+The old candidate `2144b583…` must not replace the refreshed live flow.
+
+The follow-up changes only tests, the explicit reviewed source pin and documentation.
+Acceptance and scoped ESLint were rerun; the three patched function hashes match the
+previous candidate. The broader regression/build/lint results above are prior checkpoint
+evidence and were not rerun for this follow-up. Any further server drift needs fresh review.
 
 Changed files: this runbook; `docs/WORKLOG.md`;
 `scripts/check_subscription_create_preflight.mjs`;

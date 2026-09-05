@@ -11,6 +11,8 @@ if (fixture) {
   assert.equal(crypto.createHash('sha256').update(raw).digest('hex'), SOURCE_SHA);
   const flow = JSON.parse(raw);
   sources = patchSources(Object.fromEntries(Object.entries(IDS).map(([key, id]) => [key, flow.find(n => n.id === id).func])));
+  sources.policy = flow.find(n => n.id === 'lk_subscription_managed_policy_20260820').func;
+  sources.policyBlocked = flow.find(n => n.id === 'lk_subscription_managed_policy_blocked_20260820').func;
 }
 const liveTest = (name, fn) => test(name, { skip: !fixture && 'Requires exact private live source fixture' }, fn);
 const run = (key, msg, values = {}) => new Function('msg', 'global', 'env', 'node', sources[key])(
@@ -24,14 +26,15 @@ function initial() {
       roomId: 'fixture-room', studioId: 'fixture-studio', date: '2026-09-10', fromTime: '17:00', toTime: '19:00' } };
 }
 // Enter from the actual server function immediately before exercise creation.
-function start() {
+function start(target = {}) {
   const source = sources.split.replace('if (ctx.step === "token") {', `if (ctx.step === "fixture_before_create") return continueSplitAfterVerifiedPrice(ctx);\nif (ctx.step === "token") {`);
   const msg = initial(); msg._splitCtx.step = 'fixture_before_create'; delete msg._splitCtx.subscriptionCreatePreflightDone;
+  Object.assign(msg._splitCtx, target);
   return new Function('msg', 'global', 'env', 'node', source)(msg,
     { get: () => undefined, set() {} }, { get: () => undefined }, {})[3];
 }
-function subscriptionStage() {
-  const started = start();
+function subscriptionStage(target) {
+  const started = start(target);
   const response = run('gateway', { ...started, statusCode: 200, payload: { id: 'fixture-client', phone: '+79990000001' } });
   assert.equal(response[0].method, 'GET');
   assert.match(response[0].url, /\/subscriptions\?/);
@@ -152,8 +155,8 @@ const managedGlobals = {
   subscriptions_runtime_api_base_url: 'https://runtime.invalid/api',
   subscriptions_runtime_context_integration_token: 'fixture-integration',
 };
-function managedStart() {
-  return run('gateway', { ...subscriptionStage(), statusCode: 200, payload: [eligibleSubscription({
+function managedStart(target) {
+  return run('gateway', { ...subscriptionStage(target), statusCode: 200, payload: [eligibleSubscription({
     name: 'Падел.Дружба.Питер — 12 месяцев', productId: '8bf334ba-3050-4017-b40a-7eef2db1eb16',
   })] }, managedGlobals)[0];
 }
@@ -164,15 +167,89 @@ liveTest('managed preflight permits only existing read-only runtime-context POST
   const unavailable = run('gateway', { ...out, statusCode: 503, payload: {} }, managedGlobals);
   assert.equal(unavailable[4].payload.details.code, 'MANAGED_SUBSCRIPTION_RUNTIME_CONTEXT_UNAVAILABLE');
 });
-liveTest('accepted managed policy completes preflight without reserve, activation or booking writes', () => {
-  const msg = managedStart();
-  msg._subscriptionBooking.step = 'managed_policy_decision';
-  msg._subscriptionBooking.managedRuntime = { policy: { policyVersion: 1 } };
-  const result = run('gateway', { ...msg, _managedSubscriptionPolicyDecision: {
-    eligible: true, policyVersion: 1, usageUnits: 1, benefit: { kind: 'FREE_ENTITLEMENT' },
-  } }, managedGlobals);
-  assert.equal(result[4].payload.state, 'CREATE_PREFLIGHT_PASSED');
-  assert.ok(result.slice(0, 4).every(n => n === null));
+const piterStation = '1ea77cbf-bc36-49a1-96d6-f35c216a409b';
+// Provider responses are synthetic; routing and policy evaluation use the exact live functions.
+function managedRuntime(instanceOverrides = {}) {
+  const policy = {
+    runtimeSchemaVersion: 1, subscriptionTypeId: 'fixture-type', policyVersion: 1,
+    status: 'PUBLISHED', effectiveAt: '2026-08-01T00:00:00.000Z', timeZone: 'Europe/Moscow',
+    createGame: { enabled: true, durationsMinutes: [60] },
+    joinGame: { enabled: true, minDurationMinutes: 60, maxDurationMinutes: 120 },
+    activeServicesLimit: { enabled: false, max: null, scope: 'SUBSCRIPTION_BENEFIT_ONLY' },
+    bookingWindow: { enabled: false, days: null }, dailyUsageLimit: 1,
+    usageUnitsByDuration: { '60': 1, '90': 1, '120': 1 },
+    stationAccessRules: [{ ruleId: 'fixture-station', enabled: true, priority: 1,
+      selector: { kind: 'STATION_LIST', stationIds: [piterStation] },
+      surcharge: { kind: 'NONE', amountMinor: 0 } }],
+    benefitRules: [{ ruleId: 'fixture-create', enabled: true, category: 'GAME', actions: ['CREATE_GAME'],
+      externalEventTypeIds: ['viva:direction:4588:type:1613'], productTypeIds: [], durationMinutes: [60],
+      stationIds: [piterStation], kind: 'FREE_ENTITLEMENT', priority: 1 }],
+    lifecycle: { activationMode: 'FIRST_USE_OR_FIXED_DATE', activationWindowDays: 0,
+      fixedActivationAt: '2026-09-30T21:00:00.000Z', fixedActivationTimeZone: 'Europe/Moscow',
+      validityDays: 365, allowBookingsAfterExpiry: false },
+    usage: { weeklyUsageLimit: null, monthlyUsageLimit: null, maxFutureBookings: null,
+      minHoursBetweenUses: 0, blackoutDates: [] },
+  };
+  return { schemaVersion: 1, subscriptionInstanceId: 'fixture-instance', clientSubscriptionId: 'fixture-subscription',
+    policyDigest: 'a'.repeat(64), policy, evidence: { mappingRevision: 1, instanceRevision: 1 },
+    instance: { subscriptionInstanceId: 'fixture-instance', subscriptionTypeId: policy.subscriptionTypeId,
+      policyVersion: 1, state: 'ACTIVE', activeFrom: '2026-01-01T00:00:00.000Z', activeTo: '2100-01-01T00:00:00.000Z',
+      frozenUntil: null, noShowBlockedUntil: null, homeStationId: piterStation, ...instanceOverrides } };
+}
+function onlyOutput(out, index) {
+  assert.ok(out[index]);
+  assert.ok(out.every((msg, i) => i === index || msg === null));
+  return out[index];
+}
+function managedPolicyInput({ target = {}, runtime = managedRuntime() } = {}) {
+  const started = managedStart({ studioId: piterStation, toTime: '18:00', ...target });
+  assert.equal(started._subscriptionBooking.step, 'managed_runtime_context');
+  let msg = onlyOutput(run('gateway', { ...started, statusCode: 200, payload: runtime }, managedGlobals), 0);
+  assert.equal(msg.method, 'GET'); assert.equal(msg._subscriptionBooking.step, 'active_bookings');
+  msg = onlyOutput(run('gateway', { ...msg, statusCode: 200, payload: [] }, managedGlobals), 0);
+  assert.equal(msg.method, 'GET'); assert.equal(msg._subscriptionBooking.step, 'history_bookings');
+  msg = onlyOutput(run('gateway', { ...msg, statusCode: 200, payload: [] }, managedGlobals), 6);
+  assert.equal(msg._subscriptionBooking.step, 'managed_policy_decision');
+  assert.equal(msg._managedSubscriptionPolicyInput.action, 'CREATE_GAME');
+  return msg;
+}
+liveTest('full managed runtime/history/policy path allows 60-minute CREATE then rechecks real exercise', () => {
+  const decision = onlyOutput(run('policy', managedPolicyInput()), 0);
+  assert.equal(decision._managedSubscriptionPolicyDecision.eligible, true);
+  const result = onlyOutput(run('gateway', decision, managedGlobals), 4);
+  assert.equal(result.payload.state, 'CREATE_PREFLIGHT_PASSED');
+  const resumed = onlyOutput(run('finalize', result), 0);
+  assert.equal(resumed._splitCtx.subscriptionGuardDone, undefined);
+  const create = onlyOutput(run('split', resumed), 0);
+  assert.equal(create.method, 'POST'); assert.match(create.url, /\/exercises$/);
+  const recheck = onlyOutput(run('split', { ...create, statusCode: 201, payload: { id: 'fixture-created' } }), 3);
+  assert.equal(recheck.method, 'GET'); assert.match(recheck.url, /\/profile$/);
+  assert.equal(recheck._subscriptionBooking.caller, 'split');
+  assert.equal(recheck._subscriptionBooking.exerciseId, 'fixture-created');
+});
+for (const [name, options, code] of [
+  ['120-minute CREATE', { target: { toTime: '19:00' } }, 'DURATION_NOT_ALLOWED'],
+  ['another station', { target: { studioId: 'fixture-other-station' } }, 'STATION_NOT_ALLOWED'],
+  ['frozen runtime instance', { runtime: managedRuntime({ state: 'FROZEN', frozenUntil: '2100-01-01T00:00:00.000Z' }) }, 'SUBSCRIPTION_FROZEN'],
+]) liveTest(`full managed policy rejects ${name} before CREATE`, () => {
+  const denied = onlyOutput(run('policy', managedPolicyInput(options)), 1);
+  assert.ok(denied._managedSubscriptionPolicyDecision.blockers.some(b => b.code === code));
+  const blocked = run('policyBlocked', denied);
+  const terminal = onlyOutput(run('finalize', blocked), 1);
+  assert.equal(terminal.statusCode, 409);
+  assert.ok(terminal.payload.details.blockerCodes.includes(code));
+  assert.equal(terminal._splitCtx.exerciseId, undefined);
+});
+for (const [name, runtime, code] of [
+  ['another subscription', { ...managedRuntime(), clientSubscriptionId: 'fixture-other-subscription' }, 'MANAGED_SUBSCRIPTION_RUNTIME_CONTEXT_INVALID'],
+  ['first use without activation configuration', managedRuntime({ state: 'PENDING_ACTIVATION', activeFrom: null, activeTo: null }), 'SUBSCRIPTION_ACTIVATION_NOT_CONFIGURED'],
+]) liveTest(`managed runtime rejects ${name} without CREATE or writes`, () => {
+  const started = managedStart({ studioId: piterStation, toTime: '18:00' });
+  const failed = onlyOutput(run('gateway', { ...started, statusCode: 200, payload: runtime }, managedGlobals), 4);
+  assert.equal(failed.payload.details.code, code);
+  const terminal = onlyOutput(run('finalize', failed), 1);
+  assert.ok(terminal.statusCode >= 400);
+  assert.equal(terminal._splitCtx.exerciseId, undefined);
 });
 liveTest('first-use activation POST is blocked even on unexpected post-booking entry', () => {
   const msg = managedStart();
