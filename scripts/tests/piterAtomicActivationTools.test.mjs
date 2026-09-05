@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { PITER_QUOTA_UPDATE } from "../lib/piterAtomicQuotaUpdateContract.mjs";
 import {
   PITER_ATOMIC_ACTIVATION,
   buildPiterAtomicActivationPacket,
@@ -331,6 +332,27 @@ test("explicit 50-of-100 quota is digest-bound and never fabricates paid records
   assert.throws(() => validatePiterAtomicActivationPacket(tampered, { now: NOW }), /launch quota mismatch/);
   assert.throws(() => buildPiterAtomicLedgerPlan({ action: "activate", packet: built,
     documents: [paidRow(), { ...sentinel, quotaAdjustment: 48 }], activeFlowSha256: FLOW_SHA, expectedRevision: 0, now: NOW }), /quota|custody/);
+});
+
+test("activation accepts only the exact installed-topology update tuple with explicit quota", () => {
+  const data = evidence();
+  const report = { ...data.candidateReport, ...PITER_QUOTA_UPDATE, launchQuotaSchemaVersion: 2 };
+  const built = buildPiterAtomicActivationPacket({ ...data, candidateReport: report, initialBatchRemaining: 50 });
+  assert.equal(built.formatVersion, 2);
+  assert.equal(built.deployment.candidateNodeCount, built.deployment.sourceNodeCount);
+  assert.doesNotThrow(() => validatePiterAtomicActivationPacket(built, { now: NOW }));
+  assert.throws(() => buildPiterAtomicActivationPacket({ ...data, candidateReport: report }), /explicit 50/);
+  for (const drift of [{ candidateSha256: "c".repeat(64) }, { sourceSha256: "d".repeat(64) },
+    { updateKind: "unknown" }, { launchQuotaSchemaVersion: 1 }, { candidateNodeCount: 4767 },
+    { candidateNodeCount: 4769 }]) {
+    assert.throws(() => buildPiterAtomicActivationPacket({ ...data, candidateReport: { ...report, ...drift }, initialBatchRemaining: 50 }));
+  }
+  const forged = structuredClone(built); forged.deployment.sourceSha256 = "e".repeat(64);
+  delete forged.contractDigest; forged.contractDigest = sha256(stableJson(forged));
+  assert.throws(() => validatePiterAtomicActivationPacket(forged, { now: NOW }), /deployment contract/);
+  const fakeInstall = structuredClone(built); fakeInstall.deployment.candidateNodeCount += 1;
+  delete fakeInstall.contractDigest; fakeInstall.contractDigest = sha256(stableJson(fakeInstall));
+  assert.throws(() => validatePiterAtomicActivationPacket(fakeInstall, { now: NOW }), /deployment contract/);
 });
 
 test("ledger plan seeds inactive, activates by exact CAS, and deactivates without deleting attempts", () => {

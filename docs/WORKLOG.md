@@ -2,6 +2,20 @@
 
 Этот файл обязателен к ведению для задач по ЛК и Админке ЦУП.
 
+## 2026-09-05 — Piter: локальный updater установленного atomic flow
+
+- Добавлен отдельный exact updater fresh source 7775475... -> candidate 8cc76ed...:
+  только status/atomic-router function bodies, 4768 узлов и 215 HTTP inputs сохранены.
+- Initial installer не используется повторно; source/preimage/replacement drift,
+  stale origin и повторная запись output завершаются fail closed.
+- Equal-node activation report разрешён только для pinned update tuple и явной
+  квоты 50; update identity сохраняется в packet. Остальные refund/readiness gates
+  не ослаблены. Документирован новый transitive dependency operator packaging.
+- Exact-graph forward и structural reverse проверены локально; rollback не разрешён.
+  174 теста PASS, 1 Linux-only SKIP; inert prod/dev build PASS, lint 0 errors.
+- Production, lease, Mongo и Viva writes отсутствуют. Сверка возвратов и единое
+  окно/пакет публикации остаются отдельными незакрытыми границами.
+
 ## 2026-09-05 — Piter: отдельная стартовая квота, без фиктивных оплат
 
 - Локально добавлен явный старт 50 из 100 через digest-bound activation packet

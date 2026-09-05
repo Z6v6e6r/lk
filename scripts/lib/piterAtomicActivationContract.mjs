@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isExactPiterQuotaUpdateDeployment, PITER_QUOTA_UPDATE } from "./piterAtomicQuotaUpdateContract.mjs";
 
 export const PITER_ATOMIC_ACTIVATION = Object.freeze({
   kind: "PADLHUB_PITER_ATOMIC_SALES_ACTIVATION_V1",
@@ -292,12 +293,20 @@ const validateCandidateReport = (report) => {
   for (const key of ["sourceSha256", "candidateSha256"]) {
     if (!SHA256_PATTERN.test(String(report[key] || ""))) fail(`candidate report ${key} is invalid`);
   }
+  if (report.updateKind !== undefined && (report.updateKind !== PITER_QUOTA_UPDATE.updateKind
+    || !isExactPiterQuotaUpdateDeployment(report) || report.launchQuotaSchemaVersion !== 2)) {
+    fail("candidate report quota update identity mismatch");
+  }
   if (!Number.isInteger(report.sourceNodeCount) || report.sourceNodeCount < 1
-    || !Number.isInteger(report.candidateNodeCount) || report.candidateNodeCount <= report.sourceNodeCount) {
+    || !Number.isInteger(report.candidateNodeCount)
+    || (report.candidateNodeCount <= report.sourceNodeCount
+      && !(isExactPiterQuotaUpdateDeployment(report)
+        && report.updateKind === PITER_QUOTA_UPDATE.updateKind && report.launchQuotaSchemaVersion === 2))) {
     fail("candidate report node counts are invalid");
   }
   return {
     deploymentId: report.deploymentId,
+    ...(report.updateKind ? { updateKind: report.updateKind } : {}),
     sourceSha256: report.sourceSha256,
     candidateSha256: report.candidateSha256,
     sourceNodeCount: toInteger(report.sourceNodeCount),
@@ -634,6 +643,9 @@ export function buildPiterAtomicActivationPacket({
     fail("evidence snapshots exceed the allowed capture-time skew");
   }
   const candidate = validateCandidateReport(candidateReport);
+  if (isExactPiterQuotaUpdateDeployment(candidate) && initialBatchRemaining !== 50) {
+    fail("quota update candidate requires explicit 50-of-100 launch quota");
+  }
   const reconciliation = validateLegacyReconciliationProof({
     packet: reconciliationPacket,
     applyReceipt: reconciliationApplyReceipt,
@@ -721,8 +733,13 @@ export function validatePiterAtomicActivationPacket(packet, { now = new Date(), 
     || !SHA256_PATTERN.test(String(packet.deployment?.candidateSha256 || ""))
     || !Number.isInteger(packet.deployment?.sourceNodeCount) || packet.deployment.sourceNodeCount < 1
     || !Number.isInteger(packet.deployment?.candidateNodeCount)
-    || packet.deployment.candidateNodeCount <= packet.deployment.sourceNodeCount) {
+    || (packet.deployment.candidateNodeCount <= packet.deployment.sourceNodeCount
+      && !(packet.launchQuota && isExactPiterQuotaUpdateDeployment(packet.deployment)))) {
     fail("packet deployment contract mismatch");
+  }
+  if (packet.deployment.updateKind !== undefined && (packet.deployment.updateKind !== PITER_QUOTA_UPDATE.updateKind
+    || !packet.launchQuota || !isExactPiterQuotaUpdateDeployment(packet.deployment))) {
+    fail("packet deployment contract quota update mismatch");
   }
   const expectedTarget = {
     collection: "lk_tournament_subscription_sales",
