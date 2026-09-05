@@ -32,6 +32,7 @@ import {
 } from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
 import {
   acceptFenceGuardianChildRequest,
+  announceFenceGuardianRecoveryTakeoverEstablished,
   isAuthorizedFenceGuardianRecovery,
 } from "./lib/vivaGameProjectionFenceGuardian.mjs";
 
@@ -67,7 +68,7 @@ const takeoverPaths = (options, requestId) => {
   return { receiptPath: `${prefix}.json`, heartbeatPath: `${prefix}.heartbeat.json` };
 };
 
-const assertLiveRecoveryFenceTakeover = (receipt, expected, nowMs = Date.now()) => {
+const validateRecoveryFenceTakeoverReceipt = (receipt, expected) => {
   if (receipt?.formatVersion !== 1
     || receipt?.kind !== "viva-game-projection-recovery-fence-takeover-receipt"
     || receipt?.state !== "HOLDING_UNTIL_EXPLICIT_RELEASE"
@@ -76,23 +77,36 @@ const assertLiveRecoveryFenceTakeover = (receipt, expected, nowMs = Date.now()) 
     || receipt?.parentGuardianProcessStartIdentity !== expected.parentGuardianProcessStartIdentity
     || receipt?.recoveryRequestId !== expected.recoveryRequestId
     || receipt?.fenceTokenSha256 !== expected.fenceTokenSha256
-    || receipt?.lockPath !== expected.lockPath || receipt?.releaseRequestPath !== expected.releaseRequestPath
+    || receipt?.lockPath !== expected.lockPath || receipt?.lockDevice !== expected.lockDevice
+    || receipt?.lockInode !== expected.lockInode || receipt?.heartbeatPath !== expected.heartbeatPath
+    || receipt?.releaseRequestPath !== expected.releaseRequestPath
     || receipt?.recoveryReportPath !== expected.recoveryReportPath
+    || receipt?.custodyState !== "TAKEOVER_ESTABLISHED"
     || receipt?.automaticRelease !== false || !Number.isSafeInteger(receipt?.pid) || receipt.pid < 1
-    || !Number.isSafeInteger(receipt?.fd) || receipt.fd < 3 || !String(receipt?.heartbeatPath || "").startsWith("/")) {
+    || !Number.isSafeInteger(receipt?.fd) || receipt.fd < 3
+    || !/^\d+:\d+$/.test(String(receipt?.processStartIdentity || ""))
+    || !String(receipt.processStartIdentity).startsWith(`${receipt.pid}:`)) {
     fail("Recovery fence takeover receipt is invalid");
   }
-  try { process.kill(receipt.pid, 0); } catch { fail("Recovery fence takeover is not alive"); }
-  if (linuxProcessStartIdentity(receipt.pid) !== receipt.processStartIdentity) fail("Recovery fence takeover PID was reused");
-  const descriptorStat = fs.statSync(`/proc/${receipt.pid}/fd/${receipt.fd}`);
-  const lockStat = fs.statSync(receipt.lockPath);
-  if (String(descriptorStat.dev) !== receipt.lockDevice || String(descriptorStat.ino) !== receipt.lockInode
-    || descriptorStat.dev !== lockStat.dev || descriptorStat.ino !== lockStat.ino) {
-    fail("Recovery fence takeover no longer holds the canonical lock inode");
+  return receipt;
+};
+
+const recoveryFenceTakeoverIsAlive = (receipt) => {
+  try {
+    process.kill(receipt.pid, 0);
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
   }
-  const heartbeatRead = readPrivateJson(receipt.heartbeatPath, "Recovery fence takeover heartbeat", 1024 * 1024);
-  const heartbeat = heartbeatRead.value;
-  const observedAt = Date.parse(heartbeat?.observedAt);
+  try {
+    return linuxProcessStartIdentity(receipt.pid) === receipt.processStartIdentity;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+};
+
+const validateRecoveryFenceTakeoverHeartbeat = (heartbeat, receipt) => {
   if (heartbeat?.formatVersion !== 1
     || heartbeat?.kind !== "viva-game-projection-recovery-fence-takeover-heartbeat"
     || heartbeat?.state !== "HOLDING" || heartbeat?.pid !== receipt.pid || heartbeat?.fd !== receipt.fd
@@ -103,13 +117,69 @@ const assertLiveRecoveryFenceTakeover = (receipt, expected, nowMs = Date.now()) 
     || heartbeat?.parentGuardianPid !== receipt.parentGuardianPid
     || heartbeat?.parentGuardianProcessStartIdentity !== receipt.parentGuardianProcessStartIdentity
     || heartbeat?.recoveryRequestId !== receipt.recoveryRequestId || !Number.isSafeInteger(heartbeat?.sequence)
-    || !Number.isFinite(observedAt) || observedAt > nowMs + 1_000 || nowMs - observedAt > 5_000) {
+    || !Number.isFinite(Date.parse(heartbeat?.observedAt))) {
+    fail("Recovery fence takeover heartbeat is invalid");
+  }
+  return heartbeat;
+};
+
+const assertLiveRecoveryFenceTakeover = (receipt, expected, nowMs = Date.now()) => {
+  validateRecoveryFenceTakeoverReceipt(receipt, expected);
+  try { process.kill(receipt.pid, 0); } catch { fail("Recovery fence takeover is not alive"); }
+  if (linuxProcessStartIdentity(receipt.pid) !== receipt.processStartIdentity) fail("Recovery fence takeover PID was reused");
+  const descriptorStat = fs.statSync(`/proc/${receipt.pid}/fd/${receipt.fd}`);
+  const lockStat = fs.statSync(receipt.lockPath);
+  if (String(descriptorStat.dev) !== receipt.lockDevice || String(descriptorStat.ino) !== receipt.lockInode
+    || descriptorStat.dev !== lockStat.dev || descriptorStat.ino !== lockStat.ino) {
+    fail("Recovery fence takeover no longer holds the canonical lock inode");
+  }
+  const heartbeatRead = readPrivateJson(receipt.heartbeatPath, "Recovery fence takeover heartbeat", 1024 * 1024);
+  const heartbeat = validateRecoveryFenceTakeoverHeartbeat(heartbeatRead.value, receipt);
+  const observedAt = Date.parse(heartbeat?.observedAt);
+  if (observedAt > nowMs + 1_000 || nowMs - observedAt > 5_000) {
     fail("Recovery fence takeover heartbeat is stale or invalid");
   }
   return { heartbeat, bytes: heartbeatRead.bytes, sha256: sha256(heartbeatRead.bytes) };
 };
 
-const startRecoveryFenceTakeover = async (options, guardian, guardianReceiptSha256, requestId, dependencies) => {
+const discoverRecoveryFenceTakeoverRequestIds = (options, guardian, guardianReceiptSha256) => {
+  const directory = path.dirname(options.fenceGuardianReceipt);
+  const receiptPattern = /^\.viva-recovery-fence-takeover-([0-9a-f-]+)\.json$/i;
+  const heartbeatPattern = /^\.viva-recovery-fence-takeover-([0-9a-f-]+)\.heartbeat\.json$/i;
+  const names = fs.readdirSync(directory);
+  const receiptIds = names.map((name) => name.match(receiptPattern)?.[1]).filter(Boolean);
+  const heartbeatIds = names.map((name) => name.match(heartbeatPattern)?.[1]).filter(Boolean);
+  const matching = [];
+  for (const requestId of receiptIds) {
+    if (!UUID_RE.test(requestId)) fail("Recovery fence takeover receipt name is ambiguous");
+    const paths = takeoverPaths(options, requestId);
+    const takeoverRead = readPrivateJson(paths.receiptPath, "Prior recovery takeover receipt", 1024 * 1024);
+    if (takeoverRead.value?.parentGuardianReceiptSha256 !== guardianReceiptSha256) continue;
+    validateRecoveryFenceTakeoverReceipt(takeoverRead.value, {
+      parentGuardianReceiptSha256: guardianReceiptSha256,
+      parentGuardianPid: guardian.pid,
+      parentGuardianProcessStartIdentity: guardian.processStartIdentity,
+      recoveryRequestId: requestId,
+      fenceTokenSha256: guardian.fenceTokenSha256,
+      lockPath: guardian.lockPath,
+      lockDevice: guardian.lockDevice,
+      lockInode: guardian.lockInode,
+      heartbeatPath: paths.heartbeatPath,
+      releaseRequestPath: guardian.releaseRequestPath,
+      recoveryReportPath: options.report,
+    });
+    matching.push(requestId);
+  }
+  if (heartbeatIds.some((requestId) => !receiptIds.includes(requestId))) {
+    fail("Recovery fence takeover heartbeat lacks its exact receipt");
+  }
+  if (matching.length > 1) fail("Multiple recovery fence takeovers match this exact guardian");
+  return matching;
+};
+
+export const startRecoveryFenceTakeover = async (
+  options, guardian, guardianReceiptSha256, requestId, dependencies = {},
+) => {
   const paths = takeoverPaths(options, requestId);
   const expected = {
     parentGuardianReceiptSha256: guardianReceiptSha256,
@@ -118,19 +188,41 @@ const startRecoveryFenceTakeover = async (options, guardian, guardianReceiptSha2
     recoveryRequestId: requestId,
     fenceTokenSha256: guardian.fenceTokenSha256,
     lockPath: guardian.lockPath,
+    lockDevice: guardian.lockDevice,
+    lockInode: guardian.lockInode,
+    heartbeatPath: paths.heartbeatPath,
     releaseRequestPath: guardian.releaseRequestPath,
     recoveryReportPath: options.report,
   };
   const receiptExists = fs.existsSync(paths.receiptPath);
   const heartbeatExists = fs.existsSync(paths.heartbeatPath);
   if (receiptExists || heartbeatExists) {
-    if (!receiptExists || !heartbeatExists) fail("Recovery fence takeover outputs are incomplete");
+    if (!receiptExists) fail("Recovery fence takeover heartbeat lacks its exact receipt");
     const receiptRead = readPrivateJson(paths.receiptPath, "Recovery fence takeover receipt", 1024 * 1024);
-    const lease = dependencies.assertTakeoverLease
-      ? await dependencies.assertTakeoverLease(receiptRead.value, expected, Date.now())
-      : assertLiveRecoveryFenceTakeover(receiptRead.value, expected);
-    if (!HASH_RE.test(String(lease?.sha256 || ""))) fail("Existing recovery fence takeover lacks a fresh heartbeat digest");
-    return { ...paths, receipt: receiptRead.value, receiptSha256: sha256(receiptRead.bytes), lease, adopted: true };
+    validateRecoveryFenceTakeoverReceipt(receiptRead.value, expected);
+    if (dependencies.assertTakeoverLease && heartbeatExists) {
+      const lease = await dependencies.assertTakeoverLease(receiptRead.value, expected, Date.now());
+      if (!HASH_RE.test(String(lease?.sha256 || ""))) fail("Existing recovery fence takeover lacks a fresh heartbeat digest");
+      return { ...paths, receipt: receiptRead.value, receiptSha256: sha256(receiptRead.bytes), lease, adopted: true };
+    }
+    const isAlive = dependencies.isTakeoverAlive
+      ? await dependencies.isTakeoverAlive(receiptRead.value)
+      : recoveryFenceTakeoverIsAlive(receiptRead.value);
+    if (isAlive !== true && isAlive !== false) fail("Recovery fence takeover liveness is ambiguous");
+    if (isAlive) {
+      if (!heartbeatExists) fail("Live recovery fence takeover has not published its first heartbeat");
+      const lease = assertLiveRecoveryFenceTakeover(receiptRead.value, expected);
+      return { ...paths, receipt: receiptRead.value, receiptSha256: sha256(receiptRead.bytes), lease, adopted: true };
+    }
+    if (heartbeatExists) {
+      const heartbeatRead = readPrivateJson(
+        paths.heartbeatPath, "Dead recovery fence takeover heartbeat", 1024 * 1024,
+      );
+      validateRecoveryFenceTakeoverHeartbeat(heartbeatRead.value, receiptRead.value);
+      fs.unlinkSync(paths.heartbeatPath);
+    }
+    fs.unlinkSync(paths.receiptPath);
+    syncDirectory(path.dirname(paths.receiptPath));
   }
   if (dependencies.startFenceTakeover) {
     return dependencies.startFenceTakeover({ options, guardian, guardianReceiptSha256, requestId });
@@ -398,6 +490,9 @@ const readCompletedRecoveryWithLiveTakeover = async ({
     recoveryRequestId: completedRequestId,
     fenceTokenSha256: guardian.fenceTokenSha256,
     lockPath: guardian.lockPath,
+    lockDevice: guardian.lockDevice,
+    lockInode: guardian.lockInode,
+    heartbeatPath: paths.heartbeatPath,
     releaseRequestPath: guardian.releaseRequestPath,
     recoveryReportPath: options.report,
   };
@@ -521,11 +616,23 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
   let requestId = null;
   let request = null;
   let shouldPublishRequest = false;
+  const takeoverIds = discoverRecoveryFenceTakeoverRequestIds(
+    options, guardianRead.value, options.expectedFenceGuardianReceiptSha256,
+  );
   if (fs.existsSync(options.fenceGuardianRecoveryRequest)) {
     request = readExactRecoveryRequest(
       options.fenceGuardianRecoveryRequest, argv, guardianRead.value, nowMs,
     );
     requestId = request.requestId;
+    if (takeoverIds.length === 1 && takeoverIds[0] !== requestId) {
+      const supersededPath = `${options.fenceGuardianRecoveryRequest}.superseded-${requestId}-by-${takeoverIds[0]}`;
+      if (fs.existsSync(supersededPath)) fail("Superseded recovery request evidence already exists");
+      fs.renameSync(options.fenceGuardianRecoveryRequest, supersededPath);
+      syncDirectory(path.dirname(options.fenceGuardianRecoveryRequest));
+      requestId = takeoverIds[0];
+      request = null;
+      shouldPublishRequest = true;
+    }
   } else {
     const heartbeatRequestId = initialGuardianLease?.heartbeat?.recoveryRequestId;
     const acceptedPrefix = `${path.basename(options.fenceGuardianRecoveryRequest)}.accepted-`;
@@ -533,9 +640,11 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
       .filter((name) => name.startsWith(acceptedPrefix))
       .map((name) => name.slice(acceptedPrefix.length))
       .filter((value) => UUID_RE.test(value));
-    const candidateIds = UUID_RE.test(String(heartbeatRequestId || ""))
-      ? [heartbeatRequestId]
-      : acceptedIds;
+    const candidateIds = [...new Set([
+      ...(UUID_RE.test(String(heartbeatRequestId || "")) ? [heartbeatRequestId] : []),
+      ...acceptedIds,
+      ...takeoverIds,
+    ])];
     const accepted = [];
     for (const candidateId of candidateIds) {
       const acceptedPath = `${options.fenceGuardianRecoveryRequest}.accepted-${candidateId}`;
@@ -548,6 +657,9 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
     if (accepted.length === 1) {
       request = accepted[0];
       requestId = request.requestId;
+      if (takeoverIds.length === 1 && takeoverIds[0] !== requestId) {
+        fail("Accepted recovery and takeover request IDs disagree");
+      }
       const recoveryIsActive = UUID_RE.test(String(heartbeatRequestId || ""))
         && heartbeatRequestId === requestId
         && Number.isSafeInteger(initialGuardianLease?.heartbeat?.recoveryChildPid);
@@ -555,6 +667,13 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
         request = null;
         shouldPublishRequest = true;
       }
+    } else if (takeoverIds.length === 1) {
+      [requestId] = takeoverIds;
+      shouldPublishRequest = true;
+    } else if (UUID_RE.test(String(heartbeatRequestId || ""))
+      && initialGuardianLease?.heartbeat?.recoveryReleaseDelegated === true) {
+      requestId = heartbeatRequestId;
+      shouldPublishRequest = true;
     } else {
       const failedRequestId = initialGuardianLease?.heartbeat?.lastRecoveryResult?.requestId;
       if (UUID_RE.test(String(failedRequestId || ""))) {
@@ -562,7 +681,7 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
         const receiptExists = fs.existsSync(paths.receiptPath);
         const heartbeatExists = fs.existsSync(paths.heartbeatPath);
         if (receiptExists || heartbeatExists) {
-          if (!receiptExists || !heartbeatExists) fail("Prior recovery takeover outputs are incomplete");
+          if (!receiptExists) fail("Prior recovery takeover heartbeat lacks its exact receipt");
           const takeoverRead = readPrivateJson(paths.receiptPath, "Prior recovery takeover receipt", 1024 * 1024);
           const expected = {
             parentGuardianReceiptSha256: options.expectedFenceGuardianReceiptSha256,
@@ -571,13 +690,13 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
             recoveryRequestId: failedRequestId,
             fenceTokenSha256: guardianRead.value.fenceTokenSha256,
             lockPath: guardianRead.value.lockPath,
+            lockDevice: guardianRead.value.lockDevice,
+            lockInode: guardianRead.value.lockInode,
+            heartbeatPath: paths.heartbeatPath,
             releaseRequestPath: guardianRead.value.releaseRequestPath,
             recoveryReportPath: options.report,
           };
-          const lease = dependencies.assertTakeoverLease
-            ? await dependencies.assertTakeoverLease(takeoverRead.value, expected, nowMs)
-            : assertLiveRecoveryFenceTakeover(takeoverRead.value, expected, nowMs);
-          if (!HASH_RE.test(String(lease?.sha256 || ""))) fail("Prior recovery takeover lacks a fresh heartbeat digest");
+          validateRecoveryFenceTakeoverReceipt(takeoverRead.value, expected);
           requestId = failedRequestId;
           shouldPublishRequest = true;
         }
@@ -748,6 +867,9 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
         recoveryRequestId: guardianRecoveryRequestId,
         fenceTokenSha256: currentGuardian.fenceTokenSha256,
         lockPath: currentGuardian.lockPath,
+        lockDevice: currentGuardian.lockDevice,
+        lockInode: currentGuardian.lockInode,
+        heartbeatPath: recoveryFenceTakeover.heartbeatPath,
         releaseRequestPath: currentGuardian.releaseRequestPath,
         recoveryReportPath: options.report,
       };
@@ -829,6 +951,9 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
       recoveryRequestId: completedRequestId,
       fenceTokenSha256: guardianRead.value.fenceTokenSha256,
       lockPath: guardianRead.value.lockPath,
+      lockDevice: guardianRead.value.lockDevice,
+      lockInode: guardianRead.value.lockInode,
+      heartbeatPath: expectedPaths.heartbeatPath,
       releaseRequestPath: guardianRead.value.releaseRequestPath,
       recoveryReportPath: options.report,
     };
@@ -910,6 +1035,11 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     const prestartedFenceTakeover = await startRecoveryFenceTakeoverBeforeAcceptance(
       options, requestId, dependencies,
     );
+    announceFenceGuardianRecoveryTakeoverEstablished({
+      requestId,
+      receiptPath: prestartedFenceTakeover.receiptPath,
+      receiptSha256: prestartedFenceTakeover.receiptSha256,
+    });
     acceptFenceGuardianChildRequest({
       childKind: "recovery",
       requestId,

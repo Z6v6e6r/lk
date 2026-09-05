@@ -105,6 +105,31 @@ export function acceptFenceGuardianChildRequest({ childKind, requestId }) {
   return acceptedPath;
 }
 
+export function announceFenceGuardianRecoveryTakeoverEstablished({ requestId, receiptPath, receiptSha256 }) {
+  const handshakeFd = Number(process.env.PADLHUB_CUTOVER_GUARDIAN_HANDSHAKE_FD);
+  const fenceFd = Number(process.env.PADLHUB_CUTOVER_FENCE_FD);
+  const requestPath = String(process.env.PADLHUB_CUTOVER_GUARDIAN_CHILD_REQUEST_PATH || "");
+  const expectedReceiptPath = path.join(
+    path.dirname(requestPath), `.viva-recovery-fence-takeover-${requestId}.json`,
+  );
+  if (!Number.isSafeInteger(handshakeFd) || handshakeFd < 3 || handshakeFd === fenceFd
+    || !Number.isSafeInteger(fenceFd) || fenceFd < 3 || !path.isAbsolute(requestPath)
+    || receiptPath !== expectedReceiptPath || !/^[a-f0-9]{64}$/.test(String(receiptSha256 || ""))) {
+    throw new Error("Recovery takeover handshake evidence is invalid");
+  }
+  const receiptBytes = fs.readFileSync(receiptPath);
+  if (sha256(receiptBytes) !== receiptSha256) {
+    throw new Error("Recovery takeover changed before its guardian handshake");
+  }
+  fs.writeSync(handshakeFd, `${canonicalJson({
+    state: "TAKEOVER_ESTABLISHED",
+    childKind: "recovery",
+    requestId,
+    receiptPath,
+    receiptSha256,
+  })}\n`);
+}
+
 export function isAuthorizedFenceGuardianRelease({ release, validPrivateFile, fenceTokenSha256, nowMs = Date.now() }) {
   const authorizedAt = Date.parse(release?.authorizedAt);
   return validPrivateFile === true && release?.formatVersion === 1

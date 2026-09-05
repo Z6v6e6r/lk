@@ -143,7 +143,7 @@ const writeHeartbeat = () => {
     lastRejectedRecoveryRequestSha256,
     lastRejectedReadyRequestSha256,
     recoveryChildPid: recoveryChild?.pid || null,
-    recoveryRequestId,
+    recoveryRequestId: recoveryRequestId || delegatedRecovery?.requestId || null,
     lastRecoveryResult,
     readyChildPid: readyChild?.pid || null,
     readyRequestId,
@@ -182,10 +182,13 @@ const quarantineReadyRequest = (reason) => {
   } catch { /* retain the lock and retry quarantine on the next loop */ }
   lastRejectedReadyRequestSha256 = digest;
 };
-const waitForAcceptedHandshake = (child, handshakeFd, childKind, requestId) => new Promise((resolve, reject) => {
+const waitForAcceptedHandshake = (
+  child, handshakeFd, childKind, requestId, onRecoveryTakeoverEstablished = null,
+) => new Promise((resolve, reject) => {
   const stream = child.stdio[handshakeFd];
   let buffer = "";
   let inherited = false;
+  let takeoverEstablished = childKind !== "recovery";
   let settled = false;
   const timeout = setTimeout(() => finish(new Error("Fence child acceptance handshake timed out")), 15_000);
   const cleanup = () => {
@@ -213,7 +216,10 @@ const waitForAcceptedHandshake = (child, handshakeFd, childKind, requestId) => n
       if (event?.childKind !== childKind || event?.requestId !== requestId) {
         finish(new Error("Fence child handshake identity mismatch")); return;
       }
-      if (!inherited && event.state === "FENCE_INHERITED") inherited = true;
+      if (!takeoverEstablished && event.state === "TAKEOVER_ESTABLISHED") {
+        try { onRecoveryTakeoverEstablished?.(event); } catch (error) { finish(error); return; }
+        takeoverEstablished = true;
+      } else if (takeoverEstablished && !inherited && event.state === "FENCE_INHERITED") inherited = true;
       else if (inherited && event.state === "REQUEST_ACCEPTED") { finish(); return; }
       else { finish(new Error("Fence child handshake sequence mismatch")); return; }
     }
@@ -224,6 +230,9 @@ const waitForAcceptedHandshake = (child, handshakeFd, childKind, requestId) => n
 });
 const startRecovery = async (request) => {
   const acceptedPath = `${recoveryRequestPath}.accepted-${request.requestId}`;
+  const reportPath = request.argv[request.argv.indexOf("--report") + 1];
+  recoveryReleaseDelegated = true;
+  delegatedRecovery = { requestId: request.requestId, reportPath };
   const handshakeFd = fd + 1;
   const childStdio = Array.from({ length: handshakeFd + 1 }, (_, index) => (index === 0 ? "ignore" : (index < 3 ? "inherit" : "ignore")));
   childStdio[fd] = fd;
@@ -254,20 +263,16 @@ const startRecovery = async (request) => {
     recoveryRequestId = null;
   });
   try {
-    await waitForAcceptedHandshake(child, handshakeFd, "recovery", request.requestId);
-    recoveryReleaseDelegated = true;
-    delegatedRecovery = {
-      requestId: request.requestId,
-      reportPath: request.argv[request.argv.indexOf("--report") + 1],
-    };
+    await waitForAcceptedHandshake(
+      child, handshakeFd, "recovery", request.requestId,
+      (event) => markRecoveryTakeoverEstablished(request, event),
+    );
   } catch (error) {
     try { child.kill("SIGKILL"); } catch { /* child already exited */ }
-    if (fs.existsSync(acceptedPath)) {
-      recoveryReleaseDelegated = true;
-      delegatedRecovery = {
-        requestId: request.requestId,
-        reportPath: request.argv[request.argv.indexOf("--report") + 1],
-      };
+    if (recoveryTakeoverArtifactsExist(request.requestId) || fs.existsSync(acceptedPath)) {
+      try { markRecoveryTakeoverEstablished(request); } catch {
+        // Any exact-path takeover artifact makes release ambiguous. Keep the guardian fail-closed.
+      }
     }
     if (fs.existsSync(recoveryRequestPath)) quarantineRecoveryRequest(String(error?.message || error));
   }
@@ -323,17 +328,56 @@ const readPrivateJson = (filePath, label, maximumBytes = 16 * 1024 * 1024) => {
   return { bytes, value: JSON.parse(bytes.toString("utf8")) };
 };
 
+const recoveryTakeoverPaths = (requestId) => {
+  const prefix = path.join(receiptParent, `.viva-recovery-fence-takeover-${requestId}`);
+  return { receiptPath: `${prefix}.json`, heartbeatPath: `${prefix}.heartbeat.json` };
+};
+const recoveryTakeoverArtifactsExist = (requestId) => {
+  const paths = recoveryTakeoverPaths(requestId);
+  return fs.existsSync(paths.receiptPath) || fs.existsSync(paths.heartbeatPath);
+};
+const markRecoveryTakeoverEstablished = (request, event = null) => {
+  const reportIndex = request.argv.indexOf("--report");
+  const reportPath = request.argv[reportIndex + 1];
+  const paths = recoveryTakeoverPaths(request.requestId);
+  recoveryReleaseDelegated = true;
+  delegatedRecovery = { requestId: request.requestId, reportPath };
+  const takeoverRead = readPrivateJson(paths.receiptPath, "Recovery takeover receipt", 1024 * 1024);
+  const takeover = takeoverRead.value;
+  const takeoverReceiptSha256 = sha256(takeoverRead.bytes);
+  if (reportIndex < 0 || !path.isAbsolute(String(reportPath || ""))
+    || event && (event.receiptPath !== paths.receiptPath || event.receiptSha256 !== takeoverReceiptSha256)
+    || takeover?.formatVersion !== 1
+    || takeover?.kind !== "viva-game-projection-recovery-fence-takeover-receipt"
+    || takeover?.state !== "HOLDING_UNTIL_EXPLICIT_RELEASE"
+    || takeover?.custodyState !== "TAKEOVER_ESTABLISHED"
+    || takeover?.parentGuardianReceiptSha256 !== sha256(canonicalJson(receipt))
+    || takeover?.parentGuardianPid !== process.pid
+    || takeover?.parentGuardianProcessStartIdentity !== processStartIdentity
+    || takeover?.recoveryRequestId !== request.requestId
+    || takeover?.fenceTokenSha256 !== tokenSha256
+    || takeover?.lockPath !== lockPath || takeover?.lockDevice !== String(lockStat.dev)
+    || takeover?.lockInode !== String(lockStat.ino) || takeover?.heartbeatPath !== paths.heartbeatPath
+    || takeover?.releaseRequestPath !== releasePath || takeover?.recoveryReportPath !== reportPath
+    || takeover?.automaticRelease !== false || !Number.isSafeInteger(takeover?.pid) || takeover.pid < 1
+    || !Number.isSafeInteger(takeover?.fd) || takeover.fd < 3
+    || !/^\d+:\d+$/.test(String(takeover?.processStartIdentity || ""))) {
+    fail("Recovery takeover cannot establish guardian delegation");
+  }
+};
+
 const assertSuccessfulRecoveryTakeoverHandoff = () => {
   if (!delegatedRecovery || recoveryChild || lastRecoveryResult?.requestId !== delegatedRecovery.requestId
     || lastRecoveryResult?.exitCode !== 0) fail("Recovery takeover handoff is not terminal");
-  const prefix = path.join(receiptParent, `.viva-recovery-fence-takeover-${delegatedRecovery.requestId}`);
-  const takeoverReceiptPath = `${prefix}.json`;
-  const takeoverHeartbeatPath = `${prefix}.heartbeat.json`;
+  const { receiptPath: takeoverReceiptPath, heartbeatPath: takeoverHeartbeatPath } = recoveryTakeoverPaths(
+    delegatedRecovery.requestId,
+  );
   const takeoverRead = readPrivateJson(takeoverReceiptPath, "Recovery takeover receipt", 1024 * 1024);
   const takeover = takeoverRead.value;
   if (takeover?.formatVersion !== 1
     || takeover?.kind !== "viva-game-projection-recovery-fence-takeover-receipt"
     || takeover?.state !== "HOLDING_UNTIL_EXPLICIT_RELEASE"
+    || takeover?.custodyState !== "TAKEOVER_ESTABLISHED"
     || takeover?.parentGuardianReceiptSha256 !== sha256(canonicalJson(receipt))
     || takeover?.parentGuardianPid !== process.pid
     || takeover?.parentGuardianProcessStartIdentity !== processStartIdentity
@@ -429,7 +473,9 @@ while (true) {
         && requestStat.uid === process.getuid() && (requestStat.mode & 0o077) === 0 && requestStat.size <= 64 * 1024;
       if (validPrivateFile) request = JSON.parse(fs.readFileSync(recoveryRequestPath, "utf8"));
     } catch { /* malformed requests are quarantined while the lock remains held */ }
-    const authorized = !recoveryChild && !readyChild && isAuthorizedFenceGuardianRecovery({
+    const authorized = !recoveryChild && !readyChild
+      && (!recoveryReleaseDelegated || request?.requestId === delegatedRecovery?.requestId)
+      && isAuthorizedFenceGuardianRecovery({
       request,
       validPrivateFile,
       fenceTokenSha256: tokenSha256,
@@ -456,7 +502,8 @@ while (true) {
         && requestStat.uid === process.getuid() && (requestStat.mode & 0o077) === 0 && requestStat.size <= 64 * 1024;
       if (validPrivateFile) request = JSON.parse(fs.readFileSync(readyRequestPath, "utf8"));
     } catch { /* malformed requests are quarantined while the lock remains held */ }
-    const authorized = !recoveryChild && !readyChild && isAuthorizedFenceGuardianReadyFinalization({
+    const authorized = !recoveryReleaseDelegated && !recoveryChild && !readyChild
+      && isAuthorizedFenceGuardianReadyFinalization({
       request,
       validPrivateFile,
       fenceTokenSha256: tokenSha256,

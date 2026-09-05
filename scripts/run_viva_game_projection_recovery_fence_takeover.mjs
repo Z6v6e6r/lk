@@ -93,6 +93,7 @@ const receipt = {
   heartbeatPath,
   releaseRequestPath: releasePath,
   recoveryReportPath,
+  custodyState: "TAKEOVER_ESTABLISHED",
   parentGuardianReceiptSha256,
   parentGuardianPid,
   parentGuardianProcessStartIdentity,

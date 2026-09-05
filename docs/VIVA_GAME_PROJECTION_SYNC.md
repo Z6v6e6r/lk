@@ -286,6 +286,14 @@ guardian process still owns its copy of the descriptor. After successful
 recovery, the guardian independently checks the terminal report, terminal
 journal, takeover receipt, fresh heartbeat, PID/start identity, descriptor, and
 lock inode, then exits and transfers sole release custody to that takeover.
+The takeover receipt durably records `custodyState=TAKEOVER_ESTABLISHED` before
+the request is accepted. The child announces that exact receipt to the guardian,
+which immediately blocks READY, generic release, and every different recovery
+request ID. A CLI retry discovers the receipt even without an accepted request
+or refreshed guardian heartbeat. It adopts a live keeper, refuses to replace it
+while its first heartbeat is pending, or removes and replaces the exact same-ID keeper only after
+PID/start identity proves that process is dead; incomplete or ambiguous evidence
+never starts a second keeper.
 Early invalid release requests are quarantined while the takeover keeps the
 flock. A completed recovery report is reusable only while that exact takeover
 receipt and live heartbeat still prove lock custody. A recovery CLI retry

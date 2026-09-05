@@ -58,6 +58,7 @@ import {
   openRecoveryJournal,
   recoverVivaGameProjectionMongoWriteBarrier,
   requestRecoveryFromGuardian,
+  startRecoveryFenceTakeover,
 } from "../recover_viva_game_projection_mongo_write_barrier.mjs";
 import {
   assertNoConcurrentMongoWrites,
@@ -626,9 +627,13 @@ test("recovery request waits for the exact guardian child terminal result", asyn
       kind: "viva-game-projection-fence-guardian-receipt",
       state: "HOLDING_UNTIL_EXPLICIT_RELEASE",
       pid: 123,
+      fd: 9,
       processStartIdentity: "123:456",
       fenceTokenSha256,
       lockPath: "/run/lock/padlhub-viva-game-projection-cutover.lock",
+      lockDevice: "1",
+      lockInode: "2",
+      heartbeatPath: path.join(privateRoot, "guardian-heartbeat.json"),
       releaseRequestPath: path.join(privateRoot, "release-request.json"),
       recoveryRequestPath: requestPath,
       recoveryExecutorPath: executorPath,
@@ -692,7 +697,27 @@ test("recovery request waits for the exact guardian child terminal result", asyn
         const journalDirectory = `${reportPath}.journal`;
         fs.mkdirSync(journalDirectory, { mode: 0o700 });
         const takeoverPath = path.join(privateRoot, `.viva-recovery-fence-takeover-${requestId}.json`);
-        const takeoverBytes = Buffer.from(canonicalJson({ fixture: "takeover" }));
+        const takeoverBytes = Buffer.from(canonicalJson({
+          formatVersion: 1,
+          kind: "viva-game-projection-recovery-fence-takeover-receipt",
+          state: "HOLDING_UNTIL_EXPLICIT_RELEASE",
+          custodyState: "TAKEOVER_ESTABLISHED",
+          pid: 456,
+          fd: 9,
+          processStartIdentity: "456:789",
+          lockPath: guardian.lockPath,
+          lockDevice: guardian.lockDevice,
+          lockInode: guardian.lockInode,
+          heartbeatPath: takeoverPath.replace(/\.json$/, ".heartbeat.json"),
+          releaseRequestPath: guardian.releaseRequestPath,
+          recoveryReportPath: reportPath,
+          parentGuardianReceiptSha256: expectedGuardianSha256,
+          parentGuardianPid: guardian.pid,
+          parentGuardianProcessStartIdentity: guardian.processStartIdentity,
+          recoveryRequestId: requestId,
+          fenceTokenSha256: guardian.fenceTokenSha256,
+          automaticRelease: false,
+        }));
         write0600(takeoverPath, takeoverBytes);
         const report = {
           formatVersion: 1,
@@ -746,12 +771,64 @@ test("recovery request waits for the exact guardian child terminal result", asyn
     assert.equal(resumed.recoveryAttemptId, attemptId);
     assert.equal(guardianRechecked, false);
     assert.equal(fs.existsSync(requestPath), false);
+    fs.unlinkSync(path.join(privateRoot, `.viva-recovery-fence-takeover-${requestId}.json`));
 
     const failedRequestId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     const retryRequestId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
     const retryReportPath = path.join(privateRoot, "retry-recovery-report.json");
     const retryOptions = { ...options, report: retryReportPath };
     const retryArgv = argv.map((value) => (value === reportPath ? retryReportPath : value));
+    const preacceptedRequestId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const preacceptedTakeoverPath = path.join(
+      privateRoot, `.viva-recovery-fence-takeover-${preacceptedRequestId}.json`,
+    );
+    write0600(preacceptedTakeoverPath, Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-recovery-fence-takeover-receipt",
+      state: "HOLDING_UNTIL_EXPLICIT_RELEASE",
+      custodyState: "TAKEOVER_ESTABLISHED",
+      pid: 456,
+      fd: 9,
+      processStartIdentity: "456:789",
+      lockPath: guardian.lockPath,
+      lockDevice: guardian.lockDevice,
+      lockInode: guardian.lockInode,
+      heartbeatPath: preacceptedTakeoverPath.replace(/\.json$/, ".heartbeat.json"),
+      releaseRequestPath: guardian.releaseRequestPath,
+      recoveryReportPath: retryReportPath,
+      parentGuardianReceiptSha256: expectedGuardianSha256,
+      parentGuardianPid: guardian.pid,
+      parentGuardianProcessStartIdentity: guardian.processStartIdentity,
+      recoveryRequestId: preacceptedRequestId,
+      fenceTokenSha256: guardian.fenceTokenSha256,
+      automaticRelease: false,
+    })));
+    write0600(requestPath, Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-fence-recovery-request",
+      state: "RECOVERY_AUTHORIZED",
+      confirmation: "RECOVER_VIVA_GAME_PROJECTION_MONGO_WRITE_BARRIER_V1",
+      requestId: retryRequestId,
+      guardianPid: guardian.pid,
+      guardianProcessStartIdentity: guardian.processStartIdentity,
+      fenceTokenSha256: guardian.fenceTokenSha256,
+      argv: retryArgv,
+      authorizedAt: nowIso,
+    })));
+    await assert.rejects(requestRecoveryFromGuardian(retryArgv, retryOptions, {
+      getUid: () => 0,
+      nowMs: Date.parse(nowIso),
+      requestId: retryRequestId,
+      maximumPolls: 1,
+      assertGuardianLease: async () => ({ heartbeat: { recoveryChildPid: null, lastRecoveryResult: null } }),
+      waitForPoll: async () => {},
+    }), /Timed out waiting for the fence guardian recovery child/);
+    assert.equal(JSON.parse(fs.readFileSync(requestPath, "utf8")).requestId, preacceptedRequestId);
+    assert.equal(fs.existsSync(
+      `${requestPath}.superseded-${retryRequestId}-by-${preacceptedRequestId}`,
+    ), true);
+    fs.unlinkSync(requestPath);
+    fs.unlinkSync(preacceptedTakeoverPath);
     write0600(`${requestPath}.accepted-${failedRequestId}`, Buffer.from(canonicalJson({
       formatVersion: 1,
       kind: "viva-game-projection-fence-recovery-request",
@@ -782,6 +859,167 @@ test("recovery request waits for the exact guardian child terminal result", asyn
   } finally {
     if (previousConfirmation === undefined) delete process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
     else process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = previousConfirmation;
+    fs.rmSync(privateRoot, { recursive: true, force: true });
+  }
+});
+
+test("takeover reconciliation replaces only an exact dead keeper and fails closed on a live partial keeper", async () => {
+  const privateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-takeover-reconcile-")));
+  fs.chmodSync(privateRoot, 0o700);
+  try {
+    const requestId = "12345678-1234-4234-8234-123456789abc";
+    const guardianReceiptSha256 = "a".repeat(64);
+    const options = {
+      fenceGuardianReceipt: path.join(privateRoot, "guardian.json"),
+      report: path.join(privateRoot, "recovery-report.json"),
+    };
+    const guardian = {
+      pid: 123,
+      processStartIdentity: "123:456",
+      fenceTokenSha256,
+      lockPath: "/run/lock/padlhub-viva-game-projection-cutover.lock",
+      lockDevice: "1",
+      lockInode: "2",
+      releaseRequestPath: path.join(privateRoot, "release-request.json"),
+    };
+    const receiptPath = path.join(privateRoot, `.viva-recovery-fence-takeover-${requestId}.json`);
+    const heartbeatPath = receiptPath.replace(/\.json$/, ".heartbeat.json");
+    const receipt = {
+      formatVersion: 1,
+      kind: "viva-game-projection-recovery-fence-takeover-receipt",
+      state: "HOLDING_UNTIL_EXPLICIT_RELEASE",
+      custodyState: "TAKEOVER_ESTABLISHED",
+      pid: 456,
+      fd: 9,
+      processStartIdentity: "456:789",
+      lockPath: guardian.lockPath,
+      lockDevice: guardian.lockDevice,
+      lockInode: guardian.lockInode,
+      heartbeatPath,
+      releaseRequestPath: guardian.releaseRequestPath,
+      recoveryReportPath: options.report,
+      parentGuardianReceiptSha256: guardianReceiptSha256,
+      parentGuardianPid: guardian.pid,
+      parentGuardianProcessStartIdentity: guardian.processStartIdentity,
+      recoveryRequestId: requestId,
+      fenceTokenSha256: guardian.fenceTokenSha256,
+      automaticRelease: false,
+    };
+    const heartbeat = {
+      formatVersion: 1,
+      kind: "viva-game-projection-recovery-fence-takeover-heartbeat",
+      state: "HOLDING",
+      pid: receipt.pid,
+      fd: receipt.fd,
+      processStartIdentity: receipt.processStartIdentity,
+      lockPath: receipt.lockPath,
+      lockDevice: receipt.lockDevice,
+      lockInode: receipt.lockInode,
+      fenceTokenSha256: receipt.fenceTokenSha256,
+      parentGuardianReceiptSha256: receipt.parentGuardianReceiptSha256,
+      parentGuardianPid: receipt.parentGuardianPid,
+      parentGuardianProcessStartIdentity: receipt.parentGuardianProcessStartIdentity,
+      recoveryRequestId: requestId,
+      sequence: 0,
+      observedAt: nowIso,
+    };
+    let restartCount = 0;
+    const deadDependencies = {
+      isTakeoverAlive: async () => false,
+      startFenceTakeover: async ({ requestId: restartedRequestId }) => {
+        restartCount += 1;
+        return { restarted: true, requestId: restartedRequestId };
+      },
+    };
+    write0600(receiptPath, Buffer.from(canonicalJson(receipt)));
+    assert.deepEqual(
+      await startRecoveryFenceTakeover(options, guardian, guardianReceiptSha256, requestId, deadDependencies),
+      { restarted: true, requestId },
+    );
+    assert.equal(fs.existsSync(receiptPath), false);
+    assert.equal(restartCount, 1);
+
+    write0600(receiptPath, Buffer.from(canonicalJson(receipt)));
+    write0600(heartbeatPath, Buffer.from(canonicalJson(heartbeat)));
+    await startRecoveryFenceTakeover(options, guardian, guardianReceiptSha256, requestId, deadDependencies);
+    assert.equal(fs.existsSync(receiptPath), false);
+    assert.equal(fs.existsSync(heartbeatPath), false);
+    assert.equal(restartCount, 2);
+
+    write0600(receiptPath, Buffer.from(canonicalJson(receipt)));
+    await assert.rejects(startRecoveryFenceTakeover(
+      options, guardian, guardianReceiptSha256, requestId,
+      { ...deadDependencies, isTakeoverAlive: async () => true },
+    ), /has not published its first heartbeat/);
+    assert.equal(fs.existsSync(receiptPath), true);
+    assert.equal(restartCount, 2);
+  } finally {
+    fs.rmSync(privateRoot, { recursive: true, force: true });
+  }
+});
+
+test("a SIGKILLed receipt-only takeover is replaced with the same request ID", {
+  skip: process.platform !== "linux" || process.getuid?.() !== 0
+    || process.env.PADLHUB_RUN_LINUX_FLOCK_TESTS !== "1",
+}, async () => {
+  const privateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-dead-partial-takeover-")));
+  fs.chmodSync(privateRoot, 0o700);
+  let keeper = null;
+  try {
+    const requestId = "12345678-1234-4234-8234-123456789abc";
+    const guardianReceiptSha256 = "a".repeat(64);
+    const options = {
+      fenceGuardianReceipt: path.join(privateRoot, "guardian.json"),
+      report: path.join(privateRoot, "recovery-report.json"),
+    };
+    const guardian = {
+      pid: process.pid,
+      processStartIdentity: `${process.pid}:1`,
+      fenceTokenSha256,
+      lockPath: "/run/lock/padlhub-viva-game-projection-cutover.lock",
+      lockDevice: "1",
+      lockInode: "2",
+      releaseRequestPath: path.join(privateRoot, "release-request.json"),
+    };
+    keeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    const body = fs.readFileSync(`/proc/${keeper.pid}/stat`, "utf8").trim();
+    const tail = body.slice(body.lastIndexOf(")") + 2).split(/\s+/);
+    const processStartIdentity = `${keeper.pid}:${tail[19]}`;
+    const receiptPath = path.join(privateRoot, `.viva-recovery-fence-takeover-${requestId}.json`);
+    write0600(receiptPath, Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-recovery-fence-takeover-receipt",
+      state: "HOLDING_UNTIL_EXPLICIT_RELEASE",
+      custodyState: "TAKEOVER_ESTABLISHED",
+      pid: keeper.pid,
+      fd: 9,
+      processStartIdentity,
+      lockPath: guardian.lockPath,
+      lockDevice: guardian.lockDevice,
+      lockInode: guardian.lockInode,
+      heartbeatPath: receiptPath.replace(/\.json$/, ".heartbeat.json"),
+      releaseRequestPath: guardian.releaseRequestPath,
+      recoveryReportPath: options.report,
+      parentGuardianReceiptSha256: guardianReceiptSha256,
+      parentGuardianPid: guardian.pid,
+      parentGuardianProcessStartIdentity: guardian.processStartIdentity,
+      recoveryRequestId: requestId,
+      fenceTokenSha256: guardian.fenceTokenSha256,
+      automaticRelease: false,
+    })));
+    keeper.kill("SIGKILL");
+    await new Promise((resolve) => keeper.once("close", resolve));
+    let restartedRequestId = null;
+    await startRecoveryFenceTakeover(options, guardian, guardianReceiptSha256, requestId, {
+      startFenceTakeover: async ({ requestId: value }) => {
+        restartedRequestId = value;
+        return { restarted: true };
+      },
+    });
+    assert.equal(restartedRequestId, requestId);
+    assert.equal(fs.existsSync(receiptPath), false);
+  } finally {
+    try { if (keeper?.pid) process.kill(keeper.pid, "SIGKILL"); } catch { /* already stopped */ }
     fs.rmSync(privateRoot, { recursive: true, force: true });
   }
 });
@@ -1088,8 +1326,14 @@ test("standalone Mongo barrier recovery requires stopped fenced runtime and reco
       formatVersion: 1,
       kind: "viva-game-projection-fence-guardian-receipt",
       state: "HOLDING_UNTIL_EXPLICIT_RELEASE",
+      pid: 123,
+      fd: 9,
+      processStartIdentity: "123:456",
       fenceTokenSha256,
       lockPath: "/run/lock/padlhub-viva-game-projection-cutover.lock",
+      lockDevice: "1",
+      lockInode: "2",
+      heartbeatPath: path.join(privateRoot, "guardian-heartbeat.json"),
       releaseRequestPath: guardianReleaseRequestPath,
       recoveryRequestPath: guardianRecoveryRequestPath,
       recoveryExecutorPath,
@@ -1161,13 +1405,33 @@ test("standalone Mongo barrier recovery requires stopped fenced runtime and reco
         if (guardianLostDuringRoleRestore) throw new Error("simulated guardian SIGKILL");
         return { sha256: "7".repeat(64) };
       },
-      startFenceTakeover: async () => {
+      startFenceTakeover: async ({ options, guardian, guardianReceiptSha256, requestId }) => {
         takeoverStartAttempts += 1;
         const receiptPath = path.join(
-          privateRoot, ".viva-recovery-fence-takeover-12345678-1234-4234-8234-123456789abc.json",
+          privateRoot, `.viva-recovery-fence-takeover-${requestId}.json`,
         );
         const heartbeatPath = receiptPath.replace(/\.json$/, ".heartbeat.json");
-        const receipt = { fixture: "takeover" };
+        const receipt = {
+          formatVersion: 1,
+          kind: "viva-game-projection-recovery-fence-takeover-receipt",
+          state: "HOLDING_UNTIL_EXPLICIT_RELEASE",
+          custodyState: "TAKEOVER_ESTABLISHED",
+          pid: 456,
+          fd: 9,
+          processStartIdentity: "456:789",
+          lockPath: guardian.lockPath,
+          lockDevice: guardian.lockDevice,
+          lockInode: guardian.lockInode,
+          heartbeatPath,
+          releaseRequestPath: guardian.releaseRequestPath,
+          recoveryReportPath: options.report,
+          parentGuardianReceiptSha256: guardianReceiptSha256,
+          parentGuardianPid: guardian.pid,
+          parentGuardianProcessStartIdentity: guardian.processStartIdentity,
+          recoveryRequestId: requestId,
+          fenceTokenSha256: guardian.fenceTokenSha256,
+          automaticRelease: false,
+        };
         const receiptBytes = Buffer.from(canonicalJson(receipt));
         if (!fs.existsSync(receiptPath)) write0600(receiptPath, receiptBytes);
         if (!fs.existsSync(heartbeatPath)) write0600(heartbeatPath, Buffer.from(canonicalJson({ fixture: "heartbeat" })));
@@ -1852,6 +2116,7 @@ test("the real recovery child establishes takeover custody before an accepted va
       const tail = body.slice(body.lastIndexOf(")") + 2).split(/\\s+/);
       const processStartIdentity = \`\${process.pid}:\${tail[19]}\`;
       const token = process.env.PADLHUB_CUTOVER_FENCE_TOKEN;
+      const lockStat = fs.fstatSync(9);
       const guardian = {
         formatVersion: 1,
         kind: "viva-game-projection-fence-guardian-receipt",
@@ -1860,6 +2125,8 @@ test("the real recovery child establishes takeover custody before an accepted va
         fd: 9,
         processStartIdentity,
         lockPath,
+        lockDevice: String(lockStat.dev),
+        lockInode: String(lockStat.ino),
         heartbeatPath,
         releaseRequestPath: releasePath,
         recoveryRequestPath: requestPath,
@@ -1954,7 +2221,10 @@ test("the real recovery child establishes takeover custody before an accepted va
     process.kill(guardian.pid, "SIGKILL");
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.notEqual(spawnSync("flock", ["-n", lockPath, "-c", "true"], { stdio: "ignore" }).status, 0);
-    assert.match(fs.readFileSync(handshakePath, "utf8"), /FENCE_INHERITED[\s\S]+REQUEST_ACCEPTED/);
+    assert.match(
+      fs.readFileSync(handshakePath, "utf8"),
+      /TAKEOVER_ESTABLISHED[\s\S]+FENCE_INHERITED[\s\S]+REQUEST_ACCEPTED/,
+    );
   } finally {
     try { if (guardian?.pid) process.kill(guardian.pid, "SIGKILL"); } catch { /* already stopped */ }
     try { if (childPid) process.kill(childPid, "SIGKILL"); } catch { /* already stopped */ }
@@ -1963,7 +2233,7 @@ test("the real recovery child establishes takeover custody before an accepted va
   }
 });
 
-test("the real guardian retries one accepted recovery with the same live takeover", {
+test("the real guardian adopts one live takeover after its recovery child dies before accept", {
   skip: process.platform !== "linux" || process.getuid?.() !== 0
     || process.env.PADLHUB_RUN_LINUX_FLOCK_TESTS !== "1",
 }, async () => {
@@ -1985,6 +2255,7 @@ test("the real guardian retries one accepted recovery with the same live takeove
   const previousConfirmation = process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
   let guardian = null;
   let takeoverPid = null;
+  let watcher = null;
   try {
     guardian = spawn("/bin/bash", [
       "-c",
@@ -2041,14 +2312,56 @@ test("the real guardian retries one accepted recovery with the same live takeove
       "--report": options.report,
     }).flat();
     process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = "RECOVER_VIVA_GAME_PROJECTION_MONGO_WRITE_BARRIER_V1";
-    await assert.rejects(requestRecoveryFromGuardian(argv, options, {
+    const takeoverReceiptPath = path.join(privateRoot, `.viva-recovery-fence-takeover-${firstRequestId}.json`);
+    let killedRecoveryChildPid = null;
+    const killedBeforeAccept = new Promise((resolve, reject) => {
+      watcher = fs.watch(privateRoot, (_event, filename) => {
+        if (filename !== path.basename(takeoverReceiptPath) || killedRecoveryChildPid) return;
+        try {
+          const children = fs.readFileSync(
+            `/proc/${guardian.pid}/task/${guardian.pid}/children`, "utf8",
+          ).trim().split(/\s+/).filter(Boolean).map(Number);
+          assert.equal(children.length, 1);
+          [killedRecoveryChildPid] = children;
+          process.kill(killedRecoveryChildPid, "SIGKILL");
+          resolve();
+        } catch (error) { reject(error); }
+      });
+    });
+    const firstRequest = assert.rejects(requestRecoveryFromGuardian(argv, options, {
       getUid: () => 0,
       requestId: firstRequestId,
-      maximumPolls: 40,
+      maximumPolls: 80,
     }), /recovery child failed/);
-    const takeoverReceiptPath = path.join(privateRoot, `.viva-recovery-fence-takeover-${firstRequestId}.json`);
+    await Promise.race([
+      killedBeforeAccept,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Did not intercept pre-accept recovery child")), 5_000)),
+    ]);
+    await firstRequest;
+    watcher.close();
+    watcher = null;
+    assert.equal(fs.existsSync(`${requestPath}.accepted-${firstRequestId}`), false);
+    for (let poll = 0; poll < 100; poll += 1) {
+      const heartbeat = JSON.parse(fs.readFileSync(heartbeatPath, "utf8"));
+      if (heartbeat.recoveryReleaseDelegated && heartbeat.recoveryRequestId === firstRequestId) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const delegatedHeartbeat = JSON.parse(fs.readFileSync(heartbeatPath, "utf8"));
+    assert.equal(delegatedHeartbeat.recoveryReleaseDelegated, true);
+    assert.equal(delegatedHeartbeat.recoveryRequestId, firstRequestId);
     const firstTakeoverReceipt = JSON.parse(fs.readFileSync(takeoverReceiptPath, "utf8"));
     takeoverPid = firstTakeoverReceipt.pid;
+    write0600(releasePath, Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-fence-release-request",
+      state: "RELEASE_AUTHORIZED",
+      confirmation: "RELEASE_VIVA_GAME_PROJECTION_CUTOVER_FENCE_V1",
+      fenceTokenSha256: cutoverSha256(token),
+      authorizedAt: new Date().toISOString(),
+    })));
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    process.kill(guardian.pid, 0);
+    assert.equal(fs.existsSync(releasePath), true);
     await assert.rejects(requestRecoveryFromGuardian(argv, options, {
       getUid: () => 0,
       requestId: unusedFreshRequestId,
@@ -2068,6 +2381,7 @@ test("the real guardian retries one accepted recovery with the same live takeove
     else process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = previousConfirmation;
     try { if (guardian?.pid) process.kill(guardian.pid, "SIGKILL"); } catch { /* already stopped */ }
     try { if (takeoverPid) process.kill(takeoverPid, "SIGKILL"); } catch { /* already stopped */ }
+    try { watcher?.close(); } catch { /* already closed */ }
     await new Promise((resolve) => setTimeout(resolve, 100));
     fs.rmSync(privateRoot, { recursive: true, force: true });
   }
