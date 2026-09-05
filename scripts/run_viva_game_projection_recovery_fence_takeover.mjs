@@ -5,12 +5,12 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { canonicalJson, sha256 } from "./lib/vivaGameProjectionCutoverContract.mjs";
-import { isAuthorizedFenceGuardianRelease } from "./lib/vivaGameProjectionFenceGuardian.mjs";
+import { isAuthorizedRecoveryFenceTakeoverRelease } from "./lib/vivaGameProjectionFenceGuardian.mjs";
 
 const fail = (message) => { throw new Error(message); };
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 if (process.argv.slice(2).includes("--help")) {
-  process.stdout.write("Usage: node scripts/run_viva_game_projection_recovery_fence_takeover.mjs --receipt /private/takeover.json --heartbeat /private/takeover-heartbeat.json --release-request /private/release-request.json --parent-guardian-receipt-sha256 SHA256 --recovery-request-id UUID\n");
+  process.stdout.write("Usage: node scripts/run_viva_game_projection_recovery_fence_takeover.mjs --receipt /private/takeover.json --heartbeat /private/takeover-heartbeat.json --release-request /private/release-request.json --recovery-report /private/recovery-report.json --parent-guardian-receipt-sha256 SHA256 --recovery-request-id UUID\n");
   process.exit(0);
 }
 
@@ -51,6 +51,7 @@ const token = String(process.env.PADLHUB_CUTOVER_FENCE_TOKEN || "");
 const receiptPath = path.resolve(args.get("--receipt") || "");
 const heartbeatPath = path.resolve(args.get("--heartbeat") || "");
 const releasePath = path.resolve(args.get("--release-request") || "");
+const recoveryReportPath = path.resolve(args.get("--recovery-report") || "");
 const parentGuardianReceiptSha256 = String(args.get("--parent-guardian-receipt-sha256") || "");
 const recoveryRequestId = String(args.get("--recovery-request-id") || "");
 const parent = path.dirname(receiptPath);
@@ -58,8 +59,9 @@ const parentStat = fs.lstatSync(parent);
 if (!Number.isSafeInteger(fd) || fd < 3 || lockPath !== "/run/lock/padlhub-viva-game-projection-cutover.lock"
   || token.length < 32 || !HASH_RE.test(parentGuardianReceiptSha256) || !UUID_RE.test(recoveryRequestId)
   || !path.isAbsolute(receiptPath) || !path.isAbsolute(heartbeatPath) || !path.isAbsolute(releasePath)
+  || !path.isAbsolute(recoveryReportPath)
   || path.dirname(heartbeatPath) !== parent || path.dirname(releasePath) !== parent
-  || new Set([receiptPath, heartbeatPath, releasePath]).size !== 3
+  || new Set([receiptPath, heartbeatPath, releasePath, recoveryReportPath]).size !== 4
   || !parentStat.isDirectory() || parentStat.isSymbolicLink() || fs.realpathSync(parent) !== parent
   || parentStat.uid !== process.getuid() || (parentStat.mode & 0o077) !== 0
   || fs.existsSync(receiptPath) || fs.existsSync(heartbeatPath)) fail("Recovery fence takeover inputs are invalid");
@@ -85,15 +87,17 @@ const receipt = {
   lockInode: String(lockStat.ino),
   heartbeatPath,
   releaseRequestPath: releasePath,
+  recoveryReportPath,
   parentGuardianReceiptSha256,
   recoveryRequestId,
   fenceTokenSha256: tokenSha256,
   startedAt: new Date().toISOString(),
   automaticRelease: false,
 };
+const receiptBytes = Buffer.from(canonicalJson(receipt));
 const receiptDescriptor = fs.openSync(receiptPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
 try {
-  fs.writeFileSync(receiptDescriptor, canonicalJson(receipt));
+  fs.writeFileSync(receiptDescriptor, receiptBytes);
   fs.fsyncSync(receiptDescriptor);
 } finally { fs.closeSync(receiptDescriptor); }
 syncDirectory(parent);
@@ -103,6 +107,33 @@ process.on("SIGINT", () => {});
 process.on("SIGTERM", () => {});
 let sequence = 0;
 let lastRejectedReleaseRequestSha256 = null;
+const readPrivateJson = (filePath, maximumBytes) => {
+  const stat = fs.lstatSync(filePath);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== process.getuid()
+    || (stat.mode & 0o077) !== 0 || stat.size > maximumBytes) fail("Recovery takeover evidence is not private");
+  const bytes = fs.readFileSync(filePath);
+  return { bytes, value: JSON.parse(bytes.toString("utf8")) };
+};
+const readTerminalRecovery = () => {
+  const reportRead = readPrivateJson(recoveryReportPath, 16 * 1024 * 1024);
+  const journalPath = `${recoveryReportPath}.journal`;
+  const journalStat = fs.lstatSync(journalPath);
+  if (!journalStat.isDirectory() || journalStat.isSymbolicLink() || journalStat.uid !== process.getuid()
+    || (journalStat.mode & 0o077) !== 0 || fs.realpathSync(journalPath) !== path.resolve(journalPath)) {
+    fail("Recovery takeover journal is not private and canonical");
+  }
+  const names = fs.readdirSync(journalPath).sort();
+  if (names.length === 0) fail("Recovery takeover terminal journal is absent");
+  const terminalRead = readPrivateJson(path.join(journalPath, names.at(-1)), 16 * 1024 * 1024);
+  return { reportRead, terminalRead };
+};
+const quarantineReleaseRequest = (digest) => {
+  const quarantinePath = `${releasePath}.rejected-takeover-${Date.now()}-${digest.slice(0, 16)}`;
+  try {
+    fs.renameSync(releasePath, quarantinePath);
+    syncDirectory(parent);
+  } catch { /* another lock custodian may already have consumed or quarantined it */ }
+};
 while (true) {
   const currentDescriptor = fs.fstatSync(fd);
   const currentLock = fs.statSync(lockPath);
@@ -119,10 +150,29 @@ while (true) {
         && releaseStat.uid === process.getuid() && (releaseStat.mode & 0o077) === 0 && releaseStat.size <= 64 * 1024;
       if (validPrivateFile) release = JSON.parse(fs.readFileSync(releasePath, "utf8"));
     } catch { /* keep the lock and report only the request digest */ }
-    if (isAuthorizedFenceGuardianRelease({ release, validPrivateFile, fenceTokenSha256: tokenSha256, nowMs: Date.now() })) {
-      process.exit(0);
+    let releaseDigest = null;
+    try { releaseDigest = sha256(fs.readFileSync(releasePath)); } catch { /* another custodian handled it */ }
+    let terminal = null;
+    try { terminal = readTerminalRecovery(); } catch { /* recovery is incomplete or unreconciled */ }
+    const authorized = terminal && isAuthorizedRecoveryFenceTakeoverRelease({
+      release,
+      validPrivateFile,
+      fenceTokenSha256: tokenSha256,
+      recoveryRequestId,
+      recoveryReportPath,
+      recoveryReport: terminal.reportRead.value,
+      recoveryReportSha256: sha256(terminal.reportRead.bytes),
+      recoveryTerminalJournal: terminal.terminalRead.value,
+      recoveryTerminalJournalSha256: sha256(terminal.terminalRead.bytes),
+      recoveryFenceTakeoverReceiptPath: receiptPath,
+      recoveryFenceTakeoverReceiptSha256: sha256(receiptBytes),
+      nowMs: Date.now(),
+    });
+    if (authorized) process.exit(0);
+    if (releaseDigest) {
+      lastRejectedReleaseRequestSha256 = releaseDigest;
+      quarantineReleaseRequest(releaseDigest);
     }
-    try { lastRejectedReleaseRequestSha256 = sha256(fs.readFileSync(releasePath)); } catch { /* retry */ }
   }
   atomicPrivateWrite(heartbeatPath, {
     formatVersion: 1,

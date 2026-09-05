@@ -23,6 +23,10 @@ import { buildMongoTargetIdentity, canonicalJson } from "./lib/vivaGameProjectio
 import { assertMongoWriteBarrier } from "./lib/vivaGameProjectionMongoWriteBarrier.mjs";
 import { assertExactExecutorSources } from "./lib/vivaGameProjectionExecutorSource.mjs";
 import { validateExactCutoverPacket } from "./lib/vivaGameProjectionCutoverPacketValidation.mjs";
+import {
+  recoverAtomicExclusivePublication,
+  writeFileExclusiveAtomicDurable,
+} from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = fs.realpathSync(path.resolve(path.dirname(SCRIPT_PATH), ".."));
@@ -166,6 +170,85 @@ function writeDurableExclusive(filePath, bytes) {
   return sha256(readback);
 }
 
+export function recoverDurableTerminalReport(reportPath, mode, expectedReportSha256 = null) {
+  if (!path.isAbsolute(String(reportPath || ""))) fail("Report path must be absolute");
+  const requested = path.resolve(reportPath);
+  const parent = ensurePrivateDirectory(path.dirname(requested), "Report directory");
+  const journalDirectory = `${requested}.journal`;
+  const journalRoot = fs.realpathSync(journalDirectory);
+  const journalStat = fs.lstatSync(journalRoot);
+  if (journalRoot !== path.resolve(journalDirectory) || !journalStat.isDirectory() || journalStat.isSymbolicLink()
+    || (journalStat.mode & 0o077) !== 0
+    || (typeof process.getuid === "function" && journalStat.uid !== process.getuid())) {
+    fail("Report journal is not private and canonical");
+  }
+  const names = fs.readdirSync(journalRoot).sort();
+  const entries = names.map((name, index) => {
+    if (!new RegExp(`^${String(index).padStart(4, "0")}-[a-z0-9-]+\\.json$`).test(name)) {
+      fail("Report journal sequence is incomplete");
+    }
+    return readPrivateJson(path.join(journalRoot, name), "Report journal", MAX_PLAN_BYTES).value;
+  });
+  const attemptId = entries[0]?.attemptId;
+  const terminal = entries.at(-1);
+  if (!attemptId || entries.length < 2 || entries.some((entry, index) => entry?.formatVersion !== 1
+    || entry?.attemptId !== attemptId || entry?.mode !== String(mode || "").toUpperCase() || entry?.sequence !== index)
+    || entries.filter((entry) => entry?.phase === "TERMINAL_RESULT").length !== 1
+    || terminal?.phase !== "TERMINAL_RESULT" || !terminal?.report || typeof terminal.report !== "object") {
+    fail("Report journal lacks one exact terminal result");
+  }
+  const decodedReportBytes = typeof terminal.reportBytesBase64 === "string"
+    ? Buffer.from(terminal.reportBytesBase64, "base64") : null;
+  const fallbackCandidates = [
+    Buffer.from(`${JSON.stringify(terminal.report, null, 2)}\n`),
+    Buffer.from(canonicalJson(terminal.report)),
+  ];
+  const reportBytes = decodedReportBytes && decodedReportBytes.toString("base64") === terminal.reportBytesBase64
+    ? decodedReportBytes
+    : fallbackCandidates.find((candidate) => sha256(candidate) === terminal.reportSha256);
+  if (!reportBytes) fail("Terminal report bytes cannot be reconstructed from the journal");
+  let decodedReport;
+  try { decodedReport = JSON.parse(reportBytes.toString("utf8")); } catch { fail("Terminal report bytes are invalid"); }
+  if (canonicalJson(decodedReport) !== canonicalJson(terminal.report)) {
+    fail("Terminal report bytes differ from the embedded journal report");
+  }
+  const reportSha256 = sha256(reportBytes);
+  if (terminal.reportSha256 !== reportSha256
+    || (expectedReportSha256 !== null && expectedReportSha256 !== reportSha256)) {
+    fail("Terminal report digest does not match the journal");
+  }
+  recoverAtomicExclusivePublication(requested, {
+    uid: typeof process.getuid === "function" ? process.getuid() : 0,
+    gid: typeof process.getgid === "function" ? process.getgid() : 0,
+    mode: 0o600,
+  });
+  if (fs.existsSync(requested)) {
+    const stat = fs.lstatSync(requested);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0
+      || (typeof process.getuid === "function" && stat.uid !== process.getuid()) || stat.size > reportBytes.length) {
+      fail("Terminal report output is not private or recoverable");
+    }
+    const existing = fs.readFileSync(requested);
+    if (!existing.equals(reportBytes)) {
+      if (existing.length >= reportBytes.length || !reportBytes.subarray(0, existing.length).equals(existing)) {
+        fail("Terminal report output differs from its journal");
+      }
+      fs.unlinkSync(requested);
+      syncDirectory(parent);
+    }
+  }
+  if (!fs.existsSync(requested)) {
+    writeFileExclusiveAtomicDurable(requested, reportBytes, {
+      uid: typeof process.getuid === "function" ? process.getuid() : 0,
+      gid: typeof process.getgid === "function" ? process.getgid() : 0,
+      mode: 0o600,
+    });
+  }
+  const readback = readPrivateBytes(requested, "Recovered terminal report", Math.max(reportBytes.length + 1, 1024));
+  if (!readback.equals(reportBytes)) fail("Recovered terminal report readback mismatch");
+  return { attemptId, journalDirectory, terminal, report: terminal.report, bytes: readback, sha256: reportSha256 };
+}
+
 export function createDurableReportJournal(reportPath, mode, attemptId = crypto.randomUUID()) {
   if (!path.isAbsolute(String(reportPath || ""))) fail("Report path must be absolute");
   const requested = path.resolve(reportPath);
@@ -197,9 +280,14 @@ export function createDurableReportJournal(reportPath, mode, attemptId = crypto.
         outcome: value.outcome || value.state || null,
         mutationAttempted: value.mutationAttempted === true,
         reportSha256: sha256(reportBytes),
+        reportBytesBase64: reportBytes.toString("base64"),
         report: value,
       });
-      writeDurableExclusive(requested, reportBytes);
+      writeFileExclusiveAtomicDurable(requested, reportBytes, {
+        uid: typeof process.getuid === "function" ? process.getuid() : 0,
+        gid: typeof process.getgid === "function" ? process.getgid() : 0,
+        mode: 0o600,
+      });
       closed = true;
     },
   };

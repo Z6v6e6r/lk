@@ -273,9 +273,16 @@ the report without repeating Mongo mutations. Before the first recovery side
 effect, the recovery child starts a detached takeover keeper with the inherited
 canonical flock descriptor. That keeper has its own receipt, process-start
 identity, and heartbeat, remains alive through guardian or recovery-child
-`SIGKILL`, and accepts only the same explicit fence-release request. A completed
-recovery report is reusable only while that exact takeover receipt and live
-heartbeat still prove lock custody. The validator is restored before
+`SIGKILL`, and accepts the explicit fence-release request only when it also
+binds the exact recovery request ID, recovery report path and SHA-256,
+terminal-journal SHA-256, and takeover-receipt SHA-256. It independently
+rereads the complete terminal report and embedded journal report before
+releasing; early release requests are quarantined while the takeover keeps the
+flock. A completed recovery report is reusable only while that exact takeover
+receipt and live heartbeat still prove lock custody. A recovery CLI retry
+reconciles an existing pending/accepted request or a completed report before it
+can publish another request, so an older report cannot make a new guardian
+child run after the CLI has returned. The validator is restored before
 application roles are returned. This Mongo barrier recovery therefore retains
 the host fence across coordinator, guardian, and recovery-child failure. The coordinator then rereads
 the packet's complete EJSON backup and requires its document count and canonical
@@ -353,7 +360,18 @@ SHA, then spawns that finalizer with the inherited flock descriptor. The child
 repeats every final gate before it creates or accepts READY. Its publication is
 idempotent for the same execution/report pair and repairs the exact two-link
 temporary-file state left by `SIGKILL` between hard-link creation and temporary
-unlink; any different alias, owner, mode, content, or binding fails closed.
+unlink; any different alias, owner, mode, content, or binding fails closed. A
+retry adopts the exact pending or guardian-accepted request and accepts an
+existing marker only with its terminal guardian result. The terminal
+coordinator report is atomically published and can be reconstructed
+byte-for-byte from the single terminal journal entry after a crash, including
+a partial legacy report prefix. Delayed finalization validates immutable
+packet, fence, and postcheck evidence at the recorded terminal completion time,
+then reruns current flock, guardian, PM2, candidate-flow, `/flows`, Mongo
+barrier, replica-set, and `$currentOp` checks. It writes a fresh
+`ready-finalization.receipt.json` with those current proofs; READY binds that
+receipt SHA-256. A stale exact READY and receipt are refreshed only after all
+current gates pass.
 If READY publication cannot be reconciled or durably removed, the publication
 helper returns an explicit outcome-unknown path. The coordinator then keeps the
 already validated SHADOW runtime online while ingress and both barriers remain

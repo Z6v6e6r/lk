@@ -1842,6 +1842,19 @@
   restoring Mongo state. Its receipt and heartbeat remain required on completed-report
   retry, so guardian or recovery-child termination cannot silently release the host
   writer fence during validator and application-role restoration.
+- The takeover now rejects and quarantines a generic early release. It releases only
+  when that request binds the exact completed recovery report, its terminal journal,
+  request ID, and takeover receipt. Recovery retries adopt pending/accepted guardian
+  work or reconcile the prior terminal report before publishing anything new.
+- Coordinator reports are atomically published and recoverable byte-for-byte from the
+  embedded terminal journal payload after an absent or partial report write. READY
+  retries likewise adopt pending/accepted guardian requests and do not create a second
+  child after requester termination.
+- Delayed recovery treats the immutable writer-fence receipt as historical identity
+  evidence while requiring the current flock, guardian/takeover, stopped PM2 runtime,
+  and Mongo gates. Delayed READY finalization validates historic packet/fence/postcheck
+  state at terminal completion, reruns all current gates, and binds a fresh
+  `ready-finalization.receipt.json` into the READY marker.
 - Expanded the live `$currentOp` gate to reject `drop`, `dropDatabase`,
   `renameCollection`, `createIndexes`, `collMod`, and aggregate `$out`/`$merge`
   operations that target `games.lk_games`.

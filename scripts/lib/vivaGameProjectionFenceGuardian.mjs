@@ -23,6 +23,42 @@ export function isAuthorizedFenceGuardianRelease({ release, validPrivateFile, fe
     && authorizedAt <= nowMs + 60_000 && nowMs - authorizedAt <= 5 * 60_000;
 }
 
+export function isAuthorizedRecoveryFenceTakeoverRelease({
+  release,
+  validPrivateFile,
+  fenceTokenSha256,
+  recoveryRequestId,
+  recoveryReportPath,
+  recoveryReport,
+  recoveryReportSha256,
+  recoveryTerminalJournal,
+  recoveryTerminalJournalSha256,
+  recoveryFenceTakeoverReceiptPath,
+  recoveryFenceTakeoverReceiptSha256,
+  nowMs = Date.now(),
+}) {
+  return isAuthorizedFenceGuardianRelease({ release, validPrivateFile, fenceTokenSha256, nowMs })
+    && release?.recoveryRequestId === recoveryRequestId
+    && release?.recoveryReportPath === recoveryReportPath
+    && release?.recoveryReportSha256 === recoveryReportSha256
+    && release?.recoveryTerminalJournalSha256 === recoveryTerminalJournalSha256
+    && release?.recoveryFenceTakeoverReceiptSha256 === recoveryFenceTakeoverReceiptSha256
+    && recoveryReport?.formatVersion === 1
+    && recoveryReport?.kind === "viva-game-projection-mongo-write-barrier-recovery-receipt"
+    && recoveryReport?.state === "RELEASED_TO_EXACT_PREIMAGE"
+    && recoveryReport?.guardianRecoveryRequestId === recoveryRequestId
+    && recoveryReport?.recoveryJournalPath === `${recoveryReportPath}.journal`
+    && recoveryReport?.recoveryFenceTakeoverState === "HELD_UNTIL_EXPLICIT_FENCE_RELEASE"
+    && recoveryReport?.recoveryFenceTakeoverReceiptPath === recoveryFenceTakeoverReceiptPath
+    && recoveryReport?.recoveryFenceTakeoverReceiptSha256 === recoveryFenceTakeoverReceiptSha256
+    && recoveryTerminalJournal?.formatVersion === 1
+    && recoveryTerminalJournal?.mode === "BARRIER_RECOVERY"
+    && recoveryTerminalJournal?.phase === "TERMINAL_RESULT"
+    && recoveryTerminalJournal?.attemptId === recoveryReport?.recoveryAttemptId
+    && recoveryTerminalJournal?.reportSha256 === recoveryReportSha256
+    && JSON.stringify(recoveryTerminalJournal?.report) === JSON.stringify(recoveryReport);
+}
+
 export function isAuthorizedFenceGuardianRecovery({
   request, validPrivateFile, fenceTokenSha256, guardianPid, processStartIdentity, nowMs = Date.now(),
 }) {

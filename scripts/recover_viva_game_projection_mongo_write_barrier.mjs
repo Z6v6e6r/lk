@@ -27,6 +27,7 @@ import {
   validateHeldWriterFence,
 } from "./run_viva_game_projection_tenant_migration.mjs";
 import { writeFileExclusiveAtomicDurable } from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
+import { isAuthorizedFenceGuardianRecovery } from "./lib/vivaGameProjectionFenceGuardian.mjs";
 
 const SCRIPT_PATH = fs.realpathSync(fileURLToPath(import.meta.url));
 const TAKEOVER_SCRIPT_PATH = fs.realpathSync(path.join(
@@ -68,6 +69,7 @@ const assertLiveRecoveryFenceTakeover = (receipt, expected, nowMs = Date.now()) 
     || receipt?.recoveryRequestId !== expected.recoveryRequestId
     || receipt?.fenceTokenSha256 !== expected.fenceTokenSha256
     || receipt?.lockPath !== expected.lockPath || receipt?.releaseRequestPath !== expected.releaseRequestPath
+    || receipt?.recoveryReportPath !== expected.recoveryReportPath
     || receipt?.automaticRelease !== false || !Number.isSafeInteger(receipt?.pid) || receipt.pid < 1
     || !Number.isSafeInteger(receipt?.fd) || receipt.fd < 3 || !String(receipt?.heartbeatPath || "").startsWith("/")) {
     fail("Recovery fence takeover receipt is invalid");
@@ -114,6 +116,7 @@ const startRecoveryFenceTakeover = async (options, guardian, guardianReceiptSha2
     "--receipt", paths.receiptPath,
     "--heartbeat", paths.heartbeatPath,
     "--release-request", guardian.releaseRequestPath,
+    "--recovery-report", options.report,
     "--parent-guardian-receipt-sha256", guardianReceiptSha256,
     "--recovery-request-id", requestId,
   ], { detached: true, stdio: childStdio, env: process.env });
@@ -133,6 +136,7 @@ const startRecoveryFenceTakeover = async (options, guardian, guardianReceiptSha2
     fenceTokenSha256: guardian.fenceTokenSha256,
     lockPath: guardian.lockPath,
     releaseRequestPath: guardian.releaseRequestPath,
+    recoveryReportPath: options.report,
   };
   const lease = assertLiveRecoveryFenceTakeover(receiptRead.value, expected);
   return { ...paths, receipt: receiptRead.value, receiptSha256: sha256(receiptRead.bytes), lease };
@@ -228,6 +232,57 @@ const openRecoveryJournal = (reportPath, bindings) => {
   return { attemptId, journalDirectory, resumed, append, appendTerminal, completedReport: null };
 };
 
+const readCompletedRecoveryWithLiveTakeover = async ({
+  options, bindings, guardian, nowMs, dependencies, requiredRequestId = null,
+}) => {
+  if (!fs.existsSync(options.report) && !fs.existsSync(`${options.report}.journal`)) return null;
+  const journal = openRecoveryJournal(options.report, bindings);
+  const completed = journal.completedReport;
+  if (!completed) return null;
+  const completedRequestId = String(completed.guardianRecoveryRequestId || "");
+  if (!UUID_RE.test(completedRequestId)) fail("Completed recovery report lacks its guardian request identity");
+  if (requiredRequestId && completedRequestId !== requiredRequestId) return null;
+  const paths = takeoverPaths(options, completedRequestId);
+  if (completed.recoveryFenceTakeoverState !== "HELD_UNTIL_EXPLICIT_FENCE_RELEASE"
+    || completed.recoveryFenceTakeoverReceiptPath !== paths.receiptPath || !fs.existsSync(paths.receiptPath)) {
+    fail("Completed recovery report lacks its exact takeover receipt");
+  }
+  const takeoverRead = readPrivateJson(paths.receiptPath, "Recovery fence takeover receipt", 1024 * 1024);
+  if (completed.recoveryFenceTakeoverReceiptSha256 !== sha256(takeoverRead.bytes)) {
+    fail("Recovery takeover does not bind the completed recovery report");
+  }
+  const expected = {
+    parentGuardianReceiptSha256: options.expectedFenceGuardianReceiptSha256,
+    recoveryRequestId: completedRequestId,
+    fenceTokenSha256: guardian.fenceTokenSha256,
+    lockPath: guardian.lockPath,
+    releaseRequestPath: guardian.releaseRequestPath,
+    recoveryReportPath: options.report,
+  };
+  const lease = dependencies.assertTakeoverLease
+    ? await dependencies.assertTakeoverLease(takeoverRead.value, expected, nowMs)
+    : assertLiveRecoveryFenceTakeover(takeoverRead.value, expected, nowMs);
+  if (!HASH_RE.test(String(lease?.sha256 || ""))) fail("Recovery takeover lacks a fresh heartbeat digest");
+  return completed;
+};
+
+const readExactRecoveryRequest = (requestPath, argv, guardian, nowMs, { accepted = false } = {}) => {
+  const requestRead = readPrivateJson(requestPath, "Fence guardian recovery request", 1024 * 1024);
+  const request = requestRead.value;
+  const validationNowMs = accepted ? Date.parse(request?.authorizedAt) : nowMs;
+  if (!isAuthorizedFenceGuardianRecovery({
+    request,
+    validPrivateFile: true,
+    fenceTokenSha256: guardian.fenceTokenSha256,
+    guardianPid: guardian.pid,
+    processStartIdentity: guardian.processStartIdentity,
+    nowMs: validationNowMs,
+  }) || canonicalJson(request.argv) !== canonicalJson(argv)) {
+    fail("Existing fence guardian recovery request does not bind this exact recovery");
+  }
+  return request;
+};
+
 const parseArgs = (argv) => {
   const values = new Map();
   for (let index = 0; index < argv.length; index += 2) {
@@ -281,34 +336,7 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
     || path.dirname(options.fenceGuardianRecoveryRequest) !== path.dirname(options.fenceGuardianReceipt)) {
     fail("Fence guardian recovery-request path is not canonical");
   }
-  if (fs.existsSync(options.fenceGuardianRecoveryRequest)) fail("Fence guardian recovery-request path must be new");
   const nowMs = typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now());
-  if (dependencies.assertGuardianLease) await dependencies.assertGuardianLease(guardianRead.value, nowMs);
-  else assertLiveFenceGuardian(guardianRead.value, nowMs);
-  const requestId = dependencies.requestId || crypto.randomUUID();
-  if (!UUID_RE.test(String(requestId || ""))) fail("Fence guardian recovery request ID is invalid");
-  const request = {
-    formatVersion: 1,
-    kind: "viva-game-projection-fence-recovery-request",
-    state: "RECOVERY_AUTHORIZED",
-    confirmation: CONFIRMATION,
-    requestId,
-    guardianPid: guardianRead.value.pid,
-    guardianProcessStartIdentity: guardianRead.value.processStartIdentity,
-    fenceTokenSha256: guardianRead.value.fenceTokenSha256,
-    argv,
-    authorizedAt: new Date(nowMs).toISOString(),
-  };
-  try {
-    writeFileExclusiveAtomicDurable(
-      options.fenceGuardianRecoveryRequest, Buffer.from(canonicalJson(request)), privateOptions(),
-    );
-  } catch (error) {
-    if (error?.publicationOutcome !== "UNKNOWN"
-      || error?.publicationPath !== options.fenceGuardianRecoveryRequest) throw error;
-    // The request is already authorized. Keep observing this exact request ID
-    // instead of returning while the guardian may still accept it.
-  }
   const bindings = {
     barrierArtifactSha256: options.expectedBarrierArtifactSha256,
     cutoverPlanSha256: options.expectedCutoverPlanSha256,
@@ -316,6 +344,75 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
     fenceReceiptSha256: options.expectedFenceReceiptSha256,
     fenceGuardianReceiptSha256: options.expectedFenceGuardianReceiptSha256,
   };
+  if (!fs.existsSync(options.fenceGuardianRecoveryRequest)) {
+    const completed = await readCompletedRecoveryWithLiveTakeover({
+      options, bindings, guardian: guardianRead.value, nowMs, dependencies,
+    });
+    if (completed) return completed;
+  }
+  let initialGuardianLease = null;
+  let guardianLeaseError = null;
+  try {
+    initialGuardianLease = dependencies.assertGuardianLease
+      ? await dependencies.assertGuardianLease(guardianRead.value, nowMs)
+      : assertLiveFenceGuardian(guardianRead.value, nowMs);
+  } catch (error) { guardianLeaseError = error; }
+  let requestId = null;
+  let request = null;
+  if (fs.existsSync(options.fenceGuardianRecoveryRequest)) {
+    request = readExactRecoveryRequest(
+      options.fenceGuardianRecoveryRequest, argv, guardianRead.value, nowMs,
+    );
+    requestId = request.requestId;
+  } else {
+    const heartbeatRequestId = initialGuardianLease?.heartbeat?.recoveryRequestId;
+    const acceptedPrefix = `${path.basename(options.fenceGuardianRecoveryRequest)}.accepted-`;
+    const acceptedIds = fs.readdirSync(path.dirname(options.fenceGuardianRecoveryRequest))
+      .filter((name) => name.startsWith(acceptedPrefix))
+      .map((name) => name.slice(acceptedPrefix.length))
+      .filter((value) => UUID_RE.test(value));
+    const candidateIds = UUID_RE.test(String(heartbeatRequestId || ""))
+      ? [heartbeatRequestId]
+      : acceptedIds;
+    const accepted = [];
+    for (const candidateId of candidateIds) {
+      const acceptedPath = `${options.fenceGuardianRecoveryRequest}.accepted-${candidateId}`;
+      if (!fs.existsSync(acceptedPath)) continue;
+      try {
+        accepted.push(readExactRecoveryRequest(acceptedPath, argv, guardianRead.value, nowMs, { accepted: true }));
+      } catch { /* unrelated or corrupt accepted requests never authorize this retry */ }
+    }
+    if (accepted.length > 1) fail("Multiple accepted recovery requests match this exact recovery");
+    if (accepted.length === 1) {
+      request = accepted[0];
+      requestId = request.requestId;
+    }
+  }
+  if (!requestId && guardianLeaseError) throw guardianLeaseError;
+  requestId ||= dependencies.requestId || crypto.randomUUID();
+  if (!UUID_RE.test(String(requestId || ""))) fail("Fence guardian recovery request ID is invalid");
+  if (!request) {
+    request = {
+      formatVersion: 1,
+      kind: "viva-game-projection-fence-recovery-request",
+      state: "RECOVERY_AUTHORIZED",
+      confirmation: CONFIRMATION,
+      requestId,
+      guardianPid: guardianRead.value.pid,
+      guardianProcessStartIdentity: guardianRead.value.processStartIdentity,
+      fenceTokenSha256: guardianRead.value.fenceTokenSha256,
+      argv,
+      authorizedAt: new Date(nowMs).toISOString(),
+    };
+    try {
+      writeFileExclusiveAtomicDurable(
+        options.fenceGuardianRecoveryRequest, Buffer.from(canonicalJson(request)), privateOptions(),
+      );
+    } catch (error) {
+      if (error?.publicationOutcome !== "UNKNOWN"
+        || error?.publicationPath !== options.fenceGuardianRecoveryRequest) throw error;
+    }
+  }
   const maximumPolls = dependencies.maximumPolls ?? 360;
   for (let poll = 0; poll < maximumPolls; poll += 1) {
     const pollNowMs = typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now());
@@ -331,45 +428,20 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
     if (childFinished && heartbeat.lastRecoveryResult.exitCode !== 0) {
       fail("Fence guardian recovery child failed while the canonical fence remained held");
     }
-    if (childFinished && heartbeat.lastRecoveryResult.exitCode === 0
-      && !fs.existsSync(options.fenceGuardianRecoveryRequest) && fs.existsSync(options.report)) {
-      const journal = openRecoveryJournal(options.report, bindings);
-      if (!journal.completedReport) fail("Fence guardian recovery child exited without a durable terminal report");
-    }
-    if (childFinished && heartbeat.lastRecoveryResult.exitCode === 0
-      && !fs.existsSync(options.fenceGuardianRecoveryRequest) && !fs.existsSync(options.report)) {
-      fail("Fence guardian recovery child exited without publishing its durable report");
-    }
-    if (fs.existsSync(options.report)) {
-      const journal = openRecoveryJournal(options.report, bindings);
-      const completed = journal.completedReport;
-      if (!completed) fail("Recovery report exists without a durable terminal journal");
-      const completedRequestId = String(completed.guardianRecoveryRequestId || "");
-      if (!UUID_RE.test(completedRequestId)) fail("Completed recovery report lacks its guardian request identity");
-      const completedTakeoverPaths = takeoverPaths(options, completedRequestId);
-      if (completed.recoveryFenceTakeoverState !== "HELD_UNTIL_EXPLICIT_FENCE_RELEASE"
-        || completed.recoveryFenceTakeoverReceiptPath !== completedTakeoverPaths.receiptPath
-        || !fs.existsSync(completedTakeoverPaths.receiptPath)) {
-        fail("Completed recovery report lacks its exact takeover receipt");
-      }
-      const takeoverRead = readPrivateJson(
-        completedTakeoverPaths.receiptPath, "Recovery fence takeover receipt", 1024 * 1024,
-      );
-      const takeoverExpected = {
-        parentGuardianReceiptSha256: options.expectedFenceGuardianReceiptSha256,
-        recoveryRequestId: completedRequestId,
-        fenceTokenSha256: guardianRead.value.fenceTokenSha256,
-        lockPath: guardianRead.value.lockPath,
-        releaseRequestPath: guardianRead.value.releaseRequestPath,
-      };
-      const takeoverLease = dependencies.assertTakeoverLease
-        ? await dependencies.assertTakeoverLease(takeoverRead.value, takeoverExpected, pollNowMs)
-        : assertLiveRecoveryFenceTakeover(takeoverRead.value, takeoverExpected, pollNowMs);
-      if (!HASH_RE.test(String(takeoverLease?.sha256 || ""))) fail("Recovery takeover lacks a fresh heartbeat digest");
-      if (completed.recoveryFenceTakeoverReceiptSha256 !== sha256(takeoverRead.bytes)) {
-        fail("Recovery takeover does not bind the completed recovery report");
-      }
+    const requestConsumed = !fs.existsSync(options.fenceGuardianRecoveryRequest);
+    if (childFinished && heartbeat.lastRecoveryResult.exitCode === 0 && requestConsumed) {
+      const completed = await readCompletedRecoveryWithLiveTakeover({
+        options, bindings, guardian: guardianRead.value, nowMs: pollNowMs, dependencies,
+      });
+      if (!completed) fail("Fence guardian recovery child exited without a durable terminal report");
       return completed;
+    }
+    if (!guardianLease && requestConsumed) {
+      const completed = await readCompletedRecoveryWithLiveTakeover({
+        options, bindings, guardian: guardianRead.value, nowMs: pollNowMs, dependencies,
+        requiredRequestId: requestId,
+      });
+      if (completed) return completed;
     }
     if (dependencies.waitForPoll) await dependencies.waitForPoll();
     else await new Promise((resolve) => setTimeout(resolve, 500));
@@ -451,7 +523,7 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
       externalWriterProofSha256: plan.writerFence?.externalWriterProofSha256,
       fenceTokenSha256: plan.writerFence?.fenceTokenSha256,
       lockPath: plan.writerFence?.lockPath,
-      nowMs,
+      nowMs: Date.parse(currentFence?.observedAt),
     });
     if (sha256(String(currentFence?.tenantKey || "")) !== plan.tenantKeySha256
       || currentFence?.pm2ProcessId !== plan.production?.pm2ProcessId
@@ -476,6 +548,7 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
         fenceTokenSha256: currentGuardian.fenceTokenSha256,
         lockPath: currentGuardian.lockPath,
         releaseRequestPath: currentGuardian.releaseRequestPath,
+        recoveryReportPath: options.report,
       };
       takeoverLease = dependencies.assertTakeoverLease
         ? await dependencies.assertTakeoverLease(recoveryFenceTakeover.receipt, takeoverExpected, nowMs)
@@ -554,6 +627,7 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
       fenceTokenSha256: guardianRead.value.fenceTokenSha256,
       lockPath: guardianRead.value.lockPath,
       releaseRequestPath: guardianRead.value.releaseRequestPath,
+      recoveryReportPath: options.report,
     };
     if (dependencies.assertTakeoverLease) {
       await dependencies.assertTakeoverLease(takeoverRead.value, takeoverExpected, Date.now());

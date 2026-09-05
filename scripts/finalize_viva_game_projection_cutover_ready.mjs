@@ -14,7 +14,10 @@ import {
 import { assertExactExecutorSources } from "./lib/vivaGameProjectionExecutorSource.mjs";
 import { validateExactCutoverPacket } from "./lib/vivaGameProjectionCutoverPacketValidation.mjs";
 import { assertMongoWriteBarrier } from "./lib/vivaGameProjectionMongoWriteBarrier.mjs";
-import { FENCE_READY_CONFIRMATION } from "./lib/vivaGameProjectionFenceGuardian.mjs";
+import {
+  FENCE_READY_CONFIRMATION,
+  isAuthorizedFenceGuardianReadyFinalization,
+} from "./lib/vivaGameProjectionFenceGuardian.mjs";
 import {
   assertLiveFenceGuardian,
   assertNoCutoverEnvironment,
@@ -30,6 +33,7 @@ import {
   readPrivateBytes,
   readPrivateJson,
   readPrivateMongoConnection,
+  recoverDurableTerminalReport,
   validateHeldWriterFence,
 } from "./run_viva_game_projection_tenant_migration.mjs";
 import {
@@ -136,7 +140,10 @@ const validatePostcheckArtifacts = ({ outputDirectory, report, plan, executionRe
   }, { maximumAgeMs: 30 * 60_000 });
   return { receipt, manifestRead, receiptRead };
 };
-const validateReadyMarker = (marker, expected, nowMs) => {
+const validateReadyMarker = (marker, expected, nowMs, {
+  allowAnyGuardianRequestId = false,
+  maximumAgeMs = 5 * 60_000,
+} = {}) => {
   const { runtimeHealthUrl, candidateCanonicalSha256 } = expected;
   const bindings = Object.fromEntries(Object.entries(expected).filter(([key]) => ![
     "runtimeHealthUrl", "candidateCanonicalSha256", "guardianReadyRequestId",
@@ -148,11 +155,54 @@ const validateReadyMarker = (marker, expected, nowMs) => {
     || marker?.runtimeHealth?.url !== runtimeHealthUrl
     || marker?.runtimeHealth?.statusCode !== 200
     || marker?.runtimeHealth?.bodyCanonicalSha256 !== candidateCanonicalSha256
-    || !(marker?.guardianReadyRequestId === null || UUID_V4_RE.test(String(marker?.guardianReadyRequestId || "")))
+    || (allowAnyGuardianRequestId
+      ? !(marker?.guardianReadyRequestId === null || UUID_V4_RE.test(String(marker?.guardianReadyRequestId || "")))
+      : marker?.guardianReadyRequestId !== expected.guardianReadyRequestId)
     || !HASH_RE.test(String(marker?.runtimeHealth?.bodySha256 || ""))
     || !HASH_RE.test(String(marker?.fenceGuardianHeartbeatSha256 || ""))
     || !Number.isFinite(Date.parse(marker?.observedAt)) || Date.parse(marker.observedAt) > nowMs + 60_000
-    || nowMs - Date.parse(marker.observedAt) > 5 * 60_000) fail("READY marker does not bind the exact live finalization gates");
+    || nowMs - Date.parse(marker.observedAt) > maximumAgeMs) fail("READY marker does not bind the exact live finalization gates");
+};
+
+const readyExpected = ({
+  execution, report, terminal, plan, options, guardianReadyRequestId, readyFinalizationReceiptSha256,
+}) => ({
+  cutoverPlanSha256: execution.cutoverPlanSha256,
+  executionIndexSha256: options.expectedExecutionIndexSha256,
+  coordinatorAttemptId: report.coordinatorAttemptId,
+  coordinatorReportSha256: options.expectedCoordinatorReportSha256,
+  guardianReadyRequestId,
+  coordinatorTerminalJournalSha256: sha256(terminal.bytes),
+  postcheckReceiptSha256: report.postcheckReceiptSha256,
+  postcheckManifestSha256: report.postcheckManifestSha256,
+  mongoWriteBarrierReceiptSha256: report.mongoWriteBarrierReceiptSha256,
+  fenceGuardianReceiptSha256: report.fenceGuardianReceiptSha256,
+  ...(readyFinalizationReceiptSha256 ? { readyFinalizationReceiptSha256 } : {}),
+  runtimeHealthUrl: plan.production.localHealthUrl,
+  candidateCanonicalSha256: plan.candidateCanonicalSha256,
+});
+
+const validateReadyFinalizationReceipt = (receipt, expected, nowMs, { maximumAgeMs = 5 * 60_000 } = {}) => {
+  const stable = Object.fromEntries(Object.entries(expected).filter(([key]) => ![
+    "runtimeHealthUrl", "candidateCanonicalSha256", "readyFinalizationReceiptSha256",
+  ].includes(key)));
+  if (receipt?.formatVersion !== 1
+    || receipt?.kind !== "viva-game-projection-ready-finalization-receipt"
+    || receipt?.state !== "PASS_CURRENT_GATES"
+    || Object.entries(stable).some(([key, value]) => receipt?.[key] !== value)
+    || !HASH_RE.test(String(receipt?.fenceGuardianHeartbeatSha256 || ""))
+    || !HASH_RE.test(String(receipt?.pm2StateSha256 || ""))
+    || !HASH_RE.test(String(receipt?.liveFlowSha256 || ""))
+    || receipt?.runtimeHealth?.url !== expected.runtimeHealthUrl
+    || receipt?.runtimeHealth?.statusCode !== 200
+    || receipt?.runtimeHealth?.bodyCanonicalSha256 !== expected.candidateCanonicalSha256
+    || !HASH_RE.test(String(receipt?.runtimeHealth?.bodySha256 || ""))
+    || typeof receipt?.mongoReplicaSetName !== "string" || !receipt.mongoReplicaSetName
+    || receipt?.mongoCurrentOpClear !== true
+    || !Number.isFinite(Date.parse(receipt?.observedAt)) || Date.parse(receipt.observedAt) > nowMs + 60_000
+    || nowMs - Date.parse(receipt.observedAt) > maximumAgeMs) {
+    fail("READY finalization receipt does not bind the exact current gates");
+  }
 };
 
 export async function finalizeVivaGameProjectionCutoverReady(options, dependencies = {}) {
@@ -166,7 +216,10 @@ export async function finalizeVivaGameProjectionCutoverReady(options, dependenci
   assertHash(options.expectedExecutionIndexSha256, "Expected execution-index digest");
   assertHash(options.expectedCoordinatorReportSha256, "Expected coordinator-report digest");
   const executionRead = readPrivateJson(options.executionIndex, "Cutover execution index", MAX_JSON_BYTES);
-  const reportRead = readPrivateJson(options.coordinatorReport, "Coordinator terminal report", MAX_JSON_BYTES);
+  const recoveredReport = recoverDurableTerminalReport(
+    options.coordinatorReport, "CUTOVER", options.expectedCoordinatorReportSha256,
+  );
+  const reportRead = { value: recoveredReport.report, bytes: recoveredReport.bytes };
   if (sha256(executionRead.bytes) !== options.expectedExecutionIndexSha256
     || sha256(reportRead.bytes) !== options.expectedCoordinatorReportSha256) fail("READY finalizer input digest mismatch");
   const execution = executionRead.value;
@@ -181,6 +234,8 @@ export async function finalizeVivaGameProjectionCutoverReady(options, dependenci
     ? { value: providedGuardian, bytes: Buffer.from(canonicalJson(providedGuardian)) }
     : readPrivateJson(guardianPath, "Fence guardian receipt", 1024 * 1024);
   const plan = cutoverRead.value;
+  const historicalCompletionMs = Date.parse(report?.completedAt);
+  if (!Number.isFinite(historicalCompletionMs)) fail("Coordinator terminal completion time is invalid");
   if (sha256(cutoverRead.bytes) !== execution.cutoverPlanSha256
     || sha256(packetManifestRead.bytes) !== execution.packetManifestSha256
     || sha256(fenceRead.bytes) !== execution.fenceReceiptSha256
@@ -197,8 +252,12 @@ export async function finalizeVivaGameProjectionCutoverReady(options, dependenci
   if (dependencies.assertExecutorSources) await dependencies.assertExecutorSources(plan);
   else assertExactExecutorSources(plan);
   if (dependencies.validateExactCutoverPacket) {
-    await dependencies.validateExactCutoverPacket({ packetRoot, plan, manifest: packetManifestRead.value });
-  } else validateExactCutoverPacket({ packetRoot, plan, manifest: packetManifestRead.value, nowMs: clockNow() });
+    await dependencies.validateExactCutoverPacket({
+      packetRoot, plan, manifest: packetManifestRead.value, nowMs: historicalCompletionMs,
+    });
+  } else validateExactCutoverPacket({
+    packetRoot, plan, manifest: packetManifestRead.value, nowMs: historicalCompletionMs,
+  });
   validateHeldWriterFence(fenceRead.value, {
     sourceFlowSha256: plan.sourceFlowSha256,
     candidateSha256: plan.candidateSha256,
@@ -209,7 +268,7 @@ export async function finalizeVivaGameProjectionCutoverReady(options, dependenci
     externalWriterProofSha256: plan.writerFence.externalWriterProofSha256,
     fenceTokenSha256: plan.writerFence.fenceTokenSha256,
     lockPath: plan.writerFence.lockPath,
-    nowMs: clockNow(),
+    nowMs: historicalCompletionMs,
   });
   if (dependencies.assertFenceLease) await dependencies.assertFenceLease(fenceRead.value);
   else assertExclusiveFenceLease(fenceRead.value);
@@ -219,23 +278,34 @@ export async function finalizeVivaGameProjectionCutoverReady(options, dependenci
     : assertLiveFenceGuardian(guardianRead.value, nowMs);
   const postcheckOutputDirectory = ensurePrivateDirectory(execution.postcheckOutputDirectory, "Postcheck output directory");
   const postcheck = validatePostcheckArtifacts({
-    outputDirectory: postcheckOutputDirectory, report, plan, executionRead, barrierRead, guardianRead, nowMs,
+    outputDirectory: postcheckOutputDirectory, report, plan, executionRead, barrierRead, guardianRead,
+    nowMs: historicalCompletionMs,
   });
   const pm2Rows = dependencies.inspectPm2
     ? [await dependencies.inspectPm2()] : (dependencies.readPm2 ? await dependencies.readPm2() : readPm2());
   const matches = Array.isArray(pm2Rows) ? pm2Rows.filter((item) => item?.name === plan.production.processName) : [];
   const processEntry = matches[0];
+  const liveFlowSha256 = sha256(readPrivateBytes(execution.liveFlowPath, "Final candidate flow", 256 * 1024 * 1024));
   if (matches.length !== 1 || processEntry?.pm_id !== plan.production.pm2ProcessId
     || String(processEntry?.pm2_env?.status || "").toLowerCase() !== "online"
     || sha256(String(envValue(processEntry, "PADLHUB_PLATFORM_TENANT_KEY") || "")) !== plan.tenantKeySha256
     || String(envValue(processEntry, "VIVA_GAME_PROJECTION_SYNC_MODE") || "").toUpperCase() !== "SHADOW"
     || Number(processEntry?.pm2_env?.restart_time) !== postcheck.receipt.runtimeRestartCount
     || nowMs - Number(processEntry?.pm2_env?.pm_uptime) < 10_000
-    || sha256(readPrivateBytes(execution.liveFlowPath, "Final candidate flow", 256 * 1024 * 1024)) !== plan.candidateSha256) {
+    || liveFlowSha256 !== plan.candidateSha256) {
     fail("READY finalizer runtime gate failed");
   }
   assertPm2RuntimeIdentity(processEntry, plan.production);
   assertNoCutoverEnvironment(processEntry);
+  const pm2StateSha256 = sha256(canonicalJson({
+    name: processEntry.name,
+    pmId: processEntry.pm_id,
+    status: processEntry.pm2_env.status,
+    restartCount: Number(processEntry.pm2_env.restart_time),
+    pmUptime: Number(processEntry.pm2_env.pm_uptime),
+    execPath: processEntry.pm2_env.pm_exec_path,
+    cwd: processEntry.pm2_env.pm_cwd,
+  }));
   const health = dependencies.probeRuntimeHealth
     ? await dependencies.probeRuntimeHealth(plan.production.localHealthUrl)
     : await probeLocalRuntimeHealth(plan.production.localHealthUrl, plan.candidateCanonicalSha256);
@@ -248,10 +318,12 @@ export async function finalizeVivaGameProjectionCutoverReady(options, dependenci
     appName: "PadlHubVivaGameProjectionReadyFinalizer", maxPoolSize: 1,
     serverSelectionTimeoutMS: 20_000, connectTimeoutMS: 20_000, socketTimeoutMS: 20_000, timeoutMS: 20_000,
   });
+  let mongoReplicaSetName = null;
   try {
     if (!dependencies.finalizationMongoClient) await client.connect();
     const hello = await client.db("admin").command({ hello: 1 });
     if (hello?.setName !== plan.mongoTarget.replicaSetName) fail("READY finalizer Mongo target changed");
+    mongoReplicaSetName = hello.setName;
     if (dependencies.assertMongoWriteBarrier) await dependencies.assertMongoWriteBarrier(barrierRead.value);
     else await assertMongoWriteBarrier(client, barrierRead.value, {
       fenceTokenSha256: plan.writerFence.fenceTokenSha256,
@@ -264,26 +336,70 @@ export async function finalizeVivaGameProjectionCutoverReady(options, dependenci
     if (!dependencies.finalizationMongoClient) await client.close().catch(() => {});
   }
   const readyPath = path.join(postcheckOutputDirectory, "READY_TO_REOPEN_INGRESS.json");
-  const expected = {
-    cutoverPlanSha256: execution.cutoverPlanSha256,
-    executionIndexSha256: options.expectedExecutionIndexSha256,
-    coordinatorAttemptId: report.coordinatorAttemptId,
-    coordinatorReportSha256: options.expectedCoordinatorReportSha256,
-    guardianReadyRequestId: guardianRequestId || null,
-    coordinatorTerminalJournalSha256: sha256(terminal.bytes),
-    postcheckReceiptSha256: report.postcheckReceiptSha256,
-    postcheckManifestSha256: report.postcheckManifestSha256,
-    mongoWriteBarrierReceiptSha256: report.mongoWriteBarrierReceiptSha256,
-    fenceGuardianReceiptSha256: report.fenceGuardianReceiptSha256,
-    runtimeHealthUrl: plan.production.localHealthUrl,
-    candidateCanonicalSha256: plan.candidateCanonicalSha256,
-  };
+  const finalizationReceiptPath = path.join(postcheckOutputDirectory, "ready-finalization.receipt.json");
+  const baseExpected = readyExpected({
+    execution, report, terminal, plan, options, guardianReadyRequestId: guardianRequestId || null,
+  });
   recoverAtomicExclusivePublication(readyPath, protectedOptions());
   if (fs.existsSync(readyPath)) {
     const existing = readPrivateJson(readyPath, "READY marker", MAX_JSON_BYTES);
-    validateReadyMarker(existing.value, expected, nowMs);
-    return { state: existing.value.state, readyMarkerSha256: sha256(existing.bytes), resumed: true };
+    const existingReceiptRead = readPrivateJson(
+      finalizationReceiptPath, "READY finalization receipt", MAX_JSON_BYTES,
+    );
+    if (sha256(existingReceiptRead.bytes) !== existing.value?.readyFinalizationReceiptSha256) {
+      fail("READY marker does not bind its finalization receipt");
+    }
+    const existingExpected = {
+      ...baseExpected,
+      guardianReadyRequestId: existing.value.guardianReadyRequestId,
+      readyFinalizationReceiptSha256: sha256(existingReceiptRead.bytes),
+    };
+    validateReadyFinalizationReceipt(existingReceiptRead.value, existingExpected, nowMs, {
+      maximumAgeMs: Number.POSITIVE_INFINITY,
+    });
+    validateReadyMarker(existing.value, existingExpected, nowMs, {
+      allowAnyGuardianRequestId: true, maximumAgeMs: Number.POSITIVE_INFINITY,
+    });
+    if (nowMs - Date.parse(existing.value.observedAt) <= 5 * 60_000
+      && nowMs - Date.parse(existingReceiptRead.value.observedAt) <= 5 * 60_000) {
+      return { state: existing.value.state, readyMarkerSha256: sha256(existing.bytes), resumed: true };
+    }
+    fs.unlinkSync(readyPath);
+    const directory = fs.openSync(path.dirname(readyPath), fs.constants.O_RDONLY);
+    try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
   }
+  recoverAtomicExclusivePublication(finalizationReceiptPath, protectedOptions());
+  if (fs.existsSync(finalizationReceiptPath)) {
+    const stale = readPrivateJson(finalizationReceiptPath, "READY finalization receipt", MAX_JSON_BYTES);
+    validateReadyFinalizationReceipt(stale.value, {
+      ...baseExpected, guardianReadyRequestId: stale.value?.guardianReadyRequestId,
+    }, nowMs, { maximumAgeMs: Number.POSITIVE_INFINITY });
+    fs.unlinkSync(finalizationReceiptPath);
+    const directory = fs.openSync(path.dirname(finalizationReceiptPath), fs.constants.O_RDONLY);
+    try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+  }
+  const finalizationReceipt = {
+    formatVersion: 1,
+    kind: "viva-game-projection-ready-finalization-receipt",
+    state: "PASS_CURRENT_GATES",
+    ...Object.fromEntries(Object.entries(baseExpected).filter(([key]) => ![
+      "runtimeHealthUrl", "candidateCanonicalSha256",
+    ].includes(key))),
+    fenceGuardianHeartbeatSha256: guardianLease.sha256,
+    pm2StateSha256,
+    liveFlowSha256,
+    runtimeHealth: health,
+    mongoReplicaSetName,
+    mongoCurrentOpClear: true,
+    observedAt: new Date(nowMs).toISOString(),
+  };
+  const finalizationReceiptBytes = Buffer.from(canonicalJson(finalizationReceipt));
+  writeFileExclusiveAtomicDurable(finalizationReceiptPath, finalizationReceiptBytes, protectedOptions());
+  const expected = {
+    ...baseExpected,
+    readyFinalizationReceiptSha256: sha256(finalizationReceiptBytes),
+  };
+  validateReadyFinalizationReceipt(finalizationReceipt, expected, nowMs);
   const marker = {
     formatVersion: 1,
     kind: "viva-game-projection-cutover-ready-marker",
@@ -297,6 +413,7 @@ export async function finalizeVivaGameProjectionCutoverReady(options, dependenci
     postcheckManifestSha256: expected.postcheckManifestSha256,
     mongoWriteBarrierReceiptSha256: expected.mongoWriteBarrierReceiptSha256,
     fenceGuardianReceiptSha256: expected.fenceGuardianReceiptSha256,
+    readyFinalizationReceiptSha256: expected.readyFinalizationReceiptSha256,
     guardianReadyRequestId: expected.guardianReadyRequestId,
     fenceGuardianHeartbeatSha256: guardianLease.sha256,
     runtimeHealth: health,
@@ -319,14 +436,35 @@ const readyArgv = (options) => [
   "--expected-coordinator-report-sha256", options.expectedCoordinatorReportSha256,
 ];
 
+const readExactReadyRequest = (requestPath, argv, guardian, nowMs, { accepted = false } = {}) => {
+  const requestRead = readPrivateJson(requestPath, "Fence guardian READY request", 1024 * 1024);
+  const request = requestRead.value;
+  const validationNowMs = accepted ? Date.parse(request?.authorizedAt) : nowMs;
+  if (!isAuthorizedFenceGuardianReadyFinalization({
+    request,
+    validPrivateFile: true,
+    fenceTokenSha256: guardian.fenceTokenSha256,
+    guardianPid: guardian.pid,
+    processStartIdentity: guardian.processStartIdentity,
+    nowMs: validationNowMs,
+  }) || canonicalJson(request.argv) !== canonicalJson(argv)) {
+    fail("Existing guardian READY request does not bind this exact finalization");
+  }
+  return request;
+};
+
 export async function requestReadyFinalizationFromGuardian(options, dependencies = {}) {
-  const nowMs = typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now());
+  const clockNow = () => (typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now()));
+  const nowMs = clockNow();
   if ((dependencies.getUid ? dependencies.getUid() : process.getuid?.()) !== 0) fail("READY finalization request requires root");
   if (process.env.VIVA_GAME_PROJECTION_READY_FINALIZE !== CONFIRMATION) fail("READY finalization confirmation is absent");
   assertHash(options.expectedExecutionIndexSha256, "Expected execution-index digest");
   assertHash(options.expectedCoordinatorReportSha256, "Expected coordinator-report digest");
   const executionRead = readPrivateJson(options.executionIndex, "Cutover execution index", MAX_JSON_BYTES);
-  const reportRead = readPrivateJson(options.coordinatorReport, "Coordinator terminal report", MAX_JSON_BYTES);
+  const recoveredReport = recoverDurableTerminalReport(
+    options.coordinatorReport, "CUTOVER", options.expectedCoordinatorReportSha256,
+  );
+  const reportRead = { value: recoveredReport.report, bytes: recoveredReport.bytes };
   if (sha256(executionRead.bytes) !== options.expectedExecutionIndexSha256
     || sha256(reportRead.bytes) !== options.expectedCoordinatorReportSha256) fail("READY finalization request input digest mismatch");
   const guardianPath = String(process.env.PADLHUB_CUTOVER_GUARDIAN_RECEIPT || "");
@@ -344,43 +482,88 @@ export async function requestReadyFinalizationFromGuardian(options, dependencies
   const guardianLease = dependencies.assertGuardianLease
     ? await dependencies.assertGuardianLease(guardian, nowMs)
     : assertLiveFenceGuardian(guardian, nowMs);
-  if (guardianLease.heartbeat?.recoveryChildPid || guardianLease.heartbeat?.readyChildPid) {
-    fail("Fence guardian already has an active child operation");
+  if (guardianLease.heartbeat?.recoveryChildPid) fail("Fence guardian already has an active recovery operation");
+  const argv = readyArgv(options);
+  const terminal = readJournalTerminal(
+    options.coordinatorReport, reportRead.value.coordinatorAttemptId, reportRead,
+  );
+  const cutoverRead = readPrivateJson(executionRead.value.cutoverPlanPath, "Cutover plan", MAX_JSON_BYTES);
+  if (sha256(cutoverRead.bytes) !== executionRead.value.cutoverPlanSha256) {
+    fail("READY request cutover plan differs from the terminal execution");
   }
-  const requestId = dependencies.requestId || crypto.randomUUID();
-  if (!UUID_V4_RE.test(requestId)) fail("READY request ID is invalid");
-  const request = {
-    formatVersion: 1,
-    kind: "viva-game-projection-fence-ready-finalization-request",
-    state: "READY_FINALIZATION_AUTHORIZED",
-    confirmation: CONFIRMATION,
-    requestId,
-    guardianPid: guardian.pid,
-    guardianProcessStartIdentity: guardian.processStartIdentity,
-    fenceTokenSha256: guardian.fenceTokenSha256,
-    argv: readyArgv(options),
-    authorizedAt: new Date(nowMs).toISOString(),
-  };
-  writeFileExclusiveAtomicDurable(readyRequestPath, Buffer.from(canonicalJson(request)), protectedOptions());
   const readyPath = path.join(executionRead.value.postcheckOutputDirectory, "READY_TO_REOPEN_INGRESS.json");
+  const finalizationReceiptPath = path.join(
+    executionRead.value.postcheckOutputDirectory, "ready-finalization.receipt.json",
+  );
+  const readExactReadyResult = (markerRequestId, validationNowMs, maximumAgeMs) => {
+    const readyRead = readPrivateJson(readyPath, "READY marker", MAX_JSON_BYTES);
+    const receiptRead = readPrivateJson(finalizationReceiptPath, "READY finalization receipt", MAX_JSON_BYTES);
+    const expected = readyExpected({
+      execution: executionRead.value,
+      report: reportRead.value,
+      terminal,
+      plan: cutoverRead.value,
+      options,
+      guardianReadyRequestId: markerRequestId,
+      readyFinalizationReceiptSha256: sha256(receiptRead.bytes),
+    });
+    validateReadyFinalizationReceipt(receiptRead.value, expected, validationNowMs, { maximumAgeMs });
+    validateReadyMarker(readyRead.value, expected, validationNowMs, { maximumAgeMs });
+    return readyRead;
+  };
+  const activeRequestId = guardianLease.heartbeat?.readyRequestId;
+  let request = null;
+  if (fs.existsSync(readyRequestPath)) {
+    request = readExactReadyRequest(readyRequestPath, argv, guardian, nowMs);
+  } else if (guardianLease.heartbeat?.readyChildPid && UUID_V4_RE.test(String(activeRequestId || ""))) {
+    const acceptedPath = `${readyRequestPath}.accepted-${activeRequestId}`;
+    if (!fs.existsSync(acceptedPath)) fail("Active guardian READY child lacks its accepted request");
+    request = readExactReadyRequest(acceptedPath, argv, guardian, nowMs, { accepted: true });
+  } else if (guardianLease.heartbeat?.readyChildPid) {
+    fail("Active guardian READY child identity is invalid");
+  }
+  if (!request && fs.existsSync(readyPath)) {
+    const existing = readPrivateJson(readyPath, "READY marker", MAX_JSON_BYTES);
+    const markerRequestId = existing.value?.guardianReadyRequestId;
+    readExactReadyResult(markerRequestId, nowMs, Number.POSITIVE_INFINITY);
+    const markerAgeMs = nowMs - Date.parse(existing.value.observedAt);
+    const markerResult = guardianLease.heartbeat?.lastReadyResult;
+    if (markerAgeMs <= 5 * 60_000 && (markerRequestId === null
+      || (markerResult?.requestId === markerRequestId && markerResult.exitCode === 0 && !markerResult.signal))) {
+      return { state: existing.value.state, readyMarkerSha256: sha256(existing.bytes), resumed: true };
+    }
+  }
+  let requestId = request?.requestId || dependencies.requestId || crypto.randomUUID();
+  if (!UUID_V4_RE.test(requestId)) fail("READY request ID is invalid");
+  if (!request) {
+    request = {
+      formatVersion: 1,
+      kind: "viva-game-projection-fence-ready-finalization-request",
+      state: "READY_FINALIZATION_AUTHORIZED",
+      confirmation: CONFIRMATION,
+      requestId,
+      guardianPid: guardian.pid,
+      guardianProcessStartIdentity: guardian.processStartIdentity,
+      fenceTokenSha256: guardian.fenceTokenSha256,
+      argv,
+      authorizedAt: new Date(nowMs).toISOString(),
+    };
+    writeFileExclusiveAtomicDurable(readyRequestPath, Buffer.from(canonicalJson(request)), protectedOptions());
+  }
   const maximumPolls = dependencies.maximumPolls ?? 300;
   for (let poll = 0; poll < maximumPolls; poll += 1) {
     if (dependencies.waitForPoll) await dependencies.waitForPoll();
     else await sleep(1000);
     const lease = dependencies.assertGuardianLease
-      ? await dependencies.assertGuardianLease(guardian, Date.now())
-      : assertLiveFenceGuardian(guardian, Date.now());
+      ? await dependencies.assertGuardianLease(guardian, clockNow())
+      : assertLiveFenceGuardian(guardian, clockNow());
     const result = lease.heartbeat?.lastReadyResult;
     if (result?.requestId !== requestId) continue;
     if (result.exitCode !== 0 || result.signal) fail("Guardian READY finalizer child failed");
-    const readyRead = readPrivateJson(readyPath, "READY marker", MAX_JSON_BYTES);
-    if (readyRead.value?.state !== "READY_TO_REOPEN_INGRESS"
-      || !(readyRead.value?.guardianReadyRequestId === null
-        || UUID_V4_RE.test(String(readyRead.value?.guardianReadyRequestId || "")))
-      || readyRead.value?.executionIndexSha256 !== options.expectedExecutionIndexSha256
-      || readyRead.value?.coordinatorReportSha256 !== options.expectedCoordinatorReportSha256) {
-      fail("Guardian READY finalizer did not publish the exact requested marker");
-    }
+    const published = readPrivateJson(readyPath, "READY marker", MAX_JSON_BYTES);
+    const readyRead = readExactReadyResult(
+      published.value?.guardianReadyRequestId, clockNow(), 5 * 60_000,
+    );
     return { state: readyRead.value.state, readyMarkerSha256: sha256(readyRead.bytes), resumed: true };
   }
   fail("Timed out waiting for the guardian READY finalizer child");
