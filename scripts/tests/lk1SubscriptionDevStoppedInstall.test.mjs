@@ -7,7 +7,6 @@ import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { buildRuntimeInstallCandidateBundle } from "../build_lk1_subscription_dev_runtime_install_candidate.mjs";
-import { launchStoppedCandidate } from "../launch_lk1_subscription_dev_stopped_candidate.mjs";
 import {
   captureCurrentHostPreflightEvidence,
   checkedHostPreflightEvidence,
@@ -57,7 +56,7 @@ const transcript = () => [
   "INPUT\tinstallIdentityEnvironmentAbsent\ttrue",
   "INPUT\ttlsKeyAbsent\ttrue",
   "INPUT\ttlsCertificateAbsent\ttrue",
-  "INGRESS_ISOLATION\ttrue\ttrue",
+  `INGRESS_ISOLATION\ttrue\ttrue\ttrue\t7\t${"d".repeat(64)}`,
   "PRODUCTION_MARKERS_ABSENT\ttrue",
   `SHARED_FLOW_SHA256\t${checkedHostPreflightEvidence.sharedResources.flowSha256}`,
   "END",
@@ -323,44 +322,55 @@ test("stopped installer atomically installs six exact files and a separate rollb
 test("trusted out-of-bundle launcher verifies custody and hashes before locked execution", () => {
   const prepared = prepare();
   try {
-    let invocation;
-    const argv = [
-      "--mode", "install",
-      "--bundle", prepared.outputDirectory,
-      "--manifest-sha256", prepared.manifestSha256,
-      "--preflight-evidence", "/private/tmp/evidence.json",
-      "--preflight-sha256", "b".repeat(64),
-      "--attempt-id", ATTEMPT_ID,
-    ];
-    assert.equal(launchStoppedCandidate({
-      argv,
-      environment: "rehearsal",
-      expectedUid: process.getuid(),
-      runLocked: (runtime, installerPath, forwardedArgs, policy) => {
-        invocation = { runtime, installerPath, forwardedArgs, policy };
-      },
-    }), true);
-    assert.equal(invocation.forwardedArgs, argv);
-    assert.equal(path.dirname(invocation.installerPath), path.join(prepared.outputDirectory, "payload"));
-    assert.deepEqual(invocation.policy.childEnv, {
-      PATH: "/usr/bin:/bin",
-      LANG: "C",
-      LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_HELD: "HELD_BY_TRUSTED_STOPPED_INSTALL_LAUNCHER",
-      LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_FD: "3",
-    });
-    fs.chmodSync(invocation.installerPath, 0o750);
-    fs.appendFileSync(invocation.installerPath, "\n");
-    fs.chmodSync(invocation.installerPath, 0o550);
-    assert.throws(() => launchStoppedCandidate({
-      argv,
-      environment: "rehearsal",
-      expectedUid: process.getuid(),
-      runLocked: () => assert.fail("tampered installer must not execute"),
-    }), /payload drift/);
+    const runtime = copyLauncherTestRuntime(prepared.parent);
+    runLauncherRuntimeFixture(prepared, runtime, 0o555, "accepted-and-tamper-rejected");
   } finally {
     fs.rmSync(prepared.parent, { recursive: true });
   }
 });
+
+test("trusted launcher rejects group- and other-writable Node before locked execution", () => {
+  const prepared = prepare();
+  try {
+    const runtime = copyLauncherTestRuntime(prepared.parent);
+    for (const mode of [0o575, 0o557]) {
+      fs.chmodSync(runtime, mode);
+      runLauncherRuntimeFixture(prepared, runtime, mode, "unsafe-runtime-rejected");
+    }
+  } finally {
+    fs.rmSync(prepared.parent, { recursive: true });
+  }
+});
+
+function copyLauncherTestRuntime(parent) {
+  // The hosted toolcache may be group-writable. Never chmod the shared Node binary.
+  const source = fs.realpathSync(process.execPath);
+  const runtime = path.join(parent, "node");
+  fs.copyFileSync(source, runtime, fs.constants.COPYFILE_EXCL);
+  fs.chmodSync(runtime, 0o555);
+  assert.equal(sha256(fs.readFileSync(runtime)), sha256(fs.readFileSync(source)));
+  return runtime;
+}
+
+function runLauncherRuntimeFixture(prepared, runtime, mode, outcome) {
+  const result = spawnSync(runtime, [
+    path.join(ROOT, "scripts/tests/fixtures/lk1StoppedLauncherRuntime.mjs"),
+  ], {
+    input: JSON.stringify({
+      bundleDirectory: prepared.outputDirectory,
+      manifestSha256: prepared.manifestSha256,
+      runtime, mode, outcome, attemptId: ATTEMPT_ID,
+    }),
+    encoding: "utf8",
+    env: { PATH: "/usr/bin:/bin", LANG: "C" },
+    timeout: 15_000,
+    maxBuffer: 64 * 1024,
+  });
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.signal, null, result.stderr);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), `LAUNCHER_RUNTIME_FIXTURE=PASS mode=${mode.toString(8)} outcome=${outcome}`);
+}
 
 test("dangling target and metadata drift fail before any target mutation", async () => {
   for (const scenario of ["dangling", "metadata"]) {
