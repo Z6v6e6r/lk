@@ -1839,6 +1839,7 @@
   rehearsals use `--tmpfs /tmp:mode=1777,exec`; `noexec` correctly fails with EACCES,
   not a skipped/PASS test. Fixtures remain private and are removed after each test.
 - This is local test-only correction, not a new CI success, install or activation.
+
 ## 2026-09-05 — Viva game projection cutover recovery hardening
 
 - Bound every tenant-migration plan to the exact Mongo projection, Viva projection,
@@ -1899,3 +1900,22 @@
   source-only work: no packet was executed against production, no Node-RED flow or
   PM2 process was changed, no Mongo/Viva write occurred, and no push, merge, deploy,
   ingress change, or activation was performed.
+
+## 2026-09-05 — Subscription CREATE preflight (local candidate)
+
+- Prepared a narrow three-function candidate from fresh live SHA `46cf684fce5017e5ff4c5add22e918cfde92d404b651b416b6fdebd30275504a`; wider main/DEV subscription sources remain separate.
+- Known subscription availability/policy/daily-limit failures are checked before Viva exercise creation using existing availability rules. Real-exercise verification remains mandatory; preflight performs no booking, activation or Mongo writes.
+- Late failures carry exact reconciliation identity; no new automatic deletion and no historical repair. The GET-empty/DELETE race requires a provider atomic contract before destructive compensation can be introduced.
+- Preparation, limits and executable local acceptance commands: `docs/SUBSCRIPTION_CREATE_PREFLIGHT_2026-09-05.md`. Production unchanged; provider/browser booking proof NOT_RUN.
+
+### Follow-up: full managed policy replay and reviewed live refresh
+
+- Replaced the injected managed-policy success fixture with the exact live policy/blocked functions after runtime-context and active/history responses. Added successful 60-minute CREATE/revalidation and negative duration, station, freeze, runtime identity and missing first-use configuration coverage: 36 PASS, 0 FAIL, 0 SKIP; scoped ESLint PASS.
+- Fresh read-only source changed to `7775475aea2436ca5d6ec26cdc6acc4c682556f05b71af2fb79f6e0c0edbcb71`. Independent review identified only two unrelated read-response phone/UUID redaction functions; all three preflight target nodes and topology are unchanged. Updated the exact SHA pin after review, preserving both fresh functions.
+- Regenerated private candidate SHA `e38f844343ef290aa49f2583861dfc4488031b97d303ccbe36b3a5e12c292ec3`; exactly three function-body changes against the refreshed baseline. Runtime patch bodies retain their prior hashes. No push, merge, deploy or live data mutation; physical provider proof remains NOT_RUN.
+
+### Local main integration
+
+- Integrated approved task head `408aed547e952741e8b4e07eabca1c4f76ce4727` into frozen local/remote-main baseline `27d13055a791e1713c88d5434fce3635c9c3e90e`. The only conflict was this append-only worklog; both task histories are preserved.
+- Merged-tree checks: fresh exact-source acceptance 36 PASS/0 SKIP; applicable subscription/split/leave/roster/modular regressions 312 PASS/1 existing optional fixture SKIP; scoped ESLint and diff checks PASS. Candidate SHA remains `e38f844343ef290aa49f2583861dfc4488031b97d303ccbe36b3a5e12c292ec3`.
+- Independent integration review found no blockers. Frontend sources, build configuration, availability helper and lockfile are unchanged from prior validation; full frontend builds were not repeated. This is local integration only, with no push, deploy, booking, debit, or data repair.
