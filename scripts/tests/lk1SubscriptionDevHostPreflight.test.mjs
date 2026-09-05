@@ -113,6 +113,7 @@ test("effective unit scan accepts only loopback allow plus deny-all network sand
   assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes(
     `test "$restrict_address_families" != '${EFFECTIVE_UNIT_NETWORK_SANDBOX.restrictAddressFamilies}'`,
   ), true);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes("nginx -T"), false);
 });
 
 test("historical host preflight proves its archived stopped isolated state", () => {

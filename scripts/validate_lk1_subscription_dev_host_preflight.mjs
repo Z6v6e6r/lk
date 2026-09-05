@@ -310,15 +310,6 @@ for root in /etc/nginx /etc/caddy /etc/haproxy; do
     fi
   fi
 done
-if command -v nginx >/dev/null 2>&1; then
-  if nginx_effective="$(nginx -T 2>&1)"; then
-    if printf '%s\\n' "$nginx_effective" | grep -Eiq '${INGRESS_TARGET_REFERENCE_PATTERN}'; then
-      ingress_target_absent=false
-    fi
-  else
-    ingress_configuration_readable=false
-  fi
-fi
 if test "$ingress_configuration_readable" != true || test "$ingress_target_absent" != true; then
   production_markers_absent=false
 fi
