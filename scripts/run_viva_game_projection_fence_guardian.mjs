@@ -41,13 +41,14 @@ const atomicPrivateWrite = (filePath, value) => {
   fs.renameSync(temporary, filePath);
   syncDirectory(path.dirname(filePath));
 };
-const linuxProcessStartIdentity = (pid) => {
+const linuxProcessIdentity = (pid) => {
   const body = fs.readFileSync(`/proc/${pid}/stat`, "utf8").trim();
   const tail = body.slice(body.lastIndexOf(")") + 2).split(/\s+/);
   const startTicks = tail[19];
   if (!/^\d+$/.test(String(startTicks || ""))) fail("Unable to read guardian process start identity");
-  return `${pid}:${startTicks}`;
+  return { processStartIdentity: `${pid}:${startTicks}`, state: tail[0] };
 };
+const linuxProcessStartIdentity = (pid) => linuxProcessIdentity(pid).processStartIdentity;
 
 if (process.getuid?.() !== 0) fail("Fence guardian requires root");
 const fd = Number(process.env.PADLHUB_CUTOVER_FENCE_FD);
@@ -473,14 +474,14 @@ const assertRecoveryTakeoverPositivelyDead = (takeover) => {
     if (error?.code === "ESRCH") return;
     throw error;
   }
-  let currentIdentity;
+  let current;
   try {
-    currentIdentity = linuxProcessStartIdentity(takeover.pid);
+    current = linuxProcessIdentity(takeover.pid);
   } catch (error) {
     if (error?.code === "ENOENT") return;
     throw error;
   }
-  if (currentIdentity === takeover.processStartIdentity) {
+  if (current.processStartIdentity === takeover.processStartIdentity && current.state !== "Z") {
     fail("Recovery takeover remains alive before guardian fallback");
   }
   try {
