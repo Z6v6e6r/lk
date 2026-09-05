@@ -267,22 +267,33 @@ Release requests are quarantined while recovery runs. The executor repeats the
 live flock, heartbeat, PM2, and receipt gates before and after every Mongo
 recovery side effect. It durably records an outcome-unknown entry before
 restoring Mongo state; retrying the same report path reconciles that journal and
-completes the exact preimage. Its terminal journal entry contains the complete
+completes the exact preimage. Every journal append uses exclusive durable
+publication. A retry publishes the one fully synced, private, exact
+next-sequence orphan left before hard-link creation, while multiple, malformed,
+or unrelated artifacts fail closed. Its terminal journal entry contains the complete
 report and hash before report publication, so a crash in finalization recreates
-the report without repeating Mongo mutations. Before the first recovery side
-effect, the recovery child starts a detached takeover keeper with the inherited
+the report without repeating Mongo mutations. Before it durably accepts the
+guardian request or performs any fallible post-accept validation, the recovery
+child starts or adopts the single detached takeover keeper with the inherited
 canonical flock descriptor. That keeper has its own receipt, process-start
 identity, and heartbeat, remains alive through guardian or recovery-child
 `SIGKILL`, and accepts the explicit fence-release request only when it also
 binds the exact recovery request ID, recovery report path and SHA-256,
 terminal-journal SHA-256, and takeover-receipt SHA-256. It independently
 rereads the complete terminal report and embedded journal report before
-releasing; early release requests are quarantined while the takeover keeps the
+releasing. It leaves an otherwise valid release pending while the original
+guardian process still owns its copy of the descriptor. After successful
+recovery, the guardian independently checks the terminal report, terminal
+journal, takeover receipt, fresh heartbeat, PID/start identity, descriptor, and
+lock inode, then exits and transfers sole release custody to that takeover.
+Early invalid release requests are quarantined while the takeover keeps the
 flock. A completed recovery report is reusable only while that exact takeover
 receipt and live heartbeat still prove lock custody. A recovery CLI retry
-reconciles an existing pending/accepted request or a completed report before it
-can publish another request, so an older report cannot make a new guardian
-child run after the CLI has returned. The validator is restored before
+reuses the exact accepted request ID, refreshes only its authorization time,
+and adopts the existing live takeover before it reconciles the same journal; it
+cannot create a second keeper. It also reconciles an existing pending request or
+a completed report before it can publish another request, so an older report
+cannot make a new guardian child run after the CLI has returned. The validator is restored before
 application roles are returned. This Mongo barrier recovery therefore retains
 the host fence across coordinator, guardian, and recovery-child failure. The coordinator then rereads
 the packet's complete EJSON backup and requires its document count and canonical
@@ -364,8 +375,10 @@ guardian validates the exact four pinned arguments plus the installed finalizer
 SHA, then spawns that finalizer with the inherited flock descriptor. The child
 proves that descriptor and durably renames its own request to the exact accepted
 path before it reports acceptance to the guardian. The same handshake protects
-barrier recovery, and once recovery is accepted the guardian leaves release
-authorization exclusively to the recovery takeover bound to its terminal report. The child
+barrier recovery after its persistent takeover is already live. Once recovery
+finishes successfully, the guardian verifies that takeover and its exact terminal
+report before closing its own descriptor; release authorization then belongs
+exclusively to the terminal-bound takeover. The child
 repeats every final gate before it creates or accepts READY. Its publication is
 idempotent for the same execution/report pair and repairs the exact two-link
 temporary-file state left by `SIGKILL` between hard-link creation and temporary

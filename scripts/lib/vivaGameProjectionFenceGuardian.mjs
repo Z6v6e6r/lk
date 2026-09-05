@@ -63,15 +63,42 @@ export function acceptFenceGuardianChildRequest({ childKind, requestId }) {
   if (!requestStat.isFile() || requestStat.isSymbolicLink() || requestStat.nlink !== 1
     || requestStat.uid !== process.getuid?.() || (requestStat.mode & 0o077) !== 0
     || sha256(requestBytes) !== expectedRequestSha256
-    || request?.kind !== expectedKind || request?.requestId !== requestId || fs.existsSync(acceptedPath)) {
+    || request?.kind !== expectedKind || request?.requestId !== requestId) {
     throw new Error("Fence guardian child request cannot be accepted exactly");
   }
   const currentRequestStat = fs.lstatSync(requestPath);
   if (currentRequestStat.dev !== requestStat.dev || currentRequestStat.ino !== requestStat.ino) {
     throw new Error("Fence guardian child request changed before acceptance");
   }
+  let resumesAcceptedRequest = false;
+  if (fs.existsSync(acceptedPath)) {
+    if (childKind !== "recovery") throw new Error("Fence guardian child request was already accepted");
+    const acceptedDescriptor = fs.openSync(acceptedPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    let acceptedStat;
+    let acceptedBytes;
+    try {
+      acceptedStat = fs.fstatSync(acceptedDescriptor);
+      acceptedBytes = fs.readFileSync(acceptedDescriptor);
+    } finally { fs.closeSync(acceptedDescriptor); }
+    let acceptedRequest;
+    try { acceptedRequest = JSON.parse(acceptedBytes.toString("utf8")); } catch {
+      throw new Error("Previously accepted fence recovery request is invalid");
+    }
+    const currentAcceptedStat = fs.lstatSync(acceptedPath);
+    const { authorizedAt: requestAuthorizedAt, ...requestBinding } = request;
+    const { authorizedAt: acceptedAuthorizedAt, ...acceptedBinding } = acceptedRequest;
+    if (!acceptedStat.isFile() || acceptedStat.isSymbolicLink() || acceptedStat.nlink !== 1
+      || acceptedStat.uid !== process.getuid?.() || (acceptedStat.mode & 0o077) !== 0
+      || currentAcceptedStat.dev !== acceptedStat.dev || currentAcceptedStat.ino !== acceptedStat.ino
+      || !Number.isFinite(Date.parse(requestAuthorizedAt)) || !Number.isFinite(Date.parse(acceptedAuthorizedAt))
+      || canonicalJson(requestBinding) !== canonicalJson(acceptedBinding)) {
+      throw new Error("Fence recovery retry does not bind the previously accepted request");
+    }
+    resumesAcceptedRequest = true;
+  }
   fs.writeSync(handshakeFd, `${canonicalJson({ state: "FENCE_INHERITED", childKind, requestId })}\n`);
-  fs.renameSync(requestPath, acceptedPath);
+  if (resumesAcceptedRequest) fs.unlinkSync(requestPath);
+  else fs.renameSync(requestPath, acceptedPath);
   syncDirectory(path.dirname(requestPath));
   fs.writeSync(handshakeFd, `${canonicalJson({ state: "REQUEST_ACCEPTED", childKind, requestId })}\n`);
   fs.closeSync(handshakeFd);

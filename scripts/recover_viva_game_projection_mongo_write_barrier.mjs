@@ -72,6 +72,8 @@ const assertLiveRecoveryFenceTakeover = (receipt, expected, nowMs = Date.now()) 
     || receipt?.kind !== "viva-game-projection-recovery-fence-takeover-receipt"
     || receipt?.state !== "HOLDING_UNTIL_EXPLICIT_RELEASE"
     || receipt?.parentGuardianReceiptSha256 !== expected.parentGuardianReceiptSha256
+    || receipt?.parentGuardianPid !== expected.parentGuardianPid
+    || receipt?.parentGuardianProcessStartIdentity !== expected.parentGuardianProcessStartIdentity
     || receipt?.recoveryRequestId !== expected.recoveryRequestId
     || receipt?.fenceTokenSha256 !== expected.fenceTokenSha256
     || receipt?.lockPath !== expected.lockPath || receipt?.releaseRequestPath !== expected.releaseRequestPath
@@ -98,6 +100,8 @@ const assertLiveRecoveryFenceTakeover = (receipt, expected, nowMs = Date.now()) 
     || heartbeat?.lockDevice !== receipt.lockDevice || heartbeat?.lockInode !== receipt.lockInode
     || heartbeat?.fenceTokenSha256 !== receipt.fenceTokenSha256
     || heartbeat?.parentGuardianReceiptSha256 !== receipt.parentGuardianReceiptSha256
+    || heartbeat?.parentGuardianPid !== receipt.parentGuardianPid
+    || heartbeat?.parentGuardianProcessStartIdentity !== receipt.parentGuardianProcessStartIdentity
     || heartbeat?.recoveryRequestId !== receipt.recoveryRequestId || !Number.isSafeInteger(heartbeat?.sequence)
     || !Number.isFinite(observedAt) || observedAt > nowMs + 1_000 || nowMs - observedAt > 5_000) {
     fail("Recovery fence takeover heartbeat is stale or invalid");
@@ -106,11 +110,31 @@ const assertLiveRecoveryFenceTakeover = (receipt, expected, nowMs = Date.now()) 
 };
 
 const startRecoveryFenceTakeover = async (options, guardian, guardianReceiptSha256, requestId, dependencies) => {
+  const paths = takeoverPaths(options, requestId);
+  const expected = {
+    parentGuardianReceiptSha256: guardianReceiptSha256,
+    parentGuardianPid: guardian.pid,
+    parentGuardianProcessStartIdentity: guardian.processStartIdentity,
+    recoveryRequestId: requestId,
+    fenceTokenSha256: guardian.fenceTokenSha256,
+    lockPath: guardian.lockPath,
+    releaseRequestPath: guardian.releaseRequestPath,
+    recoveryReportPath: options.report,
+  };
+  const receiptExists = fs.existsSync(paths.receiptPath);
+  const heartbeatExists = fs.existsSync(paths.heartbeatPath);
+  if (receiptExists || heartbeatExists) {
+    if (!receiptExists || !heartbeatExists) fail("Recovery fence takeover outputs are incomplete");
+    const receiptRead = readPrivateJson(paths.receiptPath, "Recovery fence takeover receipt", 1024 * 1024);
+    const lease = dependencies.assertTakeoverLease
+      ? await dependencies.assertTakeoverLease(receiptRead.value, expected, Date.now())
+      : assertLiveRecoveryFenceTakeover(receiptRead.value, expected);
+    if (!HASH_RE.test(String(lease?.sha256 || ""))) fail("Existing recovery fence takeover lacks a fresh heartbeat digest");
+    return { ...paths, receipt: receiptRead.value, receiptSha256: sha256(receiptRead.bytes), lease, adopted: true };
+  }
   if (dependencies.startFenceTakeover) {
     return dependencies.startFenceTakeover({ options, guardian, guardianReceiptSha256, requestId });
   }
-  const paths = takeoverPaths(options, requestId);
-  if (fs.existsSync(paths.receiptPath) || fs.existsSync(paths.heartbeatPath)) fail("Recovery fence takeover outputs must be new");
   const fd = Number(process.env.PADLHUB_CUTOVER_FENCE_FD);
   if (!Number.isSafeInteger(fd) || fd < 3 || guardian.releaseRequestPath !== path.resolve(guardian.releaseRequestPath || "")) {
     fail("Recovery fence takeover lacks the inherited descriptor or release path");
@@ -124,6 +148,8 @@ const startRecoveryFenceTakeover = async (options, guardian, guardianReceiptSha2
     "--release-request", guardian.releaseRequestPath,
     "--recovery-report", options.report,
     "--parent-guardian-receipt-sha256", guardianReceiptSha256,
+    "--parent-guardian-pid", String(guardian.pid),
+    "--parent-guardian-process-start-identity", guardian.processStartIdentity,
     "--recovery-request-id", requestId,
   ], { detached: true, stdio: childStdio, env: process.env });
   child.unref();
@@ -136,14 +162,6 @@ const startRecoveryFenceTakeover = async (options, guardian, guardianReceiptSha2
     fail("Recovery fence takeover did not publish its receipt and heartbeat");
   }
   const receiptRead = readPrivateJson(paths.receiptPath, "Recovery fence takeover receipt", 1024 * 1024);
-  const expected = {
-    parentGuardianReceiptSha256: guardianReceiptSha256,
-    recoveryRequestId: requestId,
-    fenceTokenSha256: guardian.fenceTokenSha256,
-    lockPath: guardian.lockPath,
-    releaseRequestPath: guardian.releaseRequestPath,
-    recoveryReportPath: options.report,
-  };
   const lease = assertLiveRecoveryFenceTakeover(receiptRead.value, expected);
   return { ...paths, receipt: receiptRead.value, receiptSha256: sha256(receiptRead.bytes), lease };
 };
@@ -160,7 +178,7 @@ const validateCompletedRecoveryReport = (report, bindings, attemptId, journalDir
   return Buffer.from(canonicalJson(report));
 };
 
-const openRecoveryJournal = (reportPath, bindings) => {
+export const openRecoveryJournal = (reportPath, bindings) => {
   const journalDirectory = `${reportPath}.journal`;
   let attemptId;
   let sequence;
@@ -206,8 +224,64 @@ const openRecoveryJournal = (reportPath, bindings) => {
       || entries.some((entry, index) => entry.phase === "TERMINAL_RESULT" && index !== entries.length - 1)) {
       fail("Mongo barrier recovery journal cannot be reconciled to these exact inputs");
     }
-    const terminalIntent = entries.at(-1)?.phase === "TERMINAL_RESULT_INTENT" ? entries.at(-1) : null;
-    const hiddenNames = allNames.filter((name) => name.startsWith("."));
+    let terminalIntent = entries.at(-1)?.phase === "TERMINAL_RESULT_INTENT" ? entries.at(-1) : null;
+    let hiddenNames = allNames.filter((name) => name.startsWith("."));
+    if (!terminalIntent && hiddenNames.length > 0) {
+      const nextSequence = String(entries.length).padStart(4, "0");
+      const orphanPattern = new RegExp(`^\\.(${nextSequence}-([a-z0-9-]+)\\.json)\\.\\d+\\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.tmp$`, "i");
+      const match = hiddenNames.length === 1 ? hiddenNames[0].match(orphanPattern) : null;
+      if (!match) fail("Mongo barrier recovery journal has an unrelated or ambiguous temporary artifact");
+      const orphanPath = path.join(canonical, hiddenNames[0]);
+      const orphanRead = readPrivateJson(orphanPath, "Mongo barrier recovery next-sequence temporary", 1024 * 1024);
+      const orphan = orphanRead.value;
+      const allowedPhases = new Set([
+        "ATTEMPT_STARTED",
+        "BARRIER_RECOVERY_OUTCOME_UNKNOWN",
+        "BARRIER_RECOVERY_RECONCILE_OUTCOME_UNKNOWN",
+        "FENCE_REVALIDATED_BEFORE_BARRIER_RECOVERY",
+        "FENCE_REVALIDATED_DURING_BARRIER_RECOVERY",
+        "FENCE_REVALIDATED_AFTER_BARRIER_RECOVERY",
+        "TERMINAL_RESULT_INTENT",
+      ]);
+      const expectedAttemptId = entries[0]?.attemptId;
+      const lastPhase = entries.at(-1)?.phase;
+      const hasUnknownOutcome = entries.some((entry) => entry.phase === "BARRIER_RECOVERY_OUTCOME_UNKNOWN"
+        || entry.phase === "BARRIER_RECOVERY_RECONCILE_OUTCOME_UNKNOWN");
+      const admissibleTransition = (entries.length === 0 && orphan?.phase === "ATTEMPT_STARTED")
+        || (lastPhase === "ATTEMPT_STARTED" && !hasUnknownOutcome
+          && orphan?.phase === "BARRIER_RECOVERY_OUTCOME_UNKNOWN")
+        || (hasUnknownOutcome && !["TERMINAL_RESULT_INTENT", "TERMINAL_RESULT"].includes(lastPhase)
+          && orphan?.phase === "BARRIER_RECOVERY_RECONCILE_OUTCOME_UNKNOWN")
+        || (["BARRIER_RECOVERY_OUTCOME_UNKNOWN", "BARRIER_RECOVERY_RECONCILE_OUTCOME_UNKNOWN"].includes(lastPhase)
+          && orphan?.phase === "FENCE_REVALIDATED_BEFORE_BARRIER_RECOVERY")
+        || (["FENCE_REVALIDATED_BEFORE_BARRIER_RECOVERY", "FENCE_REVALIDATED_DURING_BARRIER_RECOVERY"].includes(lastPhase)
+          && orphan?.phase === "FENCE_REVALIDATED_DURING_BARRIER_RECOVERY")
+        || (lastPhase === "FENCE_REVALIDATED_DURING_BARRIER_RECOVERY"
+          && orphan?.phase === "FENCE_REVALIDATED_AFTER_BARRIER_RECOVERY")
+        || (lastPhase === "FENCE_REVALIDATED_AFTER_BARRIER_RECOVERY"
+          && orphan?.phase === "TERMINAL_RESULT_INTENT");
+      const phaseSlug = String(orphan?.phase || "").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      if (orphan?.formatVersion !== 1 || orphan?.mode !== "BARRIER_RECOVERY"
+        || orphan?.sequence !== entries.length || !allowedPhases.has(orphan?.phase) || !admissibleTransition
+        || phaseSlug !== match[2] || !Number.isFinite(Date.parse(orphan?.at))
+        || (entries.length === 0 && (orphan?.phase !== "ATTEMPT_STARTED" || !UUID_RE.test(String(orphan?.attemptId || ""))))
+        || (entries.length > 0 && orphan?.attemptId !== expectedAttemptId)
+        || (orphan?.phase === "ATTEMPT_STARTED"
+          && Object.entries(bindings).some(([key, value]) => orphan?.[key] !== value))
+        || (orphan?.phase.startsWith("BARRIER_RECOVERY_")
+          && Object.entries(bindings).some(([key, value]) => orphan?.[key] !== value))) {
+        fail("Mongo barrier recovery next-sequence temporary is not a valid journal entry");
+      }
+      const destinationPath = path.join(canonical, match[1]);
+      fs.linkSync(orphanPath, destinationPath);
+      syncDirectory(canonical);
+      fs.unlinkSync(orphanPath);
+      syncDirectory(canonical);
+      entries.push(orphan);
+      attemptId ||= orphan.attemptId;
+      hiddenNames = [];
+      terminalIntent = orphan.phase === "TERMINAL_RESULT_INTENT" ? orphan : null;
+    }
     if (terminalIntent) {
       const terminalSequence = terminalIntent.sequence + 1;
       const terminalName = `${String(terminalSequence).padStart(4, "0")}-terminal-result.json`;
@@ -237,20 +311,8 @@ const openRecoveryJournal = (reportPath, bindings) => {
       const terminal = { ...terminalIntent, sequence: terminalSequence, phase: "TERMINAL_RESULT" };
       writeFileExclusiveAtomicDurable(terminalPath, Buffer.from(canonicalJson(terminal)), privateOptions());
       entries.push(terminal);
-    } else if (hiddenNames.length > 0) {
-      const intentName = `${String(entries.length).padStart(4, "0")}-terminal-result-intent.json`;
-      const orphanPattern = new RegExp(`^\\.${intentName.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\.[^.]+\\.[^.]+\\.tmp$`);
-      if (hiddenNames.length !== 1 || !orphanPattern.test(hiddenNames[0])) {
-        fail("Mongo barrier recovery journal has an unrelated temporary artifact");
-      }
-      const orphanPath = path.join(canonical, hiddenNames[0]);
-      const orphanStat = fs.lstatSync(orphanPath);
-      if (!orphanStat.isFile() || orphanStat.isSymbolicLink() || orphanStat.nlink !== 1
-        || orphanStat.uid !== privateOptions().uid || (orphanStat.mode & 0o077) !== 0) {
-        fail("Mongo barrier recovery terminal intent temporary is not private");
-      }
-      fs.unlinkSync(orphanPath);
-      syncDirectory(canonical);
+    } else if (partialTerminalPath || hiddenNames.length > 0) {
+      fail("Mongo barrier recovery terminal publication is missing its exact intent");
     }
   }
   attemptId ||= crypto.randomUUID();
@@ -331,6 +393,8 @@ const readCompletedRecoveryWithLiveTakeover = async ({
   }
   const expected = {
     parentGuardianReceiptSha256: options.expectedFenceGuardianReceiptSha256,
+    parentGuardianPid: guardian.pid,
+    parentGuardianProcessStartIdentity: guardian.processStartIdentity,
     recoveryRequestId: completedRequestId,
     fenceTokenSha256: guardian.fenceTokenSha256,
     lockPath: guardian.lockPath,
@@ -396,6 +460,25 @@ const optionsFromValues = (values) => ({
   report: values.get("--report"),
 });
 
+const startRecoveryFenceTakeoverBeforeAcceptance = async (options, requestId, dependencies = {}) => {
+  const guardianRead = readPrivateJson(options.fenceGuardianReceipt, "Fence-guardian receipt", 1024 * 1024);
+  const guardian = guardianRead.value;
+  if (sha256(guardianRead.bytes) !== options.expectedFenceGuardianReceiptSha256
+    || guardian?.formatVersion !== 1
+    || guardian?.kind !== "viva-game-projection-fence-guardian-receipt"
+    || guardian?.state !== "HOLDING_UNTIL_EXPLICIT_RELEASE"
+    || guardian?.recoveryRequestPath !== options.fenceGuardianRecoveryRequest
+    || guardian?.recoveryExecutorPath !== SCRIPT_PATH
+    || guardian?.recoveryExecutorSha256 !== sha256(fs.readFileSync(SCRIPT_PATH))
+    || !path.isAbsolute(String(guardian?.releaseRequestPath || ""))
+    || guardian?.automaticRelease !== false) {
+    fail("Recovery child cannot establish takeover custody for this exact guardian");
+  }
+  return startRecoveryFenceTakeover(
+    options, guardian, options.expectedFenceGuardianReceiptSha256, requestId, dependencies,
+  );
+};
+
 export async function requestRecoveryFromGuardian(argv, options, dependencies = {}) {
   if ((dependencies.getUid ? dependencies.getUid() : process.getuid?.()) !== 0) fail("Mongo barrier recovery requires root");
   if (process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER !== CONFIRMATION) fail("Mongo barrier recovery confirmation is absent");
@@ -437,6 +520,7 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
   } catch (error) { guardianLeaseError = error; }
   let requestId = null;
   let request = null;
+  let shouldPublishRequest = false;
   if (fs.existsSync(options.fenceGuardianRecoveryRequest)) {
     request = readExactRecoveryRequest(
       options.fenceGuardianRecoveryRequest, argv, guardianRead.value, nowMs,
@@ -451,7 +535,7 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
       .filter((value) => UUID_RE.test(value));
     const candidateIds = UUID_RE.test(String(heartbeatRequestId || ""))
       ? [heartbeatRequestId]
-      : (initialGuardianLease ? [] : acceptedIds);
+      : acceptedIds;
     const accepted = [];
     for (const candidateId of candidateIds) {
       const acceptedPath = `${options.fenceGuardianRecoveryRequest}.accepted-${candidateId}`;
@@ -464,12 +548,49 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
     if (accepted.length === 1) {
       request = accepted[0];
       requestId = request.requestId;
+      const recoveryIsActive = UUID_RE.test(String(heartbeatRequestId || ""))
+        && heartbeatRequestId === requestId
+        && Number.isSafeInteger(initialGuardianLease?.heartbeat?.recoveryChildPid);
+      if (initialGuardianLease && !recoveryIsActive) {
+        request = null;
+        shouldPublishRequest = true;
+      }
+    } else {
+      const failedRequestId = initialGuardianLease?.heartbeat?.lastRecoveryResult?.requestId;
+      if (UUID_RE.test(String(failedRequestId || ""))) {
+        const paths = takeoverPaths(options, failedRequestId);
+        const receiptExists = fs.existsSync(paths.receiptPath);
+        const heartbeatExists = fs.existsSync(paths.heartbeatPath);
+        if (receiptExists || heartbeatExists) {
+          if (!receiptExists || !heartbeatExists) fail("Prior recovery takeover outputs are incomplete");
+          const takeoverRead = readPrivateJson(paths.receiptPath, "Prior recovery takeover receipt", 1024 * 1024);
+          const expected = {
+            parentGuardianReceiptSha256: options.expectedFenceGuardianReceiptSha256,
+            parentGuardianPid: guardianRead.value.pid,
+            parentGuardianProcessStartIdentity: guardianRead.value.processStartIdentity,
+            recoveryRequestId: failedRequestId,
+            fenceTokenSha256: guardianRead.value.fenceTokenSha256,
+            lockPath: guardianRead.value.lockPath,
+            releaseRequestPath: guardianRead.value.releaseRequestPath,
+            recoveryReportPath: options.report,
+          };
+          const lease = dependencies.assertTakeoverLease
+            ? await dependencies.assertTakeoverLease(takeoverRead.value, expected, nowMs)
+            : assertLiveRecoveryFenceTakeover(takeoverRead.value, expected, nowMs);
+          if (!HASH_RE.test(String(lease?.sha256 || ""))) fail("Prior recovery takeover lacks a fresh heartbeat digest");
+          requestId = failedRequestId;
+          shouldPublishRequest = true;
+        }
+      }
     }
   }
   if (!requestId && guardianLeaseError) throw guardianLeaseError;
-  requestId ||= dependencies.requestId || crypto.randomUUID();
+  if (!requestId) {
+    requestId = dependencies.requestId || crypto.randomUUID();
+    shouldPublishRequest = true;
+  }
   if (!UUID_RE.test(String(requestId || ""))) fail("Fence guardian recovery request ID is invalid");
-  if (!request) {
+  if (shouldPublishRequest) {
     request = {
       formatVersion: 1,
       kind: "viva-game-projection-fence-recovery-request",
@@ -503,10 +624,10 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
     const heartbeat = guardianLease?.heartbeat;
     const childFinished = heartbeat?.recoveryChildPid == null
       && heartbeat?.lastRecoveryResult?.requestId === requestId;
-    if (childFinished && heartbeat.lastRecoveryResult.exitCode !== 0) {
+    const requestConsumed = !fs.existsSync(options.fenceGuardianRecoveryRequest);
+    if (childFinished && requestConsumed && heartbeat.lastRecoveryResult.exitCode !== 0) {
       fail("Fence guardian recovery child failed while the canonical fence remained held");
     }
-    const requestConsumed = !fs.existsSync(options.fenceGuardianRecoveryRequest);
     if (childFinished && heartbeat.lastRecoveryResult.exitCode === 0 && requestConsumed) {
       const completed = await readCompletedRecoveryWithLiveTakeover({
         options, bindings, guardian: guardianRead.value, nowMs: pollNowMs, dependencies,
@@ -580,7 +701,7 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
     fail("Mongo barrier recovery host differs from the cutover production host");
   }
   const now = () => (typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now()));
-  let recoveryFenceTakeover = null;
+  let recoveryFenceTakeover = dependencies.prestartedFenceTakeover || null;
   const assertRecoveryFence = async () => {
     const nowMs = now();
     const currentFenceRead = readPrivateJson(options.fenceReceipt, "Writer-fence receipt", 16 * 1024 * 1024);
@@ -622,6 +743,8 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
     if (recoveryFenceTakeover) {
       const takeoverExpected = {
         parentGuardianReceiptSha256: options.expectedFenceGuardianReceiptSha256,
+        parentGuardianPid: currentGuardian.pid,
+        parentGuardianProcessStartIdentity: currentGuardian.processStartIdentity,
         recoveryRequestId: guardianRecoveryRequestId,
         fenceTokenSha256: currentGuardian.fenceTokenSha256,
         lockPath: currentGuardian.lockPath,
@@ -701,6 +824,8 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
     }
     const takeoverExpected = {
       parentGuardianReceiptSha256: options.expectedFenceGuardianReceiptSha256,
+      parentGuardianPid: guardianRead.value.pid,
+      parentGuardianProcessStartIdentity: guardianRead.value.processStartIdentity,
       recoveryRequestId: completedRequestId,
       fenceTokenSha256: guardianRead.value.fenceTokenSha256,
       lockPath: guardianRead.value.lockPath,
@@ -713,10 +838,12 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
     return completed;
   }
   await assertRecoveryFence();
-  recoveryFenceTakeover = await startRecoveryFenceTakeover(
-    options, guardianRead.value, options.expectedFenceGuardianReceiptSha256,
-    guardianRecoveryRequestId, dependencies,
-  );
+  if (!recoveryFenceTakeover) {
+    recoveryFenceTakeover = await startRecoveryFenceTakeover(
+      options, guardianRead.value, options.expectedFenceGuardianReceiptSha256,
+      guardianRecoveryRequestId, dependencies,
+    );
+  }
   const initialFenceEvidence = await assertRecoveryFence();
   journal.append(journal.resumed ? "BARRIER_RECOVERY_RECONCILE_OUTCOME_UNKNOWN" : "BARRIER_RECOVERY_OUTCOME_UNKNOWN", {
     ...journalBindings,
@@ -775,17 +902,23 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
-  if (process.env.PADLHUB_CUTOVER_GUARDIAN_CHILD === "1") {
-    acceptFenceGuardianChildRequest({
-      childKind: "recovery",
-      requestId: process.env.PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST_ID,
-    });
-  }
   const values = parseArgs(argv);
   const options = optionsFromValues(values);
-  const result = process.env.PADLHUB_CUTOVER_GUARDIAN_CHILD === "1" || dependencies.forceDirectRecovery
-    ? await recoverVivaGameProjectionMongoWriteBarrier(options, dependencies)
-    : await requestRecoveryFromGuardian(argv, options, dependencies);
+  let effectiveDependencies = dependencies;
+  if (process.env.PADLHUB_CUTOVER_GUARDIAN_CHILD === "1") {
+    const requestId = process.env.PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST_ID;
+    const prestartedFenceTakeover = await startRecoveryFenceTakeoverBeforeAcceptance(
+      options, requestId, dependencies,
+    );
+    acceptFenceGuardianChildRequest({
+      childKind: "recovery",
+      requestId,
+    });
+    effectiveDependencies = { ...dependencies, prestartedFenceTakeover };
+  }
+  const result = process.env.PADLHUB_CUTOVER_GUARDIAN_CHILD === "1" || effectiveDependencies.forceDirectRecovery
+    ? await recoverVivaGameProjectionMongoWriteBarrier(options, effectiveDependencies)
+    : await requestRecoveryFromGuardian(argv, options, effectiveDependencies);
   process.stdout.write(`${JSON.stringify({ state: result.state })}\n`);
   return result;
 }

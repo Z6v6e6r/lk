@@ -10,7 +10,7 @@ import { isAuthorizedRecoveryFenceTakeoverRelease } from "./lib/vivaGameProjecti
 const fail = (message) => { throw new Error(message); };
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 if (process.argv.slice(2).includes("--help")) {
-  process.stdout.write("Usage: node scripts/run_viva_game_projection_recovery_fence_takeover.mjs --receipt /private/takeover.json --heartbeat /private/takeover-heartbeat.json --release-request /private/release-request.json --recovery-report /private/recovery-report.json --parent-guardian-receipt-sha256 SHA256 --recovery-request-id UUID\n");
+  process.stdout.write("Usage: node scripts/run_viva_game_projection_recovery_fence_takeover.mjs --receipt /private/takeover.json --heartbeat /private/takeover-heartbeat.json --release-request /private/release-request.json --recovery-report /private/recovery-report.json --parent-guardian-receipt-sha256 SHA256 --parent-guardian-pid PID --parent-guardian-process-start-identity PID:TICKS --recovery-request-id UUID\n");
   process.exit(0);
 }
 
@@ -53,11 +53,16 @@ const heartbeatPath = path.resolve(args.get("--heartbeat") || "");
 const releasePath = path.resolve(args.get("--release-request") || "");
 const recoveryReportPath = path.resolve(args.get("--recovery-report") || "");
 const parentGuardianReceiptSha256 = String(args.get("--parent-guardian-receipt-sha256") || "");
+const parentGuardianPid = Number(args.get("--parent-guardian-pid"));
+const parentGuardianProcessStartIdentity = String(args.get("--parent-guardian-process-start-identity") || "");
 const recoveryRequestId = String(args.get("--recovery-request-id") || "");
 const parent = path.dirname(receiptPath);
 const parentStat = fs.lstatSync(parent);
 if (!Number.isSafeInteger(fd) || fd < 3 || lockPath !== "/run/lock/padlhub-viva-game-projection-cutover.lock"
   || token.length < 32 || !HASH_RE.test(parentGuardianReceiptSha256) || !UUID_RE.test(recoveryRequestId)
+  || !Number.isSafeInteger(parentGuardianPid) || parentGuardianPid < 1
+  || parentGuardianProcessStartIdentity !== `${parentGuardianPid}:${parentGuardianProcessStartIdentity.split(":").at(-1)}`
+  || !/^\d+:\d+$/.test(parentGuardianProcessStartIdentity)
   || !path.isAbsolute(receiptPath) || !path.isAbsolute(heartbeatPath) || !path.isAbsolute(releasePath)
   || !path.isAbsolute(recoveryReportPath)
   || path.dirname(heartbeatPath) !== parent || path.dirname(releasePath) !== parent
@@ -89,6 +94,8 @@ const receipt = {
   releaseRequestPath: releasePath,
   recoveryReportPath,
   parentGuardianReceiptSha256,
+  parentGuardianPid,
+  parentGuardianProcessStartIdentity,
   recoveryRequestId,
   fenceTokenSha256: tokenSha256,
   startedAt: new Date().toISOString(),
@@ -134,6 +141,12 @@ const quarantineReleaseRequest = (digest) => {
     syncDirectory(parent);
   } catch { /* another lock custodian may already have consumed or quarantined it */ }
 };
+const parentGuardianStillOwnsFence = () => {
+  try {
+    process.kill(parentGuardianPid, 0);
+    return linuxProcessStartIdentity(parentGuardianPid) === parentGuardianProcessStartIdentity;
+  } catch { return false; }
+};
 while (true) {
   const currentDescriptor = fs.fstatSync(fd);
   const currentLock = fs.statSync(lockPath);
@@ -141,7 +154,7 @@ while (true) {
     || String(currentDescriptor.dev) !== receipt.lockDevice || String(currentDescriptor.ino) !== receipt.lockInode) {
     fail("Recovery fence takeover lost the canonical lock inode");
   }
-  if (fs.existsSync(releasePath)) {
+  if (fs.existsSync(releasePath) && !parentGuardianStillOwnsFence()) {
     let release;
     let validPrivateFile = false;
     try {
@@ -186,6 +199,8 @@ while (true) {
     lockInode: receipt.lockInode,
     fenceTokenSha256: tokenSha256,
     parentGuardianReceiptSha256,
+    parentGuardianPid,
+    parentGuardianProcessStartIdentity,
     recoveryRequestId,
     sequence,
     observedAt: new Date().toISOString(),

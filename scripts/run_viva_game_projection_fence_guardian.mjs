@@ -124,6 +124,7 @@ let readyChild = null;
 let readyRequestId = null;
 let lastReadyResult = null;
 let recoveryReleaseDelegated = false;
+let delegatedRecovery = null;
 const writeHeartbeat = () => {
   atomicPrivateWrite(heartbeatPath, {
     formatVersion: 1,
@@ -186,7 +187,7 @@ const waitForAcceptedHandshake = (child, handshakeFd, childKind, requestId) => n
   let buffer = "";
   let inherited = false;
   let settled = false;
-  const timeout = setTimeout(() => finish(new Error("Fence child acceptance handshake timed out")), 5_000);
+  const timeout = setTimeout(() => finish(new Error("Fence child acceptance handshake timed out")), 15_000);
   const cleanup = () => {
     clearTimeout(timeout);
     stream?.removeListener("data", onData);
@@ -255,9 +256,19 @@ const startRecovery = async (request) => {
   try {
     await waitForAcceptedHandshake(child, handshakeFd, "recovery", request.requestId);
     recoveryReleaseDelegated = true;
+    delegatedRecovery = {
+      requestId: request.requestId,
+      reportPath: request.argv[request.argv.indexOf("--report") + 1],
+    };
   } catch (error) {
     try { child.kill("SIGKILL"); } catch { /* child already exited */ }
-    if (fs.existsSync(acceptedPath)) recoveryReleaseDelegated = true;
+    if (fs.existsSync(acceptedPath)) {
+      recoveryReleaseDelegated = true;
+      delegatedRecovery = {
+        requestId: request.requestId,
+        reportPath: request.argv[request.argv.indexOf("--report") + 1],
+      };
+    }
     if (fs.existsSync(recoveryRequestPath)) quarantineRecoveryRequest(String(error?.message || error));
   }
 };
@@ -302,12 +313,112 @@ const startReadyFinalization = async (request) => {
   }
 };
 
+const readPrivateJson = (filePath, label, maximumBytes = 16 * 1024 * 1024) => {
+  const fileStat = fs.lstatSync(filePath);
+  if (!fileStat.isFile() || fileStat.isSymbolicLink() || fileStat.nlink !== 1
+    || fileStat.uid !== process.getuid() || (fileStat.mode & 0o077) !== 0 || fileStat.size > maximumBytes) {
+    fail(`${label} is not private`);
+  }
+  const bytes = fs.readFileSync(filePath);
+  return { bytes, value: JSON.parse(bytes.toString("utf8")) };
+};
+
+const assertSuccessfulRecoveryTakeoverHandoff = () => {
+  if (!delegatedRecovery || recoveryChild || lastRecoveryResult?.requestId !== delegatedRecovery.requestId
+    || lastRecoveryResult?.exitCode !== 0) fail("Recovery takeover handoff is not terminal");
+  const prefix = path.join(receiptParent, `.viva-recovery-fence-takeover-${delegatedRecovery.requestId}`);
+  const takeoverReceiptPath = `${prefix}.json`;
+  const takeoverHeartbeatPath = `${prefix}.heartbeat.json`;
+  const takeoverRead = readPrivateJson(takeoverReceiptPath, "Recovery takeover receipt", 1024 * 1024);
+  const takeover = takeoverRead.value;
+  if (takeover?.formatVersion !== 1
+    || takeover?.kind !== "viva-game-projection-recovery-fence-takeover-receipt"
+    || takeover?.state !== "HOLDING_UNTIL_EXPLICIT_RELEASE"
+    || takeover?.parentGuardianReceiptSha256 !== sha256(canonicalJson(receipt))
+    || takeover?.parentGuardianPid !== process.pid
+    || takeover?.parentGuardianProcessStartIdentity !== processStartIdentity
+    || takeover?.recoveryRequestId !== delegatedRecovery.requestId
+    || takeover?.fenceTokenSha256 !== tokenSha256
+    || takeover?.lockPath !== lockPath || takeover?.lockDevice !== String(lockStat.dev)
+    || takeover?.lockInode !== String(lockStat.ino)
+    || takeover?.heartbeatPath !== takeoverHeartbeatPath
+    || takeover?.releaseRequestPath !== releasePath
+    || takeover?.recoveryReportPath !== delegatedRecovery.reportPath
+    || takeover?.automaticRelease !== false || !Number.isSafeInteger(takeover?.pid) || takeover.pid < 1
+    || !Number.isSafeInteger(takeover?.fd) || takeover.fd < 3) {
+    fail("Recovery takeover cannot receive guardian custody");
+  }
+  process.kill(takeover.pid, 0);
+  if (linuxProcessStartIdentity(takeover.pid) !== takeover.processStartIdentity) {
+    fail("Recovery takeover PID changed before guardian handoff");
+  }
+  const takeoverDescriptor = fs.statSync(`/proc/${takeover.pid}/fd/${takeover.fd}`);
+  if (takeoverDescriptor.dev !== lockStat.dev || takeoverDescriptor.ino !== lockStat.ino) {
+    fail("Recovery takeover does not hold the guardian lock inode");
+  }
+  const heartbeatRead = readPrivateJson(takeoverHeartbeatPath, "Recovery takeover heartbeat", 1024 * 1024);
+  const heartbeat = heartbeatRead.value;
+  const heartbeatAt = Date.parse(heartbeat?.observedAt);
+  if (heartbeat?.formatVersion !== 1
+    || heartbeat?.kind !== "viva-game-projection-recovery-fence-takeover-heartbeat"
+    || heartbeat?.state !== "HOLDING" || heartbeat?.pid !== takeover.pid || heartbeat?.fd !== takeover.fd
+    || heartbeat?.processStartIdentity !== takeover.processStartIdentity
+    || heartbeat?.lockPath !== lockPath || heartbeat?.lockDevice !== String(lockStat.dev)
+    || heartbeat?.lockInode !== String(lockStat.ino) || heartbeat?.fenceTokenSha256 !== tokenSha256
+    || heartbeat?.parentGuardianReceiptSha256 !== takeover.parentGuardianReceiptSha256
+    || heartbeat?.parentGuardianPid !== process.pid
+    || heartbeat?.parentGuardianProcessStartIdentity !== processStartIdentity
+    || heartbeat?.recoveryRequestId !== delegatedRecovery.requestId
+    || !Number.isFinite(heartbeatAt) || heartbeatAt > Date.now() + 1_000 || Date.now() - heartbeatAt > 5_000) {
+    fail("Recovery takeover heartbeat cannot receive guardian custody");
+  }
+  const reportRead = readPrivateJson(delegatedRecovery.reportPath, "Mongo barrier recovery report");
+  const report = reportRead.value;
+  if (report?.formatVersion !== 1
+    || report?.kind !== "viva-game-projection-mongo-write-barrier-recovery-receipt"
+    || report?.state !== "RELEASED_TO_EXACT_PREIMAGE"
+    || report?.guardianRecoveryRequestId !== delegatedRecovery.requestId
+    || report?.recoveryFenceTakeoverState !== "HELD_UNTIL_EXPLICIT_FENCE_RELEASE"
+    || report?.recoveryFenceTakeoverReceiptPath !== takeoverReceiptPath
+    || report?.recoveryFenceTakeoverReceiptSha256 !== sha256(takeoverRead.bytes)
+    || report?.recoveryJournalPath !== `${delegatedRecovery.reportPath}.journal`) {
+    fail("Recovery report cannot authorize guardian handoff");
+  }
+  const journalStat = fs.lstatSync(report.recoveryJournalPath);
+  if (!journalStat.isDirectory() || journalStat.isSymbolicLink() || journalStat.uid !== process.getuid()
+    || (journalStat.mode & 0o077) !== 0 || fs.realpathSync(report.recoveryJournalPath) !== report.recoveryJournalPath) {
+    fail("Recovery terminal journal cannot authorize guardian handoff");
+  }
+  const terminalNames = fs.readdirSync(report.recoveryJournalPath).filter((name) => !name.startsWith(".")).sort();
+  const terminalRead = readPrivateJson(
+    path.join(report.recoveryJournalPath, terminalNames.at(-1) || ""), "Recovery terminal journal", 16 * 1024 * 1024,
+  );
+  if (terminalRead.value?.phase !== "TERMINAL_RESULT"
+    || terminalRead.value?.attemptId !== report.recoveryAttemptId
+    || terminalRead.value?.reportSha256 !== sha256(reportRead.bytes)
+    || canonicalJson(terminalRead.value?.report) !== canonicalJson(report)) {
+    fail("Recovery terminal journal does not authorize guardian handoff");
+  }
+  return { takeoverReceiptSha256: sha256(takeoverRead.bytes), takeoverHeartbeatSha256: sha256(heartbeatRead.bytes) };
+};
+
 while (true) {
   const currentFd = fs.fstatSync(fd);
   const currentLock = fs.statSync(lockPath);
   if (currentFd.dev !== currentLock.dev || currentFd.ino !== currentLock.ino
     || String(currentFd.dev) !== receipt.lockDevice || String(currentFd.ino) !== receipt.lockInode) {
     fail("Fence guardian lost the canonical lock inode");
+  }
+  if (recoveryReleaseDelegated && lastRecoveryResult?.exitCode === 0 && !recoveryChild) {
+    try {
+      assertSuccessfulRecoveryTakeoverHandoff();
+      process.exit(0);
+    } catch (error) {
+      lastRecoveryResult = {
+        ...lastRecoveryResult,
+        handoffErrorSha256: sha256(String(error?.message || error)),
+      };
+    }
   }
   if (fs.existsSync(recoveryRequestPath)) {
     let request = null;

@@ -55,6 +55,7 @@ import {
 } from "../finalize_viva_game_projection_cutover_ready.mjs";
 import { buildVivaGameProjectionSyncCandidate } from "../prepare_viva_game_projection_sync_candidate.mjs";
 import {
+  openRecoveryJournal,
   recoverVivaGameProjectionMongoWriteBarrier,
   requestRecoveryFromGuardian,
 } from "../recover_viva_game_projection_mongo_write_barrier.mjs";
@@ -777,7 +778,7 @@ test("recovery request waits for the exact guardian child terminal result", asyn
       }),
       waitForPoll: async () => {},
     }), /Timed out waiting for the fence guardian recovery child/);
-    assert.equal(JSON.parse(fs.readFileSync(requestPath, "utf8")).requestId, retryRequestId);
+    assert.equal(JSON.parse(fs.readFileSync(requestPath, "utf8")).requestId, failedRequestId);
   } finally {
     if (previousConfirmation === undefined) delete process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
     else process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = previousConfirmation;
@@ -1119,6 +1120,7 @@ test("standalone Mongo barrier recovery requires stopped fenced runtime and reco
     write0600(executionIndexPath, executionIndexBytes);
     let runtimeStatus = "online";
     let restoreAttempts = 0;
+    let takeoverStartAttempts = 0;
     let guardianLostDuringRoleRestore = false;
     const pm2Fixture = () => [{
       name: "node-red",
@@ -1160,15 +1162,18 @@ test("standalone Mongo barrier recovery requires stopped fenced runtime and reco
         return { sha256: "7".repeat(64) };
       },
       startFenceTakeover: async () => {
+        takeoverStartAttempts += 1;
         const receiptPath = path.join(
           privateRoot, ".viva-recovery-fence-takeover-12345678-1234-4234-8234-123456789abc.json",
         );
+        const heartbeatPath = receiptPath.replace(/\.json$/, ".heartbeat.json");
         const receipt = { fixture: "takeover" };
         const receiptBytes = Buffer.from(canonicalJson(receipt));
         if (!fs.existsSync(receiptPath)) write0600(receiptPath, receiptBytes);
+        if (!fs.existsSync(heartbeatPath)) write0600(heartbeatPath, Buffer.from(canonicalJson({ fixture: "heartbeat" })));
         return {
           receiptPath,
-          heartbeatPath: `${receiptPath}.heartbeat.json`,
+          heartbeatPath,
           receiptSha256: cutoverSha256(receiptBytes),
           receipt,
         };
@@ -1222,6 +1227,7 @@ test("standalone Mongo barrier recovery requires stopped fenced runtime and reco
     assert.equal(result.reconciledPriorUnknownOutcome, true);
     assert.equal(result.recoveryFenceTakeoverState, "HELD_UNTIL_EXPLICIT_FENCE_RELEASE");
     assert.equal(restoreAttempts, 2);
+    assert.equal(takeoverStartAttempts, 1);
     assert.equal(reportPublicationAttempts, 1);
     const phases = fs.readdirSync(`${reportPath}.journal`).sort().map((name) => (
       JSON.parse(fs.readFileSync(path.join(`${reportPath}.journal`, name), "utf8")).phase
@@ -1811,6 +1817,395 @@ test("a guardian child accepts only after inheriting the flock and survives guar
   }
 });
 
+test("the real recovery child establishes takeover custody before an accepted validation failure", {
+  skip: process.platform !== "linux" || process.getuid?.() !== 0
+    || process.env.PADLHUB_RUN_LINUX_FLOCK_TESTS !== "1",
+}, async () => {
+  const privateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-real-recovery-takeover-")));
+  fs.chmodSync(privateRoot, 0o700);
+  const lockPath = "/run/lock/padlhub-viva-game-projection-cutover.lock";
+  const guardianPath = path.join(privateRoot, "guardian.mjs");
+  const childPidPath = path.join(privateRoot, "recovery-child.pid");
+  const handshakePath = path.join(privateRoot, "handshake.log");
+  const guardianReceiptPath = path.join(privateRoot, "guardian.json");
+  const guardianHeartbeatPath = path.join(privateRoot, "guardian-heartbeat.json");
+  const requestPath = path.join(privateRoot, "recovery-request.json");
+  const releasePath = path.join(privateRoot, "release.json");
+  const reportPath = path.join(privateRoot, "recovery-report.json");
+  const recoveryPath = fs.realpathSync(path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)), "../recover_viva_game_projection_mongo_write_barrier.mjs",
+  ));
+  const requestId = "12345678-1234-4234-8234-123456789abc";
+  const token = "fixture-fence-token-with-sufficient-entropy";
+  let guardian = null;
+  let childPid = null;
+  let takeoverPid = null;
+  try {
+    write0600(guardianPath, Buffer.from(`
+      import crypto from "node:crypto";
+      import fs from "node:fs";
+      import { spawn } from "node:child_process";
+      const [recoveryPath, receiptPath, heartbeatPath, requestPath, releasePath, reportPath, childPidPath, handshakePath, requestId, lockPath] = process.argv.slice(2);
+      const canonical = (value) => JSON.stringify(value, Object.keys(value).sort());
+      const digest = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
+      const body = fs.readFileSync(\`/proc/\${process.pid}/stat\`, "utf8").trim();
+      const tail = body.slice(body.lastIndexOf(")") + 2).split(/\\s+/);
+      const processStartIdentity = \`\${process.pid}:\${tail[19]}\`;
+      const token = process.env.PADLHUB_CUTOVER_FENCE_TOKEN;
+      const guardian = {
+        formatVersion: 1,
+        kind: "viva-game-projection-fence-guardian-receipt",
+        state: "HOLDING_UNTIL_EXPLICIT_RELEASE",
+        pid: process.pid,
+        fd: 9,
+        processStartIdentity,
+        lockPath,
+        heartbeatPath,
+        releaseRequestPath: releasePath,
+        recoveryRequestPath: requestPath,
+        recoveryExecutorPath: recoveryPath,
+        recoveryExecutorSha256: digest(fs.readFileSync(recoveryPath)),
+        fenceTokenSha256: digest(token),
+        automaticRelease: false,
+      };
+      const guardianBytes = Buffer.from(JSON.stringify(guardian));
+      fs.writeFileSync(receiptPath, guardianBytes, { mode: 0o600, flag: "wx" });
+      const guardianSha = digest(guardianBytes);
+      const missing = (name) => new URL(name, \`file://\${reportPath}\`).pathname;
+      const argv = [
+        "--barrier-artifact", missing("missing-barrier.json"),
+        "--expected-barrier-artifact-sha256", "a".repeat(64),
+        "--cutover-plan", missing("missing-cutover.json"),
+        "--expected-cutover-plan-sha256", "b".repeat(64),
+        "--migration-connection-file", missing("missing-connection.json"),
+        "--execution-index", missing("missing-execution.json"),
+        "--expected-execution-index-sha256", "c".repeat(64),
+        "--fence-receipt", missing("missing-fence.json"),
+        "--expected-fence-receipt-sha256", "d".repeat(64),
+        "--fence-guardian-receipt", receiptPath,
+        "--expected-fence-guardian-receipt-sha256", guardianSha,
+        "--fence-guardian-recovery-request", requestPath,
+        "--report", reportPath,
+      ];
+      const request = {
+        formatVersion: 1,
+        kind: "viva-game-projection-fence-recovery-request",
+        state: "RECOVERY_AUTHORIZED",
+        confirmation: "RECOVER_VIVA_GAME_PROJECTION_MONGO_WRITE_BARRIER_V1",
+        requestId,
+        guardianPid: process.pid,
+        guardianProcessStartIdentity: processStartIdentity,
+        fenceTokenSha256: guardian.fenceTokenSha256,
+        argv,
+        authorizedAt: new Date().toISOString(),
+      };
+      const requestBytes = Buffer.from(JSON.stringify(request));
+      fs.writeFileSync(requestPath, requestBytes, { mode: 0o600, flag: "wx" });
+      const handshakeFd = 10;
+      const handshake = fs.openSync(handshakePath, "wx", 0o600);
+      const stdio = Array(handshakeFd + 1).fill("ignore");
+      stdio[9] = 9;
+      stdio[handshakeFd] = handshake;
+      const child = spawn(process.execPath, [recoveryPath, ...argv], {
+        stdio,
+        env: {
+          ...process.env,
+          VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER: "RECOVER_VIVA_GAME_PROJECTION_MONGO_WRITE_BARRIER_V1",
+          PADLHUB_CUTOVER_GUARDIAN_CHILD: "1",
+          PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST_ID: requestId,
+          PADLHUB_CUTOVER_GUARDIAN_HANDSHAKE_FD: String(handshakeFd),
+          PADLHUB_CUTOVER_GUARDIAN_CHILD_REQUEST_PATH: requestPath,
+          PADLHUB_CUTOVER_GUARDIAN_CHILD_ACCEPTED_PATH: \`\${requestPath}.accepted-\${requestId}\`,
+          PADLHUB_CUTOVER_GUARDIAN_CHILD_REQUEST_SHA256: digest(requestBytes),
+          PADLHUB_CUTOVER_FENCE_FD: "9",
+          PADLHUB_CUTOVER_FENCE_LOCK_PATH: lockPath,
+        },
+      });
+      fs.closeSync(handshake);
+      fs.writeFileSync(childPidPath, String(child.pid), { mode: 0o600, flag: "wx" });
+      while (true) await new Promise((resolve) => setTimeout(resolve, 1000));
+    `));
+    guardian = spawn("/bin/bash", [
+      "-c",
+      "exec 9>\"$1\"\nflock -n 9\nexec node \"$2\" \"$3\" \"$4\" \"$5\" \"$6\" \"$7\" \"$8\" \"$9\" \"${10}\" \"${11}\" \"${12}\" \"${13}\"",
+      "viva-real-recovery-takeover",
+      lockPath,
+      guardianPath,
+      recoveryPath,
+      guardianReceiptPath,
+      guardianHeartbeatPath,
+      requestPath,
+      releasePath,
+      reportPath,
+      childPidPath,
+      handshakePath,
+      requestId,
+      lockPath,
+    ], { stdio: "ignore", env: { ...process.env, PADLHUB_CUTOVER_FENCE_TOKEN: token } });
+    const acceptedPath = `${requestPath}.accepted-${requestId}`;
+    const takeoverReceiptPath = path.join(privateRoot, `.viva-recovery-fence-takeover-${requestId}.json`);
+    for (let poll = 0; poll < 150 && (!fs.existsSync(acceptedPath) || !fs.existsSync(takeoverReceiptPath)); poll += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(fs.existsSync(acceptedPath), true);
+    assert.equal(fs.existsSync(takeoverReceiptPath), true);
+    childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+    takeoverPid = JSON.parse(fs.readFileSync(takeoverReceiptPath, "utf8")).pid;
+    process.kill(guardian.pid, "SIGKILL");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.notEqual(spawnSync("flock", ["-n", lockPath, "-c", "true"], { stdio: "ignore" }).status, 0);
+    assert.match(fs.readFileSync(handshakePath, "utf8"), /FENCE_INHERITED[\s\S]+REQUEST_ACCEPTED/);
+  } finally {
+    try { if (guardian?.pid) process.kill(guardian.pid, "SIGKILL"); } catch { /* already stopped */ }
+    try { if (childPid) process.kill(childPid, "SIGKILL"); } catch { /* already stopped */ }
+    try { if (takeoverPid) process.kill(takeoverPid, "SIGKILL"); } catch { /* already stopped */ }
+    fs.rmSync(privateRoot, { recursive: true, force: true });
+  }
+});
+
+test("the real guardian retries one accepted recovery with the same live takeover", {
+  skip: process.platform !== "linux" || process.getuid?.() !== 0
+    || process.env.PADLHUB_RUN_LINUX_FLOCK_TESTS !== "1",
+}, async () => {
+  const privateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-real-guardian-retry-")));
+  fs.chmodSync(privateRoot, 0o700);
+  const lockPath = "/run/lock/padlhub-viva-game-projection-cutover.lock";
+  const guardianScript = fs.realpathSync(path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)), "../run_viva_game_projection_fence_guardian.mjs",
+  ));
+  const receiptPath = path.join(privateRoot, "guardian.json");
+  const heartbeatPath = path.join(privateRoot, "guardian-heartbeat.json");
+  const requestPath = path.join(privateRoot, "recovery-request.json");
+  const readyPath = path.join(privateRoot, "ready-request.json");
+  const releasePath = path.join(privateRoot, "release.json");
+  const reportPath = path.join(privateRoot, "recovery-report.json");
+  const firstRequestId = "12345678-1234-4234-8234-123456789abc";
+  const unusedFreshRequestId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const token = "fixture-fence-token-with-sufficient-entropy";
+  const previousConfirmation = process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
+  let guardian = null;
+  let takeoverPid = null;
+  try {
+    guardian = spawn("/bin/bash", [
+      "-c",
+      "exec 9>\"$1\"\nflock -n 9\nexec node \"$2\" --receipt \"$3\" --release-request \"$4\" --recovery-request \"$5\" --ready-request \"$6\" --heartbeat \"$7\"",
+      "viva-real-guardian-retry",
+      lockPath,
+      guardianScript,
+      receiptPath,
+      releasePath,
+      requestPath,
+      readyPath,
+      heartbeatPath,
+    ], {
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        PADLHUB_CUTOVER_FENCE_FD: "9",
+        PADLHUB_CUTOVER_FENCE_LOCK_PATH: lockPath,
+        PADLHUB_CUTOVER_FENCE_TOKEN: token,
+      },
+    });
+    for (let poll = 0; poll < 100 && (!fs.existsSync(receiptPath) || !fs.existsSync(heartbeatPath)); poll += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const guardianBytes = fs.readFileSync(receiptPath);
+    const options = {
+      barrierArtifact: path.join(privateRoot, "missing-barrier.json"),
+      expectedBarrierArtifactSha256: "a".repeat(64),
+      cutoverPlan: path.join(privateRoot, "missing-cutover.json"),
+      expectedCutoverPlanSha256: "b".repeat(64),
+      migrationConnectionFile: path.join(privateRoot, "missing-connection.json"),
+      executionIndex: path.join(privateRoot, "missing-execution.json"),
+      expectedExecutionIndexSha256: "c".repeat(64),
+      fenceReceipt: path.join(privateRoot, "missing-fence.json"),
+      expectedFenceReceiptSha256: "d".repeat(64),
+      fenceGuardianReceipt: receiptPath,
+      expectedFenceGuardianReceiptSha256: cutoverSha256(guardianBytes),
+      fenceGuardianRecoveryRequest: requestPath,
+      report: reportPath,
+    };
+    const argv = Object.entries({
+      "--barrier-artifact": options.barrierArtifact,
+      "--expected-barrier-artifact-sha256": options.expectedBarrierArtifactSha256,
+      "--cutover-plan": options.cutoverPlan,
+      "--expected-cutover-plan-sha256": options.expectedCutoverPlanSha256,
+      "--migration-connection-file": options.migrationConnectionFile,
+      "--execution-index": options.executionIndex,
+      "--expected-execution-index-sha256": options.expectedExecutionIndexSha256,
+      "--fence-receipt": options.fenceReceipt,
+      "--expected-fence-receipt-sha256": options.expectedFenceReceiptSha256,
+      "--fence-guardian-receipt": options.fenceGuardianReceipt,
+      "--expected-fence-guardian-receipt-sha256": options.expectedFenceGuardianReceiptSha256,
+      "--fence-guardian-recovery-request": options.fenceGuardianRecoveryRequest,
+      "--report": options.report,
+    }).flat();
+    process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = "RECOVER_VIVA_GAME_PROJECTION_MONGO_WRITE_BARRIER_V1";
+    await assert.rejects(requestRecoveryFromGuardian(argv, options, {
+      getUid: () => 0,
+      requestId: firstRequestId,
+      maximumPolls: 40,
+    }), /recovery child failed/);
+    const takeoverReceiptPath = path.join(privateRoot, `.viva-recovery-fence-takeover-${firstRequestId}.json`);
+    const firstTakeoverReceipt = JSON.parse(fs.readFileSync(takeoverReceiptPath, "utf8"));
+    takeoverPid = firstTakeoverReceipt.pid;
+    await assert.rejects(requestRecoveryFromGuardian(argv, options, {
+      getUid: () => 0,
+      requestId: unusedFreshRequestId,
+      maximumPolls: 40,
+    }), /recovery child failed/);
+    const acceptedNames = fs.readdirSync(privateRoot).filter((name) => name.startsWith("recovery-request.json.accepted-"));
+    const takeoverReceiptNames = fs.readdirSync(privateRoot)
+      .filter((name) => /^\.viva-recovery-fence-takeover-[^.]+\.json$/.test(name));
+    assert.deepEqual(acceptedNames, [`recovery-request.json.accepted-${firstRequestId}`]);
+    assert.deepEqual(takeoverReceiptNames, [`.viva-recovery-fence-takeover-${firstRequestId}.json`]);
+    assert.equal(JSON.parse(fs.readFileSync(takeoverReceiptPath, "utf8")).pid, takeoverPid);
+    process.kill(guardian.pid, "SIGKILL");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.notEqual(spawnSync("flock", ["-n", lockPath, "-c", "true"], { stdio: "ignore" }).status, 0);
+  } finally {
+    if (previousConfirmation === undefined) delete process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
+    else process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = previousConfirmation;
+    try { if (guardian?.pid) process.kill(guardian.pid, "SIGKILL"); } catch { /* already stopped */ }
+    try { if (takeoverPid) process.kill(takeoverPid, "SIGKILL"); } catch { /* already stopped */ }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    fs.rmSync(privateRoot, { recursive: true, force: true });
+  }
+});
+
+test("the real takeover waits for guardian handoff and exact release frees the final flock", {
+  skip: process.platform !== "linux" || process.getuid?.() !== 0
+    || process.env.PADLHUB_RUN_LINUX_FLOCK_TESTS !== "1",
+}, async () => {
+  const privateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-takeover-release-")));
+  fs.chmodSync(privateRoot, 0o700);
+  const lockPath = "/run/lock/padlhub-viva-game-projection-cutover.lock";
+  const guardianPath = path.join(privateRoot, "guardian.mjs");
+  const exitPath = path.join(privateRoot, "guardian-exit");
+  const receiptPath = path.join(privateRoot, "takeover.json");
+  const heartbeatPath = path.join(privateRoot, "takeover-heartbeat.json");
+  const releasePath = path.join(privateRoot, "release.json");
+  const reportPath = path.join(privateRoot, "recovery-report.json");
+  const takeoverPath = fs.realpathSync(path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)), "../run_viva_game_projection_recovery_fence_takeover.mjs",
+  ));
+  const requestId = "12345678-1234-4234-8234-123456789abc";
+  const token = "fixture-fence-token-with-sufficient-entropy";
+  let guardian = null;
+  let takeoverPid = null;
+  try {
+    write0600(guardianPath, Buffer.from(`
+      import fs from "node:fs";
+      import { spawn } from "node:child_process";
+      const [takeoverPath, receiptPath, heartbeatPath, releasePath, reportPath, exitPath, requestId, lockPath] = process.argv.slice(2);
+      const body = fs.readFileSync(\`/proc/\${process.pid}/stat\`, "utf8").trim();
+      const tail = body.slice(body.lastIndexOf(")") + 2).split(/\\s+/);
+      const identity = \`\${process.pid}:\${tail[19]}\`;
+      const stdio = Array(10).fill("ignore");
+      stdio[9] = 9;
+      const child = spawn(process.execPath, [takeoverPath,
+        "--receipt", receiptPath,
+        "--heartbeat", heartbeatPath,
+        "--release-request", releasePath,
+        "--recovery-report", reportPath,
+        "--parent-guardian-receipt-sha256", "a".repeat(64),
+        "--parent-guardian-pid", String(process.pid),
+        "--parent-guardian-process-start-identity", identity,
+        "--recovery-request-id", requestId,
+      ], { detached: true, stdio, env: process.env });
+      child.unref();
+      while (!fs.existsSync(exitPath)) await new Promise((resolve) => setTimeout(resolve, 20));
+    `));
+    guardian = spawn("/bin/bash", [
+      "-c",
+      "exec 9>\"$1\"\nflock -n 9\nexec node \"$2\" \"$3\" \"$4\" \"$5\" \"$6\" \"$7\" \"$8\" \"$9\" \"${10}\"",
+      "viva-takeover-release",
+      lockPath,
+      guardianPath,
+      takeoverPath,
+      receiptPath,
+      heartbeatPath,
+      releasePath,
+      reportPath,
+      exitPath,
+      requestId,
+      lockPath,
+    ], {
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        PADLHUB_CUTOVER_FENCE_FD: "9",
+        PADLHUB_CUTOVER_FENCE_LOCK_PATH: lockPath,
+        PADLHUB_CUTOVER_FENCE_TOKEN: token,
+      },
+    });
+    for (let poll = 0; poll < 100 && (!fs.existsSync(receiptPath) || !fs.existsSync(heartbeatPath)); poll += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const takeoverReceiptBytes = fs.readFileSync(receiptPath);
+    const takeoverReceipt = JSON.parse(takeoverReceiptBytes.toString("utf8"));
+    takeoverPid = takeoverReceipt.pid;
+    const journalPath = `${reportPath}.journal`;
+    fs.mkdirSync(journalPath, { mode: 0o700 });
+    const attemptId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const report = {
+      formatVersion: 1,
+      kind: "viva-game-projection-mongo-write-barrier-recovery-receipt",
+      state: "RELEASED_TO_EXACT_PREIMAGE",
+      recoveryAttemptId: attemptId,
+      recoveryJournalPath: journalPath,
+      guardianRecoveryRequestId: requestId,
+      recoveryFenceTakeoverState: "HELD_UNTIL_EXPLICIT_FENCE_RELEASE",
+      recoveryFenceTakeoverReceiptPath: receiptPath,
+      recoveryFenceTakeoverReceiptSha256: cutoverSha256(takeoverReceiptBytes),
+    };
+    const reportBytes = Buffer.from(canonicalJson(report));
+    write0600(reportPath, reportBytes);
+    const terminal = {
+      formatVersion: 1,
+      attemptId,
+      mode: "BARRIER_RECOVERY",
+      sequence: 1,
+      at: new Date().toISOString(),
+      phase: "TERMINAL_RESULT",
+      reportSha256: cutoverSha256(reportBytes),
+      reportBytesBase64: reportBytes.toString("base64"),
+      report,
+    };
+    const terminalBytes = Buffer.from(canonicalJson(terminal));
+    write0600(path.join(journalPath, "0001-terminal-result.json"), terminalBytes);
+    write0600(releasePath, Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-fence-release-request",
+      state: "RELEASE_AUTHORIZED",
+      confirmation: "RELEASE_VIVA_GAME_PROJECTION_CUTOVER_FENCE_V1",
+      fenceTokenSha256: cutoverSha256(token),
+      recoveryRequestId: requestId,
+      recoveryReportPath: reportPath,
+      recoveryReportSha256: cutoverSha256(reportBytes),
+      recoveryTerminalJournalSha256: cutoverSha256(terminalBytes),
+      recoveryFenceTakeoverReceiptSha256: cutoverSha256(takeoverReceiptBytes),
+      authorizedAt: new Date().toISOString(),
+    })));
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    process.kill(takeoverPid, 0);
+    assert.equal(fs.existsSync(releasePath), true);
+    assert.notEqual(spawnSync("flock", ["-n", lockPath, "-c", "true"], { stdio: "ignore" }).status, 0);
+    write0600(exitPath, Buffer.from("handoff\n"));
+    await new Promise((resolve) => guardian.once("close", resolve));
+    let acquired = false;
+    for (let poll = 0; poll < 150 && !acquired; poll += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      acquired = spawnSync("flock", ["-n", lockPath, "-c", "true"], { stdio: "ignore" }).status === 0;
+    }
+    assert.equal(acquired, true);
+  } finally {
+    try { if (guardian?.pid) process.kill(guardian.pid, "SIGKILL"); } catch { /* already stopped */ }
+    try { if (takeoverPid) process.kill(takeoverPid, "SIGKILL"); } catch { /* already stopped */ }
+    fs.rmSync(privateRoot, { recursive: true, force: true });
+  }
+});
+
 test("durable reports use append-only private journals outside Git worktrees", () => {
   const privateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-cutover-journal-")));
   fs.chmodSync(privateRoot, 0o700);
@@ -1865,6 +2260,64 @@ test("durable reports use append-only private journals outside Git worktrees", (
     assert.equal(terminal.mutationAttempted, true);
     const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
     assert.throws(() => ensurePrivateDirectory(path.join(repositoryRoot, "tmp-cutover-output"), "Fixture"), /outside the repository/);
+  } finally {
+    fs.rmSync(privateRoot, { recursive: true, force: true });
+  }
+});
+
+test("recovery journal publishes one exact private next-sequence orphan for every nonterminal append", () => {
+  const privateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-recovery-orphans-")));
+  fs.chmodSync(privateRoot, 0o700);
+  const bindings = {
+    barrierArtifactSha256: "1".repeat(64),
+    cutoverPlanSha256: "2".repeat(64),
+    executionIndexSha256: "3".repeat(64),
+    fenceReceiptSha256: "4".repeat(64),
+    fenceGuardianReceiptSha256: "5".repeat(64),
+  };
+  const cases = [
+    { phase: "ATTEMPT_STARTED", prefix: [] },
+    { phase: "BARRIER_RECOVERY_OUTCOME_UNKNOWN", prefix: ["ATTEMPT_STARTED"] },
+    { phase: "BARRIER_RECOVERY_RECONCILE_OUTCOME_UNKNOWN", prefix: ["ATTEMPT_STARTED", "BARRIER_RECOVERY_OUTCOME_UNKNOWN"] },
+    { phase: "FENCE_REVALIDATED_BEFORE_BARRIER_RECOVERY", prefix: ["ATTEMPT_STARTED", "BARRIER_RECOVERY_OUTCOME_UNKNOWN"] },
+    { phase: "FENCE_REVALIDATED_DURING_BARRIER_RECOVERY", prefix: ["ATTEMPT_STARTED", "BARRIER_RECOVERY_OUTCOME_UNKNOWN", "FENCE_REVALIDATED_BEFORE_BARRIER_RECOVERY"] },
+    { phase: "FENCE_REVALIDATED_AFTER_BARRIER_RECOVERY", prefix: ["ATTEMPT_STARTED", "BARRIER_RECOVERY_OUTCOME_UNKNOWN", "FENCE_REVALIDATED_BEFORE_BARRIER_RECOVERY", "FENCE_REVALIDATED_DURING_BARRIER_RECOVERY"] },
+  ];
+  try {
+    for (const [caseIndex, { phase, prefix }] of cases.entries()) {
+      const reportPath = path.join(privateRoot, `report-${caseIndex}.json`);
+      const journalPath = `${reportPath}.journal`;
+      fs.mkdirSync(journalPath, { mode: 0o700 });
+      const attemptId = `12345678-1234-4234-8234-${String(caseIndex).padStart(12, "0")}`;
+      for (const [sequence, prefixPhase] of prefix.entries()) {
+        const prefixSlug = prefixPhase.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        write0600(path.join(journalPath, `${String(sequence).padStart(4, "0")}-${prefixSlug}.json`), Buffer.from(canonicalJson({
+          formatVersion: 1, attemptId, mode: "BARRIER_RECOVERY", sequence,
+          at: nowIso, phase: prefixPhase,
+          ...(prefixPhase === "ATTEMPT_STARTED" || prefixPhase.startsWith("BARRIER_RECOVERY_") ? bindings : {}),
+        })));
+      }
+      const sequence = prefix.length;
+      const phaseSlug = phase.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      const orphanName = `.${String(sequence).padStart(4, "0")}-${phaseSlug}.json.321.aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.tmp`;
+      const orphan = {
+        formatVersion: 1, attemptId, mode: "BARRIER_RECOVERY", sequence,
+        at: nowIso, phase,
+        ...(phase === "ATTEMPT_STARTED" || phase.startsWith("BARRIER_RECOVERY_") ? bindings : {}),
+      };
+      write0600(path.join(journalPath, orphanName), Buffer.from(canonicalJson(orphan)));
+      openRecoveryJournal(reportPath, bindings);
+      assert.equal(fs.readdirSync(journalPath).some((name) => name.startsWith(".")), false);
+      const recoveredPath = path.join(journalPath, `${String(sequence).padStart(4, "0")}-${phaseSlug}.json`);
+      assert.deepEqual(JSON.parse(fs.readFileSync(recoveredPath, "utf8")), orphan);
+    }
+    const ambiguousReportPath = path.join(privateRoot, "report-ambiguous.json");
+    const ambiguousJournalPath = `${ambiguousReportPath}.journal`;
+    fs.mkdirSync(ambiguousJournalPath, { mode: 0o700 });
+    for (const suffix of ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"]) {
+      write0600(path.join(ambiguousJournalPath, `.0000-attempt-started.json.321.${suffix}.tmp`), Buffer.from("partial"));
+    }
+    assert.throws(() => openRecoveryJournal(ambiguousReportPath, bindings), /unrelated or ambiguous/);
   } finally {
     fs.rmSync(privateRoot, { recursive: true, force: true });
   }
