@@ -191,7 +191,7 @@ export function validatePartnerSidecarArtifacts({ artifacts, candidateBytes, sid
   const rehearsal = JSON.parse(rehearsalBytes.toString("utf8"));
   const expected = {
     formatVersion: 1,
-    capturedAt: "2026-09-04T13:05:14.000Z",
+    capturedAt: "2026-09-05T06:49:04.000Z",
     environment: "LOCAL_DISPOSABLE_CONTAINER",
     networkMode: "none",
     runtime: {

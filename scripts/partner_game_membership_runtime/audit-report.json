@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "capturedAt": "2026-09-04T12:30:33.751Z",
+  "capturedAt": "2026-09-05T06:35:59.436Z",
   "command": "npm audit --omit=dev --json",
   "runtime": {
     "platform": "linux",
@@ -80,6 +80,7 @@
         "qs"
       ],
       "effects": [
+        "@node-red/editor-api",
         "@node-red/nodes"
       ],
       "range": "1.20.5 - 1.20.6",
@@ -97,7 +98,6 @@
         "qs"
       ],
       "effects": [
-        "@node-red/editor-api",
         "@node-red/runtime",
         "node-red"
       ],

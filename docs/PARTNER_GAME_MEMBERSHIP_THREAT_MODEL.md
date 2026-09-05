@@ -142,7 +142,9 @@ settlement. Viva является authority только для существо
   response и отсутствие blind retry.
 - Контроли v0.2: adapter не делает retry, прокидывает `Idempotency-Key`, требует exact
   create binding, cancel-only probe и read-back; readiness выполняется до local
-  operation/reservation.
+  operation/reservation. Один deadline охватывает fetch и полное чтение response body;
+  поток ограничен `1 000 000` байт по `Content-Length` и фактически полученным chunks,
+  а при timeout/overflow reader отменяется без запроса следующего chunk.
 - Corrective control: все непустые identity/state aliases обязаны согласовываться, а
   lifecycle booleans и textual state дают один непротиворечивый результат. REMOVE
   использует сохранённый canonical `technicalVivaClientId`, поэтому runtime rotation не

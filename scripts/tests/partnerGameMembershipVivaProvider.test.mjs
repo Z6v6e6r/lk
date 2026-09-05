@@ -4,16 +4,16 @@ import test from "node:test";
 import {
   PARTNER_VIVA_ADMIN_API_BASE,
   PARTNER_VIVA_CONTRACT_REVISION,
+  PARTNER_VIVA_RESPONSE_MAX_BYTES,
   VivaAdminTechnicalUserProvider,
 } from "../../node-red/custom-nodes/partner-game-membership-api/partner-game-membership-viva.mjs";
 
 const TOKEN = "header.payload.signature-value-for-tests";
 const OPERATION_ID = "550e8400-e29b-41d4-a716-446655440000";
-const response = (status, payload) => ({
-  status,
-  ok: status >= 200 && status < 300,
-  async text() { return payload === null ? "" : JSON.stringify(payload); },
-});
+const response = (status, payload) => new Response(
+  payload === null ? null : JSON.stringify(payload),
+  { status, headers: { "Content-Type": "application/json" } },
+);
 
 const readyProvider = (fetchImpl) => new VivaAdminTechnicalUserProvider({
   fetchImpl,
@@ -97,6 +97,115 @@ test("Viva mutation transport and 5xx outcomes are ambiguous and never retried",
     });
     assert.equal(calls, 1);
   }
+});
+
+test("Viva response timeout remains active while the body is streaming", async () => {
+  let signal;
+  let readCalls = 0;
+  let cancelCalls = 0;
+  let releaseCalls = 0;
+  const provider = readyProvider(async (_url, options) => {
+    signal = options.signal;
+    return {
+      status: 201,
+      ok: true,
+      headers: { get: () => null },
+      body: {
+        getReader() {
+          return {
+            read() {
+              readCalls += 1;
+              return new Promise(() => {});
+            },
+            async cancel() { cancelCalls += 1; },
+            releaseLock() { releaseCalls += 1; },
+          };
+        },
+      },
+    };
+  });
+
+  const startedAt = Date.now();
+  await assert.rejects(() => provider.addTechnicalUser(addInput), {
+    code: "VIVA_ADD_OUTCOME_UNKNOWN",
+    ambiguous: true,
+    httpStatus: 202,
+  });
+  const elapsedMs = Date.now() - startedAt;
+
+  assert.equal(signal.aborted, true);
+  assert.equal(readCalls, 1);
+  assert.equal(cancelCalls, 1);
+  assert.equal(releaseCalls, 1);
+  assert.ok(elapsedMs >= 900, `body timeout fired too early: ${elapsedMs}ms`);
+  assert.ok(elapsedMs < 2_000, `body timeout did not bound the request: ${elapsedMs}ms`);
+});
+
+test("Viva response streaming stops and cancels before buffering an oversized body", async () => {
+  const chunks = [
+    new Uint8Array(600_000).fill(0x20),
+    new Uint8Array(PARTNER_VIVA_RESPONSE_MAX_BYTES - 600_000 + 1).fill(0x20),
+    new Uint8Array(1).fill(0x20),
+  ];
+  let readCalls = 0;
+  let cancelCalls = 0;
+  let releaseCalls = 0;
+  const provider = readyProvider(async () => ({
+    status: 201,
+    ok: true,
+    headers: { get: () => null },
+    body: {
+      getReader() {
+        return {
+          async read() {
+            const value = chunks[readCalls];
+            readCalls += 1;
+            return value ? { done: false, value } : { done: true, value: undefined };
+          },
+          async cancel() { cancelCalls += 1; },
+          releaseLock() { releaseCalls += 1; },
+        };
+      },
+    },
+  }));
+
+  await assert.rejects(() => provider.addTechnicalUser(addInput), {
+    code: "VIVA_RESPONSE_TOO_LARGE",
+    ambiguous: true,
+    httpStatus: 202,
+  });
+  assert.equal(readCalls, 2, "reader must stop before requesting another chunk");
+  assert.equal(cancelCalls, 1);
+  assert.equal(releaseCalls, 1);
+});
+
+test("Viva response rejects an oversized Content-Length before opening the stream", async () => {
+  let getReaderCalls = 0;
+  let cancelCalls = 0;
+  const provider = readyProvider(async () => ({
+    status: 201,
+    ok: true,
+    headers: {
+      get(name) {
+        return name === "content-length" ? String(PARTNER_VIVA_RESPONSE_MAX_BYTES + 1) : null;
+      },
+    },
+    body: {
+      getReader() {
+        getReaderCalls += 1;
+        throw new Error("oversized response must not be opened");
+      },
+      async cancel() { cancelCalls += 1; },
+    },
+  }));
+
+  await assert.rejects(() => provider.addTechnicalUser(addInput), {
+    code: "VIVA_RESPONSE_TOO_LARGE",
+    ambiguous: true,
+    httpStatus: 202,
+  });
+  assert.equal(getReaderCalls, 0);
+  assert.equal(cancelCalls, 1);
 });
 
 test("Viva add rejects missing or mismatched booking identity as ambiguous", async () => {
