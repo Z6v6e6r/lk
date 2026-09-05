@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -37,7 +38,7 @@ const CAN_EXECUTE_INGRESS_FIXTURES = process.platform === "linux" && BASH_MAJOR 
 const clone = (value) => structuredClone(value);
 
 const runIngressFixture = (configure, bounds = {}) => {
-  const temporary = fs.mkdtempSync("/private/tmp/lk1-ingress-closure-test-");
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "lk1-ingress-closure-test-"));
   const root = path.join(temporary, "root");
   const external = path.join(temporary, "external");
   fs.mkdirSync(root);
