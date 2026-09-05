@@ -14,7 +14,7 @@
         <mxCell id="4" value="ТОЛЬКО ЛОКАЛЬНЫЙ РЕЗУЛЬТАТ&#xa;NOT_LIVE_PROOF&#xa;deploy / activation = false" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1">
           <mxGeometry x="1060" y="20" width="320" height="130" as="geometry" />
         </mxCell>
-        <mxCell id="5" value="NGINX 1.24 — ВЫБРАН&#xa;Raw-request guard + live proof&#xa;TLS/mTLS rehearsal — NOT_RUN" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1">
+        <mxCell id="5" value="NGINX 1.24 — ВЫБРАН&#xa;Raw guard: local 135 probes PASS&#xa;Live proof / packet — НЕ ГОТОВЫ" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;spacing=14;" vertex="1" parent="1">
           <mxGeometry x="540" y="350" width="320" height="140" as="geometry" />
         </mxCell>
         <mxCell id="6" value="БЕЗУСЛОВНЫЙ STOP&#xa;UNSUPPORTED_INGRESS_ADAPTER&#xa;Боевой ingress не меняется" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1">
@@ -32,6 +32,23 @@
         <mxCell id="10" value="сейчас" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=16;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="Raw guard local candidate">
+    <mxGraphModel grid="1" gridSize="10" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="NGINX 1.24 · FIXTURE&#xa;TLS + synthetic client cert&#xa;HTTP/1.1 · no external network&#xa;Framing rejected before proxy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="320" height="160" as="geometry" /></mxCell>
+        <mxCell id="3" value="RAW GUARD · CANDIDATE&#xa;Duplicate headers + JSON keys&#xa;16 KiB · deadline · audit&#xa;Then req.body / _body = true" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="20" width="320" height="160" as="geometry" /></mxCell>
+        <mxCell id="4" value="REAL NODE-RED 5.0.6&#xa;HTTP In → fixture observer&#xa;Valid: 1 call, same payload&#xa;Rejected: 0 calls" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1220" y="20" width="320" height="160" as="geometry" /></mxCell>
+        <mxCell id="5" value="LOCAL REDACTED AUDIT&#xa;Fixed code + new request ID&#xa;No body / nonce / IP / signature&#xa;Receipt binds source + logs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="620" y="460" width="320" height="160" as="geometry" /></mxCell>
+        <mxCell id="6" value="PRODUCTION STOP&#xa;Old packet unchanged&#xa;Viva / Mongo not connected&#xa;No deploy or activation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=18;spacing=14;" vertex="1" parent="1"><mxGeometry x="1220" y="460" width="320" height="160" as="geometry" /></mxCell>
+        <mxCell id="7" value="raw request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="8" value="only after audit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="9" value="accept / reject" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="3" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="10" value="not business proof" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
       </root>
     </mxGraphModel>
   </diagram>

@@ -1,9 +1,11 @@
 # Partner API: ingress evidence core
 
 Статус: реализована **общая локальная часть**, не production live-verifier.
+Отдельно добавлен [raw-request guard и физическая локальная Nginx-репетиция](PARTNER_GAME_MEMBERSHIP_RAW_GUARD.md).
+Новый кандидат ещё не включён в frozen production packet.
 `verifyPartnerProductionIngress()` безусловно завершается
 `UNSUPPORTED_INGRESS_ADAPTER`. Нет CLI, сетевого collector, чтения production,
-проверки X.509 certificate/CA или физических TLS/mTLS probes. Существующие
+проверки X.509 certificate/CA или физических TLS/mTLS probes внутри этого verifier. Существующие
 production-controls, binding, immutable packet и runtime не меняются.
 
 **Выбор 2026-09-05: Nginx, подтверждён пользователем.** Read-only `nginx -v/-V`
@@ -201,7 +203,9 @@ expiry, canonical encoding, размер, file ownership/modes, symlink/hardlink
 подмену файла при чтении, полноту матрицы, drift и запрет повышения local proof до live.
 Ключи тестов генерируются только в памяти; shared data и реальные сертификаты не нужны.
 
-Физический TLS, Linux-host collector и production evidence: **NOT_RUN / NOT_IMPLEMENTED**.
+Production TLS, Linux-host collector и production evidence: **NOT_RUN / NOT_IMPLEMENTED**.
+Отдельный raw-guard fixture теперь физически проверяет HTTP/1.1 TLS с синтетическим
+client certificate и no-cert rejection, но не всю generic/live matrix.
 Не следует подменять эту отметку результатом unit-тестов или прошлым зелёным main CI.
 
 Первый checkpoint `3e5965a` (до выбора Nginx): Partner suite `131/131`, ESLint, TypeScript и inert
@@ -215,5 +219,11 @@ unknown/duplicate/incomplete metadata, disabled modules, source/control drift,
 непроверенные raw guards и запрет caller claims. Новый combined suite `143/143`,
 full ESLint/TypeScript и inert prod/dev build PASS; scoped security review P0–P2=`0`.
 XML повторно проходит structural validation; PNG/visual QA не повторялись.
-Локальный Docker daemon недоступен;
-его не запускали и не перезапускали. Physical Nginx/Node-RED rehearsal остаётся NOT_RUN.
+На момент checkpoint `956af9b` локальный Docker daemon был недоступен;
+его не запускали и не перезапускали. Physical Nginx/Node-RED rehearsal тогда оставалась NOT_RUN.
+
+Следующий одобренный локальный этап: Docker уже работал, restart не потребовался.
+Raw guard/factory добавлены отдельно от pinned settings; `135/135` physical probes
+на Linux x64 Node 22.23.2 / Node-RED 5.0.6 / Nginx 1.24 прошли. Это не обновляет
+старые source pins, не снимает live blockers и не разрешает deploy/activation.
+См. отдельный runbook выше: scope, исходники, ограничения и воспроизведение.
