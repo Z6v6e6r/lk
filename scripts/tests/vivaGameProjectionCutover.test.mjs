@@ -2433,6 +2433,7 @@ test("the real guardian releases terminal fallback only after the exact takeover
   let guardian = null;
   let recoveryPid = null;
   let takeoverPid = null;
+  let watcher = null;
   try {
     guardian = spawn("/bin/bash", [
       "-c",
@@ -2554,6 +2555,20 @@ test("the real guardian releases terminal fallback only after the exact takeover
       "--fence-guardian-recovery-request": options.fenceGuardianRecoveryRequest,
       "--report": options.report,
     }).flat();
+    const takeoverReceiptPath = path.join(privateRoot, `.viva-recovery-fence-takeover-${requestId}.json`);
+    const recoveryStopped = new Promise((resolve, reject) => {
+      watcher = fs.watch(privateRoot, (_event, filename) => {
+        if (filename !== path.basename(takeoverReceiptPath) || recoveryPid) return;
+        try {
+          const children = fs.readFileSync(`/proc/${guardian.pid}/task/${guardian.pid}/children`, "utf8")
+            .trim().split(/\s+/).filter(Boolean).map(Number);
+          assert.equal(children.length, 1);
+          [recoveryPid] = children;
+          process.kill(recoveryPid, "SIGSTOP");
+          resolve();
+        } catch (error) { reject(error); }
+      });
+    });
     write0600(requestPath, Buffer.from(canonicalJson({
       formatVersion: 1,
       kind: "viva-game-projection-fence-recovery-request",
@@ -2566,14 +2581,15 @@ test("the real guardian releases terminal fallback only after the exact takeover
       argv,
       authorizedAt: new Date().toISOString(),
     })));
-    const takeoverReceiptPath = path.join(privateRoot, `.viva-recovery-fence-takeover-${requestId}.json`);
-    for (let poll = 0; poll < 500 && !fs.existsSync(takeoverReceiptPath); poll += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 2));
+    await Promise.race([
+      recoveryStopped,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Did not stop terminal recovery child")), 5_000)),
+    ]);
+    watcher.close();
+    watcher = null;
+    for (let poll = 0; poll < 100 && !fs.existsSync(takeoverReceiptPath); poll += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    const children = fs.readFileSync(`/proc/${guardian.pid}/task/${guardian.pid}/children`, "utf8")
-      .trim().split(/\s+/).filter(Boolean).map(Number);
-    assert.equal(children.length, 1);
-    [recoveryPid] = children;
     const takeoverBytes = fs.readFileSync(takeoverReceiptPath);
     const takeoverReceipt = JSON.parse(takeoverBytes.toString("utf8"));
     takeoverPid = takeoverReceipt.pid;
@@ -2678,6 +2694,7 @@ test("the real guardian releases terminal fallback only after the exact takeover
     try { if (guardian?.pid) process.kill(guardian.pid, "SIGKILL"); } catch { /* already stopped */ }
     try { if (recoveryPid) process.kill(recoveryPid, "SIGKILL"); } catch { /* already stopped */ }
     try { if (takeoverPid) process.kill(takeoverPid, "SIGKILL"); } catch { /* already stopped */ }
+    try { watcher?.close(); } catch { /* already closed */ }
     await new Promise((resolve) => setTimeout(resolve, 100));
     fs.rmSync(privateRoot, { recursive: true, force: true });
   }
