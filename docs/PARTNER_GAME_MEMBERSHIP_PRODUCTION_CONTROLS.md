@@ -123,6 +123,12 @@ deploy/activation authorization. До deploy нужен отдельный live 
 читает exact ingress config/readback/certificate/CA и подписанный audit reachability
 artifact, а также сам повторяет отрицательные сетевые probes.
 
+Общая локальная часть описана в
+[Ingress evidence core](PARTNER_GAME_MEMBERSHIP_INGRESS_VERIFIER.md). Она проверяет
+подпись, pinned files и локальную матрицу результатов, но не собирает live evidence:
+production entry point пока всегда возвращает `UNSUPPORTED_INGRESS_ADAPTER`.
+Это не снимает `DECLARED_EVIDENCE_UNVERIFIED` и не изменяет 16 `requiredBeforeDeploy`.
+
 ## Ingress contract
 
 Разрешены только три пары method/path:
