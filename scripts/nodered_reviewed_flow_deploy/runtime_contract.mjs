@@ -394,11 +394,41 @@ export function writeFileExclusiveAtomicDurable(
     onTransition("temporary-synced");
     fs.linkSync(temporary, filePath);
     linked = true;
+    onTransition("destination-linked-before-directory-sync");
     syncDirectory(directory);
     onTransition("destination-linked");
     fs.unlinkSync(temporary);
+    onTransition("temporary-unlinked-before-directory-sync");
     syncDirectory(directory);
+    onTransition("publication-directory-synced");
     assertProtectedFile(filePath, { uid, gid, mode });
+  } catch (error) {
+    if (linked) {
+      try {
+        recoverAtomicExclusivePublication(filePath, { uid, gid, mode });
+        assertProtectedFile(filePath, { uid, gid, mode });
+        if (!fs.readFileSync(filePath).equals(Buffer.from(bytes))) {
+          throw new Error(`Atomic exclusive publication content mismatch: ${filePath}`);
+        }
+        syncDirectory(directory);
+        return;
+      } catch (reconciliationError) {
+        try {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+          if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+          syncDirectory(directory);
+          if (fs.existsSync(filePath)) throw new Error(`Atomic exclusive publication cleanup failed: ${filePath}`);
+        } catch (cleanupError) {
+          const failure = new Error(`Atomic exclusive publication outcome is unknown: ${filePath}`);
+          failure.publicationOutcome = "UNKNOWN";
+          failure.publicationPath = filePath;
+          failure.cause = new AggregateError([error, reconciliationError, cleanupError]);
+          throw failure;
+        }
+        throw error;
+      }
+    }
+    throw error;
   } finally {
     if (descriptor !== undefined) {
       try { fs.closeSync(descriptor); } catch { /* already closed */ }

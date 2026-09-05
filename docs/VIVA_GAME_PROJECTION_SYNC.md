@@ -257,10 +257,17 @@ recovered only with the exact artifact and explicit
 `npm run mongo:viva-game-projection-sync:barrier-recover` confirmation. Recovery
 also requires the exact execution index, fresh writer-fence and guardian receipts, a live
 guardian heartbeat holding the canonical lock inode, the frozen runtime in
-`stopped`/`SHADOW`, and the exact clean executor commit. It durably records an
-outcome-unknown entry before restoring Mongo state; retrying the same report
-path reconciles that journal and completes the exact preimage. The validator is
-restored before application roles are returned. This
+`stopped`/`SHADOW`, and the exact clean executor commit. The operator command
+writes a private, fresh recovery request; the guardian alone accepts it and
+spawns the frozen recovery executor with its inherited canonical flock FD.
+Release requests are quarantined while recovery runs. The executor repeats the
+live flock, heartbeat, PM2, and receipt gates before and after every Mongo
+recovery side effect. It durably records an outcome-unknown entry before
+restoring Mongo state; retrying the same report path reconciles that journal and
+completes the exact preimage. Its terminal journal entry contains the complete
+report and hash before report publication, so a crash in finalization recreates
+the report without repeating Mongo mutations. The validator is restored before
+application roles are returned. This
 Mongo barrier survives coordinator and guardian-process failure. The coordinator then rereads
 the packet's complete EJSON backup and requires its document count and canonical
 full-collection state hash to equal a fresh live scan under the barrier before
@@ -330,6 +337,10 @@ and terminal journal entry, then repeats the packet, writer fence, guardian,
 Mongo barrier, PM2, and exact `/flows` gates. READY is written last and binds the
 terminal report/journal hashes, exact execution-index SHA, coordinator attempt
 UUID, barrier receipt, guardian receipt, and final guardian heartbeat.
+If READY publication cannot be reconciled or durably removed, the publication
+helper returns an explicit outcome-unknown path. The coordinator then keeps the
+already validated SHADOW runtime online while ingress and both barriers remain
+closed, avoiding a valid-looking READY marker that points to a stopped runtime.
 The coordinator reports `POSTCHECK_PASS_INGRESS_STILL_BLOCKED`; it never opens
 ingress. A failed postcheck emits no READY marker. If the candidate was already
 published, the coordinator must prove PM2 `stopped`; a stop failure is reported
@@ -343,7 +354,8 @@ connection file and its SHA-256, a new Mongo-barrier receipt path, flow-backup
 directory, apply-index output, postcheck output, and canonical live flow path.
 `PADLHUB_CUTOVER_GUARDIAN_RECEIPT`,
 `PADLHUB_CUTOVER_GUARDIAN_HEARTBEAT`, and
-`PADLHUB_CUTOVER_GUARDIAN_RELEASE_REQUEST` must point to new private paths
+`PADLHUB_CUTOVER_GUARDIAN_RELEASE_REQUEST` and
+`PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST` must point to new private paths
 outside the repository. Live execution requires both
 the migration confirmation and `VIVA_GAME_PROJECTION_CUTOVER_EXECUTE=`
 `EXECUTE_VIVA_GAME_PROJECTION_CUTOVER_V1`; neither is present in a prepared

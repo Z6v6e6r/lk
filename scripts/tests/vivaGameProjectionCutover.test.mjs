@@ -12,8 +12,14 @@ import {
   installMongoWriteBarrier,
   restorePreviousMongoWriteBarrier,
 } from "../lib/vivaGameProjectionMongoWriteBarrier.mjs";
-import { isAuthorizedFenceGuardianRelease } from "../lib/vivaGameProjectionFenceGuardian.mjs";
-import { validateExactCutoverPacket } from "../lib/vivaGameProjectionCutoverPacketValidation.mjs";
+import {
+  isAuthorizedFenceGuardianRecovery,
+  isAuthorizedFenceGuardianRelease,
+} from "../lib/vivaGameProjectionFenceGuardian.mjs";
+import {
+  validateCopiedControlEvidence,
+  validateExactCutoverPacket,
+} from "../lib/vivaGameProjectionCutoverPacketValidation.mjs";
 import {
   buildMongoTargetIdentity,
   buildVivaGameProjectionCutoverPlan,
@@ -37,12 +43,16 @@ import { buildLegacyTenantMigrationPlan } from "../lib/vivaGameProjectionTenantM
 import { prepareVivaGameProjectionCutoverPacket } from "../prepare_viva_game_projection_cutover_packet.mjs";
 import { prepareVivaGameProjectionCutoverPostcheck } from "../prepare_viva_game_projection_cutover_postcheck.mjs";
 import { buildVivaGameProjectionSyncCandidate } from "../prepare_viva_game_projection_sync_candidate.mjs";
-import { recoverVivaGameProjectionMongoWriteBarrier } from "../recover_viva_game_projection_mongo_write_barrier.mjs";
+import {
+  recoverVivaGameProjectionMongoWriteBarrier,
+  requestRecoveryFromGuardian,
+} from "../recover_viva_game_projection_mongo_write_barrier.mjs";
 import {
   createDurableReportJournal,
   ensurePrivateDirectory,
   validateHeldWriterFence,
 } from "../run_viva_game_projection_tenant_migration.mjs";
+import { writeFileExclusiveAtomicDurable } from "../nodered_reviewed_flow_deploy/runtime_contract.mjs";
 
 const sourceFlowSha256 = "a".repeat(64);
 const candidateSha256 = "b".repeat(64);
@@ -423,11 +433,21 @@ test("Mongo write barrier proves application denial and migration-only bypass", 
     cutoverPlanSha256: "6".repeat(64),
     mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
   });
+  const recoveryFencePhases = [];
   await restorePreviousMongoWriteBarrier(migrationClient, preparation, {
     fenceTokenSha256,
     cutoverPlanSha256: "6".repeat(64),
     mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
+    assertFence: async (phase) => { recoveryFencePhases.push(phase); },
   });
+  assert.deepEqual(recoveryFencePhases, [
+    "BEFORE_RECOVERY_STATE_READ",
+    "BEFORE_VALIDATOR_RESTORE",
+    "AFTER_VALIDATOR_RESTORE",
+    "BEFORE_APPLICATION_ROLES_RESTORE",
+    "AFTER_APPLICATION_ROLES_RESTORE",
+    "AFTER_RECOVERY_READBACK",
+  ]);
   assert.deepEqual(state, { validator: {}, validationLevel: "strict", validationAction: "error" });
   assert.deepEqual(applicationRoles, [{ role: "readWrite", db: "games" }]);
 });
@@ -449,6 +469,158 @@ test("fence guardian rejects malformed or stale release requests without treatin
     release: { ...exact, authorizedAt: new Date(nowMs - 5 * 60_000 - 1).toISOString() },
     validPrivateFile: true, fenceTokenSha256, nowMs,
   }), false);
+  const recoveryArgv = [
+    "--barrier-artifact", "/private/barrier.json.prepared",
+    "--expected-barrier-artifact-sha256", "1".repeat(64),
+    "--cutover-plan", "/private/cutover.json",
+    "--expected-cutover-plan-sha256", "2".repeat(64),
+    "--migration-connection-file", "/private/migration.json",
+    "--execution-index", "/private/execution.json",
+    "--expected-execution-index-sha256", "3".repeat(64),
+    "--fence-receipt", "/private/fence.json",
+    "--expected-fence-receipt-sha256", "4".repeat(64),
+    "--fence-guardian-receipt", "/private/guardian.json",
+    "--expected-fence-guardian-receipt-sha256", "5".repeat(64),
+    "--fence-guardian-recovery-request", "/private/recovery-request.json",
+    "--report", "/private/recovery-report.json",
+  ];
+  const recoveryRequest = {
+    formatVersion: 1,
+    kind: "viva-game-projection-fence-recovery-request",
+    state: "RECOVERY_AUTHORIZED",
+    confirmation: "RECOVER_VIVA_GAME_PROJECTION_MONGO_WRITE_BARRIER_V1",
+    requestId: "12345678-1234-4234-8234-123456789abc",
+    guardianPid: 123,
+    guardianProcessStartIdentity: "123:456",
+    fenceTokenSha256,
+    argv: recoveryArgv,
+    authorizedAt: nowIso,
+  };
+  assert.equal(isAuthorizedFenceGuardianRecovery({
+    request: recoveryRequest, validPrivateFile: true, fenceTokenSha256,
+    guardianPid: 123, processStartIdentity: "123:456", nowMs,
+  }), true);
+  assert.equal(isAuthorizedFenceGuardianRecovery({
+    request: { ...recoveryRequest, argv: [...recoveryArgv, "--report", "/tmp/other"] },
+    validPrivateFile: true, fenceTokenSha256, guardianPid: 123, processStartIdentity: "123:456", nowMs,
+  }), false);
+});
+
+test("recovery request waits for the exact guardian child terminal result", async () => {
+  const privateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-guardian-recovery-request-")));
+  fs.chmodSync(privateRoot, 0o700);
+  const previousConfirmation = process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
+  process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = "RECOVER_VIVA_GAME_PROJECTION_MONGO_WRITE_BARRIER_V1";
+  try {
+    const executorPath = fs.realpathSync(path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)), "../recover_viva_game_projection_mongo_write_barrier.mjs",
+    ));
+    const requestPath = path.join(privateRoot, "recovery-request.json");
+    const reportPath = path.join(privateRoot, "recovery-report.json");
+    const guardianPath = path.join(privateRoot, "guardian.json");
+    const requestId = "12345678-1234-4234-8234-123456789abc";
+    const attemptId = "87654321-4321-4321-8321-cba987654321";
+    const expected = {
+      expectedBarrierArtifactSha256: "1".repeat(64),
+      expectedCutoverPlanSha256: "2".repeat(64),
+      expectedExecutionIndexSha256: "3".repeat(64),
+      expectedFenceReceiptSha256: "4".repeat(64),
+    };
+    const guardian = {
+      formatVersion: 1,
+      kind: "viva-game-projection-fence-guardian-receipt",
+      state: "HOLDING_UNTIL_EXPLICIT_RELEASE",
+      pid: 123,
+      processStartIdentity: "123:456",
+      fenceTokenSha256,
+      recoveryRequestPath: requestPath,
+      recoveryExecutorPath: executorPath,
+      recoveryExecutorSha256: cutoverSha256(fs.readFileSync(executorPath)),
+    };
+    const guardianBytes = Buffer.from(canonicalJson(guardian));
+    write0600(guardianPath, guardianBytes);
+    const expectedGuardianSha256 = cutoverSha256(guardianBytes);
+    const options = {
+      ...expected,
+      barrierArtifact: path.join(privateRoot, "barrier.json"),
+      cutoverPlan: path.join(privateRoot, "cutover.json"),
+      migrationConnectionFile: path.join(privateRoot, "migration.json"),
+      executionIndex: path.join(privateRoot, "execution.json"),
+      fenceReceipt: path.join(privateRoot, "fence.json"),
+      fenceGuardianReceipt: guardianPath,
+      expectedFenceGuardianReceiptSha256: expectedGuardianSha256,
+      fenceGuardianRecoveryRequest: requestPath,
+      report: reportPath,
+    };
+    const argv = Object.entries({
+      "--barrier-artifact": options.barrierArtifact,
+      "--expected-barrier-artifact-sha256": options.expectedBarrierArtifactSha256,
+      "--cutover-plan": options.cutoverPlan,
+      "--expected-cutover-plan-sha256": options.expectedCutoverPlanSha256,
+      "--migration-connection-file": options.migrationConnectionFile,
+      "--execution-index": options.executionIndex,
+      "--expected-execution-index-sha256": options.expectedExecutionIndexSha256,
+      "--fence-receipt": options.fenceReceipt,
+      "--expected-fence-receipt-sha256": options.expectedFenceReceiptSha256,
+      "--fence-guardian-receipt": options.fenceGuardianReceipt,
+      "--expected-fence-guardian-receipt-sha256": options.expectedFenceGuardianReceiptSha256,
+      "--fence-guardian-recovery-request": options.fenceGuardianRecoveryRequest,
+      "--report": options.report,
+    }).flat();
+    let pollCount = 0;
+    const result = await requestRecoveryFromGuardian(argv, options, {
+      getUid: () => 0,
+      nowMs: Date.parse(nowIso),
+      requestId,
+      maximumPolls: 4,
+      assertGuardianLease: async () => ({
+        heartbeat: pollCount < 2
+          ? { recoveryChildPid: 456, lastRecoveryResult: null }
+          : { recoveryChildPid: null, lastRecoveryResult: { requestId, exitCode: 0 } },
+      }),
+      waitForPoll: async () => {
+        pollCount += 1;
+        if (pollCount !== 1) return;
+        const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+        assert.equal(request.requestId, requestId);
+        fs.unlinkSync(requestPath);
+        const bindings = {
+          barrierArtifactSha256: options.expectedBarrierArtifactSha256,
+          cutoverPlanSha256: options.expectedCutoverPlanSha256,
+          executionIndexSha256: options.expectedExecutionIndexSha256,
+          fenceReceiptSha256: options.expectedFenceReceiptSha256,
+          fenceGuardianReceiptSha256: options.expectedFenceGuardianReceiptSha256,
+        };
+        const journalDirectory = `${reportPath}.journal`;
+        fs.mkdirSync(journalDirectory, { mode: 0o700 });
+        const report = {
+          formatVersion: 1,
+          kind: "viva-game-projection-mongo-write-barrier-recovery-receipt",
+          state: "RELEASED_TO_EXACT_PREIMAGE",
+          recoveryAttemptId: attemptId,
+          recoveryJournalPath: journalDirectory,
+          ...bindings,
+        };
+        const reportBytes = Buffer.from(canonicalJson(report));
+        write0600(path.join(journalDirectory, "0000-attempt-started.json"), Buffer.from(canonicalJson({
+          formatVersion: 1, attemptId, mode: "BARRIER_RECOVERY", sequence: 0,
+          at: nowIso, phase: "ATTEMPT_STARTED", ...bindings,
+        })));
+        write0600(path.join(journalDirectory, "0001-terminal-result.json"), Buffer.from(canonicalJson({
+          formatVersion: 1, attemptId, mode: "BARRIER_RECOVERY", sequence: 1,
+          at: nowIso, phase: "TERMINAL_RESULT", state: report.state,
+          mutationAttempted: true, reportSha256: cutoverSha256(reportBytes), report,
+        })));
+        write0600(reportPath, reportBytes);
+      },
+    });
+    assert.equal(pollCount, 2);
+    assert.equal(result.recoveryAttemptId, attemptId);
+  } finally {
+    if (previousConfirmation === undefined) delete process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
+    else process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = previousConfirmation;
+    fs.rmSync(privateRoot, { recursive: true, force: true });
+  }
 });
 
 test("standalone Mongo barrier recovery requires stopped fenced runtime and reconciles its durable unknown journal", async () => {
@@ -530,12 +702,19 @@ test("standalone Mongo barrier recovery requires stopped fenced runtime and reco
     }));
     write0600(fenceReceiptPath, fenceReceiptBytes);
     const guardianReceiptPath = path.join(privateRoot, "guardian.json");
+    const guardianRecoveryRequestPath = path.join(privateRoot, "guardian-recovery-request.json");
+    const recoveryExecutorPath = fs.realpathSync(path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)), "../recover_viva_game_projection_mongo_write_barrier.mjs",
+    ));
     const guardianReceiptBytes = Buffer.from(canonicalJson({
       formatVersion: 1,
       kind: "viva-game-projection-fence-guardian-receipt",
       state: "HOLDING_UNTIL_EXPLICIT_RELEASE",
       fenceTokenSha256,
       lockPath: "/run/lock/padlhub-viva-game-projection-cutover.lock",
+      recoveryRequestPath: guardianRecoveryRequestPath,
+      recoveryExecutorPath,
+      recoveryExecutorSha256: cutoverSha256(fs.readFileSync(recoveryExecutorPath)),
       automaticRelease: false,
     }));
     write0600(guardianReceiptPath, guardianReceiptBytes);
@@ -588,19 +767,30 @@ test("standalone Mongo barrier recovery requires stopped fenced runtime and reco
       expectedFenceReceiptSha256: cutoverSha256(fenceReceiptBytes),
       fenceGuardianReceipt: guardianReceiptPath,
       expectedFenceGuardianReceiptSha256: cutoverSha256(guardianReceiptBytes),
+      fenceGuardianRecoveryRequest: guardianRecoveryRequestPath,
     };
     const dependencies = {
       getUid: () => 0,
+      allowFixtureGuardianChild: true,
       allowFixtureHostname: true,
+      guardianRecoveryRequestId: "12345678-1234-4234-8234-123456789abc",
       nowMs: Date.parse(nowIso),
       assertExecutorSources: async () => true,
       assertGuardianLease: async () => ({ sha256: "7".repeat(64) }),
+      assertFenceLease: async () => true,
       readPm2: async () => pm2Fixture(),
       migrationClient: { db: () => ({ command: async () => ({ setName: "rs-fixture" }) }) },
-      restorePreviousMongoWriteBarrier: async () => {
+      restorePreviousMongoWriteBarrier: async (_client, _artifact, expected) => {
         restoreAttempts += 1;
+        await expected.assertFence("BEFORE_RECOVERY_STATE_READ");
         if (restoreAttempts === 1) throw new Error("simulated recovery interruption");
-        return { formatVersion: 1, state: "RELEASED_TO_EXACT_PREIMAGE" };
+        await expected.assertFence("BEFORE_APPLICATION_ROLES_RESTORE");
+        await expected.assertFence("AFTER_RECOVERY_READBACK");
+        return {
+          formatVersion: 1,
+          kind: "viva-game-projection-mongo-write-barrier-recovery-receipt",
+          state: "RELEASED_TO_EXACT_PREIMAGE",
+        };
       },
     };
     await assert.rejects(
@@ -616,21 +806,33 @@ test("standalone Mongo barrier recovery requires stopped fenced runtime and reco
     );
     assert.equal(fs.existsSync(reportPath), false);
     assert.equal(fs.existsSync(`${reportPath}.journal`), true);
+    let reportPublicationAttempts = 0;
+    const interruptedPublicationDependencies = {
+      ...dependencies,
+      writeRecoveryReport: async () => {
+        reportPublicationAttempts += 1;
+        throw new Error("simulated recovery report publication interruption");
+      },
+    };
+    await assert.rejects(
+      recoverVivaGameProjectionMongoWriteBarrier({ ...common, report: reportPath }, interruptedPublicationDependencies),
+      /simulated recovery report publication interruption/,
+    );
+    assert.equal(fs.existsSync(reportPath), false);
     const result = await recoverVivaGameProjectionMongoWriteBarrier({ ...common, report: reportPath }, dependencies);
     assert.equal(result.state, "RELEASED_TO_EXACT_PREIMAGE");
     assert.equal(result.reconciledPriorUnknownOutcome, true);
     assert.equal(restoreAttempts, 2);
+    assert.equal(reportPublicationAttempts, 1);
     const phases = fs.readdirSync(`${reportPath}.journal`).sort().map((name) => (
       JSON.parse(fs.readFileSync(path.join(`${reportPath}.journal`, name), "utf8")).phase
     ));
-    assert.deepEqual(phases, [
-      "ATTEMPT_STARTED",
-      "BARRIER_RECOVERY_OUTCOME_UNKNOWN",
-      "FENCE_REVALIDATED_BEFORE_BARRIER_RECOVERY",
-      "BARRIER_RECOVERY_RECONCILE_OUTCOME_UNKNOWN",
-      "FENCE_REVALIDATED_BEFORE_BARRIER_RECOVERY",
-      "TERMINAL_RESULT",
-    ]);
+    assert.equal(phases[0], "ATTEMPT_STARTED");
+    assert.equal(phases[1], "BARRIER_RECOVERY_OUTCOME_UNKNOWN");
+    assert.ok(phases.includes("BARRIER_RECOVERY_RECONCILE_OUTCOME_UNKNOWN"));
+    assert.equal(phases.filter((phase) => phase === "FENCE_REVALIDATED_DURING_BARRIER_RECOVERY").length, 4);
+    assert.equal(phases.at(-2), "FENCE_REVALIDATED_AFTER_BARRIER_RECOVERY");
+    assert.equal(phases.at(-1), "TERMINAL_RESULT");
   } finally {
     if (previousConfirmation === undefined) delete process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
     else process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = previousConfirmation;
@@ -977,6 +1179,8 @@ test("cutover tools contain no remote-control or inline credential path", () => 
   const postcheckSource = fs.readFileSync(path.join(root, "prepare_viva_game_projection_cutover_postcheck.mjs"), "utf8");
   const guardianSource = fs.readFileSync(path.join(root, "run_viva_game_projection_fence_guardian.mjs"), "utf8");
   const guardianContractSource = fs.readFileSync(path.join(root, "lib/vivaGameProjectionFenceGuardian.mjs"), "utf8");
+  const recoverySource = fs.readFileSync(path.join(root, "recover_viva_game_projection_mongo_write_barrier.mjs"), "utf8");
+  const barrierSource = fs.readFileSync(path.join(root, "lib/vivaGameProjectionMongoWriteBarrier.mjs"), "utf8");
   assert.doesNotMatch(packetSource, /\bssh\b|\bscp\b|\bcurl\b|pm2\s+(?:restart|stop|start)/);
   assert.doesNotMatch(executorSource, /process\.env\.MONGO_URI|mongodb(?:\+srv)?:\/\//);
   assert.doesNotMatch(coordinatorSource, /\bssh\b|\bscp\b|\bcurl\b/);
@@ -987,12 +1191,16 @@ test("cutover tools contain no remote-control or inline credential path", () => 
   assert.match(guardianSource, /HOLDING_UNTIL_EXPLICIT_RELEASE/);
   assert.match(guardianContractSource, /RELEASE_VIVA_GAME_PROJECTION_CUTOVER_FENCE_V1/);
   assert.match(guardianSource, /quarantineReleaseRequest/);
+  assert.match(guardianSource, /isAuthorizedFenceGuardianRecovery[\s\S]+childStdio\[fd\] = fd[\s\S]+PADLHUB_CUTOVER_GUARDIAN_CHILD/);
+  assert.match(recoverySource, /assertExclusiveFenceLease[\s\S]+FENCE_REVALIDATED_DURING_BARRIER_RECOVERY/);
+  assert.match(barrierSource, /BEFORE_VALIDATOR_RESTORE[\s\S]+BEFORE_APPLICATION_ROLES_RESTORE[\s\S]+AFTER_RECOVERY_READBACK/);
   assert.ok(coordinatorSource.indexOf("MIGRATION_PLAN_IN_FLIGHT") < coordinatorSource.indexOf("await runMigration"));
   assert.ok(coordinatorSource.indexOf("installMongoWriteBarrier") < coordinatorSource.indexOf("await runMigration"));
   assert.ok(coordinatorSource.indexOf("hashLiveFullCollection") < coordinatorSource.indexOf("await runMigration"));
   assert.ok(coordinatorSource.indexOf("await runMigration") < coordinatorSource.indexOf("atomicWrite(liveFlowPath"));
   assert.ok(coordinatorSource.indexOf("atomicWrite(liveFlowPath") < coordinatorSource.indexOf("await prepareVivaGameProjectionCutoverPostcheck"));
-  assert.ok(coordinatorSource.indexOf("coordinatorJournal.finalize(result)") < coordinatorSource.indexOf("READY_TO_REOPEN_INGRESS.json"));
+  assert.ok(coordinatorSource.indexOf("coordinatorJournal.finalize(result)") < coordinatorSource.indexOf("readyPublicationAttempted = true"));
+  assert.match(coordinatorSource, /readyPublicationOutcomeUnknown[\s\S]+candidatePublished && !readyPublicationOutcomeUnknown/);
   assert.doesNotMatch(postcheckSource, /READY_TO_REOPEN_INGRESS\.json/);
   assert.match(postcheckSource, /countDocuments\(activeLegacyQuery\)/);
   assert.match(postcheckSource, /assertExclusiveFenceLease[\s\S]+finalNowMs[\s\S]+assertMongoWriteBarrier/);
@@ -1026,6 +1234,48 @@ test("durable reports use append-only private journals outside Git worktrees", (
     assert.equal(terminal.mutationAttempted, true);
     const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
     assert.throws(() => ensurePrivateDirectory(path.join(repositoryRoot, "tmp-cutover-output"), "Fixture"), /outside the repository/);
+  } finally {
+    fs.rmSync(privateRoot, { recursive: true, force: true });
+  }
+});
+
+test("exclusive durable publication reconciles every linked READY fault boundary", () => {
+  const privateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-ready-publication-")));
+  fs.chmodSync(privateRoot, 0o700);
+  try {
+    const bytes = Buffer.from(canonicalJson({ state: "READY_TO_REOPEN_INGRESS" }));
+    for (const phase of [
+      "destination-linked-before-directory-sync",
+      "destination-linked",
+      "temporary-unlinked-before-directory-sync",
+    ]) {
+      const filePath = path.join(privateRoot, `${phase}.json`);
+      writeFileExclusiveAtomicDurable(filePath, bytes, {
+        uid: process.getuid?.() ?? 0,
+        gid: process.getgid?.() ?? 0,
+        mode: 0o600,
+        onTransition: (observed) => {
+          if (observed === phase) throw new Error(`simulated ${phase} fault`);
+        },
+      });
+      assert.deepEqual(fs.readFileSync(filePath), bytes);
+      const stat = fs.lstatSync(filePath);
+      assert.equal(stat.nlink, 1);
+      assert.equal(stat.mode & 0o777, 0o600);
+    }
+    const unknownPath = path.join(privateRoot, "persistent-outcome-unknown.json");
+    assert.throws(() => writeFileExclusiveAtomicDurable(unknownPath, bytes, {
+      uid: process.getuid?.() ?? 0,
+      gid: process.getgid?.() ?? 0,
+      mode: 0o600,
+      onTransition: (observed) => {
+        if (observed !== "destination-linked-before-directory-sync") return;
+        fs.unlinkSync(unknownPath);
+        fs.mkdirSync(unknownPath, { mode: 0o700 });
+        throw new Error("simulated unreconcilable publication fault");
+      },
+    }), (error) => error?.publicationOutcome === "UNKNOWN" && error?.publicationPath === unknownPath);
+    fs.rmSync(unknownPath, { recursive: true, force: true });
   } finally {
     fs.rmSync(privateRoot, { recursive: true, force: true });
   }
@@ -1277,6 +1527,49 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
     assert.equal(result.plan.state, "READY_FOR_SEPARATE_LIVE_APPROVAL");
     assert.equal(result.plan.candidateSha256, actualCandidateSha256);
     assert.ok(result.manifest.files.some((entry) => entry.path === "evidence/full-backup.manifest.json"));
+
+    const copiedExternalWriterProofPath = path.join(outputDirectory, "evidence/external-writer-proof.json");
+    const copiedExternalWriterProofBytes = fs.readFileSync(copiedExternalWriterProofPath);
+    const falseExternalWriterProofBytes = Buffer.from(canonicalJson({
+      ...JSON.parse(copiedExternalWriterProofBytes.toString("utf8")),
+      allWritersUseCanonicalLock: false,
+    }));
+    fs.writeFileSync(copiedExternalWriterProofPath, falseExternalWriterProofBytes, { mode: 0o600 });
+    assert.throws(() => validateCopiedControlEvidence(outputDirectory, {
+      ...dynamicControls,
+      writerFence: {
+        ...dynamicControls.writerFence,
+        externalWriterProofSha256: cutoverSha256(falseExternalWriterProofBytes),
+      },
+    }), /does not bind every writer/);
+    fs.writeFileSync(copiedExternalWriterProofPath, copiedExternalWriterProofBytes, { mode: 0o600 });
+    fs.chmodSync(copiedExternalWriterProofPath, 0o644);
+    assert.throws(() => validateExactCutoverPacket({
+      packetRoot: outputDirectory, plan: result.plan, manifest: result.manifest, nowMs: Date.parse(nowIso),
+    }), /not an owned private packet file/);
+    fs.chmodSync(copiedExternalWriterProofPath, 0o600);
+    const hardlinkAlias = path.join(privateRoot, "external-writer-proof-hardlink.json");
+    fs.linkSync(copiedExternalWriterProofPath, hardlinkAlias);
+    assert.throws(() => validateExactCutoverPacket({
+      packetRoot: outputDirectory, plan: result.plan, manifest: result.manifest, nowMs: Date.parse(nowIso),
+    }), /not an owned private packet file/);
+    fs.unlinkSync(hardlinkAlias);
+
+    const copiedRestoreReceiptPath = path.join(outputDirectory, "evidence/full-backup.restore-rehearsal.json");
+    const copiedRestoreReceiptBytes = fs.readFileSync(copiedRestoreReceiptPath);
+    const falseRestoreReceiptBytes = Buffer.from(canonicalJson({
+      ...JSON.parse(copiedRestoreReceiptBytes.toString("utf8")),
+      postRestoreHashMatch: false,
+    }));
+    fs.writeFileSync(copiedRestoreReceiptPath, falseRestoreReceiptBytes, { mode: 0o600 });
+    assert.throws(() => validateCopiedControlEvidence(outputDirectory, {
+      ...dynamicControls,
+      restoreRehearsal: {
+        ...dynamicControls.restoreRehearsal,
+        receiptSha256: cutoverSha256(falseRestoreReceiptBytes),
+      },
+    }), /does not bind the declared restore control/);
+    fs.writeFileSync(copiedRestoreReceiptPath, copiedRestoreReceiptBytes, { mode: 0o600 });
 
     const migratedCollection = new FakeCollection(legacyGame());
     const migrationBackup = await captureTenantMigrationPreimages(migratedCollection, migrationPlan, migrationPlanSha256, nowIso);

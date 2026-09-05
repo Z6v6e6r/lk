@@ -332,8 +332,12 @@ const parsePreparedPreimage = (artifact) => {
 
 export async function restorePreviousMongoWriteBarrier(migrationClient, artifact, expected) {
   assertReceiptIdentity(artifact, expected);
+  if (typeof expected?.assertFence !== "function") {
+    fail("Mongo write-barrier recovery requires a continuous fence callback");
+  }
   const { previous, roles } = parsePreparedPreimage(artifact);
   const db = migrationClient.db("games");
+  await expected.assertFence("BEFORE_RECOVERY_STATE_READ");
   const current = await readMongoWriteBarrierState(db);
   const currentStateSha256 = canonicalEjsonSha256(current);
   const expectedBarrierStateSha256 = canonicalEjsonSha256({
@@ -351,15 +355,19 @@ export async function restorePreviousMongoWriteBarrier(migrationClient, artifact
     fail("Application Mongo roles drifted beyond the prepared ACL barrier or their exact preimage");
   }
   if (currentStateSha256 === expectedBarrierStateSha256) {
+    await expected.assertFence("BEFORE_VALIDATOR_RESTORE");
     await db.command({
       collMod: "lk_games",
       validator: previous.validator,
       validationLevel: previous.validationLevel,
       validationAction: previous.validationAction,
     });
+    await expected.assertFence("AFTER_VALIDATOR_RESTORE");
   }
   if (currentRolesSha256 === emptyRolesSha256) {
+    await expected.assertFence("BEFORE_APPLICATION_ROLES_RESTORE");
     await updateStoredMongoUserRoles(migrationClient, artifact.applicationPrincipal, roles);
+    await expected.assertFence("AFTER_APPLICATION_ROLES_RESTORE");
   }
   const restored = await readMongoWriteBarrierState(db);
   const restoredRoles = await readStoredMongoUserRoles(migrationClient, artifact.applicationPrincipal);
@@ -367,6 +375,7 @@ export async function restorePreviousMongoWriteBarrier(migrationClient, artifact
     || canonicalEjsonSha256(restoredRoles) !== artifact.previousApplicationRolesSha256) {
     fail("Mongo write-barrier preimage was not restored exactly");
   }
+  await expected.assertFence("AFTER_RECOVERY_READBACK");
   return {
     formatVersion: 1,
     kind: "viva-game-projection-mongo-write-barrier-recovery-receipt",

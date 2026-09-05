@@ -51,8 +51,11 @@ const CUTOVER_ONLY_ENV_KEYS = [
   "PADLHUB_CUTOVER_FENCE_LOCK_PATH",
   "PADLHUB_CUTOVER_GUARDIAN_RECEIPT",
   "PADLHUB_CUTOVER_GUARDIAN_RELEASE_REQUEST",
+  "PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST",
   "PADLHUB_CUTOVER_GUARDIAN_HEARTBEAT",
   "PADLHUB_CUTOVER_GUARDIAN_PID",
+  "PADLHUB_CUTOVER_GUARDIAN_CHILD",
+  "PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST_ID",
   "VIVA_GAME_PROJECTION_CUTOVER_EXECUTE",
   "VIVA_GAME_PROJECTION_MIGRATION_APPLY",
   "VIVA_GAME_PROJECTION_MIGRATION_RESTORE",
@@ -298,6 +301,8 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
   let appliedItems = [];
   let inFlightPlanSha256 = null;
   let globalLegacyCoverage = null;
+  const readyMarkerPath = path.join(postcheckOutputDirectory, "READY_TO_REOPEN_INGRESS.json");
+  let readyPublicationAttempted = false;
   const coordinatorJournal = createDurableReportJournal(coordinatorReportPath, "cutover", coordinatorAttemptId);
   try {
     const applicationConnection = readFlowConnection(liveFlowPath, plan.sourceFlowSha256);
@@ -622,7 +627,8 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
     } finally {
       if (!dependencies.finalizationMongoClient) await finalMongoClient.close().catch(() => {});
     }
-    const readyMarker = writePrivate(path.join(postcheckOutputDirectory, "READY_TO_REOPEN_INGRESS.json"), {
+    readyPublicationAttempted = true;
+    const readyMarker = writePrivate(readyMarkerPath, {
       formatVersion: 1,
       kind: "viva-game-projection-cutover-ready-marker",
       state: "READY_TO_REOPEN_INGRESS",
@@ -643,9 +649,11 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
     });
     return { ...result, readyMarkerSha256: readyMarker.sha256 };
   } catch (error) {
+    const readyPublicationOutcomeUnknown = readyPublicationAttempted
+      && error?.publicationOutcome === "UNKNOWN" && error?.publicationPath === readyMarkerPath;
     let runtimeStopped = !candidatePublished;
     let stopError = null;
-    if (candidatePublished) {
+    if (candidatePublished && !readyPublicationOutcomeUnknown) {
       try {
         if (dependencies.stopNodeRed) await dependencies.stopNodeRed();
         else runPm2(["stop", plan.production.processName]);
@@ -675,6 +683,7 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
         fenceGuardianReceiptSha256: guardianReceiptSha256,
         coordinatorAttemptId,
         runtimeStopped,
+        readyPublicationOutcome: readyPublicationOutcomeUnknown ? "UNKNOWN_KEEP_RUNTIME_ONLINE" : "NOT_READY_OR_FAILED",
         ingressReopened: false,
         mutationAttempted: appliedItems.length > 0 || inFlightPlanSha256 !== null || candidatePublished || barrierInstallAttempted,
         failedAt: new Date(clockNow()).toISOString(),

@@ -12,6 +12,7 @@
 
 | Дата | Время | Блок | Что изменили | Для чего | Результат |
 | --- | --- | --- | --- | --- | --- |
+| 2026-09-05 | ~00:30 | LK Games / tenant cutover R4 finalization | Recovery теперь запускается только guardian-процессом с унаследованным flock FD и повторяет fence/PM2 checks вокруг каждого `collMod`/role шага; terminal recovery report предшествует standalone report; packet validator семантически перепроверяет writer/backup/restore evidence; READY publication умеет reconcile crash boundaries и помечает неустранимый outcome unknown без остановки проверенного SHADOW runtime | Закрыть четыре блокирующих замечания recovery/release review перед новым checkpoint | Source/tests/docs only; production upload/import/restart/Mongo/Viva writes `0`; итоговые проверки и повторное независимое review выполняются |
 | 2026-09-04 | ~17:20 | LK Games / tenant cutover R4 remediation | После двух независимых review добавлены actual-byte backup/restore/external-writer evidence, max-100 transaction + bounded Mongo timeouts, multi-plan fence identity, read-only `reconcile-restore`, persistent host-lock guardian, database-enforced `lk_games` validator barrier with separate migration principal, exact live-full-backup comparison and final live postcheck/READY builder; future/dynamic/aggregate contracts закрыты fail-closed | Устранить окна при crash/SIGKILL, между migration/deploy вызовами, synthetic evidence, долгую transaction и неоднозначный restore outcome до нового checkpoint | Focused `43/43`, real disposable MongoDB 7 replica restore rehearsal plus validator-fenced verify/apply/reconcile/reconcile-restore/restore/reconcile-restore `1/1`, targeted ESLint и syntax PASS; оба барьера остаются до отдельного release, production upload/import/restart/Mongo/Viva writes `0` |
 | 2026-09-04 | ~17:10 | Partner API v0.2 / local main integration | Checkpoint `f4647e42…` слит в локальный `main` поверх exact `origin/main=5044d2b9…` и девяти уже локально интегрированных коммитов; единственный конфликт в append-only WORKLOG разрешён сохранением обеих сторон | Проверить совместимость Partner R4 boundary с актуальным совокупным local-main tree до отдельного push gate | Partner `84/84`, workflow `13/13`, Piter `17 PASS/1 macOS SKIP`, runtime/controls validators, TypeScript и inert prod/dev build PASS; ESLint `0 errors/387 warnings`; push/deploy/live writes `0` |
 | 2026-09-04 | ~16:40 | Partner API v0.2 / R4 remediation and independent review | Sidecar settings/unit/rehearsal/candidate замкнуты exact SHA в controls/plan/packet validator; manifest связан с commit+tree и binding требует оба out-of-band; Partner/Piter gates добавлены в exact-head CI, full-palette observation понижено до non-authorizing evidence | Закрыть self-resealed packet, mutable-template, shared-writer и CI omission риски до checkpoint | Security и release reviewers PASS P0-P2=0; Partner `84/84`, workflow `13/13`, Piter `17 PASS/1 macOS SKIP`, TypeScript/build PASS, ESLint `0 errors/378 existing warnings`; deploy/live writes `0`, production binding/activation остаются `UNBOUND/BLOCKED` |
@@ -1816,8 +1817,10 @@
   of the real execution index, journal order, apply receipts, guardian heartbeat,
   PM2 identity, restart stability, and local health.
 - Live entrypoints now hash the complete packet tree and replay the exact Mongo/Viva
-  capture evidence and deterministic planner. The future boundary is fixed to the
-  fresh packet UTC date. Local health requires exact candidate JSON from `GET /flows`.
+  capture evidence, external-writer proof, backup/restore-rehearsal artifacts, and
+  deterministic planner through private no-follow reads. The future boundary is
+  fixed to the fresh packet UTC date. Local health requires exact candidate JSON
+  from `GET /flows`.
 - Standalone postcheck publishes evidence only. The coordinator fsyncs terminal
   success, repeats all live barriers and runtime checks, and writes READY last with
   hashes of the terminal report and terminal journal entry.
@@ -1826,6 +1829,11 @@
   probes, a durable pre-mutation recovery artifact, and an explicit recovery command
   gated by the live guardian and stopped frozen PM2 runtime. Recovery journals the
   unknown outcome before mutation and reconciles the same journal after interruption.
+  The guardian spawns recovery with its inherited flock FD; the executor repeats
+  fence checks around every Mongo side effect and journals the complete terminal
+  report before publication.
+- Atomic exclusive publication reconciles linked and unlinked directory-sync fault
+  boundaries so a thrown READY write cannot leave an ambiguous valid marker.
 - Made the detached host-lock guardian prove its live PID/start/descriptor/inode with
   a fresh durable heartbeat and quarantine malformed release requests. Restore
   rehearsal cleanup now removes only collections protected by an exclusive ownership

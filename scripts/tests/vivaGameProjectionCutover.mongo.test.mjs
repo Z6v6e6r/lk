@@ -373,6 +373,7 @@ maybeTest("real replica set applies and restores an exact tenant migration under
       fenceTokenSha256: sha256(fenceToken),
       cutoverPlanSha256: cutoverSha256,
       mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
+      assertFence: async () => true,
     });
     assert.equal(barrierRecovery.state, "RELEASED_TO_EXACT_PREIMAGE");
     barrierPreparation = null;

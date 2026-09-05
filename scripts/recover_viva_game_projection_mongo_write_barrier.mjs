@@ -18,6 +18,7 @@ import {
   readPm2,
 } from "./prepare_viva_game_projection_cutover_postcheck.mjs";
 import {
+  assertExclusiveFenceLease,
   ensurePrivateDirectory,
   readPrivateBytes,
   readPrivateJson,
@@ -29,6 +30,7 @@ import { writeFileExclusiveAtomicDurable } from "./nodered_reviewed_flow_deploy/
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const CONFIRMATION = "RECOVER_VIVA_GAME_PROJECTION_MONGO_WRITE_BARRIER_V1";
 const HASH_RE = /^[a-f0-9]{64}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const fail = (message) => { throw new Error(message); };
 const privateOptions = () => ({
   uid: typeof process.getuid === "function" ? process.getuid() : 0,
@@ -41,18 +43,27 @@ const syncDirectory = (directory) => {
   try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
 };
 
-const openRecoveryJournal = (reportPath, bindings, dynamicEvidence) => {
+const validateCompletedRecoveryReport = (report, bindings, attemptId, journalDirectory) => {
+  if (report?.formatVersion !== 1
+    || report?.kind !== "viva-game-projection-mongo-write-barrier-recovery-receipt"
+    || report?.state !== "RELEASED_TO_EXACT_PREIMAGE"
+    || report?.recoveryAttemptId !== attemptId
+    || report?.recoveryJournalPath !== journalDirectory
+    || Object.entries(bindings).some(([key, value]) => report?.[key] !== value)) {
+    fail("Mongo barrier recovery report does not bind the exact completed attempt");
+  }
+  return Buffer.from(canonicalJson(report));
+};
+
+const openRecoveryJournal = (reportPath, bindings) => {
   const journalDirectory = `${reportPath}.journal`;
-  if (fs.existsSync(reportPath)) fail("Mongo barrier recovery report must be new");
   let attemptId;
   let sequence;
-  let resumed = false;
+  let entries = [];
   if (!fs.existsSync(journalDirectory)) {
     fs.mkdirSync(journalDirectory, { mode: 0o700 });
     fs.chmodSync(journalDirectory, 0o700);
     syncDirectory(path.dirname(journalDirectory));
-    attemptId = crypto.randomUUID();
-    sequence = 0;
   } else {
     const canonical = fs.realpathSync(journalDirectory);
     const stat = fs.lstatSync(canonical);
@@ -61,23 +72,24 @@ const openRecoveryJournal = (reportPath, bindings, dynamicEvidence) => {
       fail("Mongo barrier recovery journal is not private and canonical");
     }
     const names = fs.readdirSync(canonical).sort();
-    const entries = names.map((name, index) => {
+    entries = names.map((name, index) => {
       if (!new RegExp(`^${String(index).padStart(4, "0")}-[a-z0-9-]+\\.json$`).test(name)) {
         fail("Mongo barrier recovery journal sequence is incomplete");
       }
       return readPrivateJson(path.join(canonical, name), "Mongo barrier recovery journal", 1024 * 1024).value;
     });
     attemptId = entries[0]?.attemptId;
-    if (!attemptId || entries.length < 2 || entries.some((entry, index) => entry?.formatVersion !== 1
+    if ((entries.length > 0 && !attemptId) || entries.some((entry, index) => entry?.formatVersion !== 1
       || entry?.attemptId !== attemptId || entry?.mode !== "BARRIER_RECOVERY" || entry?.sequence !== index)
-      || entries[0]?.phase !== "ATTEMPT_STARTED" || entries.some((entry) => entry.phase === "TERMINAL_RESULT")
-      || !entries.some((entry) => entry.phase === "BARRIER_RECOVERY_OUTCOME_UNKNOWN"
-        && Object.entries(bindings).every(([key, value]) => entry[key] === value))) {
+      || (entries.length > 0 && (entries[0]?.phase !== "ATTEMPT_STARTED"
+        || Object.entries(bindings).some(([key, value]) => entries[0]?.[key] !== value)))
+      || entries.filter((entry) => entry.phase === "TERMINAL_RESULT").length > 1
+      || entries.some((entry, index) => entry.phase === "TERMINAL_RESULT" && index !== entries.length - 1)) {
       fail("Mongo barrier recovery journal cannot be reconciled to these exact inputs");
     }
-    sequence = entries.length;
-    resumed = true;
   }
+  attemptId ||= crypto.randomUUID();
+  sequence = entries.length;
   const append = (phase, detail = {}) => {
     const entry = {
       formatVersion: 1, attemptId, mode: "BARRIER_RECOVERY", sequence,
@@ -89,10 +101,36 @@ const openRecoveryJournal = (reportPath, bindings, dynamicEvidence) => {
     return entry;
   };
   if (sequence === 0) append("ATTEMPT_STARTED", bindings);
-  append(resumed ? "BARRIER_RECOVERY_RECONCILE_OUTCOME_UNKNOWN" : "BARRIER_RECOVERY_OUTCOME_UNKNOWN", {
-    ...bindings, ...dynamicEvidence,
-  });
-  return { attemptId, journalDirectory, resumed, append };
+  const appendTerminal = (report) => {
+    const reportBytes = validateCompletedRecoveryReport(report, bindings, attemptId, journalDirectory);
+    append("TERMINAL_RESULT", {
+      state: report.state,
+      mutationAttempted: true,
+      reconciledPriorUnknownOutcome: report.reconciledPriorUnknownOutcome,
+      reportSha256: sha256(reportBytes),
+      report,
+    });
+    return reportBytes;
+  };
+  const terminal = entries.find((entry) => entry.phase === "TERMINAL_RESULT");
+  if (terminal) {
+    const reportBytes = validateCompletedRecoveryReport(terminal.report, bindings, attemptId, journalDirectory);
+    if (terminal.reportSha256 !== sha256(reportBytes)) fail("Mongo barrier recovery terminal report digest mismatch");
+    if (fs.existsSync(reportPath)) {
+      const existing = readPrivateJson(reportPath, "Mongo barrier recovery report", 16 * 1024 * 1024);
+      if (sha256(existing.bytes) !== terminal.reportSha256) fail("Mongo barrier recovery report differs from terminal journal");
+    } else writeFileExclusiveAtomicDurable(reportPath, reportBytes, privateOptions());
+    return { attemptId, journalDirectory, resumed: true, append, completedReport: terminal.report };
+  }
+  if (fs.existsSync(reportPath)) {
+    const existing = readPrivateJson(reportPath, "Mongo barrier recovery report", 16 * 1024 * 1024);
+    const reportBytes = appendTerminal(existing.value);
+    if (sha256(existing.bytes) !== sha256(reportBytes)) fail("Mongo barrier recovery report canonical bytes mismatch");
+    return { attemptId, journalDirectory, resumed: true, append, completedReport: existing.value };
+  }
+  const resumed = entries.some((entry) => entry.phase === "BARRIER_RECOVERY_OUTCOME_UNKNOWN"
+    || entry.phase === "BARRIER_RECOVERY_RECONCILE_OUTCOME_UNKNOWN");
+  return { attemptId, journalDirectory, resumed, append, appendTerminal, completedReport: null };
 };
 
 const parseArgs = (argv) => {
@@ -108,14 +146,112 @@ const parseArgs = (argv) => {
     "--expected-cutover-plan-sha256", "--migration-connection-file",
     "--execution-index", "--expected-execution-index-sha256",
     "--fence-receipt", "--expected-fence-receipt-sha256",
-    "--fence-guardian-receipt", "--expected-fence-guardian-receipt-sha256", "--report",
+    "--fence-guardian-receipt", "--expected-fence-guardian-receipt-sha256",
+    "--fence-guardian-recovery-request", "--report",
   ]) if (!values.get(key)) fail(`Missing ${key}`);
   return values;
 };
 
+const optionsFromValues = (values) => ({
+  barrierArtifact: values.get("--barrier-artifact"),
+  expectedBarrierArtifactSha256: values.get("--expected-barrier-artifact-sha256"),
+  cutoverPlan: values.get("--cutover-plan"),
+  expectedCutoverPlanSha256: values.get("--expected-cutover-plan-sha256"),
+  migrationConnectionFile: values.get("--migration-connection-file"),
+  executionIndex: values.get("--execution-index"),
+  expectedExecutionIndexSha256: values.get("--expected-execution-index-sha256"),
+  fenceReceipt: values.get("--fence-receipt"),
+  expectedFenceReceiptSha256: values.get("--expected-fence-receipt-sha256"),
+  fenceGuardianReceipt: values.get("--fence-guardian-receipt"),
+  expectedFenceGuardianReceiptSha256: values.get("--expected-fence-guardian-receipt-sha256"),
+  fenceGuardianRecoveryRequest: values.get("--fence-guardian-recovery-request"),
+  report: values.get("--report"),
+});
+
+export async function requestRecoveryFromGuardian(argv, options, dependencies = {}) {
+  if ((dependencies.getUid ? dependencies.getUid() : process.getuid?.()) !== 0) fail("Mongo barrier recovery requires root");
+  if (process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER !== CONFIRMATION) fail("Mongo barrier recovery confirmation is absent");
+  const guardianRead = readPrivateJson(options.fenceGuardianReceipt, "Fence-guardian receipt", 1024 * 1024);
+  if (sha256(guardianRead.bytes) !== options.expectedFenceGuardianReceiptSha256
+    || guardianRead.value?.kind !== "viva-game-projection-fence-guardian-receipt"
+    || guardianRead.value?.state !== "HOLDING_UNTIL_EXPLICIT_RELEASE"
+    || guardianRead.value?.recoveryRequestPath !== options.fenceGuardianRecoveryRequest
+    || guardianRead.value?.recoveryExecutorPath !== SCRIPT_PATH
+    || guardianRead.value?.recoveryExecutorSha256 !== sha256(fs.readFileSync(SCRIPT_PATH))) {
+    fail("Fence guardian cannot accept this exact recovery executor request");
+  }
+  if (!path.isAbsolute(options.fenceGuardianRecoveryRequest)
+    || path.resolve(options.fenceGuardianRecoveryRequest) !== options.fenceGuardianRecoveryRequest
+    || path.dirname(options.fenceGuardianRecoveryRequest) !== path.dirname(options.fenceGuardianReceipt)) {
+    fail("Fence guardian recovery-request path is not canonical");
+  }
+  if (fs.existsSync(options.fenceGuardianRecoveryRequest)) fail("Fence guardian recovery-request path must be new");
+  const nowMs = typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now());
+  if (dependencies.assertGuardianLease) await dependencies.assertGuardianLease(guardianRead.value, nowMs);
+  else assertLiveFenceGuardian(guardianRead.value, nowMs);
+  const requestId = dependencies.requestId || crypto.randomUUID();
+  const request = {
+    formatVersion: 1,
+    kind: "viva-game-projection-fence-recovery-request",
+    state: "RECOVERY_AUTHORIZED",
+    confirmation: CONFIRMATION,
+    requestId,
+    guardianPid: guardianRead.value.pid,
+    guardianProcessStartIdentity: guardianRead.value.processStartIdentity,
+    fenceTokenSha256: guardianRead.value.fenceTokenSha256,
+    argv,
+    authorizedAt: new Date(nowMs).toISOString(),
+  };
+  try {
+    writeFileExclusiveAtomicDurable(
+      options.fenceGuardianRecoveryRequest, Buffer.from(canonicalJson(request)), privateOptions(),
+    );
+  } catch (error) {
+    if (error?.publicationOutcome !== "UNKNOWN"
+      || error?.publicationPath !== options.fenceGuardianRecoveryRequest) throw error;
+    // The request is already authorized. Keep observing this exact request ID
+    // instead of returning while the guardian may still accept it.
+  }
+  const bindings = {
+    barrierArtifactSha256: options.expectedBarrierArtifactSha256,
+    cutoverPlanSha256: options.expectedCutoverPlanSha256,
+    executionIndexSha256: options.expectedExecutionIndexSha256,
+    fenceReceiptSha256: options.expectedFenceReceiptSha256,
+    fenceGuardianReceiptSha256: options.expectedFenceGuardianReceiptSha256,
+  };
+  const maximumPolls = dependencies.maximumPolls ?? 360;
+  for (let poll = 0; poll < maximumPolls; poll += 1) {
+    const pollNowMs = typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now());
+    const lease = dependencies.assertGuardianLease
+      ? await dependencies.assertGuardianLease(guardianRead.value, pollNowMs)
+      : assertLiveFenceGuardian(guardianRead.value, pollNowMs);
+    const heartbeat = lease?.heartbeat;
+    const childFinished = heartbeat?.recoveryChildPid == null
+      && heartbeat?.lastRecoveryResult?.requestId === requestId;
+    if (childFinished && heartbeat.lastRecoveryResult.exitCode !== 0) {
+      fail("Fence guardian recovery child failed while the canonical fence remained held");
+    }
+    if (childFinished && heartbeat.lastRecoveryResult.exitCode === 0
+      && !fs.existsSync(options.fenceGuardianRecoveryRequest) && fs.existsSync(options.report)) {
+      const journal = openRecoveryJournal(options.report, bindings);
+      if (!journal.completedReport) fail("Fence guardian recovery child exited without a durable terminal report");
+      return journal.completedReport;
+    }
+    if (dependencies.waitForPoll) await dependencies.waitForPoll();
+    else await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  fail("Timed out waiting for the fence guardian recovery child");
+}
+
 export async function recoverVivaGameProjectionMongoWriteBarrier(options, dependencies = {}) {
   if ((dependencies.getUid ? dependencies.getUid() : process.getuid?.()) !== 0) fail("Mongo barrier recovery requires root");
   if (process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER !== CONFIRMATION) fail("Mongo barrier recovery confirmation is absent");
+  if (!dependencies.allowFixtureGuardianChild && process.env.PADLHUB_CUTOVER_GUARDIAN_CHILD !== "1") {
+    fail("Mongo barrier recovery must be spawned by the live fence guardian");
+  }
+  const guardianRecoveryRequestId = dependencies.guardianRecoveryRequestId
+    || process.env.PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST_ID;
+  if (!UUID_RE.test(String(guardianRecoveryRequestId || ""))) fail("Mongo barrier recovery guardian request identity is invalid");
   for (const [value, label] of [
     [options.expectedBarrierArtifactSha256, "Barrier artifact digest"],
     [options.expectedCutoverPlanSha256, "Cutover-plan digest"],
@@ -188,9 +324,14 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
       || currentGuardian?.state !== "HOLDING_UNTIL_EXPLICIT_RELEASE"
       || currentGuardian?.fenceTokenSha256 !== plan.writerFence?.fenceTokenSha256
       || currentGuardian?.lockPath !== plan.writerFence?.lockPath
+      || currentGuardian?.recoveryRequestPath !== options.fenceGuardianRecoveryRequest
+      || currentGuardian?.recoveryExecutorPath !== SCRIPT_PATH
+      || currentGuardian?.recoveryExecutorSha256 !== sha256(fs.readFileSync(SCRIPT_PATH))
       || currentGuardian?.automaticRelease !== false) {
       fail("Mongo barrier recovery fence receipts do not bind the exact cutover");
     }
+    if (dependencies.assertFenceLease) await dependencies.assertFenceLease(currentFence);
+    else assertExclusiveFenceLease(currentFence);
     const guardianLease = dependencies.assertGuardianLease
       ? await dependencies.assertGuardianLease(currentGuardian, nowMs)
       : assertLiveFenceGuardian(currentGuardian, nowMs);
@@ -221,7 +362,6 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
       restartCount: Number(processEntry.pm2_env.restart_time),
     };
   };
-  const initialFenceEvidence = await assertRecoveryFence();
   const connection = readPrivateMongoConnection(
     options.migrationConnectionFile, plan.mongoTarget?.migrationConnectionFingerprint,
   );
@@ -236,7 +376,14 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
     fenceReceiptSha256: options.expectedFenceReceiptSha256,
     fenceGuardianReceiptSha256: options.expectedFenceGuardianReceiptSha256,
   };
-  const journal = openRecoveryJournal(options.report, journalBindings, initialFenceEvidence);
+  const journal = openRecoveryJournal(options.report, journalBindings);
+  if (journal.completedReport) return journal.completedReport;
+  const initialFenceEvidence = await assertRecoveryFence();
+  journal.append(journal.resumed ? "BARRIER_RECOVERY_RECONCILE_OUTCOME_UNKNOWN" : "BARRIER_RECOVERY_OUTCOME_UNKNOWN", {
+    ...journalBindings,
+    ...initialFenceEvidence,
+    guardianRecoveryRequestId,
+  });
   const client = dependencies.migrationClient || new MongoClient(connection.uri, {
     appName: "PadlHubVivaGameProjectionMongoBarrierRecovery",
     maxPoolSize: 1, serverSelectionTimeoutMS: 20_000, connectTimeoutMS: 20_000,
@@ -252,10 +399,18 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
       fenceTokenSha256: plan.writerFence?.fenceTokenSha256,
       cutoverPlanSha256: options.expectedCutoverPlanSha256,
       mongoTargetIdentitySha256: plan.mongoTarget?.targetIdentitySha256,
+      assertFence: async (phase) => {
+        const evidence = await assertRecoveryFence();
+        journal.append("FENCE_REVALIDATED_DURING_BARRIER_RECOVERY", { fencePhase: phase, ...evidence });
+        return evidence;
+      },
     });
+    const finalFenceEvidence = await assertRecoveryFence();
+    journal.append("FENCE_REVALIDATED_AFTER_BARRIER_RECOVERY", finalFenceEvidence);
     const report = {
       ...recovery,
       barrierArtifactSha256: options.expectedBarrierArtifactSha256,
+      cutoverPlanSha256: options.expectedCutoverPlanSha256,
       fenceReceiptSha256: options.expectedFenceReceiptSha256,
       executionIndexSha256: options.expectedExecutionIndexSha256,
       fenceGuardianReceiptSha256: options.expectedFenceGuardianReceiptSha256,
@@ -263,15 +418,13 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
       pm2StateSha256: boundaryFenceEvidence.pm2StateSha256,
       recoveryAttemptId: journal.attemptId,
       recoveryJournalPath: journal.journalDirectory,
+      guardianRecoveryRequestId,
       reconciledPriorUnknownOutcome: journal.resumed,
       migrationConnectionFingerprint: connection.connectionFingerprint,
     };
-    writeFileExclusiveAtomicDurable(options.report, Buffer.from(canonicalJson(report)), privateOptions());
-    journal.append("TERMINAL_RESULT", {
-      state: report.state,
-      mutationAttempted: true,
-      reconciledPriorUnknownOutcome: journal.resumed,
-    });
+    const reportBytes = journal.appendTerminal(report);
+    if (dependencies.writeRecoveryReport) await dependencies.writeRecoveryReport(options.report, reportBytes);
+    else writeFileExclusiveAtomicDurable(options.report, reportBytes, privateOptions());
     return report;
   } finally {
     if (!dependencies.migrationClient) await client.close().catch(() => {});
@@ -280,27 +433,17 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const values = parseArgs(argv);
-  const result = await recoverVivaGameProjectionMongoWriteBarrier({
-    barrierArtifact: values.get("--barrier-artifact"),
-    expectedBarrierArtifactSha256: values.get("--expected-barrier-artifact-sha256"),
-    cutoverPlan: values.get("--cutover-plan"),
-    expectedCutoverPlanSha256: values.get("--expected-cutover-plan-sha256"),
-    migrationConnectionFile: values.get("--migration-connection-file"),
-    executionIndex: values.get("--execution-index"),
-    expectedExecutionIndexSha256: values.get("--expected-execution-index-sha256"),
-    fenceReceipt: values.get("--fence-receipt"),
-    expectedFenceReceiptSha256: values.get("--expected-fence-receipt-sha256"),
-    fenceGuardianReceipt: values.get("--fence-guardian-receipt"),
-    expectedFenceGuardianReceiptSha256: values.get("--expected-fence-guardian-receipt-sha256"),
-    report: values.get("--report"),
-  }, dependencies);
+  const options = optionsFromValues(values);
+  const result = process.env.PADLHUB_CUTOVER_GUARDIAN_CHILD === "1" || dependencies.forceDirectRecovery
+    ? await recoverVivaGameProjectionMongoWriteBarrier(options, dependencies)
+    : await requestRecoveryFromGuardian(argv, options, dependencies);
   process.stdout.write(`${JSON.stringify({ state: result.state })}\n`);
   return result;
 }
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === SCRIPT_PATH) {
   if (process.argv.slice(2).includes("--help")) {
-    process.stdout.write("Usage: node scripts/recover_viva_game_projection_mongo_write_barrier.mjs --barrier-artifact /private/barrier.json.prepared --expected-barrier-artifact-sha256 SHA256 --cutover-plan /private/packet/cutover-plan.json --expected-cutover-plan-sha256 SHA256 --execution-index /private/execution-index.json --expected-execution-index-sha256 SHA256 --migration-connection-file /private/migration-mongo.json --fence-receipt /private/fence.json --expected-fence-receipt-sha256 SHA256 --fence-guardian-receipt /private/guardian.json --expected-fence-guardian-receipt-sha256 SHA256 --report /private/new-recovery-report.json\n");
+    process.stdout.write("Usage: node scripts/recover_viva_game_projection_mongo_write_barrier.mjs --barrier-artifact /private/barrier.json.prepared --expected-barrier-artifact-sha256 SHA256 --cutover-plan /private/packet/cutover-plan.json --expected-cutover-plan-sha256 SHA256 --execution-index /private/execution-index.json --expected-execution-index-sha256 SHA256 --migration-connection-file /private/migration-mongo.json --fence-receipt /private/fence.json --expected-fence-receipt-sha256 SHA256 --fence-guardian-receipt /private/guardian.json --expected-fence-guardian-receipt-sha256 SHA256 --fence-guardian-recovery-request /private/guardian-recovery-request.json --report /private/new-recovery-report.json\n");
   } else main().catch((error) => {
     process.stderr.write(`${String(error?.message || error).replace(/mongodb(?:\+srv)?:\/\/[^\s]+/gi, "[REDACTED_MONGO_URI]").slice(0, 500)}\n`);
     process.exitCode = 1;
