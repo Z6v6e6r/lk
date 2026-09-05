@@ -2384,9 +2384,12 @@ test("the real guardian adopts one live takeover after its recovery child dies b
       fenceTokenSha256: cutoverSha256(token),
       authorizedAt: new Date().toISOString(),
     })));
-    await new Promise((resolve) => setTimeout(resolve, 1100));
+    for (let poll = 0; poll < 150 && fs.existsSync(releasePath); poll += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     process.kill(guardian.pid, 0);
-    assert.equal(fs.existsSync(releasePath), true);
+    assert.equal(fs.existsSync(releasePath), false);
+    assert.notEqual(spawnSync("flock", ["-n", lockPath, "-c", "true"], { stdio: "ignore" }).status, 0);
     await assert.rejects(requestRecoveryFromGuardian(argv, options, {
       getUid: () => 0,
       requestId: unusedFreshRequestId,
