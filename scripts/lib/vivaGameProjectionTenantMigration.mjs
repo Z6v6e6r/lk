@@ -56,6 +56,20 @@ export function buildLegacyTenantMigrationMongoQuery({ dateFrom, dateTo }) {
   };
 }
 
+export function buildGlobalActiveLegacyTenantQuery({ dateFrom }) {
+  if (!DATE_RE.test(toStr(dateFrom) || "")) throw new Error("global legacy boundary date is invalid");
+  return {
+    archived: { $ne: true },
+    status: { $nin: ["CANCELLED", "CANCELED"] },
+    tenantKey: null,
+    revision: null,
+    "booking.date": { $gte: dateFrom },
+    "booking.timeFrom": { $type: "string", $ne: "" },
+    "booking.timeTo": { $type: "string", $ne: "" },
+    "booking.studioId": { $type: "string", $ne: "" },
+  };
+}
+
 function gameIdentity(game) {
   const dedupe = toStr(game?.dedupeKey);
   const rootId = toStr(game?.id);

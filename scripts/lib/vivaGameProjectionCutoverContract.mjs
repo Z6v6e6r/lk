@@ -146,6 +146,12 @@ export function validateCutoverControls(controls, {
       || !String(controls.runtimeTenant.hostname || "").trim()
       || controls.runtimeTenant.processName !== "node-red"
       || !Number.isSafeInteger(controls.runtimeTenant.pm2ProcessId)
+      || !String(controls.runtimeTenant.pmExecPath || "").startsWith("/")
+      || !String(controls.runtimeTenant.pmCwd || "").startsWith("/")
+      || !HASH_RE.test(String(controls.runtimeTenant.pmArgsSha256 || ""))
+      || !HASH_RE.test(String(controls.runtimeTenant.pmNodeArgsSha256 || ""))
+      || !Number.isSafeInteger(controls.runtimeTenant.restartCount) || controls.runtimeTenant.restartCount < 0
+      || !/^http:\/\/127\.0\.0\.1:\d{2,5}\/[A-Za-z0-9_/?=&.-]*$/.test(String(controls.runtimeTenant.localHealthUrl || ""))
       || !isFreshTimestamp(controls.runtimeTenant.restartAt, 30 * 60_000)
       || !isFreshTimestamp(controls.runtimeTenant.readBackAt, 30 * 60_000)
       || Date.parse(controls.runtimeTenant.restartAt) > Date.parse(controls.runtimeTenant.readBackAt)
@@ -287,6 +293,7 @@ export function buildVivaGameProjectionCutoverPlan({
   controls,
   controlsSha256,
   reviewedFlowContractSha256,
+  executorSources,
   generatedAt,
 }) {
   if (!isObject(repository) || !COMMIT_RE.test(String(repository.commit || "")) || !String(repository.branch || "").trim()) {
@@ -296,6 +303,12 @@ export function buildVivaGameProjectionCutoverPlan({
   assertHash(candidateSha256, "Cutover candidate digest");
   assertHash(controlsSha256, "Cutover controls digest");
   assertHash(reviewedFlowContractSha256, "Reviewed-flow contract digest");
+  if (!Array.isArray(executorSources) || executorSources.length < 8
+    || executorSources.some((entry) => !String(entry?.path || "").startsWith("scripts/")
+      || !HASH_RE.test(String(entry?.sha256 || "")))
+    || new Set(executorSources.map((entry) => entry.path)).size !== executorSources.length) {
+    fail("Cutover executor source manifest is incomplete or invalid");
+  }
   if (!TENANT_RE.test(String(tenantKey || "")) || !Number.isFinite(Date.parse(generatedAt))) {
     fail("Cutover tenant or generation time is invalid");
   }
@@ -307,6 +320,12 @@ export function buildVivaGameProjectionCutoverPlan({
     }
   }
   const planSummary = validatePlans(plans, sourceFlowSha256, tenantKey, generatedAt);
+  if (plans.some((item) => !isObject(item.sourceEvidence)
+    || item.sourceEvidence.games?.sha256 !== item.plan.source.gamesSha256
+    || item.sourceEvidence.provider?.sha256 !== item.plan.source.providerSha256
+    || item.sourceEvidence.providerCaptureReceipt?.sha256 !== item.plan.source.providerCaptureReceiptSha256)) {
+    fail("Cutover migration source evidence is incomplete");
+  }
   const writerNodeIds = [...new Set([...sourceWriters, ...candidateWriters].map(({ nodeId }) => nodeId))].sort();
   const writerInventorySha256 = sha256(canonicalJson({ sourceWriters, candidateWriters }));
   const blockers = validateCutoverControls(controls, {
@@ -329,6 +348,8 @@ export function buildVivaGameProjectionCutoverPlan({
     repository,
     controlsSha256,
     reviewedFlowContractSha256,
+    executorSources,
+    executorSourcesSha256: sha256(canonicalJson(executorSources)),
     sourceFlowSha256,
     candidateSha256,
     tenantKeySha256: sha256(tenantKey),
@@ -337,11 +358,26 @@ export function buildVivaGameProjectionCutoverPlan({
       hostname: controls.runtimeTenant.hostname,
       processName: controls.runtimeTenant.processName,
       pm2ProcessId: controls.runtimeTenant.pm2ProcessId,
+      pmExecPath: controls.runtimeTenant.pmExecPath,
+      pmCwd: controls.runtimeTenant.pmCwd,
+      pmArgsSha256: controls.runtimeTenant.pmArgsSha256,
+      pmNodeArgsSha256: controls.runtimeTenant.pmNodeArgsSha256,
+      restartCountAtEvidence: controls.runtimeTenant.restartCount,
+      localHealthUrl: controls.runtimeTenant.localHealthUrl,
       canonicalFlowPath: "/root/.node-red/flows.json",
     } : null,
     migration: {
       planSha256s: planSummary.planSha256s,
       operationIds: planSummary.operationIds,
+      sourceEvidence: plans.map((item, index) => ({
+        planSha256: item.planSha256,
+        gamesPath: `migration-evidence/${String(index + 1).padStart(2, "0")}/games.projection.json`,
+        gamesSha256: item.sourceEvidence.games.sha256,
+        providerPath: `migration-evidence/${String(index + 1).padStart(2, "0")}/provider.projection.json`,
+        providerSha256: item.sourceEvidence.provider.sha256,
+        providerCaptureReceiptPath: `migration-evidence/${String(index + 1).padStart(2, "0")}/provider.capture-receipt.json`,
+        providerCaptureReceiptSha256: item.sourceEvidence.providerCaptureReceipt.sha256,
+      })),
       totalEligible: planSummary.totalEligible,
       totalSkipped: planSummary.totalSkipped,
       executor: "scripts/run_viva_game_projection_tenant_migration.mjs",
@@ -431,11 +467,16 @@ export function validateVivaGameProjectionCutoverPostcheck(receipt, plan, nowMs 
     || receipt.workerWriteCount !== plan.postchecks.shadowWritesExpected
     || receipt.runtimeTenantReadback !== true
     || receipt.candidateFlowReadback !== true
+    || receipt.runtimeHealth?.url !== plan.production?.localHealthUrl
+    || !Number.isSafeInteger(receipt.runtimeHealth?.statusCode)
+    || receipt.runtimeHealth.statusCode < 200 || receipt.runtimeHealth.statusCode >= 400
+    || !HASH_RE.test(String(receipt.runtimeHealth?.bodySha256 || ""))
     || receipt.ingressReopened !== false
     || !HASH_RE.test(String(receipt.fenceReceiptSha256 || ""))
     || !HASH_RE.test(String(receipt.mongoWriteBarrierReceiptSha256 || ""))
     || !HASH_RE.test(String(receipt.executionIndexSha256 || ""))
     || !HASH_RE.test(String(receipt.fenceGuardianReceiptSha256 || ""))
+    || !HASH_RE.test(String(receipt.fenceGuardianHeartbeatSha256 || ""))
     || !UUID_RE.test(String(receipt.coordinatorAttemptId || ""))
     || !Number.isFinite(Date.parse(receipt.observedAt))
     || nowMs - Date.parse(receipt.observedAt) > 5 * 60_000
@@ -452,6 +493,7 @@ export function validateVivaGameProjectionCutoverPostcheck(receipt, plan, nowMs 
     [evidence.mongoWriteBarrierReceiptBytes, receipt.mongoWriteBarrierReceiptSha256, "Mongo write-barrier receipt"],
     [evidence.executionIndexBytes, receipt.executionIndexSha256, "Cutover execution index"],
     [evidence.fenceGuardianReceiptBytes, receipt.fenceGuardianReceiptSha256, "Fence guardian receipt"],
+    [evidence.fenceGuardianHeartbeatBytes, receipt.fenceGuardianHeartbeatSha256, "Fence guardian heartbeat"],
   ]) {
     if (!Buffer.isBuffer(bytes) || sha256(bytes) !== expected) fail(`Cutover postcheck lacks the exact ${label} artifact`);
   }

@@ -10,8 +10,9 @@ import { BSON, ObjectId } from "mongodb";
 import {
   assertMongoWriteBarrier,
   installMongoWriteBarrier,
-  restorePreviousMongoValidationOptions,
+  restorePreviousMongoWriteBarrier,
 } from "../lib/vivaGameProjectionMongoWriteBarrier.mjs";
+import { isAuthorizedFenceGuardianRelease } from "../lib/vivaGameProjectionFenceGuardian.mjs";
 import {
   buildMongoTargetIdentity,
   buildVivaGameProjectionCutoverPlan,
@@ -132,6 +133,19 @@ function executablePlan() {
   };
 }
 
+const fixtureExecutorSources = Array.from({ length: 8 }, (_, index) => ({
+  path: `scripts/fixture-${index}.mjs`, sha256: String(index + 1).repeat(64),
+}));
+const cutoverPlanItem = (planSha256, plan) => ({
+  planSha256,
+  plan,
+  sourceEvidence: {
+    games: { sha256: plan.source.gamesSha256 },
+    provider: { sha256: plan.source.providerSha256 },
+    providerCaptureReceipt: { sha256: plan.source.providerCaptureReceiptSha256 },
+  },
+});
+
 const cloneBson = (value) => BSON.EJSON.parse(BSON.EJSON.stringify(value, null, 0, { relaxed: false }), { relaxed: false });
 const getPath = (owner, dotted) => dotted.split(".").reduce((value, key) => value?.[key], owner);
 const setPath = (owner, dotted, value) => {
@@ -192,6 +206,12 @@ const controls = (overrides = {}) => ({
     hostname: "padlhub-lk-primary",
     processName: "node-red",
     pm2ProcessId: 0,
+    pmExecPath: "/usr/local/bin/node-red",
+    pmCwd: "/root/.node-red",
+    pmArgsSha256: cutoverSha256(canonicalJson([])),
+    pmNodeArgsSha256: cutoverSha256(canonicalJson([])),
+    restartCount: 3,
+    localHealthUrl: "http://127.0.0.1:1880/",
     tenantKeySha256: cutoverSha256(tenantKey),
     durableConfigReadback: true,
     restartUsedUpdateEnv: true,
@@ -315,6 +335,7 @@ test("migration executor decodes canonical EJSON ObjectId and rejects upsert or 
 
 test("Mongo write barrier proves application denial and migration-only bypass", async () => {
   let state = { validator: {}, validationLevel: "strict", validationAction: "error" };
+  let applicationRoles = [{ role: "readWrite", db: "games" }];
   let preparation = null;
   const session = () => ({
     startTransaction() {},
@@ -337,16 +358,47 @@ test("Mongo write barrier proves application denial and migration-only bypass", 
     }),
   };
   const applicationDb = {
+    async command() { const error = new Error("not authorized"); error.code = 13; throw error; },
     collection: () => ({
-      updateOne: async () => { const error = new Error("Document failed validation"); error.code = 121; throw error; },
+      insertOne: async () => { const error = new Error("not authorized"); error.code = 13; throw error; },
+      updateOne: async () => { const error = new Error("not authorized"); error.code = 13; throw error; },
+      deleteOne: async () => { const error = new Error("not authorized"); error.code = 13; throw error; },
     }),
   };
+  const migrationAdmin = {
+    async command(command) {
+      if (command.hello) return { setName: "rs-fixture" };
+      if (command.connectionStatus) return {
+        authInfo: {
+          authenticatedUsers: [{ user: "migration", db: "admin" }],
+          authenticatedUserRoles: [{ role: "root", db: "admin" }],
+          authenticatedUserPrivileges: [{ resource: { anyResource: true }, actions: ["anyAction"] }],
+        },
+      };
+      if (command.usersInfo) return { users: [{ user: "application", db: "admin", roles: applicationRoles }] };
+      if (command.updateUser === "application") { applicationRoles = command.roles; return { ok: 1 }; }
+      throw new Error("unexpected admin command");
+    },
+  };
+  const applicationAdmin = {
+    async command(command) {
+      if (command.hello) return { setName: "rs-fixture" };
+      if (command.connectionStatus) return {
+        authInfo: {
+          authenticatedUsers: [{ user: "application", db: "admin" }],
+          authenticatedUserRoles: applicationRoles,
+          authenticatedUserPrivileges: applicationRoles.length ? [{ resource: { db: "games", collection: "" }, actions: ["find", "insert", "update", "remove"] }] : [],
+        },
+      };
+      const error = new Error("not authorized"); error.code = 13; throw error;
+    },
+  };
   const migrationClient = {
-    db: (name) => (name === "admin" ? { command: async () => ({ setName: "rs-fixture" }) } : migrationDb),
+    db: (name) => (name === "admin" ? migrationAdmin : migrationDb),
     startSession: session,
   };
   const applicationClient = {
-    db: (name) => (name === "admin" ? { command: async () => ({ setName: "rs-fixture" }) } : applicationDb),
+    db: (name) => (name === "admin" ? applicationAdmin : applicationDb),
     startSession: session,
   };
   const receipt = await installMongoWriteBarrier({
@@ -360,20 +412,41 @@ test("Mongo write barrier proves application denial and migration-only bypass", 
     installedAt: nowIso,
     beforeInstall: async (value) => { preparation = value; },
   });
-  assert.equal(preparation.state, "PREPARED_BEFORE_COLLMOD");
-  assert.equal(receipt.applicationWriteProbeRejected, true);
+  assert.equal(preparation.state, "PREPARED_BEFORE_ACL_AND_COLLMOD");
+  assert.equal(receipt.applicationDeleteProbeRejected, true);
+  assert.equal(receipt.applicationCollModProbeRejected, true);
   assert.equal(receipt.migrationBypassProbeAborted, true);
-  await assertMongoWriteBarrier(migrationDb, receipt, {
+  await assertMongoWriteBarrier(migrationClient, receipt, {
     fenceTokenSha256,
     cutoverPlanSha256: "6".repeat(64),
     mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
   });
-  await restorePreviousMongoValidationOptions(migrationDb, receipt, {
+  await restorePreviousMongoWriteBarrier(migrationClient, preparation, {
     fenceTokenSha256,
     cutoverPlanSha256: "6".repeat(64),
     mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
   });
   assert.deepEqual(state, { validator: {}, validationLevel: "strict", validationAction: "error" });
+  assert.deepEqual(applicationRoles, [{ role: "readWrite", db: "games" }]);
+});
+
+test("fence guardian rejects malformed or stale release requests without treating them as authorization", () => {
+  const nowMs = Date.parse(nowIso);
+  const exact = {
+    formatVersion: 1,
+    kind: "viva-game-projection-fence-release-request",
+    state: "RELEASE_AUTHORIZED",
+    confirmation: "RELEASE_VIVA_GAME_PROJECTION_CUTOVER_FENCE_V1",
+    fenceTokenSha256,
+    authorizedAt: nowIso,
+  };
+  assert.equal(isAuthorizedFenceGuardianRelease({ release: exact, validPrivateFile: true, fenceTokenSha256, nowMs }), true);
+  assert.equal(isAuthorizedFenceGuardianRelease({ release: null, validPrivateFile: true, fenceTokenSha256, nowMs }), false);
+  assert.equal(isAuthorizedFenceGuardianRelease({ release: exact, validPrivateFile: false, fenceTokenSha256, nowMs }), false);
+  assert.equal(isAuthorizedFenceGuardianRelease({
+    release: { ...exact, authorizedAt: new Date(nowMs - 5 * 60_000 - 1).toISOString() },
+    validPrivateFile: true, fenceTokenSha256, nowMs,
+  }), false);
 });
 
 test("migration apply and restore require exact CAS readback and preserve the full BSON preimage", async () => {
@@ -472,10 +545,11 @@ test("cutover plan binds all source and candidate Mongo writers and keeps live a
     tenantKey,
     sourceWriters: sourceWriterInventory,
     candidateWriters: candidateWriterInventory,
-    plans: [{ planSha256, plan }],
+    plans: [cutoverPlanItem(planSha256, plan)],
     controls: completeControls,
     controlsSha256: "6".repeat(64),
     reviewedFlowContractSha256: "7".repeat(64),
+    executorSources: fixtureExecutorSources,
     generatedAt: nowIso,
   });
   assert.equal(result.state, "READY_FOR_SEPARATE_LIVE_APPROVAL");
@@ -497,12 +571,14 @@ test("cutover plan binds all source and candidate Mongo writers and keeps live a
   const fixtureBarrierBytes = Buffer.from(canonicalJson({ fixture: "barrier" }));
   const fixtureExecutionBytes = Buffer.from(canonicalJson({ fixture: "execution" }));
   const fixtureGuardianBytes = Buffer.from(canonicalJson({ fixture: "guardian" }));
+  const fixtureGuardianHeartbeatBytes = Buffer.from(canonicalJson({ fixture: "guardian-heartbeat" }));
   const postcheckEvidence = {
     applyReportBytesByPlan: { [planSha256]: fixtureApplyReport },
     queryEvidenceBytes: fixtureQueries,
     mongoWriteBarrierReceiptBytes: fixtureBarrierBytes,
     executionIndexBytes: fixtureExecutionBytes,
     fenceGuardianReceiptBytes: fixtureGuardianBytes,
+    fenceGuardianHeartbeatBytes: fixtureGuardianHeartbeatBytes,
   };
   const postcheck = {
     formatVersion: 1,
@@ -520,12 +596,16 @@ test("cutover plan binds all source and candidate Mongo writers and keeps live a
     workerWriteCount: 0,
     runtimeTenantReadback: true,
     candidateFlowReadback: true,
+    runtimeHealth: {
+      url: "http://127.0.0.1:1880/", statusCode: 200, bodySha256: "a".repeat(64), observedAt: nowIso,
+    },
     fenceTokenSha256,
     fenceReceiptSha256: "9".repeat(64),
     mongoWriteBarrierReceiptSha256: cutoverSha256(fixtureBarrierBytes),
     executionIndexSha256: cutoverSha256(fixtureExecutionBytes),
     coordinatorAttemptId: "11111111-1111-4111-8111-111111111111",
     fenceGuardianReceiptSha256: cutoverSha256(fixtureGuardianBytes),
+    fenceGuardianHeartbeatSha256: cutoverSha256(fixtureGuardianHeartbeatBytes),
     fenceExpiresAt: "2026-09-04T12:10:00.000Z",
     mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,
     observedAt: nowIso,
@@ -569,10 +649,11 @@ test("cutover plan reports missing CI, tenant, fence, backup, restore and covera
     tenantKey,
     sourceWriters: sourceWriterInventory,
     candidateWriters: candidateWriterInventory,
-    plans: [{ planSha256, plan }],
+    plans: [cutoverPlanItem(planSha256, plan)],
     controls: incomplete,
     controlsSha256: "6".repeat(64),
     reviewedFlowContractSha256: "7".repeat(64),
+    executorSources: fixtureExecutorSources,
     generatedAt: nowIso,
   });
   assert.equal(result.state, "BLOCKED");
@@ -608,10 +689,11 @@ test("claimed PASS controls reject future runtime, backup, restore, coverage, an
       tenantKey,
       sourceWriters: sourceWriterInventory,
       candidateWriters: candidateWriterInventory,
-      plans: [{ planSha256, plan: migrationPlan }],
+      plans: [cutoverPlanItem(planSha256, migrationPlan)],
       controls: evidence,
       controlsSha256: "6".repeat(64),
       reviewedFlowContractSha256: "7".repeat(64),
+      executorSources: fixtureExecutorSources,
       generatedAt: nowIso,
     }), /internally inconsistent/);
   }
@@ -626,10 +708,11 @@ test("claimed PASS controls fail closed when evidence is incomplete", () => {
     tenantKey,
     sourceWriters: sourceWriterInventory,
     candidateWriters: candidateWriterInventory,
-    plans: [{ planSha256: "5".repeat(64), plan }],
+    plans: [cutoverPlanItem("5".repeat(64), plan)],
     controls: controls({ writerFence: { state: "HELD", writerNodeIds: [] } }),
     controlsSha256: "6".repeat(64),
     reviewedFlowContractSha256: "7".repeat(64),
+    executorSources: fixtureExecutorSources,
     generatedAt: nowIso,
   }), /does not cover the exact writer inventory/);
 });
@@ -685,6 +768,7 @@ test("cutover tools contain no remote-control or inline credential path", () => 
   const coordinatorShell = fs.readFileSync(path.join(root, "run_viva_game_projection_cutover.sh"), "utf8");
   const postcheckSource = fs.readFileSync(path.join(root, "prepare_viva_game_projection_cutover_postcheck.mjs"), "utf8");
   const guardianSource = fs.readFileSync(path.join(root, "run_viva_game_projection_fence_guardian.mjs"), "utf8");
+  const guardianContractSource = fs.readFileSync(path.join(root, "lib/vivaGameProjectionFenceGuardian.mjs"), "utf8");
   assert.doesNotMatch(packetSource, /\bssh\b|\bscp\b|\bcurl\b|pm2\s+(?:restart|stop|start)/);
   assert.doesNotMatch(executorSource, /process\.env\.MONGO_URI|mongodb(?:\+srv)?:\/\//);
   assert.doesNotMatch(coordinatorSource, /\bssh\b|\bscp\b|\bcurl\b/);
@@ -693,7 +777,9 @@ test("cutover tools contain no remote-control or inline credential path", () => 
   assert.match(coordinatorShell, /exec 9>"\$\{lock_path\}"[\s\S]+flock -n 9[\s\S]+exec node/);
   assert.match(coordinatorShell, /nohup node[\s\S]+run_viva_game_projection_fence_guardian\.mjs[\s\S]+9>&9/);
   assert.match(guardianSource, /HOLDING_UNTIL_EXPLICIT_RELEASE/);
-  assert.match(guardianSource, /RELEASE_VIVA_GAME_PROJECTION_CUTOVER_FENCE_V1/);
+  assert.match(guardianContractSource, /RELEASE_VIVA_GAME_PROJECTION_CUTOVER_FENCE_V1/);
+  assert.match(guardianSource, /quarantineReleaseRequest/);
+  assert.ok(coordinatorSource.indexOf("MIGRATION_PLAN_IN_FLIGHT") < coordinatorSource.indexOf("await runMigration"));
   assert.ok(coordinatorSource.indexOf("installMongoWriteBarrier") < coordinatorSource.indexOf("await runMigration"));
   assert.ok(coordinatorSource.indexOf("hashLiveFullCollection") < coordinatorSource.indexOf("await runMigration"));
   assert.ok(coordinatorSource.indexOf("await runMigration") < coordinatorSource.indexOf("atomicWrite(liveFlowPath"));
@@ -717,6 +803,17 @@ test("durable reports use append-only private journals outside Git worktrees", (
       "0001-transaction-outcome-unknown.json",
       "0002-terminal-result.json",
     ]);
+    const failedReportPath = path.join(privateRoot, "cutover-finalize-failure.json");
+    const failedJournal = createDurableReportJournal(failedReportPath, "cutover", "fixture-cutover-attempt");
+    fs.mkdirSync(failedReportPath, { mode: 0o700 });
+    assert.throws(() => failedJournal.finalize({
+      state: "FAILED_MONGO_BARRIER_HELD_RUNTIME_STOPPED", mutationAttempted: true,
+    }));
+    const terminal = JSON.parse(fs.readFileSync(
+      path.join(`${failedReportPath}.journal`, "0001-terminal-result.json"), "utf8",
+    ));
+    assert.equal(terminal.outcome, "FAILED_MONGO_BARRIER_HELD_RUNTIME_STOPPED");
+    assert.equal(terminal.mutationAttempted, true);
     const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
     assert.throws(() => ensurePrivateDirectory(path.join(repositoryRoot, "tmp-cutover-output"), "Fixture"), /outside the repository/);
   } finally {
@@ -787,6 +884,49 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
     const migrationPlan = executablePlan();
     migrationPlan.source.sourceFlowSha256 = actualSourceSha256;
     migrationPlan.source.expectedSourceFlowSha256 = actualSourceSha256;
+    const migrationGamesPath = path.join(privateRoot, "migration-games.json");
+    const migrationGamesBytes = Buffer.from(`${JSON.stringify({
+      formatVersion: 1,
+      sourceKind: "live-147-mongo-projection",
+      sourceHost: "lk-primary-147",
+      sourceFlowSha256: actualSourceSha256,
+      database: "games",
+      collection: "lk_games",
+      capturedAt: nowIso,
+      games: [BSON.EJSON.serialize(legacyGame(), { relaxed: false })],
+    }, null, 2)}\n`);
+    write0600(migrationGamesPath, migrationGamesBytes);
+    const migrationProviderReceiptPath = path.join(privateRoot, "migration-provider-receipt.json");
+    const migrationProviderReceiptBytes = Buffer.from(`${JSON.stringify({
+      formatVersion: 1,
+      sourceKind: "viva-end-user-tenant-capture-receipt",
+      tenantKey,
+      capturedAt: nowIso,
+      endpointOrigin: "https://api.vivacrm.ru",
+      captures: [{
+        date: scope.dateFrom,
+        requestPath: `/end-user/api/v1/${tenantKey}/exercises?date=${scope.dateFrom}`,
+        statusCode: 200,
+        complete: true,
+        responseShape: "array",
+        rowCount: providerRows[scope.dateFrom].length,
+        rowsSha256: cutoverSha256(Buffer.from(JSON.stringify(providerRows[scope.dateFrom]))),
+      }],
+    }, null, 2)}\n`);
+    write0600(migrationProviderReceiptPath, migrationProviderReceiptBytes);
+    const migrationProviderPath = path.join(privateRoot, "migration-provider.json");
+    const migrationProviderBytes = Buffer.from(`${JSON.stringify({
+      formatVersion: 1,
+      sourceKind: "viva-end-user-tenant-projection",
+      capturedAt: nowIso,
+      tenantKey,
+      captureReceiptSha256: cutoverSha256(migrationProviderReceiptBytes),
+      rowsByDate: providerRows,
+    }, null, 2)}\n`);
+    write0600(migrationProviderPath, migrationProviderBytes);
+    migrationPlan.source.gamesSha256 = cutoverSha256(migrationGamesBytes);
+    migrationPlan.source.providerSha256 = cutoverSha256(migrationProviderBytes);
+    migrationPlan.source.providerCaptureReceiptSha256 = cutoverSha256(migrationProviderReceiptBytes);
     const migrationPlanPath = path.join(privateRoot, "migration-plan.json");
     const migrationPlanBytes = Buffer.from(`${JSON.stringify(migrationPlan, null, 2)}\n`);
     write0600(migrationPlanPath, migrationPlanBytes);
@@ -795,7 +935,13 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
     write0600(migrationIndexPath, Buffer.from(`${JSON.stringify({
       formatVersion: 1,
       tenantKey,
-      plans: [{ path: migrationPlanPath, sha256: migrationPlanSha256 }],
+      plans: [{
+        path: migrationPlanPath,
+        sha256: migrationPlanSha256,
+        gamesPath: migrationGamesPath,
+        providerPath: migrationProviderPath,
+        providerCaptureReceiptPath: migrationProviderReceiptPath,
+      }],
     }, null, 2)}\n`));
 
     const dynamicSourceWriters = inventoryLkGamesWriters(source);
@@ -915,6 +1061,7 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       outputDirectory,
       tenantKey,
       repository: { commit: repositoryCommit, branch: "codex/viva-cutover" },
+      executorSources: fixtureExecutorSources,
       nowMs: Date.parse(nowIso),
     });
     assert.equal(result.plan.state, "READY_FOR_SEPARATE_LIVE_APPROVAL");
@@ -941,16 +1088,26 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
     const packetManifestPath = path.join(outputDirectory, "packet.manifest.json");
     const cutoverPlanPath = path.join(outputDirectory, "cutover-plan.json");
     const applyIndexPath = path.join(privateRoot, "apply-index.json");
+    const applyBackupPath = path.join(privateRoot, "apply-backup.ejson");
+    const applyBackupBytes = Buffer.from(canonicalJson({ fixture: "apply-backup" }));
+    write0600(applyBackupPath, applyBackupBytes);
     const applyIndexBytes = Buffer.from(`${JSON.stringify({
       formatVersion: 1,
       kind: "viva-game-projection-cutover-apply-index",
       cutoverPlanSha256: cutoverEntry.sha256,
       tenantKey,
+      globalLegacyCoverage: {
+        dateFrom: scope.dateFrom,
+        mongoIds: [legacyGame()._id.toHexString()],
+        mongoIdsSha256: cutoverSha256(canonicalJson([legacyGame()._id.toHexString()])),
+      },
       items: [{
         planPath: path.join(outputDirectory, copiedPlanEntry.path),
         planSha256: migrationPlanSha256,
         reportPath: applyReportPath,
         reportSha256: cutoverSha256(applyReportBytes),
+        backupPath: applyBackupPath,
+        backupSha256: cutoverSha256(applyBackupBytes),
       }],
     }, null, 2)}\n`);
     write0600(applyIndexPath, applyIndexBytes);
@@ -989,8 +1146,33 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       fixture: true,
     }));
     write0600(barrierReceiptPath, barrierReceiptBytes);
+    const migrationConnectionFile = path.join(privateRoot, "unused-migration-connection.json");
+    const migrationConnectionBytes = Buffer.from(canonicalJson({ fixture: true }));
+    write0600(migrationConnectionFile, migrationConnectionBytes);
     const executionIndexPath = path.join(privateRoot, "execution-index.json");
-    const executionIndexBytes = Buffer.from(canonicalJson({ formatVersion: 1, kind: "fixture-execution-index" }));
+    const packetManifestSha256 = cutoverSha256(fs.readFileSync(packetManifestPath));
+    const executionIndexBytes = Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-cutover-execution-index",
+      cutoverPlanPath,
+      cutoverPlanSha256: cutoverEntry.sha256,
+      packetManifestPath,
+      packetManifestSha256,
+      fenceReceiptPath,
+      fenceReceiptSha256: cutoverSha256(fenceReceiptBytes),
+      migrationConnectionFile,
+      migrationConnectionFileSha256: cutoverSha256(migrationConnectionBytes),
+      mongoWriteBarrierReceiptOutputPath: barrierReceiptPath,
+      applyIndexOutputPath: applyIndexPath,
+      liveFlowPath: path.join(outputDirectory, "candidate.flow.json"),
+      tenantKey,
+      items: [{
+        planPath: path.join(outputDirectory, copiedPlanEntry.path),
+        planSha256: migrationPlanSha256,
+        reportPath: applyReportPath,
+        backupDirectory: path.join(privateRoot, "migration-backups"),
+      }],
+    }));
     write0600(executionIndexPath, executionIndexBytes);
     const guardianReceiptPath = path.join(privateRoot, "guardian-receipt.json");
     const guardianReceiptBytes = Buffer.from(canonicalJson({
@@ -998,12 +1180,43 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       kind: "viva-game-projection-fence-guardian-receipt",
       state: "HOLDING_UNTIL_EXPLICIT_RELEASE",
       pid: 4242,
+      fd: 9,
+      processStartIdentity: "4242:12345",
       lockPath: "/run/lock/padlhub-viva-game-projection-cutover.lock",
+      lockDevice: "1",
+      lockInode: "2",
+      heartbeatPath: path.join(privateRoot, "guardian-heartbeat.json"),
       fenceTokenSha256,
       startedAt: nowIso,
       automaticRelease: false,
     }));
     write0600(guardianReceiptPath, guardianReceiptBytes);
+    const guardianHeartbeatBytes = Buffer.from(canonicalJson({ fixture: "live-heartbeat" }));
+    const coordinatorJournal = path.join(privateRoot, "coordinator-report.json.journal");
+    fs.mkdirSync(coordinatorJournal, { mode: 0o700 });
+    const attemptId = "11111111-1111-4111-8111-111111111111";
+    const journalEntries = [
+      { phase: "ATTEMPT_STARTED" },
+      { phase: "MONGO_WRITE_BARRIER_HELD" },
+      { phase: "GLOBAL_LEGACY_SCOPE_COVERED" },
+      {
+        phase: "MIGRATION_PLAN_IN_FLIGHT", planSha256: migrationPlanSha256,
+        planPath: path.join(outputDirectory, copiedPlanEntry.path), reportPath: applyReportPath,
+      },
+      {
+        phase: "MIGRATION_PLAN_APPLIED", planSha256: migrationPlanSha256,
+        reportPath: applyReportPath, reportSha256: cutoverSha256(applyReportBytes),
+        backupPath: applyBackupPath, backupSha256: cutoverSha256(applyBackupBytes),
+      },
+      { phase: "CANDIDATE_PUBLISHED" },
+      { phase: "RUNTIME_ONLINE_SHADOW" },
+    ].map((entry, sequence) => ({
+      formatVersion: 1, attemptId, mode: "CUTOVER", sequence, at: nowIso, ...entry,
+    }));
+    journalEntries.forEach((entry, sequence) => write0600(
+      path.join(coordinatorJournal, `${String(sequence).padStart(4, "0")}-${entry.phase.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.json`),
+      Buffer.from(canonicalJson(entry)),
+    ));
     const postcheckCollection = {
       findOne: (filter) => migratedCollection.findOne(filter),
       countDocuments: async (query) => (Object.hasOwn(query, "audit.events") ? 0 : 0),
@@ -1013,7 +1226,7 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       cutoverPlan: cutoverPlanPath,
       packetManifest: packetManifestPath,
       expectedCutoverPlanSha256: cutoverEntry.sha256,
-      expectedPacketManifestSha256: cutoverSha256(fs.readFileSync(packetManifestPath)),
+      expectedPacketManifestSha256: packetManifestSha256,
       applyIndex: applyIndexPath,
       expectedApplyIndexSha256: cutoverSha256(applyIndexBytes),
       runtimeFlow: path.join(outputDirectory, "candidate.flow.json"),
@@ -1021,10 +1234,11 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       expectedFenceReceiptSha256: cutoverSha256(fenceReceiptBytes),
       mongoWriteBarrierReceipt: barrierReceiptPath,
       expectedMongoWriteBarrierReceiptSha256: cutoverSha256(barrierReceiptBytes),
-      migrationConnectionFile: path.join(privateRoot, "unused-migration-connection.json"),
+      migrationConnectionFile,
       executionIndex: executionIndexPath,
       expectedExecutionIndexSha256: cutoverSha256(executionIndexBytes),
-      coordinatorAttemptId: "11111111-1111-4111-8111-111111111111",
+      coordinatorAttemptId: attemptId,
+      coordinatorJournal,
       fenceGuardianReceiptSha256: cutoverSha256(guardianReceiptBytes),
       fenceGuardianReceipt: guardianReceiptPath,
       outputDirectory: path.join(privateRoot, "postcheck"),
@@ -1034,12 +1248,22 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       assertFenceLease: () => true,
       assertMongoWriteBarrier: async () => true,
       assertNoConcurrentWrites: async () => true,
+      assertExecutorSources: async () => true,
+      assertGuardianLease: async () => ({
+        bytes: guardianHeartbeatBytes, sha256: cutoverSha256(guardianHeartbeatBytes),
+      }),
+      probeRuntimeHealth: async (url) => ({ url, statusCode: 200, bodySha256: "a".repeat(64), observedAt: nowIso }),
       readPm2: async () => [{
         name: "node-red",
         pm_id: 0,
         pm2_env: {
           status: "online",
-          pm_uptime: Date.parse(nowIso),
+          pm_uptime: Date.parse(nowIso) - 20_000,
+          restart_time: 4,
+          pm_exec_path: "/usr/local/bin/node-red",
+          pm_cwd: "/root/.node-red",
+          args: [],
+          node_args: [],
           PADLHUB_PLATFORM_TENANT_KEY: tenantKey,
           VIVA_GAME_PROJECTION_SYNC_MODE: "SHADOW",
         },
@@ -1049,6 +1273,20 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
     assert.equal(postcheck.receipt.state, "PASS");
     assert.equal(postcheck.receipt.ingressReopened, false);
     assert.equal(fs.existsSync(postcheck.readyMarkerPath), true);
+
+    fs.writeFileSync(migrationProviderPath, Buffer.from(canonicalJson({ tampered: true })), { mode: 0o600 });
+    assert.throws(() => prepareVivaGameProjectionCutoverPacket({
+      workspace,
+      candidateDirectory,
+      migrationIndexFile: migrationIndexPath,
+      controlsFile: controlsPath,
+      outputDirectory: path.join(privateRoot, "tampered-source-evidence-packet"),
+      tenantKey,
+      repository: { commit: repositoryCommit, branch: "codex/viva-cutover" },
+      executorSources: fixtureExecutorSources,
+      nowMs: Date.parse(nowIso),
+    }), /source evidence digest mismatch/);
+    fs.writeFileSync(migrationProviderPath, migrationProviderBytes, { mode: 0o600 });
 
     const tamperedDirectory = path.join(privateRoot, "tampered-candidate");
     fs.cpSync(candidateDirectory, tamperedDirectory, { recursive: true });
@@ -1065,6 +1303,7 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       outputDirectory: path.join(privateRoot, "tampered-packet"),
       tenantKey,
       repository: { commit: repositoryCommit, branch: "codex/viva-cutover" },
+      executorSources: fixtureExecutorSources,
       nowMs: Date.parse(nowIso),
     }), /does not match the reviewed cutover contract/);
   } finally {

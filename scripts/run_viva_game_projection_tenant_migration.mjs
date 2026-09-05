@@ -21,6 +21,7 @@ import {
 } from "./lib/vivaGameProjectionTenantMigrationExecution.mjs";
 import { buildMongoTargetIdentity, canonicalJson } from "./lib/vivaGameProjectionCutoverContract.mjs";
 import { assertMongoWriteBarrier } from "./lib/vivaGameProjectionMongoWriteBarrier.mjs";
+import { assertExactExecutorSources } from "./lib/vivaGameProjectionExecutorSource.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = fs.realpathSync(path.resolve(path.dirname(SCRIPT_PATH), ".."));
@@ -187,7 +188,11 @@ export function createDurableReportJournal(reportPath, mode, attemptId = crypto.
     journalDirectory,
     append,
     finalize(value) {
-      append("TERMINAL_RESULT", { outcome: value.outcome, mutationAttempted: value.mutationAttempted === true });
+      append("TERMINAL_RESULT", {
+        state: value.state || null,
+        outcome: value.outcome || value.state || null,
+        mutationAttempted: value.mutationAttempted === true,
+      });
       writeDurableExclusive(requested, Buffer.from(`${JSON.stringify(value, null, 2)}\n`));
       closed = true;
     },
@@ -386,6 +391,8 @@ async function run({ mode, values }, dependencies = {}) {
     || cutoverPlan.liveMutationAuthorized !== false) {
     fail("Cutover plan is not ready or does not bind this migration plan");
   }
+  if (dependencies.assertExecutorSources) await dependencies.assertExecutorSources(cutoverPlan);
+  else assertExactExecutorSources(cutoverPlan);
   validatePacketBinding({ values, planBytes, plan, cutoverPlanBytes: cutoverRead.bytes, cutoverPlan, manifestBytes: manifestRead.bytes, manifest: manifestRead.value });
   if ((mode === "verify" || mode === "apply" || mode === "reconcile")
     && expectedRuntimeFlowSha256 !== expectedSourceFlowSha256) fail("Verify/apply/reconcile require the frozen source flow to remain active on disk");
@@ -459,7 +466,7 @@ async function run({ mode, values }, dependencies = {}) {
     const assertBarrier = async () => {
       const current = readPrivateJson(values.get("--mongo-write-barrier-receipt"), "Mongo write-barrier receipt", MAX_PACKET_BYTES);
       if (sha256(current.bytes) !== barrierReceiptSha256) fail("Mongo write-barrier receipt changed during execution");
-      await assertMongoWriteBarrier(db, current.value, {
+      await assertMongoWriteBarrier(client, current.value, {
         fenceTokenSha256: cutoverPlan.writerFence.fenceTokenSha256,
         cutoverPlanSha256: values.get("--expected-cutover-plan-sha256"),
         mongoTargetIdentitySha256: mongoTarget.targetIdentitySha256,

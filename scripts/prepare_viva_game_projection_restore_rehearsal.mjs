@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,16 +75,24 @@ export async function prepareVivaGameProjectionRestoreRehearsal(options, depende
     appName: "PadlHubVivaGameProjectionRestoreRehearsal", maxPoolSize: 1,
     serverSelectionTimeoutMS: 20_000, connectTimeoutMS: 20_000, socketTimeoutMS: 20_000, timeoutMS: 20_000,
   });
-  let databaseCreated = false;
+  let markerCreated = false;
+  let targetCollectionCreated = false;
+  const ownershipToken = crypto.randomBytes(32).toString("hex");
+  const markerName = "__padlhub_viva_projection_restore_owner";
   try {
     if (!dependencies.mongoClient) await client.connect();
     const hello = await client.db("admin").command({ hello: 1 });
     if (!hello.setName) fail("Restore rehearsal requires a replica-set target");
     const db = client.db(options.isolatedDatabase);
-    const existing = await db.listCollections({ name: "lk_games" }, { nameOnly: true }).toArray();
-    if (existing.length !== 0) fail("Restore rehearsal target collection already exists");
-    databaseCreated = true;
+    const databases = await client.db("admin").admin().listDatabases({ nameOnly: true });
+    if ((databases.databases || []).some((entry) => entry?.name === options.isolatedDatabase)) {
+      fail("Restore rehearsal target database already exists");
+    }
+    await db.createCollection(markerName);
+    markerCreated = true;
+    await db.collection(markerName).insertOne({ _id: "owner", ownershipToken });
     await db.createCollection("lk_games");
+    targetCollectionCreated = true;
     if (documents.length > 0) {
       const result = await db.collection("lk_games").insertMany(documents, { ordered: true, bypassDocumentValidation: true });
       if (result?.acknowledged !== true || result.insertedCount !== documents.length) fail("Restore rehearsal did not restore every document");
@@ -120,8 +129,19 @@ export async function prepareVivaGameProjectionRestoreRehearsal(options, depende
     writePrivate(receiptPath, Buffer.from(canonicalJson(receipt)));
     return { receipt, receiptPath, receiptSha256: sha256(fs.readFileSync(receiptPath)) };
   } finally {
-    if (databaseCreated) await client.db(options.isolatedDatabase).dropDatabase();
-    if (!dependencies.mongoClient) await client.close().catch(() => {});
+    try {
+      const db = client.db(options.isolatedDatabase);
+      if (markerCreated) {
+        const markers = await db.collection(markerName).find({}).toArray();
+        if (markers.length !== 1 || markers[0]?._id !== "owner" || markers[0]?.ownershipToken !== ownershipToken) {
+          fail("Restore rehearsal lost exclusive ownership of its cleanup target");
+        }
+        if (targetCollectionCreated) await db.collection("lk_games").drop();
+        await db.collection(markerName).drop();
+      }
+    } finally {
+      if (!dependencies.mongoClient) await client.close().catch(() => {});
+    }
   }
 }
 

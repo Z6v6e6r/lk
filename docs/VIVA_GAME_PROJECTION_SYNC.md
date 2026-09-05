@@ -190,7 +190,11 @@ npm run nodered:viva-game-projection-sync:cutover-packet -- \
 ```
 
 The migration index has format version 1, the exact tenant, and `plans` entries
-containing an absolute private `plan.json` path plus its SHA-256. The controls
+containing absolute private paths for `plan.json`, the Mongo projection, the
+Viva projection, and the provider-capture receipt, plus the plan SHA-256. The
+builder validates every source digest and capture receipt, deterministically
+rebuilds each plan from those exact bytes, and copies the source evidence into
+the packet. The controls
 receipt has format version 1 and the same tenant. It records exact-head CI;
 durable PM2 tenant provisioning and post-restart readback; a held writer fence;
 the current `games.lk_games` backup manifest; an isolated restore rehearsal;
@@ -201,7 +205,9 @@ plan range, unresolved skip, or mismatched flow/tenant/commit is rejected.
 The backup manifest and restore-rehearsal receipt are themselves private inputs;
 the builder reads, hashes, validates, and copies them into the packet evidence
 directory. The packet manifest binds the exact commit, source, deterministically
-rebuilt candidate, controls, reviewed-flow contract, plans, and evidence files.
+rebuilt candidate, controls, reviewed-flow contract, plans, source evidence,
+and every runtime/preparer executor source file. Packet preparation rejects a
+dirty or different checkout whose executor bytes do not match the exact commit.
 
 The packet enumerates every `mongodb4` writer to `lk_games` in both the source
 and candidate graphs. `aggregate` is conservatively classified as a writer,
@@ -215,7 +221,10 @@ guardian that inherits the canonical host `flock` descriptor and retains it
 after coordinator success, failure, or interruption. The guardian releases the
 descriptor only after a separate root-owned, token-bound release request with
 confirmation `RELEASE_VIVA_GAME_PROJECTION_CUTOVER_FENCE_V1`. The descriptor is
-held continuously across every migration plan,
+identified by its process start identity, descriptor, device, and inode. A
+fresh fsynced heartbeat proves that the detached process still owns that exact
+descriptor; malformed or stale release requests are quarantined without
+releasing the lock. The descriptor is held continuously across every migration plan,
 candidate publication, `pm2 restart --update-env`, live read-only postchecks,
 and READY-marker publication. A crash therefore leaves ingress fenced for
 explicit reconciliation. The lower-level
@@ -232,16 +241,22 @@ minutes on its lease. A generated packet always has
 evidence is internally complete for review, not that apply, import, restart, or
 activation is authorized.
 
-Before the first plan, the coordinator installs a strict impossible collection
-validator on `games.lk_games`. It proves that the application principal receives
-MongoDB validation error 121 for a transactionally aborted write probe and that
-the separately pinned migration principal can bypass validation only with
-`bypassDocumentValidation`. The prior validator is stored in the private barrier
-receipt for a separately authorized release or recovery stage. This Mongo barrier
-survives coordinator and guardian-process failure. The coordinator then rereads
+Before the first plan, the coordinator writes a durable `.prepared` recovery
+artifact containing the exact preimage, revokes every role from the separately
+identified application principal, and installs a strict impossible collection
+validator on `games.lk_games` as a second layer. It proves that the application
+principal receives authorization error 13 for transactionally aborted insert,
+update, and delete probes and for drop, rename, and `collMod` probes. The pinned
+migration principal must remain distinct and must prove a transactionally
+aborted validator bypass. The previous roles and validator/options are stored
+in the preparation and final private barrier receipts. A failed installation is
+recovered only with the exact artifact and explicit
+`npm run mongo:viva-game-projection-sync:barrier-recover` confirmation. This
+Mongo barrier survives coordinator and guardian-process failure. The coordinator then rereads
 the packet's complete EJSON backup and requires its document count and canonical
 full-collection state hash to equal a fresh live scan under the barrier before
-any tenant migration.
+any tenant migration. It also requires the frozen plan ObjectIds to equal every
+active legacy row from the earliest plan date without an upper date bound.
 
 The executor accepts canonical EJSON ObjectIds and verifies the separately
 pinned packet-manifest, cutover-plan, migration-plan, flow, tenant, host, and
@@ -268,19 +283,31 @@ The restore rehearsal is produced by
 `npm run nodered:viva-game-projection-sync:restore-rehearsal`. It restores the
 exact complete backup into a newly named disposable replica-set database,
 compares the live canonical state, writes the actual restored EJSON bytes and a
-receipt, and drops only that isolated database. The packet builder hashes and
+receipt, and marks the database with an exclusive random ownership record.
+Cleanup verifies that marker and drops only the owned `lk_games` and marker
+collections; it never drops the database, so a colliding unrelated collection
+survives. The packet builder hashes and
 revalidates those restored bytes; boolean-only restore claims are rejected.
 
 After migration and candidate installation, the coordinator calls
 `prepare_viva_game_projection_cutover_postcheck.mjs` while it still owns the
-same lock. The postcheck rereads every actual apply report and migration plan,
+same lock. The postcheck requires the exact sequential coordinator journal,
+including each in-flight entry before its matching applied receipt and all
+applies before candidate publication and runtime restart. It rereads every
+actual apply report and migration plan,
 validates every apply receipt, compares every migrated row with its exact
-postimage, queries Mongo for remaining active legacy rows and duplicate provider
+postimage, requires the apply identities to equal the global unbounded legacy
+coverage set, queries Mongo for remaining active legacy rows and duplicate provider
 identities, checks for projection-worker audit writes since PM2 restart, and
 reads back the exact candidate, runtime tenant, replica-set identity, Mongo
-write barrier, exclusive host lock, and `SHADOW` mode. `SHADOW` and the exact
+write barrier, live guardian heartbeat, executor-source hashes, exclusive host
+lock, and `SHADOW` mode. `SHADOW` and the exact
 tenant must already be present in stopped PM2 state, and the coordinator also
-passes both values explicitly into `pm2 restart --update-env`. It hashes the actual evidence bytes and atomically writes the
+passes only the required runtime values into `pm2 restart --update-env`, while
+clearing all cutover tokens, paths, descriptors, PIDs, and confirmation phrases.
+The frozen PM2 ID, executable, cwd, arguments, Node arguments, and restart count
+must remain exact through a ten-second stability dwell and a bounded local
+loopback health probe. It hashes the actual evidence bytes and atomically writes the
 postcheck receipt, manifest, and `READY_TO_REOPEN_INGRESS.json`. The standalone
 receipt validator refuses synthetic hash strings without those exact bytes.
 Immediately before READY publication it repeats the current-time lease check,
@@ -298,7 +325,8 @@ whose SHA-256 is separately pinned. The index binds the packet, fence receipt,
 tenant, exact plan/report/backup paths, a root-private migration-principal
 connection file and its SHA-256, a new Mongo-barrier receipt path, flow-backup
 directory, apply-index output, postcheck output, and canonical live flow path.
-`PADLHUB_CUTOVER_GUARDIAN_RECEIPT` and
+`PADLHUB_CUTOVER_GUARDIAN_RECEIPT`,
+`PADLHUB_CUTOVER_GUARDIAN_HEARTBEAT`, and
 `PADLHUB_CUTOVER_GUARDIAN_RELEASE_REQUEST` must point to new private paths
 outside the repository. Live execution requires both
 the migration confirmation and `VIVA_GAME_PROJECTION_CUTOVER_EXECUTE=`

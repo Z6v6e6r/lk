@@ -46,7 +46,7 @@ const listDates = (from, to) => {
   }
   return dates;
 };
-const validateProjectedInputs = (gamesPayload, providerPayload, scope) => {
+export const validateProjectedInputs = (gamesPayload, providerPayload, scope) => {
   requireOnlyFields(gamesPayload, GAMES_PAYLOAD_FIELDS, "Games projection");
   requireOnlyFields(providerPayload, PROVIDER_PAYLOAD_FIELDS, "Provider projection");
   if (!Array.isArray(gamesPayload.games)) fail("Games file must contain { games: [] }");
@@ -97,7 +97,7 @@ const validateProjectedInputs = (gamesPayload, providerPayload, scope) => {
   if (providerCount > 15_000) fail("Provider file exceeds the 15000-record migration bound");
 };
 
-const validateCaptureReceipt = (receipt, receiptSha256, providerPayload, scope) => {
+export const validateCaptureReceipt = (receipt, receiptSha256, providerPayload, scope) => {
   requireOnlyFields(receipt, RECEIPT_FIELDS, "Provider capture receipt");
   if (receipt.formatVersion !== 1 || receipt.sourceKind !== "viva-end-user-tenant-capture-receipt") fail("Provider capture receipt contract mismatch");
   if (receipt.tenantKey !== scope.tenantKey || receipt.capturedAt !== providerPayload.capturedAt) fail("Provider capture receipt tenant/time mismatch");
@@ -175,7 +175,7 @@ const writePrivate = (filePath, bytes) => {
   try { fs.writeFileSync(descriptor, bytes); fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
 };
 
-const requireFreshProjection = (payload, contract, label, nowIso) => {
+export const requireFreshProjection = (payload, contract, label, nowIso) => {
   if (!payload || typeof payload !== "object" || payload.formatVersion !== 1) fail(`${label} provenance format mismatch`);
   for (const [key, expected] of Object.entries(contract)) if (payload[key] !== expected) fail(`${label} provenance mismatch for ${key}`);
   const capturedAt = Date.parse(payload.capturedAt);

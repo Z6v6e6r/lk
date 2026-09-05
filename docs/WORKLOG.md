@@ -1805,3 +1805,25 @@
   pass the offline packet reconciliation, preventing a seed/legacy-confirm race.
 - This is isolated source-only work. No flow candidate was installed, no Mongo or
   Viva write occurred, and sales or managed usage policy were not activated.
+
+## 2026-09-05 — Viva game projection cutover recovery hardening
+
+- Bound every tenant-migration plan to the exact Mongo projection, Viva projection,
+  and provider-capture receipt; packet preparation now replays the deterministic
+  planner and copies those private evidence bytes into the immutable packet.
+- Added exact clean-commit executor-source custody, a durable coordinator phase
+  journal, unbounded future legacy-row coverage, and standalone postcheck validation
+  of the real execution index, journal order, apply receipts, guardian heartbeat,
+  PM2 identity, restart stability, and local health.
+- Replaced the validator-only Mongo pause with a distinct-principal ACL barrier plus
+  an impossible validator, actual insert/update/delete/drop/rename/`collMod` denial
+  probes, a durable pre-mutation recovery artifact, and an explicit recovery command.
+- Made the detached host-lock guardian prove its live PID/start/descriptor/inode with
+  a fresh durable heartbeat and quarantine malformed release requests. Restore
+  rehearsal cleanup now removes only collections protected by an exclusive ownership
+  marker and preserves unrelated colliding database contents.
+- Added authenticated Mongo replica-set coverage for barrier install, migration,
+  restore, barrier recovery, and rehearsal collision cleanup. This remains isolated
+  source-only work: no packet was executed against production, no Node-RED flow or
+  PM2 process was changed, no Mongo/Viva write occurred, and no push, merge, deploy,
+  ingress change, or activation was performed.

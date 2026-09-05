@@ -24,11 +24,35 @@ import {
 } from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
 import { verifyWorkspace } from "./verify_nodered_source_origin.mjs";
 import { buildVivaGameProjectionSyncCandidate } from "./prepare_viva_game_projection_sync_candidate.mjs";
+import { buildLegacyTenantMigrationPlan } from "./lib/vivaGameProjectionTenantMigration.mjs";
+import {
+  requireFreshProjection,
+  validateCaptureReceipt,
+  validateProjectedInputs,
+} from "./prepare_viva_game_projection_tenant_migration.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = fs.realpathSync(path.resolve(SCRIPT_DIR, ".."));
 const COMMIT_RE = /^[a-f0-9]{40}$/;
 const HASH_RE = /^[a-f0-9]{64}$/;
+const EXECUTOR_SOURCE_PATHS = [
+  "scripts/prepare_viva_game_projection_cutover_packet.mjs",
+  "scripts/prepare_viva_game_projection_tenant_migration.mjs",
+  "scripts/prepare_viva_game_projection_restore_rehearsal.mjs",
+  "scripts/run_viva_game_projection_cutover.sh",
+  "scripts/run_viva_game_projection_cutover_coordinator.mjs",
+  "scripts/run_viva_game_projection_fence_guardian.mjs",
+  "scripts/prepare_viva_game_projection_cutover_postcheck.mjs",
+  "scripts/recover_viva_game_projection_mongo_write_barrier.mjs",
+  "scripts/run_viva_game_projection_tenant_migration.mjs",
+  "scripts/lib/vivaGameProjectionMongoWriteBarrier.mjs",
+  "scripts/lib/vivaGameProjectionTenantMigration.mjs",
+  "scripts/lib/vivaGameProjectionTenantMigrationExecution.mjs",
+  "scripts/lib/vivaGameProjectionCutoverContract.mjs",
+  "scripts/lib/vivaGameProjectionExecutorSource.mjs",
+  "scripts/lib/vivaGameProjectionFenceGuardian.mjs",
+  "scripts/nodered_reviewed_flow_deploy/runtime_contract.mjs",
+];
 
 const fail = (message) => { throw new Error(message); };
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -43,6 +67,20 @@ function repositoryIdentity() {
     fail("Cutover packet requires a clean exact task-branch commit");
   }
   return identity;
+}
+
+function executorSourceManifest(repositoryCommit) {
+  return EXECUTOR_SOURCE_PATHS.map((relativePath) => {
+    const absolutePath = path.join(REPO_ROOT, relativePath);
+    const bytes = fs.readFileSync(absolutePath);
+    const committed = spawnSync("git", ["show", `${repositoryCommit}:${relativePath}`], {
+      cwd: REPO_ROOT, encoding: null, maxBuffer: 32 * 1024 * 1024,
+    });
+    if (committed.status !== 0 || !Buffer.isBuffer(committed.stdout) || !committed.stdout.equals(bytes)) {
+      fail(`Executor source is not the exact committed byte stream: ${relativePath}`);
+    }
+    return { path: relativePath, sha256: sha256(bytes) };
+  });
 }
 
 function assertPrivateDirectory(directoryPath, label) {
@@ -128,7 +166,9 @@ function loadMigrationPlans(indexPath, expectedSourceFlowSha256, tenantKey) {
     fail("Migration plan index contract mismatch");
   }
   return index.plans.map((entry, planIndex) => {
-    if (!isObject(entry) || !path.isAbsolute(String(entry.path || "")) || !HASH_RE.test(String(entry.sha256 || ""))) {
+    if (!isObject(entry) || !path.isAbsolute(String(entry.path || "")) || !HASH_RE.test(String(entry.sha256 || ""))
+      || !path.isAbsolute(String(entry.gamesPath || "")) || !path.isAbsolute(String(entry.providerPath || ""))
+      || !path.isAbsolute(String(entry.providerCaptureReceiptPath || ""))) {
       fail(`Migration plan index entry ${planIndex} is invalid`);
     }
     const { bytes, value: plan } = readPrivateJson(entry.path, `Migration plan ${planIndex}`, 64 * 1024 * 1024);
@@ -138,7 +178,38 @@ function loadMigrationPlans(indexPath, expectedSourceFlowSha256, tenantKey) {
       expectedSourceFlowSha256,
       expectedTenantKey: tenantKey,
     });
-    return { planSha256: entry.sha256, plan, bytes };
+    const gamesRead = readPrivateJson(entry.gamesPath, `Migration games projection ${planIndex}`, 32 * 1024 * 1024);
+    const providerRead = readPrivateJson(entry.providerPath, `Migration provider projection ${planIndex}`, 64 * 1024 * 1024);
+    const receiptRead = readPrivateJson(entry.providerCaptureReceiptPath, `Migration provider receipt ${planIndex}`, 1024 * 1024);
+    const receiptSha256 = sha256(receiptRead.bytes);
+    if (sha256(gamesRead.bytes) !== plan.source.gamesSha256 || sha256(providerRead.bytes) !== plan.source.providerSha256
+      || receiptSha256 !== plan.source.providerCaptureReceiptSha256) {
+      fail(`Migration plan ${planIndex} source evidence digest mismatch`);
+    }
+    validateProjectedInputs(gamesRead.value, providerRead.value, plan.scope);
+    validateCaptureReceipt(receiptRead.value, receiptSha256, providerRead.value, plan.scope);
+    requireFreshProjection(gamesRead.value, {
+      sourceKind: "live-147-mongo-projection", sourceHost: "lk-primary-147", database: "games", collection: "lk_games",
+    }, "Games", plan.generatedAt);
+    requireFreshProjection(providerRead.value, { sourceKind: "viva-end-user-tenant-projection" }, "Provider", plan.generatedAt);
+    if (gamesRead.value.sourceFlowSha256 !== expectedSourceFlowSha256 || providerRead.value.tenantKey !== tenantKey) {
+      fail(`Migration plan ${planIndex} source evidence target mismatch`);
+    }
+    const rebuiltBody = buildLegacyTenantMigrationPlan(
+      gamesRead.value.games, providerRead.value.rowsByDate, plan.scope, plan.generatedAt,
+    );
+    const rebuilt = { ...plan, ...rebuiltBody };
+    if (!isDeepStrictEqual(plan, rebuilt)) fail(`Migration plan ${planIndex} does not deterministically match its source evidence`);
+    return {
+      planSha256: entry.sha256,
+      plan,
+      bytes,
+      sourceEvidence: {
+        games: { bytes: gamesRead.bytes, sha256: plan.source.gamesSha256 },
+        provider: { bytes: providerRead.bytes, sha256: plan.source.providerSha256 },
+        providerCaptureReceipt: { bytes: receiptRead.bytes, sha256: receiptSha256 },
+      },
+    };
   });
 }
 
@@ -284,6 +355,7 @@ export function prepareVivaGameProjectionCutoverPacket({
   outputDirectory,
   tenantKey,
   repository,
+  executorSources,
   nowMs,
 } = {}) {
   const repositoryProof = repository || repositoryIdentity();
@@ -321,6 +393,7 @@ export function prepareVivaGameProjectionCutoverPacket({
     controls,
     controlsSha256: sha256(controlsRead.bytes),
     reviewedFlowContractSha256: sha256(contractBytes),
+    executorSources: executorSources || executorSourceManifest(repositoryProof.commit),
     generatedAt: new Date(nowMs ?? Date.now()).toISOString(),
   });
   const output = assertExternalPacketDirectory(outputDirectory);
@@ -335,6 +408,9 @@ export function prepareVivaGameProjectionCutoverPacket({
     const evidenceDirectory = path.join(temporary, "evidence");
     fs.mkdirSync(evidenceDirectory, { mode: 0o700 });
     fs.chmodSync(evidenceDirectory, 0o700);
+    const migrationEvidenceDirectory = path.join(temporary, "migration-evidence");
+    fs.mkdirSync(migrationEvidenceDirectory, { mode: 0o700 });
+    fs.chmodSync(migrationEvidenceDirectory, 0o700);
     writePrivate(path.join(temporary, "source.flow.json"), sourceBytes);
     writePrivate(path.join(temporary, "candidate.flow.json"), candidateBytes);
     writePrivate(path.join(temporary, "candidate.report.json"), reportRead.bytes);
@@ -345,8 +421,18 @@ export function prepareVivaGameProjectionCutoverPacket({
       path.join(migrationDirectory, `${String(index + 1).padStart(2, "0")}-${item.planSha256}.json`),
       item.bytes,
     ));
+    plans.forEach((item, index) => {
+      const sourceDirectory = path.join(migrationEvidenceDirectory, String(index + 1).padStart(2, "0"));
+      fs.mkdirSync(sourceDirectory, { mode: 0o700 });
+      fs.chmodSync(sourceDirectory, 0o700);
+      writePrivate(path.join(sourceDirectory, "games.projection.json"), item.sourceEvidence.games.bytes);
+      writePrivate(path.join(sourceDirectory, "provider.projection.json"), item.sourceEvidence.provider.bytes);
+      writePrivate(path.join(sourceDirectory, "provider.capture-receipt.json"), item.sourceEvidence.providerCaptureReceipt.bytes);
+      syncDirectory(sourceDirectory);
+    });
     controlEvidence.forEach((item) => writePrivate(path.join(evidenceDirectory, item.name), item.bytes));
     syncDirectory(migrationDirectory);
+    syncDirectory(migrationEvidenceDirectory);
     syncDirectory(evidenceDirectory);
     const manifest = buildPacketManifest(temporary, plan);
     writePrivate(path.join(temporary, "packet.manifest.json"), Buffer.from(canonicalJson(manifest)));
