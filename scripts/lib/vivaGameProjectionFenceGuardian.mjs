@@ -96,11 +96,11 @@ export function acceptFenceGuardianChildRequest({ childKind, requestId }) {
     }
     resumesAcceptedRequest = true;
   }
-  fs.writeSync(handshakeFd, `${canonicalJson({ state: "FENCE_INHERITED", childKind, requestId })}\n`);
+  fs.writeSync(handshakeFd, canonicalJson({ state: "FENCE_INHERITED", childKind, requestId }));
   if (resumesAcceptedRequest) fs.unlinkSync(requestPath);
   else fs.renameSync(requestPath, acceptedPath);
   syncDirectory(path.dirname(requestPath));
-  fs.writeSync(handshakeFd, `${canonicalJson({ state: "REQUEST_ACCEPTED", childKind, requestId })}\n`);
+  fs.writeSync(handshakeFd, canonicalJson({ state: "REQUEST_ACCEPTED", childKind, requestId }));
   fs.closeSync(handshakeFd);
   return acceptedPath;
 }
@@ -121,13 +121,13 @@ export function announceFenceGuardianRecoveryTakeoverEstablished({ requestId, re
   if (sha256(receiptBytes) !== receiptSha256) {
     throw new Error("Recovery takeover changed before its guardian handshake");
   }
-  fs.writeSync(handshakeFd, `${canonicalJson({
+  fs.writeSync(handshakeFd, canonicalJson({
     state: "TAKEOVER_ESTABLISHED",
     childKind: "recovery",
     requestId,
     receiptPath,
     receiptSha256,
-  })}\n`);
+  }));
 }
 
 export function isAuthorizedFenceGuardianRelease({ release, validPrivateFile, fenceTokenSha256, nowMs = Date.now() }) {
