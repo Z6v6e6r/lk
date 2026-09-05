@@ -7,7 +7,6 @@ import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { buildRuntimeInstallCandidateBundle } from "../build_lk1_subscription_dev_runtime_install_candidate.mjs";
-import { launchStoppedCandidate } from "../launch_lk1_subscription_dev_stopped_candidate.mjs";
 import {
   captureCurrentHostPreflightEvidence,
   checkedHostPreflightEvidence,
@@ -320,10 +319,14 @@ test("stopped installer atomically installs six exact files and a separate rollb
   }
 });
 
-test("trusted out-of-bundle launcher verifies custody and hashes before locked execution", () => {
+function assertLauncherRuntimeFixture(runtimeMode) {
   const prepared = prepare();
   try {
-    let invocation;
+    // setup-node and local installations can have different executable modes.
+    // Own the runtime fixture without modifying the host/runner's Node binary.
+    const runtimePath = path.join(prepared.parent, "node");
+    fs.copyFileSync(fs.realpathSync(process.execPath), runtimePath, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(runtimePath, runtimeMode);
     const argv = [
       "--mode", "install",
       "--bundle", prepared.outputDirectory,
@@ -332,34 +335,73 @@ test("trusted out-of-bundle launcher verifies custody and hashes before locked e
       "--preflight-sha256", "b".repeat(64),
       "--attempt-id", ATTEMPT_ID,
     ];
-    assert.equal(launchStoppedCandidate({
-      argv,
-      environment: "rehearsal",
-      expectedUid: process.getuid(),
-      runLocked: (runtime, installerPath, forwardedArgs, policy) => {
-        invocation = { runtime, installerPath, forwardedArgs, policy };
-      },
-    }), true);
-    assert.equal(invocation.forwardedArgs, argv);
-    assert.equal(path.dirname(invocation.installerPath), path.join(prepared.outputDirectory, "payload"));
-    assert.deepEqual(invocation.policy.childEnv, {
-      PATH: "/usr/bin:/bin",
-      LANG: "C",
-      LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_HELD: "HELD_BY_TRUSTED_STOPPED_INSTALL_LAUNCHER",
-      LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_FD: "3",
+    const launcherUrl = pathToFileURL(path.join(ROOT, "scripts/launch_lk1_subscription_dev_stopped_candidate.mjs")).href;
+    const result = spawnSync(runtimePath, ["--input-type=module", "--eval", `
+      import assert from "node:assert/strict";
+      import fs from "node:fs";
+      import path from "node:path";
+      import { launchStoppedCandidate } from ${JSON.stringify(launcherUrl)};
+      const { argv, runtimePath, runtimeMode, bundleDirectory } = JSON.parse(process.argv[2]);
+      assert.equal(fs.realpathSync(process.execPath), fs.realpathSync(runtimePath));
+      assert.equal(fs.statSync(process.execPath).mode & 0o777, runtimeMode);
+      if ((runtimeMode & 0o022) !== 0) {
+        assert.throws(() => launchStoppedCandidate({
+          argv,
+          environment: "rehearsal",
+          expectedUid: process.getuid(),
+          runLocked: () => assert.fail("writable runtime must not reach locked execution"),
+        }), /trusted launcher Node runtime custody mismatch/);
+      } else {
+        let invocation;
+        assert.equal(launchStoppedCandidate({
+          argv,
+          environment: "rehearsal",
+          expectedUid: process.getuid(),
+          runLocked: (runtime, installerPath, forwardedArgs, policy) => {
+            invocation = { runtime, installerPath, forwardedArgs, policy };
+          },
+        }), true);
+        assert.equal(invocation.runtime, fs.realpathSync(runtimePath));
+        assert.equal(invocation.forwardedArgs, argv);
+        assert.equal(path.dirname(invocation.installerPath), path.join(bundleDirectory, "payload"));
+        assert.deepEqual(invocation.policy.childEnv, {
+          PATH: "/usr/bin:/bin",
+          LANG: "C",
+          LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_HELD: "HELD_BY_TRUSTED_STOPPED_INSTALL_LAUNCHER",
+          LK1_SUBSCRIPTION_DEV_STOPPED_LOCK_FD: "3",
+        });
+        fs.chmodSync(invocation.installerPath, 0o750);
+        fs.appendFileSync(invocation.installerPath, "\\n");
+        fs.chmodSync(invocation.installerPath, 0o550);
+        assert.throws(() => launchStoppedCandidate({
+          argv,
+          environment: "rehearsal",
+          expectedUid: process.getuid(),
+          runLocked: () => assert.fail("tampered installer must not execute"),
+        }), /payload drift/);
+      }
+    `, import.meta.filename, JSON.stringify({ argv, runtimePath, runtimeMode, bundleDirectory: prepared.outputDirectory })], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { PATH: "/usr/bin:/bin", LANG: "C" },
     });
-    fs.chmodSync(invocation.installerPath, 0o750);
-    fs.appendFileSync(invocation.installerPath, "\n");
-    fs.chmodSync(invocation.installerPath, 0o550);
-    assert.throws(() => launchStoppedCandidate({
-      argv,
-      environment: "rehearsal",
-      expectedUid: process.getuid(),
-      runLocked: () => assert.fail("tampered installer must not execute"),
-    }), /payload drift/);
+    assert.equal(result.error, undefined, result.error?.message);
+    assert.equal(result.status, 0, `runtime fixture failed (${runtimeMode.toString(8)}):\n${result.stderr}`);
   } finally {
     fs.rmSync(prepared.parent, { recursive: true });
   }
+}
+
+test("trusted out-of-bundle launcher verifies custody and hashes before locked execution", () => {
+  assertLauncherRuntimeFixture(0o755);
+});
+
+test("trusted launcher rejects group-writable Node before locked execution", () => {
+  assertLauncherRuntimeFixture(0o775);
+});
+
+test("trusted launcher rejects world-writable Node before locked execution", () => {
+  assertLauncherRuntimeFixture(0o757);
 });
 
 test("dangling target and metadata drift fail before any target mutation", async () => {
