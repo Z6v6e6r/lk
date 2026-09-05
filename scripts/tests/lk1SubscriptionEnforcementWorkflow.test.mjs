@@ -19,6 +19,16 @@ const step = (name) => steps.find((candidate) => candidate.name === name);
 const binaryScanStep = () => step("Scan changed paths for secrets, PII, binaries, and runtime artifacts");
 const binaryScan = () => binaryScanStep().run;
 
+function assertFocusedGate(candidateJob, name, command) {
+  assert.equal(candidateJob.if, undefined, "The gate job must not be conditional");
+  assert.equal(candidateJob["continue-on-error"], undefined, "The gate job must fail closed");
+  const matches = candidateJob.steps.filter((candidate) => candidate.name === name);
+  assert.equal(matches.length, 1, `${name} must be present exactly once`);
+  assert.equal(matches[0].if, undefined, `${name} must not be conditional`);
+  assert.equal(matches[0].run, command);
+  assert.equal(matches[0]["continue-on-error"], undefined, `${name} must fail closed`);
+}
+
 async function createBinaryDiffRepo(t, entries) {
   const repoDirectory = await mkdtemp(join(tmpdir(), "lk1-binary-diff-"));
   t.after(() => rm(repoDirectory, { recursive: true, force: true }));
@@ -347,6 +357,8 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     "Validate combined legacy game command prerequisites",
     "Validate combined split draft persistence",
     "Validate referral attribution compatibility",
+    "Validate Codex main worktree guard",
+    "Validate community list performance",
     "Fetch pinned legacy build image",
     "Validate reviewed-flow and legacy custody boundaries",
     "Typecheck",
@@ -390,6 +402,12 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     step("Validate referral attribution compatibility").run,
     /scripts\/tests\/referralAttributionReleaseCandidate\.test\.mjs/,
   );
+  for (const [name, command] of [
+    ["Validate Codex main worktree guard", "npm run test:codex-main-worktree-guard"],
+    ["Validate community list performance", "npm run test:community-list-performance"],
+  ]) {
+    assertFocusedGate(job, name, command);
+  }
   const partnerStep = step("Run Partner membership R4 gates");
   for (const command of [
     "npm run test:partner-game-membership-api",
@@ -416,6 +434,26 @@ test("full enforcement matrix and workflow contract cannot be silently skipped",
     step("Fetch pinned legacy build image").run,
     "docker pull node@sha256:0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a",
   );
+});
+
+test("focused gate validation rejects missing, conditional, replaced, and soft-failing gates", () => {
+  const name = "Validate community list performance";
+  const command = "npm run test:community-list-performance";
+  const mutations = [
+    (value) => { value.steps = value.steps.filter((candidate) => candidate.name !== name); },
+    (value) => { value.steps.find((candidate) => candidate.name === name).run = "true"; },
+    (value) => { value.steps.find((candidate) => candidate.name === name).if = "github.event_name == 'pull_request'"; },
+    (value) => { value.steps.find((candidate) => candidate.name === name)["continue-on-error"] = true; },
+    (value) => { value.if = "false"; },
+    (value) => { value["continue-on-error"] = true; },
+    (value) => { value.steps.push(structuredClone(value.steps.find((candidate) => candidate.name === name))); },
+  ];
+  assertFocusedGate(job, name, command);
+  for (const mutate of mutations) {
+    const weakened = structuredClone(job);
+    mutate(weakened);
+    assert.throws(() => assertFocusedGate(weakened, name, command), assert.AssertionError);
+  }
 });
 
 test("workflow contains no manual or production mutation path", () => {

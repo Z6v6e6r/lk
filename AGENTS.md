@@ -98,6 +98,11 @@ Read specialized documents only when their domain trigger applies:
 ## Git Discipline
 
 - Work on focused branches when possible.
+- Before editing, run `npm run governance:worktree:check` from a clean linked worktree on a `codex/*` or `agent/*` branch. The primary checkout and shared worktrees are not task workspaces.
+- Only the designated merge-owner may use a dedicated linked `main` worktree. After fresh fetch/readback, claim with `npm run governance:main-owner:claim -- --owner <task-id> --expected-main-sha <sha> --expected-main-tree <tree>` and preserve the returned `leaseId`. Run `npm run governance:main-owner:verify -- --owner <task-id>` immediately before each authorized Ready or merge boundary.
+- Never share the merge-owner worktree or owner ID, steal or auto-expire a stale lease/mutation lock, or bypass the guard with raw Git/GUI operations. Release from the claiming worktree with `npm run governance:main-owner:release -- --owner <task-id> --lease-id <lease-id>` after checking there are no operations in flight.
+- An ordinary merge intentionally invalidates the old lease's HEAD identity. Verify parents/tree and CI, record the outcome (including ABORTED or BLOCKED_POST_MERGE), release the old generation, and freeze/claim again before another boundary. If local main differs from origin/main, STOP and reconcile under the separately authorized integration/push procedure; do not reset, force-push, or weaken verification to reclaim.
+- The lease is cooperative coordination within one clone. Owner ID is a non-secret label, not process authentication; arbitrary filesystem/Git access and other clones can bypass it. GitHub required PR/check protections are a separate server-side gate. Neither the lease nor these instructions authorize changing repository settings, Ready, merge, push, deploy, or live actions. See `docs/MERGE_OWNER_GUARD.md` for the operator procedure and remaining enforcement gap.
 - Do not commit unrelated changes.
 - Do not amend commits unless explicitly requested.
 - Final reports must list changed files, checks run, and residual risks.
