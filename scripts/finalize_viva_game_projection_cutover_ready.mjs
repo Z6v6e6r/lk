@@ -346,7 +346,9 @@ export async function finalizeVivaGameProjectionCutoverReady(options, dependenci
     const existingReceiptRead = readPrivateJson(
       finalizationReceiptPath, "READY finalization receipt", MAX_JSON_BYTES,
     );
-    if (sha256(existingReceiptRead.bytes) !== existing.value?.readyFinalizationReceiptSha256) {
+    if (sha256(existingReceiptRead.bytes) !== existing.value?.readyFinalizationReceiptSha256
+      || existingReceiptRead.value?.fenceGuardianHeartbeatSha256 !== existing.value?.fenceGuardianHeartbeatSha256
+      || canonicalJson(existingReceiptRead.value?.runtimeHealth) !== canonicalJson(existing.value?.runtimeHealth)) {
       fail("READY marker does not bind its finalization receipt");
     }
     const existingExpected = {
@@ -498,6 +500,11 @@ export async function requestReadyFinalizationFromGuardian(options, dependencies
   const readExactReadyResult = (markerRequestId, validationNowMs, maximumAgeMs) => {
     const readyRead = readPrivateJson(readyPath, "READY marker", MAX_JSON_BYTES);
     const receiptRead = readPrivateJson(finalizationReceiptPath, "READY finalization receipt", MAX_JSON_BYTES);
+    if (readyRead.value?.readyFinalizationReceiptSha256 !== sha256(receiptRead.bytes)
+      || readyRead.value?.fenceGuardianHeartbeatSha256 !== receiptRead.value?.fenceGuardianHeartbeatSha256
+      || canonicalJson(readyRead.value?.runtimeHealth) !== canonicalJson(receiptRead.value?.runtimeHealth)) {
+      fail("READY marker does not bind its exact current-gate receipt");
+    }
     const expected = readyExpected({
       execution: executionRead.value,
       report: reportRead.value,
