@@ -2462,16 +2462,7 @@ test("the real guardian releases terminal fallback only after the exact takeover
         };
       }
       if (String(process.argv[1] || "").endsWith("recover_viva_game_projection_mongo_write_barrier.mjs")) {
-        const originalStdoutWrite = process.stdout.write.bind(process.stdout);
-        let terminalPauseReached = false;
-        process.stdout.write = (...args) => {
-          const result = originalStdoutWrite(...args);
-          if (!terminalPauseReached) {
-            terminalPauseReached = true;
-            process.kill(process.pid, "SIGSTOP");
-          }
-          return result;
-        };
+        process.once("beforeExit", () => process.kill(process.pid, "SIGSTOP"));
       }
     `));
     guardian = spawn("/bin/bash", [
