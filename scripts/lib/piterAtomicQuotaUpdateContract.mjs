@@ -3,8 +3,8 @@
 export const PITER_QUOTA_UPDATE = Object.freeze({
   deploymentId: "piter-atomic-sales-20260903",
   updateKind: "existing-atomic-quota-v2",
-  sourceSha256: "7775475aea2436ca5d6ec26cdc6acc4c682556f05b71af2fb79f6e0c0edbcb71",
-  candidateSha256: "8cc76edc46bd97ec4dd83b1e09402242ce28d5c3f2ee221490fd8120978f39df",
+  sourceSha256: "e38f844343ef290aa49f2583861dfc4488031b97d303ccbe36b3a5e12c292ec3",
+  candidateSha256: "650a76ba68b196808663102423c83cbe6ae9db1c69eca6669fc25b0f969e8841",
   sourceNodeCount: 4768,
   candidateNodeCount: 4768,
   httpInputCount: 215,

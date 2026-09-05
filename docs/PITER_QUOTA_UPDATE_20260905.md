@@ -5,9 +5,9 @@
 Local preparation only. No publication, restart, lease mutation, reconciliation
 write, seed or activation is performed by this builder. Managed usage stays off.
 
-- Exact source: `7775475aea2436ca5d6ec26cdc6acc4c682556f05b71af2fb79f6e0c0edbcb71`.
-- Exact candidate: `8cc76edc46bd97ec4dd83b1e09402242ce28d5c3f2ee221490fd8120978f39df`.
-- Exact graph contract: `a090adea906beeecfc5f8fdf3f4183f7c3d2f5e226204c97d83553be63b9d19b`.
+- Exact source: `e38f844343ef290aa49f2583861dfc4488031b97d303ccbe36b3a5e12c292ec3`.
+- Exact candidate: `650a76ba68b196808663102423c83cbe6ae9db1c69eca6669fc25b0f969e8841`.
+- Exact graph contract: `b92fb84d6f95472d3ac07c688a4bf8528a8584aa7021b48145a4593ff05131a8`.
 - Node count stays 4768; all 215 HTTP inputs are unchanged.
 - Only `func` changes for `c165e43eba668c25` (subscription status) and
   `piter_atomic_router_20260903` (atomic purchase router).
@@ -18,6 +18,12 @@ The fixed tuple is a reviewed local input/output contract, not evidence that the
 server still has those bytes. Any source drift requires renewed inspection and
 review; the CLI has no hash/target override. Do not use the old initial installer
 over the existing atomic graph.
+
+This supersedes the unpublished 7775475... -> 8cc76ed... candidate. The fresh
+source includes the completed `subscription-create-preflight` deployment, whose
+three function changes (`8f7bd5b482fe9763`, `lk_subscription_booking_router_20260804`,
+`lk_subscription_booking_finalize_20260804`) were independently compared and are
+preserved exactly. Its historical terminal receipt is not a fresh lease check.
 
 ## Local preparation
 
@@ -75,7 +81,7 @@ this local candidate does not provide or authorize a server operator installatio
 
 ## Recovery boundary
 
-The only structural restore source is the exact 7775475... snapshot, not the
+The only structural restore source is the exact e38f844... snapshot, not the
 older pre-atomic source. `structuralReverseCheckPassed=true` and
 `rollbackAuthorized=false` are intentional. Before restoring code, use the
 existing data-aware rollback precheck and approved recovery procedure. Once a
