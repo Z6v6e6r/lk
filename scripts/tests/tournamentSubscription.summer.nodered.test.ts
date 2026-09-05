@@ -2472,6 +2472,93 @@ test("Piter confirm accepts only explicit PAID with the exact transaction identi
     "PAYMENT_PENDING");
 });
 
+test("Piter confirm releases only expired exact UNPAID and evidenced REFUND attempts", () => {
+  const providerFacts = {
+    id: "tx-piter-terminal",
+    toPay: 1980000,
+    sum: 1980000,
+    clientId: "client-piter-terminal",
+    clientPhone: ["+7", "9990000001"].join(""),
+    products: [{ id: "8bf334ba-3050-4017-b40a-7eef2db1eb16", discount: 3700000 }],
+  };
+  const baseCtx = {
+    action: "confirm", step: "confirm_lookup", counterKey: "piter_friendship",
+    inventoryId: "piter_friendship_12m_2026_v1", paymentRef: "piter-terminal-1",
+    transactionId: "tx-piter-terminal", expectedAmountMinor: 1980000,
+    requestFingerprint: "fingerprint-terminal", toPayMinor: 1980000,
+    clientId: "client-piter-terminal", clientPhone: "79990000001",
+    productId: "8bf334ba-3050-4017-b40a-7eef2db1eb16",
+    saleRecord: { providerProductCostMinor: 5680000, discountMinor: 3700000 },
+  };
+  const futureUnpaid = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: { ...providerFacts, status: "UNPAID", paymentDueDate: "2999-09-04T10:00:00.000Z" },
+      _summerSubscriptionCtx: { ...baseCtx },
+    },
+  ) as unknown[];
+  assert.equal(asRecord(asRecord(asRecord(futureUnpaid[4])._summerSubscriptionCtx).confirmResult).nextStatus,
+    "PAYMENT_PENDING");
+
+  const expiredUnpaid = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: { ...providerFacts, status: "UNPAID", paymentDueDate: "2020-09-04T10:00:00.000Z" },
+      _summerSubscriptionCtx: { ...baseCtx },
+    },
+  ) as unknown[];
+  assert.equal(asRecord(asRecord(asRecord(expiredUnpaid[4])._summerSubscriptionCtx).confirmResult).nextStatus,
+    "FAILED");
+
+  const ambiguousZeroBalanceUnpaid = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: {
+        ...providerFacts,
+        status: "UNPAID",
+        toPay: 0,
+        paymentDueDate: "2020-09-04T10:00:00.000Z",
+      },
+      _summerSubscriptionCtx: { ...baseCtx },
+    },
+  ) as unknown[];
+  assert.equal(ambiguousZeroBalanceUnpaid[4], undefined);
+  assert.equal(
+    asRecord(asRecord(asRecord(ambiguousZeroBalanceUnpaid[2]).payload).details).code,
+    "PITER_CONFIRM_PROVIDER_MISMATCH",
+  );
+
+  const refunded = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: {
+        ...providerFacts,
+        status: "REFUND",
+        refundSum: 1969000,
+        refundedAt: "2026-09-03T12:00:00.000Z",
+      },
+      _summerSubscriptionCtx: { ...baseCtx },
+    },
+  ) as unknown[];
+  assert.equal(asRecord(asRecord(asRecord(refunded[4])._summerSubscriptionCtx).confirmResult).nextStatus,
+    "FAILED");
+
+  const unevidencedRefund = runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",
+    {
+      statusCode: 200,
+      payload: { ...providerFacts, status: "REFUND", refundSum: 0 },
+      _summerSubscriptionCtx: { ...baseCtx },
+    },
+  ) as unknown[];
+  assert.equal(asRecord(asRecord(asRecord(unevidencedRefund[4])._summerSubscriptionCtx).confirmResult).nextStatus,
+    "PAYMENT_PENDING");
+});
+
 test("Piter legacy confirm without an atomic fingerprint always requires offline reconciliation", () => {
   const out = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_purchase_router.js",

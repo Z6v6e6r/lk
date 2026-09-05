@@ -18,7 +18,8 @@ export const PITER_ATOMIC_ACTIVATION = Object.freeze({
 });
 
 const PAID_STATUSES = new Set(["PAID", "SUCCESS", "SUCCEEDED", "COMPLETE", "COMPLETED", "APPROVED"]);
-const FAILED_STATUSES = new Set(["FAILED", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"]);
+const FAILED_STATUSES = new Set(["FAILED", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED", "REFUNDED"]);
+const REFUNDED_PROVIDER_STATUSES = new Set(["REFUND", "REFUNDED"]);
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
 const fail = (message) => {
@@ -102,6 +103,37 @@ const pickTransactionId = (value) => (
   || toStr(value?.uuid)
 );
 
+export const projectPiterLegacyLedgerRow = (row) => ({
+  id: toStr(row?._id),
+  inventoryId: toStr(row?.inventoryId),
+  counterKey: toStr(row?.counterKey),
+  paymentRef: toStr(row?.paymentRef),
+  transactionId: pickTransactionId(row),
+  productId: toStr(row?.productId),
+  status: normalizeStatus(row?.status),
+  paymentStatus: normalizeStatus(row?.paymentStatus),
+  amountMinor: toInteger(row?.amountMinor),
+  providerProductCostMinor: toInteger(row?.providerProductCostMinor),
+  discountMinor: toInteger(row?.discountMinor),
+  clientId: toStr(row?.clientId),
+  clientPhone: normalizePhone(row?.clientPhone),
+  expiresAt: toStr(row?.expiresAt),
+  paidAt: toStr(row?.paidAt),
+  updatedAt: toStr(row?.updatedAt),
+  failureCode: toStr(row?.failureCode),
+  failedAt: toStr(row?.failedAt),
+  lastCheckedAt: toStr(row?.lastCheckedAt),
+  refundedAt: toStr(row?.refundedAt),
+  refundSumMinor: toInteger(row?.refundSumMinor),
+  refundedSubscriptionId: toStr(row?.refundedSubscriptionId),
+  reconciliation: row?.piterLegacyReconciliation || null,
+});
+
+export const projectPiterLegacyLedgerRows = (rows) => rows.map(projectPiterLegacyLedgerRow)
+  .sort((left, right) => String(left.transactionId).localeCompare(String(right.transactionId)));
+
+export const digestPiterLegacyLedgerRows = (rows) => sha256(stableJson(projectPiterLegacyLedgerRows(rows)));
+
 const productLineMatches = (line, productId) => Boolean(line && typeof line === "object" && [
   line.id,
   line.uuid,
@@ -131,9 +163,26 @@ const providerClientPhone = (transaction) => normalizePhone(
   || transaction?.client?.phoneNumber,
 );
 
-const transactionStatusClass = (transaction) => {
+const transactionStatusClass = (transaction, providerCapturedAtMs) => {
   const status = normalizeStatus(transaction?.status || transaction?.state || transaction?.paymentStatus);
   if (PAID_STATUSES.has(status)) return "PAID";
+  if (REFUNDED_PROVIDER_STATUSES.has(status)) {
+    const refundSum = toInteger(transaction?.refundSum);
+    const refundedAt = toStr(transaction?.refundedAt);
+    if (!Number.isInteger(refundSum) || refundSum <= 0 || !refundedAt || !Number.isFinite(Date.parse(refundedAt))) {
+      return "UNRESOLVED";
+    }
+    return "REFUNDED";
+  }
+  if (status === "UNPAID") {
+    const dueAt = Date.parse(toStr(transaction?.paymentDueDate) || "");
+    if (!Number.isFinite(providerCapturedAtMs) || !Number.isFinite(dueAt) || dueAt > providerCapturedAtMs
+      || toStr(transaction?.paymentDate) || toStr(transaction?.refundedAt)
+      || (toInteger(transaction?.refundSum) ?? 0) > 0 || (toInteger(transaction?.toPay) ?? 0) <= 0) {
+      return "UNRESOLVED";
+    }
+    return "EXPIRED_UNPAID";
+  }
   if (FAILED_STATUSES.has(status)) return "FAILED";
   return "UNRESOLVED";
 };
@@ -217,8 +266,143 @@ const validateCandidateReport = (report) => {
   };
 };
 
-export function derivePiterLegacyBaseline({ ledgerRows, providerTransactions, productId }) {
+const validateLegacyReconciliationProof = ({
+  packet,
+  applyReceipt,
+  ledgerRows,
+  providerTransactions,
+  productId,
+  candidate,
+  nowMs,
+}) => {
+  const classified = providerTransactions.map((transaction) => ({
+    transactionId: pickTransactionId(transaction),
+    statusClass: transactionStatusClass(transaction, nowMs),
+  }));
+  const requiresProof = classified.some(({ statusClass }) => (
+    statusClass === "REFUNDED" || statusClass === "EXPIRED_UNPAID"
+  ));
+  if (!requiresProof && !packet && !applyReceipt) return null;
+  if (!packet || packet.formatVersion !== 1
+    || packet.kind !== "PADLHUB_PITER_LEGACY_SALES_RECONCILIATION_V1") {
+    fail("legacy reconciliation packet is required");
+  }
+  if (!applyReceipt || applyReceipt.formatVersion !== 1
+    || applyReceipt.kind !== "PADLHUB_PITER_LEGACY_SALES_RECONCILIATION_APPLY_RECEIPT_V1"
+    || applyReceipt.mutationPerformed !== true) {
+    fail("durable legacy reconciliation apply receipt is required");
+  }
+  const created = parseIso(packet.createdAt, "reconciliationPacket.createdAt");
+  const expires = parseIso(packet.expiresAt, "reconciliationPacket.expiresAt");
+  const { planDigest, ...unsigned } = packet;
+  if (!SHA256_PATTERN.test(String(planDigest || "")) || sha256(stableJson(unsigned)) !== planDigest
+    || created.timestamp > nowMs + 60_000
+    || expires.timestamp <= created.timestamp
+    || expires.timestamp - created.timestamp > PITER_ATOMIC_ACTIVATION.maxEvidenceAgeMs) {
+    fail("legacy reconciliation packet identity or freshness mismatch");
+  }
+  if (packet.target?.inventoryId !== PITER_ATOMIC_ACTIVATION.inventoryId
+    || packet.target?.counterKey !== PITER_ATOMIC_ACTIVATION.counterKey
+    || packet.target?.productId !== productId
+    || packet.deployment?.deploymentId !== candidate.deploymentId
+    || packet.deployment?.sourceSha256 !== candidate.sourceSha256
+    || packet.deployment?.candidateSha256 !== candidate.candidateSha256
+    || packet.evidence?.providerDigest !== sha256(stableJson(providerTransactions))
+    || !SHA256_PATTERN.test(String(packet.evidence?.evidenceDigest || ""))
+    || !Array.isArray(packet.changes) || !Array.isArray(packet.providerOnlyRefunds)) {
+    fail("legacy reconciliation packet scope mismatch");
+  }
+  const evidenceTimes = ["ledgerCapturedAt", "providerCapturedAt", "subscriptionCapturedAt"]
+    .map((key) => parseIso(packet.evidence?.[key], `reconciliationPacket.evidence.${key}`).timestamp);
+  if (Math.max(...evidenceTimes) - Math.min(...evidenceTimes) > PITER_ATOMIC_ACTIVATION.maxEvidenceSkewMs
+    || Math.min(...evidenceTimes) + PITER_ATOMIC_ACTIVATION.maxEvidenceAgeMs !== expires.timestamp
+    || Math.max(...evidenceTimes) > created.timestamp + 60_000
+    || created.timestamp - Math.min(...evidenceTimes) > PITER_ATOMIC_ACTIVATION.maxEvidenceAgeMs) {
+    fail("legacy reconciliation packet evidence window mismatch");
+  }
+  const changes = new Map();
+  for (const change of packet.changes) {
+    if (!change?.transactionId || changes.has(change.transactionId)) {
+      fail("legacy reconciliation packet contains duplicate changes");
+    }
+    changes.set(change.transactionId, change);
+  }
+  const providerOnly = new Map();
+  for (const item of packet.providerOnlyRefunds) {
+    if (!item?.transactionId || providerOnly.has(item.transactionId)
+      || item.transactionHash !== hashId(item.transactionId)
+      || !toStr(item.subscriptionId) || item.subscriptionHash !== hashId(item.subscriptionId)) {
+      fail("legacy reconciliation packet provider-only proof mismatch");
+    }
+    providerOnly.set(item.transactionId, item);
+  }
+  const { receiptDigest, ...unsignedReceipt } = applyReceipt;
+  const applied = parseIso(applyReceipt.appliedAt, "reconciliationApplyReceipt.appliedAt");
+  if (!SHA256_PATTERN.test(String(receiptDigest || ""))
+    || sha256(stableJson(unsignedReceipt)) !== receiptDigest
+    || applied.timestamp < created.timestamp || applied.timestamp > nowMs + 60_000
+    || applyReceipt.operationId !== packet.operationId
+    || applyReceipt.planDigest !== packet.planDigest
+    || applyReceipt.evidenceDigest !== packet.evidence.evidenceDigest
+    || stableJson(applyReceipt.deployment) !== stableJson(packet.deployment)
+    || stableJson(applyReceipt.target) !== stableJson(packet.target)
+    || applyReceipt.legacyLedgerDigest !== digestPiterLegacyLedgerRows(ledgerRows)
+    || !SHA256_PATTERN.test(String(applyReceipt.exactPostimageDigest || ""))
+    || !SHA256_PATTERN.test(String(applyReceipt.forensicSnapshotSha256 || ""))
+    || !SHA256_PATTERN.test(String(applyReceipt.hostIdentitySha256 || ""))
+    || !SHA256_PATTERN.test(String(applyReceipt.mongoIdentitySha256 || ""))
+    || applyReceipt.canonicalFlowSha256 !== candidate.candidateSha256
+    || applyReceipt.changeCount !== packet.changes.length
+    || stableJson(applyReceipt.providerOnlyRefundHashes) !== stableJson(
+      packet.providerOnlyRefunds.map((item) => item.transactionHash).sort(),
+    )) {
+    fail("durable legacy reconciliation apply receipt mismatch");
+  }
+  const ledgerByTransactionId = new Map(ledgerRows.map((row) => [pickTransactionId(row), row]));
+  for (const { transactionId, statusClass } of classified) {
+    if (statusClass !== "REFUNDED" && statusClass !== "EXPIRED_UNPAID") continue;
+    const row = ledgerByTransactionId.get(transactionId);
+    if (!row) {
+      if (statusClass !== "REFUNDED" || !providerOnly.has(transactionId)) {
+        fail(`legacy reconciliation proof is missing for ${hashId(transactionId)}`);
+      }
+      continue;
+    }
+    const change = changes.get(transactionId);
+    const expectedAction = statusClass === "REFUNDED" ? "MARK_REFUNDED" : "MARK_FAILED";
+    const expectedOutcome = statusClass === "REFUNDED" ? "PROVIDER_REFUNDED" : "PROVIDER_UNPAID_EXPIRED";
+    const marker = row.piterLegacyReconciliation;
+    if (change?.action !== expectedAction
+      || change?.set?.piterLegacyReconciliation?.operationId !== packet.operationId
+      || marker?.operationId !== packet.operationId
+      || marker?.evidenceDigest !== packet.evidence.evidenceDigest
+      || marker?.outcome !== expectedOutcome
+      || marker?.transactionHash !== hashId(transactionId)) {
+      fail(`legacy reconciliation marker is not linked for ${hashId(transactionId)}`);
+    }
+  }
+  return {
+    kind: packet.kind,
+    operationId: packet.operationId,
+    planDigest: packet.planDigest,
+    evidenceDigest: packet.evidence.evidenceDigest,
+    providerDigest: packet.evidence.providerDigest,
+    applyReceiptDigest: applyReceipt.receiptDigest,
+    legacyLedgerDigest: applyReceipt.legacyLedgerDigest,
+    changeTransactionHashes: packet.changes.map((item) => item.transactionHash).sort(),
+    providerOnlyRefundHashes: packet.providerOnlyRefunds.map((item) => item.transactionHash).sort(),
+  };
+};
+
+export function derivePiterLegacyBaseline({
+  ledgerRows,
+  providerTransactions,
+  productId,
+  providerCapturedAt = null,
+  reconciliationReceipt = null,
+}) {
   if (!Array.isArray(ledgerRows) || !Array.isArray(providerTransactions)) fail("baseline inputs must be arrays");
+  const providerCapturedAtMs = providerCapturedAt ? Date.parse(providerCapturedAt) : Number.NaN;
   const providerById = new Map();
   for (const transaction of providerTransactions) {
     const transactionId = pickTransactionId(transaction);
@@ -229,7 +413,7 @@ export function derivePiterLegacyBaseline({ ledgerRows, providerTransactions, pr
       || (toStr(transaction?.productId) && toStr(transaction.productId) !== productId)) {
       fail(`provider transaction ${hashId(transactionId)} product mismatch`);
     }
-    const statusClass = transactionStatusClass(transaction);
+    const statusClass = transactionStatusClass(transaction, providerCapturedAtMs);
     if (statusClass === "UNRESOLVED") fail(`provider transaction ${hashId(transactionId)} is nonterminal`);
     if (statusClass === "PAID") {
       assertNoRefund(transaction);
@@ -264,8 +448,39 @@ export function derivePiterLegacyBaseline({ ledgerRows, providerTransactions, pr
       ? "PAID"
       : FAILED_STATUSES.has(localStatus) ? "FAILED" : "UNRESOLVED";
     if (localStatusClass === "UNRESOLVED") fail(`ledger transaction ${hashId(transactionId)} is nonterminal`);
-    if (localStatusClass !== provider.statusClass) fail(`ledger/provider status mismatch for ${hashId(transactionId)}`);
+    const providerTerminalClass = provider.statusClass === "PAID" ? "PAID" : "FAILED";
+    if (localStatusClass !== providerTerminalClass
+      || (localStatus === "REFUNDED") !== (provider.statusClass === "REFUNDED")) {
+      fail(`ledger/provider status mismatch for ${hashId(transactionId)}`);
+    }
     if (toStr(row.productId) !== productId) fail(`ledger product mismatch for ${hashId(transactionId)}`);
+    if (provider.statusClass === "REFUNDED") {
+      const marker = row.piterLegacyReconciliation;
+      if (localStatus !== "REFUNDED"
+        || marker?.kind !== "PITER_LEGACY_SALE_RECONCILIATION_V1"
+        || marker?.outcome !== "PROVIDER_REFUNDED"
+        || marker?.transactionHash !== hashId(transactionId)
+        || !toStr(marker?.subscriptionHash)
+        || !/^[a-f0-9]{64}$/.test(toStr(marker?.evidenceDigest) || "")
+        || marker?.operationId !== reconciliationReceipt?.operationId
+        || marker?.evidenceDigest !== reconciliationReceipt?.evidenceDigest) {
+        fail(`refund reconciliation marker mismatch for ${hashId(transactionId)}`);
+      }
+    }
+    if (provider.statusClass === "EXPIRED_UNPAID") {
+      const marker = row.piterLegacyReconciliation;
+      if (localStatus !== "FAILED"
+        || toStr(row.expiresAt) !== toStr(provider.transaction?.paymentDueDate)
+        || toStr(row.paidAt)
+        || marker?.kind !== "PITER_LEGACY_SALE_RECONCILIATION_V1"
+        || marker?.outcome !== "PROVIDER_UNPAID_EXPIRED"
+        || marker?.transactionHash !== hashId(transactionId)
+        || !/^[a-f0-9]{64}$/.test(toStr(marker?.evidenceDigest) || "")
+        || marker?.operationId !== reconciliationReceipt?.operationId
+        || marker?.evidenceDigest !== reconciliationReceipt?.evidenceDigest) {
+        fail(`expired UNPAID reconciliation marker mismatch for ${hashId(transactionId)}`);
+      }
+    }
     if (localStatusClass === "PAID") {
       const amountMinor = toInteger(row.amountMinor);
       const providerProductCostMinor = toInteger(row.providerProductCostMinor);
@@ -309,6 +524,10 @@ export function derivePiterLegacyBaseline({ ledgerRows, providerTransactions, pr
         fail(`paid provider transaction ${hashId(transactionId)} is missing from the ledger`);
       }
     }
+    if (provider.statusClass === "REFUNDED" && !ledgerByTransactionId.has(transactionId)
+      && !reconciliationReceipt?.providerOnlyRefundHashes?.includes(hashId(transactionId))) {
+      fail(`provider-only refund ${hashId(transactionId)} lacks linked reconciliation proof`);
+    }
   }
 
   paidEntries.sort((left, right) => left.paymentRef.localeCompare(right.paymentRef));
@@ -327,6 +546,7 @@ export function derivePiterLegacyBaseline({ ledgerRows, providerTransactions, pr
     takenCount: paidEntries.length,
     legacyPaymentRefs: paidEntries.map((entry) => entry.paymentRef),
     entries: paidEntries,
+    legacyLedgerDigest: digestPiterLegacyLedgerRows(ledgerRows),
   };
 }
 
@@ -336,6 +556,8 @@ export function buildPiterAtomicActivationPacket({
   productEvidence,
   bindingEvidence,
   candidateReport,
+  reconciliationPacket = null,
+  reconciliationApplyReceipt = null,
   productId,
   createdAt = new Date().toISOString(),
   maxEvidenceAgeMs = PITER_ATOMIC_ACTIVATION.maxEvidenceAgeMs,
@@ -372,10 +594,21 @@ export function buildPiterAtomicActivationPacket({
     fail("evidence snapshots exceed the allowed capture-time skew");
   }
   const candidate = validateCandidateReport(candidateReport);
+  const reconciliation = validateLegacyReconciliationProof({
+    packet: reconciliationPacket,
+    applyReceipt: reconciliationApplyReceipt,
+    ledgerRows: ledger.rows,
+    providerTransactions: provider.rows,
+    productId: expectedProductId,
+    candidate,
+    nowMs: created.timestamp,
+  });
   const baseline = derivePiterLegacyBaseline({
     ledgerRows: ledger.rows,
     providerTransactions: provider.rows,
     productId: expectedProductId,
+    providerCapturedAt: provider.capturedAt,
+    reconciliationReceipt: reconciliation,
   });
   const expiresAt = new Date(Math.min(
     Date.parse(ledger.capturedAt),
@@ -413,6 +646,7 @@ export function buildPiterAtomicActivationPacket({
       key: PITER_ATOMIC_ACTIVATION.productBindingKey,
       productId: expectedProductId,
     },
+    reconciliation,
     baseline,
   };
   return { ...packet, contractDigest: sha256(stableJson(packet)) };
@@ -469,6 +703,21 @@ export function validatePiterAtomicActivationPacket(packet, { now = new Date(), 
   })) fail("packet Node-RED product binding mismatch");
   const entries = packet.baseline?.entries;
   if (!Array.isArray(entries)) fail("packet baseline entries are required");
+  if (!SHA256_PATTERN.test(String(packet.baseline?.legacyLedgerDigest || ""))) {
+    fail("packet legacy ledger digest is invalid");
+  }
+  if (packet.reconciliation !== null && (!packet.reconciliation
+    || packet.reconciliation.kind !== "PADLHUB_PITER_LEGACY_SALES_RECONCILIATION_V1"
+    || !/^[a-f0-9]{32}$/.test(String(packet.reconciliation.operationId || ""))
+    || !SHA256_PATTERN.test(String(packet.reconciliation.planDigest || ""))
+    || !SHA256_PATTERN.test(String(packet.reconciliation.evidenceDigest || ""))
+    || !SHA256_PATTERN.test(String(packet.reconciliation.providerDigest || ""))
+    || !SHA256_PATTERN.test(String(packet.reconciliation.applyReceiptDigest || ""))
+    || !SHA256_PATTERN.test(String(packet.reconciliation.legacyLedgerDigest || ""))
+    || !Array.isArray(packet.reconciliation.changeTransactionHashes)
+    || !Array.isArray(packet.reconciliation.providerOnlyRefundHashes))) {
+    fail("packet reconciliation receipt mismatch");
+  }
   const recomputed = derivePiterLegacyBaseline({
     ledgerRows: entries.map((entry) => ({
       ...entry,
@@ -487,7 +736,11 @@ export function validatePiterAtomicActivationPacket(packet, { now = new Date(), 
     })),
     productId: packet.product?.id,
   });
-  if (stableJson(recomputed) !== stableJson(packet.baseline)) fail("packet baseline mismatch");
+  const recomputedPaid = { ...recomputed };
+  const packetPaid = { ...packet.baseline };
+  delete recomputedPaid.legacyLedgerDigest;
+  delete packetPaid.legacyLedgerDigest;
+  if (stableJson(recomputedPaid) !== stableJson(packetPaid)) fail("packet baseline mismatch");
   return packet;
 }
 

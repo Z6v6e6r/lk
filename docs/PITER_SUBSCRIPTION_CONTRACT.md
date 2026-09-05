@@ -100,6 +100,79 @@ legacy runtime.
 гонку между поздним legacy `FAILED -> PAID` и seed baseline; поэтому все четыре
 snapshot снимаются только после получения совпадающего `soaking` lease.
 
+## Сверка исторических `UNPAID` и `REFUND`
+
+`scripts/prepare_piter_legacy_reconciliation_packet.mjs` остаётся постоянно
+offline и принимает три полных snapshot: scoped Mongo ledger, все Viva
+transactions точного product ID и client-scoped Viva subscriptions для всех
+возвращённых transaction ID с `includeFinished=true`. Между snapshot допустима
+разница не более минуты, срок packet — не более пяти минут. Приватный packet
+пишется в новый каталог `0700` файлами `0600`; публичный report содержит только
+усечённые SHA-256 идентификаторов.
+
+План допускает только два автоматических перехода:
+
+- `PAYMENT_PENDING -> FAILED`, если Viva возвращает точный `UNPAID`, его
+  `paymentDueDate` уже прошёл, совпадает с локальным `expiresAt`, `paymentDate`
+  и refund evidence отсутствуют, а product, client, сумма и скидка совпадают;
+- `PAID -> REFUNDED`, если transaction имеет точный `REFUND/REFUNDED`,
+  положительный `refundSum` и `refundedAt`, а client-scoped readback содержит
+  ровно один совпадающий subscription instance того же client/product/
+  transaction в статусе `REFUNDED` с теми же refund facts.
+
+Subscription readback связывается только через явные provider-поля
+`transactionId|transactionUuid|transaction.id|transaction.uuid` и
+`productId|subscriptionProductId|product.id|product.uuid`; совпадение ID в
+`history`, booking, note или произвольном metadata не считается доказательством.
+Для текущего Viva `REFUND` exact amount-контракт отражает форму фактического
+snapshot: `toPay` равен локально уплаченной сумме, а `sum` — полной стоимости
+provider product до скидки. Любое иное сочетание блокирует reconciliation.
+
+Provider-only `REFUND` не создаёт локальную продажу и явно исключается из
+baseline только после той же exact subscription-проверки. Неистёкший `UNPAID`,
+частичный/неполный refund evidence, несовпавший client/product/amount, missing
+provider-paid ledger row, duplicate identity или любой другой статус полностью
+блокируют packet.
+
+`scripts/manage_piter_legacy_reconciliation.mjs` по умолчанию выполняет только
+dry-run. Будущий `--apply` требует отдельно подтверждённую фразу
+`APPLY_PITER_LEGACY_RECONCILIATION_147`, exact `planDigest`, root-owned active
+flow с SHA reviewed candidate, непрерывный deployment lock и неистёкший
+`soaking` lease, pinned host/replica-set identity и новый private backup.
+Как и atomic ledger operator, reconciliation запускается через `flock -F` и
+проверяет фактическое владение Linux lock перед каждой mutation и commit;
+одна environment-переменная не авторизует запись.
+Все изменения выполняются одной Mongo transaction с snapshot read, exact CAS,
+majority+journaled commit и полным post-read; CAS failure откатывает всю
+транзакцию, а потерянный commit response принимается только по точному
+canonical EJSON postimage. Общий `timeoutMS` ограничен фактическим остатком
+packet/lease, включая управляемые драйвером повторы commit. Operator сохраняет
+исходный reviewed packet рядом с backup и только после точного post-read пишет
+fsync'd `apply-receipt.json`; отсутствие receipt блокирует дальнейшую activation.
+Если commit уже подтверждён exact postimage, но процесс упал на границе записи
+receipt, повтор того же отдельно разрешённого apply после истечения packet не
+повторяет Mongo write: он сверяет сохранённые packet + canonical EJSON preimage,
+строит полный ожидаемый postimage, требует его точного live readback и только
+после этого восстанавливает receipt.
+Operator никогда не пишет в Viva и не выполняет refund.
+
+После сверки activation packet принимает `FAILED` только с маркером
+`PROVIDER_UNPAID_EXPIRED`, а `REFUNDED` — только с маркером
+`PROVIDER_REFUNDED`; остальные ручные подмены остаются fail closed. Для новых
+atomic attempt provider `UNPAID` освобождает место только после точного
+истечения `paymentDueDate` и при положительном `toPay`, а `REFUND` — только с
+положительным refund evidence. Activation packet при наличии любого
+`REFUND/REFUNDED` или reconciled expired `UNPAID` обязательно принимает и
+хэширует сохранённый private reconciliation packet вместе с его durable
+`apply-receipt.json`. После apply исходный packet может быть старше пяти минут:
+его первоначальное окно остаётся структурно проверяемым, а fresh activation
+snapshot обязан совпасть с receipt по полному legacy ledger digest и provider
+digest. Поэтому provider-only refund исключается только с durable exact proof, а live seed и
+activate дополнительно сравнивают digest всех legacy rows, включая terminal
+status и reconciliation marker.
+Managed policy и новые ограничения использования при этом не публикуются и не
+включаются: продажи продолжают compatibility-контур до отдельного этапа.
+
 ## Витрина и счётчик
 
 - `counterKey`: `piter_friendship`;

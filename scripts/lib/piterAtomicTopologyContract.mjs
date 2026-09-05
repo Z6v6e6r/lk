@@ -17,7 +17,7 @@ export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
 });
 
 export const PITER_ATOMIC_ROUTER_SHA256 = "fe097554fb070cbf7e076ee907c90f4448317424650d7804eb2151b2d9372a6c";
-export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "482c7f2230a1a6d2b781ddd9f67ecea19ee80a594385e7455a5acd759d989271";
+export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "28cda3933e4ec72690e451a36e883e22157f8c6624cb23a0f12f1f8b9f6056f7";
 export const PITER_ATOMIC_BINDING_INITIALIZER_SOURCE = `const key = "summer_subscription_piter_friendship_product_id";
 const expectedProductId = "8bf334ba-3050-4017-b40a-7eef2db1eb16";
 const currentProductId = String(global.get(key) ?? "").trim();

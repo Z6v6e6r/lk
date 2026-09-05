@@ -1,6 +1,7 @@
 import {
   PITER_ATOMIC_ACTIVATION,
   buildPiterAtomicSentinel,
+  digestPiterLegacyLedgerRows,
   hashId,
   sha256,
   stableJson,
@@ -8,7 +9,7 @@ import {
 } from "./piterAtomicActivationContract.mjs";
 
 const TERMINAL_PAID = new Set(["PAID", "SUCCESS", "SUCCEEDED", "COMPLETE", "COMPLETED", "APPROVED"]);
-const TERMINAL_FAILED = new Set(["FAILED", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"]);
+const TERMINAL_FAILED = new Set(["FAILED", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED", "REFUNDED"]);
 const ACTIVE_STATES = new Set(["CLAIMED", "DISPATCHING", "PAYMENT_PENDING", "PROVIDER_UNKNOWN"]);
 
 const fail = (message) => {
@@ -61,9 +62,11 @@ const projectPaidEntry = (row, productId) => {
 export function deriveLiveLegacyBaseline(rows, productId) {
   if (!Array.isArray(rows)) fail("live rows must be an array");
   const entries = [];
+  const legacyRows = [];
   for (const row of rows) {
     if (!row || typeof row !== "object" || Array.isArray(row)) fail("live row must be an object");
     if (row._id === PITER_ATOMIC_ACTIVATION.ledgerId || String(row._id || "").startsWith("piter-sale:")) continue;
+    legacyRows.push(row);
     if (toStr(row.inventoryId) !== PITER_ATOMIC_ACTIVATION.inventoryId
       || toStr(row.counterKey) !== PITER_ATOMIC_ACTIVATION.counterKey) fail("live row is outside Piter scope");
     const status = normalizeStatus(row.status);
@@ -90,6 +93,7 @@ export function deriveLiveLegacyBaseline(rows, productId) {
     takenCount: entries.length,
     legacyPaymentRefs: paymentRefs,
     entries,
+    legacyLedgerDigest: digestPiterLegacyLedgerRows(legacyRows),
   };
 }
 
