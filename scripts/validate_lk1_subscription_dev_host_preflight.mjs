@@ -187,10 +187,15 @@ export function validateFreshHostPreflightEvidence(evidence, now, {
     }
   }
   exactKeys(evidence.runtimeIsolation.ingress, [
-    "configurationReadable", "targetRouteAbsent",
+    "configurationReadable", "targetRouteAbsent", "closureComplete", "fileCount", "closureSha256",
   ], "fresh ingress isolation");
   if (evidence.runtimeIsolation.ingress.configurationReadable !== true
-    || evidence.runtimeIsolation.ingress.targetRouteAbsent !== true) {
+    || evidence.runtimeIsolation.ingress.targetRouteAbsent !== true
+    || evidence.runtimeIsolation.ingress.closureComplete !== true
+    || !Number.isSafeInteger(evidence.runtimeIsolation.ingress.fileCount)
+    || evidence.runtimeIsolation.ingress.fileCount < 1
+    || evidence.runtimeIsolation.ingress.fileCount > 512
+    || !SHA256.test(evidence.runtimeIsolation.ingress.closureSha256)) {
     fail("fresh ingress isolation mismatch");
   }
   exactKeys(evidence.repositoryIdentity, ["headSha", "treeSha", "clean"], "repository identity");
@@ -300,20 +305,95 @@ for unit in \\
 done
 ingress_configuration_readable=true
 ingress_target_absent=true
-for root in /etc/nginx /etc/caddy /etc/haproxy; do
+ingress_closure_complete=true
+ingress_file_count=0
+ingress_closure_sha256=INVALID
+declare -A ingress_seen=()
+declare -a ingress_queue_kind=()
+declare -a ingress_queue_path=()
+declare -a ingress_digest_rows=()
+enqueue_ingress_file() {
+  local kind="$1"
+  local candidate="$2"
+  local resolved
+  resolved="$(readlink -f -- "$candidate" 2>/dev/null || true)"
+  if test -z "$resolved" || ! [[ "$resolved" =~ ^[/A-Za-z0-9_.+*-]+$ ]] \
+    || test ! -f "$resolved" || test ! -r "$resolved"; then
+    ingress_configuration_readable=false
+    ingress_closure_complete=false
+    return
+  fi
+  ingress_queue_kind+=("$kind")
+  ingress_queue_path+=("$resolved")
+}
+for row in nginx:/etc/nginx caddy:/etc/caddy haproxy:/etc/haproxy; do
+  kind="\${row%%:*}"
+  root="\${row#*:}"
   if test -d "$root"; then
-    if find "$root" -type f ! -readable -print -quit | grep -q .; then
-      ingress_configuration_readable=false
-    fi
-    if grep -RIsEq '${INGRESS_TARGET_REFERENCE_PATTERN}' "$root"; then
-      ingress_target_absent=false
-    fi
+    while IFS= read -r -d '' candidate; do
+      enqueue_ingress_file "$kind" "$candidate"
+    done < <(find "$root" \\( -type f -o -type l \\) -print0)
   fi
 done
-if test "$ingress_configuration_readable" != true || test "$ingress_target_absent" != true; then
+ingress_queue_index=0
+while test "$ingress_queue_index" -lt "\${#ingress_queue_path[@]}"; do
+  kind="\${ingress_queue_kind[$ingress_queue_index]}"
+  config_file="\${ingress_queue_path[$ingress_queue_index]}"
+  ingress_queue_index=$((ingress_queue_index + 1))
+  seen_key="$kind:$config_file"
+  if test "\${ingress_seen[$seen_key]+present}" = present; then
+    continue
+  fi
+  ingress_seen[$seen_key]=true
+  ingress_file_count=$((ingress_file_count + 1))
+  if test "$ingress_file_count" -gt 512; then
+    ingress_closure_complete=false
+    break
+  fi
+  config_sha256="$(sha256sum "$config_file" | awk '{print $1}')"
+  ingress_digest_rows+=("$kind\\t$config_file\\t$config_sha256")
+  if grep -IsEq '${INGRESS_TARGET_REFERENCE_PATTERN}' "$config_file"; then
+    ingress_target_absent=false
+  fi
+  while IFS= read -r directive; do
+    include_token="$(printf '%s\\n' "$directive" | sed -E 's/^[[:space:]]*(include|import)[[:space:]]+([^;#[:space:]]+).*/\\2/')"
+    if ! [[ "$include_token" =~ ^[/A-Za-z0-9_.+*-]+$ ]]; then
+      ingress_closure_complete=false
+      continue
+    fi
+    if [[ "$include_token" = /* ]]; then
+      include_pattern="$include_token"
+    elif test "$kind" = nginx; then
+      include_pattern="/etc/nginx/$include_token"
+    else
+      include_pattern="$(dirname "$config_file")/$include_token"
+    fi
+    include_matches=()
+    while IFS= read -r include_match; do
+      test -n "$include_match" && include_matches+=("$include_match")
+    done < <(compgen -G "$include_pattern" || true)
+    if test "\${#include_matches[@]}" -eq 0; then
+      if [[ "$include_token" != *'*'* ]]; then
+        ingress_closure_complete=false
+      fi
+      continue
+    fi
+    for include_match in "\${include_matches[@]}"; do
+      enqueue_ingress_file "$kind" "$include_match"
+    done
+  done < <(grep -IsE '^[[:space:]]*(include|import)[[:space:]]+' "$config_file" || true)
+done
+if test "$ingress_closure_complete" = true && test "$ingress_file_count" -gt 0; then
+  ingress_closure_sha256="$(printf '%s\\n' "\${ingress_digest_rows[@]}" | LC_ALL=C sort | sha256sum | awk '{print $1}')"
+else
+  ingress_closure_complete=false
+fi
+if test "$ingress_configuration_readable" != true || test "$ingress_target_absent" != true \
+  || test "$ingress_closure_complete" != true; then
   production_markers_absent=false
 fi
-printf 'INGRESS_ISOLATION\\t%s\\t%s\\n' "$ingress_configuration_readable" "$ingress_target_absent"
+printf 'INGRESS_ISOLATION\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$ingress_configuration_readable" \
+  "$ingress_target_absent" "$ingress_closure_complete" "$ingress_file_count" "$ingress_closure_sha256"
 printf 'PRODUCTION_MARKERS_ABSENT\\t%s\\n' "$production_markers_absent"
 printf 'SHARED_FLOW_SHA256\\t%s\\n' "$(sha256sum /root/.node-red/flows.json | awk '{print $1}')"
 printf 'END\\n'
@@ -403,10 +483,13 @@ export function captureCurrentHostPreflightEvidence({
         dropInsAbsent: fields[4] === "true",
         effectiveProductionMarkersAbsent: fields[5] === "true",
       };
-    } else if (kind === "INGRESS_ISOLATION" && fields.length === 3 && !ingressIsolation) {
+    } else if (kind === "INGRESS_ISOLATION" && fields.length === 6 && !ingressIsolation) {
       ingressIsolation = {
         configurationReadable: fields[1] === "true",
         targetRouteAbsent: fields[2] === "true",
+        closureComplete: fields[3] === "true",
+        fileCount: Number.parseInt(fields[4], 10),
+        closureSha256: fields[5],
       };
     } else if (kind === "END" && fields.length === 1 && lineIndex === lines.length - 1) {
       ended = true;

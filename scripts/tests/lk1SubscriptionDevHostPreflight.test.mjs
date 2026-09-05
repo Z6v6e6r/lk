@@ -48,7 +48,7 @@ const transcriptFrom = (evidence = checkedHostPreflightEvidence) => [
   ...Object.entries(evidence.inputs)
     .filter(([key]) => key !== "productionMarkersAbsent")
     .map(([key, value]) => `INPUT\t${key}\t${value}`),
-  "INGRESS_ISOLATION\ttrue\ttrue",
+  `INGRESS_ISOLATION\ttrue\ttrue\ttrue\t7\t${"d".repeat(64)}`,
   `PRODUCTION_MARKERS_ABSENT\t${evidence.inputs.productionMarkersAbsent}`,
   `SHARED_FLOW_SHA256\t${evidence.sharedResources.flowSha256}`,
   "END",
@@ -114,6 +114,8 @@ test("effective unit scan accepts only loopback allow plus deny-all network sand
     `test "$restrict_address_families" != '${EFFECTIVE_UNIT_NETWORK_SANDBOX.restrictAddressFamilies}'`,
   ), true);
   assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes("nginx -T"), false);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes("ingress_closure_complete"), true);
+  assert.equal(REMOTE_PREFLIGHT_SCRIPT.includes("ingress_closure_sha256"), true);
 });
 
 test("historical host preflight proves its archived stopped isolated state", () => {
@@ -175,6 +177,8 @@ test("direct SSH capture binds freshness, repository, release, tooling, and trus
     (value) => { value.capture.validatorSha256 = "b".repeat(64); },
     (value) => { value.runtimeIsolation.systemdUnits["lk1-subscription-dev-cup.service"].dropInsAbsent = false; },
     (value) => { value.runtimeIsolation.ingress.targetRouteAbsent = false; },
+    (value) => { value.runtimeIsolation.ingress.closureComplete = false; },
+    (value) => { value.runtimeIsolation.ingress.closureSha256 = "INVALID"; },
     (value) => {
       value.sharedResources.flowSha256 = "c".repeat(64);
       value.sharedResources.expectedFlowSha256 = "c".repeat(64);
