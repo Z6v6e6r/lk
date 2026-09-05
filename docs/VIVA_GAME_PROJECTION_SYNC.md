@@ -285,9 +285,13 @@ releasing. It leaves an otherwise valid release pending while the original
 guardian process still owns its copy of the descriptor. After successful
 recovery, the guardian independently checks the terminal report, terminal
 journal, takeover receipt, fresh heartbeat, PID/start identity, descriptor, and
-lock inode, then exits and transfers sole release custody to that takeover.
-If that exact takeover dies after the terminal report is durable but before the
-handoff, the still-live guardian proves the old PID/start identity is dead,
+lock inode, and remains a co-custodian of the flock. It quarantines every
+release that is not bound to that exact terminal evidence. Only after validating
+an exact terminal-bound release and revalidating the live takeover may the
+guardian exit and leave the request for the takeover to consume after it
+observes the parent death. A keeper death after that authorization is safe
+because the release is already exact and terminal-bound. If that exact takeover
+dies before authorization, the still-live guardian proves the old PID/start identity is dead,
 rereads the same receipt, report, and terminal journal, and advertises
 `HOLDING_TERMINAL_RECOVERY_FALLBACK` in its heartbeat. It keeps the canonical
 flock, rejects another recovery child and generic release, and accepts only the
@@ -305,7 +309,7 @@ never starts a second keeper. Guardian-child handshake events use one canonical
 JSON record per line, so an empty record cannot invalidate an otherwise accepted
 recovery or READY request; the guardian heartbeat retains only a hash of the last
 handshake failure.
-Early invalid release requests are quarantined while the takeover keeps the
+Early invalid release requests are quarantined while both live custodians keep the
 flock. A completed recovery report is reusable only while that exact takeover
 receipt and live heartbeat prove lock custody, or while a fresh exact guardian
 heartbeat proves terminal fallback custody after the keeper's confirmed death. A recovery CLI retry
