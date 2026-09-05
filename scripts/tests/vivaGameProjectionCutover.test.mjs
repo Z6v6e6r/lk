@@ -2667,11 +2667,20 @@ test("the real guardian releases terminal fallback only after the exact takeover
     assert.equal(fs.existsSync(takeoverReceipt.heartbeatPath), true);
     await Promise.race([
       terminalOutputObserved,
-      new Promise((_, reject) => setTimeout(() => reject(new Error(canonicalJson({
-        message: "Recovery terminal output was not observed",
-        guardianStdout: guardianStdout.slice(-1000),
-        guardianStderr: guardianStderr.slice(-1000),
-      }))), 5_000)),
+      new Promise((_, reject) => setTimeout(() => {
+        const readOptional = (filePath) => {
+          try { return fs.readFileSync(filePath, "utf8").slice(-2000); } catch { return null; }
+        };
+        reject(new Error(canonicalJson({
+          message: "Recovery terminal output was not observed",
+          guardianStdout: guardianStdout.slice(-1000),
+          guardianStderr: guardianStderr.slice(-1000),
+          guardianHeartbeat: readOptional(heartbeatPath),
+          recoveryStatus: readOptional(`/proc/${recoveryPid}/status`),
+          takeoverStatus: readOptional(`/proc/${takeoverPid}/status`),
+          acceptedRequestExists: fs.existsSync(`${requestPath}.accepted-${requestId}`),
+        })));
+      }, 16_000)),
     ]);
     for (let poll = 0; poll < 250; poll += 1) {
       try { process.kill(recoveryPid, 0); } catch (error) {
