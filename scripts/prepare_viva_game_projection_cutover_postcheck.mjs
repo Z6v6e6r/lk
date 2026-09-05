@@ -42,11 +42,14 @@ const MAX_JSON_BYTES = 64 * 1024 * 1024;
 const CUTOVER_ONLY_ENV_KEYS = [
   "PADLHUB_CUTOVER_FENCE_TOKEN", "PADLHUB_CUTOVER_FENCE_FD", "PADLHUB_CUTOVER_FENCE_LOCK_PATH",
   "PADLHUB_CUTOVER_GUARDIAN_RECEIPT", "PADLHUB_CUTOVER_GUARDIAN_RELEASE_REQUEST",
-  "PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST", "PADLHUB_CUTOVER_GUARDIAN_HEARTBEAT",
+  "PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST", "PADLHUB_CUTOVER_GUARDIAN_READY_REQUEST",
+  "PADLHUB_CUTOVER_GUARDIAN_HEARTBEAT",
   "PADLHUB_CUTOVER_GUARDIAN_PID", "PADLHUB_CUTOVER_GUARDIAN_CHILD",
-  "PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST_ID",
+  "PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST_ID", "PADLHUB_CUTOVER_GUARDIAN_READY_CHILD",
+  "PADLHUB_CUTOVER_GUARDIAN_READY_REQUEST_ID",
   "VIVA_GAME_PROJECTION_CUTOVER_EXECUTE", "VIVA_GAME_PROJECTION_MIGRATION_APPLY",
   "VIVA_GAME_PROJECTION_MIGRATION_RESTORE", "VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER",
+  "VIVA_GAME_PROJECTION_READY_FINALIZE",
 ];
 const fail = (message) => { throw new Error(message); };
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -108,7 +111,7 @@ export const assertPm2RuntimeIdentity = (entry, production) => {
     fail("PM2 runtime identity differs from the frozen Node-RED service");
   }
 };
-const probeLocalRuntimeHealth = async (url, expectedCanonicalSha256) => {
+export const probeLocalRuntimeHealth = async (url, expectedCanonicalSha256) => {
   const response = await fetch(url, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(5_000) });
   const body = Buffer.from(await response.arrayBuffer());
   let flow;
@@ -557,6 +560,14 @@ export async function prepareVivaGameProjectionCutoverPostcheck(options, depende
       formatVersion: 1, kind: "viva-game-projection-worker-mode-query", candidateSha256: plan.candidateSha256,
       mode: workerMode, restartAt, writeCount: workerWriteCount, observedAt: new Date(nowMs).toISOString(),
     });
+    const guardianHeartbeatSnapshotPath = path.join(outputDirectory, "fence-guardian-heartbeat.snapshot.json");
+    writeFileExclusiveAtomicDurable(guardianHeartbeatSnapshotPath, guardianLease.bytes, privateOptions());
+    const guardianHeartbeatSnapshot = {
+      path: guardianHeartbeatSnapshotPath,
+      bytes: guardianLease.bytes,
+      sha256: sha256(guardianLease.bytes),
+    };
+    if (guardianHeartbeatSnapshot.sha256 !== guardianLease.sha256) fail("Guardian heartbeat snapshot digest changed");
     const receipt = {
       formatVersion: 1,
       kind: "viva-game-projection-tenant-cutover-postcheck",
@@ -580,6 +591,7 @@ export async function prepareVivaGameProjectionCutoverPostcheck(options, depende
       providerConfirmedTenantBoundCount,
       workerMode,
       workerWriteCount,
+      runtimeRestartCount: restartCount,
       runtimeTenantReadback: true,
       candidateFlowReadback: true,
       runtimeHealth,
@@ -620,7 +632,7 @@ export async function prepareVivaGameProjectionCutoverPostcheck(options, depende
       coordinatorAttemptId: options.coordinatorAttemptId,
       fenceGuardianReceiptSha256: options.fenceGuardianReceiptSha256,
       fenceGuardianHeartbeatSha256: guardianLease.sha256,
-      files: [activeEvidence, duplicateEvidence, providerEvidence, workerEvidence, receiptArtifact]
+      files: [activeEvidence, duplicateEvidence, providerEvidence, workerEvidence, guardianHeartbeatSnapshot, receiptArtifact]
         .map((entry) => ({ path: path.basename(entry.path), sha256: entry.sha256 })),
     };
     const manifestArtifact = writeEvidence(outputDirectory, "postcheck.manifest.json", outputManifest);

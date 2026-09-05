@@ -225,6 +225,7 @@ maybeTest("real replica set applies and restores an exact tenant migration under
     write0600(cutoverPath, cutoverBytes);
     const cutoverSha256 = sha256(cutoverBytes);
     const manifestPath = path.join(packetRoot, "packet.manifest.json");
+    const manifestEntry = (entryPath, bytes) => ({ path: entryPath, sha256: sha256(bytes), size: bytes.length });
     const manifestBytes = Buffer.from(`${JSON.stringify({
       formatVersion: 1,
       kind: "viva-game-projection-cutover-packet-manifest",
@@ -233,15 +234,15 @@ maybeTest("real replica set applies and restores an exact tenant migration under
       candidateSha256,
       state: "READY_FOR_SEPARATE_LIVE_APPROVAL",
       files: [
-        { path: "candidate.flow.json", sha256: candidateSha256 },
-        { path: "cutover-controls.json", sha256: sha256(controlsBytes) },
-        { path: "cutover-plan.json", sha256: cutoverSha256 },
-        { path: "evidence/external-writer-proof.json", sha256: sha256(externalWriterProofBytes) },
-        { path: "evidence/full-backup.ejson", sha256: sha256(fullBackupBytes) },
-        { path: "evidence/full-backup.manifest.json", sha256: sha256(fullBackupManifestBytes) },
-        { path: "migration-plans/01-plan.json", sha256: planSha256 },
-        { path: "reviewed-flow.contract.json", sha256: sha256(reviewedContractBytes) },
-        { path: "source.flow.json", sha256: sourceFlowSha256 },
+        manifestEntry("candidate.flow.json", flowBytes),
+        manifestEntry("cutover-controls.json", controlsBytes),
+        manifestEntry("cutover-plan.json", cutoverBytes),
+        manifestEntry("evidence/external-writer-proof.json", externalWriterProofBytes),
+        manifestEntry("evidence/full-backup.ejson", fullBackupBytes),
+        manifestEntry("evidence/full-backup.manifest.json", fullBackupManifestBytes),
+        manifestEntry("migration-plans/01-plan.json", planBytes),
+        manifestEntry("reviewed-flow.contract.json", reviewedContractBytes),
+        manifestEntry("source.flow.json", flowBytes),
       ],
     }, null, 2)}\n`);
     write0600(manifestPath, manifestBytes);
@@ -309,6 +310,7 @@ maybeTest("real replica set applies and restores an exact tenant migration under
       assertSystemFenceLease: () => true,
       assertCheapFenceLease: () => true,
       assertExecutorSources: () => true,
+      validateExactCutoverPacket: () => true,
     };
     const verified = await runMigration(["--mode", "verify", ...common, "--report", verifyReport], dependencies);
     assert.equal(verified.writeCommandCount, 0);

@@ -31,7 +31,9 @@ const RESTORE_CONFIRMATION = "RESTORE_VIVA_GAME_PROJECTION_TENANT_MIGRATION_V1";
 const MONGO_CONFIG_ID = "4e820638cc39c730";
 const PRODUCTION_FLOW_PATH = "/root/.node-red/flows.json";
 const PRODUCTION_LOCK_PATH = "/run/lock/padlhub-viva-game-projection-cutover.lock";
-const WRITE_COMMANDS = new Set(["insert", "update", "delete", "findAndModify", "createIndexes", "drop", "dropDatabase", "renameCollection"]);
+const WRITE_COMMANDS = new Set([
+  "insert", "update", "delete", "findAndModify", "createIndexes", "drop", "dropDatabase", "renameCollection", "collMod",
+]);
 const MAX_PLAN_BYTES = 64 * 1024 * 1024;
 const MAX_BACKUP_BYTES = 512 * 1024 * 1024;
 const MAX_PACKET_BYTES = 16 * 1024 * 1024;
@@ -189,12 +191,15 @@ export function createDurableReportJournal(reportPath, mode, attemptId = crypto.
     journalDirectory,
     append,
     finalize(value) {
+      const reportBytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
       append("TERMINAL_RESULT", {
         state: value.state || null,
         outcome: value.outcome || value.state || null,
         mutationAttempted: value.mutationAttempted === true,
+        reportSha256: sha256(reportBytes),
+        report: value,
       });
-      writeDurableExclusive(requested, Buffer.from(`${JSON.stringify(value, null, 2)}\n`));
+      writeDurableExclusive(requested, reportBytes);
       closed = true;
     },
   };
@@ -355,15 +360,39 @@ function assertSystemFenceLease(receipt, cutoverPlan) {
   }
 }
 
+const writeStageNamespace = (stage, defaultDatabase) => {
+  if (typeof stage === "string") return `${defaultDatabase}.${stage}`;
+  const target = stage?.into ?? stage;
+  if (typeof target === "string") return `${defaultDatabase}.${target}`;
+  if (!isObject(target)) return "";
+  const database = String(target.db || defaultDatabase || "");
+  const collection = String(target.coll || "");
+  return database && collection ? `${database}.${collection}` : "";
+};
+
+export function mongoCurrentOpTouchesLkGames(row) {
+  const command = isObject(row?.command) ? row.command : {};
+  const database = String(command.$db || "");
+  if (["insert", "update", "delete", "findAndModify"].some((name) => command[name] === "lk_games")
+    && database === "games") return true;
+  if (["createIndexes", "drop", "collMod"].some((name) => command[name] === "lk_games")
+    && database === "games") return true;
+  if (Object.hasOwn(command, "dropDatabase") && database === "games") return true;
+  if (typeof command.renameCollection === "string"
+    && [command.renameCollection, command.to].includes("games.lk_games")) return true;
+  if (Object.hasOwn(command, "aggregate") && Array.isArray(command.pipeline)) {
+    return command.pipeline.some((stage) => (
+      Object.hasOwn(stage || {}, "$out") && writeStageNamespace(stage.$out, database) === "games.lk_games"
+    ) || (
+      Object.hasOwn(stage || {}, "$merge") && writeStageNamespace(stage.$merge, database) === "games.lk_games"
+    ));
+  }
+  return ["insert", "update", "remove"].includes(row?.op) && row?.ns === "games.lk_games";
+}
+
 export async function assertNoConcurrentMongoWrites(client) {
   const rows = await client.db("admin").aggregate([{ $currentOp: { allUsers: true, localOps: true } }]).toArray();
-  const conflicting = rows.filter((row) => {
-    const command = isObject(row.command) ? row.command : {};
-    const collection = command.insert || command.update || command.delete || command.findAndModify || "";
-    const namespace = String(row.ns || (command.$db ? `${command.$db}.${collection}` : ""));
-    const writeCommand = [...WRITE_COMMANDS].some((name) => Object.hasOwn(command, name));
-    return (writeCommand || ["insert", "update", "remove"].includes(row.op)) && namespace === "games.lk_games";
-  });
+  const conflicting = rows.filter(mongoCurrentOpTouchesLkGames);
   if (conflicting.length !== 0) fail("Concurrent games.lk_games writer observed while the fence is held");
 }
 

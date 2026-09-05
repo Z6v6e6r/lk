@@ -1834,6 +1834,17 @@
   report before publication.
 - Atomic exclusive publication reconciles linked and unlinked directory-sync fault
   boundaries so a thrown READY write cannot leave an ambiguous valid marker.
+- Added a guardian-owned standalone READY finalizer for coordinator `SIGKILL` after
+  terminal success. It revalidates the exact packet, journal, postcheck evidence,
+  PM2 identity/restart count, candidate `/flows`, Mongo barrier and current operations,
+  and can reconcile the exact two-link atomic-publication state before returning READY.
+- Recovery now transfers the inherited flock to an independent detached keeper before
+  restoring Mongo state. Its receipt and heartbeat remain required on completed-report
+  retry, so guardian or recovery-child termination cannot silently release the host
+  writer fence during validator and application-role restoration.
+- Expanded the live `$currentOp` gate to reject `drop`, `dropDatabase`,
+  `renameCollection`, `createIndexes`, `collMod`, and aggregate `$out`/`$merge`
+  operations that target `games.lk_games`.
 - Made the detached host-lock guardian prove its live PID/start/descriptor/inode with
   a fresh durable heartbeat and quarantine malformed release requests. Restore
   rehearsal cleanup now removes only collections protected by an exclusive ownership

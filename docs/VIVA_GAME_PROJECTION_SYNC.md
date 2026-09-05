@@ -235,7 +235,10 @@ explicit reconciliation. The lower-level
 verify, reconciliation, apply, or restore action only. The executor performs a
 full live PM2/tenant/flock/current-op check before and after each transaction,
 uses a one-second watchdog during the transaction, and performs a cheap
-descriptor/token/inode lease check around each CAS and readback. Mongo clients
+descriptor/token/inode lease check around each CAS and readback.
+The current-op gate treats DML plus `drop`, `dropDatabase`, `renameCollection`,
+`createIndexes`, `collMod`, and aggregate `$out`/`$merge` targeting
+`games.lk_games` as conflicting writes. Mongo clients
 use bounded connection, socket, operation, and commit timeouts. Each plan is
 limited to 100 operations so those checks and the 15-second commit deadline fit
 inside a bounded transaction. The receipt expires and must leave at least two
@@ -266,9 +269,15 @@ recovery side effect. It durably records an outcome-unknown entry before
 restoring Mongo state; retrying the same report path reconciles that journal and
 completes the exact preimage. Its terminal journal entry contains the complete
 report and hash before report publication, so a crash in finalization recreates
-the report without repeating Mongo mutations. The validator is restored before
-application roles are returned. This
-Mongo barrier survives coordinator and guardian-process failure. The coordinator then rereads
+the report without repeating Mongo mutations. Before the first recovery side
+effect, the recovery child starts a detached takeover keeper with the inherited
+canonical flock descriptor. That keeper has its own receipt, process-start
+identity, and heartbeat, remains alive through guardian or recovery-child
+`SIGKILL`, and accepts only the same explicit fence-release request. A completed
+recovery report is reusable only while that exact takeover receipt and live
+heartbeat still prove lock custody. The validator is restored before
+application roles are returned. This Mongo barrier recovery therefore retains
+the host fence across coordinator, guardian, and recovery-child failure. The coordinator then rereads
 the packet's complete EJSON backup and requires its document count and canonical
 full-collection state hash to equal a fresh live scan under the barrier before
 any tenant migration. It also requires the frozen plan ObjectIds to equal every
@@ -337,6 +346,14 @@ and terminal journal entry, then repeats the packet, writer fence, guardian,
 Mongo barrier, PM2, and exact `/flows` gates. READY is written last and binds the
 terminal report/journal hashes, exact execution-index SHA, coordinator attempt
 UUID, barrier receipt, guardian receipt, and final guardian heartbeat.
+If the coordinator is terminated after its terminal report, the standalone
+`ready-finalize` command sends a fresh, token-bound request to the guardian. The
+guardian validates the exact four pinned arguments plus the installed finalizer
+SHA, then spawns that finalizer with the inherited flock descriptor. The child
+repeats every final gate before it creates or accepts READY. Its publication is
+idempotent for the same execution/report pair and repairs the exact two-link
+temporary-file state left by `SIGKILL` between hard-link creation and temporary
+unlink; any different alias, owner, mode, content, or binding fails closed.
 If READY publication cannot be reconciled or durably removed, the publication
 helper returns an explicit outcome-unknown path. The coordinator then keeps the
 already validated SHADOW runtime online while ingress and both barriers remain
@@ -355,12 +372,17 @@ directory, apply-index output, postcheck output, and canonical live flow path.
 `PADLHUB_CUTOVER_GUARDIAN_RECEIPT`,
 `PADLHUB_CUTOVER_GUARDIAN_HEARTBEAT`, and
 `PADLHUB_CUTOVER_GUARDIAN_RELEASE_REQUEST` and
-`PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST` must point to new private paths
+`PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST` and
+`PADLHUB_CUTOVER_GUARDIAN_READY_REQUEST` must point to new private paths
 outside the repository. Live execution requires both
 the migration confirmation and `VIVA_GAME_PROJECTION_CUTOVER_EXECUTE=`
 `EXECUTE_VIVA_GAME_PROJECTION_CUTOVER_V1`; neither is present in a prepared
 packet. Run `npm run nodered:viva-game-projection-sync:cutover-run -- --help`
-for the bounded CLI. Producing a READY marker still does not authorize the
+for the bounded coordinator CLI and
+`npm run nodered:viva-game-projection-sync:ready-finalize -- --help` for exact
+terminal-report recovery. Standalone finalization additionally requires
+`VIVA_GAME_PROJECTION_READY_FINALIZE=FINALIZE_VIVA_GAME_PROJECTION_READY_V1`.
+Producing a READY marker still does not authorize the
 separate ingress-opening transition.
 
 ## Candidate preparation

@@ -451,7 +451,9 @@ export function buildVivaGameProjectionCutoverPlan({
   };
 }
 
-export function validateVivaGameProjectionCutoverPostcheck(receipt, plan, nowMs = Date.now(), evidence = {}) {
+export function validateVivaGameProjectionCutoverPostcheck(
+  receipt, plan, nowMs = Date.now(), evidence = {}, { maximumAgeMs = 5 * 60_000 } = {},
+) {
   if (!isObject(plan) || plan.kind !== "viva-game-projection-tenant-cutover-plan") {
     fail("Cutover plan contract mismatch");
   }
@@ -471,6 +473,8 @@ export function validateVivaGameProjectionCutoverPostcheck(receipt, plan, nowMs 
     || receipt.providerConfirmedTenantBoundCount < plan.postchecks.providerConfirmedTenantBoundMinimum
     || receipt.workerMode !== plan.postchecks.workerInitialMode
     || receipt.workerWriteCount !== plan.postchecks.shadowWritesExpected
+    || !Number.isSafeInteger(receipt.runtimeRestartCount)
+    || receipt.runtimeRestartCount < plan.production.restartCountAtEvidence
     || receipt.runtimeTenantReadback !== true
     || receipt.candidateFlowReadback !== true
     || receipt.runtimeHealth?.url !== plan.production?.localHealthUrl
@@ -486,7 +490,7 @@ export function validateVivaGameProjectionCutoverPostcheck(receipt, plan, nowMs 
     || !HASH_RE.test(String(receipt.fenceGuardianHeartbeatSha256 || ""))
     || !UUID_RE.test(String(receipt.coordinatorAttemptId || ""))
     || !Number.isFinite(Date.parse(receipt.observedAt))
-    || nowMs - Date.parse(receipt.observedAt) > 5 * 60_000
+    || nowMs - Date.parse(receipt.observedAt) > maximumAgeMs
     || Date.parse(receipt.observedAt) > nowMs + 60_000
     || !Number.isFinite(Date.parse(receipt.fenceExpiresAt))
     || Date.parse(receipt.fenceExpiresAt) <= nowMs

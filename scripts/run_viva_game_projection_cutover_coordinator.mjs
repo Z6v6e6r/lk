@@ -13,13 +13,13 @@ import { buildGlobalActiveLegacyTenantQuery } from "./lib/vivaGameProjectionTena
 import { decodeTenantMigrationOperation } from "./lib/vivaGameProjectionTenantMigrationExecution.mjs";
 import { assertExactExecutorSources } from "./lib/vivaGameProjectionExecutorSource.mjs";
 import { validateExactCutoverPacket } from "./lib/vivaGameProjectionCutoverPacketValidation.mjs";
+import { finalizeVivaGameProjectionCutoverReady } from "./finalize_viva_game_projection_cutover_ready.mjs";
 import {
   assertLiveFenceGuardian,
   prepareVivaGameProjectionCutoverPostcheck,
 } from "./prepare_viva_game_projection_cutover_postcheck.mjs";
 import {
   assertExclusiveFenceLease,
-  assertNoConcurrentMongoWrites,
   createDurableReportJournal,
   ensurePrivateDirectory,
   main as runMigration,
@@ -52,14 +52,18 @@ const CUTOVER_ONLY_ENV_KEYS = [
   "PADLHUB_CUTOVER_GUARDIAN_RECEIPT",
   "PADLHUB_CUTOVER_GUARDIAN_RELEASE_REQUEST",
   "PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST",
+  "PADLHUB_CUTOVER_GUARDIAN_READY_REQUEST",
   "PADLHUB_CUTOVER_GUARDIAN_HEARTBEAT",
   "PADLHUB_CUTOVER_GUARDIAN_PID",
   "PADLHUB_CUTOVER_GUARDIAN_CHILD",
   "PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST_ID",
+  "PADLHUB_CUTOVER_GUARDIAN_READY_CHILD",
+  "PADLHUB_CUTOVER_GUARDIAN_READY_REQUEST_ID",
   "VIVA_GAME_PROJECTION_CUTOVER_EXECUTE",
   "VIVA_GAME_PROJECTION_MIGRATION_APPLY",
   "VIVA_GAME_PROJECTION_MIGRATION_RESTORE",
   "VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER",
+  "VIVA_GAME_PROJECTION_READY_FINALIZE",
 ];
 const fail = (message) => { throw new Error(message); };
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -575,79 +579,18 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
       fail("Coordinator durable terminal result is not exact");
     }
 
-    if (dependencies.assertExecutorSources) await dependencies.assertExecutorSources(plan);
-    else assertExactExecutorSources(plan);
-    if (dependencies.validateExactCutoverPacket) await dependencies.validateExactCutoverPacket({ packetRoot, plan, manifest: manifestRead.value });
-    else validateExactCutoverPacket({ packetRoot, plan, manifest: manifestRead.value, nowMs: clockNow() });
-    assertFreshWriterFence();
-    const finalGuardianNowMs = clockNow();
-    const finalGuardianLease = dependencies.assertGuardianLease
-      ? await dependencies.assertGuardianLease(guardian, finalGuardianNowMs)
-      : assertLiveFenceGuardian(guardian, finalGuardianNowMs);
-    const finalPm2 = dependencies.inspectPm2 ? await dependencies.inspectPm2() : pm2Entry(plan.production.processName);
-    if (finalPm2?.pm_id !== plan.production.pm2ProcessId
-      || String(finalPm2?.pm2_env?.status || "").toLowerCase() !== "online"
-      || sha256(String(pm2EnvValue(finalPm2, "PADLHUB_PLATFORM_TENANT_KEY") || "")) !== plan.tenantKeySha256
-      || String(pm2EnvValue(finalPm2, "VIVA_GAME_PROJECTION_SYNC_MODE") || "").toUpperCase() !== "SHADOW"
-      || Number(finalPm2?.pm2_env?.restart_time) !== activeRestartCount
-      || finalGuardianNowMs - Number(finalPm2?.pm2_env?.pm_uptime) < 10_000
-      || sha256(readPrivateBytes(liveFlowPath, "Final candidate flow", MAX_JSON_BYTES)) !== plan.candidateSha256) {
-      fail("Final READY runtime gate failed after coordinator terminal success");
-    }
-    assertPm2RuntimeIdentity(finalPm2, plan.production);
-    assertNoCutoverEnvironment(finalPm2);
-    const finalHealth = dependencies.probeRuntimeHealth
-      ? await dependencies.probeRuntimeHealth(plan.production.localHealthUrl)
-      : await probeLocalRuntimeHealth(plan.production.localHealthUrl, plan.candidateCanonicalSha256);
-    if (finalHealth?.url !== plan.production.localHealthUrl || finalHealth?.statusCode !== 200
-      || finalHealth?.bodyCanonicalSha256 !== plan.candidateCanonicalSha256) {
-      fail("Final READY /flows proof is not the exact candidate");
-    }
-    const finalMigrationConnection = readPrivateMongoConnection(
-      execution.migrationConnectionFile, plan.mongoTarget.migrationConnectionFingerprint,
-    );
-    const finalMongoClient = dependencies.finalizationMongoClient || new MongoClient(finalMigrationConnection.uri, {
-      appName: "PadlHubVivaGameProjectionReadyFinalizer", maxPoolSize: 1,
-      serverSelectionTimeoutMS: 20_000, connectTimeoutMS: 20_000, socketTimeoutMS: 20_000, timeoutMS: 20_000,
-    });
-    try {
-      if (!dependencies.finalizationMongoClient) await finalMongoClient.connect();
-      const finalHello = await finalMongoClient.db("admin").command({ hello: 1 });
-      if (finalHello?.setName !== plan.mongoTarget.replicaSetName) fail("Final READY Mongo replica set changed");
-      const finalBarrierRead = readPrivateJson(barrierReceiptPath, "Final Mongo write-barrier receipt", MAX_JSON_BYTES);
-      if (sha256(finalBarrierRead.bytes) !== barrierArtifact.sha256) fail("Final READY Mongo barrier receipt changed");
-      if (dependencies.assertMongoWriteBarrier) await dependencies.assertMongoWriteBarrier(finalBarrierRead.value);
-      else await assertMongoWriteBarrier(finalMongoClient, finalBarrierRead.value, {
-        fenceTokenSha256: plan.writerFence.fenceTokenSha256,
-        cutoverPlanSha256: execution.cutoverPlanSha256,
-        mongoTargetIdentitySha256: plan.mongoTarget.targetIdentitySha256,
-      });
-      if (dependencies.assertNoConcurrentWrites) await dependencies.assertNoConcurrentWrites();
-      else await assertNoConcurrentMongoWrites(finalMongoClient);
-    } finally {
-      if (!dependencies.finalizationMongoClient) await finalMongoClient.close().catch(() => {});
-    }
     readyPublicationAttempted = true;
-    const readyMarker = writePrivate(readyMarkerPath, {
-      formatVersion: 1,
-      kind: "viva-game-projection-cutover-ready-marker",
-      state: "READY_TO_REOPEN_INGRESS",
-      cutoverPlanSha256: execution.cutoverPlanSha256,
-      executionIndexSha256: options.expectedExecutionIndexSha256,
-      coordinatorAttemptId,
-      coordinatorReportSha256: sha256(coordinatorReportBytes),
-      coordinatorTerminalJournalSha256: sha256(terminalJournalRead.bytes),
-      postcheckReceiptSha256: postcheckResult.postcheckReceiptSha256,
-      postcheckManifestSha256: postcheckResult.postcheckManifestSha256,
-      mongoWriteBarrierReceiptSha256: barrierArtifact.sha256,
-      fenceGuardianReceiptSha256: guardianReceiptSha256,
-      fenceGuardianHeartbeatSha256: finalGuardianLease.sha256,
-      runtimeHealth: finalHealth,
-      ingressReopenEligible: true,
-      ingressReopened: false,
-      observedAt: new Date(finalGuardianNowMs).toISOString(),
+    const readyMarker = await finalizeVivaGameProjectionCutoverReady({
+      executionIndex: options.executionIndex,
+      expectedExecutionIndexSha256: options.expectedExecutionIndexSha256,
+      coordinatorReport: coordinatorReportPath,
+      expectedCoordinatorReportSha256: sha256(coordinatorReportBytes),
+    }, {
+      ...dependencies,
+      authorizedByCoordinator: true,
+      guardianReceipt: guardian,
     });
-    return { ...result, readyMarkerSha256: readyMarker.sha256 };
+    return { ...result, readyMarkerSha256: readyMarker.readyMarkerSha256 };
   } catch (error) {
     const readyPublicationOutcomeUnknown = readyPublicationAttempted
       && error?.publicationOutcome === "UNKNOWN" && error?.publicationPath === readyMarkerPath;

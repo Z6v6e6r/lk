@@ -8,13 +8,14 @@ import { spawn, spawnSync } from "node:child_process";
 import { canonicalJson, sha256 } from "./lib/vivaGameProjectionCutoverContract.mjs";
 import {
   isAuthorizedFenceGuardianRecovery,
+  isAuthorizedFenceGuardianReadyFinalization,
   isAuthorizedFenceGuardianRelease,
 } from "./lib/vivaGameProjectionFenceGuardian.mjs";
 
 const fail = (message) => { throw new Error(message); };
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 if (process.argv.slice(2).includes("--help")) {
-  process.stdout.write("Usage: node scripts/run_viva_game_projection_fence_guardian.mjs --receipt /private/guardian.json --release-request /private/release-request.json --recovery-request /private/recovery-request.json --heartbeat /private/guardian-heartbeat.json\n");
+  process.stdout.write("Usage: node scripts/run_viva_game_projection_fence_guardian.mjs --receipt /private/guardian.json --release-request /private/release-request.json --recovery-request /private/recovery-request.json --ready-request /private/ready-request.json --heartbeat /private/guardian-heartbeat.json\n");
   process.exit(0);
 }
 const args = new Map();
@@ -54,19 +55,23 @@ const token = String(process.env.PADLHUB_CUTOVER_FENCE_TOKEN || "");
 const receiptPath = path.resolve(args.get("--receipt") || "");
 const releasePath = path.resolve(args.get("--release-request") || "");
 const recoveryRequestPath = path.resolve(args.get("--recovery-request") || "");
+const readyRequestPath = path.resolve(args.get("--ready-request") || "");
 const heartbeatPath = path.resolve(args.get("--heartbeat") || "");
 const recoveryExecutorPath = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "recover_viva_game_projection_mongo_write_barrier.mjs"));
+const readyFinalizerPath = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "finalize_viva_game_projection_cutover_ready.mjs"));
 const receiptParent = path.dirname(receiptPath);
 const parentStat = fs.lstatSync(receiptParent);
 if (!Number.isSafeInteger(fd) || fd < 3 || lockPath !== "/run/lock/padlhub-viva-game-projection-cutover.lock"
   || token.length < 32 || !path.isAbsolute(receiptPath) || !path.isAbsolute(releasePath)
-  || !path.isAbsolute(recoveryRequestPath) || !path.isAbsolute(heartbeatPath)
+  || !path.isAbsolute(recoveryRequestPath) || !path.isAbsolute(readyRequestPath) || !path.isAbsolute(heartbeatPath)
   || path.dirname(releasePath) !== receiptParent || path.dirname(recoveryRequestPath) !== receiptParent
+  || path.dirname(readyRequestPath) !== receiptParent
   || path.dirname(heartbeatPath) !== receiptParent
   || !parentStat.isDirectory() || parentStat.isSymbolicLink()
   || fs.realpathSync(receiptParent) !== receiptParent || parentStat.uid !== process.getuid() || (parentStat.mode & 0o077) !== 0
   || fs.existsSync(receiptPath) || fs.existsSync(heartbeatPath) || fs.existsSync(recoveryRequestPath)
-  || new Set([receiptPath, releasePath, recoveryRequestPath, heartbeatPath]).size !== 4) fail("Fence guardian inputs are invalid");
+  || fs.existsSync(readyRequestPath)
+  || new Set([receiptPath, releasePath, recoveryRequestPath, readyRequestPath, heartbeatPath]).size !== 5) fail("Fence guardian inputs are invalid");
 const stat = fs.fstatSync(fd);
 const lockStat = fs.statSync(lockPath);
 if (!stat.isFile() || stat.dev !== lockStat.dev || stat.ino !== lockStat.ino) fail("Fence guardian did not inherit the canonical lock descriptor");
@@ -86,9 +91,13 @@ const receipt = {
   lockDevice: String(lockStat.dev),
   lockInode: String(lockStat.ino),
   heartbeatPath,
+  releaseRequestPath: releasePath,
   recoveryRequestPath,
+  readyRequestPath,
   recoveryExecutorPath,
   recoveryExecutorSha256: sha256(fs.readFileSync(recoveryExecutorPath)),
+  readyFinalizerPath,
+  readyFinalizerSha256: sha256(fs.readFileSync(readyFinalizerPath)),
   fenceTokenSha256: tokenSha256,
   startedAt: new Date().toISOString(),
   automaticRelease: false,
@@ -107,9 +116,13 @@ process.on("SIGTERM", () => {});
 let heartbeatSequence = 0;
 let lastRejectedReleaseRequestSha256 = null;
 let lastRejectedRecoveryRequestSha256 = null;
+let lastRejectedReadyRequestSha256 = null;
 let recoveryChild = null;
 let recoveryRequestId = null;
 let lastRecoveryResult = null;
+let readyChild = null;
+let readyRequestId = null;
+let lastReadyResult = null;
 const writeHeartbeat = () => {
   atomicPrivateWrite(heartbeatPath, {
     formatVersion: 1,
@@ -126,9 +139,13 @@ const writeHeartbeat = () => {
     observedAt: new Date().toISOString(),
     lastRejectedReleaseRequestSha256,
     lastRejectedRecoveryRequestSha256,
+    lastRejectedReadyRequestSha256,
     recoveryChildPid: recoveryChild?.pid || null,
     recoveryRequestId,
     lastRecoveryResult,
+    readyChildPid: readyChild?.pid || null,
+    readyRequestId,
+    lastReadyResult,
   });
   heartbeatSequence += 1;
 };
@@ -151,6 +168,16 @@ const quarantineRecoveryRequest = (reason) => {
     syncDirectory(receiptParent);
   } catch { /* retain the lock and retry quarantine on the next loop */ }
   lastRejectedRecoveryRequestSha256 = digest;
+};
+const quarantineReadyRequest = (reason) => {
+  let digest;
+  try { digest = sha256(fs.readFileSync(readyRequestPath)); } catch { digest = sha256(reason); }
+  const quarantinePath = `${readyRequestPath}.rejected-${Date.now()}-${digest.slice(0, 16)}`;
+  try {
+    fs.renameSync(readyRequestPath, quarantinePath);
+    syncDirectory(receiptParent);
+  } catch { /* retain the lock and retry quarantine on the next loop */ }
+  lastRejectedReadyRequestSha256 = digest;
 };
 const startRecovery = (request) => {
   const acceptedPath = `${recoveryRequestPath}.accepted-${request.requestId}`;
@@ -180,6 +207,36 @@ const startRecovery = (request) => {
     recoveryRequestId = null;
   });
 };
+const startReadyFinalization = (request) => {
+  const acceptedPath = `${readyRequestPath}.accepted-${request.requestId}`;
+  fs.renameSync(readyRequestPath, acceptedPath);
+  syncDirectory(receiptParent);
+  const childStdio = Array(fd + 1).fill("ignore");
+  childStdio[1] = "inherit";
+  childStdio[2] = "inherit";
+  childStdio[fd] = fd;
+  const child = spawn(process.execPath, [readyFinalizerPath, ...request.argv], {
+    stdio: childStdio,
+    env: {
+      ...process.env,
+      PADLHUB_CUTOVER_GUARDIAN_READY_CHILD: "1",
+      PADLHUB_CUTOVER_GUARDIAN_READY_REQUEST_ID: request.requestId,
+    },
+  });
+  readyChild = child;
+  readyRequestId = request.requestId;
+  lastReadyResult = null;
+  child.once("error", (error) => {
+    lastReadyResult = { requestId: request.requestId, exitCode: null, signal: null, errorSha256: sha256(String(error?.message || error)) };
+    readyChild = null;
+    readyRequestId = null;
+  });
+  child.once("close", (exitCode, signal) => {
+    lastReadyResult = { requestId: request.requestId, exitCode, signal: signal || null, completedAt: new Date().toISOString() };
+    readyChild = null;
+    readyRequestId = null;
+  });
+};
 
 while (true) {
   const currentFd = fs.fstatSync(fd);
@@ -197,7 +254,7 @@ while (true) {
         && requestStat.uid === process.getuid() && (requestStat.mode & 0o077) === 0 && requestStat.size <= 64 * 1024;
       if (validPrivateFile) request = JSON.parse(fs.readFileSync(recoveryRequestPath, "utf8"));
     } catch { /* malformed requests are quarantined while the lock remains held */ }
-    const authorized = !recoveryChild && isAuthorizedFenceGuardianRecovery({
+    const authorized = !recoveryChild && !readyChild && isAuthorizedFenceGuardianRecovery({
       request,
       validPrivateFile,
       fenceTokenSha256: tokenSha256,
@@ -206,7 +263,27 @@ while (true) {
       nowMs: Date.now(),
     });
     if (authorized) startRecovery(request);
-    else quarantineRecoveryRequest(recoveryChild ? "Fence recovery already running" : "Fence recovery request is invalid");
+    else quarantineRecoveryRequest(recoveryChild || readyChild ? "Fence child operation already running" : "Fence recovery request is invalid");
+  }
+  if (fs.existsSync(readyRequestPath)) {
+    let request = null;
+    let validPrivateFile = false;
+    try {
+      const requestStat = fs.lstatSync(readyRequestPath);
+      validPrivateFile = requestStat.isFile() && !requestStat.isSymbolicLink() && requestStat.nlink === 1
+        && requestStat.uid === process.getuid() && (requestStat.mode & 0o077) === 0 && requestStat.size <= 64 * 1024;
+      if (validPrivateFile) request = JSON.parse(fs.readFileSync(readyRequestPath, "utf8"));
+    } catch { /* malformed requests are quarantined while the lock remains held */ }
+    const authorized = !recoveryChild && !readyChild && isAuthorizedFenceGuardianReadyFinalization({
+      request,
+      validPrivateFile,
+      fenceTokenSha256: tokenSha256,
+      guardianPid: process.pid,
+      processStartIdentity,
+      nowMs: Date.now(),
+    });
+    if (authorized) startReadyFinalization(request);
+    else quarantineReadyRequest(recoveryChild || readyChild ? "Fence child operation already running" : "Fence READY request is invalid");
   }
   if (fs.existsSync(releasePath)) {
     let release = null;
@@ -218,7 +295,7 @@ while (true) {
       if (validPrivateFile) release = JSON.parse(fs.readFileSync(releasePath, "utf8"));
     } catch { /* malformed requests are quarantined while the lock remains held */ }
     const nowMs = Date.now();
-    const authorized = !recoveryChild
+    const authorized = !recoveryChild && !readyChild
       && isAuthorizedFenceGuardianRelease({ release, validPrivateFile, fenceTokenSha256: tokenSha256, nowMs });
     if (authorized) process.exit(0);
     quarantineReleaseRequest("Fence release request is invalid");
