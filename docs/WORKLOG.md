@@ -1829,3 +1829,10 @@
   rehearsals use `--tmpfs /tmp:mode=1777,exec`; `noexec` correctly fails with EACCES,
   not a skipped/PASS test. Fixtures remain private and are removed after each test.
 - This is local test-only correction, not a new CI success, install or activation.
+
+## 2026-09-05 — Subscription CREATE preflight (local candidate)
+
+- Prepared a narrow three-function candidate from fresh live SHA `46cf684fce5017e5ff4c5add22e918cfde92d404b651b416b6fdebd30275504a`; wider main/DEV subscription sources remain separate.
+- Known subscription availability/policy/daily-limit failures are checked before Viva exercise creation using existing availability rules. Real-exercise verification remains mandatory; preflight performs no booking, activation or Mongo writes.
+- Late failures carry exact reconciliation identity; no new automatic deletion and no historical repair. The GET-empty/DELETE race requires a provider atomic contract before destructive compensation can be introduced.
+- Preparation, limits and executable local acceptance commands: `docs/SUBSCRIPTION_CREATE_PREFLIGHT_2026-09-05.md`. Production unchanged; provider/browser booking proof NOT_RUN.
