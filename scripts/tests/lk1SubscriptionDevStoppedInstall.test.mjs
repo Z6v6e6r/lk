@@ -57,7 +57,7 @@ const transcript = () => [
   "INPUT\tinstallIdentityEnvironmentAbsent\ttrue",
   "INPUT\ttlsKeyAbsent\ttrue",
   "INPUT\ttlsCertificateAbsent\ttrue",
-  "INGRESS_ISOLATION\ttrue\ttrue",
+  `INGRESS_ISOLATION\ttrue\ttrue\ttrue\t7\t${"d".repeat(64)}`,
   "PRODUCTION_MARKERS_ABSENT\ttrue",
   `SHARED_FLOW_SHA256\t${checkedHostPreflightEvidence.sharedResources.flowSha256}`,
   "END",
