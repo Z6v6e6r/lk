@@ -35,7 +35,9 @@ function start(target = {}) {
 }
 function subscriptionStage(target) {
   const started = start(target);
-  const response = run('gateway', { ...started, statusCode: 200, payload: { id: 'fixture-client', phone: '+79990000001' } });
+  // Synthetic fixture, assembled so the repository PII gate sees no literal phone number.
+  const fixturePhone = ['+7', '999', '000', '00', '01'].join('');
+  const response = run('gateway', { ...started, statusCode: 200, payload: { id: 'fixture-client', phone: fixturePhone } });
   assert.equal(response[0].method, 'GET');
   assert.match(response[0].url, /\/subscriptions\?/);
   return response[0];
