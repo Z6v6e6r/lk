@@ -2107,6 +2107,113 @@ function buildPiterRows(count: number) {
   }))];
 }
 
+function quotaLedger(newPaid = 0) {
+  return { ...buildPiterRows(41)[0], schemaVersion: 2, quotaAdjustment: 9,
+    paidCount: 41 + newPaid, takenCount: 41 + newPaid,
+    reservations: Array.from({ length: newPaid }, (_, i) => ({
+      paymentRef: `quota-paid-${i}`, transactionId: `quota-tx-${i}`, state: "PAID",
+    })) };
+}
+
+function quotaPurchaseContext() {
+  const productId = PITER_PRODUCT_GLOBALS.summer_subscription_piter_friendship_product_id;
+  return { step: "piter_ledger_find", counterKey: "piter_friendship", inventoryId: "piter_friendship_12m_2026_v1",
+    paymentRef: "quota-new", clientPhone: "79990000000", clientId: null, totalLimit: 400, batchSize: 100,
+    providerProductCostMinor: 5680000, providerPayload: { products: [{ id: productId, discount: 3700000 }] },
+    tiers: [1980000, 2380000, 3680000, 5680000].map(priceMinor => ({ productId, productName: "Питер", priceMinor, providerProductCostMinor: 5680000 })) };
+}
+
+test("Piter V2 quota starts at 50/100 with 41 real payments and advances tiers consistently", () => {
+  const prepared = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",
+    { req: { query: { counterKey: "piter_friendship" } } }, PITER_PRODUCT_GLOBALS) as unknown[];
+  for (const [newPaid, remaining, batch, price] of [[0, 50, 1, 1980000], [1, 49, 1, 1980000], [49, 1, 1, 1980000], [50, 100, 2, 2380000], [349, 1, 4, 5680000]]) {
+    const ledger = quotaLedger(newPaid);
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_status_response.js",
+      { _summerSubscriptionCtx: structuredClone(asRecord(prepared[0])._summerSubscriptionCtx), payload: [ledger] }, PITER_PRODUCT_GLOBALS) as unknown[];
+    const status = asRecord(asRecord(out[0]).payload);
+    assert.equal(status.paidCount, 41 + newPaid);
+    assert.equal(status.quotaAdjustment, 9);
+    assert.equal(status.batchRemainingCount, remaining);
+    assert.equal(status.batchIndex, batch);
+    assert.equal(status.priceMinor, price);
+    assert.equal(status.canPurchase, true);
+    const reserve = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+      { _summerSubscriptionCtx: quotaPurchaseContext(), payload: [ledger] }) as unknown[];
+    const ctx = asRecord(asRecord(reserve[1])._summerSubscriptionCtx);
+    assert.equal(ctx.batchRemainingBefore, remaining);
+    assert.equal(ctx.batchIndex, batch);
+    assert.equal(ctx.priceMinor, price);
+    const args = asRecord(reserve[1]).payload as unknown[];
+    assert.equal(asRecord(args[0]).schemaVersion, 2);
+    assert.equal(asRecord(args[0]).quotaAdjustment, 9);
+    assert.equal(asRecord(asRecord(args[1]).$inc).takenCount, 1);
+  }
+});
+
+test("Piter V2 rejects quota tampering and overselling; final-slot CAS still binds revision", () => {
+  for (const ledger of [quotaLedger(350), { ...quotaLedger(), quotaAdjustment: 8 },
+    { ...quotaLedger(), quotaAdjustment: "9" }, { ...quotaLedger(), schemaVersion: 1 }]) {
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+      { _summerSubscriptionCtx: quotaPurchaseContext(), payload: [ledger] }) as unknown[];
+    assert.equal(out[1], null); assert.equal(out[4], null); assert.ok(out[3]);
+  }
+  const last = quotaLedger(349);
+  const outputs = ["quota-a", "quota-b"].map(paymentRef => runNodeRedFunction(
+    "scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    { _summerSubscriptionCtx: { ...quotaPurchaseContext(), paymentRef }, payload: [last] }) as unknown[]);
+  for (const out of outputs) {
+    const filter = asRecord((asRecord(out[1]).payload as unknown[])[0]);
+    assert.equal(filter.revision, last.revision); assert.equal(filter.takenCount, 390);
+    assert.equal(filter.quotaAdjustment, 9);
+  }
+});
+
+test("Piter V2 carries exact quota custody through dispatch and provider-result writes", () => {
+  const reserved = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+    { _summerSubscriptionCtx: quotaPurchaseContext(), payload: [quotaLedger()] }) as unknown[];
+  const captured = asRecord(asRecord(reserved[1])._summerSubscriptionCtx);
+  assert.equal(captured.ledgerSchemaVersion, 2);
+  assert.equal(captured.ledgerQuotaAdjustment, 9);
+  for (const step of ["piter_dispatch_claim", "piter_provider_result"]) {
+    for (const v2 of [false, true]) {
+      const context = { ...quotaPurchaseContext(), step,
+        ...(v2 ? { ledgerSchemaVersion: 2, ledgerQuotaAdjustment: 9 } : {}) };
+      const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+        { _summerSubscriptionCtx: context }) as unknown[];
+      const filter = asRecord((asRecord(out[1]).payload as unknown[])[0]);
+      assert.equal(filter.schemaVersion, v2 ? 2 : 1);
+      assert.deepEqual(filter.quotaAdjustment, v2 ? 9 : { $exists: false });
+      const failed = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+        { _summerSubscriptionCtx: asRecord(out[1])._summerSubscriptionCtx,
+          payload: { acknowledged: true, matchedCount: 0, modifiedCount: 0, upsertedCount: 0, upsertedId: null } }) as unknown[];
+      assert.equal(failed[4], null);
+      assert.ok(failed[3]);
+    }
+    const invalid = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+      { _summerSubscriptionCtx: { ...quotaPurchaseContext(), step, ledgerSchemaVersion: 2 } }) as unknown[];
+    assert.equal(invalid[1], null); assert.equal(invalid[4], null); assert.ok(invalid[3]);
+  }
+});
+
+test("Piter V2 failed confirmation releases a reservation without changing the quota adjustment", () => {
+  const ledger = { ...quotaLedger(), reservedCount: 1, takenCount: 42,
+    reservations: [{ paymentRef: "quota-new", requestFingerprint: "quota-fp", intentFingerprint: "quota-intent",
+      transactionId: "quota-tx", state: "PAYMENT_PENDING", priceMinor: 1980000 }] };
+  for (const nextStatus of ["FAILED", "PAID"]) {
+    const out = runNodeRedFunction("scripts/nodered_games_nodes/fn_tournament_subscription_piter_atomic_router.js",
+      { payload: [ledger], _summerSubscriptionCtx: { ...quotaPurchaseContext(), step: "piter_confirm_validate",
+        requestFingerprint: "quota-fp", transactionId: "quota-tx", expectedAmountMinor: 1980000,
+        confirmResult: { nextStatus, paid: nextStatus === "PAID", transactionId: "quota-tx" } } }) as unknown[];
+    const args = asRecord(out[1]).payload as unknown[];
+    assert.equal(asRecord(args[0]).schemaVersion, 2);
+    assert.equal(asRecord(args[0]).quotaAdjustment, 9);
+    const inc = asRecord(asRecord(args[1]).$inc);
+    assert.equal(inc.reservedCount, -1);
+    assert.equal(inc.quotaAdjustment, undefined);
+    assert.equal(inc.takenCount, nextStatus === "FAILED" ? -1 : undefined);
+  }
+});
+
 test("Piter status uses a dedicated 400-unit inventory and server-side batches of 100", () => {
   const prepared = runNodeRedFunction(
     "scripts/nodered_games_nodes/fn_tournament_subscription_status_prepare.js",

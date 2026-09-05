@@ -16,6 +16,7 @@ import {
 import {
   buildPiterAtomicLedgerPlan,
   deriveLiveLegacyBaseline,
+  validateAtomicLedgerShape,
 } from "../lib/piterAtomicLedgerOperations.mjs";
 import { parseArgs as parsePacketArgs, preparePacket } from "../prepare_piter_atomic_activation_packet.mjs";
 import {
@@ -127,11 +128,16 @@ const evidence = (rows = [paidRow()], transactions = [providerTransaction()]) =>
 
 const packet = () => buildPiterAtomicActivationPacket(evidence());
 
-const createSeedApplyHarness = ({ alreadyApplied = false, ambiguousWrite = false, now } = {}) => {
+const createSeedApplyHarness = ({ alreadyApplied = false, ambiguousWrite = false, now,
+  launchQuota = false, postWriteTransform = (document) => document } = {}) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "piter-ledger-harness-"));
   const flowBytes = Buffer.from("exact reviewed flow\n");
   const input = evidence();
   input.candidateReport.candidateSha256 = sha256(flowBytes);
+  if (launchQuota) {
+    input.initialBatchRemaining = 50;
+    input.candidateReport.launchQuotaSchemaVersion = 2;
+  }
   const built = buildPiterAtomicActivationPacket(input);
   const packetFile = path.join(root, "activation.packet.json");
   const activeFlowFile = path.join(root, "flows.json");
@@ -145,7 +151,7 @@ const createSeedApplyHarness = ({ alreadyApplied = false, ambiguousWrite = false
     find() { return { toArray: async () => documents }; },
     async insertOne(document) {
       writeCalls += 1;
-      documents = [...documents, document];
+      documents = [...documents, postWriteTransform(document)];
       if (ambiguousWrite) throw new Error("simulated network timeout after commit");
       return { acknowledged: true, insertedId: document._id };
     },
@@ -292,6 +298,39 @@ test("activation packet requires exact source, pagination, product cost, and act
       values: [{ key: PITER_ATOMIC_ACTIVATION.productBindingKey, value: "different-product" }],
     },
   }), /product binding mismatch/);
+});
+
+test("explicit 50-of-100 quota is digest-bound and never fabricates paid records", () => {
+  const data = evidence();
+  const built = buildPiterAtomicActivationPacket({ ...data, initialBatchRemaining: 50,
+    candidateReport: { ...data.candidateReport, launchQuotaSchemaVersion: 2 } });
+  const sentinel = buildPiterAtomicSentinel(built, NOW.toISOString());
+  assert.equal(built.formatVersion, 2);
+  assert.equal(packet().formatVersion, 1);
+  const downgraded = structuredClone(built);
+  downgraded.formatVersion = 1;
+  delete downgraded.contractDigest; downgraded.contractDigest = sha256(stableJson(downgraded));
+  assert.throws(() => validatePiterAtomicActivationPacket(downgraded, { now: NOW }), /identity mismatch/);
+  assert.equal(sentinel.schemaVersion, 2);
+  assert.equal(sentinel.paidCount, 1);
+  assert.equal(sentinel.takenCount, 1);
+  assert.equal(sentinel.quotaAdjustment, 49);
+  assert.equal(sentinel.takenCount + sentinel.quotaAdjustment, 50);
+  assert.deepEqual(sentinel.legacyPaymentRefs, ["pay-ref-1"]);
+  assert.doesNotThrow(() => validateAtomicLedgerShape(sentinel));
+  const plan = buildPiterAtomicLedgerPlan({ action: "activate", packet: built, documents: [paidRow(), sentinel],
+    activeFlowSha256: FLOW_SHA, expectedRevision: 0, now: NOW });
+  assert.equal(plan.mutation.filter.schemaVersion, 2);
+  assert.equal(plan.mutation.filter.quotaAdjustment, 49);
+  assert.equal(plan.mutation.update.$set.ready, true);
+  assert.throws(() => validateAtomicLedgerShape({ ...sentinel, quotaAdjustment: 48 }), /quota invariant/);
+  assert.throws(() => validateAtomicLedgerShape({ ...sentinel, schemaVersion: 1 }), /quota invariant/);
+  assert.throws(() => buildPiterAtomicActivationPacket({ ...data, initialBatchRemaining: 50 }), /V2 candidate/);
+  const tampered = structuredClone(built); tampered.launchQuota.adjustment = 48;
+  delete tampered.contractDigest; tampered.contractDigest = sha256(stableJson(tampered));
+  assert.throws(() => validatePiterAtomicActivationPacket(tampered, { now: NOW }), /launch quota mismatch/);
+  assert.throws(() => buildPiterAtomicLedgerPlan({ action: "activate", packet: built,
+    documents: [paidRow(), { ...sentinel, quotaAdjustment: 48 }], activeFlowSha256: FLOW_SHA, expectedRevision: 0, now: NOW }), /quota|custody/);
 });
 
 test("ledger plan seeds inactive, activates by exact CAS, and deactivates without deleting attempts", () => {
@@ -531,7 +570,21 @@ test("guarded seed recovers an ambiguous ACK only from the exact majority readba
   assert.equal(harness.writeCalls, 1);
 });
 
-test("deactivate recovery accepts a valid in-flight confirmation after the stop CAS", async () => {
+test("quota seed refuses ambiguous readback with changed schema or quota", async () => {
+  for (const postWriteTransform of [
+    (doc) => ({ ...doc, schemaVersion: 1, quotaAdjustment: undefined }),
+    (doc) => { const copy = { ...doc }; delete copy.quotaAdjustment; return copy; },
+    (doc) => ({ ...doc, quotaAdjustment: 48 }),
+  ]) {
+    const harness = createSeedApplyHarness({ launchQuota: true, ambiguousWrite: true, postWriteTransform });
+    await assert.rejects(() => runLedgerOperation(harness.options, harness.dependencies));
+    assert.equal(harness.writeCalls, 1);
+  }
+  const exact = createSeedApplyHarness({ launchQuota: true, ambiguousWrite: true });
+  assert.equal((await runLedgerOperation(exact.options, exact.dependencies)).ambiguousWriteRecovered, true);
+});
+
+for (const quotaDrift of [false, true]) test(`deactivate recovery preserves quota custody (drift=${quotaDrift})`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "piter-deactivate-race-"));
   const flowBytes = Buffer.from("deactivate reviewed flow\n");
   const input = evidence();
@@ -563,6 +616,7 @@ test("deactivate recovery accepts a valid in-flight confirmation after the stop 
       };
       documents = [{
         ...stopped,
+        ...(quotaDrift ? { schemaVersion: 2, quotaAdjustment: 49 } : {}),
         revision: stopped.revision + 1,
         paidCount: 2,
         reservedCount: 0,
@@ -577,7 +631,7 @@ test("deactivate recovery accepts a valid in-flight confirmation after the stop 
   const client = { db: (name) => name === "admin"
     ? { command: async () => MONGO_IDENTITY }
     : { collection: () => collection } };
-  const result = await runLedgerOperation({
+  const pending = runLedgerOperation({
     action: "deactivate", apply: true, packetFile, activeFlowFile, expectedRevision: 8,
     expectedContractDigest: built.contractDigest, backupDir: path.join(root, "backup"),
     reason: "manual safety stop",
@@ -599,6 +653,11 @@ test("deactivate recovery accepts a valid in-flight confirmation after the stop 
       LK_PITER_ATOMIC_EXPECTED_MONGO_IDENTITY_SHA256: MONGO_IDENTITY_SHA,
     },
   });
+  if (quotaDrift) {
+    await assert.rejects(() => pending, /outcome is unresolved/);
+    return;
+  }
+  const result = await pending;
   assert.equal(result.ambiguousWriteRecovered, true);
   assert.equal(result.postReady, false);
   assert.equal(result.postRevision, 10);

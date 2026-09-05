@@ -45,7 +45,7 @@ export const UNBOUND_LK1_SOURCE_AMENDMENTS = Object.freeze([
   }),
   Object.freeze({
     id: "c165e43eba668c25",
-    sourceSha256: "e81699c4c490b9883cacf104c751990c0b2922ce86d1f607889fb66991fedb53",
+    sourceSha256: "52e1d932916a8ee139842c4ff861dba38cf4602a3e392d4e29997d796973f40a",
     reason: "PITER_ATOMIC_SALES_NOT_COMPOSED",
   }),
   Object.freeze({

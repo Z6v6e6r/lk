@@ -23,6 +23,7 @@ Usage:
     --binding-file /absolute/private/nodered-binding-evidence.json \\
     [--reconciliation-packet /absolute/private/reconciliation.packet.json] \\
     [--reconciliation-receipt /absolute/private/apply-receipt.json] \\
+    [--initial-batch-remaining 50] \\
     --candidate-report /absolute/fresh-live-workspace/build-piter-atomic/report.json \\
     --product-id <exact-viva-product-id> \\
     --output-dir /absolute/new/private/output-directory
@@ -41,6 +42,7 @@ const valueFlags = new Map([
   ["--reconciliation-receipt", "reconciliationReceipt"],
   ["--product-id", "productId"],
   ["--output-dir", "outputDir"],
+  ["--initial-batch-remaining", "initialBatchRemaining"],
 ]);
 
 const toStr = (value) => {
@@ -68,12 +70,16 @@ export function parseArgs(argv) {
   }
   if (options.help) return options;
   for (const [flag, key] of valueFlags) {
-    if (key === "reconciliationPacket" || key === "reconciliationReceipt") continue;
+    if (key === "reconciliationPacket" || key === "reconciliationReceipt" || key === "initialBatchRemaining") continue;
     options[key] = toStr(options[key]);
     if (!options[key]) throw new Error(`${flag} is required`);
   }
   options.reconciliationPacket = toStr(options.reconciliationPacket);
   options.reconciliationReceipt = toStr(options.reconciliationReceipt);
+  if (options.initialBatchRemaining !== undefined && options.initialBatchRemaining !== "50") {
+    throw new Error("--initial-batch-remaining supports only the approved value 50");
+  }
+  options.initialBatchRemaining = options.initialBatchRemaining === "50" ? 50 : null;
   for (const key of ["ledgerFile", "providerFile", "productFile", "bindingFile", "candidateReport", "reconciliationPacket", "reconciliationReceipt", "outputDir"]) {
     if (options[key] && !path.isAbsolute(options[key])) throw new Error(`${key} must be an absolute path`);
   }
@@ -123,6 +129,7 @@ export function preparePacket(options, dependencies = {}) {
       ? readProtectedJson(options.reconciliationReceipt, "reconciliation apply receipt", fsImpl)
       : null,
     productId: options.productId,
+    initialBatchRemaining: options.initialBatchRemaining ?? null,
     createdAt,
   });
   const report = redactPiterAtomicActivationPacket(packet);

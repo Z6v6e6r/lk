@@ -16,7 +16,8 @@ export const PITER_ATOMIC_TOPOLOGY_IDS = Object.freeze({
   mongoClient: "4e820638cc39c730",
 });
 
-export const PITER_ATOMIC_ROUTER_SHA256 = "fe097554fb070cbf7e076ee907c90f4448317424650d7804eb2151b2d9372a6c";
+// Source contract for quota-aware candidates; not a binding to an installed flow.
+export const PITER_ATOMIC_ROUTER_SHA256 = "7283aec32b1a9e9b3c3ae0d76bc14d1214c4b2a27b9d4a8821619e61149deaf4";
 export const PITER_TOPOLOGY_DEPENDENT_PURCHASE_ROUTER_SHA256 = "28cda3933e4ec72690e451a36e883e22157f8c6624cb23a0f12f1f8b9f6056f7";
 export const PITER_ATOMIC_BINDING_INITIALIZER_SOURCE = `const key = "summer_subscription_piter_friendship_product_id";
 const expectedProductId = "8bf334ba-3050-4017-b40a-7eef2db1eb16";

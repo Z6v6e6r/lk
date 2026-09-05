@@ -728,8 +728,14 @@ const piterLedgerRowsValid = Array.isArray(piterLedger?.legacyPaymentRefs)
   && piterLedger?.reservedCount === piterReservations.filter((item) => (
     ["CLAIMED", "DISPATCHING", "PAYMENT_PENDING", "PROVIDER_UNKNOWN"].includes(item?.state)
   )).length;
+const piterQuotaAdjustment = piterLedger?.schemaVersion === 2 ? piterLedger.quotaAdjustment : 0;
+const piterQuotaValid = Number.isSafeInteger(piterQuotaAdjustment) && piterQuotaAdjustment >= 0
+  && (piterLedger?.schemaVersion === 2
+    ? piterLegacyRefs.length + piterQuotaAdjustment === 50
+    : !Object.prototype.hasOwnProperty.call(piterLedger || {}, "quotaAdjustment"));
 if (piterState && piterLedger?.ready === true
-  && piterLedger.schemaVersion === 1
+  && [1, 2].includes(piterLedger.schemaVersion)
+  && piterQuotaValid
   && Number.isInteger(piterLedger.revision)
   && piterLedger.revision >= 0
   && Number.isInteger(piterLedger.paidCount)
@@ -739,11 +745,12 @@ if (piterState && piterLedger?.ready === true
   && Number.isInteger(piterLedger.takenCount)
   && piterLedger.takenCount >= 0
   && piterLedger.takenCount === piterLedger.paidCount + piterLedger.reservedCount
-  && piterLedger.takenCount <= piterState.totalLimit
+  && piterLedger.takenCount + piterQuotaAdjustment <= piterState.totalLimit
   && /^[a-f0-9]{64}$/.test(toStr(piterLedger.baselineDigest) || "")
   && Number.isFinite(Date.parse(toStr(piterLedger.baselineCapturedAt) || ""))
   && piterLedgerRowsValid) {
   piterState.paidCount = piterLedger.paidCount;
+  piterState.quotaAdjustment = piterQuotaAdjustment;
   piterState.reservedCount = piterLedger.reservedCount;
   piterState.takenCount = piterLedger.takenCount;
   piterState.remainingCount = Math.max(piterState.totalLimit - piterLedger.takenCount, 0);
@@ -873,7 +880,8 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
       state.paidCount = state.dailyDropActive ? state._dailyPaidCount : state.launchPaidCount;
       state.reservedCount = state.dailyDropActive ? state._dailyReservedCount : state.launchReservedCount;
     }
-    const inventoryTakenCount = state.paidCount + state.reservedCount;
+    const quotaAdjustment = state.counterKey === "piter_friendship" ? state.quotaAdjustment || 0 : 0;
+    const inventoryTakenCount = state.paidCount + state.reservedCount + quotaAdjustment;
     state.inventoryTotalLimit = state.totalLimit;
     state.inventoryPaidCount = state.paidCount;
     state.inventoryReservedCount = state.reservedCount;
@@ -887,7 +895,7 @@ const plansPayload = (singleCounter ? [selectedCounterKey] : countersOrder)
       state.paidCount = state._dailyPaidCount;
       state.reservedCount = state._dailyReservedCount;
     }
-    state.takenCount = state.paidCount + state.reservedCount;
+    state.takenCount = state.paidCount + state.reservedCount + quotaAdjustment;
     state.remainingCount = state.unlimited
       ? 0
       : state.dailyCapEnabled
@@ -994,6 +1002,7 @@ msg.payload = {
   paidCount: toInt(selectedCounter.paidCount, 0),
   reservedCount: toInt(selectedCounter.reservedCount, 0),
   takenCount: toInt(selectedCounter.takenCount, 0),
+  quotaAdjustment: toInt(selectedCounter.quotaAdjustment, 0),
   remainingCount: toInt(selectedCounter.remainingCount, 0),
   canPurchase: toBool(selectedCounter.canPurchase) ?? false,
   bindingReady: toBool(selectedCounter.bindingReady) ?? true,

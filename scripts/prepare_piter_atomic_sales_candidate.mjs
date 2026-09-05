@@ -93,6 +93,7 @@ fs.mkdirSync(buildDir, { mode: 0o700 });
 fs.writeFileSync(path.join(buildDir, "candidate.flow.json"), candidateBytes, { mode: 0o600, flag: "wx" });
 fs.writeFileSync(path.join(buildDir, "reviewed-flow.contract.json"), `${JSON.stringify(contract, null, 2)}\n`, { mode: 0o600, flag: "wx" });
 const report = {
+  launchQuotaSchemaVersion: 2,
   ok: true, deploymentId: DEPLOYMENT_ID, sourceSha256: contract.sourceSha256,
   candidateSha256: contract.candidateSha256, sourceNodeCount: contract.sourceNodeCount,
   candidateNodeCount: contract.candidateNodeCount, httpInputCount: contract.httpInputCount,

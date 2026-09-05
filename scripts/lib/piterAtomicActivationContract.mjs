@@ -597,6 +597,7 @@ export function buildPiterAtomicActivationPacket({
   candidateReport,
   reconciliationPacket = null,
   reconciliationApplyReceipt = null,
+  initialBatchRemaining = null,
   productId,
   createdAt = new Date().toISOString(),
   maxEvidenceAgeMs = PITER_ATOMIC_ACTIVATION.maxEvidenceAgeMs,
@@ -649,6 +650,12 @@ export function buildPiterAtomicActivationPacket({
     providerCapturedAt: provider.capturedAt,
     reconciliationReceipt: reconciliation,
   });
+  let launchQuota = null;
+  if (initialBatchRemaining !== null) {
+    if (initialBatchRemaining !== 50 || candidateReport.launchQuotaSchemaVersion !== 2
+      || baseline.paidCount > 50) fail("50-of-100 launch quota requires a V2 candidate and at most 50 historical paid sales");
+    launchQuota = { initialBatchRemaining: 50, batchSize: 100, adjustment: 50 - baseline.paidCount };
+  }
   const expiresAt = new Date(Math.min(
     Date.parse(ledger.capturedAt),
     Date.parse(provider.capturedAt),
@@ -657,7 +664,7 @@ export function buildPiterAtomicActivationPacket({
   ) + maxEvidenceAgeMs).toISOString();
   if (Date.parse(expiresAt) <= created.timestamp) fail("evidence expires before packet creation");
   const packet = {
-    formatVersion: 1,
+    formatVersion: launchQuota ? 2 : 1,
     kind: PITER_ATOMIC_ACTIVATION.kind,
     createdAt: created.text,
     expiresAt,
@@ -691,13 +698,15 @@ export function buildPiterAtomicActivationPacket({
     },
     reconciliation,
     baseline,
+    ...(launchQuota ? { launchQuota } : {}),
   };
   return { ...packet, contractDigest: sha256(stableJson(packet)) };
 }
 
 export function validatePiterAtomicActivationPacket(packet, { now = new Date(), allowExpired = false } = {}) {
   if (!packet || typeof packet !== "object" || Array.isArray(packet)) fail("packet object is required");
-  if (packet.formatVersion !== 1 || packet.kind !== PITER_ATOMIC_ACTIVATION.kind) fail("packet identity mismatch");
+  if (packet.formatVersion !== (packet.launchQuota !== undefined ? 2 : 1)
+    || packet.kind !== PITER_ATOMIC_ACTIVATION.kind) fail("packet identity mismatch");
   const nowMs = now instanceof Date ? now.getTime() : Date.parse(String(now));
   if (!Number.isFinite(nowMs)) fail("validation time is invalid");
   const created = parseIso(packet.createdAt, "packet.createdAt");
@@ -750,6 +759,10 @@ export function validatePiterAtomicActivationPacket(packet, { now = new Date(), 
   })) fail("packet Node-RED product binding mismatch");
   const entries = packet.baseline?.entries;
   if (!Array.isArray(entries)) fail("packet baseline entries are required");
+  if (packet.launchQuota !== undefined && stableJson(packet.launchQuota) !== stableJson({
+    initialBatchRemaining: 50, batchSize: 100, adjustment: 50 - entries.length,
+  })) fail("packet launch quota mismatch");
+  if (packet.launchQuota && entries.length > 50) fail("packet launch quota cannot erase historical sales");
   if (!SHA256_PATTERN.test(String(packet.baseline?.legacyLedgerDigest || ""))) {
     fail("packet legacy ledger digest is invalid");
   }
@@ -799,7 +812,8 @@ export function buildPiterAtomicSentinel(packet, createdAt = new Date().toISOStr
   return {
     _id: packet.target.ledgerId,
     documentType: "PITER_ATOMIC_INVENTORY_LEDGER",
-    schemaVersion: 1,
+    schemaVersion: packet.launchQuota ? 2 : 1,
+    ...(packet.launchQuota ? { quotaAdjustment: packet.launchQuota.adjustment } : {}),
     inventoryId: packet.target.inventoryId,
     counterKey: packet.target.counterKey,
     ready: false,
@@ -833,6 +847,7 @@ export function redactPiterAtomicActivationPacket(packet) {
     productCostMinor: packet.product.costMinor,
     paidCount: packet.baseline.paidCount,
     baselineDigest: packet.baseline.digest,
+    launchQuota: packet.launchQuota ?? null,
     providerOnlyFreeIssueCount: packet.evidence.providerOnlyFreeIssueCount ?? 0,
     legacyPaymentRefHashes: packet.baseline.legacyPaymentRefs.map(hashId),
     contractDigest: packet.contractDigest,

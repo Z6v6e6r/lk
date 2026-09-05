@@ -338,6 +338,16 @@ const exactPostcondition = ({ action, after, beforePlan, packet, expectedRevisio
   if (sentinel.activationContractDigest !== packet.contractDigest
     || sentinel.baselineDigest !== packet.baseline.digest
     || stableJson(sentinel.legacyPaymentRefs) !== stableJson(packet.baseline.legacyPaymentRefs)) return null;
+  if (action === "seed" || action === "activate") {
+    if (!shapeValid || sentinel.schemaVersion !== (packet.launchQuota ? 2 : 1)
+      || (packet.launchQuota ? sentinel.quotaAdjustment !== packet.launchQuota.adjustment
+        : Object.hasOwn(sentinel, "quotaAdjustment"))) return null;
+  } else {
+    const custody = beforePlan.preDeactivateQuotaCustody;
+    if (!custody || sentinel.schemaVersion !== custody.schemaVersion
+      || Object.hasOwn(sentinel, "quotaAdjustment") !== custody.hasQuotaAdjustment
+      || sentinel.quotaAdjustment !== custody.quotaAdjustment) return null;
+  }
   if (action === "seed") {
     return sentinel.ready === false && sentinel.revision === 0
       && sentinel.reservations.length === 0 && sentinel.reservedCount === 0

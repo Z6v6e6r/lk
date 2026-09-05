@@ -101,7 +101,7 @@ export function validateAtomicLedgerCustody(ledger) {
   if (!ledger || typeof ledger !== "object" || Array.isArray(ledger)) fail("atomic sentinel is missing");
   if (ledger._id !== PITER_ATOMIC_ACTIVATION.ledgerId
     || ledger.documentType !== "PITER_ATOMIC_INVENTORY_LEDGER"
-    || ledger.schemaVersion !== 1
+    || ![1, 2].includes(ledger.schemaVersion)
     || typeof ledger.ready !== "boolean"
     || !Number.isInteger(ledger.revision) || ledger.revision < 0
     || !Number.isInteger(ledger.paidCount) || ledger.paidCount < 0
@@ -116,6 +116,11 @@ export function validateAtomicLedgerCustody(ledger) {
 
 export function validateAtomicLedgerShape(ledger, totalLimit = PITER_ATOMIC_ACTIVATION.totalLimit) {
   validateAtomicLedgerCustody(ledger);
+  const quotaAdjustment = ledger.schemaVersion === 2 ? ledger.quotaAdjustment : 0;
+  if ((ledger.schemaVersion === 1 && Object.hasOwn(ledger, "quotaAdjustment"))
+    || !Number.isSafeInteger(quotaAdjustment) || quotaAdjustment < 0
+    || (ledger.schemaVersion === 2 && ledger.legacyPaymentRefs.length + quotaAdjustment !== 50)
+    || ledger.takenCount + quotaAdjustment > totalLimit) fail("atomic launch quota invariant mismatch");
   if (ledger.takenCount !== ledger.paidCount + ledger.reservedCount || ledger.takenCount > totalLimit) {
     fail("atomic sentinel invariant mismatch");
   }
@@ -153,6 +158,8 @@ const assertExpectedRevision = (value) => {
 
 const hasExactPacketCustody = (ledger, packet) => (
   ledger?.activationContractDigest === packet.contractDigest
+  && ledger?.schemaVersion === (packet.launchQuota ? 2 : 1)
+  && (packet.launchQuota ? ledger?.quotaAdjustment === packet.launchQuota.adjustment : !Object.hasOwn(ledger, "quotaAdjustment"))
   && ledger?.baselineDigest === packet.baseline.digest
   && stableJson(ledger?.legacyPaymentRefs) === stableJson(packet.baseline.legacyPaymentRefs)
 );
@@ -293,6 +300,8 @@ export function buildPiterAtomicLedgerPlan({
           revision: expectedRevision,
           activationContractDigest: packet.contractDigest,
           baselineDigest: packet.baseline.digest,
+          schemaVersion: packet.launchQuota ? 2 : 1,
+          quotaAdjustment: packet.launchQuota ? packet.launchQuota.adjustment : { $exists: false },
           paidCount: packet.baseline.paidCount,
           reservedCount: 0,
           takenCount: packet.baseline.paidCount,
@@ -347,6 +356,8 @@ export function buildPiterAtomicLedgerPlan({
         revision: expectedRevision,
         activationContractDigest: packet.contractDigest,
         paidCount: ledger.paidCount,
+        schemaVersion: ledger.schemaVersion,
+        quotaAdjustment: ledger.schemaVersion === 2 ? ledger.quotaAdjustment : { $exists: false },
         reservedCount: ledger.reservedCount,
         takenCount: ledger.takenCount,
       },
@@ -364,6 +375,11 @@ export function buildPiterAtomicLedgerPlan({
     expectedRevision,
     baselineDigest: liveBaseline.digest,
     activeReservationCount: ledger.reservedCount,
+    preDeactivateQuotaCustody: {
+      schemaVersion: ledger.schemaVersion,
+      hasQuotaAdjustment: Object.hasOwn(ledger, "quotaAdjustment"),
+      quotaAdjustment: ledger.quotaAdjustment,
+    },
     preDeactivateCounts: {
       paidCount: ledger.paidCount,
       reservedCount: ledger.reservedCount,

@@ -78,7 +78,7 @@ const intentFingerprint = (ctx) => [
 const ACTIVE_RESERVATION_STATES = ["CLAIMED", "DISPATCHING", "PAYMENT_PENDING", "PROVIDER_UNKNOWN"];
 const ledgerIsStructurallyValid = (ledger, totalLimit) => {
   if (!(ledger && typeof ledger.ready === "boolean"
-    && ledger.schemaVersion === 1
+    && [1, 2].includes(ledger.schemaVersion)
     && Number.isInteger(ledger.revision) && ledger.revision >= 0
     && Number.isInteger(ledger.paidCount) && ledger.paidCount >= 0
     && Number.isInteger(ledger.reservedCount) && ledger.reservedCount >= 0
@@ -90,6 +90,11 @@ const ledgerIsStructurallyValid = (ledger, totalLimit) => {
     && Array.isArray(ledger.legacyPaymentRefs)
     && Array.isArray(ledger.reservations))) return false;
   const legacyRefs = ledger.legacyPaymentRefs.map(toStr);
+  const quotaAdjustment = ledger.schemaVersion === 2 ? ledger.quotaAdjustment : 0;
+  if ((ledger.schemaVersion === 1 && Object.prototype.hasOwnProperty.call(ledger, "quotaAdjustment"))
+    || !Number.isSafeInteger(quotaAdjustment) || quotaAdjustment < 0
+    || (ledger.schemaVersion === 2 && legacyRefs.length + quotaAdjustment !== 50)
+    || ledger.takenCount + quotaAdjustment > totalLimit) return false;
   const reservationRefs = ledger.reservations.map((item) => toStr(item?.paymentRef));
   if (legacyRefs.some((item) => !item) || reservationRefs.some((item) => !item)) return false;
   if (ledger.reservations.some((item) => ![
@@ -186,11 +191,21 @@ const finishConfirmProjection = () => {
   if (ctx.confirmResult?.reconcile === true) return [null, null, null, null, null];
   return response(200, ctx.confirmResult?.response || { ok: true, status: ctx.confirmResult?.nextStatus });
 };
+const quotaCustodyFilter = (ctx) => (ctx.ledgerSchemaVersion === 2
+  && (!Number.isSafeInteger(ctx.ledgerQuotaAdjustment) || ctx.ledgerQuotaAdjustment < 0)
+  ? null : {
+  schemaVersion: ctx.ledgerSchemaVersion ?? 1,
+  quotaAdjustment: ctx.ledgerSchemaVersion === 2
+    ? ctx.ledgerQuotaAdjustment : { $exists: false },
+});
 const dispatchClaim = (ctx) => {
+  const custody = quotaCustodyFilter(ctx);
+  if (!custody) return fail(503, "Состояние квоты изменилось", "PITER_ATOMIC_QUOTA_CUSTODY_INVALID");
   ctx.step = "piter_dispatch_ack";
   const nowIso = new Date().toISOString();
   return ledgerUpdate(ctx, {
     _id: LEDGER_ID, ready: true,
+    ...custody,
     reservations: { $elemMatch: { paymentRef: ctx.paymentRef, requestFingerprint: ctx.requestFingerprint, state: "CLAIMED" } },
   }, {
     $set: {
@@ -215,6 +230,8 @@ if (ctx.step === "piter_ledger_find") {
   if (!ledgerIsStructurallyValid(ledger, ctx.totalLimit)) {
     return fail(503, "Продажа Питера ещё не активирована", "PITER_ATOMIC_LEDGER_NOT_READY");
   }
+  ctx.ledgerSchemaVersion = ledger.schemaVersion;
+  ctx.ledgerQuotaAdjustment = ledger.schemaVersion === 2 ? ledger.quotaAdjustment : null;
   let requestFingerprint = fingerprint(ctx);
   const currentIntentFingerprint = intentFingerprint(ctx);
   if (ledger.legacyPaymentRefs.includes(ctx.paymentRef)) {
@@ -302,21 +319,22 @@ if (ctx.step === "piter_ledger_find") {
   if (!ledgerIsPurchaseReady(ledger, ctx.totalLimit)) {
     return fail(503, "Продажа Питера остановлена", "PITER_ATOMIC_LEDGER_NOT_READY");
   }
-  if (ledger.takenCount >= ctx.totalLimit) {
+  const quotaTakenCount = ledger.takenCount + (ledger.schemaVersion === 2 ? ledger.quotaAdjustment : 0);
+  if (quotaTakenCount >= ctx.totalLimit) {
     return fail(409, "Лимит абонементов исчерпан", "PITER_INVENTORY_EXHAUSTED", {
-      totalLimit: ctx.totalLimit, takenCount: ledger.takenCount,
+      totalLimit: ctx.totalLimit, takenCount: quotaTakenCount,
     });
   }
   const tiers = Array.isArray(ctx.tiers) ? ctx.tiers : [];
   const batchSize = Math.max(1, Math.floor(Number(ctx.batchSize) || 100));
-  const batchIndex = Math.max(1, Math.min(tiers.length || 1, Math.floor(ledger.takenCount / batchSize) + 1));
+  const batchIndex = Math.max(1, Math.min(tiers.length || 1, Math.floor(quotaTakenCount / batchSize) + 1));
   const activeTier = tiers[batchIndex - 1];
   if (!activeTier || !toStr(activeTier.productId) || !Number.isFinite(Number(activeTier.priceMinor))) {
     return fail(503, "Ценовая партия Питера не настроена", "PITER_ATOMIC_TIER_NOT_READY", { batchIndex });
   }
   ctx.batchSize = batchSize;
   ctx.batchIndex = batchIndex;
-  ctx.batchRemainingBefore = Math.max(0, batchSize - (ledger.takenCount - (batchIndex - 1) * batchSize));
+  ctx.batchRemainingBefore = Math.max(0, batchSize - (quotaTakenCount - (batchIndex - 1) * batchSize));
   const atomicProductId = toStr(activeTier.productId);
   const atomicProviderCostMinor = Math.max(0, Math.round(Number(activeTier.providerProductCostMinor)));
   const validatedProviderCostMinor = Math.max(0, Math.round(Number(ctx.providerProductCostMinor)));
@@ -331,7 +349,7 @@ if (ctx.step === "piter_ledger_find") {
   ctx.productCostMinor = atomicProviderCostMinor;
   ctx.discountMinor = ctx.productCostMinor - ctx.priceMinor;
   providerLine.discount = ctx.discountMinor;
-  ctx.remainingBefore = Math.max(0, ctx.totalLimit - ledger.takenCount);
+  ctx.remainingBefore = Math.max(0, ctx.totalLimit - quotaTakenCount);
   const nowIso = new Date().toISOString();
   ctx.ledgerRevision = ledger.revision;
   ctx.requestFingerprint = requestFingerprint;
@@ -359,6 +377,8 @@ if (ctx.step === "piter_ledger_find") {
   return ledgerUpdate(ctx, {
     _id: LEDGER_ID, ready: true, revision: ledger.revision,
     takenCount: ledger.takenCount,
+    schemaVersion: ledger.schemaVersion,
+    quotaAdjustment: ledger.schemaVersion === 2 ? ledger.quotaAdjustment : { $exists: false },
     $and: [
       { "reservations.paymentRef": { $ne: ctx.paymentRef } },
       { reservations: { $not: { $elemMatch: {
@@ -397,11 +417,14 @@ if (ctx.step === "piter_dispatch_ack") {
 }
 
 if (ctx.step === "piter_provider_result") {
+  const custody = quotaCustodyFilter(ctx);
+  if (!custody) return fail(503, "Состояние квоты изменилось", "PITER_ATOMIC_QUOTA_CUSTODY_INVALID");
   const result = ctx.providerResult || {};
   const nowIso = new Date().toISOString();
   ctx.step = "piter_provider_ledger_ack";
   const resultFilter = {
     _id: LEDGER_ID,
+    ...custody,
     $and: [{ reservations: { $elemMatch: {
       paymentRef: ctx.paymentRef, requestFingerprint: ctx.requestFingerprint, state: "DISPATCHING",
     } } }],
@@ -510,7 +533,8 @@ if (ctx.step === "piter_confirm_validate") {
   return ledgerUpdate(ctx, {
     _id: LEDGER_ID,
     ready: ledger.ready,
-    schemaVersion: 1,
+    schemaVersion: ledger.schemaVersion,
+    quotaAdjustment: ledger.schemaVersion === 2 ? ledger.quotaAdjustment : { $exists: false },
     revision: ledger.revision,
     paidCount: ledger.paidCount,
     reservedCount: ledger.reservedCount,
