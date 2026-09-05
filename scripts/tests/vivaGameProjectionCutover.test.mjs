@@ -2461,9 +2461,6 @@ test("the real guardian releases terminal fallback only after the exact takeover
           return result;
         };
       }
-      if (String(process.argv[1] || "").endsWith("recover_viva_game_projection_mongo_write_barrier.mjs")) {
-        process.once("beforeExit", () => process.kill(process.pid, "SIGSTOP"));
-      }
     `));
     guardian = spawn("/bin/bash", [
       "-c",
@@ -2477,7 +2474,7 @@ test("the real guardian releases terminal fallback only after the exact takeover
       readyPath,
       heartbeatPath,
     ], {
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
         VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER: "RECOVER_VIVA_GAME_PROJECTION_MONGO_WRITE_BARRIER_V1",
@@ -2486,6 +2483,16 @@ test("the real guardian releases terminal fallback only after the exact takeover
         PADLHUB_CUTOVER_FENCE_TOKEN: token,
         NODE_OPTIONS: `--import=${takeoverPauseHookPath}`,
       },
+    });
+    let guardianStdout = "";
+    let resolveTerminalOutput;
+    const terminalOutputObserved = new Promise((resolve) => { resolveTerminalOutput = resolve; });
+    guardian.stdout.on("data", (chunk) => {
+      guardianStdout += chunk.toString("utf8");
+      if (takeoverPid && guardianStdout.includes('"state":"RELEASED_TO_EXACT_PREIMAGE"')) {
+        try { process.kill(takeoverPid, "SIGKILL"); } catch { /* already stopped */ }
+        resolveTerminalOutput();
+      }
     });
     guardian.stderr.on("data", (chunk) => { guardianStderr += chunk.toString("utf8"); });
     for (let poll = 0; poll < 100 && (!fs.existsSync(receiptPath) || !fs.existsSync(heartbeatPath)); poll += 1) {
@@ -2658,16 +2665,14 @@ test("the real guardian releases terminal fallback only after the exact takeover
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     assert.equal(fs.existsSync(takeoverReceipt.heartbeatPath), true);
-    for (let poll = 0; poll < 250; poll += 1) {
-      const status = fs.readFileSync(`/proc/${recoveryPid}/status`, "utf8");
-      if (/^State:\s+T/m.test(status)) break;
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    assert.match(
-      fs.readFileSync(`/proc/${recoveryPid}/status`, "utf8"), /^State:\s+T/m, guardianStderr.slice(-1000),
-    );
-    process.kill(takeoverPid, "SIGKILL");
-    process.kill(recoveryPid, "SIGCONT");
+    await Promise.race([
+      terminalOutputObserved,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(canonicalJson({
+        message: "Recovery terminal output was not observed",
+        guardianStdout: guardianStdout.slice(-1000),
+        guardianStderr: guardianStderr.slice(-1000),
+      }))), 5_000)),
+    ]);
     for (let poll = 0; poll < 250; poll += 1) {
       try { process.kill(recoveryPid, 0); } catch (error) {
         if (error?.code === "ESRCH") break;
