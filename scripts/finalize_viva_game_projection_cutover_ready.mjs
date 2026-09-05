@@ -15,6 +15,7 @@ import { assertExactExecutorSources } from "./lib/vivaGameProjectionExecutorSour
 import { validateExactCutoverPacket } from "./lib/vivaGameProjectionCutoverPacketValidation.mjs";
 import { assertMongoWriteBarrier } from "./lib/vivaGameProjectionMongoWriteBarrier.mjs";
 import {
+  acceptFenceGuardianChildRequest,
   FENCE_READY_CONFIRMATION,
   isAuthorizedFenceGuardianReadyFinalization,
 } from "./lib/vivaGameProjectionFenceGuardian.mjs";
@@ -596,14 +597,24 @@ const parseArgs = (argv) => {
   };
 };
 
+export async function main(argv = process.argv.slice(2)) {
+  const options = parseArgs(argv);
+  let result;
+  if (process.env.PADLHUB_CUTOVER_GUARDIAN_READY_CHILD === "1") {
+    acceptFenceGuardianChildRequest({
+      childKind: "ready",
+      requestId: process.env.PADLHUB_CUTOVER_GUARDIAN_READY_REQUEST_ID,
+    });
+    result = await finalizeVivaGameProjectionCutoverReady(options, { authorizedByGuardian: true });
+  } else result = await requestReadyFinalizationFromGuardian(options);
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+  return result;
+}
+
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === SCRIPT_PATH) {
   if (process.argv.slice(2).includes("--help")) {
     process.stdout.write("Usage: node scripts/finalize_viva_game_projection_cutover_ready.mjs --execution-index /private/execution-index.json --expected-execution-index-sha256 SHA256 --coordinator-report /private/coordinator-report.json --expected-coordinator-report-sha256 SHA256\n");
-  } else (process.env.PADLHUB_CUTOVER_GUARDIAN_READY_CHILD === "1"
-    ? finalizeVivaGameProjectionCutoverReady(parseArgs(process.argv.slice(2)), { authorizedByGuardian: true })
-    : requestReadyFinalizationFromGuardian(parseArgs(process.argv.slice(2)))).then((result) => {
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-  }).catch((error) => {
+  } else main().catch((error) => {
     process.stderr.write(`${String(error?.message || error).replace(/mongodb(?:\+srv)?:\/\/[^\s]+/gi, "[REDACTED_MONGO_URI]").slice(0, 500)}\n`);
     process.exitCode = 1;
   });

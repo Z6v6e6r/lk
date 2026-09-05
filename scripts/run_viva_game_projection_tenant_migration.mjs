@@ -170,7 +170,7 @@ function writeDurableExclusive(filePath, bytes) {
   return sha256(readback);
 }
 
-export function recoverDurableTerminalReport(reportPath, mode, expectedReportSha256 = null) {
+export function recoverDurableTerminalReport(reportPath, mode, expectedReportSha256 = null, preparedReport = null) {
   if (!path.isAbsolute(String(reportPath || ""))) fail("Report path must be absolute");
   const requested = path.resolve(reportPath);
   const parent = ensurePrivateDirectory(path.dirname(requested), "Report directory");
@@ -182,20 +182,146 @@ export function recoverDurableTerminalReport(reportPath, mode, expectedReportSha
     || (typeof process.getuid === "function" && journalStat.uid !== process.getuid())) {
     fail("Report journal is not private and canonical");
   }
-  const names = fs.readdirSync(journalRoot).sort();
-  const entries = names.map((name, index) => {
+  let allNames = fs.readdirSync(journalRoot).sort();
+  for (const name of allNames.filter((entry) => !entry.startsWith("."))) {
+    recoverAtomicExclusivePublication(path.join(journalRoot, name), {
+      uid: typeof process.getuid === "function" ? process.getuid() : 0,
+      gid: typeof process.getgid === "function" ? process.getgid() : 0,
+      mode: 0o600,
+    });
+  }
+  allNames = fs.readdirSync(journalRoot).sort();
+  const names = allNames.filter((name) => !name.startsWith("."));
+  const entries = [];
+  let partialTerminalPath = null;
+  let partialIntentPath = null;
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
     if (!new RegExp(`^${String(index).padStart(4, "0")}-[a-z0-9-]+\\.json$`).test(name)) {
       fail("Report journal sequence is incomplete");
     }
-    return readPrivateJson(path.join(journalRoot, name), "Report journal", MAX_PLAN_BYTES).value;
-  });
+    try {
+      entries.push(readPrivateJson(path.join(journalRoot, name), "Report journal", MAX_PLAN_BYTES).value);
+    } catch (error) {
+      if (index !== names.length - 1) throw error;
+      if (name.endsWith("-terminal-result.json")) partialTerminalPath = path.join(journalRoot, name);
+      else if (preparedReport && name.endsWith("-terminal-result-intent.json")) {
+        partialIntentPath = path.join(journalRoot, name);
+      } else throw error;
+    }
+  }
+  let terminalIntent = entries.at(-1)?.phase === "TERMINAL_RESULT_INTENT" ? entries.at(-1) : null;
+  if (!terminalIntent && preparedReport) {
+    const terminalSequence = entries.length;
+    const intentName = `${String(terminalSequence).padStart(4, "0")}-terminal-result-intent.json`;
+    const intentPath = path.join(journalRoot, intentName);
+    const hiddenNames = allNames.filter((name) => name.startsWith("."));
+    const orphanPattern = new RegExp(`^\\.${intentName.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\.[^.]+\\.[^.]+\\.tmp$`);
+    const orphanNames = hiddenNames.filter((name) => orphanPattern.test(name));
+    if ((partialIntentPath && partialIntentPath !== intentPath) || partialTerminalPath
+      || orphanNames.length > 1 || hiddenNames.length !== orphanNames.length) {
+      fail("Report journal terminal intent cannot be resumed uniquely");
+    }
+    for (const candidate of [partialIntentPath, ...orphanNames.map((name) => path.join(journalRoot, name))].filter(Boolean)) {
+      const candidateStat = fs.lstatSync(candidate);
+      if (!candidateStat.isFile() || candidateStat.isSymbolicLink() || candidateStat.nlink !== 1
+        || (candidateStat.mode & 0o077) !== 0
+        || (typeof process.getuid === "function" && candidateStat.uid !== process.getuid())) {
+        fail("Report journal terminal intent artifact is not private");
+      }
+      fs.unlinkSync(candidate);
+    }
+    if (partialIntentPath || orphanNames.length > 0) syncDirectory(journalRoot);
+    const attemptId = entries[0]?.attemptId;
+    if (!attemptId || entries.length < 1 || entries.some((entry, index) => entry?.formatVersion !== 1
+      || entry?.attemptId !== attemptId || entry?.mode !== String(mode || "").toUpperCase() || entry?.sequence !== index)
+      || entries.some((entry) => new Set(["TERMINAL_RESULT_INTENT", "TERMINAL_RESULT"]).has(entry?.phase))) {
+      fail("Report journal preterminal state cannot accept a prepared report");
+    }
+    const reportBytes = Buffer.from(`${JSON.stringify(preparedReport, null, 2)}\n`);
+    if (expectedReportSha256 !== null && sha256(reportBytes) !== expectedReportSha256) {
+      fail("Prepared terminal report digest mismatch");
+    }
+    terminalIntent = {
+      formatVersion: 1,
+      attemptId,
+      mode: String(mode || "").toUpperCase(),
+      sequence: terminalSequence,
+      at: new Date().toISOString(),
+      phase: "TERMINAL_RESULT_INTENT",
+      state: preparedReport.state || null,
+      outcome: preparedReport.outcome || preparedReport.state || null,
+      mutationAttempted: preparedReport.mutationAttempted === true,
+      reportSha256: sha256(reportBytes),
+      reportBytesBase64: reportBytes.toString("base64"),
+      report: preparedReport,
+    };
+    writeFileExclusiveAtomicDurable(intentPath, Buffer.from(canonicalJson(terminalIntent)), {
+      uid: typeof process.getuid === "function" ? process.getuid() : 0,
+      gid: typeof process.getgid === "function" ? process.getgid() : 0,
+      mode: 0o600,
+    });
+    entries.push(terminalIntent);
+    allNames = fs.readdirSync(journalRoot).sort();
+  }
+  if (terminalIntent) {
+    const terminalSequence = terminalIntent.sequence + 1;
+    const terminalName = `${String(terminalSequence).padStart(4, "0")}-terminal-result.json`;
+    const terminalPath = path.join(journalRoot, terminalName);
+    const orphanPattern = new RegExp(`^\\.${terminalName.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\.[^.]+\\.[^.]+\\.tmp$`);
+    const orphanNames = allNames.filter((name) => orphanPattern.test(name));
+    const hiddenNames = allNames.filter((name) => name.startsWith("."));
+    if ((partialTerminalPath && partialTerminalPath !== terminalPath) || orphanNames.length > 1
+      || hiddenNames.length !== orphanNames.length) {
+      fail("Report journal terminal publication cannot be reconciled uniquely");
+    }
+    if (partialTerminalPath) {
+      const partialStat = fs.lstatSync(partialTerminalPath);
+      if (!partialStat.isFile() || partialStat.isSymbolicLink() || partialStat.nlink !== 1
+        || (partialStat.mode & 0o077) !== 0
+        || (typeof process.getuid === "function" && partialStat.uid !== process.getuid())) {
+        fail("Report journal partial terminal is not private");
+      }
+      fs.unlinkSync(partialTerminalPath);
+    }
+    for (const orphanName of orphanNames) {
+      const orphanPath = path.join(journalRoot, orphanName);
+      const orphanStat = fs.lstatSync(orphanPath);
+      if (!orphanStat.isFile() || orphanStat.isSymbolicLink() || orphanStat.nlink !== 1
+        || (orphanStat.mode & 0o077) !== 0
+        || (typeof process.getuid === "function" && orphanStat.uid !== process.getuid())) {
+        fail("Report journal terminal temporary is not private");
+      }
+      fs.unlinkSync(orphanPath);
+    }
+    if (partialTerminalPath || orphanNames.length > 0) syncDirectory(journalRoot);
+    const terminal = {
+      ...terminalIntent,
+      sequence: terminalSequence,
+      phase: "TERMINAL_RESULT",
+    };
+    writeFileExclusiveAtomicDurable(terminalPath, Buffer.from(canonicalJson(terminal)), {
+      uid: typeof process.getuid === "function" ? process.getuid() : 0,
+      gid: typeof process.getgid === "function" ? process.getgid() : 0,
+      mode: 0o600,
+    });
+    entries.push(terminal);
+  }
   const attemptId = entries[0]?.attemptId;
   const terminal = entries.at(-1);
   if (!attemptId || entries.length < 2 || entries.some((entry, index) => entry?.formatVersion !== 1
     || entry?.attemptId !== attemptId || entry?.mode !== String(mode || "").toUpperCase() || entry?.sequence !== index)
+    || entries.filter((entry) => entry?.phase === "TERMINAL_RESULT_INTENT").length !== 1
+    || entries.at(-2)?.phase !== "TERMINAL_RESULT_INTENT"
     || entries.filter((entry) => entry?.phase === "TERMINAL_RESULT").length !== 1
     || terminal?.phase !== "TERMINAL_RESULT" || !terminal?.report || typeof terminal.report !== "object") {
     fail("Report journal lacks one exact terminal result");
+  }
+  const intent = entries.at(-2);
+  if (intent.reportSha256 !== terminal.reportSha256
+    || intent.reportBytesBase64 !== terminal.reportBytesBase64
+    || canonicalJson(intent.report) !== canonicalJson(terminal.report)) {
+    fail("Report journal terminal result differs from its durable intent");
   }
   const decodedReportBytes = typeof terminal.reportBytesBase64 === "string"
     ? Buffer.from(terminal.reportBytesBase64, "base64") : null;
@@ -264,7 +390,11 @@ export function createDurableReportJournal(reportPath, mode, attemptId = crypto.
     if (closed) fail("Migration report journal is already finalized");
     const entry = { formatVersion: 1, attemptId, mode: mode.toUpperCase(), sequence, at: new Date().toISOString(), phase, ...detail };
     const fileName = `${String(sequence).padStart(4, "0")}-${String(phase).toLowerCase().replace(/[^a-z0-9]+/g, "-")}.json`;
-    writeDurableExclusive(path.join(journalDirectory, fileName), Buffer.from(canonicalJson(entry)));
+    writeFileExclusiveAtomicDurable(path.join(journalDirectory, fileName), Buffer.from(canonicalJson(entry)), {
+      uid: typeof process.getuid === "function" ? process.getuid() : 0,
+      gid: typeof process.getgid === "function" ? process.getgid() : 0,
+      mode: 0o600,
+    });
     sequence += 1;
     return entry;
   };
@@ -275,20 +405,22 @@ export function createDurableReportJournal(reportPath, mode, attemptId = crypto.
     append,
     finalize(value) {
       const reportBytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
-      append("TERMINAL_RESULT", {
+      const terminalDetail = {
         state: value.state || null,
         outcome: value.outcome || value.state || null,
         mutationAttempted: value.mutationAttempted === true,
         reportSha256: sha256(reportBytes),
         reportBytesBase64: reportBytes.toString("base64"),
         report: value,
-      });
+      };
+      append("TERMINAL_RESULT_INTENT", terminalDetail);
+      append("TERMINAL_RESULT", terminalDetail);
+      closed = true;
       writeFileExclusiveAtomicDurable(requested, reportBytes, {
         uid: typeof process.getuid === "function" ? process.getuid() : 0,
         gid: typeof process.getgid === "function" ? process.getgid() : 0,
         mode: 0o600,
       });
-      closed = true;
     },
   };
 }

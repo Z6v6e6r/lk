@@ -27,6 +27,7 @@ import {
   readPrivateJson,
   readFlowConnection,
   readPrivateMongoConnection,
+  recoverDurableTerminalReport,
   validateHeldWriterFence,
 } from "./run_viva_game_projection_tenant_migration.mjs";
 import {
@@ -37,6 +38,7 @@ import {
 } from "./lib/vivaGameProjectionMongoWriteBarrier.mjs";
 import {
   atomicWrite,
+  recoverAtomicExclusivePublication,
   validateReviewedFlowContract,
   writeFileExclusiveAtomicDurable,
 } from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
@@ -59,6 +61,10 @@ const CUTOVER_ONLY_ENV_KEYS = [
   "PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST_ID",
   "PADLHUB_CUTOVER_GUARDIAN_READY_CHILD",
   "PADLHUB_CUTOVER_GUARDIAN_READY_REQUEST_ID",
+  "PADLHUB_CUTOVER_GUARDIAN_HANDSHAKE_FD",
+  "PADLHUB_CUTOVER_GUARDIAN_CHILD_REQUEST_PATH",
+  "PADLHUB_CUTOVER_GUARDIAN_CHILD_ACCEPTED_PATH",
+  "PADLHUB_CUTOVER_GUARDIAN_CHILD_REQUEST_SHA256",
   "VIVA_GAME_PROJECTION_CUTOVER_EXECUTE",
   "VIVA_GAME_PROJECTION_MIGRATION_APPLY",
   "VIVA_GAME_PROJECTION_MIGRATION_RESTORE",
@@ -147,6 +153,96 @@ const writePrivate = (filePath, value) => {
   return { bytes, sha256: sha256(bytes) };
 };
 
+export const reconstructSuccessfulCoordinatorReport = ({ execution, plan, reportPath }) => {
+  const journalDirectory = fs.realpathSync(`${reportPath}.journal`);
+  const journalStat = fs.lstatSync(journalDirectory);
+  if (journalDirectory !== path.resolve(`${reportPath}.journal`) || !journalStat.isDirectory()
+    || journalStat.isSymbolicLink() || (journalStat.mode & 0o077) !== 0
+    || (typeof process.getuid === "function" && journalStat.uid !== process.getuid())) {
+    fail("Coordinator resume journal is not private and canonical");
+  }
+  let allNames = fs.readdirSync(journalDirectory).sort();
+  for (const name of allNames.filter((entry) => !entry.startsWith("."))) {
+    recoverAtomicExclusivePublication(path.join(journalDirectory, name), protectedOptions());
+  }
+  allNames = fs.readdirSync(journalDirectory).sort();
+  const names = allNames.filter((name) => !name.startsWith(".")).sort();
+  const entries = [];
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index];
+    if (!new RegExp(`^${String(index).padStart(4, "0")}-[a-z0-9-]+\\.json$`).test(name)) {
+      fail("Coordinator resume journal sequence is incomplete");
+    }
+    try {
+      entries.push(readPrivateJson(path.join(journalDirectory, name), "Coordinator resume journal", MAX_JSON_BYTES).value);
+    } catch (error) {
+      if (index !== names.length - 1
+        || (!name.endsWith("-terminal-result-intent.json") && !name.endsWith("-terminal-result.json"))) throw error;
+    }
+  }
+  const attemptId = entries[0]?.attemptId;
+  if (!attemptId || entries.some((entry, index) => entry?.formatVersion !== 1
+    || entry?.attemptId !== attemptId || entry?.mode !== "CUTOVER" || entry?.sequence !== index)) {
+    fail("Coordinator resume journal identity mismatch");
+  }
+  const postcheckIndex = entries.findLastIndex((entry) => entry?.phase === "POSTCHECK_EVIDENCE_PASS_READY_PENDING");
+  if (postcheckIndex < 0 || entries.slice(postcheckIndex + 1).some((entry) => (
+    !new Set(["TERMINAL_RESULT_INTENT", "TERMINAL_RESULT"]).has(entry?.phase)
+  ))) fail("Coordinator resume lacks one durable successful postcheck boundary");
+  const postcheckEntry = entries[postcheckIndex];
+  const applyIndexRead = readPrivateJson(execution.applyIndexOutputPath, "Coordinator resume apply index", MAX_JSON_BYTES);
+  const barrierRead = readPrivateJson(
+    execution.mongoWriteBarrierReceiptOutputPath, "Coordinator resume Mongo barrier", MAX_JSON_BYTES,
+  );
+  const postcheckReceiptRead = readPrivateJson(
+    path.join(execution.postcheckOutputDirectory, "postcheck.receipt.json"), "Coordinator resume postcheck receipt", MAX_JSON_BYTES,
+  );
+  const postcheckManifestRead = readPrivateJson(
+    path.join(execution.postcheckOutputDirectory, "postcheck.manifest.json"), "Coordinator resume postcheck manifest", MAX_JSON_BYTES,
+  );
+  const postcheckReceipt = postcheckReceiptRead.value;
+  const postcheckManifest = postcheckManifestRead.value;
+  const completedAt = postcheckReceipt?.observedAt;
+  const resumeChecks = {
+    receiptHash: sha256(postcheckReceiptRead.bytes) === postcheckEntry.postcheckReceiptSha256,
+    manifestHash: sha256(postcheckManifestRead.bytes) === postcheckEntry.postcheckManifestSha256,
+    receiptKind: postcheckReceipt?.kind === "viva-game-projection-tenant-cutover-postcheck",
+    receiptState: postcheckReceipt?.state === "PASS" && postcheckReceipt?.ingressReopened === false,
+    receiptAttempt: postcheckReceipt?.coordinatorAttemptId === attemptId,
+    receiptCandidate: postcheckReceipt?.candidateSha256 === plan.candidateSha256,
+    receiptExecution: postcheckReceipt?.executionIndexSha256 === execution.executionIndexSha256,
+    receiptBarrier: postcheckReceipt?.mongoWriteBarrierReceiptSha256 === sha256(barrierRead.bytes),
+    manifestKind: postcheckManifest?.kind === "viva-game-projection-cutover-postcheck-manifest",
+    manifestState: postcheckManifest?.state === "PASS",
+    manifestAttempt: postcheckManifest?.coordinatorAttemptId === attemptId,
+    manifestPlan: postcheckManifest?.cutoverPlanSha256 === execution.cutoverPlanSha256,
+    manifestApply: postcheckManifest?.applyIndexSha256 === sha256(applyIndexRead.bytes),
+    manifestBarrier: postcheckManifest?.mongoWriteBarrierReceiptSha256 === sha256(barrierRead.bytes),
+    completionTime: Number.isFinite(Date.parse(completedAt)),
+  };
+  const failedChecks = Object.entries(resumeChecks).filter(([, passed]) => !passed).map(([name]) => name);
+  if (failedChecks.length > 0) {
+    fail(`Coordinator resume postcheck artifacts failed: ${failedChecks.join(",")}`);
+  }
+  return {
+    formatVersion: 1,
+    kind: "viva-game-projection-cutover-coordinator-report",
+    state: "POSTCHECK_PASS_INGRESS_STILL_BLOCKED",
+    cutoverPlanSha256: execution.cutoverPlanSha256,
+    applyIndexSha256: sha256(applyIndexRead.bytes),
+    activeFlowSha256: plan.candidateSha256,
+    postcheckReceiptSha256: postcheckEntry.postcheckReceiptSha256,
+    postcheckManifestSha256: postcheckEntry.postcheckManifestSha256,
+    mongoWriteBarrierReceiptSha256: sha256(barrierRead.bytes),
+    mongoWriteBarrierState: "HELD",
+    fenceGuardianReceiptSha256: postcheckReceipt.fenceGuardianReceiptSha256,
+    coordinatorAttemptId: attemptId,
+    ingressReopened: false,
+    mutationAttempted: true,
+    completedAt,
+  };
+};
+
 export async function executeVivaGameProjectionCutover(options, dependencies = {}) {
   const coordinatorAttemptId = dependencies.attemptId || crypto.randomUUID();
   const clockNow = () => (typeof dependencies.nowMs === "function" ? dependencies.nowMs() : (dependencies.nowMs ?? Date.now()));
@@ -179,6 +275,37 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
     || plan.state !== "READY_FOR_SEPARATE_LIVE_APPROVAL" || plan.liveMutationAuthorized !== false
     || sha256(String(execution.tenantKey || "")) !== plan.tenantKeySha256) {
     fail("Cutover plan is not eligible for separately confirmed execution");
+  }
+  const coordinatorReportPath = path.resolve(options.report);
+  if (coordinatorReportPath !== options.report) fail("Coordinator report path is not canonical");
+  if (fs.existsSync(`${coordinatorReportPath}.journal`)) {
+    ensurePrivateDirectory(path.dirname(coordinatorReportPath), "Coordinator report directory");
+    const preparedReport = reconstructSuccessfulCoordinatorReport({
+      execution: { ...execution, executionIndexSha256: options.expectedExecutionIndexSha256 },
+      plan,
+      reportPath: coordinatorReportPath,
+    });
+    const recovered = recoverDurableTerminalReport(
+      coordinatorReportPath, "CUTOVER", null, preparedReport,
+    );
+    if (canonicalJson(recovered.report) !== canonicalJson(preparedReport)) {
+      fail("Recovered coordinator report differs from the durable successful postcheck");
+    }
+    const guardianPath = String(process.env.PADLHUB_CUTOVER_GUARDIAN_RECEIPT || "");
+    const resumedGuardianRead = dependencies.guardianReceipt
+      || readPrivateJson(guardianPath, "Fence guardian receipt", 1024 * 1024);
+    const resumedGuardian = resumedGuardianRead.value || resumedGuardianRead;
+    const readyMarker = await finalizeVivaGameProjectionCutoverReady({
+      executionIndex: options.executionIndex,
+      expectedExecutionIndexSha256: options.expectedExecutionIndexSha256,
+      coordinatorReport: coordinatorReportPath,
+      expectedCoordinatorReportSha256: recovered.sha256,
+    }, {
+      ...dependencies,
+      authorizedByCoordinator: true,
+      guardianReceipt: resumedGuardian,
+    });
+    return { ...preparedReport, readyMarkerSha256: readyMarker.readyMarkerSha256, resumed: true };
   }
   if (dependencies.assertExecutorSources) await dependencies.assertExecutorSources(plan);
   else assertExactExecutorSources(plan);
@@ -254,7 +381,6 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
   }
   if (expectedPlans.size !== 0) fail("Execution index omits a migration plan");
 
-  const coordinatorReportPath = path.resolve(options.report);
   const applyIndexPath = path.resolve(execution.applyIndexOutputPath);
   const flowBackupDirectory = ensurePrivateDirectory(execution.flowBackupDirectory, "Flow backup directory");
   const postcheckOutputDirectory = ensurePrivateDirectory(execution.postcheckOutputDirectory, "Postcheck output directory");
@@ -565,7 +691,7 @@ export async function executeVivaGameProjectionCutover(options, dependencies = {
       coordinatorAttemptId,
       ingressReopened: false,
       mutationAttempted: barrierInstallAttempted || appliedItems.length > 0 || candidatePublished,
-      completedAt: new Date(clockNow()).toISOString(),
+      completedAt: postcheckResult.receipt.observedAt,
     };
     coordinatorJournal.finalize(result);
     const coordinatorReportBytes = readPrivateBytes(coordinatorReportPath, "Coordinator terminal report", MAX_JSON_BYTES);

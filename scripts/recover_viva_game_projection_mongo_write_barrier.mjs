@@ -26,8 +26,14 @@ import {
   readPrivateMongoConnection,
   validateHeldWriterFence,
 } from "./run_viva_game_projection_tenant_migration.mjs";
-import { writeFileExclusiveAtomicDurable } from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
-import { isAuthorizedFenceGuardianRecovery } from "./lib/vivaGameProjectionFenceGuardian.mjs";
+import {
+  recoverAtomicExclusivePublication,
+  writeFileExclusiveAtomicDurable,
+} from "./nodered_reviewed_flow_deploy/runtime_contract.mjs";
+import {
+  acceptFenceGuardianChildRequest,
+  isAuthorizedFenceGuardianRecovery,
+} from "./lib/vivaGameProjectionFenceGuardian.mjs";
 
 const SCRIPT_PATH = fs.realpathSync(fileURLToPath(import.meta.url));
 const TAKEOVER_SCRIPT_PATH = fs.realpathSync(path.join(
@@ -170,21 +176,81 @@ const openRecoveryJournal = (reportPath, bindings) => {
       || stat.uid !== privateOptions().uid || (stat.mode & 0o077) !== 0) {
       fail("Mongo barrier recovery journal is not private and canonical");
     }
-    const names = fs.readdirSync(canonical).sort();
-    entries = names.map((name, index) => {
+    let allNames = fs.readdirSync(canonical).sort();
+    for (const name of allNames.filter((entry) => !entry.startsWith("."))) {
+      recoverAtomicExclusivePublication(path.join(canonical, name), privateOptions());
+    }
+    allNames = fs.readdirSync(canonical).sort();
+    const names = allNames.filter((name) => !name.startsWith("."));
+    let partialTerminalPath = null;
+    entries = [];
+    for (let index = 0; index < names.length; index += 1) {
+      const name = names[index];
       if (!new RegExp(`^${String(index).padStart(4, "0")}-[a-z0-9-]+\\.json$`).test(name)) {
         fail("Mongo barrier recovery journal sequence is incomplete");
       }
-      return readPrivateJson(path.join(canonical, name), "Mongo barrier recovery journal", 1024 * 1024).value;
-    });
+      try {
+        entries.push(readPrivateJson(path.join(canonical, name), "Mongo barrier recovery journal", 1024 * 1024).value);
+      } catch (error) {
+        if (index !== names.length - 1 || !name.endsWith("-terminal-result.json")) throw error;
+        partialTerminalPath = path.join(canonical, name);
+      }
+    }
     attemptId = entries[0]?.attemptId;
     if ((entries.length > 0 && !attemptId) || entries.some((entry, index) => entry?.formatVersion !== 1
       || entry?.attemptId !== attemptId || entry?.mode !== "BARRIER_RECOVERY" || entry?.sequence !== index)
       || (entries.length > 0 && (entries[0]?.phase !== "ATTEMPT_STARTED"
         || Object.entries(bindings).some(([key, value]) => entries[0]?.[key] !== value)))
+      || entries.filter((entry) => entry.phase === "TERMINAL_RESULT_INTENT").length > 1
       || entries.filter((entry) => entry.phase === "TERMINAL_RESULT").length > 1
       || entries.some((entry, index) => entry.phase === "TERMINAL_RESULT" && index !== entries.length - 1)) {
       fail("Mongo barrier recovery journal cannot be reconciled to these exact inputs");
+    }
+    const terminalIntent = entries.at(-1)?.phase === "TERMINAL_RESULT_INTENT" ? entries.at(-1) : null;
+    const hiddenNames = allNames.filter((name) => name.startsWith("."));
+    if (terminalIntent) {
+      const terminalSequence = terminalIntent.sequence + 1;
+      const terminalName = `${String(terminalSequence).padStart(4, "0")}-terminal-result.json`;
+      const terminalPath = path.join(canonical, terminalName);
+      const orphanPattern = new RegExp(`^\\.${terminalName.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\.[^.]+\\.[^.]+\\.tmp$`);
+      const orphanNames = hiddenNames.filter((name) => orphanPattern.test(name));
+      if ((partialTerminalPath && partialTerminalPath !== terminalPath) || orphanNames.length > 1
+        || hiddenNames.length !== orphanNames.length) {
+        fail("Mongo barrier recovery terminal publication is ambiguous");
+      }
+      const reportBytes = validateCompletedRecoveryReport(
+        terminalIntent.report, bindings, attemptId, journalDirectory,
+      );
+      if (terminalIntent.reportSha256 !== sha256(reportBytes)
+        || terminalIntent.reportBytesBase64 !== reportBytes.toString("base64")) {
+        fail("Mongo barrier recovery terminal intent digest mismatch");
+      }
+      for (const candidate of [partialTerminalPath, ...orphanNames.map((name) => path.join(canonical, name))].filter(Boolean)) {
+        const candidateStat = fs.lstatSync(candidate);
+        if (!candidateStat.isFile() || candidateStat.isSymbolicLink() || candidateStat.nlink !== 1
+          || candidateStat.uid !== privateOptions().uid || (candidateStat.mode & 0o077) !== 0) {
+          fail("Mongo barrier recovery terminal artifact is not private");
+        }
+        fs.unlinkSync(candidate);
+      }
+      if (partialTerminalPath || orphanNames.length > 0) syncDirectory(canonical);
+      const terminal = { ...terminalIntent, sequence: terminalSequence, phase: "TERMINAL_RESULT" };
+      writeFileExclusiveAtomicDurable(terminalPath, Buffer.from(canonicalJson(terminal)), privateOptions());
+      entries.push(terminal);
+    } else if (hiddenNames.length > 0) {
+      const intentName = `${String(entries.length).padStart(4, "0")}-terminal-result-intent.json`;
+      const orphanPattern = new RegExp(`^\\.${intentName.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\.[^.]+\\.[^.]+\\.tmp$`);
+      if (hiddenNames.length !== 1 || !orphanPattern.test(hiddenNames[0])) {
+        fail("Mongo barrier recovery journal has an unrelated temporary artifact");
+      }
+      const orphanPath = path.join(canonical, hiddenNames[0]);
+      const orphanStat = fs.lstatSync(orphanPath);
+      if (!orphanStat.isFile() || orphanStat.isSymbolicLink() || orphanStat.nlink !== 1
+        || orphanStat.uid !== privateOptions().uid || (orphanStat.mode & 0o077) !== 0) {
+        fail("Mongo barrier recovery terminal intent temporary is not private");
+      }
+      fs.unlinkSync(orphanPath);
+      syncDirectory(canonical);
     }
   }
   attemptId ||= crypto.randomUUID();
@@ -202,19 +268,31 @@ const openRecoveryJournal = (reportPath, bindings) => {
   if (sequence === 0) append("ATTEMPT_STARTED", bindings);
   const appendTerminal = (report) => {
     const reportBytes = validateCompletedRecoveryReport(report, bindings, attemptId, journalDirectory);
-    append("TERMINAL_RESULT", {
+    const terminalDetail = {
       state: report.state,
       mutationAttempted: true,
       reconciledPriorUnknownOutcome: report.reconciledPriorUnknownOutcome,
       reportSha256: sha256(reportBytes),
+      reportBytesBase64: reportBytes.toString("base64"),
       report,
-    });
+    };
+    append("TERMINAL_RESULT_INTENT", terminalDetail);
+    append("TERMINAL_RESULT", terminalDetail);
     return reportBytes;
   };
   const terminal = entries.find((entry) => entry.phase === "TERMINAL_RESULT");
   if (terminal) {
+    const terminalIndex = entries.indexOf(terminal);
+    const terminalIntent = entries[terminalIndex - 1];
     const reportBytes = validateCompletedRecoveryReport(terminal.report, bindings, attemptId, journalDirectory);
-    if (terminal.reportSha256 !== sha256(reportBytes)) fail("Mongo barrier recovery terminal report digest mismatch");
+    if (terminalIntent?.phase !== "TERMINAL_RESULT_INTENT"
+      || terminalIntent.reportSha256 !== sha256(reportBytes)
+      || terminalIntent.reportBytesBase64 !== reportBytes.toString("base64")
+      || terminal.reportSha256 !== terminalIntent.reportSha256
+      || terminal.reportBytesBase64 !== terminalIntent.reportBytesBase64
+      || canonicalJson(terminal.report) !== canonicalJson(terminalIntent.report)) {
+      fail("Mongo barrier recovery terminal report digest mismatch");
+    }
     if (fs.existsSync(reportPath)) {
       const existing = readPrivateJson(reportPath, "Mongo barrier recovery report", 16 * 1024 * 1024);
       if (sha256(existing.bytes) !== terminal.reportSha256) fail("Mongo barrier recovery report differs from terminal journal");
@@ -373,7 +451,7 @@ export async function requestRecoveryFromGuardian(argv, options, dependencies = 
       .filter((value) => UUID_RE.test(value));
     const candidateIds = UUID_RE.test(String(heartbeatRequestId || ""))
       ? [heartbeatRequestId]
-      : acceptedIds;
+      : (initialGuardianLease ? [] : acceptedIds);
     const accepted = [];
     for (const candidateId of candidateIds) {
       const acceptedPath = `${options.fenceGuardianRecoveryRequest}.accepted-${candidateId}`;
@@ -697,6 +775,12 @@ export async function recoverVivaGameProjectionMongoWriteBarrier(options, depend
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
+  if (process.env.PADLHUB_CUTOVER_GUARDIAN_CHILD === "1") {
+    acceptFenceGuardianChildRequest({
+      childKind: "recovery",
+      requestId: process.env.PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST_ID,
+    });
+  }
   const values = parseArgs(argv);
   const options = optionsFromValues(values);
   const result = process.env.PADLHUB_CUTOVER_GUARDIAN_CHILD === "1" || dependencies.forceDirectRecovery

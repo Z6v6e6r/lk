@@ -348,8 +348,13 @@ postcheck never writes `READY_TO_REOPEN_INGRESS.json` and refuses synthetic hash
 strings without the exact bytes.
 Immediately before READY publication it repeats the current-time lease check,
 exclusive-flock probe, Mongo barrier check, PM2 environment/status readback, and
-candidate-flow hash. The coordinator first fsyncs its terminal success report
-and terminal journal entry, then repeats the packet, writer fence, guardian,
+candidate-flow hash. The coordinator first fsyncs a terminal intent containing
+the complete report bytes, then atomically publishes the matching terminal
+journal entry and report. A missing, partial, or orphan-temporary terminal
+entry is rebuilt only from that exact intent. If termination occurs while the
+intent itself is being published, rerunning the exact coordinator reconstructs
+the same success report from the durable postcheck receipt, manifest, apply
+index, and Mongo-barrier receipt before it resumes READY finalization. It then repeats the packet, writer fence, guardian,
 Mongo barrier, PM2, and exact `/flows` gates. READY is written last and binds the
 terminal report/journal hashes, exact execution-index SHA, coordinator attempt
 UUID, barrier receipt, guardian receipt, and final guardian heartbeat.
@@ -357,6 +362,10 @@ If the coordinator is terminated after its terminal report, the standalone
 `ready-finalize` command sends a fresh, token-bound request to the guardian. The
 guardian validates the exact four pinned arguments plus the installed finalizer
 SHA, then spawns that finalizer with the inherited flock descriptor. The child
+proves that descriptor and durably renames its own request to the exact accepted
+path before it reports acceptance to the guardian. The same handshake protects
+barrier recovery, and once recovery is accepted the guardian leaves release
+authorization exclusively to the recovery takeover bound to its terminal report. The child
 repeats every final gate before it creates or accepts READY. Its publication is
 idempotent for the same execution/report pair and repairs the exact two-link
 temporary-file state left by `SIGKILL` between hard-link creation and temporary

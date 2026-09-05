@@ -46,6 +46,10 @@ import { buildLegacyTenantMigrationPlan } from "../lib/vivaGameProjectionTenantM
 import { prepareVivaGameProjectionCutoverPacket } from "../prepare_viva_game_projection_cutover_packet.mjs";
 import { prepareVivaGameProjectionCutoverPostcheck } from "../prepare_viva_game_projection_cutover_postcheck.mjs";
 import {
+  executeVivaGameProjectionCutover,
+  reconstructSuccessfulCoordinatorReport,
+} from "../run_viva_game_projection_cutover_coordinator.mjs";
+import {
   finalizeVivaGameProjectionCutoverReady,
   requestReadyFinalizationFromGuardian,
 } from "../finalize_viva_game_projection_cutover_ready.mjs";
@@ -706,10 +710,17 @@ test("recovery request waits for the exact guardian child terminal result", asyn
           formatVersion: 1, attemptId, mode: "BARRIER_RECOVERY", sequence: 0,
           at: nowIso, phase: "ATTEMPT_STARTED", ...bindings,
         })));
-        write0600(path.join(journalDirectory, "0001-terminal-result.json"), Buffer.from(canonicalJson({
+        const recoveryTerminalDetail = {
+          state: report.state, mutationAttempted: true,
+          reportSha256: cutoverSha256(reportBytes), reportBytesBase64: reportBytes.toString("base64"), report,
+        };
+        write0600(path.join(journalDirectory, "0001-terminal-result-intent.json"), Buffer.from(canonicalJson({
           formatVersion: 1, attemptId, mode: "BARRIER_RECOVERY", sequence: 1,
-          at: nowIso, phase: "TERMINAL_RESULT", state: report.state,
-          mutationAttempted: true, reportSha256: cutoverSha256(reportBytes), report,
+          at: nowIso, phase: "TERMINAL_RESULT_INTENT", ...recoveryTerminalDetail,
+        })));
+        write0600(path.join(journalDirectory, "0002-terminal-result.json"), Buffer.from(canonicalJson({
+          formatVersion: 1, attemptId, mode: "BARRIER_RECOVERY", sequence: 2,
+          at: nowIso, phase: "TERMINAL_RESULT", ...recoveryTerminalDetail,
         })));
         write0600(reportPath, reportBytes);
       },
@@ -734,6 +745,39 @@ test("recovery request waits for the exact guardian child terminal result", asyn
     assert.equal(resumed.recoveryAttemptId, attemptId);
     assert.equal(guardianRechecked, false);
     assert.equal(fs.existsSync(requestPath), false);
+
+    const failedRequestId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const retryRequestId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const retryReportPath = path.join(privateRoot, "retry-recovery-report.json");
+    const retryOptions = { ...options, report: retryReportPath };
+    const retryArgv = argv.map((value) => (value === reportPath ? retryReportPath : value));
+    write0600(`${requestPath}.accepted-${failedRequestId}`, Buffer.from(canonicalJson({
+      formatVersion: 1,
+      kind: "viva-game-projection-fence-recovery-request",
+      state: "RECOVERY_AUTHORIZED",
+      confirmation: "RECOVER_VIVA_GAME_PROJECTION_MONGO_WRITE_BARRIER_V1",
+      requestId: failedRequestId,
+      guardianPid: guardian.pid,
+      guardianProcessStartIdentity: guardian.processStartIdentity,
+      fenceTokenSha256: guardian.fenceTokenSha256,
+      argv: retryArgv,
+      authorizedAt: nowIso,
+    })));
+    await assert.rejects(requestRecoveryFromGuardian(retryArgv, retryOptions, {
+      getUid: () => 0,
+      nowMs: Date.parse(nowIso),
+      requestId: retryRequestId,
+      maximumPolls: 1,
+      assertGuardianLease: async () => ({
+        heartbeat: {
+          recoveryChildPid: null,
+          recoveryRequestId: null,
+          lastRecoveryResult: { requestId: failedRequestId, exitCode: 1 },
+        },
+      }),
+      waitForPoll: async () => {},
+    }), /Timed out waiting for the fence guardian recovery child/);
+    assert.equal(JSON.parse(fs.readFileSync(requestPath, "utf8")).requestId, retryRequestId);
   } finally {
     if (previousConfirmation === undefined) delete process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
     else process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER = previousConfirmation;
@@ -807,12 +851,19 @@ test("standalone READY finalization requests an exact guardian child and waits f
     write0600(path.join(reportJournal, "0000-attempt-started.json"), Buffer.from(canonicalJson({
       formatVersion: 1, attemptId, mode: "CUTOVER", sequence: 0, at: nowIso, phase: "ATTEMPT_STARTED",
     })));
-    const terminalBytes = Buffer.from(canonicalJson({
-      formatVersion: 1, attemptId, mode: "CUTOVER", sequence: 1, at: nowIso,
-      phase: "TERMINAL_RESULT", state: report.state, reportSha256,
+    const terminalDetail = {
+      state: report.state, mutationAttempted: true, reportSha256,
       reportBytesBase64: reportBytes.toString("base64"), report,
+    };
+    write0600(path.join(reportJournal, "0001-terminal-result-intent.json"), Buffer.from(canonicalJson({
+      formatVersion: 1, attemptId, mode: "CUTOVER", sequence: 1, at: nowIso,
+      phase: "TERMINAL_RESULT_INTENT", ...terminalDetail,
+    })));
+    const terminalBytes = Buffer.from(canonicalJson({
+      formatVersion: 1, attemptId, mode: "CUTOVER", sequence: 2, at: nowIso,
+      phase: "TERMINAL_RESULT", ...terminalDetail,
     }));
-    write0600(path.join(reportJournal, "0001-terminal-result.json"), terminalBytes);
+    write0600(path.join(reportJournal, "0002-terminal-result.json"), terminalBytes);
     write0600(reportPath, reportBytes);
     process.env.VIVA_GAME_PROJECTION_READY_FINALIZE = "FINALIZE_VIVA_GAME_PROJECTION_READY_V1";
     process.env.PADLHUB_CUTOVER_GUARDIAN_RECEIPT = guardianPath;
@@ -1179,7 +1230,8 @@ test("standalone Mongo barrier recovery requires stopped fenced runtime and reco
     assert.equal(phases[1], "BARRIER_RECOVERY_OUTCOME_UNKNOWN");
     assert.ok(phases.includes("BARRIER_RECOVERY_RECONCILE_OUTCOME_UNKNOWN"));
     assert.equal(phases.filter((phase) => phase === "FENCE_REVALIDATED_DURING_BARRIER_RECOVERY").length, 4);
-    assert.equal(phases.at(-2), "FENCE_REVALIDATED_AFTER_BARRIER_RECOVERY");
+    assert.equal(phases.at(-3), "FENCE_REVALIDATED_AFTER_BARRIER_RECOVERY");
+    assert.equal(phases.at(-2), "TERMINAL_RESULT_INTENT");
     assert.equal(phases.at(-1), "TERMINAL_RESULT");
   } finally {
     if (previousConfirmation === undefined) delete process.env.VIVA_GAME_PROJECTION_MONGO_BARRIER_RECOVER;
@@ -1561,6 +1613,9 @@ test("cutover tools contain no remote-control or inline credential path", () => 
   assert.match(guardianSource, /HOLDING_UNTIL_EXPLICIT_RELEASE/);
   assert.match(guardianContractSource, /RELEASE_VIVA_GAME_PROJECTION_CUTOVER_FENCE_V1/);
   assert.match(guardianSource, /quarantineReleaseRequest/);
+  assert.match(guardianSource, /waitForAcceptedHandshake[\s\S]+spawn\(process\.execPath[\s\S]+recoveryReleaseDelegated = true/);
+  assert.match(guardianSource, /if \(recoveryReleaseDelegated\)[\s\S]+continue;[\s\S]+isAuthorizedFenceGuardianRelease/);
+  assert.match(guardianContractSource, /FENCE_INHERITED[\s\S]+renameSync\(requestPath, acceptedPath\)[\s\S]+REQUEST_ACCEPTED/);
   assert.match(guardianSource, /isAuthorizedFenceGuardianRecovery[\s\S]+childStdio\[fd\] = fd[\s\S]+PADLHUB_CUTOVER_GUARDIAN_CHILD/);
   assert.match(guardianSource, /isAuthorizedFenceGuardianReadyFinalization[\s\S]+childStdio\[fd\] = fd[\s\S]+PADLHUB_CUTOVER_GUARDIAN_READY_CHILD/);
   assert.match(recoverySource, /assertExclusiveFenceLease[\s\S]+FENCE_REVALIDATED_DURING_BARRIER_RECOVERY/);
@@ -1649,6 +1704,113 @@ test("a recovery takeover child keeps the inherited flock after guardian SIGKILL
   }
 });
 
+test("a guardian child accepts only after inheriting the flock and survives guardian SIGKILL before accept", {
+  skip: process.platform !== "linux",
+}, async () => {
+  const privateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-child-accept-flock-")));
+  fs.chmodSync(privateRoot, 0o700);
+  const lockPath = path.join(privateRoot, "cutover.lock");
+  const requestPath = path.join(privateRoot, "recovery-request.json");
+  const requestId = "12345678-1234-4234-8234-123456789abc";
+  const acceptedPath = `${requestPath}.accepted-${requestId}`;
+  const guardianPath = path.join(privateRoot, "guardian.mjs");
+  const childPath = path.join(privateRoot, "child.mjs");
+  const childPidPath = path.join(privateRoot, "child.pid");
+  const handshakePath = path.join(privateRoot, "handshake.log");
+  const releasePath = path.join(privateRoot, "release");
+  const contractPath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)), "../lib/vivaGameProjectionFenceGuardian.mjs",
+  );
+  let guardian = null;
+  let childPid = null;
+  try {
+    write0600(requestPath, Buffer.from(canonicalJson({
+      kind: "viva-game-projection-fence-recovery-request", requestId,
+    })));
+    write0600(childPath, Buffer.from(`
+      import fs from "node:fs";
+      import { pathToFileURL } from "node:url";
+      const [contractPath, requestId, releasePath] = process.argv.slice(2);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const { acceptFenceGuardianChildRequest } = await import(pathToFileURL(contractPath).href);
+      acceptFenceGuardianChildRequest({ childKind: "recovery", requestId });
+      while (!fs.existsSync(releasePath)) await new Promise((resolve) => setTimeout(resolve, 20));
+    `));
+    write0600(guardianPath, Buffer.from(`
+      import fs from "node:fs";
+      import { spawn } from "node:child_process";
+      import crypto from "node:crypto";
+      const [childPath, contractPath, requestPath, acceptedPath, requestId, childPidPath, handshakePath, releasePath, lockPath] = process.argv.slice(2);
+      const handshakeFd = 10;
+      const handshake = fs.openSync(handshakePath, "wx", 0o600);
+      const stdio = Array(handshakeFd + 1).fill("ignore");
+      stdio[9] = 9;
+      stdio[handshakeFd] = handshake;
+      const child = spawn(process.execPath, [childPath, contractPath, requestId, releasePath], {
+        detached: true,
+        stdio,
+        env: {
+          ...process.env,
+          PADLHUB_CUTOVER_FENCE_FD: "9",
+          PADLHUB_CUTOVER_FENCE_LOCK_PATH: lockPath,
+          PADLHUB_CUTOVER_GUARDIAN_HANDSHAKE_FD: String(handshakeFd),
+          PADLHUB_CUTOVER_GUARDIAN_CHILD_REQUEST_PATH: requestPath,
+          PADLHUB_CUTOVER_GUARDIAN_CHILD_ACCEPTED_PATH: acceptedPath,
+          PADLHUB_CUTOVER_GUARDIAN_CHILD_REQUEST_SHA256: crypto.createHash("sha256").update(fs.readFileSync(requestPath)).digest("hex"),
+        },
+      });
+      child.unref();
+      fs.writeFileSync(childPidPath, String(child.pid), { mode: 0o600, flag: "wx" });
+      while (true) await new Promise((resolve) => setTimeout(resolve, 1000));
+    `));
+    guardian = spawn("/bin/bash", [
+      "-c",
+      "exec 9>\"$1\"\nflock -n 9\nexec node \"$2\" \"$3\" \"$4\" \"$5\" \"$6\" \"$7\" \"$8\" \"$9\" \"${10}\" \"${11}\"",
+      "viva-child-accept-fixture",
+      lockPath,
+      guardianPath,
+      childPath,
+      contractPath,
+      requestPath,
+      acceptedPath,
+      requestId,
+      childPidPath,
+      handshakePath,
+      releasePath,
+      lockPath,
+    ], { stdio: "ignore" });
+    for (let poll = 0; poll < 50 && !fs.existsSync(childPidPath); poll += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(fs.existsSync(childPidPath), true);
+    childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+    process.kill(guardian.pid, "SIGKILL");
+    assert.notEqual(spawnSync("flock", ["-n", lockPath, "-c", "true"], { stdio: "ignore" }).status, 0);
+    for (let poll = 0; poll < 100 && !fs.existsSync(acceptedPath); poll += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(fs.existsSync(requestPath), false);
+    assert.equal(fs.existsSync(acceptedPath), true);
+    for (let poll = 0; poll < 50
+      && !fs.readFileSync(handshakePath, "utf8").includes("REQUEST_ACCEPTED"); poll += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.match(fs.readFileSync(handshakePath, "utf8"), /FENCE_INHERITED[\s\S]+REQUEST_ACCEPTED/);
+    assert.notEqual(spawnSync("flock", ["-n", lockPath, "-c", "true"], { stdio: "ignore" }).status, 0);
+    write0600(releasePath, Buffer.from("release\n"));
+    let acquired = false;
+    for (let poll = 0; poll < 100 && !acquired; poll += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      acquired = spawnSync("flock", ["-n", lockPath, "-c", "true"], { stdio: "ignore" }).status === 0;
+    }
+    assert.equal(acquired, true);
+  } finally {
+    try { if (guardian?.pid) process.kill(guardian.pid, "SIGKILL"); } catch { /* already stopped */ }
+    try { if (childPid) process.kill(childPid, "SIGKILL"); } catch { /* already stopped */ }
+    fs.rmSync(privateRoot, { recursive: true, force: true });
+  }
+});
+
 test("durable reports use append-only private journals outside Git worktrees", () => {
   const privateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "viva-cutover-journal-")));
   fs.chmodSync(privateRoot, 0o700);
@@ -1661,7 +1823,8 @@ test("durable reports use append-only private journals outside Git worktrees", (
     assert.deepEqual(fs.readdirSync(`${reportPath}.journal`).sort(), [
       "0000-attempt-started.json",
       "0001-transaction-outcome-unknown.json",
-      "0002-terminal-result.json",
+      "0002-terminal-result-intent.json",
+      "0003-terminal-result.json",
     ]);
     const exactReportBytes = fs.readFileSync(reportPath);
     const exactReportSha256 = cutoverSha256(exactReportBytes);
@@ -1671,6 +1834,24 @@ test("durable reports use append-only private journals outside Git worktrees", (
     fs.writeFileSync(reportPath, exactReportBytes.subarray(0, Math.floor(exactReportBytes.length / 2)), { mode: 0o600 });
     const recoveredPartial = recoverDurableTerminalReport(reportPath, "APPLY", exactReportSha256);
     assert.deepEqual(recoveredPartial.bytes, exactReportBytes);
+    fs.unlinkSync(reportPath);
+    const terminalJournalPath = path.join(`${reportPath}.journal`, "0003-terminal-result.json");
+    const terminalJournalBytes = fs.readFileSync(terminalJournalPath);
+    fs.unlinkSync(terminalJournalPath);
+    fs.writeFileSync(terminalJournalPath, terminalJournalBytes.subarray(0, 16), { mode: 0o600 });
+    const recoveredPartialTerminal = recoverDurableTerminalReport(reportPath, "APPLY", exactReportSha256);
+    assert.deepEqual(recoveredPartialTerminal.bytes, exactReportBytes);
+    assert.equal(JSON.parse(fs.readFileSync(terminalJournalPath, "utf8")).phase, "TERMINAL_RESULT");
+    fs.unlinkSync(reportPath);
+    const rebuiltTerminalBytes = fs.readFileSync(terminalJournalPath);
+    fs.unlinkSync(terminalJournalPath);
+    const orphanTerminalPath = path.join(
+      `${reportPath}.journal`, `.0003-terminal-result.json.${process.pid}.${crypto.randomUUID()}.tmp`,
+    );
+    fs.writeFileSync(orphanTerminalPath, rebuiltTerminalBytes.subarray(0, 16), { mode: 0o600 });
+    const recoveredOrphanTerminal = recoverDurableTerminalReport(reportPath, "APPLY", exactReportSha256);
+    assert.deepEqual(recoveredOrphanTerminal.bytes, exactReportBytes);
+    assert.equal(fs.existsSync(orphanTerminalPath), false);
     const failedReportPath = path.join(privateRoot, "cutover-finalize-failure.json");
     const failedJournal = createDurableReportJournal(failedReportPath, "cutover", "fixture-cutover-attempt");
     fs.mkdirSync(failedReportPath, { mode: 0o700 });
@@ -1678,7 +1859,7 @@ test("durable reports use append-only private journals outside Git worktrees", (
       state: "FAILED_MONGO_BARRIER_HELD_RUNTIME_STOPPED", mutationAttempted: true,
     }));
     const terminal = JSON.parse(fs.readFileSync(
-      path.join(`${failedReportPath}.journal`, "0001-terminal-result.json"), "utf8",
+      path.join(`${failedReportPath}.journal`, "0002-terminal-result.json"), "utf8",
     ));
     assert.equal(terminal.outcome, "FAILED_MONGO_BARRIER_HELD_RUNTIME_STOPPED");
     assert.equal(terminal.mutationAttempted, true);
@@ -2257,29 +2438,41 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       mutationAttempted: true,
       completedAt: nowIso,
     };
-    const coordinatorReportBytes = Buffer.from(canonicalJson(coordinatorReport));
-    const finalJournalEntries = [
-      {
+    const postcheckSequence = journalEntries.length;
+    const postcheckJournalPath = path.join(
+      coordinatorJournal, `${String(postcheckSequence).padStart(4, "0")}-postcheck-evidence-pass-ready-pending.json`,
+    );
+    write0600(
+      postcheckJournalPath,
+      Buffer.from(canonicalJson({
+        formatVersion: 1, attemptId, mode: "CUTOVER", sequence: postcheckSequence, at: nowIso,
         phase: "POSTCHECK_EVIDENCE_PASS_READY_PENDING",
         postcheckReceiptSha256: postcheck.postcheckReceiptSha256,
         postcheckManifestSha256: postcheck.postcheckManifestSha256,
+      })),
+    );
+    const postcheckJournalAlias = path.join(
+      coordinatorJournal, `.${path.basename(postcheckJournalPath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
+    );
+    fs.linkSync(postcheckJournalPath, postcheckJournalAlias);
+    assert.equal(fs.lstatSync(postcheckJournalPath).nlink, 2);
+    const reconstructedReport = reconstructSuccessfulCoordinatorReport({
+      execution: {
+        ...JSON.parse(executionIndexBytes.toString("utf8")),
+        executionIndexSha256: cutoverSha256(executionIndexBytes),
       },
-      {
-        phase: "TERMINAL_RESULT",
-        state: coordinatorReport.state,
-        mutationAttempted: true,
-        reportSha256: cutoverSha256(coordinatorReportBytes),
-        report: coordinatorReport,
-      },
-    ];
-    finalJournalEntries.forEach((entry, offset) => {
-      const sequence = journalEntries.length + offset;
-      write0600(
-        path.join(coordinatorJournal, `${String(sequence).padStart(4, "0")}-${entry.phase.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.json`),
-        Buffer.from(canonicalJson({ formatVersion: 1, attemptId, mode: "CUTOVER", sequence, at: nowIso, ...entry })),
-      );
+      plan: result.plan,
+      reportPath: coordinatorReportPath,
     });
-    write0600(coordinatorReportPath, coordinatorReportBytes);
+    assert.deepEqual(reconstructedReport, coordinatorReport);
+    assert.equal(fs.existsSync(postcheckJournalAlias), false);
+    assert.equal(fs.lstatSync(postcheckJournalPath).nlink, 1);
+    const intentSequence = postcheckSequence + 1;
+    const orphanIntentPath = path.join(
+      coordinatorJournal,
+      `.${String(intentSequence).padStart(4, "0")}-terminal-result-intent.json.${process.pid}.${crypto.randomUUID()}.tmp`,
+    );
+    write0600(orphanIntentPath, Buffer.from("partial intent"));
     const packetValidationTimes = [];
     const finalizerDependencies = {
       getUid: () => 0,
@@ -2318,14 +2511,29 @@ test("packet builder deterministically rebuilds the candidate and emits an evide
       assertMongoWriteBarrier: async () => true,
       assertNoConcurrentWrites: async () => true,
     };
+    const previousCutoverConfirmation = process.env.VIVA_GAME_PROJECTION_CUTOVER_EXECUTE;
+    process.env.VIVA_GAME_PROJECTION_CUTOVER_EXECUTE = "EXECUTE_VIVA_GAME_PROJECTION_CUTOVER_V1";
+    let resumedCoordinator;
+    try {
+      resumedCoordinator = await executeVivaGameProjectionCutover({
+        executionIndex: executionIndexPath,
+        expectedExecutionIndexSha256: cutoverSha256(executionIndexBytes),
+        report: coordinatorReportPath,
+      }, finalizerDependencies);
+    } finally {
+      if (previousCutoverConfirmation === undefined) delete process.env.VIVA_GAME_PROJECTION_CUTOVER_EXECUTE;
+      else process.env.VIVA_GAME_PROJECTION_CUTOVER_EXECUTE = previousCutoverConfirmation;
+    }
+    assert.equal(resumedCoordinator.resumed, true);
+    assert.equal(fs.existsSync(orphanIntentPath), false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(coordinatorReportPath, "utf8")), coordinatorReport);
+    const coordinatorReportBytes = fs.readFileSync(coordinatorReportPath);
     const finalizerOptions = {
       executionIndex: executionIndexPath,
       expectedExecutionIndexSha256: cutoverSha256(executionIndexBytes),
       coordinatorReport: coordinatorReportPath,
       expectedCoordinatorReportSha256: cutoverSha256(coordinatorReportBytes),
     };
-    const finalizedReady = await finalizeVivaGameProjectionCutoverReady(finalizerOptions, finalizerDependencies);
-    assert.equal(finalizedReady.resumed, false);
     const readyPath = path.join(privateRoot, "postcheck", "READY_TO_REOPEN_INGRESS.json");
     const linkedAlias = path.join(path.dirname(readyPath), `.${path.basename(readyPath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
     fs.linkSync(readyPath, linkedAlias);

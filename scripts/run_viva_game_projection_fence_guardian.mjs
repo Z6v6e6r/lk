@@ -123,6 +123,7 @@ let lastRecoveryResult = null;
 let readyChild = null;
 let readyRequestId = null;
 let lastReadyResult = null;
+let recoveryReleaseDelegated = false;
 const writeHeartbeat = () => {
   atomicPrivateWrite(heartbeatPath, {
     formatVersion: 1,
@@ -146,6 +147,7 @@ const writeHeartbeat = () => {
     readyChildPid: readyChild?.pid || null,
     readyRequestId,
     lastReadyResult,
+    recoveryReleaseDelegated,
   });
   heartbeatSequence += 1;
 };
@@ -179,18 +181,62 @@ const quarantineReadyRequest = (reason) => {
   } catch { /* retain the lock and retry quarantine on the next loop */ }
   lastRejectedReadyRequestSha256 = digest;
 };
-const startRecovery = (request) => {
+const waitForAcceptedHandshake = (child, handshakeFd, childKind, requestId) => new Promise((resolve, reject) => {
+  const stream = child.stdio[handshakeFd];
+  let buffer = "";
+  let inherited = false;
+  let settled = false;
+  const timeout = setTimeout(() => finish(new Error("Fence child acceptance handshake timed out")), 5_000);
+  const cleanup = () => {
+    clearTimeout(timeout);
+    stream?.removeListener("data", onData);
+    child.removeListener("error", onError);
+    child.removeListener("close", onClose);
+  };
+  const finish = (error) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    if (error) reject(error); else resolve();
+  };
+  const onError = (error) => finish(error);
+  const onClose = () => finish(new Error("Fence child exited before accepting its request"));
+  const onData = (chunk) => {
+    buffer += chunk.toString("utf8");
+    while (buffer.includes("\n")) {
+      const index = buffer.indexOf("\n");
+      const line = buffer.slice(0, index);
+      buffer = buffer.slice(index + 1);
+      let event;
+      try { event = JSON.parse(line); } catch { finish(new Error("Fence child handshake is invalid")); return; }
+      if (event?.childKind !== childKind || event?.requestId !== requestId) {
+        finish(new Error("Fence child handshake identity mismatch")); return;
+      }
+      if (!inherited && event.state === "FENCE_INHERITED") inherited = true;
+      else if (inherited && event.state === "REQUEST_ACCEPTED") { finish(); return; }
+      else { finish(new Error("Fence child handshake sequence mismatch")); return; }
+    }
+  };
+  stream?.on("data", onData);
+  child.once("error", onError);
+  child.once("close", onClose);
+});
+const startRecovery = async (request) => {
   const acceptedPath = `${recoveryRequestPath}.accepted-${request.requestId}`;
-  fs.renameSync(recoveryRequestPath, acceptedPath);
-  syncDirectory(receiptParent);
-  const childStdio = Array.from({ length: fd + 1 }, (_, index) => (index === 0 ? "ignore" : (index < 3 ? "inherit" : "ignore")));
+  const handshakeFd = fd + 1;
+  const childStdio = Array.from({ length: handshakeFd + 1 }, (_, index) => (index === 0 ? "ignore" : (index < 3 ? "inherit" : "ignore")));
   childStdio[fd] = fd;
+  childStdio[handshakeFd] = "pipe";
   const child = spawn(process.execPath, [recoveryExecutorPath, ...request.argv], {
     stdio: childStdio,
     env: {
       ...process.env,
       PADLHUB_CUTOVER_GUARDIAN_CHILD: "1",
       PADLHUB_CUTOVER_GUARDIAN_RECOVERY_REQUEST_ID: request.requestId,
+      PADLHUB_CUTOVER_GUARDIAN_HANDSHAKE_FD: String(handshakeFd),
+      PADLHUB_CUTOVER_GUARDIAN_CHILD_REQUEST_PATH: recoveryRequestPath,
+      PADLHUB_CUTOVER_GUARDIAN_CHILD_ACCEPTED_PATH: acceptedPath,
+      PADLHUB_CUTOVER_GUARDIAN_CHILD_REQUEST_SHA256: sha256(canonicalJson(request)),
     },
   });
   recoveryChild = child;
@@ -206,21 +252,33 @@ const startRecovery = (request) => {
     recoveryChild = null;
     recoveryRequestId = null;
   });
+  try {
+    await waitForAcceptedHandshake(child, handshakeFd, "recovery", request.requestId);
+    recoveryReleaseDelegated = true;
+  } catch (error) {
+    try { child.kill("SIGKILL"); } catch { /* child already exited */ }
+    if (fs.existsSync(acceptedPath)) recoveryReleaseDelegated = true;
+    if (fs.existsSync(recoveryRequestPath)) quarantineRecoveryRequest(String(error?.message || error));
+  }
 };
-const startReadyFinalization = (request) => {
+const startReadyFinalization = async (request) => {
   const acceptedPath = `${readyRequestPath}.accepted-${request.requestId}`;
-  fs.renameSync(readyRequestPath, acceptedPath);
-  syncDirectory(receiptParent);
-  const childStdio = Array(fd + 1).fill("ignore");
+  const handshakeFd = fd + 1;
+  const childStdio = Array(handshakeFd + 1).fill("ignore");
   childStdio[1] = "inherit";
   childStdio[2] = "inherit";
   childStdio[fd] = fd;
+  childStdio[handshakeFd] = "pipe";
   const child = spawn(process.execPath, [readyFinalizerPath, ...request.argv], {
     stdio: childStdio,
     env: {
       ...process.env,
       PADLHUB_CUTOVER_GUARDIAN_READY_CHILD: "1",
       PADLHUB_CUTOVER_GUARDIAN_READY_REQUEST_ID: request.requestId,
+      PADLHUB_CUTOVER_GUARDIAN_HANDSHAKE_FD: String(handshakeFd),
+      PADLHUB_CUTOVER_GUARDIAN_CHILD_REQUEST_PATH: readyRequestPath,
+      PADLHUB_CUTOVER_GUARDIAN_CHILD_ACCEPTED_PATH: acceptedPath,
+      PADLHUB_CUTOVER_GUARDIAN_CHILD_REQUEST_SHA256: sha256(canonicalJson(request)),
     },
   });
   readyChild = child;
@@ -236,6 +294,12 @@ const startReadyFinalization = (request) => {
     readyChild = null;
     readyRequestId = null;
   });
+  try {
+    await waitForAcceptedHandshake(child, handshakeFd, "ready", request.requestId);
+  } catch (error) {
+    try { child.kill("SIGKILL"); } catch { /* child already exited */ }
+    if (fs.existsSync(readyRequestPath)) quarantineReadyRequest(String(error?.message || error));
+  }
 };
 
 while (true) {
@@ -262,8 +326,15 @@ while (true) {
       processStartIdentity,
       nowMs: Date.now(),
     });
-    if (authorized) startRecovery(request);
-    else quarantineRecoveryRequest(recoveryChild || readyChild ? "Fence child operation already running" : "Fence recovery request is invalid");
+    if (authorized) {
+      try { await startRecovery(request); } catch (error) {
+        lastRecoveryResult = {
+          requestId: request.requestId, exitCode: null, signal: null,
+          errorSha256: sha256(String(error?.message || error)),
+        };
+        if (fs.existsSync(recoveryRequestPath)) quarantineRecoveryRequest(String(error?.message || error));
+      }
+    } else quarantineRecoveryRequest(recoveryChild || readyChild ? "Fence child operation already running" : "Fence recovery request is invalid");
   }
   if (fs.existsSync(readyRequestPath)) {
     let request = null;
@@ -282,10 +353,22 @@ while (true) {
       processStartIdentity,
       nowMs: Date.now(),
     });
-    if (authorized) startReadyFinalization(request);
-    else quarantineReadyRequest(recoveryChild || readyChild ? "Fence child operation already running" : "Fence READY request is invalid");
+    if (authorized) {
+      try { await startReadyFinalization(request); } catch (error) {
+        lastReadyResult = {
+          requestId: request.requestId, exitCode: null, signal: null,
+          errorSha256: sha256(String(error?.message || error)),
+        };
+        if (fs.existsSync(readyRequestPath)) quarantineReadyRequest(String(error?.message || error));
+      }
+    } else quarantineReadyRequest(recoveryChild || readyChild ? "Fence child operation already running" : "Fence READY request is invalid");
   }
   if (fs.existsSync(releasePath)) {
+    if (recoveryReleaseDelegated) {
+      writeHeartbeat();
+      await sleep(1000);
+      continue;
+    }
     let release = null;
     let validPrivateFile = false;
     try {
