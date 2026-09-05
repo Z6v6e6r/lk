@@ -49,29 +49,44 @@ const inventoryIdPattern = `^(?:${[
 
 const queryFilter = {
   inventoryId: { $regex: inventoryIdPattern },
-  status: "PAYMENT_PENDING",
-  transactionId: { $nin: [null, ""] },
   $or: [
-    { expiresAt: { $gt: requestedAtIso } },
-    { paymentExpiresAt: { $gt: requestedAtIso } },
     {
-      $and: [
-        {
-          $or: [
-            { expiresAt: { $exists: false } },
-            { expiresAt: null },
-            { expiresAt: "" },
-          ],
-        },
-        {
-          $or: [
-            { paymentExpiresAt: { $exists: false } },
-            { paymentExpiresAt: null },
-            { paymentExpiresAt: "" },
-          ],
-        },
-        { createdAt: { $gt: createdAtCutoffIso } },
-      ],
+      // Provider state, not the local checkout deadline, is authoritative for
+      // releasing bounded inventory. Keep polling expired/ambiguous transactions
+      // until Viva returns an explicit PAID or FAILED terminal state.
+      status: { $in: ["PAYMENT_PENDING", "PROVIDER_UNKNOWN"] },
+      transactionId: { $nin: [null, ""] },
+    },
+    {
+      // Atomic annual sales persist DISPATCHING before the Viva POST. If the
+      // response is lost, recover the exact provider transaction by client,
+      // product, amount and the bounded provider-attempt timestamp.
+      status: { $in: ["DISPATCHING", "PROVIDER_UNKNOWN"] },
+      transactionId: { $in: [null, ""] },
+      counterKey: { $in: ["piter_friendship", "network_friendship"] },
+      requestFingerprint: { $nin: [null, ""] },
+      clientId: { $nin: [null, ""] },
+      productId: { $nin: [null, ""] },
+      studioId: { $nin: [null, ""] },
+      providerAttemptedAt: { $nin: [null, ""] },
+      amountMinor: { $gt: 0 },
+    },
+    {
+      // A repair fence can survive a worker restart. Re-enter the atomic
+      // router only to restore CLAIMED; the scheduler must never repeat the
+      // provider POST for this state.
+      status: "DISPATCH_REPAIRING",
+      counterKey: { $in: ["piter_friendship", "network_friendship"] },
+      requestFingerprint: { $nin: [null, ""] },
+      paymentRef: { $nin: [null, ""] },
+      dispatchGeneration: { $gt: 0 },
+      repairProviderAttemptedAt: { $nin: [null, ""] },
+    },
+    {
+      status: "PAID_PENDING_INSTANCE_BINDING",
+      counterKey: "network_friendship",
+      clientSubscriptionId: { $nin: [null, ""] },
+      transactionId: { $nin: [null, ""] },
     },
   ],
 };

@@ -227,7 +227,8 @@ rows.forEach((doc) => {
   const state = states.find((candidate) => matchesCounterRecord(doc, candidate));
   if (!state) return;
 
-  const status = normalizeStatus(doc.status);
+  const normalizedStatus = normalizeStatus(doc.status);
+  const status = normalizedStatus === "PAID_PENDING_INSTANCE_BINDING" ? "PAID" : normalizedStatus;
   const releasePhase = toStr(doc.releasePhase) === "daily" ? "daily" : "launch";
   const pendingDeadlineTs = resolvePendingDeadlineTs(doc, reservationMinutes);
   const eventTs = status === "PAID"

@@ -129,6 +129,57 @@ summer_subscription_<counterKey>_inventory_id            # optional override
 опубликовать immutable policies Питера и ХАБ и включить runtime feature flags.
 До этого `usageEnabled=false` и запросы завершаются fail closed.
 
+Продажа ХАБ в кандидате также зависит от отдельной exact-readiness проверки ЦУП.
+До первого Viva write LK запрашивает `sale-readiness` для закреплённых product ID,
+`STATION_SET`, policy/fence/projector checkpoint и release phase. Ответ без полного
+immutable binding не открывает checkout. После подтверждённой оплаты LK читает точный
+`clientSubscriptionId` у Viva и передаёт нормализованный provider read-back в
+`sale-bindings/confirm`. ЦУП одной majority-journaled транзакцией создаёт instance,
+CONFIRMED purchase operation, `PURCHASE_PAID` ledger event и outbox event. Ответы не
+содержат provider client/transaction IDs или evidence refs.
+
+Если Viva уже подтвердил оплату, а ЦУП недоступен, sale projection сохраняется как
+`PAID_PENDING_INSTANCE_BINDING` и учитывается как проданная единица. Повтор использует
+тот же payment, provider instance и исходный `providerObservedAt`; новая Viva-транзакция
+не создаётся. Финальный `PAID` возвращается только после exact `BOUND` от ЦУП.
+
+Лимиты ХАБ применяются тем же атомарным Mongo/CAS-маршрутом, что и временная
+продажа Питера. До Viva POST одна операция одновременно резервирует единицу общего
+inventory `network_friendship_12m_2026_v1` (100) и единицу дневного окна Москвы
+(10). Одиннадцатый конкурентный запрос не проходит CAS. Маршрут остаётся fail closed,
+пока отдельным live-этапом из свежего read-only снимка не создан и не проверен sentinel
+`inventory:network_friendship_12m_2026_v1` с terminal baseline прежних продаж,
+текущей московской датой и `ready=true`. Deploy flow и активация sentinel — разные
+операции; данный source-кандидат не создаёт и не изменяет production data.
+
+Перед единственным Viva `POST /transactions` атомарный маршрут сначала сохраняет
+sale projection со статусом `CLAIMED`, затем переводит ledger reservation в
+`DISPATCHING` и только после этого атомарно подтверждает в sale projection статус
+`DISPATCHING` с точным `providerAttemptedAt`. Если процесс остановился между ledger
+CAS и подтверждением sale projection, повторная попытка сначала атомарно ставит на
+sale fence `DISPATCH_REPAIRING`. Каждая попытка имеет монотонный
+`dispatchGeneration`: fence не даёт ещё живому запросу прежнего поколения перейти
+в `DISPATCHING`, сохранить устаревший ответ или вызвать Viva POST. Только после
+этого reservation возвращается в `CLAIMED`, sale fence снимается и guarded dispatch
+может начаться заново. Если процесс остановился уже с установленным fence,
+reconciliation восстанавливает только пару ledger/sale в `CLAIMED` того же
+поколения и завершает обработку без Viva POST.
+Если
+ответ Viva потерян или Node-RED перезапущен после provider commit, reconciliation
+не повторяет POST: он запрашивает `GET /transactions` по существующему серверному
+фильтру `clientIds`, одновременно ограничивает запрос `productIds` и московской
+датой, а затем локально требует ровно одно совпадение transaction ID, client ID,
+product ID, суммы, обязательной станции, только открытого provider-статуса и
+короткого окна относительно
+`providerAttemptedAt`. Полнота результата принимается только при согласованной
+первой и последней странице с точными `totalPages`, `totalElements` и
+`numberOfElements`. Затем обычный exact `GET /transactions/{id}` повторно доказывает
+все recovery-поля; только после этого найденный ID атомарно привязывается к
+reservation. Ноль совпадений, несколько совпадений, неполная/неразмеченная страница
+или расхождение любого поля остаются fail closed и не разрешают новый Viva POST.
+Уже `PAID`/terminal транзакция без сохранённого ID не присваивается автоматически:
+она требует ручной сверки, поэтому heuristic recovery не начисляет чужую оплату.
+
 Изолированный кандидат маршрута выполняет переход
 `PENDING_ACTIVATION -> ACTIVE` только после того, как точная запись появилась в
 Viva read-back. До любой Viva mutation он требует отдельный server-side global
@@ -178,11 +229,29 @@ read-back reconciliation.
 11. `activationDays=0`, отсутствующие lifecycle-поля или строковые числа в
     карточке регионального Viva-продукта блокируют checkout до создания
     транзакции.
+12. Потерянный ответ после provider commit восстанавливает ровно одну транзакцию
+    по client/product/amount/station/time и не делает второй POST.
+13. Ноль, два совпадения, чужой client/product/station, другая сумма, выход из
+    временного окна и неполная пагинация остаются `PROVIDER_UNKNOWN`/`DISPATCHING`.
+14. Crash между ledger `DISPATCHING` и durable sale `DISPATCHING` восстанавливается
+    только через доказанный sale `CLAIMED`; уже подтверждённый dispatch никогда не
+    вызывает второй Viva POST.
+15. Зависший `DISPATCH_REPAIRING` подхватывается scheduled reconciliation, снимает
+    только fence и не создаёт транзакцию; поздний worker старого поколения не может
+    сохранить provider result.
+16. Atomic-продажа ХАБа сохраняет `totalLimit`, `dailyLimit` и `dailyDropDate` в
+    durable sale. Confirm восстанавливает их из этой записи, а не из клиентского
+    запроса или лимита Питера. Старые atomic-записи без этих полей возвращают
+    `HUB_CONFIRM_SALE_LIMITS_INVALID` и требуют отдельной сверки; автоматического
+    изменения старых записей нет. Факты Viva сохраняются до подготовки следующего
+    HTTP-запроса, чтобы не потерять ID и сумму подтверждаемой транзакции.
 
 ## Candidate-only globals LK
 
 ```text
 subscriptions_runtime_api_base_url=https://padlhub.su/api
+subscriptions_sale_readiness_integration_token=<read-only readiness secret reference>
+subscriptions_sale_binding_integration_token=<separate sale-binding mutation secret reference>
 subscriptions_runtime_context_integration_token=<secret reference>
 subscriptions_activation_integration_token=<separate secret reference>
 subscriptions_entitlement_integration_token=<separate mutation secret reference>

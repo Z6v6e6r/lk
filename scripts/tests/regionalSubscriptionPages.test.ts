@@ -48,12 +48,15 @@ test("network is a dedicated one-tier 100-unit guarded storefront", () => {
   assertOptimizedWebp("src/assets/network-subscription.webp");
   assert.match(page, /hasGuardedTieredStorefront = useMemo/);
   assert.match(page, /statusError && \(!hasGuardedTieredStorefront \|\| statusError !== "Unsupported counterKey"\)/);
+  assert.match(page, /result\.data\.paid && result\.data\.status === "PAID"/);
+  assert.match(page, /if \(result\.data\.paid\) \{[\s\S]*?upsertPendingPaymentEntry/);
+  assert.match(page, /window\.setInterval\(\(\) => \{[\s\S]*?void confirmPendingPayments\(\)/);
 
   assert.match(networkLoader, /variant: "network_friendship"/);
   assert.match(networkLoader, /tournament-subscription-dev\.js/);
   assert.match(networkLoader, /tournament-subscription\.js/);
-  assert.match(deployDocs, /одна партия из 100 подписок/);
-  assert.match(deployDocs, /56 800 ₽ вместо зачёркнутой 98 800 ₽/);
+  assert.match(deployDocs, /общий inventory из 100 подписок и дневное окно\s+10 продаж/);
+  assert.match(deployDocs, /56 800 ₽\s+вместо зачёркнутой 98 800 ₽/);
 });
 
 test("regional pages keep isolated terms while sharing consent, auth and fail-closed checkout", () => {
