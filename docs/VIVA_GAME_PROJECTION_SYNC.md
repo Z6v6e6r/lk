@@ -301,7 +301,10 @@ request ID. A CLI retry discovers the receipt even without an accepted request
 or refreshed guardian heartbeat. It adopts a live keeper, refuses to replace it
 while its first heartbeat is pending, or removes and replaces the exact same-ID keeper only after
 PID/start identity proves that process is dead; incomplete or ambiguous evidence
-never starts a second keeper.
+never starts a second keeper. Guardian-child handshake events use one canonical
+JSON record per line, so an empty record cannot invalidate an otherwise accepted
+recovery or READY request; the guardian heartbeat retains only a hash of the last
+handshake failure.
 Early invalid release requests are quarantined while the takeover keeps the
 flock. A completed recovery report is reusable only while that exact takeover
 receipt and live heartbeat prove lock custody, or while a fresh exact guardian
