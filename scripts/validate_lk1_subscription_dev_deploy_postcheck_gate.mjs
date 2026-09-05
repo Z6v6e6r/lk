@@ -124,6 +124,7 @@ export function validateDeployPostcheckGate(gate, {
   sourceAuthorization = CHECKED_DEV_SOURCE_AUTHORIZATION,
   archivedHostPreflightEvidence = checkedHostPreflightEvidence,
   freshHostPreflightEvidence,
+  expectedRepositoryIdentity,
   now,
 } = {}) {
   validateDevProvisioningContract(provisioningContract);
@@ -139,7 +140,9 @@ export function validateDeployPostcheckGate(gate, {
   // captured v2 object is mandatory for a current installation authorization;
   // its timestamp must never be compared to the archive timestamp.
   if (freshHostPreflightEvidence !== undefined) {
-    validateFreshHostPreflightEvidence(freshHostPreflightEvidence, now);
+    validateFreshHostPreflightEvidence(freshHostPreflightEvidence, now, {
+      expectedRepositoryIdentity,
+    });
   } else {
     if (now !== undefined) fail("fresh host evidence object is required with an explicit clock");
   }

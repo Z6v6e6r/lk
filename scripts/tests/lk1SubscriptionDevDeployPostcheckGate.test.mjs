@@ -34,11 +34,12 @@ const hostTranscript = [
   `HOSTNAME\t${checkedHostPreflightEvidence.target.hostname}`,
   `MACHINE_ID_SHA256\t${checkedHostPreflightEvidence.target.machineIdSha256}`,
   `SYSTEMD_VERSION\t${checkedHostPreflightEvidence.hostCapabilities.systemdVersion}`,
+  "EXECUTION_PREREQ\ttrue\ttrue",
   ...Object.entries(checkedHostPreflightEvidence.dedicatedUnits).map(([unit, state]) => (
     `UNIT\t${unit}\t${state.loadState}\t${state.activeState}\t${state.unitFileState}`
   )),
   ...Object.keys(checkedHostPreflightEvidence.dedicatedUnits).map((unit) => (
-    `UNIT_ISOLATION\t${unit}\t${unitFragmentSha256[unit]}\ttrue\ttrue\ttrue`
+    `UNIT_ISOLATION\t${unit}\t${unitFragmentSha256[unit]}\ttrue\ttrue\ttrue\ttrue`
   )),
   "LISTENER\t1880\tPRESENT", "LISTENER\t3036\tPRESENT", "LISTENER\t1882\tABSENT",
   "LISTENER\t27030\tABSENT", "LISTENER\t3037\tABSENT", "LISTENER\t3038\tABSENT",
@@ -78,18 +79,21 @@ test("fresh preflight has a new timestamp while immutable archive metadata stays
   const repositoryIdentity = currentRepositoryIdentity();
   const freshHostPreflightEvidence = captureCurrentHostPreflightEvidence({
     runSsh: () => hostTranscript,
+    assertPinnedHostKey: () => {},
     now: NOW,
     readRepositoryIdentity: () => repositoryIdentity,
   });
   assert.notEqual(freshHostPreflightEvidence.capturedAt, checkedDeployPostcheckGate.predeploy.capturedAt);
   assert.equal(validateDeployPostcheckGate(checkedDeployPostcheckGate, {
     freshHostPreflightEvidence,
+    expectedRepositoryIdentity: repositoryIdentity,
     now: NOW,
   }), true);
   const changed = clone(freshHostPreflightEvidence);
   changed.releaseBinding.manifestSha256 = "a".repeat(64);
   assert.throws(() => validateDeployPostcheckGate(checkedDeployPostcheckGate, {
     freshHostPreflightEvidence: changed,
+    expectedRepositoryIdentity: repositoryIdentity,
     now: NOW,
   }), /release binding/);
 });

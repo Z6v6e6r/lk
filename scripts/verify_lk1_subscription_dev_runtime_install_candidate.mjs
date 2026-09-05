@@ -12,7 +12,7 @@ import { validateReleaseReceiptV2 } from "./validate_lk1_subscription_dev_releas
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
-const CONTRACT_CANONICAL_SHA256 = "dd5475a7e412a465015d8e38c4909b25de8d4f4126bbcbead1c930abe7446dea";
+const CONTRACT_CANONICAL_SHA256 = "fcc07e903853da99d914df2e9002469bb552a239abde42e1fc7c7342f3548298";
 const NODE_RED_SETTINGS_SHA256 = "6b6cc7253b120f2a8b2397c0d3a5f82db9a72fb6d62948bd9f6e6bdb5ab3deb6";
 const UNIT_SHA256 = Object.freeze({
   "lk1-subscription-dev-cup.service": "21423847b61c56bb7c8d2561e4a740d2e21aad399abbb1b2725a2936d3631ba5",
@@ -33,6 +33,17 @@ const EXPECTED_FILES = Object.freeze([
   "payload/verify_lk1_subscription_dev_runtime_source.mjs",
   "payload/verify_lk1_subscription_dev_runtime_install_candidate.mjs",
   "payload/validate_lk1_subscription_dev_release_receipt_v2.mjs",
+  "payload/install_lk1_subscription_dev_stopped_candidate.mjs",
+  "payload/validate_lk1_subscription_dev_host_preflight.mjs",
+  "payload/lk1_subscription_dev_provisioning_contract.json",
+  "payload/lk1_subscription_dev_release_receipt_v2_contract.json",
+  "payload/lk1_subscription_dev_host_preflight_evidence.json",
+  "payload/lk1_subscription_dev_bootstrap/units/lk1-subscription-dev-mongo.service",
+  "payload/lk1_subscription_dev_bootstrap/units/lk1-subscription-dev-cup.service",
+  "payload/lk1_subscription_dev_bootstrap/units/lk1-subscription-dev-provider-fixture.service",
+  "payload/lk1_subscription_dev_bootstrap/units/lk1-subscription-dev-identity-fixture.service",
+  "payload/lk1_subscription_dev_bootstrap/units/lk1-subscription-dev-nodered.service",
+  ...Object.keys(UNIT_SHA256).map((name) => `payload/lk1_subscription_dev_runtime_install/units/${name}`),
 ]);
 
 const fail = (message) => { throw new Error(message); };
@@ -51,9 +62,10 @@ export function validateRuntimeInstallContract(contract) {
   exactKeys(contract, [
     "formatVersion", "stage", "environment", "sourceCommit", "target",
     "authorizationCustody", "credentialBinding", "units", "prerequisites",
-    "candidateContents", "runtimeCapabilityDisclosure", "intendedStoppedPostconditions", "authority",
+    "stoppedInstall", "rollback", "candidateContents", "runtimeCapabilityDisclosure",
+    "intendedStoppedPostconditions", "authority",
   ], "runtime install contract");
-  if (contract.formatVersion !== 1 || contract.stage !== "LOCAL_INSTALL_CANDIDATE"
+  if (contract.formatVersion !== 2 || contract.stage !== "STOPPED_INSTALL_CANDIDATE"
     || contract.environment !== "DEV" || contract.sourceCommit !== null) {
     fail("runtime install contract identity mismatch");
   }
@@ -102,8 +114,12 @@ export function validateRuntimeInstallContract(contract) {
     || contract.candidateContents.nodeRedFlow !== "GENERATED_EXACT_SOURCE_CANDIDATE"
     || contract.candidateContents.sourceCandidateManifest !== "INCLUDED_SOURCE_ONLY"
     || contract.candidateContents.releaseReceiptV2Template !== "INCLUDED_SOURCE_ONLY"
+    || contract.candidateContents.installExecutor !== "INCLUDED_STOPPED_ONLY"
+    || contract.candidateContents.rollbackExecutor !== "INCLUDED_SEPARATELY_AUTHORIZED"
+    || contract.candidateContents.trustedPreExecLauncher !== "OUT_OF_BUNDLE_EXACT_SHA"
     || Object.entries(contract.candidateContents).some(([key, value]) => (
-      !["nodeRedFlow", "sourceCandidateManifest", "releaseReceiptV2Template"].includes(key)
+      !["nodeRedFlow", "sourceCandidateManifest", "releaseReceiptV2Template",
+        "installExecutor", "rollbackExecutor", "trustedPreExecLauncher"].includes(key)
       && value !== "NOT_INCLUDED"
     ))
     || JSON.stringify(contract.runtimeCapabilityDisclosure) !== JSON.stringify({
@@ -120,10 +136,19 @@ export function validateRuntimeInstallContract(contract) {
       requiresSeparateStartReview: true,
       requiresSeparateMutationReview: true,
     })
-    || Object.values(contract.intendedStoppedPostconditions).some((value) => value !== false)
+    || contract.intendedStoppedPostconditions.payloadInstalled !== true
+    || contract.intendedStoppedPostconditions.preimagePreserved !== true
+    || contract.intendedStoppedPostconditions.installEvidenceCreated !== true
+    || Object.entries(contract.intendedStoppedPostconditions).some(([key, value]) => (
+      !["payloadInstalled", "preimagePreserved", "installEvidenceCreated"].includes(key)
+      && value !== false
+    ))
     || contract.authority.bundleBuildAllowed !== true
+    || contract.authority.hostReadAllowed !== true
+    || contract.authority.hostInstallAllowed !== true
     || Object.entries(contract.authority).some(([key, value]) => (
-      key !== "bundleBuildAllowed" && value !== false
+      !["bundleBuildAllowed", "hostReadAllowed", "hostInstallAllowed"].includes(key)
+      && value !== false
     ))) {
     fail("runtime install candidate exceeds local stopped-only authority");
   }
@@ -220,11 +245,24 @@ function inspectBundleInventory(root) {
   return files.sort();
 }
 
-export function verifyRuntimeInstallCandidateBundle(bundleDirectory, expectedManifestSha256) {
+export function assertRuntimeInstallCandidateLocation(root, expectedManifestSha256, location = "local") {
+  if (location === "local") {
+    if (!root.startsWith("/private/tmp/") && !root.startsWith("/tmp/")) {
+      fail("runtime install candidate must stay in a temporary workspace");
+    }
+  } else if (location === "production") {
+    if (root !== `/srv/lk1-subscription-dev/.stopped-install-${expectedManifestSha256}/bundle`) {
+      fail("runtime install candidate production path mismatch");
+    }
+  } else fail("runtime install candidate location mode mismatch");
+  return true;
+}
+
+export function verifyRuntimeInstallCandidateBundle(bundleDirectory, expectedManifestSha256, {
+  location = "local",
+} = {}) {
   const root = fs.realpathSync(bundleDirectory);
-  if (!root.startsWith("/private/tmp/") && !root.startsWith("/tmp/")) {
-    fail("runtime install candidate must stay in a temporary workspace");
-  }
+  assertRuntimeInstallCandidateLocation(root, expectedManifestSha256, location);
   const rootStat = fs.lstatSync(root);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || (rootStat.mode & 0o777) !== 0o700) {
     fail("runtime install candidate root custody mismatch");
@@ -240,18 +278,20 @@ export function verifyRuntimeInstallCandidateBundle(bundleDirectory, expectedMan
   }
   const manifest = JSON.parse(manifestBytes);
   exactKeys(manifest, [
-    "formatVersion", "stage", "environment", "sourceCommit", "toolingCommit",
-    "sourceCandidateSha256", "sourceCandidateManifestSha256", "createdAt", "files", "authority",
+    "formatVersion", "stage", "environment", "sourceCommit", "toolingCommit", "toolingTreeSha",
+    "sourceCandidateSha256", "sourceCandidateManifestSha256", "createdAt", "files",
+    "trustedLauncher", "preflightBinding", "authority",
   ], "runtime install candidate manifest");
-  if (manifest.formatVersion !== 1 || manifest.stage !== "LOCAL_INSTALL_CANDIDATE"
+  if (manifest.formatVersion !== 1 || manifest.stage !== "STOPPED_INSTALL_CANDIDATE"
     || manifest.environment !== "DEV" || !COMMIT.test(manifest.sourceCommit || "")
     || !COMMIT.test(manifest.toolingCommit || "")
+    || !COMMIT.test(manifest.toolingTreeSha || "")
     || !SHA256.test(manifest.sourceCandidateSha256 || "")
     || !SHA256.test(manifest.sourceCandidateManifestSha256 || "")
     || !Number.isFinite(Date.parse(manifest.createdAt || ""))
     || JSON.stringify(manifest.authority) !== JSON.stringify({
-      hostRead: false,
-      hostInstall: false,
+      hostRead: true,
+      hostInstall: true,
       daemonReload: false,
       serviceStart: false,
       enableUnits: false,
@@ -262,6 +302,25 @@ export function verifyRuntimeInstallCandidateBundle(bundleDirectory, expectedMan
       externalWrites: false,
     })) {
     fail("runtime install candidate manifest identity or authority mismatch");
+  }
+  exactKeys(manifest.trustedLauncher, ["path", "sha256"], "runtime install trusted launcher");
+  if (manifest.trustedLauncher.path
+      !== "scripts/launch_lk1_subscription_dev_stopped_candidate.mjs"
+    || !SHA256.test(manifest.trustedLauncher.sha256 || "")) {
+    fail("runtime install trusted launcher binding mismatch");
+  }
+  exactKeys(manifest.preflightBinding, [
+    "hostKeyFingerprint", "validatorPath", "validatorSha256", "remoteScriptSha256",
+    "expectedSharedFlowSha256",
+  ], "runtime install preflight binding");
+  if (manifest.preflightBinding.hostKeyFingerprint
+      !== "SHA256:LP1OQP7TkwpzFQzJZMrKLiaFVwJYd71VeliwfMs6krk"
+    || manifest.preflightBinding.validatorPath
+      !== "scripts/validate_lk1_subscription_dev_host_preflight.mjs"
+    || !SHA256.test(manifest.preflightBinding.validatorSha256 || "")
+    || !SHA256.test(manifest.preflightBinding.remoteScriptSha256 || "")
+    || !SHA256.test(manifest.preflightBinding.expectedSharedFlowSha256 || "")) {
+    fail("runtime install preflight binding mismatch");
   }
   if (!Array.isArray(manifest.files)
     || JSON.stringify(manifest.files.map((row) => row.path).sort())
@@ -284,6 +343,13 @@ export function verifyRuntimeInstallCandidateBundle(bundleDirectory, expectedMan
       || bytes.length !== row.size || sha256(bytes) !== row.sha256) {
       fail(`runtime install candidate file drift (${row.path})`);
     }
+  }
+  const preflightValidator = manifest.files.find((row) => (
+    row.path === "payload/validate_lk1_subscription_dev_host_preflight.mjs"
+  ));
+  if (!preflightValidator
+    || preflightValidator.sha256 !== manifest.preflightBinding.validatorSha256) {
+    fail("runtime install preflight validator digest mismatch");
   }
   const contract = JSON.parse(fs.readFileSync(path.join(root, "payload/runtime-install-contract.json")));
   const runtimeContract = JSON.parse(fs.readFileSync(

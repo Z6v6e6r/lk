@@ -333,6 +333,7 @@ jobs:
           scripts/tests/lk1SubscriptionDevRuntimeSource.test.mjs
           scripts/tests/lk1SubscriptionDevReleaseReceipt.test.mjs
           scripts/tests/lk1SubscriptionDevRuntimeInstallCandidate.test.mjs
+          scripts/tests/lk1SubscriptionDevStoppedInstall.test.mjs
           scripts/tests/lk1SubscriptionDevDeployPostcheckGate.test.mjs
           scripts/tests/lk1SubscriptionDevHostPreflight.test.mjs
           scripts/dev-uat/subscriptions-sale-period/test.mjs

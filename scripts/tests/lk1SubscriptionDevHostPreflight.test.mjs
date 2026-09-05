@@ -8,6 +8,7 @@ import {
   captureCurrentHostPreflightEvidence,
   checkedHostPreflightEvidence,
   INGRESS_TARGET_REFERENCE_PATTERN,
+  selectPinnedEd25519KnownHostLine,
   validateFreshHostPreflightEvidence,
   validateHostPreflightEvidence,
   writeFreshHostPreflightEvidence,
@@ -29,11 +30,12 @@ const transcriptFrom = (evidence = checkedHostPreflightEvidence) => [
   `HOSTNAME\t${evidence.target.hostname}`,
   `MACHINE_ID_SHA256\t${evidence.target.machineIdSha256}`,
   `SYSTEMD_VERSION\t${evidence.hostCapabilities.systemdVersion}`,
+  "EXECUTION_PREREQ\ttrue\ttrue",
   ...Object.entries(evidence.dedicatedUnits).map(([unit, state]) => (
     `UNIT\t${unit}\t${state.loadState}\t${state.activeState}\t${state.unitFileState}`
   )),
   ...Object.keys(evidence.dedicatedUnits).map((unit) => (
-    `UNIT_ISOLATION\t${unit}\t${UNIT_FRAGMENT_SHA256[unit]}\ttrue\ttrue\ttrue`
+    `UNIT_ISOLATION\t${unit}\t${UNIT_FRAGMENT_SHA256[unit]}\ttrue\ttrue\ttrue\ttrue`
   )),
   `LISTENER\t1880\t${evidence.listeners.sharedNodeRed1880Present ? "PRESENT" : "ABSENT"}`,
   `LISTENER\t3036\t${evidence.listeners.forbiddenSharedCup3036Present ? "PRESENT" : "ABSENT"}`,
@@ -58,6 +60,7 @@ const capture = (overrides = {}) => captureCurrentHostPreflightEvidence({
   },
   now: NOW,
   readRepositoryIdentity: () => REPOSITORY_IDENTITY,
+  assertPinnedHostKey: () => {},
   ...overrides,
 });
 
@@ -117,7 +120,8 @@ test("direct SSH capture binds freshness, repository, release, tooling, and trus
     expectedRepositoryIdentity: REPOSITORY_IDENTITY,
   }), true);
   assert.equal(evidence.schemaVersion, 2);
-  assert.equal(evidence.capture.transport, "SSH_BATCH_ROOT_READ_ONLY");
+  assert.equal(evidence.capture.transport, "SSH_BATCH_ROOT_READ_ONLY_PINNED_ED25519");
+  assert.equal(evidence.capture.hostKeyFingerprint, "SHA256:LP1OQP7TkwpzFQzJZMrKLiaFVwJYd71VeliwfMs6krk");
   assert.equal(evidence.runtimeIsolation.ingress.targetRouteAbsent, true);
   assert.equal(evidence.sharedResources.expectedFlowSha256, checkedHostPreflightEvidence.sharedResources.flowSha256);
 
@@ -138,6 +142,7 @@ test("direct SSH capture binds freshness, repository, release, tooling, and trus
     (value) => { value.releaseBinding.candidateSha256 = "a".repeat(64); },
     (value) => { value.capture.validatorSha256 = "b".repeat(64); },
     (value) => { value.runtimeIsolation.systemdUnits["lk1-subscription-dev-cup.service"].dropInsAbsent = false; },
+    (value) => { value.runtimeIsolation.systemdUnits["lk1-subscription-dev-cup.service"].networkPolicyExact = false; },
     (value) => { value.runtimeIsolation.ingress.targetRouteAbsent = false; },
     (value) => {
       value.sharedResources.flowSha256 = "c".repeat(64);
@@ -162,6 +167,40 @@ test("capture rejects incomplete transcripts and repository drift without a real
       treeSha: (++reads === 1 ? "2" : "3").repeat(40),
     }),
   }), /during capture/);
+});
+
+test("capture treats deny-all CIDRs as the required policy, not as wildcard-bind drift", () => {
+  let remoteScript = "";
+  let pinChecks = 0;
+  capture({
+    runSsh: (script) => {
+      remoteScript = script;
+      return transcriptFrom();
+    },
+    assertPinnedHostKey: () => { pinChecks += 1; },
+  });
+  assert.equal(pinChecks, 1);
+  assert.match(remoteScript, /ip_deny=.*IPAddressDeny --value/);
+  assert.match(remoteScript, /ip_deny.*0\.0\.0\.0\/0 ::\/0/);
+  assert.match(remoteScript, /network_policy_exact=true/);
+  assert.doesNotMatch(
+    remoteScript,
+    /effective=.*IPAddressAllow.*IPAddressDeny/,
+  );
+  assert.match(remoteScript, /test -e "\$target" \|\| test -L "\$target"/);
+});
+
+test("host-key pin accepts exactly one matching ED25519 key and rejects an additional one", () => {
+  const expected = "host ssh-ed25519 EXPECTED";
+  const other = "host ssh-ed25519 OTHER";
+  const fingerprintLine = (line) => (line === expected
+    ? "256 SHA256:LP1OQP7TkwpzFQzJZMrKLiaFVwJYd71VeliwfMs6krk host (ED25519)"
+    : "256 SHA256:other host (ED25519)");
+  assert.equal(selectPinnedEd25519KnownHostLine(expected, { fingerprintLine }), expected);
+  assert.throws(() => selectPinnedEd25519KnownHostLine(
+    `${expected}\n${other}\n`, { fingerprintLine },
+  ), /exactly one/);
+  assert.throws(() => selectPinnedEd25519KnownHostLine(other, { fingerprintLine }), /fingerprint/);
 });
 
 test("fresh evidence writer creates a private single-link artifact", () => {
